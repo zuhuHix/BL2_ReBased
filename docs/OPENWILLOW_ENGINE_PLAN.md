@@ -110,20 +110,31 @@ choice after a hand-play of the slice on main 08bcf3e
 left the tree in that change; `git show 08bcf3e:<path>` recovers any of it, and its code and evidence stay useful as
 a behaviour reference.
 
-**The route now: Rust, with the engine picked by benchmark (Phase 0R).** New runtime code is Rust: the engine-agnostic
-core and the host. No Rust engine is chosen yet. A timeboxed benchmark builds the same small scene in each candidate,
-and the maintainer picks from the measurements:
+**The route now: Rust, on our own engine built on wgpu + winit (picked 2026-11-15 from the Phase 0R benchmark).**
+New runtime code is Rust: the engine-agnostic core and the host. A timeboxed benchmark built the same small scene in
+each candidate, and the maintainer picked from the measurements
+([decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)):
 
-- Candidates: **Bevy** (MIT or Apache-2.0) and **an own engine on wgpu + winit** (MIT or Apache-2.0) are required;
-  **Fyrox** (MIT) is optional. Licences as stated in the decision; each is confirmed in `THIRD_PARTY.md` before any
-  of it lands.
+- Candidates: **Bevy** (MIT or Apache-2.0) and **an own engine on wgpu + winit** (MIT or Apache-2.0) were required;
+  **Fyrox** (MIT) was optional and was not built. Bevy 0.20.1 ran on pc-hummer, the wgpu prototype on the zuhu
+  desktop.
 - The scene: Sanctuary's static meshes from the existing local exports, Maya's skeletal mesh playing one animation, a
   capsule that walks on the collision, and one BL2 movie shown through Ruffle.
-- Measured: clean and incremental build time, frame time at 1280x720 and 1920x1080 on each project PC, memory, binary
-  size, lines of our own code, and what was missing and had to be written.
+- Measured: clean and incremental build time, frame time at 1280x720 and 1920x1080, memory, binary size, lines of our
+  own code, and what was missing and had to be written. Each prototype ran on one PC only, with different draw
+  strategies, so the frame times are not like for like; both were far under a 16.7 ms frame.
+- Why wgpu + winit: Ruffle embedded natively on the same wgpu device (BL2's UI is Flash; the Bevy prototype did not
+  embed it), an about 4.5-9 times smaller binary (11.1-21.5 MiB against 96.8 MiB), no ECS scheduler imposing `Send` rules on the deliberately `!Send` simulation
+  (D18 in `docs/rust-port/ARCHITECTURE.md`), no forced toolchain bump, and Bevy's renderer, animation and scenes would
+  not match BL2's AnimTree, materials or Kismet anyway. The cost: more own code (about 2.4 times as much in the
+  benchmark scene) and an animation and material pipeline written by hand.
+- The engine crates (wgpu, winit, glam, bytemuck, pollster, rapier3d, the Ruffle crates from git, and a Java JDK to
+  build Ruffle) enter the tree only with `THIRD_PARTY.md` entries the maintainer approves, when the host work needs
+  them. None is in the tree yet.
 
 Prototypes live under ignored `local/bench/`; the record is
-[ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md). Nothing about the Rust route is verified yet.
+[ENGINE_BENCHMARK.md](verification/ENGINE_BENCHMARK.md). The host itself is not written yet, and nothing about the Rust
+route is verified yet.
 
 **What UE5 gave, and what the Rust host must therefore build or pick a crate for.** The old argument for UE5 was that
 the conceptual mapping is nearly 1:1: UE3 material node graphs to UE5 material graphs, AnimTree to AnimBP, Matinee to
@@ -284,11 +295,12 @@ Added 2026-11-14 with the switch to Rust (section 2.1).
 2. **Parity on the real packages:** `tools/verify_packages.py --reader <the Rust reader>` gives the same counts and
    the same exact class bodies as the C++ reader. Only then is the matching part of `src/` retired.
 3. **Benchmark the engine candidates** (Bevy and an own engine on wgpu + winit; Fyrox optional) on the scene in
-   section 2.1, with prototypes under ignored `local/bench/<candidate>/`, one machine at a time, on each project PC.
+   section 2.1, with prototypes under ignored `local/bench/<candidate>/`, one machine at a time. Done 2026-11-14,
+   one PC per candidate.
 4. **Record the measurements** in `docs/verification/ENGINE_BENCHMARK.md`: build times, frame times, memory, binary
-   size, lines of our own code, and what was missing.
-5. **The maintainer picks the route**, recorded as a new decision file. The chosen engine's `THIRD_PARTY.md` entry
-   comes before any of it lands in the tree.
+   size, lines of our own code, and what was missing. Done.
+5. **The maintainer picks the route**, recorded as a new decision file. Done 2026-11-15: own engine on wgpu + winit
+   ([decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)). Each engine crate's `THIRD_PARTY.md` entry comes before any of it lands in the tree.
 
 **Gate:** the Rust reader matches `verify_packages.py`, the benchmark is recorded, and the maintainer has picked the
 route.
@@ -510,4 +522,6 @@ done in Phase 0; `git show 08bcf3e:docs/OPENWILLOW_ENGINE_PLAN.md` has it. The R
 9. Build the same scene on wgpu + winit under `local/bench/wgpu/` (and Fyrox, if there is time). Measure it the same
    way on each project PC.
 10. Fill in the benchmark record with what was measured, and only that. The maintainer picks the route. That pick is
-    Phase 0R's gate and the first thing you post.
+    Phase 0R's gate and the first thing you post. (Steps 8-10 done 2026-11-14/15, with exceptions: no Ruffle in the
+    Bevy prototype, one PC per candidate, Fyrox not built. The route is an own engine on wgpu + winit,
+    [decision](decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md).)

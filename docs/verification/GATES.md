@@ -76,9 +76,10 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 - `python tools/verify_combat_pawn.py --live` checks the formulas against ignored live dumps when they exist.
 
 ## When the Rust host changes
-Not defined yet: no engine route is chosen, and `ow-host` only checks that it was given a Borderlands 2 install. The
-host's checks will be set with the route, from the Phase 0R benchmark record (`docs/verification/ENGINE_BENCHMARK.md`,
-written, NOT RUN). The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
+Not defined yet. The engine route is chosen (own engine on wgpu + winit, picked 2026-11-15 from
+`docs/verification/ENGINE_BENCHMARK.md`), but the host is not written: `ow-host` only checks that it was given a
+Borderlands 2 install. The host's checks are set when the host work starts. The retired UE5 host's suites and their
+baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records
 - `python tools/decisions_index.py --check --baseline origin/main` after adding, editing or moving decisions (with the

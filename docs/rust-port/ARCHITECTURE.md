@@ -188,7 +188,7 @@ The scaffold creates every file below with a `//!` header naming its owner lane 
 |---|---|
 | `ow-core` | `lib.rs`, `notyet.rs`, `ident.rs`, `detmap.rs`, `ordmap.rs`, `parity.rs` (W0-SCAFFOLD); `num.rs`, `units.rs`, `fmt.rs` (W1-NUM); `rand.rs` (W1-RAND); `sim.rs` (W1-SIM) |
 | `ow-container` | `lib.rs` (signature: W0; body: W1-LZO), `lzo.rs`, `chunks.rs` (W1-LZO) |
-| `ow-package` | `reader.rs`, `header.rs`, `tables.rs`, `package.rs` (W1-PKG); `testkit.rs` behind feature `test-support` (placeholder: W0; real: W1-TESTKIT); `props.rs`, `schema.rs` (W2-PROPS); `store.rs` (W2-STORE) |
+| `ow-package` | `reader.rs`, `header.rs`, `tables.rs`, `package.rs` (W1-PKG); `testkit.rs` behind feature `test-support` (placeholder: W0; real: W1-TESTKIT), its children `testkit/reflect.rs` (W2-REFLECT) and `testkit/script.rs` (W2-SCRIPT), declared as placeholders by W1-TESTKIT; `props.rs`, `schema.rs` (W2-PROPS); `store.rs` (W2-STORE) |
 | `ow-object` | `ids.rs`, `value.rs`, `names.rs`, `heap.rs`, `layout.rs` (W1-OBJ); `reflect.rs`, `class_body.rs` (W2-REFLECT); `decode.rs`, `cdo.rs`, `prefix.rs` (W3-DECODE) |
 | `ow-defs` | `store.rs`, `identity.rs`, `overlay.rs`, `keys.rs`, `tail.rs` (W3-DEFS) |
 | `ow-script` | `ops.rs`, `function.rs`, `decode.rs`, `disasm.rs`, `check.rs` (W2-SCRIPT) |
@@ -322,7 +322,8 @@ impl GameRng {
     pub fn crt(&mut self, s: CrtStream) -> &mut CrtRand;
     pub fn script(&mut self, s: ScriptStream) -> &mut dyn ScriptRng;   // CrtRand, or VmLcg(12345)/VmLcg(54321) under Reference
 }
-pub fn frand_f64(r: &mut dyn Rand15) -> f64;       // rand15 / 32767 in double (weapon_recipe's form)
+pub fn frand_f64(r: &mut dyn Rand15) -> f64;       // rand15 / 32767 in double: the listed-pool probability draw (weapon_gen.cpp:1676)
+pub fn weighted_draw(r: &mut dyn Rand15, total: f64) -> f64;  // total * rand15 / 32767, left to right: every weighted pick (weapon_gen.cpp:757)
 pub fn frand_f32(r: &mut dyn Rand15) -> f32;       // the same in single; each rule names which its oracle uses
 // HostRng (cosmetic randomness: particles, sound variation) lives in ow-host, which no game crate may depend on.
 
@@ -332,12 +333,14 @@ pub fn frand_f32(r: &mut dyn Rand15) -> f32;       // the same in single; each r
 // so they live on the actor in ow-world (W5-WORLD), not in a generic queue here.
 pub struct SimClock { .. }                         // tick counter u64, time f64, TimeSeconds f32 accumulated as UE3 does
 impl SimClock {
-    pub fn advance(&mut self, real_dt: f32) -> Step;   // Step { dt: f32, tick: u64 }; where CustomTimeDilation and the world's
+    pub fn advance(&mut self, real_dt: f32) -> Step;   // Step { dt, real_dt, tick } (#[non_exhaustive]); where CustomTimeDilation and the world's
                                                        // TimeDilation enter the actor's delta is not located in the record
                                                        // (NATIVE_ENGINE_CORE.md, Open): the dilated dt is UNVERIFIED
-    pub fn time_seconds(&self) -> f32;  pub fn set_time_dilation(&mut self, d: f32);
+    pub fn time_seconds(&self) -> f32;
+    pub fn set_time_dilation(&mut self, d: f32) -> Result<(), ClockError>;   // negative/NaN/inf refused, old value kept
 }
-pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWork }
+pub enum ClockError { BadTimeDilation(f32) }   // #[non_exhaustive]
+pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWork, EffectsUpdateWork }  // Core.upk Object.ETickingGroup values 0-4 (TG_MAX = 5)
 ```
 
 ### 3.2 `ow-container`, `ow-package`
@@ -369,9 +372,12 @@ pub type PackageId = u32;                          // index into PackageStore, s
 
 // testkit.rs (feature "test-support"; placeholder W0, real W1-TESTKIT): synthetic packages for Rust tests, rule 9.
 pub struct PackageBuilder { .. }   // header 832/46, names, imports, exports, payloads, the same layout package_test.py writes
-pub fn tag(name: &str, kind: &str, value: &[u8]) -> Vec<u8>;   // the tests/ tag() helpers' byte form
+impl PackageBuilder { pub fn tag(&mut self, name: &str, kind: &str, value: &[u8]) -> Vec<u8>; .. }  // tags need the name
+                                   // table: the tests/ tag() helpers' byte form; tag_detail, tag_full, typed tags too
 pub fn container(data: &[u8], block: usize) -> Vec<u8>;        // a valid LZO container made of literal runs only
-pub fn partial(..) -> Vec<u8>;                                 // a partially compressed package (package_test.py:64-79 shape)
+pub fn partial(builder: &mut PackageBuilder) -> Vec<u8>;       // build_partial(): the package_test.py:64-79 shape
+// testkit/reflect.rs (placeholder; W2-REFLECT): property, struct, class and enum exports, class_body().
+// testkit/script.rs (placeholder; W2-SCRIPT): function exports and the Asm bytecode writer.
 
 // props.rs (W2-PROPS): the serialized tree, references still package-relative.
 pub enum PropValue { Int(i32), Float(f32), Bool(bool), Byte(u8), Enum(String), Name(String), Str(String),
@@ -558,10 +564,23 @@ pub struct OpLevel(u8);        // 0..=10 (NATIVE_LOOT cap reading, UNVERIFIED); 
 pub struct PlayerCount(u8);    // 1..=4; single player = 1 (D12)
 pub struct GameStage(pub i32);   // placed by W0, final (W1-ITEMDATA uses it before W1-BALTYPES lands)
 pub struct ExpLevel(i32); pub struct AwesomeLevel(i32);
-pub struct LevelCapUpgrades(u8); // 0, 1, 2 level-cap packs (cap 50 / 61 / 72; the third-playthrough cap rule reads it)
+pub enum LevelCapPack { First, Second, Third }  // record order; increments 11 / 11 / 8 are data for W3-BALANCE
+impl LevelCapPack { pub const ALL: [LevelCapPack; 3]; pub fn bit(self) -> u8 /* 0x1, 0x2, 0x4: this crate's encoding */ }
+pub struct LevelCapUpgrades(u8); // set of licensed level-cap packs; input to the player level cap in every playthrough
+impl LevelCapUpgrades { pub const NONE: Self; pub const ALL: Self;
+                        pub fn from_bits(bits: u32) -> Result<Self, BalanceError> /* unknown bits refused */;
+                        pub fn bits(self) -> u8; pub fn with(self, pack: LevelCapPack) -> Self;
+                        pub fn contains(self, pack: LevelCapPack) -> bool; pub fn is_empty(self) -> bool }
+#[non_exhaustive]
 pub struct BalanceSnapshot { pub playthrough: Playthrough, pub op: OpLevel, pub players: PlayerCount,
-                             pub player_level: ExpLevel, pub stage: GameStage, pub awesome: AwesomeLevel }
-pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: i64 }, Attr(AttrError) }
+                             pub player_level: ExpLevel, pub stage: GameStage, pub awesome: AwesomeLevel,
+                             pub level_cap_packs: LevelCapUpgrades }
+impl BalanceSnapshot { pub fn new(/* the seven fields in order */) -> Result<Self, BalanceError> /* validates */;
+                       pub fn validate(&self) -> Result<(), BalanceError> /* nonzero OP only in UVHM, UNVERIFIED */ }
+#[non_exhaustive]  // Clone + PartialEq, not Eq (so Attr(AttrError) need not be Eq)
+pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: i64 },
+                        OpLevelOutsideUvhm { op: u8, playthrough: Playthrough }, UnknownLevelCapPackBits { bits: u32 },
+                        Attr(AttrError) /* added once ow-attr has its error type */ }
 
 // W3-BALANCE
 pub fn experience_required(sys: &AttributeSystem, cx: &mut EvalCx, curve: ObjRef, level: ExpLevel) -> Result<i64, BalanceError>;
@@ -580,7 +599,7 @@ pub struct OfflineWorld { .. }   // builds GRI, PRI and controller objects in an
 pub enum ItemKind { Weapon, Shield, GrenadeMod, ClassMod, Relic, Usable, Customization, MissionItem, MissionWeapon }
 pub enum WeaponSlot { Body, Grip, Barrel, Sight, Stock, Elemental, Accessory1, Accessory2, Material }
 pub enum ItemSlot { Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta, Theta, Material }
-pub struct DefinitionData { pub kind: ItemKind, pub balance: ObjectPath, pub definition: ObjectPath, pub manufacturer: Option<ObjectPath>,
+pub struct DefinitionData { pub kind: ItemKind, pub balance: Option<ObjectPath>, pub definition: ObjectPath, pub manufacturer: Option<ObjectPath>,
                             pub manufacturer_grade: i32, pub parts: [Option<ObjectPath>; 9], pub prefix: Option<ObjectPath>,
                             pub title: Option<ObjectPath>, pub game_stage: GameStage, /* the remaining fields exactly as the package
                             declares WeaponDefinitionData / ItemDefinitionData: names read with the C++ tool, not invented */ }
@@ -741,6 +760,13 @@ call only until each is settled, and keep the parameter afterwards (callers then
   defaults are the settled forms; if a set passes only under the other form, the lane stops and reports: that is a
   finding for the maintainer and real-game questions 21 (pow) and 22 (stack combine), not a lane decision.
 
+The same holds for **two half-up roundings** of RoundingMode 1 (`ATTRROUNDING_IntRound`; review r1 of W1-NUM). The
+attribute-initialization path (`weapon_gen.cpp:568` `Round()`, `weapon_recipe.ROUNDING`) rounds `floor(x + 0.5)` in
+double: `ow_core::num::round_mode(x, RoundingMode::HalfUp)`, so `-2.5` gives `-2`. `progression.cpp:311`
+`restricted()` (XP curve, health base) calls `std::round`, halves away from zero: `ow_core::num::round_half_away_f32`,
+so `-2.5` gives `-3` and `-0.3` gives `-0.0`. They differ only on negative halves. Each port calls the form its oracle
+uses (W1-ATTRMATH's `restricted()` calls `round_half_away_f32`); which form the game uses for each rule is UNVERIFIED.
+
 ---
 
 ## 6. Parity strategy per layer
@@ -812,7 +838,8 @@ returns) in the same PR. W7-RETIRE owns the split files and deletes each only wh
 | `ow-core::num` / `fmt` (choke points, `f32r`, both truncation forms, rounding, every output format) | W1-NUM | its PR lands | every rule and CLI lane |
 | `ow-core::rand` (`Rand15`, `ScriptRng`, `CrtRand`, `VmLcg`, `CrtStream`, `ScriptStream`, `GameRng`) | W1-RAND | its PR lands | items, VM natives, combat, AI |
 | `ow-core::sim` (`SimClock`, `TickGroup`) | W1-SIM | its PR lands | VM, world, behavior, pools |
-| `ow-package::testkit` builders | W1-TESTKIT | its PR lands | every W2+ lane with synthetic packages |
+| `ow-package::testkit` builders (`testkit.rs`) | W1-TESTKIT | its PR lands | every W2+ lane with synthetic packages |
+| `testkit/reflect.rs`, `testkit/script.rs` helpers | W2-REFLECT, W2-SCRIPT | each owner's PR lands | W3+ lanes with reflection exports or script bodies |
 | `ow-object` IDs, `PropAddr`, `Value` (`Rc`, `!Send`: D18), `Heap`, `ClassTable`, `PropertyDecl`, `ObjectSpace` | W1-OBJ | its PR lands | reflect, decode, defs, attr, VM |
 | `ow-package` `Package`, `Reader`, `PropValue`, `ArrayTyper` | W1-PKG, W2-PROPS | their PRs land | script, reflect, decode, assets |
 | `ow-attr` stack math, `Modifier`, `PowForm`, `CombineForm` | W1-ATTRMATH | its PR lands | attr lanes, VM 5F |
@@ -979,8 +1006,8 @@ W1-NUM is the lane to start first and review first.
 - Inputs: W0.
 - Not yet: any rule (curve, stage, cap): those are W3-BALANCE.
 - Tests / done when: `Playthrough::from_index(0).count() == 1`; out-of-range indices refused; `OpLevel` refused
-  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` 0..=2 (doc: caps 50,
-  61, 72 as the records give them, UNVERIFIED).
+  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` a set of the three level-cap
+  packs (increments 11, 11, 8 in the records), unknown bits refused with a typed error (independent licensing UNVERIFIED).
 
 **W1-ITEMDATA: item identity** · S · game: yes (read the struct declarations with the C++ tool) · Opus 5.5 medium
 - Goal: `ow-items::data` as in 3.7. The field list mirrors `WeaponDefinitionData` and `ItemDefinitionData` as the
@@ -1006,7 +1033,8 @@ W1-NUM is the lane to start first and review first.
   and `container()` helpers in `tests/` (`package_test.py`, `properties_test.py`, `runtime_test.py`,
   `global_resolve_test.py`, `assets_test.py`), LZO containers of literal runs, the partial-compression shape. It
   writes bytes only; it does not use the reader, so it runs beside W1-PKG.
-- Owns: `crates/ow-package/src/testkit.rs` (and `testkit/` children).
+- Owns: `crates/ow-package/src/testkit.rs` and `testkit/tests.rs`; declares the placeholder children `testkit/reflect.rs`
+  (W2-REFLECT) and `testkit/script.rs` (W2-SCRIPT), not their contents.
 - Inputs: W0.
 - Not yet: any reading or checking (W1-PKG's tests use it).
 - Tests / done when: for each Python helper, the same invented inputs give byte-identical output to the Python helper
@@ -1065,7 +1093,8 @@ W1-NUM is the lane to start first and review first.
 **W2-SCRIPT: bytecode decoder** · M-L · game: yes · Opus 5.5 medium
 - Goal: port `src/script.*`: `readFunction`, `decode`, `format`/`disassemble`, `checkPackage`; CLI `--script-check`,
   `--disasm`.
-- Owns: `crates/ow-script/src/*`, `crates/ow-cli/src/cmd/script.rs`, `tests/rust_parity.d/script.txt`.
+- Owns: `crates/ow-script/src/*`, `crates/ow-cli/src/cmd/script.rs`, `tests/rust_parity.d/script.txt`,
+  `crates/ow-package/src/testkit/script.rs`.
 - Inputs: W1-PKG, W1-TESTKIT.
 - Not yet: execution.
 - Done when: the cases of `tests/script_disasm_test.py` (which tests only the Python decoder) re-expressed as Rust
@@ -1076,7 +1105,7 @@ W1-NUM is the lane to start first and review first.
 **W2-REFLECT: reflection and class bodies** · M-L · game: yes · Opus 5.5 high
 - Goal: load Class/Struct/Enum/Property exports into `ClassTable` layouts (including the attribute companions and the
   byte-attribute shift), `decode_class_body`, interface tables; CLI `--class-check`, `--interface-compare`.
-- Owns: `crates/ow-object/src/{reflect,class_body}.rs`, `crates/ow-cli/src/cmd/classes.rs`,
+- Owns: `crates/ow-object/src/{reflect,class_body}.rs`, `crates/ow-package/src/testkit/reflect.rs`, `crates/ow-cli/src/cmd/classes.rs`,
   `tests/rust_parity.d/reflect.txt`.
 - Inputs: W1-PKG, W1-OBJ, W1-TESTKIT, W2-STORE (cross-package super classes).
 - Not yet: tagged default values, CDOs.
@@ -1218,7 +1247,8 @@ W1-NUM is the lane to start first and review first.
 
 **W3-BALANCE: balance service** · M · game: yes · Opus 5.5 high
 - Goal: section 3.6 rules: XP curve, region game stage (stored where the game stores it, first query wins), item stage
-  cap, playthrough modifiers, mission and kill XP, skill points, `OfflineWorld`.
+  cap, the player max level (`GetMaxExpLevel`: 50 + the increment of each licensed level-cap pack, clamped to 50 + the
+  sum of all; NATIVE_PROGRESSION.md, "Level cap"), playthrough modifiers, mission and kill XP, skill points, `OfflineWorld`.
 - Owns: `crates/ow-balance/src/{curve,stage,cap,playthrough,xp,offline}.rs`.
 - Inputs: W1-BALTYPES, W3-ATTREVAL, W3-ATTRCTX.
 - Not yet: UVHM region stage (`NeedsRealGame(2)`), playthrough modifier effects above index 0 where unread, kill XP
@@ -1325,6 +1355,9 @@ W1-NUM is the lane to start first and review first.
 - **W7-WORLDLOGIC**: vendors, interactive objects, stations (`ow-mission/src/{vendors,interactive}.rs`); needs
   W4-POOLS, W6-MISSION.
 - **W7-SAVE**: `ow-save` model and load order over `DefinitionData`; the on-disk format only after D9.
+  Items from DLC that is not installed are kept by the save as opaque `SerialNumber` records
+  (`PlayerSaveGame.UnloadableDlcWeaponSaveGameData` / `UnloadableDlcItemSaveGameData`) and cannot be an
+  `InventoryInstance`; the save model needs its own carrier for them.
 - **W7-UI**: `ow-ui` bridge natives and the `MoviePlayer` trait; needs the engine pick for the implementation.
 - **W7-RETIRE**: delete `src/`, `third_party/lzokay`, the C++ targets and the ctest entries that only test the C++
   binary, once the Rust binary passes every one of them (`tools/rust_parity.py` over the full list); a sensitive-file

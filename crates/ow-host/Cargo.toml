@@ -1,6 +1,6 @@
 [package]
 name = "ow-host"
-description = "The Rust host. Engine route not chosen (Phase 0R benchmark)"
+description = "The Rust host. Engine route: own engine on wgpu + winit (picked 2026-11-15); not written yet"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

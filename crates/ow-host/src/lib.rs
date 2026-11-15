@@ -1,5 +1,6 @@
-//! The Rust host. Its engine route is not chosen yet: the Phase 0R benchmark (`docs/verification/ENGINE_BENCHMARK.md`)
-//! compares candidates and the maintainer picks one (decision 2026-11-14-01).
+//! The Rust host. Its engine route is chosen: our own engine on wgpu + winit, picked by the maintainer from the Phase 0R
+//! benchmark (`docs/verification/ENGINE_BENCHMARK.md`, decision 2026-11-15-01). The host itself is not written yet, and
+//! no engine crate is in the workspace until its `THIRD_PARTY.md` entry is approved.
 //!
 //! What exists now is the start of the one rule every route keeps (AGENTS.md rule 11): the host will read the player's
 //! own installed game and refuses to start without it. Today it only checks that the install's folders and code
