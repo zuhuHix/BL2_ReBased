@@ -12,7 +12,6 @@
 //! `ObjectPropertyAttributeValueResolver`); every other one answers false. Nothing is rolled back: a later failure
 //! leaves an earlier resolver's change in place.
 
-use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 
@@ -20,6 +19,7 @@ use crate::api::{
     AddModifierOutcome, Applied, AppliedEffect, AttrError, EffectData, EvalCx, InitData, Refusal,
     RemoveModifierOutcome, Storage, WorldParts,
 };
+use crate::eval;
 use crate::registry::AttributeSystem;
 use crate::stack::ModifierType;
 use crate::storage::{self, ATTRIBUTE_MODIFIER_CLASS};
@@ -30,38 +30,14 @@ fn bad(reason: String) -> AttrError {
     }
 }
 
-/// Loads `obj` in place when it is a definition handle the store has not loaded yet; anything else is left as it is.
-/// A world without a store has no handles to load.
-fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> {
-    let WorldParts { space, defs, .. } = cx.world.parts();
-    if let Some(defs) = defs {
-        defs.ensure_loaded(space, obj)?;
-    }
-    Ok(())
-}
-
-/// The attribute definition `attr`'s `ValueResolverChain`, in order (a null entry kept as `None`).
+/// The attribute definition `attr`'s `ValueResolverChain`, in order (a null entry kept as `None`), read with the
+/// evaluator's helpers (W3-ATTREVAL's `eval.rs`), which load a definition handle first. A class without the property
+/// is not an attribute definition: `BadData`.
 fn value_chain(cx: &mut EvalCx<'_>, attr: ObjRef) -> Result<Vec<Option<ObjRef>>, AttrError> {
-    ensure_loaded(cx, attr)?;
-    let space: &ObjectSpace = cx.world.parts().space;
-    let class = space.heap.get(attr)?.class;
-    let chain = space.prop(class, "ValueResolverChain").ok_or_else(|| {
-        bad(format!(
-            "{attr:?} has no ValueResolverChain: not an attribute definition"
-        ))
-    })?;
-    let Value::Array(items) = space.read(attr, PropAddr::scalar(chain))? else {
-        return Err(bad("ValueResolverChain is not an array".to_string()));
-    };
-    items
+    let chain = eval::required(cx, attr, "ValueResolverChain")?;
+    eval::elements("ValueResolverChain", &chain)?
         .iter()
-        .map(|item| match item {
-            Value::Object(r) => Ok(*r),
-            other => Err(bad(format!(
-                "ValueResolverChain element is a {}",
-                other.kind_name()
-            ))),
-        })
+        .map(|entry| eval::object("ValueResolverChain entry", entry))
         .collect()
 }
 
@@ -76,7 +52,7 @@ fn storage_at(
     context: ObjRef,
     cx: &mut EvalCx<'_>,
 ) -> Result<Option<Storage>, AttrError> {
-    ensure_loaded(cx, r)?;
+    eval::ensure_loaded(cx, r)?;
     let resolver = sys.value_resolver(cx.world.parts().space, r)?;
     resolver.storage(sys, r, context, cx)
 }
@@ -374,9 +350,10 @@ pub(crate) fn remove_effects(
 #[cfg(test)]
 pub(crate) mod fixture {
     //! A synthetic world for the effect and storage tests (rule 9: invented classes, names and values only). It has
-    //! no definition store, so every definition is a plain runtime object. Until W3-ATTREVAL registers the real
-    //! `ObjectPropertyAttributeValueResolver`, a test resolver class stands in for it: it reads the property named by
-    //! its own `PropertyName` field, and its storage is [`storage::storage_of`] on that property.
+    //! no definition store, so every definition is a plain runtime object. The value resolvers are W3-ATTREVAL's
+    //! (`value_resolvers::register`), the writable one being `Engine.ObjectPropertyAttributeValueResolver`. Two
+    //! classes are the tests' own: a read-only value resolver, and a context resolver answering its source (W3-ATTRCTX's
+    //! classes are not on main yet).
 
     use ow_core::NotYet;
     use ow_core::rand::{CrtStream, Rand15};
@@ -386,10 +363,12 @@ pub(crate) mod fixture {
     use ow_object::value::Value;
 
     use crate::api::{
-        AttrError, AttrWorld, EvalCx, GlobalSlots, NumForms, Storage, ValueResolver, WorldParts,
+        AttrError, AttrWorld, ContextResolver, EvalCx, GlobalSlots, NumForms, ValueResolver,
+        WorldParts,
     };
     use crate::registry::AttributeSystem;
     use crate::storage::{self, Notified};
+    use crate::value_resolvers;
 
     pub(crate) const STACK: u64 = PropertyDecl::STACK_ATTRIBUTE;
     pub(crate) const PLAIN: u64 = PropertyDecl::PLAIN_ATTRIBUTE;
@@ -433,54 +412,6 @@ pub(crate) mod fixture {
         }
     }
 
-    /// The writable test resolver (see the module doc).
-    pub(crate) struct NamedProperty;
-
-    impl NamedProperty {
-        fn target(
-            cx: &mut EvalCx<'_>,
-            resolver: ObjRef,
-            context: ObjRef,
-        ) -> Result<Option<PropId>, AttrError> {
-            let space = cx.world.parts().space;
-            let class = space.heap.get(resolver)?.class;
-            let field = space.prop(class, "PropertyName").unwrap();
-            let Value::Name(n) = space.read(resolver, PropAddr::scalar(field))?.clone() else {
-                panic!("PropertyName is a name");
-            };
-            Ok(space.classes.prop(space.heap.get(context)?.class, n))
-        }
-    }
-
-    impl ValueResolver for NamedProperty {
-        fn value(
-            &self,
-            _sys: &AttributeSystem,
-            resolver: ObjRef,
-            context: ObjRef,
-            _previous: f32,
-            cx: &mut EvalCx<'_>,
-        ) -> Result<f32, AttrError> {
-            let p = Self::target(cx, resolver, context)?.unwrap();
-            match cx.world.parts().space.read(context, PropAddr::scalar(p))? {
-                Value::Float(x) => Ok(*x),
-                _ => Ok(0.0),
-            }
-        }
-        fn storage(
-            &self,
-            _sys: &AttributeSystem,
-            resolver: ObjRef,
-            context: ObjRef,
-            cx: &mut EvalCx<'_>,
-        ) -> Result<Option<Storage>, AttrError> {
-            match Self::target(cx, resolver, context)? {
-                Some(p) => storage::storage_of(cx.world.parts().space, context, p),
-                None => Ok(None),
-            }
-        }
-    }
-
     /// A resolver that answers a number and takes no writes (the class default storage), as a constant does.
     pub(crate) struct ReadOnly;
 
@@ -497,11 +428,28 @@ pub(crate) mod fixture {
         }
     }
 
+    /// A context resolver answering its source, the first step of every test chain.
+    pub(crate) struct Source;
+
+    impl ContextResolver for Source {
+        fn resolve(
+            &self,
+            _sys: &AttributeSystem,
+            _resolver: ObjRef,
+            _attr: ObjRef,
+            source: Option<ObjRef>,
+            _cx: &mut EvalCx<'_>,
+        ) -> Result<Option<ObjRef>, AttrError> {
+            Ok(source)
+        }
+    }
+
     pub(crate) fn system() -> AttributeSystem {
-        AttributeSystem::new_empty()
-            .with_value_resolver("Test.NamedPropertyValueResolver", NamedProperty)
+        value_resolvers::register(AttributeSystem::new_empty())
             .unwrap()
             .with_value_resolver("Test.ReadOnlyValueResolver", ReadOnly)
+            .unwrap()
+            .with_context_resolver("Test.SourceContextResolver", Source)
             .unwrap()
     }
 
@@ -510,6 +458,7 @@ pub(crate) mod fixture {
         pub modifier: ClassId,
         pub definition: ClassId,
         pub named: ClassId,
+        pub source: ClassId,
         pub read_only: ClassId,
         pub unread: ClassId,
         pub weapon: ClassId,
@@ -561,10 +510,18 @@ pub(crate) mod fixture {
         ];
         let modifier = define(&mut space, "Core.AttributeModifier", props);
         let chain = PropKind::Array(Box::new(PropKind::Object { class: object }));
-        let props = vec![decl(&mut space, "ValueResolverChain", chain, 0)];
+        let props = vec![
+            decl(&mut space, "ContextResolverChain", chain.clone(), 0),
+            decl(&mut space, "ValueResolverChain", chain, 0),
+        ];
         let definition = define(&mut space, "Test.AttributeDefinition", props);
         let props = vec![decl(&mut space, "PropertyName", PropKind::Name, 0)];
-        let named = define(&mut space, "Test.NamedPropertyValueResolver", props);
+        let named = define(
+            &mut space,
+            "Engine.ObjectPropertyAttributeValueResolver",
+            props,
+        );
+        let source = define(&mut space, "Test.SourceContextResolver", vec![]);
         let read_only = define(&mut space, "Test.ReadOnlyValueResolver", vec![]);
         let unread = define(&mut space, "Test.UnreadValueResolver", vec![]);
 
@@ -611,6 +568,7 @@ pub(crate) mod fixture {
             modifier,
             definition,
             named,
+            source,
             read_only,
             unread,
             weapon,
@@ -666,9 +624,9 @@ pub(crate) mod fixture {
             m
         }
 
-        /// A resolver object of the named-property class for property `prop`.
+        /// An ObjectProperty resolver object for property `prop`.
         pub(crate) fn resolver(&mut self, c: &Classes, prop: &str) -> ObjRef {
-            let r = self.obj(c.named, "NamedPropertyValueResolver");
+            let r = self.obj(c.named, "ObjectPropertyAttributeValueResolver");
             let n = self.space.names.intern(prop);
             self.set(r, "PropertyName", Value::Name(n));
             r
@@ -686,6 +644,18 @@ pub(crate) mod fixture {
         pub(crate) fn property_attribute(&mut self, c: &Classes, prop: &str) -> ObjRef {
             let r = self.resolver(c, prop);
             self.attribute(c, &[Some(r)])
+        }
+
+        /// As [`World::property_attribute`], with a context chain that resolves to the source itself.
+        pub(crate) fn resolving_attribute(&mut self, c: &Classes, prop: &str) -> ObjRef {
+            let a = self.property_attribute(c, prop);
+            let r = self.obj(c.source, "SourceContextResolver");
+            self.set(
+                a,
+                "ContextResolverChain",
+                Value::array(vec![Value::Object(Some(r))]),
+            );
+            a
         }
     }
 }
@@ -716,9 +686,9 @@ mod tests {
         }
     }
 
-    /// A stand-in of the evaluator's two steps (W3-ATTREVAL's) for the loop tests: a constant initialization value
+    /// A stand-in of the evaluator's two steps, so the loop tests pin the loop alone: a constant initialization value
     /// (constant times scale; anything else is not these tests'), and a fixed table (attribute, source) -> context.
-    /// It counts the value evaluations.
+    /// It counts the value evaluations. `apply_effects_runs_through_the_evaluator` runs the real steps.
     struct TestSteps {
         contexts: Vec<(ObjRef, Option<ObjRef>, ObjRef)>,
         evaluated: Cell<usize>,
@@ -1258,7 +1228,7 @@ mod tests {
         let e = sys
             .add_modifier(flagged, Some(gun), m, false, &mut EvalCx::new(&mut w))
             .unwrap_err();
-        assert_eq!(not_yet(e), Missing::NotRead);
+        assert!(matches!(e, AttrError::BadData { .. }), "{e:?}");
         // An object of another class handed in as the modifier: refused before anything is written.
         let stranger = w.obj(c.object, "Stranger");
         let damage = w.property_attribute(&c, "InstantHitDamage");
@@ -1320,6 +1290,84 @@ mod tests {
         let current = w.property_attribute(&c, "CurrentValue");
         assert!(set(&mut w, current, &[pool], 250.0));
         assert_eq!(w.get(pool, "CurrentValue"), Value::Float(100.0));
+    }
+
+    /// End to end through W3-ATTREVAL's evaluator and chain walks (no stand-in steps): `skill_effects_test.py`'s
+    /// "an attribute times its scale" value (the clip size, 12, times 0.5), evaluated once at apply time, so a later
+    /// change of the clip size does not move it; the override source first; an attribute whose context chain is empty
+    /// leaves no record.
+    #[test]
+    fn apply_effects_runs_through_the_evaluator() {
+        let (mut w, c) = world();
+        let gun = weapon(&mut w, &c);
+        let other = weapon(&mut w, &c);
+        let damage = w.resolving_attribute(&c, "InstantHitDamage");
+        let clip = w.resolving_attribute(&c, "ClipSize");
+        let unresolved = w.property_attribute(&c, "InstantHitDamage");
+        let mut from_clip = InitData::constant(0.0);
+        from_clip.base_value_attribute = Some(clip);
+        from_clip.base_value_scale_constant = 0.5;
+        let effects = [
+            effect(Some(damage), ModifierType::Scale, 0.25),
+            EffectData::new(Some(damage), ModifierType::PostAdd, from_clip),
+            effect(Some(unresolved), ModifierType::PostAdd, 100.0),
+            effect(None, ModifierType::PreAdd, 1.0),
+        ];
+        let sys = system();
+        let applied = sys
+            .apply_effects(&effects, Some(gun), None, &mut EvalCx::new(&mut w))
+            .unwrap();
+        assert_eq!(applied.0.len(), 2);
+        let from_clip_modifier = applied.0[1].modifier;
+        assert_eq!(w.get(from_clip_modifier, "Value"), Value::Float(6.0));
+        // 10 * (1 + 0.25) + 6
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(18.5));
+
+        // The clip size changes after the apply: the modifier keeps the value it was given.
+        let mut cx = EvalCx::new(&mut w);
+        assert!(sys.set_base(clip, Some(gun), 20.0, false, &mut cx).unwrap());
+        assert_eq!(w.get(gun, "ClipSize"), Value::Int(20));
+        assert_eq!(w.get(from_clip_modifier, "Value"), Value::Float(6.0));
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(18.5));
+
+        sys.remove_effects(applied, &mut EvalCx::new(&mut w))
+            .unwrap();
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
+
+        // With an override source, its context wins (the test chain answers its source, so: the other gun).
+        let one = [effect(Some(damage), ModifierType::PostAdd, 1.0)];
+        let applied = sys
+            .apply_effects(&one, Some(gun), Some(other), &mut EvalCx::new(&mut w))
+            .unwrap();
+        assert_eq!(applied.0[0].context, other);
+        assert_eq!(w.get(other, "InstantHitDamage"), Value::Float(11.0));
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(10.0));
+    }
+
+    /// `SetAttributeBaseValue` end to end: the contexts from `ResolveContexts`, then the set; no context is false.
+    #[test]
+    fn set_base_runs_through_the_context_chain() {
+        let (mut w, c) = world();
+        let gun = weapon(&mut w, &c);
+        let damage = w.resolving_attribute(&c, "InstantHitDamage");
+        let m = w.modifier(&c, POST, 1.0);
+        add(&mut w, damage, Some(gun), m);
+        let sys = system();
+        let mut cx = EvalCx::new(&mut w);
+        assert!(
+            sys.set_base(damage, Some(gun), 20.0, false, &mut cx)
+                .unwrap()
+        );
+        // The test chain answers its source, so a None source resolves to no context.
+        assert!(!sys.set_base(damage, None, 30.0, false, &mut cx).unwrap());
+        let unresolved = w.property_attribute(&c, "InstantHitDamage");
+        let mut cx = EvalCx::new(&mut w);
+        assert!(
+            !sys.set_base(unresolved, Some(gun), 40.0, false, &mut cx)
+                .unwrap()
+        );
+        assert_eq!(w.get(gun, "InstantHitDamageBaseValue"), Value::Float(20.0));
+        assert_eq!(w.get(gun, "InstantHitDamage"), Value::Float(21.0));
     }
 
     #[test]
