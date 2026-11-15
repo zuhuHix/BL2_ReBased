@@ -340,6 +340,12 @@ banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
   (exit 0; 1 when it refuses the folder, 2 for a wrong call).
 - The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; until a command family is ported it prints
   `<flag> is not ported to Rust yet (lane <lane>)` and exits 3. Use `build/Release/ow-package.exe` meanwhile.
+- Since lane W3-SWITCH (2026-11-15), the Python tools whose `ow-package` flags are all ported default to the Rust
+  release binary, `target/release/ow-package.exe` (`tools/repo_paths.py`, `default_reader`). Build it with
+  `cargo build --release -p ow-cli --locked`; a tool run without it stops and says so. `--reader build/Release/ow-package.exe`
+  still selects the C++ reader (give it as an absolute path: some tools hand the value to Windows as it is, and a relative
+  path with forward slashes does not start there). The tools that keep the C++ default, and the flag each waits for, are in decision
+  2026-11-15-17 (`grep -n "waits_for=" tools/*.py`).
 
 Beyond `ow-host`'s install check and five finished `ow-core` files (`NotYet`, object paths, the key-ordered and
 insertion-ordered maps, the parity mode), every module is a stub that its owner lane fills; nothing in Rust reads a

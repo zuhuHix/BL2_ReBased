@@ -7,8 +7,9 @@ No parser changes; what changes is which parser a tool runs when no `--reader` i
 - **What changed.**
   - `tools/repo_paths.py` gains `default_reader(waits_for=None)`, with `RUST_READER` (`target/release/ow-package`) and
     `CXX_READER` (`build/Release/ow-package`), both relative to the checkout.
-  - The 36 tools that had a built-in `--reader` default now take it from the helper:
-    - 31 default to the Rust binary;
+  - The 37 tools with a built-in `--reader` default now take it from the helper:
+    - 32 default to the Rust binary: the 31 whose default line changed, and `item_roll.py`, which took
+      `item_registry.DEFAULT_READER` and now calls the helper too;
     - 5 keep the C++ binary and name the flag they wait for:
 
       | Tool | Waits for |
@@ -20,6 +21,11 @@ No parser changes; what changes is which parser a tool runs when no `--reader` i
       | `prepare_phaselock_target.py` | `--object-dump`, below |
   - Tools whose `--reader` is required are unchanged, and so is `tools/rust_parity.py`, whose `--cxx` is the C++
     reference by design. A path given with `--reader` always wins.
+  - When `target/release/ow-package` is missing, a tool run with the Rust default and no `--reader` stops with one line
+    that names the path and `cargo build --release -p ow-cli --locked`. It never falls back to C++. The check is skipped
+    when the tool is only imported (a test calling its `main()`).
+  - `audio_slice_chain.py` and `prepare_range.py` also call `--object-dump`. A comment at each call says that they wait
+    for its parity too, once their first flag is ported.
 - **Rule for moving a tool.** A tool moves when every `ow-package` flag it calls, directly or through the tools it
   imports or runs, is ported (`crates/ow-cli/src/cmd/*.rs` no longer answers "not ported", exit 3). The tools reached
   through `--object-dump`, where decision 2026-11-15-08 accepts two output differences, moved only after a rerun on both

@@ -442,6 +442,7 @@ def object_reader(reader, package_path, cooked):
             raise KeyError(path)
         problem = ""
         for prefix in ("4", "8"):
+            # also waits for --object-dump parity (decision 2026-11-15-17) once --combat-run is ported
             run = subprocess.run([reader, package_path, "--object-dump", str(index[path]), prefix, "--cooked", cooked],
                                  capture_output=True, text=True, encoding="utf-8")
             if run.returncode == 0:
