@@ -628,23 +628,81 @@ live until destroyed; who calls `free` and when is for the world and VM lanes. S
 ### 3.4 `ow-defs` (W3-DEFS)
 
 ```rust
-pub struct LoadSet { pub packages: Vec<PackageName> }          // the game's loaded set, in load order
-pub enum IdentityPolicy { FirstInScanOrder /* the tools' convention; parity; UNVERIFIED as a game rule */, Loaded(LoadSet) }
-pub struct Overlay { pub name: String, pub kind: OverlayKind, pub patches: Vec<Patch> }
-pub enum OverlayKind { LiveCapture, Hotfix, TextMod, Test }
-pub struct Patch { pub object: ObjectPath, pub property: String /* "Prop[3].Field" */, pub value: String /* text form, typed by reflection */ }
-pub struct DefStore { .. }
+// identity.rs
+#[non_exhaustive] pub struct LoadSet { pub packages: Vec<PackageName> }   // ::new; the game's loaded set, in load order
+#[non_exhaustive] pub enum IdentityPolicy { #[default] FirstInScanOrder /* the tools' convention; parity; UNVERIFIED as a
+                                            game rule */, Loaded(LoadSet) /* first holder in load order; UNVERIFIED */ }
+#[non_exhaustive] pub struct Owner { pub package: String /* file stem */, pub file: PathBuf, pub export: i32 }   // ::new
+// overlay.rs
+pub struct OverlayId(u32);                         // ::new(raw), raw(): push order from 0
+#[non_exhaustive] pub enum OverlayKind { LiveCapture, Hotfix, TextMod, Test }
+#[non_exhaustive] pub enum PatchValue { Null, Bool(bool), Number(String) /* as written */, Text(String),
+                                        List(Vec<PatchValue>), Fields(Vec<(String, PatchValue)>) }   // the JSON value model
+#[non_exhaustive] pub struct Patch { pub object: ObjectPath, pub property: String /* "Prop[3].Field" */, pub value: PatchValue }
+#[non_exhaustive] pub struct Overlay { pub name: String, pub kind: OverlayKind, pub patches: Vec<Patch> }   // ::new
+impl Overlay { pub fn from_live_capture(name: &str, json: &str) -> Result<Overlay, DefError>;   // weapon_dump.py's file
+               pub fn from_text(name: &str, kind: OverlayKind, text: &str) -> Result<Overlay, DefError>;   // test format
+               pub fn read_file(path: &Path) -> Result<Overlay, DefError>; }   // `{` first: live capture, else test format
+#[non_exhaustive] pub struct OverlayStatus { pub applied: usize, pub pending: usize, pub failed: Vec<(usize, DefError)> }
+#[non_exhaustive] pub enum ValueOrigin { Cooked, Overlay(OverlayId), NotADefinition }
+#[non_exhaustive] pub struct Segment { pub name: String, pub index: Option<u32> }
+#[non_exhaustive] pub struct PropertyPath { pub segments: Vec<Segment> }   // ::parse: Name[i]?(.Name[i]?)*
+// store.rs
+pub const RECORD: &str;
+#[non_exhaustive] #[derive(Clone, PartialEq)] pub enum DefError { Store(StoreError), Reflect(ReflectError),
+    Decode(DecodeError), Heap(HeapError) /* the four transparent */, Io { path, reason }, OverlaySyntax { line, column, reason },
+    OverlayShape { object, reason }, BadPropertyPath { path, reason }, BadPatch { object, property, reason },
+    NoSuchProperty { class, property }, NotADefinition(String), NotYet(NotYet) }
+pub struct DefStore { .. }                         // owns the PackageStore, the CodeIndex and the DecodeState; Default = new_empty
 impl DefStore {
-    pub fn new(store: PackageStore, policy: IdentityPolicy) -> Self;
-    pub fn find(&mut self, w: &mut ObjectSpace, path: &ObjectPath) -> Result<Option<ObjRef>, DefError>;   // lazy load + overlays
+    pub fn new(store: PackageStore, policy: IdentityPolicy, mode: ParityMode) -> Self;   // no overlay installed (D1)
+    pub fn new_empty() -> Self;                    // no packages, FirstInScanOrder, ParityMode::Off
+    pub fn open(cooked_root: PathBuf, policy: IdentityPolicy, mode: ParityMode) -> Result<Self, DefError>;
+    pub fn from_synthetic(dir: &Path, files: &[(&str, &[u8])], policy: IdentityPolicy, mode: ParityMode)
+        -> Result<Self, DefError>;                 // test support: writes the files under dir, then opens it
+    pub fn policy(&self) -> &IdentityPolicy; pub fn mode(&self) -> ParityMode;
+    pub fn packages(&self) -> &PackageStore; pub fn code(&self) -> &CodeIndex; pub fn take_log(&mut self) -> Vec<String>;
+    pub fn find(&mut self, w: &mut ObjectSpace, path: &ObjectPath) -> Result<Option<ObjRef>, DefError>;   // loaded + overlays
     pub fn resolve_ref(&mut self, w: &mut ObjectSpace, from: PackageId, reference: i32) -> Result<Option<ObjRef>, DefError>;
-    pub fn owners(&self, path: &ObjectPath) -> Vec<(PackageName, i32)>;      // every holder, for audits
-    pub fn push_overlay(&mut self, w: &mut ObjectSpace, o: Overlay) -> Result<OverlayId, DefError>;  // also patches loaded objects
-    pub fn origin(&self, obj: ObjRef, prop: PropId) -> ValueOrigin;          // Cooked | Overlay(id)
-    pub fn raw_tail(&self, obj: ObjRef) -> Option<&[u8]>;                    // untagged bytes after the tags (behavior providers)
-    pub fn exports_of_class(&mut self, class_path: &str) -> Result<Vec<ObjectPath>, DefError>;  // scan order, for censuses
-    pub fn key(&mut self, w: &ObjectSpace, class_path: &str, prop: &str) -> Result<PropId, DefError>; // typed key, cached
+    pub fn load(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<ObjRef, DefError>;   // an unloaded handle, in place
+    pub fn is_loaded(&self, w: &ObjectSpace, obj: ObjRef) -> bool;
+    pub fn load_export(&mut self, w: &mut ObjectSpace, package: PackageId, index: i32, prefix: PropertyPrefix)
+        -> Result<ObjRef, DefError>;               // components (8) and placed actors (26)
+    pub fn owners(&mut self, path: &ObjectPath) -> Result<Vec<Owner>, DefError>;   // every holder, scan order, for audits
+    pub fn push_overlay(&mut self, w: &mut ObjectSpace, o: Overlay) -> Result<OverlayId, DefError>;   // also patches loaded objects
+    pub fn overlay_status(&self, id: OverlayId) -> Option<&OverlayStatus>;
+    pub fn origin(&self, obj: ObjRef, at: PropAddr) -> ValueOrigin;   // per element: Cooked | Overlay(id) | NotADefinition
+    pub fn raw_tail(&self, obj: ObjRef) -> Option<&[u8]>;   // untagged bytes after the tags (behavior providers), from tags_end
+    pub fn exports_of_class(&mut self, class_path: &str) -> Result<Vec<ObjectPath>, DefError>;  // exact class, scan order, censuses
+    pub fn key(&mut self, w: &mut ObjectSpace, class_path: &str, prop: &str) -> Result<PropId, DefError>;   // typed key, cached
+    pub fn class_id(&mut self, w: &mut ObjectSpace, class_path: &str) -> Result<ClassId, DefError>;
+    pub fn class_default(&mut self, w: &mut ObjectSpace, class_path: &str) -> Result<ObjRef, DefError>;   // no overlay applied
 }
+// Semantics (the doc comments of crates/ow-defs say more):
+// - Identity is by object path: each path is one object, the export of the holder the policy picks, however it is
+//   reached (find, an export reference, an import naming the path). Its key is that export as (filed id, index), the id
+//   CodeIndex::filed_id files the package under (decision 2026-11-15-10); no map is keyed by a raw PackageId. A path
+//   matches a file as Package::find_export matches it (folded, a leading `<file stem>.` dropped).
+// - Lazy loading in place: naming a definition allocates its one heap object unloaded (slotless, Origin::Resource, as
+//   the decoder's stand-ins); references decoded inside a definition are such handles. find, resolve_ref and load
+//   apply the class default and the export's tags into that same ObjRef, whose origin becomes Origin::Export with the
+//   filed id.
+// - Loads never nest: loading a definition never loads what it references, so no object still being built is handed
+//   out and the decoder's InstantiationCycle cannot come from the store's loads. Cyclic references are handles.
+// - Callers must load() a referenced definition before reading its slots: an unloaded handle has no slots, and reading
+//   one fails in the heap (SlotMissing), never with a guessed value.
+// - Lazy loads read tags from the 4-byte prefix (PropertyPrefix::Ordinary), the value every C++ definition consumer
+//   passes; components and placed actors go through load_export with the caller's prefix.
+// - Code exports (class, struct, enum, function, state, property) give DefError::NotADefinition from find; their layouts
+//   are reached through class_id and key. A Default__<Class> export is that class's default object (class_default).
+// - Overlays patch values only (they define no class): pushed in order, a later patch of an element wins; applied to
+//   loaded objects at once and to others when they load; a patch replaces the whole element its path ends at (a struct
+//   from its defaults with the listed fields set); a patch that does not type leaves the cooked value and is recorded in
+//   OverlayStatus::failed. The default overlay set is empty (D1). Static-array patches (`Prop[3].Field`) address PropAddr.
+// - The store passes its ParityMode to every decode and adds no stand-in of its own.
+// As shipped by the W3-DEFS contract commit: the ParityMode argument, open, from_synthetic, Owner, PatchValue, the
+// PropAddr origin, ValueOrigin::NotADefinition, &mut on owners and key, and the added load, is_loaded, load_export,
+// class_id, class_default, overlay_status, take_log and PropertyPath differ from revision 3 here.
 ```
 
 ### 3.5 `ow-attr`
