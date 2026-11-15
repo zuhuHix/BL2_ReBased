@@ -27,7 +27,9 @@ use crate::layout::PropKind;
 use crate::prefix::PropertyPrefix;
 use crate::reflect::ClassKey;
 
-/// The class default object of loaded class `class`, built on first use (module documentation).
+/// The class default object of loaded class `class`, built on first use (module documentation). A call made while
+/// it is being built (through a resolver that instantiates an export of this class) returns the object being built,
+/// with the tags applied so far.
 pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, DecodeError> {
     if let Some(&o) = cx.state.class_defaults.get(&class) {
         return Ok(o);
@@ -54,6 +56,10 @@ pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, De
     let object = cx
         .space
         .alloc(id, &name, None, Origin::Default { class: id })?;
+    // Registered before any tag is applied, as the C++ `buildDefaults` sets `defaultsBuilt` first: a resolver that
+    // instantiates an export of this class while these defaults are read gets this object, still being built,
+    // instead of starting another one.
+    cx.state.class_defaults.insert(class, object);
     let mut chain: Vec<ClassKey> = cx.code.super_chain(class).collect();
     chain.reverse();
     for cursor in chain {
@@ -73,7 +79,6 @@ pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, De
             cx.state.log.push(format!("defaults: {wanted}: {error}"));
         }
     }
-    cx.state.class_defaults.insert(class, object);
     Ok(object)
 }
 

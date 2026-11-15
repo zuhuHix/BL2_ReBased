@@ -158,7 +158,7 @@ fn body(d: &mut Declarations, tags: &[Vec<u8>]) -> Vec<u8> {
 ///
 /// ```text
 /// enum EKind { K_A, K_B, K_C }    enum ESize { EPSM_1, EPSM_2, EPSM_4 } (numbered names: base EPSM + number)
-/// enum EState { ready, set }
+/// enum EState { ready, set }         enum Other.EKind { K_C, K_B, K_A } (a second EKind, in class Other)
 /// struct Vector { float X, Y, Z }    struct Plane extends Vector { float W }        (native layouts)
 /// struct Scaled { int Base; int Scale }     defaults: Scale = 1 (or a stream that does not end exactly)
 /// struct Listed { array<int> L }            defaults: L = [1, 2]
@@ -166,8 +166,8 @@ fn body(d: &mut Declarations, tags: &[Vec<u8>]) -> Vec<u8> {
 /// class Object
 /// class Base extends Object { int A; float B; bool C; name N; string S; EKind Kind; ESize Size; EState State;
 ///     int Count[3]; Scaled Holder, Other; Listed Lists; Plane P; array<int> Ints; array<Scaled> Rows;
-///     array<EKind> Kinds; array<bool> Flags; Object Owner, Asset; class<Object> Kindred; interface Iface;
-///     delegate OnDone }
+///     array<EKind> Kinds; array<bool> Flags; Object Owner, Asset; array<Object> Others; class<Object> Kindred;
+///     interface Iface; delegate OnDone; Other.EKind Kind2; EKind Kind3 }
 /// class Leaf extends Base { int D }         class Looper extends Object { CycA Loop }
 /// Default__Base: A = 3, B = 1.5
 /// Default__Leaf: A = 7, B (an int tag of 8 bytes: skipped), N = Foo, S = bar, C, Holder { Base = 2 }, Count[0] = 1,
@@ -175,9 +175,11 @@ fn body(d: &mut Declarations, tags: &[Vec<u8>]) -> Vec<u8> {
 ///     Ints = [5, 6], Rows = [{ Base = 1 }, { Scale = 4 }], Owner = Thing, Asset = Mesh, Kindred = Leaf (as an
 ///     ObjectProperty tag), Iface = Thing, OnDone (a delegate tag: skipped), Editor (undeclared int: dropped),
 ///     Menu (undeclared array with an element: skipped), Kinds = [K_B, K_A] (8-byte names), Flags = [1, 0, 1]
-///     (1-byte bools), State = set, D = 1
+///     (1-byte bools), State = set, Kind2 = K_C (tag enum EKind), Kind3 = K_B (tag enum ENope), D = 1
 /// Thing (a Leaf): D = 2      Comp (a Leaf, 8-byte prefix): D = 3      Tiny (a Leaf, 4 bytes)
 /// Broken (a Leaf): D = 4, then a tag of negative size
+/// Strays (a Leaf): Owner = 9999 (outside the tables), Others = [Thing, 9999, Thing], D = 5
+/// Selfie (a Leaf): Owner = Selfie
 /// Mesh: an object of class Engine.StaticMesh, a class no package exports
 /// ```
 pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
@@ -186,6 +188,8 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     d.default_object(object, "Object");
     let kind = d.enum_(object, "EKind", &["K_A", "K_B", "K_C"]);
     let state = d.enum_(object, "EState", &["ready", "set"]);
+    let other = d.cls("Other", object);
+    let other_kind = d.enum_(other, "EKind", &["K_C", "K_B", "K_A"]);
     // An enum whose value names carry FName numbers (the package stores EPSM with numbers 2, 3 and 5).
     let size = {
         let mut payload = ints(&[0]);
@@ -250,6 +254,9 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     d.array_of(base, "Kinds", "Byte", kind);
     d.array_of(base, "Flags", "Bool", 0);
     d.prop("Byte", base, "State", state);
+    d.array_of(base, "Others", "Object", object);
+    d.prop("Byte", base, "Kind2", other_kind);
+    d.prop("Byte", base, "Kind3", kind);
     d.prop("Struct", base, "P", plane);
     d.prop("Struct", base, "Lists", listed);
     d.prop("Struct", base, "Other", scaled);
@@ -329,6 +336,8 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
         kinds,
         d.p.array_tag("Flags", 3, &[1, 0, 1]),
         d.p.enum_tag("State", "EState", "set"),
+        d.p.enum_tag("Kind2", "EKind", "K_C"),
+        d.p.enum_tag("Kind3", "ENope", "K_B"),
         d.p.int_tag("D", 1),
     ];
     let payload = stream(&mut d, 4, &tags);
@@ -346,6 +355,17 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     ];
     let payload = stream(&mut d, 4, &tags);
     d.p.add_export(leaf, "Broken", payload);
+    let tags = vec![
+        d.p.object_tag("Owner", 9999),
+        d.p.array_tag("Others", 3, &ints(&[thing, 9999, thing])),
+        d.p.int_tag("D", 5),
+    ];
+    let payload = stream(&mut d, 4, &tags);
+    d.p.add_export(leaf, "Strays", payload);
+    let selfie = d.p.next_export();
+    let tags = vec![d.p.object_tag("Owner", selfie)];
+    let payload = stream(&mut d, 4, &tags);
+    d.p.add_export(leaf, "Selfie", payload);
     d.build()
 }
 
@@ -554,6 +574,82 @@ fn an_enum_value_the_enum_lacks_is_refused_except_in_the_reference_mode() {
         w.cx(ParityMode::Reference).enum_value(e, decl.name, "None"),
         Ok(0)
     );
+    let core = w.core;
+    assert_eq!(
+        w.cx(ParityMode::Reference)
+            .cxx_byte_from_enum(core, "EKind", "None", &decl),
+        0
+    );
+}
+
+#[test]
+fn the_reference_enum_lookup_is_the_cxx_byte_from_enum() {
+    // Kind2 is declared with Other.EKind { K_C, K_B, K_A } but its tag names enum EKind: the C++ first takes the first
+    // Enum export of the package named EKind (Object.EKind { K_A, K_B, K_C }), so K_C is 2 there; the declared enum
+    // gives 0. Kind3's tag names enum ENope, which is no export and not the declared enum's name: 0 under Reference.
+    let mut w = world("byte-from-enum-ref", false);
+    let o = leaf_default(&mut w, ParityMode::Reference);
+    assert_eq!(
+        (get(&w.space, o, "Kind2"), get(&w.space, o, "Kind3")),
+        (Value::Byte(2), Value::Byte(0))
+    );
+    let mut w = world("byte-from-enum-off", false);
+    let o = leaf_default(&mut w, ParityMode::Off);
+    assert_eq!(
+        (get(&w.space, o, "Kind2"), get(&w.space, o, "Kind3")),
+        (Value::Byte(0), Value::Byte(1))
+    );
+}
+
+/// `Core.upk` with an enum of 258 values and a class whose default object picks the last one.
+fn big_enum_fixture() -> Vec<u8> {
+    let mut d = decls();
+    let object = d.cls("Object", 0);
+    let values: Vec<String> = (0..258).map(|i| format!("V{i}")).collect();
+    let values: Vec<&str> = values.iter().map(String::as_str).collect();
+    let big = d.enum_(object, "EBig", &values);
+    let holder = d.cls("Holder", object);
+    d.prop("Byte", holder, "Pick", big);
+    let pick = d.p.enum_tag("Pick", "EBig", "V257");
+    let payload = stream(&mut d, 4, &[pick]);
+    d.p.add_export(holder, "Default__Holder", payload);
+    d.build()
+}
+
+#[test]
+fn an_enum_position_past_a_byte_wraps_as_the_cxx_uint8_and_is_refused_off() {
+    for mode in [ParityMode::Reference, ParityMode::Off] {
+        let tree = Tree::new(&format!("big-enum-{mode:?}"));
+        tree.write("Core.upk", &big_enum_fixture());
+        let mut w = World::open(tree);
+        let holder = w.class("Holder");
+        let o = crate::cdo::class_default(&mut w.cx(mode), holder).unwrap();
+        if mode == ParityMode::Reference {
+            assert_eq!(get(&w.space, o, "Pick"), Value::Byte(1), "257 as uint8_t");
+        } else {
+            assert_eq!(get(&w.space, o, "Pick"), Value::Byte(0));
+            assert_eq!(
+                w.state.log,
+                ["defaults: skipped Holder.Pick (ByteProperty)"]
+            );
+            let decl = {
+                let id = w.cx(mode).layout(holder).unwrap();
+                let prop = w.space.prop(id, "Pick").unwrap();
+                w.space.classes.decl(prop).unwrap().clone()
+            };
+            let err = w
+                .cx(mode)
+                .enum_value(enum_of(&decl.kind), decl.name, "V257")
+                .unwrap_err();
+            assert_eq!(
+                err,
+                DecodeError::EnumPastByte {
+                    property: "Pick".into(),
+                    position: 257
+                }
+            );
+        }
+    }
 }
 
 #[test]
@@ -666,33 +762,98 @@ fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only()
     let err = w.cx(ParityMode::Off).resource(core, mesh).unwrap_err();
     assert!(matches!(err, DecodeError::NotYet(_)), "{err:?}");
     assert!(w.state.native_classes.is_empty());
+
+    // Off, with Engine.StaticMesh defined by something else first (an overlay): its layout is used.
+    let mut w = world("native-class-overlay", false);
+    let leaf = w.class("Leaf");
+    w.cx(ParityMode::Off).layout(leaf).unwrap();
+    let object = w.space.classes.by_path("Core.Object").unwrap();
+    let mesh_class = w
+        .space
+        .classes
+        .define("Engine.StaticMesh", Some(object), Vec::new())
+        .unwrap();
+    let o = leaf_default(&mut w, ParityMode::Off);
+    let Value::Object(Some(mesh)) = get(&w.space, o, "Asset") else {
+        panic!("Asset")
+    };
+    assert_eq!(w.space.heap.get(mesh).unwrap().class, mesh_class);
+    assert!(w.state.native_classes.is_empty());
+    assert!(!w.state.is_native_stand_in(mesh_class));
 }
 
 #[test]
-fn stand_ins_hold_no_slots_and_have_a_budget() {
+fn stand_ins_hold_no_slots() {
     let mut w = world("stand-ins", false);
     let o = leaf_default(&mut w, ParityMode::Off);
     let Value::Object(Some(owner)) = get(&w.space, o, "Owner") else {
         panic!("Owner")
     };
-    assert!(w.space.heap.get(owner).unwrap().slots.is_empty());
-    // Past the budget, a typed error: the property is skipped, the rest applies.
-    let mut w = world("stand-in-budget", false);
-    w.state.stand_in_budget = 0;
-    let o = leaf_default(&mut w, ParityMode::Off);
-    assert_eq!(get(&w.space, o, "Owner"), Value::Object(None));
-    assert_eq!(get(&w.space, o, "D"), Value::Int(1));
-    assert!(
-        w.state
-            .log
-            .contains(&"defaults: skipped Leaf.Owner (ObjectProperty)".to_string())
-    );
-    let core = w.core;
-    let thing = w.export("Thing");
     assert_eq!(
-        w.cx(ParityMode::Off).resource(core, thing),
-        Err(DecodeError::StandInBudget(0))
+        w.space.heap.get(owner).unwrap().slots.capacity(),
+        0,
+        "no slot vector"
     );
+}
+
+#[test]
+fn a_reference_outside_the_tables_is_the_cxx_question_mark_only_under_reference() {
+    let mut w = world("strays-ref", false);
+    let strays = w.export("Strays");
+    let core = w.core;
+    let o = crate::cdo::instantiate_export(
+        &mut w.cx(ParityMode::Reference),
+        core,
+        strays,
+        crate::prefix::PropertyPrefix::Ordinary,
+    )
+    .unwrap()
+    .object;
+    let s = &w.space;
+    let Value::Object(Some(stray)) = get(s, o, "Owner") else {
+        panic!("Owner")
+    };
+    let object = s.heap.get(stray).unwrap();
+    assert_eq!(s.names.text(object.name), "?");
+    assert_eq!(object.class, s.classes.by_path("Core.Object").unwrap());
+    assert_eq!(
+        object.origin,
+        Origin::Resource {
+            package: core,
+            index: 9999
+        }
+    );
+    assert!(object.slots.is_empty());
+    // One bad element keeps the others.
+    let others = get(s, o, "Others");
+    let others = others.elements().unwrap();
+    assert_eq!(others.len(), 3);
+    assert_eq!(others[1], Value::Object(Some(stray)));
+    assert_eq!(others[0], others[2]);
+    assert_eq!(get(s, o, "D"), Value::Int(5));
+
+    // Off: a typed error, so both properties are skipped and logged.
+    let mut w = world("strays-off", false);
+    let core = w.core;
+    let o = crate::cdo::instantiate_export(
+        &mut w.cx(ParityMode::Off),
+        core,
+        strays,
+        crate::prefix::PropertyPrefix::Ordinary,
+    )
+    .unwrap()
+    .object;
+    assert_eq!(get(&w.space, o, "D"), Value::Int(5));
+    assert_eq!(get(&w.space, o, "Others"), Value::array(Vec::new()));
+    let tail: Vec<&String> = w.state.log.iter().rev().take(2).collect();
+    assert_eq!(
+        tail,
+        [
+            "defaults: skipped Leaf.Others (ArrayProperty)",
+            "defaults: skipped Leaf.Owner (ObjectProperty)"
+        ]
+    );
+    assert!(w.cx(ParityMode::Off).resource(core, 9999).is_err());
 }
 
 /// A resolver that answers every reference with one object of its own, and counts the calls.
@@ -903,6 +1064,28 @@ fn to_value_skips_what_tagged_skips_and_shares_the_nesting_bound() {
     );
     let shallow = Stream { depth: 0, ..deep };
     assert!(tree_value(&tree, &decl, core, &mut cx, shallow).is_ok());
+    // At struct depth 16 (a stream at 15) a native struct is read untagged and accepted; a tagged one is refused.
+    let at_16 = Stream {
+        depth: MAX_STRUCT_DEPTH - 1,
+        ..deep
+    };
+    assert_eq!(
+        tree_value(&tree, &decl, core, &mut cx, at_16),
+        Err(DecodeError::StructTooDeep)
+    );
+    let plane = {
+        let prop = cx.space.prop(leaf, "P").unwrap();
+        cx.space.classes.decl(prop).unwrap().clone()
+    };
+    let plane_tree = PropValue::Struct {
+        ty: "Plane".into(),
+        fields: ["W", "X", "Y", "Z"]
+            .iter()
+            .map(|f| ow_package::props::PropEntry::new(*f, 0, PropValue::Float(1.0), None))
+            .collect(),
+        start: 0,
+    };
+    assert!(tree_value(&plane_tree, &plane, core, &mut cx, at_16).is_ok());
 }
 
 #[test]
@@ -922,4 +1105,225 @@ fn the_reflection_typer_takes_the_element_widths_of_its_mode() {
         assert_eq!(typer.element(&scope, "Flags"), None);
         assert_eq!(typer.element(&scope, "Ints"), Some(ElementType::Int));
     }
+}
+
+/// A resolver that instantiates the export a reference names (in the same package) and falls back to stand-ins;
+/// with `cache`, one instance per export.
+struct Loader {
+    cache: bool,
+    loaded: std::cell::RefCell<FixedHashMap<(PackageId, i32), ObjRef>>,
+}
+
+impl ReferenceResolver for Loader {
+    fn resolve(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        if reference <= 0 || cx.store.get(package).object(reference).is_err() {
+            return cx.resource(package, reference);
+        }
+        if self.cache
+            && let Some(&o) = self.loaded.borrow().get(&(package, reference))
+        {
+            return Ok(Some(o));
+        }
+        let exported = cx.store.get(package).exports[reference as usize - 1].clone();
+        if exported.name.starts_with("Default__") || exported.class <= 0 {
+            return cx.resource(package, reference);
+        }
+        let o = crate::cdo::instantiate_export(
+            cx,
+            package,
+            reference,
+            crate::prefix::PropertyPrefix::Ordinary,
+        )?
+        .object;
+        if self.cache {
+            self.loaded.borrow_mut().insert((package, reference), o);
+        }
+        Ok(Some(o))
+    }
+}
+
+#[test]
+fn a_class_default_named_by_its_own_defaults_is_the_one_being_built() {
+    // Default__Leaf's Owner and Iface name Thing, a Leaf: loading Thing needs Leaf's default object, which is being
+    // built. It gets that object (with the tags applied so far), so one default object exists, not one per load.
+    let mut w = world("reentry", false);
+    let leaf = w.class("Leaf");
+    let loader = Loader {
+        cache: true,
+        loaded: Default::default(),
+    };
+    let o = {
+        let mut cx = w.cx(ParityMode::Reference).with_resolver(&loader);
+        crate::cdo::class_default(&mut cx, leaf).unwrap()
+    };
+    let leaf_id = w.space.classes.by_path("Core.Leaf").unwrap();
+    let instances: Vec<ObjRef> = w.space.live(leaf_id).collect();
+    assert_eq!(instances.len(), 1, "one Thing");
+    let thing = instances[0];
+    assert_eq!(
+        w.space.names.text(w.space.heap.get(thing).unwrap().name),
+        "Thing"
+    );
+    assert_eq!(get(&w.space, o, "Owner"), Value::Object(Some(thing)));
+    // Thing started from the default object as it stood: A (tagged before Owner) set, D its own.
+    assert_eq!(
+        (get(&w.space, thing, "A"), get(&w.space, thing, "D")),
+        (Value::Int(7), Value::Int(2))
+    );
+    assert_eq!(w.state.class_defaults.len(), 1);
+    assert_eq!(w.state.resolve_depth, 0);
+}
+
+#[test]
+fn nested_resolution_stops_at_its_bound_and_cleans_up() {
+    // Selfie's Owner names Selfie: a resolver that loads every target without a cache would recurse forever.
+    let mut w = world("resolve-bound", false);
+    let selfie = w.export("Selfie");
+    let core = w.core;
+    let loader = Loader {
+        cache: false,
+        loaded: Default::default(),
+    };
+    let outer = {
+        let mut cx = w.cx(ParityMode::Reference).with_resolver(&loader);
+        crate::cdo::instantiate_export(
+            &mut cx,
+            core,
+            selfie,
+            crate::prefix::PropertyPrefix::Ordinary,
+        )
+        .unwrap()
+        .object
+    };
+    assert_eq!(w.state.resolve_depth, 0, "the counter unwinds");
+    assert!(
+        w.state
+            .log
+            .contains(&"defaults: skipped Leaf.Owner (ObjectProperty)".to_string())
+    );
+    // Follow Owner through the Selfies: the outer one and one per allowed nesting level.
+    let mut chain = 0;
+    let mut cursor = outer;
+    while w.space.names.text(w.space.heap.get(cursor).unwrap().name) == "Selfie" {
+        chain += 1;
+        let Value::Object(Some(next)) = get(&w.space, cursor, "Owner") else {
+            break;
+        };
+        cursor = next;
+    }
+    assert_eq!(chain, MAX_RESOLVE_DEPTH + 1);
+    let mut cx = w.cx(ParityMode::Reference).with_resolver(&loader);
+    cx.state.resolve_depth = MAX_RESOLVE_DEPTH;
+    assert_eq!(
+        cx.object_value(
+            core,
+            selfie,
+            &PropKind::Object {
+                class: ClassId::new(0)
+            }
+        ),
+        Err(DecodeError::ResolveTooDeep(MAX_RESOLVE_DEPTH))
+    );
+    assert_eq!(cx.state.resolve_depth, MAX_RESOLVE_DEPTH);
+}
+
+/// `Core.upk` with a ring of 65 structs `R0..R64`, each holding `array<R(i+1)> Next` with one default element.
+fn ring_fixture() -> Vec<u8> {
+    let mut d = decls();
+    let object = d.cls("Object", 0);
+    let element = stream(&mut d, 0, &[]);
+    let tags = {
+        let next = d.p.array_tag("Next", 1, &element);
+        stream(&mut d, 0, &[next])
+    };
+    let first = d.p.next_export();
+    // Each struct export is followed by its array and the array's inner property: three exports per struct.
+    let rings: Vec<i32> = (0..65).map(|i| first + 3 * i).collect();
+    for (i, &at) in rings.iter().enumerate() {
+        let r = d.struct_in(object, &format!("R{i}"), 0, Some(&tags));
+        assert_eq!(r, at);
+        d.array_of(r, "Next", "Struct", rings[(i + 1) % 65]);
+    }
+    let holder = d.cls("Ringer", object);
+    d.prop("Struct", holder, "First", rings[0]);
+    d.build()
+}
+
+#[test]
+fn a_ring_longer_than_the_nesting_bound_is_refused_from_any_start() {
+    let outcomes = |start: usize| {
+        let tree = Tree::new(&format!("ring-{start}"));
+        tree.write("Core.upk", &ring_fixture());
+        let mut w = World::open(tree);
+        let ringer = w.class("Ringer");
+        w.cx(ParityMode::Off).layout(ringer).unwrap();
+        let ids: Vec<StructId> = (0..65)
+            .map(|i| {
+                w.space
+                    .classes
+                    .struct_by_path(&format!("Core.Object.R{i}"))
+                    .unwrap()
+            })
+            .collect();
+        let mut cx = w.cx(ParityMode::Off);
+        let mut out = vec![None; 65];
+        for k in 0..65 {
+            let i = (start + k) % 65;
+            out[i] = Some(cx.ensure_struct_defaults(ids[i]));
+        }
+        assert!(
+            matches!(
+                crate::cdo::class_default(&mut cx, ringer),
+                Err(DecodeError::DefaultsTooDeep)
+            ),
+            "a class holding one is refused"
+        );
+        for &s in &ids {
+            assert!(
+                w.space
+                    .classes
+                    .struct_layout(s)
+                    .unwrap()
+                    .own_defaults()
+                    .is_empty(),
+                "nothing published"
+            );
+        }
+        out
+    };
+    let from_0 = outcomes(0);
+    assert!(
+        from_0
+            .iter()
+            .all(|o| *o == Some(Err(DecodeError::DefaultsTooDeep)))
+    );
+    assert_eq!(outcomes(10), from_0);
+}
+
+#[test]
+fn struct_and_enum_sources_come_from_the_declarations() {
+    let mut w = world("sources", false);
+    leaf_default(&mut w, ParityMode::Off);
+    let scaled = w
+        .space
+        .classes
+        .struct_by_path("Core.Object.Scaled")
+        .unwrap();
+    let kind = w.space.classes.enum_by_path("Core.Object.EKind").unwrap();
+    let core = w.core;
+    let scaled_export = w.export("Object.Scaled");
+    let kind_export = w.export("Object.EKind");
+    assert_eq!(
+        w.state.sources.get(&Source::Struct(scaled)),
+        Some(&(core, scaled_export))
+    );
+    assert_eq!(
+        w.state.sources.get(&Source::Enum(kind)),
+        Some(&(core, kind_export))
+    );
 }

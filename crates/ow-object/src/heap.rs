@@ -255,7 +255,33 @@ impl Heap {
         if let Some(o) = outer {
             self.get(o)?;
         }
-        let object = Object::new(class, name, outer, slots, origin);
+        Ok(self.insert(Object::new(class, name, outer, slots, origin)))
+    }
+
+    /// Creates an object of class `class` (defined in `classes`) with **no property slots** and no outer: a stand-in
+    /// for an object whose properties are not loaded (the C++ `Runtime::resource` stand-in, which holds no properties
+    /// either). It takes part in reference checks by its class, as any object does; reading or writing one of its
+    /// properties is [`HeapError::SlotMissing`]. Additive (W3-DECODE, granted in review r2 of PR #304), so a stand-in
+    /// costs one object, whatever the size of its class.
+    pub fn alloc_stand_in(
+        &mut self,
+        classes: &ClassTable,
+        class: ClassId,
+        name: NameId,
+        origin: Origin,
+    ) -> Result<ObjRef, HeapError> {
+        match classes.get_layout(class) {
+            None => return Err(LayoutError::UnknownClass(class).into()),
+            Some(layout) if !layout.is_defined() => {
+                return Err(LayoutError::NotDefined(class).into());
+            }
+            Some(_) => {}
+        }
+        Ok(self.insert(Object::new(class, name, None, Vec::new(), origin)))
+    }
+
+    /// Puts `object` in a free slot or a new one and records it in creation order.
+    fn insert(&mut self, object: Object) -> ObjRef {
         let handle = match self.free.pop() {
             Some(index) => {
                 let entry = &mut self.entries[index as usize];
@@ -273,7 +299,7 @@ impl Heap {
         };
         self.order.push(handle);
         self.count += 1;
-        Ok(handle)
+        handle
     }
 
     fn is_current(entries: &[Entry], o: ObjRef) -> bool {
@@ -604,6 +630,17 @@ impl ObjectSpace {
     ) -> Result<ObjRef, HeapError> {
         let name = self.names.intern(name);
         self.heap.alloc(&self.classes, class, name, outer, origin)
+    }
+
+    /// [`Heap::alloc_stand_in`] with the name interned.
+    pub fn alloc_stand_in(
+        &mut self,
+        class: ClassId,
+        name: &str,
+        origin: Origin,
+    ) -> Result<ObjRef, HeapError> {
+        let name = self.names.intern(name);
+        self.heap.alloc_stand_in(&self.classes, class, name, origin)
     }
 
     /// [`Heap::read`] through this space's classes.
@@ -1706,6 +1743,44 @@ mod tests {
                 expected: "Map",
                 found: "Int"
             })
+        );
+    }
+
+    #[test]
+    fn a_stand_in_has_no_slots_but_its_class() {
+        let mut w = world();
+        let before = w.space.heap.len();
+        let o = w
+            .space
+            .alloc_stand_in(
+                w.actor,
+                "Mesh",
+                Origin::Resource {
+                    package: 0,
+                    index: 7,
+                },
+            )
+            .unwrap();
+        let object = w.space.heap.get(o).unwrap();
+        assert_eq!(object.slots.capacity(), 0, "no slot vector is allocated");
+        assert_eq!((object.class, object.outer), (w.actor, None));
+        assert_eq!(w.space.heap.len(), before + 1);
+        // Its properties are not there; its class still decides what it may be stored in.
+        let health = PropAddr::scalar(w.p(w.actor, "Health"));
+        assert!(matches!(
+            w.space.read(o, health),
+            Err(HeapError::SlotMissing { .. })
+        ));
+        let pawn = w.new_obj(w.pawn, "P");
+        let target = PropAddr::scalar(w.p(w.actor, "Target"));
+        assert_eq!(w.space.write(pawn, target, Value::Object(Some(o))), Ok(()));
+        // It is not an instance: live iteration skips it.
+        assert!(!w.space.live(w.actor).any(|r| r == o));
+        // An undefined class is refused, as for alloc.
+        let undefined = w.space.classes.declare("Engine.Nowhere").unwrap();
+        assert_eq!(
+            w.space.alloc_stand_in(undefined, "X", Origin::Runtime),
+            Err(HeapError::Layout(LayoutError::NotDefined(undefined)))
         );
     }
 }

@@ -1,8 +1,11 @@
 # AI-assisted (Claude Code). Lane W3-DECODE: --object-dump.
 #
-# tests/object_dump_test.py runs only --object-dump on an invented package (class defaults, prefixes 4, 8 and 26, a
-# struct default, the refusals) and passes on the C++ and the Rust binary. The installed game was compared locally as
+# tests/object_dump_test.py runs only --object-dump on an invented package (class defaults, prefixes 4, 8 and 26, values,
+# the print order, a struct default, a reference outside the tables, the refusals). ctest runs it on the C++ binary with
+# --reference (object-dump-synthetic); here it runs on the Rust binary in Off mode, and with --reference under the
+# reference mode, where a reference outside the tables is the C++ `?` stand-in. The installed game was compared locally as
 # well: every class default object of the nine code packages, the attribute definitions of Startup.upk and a sample
 # of Sanctuary exports, with and without --all, in both parity modes (counts in decision 2026-11-15-08). The Rust unit
 # tests in crates/ow-object/src/decode/tests.rs, cdo/tests.rs and crates/ow-cli/src/cmd/objects.rs cover each rule.
 python tests/object_dump_test.py {bin}
+python tests/object_dump_test.py {bin} --reference mode=reference
