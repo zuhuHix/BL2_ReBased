@@ -21,12 +21,41 @@
 
 use ow_attr::AttributeSystem;
 use ow_attr::api::{EvalCx, InitData};
+use ow_attr::eval::{init_data, required};
+use ow_core::NotYet;
 use ow_object::ids::ObjRef;
 
 use crate::types::{BalanceError, ExpLevel};
 
 /// The record the curve comes from.
 pub const RECORD: &str = "NATIVE_PROGRESSION.md section 3";
+
+/// The curve definition the globals name: `GlobalsDefinition.ExpPointsRequiredForLevel`, which the installed game
+/// holds as `AttributeInitializationData` (`{ BaseValueConstant 0, no BaseValueAttribute, Init_ExperienceRequiredForLevel,
+/// BaseValueScaleConstant 1 }`, read with the real packages on 2026-11-15, local run). Only that shape is the definition
+/// alone, which the functions below evaluate. Data with a constant, an attribute, another scale or no definition is
+/// `NotYet { NotRead }`: how the native routine combines those with the curve is not read (it is not in this data).
+pub fn curve_definition(
+    cx: &mut EvalCx<'_>,
+    globals_definition: ObjRef,
+) -> Result<ObjRef, BalanceError> {
+    let v = required(cx, globals_definition, "ExpPointsRequiredForLevel")?;
+    let d = init_data(cx.world.parts().space, &v)?;
+    match d.initialization_definition {
+        Some(curve)
+            if d.base_value_constant == 0.0
+                && d.base_value_attribute.is_none()
+                && d.base_value_scale_constant == 1.0 =>
+        {
+            Ok(curve)
+        }
+        _ => Err(NotYet::not_read(
+            "an ExpPointsRequiredForLevel with a constant, an attribute, a scale other than 1 or no definition",
+            RECORD,
+        )
+        .into()),
+    }
+}
 
 /// `trunc(f(level))`: the curve definition evaluated with `level` in global slot 0, truncated toward zero.
 ///
@@ -163,6 +192,48 @@ mod tests {
         assert_eq!(r(18), 196_238);
         assert_eq!(r(46), 2_715_586);
         assert_eq!(r(71), 9_155_282);
+    }
+
+    #[test]
+    fn the_curve_is_read_from_the_globals_data() {
+        // The installed game's shape: { 0, None, the curve, 1 }. R(9) is the record's 28,126.
+        use ow_core::notyet::Missing;
+        let mut fx = Fx::new();
+        let curve = fx.xp_curve();
+        let plain = InitData {
+            initialization_definition: Some(curve),
+            ..InitData::constant(0.0)
+        };
+        let globals = fx.curve_globals(plain);
+        let others = [
+            fx.curve_globals(InitData {
+                base_value_constant: 5.0,
+                ..plain
+            }),
+            fx.curve_globals(InitData {
+                base_value_scale_constant: 2.0,
+                ..plain
+            }),
+            fx.curve_globals(InitData {
+                base_value_attribute: Some(curve),
+                ..plain
+            }),
+            fx.curve_globals(InitData::constant(0.0)),
+        ];
+        let (sys, mut world) = fx.into_world();
+        let mut cx = EvalCx::new(&mut world);
+        let read = curve_definition(&mut cx, globals).unwrap();
+        assert_eq!(read, curve);
+        assert_eq!(
+            experience_required(&sys, &mut cx, read, ExpLevel::new(9)).unwrap(),
+            28_126
+        );
+        for g in others {
+            assert!(matches!(
+                curve_definition(&mut cx, g),
+                Err(BalanceError::NotYet(n)) if n.missing == Missing::NotRead
+            ));
+        }
     }
 
     #[test]
