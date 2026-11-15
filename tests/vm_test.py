@@ -132,6 +132,9 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
     def make_function(owner, name, declared, asm_fn, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, native=0, friendly=None,
                       result='Int', locals_=(), result_ref=None, hidden=()):
         """declared: [(kind, name, extraflags)] in declaration order. asm_fn(ids) -> Asm (or None for natives)."""
+        # An array property names its inner property (an IntProperty here), made before the children and moved into
+        # its array once that exists, as the real packages nest it.
+        inners = {pname: prop('IntProperty', 0, pname) for kind, pname, _ in [*locals_, *declared] if kind == 'Array'}
         # Children first, in reverse declaration order (the real packages export them that way).
         first_child = len(p.exports) + 1
         children = []
@@ -149,7 +152,11 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
             tail = None
             if kind == 'Object' and ref is None: ref = obj
             if kind == 'Class': tail = w32(imp['Class'], ref or obj)
+            if kind == 'Array' and ref is None: ref = inners[pname]
             ids[pname] = prop(kind + 'Property', func_index, pname, flags_, type_ref=ref, tail=tail)
+            if kind == 'Array' and pname in inners:
+                cls, sup, _, nm, payload = p.exports[inners[pname] - 1]
+                p.exports[inners[pname] - 1] = (cls, sup, ids[pname], nm, payload)
         asm = asm_fn(ids) if asm_fn else None
         script = bytes(asm.b) if asm else b''
         memory = (len(script) + 4 * asm.refs) if asm else 0
@@ -628,7 +635,7 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
             ref_table = [(c, (child if with_property else 0)) for c in table]
             p.add_export(0, name, class_body(p, super_ref, obj, at + 1 + (1 if with_property else 0), flags, ref_table, first_child=child),
                          super_ref=super_ref)
-            if with_property: prop('StructProperty', at, with_property)
+            if with_property: prop('StructProperty', at, with_property, type_ref=pair)   # the struct: the invented Pair
             p.add_export(at, 'Default__' + name, w32(0) + none)
             return at
         thing = make_class('IThing', obj, flags=2 | CLASS_INTERFACE)
