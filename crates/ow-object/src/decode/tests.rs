@@ -747,10 +747,10 @@ fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only()
         "no native property is invented"
     );
     assert_eq!(w.state.native_classes, ["Engine.StaticMesh"]);
-    assert!(w.state.is_native_stand_in(class));
+    assert!(w.state.is_native_stand_in(&s.classes, class));
     assert!(
         !w.state
-            .is_native_stand_in(s.classes.by_path("Core.Leaf").unwrap())
+            .is_native_stand_in(&s.classes, s.classes.by_path("Core.Leaf").unwrap())
     );
 
     // Off: the class is not read, a NotYet, and the property is skipped.
@@ -779,7 +779,7 @@ fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only()
     };
     assert_eq!(w.space.heap.get(mesh).unwrap().class, mesh_class);
     assert!(w.state.native_classes.is_empty());
-    assert!(!w.state.is_native_stand_in(mesh_class));
+    assert!(!w.state.is_native_stand_in(&w.space.classes, mesh_class));
 }
 
 #[test]
@@ -1326,4 +1326,58 @@ fn struct_and_enum_sources_come_from_the_declarations() {
         w.state.sources.get(&Source::Enum(kind)),
         Some(&(core, kind_export))
     );
+}
+
+#[test]
+fn two_decode_states_over_one_space_agree_on_native_stand_ins() {
+    // The first state defines the Engine.StaticMesh stand-in class; a second state over the same space reuses it and
+    // gives the same answer, and so does an Off-mode state, which does not take the stand-in class as an overlay's.
+    let mut w = world("two-states", false);
+    let leaf = w.class("Leaf");
+    let core = w.core;
+    let mesh = w.export("Mesh");
+    let first = crate::cdo::class_default(&mut w.cx(ParityMode::Reference), leaf).unwrap();
+    let Value::Object(Some(first_mesh)) = get(&w.space, first, "Asset") else {
+        panic!("Asset")
+    };
+    let class = w.space.heap.get(first_mesh).unwrap().class;
+    let mut second = DecodeState::new();
+    let second_mesh = {
+        let mut cx = ValueCx::new(
+            &mut w.store,
+            &mut w.code,
+            &mut w.space,
+            &mut second,
+            ParityMode::Reference,
+        );
+        cx.resource(core, mesh).unwrap().unwrap()
+    };
+    assert_ne!(
+        second_mesh, first_mesh,
+        "each state keeps its own stand-ins"
+    );
+    assert_eq!(
+        w.space.heap.get(second_mesh).unwrap().class,
+        class,
+        "the class is reused"
+    );
+    assert!(
+        second.native_classes.is_empty(),
+        "the second state defined nothing"
+    );
+    assert!(w.state.is_native_stand_in(&w.space.classes, class));
+    assert!(second.is_native_stand_in(&w.space.classes, class));
+    let mut off = DecodeState::new();
+    assert!(off.is_native_stand_in(&w.space.classes, class));
+    let mut cx = ValueCx::new(
+        &mut w.store,
+        &mut w.code,
+        &mut w.space,
+        &mut off,
+        ParityMode::Off,
+    );
+    assert!(matches!(
+        cx.resource(core, mesh),
+        Err(DecodeError::NotYet(_))
+    ));
 }

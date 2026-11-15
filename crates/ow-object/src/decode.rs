@@ -392,7 +392,6 @@ pub struct DecodeState {
     pub dropped: Vec<String>,
     /// The engine-native classes defined for stand-ins, by path, in order ([`ValueCx::resource`]).
     pub native_classes: Vec<String>,
-    native_ids: FixedHashSet<ClassId>,
     /// How many [`ReferenceResolver`] calls are under way ([`MAX_RESOLVE_DEPTH`]).
     resolve_depth: usize,
     /// How many times a struct-defaults refusal (a cycle, or the nesting bound) was returned, and how many of those were
@@ -425,7 +424,6 @@ impl Default for DecodeState {
             log: Vec::new(),
             dropped: Vec::new(),
             native_classes: Vec::new(),
-            native_ids: FixedHashSet::default(),
             resolve_depth: 0,
             refusals: 0,
             depth_refusals: 0,
@@ -441,16 +439,13 @@ impl DecodeState {
         Self::default()
     }
 
-    /// Whether class `c` is an engine-native stand-in class this state defined ([`ValueCx::resource`]): a class
-    /// known only by its import path, with no properties of its own and `Core.Object` as its super class, so
-    /// `IsA` through it is not the game's answer (W3-INTERP answers `NotYet` there).
-    ///
-    /// The answer is this state's: one `DecodeState` serves one `ObjectSpace` for life (a second state over the same
-    /// space reuses such a class and answers `false` for it). Nothing enforces that pairing yet: the class table
-    /// (W1-OBJ's `layout.rs`) is the only place that could hold the mark for every state, and the object space has no
-    /// identity a state could check (review r2 of PR #304; proposed to the hub).
-    pub fn is_native_stand_in(&self, c: ClassId) -> bool {
-        self.native_ids.contains(&c)
+    /// Whether class `c` of `classes` is an engine-native stand-in class ([`ValueCx::resource`]): a class known only
+    /// by its import path, with no properties of its own and `Core.Object` as its super class, so `IsA` through it is
+    /// not the game's answer (W3-INTERP answers `NotYet` there). The mark is the class table's
+    /// ([`ClassTable::mark_native`]), so every state over one object space gives the same answer, whichever state
+    /// defined the class.
+    pub fn is_native_stand_in(&self, classes: &ClassTable, c: ClassId) -> bool {
+        classes.is_native(c)
     }
 }
 
@@ -1374,7 +1369,7 @@ impl<'a> ValueCx<'a> {
         // under the reference mode.
         if let Some(id) = classes.by_path(path)
             && classes.get_layout(id).is_some_and(|l| l.is_defined())
-            && (self.mode == ParityMode::Reference || !self.state.native_ids.contains(&id))
+            && (self.mode == ParityMode::Reference || !classes.is_native(id))
         {
             return Ok(id);
         }
@@ -1393,7 +1388,7 @@ impl<'a> ValueCx<'a> {
             })?;
         let id = classes.define(path, Some(object), Vec::new())?;
         self.state.native_classes.push(path.to_string());
-        self.state.native_ids.insert(id);
+        self.space.classes.mark_native(id)?;
         Ok(id)
     }
 
