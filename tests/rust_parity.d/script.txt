@@ -1,0 +1,7 @@
+# AI-assisted (Claude Code). Lane W2-SCRIPT: --script-check, --disasm.
+#
+# No line yet. A diff line needs a tracked package file and a test-command line a tracked tests/*.py that runs
+# only these commands; neither exists (tests/vm_test.py runs --script-check but also --run, which is W4's). The
+# C++ and Rust outputs were compared locally instead, on synthetic packages generated under ignored local/ and on
+# the installed game's code packages (counts in the W2-SCRIPT handoff). The decoder's cases run as Rust unit tests
+# in crates/ow-script (the cases of tests/script_disasm_test.py among them).
