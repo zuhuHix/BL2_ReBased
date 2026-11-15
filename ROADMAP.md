@@ -9,14 +9,15 @@ verification is written down.
 Legend: <img src=".github/assets/icons/done.svg" width="18" align="absmiddle" alt=""> done and verified · <img src=".github/assets/icons/now.svg" width="18" align="absmiddle" alt=""> in progress · <img src=".github/assets/icons/todo.svg" width="18" align="absmiddle" alt=""> not started.
 Items marked *Caveat:* are done with a recorded limitation.
 
-**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core and engine benchmark) · **Last update:** 2026-11-14
+**Phase 0 gate:** 2026-09-10 · **Now:** Phase 0R (Rust core; engine route picked) · **Last update:** 2026-11-15
 
 **2026-11-14: the host engine changes.** The maintainer reversed the Unreal Engine 5 host choice
 ([decision](docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md)). New runtime code is Rust; Python stays for tools and analysis. The UE5 host
 (`host/ue5/`, its scripts and suites) left the tree; main 08bcf3e is the last commit that holds it, and
 `git show 08bcf3e:<path>` recovers any of it. The C++ core in `src/` will be ported to Rust crate by crate (not started: the crates are skeletons) and stays the
-reference until each crate matches it. No Rust engine is chosen yet: Phase 0R benchmarks the candidates and the
-maintainer picks. Host results below are the retired UE5 host's: they say what that host did and no longer count
+reference until each crate matches it. The engine route is picked: on 2026-11-15 the maintainer chose an own engine
+on wgpu + winit over Bevy from the Phase 0R benchmark ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)); the host itself
+is not written yet. Host results below are the retired UE5 host's: they say what that host did and no longer count
 toward a gate. Host-independent evidence (real-game captures, native notes, script disassembly, reader checks, the
 core's VM, combat, mission and item results) keeps its status. Nothing about the Rust route is verified yet.
 
@@ -39,9 +40,9 @@ Broad map coverage (79 more maps) and the remaining Vault Hunters are
 deferred until that gate is met; they move to Phase 5/6.
 
 The slice priority is unchanged by the switch to Rust (2026-11-14); the order
-in front of it is: port the C++ core to Rust to parity and run the engine
-benchmark (Phase 0R), let the maintainer pick the engine route, then build the
-slice again in the Rust host, Sanctuary first and Maya next, reusing the
+in front of it is: port the C++ core to Rust to parity (Phase 0R; the engine
+benchmark is done and the maintainer picked an own engine on wgpu + winit),
+then build the slice again in the Rust host, Sanctuary first and Maya next, reusing the
 host-independent rules and evidence already recorded.
 
 ---
@@ -354,8 +355,9 @@ No phase after Phase 0 has passed its gate.
 
 ## Now / next
 
-The Rust route, in the order it is being taken (2026-11-14). None of it is
-started beyond the workspace skeleton; nothing here is verified yet.
+The Rust route, in the order it is being taken (2026-11-14; updated
+2026-11-15). Beyond the workspace skeleton and the engine pick, none of it is
+started; nothing here is verified yet.
 
 - [ ] Port `ow-container` (LZO1X and the chunk container) to Rust; the same
       synthetic fixtures as the C++ tests give the same results.
@@ -365,13 +367,18 @@ started beyond the workspace skeleton; nothing here is verified yet.
 - [ ] `tools/verify_packages.py --reader <the Rust reader>` gives the same
       counts and exact class bodies as the C++ reader. Only then does the
       matching part of `src/` retire.
-- [ ] Engine benchmark: Bevy and an own engine on wgpu + winit (Fyrox
-      optional), the same small scene in each, prototypes under ignored
-      `local/bench/`, measured on each project PC
-      ([record](docs/verification/ENGINE_BENCHMARK.md), not run).
-- [ ] The maintainer picks the engine route from the measurements; the pick
-      becomes a decision file, and the engine's `THIRD_PARTY.md` entry comes
-      before it lands.
+- [x] Engine benchmark: Bevy and an own engine on wgpu + winit, the same
+      small scene in each, prototypes under ignored `local/bench/`
+      ([record](docs/verification/ENGINE_BENCHMARK.md)). *Caveat:* one PC per
+      candidate with different draw strategies, so the frame times are not
+      like for like; Fyrox was not built; Ruffle was embedded in the wgpu
+      prototype only.
+- [x] The maintainer picks the engine route from the measurements: an own
+      engine on wgpu + winit (2026-11-15, [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)).
+- [ ] `THIRD_PARTY.md` entries for the engine crates (wgpu, winit, glam,
+      bytemuck, pollster, rapier3d, the Ruffle crates from git, and a JDK to
+      build Ruffle), approved by the maintainer before any of them lands,
+      when the host work needs them.
 - [ ] Port the script VM and the game rules (combat, missions, items,
       weapons) crate by crate, each against the C++ results.
 - [ ] Rebuild Sanctuary in the Rust host (Phase 1), then Maya (Phases 3-4),
@@ -434,18 +441,21 @@ the host engine. Records: [DECISIONS.md](DECISIONS.md) entries dated
 Goal: the engine-agnostic core in Rust, matching the C++ core, and a host
 engine route picked from measurements.
 
-- [x] Cargo workspace at the repository root with skeleton crates
-      (`ow-container`, `ow-package`, `ow-vm`, `ow-game`, `ow-cli`, `ow-host`)
-      and no third-party crates. *Caveat:* skeletons only; no Rust code reads a
-      package yet.
+- [x] Cargo workspace at the repository root with skeleton crates (22 of
+      them since the scaffold; the list and their edges are in
+      [crates/README.md](crates/README.md)) and no third-party crates.
+      *Caveat:* skeletons only; no Rust code reads a package yet.
 - [ ] `ow-container` ported; same results as the C++ code on the same
       synthetic fixtures
 - [ ] `ow-package` ported; same results on the same synthetic fixtures
 - [ ] `tools/verify_packages.py --reader` on the Rust reader: same counts and
       exact class bodies as the C++ reader
-- [ ] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox optional)
-      and recorded in [ENGINE_BENCHMARK.md](docs/verification/ENGINE_BENCHMARK.md)
-- [ ] Engine route picked by the maintainer and recorded as a decision
+- [x] Engine benchmark run (Bevy, own engine on wgpu + winit; Fyrox, the
+      optional one, not built) and recorded in
+      [ENGINE_BENCHMARK.md](docs/verification/ENGINE_BENCHMARK.md). *Caveat:*
+      one PC per candidate, so frame times are not like for like.
+- [x] Engine route picked by the maintainer and recorded as a decision: own
+      engine on wgpu + winit, 2026-11-15 ([decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md))
 
 **Gate:** the Rust reader matches `verify_packages.py`, the benchmark is
 recorded, and the maintainer has picked the route.
