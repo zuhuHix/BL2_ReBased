@@ -942,6 +942,112 @@ fn a_struct_cycle_through_an_array_loads_in_either_order() {
     }
 }
 
+/// `S { array<T> }`, held by value first by a class whose companions fail, then by a valid class. `S` is cached
+/// as defined, but `T`'s deferred definition belonged to the failed class: the valid class queues it again and
+/// defines it before it is published, or, when `T` cannot be defined, is refused with `T`'s error.
+#[test]
+fn a_reused_struct_brings_its_deferred_dependencies() {
+    for (tag, t_breaks) in [("deps-ok", false), ("deps-fail", true)] {
+        let tree = Tree::new(tag);
+        let mut d = Declarations::with_imports(&[
+            "Class",
+            "ScriptStruct",
+            "StructProperty",
+            "ArrayProperty",
+            "IntProperty",
+            "WeirdProperty",
+            "FloatAttributeProperty",
+            "ObjectProperty",
+        ]);
+        let owner = d.cls("Owner", 0);
+        let s_ref = d.struct_in(owner, "S", 0, None);
+        let t_ref = d.struct_in(owner, "T", 0, None);
+        d.array_of(s_ref, "Ts", "Struct", t_ref);
+        if t_breaks {
+            d.prop("Weird", t_ref, "Odd", 0);
+        } else {
+            d.prop("Int", t_ref, "X", 0);
+        }
+        // Bad holds S, then fails while resolving its companions (the stack reference names nothing), before the
+        // structs it deferred are defined.
+        let bad = d.cls("Bad", 0);
+        d.prop("Struct", bad, "Held", s_ref);
+        let speed = d.p.next_export();
+        d.prop_with(&PropSpec {
+            flags: PropertyDecl::STACK_ATTRIBUTE,
+            tail: Some(ints(&[999, speed + 1])),
+            ..PropSpec::new("FloatAttribute", bad, "Speed")
+        });
+        d.prop_with(&PropSpec {
+            flags: PropertyDecl::PLAIN_ATTRIBUTE,
+            ..PropSpec::new("FloatAttribute", bad, "SpeedBase")
+        });
+        let good = d.cls("Good", 0);
+        d.prop("Struct", good, "Held", s_ref);
+        tree.write("Core.upk", &d.build());
+
+        let (mut store, id) = load(&tree, "Core.upk");
+        let mut space = crate::heap::ObjectSpace::new();
+        let mut index = CodeIndex::new();
+        let mut layout = |r: i32, space: &mut crate::heap::ObjectSpace| {
+            let key = index.class_at(&mut store, id, r).unwrap().unwrap();
+            index.define_layout(&mut store, &mut space.names, &mut space.classes, key)
+        };
+        let bad_error = layout(bad, &mut space).unwrap_err();
+        assert!(
+            matches!(
+                root(bad_error),
+                ReflectError::Unresolved { reference: 999, .. }
+            ),
+            "{tag}"
+        );
+        let s_id = space.classes.struct_by_path("Core.Owner.S").unwrap();
+        assert!(
+            space.classes.struct_layout(s_id).is_some(),
+            "{tag}: S stays defined and cached"
+        );
+        let t_id = space.classes.struct_by_path("Core.Owner.T").unwrap();
+        assert!(
+            space.classes.struct_layout(t_id).is_none(),
+            "{tag}: T was only declared"
+        );
+
+        let good_outcome = layout(good, &mut space);
+        if t_breaks {
+            let error = good_outcome.unwrap_err();
+            assert_eq!(
+                root(error),
+                ReflectError::UnknownPropertyClass("WeirdProperty".into())
+            );
+            let good_id = space.classes.by_path("Core.Good").unwrap();
+            assert!(
+                !space.classes.layout(good_id).is_defined(),
+                "refused, never half defined"
+            );
+        } else {
+            let good_id = good_outcome.unwrap();
+            assert!(
+                space.classes.struct_layout(t_id).is_some(),
+                "T defined before Good was published"
+            );
+            let object = space
+                .alloc(good_id, "G", None, crate::heap::Origin::Runtime)
+                .unwrap();
+            let held = crate::ids::PropAddr::scalar(space.prop(good_id, "Held").unwrap());
+            let element = space
+                .classes
+                .default_value(&PropKind::Struct(t_id))
+                .unwrap();
+            let ts = crate::value::Value::array(vec![element]);
+            assert_eq!(
+                space.write_in(object, held, &[crate::heap::Step::Field(0)], ts),
+                Ok(()),
+                "a non-empty array of T can be written"
+            );
+        }
+    }
+}
+
 /// The read-only lookups answer from what earlier calls loaded, and nothing else.
 #[test]
 fn read_only_lookups_answer_from_the_cache() {

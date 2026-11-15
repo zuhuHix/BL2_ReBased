@@ -459,6 +459,12 @@ pub struct CodeIndex {
     struct_in_progress: FixedHashMap<(PackageId, i32), StructId>,
     /// Structs reached only through an array or a map, declared and defined after the class that reached them.
     deferred_structs: Vec<(PackageId, i32)>,
+    /// The structs each struct reached through an array or a map while it was defined (its deferred dependencies).
+    struct_deps: FixedHashMap<(PackageId, i32), Vec<(PackageId, i32)>>,
+    /// Structs whose deferred dependencies are all defined, transitively.
+    complete_structs: FixedHashSet<(PackageId, i32)>,
+    /// The structs being defined, innermost last.
+    struct_stack: Vec<(PackageId, i32)>,
     property_in_progress: FixedHashSet<(PackageId, i32)>,
     enums: FixedHashMap<(PackageId, i32), Result<EnumId, ReflectError>>,
     nesting: usize,
@@ -1561,8 +1567,20 @@ impl CodeIndex {
                 found,
             });
         }
-        if let Some(outcome) = self.structs.get(&target) {
-            return outcome.clone();
+        if !by_value
+            && let Some(&current) = self.struct_stack.last()
+            && current != target
+        {
+            let deps = self.struct_deps.entry(current).or_default();
+            if !deps.contains(&target) {
+                deps.push(target);
+            }
+        }
+        if let Some(outcome) = self.structs.get(&target).cloned() {
+            if outcome.is_ok() {
+                self.complete_deps(target)?;
+            }
+            return outcome;
         }
         if let Some(&id) = self.struct_in_progress.get(&target) {
             if by_value {
@@ -1592,18 +1610,64 @@ impl CodeIndex {
         classes: &mut ClassTable,
         target: (PackageId, i32),
     ) -> Result<StructId, ReflectError> {
-        if let Some(outcome) = self.structs.get(&target) {
-            return outcome.clone();
+        if let Some(outcome) = self.structs.get(&target).cloned() {
+            if outcome.is_ok() {
+                self.complete_deps(target)?;
+            }
+            return outcome;
         }
         let path = Self::object_path(store, target.0, target.1)?;
         let declared = classes.declare_struct(&path)?;
         self.struct_in_progress.insert(target, declared);
+        self.struct_stack.push(target);
         let outcome = self
             .nested(|index| index.define_struct_inner(store, names, classes, target, &path))
             .map_err(in_struct(&path));
+        self.struct_stack.pop();
         self.struct_in_progress.remove(&target);
         self.structs.insert(target, outcome.clone());
         outcome
+    }
+
+    /// Makes sure every struct a defined struct reached through an array or a map (transitively) is defined, or
+    /// queued to be defined before the current class is published: a struct is cached once defined, but the deferred
+    /// definitions it queued are dropped when the class that reached it fails. A dependency whose definition failed
+    /// passes its error on, so no class is published holding a struct whose array element cannot be defined.
+    fn complete_deps(&mut self, target: (PackageId, i32)) -> Result<(), ReflectError> {
+        if self.complete_structs.contains(&target) {
+            return Ok(());
+        }
+        let mut pending = vec![target];
+        let mut seen: FixedHashSet<(PackageId, i32)> = FixedHashSet::default();
+        seen.insert(target);
+        let mut complete = true;
+        while let Some(at) = pending.pop() {
+            for dep in self.struct_deps.get(&at).cloned().unwrap_or_default() {
+                if !seen.insert(dep) {
+                    continue;
+                }
+                match self.structs.get(&dep) {
+                    Some(Ok(_)) => {
+                        if !self.complete_structs.contains(&dep) {
+                            pending.push(dep);
+                        }
+                    }
+                    Some(Err(error)) => return Err(error.clone()),
+                    None => {
+                        complete = false;
+                        if !self.struct_in_progress.contains_key(&dep)
+                            && !self.deferred_structs.contains(&dep)
+                        {
+                            self.deferred_structs.push(dep);
+                        }
+                    }
+                }
+            }
+        }
+        if complete {
+            self.complete_structs.insert(target);
+        }
+        Ok(())
     }
 
     fn define_struct_inner(
