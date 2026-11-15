@@ -179,7 +179,7 @@ pub enum ItemKind {
 
 impl ItemKind {
     /// Every kind, in declaration order.
-    pub const ALL: [ItemKind; 9] = [
+    pub const ALL: &'static [ItemKind] = &[
         ItemKind::Weapon,
         ItemKind::Shield,
         ItemKind::GrenadeMod,
@@ -284,7 +284,7 @@ pub enum DataError {
     FieldType {
         field: &'static str,
     },
-    /// `field` is a null reference, but [`DefinitionData`] requires it (the definition and the balance).
+    /// `field` is a null reference, but [`DefinitionData`] requires it (the definition).
     RequiredNull {
         field: &'static str,
     },
@@ -332,8 +332,10 @@ impl From<NotYet> for DataError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefinitionData {
     pub kind: ItemKind,
-    /// `BalanceDefinition`.
-    pub balance: ObjectPath,
+    /// `BalanceDefinition`, `None` for a null reference. A held item may have none: `ITEM_REGISTRY.md` counts 110 of
+    /// 270 mission-item definitions that no balance names. Whether a held mission item's `BalanceDefinition` is null
+    /// is UNVERIFIED (settling read: one bl-sdk read of a held mission item's `DefinitionData.BalanceDefinition`).
+    pub balance: Option<ObjectPath>,
     /// `WeaponTypeDefinition` for weapon kinds, `ItemDefinition` for the others.
     pub definition: ObjectPath,
     /// `ManufacturerDefinition`.
@@ -378,7 +380,7 @@ impl DefinitionData {
     pub fn to_fields(&self) -> [FieldValue; FIELD_COUNT] {
         let mut out: [FieldValue; FIELD_COUNT] = std::array::from_fn(|_| FieldValue::Int(0));
         out[field::DEFINITION] = FieldValue::Object(Some(self.definition.clone()));
-        out[field::BALANCE] = FieldValue::Object(Some(self.balance.clone()));
+        out[field::BALANCE] = FieldValue::Object(self.balance.clone());
         out[field::MANUFACTURER] = FieldValue::Object(self.manufacturer.clone());
         out[field::MANUFACTURER_GRADE] = FieldValue::Int(self.manufacturer_grade);
         for (i, part) in self.parts.iter().enumerate() {
@@ -392,7 +394,7 @@ impl DefinitionData {
     }
 
     /// Builds the data of a `kind` item from its struct form (one value per field, declaration order). The values'
-    /// types must match the declaration; the definition and the balance must not be null.
+    /// types must match the declaration; the definition must not be null (the balance may be).
     pub fn from_fields(kind: ItemKind, values: &[FieldValue]) -> Result<Self, DataError> {
         if values.len() != FIELD_COUNT {
             return Err(DataError::FieldCount { got: values.len() });
@@ -422,7 +424,7 @@ impl DefinitionData {
         Ok(DefinitionData {
             kind,
             definition: required(field::DEFINITION)?,
-            balance: required(field::BALANCE)?,
+            balance: object(field::BALANCE)?,
             manufacturer: object(field::MANUFACTURER)?,
             manufacturer_grade: int(field::MANUFACTURER_GRADE)?,
             parts,
@@ -457,14 +459,22 @@ impl Mark {
 }
 
 /// An item held by an inventory: its identity and the per-instance state the inventory keeps.
+///
+/// The save does not store one shape for both (`PlayerSaveGame`, `WillowGame.upk`): weapons are
+/// `WeaponSaveGameData` (`WeaponDefinitionData`, a `QuickSlot` byte, a `Mark` byte; no quantity and no equipped flag),
+/// other items are `InventorySaveGameData` (`DefinitionData`, `Quantity`, `bEquipped`, `Mark`). For a weapon,
+/// `equipped` means readied and is not saved (the save keeps only the slot); `quantity` is saved only for items.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryInstance {
     pub data: DefinitionData,
+    /// Saved for items (`Quantity`), not for weapons.
     pub quantity: i32,
-    /// Readied (in a weapon slot or an equipped gear slot) rather than in the backpack.
+    /// Readied (in a weapon slot or an equipped gear slot) rather than in the backpack. Saved for items
+    /// (`bEquipped`); for weapons it is not saved.
     pub equipped: bool,
     pub mark: Mark,
-    /// The weapon's `QuickSelectSlot`, 1..=4; `None` for 0, not slotted (`NATIVE_INVENTORY_EQUIP.md` item 3).
+    /// Weapons only: the weapon's `QuickSelectSlot`, 1..=4; `None` for 0, not slotted (`NATIVE_INVENTORY_EQUIP.md`
+    /// item 3). The game's field is a byte (saved as `WeaponSaveGameData.QuickSlot`); `None` for every other kind.
     pub quick_slot: Option<u8>,
 }
 
@@ -502,7 +512,7 @@ mod tests {
         }
         DefinitionData {
             kind,
-            balance: path("Test_Items.Balance.B1"),
+            balance: Some(path("Test_Items.Balance.B1")),
             definition: path("Test_Items.Types.T1"),
             manufacturer: Some(path("Test_Items.Makers.M1")),
             manufacturer_grade: 13,
@@ -577,7 +587,8 @@ mod tests {
     #[test]
     fn kinds_pick_their_struct() {
         let weapons: Vec<ItemKind> = ItemKind::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|k| k.definition_struct() == DefinitionStruct::Weapon)
             .collect();
         assert_eq!(weapons, vec![ItemKind::Weapon, ItemKind::MissionWeapon]);
@@ -587,7 +598,7 @@ mod tests {
 
     #[test]
     fn synthetic_data_round_trips_through_struct_order() {
-        for kind in ItemKind::ALL {
+        for &kind in ItemKind::ALL {
             let data = synthetic(kind);
             let fields = data.to_fields();
             assert_eq!(
@@ -667,14 +678,11 @@ mod tests {
                 field: "WeaponTypeDefinition"
             })
         );
-        let mut null = fields;
+        let mut null = synthetic(ItemKind::MissionItem).to_fields();
         null[field::BALANCE] = FieldValue::Object(None);
-        assert_eq!(
-            DefinitionData::from_fields(ItemKind::Relic, &null),
-            Err(DataError::RequiredNull {
-                field: "BalanceDefinition"
-            })
-        );
+        let read = DefinitionData::from_fields(ItemKind::MissionItem, &null).unwrap();
+        assert_eq!(read.balance, None);
+        assert_eq!(read.to_fields(), null);
     }
 
     #[test]
