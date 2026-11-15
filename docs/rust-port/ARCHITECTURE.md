@@ -879,6 +879,13 @@ impl AttributeSystem {
 // notification (NATIVE_BYTECODE_OPCODES opcode 5F, high confidence; NATIVE_LEVEL_UP_ATTRIBUTES's pool
 // rebase depends on it; interp.cpp:566-569). The NATIVE_ATTRIBUTES "Open" line on the typed let predates that reading.
 pub fn let_base(space: &mut ObjectSpace, owner: ObjRef, c: AttrCompanions, rhs: Value, form: CombineForm) -> Result<(), AttrError>; // UNVERIFIED in the game
+// storage.rs, added by W3-ATTREFFECTS (additive): the modifier class, a property's storage, and the owner overrides of
+// the change notification, which a world's attribute_changed calls (W5-WORLD); decision 2026-11-15-13.
+pub const ATTRIBUTE_MODIFIER_CLASS: &str;   // "Core.AttributeModifier": the class ApplyAttributeEffects instantiates
+pub fn storage_of(space: &ObjectSpace, owner: ObjRef, p: PropId) -> Result<Option<Storage>, AttrError>;   // None: not an attribute
+#[non_exhaustive] pub enum Notified { PoolCurrentValue { before: f32, after: f32 } /* clamp, min test first */,
+    SkillRefreshFlagged /* Grade */, NoEffect /* a known owner, another property */, NotRead /* question 11: counted */ }
+pub fn owner_notification(space: &mut ObjectSpace, owner: ObjRef, value_prop: PropId) -> Result<Notified, AttrError>; // UNVERIFIED
 ```
 
 ### 3.6 `ow-balance`
