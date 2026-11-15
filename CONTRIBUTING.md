@@ -20,8 +20,11 @@ project's primary correctness method. Build the reader (README, *Build and run i
   your platform (Steam/Epic), which DLC you own, and whether the UHD pack is
   installed. Different installs are different test cases.
 - In-host map comparison waits for the Rust host: the UE5 host that could
-  open a prepared map left the tree on 2026-11-14, and the Rust host's engine
-  route is not chosen yet. Until then, `cargo build --workspace` and
+  open a prepared map left the tree on 2026-11-14, and the Rust host is not
+  written yet. Its engine route is picked: an own engine on wgpu + winit
+  (2026-11-15,
+  [decision](docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md)).
+  Until then, `cargo build --workspace` and
   `cargo test --workspace` on your machine are a useful report, with
   `cargo --version` and your platform.
 
