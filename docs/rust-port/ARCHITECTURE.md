@@ -595,7 +595,7 @@ pub struct OfflineWorld { .. }   // builds GRI, PRI and controller objects in an
 pub enum ItemKind { Weapon, Shield, GrenadeMod, ClassMod, Relic, Usable, Customization, MissionItem, MissionWeapon }
 pub enum WeaponSlot { Body, Grip, Barrel, Sight, Stock, Elemental, Accessory1, Accessory2, Material }
 pub enum ItemSlot { Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta, Theta, Material }
-pub struct DefinitionData { pub kind: ItemKind, pub balance: ObjectPath, pub definition: ObjectPath, pub manufacturer: Option<ObjectPath>,
+pub struct DefinitionData { pub kind: ItemKind, pub balance: Option<ObjectPath>, pub definition: ObjectPath, pub manufacturer: Option<ObjectPath>,
                             pub manufacturer_grade: i32, pub parts: [Option<ObjectPath>; 9], pub prefix: Option<ObjectPath>,
                             pub title: Option<ObjectPath>, pub game_stage: GameStage, /* the remaining fields exactly as the package
                             declares WeaponDefinitionData / ItemDefinitionData: names read with the C++ tool, not invented */ }
@@ -1341,6 +1341,9 @@ W1-NUM is the lane to start first and review first.
 - **W7-WORLDLOGIC**: vendors, interactive objects, stations (`ow-mission/src/{vendors,interactive}.rs`); needs
   W4-POOLS, W6-MISSION.
 - **W7-SAVE**: `ow-save` model and load order over `DefinitionData`; the on-disk format only after D9.
+  Items from DLC that is not installed are kept by the save as opaque `SerialNumber` records
+  (`PlayerSaveGame.UnloadableDlcWeaponSaveGameData` / `UnloadableDlcItemSaveGameData`) and cannot be an
+  `InventoryInstance`; the save model needs its own carrier for them.
 - **W7-UI**: `ow-ui` bridge natives and the `MoviePlayer` trait; needs the engine pick for the implementation.
 - **W7-RETIRE**: delete `src/`, `third_party/lzokay`, the C++ targets and the ctest entries that only test the C++
   binary, once the Rust binary passes every one of them (`tools/rust_parity.py` over the full list); a sensitive-file
