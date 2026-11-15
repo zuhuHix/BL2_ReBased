@@ -309,23 +309,18 @@ fn the_attribute_system_is_called_from_inside_a_native() {
         native(move |c| {
             // The clone-the-Rc pattern: no borrow of c.vm.attrs is live while the VM is lent.
             let attrs = c.vm.attrs.clone();
-            let got = attrs.value_of(attr, Some(attr), None, &mut EvalCx::new(c.vm));
-            match got {
-                Err(AttrError::NotYet(n)) => {
-                    assert_eq!(n.missing, Missing::NotPorted);
-                    Err(VmError::Attr(AttrError::NotYet(n)))
-                }
-                other => panic!("the empty system evaluates nothing yet: {other:?}"),
-            }
+            let got = attrs.value_of(attr, Some(attr), None, &mut EvalCx::new(c.vm))?;
+            Ok(Value::Float(got.map_or(0.0, |v| v.value)))
         }),
     )
     .unwrap();
+    // The empty system evaluates nothing yet; its NotYet arrives as the VM's NotYet through `?`.
     assert!(matches!(
         vm.call(f, None, vec![]),
-        Err(VmError::Attr(AttrError::NotYet(NotYet {
+        Err(VmError::NotYet(NotYet {
             missing: Missing::NotPorted,
             ..
-        })))
+        }))
     ));
 }
 
@@ -548,19 +543,22 @@ fn instantiate_names() {
     let obj = fx.vm.space.heap.get(named).unwrap();
     assert_eq!(fx.vm.space.names.text(obj.name), "Pool_7");
     assert_eq!(obj.origin, Origin::Runtime);
-    // Unnamed objects: <Class>_<n>, one counter per class, the same in both modes.
-    for mode in [ParityMode::Off, ParityMode::Reference] {
-        let mut fx = fixture(mode);
-        let name = |vm: &mut Vm, c| {
-            let o = vm.instantiate(c, "").unwrap();
-            let n = vm.space.heap.get(o).unwrap().name;
-            vm.space.names.text(n).into_owned()
-        };
-        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_0");
-        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_1");
-        assert_eq!(name(&mut fx.vm, fx.sub_pool), "SubPool_0");
-        assert_eq!(name(&mut fx.vm, fx.pool), "Pool_2");
-    }
+    let name = |vm: &mut Vm, c| {
+        let o = vm.instantiate(c, "").unwrap();
+        let n = vm.space.heap.get(o).unwrap().name;
+        vm.space.names.text(n).into_owned()
+    };
+    // Off: <Class>_<n>, one counter per class (UE3's form, numbering UNVERIFIED).
+    let mut off = fixture(ParityMode::Off);
+    assert_eq!(name(&mut off.vm, off.pool), "Pool_0");
+    assert_eq!(name(&mut off.vm, off.pool), "Pool_1");
+    assert_eq!(name(&mut off.vm, off.sub_pool), "SubPool_0");
+    assert_eq!(name(&mut off.vm, off.pool), "Pool_2");
+    // Reference: every unnamed object is <Class>_0, as the C++ (vm.cpp:1083).
+    let mut rf = fixture(ParityMode::Reference);
+    assert_eq!(name(&mut rf.vm, rf.pool), "Pool_0");
+    assert_eq!(name(&mut rf.vm, rf.pool), "Pool_0");
+    assert_eq!(name(&mut rf.vm, rf.sub_pool), "SubPool_0");
 }
 
 #[test]
@@ -795,4 +793,14 @@ fn the_world_owns_the_global_slots() {
     // One process-wide pair: an evaluation context sees what was set before it.
     let cx = EvalCx::new(&mut fx.vm);
     assert_eq!(cx.world.global_slots().get(0), 12.0);
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "parity mode differs")]
+fn streams_of_the_other_mode_are_caught_in_debug_builds() {
+    let mut fx = fixture(ParityMode::Off);
+    let twice = declare_twice(&mut fx.vm);
+    fx.vm.rng = GameRng::from_world_seed(0, ParityMode::Reference);
+    let _ = fx.vm.call(twice, None, vec![]);
 }

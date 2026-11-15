@@ -483,8 +483,9 @@ impl Vm {
         }
     }
 
-    /// Reseeds the RNG streams from `seed`, in the VM's own parity mode (so an `Off` VM can never run on the
-    /// Reference stand-in streams, nor the reverse).
+    /// Reseeds the RNG streams from `seed`, in the VM's own parity mode. That the streams' mode matches
+    /// [`Vm::parity`] (no `Off` VM on the Reference stand-in streams, nor the reverse) is checked on every call in
+    /// debug builds; `rng` and `parity` are public fields, so this constructor is the safe way to reseed.
     pub fn with_world_seed(mut self, seed: u64) -> Self {
         self.rng = GameRng::from_world_seed(seed, self.parity);
         self
@@ -561,10 +562,15 @@ impl Vm {
 
     /// A new runtime object of class `c` (no outer), starting from the class's default slots.
     ///
-    /// An empty `name` gives `<Class>_<n>` with a per-class counter starting at 0, the form UE3's
-    /// `MakeUniqueObjectName` gives an unnamed object (the first one is `<Class>_0`, which the C++ VM's fixed name
-    /// `vm.cpp:1083` and the tests that read it agree with). Status: UNVERIFIED for this executable: the exact
-    /// numbering (per-class counter, no check against an existing object of that name) is not read from it.
+    /// An empty `name`:
+    /// - `ParityMode::Off`: `<Class>_<n>` with a per-class counter starting at 0, the form UE3's
+    ///   `MakeUniqueObjectName` gives an unnamed object. Status: UNVERIFIED for this executable: the exact numbering
+    ///   (per-class counter, no check against an existing object of that name) is not read from it.
+    /// - `ParityMode::Reference`: `<Class>_0` for every unnamed object, as the C++ VM names them (`vm.cpp:1083`;
+    ///   several per class in `combat.cpp:325`, `combat_hit.cpp:173`, `combat_loot.cpp:435`, `EX_New`
+    ///   `interp.cpp:472`). A Reference-only stand-in (architecture section 6.1, owner W7-RETIRE).
+    ///
+    /// Both give `<Class>_0` for the first unnamed object of a class (`vm_test.py:937-938`).
     pub fn instantiate(&mut self, c: ClassId, name: &str) -> Result<ObjRef, VmError> {
         if !name.is_empty() {
             return Ok(self.space.alloc(c, name, None, Origin::Runtime)?);
@@ -574,10 +580,15 @@ impl Vm {
             .classes
             .get_layout(c)
             .ok_or(HeapError::Layout(LayoutError::UnknownClass(c)))?;
-        let next = self.unique_names.get(&c).copied().unwrap_or(0);
+        let next = match self.parity {
+            ParityMode::Off => self.unique_names.get(&c).copied().unwrap_or(0),
+            ParityMode::Reference => 0,
+        };
         let generated = format!("{}_{next}", layout.path().name());
         let object = self.space.alloc(c, &generated, None, Origin::Runtime)?;
-        self.unique_names.insert(c, next.wrapping_add(1));
+        if self.parity == ParityMode::Off {
+            self.unique_names.insert(c, next.wrapping_add(1));
+        }
         Ok(object)
     }
 
@@ -694,15 +705,21 @@ impl Vm {
     /// `interp.cpp:915-917`): the Rust VM has one entry point and gives it the `callFromNative` meaning.
     ///
     /// A native runs its implementation, or the stub policy decides. A script function runs its override binding;
-    /// without one it is `NotYet { NotPorted }` until the interpreter lands (W3-INTERP replaces that branch).
+    /// without one it is `NotYet { NotPorted }` until the interpreter lands (W3-INTERP fills [`Vm::run_frame`]).
     pub fn call(
         &mut self,
         f: FuncId,
         this: Option<ObjRef>,
         args: Vec<Value>,
     ) -> Result<CallResult, VmError> {
+        debug_assert_eq!(
+            self.rng.mode(),
+            self.parity,
+            "the RNG streams' parity mode differs from the VM's"
+        );
         self.services.check_none_borrowed()?;
         if self.active_calls == 0 {
+            debug_assert_eq!(self.script_depth, 0, "a bytecode frame outlived its call");
             self.steps = 0;
         }
         let bound = self.bind_args(f, args)?;
@@ -790,28 +807,47 @@ impl Vm {
             Some((key, None)) => self.stub(f, &key, args),
             None => match binding {
                 Some(imp) => self.run_native(&imp, f, this, args),
-                None => self.run_bytecode(&path),
+                None => self.run_bytecode(f, this, args),
             },
         }
     }
 
-    /// The bytecode branch (W3-INTERP replaces the body after the depth check). The depth is counted in the `Vm`
-    /// so that it carries through natives, and checked before a frame is made, as C++ (`interp.cpp:711`).
-    fn run_bytecode(&mut self, path: &str) -> Result<CallResult, VmError> {
+    /// The bytecode branch: only the depth bookkeeping, so the counter unwinds on every path out of the frame,
+    /// errors included. The depth is counted in the `Vm` so that it carries through natives, and checked before a
+    /// frame is made, as C++ (`interp.cpp:711`). The frame itself is [`Vm::run_frame`].
+    fn run_bytecode(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Arg>,
+    ) -> Result<CallResult, VmError> {
         if self.script_depth >= self.limits.max_call_depth {
+            let path = self.function_path(f);
             return Err(VmError::Script {
-                function: path.to_string(),
                 message: format!("call depth limit reached in {path}"),
+                function: path,
             });
         }
         self.script_depth += 1;
-        let result = Err(NotYet::not_ported(
-            format!("running script function {path}"),
-            "lane W3-INTERP (the interpreter)",
-        )
-        .into());
+        let result = self.run_frame(f, this, args);
         self.script_depth -= 1;
         result
+    }
+
+    /// Runs one bytecode frame of script function `f`. W3-INTERP fills this body (its grant in architecture
+    /// section 8); until then it is `NotYet { NotPorted }`.
+    fn run_frame(
+        &mut self,
+        f: FuncId,
+        this: Option<ObjRef>,
+        args: Vec<Arg>,
+    ) -> Result<CallResult, VmError> {
+        let _ = (this, args);
+        Err(NotYet::not_ported(
+            format!("running script function {}", self.function_path(f)),
+            "lane W3-INTERP (the interpreter)",
+        )
+        .into())
     }
 
     fn run_native(

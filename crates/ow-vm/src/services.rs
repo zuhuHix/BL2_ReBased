@@ -1,15 +1,16 @@
 //! Owner: lane W2-VMAPI. The VM's services (architecture sections 3.8 and 3.9).
 //!
 //! State that belongs to a crate above the VM (the world's balance state, the inventory manager's tables, a native
-//! pack's bookkeeping) is a **service**: one value per type, held as `Rc<RefCell<T>>` in a map keyed by `TypeId`, so
-//! that everything a native needs is reachable from `&mut Vm` and no native needs a `&mut World`. The one upward
+//! pack's bookkeeping) is a **service**: one value per type, held as `Rc<RefCell<T>>` in a list in registration order
+//! (with a `TypeId` index for lookups), so that everything a native needs is reachable from `&mut Vm` and no native needs a `&mut World`. The one upward
 //! hook the VM itself calls, [`crate::api::WorldHooks`], has its own slot ([`Services::hooks`]) because it is held as
 //! a trait object.
 //!
 //! **The borrow rule** (the review bar's first check for every native): a native borrows a service only for a short
 //! scope (`vm.service::<T>()` clones the `Rc` out, then `borrow_mut()` for the few lines that need it) and **never
-//! holds a borrow across `NativeCall::call_script`**. The VM enforces it: a nested call made while any service is
-//! borrowed fails with [`VmError::ServiceBorrowed`] instead of panicking later inside the callee.
+//! holds a borrow across `NativeCall::call_script`**. The VM enforces it: every call made while any service is borrowed
+//! (a nested call from a native, or a top-level call from a host holding a borrow) fails with
+//! [`VmError::ServiceBorrowed`] instead of panicking later inside the callee.
 //!
 //! The services are kept in registration order, and that is the only order anything walks them in (the borrow check
 //! names the first borrowed one), so no text depends on the `TypeId` order, which differs between builds
