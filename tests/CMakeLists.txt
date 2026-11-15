@@ -156,3 +156,22 @@ else()
   list(LENGTH OW_PILLOW_PY_TESTS ow_count)
   message(STATUS "Pillow and numpy do not both import in ${Python3_EXECUTABLE}: the ${ow_count} tests in OW_PILLOW_PY_TESTS are not registered (docs/verification/GATES.md)")
 endif()
+
+# The Rust parity runner (lane W1-HARNESS, 2026-11-15; maintainer decision D15). py-rust_parity is the runner's self-test
+# (synthetic manifests and stand-in binaries, stdlib only). rust-parity runs the real manifest, tests/rust_parity.d/*.txt, on
+# the Rust release binary, with the C++ ow-package for its diff lines. It is registered only when the Rust binary exists at
+# configure time (cargo build --release -p ow-cli --locked, then configure again); CI builds it before configuring, and with
+# OW_REQUIRE_TEST_TOOLS=ON a missing binary fails the configure instead of leaving the entry out.
+add_test(NAME py-rust_parity COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/rust_parity_test.py
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(py-rust_parity PROPERTIES TIMEOUT 120)
+set(OW_RUST_PACKAGE ${CMAKE_SOURCE_DIR}/target/release/ow-package${CMAKE_EXECUTABLE_SUFFIX})
+if(EXISTS ${OW_RUST_PACKAGE})
+  add_test(NAME rust-parity COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/rust_parity.py --bin ${OW_RUST_PACKAGE}
+           --cxx $<TARGET_FILE:ow-package> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_tests_properties(rust-parity PROPERTIES TIMEOUT 1800 LABELS rust)
+elseif(OW_REQUIRE_TEST_TOOLS)
+  message(FATAL_ERROR "OW_REQUIRE_TEST_TOOLS is ON and there is no Rust binary at ${OW_RUST_PACKAGE}: rust-parity is not registered (cargo build --release -p ow-cli --locked)")
+else()
+  message(STATUS "No Rust binary at ${OW_RUST_PACKAGE}: rust-parity is not registered (cargo build --release -p ow-cli --locked, then configure again)")
+endif()
