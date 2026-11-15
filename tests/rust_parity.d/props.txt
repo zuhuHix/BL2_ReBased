@@ -1,0 +1,8 @@
+# Lane W2-PROPS (tagged properties: --properties, --properties-batch, --property-offset, --array-schema).
+#
+# No line yet. tests/properties_test.py is this lane's gate, but its last block (from the --terrain-records
+# calls on) runs a W2-ASSETS command that is still a stub in the Rust binary, so the whole file cannot pass until
+# W2-ASSETS ports --terrain-records. Its line, to add when that lands:
+#   python tests/properties_test.py {bin}
+# Every case before that block passes on the Rust binary; the Rust unit tests in crates/ow-package/src/props.rs
+# and crates/ow-cli/src/cmd/properties.rs re-express them, the JSON text pinned to the C++ binary's output.
