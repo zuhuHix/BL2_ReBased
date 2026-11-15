@@ -282,6 +282,9 @@ class StatsRustTest(unittest.TestCase):
 
     def test_the_rust_ran_in_reference_mode(self):
         self.assertEqual(len(self.guns), len(self.requests))
+        # A failed evaluation is its own line (`error`): report it as that, not as a mode problem.
+        errors = [g for g in self.guns if 'error' in g]
+        self.assertEqual(errors[:3], [], 'the Rust card failed on a request')
         off = [g for g in self.guns if 'card' not in g]
         self.assertEqual(off[:3], [], 'the Rust card answered without a gun: run this test as a mode=reference line')
 
