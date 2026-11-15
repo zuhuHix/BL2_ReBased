@@ -1,11 +1,12 @@
 """AI-assisted (Claude Code). Self-test of tools/rust_parity.py (docs/rust-port/ARCHITECTURE.md section 6; lane
 W1-HARNESS).
 
-Stdlib only. Run: python tests/rust_parity_test.py
+Stdlib only (and git, which the runner uses to list tracked test scripts). Run: python tests/rust_parity_test.py
 
-Each case writes a synthetic manifest folder and two tiny stand-in binaries (Python scripts, which the runner starts
-with its own Python) into a temporary folder, runs the runner on them in a child process and checks its PASS/FAIL
-lines, summary and exit code. Nothing here reads the real manifest, a real binary or game data.
+Each case makes a throwaway git repository in a temporary folder (test scripts under its tests/, added to its index
+so the runner sees them as tracked), a synthetic manifest folder and two tiny stand-in binaries (Python scripts, which
+the runner starts with its own Python), runs the runner on them with --repo in a child process and checks its
+PASS/FAIL lines, summary and exit code. Nothing here reads the real manifest, a real binary or game data.
 
 The stand-ins print their arguments and the OW_PARITY value they see. `--exit N` makes them exit with N, `--err TEXT`
 writes TEXT to stderr; the Rust stand-in prints `rust-only` where the C++ one prints `cxx-only` when given `--split`,
@@ -55,35 +56,51 @@ CHECKER = textwrap.dedent('''\
     sys.exit(code)
 ''')
 
+# Stand-in pair that write only `text` to the given stream and exit with `code` (the same for both binaries).
+SAME_OUTPUT = 'import sys\nsys.{stream}.write({text!r})\nsys.exit({code})\n'
+
 
 class RunnerTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix='ow-rust-parity-'))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.repo = self.tmp / 'repo'
+        (self.repo / 'tests').mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', str(self.repo)], check=True, capture_output=True)
         self.manifest = self.tmp / 'manifest'
         self.manifest.mkdir()
         self.rust = self.tmp / 'rust_bin.py'
         self.cxx = self.tmp / 'cxx_bin.py'
         self.rust.write_text(STAND_IN.format(who='rust'), encoding='utf-8')
         self.cxx.write_text(STAND_IN.format(who='cxx'), encoding='utf-8')
-        self.checker = self.tmp / 'checker.py'
-        self.checker.write_text(CHECKER, encoding='utf-8')
+        self.add_script('checker_test.py', CHECKER)
+
+    def add_script(self, name, text, track=True):
+        """Writes tests/<name> in the throwaway repository and, unless track is False, adds it to the index."""
+        (self.repo / 'tests' / name).write_text(text, encoding='utf-8')
+        if track:
+            subprocess.run(['git', '-C', str(self.repo), 'add', f'tests/{name}'], check=True, capture_output=True)
+
+    def same_output(self, stream, text, code=0):
+        for binary in (self.rust, self.cxx):
+            binary.write_text(SAME_OUTPUT.format(stream=stream, text=text, code=code), encoding='utf-8')
 
     def write(self, name, text):
         (self.manifest / name).write_text(textwrap.dedent(text), encoding='utf-8')
 
     def check_line(self, want_parity, code=0, suffix=''):
         """A plain manifest line that runs the checker with the Rust binary."""
-        checker = self.checker.as_posix()
-        return f'python {checker} {{bin}} {want_parity} {code}{suffix}'
+        return f'python tests/checker_test.py {{bin}} {want_parity} {code}{suffix}'
 
-    def runner(self, *extra, env_parity=None, cxx=True):
+    def runner(self, *extra, env_parity=None, cxx=True, env_extra=None):
         env = dict(os.environ)
         env.pop('OW_PARITY', None)
         if env_parity is not None:
             env['OW_PARITY'] = env_parity
-        argv = [sys.executable, str(RUNNER), '--bin', str(self.rust), '--manifest-dir', str(self.manifest)]
+        env.update(env_extra or {})
+        argv = [sys.executable, str(RUNNER), '--bin', str(self.rust), '--manifest-dir', str(self.manifest),
+                '--repo', str(self.repo)]
         if cxx:
             argv += ['--cxx', str(self.cxx)]
         done = subprocess.run(argv + list(extra), capture_output=True, text=True, env=env, timeout=120)
@@ -97,6 +114,8 @@ class RunnerTest(unittest.TestCase):
         m = re.search(r'^rust_parity: (\d+) passed, (\d+) failed, of (\d+) lines in (\d+) files', out, re.M)
         self.assertIsNotNone(m, out)
         return tuple(int(g) for g in m.groups())
+
+    # Plain test-command lines.
 
     def test_passing_failing_reference_and_diff_lines(self):
         # The case the lane entry names: a passing, a failing, a mode=reference and a diff line, in two files.
@@ -142,74 +161,39 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('parity <unset>, wanted reference', out)
 
-    def test_diff_compares_stdout(self):
-        self.write('d.txt', '''\
-            diff --split x
+    def test_asserts_cannot_be_optimised_away(self):
+        # Review r2's probe: an assert-based test passed under PYTHONOPTIMIZE=1 and with python -O. The runner removes
+        # PYTHONOPTIMIZE, so the assert still fails; a -O option before the script is a bad line.
+        self.add_script('asserts_test.py', 'import sys\nassert False, "an assert ran"\n')
+        self.write('a.txt', '''\
+            python tests/asserts_test.py {bin}
+            python -O tests/asserts_test.py {bin}
+            python -OO tests/asserts_test.py {bin}
             ''')
-        code, out, _ = self.runner()
+        code, out, _ = self.runner(env_extra={'PYTHONOPTIMIZE': '1'})
         self.assertEqual(code, 1, out)
-        self.assertIn("stdout differs: line 1: C++ 'cxx-only', Rust 'rust-only'", out)
+        self.assertEqual(self.summary(out), (0, 3, 3, 1))
+        self.assertIn('an assert ran', out)
+        self.assertEqual(out.count('python -O strips the asserts'), 2, out)
 
-    def test_an_expected_error_needs_the_stderr_marker(self):
-        # Both stand-ins exit 3 with the same stdout. Without `stderr` the line fails (two binaries refusing the
-        # arguments the same way must not pass); with it, equal stderr passes and different stderr fails.
-        self.write('d.txt', '''\
-            diff --exit 3 x
-            diff --exit 3 x stderr
-            diff --exit 3 --err boom x stderr
+    def test_a_test_line_must_run_a_tracked_test_script(self):
+        # Review r2: the {bin} check alone let `python -c "print('{bin}')"` through.
+        self.add_script('untracked_test.py', 'pass\n', track=False)
+        self.write('a.txt', '''\
+            python -c "print('{bin}')"
+            python tests/untracked_test.py {bin}
+            python tests/missing_test.py {bin}
+            python tools/checker_test.py {bin}
+            node tests/checker_test.py {bin}
             ''')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
-        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS', 'd.txt:3': 'FAIL'}, out)
-        self.assertIn('a binary exited non-zero (C++ 3, Rust 3): an expected error needs the stderr marker', out)
-
-    def test_both_binaries_refusing_the_same_way_fails(self):
-        # The probe of review r1: every C++ error exits 1 with empty stdout, and so does a Rust usage error. Both
-        # stand-ins here do exactly that, with different stderr text.
-        for binary, who in ((self.rust, 'rust'), (self.cxx, 'cxx')):
-            binary.write_text(f"import sys\nsys.stderr.write('{who}: bad command line\\n')\nsys.exit(1)\n",
-                              encoding='utf-8')
-        self.write('d.txt', '''\
-            diff --nmaes local/not-there.upk
-            diff --nmaes local/not-there.upk stderr
-            ''')
-        code, out, _ = self.runner()
-        self.assertEqual(code, 1, out)
-        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'FAIL'}, out)
-        self.assertIn('exited non-zero (C++ 1, Rust 1)', out)
-        self.assertIn('stderr differs', out)
-
-    def test_empty_cxx_stdout_needs_the_stderr_marker(self):
-        # Both exit 0 and print nothing.
-        for binary in (self.rust, self.cxx):
-            binary.write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
-        self.write('d.txt', '''\
-            diff --quiet x
-            diff --quiet x stderr
-            ''')
-        code, out, _ = self.runner()
-        self.assertEqual(code, 1, out)
-        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS'}, out)
-        self.assertIn('the C++ stdout is empty', out)
-
-    def test_misplaced_markers_comments_and_backslashes_are_bad_lines(self):
-        self.write('a.txt', f'''\
-            diff mode=reference --names x.upk
-            diff stderr --names x.upk
-            diff --names x.upk  # inline comment
-            diff --names local\\\\x.upk
-            {self.check_line('<unset>')} # a comment
-            {self.check_line('<unset>').replace(' {bin}', ' mode=reference {bin}')}
-            ''')
-        code, out, _ = self.runner()
-        self.assertEqual(code, 1, out)
-        self.assertEqual(self.summary(out), (0, 6, 6, 1))
-        self.assertEqual(out.count('must come at the end of the line'), 3, out)
-        self.assertEqual(out.count("'#' inside a line"), 2, out)
-        self.assertEqual(out.count('a backslash in the line'), 1, out)
+        self.assertEqual(self.summary(out), (0, 5, 5, 1))
+        self.assertEqual(out.count('is not a tracked tests/*.py file'), 4, out)
+        self.assertIn('a test command starts with python', out)
 
     def test_a_test_line_without_bin_is_a_bad_line(self):
-        self.write('a.txt', f'python {self.checker.as_posix()} somebinary <unset> 0\n')
+        self.write('a.txt', 'python tests/checker_test.py somebinary <unset> 0\n')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
         self.assertIn('a test command must name {bin}', out)
@@ -217,7 +201,7 @@ class RunnerTest(unittest.TestCase):
     def test_skipped_unittest_cases_fail_the_line(self):
         # A unittest file whose cases skip exits 0; the line still fails. One with no skip passes.
         for name, body in (('skips', 'raise unittest.SkipTest("no data")'), ('runs', 'pass')):
-            (self.tmp / f'{name}_test.py').write_text(textwrap.dedent(f'''\
+            self.add_script(f'{name}_test.py', textwrap.dedent(f'''\
                 import sys, unittest
                 class T(unittest.TestCase):
                     def test_a(self):
@@ -227,50 +211,104 @@ class RunnerTest(unittest.TestCase):
                 if __name__ == '__main__':
                     sys.argv[1:] = []
                     unittest.main()
-                '''), encoding='utf-8')
-        self.write('a.txt', f'''\
-            python {(self.tmp / 'skips_test.py').as_posix()} {{bin}}
-            python {(self.tmp / 'runs_test.py').as_posix()} {{bin}}
+                '''))
+        self.write('a.txt', '''\
+            python tests/skips_test.py {bin}
+            python tests/runs_test.py {bin}
             ''')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
         self.assertEqual(self.verdicts(out), {'a.txt:1': 'FAIL', 'a.txt:2': 'PASS'}, out)
         self.assertIn('the output reports skipped cases (skipped=1)', out)
 
-    def test_other_entries_in_the_manifest_folder_fail(self):
-        self.write('a.txt', self.check_line('<unset>') + '\n')
-        self.write('README.md', 'not a manifest\n')
-        self.write('pkg.text', self.check_line('<unset>') + '\n')
-        self.write('pkg.md', self.check_line('<unset>') + '\n')
-        (self.manifest / 'sub').mkdir()
+    # Diff lines.
+
+    def test_diff_compares_stdout(self):
+        self.write('d.txt', '''\
+            diff --split x
+            ''')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
-        self.assertEqual(self.summary(out), (1, 3, 4, 1))
-        self.assertEqual(out.count('not a manifest file'), 3, out)
-        for name in ('pkg.text', 'pkg.md', 'sub'):
-            self.assertIn(f'FAIL {name} ', out)
+        self.assertIn("stdout differs: line 1: C++ 'cxx-only', Rust 'rust-only'", out)
 
-    def test_a_timeout_stops_the_whole_process_tree(self):
-        # The Rust stand-in starts a grandchild that holds the inherited pipes open for 60 s, then sleeps itself.
-        # With a 2 s timeout the line fails quickly: the runner stops the tree of the PID it started.
-        self.rust.write_text(textwrap.dedent('''\
-            import subprocess, sys, time
-            subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-            time.sleep(60)
-            '''), encoding='utf-8')
-        self.write('d.txt', 'diff x\n')
-        started = time.monotonic()
-        code, out, _ = self.runner('--timeout', '2')
-        elapsed = time.monotonic() - started
+    def test_an_expected_error_needs_the_exit_marker(self):
+        # Review r2's probe: once the usage text is ported, both binaries exit 1 with the same usage on stderr, so
+        # `stderr` alone must not let a mistyped flag pass. Only exit=N with the C++ exit code does.
+        self.same_output('stderr', 'usage: ow-package <flag> <package>\n', code=1)
+        self.write('d.txt', '''\
+            diff --nmaes local/not-there.upk
+            diff --nmaes local/not-there.upk stderr
+            diff --nmaes local/not-there.upk exit=1 stderr
+            diff --nmaes local/not-there.upk stderr exit=1
+            diff --nmaes local/not-there.upk exit=1
+            diff --nmaes local/not-there.upk exit=2 stderr
+            ''')
+        code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
-        self.assertIn('Rust binary: timed out after 2.0 s; stopped it and its child processes', out)
-        self.assertLess(elapsed, 45, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'FAIL', 'd.txt:3': 'PASS',
+                                              'd.txt:4': 'PASS', 'd.txt:5': 'FAIL', 'd.txt:6': 'FAIL'}, out)
+        self.assertEqual(out.count('an expected error needs exit=1'), 2, out)
+        self.assertIn('the C++ stdout is empty: a line with no output needs the stderr marker', out)
+        self.assertIn('exit=2 expected, the C++ binary exited 1', out)
+
+    def test_an_expected_error_needs_cxx_stderr(self):
+        # The stand-ins exit 3 with the same stdout and no stderr: an error that says nothing fails even with exit=3.
+        self.write('d.txt', '''\
+            diff --exit 3 x exit=3
+            diff --exit 3 --err boom x exit=3
+            diff --exit 3 --err boom x exit=3 stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS', 'd.txt:3': 'FAIL'}, out)
+        self.assertIn('the C++ binary exited 3 with empty stderr', out)
+        self.assertIn("stderr differs: line 1: C++ 'cxx:boom', Rust 'rust:boom'", out)
+
+    def test_both_binaries_refusing_the_same_way_fails(self):
+        # Review r1's probe: every C++ error exits 1 with empty stdout, and so does a Rust usage error.
+        for binary, who in ((self.rust, 'rust'), (self.cxx, 'cxx')):
+            binary.write_text(f"import sys\nsys.stderr.write('{who}: bad command line\\n')\nsys.exit(1)\n",
+                              encoding='utf-8')
+        self.write('d.txt', '''\
+            diff --nmaes local/not-there.upk
+            diff --nmaes local/not-there.upk exit=1 stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'FAIL'}, out)
+        self.assertIn('an expected error needs exit=1', out)
+        self.assertIn('stderr differs', out)
+
+    def test_a_cxx_binary_that_writes_nothing_fails_whatever_the_markers(self):
+        # Review r2: with `stderr`, two silent binaries agreed on everything (a Rust `fn main() {}` passed).
+        self.same_output('stdout', '')
+        self.write('d.txt', '''\
+            diff --quiet x
+            diff --quiet x stderr
+            diff --quiet x exit=0 stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.summary(out), (0, 3, 3, 1))
+        self.assertEqual(out.count('the C++ binary wrote nothing'), 3, out)
+
+    def test_empty_cxx_stdout_needs_the_stderr_marker(self):
+        # Both exit 0 and write the same text to stderr only.
+        self.same_output('stderr', 'note: nothing to list\n')
+        self.write('d.txt', '''\
+            diff --quiet x
+            diff --quiet x stderr
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.verdicts(out), {'d.txt:1': 'FAIL', 'd.txt:2': 'PASS'}, out)
+        self.assertIn('the C++ stdout is empty', out)
 
     def test_diff_with_different_exit_codes_fails(self):
         # Same stdout, but the C++ stand-in exits one higher than asked.
         self.cxx.write_text(STAND_IN.format(who='cxx').replace('sys.exit(code)', 'sys.exit(code + 1)'),
                             encoding='utf-8')
-        self.write('d.txt', 'diff --exit 3 x\n')
+        self.write('d.txt', 'diff --exit 3 --err e x exit=4\n')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
         self.assertIn('exit code: C++ 4, Rust 3', out)
@@ -307,18 +345,71 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn('exit code: C++ 7, Rust 6', out)
 
+    def test_a_timeout_stops_the_whole_process_tree(self):
+        # The Rust stand-in starts a grandchild that holds the inherited pipes open for 60 s, then sleeps itself.
+        # With a 2 s timeout the line fails quickly: the runner stops the tree of the PID it started. The bound sits
+        # below stop_tree's 30 s fallback, so a tree stop that left the grandchild holding the pipes would fail it.
+        self.rust.write_text(textwrap.dedent('''\
+            import subprocess, sys, time
+            subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+            time.sleep(60)
+            '''), encoding='utf-8')
+        self.write('d.txt', 'diff x\n')
+        started = time.monotonic()
+        code, out, _ = self.runner('--timeout', '2')
+        elapsed = time.monotonic() - started
+        self.assertEqual(code, 1, out)
+        self.assertIn('Rust binary: timed out after 2.0 s; stopped it and its child processes', out)
+        self.assertLess(elapsed, 20, out)
+
+    # Bad lines and the manifest folder.
+
+    def test_misplaced_markers_comments_and_backslashes_are_bad_lines(self):
+        self.write('a.txt', f'''\
+            diff mode=reference --names x.upk
+            diff stderr --names x.upk
+            diff exit=1 --names x.upk
+            diff --names x.upk  # inline comment
+            diff --names local\\\\x.upk
+            {self.check_line('<unset>')} # a comment
+            {self.check_line('<unset>').replace(' {bin}', ' mode=reference {bin}')}
+            ''')
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.summary(out), (0, 7, 7, 1))
+        self.assertEqual(out.count('must come at the end of the line'), 4, out)
+        self.assertEqual(out.count("'#' inside a line"), 2, out)
+        self.assertEqual(out.count('a backslash in the line'), 1, out)
+
     def test_bad_lines_fail(self):
         self.write('a.txt', '''\
             diff
             diff mode=reference
             stderr
-            python x.py {bin} stderr
+            python tests/checker_test.py {bin} stderr
+            python tests/checker_test.py {bin} exit=1
+            diff x exit=1 exit=1
             python "unclosed
             ''')
         code, out, _ = self.runner()
         self.assertEqual(code, 1, out)
-        self.assertEqual(self.summary(out), (0, 5, 5, 1))
-        self.assertEqual(out.count('bad line:'), 5, out)
+        self.assertEqual(self.summary(out), (0, 7, 7, 1))
+        self.assertEqual(out.count('bad line:'), 7, out)
+        self.assertEqual(out.count('the stderr and exit= markers are for diff lines only'), 2, out)
+        self.assertIn('more than one exit= marker', out)
+
+    def test_other_entries_in_the_manifest_folder_fail(self):
+        self.write('a.txt', self.check_line('<unset>') + '\n')
+        self.write('README.md', 'not a manifest\n')
+        self.write('pkg.text', self.check_line('<unset>') + '\n')
+        self.write('pkg.md', self.check_line('<unset>') + '\n')
+        (self.manifest / 'sub').mkdir()
+        code, out, _ = self.runner()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.summary(out), (1, 3, 4, 1))
+        self.assertEqual(out.count('not a manifest file'), 3, out)
+        for name in ('pkg.text', 'pkg.md', 'sub'):
+            self.assertIn(f'FAIL {name} ', out)
 
     def test_an_empty_manifest_passes_and_says_so(self):
         (self.manifest / 'README.md').write_text('diff not a manifest line\n', encoding='utf-8')
@@ -348,6 +439,11 @@ class RunnerTest(unittest.TestCase):
         code, _, err = self.runner('--manifest-dir', str(self.tmp / 'nowhere'))
         self.assertEqual(code, 2)
         self.assertIn('no manifest folder', err)
+        not_a_repo = self.tmp / 'not-a-repo'
+        not_a_repo.mkdir()
+        code, _, err = self.runner('--repo', str(not_a_repo))
+        self.assertEqual(code, 2)
+        self.assertIn('git ls-files failed', err)
 
     def test_no_cxx_needed_without_diff_lines(self):
         self.write('a.txt', self.check_line('<unset>') + '\n')
@@ -355,7 +451,8 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
     def test_the_real_manifest_parses(self):
-        # The tracked manifest folder: every *.txt line parses (running it needs the binaries; ctest's rust-parity).
+        # The tracked manifest folder: every *.txt line parses against this repository's tracked tests (running it
+        # needs the binaries; that is ctest's rust-parity).
         sys.path.insert(0, str(ROOT / 'tools'))
         try:
             import rust_parity
@@ -363,7 +460,9 @@ class RunnerTest(unittest.TestCase):
             sys.path.pop(0)
         folder = ROOT / 'tests' / 'rust_parity.d'
         self.assertTrue((folder / 'README.md').is_file())
-        _, _, problems = rust_parity.read_manifest(folder, [])
+        tracked = rust_parity.tracked_test_scripts(ROOT)
+        self.assertIn('tests/rust_parity_test.py', tracked)
+        _, _, problems = rust_parity.read_manifest(folder, [], tracked)
         self.assertEqual(problems, [])
 
 

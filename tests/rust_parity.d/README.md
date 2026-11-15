@@ -19,14 +19,27 @@ line (so quote an argument with spaces, and write paths with forward slashes) an
 
 | Line | What runs | Passes when |
 |---|---|---|
-| `python tests/package_test.py {bin}` | the command, with `{bin}` (required) replaced by the Rust binary's path and a first word `python` by the runner's Python | it exits 0 and reports no skipped unittest case (`skipped=N`, `OK (skipped`) |
-| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes) and the exit code are equal, both binaries exit 0 and the C++ stdout is not empty |
+| `python tests/package_test.py {bin}` | the test script, with `{bin}` (required) replaced by the Rust binary's path and `python` by the runner's Python | it exits 0 and reports no skipped unittest case (`skipped=N`, `OK (skipped`) |
+| `diff --names <package>` | the arguments on the C++ binary (`--cxx`) and on the Rust binary (`--bin`) | stdout (bytes) and the exit code are equal, and the rules below hold |
 
-Trailing markers, in either order:
+A test-command line starts with `python`, and the next word is a tracked `tests/*.py` file (`git ls-files`). No
+interpreter option goes before it: `-O` would strip the test's asserts, and the runner removes `PYTHONOPTIMIZE` from
+every command's environment for the same reason.
 
-- `stderr` (diff lines only): stderr must be equal too. A diff line where either binary exits non-zero or the C++
-  stdout is empty passes only with it, so two binaries that refuse the arguments the same way (a typo in a flag, a
-  missing package) cannot pass. Add it also where a C++ test asserts stderr text.
+A diff line must not pass just because both binaries did nothing, or failed the same way:
+
+- if the C++ binary wrote nothing (empty stdout and stderr), the line fails whatever its markers. Commands that print
+  nothing belong in a test-command line;
+- if the C++ stdout is empty, the line needs `stderr`;
+- if the C++ binary exits non-zero, the line needs `exit=N` with N its exit code, and the C++ stderr must not be
+  empty.
+
+Trailing markers, in any order:
+
+- `exit=N` (diff lines only): the C++ binary is expected to exit with N; required for every non-zero exit, and a
+  different C++ exit code fails the line. It says the error is expected. It compares nothing by itself.
+- `stderr` (diff lines only): stderr must be equal too. Add it where a C++ test asserts stderr text, and on expected
+  errors whose message matters (`diff --nmaes x exit=1` passes on any shared usage text; `stderr` pins the text).
 - `mode=reference`: the line runs with `OW_PARITY=reference`, which turns on the reference stand-ins
   (`docs/rust-port/ARCHITECTURE.md` section 6.1). Every other line runs with `OW_PARITY` removed, whatever the
   caller's environment holds. Mark only the lines that pin a stand-in, and list each in your handoff with the
