@@ -1,0 +1,10 @@
+# AI-assisted (Claude Code). Lane W4-POOLS: --item-pool (crates/ow-items/src/pools.rs).
+#
+# tests/item_pools_rust_test.py rolls an invented install with the Rust --item-pool (--parity, and the single form for a
+# pawn balance and a pool outside .WeaponPools.) and compares every roll with tools/loot_pools.py's CrtRand path
+# (roll_crt / roll_pool_crt, as tools/weapon_gen_parity.py pool_drops calls them) on the C++ reader. The oracle's rules
+# (a round-half-even quantity, every listed pool fired) are reproduced only in Reference mode, so the line runs in
+# Reference mode. The Off-mode pool roll (NATIVE_LOOT.md) has its own Rust tests in crates/ow-items/src/pools.rs
+# (decision 2026-11-15-25).
+
+python tests/item_pools_rust_test.py build/Release/ow-package.exe {bin} mode=reference
