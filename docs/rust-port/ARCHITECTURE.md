@@ -350,7 +350,8 @@ pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWor
 pub fn decode_package(input: &[u8]) -> Result<Vec<u8>, ContainerError>;
 pub enum ContainerError { Truncated { at: usize, need: usize }, BadMagic, BadChunk { index: usize, reason: &'static str },
                           Lzo { at: usize, reason: &'static str }, BadPartialTable { reason: &'static str },
-                          TrailingPartialBytes, NotYet(NotYet) }
+                          TrailingPartialBytes, BadHeader { reason: &'static str },
+                          InPartialChunk { index: usize, at: usize, error: Box<ContainerError> }, NotYet(NotYet) }
 // decode_package handles both forms, as container.cpp does: a fully compressed container, and a package whose summary
 // carries a partial compression table (codec 2; chunk bounds checked against the summary and each other; each chunk a
 // nested container whose decoded size must match; no trailing bytes after the last chunk). tests/package_test.py:64-79.

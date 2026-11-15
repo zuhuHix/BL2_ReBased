@@ -39,8 +39,7 @@ pub(crate) fn word(data: &[u8], offset: usize) -> Result<u32, ContainerError> {
 }
 
 fn header(reason: &'static str) -> ContainerError {
-    // The frozen error enum has no header variant; header-level container errors report chunk 0.
-    ContainerError::BadChunk { index: 0, reason }
+    ContainerError::BadHeader { reason }
 }
 
 /// Decodes a fully compressed container (the tag is already checked by the caller).
@@ -48,7 +47,7 @@ pub fn decode_container(input: &[u8]) -> Result<Vec<u8>, ContainerError> {
     let block = word(input, 4)? as usize;
     if !(4096..=1024 * 1024).contains(&block) || !block.is_power_of_two() {
         return Err(header(
-            "header: unsupported package version or container block size",
+            "unsupported package version or container block size",
         ));
     }
     let compressed = word(input, 8)? as usize;
@@ -56,7 +55,7 @@ pub fn decode_container(input: &[u8]) -> Result<Vec<u8>, ContainerError> {
     // Bound the allocation before trusting the file's counts.
     if decoded == 0 || decoded > DECODED_LIMIT {
         return Err(header(
-            "header: decoded size is zero or over the 512 MiB research limit",
+            "decoded size is zero or over the 512 MiB research limit",
         ));
     }
     let blocks = decoded.div_ceil(block);
@@ -69,7 +68,7 @@ pub fn decode_container(input: &[u8]) -> Result<Vec<u8>, ContainerError> {
     }
     if compressed != input.len() - start {
         return Err(header(
-            "header: compressed size differs from the bytes after the block table",
+            "compressed size differs from the bytes after the block table",
         ));
     }
 
@@ -191,12 +190,18 @@ pub fn decode_partial(input: &[u8]) -> Result<Vec<u8>, ContainerError> {
             output.extend_from_slice(&input[..dest]);
         }
         let chunk = &input[source..source + stored];
-        if word(chunk, 4)? == BL2_VERSION_WORD {
+        // Errors inside the chunk are in its own coordinates; name the table entry and the chunk's file offset.
+        let in_chunk = |error| ContainerError::InPartialChunk {
+            index: i,
+            at: source,
+            error: Box::new(error),
+        };
+        if word(chunk, 4).map_err(in_chunk)? == BL2_VERSION_WORD {
             return Err(ContainerError::BadPartialTable {
                 reason: "chunk is a package, not a container",
             });
         }
-        let decoded = crate::decode_package(chunk)?;
+        let decoded = crate::decode_package(chunk).map_err(in_chunk)?;
         if decoded.len() != size {
             return Err(ContainerError::BadPartialTable {
                 reason: "chunk decoded size differs from the table",
@@ -401,10 +406,7 @@ mod tests {
             let mut bad = container(&v, 131072);
             put(&mut bad, 4, block);
             assert!(
-                matches!(
-                    decode_package(&bad),
-                    Err(ContainerError::BadChunk { index: 0, .. })
-                ),
+                matches!(decode_package(&bad), Err(ContainerError::BadHeader { .. })),
                 "{block}"
             );
         }
@@ -481,6 +483,35 @@ mod tests {
             decode_package(&partial),
             Err(ContainerError::BadPartialTable {
                 reason: "chunk is a package, not a container"
+            })
+        );
+    }
+
+    #[test]
+    fn errors_inside_a_partial_chunk_name_the_entry_and_its_file_offset() {
+        // A broken end marker in the chunk's LZO stream: the error names table entry 0, stored at file byte 144.
+        let (mut broken, _) = partial();
+        let n = broken.len();
+        broken[n - 3..].fill(0);
+        match decode_package(&broken) {
+            Err(ContainerError::InPartialChunk {
+                index: 0,
+                at: 144,
+                error,
+            }) => {
+                assert!(matches!(*error, ContainerError::Lzo { .. }), "{error:?}")
+            }
+            other => panic!("expected InPartialChunk, got {other:?}"),
+        }
+        // A chunk too short to hold a container header.
+        let (mut short, _) = partial();
+        put(&mut short, 124, 4);
+        assert_eq!(
+            decode_package(&short),
+            Err(ContainerError::InPartialChunk {
+                index: 0,
+                at: 144,
+                error: Box::new(ContainerError::Truncated { at: 4, need: 4 })
             })
         );
     }

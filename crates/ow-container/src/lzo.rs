@@ -3,8 +3,10 @@
 //!
 //! Written from the LZO1X instruction format and from the project's own pure-Python decoder
 //! (`research/native_count.py`, `lzo1x_decompress`), which this file follows instruction by instruction. No code of
-//! any LZO implementation is copied or translated; the C++ build's lzokay (`third_party/lzokay`) is only the
-//! differential reference on the real packages.
+//! any LZO implementation is copied or translated. The Python decoder's instruction semantics were checked against
+//! lzokay (MIT, `third_party/lzokay`) when it was written (its docstring says so); here lzokay is the C++ build's
+//! decoder and the differential reference on the real packages. The end-marker rule follows its accept/refuse
+//! behaviour as found in review r1 of PR #283.
 //!
 //! A stream is a sequence of instructions. Each instruction either copies literal bytes from the input or copies a
 //! match from the output already written (a distance back and a length), and most end with 0 to 3 trailing literals.
@@ -193,6 +195,11 @@ impl Decoder<'_, '_> {
                 let word = self.word()?;
                 let distance = high + (word >> 2);
                 if distance == 0 {
+                    // Only the 3-byte form `0x11 0x00 0x00` ends a stream: a zero distance with any other length
+                    // (opcodes 0x10 extended, 0x12..=0x17) is refused, as the C++ reference's lzokay refuses it.
+                    if length != 3 {
+                        return Err(self.err("end-of-stream marker with a length other than 3"));
+                    }
                     break;
                 }
                 self.copy_match(distance + 16384, length)?;
@@ -382,5 +389,25 @@ mod tests {
             decompress(&[0x00, 0x00, 0x00], 4).unwrap_err().reason,
             "input overrun"
         );
+    }
+
+    #[test]
+    fn only_0x11_ends_a_stream() {
+        // A zero distance with a length other than 3 is not an end marker (review r1 of PR #283): 0x12..=0x17 and
+        // the extended 0x10 form are refused.
+        for marker in [
+            &[0x12, 0x00, 0x00][..],
+            &[0x17, 0x00, 0x00],
+            &[0x10, 0x01, 0x00, 0x00],
+        ] {
+            let s = stream(&[&[17 + 4], b"abcd", marker]);
+            assert_eq!(
+                decompress(&s, 4).unwrap_err().reason,
+                "end-of-stream marker with a length other than 3",
+                "{marker:02x?}"
+            );
+        }
+        let good = stream(&[&[17 + 4], b"abcd", &EOS]);
+        assert_eq!(decompress(&good, 4).unwrap(), b"abcd");
     }
 }
