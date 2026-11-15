@@ -97,8 +97,10 @@ where the Rust output differs from the C++ and why, and what stays open.
     - A "no" through an engine-native stand-in class stays `NotYet` (decision 2026-11-15-08), in the casts, in
       `QueryInterface` and in the iterators' InterfaceClass filter (review r1 of PR #318).
     - **The caller rule.** `Vm::implements` stays a plain `bool`; its callers apply the stand-in check. After a "no" a
-      caller asks `interp::is_child(vm, class, iface)?`, which answers `NotYet` through a stand-in class. A later lane
-      that asks `implements` does the same.
+      caller asks `interp::is_child(vm, class, iface)?`, which answers `NotYet` through a stand-in class. The rule can
+      be followed only inside `ow-vm`, because `interp::is_child` is crate-internal. A caller in another crate (a native
+      pack) needs a public checked form, such as a `Vm` method returning `Result<bool, VmError>`. That is open (review
+      r2 of PR #318); until it exists, such a caller must not treat a plain "no" from `implements` as settled.
     - `InterfaceContext` passes its operand through.
 - **Recursion, bounds and order (the brief's questions).** Every expression level these files add goes through the
   interpreter's nesting budget (`MAX_NESTING`), including the static-array base walk. The only recursion on values is
@@ -125,7 +127,7 @@ where the Rust output differs from the C++ and why, and what stays open.
   - `FindStruct` and `Find` on a struct value: the C++ `elements()` of a struct is its fields, so it searches them;
     here a value that is not an array finds nothing. This is not seen in compiled script.
   - Delegate function names compare case-insensitively (names are interned without case), where the C++ compares the
-    two spellings byte for byte: the delegate comparisons and the bound check (`delegate.rs`, `parts` and `bound`).
+    two spellings byte for byte: the delegate comparisons (`delegate.rs`, `parts`).
   - A delegate bound to an object that the heap has since freed: calling it is a `HeapError` (a stale handle) here,
     where the C++ keeps the object alive through its reference and calls the function on it.
 - **Verified (automated, local, pc-hummer).**
@@ -182,9 +184,11 @@ where the Rust output differs from the C++ and why, and what stays open.
     - **The one left**, `WillowPlayerController.InitInputSystem`, is not this lane's. The function creates its
       PlayerInput object from the class its `InputClass` default names. In the C++ that creation gives None; here it
       gives an object (W3-DEFS's defaults give a class), and that object's native `InitInputSystem` stub then runs.
-      W3-INTERP's real-package run on `main` traced it to the C++ reference: its tag readers hold the inherited
+      W3-INTERP's real-package run on `main` points at the C++ reference: the C++ seems to hold the inherited
       `InputClass` default as an object stand-in, and its `New` returns None for a value that is not a class
-      (`src/interp.cpp:469`). The Rust result follows the declared `ClassProperty`, and that is the reading kept.
+      (`src/interp.cpp:469`). UNVERIFIED: no tracked record holds that trace, and `reference(true)` in `src/vm.cpp`
+      reads a declared `ClassProperty` as a class, so which C++ path gives the stand-in is not settled. The Rust result
+      follows the declared `ClassProperty`. The item stays open (below).
     - **Off adds only the Off rows of decision 2026-11-15-14:** `GotoState` `NotYet` (W5-STATES), `<Class>_<n>` names
       and `FRand`. One more case meets a decision 2026-11-15-08 stand-in class `NotYet`.
   - Nothing was checked in the running game; there was no session in this lane.
@@ -194,6 +198,9 @@ where the Rust output differs from the C++ and why, and what stays open.
     property; it is W5-EQUIP's `--inventory-move` block and was not part of this grant.
   - The installed-game rerun on `main` now that PR #316 has landed (the numbers above are from a local merge with its
     45e1cd44 head).
+  - `WillowPlayerController.InitInputSystem`: find and record which C++ path holds the inherited `InputClass` default
+    as an object stand-in (above), or show that the Rust reading is the game's.
+  - A public checked form of `Vm::implements` for callers outside `ow-vm` (the caller rule, above).
   - A static array used as a whole, if script is found that needs it.
   - `DynArraySort` and a delegate called through a local in Off mode: both wait for the game's rule to be read.
 - **UNVERIFIED.** Every rule above is the C++ VM's reading, none checked in the running game:
