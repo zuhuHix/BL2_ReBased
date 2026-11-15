@@ -158,22 +158,26 @@ fn body(d: &mut Declarations, tags: &[Vec<u8>]) -> Vec<u8> {
 ///
 /// ```text
 /// enum EKind { K_A, K_B, K_C }    enum ESize { EPSM_1, EPSM_2, EPSM_4 } (numbered names: base EPSM + number)
+/// enum EState { ready, set }
 /// struct Vector { float X, Y, Z }    struct Plane extends Vector { float W }        (native layouts)
 /// struct Scaled { int Base; int Scale }     defaults: Scale = 1 (or a stream that does not end exactly)
 /// struct Listed { array<int> L }            defaults: L = [1, 2]
 /// struct CycA { array<CycB> Bs }  defaults: Bs = [{}];   struct CycB { array<CycA> As }  defaults: As = [{}]
 /// class Object
-/// class Base extends Object { int A; float B; bool C; name N; string S; EKind Kind; ESize Size; int Count[3];
-///     Scaled Holder, Other; Listed Lists; Plane P; CycA Loop; array<int> Ints; array<Scaled> Rows;
-///     Object Owner, Asset; class<Object> Kindred; interface Iface; delegate OnDone }
-/// class Leaf extends Base { int D }
+/// class Base extends Object { int A; float B; bool C; name N; string S; EKind Kind; ESize Size; EState State;
+///     int Count[3]; Scaled Holder, Other; Listed Lists; Plane P; array<int> Ints; array<Scaled> Rows;
+///     array<EKind> Kinds; array<bool> Flags; Object Owner, Asset; class<Object> Kindred; interface Iface;
+///     delegate OnDone }
+/// class Leaf extends Base { int D }         class Looper extends Object { CycA Loop }
 /// Default__Base: A = 3, B = 1.5
 /// Default__Leaf: A = 7, B (an int tag of 8 bytes: skipped), N = Foo, S = bar, C, Holder { Base = 2 }, Count[0] = 1,
 ///     Count[2] = 3, Count[5] = 9 (past the array: ignored), Kind = K_C, Size = EPSM_2, P (W 4, X 1, Y 2, Z 3),
 ///     Ints = [5, 6], Rows = [{ Base = 1 }, { Scale = 4 }], Owner = Thing, Asset = Mesh, Kindred = Leaf (as an
 ///     ObjectProperty tag), Iface = Thing, OnDone (a delegate tag: skipped), Editor (undeclared int: dropped),
-///     Menu (undeclared array with an element: skipped), D = 1
+///     Menu (undeclared array with an element: skipped), Kinds = [K_B, K_A] (8-byte names), Flags = [1, 0, 1]
+///     (1-byte bools), State = set, D = 1
 /// Thing (a Leaf): D = 2      Comp (a Leaf, 8-byte prefix): D = 3      Tiny (a Leaf, 4 bytes)
+/// Broken (a Leaf): D = 4, then a tag of negative size
 /// Mesh: an object of class Engine.StaticMesh, a class no package exports
 /// ```
 pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
@@ -181,6 +185,7 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     let object = d.cls("Object", 0);
     d.default_object(object, "Object");
     let kind = d.enum_(object, "EKind", &["K_A", "K_B", "K_C"]);
+    let state = d.enum_(object, "EState", &["ready", "set"]);
     // An enum whose value names carry FName numbers (the package stores EPSM with numbers 2, 3 and 5).
     let size = {
         let mut payload = ints(&[0]);
@@ -242,7 +247,9 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     d.prop("Object", base, "Owner", object);
     d.array_of(base, "Rows", "Struct", scaled);
     d.array_of(base, "Ints", "Int", 0);
-    d.prop("Struct", base, "Loop", cyc_a);
+    d.array_of(base, "Kinds", "Byte", kind);
+    d.array_of(base, "Flags", "Bool", 0);
+    d.prop("Byte", base, "State", state);
     d.prop("Struct", base, "P", plane);
     d.prop("Struct", base, "Lists", listed);
     d.prop("Struct", base, "Other", scaled);
@@ -260,6 +267,8 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     d.prop("Int", base, "A", 0);
     let leaf = d.cls("Leaf", base);
     d.prop("Int", leaf, "D", 0);
+    let looper = d.cls("Looper", object);
+    d.prop("Struct", looper, "Loop", cyc_a);
 
     let engine = d.p.add_import("Core", "Package", 0, "Engine");
     let static_mesh = d.p.add_import("Core", "Class", engine, "StaticMesh");
@@ -290,6 +299,11 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
         let detail = d.p.fname("ESize", 0);
         d.p.tag_detail("Size", "ByteProperty", &detail, &value)
     };
+    let kinds = {
+        let mut names = d.p.fname("K_B", 0).to_vec();
+        names.extend_from_slice(&d.p.fname("K_A", 0));
+        d.p.array_tag("Kinds", 2, &names)
+    };
     let tags = vec![
         d.p.int_tag("A", 7),
         d.p.tag_full("B", 0, "IntProperty", 8, &[], &[0; 8]),
@@ -312,6 +326,9 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
         d.p.tag("OnDone", "DelegateProperty", &[0; 12]),
         d.p.int_tag("Editor", 5),
         d.p.array_tag("Menu", 1, &[0; 8]),
+        kinds,
+        d.p.array_tag("Flags", 3, &[1, 0, 1]),
+        d.p.enum_tag("State", "EState", "set"),
         d.p.int_tag("D", 1),
     ];
     let payload = stream(&mut d, 4, &tags);
@@ -323,6 +340,12 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     let payload = stream(&mut d, 8, &tags);
     d.p.add_export(leaf, "Comp", payload);
     d.p.add_export(leaf, "Tiny", ints(&[0]));
+    let tags = vec![
+        d.p.int_tag("D", 4),
+        d.p.tag_full("A", 0, "IntProperty", -1, &[], &[]),
+    ];
+    let payload = stream(&mut d, 4, &tags);
+    d.p.add_export(leaf, "Broken", payload);
     d.build()
 }
 
@@ -361,6 +384,8 @@ fn a_value_that_fails_is_skipped_and_logged_the_rest_applies() {
         w.state.log,
         [
             "defaults: skipped Leaf.B (IntProperty)",
+            // Off mode: Mesh's class is an engine-native class, a NotYet.
+            "defaults: skipped Leaf.Asset (ObjectProperty)",
             "defaults: skipped Leaf.OnDone (DelegateProperty)",
             "defaults: skipped Leaf.Menu (ArrayProperty)",
         ]
@@ -437,21 +462,43 @@ fn arrays_in_struct_defaults_decode_only_off_the_reference_mode() {
     assert_eq!(ints_of(&field(&w.space, &lists, "L")), Vec::<i32>::new());
 }
 
-#[test]
-fn struct_defaults_that_need_themselves_stop_with_a_typed_error() {
-    // CycA's defaults hold a CycB, whose defaults hold a CycA: the inner one cannot wait on the outer, so its array is
-    // skipped and the outer completes. No loop, no overflow.
-    let mut w = world("cycle", false);
-    let o = leaf_default(&mut w, ParityMode::Off);
-    let s = &w.space;
-    let looped = get(s, o, "Loop");
-    let bs = field(s, &looped, "Bs");
-    let bs = bs.elements().unwrap();
-    assert_eq!(bs.len(), 1);
-    assert_eq!(field(s, &bs[0], "As").elements().unwrap().len(), 0);
-    let cyc_a = s.classes.struct_by_path("Core.Object.CycA").unwrap();
+/// CycA's defaults hold a CycB, whose defaults hold a CycA. Reading either first refuses both, and neither publishes
+/// a default; a class holding one by value cannot build its default object.
+fn cycle_outcome(first: &str) -> [Result<(), DecodeError>; 2] {
+    let mut w = world(&format!("cycle-{first}"), false);
+    // Lay the structs out first (through the class that holds one).
+    let looper = w.class("Looper");
+    w.cx(ParityMode::Off).layout(looper).unwrap();
+    let a = w.space.classes.struct_by_path("Core.Object.CycA").unwrap();
+    let b = w.space.classes.struct_by_path("Core.Object.CycB").unwrap();
+    let order = if first == "a" { [a, b] } else { [b, a] };
     let mut cx = w.cx(ParityMode::Off);
-    assert_eq!(cx.ensure_struct_defaults(cyc_a), Ok(()));
+    let first_outcome = cx.ensure_struct_defaults(order[0]);
+    let second_outcome = cx.ensure_struct_defaults(order[1]);
+    assert!(
+        matches!(
+            crate::cdo::class_default(&mut cx, looper),
+            Err(DecodeError::StructDefaultsCycle(_))
+        ),
+        "the default object of a class holding CycA is refused"
+    );
+    for s in [a, b] {
+        let layout = w.space.classes.struct_layout(s).unwrap();
+        assert!(layout.own_defaults().is_empty(), "nothing published");
+    }
+    if first == "a" {
+        [first_outcome, second_outcome]
+    } else {
+        [second_outcome, first_outcome]
+    }
+}
+
+#[test]
+fn struct_defaults_that_need_themselves_are_refused_in_either_order() {
+    let cycle = |path: &str| Err(DecodeError::StructDefaultsCycle(path.to_string()));
+    let expected = [cycle("Core.Object.CycA"), cycle("Core.Object.CycB")];
+    assert_eq!(cycle_outcome("a"), expected);
+    assert_eq!(cycle_outcome("b"), expected);
 }
 
 #[test]
@@ -497,9 +544,70 @@ fn an_enum_value_the_enum_lacks_is_refused_except_in_the_reference_mode() {
         let prop = w.space.prop(base, "Kind").unwrap();
         w.space.classes.decl(prop).unwrap().clone()
     };
-    let err = w.cx(ParityMode::Off).enum_value(&decl, "None").unwrap_err();
+    let e = enum_of(&decl.kind);
+    let err = w
+        .cx(ParityMode::Off)
+        .enum_value(e, decl.name, "None")
+        .unwrap_err();
     assert_eq!(err.to_string(), "Kind: the enum has no value None");
-    assert_eq!(w.cx(ParityMode::Reference).enum_value(&decl, "None"), Ok(0));
+    assert_eq!(
+        w.cx(ParityMode::Reference).enum_value(e, decl.name, "None"),
+        Ok(0)
+    );
+}
+
+#[test]
+fn the_reference_enum_comparison_uses_the_package_spelling_in_either_load_order() {
+    // EState is { ready, set } in the package; a tag says `set`. Interning `SET` first makes the name table keep that
+    // spelling, which must not change the C++ comparison (the package's own text, case-sensitive).
+    for spelled_first in [false, true] {
+        let mut w = world(&format!("enum-spelling-{spelled_first}"), false);
+        if spelled_first {
+            w.space.names.intern("SET");
+        }
+        let o = leaf_default(&mut w, ParityMode::Reference);
+        assert_eq!(
+            get(&w.space, o, "State"),
+            Value::Byte(1),
+            "SET interned first: {spelled_first}"
+        );
+        let mut w = world(&format!("enum-spelling-off-{spelled_first}"), false);
+        if spelled_first {
+            w.space.names.intern("SET");
+        }
+        let o = leaf_default(&mut w, ParityMode::Off);
+        assert_eq!(get(&w.space, o, "State"), Value::Byte(1));
+    }
+}
+
+#[test]
+fn array_element_widths_follow_the_parity_mode() {
+    // Off: the measured widths, an enum byte as an 8-byte name and a bool as one byte.
+    let mut w = world("widths-off", false);
+    let o = leaf_default(&mut w, ParityMode::Off);
+    assert_eq!(
+        get(&w.space, o, "Kinds"),
+        Value::array(vec![Value::Byte(1), Value::Byte(0)])
+    );
+    assert_eq!(
+        get(&w.space, o, "Flags"),
+        Value::array([true, false, true].map(Value::Bool).to_vec())
+    );
+    // Reference: the C++ widths (one byte, four bytes), which do not meet these tags' sizes: both skipped.
+    let mut w = world("widths-ref", false);
+    let o = leaf_default(&mut w, ParityMode::Reference);
+    assert_eq!(get(&w.space, o, "Kinds"), Value::array(Vec::new()));
+    assert_eq!(get(&w.space, o, "Flags"), Value::array(Vec::new()));
+    assert!(
+        w.state
+            .log
+            .contains(&"defaults: skipped Leaf.Kinds (ArrayProperty)".to_string())
+    );
+    assert!(
+        w.state
+            .log
+            .contains(&"defaults: skipped Leaf.Flags (ArrayProperty)".to_string())
+    );
 }
 
 #[test]
@@ -526,9 +634,9 @@ fn references_get_one_stand_in_each_and_class_tags_type_by_declaration() {
 }
 
 #[test]
-fn a_class_no_package_exports_gets_an_engine_native_stand_in_class() {
+fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only() {
     let mut w = world("native-class", false);
-    let o = leaf_default(&mut w, ParityMode::Off);
+    let o = leaf_default(&mut w, ParityMode::Reference);
     let s = &w.space;
     let Value::Object(Some(mesh)) = get(s, o, "Asset") else {
         panic!("Asset")
@@ -543,6 +651,91 @@ fn a_class_no_package_exports_gets_an_engine_native_stand_in_class() {
         "no native property is invented"
     );
     assert_eq!(w.state.native_classes, ["Engine.StaticMesh"]);
+    assert!(w.state.is_native_stand_in(class));
+    assert!(
+        !w.state
+            .is_native_stand_in(s.classes.by_path("Core.Leaf").unwrap())
+    );
+
+    // Off: the class is not read, a NotYet, and the property is skipped.
+    let mut w = world("native-class-off", false);
+    let mesh = w.export("Mesh");
+    let core = w.core;
+    let o = leaf_default(&mut w, ParityMode::Off);
+    assert_eq!(get(&w.space, o, "Asset"), Value::Object(None));
+    let err = w.cx(ParityMode::Off).resource(core, mesh).unwrap_err();
+    assert!(matches!(err, DecodeError::NotYet(_)), "{err:?}");
+    assert!(w.state.native_classes.is_empty());
+}
+
+#[test]
+fn stand_ins_hold_no_slots_and_have_a_budget() {
+    let mut w = world("stand-ins", false);
+    let o = leaf_default(&mut w, ParityMode::Off);
+    let Value::Object(Some(owner)) = get(&w.space, o, "Owner") else {
+        panic!("Owner")
+    };
+    assert!(w.space.heap.get(owner).unwrap().slots.is_empty());
+    // Past the budget, a typed error: the property is skipped, the rest applies.
+    let mut w = world("stand-in-budget", false);
+    w.state.stand_in_budget = 0;
+    let o = leaf_default(&mut w, ParityMode::Off);
+    assert_eq!(get(&w.space, o, "Owner"), Value::Object(None));
+    assert_eq!(get(&w.space, o, "D"), Value::Int(1));
+    assert!(
+        w.state
+            .log
+            .contains(&"defaults: skipped Leaf.Owner (ObjectProperty)".to_string())
+    );
+    let core = w.core;
+    let thing = w.export("Thing");
+    assert_eq!(
+        w.cx(ParityMode::Off).resource(core, thing),
+        Err(DecodeError::StandInBudget(0))
+    );
+}
+
+/// A resolver that answers every reference with one object of its own, and counts the calls.
+struct One {
+    object: ObjRef,
+    calls: std::cell::Cell<u32>,
+}
+
+impl ReferenceResolver for One {
+    fn resolve(
+        &self,
+        _cx: &mut ValueCx<'_>,
+        _package: PackageId,
+        _reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        self.calls.set(self.calls.get() + 1);
+        Ok(Some(self.object))
+    }
+}
+
+#[test]
+fn a_resolver_decides_what_references_point_at() {
+    let mut w = world("resolver", false);
+    let thing = w.class("Leaf");
+    let leaf_id = w.cx(ParityMode::Off).layout(thing).unwrap();
+    let own = w
+        .space
+        .alloc(leaf_id, "Mine", None, Origin::Runtime)
+        .unwrap();
+    let one = One {
+        object: own,
+        calls: std::cell::Cell::new(0),
+    };
+    let o = {
+        let leaf = w.class("Leaf");
+        let mut cx = w.cx(ParityMode::Reference).with_resolver(&one);
+        crate::cdo::class_default(&mut cx, leaf).unwrap()
+    };
+    assert_eq!(get(&w.space, o, "Owner"), Value::Object(Some(own)));
+    assert_eq!(get(&w.space, o, "Iface"), Value::Interface(Some(own)));
+    // Owner, Asset and Iface each ask once (Asset gets Mine too: a Leaf is an Object).
+    assert_eq!(one.calls.get(), 3);
+    assert!(w.state.native_classes.is_empty(), "no stand-in was made");
 }
 
 #[test]
@@ -646,7 +839,7 @@ fn the_reflection_typer_follows_the_root_and_the_path() {
     let h = w.export("H");
     let k = w.export("K");
     let pkg = w.store.shared(core);
-    let typer = ReflectionTyper::new(&w.store, &w.code, &w.space, core);
+    let typer = ReflectionTyper::new(&w.store, &w.code, &w.space, core, ParityMode::Off);
     let items = |export: i32| {
         let walked = read_tagged(&pkg, export, 4, &typer).unwrap();
         let PropValue::Array(rows) = &walked.entries[0].value else {
@@ -671,4 +864,62 @@ fn the_reflection_typer_follows_the_root_and_the_path() {
     );
     // A property the class does not declare stays raw.
     assert_eq!(items(k).1, Some(PropValue::Raw(ints(&[3]))));
+}
+
+#[test]
+fn to_value_skips_what_tagged_skips_and_shares_the_nesting_bound() {
+    let mut w = world("to-value-rules", false);
+    let leaf = w.class("Leaf");
+    let leaf = w.cx(ParityMode::Off).layout(leaf).unwrap();
+    let prop = w.space.prop(leaf, "Holder").unwrap();
+    let decl = w.space.classes.decl(prop).unwrap().clone();
+    let core = w.core;
+    let tree = PropValue::Struct {
+        ty: "Scaled".into(),
+        fields: vec![
+            ow_package::props::PropEntry::new("Base", 0, PropValue::Int(2), None),
+            ow_package::props::PropEntry::new("Nowhere", 0, PropValue::Int(9), None),
+            ow_package::props::PropEntry::new("Scale", 0, PropValue::Str("no".into()), None),
+        ],
+        start: 0,
+    };
+    let v = to_value(&tree, &decl, core, &mut w.cx(ParityMode::Off)).unwrap();
+    // The undeclared field and the field of the wrong kind are skipped; Scale keeps its default.
+    assert_eq!(
+        (field(&w.space, &v, "Base"), field(&w.space, &v, "Scale")),
+        (Value::Int(2), Value::Int(1))
+    );
+
+    // A struct reached at the VM reader's deepest stream is refused, as that reader refuses it.
+    let mut cx = w.cx(ParityMode::Off);
+    let deep = Stream {
+        top: false,
+        defaults: false,
+        depth: MAX_STRUCT_DEPTH,
+    };
+    assert_eq!(
+        tree_value(&tree, &decl, core, &mut cx, deep),
+        Err(DecodeError::StructTooDeep)
+    );
+    let shallow = Stream { depth: 0, ..deep };
+    assert!(tree_value(&tree, &decl, core, &mut cx, shallow).is_ok());
+}
+
+#[test]
+fn the_reflection_typer_takes_the_element_widths_of_its_mode() {
+    let mut w = world("typer-modes", false);
+    let core = w.core;
+    prepare_typer(&mut w.cx(ParityMode::Off), core);
+    let leaf_ref = w.export("Leaf");
+    let root = ow_package::props::StreamRoot::new("Leaf", Some(leaf_ref));
+    let scope = ArrayScope::new("Leaf", Some(leaf_ref), &[], &root);
+    for (mode, kinds) in [
+        (ParityMode::Reference, Some(ElementType::Byte)),
+        (ParityMode::Off, None),
+    ] {
+        let typer = ReflectionTyper::new(&w.store, &w.code, &w.space, core, mode);
+        assert_eq!(typer.element(&scope, "Kinds"), kinds, "{mode:?}");
+        assert_eq!(typer.element(&scope, "Flags"), None);
+        assert_eq!(typer.element(&scope, "Ints"), Some(ElementType::Int));
+    }
 }

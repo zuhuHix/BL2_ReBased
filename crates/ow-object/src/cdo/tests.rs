@@ -51,6 +51,10 @@ fn an_export_starts_from_its_class_default_and_applies_its_own_tags() {
     let mut cx = w.cx(ParityMode::Off);
     let o = instantiate_export(&mut cx, core, thing, PropertyPrefix::Ordinary).unwrap();
     let c = instantiate_export(&mut cx, core, comp, PropertyPrefix::Component).unwrap();
+    // Both streams end at their export's end (no untagged tail).
+    let size = |index: i32| w.store.get(core).object(index).unwrap().size as usize;
+    assert_eq!((o.tags_end, c.tags_end), (size(thing), size(comp)));
+    let (o, c) = (o.object, c.object);
     let s = &w.space;
     assert_eq!(
         (get(s, o, "D"), get(s, o, "A")),
@@ -88,6 +92,45 @@ fn the_cxx_refusals() {
     assert_eq!(err(&mut cx, object), "cannot instantiate a null class");
     // Four bytes cannot hold the prefix and a tag.
     assert_eq!(err(&mut cx, tiny), "object property prefix outside export");
+}
+
+#[test]
+fn a_failed_instantiation_leaves_no_object_behind() {
+    let mut w = world("cdo-rollback", false);
+    let tiny = w.export("Tiny");
+    let broken = w.export("Broken");
+    let core = w.core;
+    let leaf = w.class("Leaf");
+    let leaf_id = w.cx(ParityMode::Off).layout(leaf).unwrap();
+    // Build the class default (and its stand-ins) first, so the counts below see only the instantiations.
+    class_default(&mut w.cx(ParityMode::Off), leaf).unwrap();
+    let before = w.space.heap.len();
+    for (index, text) in [
+        (tiny, "object property prefix outside export"),
+        (broken, "negative property size or index"),
+        (tiny, "object property prefix outside export"),
+    ] {
+        let err = instantiate_export(
+            &mut w.cx(ParityMode::Off),
+            core,
+            index,
+            PropertyPrefix::Ordinary,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), text);
+        assert_eq!(w.space.heap.len(), before, "nothing piles up");
+        assert_eq!(w.space.live(leaf_id).count(), 0, "no live Leaf instance");
+    }
+    // A class default whose own stream breaks keeps its earlier writes (next test); an export that succeeds stays.
+    let thing = w.export("Thing");
+    let ok = instantiate_export(
+        &mut w.cx(ParityMode::Off),
+        core,
+        thing,
+        PropertyPrefix::Ordinary,
+    )
+    .unwrap();
+    assert_eq!(w.space.live(leaf_id).collect::<Vec<_>>(), [ok.object]);
 }
 
 #[test]

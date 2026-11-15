@@ -23,8 +23,9 @@
 //! remain in both modes, because the typed slot model holds what the bag did not (decision 2026-11-15-08): a class
 //! property prints `class:<Package>.<Class>` where the C++, which keeps an object stand-in there, prints the class's
 //! object path (or `null` for an explicit null tag); and a property the class does not declare (an editor-only one
-//! stripped from the cooked class, still tagged) is not printed, where the C++ bag prints it. Lines end in `\n` (the
-//! parity harness normalises line ends).
+//! stripped from the cooked class, still tagged) is not printed, where the C++ bag prints it. These are the two R7
+//! exceptions the hub accepted. Lines end in `\n`; the parity harness reads the C++ `\r\n` as `\n` (decision
+//! 2026-11-15-09).
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -93,7 +94,9 @@ fn execute(args: &[String], mode: ParityMode) -> Result<String, String> {
     let mut space = ObjectSpace::new();
     let mut state = DecodeState::new();
     let mut cx = ValueCx::new(&mut store, &mut code, &mut space, &mut state, mode);
-    let object = instantiate_export(&mut cx, package, index, prefix).map_err(|e| text(&e))?;
+    let object = instantiate_export(&mut cx, package, index, prefix)
+        .map_err(|e| text(&e))?
+        .object;
     let class_id = cx.space.heap.get(object).map_err(|e| text(&e))?.class;
     let key = cx
         .code
