@@ -180,6 +180,7 @@ pub(crate) struct Classes {
     pub weapon_type: ClassId,
     pub designer: ClassId,
     pub skill: ClassId,
+    pub unlinked: ClassId,
     pub unread: ClassId,
 }
 
@@ -520,6 +521,15 @@ impl Fx {
             .classes
             .define("Test.Skill", Some(object), decls)
             .unwrap();
+        // A stack-flagged attribute whose companions were never linked (the "Modifier stack not found" case).
+        let decls = vec![
+            PropertyDecl::new(space.names.intern("Loose"), PropKind::FloatAttribute)
+                .with_flags(PropertyDecl::STACK_ATTRIBUTE),
+        ];
+        let unlinked = space
+            .classes
+            .define("Test.Unlinked", Some(object), decls)
+            .unwrap();
         let decls = vec![plain(&mut space, "Value", PropKind::FloatAttribute)];
         let designer = space
             .classes
@@ -561,6 +571,7 @@ impl Fx {
             weapon_type,
             designer,
             skill,
+            unlinked,
             unread,
         };
         Fx { w, c }

@@ -25,20 +25,26 @@ code. **Every rule here is UNVERIFIED in the running game**; no real-game sessio
   `D_Attributes.WeaponManufacturer.Weapon_Is_<Maker>` attributes are that resolver behind a weapon context.
 - Definitions are read through `DefStore::ensure_loaded` (the W3-DEFS contract after its review r1, PR #307): only an `Origin::Resource` object can be an unloaded handle, so only those go to the store.
 - Data drives the recursion, so each nested step enters a guard: a step already in progress with the same key, or
-  nesting past 64 steps, is `AttrError::BadData`. The guard is a per-thread stack, because resolvers re-enter through
-  the public `AttributeSystem` methods, which carry no depth (the simulation is single-threaded, D18).
+  nesting past 64 steps (`MAX_DEPTH`), is `AttrError::BadData`. Depth does not bound the work (a sub-definition named
+  by all four formula terms costs about 4^n steps at depth n), so the guard also counts the steps of one outermost
+  step and refuses the step past **10,000** (`MAX_WORK`) as `BadData`. Both budgets are Rust-only refusals of this
+  project, not rules of the game; the C++ evaluators have neither. The guard is a per-thread stack, because resolvers
+  re-enter through the public `AttributeSystem` methods, which carry no depth (the simulation is single-threaded,
+  D18).
 - Hub-granted test edits outside the lane's files: W2-ATTRAPI's `every_entry_point_is_not_ported_yet` no longer
   lists the eight entry points this lane fills; W2-VMAPI's `the_attribute_system_is_called_from_inside_a_native` now
   evaluates a synthetic attribute definition (a constant resolver, 2.5) from inside a native.
 
 **Architecture 5.3 results.**
 
-- `PowForm`: settled for the evaluator's fixtures. The re-expressed fixtures (the invented curve, reward chain,
-  skill points and health pool of `tests/mission_script_test.py`; the scale and random-quantity rows of
-  `tests/combat_test.py`; the `Weapon_Is_Acme` terms of `tests/weapon_gen_test.py`; the designer value of
-  `tests/skill_stats_test.py`) pass under both forms, and the live level curve (1,241 / 28,126 / 196,238 /
-  9,155,282) and health base (102.152, 212.6755, 638.886, 415,509.44) give the same bits under both forms at every
-  level 1..80 when run through definitions. By 5.3's rule the default `DoubleThenSingle` stands. Real-game question
+- `PowForm`: settled for the evaluator's fixtures. The re-expressed fixtures that take a power, the invented curve
+  and health pool of `tests/mission_script_test.py`, pass under both forms. The others (the reward chain and skill
+  points of that file, the scale and random-quantity rows of `tests/combat_test.py`, the `Weapon_Is_Acme` terms of
+  `tests/weapon_gen_test.py`, the designer value of `tests/skill_stats_test.py`) take no power, so the form does not
+  reach them; they run under the default. The live level curve (1,241 / 28,126 / 196,238 / 9,155,282) and health base
+  (102.152, 212.6755, 638.886, 415,509.44) match under both forms, and both give the same bits under the two forms at
+  every level 1..80 when run through definitions (`to_bits` loops). By 5.3's rule the default `DoubleThenSingle`
+  stands. Real-game question
   21 stays open for the game's own form.
 - `CombineForm`: nothing for this evaluator to settle. It reads a stack attribute's stored value and never combines
   a stack; W1-ATTRMATH's tests already show the VM 5F fixtures pass under the default `WeaponGen`, which the one stack
@@ -79,7 +85,9 @@ random, and then combines `f = 0` by the mode; the two differ only for a non-zer
    editor's display shares).
 6. `ObjectPropertyAttributeValueResolver` looks the property up over the context's whole class chain (real-game
    question 12); a property that is neither a stack nor a plain attribute reads 0 (the record); a property the class
-   chain lacks is `NotYet { NotRead }` (the record is silent).
+   chain lacks is `NotYet { NotRead }` (the record is silent). The record gives "Modifier stack not found" for add
+   and remove only, so a value read of a stack attribute whose companions are missing returns the stored number; the
+   base read and `storage`, which need the companions, are `BadData` then.
 7. The item's manufacturer is its `DefinitionData.ManufacturerDefinition`, matched by the manufacturer definition's
    object name (FName equality) against `AssociatedManufacturerName`; the native asks
    `WillowInventory.GetManufacturer()`, whose body is unread. The weapon type is

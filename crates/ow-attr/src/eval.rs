@@ -37,9 +37,13 @@
 //! Data drives the recursion (a formula term names an attribute whose resolver evaluates more data), so every nested
 //! step enters a guard: at most [`MAX_DEPTH`] steps deep, and a step already in progress with the same key (the same
 //! definition with the same sources, the same attribute on the same context) is a cycle. Both are
-//! [`AttrError::BadData`]. The guard is a per-thread stack because resolvers re-enter through the public
-//! [`AttributeSystem`] methods, which carry no depth; the simulation is single-threaded (architecture D18), and the
-//! guard pops on every return path.
+//! [`AttrError::BadData`]. Depth alone does not bound the work: a sub-definition named by all four formula terms (or
+//! by both clamp bounds) is evaluated once per naming, so a chain of them costs about 4^n steps well under the depth
+//! cap. So the guard also counts the steps one outermost step takes (every entry while the stack is not empty, the
+//! count reset when an entry finds it empty), and refuses the step past [`MAX_WORK`] as `BadData`. Both budgets are
+//! this project's refusals, not rules of the game. The guard is a per-thread stack because resolvers re-enter through
+//! the public [`AttributeSystem`] methods, which carry no depth; the simulation is single-threaded (architecture
+//! D18), and the guard pops on every return path.
 
 use std::cell::RefCell;
 
@@ -60,6 +64,10 @@ pub(crate) const CHAINS: &str = "NATIVE_ATTRIBUTES.md section 1";
 /// How deep one evaluation may nest (definitions, attributes and context chains together) before it is refused as
 /// bad data. The shipped data nests a few levels; the budget is a guard, not a rule of the game.
 pub const MAX_DEPTH: usize = 64;
+
+/// How many guarded steps one outermost step may take (module documentation, "Cycles"). A shipped evaluation takes
+/// tens; the budget is a guard against data that names one sub-definition many times, not a rule of the game.
+pub const MAX_WORK: usize = 10_000;
 
 /// The class whose definitions expand to several contexts (`ResolveContexts`); its expansion is not read.
 const MULTI_CONTEXT_CLASS: &str = "Engine.AttributeDefinitionMultiContext";
@@ -90,8 +98,14 @@ enum Step {
     },
 }
 
+/// The steps in progress and the work the current outermost step has taken.
+struct Active {
+    steps: Vec<Step>,
+    work: usize,
+}
+
 thread_local! {
-    static ACTIVE: RefCell<Vec<Step>> = const { RefCell::new(Vec::new()) };
+    static ACTIVE: RefCell<Active> = const { RefCell::new(Active { steps: Vec::new(), work: 0 }) };
 }
 
 /// A step on the per-thread stack; popped when dropped, on every return path.
@@ -103,18 +117,27 @@ impl Guard {
             let mut active = active.try_borrow_mut().map_err(|_| AttrError::BadData {
                 reason: "the attribute evaluation guard is busy".into(),
             })?;
-            if active.len() >= MAX_DEPTH {
+            if active.steps.is_empty() {
+                active.work = 0;
+            }
+            active.work += 1;
+            if active.work > MAX_WORK {
+                return Err(AttrError::BadData {
+                    reason: format!("attribute evaluation took more than {MAX_WORK} steps").into(),
+                });
+            }
+            if active.steps.len() >= MAX_DEPTH {
                 return Err(AttrError::BadData {
                     reason: format!("attribute evaluation nested deeper than {MAX_DEPTH} steps")
                         .into(),
                 });
             }
-            if active.contains(&step) {
+            if active.steps.contains(&step) {
                 return Err(AttrError::BadData {
                     reason: format!("attribute evaluation cycle at {step:?}").into(),
                 });
             }
-            active.push(step);
+            active.steps.push(step);
             Ok(())
         });
         match entered {
@@ -131,7 +154,7 @@ impl Drop for Guard {
     fn drop(&mut self) {
         let _ = ACTIVE.try_with(|active| {
             if let Ok(mut active) = active.try_borrow_mut() {
-                active.pop();
+                active.steps.pop();
             }
         });
     }
