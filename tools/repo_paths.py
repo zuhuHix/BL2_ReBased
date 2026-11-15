@@ -25,6 +25,21 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The two ow-package builds (lane W3-SWITCH, 2026-11-15). The Rust binary (cargo build --release -p ow-cli) is the default
+# reader of every tool whose ow-package flags are all ported; the C++ one (build/Release, frozen, see src/package.hpp) stays the
+# default of a tool that still calls a flag the Rust binary answers with "not ported to Rust yet" (exit 3).
+EXE = '.exe' if os.name == 'nt' else ''
+RUST_READER = ROOT / 'target' / 'release' / f'ow-package{EXE}'
+CXX_READER = ROOT / 'build' / 'Release' / f'ow-package{EXE}'
+
+
+def default_reader(waits_for=None):
+    """The ``--reader`` default of a tool: the Rust binary, or the C++ one when ``waits_for`` names the ow-package flag the tool
+    waits for: one not ported yet (``default_reader(waits_for='--mission-run')``), or a ported one whose Rust output still
+    changes the tool's result (the tool says how next to the call). The switch lane that ports a flag finds its tools with
+    ``grep -n "waits_for='--flag'" tools/*.py`` and drops the argument. A path the caller passes with ``--reader`` always wins."""
+    return CXX_READER if waits_for else RUST_READER
+
 # Job keys holding a file the editor reads (inputs) or writes (outputs). ``textures`` maps a parameter to a file.
 INPUT_KEYS = ('gltf', 'tracks', 'sample_gltf', 'candidates_gltf', 'props')
 OUTPUT_KEYS = ('slice_dir', 'reference_out')

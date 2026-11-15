@@ -40,6 +40,7 @@ import weapon_projectile_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
 from prepare_action_skill import read_provider  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 # The projectile's behaviour graph (prepare_action_skill.read_provider decodes it).
 PROVIDER_SCHEMA_LINES = [
@@ -385,7 +386,7 @@ def write_block(out, block):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--level', type=int, default=8, help='ProjectileLevel for the damage (default 8)')
     parser.add_argument('--part', action='append', default=[], metavar='KIND=PART',

@@ -15,7 +15,7 @@ written. The choices above are this tool's sampling rules, not game rules; nothi
 in game. Rolls are seeded and do not reproduce the game's random sequence (weapon_recipe.pick()).
 
 Usage:
-  python tools/weapon_assembly_sample.py --game "<BL2 dir>" [--reader build/Release/ow-package.exe]
+  python tools/weapon_assembly_sample.py --game "<BL2 dir>" [--reader target/release/ow-package.exe]
       [--census local/wpa/census/visual_census.json] [--gestalt local/gestalt]
       [--output local/wpa/sample] [--sets matrix unique skins]
 """
@@ -36,6 +36,7 @@ import skill_stats  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
 import weapon_slice_gear  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 GAME_PACKAGE = Path('WillowGame') / 'CookedPCConsole' / 'Startup.upk'
 BALANCE_CLASS = 'WillowGame.WeaponBalanceDefinition'
@@ -347,7 +348,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--game', required=True, help='Borderlands 2 install directory')
-    parser.add_argument('--reader', default=str(REPO / 'build' / 'Release' / 'ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--census', default=str(REPO / 'local' / 'wpa' / 'census' / 'visual_census.json'))
     parser.add_argument('--gestalt', default=str(REPO / 'local' / 'gestalt'), help='cooked gestalt tables (<Type>.json)')
     parser.add_argument('--output', default=str(REPO / 'local' / 'wpa' / 'sample'), help='must be inside local/')

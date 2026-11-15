@@ -21,6 +21,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 TOOLS = REPO / 'tools'
@@ -55,7 +57,7 @@ def run(*args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
-    parser.add_argument('--reader', type=Path, default=REPO / 'build/Release/ow-package.exe')
+    parser.add_argument('--reader', type=Path, default=default_reader())
     parser.add_argument('--items', type=Path, default=REPO / 'local/items')
     parser.add_argument('--only-firing', action='store_true', help='do not reroll; only refresh the firing blocks')
     args = parser.parse_args(argv)

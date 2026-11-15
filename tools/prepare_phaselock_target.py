@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import slice_npc_assets as npc
 from editor_inputs import ZONE_TEXTURES, file_problem  # noqa: E402
-from repo_paths import job_to_repo, to_repo  # noqa: E402
+from repo_paths import job_to_repo, to_repo, default_reader  # noqa: E402
 
 OUT = ROOT / 'local/phaselock/target'
 UMODEL_OUT = ROOT / 'local/external/umodel/phaselock-target'
@@ -452,7 +452,9 @@ def main():
     parser.add_argument('step', choices=['identity', 'extract', 'editor-job', 'anims', 'attachments', 'all'])
     parser.add_argument('--game', help='Borderlands 2 folder (or OPENWILLOW_BL2)')
     parser.add_argument('--umodel', help='umodel.exe, build 1590 (or OPENWILLOW_UMODEL)')
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    # C++ until the Rust --object-dump keeps StaticMeshComponent.StaticMesh outside OW_PARITY=reference (W3-SWITCH rerun: the
+    # identity step stops at the first worn attachment, 'an attached component without a static mesh').
+    parser.add_argument('--reader', default=str(default_reader(waits_for='--object-dump')))
     args = parser.parse_args()
     use_own_folders()
     steps = {'identity': [identity_step], 'extract': [extract_step], 'editor-job': [editor_job_step],

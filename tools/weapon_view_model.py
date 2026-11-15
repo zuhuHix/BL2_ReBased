@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import weapon_muzzle_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 
 SCHEMA_ADDITIONS = [
@@ -729,7 +730,7 @@ def check_folder(tables, folder):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('--dir', type=Path, nargs='+', default=[])
     parser.add_argument('--library', type=Path, help='local/weapon_library/library.json: write view_types.json beside it')

@@ -35,6 +35,7 @@ import skill_stats  # noqa: E402
 import weapon_balance  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MISSION_WEAPON = 'GD_Z1_RockPaperGenocideData.MW_RockPaper_Fire'
@@ -153,7 +154,7 @@ def pick_from_pool(package, values, pool, level, seed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--level', type=int, default=8)
     parser.add_argument('--seed', type=int, default=1, help='part-roll seed (pool picks use seed + index)')

@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import weapon_muzzle_fx  # noqa: E402
 import weapon_recipe  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 SCHEMA_LINES = weapon_muzzle_fx.SCHEMA_LINES + ['ExplosionScale=StructProperty:ExplosionScaleData']
 
@@ -106,7 +107,7 @@ def build(package, firing, cache=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True)
     parser.add_argument('recipes', nargs='+', type=Path)
     args = parser.parse_args()

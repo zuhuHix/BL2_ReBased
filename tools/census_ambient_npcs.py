@@ -19,7 +19,7 @@ What it collects, for the levels streamed into ``Sanctuary_P`` that hold populat
 * ``routes``     for each spawn point with a destination, the node chain reached by following ``NextNodes``
 * ``named``      the individually placed ``WillowAIPawn`` actors of the town (archetype and pose)
 
-  python tools/census_ambient_npcs.py [--game DIR] [--reader build/Release/ow-package.exe] [--levels A B ...]
+  python tools/census_ambient_npcs.py [--game DIR] [--reader target/release/ow-package.exe] [--levels A B ...]
 """
 import argparse
 import datetime
@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import prepare_slice_world as W  # noqa: E402
 from prepare_level import transform  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 TOOL = 'tools/census_ambient_npcs.py'
 OUT = ROOT / 'local/slice/ambient_npcs.json'
@@ -333,7 +334,7 @@ def routes(level):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--game', default=os.environ.get('OPENWILLOW_BL2'))
-    ap.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    ap.add_argument('--reader', default=str(default_reader()))
     ap.add_argument('--levels', nargs='*', default=LEVELS)
     ap.add_argument('--output', default=str(OUT))
     ap.add_argument('--definitions-from', nargs='*', help='levels whose definitions are read (default all)')

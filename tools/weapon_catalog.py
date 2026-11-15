@@ -42,10 +42,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import loot_pools  # noqa: E402  (SCHEMA_LINES: weapon_recipe's schema plus pool and balance arrays)
 import weapon_recipe  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 OUT = ROOT / 'local/weapons/catalog'
 LIVE_CATALOG = ROOT / 'local/realgame/weapons/live_catalog.json'
-DEFAULT_READER = ROOT / 'build/Release/ow-package.exe'
+DEFAULT_READER = default_reader()
 DEFAULT_GAME = Path(os.environ.get('OPENWILLOW_BL2', r'C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2'))
 DEFAULT_DB = Path(os.environ.get('LOCALAPPDATA', '')) / 'OpenBLCMM' / 'extracted-data' / 'BL2' / 'data.db'
 

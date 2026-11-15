@@ -24,6 +24,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 MISSION = "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire"
 
@@ -285,7 +287,7 @@ def self_test():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--reader", default="build/Release/ow-package.exe")
+    parser.add_argument("--reader", default=str(default_reader(waits_for='--slice-run')))
     parser.add_argument("--cooked", default=os.environ.get("OPENWILLOW_BL2", "") and str(Path(os.environ["OPENWILLOW_BL2"]) / "WillowGame" / "CookedPCConsole"))
     parser.add_argument("--from-json", help="check this --slice-run output (made with the STEPS above) instead of running the reader")
     parser.add_argument("--lines-json", help="with --from-json: the LINES run's --slice-run output (made with STEPS_LINES); without it the LINES rules are skipped")

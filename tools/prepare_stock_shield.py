@@ -49,6 +49,7 @@ import prepare_vendors as pv  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_stats  # noqa: E402
 from loot_pools import SCHEMA_LINES  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_BALANCE = 'GD_ItemGrades.Shields.ItemGrade_Gear_Shield_Standard_01_Common'
@@ -398,7 +399,7 @@ def open_chain(reader, game):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(REPO / 'build' / 'Release' / 'ow-package.exe'), help='ow-package executable')
+    parser.add_argument('--reader', default=str(default_reader()), help='ow-package executable')
     parser.add_argument('--game', required=True, help='Borderlands 2 install directory')
     parser.add_argument('--balance', default=DEFAULT_BALANCE)
     parser.add_argument('--level', type=int, default=SLICE_LEVEL, help=f'item level, 1..{SLICE_LEVEL}')

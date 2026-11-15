@@ -20,6 +20,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,7 +93,7 @@ def table(rows, limit):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build' / 'Release' / 'ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader(waits_for='--native-census')))
     parser.add_argument('--cooked', default=None, help='cooked package directory (default: $OPENWILLOW_BL2/WillowGame/CookedPCConsole)')
     parser.add_argument('--package', default='Startup.upk', help='package passed to the reader (the mission definition lives in Startup)')
     parser.add_argument('--entries', default=str(ROOT / 'tools' / 'slice_native_census_entries.txt'))

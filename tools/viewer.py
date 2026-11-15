@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from installed_content import PACKAGE_SUFFIXES, content_files
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SANCTUARY_MAP = 'Sanctuary_P'
@@ -104,7 +105,7 @@ def main():
     parser.add_argument('--list', action='store_true', help='List installed maps and exit')
     parser.add_argument('--json', action='store_true', help='Machine-readable map catalog (with --list)')
     parser.add_argument('--action', choices=('prepare',), default='prepare')
-    parser.add_argument('--reader', type=Path, default=ROOT / 'build/Release/ow-package.exe')
+    parser.add_argument('--reader', type=Path, default=default_reader())
     parser.add_argument('--include-dlc', action='store_true', help='Include installed DLC maps and texture caches')
     parser.add_argument('--sanctuary-geometry', action='store_true',
                         help='Also prepare Sanctuary terrain and BSP with triangle collision')

@@ -31,6 +31,7 @@ import weapon_gen_manifest  # noqa: E402
 import weapon_recipe  # noqa: E402
 import weapon_firing  # noqa: E402
 import weapon_stats  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 STAGES = (1, 8, 15, 30, 50, 80)
@@ -162,7 +163,7 @@ def pool_drops(package, values, pool, stage, seed):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--weapongen', default=str(ROOT / 'build/Release/ow-weapongen.exe'))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--manifest', type=Path, default=ROOT / 'local/weapons/gen/weapon_gen_manifest.txt')

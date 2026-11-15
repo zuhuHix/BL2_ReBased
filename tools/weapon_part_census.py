@@ -37,7 +37,7 @@ Rules and their status:
   Object paths are matched case-insensitively because live and cooked paths can differ in case.
 
 Usage:
-  python tools/weapon_part_census.py --game "<BL2 dir>" [--reader build/Release/ow-package.exe]
+  python tools/weapon_part_census.py --game "<BL2 dir>" [--reader target/release/ow-package.exe]
       [--gestalt local/gestalt] [--materials <umodel export root> ...]
       [--live local/realgame/wpa/live_visual_census.json]
       --output local/wpa/census/visual_census.json
@@ -59,6 +59,7 @@ sys.path.insert(0, str(TOOLS))
 import weapon_recipe  # noqa: E402
 from filter_gestalt_gltf import gestalt_parts  # noqa: E402
 from render_weapon_previews import find_props  # noqa: E402
+from repo_paths import default_reader  # noqa: E402
 
 GESTALTS = {
     'Pistol': 'Weap_Pistol.GestaltDef_Pistol',
@@ -589,7 +590,7 @@ def load_gestalt_tables(gestalt_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--game', required=True, help='Borderlands 2 install directory')
-    parser.add_argument('--reader', default=str(REPO / 'build' / 'Release' / 'ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--gestalt', default=str(REPO / 'local' / 'gestalt'))
     parser.add_argument('--materials', nargs='+', help='UModel export roots to check skins against')
     parser.add_argument('--live', help='live SDK census (weapon_visual_census.py output) to compare with')

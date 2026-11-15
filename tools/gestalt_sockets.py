@@ -24,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/, for repo_paths
+from repo_paths import default_reader  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / 'tools/gestalt-arrays.schema'
@@ -199,7 +201,7 @@ def decode_family(reader, package, exports, path, mesh_gltf):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', type=Path, required=True, help='Borderlands 2 install folder')
     parser.add_argument('--output', type=Path, default=ROOT / 'local/gestalt')
     parser.add_argument('--gltf', type=Path, help='folder of GestaltDef_<Kind>_GestaltSkeletalMesh.gltf (adds mesh_location)')

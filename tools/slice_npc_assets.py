@@ -47,7 +47,7 @@ from prepare_character_anims import MIRROR, matrix, to_quat, ue_matrix  # noqa: 
 from prepare_character_pose import read_joints  # noqa: E402
 from prepare_sanctuary_pillar import block, numbers  # noqa: E402
 import filter_gestalt_gltf  # noqa: E402
-from repo_paths import job_to_repo, to_repo  # noqa: E402
+from repo_paths import job_to_repo, to_repo, default_reader  # noqa: E402
 import weapon_recipe  # noqa: E402
 
 SLICE = ROOT / 'local/slice'
@@ -952,7 +952,7 @@ STEPS = {'identity': identity_step, 'extract': extract_step, 'crosscheck': cross
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('step', choices=sorted(STEPS))
-    parser.add_argument('--reader', default=str(ROOT / 'build/Release/ow-package.exe'))
+    parser.add_argument('--reader', default=str(default_reader()))
     parser.add_argument('--game', help='Borderlands 2 folder (default $OPENWILLOW_BL2)')
     parser.add_argument('--umodel', help='umodel.exe (default $OPENWILLOW_UMODEL)')
     args = parser.parse_args()
