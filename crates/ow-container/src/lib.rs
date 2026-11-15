@@ -56,7 +56,8 @@ impl fmt::Display for ContainerError {
             ContainerError::Truncated { at, need } => {
                 write!(f, "truncated at byte {at}: {need} more bytes needed")
             }
-            ContainerError::BadMagic => f.write_str("not a UE3 package (bad tag)"),
+            // The C++ text (`src/container.cpp`, `decode_package`), so both readers print the same line (rule R7).
+            ContainerError::BadMagic => f.write_str("invalid package magic"),
             ContainerError::BadChunk { index, reason } => write!(f, "bad chunk {index}: {reason}"),
             ContainerError::Lzo { at, reason } => {
                 write!(f, "bad LZO stream at byte {at}: {reason}")
@@ -115,6 +116,14 @@ mod tests {
         assert_eq!(
             decode_package(&[]),
             Err(ContainerError::Truncated { at: 0, need: 4 })
+        );
+    }
+
+    #[test]
+    fn bad_magic_prints_the_cxx_text() {
+        assert_eq!(
+            decode_package(&[0u8; 8]).unwrap_err().to_string(),
+            "invalid package magic"
         );
     }
 

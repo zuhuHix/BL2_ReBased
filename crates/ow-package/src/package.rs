@@ -49,7 +49,9 @@ impl fmt::Display for PackageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PackageError::Open => f.write_str("cannot open input package"),
-            // The container's own text is its `source()`, so a chained reporter prints it once.
+            // A bad magic prints the C++ text alone, as `src/container.cpp` throws it (rule R7); `source()` is
+            // then empty. Any other container error's own text is its `source()`, so a chained reporter prints it once.
+            PackageError::Container(e @ ContainerError::BadMagic) => e.fmt(f),
             PackageError::Container(_) => f.write_str("cannot decode the package container"),
             PackageError::Header(e) => e.fmt(f),
             PackageError::Table(e) => e.fmt(f),
@@ -63,6 +65,7 @@ impl std::error::Error for PackageError {
     /// The container error behind [`PackageError::Container`]; the other variants print their whole cause.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            PackageError::Container(ContainerError::BadMagic) => None,
             PackageError::Container(e) => Some(e),
             _ => None,
         }
@@ -417,6 +420,13 @@ mod tests {
         assert!(matches!(error, PackageError::Container(_)), "{error:?}");
         assert_eq!(error.to_string(), "cannot decode the package container");
         assert!(error.source().is_some());
+
+        let mut not_a_package = container(&plain, 4096);
+        not_a_package[0..4].copy_from_slice(&0u32.to_le_bytes());
+        let error = load(&not_a_package).unwrap_err();
+        assert_eq!(error, PackageError::Container(ContainerError::BadMagic));
+        assert_eq!(error.to_string(), "invalid package magic");
+        assert!(error.source().is_none());
     }
 
     #[test]
