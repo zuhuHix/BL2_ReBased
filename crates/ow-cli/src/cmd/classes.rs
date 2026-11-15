@@ -11,7 +11,8 @@
 //!
 //! Rust-only modifier: `--interface-compare --cooked <directory> --layouts` loads the nine code packages into a
 //! `ClassTable` (`ow_object::reflect::load_code_packages`) and prints how many classes got a layout and why each other
-//! did not. The C++ binary has no such command (its VM keeps no layouts). `args.rs`'s usage text does not list it.
+//! did not. The C++ binary has no such command (its VM keeps no layouts). `args.rs` lists it among `--interface-compare`'s
+//! options; the C++ usage text, which `args.rs` keeps byte for byte, does not.
 //!
 //! Lines end in `\n` on every platform (the parity harness normalises line ends; see `cmd/resolve.rs`). The command
 //! does not depend on the parity mode.

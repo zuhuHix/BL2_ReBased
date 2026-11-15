@@ -480,27 +480,21 @@ fn a_super_class_in_another_package_is_laid_out_first() {
     assert_eq!(index.class_at(&mut store, id, lost), Ok(None));
 }
 
-/// What is not laid out, and why: a map property (`NotYet`, and every subclass through its super), an unknown
-/// property class, a struct holding itself by value, a reference to nothing.
+/// What is not laid out, and why: an unknown property class (and every subclass through its super), a struct holding
+/// itself by value, a reference to nothing.
 #[test]
 fn layouts_refuse_with_typed_errors() {
     let tree = Tree::new("refuse");
     let mut d = Declarations::with_imports(&[
         "Class",
         "ScriptStruct",
-        "MapProperty",
         "WeirdProperty",
         "StructProperty",
         "ObjectProperty",
     ]);
-    let mapped = d.cls("Mapped", 0);
-    d.prop_with(&PropSpec {
-        tail: Some(ints(&[0, 0])),
-        ..PropSpec::new("Map", mapped, "Lookup")
-    });
-    let below = d.cls("Below", mapped);
     let weird = d.cls("Weird", 0);
     d.prop("Weird", weird, "Odd", 0);
+    let below = d.cls("Below", weird);
     let looped = d.cls("Looped", 0);
     let cycle = d.struct_in(looped, "Cycle", 0, None);
     d.prop("Struct", cycle, "Again", cycle);
@@ -515,7 +509,7 @@ fn layouts_refuse_with_typed_errors() {
     let summary = index
         .define_layouts(&mut store, &mut names, &mut classes, id)
         .unwrap();
-    assert_eq!((summary.classes, summary.defined), (5, 0));
+    assert_eq!((summary.classes, summary.defined), (4, 0));
     let mut cause = |r: i32| {
         let key = index.class_at(&mut store, id, r).unwrap().unwrap();
         let mut e = index.layout_of(key).unwrap().clone().unwrap_err();
@@ -524,12 +518,9 @@ fn layouts_refuse_with_typed_errors() {
         }
         e
     };
-    assert!(matches!(cause(mapped), ReflectError::NotYet(_)));
-    assert!(matches!(cause(below), ReflectError::NotYet(_)));
-    assert_eq!(
-        cause(weird),
-        ReflectError::UnknownPropertyClass("WeirdProperty".into())
-    );
+    let unknown = ReflectError::UnknownPropertyClass("WeirdProperty".into());
+    assert_eq!(cause(weird), unknown);
+    assert_eq!(cause(below), unknown);
     assert_eq!(
         cause(looped),
         ReflectError::StructCycle("Core.Looped.Cycle".into())
@@ -549,7 +540,70 @@ fn layouts_refuse_with_typed_errors() {
             .by_path("Core.Below")
             .is_none_or(|c| !classes.layout(c).is_defined())
     );
-    assert_eq!(index.layout_failures().len(), 5);
+    assert_eq!(index.layout_failures().len(), 4);
+}
+
+/// A map property is a `Map` kind: with no references (every map of the installed code packages) both sides are
+/// `None`; references, where present, are typed key first. Its value is `None`, and a subclass is laid out after it.
+#[test]
+fn map_properties_get_a_map_kind() {
+    let tree = Tree::new("maps");
+    let mut d =
+        Declarations::with_imports(&["Class", "MapProperty", "NameProperty", "IntProperty"]);
+    let mapped = d.cls("Mapped", 0);
+    d.prop_with(&PropSpec {
+        tail: Some(ints(&[0, 0])),
+        ..PropSpec::new("Map", mapped, "Lookup")
+    });
+    let keyed = d.p.next_export();
+    d.prop_with(&PropSpec {
+        tail: Some(ints(&[keyed + 1, keyed + 2])),
+        ..PropSpec::new("Map", mapped, "Index")
+    });
+    d.prop("Name", keyed, "Index", 0);
+    d.prop("Int", keyed, "Index", 0);
+    let below = d.cls("Below", mapped);
+    d.prop("Int", below, "Extra", 0);
+    tree.write("Core.upk", &d.build());
+
+    let (mut store, id) = load(&tree, "Core.upk");
+    let (mut names, mut classes) = (NameTable::new(), ClassTable::new());
+    let mut index = CodeIndex::new();
+    let summary = index
+        .define_layouts(&mut store, &mut names, &mut classes, id)
+        .unwrap();
+    assert_eq!(
+        (summary.classes, summary.defined),
+        (2, 2),
+        "{:?}",
+        summary.failures
+    );
+    let mapped_id = classes.by_path("Core.Mapped").unwrap();
+    let kind_of = |names: &mut NameTable, n: &str| {
+        let p = classes.prop(mapped_id, names.intern(n)).unwrap();
+        classes.decl(p).unwrap().kind.clone()
+    };
+    assert_eq!(
+        kind_of(&mut names, "Lookup"),
+        PropKind::Map {
+            key: None,
+            value: None
+        }
+    );
+    assert_eq!(
+        kind_of(&mut names, "Index"),
+        PropKind::Map {
+            key: Some(Box::new(PropKind::Name)),
+            value: Some(Box::new(PropKind::Int))
+        }
+    );
+    assert_eq!(
+        classes.zero_value(&kind_of(&mut names, "Lookup")),
+        crate::value::Value::None
+    );
+    let below_id = classes.by_path("Core.Below").unwrap();
+    assert!(classes.layout(below_id).is_defined());
+    assert_eq!(classes.layout(below_id).first_slot(), 2);
 }
 
 /// A super chain that holds a non-class is the C++ "export is not a class", returned again on every later call.

@@ -178,7 +178,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("--script-check", P, F::Script, &["--failures"]),
     cmd("--disasm", P, F::Script, &[]),
     cmd("--class-check", P, F::Classes, &["--cooked", "--failures"]),
-    cmd("--interface-compare", P, F::Classes, &["--cooked"]),
+    cmd("--interface-compare", P, F::Classes, &["--cooked", "--layouts"]), // --layouts: Rust-only (W2-REFLECT)
     cmd(
         "--vm-sweep",
         P,
