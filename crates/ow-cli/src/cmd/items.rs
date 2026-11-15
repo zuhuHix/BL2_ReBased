@@ -141,15 +141,30 @@ mod tests {
     }
 
     #[test]
-    fn the_store_census_is_not_there_yet() {
-        // Flips when the body of DefStore::census() lands (W3-DEFS).
+    fn an_empty_cooked_folder_builds_an_empty_registry() {
+        // DefStore::census() has its body (W3-DEFS): an empty synthetic folder scans no package and builds an empty
+        // registry, whose census report says so.
         let dir = std::env::temp_dir().join(format!("ow-cli-items-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let line = args(&["--item-registry", "--cooked", &dir.to_string_lossy()]);
-        assert_eq!(
-            run(command(), &line, ParityMode::Off),
-            ExitCode::from(NOT_PORTED)
-        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let cooked = dir.join("cooked");
+        std::fs::create_dir_all(&cooked).unwrap();
+        let census = dir.join("census.json");
+        let line = args(&[
+            "--item-registry",
+            "--cooked",
+            &cooked.to_string_lossy(),
+            "--census",
+            &census.to_string_lossy(),
+        ]);
+        assert_eq!(run(command(), &line, ParityMode::Off), ExitCode::SUCCESS);
+        let report = std::fs::read_to_string(&census).unwrap();
+        for empty in [
+            "\"packages_scanned\":0,",
+            "\"scan_errors\":{}",
+            "\"objects_by_class\":{}",
+        ] {
+            assert!(report.contains(empty), "{empty} not in {report}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

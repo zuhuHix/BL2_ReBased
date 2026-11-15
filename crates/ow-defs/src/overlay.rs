@@ -25,6 +25,11 @@
 //!   [`OverlayKind::Hotfix`] it is `DefError::NotYet`, since mods and micropatches do set class defaults and patching
 //!   them is a missing feature, not bad data.
 //! - A patch whose object no package holds stays pending (`OverlayStatus::pending`).
+//! - A live capture's top-level `null`, `[]` or `{}` for a property the cooked export does not tag is skipped, as
+//!   `tools/real_game/live_overlay.py` skips it: the property keeps the value it inherits from the class default
+//!   object (no `null` lands in an int, a float or a struct, and no non-empty inherited value is overwritten). The
+//!   patch counts as applied. A property the export does tag takes the empty value, as the script sets it. Other
+//!   overlay kinds are not skipped.
 //! - The numbers Python's `json.dumps` writes for non-finite floats, `NaN`, `Infinity` and `-Infinity`, are accepted
 //!   as [`PatchValue::Number`] text (they type only into a float).
 //!
@@ -178,7 +183,8 @@ impl Overlay {
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            let column = |rest: &str| line.len() - rest.len() + 1;
+            // 1-based columns in characters, as the JSON reader counts them.
+            let column = |rest: &str| line[..line.len() - rest.len()].chars().count() + 1;
             let syntax = |rest: &str, reason: &str| DefError::OverlaySyntax {
                 line: line_no,
                 column: column(rest),
@@ -845,20 +851,25 @@ pub(crate) mod json {
                     }
                     '\\' => {
                         self.at += 1;
-                        let Some(e) = self.peek() else {
+                        // The escaped character as a char, so `at` stays on a character boundary whatever follows
+                        // the backslash (a non-ASCII character is an unknown escape, reported where it starts).
+                        let Some(e) = self.text[self.at..].chars().next() else {
                             return Err(self.error("the string does not end"));
                         };
+                        if !e.is_ascii() {
+                            return Err(self.error("an unknown escape"));
+                        }
                         self.at += 1;
                         match e {
-                            b'"' => out.push('"'),
-                            b'\\' => out.push('\\'),
-                            b'/' => out.push('/'),
-                            b'b' => out.push('\u{8}'),
-                            b'f' => out.push('\u{c}'),
-                            b'n' => out.push('\n'),
-                            b'r' => out.push('\r'),
-                            b't' => out.push('\t'),
-                            b'u' => {
+                            '"' => out.push('"'),
+                            '\\' => out.push('\\'),
+                            '/' => out.push('/'),
+                            'b' => out.push('\u{8}'),
+                            'f' => out.push('\u{c}'),
+                            'n' => out.push('\n'),
+                            'r' => out.push('\r'),
+                            't' => out.push('\t'),
+                            'u' => {
                                 let unit = self.hex4()?;
                                 let code = if (0xD800..0xDC00).contains(&unit) {
                                     if !self.eat("\\u") {
@@ -994,6 +1005,8 @@ mod tests {
             ("[1] x", 1, 5),
             ("{\"a\" 1}", 1, 6),
             ("\"tab\there\"", 1, 5),
+            ("\"a\\\u{e9}\"", 1, 4),
+            ("[\"\u{e9}\u{e9}\", 01]", 1, 9),
             ("", 1, 1),
         ] {
             match json::parse_document(text) {
@@ -1089,6 +1102,7 @@ mod tests {
         for (bad, column) in [
             ("GD_Test.A ClipSize 12", 20),
             ("GD_Test.A ClipSize = [1,", 25),
+            ("GD_Test.\u{e9} ClipSize = [1,", 25),
             ("GD_Test.A", 10),
         ] {
             match Overlay::from_text("t", OverlayKind::Test, bad) {

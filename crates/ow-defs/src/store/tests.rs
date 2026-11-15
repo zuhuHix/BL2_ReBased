@@ -79,10 +79,12 @@ const TAIL: [u8; 3] = [0xAB, 0xCD, 0xEF];
 /// `GD_Test.upk`: `Part_A` (ClipSize 7, Next -> Part_B, Pair.Label, then three untagged bytes), `Part_B` (Damage
 /// 2.5, Next -> Part_A), `Part_C` (Next -> an import of a package no file holds), `Comp_A` (an actor component, tags
 /// from 8 bytes in), `Comp_Bad` (an actor component whose tags start at 4: the derived prefix reads garbage),
-/// `TheLevel` (a level) holding `Placed` (an actor, tags from 26 bytes in).
+/// `TheLevel` (a level) holding `Placed` (an actor, tags from 26 bytes in), `Sub` (a subobject of `Part_A`) and
+/// `Inner` (inside an imported package object `GD_Ext`).
 fn gd_test() -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let (thing, actor_component, actor, level, _) = class_imports(&mut p);
+    let ext = p.add_import("Core", "Package", 0, "GD_Ext");
     let missing = p.add_import("Core", "Package", 0, "GD_Missing");
     let nowhere = p.add_import("Core", "Thing", missing, "Nowhere");
     let none = p.none();
@@ -125,6 +127,21 @@ fn gd_test() -> Vec<u8> {
     let mut export = ow_package::testkit::Export::new(actor, "Placed", placed);
     export.outer = level_ref;
     assert_eq!(p.add_export_with(export), 7);
+    let mut sub = ow_package::testkit::Export::new(thing, "Sub", {
+        let mut b = ints(&[0]);
+        b.extend(p.int_tag("ClipSize", 3));
+        b.extend_from_slice(&none);
+        b
+    });
+    sub.outer = 1;
+    assert_eq!(p.add_export_with(sub), 8);
+    let mut inner = ow_package::testkit::Export::new(thing, "Inner", {
+        let mut b = ints(&[0]);
+        b.extend_from_slice(&none);
+        b
+    });
+    inner.outer = ext;
+    assert_eq!(p.add_export_with(inner), 9);
     p.build()
 }
 
@@ -525,7 +542,17 @@ fn owners_census_and_exports_of_class() {
         .iter()
         .map(|p| p.as_str().to_string())
         .collect();
-    assert_eq!(things, ["Part_A", "Part_B", "Part_C", "GD_Test.Part_A"]);
+    assert_eq!(
+        things,
+        [
+            "Part_A",
+            "Part_B",
+            "Part_C",
+            "Part_A.Sub",
+            "GD_Ext.Inner",
+            "GD_Test.Part_A"
+        ]
+    );
     assert_eq!(
         t.defs
             .exports_of_class("Engine.ActorComponent")
@@ -817,7 +844,7 @@ fn errors_print_their_layer_and_conversions_flatten() {
 fn real_census_and_owners() {
     use std::fmt::Write as _;
     let root = PathBuf::from(std::env::var("OW_DEFS_REAL_ROOT").expect("OW_DEFS_REAL_ROOT"));
-    let out = PathBuf::from(std::env::var("OW_DEFS_LOCAL_OUT").expect("OW_DEFS_LOCAL_OUT"));
+    let out = local_out();
     let mut defs = DefStore::open(root, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let census = defs.census().unwrap();
     let mut text = String::new();
@@ -935,4 +962,187 @@ fn a_file_failure_prints_the_reader_s_exports_error() {
     }
     assert_eq!(census.failures.len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_colon_path_and_its_dotted_form_have_one_holder() {
+    let mut t = World::off("colon");
+    // The `:` form first: its answer is cached under the dotted key, so it must be the dotted form's answer.
+    let sub = t.get("GD_Test.Part_A:Sub");
+    assert_eq!(t.read(sub, "ClipSize"), Value::Int(3));
+    assert_eq!(t.get("GD_Test.Part_A.Sub"), sub);
+    let holders = t
+        .defs
+        .owners(&ObjectPath::parse("GD_Test.Part_A:Sub").unwrap())
+        .unwrap();
+    assert_eq!(holders.holders.len(), 1);
+    assert_eq!(holders.holders[0].export, 8);
+    // Its outer is Part_A's object.
+    let a = t.get("GD_Test.Part_A");
+    assert_eq!(t.w.heap.get(sub).unwrap().outer, Some(a));
+}
+
+#[test]
+fn a_code_outer_through_an_import_stays_none() {
+    let mut t = World::off("codeouter");
+    let inner = t.get("GD_Ext.Inner");
+    assert_eq!(t.w.heap.get(inner).unwrap().outer, None);
+    let log = t.defs.take_log();
+    assert!(
+        !log.iter().any(|l| l.starts_with("defs: outer of")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn a_live_capture_skips_an_empty_value_for_a_property_the_export_does_not_tag() {
+    // tools/real_game/live_overlay.py: `if live in (None, [], {}) and key not in props: continue`.
+    let mut t = World::off("liveskip");
+    let capture = r#"{"GD_Test.Part_B": {"class": "Thing", "properties": {
+        "ClipSize": null, "List": [], "Pair": {}, "Next": null}}}"#;
+    let o = Overlay::from_live_capture("cap", capture).unwrap();
+    let id = t.defs.push_overlay(&mut t.w, o).unwrap();
+    let b = t.get("GD_Test.Part_B");
+    let status = t.defs.overlay_status(id).unwrap().clone();
+    assert_eq!(
+        (status.applied, status.pending, status.failed.len()),
+        (4, 0, 0)
+    );
+    // Not tagged by Part_B: the inherited values stay (ClipSize 1 from the class default).
+    assert_eq!(t.read(b, "ClipSize"), Value::Int(1));
+    assert_eq!(t.read(b, "List"), Value::array(vec![]));
+    let clip = t.key("ClipSize");
+    assert_eq!(
+        t.defs.origin(
+            b,
+            PropAddr {
+                prop: clip,
+                index: 0
+            }
+        ),
+        ValueOrigin::Cooked
+    );
+    // Tagged by Part_B: the empty value is a patch, as the script applies it.
+    assert_eq!(t.read(b, "Next"), Value::Object(None));
+    let next = t.key("Next");
+    assert_eq!(
+        t.defs.origin(
+            b,
+            PropAddr {
+                prop: next,
+                index: 0
+            }
+        ),
+        ValueOrigin::Overlay(id)
+    );
+    // The same patches in the test format are not skipped: null does not fit an int.
+    let mut t = World::off("liveskip-text");
+    let id = t.overlay(OverlayKind::Test, "GD_Test.Part_B ClipSize = null\n");
+    t.get("GD_Test.Part_B");
+    assert_eq!(t.defs.overlay_status(id).unwrap().failed.len(), 1);
+}
+
+#[test]
+fn a_broken_outer_chain_hides_only_the_exports_after_it() {
+    // Cycle.upk: `Early`, then two exports that are each other's outer (no path). The C++ findExport finds `Early`
+    // before it meets them, and fails for a path it has not found by then.
+    let mut p = PackageBuilder::new_empty();
+    let (thing, ..) = class_imports(&mut p);
+    let none = p.none();
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&none);
+    p.add_export(thing, "Early", payload.clone());
+    let a = p.add_export(thing, "LoopA", payload.clone());
+    let b = p.add_export(thing, "LoopB", payload);
+    p.set_outer(a, b);
+    p.set_outer(b, a);
+    let cycle = p.build();
+    let dir = std::env::temp_dir().join(format!("ow-defs-cycle-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files: [(&str, &[u8]); 2] = [("Core.upk", &core()), ("Cycle.upk", &cycle)];
+    let mut defs = DefStore::from_synthetic(
+        &dir,
+        &files,
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let mut w = ObjectSpace::new();
+    let early = ObjectPath::parse("Cycle.Early").unwrap();
+    let holders = defs.owners(&early).unwrap();
+    assert_eq!((holders.holders.len(), holders.failures.len()), (1, 0));
+    assert!(defs.find(&mut w, &early).unwrap().is_some());
+    let absent = ObjectPath::parse("Cycle.Absent").unwrap();
+    let holders = defs.owners(&absent).unwrap();
+    assert_eq!((holders.holders.len(), holders.failures.len()), (0, 1));
+    assert_eq!(defs.find(&mut w, &absent).unwrap(), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The output folder of the real-game checks, `OW_DEFS_LOCAL_OUT`, refused unless one of its path components is
+/// `local` (the ignored folder): what they write is game data (AGENTS.md rule 1).
+fn local_out() -> PathBuf {
+    let out = PathBuf::from(std::env::var("OW_DEFS_LOCAL_OUT").expect("OW_DEFS_LOCAL_OUT"));
+    assert!(
+        out.components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case("local")),
+        "OW_DEFS_LOCAL_OUT must be under the ignored local/ folder: {}",
+        out.display()
+    );
+    out
+}
+
+/// A local timing on the installed game, not run by default: every object path listed in the file
+/// `OW_DEFS_PATHS` (one per line, under local/) found and loaded into ONE store over `OW_DEFS_REAL_ROOT`, the time of
+/// the first lookup (the global index) and of the loads written to `loads.txt` in `OW_DEFS_LOCAL_OUT`.
+#[test]
+#[ignore = "needs the installed game (OW_DEFS_REAL_ROOT), a path list (OW_DEFS_PATHS) and OW_DEFS_LOCAL_OUT under local/"]
+fn real_loads_in_one_store() {
+    use std::fmt::Write as _;
+    let out = local_out();
+    let root = PathBuf::from(std::env::var("OW_DEFS_REAL_ROOT").expect("OW_DEFS_REAL_ROOT"));
+    let paths =
+        std::fs::read_to_string(std::env::var("OW_DEFS_PATHS").expect("OW_DEFS_PATHS")).unwrap();
+    let paths: Vec<ObjectPath> = paths
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| ObjectPath::parse(l.trim()).unwrap())
+        .collect();
+    let mut defs = DefStore::open(root, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut w = ObjectSpace::new();
+    let mut text = String::new();
+    let start = std::time::Instant::now();
+    let (mut loaded, mut failed) = (0, 0);
+    let mut first = None;
+    let mut slowest = std::time::Duration::ZERO;
+    for path in &paths {
+        let t = std::time::Instant::now();
+        match defs.find(&mut w, path) {
+            Ok(Some(_)) => loaded += 1,
+            _ => failed += 1,
+        }
+        let took = t.elapsed();
+        if first.is_none() {
+            first = Some(took);
+        } else if took > slowest {
+            slowest = took;
+        }
+    }
+    let total = start.elapsed();
+    let rest = total - first.unwrap_or_default();
+    let _ = write!(
+        text,
+        "paths {}\nloaded {loaded}\nfailed {failed}\nheap objects {}\nfirst lookup (global index and first load) {} ms\n\
+         the other {} loads {} ms, {} us each on average, slowest {} ms\ntotal {} ms\n",
+        paths.len(),
+        w.heap.len(),
+        first.unwrap_or_default().as_millis(),
+        paths.len().saturating_sub(1),
+        rest.as_millis(),
+        rest.as_micros() / paths.len().saturating_sub(1).max(1) as u128,
+        slowest.as_millis(),
+        total.as_millis()
+    );
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("loads.txt"), text).unwrap();
 }

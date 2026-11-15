@@ -12,10 +12,14 @@ records how the store does what section 3.4 says, and what was checked.
   The holder is picked by the policy and cached per key:
   - `FirstInScanOrder`: the first of the files `PackageStore::global_candidates` lists (the store's global fallback
     candidates, in scan order) that holds the path, matched as `Package::find_export` matches (folded, a leading
-    `<stem>.` dropped). Each candidate is read once into a list of its export paths and dropped; only the holder's
-    file is loaded into the package store. A candidate that fails to load, or one of whose exports has no path, is
-    no holder, as the fallback treats a file whose load or search fails. (A first version loaded every candidate into
-    the package store; on the whole game root an audit run grew to 11 GB before it was stopped.)
+    `<stem>.` dropped; a `:` in the path read as `.` once before every search, as the identity key reads it, so
+    `Outer:Sub` and `Outer.Sub` have one answer, review r1). Each candidate is read once into a list of its export paths
+    and dropped; only the holder's file is loaded into the package store. A candidate that fails to load is no holder;
+    in a file with an export whose outer chain is broken, a match before that export is found and a path not found by
+    then is the search's error (no holder; reported by `owners()`), as the C++ `findExport` walks the exports in order
+    (review r1). Each candidate's folded export-path list stays in the store (`Handles.files`) for its life. (A first
+    version loaded every candidate into the package store; on the whole game root an audit run grew to 11 GB before it
+    was stopped.)
   - `Loaded(set)`: the first package of the set, loaded by stem, that holds the path.
   Every map is keyed by the filed id (decision 2026-11-15-10).
 - **Lazy loading in place.** A reference decoded inside a definition goes through the store's `ReferenceResolver`,
@@ -25,9 +29,12 @@ records how the store does what section 3.4 says, and what was checked.
   the handle, whose origin becomes `Origin::Export`. Because the resolver never loads, no load nests and no object
   being built is reached: two definitions naming each other are two handles, and `InstantiationCycle` cannot come from
   the store. A handle's outer is the outer's object, except a code outer (a `Package` object, a class), which stays
-  `None`.
-- **What stays a stand-in.** No holder (logged `defs: no holder for <path>` once per path; keyed by path in Off, by the
-  import under Reference), the decoder's `?`, engine-native classes, code exports, class default objects and their
+  `None`, whether the outer is an export or an import (review r1). Loaded definitions appear in `Heap::live()` in
+  first-sight order (when their handles were allocated), not load order.
+- **What stays a stand-in.** No holder (logged `defs: no holder for <path>` once per path; keyed by path in Off;
+  under Reference it is the decoder's stand-in, keyed by the export `CodeIndex::resolve_ref` resolves the import to
+  where it resolves, which under `Loaded` includes a holder outside the load set, and by the import only where it does
+  not resolve), the decoder's `?`, engine-native classes, code exports, class default objects and their
   subobjects. `find` gives `Ok(None)` for no holder and `NotADefinition` for code; a `Default__<Class>` path gives the
   class default object.
 - **Prefix.** Derived from the class chain: `Engine.ActorComponent` 8; `Engine.Actor` whose outer export is a `Level`
@@ -35,15 +42,16 @@ records how the store does what section 3.4 says, and what was checked.
   its `None` tag within the export (headers readable, values skipped by size), else `NotYet`. UNVERIFIED as a rule of
   the game.
 - **Failed loads** are cached per handle with their error: no second decode, no second log line.
-- **Overlays.** `Overlay::from_live_capture` reads `weapon_dump.py`'s JSON and applies `live_overlay.py`'s `clean`
-  rules (empty struct entries dropped, `BaseValueScaleConstant` 1.0 dropped without `BaseValueAttribute`,
-  `ModifierType` 0-2 to its names, `Class'path'` to the path). One difference: `live_overlay.py` skips a top-level
-  empty value for a property the cooked export does not tag; here it is a patch, which sets the property to the empty
-  value it already has by default. The JSON reader is our own (RFC 8259 plus `NaN`, `Infinity`, `-Infinity`, nesting
-  bounded at 128). Patches are placed by holder when pushed: applied at once to a loaded object, else kept by the
-  holder export and applied when it loads; a path no file holds stays pending. Typing follows the declaration (int,
-  float through a double rounded to single, byte by number or enum name, name, string, object paths to the path's
-  object without loading it, class paths, structs from their defaults, arrays); the heap checks the result.
+- **Overlays.** `Overlay::from_live_capture` reads `weapon_dump.py`'s JSON and applies `live_overlay.py`'s `clean` rules
+  (empty struct entries dropped, `BaseValueScaleConstant` 1.0 dropped without `BaseValueAttribute`, `ModifierType` 0-2
+  to its names, `Class'path'` to the path). As the script, a top-level `null`, `[]` or `{}` for a property the cooked
+  export does not tag is skipped (review r1 of PR #316; it first was a patch, which put a `null` in an int, float or
+  struct property as a failed patch and overwrote a non-empty inherited value): the property keeps what it inherits, the
+  patch counts as applied. The JSON reader is our own (RFC 8259 plus `NaN`, `Infinity`, `-Infinity`, nesting bounded at
+  128). Patches are placed by holder when pushed: applied at once to a loaded object, else kept by the holder export and
+  applied when it loads; a path no file holds stays pending. Typing follows the declaration (int, float through a double
+  rounded to single, byte by number or enum name, name, string, object paths to the path's object without loading it,
+  class paths, structs from their defaults, arrays); the heap checks the result.
 - **Census.** `census()` reads every file of the scan with `Package::load` and drops it, in the shape of
   `ow-package --exports` (exact path text, the class as `--exports` prints it); a file whose listing fails anywhere
   contributes nothing and is a failure. A failure's `Display` (`FileFailure`) is exactly what the reader's
@@ -102,10 +110,18 @@ records how the store does what section 3.4 says, and what was checked.
   (`crates/ow-attr/src/value_resolvers/tests.rs`, granted): that store did not make the object, so `ensure_loaded`
   leaves it, and reading its slots fails with `SlotMissing`.
 - **Open.**
+  - Load cost grows with the heap: each load instantiates into a new object and frees it after moving its slots into
+    the handle (`ObjectSpace::free`), and the free walks every live object and every struct default
+    (`Heap::free_many`, `clear_refs_in_defaults`). Measured (ignored test `store::tests::real_loads_in_one_store`,
+    pc-hummer): the 658 parts loaded into one store over `CookedPCConsole` in 8.0 s, 6.3 s of it the first lookup
+    (the global index), the other 657 loads 1.7 s (2.6 ms on average, the slowest 1.05 s), ending with 2,564 heap
+    objects. A move primitive in `ow-object` that does not walk is the follow-up (hub); `ow-object` is not changed
+    here.
   - Memory: `owners()` loads every holder's file into the package store (so `Owner::id` is set) and keeps it; the
     764-path audit sample over the whole game root peaked at 8.7 GB. Holder lookups for `find` keep only path lists.
-  - Cost: the first `FirstInScanOrder` lookup builds the global index, reading every package once (6.6 s for
+  - Cost: the first `FirstInScanOrder` lookup builds the global index, reading every package once (6.3 to 6.6 s for
     `CookedPCConsole`).
+  - The "39 changed objects" live-capture check needs a bl-sdk capture; the hub keeps it on its list.
   - The decode difference the comparison found (`FirstPersonParticle`, a component reference the C++ prints and the
     Rust decoder skips with a log line, 16 of 658 parts in both modes; and in Off mode 10 runs with log-only
     differences) belongs to W3-DECODE (`ow_object::decode`); not changed here.

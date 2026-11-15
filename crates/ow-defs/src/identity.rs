@@ -171,40 +171,63 @@ impl CensusEntry {
     }
 }
 
-//// One file's export paths for holder lookups that keep no package loaded: each export's path in the file, ASCII
+/// One file's export paths for holder lookups that keep no package loaded: each export's path in the file, ASCII
 /// folded, to the first export with that path, and the folded stem. `find` answers as `Package::find_export` does
-/// (folded, a leading `<stem>.` dropped). A file one of whose exports has no path (a broken outer chain) is refused
-/// whole, as the global fallback treats a file whose search fails: no holder.
+/// (folded, a leading `<stem>.` dropped, the first match in export order). That search walks the exports in order and
+/// fails at the first export whose path cannot be built (a broken outer chain): so only the exports before it are
+/// listed, a match among them is found, and a path not among them is the search's error (`find` gives it back), which
+/// the global fallback reads as "this file is no holder".
 #[derive(Debug)]
 pub(crate) struct FileIndex {
     stem: String,
     by_path: FixedHashMap<String, i32>,
+    /// Why the walk stopped early: the first export whose path cannot be built.
+    broken: Option<PackageError>,
 }
 
 impl FileIndex {
-    /// Reads `file` and keeps only its paths; the package is dropped.
+    /// Reads `file` and keeps only its paths; the package is dropped. A file that cannot be loaded is an error.
     pub(crate) fn read(file: &Path) -> Result<FileIndex, PackageError> {
         let package = Package::load(file)?;
         let mut by_path = FixedHashMap::default();
+        let mut broken = None;
         for index in 1..=package.exports.len() as i32 {
-            by_path
-                .entry(package.path_of(index)?.to_ascii_lowercase())
-                .or_insert(index);
+            match package.path_of(index) {
+                Ok(path) => {
+                    by_path.entry(path.to_ascii_lowercase()).or_insert(index);
+                }
+                Err(e) => {
+                    broken = Some(e);
+                    break;
+                }
+            }
         }
         Ok(FileIndex {
             stem: package.name.to_ascii_lowercase(),
             by_path,
+            broken,
         })
     }
 
-    pub(crate) fn find(&self, path: &str) -> Option<i32> {
+    /// The first export at `path` (already `.`-separated), as `Package::find_export` answers it.
+    pub(crate) fn find(&self, path: &str) -> Result<Option<i32>, PackageError> {
         let wanted = path.to_ascii_lowercase();
         let wanted = wanted
             .strip_prefix(&self.stem)
             .and_then(|rest| rest.strip_prefix('.'))
             .unwrap_or(&wanted);
-        self.by_path.get(wanted).copied()
+        match (self.by_path.get(wanted), &self.broken) {
+            (Some(&index), _) => Ok(Some(index)),
+            (None, Some(e)) => Err(e.clone()),
+            (None, None) => Ok(None),
+        }
     }
+}
+
+/// `path` with every `:` read as `.`: the form `Package::find_export` and the store's indexes compare against (the
+/// game writes `Outer:Subobject` for subobjects, the package tables join every outer with `.`).
+pub(crate) fn dotted(path: &str) -> String {
+    path.replace(':', ".")
 }
 
 // ---------------------------------------------------------------------------------------------------- path helpers
