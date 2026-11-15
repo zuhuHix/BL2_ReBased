@@ -89,7 +89,7 @@ BANNED = [
     # from it. A float behind a bare `{}` cannot be seen here (a review item). A string cut by precision fails too:
     # slice it instead.
     ('N6 float text outside ow_core::fmt',
-     re.compile(r'\{[A-Za-z0-9_]*:[^{}"\s]*(?:\.(?:[0-9]+\$?|\*)[^{}"\s]*|[eE])\}'),
+     re.compile(r'\{[A-Za-z0-9_]*:[^{}"\s]*(?:\.(?:[0-9]+\$?|[A-Za-z_][A-Za-z0-9_]*\$|\*)[^{}"\s]*|[eE])\}'),
      {'crates/ow-core/src/fmt.rs'}),
 ]
 
@@ -302,7 +302,8 @@ class FailsOnBadInput(unittest.TestCase):
             'fn u(x: f64) -> f64 { x.asinh() + < f32 >::atanh(0.5) as f64 }\n'
             'fn v(x: f64) -> String { format!("{:.3} {x:e}", x) }\n'
             'fn w(x: f64) -> String { format!("{:>8.2e}|{:.*}", x, 2, x) }\n'
-            'fn y(n: u32) -> String { format!("{n:08x} {n:>4} {:?} {}", n, n) }\n', encoding='utf-8')
+            'fn y(n: u32) -> String { format!("{n:08x} {n:>4} {:?} {}", n, n) }\n'
+            'fn z(x: f64, p: usize) -> String { format!("{:.prec$} {x:.p$}", x, prec = p) }\n', encoding='utf-8')
         found = check_banned(self.tmp)
         names = [p.split(': ')[1] for p in found]
         self.assertEqual(names.count('N2 fused multiply-add'), 1)
@@ -312,8 +313,9 @@ class FailsOnBadInput(unittest.TestCase):
         # h, k, o, p, q: every way of naming the std containers; r (the fixed-hasher alias) passes
         self.assertEqual(names.count('N7 std HashMap/HashSet outside ow_core::detmap'), 5, found)
         self.assertFalse(any('bad.rs:12:' in p or 'bad.rs:13:' in p for p in found), found)
-        # v and w (precision and exponent specs); y (hex, width, Debug, Display) passes
-        self.assertEqual(names.count('N6 float text outside ow_core::fmt'), 2, found)
+        # v and w (precision and exponent specs) and z (named precision, `{:.prec$}` and `{x:.p$}`); y (hex, width,
+        # Debug, Display) passes
+        self.assertEqual(names.count('N6 float text outside ow_core::fmt'), 3, found)
         self.assertFalse(any('bad.rs:18:' in p for p in found), found)
         num = self.tmp / 'crates' / 'ow-core' / 'src'
         num.mkdir(parents=True)
