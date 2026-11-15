@@ -92,27 +92,12 @@ shipped interface, the places the port does not follow the C++ one to one and wh
       `--mover-probe` 1 (W5-DIALOG).
   - **The installed game.**
     - `--vm-sweep` on the nine code packages under `OW_PARITY=reference`: 6 of 9 are identical to the C++ (Core,
-      GameFramework, GFxUI, IpDrv, OnlineSubsystemSteamworks, AkAudio). The other three differ for three causes that
-      are not this lane's. Decision 07's string-unit differences did not show in any package.
-    - **A. Class-typed defaults cooked with an ObjectProperty tag.**
-      - Example: `MoveRequestClass` of `GearboxFramework.Action_PawnMovementBase`, whose value names a class.
-      - The C++ decode switches on the tag's type, so it holds an object stand-in, and `New` returns None for a value
-        that is not a class (`interp.cpp:469-471`). The Rust value follows the declared `ClassProperty`, so `New`
-        makes the object.
-      - This settles the path decision 20 left open for `WillowPlayerController.InitInputSystem`.
-      - Shown by a local, uncommitted change to the C++ decode that followed the declared type: GearboxFramework then
-        matched, and so did the Engine cameras.
-    - **B. Classless resource stand-ins.** The C++ `Runtime::resource` stand-in has no class, so a method on it is
-      `UNIMPLEMENTED function ?.<Name>` and `DynamicCast` gives None. The Rust stand-ins (decision 2026-11-15-08)
-      carry their class. With A patched out, this is all that is left in Engine: 100 steps over 3,574 functions, 94
-      of them in `SVehicle.TakeRadiusDamage`.
-    - **C. Three interpreter gaps, five WillowGame functions:**
-      - a static array used as a whole is `NotYet` (decision 20), in 2 functions;
-      - `Add_VectorVector` refuses a non-struct argument that came from reading past the end of an empty dynamic
-        array, in 2 functions;
-      - the heap refuses a Byte value written to an Int property, in 1 function.
-      - With A patched out, WillowGame differs only by these five functions, and by one `Localize` count that one of
-        them no longer reaches.
+      GameFramework, GFxUI, IpDrv, OnlineSubsystemSteamworks, AkAudio). Engine, GearboxFramework and WillowGame differ.
+      Every difference traces to cause A, B or C below. Decision 07's string-unit differences did not show in any
+      package.
+    - With A patched out of a local C++ build, two things are left. Engine differs only by B: 100 steps over 3,574
+      functions, 94 of them in `SVehicle.TakeRadiusDamage`. WillowGame differs only by C's five functions, plus one
+      `Localize` count that one of them no longer reaches.
     - **Off mode** adds only the stand-ins of architecture section 6.1 and decision 08: `GotoState` `NotYet`, and
       engine-native stand-in classes.
     - **`--native-census` with the static closure**, on a local entry file over the installed packages (`new`, `run`,
@@ -136,17 +121,61 @@ shipped interface, the places the port does not follow the C++ one to one and wh
     4.8 s against the C++'s 0.46 s.
   - Nothing was checked in the running game; this lane had no session. The census and the sweep assert no game
     behaviour: they measure the interpreter.
+- **Gate differences A and B (hub decision on this lane's report).** The `ow-vm` row of architecture section 6 now
+  reads "identical to C++ under Reference apart from decision 07's string-unit differences and decision 23's causes A
+  and B". Rust does not reproduce either one under Reference. Both are representation quirks of the C++ VM, and copying
+  them would only add stand-in code that W7-RETIRE then deletes.
+  - **A. A class-typed default cooked with an ObjectProperty tag.**
+    - *Example:* `MoveRequestClass` of `GearboxFramework.Action_PawnMovementBase`, a `ClassProperty` whose cooked
+      default tag says ObjectProperty and whose value names a class.
+    - *C++:* the default decode switches on the tag's type (`src/vm.cpp`, `applyTaggedDefaults`), so the property
+      holds an object stand-in. `New` returns None for a value that is not a class (`interp.cpp:469-471`), and every
+      Context on the result is a None context.
+    - *Rust:* the value follows the declared `ClassProperty` (the definition store's typed defaults), so it is a
+      class and `New` makes the object.
+    - *Why Rust keeps it:* the declaration says the property holds a class, and `New` with a class is what the script
+      asks for. The C++ result comes from reading the tag's type in place of the declaration.
+    - *Shown by:* a local, uncommitted change to the C++ decode that followed the declared type. GearboxFramework then
+      matched, and so did the Engine cameras.
+    - *Settles decision 20's open item:* in `WillowPlayerController.InitInputSystem`, the C++ path that gives None is
+      this one, an ObjectProperty-tagged cooked default.
+    - *UNVERIFIED:* what the game's `New` does with this default. No session observed it.
+  - **B. A resource stand-in keeps its class.**
+    - *C++:* the `Runtime::resource` stand-in has no class. A method called on it is
+      `UNIMPLEMENTED function ?.<Name>`, and `DynamicCast` of it gives None.
+    - *Rust:* the stand-ins of decision 2026-11-15-08 carry their class. A method finds that class's function, and a
+      cast to a class of its chain succeeds. Example: `SVehicle.TakeRadiusDamage` casts its mesh component to
+      `SkeletalMeshComponent` and goes on.
+    - *Why Rust keeps it:* the reference names an object of a known class. A classless object is the C++ stand-in's
+      limit, not something the package says.
+    - *UNVERIFIED:* the game's behaviour on these calls and casts; in the game the objects are loaded, not stand-ins.
 - **Open items.**
-  - The `ow-vm` gate's "sweep identical on the 9 packages" is not met while causes A, B and C stand. Each needs its
-    owner, or a decision that accepts it as an explained difference:
-    - A: W3-DEFS or W3-DECODE (the class-default decode), or a Reference stand-in in `New` (W3-INTERP's file);
-    - B: W3-DECODE (decision 08's stand-ins);
-    - C: W4-INTERP2 (static arrays, the past-the-end element) and W3-INTERP or W3-CORENAT (the Byte into Int store,
-      the vector argument check).
-  - Freezing the C++ VM files was not done. Section 6 freezes a layer at its gate, which is not met, and the files are
-    outside this lane. The one precedent is the `FROZEN` header W3-SWITCH put on `src/package.*`. The question is in
-    the handoff.
-  - Performance: the one-time 4 s class-default build and a sweep 14 to 45 times slower than the C++ on the four large packages are over the 2x
-    of the risk table (architecture section 13). The census's static walk adds 0.35 s.
-  - The release rule does not count references held by class default objects (above). The census `export` command
-    is tested only for its error path; no `export` line ran on the installed packages.
+  - **C. Three interpreter gaps, five WillowGame functions.** These are real gaps; the hub starts a follow-up lane
+    after this one lands.
+    - A static array used as a whole is `NotYet` (decision 20): `WillowGame.WillowPlayerController.
+      ClientTravelToSession` and `WillowGame.WillowPlayerController.OnDestroyForTravelComplete`.
+    - `Core.Object.Add_VectorVector` refuses a non-struct argument ("argument 0: expected a struct"). The C++ native
+      reads such a value as a zero vector. Two functions hit it, by two input paths:
+      - `WillowGame.WillowAutoTestManager.TravelTheWorld.DownTrace`: an element read past the end of an empty
+        dynamic array;
+      - `WillowGame.WillowWeapon.GetEffectLocation`: a struct member read through a Context on a mesh component.
+    - The heap refuses a Byte value written to an Int property, where the C++ stores it:
+      `WillowGame.FrontEndPlayerListGFxObject.OnPlayerDetailsLoaded`.
+  - **The freeze waits.** Section 6 freezes the C++ VM files at the `ow-vm` gate. Under the amended gate that means
+    9 of 9 packages identical apart from the listed differences, so not before C lands. No `FROZEN` header is added
+    yet. The precedent, when it comes, is the header W3-SWITCH put on `src/package.*`.
+  - **Performance.**
+    - The one-time 4 s class-default build is probably the O(heap) free in the definition store's loads, which is
+      already on the hub's list.
+    - A sweep runs 14 to 45 times slower than the C++ on the four large packages. That is over the 2x of the risk
+      table (architecture section 13).
+    - The census's static walk adds 0.35 s.
+  - **Contract follow-ups** (on the hub's list):
+    - `CodeIndex::find_export` (as the C++ `findExport`) drops a leading `<package>.` once. So `Vm::find_function`,
+      and `--run`, cannot find a function of a class named like its package by its plain path. This lane goes
+      through the owner class and the full path instead.
+    - The sweep's release rule cannot see references held by class default objects. The heap lists only instances
+      to callers outside `ow-object`.
+    - The decode-failure state is private to `interp`. The sweep infers "decoded before" from the call census and
+      decodes again.
+  - The census `export` command is tested only for its error path; no `export` line ran on the installed packages.
