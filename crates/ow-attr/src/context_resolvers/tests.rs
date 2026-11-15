@@ -1,10 +1,11 @@
 //! Synthetic-world tests of the context resolvers (AGENTS.md rule 9: invented classes, objects and values; the
 //! class and property names are the engine's, as the resolvers read them).
 //!
-//! The chain walk is the evaluator's (`eval.rs`, W3-ATTREVAL), a `NotPorted` stub on this lane's base, so the tests
-//! walk chains with [`walk`] / [`walk_with_override`], written from NATIVE_ATTRIBUTES.md section 1: each resolver
-//! gets the previous answer, the first `None` ends the walk, an empty chain is `None`, a null entry is skipped, and
-//! the override source is tried first. Once `AttributeSystem::resolve_context` lands, these tests can call it.
+//! Chains are walked by the evaluator itself (`eval.rs`, W3-ATTREVAL): [`walk`] writes the chain into a synthetic
+//! attribute definition and calls [`AttributeSystem::resolve_context`]; [`walk_with_override`] calls
+//! [`AttributeSystem::value_of`] (an empty value chain) for its override-first rule and keeps the resolved context.
+//! The rules (NATIVE_ATTRIBUTES.md section 1): each resolver gets the previous answer, the first `None` ends the
+//! walk, an empty chain is `None`, a null entry is skipped, and the override source is tried first.
 
 use ow_core::rand::{CrtStream, Rand15};
 use ow_core::{Missing, ObjectPath};
@@ -26,7 +27,7 @@ struct World {
     space: ObjectSpace,
     defs: Option<DefStore>,
     globals: Option<ObjRef>,
-    /// The attribute definition the resolvers are handed (they do not read it).
+    /// The attribute definition the tests write their chains into (the resolvers do not read it).
     attr: ObjRef,
     game_info: Option<ObjRef>,
     /// The engine's answers; a query not in the table answers `Ok(None)` (the lookup ran and found nothing).
@@ -177,8 +178,19 @@ impl World {
         let game_info = space
             .alloc(classes.actor, "TheGameInfo", None, Origin::Runtime)
             .unwrap();
+        let chain_kind = PropKind::Array(Box::new(obj_kind(classes.object)));
+        let def_props = vec![
+            ("ContextResolverChain", chain_kind.clone()),
+            ("ValueResolverChain", chain_kind),
+        ];
+        let def_class = resolver_class(
+            &mut space,
+            classes.object,
+            "Test.AttributeDefinition",
+            def_props,
+        );
         let attr = space
-            .alloc(classes.object, "Att_Test", None, Origin::Runtime)
+            .alloc(def_class, "Att_Test", None, Origin::Runtime)
             .unwrap();
         let w = World {
             space,
@@ -217,7 +229,7 @@ impl World {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The chain walk of NATIVE_ATTRIBUTES.md section 1 (test support; the evaluator's is eval.rs)
+// The chain walk: the evaluator's own (eval.rs)
 // ---------------------------------------------------------------------------------------------------------------
 
 fn walk(
@@ -226,20 +238,8 @@ fn walk(
     source: Option<ObjRef>,
     w: &mut World,
 ) -> Result<Option<ObjRef>, AttrError> {
-    if chain.is_empty() {
-        return Ok(None);
-    }
-    let attr = w.attr;
-    let mut cx = EvalCx::new(w);
-    let mut current = source;
-    for r in chain.iter().flatten() {
-        let resolver = sys.context_resolver(cx.world.parts().space, *r)?;
-        current = resolver.resolve(sys, *r, attr, current, &mut cx)?;
-        if current.is_none() {
-            return Ok(None);
-        }
-    }
-    Ok(current)
+    let attr = set_chain(w, chain);
+    sys.resolve_context(attr, source, &mut EvalCx::new(w))
 }
 
 fn walk_with_override(
@@ -249,12 +249,17 @@ fn walk_with_override(
     override_source: Option<ObjRef>,
     w: &mut World,
 ) -> Result<Option<ObjRef>, AttrError> {
-    if override_source.is_some()
-        && let Some(c) = walk(sys, chain, override_source, w)?
-    {
-        return Ok(Some(c));
-    }
-    walk(sys, chain, source, w)
+    let attr = set_chain(w, chain);
+    let read = sys.value_of(attr, source, override_source, &mut EvalCx::new(w))?;
+    Ok(read.map(|v| v.context))
+}
+
+/// Writes `chain` as the test definition's `ContextResolverChain` (the value chain stays empty).
+fn set_chain(w: &mut World, chain: &[Option<ObjRef>]) -> ObjRef {
+    let attr = w.attr;
+    let entries = chain.iter().map(|r| Value::Object(*r)).collect();
+    w.set(attr, "ContextResolverChain", Value::array(entries));
+    attr
 }
 
 // ---------------------------------------------------------------------------------------------------------------
