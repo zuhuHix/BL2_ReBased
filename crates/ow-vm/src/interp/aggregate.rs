@@ -94,6 +94,9 @@ fn integer(v: &Value) -> i64 {
             let x = f64::from(*x);
             // -2^63 <= x < 2^63 converts; anything else (NaN included) is the "integer indefinite" value.
             if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&x) {
+                // The oracle step: MSVC `int64_t(double)` (truncation toward zero) after the range check above, so
+                // `as` cannot saturate here. A bare `as` on a float is against crate_edges N5; a refusing `trunc_i64`
+                // in `ow_core::num` is a hub follow-up (already listed from W3-BALANCE), and this line moves to it then.
                 x as i64
             } else {
                 i64::MIN

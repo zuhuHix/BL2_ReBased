@@ -676,6 +676,11 @@ impl Vm {
     /// bodies did not all decode (synthetic packages) falls back to the structural rule, as the C++ does. A class
     /// with no package export behind it (one defined by hand) implements nothing. Being a child of `iface` is not
     /// asked here: the callers (`QueryInterface`, the casts) ask the class table first, as the C++ does.
+    ///
+    /// **Callers apply the stand-in check.** This is a plain `bool`. When the answer is "no" and `class`'s chain may
+    /// run through an engine-native stand-in class (decision 2026-11-15-08), the "no" is not proven: a caller asks
+    /// `interp::is_child(vm, class, iface)?` after a "no" and so answers `NotYet` there, as `DynamicCast`,
+    /// `InterfaceCast`, `QueryInterface` and the iterators' InterfaceClass filter do.
     pub fn implements(&mut self, class: ClassId, iface: ClassId) -> bool {
         let (code, store) = self.defs.code_mut();
         match (code.key_of(class), code.key_of(iface)) {
