@@ -34,9 +34,9 @@ fn a_command_says_not_ported_and_exits_3() {
         err.contains("--combat-run is not ported to Rust yet (lane W6-COMBAT)"),
         "{err}"
     );
-    let (code, err) = ow_package(&["--native-selftest"]);
+    let (code, err) = ow_package(&["x", "--mover-probe"]);
     assert_eq!(code, Some(3));
-    assert!(err.contains("(lane W4-VMTOOLS)"), "{err}");
+    assert!(err.contains("(lane W5-DIALOG)"), "{err}");
 }
 
 #[test]

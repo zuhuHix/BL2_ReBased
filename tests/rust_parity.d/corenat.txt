@@ -1,13 +1,16 @@
 # AI-assisted (Claude Code). Lane W3-CORENAT: the Core natives (crates/ow-vm/src/natives_core.rs).
 #
-# No line yet. The two test files that reach these natives through the binary cannot pass on the Rust binary until
-# their commands exist, and a line goes in only when it passes. Both lines land with W4-VMTOOLS, which owns
-# --native-census and --native-selftest (hub decision, decision 2026-11-15-07):
-# - tests/natives_test.py runs --native-selftest and --native (StubPolicy::LogAndZero); it is added as a
-#   test-command line.
-# - tests/vm_states_test.py pins the GotoState stand-in through --native-census on a synthetic package; it is added
-#   as a mode=reference line. It also needs W3-INTERP's Vm::find_method and Vm::class_declares_state wired into
-#   natives_core::register (until then GotoState under Reference returns NotYet LayerAbsent).
-# Every native has a direct Rust unit test instead (crates/ow-vm/src/natives_core.rs, mod tests), including the
+# The two test files that reach these natives through the binary need commands W4-VMTOOLS owns (--native-census and
+# --native-selftest), so their lines landed with that lane (hub decision, decision 2026-11-15-07):
+# - tests/natives_test.py runs --native-selftest and --native (StubPolicy::LogAndZero): a test-command line, and the
+#   --native-selftest command lines as diff lines;
+# - tests/vm_states_test.py pins the GotoState stand-in through --native-census on a synthetic package, so it runs
+#   with mode=reference (architecture section 6.1). Its Rust-native replacement test is natives_core.rs's
+#   GotoState NotYet NotPorted outside Reference (W5-STATES replaces the stand-in).
+# Every native has a direct Rust unit test as well (crates/ow-vm/src/natives_core.rs, mod tests), including the
 # Rust-native replacement tests of both stand-ins: GotoState is NotYet NotPorted outside Reference, and Rand/FRand
 # draw from the CrtRand script streams outside Reference.
+python tests/natives_test.py {bin}
+python tests/vm_states_test.py {bin} mode=reference
+diff --native-selftest
+diff --native-selftest extra exit=1 stderr
