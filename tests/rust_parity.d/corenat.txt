@@ -1,0 +1,12 @@
+# AI-assisted (Claude Code). Lane W3-CORENAT: the Core natives (crates/ow-vm/src/natives_core.rs).
+#
+# No line yet. The two test files that reach these natives through the binary cannot pass on the Rust binary until
+# the interpreter and its commands exist, and a line goes in only when it passes:
+# - tests/natives_test.py runs --native-selftest and --native (StubPolicy::LogAndZero); it passes once W3-INTERP is
+#   in, and is then added here as a test-command line.
+# - tests/vm_states_test.py pins the GotoState stand-in through --native-census on a synthetic package; it becomes a
+#   mode=reference line here once W3-INTERP loads functions and class states (the state table and the method lookup
+#   by class and state that GotoState needs; until then GotoState under Reference returns NotYet LayerAbsent).
+# Every native has a direct Rust unit test instead (crates/ow-vm/src/natives_core.rs, mod tests), including the
+# Rust-native replacement tests of both stand-ins: GotoState is NotYet NotPorted outside Reference, and Rand/FRand
+# draw from the CrtRand script streams outside Reference.
