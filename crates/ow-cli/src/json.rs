@@ -4,12 +4,6 @@
 //! the order its C++ code does.
 #![allow(dead_code)] // `float9` has no caller until W2-PROPS.
 
-/// The line end the C++ binary prints. Its `std::cout` and `std::cerr` are text-mode streams, so on Windows (the
-/// MSVC reference build) every `\n` reaches the pipe as `\r\n`; elsewhere it stays `\n`. Seen on the synthetic
-/// differential run (local, the C++ `ow-package.exe` built at 4800f3d): every stdout and stderr line ends in `\r\n`.
-/// Commands end their lines with this, not with `println!`, to stay byte-identical (architecture R7).
-pub const NEWLINE: &str = if cfg!(windows) { "\r\n" } else { "\n" };
-
 /// A JSON string as the C++ `quote()` writes it: `"` and `\` escaped with a backslash, bytes below 0x20 as
 /// `\u00xx` (lower-case hex), everything else, non-ASCII included, as is.
 pub fn quote(s: &str) -> String {

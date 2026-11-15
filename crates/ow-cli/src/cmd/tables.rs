@@ -1,7 +1,9 @@
 //! Owner: lane W1-PKG. Commands: the header summary (`ow-package <package>`), `--names`, `--imports`, `--exports`,
 //! `--census`, `--payload`, `--payload-file`, `--payloads`, `--verify-decoded`: the port of their branches in
 //! `src/cli.cpp`, with the same argument counts, the same stdout bytes and the same `ow-package: <message>` stderr
-//! line and exit code 1 on failure.
+//! line and exit code 1 on failure. Lines end in LF on every platform, as in the other command families; the C++
+//! binary's text-mode streams print CRLF on Windows, which `tools/rust_parity.py` reads as LF (decision
+//! 2026-11-15-09).
 //!
 //! As in the C++ binary, the package is loaded before the command's own arguments are checked, so a bad package is
 //! reported before a bad command line. Output is built in memory and written once; if a command fails part way
@@ -20,7 +22,7 @@ use ow_core::ParityMode;
 use ow_package::package::{Package, PackageError};
 
 use crate::args::{Command, USAGE};
-use crate::json::{NEWLINE, quote};
+use crate::json::quote;
 
 /// A failed command: the message printed after `ow-package: `.
 struct Failure(String);
@@ -61,7 +63,7 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(Failure(message)) => {
-            eprint!("ow-package: {message}{NEWLINE}");
+            eprintln!("ow-package: {message}");
             ExitCode::from(1)
         }
     }
@@ -182,7 +184,7 @@ fn payloads(package: &Package, args: &[String], out: &mut String) -> Result<(), 
         out.push_str("]}");
     }
     out.push(']');
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
@@ -197,7 +199,7 @@ fn payload_file(package: &Package, args: &[String], out: &mut String) -> Result<
     file.write_all(bytes)
         .and_then(|()| file.flush())
         .map_err(|_| Failure("cannot write payload output file".into()))?;
-    let _ = write!(out, "{{\"index\":{index},\"bytes\":{}}}{NEWLINE}", bytes.len());
+    let _ = writeln!(out, "{{\"index\":{index},\"bytes\":{}}}", bytes.len());
     Ok(())
 }
 
@@ -209,14 +211,14 @@ fn payload(package: &Package, args: &[String], out: &mut String) -> Result<(), F
     out.push('[');
     write_bytes(out, payload_bytes(package, index)?);
     out.push(']');
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
 fn summary(package: &Package, out: &mut String) {
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "{{\"version\":832,\"licensee\":46,\"names\":{},\"imports\":{},\"exports\":{}}}{NEWLINE}",
+        "{{\"version\":832,\"licensee\":46,\"names\":{},\"imports\":{},\"exports\":{}}}",
         package.names.len(),
         package.imports.len(),
         package.exports.len()
@@ -262,7 +264,7 @@ fn census(package: &Package, args: &[String], out: &mut String) -> Result<(), Fa
         let _ = write!(out, "{}:{count}", quote(name));
     }
     out.push_str("}}");
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
@@ -278,7 +280,7 @@ fn names(package: &Package, args: &[String], out: &mut String) -> Result<(), Fai
         out.push_str(&quote(name));
     }
     out.push(']');
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
@@ -311,7 +313,7 @@ fn exports(package: &Package, args: &[String], out: &mut String) -> Result<(), F
         );
     }
     out.push(']');
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
@@ -336,7 +338,7 @@ fn imports(package: &Package, args: &[String], out: &mut String) -> Result<(), F
         );
     }
     out.push(']');
-    out.push_str(NEWLINE);
+    out.push('\n');
     Ok(())
 }
 
@@ -393,8 +395,8 @@ mod tests {
         }
     }
 
-    /// Runs `flag` with `extra` arguments on `package` bytes the way `run` does, and returns stdout with the line
-    /// end as `\n`, and the error text if the command failed.
+    /// Runs `flag` with `extra` arguments on `package` bytes the way `run` does, and returns stdout and the
+    /// error text if the command failed.
     fn exec(dir: &TempDir, package: &[u8], flag: &str, extra: &[&str]) -> (String, Option<String>) {
         let path = dir.0.join("fixture.upk");
         std::fs::write(&path, package).unwrap();
@@ -407,7 +409,7 @@ mod tests {
         let error = execute(if flag.is_empty() { "<package>" } else { flag }, &args, &mut out)
             .err()
             .map(|Failure(text)| text);
-        (out.replace(NEWLINE, "\n"), error)
+        (out, error)
     }
 
     // The expected texts below are what the C++ binary (build/Release/ow-package.exe, src/ at 4800f3d) printed for
