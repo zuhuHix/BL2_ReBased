@@ -163,6 +163,9 @@ pub enum HeapError {
     BadPath { at: usize, reason: &'static str },
     /// The same handle twice in one [`Heap::free_many`].
     FreedTwice(ObjRef),
+    /// [`Heap::alloc_stand_in`] asked for an instance origin: an object with no slots cannot be an instance, which
+    /// [`Heap::live`] would yield.
+    InstanceStandIn(Origin),
 }
 
 impl fmt::Display for HeapError {
@@ -197,6 +200,9 @@ impl fmt::Display for HeapError {
             }
             HeapError::BadPath { at, reason } => write!(f, "path step {at}: {reason}"),
             HeapError::FreedTwice(o) => write!(f, "{o:?} given twice to free_many"),
+            HeapError::InstanceStandIn(origin) => {
+                write!(f, "a stand-in cannot have the instance origin {origin:?}")
+            }
         }
     }
 }
@@ -261,7 +267,9 @@ impl Heap {
     /// Creates an object of class `class` (defined in `classes`) with **no property slots** and no outer: a stand-in
     /// for an object whose properties are not loaded (the C++ `Runtime::resource` stand-in, which holds no properties
     /// either). It takes part in reference checks by its class, as any object does; reading or writing one of its
-    /// properties is [`HeapError::SlotMissing`]. Additive (W3-DECODE, granted in review r2 of PR #304), so a stand-in
+    /// properties is [`HeapError::SlotMissing`]. Its origin must not be an instance one ([`Origin::is_instance`]:
+    /// `Runtime`, `Export`), which would make [`Heap::live`] list an object without properties; that is
+    /// [`HeapError::InstanceStandIn`]. Additive (W3-DECODE, granted in review r2 of PR #304), so a stand-in
     /// costs one object, whatever the size of its class.
     pub fn alloc_stand_in(
         &mut self,
@@ -270,6 +278,9 @@ impl Heap {
         name: NameId,
         origin: Origin,
     ) -> Result<ObjRef, HeapError> {
+        if origin.is_instance() {
+            return Err(HeapError::InstanceStandIn(origin));
+        }
         match classes.get_layout(class) {
             None => return Err(LayoutError::UnknownClass(class).into()),
             Some(layout) if !layout.is_defined() => {
@@ -1778,9 +1789,28 @@ mod tests {
         assert!(!w.space.live(w.actor).any(|r| r == o));
         // An undefined class is refused, as for alloc.
         let undefined = w.space.classes.declare("Engine.Nowhere").unwrap();
+        let resource = Origin::Resource {
+            package: 0,
+            index: 8,
+        };
         assert_eq!(
-            w.space.alloc_stand_in(undefined, "X", Origin::Runtime),
+            w.space.alloc_stand_in(undefined, "X", resource),
             Err(HeapError::Layout(LayoutError::NotDefined(undefined)))
         );
+        // An instance origin is refused: live() would list an object with no properties.
+        let before = w.space.heap.len();
+        for origin in [
+            Origin::Runtime,
+            Origin::Export {
+                package: 0,
+                index: 9,
+            },
+        ] {
+            assert_eq!(
+                w.space.alloc_stand_in(w.actor, "X", origin),
+                Err(HeapError::InstanceStandIn(origin))
+            );
+        }
+        assert_eq!(w.space.heap.len(), before);
     }
 }

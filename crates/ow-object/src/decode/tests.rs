@@ -179,7 +179,7 @@ fn body(d: &mut Declarations, tags: &[Vec<u8>]) -> Vec<u8> {
 /// Thing (a Leaf): D = 2      Comp (a Leaf, 8-byte prefix): D = 3      Tiny (a Leaf, 4 bytes)
 /// Broken (a Leaf): D = 4, then a tag of negative size
 /// Strays (a Leaf): Owner = 9999 (outside the tables), Others = [Thing, 9999, Thing], D = 5
-/// Selfie (a Leaf): Owner = Selfie
+/// Selfie (a Leaf): Owner = Selfie      Twins (a Leaf): Owner = Iface = Twins, Others = [Twins, Twins]
 /// Mesh: an object of class Engine.StaticMesh, a class no package exports
 /// ```
 pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
@@ -366,6 +366,14 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     let tags = vec![d.p.object_tag("Owner", selfie)];
     let payload = stream(&mut d, 4, &tags);
     d.p.add_export(leaf, "Selfie", payload);
+    let twins = d.p.next_export();
+    let tags = vec![
+        d.p.object_tag("Owner", twins),
+        d.p.tag("Iface", "InterfaceProperty", &twins.to_le_bytes()),
+        d.p.array_tag("Others", 2, &ints(&[twins, twins])),
+    ];
+    let payload = stream(&mut d, 4, &tags);
+    d.p.add_export(leaf, "Twins", payload);
     d.build()
 }
 
@@ -747,11 +755,8 @@ fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only()
         "no native property is invented"
     );
     assert_eq!(w.state.native_classes, ["Engine.StaticMesh"]);
-    assert!(w.state.is_native_stand_in(&s.classes, class));
-    assert!(
-        !w.state
-            .is_native_stand_in(&s.classes, s.classes.by_path("Core.Leaf").unwrap())
-    );
+    assert!(s.classes.is_native(class));
+    assert!(!s.classes.is_native(s.classes.by_path("Core.Leaf").unwrap()));
 
     // Off: the class is not read, a NotYet, and the property is skipped.
     let mut w = world("native-class-off", false);
@@ -779,7 +784,7 @@ fn a_class_no_package_exports_gets_a_stand_in_class_in_the_reference_mode_only()
     };
     assert_eq!(w.space.heap.get(mesh).unwrap().class, mesh_class);
     assert!(w.state.native_classes.is_empty());
-    assert!(!w.state.is_native_stand_in(&w.space.classes, mesh_class));
+    assert!(!w.space.classes.is_native(mesh_class));
 }
 
 #[test]
@@ -1180,9 +1185,10 @@ fn a_class_default_named_by_its_own_defaults_is_the_one_being_built() {
 }
 
 #[test]
-fn nested_resolution_stops_at_its_bound_and_cleans_up() {
-    // Selfie's Owner names Selfie: a resolver that loads every target without a cache would recurse forever.
-    let mut w = world("resolve-bound", false);
+fn an_export_reached_again_while_it_is_instantiated_is_a_cycle() {
+    // Selfie's Owner names Selfie: a resolver that loads every target without a cache meets Selfie again while it is
+    // being instantiated. That reference is refused and skipped; Selfie keeps the class default's Owner.
+    let mut w = world("self-cycle", false);
     let selfie = w.export("Selfie");
     let core = w.core;
     let loader = Loader {
@@ -1201,35 +1207,161 @@ fn nested_resolution_stops_at_its_bound_and_cleans_up() {
         .object
     };
     assert_eq!(w.state.resolve_depth, 0, "the counter unwinds");
+    assert!(w.state.instantiating.is_empty());
     assert!(
         w.state
             .log
             .contains(&"defaults: skipped Leaf.Owner (ObjectProperty)".to_string())
     );
-    // Follow Owner through the Selfies: the outer one and one per allowed nesting level.
-    let mut chain = 0;
-    let mut cursor = outer;
-    while w.space.names.text(w.space.heap.get(cursor).unwrap().name) == "Selfie" {
-        chain += 1;
-        let Value::Object(Some(next)) = get(&w.space, cursor, "Owner") else {
-            break;
-        };
-        cursor = next;
+    let Value::Object(Some(owner)) = get(&w.space, outer, "Owner") else {
+        panic!("Owner")
+    };
+    assert_eq!(
+        w.space.names.text(w.space.heap.get(owner).unwrap().name),
+        "Thing",
+        "the class default's"
+    );
+}
+
+#[test]
+fn an_export_naming_itself_twice_loads_once() {
+    // Twins names itself four times (Owner, Iface, two array elements). Without the cycle check each level would load
+    // every branch again: a binary tree of instances. With it, the count stays small and fixed.
+    let mut w = world("twins", false);
+    let twins = w.export("Twins");
+    let core = w.core;
+    let loader = Loader {
+        cache: false,
+        loaded: Default::default(),
+    };
+    let before = w.space.heap.len();
+    {
+        let mut cx = w.cx(ParityMode::Reference).with_resolver(&loader);
+        crate::cdo::instantiate_export(
+            &mut cx,
+            core,
+            twins,
+            crate::prefix::PropertyPrefix::Ordinary,
+        )
+        .unwrap();
     }
-    assert_eq!(chain, MAX_RESOLVE_DEPTH + 1);
-    let mut cx = w.cx(ParityMode::Reference).with_resolver(&loader);
-    cx.state.resolve_depth = MAX_RESOLVE_DEPTH;
+    let leaf_id = w.space.classes.by_path("Core.Leaf").unwrap();
+    let names: Vec<String> = w
+        .space
+        .live(leaf_id)
+        .map(|o| {
+            w.space
+                .names
+                .text(w.space.heap.get(o).unwrap().name)
+                .into_owned()
+        })
+        .collect();
+    // Twins once, and the two Things the class default's Owner and Iface load (no cache here).
+    assert_eq!(names, ["Thing", "Thing", "Twins"]);
+    // The class default object, the two stand-ins it takes (Mesh, and the engine-native class's), and the instances.
+    assert!(
+        w.space.heap.len() - before <= 6,
+        "{} objects",
+        w.space.heap.len() - before
+    );
+}
+
+/// A resolver that asks the context again for the same reference: unbounded nesting without the depth bound.
+struct Again;
+
+impl ReferenceResolver for Again {
+    fn resolve(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        match cx.object_value(
+            package,
+            reference,
+            &PropKind::Object {
+                class: ClassId::new(0),
+            },
+        )? {
+            Value::Object(o) => Ok(o),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[test]
+fn nested_resolution_stops_at_its_bound_and_cleans_up() {
+    let mut w = world("resolve-bound", false);
+    let thing = w.export("Thing");
+    let core = w.core;
+    let mut cx = w.cx(ParityMode::Reference).with_resolver(&Again);
     assert_eq!(
         cx.object_value(
             core,
-            selfie,
+            thing,
             &PropKind::Object {
                 class: ClassId::new(0)
             }
         ),
         Err(DecodeError::ResolveTooDeep(MAX_RESOLVE_DEPTH))
     );
-    assert_eq!(cx.state.resolve_depth, MAX_RESOLVE_DEPTH);
+    assert_eq!(cx.state.resolve_depth, 0, "the counter unwinds");
+}
+
+#[test]
+fn a_load_past_its_resolve_budget_aborts_and_leaves_nothing() {
+    // Default__Leaf resolves three references (Owner, Asset, Iface): three resolver calls. With a
+    // budget of two the whole load fails, through apply_tags, and its objects go.
+    let mut w = world("resolve-budget", false);
+    let leaf = w.class("Leaf");
+    w.state.resolve_budget = 2;
+    let before = w.space.heap.len();
+    let err = crate::cdo::class_default(&mut w.cx(ParityMode::Reference), leaf).unwrap_err();
+    assert_eq!(err, DecodeError::ResolveBudget(2));
+    assert!(err.aborts());
+    assert_eq!(
+        w.space.heap.len(),
+        before,
+        "the class default and its stand-ins are freed"
+    );
+    assert!(w.state.class_defaults.is_empty());
+    assert!(w.state.resources.is_empty());
+    assert!(w.state.load_allocated.is_empty() && w.state.load_depth == 0);
+    // A budget that suffices loads it, from scratch.
+    w.state.resolve_budget = MAX_RESOLVES_PER_LOAD;
+    let o = crate::cdo::class_default(&mut w.cx(ParityMode::Reference), leaf).unwrap();
+    assert!(matches!(get(&w.space, o, "Owner"), Value::Object(Some(_))));
+}
+
+#[test]
+fn a_reference_enum_tree_finds_its_enum_on_a_fresh_state() {
+    // The declaration's layout was defined without this state's `layout` (no source recorded): the enum's export is
+    // found by its path, so K_C is 2, not 0.
+    let mut w = world("enum-fresh", false);
+    let leaf = w.class("Leaf");
+    let id = w
+        .code
+        .define_layout(&mut w.store, &mut w.space.names, &mut w.space.classes, leaf)
+        .unwrap();
+    let decl = w
+        .space
+        .classes
+        .decl(w.space.prop(id, "Kind").unwrap())
+        .unwrap()
+        .clone();
+    let core = w.core;
+    let mut fresh = DecodeState::new();
+    let mut cx = ValueCx::new(
+        &mut w.store,
+        &mut w.code,
+        &mut w.space,
+        &mut fresh,
+        ParityMode::Reference,
+    );
+    assert_eq!(
+        to_value(&PropValue::Enum("K_C".into()), &decl, core, &mut cx),
+        Ok(Value::Byte(2))
+    );
 }
 
 /// `Core.upk` with a ring of 65 structs `R0..R64`, each holding `array<R(i+1)> Next` with one default element.
@@ -1365,10 +1497,9 @@ fn two_decode_states_over_one_space_agree_on_native_stand_ins() {
         second.native_classes.is_empty(),
         "the second state defined nothing"
     );
-    assert!(w.state.is_native_stand_in(&w.space.classes, class));
-    assert!(second.is_native_stand_in(&w.space.classes, class));
+    // The mark is the class table's, so every state over the space sees it.
+    assert!(w.space.classes.is_native(class));
     let mut off = DecodeState::new();
-    assert!(off.is_native_stand_in(&w.space.classes, class));
     let mut cx = ValueCx::new(
         &mut w.store,
         &mut w.code,
@@ -1380,4 +1511,36 @@ fn two_decode_states_over_one_space_agree_on_native_stand_ins() {
         cx.resource(core, mesh),
         Err(DecodeError::NotYet(_))
     ));
+}
+
+#[test]
+fn a_second_store_id_for_the_same_file_finds_the_same_stand_in() {
+    // A load after scan() hands out a new id for the same file (decision 2026-11-15-05); the stand-in cache is keyed by
+    // the id the reflection index files the package under, so both ids reach one stand-in.
+    let mut w = world("filed-id", false);
+    let thing = w.export("Thing");
+    let core = w.core;
+    let first = w
+        .cx(ParityMode::Reference)
+        .resource(core, thing)
+        .unwrap()
+        .unwrap();
+    w.store.scan().unwrap();
+    let path = w._tree.0.join("Core.upk");
+    let second_id = w.store.load_path(&path).unwrap();
+    assert_ne!(second_id, core, "the store hands out a second id");
+    let second = w
+        .cx(ParityMode::Reference)
+        .resource(second_id, thing)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second, first);
+    assert_eq!(
+        w.space.heap.get(second).unwrap().origin,
+        Origin::Resource {
+            package: core,
+            index: thing
+        },
+        "filed under the first id"
+    );
 }

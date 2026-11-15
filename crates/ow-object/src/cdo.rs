@@ -29,11 +29,16 @@ use crate::reflect::ClassKey;
 
 /// The class default object of loaded class `class`, built on first use (module documentation). A call made while
 /// it is being built (through a resolver that instantiates an export of this class) returns the object being built,
-/// with the tags applied so far.
+/// with the tags applied so far: a Rust-only choice, as the C++ re-entry gets no object (below). It runs as a load
+/// ([`ValueCx::load`]): a load that runs out of its resolve budget fails, and what it allocated is freed.
 pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, DecodeError> {
     if let Some(&o) = cx.state.class_defaults.get(&class) {
         return Ok(o);
     }
+    cx.load(|cx| build_default(cx, class))
+}
+
+fn build_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, DecodeError> {
     let id = cx.layout(class)?;
     // Every struct a property holds by value takes its defaults before the object is allocated, so the slots start
     // from them.
@@ -56,9 +61,11 @@ pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, De
     let object = cx
         .space
         .alloc(id, &name, None, Origin::Default { class: id })?;
-    // Registered before any tag is applied, as the C++ `buildDefaults` sets `defaultsBuilt` first: a resolver that
-    // instantiates an export of this class while these defaults are read gets this object, still being built,
-    // instead of starting another one.
+    cx.allocated(object);
+    // Registered before any tag is applied, so that a resolver that instantiates an export of this class while these
+    // defaults are read gets this object, still being built, instead of starting another one, endlessly. This is a
+    // Rust-only choice: the C++ `buildDefaults` sets `defaultsBuilt` first but assigns `cls->defaults` only at its
+    // end (`src/vm.cpp`), so its re-entrant `defaultsOf` returns null and `instantiate` would dereference it.
     cx.state.class_defaults.insert(class, object);
     let mut chain: Vec<ClassKey> = cx.code.super_chain(class).collect();
     chain.reverse();
@@ -69,14 +76,16 @@ pub fn class_default(cx: &mut ValueCx<'_>, class: ClassKey) -> Result<ObjRef, De
         let Some(export) = default_export(cx, package, class_export, &wanted) else {
             continue;
         };
-        if let Err(error) = cx.apply_tags(
+        match cx.apply_tags(
             object,
             cursor,
             package,
             export,
             PropertyPrefix::Ordinary.bytes(),
         ) {
-            cx.state.log.push(format!("defaults: {wanted}: {error}"));
+            Err(error) if error.aborts() => return Err(error),
+            Err(error) => cx.state.log.push(format!("defaults: {wanted}: {error}")),
+            Ok(_) => {}
         }
     }
     Ok(object)
@@ -113,6 +122,12 @@ pub struct Instance {
 /// instantiate a null class") or not to a class, and a failure applying the export's tags. On a failure after the
 /// object was allocated it is freed again, as the C++ drops its local object: nothing is left behind but the class
 /// default object and the stand-ins the tags reached, which stay cached as in the C++.
+///
+/// It runs as a load ([`ValueCx::load`]), with a nested call (a loading resolver instantiating what the tags name)
+/// part of the same load. An export reached again while it is being instantiated is
+/// [`DecodeError::InstantiationCycle`] for the reference that reached it (skipped, as any failing value), so an export
+/// that names itself is instantiated once. A load that runs out of its resolve budget fails as a whole, and every
+/// object it allocated is freed.
 pub fn instantiate_export(
     cx: &mut ValueCx<'_>,
     package: PackageId,
@@ -122,6 +137,29 @@ pub fn instantiate_export(
     if index <= 0 {
         return Err(DecodeError::UnsupportedRequest);
     }
+    // Keyed by the filed id (decision 2026-11-15-10), so a second id of the same file is the same export.
+    let key = (
+        cx.code
+            .resolve_ref(cx.store, package, index)
+            .map_or_else(|| cx.code.filed_id(package), |t| t.0),
+        index,
+    );
+    if cx.state.instantiating.contains(&key) {
+        let path = cx.store.get(package).path_of(index)?;
+        return Err(DecodeError::InstantiationCycle(path));
+    }
+    cx.state.instantiating.push(key);
+    let outcome = cx.load(|cx| instantiate(cx, package, index, prefix));
+    cx.state.instantiating.pop();
+    outcome
+}
+
+fn instantiate(
+    cx: &mut ValueCx<'_>,
+    package: PackageId,
+    index: i32,
+    prefix: PropertyPrefix,
+) -> Result<Instance, DecodeError> {
     let pkg = cx.store.shared(package);
     let exported = pkg.object(index)?;
     let class = cx
@@ -133,6 +171,7 @@ pub fn instantiate_export(
     let object = cx
         .space
         .alloc(id, &exported.name, None, Origin::Export { package, index })?;
+    cx.allocated(object);
     let applied = cx
         .space
         .heap
