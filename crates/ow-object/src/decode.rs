@@ -7,13 +7,20 @@
 //! (name, type, size, array index; the struct or enum name of a struct or byte tag; a bool's byte) is read and
 //! checked, its value is read inside a limit of exactly `size` bytes, and a value that fails to decode, or does not
 //! end where the tag said, is skipped with the C++ log line (`defaults: skipped <Class>.<Property> (<Type>)`) without
-//! upsetting the rest. A header that cannot be read ends the stream with an error. The value kinds are the C++ VM's:
-//! int, float, the float and int attribute tags (one 4-byte number each), bool (its byte, any non-zero is true), name,
-//! string, object, component and interface references (a stand-in per referenced object, [`ValueCx::resource`]),
-//! class references, plain bytes and enum bytes (the value's position in the declared enum), structs and dynamic
-//! arrays, whose elements are read by the inner declaration's kind with the C++ widths (a bool element 4 bytes, a
-//! byte element 1 byte, enum or not). Other tag types (delegates, maps, byte attributes) are skipped and logged, as in
-//! the C++.
+//! upsetting the rest. A header that cannot be read ends the stream with an error; otherwise the call returns where
+//! the stream ended (the start of any untagged tail). The value kinds are the C++ VM's: int, float, the float and int
+//! attribute tags (one 4-byte number each), bool (its byte, any non-zero is true), name, string, object, component
+//! and interface references (the object the [`ReferenceResolver`] gives; by default a stand-in per referenced
+//! object, [`ValueCx::resource`]), class references, plain bytes and enum bytes (the value's position in the declared
+//! enum), structs and dynamic arrays, whose elements are read by the inner declaration's kind. Other tag types
+//! (delegates, maps, byte attributes) are skipped and logged, as in the C++.
+//!
+//! **Array element widths, by parity mode.** [`ParityMode::Reference`] reads an enum-byte element as one byte and a
+//! bool element as a 4-byte word, as the C++ VM does. [`ParityMode::Off`] reads them as the installed packages store
+//! them (FITTED from sizes that meet, UNVERIFIED in the game): an enum-byte element as an 8-byte name placed in the
+//! declared enum (19 of 19 such array tags in the code packages' class defaults), a bool element as one byte (the one
+//! bool array with elements in their struct defaults: 3 elements in 7 bytes). With the C++ widths those arrays do not
+//! meet their tags' sizes, so the C++ VM skips them.
 //!
 //! **Structs.** A struct tag whose struct name is one of the eight in [`native_layout`] holds its fields untagged, in
 //! the C++ order (`Plane` as W, X, Y, Z, `Color` as B, G, R, A); the fields are placed by name into the declared
@@ -36,19 +43,34 @@
 //! class ([`Value::Class`]). The CLI therefore prints `class:<Package>.<Class>` where the C++ prints the class's
 //! object path (decision 2026-11-15-08).
 //!
-//! **Stand-ins.** Each referenced object gets one heap object of its own class with [`Origin::Resource`]. An object
+//! **References and stand-ins.** A [`ReferenceResolver`] on the context decides what a decoded reference points at
+//! (a definition store answers with the objects it loads). The default, [`StandIns`], gives each referenced object
+//! one heap object of its own class with [`Origin::Resource`] and no property slots, as the C++ stand-in holds no
+//! properties. The heap only allocates an object with its class's whole slot vector, which the stand-in drops at
+//! once; that work counts against [`DecodeState::stand_in_budget`] ([`STAND_IN_BUDGET`] slots in all), past which a
+//! stand-in is a typed error (a Rust-only bound against hostile packages; the C++ stand-in cannot fail). An object
 //! whose class no installed package exports (an engine-native class such as `Engine.StaticMesh`, or `Core.Class` for
-//! a class object) gets that class defined at its import path with no properties of its own under `Core.Object`
-//! ([`DecodeState::native_classes`]): nothing about its native properties is invented, and the classes between it
-//! and `Core.Object`, if any, are UNVERIFIED.
+//! a class object) gets, under [`ParityMode::Reference`] only, that class defined at its import path with no
+//! properties of its own under `Core.Object` ([`DecodeState::native_classes`], [`DecodeState::is_native_stand_in`]):
+//! nothing about its native properties is invented, and the classes between it and `Core.Object`, if any, are
+//! UNVERIFIED. In [`ParityMode::Off`] such a reference is a [`NotYet`] (the class's layout is not read) and the
+//! property is skipped. Any other failure to find or lay out a class is returned as it is. A class an overlay or a
+//! native pack defines must be defined before any decode.
 //!
-//! **Differences from the C++, by parity mode.** [`ParityMode::Reference`] keeps three C++ behaviours that
-//! [`ParityMode::Off`] does not: an array with elements inside a struct's default stream stays empty (the C++ reads
-//! those streams with no array typing; Off types them through reflection), an enum value name the enum lacks gives 0
-//! (Off refuses it and skips the property), and a numbered enum value (`EPSM_4`, stored as `EPSM` and a number)
-//! is compared to the enum's entries without their numbers, so it matches nothing and gives 0 (Off finds its
-//! position). With those, `--object-dump` can be compared with the C++ byte for byte except where slots cannot
-//! follow the bag (below) and for class properties (above).
+//! **Differences from the C++, by parity mode.** Besides the element widths and the engine-native classes above,
+//! [`ParityMode::Reference`] keeps three C++ behaviours that [`ParityMode::Off`] does not (architecture section 6.1):
+//! an array with elements inside a struct's default stream stays empty (the C++ reads those streams with no array
+//! typing; Off types them through reflection), an enum value name the enum lacks gives 0 (Off refuses it and skips
+//! the property), and an enum value is compared with the C++ `enumPosition` rule: the enum export's own entries, in
+//! their package's spelling and without their numbers, against the value's whole text, so a numbered value (`EPSM_4`,
+//! stored as `EPSM` and a number) matches nothing and gives 0 (Off finds its position). With those, `--object-dump`
+//! can be compared with the C++ byte for byte except where slots cannot follow the bag (below) and for class
+//! properties (above).
+//!
+//! **Struct defaults that need themselves.** Only Off reads arrays in default streams, so only there can a struct's
+//! defaults wait on its own (`A { array<B> }` with `B { array<A> }`). Such defaults are refused: every struct whose
+//! stream met the cycle, swallowed or not, fails with [`DecodeError::StructDefaultsCycle`] and publishes nothing,
+//! whichever struct was asked first; a value of such a struct, or a class holding one by value, fails with it.
 //!
 //! **What the C++ does that slots cannot.** The C++ object is a name-keyed bag, so a tag naming a property the class
 //! does not declare (an editor-only property stripped from the cooked class) is stored under its name. A slot layout
@@ -71,7 +93,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ow_core::{FixedHashMap, NotYet, ParityMode};
+use ow_core::{FixedHashMap, FixedHashSet, NotYet, ParityMode};
 use ow_package::PackageId;
 use ow_package::package::{Package, PackageError};
 use ow_package::props::{ArrayScope, ArrayTyper, ElementType, PropValue};
@@ -80,7 +102,7 @@ use ow_package::store::{PackageStore, StoreError};
 use ow_package::tables;
 
 use crate::heap::{HeapError, ObjectSpace, Origin};
-use crate::ids::{ClassId, ObjRef, PropAddr, PropId, StructId};
+use crate::ids::{ClassId, EnumId, NameId, ObjRef, PropAddr, PropId, StructId};
 use crate::layout::{ClassTable, LayoutError, PropKind, PropertyDecl};
 use crate::names::NameTable;
 use crate::reflect::{ClassKey, CodeIndex, ReflectError};
@@ -102,6 +124,15 @@ pub const STRUCT_DEFAULTS_ZERO_WORD: usize = 44;
 /// How deeply the struct defaults of one struct may wait on those of others (through arrays of structs in a default
 /// stream). A Rust-only bound: the C++ never reads such arrays (module documentation), so it has none.
 pub const MAX_DEFAULTS_NESTING: usize = 64;
+
+/// The default [`DecodeState::stand_in_budget`]: how many slots stand-in allocations may build in total. The heap
+/// allocates an object with its class's whole slot vector, which a stand-in drops at once (it holds no property, as
+/// the C++ stand-in); the budget bounds that transient work against hostile packages (a Rust-only bound: 16 M slots,
+/// far above the installed packages' needs).
+pub const STAND_IN_BUDGET: usize = 1 << 24;
+
+/// The decision file that records this module's rules (named by `NotYet` values).
+pub const RECORD: &str = "docs/decisions/2026-11/2026-11-15-08-rust-typed-values-class-defaults-and-object-dumps-contract.md";
 
 /// The kind of every field of a [native struct](native_layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,12 +217,15 @@ pub enum DecodeError {
     StructDefaultsCycle(String),
     /// Struct defaults waited on each other deeper than [`MAX_DEFAULTS_NESTING`].
     DefaultsTooDeep,
-    /// A struct of the class table whose ScriptStruct export is not in its package.
-    NoStructExport(String),
-    /// A referenced object whose class has no layout (a class object, or a class no installed package holds).
+    /// A struct or enum of the class table whose export is not in its package.
+    NoExport(String),
+    /// A referenced object whose class has no layout: an invalid class reference, or an engine-native stand-in class
+    /// (under [`ParityMode::Reference`]) before `Core.Object` has a layout.
     NoClass {
         object: String,
     },
+    /// Stand-ins were allocated past [`DecodeState::stand_in_budget`] slots in total (module documentation).
+    StandInBudget(usize),
     /// A serialized value that does not match its declaration's kind: a struct tag on a property that is not a
     /// struct, or a package-walker value of another kind ([`to_value`]).
     KindMismatch {
@@ -248,8 +282,11 @@ impl fmt::Display for DecodeError {
                 f,
                 "struct defaults nest deeper than {MAX_DEFAULTS_NESTING} levels"
             ),
-            DecodeError::NoStructExport(path) => write!(f, "no ScriptStruct export for {path}"),
+            DecodeError::NoExport(path) => write!(f, "no export for {path}"),
             DecodeError::NoClass { object } => write!(f, "the class of {object} has no layout"),
+            DecodeError::StandInBudget(budget) => {
+                write!(f, "stand-ins need more than {budget} slots in total")
+            }
             DecodeError::KindMismatch { property, kind } => {
                 write!(
                     f,
@@ -325,7 +362,7 @@ enum Defaults {
 /// What decoding keeps between calls (the C++ `Runtime`'s caches and log): one stand-in object per referenced
 /// object, the structs whose defaults are read, the class default objects, a per-package export-name index and the
 /// log.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DecodeState {
     resources: FixedHashMap<(PackageId, i32), ObjRef>,
     struct_defaults: FixedHashMap<StructId, Defaults>,
@@ -339,22 +376,86 @@ pub struct DecodeState {
     pub dropped: Vec<String>,
     /// The engine-native classes defined for stand-ins, by path, in order ([`ValueCx::resource`]).
     pub native_classes: Vec<String>,
+    native_ids: FixedHashSet<ClassId>,
+    /// How many slots stand-in allocations may still build in total ([`STAND_IN_BUDGET`] at first).
+    pub stand_in_budget: usize,
+    /// How many times a struct-defaults cycle error was returned (read and compared by
+    /// [`ValueCx::ensure_struct_defaults`], so a stream that swallowed one is not published).
+    cycle_errors: u64,
+}
+
+impl Default for DecodeState {
+    fn default() -> Self {
+        DecodeState {
+            resources: FixedHashMap::default(),
+            struct_defaults: FixedHashMap::default(),
+            defaults_nesting: 0,
+            by_name: FixedHashMap::default(),
+            class_defaults: FixedHashMap::default(),
+            log: Vec::new(),
+            dropped: Vec::new(),
+            native_classes: Vec::new(),
+            native_ids: FixedHashSet::default(),
+            stand_in_budget: STAND_IN_BUDGET,
+            cycle_errors: 0,
+        }
+    }
 }
 
 impl DecodeState {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Whether class `c` is an engine-native stand-in class this state defined ([`ValueCx::resource`]): a class
+    /// known only by its import path, with no properties of its own and `Core.Object` as its super class, so
+    /// `IsA` through it is not the game's answer (W3-INTERP answers `NotYet` there).
+    pub fn is_native_stand_in(&self, c: ClassId) -> bool {
+        self.native_ids.contains(&c)
+    }
 }
 
-/// Everything decoding reads and writes: the store, the reflection index, the object space, the decode state and the
-/// parity mode.
+/// How decoded object references become heap objects: [`ValueCx`] asks its resolver for every object, component and
+/// interface reference it decodes. The default, [`StandIns`], gives one [`Origin::Resource`] stand-in per referenced
+/// object ([`ValueCx::resource`]); a definition store can answer with objects it loads instead (W3-DEFS).
+///
+/// The resolver is called re-entrantly: decoding inside `resolve` (loading another definition) asks it again for the
+/// references found there. An implementation that keeps state behind a `RefCell` must not hold a borrow across a call
+/// into `cx`.
+pub trait ReferenceResolver {
+    /// The object `reference` (package-relative, not 0) of `package` names, or `None` for no object.
+    fn resolve(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError>;
+}
+
+/// The default [`ReferenceResolver`]: the C++ `Runtime::resource` stand-ins.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StandIns;
+
+impl ReferenceResolver for StandIns {
+    fn resolve(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        cx.resource(package, reference)
+    }
+}
+
+/// Everything decoding reads and writes: the store, the reflection index, the object space, the decode state, the
+/// parity mode and the reference resolver ([`StandIns`] unless [`ValueCx::with_resolver`] sets another).
 pub struct ValueCx<'a> {
     pub store: &'a mut PackageStore,
     pub code: &'a mut CodeIndex,
     pub space: &'a mut ObjectSpace,
     pub state: &'a mut DecodeState,
     pub mode: ParityMode,
+    pub resolver: &'a dyn ReferenceResolver,
 }
 
 /// A property tag's header.
@@ -391,6 +492,14 @@ fn float(r: &mut Reader<'_>) -> Result<f32, ReadError> {
     Ok(f32::from_bits(r.u32()?))
 }
 
+/// The enum a byte or byte-attribute kind names.
+fn enum_of(kind: &PropKind) -> Option<EnumId> {
+    match kind {
+        PropKind::Byte { enum_ } | PropKind::ByteAttribute { enum_ } => *enum_,
+        _ => None,
+    }
+}
+
 /// The last component of an object path (a struct's or class's own name).
 fn last_name(path: &str) -> &str {
     path.rsplit('.').next().unwrap_or(path)
@@ -410,7 +519,14 @@ impl<'a> ValueCx<'a> {
             space,
             state,
             mode,
+            resolver: &StandIns,
         }
+    }
+
+    /// This context with `resolver` deciding what decoded references point at.
+    pub fn with_resolver(mut self, resolver: &'a dyn ReferenceResolver) -> Self {
+        self.resolver = resolver;
+        self
     }
 
     /// The layout of loaded class `key`, defined on first use ([`CodeIndex::define_layout`]).
@@ -446,7 +562,8 @@ impl<'a> ValueCx<'a> {
     /// Applies export `export`'s tags (from `prefix` bytes into its payload) to `object`, typed by the declarations
     /// of class `class` and its super classes: the C++ `applyTaggedDefaults`. A value that cannot be decoded or stored
     /// is skipped and logged; an error is returned only where the C++ throws (a prefix outside the export, a tag
-    /// header that cannot be read), after the tags before it were applied.
+    /// header that cannot be read), after the tags before it were applied. Returns where the stream ended (just past
+    /// its `None` tag), from the export's payload start: the start of any untagged tail.
     pub fn apply_tags(
         &mut self,
         object: ObjRef,
@@ -454,7 +571,7 @@ impl<'a> ValueCx<'a> {
         package: PackageId,
         export: i32,
         prefix: usize,
-    ) -> Result<(), DecodeError> {
+    ) -> Result<usize, DecodeError> {
         let pkg = self.store.shared(package);
         let exported = pkg.object(export)?;
         let size = usize::try_from(exported.size).map_err(|_| DecodeError::PrefixOutsideExport)?;
@@ -526,7 +643,7 @@ impl<'a> ValueCx<'a> {
                 ));
             }
         }
-        Ok(())
+        Ok(r.pos() - offset)
     }
 
     /// Writes a decoded top-level value: one element of a static array (an index past it is ignored, as the C++
@@ -628,7 +745,7 @@ impl<'a> ValueCx<'a> {
             "ByteProperty" if h.detail == "None" => Value::Byte(byte(r)?),
             "ByteProperty" => {
                 let value = tables::read_name(r, &pkg.names)?;
-                Value::Byte(self.enum_value(decl, &value)?)
+                Value::Byte(self.enum_value(enum_of(&decl.kind), decl.name, &value)?)
             }
             "StructProperty" => {
                 let PropKind::Struct(s) = decl.kind else {
@@ -656,7 +773,15 @@ impl<'a> ValueCx<'a> {
                     let Some(inner) = inner.as_ref().filter(|_| typed) else {
                         return Err(DecodeError::ElementTypeUnknown);
                     };
-                    elements.push(self.element(r, pkg, package, inner, depth, stream.defaults)?);
+                    elements.push(self.element(
+                        r,
+                        pkg,
+                        package,
+                        inner,
+                        decl.name,
+                        depth,
+                        stream.defaults,
+                    )?);
                 }
                 Value::array(elements)
             }
@@ -664,16 +789,24 @@ impl<'a> ValueCx<'a> {
         })
     }
 
-    /// An array element of kind `kind` (the C++ `element`, by the inner declaration's type).
+    /// An array element of kind `kind` of array property `property` (the C++ `element`, by the inner declaration's
+    /// type). Under [`ParityMode::Reference`] with the C++ widths: an enum byte as one byte, a bool as a 4-byte word.
+    /// Otherwise with the widths measured on the installed packages (FITTED, UNVERIFIED in the game): an enum byte as
+    /// an 8-byte name placed in the declared enum (19 of 19 enum-byte array tags of the code packages' class defaults
+    /// meet their size so), a bool as one byte (the one bool array with elements in their struct defaults: 3 elements
+    /// in 7 bytes).
+    #[allow(clippy::too_many_arguments)]
     fn element(
         &mut self,
         r: &mut Reader<'_>,
         pkg: &Arc<Package>,
         package: PackageId,
         kind: &PropKind,
+        property: NameId,
         depth: u32,
         defaults: bool,
     ) -> Result<Value, DecodeError> {
+        let cxx = self.mode == ParityMode::Reference;
         Ok(match kind {
             PropKind::Int => Value::Int(r.i32()?),
             PropKind::Float => Value::Float(float(r)?),
@@ -690,8 +823,13 @@ impl<'a> ValueCx<'a> {
                 let reference = r.i32()?;
                 self.class_value(package, reference)?
             }
+            PropKind::Byte { enum_: Some(e) } if !cxx => {
+                let text = tables::read_name(r, &pkg.names)?;
+                Value::Byte(self.enum_value(Some(*e), property, &text)?)
+            }
             PropKind::Byte { .. } => Value::Byte(byte(r)?),
-            PropKind::Bool => Value::Bool(r.u32()? != 0),
+            PropKind::Bool if cxx => Value::Bool(r.u32()? != 0),
+            PropKind::Bool => Value::Bool(byte(r)? != 0),
             PropKind::Struct(s) => {
                 let name = self.struct_name(*s);
                 self.structure(r, pkg, package, &name, *s, depth + 1, defaults)?
@@ -832,14 +970,24 @@ impl<'a> ValueCx<'a> {
     /// Reads struct `s`'s default tags once and stores them in the class table, after the defaults of the structs it
     /// holds by value (the C++ `applyStructDefaults`, which the C++ reruns on every zero value). A stream that fails,
     /// or does not end exactly at the export's end, leaves the zero value (no error); a native struct takes none.
+    ///
+    /// Defaults that need themselves (through arrays of structs in default streams, which only [`ParityMode::Off`]
+    /// reads) are refused: every struct whose stream met such a cycle, swallowed or not, gets
+    /// [`DecodeError::StructDefaultsCycle`] and publishes nothing, so the outcome does not depend on which struct was
+    /// asked first.
     pub fn ensure_struct_defaults(&mut self, s: StructId) -> Result<(), DecodeError> {
-        match self.state.struct_defaults.get(&s) {
-            Some(Defaults::Done(outcome)) => return outcome.clone(),
-            Some(Defaults::Reading) => {
-                return Err(DecodeError::StructDefaultsCycle(self.struct_path(s)));
-            }
-            None => {}
+        let outcome = match self.state.struct_defaults.get(&s) {
+            Some(Defaults::Done(outcome)) => outcome.clone(),
+            Some(Defaults::Reading) => Err(DecodeError::StructDefaultsCycle(self.struct_path(s))),
+            None => return self.read_struct_defaults_once(s),
+        };
+        if matches!(outcome, Err(DecodeError::StructDefaultsCycle(_))) {
+            self.state.cycle_errors += 1;
         }
+        outcome
+    }
+
+    fn read_struct_defaults_once(&mut self, s: StructId) -> Result<(), DecodeError> {
         if self.state.defaults_nesting >= MAX_DEFAULTS_NESTING {
             return Err(DecodeError::DefaultsTooDeep);
         }
@@ -850,6 +998,9 @@ impl<'a> ValueCx<'a> {
         self.state
             .struct_defaults
             .insert(s, Defaults::Done(outcome.clone()));
+        if matches!(outcome, Err(DecodeError::StructDefaultsCycle(_))) {
+            self.state.cycle_errors += 1;
+        }
         outcome
     }
 
@@ -896,17 +1047,18 @@ impl<'a> ValueCx<'a> {
         }
         r.set_pos(start + STRUCT_DEFAULTS_START);
         r.set_limit(end);
+        let cycles_before = self.state.cycle_errors;
         let mut candidate = self.space.classes.struct_defaults(s)?;
         let stream = Stream {
             top: false,
             defaults: true,
             depth: 1,
         };
-        if self
-            .tagged(&mut r, &pkg, package, &mut candidate, s, stream)
-            .is_err()
-            || r.pos() != end
-        {
+        let read = self.tagged(&mut r, &pkg, package, &mut candidate, s, stream);
+        if self.state.cycle_errors != cycles_before {
+            return Err(DecodeError::StructDefaultsCycle(path.as_str().to_string()));
+        }
+        if read.is_err() || r.pos() != end {
             return Ok(());
         }
         Ok(self.space.set_struct_defaults(s, candidate)?)
@@ -914,7 +1066,7 @@ impl<'a> ValueCx<'a> {
 
     /// The ScriptStruct export a class-table struct was defined from: its path is `<package stem>.<object path>`.
     fn struct_export(&mut self, s: StructId, path: &str) -> Result<(PackageId, i32), DecodeError> {
-        let missing = || DecodeError::NoStructExport(path.to_string());
+        let missing = || DecodeError::NoExport(path.to_string());
         let (stem, _) = path.split_once('.').ok_or_else(missing)?;
         let package = self.code.package(self.store, stem)?;
         // The whole path: `find_export` drops one leading `<package>.`, so a struct of a class named like its package
@@ -929,14 +1081,19 @@ impl<'a> ValueCx<'a> {
     // ------------------------------------------------------------------------------------------- references
 
     /// An object reference value of declared kind `kind` (an interface reference for an interface, an object
-    /// reference otherwise).
+    /// reference otherwise), the object chosen by the [resolver](ReferenceResolver).
     fn object_value(
         &mut self,
         package: PackageId,
         reference: i32,
         kind: &PropKind,
     ) -> Result<Value, DecodeError> {
-        let object = self.resource(package, reference)?;
+        let object = if reference == 0 {
+            None
+        } else {
+            let resolver = self.resolver;
+            resolver.resolve(self, package, reference)?
+        };
         Ok(match kind {
             PropKind::Interface { .. } => Value::Interface(object),
             _ => Value::Object(object),
@@ -953,9 +1110,13 @@ impl<'a> ValueCx<'a> {
         Ok(Value::Class(Some(self.layout(key)?)))
     }
 
-    /// The stand-in for the object `reference` of `package` names (the C++ `Runtime::resource`): an import is
-    /// followed to the export that holds it where one does (else the stand-in names the import), and each object
-    /// gets one stand-in, of the object's class, with [`Origin::Resource`]. `None` for reference 0.
+    /// The stand-in for the object `reference` of `package` names (the C++ `Runtime::resource`), the default
+    /// [`ReferenceResolver`]: an import is followed to the export that holds it where one does (else the stand-in
+    /// names the import), and each object gets one stand-in, of the object's class, with [`Origin::Resource`] and no
+    /// property slots (the C++ stand-in holds no properties either; reading one is a heap error). `None` for
+    /// reference 0. Fails for a reference outside the package's tables, for a class that cannot be found or laid out
+    /// (an engine-native class is a `NotYet` outside [`ParityMode::Reference`], see the module documentation), and past
+    /// the [stand-in budget](DecodeState::stand_in_budget).
     pub fn resource(
         &mut self,
         package: PackageId,
@@ -977,6 +1138,13 @@ impl<'a> ValueCx<'a> {
         let pkg = self.store.shared(owner);
         let entry = pkg.object(index)?;
         let class = self.object_class(owner, &pkg, index)?;
+        // The heap builds the class's slots on allocation; the stand-in drops them at once, and the budget bounds
+        // that work.
+        let slots = self.space.classes.layout(class).slot_count() as usize;
+        if slots > self.state.stand_in_budget {
+            return Err(DecodeError::StandInBudget(self.state.stand_in_budget));
+        }
+        self.state.stand_in_budget -= slots;
         let o = self.space.alloc(
             class,
             &entry.name,
@@ -986,13 +1154,15 @@ impl<'a> ValueCx<'a> {
                 index,
             },
         )?;
+        self.space.heap.get_mut(o)?.slots = Vec::new();
         self.state.resources.insert((owner, index), o);
         Ok(Some(o))
     }
 
     /// The class of object `index` of `package`: an export's class reference, or an unresolved import's class path.
-    /// A class that no installed package exports (an engine-native class such as `Engine.StaticMesh` or `Core.Class`,
-    /// the class of a class object) gets an [engine-native stand-in class](ValueCx::native_class).
+    /// A class that is genuinely absent (its import resolves into no installed package, or the class path names a
+    /// package or an export that does not exist) is an engine-native class ([`ValueCx::native_class`]); every other
+    /// failure is returned as it is.
     fn object_class(
         &mut self,
         package: PackageId,
@@ -1000,92 +1170,151 @@ impl<'a> ValueCx<'a> {
         index: i32,
     ) -> Result<ClassId, DecodeError> {
         let entry = pkg.object(index)?;
-        let no_class = || DecodeError::NoClass {
-            object: pkg.path_of(index).unwrap_or_default(),
-        };
-        let (key, native_path) = if index > 0 {
-            if entry.class == 0 {
-                (None, "Core.Class".to_string())
-            } else {
-                let key = self
-                    .code
-                    .class_at(self.store, package, entry.class)
-                    .map_err(|_| no_class())?;
-                let path = if entry.class < 0 {
-                    pkg.path_of(entry.class)?
-                } else {
-                    String::new()
-                };
-                (key, path)
+        let key = if index > 0 {
+            match entry.class {
+                // A class object: its class is Core.Class, which the installed Core does not export.
+                0 => self.class_by_path("Core.Class")?,
+                class => match self.code.class_at(self.store, package, class)? {
+                    Some(key) => Ok(key),
+                    None if class < 0 => Err(pkg.path_of(class)?),
+                    None => {
+                        return Err(DecodeError::NoClass {
+                            object: pkg.path_of(index)?,
+                        });
+                    }
+                },
             }
         } else {
-            let path = format!("{}.{}", entry.class_package, entry.class_name);
-            (self.code.find_class(self.store, &path).ok(), path)
+            self.class_by_path(&format!("{}.{}", entry.class_package, entry.class_name))?
         };
         match key {
-            Some(key) => self.layout(key).map_err(|_| no_class()),
-            None if !native_path.is_empty() => self.native_class(&native_path).ok_or_else(no_class),
-            None => Err(no_class()),
+            Ok(key) => self.layout(key),
+            Err(path) => self.native_class(&path),
         }
     }
 
-    /// The class of a stand-in for an object whose class no installed package exports: the class at its import
-    /// path, defined (once, if nothing defined it before) with no properties of its own under `Core.Object`, the root
-    /// every class derives from. Its native properties are not in the packages, so none is invented; the classes
-    /// between it and `Core.Object`, if any, are not known (UNVERIFIED). Each one defined here is listed in
-    /// [`DecodeState::native_classes`]. `None` when `Core.Object` has no layout yet.
-    fn native_class(&mut self, path: &str) -> Option<ClassId> {
+    /// The loaded class at `path`, or `Err(path)` back when no installed package holds it (the package is missing, or
+    /// has no such export). Other failures are errors.
+    fn class_by_path(&mut self, path: &str) -> Result<Result<ClassKey, String>, DecodeError> {
+        match self.code.find_class(self.store, path) {
+            Ok(key) => Ok(Ok(key)),
+            Err(ReflectError::ClassNotFound(_))
+            | Err(ReflectError::Store(StoreError::PackageNotFound(_))) => Ok(Err(path.to_string())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The class of a stand-in for an object whose class no installed package exports. Only under
+    /// [`ParityMode::Reference`] (the C++ stand-in needs no class): the class at its import path, defined (once, if
+    /// nothing defined that path before) with no properties of its own under `Core.Object`, the root every class
+    /// derives from, and listed in [`DecodeState::native_classes`] and [`DecodeState::is_native_stand_in`]. Its native
+    /// properties are not in the packages, so none is invented; the classes between it and `Core.Object`, if any, are
+    /// not known (UNVERIFIED). A class an overlay or a native pack defines must be defined before any decode, or the
+    /// stand-in class takes its path first. In [`ParityMode::Off`] a [`NotYet`]: the class's layout is not read.
+    fn native_class(&mut self, path: &str) -> Result<ClassId, DecodeError> {
+        if self.mode != ParityMode::Reference {
+            return Err(DecodeError::NotYet(NotYet::not_read(
+                format!("engine-native class {path}: no installed package exports it"),
+                RECORD,
+            )));
+        }
         let classes = &mut self.space.classes;
         if let Some(id) = classes.by_path(path)
             && classes.get_layout(id).is_some_and(|l| l.is_defined())
         {
-            return Some(id);
+            return Ok(id);
         }
         let object = classes
             .by_path("Core.Object")
-            .filter(|&o| classes.get_layout(o).is_some_and(|l| l.is_defined()))?;
-        let id = classes.define(path, Some(object), Vec::new()).ok()?;
+            .filter(|&o| classes.get_layout(o).is_some_and(|l| l.is_defined()))
+            .ok_or_else(|| DecodeError::NoClass {
+                object: path.to_string(),
+            })?;
+        let id = classes.define(path, Some(object), Vec::new())?;
         self.state.native_classes.push(path.to_string());
-        Some(id)
+        self.state.native_ids.insert(id);
+        Ok(id)
     }
 
-    /// The byte of enum value `value` for a byte declaration: its position in the declared enum.
-    fn enum_value(&mut self, decl: &PropertyDecl, value: &str) -> Result<u8, DecodeError> {
-        let layout = match decl.kind {
-            PropKind::Byte { enum_: Some(e) } | PropKind::ByteAttribute { enum_: Some(e) } => {
-                self.space.classes.enum_layout(e)
-            }
-            _ => None,
+    /// The byte of enum value `value` of enum `enum_` for property `property`: its position in the declared enum.
+    /// Under [`ParityMode::Reference`] it is the C++ `enumPosition`: the enum export's own name entries, compared in
+    /// their package's spelling and without their numbers to the value's whole text, 0 where none matches.
+    fn enum_value(
+        &mut self,
+        enum_: Option<EnumId>,
+        property: NameId,
+        value: &str,
+    ) -> Result<u8, DecodeError> {
+        let unknown = |cx: &Self| DecodeError::UnknownEnumValue {
+            property: cx.space.names.text(property).into_owned(),
+            value: value.to_string(),
         };
-        let position = match layout {
-            // The C++ `enumPosition` compares each enum entry's text without its instance number to the value's whole
-            // text, so a numbered value (`EPSM_4`, stored as `EPSM` and a number) matches nothing there and is 0.
-            Some(layout) if self.mode == ParityMode::Reference => Some(
-                layout
-                    .values()
-                    .iter()
-                    .position(|&v| self.space.names.base_text(v) == value)
-                    .unwrap_or(0),
-            ),
-            Some(layout) => self
-                .space
-                .names
-                .find(value)
-                .and_then(|n| layout.index_of(n)),
-            None => None,
+        let Some(e) = enum_ else {
+            // No declared enum to place the value in: the C++ gives 0 (UNVERIFIED there).
+            return if self.mode == ParityMode::Reference {
+                Ok(0)
+            } else {
+                Err(unknown(self))
+            };
         };
-        match position {
-            Some(p) => u8::try_from(p).map_err(|_| DecodeError::UnknownEnumValue {
-                property: self.space.names.text(decl.name).into_owned(),
-                value: value.to_string(),
-            }),
-            // The C++ gives 0 to a value it cannot place (UNVERIFIED there); only the reference mode keeps that.
-            None if self.mode == ParityMode::Reference => Ok(0),
-            None => Err(DecodeError::UnknownEnumValue {
-                property: self.space.names.text(decl.name).into_owned(),
-                value: value.to_string(),
-            }),
+        if self.mode == ParityMode::Reference {
+            return self.cxx_enum_position(e, value);
         }
+        let position = self
+            .space
+            .names
+            .find(value)
+            .and_then(|n| self.space.classes.enum_layout(e)?.index_of(n));
+        position
+            .and_then(|p| u8::try_from(p).ok())
+            .ok_or_else(|| unknown(self))
+    }
+
+    /// The C++ `enumPosition` over the export enum `e` was defined from: at +16 the count, then (name index, number)
+    /// pairs; the first entry whose name-table text equals `value` gives its position, any other case 0.
+    fn cxx_enum_position(&mut self, e: EnumId, value: &str) -> Result<u8, DecodeError> {
+        let path = self
+            .space
+            .classes
+            .enum_layout(e)
+            .map(|l| l.path().as_str().to_string())
+            .unwrap_or_default();
+        let missing = || DecodeError::NoExport(path.clone());
+        let (stem, _) = path.split_once('.').ok_or_else(missing)?;
+        let package = self.code.package(self.store, stem)?;
+        let index = self.code.find_export(self.store, package, &path);
+        if index == 0 || self.code.enum_of(package, index) != Some(e) {
+            return Err(missing());
+        }
+        let pkg = self.store.get(package);
+        let object = pkg.object(index)?;
+        let start = object.offset as usize;
+        let end = start + object.size as usize;
+        let word = |at: usize| -> Option<u32> {
+            if at + 4 > end {
+                return None;
+            }
+            pkg.data
+                .get(at..at + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        let Some(count) = word(start + 16) else {
+            return Ok(0);
+        };
+        let mut at = start + 20;
+        let mut position = 0u32;
+        while (position as i32) < count as i32 && at + 8 <= end {
+            let Some(name) = word(at) else { break };
+            let text = usize::try_from(name as i32)
+                .ok()
+                .and_then(|n| pkg.names.get(n));
+            if text.is_some_and(|t| t == value) {
+                return Ok(u8::try_from(position).unwrap_or(0));
+            }
+            position += 1;
+            at += 8;
+        }
+        Ok(0)
     }
 }
 
@@ -1163,11 +1392,35 @@ fn skim(r: &mut Reader<'_>, pkg: &Package, h: &Header) -> Result<(), DecodeError
 /// them, an array element by element. The value is one tag's: a static-array declaration's elements are separate
 /// entries, which the caller places. A value the walker left raw, a delegate, and a value of another kind than the
 /// declaration's are errors.
+///
+/// The rules of the VM-side reader hold here too: structs nest at most [`MAX_STRUCT_DEPTH`] deep counted as that
+/// reader counts them (the walker itself accepts 32), and inside a struct a field the struct does not declare, a field
+/// that does not type, and a value the heap would refuse for the field are skipped, as the C++ `tagged` skips them.
 pub fn to_value(
     tree: &PropValue,
     decl: &PropertyDecl,
     package: PackageId,
     cx: &mut ValueCx<'_>,
+) -> Result<Value, DecodeError> {
+    tree_value(
+        tree,
+        decl,
+        package,
+        cx,
+        Stream {
+            top: true,
+            defaults: false,
+            depth: 0,
+        },
+    )
+}
+
+fn tree_value(
+    tree: &PropValue,
+    decl: &PropertyDecl,
+    package: PackageId,
+    cx: &mut ValueCx<'_>,
+    stream: Stream,
 ) -> Result<Value, DecodeError> {
     let mismatch = |cx: &ValueCx<'_>| DecodeError::KindMismatch {
         property: cx.space.names.text(decl.name).into_owned(),
@@ -1181,7 +1434,7 @@ pub fn to_value(
             Value::Byte(*b)
         }
         (PropKind::Byte { .. } | PropKind::ByteAttribute { .. }, PropValue::Enum(name)) => {
-            Value::Byte(cx.enum_value(decl, name)?)
+            Value::Byte(cx.enum_value(enum_of(&decl.kind), decl.name, name)?)
         }
         (PropKind::Name, PropValue::Name(text)) => Value::Name(cx.space.names.intern(text)),
         (PropKind::Str, PropValue::Str(text)) => Value::string(text),
@@ -1191,6 +1444,16 @@ pub fn to_value(
         (PropKind::Class { .. }, PropValue::Object(r)) => cx.class_value(package, *r)?,
         (PropKind::Struct(s), PropValue::Struct { fields, .. }) => {
             let s = *s;
+            // As the VM reader: a struct value at `depth`, its fields one stream deeper.
+            let depth = if stream.top { 0 } else { stream.depth + 1 };
+            if depth > MAX_STRUCT_DEPTH || depth + 1 > MAX_STRUCT_DEPTH {
+                return Err(DecodeError::StructTooDeep);
+            }
+            let inner = Stream {
+                top: false,
+                defaults: false,
+                depth: depth + 1,
+            };
             cx.ensure_struct_defaults(s)?;
             let mut value = cx.space.classes.struct_defaults(s)?;
             for entry in fields {
@@ -1201,16 +1464,23 @@ pub fn to_value(
                     .and_then(|n| cx.space.classes.struct_layout(s)?.field(n))
                     .map(|(at, d)| (at, d.clone()));
                 let Some((at, field_decl)) = field else {
-                    return Err(DecodeError::Undeclared(entry.name.clone()));
+                    continue;
                 };
-                let v = to_value(&entry.value, &field_decl, package, cx)?;
+                let Ok(v) = tree_value(&entry.value, &field_decl, package, cx, inner) else {
+                    continue;
+                };
+                if cx
+                    .space
+                    .heap
+                    .check_value(&cx.space.classes, &field_decl.kind, &v)
+                    .is_err()
+                {
+                    continue;
+                }
                 let at =
                     if field_decl.array_dim > 1 && !matches!(field_decl.kind, PropKind::Array(_)) {
                         if entry.index < 0 || entry.index >= field_decl.array_dim {
-                            return Err(DecodeError::StaticIndex {
-                                property: entry.name.clone(),
-                                index: entry.index,
-                            });
+                            continue;
                         }
                         at + entry.index as u32
                     } else {
@@ -1222,10 +1492,19 @@ pub fn to_value(
             value
         }
         (PropKind::Array(inner), PropValue::Array(items)) => {
+            if items.len() > MAX_ARRAY_LENGTH as usize {
+                return Err(DecodeError::InvalidArrayLength);
+            }
             let element = PropertyDecl::new(decl.name, inner.as_ref().clone());
+            // As the VM reader: an element's struct sits one level below the array's stream.
+            let elements = Stream {
+                top: false,
+                defaults: false,
+                depth: if stream.top { 0 } else { stream.depth },
+            };
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(to_value(item, &element, package, cx)?);
+                out.push(tree_value(item, &element, package, cx, elements)?);
             }
             Value::array(out)
         }
@@ -1241,23 +1520,28 @@ pub fn to_value(
 /// index and the class table, and gives `None` (the array stays raw) where it knows nothing.
 ///
 /// Kinds the walker decodes map to its element types (an object or component reference to `ObjectProperty`, a struct
-/// to `StructProperty:<name>`). Bool, class, interface, delegate, attribute and map elements have no walker decoder
-/// that reads them as the C++ VM does, so they give `None` rather than a type that would misread them.
+/// to `StructProperty:<name>`). The element widths follow the parity mode, as the VM-side reader's do
+/// (module documentation): under [`ParityMode::Reference`] an enum-byte element is one byte (`ByteProperty`); otherwise
+/// it is an 8-byte name placed in an enum, which no walker element type reads, so it gives `None`. Bool, class,
+/// interface, delegate, attribute and map elements have no walker element type of their width in either mode, so they
+/// give `None` rather than a type that would misread them.
 pub struct ReflectionTyper<'a> {
     store: &'a PackageStore,
     code: &'a CodeIndex,
     classes: &'a ClassTable,
     names: &'a NameTable,
     package: PackageId,
+    mode: ParityMode,
 }
 
 impl<'a> ReflectionTyper<'a> {
-    /// A typer for the exports of `package`.
+    /// A typer for the exports of `package`, with the element widths of `mode`.
     pub fn new(
         store: &'a PackageStore,
         code: &'a CodeIndex,
         space: &'a ObjectSpace,
         package: PackageId,
+        mode: ParityMode,
     ) -> Self {
         ReflectionTyper {
             store,
@@ -1265,6 +1549,7 @@ impl<'a> ReflectionTyper<'a> {
             classes: &space.classes,
             names: &space.names,
             package,
+            mode,
         }
     }
 
@@ -1316,7 +1601,10 @@ impl ArrayTyper for ReflectionTyper<'_> {
             PropKind::Name => ElementType::Name,
             PropKind::Str => ElementType::Str,
             PropKind::Object { .. } => ElementType::Object,
-            PropKind::Byte { .. } => ElementType::Byte,
+            PropKind::Byte { enum_: None } => ElementType::Byte,
+            PropKind::Byte { enum_: Some(_) } if self.mode == ParityMode::Reference => {
+                ElementType::Byte
+            }
             PropKind::Struct(s) => ElementType::Struct(
                 last_name(self.classes.struct_layout(*s)?.path().as_str()).to_string(),
             ),

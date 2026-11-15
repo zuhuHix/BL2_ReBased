@@ -1102,6 +1102,9 @@ returns) in the same PR. W7-RETIRE owns the split files and deletes each only wh
 | "A property reading 0 with base 0 is the identity 1" | `combat_hit.cpp` (the lane greps `combat_test.py` for rows that depend on it) | W6-COMBAT | class defaults and start-up modifiers; crit base `NotYet { NeedsRealGame(8) }` |
 | `prepare_stock_shield.py` at `SLICE_LEVEL = 8` | `prepare_stock_shield_test.py` | W4-STATS | non-weapon stats at the region stage |
 | Every unnamed object named `<Class>_0` (`vm.cpp:1083`; several per class from `combat.cpp:325`, `combat_hit.cpp:173`, `combat_loot.cpp:435`, `EX_New` `interp.cpp:472`) | outputs that print unnamed object names; `vm_test.py:937-938` (first object `Foo_0`) holds in both modes | W2-VMAPI (reproduces in `Vm::instantiate`), W7-RETIRE (deletes) | Off mode's per-class `<Class>_<n>` (UE3 `MakeUniqueObjectName` form, numbering UNVERIFIED), `ow-vm` `instantiate_names` |
+| Arrays with elements inside a struct's default stream left empty (`applyStructDefaults` reads it with no array typing, `vm.cpp`) | pinned by no tracked test (local W3-DECODE comparison only) | W3-DECODE (reproduces) | Off mode types and decodes them (`ow-object` `decode::tests::arrays_in_struct_defaults_decode_only_off_the_reference_mode`) |
+| An enum value name the enum does not have read as 0 (`byteFromEnum`, `vm.cpp`) | pinned by no tracked test (local W3-DECODE comparison only) | W3-DECODE (reproduces) | Off mode refuses it and skips the property, no guessed value (`decode::tests::an_enum_value_the_enum_lacks_is_refused_except_in_the_reference_mode`) |
+| Enum values matched against the enum export's own entries without their FName numbers (`enumPosition`, `vm.cpp`), so a numbered value is 0 | pinned by no tracked test (local W3-DECODE comparison only) | W3-DECODE (reproduces) | Off mode takes the value's position in the declared enum (`decode::tests::numbered_enum_values_take_their_position_except_in_the_reference_mode`) |
 
 ---
 

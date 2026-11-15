@@ -93,16 +93,27 @@ fn default_export(
     })
 }
 
+/// An instantiated export: the new object, and where its tag stream ended (just past the `None` tag, from the
+/// export's payload start: the start of any untagged tail).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Instance {
+    pub object: ObjRef,
+    pub tags_end: usize,
+}
+
 /// Instantiates export `index` of `package` (module documentation): a new object of the export's class with the class
 /// defaults and the export's tags from `prefix` on. Errors: an index that is not positive ("unsupported exported
 /// object request"), an index outside the export table, a class reference that resolves to nothing ("cannot
-/// instantiate a null class") or not to a class, and a failure applying the export's tags.
+/// instantiate a null class") or not to a class, and a failure applying the export's tags. On a failure after the
+/// object was allocated it is freed again, as the C++ drops its local object: nothing is left behind but the class
+/// default object and the stand-ins the tags reached, which stay cached as in the C++.
 pub fn instantiate_export(
     cx: &mut ValueCx<'_>,
     package: PackageId,
     index: i32,
     prefix: PropertyPrefix,
-) -> Result<ObjRef, DecodeError> {
+) -> Result<Instance, DecodeError> {
     if index <= 0 {
         return Err(DecodeError::UnsupportedRequest);
     }
@@ -117,10 +128,24 @@ pub fn instantiate_export(
     let object = cx
         .space
         .alloc(id, &exported.name, None, Origin::Export { package, index })?;
-    let slots = cx.space.heap.get(defaults)?.slots.clone();
-    cx.space.heap.get_mut(object)?.slots = slots;
-    cx.apply_tags(object, class, package, index, prefix.bytes())?;
-    Ok(object)
+    let applied = cx
+        .space
+        .heap
+        .get(defaults)
+        .map(|d| d.slots.clone())
+        .map_err(DecodeError::from)
+        .and_then(|slots| {
+            cx.space.heap.get_mut(object)?.slots = slots;
+            cx.apply_tags(object, class, package, index, prefix.bytes())
+        });
+    match applied {
+        Ok(tags_end) => Ok(Instance { object, tags_end }),
+        Err(error) => {
+            // Nothing refers to the new object yet; freeing it only gives its slot back.
+            let _ = cx.space.free(object);
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
