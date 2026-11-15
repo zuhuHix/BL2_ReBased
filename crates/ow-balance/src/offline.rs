@@ -32,7 +32,7 @@ use ow_object::layout::PropKind;
 use ow_object::value::Value;
 
 use crate::cap;
-use crate::stage::{RegionQuery, RegionStages, region_game_stage};
+use crate::stage::{RegionQuery, RegionStage, RegionStages, region_game_stage};
 use crate::types::{BalanceError, BalanceSnapshot, ExpLevel, GameStage, PlayerCount};
 use crate::xp::{skill_points_for_level_up, write_level};
 
@@ -316,7 +316,7 @@ impl OfflineWorld {
         globals_definition: ObjRef,
         region: ObjRef,
         completed_missions: &[ObjRef],
-    ) -> Result<GameStage, BalanceError> {
+    ) -> Result<RegionStage, BalanceError> {
         let q = RegionQuery::new(
             region,
             self.snapshot.playthrough,
@@ -599,17 +599,29 @@ mod tests {
     }
 
     #[test]
-    fn a_synthetic_store_answers_not_yet_until_the_store_body_lands() {
-        // The DefStore body is in review on another lane: every lookup answers NotYet for now, and the offline world
-        // passes that through unchanged. This test flips when the body lands (then it finds the exported object).
+    fn find_passes_the_store_answer_through_unchanged() {
+        // Whatever the store answers (NotYet while the DefStore body is in review, a found object once it lands),
+        // OfflineWorld::find hands it on, converted only by the error From chain. The expected answer comes from a
+        // second store over the same directory and a space built the same way, so the handles agree.
         let dir = std::env::temp_dir().join(format!("ow-balance-offline-{}", std::process::id()));
-        let defs = DefStore::from_synthetic(&dir, &[], IdentityPolicy::default(), ParityMode::Off)
-            .unwrap();
-        let fx = Fx::new();
-        let mut world = OfflineWorld::new(fx.space_only(), Some(defs), snapshot()).unwrap();
-        let found = world.find(&ObjectPath::parse("Test.Curve").unwrap());
+        let path = ObjectPath::parse("Test.Curve").unwrap();
+        let defs = DefStore::from_synthetic(&dir, &[], IdentityPolicy::default(), ParityMode::Off);
+        let other = DefStore::open(dir.clone(), IdentityPolicy::default(), ParityMode::Off);
+        let (defs, mut other) = match (defs, other) {
+            (Ok(a), Ok(b)) => (a, b),
+            (a, b) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                panic!("synthetic stores: {:?} / {:?}", a.err(), b.err());
+            }
+        };
+        let mut world = OfflineWorld::new(Fx::new().space_only(), Some(defs), snapshot()).unwrap();
+        let mut twin = OfflineWorld::new(Fx::new().space_only(), None, snapshot()).unwrap();
+        let got = world.find(&path);
+        let want = other
+            .find(twin.space_mut(), &path)
+            .map_err(|e| BalanceError::from(AttrError::from(e)));
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(matches!(found, Err(BalanceError::NotYet(_))));
+        assert_eq!(got, want);
     }
 
     #[test]
@@ -620,14 +632,16 @@ mod tests {
         assert_eq!(
             world
                 .region_game_stage(&sys, r.globals, r.region, &[])
-                .unwrap(),
+                .unwrap()
+                .stage,
             GameStage(8)
         );
         world.set_player_level(ExpLevel::new(12)).unwrap();
         assert_eq!(
             world
                 .region_game_stage(&sys, r.globals, r.region, &[r.missions[0]])
-                .unwrap(),
+                .unwrap()
+                .stage,
             GameStage(8)
         );
         assert_eq!(world.region_stages().len(), 1);

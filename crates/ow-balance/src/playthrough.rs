@@ -21,6 +21,7 @@
 //! `WillowPlayerReplicationInfo.ExpLevel`. **Status: UNVERIFIED**; the 1.0 of the first playthrough below level 50
 //! is behind the live Fire mission XP of 395 (REALGAME_GROUND_TRUTH.md).
 
+use ow_attr::AttributeSystem;
 use ow_attr::api::EvalCx;
 use ow_core::NotYet;
 use ow_object::ids::ObjRef;
@@ -77,11 +78,18 @@ pub fn playthrough_modifier(
 /// The XP multiplier `m` of the mission reward ([`XpKind::Quests`]) and the kill credit ([`XpKind::Combat`]) for a
 /// player at `player_level` in playthrough `pt` (module documentation): 1.0 in the first two playthroughs below level
 /// 50; `NotYet { NotRead }` in UVHM and at level 50 or more.
+///
+/// The evaluator and the world are taken now so the signature does not change when those two branches are read: they
+/// read `PlayThroughBasedBalanceModifiers` from the world's globals, and the multiplier fields may be
+/// `AttributeInitializationData` to evaluate (their type is not read). The 1.0 branch reads neither.
 pub fn xp_multiplier(
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
     kind: XpKind,
     pt: Playthrough,
     player_level: ExpLevel,
 ) -> Result<f32, BalanceError> {
+    let _ = (sys, cx);
     if pt.index() >= 2 {
         return Err(NotYet::not_read(
             format!(
@@ -121,10 +129,13 @@ mod tests {
     #[test]
     fn one_below_fifty_in_the_first_two_playthroughs() {
         // NATIVE_PROGRESSION.md section 2: "otherwise 1.0. The slice (playthrough 1, level < 50) is in this case."
+        let (sys, mut world) = Fx::new().into_world();
+        let mut cx = EvalCx::new(&mut world);
         for kind in [XpKind::Combat, XpKind::Quests] {
             for pt in [Playthrough::NORMAL, Playthrough::TVHM] {
                 for level in [1, 8, 49] {
-                    assert_eq!(xp_multiplier(kind, pt, ExpLevel::new(level)).unwrap(), 1.0);
+                    let m = xp_multiplier(&sys, &mut cx, kind, pt, ExpLevel::new(level));
+                    assert_eq!(m.unwrap(), 1.0);
                 }
             }
         }
@@ -132,20 +143,19 @@ mod tests {
 
     #[test]
     fn uvhm_and_level_fifty_are_not_read() {
+        let (sys, mut world) = Fx::new().into_world();
+        let mut cx = EvalCx::new(&mut world);
         for kind in [XpKind::Combat, XpKind::Quests] {
-            assert!(not_read(xp_multiplier(
-                kind,
-                Playthrough::UVHM,
-                ExpLevel::new(8)
-            )));
-            assert!(not_read(xp_multiplier(
-                kind,
-                Playthrough::UVHM,
-                ExpLevel::new(72)
-            )));
-            for pt in [Playthrough::NORMAL, Playthrough::TVHM] {
-                assert!(not_read(xp_multiplier(kind, pt, ExpLevel::new(50))));
-                assert!(not_read(xp_multiplier(kind, pt, ExpLevel::new(80))));
+            for (pt, level) in [
+                (Playthrough::UVHM, 8),
+                (Playthrough::UVHM, 72),
+                (Playthrough::NORMAL, 50),
+                (Playthrough::NORMAL, 80),
+                (Playthrough::TVHM, 50),
+                (Playthrough::TVHM, 80),
+            ] {
+                let m = xp_multiplier(&sys, &mut cx, kind, pt, ExpLevel::new(level));
+                assert!(not_read(m), "{kind:?} {pt:?} {level}");
             }
         }
     }

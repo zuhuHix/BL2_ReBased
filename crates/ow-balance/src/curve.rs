@@ -92,6 +92,13 @@ pub fn experience_span(
 
 /// `int64_t(std::trunc(x))` for an `x` that has an answer: toward zero; NaN and anything outside the `i64` range are
 /// refused, not saturated.
+///
+/// Why a local form (N5): `ow_core::num` has no float-to-`i64` conversion, and its two forms answer a value for every
+/// input (`trunc_i32` gives `i32::MIN` out of range; `trunc_i64_wrap_i32` wraps to 32 bits). The curve's points pass
+/// `i32` near level 500 (60 x n^2.8 reaches 2^31 there), and the C++ has no defined answer outside `i64`, so the
+/// curve needs a form that **refuses** instead. The one `as` below runs only inside the checked range, where it is
+/// exact. A doc follow-up for the hub: move this refusing form into `ow_core::num` (this lane does not edit
+/// `ow-core`).
 fn trunc_i64(x: f32) -> Result<i64, BalanceError> {
     // 2^63 is exact in f32; NaN is in no range.
     if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&x) {
