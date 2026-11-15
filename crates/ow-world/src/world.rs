@@ -19,15 +19,17 @@
 //!    its `TickGroup` changes during the tick, and is skipped if destroyed by then. An actor spawned during a tick
 //!    is first ticked in the next one: the record sets a spawned actor's `bTicked` from the level's tick state
 //!    (spawn step 5), read here that way. UNVERIFIED: that reading, and the order across actors (the record reads
-//!    one actor's tick).
+//!    one actor's tick). The unread alternative is spawn step 11's list of newly spawned actors: in public UE3 that
+//!    list ticks actors spawned during a tick in the same frame (open item, decision 2026-11-15-26).
 //! 3. One actor's tick is the record's authoritative path (NATIVE_ENGINE_CORE.md, "Actor tick order"): script
 //!    `Tick(DeltaTime)`, the state-code step, the timer update pass, `LifeSpan` (destroyed when it falls to 0.0001
 //!    or below, and the tick ends), then physics when `Physics` is not `PHYS_None` and `Role` is not 2 (simulated
 //!    proxy). Physics of an actor with a `Base` is `NotYet`: whether the base is being moved by a rigid-body step is
 //!    the record's condition and this world cannot see it. An actor with `Role` 0 gets only a physics step, and only
 //!    in `PHYS_Falling`, `PHYS_Rotating`, `PHYS_Projectile` or `PHYS_Interpolating`; one whose `RemoteRole` is 2
-//!    takes a variant the record did not read (`NotYet`). Nothing in single player sets `RemoteRole` to none, so a
-//!    class whose defaults carry `RemoteRole` 2 stops the tick there.
+//!    takes a variant the record did not read (`NotYet`). Nothing in this world sets `RemoteRole` to none. The
+//!    record says the single-player game keeps local actors at remote role none, but where it does so was not read.
+//!    Until then, a class whose defaults carry `RemoteRole` 2 stops the tick with this `NotYet`.
 //! 4. The state-code step and the physics step are hooks ([`World::set_state_step`], [`World::set_physics_step`]):
 //!    lane W5-STATES and the host provide them. Without one, an actor in a state, or one with physics to run, is
 //!    `NotYet` naming that layer. The delta every part gets is the clock's dilated delta; an actor's
@@ -241,7 +243,8 @@ impl World {
         // Each actor's group is decided once, here, before anything moves: an actor that changes its TickGroup
         // during the tick keeps this tick's group, and an actor spawned during the tick is not in the plan, so it is
         // first ticked in the next one. The record sets a spawned actor's bTicked from the level's tick state (spawn
-        // step 5); reading that as "waits for the next tick" is UNVERIFIED, as is the order across actors.
+        // step 5); reading that as "waits for the next tick" is UNVERIFIED, as is the order across actors. The unread
+        // alternative is spawn step 11's newly-spawned list, which in public UE3 ticks such actors in the same frame.
         let plan = self.tick_plan()?;
         let step = self.vm.clock.advance(real_dt);
         if let Some(wi) = world_info {
@@ -373,7 +376,7 @@ impl World {
         {
             if object(space, actor, "Base")?.is_some() {
                 return Err(NotYet::not_read(
-                    "the physics condition of an actor with a Base (whether its base is being moved by a                      rigid-body step)",
+                    "the physics condition of an actor with a Base (whether its base is being moved by a rigid-body step)",
                     RECORD,
                 )
                 .into());

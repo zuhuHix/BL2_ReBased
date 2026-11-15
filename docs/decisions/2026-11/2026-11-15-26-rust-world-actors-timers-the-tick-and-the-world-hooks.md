@@ -41,9 +41,10 @@ session in this lane.
   reduced first; the function found by name in the target's state, then class chain (missing: removed silently);
   zeroed parameters; after each callback the pass stops on actor destruction, a cleared entry is removed, a `Count`
   of exactly 0 keeps a non-loop entry; a due non-loop entry is removed afterwards. **Rust-only refusals** (`NotYet {
-  NotRead }`, the record leaves them untraced): a due timer with a negative rate, and a loop due more than `i32::MAX`
-  times in one pass. Both are refused before the pass changes anything (review r1 of PR #325), judged on what step
-  1 would make of each entry whose target is still there; an entry a callback appends meets them at its own check.
+  NotRead }`, the record leaves them untraced): a timer with a negative rate (refused up front, due or not), and a
+  loop due more than `i32::MAX` times in one pass. Both are refused before the pass changes anything (review r1 of
+  PR #325), for each entry whose target is still there (the loop case judged on what step 1 would make of it); an
+  entry a callback appends or re-sets meets them at its own check.
   The entries live in the `Timers` service, not in the heap's `Timers` property: script never reads that array.
   A destroyed actor's entries are dropped by its destroy.
 - **The tick.** `WorldInfo.TimeDilation` is copied into the clock first; a value the clock refuses stops the tick with
@@ -53,13 +54,15 @@ session in this lane.
   advances (review r1): an actor gets at most one tick and keeps that group if its `TickGroup` changes meanwhile,
   and an actor spawned during a tick is first ticked in the next one. The record sets a spawned actor's `bTicked`
   from the level's tick state (spawn step 5); reading that as "waits for the next tick" is UNVERIFIED, as is the
-  order across actors. One actor's tick is the record's authoritative path: `Tick(DeltaTime)`, the state-code step,
+  order across actors. The unread alternative is spawn step 11's list of newly spawned actors: in public UE3 that
+  list ticks actors spawned during a tick in the same frame (open item). One actor's tick is the record's authoritative path: `Tick(DeltaTime)`, the state-code step,
   the timer pass, `LifeSpan` (destroyed at 0.0001 or below, and the tick ends), physics when `Physics` is not
   `PHYS_None` and `Role` is not 2 (simulated proxy). Physics of an actor with a `Base` is `NotYet { NotRead }`:
   whether the base is being moved by a rigid-body step is the record's condition and the world cannot see it, so
   the physics hook is not handed that rule. `Role` 0 gets only a physics step in the four modes the record names;
-  `RemoteRole` 2 is `NotYet { NotRead }`. **Note for W6:** nothing in single player sets `RemoteRole` to none, so a
-  class whose defaults carry `RemoteRole` 2 stops the tick with that `NotYet`. The
+  `RemoteRole` 2 is `NotYet { NotRead }`. **Note for W6:** nothing in this world sets `RemoteRole` to none. The
+  record says the single-player game keeps local actors at remote role none, but where it does so was not read.
+  Until then, a class whose defaults carry `RemoteRole` 2 stops the tick with this `NotYet`. The
   state-code step (W5-STATES) and the physics step (the host) are hooks; without one, an actor that needs it is
   `NotYet { LayerAbsent }`. Physics modes are compared by their enum names, read from the property's enum.
 - **Spawn and destroy**, in the record's order, with these choices:
@@ -68,7 +71,8 @@ session in this lane.
     LayerAbsent }`, checked on the class defaults before anything is made: the placement spot search and, after play
     began, the encroachment check or relocation of an actor with `bCollideActors` and the base search (which
     review r1 found ran only after the events; now checked first too). An actor that does not collide with actors is
-    taken to pass the encroachment check (UNVERIFIED: its internals are not read). The begin-play events can change
+    taken to pass the encroachment check (UNVERIFIED: its internals are not read). The pre-checks are conservative:
+    they refuse with `NotYet` even when the begin-play events would have made the check unnecessary. The begin-play events can change
     those fields, so `bCollideActors` is checked again after `PreBeginPlay` and the base search after
     `SetInitialState`; a `NotYet` from those post-event checks leaves the actor made, listed and past its events, and
     the run is meant to stop there. Before play begins no begin-play event, encroachment check or base search runs
@@ -115,6 +119,10 @@ session in this lane.
   - The probe mask, `EndState` on destroy and the state-code step: W5-STATES. Kismet destroyed events: W5-KISMET.
     Collision, physics and the unbase and untouch routines: the host track.
   - Where the world's `TimeDilation` and an actor's `CustomTimeDilation` enter the tick delta (NATIVE_ENGINE_CORE.md,
-    Open); the order across actors and for actors spawned during a group.
+    Open); the order across actors.
+  - Actors spawned during a tick: this world first ticks them in the next tick (the `bTicked` reading above). Spawn
+    step 11's newly-spawned list is the unread alternative; in public UE3 it ticks them in the same frame. Read
+    which one the game does.
+  - Where the game sets a local actor's `RemoteRole` to none (above).
 - **UNVERIFIED.** Every rule above, as read from the executable by the record, none checked in the running game; the
   delta every timer and tick gets in particular.

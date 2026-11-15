@@ -517,7 +517,8 @@ fn collision(what: &'static str) -> VmError {
 ///    began, the encroachment check or relocation of an actor that collides with actors (`bCollideActors`), and the
 ///    base search of step 4. A template other than the class default object is `NotYet` too (how its instanced
 ///    subobjects are copied is not read). An actor that does not collide with actors is taken to pass the
-///    encroachment check (UNVERIFIED: the check's internals are not read).
+///    encroachment check (UNVERIFIED: the check's internals are not read). The pre-checks are conservative: they
+///    refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
 /// 3. The actor is made from the class defaults and appended to the level list; `CreationTime` = the world's
 ///    `TimeSeconds`, `WorldInfo`, `Location` and `Rotation` (the spawner's when omitted), the owner through
 ///    [`set_owner`] (`GainedChild`), then `Instigator` = **the spawner's** `Instigator`.
@@ -531,10 +532,12 @@ fn collision(what: &'static str) -> VmError {
 /// past the events that ran; the run is meant to stop there, as at any `NotYet`.
 ///
 /// `bTicked` (step 5, set from the level's tick state) is not written; its effect is the tick's rule that an actor
-/// spawned during a tick is first ticked in the next one ([`crate::world::World::tick`], UNVERIFIED).
+/// spawned during a tick is first ticked in the next one ([`crate::world::World::tick`], UNVERIFIED). The unread
+/// alternative is step 11's list of newly spawned actors, which in public UE3 ticks them in the same frame.
 ///
-/// Not modelled, each a step the record leaves unread or a layer this world lacks: `PhysicsVolume`, the physics-body and state-frame set-up of step
-/// 6, the zone and tick-group changes after `PreBeginPlay`, the per-component call of step 8.
+/// Not modelled, each a step the record leaves unread or a layer this world lacks: `PhysicsVolume`, the
+/// physics-body and state-frame set-up of step 6, the zone and tick-group changes after `PreBeginPlay`, the
+/// per-component call of step 8.
 ///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
