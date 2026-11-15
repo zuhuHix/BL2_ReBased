@@ -14,6 +14,8 @@ use std::path::Path;
 use ow_core::DetMap;
 
 use crate::props::{ArrayScope, ArrayTyper, ElementType};
+#[cfg(test)]
+use crate::props::StreamRoot;
 
 /// Why a schema could not be loaded. `Display` gives the C++ text where the C++ loader has the case.
 #[non_exhaustive]
@@ -126,7 +128,8 @@ impl ArrayTyper for SchemaTyper {
 mod tests {
     use super::*;
 
-    const SCOPE: ArrayScope<'static> = ArrayScope { owner: "Any", owner_ref: None, path: &[] };
+    const ROOT: &StreamRoot = &StreamRoot { owner: String::new(), owner_ref: None };
+    const SCOPE: ArrayScope<'static> = ArrayScope { owner: "Any", owner_ref: None, path: &[], root: ROOT };
 
     #[test]
     fn text_mode_stops_at_ctrl_z() {

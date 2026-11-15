@@ -131,11 +131,20 @@ pub struct ArrayScope<'a> {
     /// The names of the enclosing struct and array properties from the stream's root, outermost first (empty for
     /// the stream's own tags; `Rows`, `Inner` for an array in struct `Inner` in an element of array `Rows`).
     pub path: &'a [String],
+    /// The walk's root (the export's class from [`StreamRoot::for_export`], or the caller's root given to
+    /// [`read_tagged_in`]): the same for every array of one walk, so with `path` it tells apart same-named structs
+    /// of different owners (`A.State` and `B.State` both seen as owner `State` inside a struct).
+    pub root: &'a StreamRoot,
 }
 
 impl<'a> ArrayScope<'a> {
-    pub fn new(owner: &'a str, owner_ref: Option<i32>, path: &'a [String]) -> Self {
-        ArrayScope { owner, owner_ref, path }
+    pub fn new(owner: &'a str, owner_ref: Option<i32>, path: &'a [String], root: &'a StreamRoot) -> Self {
+        ArrayScope {
+            owner,
+            owner_ref,
+            path,
+            root,
+        }
     }
 }
 
@@ -178,6 +187,9 @@ pub enum PropValue {
     /// A struct. A tagged struct holds its tag stream, each entry with its [`Tag`] (whose offsets count from this
     /// struct's start); a fixed-layout struct (Vector, Rotator, Box, ...) holds its fields in serialized order, each
     /// entry with `tag: None`. `start` is where the struct's bytes begin, from the export's payload start.
+    ///
+    /// `==` on a `PropValue` compares `start` too, so the same struct value at two places is not equal: a consumer
+    /// comparing values compares `ty` and `fields`.
     Struct { ty: String, fields: Vec<PropEntry>, start: usize },
     /// The elements of an array whose element type was given.
     Array(Vec<PropValue>),
@@ -398,6 +410,7 @@ pub fn read_tagged_in(
         typer,
         payload: base,
         path: Vec::new(),
+        root,
     };
     let entries = walk.tags(&mut r, base, 0, &root.owner, root.owner_ref)?;
     Ok(TaggedProps {
@@ -441,6 +454,8 @@ struct Walk<'p> {
     payload: usize,
     /// The enclosing struct and array property names, outermost first.
     path: Vec<String>,
+    /// The walk's root, passed to the typer with every array.
+    root: &'p StreamRoot,
 }
 
 impl Walk<'_> {
@@ -592,7 +607,8 @@ impl Walk<'_> {
                     if !(0..=MAX_ARRAY_COUNT).contains(&count) {
                         return Err(PropError::InvalidArrayCount);
                     }
-                    let element = self.typer.element(&ArrayScope::new(owner, owner_ref, &self.path), &name);
+                    let element = self.typer
+                        .element(&ArrayScope::new(owner, owner_ref, &self.path, self.root), &name);
                     let value = match &element {
                         None if count != 0 => {
                             let rest = end - r.pos();
@@ -864,13 +880,13 @@ mod tests {
 
     #[test]
     fn the_scope_reaches_the_typer() {
-        type Seen = Vec<(String, Option<i32>, Vec<String>, String)>;
+        type Seen = Vec<(String, Option<i32>, Vec<String>, String, StreamRoot)>;
         struct Record(std::cell::RefCell<Seen>);
         impl ArrayTyper for Record {
             fn element(&self, scope: &ArrayScope<'_>, property: &str) -> Option<ElementType> {
                 self.0
                     .borrow_mut()
-                    .push((scope.owner.into(), scope.owner_ref, scope.path.to_vec(), property.into()));
+                    .push((scope.owner.into(), scope.owner_ref, scope.path.to_vec(), property.into(), scope.root.clone()));
                 (property == "Rows").then(|| ElementType::Struct("Row".into()))
             }
         }
@@ -887,18 +903,26 @@ mod tests {
         let record = Record(Default::default());
         walk(&p, 4, &record).unwrap();
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // Every array of one walk, nested ones included, sees the export's root.
+        let export = StreamRoot::new("Root", Some(-1));
         let expected: Seen = vec![
-            ("Root".into(), Some(-1), vec![], "Outer".into()),
-            ("MyStruct".into(), None, s(&["Test"]), "Inner".into()),
-            ("Root".into(), Some(-1), vec![], "Rows".into()),
-            ("Row".into(), None, s(&["Rows"]), "Deep".into()),
-            ("Row".into(), None, s(&["Rows"]), "Deep".into()),
+            ("Root".into(), Some(-1), vec![], "Outer".into(), export.clone()),
+            ("MyStruct".into(), None, s(&["Test"]), "Inner".into(), export.clone()),
+            ("Root".into(), Some(-1), vec![], "Rows".into(), export.clone()),
+            ("Row".into(), None, s(&["Rows"]), "Deep".into(), export.clone()),
+            ("Row".into(), None, s(&["Rows"]), "Deep".into(), export.clone()),
         ];
         assert_eq!(record.0.into_inner(), expected);
-        // A caller-given root replaces the export's.
+        // A caller-given root (a struct's defaults, say) replaces the export's, for the nested arrays too: the same
+        // nested scope under another root is told apart by `root`.
         let record = Record(Default::default());
-        read_tagged_in(&p, 1, 4, &StreamRoot::new("Owner", Some(7)), &record).unwrap();
-        assert_eq!(record.0.borrow()[0], ("Owner".into(), Some(7), vec![], "Outer".into()));
+        let given = StreamRoot::new("Owner", Some(7));
+        read_tagged_in(&p, 1, 4, &given, &record).unwrap();
+        let seen = record.0.into_inner();
+        assert_eq!(seen[0], ("Owner".into(), Some(7), vec![], "Outer".into(), given.clone()));
+        assert_eq!(seen[1], ("MyStruct".into(), None, s(&["Test"]), "Inner".into(), given.clone()));
+        assert_eq!(seen[3].4, given);
+        assert_ne!(seen[1], expected[1]);
         assert_eq!(StreamRoot::for_export(&p, 1), Ok(StreamRoot::new("Root", Some(-1))));
     }
 

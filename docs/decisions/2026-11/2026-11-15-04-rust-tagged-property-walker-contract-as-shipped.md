@@ -17,7 +17,8 @@ where the shipped interface differs from revision 3 of `docs/rust-port/ARCHITECT
   fields (Vector, Box, ...) have no tag and hold `None`.
 - **`PropValue::Struct` records `start`,** where the struct's bytes begin from the export's payload start, so a
   consumer can place a nested value: `Tag.offset` inside a struct counts from that struct's start (as the C++ prints
-  it). The CLI output does not print it and does not change.
+  it). The CLI output does not print it and does not change. `==` on a `PropValue` compares `start` too, so the
+  same struct value at two places is not equal; a consumer comparing values compares `ty` and `fields`.
 - **`ElementType` is an enum of the six scalar element kinds, `Struct(name)` and `Other(text)`.** `Other` is a
   schema value with no decoder in this walker yet: the C++ loader accepts it, an empty array of it decodes, an
   element of it fails with "unsupported array schema type". `ElementType::parse` and `spec` round-trip every text,
@@ -29,10 +30,16 @@ where the shipped interface differs from revision 3 of `docs/rust-port/ARCHITECT
   with an `Items` field look the same). `ArrayScope` (`#[non_exhaustive]`, filled by the walker) holds the owner text
   (the export's class object name, `Class` for class reference 0, or the struct name inside a struct), the
   package-relative reference of the owning class or struct where the walker knows it (the root's, so the export's
-  class at the top level; `None` inside a struct, whose tag names it by name only), and the path of enclosing
-  struct and array property names from the stream's root. `read_tagged` takes the root from the export
-  (`StreamRoot::for_export`); `read_tagged_in` takes a caller's `StreamRoot`. `SchemaTyper` ignores the scope, as
-  the C++ `arrayTypes` map is keyed by property name only, so `--array-schema` output is unchanged.
+  class at the top level; `None` inside a struct, whose tag names it by name only), the path of enclosing struct
+  and array property names from the stream's root, and the walk's root itself (`root: &StreamRoot`, the same for
+  every array of one walk). `read_tagged` takes the root from the export (`StreamRoot::for_export`);
+  `read_tagged_in` takes a caller's `StreamRoot` (a struct's defaults, say). The root is what separates the two
+  `State` structs: inside a struct the owner text, reference and path can be the same for export X of class A
+  (property `S` of struct `A.State`) and export Y of class B (`S` of a different `B.State`), and one typer serves
+  every export of a `--properties-batch` run; with the root (class A or class B) and the path (`S`), a reflection
+  typer finds the declaration. Review r2 of PR #297 added the root: r1's scope alone did not separate them.
+  `SchemaTyper` ignores the scope, as the C++ `arrayTypes` map is keyed by property name only, so `--array-schema`
+  output is unchanged.
 - **`#[non_exhaustive]`** on `PropValue`, `ElementType`, `PropEntry`, `Tag`, `ArrayTag`, `TaggedProps`,
   `ArrayScope`, `StreamRoot` and the error enums (architecture section 1, types that may grow), with `new`
   constructors for the structs.
