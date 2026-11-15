@@ -22,7 +22,9 @@
 //!
 //! The clock's dilation is a copy: the authoritative value is the heap's `WorldInfo.TimeDilation`, which script,
 //! Kismet, the console and mods can write. The world (W5-WORLD) copies it into the clock with
-//! [`SimClock::set_time_dilation`] before each tick, so there is one source of truth.
+//! [`SimClock::set_time_dilation`] before each tick. When that call refuses a value (`Err`), the clock keeps its
+//! last good dilation while the heap holds the refused one, so the two differ; what W5-WORLD does then (log it, or
+//! return `NotYet`) is that lane's decision.
 
 /// The default simulation step, 1/60 s (decision D13). Callers pass it to [`SimClock::advance`]; a golden replay
 /// passes its recorded deltas instead.
@@ -175,7 +177,9 @@ impl std::error::Error for ClockError {}
 /// `ow-package Core.upk --payload 119` gives its bytes, read with the enum layout the C++ reader already uses
 /// (`src/vm.cpp:739`: net index, `None`, next, count, then one name per value, a value's number being its
 /// position). The count is 6 and the names in position order are TG_PreAsyncWork (0), TG_DuringAsyncWork (1),
-/// TG_PostAsyncWork (2), TG_PostUpdateWork (3), TG_EffectsUpdateWork (4), TG_MAX (5). (`--object-dump` refuses an
+/// TG_PostAsyncWork (2), TG_PostUpdateWork (3), TG_EffectsUpdateWork (4), TG_MAX (5). The export is 68 bytes =
+/// 20 + 6 x 8, so the name list ends exactly at the export's end (the structural check of
+/// `docs/verification/PHASELOCK_STOCK_DATA.md`, "Enums"). (`--object-dump` refuses an
 /// enum export and `--disasm` needs a function, so neither could show it.) That a frame runs the groups in value
 /// order, and what each group contains, was not read from the executable: UNVERIFIED.
 #[non_exhaustive]

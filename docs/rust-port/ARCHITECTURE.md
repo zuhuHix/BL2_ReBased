@@ -332,11 +332,13 @@ pub fn frand_f32(r: &mut dyn Rand15) -> f32;       // the same in single; each r
 // so they live on the actor in ow-world (W5-WORLD), not in a generic queue here.
 pub struct SimClock { .. }                         // tick counter u64, time f64, TimeSeconds f32 accumulated as UE3 does
 impl SimClock {
-    pub fn advance(&mut self, real_dt: f32) -> Step;   // Step { dt: f32, tick: u64 }; where CustomTimeDilation and the world's
+    pub fn advance(&mut self, real_dt: f32) -> Step;   // Step { dt, real_dt, tick } (#[non_exhaustive]); where CustomTimeDilation and the world's
                                                        // TimeDilation enter the actor's delta is not located in the record
                                                        // (NATIVE_ENGINE_CORE.md, Open): the dilated dt is UNVERIFIED
-    pub fn time_seconds(&self) -> f32;  pub fn set_time_dilation(&mut self, d: f32);
+    pub fn time_seconds(&self) -> f32;
+    pub fn set_time_dilation(&mut self, d: f32) -> Result<(), ClockError>;   // negative/NaN/inf refused, old value kept
 }
+pub enum ClockError { BadTimeDilation(f32) }   // #[non_exhaustive]
 pub enum TickGroup { PreAsyncWork, DuringAsyncWork, PostAsyncWork, PostUpdateWork, EffectsUpdateWork }  // Core.upk Object.ETickingGroup values 0-4 (TG_MAX = 5)
 ```
 
