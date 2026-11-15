@@ -40,6 +40,21 @@ use crate::args::{Command, USAGE};
 use crate::cmd::properties::{error_text, unsigned_number};
 use crate::json::quote;
 
+/// Why a command stopped.
+#[derive(Debug)]
+enum Failure {
+    /// The C++ error text, printed after `ow-package: ` (exit code 1).
+    Error(String),
+    /// A `NotYet` of the Rust port (exit code 3, architecture section 4).
+    NotYet(String),
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Failure::Error(message)
+    }
+}
+
 pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     let result = match command.flag {
         "--native-selftest" => self_test(args),
@@ -48,7 +63,7 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
             _ => census(args, mode),
         })
         // A panic on the VM thread is reported, not re-raised: "the VM thread panicked".
-        .unwrap_or_else(|e| Err(e.to_string())),
+        .unwrap_or_else(|e| Err(Failure::Error(e.to_string()))),
     };
     match result {
         Ok(stdout) => {
@@ -56,9 +71,17 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
             let _ = std::io::stdout().lock().write_all(stdout.as_bytes());
             ExitCode::SUCCESS
         }
-        Err(message) => {
+        Err(Failure::Error(message)) => {
             let _ = writeln!(std::io::stderr().lock(), "ow-package: {message}");
             ExitCode::from(1)
+        }
+        Err(Failure::NotYet(message)) => {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "ow-package (Rust): {}: {message}",
+                command.flag
+            );
+            ExitCode::from(super::NOT_PORTED)
         }
     }
 }
@@ -94,9 +117,9 @@ fn open_vm(cooked: &Path, mode: ParityMode) -> Result<Vm, String> {
 // ------------------------------------------------------------------------------------------- --native-selftest
 
 /// `--native-selftest` (`args[0]` is the flag): no other argument.
-fn self_test(args: &[String]) -> Result<String, String> {
+fn self_test(args: &[String]) -> Result<String, Failure> {
     if args.len() != 1 {
-        return Err(usage());
+        return Err(usage().into());
     }
     let summary = ow_vm::census::native_self_test()?;
     Ok(format!(
@@ -107,7 +130,7 @@ fn self_test(args: &[String]) -> Result<String, String> {
 
 // ------------------------------------------------------------------------------------------------ --vm-sweep
 
-fn sweep(args: &[String], mode: ParityMode) -> Result<String, String> {
+fn sweep(args: &[String], mode: ParityMode) -> Result<String, Failure> {
     Package::load(Path::new(&args[0])).map_err(|e| error_text(&e))?;
     let mut options = SweepOptions::default();
     let mut cooked = PathBuf::new();
@@ -121,12 +144,12 @@ fn sweep(args: &[String], mode: ParityMode) -> Result<String, String> {
                 options.step_limit = unsigned_number(&next_value(args, &mut i, "--steps")?)? as u64
             }
             "--top" => options.top = unsigned_number(&next_value(args, &mut i, "--top")?)?,
-            _ => return Err(usage()),
+            _ => return Err(usage().into()),
         }
         i += 1;
     }
     if cooked.as_os_str().is_empty() {
-        return Err(usage());
+        return Err(usage().into());
     }
     let mut vm = open_vm(&cooked, mode)?;
     let source = vm
@@ -204,10 +227,10 @@ fn sweep_json(r: &SweepReport) -> String {
 
 // --------------------------------------------------------------------------------------------- --native-census
 
-fn census(args: &[String], mode: ParityMode) -> Result<String, String> {
+fn census(args: &[String], mode: ParityMode) -> Result<String, Failure> {
     Package::load(Path::new(&args[0])).map_err(|e| error_text(&e))?;
     if args.len() < 5 {
-        return Err(usage());
+        return Err(usage().into());
     }
     let mut options = CensusOptions::default();
     let mut cooked = PathBuf::new();
@@ -219,17 +242,21 @@ fn census(args: &[String], mode: ParityMode) -> Result<String, String> {
                 options.step_limit = unsigned_number(&next_value(args, &mut i, "--steps")?)? as u64
             }
             "--no-static" => options.static_closure = false,
-            _ => return Err(usage()),
+            _ => return Err(usage().into()),
         }
         i += 1;
     }
     if cooked.as_os_str().is_empty() {
-        return Err(usage());
+        return Err(usage().into());
     }
     let bytes = std::fs::read(&args[2]).map_err(|_| "cannot open entry file".to_string())?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let mut vm = open_vm(&cooked, mode)?;
-    let report = ow_vm::census::native_census(&mut vm, &text, &options)?;
+    let report =
+        ow_vm::census::native_census(&mut vm, &text, &options).map_err(|e| match e.not_yet() {
+            Some(n) => Failure::NotYet(n.to_string()),
+            None => Failure::Error(error_text(&e)),
+        })?;
     Ok(census_json(&report))
 }
 
@@ -394,10 +421,44 @@ mod tests {
             self_test(&strings(&["--native-selftest"])).unwrap(),
             "{\"registered\":1,\"unimplemented\":1,\"duplicate_rejected\":true,\"passed\":true}\n"
         );
-        assert_eq!(
-            self_test(&strings(&["--native-selftest", "extra"])).unwrap_err(),
-            USAGE
+        assert!(matches!(
+            self_test(&strings(&["--native-selftest", "extra"])),
+            Err(Failure::Error(m)) if m == USAGE
+        ));
+    }
+
+    #[test]
+    fn a_not_yet_census_line_is_the_not_ported_failure() {
+        // An invented package (AGENTS.md rule 9): `Core.Object` only.
+        let mut t = ow_package::testkit::script::ScriptToy::new(&["Int"]);
+        t.class("Object", 0);
+        let dir = std::env::temp_dir().join(format!("ow-cli-census-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let package = dir.join("Core.upk");
+        std::fs::write(&package, t.build()).unwrap();
+        let (p, d) = (package.display().to_string(), dir.display().to_string());
+        let run = |entries: &str| {
+            let file = dir.join("entries.txt");
+            std::fs::write(&file, entries).unwrap();
+            let f = file.display().to_string();
+            census(
+                &strings(&[&p, "--native-census", &f, "--cooked", &d]),
+                ParityMode::Off,
+            )
+        };
+        let not_yet = run("export e Core Object\n");
+        assert!(
+            matches!(&not_yet, Err(Failure::NotYet(m)) if m.contains("census line export Core Object")),
+            "{:?}",
+            not_yet.as_ref().err().map(|_| ())
         );
+        let missing = run("export e Core Nope\n");
+        assert!(matches!(
+            &missing,
+            Err(Failure::Error(m)) if m == "entry file line 1: export not found: Core Nope"
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
