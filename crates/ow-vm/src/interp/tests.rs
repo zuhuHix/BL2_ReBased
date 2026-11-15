@@ -2,15 +2,15 @@
 //! `ow_package::testkit::script` and loaded through `DefStore::from_synthetic`.
 //!
 //! The cases re-express the `tests/vm_test.py` cases that use only this lane's features (its `make()` fixture, the
-//! `--run` assertions, the hidden temporaries, the 0x5F None context, the census counters of `SumTo` and `NoneCtx`),
+//! `--run` assertions, the hidden temporaries, the 0x5F attribute block, the census counters of `SumTo` and `NoneCtx`),
 //! plus the GotoState wiring over package-loaded states (the `tests/vm_states_test.py` scenario `GoA`), and the error
 //! and edge paths the C++ code has. `tests/runtime_test.py` runs only `--resolve`, `--scene-records` and `--payload`,
 //! so none of its cases is this lane's.
 //!
 //! Until the W3-DEFS body lands, `DefStore::class_default` answers `NotYet`, so every call here passes its object:
 //! one made with `Vm::instantiate` (zero slots, no class default object). The cases that need a class default object
-//! (a call with no object, `Class.static`, `New`) assert that `NotYet`. Until W3-ATTREFFECTS lands,
-//! `ow_attr::registry::let_base` is a stub, so a 0x5F that reaches it asserts its `NotYet`.
+//! (a call with no object, `Class.static`, `New`) assert that `NotYet`. The 0x5F let runs through W3-ATTREFFECTS'
+//! `ow_attr::registry::let_base` with `vm_test.py`'s expected values.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -136,6 +136,7 @@ fn fixture() -> Fixture {
         "ClassProperty",
         "ArrayProperty",
         "FloatAttributeProperty",
+        "IntAttributeProperty",
     ]);
     let class_import = t.import("Class");
     let object = t.class("Object", 0);
@@ -616,6 +617,91 @@ fn fixture() -> Fixture {
             })
         },
     );
+    // The rest of vm_test.py's attribute functions: the base read, a 5F through Context(Self), an int attribute Cap
+    // with its own stack and base, and two right sides of other kinds (an int, which the assignment rule converts to
+    // the float base, and a string, which it does not).
+    let let_speed = |t: &mut ScriptToy, name: &str, kind: &str| {
+        script(t, foo, name, &[param(kind, "V", 0)], None, &[], |ids, a| {
+            a.stmt()
+                .raw(&[0x5F, 0x5E])
+                .reference(speed)
+                .local(ids.get("V"));
+            a.stmt().return_nothing();
+            a.end();
+        });
+    };
+    let_speed(&mut t, "SetSpeedInt", "Int");
+    let_speed(&mut t, "SetSpeedStr", "Str");
+    script(
+        &mut t,
+        foo,
+        "SetSpeedSelf",
+        &[param("Float", "V", 0)],
+        None,
+        &[],
+        |ids, a| {
+            a.stmt()
+                .raw(&[0x5F, 0x19, 0x17])
+                .w(0)
+                .reference(0)
+                .raw(&[0, 0x5E])
+                .reference(speed)
+                .local(ids.get("V"));
+            a.stmt().return_nothing();
+            a.end();
+        },
+    );
+    let first = t.p.next_export();
+    let (cap_stack, cap_base, cap) = (first + 1, first + 2, first + 3);
+    t.prop(
+        "Object",
+        cap_stack,
+        "CapModifierStack_Element",
+        0,
+        mod_class,
+    );
+    t.prop("Array", foo, "CapModifierStack", 0, first);
+    t.prop_tail(
+        "IntAttribute",
+        foo,
+        "CapBaseValue",
+        PLAIN_ATTRIBUTE,
+        &ints(&[0, cap]),
+    );
+    t.prop_tail(
+        "IntAttribute",
+        foo,
+        "Cap",
+        STACK_ATTRIBUTE,
+        &ints(&[cap_stack, cap_base]),
+    );
+    script(
+        &mut t,
+        foo,
+        "SetCap",
+        &[param("Int", "V", 0)],
+        None,
+        &[],
+        |ids, a| {
+            a.stmt()
+                .raw(&[0x5F, 0x5E])
+                .reference(cap)
+                .local(ids.get("V"));
+            a.stmt().return_nothing();
+            a.end();
+        },
+    );
+    for (name, kind, op, reference) in [
+        ("ReadSpeedBase", "Float", 0x01, base),
+        ("ReadCap", "Int", 0x5E, cap),
+        ("ReadCapBase", "Int", 0x01, cap_base),
+    ] {
+        script(&mut t, foo, name, &[], Some((kind, 0)), &[], |_, a| {
+            returns(a, |a| {
+                a.raw(&[op]).reference(reference);
+            })
+        });
+    }
     // Recursion (the depth limit) and a loop that never ends (the step limit).
     let rec = t.p.next_export() + 1;
     script(&mut t, foo, "Rec", &[], Some(("Int", 0)), &[], |ids, a| {
@@ -1447,16 +1533,96 @@ fn class_defaults_wait_for_the_definition_store() {
     }
 }
 
+/// Adds a `Core.Mod` modifier (`Type`, `Value`) to `o`'s stack property `stack`, as `vm_test.py`'s `AddSpeedMod` /
+/// `AddCapMod` do through `New` and `AddItem` (W4-INTERP2's); adding one recomputes nothing.
+fn add_modifier(r: &mut Run, o: ObjRef, stack: &str, kind: u8, amount: f32) {
+    let mod_class = r.vm.find_class("Core.Mod").unwrap();
+    let m = r.vm.instantiate(mod_class, "").unwrap();
+    let ty = r.vm.space.prop(mod_class, "Type").unwrap();
+    let value = r.vm.space.prop(mod_class, "Value").unwrap();
+    r.vm.space
+        .write(m, PropAddr::scalar(ty), Value::Byte(kind))
+        .unwrap();
+    r.vm.space
+        .write(m, PropAddr::scalar(value), Value::Float(amount))
+        .unwrap();
+    let foo = r.vm.find_class("Core.Foo").unwrap();
+    let at = PropAddr::scalar(r.vm.space.prop(foo, stack).unwrap());
+    let mut items = r.vm.space.read(o, at).unwrap().clone();
+    items.array_mut().unwrap().push(Value::Object(Some(m)));
+    r.vm.space.write(o, at, items).unwrap();
+}
+
+fn read_on(r: &mut Run, o: ObjRef, f: &str) -> Value {
+    r.call(&format!("Core.Foo.{f}"), Some(o), vec![])
+        .unwrap()
+        .ret
+}
+
+fn set_on(r: &mut Run, o: ObjRef, f: &str, v: Value) {
+    r.call(&format!("Core.Foo.{f}"), Some(o), vec![v]).unwrap();
+}
+
 #[test]
 fn let_attribute() {
+    // The attributes block of tests/vm_test.py, with its expected values (the C++ rule interp.cpp:545-595): the 5F
+    // converts the right side by the assignment rule (interp.cpp:511-522), stores it in the base and recomputes the
+    // value from base and stack, value = (base + pre) * ((1 + scale up) / (1 - scale down)) + post, int attributes
+    // truncated toward zero. Modifier Type 0 scale, 1 pre-add, 2 post-add.
     let mut r = start(ParityMode::Off);
     let o = r.object("Core.Foo");
+    let notified = Rc::new(std::cell::Cell::new(0u32));
+    let seen = notified.clone();
+    r.vm.register_attribute_notify(
+        "Core.Foo",
+        Rc::new(move |_, _, _, _| {
+            seen.set(seen.get() + 1);
+            Ok(())
+        }),
+    )
+    .unwrap();
     // 0x5E reads the value property.
-    assert_eq!(
-        r.call("Core.Foo.ReadSpeed", Some(o), vec![]).unwrap().ret,
-        Value::Float(0.0)
-    );
-    // A None context logs and still evaluates the right side.
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(0.0));
+    // Value and base both set by the 5F: no stale base.
+    set_on(&mut r, o, "SetSpeed", Value::Float(10.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(10.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeedBase"), Value::Float(10.0));
+    // Adding modifiers recomputes nothing; only a later 5F does: (20 + 5) * 1.5 + 3. The stack never touches the base.
+    for (kind, amount) in [(1, 5.0), (0, 0.5), (2, 3.0)] {
+        add_modifier(&mut r, o, "SpeedModifierStack", kind, amount);
+    }
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(10.0));
+    set_on(&mut r, o, "SetSpeed", Value::Float(20.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(40.5));
+    assert_eq!(read_on(&mut r, o, "ReadSpeedBase"), Value::Float(20.0));
+    // Scale -1 joins the denominator: (2 + 5) * (1.5 / 2) + 3, through Context(Self).
+    add_modifier(&mut r, o, "SpeedModifierStack", 0, -1.0);
+    set_on(&mut r, o, "SetSpeedSelf", Value::Float(2.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(8.25));
+    assert_eq!(read_on(&mut r, o, "ReadSpeedBase"), Value::Float(2.0));
+    // An int right side is converted to the float base first (the assignment rule): (7 + 5) * (1.5 / 2) + 3.
+    set_on(&mut r, o, "SetSpeedInt", Value::Int(7));
+    assert_eq!(read_on(&mut r, o, "ReadSpeedBase"), Value::Float(7.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(12.0));
+    // Int attributes truncate toward zero: 10 * 1.25 + 0.9 = 13.4 -> 13; -12.5 + 0.9 = -11.6 -> -11, not -12.
+    add_modifier(&mut r, o, "CapModifierStack", 0, 0.25);
+    add_modifier(&mut r, o, "CapModifierStack", 2, 0.9);
+    set_on(&mut r, o, "SetCap", Value::Int(10));
+    assert_eq!(read_on(&mut r, o, "ReadCap"), Value::Int(13));
+    assert_eq!(read_on(&mut r, o, "ReadCapBase"), Value::Int(10));
+    set_on(&mut r, o, "SetCap", Value::Int(-10));
+    assert_eq!(read_on(&mut r, o, "ReadCap"), Value::Int(-11));
+    assert_eq!(read_on(&mut r, o, "ReadCapBase"), Value::Int(-10));
+    // No change notification runs on a 5F (interp.cpp:566-569).
+    assert_eq!(notified.get(), 0);
+    // A right side the assignment rule leaves in another kind is refused by let_base and nothing is written. The C++
+    // stores the string in the base silently; the refusal is ow-attr's (registry::let_base).
+    let refused = r.call("Core.Foo.SetSpeedStr", Some(o), vec![Value::string("x")]);
+    assert!(matches!(refused, Err(VmError::Attr(_))), "{refused:?}");
+    assert_eq!(read_on(&mut r, o, "ReadSpeedBase"), Value::Float(7.0));
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(12.0));
+    // A None context logs and still evaluates the right side; nothing changes.
+    r.vm.log.clear();
     r.call(
         "Core.Foo.SetSpeedOn",
         Some(o),
@@ -1464,9 +1630,7 @@ fn let_attribute() {
     )
     .unwrap();
     assert_eq!(r.vm.log, ["Attempt to assign attribute through None"]);
-    // Otherwise the store goes through ow_attr::registry::let_base (a stub until W3-ATTREFFECTS).
-    let n = not_yet(r.call("Core.Foo.SetSpeed", Some(o), vec![Value::Float(10.0)]));
-    assert_eq!(n.missing, Missing::NotPorted);
+    assert_eq!(read_on(&mut r, o, "ReadSpeed"), Value::Float(12.0));
 }
 
 #[test]

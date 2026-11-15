@@ -85,11 +85,15 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     it. A batch `s:`/`t:` value that is not UTF-8 becomes U+FFFD where the C++ keeps the raw bytes. A
     `ComponentProperty` parameter is reported as `ObjectProperty` in the batch's type checks.
 - **Verified (automated, local, pc-hummer; C++ `build/Release/ow-package.exe` of this branch, MSVC 14.50).**
-  - **Unit tests.** 27 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
+  - **Unit tests.** 25 interpreter tests on an invented package, re-expressing the `vm_test.py` cases that use only
     this lane's features (constants, natives and the 32-bit wrap, `SumTo`, `Pick`, virtual dispatch, instance
     variables, optional and out parameters, unbound natives and native indices, the typed temporaries and their errors,
-    `NoneCtx` and the `SumTo` census counters, the 0x5F None context, casts, steps, the step and depth limits, the
-    `GoA` state events under Reference, find and error texts). Also 3 CLI tests and 3 reflection tests.
+    `NoneCtx` and the `SumTo` census counters, casts, steps, the step and depth limits, the `GoA` state events under
+    Reference, find and error texts). The 0x5F let runs `vm_test.py`'s attribute block with its expected values: base
+    and value both set (10, 10), adding modifiers recomputes nothing, then 40.5 for base 20, 8.25 for base 2 through
+    `Context(Self)`, the int attribute truncated toward zero (13 for 10, -11 for -10), an int right side converted to
+    the float base (7, giving 12), no change notification, and the None context logged. A string right side, which the
+    C++ stores silently, is refused by `let_base` with nothing written. Also 3 CLI tests and 3 reflection tests.
     `tests/runtime_test.py` runs no VM command, so none of its cases is this lane's.
   - **`--native`.** `tests/rust_parity.d/vm.txt`: 8 diff lines (the `natives_test.py` command lines among them), 8 pass.
   - **`vm_test.py`'s package, with the two fixture patches above.** 64 `--run`, `--run-batch` and `--native` command
@@ -97,16 +101,17 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
     - As committed, 27 of 64 are identical. The other 37 need a class default object and print
       `DefStore::class_default`'s `NotYet`.
     - With a local `class_default` stand-in (`ow_object::cdo::class_default`, as `--object-dump` uses it; in the
-      working tree only, never committed), 59 of 64 are identical in Off and 59 of 64 under Reference.
-    - The 5 left: `Arr` and `Append` (W4-INTERP2 arrays), `MakePair` (struct defaults), `SetSpeed`
-      (`ow_attr::registry::let_base` is W3-ATTREFFECTS's stub) and `Add2 --arg f:1.5` (above). Step counts equal.
+      working tree only, never committed), 60 of 64 are identical in Off and 60 of 64 under Reference (with
+      W3-ATTREFFECTS' `let_base`; before it landed, `SetSpeed` was a fifth difference).
+    - The 4 left: `Arr` and `Append` (W4-INTERP2 arrays), `MakePair` (struct defaults) and `Add2 --arg f:1.5` (above).
+      Step counts equal.
   - **The installed game, the same stand-in, through `--run-batch`.** Every function of `Core.Object` with no self
     class, and every function of `Engine.Actor`, `WillowGame.WillowPawn` and `WillowGame.WillowPlayerController` with
     the class as self: 2,747 cases per mode.
-    - Under Reference: 326/326, 309/312, 494/513 and 1,465/1,596 identical.
+    - Under Reference: 326/326, 309/312, 498/513 and 1,465/1,596 identical.
     - Every difference is a case the C++ ran and the Rust port stops with `NotYet` for another lane's feature:
-      `foreach`, aggregates, delegates and interfaces (W4-INTERP2), `let_base` (W3-ATTREFFECTS), `QueryInterface`
-      (W4-INTERP2).
+      `foreach`, aggregates, delegates, interfaces and `QueryInterface` (W4-INTERP2). With W3-ATTREFFECTS'
+      `let_base` no 0x5F case differs any more.
     - Off adds only the Off rows above.
   - **Reflection after the addition.** `tools/verify_packages.py` on both readers: 9 packages, 3,339/3,339 class bodies
     exact. The Rust `--interface-compare --layouts`: 3,339 classes defined, 0 failed, 257 linked attributes.
@@ -114,7 +119,6 @@ interface, the rules ported, where the Rust output differs from the C++ and why,
   - The W3-DEFS body: `class_default` (and `resolve_ref` / `load` for object constants and unloaded handles), then
     rerun the comparisons above without the stand-in.
   - A definition-store call that loads a struct's defaults, for frame zero values (W3-DEFS).
-  - `let_base` (W3-ATTREFFECTS).
   - The `vm_test.py` fixture (hub).
   - Typed error sources on `VmError` for reflection and bytecode decoding, in place of the C++-text `Script`
     strings this lane uses for them (W2-VMAPI's contract). Definition store errors already travel as W3-DEFS's
