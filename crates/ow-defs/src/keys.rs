@@ -10,7 +10,7 @@ use ow_object::ids::PropId;
 
 /// The cache of typed keys: (folded class path, folded property name) -> key.
 #[derive(Debug, Default)]
-#[allow(dead_code)] // Contract commit: the body (W3-DEFS) fills and reads it.
+
 pub(crate) struct KeyCache {
     pub(crate) keys: DetMap<(String, String), PropId>,
 }

@@ -23,10 +23,11 @@
 //! A path matches a file as the store matches it: ASCII case folded, a leading `<file stem>.` dropped
 //! (`Package::find_export`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use ow_core::PackageName;
+use ow_core::{FixedHashMap, PackageName};
 use ow_package::PackageId;
+use ow_package::package::{Package, PackageError};
 
 use crate::store::DefError;
 
@@ -110,6 +111,23 @@ impl FileFailure {
     }
 }
 
+/// Exactly what the reader's `ow-package <file> --exports` prints after `ow-package: ` for the same failure: the
+/// error's text and each of its causes (`source()`), joined with `: `, with no path and no wrapper (what
+/// `tools/item_registry.py` keeps as a scan error). `error`'s own `Display` is only the first part where the cause is
+/// separate: a container failure prints `cannot decode the package container` there and keeps the container's text in
+/// `source()`, so a chained reporter prints it once.
+impl std::fmt::Display for FileFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.error)?;
+        let mut cause = std::error::Error::source(&self.error);
+        while let Some(c) = cause {
+            write!(f, ": {c}")?;
+            cause = c.source();
+        }
+        Ok(())
+    }
+}
+
 /// Every holder of one object path, in scan order, and the candidate files that failed to load or search
 /// (`DefStore::owners`).
 #[non_exhaustive]
@@ -150,6 +168,115 @@ pub struct CensusEntry {
 impl CensusEntry {
     pub fn new(path: String, holders: Vec<Owner>) -> Self {
         CensusEntry { path, holders }
+    }
+}
+
+//// One file's export paths for holder lookups that keep no package loaded: each export's path in the file, ASCII
+/// folded, to the first export with that path, and the folded stem. `find` answers as `Package::find_export` does
+/// (folded, a leading `<stem>.` dropped). A file one of whose exports has no path (a broken outer chain) is refused
+/// whole, as the global fallback treats a file whose search fails: no holder.
+#[derive(Debug)]
+pub(crate) struct FileIndex {
+    stem: String,
+    by_path: FixedHashMap<String, i32>,
+}
+
+impl FileIndex {
+    /// Reads `file` and keeps only its paths; the package is dropped.
+    pub(crate) fn read(file: &Path) -> Result<FileIndex, PackageError> {
+        let package = Package::load(file)?;
+        let mut by_path = FixedHashMap::default();
+        for index in 1..=package.exports.len() as i32 {
+            by_path
+                .entry(package.path_of(index)?.to_ascii_lowercase())
+                .or_insert(index);
+        }
+        Ok(FileIndex {
+            stem: package.name.to_ascii_lowercase(),
+            by_path,
+        })
+    }
+
+    pub(crate) fn find(&self, path: &str) -> Option<i32> {
+        let wanted = path.to_ascii_lowercase();
+        let wanted = wanted
+            .strip_prefix(&self.stem)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(&wanted);
+        self.by_path.get(wanted).copied()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------- path helpers
+
+/// The identity key of an object path: ASCII case folded and `:` read as `.`, as `ObjectPath` compares paths.
+pub(crate) fn path_key(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            if c == ':' {
+                '.'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// A class default object or something inside one: a `.`-separated segment starting `Default__` (the tools'
+/// `weapon_catalog.is_class_default`).
+pub(crate) fn is_class_default(path: &str) -> bool {
+    path.split('.')
+        .any(|segment| segment.starts_with("Default__"))
+}
+
+/// The full object path of `reference` in `package`, as the game names the object: an import's path is already
+/// full (its outer chain ends at the package it comes from). An export whose outermost export is a `Package` object
+/// (a package cooked into another file, as `Startup.upk` holds `GD_*` packages) is named by its path in the file; any
+/// other export is named after the file: `<file stem>.<path in the file>`. `Package::find_export` drops that leading
+/// stem again, so either form finds the export in its own file.
+pub(crate) fn full_path(package: &Package, reference: i32) -> Result<String, PackageError> {
+    let path = package.path_of(reference)?;
+    if reference <= 0 {
+        return Ok(path);
+    }
+    // path_of has checked the chain: it ends, and within the bound.
+    let mut cursor = reference;
+    loop {
+        let entry = package.object(cursor)?;
+        if entry.outer == 0 {
+            break;
+        }
+        if entry.outer < 0 {
+            // An export inside an import: the import names the package already.
+            return Ok(path);
+        }
+        cursor = entry.outer;
+    }
+    let outermost = package.object(cursor)?;
+    let is_package = outermost.class != 0 && package.object(outermost.class)?.name == "Package";
+    Ok(if is_package {
+        path
+    } else {
+        format!("{}.{path}", package.name)
+    })
+}
+
+/// An export's class as `ow-package --exports` prints it: the class reference's path in the file, `Class` for 0.
+pub(crate) fn class_text(package: &Package, class: i32) -> Result<String, PackageError> {
+    if class == 0 {
+        Ok("Class".to_string())
+    } else {
+        package.path_of(class)
+    }
+}
+
+/// An export's class as a `Package.Class` path: an imported class's path, `<file stem>.<path>` for a class the file
+/// exports itself, `Core.Class` for 0.
+pub(crate) fn full_class(package: &Package, class: i32) -> Result<String, PackageError> {
+    match class {
+        0 => Ok("Core.Class".to_string()),
+        c if c < 0 => package.path_of(c),
+        c => Ok(format!("{}.{}", package.name, package.path_of(c)?)),
     }
 }
 

@@ -47,7 +47,7 @@ impl Tail {
 
 /// Where each loaded definition's tail lies: the object -> (filed package id, absolute byte range).
 #[derive(Debug, Default)]
-#[allow(dead_code)] // Contract commit: the body (W3-DEFS) fills and reads it.
+
 pub(crate) struct Tails {
     pub(crate) spans: FixedHashMap<ObjRef, (PackageId, Range<usize>)>,
 }

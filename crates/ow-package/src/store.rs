@@ -525,6 +525,31 @@ impl PackageStore {
             .find_map(|position| try_file(&self.indexed[position as usize], global_path))
     }
 
+    /// The files that could hold `global_path`, in scan order: the candidates [`find_global`](Self::find_global) tries,
+    /// from the global index (built on first use, as for the global fallback): the files whose roots include the
+    /// path's first segment and the files whose roots are not known, merged. The first of them whose
+    /// `Package::find_export(global_path)` matches is the global fallback's answer; a file not listed holds no export
+    /// at that path (`docs/verification/PACKAGE_GLOBAL_INDEX.md`). Nothing is loaded into the store and no cache
+    /// changes. Added for W3-DEFS (granted): the definition store's `FirstInScanOrder` lookup and `owners()` use it,
+    /// so there is one global index.
+    pub fn global_candidates(&mut self, global_path: &str) -> Vec<PathBuf> {
+        if self.global_index.is_none() {
+            self.build_global_index();
+        }
+        let Some(index) = self.global_index.as_ref() else {
+            return Vec::new();
+        };
+        let rooted = index
+            .by_root
+            .get(&first_segment(global_path))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        merge(rooted, &index.any_root)
+            .into_iter()
+            .map(|position| self.indexed[position as usize].clone())
+            .collect()
+    }
+
     /// C++ `scanGlobal`: the fallback before the index, every file in order. Only the check oracle runs it.
     fn scan_global(&self, global_path: &str) -> Option<(Arc<Package>, i32)> {
         self.indexed
@@ -884,6 +909,27 @@ mod tests {
         tree.write("Dotted.upk", &package(&[], &[("GDX.Obj", 0)]));
         tree.write("Later.upk", &package(&[], HOLDS));
         assert_eq!(checked(&tree, -2).0.unwrap(), ("Dotted".into(), 1));
+    }
+
+    #[test]
+    fn global_candidates_are_the_fallback_s_files_in_scan_order() {
+        let tree = Tree::new("candidates");
+        tree.write("Source.upk", &package(GDX_OBJ, &[]));
+        tree.write("Zeta.upk", &package(&[], HOLDS));
+        tree.write("Mid.upk", &package(&[], HOLDS));
+        tree.write("Other.upk", &package(&[], &[("Unrelated", 0), ("Obj", 1)]));
+        tree.write("Broken.upk", &[1, 2, 3]);
+        let mut store = tree.store();
+        let names: Vec<String> = store
+            .global_candidates("GDX.Obj")
+            .iter()
+            .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // The files whose roots hold GDX, and the file whose roots are unknown (it does not load), in scan order.
+        assert_eq!(names, ["Broken", "Mid", "Zeta"]);
+        // Nothing was loaded or cached: the fallback still answers as before.
+        assert!(store.loaded.is_empty());
+        assert!(store.global_matches.is_empty());
     }
 
     #[test]
