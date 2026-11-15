@@ -15,7 +15,8 @@ use crate::texture::{
     AssetError, bulk_array_skip, check, class_name, count, read_u16, real, walk_properties,
 };
 
-/// One vertex of a LOD.
+/// One vertex of a LOD. Not kept yet: the TangentX word the reader skips; fields may be added.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshVertex {
     pub position: [f32; 3],
@@ -27,7 +28,9 @@ pub struct MeshVertex {
     pub has_color: bool,
 }
 
-/// A section: a material and a run of triangles.
+/// A section: a material and a run of triangles. Not kept yet: the section's skipped words and fragment list; fields
+/// may be added.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MeshSection {
     /// The material reference (0: none).
@@ -40,7 +43,8 @@ pub struct MeshSection {
     pub max_vertex: u32,
 }
 
-/// One level of detail.
+/// One level of detail. Not kept yet: the extra entries of a doubled colour stream; fields may be added.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshLod {
     pub vertices: Vec<MeshVertex>,
@@ -51,7 +55,8 @@ pub struct MeshLod {
     pub uv_set_count: usize,
 }
 
-/// A static mesh export.
+/// A static mesh export. Not kept yet: the native header and bulk arrays before the LODs; fields may be added.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MeshAsset {
     pub path: String,
