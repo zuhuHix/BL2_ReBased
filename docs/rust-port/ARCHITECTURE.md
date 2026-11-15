@@ -558,7 +558,7 @@ pub struct OpLevel(u8);        // 0..=10 (NATIVE_LOOT cap reading, UNVERIFIED); 
 pub struct PlayerCount(u8);    // 1..=4; single player = 1 (D12)
 pub struct GameStage(pub i32);   // placed by W0, final (W1-ITEMDATA uses it before W1-BALTYPES lands)
 pub struct ExpLevel(i32); pub struct AwesomeLevel(i32);
-pub struct LevelCapUpgrades(u8); // 0, 1, 2 level-cap packs (cap 50 / 61 / 72; the third-playthrough cap rule reads it)
+pub struct LevelCapUpgrades(u8); // set of licensed level-cap packs (bits of LevelCapPack::{First, Second, Third}, increments 11 / 11 / 8 as data for W3-BALANCE); input to the player level cap in every playthrough
 pub struct BalanceSnapshot { pub playthrough: Playthrough, pub op: OpLevel, pub players: PlayerCount,
                              pub player_level: ExpLevel, pub stage: GameStage, pub awesome: AwesomeLevel }
 pub enum BalanceError { NotYet(NotYet), OutOfRange { what: &'static str, value: i64 }, Attr(AttrError) }
@@ -979,8 +979,8 @@ W1-NUM is the lane to start first and review first.
 - Inputs: W0.
 - Not yet: any rule (curve, stage, cap): those are W3-BALANCE.
 - Tests / done when: `Playthrough::from_index(0).count() == 1`; out-of-range indices refused; `OpLevel` refused
-  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` 0..=2 (doc: caps 50,
-  61, 72 as the records give them, UNVERIFIED).
+  above 10 and nonzero outside UVHM (as a typed error, labelled UNVERIFIED); `LevelCapUpgrades` a set of the three level-cap
+  packs (increments 11, 11, 8 in the records), unknown bits refused with a typed error (independent licensing UNVERIFIED).
 
 **W1-ITEMDATA: item identity** · S · game: yes (read the struct declarations with the C++ tool) · Opus 5.5 medium
 - Goal: `ow-items::data` as in 3.7. The field list mirrors `WeaponDefinitionData` and `ItemDefinitionData` as the

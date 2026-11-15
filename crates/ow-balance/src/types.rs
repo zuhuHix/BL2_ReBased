@@ -14,9 +14,10 @@ use ow_core::NotYet;
 /// Why a balance value was refused or is not available.
 ///
 /// The `Attr(AttrError)` variant of architecture section 3.6 is added once `ow-attr` has an error type (W2-ATTRAPI);
-/// the enum is `#[non_exhaustive]`, so that is an additive change.
+/// the enum is `#[non_exhaustive]`, so that is an additive change. It derives `PartialEq` but not `Eq`, so that
+/// variant may carry an error holding an `f32` or a `Value`.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BalanceError {
     /// The rule or branch is not read or not built yet (architecture rule R3).
     NotYet(NotYet),
@@ -25,6 +26,8 @@ pub enum BalanceError {
     /// A nonzero OP level outside the third playthrough (UVHM). Status: UNVERIFIED; the records only read OP levels in
     /// the third playthrough's level-cap branch (NATIVE_LOOT.md, "Level cap").
     OpLevelOutsideUvhm { op: u8, playthrough: Playthrough },
+    /// Bits outside the three known level-cap packs in a [`LevelCapUpgrades`] set.
+    UnknownLevelCapPackBits { bits: u32 },
 }
 
 impl fmt::Display for BalanceError {
@@ -38,6 +41,10 @@ impl fmt::Display for BalanceError {
                 f,
                 "OP level {op} in playthrough index {}: OP levels exist only in UVHM (index 2), UNVERIFIED",
                 playthrough.index()
+            ),
+            BalanceError::UnknownLevelCapPackBits { bits } => write!(
+                f,
+                "level-cap pack bits {bits:#x}: only bits 0x1, 0x2 and 0x4 name a pack"
             ),
         }
     }
@@ -118,6 +125,13 @@ impl Playthrough {
 /// 10". Status: UNVERIFIED (the third-playthrough branch was read at overview level). An OP level is nonzero only in
 /// UVHM; [`OpLevel::in_playthrough`] refuses anything else with [`BalanceError::OpLevelOutsideUvhm`] (also
 /// UNVERIFIED).
+///
+/// This is the **active** overpower level, the one the game is played at now. It is neither the number of OP levels
+/// unlocked nor the last choice stored in the save: the controller holds `NumOverpowerLevelsUnlocked` and the last
+/// overpower choice from the save in any playthrough (NATIVE_SAVE_LOAD.md, `ApplyPlayerSaveGameData` and the save
+/// markers, codes 4 and 5); those belong to the save lane. The 0..=10 bound here is only the type's range: the record's
+/// "capped at 10 (8 plus 2)" means the highest level actually allowed depends on the licensed DLC, a cross-field rule
+/// for W3-BALANCE, not checked here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct OpLevel(u8);
 
@@ -248,41 +262,92 @@ impl AwesomeLevel {
     }
 }
 
-/// How many level-cap upgrade packs are present, 0..=2.
+/// One level-cap DLC pack. The records do not name the packs; they give three level-cap increments in the
+/// executable's data, in this order, with default values 11, 11 and 8 (NATIVE_SAVE_LOAD.md, the `ExpLevel` clamp on
+/// load; NATIVE_LOOT.md, "Level cap": "80 (50 plus 11, 11 and 8)"). The packs are named by that order. The increment
+/// values are data for W3-BALANCE, not part of this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LevelCapPack {
+    /// The first increment in the executable's data (default 11).
+    First,
+    /// The second increment (default 11).
+    Second,
+    /// The third increment (default 8).
+    Third,
+}
+
+impl LevelCapPack {
+    /// The three packs in the records' order.
+    pub const ALL: [LevelCapPack; 3] = [
+        LevelCapPack::First,
+        LevelCapPack::Second,
+        LevelCapPack::Third,
+    ];
+
+    /// This pack's bit in a [`LevelCapUpgrades`] set: 0x1, 0x2, 0x4.
+    pub fn bit(self) -> u8 {
+        match self {
+            LevelCapPack::First => 0x1,
+            LevelCapPack::Second => 0x2,
+            LevelCapPack::Third => 0x4,
+        }
+    }
+}
+
+/// The set of licensed level-cap DLC packs, an input to the player's level cap in **every** playthrough (not only
+/// the third): `WillowPlayerController.GetMaxExpLevel` is 50 plus the increment of each licensed level-cap DLC,
+/// clamped to 50 plus the sum of all increments (NATIVE_PROGRESSION.md, "Level cap"), and the item stage cap of the
+/// third playthrough reads it as well (NATIVE_LOOT.md, "Level cap"; at most 80, `src/weapon_gen.hpp`).
 ///
-/// Caps as the architecture gives them (section 3.6): 0 -> 50, 1 -> 61, 2 -> 72. NATIVE_LOOT.md, "Level cap", reads
-/// 50 outside the third playthrough and, in the third with the upgrades, "80 (50 plus 11, 11 and 8)" plus the OP
-/// level; how the intermediate values are chosen is open there. The third-playthrough cap rule (W3-BALANCE) reads
-/// this type. Status: UNVERIFIED (overview-level reading). This type holds the count only; no cap is computed here.
+/// A set, not a count: a count cannot tell 11 + 11 from 11 + 8. Whether the packs can be licensed independently of
+/// each other is UNVERIFIED; the set form covers both answers. Whether the game zeroes an increment without its DLC
+/// is not read either (NATIVE_SAVE_LOAD.md). Stored as bits ([`LevelCapPack::bit`]); unknown bits are refused. This
+/// type computes no cap and holds no increment: the cap rule and its data are W3-BALANCE's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct LevelCapUpgrades(u8);
 
 impl LevelCapUpgrades {
-    /// No upgrade pack.
+    /// No level-cap pack licensed.
     pub const NONE: Self = LevelCapUpgrades(0);
-    /// The highest count.
-    pub const MAX: u8 = 2;
+    /// All three packs licensed.
+    pub const ALL: Self = LevelCapUpgrades(0x7);
 
-    /// `n` upgrade packs; anything outside 0..=2 is refused.
-    pub fn new(n: i32) -> Result<Self, BalanceError> {
-        if (0..=i32::from(Self::MAX)).contains(&n) {
-            Ok(LevelCapUpgrades(n as u8))
+    /// The set held in `bits`; any bit other than 0x1, 0x2 and 0x4 is refused with
+    /// [`BalanceError::UnknownLevelCapPackBits`].
+    pub fn from_bits(bits: u32) -> Result<Self, BalanceError> {
+        if bits & !u32::from(Self::ALL.0) == 0 {
+            Ok(LevelCapUpgrades(bits as u8))
         } else {
-            Err(BalanceError::OutOfRange {
-                what: "LevelCapUpgrades (0..=2)",
-                value: i64::from(n),
-            })
+            Err(BalanceError::UnknownLevelCapPackBits { bits })
         }
     }
 
-    /// The count, 0..=2.
-    pub fn get(self) -> u8 {
+    /// The bits of the set (0..=0x7).
+    pub fn bits(self) -> u8 {
         self.0
+    }
+
+    /// This set with `pack` added.
+    pub fn with(self, pack: LevelCapPack) -> Self {
+        LevelCapUpgrades(self.0 | pack.bit())
+    }
+
+    /// True when `pack` is licensed.
+    pub fn contains(self, pack: LevelCapPack) -> bool {
+        self.0 & pack.bit() != 0
+    }
+
+    /// True when no pack is licensed.
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
     }
 }
 
-/// The balance inputs of one moment: the playthrough, OP level, player count, player level, stage and awesome level
-/// that offline rules and the offline world (W3-BALANCE) read.
+/// The balance inputs of one moment: the playthrough, OP level, player count, player level, stage, awesome level and
+/// licensed level-cap packs that offline rules and the offline world (W3-BALANCE) read.
+///
+/// `#[non_exhaustive]`, so a later input is an additive field; build it with [`BalanceSnapshot::new`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BalanceSnapshot {
     pub playthrough: Playthrough,
@@ -291,9 +356,33 @@ pub struct BalanceSnapshot {
     pub player_level: ExpLevel,
     pub stage: GameStage,
     pub awesome: AwesomeLevel,
+    pub level_cap_packs: LevelCapUpgrades,
 }
 
 impl BalanceSnapshot {
+    /// A snapshot of these inputs, checked with [`BalanceSnapshot::validate`].
+    pub fn new(
+        playthrough: Playthrough,
+        op: OpLevel,
+        players: PlayerCount,
+        player_level: ExpLevel,
+        stage: GameStage,
+        awesome: AwesomeLevel,
+        level_cap_packs: LevelCapUpgrades,
+    ) -> Result<Self, BalanceError> {
+        let snap = BalanceSnapshot {
+            playthrough,
+            op,
+            players,
+            player_level,
+            stage,
+            awesome,
+            level_cap_packs,
+        };
+        snap.validate()?;
+        Ok(snap)
+    }
+
     /// Checks the cross-field rule the types alone cannot: a nonzero OP level only in UVHM (UNVERIFIED).
     pub fn validate(&self) -> Result<(), BalanceError> {
         self.op.check_playthrough(self.playthrough)
@@ -397,19 +486,34 @@ mod tests {
     }
 
     #[test]
-    fn level_cap_upgrades_range() {
-        for n in 0..=2 {
-            assert_eq!(LevelCapUpgrades::new(n).unwrap().get(), n as u8);
-        }
+    fn level_cap_upgrades_set() {
         assert_eq!(LevelCapUpgrades::default(), LevelCapUpgrades::NONE);
-        for n in [3, -1] {
-            assert_eq!(
-                LevelCapUpgrades::new(n),
-                Err(BalanceError::OutOfRange {
-                    what: "LevelCapUpgrades (0..=2)",
-                    value: i64::from(n)
-                })
-            );
+        assert!(LevelCapUpgrades::NONE.is_empty());
+        for bits in 0..=7u32 {
+            let set = LevelCapUpgrades::from_bits(bits).unwrap();
+            assert_eq!(u32::from(set.bits()), bits);
+            for pack in LevelCapPack::ALL {
+                assert_eq!(set.contains(pack), bits & u32::from(pack.bit()) != 0);
+            }
+        }
+        // First + Second (11 + 11) and First + Third (11 + 8) are different sets: a count could not tell them apart.
+        let a = LevelCapUpgrades::NONE
+            .with(LevelCapPack::First)
+            .with(LevelCapPack::Second);
+        let b = LevelCapUpgrades::NONE
+            .with(LevelCapPack::First)
+            .with(LevelCapPack::Third);
+        assert_ne!(a, b);
+        assert!(!a.contains(LevelCapPack::Third) && b.contains(LevelCapPack::Third));
+        let all = LevelCapPack::ALL
+            .iter()
+            .fold(LevelCapUpgrades::NONE, |s, p| s.with(*p));
+        assert_eq!(all, LevelCapUpgrades::ALL);
+        for bits in [0x8u32, 0xF, 0x10, 0x80, u32::MAX] {
+            assert!(matches!(
+                LevelCapUpgrades::from_bits(bits),
+                Err(BalanceError::UnknownLevelCapPackBits { bits: b }) if b == bits
+            ));
         }
     }
 
@@ -432,26 +536,51 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_validate() {
-        let mut snap = BalanceSnapshot {
-            playthrough: Playthrough::NORMAL,
-            op: OpLevel::NONE,
-            players: PlayerCount::SINGLE,
-            player_level: ExpLevel::new(8),
-            stage: GameStage(8),
-            awesome: AwesomeLevel::new(0),
-        };
+    fn snapshot_new_validates() {
+        let snap = BalanceSnapshot::new(
+            Playthrough::NORMAL,
+            OpLevel::NONE,
+            PlayerCount::SINGLE,
+            ExpLevel::new(8),
+            GameStage(8),
+            AwesomeLevel::new(0),
+            LevelCapUpgrades::NONE,
+        )
+        .unwrap();
         assert_eq!(snap.validate(), Ok(()));
-        snap.op = OpLevel::new(2).unwrap();
-        assert_eq!(
-            snap.validate(),
-            Err(BalanceError::OpLevelOutsideUvhm {
-                op: 2,
-                playthrough: Playthrough::NORMAL
-            })
+        assert_eq!(snap.level_cap_packs, LevelCapUpgrades::NONE);
+        let op2 = OpLevel::new(2).unwrap();
+        let refused = BalanceSnapshot::new(
+            Playthrough::NORMAL,
+            op2,
+            PlayerCount::SINGLE,
+            ExpLevel::new(8),
+            GameStage(8),
+            AwesomeLevel::new(0),
+            LevelCapUpgrades::ALL,
         );
-        snap.playthrough = Playthrough::UVHM;
-        assert_eq!(snap.validate(), Ok(()));
+        assert!(matches!(
+            refused,
+            Err(BalanceError::OpLevelOutsideUvhm { op: 2, playthrough }) if playthrough == Playthrough::NORMAL
+        ));
+        let uvhm = BalanceSnapshot::new(
+            Playthrough::UVHM,
+            op2,
+            PlayerCount::SINGLE,
+            ExpLevel::new(72),
+            GameStage(72),
+            AwesomeLevel::new(0),
+            LevelCapUpgrades::ALL,
+        )
+        .unwrap();
+        assert_eq!(uvhm.op.get(), 2);
+        // A field changed afterwards is checked again by validate().
+        let mut changed = uvhm;
+        changed.playthrough = Playthrough::TVHM;
+        assert!(matches!(
+            changed.validate(),
+            Err(BalanceError::OpLevelOutsideUvhm { .. })
+        ));
     }
 
     #[test]
