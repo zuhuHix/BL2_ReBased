@@ -35,6 +35,17 @@ pub enum ContainerError {
     BadPartialTable { reason: &'static str },
     /// Bytes follow the last chunk of a partially compressed package.
     TrailingPartialBytes,
+    /// The header of a fully compressed container is not valid (block size, decoded size, or compressed size against
+    /// the bytes after the block table). Added by W1-LZO (review r1 of PR #283), additive.
+    BadHeader { reason: &'static str },
+    /// Entry `index` of a partial compression table names a chunk stored at file byte `at` that could not be
+    /// decoded; `error` is in the chunk's own coordinates (its offsets count from `at`, its chunk indices are the
+    /// nested container's blocks). Added by W1-LZO (review r1 of PR #283), additive.
+    InPartialChunk {
+        index: usize,
+        at: usize,
+        error: Box<ContainerError>,
+    },
     /// Not written yet.
     NotYet(NotYet),
 }
@@ -56,12 +67,24 @@ impl fmt::Display for ContainerError {
             ContainerError::TrailingPartialBytes => {
                 f.write_str("bytes after the last partially compressed chunk")
             }
+            ContainerError::BadHeader { reason } => write!(f, "bad container header: {reason}"),
+            ContainerError::InPartialChunk { index, at, error } => write!(
+                f,
+                "partial compression chunk {index} (file byte {at}): {error} (offsets within the chunk)"
+            ),
             ContainerError::NotYet(n) => n.fmt(f),
         }
     }
 }
 
-impl std::error::Error for ContainerError {}
+impl std::error::Error for ContainerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ContainerError::InPartialChunk { error, .. } => Some(error.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// Decodes a package file's bytes into the uncompressed package: a fully compressed container, or a package whose
 /// summary carries a partial compression table, as `src/container.cpp` does. An 832/46 package without the
@@ -102,6 +125,78 @@ mod tests {
         );
     }
 
+    /// Python's stdin loop for the gate: one path per line in, one SHA-256 hex digest per line out.
+    const HASHER: &str = "import hashlib, sys\nfor line in sys.stdin:\n    \
+        print(hashlib.sha256(open(line.rstrip('\\n'), 'rb').read()).hexdigest(), flush=True)";
+
+    /// Whether the C++ reader's error message (`std::runtime_error` text from `src/container.cpp`) is the same kind
+    /// of refusal as this crate's error. The C++ code has messages only, so the kinds are matched on its wording.
+    fn same_kind_as_cxx(error: &ContainerError, cxx: &str) -> bool {
+        let any = |words: &[&str]| words.iter().any(|w| cxx.contains(w));
+        match error {
+            ContainerError::BadMagic => any(&["invalid package magic"]),
+            ContainerError::Truncated { .. } => {
+                // C++ reports a block table cut off by the end of the file as a size mismatch.
+                any(&[
+                    "truncated container header",
+                    "invalid summary folder length",
+                    "compressed size/table mismatch",
+                ])
+            }
+            ContainerError::BadHeader { .. } => any(&[
+                "version or container block size",
+                "decoded size exceeds",
+                "compressed size/table mismatch",
+            ]),
+            ContainerError::BadChunk { .. } => {
+                any(&["invalid container block sizes", "block totals mismatch"])
+            }
+            ContainerError::Lzo { .. } => any(&["invalid LZO block"]),
+            ContainerError::BadPartialTable { .. } => any(&[
+                "generation count",
+                "partial compression table",
+                "partial compression chunk bounds",
+                "expected chunk container",
+                "partial chunk decoded size",
+            ]),
+            ContainerError::TrailingPartialBytes => any(&["trailing partial package bytes"]),
+            ContainerError::InPartialChunk { error, .. } => same_kind_as_cxx(error, cxx),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn cxx_kind_matching() {
+        let header = ContainerError::BadHeader { reason: "x" };
+        let block = ContainerError::BadChunk {
+            index: 1,
+            reason: "x",
+        };
+        assert!(same_kind_as_cxx(
+            &ContainerError::BadMagic,
+            "ow-package: invalid package magic"
+        ));
+        assert!(same_kind_as_cxx(
+            &header,
+            "unsupported package version or container block size"
+        ));
+        assert!(!same_kind_as_cxx(&header, "invalid container block sizes"));
+        assert!(same_kind_as_cxx(&block, "invalid container block sizes"));
+        let nested = ContainerError::InPartialChunk {
+            index: 0,
+            at: 9,
+            error: Box::new(ContainerError::Lzo { at: 1, reason: "x" }),
+        };
+        assert!(same_kind_as_cxx(
+            &nested,
+            "invalid LZO block or decoded length mismatch"
+        ));
+        assert!(!same_kind_as_cxx(
+            &ContainerError::BadMagic,
+            "invalid LZO block"
+        ));
+    }
+
     /// The real-package gate (W1-LZO), run by hand on a machine with the game installed; ignored by default:
     ///
     /// `OW_LZO_GATE_GAME=<install> OW_LZO_GATE_CXX=build/Release/ow-package.exe OW_LZO_GATE_OUT=local/w1-lzo
@@ -109,13 +204,9 @@ mod tests {
     ///
     /// For every `.upk` under the install (sorted paths): decode it here, write the bytes to `OUT/decoded.bin`, run
     /// the C++ reader's `--verify-decoded` on it (a byte comparison with the C++ decoder's output), and hash it with
-    /// Python's `hashlib`. Where this crate refuses a package, the C++ reader must refuse it too (`--names`). The
-    /// per-package lines go to `OUT/real_gate.tsv` (ignored `local/`: they name game files). Game bytes never leave
-    /// `OUT`, and `decoded.bin` is removed at the end.
-    /// Python's stdin loop for the gate: one path per line in, one SHA-256 hex digest per line out.
-    const HASHER: &str = "import hashlib, sys\nfor line in sys.stdin:\n    \
-        print(hashlib.sha256(open(line.rstrip('\\n'), 'rb').read()).hexdigest(), flush=True)";
-
+    /// Python's `hashlib`. Where this crate refuses a package, the C++ reader must refuse it too (`--names`), with
+    /// the same kind of error ([`same_kind_as_cxx`]). The per-package lines go to `OUT/real_gate.tsv` (ignored
+    /// `local/`: they name game files). Game bytes never leave `OUT`, and `decoded.bin` is removed at the end.
     #[test]
     #[ignore = "needs the installed game and the C++ build; see the doc comment"]
     fn real_packages_match_cxx() {
@@ -202,6 +293,11 @@ mod tests {
                         failures.push(format!(
                             "{rel}: refused here ({e}) but the C++ reader reads it"
                         ));
+                    } else if !same_kind_as_cxx(&e, &err) {
+                        writeln!(tsv, "{rel}\tKIND_DIFFERS\t\t\trust: {e}; c++: {err}").unwrap();
+                        failures.push(format!(
+                            "{rel}: refused by both, but as {e:?} here and \"{err}\" in C++"
+                        ));
                     } else {
                         both_refused += 1;
                         writeln!(tsv, "{rel}\tboth_refused\t\t\trust: {e}; c++: {err}").unwrap();
@@ -213,7 +309,7 @@ mod tests {
         hasher.wait().unwrap();
         let _ = std::fs::remove_file(&decoded_path);
         let summary = format!(
-            "{} packages: {matched} byte-identical to C++, {both_refused} refused by both, {} failures",
+            "{} packages: {matched} byte-identical to C++, {both_refused} refused by both with the same error kind, {} failures",
             packages.len(),
             failures.len()
         );
