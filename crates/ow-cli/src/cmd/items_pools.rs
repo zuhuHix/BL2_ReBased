@@ -2,8 +2,9 @@
 //!
 //! ```text
 //! ow-package --item-pool <pool path> --cooked <install folder> --stage <n> --seed <n> [--count <n>]
-//!     [--playthrough <index>] [--op-level <n>] [--package <file>]
+//!     [--playthrough <index>] [--op-level <n>] [--package <file>] [--python-sum 3.12|3.14]
 //! ow-package --item-pool --parity <file> --cooked <install folder> [--seeds <n>] [--package <file>]
+//!     [--python-sum 3.12|3.14]
 //! ```
 //!
 //! `<pool path>` is an `ItemPoolDefinition`, an `ItemPoolListDefinition` or an `AIPawnBalanceDefinition`. The pool
@@ -22,7 +23,12 @@
 //! `.WeaponPools.` and every `ItemPoolListDefinition` of the package (sorted), at stages 1, 8, 15, 30, 50 and 80,
 //! seeds 1 to `--seeds` (default 20), so that lane W4-POOLS's comparison script can compare them with
 //! `loot_pools.roll_crt` / `roll_pool_crt`. Run it with `OW_PARITY=reference` for that comparison. Output is game
-//! data: write it under ignored `local/` only (docs/LEGAL.md).
+//! data, so `<file>` must lie under the workspace's ignored `local/` (docs/LEGAL.md), as the Python tools refuse any
+//! other `--output`: the workspace is the folder holding `Cargo.toml` above this binary.
+//!
+//! `--python-sum` names the interpreter the oracle runs on (default 3.14; 3.12 and 3.13 share the 3.12 rule), because
+//! CPython 3.12 and 3.14 add an int into a float sum differently and a pool's total depends on it (Reference mode;
+//! `ow_items::pools::PySum`).
 //!
 //! The player state is one player in the given playthrough (default 0) and OP level (default 0), every level-cap
 //! pack licensed. `--overlay` is refused: the roll reads tag streams, which overlays do not patch (as `--item-roll`).
@@ -49,7 +55,8 @@ use ow_defs::identity::IdentityPolicy;
 use ow_items::ItemError;
 use ow_items::merge::RollData;
 use ow_items::pools::{
-    PARITY_PACKAGE, PARITY_STAGES, PoolData, PoolRequest, off_drop_json, parity_line, roll_pool,
+    PARITY_PACKAGE, PARITY_STAGES, PoolData, PoolRequest, PySum, off_drop_json, parity_line,
+    roll_pool,
 };
 use ow_items::registry::{CensusInput, Pv, Registry, build_from_census, python_path_text};
 use ow_items::roll::{RollCx, RollWorld};
@@ -60,8 +67,8 @@ use super::NOT_PORTED;
 use crate::args::Command;
 
 const USAGE: &str = "usage: ow-package --item-pool <pool path> --cooked <install folder> --stage <n> --seed <n> \
-[--count <n>] [--playthrough <index>] [--op-level <n>] [--package <file>] | --item-pool --parity <file> \
---cooked <install folder> [--seeds <n>] [--package <file>]";
+[--count <n>] [--playthrough <index>] [--op-level <n>] [--package <file>] [--python-sum 3.12|3.14] | --item-pool \
+--parity <file under local/> --cooked <install folder> [--seeds <n>] [--package <file>] [--python-sum 3.12|3.14]";
 
 #[derive(Default)]
 struct Line {
@@ -76,6 +83,7 @@ struct Line {
     parity: Option<String>,
     seeds: u32,
     overlay: Option<String>,
+    python_sum: Option<PySum>,
 }
 
 fn parse(command: &Command, args: &[String]) -> Result<Line, String> {
@@ -121,6 +129,13 @@ fn parse(command: &Command, args: &[String]) -> Result<Line, String> {
             "--playthrough" => line.playthrough = to_i32(number(value()?)?, arg)?,
             "--op-level" => line.op = to_i32(number(value()?)?, arg)?,
             "--overlay" => line.overlay = Some(value()?),
+            "--python-sum" => {
+                line.python_sum = Some(match value()?.as_str() {
+                    "3.12" | "3.13" => PySum::Py312,
+                    "3.14" => PySum::Py314,
+                    other => return Err(format!("{arg}: 3.12, 3.13 or 3.14, not {other}")),
+                })
+            }
             _ => return Err(USAGE.to_string()),
         }
         i += 2;
@@ -161,6 +176,11 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     {
         return fail(USAGE);
     }
+    if let Some(file) = &line.parity
+        && let Err(message) = check_local(Path::new(file))
+    {
+        return fail(&message);
+    }
     match execute(&line, Path::new(&cooked), mode) {
         Ok(()) => ExitCode::SUCCESS,
         Err(ItemError::NotYet(e)) => {
@@ -168,6 +188,59 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
             ExitCode::from(NOT_PORTED)
         }
         Err(e) => fail(&super::properties::error_text(&e)),
+    }
+}
+
+/// The workspace's `local/`: the nearest folder above this binary that holds `Cargo.toml` and `crates/`, joined with
+/// `local`.
+fn workspace_local() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors()
+        .find(|d| d.join("Cargo.toml").is_file() && d.join("crates").is_dir())
+        .map(|d| d.join("local"))
+}
+
+/// A path's components with `.` dropped and `..` applied (lexically, as `Path.resolve` gives for a path whose
+/// folders are not links), compared case-blind on Windows.
+fn normal(path: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => {
+                let text = other.as_os_str().to_string_lossy().into_owned();
+                out.push(if cfg!(windows) {
+                    text.to_ascii_lowercase()
+                } else {
+                    text
+                });
+            }
+        }
+    }
+    out
+}
+
+/// `--parity <file>` writes game data: refuse a file outside the workspace's `local/` (as the Python tools refuse an
+/// `--output` outside it).
+fn check_local(file: &Path) -> Result<(), String> {
+    let Some(local) = workspace_local() else {
+        return Err(
+            "--parity: no workspace (Cargo.toml) above this binary to hold local/".to_string(),
+        );
+    };
+    let absolute =
+        std::path::absolute(file).map_err(|e| format!("--parity: {}: {e}", file.display()))?;
+    let (file_parts, local_parts) = (normal(&absolute), normal(&local));
+    if file_parts.len() > local_parts.len() && file_parts.starts_with(&local_parts) {
+        Ok(())
+    } else {
+        Err(format!(
+            "--parity must stay under {} (the output is game data)",
+            local.display()
+        ))
     }
 }
 
@@ -316,7 +389,10 @@ impl Session {
             &self.data,
             self.mode,
         );
-        let request = PoolRequest::for_mode(self.mode);
+        let mut request = PoolRequest::for_mode(self.mode);
+        if let Some(rule) = line.python_sum {
+            request = request.with_python_sum(rule);
+        }
         let drops = roll_pool(&self.pools, self.reg.as_ref(), &path, &request, &mut cx)?;
         if self.mode == ParityMode::Reference {
             return Ok(parity_line(pool, stage, seed, &drops));
@@ -487,6 +563,36 @@ mod tests {
     }
 
     #[test]
+    fn the_parity_file_stays_under_local() {
+        let local = workspace_local().unwrap();
+        assert!(check_local(&local.join("p2").join("x.jsonl")).is_ok());
+        assert!(check_local(&local.join("..").join("x.jsonl")).is_err());
+        assert!(check_local(&local).is_err());
+        assert!(check_local(&std::env::temp_dir().join("x.jsonl")).is_err());
+        let refused = args(&["--item-pool", "--parity", "x.jsonl", "--cooked", "."]);
+        assert_eq!(
+            run(command(), &refused, ParityMode::Reference),
+            ExitCode::from(1)
+        );
+        let bad_rule = args(&[
+            "--item-pool",
+            "X.Y",
+            "--cooked",
+            ".",
+            "--stage",
+            "8",
+            "--seed",
+            "1",
+            "--python-sum",
+            "2.7",
+        ]);
+        assert_eq!(
+            run(command(), &bad_rule, ParityMode::Reference),
+            ExitCode::from(1)
+        );
+    }
+
+    #[test]
     fn an_empty_install_has_no_pool() {
         // No package holds the pool: a failed roll (exit 1); the parity batch has no pool and writes no line.
         let dir = std::env::temp_dir().join(format!("ow-cli-items-pools-{}", std::process::id()));
@@ -506,7 +612,11 @@ mod tests {
             run(command(), &single, ParityMode::Reference),
             ExitCode::from(1)
         );
-        let file = dir.join("parity.jsonl");
+        let out = workspace_local()
+            .unwrap()
+            .join(format!("ow-cli-items-pools-{}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+        let file = out.join("parity.jsonl");
         let f = file.to_string_lossy().to_string();
         let batch = args(&["--item-pool", "--parity", &f, "--cooked", &d]);
         assert_eq!(
@@ -514,6 +624,7 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+        let _ = std::fs::remove_dir_all(&out);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

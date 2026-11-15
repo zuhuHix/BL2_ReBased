@@ -50,18 +50,28 @@
 //!   The candidate a drop carries is what [`crate::roll::roll_candidate`] rolls once the caller has the item's
 //!   instance (architecture section 3.7); this module rolls no item.
 //!
-//! **Off mode reads an untagged pool field** (`Quantity`, the stage requirements and the flags) from the pool
-//! class's default object (`Default__ItemPoolDefinition` and the like, which [`PoolData::one_file`] adds from the
-//! census), as the engine fills an untagged property from the class default; with no such object in the scan it
-//! answers `NotYet`. An untagged entry field (`BalancedInventoryData.bDropOnDeath`) keeps its struct default, which
-//! is not read ([`PoolDrop::drop_on_death`] is then `None`).
+//! **Off mode reads an untagged field** (`Quantity`, the stage requirements, the flags, the lists) along the class's
+//! default-object chain (`Default__KeyedItemPoolDefinition`, then `Default__ItemPoolDefinition`, and the like, which
+//! [`PoolData::one_file`] adds from the census), as the engine fills an untagged property from the class default.
+//! When no default object of the chain tags it, the chain's end gives no object, `false` or an empty array, and a
+//! struct (`Quantity`) is `NotYet`; a chain step whose default object is not in the scan is `NotYet`. A value that is
+//! tagged but was not decoded is `BadData`, never read as untagged. An untagged entry field
+//! (`BalancedInventoryData.bDropOnDeath`) keeps its struct default, which is not read ([`PoolDrop::drop_on_death`]
+//! is then `None`).
 //!
 //! **Off mode answers `NotYet`** for what the records do not give: the global class mod pools that
 //! the game fills at run time (decision 2026-11-13-04: the trigger and the class identifier list are open), the
 //! uncommon chest multiplier (`GetUncommonChestItemPoolWeightMultiplier`, values not read; no pool in `Startup.upk`
-//! sets the flag), the per-player ammo multiplier (`GetAmmoDropsPerPlayerMultiplier`), the readied roll of
-//! `bAutoReadyItems` pools (whether `AddPoolItems` tests the probability is not read), and a single-precision draw
-//! that rounding leaves past every interval (not read).
+//! sets the flag), the per-player ammo multiplier from playthrough index 2 (below it the record gives 1.0, which is
+//! used, UNVERIFIED), the readied roll of `bAutoReadyItems` pools (whether `AddPoolItems` tests the probability is not
+//! read), a `KeyedItemPoolDefinition` with no entries of its own (how its `Key` yields items is not read), and a
+//! single-precision draw that rounding leaves past every interval (not read). A pool, sub-pool or list
+//! that includes itself is `BadData`, and so is a `Quantity` above 10,000 draws.
+//!
+//! **Draw order.** The native spawns each item inside the pick loop (`InitializeInventory` runs the item's roll before
+//! the next pick), so the game interleaves pool draws and item draws. This shape returns the drops first and leaves
+//! the item rolls to the caller, so one generator cannot reproduce the native's order through it. The game's
+//! sequence is not reproduced in either case (UNVERIFIED; decision 2026-11-15-25).
 //!
 //! **One generator.** Both modes draw from the roll world's one generator ([`crate::roll::RollWorld`]), asked for
 //! as [`CrtStream::LootPool`]: the tools' seeding, not the game's sequence (UNVERIFIED that the game's pool roll uses
@@ -89,8 +99,11 @@ use crate::roll::RollCx;
 pub const RECORD: &str =
     "docs/verification/NATIVE_LOOT.md (ItemPool.SpawnBalancedInventoryFromPool)";
 
-/// The schema lines the oracle reads with: `weapon_recipe.SCHEMA_LINES` and `loot_pools.SCHEMA_LINES`' own.
-pub const SCHEMA_LINES: [&str; 16] = [
+/// The schema lines the oracle reads with (`weapon_recipe.SCHEMA_LINES` and `loot_pools.SCHEMA_LINES`' own), plus
+/// `ItemPoolIncludedLists`, which the oracle has no line for and never reads (its `source_lists` ignores a list's
+/// included lists). A schema line types only the array of its own name, so the extra line changes no value the
+/// oracle reads; without it the array is undecoded and Off mode could not follow `AddToItemPoolList`.
+pub const SCHEMA_LINES: [&str; 17] = [
     "WeightedParts=StructProperty:WeightedPart",
     "ConsolidatedAttributeInitData=StructProperty:AttributeInitializationData",
     "Manufacturers=StructProperty:ManufacturerGradeData",
@@ -107,6 +120,7 @@ pub const SCHEMA_LINES: [&str; 16] = [
     "CustomItemPoolIncludedLists=ObjectProperty",
     "PlayThroughs=StructProperty:PlayThroughData",
     "ConditionalExpressionList=StructProperty:ConditionalExpression",
+    "ItemPoolIncludedLists=ObjectProperty",
 ];
 
 /// `loot_pools.NUMBER_OF_PLAYERS`.
@@ -127,12 +141,61 @@ pub const CLASS_MOD_POOLS: &str = "GD_Itempools.ClassModPools.";
 /// The alias key prefix of a pool class's default object in [`PoolData`] (not a path any package exports).
 const CLASS_DEFAULT_KEY: &str = "<class default>.";
 
-/// The pool classes whose default objects Off mode reads (unqualified names).
-const POOL_CLASSES: [&str; 3] = [
-    "ItemPoolDefinition",
-    "KeyedItemPoolDefinition",
-    "ItemPoolListDefinition",
+/// The classes whose default objects Off mode reads (unqualified names), each with its superclass among them: the
+/// class-default chain an untagged field is looked up along. `KeyedItemPoolDefinition`'s superclass is
+/// `ItemPoolDefinition` (its class export in `WillowGame.upk`); the chain of the others ends at their own default
+/// object.
+const DEFAULT_CHAIN: [(&str, Option<&str>); 4] = [
+    ("ItemPoolDefinition", None),
+    ("KeyedItemPoolDefinition", Some("ItemPoolDefinition")),
+    ("ItemPoolListDefinition", None),
+    ("AIPawnBalanceDefinition", None),
 ];
+
+/// What kind of value Off mode expects of a field. A tagged `None` is a null reference for an object; for every other
+/// kind it is a value the walker left undecoded (the registry's reading gives `None` for it), which is `BadData`.
+/// When no default object along the class chain tags the field, the chain's end gives: no object, `false`, an empty
+/// array, and for a struct `NotYet` (its zero value is not read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Object,
+    Flag,
+    Array,
+    Struct,
+}
+
+/// A tagged value of `props` as Off mode reads it (`Kind`); `None` when untagged.
+fn tagged<'p>(
+    props: &'p Pv,
+    key: &str,
+    kind: Kind,
+    path: &str,
+) -> Result<Option<&'p Pv>, ItemError> {
+    match props.get(key) {
+        None => Ok(None),
+        Some(Pv::Null) if kind != Kind::Object => Err(bad(format!(
+            "{path}: {key} is tagged but its value was not decoded"
+        ))),
+        Some(v) => Ok(Some(v)),
+    }
+}
+
+/// The largest truncated `Quantity` Off mode draws for; above it the roll is refused (`BadData`). The data's
+/// quantities are single digits; the bound only keeps bad data from looping (ours, not the game's).
+const MAX_OFF_QUANTITY: i32 = 10_000;
+
+/// Which CPython `sum()` the oracle ran on. The two differ in how an int adds into a float total: 3.12 adds it
+/// plainly, 3.14 with compensation (measured on 20,000 random mixed lists with each interpreter: 0 misses for its own
+/// rule, 380 for the other's). A pool total of int and float weights depends on it, so the comparison names the
+/// interpreter it ran on.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PySum {
+    /// CPython 3.12 (and 3.13, which the lane did not measure).
+    Py312,
+    /// CPython 3.14.
+    Py314,
+}
 
 /// `expand`'s depth limit in the oracle (`depth > 12` is a cycle).
 const MAX_TREE_DEPTH: u32 = 12;
@@ -212,26 +275,49 @@ impl PoolData {
     }
 
     /// The census input of one file of a store's census (`file` relative to `root`, as `PARITY_PACKAGE`): its exports
-    /// in export order, each with its holder in that file only, as the oracle reads one package.
+    /// in export order, each with its holder in that file only, as the oracle reads one package; and the default
+    /// objects of [`DEFAULT_CHAIN`]'s classes.
     pub fn one_file(census: &ow_defs::identity::Census, root: &Path, file: &str) -> CensusInput {
-        let rel: std::path::PathBuf = file.split('/').collect();
-        let mut rows: Vec<(i32, PathHolders)> = Vec::new();
-        let mut files = Vec::new();
+        Self::from_files(census, root, &[file])
+    }
+
+    /// The census input of several files (each relative to `root`), for callers that need pools beyond one package
+    /// (W6-LOOT): a path's holders in those files only, its owner the first holder in `files_in` order, paths
+    /// ordered by their owner's file in that order, then by export; and the default objects of [`DEFAULT_CHAIN`]'s
+    /// classes. With one file this is [`PoolData::one_file`]. Not an oracle reading: the tool reads one package.
+    pub fn from_files(
+        census: &ow_defs::identity::Census,
+        root: &Path,
+        files_in: &[&str],
+    ) -> CensusInput {
+        let rels: Vec<std::path::PathBuf> =
+            files_in.iter().map(|f| f.split('/').collect()).collect();
+        let rank = |file: &Path| rels.iter().position(|r| file.ends_with(r));
+        let mut rows: Vec<((usize, i32), PathHolders)> = Vec::new();
+        let mut found: Vec<(usize, std::path::PathBuf)> = Vec::new();
         for entry in &census.entries {
-            let holders: Vec<Holder> = entry
+            let mut holders: Vec<(usize, Holder)> = entry
                 .holders
                 .iter()
-                .filter(|o| o.file.ends_with(&rel))
-                .map(|o| Holder::new(o.file.clone(), o.class.clone(), o.export))
+                .filter_map(|o| {
+                    rank(&o.file)
+                        .map(|r| (r, Holder::new(o.file.clone(), o.class.clone(), o.export)))
+                })
                 .collect();
-            if let Some(first) = holders.first() {
-                if files.is_empty() {
-                    files.push(first.file.clone());
+            // Stable: the holders of one file keep their export order.
+            holders.sort_by_key(|(r, _)| *r);
+            if let Some((r, first)) = holders.first() {
+                if !found.iter().any(|(_, f)| *f == first.file) {
+                    found.push((*r, first.file.clone()));
                 }
-                rows.push((first.export, PathHolders::new(entry.path.clone(), holders)));
+                let key = (*r, first.export);
+                let holders = holders.into_iter().map(|(_, h)| h).collect();
+                rows.push((key, PathHolders::new(entry.path.clone(), holders)));
             }
         }
-        rows.sort_by_key(|(export, _)| *export);
+        rows.sort_by_key(|(key, _)| *key);
+        found.sort_by_key(|(r, _)| *r);
+        let mut files: Vec<std::path::PathBuf> = found.into_iter().map(|(_, f)| f).collect();
         let mut input = CensusInput::new(root.to_path_buf());
         input.paths = rows.into_iter().map(|(_, p)| p).collect();
         // The pool classes' default objects (in WillowGame.upk), under an alias key: the registry's census reads
@@ -240,7 +326,7 @@ impl PoolData {
             let Some(class) = entry.path.strip_prefix("Default__") else {
                 continue;
             };
-            if !POOL_CLASSES.contains(&class) {
+            if !DEFAULT_CHAIN.iter().any(|(c, _)| *c == class) {
                 continue;
             }
             if let Some(o) = entry.holders.first() {
@@ -262,19 +348,50 @@ impl PoolData {
         self.lookup.get(&format!("{CLASS_DEFAULT_KEY}{class}"))
     }
 
-    /// Off mode's read of a pool-level field: the tagged value, else the pool class's default object's, else
-    /// `NotYet` (no class default to read).
-    fn field(&self, path: &str, key: &str) -> Result<Pv, ItemError> {
+    /// Off mode's read of an object's field: the tagged value (`Kind`: a tagged value that did not decode is
+    /// `BadData`), else the first default object along the class-default chain ([`DEFAULT_CHAIN`]) that tags it,
+    /// else the chain end's value for the kind. A class outside the chain, or a chain step whose default object is
+    /// not in the scan, is `NotYet`.
+    fn field(&self, path: &str, key: &str, kind: Kind) -> Result<Pv, ItemError> {
         let props = self.props(path)?;
-        let v = props.at(key);
-        if !matches!(v, Pv::Null) {
+        if let Some(v) = tagged(&props, key, kind, path)? {
             return Ok(v.clone());
         }
-        let class = short(self.class_of(path)).to_string();
-        match self.class_default(&class) {
-            Some(d) => Ok(d.at(key).clone()),
-            None => Err(NotYet::not_read(
-                format!("{path}: an untagged {key} (no Default__{class} object in the scan)"),
+        let mut class = short(self.class_of(path)).to_string();
+        loop {
+            let Some((_, parent)) = DEFAULT_CHAIN.iter().find(|(c, _)| *c == class) else {
+                return Err(NotYet::not_read(
+                    format!(
+                        "{path}: an untagged {key} (the class defaults of {class} are not read)"
+                    ),
+                    RECORD,
+                )
+                .into());
+            };
+            let Some(default) = self.class_default(&class) else {
+                return Err(NotYet::not_read(
+                    format!("{path}: an untagged {key} (no Default__{class} object in the scan)"),
+                    RECORD,
+                )
+                .into());
+            };
+            if let Some(v) = tagged(&default, key, kind, &format!("Default__{class}"))? {
+                return Ok(v.clone());
+            }
+            match parent {
+                Some(p) => class = (*p).to_string(),
+                None => break,
+            }
+        }
+        match kind {
+            Kind::Object => Ok(Pv::Null),
+            Kind::Flag => Ok(Pv::Bool(false)),
+            Kind::Array => Ok(Pv::List(Vec::new())),
+            Kind::Struct => Err(NotYet::not_read(
+                format!(
+                    "{path}: {key} is tagged by no default object of its class chain (the struct's zero value is \
+                     not read)"
+                ),
                 RECORD,
             )
             .into()),
@@ -364,10 +481,11 @@ impl PyNum {
     }
 }
 
-/// CPython 3.12's `sum()` from the integer 0: ints add exactly while every item is an int; the first float is a plain
-/// add; then floats add with Neumaier compensation and ints add plainly (`f_result += (double)value`), the
-/// compensation added at the end when non-zero and finite. [`py_sum`] is the all-float case.
-fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>) -> Result<PyNum, ItemError> {
+/// CPython's `sum()` from the integer 0: ints add exactly while every item is an int; the first float is a plain add;
+/// then floats add with Neumaier compensation, and ints add plainly under 3.12 (`f_result += (double)value`) or with
+/// the same compensation under 3.14 ([`PySum`]); the compensation is added at the end when non-zero and finite.
+/// [`py_sum`] is the all-float case (the same under both).
+fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>, rule: PySum) -> Result<PyNum, ItemError> {
     let mut items = items.into_iter();
     let mut int_total: i64 = 0;
     let mut sum;
@@ -397,7 +515,17 @@ fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>) -> Result<PyNum, ItemErr
                 }
                 sum = t;
             }
-            PyNum::Int(i) => sum += PyNum::Int(i).f(),
+            PyNum::Int(i) if rule == PySum::Py312 => sum += PyNum::Int(i).f(),
+            PyNum::Int(i) => {
+                let x = PyNum::Int(i).f();
+                let t = sum + x;
+                if sum.abs() >= x.abs() {
+                    c += (sum - t) + x;
+                } else {
+                    c += (x - t) + sum;
+                }
+                sum = t;
+            }
         }
     }
     if c != 0.0 && c.is_finite() {
@@ -415,16 +543,18 @@ const SETS_BASE_VALUE: &str = "BASEVALUE_InitializationDefSetsBaseValue";
 pub struct Values<'d> {
     data: &'d PoolData,
     context: Vec<(String, PyNum)>,
+    sum: PySum,
     /// The definitions and attributes that had no value.
     pub unresolved: DetSet<String>,
 }
 
 impl<'d> Values<'d> {
-    /// `Values(package, {NUMBER_OF_PLAYERS: players})`.
-    pub fn new(data: &'d PoolData, players: f64) -> Values<'d> {
+    /// `Values(package, {NUMBER_OF_PLAYERS: players})` on the interpreter `sum` names.
+    pub fn new(data: &'d PoolData, players: f64, sum: PySum) -> Values<'d> {
         Values {
             data,
             context: vec![(NUMBER_OF_PLAYERS.to_string(), PyNum::Float(players))],
+            sum,
             unresolved: DetSet::new(),
         }
     }
@@ -778,6 +908,7 @@ fn expand_at(
             .iter()
             .filter(|c| counted(c))
             .filter_map(|c| c.weight),
+        values.sum,
     )?;
     for c in &mut children {
         if total.f() > 0.0 && counted(c) {
@@ -1032,6 +1163,8 @@ pub struct PoolRequest {
     /// The caller's `GameStageVarianceFormula` as init data (an interactive object's; enemy drops pass none). Off
     /// mode only.
     pub variance: Option<Pv>,
+    /// The interpreter whose `sum()` the oracle ran on (Reference mode only; default [`PySum::Py314`]).
+    pub python_sum: PySum,
 }
 
 impl PoolRequest {
@@ -1044,7 +1177,13 @@ impl PoolRequest {
                 Listing::OnDeath
             },
             variance: None,
+            python_sum: PySum::Py314,
         }
+    }
+
+    pub fn with_python_sum(mut self, rule: PySum) -> Self {
+        self.python_sum = rule;
+        self
     }
 
     pub fn with_variance(mut self, variance: Pv) -> Self {
@@ -1078,7 +1217,7 @@ pub fn roll_pool(
                 });
             }
             let players = f64::from(cx.balance.players.get());
-            let mut values = Values::new(pools, players);
+            let mut values = Values::new(pools, players, request.python_sum);
             let rng = cx.eval.world.rng(CrtStream::LootPool)?;
             reference_drops(&mut values, source.as_str(), stage, rng)
         }
@@ -1178,6 +1317,37 @@ struct Off<'r, 'c, 'a> {
     cap: i32,
 }
 
+/// An entry's tagged value of `kind`, `Null` when untagged.
+fn entry_value(entry: &Pv, key: &str, kind: Kind, pool: &str) -> Result<Pv, ItemError> {
+    Ok(tagged(entry, key, kind, pool)?.cloned().unwrap_or(Pv::Null))
+}
+
+/// An entry's object path, `None` when untagged, null or empty.
+fn entry_path(entry: &Pv, key: &str, pool: &str) -> Result<Option<String>, ItemError> {
+    match tagged(entry, key, Kind::Object, pool)? {
+        None | Some(Pv::Null) => Ok(None),
+        Some(v) => match v.as_str() {
+            Some("") => Ok(None),
+            Some(p) => Ok(Some(p.to_string())),
+            None => Err(bad(format!("{pool}: {key} is not a path"))),
+        },
+    }
+}
+
+/// `seen` holding `path` is a cycle: `BadData` naming it.
+fn refuse_cycle(seen: &[String], path: &str, what: &str) -> Result<(), ItemError> {
+    if seen.iter().any(|p| p == path) {
+        return Err(bad(format!(
+            "{path}: {what} include themselves (a cycle through {})",
+            seen.join(" -> ")
+        )));
+    }
+    if seen.len() > MAX_DEPTH as usize {
+        return Err(bad(format!("{path}: {what} nested too deep")));
+    }
+    Ok(())
+}
+
 impl Off<'_, '_, '_> {
     fn find(&mut self, path: &str) -> Result<ObjRef, ItemError> {
         if let Some(o) = self.cx.known.get(path) {
@@ -1248,21 +1418,41 @@ impl Off<'_, '_, '_> {
 
     /// `(min, max)` of a pool's stage requirements.
     fn window(&mut self, pool: &str) -> Result<(i32, i32), ItemError> {
-        let min = self.pools.field(pool, "MinGameStageRequirement")?;
-        let max = self.pools.field(pool, "MaxGameStageRequirement")?;
+        let min = self
+            .pools
+            .field(pool, "MinGameStageRequirement", Kind::Object)?;
+        let max = self
+            .pools
+            .field(pool, "MaxGameStageRequirement", Kind::Object)?;
         let min = self.requirement(&min)?;
         let max = self.requirement(&max)?;
         Ok((min, max))
     }
 
-    fn props(&self, path: &str) -> Result<Props, ItemError> {
-        self.pools.props(path)
+    /// A pool's `BalancedItems`. A `KeyedItemPoolDefinition` with none is `NotYet`: on the installed game all 83
+    /// tag only `Key` and `bAutoReadyItems`, and how a key yields items is not read.
+    fn entries(&self, pool: &str) -> Result<Vec<Pv>, ItemError> {
+        let entries = self
+            .pools
+            .field(pool, "BalancedItems", Kind::Array)?
+            .items()
+            .to_vec();
+        if entries.is_empty() && short(self.pools.class_of(pool)) == "KeyedItemPoolDefinition" {
+            return Err(NotYet::not_read(
+                format!(
+                    "{pool}: a keyed pool with no entries of its own (how its Key yields items)"
+                ),
+                RECORD,
+            )
+            .into());
+        }
+        Ok(entries)
     }
 
     /// Whether `pool` has entries of its own; a global class mod pool, empty in the packages and filled at run time,
     /// is `NotYet`.
     fn has_entries(&self, pool: &str) -> Result<bool, ItemError> {
-        let has = !self.props(pool)?.at("BalancedItems").items().is_empty();
+        let has = !self.entries(pool)?.is_empty();
         if !has && pool.starts_with(CLASS_MOD_POOLS) {
             return Err(NotYet::not_read(
                 format!(
@@ -1276,36 +1466,32 @@ impl Off<'_, '_, '_> {
         Ok(has)
     }
 
-    /// The pool gate (window and a reachable entry) at `stage`.
-    fn gate(&mut self, pool: &str, stage: i32, depth: u32) -> Result<bool, ItemError> {
-        if depth > MAX_DEPTH {
-            return Err(bad(format!("{pool}: nested pools too deep (a cycle)")));
-        }
-        let props = self.props(pool)?;
+    /// The pool gate (window and a reachable entry) at `stage`; `seen` is the path of pools being gated above, and a
+    /// pool already on it is a cycle (`BadData`).
+    fn gate(&mut self, pool: &str, stage: i32, seen: &mut Vec<String>) -> Result<bool, ItemError> {
+        refuse_cycle(seen, pool, "nested pools")?;
         let (min, max) = self.window(pool)?;
         let open = (min == 0 || (min <= stage && min <= self.cap)) && (max == 0 || stage <= max);
         if !open {
             return Ok(false);
         }
-        for entry in props.at("BalancedItems").items() {
-            if let Some(sub) = entry
-                .at("ItmPoolDefinition")
-                .as_str()
-                .filter(|p| !p.is_empty())
-                && self.has_entries(sub)?
-                && self.gate(sub, stage, depth + 1)?
+        seen.push(pool.to_string());
+        let mut reachable = false;
+        for entry in self.entries(pool)? {
+            if let Some(sub) = entry_path(&entry, "ItmPoolDefinition", pool)?
+                && self.has_entries(&sub)?
+                && self.gate(&sub, stage, seen)?
             {
-                return Ok(true);
+                reachable = true;
+                break;
             }
-            if entry
-                .at("InvBalanceDefinition")
-                .as_str()
-                .is_some_and(|b| !b.is_empty())
-            {
-                return Ok(true);
+            if entry_path(&entry, "InvBalanceDefinition", pool)?.is_some() {
+                reachable = true;
+                break;
             }
         }
-        Ok(false)
+        seen.pop();
+        Ok(reachable)
     }
 
     /// The balance entry's stage with the caller's variance (module documentation).
@@ -1320,7 +1506,12 @@ impl Off<'_, '_, '_> {
             return Ok(stage);
         };
         // bSupportsGameStageVariance: class default true (NATIVE_LOOT.md; the default object holds it).
-        if flag(&self.pools.field(pool, "bSupportsGameStageVariance")?) == Some(false) {
+        if flag(
+            &self
+                .pools
+                .field(pool, "bSupportsGameStageVariance", Kind::Flag)?,
+        ) == Some(false)
+        {
             return Ok(stage);
         }
         let v = trunc_i32(self.init(variance)?);
@@ -1338,41 +1529,27 @@ impl Off<'_, '_, '_> {
         Ok(s)
     }
 
-    /// The pool's candidate list (module documentation), with weights.
+    /// The pool's candidate list (module documentation), with weights. `seen` is the spawn path above the pool,
+    /// the pool itself included.
     fn candidates(
         &mut self,
         pool: &str,
-        props: &Pv,
         stage: i32,
         variance: Option<&Pv>,
-        depth: u32,
+        seen: &mut Vec<String>,
     ) -> Result<Vec<(Candidate, f32)>, ItemError> {
         let window = self.window(pool)?;
         let uncommon = self
             .pools
-            .field(pool, "bEligibleForUncommonWeightMultiplier")?
+            .field(pool, "bEligibleForUncommonWeightMultiplier", Kind::Flag)?
             .truthy();
         let mut list: Vec<(Candidate, f32)> = Vec::new();
-        let add = |list: &mut Vec<(Candidate, f32)>, c: Candidate, w: f32| {
-            if f64::from(w) <= MIN_WEIGHT {
-                return;
-            }
-            match list.iter_mut().find(|(d, _)| d.same(&c)) {
-                Some(slot) => slot.1 = w,
-                None => list.push((c, w)),
-            }
-        };
-        for entry in props.at("BalancedItems").items() {
-            let drop = flag(entry.at("bDropOnDeath"));
-            let probability = entry.at("Probability");
-            let sub = entry
-                .at("ItmPoolDefinition")
-                .as_str()
-                .filter(|p| !p.is_empty());
-            if let Some(sub) = sub
-                && self.has_entries(sub)?
+        for entry in self.entries(pool)? {
+            let drop = flag(&entry_value(&entry, "bDropOnDeath", Kind::Flag, pool)?);
+            let probability = entry_value(&entry, "Probability", Kind::Struct, pool)?;
+            if let Some(sub) = entry_path(&entry, "ItmPoolDefinition", pool)?
+                && self.has_entries(&sub)?
             {
-                let mut w = self.init(probability)?;
                 let def = probability
                     .at("InitializationDefinition")
                     .as_str()
@@ -1386,29 +1563,19 @@ impl Off<'_, '_, '_> {
                     )
                     .into());
                 }
-                if !self.gate(sub, stage, depth + 1)? {
+                let mut w = self.init(&probability)?;
+                if !self.gate(&sub, stage, seen)? {
                     w = 0.0;
                 }
-                add(
-                    &mut list,
-                    Candidate::Pool {
-                        path: sub.to_string(),
-                        drop,
-                    },
-                    w,
-                );
+                add_candidate(&mut list, Candidate::Pool { path: sub, drop }, w);
                 continue;
             }
-            let Some(balance) = entry
-                .at("InvBalanceDefinition")
-                .as_str()
-                .filter(|b| !b.is_empty())
-            else {
+            let Some(balance) = entry_path(&entry, "InvBalanceDefinition", pool)? else {
                 continue;
             };
             let s = self.entry_stage(pool, stage, variance, window)?;
-            let w = self.init(probability)?;
-            let Some(record) = self.reg.balance(balance) else {
+            let w = self.init(&probability)?;
+            let Some(record) = self.reg.balance(&balance) else {
                 return Err(bad(format!(
                     "{pool}: {balance} is not a balance the registry holds"
                 )));
@@ -1424,10 +1591,10 @@ impl Off<'_, '_, '_> {
             let n = found.len() as f32;
             for c in found {
                 let weight = c.weight * w / n;
-                add(
+                add_candidate(
                     &mut list,
                     Candidate::Balance {
-                        balance: balance.to_string(),
+                        balance: balance.clone(),
                         candidate: c,
                         drop,
                     },
@@ -1455,25 +1622,12 @@ impl Off<'_, '_, '_> {
 
     /// One draw over the list in single precision: the first closed interval holding `r`.
     fn draw(&mut self, list: &[(Candidate, f32)]) -> Result<usize, ItemError> {
-        let total = list.iter().fold(0.0f32, |t, (_, w)| t + w);
         let rng = self.cx.eval.world.rng(CrtStream::LootPool)?;
-        let r = total * f32::from(rng.rand15()) / 32_767.0;
-        let mut running = 0.0f32;
-        for (i, (_, w)) in list.iter().enumerate() {
-            if running <= r && r <= running + w {
-                return Ok(i);
-            }
-            running += w;
-        }
-        Err(NotYet::not_read(
-            "a single-precision pool draw past every interval (what the native does then)",
-            RECORD,
-        )
-        .into())
+        single_draw(list.iter().map(|(_, w)| *w), rng.rand15())
     }
 
-    /// `SpawnBalancedInventoryFromPool` on `pool`.
-    #[allow(clippy::too_many_arguments)]
+    /// `SpawnBalancedInventoryFromPool` on `pool`. `chain` is the spawn path above it; a pool already on it is a
+    /// cycle (`BadData`).
     fn pool(
         &mut self,
         pool: &str,
@@ -1481,21 +1635,24 @@ impl Off<'_, '_, '_> {
         variance: Option<&Pv>,
         may_drop: Option<bool>,
         chain: &[String],
-        depth: u32,
         drops: &mut Vec<PoolDrop>,
     ) -> Result<(), ItemError> {
-        if depth > MAX_DEPTH {
-            return Err(bad(format!("{pool}: nested pools too deep (a cycle)")));
+        refuse_cycle(chain, pool, "pools")?;
+        // NATIVE_LOOT.md step 1: Quantity is evaluated first, before the gate, so a random quantity draws even for
+        // a pool the gate then closes.
+        let quantity = self.pools.field(pool, "Quantity", Kind::Struct)?;
+        let quantity = trunc_i32(self.init(&quantity)?);
+        if quantity > MAX_OFF_QUANTITY {
+            return Err(bad(format!(
+                "{pool}: a Quantity of {quantity} (above the {MAX_OFF_QUANTITY} draws this port allows)"
+            )));
         }
-        if !self.gate(pool, stage, depth)? {
+        if !self.gate(pool, stage, &mut chain.to_vec())? {
             return Ok(());
         }
-        let props = self.props(pool)?;
-        let quantity = self.pools.field(pool, "Quantity")?;
-        let quantity = trunc_i32(self.init(&quantity)?);
-        let list = self.candidates(pool, &props, stage, variance, depth)?;
         let mut here = chain.to_vec();
         here.push(pool.to_string());
+        let list = self.candidates(pool, stage, variance, &mut here.clone())?;
         for _ in 0..quantity.max(0) {
             if list.is_empty() {
                 continue;
@@ -1504,7 +1661,7 @@ impl Off<'_, '_, '_> {
             match &list[i].0 {
                 Candidate::Pool { path, drop } => {
                     let flag = and_flags(*drop, may_drop);
-                    self.pool(path, stage, variance, flag, &here, depth + 1, drops)?;
+                    self.pool(path, stage, variance, flag, &here, drops)?;
                 }
                 Candidate::Balance {
                     balance,
@@ -1521,25 +1678,32 @@ impl Off<'_, '_, '_> {
         Ok(())
     }
 
-    /// `AddToItemPoolList`: included lists first (depth first), then the list's own pools.
+    /// `AddToItemPoolList`: included lists first (depth first), then the list's own pools. `seen` is the path of
+    /// lists above; a list already on it is a cycle (`BadData`; the native has no guard, NATIVE_LOOT.md).
     fn add_list(
         &self,
         list: &str,
-        depth: u32,
+        seen: &mut Vec<String>,
         out: &mut Vec<(String, Pv)>,
     ) -> Result<(), ItemError> {
-        if depth > MAX_DEPTH {
-            return Err(bad(format!("{list}: included lists too deep (a cycle)")));
-        }
-        let props = self.props(list)?;
-        for included in props.at("ItemPoolIncludedLists").items() {
+        refuse_cycle(seen, list, "pool lists")?;
+        seen.push(list.to_string());
+        for included in self
+            .pools
+            .field(list, "ItemPoolIncludedLists", Kind::Array)?
+            .items()
+        {
             let path = included
                 .as_str()
                 .ok_or_else(|| bad(format!("{list}: an included list that is not a path")))?;
-            self.add_list(path, depth + 1, out)?;
+            self.add_list(path, seen, out)?;
         }
-        push_pools(props.at("ItemPools"), out);
-        Ok(())
+        seen.pop();
+        push_pools(
+            &self.pools.field(list, "ItemPools", Kind::Array)?,
+            list,
+            out,
+        )
     }
 
     /// The listed pools of a source, with their probability init data.
@@ -1547,39 +1711,60 @@ impl Off<'_, '_, '_> {
         let class = short(self.pools.class_of(source)).to_string();
         let mut out = Vec::new();
         match class.as_str() {
-            "ItemPoolListDefinition" => self.add_list(source, 0, &mut out)?,
+            "ItemPoolListDefinition" => self.add_list(source, &mut Vec::new(), &mut out)?,
             "AIPawnBalanceDefinition" => {
-                let props = self.props(source)?;
-                let entries = props.at("PlayThroughs").items();
+                let entries = self.pools.field(source, "PlayThroughs", Kind::Array)?;
+                let entries = entries.items();
                 if entries.is_empty() {
                     return Ok(out);
                 }
                 // GetPlayThroughIndex: the player's playthrough, at most the last entry.
                 let index = usize::from(self.cx.balance.playthrough.index()).min(entries.len() - 1);
                 let entry = &entries[index];
-                let pick = |custom: &str, default: &str| -> Pv {
-                    let c = entry.at(custom);
+                // A playthrough entry's custom list replaces the default list when it is non-empty.
+                let pick = |custom: &str, default: &str| -> Result<Pv, ItemError> {
+                    let c = entry_value(entry, custom, Kind::Array, source)?;
                     if c.items().is_empty() {
-                        props.at(default).clone()
+                        self.pools.field(source, default, Kind::Array)
                     } else {
-                        c.clone()
+                        Ok(c)
                     }
                 };
                 let included = pick(
                     "CustomItemPoolIncludedLists",
                     "DefaultItemPoolIncludedLists",
-                );
+                )?;
                 for l in included.items() {
                     let path = l.as_str().ok_or_else(|| {
                         bad(format!("{source}: an included list that is not a path"))
                     })?;
-                    self.add_list(path, 1, &mut out)?;
+                    self.add_list(path, &mut vec![source.to_string()], &mut out)?;
                 }
-                push_pools(&pick("CustomItemPoolList", "DefaultItemPoolList"), &mut out);
+                push_pools(
+                    &pick("CustomItemPoolList", "DefaultItemPoolList")?,
+                    source,
+                    &mut out,
+                )?;
             }
             _ => {}
         }
         Ok(out)
+    }
+
+    /// `GetAmmoDropsPerPlayerMultiplier` (NATIVE_LOOT.md): 1.0 below playthrough index 2 (UNVERIFIED, read from
+    /// native code); from index 2 the `BalanceModifiers` entry's value, which is not read (`NotYet`).
+    fn ammo_multiplier(&self, pool: &str) -> Result<f32, ItemError> {
+        if self.cx.balance.playthrough.index() < 2 {
+            return Ok(1.0);
+        }
+        Err(NotYet::not_read(
+            format!(
+                "{pool}: the per-player ammo multiplier from playthrough index 2 (GetAmmoDropsPerPlayerMultiplier's \
+                 BalanceModifiers values)"
+            ),
+            RECORD,
+        )
+        .into())
     }
 
     fn source(
@@ -1597,7 +1782,7 @@ impl Off<'_, '_, '_> {
                     "{source}: unsupported loot source class {class}"
                 )));
             }
-            self.pool(source, stage, variance, Some(true), &[], 0, &mut drops)?;
+            self.pool(source, stage, variance, Some(true), &[], &mut drops)?;
             return Ok(drops);
         }
         if request.listing == Listing::Readied {
@@ -1609,41 +1794,71 @@ impl Off<'_, '_, '_> {
         }
         for (pool, probability) in self.listed(source)? {
             // bAutoReadyItems: class default true; the death roll keeps the pools that set it false.
-            if flag(&self.pools.field(&pool, "bAutoReadyItems")?) != Some(false) {
+            if flag(&self.pools.field(&pool, "bAutoReadyItems", Kind::Flag)?) != Some(false) {
                 continue;
             }
             let def = probability
                 .at("InitializationDefinition")
                 .as_str()
                 .unwrap_or("");
-            if object_name(def) == "AmmoDrops_PerPlayer" {
-                return Err(NotYet::not_read(
-                    format!(
-                        "{pool}: the per-player ammo multiplier (GetAmmoDropsPerPlayerMultiplier)"
-                    ),
-                    RECORD,
-                )
-                .into());
-            }
-            let chance = self.init(&probability)?;
+            // The multiplier first: from playthrough index 2 it is NotYet before anything is evaluated.
+            let multiplier = if object_name(def) == "AmmoDrops_PerPlayer" {
+                self.ammo_multiplier(&pool)?
+            } else {
+                1.0
+            };
+            let chance = self.init(&probability)? * multiplier;
             if chance <= 0.0 {
                 continue;
             }
             let rng = self.cx.eval.world.rng(CrtStream::LootPool)?;
             if frand_f32(rng) <= chance {
-                self.pool(&pool, stage, variance, Some(true), &[], 0, &mut drops)?;
+                self.pool(&pool, stage, variance, Some(true), &[], &mut drops)?;
             }
         }
         Ok(drops)
     }
 }
 
-fn push_pools(list: &Pv, out: &mut Vec<(String, Pv)>) {
+/// Adds a candidate to a pool's list: one at or below the 1e-8 floor is left out, and one identical to an earlier
+/// candidate replaces that candidate's weight in place.
+fn add_candidate(list: &mut Vec<(Candidate, f32)>, c: Candidate, w: f32) {
+    if f64::from(w) <= MIN_WEIGHT {
+        return;
+    }
+    match list.iter_mut().find(|(d, _)| d.same(&c)) {
+        Some(slot) => slot.1 = w,
+        None => list.push((c, w)),
+    }
+}
+
+/// The single-precision pool draw: `r = total * rand / 32767`, the first closed interval holding `r`; `NotYet` when
+/// rounding leaves `r` past every interval (what the native does then is not read).
+fn single_draw(weights: impl Iterator<Item = f32> + Clone, rand: u16) -> Result<usize, ItemError> {
+    let total = weights.clone().fold(0.0f32, |t, w| t + w);
+    let r = total * f32::from(rand) / 32_767.0;
+    let mut running = 0.0f32;
+    for (i, w) in weights.enumerate() {
+        if running <= r && r <= running + w {
+            return Ok(i);
+        }
+        running += w;
+    }
+    Err(NotYet::not_read(
+        "a single-precision pool draw past every interval (what the native does then)",
+        RECORD,
+    )
+    .into())
+}
+
+/// The `ItemPoolInfo` entries of a list with a pool, in order (Off mode: an undecoded value is `BadData`).
+fn push_pools(list: &Pv, owner: &str, out: &mut Vec<(String, Pv)>) -> Result<(), ItemError> {
     for e in list.items() {
-        if let Some(p) = e.at("ItemPool").as_str().filter(|p| !p.is_empty()) {
-            out.push((p.to_string(), e.at("PoolProbability").clone()));
+        if let Some(p) = entry_path(e, "ItemPool", owner)? {
+            out.push((p, entry_value(e, "PoolProbability", Kind::Struct, owner)?));
         }
     }
+    Ok(())
 }
 
 /// A source's drops as the parity line `{"pool":...,"stage":...,"seed":...,"drops":[...]}` (the C++ batch header's
@@ -2102,8 +2317,21 @@ mod tests {
                 items(vec![off_entry(SHIELD, 1.0, Some(true))]),
             ],
         );
-        // Stands in for the class default object (the alias key below points at it).
-        p.add("Off.Default", IP, vec![("Quantity", konst(1.0))]);
+        // Stand in for the class default objects (the alias keys below point at them): the pool default tags what the
+        // installed game's tags (Quantity 1, the two flags true); the others tag nothing.
+        p.add(
+            "Off.Default",
+            IP,
+            vec![
+                ("Quantity", konst(1.0)),
+                ("bAutoReadyItems", V::Bool(true)),
+                ("bSupportsGameStageVariance", V::Bool(true)),
+            ],
+        );
+        p.add("Off.KeyedDefault", KEYED, vec![]);
+        p.add("Off.ListDefault", LIST_CLASS, vec![]);
+        p.add("Off.PawnDefault", PAWN, vec![]);
+        off_more(p);
     }
 
     struct Install(PathBuf);
@@ -2144,16 +2372,23 @@ mod tests {
                 ));
             }
             let mut with_default = input.clone();
-            let default = input
-                .paths
-                .iter()
-                .find(|e| e.path == "Off.Default")
-                .unwrap()
-                .clone();
-            with_default.paths.push(PathHolders::new(
-                format!("{CLASS_DEFAULT_KEY}ItemPoolDefinition"),
-                default.holders,
-            ));
+            for (stand_in, class) in [
+                ("Off.Default", "ItemPoolDefinition"),
+                ("Off.KeyedDefault", "KeyedItemPoolDefinition"),
+                ("Off.ListDefault", "ItemPoolListDefinition"),
+                ("Off.PawnDefault", "AIPawnBalanceDefinition"),
+            ] {
+                let default = input
+                    .paths
+                    .iter()
+                    .find(|e| e.path == stand_in)
+                    .unwrap()
+                    .clone();
+                with_default.paths.push(PathHolders::new(
+                    format!("{CLASS_DEFAULT_KEY}{class}"),
+                    default.holders,
+                ));
+            }
             Fx {
                 pools: PoolData::new(with_default).unwrap(),
                 input,
@@ -2162,7 +2397,7 @@ mod tests {
         }
 
         fn values(&self, players: f64) -> Values<'_> {
-            Values::new(&self.pools, players)
+            Values::new(&self.pools, players, PySum::Py314)
         }
     }
 
@@ -2216,15 +2451,19 @@ mod tests {
     #[test]
     fn python_sum_adds_ints_into_a_float_total_without_compensation() {
         let big = 1e16;
-        let mixed = py_sum_mixed([PyNum::Float(big), PyNum::Int(1), PyNum::Int(1)]).unwrap();
+        let mixed = py_sum_mixed(
+            [PyNum::Float(big), PyNum::Int(1), PyNum::Int(1)],
+            PySum::Py312,
+        )
+        .unwrap();
         assert_eq!(mixed, PyNum::Float(big));
         assert_eq!(py_sum([big, 1.0, 1.0]), big + 2.0);
         assert_eq!(
-            py_sum_mixed([PyNum::Int(3), PyNum::Int(1)]).unwrap(),
+            py_sum_mixed([PyNum::Int(3), PyNum::Int(1)], PySum::Py314).unwrap(),
             PyNum::Int(4)
         );
-        assert_eq!(py_sum_mixed([]).unwrap(), PyNum::Int(0));
-        assert!(py_sum_mixed([PyNum::Int(i64::MAX), PyNum::Int(1)]).is_err());
+        assert_eq!(py_sum_mixed([], PySum::Py314).unwrap(), PyNum::Int(0));
+        assert!(py_sum_mixed([PyNum::Int(i64::MAX), PyNum::Int(1)], PySum::Py312).is_err());
     }
 
     #[test]
@@ -2334,7 +2573,15 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(
             fx.pools.parity_pools(),
-            ["List", "Off.List", "Pool.WeaponPools.Guns"]
+            [
+                "List",
+                "Off.AmmoList",
+                "Off.List",
+                "Off.ListDefault",
+                "Off.ListOuter",
+                "Off.ListSelf",
+                "Pool.WeaponPools.Guns"
+            ]
         );
         assert_eq!(
             parity_line("List", 10, 1, &list),
@@ -2442,8 +2689,9 @@ mod tests {
             cx: &mut cx,
             cap: 50,
         };
-        let props = fx.fx.pools.props("Off.Gear").unwrap();
-        let list = off.candidates("Off.Gear", &props, 8, None, 0).unwrap();
+        let list = off
+            .candidates("Off.Gear", 8, None, &mut vec!["Off.Gear".to_string()])
+            .unwrap();
         let weights: Vec<f32> = list.iter().map(|(_, w)| *w).collect();
         let bolt = 0.5f32 + 7.0f32 / 10.0f32 * 0.5f32;
         assert_eq!(weights, [1.0 * 2.0 / 2.0, bolt * 2.0 / 2.0, 1.0]);
@@ -2481,12 +2729,15 @@ mod tests {
         // Without a default object, the field is NotYet.
         let bare = PoolData::new(fx.fx.input.clone()).unwrap();
         assert!(matches!(
-            bare.field("Off.Untagged", "Quantity"),
+            bare.field("Off.Untagged", "Quantity", Kind::Struct),
             Err(ItemError::NotYet(_))
         ));
         assert_eq!(
-            bare.field("Off.Gear", "Quantity").unwrap(),
-            fx.fx.pools.field("Off.Gear", "Quantity").unwrap()
+            bare.field("Off.Gear", "Quantity", Kind::Struct).unwrap(),
+            fx.fx
+                .pools
+                .field("Off.Gear", "Quantity", Kind::Struct)
+                .unwrap()
         );
     }
 
@@ -2541,5 +2792,359 @@ mod tests {
             .0
             .unwrap();
         assert!(up.iter().all(|d| d.candidate.as_ref().unwrap().stage == 10));
+    }
+
+    // ---- review r1: more Off-mode cases ----
+
+    const KEYED: &str = "WillowGame.KeyedItemPoolDefinition";
+    const LIST_CLASS: &str = "WillowGame.ItemPoolListDefinition";
+    const PAWN: &str = "WillowGame.AIPawnBalanceDefinition";
+
+    fn death_pool(p: &mut Syn, path: &'static str, balance: &'static str) {
+        p.add(
+            path,
+            IP,
+            vec![
+                ("Quantity", konst(1.0)),
+                ("bAutoReadyItems", V::Bool(false)),
+                items(vec![off_entry(balance, 1.0, Some(true))]),
+            ],
+        );
+    }
+
+    fn off_more(p: &mut Syn) {
+        // A keyed pool with no Quantity of its own: the keyed default tags none, the pool default gives 1.
+        p.add(
+            "Off.Keyed",
+            KEYED,
+            vec![items(vec![off_entry(SHIELD, 1.0, Some(true))])],
+        );
+        p.add("Off.KeyedEmpty", KEYED, vec![("Key", V::Name("SomeKey"))]);
+        p.add("Gate10", ATTR, vec![]);
+        p.add(
+            "Off.Max",
+            IP,
+            vec![
+                ("Quantity", konst(1.0)),
+                ("MaxGameStageRequirement", r("Gate10")),
+                items(vec![off_entry(SHIELD, 1.0, Some(true))]),
+            ],
+        );
+        death_pool(p, "Off.Death2", GRENADE);
+        death_pool(p, "Off.DeathAlt", SHIELD);
+        p.add(
+            "Off.ListOuter",
+            LIST_CLASS,
+            vec![
+                ("ItemPoolIncludedLists", V::Array(vec![r("Off.List")])),
+                (
+                    "ItemPools",
+                    V::Array(vec![listed("Off.Death2", konst(1.0))]),
+                ),
+            ],
+        );
+        p.add(
+            "Off.ListSelf",
+            LIST_CLASS,
+            vec![("ItemPoolIncludedLists", V::Array(vec![r("Off.ListSelf")]))],
+        );
+        p.add(
+            "Off.PoolSelf",
+            IP,
+            vec![
+                ("Quantity", konst(2.0)),
+                items(vec![entry(Some("Off.PoolSelf"), None, konst(1.0))]),
+            ],
+        );
+        p.add(
+            "Off.Pawn",
+            PAWN,
+            vec![
+                (
+                    "DefaultItemPoolIncludedLists",
+                    V::Array(vec![r("Off.List")]),
+                ),
+                (
+                    "DefaultItemPoolList",
+                    V::Array(vec![listed("Off.DeathAlt", konst(1.0))]),
+                ),
+                (
+                    "PlayThroughs",
+                    V::Array(vec![V::Struct(
+                        "PlayThroughData",
+                        vec![(
+                            "CustomItemPoolList",
+                            V::Array(vec![listed("Off.Death2", konst(1.0))]),
+                        )],
+                    )]),
+                ),
+            ],
+        );
+        p.add(
+            "Off.Huge",
+            IP,
+            vec![
+                ("Quantity", konst(20_000.0)),
+                items(vec![off_entry(SHIELD, 1.0, Some(true))]),
+            ],
+        );
+        p.add(
+            "Off.Uncommon",
+            IP,
+            vec![
+                ("Quantity", konst(1.0)),
+                ("bEligibleForUncommonWeightMultiplier", V::Bool(true)),
+                items(vec![entry(
+                    Some("Off.Death"),
+                    None,
+                    by_def("GD_PoolTest.Weight_2_Uncommon"),
+                )]),
+            ],
+        );
+        p.add(
+            "Off.AmmoList",
+            LIST_CLASS,
+            vec![(
+                "ItemPools",
+                V::Array(vec![listed(
+                    "Off.Death",
+                    by_def("GD_PoolTest.AmmoDrops_PerPlayer"),
+                )]),
+            )],
+        );
+    }
+
+    fn snap_uvhm(stage: i32) -> ow_balance::types::BalanceSnapshot {
+        use ow_balance::types::*;
+        BalanceSnapshot::new(
+            Playthrough::UVHM,
+            OpLevel::NONE,
+            PlayerCount::SINGLE,
+            ExpLevel::new(stage),
+            GameStage(stage),
+            AwesomeLevel::new(0),
+            LevelCapUpgrades::ALL,
+        )
+        .unwrap()
+    }
+
+    impl OffFx {
+        fn roll_snap(
+            &self,
+            source: &str,
+            snap: &ow_balance::types::BalanceSnapshot,
+            seed: u32,
+        ) -> Result<Vec<PoolDrop>, ItemError> {
+            let mut world = TestWorld::new();
+            let gate10 = world.constant_attribute(10.0);
+            let gate60 = world.constant_attribute(60.0);
+            let mut rng = CrtRand::new(seed);
+            let mut rw = RollWorld::new(&mut world, &mut rng, false);
+            let mut cx = RollCx::new(
+                snap,
+                EvalCx::new(&mut rw),
+                &self.sys,
+                &self.data,
+                ParityMode::Off,
+            )
+            .with_known("Gate10", gate10)
+            .with_known("Gate60", gate60);
+            roll_pool(
+                &self.fx.pools,
+                Some(&self.reg),
+                &ObjectPath::parse(source).unwrap(),
+                &PoolRequest::for_mode(ParityMode::Off),
+                &mut cx,
+            )
+        }
+    }
+
+    fn chains(drops: &[PoolDrop]) -> Vec<Vec<&str>> {
+        drops
+            .iter()
+            .map(|d| d.chain.iter().map(String::as_str).collect())
+            .collect()
+    }
+
+    #[test]
+    fn python_3_12_and_3_14_add_an_int_into_a_float_sum_differently() {
+        // sum([0.1, 2, 0.2, 5]): 0x1.d333333333334p+2 on CPython 3.12.10, 0x1.d333333333333p+2 on 3.14.7 (measured).
+        let items = [
+            PyNum::Float(0.1),
+            PyNum::Int(2),
+            PyNum::Float(0.2),
+            PyNum::Int(5),
+        ];
+        let bits = |rule| match py_sum_mixed(items, rule).unwrap() {
+            PyNum::Float(x) => x.to_bits(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(bits(PySum::Py312), 4_619_905_087_747_339_060);
+        assert_eq!(bits(PySum::Py314), 4_619_905_087_747_339_059);
+    }
+
+    #[test]
+    fn off_mode_follows_included_lists_first() {
+        let fx = OffFx::new("off-included");
+        // Off.ListOuter includes Off.List (whose death pool is Off.Death), then lists Off.Death2 itself.
+        let drops = fx.off("Off.ListOuter", 8, 1).unwrap();
+        assert_eq!(chains(&drops), [vec!["Off.Death"], vec!["Off.Death2"]]);
+        // A list that includes itself is refused.
+        assert!(matches!(
+            fx.off("Off.ListSelf", 8, 1),
+            Err(ItemError::BadData(_))
+        ));
+    }
+
+    #[test]
+    fn off_mode_custom_playthrough_lists_replace_the_defaults() {
+        let fx = OffFx::new("off-pawn");
+        // Included lists first (the default ones: the playthrough entry has none), then the custom pool list, which
+        // replaces the default list (Off.DeathAlt never rolls).
+        let drops = fx.off("Off.Pawn", 8, 1).unwrap();
+        assert_eq!(chains(&drops), [vec!["Off.Death"], vec!["Off.Death2"]]);
+    }
+
+    #[test]
+    fn off_mode_walks_the_class_default_chain() {
+        let fx = OffFx::new("off-keyed");
+        // Default__KeyedItemPoolDefinition tags no Quantity: Default__ItemPoolDefinition's 1 applies.
+        assert_eq!(fx.off("Off.Keyed", 8, 1).unwrap().len(), 1);
+        assert!(matches!(
+            fx.off("Off.KeyedEmpty", 8, 1),
+            Err(ItemError::NotYet(n)) if n.missing == Missing::NotRead
+        ));
+        assert_eq!(
+            fx.fx
+                .pools
+                .field("Off.Keyed", "Quantity", Kind::Struct)
+                .unwrap(),
+            fx.fx
+                .pools
+                .field("Off.Default", "Quantity", Kind::Struct)
+                .unwrap()
+        );
+        // The chain's end: no object, false, an empty array; a struct is NotYet.
+        assert_eq!(
+            fx.fx
+                .pools
+                .field("Off.Keyed", "MaxGameStageRequirement", Kind::Object)
+                .unwrap(),
+            Pv::Null
+        );
+        assert_eq!(
+            fx.fx
+                .pools
+                .field(
+                    "Off.Keyed",
+                    "bEligibleForUncommonWeightMultiplier",
+                    Kind::Flag
+                )
+                .unwrap(),
+            Pv::Bool(false)
+        );
+        assert_eq!(
+            fx.fx
+                .pools
+                .field("Off.ListSelf", "ItemPools", Kind::Array)
+                .unwrap(),
+            Pv::List(vec![])
+        );
+        assert!(matches!(
+            fx.fx.pools.field("Off.Keyed", "Probability", Kind::Struct),
+            Err(ItemError::NotYet(_))
+        ));
+        // A tagged value that did not decode is BadData, never read as untagged.
+        let undecoded = Pv::Map(DetMap::from([("Quantity".to_string(), Pv::Null)]));
+        assert!(matches!(
+            tagged(&undecoded, "Quantity", Kind::Struct, "P"),
+            Err(ItemError::BadData(_))
+        ));
+        assert_eq!(
+            tagged(&undecoded, "Quantity", Kind::Object, "P").unwrap(),
+            Some(&Pv::Null)
+        );
+        assert_eq!(
+            tagged(&undecoded, "Other", Kind::Struct, "P").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn off_mode_closes_a_max_window_above_its_bound() {
+        let fx = OffFx::new("off-max");
+        assert_eq!(fx.roll_snap("Off.Max", &snapshot(10), 1).unwrap().len(), 1);
+        assert_eq!(fx.roll_snap("Off.Max", &snapshot(11), 1).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn off_mode_refuses_cycles_and_runaway_quantities() {
+        let fx = OffFx::new("off-cycle");
+        assert!(matches!(
+            fx.off("Off.PoolSelf", 8, 1),
+            Err(ItemError::BadData(_))
+        ));
+        assert!(matches!(
+            fx.off("Off.Huge", 8, 1),
+            Err(ItemError::BadData(_))
+        ));
+    }
+
+    #[test]
+    fn off_mode_multipliers_answer_where_the_record_stops() {
+        let fx = OffFx::new("off-multipliers");
+        let not_read = |r: Result<Vec<PoolDrop>, ItemError>| matches!(r, Err(ItemError::NotYet(n)) if n.missing == Missing::NotRead);
+        assert!(not_read(fx.off("Off.Uncommon", 8, 1)));
+        // The per-player ammo multiplier: NotYet from playthrough index 2, 1.0 below it.
+        assert!(not_read(fx.roll_snap("Off.AmmoList", &snap_uvhm(8), 1)));
+        let snap = snapshot(8);
+        let mut world = TestWorld::new();
+        let mut rng = CrtRand::new(1);
+        let mut rw = RollWorld::new(&mut world, &mut rng, false);
+        let mut cx = RollCx::new(
+            &snap,
+            EvalCx::new(&mut rw),
+            &fx.sys,
+            &fx.data,
+            ParityMode::Off,
+        );
+        let off = Off {
+            pools: &fx.fx.pools,
+            reg: &fx.reg,
+            cx: &mut cx,
+            cap: 50,
+        };
+        assert_eq!(off.ammo_multiplier("Off.Death").unwrap(), 1.0);
+    }
+
+    #[test]
+    fn off_mode_candidate_list_floor_replace_and_draw() {
+        let pool = |p: &str| Candidate::Pool {
+            path: p.to_string(),
+            drop: None,
+        };
+        let mut list = Vec::new();
+        add_candidate(&mut list, pool("A"), 2.0);
+        add_candidate(&mut list, pool("B"), 1e-8); // at the floor: left out
+        add_candidate(&mut list, pool("C"), 1.0);
+        add_candidate(&mut list, pool("A"), 5.0); // identical: replaces A's weight in place
+        let shown: Vec<(String, f32)> = list
+            .iter()
+            .map(|(c, w)| match c {
+                Candidate::Pool { path, .. } => (path.clone(), *w),
+                Candidate::Balance { balance, .. } => (balance.clone(), *w),
+            })
+            .collect();
+        assert_eq!(shown, [("A".to_string(), 5.0), ("C".to_string(), 1.0)]);
+        // The draw: total 6, rand 0 -> A, rand 32767 -> C (the closed last interval).
+        let ws = [5.0f32, 1.0];
+        assert_eq!(single_draw(ws.iter().copied(), 0).unwrap(), 0);
+        assert_eq!(single_draw(ws.iter().copied(), 32_767).unwrap(), 1);
+        // Weights whose single-precision total times 32767 over 32767 lands past the last interval: NotYet.
+        let past = [f32::from_bits(0x4013_1c7f), f32::from_bits(0x3fc6_4701)];
+        assert!(matches!(
+            single_draw(past.iter().copied(), 32_767),
+            Err(ItemError::NotYet(n)) if n.missing == Missing::NotRead
+        ));
     }
 }
