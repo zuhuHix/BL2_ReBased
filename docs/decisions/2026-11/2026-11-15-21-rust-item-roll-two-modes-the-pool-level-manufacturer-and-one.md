@@ -2,7 +2,19 @@
 
 AI-assisted (Claude Code). Lane W4-ROLL of the Rust port fills `crates/ow-items/src/{merge,candidates,pick,names,rarity,value,roll}.rs`
 and the `--item-roll` command (`crates/ow-cli/src/cmd/items_roll.rs`), architecture section 3.7. No parsing behaviour
-changes. No file outside the lane's own was edited. This file records the choices a later lane should be able to find.
+changes. This file records the choices a later lane should be able to find.
+
+- **Edits outside the lane's own files** (review r1 of PR #319, each granted by the hub):
+  - `crates/ow-items/src/error.rs`: `ItemError::Attr`, `Balance`, `BadData` and `WrongMode`. They are additive (the
+    enum is `#[non_exhaustive]`), with `From<AttrError>` and `From<BalanceError>`, which keep a `NotYet` as `NotYet`,
+    and `source()`.
+  - `crates/ow-items/src/registry.rs`: a small public lookup, `TagLookup`, with `Props` and `Raises`. It is the
+    registry's census and tag-stream reading under given schema lines, and `attribute_value` with attribute values
+    passed in. Existing callers pass none, and the registry's output is unchanged: `item_registry_rust_test.py`
+    passes, and the real `--item-registry` is byte-identical.
+  - `tests/item_roll_rust_test.py`, `tests/rust_parity.d/roll.txt` and the `item-roll-rust` ctest entry. The ctest
+    entry sets `OW_PARITY=reference`, as the manifest's `mode=reference` marker does.
+  - The `ow-items` block of ARCHITECTURE.md section 3.7 and the `--item-roll` row of section 2.3.
 
 - **One generator per roll.** `RollWorld` hands the roll's one `CrtRand(seed)` to every stream, the evaluator's
   included, as both oracles draw one stream per roll. It forwards `attribute_changed` only over a world that runs no
@@ -28,10 +40,13 @@ changes. No file outside the lane's own was edited. This file records the choice
       terms and name expressions.
     - Class mods answer `NotYet { NeedsRealGame(6) }`. After W7 deletes Reference, the census no longer covers class
       mods until question 6 is answered.
+- **Off mode's pick arithmetic** is the tools': CPython's compensated sum and a double-precision draw. It is
+  UNVERIFIED as the game's: NATIVE_LOOT.md gives single-precision intervals for the pool pick, and `weapon_gen.cpp`
+  sums plainly.
 - **Question 7 (the grenade-mod per-element minimum).** 1,035 grenade-mod part entries bound their window by an
   attribute whose only value resolver is a constant resolver. Reference reads such a bound as no bound, as the tools do.
-  Off mode evaluates it, which gives the constant, so the bound applies. This is the evaluator's reading and stays
-  UNVERIFIED until question 7 is answered. A test shows the part dropping out below the bound in Off mode only.
+  Off mode evaluates it, which gives the constant, so the bound applies. The hub confirms this as the intended Off
+  reading (review r1). It stays UNVERIFIED until question 7 is answered. A test shows the part dropping out below the bound in Off mode only.
 - **Name parts in the rarity sum** is a reading, not a stand-in: the same in both modes, UNVERIFIED (question 6).
   Rarity also counts the two name parts for weapons; every weapon name part has rarity 0 (NATIVE_WEAPON_RULES.md
   section 12), so the weapon sum is the card's.
@@ -41,18 +56,29 @@ changes. No file outside the lane's own was edited. This file records the choice
   (manufacturers), 1 usable (definition). The synthetic test has a record of each shape, and the installed game's registry
   gives the same count (below).
 - **Where the values come from.** The roll reads raw properties the registry does not hold: rarities, slot effects
-  and upgrades, name parts, flags and globals. They come from each owner's tag stream with `item_roll.py`'s schema
-  lines (a superset of the registry's), the same reading as decision 2026-11-15-15. The registry exposes no lookup,
-  so `merge.rs` keeps a copy of its decoder and of `weapon_recipe.attribute_value` (about 250 lines). The copy goes
-  once the registry exposes its census (an open item).
-- **Contract gaps, handled in the lane's own files.**
-  - `ItemError` has no variant for an evaluator or balance error that is not a `NotYet`, so `roll` returns
-    `RollError`.
-  - `roll` returns `RollResult` (an item, or `NotRollable` with the oracle's reason), not `DefinitionData`;
-    `Rolled::definition_data()` gives the data.
-  - `RollCx` carries the attribute system, the values, the mode, the item instance (none offline until W4-STATS) and
+  and upgrades, name parts, flags and globals. They come from each owner's tag stream through the registry's
+  `TagLookup`, with `item_roll.py`'s schema lines (a superset of the registry's). That is the same reading as
+  decision 2026-11-15-15. `RollData` (`merge.rs`) wraps it; `RollCx` holds it `pub(crate)`.
+- **A known difference in a rare case, kept.** `attribute_value` stops at the first formula term with no value.
+  The tool evaluates all four terms first, so a later term that raises makes the tool raise where the port answers
+  "no value". Both the registry and the roll have it. It is not changed, because the registry is byte-identical on the
+  installed game.
+- **Shapes (architecture section 3.7, hub decisions in review r1):**
+  - `roll` returns `Result<RollResult, ItemError>`: an item, or `NotRollable` with the oracle's reason.
+    `Rolled::definition_data()` gives the definition data.
+  - `roll_candidate` rolls a candidate a pool already drew. It serves Off mode only; under Reference it answers
+    `ItemError::WrongMode`.
+  - `RollCx` carries the attribute system, the mode, the item's instance, a manufacturer the caller chose and the
     objects the caller holds by path.
-  - `roll_candidate` rolls a candidate a pool already drew, for W4-POOLS.
+  - Off mode with an instance: the caller runs `expand`, draws, instantiates the item, then calls `roll_candidate`
+    with `with_item`. Without one, `roll` answers `NotYet` for what needs it.
+- **Review r1 fixes.**
+  - `GetExpLevelFromManufacturerData` asks each chain step in turn. A step that interpolates answers the word
+    unchanged. A non-interpolating leaf over an interpolating base gives a base candidate the word as its level.
+  - Float-to-integer conversions are checked: a rarity term or `ExpLevel` that is not finite or out of range is
+    `BadData`, where Python's `math.trunc` raises.
+  - The Off-mode check for a weight with no index looks only at the slots the roll draws.
+  - The CLI answers `--overlay` with `NotYet` (exit 3) and reports a refused offline world.
 - **Off-mode gaps that answer `NotYet` instead of a value.**
   - Name expressions need the item's instance as the source.
   - A part weight with no init data index.
@@ -83,6 +109,9 @@ changes. No file outside the lane's own was edited. This file records the choice
     rolls answer `NotYet` (question 6). 16,300 answer `NotYet { NotPorted }`, because their name expressions need
     the item's instance.
 - **Verified on an invented install.**
+  - `tests/item_roll_rust_test.py` is the tracked gate: its own invented install, the Rust `--item-roll --census`
+    and `--weapons`, checked with `item_roll.check` and compared with `item_roll.roll` and `weapon_recipe.roll` on the
+    C++ reader. The manifest line `roll.txt` and ctest `item-roll-rust` run it.
   - On an invented install (`roll.rs` tests, written out by the ignored `write_the_fixture_for_the_tools`), the
     oracles run with the Rust `ow-package` gave the same result as the Rust Reference roll:
     - `item_roll.roll`: 1,320 of 1,320 item rolls equal, field for field (parts, name parts, rarity level and band,

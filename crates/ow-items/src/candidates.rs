@@ -32,14 +32,15 @@ use ow_core::OrderedMap;
 use ow_core::num::f32r;
 use ow_core::rand::Rand15;
 
+use crate::ItemError;
 use crate::merge::{RollData, short};
 use crate::pick::{MIN_WEIGHT, Picked, pick};
+use crate::rarity::trunc_i32;
 use crate::registry::{FLAT_WEIGHT, ITEM_SLOTS, Pv, WEAPON_SLOTS};
-use crate::roll::RollError;
 
 /// A value reader: a registry value (a number, `{"init": ...}`, or `None`) to a number, `None` when the value has
 /// none (the stand-in's "needs runtime state", or no value at all).
-pub type ValueOf<'a> = dyn FnMut(&Pv) -> Result<Option<f64>, RollError> + 'a;
+pub type ValueOf<'a> = dyn FnMut(&Pv) -> Result<Option<f64>, ItemError> + 'a;
 
 // ---- the oracle's balance-level draw (Reference) ---------------------------------------------------------------------
 
@@ -252,26 +253,37 @@ fn definition_for(
     answer.or_else(|| definition_for(data, record, chain, from + 1, maker, word))
 }
 
-/// `GetExpLevelFromManufacturerData` (NATIVE_LOOT.md): the word for an interpolating balance; otherwise the grade's
-/// `ExpLevel` of the first step listing the manufacturer with the grade in range (high 16 bits of the word zero), the
-/// high 16 bits capped at 63 when set; 1 when nothing resolves.
-fn level_for(data: &RollData, record: &Pv, chain: &[String], maker: &str, word: i32) -> i32 {
-    if chain.first().is_some_and(|b| interpolates(data, b)) {
-        return word;
-    }
+/// `GetExpLevelFromManufacturerData` (NATIVE_LOOT.md), asked of each step in turn as the native hands the question
+/// to the base: a step that interpolates its level answers the word unchanged; otherwise a step listing the
+/// manufacturer with the grade index (low 16 bits) in range answers that grade's `ExpLevel` when the high 16 bits are
+/// zero, else the high 16 bits capped at 63; any other step defers to its base. 1 when no step answers.
+fn level_for(
+    data: &RollData,
+    record: &Pv,
+    chain: &[String],
+    maker: &str,
+    word: i32,
+) -> Result<i32, ItemError> {
     for step in chain {
+        if interpolates(data, step) {
+            return Ok(word);
+        }
         let makers = step_makers(data, record, step);
         if let Some((_, grades)) = makers.iter().find(|(m, _)| m.as_deref() == Some(maker))
             && let Some(g) = grades.get((word & 0xFFFF) as usize)
         {
             let high = (word >> 16) & 0xFFFF;
             if high != 0 {
-                return high.min(63);
+                return Ok(high.min(63));
             }
-            return g.at("exp_level").number().map_or(1, |v| v as i32);
+            return match g.at("exp_level").number() {
+                // GetExpLevelFromManufacturerData: the grade's GradeModifiers.ExpLevel (an int in the data).
+                Some(v) => trunc_i32(v, "a grade's ExpLevel (GetExpLevelFromManufacturerData)"),
+                None => Ok(1),
+            };
         }
     }
-    1
+    Ok(1)
 }
 
 /// The balance candidate expansion (module documentation) at `stage` capped by `cap`. `value` reads the spawn
@@ -282,7 +294,7 @@ pub fn expand(
     stage: i32,
     cap: i32,
     value: &mut ValueOf<'_>,
-) -> Result<Vec<PoolCandidate>, RollError> {
+) -> Result<Vec<PoolCandidate>, ItemError> {
     let s = stage.min(cap);
     let chain: Vec<String> = record
         .at("chain")
@@ -307,7 +319,9 @@ pub fn expand(
             let word = if original_interpolates {
                 s
             } else {
-                index as i32
+                i32::try_from(index).map_err(|_| {
+                    ItemError::BadData(format!("grade index {index} is out of range"))
+                })?
             };
             let Some(definition) = definition_for(data, record, &chain, 0, &maker, word) else {
                 continue;
@@ -332,7 +346,7 @@ pub fn expand(
                 definition,
                 grade_or_level: word,
                 stage: s,
-                level: level_for(data, record, &chain, &maker, word),
+                level: level_for(data, record, &chain, &maker, word)?,
                 weight,
             });
         }
@@ -346,8 +360,9 @@ pub fn expand(
 /// A balance rolled on its own, as a pool with that one balance entry would draw it (NATIVE_LOOT.md, pool roll steps
 /// 3 and 4): each candidate weighs its modifier times the entry weight 1 over the number of candidates, in single
 /// precision; a candidate at or below 1e-8 is left out; then one weighted draw, also for a single candidate. The draw
-/// is [`pick`]'s form (double), the form `loot_pools.roll_crt` uses; the game's own form is UNVERIFIED (W4-POOLS
-/// owns the pool roll).
+/// is [`pick`]'s form, the tools' (`loot_pools.roll_crt`): CPython's compensated sum and a double-precision draw.
+/// That form is UNVERIFIED as the game's: NATIVE_LOOT.md gives single-precision intervals for the pool pick, and
+/// `weapon_gen.cpp` sums plainly (W4-POOLS owns the pool roll).
 pub fn pick_candidate(candidates: &[PoolCandidate], rng: &mut dyn Rand15) -> Picked<usize> {
     let n = candidates.len().max(1) as f32;
     pick(
@@ -400,7 +415,7 @@ pub fn part_candidates(
     stage: i64,
     manufacturer: Option<&str>,
     value: &mut ValueOf<'_>,
-) -> Result<PartCandidates, RollError> {
+) -> Result<PartCandidates, ItemError> {
     let mut out = PartCandidates::new();
     let s = stage as f64;
     for slot in slot_order(weapon_balance) {
@@ -566,7 +581,7 @@ mod tests {
         ])
     }
 
-    fn numbers(v: &Pv) -> Result<Option<f64>, RollError> {
+    fn numbers(v: &Pv) -> Result<Option<f64>, ItemError> {
         Ok(v.number().filter(|_| !matches!(v, Pv::Null)))
     }
 
@@ -600,7 +615,7 @@ mod tests {
         // GetInventoryDefinitionForManufacturerGrade answers from the balance's own InventoryDefinition (NATIVE_LOOT.md):
         // with no package data the balance has none, so the manufacturer yields no candidate. The expansion with
         // package data is tested in roll.rs (`off_mode_expands_at_the_pool_level_and_draws_once_more`).
-        let data = RollData::new(&CensusInput::new(PathBuf::from(".")));
+        let data = RollData::new(&CensusInput::new(PathBuf::from("."))).unwrap();
         let r = record(vec![("Test.A", vec![grade(1, 100, None, None)])]);
         assert!(expand(&data, &r, 8, 50, &mut numbers).unwrap().is_empty());
     }
@@ -669,7 +684,7 @@ mod tests {
             ]),
         )]);
         // The stand-in reading: a value needing runtime state has none (no bound).
-        let mut stand_in = |v: &Pv| -> Result<Option<f64>, RollError> {
+        let mut stand_in = |v: &Pv| -> Result<Option<f64>, ItemError> {
             Ok(match v {
                 Pv::Int(_) | Pv::Float(_) => v.number(),
                 _ => None,

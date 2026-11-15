@@ -9,7 +9,9 @@
 //! and when rounding leaves `r` past every interval the last entry wins. No candidate: no draw and no pick.
 //!
 //! The seeding (one `CrtRand(seed)` per roll) is the tools', not the game's: the game's own random sequence is not
-//! reproduced (UNVERIFIED).
+//! reproduced (UNVERIFIED). The arithmetic is the tool's too: CPython's compensated `sum()` and a double-precision
+//! draw. It is UNVERIFIED as the game's: NATIVE_LOOT.md gives single-precision intervals for the pool pick, and
+//! `weapon_gen.cpp` sums plainly. Both modes use it (Off mode has no read form of its own yet).
 
 use ow_core::rand::{Rand15, weighted_draw};
 

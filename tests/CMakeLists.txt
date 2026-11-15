@@ -179,6 +179,12 @@ if(EXISTS ${OW_RUST_PACKAGE})
   add_test(NAME item-registry-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_registry_rust_test.py
            $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
   set_tests_properties(item-registry-rust PROPERTIES TIMEOUT 300 LABELS rust)
+  # Lane W4-ROLL: the Rust --item-roll against tools/item_roll.py (check and roll) and tools/weapon_recipe.py on the C++
+  # reader. It pins the reference stand-ins, so it runs with OW_PARITY=reference, as its mode=reference manifest line
+  # (tests/rust_parity.d/roll.txt) does under tools/rust_parity.py.
+  add_test(NAME item-roll-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_roll_rust_test.py
+           $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
+  set_tests_properties(item-roll-rust PROPERTIES TIMEOUT 300 LABELS rust ENVIRONMENT "OW_PARITY=reference")
   # Lane W3-DEFS: --def-dump is Rust-only (the C++ binary has no such command), so this runs the Rust binary alone.
   add_test(NAME def-dump-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/def_dump_test.py ${OW_RUST_PACKAGE})
   set_tests_properties(def-dump-synthetic PROPERTIES TIMEOUT 120 LABELS rust)

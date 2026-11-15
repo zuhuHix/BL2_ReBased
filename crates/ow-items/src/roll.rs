@@ -29,16 +29,22 @@
 //! through the evaluator, which gives the resolver's constant, so the bound applies: the evaluator's reading,
 //! UNVERIFIED (question 7).
 //!
-//! **Level** = the stage for an interpolating balance (`bInterpolateExpLevel`, class default true), else the grade's
-//! `ExpLevel` (`GetExpLevelFromManufacturerData`, verified for 1,600 game-rolled guns). Reference applies no stage
-//! cap, as both oracles do by default.
+//! **Level** = the stage for an interpolating balance (`bInterpolateExpLevel`, class default true; level equals stage
+//! is verified for 1,600 game-rolled guns, WEAPON_PARTS_CATALOG.md section 4), else the grade's `ExpLevel`
+//! (`GetExpLevelFromManufacturerData`, read from native code, UNVERIFIED). Reference applies no stage cap, as both
+//! oracles do by default.
+//!
+//! **Off mode and the item's instance** (architecture section 3.7): a caller that has the item's instance object
+//! runs [`crate::candidates::expand`], draws a candidate ([`crate::candidates::pick_candidate`] or its pool's draw),
+//! instantiates the item, then calls [`roll_candidate`] with [`RollCx::with_item`]. [`roll`] in Off mode without an
+//! instance answers `NotYet` for the parts that need one (name expressions, context-dependent rarity terms).
 
 use ow_attr::AttributeSystem;
 use ow_attr::api::{
     AttrError, AttrWorld, Comparison, EngineQuery, EvalCx, ExprData, ExprMode, GlobalSlots,
     InitData, NumForms, Operand2Usage, WorldParts,
 };
-use ow_balance::types::{BalanceError, BalanceSnapshot};
+use ow_balance::types::BalanceSnapshot;
 use ow_core::rand::{CrtRand, CrtStream, Rand15};
 use ow_core::{DetMap, NotYet, ObjectPath, OrderedMap, ParityMode};
 use ow_object::ids::{ObjRef, PropId};
@@ -52,7 +58,7 @@ use crate::data::{DefinitionData, ItemKind, ItemSlot, SLOT_COUNT, WeaponSlot};
 use crate::merge::{self, RollData};
 use crate::names::{self, NameContext, choose, native_damage_type, tool_expressions_hold};
 use crate::pick::{Picked, pick};
-use crate::rarity::{self, Rarity};
+use crate::rarity::{self, Rarity, trunc_i64};
 use crate::registry::{ITEM_SLOTS, Pv, Registry, WEAPON_SLOTS};
 use crate::value::part_value_total;
 
@@ -137,76 +143,6 @@ impl AttrWorld for RollWorld<'_> {
 
 // ---- errors and results ----------------------------------------------------------------------------------------
 
-/// Why a roll could not run. `ItemError` has no variant for an evaluator or balance error that is not a `NotYet`
-/// (handoff, contract item), so the roll has its own error; every `NotYet` from below is [`RollError::NotYet`].
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
-pub enum RollError {
-    NotYet(NotYet),
-    Item(ItemError),
-    Attr(AttrError),
-    Balance(BalanceError),
-    /// Data the roll cannot use (a path that does not parse, an init naming an object no package holds).
-    BadData(String),
-}
-
-impl std::fmt::Display for RollError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RollError::NotYet(e) => e.fmt(f),
-            RollError::Item(e) => e.fmt(f),
-            RollError::Attr(e) => e.fmt(f),
-            RollError::Balance(e) => e.fmt(f),
-            RollError::BadData(reason) => write!(f, "bad roll data: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for RollError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            RollError::Item(e) => e.source(),
-            RollError::Attr(e) => e.source(),
-            RollError::Balance(e) => e.source(),
-            RollError::NotYet(_) | RollError::BadData(_) => None,
-        }
-    }
-}
-
-impl From<NotYet> for RollError {
-    fn from(e: NotYet) -> Self {
-        RollError::NotYet(e)
-    }
-}
-
-impl From<ItemError> for RollError {
-    fn from(e: ItemError) -> Self {
-        match e {
-            ItemError::NotYet(n) => RollError::NotYet(n),
-            other => RollError::Item(other),
-        }
-    }
-}
-
-impl From<AttrError> for RollError {
-    fn from(e: AttrError) -> Self {
-        match e {
-            AttrError::NotYet(n) => RollError::NotYet(n),
-            other => RollError::Attr(other),
-        }
-    }
-}
-
-impl From<BalanceError> for RollError {
-    fn from(e: BalanceError) -> Self {
-        match e {
-            BalanceError::NotYet(n) => RollError::NotYet(n),
-            BalanceError::Attr(a) => a.into(),
-            other => RollError::Balance(other),
-        }
-    }
-}
-
 /// The balance yields no item at this stage; `reason` is a short key (`item_roll.NotRollable`'s, plus
 /// `no_candidate_at_stage` and `no_candidate_above_the_floor` of the Off-mode expansion).
 #[non_exhaustive]
@@ -289,7 +225,7 @@ pub struct RollCx<'a> {
     /// `eval.world` is a [`RollWorld`].
     pub eval: EvalCx<'a>,
     pub sys: &'a AttributeSystem,
-    pub data: &'a RollData,
+    pub(crate) data: &'a RollData,
     pub mode: ParityMode,
     /// The item's instance object, the source the Off-mode evaluations use (`None` offline until W4-STATS's
     /// `instantiate_stats` makes one).
@@ -336,17 +272,17 @@ impl<'a> RollCx<'a> {
         self
     }
 
-    fn rng(&mut self) -> Result<&mut dyn Rand15, RollError> {
+    fn rng(&mut self) -> Result<&mut dyn Rand15, ItemError> {
         Ok(self.eval.world.rng(CrtStream::ItemRoll)?)
     }
 
     /// The object at `path`: the caller's, else through the world's store.
-    fn find(&mut self, path: &str) -> Result<ObjRef, RollError> {
+    fn find(&mut self, path: &str) -> Result<ObjRef, ItemError> {
         if let Some(o) = self.known.get(path) {
             return Ok(*o);
         }
         let parsed =
-            ObjectPath::parse(path).map_err(|e| RollError::BadData(format!("{path}: {e}")))?;
+            ObjectPath::parse(path).map_err(|e| ItemError::BadData(format!("{path}: {e}")))?;
         let parts = self.eval.world.parts();
         let space = parts.space;
         let Some(defs) = parts.defs else {
@@ -359,11 +295,11 @@ impl<'a> RollCx<'a> {
         };
         match defs.find(space, &parsed).map_err(ItemError::from)? {
             Some(o) => Ok(o),
-            None => Err(RollError::BadData(format!("{path}: no package holds it"))),
+            None => Err(ItemError::BadData(format!("{path}: no package holds it"))),
         }
     }
 
-    fn find_opt(&mut self, v: &Pv) -> Result<Option<ObjRef>, RollError> {
+    fn find_opt(&mut self, v: &Pv) -> Result<Option<ObjRef>, ItemError> {
         match v.as_str() {
             Some(p) if !p.is_empty() => self.find(p).map(Some),
             _ => Ok(None),
@@ -372,7 +308,7 @@ impl<'a> RollCx<'a> {
 
     /// An `AttributeInitializationData` written as the tag stream holds it, through the evaluator. An untagged
     /// `BaseValueScaleConstant` is the struct default 1 and an untagged constant 0, as the tools read them.
-    fn evaluate_init(&mut self, init: &Pv) -> Result<f64, RollError> {
+    fn evaluate_init(&mut self, init: &Pv) -> Result<f64, ItemError> {
         let data = InitData {
             base_value_constant: init.at("BaseValueConstant").number().unwrap_or(0.0) as f32,
             base_value_attribute: self.find_opt(init.at("BaseValueAttribute"))?,
@@ -394,7 +330,7 @@ impl<'a> RollCx<'a> {
 
     /// Off mode's reading of a registry value: a number as it is, `{"init": ...}` through the evaluator, `None`
     /// for no value.
-    fn off_value(&mut self, v: &Pv) -> Result<Option<f64>, RollError> {
+    fn off_value(&mut self, v: &Pv) -> Result<Option<f64>, ItemError> {
         match v {
             Pv::Null => Ok(None),
             Pv::Int(_) | Pv::Float(_) | Pv::Bool(_) => Ok(v.number()),
@@ -403,7 +339,7 @@ impl<'a> RollCx<'a> {
                     let init = init.clone();
                     self.evaluate_init(&init).map(Some)
                 }
-                None => Err(RollError::BadData(format!(
+                None => Err(ItemError::BadData(format!(
                     "a registry value {}",
                     other.to_json()
                 ))),
@@ -413,7 +349,7 @@ impl<'a> RollCx<'a> {
 
     /// Off mode's rarity term: the oracle's subset where it gives a value (the evaluator gives the same there),
     /// else the evaluator.
-    fn off_term(&mut self, v: &Pv) -> Result<Option<f64>, RollError> {
+    fn off_term(&mut self, v: &Pv) -> Result<Option<f64>, ItemError> {
         if let Some(x) = self.data.number(v) {
             return Ok(Some(x));
         }
@@ -421,7 +357,7 @@ impl<'a> RollCx<'a> {
     }
 
     /// Off mode's name expressions: `EvaluateExpressions` (And) with the item as the source.
-    fn off_holds(&mut self, expressions: &Pv) -> Result<bool, RollError> {
+    fn off_holds(&mut self, expressions: &Pv) -> Result<bool, ItemError> {
         let rows = expressions.items();
         if rows.is_empty() {
             return Ok(true);
@@ -446,7 +382,7 @@ impl<'a> RollCx<'a> {
                     Some("OPERATOR_GreaterThan") => Comparison::GreaterThan,
                     Some("OPERATOR_GreaterThanOrEqualTo") => Comparison::GreaterThanOrEqual,
                     _ => {
-                        return Err(RollError::BadData(format!(
+                        return Err(ItemError::BadData(format!(
                             "comparison operator {}",
                             v.to_json()
                         )));
@@ -475,7 +411,12 @@ impl<'a> RollCx<'a> {
 
 // ---- the roll ------------------------------------------------------------------------------------------------------
 
-fn not_rollable(reason: &'static str, detail: impl Into<String>) -> Result<RollResult, RollError> {
+/// An `i64` the item fields store as `i32`.
+fn to_i32(v: i64, what: &str) -> Result<i32, ItemError> {
+    i32::try_from(v).map_err(|_| ItemError::BadData(format!("{what} {v} is out of range")))
+}
+
+fn not_rollable(reason: &'static str, detail: impl Into<String>) -> Result<RollResult, ItemError> {
     Ok(RollResult::NotRollable(NotRollable::new(reason, detail)))
 }
 
@@ -484,7 +425,7 @@ pub fn roll(
     reg: &Registry,
     balance: &ObjectPath,
     cx: &mut RollCx,
-) -> Result<RollResult, RollError> {
+) -> Result<RollResult, ItemError> {
     let path = balance.as_str();
     let Some(record) = reg.balance(path) else {
         return not_rollable("unknown_balance", path);
@@ -507,11 +448,17 @@ pub fn roll_candidate(
     balance: &ObjectPath,
     candidate: &PoolCandidate,
     cx: &mut RollCx,
-) -> Result<RollResult, RollError> {
+) -> Result<RollResult, ItemError> {
     let path = balance.as_str();
     let Some(record) = reg.balance(path) else {
         return not_rollable("unknown_balance", path);
     };
+    if cx.mode == ParityMode::Reference {
+        return Err(ItemError::WrongMode {
+            call: "roll_candidate",
+            mode: cx.mode,
+        });
+    }
     let kind = record.at("kind").as_str().unwrap_or("").to_string();
     off_roll(reg, path, record, &kind, Some(candidate), cx)
 }
@@ -609,7 +556,7 @@ fn reference_item(
     record: &Pv,
     kind: &str,
     cx: &mut RollCx,
-) -> Result<RollResult, RollError> {
+) -> Result<RollResult, ItemError> {
     let data = cx.data;
     let stage = i64::from(cx.balance.stage.0);
     let mut notes = Vec::new();
@@ -708,16 +655,17 @@ fn reference_item(
     let slots = pick_slots(&found, &ITEM_SLOTS, cx.rng()?, &mut notes, &rule);
     let level = match &grade {
         Some(g) if !interpolating => match g.at("exp_level").number() {
-            Some(l) if l != 0.0 => l as i64,
+            // item_roll.roll: `grade.get('exp_level') or 1` (an int in the data).
+            Some(l) if l != 0.0 => trunc_i64(l, "a grade's exp_level (item_roll.roll step 4)")?,
             _ => 1,
         },
         _ => stage,
     };
     let name_cx = NameContext::new(Some(level), maker.as_deref(), None);
-    let mut holds = |e: &Pv, n: &NameContext<'_>| -> Result<bool, RollError> {
+    let mut holds = |e: &Pv, n: &NameContext<'_>| -> Result<bool, ItemError> {
         Ok(tool_expressions_hold(data, e, n))
     };
-    let mut pick_name = |key: &str| -> Result<Option<String>, RollError> {
+    let mut pick_name = |key: &str| -> Result<Option<String>, ItemError> {
         let mut lists = vec![registry_list(reg, "definitions", &definition, key)];
         for s in &slots {
             lists.push(registry_list(reg, "parts", &s.part, key));
@@ -732,9 +680,9 @@ fn reference_item(
         Ok(data.number(v))
     })?;
     let grade_or_level = if interpolating {
-        level as i32
+        to_i32(level, "the item level")?
     } else {
-        grade_index.map_or(0, |g| g as i32)
+        to_i32(grade_index.map_or(0, |g| g as i64), "the grade index")?
     };
     let value_total = value_total(data, &definition, &parts, &names);
     Ok(RollResult::Item(Box::new(Rolled {
@@ -782,7 +730,7 @@ fn value_total(
 }
 
 /// `weapon_recipe.roll` (Reference): the root-most manufacturer and weapon type, no manufacturer draw, level = stage.
-fn reference_weapon(balance: &str, record: &Pv, cx: &mut RollCx) -> Result<RollResult, RollError> {
+fn reference_weapon(balance: &str, record: &Pv, cx: &mut RollCx) -> Result<RollResult, ItemError> {
     let data = cx.data;
     let stage = i64::from(cx.balance.stage.0);
     let chosen = merge::choice(record, merge::Reading::RootMost);
@@ -811,10 +759,10 @@ fn reference_weapon(balance: &str, record: &Pv, cx: &mut RollCx) -> Result<RollR
         .map(|s| s.part.as_str());
     let damage = native_damage_type(data, elemental, weapon_type.as_deref());
     let name_cx = NameContext::new(Some(stage), maker.as_deref(), damage.as_deref());
-    let mut holds = |e: &Pv, n: &NameContext<'_>| -> Result<bool, RollError> {
+    let mut holds = |e: &Pv, n: &NameContext<'_>| -> Result<bool, ItemError> {
         Ok(tool_expressions_hold(data, e, n))
     };
-    let mut pick_name = |key: &str| -> Result<Option<String>, RollError> {
+    let mut pick_name = |key: &str| -> Result<Option<String>, ItemError> {
         let mut lists = Vec::new();
         if let Some(t) = &weapon_type {
             lists.push(raw_list(data, t, key));
@@ -841,7 +789,7 @@ fn reference_weapon(balance: &str, record: &Pv, cx: &mut RollCx) -> Result<RollR
         mode: ParityMode::Reference,
         stage,
         level: stage,
-        grade_or_level: stage as i32,
+        grade_or_level: to_i32(stage, "the stage")?,
         manufacturer: maker,
         grade: None,
         definition,
@@ -863,7 +811,7 @@ fn off_roll(
     kind: &str,
     chosen: Option<&PoolCandidate>,
     cx: &mut RollCx,
-) -> Result<RollResult, RollError> {
+) -> Result<RollResult, ItemError> {
     if kind == "class_mod" {
         return Err(NotYet::needs_real_game(
             "which of a class mod balance's ClassModDefinitions the game rolls (its ClassModBalanceDefinition \
@@ -924,8 +872,11 @@ fn off_roll(
         &mut |v| cx.off_value(v),
     )?;
     let removed = apply_relic_hook(reg.tree(), data, &definition, &mut found);
+    // Only the slots the pick draws: a slot pick_slots never reads cannot make the roll NotYet.
+    let slot_names: &[&str] = if weapon { &WEAPON_SLOTS } else { &ITEM_SLOTS };
     if let Some((slot, _)) = found
         .iter()
+        .filter(|(slot, _)| slot_names.contains(&slot.as_str()))
         .find(|(_, s)| s.parts.values().any(Option::is_none))
     {
         return Err(NotYet::not_read(
@@ -935,7 +886,6 @@ fn off_roll(
         .into());
     }
     let mut notes = Vec::new();
-    let slot_names: &[&str] = if weapon { &WEAPON_SLOTS } else { &ITEM_SLOTS };
     let rule = SlotNotes {
         runtime: "",
         per_entry: false,
@@ -960,7 +910,7 @@ fn off_roll(
             lists.push(raw_list(data, &s.part, key));
         }
         let mut holds =
-            |e: &Pv, _: &NameContext<'_>| -> Result<bool, RollError> { cx.off_holds(e) };
+            |e: &Pv, _: &NameContext<'_>| -> Result<bool, ItemError> { cx.off_holds(e) };
         prefix_title[i] = names::choose(data, &lists, &name_cx, &mut holds)?;
     }
     let [prefix, title] = prefix_title;
@@ -1018,9 +968,9 @@ const UNVERIFIED: [&str; 8] = [
 impl Rolled {
     /// The item's definition data (`DefinitionData`): the nine slots by their index for the kind, the game stage
     /// as stored, `ManufacturerGradeIndex` as the grade-or-level word, no unique id.
-    pub fn definition_data(&self) -> Result<DefinitionData, RollError> {
+    pub fn definition_data(&self) -> Result<DefinitionData, ItemError> {
         let path =
-            |p: &str| ObjectPath::parse(p).map_err(|e| RollError::BadData(format!("{p}: {e}")));
+            |p: &str| ObjectPath::parse(p).map_err(|e| ItemError::BadData(format!("{p}: {e}")));
         let kind = match self.kind.as_str() {
             "weapon" => ItemKind::Weapon,
             "shield" => ItemKind::Shield,
@@ -1028,7 +978,7 @@ impl Rolled {
             "class_mod" => ItemKind::ClassMod,
             "relic" => ItemKind::Relic,
             other => {
-                return Err(RollError::BadData(format!(
+                return Err(ItemError::BadData(format!(
                     "no definition data for kind {other}"
                 )));
             }
@@ -1049,7 +999,7 @@ impl Rolled {
                     .map(ItemSlot::index)
             };
             let Some(index) = index else {
-                return Err(RollError::BadData(format!(
+                return Err(ItemError::BadData(format!(
                     "slot {} of a {} roll",
                     s.slot, self.kind
                 )));
@@ -1066,7 +1016,7 @@ impl Rolled {
             parts,
             prefix: opt(&self.prefix)?,
             title: opt(&self.title)?,
-            game_stage: ow_balance::GameStage(self.stage as i32),
+            game_stage: ow_balance::GameStage(to_i32(self.stage, "the stage")?),
             unique_id: 0,
         })
     }
@@ -1515,6 +1465,12 @@ pub(crate) mod tests {
     pub(crate) const RELIC: &str = "GD_RollTest.Bal.Relic";
     pub(crate) const WEAPON: &str = "GD_RollTest.Bal.Weapon";
     pub(crate) const LATE: &str = "GD_RollTest.Bal.Late";
+    const CHAIN_BASE: &str = "GD_RollTest.Chain.Base";
+    const LEAF_UNCOVERED: &str = "GD_RollTest.Chain.LeafUncovered";
+    const LEAF_COVERED: &str = "GD_RollTest.Chain.LeafCovered";
+    const FIXED_BASE: &str = "GD_RollTest.Chain.FixedBase";
+    const LEAF_RANGE: &str = "GD_RollTest.Chain.LeafRange";
+    const LEAF_FIXED_OVER_INTERP: &str = "GD_RollTest.Chain.LeafFixedOverInterp";
 
     pub(crate) fn package() -> Syn {
         let mut p = Syn::default();
@@ -1739,6 +1695,98 @@ pub(crate) mod tests {
                 (
                     "Manufacturers",
                     makers(vec![(ACME, vec![grade(20, 100, 1, None, None)])]),
+                ),
+            ],
+        );
+
+        // Base chains for the Off-mode expansion (NATIVE_LOOT.md: the walk from the balance itself to its bases,
+        // stopping at the first step that yields a candidate).
+        p.add(
+            CHAIN_BASE,
+            IB,
+            vec![
+                ("InventoryDefinition", r("GD_RollTest.Shield.Def")),
+                (
+                    "Manufacturers",
+                    makers(vec![
+                        (ACME, vec![grade(1, 100, 3, None, None)]),
+                        (BOLT, vec![grade(1, 100, 4, None, None)]),
+                    ]),
+                ),
+            ],
+        );
+        // The leaf's only grade does not cover stage 8: the base yields, Bolt listed by the base only.
+        p.add(
+            LEAF_UNCOVERED,
+            IB,
+            vec![
+                ("BaseDefinition", r(CHAIN_BASE)),
+                ("InventoryDefinition", r("GD_RollTest.Shield.Def")),
+                (
+                    "Manufacturers",
+                    makers(vec![(ACME, vec![grade(60, 100, 1, None, None)])]),
+                ),
+            ],
+        );
+        // The leaf yields: the base is not consulted.
+        p.add(
+            LEAF_COVERED,
+            IB,
+            vec![
+                ("BaseDefinition", r(CHAIN_BASE)),
+                ("InventoryDefinition", r("GD_RollTest.Shield.Def")),
+                (
+                    "Manufacturers",
+                    makers(vec![(ACME, vec![grade(1, 100, 1, None, None)])]),
+                ),
+            ],
+        );
+        // Non-interpolating base whose second grade covers stage 8, and a non-interpolating leaf with one grade:
+        // the base's grade index 1 is out of range in the leaf, so the leaf defers to the base.
+        p.add(
+            FIXED_BASE,
+            IB,
+            vec![
+                ("InventoryDefinition", r("GD_RollTest.Grenade.Def")),
+                ("bInterpolateExpLevel", V::Bool(false)),
+                (
+                    "Manufacturers",
+                    makers(vec![(
+                        ACME,
+                        vec![
+                            grade(60, 100, 2, None, None),
+                            grade(1, 50, 7, Some("GD_RollTest.Grenade.Def_Fixed"), None),
+                        ],
+                    )]),
+                ),
+            ],
+        );
+        p.add(
+            LEAF_RANGE,
+            IB,
+            vec![
+                ("BaseDefinition", r(FIXED_BASE)),
+                ("InventoryDefinition", r("GD_RollTest.Grenade.Def")),
+                ("bInterpolateExpLevel", V::Bool(false)),
+                (
+                    "Manufacturers",
+                    makers(vec![(ACME, vec![grade(60, 100, 9, None, None)])]),
+                ),
+            ],
+        );
+        // A non-interpolating leaf over the interpolating base: the leaf yields nothing at stage 8, so the base
+        // yields; the leaf lists Bolt (grade 0 in range: the leaf's ExpLevel 5) but not Acme (the interpolating base
+        // answers the word unchanged).
+        p.add(
+            LEAF_FIXED_OVER_INTERP,
+            IB,
+            vec![
+                ("BaseDefinition", r(CHAIN_BASE)),
+                ("InventoryDefinition", r("GD_RollTest.Shield.Def")),
+                ("bInterpolateExpLevel", V::Bool(false)),
+                (
+                    "Manufacturers",
+                    makers(vec![(BOLT, vec![grade(60, 100, 5, None, None)])]),
                 ),
             ],
         );
@@ -2114,7 +2162,7 @@ pub(crate) mod tests {
             let install = Install::new(tag);
             let input = install.census();
             Fx {
-                data: RollData::new(&input),
+                data: RollData::new(&input).unwrap(),
                 reg: build_from_census(input, "Game"),
                 _install: install,
                 sys: AttributeSystem::standard().unwrap(),
@@ -2132,7 +2180,7 @@ pub(crate) mod tests {
             mode: ParityMode,
             known: &[(&str, ObjRef)],
             manufacturer: Option<&str>,
-        ) -> (Result<RollResult, RollError>, CrtRand) {
+        ) -> (Result<RollResult, ItemError>, CrtRand) {
             let snap = snapshot(stage);
             let mut rng = CrtRand::new(seed);
             let result = {
@@ -2155,7 +2203,7 @@ pub(crate) mod tests {
             stage: i32,
             seed: u32,
             mode: ParityMode,
-        ) -> Result<RollResult, RollError> {
+        ) -> Result<RollResult, ItemError> {
             self.roll_with(&mut TestWorld::new(), balance, stage, seed, mode, &[], None)
                 .0
         }
@@ -2368,6 +2416,129 @@ pub(crate) mod tests {
         assert_eq!(reference_fixed.definition, "GD_RollTest.Grenade.Def_Fixed");
     }
 
+    /// The expansion at stage 8, cap 50, with the numbers the registry evaluated.
+    fn expand_at_8(fx: &Fx, balance: &str) -> Vec<PoolCandidate> {
+        expand(
+            &fx.data,
+            fx.reg.balance(balance).unwrap(),
+            8,
+            50,
+            &mut |v| Ok(v.number()),
+        )
+        .unwrap()
+    }
+
+    fn summary(found: &[PoolCandidate]) -> Vec<(&str, &str, usize, i32, i32, &str)> {
+        found
+            .iter()
+            .map(|c| {
+                (
+                    c.step.as_str(),
+                    c.manufacturer.as_str(),
+                    c.grade,
+                    c.grade_or_level,
+                    c.level,
+                    c.definition.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn off_mode_walks_the_base_chain_to_the_first_step_that_yields() {
+        let fx = Fx::new("chain");
+        let shield = "GD_RollTest.Shield.Def";
+        // The leaf's grade does not cover stage 8: the base yields both its manufacturers. Bolt is listed only by the
+        // base, so its definition is the base's answer; Acme is listed by the leaf, which interpolates and answers
+        // its own definition. Both levels are the stage (interpolating).
+        assert_eq!(
+            summary(&expand_at_8(&fx, LEAF_UNCOVERED)),
+            [
+                (CHAIN_BASE, ACME, 0, 8, 8, shield),
+                (CHAIN_BASE, BOLT, 0, 8, 8, shield)
+            ]
+        );
+        // The leaf yields, so the base (which also lists Bolt) is not consulted.
+        assert_eq!(
+            summary(&expand_at_8(&fx, LEAF_COVERED)),
+            [(LEAF_COVERED, ACME, 0, 8, 8, shield)]
+        );
+        // Non-interpolating: the base's grade 1 is out of range in the leaf's one-grade list, so both the definition
+        // and the level defer to the base (its grade 1: its own definition, ExpLevel 7).
+        assert_eq!(
+            summary(&expand_at_8(&fx, LEAF_RANGE)),
+            [(FIXED_BASE, ACME, 1, 1, 7, "GD_RollTest.Grenade.Def_Fixed")]
+        );
+    }
+
+    #[test]
+    fn an_interpolating_base_answers_the_level_word_unchanged() {
+        // GetExpLevelFromManufacturerData hands the question to the base, and a base that interpolates answers the
+        // word (here the grade index 0 of a non-interpolating original), not its grade's ExpLevel (3).
+        let fx = Fx::new("chain-level");
+        assert_eq!(
+            summary(&expand_at_8(&fx, LEAF_FIXED_OVER_INTERP)),
+            [
+                (CHAIN_BASE, ACME, 0, 0, 0, "GD_RollTest.Shield.Def"),
+                // The leaf lists Bolt with grade 0 in range: its own ExpLevel 5 and its own definition.
+                (CHAIN_BASE, BOLT, 0, 0, 5, "GD_RollTest.Shield.Def"),
+            ]
+        );
+    }
+
+    #[test]
+    fn roll_candidate_serves_off_mode_only() {
+        let fx = Fx::new("candidate");
+        let candidate = expand_at_8(&fx, SHIELD).remove(0);
+        let snap = snapshot(8);
+        let mut world = TestWorld::new();
+        for mode in [ParityMode::Reference, ParityMode::Off] {
+            let mut rng = CrtRand::new(1);
+            let mut rw = RollWorld::new(&mut world, &mut rng, false);
+            let mut cx = RollCx::new(&snap, EvalCx::new(&mut rw), &fx.sys, &fx.data, mode);
+            let got = roll_candidate(
+                &fx.reg,
+                &ObjectPath::parse(SHIELD).unwrap(),
+                &candidate,
+                &mut cx,
+            );
+            match mode {
+                ParityMode::Reference => assert_eq!(
+                    got,
+                    Err(ItemError::WrongMode {
+                        call: "roll_candidate",
+                        mode: ParityMode::Reference
+                    })
+                ),
+                _ => {
+                    let r = got.unwrap();
+                    let r = r.item().unwrap();
+                    assert_eq!(r.mode, ParityMode::Off);
+                    assert_eq!(r.manufacturer.as_deref(), Some(ACME));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_rarity_term_that_does_not_truncate_is_refused() {
+        // math.trunc raises on inf and NaN; the port refuses them instead of an `as` conversion.
+        for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 1e19] {
+            assert!(
+                matches!(
+                    crate::rarity::trunc_i64(x, "test"),
+                    Err(ItemError::BadData(_))
+                ),
+                "{x}"
+            );
+        }
+        assert_eq!(crate::rarity::trunc_i64(-2.9, "test"), Ok(-2));
+        assert!(matches!(
+            crate::rarity::trunc_i32(3e9, "test"),
+            Err(ItemError::BadData(_))
+        ));
+    }
+
     #[test]
     fn class_mods_pick_uniformly_only_under_reference() {
         let fx = Fx::new("class-mod");
@@ -2379,7 +2550,7 @@ pub(crate) mod tests {
             defs.iter().any(|d| d.ends_with("Def1")) && defs.iter().any(|d| d.ends_with("Def2"))
         );
         match fx.roll(CLASS_MOD, 8, 1, ParityMode::Off) {
-            Err(RollError::NotYet(n)) => assert_eq!(n.missing, Missing::NeedsRealGame(6)),
+            Err(ItemError::NotYet(n)) => assert_eq!(n.missing, Missing::NeedsRealGame(6)),
             other => panic!("expected NotYet, got {other:?}"),
         }
     }
@@ -2420,7 +2591,7 @@ pub(crate) mod tests {
         assert!(d3_above);
         // Without a store or a known object, the evaluator's path answers NotYet (no guessed bound).
         match fx.roll(GRENADE, 8, 1, ParityMode::Off) {
-            Err(RollError::NotYet(n)) => assert_eq!(n.missing, Missing::LayerAbsent("ow-defs")),
+            Err(ItemError::NotYet(n)) => assert_eq!(n.missing, Missing::LayerAbsent("ow-defs")),
             other => panic!("expected NotYet, got {other:?}"),
         }
     }
@@ -2471,7 +2642,7 @@ pub(crate) mod tests {
                 )
                 .0
             {
-                Err(RollError::NotYet(n)) => {
+                Err(ItemError::NotYet(n)) => {
                     assert_eq!(n.missing, Missing::NotPorted);
                     seen_not_yet = true;
                 }
@@ -2571,7 +2742,7 @@ pub(crate) mod tests {
         let census = defs.census().unwrap();
         let input = CensusInput::from_store(census, &fx._install.0);
         let store = Fx {
-            data: RollData::new(&input),
+            data: RollData::new(&input).unwrap(),
             reg: build_from_census(input, "Game"),
             _install: Install(PathBuf::new()),
             sys: AttributeSystem::standard().unwrap(),
@@ -2598,7 +2769,7 @@ pub(crate) mod tests {
         let dir = PathBuf::from(dir);
         let install = Install::at(dir.join("Game"));
         let input = install.census();
-        let data = RollData::new(&input);
+        let data = RollData::new(&input).unwrap();
         let reg = build_from_census(input, "Game");
         let sys = AttributeSystem::standard().unwrap();
         let mut items = String::new();

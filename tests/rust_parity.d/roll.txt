@@ -1,0 +1,9 @@
+# AI-assisted (Claude Code). Lane W4-ROLL: --item-roll (crates/ow-items/src/{merge,candidates,pick,names,rarity,value,roll}.rs).
+#
+# tests/item_roll_rust_test.py rolls an invented install with the Rust --item-roll (--census, --weapons) and checks every
+# roll with tools/item_roll.py (check and roll) and tools/weapon_recipe.py (roll) on the C++ reader. It pins the
+# reference stand-ins of architecture section 6.1 (the manufacturer drawn in the balance roll, the uniform class-mod
+# definition pick, runtime-state weights as 1 and window bounds as none), so the line runs in Reference mode. The
+# Off-mode replacements are Rust tests in crates/ow-items/src/roll.rs and candidates.rs (decision 2026-11-15-21).
+
+python tests/item_roll_rust_test.py build/Release/ow-package.exe {bin} mode=reference

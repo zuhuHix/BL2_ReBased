@@ -1,7 +1,8 @@
 //! Owner: lane W4-ROLL. Name parts: the prefix and title a roll gets (no random draw).
 //!
 //! **The rule** (`weapon_recipe.choose_name_parts` and `best_name_part`, read from native code; verified for
-//! weapons on 1,600 of 1,600 game-rolled names, UNVERIFIED for items): start from the definition's `PrefixList` /
+//! weapons on 1,600 of 1,600 game-rolled names for manufacturer-only expressions, the damage-type rule confirmed on
+//! one gun (NATIVE_WEAPON_RULES.md section 5); UNVERIFIED for items): start from the definition's `PrefixList` /
 //! `TitleList`, then each chosen part's in slot order. Within one list the qualifying entry with the highest
 //! `Priority` wins, a later one on ties; a later list replaces the current pick when its pick's priority is at least
 //! the current one's. An entry qualifies when it has a `PartName`, its level window holds the level
@@ -24,9 +25,9 @@
 
 use ow_core::num::f32r;
 
+use crate::ItemError;
 use crate::merge::RollData;
 use crate::registry::Pv;
-use crate::roll::RollError;
 
 /// What the name expressions of one roll see.
 #[non_exhaustive]
@@ -52,7 +53,7 @@ impl<'a> NameContext<'a> {
 }
 
 /// Whether a name part's `Expressions` list holds.
-pub type ExprHold<'a> = dyn FnMut(&Pv, &NameContext<'_>) -> Result<bool, RollError> + 'a;
+pub type ExprHold<'a> = dyn FnMut(&Pv, &NameContext<'_>) -> Result<bool, ItemError> + 'a;
 
 /// `weapon_recipe.name_priority`: `Priority`, 1 when untagged (`Default__WeaponNamePartDefinition`).
 pub fn name_priority(data: &RollData, name_part: &str) -> f64 {
@@ -67,7 +68,7 @@ pub fn qualifies(
     name_part: &str,
     cx: &NameContext<'_>,
     holds: &mut ExprHold<'_>,
-) -> Result<bool, RollError> {
+) -> Result<bool, ItemError> {
     let Some(props) = data.get(name_part) else {
         return Ok(false);
     };
@@ -95,7 +96,7 @@ pub fn best_name_part(
     names: &[Pv],
     cx: &NameContext<'_>,
     holds: &mut ExprHold<'_>,
-) -> Result<Option<String>, RollError> {
+) -> Result<Option<String>, ItemError> {
     let mut best: Option<String> = None;
     for name in names.iter().filter_map(Pv::as_str) {
         if qualifies(data, name, cx, holds)?
@@ -116,7 +117,7 @@ pub fn choose(
     lists: &[Vec<Pv>],
     cx: &NameContext<'_>,
     holds: &mut ExprHold<'_>,
-) -> Result<Option<String>, RollError> {
+) -> Result<Option<String>, ItemError> {
     let mut lists = lists.iter();
     let mut current = match lists.next() {
         Some(own) => best_name_part(data, own, cx, holds)?,
