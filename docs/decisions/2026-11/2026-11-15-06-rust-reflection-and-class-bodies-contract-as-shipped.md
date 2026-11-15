@@ -45,6 +45,10 @@ rules the layouts use.
     super struct and by-value fields first. A struct reached through an array or a map is only declared there and
     defined after the class that reached it, so struct cycles are checked along by-value edges only and the outcome
     does not depend on the load order (`A { array<B> }` with `B { A }` loads either way); a by-value cycle is refused;
+  - a struct keeps the structs it reached through an array or a map. A class that reuses a cached struct first
+    defines any of those still undefined (they stay undefined when the class that first reached them failed before
+    defining them), transitively, or takes the error of one that failed; so no class is published holding a struct
+    whose array element is only declared (review r2);
   - an array or map property whose inner declarations lead back to it, in one package or across packages, is
     `PropertyCycle`;
   - an Enum export is `[net index][None][next][count][names]` with a count of at most 1024 (`enumNames`). It must also
