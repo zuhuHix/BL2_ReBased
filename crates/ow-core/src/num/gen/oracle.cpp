@@ -31,7 +31,7 @@ std::string print(const char* format, double x) {
 
 double F32(double value) { return static_cast<double>(static_cast<float>(value)); }
 
-// weapon_gen.cpp HalfUp, as written there.
+// F32 and HalfUp: copies of src/weapon_gen.cpp at commit 3c1c47f (F32 line 521, HalfUp lines 878-881).
 double HalfUp(double number, double digits) {
     double scale = F32(std::pow(10.0, digits));
     return std::floor(F32(F32(number * scale) + 0.5)) / scale;
@@ -60,6 +60,7 @@ int main(int argc, char** argv) {
         else if (kind == "acos") out.push_back(h64(std::acos(from64(a))));
         else if (kind == "atan") out.push_back(h64(std::atan(from64(a))));
         else if (kind == "atan2") { words >> b; out.push_back(h64(std::atan2(from64(a), from64(b)))); }
+        else if (kind == "round32") out.push_back(h32(std::round(from32(a))));   // progression.cpp restricted(), mode 1
         else if (kind == "trunc") {
             const double x = from64(a);
             out.push_back(std::to_string(int32_t(int64_t(x))));   // natives_core.cpp int64_t(...) then makeInt

@@ -3,6 +3,12 @@
 //!
 //! AI-assisted (Claude Code).
 //!
+//! **Rule: never print an output float with Rust's `{}`, `{:?}`, `{:e}` or `{:.N}`; use a function of this module.**
+//! Rust's own text matches none of the oracles' (`1e-5` prints `0.00001`, an exact tie between two 17-digit
+//! neighbours rounds up where `to_chars` and `repr` go to even), so a parity test comparing bytes fails.
+//! `tests/crate_edges_test.py` refuses the `{:e}` and precision forms outside this file; it cannot see a float
+//! behind a bare `{}`, so that one is a review item.
+//!
 //! | Function | Oracle form | Where the oracles use it |
 //! |---|---|---|
 //! | [`fmt_g`] | printf `%.<p>g`, ostream `setprecision(p)` | `%.9g` in `package.cpp`, `assets.cpp`, `combat_run.cpp`; `%.5g` in `combat_hit.cpp:26`; `%g` in `weapon_gen.cpp:959` |

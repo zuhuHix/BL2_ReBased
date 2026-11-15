@@ -757,6 +757,13 @@ call only until each is settled, and keep the parameter afterwards (callers then
   defaults are the settled forms; if a set passes only under the other form, the lane stops and reports: that is a
   finding for the maintainer and real-game questions 21 (pow) and 22 (stack combine), not a lane decision.
 
+The same holds for **two half-up roundings** of RoundingMode 1 (`ATTRROUNDING_IntRound`; review r1 of W1-NUM). The
+attribute-initialization path (`weapon_gen.cpp:568` `Round()`, `weapon_recipe.ROUNDING`) rounds `floor(x + 0.5)` in
+double: `ow_core::num::round_mode(x, RoundingMode::HalfUp)`, so `-2.5` gives `-2`. `progression.cpp:311`
+`restricted()` (XP curve, health base) calls `std::round`, halves away from zero: `ow_core::num::round_half_away_f32`,
+so `-2.5` gives `-3` and `-0.3` gives `-0.0`. They differ only on negative halves. Each port calls the form its oracle
+uses (W1-ATTRMATH's `restricted()` calls `round_half_away_f32`); which form the game uses for each rule is UNVERIFIED.
+
 ---
 
 ## 6. Parity strategy per layer
