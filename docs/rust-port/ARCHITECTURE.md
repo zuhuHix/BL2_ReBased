@@ -314,7 +314,7 @@ impl ScriptRng for CrtRand { .. }                  // rand15 % limit and rand15 
 pub struct VmLcg { pub state: u32 }                // the C++ VM stand-in, ParityMode::Reference only: state*1664525+1013904223;
 impl ScriptRng for VmLcg { .. }                    // rand_limit = (state>>8) % limit, frand = (state>>8) / 2^24 (natives_core.cpp:201-209)
 pub enum CrtStream { LootPool, ItemRoll, AttributeVariance, AiDecision, FiringSpread, StatusEffect, Population, Dialog }
-pub enum ScriptStream { Rand, FRand }              // two streams, as the C++ keeps two separate states
+pub enum ScriptStream { Rand, FRand }              // two streams, as the C++ keeps two separate states; Off-mode split is a project choice, UNVERIFIED
 pub struct GameRng { .. }
 impl GameRng {
     pub fn from_world_seed(seed: u64, mode: ParityMode) -> Self;   // streams seeded by splitmix64(seed, stream id) -> u32;
@@ -1543,8 +1543,9 @@ W1-NUM is the lane to start first and review first.
 - **W7-WORLDLOGIC**: vendors, interactive objects, stations (`ow-mission/src/{vendors,interactive}.rs`); needs
   W4-POOLS, W6-MISSION.
 - **W7-SAVE**: `ow-save` model and load order over `DefinitionData`; the on-disk format only after D9.
-  Items from DLC that is not installed are kept by the save as opaque `SerialNumber` records
-  (`PlayerSaveGame.UnloadableDlcWeaponSaveGameData` / `UnloadableDlcItemSaveGameData`) and cannot be an
+  Items from DLC that is not installed are kept by the save as opaque `SerialNumber` records with their slot fields
+  (weapons: `QuickSlot`, `Mark`; items: `Quantity`, `bEquipped`, `Mark`) in
+  `PlayerSaveGame.UnloadableDlcWeaponSaveGameData` / `UnloadableDlcItemSaveGameData`, and cannot be an
   `InventoryInstance`; the save model needs its own carrier for them.
 - **W7-UI**: `ow-ui` bridge natives and the `MoviePlayer` trait; needs the engine pick for the implementation.
 - **W7-RETIRE**: delete `src/`, `third_party/lzokay`, the C++ targets and the ctest entries that only test the C++
@@ -1653,7 +1654,7 @@ counts the case as an open item, not a failure. None blocks the Phase 4 slice (P
 | 6 | Non-weapon roll frequencies, class-mod pick | W4-ROLL, W4-POOLS | uniform pick labelled stand-in + `NotYet` flag |
 | 7 | Grenade-mod per-element minimum stage | W4-ROLL | current reading, labelled |
 | 8 | Maya's crit multiplier source | W6-COMBAT | crit base `NotYet { NeedsRealGame(8) }` (no 0-means-1) |
-| 9 | Spread distribution, proc rate, beams, ricochets | W1-FIRING, W6-COMBAT | maths as read, UNVERIFIED; beams/ricochets `NotYet` |
+| 9 | Proc rate, beams, ricochets (the spread distribution is confirmed live, 2026-11-03: `WEAPON_PROJECTILES.md` section 10) | W1-FIRING, W6-COMBAT | spread as confirmed; the rest maths as read, UNVERIFIED; beams/ricochets `NotYet` |
 | 10 | Does a 0x5F base write notify? | W3-INTERP, W3-ATTREFFECTS | no notification, UNVERIFIED |
 | 11 | Classes overriding the attribute notification | W3-ATTREFFECTS, W5-WORLD | known owners handled; others counted in the census, no effect |
 | 12 | Does ObjectProperty find inherited properties? | W3-ATTREVAL | inherited lookup (slot layouts make it natural), UNVERIFIED |
