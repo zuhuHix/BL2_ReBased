@@ -35,6 +35,10 @@ is a port of the C++ reading; none was observed in the running game, so all stay
       `Object.Add_VectorVector` (the cause C cases) and once each for `Actor.FastTrace` and
       `BehaviorHelpers.GetRotationFromAttachmentLocationData`, both natives with no implementation (logged stubs, which
       read no argument). The comparison natives were never reached by it.
+    - *Hub decision (on this lane's report):* the conversion stays in the interpreter. Core `==(vector,vector)` and
+      `!=(vector,vector)` given such an argument see a zero vector where the C++ sees `None`, and the nine sweeps
+      never hit this. Having `comp` in `natives_core.rs` read a non-struct as zeros, as the C++ does, is on the hub's
+      follow-ups.
     - *Met by:* `WillowAutoTestManager.TravelTheWorld.DownTrace` (an element of an empty dynamic array) and
       `WillowWeapon.GetEffectLocation` (a struct member through a mesh component the sweep leaves unloaded).
   - **A Byte stored into an Int property.**
@@ -113,17 +117,13 @@ is a port of the C++ reading; none was observed in the running game, so all stay
 - **The freeze.** The `ow-vm` gate as amended (architecture section 6, "identical to C++ under Reference apart from
   decision 2026-11-15-07's string-unit differences and decision 2026-11-15-23's causes A and B") is met on the nine
   packages. So `src/vm.cpp`, `src/interp.cpp`, `src/natives.cpp`, `src/natives_core.cpp`, `src/census.cpp`,
-  `src/census.hpp` and `src/vm_sweep.cpp` open with a `// FROZEN (...)` header like the one W3-SWITCH put on
-  `src/package.*`. It names this lane, decisions 23 and 28 and the gate. Only the comments change; the code is as it
-  was, and the C++ stays the differential reference until W7-RETIRE deletes it.
-  - `src/vm.hpp` and `src/natives.hpp` carry no header. The hub's grant named the files above, and the C++ files
-    above the reader all include `vm.hpp`.
+  `src/census.hpp`, `src/vm_sweep.cpp`, `src/vm.hpp` and `src/natives.hpp` open with a `// FROZEN (...)` header
+  like the one W3-SWITCH put on `src/package.*`. It names this lane, decisions 23 and 28 and the gate. Only the
+  comments change; the code is as it was, and the C++ stays the differential reference until W7-RETIRE deletes it.
 - **Open items.**
   - The three whole-static-array uses that stay `NotYet` (assignment, an aliasing `out` argument, a parameter given
     another shape), until script that needs them is found.
-  - `crates/ow-vm/src/interp/mod.rs` still says a static array used as a whole stays `NotYet`; that file is
-    W3-INTERP's, so the line waits for its owner.
-  - `natives_core.rs` could read a non-struct argument as zeros itself, as the C++ `comp` does, and the interpreter
-    conversion would then go. That is W3-CORENAT's file and a contract choice for the hub.
+  - `natives_core.rs` reading a non-struct argument as zeros itself, as the C++ `comp` does (the hub's follow-up);
+    the interpreter conversion would then go.
   - Cause B's step residue in WillowGame (+339) has not been bisected to its functions. Decision 23's pattern
     attribution stands.
