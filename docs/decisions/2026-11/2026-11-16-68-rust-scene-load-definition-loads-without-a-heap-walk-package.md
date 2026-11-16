@@ -46,7 +46,7 @@ There was no real-game session.
     loaded.
   - **`ow-package/src/store.rs` (sensitive).** `build_global_index` reads each file's roots on worker threads (at most
     16) through a new private `file_roots`, then folds the results into the index in scan order, as the single pass
-    did. A worker that panicked counts its files as unknown roots, as a load failure does.
+    did. A worker that panics has its panic raised again, as the single pass would have panicked (review r1).
     - No check changed, and nothing outside `build_global_index` changed. `find_global` and `resolve_import`, which
       PR #362 edits, are untouched. The branch is rebased onto main 37ca667, which holds #362, without a conflict,
       and the module documentation gains a "Global index build" paragraph next to #362's "Candidate files".
@@ -93,5 +93,10 @@ There was no real-game session.
   - The speed-ups are measured on one machine.
   - The byte-identical claim covers Sanctuary's load and the synthetic suites.
   - `free_newest`'s precondition rests on how the decode allocates, argued above and checked in debug builds, not
-    proven for every caller. Only the definition store calls it.
+    proven for every caller. Only the definition store calls it. The debug check ran on the synthetic suites only:
+    the installed Sanctuary driver runs in release, and its digests cover the scene, material library and lights,
+    not the object space, so the precondition was not checked on Sanctuary (review r1 of PR #371). A breach there
+    would leave a stale handle in an older object, not corrupt memory.
+  - Worker threads: up to 16 whole-package decodes run at once in each pool (peak memory), capped by
+    `available_parallelism`.
   - Worker threads read packages concurrently, which only changes when the reads happen, not what they produce.
