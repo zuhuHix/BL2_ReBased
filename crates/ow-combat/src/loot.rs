@@ -1037,14 +1037,18 @@ fn roll_pools(
         })();
         match attempt {
             Ok(()) => {}
-            // The C++ catches its `RuntimeError` only: a rule error of this unit or of the data is reported and
-            // nothing is dropped for this pool. A `NotYet` (an unread resolver, a missing layer) and the VM's own
-            // errors (a borrowed service, a stale handle) stop the roll (review r1 of PR #340).
-            Err(e @ VmError::Script { .. }) => {
+            // Three kinds stop the roll (review r1 and r2 of PR #340): a `NotYet` (an unread resolver, a missing
+            // layer: the C++ evaluates or catches there, the port does not guess), a borrowed service (a wiring
+            // bug), and the step budget (the run's harness limit, not this pool's data).
+            Err(e @ (VmError::NotYet(_) | VmError::ServiceBorrowed(_) | VmError::StepLimit)) => return Err(e),
+            // Everything else is what the C++ catches as its `RuntimeError`: a rule error of this unit, a data
+            // error of the attribute system, the definition store or the heap (a definition without a field the
+            // evaluator reads, a reference that does not load). It is reported on this pool, nothing is dropped for
+            // it, and the roll goes on.
+            Err(e) => {
                 rolled.error = error_text(&e);
                 rolled.tried = false;
             }
-            Err(e) => return Err(e),
         }
         drop.pools.push(rolled);
     }

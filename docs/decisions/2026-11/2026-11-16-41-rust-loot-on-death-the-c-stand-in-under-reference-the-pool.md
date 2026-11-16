@@ -67,17 +67,30 @@ the oracle for every Reference text and number, which says nothing about the gam
   failed. That binding is removed (granted seam edit, `crates/ow-inventory/src/spawn.rs` and its test, which now
   checks the key is left unbound; `FROM_POOL` stays as the installed key), and `loot::enable` refuses a loot key that
   is already bound instead of skipping it. Outcome, both orders tested in Reference and Off
-  (`the_pool_native_is_the_loot_one_whichever_pack_registers_first`): `ow-inventory` first, then loot: both succeed and
-  the key is loot's; loot first, then `ow-inventory`: both succeed, the key is loot's and the balance native
-  `ow-inventory`'s. A third pack that binds a loot key first makes `enable` fail, before it binds anything
-  (`enable_refuses_a_loot_key_another_pack_bound_before_binding_anything`).
-- **What the Reference death roll catches** (review r1 of PR #340). The C++ catches `RuntimeError` only, so the port
-  catches `VmError::Script` only (its rule errors and the data errors of this unit, recorded on the pool as "not
-  evaluated", nothing dropped for it). A `NotYet` (an unread resolver, a missing layer) and the VM's own errors (a
-  borrowed service, a stale handle) stop the death roll and so the step (`a_not_yet_in_a_pool_chance_stops_the_reference_death_roll`).
-  This differs from the C++ wherever its evaluator throws its "unsupported" `RuntimeError` for what `ow-attr` answers
-  `NotYet`: the C++ records "not evaluated" and goes on, the Rust stops. Items a pool made before a caught error stay
-  in its record, as the C++ `spawnFromPool` appends them (`a_rule_error_is_reported_on_its_pool_and_keeps_the_items_made_before_it`).
+  (`the_pool_native_is_the_loot_one_whichever_pack_registers_first`): `ow-inventory` first, then loot: both succeed,
+  `ow-inventory` leaves the key unbound and loot binds it; loot first, then `ow-inventory`: both succeed, the key is
+  loot's and the balance native `ow-inventory`'s. That test runs on the fixture's key, which differs from the
+  installed `FROM_POOL` key (the toy declares `SpawnedInventory` an `object`, the installed package an `array`), so it
+  never puts the two packs on one key. The real protection is `ow-inventory`'s own test that `register` leaves
+  `FROM_POOL` unbound (`the_pool_spawn_is_left_to_ow_combat_and_a_none_balance_spawns_nothing`) plus the `enable`
+  refusal: a pack that binds a loot key first makes `enable` fail, before it binds anything
+  (`enable_refuses_a_loot_key_another_pack_bound_before_binding_anything`). One consequence: with only the inventory
+  pack registered, a script call to `SpawnBalancedInventoryFromPool` is now an unbound native, `UnboundNative` under
+  `StubPolicy::Refuse` and a logged zero under `LogAndZero`, where it was `NotYet { NotPorted }` before.
+- **What the Reference death roll catches** (reviews r1 and r2 of PR #340). The C++ catches its `RuntimeError`, which
+  every rule and data error of its evaluator and its object reads is. Three kinds stop the Rust roll, and so the step:
+  a `NotYet` (an unread resolver, a missing layer;
+  `a_not_yet_in_a_pool_chance_stops_the_reference_death_roll`), a borrowed service (a wiring bug) and the step budget
+  (the run's harness limit, not a pool's data). Every other error is caught as the C++ catches its `RuntimeError`,
+  recorded on the pool as "not evaluated", nothing dropped for it, and the roll goes on: this unit's rule errors
+  (`VmError::Script`), and the data errors of the attribute system, the definition store and the heap
+  (`VmError::Attr`, `Def`, `Heap` and the rest). One of those data errors is not an error in the C++ at all: the Rust
+  evaluator refuses an initialization definition without `ValueFormula` and the other fields it reads, which the C++
+  reads as absent (the `ow-attr` gap below); such a pool is "not evaluated" here where the C++ rolls it
+  (`a_data_error_in_a_pool_quantity_is_not_evaluated_and_the_reference_roll_goes_on`). The `NotYet` kind differs from
+  the C++ wherever its evaluator throws its "unsupported" `RuntimeError` for what `ow-attr` answers `NotYet`: the C++
+  records "not evaluated" and goes on, the Rust stops. Items a pool made before a caught error stay in its record, as
+  the C++ `spawnFromPool` appends them (`a_rule_error_is_reported_on_its_pool_and_keeps_the_items_made_before_it`).
 - **The decision-12 stand-in** (decision 2026-11-15-12: `src/progression.cpp` reads `GameInfoAttributeContextResolver`
   and `DesignerAttributeContextResolver` as keeping the object the chain held before them; the loot's artifact weights
   read a designer attribute that way). It is **not reproduced** under Reference here: `AttributeSystem` refuses a
@@ -124,10 +137,11 @@ the oracle for every Reference text and number, which says nothing about the gam
   `ConditionalInitialization`, `RangeRestriction`, `RoundingMode`; the `ow-attr` gap below), the batch's damage
   source `WillowDmgSource_Shotgun` and stock damage type `GD_Impact.DamageType.DmgType_Normal`, `Balance_Two` (two
   playthrough entries), `List_Loop` / `Balance_Loop` (a list that includes itself), `Balance_Unread` (a pool chance
-  through `ToyUnreadValueResolver`, a class no resolver registry knows) and `Balance_Partial` (`Pool_Partial`, a coin
-  and `Pool_Self`, a pool that holds itself).
+  through `ToyUnreadValueResolver`, a class no resolver registry knows), `Balance_Partial` (`Pool_Partial`, a coin
+  and `Pool_Self`, a pool that holds itself) and `Balance_Bare` (`Pool_Bare`, whose quantity definition is a
+  `ToyBareDefinition` without the evaluator's fields, then `Pool_Coins`).
 - **Verified (automated, local, pc-hummer).**
-  - 31 loot unit tests in `loot/tests.rs` (93 `ow-combat` tests pass with W6-COMBAT's, 2 ignored: the two fixture
+  - 32 loot unit tests in `loot/tests.rs` (94 `ow-combat` tests pass with W6-COMBAT's, 2 ignored: the two fixture
     writers), one per rule above.
   - The S-g steps against the C++ binary on the same package bytes: twelve step lists (kills on each pawn balance,
     seeds, the cap, `rollpool` on every toy pool, `lootbatch`, the refusals, two of the Rust-only balances) are
@@ -137,11 +151,14 @@ the oracle for every Reference text and number, which says nothing about the gam
     fresh fixture write (the folder removed, the packages written again with the round's new exports): unchanged.
   - `tests/combat_loot_standin_test.py` passes on the Rust binary under `OW_PARITY=reference` (manifest line
     `tests/rust_parity.d/loot.txt`) and on the C++ binary.
-  - `tests/combat_test.py` on the Rust binary under `OW_PARITY=reference`: 3 checks fail, W6-COMBAT's two
-    `SetHealth`-event checks and one of the loot section's, the random quantity of `Pool_Rand`. Its cause is the
-    `ow-attr` gap below, not the test: the Rust evaluator refuses the Python toy's initialization definition, so the
-    pool's evaluation fails where the C++ evaluates it. Every other loot check passes. In Off mode the loot section
-    fails by design (the toy `DropLootOnDeath` is an empty script). So the file is not a manifest line.
+  - `tests/combat_test.py` on the Rust binary under `OW_PARITY=reference` (`python -I`, after review r2): it runs to
+    its end and reports 3 failed checks, exit 1: W6-COMBAT's two `SetHealth`-event checks, and one of the loot
+    section's, the random quantity of `Pool_Rand` (quantities seen `[0]`). Its cause is the `ow-attr` gap below, not
+    the test: the Rust evaluator refuses the Python toy's initialization definition (a data error, caught), so
+    `Pool_Rand` is "not evaluated" where the C++ rolls it, and every kill goes on to its other pools. Every other loot
+    check passes. (At bb6ca48, which caught `VmError::Script` only, that data error stopped every kill's roll and the
+    script crashed at its first loot check; review r2.) In Off mode the loot section fails by design (the toy
+    `DropLootOnDeath` is an empty script). So the file is not a manifest line.
 - **The installed game (local, outputs under `local/p2/w6-loot/installed/`).** One run over `Sanctuary_Dynamic.upk`:
   seed 20261009, `player:8` (the `maya` step needs the mission bridge, not wired), the four bullymong kinds
   (`adult`, `baby`, `regular`, `ranged`) spawned and each killed once, `rollpool` on nine pools of their list, and two
