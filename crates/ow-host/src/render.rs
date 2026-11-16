@@ -1,7 +1,7 @@
 //! Owner: lane H2-DRAW (host track, stage 2). The scene renderer on wgpu: it uploads a [`DrawPlan`] once (LOD 0
-//! vertex and index buffers, one instance buffer, the diffuse textures) and draws every batch as one instanced,
-//! indexed draw, lit by plain diffuse plus one sun and an ambient term. That is the B2 benchmark's level of drawing;
-//! nothing here claims BL2's look (no normal maps, lightmaps, fog, shadows, translucency or masks).
+//! vertex and index buffers, one instance buffer, the textures) and draws it: each opaque, masked or sky batch as one
+//! instanced, indexed draw, each blended instance on its own (lane H8-MATERIALS, below). Nothing here claims BL2's
+//! look (no normal maps, lightmaps, fog or shadows).
 //!
 //! AI-assisted (Claude Code). Written from the wgpu 30.0.1 API, not from any listing. Decision:
 //! `docs/decisions/2026-11/2026-11-16-51-*`.
@@ -35,10 +35,13 @@
 //! its own, back to front by its origin, with the depth test and no depth write. Translucent blends by the diffuse
 //! alpha, additive adds, modulate multiplies what is behind. A translucent material is drawn only where its opacity
 //! has a source the host can read: one with no diffuse is left out of the plan
-//! ([`crate::draw::PlanStats::translucent_skipped`]), and one whose diffuse has alpha 255 everywhere (DXT1, say) is
-//! left out here ([`UploadStats::translucent_without_alpha`]). Drawn, both covered the scene opaquely (Sanctuary's
-//! water decals in white, a cloud layer's DXT1 dust as a yellow and black band); their opacity is the stripped
-//! graph's. UNVERIFIED: the game draws them, and their look waits for a graph reading.
+//! ([`crate::draw::PlanStats::blended_skipped`], which leaves out additive and modulate ones with no diffuse too),
+//! one whose diffuse has alpha 255 everywhere (DXT1, say) is left out here
+//! ([`UploadStats::translucent_without_alpha`]), and so is any blended one none of whose candidates decodes
+//! ([`UploadStats::blended_undecoded`]). Drawn, the first two covered the scene opaquely (Sanctuary's water decals
+//! in white, a cloud layer's DXT1 dust as a yellow and black band); their opacity is the stripped graph's.
+//! UNVERIFIED: the game draws them, and their look waits for a graph reading. The sky strip is sampled through its
+//! own clamped sampler; the other textures repeat.
 //!
 //! **Lighting** ([`Lighting`]) is the packages' when the caller reads them ([`Lighting::from_scene`]): the
 //! dominant directional light along its direction, and the sky light as a hemisphere term (its lower colour facing
@@ -120,6 +123,8 @@ struct Material {
 @group(1) @binding(1) var colour_sampler: sampler;
 @group(1) @binding(2) var data: texture_2d<f32>;
 @group(1) @binding(3) var<uniform> material: Material;
+// The sky strip's own sampler: clamped, so a column or row at the strip's edge does not blend with the other edge.
+@group(1) @binding(4) var strip_sampler: sampler;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -155,8 +160,8 @@ fn vs_main(v: VertexIn) -> VertexOut {
 fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     // Every sample first, in uniform control flow.
     let texel = textureSample(colour, colour_sampler, in.uv);
-    let strip_sky = textureSample(colour, colour_sampler, vec2<f32>(material.sky.x, in.uv.y));
-    let strip_cloud = textureSample(colour, colour_sampler, vec2<f32>(material.sky.x, material.flags.y));
+    let strip_sky = textureSample(colour, strip_sampler, vec2<f32>(material.sky.x, in.uv.y));
+    let strip_cloud = textureSample(colour, strip_sampler, vec2<f32>(material.sky.x, material.flags.y));
     let cloud = textureSample(data, colour_sampler, in.uv).r;
     if (material.flags.x > 0.5) {
         // The sky record's formula (NATIVE_SKY_APPROXIMATION.md): the strip at the time-of-day column and the dome's
@@ -289,8 +294,11 @@ pub struct UploadStats {
     /// Translucent slots not drawn because their diffuse has no alpha below 255 (a DXT1 texture, say): the opacity
     /// comes from the stripped graph, and drawing the diffuse's alpha would draw the whole surface opaque.
     pub translucent_without_alpha: usize,
-    /// Section instances of those slots, not drawn.
-    pub translucent_skipped_instances: usize,
+    /// Blended slots (translucent, additive, modulate) with diffuse candidates of which none decoded, not drawn:
+    /// grey in their place would cover, veil or darken what is behind (they are in `grey_materials` too).
+    pub blended_undecoded: usize,
+    /// Section instances of the slots of `translucent_without_alpha` and `blended_undecoded`, not drawn.
+    pub skipped_instances: usize,
 }
 
 /// The scene's light as the shader takes it.
@@ -523,6 +531,12 @@ impl SceneRenderer {
                 },
                 texture_entry(2),
                 uniform(3, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -639,6 +653,16 @@ impl SceneRenderer {
             anisotropy_clamp: 8,
             ..Default::default()
         });
+        let strip_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sky strip"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         let group = |colour: &wgpu::TextureView, data: &wgpu::TextureView, params: &[u8]| {
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("material"),
@@ -664,6 +688,10 @@ impl SceneRenderer {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::Sampler(&strip_sampler),
                     },
                 ],
             })
@@ -768,6 +796,12 @@ impl SceneRenderer {
                 }
                 None => {
                     upload.grey_materials += 1;
+                    if pass.blended() {
+                        upload.blended_undecoded += 1;
+                        if let Some(s) = skipped.get_mut(index) {
+                            *s = true;
+                        }
+                    }
                     material_groups.push(group(&grey, &grey, &params));
                 }
             }
@@ -814,7 +848,7 @@ impl SceneRenderer {
                 .copied()
                 .unwrap_or(false)
             {
-                upload.translucent_skipped_instances += b.instances.len();
+                upload.skipped_instances += b.instances.len();
                 continue;
             }
             let pass = Pass::of(slot);

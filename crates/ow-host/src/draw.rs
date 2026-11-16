@@ -369,10 +369,11 @@ pub struct PlanStats {
     pub by_blend: [usize; 5],
     /// Section instances of the sky dome's material.
     pub sky_instances: usize,
-    /// Section instances of a translucent material with neither a diffuse nor a constant, not batched: their opacity
-    /// is the stripped graph's, and drawing them opaque grey covered Sanctuary's water decals in white. Counted under
-    /// `untextured_no_diffuse` and `by_blend` too.
-    pub translucent_skipped: usize,
+    /// Section instances of a blended material (translucent, additive or modulate) with neither a diffuse nor a
+    /// constant, not batched: what they blend is the stripped graph's, and drawn with grey a translucent one covered
+    /// Sanctuary's water decals in white, an additive one would lay a grey veil and a modulate one darken by about
+    /// half. Counted under `untextured_no_diffuse` and `by_blend` too.
+    pub blended_skipped: usize,
 }
 
 impl PlanStats {
@@ -607,12 +608,14 @@ impl DrawPlan {
                     None => stats.by_blend[blend_index(Blend::Opaque)] += 1,
                 }
                 if made.is_some_and(|m| {
-                    m.blend == Blend::Translucent
-                        && m.sky.is_none()
+                    matches!(
+                        m.blend,
+                        Blend::Translucent | Blend::Additive | Blend::Modulate
+                    ) && m.sky.is_none()
                         && m.constant.is_none()
                         && m.diffuse.is_empty()
                 }) {
-                    stats.translucent_skipped += 1;
+                    stats.blended_skipped += 1;
                     continue;
                 }
                 let two_sided = library

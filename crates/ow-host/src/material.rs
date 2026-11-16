@@ -26,8 +26,11 @@
 //! `INSPECTED_COLOR_FALLBACKS`, the glacier surface, scene recipes, tints and emissive calibrations). They name
 //! single Sanctuary materials from screenshot inspection; such a material is drawn as the general rules leave it.
 //! The tool's `DiffuseColor` rule also needs the input to be serialized; the definition store applies class
-//! defaults, so an unserialized input reads as an unconnected one here (UNVERIFIED difference; one Sanctuary
-//! material takes the rule in the tool).
+//! defaults, so an unserialized input reads as an unconnected one here, with the default's black constant, where the
+//! tool takes no rule (UNVERIFIED difference; one Sanctuary material takes the rule in the tool).
+//! The scene keeps no null texture override (`Scene::load` drops a `TextureParameterValues` entry whose value is
+//! null), so an instance that nulls its parent's diffuse parameter keeps the parent's texture here and does not block
+//! the unnamed-sample rule, where the tool's parameter dict holds the null (a known difference, not counted).
 //!
 //! **Where a node-graph evaluator would fit.** Cooked materials keep only their parameter expressions (their graphs
 //! are stripped); [`MaterialInfo::expression_classes`] counts what survives. An evaluator of the surviving graph, or of
@@ -106,7 +109,9 @@ pub enum DiffuseSource {
     CookedDif(String),
     /// The sole non-auxiliary `Texture2D` of the cooked list (opaque or masked materials only).
     CookedSole(String),
-    /// An unconnected `DiffuseColor` input's constant, linear 0..1 per channel (the `Color` bytes over 255).
+    /// An unconnected `DiffuseColor` input's constant, as linear colour: its `Color` bytes through
+    /// [`crate::lighting::linear_color`], as UE3's `FLinearColor` converts an `FColor` (UNVERIFIED for BL2; the tool
+    /// takes the bytes over 255).
     Constant([f32; 3]),
     /// None of the rules applies.
     None,
@@ -323,7 +328,9 @@ impl Reader<'_> {
                 levels.push(self.named_floats(m, "ScalarParameterValues", "ParameterValue")?);
                 cursor = read_object(self.space, m, "Parent")?;
             } else if self.space.classes.is_child_of(class, self.base) {
-                self.base_material(m, info)?;
+                // Read whole before the error is reported: a refused cooked list must not cost the instances'
+                // scalars (the sky's inputs among them).
+                let read = self.base_material(m, info);
                 // Base defaults first, then each instance from the nearest the base to the material asked for.
                 let mut scalars = std::mem::take(&mut info.scalars);
                 for level in levels.iter().rev() {
@@ -336,6 +343,7 @@ impl Reader<'_> {
                     }
                 }
                 info.scalars = scalars;
+                read?;
                 return Ok(Some(m));
             } else {
                 return Err("a material class outside Material and MaterialInstance".into());
@@ -745,10 +753,14 @@ pub fn unconnected_constant(space: &ObjectSpace, base: ObjRef) -> Option<[f32; 3
     }
     let constant = struct_field(space, input, "Constant")?;
     let channel = |c: &str| match struct_field(space, constant, c) {
-        Some(Value::Byte(b)) => Some(f32::from(*b) / 255.0),
+        Some(Value::Byte(b)) => Some(*b),
         _ => None,
     };
-    Some([channel("R")?, channel("G")?, channel("B")?])
+    Some(crate::lighting::linear_color([
+        channel("R")?,
+        channel("G")?,
+        channel("B")?,
+    ]))
 }
 
 /// The sky inputs of a [`SKY_MASTER`] chain, or `None` when one is missing (the tool then keeps the diffuse path).

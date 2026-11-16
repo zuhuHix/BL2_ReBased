@@ -528,7 +528,7 @@ fn a_fallback_texture_or_constant_fills_a_material_with_no_named_diffuse() {
 }
 
 #[test]
-fn a_translucent_material_with_nothing_to_draw_is_not_batched() {
+fn a_blended_material_with_nothing_to_draw_is_not_batched() {
     use crate::material::MaterialInfo;
     let mut s = scene();
     s.materials
@@ -567,8 +567,24 @@ fn a_translucent_material_with_nothing_to_draw_is_not_batched() {
     let before = DrawPlan::build(&s);
     let plan = DrawPlan::build_with(&s, Some(&l));
     let st = plan.stats;
-    assert_eq!((st.translucent_skipped, st.untextured_no_diffuse), (1, 1));
+    assert_eq!((st.blended_skipped, st.untextured_no_diffuse), (1, 1));
     assert_eq!(st.instances + 1, before.stats.instances);
+    // Additive and modulate ones too (a grey veil, a darkening); an opaque one stays, drawn grey.
+    for (blend, skipped) in [
+        (Blend::Additive, 1),
+        (Blend::Modulate, 1),
+        (Blend::Opaque, 0),
+    ] {
+        let mut l = l.clone();
+        if let Some(m) = l.materials.get_mut("Mats.Water") {
+            m.blend = blend;
+        }
+        assert_eq!(
+            DrawPlan::build_with(&s, Some(&l)).stats.blended_skipped,
+            skipped,
+            "{blend:?}"
+        );
+    }
     let water = plan
         .slots
         .iter()

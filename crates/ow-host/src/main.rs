@@ -249,8 +249,8 @@ fn scene_window(
         s.sky_instances
     );
     println!(
-        "translucent section instances not drawn for want of an opacity: {} with no diffuse",
-        s.translucent_skipped
+        "blended (translucent, additive, modulate) section instances not drawn: {} with no diffuse",
+        s.blended_skipped
     );
     let start = scene.player_starts.values().next();
     let camera = match start {
@@ -296,9 +296,9 @@ fn scene_window(
         r.draw_calls
     );
     println!(
-        "translucent slots not drawn because their diffuse has no alpha below 255: {} ({} section instances); \
-         {} blended instances drawn one by one",
-        u.translucent_without_alpha, u.translucent_skipped_instances, r.blended_instances
+        "blended slots not drawn: {} translucent whose diffuse has no alpha below 255, {} whose candidates all \
+         failed ({} section instances); {} blended instances drawn one by one",
+        u.translucent_without_alpha, u.blended_undecoded, u.skipped_instances, r.blended_instances
     );
     if let Some((w, h)) = r.size {
         println!("drawable size {w}x{h}");

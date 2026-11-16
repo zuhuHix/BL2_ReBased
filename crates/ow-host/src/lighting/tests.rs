@@ -21,8 +21,6 @@ fn light_package(junk: &[u8]) -> Package {
 #[test]
 fn the_anchored_stream_is_the_one_that_parses_to_the_end() {
     // The light data in front holds the anchor's name once more: that start must not parse to the end.
-    let mut probe = PackageBuilder::new_empty();
-    probe.names(["None"]);
     let anchor_name = {
         let pkg = light_package(&[0u8; 4]);
         let index = pkg
@@ -52,7 +50,6 @@ fn the_anchored_stream_is_the_one_that_parses_to_the_end() {
     );
     // A required tag the stream lacks: no start qualifies.
     assert!(anchored_tags(&pkg, 1, DIRECTIONAL_ANCHOR, &["Radius"]).is_err());
-    let _ = probe;
 }
 
 #[test]
