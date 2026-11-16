@@ -13,8 +13,8 @@ C++ reading (`ParityMode::Reference`); the Off rule is to be built by a fresh im
 ## 1. The shape (from the packages)
 
 - `WillowGame.PlayThroughCountAttributeValueResolver` extends the value resolver base class and declares one field,
-  `IncludePlaythroughThree` (an int). It has no script functions and registers no natives. Its rules are the
-  overrides of the value resolver's virtual get, get-base, add, remove and set-base (NATIVE_ATTRIBUTES.md section 6).
+  `IncludePlaythroughThree` (an int). It has no script functions and registers no natives. Its rules are its answers
+  to the value resolver's five operations: get, get-base, add, remove and set-base (NATIVE_ATTRIBUTES.md section 6).
 - The installed data has exactly one resolver of this class. It is the only value resolver of
   `D_Attributes.Balance.PlayThroughCount` (an `Engine.AttributeDefinition` whose context chain is one
   `NoContextNeededAttributeContextResolver`), and its `IncludePlaythroughThree` is **0**.
@@ -22,67 +22,67 @@ C++ reading (`ParityMode::Reference`); the Off rule is to be built by a fresh im
   NATIVE_CONTROLLER_HELPERS.md reads the script). `PlaythroughOverride`, the field declared right after it, is not
   read.
 
-## 2. Which slots the class overrides
+## 2. What the class defines
 
-Of the five virtual operations, the class overrides **get** only. Get-base, add, remove and set-base are the base
-class's own entries, the same ones `ConstantAttributeValueResolver` uses: get-base calls get with the same arguments,
-and add, remove and set-base change nothing and answer false. (This is the class default that the value resolver
-module already describes for every class but `ObjectPropertyAttributeValueResolver`.)
+The class defines its own **get** only. The other four operations behave as the base class's do (the same as
+`ConstantAttributeValueResolver`): get-base gives the same number as get, and add, remove and set-base change nothing
+and answer false. That is the class default the value resolver module already describes for every class but
+`ObjectPropertyAttributeValueResolver`.
 
 ## 3. Get
 
-Inputs: the resolver object, the resolved context and the chain's previous value. **The context and the previous
-value are ignored.** The only inputs are the world's replication info and the resolver's `IncludePlaythroughThree`.
+The answer depends only on the world's replication info (the `GRI` of the world's `WorldInfo`, the object
+`WillowPlayerController.GetCurrentPlaythrough` reads, NATIVE_CONTROLLER_HELPERS.md) and on the resolver's
+`IncludePlaythroughThree`. **The resolved context and the chain's previous value do not change it.** Nothing is
+written and nothing is drawn.
 
-1. Start from a count of 1.
-2. Find the replication info the same way `WillowPlayerController.GetCurrentPlaythrough` does
-   (NATIVE_CONTROLLER_HELPERS.md): the engine's single global world, its `WorldInfo` (the persistent level's, without
-   the streaming-level variant), that object's `GRI`, which must be a `WillowGameReplicationInfo` (a class test that
-   walks the super-class chain). If any link is missing, or `GRI` is not a `WillowGameReplicationInfo`, the count
-   stays 1.
-3. Read `CurrentPlaythrough` from it (through a virtual accessor of the replication info that returns the field as
-   stored: no override, no clamp). If it is 0 or more, the count is `CurrentPlaythrough + 1`. A negative value leaves
-   the count at 1.
-4. If `IncludePlaythroughThree` is 0: clamp the count to the range 1 to 2 (below 1 gives 1, above 2 gives 2).
-   If it is any other value: no clamp; the count from step 3 stands, so a third playthrough gives 3 (and a larger
-   stored value a larger count).
-5. Return the count as a float.
+Writing CP for that replication info's `CurrentPlaythrough`, as stored:
 
-What this gives with the installed field (0): Normal 1, TVHM 2, **UVHM 2**. With a non-zero field: 1, 2, 3.
+| Case | Result |
+|---|---|
+| No world, no `WorldInfo` or no `GRI`, or a `GRI` that is not a `WillowGameReplicationInfo` (a subclass counts) | 1.0 |
+| CP < 0 | 1.0 |
+| CP >= 0, `IncludePlaythroughThree` = 0 | min(CP + 1, 2) |
+| CP >= 0, `IncludePlaythroughThree` not 0 | CP + 1 |
 
-No side effects: nothing is written, no notification, no random draw.
+`PlaythroughOverride` plays no part. With the installed field (0): Normal 1, TVHM 2, **UVHM 2**. With a non-zero
+field: Normal 1, TVHM 2, UVHM 3.
 
 ## 4. Edge cases
 
-- No world, no world info or no replication info (a front-end or offline evaluation): 1.
-- A replication info of another class: 1.
-- Get-base is the same number as get (section 2).
+- A front-end or offline evaluation with no replication info: 1.0 (the first row).
+- Get-base gives the same number as get (section 2).
 - The context chain still runs before the resolver (NATIVE_ATTRIBUTES.md section 1); for the installed attribute it
-  is NoContextNeeded, which always resolves. The resolved context does not change the answer.
+  is NoContextNeeded, which always resolves.
+- CP = `i32::MAX`: CP + 1 is a 32-bit signed sum and wraps to `i32::MIN`. With a non-zero field the result is
+  -2147483648.0; with the field 0 the wrapped value is below 1, so the result is 1.0, not 2. Large counts are
+  rounded to the nearest `f32`. Both are readings of the arithmetic only (UNVERIFIED); no shipped value comes near.
 - A network client reads its local copy of `CurrentPlaythrough`; single player does not need the distinction.
 
 ## 5. How it was read (for a reviewer)
 
-The class's vtable was found from its registration, and the get, get-base and write slots were compared with the
-Constant resolver's: the get entry differs and the other four are identical. The replication-info class used in the
-class test was identified from its registration (name `WillowGameReplicationInfo`, package `WillowGame`). Its
-registered instance size equals the size `class_layout.py` computes for that class, a structural check of the layout.
-The accessor was located in that class's vtable through its constructor; it returns the field that `class_layout.py`
-places as `CurrentPlaythrough`. The field read in step 4 is the resolver's only declared field. One link is not
-checked by layout: `class_layout.py` cannot lay out `Engine.WorldInfo` (it has a map property the tool does not
-handle), so that the field read there is `GRI` rests on the same lookup in the `GetCurrentPlaythrough` note.
+- Only get is the class's own; get-base and the three writes are the base class's, shared with the Constant
+  resolver.
+- The registered instance size of `WillowGameReplicationInfo` equals the size `class_layout.py` computes for it, and
+  the field the rule reads is the one `class_layout.py` places as `CurrentPlaythrough`. The `IncludePlaythroughThree`
+  read is the resolver's only declared field.
+- Not checked by layout: `class_layout.py` cannot lay out `Engine.WorldInfo` (it has a map property the tool does
+  not handle), so that the world info's field is `GRI` rests on the `GetCurrentPlaythrough` note.
 
 ## 6. Implementer checklist (Off mode)
 
 1. Get ignores the context and the previous value.
-2. Count = 1; with a `WillowGameReplicationInfo` reachable as the world's `GRI` and `CurrentPlaythrough >= 0`,
-   count = `CurrentPlaythrough + 1`. `ow-attr` has no query for the world's replication info yet: the
-   `AttrWorld::game_info` / `EngineQuery` contract would need a way to reach it (`ow_balance::OfflineWorld` already
-   keeps one with `CurrentPlaythrough` set from its snapshot). A world that models no replication info reads 1, per
-   section 4.
-3. `IncludePlaythroughThree == 0`: clamp to 1..2. Otherwise no clamp.
-4. Get-base = get.
-5. Add, remove and set-base: false, nothing written (the module's class default, `storage` = `None`).
+2. The table in section 3. `ow-attr` has no query for the world's replication info yet: the `AttrWorld::game_info` /
+   `EngineQuery` contract would need a way to reach it (`ow_balance::OfflineWorld` already keeps one with
+   `CurrentPlaythrough` set from its snapshot). A world that models no replication info reads 1.0.
+3. **`ow_balance::types::Playthrough::count()` is not this attribute's value.** It is `index + 1` (UVHM 3); the
+   attribute applies the clamp of section 3 on top of that when `IncludePlaythroughThree` is 0 (UVHM 2), as it is
+   in the installed data. Its documentation (`types.rs`, ARCHITECTURE.md section 3.6) calls it "the PlayThroughCount
+   reading"; that wording is to be corrected in the hub's docs pass.
+4. Do not overflow on CP + 1 (Rust's default `+` panics in a debug build): use the wrapping sum of section 4, or
+   refuse the value as bad data, and say which.
+5. Get-base = get.
+6. Add, remove and set-base: false, nothing written (the module's class default, `storage` = `None`).
 
 ## 7. What would confirm it (live, bl-sdk)
 
