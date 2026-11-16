@@ -64,19 +64,28 @@
 //! values (or its class default object's, for none) with its own tags from its derived prefix applied; a class's
 //! default object as archetype gives its class default object. The archetype's class must be the export's or one it
 //! derives from (its slots are then the first of the export's). An archetype no holder has, of another class, in a
-//! cycle or more than 16 deep is a `NotYet` for the load, never class defaults in its place. One kind is not followed:
-//! an archetype inside a class default object (a template, such as `Engine.Default__StaticMeshActor`'s component,
-//! the archetype of most placed components). No record or C++ read gives such a subobject's property prefix, so its
-//! values are not read; the class default object stays the base, as before this rule, and the store logs
-//! `defs: archetype <path> not applied: ...` once per path ([`DefStore::take_log`]). Each archetype of a chain is
-//! built as its own decode load, so the decoder's resolve budget counts per step, not per chain (a chain has at most
-//! 17 steps, each within the budget). The archetype's values are copied as they are: a reference to one of the
-//! archetype's own subobjects (a pawn archetype's `DialogComponent`) is shared by every object made from it, not
+//! cycle or more than 16 deep is a `NotYet` for the load, never class defaults in its place. An archetype inside a
+//! class default object (a template, such as `Engine.Default__StaticMeshActor`'s component, the archetype of most
+//! placed components) is followed like any other, read from its derived prefix (below, "Subobjects of class default
+//! objects"; decision 2026-11-16-70, which replaced the logged skip of decision 2026-11-16-55). Each archetype of a
+//! chain is built as its own decode load, so the decoder's resolve budget counts per step, not per chain (a chain has
+//! at most 17 steps, each within the budget). The archetype's values are copied as they are: a reference to one of
+//! the archetype's own subobjects (a pawn archetype's `DialogComponent`) is shared by every object made from it, not
 //! made per object (UNVERIFIED against the game, which instances such subobjects). Decision 2026-11-16-55;
 //! UNVERIFIED in the running game.
 //!
+//! **Subobjects of class default objects.** Under `ParityMode::Off` an object inside a class default object (a path
+//! with a `Default__` segment before its last) is a definition like any other: it loads from its holder, from its
+//! derived prefix, with its archetype applied. Under `ParityMode::Reference` it stays a stand-in, as before: the C++
+//! reads no such object (its class default object applies the `Default__<Class>` export's tags only). The class
+//! default object itself is unchanged in both modes. Decision 2026-11-16-70; UNVERIFIED in the running game.
+//!
 //! **Prefix by class.** Where an export's tags start is derived from the export itself, so the order loads happen in
 //! cannot change a decode:
+//! - an export whose class derives from `Core.Component` and whose chain of outer exports reaches a class default
+//!   object (a template) reads from 16 (`PropertyPrefix::Template`) when its tag stream parses there, else `NotYet`
+//!   (decision 2026-11-16-70: in the installed packages every such component but the three dominant light templates
+//!   parses there, with its own name as a name at 4);
 //! - an export whose class path contains `CollectionActor` (`Engine.StaticMeshCollectionActor`,
 //!   `Engine.StaticLightCollectionActor`) reads from 4 (`PropertyPrefix::Ordinary`) without a check, wherever it is:
 //!   the C++ `--scene-records` rule (`src/cli.cpp`) and decision 2026-09-10-09. Its untagged tail lists its
@@ -182,6 +191,9 @@ pub const COLLECTION_RECORD: &str =
 
 /// The text the C++ `--scene-records` prefix rule looks for in an export's class path (`src/cli.cpp`).
 const COLLECTION_ACTOR: &str = "CollectionActor";
+
+/// The record of the subobjects of class default objects and their 16-byte prefix.
+pub const CDO_RECORD: &str = "docs/decisions/2026-11/2026-11-16-70-rust-definition-store-subobjects-of-class-default-objects.md";
 
 /// How many archetypes deep a load follows (module documentation, "Archetypes"); deeper is a `NotYet`.
 const MAX_ARCHETYPE_DEPTH: usize = 16;
@@ -467,8 +479,6 @@ struct Handles {
     files: FixedHashMap<PathBuf, Result<Rc<FileIndex>, PackageError>>,
     /// Paths whose `defs: no holder` line was logged.
     no_holder_logged: FixedHashSet<String>,
-    /// Archetype paths inside a class default object whose `defs: archetype .. not applied` line was logged.
-    template_logged: FixedHashSet<String>,
 }
 
 impl Handles {
@@ -593,7 +603,7 @@ impl Linker<'_> {
                 .resource(target.0, target.1)?
                 .ok_or(DecodeError::UnsupportedRequest)?,
         };
-        let why = if is_class_default(&path) {
+        let why = if is_class_default(&path) && !loads_inside_class_default(cx.mode, &path) {
             Some(Stay::ClassDefault)
         } else if is_code_class(&class_name) {
             Some(Stay::Code)
@@ -973,6 +983,22 @@ impl Loader<'_, '_> {
             .map(|k| self.cx.code.class(k).path.to_ascii_lowercase())
             .collect();
         let has = |p: &str| chain.iter().any(|c| c == p);
+        // A component inside a class default object (a template): 16 bytes, under the structural check (decision
+        // 2026-11-16-70). The classes whose templates carry more before their tags (the dominant light components)
+        // fail the check and are `NotYet`.
+        if has("core.component") && self.outer_chain_reaches_class_default(&pkg, entry.outer) {
+            return if tags_parse(&pkg, &entry, PropertyPrefix::Template.bytes()) {
+                Ok(PropertyPrefix::Template)
+            } else {
+                Err(DefError::NotYet(NotYet::not_read(
+                    format!(
+                        "the property prefix of {path}: a component inside a class default object whose tags do not \
+                         parse from 16 bytes in"
+                    ),
+                    CDO_RECORD,
+                )))
+            };
+        }
         if has("engine.actorcomponent") {
             return Ok(PropertyPrefix::Component);
         }
@@ -1060,23 +1086,6 @@ impl Loader<'_, '_> {
         let Some(class) = self.cx.code.class_at(self.cx.store, package, entry.class)? else {
             return Err(DecodeError::NullClass.into());
         };
-        // A subobject of a class default object (a template, such as the component a class's default actor holds):
-        // where its tags start is not recorded, so its values are not read and the class default object stays the
-        // base, as before this rule. Logged once per path.
-        let dotted_path = dotted(&path);
-        let segments: Vec<&str> = dotted_path.split('.').collect();
-        if segments
-            .split_last()
-            .is_some_and(|(_, outers)| outers.iter().any(|s| s.starts_with("Default__")))
-        {
-            let mut handles = self.linker.handles.borrow_mut();
-            if handles.template_logged.insert(path_key(&path)) {
-                self.cx.state.log.push(format!(
-                    "defs: archetype {path} not applied: a class default object's subobject, its prefix not recorded"
-                ));
-            }
-            return Ok(None);
-        }
         let key = path_key(&path);
         let Some(target) = self.linker.holder_of(self.cx, &path, &key)? else {
             return Err(not_yet("no package holds it".into()));
@@ -1107,8 +1116,7 @@ impl Loader<'_, '_> {
                 self.cx.code.class(class).path
             )));
         }
-        // A class's default object (the template check above has already taken anything inside one): the class
-        // default object.
+        // A class's default object (a template inside one has another name): the class default object.
         if arch_entry.name.starts_with("Default__") {
             if arch_class == class {
                 return Ok(None);
@@ -1174,6 +1182,23 @@ impl Loader<'_, '_> {
             }
         })?;
         Ok(made)
+    }
+
+    /// Whether the export chain of outers from `outer` (an export reference of `package`) reaches a class default
+    /// object (an export named `Default__...`). Bounded as [`Loader::outer_chain_reaches_level`].
+    fn outer_chain_reaches_class_default(&self, pkg: &Package, outer: i32) -> bool {
+        let mut at = outer;
+        for _ in 0..pkg.exports.len() {
+            if at <= 0 {
+                return false;
+            }
+            match pkg.object(at) {
+                Ok(e) if e.name.starts_with("Default__") => return true,
+                Ok(e) => at = e.outer,
+                Err(_) => return false,
+            }
+        }
+        false
     }
 
     /// Whether the export chain of outers from `outer` (an export reference of `package`) reaches an export of class
@@ -1332,7 +1357,7 @@ impl Loader<'_, '_> {
 
     fn find(&mut self, text: &str) -> Result<Option<ObjRef>, DefError> {
         let key = path_key(text);
-        if is_class_default(text) {
+        if is_class_default(text) && !loads_inside_class_default(self.cx.mode, text) {
             let own = text
                 .rsplit(['.', ':'])
                 .next()
@@ -1375,6 +1400,21 @@ impl Loader<'_, '_> {
         };
         self.ensure(o, true).map(Some)
     }
+}
+
+/// Whether `path` names an object inside a class default object (a segment before its last starts `Default__`).
+fn inside_class_default(path: &str) -> bool {
+    let dotted_path = dotted(path);
+    let segments: Vec<&str> = dotted_path.split('.').collect();
+    segments
+        .split_last()
+        .is_some_and(|(_, outers)| outers.iter().any(|s| s.starts_with("Default__")))
+}
+
+/// Whether the store loads the object at `path` although it is inside a class default object: in `ParityMode::Off`
+/// only (module documentation, "Subobjects of class default objects"); the C++ reads no such object.
+fn loads_inside_class_default(mode: ParityMode, path: &str) -> bool {
+    mode != ParityMode::Reference && inside_class_default(path)
 }
 
 /// Whether export `entry`'s tag stream, read from `prefix` bytes into its payload, reaches its `None` tag inside the
@@ -1688,7 +1728,9 @@ impl DefStore {
         let path = full_path(&pkg, index).map_err(package_error)?;
         self.run(w, |l| {
             let class_name = l.cx.code.class_name(l.cx.store, package, index);
-            if is_class_default(&path) || is_code_class(&class_name) {
+            if (is_class_default(&path) && !loads_inside_class_default(l.cx.mode, &path))
+                || is_code_class(&class_name)
+            {
                 return Err(DefError::NotADefinition(path.clone()));
             }
             let derived = l.derive_prefix(package, index, &path)?;

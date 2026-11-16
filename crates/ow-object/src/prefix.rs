@@ -10,7 +10,9 @@
 //! (ROADMAP Phase 0, "the observed 4-byte prefix is UNVERIFIED as a rule").
 
 /// The bytes before an export's tags. The discriminant is the byte count. `#[non_exhaustive]` (granted to W3-DEFS):
-/// distribution subobjects may need a 16-byte case (PHASELOCK_STOCK_DATA.md).
+/// distribution subobjects may need a 16-byte case (PHASELOCK_STOCK_DATA.md). [`PropertyPrefix::Template`] is that
+/// case for a component inside a class default object (decision 2026-11-16-70); the C++ VM accepts only the other
+/// three, so [`PropertyPrefix::from_bytes`] does not give it.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PropertyPrefix {
@@ -20,6 +22,10 @@ pub enum PropertyPrefix {
     PlacedActor = 26,
     /// A component: 8 bytes.
     Component = 8,
+    /// A component inside a class default object (a template): 16 bytes, its own name as a name at 4 (decision
+    /// 2026-11-16-70, a census of the installed packages; UNVERIFIED as a rule of the game). The definition store's
+    /// only, `ParityMode::Off`: the C++ VM reads no such object.
+    Template = 16,
 }
 
 impl PropertyPrefix {
@@ -55,6 +61,9 @@ mod tests {
         assert_eq!(PropertyPrefix::Ordinary.bytes(), 4);
         assert_eq!(PropertyPrefix::Component.bytes(), 8);
         assert_eq!(PropertyPrefix::PlacedActor.bytes(), 26);
+        // The template prefix is not one the C++ accepts.
+        assert_eq!(PropertyPrefix::Template.bytes(), 16);
+        assert_eq!(PropertyPrefix::from_bytes(16), None);
         for other in [0, 1, 3, 5, 12, 25, 27, usize::MAX] {
             assert_eq!(PropertyPrefix::from_bytes(other), None);
         }
