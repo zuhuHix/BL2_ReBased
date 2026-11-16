@@ -94,9 +94,9 @@ and that every flag `src/cli.cpp`'s `main()` dispatches on has a `cmd("--flag"` 
 
 ## The Rust `ow-package`
 
-`cargo build -p ow-cli` builds `target/debug/ow-package.exe`. It takes the C++ binary's command lines. A command
-whose family is not ported yet prints `ow-package (Rust): <flag> is not ported to Rust yet (lane <lane>)` on stderr
-and exits with code 3, which the C++ binary never uses; until then, use `build/Release/ow-package.exe`. The parity
+`cargo build -p ow-cli` builds `target/debug/ow-package.exe`. It takes the C++ binary's command lines, and every
+command family is ported (lane W6-FIRE ported the last, decision 2026-11-16-38). Exit code 3, which the C++ binary
+never uses, means the command met a `NotYet` (a rule, layer or native not ported or read yet). The parity
 mode is read once at start-up from `OW_PARITY` (`reference` or unset); any other value prints
 `ow-package: OW_PARITY must be "reference" or unset, ...` and exits 1.
 

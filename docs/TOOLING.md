@@ -338,8 +338,8 @@ banned numeric or determinism pattern, or a C++ CLI flag without a Rust entry.
 - `ow-host --game <install>` checks that the folder holds `WillowGame/CookedPCConsole` with `Core.upk`, `Engine.upk`
   and `WillowGame.upk` (rule 11), then says that the host on the chosen engine route is not written yet and stops
   (exit 0; 1 when it refuses the folder, 2 for a wrong call).
-- The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; until a command family is ported it prints
-  `<flag> is not ported to Rust yet (lane <lane>)` and exits 3. Use `build/Release/ow-package.exe` meanwhile.
+- The Rust `ow-package` (`ow-cli`) takes the C++ binary's command lines; every command family is ported (decision
+  2026-11-16-38). Exit code 3 means the command met a `NotYet` (a rule, layer or native not ported or read yet).
 - Since lane W3-SWITCH (2026-11-15), the Python tools whose `ow-package` flags are all ported default to the Rust
   release binary, `target/release/ow-package.exe` (`tools/repo_paths.py`, `default_reader`). Build it with
   `cargo build --release -p ow-cli --locked`; a tool run without it stops and says so. `--reader build/Release/ow-package.exe`

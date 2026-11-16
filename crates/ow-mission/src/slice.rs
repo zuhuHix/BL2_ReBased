@@ -41,10 +41,10 @@
 //!   level-up of a class that names a health pool, and the `health:` input, are `NotYet { NotRead }` (the game builds
 //!   its pools in the class-defaults routine, not read).
 //! - `Behavior_AIHold` on the dummy before it has a mind: the C++ records it as a no-op (the dummy gets its mind and
-//!   AI component at its first pawn hit, lane W6-COMBAT's chain). Reference: the no-op; Off: `NotYet { LayerAbsent }`.
-//! - The player's hit through the stock pawn chain (`damage_dummy` with a damage): lane W6-COMBAT, `NotYet {
-//!   LayerAbsent }` in both modes. Without a damage (the host's call so far) `OnTakeDamage` is raised directly, as in
-//!   the C++.
+//!   AI component at its first pawn hit, through the combat chain). Reference: the no-op; Off: `NotYet { NotPorted }`.
+//! - The player's hit through the stock pawn chain (`damage_dummy` with a damage): `ow-combat` has it (W6-COMBAT), but
+//!   it is not wired into the slice yet (follow-up W6-COMBAT-RUN2), so `NotYet { NotPorted }` in both modes. Without
+//!   a damage (the host's call so far) `OnTakeDamage` is raised directly, as in the C++.
 //! - The world ops listed at the boundary (`Behavior_Transform`, `Behavior_RegisterTargetable`, `Behavior_IntMath`,
 //!   `Behavior_ChangeInstanceDataSwitch`, `Behavior_SpecialMove`): not run in either mode (the kernel's boundary
 //!   list, with the decoded fields the host needs), as in the C++.
@@ -64,9 +64,6 @@ use ow_behavior::kernel::{BehaviorId, BoundaryCall, Provider};
 use ow_behavior::provider::{BehaviorError, class_path_of, enum_names, provider_path_leaf, stock_path};
 use ow_behavior::registry::{DescribeFn, Handler};
 use ow_core::{DetMap, DetSet, NotYet, PackageName, ParityMode};
-use ow_object::cdo::instantiate_export;
-use ow_object::decode::{DecodeState, ValueCx};
-use ow_object::heap::Origin;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::prefix::PropertyPrefix;
 use ow_object::value::Value;
@@ -74,7 +71,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 use ow_world::world::World;
 
-use crate::bridge::{self, Gain, MarcusUse, MissionLists, MissionScript, Toucher};
+use crate::bridge::{self, Gain, MarcusUse, MissionLists, MissionScript, Toucher, error_text, instantiate_copy, store_object};
 use crate::dialog::DialogSystem;
 use crate::tracker::{self, EffectKind, MissionError, MissionSystem, Notification, field, field_value, integer, prop, ref_path, text};
 
@@ -112,7 +109,7 @@ pub const INCENDIARY_IMPACT: &str = "GD_Incendiary.DamageType.DmgType_Incendiary
 pub const CONDITION_CLASS: &str = "WillowGame.BehaviorSequenceEnableByMission";
 
 /// The layer the pawn hit chain needs.
-const COMBAT_LAYER: &str = "ow-combat (lane W6-COMBAT)";
+const COMBAT_FOLLOW_UP: &str = "the combat chain wired into the Fire slice (follow-up W6-COMBAT-RUN2)";
 
 /// The settle bound of the drain and the depth bound of nested notifications (the C++ 16).
 const SETTLE: usize = 16;
@@ -299,55 +296,6 @@ fn name_of(names: &[String], value: Option<&Value>) -> String {
         .and_then(|i| names.get(i))
         .cloned()
         .unwrap_or_else(|| format!("?{index}"))
-}
-
-/// A copy of export `index` of `package` decoded from `prefix` on (the C++ `instantiateExport`), as the bridge makes
-/// the director: references inside it are stand-ins.
-fn instantiate_copy(
-    vm: &mut Vm,
-    package: ow_package::PackageId,
-    index: i32,
-    prefix: PropertyPrefix,
-) -> Result<ObjRef, MissionError> {
-    let mode = vm.parity;
-    let mut state = DecodeState::new();
-    let (code, store) = vm.defs.code_mut();
-    let mut cx = ValueCx::new(store, code, &mut vm.space, &mut state, mode);
-    let made = instantiate_export(&mut cx, package, index, prefix);
-    vm.log.append(&mut state.log);
-    Ok(made
-        .map_err(|e| BehaviorError::from(ow_defs::store::DefError::from(e)))?
-        .object)
-}
-
-/// The definition store's object for a stand-in of a package export (through the identity policy, as every path is
-/// one object); any other value as it is.
-fn store_object(vm: &mut Vm, v: &Value) -> Result<Value, MissionError> {
-    let Value::Object(Some(o)) = v else {
-        return Ok(v.clone());
-    };
-    let Origin::Resource { package, index } = vm.space.heap.get(*o)?.origin else {
-        return Ok(v.clone());
-    };
-    let found = vm.defs.resolve_ref(&mut vm.space, package, index);
-    let log = vm.defs.take_log();
-    vm.log.extend(log);
-    Ok(match found.map_err(BehaviorError::from)? {
-        Some(f) => Value::Object(Some(f)),
-        None => v.clone(),
-    })
-}
-
-/// An error's text with its causes (the C++ `what()` of a rethrown exception).
-fn error_text(error: &dyn std::error::Error) -> String {
-    let mut text = error.to_string();
-    let mut cause = error.source();
-    while let Some(c) = cause {
-        text.push_str(": ");
-        text.push_str(&c.to_string());
-        cause = c.source();
-    }
-    text
 }
 
 fn set_prop(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), MissionError> {
@@ -545,16 +493,16 @@ impl FireMissionSlice {
         // the move and selects output 0 at once; output 1 follows when the move has ended (no animation system here).
         d.report_at_boundary("GearboxFramework.Behavior_SpecialMove", None, vec![0]);
         // Behavior_AIHold is installed script that needs the pawn's AI component, which the dummy gets with its mind at
-        // its first pawn hit (lane W6-COMBAT). Before that the C++ records it as a no-op (Reference); Off: NotYet.
+        // its first pawn hit (the combat chain, not wired into the slice yet: W6-COMBAT-RUN2). Before that the C++
+        // records it as a no-op (Reference); Off: NotYet.
         d.handle(
             "GearboxFramework.Behavior_AIHold",
             Handler::run(move |vm, _p, _id, _| {
                 if vm.parity == ParityMode::Reference {
                     return Ok(Vec::new());
                 }
-                Err(NotYet::layer_absent(
-                    "Behavior_AIHold on the target dummy (its mind and AI component come with the pawn hit chain)",
-                    COMBAT_LAYER,
+                Err(NotYet::not_ported(
+                    format!("Behavior_AIHold on the target dummy (its mind and AI component come with {COMBAT_FOLLOW_UP})"),
                     RECORD,
                 )
                 .into())
@@ -969,7 +917,36 @@ impl FireMissionSlice {
         set_prop(vm, pool, "AssociatedProvider", Value::Object(Some(controller)))?;
         set_prop(vm, pool, "bIsAuthoritative", Value::Bool(true))?;
         set_prop(vm, controller, "ResourcePoolManager", Value::Object(Some(manager)))?;
+        // The C++ catches any failure of the link itself and keeps the pool.
+        let _ = self.link_player_health(vm, manager, pool);
         Ok(Some(HealthPool { pool }))
+    }
+
+    /// The C++ `linkPlayerHealth` (Reference only, with the pool): the player pawn's `HealthPool` reference (section
+    /// 1.1 of NATIVE_LEVEL_UP_ATTRIBUTES.md: manager, slot, GUID byte, cached pool) to the built pool, slot 0 and the
+    /// pool's own GUID, so the pawn's health reads answer from it. The C++ links at the pawn's creation and at the
+    /// pool's, whichever comes second; here the bridge is asked for the player pawn when the pool is built (one pawn
+    /// either way, made earlier than the C++ would make it). A pawn class without the reference, or a package set
+    /// without the reference struct, keeps no link, as the C++.
+    fn link_player_health(&self, vm: &mut Vm, manager: ObjRef, pool: ObjRef) -> Result<(), MissionError> {
+        let pawn = self.inner.script.player_pawn(vm)?;
+        let class = vm.space.heap.get(pawn)?.class;
+        let Some(health) = vm.space.prop(class, "HealthPool") else {
+            return Ok(());
+        };
+        let Some(ty) = vm.space.classes.struct_by_path("Engine.Actor.ResourcePoolReference") else {
+            return Ok(());
+        };
+        // The C++ `makeByte(guid->integer())`: the low byte of the pool's GUID (0 when it has none).
+        let guid = prop(&vm.space, pool, "PoolGUID")?.map_or(0, |v| integer(&v));
+        let guid = u8::try_from(guid & 0xFF).unwrap_or(0);
+        let reference = ow_world::pools::ref_value(
+            &vm.space,
+            ty,
+            ow_world::pools::PoolRef::new(Some(manager), 0, guid, Some(pool)),
+        )?;
+        vm.space.write(pawn, PropAddr::scalar(health), reference)?;
+        Ok(())
     }
 
     /// The C++ `seedHealthPool` (Reference only): the pool for the player's level, its base maximum from the
@@ -1162,7 +1139,8 @@ impl FireMissionSlice {
 
     /// `OnTakeDamage` on the dummy: `damage_type` is the stock path of the damage type the host dealt (`""` for None);
     /// it and `damage_source` are written to the variables the event links as its outputs. With `damage` >= 0 and a
-    /// pawn for the dummy the C++ runs the player's hit through the stock pawn chain: lane W6-COMBAT, `NotYet` here.
+    /// pawn for the dummy the C++ runs the player's hit through the stock pawn chain: not wired here yet (W6-COMBAT-RUN2),
+    /// `NotYet`.
     pub fn damage_dummy(
         &self,
         vm: &mut Vm,
@@ -1173,9 +1151,8 @@ impl FireMissionSlice {
         // The C++ `damage < 0 || !dummyPawn_`: a NaN damage takes the pawn path there too.
         let direct = damage < 0.0 || self.inner.state.borrow().dummy_pawn.is_none();
         if !direct {
-            return Err(self.refuse(NotYet::layer_absent(
-                "the player's hit on the dummy pawn through the stock TakeDamage chain",
-                COMBAT_LAYER,
+            return Err(self.refuse(NotYet::not_ported(
+                format!("the player's hit on the dummy pawn through the stock TakeDamage chain ({COMBAT_FOLLOW_UP})"),
                 RECORD,
             )));
         }
