@@ -12,8 +12,9 @@
 //! **The tick** ([`World::tick`]), with the label each part has:
 //! 1. `WorldInfo.TimeDilation` (the authoritative value) is copied into the clock; a value the clock refuses stops
 //!    the tick with [`WorldError::Clock`] (the clock keeps its last good value). Then `SimClock::advance`, and
-//!    `WorldInfo.TimeSeconds` and `RealTimeSeconds` are written from the clock. UNVERIFIED: where and how the game
-//!    advances them was not located (the clock is a placeholder, `ow_core::sim`).
+//!    `WorldInfo.TimeSeconds` and `RealTimeSeconds` are written from the clock, and `DeltaSeconds` with the clock's
+//!    dilated delta where the class declares it (lane W5-MAPLOAD). UNVERIFIED: where and how the game advances them
+//!    was not located (the clock is a placeholder, `ow_core::sim`).
 //! 2. The actors are ticked by tick group (`TickingGroup` values 0 to 4 in order). Each actor's group is read once,
 //!    before the clock advances, from the level list in order; an actor gets at most one tick, keeps that group if
 //!    its `TickGroup` changes during the tick, and is skipped if destroyed by then. An actor spawned during a tick
@@ -185,7 +186,10 @@ impl World {
         query
             .try_borrow_mut()
             .map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?
-            .register(QueryKind::PlayerController, query::player_controller_handler())?;
+            .register(
+                QueryKind::PlayerController,
+                query::player_controller_handler(),
+            )?;
         let timers = vm.add_service(Timers::new())?;
         let balance = vm.add_service(balance)?;
         let walk: ActorWalkFn = Rc::new(|vm: &Vm, which| {
@@ -266,6 +270,17 @@ impl World {
             );
             set_field(&mut self.vm.space, wi, "TimeSeconds", Value::Float(t))?;
             set_field(&mut self.vm.space, wi, "RealTimeSeconds", Value::Float(r))?;
+            // Lane W5-MAPLOAD: the frame's dilated delta, which script reads (the AI's actions, decision
+            // 2026-11-16-66). A WorldInfo class that declares no DeltaSeconds (a synthetic fixture) is left alone.
+            let class = self.vm.space.heap.get(wi).map_err(VmError::from)?.class;
+            if self.vm.space.prop(class, "DeltaSeconds").is_some() {
+                set_field(
+                    &mut self.vm.space,
+                    wi,
+                    "DeltaSeconds",
+                    Value::Float(step.dt),
+                )?;
+            }
         }
         let mut index = 0u8;
         while let Some(group) = TickGroup::from_index(index) {
@@ -472,6 +487,9 @@ impl NativePack for Pack {
         Ok(())
     }
 }
+
+/// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).
+pub mod mapload;
 
 #[cfg(test)]
 mod tests;

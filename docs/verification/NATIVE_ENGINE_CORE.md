@@ -490,7 +490,7 @@ at the new state and at most five such restarts are performed per step.
   hanging off `WorldInfo`).
 - The collision-hash query internals (`CollidingActors`, `OverlappingActors`), `Extent` and `bSkipTraceTest` handling in
   `VisibleCollidingActors`, the spawn placement routine (spot finding) and the post-spawn encroachment check.
-- The begin-play pass for actors spawned before the world begins play.
+- The begin-play pass for actors spawned before the world begins play (partly read since: NATIVE_MAP_LOAD.md, section 2).
 - The Kismet destroyed-event class check, and the controller special case in the destroy routine.
 - Touch/UnTouch dispatch routines (belong with physics natives).
 - `Object.new` (bytecode, not a native).
