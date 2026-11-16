@@ -230,6 +230,46 @@ fn sanctuary_lighting_on_the_installed_game() {
     for e in &lighting.errors {
         let _ = writeln!(r, "  refused: {e}");
     }
+    // How the census's components become the plan's lit placements: hidden placements are not drawn.
+    let plan = crate::draw::DrawPlan::build_lit(&scene, None, Some(&lighting));
+    let (mut hidden_texture, mut hidden_shadowed) = (0usize, 0usize);
+    for (key, p) in scene.placements.iter() {
+        let Some(light) = lighting.components.get(key) else {
+            continue;
+        };
+        if p.is_hidden() {
+            hidden_texture +=
+                usize::from(matches!(light.light_map, Some(LightMap::Texture { .. })));
+            hidden_shadowed += usize::from(light.shadow.is_some());
+        }
+    }
+    let st = plan.stats;
+    let _ = writeln!(
+        r,
+        "plan: {} lit by a texture light map, {} per vertex, {} shadowed; hidden placements with a texture light \
+         map {hidden_texture}, with a sun shadow map {hidden_shadowed}; not applied: {} light maps and {} shadow maps \
+         without UVs, {} vertex mismatches",
+        st.lit_texture,
+        st.lit_vertex,
+        st.shadowed,
+        st.lightmap_no_uvs,
+        st.shadow_no_uvs,
+        st.lightmap_vertex_mismatch
+    );
     std::fs::write(out.join("report.md"), &r).expect("report.md");
     print!("{r}");
+    // Review r1 of PR #365: the run checks what decision 65 claims of Sanctuary.
+    assert_eq!(lighting.census.refused, 0, "{:?}", lighting.errors);
+    assert_eq!(lighting.census.uv_set_unread, 0, "{:?}", lighting.errors);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(classes.get("LightMapTexture2D"), Some(&(136, 0)));
+    assert_eq!(classes.get("ShadowMapTexture2D").map(|c| c.1), Some(0));
+    assert_eq!(
+        st.lit_texture + hidden_texture + st.lightmap_no_uvs,
+        lighting.census.texture_light_maps
+    );
+    assert_eq!(
+        st.shadowed + hidden_shadowed + st.shadow_no_uvs,
+        lighting.census.shadowed
+    );
 }

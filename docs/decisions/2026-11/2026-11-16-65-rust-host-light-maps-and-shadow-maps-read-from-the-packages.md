@@ -73,12 +73,20 @@ none differs from the tool outside the 15 inspected materials, by the material-b
   - **Shadow maps.**
     - A `ShadowMap2D` is fully tagged: `Texture` (a `ShadowMapTexture2D`), `CoordinateScale`, `CoordinateBias`,
       `LightGuid` and `bIsShadowFactorTexture`.
-    - All 1,540 in the three main level files carry the `DominantDirectionalLight` component's own `LightGuid`.
+    - All 1,540 in the three main level files (`Sanctuary_P`, `_Land`, `_Light`) carry the
+      `DominantDirectionalLight` component's own `LightGuid`. Over all ten files the levels hold 1,567 `ShadowMap2D`
+      exports. 1,548 placed components each reference one of the sun's, with no second one (counted:
+      `second_sun_shadow_maps` 0, `other_shadow_maps` 0). The rest belong to terrain components, decal actors, the
+      BSP model and components that are not placements.
     - All are serialized with `bIsShadowFactorTexture` false; the class default is true.
     - Their G8 textures look like distance fields (smooth greys with edges at mid-grey). That reading is UNVERIFIED.
     - The 142 `ShadowMap1D` (per-vertex shadows) are counted, not read.
   - **Light-map UVs.** `StaticMesh.LightMapCoordinateIndex` is 1 on 377 of Sanctuary's meshes, 2 on 2, and absent
-    on 51. An absent one is taken as 0, the property's zero value; that is UNVERIFIED as the class default.
+    on 51. An absent one is taken as 0. That is UNVERIFIED as the class default. It fits the data: no mesh serializes
+    0, as a property written only when it differs from a default of 0 would be.
+    - A mesh whose tags do not read, or whose index is negative, is not taken as 0. It is counted
+      (`uv_set_unread`, 0 on Sanctuary), and its components' light maps and shadow maps are not applied (review r1
+      of PR #365).
   - **What the data says, read from names and values only.**
     - Slot 0's textures are named `EnvironmentLightmap*` and always carry scale (1, 1, 1).
     - Slot 1's are named `DominantBouncemap*`, with a per-component scale (for example 5.46 and 14.25). The sun's
@@ -134,9 +142,17 @@ none differs from the tool outside the 15 inspected materials, by the material-b
   - "Before" is main 60413ba, built in a temporary worktree.
   - **Lit placements:** 3,580 by a texture light map, 462 per vertex, 1,535 with the sun's shadow map. None was left
     unapplied for missing UVs or a vertex-count mismatch.
+    - The census's 3,581 texture light maps are 3,580 lit placements and 1 hidden placement, which is not drawn.
+    - Its 1,548 sun shadow maps are 1,535 shadowed placements and 13 hidden ones.
+    - The installed driver asserts both sums (review r1 of PR #365).
+  - **Not read, counted:** 142 shadow vertex buffers, and 12 components' per-vertex override colours.
   - **Lighting slots:** 578. They split the batches, so a frame now issues 1,883 instanced draws (662 before).
   - **Lighting textures:** 201, uploaded linear. Texture bytes are 1,941,085,888, up from 1,815,865,592.
-  - **Frame time, median / p95:** 1.234 / 1.387 ms at 1280x720 and 1.241 / 1.397 ms at 1920x1080, against
+  - **Frame time after review r1:** median / p95 0.981 / 1.090 ms at 1280x720 and 0.976 / 1.088 ms at 1920x1080.
+    - The frame now sets the pipeline, bind groups and mesh buffers only when they change from the previous draw.
+    - It binds the instance buffer once and addresses each batch by its first instance.
+    - The screenshots are byte-identical to the runs before it.
+  - **Frame time, median / p95, first runs:** 1.234 / 1.387 ms at 1280x720 and 1.241 / 1.397 ms at 1920x1080, against
     0.472 / 0.533 and 0.471 / 0.531 ms before. The extra draws cost about 0.8 ms; merging lighting atlases into
     texture arrays would bring the draws back down, but nothing in this lane needed it.
   - **Load time:** reading the lighting takes about 35 ms after the scene loads.

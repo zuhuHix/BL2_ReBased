@@ -212,28 +212,36 @@ fn scene_window(
     );
     let c = &baked.census;
     println!(
-        "baked lighting: {} components read, {} refused; {} texture light maps, {} per-vertex, {} none; {} shadowed; \
-         {} lighting textures; {} shadow vertex buffers not read",
+        "baked lighting: {} components read, {} refused; {} texture light maps, {} per-vertex, {} none; {} shadowed \
+         ({} second sun shadow maps and {} other lights' not used); {} lighting textures; {} shadow vertex buffers \
+         and {} override colour streams not read; {} meshes whose light-map UV set did not read",
         c.parsed,
         c.refused,
         c.texture_light_maps,
         c.vertex_light_maps,
         c.no_light_map,
         c.shadowed,
+        c.second_sun_shadow_maps,
+        c.other_shadow_maps,
         baked.textures.len(),
-        c.shadow_vertex_buffers
+        c.shadow_vertex_buffers,
+        c.override_colors,
+        c.uv_set_unread
     );
     for e in baked.errors.iter().take(5) {
         println!("  refused: {e}");
     }
     println!(
-        "lit placements: {} by a texture light map, {} per vertex, {} shadowed; not applied: {} without the light-map \
-         UVs, {} with a vertex count mismatch; {} lighting slots",
+        "lit placements: {} by a texture light map, {} per vertex, {} shadowed; not applied: {} light maps and {} \
+         shadow maps without the light-map UVs, {} with a vertex count mismatch; {} with a third coefficient not \
+         bound; {} lighting slots",
         s.lit_texture,
         s.lit_vertex,
         s.shadowed,
         s.lightmap_no_uvs,
+        s.shadow_no_uvs,
         s.lightmap_vertex_mismatch,
+        s.third_coefficient,
         plan.lightings.len()
     );
     println!("scene {map}: {} levels, {} placements, loaded in {} ms", scene.levels.len(), s.placements, millis(loaded));
@@ -310,8 +318,8 @@ fn scene_window(
     let u = r.upload;
     println!(
         "upload in {} ms: {} meshes ({} vertex and {} index bytes), {} instance bytes, {} textures ({} bytes), \
-         {} candidate textures failed, {} materials on a later candidate, {} materials grey; {} instanced draws \
-         per frame",
+         {} candidate textures failed, {} materials on a later candidate, {} materials grey; {} lighting slots \
+         ({} with a lighting texture that failed), {} per-vertex light bytes; {} instanced draws per frame",
         millis(r.upload_time),
         u.meshes,
         u.vertex_bytes,
@@ -322,6 +330,9 @@ fn scene_window(
         u.textures_failed,
         u.fallbacks,
         u.grey_materials,
+        u.lightings,
+        u.lighting_failed,
+        u.vertex_light_bytes,
         r.draw_calls
     );
     println!(
@@ -487,7 +498,18 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         }
     };
     let d = draw.borrow();
-    println!("upload in {} ms, {} instanced draws per frame", millis(d.draw.upload_time), d.draw.draw_calls);
+    let u = d.draw.upload;
+    println!(
+        "upload in {} ms, {} instanced draws per frame; {} textures, {} failed; {} lighting slots ({} with a lighting \
+         texture that failed), {} per-vertex light bytes",
+        millis(d.draw.upload_time),
+        d.draw.draw_calls,
+        u.textures,
+        u.textures_failed,
+        u.lightings,
+        u.lighting_failed,
+        u.vertex_light_bytes
+    );
     if let (Some(median), Some(p95), Some(max)) = (d.draw.quantile(0.5), d.draw.quantile(0.95), d.draw.quantile(1.0)) {
         println!(
             "frame time over {} intervals (nearest rank): median {} ms, p95 {} ms, max {} ms",

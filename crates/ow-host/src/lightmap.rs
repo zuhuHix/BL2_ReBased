@@ -311,6 +311,14 @@ pub struct LightingCensus {
     pub shadowed: usize,
     /// Shadow map references whose `LightGuid` is not the dominant light's (not used).
     pub other_shadow_maps: usize,
+    /// A component's second (or later) shadow map of the dominant light: not used, the first one is (none on
+    /// Sanctuary; review r1 of PR #365).
+    pub second_sun_shadow_maps: usize,
+    /// Components whose LOD carries per-vertex override colours (counted, not read).
+    pub override_colors: usize,
+    /// Decoded meshes whose tags did not read, or whose `LightMapCoordinateIndex` is negative: no light-map UV set
+    /// is known for them, so their components' light maps are not applied (first reasons in `errors`).
+    pub uv_set_unread: usize,
     /// Per-vertex shadow buffers (`ShadowMap1D`), not read.
     pub shadow_vertex_buffers: usize,
 }
@@ -323,7 +331,9 @@ pub struct SceneLighting {
     pub components: OrderedMap<ExportKey, ComponentLight>,
     /// Lighting textures by key ([`KEY_PREFIX`]), with their class and holder.
     pub textures: OrderedMap<String, (String, Holder)>,
-    /// Each decoded mesh's `LightMapCoordinateIndex` (0 where the mesh does not serialize it: UNVERIFIED default).
+    /// Each decoded mesh's `LightMapCoordinateIndex`; 0 where the mesh does not serialize it (UNVERIFIED default: on
+    /// Sanctuary 377 meshes serialize 1, 2 serialize 2 and none serializes 0, which fits a property serialized only
+    /// when it differs from a default of 0). A mesh whose tags did not read is absent ([`LightingCensus::uv_set_unread`]).
     pub uv_sets: OrderedMap<String, usize>,
     pub census: LightingCensus,
     /// The first refusal reasons.
@@ -347,11 +357,23 @@ impl SceneLighting {
                 PropertyPrefix::Ordinary.bytes(),
                 &NoArrayTypes,
             )
-            .ok()
-            .and_then(|t| int_of(&t.entries, "LightMapCoordinateIndex"))
-            .and_then(|i| usize::try_from(i).ok())
-            .unwrap_or(0);
-            out.uv_sets.insert(path.clone(), index);
+            .map_err(|e| e.to_string())
+            .and_then(|t| match int_of(&t.entries, "LightMapCoordinateIndex") {
+                None => Ok(0),
+                Some(i) => usize::try_from(i).map_err(|_| format!("LightMapCoordinateIndex {i}")),
+            });
+            match index {
+                Ok(index) => {
+                    out.uv_sets.insert(path.clone(), index);
+                }
+                Err(e) => {
+                    out.census.uv_set_unread += 1;
+                    if out.errors.len() < KEPT_ERRORS {
+                        out.errors
+                            .push(format!("{path}: the light-map UV set: {e}"));
+                    }
+                }
+            }
         }
         for (key, _) in scene.placements.iter() {
             out.census.placements += 1;
@@ -418,6 +440,7 @@ impl SceneLighting {
             return Ok(ComponentLight::default());
         };
         self.census.shadow_vertex_buffers += lod.shadow_vertex_buffers.len();
+        self.census.override_colors += usize::from(lod.override_colors.is_some());
         let light_map = match &lod.light_map {
             RawLightMap::None => None,
             RawLightMap::Vertex {
@@ -467,9 +490,12 @@ impl SceneLighting {
                 props::read_tagged(pkg, r, PropertyPrefix::Ordinary.bytes(), &NoArrayTypes)
                     .map_err(|e| e.to_string())?
                     .entries;
-            if sun_guid.is_none() || guid_of(&entries, "LightGuid") != sun_guid || shadow.is_some()
-            {
+            if sun_guid.is_none() || guid_of(&entries, "LightGuid") != sun_guid {
                 self.census.other_shadow_maps += 1;
+                continue;
+            }
+            if shadow.is_some() {
+                self.census.second_sun_shadow_maps += 1;
                 continue;
             }
             let texture = match entries

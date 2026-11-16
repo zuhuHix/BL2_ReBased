@@ -681,7 +681,28 @@ fn baked_lighting_goes_to_each_instance_and_splits_the_batches() {
     // A light-map UV set the mesh does not have: neither map is applied.
     l.uv_sets.insert("Meshes.A".into(), 1);
     let st = DrawPlan::build_lit(&s, None, Some(&l)).stats;
-    assert_eq!((st.lit_texture, st.lightmap_no_uvs, st.shadowed), (0, 1, 0));
+    assert_eq!(
+        (
+            st.lit_texture,
+            st.lightmap_no_uvs,
+            st.shadowed,
+            st.shadow_no_uvs
+        ),
+        (0, 1, 0, 1)
+    );
+    // A mesh whose light-map UV set was not read (absent from `uv_sets`): the same, while the per-vertex light map,
+    // which needs no UVs, still applies.
+    l.uv_sets = Default::default();
+    let st = DrawPlan::build_lit(&s, None, Some(&l)).stats;
+    assert_eq!(
+        (
+            st.lit_texture,
+            st.lit_vertex,
+            st.lightmap_no_uvs,
+            st.shadow_no_uvs
+        ),
+        (0, 1, 1, 1)
+    );
 }
 
 #[test]

@@ -594,6 +594,18 @@ fn lit_centre(
     lighting: Lighting,
     colours: &[[u8; 4]],
 ) -> [u8; 4] {
+    lit_centre_with_upload(device, queue, light, slot, lighting, colours).0
+}
+
+/// [`lit_centre`], with what the upload counted. A `Tex.<n>` past `colours` does not decode.
+fn lit_centre_with_upload(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    light: crate::draw::InstanceLight,
+    slot: crate::draw::LightingSlot,
+    lighting: Lighting,
+    colours: &[[u8; 4]],
+) -> ([u8; 4], UploadStats) {
     let (mut p, _) = plan(triangle(true), [1.0; 3], true);
     p.slots = vec![slot_of("Tex.0")];
     p.lightings = vec![slot];
@@ -606,7 +618,8 @@ fn lit_centre(
             .trim_start_matches("Tex.")
             .parse()
             .map_err(|_| "a path")?;
-        solid_texture(colours[index])
+        let colour = colours.get(index).ok_or("an invented decode failure")?;
+        solid_texture(*colour)
     };
     let mut r = SceneRenderer::new(
         device,
@@ -621,7 +634,7 @@ fn lit_centre(
     let vp = camera.view_projection(32, 32).unwrap();
     let rgba = r.capture(device, queue, (32, 32), &vp, [0.0; 3]).unwrap();
     let px = &rgba[(16 * 32 + 16) * 4..][..4];
-    [px[0], px[1], px[2], px[3]]
+    ([px[0], px[1], px[2], px[3]], r.upload)
 }
 
 /// A lit opaque slot whose diffuse is `path`.
@@ -711,5 +724,21 @@ fn light_maps_and_shadow_maps_light_the_surface_as_the_fit_says() {
     assert!(near(px, [188, 188, 188]), "{px:?}");
     let px = lit_centre(&device, &queue, light, shadowed(4), sunny, &colours);
     assert!(near(px, [0, 0, 0]), "{px:?}");
+    // Review r1 of PR #365: a lighting texture that does not decode (Tex.9) is counted, and the instance is drawn
+    // without its light map: the sky term (0.502 here, no sun) gives 188, where the black stand-in drawn as a light
+    // map would give 0.
+    let broken = LightingSlot {
+        textures: [Some("Tex.9".into()), Some("Tex.2".into())],
+        shadow: Some("Tex.3".into()),
+        samples: None,
+    };
+    let sky = Lighting {
+        sky_upper: [0.502; 3],
+        sky_lower: [0.502; 3],
+        ..dark
+    };
+    let (px, upload) = lit_centre_with_upload(&device, &queue, light, broken, sky, &colours);
+    assert_eq!((upload.lightings, upload.lighting_failed), (1, 1));
+    assert!(near(px, [188, 188, 188]), "{px:?}");
     assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }

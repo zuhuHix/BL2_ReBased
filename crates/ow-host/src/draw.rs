@@ -468,12 +468,15 @@ pub struct PlanStats {
     pub lit_texture: usize,
     pub lit_vertex: usize,
     pub shadowed: usize,
-    /// Drawn placements whose light map was not applied: the mesh lacks the light-map UV set, or the per-vertex
-    /// samples do not match the mesh's vertex count.
+    /// Drawn placements whose light map was not applied: the mesh lacks the light-map UV set (or its set was not
+    /// read: `LightingCensus::uv_set_unread`), or the per-vertex samples do not match the mesh's vertex count.
     pub lightmap_no_uvs: usize,
     pub lightmap_vertex_mismatch: usize,
     /// Texture light maps with a third coefficient texture, which the renderer does not bind (none on Sanctuary).
     pub third_coefficient: usize,
+    /// Drawn placements whose shadow map was not applied because the mesh lacks the light-map UV set (review r1 of
+    /// PR #365).
+    pub shadow_no_uvs: usize,
 }
 
 impl PlanStats {
@@ -663,10 +666,17 @@ impl DrawPlan {
                             .lods
                             .first()
                             .and_then(|lod| {
-                                let set = lighting
-                                    .and_then(|l| l.uv_sets.get(p.mesh.as_str()).copied())
-                                    .unwrap_or(0);
-                                MeshData::from_lod_with(&p.mesh, lod, set)
+                                // A mesh whose light-map UV set was not read has none to apply.
+                                let set = lighting.map(|l| l.uv_sets.get(p.mesh.as_str()).copied());
+                                let mut data = MeshData::from_lod_with(
+                                    &p.mesh,
+                                    lod,
+                                    set.flatten().unwrap_or(0),
+                                )?;
+                                if set == Some(None) {
+                                    data.lightmap_uvs = false;
+                                }
+                                Some(data)
                             })
                             .map(|data| {
                                 meshes.push(data);
@@ -736,6 +746,8 @@ impl DrawPlan {
                             shadow.uv_bias[1],
                         ];
                         stats.shadowed += 1;
+                    } else if light.shadow.is_some() {
+                        stats.shadow_no_uvs += 1;
                     }
                     if slot == LightingSlot::default() {
                         None
