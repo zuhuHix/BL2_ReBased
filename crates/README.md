@@ -4,8 +4,10 @@ AI-assisted (Claude Code).
 
 The Cargo workspace that ports the C++ core in `src/` and the Python runtime rules in `tools/` (decision
 2026-11-14-01). The C++ code stays the reference until each crate matches it on the same synthetic fixtures and, for
-the reader, on `tools/verify_packages.py`. No third-party crate is in the tree: each one needs its `THIRD_PARTY.md`
-entry first, which is the maintainer's decision (AGENTS.md rule 6).
+the reader, on `tools/verify_packages.py`. The only third-party crates are the engine crates wgpu 30.0.1 and winit
+0.30.13 and their transitive closure, declared by `ow-host` alone (`THIRD_PARTY.md`, "Engine crates: wgpu and winit",
+maintainer approval 2026-11-16). Any other one needs its `THIRD_PARTY.md` entry first, which is the maintainer's
+decision (AGENTS.md rule 6).
 
 The scaffold (lane W0-SCAFFOLD) created every crate, every `Cargo.toml` and every module file in its final place.
 Each module file names its owner lane in its first line; a lane fills its own files and does not edit a `lib.rs`, a

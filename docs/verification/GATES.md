@@ -76,10 +76,34 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 - `python tools/verify_combat_pawn.py --live` checks the formulas against ignored live dumps when they exist.
 
 ## When the Rust host changes
-Not defined yet. The engine route is chosen (own engine on wgpu + winit, picked 2026-11-15 from
-`docs/verification/ENGINE_BENCHMARK.md`), but the host is not written: `ow-host` only checks that it was given a
-Borderlands 2 install. The host's checks are set when the host work starts. The retired UE5 host's suites and their
-baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
+
+### Host (Rust, H1): proposed by lane H1, 2026-11-16
+The host's first checks (decision `docs/decisions/2026-11/2026-11-16-44-engine-crates-wgpu-and-winit-in-ow-host-host-skeleton-h1.md`).
+They are proposals until CI runs them: `.github/workflows/ci.yml` is unchanged, because a workflow change needs the
+maintainer's yes.
+- **CI, and every change to `ow-host`, `Cargo.lock` or `tests/crate_edges_test.py`:** `cargo build --workspace
+  --locked`, `cargo test --workspace --locked` (the `ow-host` unit tests among them), `python tests/crate_edges_test.py`
+  (also ctest `py-crate_edges`), and the existing refusal check (`ow-host --game <not an install>` must exit non-zero).
+  Then `ow-host --headless-probe`: exit 0 prints the adapter; exit 4 means no adapter on that machine and counts as
+  "not run", not as a failure; any other exit fails. With the engine crates, the build downloads them from crates.io,
+  so the CI job's comment "nothing is downloaded" must change with the job.
+- **A machine with a GPU and a screen** (the zuhu desktop, pc-hummer), after a change to the window, device or frame
+  loop: a release build, then `ow-host --game <install> --frames 300`, and again with `--no-vsync`, timed. Pass is
+  exit 0 with 300 frames presented. Record the adapter, the backend, the median frame time and the wall time. The
+  vsync median should be close to the monitor's refresh interval; the `--no-vsync` median is the loop's throughput.
+- **One run per machine:** every window run (`--window`, `--frames`) is a heavy run. Take the machine-wide lock first
+  and release it after the process has exited: `. ./tools/ue_lock.ps1; Enter-OwUeLock -Owner <lane>; try { ... }
+  finally { Exit-OwUeLock }`. `--headless-probe` and the install check open no window and need no lock. The
+  maintainer works on the desktop's screen, so keep runs short.
+
+**Baseline (2026-11-16, zuhu desktop, i9-9900K, RTX 4070, driver 621.01, release build, lane H1):** probe "NVIDIA
+GeForce RTX 4070", Vulkan, exit 0. `--frames 300 --no-vsync`: 300 presented, 0 skipped, median 0.171 ms (min 0.164,
+max 0.508) over 299 intervals, 642 ms wall. `--frames 300` with vsync: 300 presented, exit 0, median 252 ms. Dx12 gave
+the same. The screen had been idle for about 18 hours, so the displays were very likely asleep; the vsync figure is
+`UNVERIFIED` until it is repeated with the screen on (165 Hz monitor, 6.1 ms expected). `crate_edges_test.py` 19
+tests OK.
+
+The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records
 - `python tools/decisions_index.py --check --baseline origin/main` after adding, editing or moving decisions (with the

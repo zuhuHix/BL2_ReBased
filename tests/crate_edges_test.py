@@ -5,8 +5,12 @@ Stdlib only (tomllib). Run: python tests/crate_edges_test.py
 What it checks:
   - the workspace has exactly the 22 crates, and each crate's path dependencies stay inside the allowed closure of
     the edge table below (an edge outside it fails);
-  - no dependency is anything but a workspace crate by path (no third-party crate; AGENTS.md rule 6), and Cargo.lock
-    holds no package with a `source`;
+  - no dependency is anything but a workspace crate by path (no third-party crate; AGENTS.md rule 6), except the
+    engine crates of ENGINE_CRATES, which only ow-host may declare, only in its [dependencies], pinned to exactly the
+    approved version (maintainer approval 2026-11-16, THIRD_PARTY.md "Engine crates: wgpu and winit");
+  - Cargo.lock holds the workspace crates, the engine crates at those versions, and registry packages that only
+    ow-host's dependency tree reaches: a package with a `source` that no engine crate pulls in fails, and so does a
+    `source` other than crates.io;
   - the banned patterns appear in no Rust file outside the places allowed: N2 `mul_add`; N3 the float functions
     (powers, exponentials, logarithms, roots, trigonometry) outside ow-core/src/num.rs; N7 the std HashMap/HashSet
     outside ow-core/src/detmap.rs (which holds the fixed-hasher aliases); N6 a float format spec (`{:e}`, `{:.3}`)
@@ -54,6 +58,14 @@ _LIBRARIES = list(EDGES)
 EDGES['ow-cli'] = list(_LIBRARIES)   # everything except ow-host
 EDGES['ow-host'] = list(_LIBRARIES)  # everything except ow-cli
 CRATES = set(EDGES)
+
+# Third-party crates the maintainer approved, by name: (the one crate that may declare it, the exact version). Each
+# needs its THIRD_PARTY.md entry before it is added here (AGENTS.md rule 6).
+ENGINE_CRATES = {
+    'wgpu': ('ow-host', '30.0.1'),
+    'winit': ('ow-host', '0.30.13'),
+}
+CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index'
 
 # The float functions every rule reaches only through ow_core::num (5.1 N3): powers, exponentials, logarithms, roots,
 # trigonometry. The method form (`x.sqrt()`) and the path forms (`f64::sqrt(x)`, `<f64>::sqrt(x)`) are refused.
@@ -138,18 +150,75 @@ def check_edges(root):
         for table_name, table in _dependency_tables(manifest):
             for dep, spec in table.items():
                 path = spec.get('path') if isinstance(spec, dict) else None
-                if path is None or dep not in CRATES or pathlib.PurePosixPath(path).name != dep:
+                if dep in ENGINE_CRATES and path is None:
+                    problems += _engine_problems(crate, table_name, dep, spec)
+                elif path is None or dep not in CRATES or pathlib.PurePosixPath(path).name != dep:
                     problems.append(f'{crate}: [{table_name}] {dep} is not a workspace crate by path '
                                     '(third-party crates need a THIRD_PARTY.md entry, AGENTS.md rule 6)')
                 elif dep not in allowed:
                     problems.append(f'{crate}: [{table_name}] {dep} is an edge outside the allowed table')
     lock = root / 'Cargo.lock'
     if lock.is_file():
-        for package in tomllib.loads(lock.read_text(encoding='utf-8')).get('package', []):
-            if 'source' in package or package.get('name') not in CRATES:
-                problems.append(f'Cargo.lock: {package.get("name")} is not a workspace crate')
+        problems += _lock_problems(tomllib.loads(lock.read_text(encoding='utf-8')).get('package', []))
     else:
         problems.append('Cargo.lock is missing')
+    return problems
+
+
+def _engine_problems(crate, table_name, dep, spec):
+    owner, version = ENGINE_CRATES[dep]
+    where = f'{crate}: [{table_name}] {dep}'
+    if crate != owner:
+        return [f'{where}: engine crates are allowed only in {owner} (architecture section 2.2)']
+    if table_name != 'dependencies':
+        return [f'{where}: engine crates belong in [dependencies] only']
+    requirement = spec if isinstance(spec, str) else spec.get('version') if isinstance(spec, dict) else None
+    extra = sorted(set(spec) - {'version', 'features'}) if isinstance(spec, dict) else []
+    problems = []
+    if requirement != f'={version}':
+        problems.append(f'{where}: must be pinned "={version}", not {requirement!r}')
+    if extra:
+        problems.append(f'{where}: only version and features may be set, not {extra} (crates.io, no git or path)')
+    return problems
+
+
+def _lock_problems(packages):
+    """Every registry package must be reachable from an engine crate at its approved version; nothing else may have
+    a source. Dependency entries in Cargo.lock are "name" or "name version" (the version only when two are locked)."""
+    problems = []
+    by_name = {}
+    for package in packages:
+        by_name.setdefault(package.get('name'), []).append(package)
+    for package in packages:
+        name, source = package.get('name'), package.get('source')
+        if source is None:
+            if name not in CRATES:
+                problems.append(f'Cargo.lock: {name} is neither a workspace crate nor from a registry')
+        elif source != CRATES_IO:
+            problems.append(f'Cargo.lock: {name} comes from {source}, not crates.io')
+        elif name in ENGINE_CRATES and package.get('version') != ENGINE_CRATES[name][1]:
+            problems.append(f'Cargo.lock: {name} {package.get("version")} is not the approved {ENGINE_CRATES[name][1]}')
+    reached, todo = set(), [p for name in ENGINE_CRATES for p in by_name.get(name, [])
+                            if p.get('source') == CRATES_IO and p.get('version') == ENGINE_CRATES[name][1]]
+    while todo:
+        package = todo.pop()
+        key = (package.get('name'), package.get('version'))
+        if key in reached:
+            continue
+        reached.add(key)
+        for entry in package.get('dependencies', []):
+            dep_name, _, dep_version = entry.partition(' ')
+            candidates = by_name.get(dep_name, [])
+            if not dep_version:
+                # Cargo names the version only when two of a name are locked, so a bare name with several
+                # candidates is a hand-edited lock: it reaches none of them, and each is reported below.
+                candidates = candidates if len(candidates) == 1 else []
+            todo.extend(p for p in candidates if not dep_version or p.get('version') == dep_version)
+    for package in packages:
+        if package.get('source') is not None and (package.get('name'), package.get('version')) not in reached:
+            problems.append(f'Cargo.lock: {package.get("name")} {package.get("version")} is not a workspace crate '
+                            'and no approved engine crate depends on it (third-party crates need a THIRD_PARTY.md '
+                            'entry, AGENTS.md rule 6)')
     return problems
 
 
@@ -216,6 +285,14 @@ class WorkspaceShape(unittest.TestCase):
         self.assertIn('--native-selftest', dispatched)
         self.assertEqual(check_cli_flags(ROOT), [])
 
+    def test_the_host_declares_exactly_the_engine_crates(self):
+        host = tomllib.loads((ROOT / 'crates' / 'ow-host' / 'Cargo.toml').read_text(encoding='utf-8'))
+        third_party = {dep: spec for dep, spec in host['dependencies'].items() if dep not in CRATES}
+        self.assertEqual(third_party, {name: f'={version}' for name, (_, version) in ENGINE_CRATES.items()})
+        locked = {(p['name'], p['version']) for p in tomllib.loads((ROOT / 'Cargo.lock').read_text(encoding='utf-8'))
+                  ['package'] if p['name'] in ENGINE_CRATES}
+        self.assertEqual(locked, {(name, version) for name, (_, version) in ENGINE_CRATES.items()})
+
     def test_the_table_itself(self):
         self.assertEqual(len(CRATES), 22)
         for forbidden_user in ('ow-attr', 'ow-balance', 'ow-items'):
@@ -269,6 +346,51 @@ class FailsOnBadInput(unittest.TestCase):
         lock.write_text(lock.read_text(encoding='utf-8') + '\n[[package]]\nname = "serde"\nversion = "1.0.0"\n'
                         'source = "registry+https://github.com/rust-lang/crates.io-index"\n', encoding='utf-8')
         self.assertTrue(any('Cargo.lock: serde' in p for p in check_edges(self.tmp)))
+
+    def test_an_engine_crate_outside_the_host_fails(self):
+        self._append('ow-core', '\n[dependencies.wgpu]\nversion = "=30.0.1"\n')
+        self._append('ow-ui', '\n[target.\'cfg(windows)\'.dependencies]\nwinit = "=0.30.13"\n')
+        problems = check_edges(self.tmp)
+        self.assertTrue(any('ow-core' in p and 'wgpu' in p and 'only in ow-host' in p for p in problems), problems)
+        self.assertTrue(any('ow-ui' in p and 'winit' in p and 'only in ow-host' in p for p in problems), problems)
+
+    def test_an_engine_crate_in_the_host_s_other_tables_fails(self):
+        self._append('ow-host', '\n[build-dependencies]\nwinit = "=0.30.13"\n')
+        problems = check_edges(self.tmp)
+        self.assertTrue(any('ow-host' in p and 'build-dependencies' in p and 'winit' in p for p in problems), problems)
+
+    def test_an_engine_crate_not_pinned_or_not_from_crates_io_fails(self):
+        manifest = self.tmp / 'crates' / 'ow-host' / 'Cargo.toml'
+        text = manifest.read_text(encoding='utf-8')
+        manifest.write_text(text.replace('wgpu = "=30.0.1"', 'wgpu = "30"'), encoding='utf-8')
+        self.assertTrue(any('wgpu' in p and 'pinned' in p for p in check_edges(self.tmp)))
+        manifest.write_text(text.replace('wgpu = "=30.0.1"', 'wgpu = "=30.0.2"'), encoding='utf-8')
+        self.assertTrue(any('wgpu' in p and 'pinned' in p for p in check_edges(self.tmp)))
+        manifest.write_text(text.replace(
+            'winit = "=0.30.13"', 'winit = { version = "=0.30.13", git = "https://example.invalid/winit" }'),
+            encoding='utf-8')
+        self.assertTrue(any('winit' in p and 'git' in p for p in check_edges(self.tmp)))
+
+    def test_another_third_party_crate_in_the_host_fails(self):
+        self._append('ow-host', '\n[dependencies.glam]\nversion = "=0.33.12"\n')
+        problems = check_edges(self.tmp)
+        self.assertTrue(any('ow-host' in p and 'glam' in p and 'THIRD_PARTY' in p for p in problems), problems)
+
+    def test_a_lock_entry_outside_the_engine_closure_fails(self):
+        lock = self.tmp / 'Cargo.lock'
+        text = lock.read_text(encoding='utf-8')
+        # A registry package that no engine crate depends on (the host pulling in glam by some other route).
+        lock.write_text(text + f'\n[[package]]\nname = "glam"\nversion = "0.33.12"\nsource = "{CRATES_IO}"\n',
+                        encoding='utf-8')
+        self.assertTrue(any('Cargo.lock: glam 0.33.12' in p and 'no approved engine crate' in p
+                            for p in check_edges(self.tmp)))
+        # A source other than crates.io, and an engine crate at a version other than the approved one.
+        lock.write_text(text + '\n[[package]]\nname = "glam"\nversion = "0.33.12"\n'
+                        'source = "git+https://example.invalid/glam#0123"\n', encoding='utf-8')
+        self.assertTrue(any('glam comes from git+' in p for p in check_edges(self.tmp)))
+        lock.write_text(text.replace('name = "winit"\nversion = "0.30.13"', 'name = "winit"\nversion = "0.30.12"'),
+                        encoding='utf-8')
+        self.assertTrue(any('winit 0.30.12 is not the approved 0.30.13' in p for p in check_edges(self.tmp)))
 
     def test_behavior_depending_on_skills_fails(self):
         # A second [dev-dependencies] header would be invalid TOML; a dotted sub-table is not.

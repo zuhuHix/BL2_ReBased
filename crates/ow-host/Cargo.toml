@@ -1,6 +1,6 @@
 [package]
 name = "ow-host"
-description = "The Rust host. Engine route: own engine on wgpu + winit (picked 2026-11-15); not written yet"
+description = "The Rust host: own engine on wgpu + winit (route picked 2026-11-15); window, device and frame loop (H1)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,9 +17,13 @@ path = "src/main.rs"
 [lib]
 path = "src/lib.rs"
 
-# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD:
-# no later lane edits this file (tests/crate_edges_test.py checks it).
+# The whole allowed closure of architecture section 2.2, declared once by W0-SCAFFOLD, plus the two engine crates
+# lane H1 added (maintainer approval 2026-11-16, THIRD_PARTY.md "Engine crates: wgpu and winit"). Engine crates live
+# only here; tests/crate_edges_test.py refuses any other third-party crate, and these two anywhere else.
 [dependencies]
+# Engine crates, pinned exactly, default features (the benchmark built on them; no feature was needed beyond them).
+wgpu = "=30.0.1"
+winit = "=0.30.13"
 ow-core = { path = "../ow-core" }
 ow-container = { path = "../ow-container" }
 ow-package = { path = "../ow-package" }

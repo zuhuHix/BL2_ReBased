@@ -90,7 +90,8 @@ were not pinned.
 
 Direct dependencies of the wgpu + winit prototype, with licences as its results file lists them (each crate's licence
 file, or its Cargo `license` field where the published crate has none). **To be confirmed in `THIRD_PARTY.md` before
-any of them lands** in the tree (`AGENTS.md` rule 6). Nothing has been added.
+any of them lands** in the tree (`AGENTS.md` rule 6). Since 2026-11-16 (lane H1, maintainer approval) wgpu 30.0.1 and
+winit 0.30.13 are in `ow-host`, with their `THIRD_PARTY.md` entry; none of the others has been added.
 
 | Crate | Version | Source | Licence (as seen) |
 |---|---|---|---|

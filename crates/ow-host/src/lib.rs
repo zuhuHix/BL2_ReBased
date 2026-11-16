@@ -1,10 +1,19 @@
-//! The Rust host. Its engine route is chosen: our own engine on wgpu + winit, picked by the maintainer from the Phase 0R
-//! benchmark (`docs/verification/ENGINE_BENCHMARK.md`, decision 2026-11-15-01). The host itself is not written yet, and
-//! no engine crate is in the workspace until its `THIRD_PARTY.md` entry is approved.
+//! The Rust host, on the engine route the maintainer picked from the Phase 0R benchmark: our own engine on wgpu +
+//! winit (`docs/verification/ENGINE_BENCHMARK.md`, decision 2026-11-15-01). Lane H1 added the two engine crates
+//! (`THIRD_PARTY.md`, "Engine crates: wgpu and winit") and the skeleton: a window, a wgpu device and surface, and a
+//! frame loop that clears and presents ([`app`], [`gpu`]), stepping a stand-in world through the host boundary
+//! ([`sim`]). It draws nothing from the game yet; scene loading is H2.
 //!
-//! What exists now is the start of the one rule every route keeps (AGENTS.md rule 11): the host will read the player's
-//! own installed game and refuses to start without it. Today it only checks that the install's folders and code
-//! packages exist; it reads nothing from them.
+//! The one rule every route keeps (AGENTS.md rule 11) stays first: the host reads the player's own installed game and
+//! refuses to start without it. [`find_install`] checks that the install's folders and code packages exist; it reads
+//! nothing from them. Only `--headless-probe`, a GPU diagnostic that opens no window and runs nothing, skips it.
+
+pub mod app;
+pub mod args;
+pub mod executor;
+pub mod gpu;
+pub mod sim;
+pub mod stats;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

@@ -274,12 +274,49 @@ decision before implementation.
   (decision `docs/decisions/2026-11/2026-11-14-01-rust-replaces-the-ue5-host-engine-route-by-benchmark.md`). The
   toolchain is a build tool: nothing from it is vendored, and the workspace's binaries link only Rust's standard
   library.
-- **Crates:** none. The workspace has no third-party crate, and `Cargo.lock` lists only the project's own six. Each
-  crate added later needs an entry here before it lands (AGENTS.md rule 6).
-- **Engine candidates for the Phase 0R benchmark (not dependencies):** Bevy, wgpu with winit, and optionally Fyrox.
-  Their prototypes live under ignored `local/bench/`, outside the tree; licences as each project states them (Bevy,
-  wgpu and winit: MIT OR Apache-2.0; Fyrox: MIT) are to be read from each upstream licence file, at the version used,
-  before any of them lands. Record: `docs/verification/ENGINE_BENCHMARK.md`.
+- **Crates:** the two engine crates in the next section, "Engine crates: wgpu and winit", and their transitive
+  closure, all in `ow-host` only. No other crate of the workspace has a third-party dependency. Each crate added
+  later needs an entry here before it lands (AGENTS.md rule 6).
+- **Engine candidates for the Phase 0R benchmark:** Bevy, wgpu with winit, and optionally Fyrox. Their prototypes
+  live under ignored `local/bench/`, outside the tree. The maintainer picked wgpu with winit on 2026-11-15; Bevy and
+  Fyrox are not dependencies. Record: `docs/verification/ENGINE_BENCHMARK.md`.
+
+## Engine crates: wgpu and winit (maintainer approval 2026-11-16)
+
+The engine route is our own engine on wgpu + winit (decision
+`docs/decisions/2026-11/2026-11-15-01-engine-route-own-engine-on-wgpu-and-winit.md`). The maintainer approved this
+entry in chat on 2026-11-16 for exactly these two direct dependencies, at the versions the Phase 0R benchmark built on
+Rust 1.96.0, and their transitive crates. The approval does not cover any other crate the benchmark prototype used
+(glam, bytemuck, pollster, serde, image, gltf, rapier3d, Ruffle): `ow-host` does without them (a std-only executor
+for wgpu's async calls, buffer bytes packed by hand, its own small matrix code), and each needs its own entry first.
+
+- **wgpu** 30.0.1, from crates.io (https://crates.io/crates/wgpu), upstream https://github.com/gfx-rs/wgpu. Licence
+  MIT OR Apache-2.0: the published crate at 30.0.1 ships `LICENSE.MIT` ("Copyright (c) 2025 The gfx-rs developers")
+  and `LICENSE.APACHE` (Apache License 2.0), and its Cargo `license` field says the same. It needs Rust 1.87.0 or
+  newer (`rust-version`), so the 1.96.0 pin holds.
+- **winit** 0.30.13, from crates.io (https://crates.io/crates/winit), upstream
+  https://github.com/rust-windowing/winit. Licence Apache-2.0: the published crate at 0.30.13 ships one `LICENSE`,
+  the Apache License 2.0 text, and its Cargo `license` field is `Apache-2.0`. It needs Rust 1.70.0 or newer.
+- **Use:** `crates/ow-host` only, the engine route: the window and event loop (winit) and the GPU instance, device,
+  surface and frame loop (wgpu). Both are pinned exactly (`=30.0.1`, `=0.30.13`) with their default features.
+  `tests/crate_edges_test.py` allows these two only in `ow-host`'s `[dependencies]`, only at those versions, and
+  refuses any other third-party crate in any crate and any `Cargo.lock` package that they do not pull in.
+- **Transitive closure** (`Cargo.lock` after the change, read with `cargo metadata --format-version 1 --locked` on
+  2026-11-16): 254 third-party packages, all from the crates.io registry (none from git or a path), at the same
+  versions as the benchmark's lock. The count covers every target platform; on the Windows desktop, 87 of them are
+  compiled. Licence expressions as each crate's Cargo `license` field gives them (only wgpu's and winit's licence
+  files were read): `MIT OR Apache-2.0` 124, `MIT` 59, `Apache-2.0 OR MIT` 14, `Apache-2.0` 10, `MIT/Apache-2.0` 9,
+  `Zlib OR Apache-2.0 OR MIT` 8, `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` 6, `MIT OR Apache-2.0 OR Zlib`
+  4, `Unlicense OR MIT` 3, `BSD-2-Clause OR Apache-2.0 OR MIT` 2, `BSD-3-Clause` 2, `BSD-3-Clause OR MIT OR
+  Apache-2.0` 2, `MIT OR Apache-2.0 OR LGPL-2.1-or-later` 2, `Unlicense/MIT` 2, `Zlib` 2, `(MIT OR Apache-2.0) AND
+  Unicode-3.0` 1, `Apache-2.0 AND MIT` 1, `Apache-2.0/MIT` 1, `BSD-2-Clause` 1, `ISC` 1. No crate is under a
+  copyleft licence only.
+- **Dual-licensed crates with a copyleft option:** `r-efi` 5.3.0 and 6.0.0 (`MIT OR Apache-2.0 OR
+  LGPL-2.1-or-later`, a UEFI binding pulled in for the UEFI target only). The permissive side, MIT OR Apache-2.0, is
+  taken. No other crate in the closure names GPL, LGPL, AGPL, MPL or another copyleft licence.
+- **How it is obtained:** cargo downloads the crates from crates.io at build time, checked against the checksums in
+  `Cargo.lock`. Nothing is vendored: no crate source is in the repository, and no code from them is copied into it.
+  The built `ow-host` links them statically; nothing is distributed by the project.
 
 ## Tools CI installs for the tests (Node.js, numpy, Pillow)
 
