@@ -35,13 +35,23 @@ how it was confirmed.
   - Owner actor flags are not read, by either.
   - Each hull goes through the placement's world transform (`frame::component_to_world`, or a collection entry's
     matrix with scale `Scale3D` x `Scale`) and becomes a convex brush.
-  - Not applied: the tool's two named triangle stand-ins (archives floor, scooter frontage) and its
-    `LANDED_INACTIVE_COLLISION` exclusion of `Sanctuary_Outer` `InterpActor_34` (decision 2026-09-23-03). That
-    decision says the box encloses the player start. With the scene's poses, composed as the BLCMM cross-check
-    confirmed against the running engine's matrices (`BLCMM_DUMP_CROSSCHECK.md`, the rule H3 adopted), it does not:
-    the box's brush spans y -5906.8 to -2685.4, and the start's y is -6348.9, about 440 uu outside. So nothing here
-    supports dropping it. Whether
-    `_Outer` content blocks in landed play is Kismet and streaming state, and stays open.
+  - Not applied: the tool's two named triangle stand-ins (archives floor, scooter frontage).
+  - **`Sanctuary_Outer` `InterpActor_34` keeps its collision here, and the Rust path diverges from the tool.**
+    `tools/prepare_level.py` still leaves this one placement without collision (`LANDED_INACTIVE_COLLISION`,
+    decision 2026-09-23-03), and that decision still governs the tool. The Rust host does not follow it:
+    - 2026-09-23-03 contradicts itself by its own numbers. It gives the box as about 19 x 34 m at (2251, -4296),
+      yaw -61.875 degrees, and says the player start (655.6, -6348.9) is inside it. Turned into the box's frame, the
+      start is about 1,058 and 2,375 uu from the centre along the box's two horizontal axes, and the larger half
+      extent those numbers allow is about 1,700 uu, so the start is outside whichever side is which.
+    - The scene's poses agree. They are composed as the BLCMM cross-check confirmed against the running engine's
+      matrices (`BLCMM_DUMP_CROSSCHECK.md`, the rule H3 adopted). The box's brush spans y -5906.8 to -2685.4, and the
+      start's y is -6348.9, about 440 uu outside.
+    - So that decision's reason for dropping the box does not hold. This is not evidence that the box blocks in
+      landed play either. This lane's own strafe stalls on it: an invisible block about 241 uu above the floor,
+      about 6 m from the spawn, is just what a player would notice. Whether `_Outer` content blocks in landed play
+      is Kismet and streaming state, and it stays open. The real-game asks below include walking that path.
+    - No `Supersedes:` line: the format uses it for a decision that replaces another, and 2026-09-23-03 still
+      governs `prepare_level.py`. This file records the divergence instead.
   - Typed `NotYet` lines in the census:
     - terrain (`tools/terrain_decode.py` not ported);
     - BSP (`tools/bsp_decode.py` not ported);
@@ -53,7 +63,14 @@ how it was confirmed.
   - A swept shape is a point against the brush grown by the shape's support distance along each plane normal: exact
     on faces, up to `r (1 / cos(a / 2) - 1)` early near an edge of angle `a` (17 uu at a right angle, radius 42).
   - The trace stops 1/32 uu short of a surface. A move that keeps half of that away counts as clear, so slides along
-    ramps and walls are not taken for entries by rounding. A start inside a brush may leave it, never go deeper.
+    ramps and walls are not taken for entries by rounding. An entering plane's fraction is clamped to 0 before it
+    is compared (review r1): unclamped, a start under half the skin from a plane with a short move into it read as
+    no entry, so the move could end inside the brush and, with the escape rule, pass through a thin wall. A start
+    inside a brush may leave it, never go deeper.
+  - A brush point beyond 1,048,576 uu from the origin on any axis is refused (`BrushError::OutOfBounds`, a census
+    reason; our bound, not a game value; Sanctuary's farthest point is about 253,000 uu out). The grid leaves out a
+    hand-built brush beyond it. Every float-to-index conversion goes through `geom::floor_index`, which is
+    `ow_core::num::trunc_i32_f64` with a clamp (rule N5).
   - A uniform 512 uu grid in X and Y; candidates in ascending brush order, the nearest hit wins, the lower index on a
     tie.
 - **The shape is a cylinder, not a capsule.** The pawn collides as its `CylinderComponent` (radius 42, half height
@@ -66,13 +83,16 @@ how it was confirmed.
     - input to acceleration (section 9);
     - the ground velocity step and sub-stepped braking with the 10 uu/s stop (section 4);
     - the falling step: air-control limit, start kick, at most 8 sub-steps of 0.05 s, fluid friction, terminal
-      velocity (section 7);
+      velocity (section 7). The limit, its start kick from the frame's `dt`, and the low-air-control cap are worked
+      out once per tick before the sub-steps, as section 7 orders them (review r1);
     - the jump (section 13), and landing on a floor of normal Z at least `WalkableFloorZ` (section 7.5).
   - **Host stand-ins**, because the game's walking step, floor finding and step-up are "Not read yet":
     - a walkable ramp ahead turns the move along its plane;
     - a wall or a too-steep slope first tries a step: up `MaxStepHeight`, across, back down onto a walkable floor;
     - otherwise the move slides along the horizontal wall normal; a slide back into an earlier wall is a corner and
       stops;
+    - a step needs its down trace to land on a walkable floor; one that finds no floor is refused (review r1), so a
+      step never carries the pawn over an obstacle and off a ledge beyond it;
     - after the move, the pawn snaps down by up to `MaxStepHeight` onto a walkable floor, or it falls;
     - a falling sub-step moves by its new velocity, and a landing drops the rest of the sub-step;
     - a spawn inside a brush is lifted up to 160 uu, 1 uu at a time. Sanctuary's start is exactly half the cylinder's
@@ -87,8 +107,8 @@ how it was confirmed.
     easing and bob, moving bases, pawn-to-pawn collision.
   - Determinism: `f64` state, a pure step; the same inputs at the same fixed step give the same bits (a test).
 - **Verified (automated, synthetic geometry only).** Six `ow-assets` tests cover a convex element with triangles, a
-  box element through its `TM`, an empty body, ten refusals, the bounds tolerance and the wrong class. Fifteen
-  `ow-host` tests (fourteen movement tests and one argument test) cover:
+  box element through its `TM`, an empty body, ten refusals, the bounds tolerance and the wrong class. Twenty
+  `ow-host` tests (nineteen movement tests and one argument test) cover:
   - a flat floor and the run to 440;
   - braking to a stop;
   - steps of 20 and 35 climbed, 36 and 60 not;
@@ -103,7 +123,11 @@ how it was confirmed.
   - the spawn lift;
   - the same path twice, bit for bit;
   - the walk checks;
-  - `--walk` parsing.
+  - `--walk` parsing;
+  - review r1's regressions: the trace from z 80.01 to 79.995 above a floor (blocked at once, the next horizontal
+    move free), tiny steps and a full-speed walk into a 1 uu wall (never inside, never through), brushes at 1e22
+    (refused; a hand-built one leaves the grid working), a step over a curb with no floor beyond (refused), and the
+    start kick over one 0.1 s tick of two sub-steps. The first three of these fail on the code before review r1.
 
   The jump at the 1/60 s step rises 312.7 uu and lands after 2.25 s at -499 uu/s. Without the falling drag the arc
   would be 396.9 uu and 2.52 s. Which one the game does is open, and it is the first real-game measurement to ask for.
@@ -132,10 +156,14 @@ how it was confirmed.
     second.
 - **Open.**
   - A real-game jump trace (the pawn's Z per tick through one standing jump) to settle the falling drag.
-  - A real-game walk along the same path to compare ground heights and the two walls.
+  - A real-game walk along the same path to compare ground heights and the two walls; in particular, walk the
+    strafe path past `Sanctuary_Outer` `InterpActor_34` and see whether the BoxLrg blocks in landed play.
   - The game's walking step, floor finding, step-up and spawn search (natives not read).
   - Terrain, BSP and blocking-volume collision (ports of the Python decoders).
   - Per-polygon collision for meshes without a body.
-  - The `_Outer` level's state in landed play.
+  - The `_Outer` level's state in landed play, and with it whether the Rust path or `prepare_level.py` is right
+    about `InterpActor_34`.
+  - `--walk` takes no lock itself: H1 has no Rust lock helper, and the lock (`tools/ue_lock.ps1`) is a PowerShell
+    gate with a global mutex and busy-process checks. As for window runs, the caller takes it (`GATES.md`).
   - Window wiring for WASD and mouse look, and the camera following the pawn, once H2 stage 2 draws. The input type
     (`MoveInput`) and the eye location exist; the window's key and mouse events do not reach the simulation yet.

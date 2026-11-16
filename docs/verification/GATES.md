@@ -124,14 +124,19 @@ Movement and collision (decision `docs/decisions/2026-11/2026-11-16-52-host-move
 - **Every change to `ow-host/src/movement*` or `ow-assets/src/collision.rs`:** the workspace build and tests above
   (the synthetic movement and body tests are among them).
 - **On a machine with the game installed**, after a change to the mover, the sweep or the collision build: a release
-  build, then `ow-host --game <install> --walk`. It opens no window, so it needs no lock. Pass is exit 0 with
-  `result: PASS`, and the collision counts unchanged unless the change explains them. A stall at a wall is
-  reported by name and is not a failure; a stall with nothing in the way is.
+  build, then `ow-host --game <install> --walk`. It opens no window, but it loads the whole scene (40-52 s on the
+  desktop), so it is a heavy run: take the machine-wide lock first, as for window runs (`. ./tools/ue_lock.ps1;
+  Enter-OwUeLock -Owner <lane>; try { ... } finally { Exit-OwUeLock }`). `--walk` does not take it itself (H1 has
+  no Rust lock helper). Pass is exit 0 with `result: PASS`, and the collision counts unchanged unless the change
+  explains them. A stall at a wall is reported by name and is not a failure; a stall with nothing in the way is.
 
 **Baseline (2026-11-16, zuhu desktop, release build, lane H4):** placements 4,446; blocking 3,855, of them 3,124
 with hulls; 299 meshes with a body (494 hulls); 4,219 brushes, 0 refused. Walk: PASS, 1,050 ticks, 3,562.2 uu
-travelled, no start-solid tick; two named wall stalls (segments 4 and 5). Workspace tests 1,500 passed, 0 failed, 17
-ignored (on main 54880df plus this lane).
+travelled, no start-solid tick; two named wall stalls. Segment 4's (a `Sanctuary_P` chain-link fence, taller than
+the jump) is expected. Segment 5's, on `Sanctuary_Outer` `InterpActor_34`, is an **open question**, not settled
+expected output: `prepare_level.py` drops that box's collision (decision 2026-09-23-03), and whether it blocks in
+landed play is not observed (decision 2026-11-16-52). Workspace tests 1,505 passed, 0 failed, 17
+ignored (on main 54880df plus this lane and its review r1); the walk run under the lock.
 
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 

@@ -1,8 +1,8 @@
 //! Invented geometry only (AGENTS.md rule 9): boxes, wedges and triangles placed by hand.
 
-use super::collide::{Brush, CollisionWorld, SKIN, Shape};
+use super::collide::{Brush, BrushError, CollisionWorld, SKIN, Shape};
 use super::geom::V3;
-use super::mover::{MoveInput, MovementParams, Mover, Physics};
+use super::mover::{MoveInput, MovementParams, Mover, Physics, TickEvents};
 use super::walk::{self, Segment};
 use ow_core::units::Rotator;
 
@@ -50,7 +50,7 @@ fn standing(world: &CollisionWorld, at: [f64; 2], yaw: i32) -> Mover {
 }
 
 fn hold(world: &CollisionWorld, m: &mut Mover, input: MoveInput, seconds: f64) {
-    for _ in 0..(seconds / DT).round() as u32 {
+    for _ in 0..super::geom::floor_index((seconds / DT).round(), 1_000_000) {
         m.tick(world, &input, DT);
     }
 }
@@ -322,4 +322,101 @@ fn a_pawn_spawned_in_the_floor_is_lifted_out() {
     let deep_world = CollisionWorld::new(vec![cuboid([-500.0, -500.0, -1000.0], [500.0, 500.0, 0.0], 0)]);
     assert_eq!(deep.lift_out_of_solid(&deep_world), None);
     assert_eq!(deep.location[2], -400.0);
+}
+
+/// Review r1 of PR #349, finding 1: a start under half the skin from a plane, with a short move into it.
+#[test]
+fn a_short_move_from_within_the_skin_is_blocked_not_passed_inside() {
+    let world = CollisionWorld::new(vec![floor()]);
+    let shape = MovementParams::maya().shape;
+    let start = [0.0, 0.0, FLOOR_TOP + 80.01];
+    let hit = world.trace(&shape, start, [0.0, 0.0, FLOOR_TOP + 79.995]);
+    assert!(hit.blocked() && hit.fraction == 0.0, "{hit:?}");
+    assert_eq!(hit.end, start);
+    assert!(!world.trace(&shape, hit.end, hit.end).start_solid, "ended inside the floor");
+    // The next horizontal move is free.
+    let next = world.trace(&shape, hit.end, add3(hit.end, [100.0, 0.0, 0.0]));
+    assert!(!next.blocked() && !next.start_solid, "{next:?}");
+}
+
+/// The same case against a thin wall: tiny steps toward it never take the pawn into it, so it can never pass.
+#[test]
+fn a_thin_wall_is_never_passed() {
+    let wall = cuboid([100.0, -1000.0, FLOOR_TOP], [101.0, 1000.0, FLOOR_TOP + 300.0], 1);
+    let world = CollisionWorld::new(vec![floor(), wall]);
+    let shape = MovementParams::maya().shape;
+    let mut at = [100.0 - 42.0 - 0.01, 0.0, REST];
+    for _ in 0..100 {
+        let hit = world.trace(&shape, at, add3(at, [0.004, 0.0, 0.0]));
+        assert!(!hit.start_solid, "inside the wall at {at:?}");
+        at = hit.end;
+    }
+    assert!(at[0] <= 100.0 - 42.0, "x {}", at[0]);
+    let through = world.trace(&shape, at, add3(at, [300.0, 0.0, 0.0]));
+    assert!(through.blocked() && through.end[0] <= 100.0 - 42.0, "{through:?}");
+    // And a mover walking into it at full speed stays on its side.
+    let mut m = standing(&world, [0.0, 0.0], 0);
+    hold(&world, &mut m, FORWARD, 2.0);
+    assert!(m.location[0] < 100.0 - 42.0 + 1e-9, "x {}", m.location[0]);
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+/// Finding 2: huge coordinates are refused by the constructors, and a hand-made brush beyond the bound does not
+/// break the grid.
+#[test]
+fn brushes_beyond_the_world_bound_are_refused_and_do_not_break_the_grid() {
+    let far = 1e22;
+    let points = [[far, 0.0, 0.0], [far + 1e6, 0.0, 0.0], [far, 1e6, 0.0], [far, 0.0, 1e6]];
+    assert_eq!(Brush::from_hull(&points, &[], 0), Err(BrushError::OutOfBounds));
+    assert_eq!(
+        Brush::from_triangle([-far, 0.0, 0.0], [far, 0.0, 0.0], [0.0, far, 0.0], 0),
+        Err(BrushError::OutOfBounds)
+    );
+    let wild = Brush { planes: Vec::new(), lo: [-far; 3], hi: [far; 3], source: 9 };
+    let world = CollisionWorld::new(vec![wild, floor()]);
+    assert_eq!(world.brushes().len(), 2);
+    let m = standing(&world, [0.0, 0.0], 0);
+    assert!(close(m.location[2], REST, 1e-6));
+    // The checked index helper.
+    use super::geom::floor_index;
+    assert_eq!(floor_index(f64::NAN, 10), 0);
+    assert_eq!(floor_index(-3.0, 10), 0);
+    assert_eq!(floor_index(3.7, 10), 3);
+    assert_eq!(floor_index(1e30, 10), 10);
+    assert_eq!(floor_index(f64::INFINITY, usize::MAX), i32::MAX as usize);
+}
+
+/// Finding 4: a step whose down trace finds no floor is no step.
+#[test]
+fn a_step_up_without_a_floor_beyond_is_refused() {
+    // A floor ending at x 150, a 30 uu curb at its edge, nothing beyond.
+    let ledge = cuboid([-1000.0, -1000.0, FLOOR_TOP - 100.0], [150.0, 1000.0, FLOOR_TOP], 0);
+    let curb = cuboid([100.0, -1000.0, FLOOR_TOP], [110.0, 1000.0, FLOOR_TOP + 30.0], 1);
+    let world = CollisionWorld::new(vec![ledge, curb]);
+    let mut m = standing(&world, [100.0 - 42.0 - SKIN - 0.5, 0.0], 0);
+    let before = m.location;
+    let mut events = TickEvents::default();
+    assert_eq!(m.step_up(&world, [300.0, 0.0, 0.0], &mut events), None);
+    assert_eq!(m.location, before);
+    // A short step onto the curb itself lands on it.
+    let mut events = TickEvents::default();
+    let climb = m.step_up(&world, [5.0, 0.0, 0.0], &mut events).expect("onto the curb");
+    assert!(close(climb, 30.0, 1e-6), "climb {climb}");
+}
+
+/// Finding 7: the air start kick is worked out once per tick, from the frame's dt.
+#[test]
+fn the_air_start_kick_uses_the_frame() {
+    let world = CollisionWorld::new(Vec::new());
+    let mut m = Mover::spawn(MovementParams::maya(), [0.0, 0.0, 10_000.0], Rotator::default());
+    m.tick(&world, &FORWARD, 0.1);
+    // Limit 2048 x 0.11 + (10 - 0) / 0.1 = 325.28 uu/s squared, over two 0.05 s sub-steps with the 0.3 drag:
+    // v1 = 325.28 x 0.05, v2 = v1 x 0.985 + 325.28 x 0.05.
+    let a = 2048.0 * 0.11 + 10.0 / 0.1;
+    let v1 = a * 0.05;
+    let v2 = v1 * (1.0 - 0.3 * 0.05) + a * 0.05;
+    assert!(close(m.velocity[0], v2, 1e-9), "vx {} expected {v2}", m.velocity[0]);
 }

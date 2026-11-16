@@ -14,7 +14,7 @@
 //! ([`SegmentResult::blocker`]) so a reader can tell which wall it was.
 
 use super::collide::CollisionWorld;
-use super::geom::{V3, add, horizontal, length, normalize, scale, sub};
+use super::geom::{V3, add, floor_index, horizontal, length, normalize, scale, sub};
 use crate::frame::rotator_axes;
 use ow_core::units::Rotator;
 use super::mover::{MoveInput, Mover, Physics};
@@ -51,6 +51,8 @@ pub const MAX_DROP: f64 = 2000.0;
 pub const STUCK_FRACTION: f64 = 0.25;
 /// How far along a stalled segment's input the blocker is looked for, uu.
 pub const BLOCKER_PROBE: f64 = 60.0;
+/// The most ticks one segment may run (about 46 hours at 1/60 s).
+pub const MAX_SEGMENT_TICKS: usize = 10_000_000;
 /// The least horizontal distance a run must travel in all, uu.
 pub const MIN_TRAVEL: f64 = 1000.0;
 
@@ -157,8 +159,8 @@ pub fn run(world: &CollisionWorld, mover: &mut Mover, script: &[Segment], dt: f6
             end_yaw: mover.view.yaw,
             input: (segment.forward, segment.strafe),
         };
-        // Whole ticks: the segment's seconds rounded to the nearest tick count.
-        let ticks = (segment.seconds / dt).round().max(0.0) as u64;
+        // Whole ticks: the segment's seconds rounded to the nearest tick count, at most MAX_SEGMENT_TICKS.
+        let ticks = floor_index((segment.seconds / dt).round(), MAX_SEGMENT_TICKS) as u64;
         for t in 0..ticks {
             let input = MoveInput::new(segment.forward, segment.strafe, segment.jump && t == 0, segment.yaw_per_tick, 0);
             let events = mover.tick(world, &input, dt);
