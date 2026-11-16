@@ -3,7 +3,7 @@
 //! `cargo test -p ow-host --locked -- --ignored render::tests`.
 
 use super::*;
-use crate::draw::{Batch, MeshData, SectionRange, Vertex};
+use crate::draw::{Batch, DiffuseCandidate, Instance, MeshData, SectionRange, Vertex};
 use crate::executor::block_on;
 use crate::frame::{self, Affine};
 use ow_core::units::Rotator;
@@ -86,10 +86,10 @@ fn plan(mesh: MeshData, scale3d: [f32; 3], two_sided: bool) -> (DrawPlan, Affine
     };
     let plan = DrawPlan {
         meshes: vec![mesh],
-        textures: Vec::new(),
+        diffuse: Vec::new(),
         batches: vec![Batch {
             key,
-            instances: vec![affine.to_engine()],
+            instances: vec![Instance::new(&affine)],
         }],
         stats: Default::default(),
     };
@@ -105,7 +105,8 @@ fn drawn_at_centre(device: &wgpu::Device, queue: &wgpu::Queue, plan: &DrawPlan) 
         wgpu::TextureFormat::Rgba8UnormSrgb,
         plan,
         &mut none,
-    );
+    )
+    .unwrap();
     let camera = FlyCamera::at([0.0; 3], Rotator::default());
     let vp = camera.view_projection(32, 32).unwrap();
     let rgba = r.capture(device, queue, (32, 32), &vp).unwrap();
@@ -161,9 +162,18 @@ fn the_upload_counts_what_it_sends() {
         panic!("no adapter, not even the software fallback");
     };
     let (mut p, _) = plan(triangle(true), [1.0; 3], false);
-    p.textures = vec!["Tex.Fine".into(), "Tex.Broken".into()];
+    let candidate = |path: &str, priority| DiffuseCandidate {
+        path: path.into(),
+        priority,
+        stub: false,
+    };
+    // The first material's best candidate does not decode: it falls back to the next. The second has only that one:
+    // it is drawn grey, and the failure is not decoded twice.
+    p.diffuse = vec![
+        vec![candidate("Tex.Broken", 100), candidate("Tex.Fine", 90)],
+        vec![candidate("Tex.Broken", 100)],
+    ];
     p.batches[0].key.texture = Some(0);
-    // A 4 x 4 texture with its full chain, then one that does not decode.
     let mut source = |path: &str| -> Result<TextureAsset, String> {
         if path != "Tex.Fine" {
             return Err("invented failure".into());
@@ -176,13 +186,24 @@ fn the_upload_counts_what_it_sends() {
         wgpu::TextureFormat::Rgba8UnormSrgb,
         &p,
         &mut source,
-    );
+    )
+    .unwrap();
     let u = r.upload;
     assert_eq!(
         (u.meshes, u.vertex_bytes, u.index_bytes, u.instance_bytes),
-        (1, 96, 12, 64)
+        (1, 96, 12, 112)
     );
     assert_eq!((u.textures, u.textures_failed, u.texture_bytes), (1, 1, 84));
+    assert_eq!((u.fallbacks, u.grey_materials), (1, 1));
+    // A target format the renderer does not draw into is refused, not drawn wrong.
+    let refused = SceneRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::R8Unorm,
+        &p,
+        &mut source,
+    );
+    assert!(refused.is_err());
     assert_eq!(r.draw_calls(), 1);
     assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }
@@ -218,6 +239,16 @@ fn fine_texture() -> Result<TextureAsset, String> {
         std::path::Path::new("."),
     )
     .map_err(|e| e.to_string())
+}
+
+#[test]
+fn captures_convert_rgba_and_bgra_only() {
+    assert_eq!(
+        capture_order(wgpu::TextureFormat::Rgba8UnormSrgb),
+        Some(false)
+    );
+    assert_eq!(capture_order(wgpu::TextureFormat::Bgra8Unorm), Some(true));
+    assert_eq!(capture_order(wgpu::TextureFormat::Rgba16Float), None);
 }
 
 #[test]

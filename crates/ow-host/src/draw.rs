@@ -8,16 +8,21 @@
 //! [`frame::component_to_world`] of its component pose and its actor pose; a collection placement is
 //! [`frame::Affine::from_ue3_matrix`] of the tail matrix, scaled by the kept `Scale3D` times scale. A placement whose
 //! transform the boundary refuses (a non-finite value) is counted, not drawn. A mirroring transform
-//! ([`frame::Affine::mirrors`]) goes to its own batch, drawn with the other front face.
+//! ([`frame::Affine::mirrors`]) goes to its own batch, drawn with the other front face. Each instance carries its
+//! normal matrix too ([`normal_matrix`]): the inverse transpose of the transform's 3x3, so that a non-uniform scale
+//! (Sanctuary has many) turns a slanted face's normal correctly.
 //!
 //! **The diffuse texture** of a material is picked by parameter name with the rule of `tools/prepare_level.py`
 //! (`material_parameters`, `CHANNELS` and `ALIASES`, `channel_for_parameter`, `parameter_priority`, and the
 //! channel loop of `Scene.material`): the chain's named texture parameters, a child's replacing its parent's of
 //! the same name and the base material's sample-parameter expressions giving the defaults; then, among those whose
 //! name maps to the diffuse channel, the first one, replaced by a later one that is not a `Common_Textures.Stub`
-//! texture where the current one is, or by one of higher priority. The tool's inferences for materials with no named
-//! diffuse (a sole unnamed `_Dif` sample, cooked texture resources, inspected fallbacks and recipes) are not ported:
-//! such a material is drawn untextured. Two more differences: an explicit null override in a child does not hide
+//! texture where the current one is, or by one of higher priority. A candidate that does not decode is skipped, as
+//! the tool's loop skips a texture whose decode raises: the plan keeps each material's candidates in the tool's order
+//! ([`DiffuseCandidate`]) and the renderer takes the best one that decodes ([`pick_from`]), which is the tool's pick
+//! among the decodable ones (the loop keeps the first of the best-ranked). The tool's inferences for materials with
+//! no named diffuse (a sole unnamed `_Dif` sample, cooked texture resources, inspected fallbacks and recipes) are not
+//! ported: such a material is drawn untextured, and [`PlanStats`] counts why. Two more differences: an explicit null override in a child does not hide
 //! its parent's texture here (the scene records no null entries), and the tool also accepts the
 //! `MaterialExpressionTextureSampleParameter2D_<n>` names, which only its unnamed inference uses.
 //!
@@ -95,10 +100,22 @@ fn is_stub(texture: &str) -> bool {
     texture.to_lowercase().contains("common_textures.stub.")
 }
 
-/// The diffuse texture of `material` by the tool's parameter rule (module documentation), or `None`.
-pub fn pick_diffuse(material: &SceneMaterial) -> Option<&str> {
-    // The tool builds its parameter dict from the deepest parent up, each level replacing the names it sets; an
-    // insertion-ordered map with replace-in-place is a Python dict.
+/// A texture a material names under a diffuse parameter, with what the tool ranks it by.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DiffuseCandidate {
+    /// The texture's object path (a key of [`Scene::textures`]).
+    pub path: String,
+    /// [`parameter_priority`] of its parameter.
+    pub priority: i32,
+    /// A `Common_Textures.Stub` texture.
+    pub stub: bool,
+}
+
+/// The diffuse candidates of `material` in the tool's order (module documentation): its named texture parameters as
+/// the tool's dict holds them, the deepest parent first and a nearer level replacing a name in place, then those
+/// whose name maps to the diffuse channel.
+pub fn diffuse_candidates(material: &SceneMaterial) -> Vec<DiffuseCandidate> {
     let mut entries: Vec<_> = material
         .textures
         .iter()
@@ -119,24 +136,43 @@ pub fn pick_diffuse(material: &SceneMaterial) -> Option<&str> {
             None => parameters.push((folded, t.path.as_str())),
         }
     }
-    let mut picked: Option<(&str, i32, bool)> = None;
-    for (name, texture) in parameters {
-        if channel_for_parameter(&name) != Some(Channel::Diffuse) {
-            continue;
-        }
-        let priority = parameter_priority(&name);
-        let stub = is_stub(texture);
+    parameters
+        .into_iter()
+        .filter(|(name, _)| channel_for_parameter(name) == Some(Channel::Diffuse))
+        .map(|(name, texture)| DiffuseCandidate {
+            path: texture.to_string(),
+            priority: parameter_priority(&name),
+            stub: is_stub(texture),
+        })
+        .collect()
+}
+
+/// The tool's channel loop over `candidates`, skipping those `usable` refuses (a texture that does not decode): the
+/// first candidate, replaced by a later one that is not a stub where the current one is, or by one of the same
+/// stubness and higher priority.
+pub fn pick_from<'a>(
+    candidates: &'a [DiffuseCandidate],
+    usable: &dyn Fn(&str) -> bool,
+) -> Option<&'a DiffuseCandidate> {
+    let mut picked: Option<&DiffuseCandidate> = None;
+    for c in candidates.iter().filter(|c| usable(&c.path)) {
         let replace = match picked {
             None => true,
-            Some((_, current_priority, current_stub)) => {
-                (current_stub && !stub) || (current_stub == stub && priority > current_priority)
+            Some(current) => {
+                (current.stub && !c.stub)
+                    || (current.stub == c.stub && c.priority > current.priority)
             }
         };
         if replace {
-            picked = Some((texture, priority, stub));
+            picked = Some(c);
         }
     }
-    picked.map(|(t, _, _)| t)
+    picked
+}
+
+/// The diffuse texture of `material` by the tool's parameter rule, every candidate taken as decodable, or `None`.
+pub fn pick_diffuse(material: &SceneMaterial) -> Option<String> {
+    pick_from(&diffuse_candidates(material), &|_| true).map(|c| c.path.clone())
 }
 
 /// One vertex as the renderer uploads it: position in uu, the packed normal unpacked, the first UV set.
@@ -172,9 +208,17 @@ pub struct MeshData {
 }
 
 impl MeshData {
-    /// LOD 0 of a decoded mesh. `None` when a section's range does not fit the index buffer (`ow-assets` checks
-    /// that already; this keeps the renderer from trusting it blindly).
+    /// LOD 0 of a decoded mesh. `None` for an LOD with no vertex, an index past the vertices, or a section's range
+    /// past the index buffer (`ow-assets` checks these already; this keeps the renderer from trusting it blindly).
     pub fn from_lod(path: &str, lod: &MeshLod) -> Option<MeshData> {
+        if lod.vertices.is_empty()
+            || lod
+                .indices
+                .iter()
+                .any(|&i| i as usize >= lod.vertices.len())
+        {
+            return None;
+        }
         let vertices = lod
             .vertices
             .iter()
@@ -222,25 +266,65 @@ impl MeshData {
 }
 
 /// What one instanced draw shares.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BatchKey {
     /// Index into [`DrawPlan::meshes`].
     pub mesh: u32,
     /// The section slot.
     pub section: u32,
-    /// Index into [`DrawPlan::textures`]; `None` draws untextured.
+    /// Index into [`DrawPlan::diffuse`] (the section's material's diffuse candidates); `None` draws untextured.
     pub texture: Option<u32>,
     pub two_sided: bool,
     /// Drawn with the other front face ([`Affine::mirrors`]).
     pub mirrored: bool,
 }
 
-/// One instanced draw: a mesh section and the world matrices of its placements, in placement order.
+/// The normal matrix of a transform, for column vectors: the inverse transpose of its 3x3, in the engine's
+/// column-major order, as three columns. With the transform's rows (the engine matrix's columns) `a`, `b`, `c`, the
+/// inverse transpose is `[b x c, c x a, a x b] / det`; dividing by the determinant's sign only keeps the direction
+/// (the shader normalises), and a flattened transform (determinant 0) keeps its cross products. Computed in `f64` and
+/// rounded to `f32` once.
+pub fn normal_matrix(affine: &Affine) -> [[f32; 3]; 3] {
+    let cross = |u: [f64; 3], v: [f64; 3]| {
+        [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ]
+    };
+    let [a, b, c] = affine.rows;
+    let sign = if affine.determinant() < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    [cross(b, c), cross(c, a), cross(a, b)].map(|col| col.map(|v| (v * sign) as f32))
+}
+
+/// One drawn placement of a batch: its world matrix and its normal matrix ([`normal_matrix`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Instance {
+    pub world: Mat4,
+    pub normal: [[f32; 3]; 3],
+}
+
+impl Instance {
+    pub fn new(affine: &Affine) -> Instance {
+        Instance {
+            world: affine.to_engine(),
+            normal: normal_matrix(affine),
+        }
+    }
+}
+
+/// One instanced draw: a mesh section and its placements, in placement order.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Batch {
     pub key: BatchKey,
-    pub instances: Vec<Mat4>,
+    pub instances: Vec<Instance>,
 }
 
 /// What [`DrawPlan::build`] counted.
@@ -262,6 +346,12 @@ pub struct PlanStats {
     pub instances: usize,
     /// Sections with no triangles, skipped.
     pub empty_sections: usize,
+    /// Section instances drawn untextured because the section has no material (no override, no section material).
+    pub untextured_no_material: usize,
+    /// Untextured because the section's material is not in [`Scene::materials`].
+    pub untextured_unknown_material: usize,
+    /// Untextured because the material names no diffuse texture by parameter (the tool's inferences not ported).
+    pub untextured_no_diffuse: usize,
 }
 
 /// Everything the renderer needs from a scene.
@@ -269,8 +359,9 @@ pub struct PlanStats {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
     pub meshes: Vec<MeshData>,
-    /// Texture object paths (keys of [`Scene::textures`]) the batches name, first-use order.
-    pub textures: Vec<String>,
+    /// The diffuse candidates of each textured material the batches use ([`diffuse_candidates`]), first-use order,
+    /// equal lists shared.
+    pub diffuse: Vec<Vec<DiffuseCandidate>>,
     /// Sorted by [`BatchKey`].
     pub batches: Vec<Batch>,
     pub stats: PlanStats,
@@ -327,9 +418,9 @@ impl DrawPlan {
         let mut stats = PlanStats::default();
         let mut meshes: Vec<MeshData> = Vec::new();
         let mut mesh_ids: DetMap<String, Option<u32>> = DetMap::new();
-        let mut textures: Vec<String> = Vec::new();
-        let mut texture_ids: DetMap<String, u32> = DetMap::new();
-        let mut batches: DetMap<BatchKey, Vec<Mat4>> = DetMap::new();
+        let mut diffuse: Vec<Vec<DiffuseCandidate>> = Vec::new();
+        let mut diffuse_ids: DetMap<Vec<DiffuseCandidate>, u32> = DetMap::new();
+        let mut batches: DetMap<BatchKey, Vec<Instance>> = DetMap::new();
         for p in scene.placements.values() {
             stats.placements += 1;
             if p.is_hidden() {
@@ -365,7 +456,7 @@ impl DrawPlan {
             stats.drawn += 1;
             let mirrored = affine.mirrors();
             stats.mirrored += usize::from(mirrored);
-            let world = affine.to_engine();
+            let instance = Instance::new(&affine);
             let effective = scene.effective_materials(p);
             let mesh = &meshes[mesh_id as usize];
             for (slot, range) in mesh.sections.iter().enumerate() {
@@ -373,14 +464,19 @@ impl DrawPlan {
                     stats.empty_sections += 1;
                     continue;
                 }
-                let material = effective
-                    .get(slot)
-                    .and_then(|m| m.as_deref())
-                    .and_then(|m| scene.materials.get(m));
-                let texture = material.and_then(pick_diffuse).map(|t| {
-                    *texture_ids.entry(t.to_string()).or_insert_with(|| {
-                        textures.push(t.to_string());
-                        u32::try_from(textures.len() - 1).unwrap_or(u32::MAX)
+                let path = effective.get(slot).and_then(|m| m.as_deref());
+                let material = path.and_then(|m| scene.materials.get(m));
+                let candidates = material.map(diffuse_candidates).unwrap_or_default();
+                match (path, material, candidates.is_empty()) {
+                    (None, _, _) => stats.untextured_no_material += 1,
+                    (Some(_), None, _) => stats.untextured_unknown_material += 1,
+                    (Some(_), Some(_), true) => stats.untextured_no_diffuse += 1,
+                    (Some(_), Some(_), false) => {}
+                }
+                let texture = (!candidates.is_empty()).then(|| {
+                    *diffuse_ids.entry(candidates.clone()).or_insert_with(|| {
+                        diffuse.push(candidates);
+                        u32::try_from(diffuse.len() - 1).unwrap_or(u32::MAX)
                     })
                 });
                 let key = BatchKey {
@@ -390,13 +486,13 @@ impl DrawPlan {
                     two_sided: material.and_then(|m| m.two_sided).unwrap_or(true),
                     mirrored,
                 };
-                batches.entry(key).or_default().push(world);
+                batches.entry(key).or_default().push(instance);
                 stats.instances += 1;
             }
         }
         DrawPlan {
             meshes,
-            textures,
+            diffuse,
             batches: batches
                 .into_iter()
                 .map(|(key, instances)| Batch { key, instances })
