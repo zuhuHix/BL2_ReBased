@@ -30,6 +30,7 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 
 const PROVIDER: &str = "ToyKernelProvider";
 const CONDITIONAL: &str = "ToyConditionalProvider";
+const FAILING: &str = "ToyFailingProvider";
 
 /// The toy action enum, in an order unlike the game's.
 const ACTIONS: [&str; 3] = ["CHANGE_Disable", "CHANGE_Toggle", "CHANGE_Enable"];
@@ -42,6 +43,8 @@ struct Toy {
     bare: ClassId,
     /// What the toy behavior handler saw: `event consumer=<name>`.
     seen: Rc<RefCell<Vec<String>>>,
+    /// While set, the failing toy behavior (`Behavior_ToyDifferent`) fails.
+    fail: Rc<std::cell::Cell<bool>>,
 }
 
 impl Drop for Toy {
@@ -72,6 +75,22 @@ fn spec() -> Spec {
                 ..Seq::default()
             },
         ],
+        vec![],
+    )
+}
+
+/// `Boom` (enabled on spawn): its `OnBehaviorSequenceEnabled` runs the failing toy behavior, so pass 1 fails.
+fn failing() -> Spec {
+    Spec::new(
+        FAILING,
+        vec![Seq {
+            name: "Boom",
+            enabled_on_spawn: Some(true),
+            events: vec![ev("OnBehaviorSequenceEnabled", (0, 1))],
+            behaviors: vec![beh("X", "Behavior_ToyDifferent", (0, 0))],
+            links: vec![(0, -1, 0.0)],
+            ..Seq::default()
+        }],
         vec![],
     )
 }
@@ -118,6 +137,7 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
     let files = install(&[
         ("TestBpd", provider_package(&spec())),
         ("TestCond", provider_package(&conditional())),
+        ("TestFail", provider_package(&failing())),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -184,7 +204,21 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         }),
     )
     .unwrap();
-    Toy { vm, dir, handle, pawn, bare, seen }
+    let fail = Rc::new(std::cell::Cell::new(false));
+    let failing = fail.clone();
+    registry::register(
+        &mut vm,
+        "WillowGame.Behavior_ToyDifferent",
+        Handler::run(move |_, _, _, _| {
+            if failing.get() {
+                Err(crate::provider::BehaviorError::Data("toy failure".to_string()))
+            } else {
+                Ok(Vec::new())
+            }
+        }),
+    )
+    .unwrap();
+    Toy { vm, dir, handle, pawn, bare, seen, fail }
 }
 
 impl Toy {
@@ -331,8 +365,8 @@ fn reference_binds_only_what_the_cxx_binds() {
 // ---------------------------------------------------------------------------------------------------------------
 
 #[test]
-fn the_consumer_handle_is_a_plain_read_of_the_object_s_field() {
-    for mode in [ParityMode::Off, ParityMode::Reference] {
+fn the_consumer_handle_is_a_plain_read_of_the_object_s_field_in_off() {
+    for mode in [ParityMode::Off] {
         let mut t = toy(mode);
         Pack.register(&mut t.vm).unwrap();
         let pawn = t.object(t.pawn, "Pawn_0");
@@ -428,8 +462,8 @@ fn claims_are_exclusive_and_allocation_skips_held_handles() {
 }
 
 #[test]
-fn an_event_on_a_none_provider_fires_nothing_whoever_owns_the_handle() {
-    let mut t = toy(ParityMode::Reference);
+fn an_event_on_a_none_provider_fires_nothing_whoever_owns_the_handle_in_off() {
+    let mut t = toy(ParityMode::Off);
     claim(&mut t.vm, 3, "a").unwrap();
     route(&mut t.vm, "a", EVENT_FROM_SCRIPT, Rc::new(|_: &mut NativeCall<'_>| panic!("not reached"))).unwrap();
     let (h, e) = (t.handle(3), t.name("Go"));
@@ -523,4 +557,92 @@ fn what_section_c_does_not_read_is_not_yet() {
     .unwrap()
     .expect("registered");
     assert_eq!(not_yet(inner), Missing::NotRead);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Reference: what the C++ does (review r1 of PR #352)
+// ---------------------------------------------------------------------------------------------------------------
+
+fn key_of(t: &mut Toy, path: &str) -> String {
+    let f = t.vm.find_function(path).unwrap();
+    t.vm.function(f).and_then(|d| d.native_key.clone()).unwrap()
+}
+
+/// An unowned handle in Reference: the stub when no crate binds the native in the C++, the one crate's body when one
+/// does, `NotYet` when two would. Off keeps the record's false / nothing.
+#[test]
+fn reference_unowned_handles_take_the_cxx_crate_s_body_or_the_stub() {
+    let mut t = toy(ParityMode::Reference);
+    Pack.register(&mut t.vm).unwrap();
+    let provider = t.object(t.bare, "AnyProvider");
+    let enabled = |t: &mut Toy| {
+        let (h, seq) = (t.handle(9), t.name("Main"));
+        t.call(IS_SEQUENCE_ENABLED, None, vec![h, Value::Object(Some(provider)), seq])
+    };
+    assert_eq!(enabled(&mut t).unwrap(), Value::Bool(false), "the stub's zero bool");
+    let stub = format!("UNIMPLEMENTED {}", key_of(&mut t, IS_SEQUENCE_ENABLED));
+    assert_eq!(t.vm.log.last(), Some(&stub));
+    // A None provider is not settled before the body in Reference: no body, the stub.
+    let (h, go) = (t.handle(9), t.name("Go"));
+    t.call(EVENT_FROM_SCRIPT, None, vec![h, Value::Object(None), go]).unwrap();
+    let stub = format!("UNIMPLEMENTED {}", key_of(&mut t, EVENT_FROM_SCRIPT));
+    assert_eq!(t.vm.log.last(), Some(&stub));
+    // One crate binds it in the C++: its body, for every unowned handle.
+    fallback(&mut t.vm, "m", IS_SEQUENCE_ENABLED, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Bool(true)))).unwrap();
+    let before = t.vm.log.len();
+    assert_eq!(enabled(&mut t).unwrap(), Value::Bool(true));
+    assert_eq!(t.vm.log.len(), before, "no stub line");
+    assert!(fallback(&mut t.vm, "m", IS_SEQUENCE_ENABLED, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::None))).is_err());
+    // Two crates would: no C++ VM holds both.
+    fallback(&mut t.vm, "c", IS_SEQUENCE_ENABLED, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Bool(false)))).unwrap();
+    assert_eq!(not_yet(enabled(&mut t)), Missing::NotPorted);
+    // Off never runs a fallback.
+    let mut t = toy(ParityMode::Off);
+    fallback(&mut t.vm, "m", IS_SEQUENCE_ENABLED, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Bool(true)))).unwrap();
+    assert_eq!(enabled(&mut t).unwrap(), Value::Bool(false));
+}
+
+/// `GetBehaviorConsumerHandle` in Reference goes through the owner of the object's own handle, else the fallback,
+/// else the stub; it is not the plain read (the C++ mission bridge stubs every pawn but the director).
+#[test]
+fn reference_reads_the_consumer_handle_through_its_owner() {
+    let mut t = toy(ParityMode::Reference);
+    Pack.register(&mut t.vm).unwrap();
+    let prop = t.vm.space.prop(t.pawn, "ConsumerHandle").unwrap();
+    let pawn = |t: &mut Toy, name: &str, pid: i32| {
+        let o = t.object(t.pawn, name);
+        let h = t.handle(pid);
+        t.vm.space.write(o, PropAddr::scalar(prop), h).unwrap();
+        o
+    };
+    let (owned, stranger) = (pawn(&mut t, "Owned", 7), pawn(&mut t, "Stranger", 8));
+    t.call(CONSUMER_HANDLE, Some(stranger), vec![]).unwrap();
+    let stub = format!("UNIMPLEMENTED {}", key_of(&mut t, CONSUMER_HANDLE));
+    assert_eq!(t.vm.log.last(), Some(&stub), "no body: the stub, not the plain read");
+    claim(&mut t.vm, 7, "a").unwrap();
+    route(&mut t.vm, "a", CONSUMER_HANDLE, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Int(1)))).unwrap();
+    fallback(&mut t.vm, "b", CONSUMER_HANDLE, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Int(2)))).unwrap();
+    assert_eq!(t.call(CONSUMER_HANDLE, Some(owned), vec![]).unwrap(), Value::Int(1));
+    assert_eq!(t.call(CONSUMER_HANDLE, Some(stranger), vec![]).unwrap(), Value::Int(2));
+    let bare = t.object(t.bare, "Bare_0");
+    assert_eq!(t.call(CONSUMER_HANDLE, Some(bare), vec![]).unwrap(), Value::Int(2), "no handle field: unowned");
+}
+
+/// A pass 1 that fails registers nothing: the provider's slot goes, the sequence reads as not registered, and the
+/// call can be made again (review r1 of PR #352).
+#[test]
+fn a_failed_pass_one_registers_nothing_and_can_be_retried() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let skill = t.object(t.bare, "Skill_0");
+    let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
+    let p = Value::Object(Some(t.definition("TestFail", FAILING)));
+    t.fail.set(true);
+    let err = t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap_err();
+    assert!(err.to_string().contains("toy failure"), "{err}");
+    let boom = t.name("Boom");
+    assert_eq!(t.call(IS_SEQUENCE_ENABLED, None, vec![h.clone(), p.clone(), boom.clone()]).unwrap(), Value::Bool(false));
+    t.fail.set(false);
+    t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
+    assert_eq!(t.call(IS_SEQUENCE_ENABLED, None, vec![h, p, boom]).unwrap(), Value::Bool(true));
 }

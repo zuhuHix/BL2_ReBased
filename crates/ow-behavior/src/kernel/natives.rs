@@ -19,18 +19,27 @@
 //! its `PID`:
 //! - a crate's handle runs that crate's body for the native ([`route`]); a crate that gave no body for it gets the
 //!   VM's unbound-native behaviour (the stub policy: the `UNIMPLEMENTED <key>` line and the zero value, or
-//!   `UnboundNative`), which is what such a call got before this pack existed;
+//!   `UnboundNative`). On a VM holding that crate alone this is what the call got before the pack existed (the
+//!   crate did not bind the native); where another crate bound it, the call used to reach that crate's body;
 //! - a kernel handle runs the kernel's own rule, below;
-//! - a handle nobody owns (-1, the invalid handle, among them) is a consumer with no process: false, and nothing
-//!   fires or changes (NATIVE_BEHAVIOR_CONTEXT.md, "kernel entry points given -1"; NATIVE_BEHAVIOR_POPULATION.md
-//!   section C, "only continues if [the process] exists").
+//! - a handle nobody owns (-1, the invalid handle, among them):
+//!   - **Off**: a consumer with no process: false, and nothing fires or changes (NATIVE_BEHAVIOR_CONTEXT.md, "kernel
+//!     entry points given -1"; NATIVE_BEHAVIOR_POPULATION.md section C, "only continues if [the process] exists");
+//!   - **Reference**: what the C++ does, which is the body of the one crate that binds the native in the C++
+//!     ([`fallback`]: `ow-mission` for `IsBehaviorSequenceEnabled` and `ActivateBehaviorEventFromScript`, `ow-combat`
+//!     for `BroadcastBehaviorEventFromScript`, whose C++ body logs for every `PID`), else the stub policy (the C++
+//!     binds nothing there). Two crates' fallbacks for one native have no C++ counterpart: `NotYet { NotPorted }`.
+//!
+//! **`WillowPawn.GetBehaviorConsumerHandle`.** Off: the record's plain read of the object's `ConsumerHandle`, for
+//! every object. Reference: routed like the others, by the `PID` in the object's own `ConsumerHandle` (the C++ mission
+//! bridge reads the director's and stubs every other pawn; the C++ combat pack reads every pawn's).
 //!
 //! | Native | Rule | Modes | Status |
 //! |---|---|---|---|
 //! | `ActivateBehaviorOutputLink` | the collector | both | UNVERIFIED (NATIVE_MISSION_DISPATCH.md A2) |
-//! | `WillowPawn.GetBehaviorConsumerHandle` | a plain read of the object's `ConsumerHandle` | both | UNVERIFIED (NATIVE_BEHAVIOR_CONTEXT.md) |
+//! | `WillowPawn.GetBehaviorConsumerHandle` | Off: a plain read of the object's `ConsumerHandle`; Reference: routed | both | UNVERIFIED (NATIVE_BEHAVIOR_CONTEXT.md) |
 //! | `IsBehaviorSequenceEnabled` | routed; kernel: the registered provider's enabled bit, else false | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
-//! | `ActivateBehaviorEventFromScript` | a None provider fires nothing; routed; kernel: fired on the registered provider, an omitted filter -1 | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
+//! | `ActivateBehaviorEventFromScript` | Off: a None provider fires nothing; routed; kernel: fired on the registered provider, an omitted filter -1 | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
 //! | `BroadcastBehaviorEventFromScript` | routed; kernel: fired on every provider of the consumer, in registration order | both | UNVERIFIED (COMBAT_DEATH.md) |
 //! | `RegisterBehaviorConsumer` | None: handle -1; else a new process at the lowest free non-negative `PID` | Off | UNVERIFIED; the allocator is not read |
 //! | `IntializeBehaviorProviderForConsumer` | routed; kernel: decode, pass 1, refuse pass 2 | Off | UNVERIFIED (NATIVE_BEHAVIOR_POPULATION.md section C) |
@@ -98,6 +107,16 @@ pub const ROUTED: [&str; 5] = [
     CHANGE_SEQUENCE,
 ];
 
+/// The natives a crate may give a body for ([`route`], [`fallback`]).
+pub const ROUTABLE: [&str; 6] = [
+    IS_SEQUENCE_ENABLED,
+    EVENT_FROM_SCRIPT,
+    BROADCAST_FROM_SCRIPT,
+    INITIALIZE_PROVIDER,
+    CHANGE_SEQUENCE,
+    CONSUMER_HANDLE,
+];
+
 /// The invalid consumer handle's `PID` (NATIVE_BEHAVIOR_CONTEXT.md: the constructor's value, all bits set).
 pub const INVALID_PID: i32 = -1;
 
@@ -128,6 +147,8 @@ pub struct Kernel {
     owners: DetMap<i32, Owner>,
     /// (owner crate, native path) -> the owner's body.
     routes: DetMap<(&'static str, &'static str), NativeFn>,
+    /// native path -> the crates' Reference bodies for a handle nobody owns, by owner.
+    fallbacks: DetMap<&'static str, DetMap<&'static str, NativeFn>>,
     processes: DetMap<i32, Process>,
 }
 
@@ -138,6 +159,14 @@ impl std::fmt::Debug for Kernel {
             .field("frames", &self.frames)
             .field("owners", &self.owners)
             .field("routes", &self.routes.keys().collect::<Vec<_>>())
+            .field(
+                "fallbacks",
+                &self
+                    .fallbacks
+                    .iter()
+                    .map(|(n, o)| (*n, o.keys().collect::<Vec<_>>()))
+                    .collect::<Vec<_>>(),
+            )
             .field("processes", &self.processes.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -153,7 +182,11 @@ impl NativePack for Pack {
             vm.add_service(Kernel::default())?;
         }
         bind(vm, OUTPUT_LINK, Rc::new(output_link))?;
-        bind(vm, CONSUMER_HANDLE, Rc::new(consumer_handle))?;
+        let handle: NativeFn = match vm.parity {
+            ParityMode::Off => Rc::new(consumer_handle),
+            ParityMode::Reference => Rc::new(consumer_handle_reference),
+        };
+        bind(vm, CONSUMER_HANDLE, handle)?;
         for path in [IS_SEQUENCE_ENABLED, EVENT_FROM_SCRIPT, BROADCAST_FROM_SCRIPT] {
             bind(vm, path, routed(path))?;
         }
@@ -182,15 +215,10 @@ pub fn collect<T>(vm: &mut Vm, run: impl FnOnce(&mut Vm) -> T) -> Result<(T, Vec
     Ok((value, ids))
 }
 
-/// Gives `owner`'s body for the routed native `native` ([`ROUTED`]). Registers [`Pack`] first. A second body for
-/// the same owner and native is refused.
+/// Gives `owner`'s body for the routed native `native` ([`ROUTABLE`]), run for the handles `owner` holds. Registers
+/// [`Pack`] first. A second body for the same owner and native is refused.
 pub fn route(vm: &mut Vm, owner: &'static str, native: &'static str, body: NativeFn) -> Result<(), VmError> {
-    if !ROUTED.contains(&native) {
-        return Err(VmError::Registration {
-            key: native.to_string(),
-            reason: "not a routed kernel native",
-        });
-    }
+    routable(native)?;
     Pack.register(vm)?;
     let k = kernel(vm)?;
     let mut k = borrow(&k)?;
@@ -202,6 +230,41 @@ pub fn route(vm: &mut Vm, owner: &'static str, native: &'static str, body: Nativ
     }
     k.routes.insert((owner, native), body);
     Ok(())
+}
+
+/// Gives `owner`'s Reference body for `native` ([`ROUTABLE`]) on a handle nobody owns: the crate binds this native in
+/// the C++ reference (module documentation). Off never runs it. Registers [`Pack`] first. A second fallback of the same
+/// owner for one native is refused.
+pub fn fallback(
+    vm: &mut Vm,
+    owner: &'static str,
+    native: &'static str,
+    body: NativeFn,
+) -> Result<(), VmError> {
+    routable(native)?;
+    Pack.register(vm)?;
+    let k = kernel(vm)?;
+    let mut k = borrow(&k)?;
+    let bodies = k.fallbacks.entry(native).or_default();
+    if bodies.contains_key(owner) {
+        return Err(VmError::Registration {
+            key: native.to_string(),
+            reason: "this owner already gave a fallback for this kernel native",
+        });
+    }
+    bodies.insert(owner, body);
+    Ok(())
+}
+
+fn routable(native: &str) -> Result<(), VmError> {
+    if ROUTABLE.contains(&native) {
+        Ok(())
+    } else {
+        Err(VmError::Registration {
+            key: native.to_string(),
+            reason: "not a routed kernel native",
+        })
+    }
 }
 
 /// Claims `pid` for `owner`. Claiming a `PID` one already holds is a no-op; a `PID` another owner holds, and the
@@ -292,6 +355,21 @@ fn consumer_handle(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(c.vm.space.read(me, PropAddr::scalar(p))?.clone())
 }
 
+// GetBehaviorConsumerHandle in Reference: routed by the PID of the object's own ConsumerHandle (module documentation).
+fn consumer_handle_reference(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let pid = match c.this {
+        Some(me) => {
+            let class = c.vm.space.heap.get(me)?.class;
+            match c.vm.space.prop(class, "ConsumerHandle") {
+                Some(p) => handle_pid(c.vm, c.vm.space.read(me, PropAddr::scalar(p))?),
+                None => None,
+            }
+        }
+        None => None,
+    };
+    dispatch(c, CONSUMER_HANDLE, pid)
+}
+
 // RegisterBehaviorConsumer(Consumer) -> BehaviorConsumerHandle (Off only).
 fn register_consumer(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let consumer = match c.arg(0)? {
@@ -328,28 +406,57 @@ fn register_consumer(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// A routed native's body (module documentation).
 fn routed(native: &'static str) -> NativeFn {
     Rc::new(move |c: &mut NativeCall<'_>| {
-        // A None provider fires nothing, whoever owns the handle (NATIVE_MARCUS_USE_CHAIN.md).
-        if native == EVENT_FROM_SCRIPT && provider_arg(c)?.is_none() {
+        // Off: a None provider fires nothing, whoever owns the handle (NATIVE_MARCUS_USE_CHAIN.md). Reference leaves
+        // it to the body the call reaches, as the C++ does (the mission bridge's body checks it first).
+        if c.vm.parity == ParityMode::Off
+            && native == EVENT_FROM_SCRIPT
+            && provider_arg(c)?.is_none()
+        {
             return Ok(Value::None);
         }
         let pid = handle_pid(c.vm, c.arg(0)?);
-        let k = kernel(c.vm)?;
-        let owner = match pid {
-            Some(p) => borrow(&k)?.owners.get(&p).copied(),
-            None => None,
-        };
-        match (owner, pid) {
-            (Some(Owner::Crate(name)), _) => {
-                let body = borrow(&k)?.routes.get(&(name, native)).cloned();
-                match body {
-                    Some(body) => body(c),
-                    None => unbound(c),
+        dispatch(c, native, pid)
+    })
+}
+
+/// Runs `native` for the handle `pid` (module documentation, "The consumer table").
+fn dispatch(c: &mut NativeCall<'_>, native: &'static str, pid: Option<i32>) -> Result<Value, VmError> {
+    let k = kernel(c.vm)?;
+    let owner = match pid {
+        Some(p) => borrow(&k)?.owners.get(&p).copied(),
+        None => None,
+    };
+    match (owner, pid) {
+        (Some(Owner::Crate(name)), _) => {
+            let body = borrow(&k)?.routes.get(&(name, native)).cloned();
+            match body {
+                Some(body) => body(c),
+                None => unbound(c),
+            }
+        }
+        (Some(Owner::Kernel), Some(pid)) => kernel_rule(c, native, pid),
+        _ => match c.vm.parity {
+            ParityMode::Off => Ok(unowned(native)),
+            ParityMode::Reference => {
+                let bodies: Vec<NativeFn> = borrow(&k)?
+                    .fallbacks
+                    .get(native)
+                    .map(|b| b.values().cloned().collect())
+                    .unwrap_or_default();
+                match bodies.as_slice() {
+                    [] => unbound(c),
+                    [body] => body(c),
+                    _ => Err(NotYet::not_ported(
+                        format!(
+                            "{native} on a handle nobody owns, with two crates' Reference bodies (no C++ VM holds both)"
+                        ),
+                        RECORD,
+                    )
+                    .into()),
                 }
             }
-            (Some(Owner::Kernel), Some(pid)) => kernel_rule(c, native, pid),
-            _ => Ok(unowned(native)),
-        }
-    })
+        },
+    }
 }
 
 /// What a routed native answers for a handle no one owns: false, nothing else.
@@ -457,19 +564,33 @@ fn initialize_provider(c: &mut NativeCall<'_>, pid: i32) -> Result<Value, VmErro
     // Pass 1 runs with the provider in its slot, lent out, so a behavior that reaches its own provider is refused
     // (module documentation) instead of finding it missing.
     if let Some(process) = borrow(&k)?.processes.get_mut(&pid) {
-        process.providers.push((path, None));
+        process.providers.push((path.clone(), None));
     }
     let slot = borrow(&k)?
         .processes
         .get(&pid)
         .map_or(0, |p| p.providers.len().saturating_sub(1));
     let result = p.register_consumer(c.vm).map_err(to_vm);
-    if let Some(entry) = borrow(&k)?
-        .processes
-        .get_mut(&pid)
-        .and_then(|p| p.providers.get_mut(slot))
-    {
-        entry.1 = Some(p);
+    let mut k = borrow(&k)?;
+    if let Some(process) = k.processes.get_mut(&pid) {
+        match &result {
+            // Registered: the provider goes into its slot.
+            Ok(()) => {
+                if let Some(entry) = process.providers.get_mut(slot) {
+                    entry.1 = Some(p);
+                }
+            }
+            // A failed pass 1 registers nothing: the slot goes, so the call can be made again.
+            Err(_) => {
+                if process
+                    .providers
+                    .get(slot)
+                    .is_some_and(|(q, held)| held.is_none() && *q == path)
+                {
+                    process.providers.remove(slot);
+                }
+            }
+        }
     }
     result.map(|()| Value::None)
 }

@@ -15,7 +15,7 @@ use std::rc::Rc;
 use ow_behavior::kernel::natives;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
-use ow_vm::api::{NativeCall, Vm};
+use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 use ow_vm::interp::instantiate_from_defaults;
 
@@ -307,34 +307,38 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
             },
         )?;
     }
-    // IBehaviorConsumer.GetBehaviorConsumerHandle (the pawn's ConsumerHandle) and
-    // BehaviorKernel.ActivateBehaviorOutputLink are the behavior kernel pack's (ow_behavior::kernel::natives).
+    // BehaviorKernel.ActivateBehaviorOutputLink, IBehaviorConsumer.GetBehaviorConsumerHandle and the routed kernel
+    // natives are the behavior kernel pack's (ow_behavior::kernel::natives). It runs the bodies below for the handles
+    // this crate gave out, and in Reference also for a handle nobody owns, as the C++ combat pack binds them.
+    // IBehaviorConsumer.GetBehaviorConsumerHandle on the pawn: its ConsumerHandle (Off reads it in the kernel pack).
+    let handle: NativeFn = Rc::new(|c: &mut NativeCall<'_>| {
+        let me = this(c, "GetBehaviorConsumerHandle")?;
+        required(c.vm, me, "ConsumerHandle", "combat death")
+    });
+    natives::route(vm, CONSUMER_OWNER, natives::CONSUMER_HANDLE, handle.clone())?;
+    natives::fallback(vm, CONSUMER_OWNER, natives::CONSUMER_HANDLE, handle)?;
     // BehaviorKernel.BroadcastBehaviorEventFromScript(ConsumerHandle, EventName, ...): a script behavior raises a
-    // named event on every provider the consumer has registered. The kernel pack routes the handles this crate
-    // gave out here.
-    natives::route(
-        vm,
-        CONSUMER_OWNER,
-        natives::BROADCAST_FROM_SCRIPT,
-        Rc::new(|c: &mut NativeCall<'_>| {
-            let event = arg_text(c, 1)?;
-            let pawn = consumer_of(c.vm, c.arg(0)?)?;
-            note(c.vm, format!("BroadcastBehaviorEventFromScript {event}"))?;
-            if let Some(pawn) = pawn {
-                raise(
-                    c.vm,
-                    BehaviorEvent {
-                        pawn,
-                        definition: None,
-                        killer: None,
-                        name: event,
-                        broadcast: true,
-                    },
-                )?;
-            }
-            Ok(Value::None)
-        }),
-    )?;
+    // named event on every provider the consumer has registered. The note is written for every PID, as in the C++.
+    let broadcast: NativeFn = Rc::new(|c: &mut NativeCall<'_>| {
+        let event = arg_text(c, 1)?;
+        let pawn = consumer_of(c.vm, c.arg(0)?)?;
+        note(c.vm, format!("BroadcastBehaviorEventFromScript {event}"))?;
+        if let Some(pawn) = pawn {
+            raise(
+                c.vm,
+                BehaviorEvent {
+                    pawn,
+                    definition: None,
+                    killer: None,
+                    name: event,
+                    broadcast: true,
+                },
+            )?;
+        }
+        Ok(Value::None)
+    });
+    natives::route(vm, CONSUMER_OWNER, natives::BROADCAST_FROM_SCRIPT, broadcast.clone())?;
+    natives::fallback(vm, CONSUMER_OWNER, natives::BROADCAST_FROM_SCRIPT, broadcast)?;
 
     // Expression evaluators (Behavior_Conditional's conditions; the natives' bodies are unread, so these three are the
     // data's plain reading, UNVERIFIED): a tree evaluates its root; a compound combines its two expressions by its

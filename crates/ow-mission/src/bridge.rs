@@ -31,9 +31,11 @@
 //!   `ShouldGrantAlternateReward`, `GetItemRewardsForPlayer` (empty rewards only);
 //! - the globals: `GetWillowGlobals`, `GetGearboxGlobals`, `GetBehaviorKernel`, `GetGlobalsDefinition`;
 //!   `WorldInfo.IsMenuLevel`, `Actor.IsPlayerOwned`; the pawn's `GetAWillowPawn` and `SetGameStage`;
-//! - with the director placed, his use chain (`ActivateBehaviorOutputLink`, `IsBehaviorSequenceEnabled`,
-//!   `ActivateBehaviorEventFromScript`, `ResolveBehaviorProviderDefinitionReference`, `GetBehaviorContext`,
-//!   `GetBehaviorConsumerHandle`, the `ClientGFxPlayMovie` override) and the mission screen's stand-in.
+//! - with the director placed, his use chain (`ResolveBehaviorProviderDefinitionReference`, `GetBehaviorContext`,
+//!   the `ClientGFxPlayMovie` override) and the mission screen's stand-in. The behavior kernel's natives
+//!   (`ActivateBehaviorOutputLink`, `IsBehaviorSequenceEnabled`, `ActivateBehaviorEventFromScript`,
+//!   `GetBehaviorConsumerHandle`) are the kernel pack's (`ow_behavior::kernel::natives`): the bridge claims the
+//!   director's handle there and gives its bodies for it, and in Reference also for a handle nobody owns.
 //!
 //! **Script runs** ([`MissionScript`] keeps the C++ `run`): the outermost run collects what the VM logged while it ran
 //! (`UNIMPLEMENTED ...` lines become the stub list, other new lines the notes), and a script that fails is recorded
@@ -127,7 +129,8 @@ pub const DIALOG_GLOBALS_PATH: &str = "GD_Globals.Dialog.DialogGlobals";
 /// The level cap without DLC (NATIVE_PROGRESSION.md section 3).
 pub const MAX_LEVEL: i32 = 50;
 
-/// The first handle the consumer registration gives out (UNVERIFIED: the allocator's base); -1 is invalid.
+/// Where the bridge asks the kernel pack's consumer table for the director's handle: the lowest free `PID` from here
+/// (UNVERIFIED: the game's allocator base). The C++ gives him this one; -1 is invalid.
 const MARCUS_PID: i32 = 0;
 
 /// This crate's name as the owner of the director's consumer handle (`ow_behavior::kernel::natives`).
@@ -248,6 +251,8 @@ struct Bridge {
     /// The director's AI-definition provider, out of its slot while it runs (`crate::tracker::lend`).
     marcus: RefCell<Option<Provider>>,
     has_marcus: Cell<bool>,
+    /// The director's consumer handle `PID`, allocated when his use chain is bound.
+    marcus_pid: Cell<Option<i32>>,
     /// The director's provider was lost by a failed lend: every later call on it is refused.
     marcus_lost: Cell<bool>,
 }
@@ -654,6 +659,7 @@ impl MissionScript {
                 state: RefCell::new(BState::default()),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
+                marcus_pid: Cell::new(None),
                 marcus_lost: Cell::new(false),
             }),
         };
@@ -1864,8 +1870,10 @@ impl MissionScript {
             provider.report_at_boundary(class, None, Vec::new());
         }
         // InitializeBehaviorProviders: while the handle is -1 the pawn registers as a consumer and keeps the answer.
-        if self.pid(vm, director)? == Some(-1) {
-            self.set_pid(vm, director, MARCUS_PID)?;
+        if self.pid(vm, director)? == Some(-1)
+            && let Some(pid) = self.inner.marcus_pid.get()
+        {
+            self.set_pid(vm, director, pid)?;
         }
         *self.inner.marcus.borrow_mut() = Some(provider);
         self.inner.has_marcus.set(true);
@@ -2014,7 +2022,7 @@ impl MissionScript {
             return Ok(false);
         }
         let pid = field(&vm.space, handle, "PID").map(integer32);
-        if pid != Some(MARCUS_PID) {
+        if pid.is_none() || pid != self.inner.marcus_pid.get() {
             return Ok(false);
         }
         Ok(stock_path(vm, *o)? == p.path())
@@ -2023,17 +2031,22 @@ impl MissionScript {
     /// The stock use chain's natives (NATIVE_MARCUS_USE_CHAIN.md, NATIVE_MISSION_DISPATCH.md A2,
     /// NATIVE_CONTROLLER_HELPERS.md; all UNVERIFIED), bound when the director is placed. The behavior kernel's
     /// natives are the kernel pack's (`ow_behavior::kernel::natives`: `ActivateBehaviorOutputLink`,
-    /// `WillowPawn.GetBehaviorConsumerHandle`); the director's handle is claimed there, so the two kernel natives
-    /// below reach this bridge for his handle only.
+    /// `WillowPawn.GetBehaviorConsumerHandle`). The director's handle is allocated there (the lowest free `PID` from
+    /// [`MARCUS_PID`], so a consumer the kernel registered first keeps its own), and the bodies below run for his
+    /// handle. They are also the Reference bodies for a handle nobody owns, as the C++ bridge binds these natives.
     fn bind_use(&self, vm: &mut Vm) -> Result<(), MissionError> {
-        const ROUTED: [(&str, Body); 2] = [
+        let pid = natives::allocate(vm, CONSUMER_OWNER, MARCUS_PID)?;
+        self.inner.marcus_pid.set(Some(pid));
+        const ROUTED: [(&str, Body); 3] = [
             (natives::IS_SEQUENCE_ENABLED, MissionScript::n_sequence_enabled),
             (natives::EVENT_FROM_SCRIPT, MissionScript::n_event_from_script),
+            (natives::CONSUMER_HANDLE, MissionScript::n_consumer_handle),
         ];
         for (path, body) in ROUTED {
-            natives::route(vm, CONSUMER_OWNER, path, self.native(path, body))?;
+            let f = self.native(path, body);
+            natives::route(vm, CONSUMER_OWNER, path, f.clone())?;
+            natives::fallback(vm, CONSUMER_OWNER, path, f)?;
         }
-        natives::claim(vm, MARCUS_PID, CONSUMER_OWNER)?;
         const BOUND: [(&str, Body); 2] = [
             (
                 "GearboxFramework.BehaviorHelpers.ResolveBehaviorProviderDefinitionReference",
@@ -2161,7 +2174,15 @@ impl MissionScript {
         Ok(Value::Object(if named { None } else { base }))
     }
 
-    // GetBehaviorConsumerHandle (IBehaviorConsumer): a plain read of the pawn's own ConsumerHandle field.
+    // GetBehaviorConsumerHandle (IBehaviorConsumer), as the C++ bridge binds it: the director's own ConsumerHandle; any
+    // other pawn is outside the binding. The kernel pack runs it in Reference only (Off reads every pawn's field).
+    fn n_consumer_handle(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        let Some(director) = self.director().filter(|d| c.this == Some(*d)) else {
+            return outside_binding(c);
+        };
+        get(&c.vm.space, director, "ConsumerHandle")
+    }
+
     fn n_dialog_globals(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if let Some(g) = self.inner.state.borrow().dialog_globals {
             return Ok(Value::Object(Some(g)));

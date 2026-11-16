@@ -171,6 +171,7 @@ fn gearbox() -> Vec<u8> {
     native(&mut t, kernel, "ActivateBehaviorEventFromScript", &event, None, NATIVE | STATIC);
     let broadcast = [param("Struct", "ConsumerHandle", 0, handle), param("Name", "EventName", 0, 0)];
     native(&mut t, kernel, "BroadcastBehaviorEventFromScript", &broadcast, None, NATIVE | STATIC);
+    native(&mut t, kernel, "RegisterBehaviorConsumer", &[param("Object", "Consumer", 0, object)], Some(("Struct", handle)), NATIVE | STATIC);
     t.build()
 }
 
@@ -953,9 +954,18 @@ fn the_kernel_combat_and_mission_packs_give_one_world_in_every_order() {
             let custom = Value::Name(vm.space.names.intern("Custom"));
             call(vm, natives::BROADCAST_FROM_SCRIPT, None, vec![handle.clone(), custom]).unwrap();
             // The director's handle reaches the bridge's body (no director placed: not registered, false).
-            let marcus = with_field(&vm.space, &handle, "PID", Value::Int(MARCUS_PID)).unwrap();
+            let pid = s.inner.marcus_pid.get().unwrap();
+            let marcus = with_field(&vm.space, &handle, "PID", Value::Int(pid)).unwrap();
             let idle = Value::Name(vm.space.names.intern("Idle"));
             let enabled = call(vm, natives::IS_SEQUENCE_ENABLED, None, vec![marcus, Value::Object(Some(pawn)), idle]);
+            // A handle nobody owns: Off the record's nothing; Reference the C++ combat body (its note for any PID).
+            let stranger = with_field(&vm.space, &handle, "PID", Value::Int(55)).unwrap();
+            let name = Value::Name(vm.space.names.intern("Stranger"));
+            call(vm, natives::BROADCAST_FROM_SCRIPT, None, vec![stranger, name]).unwrap();
+            // An unprepared pawn's handle: Off the plain read; Reference two crates' C++ bodies, so NotYet.
+            let other = new_object(vm, "WillowGame.WillowAIPawn").unwrap();
+            s.set_pid(vm, other, -1).unwrap();
+            let unowned = call(vm, natives::CONSUMER_HANDLE, Some(other), vec![]).map_err(|e| e.to_string());
             let (_, links) = natives::collect(vm, |vm| {
                 for id in [1, 0, 1] {
                     call(vm, natives::OUTPUT_LINK, None, vec![Value::Int(0), Value::Int(id)]).unwrap();
@@ -964,7 +974,7 @@ fn the_kernel_combat_and_mission_packs_give_one_world_in_every_order() {
             .unwrap();
             let events = ow_combat::hit::with_state(vm, |c| c.events.clone()).unwrap();
             let owners = [MARCUS_PID, 100].map(|pid| natives::owner_of(vm, pid).unwrap());
-            worlds.push(format!("{handle:?} {events:?} {enabled:?} {links:?} {owners:?} {:?}", vm.log));
+            worlds.push(format!("{handle:?} {events:?} {enabled:?} {links:?} {owners:?} {unowned:?} {:?}", vm.log));
         }
         let first = worlds[0].clone();
         for (order, world) in orders.iter().zip(&worlds) {
@@ -973,7 +983,100 @@ fn the_kernel_combat_and_mission_packs_give_one_world_in_every_order() {
         assert!(first.contains("BroadcastBehaviorEventFromScript Custom"), "{first}");
         assert!(first.contains("Ok(Bool(false)) [1, 0, 1]"), "{first}");
         assert!(first.contains(r#"[Some(Crate("ow-mission")), Some(Crate("ow-combat"))]"#), "{first}");
+        match mode {
+            ParityMode::Off => {
+                assert!(!first.contains("BroadcastBehaviorEventFromScript Stranger"), "{first}");
+                assert!(first.contains("Ok(Struct("), "{first}");
+            }
+            ParityMode::Reference => {
+                assert!(first.contains("BroadcastBehaviorEventFromScript Stranger"), "{first}");
+                assert!(first.contains("two crates' Reference bodies"), "{first}");
+            }
+        }
     }
+}
+
+/// A consumer the kernel registered before the director's use chain is bound keeps its handle: the bridge takes the
+/// next free one and answers for that one only (review r1 of PR #352).
+#[test]
+fn a_kernel_consumer_registered_first_keeps_its_handle() {
+    let mut env = Env::with_mode(false, ParityMode::Off);
+    let s = env.script.clone();
+    let vm = env.vm();
+    natives::Pack.register(vm).unwrap();
+    let skill = new_object(vm, "WillowGame.WillowAIPawn").unwrap();
+    let f = vm.find_function(natives::REGISTER_CONSUMER).unwrap();
+    let handle = vm.call(f, None, vec![Value::Object(Some(skill))]).unwrap().ret;
+    assert_eq!(field(&vm.space, &handle, "PID"), Some(&Value::Int(0)));
+    s.bind_use(vm).unwrap();
+    assert_eq!(s.inner.marcus_pid.get(), Some(1));
+    assert_eq!(natives::owner_of(vm, 0).unwrap(), Some(natives::Owner::Kernel));
+    assert_eq!(natives::owner_of(vm, 1).unwrap(), Some(natives::Owner::Crate(CONSUMER_OWNER)));
+    // The bridge answers for its own handle only: with the director's provider lost, its body refuses; the kernel's
+    // consumer gets the kernel rule (no provider registered: false).
+    s.inner.marcus_lost.set(true);
+    let f = vm.find_function(natives::IS_SEQUENCE_ENABLED).unwrap();
+    let idle = Value::Name(vm.space.names.intern("Idle"));
+    let at = |vm: &mut Vm, pid: i32| {
+        let h = with_field(&vm.space, &handle, "PID", Value::Int(pid)).unwrap();
+        vm.call(f, None, vec![h, Value::Object(Some(skill)), idle.clone()]).map(|r| r.ret)
+    };
+    assert!(matches!(at(vm, 1), Err(VmError::NotYet(_))), "the bridge's body");
+    assert_eq!(at(vm, 0).unwrap(), Value::Bool(false), "the kernel's rule");
+}
+
+/// Reference on a VM holding one crate is that crate's C++ binding (review r1 of PR #352). The bridge alone: the
+/// broadcast it never bound is the stub, a pawn other than the director is outside its binding, and an unowned
+/// sequence query is its own body (false, no stub). The combat pack alone: the sequence query it never bound is the
+/// stub, and its broadcast body writes its note for a PID it does not know.
+#[test]
+fn reference_follows_the_cxx_binding_of_the_one_crate_present() {
+    let call = |vm: &mut Vm, path: &str, this: Option<ObjRef>, args: Vec<Value>| {
+        let f = vm.find_function(path).unwrap();
+        vm.call(f, this, args).map(|r| r.ret)
+    };
+    let key = |vm: &mut Vm, path: &str| {
+        let f = vm.find_function(path).unwrap();
+        vm.function(f).and_then(|d| d.native_key.clone()).unwrap()
+    };
+    // The bridge alone.
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let s = env.script.clone();
+    let vm = env.vm();
+    vm.stub_policy = ow_vm::api::StubPolicy::LogAndZero;
+    s.bind_use(vm).unwrap();
+    let pawn = new_object(vm, "WillowGame.WillowAIPawn").unwrap();
+    s.set_pid(vm, pawn, 55).unwrap();
+    let handle = get(&vm.space, pawn, "ConsumerHandle").unwrap();
+    let name = Value::Name(vm.space.names.intern("Custom"));
+    call(vm, natives::BROADCAST_FROM_SCRIPT, None, vec![handle.clone(), name.clone()]).unwrap();
+    let stub = format!("UNIMPLEMENTED {}", key(vm, natives::BROADCAST_FROM_SCRIPT));
+    assert_eq!(vm.log.last(), Some(&stub));
+    call(vm, natives::CONSUMER_HANDLE, Some(pawn), vec![]).unwrap();
+    let outside = format!("UNIMPLEMENTED {} (outside the mission bridge binding)", key(vm, natives::CONSUMER_HANDLE));
+    assert_eq!(vm.log.last(), Some(&outside));
+    let before = vm.log.len();
+    let idle = Value::Name(vm.space.names.intern("Idle"));
+    let enabled = call(vm, natives::IS_SEQUENCE_ENABLED, None, vec![handle.clone(), Value::Object(Some(pawn)), idle.clone()]);
+    assert_eq!(enabled.unwrap(), Value::Bool(false));
+    assert_eq!(vm.log.len(), before, "the bridge's body, no stub line");
+    // The combat pack alone.
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let s = env.script.clone();
+    let vm = env.vm();
+    vm.stub_policy = ow_vm::api::StubPolicy::LogAndZero;
+    ow_combat::hit::Pack.register(vm).unwrap();
+    let pawn = new_object(vm, "WillowGame.WillowAIPawn").unwrap();
+    s.set_pid(vm, pawn, 55).unwrap();
+    let handle = get(&vm.space, pawn, "ConsumerHandle").unwrap();
+    let name = Value::Name(vm.space.names.intern("Custom"));
+    let idle = Value::Name(vm.space.names.intern("Idle"));
+    call(vm, natives::IS_SEQUENCE_ENABLED, None, vec![handle.clone(), Value::Object(Some(pawn)), idle]).unwrap();
+    let stub = format!("UNIMPLEMENTED {}", key(vm, natives::IS_SEQUENCE_ENABLED));
+    assert_eq!(vm.log.last(), Some(&stub));
+    call(vm, natives::BROADCAST_FROM_SCRIPT, None, vec![handle, name]).unwrap();
+    let events = ow_combat::hit::with_state(vm, |c| c.events.clone()).unwrap();
+    assert!(events.contains(&"BroadcastBehaviorEventFromScript Custom".to_string()), "{events:?}");
 }
 
 /// The level-up's `RunBehaviors` outside the level-up is the C++ log line; inside it is `NotYet` (lane W6-SKILLS);
