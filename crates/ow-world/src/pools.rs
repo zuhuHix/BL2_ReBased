@@ -520,35 +520,64 @@ fn integer_only(vm: &mut Vm, pool: ObjRef) -> Result<bool, VmError> {
     flag(&vm.space, resource, "bIntegerOnlyUpdates")
 }
 
-/// `ResourcePool.SetCurrentValue(Value)` (record section 4, UNVERIFIED): nothing unless the pool is authoritative;
-/// an integer-only resource truncates the value and the maximum toward zero and keeps the value's fraction in
-/// `RateRemainder`; current becomes the value clamped to minimum..maximum, the minimum winning when it exceeds the
-/// maximum; `PoolIdleDelayStartTime` becomes the world time; then the "current value changed" hook (module
-/// documentation: `NotYet` for a subclass in Off mode, checked before anything is written).
-pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError> {
+/// What [`set_current`] would store for `value`, without writing anything.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stored {
+    /// The new `CurrentValue`.
+    pub current: f32,
+    /// The new `RateRemainder` of an integer-only resource; `None` for any other (the field is not written).
+    pub remainder: Option<f32>,
+}
+
+/// The value rule of [`set_current`], shared so a caller can test the stored value before it writes (seam for
+/// W6-SKILLS' cooldown drain, review r1 of PR #342): `None` when the pool is not authoritative (nothing is stored);
+/// otherwise an integer-only resource truncates the value and the maximum toward zero and keeps the value's fraction
+/// as the remainder, and current is the value clamped to minimum..maximum, the minimum winning when it exceeds the
+/// maximum (the C++ comparison form, so a NaN value gives the minimum).
+pub fn stored_value(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<Option<Stored>, VmError> {
     if !flag(&vm.space, pool, "bIsAuthoritative")? {
-        return Ok(());
+        return Ok(None);
     }
-    current_hook_refusal(vm, pool)?;
     let mut maximum = float(&vm.space, pool, "MaxValue")?;
     let minimum = float(&vm.space, pool, "MinValue")?;
     let mut value = value;
+    let mut remainder = None;
     if integer_only(vm, pool)? {
         maximum = maximum.trunc();
         let whole = value.trunc();
-        set_field(
-            &mut vm.space,
-            pool,
-            "RateRemainder",
-            Value::Float(value - whole),
-        )?;
+        remainder = Some(value - whole);
         value = whole;
     }
     // The C++ form `std::max(minimum, std::min(value, maximum))`, written out so a NaN value gives the minimum as it
     // does there (`f32::min`/`max` would drop the NaN and give the maximum).
     let low = if maximum < value { maximum } else { value };
     let current = if minimum < low { low } else { minimum };
-    set_field(&mut vm.space, pool, "CurrentValue", Value::Float(current))?;
+    Ok(Some(Stored { current, remainder }))
+}
+
+/// `ResourcePool.SetCurrentValue(Value)` (record section 4, UNVERIFIED): nothing unless the pool is authoritative;
+/// an integer-only resource truncates the value and the maximum toward zero and keeps the value's fraction in
+/// `RateRemainder`; current becomes the value clamped to minimum..maximum, the minimum winning when it exceeds the
+/// maximum ([`stored_value`]); `PoolIdleDelayStartTime` becomes the world time; then the "current value changed" hook
+/// (module documentation: `NotYet` for a subclass in Off mode, checked before anything is written).
+pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError> {
+    if !flag(&vm.space, pool, "bIsAuthoritative")? {
+        return Ok(());
+    }
+    current_hook_refusal(vm, pool)?;
+    let Some(stored) = stored_value(vm, pool, value)? else {
+        return Ok(());
+    };
+    if let Some(r) = stored.remainder {
+        set_field(&mut vm.space, pool, "RateRemainder", Value::Float(r))?;
+    }
+    set_field(
+        &mut vm.space,
+        pool,
+        "CurrentValue",
+        Value::Float(stored.current),
+    )?;
     let t = world_time(vm)?;
     set_field(
         &mut vm.space,

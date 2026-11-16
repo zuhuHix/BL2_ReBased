@@ -11,13 +11,18 @@
 //!    2026-11-03 install (31 skills, 50 effect rows, 32 on an attribute and a target, 34 constraints).
 //! 3. Suspension's info-box lines through [`crate::skills::skill_lines`].
 //! 4. The lock duration: the installed `InstancedDesignerAttribute.SetBaseValue` on `Att_Phaselock_Duration`'s base,
-//!    Suspension's modifier from this crate's `Skill.CalculateModifierValue` native on the installed effect data, on
-//!    the attribute's `Value` stack (`ow-attr`), for grades 0 to 5, against `5 + 0.5 g`. The game's own chain (the
-//!    designer context resolver and the pawn's instanced attribute) is tried first and where it stops is written.
-//! 5. The schedule from the installed archetype's numbers.
+//!    Suspension's modifier from [`crate::action_skill::calculate_modifier_value`] (called directly, not through the
+//!    VM) on the installed effect data, on the attribute's `Value` stack (`ow-attr`), for grades 0 to 5, against the
+//!    record's `5 + 0.5 g`. What this checks is the installed data (base 5, Suspension 0.5 g) through that path; the
+//!    stack rule is `ow-attr`'s on both sides. The game's own chain (the designer context resolver and the pawn's
+//!    instanced attribute) is tried first and where it stops is written.
+//! 5. The schedule from the installed archetype's numbers (the [`super::Schedule`] oracle).
 //! 6. The lift and the bob: the installed `LiftActionSkill.GetLiftLocation` and `GetBobLocation` on the installed
-//!    archetype, frame by frame, with [`super::Pack`]'s `VInterpTo`, the bob against [`super::bob_target_z`] and
-//!    [`super::vinterp_to`] (the rule confirmed live, NATIVE_PHASELOCK_TARGETING.md section 5).
+//!    archetype, frame by frame, with `ow-vm`'s `VInterpTo`. Independent of `VInterpTo`: the script's bob target
+//!    (before the smoothing) against the record's formula ([`super::oracle::bob_target_z`]). The smoothed bob is
+//!    compared with [`super::oracle::vinterp_to`], the record's rule written apart from `ow-vm`'s binding; the rule was
+//!    matched live to RMS 0.001 uu (NATIVE_PHASELOCK_TARGETING.md section 5), and `VInterpTo`'s precision is
+//!    UNVERIFIED.
 //! 7. `LiftActionSkill.OnActionSkillStarted`, to write where the whole cast stops.
 
 use std::fmt::Write as _;
@@ -133,6 +138,13 @@ fn new_of(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
     ow_vm::interp::instantiate_from_defaults(vm, c).map_err(|e| format!("{class}: {e}"))
 }
 
+/// The record's lock duration at Suspension grade `g` (PHASELOCK_STOCK_DATA.md: base 5, +0.5 per grade from grade 1),
+/// the number the installed data are checked against.
+fn expected(g: i32) -> f32 {
+    // An int grade 0..=5 to float is exact.
+    5.0 + 0.5 * g as f32
+}
+
 fn g9(x: f32) -> String {
     ow_core::fmt::fmt_g(f64::from(x), 9)
 }
@@ -158,11 +170,10 @@ fn run_all(root: PathBuf) -> String {
         Rc::new(AttributeSystem::standard().unwrap()),
         ParityMode::Off,
     );
-    let packs: [&dyn NativePack; 4] = [
+    let packs: [&dyn NativePack; 3] = [
         &natives_core::Pack,
         &crate::tree::Pack,
         &crate::action_skill::Pack,
-        &super::Pack,
     ];
     let mut w = match World::new(vm, BalanceState::new(snapshot()), &packs) {
         Ok(w) => w,
@@ -209,7 +220,7 @@ fn maya_tree(vm: &mut Vm) -> Result<SkillTree, String> {
     let t = find(vm, TREE)?;
     let mut cx = EvalCx::new(vm);
     let def = read_tree(&mut cx, t).map_err(|e| e.to_string())?;
-    SkillTree::initialize(&mut cx, def, &[]).map_err(|e| e.to_string())
+    SkillTree::initialize(&mut cx, def, None).map_err(|e| e.to_string())
 }
 
 fn name_of(vm: &Vm, o: ObjRef) -> String {
@@ -218,7 +229,7 @@ fn name_of(vm: &Vm, o: ObjRef) -> String {
 
 fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     let mut tree = maya_tree(vm)?;
-    let def = tree.def.clone();
+    let def = tree.def().clone();
     let mut cells_match = 0;
     let mut tiers = 0;
     for (i, b) in def.branches.iter().enumerate() {
@@ -249,21 +260,26 @@ fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     let _ = writeln!(
         out,
         "skills in the tree: {}; action skill set: {}",
-        tree.skills.len(),
-        tree.action_skill.is_some()
+        tree.skills().len(),
+        tree.action_skill().is_some()
     );
     let motion = def
         .branches
         .iter()
         .position(|b| name_of(vm, b.object).ends_with("Branch_Motion"))
         .ok_or("no Motion branch")?;
-    let action = tree.action_skill.ok_or("no action skill")?;
+    let action = tree.action_skill().ok_or("no action skill")?;
     let before = tree
-        .upgrade(def.branches[motion].tiers[0].skills[0])
+        .upgrade(
+            &mut EvalCx::new(vm),
+            def.branches[motion].tiers[0].skills[0],
+        )
         .map_err(|e| e.to_string())?;
-    let up = tree.upgrade(action).map_err(|e| e.to_string())?;
+    let up = tree
+        .upgrade(&mut EvalCx::new(vm), action)
+        .map_err(|e| e.to_string())?;
     let opened = (1..def.branches.len())
-        .filter(|&b| tree.unlocked[b][0])
+        .filter(|&b| tree.unlocked(b, 0).unwrap_or(false))
         .count();
     let _ = writeln!(
         out,
@@ -273,7 +289,10 @@ fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     let first = def.branches[motion].tiers[0].skills[0];
     let mut spent = 0;
     for _ in 0..5 {
-        spent += i32::from(tree.upgrade(first).map_err(|e| e.to_string())?);
+        spent += i32::from(
+            tree.upgrade(&mut EvalCx::new(vm), first)
+                .map_err(|e| e.to_string())?,
+        );
     }
     let suspension = def.branches[motion]
         .tiers
@@ -284,13 +303,15 @@ fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         .ok_or("no Suspension")?;
     let mut grades = Vec::new();
     for _ in 0..6 {
-        let ok = tree.upgrade(suspension).map_err(|e| e.to_string())?;
+        let ok = tree
+            .upgrade(&mut EvalCx::new(vm), suspension)
+            .map_err(|e| e.to_string())?;
         grades.push(format!("{ok}:{}", tree.grade(suspension).unwrap_or(-1)));
     }
     let _ = writeln!(
         out,
         "spend: tier-1 skill x5 {spent}/5; Motion tier 2 open: {}; Suspension upgrades {}",
-        tree.unlocked[motion][1],
+        tree.unlocked(motion, 1).unwrap_or(false),
         grades.join(" ")
     );
     let _ = writeln!(
@@ -303,7 +324,7 @@ fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
 
 fn tree_skills(tree: &SkillTree) -> Vec<ObjRef> {
     // The action skill first, then every branch's tiers in tree order (prepare_skill_effects.main's order).
-    tree.skills.iter().map(|s| s.definition).collect()
+    tree.skills().iter().map(|s| s.definition).collect()
 }
 
 fn part_skills(vm: &mut Vm, out: &mut String) -> Result<(), String> {
@@ -483,7 +504,7 @@ fn part_duration(vm: &mut Vm, out: &mut String) -> Result<(), String> {
             modifier = Some(m);
         }
         let value = float(vm, instanced, "Value")?;
-        let same = value.to_bits() == super::maya_lock_duration(g).to_bits();
+        let same = value.to_bits() == expected(g).to_bits();
         equal += usize::from(same);
         let _ = writeln!(
             out,
@@ -498,7 +519,7 @@ fn part_duration(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     }
     let _ = writeln!(
         out,
-        "lock duration bit-equal to 5 + 0.5 g at {equal}/6 grades"
+        "lock duration bit-equal to 5 + 0.5 g at {equal}/6 grades (what this checks: the installed data give base 5 and Suspension 0.5 g, through the installed SetBaseValue and the stack; the stack rule is not checked against anything but itself)"
     );
     Ok(())
 }
@@ -518,7 +539,7 @@ fn part_schedule(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         g9(buffer)
     );
     for g in 0..=5 {
-        let s = super::Schedule::new(lift, super::maya_lock_duration(g), 1.0, fade, buffer);
+        let s = super::Schedule::new(lift, expected(g), 1.0, fade, buffer);
         let _ = writeln!(
             out,
             "grade {g}: lock at {} outro {} release {} end {}",
@@ -616,9 +637,9 @@ fn part_lift(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         let target = [
             f64::from(end[0]),
             f64::from(end[1]),
-            f64::from(super::bob_target_z(end[2], amp, freq, now - 0.0)),
+            f64::from(super::oracle::bob_target_z(end[2], amp, freq, now - 0.0)),
         ];
-        prev = super::vinterp_to(prev, target, f64::from(dt), 1.0);
+        prev = super::oracle::vinterp_to(prev, target, f64::from(dt), 1.0);
         frames += 1;
         let same = (0..3).all(|k| f64::from(got[k]).to_bits() == prev[k].to_bits());
 
@@ -640,16 +661,16 @@ fn part_lift(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         )?;
         let z = axes(vm, &v)?[2];
         targets += 1;
-        let rule = super::bob_target_z(end[2], amp, freq, t);
+        let rule = super::oracle::bob_target_z(end[2], amp, freq, t);
         targets_equal += usize::from(z.to_bits() == rule.to_bits());
     }
     let _ = writeln!(
         out,
-        "bob target (before the smoothing) bit-equal at {targets_equal}/{targets} times"
+        "bob target before the smoothing (independent of VInterpTo): the script equals the record's formula at {targets_equal}/{targets} times"
     );
     let _ = writeln!(
         out,
-        "bob: {frames} frames, bit-equal to the confirmed rule at {equal}/{frames}, largest Z difference {}, highest point {} above the lift's end",
+        "bob: {frames} frames, the script with ow-vm's VInterpTo bit-equal to the record's rule restated in this test (oracle::vinterp_to, written apart from it) at {equal}/{frames}, largest Z difference {}, highest point {} above the lift's end; the rule itself was matched live to RMS 0.001 uu, and VInterpTo's precision is UNVERIFIED",
         ow_core::fmt::fmt_g(worst, 6),
         g9(peak)
     );

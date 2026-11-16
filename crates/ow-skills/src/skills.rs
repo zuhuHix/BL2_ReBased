@@ -1396,7 +1396,11 @@ pub fn skill_lines(
     for e in &def.effects {
         values.push((reader.value(cx, &e.base)?, reader.value(cx, &e.per_grade)?));
     }
-    let count = usize::try_from(grades.max(-1) + 1).unwrap_or(0);
+    let count = grades
+        .max(-1)
+        .checked_add(1)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| SkillError::bad("a grade count out of range"))?;
     let mut lines: Vec<Vec<Line>> = vec![Vec::new(); count];
     let mut notes = Vec::new();
     let mut used = vec![false; def.effects.len()];

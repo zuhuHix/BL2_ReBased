@@ -2,17 +2,20 @@
 //! PHASELOCK_STOCK_DATA.md, the score oracle and the magnetism table of NATIVE_PHASELOCK_TARGETING.md section 3), which
 //! the docs may hold; everything else is invented (AGENTS.md rule 9).
 
-use std::rc::Rc;
-
-use ow_attr::AttributeSystem;
-use ow_core::ParityMode;
-use ow_defs::DefStore;
-use ow_object::layout::{PropKind, PropertyDecl};
-use ow_object::value::{StructValue, Value};
-use ow_vm::api::{FunctionDecl, Vm};
-
+use super::oracle::{bob_target_z, vinterp_to};
 use super::*;
-use crate::skills::fixture::Fx;
+
+/// Maya's lock duration with Suspension at `grade`, from the record's data (base 5; Suspension PostAdd 0.5 at grade 1,
+/// +0.5 per grade: PHASELOCK_STOCK_DATA.md), through the stack rule. A test helper: the game reads both numbers from
+/// the installed data, and other modifiers (Thoughtlock and the rest) join the same stack.
+fn maya_lock_duration(grade: i32) -> f32 {
+    if grade < 1 {
+        return lock_duration(5.0, &[]);
+    }
+    // grade >= 1: the effect's steps are grade - 1 (int -> float, exact for a tree's grades).
+    let post = 0.5 + 0.5 * (grade - 1) as f32;
+    lock_duration(5.0, &[(ModifierType::PostAdd, post)])
+}
 
 /// Phaselock's duration `5 + 0.5 g` for Suspension grades 0 to 5 (the lane's named rule).
 #[test]
@@ -214,67 +217,4 @@ fn the_bob_and_vinterp_to() {
         t,
         "clamped to the whole difference"
     );
-}
-
-#[test]
-fn the_vinterp_to_native_is_bound_by_path_and_returns_a_vector() {
-    let mut fx = Fx::new();
-    let object = fx.object;
-    let decls = ["X", "Y", "Z"]
-        .map(|n| PropertyDecl::new(fx.w.space.names.intern(n), PropKind::Float))
-        .to_vec();
-    let vector =
-        fx.w.space
-            .classes
-            .define_struct("Core.Object.Vector", None, decls)
-            .unwrap();
-    let space = std::mem::take(&mut fx.w.space);
-    let mut vm = Vm::new(
-        space,
-        DefStore::new_empty(),
-        Rc::new(AttributeSystem::standard().unwrap()),
-        ParityMode::Off,
-    );
-    let params = ["Current", "Target", "DeltaTime", "InterpSpeed"]
-        .iter()
-        .zip([
-            PropKind::Struct(vector),
-            PropKind::Struct(vector),
-            PropKind::Float,
-            PropKind::Float,
-        ])
-        .map(|(n, k)| PropertyDecl::new(vm.space.names.intern(n), k))
-        .collect();
-    let decl = FunctionDecl::native(
-        ow_core::ObjectPath::parse(VINTERP_TO).unwrap(),
-        "Object.VInterpTo(vector,vector,float,float)",
-    )
-    .with_owner(object)
-    .with_static(true)
-    .with_params(params)
-    .with_result(PropertyDecl::new(
-        vm.space.names.intern("ReturnValue"),
-        PropKind::Struct(vector),
-    ));
-    let f = vm.declare_function(decl).unwrap();
-    Pack.register(&mut vm).unwrap();
-    let make = |vm: &Vm, z: f32| {
-        let layout = vm.space.classes.struct_layout(vector).unwrap();
-        let mut v = match layout.zero() {
-            Value::Struct(s) => StructValue::clone(s),
-            _ => panic!(),
-        };
-        v.fields[2] = Value::Float(z);
-        Value::Struct(Rc::new(v))
-    };
-    let (from, to) = (make(&vm, 0.0), make(&vm, 30.0));
-    let r = vm
-        .call(
-            f,
-            None,
-            vec![from, to, Value::Float(0.1), Value::Float(1.0)],
-        )
-        .unwrap()
-        .ret;
-    assert_eq!(r, make(&vm, 3.0));
 }

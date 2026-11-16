@@ -547,10 +547,22 @@ fn conditions_as_skill_effects_test() {
 fn output_must_be_inside_local_as_skill_effects_test() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let good = repo.join("local").join("ui").join("run");
-    assert!(
-        local_output(&good, &repo)
-            .unwrap()
-            .ends_with("local/ui/run")
+    // The expected path, normalized here on its own: the crate folder's two parents, then local/ui/run.
+    let mut parts: Vec<std::ffi::OsString> = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .components()
+        .map(|c| c.as_os_str().to_os_string())
+        .collect();
+    parts.truncate(parts.len() - 2);
+    let expect = parts
+        .iter()
+        .collect::<PathBuf>()
+        .join("local")
+        .join("ui")
+        .join("run");
+    assert_eq!(
+        local_output(&good, &repo).unwrap(),
+        expect,
+        "the normalized path, not a suffix"
     );
     for bad in [
         repo.join("docs").join("verification"),

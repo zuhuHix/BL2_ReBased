@@ -774,6 +774,32 @@ fn floats(vm: &mut Vm) -> Result<(), VmError> {
         }
         Ok(fl(current + distance * cclamp(delta * speed, 0.0, 1.0)))
     })?;
+    // VInterpTo (granted to lane W6-SKILLS as a seam edit, review r1 of PR #342; NATIVE_PHASELOCK_TARGETING.md section
+    // 5, read from the executable, not in the C++): the target when the speed is not positive or the squared distance
+    // is below 0.0001; otherwise the current vector moved by `clamp(delta x speed, 0, 1)` of the difference. Each axis
+    // in double and rounded once, as FInterpTo here; the native's own precision is UNVERIFIED (the bob it smooths was
+    // matched live to RMS 0.001 uu). No C++ counterpart: a C++ sweep that reaches it logs a stub where this binds it.
+    reg(vm, "Object.VInterpTo(vector,vector,float,float)", |c| {
+        let (current, target) = (vec3(c, 0)?, vec3(c, 1)?);
+        let (delta, speed) = (float(c, 2)?, float(c, 3)?);
+        let d = [
+            target[0] - current[0],
+            target[1] - current[1],
+            target[2] - current[2],
+        ];
+        if speed <= 0.0 || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 0.0001 {
+            return make_vector(c.vm, target);
+        }
+        let alpha = cclamp(delta * speed, 0.0, 1.0);
+        make_vector(
+            c.vm,
+            [
+                current[0] + d[0] * alpha,
+                current[1] + d[1] * alpha,
+                current[2] + d[2] * alpha,
+            ],
+        )
+    })?;
     reg(
         vm,
         "Object.FInterpConstantTo(float,float,float,float)",
@@ -2179,6 +2205,34 @@ mod tests {
         assert_eq!(
             h.call(to, vec![f(0.0), f(10.0), f(-1.0), f(2.0)]),
             f(0.0),
+            "alpha clamped to 0"
+        );
+
+        let vto = "Object.VInterpTo(vector,vector,float,float)";
+        let (zero, up) = (h.vector(0.0, 0.0, 0.0), h.vector(0.0, 0.0, 30.0));
+        assert_eq!(
+            h.call(vto, vec![zero.clone(), up.clone(), f(0.1), f(0.0)]),
+            up,
+            "no speed: the target"
+        );
+        let close = h.vector(0.0, 0.0, 0.009);
+        assert_eq!(
+            h.call(vto, vec![zero.clone(), close.clone(), f(0.1), f(1.0)]),
+            close,
+            "squared distance below 0.0001: the target"
+        );
+        assert_eq!(
+            h.call(vto, vec![zero.clone(), up.clone(), f(0.1), f(1.0)]),
+            h.vector(0.0, 0.0, 3.0)
+        );
+        assert_eq!(
+            h.call(vto, vec![zero, up.clone(), f(5.0), f(1.0)]),
+            up,
+            "alpha clamped to 1"
+        );
+        assert_eq!(
+            h.call(vto, vec![h.vector(1.0, 2.0, 3.0), up, f(-1.0), f(1.0)]),
+            h.vector(1.0, 2.0, 3.0),
             "alpha clamped to 0"
         );
 
