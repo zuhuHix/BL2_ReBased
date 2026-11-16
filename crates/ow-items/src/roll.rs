@@ -119,6 +119,12 @@ impl AttrWorld for RollWorld<'_> {
         self.inner.global_slots()
     }
 
+    /// The inner world's clock: a read, which draws nothing (decision 2026-11-16-80). `currency_on_hand` is not
+    /// forwarded: it runs script, which could draw from the inner world's generators (the trait default answers).
+    fn time_seconds(&mut self) -> Result<Option<f32>, AttrError> {
+        self.inner.time_seconds()
+    }
+
     fn attribute_changed(
         &mut self,
         owner: ObjRef,

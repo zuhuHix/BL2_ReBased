@@ -38,6 +38,14 @@ pub(crate) struct World {
     pub skills: Option<Vec<(ObjRef, Option<ObjRef>)>>,
     /// Answers to `EngineQuery::LocalPlayerPool` by resource; `None` here: the query is not modelled.
     pub local_pools: Option<Vec<(ObjRef, Option<ObjRef>)>>,
+    /// The controller list (`EngineQuery::WorldController`) and each controller's pools by resource
+    /// (`EngineQuery::ControllerPool`, `(controller, resource, pool)`); `None`: not modelled (decision 2026-11-16-80).
+    pub controllers: Option<Vec<ObjRef>>,
+    pub controller_pools: Option<Vec<(ObjRef, ObjRef, Option<ObjRef>)>>,
+    /// `AttrWorld::time_seconds`: `None` here answers the trait default; `Some(None)` is "no world".
+    pub clock: Option<Option<f32>>,
+    /// `AttrWorld::currency_on_hand` answers: `(info, form, amount)`; `None` answers the trait default.
+    pub currency: Option<Vec<(ObjRef, u8, i32)>>,
     /// How many change notifications [`AttrWorld::attribute_changed`] received.
     pub notified: u32,
 }
@@ -68,6 +76,18 @@ impl AttrWorld for World {
                 .flatten()
                 .find(|(r, _)| *r == resource)
                 .and_then(|(_, p)| *p)),
+            (EngineQuery::WorldController { index }, _) if self.controllers.is_some() => Ok(self
+                .controllers
+                .iter()
+                .flatten()
+                .nth(usize::try_from(index).unwrap())
+                .copied()),
+            (EngineQuery::ControllerPool { resource }, _) if self.controller_pools.is_some() => Ok(self
+                .controller_pools
+                .iter()
+                .flatten()
+                .find(|(c, r, _)| *c == source && *r == resource)
+                .and_then(|(_, _, p)| *p)),
             _ => Err(NotYet::layer_absent(
                 format!("engine query {q:?} from {source:?}"),
                 "ow-world",
@@ -78,6 +98,18 @@ impl AttrWorld for World {
     }
     fn global_slots(&mut self) -> &mut GlobalSlots {
         &mut self.slots
+    }
+    fn time_seconds(&mut self) -> Result<Option<f32>, AttrError> {
+        match self.clock {
+            Some(t) => Ok(t),
+            None => Err(NotYet::layer_absent("the clock", "ow-vm", "test world").into()),
+        }
+    }
+    fn currency_on_hand(&mut self, info: ObjRef, form: u8) -> Result<i32, AttrError> {
+        match &self.currency {
+            Some(rows) => Ok(rows.iter().find(|(i, f, _)| *i == info && *f == form).map_or(0, |r| r.2)),
+            None => Err(NotYet::layer_absent("GetCurrencyOnHand", "ow-vm", "test world").into()),
+        }
     }
     fn attribute_changed(
         &mut self,
@@ -318,6 +350,19 @@ impl Fx {
             )
             .unwrap();
         let fields = vec![
+            d(&mut space, "ContextName", PropKind::Name),
+            d(&mut space, "SavedValue", PropKind::Float),
+            d(&mut space, "ExpirationTime", PropKind::Float),
+        ];
+        let saved = space
+            .classes
+            .define_struct(
+                "GearboxFramework.RandomAttributeValueResolver.SavedRandomValue",
+                None,
+                fields,
+            )
+            .unwrap();
+        let fields = vec![
             d(&mut space, "AssociatedManufacturerName", PropKind::Name),
             d(&mut space, "ValueIfMatched", PropKind::Struct(aid)),
         ];
@@ -436,6 +481,8 @@ impl Fx {
                     ("LowerBound", PropKind::Struct(aid)),
                     ("UpperBound", PropKind::Struct(aid)),
                     ("bUseIntegerRandomization", PropKind::Bool),
+                    ("ValueLifetime", PropKind::Struct(aid)),
+                    ("SavedRandomValues", PropKind::Array(Box::new(PropKind::Struct(saved)))),
                 ],
             ),
             (
@@ -601,6 +648,10 @@ impl Fx {
             streams: Vec::new(),
             skills: None,
             local_pools: None,
+            controllers: None,
+            controller_pools: None,
+            clock: None,
+            currency: None,
             notified: 0,
         };
         let c = Classes {

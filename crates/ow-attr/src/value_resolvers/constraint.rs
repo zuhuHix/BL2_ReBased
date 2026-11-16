@@ -9,8 +9,10 @@
 //! - `ParityMode::Reference`, the C++ stand-in (`src/progression.cpp`, `ConstraintAttributeValueResolver`): the
 //!   running value (the chain's previous result) raised to `MinValue` when the minimum is enabled, then lowered to
 //!   `MaxValue` when the maximum is enabled, each bound evaluated on the context only when enabled.
-//! - `ParityMode::Off`: `NotYet { NotRead }`. The analyst lane read the native (NATIVE_ATTR_RESOLVERS.md section 5)
-//!   and leaves the Off rule to a fresh implementer (docs/LANE_BRIEF.md, "Clean room").
+//! - `ParityMode::Off`, the native as NATIVE_ATTR_RESOLVERS.md section 5 reads it (lane FIX-ATTR-RESOLVERS-OFF, the
+//!   fresh implementer, decision 2026-11-16-80): the same clamp (the minimum, evaluated only when enabled, raises a
+//!   running value at or below it; then the maximum, evaluated only when enabled, lowers a value above it; neither
+//!   enabled: the running value unchanged, nothing evaluated). One rule serves both modes. UNVERIFIED in the game.
 //!
 //! **Writes** (add, remove, set-base): `NotYet` in both modes.
 
@@ -51,13 +53,7 @@ fn read(
     context: ObjRef,
     previous: f32,
 ) -> Result<f32, AttrError> {
-    if parity(cx) != ParityMode::Reference {
-        return Err(NotYet::not_read(
-            "ConstraintAttributeValueResolver in Off mode: the analyst note's rule awaits a fresh implementer",
-            RECORD,
-        )
-        .into());
-    }
+    // Both modes: the note's rule is the stand-in's (module documentation).
     let range = required(cx, resolver, "Constraints")?;
     let mut value = previous;
     if let Some(min) = bound(sys, cx, &range, "bEnableMinValueRestriction", "MinValue", context)? {

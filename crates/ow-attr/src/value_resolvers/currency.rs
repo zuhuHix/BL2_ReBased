@@ -1,8 +1,8 @@
 //! `WillowGame.CurrencyAttributeValueResolver`: an amount of currency on hand as an attribute value (lane
 //! FIX-ATTR-RESOLVERS, decision 2026-11-16-73). The class declares `FormOfCurrency` (an `ECurrencyType` byte) and no
-//! script function: its get is a native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer. The respawn fee
-//! (`GlobalsDefinition.TeleportCost`, 0.07 of the cash) reads it through a controller context. **Nothing here is a
-//! rule of the game**, and nothing is verified in the running game.
+//! script function: its get is a native read in NATIVE_ATTR_RESOLVERS.md; the Off implementation below follows
+//! that note. The respawn fee (`GlobalsDefinition.TeleportCost`, 0.07 of the cash) reads it through its context
+//! resolver chain (decision 2026-11-16-80). **The native reading remains UNVERIFIED in the running game**.
 //!
 //! **Parity modes** (architecture R3):
 //!
@@ -12,8 +12,15 @@
 //!   slot without `CurrentAmount` is what the C++ refuses ("unsupported currency attribute"), here
 //!   `NotYet { NotRead }` naming it. The live fee rows match this arithmetic (COMBAT_DOWN_RESPAWN.md), which says
 //!   nothing about the native.
-//! - `ParityMode::Off`: `NotYet { NotRead }`; the native is read in NATIVE_ATTR_RESOLVERS.md,
-//!   and the Off rule awaits a fresh implementer.
+//! - `ParityMode::Off`, the native as NATIVE_ATTR_RESOLVERS.md section 2 reads it (lane FIX-ATTR-RESOLVERS-OFF, the
+//!   fresh implementer, decision 2026-11-16-80): a context that is not a `WillowGame.WillowPlayerReplicationInfo` (or
+//!   a subclass) answers 0.0, **a controller included**: the native does not move to the controller's replication
+//!   info (whether an attribute reaches the info is its context chain's business). On a replication info, its
+//!   `GetCurrencyOnHand(FormOfCurrency)` as the script call would answer it ([`AttrWorld::currency_on_hand`]: the
+//!   VM's binding of that native, `ow_combat::down`), the int converted to a float. The cast's class is the note's
+//!   medium-confidence reading. UNVERIFIED in the game.
+//!
+//! [`AttrWorld::currency_on_hand`]: crate::api::AttrWorld::currency_on_hand
 //!
 //! **Writes** (add, remove, set-base): `NotYet` in both modes (`NotPorted` in Reference: the C++ has no write).
 
@@ -22,7 +29,7 @@ use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 
 use crate::api::{AttrError, EvalCx, Storage, ValueResolver};
-use crate::eval::{byte, ensure_loaded, field, number, object, parity, property};
+use crate::eval::{byte, ensure_loaded, field, number, object, parity, property, required};
 use crate::registry::AttributeSystem;
 
 /// The analyst note read by a fresh implementer of the Off rule.
@@ -90,15 +97,26 @@ fn reference(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f
     number("CurrentAmount", amount)
 }
 
-fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
-    if parity(cx) != ParityMode::Reference {
-        return Err(NotYet::not_read(
-            "CurrencyAttributeValueResolver in Off mode: native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer",
-            RECORD,
-        )
-        .into());
+/// The replication-info class the native's cast names (NATIVE_ATTR_RESOLVERS.md section 2, medium confidence).
+pub(crate) const REPLICATION_INFO: &str = "WillowGame.WillowPlayerReplicationInfo";
+
+/// The native's value (module documentation).
+fn native(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
+    if !crate::context_resolvers::is_a(cx.world.parts().space, context, REPLICATION_INFO)? {
+        return Ok(0.0);
     }
-    reference(cx, resolver, context)
+    let form = byte("FormOfCurrency", &required(cx, resolver, "FormOfCurrency")?)?;
+    let amount = cx.world.currency_on_hand(context, form)?;
+    // The int to single precision (the note: "the int converted to a float"); an amount past 2^24 rounds, as a
+    // float conversion does.
+    Ok(amount as f32)
+}
+
+fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
+    match parity(cx) {
+        ParityMode::Reference => reference(cx, resolver, context),
+        _ => native(cx, resolver, context),
+    }
 }
 
 impl ValueResolver for Currency {

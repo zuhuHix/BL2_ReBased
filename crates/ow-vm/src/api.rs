@@ -1137,6 +1137,36 @@ impl AttrWorld for Vm {
         }
     }
 
+    /// The VM's clock: the running world's `TimeSeconds` (decision 2026-11-16-80).
+    fn time_seconds(&mut self) -> Result<Option<f32>, AttrError> {
+        Ok(Some(self.clock.time_seconds()))
+    }
+
+    /// Calls `GetCurrencyOnHand(form)` on `info` (virtual lookup on its loaded class code, in its state, as
+    /// `ow_combat::hit::call_method` does), so the answer is whatever the VM has
+    /// bound for it (`ow_combat::down` binds the native; unbound, the stub policy's answer or its `NotYet`). A class
+    /// with no such function is `NotYet { NotRead }`; an answer that is not an int is bad data (decision
+    /// 2026-11-16-80).
+    fn currency_on_hand(&mut self, info: ObjRef, form: u8) -> Result<i32, AttrError> {
+        let (class, state) = {
+            let o = self.space.heap.get(info)?;
+            (o.class, o.state)
+        };
+        let Some(function) = self.find_method(class, "GetCurrencyOnHand", state)? else {
+            return Err(NotYet::not_read(
+                "GetCurrencyOnHand: the replication info's class has no such function",
+                "NATIVE_ATTR_RESOLVERS.md section 2",
+            )
+            .into());
+        };
+        match self.call(function, Some(info), vec![Value::Byte(form)])?.ret {
+            Value::Int(n) => Ok(n),
+            other => Err(AttrError::BadData {
+                reason: format!("GetCurrencyOnHand returned a {}, not an int", other.kind_name()).into(),
+            }),
+        }
+    }
+
     /// The VM's own pair ([`Vm::global_slots`]).
     fn global_slots(&mut self) -> &mut GlobalSlots {
         &mut self.global_slots
