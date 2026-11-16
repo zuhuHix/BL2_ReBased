@@ -79,8 +79,9 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 
 ### Host (Rust, H1): proposed by lane H1, 2026-11-16
 The host's first checks (decision `docs/decisions/2026-11/2026-11-16-44-engine-crates-wgpu-and-winit-in-ow-host-host-skeleton-h1.md`).
-CI's Rust job already runs the build, the tests, `crate_edges_test.py` (through ctest) and the refusal check;
-the one new CI step proposed here is `--headless-probe`, which waits for the maintainer's yes on a workflow change
+CI already runs most of them: the "Windows / Rust workspace" job runs the build, the tests and the refusal check, and
+the Windows / MSVC jobs run ctest, which includes `crate_edges_test.py` (`py-crate_edges`). The one new CI step
+proposed here is `--headless-probe`, which waits for the maintainer's yes on a workflow change
 (`.github/workflows/ci.yml` is unchanged).
 - **CI, and every change to `ow-host`, `Cargo.lock` or `tests/crate_edges_test.py`:** `cargo build --workspace
   --locked`, `cargo test --workspace --locked` (the `ow-host` unit tests among them), `python tests/crate_edges_test.py`
@@ -93,7 +94,7 @@ the one new CI step proposed here is `--headless-probe`, which waits for the mai
   exit 0 with 300 frames presented. Record the adapter, the backend, the median frame time and the wall time. The
   vsync median should be close to the monitor's refresh interval; the `--no-vsync` median is the loop's throughput.
   A `--frames N` run fails by itself after 60 s plus 1 s per frame (`--time-limit S` sets another limit), also with
-  the window minimised.
+  the window minimised (runs below).
 - **One run per machine:** every window run (`--window`, `--frames`) is a heavy run. Take the machine-wide lock first
   and release it after the process has exited: `. ./tools/ue_lock.ps1; Enter-OwUeLock -Owner <lane>; try { ... }
   finally { Exit-OwUeLock }`. `--headless-probe` and the install check open no window and need no lock. The
@@ -104,7 +105,19 @@ GeForce RTX 4070", Vulkan, exit 0. `--frames 300 --no-vsync`: 300 presented, 0 s
 max 0.508) over 299 intervals, 642 ms wall. `--frames 300` with vsync: 300 presented, exit 0, median 252 ms. Dx12 gave
 the same. The screen had been idle for about 18 hours, so the displays were very likely asleep; the vsync figure is
 `UNVERIFIED` until it is repeated with the screen on (165 Hz monitor, 6.1 ms expected). `crate_edges_test.py` 19
-tests OK. Review r1 runs (minimised window, deadline) are in the PR #344 report.
+tests OK.
+
+**Minimised-window runs (2026-11-16, same desktop and build, after review r1 of PR #344, under the lock).** The
+window was minimised and restored with `ShowWindow` on the window of the process the script had started. Wall times
+are from process start to exit.
+- `ow-host --game <install> --frames 300`: exit 0, 300 presented, 0 skipped, median 252.371 ms, 76.8 s wall.
+- `ow-host --game <install> --frames 48`, minimised at 2.0 s, restored at 6.1 s: exit 0, 48 presented, 319 skipped,
+  13.8 s wall.
+- `ow-host --game <install> --frames 100000 --time-limit 15`, minimised at 2.0 s and kept minimised: exit 1 with
+  "15 of 100000 frames presented within the 15 s limit", 15 presented, 1176 skipped, 15.8 s wall.
+- In these runs the minimised window still got redraws (the skips), so the case of a minimised window that gets no
+  redraw at all did not happen. That the deadline's own wake-up ends such a run is `UNVERIFIED`: the code covers it
+  (the deadline is checked on every wake-up, and the loop always waits on it), but no run showed it.
 
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 

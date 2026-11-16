@@ -53,8 +53,8 @@ option, and the permissive side is taken. Transitive licences are as each crate'
 licence files were not read.
 
 **Verified (zuhu desktop, i9-9900K, RTX 4070, Rust 1.96.0).**
-- `cargo build --workspace --locked` with no warnings; `cargo test --workspace --locked` passes, `ow-host` 22 unit
-  tests among them (18 before review r1); `python tests/crate_edges_test.py` 19 tests OK.
+- `cargo build --workspace --locked` with no warnings; `cargo test --workspace --locked` passes, `ow-host` 23 unit
+  tests among them (18 before review r1, 22 before review r2); `python tests/crate_edges_test.py` 19 tests OK.
 - `ow-host --headless-probe`: "NVIDIA GeForce RTX 4070", backend Vulkan, DiscreteGpu, driver NVIDIA 621.01, exit 0.
 - `ow-host --game <install> --frames 300`, release build, under the machine run lock: window opened, 300 frames
   cleared and presented, 0 skipped, exit 0. With `--no-vsync`: median 0.171 ms over 299 intervals (min 0.164, max
@@ -62,6 +62,13 @@ licence files were not read.
   6.1 ms. The same 250 ms came on Dx12 and Vulkan. The desktop had had no input for about 18 hours, so the displays
   were very likely asleep, and DWM probably paced presents at about 4 Hz. **UNVERIFIED**: the vsync run needs a
   repeat with the screen on.
+- Minimised window (after review r1, same desktop): a `--frames 48` run minimised at 2.0 s and restored at 6.1 s
+  exited 0 with 48 presented and 319 skipped; a `--frames 100000 --time-limit 15` run kept minimised from 2.0 s
+  exited 1 at 15.8 s, at its limit, with 15 presented. Details in `docs/verification/GATES.md`, "Host (Rust, H1)".
+  The window still got redraws while minimised, so a minimised window with no redraw at all, which the deadline's
+  own wake-up covers, was not seen: **UNVERIFIED**.
+- A queued redraw after a stop draws nothing, and the first recorded outcome is final, so a deadline failure cannot
+  become exit 0 (review r2; a unit test covers the outcome rule, not the event order).
 
 **Not verified.** Resizing and closing by hand were not tried (the runs were `--frames` runs on an unattended
 screen; the code paths are written, not exercised). The device-lost, surface-lost and validation paths were not
