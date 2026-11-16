@@ -3,17 +3,27 @@
 //! script-facing natives of the actions. AI-assisted (Claude Code). Decision 2026-11-16-66.
 //!
 //! **The brain** ([`tick_brain`], one AI tick of a mind; NATIVE_AI_MELEE.md "AIComponent: cadence", L8 section 3.1):
-//! 1. the first tick builds the tree and the action objects and raises `Init` on each;
+//! 1. the first tick builds the tree and the action objects and raises `Init` on each. A build that fails is kept
+//!    and its error answered on later ticks, without copying the archetypes or raising `Init` again;
 //! 2. part 1's tick ([`super::vm::tick_mind`]): the target update when due;
 //! 3. on hold: the running action is stopped;
 //! 4. the target events: from no target to one, the tree's timed starts are re-armed; `Target_Lost` and
 //!    `Target_Acquired` go to the running action first, then every other action in node order (L8 section 3.4);
-//! 5. the running action's `Update`, then the tree's timed fail;
+//! 5. the running action's `Update` (no arguments: the event declares none), then the tree's timed fail;
 //! 6. when the state update is due: [`Tree::state_update`].
 //!
 //! `ActionSequence.Finish` is called from inside an action's own script, while the tree is in use: the native queues
-//! the call and the brain applies it ([`Tree::finish`]) as soon as that script call returns. The note reads the
-//! re-selection as happening inside `Finish`; here it happens right after the script returns (UNVERIFIED either way).
+//! the call and the brain applies it ([`Tree::finish`]) after the script calls of a step return: after the events of
+//! step 4 (so an action finished by an event handler gets no `Update`), after `Update`, and after the state update.
+//! The note reads the re-selection as happening inside `Finish`; here it happens right after the script returns
+//! (UNVERIFIED either way). One application runs at most four `Finish` calls per tree node, then stops with an error
+//! naming the action: a `Start` that calls `Finish` at once, with no `TimedReset`, would be selected again for ever
+//! (a Rust-only bound).
+//!
+//! **Stopping.** After `Stop`, the engine puts the action back in its default state; that call is not read
+//! (NATIVE_AI_AWARENESS.md, "Not read yet"). The rest state here is the action's state once built and initialised:
+//! an action that `Stop` left there needs nothing more, and one left in another state is `NotYet` (the tree is then
+//! left as it was).
 //!
 //! **Building the actions** (G26, "the AI initialisation hook ... creates one action object per action node, raises
 //! `Init` on each"). Each action node's `Action` archetype is copied; on the copy `MyWillowPawn` is the pawn (live, L8:
@@ -27,11 +37,21 @@
 //! - `ActionSequence.Finish` (G26) and `TriggerBehavior` (G25: the event for the pawn's behavior consumer; sent through
 //!   the behavior kernel's consumer routing, `BehaviorKernel.BroadcastBehaviorEventFromScript` with the pawn's
 //!   handle, decision 2026-11-16-50);
-//! - the AI component's holds (G26: `Hold` / `Release` / `OnHold` on `Holds`, and the same on `TargetHolds`);
+//! - the AI component's holds (G26: `Hold` / `Release` / `OnHold` on `Holds`, and the same on `TargetHolds`).
+//!   `WillowAIComponent` declares its own native `Hold`, `Release` and `OnHold` (other native keys, checked in the
+//!   installed packages), so those are bound too, to the same rule. Willow's `Hold` and `Release` also send the pawn a
+//!   head-look change (`SetLookAtTarget`), presentation that is not sent. Willow's `OnHold` is also true in one case
+//!   reached through the pawn that is not decoded (G26); it answers the base rule here, **UNVERIFIED**;
 //! - movement, through the host ([`Locomotion`]): path creation on the navigation handle, path validity, arrival,
 //!   `CanMoveTo`, the movement speed and the nearest nav-mesh point. The latent ones (`FollowPath`, `WaitForPath`,
 //!   `FinishPath`, `WaitForPawnToTurn`, `WaitForPawnToStop`) answer `NotYet`: the VM's latent actions are `Sleep`
-//!   only, and a host-driven latent action is an `ow-vm` seam;
+//!   only, and a host-driven latent action is an `ow-vm` seam. Path creation, as the installed packages declare it:
+//!   `GearboxNavigationHandle.CreatePathToLocation(out PathData, DestLocation, optional DestPoly, optional
+//!   bAdjustStartForMotion)` and `WillowNavigationHandle.CreateConstrainedPath(out PathData, DestLocation,
+//!   Constraints)`, both returning whether a path was made; the destination is argument 1 of each.
+//!   `WillowActionSequencePawn.CreateVectorPath` (and `CreateActorPath`, `CreateBackupFlyerPath`) are script that
+//!   reach `CreatePathToLocation`, so they run in the VM and need no binding. `PathData` is not written: the path is
+//!   the host's, and what the engine stores in that struct is not read;
 //! - `StartAtomic`, `StopAtomic`, `IsAtomic`, `IsRunning`, `IsActionReadyToFinish`, `RangeIsValid` and
 //!   `GetRangeValue` were read by this lane as analyst (NATIVE_AI_ACTION_SEQUENCE.md). Under the clean-room rule they
 //!   are not implemented here: `NotYet` outside Reference, and unbound under Reference. For the same reason the tree's
@@ -44,7 +64,7 @@ use ow_combat::hit::access::{array, field, get, number, object, set, set_field, 
 use ow_combat::hit::call_method;
 use ow_core::rand::{CrtStream, Rand15};
 use ow_core::{DetMap, NotYet, ParityMode};
-use ow_object::ids::ObjRef;
+use ow_object::ids::{NameId, ObjRef};
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
 use ow_vm::error::VmError;
@@ -64,7 +84,8 @@ pub const RECORD_ACTIONS: &str = "docs/verification/NATIVE_AI_ACTION_SEQUENCE.md
 /// What the host answers about movement (module documentation). The handle is the mind's navigation handle object;
 /// the pawn is the action's pawn.
 pub trait Locomotion {
-    /// A path from the handle's pawn to `dest` (`CreatePathToLocation`, `CreateConstrainedPath`): whether one exists.
+    /// A path from the handle's pawn to `dest` (`CreatePathToLocation`, `CreateConstrainedPath`; module documentation):
+    /// whether one was made. The natives' `out PathData` is left as the caller passed it.
     fn create_path(&mut self, vm: &mut Vm, handle: ObjRef, dest: Vec3) -> Result<bool, VmError>;
     /// `ClearPath(bStopMovement, ...)`.
     fn clear_path(&mut self, vm: &mut Vm, handle: ObjRef, stop: bool) -> Result<bool, VmError>;
@@ -87,6 +108,9 @@ pub struct Brain {
     pub actions: Vec<Option<ObjRef>>,
     can_run_if: Vec<Option<ObjRef>>,
     conditions: Vec<Vec<Option<ObjRef>>>,
+    /// Per node: the action object's state once built and initialised, the state `Stop` must leave it in (module
+    /// documentation, "Stopping").
+    rest_states: Vec<Option<NameId>>,
     pub pawn: ObjRef,
     pub mind: ObjRef,
 }
@@ -97,6 +121,8 @@ pub struct Brains {
     brains: DetMap<ObjRef, Brain>,
     /// `(action, bFailed)`, in call order.
     finishes: Vec<(ObjRef, bool)>,
+    /// Minds whose brain failed to build, with the error: answered again without building again.
+    failed_builds: DetMap<ObjRef, VmError>,
     locomotion: Option<Rc<RefCell<dyn Locomotion>>>,
 }
 
@@ -105,6 +131,7 @@ impl std::fmt::Debug for Brains {
         f.debug_struct("Brains")
             .field("brains", &self.brains.keys().collect::<Vec<_>>())
             .field("finishes", &self.finishes)
+            .field("failed_builds", &self.failed_builds)
             .field("locomotion", &self.locomotion.is_some())
             .finish()
     }
@@ -221,7 +248,8 @@ pub fn read_tree(vm: &mut Vm, mind: ObjRef) -> Result<Brain, VmError> {
         can_run_if.push(gate);
         conditions.push(conds);
     }
-    Ok(Brain { tree: Tree::new(nodes)?, actions, can_run_if, conditions, pawn, mind })
+    let rest_states = vec![None; actions.len()];
+    Ok(Brain { tree: Tree::new(nodes)?, actions, can_run_if, conditions, rest_states, pawn, mind })
 }
 
 /// The tree's world over the VM ([`TreeWorld`]).
@@ -287,7 +315,26 @@ impl TreeWorld for VmTree<'_> {
     }
 
     fn stop(&mut self, node: usize, _failed: bool) -> Result<(), VmError> {
-        self.event(node, "Stop", vec![]).map(|_| ())
+        self.event(node, "Stop", vec![])?;
+        // The engine's "back to the default state" call after Stop is not read (NATIVE_AI_AWARENESS.md, "Not read
+        // yet"): an action that Stop left in its rest state needs nothing more; any other is NotYet.
+        let action = self.action(node)?;
+        let now_in = self.vm.space.heap.get(action)?.state;
+        let rest = self.brain.rest_states.get(node).copied().flatten();
+        if now_in != rest {
+            let text = |vm: &Vm, n: Option<NameId>| n.map_or("none".to_string(), |n| vm.space.names.text(n).into_owned());
+            return Err(NotYet::not_read(
+                format!(
+                    "the action default-state call at state stop: {} is in state {} after Stop, not {}",
+                    ow_combat::hit::access::class_name(self.vm, action),
+                    text(self.vm, now_in),
+                    text(self.vm, rest)
+                ),
+                RECORD_AWARENESS,
+            )
+            .into());
+        }
+        Ok(())
     }
 
     fn locked(&mut self, _node: usize) -> Result<bool, VmError> {
@@ -333,13 +380,26 @@ pub fn dry_select(vm: &mut Vm, mind: ObjRef) -> Result<DrySelection, VmError> {
     Ok((picked?, fails))
 }
 
-/// Raises the script event `name` on `action`; an action class without it is an error (every `ActionSequence`
-/// declares its events).
+/// Raises the script event `name` on `action` with `args`. An action class without the event is an error (every
+/// `ActionSequence` declares its events), and so is an event that declares other parameters than `args` fills: no
+/// parameter is left to default silently. In the installed packages `Init`, `Start`, `Stop`, `Update` and `CanRun`
+/// take none (`ActionSequence` and every override; checked with `research/script_disasm.py`) and `ActivateEvent` takes
+/// the event name. Script that needs the frame time reads `WorldInfo.DeltaSeconds` (the world's, not this adapter's).
 fn event(vm: &mut Vm, action: ObjRef, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
-    match call_method(vm, action, name, args)? {
-        Some(v) => Ok(v),
-        None => Err(error(format!("the action {} has no {name}", ow_combat::hit::access::class_name(vm, action)))),
+    let class = vm.space.heap.get(action)?.class;
+    let state = vm.space.heap.get(action)?.state;
+    let Some(f) = vm.find_method(class, name, state)? else {
+        return Err(error(format!("the action {} has no {name}", ow_combat::hit::access::class_name(vm, action))));
+    };
+    let declared = vm.function(f).map_or(0, |d| d.params.len());
+    if declared != args.len() {
+        return Err(error(format!(
+            "the action {}: {name} declares {declared} parameters and the adapter passes {}",
+            ow_combat::hit::access::class_name(vm, action),
+            args.len()
+        )));
     }
+    Ok(vm.call(f, Some(action), args)?.ret)
 }
 
 fn take(vm: &mut Vm, mind: ObjRef) -> Result<Option<Brain>, VmError> {
@@ -353,8 +413,15 @@ fn put(vm: &mut Vm, mind: ObjRef, brain: Brain) -> Result<(), VmError> {
     Ok(())
 }
 
-/// Applies the queued `Finish` calls of `brain`'s actions.
+/// How many queued `Finish` calls one application may run per node of the tree (a Rust-only bound: an action whose
+/// `Start` calls `Finish` at once, with no `TimedReset`, is selected and finishes again for ever).
+const FINISHES_PER_NODE: usize = 4;
+
+/// Applies the queued `Finish` calls of `brain`'s actions, at most [`FINISHES_PER_NODE`] per node of the tree; past
+/// that, an error naming the action, and the queue of `brain`'s actions is dropped.
 fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Change>) -> Result<(), VmError> {
+    let limit = brain.tree.nodes.len().saturating_mul(FINISHES_PER_NODE).max(FINISHES_PER_NODE);
+    let mut applied = 0usize;
     loop {
         let next = {
             let b = brains(vm)?;
@@ -368,6 +435,16 @@ fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Ch
         let Some(node) = brain.actions.iter().position(|a| *a == Some(action)) else {
             continue;
         };
+        applied += 1;
+        if applied > limit {
+            let b = brains(vm)?;
+            borrow(&b)?.finishes.retain(|(a, _)| !brain.actions.contains(&Some(*a)));
+            return Err(error(format!(
+                "the action {} (node {node}) finished more than {limit} times in one tick: its script calls Finish at \
+                 once and the tree selects it again (no TimedReset), so the tick would never settle",
+                ow_combat::hit::access::class_name(vm, action)
+            )));
+        }
         let snapshot = brain.clone();
         let change = brain.tree.finish(&mut VmTree { vm, brain: &snapshot }, now, node, failed)?;
         changes.push(change);
@@ -381,17 +458,40 @@ pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRe
     let mut brain = match take(vm, mind)? {
         Some(b) => b,
         None => {
-            let b = read_tree(vm, mind)?;
-            for action in b.actions.iter().flatten() {
-                event(vm, *action, "Init", vec![])?;
+            let known = borrow(&brains(vm)?)?.failed_builds.get(&mind).cloned();
+            if let Some(e) = known {
+                return Err(e);
             }
-            report.built = true;
-            b
+            match build(vm, mind) {
+                Ok(b) => {
+                    report.built = true;
+                    b
+                }
+                Err(e) => {
+                    borrow(&brains(vm)?)?.failed_builds.insert(mind, e.clone());
+                    return Err(e);
+                }
+            }
         }
     };
     let result = tick_with(vm, host, mind, globals, now, &mut brain, &mut report);
     put(vm, mind, brain)?;
     result.map(|()| report)
+}
+
+/// The brain of `mind`: the tree read, `Init` raised on each action, each action's rest state noted. A failure is
+/// kept by [`tick_brain`] and answered again on later ticks, so the archetypes are not copied again each tick.
+fn build(vm: &mut Vm, mind: ObjRef) -> Result<Brain, VmError> {
+    let mut b = read_tree(vm, mind)?;
+    for action in b.actions.iter().flatten() {
+        event(vm, *action, "Init", vec![])?;
+    }
+    for (i, action) in b.actions.iter().enumerate() {
+        if let Some(a) = action {
+            b.rest_states[i] = vm.space.heap.get(*a)?.state;
+        }
+    }
+    Ok(b)
 }
 
 fn tick_with(
@@ -435,6 +535,8 @@ fn tick_with(
         }
         report.events.push((name.to_string(), order));
     }
+    // A Finish called from an event handler takes effect before the running action's Update (review r1 L6).
+    apply_finishes(vm, brain, now, &mut report.changes)?;
     if let Some(leaf) = brain.tree.current
         && let Some(action) = brain.actions[leaf]
     {
@@ -502,20 +604,26 @@ impl NativePack for Pack {
         brains(vm)?;
         bind(vm, FINISH, Rc::new(n_finish))?;
         bind(vm, TRIGGER_BEHAVIOR, Rc::new(n_trigger_behavior))?;
-        for (list, path) in
-            [("Holds", "GearboxFramework.AIComponent.Hold"), ("TargetHolds", "GearboxFramework.AIComponent.HoldTarget")]
-        {
+        // The Willow component's own Hold, Release and OnHold (other native keys) get the same rule (module
+        // documentation; Willow's OnHold extra case is not decoded: UNVERIFIED).
+        for (list, path) in [
+            ("Holds", "GearboxFramework.AIComponent.Hold"),
+            ("TargetHolds", "GearboxFramework.AIComponent.HoldTarget"),
+            ("Holds", "WillowGame.WillowAIComponent.Hold"),
+        ] {
             bind(vm, path, hold_body(list, true))?;
         }
         for (list, path) in [
             ("Holds", "GearboxFramework.AIComponent.Release"),
             ("TargetHolds", "GearboxFramework.AIComponent.ReleaseTarget"),
+            ("Holds", "WillowGame.WillowAIComponent.Release"),
         ] {
             bind(vm, path, hold_body(list, false))?;
         }
         for (list, path) in [
             ("Holds", "GearboxFramework.AIComponent.OnHold"),
             ("TargetHolds", "GearboxFramework.AIComponent.TargetOnHold"),
+            ("Holds", "WillowGame.WillowAIComponent.OnHold"),
         ] {
             bind(
                 vm,
@@ -603,7 +711,8 @@ fn n_trigger_behavior(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 /// `Hold` / `Release` on the component's list `list` of (`HoldName`, `Tag`) pairs (G26): a hold is added unless the same
 /// pair is there or the tag is None; a release removes the pair. The Willow head-look side effects
-/// (`SetLookAtTarget`) are presentation and not sent; the Willow `OnHold` extra case is not read.
+/// (`SetLookAtTarget`) are presentation and not sent; the Willow `OnHold` extra case is not decoded (the base rule
+/// answers it: UNVERIFIED).
 fn hold_body(list: &'static str, add: bool) -> NativeFn {
     Rc::new(move |c: &mut NativeCall<'_>| {
         let me = this(c)?;

@@ -1,5 +1,6 @@
 //! Tests of the action adapter on invented classes (AGENTS.md rule 9), in both parity modes, over part 1's invented
-//! world (`super::super::vm::tests`). The action "script" is invented natives bound to the action class's events.
+//! world (`super::super::vm::tests`). The action events are script of an invented package class calling invented
+//! natives.
 //! AI-assisted (Claude Code).
 
 use std::cell::RefCell;
@@ -27,6 +28,13 @@ struct Script {
     has_target: bool,
     /// Whether the patrol finishes at its next Update.
     patrol_done: bool,
+    /// Whether the patrol's Start calls Finish at once.
+    start_finishes: bool,
+    /// Whether the patrol's Start enters the state `Busy`, and whether Stop leaves it again.
+    start_enters: bool,
+    stop_resets: bool,
+    /// Whether the patrol finishes when it hears `Target_Acquired`.
+    finish_on_acquired: bool,
 }
 
 fn name_of(vm: &Vm, o: ObjRef) -> String {
@@ -57,8 +65,9 @@ const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 
 /// `ToyActions.ToyAction`: an invented action class whose events are script. Each event calls the native
 /// `Note(Name)` with its own name (ActivateEvent with the event's name), and `CanRun` returns the native `Answer()`.
+/// `ToyActions.ToyTimedAction`, its subclass, declares an `Update(float DeltaTime)` the stock events do not have.
 fn toy_actions() -> Vec<u8> {
-    let mut t = ScriptToy::new(&["Object", "Name", "Bool"]);
+    let mut t = ScriptToy::new(&["Object", "Name", "Bool", "Float"]);
     let core = t.p.add_import("Core", "Package", 0, "Core");
     let object = t.p.add_import("Core", "Class", core, "Object");
     let class = t.class("ToyAction", object);
@@ -109,7 +118,13 @@ fn toy_actions() -> Vec<u8> {
         a.end();
         Some(a)
     });
-    let _ = class;
+    let timed = t.class("ToyTimedAction", class);
+    t.function(timed, "Update", &[Param::new("Float", "DeltaTime")], None, &[], &FunctionSpec::new(SCRIPT, "Update"), |_| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.build()
 }
 
@@ -137,6 +152,25 @@ fn world(mode: ParityMode) -> World {
                 s.borrow_mut().has_target = true;
             }
             s.borrow_mut().log.push(format!("{what} {name}"));
+            let (enters, resets, finishes, on_acquired) = {
+                let s = s.borrow();
+                (s.start_enters, s.stop_resets, s.start_finishes, s.finish_on_acquired)
+            };
+            if name == "Patrol" && what == "Target_Acquired" && on_acquired {
+                let f = c.vm.find_function(FINISH)?;
+                c.vm.call(f, Some(me), vec![Value::Bool(false)])?;
+            }
+            if name == "Patrol" && what == "Start" && enters {
+                let busy = c.vm.space.names.intern("Busy");
+                c.vm.space.heap.get_mut(me)?.state = Some(busy);
+            }
+            if name == "Patrol" && what == "Stop" && resets {
+                c.vm.space.heap.get_mut(me)?.state = None;
+            }
+            if name == "Patrol" && what == "Start" && finishes {
+                let f = c.vm.find_function(FINISH)?;
+                c.vm.call(f, Some(me), vec![Value::Bool(false)])?;
+            }
             // The patrol's script finishes it from Update when told to (as `AttackFinished` calls Finish).
             if what == "Update" && name == "Patrol" && s.borrow().patrol_done {
                 let f = c.vm.find_function(FINISH)?;
@@ -332,5 +366,96 @@ fn movement_goes_to_the_host_and_the_unread_is_not_yet() {
             }
             _ => assert!(!vm.has_native(&key), "unbound under Reference"),
         }
+    }
+}
+
+/// A Start that calls Finish at once, with no TimedReset, would be selected and finish again for ever: the
+/// application of the queued finishes is bounded and names the action (review r1 M3).
+#[test]
+fn a_start_that_finishes_at_once_is_bounded() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        w.script.borrow_mut().start_finishes = true;
+        let err = brain_at(&mut w, &mut h, 0.25).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("ToyAction") && text.contains("node 2") && text.contains("finished more than"), "{text}");
+        let starts = w.script.borrow().log.iter().filter(|l| *l == "Start Patrol").count();
+        assert!(starts > 1 && starts < 30, "{mode:?}: {starts} starts");
+    }
+}
+
+/// After Stop the engine puts the action back in its default state (not read): an action Stop leaves in another
+/// state than its rest state is NotYet, and the tree stays as it was; one Stop brings back is stopped (review r1 M2).
+#[test]
+fn stop_must_leave_the_action_in_its_rest_state() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        w.script.borrow_mut().start_enters = true;
+        brain_at(&mut w, &mut h, 0.25).unwrap();
+        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2));
+        w.script.borrow_mut().patrol_done = true;
+        let err = brain_at(&mut w, &mut h, 0.3125).unwrap_err();
+        assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
+        assert!(err.to_string().contains("in state Busy after Stop"), "{err}");
+        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2), "{mode:?}: the tree as it was");
+        w.script.borrow_mut().stop_resets = true;
+        let report = brain_at(&mut w, &mut h, 0.375).unwrap();
+        assert_eq!(report.changes.first().and_then(|c| c.stopped), Some((2, false)), "{mode:?}: {report:?}");
+    }
+}
+
+/// A brain that fails to build is not built again each tick (review r1 L3): the error is answered again and the
+/// archetypes are not copied again.
+#[test]
+fn a_failed_build_is_kept() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        let vm = &mut w.e.vm;
+        let mut nodes = ow_combat::hit::access::array(vm, w.e.aidef, "NodeList").unwrap();
+        ow_combat::hit::access::set_field(vm, &mut nodes[2], "Type", Value::Byte(9));
+        set(vm, w.e.aidef, "NodeList", Value::Array(Rc::new(nodes))).unwrap();
+        let first = brain_at(&mut w, &mut h, 0.25).unwrap_err();
+        assert!(first.to_string().contains("node 2 has the node type 9"), "{first}");
+        let objects = w.e.vm.space.heap.len();
+        let again = brain_at(&mut w, &mut h, 0.5).unwrap_err();
+        assert_eq!(again, first, "{mode:?}");
+        assert_eq!(w.e.vm.space.heap.len(), objects, "{mode:?}: nothing copied again");
+        assert!(w.script.borrow().log.is_empty(), "no Init raised");
+    }
+}
+
+/// An event is raised with exactly the parameters it declares: one that declares more is an error, not a silent
+/// zero (review r1 M1: the stock `Update` declares none).
+#[test]
+fn an_event_with_undeclared_parameters_is_an_error() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let vm = &mut w.e.vm;
+        let timed = vm.find_class("ToyActions.ToyTimedAction").unwrap();
+        let action = make(vm, timed, "Timed");
+        let err = event(vm, action, "Update", vec![]).unwrap_err();
+        assert!(err.to_string().contains("Update declares 1 parameters and the adapter passes 0"), "{mode:?}: {err}");
+        assert_eq!(event(vm, action, "Update", vec![Value::Float(0.0625)]).unwrap(), Value::None);
+    }
+}
+
+/// A Finish called from an event handler takes effect before the running action's Update: the finished patrol gets
+/// no Update, the attack it hands over to does (review r1 L6).
+#[test]
+fn a_finish_from_an_event_comes_before_the_update() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        brain_at(&mut w, &mut h, 0.25).unwrap();
+        w.script.borrow_mut().finish_on_acquired = true;
+        w.script.borrow_mut().log.clear();
+        let _ = brain_at(&mut w, &mut h, 0.5);
+        let log = w.script.borrow().log.clone();
+        let at = log.iter().position(|l| l == "Target_Acquired Patrol").expect("the event");
+        assert!(!log[at..].iter().any(|l| l == "Update Patrol"), "{mode:?}: {log:?}");
+        assert!(log[at..].iter().any(|l| l == "Update Attack"), "{mode:?}: {log:?}");
     }
 }
