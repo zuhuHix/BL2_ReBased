@@ -408,9 +408,12 @@ fn find_class(vm: &mut Vm, path: &str) -> Result<ow_object::ids::ClassId, Missio
     })
 }
 
+/// A new object of `class_path` starting from its class default object's values, as the C++ `Runtime::instantiate`
+/// copies `defaults->props` (lane W6-COMBAT-RUN2, decision 2026-11-16-54: the controller's damage modifiers, the
+/// pawn's and the replication info's defaults were zero before).
 fn new_object(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
     let c = vm.find_class(class_path)?;
-    Ok(vm.instantiate(c, "")?)
+    Ok(ow_vm::interp::instantiate_from_defaults(vm, c)?)
 }
 
 /// A new object made from export `index` of `package` on every call, its references the definition store's objects
