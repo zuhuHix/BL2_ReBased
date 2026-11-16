@@ -88,8 +88,9 @@ pub struct Station {
     pub initially_active: Option<bool>,
     /// `TeleportDest`.
     pub teleport_dest: Option<String>,
-    /// The number of `ExitPoints` the destination tags (an untagged array counts 0, an empty array); `None` when the
-    /// station names no destination or the destination does not resolve.
+    /// The number of `ExitPoints` the destination tags; `None` when the destination leaves the array untagged (its
+    /// class default is not read here), when the station names no destination, or when the destination does not
+    /// resolve.
     pub exit_points: Option<usize>,
     /// `StationTouchRadius` and `StationTouchHeight`, each when tagged (the class defaults are not read here).
     pub touch_radius: Option<f64>,
@@ -141,7 +142,7 @@ pub fn stations(view: &MapView) -> (Vec<Station>, Vec<Skip>) {
             let exit_points = teleport_dest
                 .as_deref()
                 .and_then(|d| follow(d, &mut skipped))
-                .map(|p| p.at("ExitPoints").items().len());
+                .and_then(|p| p.get("ExitPoints").map(|v| v.items().len()));
             out.push(Station {
                 level: level.name.clone(),
                 path: path.clone(),

@@ -8,7 +8,8 @@
 //! It asserts the counts the lane recorded (decision 2026-11-16-60) and, when `local/slice/vendors.json`
 //! (`tools/prepare_vendors.py`'s output at stage 8) is present, compares the Reference listing with it field by field:
 //! each machine's id and kind, each row's pool and probability (value and int/float kind), each leaf's balance,
-//! weight and class; every one must agree and the compared count must be the recorded one.
+//! weight and class; every one must agree and the compared count must be the recorded one. Not compared: the rows'
+//! `unresolved` notes (ours are written to `report.json`; the tool's wording of some notes differs).
 
 use std::path::{Path, PathBuf};
 
