@@ -113,3 +113,5 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+pub mod frame;
