@@ -71,6 +71,7 @@ pub fn find_install(root: &Path) -> Result<Install, InstallError> {
     Ok(Install { root: root.to_path_buf(), cooked })
 }
 
+pub mod anim;
 pub mod frame;
 pub mod movement;
 
