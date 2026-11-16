@@ -30,7 +30,9 @@ live).
   identity map does not hold it, `find` never returns it, two calls give two objects, and a write to it changes no
   definition. It decodes the export it is given, not the path's holder under the identity policy (the C++ reads the
   package it was handed). The prefix is checked against the one the store derives (`PrefixMismatch`, or `NotYet`
-  where none derives), as `load_export` checks it; an index that is not positive is the decoder's "unsupported
+  where none derives), as `load_export` checks it. That refusal goes beyond the C++, which takes whatever prefix its
+  caller passes and decodes from there: the Rust call is stricter, never looser, and refuses where the C++ would
+  decode from a prefix the store does not derive; an index that is not positive is the decoder's "unsupported
   exported object request" (the C++ text); a code export or a class default object is `NotADefinition`. No overlay is
   applied to an instance (the C++ has none; a later lane that needs overlays on per-call instances decides how).
   A failed decode forgets the handles it freed, as a failed load does.
@@ -52,7 +54,10 @@ live).
     package `TestDirector` and a `MissionDirectives` property on the toy `WillowAIPawn`): the placed director is not
     the store's object; his body class is the store's `Body_Toy`; his directive table is a new object with its tags;
     his component's `TriggerEvent` starts the line under the body class's name tag with no `store_object`; a second
-    placement makes another director.
+    placement makes another director. Review r1 of PR #351 added his `AIClass` (made at 4) and his `DialogComponent`
+    (an actor component subobject, made at 8; its tag is read past an 8-byte prefix) to the toy, both new objects with
+    their tags, and a second toy archetype whose `AIClass` and `DialogComponent` are imports no package holds: both
+    are left as the archetype's references (the `resourceIndex > 0` filter), and no component is made.
   - `ow-mission` slice `the_dummy_s_pawn_is_a_new_object_with_the_store_s_references` (a new `Map::pawn_reference`
     toy: the pawn's `Controller` names an invented export of its package): the pawn is not the store's object, its
     reference is the store's and reads, and each wrapper call makes another object.
@@ -98,6 +103,12 @@ live).
   Like the other keys it is an unread rule: what the movie spawn does in the game is not read, and Off mode refuses it
   until it is.
 - **Open items.**
+  - The director's other references (his body class and every reference he does not re-make: all but his directive
+    table, AI class and dialog component) are now the store's shared definitions, as any definition's references
+    are. A write through one would change what every later `find` of that path returns, where the C++ would have
+    written to a stand-in of its own. No current path writes there (the bridge and the slice only read them); a
+    path that needs to write makes its own object with `DefStore::instance` first. Also in the bridge's module
+    documentation.
   - `crates/ow-combat/src/hit.rs` has its own `instantiate_copy` (W6-COMBAT, decision 36's workaround list); it can
     switch to `DefStore::instance` in its own lane.
   - `crates/ow-mission/src/kismet.rs` still decodes its ops and variables outside the store (decision 2026-11-15-31's
