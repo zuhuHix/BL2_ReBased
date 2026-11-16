@@ -16,10 +16,13 @@ ignored installed test `crates/ow-skills/src/phaselock/installed.rs` (both modes
 `NotYet { LayerAbsent("ow-vm") }`, which is what every world that runs no script gives (an offline world, the
 roll's adapter `ow_items::RollWorld`, which is not changed and so answers that `NotYet` during a roll, unit-test
 worlds). `ow-vm`'s `impl AttrWorld for Vm` finds the function by virtual lookup on the resolver's class and calls it with
-the two arguments by parameter name; a function that lacks either name is bad data, never given a zero (review r1 of
-PR #360). A class with no such function, or a native one, is `NotYet { NotRead }`; an answer that is not an object
+the two arguments by parameter name, compared without case (the name table keeps the first spelling it interned;
+review r2 of PR #360). A function that lacks either name is `NotYet { NotRead }`, never given a zero (reviews r1 and
+r2): the engine binds by position, so an override with other names is valid script, but this binding does not guess
+the order. A class with no such function, or a native one, is `NotYet { NotRead }`; an answer that is not an object
 reference is bad data; whatever the script reaches answers as the VM answers any call. **Under a permissive stub
-policy** (`LogAndZero`, the Reference CLI runs) an unbound native inside a context script gives its zero value, so the
+policy** (`LogAndZero`, which the CLI runs that use it set: the Reference runs, and the mover, census and VM tools in
+both modes) an unbound native inside a context script gives its zero value, so the
 chain may end as None and the attribute keep its constant; under the strict policy (`Refuse`) the same call is an
 error, which reaches the caller as `AttrError::World`. Section 6.1 of ARCHITECTURE.md lists the two Reference-only
 stand-ins of this lane. This is
@@ -39,7 +42,9 @@ the same pattern as `attribute_changed`, which already runs script through the w
   gives the `BaseValue` (review r1 of PR #360; test
   `a_designer_base_value_attribute_with_a_none_source_gives_its_base_value_in_reference`). The C++ has no reading of
   the `ByName` form (it refuses the class), so that form runs the script in both modes. In Off, and for `ByName`, a
-  None source is None.
+  None source is None. The context resolver does not know whether it serves a read or a write, so in Reference the
+  globals fallback also steers a set-base or a modifier write through a designer chain with a None source onto the
+  globals object (`effects.rs`); the C++ has no such write, and no installed path reaches it (review r2 of PR #360).
 - **The value-side stand-in, Reference only.** The C++ also answers a `WillowGame.DesignerAttributeDefinition`'s value
   as its own `BaseValue`, evaluated on the context (`src/progression.cpp:117`). Without it, the Reference context (the
   previous object) would be read by the definition's value chain, which reads the designer object, and the Reference

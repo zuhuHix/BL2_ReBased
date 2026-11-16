@@ -1218,7 +1218,8 @@ fn reference_store() -> DefStore {
 /// The designer resolvers run their class script through the world (`AttrWorld::script_context`): the resolver, the
 /// definition and the step's source go in, its answer is the step's (an object, or None which ends the chain). The
 /// plain form in Reference is the C++ stand-in instead; the ByName form has no C++ reading and runs the script in both
-/// modes. A None source is None without a call, in both modes.
+/// modes. A None source makes no call: it is None for the ByName form and in Off, and the globals for the plain form in
+/// Reference (the C++ step never ends the chain).
 #[test]
 fn the_designer_resolvers_run_their_script_through_the_world() {
     for reference in [false, true] {

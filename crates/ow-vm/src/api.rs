@@ -1047,8 +1047,10 @@ impl AttrWorld for Vm {
     }
 
     /// Runs the resolver class's script `GetAttributeContext` (virtual lookup on the resolver's class) with
-    /// `Attribute` and `AttributeContextSource` by parameter name, any other parameter its zero value (lane
-    /// FIX-DESIGNER-RESOLVER, decision 2026-11-16-62). What the script reaches is the VM's as for any call: an unbound
+    /// `Attribute` and `AttributeContextSource` bound by parameter name, compared without case as the name table
+    /// keeps the first spelling it interned, any other parameter its zero value (lane FIX-DESIGNER-RESOLVER, decision
+    /// 2026-11-16-62). A function that lacks either name is `NotYet { NotRead }`: the engine binds by position, so an
+    /// override with other names is valid script, but this binding is by name and does not guess the order. What the script reaches is the VM's as for any call: an unbound
     /// or unread native stops it (its `NotYet`, or the stub policy's answer). A class with no such function, or whose
     /// function is native, is `NotYet { NotRead }`: no script rule to run. An answer that is not an object reference
     /// is bad data.
@@ -1074,24 +1076,30 @@ impl AttrWorld for Vm {
             .into());
         };
         let params = self.function(function).map(|d| d.params.clone()).unwrap_or_default();
-        // Both arguments are bound by name; a function that lacks either name is refused rather than given a zero
-        // (review r1 of PR #360).
+        // Both arguments are bound by name, without case (review r2 of PR #360); a function that lacks either name is
+        // refused rather than given a zero (review r1).
+        let named = |vm: &Vm, d: &PropertyDecl, wanted: &str| vm.space.names.text(d.name).eq_ignore_ascii_case(wanted);
         for wanted in ["Attribute", "AttributeContextSource"] {
-            if !params.iter().any(|d| self.space.names.text(d.name).as_ref() == wanted) {
-                return Err(AttrError::BadData {
-                    reason: format!(
-                        "{class_path}.GetAttributeContext has no parameter {wanted}"
-                    )
-                    .into(),
-                });
+            if !params.iter().any(|d| named(self, d, wanted)) {
+                return Err(NotYet::not_read(
+                    format!(
+                        "{class_path}.GetAttributeContext has no parameter {wanted}: the parameters are bound by name"
+                    ),
+                    "NATIVE_ATTRIBUTES.md section 5",
+                )
+                .into());
             }
         }
         let args = params
             .iter()
-            .map(|d| match self.space.names.text(d.name).as_ref() {
-                "Attribute" => Value::Object(Some(attribute)),
-                "AttributeContextSource" => Value::Object(source),
-                _ => self.space.classes.zero_value(&d.kind),
+            .map(|d| {
+                if named(self, d, "Attribute") {
+                    Value::Object(Some(attribute))
+                } else if named(self, d, "AttributeContextSource") {
+                    Value::Object(source)
+                } else {
+                    self.space.classes.zero_value(&d.kind)
+                }
             })
             .collect();
         match self.call(function, Some(resolver), args)?.ret {
