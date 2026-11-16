@@ -66,8 +66,8 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::Play { game, map, script, vsync, size, screenshot, weapon, arms } => match check(&game) {
-            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot, arms })),
+        Command::Play { game, map, script, vsync, size, screenshot, weapon, arms, pawns } => match check(&game) {
+            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot, arms, pawns })),
             Err(code) => code,
         },
         Command::PlayHeadless { game, map, script, weapon } => match check(&game) {
@@ -392,6 +392,8 @@ struct PlayWindow {
     screenshot: Option<PathBuf>,
     /// The UModel export folder of the first-person arms (lane H6-SKIN).
     arms: Option<PathBuf>,
+    /// Third-person pawns (lane H-PAWNS).
+    pawns: Vec<args::PawnArg>,
 }
 
 /// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY).
@@ -528,6 +530,34 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         },
         None => None,
     };
+    // Third-person pawns, through the same store and object space (lane H-PAWNS).
+    let pawns = if window.pawns.is_empty() {
+        None
+    } else {
+        let mut loaded = Vec::new();
+        for arg in &window.pawns {
+            let Some(kind) = ow_host::anim::pawns::kind(&arg.kind) else {
+                eprintln!("ow-host: --pawn {}: not a known pawn (bullymong, maya)", arg.kind);
+                return ExitCode::from(2);
+            };
+            let Some(actor) = ow_host::anim::pawns::actor_placement(arg.location, arg.yaw_degrees) else {
+                eprintln!("ow-host: --pawn {}: the placement is not finite", arg.kind);
+                return ExitCode::from(2);
+            };
+            match ow_host::anim::pawns::load(&mut defs, &mut space, kind, std::slice::from_ref(&arg.dir), actor) {
+                Ok(pawn) => loaded.push(pawn),
+                Err(e) => {
+                    eprintln!("ow-host: loading pawn {} from {}: {e}", arg.kind, arg.dir.display());
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        let layer = ow_host::anim::pawns::PawnLayer::new(loaded);
+        for line in layer.summary() {
+            println!("{line}");
+        }
+        Some(layer)
+    };
     let plan = DrawPlan::build_lit(&scene, Some(&library), Some(&baked));
     println!(
         "draw plan: {} drawn, {} batches, {} section instances; eye {} uu above the pawn's centre, vertical FOV {} \
@@ -556,7 +586,8 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         end_shot,
         Rc::clone(&draw),
     )
-    .with_arms(arms);
+    .with_arms(arms)
+    .with_pawns(pawns);
     let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats)).with_gun(gun, labels, !scripted);
     let options = RunOptions { frames: None, vsync: window.vsync, time_limit: None };
     let code = match app::run_play(options, sim, Some(Box::new(drawer)), InputCollector::new(!scripted)) {

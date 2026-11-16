@@ -1199,6 +1199,25 @@ impl SceneRenderer {
         view_proj: &Mat4,
         eye: [f32; 3],
     ) {
+        self.encode_with(device, queue, encoder, target, size, view_proj, eye, &mut |_| {});
+    }
+
+    /// [`SceneRenderer::encode`] with `world` called inside the scene pass, after the opaque and masked batches and
+    /// before the blended ones (lane H-PAWNS: skinned pawns drawn as world objects, depth-tested against the scene
+    /// and under its translucency). `world` may set any pipeline, bind group and buffer whose layout fits the pass
+    /// (this format, [`DEPTH_FORMAT`], one sample); the scene's own bindings are set again after it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_with(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        size: (u32, u32),
+        view_proj: &Mat4,
+        eye: [f32; 3],
+        world: &mut dyn FnMut(&mut wgpu::RenderPass<'_>),
+    ) {
         queue.write_buffer(&self.globals, 0, &globals_bytes(view_proj, &self.lighting));
         let depth = self.depth_view(device, size.0, size.1);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1231,8 +1250,10 @@ impl SceneRenderer {
         // then material, then lighting, so consecutive draws often share them).
         pass.set_vertex_buffer(1, instances.slice(..));
         let mut bound = Bound::default();
-        let mut draw =
-            |pass: &mut wgpu::RenderPass<'_>, b: &GpuBatch, range: std::ops::Range<u32>| {
+        let draw = |pass: &mut wgpu::RenderPass<'_>,
+                    bound: &mut Bound,
+                    b: &GpuBatch,
+                    range: std::ops::Range<u32>| {
                 let (Some(mesh), Some(pipeline)) = (
                     self.meshes.get(b.key.mesh as usize),
                     self.pipelines
@@ -1289,12 +1310,18 @@ impl SceneRenderer {
                     blended.push((i, u32::try_from(k).unwrap_or(u32::MAX), *origin));
                 }
             } else {
-                draw(&mut pass, b, 0..b.instances);
+                draw(&mut pass, &mut bound, b, 0..b.instances);
             }
         }
+        // The world objects drawn by the caller (encode_with), then the scene's bindings set again and the bound
+        // state forgotten, so the next batch rebinds everything it needs.
+        world(&mut pass);
+        pass.set_bind_group(0, &self.globals_group, &[]);
+        pass.set_vertex_buffer(1, instances.slice(..));
+        bound = Bound::default();
         for (i, k) in back_to_front(&blended, eye) {
             if let Some(b) = self.batches.get(i) {
-                draw(&mut pass, b, k..k + 1);
+                draw(&mut pass, &mut bound, b, k..k + 1);
             }
         }
     }

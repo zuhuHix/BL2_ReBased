@@ -687,6 +687,8 @@ pub struct PlayDrawer {
     report: Rc<RefCell<PlayDrawReport>>,
     /// Maya's first-person arms, drawn over the scene when given (lane H6-SKIN, `crate::anim::arms`).
     arms: Option<crate::anim::arms::ArmsLayer>,
+    /// Third-person skinned pawns drawn in the scene pass (lane H-PAWNS, `crate::anim::pawns`).
+    pawns: Option<crate::anim::pawns::PawnLayer>,
     /// The target format, for screenshots that draw the arms too.
     format: Option<wgpu::TextureFormat>,
 }
@@ -718,11 +720,18 @@ impl PlayDrawer {
             last_present: None,
             report,
             arms: None,
+            pawns: None,
             format: None,
         }
     }
 
     /// Draws the first-person arms too (lane H6-SKIN).
+    /// Draws third-person pawns too (lane H-PAWNS).
+    pub fn with_pawns(mut self, pawns: Option<crate::anim::pawns::PawnLayer>) -> PlayDrawer {
+        self.pawns = pawns;
+        self
+    }
+
     pub fn with_arms(mut self, arms: Option<crate::anim::arms::ArmsLayer>) -> PlayDrawer {
         self.arms = arms;
         self
@@ -734,14 +743,16 @@ impl PlayDrawer {
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
         let eye = view.eye;
         let lighting = self.lighting;
-        let mut rgba = match (&mut self.arms, self.format) {
-            (Some(arms), Some(format)) => crate::anim::arms::capture_with(device, queue, format, size, &mut |encoder, target| {
-                renderer.encode(device, queue, encoder, target, size, &vp, eye);
-                arms.encode(device, queue, encoder, target, size, &lighting)
-            })?,
+        let (arms, pawns) = (&mut self.arms, &mut self.pawns);
+        let mut rgba = match self.format {
+            Some(format) if arms.is_some() || pawns.is_some() => {
+                crate::anim::arms::capture_with(device, queue, format, size, &mut |encoder, target| {
+                    draw_world(device, queue, encoder, target, size, &vp, eye, &lighting, renderer, arms, pawns)
+                })?
+            }
             _ => renderer.capture(device, queue, size, &vp, eye)?,
         };
-        // The capture draws the scene (and the arms) only: the overlay is painted onto it.
+        // The capture draws the scene (with the pawns and the arms) only: the overlay is painted onto it.
         crate::overlay::paint(&mut rgba, size.0, size.1, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
         let png = ow_assets::png::encode(size.0, size.1, &rgba).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
@@ -750,6 +761,35 @@ impl PlayDrawer {
         std::fs::write(path, png).map_err(|e| e.to_string())?;
         Ok(path.clone())
     }
+}
+
+/// The scene with the pawns drawn inside its pass (skinned first), then the first-person arms over it: one frame's
+/// world, the same for the window and the screenshots (lanes H6-SKIN and H-PAWNS).
+#[allow(clippy::too_many_arguments)]
+fn draw_world(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    size: (u32, u32),
+    vp: &Mat4,
+    eye: [f32; 3],
+    lighting: &crate::render::Lighting,
+    renderer: &mut SceneRenderer,
+    arms: &mut Option<crate::anim::arms::ArmsLayer>,
+    pawns: &mut Option<crate::anim::pawns::PawnLayer>,
+) -> Result<(), String> {
+    match pawns {
+        Some(pawns) => {
+            pawns.prepare(queue, encoder, vp, lighting)?;
+            renderer.encode_with(device, queue, encoder, target, size, vp, eye, &mut |pass| pawns.draw(pass));
+        }
+        None => renderer.encode(device, queue, encoder, target, size, vp, eye),
+    }
+    if let Some(arms) = arms {
+        arms.encode(device, queue, encoder, target, size, lighting)?;
+    }
+    Ok(())
 }
 
 impl Drawer for PlayDrawer {
@@ -763,6 +803,9 @@ impl Drawer for PlayDrawer {
         let renderer = SceneRenderer::new(device, queue, format, &plan, self.lighting, &mut self.textures)?;
         if let Some(arms) = &mut self.arms {
             arms.attach(device, format)?;
+        }
+        if let Some(pawns) = &mut self.pawns {
+            pawns.attach(device, format)?;
         }
         self.format = Some(format);
         let mut report = self.report.borrow_mut();
@@ -785,6 +828,9 @@ impl Drawer for PlayDrawer {
         if let Some(arms) = &mut self.arms {
             arms.snapshot(snapshot.view, snapshot.sim_time);
         }
+        if let Some(pawns) = &mut self.pawns {
+            pawns.snapshot(snapshot.sim_time);
+        }
         self.finished = snapshot.finished;
         self.shot = snapshot.shot;
     }
@@ -804,10 +850,8 @@ impl Drawer for PlayDrawer {
         let view = self.view.ok_or("the simulation gave no view")?;
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
-        renderer.encode(device, queue, encoder, target, size, &vp, view.eye);
-        if let Some(arms) = &mut self.arms {
-            arms.encode(device, queue, encoder, target, size, &self.lighting)?;
-        }
+        let lighting = self.lighting;
+        draw_world(device, queue, encoder, target, size, &vp, view.eye, &lighting, renderer, &mut self.arms, &mut self.pawns)?;
         if let Some(overlay) = &self.overlay {
             overlay.encode(queue, encoder, target, size, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
         }

@@ -200,6 +200,7 @@ pub struct SkinnedMesh {
     globals: wgpu::Buffer,
     globals_group: wgpu::BindGroup,
     depth: Option<(wgpu::TextureView, u32, u32)>,
+    color: [f32; 3],
 }
 
 impl SkinnedMesh {
@@ -453,6 +454,7 @@ impl SkinnedMesh {
             globals,
             globals_group,
             depth: None,
+            color: SKIN_COLOR,
         })
     }
 
@@ -538,18 +540,7 @@ impl SkinnedMesh {
         view_proj: &Mat4,
         lighting: &Lighting,
     ) {
-        let mut globals = palette_bytes(std::slice::from_ref(view_proj));
-        for v3 in [
-            lighting.sun_direction,
-            lighting.sun,
-            lighting.sky_upper,
-            lighting.sky_lower,
-        ] {
-            globals.extend(floats(&[v3[0], v3[1], v3[2], 0.0]));
-        }
-        globals.extend(floats(&[lighting.exposure, 0.0, 0.0, 0.0]));
-        globals.extend(floats(&[SKIN_COLOR[0], SKIN_COLOR[1], SKIN_COLOR[2], 1.0]));
-        queue.write_buffer(&self.globals, 0, &globals);
+        self.set_view(queue, view_proj, lighting);
         let depth = self.depth_view(device, size.0, size.1);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("skin draw"),
@@ -572,6 +563,35 @@ impl SkinnedMesh {
             }),
             ..Default::default()
         });
+        self.draw_in(&mut pass);
+    }
+
+    /// The draw's colour, linear RGB ([`SKIN_COLOR`] unless set): a flat stand-in for the mesh's material (H8 owns
+    /// materials).
+    pub fn set_color(&mut self, color: [f32; 3]) {
+        self.color = color;
+    }
+
+    /// Writes the draw's view-projection, lighting and colour, for [`SkinnedMesh::draw_in`] (call before the pass).
+    pub fn set_view(&self, queue: &wgpu::Queue, view_proj: &Mat4, lighting: &Lighting) {
+        let mut globals = palette_bytes(std::slice::from_ref(view_proj));
+        for v3 in [
+            lighting.sun_direction,
+            lighting.sun,
+            lighting.sky_upper,
+            lighting.sky_lower,
+        ] {
+            globals.extend(floats(&[v3[0], v3[1], v3[2], 0.0]));
+        }
+        globals.extend(floats(&[lighting.exposure, 0.0, 0.0, 0.0]));
+        globals.extend(floats(&[self.color[0], self.color[1], self.color[2], 1.0]));
+        queue.write_buffer(&self.globals, 0, &globals);
+    }
+
+    /// Draws the skinned vertices into a pass the caller owns, which must have this mesh's target format and a
+    /// [`DEPTH_FORMAT`] depth attachment (the scene pass of `crate::render::SceneRenderer::encode_with` does). Call
+    /// after [`SkinnedMesh::skin`] and [`SkinnedMesh::set_view`], before the pass begins.
+    pub fn draw_in(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.draw);
         pass.set_bind_group(0, &self.globals_group, &[]);
         pass.set_vertex_buffer(0, self.out.slice(..));
