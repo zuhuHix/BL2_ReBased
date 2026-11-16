@@ -22,7 +22,11 @@ find.
   - **The oracle's interpreter.** CPython 3.12 adds an int into a float total plainly; 3.14 compensates it as it does
     a float (`sum([0.1, 2, 0.2, 5])` is `0x1.d333333333334p+2` on 3.12.10 and `0x1.d333333333333p+2` on 3.14.7; on
     20,000 random mixed lists each interpreter matched its own rule every time and the other's 380 times less).
-    `PySum` names the rule; `--python-sum 3.12|3.14` (default 3.14) passes it. The tracked test reads its own
+    `PySum` names the rule; `--python-sum 3.12|3.14` (default 3.14) passes it. The match holds only for ints within
+    a C `long`: CPython adds the leading ints in a `long`, which is 32 bits on Windows, and beyond it switches to big
+    ints and a generic loop that adds later floats with no compensation (review r2 found 520 misses in 50,000 such
+    lists on 3.14.6). That path is not emulated: an int item, or the running total of the leading ints, outside the
+    `i32` range is refused (`BadData`). Every weight on the installed game is far inside it. The tracked test reads its own
     interpreter's rule, checks it with that probe and fails, saying so, when the interpreter follows neither. Its
     fixture has a pool whose int and float weights sum differently under the two rules; on that fixture and on the
     installed game no drop depends on the rule (a last-bit change in a share rarely moves a pick). ctest on pc-hummer
@@ -73,6 +77,10 @@ find.
   - The per-player ammo multiplier from playthrough index 2 (`GetAmmoDropsPerPlayerMultiplier`'s `BalanceModifiers`
     values). Below index 2, NATIVE_LOOT.md reads it as 1.0, which Off mode uses (UNVERIFIED).
   - A `KeyedItemPoolDefinition` with no entries of its own: how its `Key` yields items is not read.
+  - An entry with no `Probability`, or a listed pool the death roll keeps with no `PoolProbability`: the struct
+    defaults of `BalancedInventoryData` and `ItemPoolInfo` are not read (review r2; before, such a weight read as 0).
+    On the installed game no entry has none: 0 of 19,396 pool entries and 0 of 6,868 list entries, over the 306
+    packages that hold pools (2 of the 2,010 packages fail to list their exports and were not read).
   - The readied roll (`AddPoolItems`): whether it tests the pool probability is not read.
   - A single-precision draw that rounding leaves past every interval: what the native does then is not read.
   - Value resolver classes `ow-attr` does not register (on the installed game: `RandomAttributeValueResolver` and
@@ -121,7 +129,9 @@ find.
   `pools.rs` pin the Reference rules on the cases of `tests/loot_pools_test.py`, both sum rules on the measured probe,
   and each Off-mode rule above on synthetic data. Review r1 added tests for included lists, custom playthrough lists,
   a max window, the class-default chain, undecoded values, cycles, the quantity bound, the multipliers, the 1e-8
-  floor, the in-place replace and a draw past every interval.
+  floor, the in-place replace and a draw past every interval. Review r2 added tests for the `long` refusal (the reviewer's
+  case), the Quantity drawn before a closed gate (exactly one draw), a diamond of shared pools and a list two lists
+  include (both roll), and the untagged probabilities.
 - **Not verified.**
   - Every rule, in the running game. The 7,680 rolls prove that the Rust roll keeps to the oracle's rules, not that
     the rules are the game's: the native truncates the quantity, tests `FRand() <= chance` and draws manufacturers at

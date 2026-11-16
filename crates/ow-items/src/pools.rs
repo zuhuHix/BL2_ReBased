@@ -64,7 +64,9 @@
 //! uncommon chest multiplier (`GetUncommonChestItemPoolWeightMultiplier`, values not read; no pool in `Startup.upk`
 //! sets the flag), the per-player ammo multiplier from playthrough index 2 (below it the record gives 1.0, which is
 //! used, UNVERIFIED), the readied roll of `bAutoReadyItems` pools (whether `AddPoolItems` tests the probability is not
-//! read), a `KeyedItemPoolDefinition` with no entries of its own (how its `Key` yields items is not read), and a
+//! read), a `KeyedItemPoolDefinition` with no entries of its own (how its `Key` yields items is not read), an
+//! entry with no `Probability` or a kept listed pool with no `PoolProbability` (the struct defaults of
+//! `BalancedInventoryData` and `ItemPoolInfo` are not read; no entry of the installed game has none), and a
 //! single-precision draw that rounding leaves past every interval (not read). A pool, sub-pool or list
 //! that includes itself is `BadData`, and so is a `Quantity` above 10,000 draws.
 //!
@@ -485,7 +487,19 @@ impl PyNum {
 /// then floats add with Neumaier compensation, and ints add plainly under 3.12 (`f_result += (double)value`) or with
 /// the same compensation under 3.14 ([`PySum`]); the compensation is added at the end when non-zero and finite.
 /// [`py_sum`] is the all-float case (the same under both).
+///
+/// CPython adds those ints in a C `long` and an int item into a float total only while the item fits a `long`;
+/// beyond it, it switches to big ints and a generic loop that adds later floats with no compensation, which this
+/// does not emulate. The oracle runs on Windows, where `long` is 32 bits, so an int item, or the running total of the
+/// leading ints, outside the `i32` range is refused (`BadData`); within it the match holds (on a 64-bit-`long`
+/// platform it holds at least there).
 fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>, rule: PySum) -> Result<PyNum, ItemError> {
+    let in_long = |v: i64| i32::try_from(v).is_ok();
+    let refuse = || {
+        bad(
+            "an int in a Python sum() outside a 32-bit C long (CPython's generic path is not emulated)",
+        )
+    };
     let mut items = items.into_iter();
     let mut int_total: i64 = 0;
     let mut sum;
@@ -493,9 +507,10 @@ fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>, rule: PySum) -> Result<P
         match items.next() {
             None => return Ok(PyNum::Int(int_total)),
             Some(PyNum::Int(i)) => {
-                int_total = int_total
-                    .checked_add(i)
-                    .ok_or_else(|| bad("an integer sum out of range"))?;
+                int_total = int_total.checked_add(i).ok_or_else(refuse)?;
+                if !in_long(i) || !in_long(int_total) {
+                    return Err(refuse());
+                }
             }
             Some(PyNum::Float(x)) => {
                 sum = PyNum::Int(int_total).f() + x;
@@ -505,6 +520,11 @@ fn py_sum_mixed(items: impl IntoIterator<Item = PyNum>, rule: PySum) -> Result<P
     }
     let mut c = 0.0f64;
     for item in items {
+        if let PyNum::Int(i) = item
+            && !in_long(i)
+        {
+            return Err(refuse());
+        }
         match item {
             PyNum::Float(x) => {
                 let t = sum + x;
@@ -1322,6 +1342,25 @@ fn entry_value(entry: &Pv, key: &str, kind: Kind, pool: &str) -> Result<Pv, Item
     Ok(tagged(entry, key, kind, pool)?.cloned().unwrap_or(Pv::Null))
 }
 
+/// The `NotYet` of an untagged entry probability: the struct's default is not read.
+fn untagged_probability(owner: &str, key: &str, struct_name: &str) -> ItemError {
+    NotYet::not_read(
+        format!(
+            "{owner}: an entry with no {key} (the struct default of {struct_name} is not read)"
+        ),
+        RECORD,
+    )
+    .into()
+}
+
+/// An entry's `Probability` (`BalancedInventoryData`): `NotYet` when untagged.
+fn entry_probability(entry: &Pv, key: &str, pool: &str) -> Result<Pv, ItemError> {
+    match tagged(entry, key, Kind::Struct, pool)? {
+        Some(v) => Ok(v.clone()),
+        None => Err(untagged_probability(pool, key, "BalancedInventoryData")),
+    }
+}
+
 /// An entry's object path, `None` when untagged, null or empty.
 fn entry_path(entry: &Pv, key: &str, pool: &str) -> Result<Option<String>, ItemError> {
     match tagged(entry, key, Kind::Object, pool)? {
@@ -1546,10 +1585,12 @@ impl Off<'_, '_, '_> {
         let mut list: Vec<(Candidate, f32)> = Vec::new();
         for entry in self.entries(pool)? {
             let drop = flag(&entry_value(&entry, "bDropOnDeath", Kind::Flag, pool)?);
-            let probability = entry_value(&entry, "Probability", Kind::Struct, pool)?;
+            // Read where it is used: an entry with neither a pool nor a balance needs none.
+            let probability = || entry_probability(&entry, "Probability", pool);
             if let Some(sub) = entry_path(&entry, "ItmPoolDefinition", pool)?
                 && self.has_entries(&sub)?
             {
+                let probability = probability()?;
                 let def = probability
                     .at("InitializationDefinition")
                     .as_str()
@@ -1573,6 +1614,7 @@ impl Off<'_, '_, '_> {
             let Some(balance) = entry_path(&entry, "InvBalanceDefinition", pool)? else {
                 continue;
             };
+            let probability = probability()?;
             let s = self.entry_stage(pool, stage, variance, window)?;
             let w = self.init(&probability)?;
             let Some(record) = self.reg.balance(&balance) else {
@@ -1797,6 +1839,13 @@ impl Off<'_, '_, '_> {
             if flag(&self.pools.field(&pool, "bAutoReadyItems", Kind::Flag)?) != Some(false) {
                 continue;
             }
+            if matches!(probability, Pv::Null) {
+                return Err(untagged_probability(
+                    &pool,
+                    "PoolProbability",
+                    "ItemPoolInfo",
+                ));
+            }
             let def = probability
                 .at("InitializationDefinition")
                 .as_str()
@@ -1855,6 +1904,7 @@ fn single_draw(weights: impl Iterator<Item = f32> + Clone, rand: u16) -> Result<
 fn push_pools(list: &Pv, owner: &str, out: &mut Vec<(String, Pv)>) -> Result<(), ItemError> {
     for e in list.items() {
         if let Some(p) = entry_path(e, "ItemPool", owner)? {
+            // Untagged stays Null here: the roll answers NotYet for it only if it fires the pool.
             out.push((p, entry_value(e, "PoolProbability", Kind::Struct, owner)?));
         }
     }
@@ -2332,6 +2382,7 @@ mod tests {
         p.add("Off.ListDefault", LIST_CLASS, vec![]);
         p.add("Off.PawnDefault", PAWN, vec![]);
         off_more(p);
+        off_r2(p);
     }
 
     struct Install(PathBuf);
@@ -2576,8 +2627,14 @@ mod tests {
             [
                 "List",
                 "Off.AmmoList",
+                "Off.L1",
+                "Off.L2",
+                "Off.LShared",
+                "Off.LTop",
                 "Off.List",
                 "Off.ListDefault",
+                "Off.ListNoProb",
+                "Off.ListNoProbReadied",
                 "Off.ListOuter",
                 "Off.ListSelf",
                 "Pool.WeaponPools.Guns"
@@ -3146,5 +3203,317 @@ mod tests {
             single_draw(past.iter().copied(), 32_767),
             Err(ItemError::NotYet(n)) if n.missing == Missing::NotRead
         ));
+    }
+
+    // ---- review r2 ----
+
+    fn off_r2(p: &mut Syn) {
+        // A closed gate (60 > the cap 50) with a Quantity from a random definition.
+        p.add(
+            "Off.RandomGated",
+            IP,
+            vec![
+                ("Quantity", by_def("RandomQty")),
+                ("MinGameStageRequirement", r("Gate60")),
+                items(vec![off_entry(SHIELD, 1.0, Some(true))]),
+            ],
+        );
+        // A diamond: A -> B, A -> C, B -> D, C -> D.
+        let sub = |pool: &'static str| {
+            V::Struct(
+                "BalancedInventoryData",
+                vec![
+                    ("ItmPoolDefinition", r(pool)),
+                    ("Probability", konst(1.0)),
+                    ("bDropOnDeath", V::Bool(true)),
+                ],
+            )
+        };
+        let one = |entries: Vec<V>| vec![("Quantity", konst(1.0)), items(entries)];
+        p.add("Off.DA", IP, one(vec![sub("Off.DB"), sub("Off.DC")]));
+        p.add("Off.DB", IP, one(vec![sub("Off.DD")]));
+        p.add("Off.DC", IP, one(vec![sub("Off.DD")]));
+        p.add("Off.DD", IP, one(vec![off_entry(SHIELD, 1.0, Some(true))]));
+        // A list two lists include.
+        p.add(
+            "Off.LShared",
+            LIST_CLASS,
+            vec![("ItemPools", V::Array(vec![listed("Off.Death", konst(1.0))]))],
+        );
+        for l in ["Off.L1", "Off.L2"] {
+            p.add(
+                l,
+                LIST_CLASS,
+                vec![("ItemPoolIncludedLists", V::Array(vec![r("Off.LShared")]))],
+            );
+        }
+        p.add(
+            "Off.LTop",
+            LIST_CLASS,
+            vec![(
+                "ItemPoolIncludedLists",
+                V::Array(vec![r("Off.L1"), r("Off.L2")]),
+            )],
+        );
+        // Untagged probabilities.
+        p.add(
+            "Off.NoProb",
+            IP,
+            vec![
+                ("Quantity", konst(1.0)),
+                items(vec![V::Struct(
+                    "BalancedInventoryData",
+                    vec![("InvBalanceDefinition", r(SHIELD))],
+                )]),
+            ],
+        );
+        let bare = |pool: &'static str| V::Struct("ItemPoolInfo", vec![("ItemPool", r(pool))]);
+        p.add(
+            "Off.ListNoProb",
+            LIST_CLASS,
+            vec![("ItemPools", V::Array(vec![bare("Off.Death")]))],
+        );
+        // A readied pool (Off.Gear) with no PoolProbability: the death roll skips it before it needs the chance.
+        p.add(
+            "Off.ListNoProbReadied",
+            LIST_CLASS,
+            vec![("ItemPools", V::Array(vec![bare("Off.Gear")]))],
+        );
+    }
+
+    /// An `AttributeInitializationDefinition` whose value is an integer random variance from `low` to `high` (the
+    /// field names the evaluator reads; every other field at its zero value: no formula, no condition, no range).
+    fn random_definition(world: &mut TestWorld, low: f32, high: f32) -> ObjRef {
+        use ow_object::heap::Origin;
+        use ow_object::ids::{PropAddr, StructId};
+        use ow_object::layout::{PropKind, PropertyDecl};
+        use ow_object::value::Value;
+        let space = &mut world.space;
+        let object = space.classes.by_path("Core.Object").unwrap();
+        let decl = |space: &mut ow_object::heap::ObjectSpace, n: &str, k: PropKind| {
+            PropertyDecl::new(space.names.intern(n), k)
+        };
+        let st = |space: &mut ow_object::heap::ObjectSpace,
+                  path: &str,
+                  fields: Vec<(&str, PropKind)>| {
+            let decls = fields.into_iter().map(|(n, k)| decl(space, n, k)).collect();
+            space.classes.define_struct(path, None, decls).unwrap()
+        };
+        let prefix = "Engine.AttributeInitializationDefinition.";
+        let aid = st(
+            space,
+            &format!("{prefix}AttributeInitializationData"),
+            vec![
+                ("BaseValueConstant", PropKind::Float),
+                ("BaseValueAttribute", PropKind::Object { class: object }),
+                (
+                    "InitializationDefinition",
+                    PropKind::Object { class: object },
+                ),
+                ("BaseValueScaleConstant", PropKind::Float),
+            ],
+        );
+        let formula = st(
+            space,
+            &format!("{prefix}BalanceFormula"),
+            vec![("bEnabled", PropKind::Bool)],
+        );
+        let conditional = st(
+            space,
+            &format!("{prefix}ConditionalInitializationExpressions"),
+            vec![("bEnabled", PropKind::Bool)],
+        );
+        let variance = st(
+            space,
+            &format!("{prefix}Variance"),
+            vec![
+                ("bEnabled", PropKind::Bool),
+                ("LowerBound", PropKind::Struct(aid)),
+                ("UpperBound", PropKind::Struct(aid)),
+                ("bUseIntegerRandomization", PropKind::Bool),
+            ],
+        );
+        let range = st(
+            space,
+            &format!("{prefix}Range"),
+            vec![
+                ("bEnableMinValueRestriction", PropKind::Bool),
+                ("bEnableMaxValueRestriction", PropKind::Bool),
+            ],
+        );
+        let byte = || PropKind::Byte { enum_: None };
+        let decls = vec![
+            decl(space, "ValueFormula", PropKind::Struct(formula)),
+            decl(
+                space,
+                "ConditionalInitialization",
+                PropKind::Struct(conditional),
+            ),
+            decl(space, "BaseValueMode", byte()),
+            decl(space, "RandomVariance", PropKind::Struct(variance)),
+            decl(space, "RangeRestriction", PropKind::Struct(range)),
+            decl(space, "RoundingMode", byte()),
+        ];
+        let class = space
+            .classes
+            .define(
+                "Engine.AttributeInitializationDefinition",
+                Some(object),
+                decls,
+            )
+            .unwrap();
+        let value =
+            |space: &mut ow_object::heap::ObjectSpace, ty: StructId, fields: Vec<(&str, Value)>| {
+                let mut v = space.classes.struct_defaults(ty).unwrap();
+                for (n, x) in fields {
+                    let id = space.names.find(n).unwrap();
+                    let at = space
+                        .classes
+                        .struct_layout(ty)
+                        .unwrap()
+                        .field(id)
+                        .unwrap()
+                        .0;
+                    v.struct_mut().unwrap().fields[at as usize] = x;
+                }
+                v
+            };
+        let k = |space: &mut ow_object::heap::ObjectSpace, x: f32| {
+            value(
+                space,
+                aid,
+                vec![
+                    ("BaseValueConstant", Value::Float(x)),
+                    ("BaseValueScaleConstant", Value::Float(1.0)),
+                ],
+            )
+        };
+        let (lo, hi) = (k(space, low), k(space, high));
+        let v = value(
+            space,
+            variance,
+            vec![
+                ("bEnabled", Value::Bool(true)),
+                ("LowerBound", lo),
+                ("UpperBound", hi),
+                ("bUseIntegerRandomization", Value::Bool(true)),
+            ],
+        );
+        let o = space
+            .alloc(class, "RandomQty", None, Origin::Runtime)
+            .unwrap();
+        let p = space.prop(class, "RandomVariance").unwrap();
+        space.write(o, PropAddr::scalar(p), v).unwrap();
+        o
+    }
+
+    #[test]
+    fn an_int_outside_a_32_bit_long_is_refused_in_a_python_sum() {
+        // The reviewer's case: CPython 3.14 gives 1.5 (its generic big-int path); refused, not emulated.
+        let items = [
+            PyNum::Int(-2_147_483_649),
+            PyNum::Float(8.7e-17),
+            PyNum::Int(2),
+            PyNum::Float(9.5e-17),
+            PyNum::Float(1.9e-17),
+            PyNum::Int(2_147_483_647),
+            PyNum::Float(0.8),
+            PyNum::Float(0.7),
+        ];
+        for rule in [PySum::Py312, PySum::Py314] {
+            assert!(matches!(
+                py_sum_mixed(items, rule),
+                Err(ItemError::BadData(_))
+            ));
+        }
+        // A leading total that leaves the range, and an int after a float outside it.
+        let total = [PyNum::Int(2_147_483_647), PyNum::Int(1), PyNum::Float(0.5)];
+        assert!(matches!(
+            py_sum_mixed(total, PySum::Py314),
+            Err(ItemError::BadData(_))
+        ));
+        let late = [PyNum::Float(0.5), PyNum::Int(1 << 31)];
+        assert!(matches!(
+            py_sum_mixed(late, PySum::Py314),
+            Err(ItemError::BadData(_))
+        ));
+        // At the range's edges the rule still applies.
+        let edge = [
+            PyNum::Int(-2_147_483_648),
+            PyNum::Float(0.5),
+            PyNum::Int(2_147_483_647),
+        ];
+        assert_eq!(
+            py_sum_mixed(edge, PySum::Py314).unwrap(),
+            PyNum::Float(-0.5)
+        );
+    }
+
+    #[test]
+    fn off_mode_evaluates_the_quantity_before_the_gate() {
+        let fx = OffFx::new("off-quantity-first");
+        let mut world = TestWorld::new();
+        let gate60 = world.constant_attribute(60.0);
+        let random = random_definition(&mut world, 1.0, 2.0);
+        let snap = snapshot(8);
+        let seed = 77;
+        let mut rng = CrtRand::new(seed);
+        let drops = {
+            let mut rw = RollWorld::new(&mut world, &mut rng, false);
+            let mut cx = RollCx::new(
+                &snap,
+                EvalCx::new(&mut rw),
+                &fx.sys,
+                &fx.data,
+                ParityMode::Off,
+            )
+            .with_known("Gate60", gate60)
+            .with_known("RandomQty", random);
+            roll_pool(
+                &fx.fx.pools,
+                Some(&fx.reg),
+                &ObjectPath::parse("Off.RandomGated").unwrap(),
+                &PoolRequest::for_mode(ParityMode::Off),
+                &mut cx,
+            )
+            .unwrap()
+        };
+        // The gate is closed, so nothing spawns, but the random Quantity drew exactly once.
+        assert_eq!(drops, vec![]);
+        let mut once = CrtRand::new(seed);
+        once.rand15();
+        assert_eq!(rng, once);
+    }
+
+    #[test]
+    fn shared_pools_and_lists_pass_the_cycle_guards() {
+        let fx = OffFx::new("off-shared");
+        let mut middles = DetSet::new();
+        // Spread seeds: CrtRand's first draw is small for every small seed, which would take one arm only.
+        for seed in crate::roll::spread_seeds(40) {
+            let drops = fx.off("Off.DA", 8, seed).unwrap();
+            assert_eq!(drops.len(), 1, "{seed}");
+            let chain = &drops[0].chain;
+            assert_eq!(
+                (chain.len(), chain[0].as_str(), chain[2].as_str()),
+                (3, "Off.DA", "Off.DD")
+            );
+            middles.insert(chain[1].clone());
+        }
+        // Both arms of the diamond were taken.
+        assert_eq!(middles.len(), 2);
+        // A list included by two lists is expanded once for each.
+        let drops = fx.off("Off.LTop", 8, 1).unwrap();
+        assert_eq!(chains(&drops), [vec!["Off.Death"], vec!["Off.Death"]]);
+    }
+
+    #[test]
+    fn an_untagged_entry_probability_is_not_yet() {
+        let fx = OffFx::new("off-noprob");
+        let not_read = |r: Result<Vec<PoolDrop>, ItemError>| matches!(r, Err(ItemError::NotYet(n)) if n.missing == Missing::NotRead);
+        assert!(not_read(fx.off("Off.NoProb", 8, 1)));
+        assert!(not_read(fx.off("Off.ListNoProb", 8, 1)));
+        // A pool the death roll does not keep needs no chance.
+        assert_eq!(fx.off("Off.ListNoProbReadied", 8, 1).unwrap(), vec![]);
     }
 }
