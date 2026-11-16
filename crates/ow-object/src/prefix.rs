@@ -50,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_three_cxx_prefixes_exist() {
+    fn from_bytes_gives_only_the_three_cxx_prefixes() {
         for prefix in [
             PropertyPrefix::Ordinary,
             PropertyPrefix::Component,

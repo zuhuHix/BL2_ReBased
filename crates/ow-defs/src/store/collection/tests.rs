@@ -80,6 +80,29 @@ fn engine(level_exported: bool) -> Vec<u8> {
     let mut old = Export::new(smc, "OldTemplate", payload);
     old.outer = mesh_actor_default;
     d.p.add_export_with(old);
+    // Review r1 of PR #370: templates that break one part of the recorded layout each, and one with the allowed tail.
+    let mut template =
+        |d: &mut Declarations, name: &str, word0: i32, name_at_4: &str, tail: &[i32]| {
+            let named = d.p.name(name_at_4);
+            let mut payload = ints(&[word0, named, 0, 0]);
+            payload.extend(d.p.int_tag("Count", 7));
+            payload.extend_from_slice(&none);
+            payload.extend(ints(tail));
+            let mut e = Export::new(smc, name, payload);
+            e.outer = mesh_actor_default;
+            d.p.add_export_with(e);
+        };
+    template(&mut d, "BadWord", 1, "BadWord", &[]);
+    template(&mut d, "BadName", 0, "MeshComponent0", &[]);
+    template(&mut d, "BadTail", 0, "BadTail", &[7]);
+    template(&mut d, "ZeroTail", 0, "ZeroTail", &[0]);
+    template(&mut d, "LongTail", 0, "LongTail", &[0, 0]);
+    // A class default object inside one: still a class default object, not a definition.
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&none);
+    let mut inner = Export::new(smc, "Default__Inner", payload);
+    inner.outer = mesh_actor_default;
+    d.p.add_export_with(inner);
     let mesh_collection = d.cls("StaticMeshCollectionActor", actor);
     d.array_of(mesh_collection, "StaticMeshComponents", "Object", smc);
     d.default_object(mesh_collection, "StaticMeshCollectionActor");
@@ -566,15 +589,53 @@ fn a_template_loads_from_16_in_off_only() {
                 Err(DefError::PrefixMismatch { .. })
             ));
             match old {
-                Err(DefError::NotYet(n)) => assert!(n.to_string().contains("16 bytes in"), "{n}"),
+                Err(DefError::NotYet(n)) => {
+                    assert!(n.to_string().contains("template layout"), "{n}")
+                }
                 other => panic!("OldTemplate: {other:?}"),
             }
+            // Review r1 of PR #370: the header and the tail are part of the check. A non-zero word 0, another name
+            // at 4, a non-zero trailing word and two trailing words are each NotYet; one zero trailing word loads.
+            for name in ["BadWord", "BadName", "BadTail", "LongTail"] {
+                match t.defs.find(&mut t.w, &path(name)) {
+                    Err(DefError::NotYet(n)) => {
+                        assert!(n.to_string().contains("template layout"), "{name}: {n}")
+                    }
+                    other => panic!("{name}: {other:?}"),
+                }
+            }
+            let zero = t.defs.find(&mut t.w, &path("ZeroTail")).unwrap().unwrap();
+            assert_eq!(t.read(zero, "Count"), Value::Int(7));
+            // A class default object inside one stays a class default object, not a definition.
+            let inner = t
+                .defs
+                .find(&mut t.w, &path("Default__Inner"))
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                t.w.heap.get(inner).unwrap().origin,
+                Origin::Default { .. }
+            ));
         } else {
             assert!(
                 matches!(found, Err(DefError::NotADefinition(_))),
                 "{found:?}"
             );
             assert!(matches!(old, Err(DefError::NotADefinition(_))), "{old:?}");
+            // Review r1 of PR #370, M2: load_export refuses it as not a definition before deriving any prefix.
+            let index = t
+                .defs
+                .packages
+                .get(engine)
+                .find_export("Default__MeshActor.MeshComponent0")
+                .unwrap()
+                .unwrap();
+            for prefix in [PropertyPrefix::Template, PropertyPrefix::Component] {
+                assert!(matches!(
+                    t.defs.load_export(&mut t.w, engine, index, prefix),
+                    Err(DefError::NotADefinition(_))
+                ));
+            }
         }
     }
 }
