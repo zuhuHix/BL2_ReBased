@@ -1524,6 +1524,45 @@ pub fn startup() -> Vec<u8> {
     p.build()
 }
 
+/// `ToyInjured`, used only by the bleed-out tests (not one of [`files`], so the packages the C++ digests were taken
+/// over are unchanged): `ToyInjuredPawn`, a `WillowPlayerPawn` with the fields the injured state reads and the five
+/// script functions the bleed step calls, each an empty body the tests override (invented, lane W6-COMBAT-RUN2).
+pub fn toy_injured() -> Vec<u8> {
+    let mut w = Toy::new(&["Float", "Byte", "Int", "Bool", "Object"]);
+    w.import_root();
+    let willow = w.import_full("Package", 0, "WillowGame");
+    let player_pawn = w.import_full("Class", willow, "WillowPlayerPawn");
+    let pawn = w.cls("ToyInjuredPawn", player_pawn);
+    for n in [
+        "TotalBleedoutTime",
+        "NumSuccessiveInjuries",
+        "flInjuredTargetedTime",
+        "LastInjuryTime",
+    ] {
+        w.prop("Float", pawn, n, 0, 0);
+    }
+    for n in ["InjuredState", "InjuredDeadState", "SecondWindReason"] {
+        w.prop("Byte", pawn, n, 0, 0);
+    }
+    w.prop("Bool", pawn, "bInjuredDeadCameraActive", 0, 0);
+    let empty = |_: &dyn Fn(&str) -> i32| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    };
+    for (name, params) in [
+        ("SwitchToSidearm", vec![]),
+        ("Tick", vec![P("Float", "DeltaTime", 0, 0)]),
+        ("InjuredDeathAnimDone", vec![]),
+        ("CalcInjuredDeadCamera", vec![P("Float", "fDeltaTime", 0, 0)]),
+        ("ShowRespawnDialog", vec![]),
+    ] {
+        w.function(pawn, name, &params, None, SCRIPT, empty);
+    }
+    w.build()
+}
+
 /// Every file of the fixture, by file name.
 pub fn files() -> Vec<(&'static str, Vec<u8>)> {
     vec![

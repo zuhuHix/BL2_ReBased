@@ -272,9 +272,26 @@ struct Held {
     reported: usize,
 }
 
-/// One deferred raise: the pawn, which provider, the event, its output values, and whether a pawn whose class has no
-/// provider is skipped (a broadcast's class target, as the C++ catches that error).
-type Deferred = (ObjRef, Which, String, DetMap<String, String>, bool);
+/// One deferred raise: the pawn, which provider, the event, its output values, whether a pawn whose class has no
+/// provider is skipped (a broadcast's class target, as the C++ catches that error), and where the target provider
+/// stood when the event was deferred ([`Mark`]).
+type Deferred = (ObjRef, Which, String, DetMap<String, String>, bool, Mark);
+
+/// Where a provider that was running stood when an event was deferred onto it (the order tripwire, [`with_provider`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    /// Deferred for another reason (a broadcast's class share queued behind its death share): not checked.
+    NotHeld,
+    /// The provider's trace length when the raising behavior ran (a script behavior of this run marks it).
+    At(usize),
+    /// Raised by a handler that marks nothing: checked conservatively (more than one behavior ran).
+    Unknown,
+}
+
+/// The note a `Reference` run logs when an event deferred onto a running provider runs after behaviors that provider
+/// ran after the raise ([`with_provider`]).
+pub const ORDER_NOTE: &str = "note: combat-run (Rust): an event raised on a running behavior provider was deferred \
+     past behaviors that provider ran after the raise; the C++ runs it inside, before them";
 
 /// The most deferred raises one outermost raise drains (a Rust-only bound: events that keep raising each other on
 /// running providers are a runaway, reported as an error rather than run forever).
@@ -288,6 +305,24 @@ struct Providers {
     deferred: Vec<Deferred>,
     /// Raises in progress: only the outermost (depth 1) drains `deferred`.
     depth: u32,
+    /// The script behaviors running, innermost last: the pawn, which provider, its trace length then ([`Mark`]).
+    marks: Vec<(ObjRef, Which, usize)>,
+}
+
+/// Runs `f` as a behavior of the provider of `which` of `pawn` whose trace length is `len`, so a raise that `f` defers
+/// onto that same provider records where it stood ([`Mark::At`]).
+fn marked<T>(
+    vm: &mut Vm,
+    pawn: ObjRef,
+    which: Which,
+    len: usize,
+    f: impl FnOnce(&mut Vm) -> Result<T, VmError>,
+) -> Result<T, VmError> {
+    let service = providers(vm)?;
+    borrow(&service)?.marks.push((pawn, which, len));
+    let result = f(vm);
+    borrow(&service)?.marks.pop();
+    result
 }
 
 /// The providers service, borrowed for a short scope (no script call inside).
@@ -309,6 +344,7 @@ fn run_script_behavior(
     p: &mut Provider,
     id: BehaviorId,
     pawn: ObjRef,
+    which: Which,
 ) -> Result<Vec<i32>, VmError> {
     let behavior = p.behavior(id).clone();
     let class = vm.space.heap.get(behavior.object)?.class;
@@ -323,8 +359,10 @@ fn run_script_behavior(
         .map(|d| d.params.clone())
         .unwrap_or_default();
     let contexts = p.contexts(id, pawn);
+    let len = p.trace.len();
     // The output links go to the behavior kernel pack's shared collector (ow_behavior::kernel::natives::collect).
-    let (result, ids) = ow_behavior::kernel::natives::collect(vm, |vm| {
+    // A raise the script defers onto this provider records where it stood (the order tripwire).
+    let (result, ids) = marked(vm, pawn, which, len, |vm| ow_behavior::kernel::natives::collect(vm, |vm| {
         for context in contexts {
             let args = params
                 .iter()
@@ -337,7 +375,7 @@ fn run_script_behavior(
             vm.call(apply, Some(behavior.object), args)?;
         }
         Ok::<(), VmError>(())
-    })?;
+    }))?;
     result.map(|()| ids)
 }
 
@@ -350,7 +388,7 @@ fn make_provider(
 ) -> Result<Provider, VmError> {
     let mut p = Provider::new(vm, definition).map_err(provider_error)?;
     let script = move |vm: &mut Vm, p: &mut Provider, id: BehaviorId, _: &str| {
-        run_script_behavior(vm, p, id, pawn).map_err(BehaviorError::Vm)
+        run_script_behavior(vm, p, id, pawn, which).map_err(BehaviorError::Vm)
     };
     match which {
         Which::Class => {
@@ -512,13 +550,55 @@ fn with_provider<T>(
             }
         }
     };
+    let (start, before) = (p.trace.len(), borrow(&service)?.deferred.len());
     let result = f(vm, &mut p, &mut reported);
+    let end = p.trace.len();
     let back = Held {
         provider: Some(p),
         reported,
     };
-    borrow(&service)?.held.insert((pawn, which), back);
-    result.map(Some)
+    let late: Vec<String> = {
+        let mut s = borrow(&service)?;
+        s.held.insert((pawn, which), back);
+        s.deferred
+            .get(before..)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|d| d.0 == pawn && d.1 == which)
+            .filter(|d| match d.5 {
+                Mark::NotHeld => false,
+                Mark::At(m) => end > m,
+                Mark::Unknown => end.saturating_sub(start) > 1,
+            })
+            .map(|d| d.2.clone())
+            .collect()
+    };
+    let value = result?;
+    order_tripwire(vm, &late)?;
+    Ok(Some(value))
+}
+
+/// The order tripwire (review r1 of PR #356, decision 2026-11-16-54): events deferred onto a running provider that then
+/// ran more of its own behaviors run after those behaviors here, where the C++ re-enters and runs them first (the
+/// hit's events list and a later `CompareBool` can differ). `Off`: `NotYet { NotPorted }`; `Reference`: the labelled
+/// [`ORDER_NOTE`], and the run goes on as before.
+fn order_tripwire(vm: &mut Vm, late: &[String]) -> Result<(), VmError> {
+    if late.is_empty() {
+        return Ok(());
+    }
+    let events = late.join(", ");
+    if vm.parity == ow_core::ParityMode::Reference {
+        vm.log.push(format!("{ORDER_NOTE} ({events})"));
+        return Ok(());
+    }
+    Err(NotYet::not_ported(
+        format!(
+            "{events} raised on a running behavior provider whose sequence went on after the raise: the C++ runs it \
+             inside, before the behaviors that follow; this port defers it past them"
+        ),
+        RECORD,
+    )
+    .into())
 }
 
 /// Runs `f` as one raise. The outermost raise then drains the raises deferred meanwhile, in order (each of which may
@@ -566,7 +646,7 @@ fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
                 Some((item, s.deferred.len()))
             }
         };
-        let Some(((pawn, which, name, outputs, skip_missing), rest)) = next else {
+        let Some(((pawn, which, name, outputs, skip_missing, _), rest)) = next else {
             return Ok(());
         };
         let death = if which == Which::Death {
@@ -614,7 +694,13 @@ fn fire_or_defer(
         report_lines(vm, p, reported)
     })?;
     if done.is_none() {
-        defer(vm, (pawn, which, name.to_string(), outputs.clone(), false))?;
+        let mark = borrow(&providers(vm)?)?
+            .marks
+            .iter()
+            .rev()
+            .find(|m| m.0 == pawn && m.1 == which)
+            .map_or(Mark::Unknown, |m| Mark::At(m.2));
+        defer(vm, (pawn, which, name.to_string(), outputs.clone(), false, mark))?;
         return Ok(true);
     }
     Ok(false)
@@ -661,7 +747,7 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
             if death_deferred {
                 defer(
                     vm,
-                    (event.pawn, Which::Class, event.name.clone(), none, true),
+                    (event.pawn, Which::Class, event.name.clone(), none, true, Mark::NotHeld),
                 )?;
                 return Ok(());
             }
@@ -1426,19 +1512,27 @@ impl Run {
                 None => return Err(error(format!("combat-run: {package} has no {cause}"))),
             }
         };
-        let vm = &mut self.world.vm;
-        let delivery = hit::delivery_of(vm, definition_object, cause_object)?;
+        let delivery = hit::delivery_of(&mut self.world.vm, definition_object, cause_object)?;
         let swing = match self.bridge.clone() {
             // The bridge's player pawn is the victim, with the controller's Pawn set to it (C++ `swingAtPlayer`).
-            Some(b) => match player::with_player_pawn(vm, &*b, |vm, victim| {
-                hit::swing(vm, mind, victim, &delivery)
-            }) {
-                Ok(s) => s,
-                Err(e) => return Ok(self.script_error(&e)),
-            },
+            // An error is the bridge guard's: recorded, and the step goes on with an empty swing (arrival 0), as
+            // the C++ (review r1 of PR #356).
+            Some(b) => {
+                let victim = self.bridge_pawn(&*b)?;
+                let controller = b.player_controller();
+                match player::with_player_pawn(&mut self.world.vm, controller, victim, |vm, victim| {
+                    hit::swing(vm, mind, victim, &delivery)
+                }) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.script_error(&e);
+                        hit::Swing::default()
+                    }
+                }
+            }
             None => {
                 let victim = self.players[0].pawn;
-                hit::swing(vm, mind, victim, &delivery)?
+                hit::swing(&mut self.world.vm, mind, victim, &delivery)?
             }
         };
         let id = format!("{row_class}.L{level}");
@@ -1512,14 +1606,19 @@ impl Run {
         };
         let report = match &bridge {
             // The bridge's controller is the instigator, its Pawn the player's while the chain runs (C++
-            // `hitFromPlayer`); an error is the bridge guard's.
+            // `hitFromPlayer`). An error is the bridge guard's: recorded, and the step goes on with an empty report
+            // (its rows 0, the hit counted, the kills and the down state processed), as the C++ (review r1 of PR #356).
             Some(b) => {
                 let controller = b.player_controller();
-                match player::with_player_pawn(vm, &**b, |vm, _| {
+                let player_pawn = self.bridge_pawn(&**b)?;
+                match player::with_player_pawn(&mut self.world.vm, controller, player_pawn, |vm, _| {
                     hit::hit(vm, pawn, Some(controller), damage, parts[3], Some(source_class))
                 }) {
                     Ok(r) => r,
-                    Err(e) => return Ok(self.script_error(&e)),
+                    Err(e) => {
+                        self.script_error(&e);
+                        HitReport::default()
+                    }
                 }
             }
             None => {
@@ -1527,6 +1626,7 @@ impl Run {
                 hit::hit(vm, pawn, Some(instigator), damage, parts[3], Some(source_class))?
             }
         };
+        let vm = &mut self.world.vm;
         // The kills this hit made (the experience natives record them): one row per kill, the credit being what the
         // bridge player's pool gained.
         let kills = with_state(vm, |s| s.kills.clone())?;
@@ -1725,11 +1825,17 @@ impl Run {
 
     // ---- the mission bridge's player (`run/player.rs`) ----------------------------------------------------------
 
-    /// A bridged chain's error, as the bridge's guard records it (`mission script: <text>`), and the step's result.
-    fn script_error(&mut self, e: &VmError) -> String {
-        let text = error_text(e);
-        self.script_errors.push(format!("mission script: {text}"));
-        format!("{{\"error\":{}}}", json_quote(&format!("mission script: {text}")))
+    /// A bridged chain's error, as the bridge's guard records it (`mission script: <text>`); the step goes on.
+    fn script_error(&mut self, e: &VmError) {
+        self.script_errors.push(format!("mission script: {}", error_text(e)));
+    }
+
+    /// The bridge's player pawn, its health reference linked to the stand-in pool when there is one, as the C++
+    /// bridge relinks on every fetch (`pawnFor`; review r1 of PR #356).
+    fn bridge_pawn(&mut self, b: &dyn PlayerBridge) -> Result<ObjRef, VmError> {
+        let pawn = b.player_pawn(&mut self.world.vm)?;
+        self.health.relink(&mut self.world.vm, pawn)?;
+        Ok(pawn)
     }
 
     fn bridge_or(&self, refusal: &str) -> Result<Rc<dyn PlayerBridge>, VmError> {
@@ -1744,6 +1850,10 @@ impl Run {
             "combat-run: maya needs the mission bridge (it is built when a maya step is among the steps)",
         )?;
         let level = stoi(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
+        // The bridge's player is the run's one local player: the same scenario setup as the first `player:` step
+        // (decision 2026-11-16-49, extended to `maya` by decision 2026-11-16-54), made before the pool's maximum is
+        // evaluated, as the C++ context always counts 1 (review r1 of PR #356).
+        self.one_local_player()?;
         let vm = &mut self.world.vm;
         b.set_player_experience(vm, level, 0)?;
         self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
@@ -1757,11 +1867,8 @@ impl Run {
             b.set_player_experience(vm, level, experience)?;
             self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
         }
-        let pawn = b.player_pawn(vm)?;
-        crate::down::prepare_player_pawn(vm, pawn)?;
-        // The bridge's player is the run's one local player: the same scenario setup as the first `player:` step
-        // (decision 2026-11-16-49; lane W6-COMBAT-RUN2 extends it to the `maya` step, decision 2026-11-16-54).
-        self.one_local_player()?;
+        let pawn = self.bridge_pawn(&*b)?;
+        crate::down::prepare_player_pawn(&mut self.world.vm, pawn)?;
         // The C++ also loads two references of the globals definition here (the death camera's end time): the
         // definition store loads a definition's references when they are read, so nothing is needed.
         Ok(format!("{{\"player\":{}}}", self.player_json()?))
@@ -1807,7 +1914,7 @@ impl Run {
     fn maya_health(&mut self, parts: &[&str]) -> Result<String, VmError> {
         let b = self.bridge_or("combat-run: mayahealth needs the mission bridge (the step maya:<level>)")?;
         let share = stod(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
-        let pawn = b.player_pawn(&mut self.world.vm)?;
+        let pawn = self.bridge_pawn(&*b)?;
         let maximum = number(&self.call(pawn, "GetMaxHealth", Vec::new())?.ret);
         let current = crate::hit::access::to_f32(share * maximum);
         self.health
@@ -1870,8 +1977,8 @@ impl Run {
     /// The bridge's player as JSON (C++ `playerJson`).
     fn player_json(&mut self) -> Result<String, VmError> {
         let b = self.bridge_or("combat-run: no mission bridge")?;
+        let pawn = self.bridge_pawn(&*b)?;
         let vm = &mut self.world.vm;
-        let pawn = b.player_pawn(vm)?;
         let level = b.player_level(vm)?;
         let next = player::next_level_at(vm, b.player_controller())?;
         let health = number(&self.call(pawn, "GetHealth", Vec::new())?.ret);
@@ -1888,15 +1995,14 @@ impl Run {
     fn down_json(&mut self) -> Result<String, VmError> {
         let b = self.bridge_or("combat-run: no mission bridge")?;
         let now = self.world_now()?;
-        let vm = &mut self.world.vm;
-        let pawn = b.player_pawn(vm)?;
-        player::down_json(vm, pawn, &self.episode, now)
+        let pawn = self.bridge_pawn(&*b)?;
+        player::down_json(&mut self.world.vm, pawn, &self.episode, now)
     }
 
     /// Starts the record of an injury when the player's pawn has just entered its injured state (C++ `trackDown`).
     fn track_down(&mut self) -> Result<(), VmError> {
         let b = self.bridge_or("combat-run: no mission bridge")?;
-        let pawn = b.player_pawn(&mut self.world.vm)?;
+        let pawn = self.bridge_pawn(&*b)?;
         if self.episode.active || !player::is_injured_state(&self.world.vm, pawn)? {
             return Ok(());
         }
@@ -1932,7 +2038,7 @@ impl Run {
             self.track_down()?;
             let n = self.episode.number.to_string();
             let controller = b.player_controller();
-            let pawn = b.player_pawn(&mut self.world.vm)?;
+            let pawn = self.bridge_pawn(b)?;
             let saved = get(&mut self.world.vm, controller, "Pawn")?;
             if saved.is_some() {
                 set(&mut self.world.vm, controller, "Pawn", Value::Object(Some(pawn)))?;

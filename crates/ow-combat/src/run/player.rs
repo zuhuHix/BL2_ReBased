@@ -116,7 +116,9 @@ fn pool_not_ported() -> VmError {
 
 impl HealthPool {
     /// C++ `ensureHealthPool`: builds the manager and the pool once; false (and no pool, ever) when the data lacks a
-    /// part, as the C++ gives up quietly. `Off` mode: `NotYet`.
+    /// part, as the C++ gives up quietly. As the C++ catch, any error of the build other than a `NotYet` is false,
+    /// with the manager and the pool cleared (review r1 of PR #356); a `NotYet` is passed on, also cleared. Then the
+    /// pawn is linked. `Off` mode: `NotYet`.
     fn ensure(&mut self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<bool, VmError> {
         if vm.parity != ParityMode::Reference {
             return Err(pool_not_ported());
@@ -128,6 +130,33 @@ impl HealthPool {
             return Ok(false);
         }
         self.failed = true;
+        match self.build(vm, bridge) {
+            Ok(true) => {
+                self.failed = false;
+                let pawn = bridge.player_pawn(vm)?;
+                self.relink(vm, pawn)?;
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
+            Err(e) => {
+                self.manager = None;
+                self.pool = None;
+                match e {
+                    VmError::NotYet(n) => Err(VmError::NotYet(n)),
+                    _ => Ok(false),
+                }
+            }
+        }
+    }
+
+    /// Whether no pool is kept (tests).
+    #[cfg(test)]
+    pub(crate) fn pool_is_none(&self) -> bool {
+        self.pool.is_none() && self.manager.is_none()
+    }
+
+    /// The build of [`HealthPool::ensure`]: the manager and the pool, kept only when every part was found.
+    fn build(&mut self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<bool, VmError> {
         let controller = bridge.player_controller();
         let Some(class) = bridge.player_class(vm)? else {
             return Ok(false);
@@ -191,17 +220,23 @@ impl HealthPool {
         }
         self.manager = Some(manager);
         self.pool = Some(pool);
-        self.failed = false;
-        self.link(vm, bridge)?;
         Ok(true)
     }
 
-    /// C++ `linkPlayerHealth`: the pawn's `HealthPool` reference to slot 0 of the manager, the pool's own GUID.
-    fn link(&self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<(), VmError> {
+    /// C++ `linkPlayerHealth`, which the C++ bridge runs on every fetch of the player's pawn (`pawnFor`): the pawn's
+    /// `HealthPool` reference to slot 0 of the manager, the pool's own GUID. Nothing without a pool (so nothing in
+    /// `Off` mode). As the C++ catch, an error other than a `NotYet` leaves the pawn as it is.
+    pub(crate) fn relink(&self, vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
+        match self.link(vm, pawn) {
+            Err(VmError::NotYet(n)) => Err(VmError::NotYet(n)),
+            _ => Ok(()),
+        }
+    }
+
+    fn link(&self, vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
         let (Some(manager), Some(pool)) = (self.manager, self.pool) else {
             return Ok(());
         };
-        let pawn = bridge.player_pawn(vm)?;
         let Some(mut reference) = get(vm, pawn, "HealthPool")? else {
             return Ok(());
         };
@@ -427,11 +462,10 @@ pub(crate) fn next_level_at(vm: &mut Vm, controller: ObjRef) -> Result<i64, VmEr
 /// `withPlayerPawn`, `hitFromPlayer`, `swingAtPlayer`); the controller is the player's while the chain runs.
 pub(crate) fn with_player_pawn<T>(
     vm: &mut Vm,
-    bridge: &dyn PlayerBridge,
+    controller: ObjRef,
+    pawn: ObjRef,
     body: impl FnOnce(&mut Vm, ObjRef) -> Result<T, VmError>,
 ) -> Result<T, VmError> {
-    let controller = bridge.player_controller();
-    let pawn = bridge.player_pawn(vm)?;
     let saved = get(vm, controller, "Pawn")?;
     if saved.is_some() {
         set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;

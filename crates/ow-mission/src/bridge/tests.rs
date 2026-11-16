@@ -18,7 +18,7 @@ use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT, FunctionSpec, Param, ScriptToy};
-use ow_package::testkit::{Export, PackageBuilder};
+use ow_package::testkit::{Export, PackageBuilder, ints};
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_vm::api::{Arg, FunctionDecl, NativeCall, NativePack, Vm};
 
@@ -268,6 +268,15 @@ fn willowgame() -> Vec<u8> {
     for name in ["Pawn", "PlayerClass", "CharacterClass", "MyWillowPawn", "ResourcePoolManager"] {
         t.prop("Object", controller, name, 0, object);
     }
+    // A damage modifier whose class default is not zero (an invented 1.0): the bridge's controller starts from it.
+    t.prop("Float", controller, "ReceivedMeleeDamageModifier", 0, 0);
+    let defaults = {
+        let mut payload = ints(&[0]);
+        payload.extend(t.p.float_tag("ReceivedMeleeDamageModifier", 1.0));
+        payload.extend_from_slice(&t.p.none());
+        payload
+    };
+    t.p.add_export(controller, "Default__WillowPlayerController", defaults);
     native(&mut t, controller, "NativeGetMissionIndex", &[param("Object", "InMission", 0, object)], Some(("Int", 0)), NATIVE);
     native(&mut t, controller, "GetCurrentPlaythrough", &[], Some(("Int", 0)), NATIVE);
     native(&mut t, controller, "GetHUDMovie", &[], Some(("Object", object)), NATIVE);
@@ -605,6 +614,19 @@ fn the_graph_is_built_and_the_data_validated() {
     let wi = env.world.actors().borrow().world_info();
     assert_eq!(wi, Some(o.world_info));
     assert_eq!(env.world.query().borrow().globals(), Some(o.globals));
+    assert!(env.script.errors().is_empty(), "{:?}", env.script.errors());
+}
+
+/// The bridge's objects start from their class default objects, as the C++ `Runtime::instantiate` copies them (lane
+/// W6-COMBAT-RUN2, decision 2026-11-16-54): the controller's invented default 1.0 survives, and what the bridge sets
+/// afterwards (its role) is still set.
+#[test]
+fn the_bridge_objects_start_from_their_class_defaults() {
+    let env = Env::new(false);
+    let o = env.script.inner.o;
+    let space = &env.world.vm.space;
+    assert_eq!(get(space, o.controller, "ReceivedMeleeDamageModifier").unwrap(), Value::Float(1.0));
+    assert_eq!(get(space, o.controller, "Role").unwrap(), Value::Byte(3));
     assert!(env.script.errors().is_empty(), "{:?}", env.script.errors());
 }
 

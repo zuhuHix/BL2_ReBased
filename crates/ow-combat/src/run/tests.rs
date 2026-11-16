@@ -34,13 +34,19 @@ impl Drop for Dir {
 
 /// The world a run is on (as `ow-cli`'s `--combat-run` builds it) over the fixture, in `mode`.
 pub(crate) fn world(mode: ParityMode) -> (World, Dir) {
+    world_with(mode, Vec::new())
+}
+
+/// [`world`] with `extra` packages beside the fixture's.
+pub(crate) fn world_with(mode: ParityMode, extra: Vec<(&'static str, Vec<u8>)>) -> (World, Dir) {
     let dir = std::env::temp_dir().join(format!(
         "ow-combat-run-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let files = fixture::files();
+    let mut files = fixture::files();
+    files.extend(extra);
     let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
     let defs =
         DefStore::from_synthetic(&dir, &refs, IdentityPolicy::FirstInScanOrder, mode).unwrap();
@@ -323,6 +329,8 @@ struct Reentry {
     vm: Vm,
     pawn: ow_object::ids::ObjRef,
     death: ow_object::ids::ObjRef,
+    /// When set, the toy handler raises without marking where its provider stood (an unmarked handler).
+    unmarked: Rc<std::cell::Cell<bool>>,
     _dir: Dir,
 }
 
@@ -366,16 +374,24 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
         "E3",
         "E4",
         "Chain",
+        "Late",
     ];
     // Chain (event 7) runs B1 (behavior 7), whose output link 0 runs B2 (behavior 8): a death sequence B1 -> B2.
-    let mut death_behaviors = behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4", "B1", "B2"]);
+    // Late (event 8) runs A1 (behavior 9), whose output link 0 runs A2 (behavior 10), the one that raises.
+    let mut death_behaviors =
+        behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4", "B1", "B2", "A1", "A2"]);
     death_behaviors[7].links = (8, 1);
+    death_behaviors[9].links = (10, 1);
     let mut death_links = links(8);
     death_links.push((8, 0, 0.0));
+    death_links.push((9, -1, 0.0));
+    death_links.push((10, 0, 0.0));
+    let mut death_event_list = events(&death_events);
+    death_event_list[8].links = (9, 1);
     let death = Seq {
         name: "Death",
         enabled_on_spawn: Some(true),
-        events: events(&death_events),
+        events: death_event_list,
         behaviors: death_behaviors,
         links: death_links,
         ..Seq::default()
@@ -460,7 +476,27 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
         Value::Object(Some(death_holder)),
     )
     .unwrap();
-    let handler = Handler::run(move |vm: &mut Vm, _p, id: BehaviorId, event: &str| {
+    let unmarked = Rc::new(std::cell::Cell::new(false));
+    let unmarked_flag = Rc::clone(&unmarked);
+    let handler = Handler::run(move |vm: &mut Vm, p: &mut Provider, id: BehaviorId, event: &str| {
+        // A script behavior of the run marks where its provider stood before it raises (`run_script_behavior`); the
+        // toy handler does the same, unless `unmarked` is set.
+        let len = p.trace.len();
+        let at = |which: Which| (!unmarked_flag.get()).then_some((which, len));
+        let raise_at = |vm: &mut Vm, at: Option<(Which, usize)>, name: &str, broadcast: bool| -> Result<(), VmError> {
+            let hook = crate::hit::with_state(vm, |s| s.on_behavior_event.clone())?.unwrap();
+            let raised = BehaviorEvent {
+                pawn,
+                definition: if broadcast { None } else { Some(death_holder) },
+                killer: None,
+                name: name.into(),
+                broadcast,
+            };
+            match at {
+                Some((which, len)) => marked(vm, pawn, which, len, |vm| hook(vm, &raised)),
+                None => hook(vm, &raised),
+            }
+        };
         let raise = |vm: &mut Vm, name: &str, broadcast: bool| -> Result<(), VmError> {
             let hook = crate::hit::with_state(vm, |s| s.on_behavior_event.clone())?.unwrap();
             let raised = BehaviorEvent {
@@ -472,19 +508,24 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
             };
             hook(vm, &raised)
         };
+        let _ = &raise;
+        let death = at(Which::Death);
         match event {
-            "OnDeathNonGib" => raise(vm, "Custom", true)?,
+            "OnDeathNonGib" => raise_at(vm, death, "Custom", true)?,
             "E1" => {
-                raise(vm, "E2", false)?;
-                raise(vm, "E4", false)?;
+                raise_at(vm, death, "E2", false)?;
+                raise_at(vm, death, "E4", false)?;
             }
-            "E2" => raise(vm, "E3", false)?,
-            "OnBehaviorSequenceDisabled" => raise(vm, "Ping", true)?,
+            "E2" => raise_at(vm, death, "E3", false)?,
+            "OnBehaviorSequenceDisabled" => raise_at(vm, at(Which::Class), "Ping", true)?,
             // B1 broadcasts Custom, then selects its output link 0 (to B2).
             "Chain" if id.index == 7 => {
-                raise(vm, "Custom", true)?;
+                raise_at(vm, death, "Custom", true)?;
                 return Ok(vec![0]);
             }
+            // A1 selects its output link 0 (to A2); A2, the last behavior, broadcasts Custom.
+            "Late" if id.index == 9 => return Ok(vec![0]),
+            "Late" if id.index == 10 => raise_at(vm, death, "Custom", true)?,
             _ => {}
         }
         Ok(Vec::new())
@@ -494,6 +535,7 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
         vm,
         pawn,
         death: death_holder,
+        unmarked,
         _dir: Dir(dir),
     }
 }
@@ -555,39 +597,100 @@ fn a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the
 }
 
 /// The order a death sequence prints when a behavior broadcasts and the sequence goes on after it (item 4 of lane
-/// W6-COMBAT-RUN2, decision 2026-11-16-54). The C++ re-enters the running death provider: B1, then Custom on the death
-/// provider (C) and on the class provider (K), then B2, so `B1, C, K, B2`. This port defers Custom until the
-/// outermost raise's own event has returned, so `B1, B2, C, K`: a named difference (decision 2026-11-15-35, the cost
-/// of deferring), pinned here so a change to the deferral shows.
+/// W6-COMBAT-RUN2; the tripwire of review r1 of PR #356, decision 2026-11-16-54). The C++ re-enters the running death
+/// provider: B1, then Custom on the death provider (C) and on the class provider (K), then B2, so `B1, C, K, B2`. This
+/// port defers Custom until the outermost raise's own event has returned, so `B1, B2, C, K`. The events list differs,
+/// so Off answers `NotYet { NotPorted }` (nothing deferred runs, every provider is back) and Reference keeps the port's
+/// order with the labelled note.
 #[test]
-fn a_broadcast_in_the_middle_of_a_death_sequence_runs_after_the_sequence_unlike_the_cxx() {
+fn a_broadcast_in_the_middle_of_a_death_sequence_is_not_yet_in_off_and_a_note_in_reference() {
     const CXX_ORDER: [&str; 4] = [
         "behavior Chain -> B1",
         "behavior Custom -> C",
         "behavior Custom -> K",
         "behavior Chain -> B2",
     ];
+    // Reference: the port's order, the same behaviors, one note naming the event.
+    let mut r = reentry_vm_in(ParityMode::Reference);
+    raise_death(&mut r, "Chain");
+    let got = behavior_lines(&r.vm);
+    assert_eq!(
+        got,
+        [
+            "behavior Chain -> B1",
+            "behavior Chain -> B2",
+            "behavior Custom -> C",
+            "behavior Custom -> K",
+        ]
+    );
+    let mut sorted_got = got.clone();
+    sorted_got.sort();
+    let mut sorted_cxx = CXX_ORDER.map(String::from).to_vec();
+    sorted_cxx.sort();
+    assert_eq!(sorted_got, sorted_cxx, "the same behaviors run, only the order differs");
+    let notes: Vec<&String> = r.vm.log.iter().filter(|l| l.starts_with(ORDER_NOTE)).collect();
+    assert_eq!(notes, [&format!("{ORDER_NOTE} (Custom)")]);
+    settled(&r.vm, 2);
+
+    // Off: NotYet; the deferred Custom does not run.
+    let mut r = reentry_vm_in(ParityMode::Off);
+    let event = BehaviorEvent {
+        pawn: r.pawn,
+        definition: Some(r.death),
+        killer: None,
+        name: "Chain".into(),
+        broadcast: false,
+    };
+    let e = raise_behavior_event(&mut r.vm, &event).unwrap_err();
+    assert!(matches!(&e, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::NotPorted)), "{e:?}");
+    assert!(error_text(&e).contains("Custom raised on a running behavior provider"), "{}", error_text(&e));
+    // The death provider's own run is listed; the deferred Custom (C, K) never runs.
+    assert_eq!(
+        behavior_lines(&r.vm),
+        ["behavior Chain -> B1", "behavior Chain -> B2"]
+    );
+    assert!(!r.vm.log.iter().any(|l| l.starts_with(ORDER_NOTE)));
+    settled(&r.vm, 1);
+}
+
+/// A raise by the last behavior that runs keeps the C++ order (A1, A2, then C and K inside A2 in the C++, after it
+/// here): no tripwire in either mode. A handler that marks nothing is judged conservatively (more than one behavior
+/// ran): Off refuses it, Reference notes it.
+#[test]
+fn a_raise_by_the_last_behavior_is_not_tripped_and_an_unmarked_one_is_judged_conservatively() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let mut r = reentry_vm_in(mode);
-        raise_death(&mut r, "Chain");
-        let got = behavior_lines(&r.vm);
+        raise_death(&mut r, "Late");
         assert_eq!(
-            got,
+            behavior_lines(&r.vm),
             [
-                "behavior Chain -> B1",
-                "behavior Chain -> B2",
+                "behavior Late -> A1",
+                "behavior Late -> A2",
                 "behavior Custom -> C",
                 "behavior Custom -> K",
             ],
             "{mode:?}"
         );
-        assert_ne!(got, CXX_ORDER, "the C++ order is not reproduced: the difference is named");
-        let mut sorted_got = got.clone();
-        sorted_got.sort();
-        let mut sorted_cxx = CXX_ORDER.map(String::from).to_vec();
-        sorted_cxx.sort();
-        assert_eq!(sorted_got, sorted_cxx, "the same behaviors run, only the order differs");
+        assert!(!r.vm.log.iter().any(|l| l.starts_with(ORDER_NOTE)), "{mode:?}");
         settled(&r.vm, 2);
+
+        let mut r = reentry_vm_in(mode);
+        r.unmarked.set(true);
+        let event = BehaviorEvent {
+            pawn: r.pawn,
+            definition: Some(r.death),
+            killer: None,
+            name: "Late".into(),
+            broadcast: false,
+        };
+        let raised = raise_behavior_event(&mut r.vm, &event);
+        match mode {
+            ParityMode::Off => assert!(matches!(raised, Err(VmError::NotYet(_))), "{raised:?}"),
+            _ => {
+                raised.unwrap();
+                assert!(r.vm.log.iter().any(|l| l.starts_with(ORDER_NOTE)));
+            }
+        }
     }
 }
 
@@ -897,7 +1000,12 @@ impl PlayerBridge for FakeBridge {
 /// A bridged run over the fixture in `mode`. With `class`, the player's class names the toy `Pool_Health` definition
 /// as its health pool (it has no `BaseMaxValue`: the C++ seed's error path).
 fn bridged(mode: ParityMode, class: bool) -> (Run, Rc<FakeBridge>, Dir) {
-    let (mut w, dir) = world(mode);
+    bridged_with(mode, class, "WillowGame.WillowPlayerPawn")
+}
+
+/// [`bridged`] with the player's pawn of class `pawn_class` (the `ToyInjured` package is in the set).
+fn bridged_with(mode: ParityMode, class: bool, pawn_class: &str) -> (Run, Rc<FakeBridge>, Dir) {
+    let (mut w, dir) = world_with(mode, vec![("ToyInjured.upk", fixture::toy_injured())]);
     let vm = &mut w.vm;
     let roles = ow_behavior::provider::enum_names(vm, "Engine", "Actor.ENetRole").unwrap();
     let authority = u8::try_from(roles.iter().position(|r| r == "ROLE_Authority").unwrap()).unwrap();
@@ -911,7 +1019,7 @@ fn bridged(mode: ParityMode, class: bool) -> (Run, Rc<FakeBridge>, Dir) {
     set(vm, controller, "Role", Value::Byte(authority)).unwrap();
     set(vm, pri, "Owner", Value::Object(Some(controller))).unwrap();
     set(vm, gri, "PRIArray", Value::array(vec![Value::Object(Some(pri))])).unwrap();
-    let pawn = make(vm, "WillowGame.WillowPlayerPawn");
+    let pawn = make(vm, pawn_class);
     set(vm, pawn, "Controller", Value::Object(Some(controller))).unwrap();
     let pool = Rc::new(std::cell::Cell::new(0.0f32));
     let earned = Rc::clone(&pool);
@@ -1102,4 +1210,258 @@ fn a_bridged_run_replays_to_the_same_report_in_both_modes() {
             .collect();
         assert_eq!(reports[0], reports[1], "{mode:?}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of PR #356: the bridge guard's empty reports, the injured path of the bleed step, mayahealth.
+// ---------------------------------------------------------------------------------------------------------------
+
+#[test]
+fn a_bridged_hit_or_swing_that_fails_keeps_its_rows_with_zeros_as_the_cxx_guard() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _fake, _dir) = bridged(mode, false);
+        for step in [
+            "spawn:ToyPawns/Pawn_Toy:4",
+            "hit:0:10:No.Such.DamageType:Bullet",
+            "hit:0:10::Bullet",
+        ] {
+            run.apply(step);
+        }
+        let failed: Vec<&String> = run.errors().iter().filter(|e| e.starts_with("hit:")).collect();
+        assert_eq!(failed.len(), 1, "{mode:?}: {:?}", run.errors());
+        assert!(
+            failed[0].starts_with("hit:0:10:No.Such.DamageType:Bullet: mission script: "),
+            "{mode:?}: {failed:?}"
+        );
+        // The failed hit is counted and its rows are 0, so the next hit is number 2.
+        for k in ["arriving", "applied", "health_after"] {
+            assert_eq!(run.rows.get(&format!("hit.Toy.L4.1.{k}")), Some(&0.0), "{mode:?} {k}");
+            assert!(run.rows.contains_key(&format!("hit.Toy.L4.2.{k}")), "{mode:?} {k}");
+        }
+        let report = run.report(0.0);
+        assert!(
+            report.contains("{\"step\":\"hit:0:10:No.Such.DamageType:Bullet\",\"result\":{\"health_before\":0,"),
+            "{mode:?}: {report}"
+        );
+    }
+    // A swing at a player pawn that has no TakeDamage (a controller object stands in for it): the arrival row is
+    // written as 0, no ratio row, the step's error is the guard's.
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _fake, _dir) =
+            bridged_with(mode, false, "WillowGame.WillowPlayerReplicationInfo");
+        run.apply("spawn:ToyPawns/Pawn_Toy:4");
+        run.apply("swing:0:Melee_Toy");
+        // The guard's error; then the step's player report fails too (the stand-in has no GetHealth), outside the
+        // guard, as the C++ `playerJson` would.
+        assert_eq!(
+            run.errors(),
+            [
+                "swing:0:Melee_Toy: combat-run: WillowPlayerReplicationInfo has no function GetHealth",
+                "swing:0:Melee_Toy: mission script: combat hit: the victim's class has no TakeDamage / GetHealth",
+            ],
+            "{mode:?}"
+        );
+        assert_eq!(run.rows.get("arrival.Toy.L4"), Some(&0.0), "{mode:?}");
+        assert!(!run.rows.contains_key("ratio.Toy.L4"), "{mode:?}");
+    }
+}
+
+/// The toy injured state (invented: a 1 s bleed-out, a camera that ends at its third view request, a fee of 100),
+/// through overrides of the toy pawn's script functions, as `ExpEarn` is overridden. Frames of 0.25 s keep every time
+/// exact.
+fn injured(mode: ParityMode) -> (Run, Rc<FakeBridge>, Dir, Rc<std::cell::RefCell<Vec<(String, f64)>>>) {
+    let (mut run, fake, dir) = bridged_with(mode, false, "ToyInjured.ToyInjuredPawn");
+    let calls: Rc<std::cell::RefCell<Vec<(String, f64)>>> = Rc::default();
+    let vm = &mut run.world().vm;
+    let now = |vm: &mut Vm| -> f64 {
+        let world = with_state(vm, |s| s.world).unwrap().unwrap();
+        number(&get(vm, world, "TimeSeconds").unwrap().unwrap())
+    };
+    let override_with = |vm: &mut Vm,
+                         name: &'static str,
+                         body: Rc<dyn Fn(&mut Vm, ObjRef, f32) -> Result<(), VmError>>| {
+        let calls = Rc::clone(&calls);
+        vm.override_script(
+            &format!("ToyInjured.ToyInjuredPawn.{name}"),
+            Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+                let me = c.this.unwrap();
+                let dt = if c.arg_count() > 0 { number(c.arg(0)?) as f32 } else { 0.0 };
+                let t = now(c.vm);
+                if name != "Tick" && name != "CalcInjuredDeadCamera" {
+                    calls.borrow_mut().push((name.to_string(), t));
+                }
+                body(c.vm, me, dt)?;
+                Ok(Value::None)
+            }),
+        )
+        .unwrap();
+    };
+    let num = |vm: &mut Vm, o: ObjRef, n: &str| number(&get(vm, o, n).unwrap().unwrap());
+    override_with(
+        vm,
+        "SwitchToSidearm",
+        Rc::new(|vm, me, _| {
+            set(vm, me, "InjuredState", Value::Byte(2))?;
+            set(vm, me, "flInjuredTargetedTime", Value::Float(0.0))?;
+            Ok(())
+        }),
+    );
+    override_with(
+        vm,
+        "Tick",
+        Rc::new(move |vm, me, dt| {
+            if num(vm, me, "InjuredState") == 2.0 {
+                let fl = num(vm, me, "flInjuredTargetedTime") as f32 + dt;
+                set(vm, me, "flInjuredTargetedTime", Value::Float(fl))?;
+                if f64::from(fl) >= num(vm, me, "TotalBleedoutTime") && num(vm, me, "InjuredDeadState") == 0.0 {
+                    set(vm, me, "InjuredDeadState", Value::Byte(1))?;
+                }
+            }
+            Ok(())
+        }),
+    );
+    override_with(
+        vm,
+        "InjuredDeathAnimDone",
+        Rc::new(|vm, me, _| {
+            set(vm, me, "InjuredDeadState", Value::Byte(4))?;
+            set(vm, me, "bInjuredDeadCameraActive", Value::Bool(true))?;
+            Ok(())
+        }),
+    );
+    let views = Rc::new(std::cell::Cell::new(0));
+    override_with(
+        vm,
+        "CalcInjuredDeadCamera",
+        Rc::new(move |vm, me, _| {
+            views.set(views.get() + 1);
+            if views.get() == 3 {
+                set(vm, me, "bInjuredDeadCameraActive", Value::Bool(false))?;
+                vm.space.heap.get_mut(me)?.state = None;
+            }
+            Ok(())
+        }),
+    );
+    let controller = fake.controller;
+    override_with(
+        vm,
+        "ShowRespawnDialog",
+        Rc::new(move |vm, _, _| {
+            let info = object(vm, controller, "PlayerReplicationInfo")?.unwrap();
+            let cash = crate::down::currency_on_hand(vm, info, 0)?;
+            crate::down::set_currency_on_hand(vm, info, 0, cash - 100)
+        }),
+    );
+    let pawn = fake.pawn;
+    set(vm, pawn, "TotalBleedoutTime", Value::Float(1.0)).unwrap();
+    set(vm, pawn, "NumSuccessiveInjuries", Value::Float(1.0)).unwrap();
+    (run, fake, dir, calls)
+}
+
+#[test]
+fn the_bleed_step_plays_the_injured_state_at_the_cxx_delays() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, fake, _dir, calls) = injured(mode);
+        run.apply("cash:500");
+        let injured = run.world().vm.space.names.intern("Injured");
+        run.world().vm.space.heap.get_mut(fake.pawn).unwrap().state = Some(injured);
+        run.apply("bleed:20:0.25");
+        assert!(run.errors().is_empty(), "{mode:?}: {:?}", run.errors());
+        // Down at 0.25 (the first frame); SwitchToSidearm at the first frame 2.28 s later, the bleed-out 1 s of the
+        // script's timer after it, the ragdoll 0.84 s later (the next frame), the camera's end at its third view,
+        // the respawn dialog 11.8 s after the respawn (the next frame).
+        assert_eq!(
+            *calls.borrow(),
+            [
+                ("SwitchToSidearm".to_string(), 2.75),
+                ("InjuredDeathAnimDone".to_string(), 4.5),
+                ("ShowRespawnDialog".to_string(), 17.0),
+            ],
+            "{mode:?}"
+        );
+        for (row, value) in [
+            ("down.total.1", 1.0),
+            ("down.successive.1", 1.0),
+            ("down.bleed_over.1", 0.0),
+            ("down.bleed_wall.1", 0.75),
+            ("down.camera.1", 1.5),
+            ("down.respawn_health.1", 0.0),
+        ] {
+            assert_eq!(run.rows.get(row), Some(&value), "{mode:?} {row}");
+        }
+        assert!(!run.rows.contains_key("down.second_wind_health.1"), "{mode:?}");
+        let report = run.report(0.0);
+        assert!(report.contains("\"down.fee.1\":{\"cash\":500,\"fee\":100}"), "{mode:?}: {report}");
+        assert!(
+            report.contains("\"result\":{\"time\":20,\"down\":{\"state\":\"\",\"injury\":1,"),
+            "{mode:?}: {report}"
+        );
+    }
+}
+
+#[test]
+fn mayahealth_seeds_the_stand_in_pool_in_reference_and_is_not_yet_in_off() {
+    let (mut run, _fake, _dir) = bridged(ParityMode::Reference, true);
+    run.apply("maya:4");
+    run.apply("mayahealth:0.5");
+    let errors: Vec<&String> = run.errors().iter().filter(|e| e.starts_with("mayahealth")).collect();
+    assert_eq!(
+        errors,
+        ["mayahealth:0.5: mission script: mission script bridge: the health pool definition has no BaseMaxValue"]
+    );
+    let (mut run, _fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("mayahealth:0.5");
+    assert_eq!(run.errors().len(), 1);
+    assert!(
+        run.errors()[0].starts_with("mayahealth:0.5: the player's health pool in --combat-run")
+            && run.errors()[0].contains("only ParityMode::Reference reproduces"),
+        "{:?}",
+        run.errors()
+    );
+}
+
+#[test]
+fn the_maya_step_counts_the_player_before_the_pool_and_relinks_the_pawn_on_each_fetch() {
+    let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    run.apply("maya:4");
+    // The pawn's reference is cleared by hand; the next fetch of the pawn (a step's player JSON) links it again.
+    let vm = &mut run.world().vm;
+    let manager = object(vm, fake.controller, "ResourcePoolManager").unwrap().unwrap();
+    let mut reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
+    assert!(crate::hit::access::set_field(vm, &mut reference, "PoolManager", Value::Object(None)));
+    set(vm, fake.pawn, "HealthPool", reference).unwrap();
+    run.apply("tick:0");
+    let vm = &mut run.world().vm;
+    let reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
+    assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), Some(manager));
+    // Off: no pool, nothing linked, and the count is set all the same.
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("maya:4");
+    let vm = &mut run.world().vm;
+    let reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
+    assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), None);
+    let world = with_state(vm, |s| s.world).unwrap().unwrap();
+    let game = object(vm, world, "Game").unwrap().unwrap();
+    assert_eq!(get(vm, game, "EffectiveNumPlayers").unwrap(), Some(Value::Int(1)));
+}
+
+#[test]
+fn the_health_pool_build_swallows_a_data_error_and_clears_as_the_cxx_catch() {
+    // A pool definition whose resource names a class without the pool's fields: the build fails on a missing
+    // property, which the C++ catch turns into "no pool"; nothing is kept, and the step is not an error.
+    let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    let vm = &mut run.world().vm;
+    let definition = object(vm, fake.class.unwrap(), "HealthPoolDefinition").unwrap().unwrap();
+    let resource = object(vm, definition, "Resource").unwrap().unwrap();
+    let bare = vm.find_class("Engine.ResourcePoolManager").unwrap();
+    let resource_copy = crate::hit::copy_of(vm, resource).unwrap();
+    set(vm, resource_copy, "DefaultResourcePoolClass", Value::Class(Some(bare))).unwrap();
+    let definition_copy = crate::hit::copy_of(vm, definition).unwrap();
+    set(vm, definition_copy, "Resource", Value::Object(Some(resource_copy))).unwrap();
+    set(vm, fake.class.unwrap(), "HealthPoolDefinition", Value::Object(Some(definition_copy))).unwrap();
+    run.apply("maya:4");
+    assert!(run.errors().is_empty(), "{:?}", run.errors());
+    let vm = &mut run.world().vm;
+    assert_eq!(object(vm, fake.controller, "ResourcePoolManager").unwrap(), None);
+    assert!(run.health.pool_is_none());
 }

@@ -22,19 +22,41 @@ game.
   and respawn rows, the fee rows), the bridged hit (the controller's `Pawn` set to the player's while the chain runs)
   and swing (the player's pawn as the victim), the kill rows' `credit` (what the bridge's pool gained), the `down`
   object on a hit and a swing, and the report's `down.fee.<n>` rows. A bridged chain or bleed frame that fails is
-  recorded as the bridge's guard records it (`<step>: mission script: <text>`) and the run goes on; the step's result is
-  then the error, where the C++ prints the partial report the chain had built.
+  recorded as the bridge's guard records it (`<step>: mission script: <text>`) and the run goes on, as the C++ guard
+  does (review r1 of PR #356): a failed hit carries on with an empty report (its `hit.<id>.N.*` rows 0, the hit counted,
+  the kill rows and the down state processed), a failed swing with an empty swing (`arrival.*` 0, no ratio). Test:
+  `a_bridged_hit_or_swing_that_fails_keeps_its_rows_with_zeros_as_the_cxx_guard`. One ordering is not the C++'s: when
+  the step then fails outside the guard (its player report), the C++ lists the guard's error under the next step,
+  this port under the same one.
 - **The first `maya` step sets the player count** (scenario setup, as the first `player:` step since decision
   2026-11-16-49): the bridge's player is the run's one local player, so the game's `EffectiveNumPlayers` becomes 1
   while it holds its class default 0. Without it every installed kill credit is `NotYet` (`KillCredit::players` holds 1
   to 4, decision 35's contract item). The C++ reads 0 there; on the installed table the S-d credit below is the same.
+  The count is set before the pool's maximum is evaluated, as the C++ context always counts 1 (review r1).
 - **Stand-in, `ParityMode::Reference` only (R3):** the player's health pool. The C++ bridge builds one by hand
   (`ensureHealthPool` / `seedHealthPool`: a manager on the controller, the class's `HealthPoolDefinition`, the maximum
   from `BaseMaxValue` with the controller as the source, the pawn's `HealthPool` reference to slot 0), a stand-in for
   the class-defaults routine that the Rust bridge does not build. `run/player.rs` reproduces it in Reference; Off
-  answers `NotYet { NotPorted }` at `maya` and `mayahealth`. Test:
-  `maya_sets_the_bridge_player_and_builds_the_cxx_health_pool_only_in_reference_mode`. The Fire slice holds its own copy
+  answers `NotYet { NotPorted }` at `maya` and `mayahealth`. As the C++ (review r1): a build error other than a
+  `NotYet` gives no pool, with the manager and the pool cleared, and the pawn's `HealthPool` reference is relinked on
+  every fetch of the pawn (`pawnFor`). Tests:
+  `maya_sets_the_bridge_player_and_builds_the_cxx_health_pool_only_in_reference_mode`,
+  `mayahealth_seeds_the_stand_in_pool_in_reference_and_is_not_yet_in_off`,
+  `the_maya_step_counts_the_player_before_the_pool_and_relinks_the_pawn_on_each_fetch`,
+  `the_health_pool_build_swallows_a_data_error_and_clears_as_the_cxx_catch`. The Fire slice holds its own copy
   of the same stand-in (`ow-mission/src/slice.rs`); the two are not shared (different crates), an open item.
+- **The bleed-out's injured path** (review r1) is tested on a toy pawn in a package of its own (`ToyInjured`, outside the
+  packages the C++ digests were taken over), whose `SwitchToSidearm`, `Tick`, `InjuredDeathAnimDone`,
+  `CalcInjuredDeadCamera` and `ShowRespawnDialog` are overridden in the test: the three callbacks at 2.28, 0.84 and
+  11.8 s, the camera's end, the `bleed_over`, `bleed_wall`, `camera`, `respawn_health` and fee rows, both modes
+  (`the_bleed_step_plays_the_injured_state_at_the_cxx_delays`).
+- **The bridge's objects start from their class defaults** (contract item 1 of the first round, granted by the hub,
+  review r1): `ow-mission/src/bridge.rs` `new_object` now uses `ow_vm::interp::instantiate_from_defaults`, as the C++
+  `Runtime::instantiate` copies the class default object. Before, the controller, the replication info and the pawns
+  started from zero, so the controller's `Instigated*` and `Received*DamageModifier` read 0 and every bridged hit and
+  swing on the installed data applied 0. Test: `bridge::tests::the_bridge_objects_start_from_their_class_defaults`
+  (an invented class default 1.0 on the toy controller). The `ow-mission` and `ow-cli` suites (`--mission-run`,
+  `--slice-run`) pass unchanged.
 - The globals references the C++ `maya` step loads by hand (the death camera's end time) are not loaded here: the
   definition store loads a definition's references when they are read.
 
@@ -58,27 +80,36 @@ event is dropped); Reference logs the labelled note `note: combat-run (Rust): th
 own class provider; ...` and runs it as before. Tests: `the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it`
 (Reference) and `off_mode_refuses_a_sequence_step_whose_events_raise_on_its_own_class_provider`.
 
-**The order test** (decision 35's named difference, now pinned):
-`a_broadcast_in_the_middle_of_a_death_sequence_runs_after_the_sequence_unlike_the_cxx`. A death sequence `B1 -> B2`
-whose B1 broadcasts `Custom`: the C++ prints `B1, C, K, B2`, this port `B1, B2, C, K`, in both modes. The port does not
-match the C++ (re-entering a running provider needs `Provider` methods that do not take `&mut self`); the test asserts
-the port's order and that the same behaviors run.
+**The order tripwire** (decision 35's named difference; review r1 of PR #356). A death sequence `B1 -> B2` whose B1
+broadcasts `Custom`: the C++ re-enters the running provider and prints `B1, C, K, B2` in the hit's `events`; this port
+defers `Custom` and prints `B1, B2, C, K`, and a later `CompareBool` in B2 could branch differently. The port does not
+reproduce the re-entry (`Provider` methods take `&mut self`), so each deferral onto a running provider records where
+that provider stood (a script behavior of the run marks its provider's trace length before it runs; a raise from a
+handler that marks nothing is judged conservatively: more than one behavior ran). When the provider is back and its
+own run went on past that mark, the C++ order differs: `Off` answers `NotYet { NotPorted }` (the deferred event is
+dropped), `Reference` logs `note: combat-run (Rust): an event raised on a running behavior provider was deferred past
+behaviors that provider ran after the raise; ...` and runs it as before. A raise by the last behavior that runs keeps
+the C++ order and trips nothing. Tests: `a_broadcast_in_the_middle_of_a_death_sequence_is_not_yet_in_off_and_a_note_in_reference`
+and `a_raise_by_the_last_behavior_is_not_tripped_and_an_unmarked_one_is_judged_conservatively`, both modes. The 16
+pinned C++ lists of `ow-cli` trip nothing.
 
 **Not done in this lane.**
 
 - **The pawn hit and the AI hold in the Fire slice** (`ow-mission/src/slice.rs`, granted for the smallest seam). The C++
   slice uses both (`hitFromPlayer` on the dummy after `adopt`, and `Behavior_AIHold` through the dummy's AI component).
   Wiring them needs the combat pack and the combat state's hooks in the slice's world (built by `cmd/slice.rs`), the
-  dummy's adoption and the hit through the bridge's controller; and on the installed data that hit would apply 0 until
-  the bridge contract item below is settled (the controller's damage modifiers read 0). Left `NotYet` as it is.
+  dummy's adoption and the hit through the bridge's controller. Left `NotYet` as it is; an open item for a follow-up
+  (the hub's OK, review r1).
 - **The kill's destroy.** `Actor.Destroy` of the victim's mind (a `Controller`) is `ow-world`'s rule, which answers
   `NotYet` for the controller and player case (NATIVE_ENGINE_CORE.md, not read); the C++ binds its own stand-in (it only
   marks the actor). In the C++ order the kill credit comes before that destroy, so the credit is made and then the hit
   fails. Not ported here: the native is not this lane's, and the VM offers no way to replace a bound native.
 
-**Verified (automated, local, pc-hummer, on `origin/main` 7f739404, after FIX-KERNEL-NATIVES).** `cargo build --workspace --locked` clean;
-`cargo test --workspace --locked` 45 binaries, 1,606 passed, 0 failed, 21 ignored; `cargo build --release -p ow-cli
---locked` clean; `tests/crate_edges_test.py` 19 tests OK; `decisions_index.py --check` OK, 1 added. `ow-combat` 103 tests (6 new bridge
+**Verified (automated, local, pc-hummer, on `origin/main` 7f739404, after FIX-KERNEL-NATIVES; review r1).** `cargo build
+--workspace --locked` clean; `cargo test --workspace --locked` 45 binaries, 1,613 passed, 0 failed, 21 ignored (1,606
+before review r1); `cargo build --release -p ow-cli --locked` clean; `tests/crate_edges_test.py` OK; `decisions_index.py
+--check` OK, 1 added. `ow-combat` 109 tests (review r1 added the order tripwire's two tests, the guard's, the injured
+path's, `mayahealth`'s, the relink's and the pool build's; `ow-mission` one, the class defaults). First round: 6 bridge
 tests on a fake bridge over the toy classes, each in both modes: the C++ texts without a bridge, the health pool, the
 kill credit, cash and the bleed frames, the gains, and two runs of the same steps in one process giving the same
 report), plus the tripwire's Off test and the order test; `ow-attr` 197 tests (4 new); the `ow-cli` comparison with
@@ -109,30 +140,28 @@ are not on disk in CI, and `combat_test.py` is not yet whole on the Rust binary.
   `RandomAttributeValueResolver` or `DesignerAttributeContextResolver` (W6-LOOT's open items). Off: 0 rows before and
   after (the spawns, as above; `lootbatch` is `NotYet` by design).
 - **S-f, the down and respawn** (`maya:8 players:1 spawn:adult:7 cash:3000`, four melee swings, `bleed:50`; COMBAT_
-  DOWN_RESPAWN.md's first injury). The C++ prints 17 rows. Before: the run is refused before any step (exit 3).
-  Reference after: 10 rows, 6 equal, 4 differ (the swings' `ratio.*` are 0: contract item 1), 7 missing (the
-  `down.*` rows and the fee: no injury happens). With contract item 1's one-line change made locally (not committed):
-  16 rows, all 16 equal (health, arrival, ratio, and `down.total`, `down.successive`, `down.bleed_over`,
-  `down.bleed_wall`, `down.camera`, `down.respawn_health`), the fee row missing (contract item 2). Off: 0 rows (the
-  pool is `NotYet` at `maya`, the bridge's script reaches the unbound `Actor.LocalPlayerControllers`, and the spawn
-  stops as above).
+  DOWN_RESPAWN.md's first injury). The C++ prints 17 rows. Before: the run is refused before any step (exit 3). First
+  round: 10 rows, 6 equal, 4 differ (the swings' `ratio.*` were 0: the bridge's zero-filled controller), 7 missing.
+  After review r1 (the bridge's objects from their class defaults): 16 rows, all 16 equal (health, arrival, ratio, and
+  `down.total`, `down.successive`, `down.bleed_over`, `down.bleed_wall`, `down.camera`, `down.respawn_health`), the
+  fee row missing (open item 2). Off: 0 rows (the pool is `NotYet` at `maya`, the bridge's script reaches the unbound
+  `Actor.LocalPlayerControllers`, and the spawn stops as above).
 - **S-d, the kill credit** (`maya:8`, a baby L6 spawned without its pawn balance, one lethal shotgun hit, `tick:0`).
-  The C++: award 50, credit 35, and the next tick shows 35 in the pool (the live record's 50 / 35, COMBAT_KILL_XP.md).
-  Before: refused (exit 3). Reference after: the hit applies 0 (contract item 1). With item 1's change made locally:
-  the credit goes into the pool (the tick's gain and the pool read 35, equal to the C++), and the hit then stops at
-  `Actor.Destroy` of the mind (contract item 3), so the hit and kill rows stay missing.
-- **Replay across processes:** the clean reruns of the three Reference runs above gave the same rows as the first runs.
+  The C++ prints 9 rows: award 50, credit 35 (the live record's 50 / 35, COMBAT_KILL_XP.md), the hit, the loot. Before:
+  refused (exit 3). After review r1: 9 rows, 7 equal, among them the kill row (award 50, credit 35), the loot rows and
+  the next tick's gain of 35. The 2 that differ are the hit's `arriving` and `applied` (0 against 9999): the hit makes
+  its credit, then stops at `Actor.Destroy` of the mind (open item 3), and the bridge guard carries on with an empty
+  report, as the C++ guard would for that error. Off: 0 rows.
+- **Replay across processes:** the clean reruns of the Reference runs above gave the same rows as the first runs; the 15
+  W6-COMBAT steps give the same 20 rows after review r1.
 
-**Contract items for the hub.**
+**Open items for the hub** (items 2 to 4 stay open, review r1).
 
-1. **The bridge's objects start from zero, not from their class defaults** (`ow-mission/src/bridge.rs`, `new_object`
-   uses `Vm::instantiate`; the C++ `Runtime::instantiate` copies the class default object). The controller's
-   `Instigated*` and `Received*DamageModifier` read 0, so every bridged hit and swing on the installed data applies 0.
-   A local experiment with `ow_vm::interp::instantiate_from_defaults` there (not committed) gave the S-f run 16 of the
-   C++'s 17 rows equal and the S-d credit 35 equal to the C++ (numbers above). A change for W6-MISSION's owner.
+1. Settled in review r1: the bridge's objects now start from their class defaults (above).
 2. `WillowGame.CurrencyAttributeValueResolver` (`ow-attr`): the respawn fee's attribute. The C++ reads a stand-in (the
    amount on hand of `FormOfCurrency` from the replication info, `src/progression.cpp`); the port answers `NotYet`, so
    the `down.fee.<n>` row stays missing.
 3. `Actor.Destroy`'s controller and player case (`ow-world`): every installed kill stops there after its credit.
 4. A per-provider replacement hook, or a Reference-mode `Actor.Destroy` stand-in, if the hub wants the C++ kill rows
    before the record is read.
+5. The Fire slice's pawn hit and AI hold (above), and the two health pool stand-ins (combat run, slice) not shared.
