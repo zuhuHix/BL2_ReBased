@@ -161,7 +161,9 @@ fn gpu_skinning_matches_the_cpu_reference() {
         .iter()
         .map(Affine::to_engine)
         .collect();
-    let got = gpu.read_back(&device, &queue, &palette).unwrap();
+    let got = gpu
+        .read_back(&device, &queue, &palette, &Mat4::IDENTITY)
+        .unwrap();
     let stored: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| v.position).collect();
     assert!(
         worst(&got, &stored) <= GPU_TOLERANCE,
@@ -173,12 +175,14 @@ fn gpu_skinning_matches_the_cpu_reference() {
     let matrices = skin_matrices(&skeleton, &pose);
     let cpu = skin(&mesh, &matrices).unwrap();
     let palette: Vec<Mat4> = matrices.iter().map(Affine::to_engine).collect();
-    let got = gpu.read_back(&device, &queue, &palette).unwrap();
+    let got = gpu
+        .read_back(&device, &queue, &palette, &Mat4::IDENTITY)
+        .unwrap();
     let diff = worst(&got, &cpu);
     assert!(diff <= GPU_TOLERANCE, "bent: {diff}");
     // The pose moved the vertices (the comparison is not of two unmoved meshes).
     assert!(worst(&cpu, &stored) > 5.0);
-    // A placement after the skin matrices (as the play window uses) moves both paths the same way.
+    // Placed after the weighted sum (as the play window does): the CPU's model-space result, placed.
     let placed = Placement::new(
         [100.0, -50.0, 20.0],
         Rotator::new(0, 16384, 0),
@@ -187,15 +191,68 @@ fn gpu_skinning_matches_the_cpu_reference() {
     )
     .affine()
     .unwrap();
-    let world: Vec<Affine> = matrices.iter().map(|m| m.then(&placed)).collect();
-    let cpu = skin(&mesh, &world).unwrap();
-    let palette: Vec<Mat4> = world.iter().map(Affine::to_engine).collect();
-    let got = gpu.read_back(&device, &queue, &palette).unwrap();
+    let cpu_placed = place_all(&cpu, &placed);
+    let got = gpu
+        .read_back(&device, &queue, &palette, &placed.to_engine())
+        .unwrap();
     assert!(
-        worst(&got, &cpu) <= GPU_TOLERANCE * 10.0,
+        worst(&got, &cpu_placed) <= GPU_TOLERANCE * 10.0,
         "placed: {}",
-        worst(&got, &cpu)
+        worst(&got, &cpu_placed)
     );
+    assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
+}
+
+/// Each point through `placement`, rounded to `f32`.
+fn place_all(points: &[[f32; 3]], placement: &Affine) -> Vec<[f32; 3]> {
+    points
+        .iter()
+        // Positions of a few thousand uu: f64 to f32 rounds.
+        .map(|p| placement.point(p.map(f64::from)).map(|c| c as f32))
+        .collect()
+}
+
+#[test]
+#[ignore = "needs a GPU adapter or the software fallback"]
+fn a_weight_sum_off_one_is_not_scaled_by_the_placement() {
+    // One vertex at (10, 0, 0) on the root with weight 0.999 (within the 1e-3 the reader allows), placed 3,600 uu
+    // out. Skinned in model space and then placed, it lands 0.01 uu from where weight 1 puts it; skinned with the
+    // placement inside the palette, the missing 0.001 would scale the whole world position: about 3.6 uu.
+    let Some((device, queue, errors)) = headless() else {
+        panic!("no adapter, not even the software fallback");
+    };
+    let bones = vec![Bone::new("Root", None, BoneTransform::new(ID, [0.0; 3]))];
+    let mesh = SkeletalMesh::new(
+        bones,
+        vec![SkinVertex::new(
+            [10.0, 0.0, 0.0],
+            [0.0, 0.0],
+            0,
+            vec![Influence::new(0, 0.999)],
+        )],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+    let gpu = SkinnedMesh::new(
+        &device,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &mesh,
+        &[[0.0; 3]],
+    )
+    .unwrap();
+    let placed = Placement::new([3600.0, 0.0, 0.0], Rotator::default(), 1.0, [1.0; 3])
+        .affine()
+        .unwrap();
+    let got = gpu
+        .read_back(&device, &queue, &[Mat4::IDENTITY], &placed.to_engine())
+        .unwrap();
+    assert!((got[0][0] - 3609.99).abs() < 1e-2, "{:?}", got[0]);
+    // The old order, for contrast: the placement in the palette scales with the weight.
+    let old = gpu
+        .read_back(&device, &queue, &[placed.to_engine()], &Mat4::IDENTITY)
+        .unwrap();
+    assert!((old[0][0] - 3610.0).abs() > 3.0, "{:?}", old[0]);
     assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }
 
@@ -209,16 +266,12 @@ fn bad_meshes_and_palettes_are_refused() {
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let gpu = SkinnedMesh::new(&device, format, &mesh, &bind_normals(&mesh)).unwrap();
     assert_eq!(gpu.bone_count(), 3);
-    assert!(
-        gpu.read_back(&device, &queue, &[Mat4::IDENTITY; 2])
-            .is_err()
-    );
+    let id = Mat4::IDENTITY;
+    assert!(gpu.read_back(&device, &queue, &[id; 2], &id).is_err());
     let mut nan = Mat4::IDENTITY;
     nan.cols[0][0] = f32::NAN;
-    assert!(
-        gpu.read_back(&device, &queue, &[nan, Mat4::IDENTITY, Mat4::IDENTITY])
-            .is_err()
-    );
+    assert!(gpu.read_back(&device, &queue, &[nan, id, id], &id).is_err());
+    assert!(gpu.read_back(&device, &queue, &[id; 3], &nan).is_err());
     assert!(SkinnedMesh::new(&device, format, &mesh, &[]).is_err());
     let mut stray = strip();
     stray.vertices[0].influences[0] = Influence::new(7, 1.0);
@@ -244,8 +297,10 @@ fn the_skinned_strip_is_drawn_where_the_cpu_puts_it() {
         .unwrap();
     let palette: Vec<Mat4> = skin_matrices(&skeleton, &bind)
         .iter()
-        .map(|m| m.then(&placed).to_engine())
+        .map(Affine::to_engine)
         .collect();
+    let place = placed.to_engine();
+    let lighting = crate::render::Lighting::viewer();
     let camera = crate::camera::FlyCamera::at([0.0; 3], Rotator::default());
     let vp = camera.view_projection(64, 64).unwrap();
     let rgba =
@@ -266,8 +321,8 @@ fn the_skinned_strip_is_drawn_where_the_cpu_puts_it() {
                     ..Default::default()
                 });
             }
-            gpu.skin(&queue, encoder, &palette)?;
-            gpu.draw(&device, &queue, encoder, view, (64, 64), &vp);
+            gpu.skin(&queue, encoder, &palette, &place)?;
+            gpu.draw(&device, &queue, encoder, view, (64, 64), &vp, &lighting);
             Ok(())
         })
         .unwrap();
