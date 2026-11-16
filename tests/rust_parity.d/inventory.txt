@@ -1,0 +1,12 @@
+# AI-assisted (Claude Code). Lane W5-EQUIP: --inventory-move (crates/ow-cli/src/cmd/inventory.rs) and the
+# inventory rules (crates/ow-inventory/src/{manager,equip,spawn}.rs).
+#
+# --inventory-move needs a package file. A diff line would need a tracked one (no package of any kind may be
+# tracked), and a test-command line a tracked tests/*.py that runs only this command: tests/vm_test.py runs it with
+# --mover-probe (lane W5-DIALOG) and a MakePair struct-default case that the Rust binary does not pass yet, so the
+# whole file is not a Rust line. Its 11 --inventory-move sites pass on the Rust binary. The command was compared
+# locally instead, byte for byte (stdout, stderr, exit code) with the C++ binary: 546 runs on tests/vm_test.py's
+# invented package and seven broken variants of its entry enum, and 126 requests on the installed game (decision
+# 2026-11-15-33). The lines below hold the two failures that come before any package is read.
+diff tests/rust_parity.d/README.md --inventory-move 1 0 5 --cooked tests exit=1 stderr
+diff tests/no_such_package.upk --inventory-move 1 0 5 --cooked tests exit=1 stderr
