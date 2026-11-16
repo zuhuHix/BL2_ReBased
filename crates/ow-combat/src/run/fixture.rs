@@ -14,6 +14,10 @@ use ow_package::testkit::script::{
 };
 use ow_package::testkit::{Export, PackageBuilder, ints};
 
+/// The loot part of the packages (lane W6-LOOT's file; one call in each builder below).
+#[path = "../loot/fixture.rs"]
+mod loot;
+
 /// `FUNC_Final | FUNC_Defined | FUNC_Public`, `FUNC_Native | FUNC_Public`, `FUNC_Static`.
 pub const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 pub const NATIVE: u32 = 0x400 | 0x20000;
@@ -534,6 +538,7 @@ pub fn engine() -> Vec<u8> {
     for n in ["BaseValueAttribute", "InitializationDefinition"] {
         e.prop("Object", data, n, 0, 0);
     }
+    loot::engine_loot(&mut e, definition_class, data);
     e.build()
 }
 
@@ -1221,6 +1226,7 @@ pub fn willow_game() -> Vec<u8> {
         a.end();
         Some(a)
     });
+    loot::willow_game_loot(&mut w, globals_class, data, willow_pawn, ai_pawn, set_health);
     w.build()
 }
 
@@ -1468,6 +1474,7 @@ pub fn toy_pawns() -> Vec<u8> {
         let payload = object_payload(&mut p, tags);
         p.add_export(tree_class, tree, payload);
     }
+    loot::toy_pawns_loot(&mut p, core, engine, willow, ai_class);
     p.build()
 }
 

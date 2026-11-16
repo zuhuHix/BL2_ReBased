@@ -192,7 +192,7 @@ fn the_steps_refuse_with_the_cxx_texts() {
 }
 
 #[test]
-fn the_loot_steps_and_a_maya_run_wait_for_their_lanes() {
+fn the_loot_steps_answer_in_off_mode_and_a_maya_run_waits_for_its_lane() {
     let (text, _) = run_steps(
         ParityMode::Off,
         &[
@@ -203,11 +203,11 @@ fn the_loot_steps_and_a_maya_run_wait_for_their_lanes() {
             "lootbatch:dummy:1:1:1",
         ],
     );
-    assert_eq!(
-        errors_of(&text).matches("needs W6-LOOT").count(),
-        3,
-        "{text}"
-    );
+    // Lane W6-LOOT: seed is a step; this pawn has no item game stage; a loot batch is NotYet in Off mode.
+    let errors = errors_of(&text);
+    assert!(!errors.contains("seed:3"), "{text}");
+    assert!(errors.contains("rollpool:0:Pool_Coins: combat-run: WillowAIPawn has no property GameStageForSpawnedInventory"), "{text}");
+    assert!(errors.contains("lootbatch:dummy:1:1:1: lootbatch in Off mode"), "{text}");
     let steps: Vec<String> = vec!["spawn:ToyPawns/Pawn_Toy:4".into(), "maya:8".into()];
     let (w, _dir) = world(ParityMode::Off);
     match combat_run(w, &steps) {
@@ -217,16 +217,14 @@ fn the_loot_steps_and_a_maya_run_wait_for_their_lanes() {
 }
 
 #[test]
-fn a_spawn_with_a_pawn_balance_spawns_the_pawn_and_waits_for_the_loot_setup() {
+fn a_spawn_with_a_pawn_balance_the_package_lacks_fails_before_the_pawn_is_listed() {
+    // As the C++ (lane W6-LOOT): the loot setup comes before the rows and the pawn list.
     let (mut run, _dir) = fresh(ParityMode::Off);
     run.apply("spawn:ToyPawns/Pawn_Toy:4:4:SomeBalance");
-    assert_eq!(run.pawns.len(), 1);
+    assert!(run.pawns.is_empty());
     assert!(run.failed());
-    assert!(
-        run.errors[0]
-            .contains("the loot setup of the spawned pawn (SomeBalance; pawn 0 was spawned)")
-    );
-    assert_eq!(run.rows.get("health.Toy.L4"), Some(&40.5));
+    assert!(run.errors[0].contains("combat-run: ToyPawns has no SomeBalance"), "{:?}", run.errors);
+    assert_eq!(run.rows.get("health.Toy.L4"), None);
 }
 
 #[test]

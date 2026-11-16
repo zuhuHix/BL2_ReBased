@@ -9,9 +9,10 @@
 //!   then a run with a `maya:` step is `NotYet { NotPorted }` before any step, and `tick`, `cash`, `bleed` and
 //!   `mayahealth` answer the C++ text of a run without the bridge. So the S-d credit into Maya's pool and the whole S-f
 //!   bleed-out are not reached here; their natives are (`crate::down`, `crate::xp`).
-//! - **Loot** (plan step S-g) is lane W6-LOOT's (`crate::loot`): `seed`, `rollpool`, `lootbatch` and the loot setup of
-//!   a spawn with a pawn balance are `NotYet { LayerAbsent("W6-LOOT") }` (the spawn itself is done first, so the pawn
-//!   and its rows exist), and a kill reports no `loot`.
+//! - **Loot** (plan step S-g, lane W6-LOOT): the rules are `crate::loot`'s; this module holds the steps (`seed`,
+//!   `rollpool`, `lootbatch`), the loot setup of a spawn with a pawn balance and a kill's `loot` report, as the C++.
+//!   In `Off` mode the death roll is the installed script's, so a kill records no roll and `lootbatch` is `NotYet`
+//!   (decision 2026-11-16-41).
 //! - **`SetHealth` events.** The C++ pool half logs `SetHealth <value>` into the event list; the Rust `SetHealth` is
 //!   W5-POOLS' native, which logs nothing, so those lines are missing from a hit's `events` (the handoff's contract
 //!   item: an observer hook in `ow_world::pools::set_health`). The `order` list still shows each call.
@@ -128,8 +129,9 @@ pub const SWINGS: [(&str, &str, &str); 6] = [
 pub const BASE_HEALTH_PATH: &str =
     "GD_Balance_HealthAndDamage.HealthAndDamage.Init_BaseEnemyHealth";
 
-/// The steps after which the C++ adds no `state` of the pawn the second field names.
-const NO_STATE: [&str; 14] = [
+/// The steps after which the C++ adds no `state` of the pawn the second field names (`rollpool` is not one: the C++
+/// reports the pawn's state after it).
+const NO_STATE: [&str; 13] = [
     "spawn",
     "base",
     "player",
@@ -143,11 +145,10 @@ const NO_STATE: [&str; 14] = [
     "seed",
     "mayahealth",
     "lootbatch",
-    "rollpool",
 ];
 
-/// The loot lane, which the loot steps wait for.
-const LOOT_LANE: &str = "W6-LOOT (ow-combat loot.rs)";
+/// What the loot batch kills with (C++ `killDamageType`).
+const KILL_DAMAGE_TYPE: &str = "GD_Impact.DamageType.DmgType_Normal";
 
 /// The `std::sto*` family as the MSVC library reads a step's numbers (the C++ texts of its exceptions).
 fn integer_prefix(text: &str) -> Option<(bool, &str)> {
@@ -748,6 +749,8 @@ pub struct Run {
     kill_rows: Vec<KillRow>,
     kill_tag: String,
     kills_seen: usize,
+    /// The death rolls already reported (C++ `dropsSeen_`).
+    drops_seen: usize,
     results: Vec<String>,
     errors: Vec<String>,
 }
@@ -796,6 +799,7 @@ impl Run {
             vm.add_service(Providers::default())?;
         }
         crate::death::enable_deaths(vm)?;
+        crate::loot::enable(vm)?;
         Ok(Run {
             world,
             pawns: Vec::new(),
@@ -805,6 +809,7 @@ impl Run {
             kill_rows: Vec::new(),
             kill_tag: String::new(),
             kills_seen: 0,
+            drops_seen: 0,
             results: Vec::new(),
             errors: Vec::new(),
         })
@@ -1175,38 +1180,14 @@ impl Run {
             "swing" => self.swing(parts),
             "hit" => self.hit(parts),
             "seed" => {
-                Err(NotYet::layer_absent("the loot's random (seed step)", LOOT_LANE, RECORD).into())
+                // seed:<n>: the loot's generator restarts from n (`crate::loot::seed`).
+                let n = u32::try_from(stoul(at(1)?)?)
+                    .map_err(|_| error("stoul argument out of range"))?;
+                crate::loot::seed(&mut self.world.vm, n);
+                Ok("{}".to_string())
             }
-            "rollpool" => {
-                if parts.len() < 3 || parts.len() > 5 {
-                    return Err(error(
-                        "combat-run: rollpool:<pawn>:<pool path>[:<stage>[:<count>]]",
-                    ));
-                }
-                self.pawn(at(1)?)?;
-                Err(NotYet::layer_absent(
-                    "ItemPool.SpawnBalancedInventoryFromPool (rollpool step)",
-                    LOOT_LANE,
-                    RECORD,
-                )
-                .into())
-            }
-            "lootbatch" => {
-                if parts.len() < 5 || parts.len() > 6 {
-                    return Err(error(
-                        "combat-run: lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]",
-                    ));
-                }
-                if self.players.is_empty() {
-                    return Err(error(
-                        "combat-run: a loot batch needs a player (the step maya:<level> or player:<level>) first",
-                    ));
-                }
-                Err(
-                    NotYet::layer_absent("the death rolls of a loot batch", LOOT_LANE, RECORD)
-                        .into(),
-                )
-            }
+            "rollpool" => self.roll_pool_steps(parts),
+            "lootbatch" => self.loot_batch(parts),
             _ => Err(error(format!("combat-run: unknown step {step}"))),
         }
     }
@@ -1247,6 +1228,20 @@ impl Run {
         let row_class = leaf.strip_prefix("Pawn_").unwrap_or(leaf).to_string();
         let started = Instant::now();
         let enemy = hit::spawn_enemy(&mut self.world.vm, &package, &path, level, stage)?;
+        // The stock spawn's loot setup (plan step S-g): the item game stage and the pawn's pool list.
+        let mut loot_setup = String::new();
+        if !balance.is_empty() {
+            let Some(b) = hit::instantiate_copy(&mut self.world.vm, &package, &balance)? else {
+                return Err(error(format!("combat-run: {package} has no {balance}")));
+            };
+            let setup = crate::loot::setup_loot(&mut self.world.vm, enemy.pawn, b)?;
+            let pools: Vec<String> = setup.pools.iter().map(|p| json_quote(p)).collect();
+            loot_setup = format!(
+                ",\"loot_setup\":{{\"item_stage\":{},\"pools\":[{}]}}",
+                setup.item_stage,
+                pools.join(",")
+            );
+        }
         let milliseconds = started.elapsed().as_secs_f64() * 1000.0;
         let id = format!("{row_class}.L{level}");
         let health = number(&self.call(enemy.pawn, "GetHealth", Vec::new())?.ret);
@@ -1263,19 +1258,8 @@ impl Run {
             enemy,
             pools: Vec::new(),
         });
-        if !balance.is_empty() {
-            return Err(NotYet::layer_absent(
-                format!(
-                    "the loot setup of the spawned pawn ({balance}; pawn {} was spawned)",
-                    self.pawns.len() - 1
-                ),
-                LOOT_LANE,
-                RECORD,
-            )
-            .into());
-        }
         Ok(format!(
-            "{{\"pawn\":{},\"milliseconds\":{}}}",
+            "{{\"pawn\":{},\"milliseconds\":{}{loot_setup}}}",
             self.pawns.len() - 1,
             num(milliseconds)
         ))
@@ -1413,7 +1397,163 @@ impl Run {
         self.row(&format!("{id}.arriving"), report.arriving);
         self.row(&format!("{id}.applied"), report.applied);
         self.row(&format!("{id}.health_after"), report.health_after);
-        Ok(hit_json(&report))
+        let mut result = hit_json(&report);
+        let key = id.strip_prefix("hit.").unwrap_or(&id).to_string();
+        if let Some(loot) = self.loot_after(pawn, &key)? {
+            result.pop();
+            let _ = write!(result, ",\"loot\":{loot}}}");
+        }
+        Ok(result)
+    }
+
+    /// The death roll(s) a hit on `pawn` made since the last report (C++ `lootAfter`): rows `loot.<key>.*` and the
+    /// last roll as JSON.
+    fn loot_after(&mut self, pawn: ObjRef, key: &str) -> Result<Option<String>, VmError> {
+        let drops = crate::loot::drops_from(&self.world.vm, self.drops_seen)?;
+        self.drops_seen += drops.len();
+        let mut text = None;
+        for drop in drops.iter().filter(|d| d.pawn == pawn) {
+            for (k, v) in crate::loot::loot_rows(drop, key) {
+                self.row(&k, v);
+            }
+            text = Some(crate::loot::loot_json(drop));
+        }
+        Ok(text)
+    }
+
+    /// `rollpool:<pawn>:<pool path>[:<stage>[:<count>]]` (C++ `rollPoolSteps`): `ItemPool.SpawnBalancedInventoryFromPool`
+    /// called through the VM (the optional arguments omitted) with the pawn as the context source, at the given stage
+    /// (default the pawn's item game stage), `count` times; rows `loot.roll.<pool>.stage<s>.n` / `.true` / `.items`
+    /// and the last call's inventories. The pool is looked up in Startup, then in the pawn's package.
+    fn roll_pool_steps(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        if parts.len() < 3 || parts.len() > 5 {
+            return Err(error(
+                "combat-run: rollpool:<pawn>:<pool path>[:<stage>[:<count>]]",
+            ));
+        }
+        let index = self.pawn(parts[1])?;
+        let (package, pawn) = {
+            let s = &self.pawns[index];
+            (s.package.clone(), s.enemy.pawn)
+        };
+        let vm = &mut self.world.vm;
+        let mut pool = None;
+        for name in ["Startup", package.as_str()] {
+            if let Some(o) = hit::instantiate_copy(vm, name, parts[2])? {
+                pool = Some(o);
+                break;
+            }
+        }
+        let Some(pool) = pool else {
+            return Err(error(format!("combat-run: no such item pool {}", parts[2])));
+        };
+        let stage = match parts.get(3) {
+            Some(s) => stoi(s)?,
+            None => crate::hit::access::low_i32(integer(&crate::hit::access::required(
+                vm,
+                pawn,
+                "GameStageForSpawnedInventory",
+                "combat-run",
+            )?)),
+        };
+        let count = match parts.get(4) {
+            Some(c) => stoi(c)?,
+            None => 1,
+        };
+        let function = vm.find_function(crate::loot::FROM_POOL)?;
+        let mut returned = 0i32;
+        let mut made = 0usize;
+        let mut last = Vec::new();
+        for _ in 0..count.max(0) {
+            let args = vec![
+                Value::Object(Some(pool)),
+                Value::Int(stage),
+                Value::Int(0),
+                Value::Object(Some(pawn)),
+                Value::array(Vec::new()),
+            ];
+            let r = vm.call(function, None, args)?;
+            returned += i32::from(truth(vm, &r.ret));
+            last = r
+                .outs
+                .get(4)
+                .ok_or_else(|| error("invalid vector subscript"))?
+                .elements()
+                .map(<[Value]>::to_vec)
+                .unwrap_or_default();
+            made += last.len();
+        }
+        let inventories = crate::loot::inventories_json(vm, &last)?;
+        let name = parts[2].rsplit_once('.').map_or(parts[2], |(_, l)| l);
+        let key = format!("loot.roll.{name}.stage{stage}");
+        self.row(&format!("{key}.n"), f64::from(count));
+        self.row(&format!("{key}.true"), f64::from(returned));
+        // A count of inventories converts to double exactly.
+        self.row(&format!("{key}.items"), made as f64);
+        Ok(format!(
+            "{{\"stage\":{stage},\"calls\":{count},\"returned_true\":{returned},\"inventories\":{inventories}}}"
+        ))
+    }
+
+    /// `lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]` (C++ `lootBatch`): `count` kills of a fresh pawn each
+    /// through the spawn and lethal hit steps (a shotgun hit of 9999 by player 0), the death rolls summed; nothing of
+    /// the kills is kept but the sums (`crate::loot::Batch::rows`). `Off` mode is `NotYet` before any kill: the death
+    /// roll is the installed script's there, which records nothing to sum.
+    fn loot_batch(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        if parts.len() < 5 || parts.len() > 6 {
+            return Err(error(
+                "combat-run: lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]",
+            ));
+        }
+        if self.players.is_empty() {
+            return Err(error(
+                "combat-run: a loot batch needs a player (the step maya:<level> or player:<level>) first",
+            ));
+        }
+        let count = stoi(parts[4])?;
+        if self.world.vm.parity == ow_core::ParityMode::Off {
+            return Err(NotYet::not_ported(
+                "lootbatch in Off mode: the death roll is the installed DropLootOnDeath script, whose per-pool \
+                 chances and draws are not recorded (crate::loot, decision 2026-11-16-41)",
+                RECORD,
+            )
+            .into());
+        }
+        let tag = parts.get(5).copied().unwrap_or(parts[1]);
+        let saved_rows = self.rows.clone();
+        let saved_hits = self.hit_counts.clone();
+        let saved_kill_rows = self.kill_rows.len();
+        let saved_results = self.results.len();
+        let mut batch = crate::loot::Batch::new();
+        for _ in 0..count.max(0) {
+            let errors_before = self.errors.len();
+            self.apply(&format!("spawn:{}:{}:{}", parts[1], parts[2], parts[3]));
+            if self.errors.len() != errors_before {
+                let last = self.errors.last().cloned().unwrap_or_default();
+                return Err(error(format!("combat-run: lootbatch: {last}")));
+            }
+            let index = self.pawns.len() - 1;
+            let before = crate::loot::drop_count(&self.world.vm)?;
+            self.apply(&format!("hit:{index}:9999:{KILL_DAMAGE_TYPE}:Shotgun"));
+            let pawn = self.pawns[index].enemy.pawn;
+            for drop in crate::loot::drops_from(&self.world.vm, before)?
+                .iter()
+                .filter(|d| d.pawn == pawn)
+            {
+                batch.add(drop);
+            }
+            self.pawns.pop();
+            self.results.truncate(saved_results);
+            self.kill_rows.truncate(saved_kill_rows);
+        }
+        self.rows = saved_rows;
+        self.hit_counts = saved_hits;
+        crate::loot::clear_drops(&self.world.vm)?;
+        self.drops_seen = 0;
+        for (k, v) in batch.rows(tag) {
+            self.row(&k, v);
+        }
+        Ok(format!("{{\"kills\":{}}}", batch.kills()))
     }
 
     /// A pawn's state (C++ `stateJson`): the natives' answers, the plain variables, the health reference and every
