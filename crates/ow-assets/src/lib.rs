@@ -8,6 +8,7 @@ pub mod actorx;
 pub mod animation;
 pub mod collision;
 pub mod mesh;
+pub mod navmesh;
 pub mod obj;
 pub mod png;
 pub mod skeletal;
