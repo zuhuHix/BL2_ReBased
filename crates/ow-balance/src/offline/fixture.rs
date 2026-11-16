@@ -26,6 +26,7 @@ const PAWN_CONTEXT: &str = "Engine.PawnAttributeContextResolver";
 const CONSTANT: &str = "GearboxFramework.ConstantAttributeValueResolver";
 const PROPERTY: &str = "Engine.ObjectPropertyAttributeValueResolver";
 const GLOBAL: &str = "WillowGame.GlobalAttributeValueResolver";
+const PLAYTHROUGH_COUNT: &str = "WillowGame.PlayThroughCountAttributeValueResolver";
 
 /// The default snapshot: first playthrough, one player, level 8, stage 8, no level-cap pack.
 pub(crate) fn snapshot() -> BalanceSnapshot {
@@ -208,6 +209,8 @@ impl Fx {
         class(&mut space, PROPERTY, object, decls);
         let decls = vec![d(&mut space, "GlobalAttribute", byte())];
         class(&mut space, GLOBAL, object, decls);
+        let decls = vec![d(&mut space, "IncludePlaythroughThree", PropKind::Int)];
+        class(&mut space, PLAYTHROUGH_COUNT, object, decls);
         for path in [NO_CONTEXT, PRI_CONTEXT, PAWN_CONTEXT] {
             class(&mut space, path, object, vec![]);
         }
@@ -495,6 +498,15 @@ impl Fx {
 
     fn constant_attr(&mut self, v: f32) -> ObjRef {
         let r = self.resolver(CONSTANT, vec![("ConstantValue", Value::Float(v))]);
+        self.attr(NO_CONTEXT, r)
+    }
+
+    /// A NoContextNeeded attribute whose one value resolver is a playthrough count with `IncludePlaythroughThree`.
+    pub fn playthrough_count_attr(&mut self, include_three: i32) -> ObjRef {
+        let r = self.resolver(
+            PLAYTHROUGH_COUNT,
+            vec![("IncludePlaythroughThree", Value::Int(include_three))],
+        );
         self.attr(NO_CONTEXT, r)
     }
 

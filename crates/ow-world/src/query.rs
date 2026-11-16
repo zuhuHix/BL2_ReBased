@@ -7,7 +7,8 @@
 //!   `NotYet { LayerAbsent }` naming the map load that makes it, never a silent None.
 //! - `engine_query`: the handler registered for the query's kind ([`WorldQuery::register`]). The packs that own the
 //!   engine state register them: resource pools (W5-POOLS, this crate), inventory and equipped items (W5-EQUIP,
-//!   `ow-inventory`), player skills (W6-SKILLS). A kind with no handler is `NotYet { LayerAbsent }` naming that layer.
+//!   `ow-inventory`), player skills (W6-SKILLS), the game replication info (the map load, not built yet; added by
+//!   FIX-PLAYTHROUGH-OFF). A kind with no handler is `NotYet { LayerAbsent }` naming that layer.
 //!   The world itself answers none: how the game finds the player controller from a source, or redirects a pawn's
 //!   attribute context, is not read here (NATIVE_ATTRIBUTES.md sections 5 and 10).
 //!
@@ -39,6 +40,7 @@ pub enum QueryKind {
     PlayerController,
     AttributeContextSource,
     PlayerSkill,
+    GameReplicationInfo,
 }
 
 impl QueryKind {
@@ -51,6 +53,7 @@ impl QueryKind {
             EngineQuery::PlayerController => QueryKind::PlayerController,
             EngineQuery::AttributeContextSource => QueryKind::AttributeContextSource,
             EngineQuery::PlayerSkill { .. } => QueryKind::PlayerSkill,
+            EngineQuery::GameReplicationInfo => QueryKind::GameReplicationInfo,
             _ => return None,
         })
     }
@@ -61,6 +64,9 @@ impl QueryKind {
             QueryKind::ResourcePool => "ow-world pools (lane W5-POOLS)",
             QueryKind::EquippedInventory | QueryKind::Inventory => "ow-inventory (lane W5-EQUIP)",
             QueryKind::PlayerSkill => "ow-skills (lane W6-SKILLS)",
+            QueryKind::GameReplicationInfo => {
+                "the map load that makes the game replication info (a handler for this query)"
+            }
             QueryKind::PlayerController | QueryKind::AttributeContextSource => {
                 "a handler for this query (the engine rule is not read: NATIVE_ATTRIBUTES.md sections 5, 10)"
             }
@@ -295,6 +301,39 @@ mod tests {
             ),
             Missing::LayerAbsent(_)
         ));
+    }
+
+    #[test]
+    fn the_game_replication_info_query_waits_for_the_map_load_handler() {
+        let (mut vm, o) = vm_with_object();
+        let q = install(&mut vm).unwrap();
+        // No handler: NotYet naming the map load, never a silent None (which would read as "no replication info").
+        match vm
+            .engine_query(EngineQuery::GameReplicationInfo, o)
+            .unwrap_err()
+        {
+            AttrError::NotYet(n) => assert_eq!(
+                n.missing,
+                Missing::LayerAbsent(
+                    "the map load that makes the game replication info (a handler for this query)"
+                )
+            ),
+            other => panic!("{other:?}"),
+        }
+        let gri = o;
+        let handler: QueryFn = Rc::new(move |q, _source, _w| match q {
+            EngineQuery::GameReplicationInfo => Ok(Some(gri)),
+            _ => Ok(None),
+        });
+        q.borrow_mut()
+            .register(QueryKind::GameReplicationInfo, handler)
+            .unwrap();
+        assert!(q.borrow().has_handler(QueryKind::GameReplicationInfo));
+        assert_eq!(
+            vm.engine_query(EngineQuery::GameReplicationInfo, o)
+                .unwrap(),
+            Some(gri)
+        );
     }
 
     #[test]
