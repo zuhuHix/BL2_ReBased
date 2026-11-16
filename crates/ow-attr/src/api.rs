@@ -235,7 +235,9 @@ pub trait AttrWorld {
     /// reference ends the chain). For a
     /// resolver class whose rule is script, which only a world that runs script can answer (lane FIX-DESIGNER-RESOLVER,
     /// decision 2026-11-16-62). The default answers `NotYet { LayerAbsent("ow-vm") }`: every world that runs no script
-    /// (an offline world, a roll's adapter, a unit test) gives that.
+    /// (an offline world, a roll's adapter, a unit test) gives that. **Adapters:** a wrapper over a world that runs
+    /// script must decide whether to forward this (running script may draw from the inner world's generators, as
+    /// [`AttrWorld::attribute_changed`] may); `ow_items::RollWorld` does not forward it, so a roll answers the default.
     fn script_context(
         &mut self,
         resolver: ObjRef,

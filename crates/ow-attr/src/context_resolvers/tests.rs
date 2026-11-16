@@ -1258,11 +1258,13 @@ fn the_designer_resolvers_run_their_script_through_the_world() {
         s.w.scripts.push(((by_name, pc), None));
         s.w.script_calls.clear();
         assert_eq!(walk(&s.sys, &[Some(by_name)], Some(pc), &mut s.w), Ok(None));
-        // A None source: None, no call.
+        // A None source, no call: the ByName form, and the plain form in Off, give None; the plain form in Reference
+        // never ends the chain (the C++ `continue`) and falls back to the globals, as NoContextNeeded does.
         s.w.script_calls.clear();
-        for r in [plain, by_name] {
-            assert_eq!(walk(&s.sys, &[Some(r)], None, &mut s.w), Ok(None));
-        }
+        assert_eq!(walk(&s.sys, &[Some(by_name)], None, &mut s.w), Ok(None));
+        let globals = s.w.globals;
+        let expected = if reference { Ok(globals) } else { Ok(None) };
+        assert_eq!(walk(&s.sys, &[Some(plain)], None, &mut s.w), expected);
         assert!(s.w.script_calls.is_empty());
     }
 }

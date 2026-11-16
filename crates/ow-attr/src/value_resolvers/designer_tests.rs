@@ -63,3 +63,57 @@ fn a_designer_attribute_is_its_base_value_only_in_reference_mode() {
     assert_eq!(read(Some(ParityMode::Off)), (9.0, 9.0));
     assert_eq!(read(None), (9.0, 9.0));
 }
+
+/// Review r1 of PR #360: in Reference the designer context step never ends the chain (the C++ `continue`,
+/// `progression.cpp:85-87`), even on a None source, so initialization data whose `BaseValueAttribute` is a designer
+/// attribute with the chain [Designer] gets that attribute's `BaseValue` back (`progression.cpp:117`). In Off the
+/// None source ends the chain and the data's constant stands.
+#[test]
+fn a_designer_base_value_attribute_with_a_none_source_gives_its_base_value_in_reference() {
+    for (mode, expected) in [(ParityMode::Reference, 5.0), (ParityMode::Off, 1.0)] {
+        let mut fx = Fx::new();
+        let (attribute, aid, object) = (fx.c.attribute, fx.c.aid, fx.c.object);
+        let base = fx.w.space.names.intern("BaseValue");
+        let designer =
+            fx.w.space
+                .classes
+                .define(
+                    "WillowGame.DesignerAttributeDefinition",
+                    Some(attribute),
+                    vec![PropertyDecl::new(base, PropKind::Struct(aid))],
+                )
+                .unwrap();
+        let resolver_class =
+            fx.w.space
+                .classes
+                .define(
+                    "WillowGame.DesignerAttributeContextResolver",
+                    Some(object),
+                    vec![],
+                )
+                .unwrap();
+        fx.w.defs = Some(DefStore::new(
+            PackageStore::new_empty(),
+            IdentityPolicy::FirstInScanOrder,
+            mode,
+        ));
+        let step = fx.obj(resolver_class, "DesignerAttributeContextResolver_0", vec![]);
+        let nine = fx.constant(9.0);
+        let attr = fx.attr_in(designer, "Att_Designer", vec![step], vec![nine]);
+        let five = fx.data(InitData::constant(5.0));
+        let p = fx.w.space.prop(designer, "BaseValue").unwrap();
+        fx.w.space
+            .write(attr, ow_object::ids::PropAddr::scalar(p), five)
+            .unwrap();
+        let data = InitData {
+            base_value_attribute: Some(attr),
+            ..InitData::constant(1.0)
+        };
+        // The standard system: the test world's own registers no designer context resolver.
+        let got = crate::registry::AttributeSystem::standard()
+            .unwrap()
+            .evaluate_init(&data, None, None, &mut EvalCx::new(&mut fx.w))
+            .unwrap();
+        assert_eq!(got, expected, "{mode:?}");
+    }
+}

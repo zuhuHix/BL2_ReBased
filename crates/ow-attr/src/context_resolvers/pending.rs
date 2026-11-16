@@ -1,6 +1,8 @@
-//! Owner: lane W3-ATTRCTX. The resolvers whose rule this layer cannot run yet (an unread proxy test, script)
-//! and the classes not read at all. Each answers `NotYet`, naming what is missing; a None source is None where the
-//! record says the resolver works on a source.
+//! Owner: lane W3-ATTRCTX. The resolvers whose rule this layer cannot run by itself, and the classes not read at all.
+//! The unread ones (the status-effect proxy test, the skill resolver, [`Unread`]) answer `NotYet`, naming what is
+//! missing. The script ones (the designer forms, [`Script`]) run their class script through the world
+//! (`AttrWorld::script_context`, lane FIX-DESIGNER-RESOLVER), which answers `NotYet { LayerAbsent("ow-vm") }` in a world
+//! that runs no script; the plain designer form has a Reference stand-in.
 
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::ObjRef;
@@ -43,9 +45,12 @@ impl ContextResolver for StatusEffectChance {
 ///   that runs no script answers `NotYet { LayerAbsent("ow-vm") }`). What the script reaches (the provider interface,
 ///   `GetInstancedDesignerAttribute` and the natives under it) answers as the VM answers any call.
 /// - `ParityMode::Reference`, the plain form only: the C++ stand-in, which treats the class as always resolving and
-///   keeps the object the chain held before it (`src/progression.cpp:85-87`): the source is the answer. The C++ has no
-///   reading of the `ByName` form (it refuses the class), so that form runs the script in both modes.
-/// - A None source is None in both modes (the script's interface query on None answers None, and the C++ keeps None).
+///   keeps the object the chain held before it (`src/progression.cpp:85-87`): the source is the answer. The step never
+///   ends the chain there, even on a None source (review r1 of PR #360): a None source falls back to the engine
+///   globals object, as `NoContextNeeded` does, so the value fold's Reference stand-in (a designer attribute is its
+///   `BaseValue`, `progression.cpp:117`) still gives the C++ value. The C++ has no reading of the `ByName` form (it
+///   refuses the class), so that form runs the script in both modes.
+/// - Off, and the `ByName` form: a None source is None (the script's interface query on None answers None).
 ///
 /// [`AttrWorld::script_context`]: crate::api::AttrWorld::script_context
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,13 +68,15 @@ impl ContextResolver for Designer {
         source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<ObjRef>, AttrError> {
+        if !self.by_name && crate::eval::parity(cx) == ParityMode::Reference {
+            return match source {
+                Some(s) => Ok(Some(s)),
+                None => cx.world.globals().map(Some),
+            };
+        }
         let Some(source) = source else {
             return Ok(None);
         };
-        let mode = cx.world.parts().defs.map_or(ParityMode::Off, |d| d.mode());
-        if !self.by_name && mode == ParityMode::Reference {
-            return Ok(Some(source));
-        }
         cx.world.script_context(resolver, attr, Some(source))
     }
 }
