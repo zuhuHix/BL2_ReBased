@@ -3,8 +3,11 @@
 //! script-facing natives of the actions. AI-assisted (Claude Code). Decision 2026-11-16-66.
 //!
 //! **The brain** ([`tick_brain`], one AI tick of a mind; NATIVE_AI_MELEE.md "AIComponent: cadence", L8 section 3.1):
-//! 1. the first tick builds the tree and the action objects and raises `Init` on each. A build that fails is kept
-//!    and its error answered on later ticks, without copying the archetypes or raising `Init` again;
+//! 1. the first tick builds the tree and the action objects and raises `Init` on each. The mind's pawn, component
+//!    and `AIDef` are checked first, on every tick until the build succeeds, and their errors are not kept (a mind
+//!    ticked before possession, or before its `AIDef` is bound, builds once they are there). A build that fails
+//!    after that is kept with the pawn and `AIDef` it was made for, and its error answered on later ticks without
+//!    copying the archetypes or raising `Init` again, until either changes;
 //! 2. part 1's tick ([`super::vm::tick_mind`]): the target update when due;
 //! 3. on hold: the running action is stopped;
 //! 4. the target events: from no target to one, the tree's timed starts are re-armed; `Target_Lost` and
@@ -22,8 +25,9 @@
 //!
 //! **Stopping.** After `Stop`, the engine puts the action back in its default state; that call is not read
 //! (NATIVE_AI_AWARENESS.md, "Not read yet"). The rest state here is the action's state once built and initialised:
-//! an action that `Stop` left there needs nothing more, and one left in another state is `NotYet` (the tree is then
-//! left as it was).
+//! an action that `Stop` left there needs nothing more, and one left in another state is `NotYet`, with the running
+//! state left as it was (the selection pass of a state update, or a failed `Finish`'s `LastFailTime`, may have run
+//! before the stop).
 //!
 //! **Building the actions** (G26, "the AI initialisation hook ... creates one action object per action node, raises
 //! `Init` on each"). Each action node's `Action` archetype is copied; on the copy `MyWillowPawn` is the pawn (live, L8:
@@ -121,8 +125,9 @@ pub struct Brains {
     brains: DetMap<ObjRef, Brain>,
     /// `(action, bFailed)`, in call order.
     finishes: Vec<(ObjRef, bool)>,
-    /// Minds whose brain failed to build, with the error: answered again without building again.
-    failed_builds: DetMap<ObjRef, VmError>,
+    /// Minds whose brain failed to build, with the pawn and `AIDef` it was built for and the error: answered again
+    /// without building again while both are the same.
+    failed_builds: DetMap<ObjRef, (ObjRef, ObjRef, VmError)>,
     locomotion: Option<Rc<RefCell<dyn Locomotion>>>,
 }
 
@@ -189,12 +194,23 @@ fn ints(v: Option<Value>) -> Vec<i64> {
 
 /// The tree of `mind`'s component, read from its `AIDef.NodeList` (`NotYet` while `AIDef` is unbound, as part 1).
 pub fn read_tree(vm: &mut Vm, mind: ObjRef) -> Result<Brain, VmError> {
+    let (pawn, aidef) = setup(vm, mind)?;
+    read_tree_of(vm, mind, pawn, aidef)
+}
+
+/// What a brain is built from: the mind's pawn and its component's `AIDef`. These can stop being missing (a mind
+/// before possession, an `AIDef` bound later), so [`tick_brain`] asks again each tick and keeps none of their errors.
+fn setup(vm: &mut Vm, mind: ObjRef) -> Result<(ObjRef, ObjRef), VmError> {
     let pawn = object(vm, mind, "Pawn")?.ok_or_else(|| error("the mind has no Pawn".to_string()))?;
     let component = object(vm, mind, "AIComponent")?.ok_or_else(|| error("the mind has no AIComponent".to_string()))?;
     let aidef = object(vm, component, "AIDef")?.ok_or_else(|| -> VmError {
         NotYet::not_read("AIComponent.AIDef unset: the native that binds it when the AI starts is not read", DECISION)
             .into()
     })?;
+    Ok((pawn, aidef))
+}
+
+fn read_tree_of(vm: &mut Vm, mind: ObjRef, pawn: ObjRef, aidef: ObjRef) -> Result<Brain, VmError> {
     let list = array(vm, aidef, "NodeList")?;
     let mut nodes = Vec::new();
     let (mut actions, mut can_run_if, mut conditions) = (Vec::new(), Vec::new(), Vec::new());
@@ -384,7 +400,9 @@ pub fn dry_select(vm: &mut Vm, mind: ObjRef) -> Result<DrySelection, VmError> {
 /// `ActionSequence` declares its events), and so is an event that declares other parameters than `args` fills: no
 /// parameter is left to default silently. In the installed packages `Init`, `Start`, `Stop`, `Update` and `CanRun`
 /// take none (`ActionSequence` and every override; checked with `research/script_disasm.py`) and `ActivateEvent` takes
-/// the event name. Script that needs the frame time reads `WorldInfo.DeltaSeconds` (the world's, not this adapter's).
+/// the event name. Script that needs the frame time reads `WorldInfo.DeltaSeconds`, the world's to set, not this
+/// adapter's. Nothing writes it yet (no map load), so that script reads the class default: the frame time action
+/// script sees is UNVERIFIED until the world sets it.
 fn event(vm: &mut Vm, action: ObjRef, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
     let class = vm.space.heap.get(action)?.class;
     let state = vm.space.heap.get(action)?.state;
@@ -440,8 +458,9 @@ fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Ch
             let b = brains(vm)?;
             borrow(&b)?.finishes.retain(|(a, _)| !brain.actions.contains(&Some(*a)));
             return Err(error(format!(
-                "the action {} (node {node}) finished more than {limit} times in one tick: its script calls Finish at \
-                 once and the tree selects it again (no TimedReset), so the tick would never settle",
+                "more than {limit} Finish calls of this brain's actions in one tick, the last from {} (node {node}): an \
+                 action whose script calls Finish at once and that the tree selects again (no TimedReset) would never \
+                 settle",
                 ow_combat::hit::access::class_name(vm, action)
             )));
         }
@@ -451,24 +470,31 @@ fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Ch
     }
 }
 
-/// One AI tick of `mind` at the VM's world time, `dt` the frame's delta (module documentation).
+/// One AI tick of `mind` at the VM's world time (module documentation).
 pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRef) -> Result<BrainReport, VmError> {
     let mut report = BrainReport::default();
     let now = vm.clock.time_seconds();
     let mut brain = match take(vm, mind)? {
         Some(b) => b,
         None => {
-            let known = borrow(&brains(vm)?)?.failed_builds.get(&mind).cloned();
+            // Not kept: these can stop being true (module documentation, step 1).
+            let (pawn, aidef) = setup(vm, mind)?;
+            let known = borrow(&brains(vm)?)?
+                .failed_builds
+                .get(&mind)
+                .filter(|(p, d, _)| (*p, *d) == (pawn, aidef))
+                .map(|(_, _, e)| e.clone());
             if let Some(e) = known {
                 return Err(e);
             }
-            match build(vm, mind) {
+            match build(vm, mind, pawn, aidef) {
                 Ok(b) => {
+                    borrow(&brains(vm)?)?.failed_builds.remove(&mind);
                     report.built = true;
                     b
                 }
                 Err(e) => {
-                    borrow(&brains(vm)?)?.failed_builds.insert(mind, e.clone());
+                    borrow(&brains(vm)?)?.failed_builds.insert(mind, (pawn, aidef, e.clone()));
                     return Err(e);
                 }
             }
@@ -479,10 +505,11 @@ pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRe
     result.map(|()| report)
 }
 
-/// The brain of `mind`: the tree read, `Init` raised on each action, each action's rest state noted. A failure is
-/// kept by [`tick_brain`] and answered again on later ticks, so the archetypes are not copied again each tick.
-fn build(vm: &mut Vm, mind: ObjRef) -> Result<Brain, VmError> {
-    let mut b = read_tree(vm, mind)?;
+/// The brain of `mind` for `pawn` and `aidef`: the tree read, `Init` raised on each action, each action's rest state
+/// noted. A failure is kept by [`tick_brain`] with the pawn and `AIDef`, so the archetypes are not copied again each
+/// tick.
+fn build(vm: &mut Vm, mind: ObjRef, pawn: ObjRef, aidef: ObjRef) -> Result<Brain, VmError> {
+    let mut b = read_tree_of(vm, mind, pawn, aidef)?;
     for action in b.actions.iter().flatten() {
         event(vm, *action, "Init", vec![])?;
     }
@@ -766,9 +793,15 @@ fn locomotion(vm: &mut Vm) -> Result<Rc<RefCell<dyn Locomotion>>, VmError> {
     })
 }
 
-fn vector(vm: &Vm, v: &Value) -> Vec3 {
-    let axis = |n: &str| field(vm, v, n).map_or(0.0, |x| number(&x) as f32);
-    [axis("X"), axis("Y"), axis("Z")]
+/// A vector argument's X, Y and Z; a value without them is an error (a wrong argument would otherwise send the pawn
+/// to the origin).
+fn vector(vm: &Vm, v: &Value) -> Result<Vec3, VmError> {
+    let axis = |n: &str| {
+        field(vm, v, n)
+            .map(|x| number(&x) as f32)
+            .ok_or_else(|| error(format!("a movement native's vector argument has no {n}")))
+    };
+    Ok([axis("X")?, axis("Y")?, axis("Z")?])
 }
 
 /// The pawn of an action native's object (an action: its `MyWillowPawn`).
@@ -790,7 +823,7 @@ enum Move {
 fn bind_locomotion(vm: &mut Vm) -> Result<(), VmError> {
     let path_body: NativeFn = Rc::new(|c: &mut NativeCall<'_>| {
         let handle = this(c)?;
-        let dest = vector(c.vm, c.arg(1)?);
+        let dest = vector(c.vm, c.arg(1)?)?;
         let host = locomotion(c.vm)?;
         let ok = host
             .try_borrow_mut()
@@ -825,7 +858,7 @@ fn bind_locomotion(vm: &mut Vm) -> Result<(), VmError> {
             Rc::new(move |c: &mut NativeCall<'_>| {
                 let pawn = action_pawn(c)?;
                 let goal = match op {
-                    Move::CanMoveTo => vector(c.vm, c.arg(0)?),
+                    Move::CanMoveTo => vector(c.vm, c.arg(0)?)?,
                     _ => [0.0; 3],
                 };
                 let speed = match op {
