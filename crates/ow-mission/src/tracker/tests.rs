@@ -829,10 +829,10 @@ fn availability_needs_the_dependencies() {
     let m = env.mission();
     assert_eq!(m.dependencies(), ["Before"]);
     let mut done = DetSet::new();
-    assert!(!m.can_start(&done, ParityMode::Off).unwrap());
+    assert!(!m.can_start(&done, &env.vm).unwrap());
     assert!(!m.accept(&mut env.vm, &done).unwrap());
     done.insert("Before".to_string());
-    assert!(m.can_start(&done, ParityMode::Off).unwrap());
+    assert!(m.can_start(&done, &env.vm).unwrap());
     let mut toy = toy_mission();
     toy.dependency = Some(("Count3", 1));
     let mut env = Env::new(&toy);
@@ -1092,21 +1092,26 @@ fn a_repeatable_complete_mission_is_not_yet() {
     toy.repeatable = true;
     let mut env = Env::new(&toy);
     let m = env.mission();
-    assert!(m.can_start(&DetSet::new(), ParityMode::Off).unwrap());
+    assert!(m.can_start(&DetSet::new(), &env.vm).unwrap());
     assert!(m.load_state("status=3\nactive=\n"));
-    let refused = m.can_start(&DetSet::new(), ParityMode::Off).unwrap_err();
+    let refused = m.can_start(&DetSet::new(), &env.vm).unwrap_err();
     assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotRead));
     assert!(m.accept(&mut env.vm, &DetSet::new()).is_err());
-    assert!(!m.can_start(&DetSet::new(), ParityMode::Reference).unwrap());
+    let mut reference = Env::with_mode(&toy, ParityMode::Reference);
+    let m = reference.mission();
+    assert!(m.load_state("status=3\nactive=\n"));
+    assert!(!m.can_start(&DetSet::new(), &reference.vm).unwrap());
     // Not repeatable: the C++ false in both modes.
     let mut env = Env::new(&toy_mission());
     let m = env.mission();
     assert!(m.load_state("status=3\nactive=\n"));
-    assert!(!m.can_start(&DetSet::new(), ParityMode::Off).unwrap());
+    assert!(!m.can_start(&DetSet::new(), &env.vm).unwrap());
 }
 
 /// A plot-critical mission whose activation finds a pending kickoff record: the overwrite is not read, so Off refuses
-/// before the status changes; Reference keeps the C++ (the pending record stays).
+/// before the status changes; Reference keeps the C++, which does not overwrite: the record that was pending stays
+/// (not one from this activation), so the tick plays `PlayKickoffDialogOnly` (id 13, linked to nothing here) instead of
+/// the activation's `PlayKickoff` (id 12, `R:Kick`). A one-mission tracker reaches this state only through a test.
 #[test]
 fn a_plot_critical_overwrite_is_not_yet() {
     let mut toy = toy_mission();
@@ -1122,7 +1127,16 @@ fn a_plot_critical_overwrite_is_not_yet() {
     let m = env.mission();
     m.inner.state.borrow_mut().kickoff_pending = true;
     assert!(m.accept(&mut env.vm, &DetSet::new()).unwrap());
-    assert!(m.kickoff_pending());
+    m.drain();
+    m.tick(&mut env.vm, 0.5).unwrap();
+    assert!(!short(&m.drain()).contains(&"R:Kick".to_string()), "the pending record was kept, not overwritten");
+    // The same mission without a pending record: the activation's own record, PlayKickoff.
+    let mut env = Env::with_mode(&toy, ParityMode::Reference);
+    let m = env.mission();
+    assert!(m.accept(&mut env.vm, &DetSet::new()).unwrap());
+    m.drain();
+    m.tick(&mut env.vm, 0.5).unwrap();
+    assert_eq!(short(&m.drain()), ["R:Kick"]);
     // Without a pending record a plot-critical mission is accepted in Off mode too.
     let mut env = Env::new(&toy);
     let m = env.mission();

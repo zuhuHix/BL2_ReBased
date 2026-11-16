@@ -34,7 +34,12 @@ lane L2).
   `unsafe` is forbidden in the workspace; this is the safe form. A call that finds the slot empty is refused
   (`tracker::PROVIDER_BUSY`, `NotYet { NotPorted }`). A lend whose call takes the provider and does not give it back
   marks the mission lost: every later call on it is refused (`tracker::PROVIDER_LOST`), rather than the placeholder
-  copy running (review r1 of PR #334; the director's provider in the bridge the same).
+  copy running (review r1 of PR #334). The director's provider in the bridge has the same lost state, and every
+  reader and caller of it refuses with `PROVIDER_LOST` once it is set (review r2 of PR #334): the registration check
+  behind `IsBehaviorSequenceEnabled` and `ActivateBehaviorEventFromScript`, the path branch of
+  `ResolveBehaviorProviderDefinitionReference`, and every call that takes the provider out of its slot (the use key's
+  `OnUsed`, the consumer registration). Unit tests: `a_lost_provider_makes_the_mission_unusable` (the mission),
+  `a_lost_director_provider_refuses_its_readers` (the director).
   - **Wave-6 contract limit (review r1 of PR #334).** Only the tracker's and the bridge's own handlers can lend. A
     behavior handler of another lane, registered in the kernel's registry, that reaches a tracker native which fires
     an event (`ActivateMission`, `CompleteMission`, `PlayTurnIn`, `UpdateObjective`, a custom event) finds the slot
@@ -89,13 +94,13 @@ lane L2).
 
   | Stand-in | C++ (Reference) | Off | Pinned by |
   |---|---|---|---|
-  | a bound native called on another object (`outside_binding`) | stub line, zero result | the stub policy decides: `VmError::UnboundNative` under `Refuse`, the stub under `LogAndZero` | no tracked test reaches it (the toys call every native on its own object) |
-  | `GetCurrencyReward` with a non-zero `CreditRewardMultiplier` | stub line, 0 credits | `NotYet { NotRead }` (the credit formula's values) | none (the toys' multiplier is 0; the Fire mission's too) |
-  | `GetCurrencyReward` of a mission with optional objectives | stub line, their rewards left out | `NotYet { NotPorted }` | none |
-  | `GetItemRewardsForPlayer` with reward items or pools | stub line, no items | `NotYet { LayerAbsent("ow-combat loot (lane W6-LOOT)") }` | none |
-  | `GetBehaviorContext` with an `InstancedDataContextName` | stub line, None | `NotYet { NotPorted }` | none (scenario H's probes have no name) |
-  | `RunBehaviors` outside the level-up | stub line, nothing | `NotYet { NotPorted }` | none |
-  | `GetExperienceReward` of a mission with optional objectives | stub line, their terms left out | `NotYet { NotPorted }` | none |
+  | a bound native called on another object (`outside_binding`) | stub line, zero result | the stub policy decides: `VmError::UnboundNative` under `Refuse`, the stub under `LogAndZero` | no tracked test reaches it (the toys call every native on its own object); unit test `a_call_outside_the_binding_is_the_unbound_behaviour` |
+  | `GetCurrencyReward` with a non-zero `CreditRewardMultiplier` | stub line, 0 credits | `NotYet { NotRead }` (the credit formula's values) | unit test `credits_with_a_multiplier_by_mode` (no tracked test: the toys' multiplier is 0, the Fire mission's too) |
+  | `GetCurrencyReward` of a mission with optional objectives | stub line, their rewards left out | `NotYet { NotPorted }` | unit test `optional_objective_currency_by_mode` |
+  | `GetItemRewardsForPlayer` with reward items or pools | stub line, no items | `NotYet { LayerAbsent("ow-combat loot (lane W6-LOOT)") }` | unit test `reward_items_by_mode` |
+  | `GetBehaviorContext` with an `InstancedDataContextName` | stub line, None | `NotYet { NotPorted }` | unit test `instance_data_context_by_mode` (scenario H's probes have no name) |
+  | `RunBehaviors` outside the level-up | stub line, nothing | `NotYet { NotPorted }` | unit test `not_implemented_is_the_cxx_line_in_reference_and_not_yet_in_off` |
+  | `GetExperienceReward` of a mission with optional objectives | stub line, their terms left out | `NotYet { NotPorted }` | unit test `optional_objective_experience_by_mode` |
 
   `RunBehaviors` inside the level-up (the C++ skill-effect stand-in) is not ported in either mode (`NotYet`, W6-SKILLS).
 - **Rules neither side models (review r1 of PR #334).** The C++ goes on silently; here Off mode answers `NotYet`
@@ -105,8 +110,8 @@ lane L2).
   |---|---|---|---|
   | an objective set of another class than `MissionObjectiveSetDefinition` (collection, branching) | `NotYet { NotPorted }` at `MissionSystem::new` | the error line `unsupported objective set class ...` when the set is reached | none in the tracked tests; installed `M_KillYourself` |
   | the lent weapon's region-stage condition (NATIVE_MISSION_SCRIPT_BRIDGE.md) | `NotYet { NotRead }` in the Active and Complete status routine of a mission that lends its weapon | granted inside Active, removed inside Complete, the condition not applied | `mission_script_test.py` scenario W (so W runs in Reference mode only) |
-  | `bRepeatable` on a Complete mission (`CanStartMission`) | `NotYet { NotRead }` | false | none |
-  | a plot-critical mission whose activation finds a pending kickoff record (the overwrite) | `NotYet { NotRead }` | the pending record kept | none (a one-mission tracker cannot reach it; a unit test sets the record) |
+  | `bRepeatable` on a Complete mission (`CanStartMission`, the mode read from the VM) | `NotYet { NotRead }` | false | unit test `a_repeatable_complete_mission_is_not_yet` |
+  | a plot-critical mission whose activation finds a pending kickoff record (the overwrite) | `NotYet { NotRead }` | the pending record kept, so the tick plays `PlayKickoffDialogOnly` (13), not the activation's `PlayKickoff` (12) | unit test `a_plot_critical_overwrite_is_not_yet`, which sets the record (a one-mission tracker cannot reach the state) |
 - **Fixture-only changes (granted by the hub).** `tests/behavior_test.py` and `tests/mission_script_test.py`: a toy
   `Core.upk`; every object property names the toy `Core.Object` and every toy class derives from it; an array
   parameter or local gets an inner property; struct parameters, locals and results name a struct (toy
@@ -123,7 +128,7 @@ lane L2).
     34 `--mission-run` commands 19 give the C++ stdout and exit code byte for byte, the 15 that differ being scenario
     E's (exit 3 here). In Off mode scenario W stops on the lent weapon's unread condition (4 checks; 18 of 34 equal).
   - `tests/behavior_test.py` passes on the Rust binary in both modes.
-  - 23 tracker and 20 bridge unit tests on invented packages (`tracker/tests.rs`, `bridge/tests.rs`), one or more per
+  - 23 tracker and 25 bridge unit tests on invented packages (`tracker/tests.rs`, `bridge/tests.rs`), one or more per
     rule and, for each stand-in, both modes; they include the whole of `behavior_test.py` section 6.
     `tests/rust_parity.d/mission.txt` (3 lines).
   - The installed game, local only (output under `local/`): the 77 missions the Sanctuary packages reference (all

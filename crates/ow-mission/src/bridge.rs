@@ -1186,7 +1186,8 @@ impl MissionScript {
                 vm,
                 "MissionDefinition.GetExperienceReward: optional objective experience",
                 NotYet::not_ported(
-                    "GetExperienceReward of a mission with optional objectives (the completed optional objectives'                      OptionalExperienceRewardPercentage terms)",
+                    "GetExperienceReward of a mission with optional objectives (the completed optional objectives' \
+                     OptionalExperienceRewardPercentage terms)",
                     RECORD,
                 ),
             )?;
@@ -1351,7 +1352,7 @@ impl MissionScript {
             return outside_binding(c);
         }
         let mine = self.is_mission(c.vm, &c.arg(0)?.clone())?;
-        let start = mine && self.inner.mission.can_start(&self.completed(), c.vm.parity)?;
+        let start = mine && self.inner.mission.can_start(&self.completed(), c.vm)?;
         Ok(Value::Bool(start))
     }
 
@@ -1544,7 +1545,8 @@ impl MissionScript {
                 c.vm,
                 "MissionDefinition.GetCurrencyReward: credits need MissionCreditRewardFormula attribute values",
                 NotYet::not_read(
-                    "GetCurrencyReward's credits: GlobalsDefinition.MissionCreditRewardFormula x CreditRewardMultiplier                      (the formula's attribute values are not decoded in the record)",
+                    "GetCurrencyReward's credits: GlobalsDefinition.MissionCreditRewardFormula x CreditRewardMultiplier \
+                     (the formula's attribute values are not decoded in the record)",
                     RECORD,
                 ),
             )?;
@@ -1895,9 +1897,7 @@ impl MissionScript {
         if !self.inner.has_marcus.get() {
             return Ok(());
         }
-        if self.inner.marcus_lost.get() {
-            return Err(NotYet::not_ported(tracker::PROVIDER_LOST, RECORD).into());
-        }
+        self.marcus_usable()?;
         let taken = self.inner.marcus.borrow_mut().take();
         let Some(mut p) = taken else {
             return Err(NotYet::not_ported(tracker::PROVIDER_BUSY, RECORD).into());
@@ -1975,8 +1975,19 @@ impl MissionScript {
         Ok(ids)
     }
 
+    /// Refused once a failed lend lost the director's provider: every reader and caller of it (module documentation of
+    /// `crate::tracker`, "Re-entrancy").
+    fn marcus_usable(&self) -> Result<(), MissionError> {
+        if self.inner.marcus_lost.get() {
+            return Err(NotYet::not_ported(tracker::PROVIDER_LOST, RECORD).into());
+        }
+        Ok(())
+    }
+
     /// The consumer's registered provider for a handle and a provider object (NATIVE_MARCUS_USE_CHAIN.md result rule).
+    /// Refused when the director's provider was lost.
     fn registered(&self, vm: &Vm, handle: &Value, provider: &Value) -> Result<bool, MissionError> {
+        self.marcus_usable()?;
         let Value::Object(Some(o)) = provider else {
             return Ok(false);
         };
@@ -2087,6 +2098,7 @@ impl MissionScript {
             }
         }
         if !full.is_empty() {
+            self.marcus_usable()?;
             let slot = self.inner.marcus.borrow();
             let found = slot
                 .as_ref()
