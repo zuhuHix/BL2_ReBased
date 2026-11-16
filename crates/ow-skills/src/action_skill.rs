@@ -1,1 +1,844 @@
-//! Owner: lane W6-SKILLS. Not started: this file is a scaffold stub (W0-SCAFFOLD); the owner lane fills it.
+//! Owner: lane W6-SKILLS. The action skill and the skill manager's natives: the start decision and its refusals
+//! (`ServerStartActionSkill`, restated), `SkillEffectManager.IsSkillActive`, the constraint check
+//! (`Skill.CalculateStateBasedOnConstraints`) with the skill constraint evaluators, the grade natives, the cooldown
+//! pool's per-frame drain, and the skill behavior handlers. AI-assisted (Claude Code).
+//!
+//! **Evidence.** NATIVE_ACTION_SKILL.md (lane G17), NATIVE_SKILLS.md sections 4-5, NATIVE_PHASELOCK_TARGETING.md
+//! section 4, read from the executable and the installed script. Every rule is **UNVERIFIED in the running game**
+//! except these, seen live: a cast during a reload starts and aborts the reload, a cast during a weapon swap's
+//! put-down stays idle and uses no cooldown (2 of 2, 2026-10-02); with a target held, Maya going down ended the skill
+//! within about 0.14 s (one cast, 2026-11-12); a base first lock released at 5.7 s and ended at 6.7 s, and a miss
+//! fizzled and ended after 1 s, within about two frames (two casts each, 2026-11-12).
+//!
+//! **What runs as installed script** (architecture R2): `StartActiveSkillCooldown` (the refill, through the pool's
+//! own `RefillPercentage`), `IsActionSkillOnCooldown`, `ActionSkillCallback`, `ServerStartActionSkill`,
+//! `SkillEffectManager.ActivateSkill`, `Skill.Activate` and `Deactivate`, and the behaviors' `ApplyBehaviorToContext`.
+//! This module binds the natives they call. [`decide_start`] restates `ServerStartActionSkill`'s decision list for
+//! callers without a VM (a second implementation until a differential test exists: Open).
+//!
+//! **Bound by function path** ([`ow_combat::hit::bind`]): a native whose function the VM does not declare is skipped,
+//! and the first binding of a key wins, so this pack and `ow-combat`'s evaluator natives never collide.
+//!
+//! **Not here, and why.** `Skill.AddSkillEffect` and `Skill.AdjustModifiers` (the record struct of an applied
+//! effect is not named in the record), the manager's per-frame skill refresh, `NotifySkillEvent` and the
+//! `ActionSkill` event natives (they need the behavior kernel's consumer natives, which no pack binds: contract item),
+//! `GetActionSkillDuration` and `SetActionSkillTime` (how a controller reaches its skill manager is not read). Each
+//! stays unbound, so a gameplay run refuses at it (`StubPolicy::Refuse`).
+
+use std::rc::Rc;
+
+use ow_attr::api::{Comparison, EvalCx, ExprData, ExprMode, Operand2Usage};
+use ow_attr::eval::{elements, field, number, object};
+use ow_behavior::kernel::{BehaviorId, Provider};
+use ow_behavior::provider::BehaviorError;
+use ow_behavior::registry::Handler;
+use ow_combat::hit::bind;
+use ow_core::NotYet;
+use ow_object::ids::ObjRef;
+use ow_object::value::Value;
+use ow_vm::api::{NativeCall, NativePack, Vm};
+use ow_vm::error::VmError;
+
+use crate::skills::{
+    Constraint, SkillError, SkillState, modifier_value, passes_min_grade_test, read_effect,
+    read_skill,
+};
+
+/// The record of the action skill.
+pub const RECORD: &str = "NATIVE_ACTION_SKILL.md";
+/// The record of the cooldown drain.
+pub const RECORD_DRAIN: &str = "NATIVE_SKILLS.md section 5.2";
+
+/// The physics value of a ladder (`EPhysics` 9, stock UE3 order; NATIVE_ACTION_SKILL.md "Enums used").
+pub const PHYS_LADDER: u8 = 9;
+
+// ---------------------------------------------------------------------------------------------------------------
+// The start decision (`ServerStartActionSkill`, restated)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// What `ServerStartActionSkill` reads (section 2), gathered by the caller.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StartInputs {
+    /// The pawn (a vehicle's driver when the pawn is a vehicle) is on a ladder (`Physics` 9).
+    pub on_ladder: bool,
+    /// The tree knows an action skill.
+    pub has_action_skill: bool,
+    /// The cooldown pool is valid and its current value is above 0.
+    pub on_cooldown: bool,
+    /// On cooldown and the current value is below the pool's maximum.
+    pub cooling_down: bool,
+    /// `IsSkillActive` for the action skill and this controller.
+    pub active: bool,
+    /// The definition is the one named `Skill_Gunzerking` (its one special case).
+    pub gunzerking: bool,
+    /// In a vehicle whose seat is not an attached-rider seat.
+    pub vehicle_seat_refuses: bool,
+    /// `bCanBeToggledOff`.
+    pub can_be_toggled_off: bool,
+    /// The action skill object allows another automatic active-ability activation now.
+    pub active_ability_allowed: bool,
+    /// The action skill object allows another automatic cooldown-ability activation now.
+    pub cooldown_ability_allowed: bool,
+}
+
+/// What `ServerStartActionSkill` does (section 2). The target variable is cleared after every branch.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartDecision {
+    /// On a ladder: nothing else changes (the target is not even stored).
+    RefusedOnLadder,
+    /// No action skill in the tree: nothing.
+    NoActionSkill,
+    /// In a vehicle seat that is not an attached rider's: nothing.
+    RefusedVehicleSeat,
+    /// Ask the manager to activate it with the tree's grade and `ActionSkillCallback` (the manager may still refuse:
+    /// activation not allowed, the grade test, or a failed constraint inside `Skill.Activate`).
+    Activate,
+    /// A second press of a skill that can be toggled off: deactivate it.
+    ToggleOff,
+    /// The active-ability path (`ServerStartActionSkillActiveAbility`).
+    ActiveAbility,
+    /// The cooldown-ability path (`ServerStartActionSkillCooldownAbility`).
+    CooldownAbility,
+    /// None of the branches applies (a press during Phaselock's lock or its cooldown).
+    Nothing,
+}
+
+/// `ServerStartActionSkill`'s decision list (NATIVE_ACTION_SKILL.md section 2, the consistent reading; UNVERIFIED in
+/// the game, except that a cast during a put-down uses no cooldown, which is the constraint inside `Activate`).
+pub fn decide_start(i: StartInputs) -> StartDecision {
+    if i.on_ladder {
+        return StartDecision::RefusedOnLadder;
+    }
+    if !i.has_action_skill {
+        return StartDecision::NoActionSkill;
+    }
+    // Only for Skill_Gunzerking the cooling-down flag is "cooling down and not active"; the cooldown refusal is not
+    // waived (Corrections, NATIVE_ACTION_SKILL.md).
+    let cooling_down = if i.gunzerking {
+        i.cooling_down && !i.active
+    } else {
+        i.cooling_down
+    };
+    if !i.on_cooldown && !i.active {
+        if i.vehicle_seat_refuses {
+            return StartDecision::RefusedVehicleSeat;
+        }
+        return StartDecision::Activate;
+    }
+    if i.can_be_toggled_off {
+        return StartDecision::ToggleOff;
+    }
+    if i.active && !cooling_down {
+        return if i.active_ability_allowed {
+            StartDecision::ActiveAbility
+        } else {
+            StartDecision::Nothing
+        };
+    }
+    if cooling_down {
+        return if i.cooldown_ability_allowed {
+            StartDecision::CooldownAbility
+        } else {
+            StartDecision::Nothing
+        };
+    }
+    StartDecision::Nothing
+}
+
+/// The cooldown flags of section 5 from the pool's current and maximum values: `(on_cooldown, cooling_down)`, where
+/// on cooldown is `current > 0` and cooling down is on cooldown and `current < max`. Ready is `current <= 0`.
+pub fn cooldown_flags(current: f32, max: f32) -> (bool, bool) {
+    let on = current > 0.0;
+    (on, on && current < max)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The constraint check
+// ---------------------------------------------------------------------------------------------------------------
+
+/// `Skill.CalculateStateBasedOnConstraints(bActivation)` (NATIVE_PHASELOCK_TARGETING.md section 4): a constraint
+/// applies when `bApplyConstraintOnActivatation` and this is the activation check, or `bApplyConstraintWhileActive`
+/// and the skill is Active, or `bApplyConstraintWhilePaused` and it is Paused. It holds when every one of its
+/// evaluators holds (`holds`, in order, stopping at the first false). A failing constraint sets the result to its
+/// `OnFailure`, and a `Deactivated` failure stops the check; with no failure the result is Active.
+///
+/// The record says "the first failing constraint sets the result ... if that is `SKILL_Deactivated` the check stops
+/// there"; read here as: each failure sets the result, and only a Deactivated one stops (a Paused failure followed by
+/// a Deactivated one gives Deactivated). UNVERIFIED; all three of Phaselock's constraints fail to Deactivated, so
+/// both readings agree for it.
+pub fn state_from_constraints(
+    constraints: &[Constraint],
+    activation: bool,
+    current: SkillState,
+    mut holds: impl FnMut(ObjRef) -> Result<bool, SkillError>,
+) -> Result<SkillState, SkillError> {
+    let mut result = SkillState::Active;
+    for c in constraints {
+        let applies = (c.on_activation && activation)
+            || (c.while_active && current == SkillState::Active)
+            || (c.while_paused && current == SkillState::Paused);
+        if !applies {
+            continue;
+        }
+        let mut ok = true;
+        for &e in &c.evaluators {
+            if !holds(e)? {
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            result = c.on_failure;
+            if c.on_failure == SkillState::Deactivated {
+                break;
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// The skill state of the byte `b` (`ESkillState`).
+pub fn skill_state_of_byte(b: u8) -> Option<SkillState> {
+    match b {
+        0 => Some(SkillState::Deactivated),
+        1 => Some(SkillState::Active),
+        2 => Some(SkillState::Paused),
+        _ => None,
+    }
+}
+
+fn script_error(function: &str, message: impl Into<String>) -> VmError {
+    VmError::Script {
+        function: function.to_string(),
+        message: message.into(),
+    }
+}
+
+/// Property `name` of `o` (loaded first), `None` when the class has none.
+pub(crate) fn get(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<Value>, VmError> {
+    let mut cx = EvalCx::new(vm);
+    Ok(ow_attr::eval::property(&mut cx, o, name)?)
+}
+
+/// Property `name` of `o`, which the class must have.
+pub(crate) fn need(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
+    let mut cx = EvalCx::new(vm);
+    Ok(ow_attr::eval::required(&mut cx, o, name)?)
+}
+
+fn obj_of(v: &Value) -> Option<ObjRef> {
+    match v {
+        Value::Object(o) | Value::Interface(o) => *o,
+        _ => None,
+    }
+}
+
+/// The function `name` as `o`'s class sees it: its method (the loaded code, from the class up), else a function
+/// declared by path on the class or a super class (a class defined without a package declares its functions that
+/// way). `None` when neither has one.
+pub(crate) fn method_of(
+    vm: &mut Vm,
+    o: ObjRef,
+    name: &str,
+) -> Result<Option<ow_object::ids::FuncId>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    if let Some(f) = vm.find_method(class, name, None)? {
+        return Ok(Some(f));
+    }
+    let mut cursor = Some(class);
+    let mut steps = 0usize;
+    while let Some(c) = cursor {
+        steps += 1;
+        if steps > crate::skills::DEPTH_BUDGET {
+            break;
+        }
+        let layout = vm.space.classes.layout(c);
+        let path = format!("{}.{name}", layout.path().as_str());
+        cursor = layout.super_class();
+        if let Ok(f) = vm.find_function(&path) {
+            return Ok(Some(f));
+        }
+    }
+    Ok(None)
+}
+
+/// Calls `name` on `o` (its class's method, script or native) and answers its bool result.
+pub(crate) fn call_bool(
+    vm: &mut Vm,
+    o: ObjRef,
+    name: &str,
+    args: Vec<Value>,
+) -> Result<bool, VmError> {
+    let Some(f) = method_of(vm, o, name)? else {
+        return Err(NotYet::not_read(
+            format!(
+                "{name} on {} (the class declares no such function)",
+                ow_attr::eval::class_path(&vm.space, o)
+            ),
+            RECORD,
+        )
+        .into());
+    };
+    match vm.call(f, Some(o), args)?.ret {
+        Value::Bool(b) => Ok(b),
+        other => Err(script_error(
+            name,
+            format!("expected a bool result, found {}", other.kind_name()),
+        )),
+    }
+}
+
+/// The pawn an evaluator's context names: the object itself when it is a pawn, a controller's `Pawn`.
+fn pawn_of(vm: &mut Vm, o: ObjRef) -> Result<Option<ObjRef>, VmError> {
+    let space = &vm.space;
+    if crate::skills::is_a(space, o, "Engine.Pawn")? {
+        return Ok(Some(o));
+    }
+    if crate::skills::is_a(space, o, "Engine.Controller")? {
+        return Ok(need(vm, o, "Pawn").ok().as_ref().and_then(obj_of));
+    }
+    Ok(None)
+}
+
+fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
+    c.this
+        .ok_or_else(|| script_error(what, "called without an object"))
+}
+
+fn arg_obj(c: &NativeCall<'_>, i: usize) -> Result<Option<ObjRef>, VmError> {
+    if i >= c.arg_count() {
+        return Ok(None);
+    }
+    Ok(obj_of(c.arg(i)?))
+}
+
+fn arg_int(c: &NativeCall<'_>, i: usize, what: &str) -> Result<i32, VmError> {
+    match c.arg(i)? {
+        Value::Int(v) => Ok(*v),
+        Value::Byte(b) => Ok(i32::from(*b)),
+        other => Err(script_error(
+            what,
+            format!("argument {i}: expected an int, found {}", other.kind_name()),
+        )),
+    }
+}
+
+fn byte_of(v: &Value, what: &str) -> Result<u8, VmError> {
+    match v {
+        Value::Byte(b) => Ok(*b),
+        other => Err(script_error(
+            what,
+            format!("expected a byte, found {}", other.kind_name()),
+        )),
+    }
+}
+
+/// The evaluator `Evaluate(Object)` of `evaluator` with `source`, through the VM (whichever binding it has).
+pub fn evaluate(vm: &mut Vm, evaluator: ObjRef, source: Option<ObjRef>) -> Result<bool, VmError> {
+    ow_attr::eval::ensure_loaded(&mut EvalCx::new(vm), evaluator)?;
+    call_bool(vm, evaluator, "Evaluate", vec![Value::Object(source)])
+}
+
+/// The native of `Skill.CalculateStateBasedOnConstraints(bActivation)` on the skill `skill`.
+pub fn calculate_state(
+    vm: &mut Vm,
+    skill: ObjRef,
+    activation: bool,
+) -> Result<SkillState, VmError> {
+    let definition = obj_of(&need(vm, skill, "Definition")?).ok_or_else(|| {
+        VmError::from(NotYet::not_read(
+            "a constraint check on a skill with no definition",
+            RECORD,
+        ))
+    })?;
+    let current = skill_state_of_byte(byte_of(&need(vm, skill, "SkillState")?, "SkillState")?)
+        .ok_or_else(|| {
+            script_error(
+                "CalculateStateBasedOnConstraints",
+                "SkillState outside ESkillState",
+            )
+        })?;
+    let instigator = obj_of(&need(vm, skill, "SkillInstigator")?);
+    let def = read_skill(&mut EvalCx::new(vm), definition)?;
+    let state = state_from_constraints(&def.constraints, activation, current, |e| {
+        Ok(evaluate(vm, e, instigator)?)
+    })?;
+    Ok(state)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The natives
+// ---------------------------------------------------------------------------------------------------------------
+
+/// `SkillEffectManager.IsSkillActive(Controller, SkillDefinition)` (section 3): any skill of the manager's
+/// `ActiveSkills` with this definition, this instigator and a state other than Deactivated (Paused counts).
+pub fn is_skill_active(
+    vm: &mut Vm,
+    manager: ObjRef,
+    controller: Option<ObjRef>,
+    definition: Option<ObjRef>,
+) -> Result<bool, VmError> {
+    let list = need(vm, manager, "ActiveSkills")?;
+    let skills: Vec<ObjRef> = list
+        .elements()
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(obj_of)
+        .collect();
+    for s in skills {
+        let d = obj_of(&need(vm, s, "Definition")?);
+        let i = obj_of(&need(vm, s, "SkillInstigator")?);
+        let state = byte_of(&need(vm, s, "SkillState")?, "SkillState")?;
+        if d == definition && i == controller && state != SkillState::Deactivated.byte() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// `Skill.CalculateModifierValue(EffectData, Grade, ContextSource)`: the grade rule with the two initialization
+/// values evaluated by the one evaluator with `source` as the context source (NATIVE_SKILLS.md 4.3).
+pub fn calculate_modifier_value(
+    vm: &mut Vm,
+    effect: &Value,
+    grade: i32,
+    source: Option<ObjRef>,
+) -> Result<f32, VmError> {
+    let e = read_effect(&vm.space, effect)?;
+    let sys = vm.attrs.clone();
+    let mut cx = EvalCx::new(vm);
+    let base = sys.evaluate_init(&e.base, source, None, &mut cx)?;
+    let per = sys.evaluate_init(&e.per_grade, source, None, &mut cx)?;
+    Ok(modifier_value(&e, grade, base, per))
+}
+
+/// The function paths this module binds.
+pub const NATIVE_PATHS: [&str; 9] = [
+    "WillowGame.SkillEffectManager.IsSkillActive",
+    "WillowGame.SkillDefinition.DoesSkillPassMinGradeTest",
+    "WillowGame.Skill.CalculateModifierValue",
+    "WillowGame.Skill.CalculateModifierValueFromDefinitionEffectArray",
+    "WillowGame.Skill.CalculateStateBasedOnConstraints",
+    "GearboxFramework.AttributeExpressionEvaluator.Evaluate",
+    "WillowGame.VehiclePassengerExpressionEvaluator.Evaluate",
+    "WillowGame.HealthStateExpressionEvaluator.Evaluate",
+    "WillowGame.WeaponActionAvailableExpressionEvaluator.Evaluate",
+];
+
+/// Reads an `AttributeExpressionData` value (the enum bytes by the package values `ow-attr` names).
+fn expr_data(vm: &Vm, v: &Value) -> Result<ExprData, VmError> {
+    let space = &vm.space;
+    let bad = |w: &str| {
+        script_error(
+            "AttributeExpressionEvaluator.Evaluate",
+            format!("{w} outside its enum"),
+        )
+    };
+    Ok(ExprData {
+        attribute_operand1: object("AttributeOperand1", field(space, v, "AttributeOperand1")?)?,
+        comparison_operator: Comparison::from_raw(i64::from(byte_of(
+            field(space, v, "ComparisonOperator")?,
+            "ComparisonOperator",
+        )?))
+        .ok_or_else(|| bad("ComparisonOperator"))?,
+        operand2_usage: Operand2Usage::from_raw(i64::from(byte_of(
+            field(space, v, "Operand2Usage")?,
+            "Operand2Usage",
+        )?))
+        .ok_or_else(|| bad("Operand2Usage"))?,
+        attribute_operand2: object("AttributeOperand2", field(space, v, "AttributeOperand2")?)?,
+        constant_operand2: number("ConstantOperand2", field(space, v, "ConstantOperand2")?)?,
+    })
+}
+
+/// The skill manager, constraint and grade natives as a [`NativePack`] (module documentation: bound by path).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Pack;
+
+impl NativePack for Pack {
+    fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
+        let [
+            active,
+            min_grade,
+            value,
+            value_from,
+            state,
+            attr_eval,
+            vehicle,
+            health,
+            weapon,
+        ] = NATIVE_PATHS;
+        bind(
+            vm,
+            active,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, active)?;
+                let (controller, definition) = (arg_obj(c, 0)?, arg_obj(c, 1)?);
+                Ok(Value::Bool(is_skill_active(
+                    c.vm, me, controller, definition,
+                )?))
+            }),
+        )?;
+        bind(
+            vm,
+            min_grade,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, min_grade)?;
+                let grade = arg_int(c, 0, min_grade)?;
+                let subject = matches!(need(c.vm, me, "bSubjectToGradeRules")?, Value::Bool(true));
+                Ok(Value::Bool(passes_min_grade_test(subject, grade)))
+            }),
+        )?;
+        bind(
+            vm,
+            value,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let effect = c.arg(0)?.clone();
+                let grade = arg_int(c, 1, value)?;
+                let source = arg_obj(c, 2)?;
+                Ok(Value::Float(calculate_modifier_value(
+                    c.vm, &effect, grade, source,
+                )?))
+            }),
+        )?;
+        bind(
+            vm,
+            value_from,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let definition = arg_obj(c, 0)?;
+                let index = arg_int(c, 1, value_from)?;
+                let grade = arg_int(c, 2, value_from)?;
+                let source = arg_obj(c, 3)?;
+                // 0.0 for a None definition or an index outside the effect list (section 4.3).
+                let Some(d) = definition else {
+                    return Ok(Value::Float(0.0));
+                };
+                let effects = need(c.vm, d, "SkillEffectDefinitions")?;
+                let entry = usize::try_from(index)
+                    .ok()
+                    .and_then(|i| effects.elements().and_then(|e| e.get(i)).cloned());
+                match entry {
+                    Some(e) => Ok(Value::Float(calculate_modifier_value(
+                        c.vm, &e, grade, source,
+                    )?)),
+                    None => Ok(Value::Float(0.0)),
+                }
+            }),
+        )?;
+        bind(
+            vm,
+            state,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, state)?;
+                let activation = matches!(c.arg(0)?, Value::Bool(true));
+                Ok(Value::Byte(calculate_state(c.vm, me, activation)?.byte()))
+            }),
+        )?;
+        // AttributeExpressionEvaluator.Evaluate(ContextSource): its one expression, as EvaluateExpressions (And of one)
+        // with no override source (NATIVE_ATTRIBUTES.md section 11).
+        bind(
+            vm,
+            attr_eval,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, attr_eval)?;
+                let source = arg_obj(c, 0)?;
+                let e = need(c.vm, me, "Expression")?;
+                let data = expr_data(c.vm, &e)?;
+                let sys = c.vm.attrs.clone();
+                let mut cx = EvalCx::new(&mut *c.vm);
+                Ok(Value::Bool(sys.expressions_hold(
+                    &[data],
+                    ExprMode::And,
+                    source,
+                    None,
+                    &mut cx,
+                )?))
+            }),
+        )?;
+        // VehiclePassengerExpressionEvaluator.Evaluate: not in a vehicle gives bNotInVehicle. The in-vehicle branch
+        // (driver of a WillowVehicle, or the seat kind) is NotYet: how the native tells the seat is not read. "In a
+        // vehicle" is read as the context's pawn being a Vehicle (UNVERIFIED).
+        bind(
+            vm,
+            vehicle,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, vehicle)?;
+                let pawn = match arg_obj(c, 0)? {
+                    Some(o) => pawn_of(c.vm, o)?,
+                    None => None,
+                };
+                if let Some(p) = pawn
+                    && crate::skills::is_a(&c.vm.space, p, "Engine.Vehicle")?
+                {
+                    return Err(NotYet::not_read(
+                        "VehiclePassengerExpressionEvaluator in a vehicle (the seat test)",
+                        crate::skills::RECORD_CONSTRAINTS,
+                    )
+                    .into());
+                }
+                Ok(Value::Bool(matches!(
+                    need(c.vm, me, "bNotInVehicle")?,
+                    Value::Bool(true)
+                )))
+            }),
+        )?;
+        // HealthStateExpressionEvaluator.Evaluate: no pawn gives false; bHealthy asks the pawn's IsAliveAndWell
+        // (whose body is not read: the pawn's own binding decides); bInjured / bDead ask IsInjured / IsDead. More than
+        // one flag, or none, is NotYet (how the native combines them is not read).
+        bind(
+            vm,
+            health,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let me = this(c, health)?;
+                let Some(pawn) = (match arg_obj(c, 0)? {
+                    Some(o) => pawn_of(c.vm, o)?,
+                    None => None,
+                }) else {
+                    return Ok(Value::Bool(false));
+                };
+                let set = |vm: &mut Vm, n: &str| -> Result<bool, VmError> {
+                    Ok(matches!(get(vm, me, n)?, Some(Value::Bool(true))))
+                };
+                let flags = [
+                    ("bHealthy", "IsAliveAndWell"),
+                    ("bInjured", "IsInjured"),
+                    ("bDead", "IsDead"),
+                ];
+                let mut on = Vec::new();
+                for (flag, function) in flags {
+                    if set(c.vm, flag)? {
+                        on.push(function);
+                    }
+                }
+                match on.as_slice() {
+                    [function] => Ok(Value::Bool(call_bool(c.vm, pawn, function, vec![])?)),
+                    _ => Err(NotYet::not_read(
+                        "HealthStateExpressionEvaluator with no or several state flags",
+                        crate::skills::RECORD_CONSTRAINTS,
+                    )
+                    .into()),
+                }
+            }),
+        )?;
+        // WeaponActionAvailableExpressionEvaluator.Evaluate: the controller's installed CanPerformWeaponAction(0).
+        bind(
+            vm,
+            weapon,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let Some(o) = arg_obj(c, 0)? else {
+                    return Ok(Value::Bool(false));
+                };
+                if !crate::skills::is_a(&c.vm.space, o, "WillowGame.WillowPlayerController")? {
+                    return Err(NotYet::not_read("WeaponActionAvailableExpressionEvaluator on a source that is not a player controller", crate::skills::RECORD_CONSTRAINTS).into());
+                }
+                Ok(Value::Bool(call_bool(
+                    c.vm,
+                    o,
+                    "CanPerformWeaponAction",
+                    vec![Value::Byte(0)],
+                )?))
+            }),
+        )?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The cooldown pool's per-frame drain
+// ---------------------------------------------------------------------------------------------------------------
+
+/// What one drain step did.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drained {
+    pub before: f32,
+    pub after: f32,
+    /// The net rate per second used.
+    pub rate: f32,
+}
+
+fn pool_float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
+    let v = need(vm, pool, name)?;
+    Ok(number(name, &v)?)
+}
+
+/// The base `ResourcePool` per-frame update for `dt` seconds (NATIVE_SKILLS.md 5.2): nothing while
+/// `RegenerationDisabled` is non-zero; the net rate is `ActiveRegenerationRate + PassiveRegenerationRate -
+/// ConsumptionRate`, plus `OnIdleRegenerationRate` once `OnIdleRegenerationDelay` has passed since
+/// `PoolIdleDelayStartTime`; the new value `current + rate x dt` goes through `SetCurrentValue` (the clamp, the
+/// integer remainder kept in `RateRemainder`, the idle stamp), and only when it differs from the current value.
+///
+/// `NotYet`, checked before anything is written: a pool class other than `Engine.ResourcePool` (the experience pool
+/// overrides the update), an attached `RegenerationPool` (its charge rule is not read), and a step that reaches or
+/// leaves the minimum or the maximum when the definition lists behaviors for that event (which list fires on which
+/// event is read from field order only, UNVERIFIED in the record). Status: UNVERIFIED in the running game.
+pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
+    let class = ow_attr::eval::class_path(&vm.space, pool);
+    if class != "Engine.ResourcePool" {
+        return Err(NotYet::not_read(
+            format!("the per-frame update of a {class} (only the base class is read)"),
+            RECORD_DRAIN,
+        )
+        .into());
+    }
+    if obj_of(&need(vm, pool, "RegenerationPool")?).is_some() {
+        return Err(NotYet::not_read(
+            "the per-frame update with a regeneration pool attached",
+            RECORD_DRAIN,
+        )
+        .into());
+    }
+    let before = pool_float(vm, pool, "CurrentValue")?;
+    let disabled = match need(vm, pool, "RegenerationDisabled")? {
+        Value::Int(i) => i,
+        other => {
+            return Err(script_error(
+                "drain",
+                format!("RegenerationDisabled: {}", other.kind_name()),
+            ));
+        }
+    };
+    if disabled != 0 {
+        return Ok(Drained {
+            before,
+            after: before,
+            rate: 0.0,
+        });
+    }
+    let mut rate = pool_float(vm, pool, "ActiveRegenerationRate")?
+        + pool_float(vm, pool, "PassiveRegenerationRate")?
+        - pool_float(vm, pool, "ConsumptionRate")?;
+    let idle = pool_float(vm, pool, "OnIdleRegenerationRate")?;
+    if idle != 0.0 {
+        let delay = pool_float(vm, pool, "OnIdleRegenerationDelay")?;
+        let stamp = pool_float(vm, pool, "PoolIdleDelayStartTime")?;
+        let now = world_time(vm)?;
+        if now - stamp >= delay {
+            rate += idle;
+        }
+    }
+    let remainder = pool_float(vm, pool, "RateRemainder")?;
+    let target = before + rate * dt + remainder;
+    let (min, max) = (
+        pool_float(vm, pool, "MinValue")?,
+        pool_float(vm, pool, "MaxValue")?,
+    );
+    let projected = if target < min {
+        min
+    } else if target > max {
+        max
+    } else {
+        target
+    };
+    let crosses = |edge: f32| (before == edge) != (projected == edge);
+    if (crosses(min) || crosses(max))
+        && let Some(def) = obj_of(&need(vm, pool, "Definition")?)
+    {
+        for list in [
+            "OnResourceDepleted",
+            "OnResourceNotDepleted",
+            "OnResourceRegenerated",
+            "OnResourceNotRegenerated",
+        ] {
+            let v = need(vm, def, list)?;
+            if !elements(list, &v)?.is_empty() {
+                return Err(NotYet::not_read(
+                    format!("the pool's {list} behaviors (their event mapping)"),
+                    RECORD_DRAIN,
+                )
+                .into());
+            }
+        }
+    }
+    if target.to_bits() != before.to_bits() {
+        ow_world::pools::set_current(vm, pool, target)?;
+    }
+    let after = pool_float(vm, pool, "CurrentValue")?;
+    Ok(Drained {
+        before,
+        after,
+        rate,
+    })
+}
+
+fn world_time(vm: &mut Vm) -> Result<f32, VmError> {
+    let actors = ow_world::actors::actors_of(vm)?;
+    let wi = actors
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("ow_world::actors::Actors"))?
+        .world_info();
+    match wi {
+        Some(w) => pool_float(vm, w, "TimeSeconds"),
+        None => Err(NotYet::layer_absent(
+            "the world time for the idle regeneration",
+            "a level with a WorldInfo",
+            RECORD_DRAIN,
+        )
+        .into()),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The skill behavior handlers
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The behavior classes whose installed `ApplyBehaviorToContext` the skill handlers run.
+pub const BEHAVIOR_CLASSES: [&str; 2] = [
+    "WillowGame.Behavior_ActivateSkill",
+    "WillowGame.Behavior_DeactivateSkill",
+];
+
+/// Runs the installed `ApplyBehaviorToContext` of behavior `id` once per context (the behavior's Context link, else
+/// `consumer`), with `ContextObject` and `SelfObject` set and every other parameter at its zero value. The script
+/// then asks the context's `ISkillBehavior` to activate or deactivate the skill.
+pub fn run_skill_behavior(
+    vm: &mut Vm,
+    p: &mut Provider,
+    id: BehaviorId,
+    consumer: ObjRef,
+) -> Result<Vec<i32>, VmError> {
+    let object = p.behavior(id).object;
+    let class = vm.space.heap.get(object)?.class;
+    let Some(apply) = vm.find_method(class, "ApplyBehaviorToContext", None)? else {
+        return Err(
+            NotYet::not_read("a skill behavior without ApplyBehaviorToContext", RECORD).into(),
+        );
+    };
+    let params = vm
+        .function(apply)
+        .map(|d| d.params.clone())
+        .unwrap_or_default();
+    for context in p.contexts(id, consumer) {
+        let args = params
+            .iter()
+            .map(|d| match vm.space.names.text(d.name).as_ref() {
+                "ContextObject" => Value::Object(Some(context)),
+                "SelfObject" => Value::Object(Some(consumer)),
+                _ => vm.space.classes.zero_value(&d.kind),
+            })
+            .collect();
+        vm.call(apply, Some(object), args)?;
+    }
+    Ok(Vec::new())
+}
+
+/// The skill behavior handlers for a provider registered on `consumer`, to be set with `Provider::handle` (a handler
+/// needs the consumer, which the registry's `HandlerFn` does not receive: decision 2026-11-15-30).
+pub fn skill_behavior_handlers(consumer: ObjRef) -> Vec<(&'static str, Handler)> {
+    BEHAVIOR_CLASSES
+        .iter()
+        .map(|class| {
+            (
+                *class,
+                Handler::run(move |vm, p, id, _event| {
+                    run_skill_behavior(vm, p, id, consumer).map_err(BehaviorError::Vm)
+                }),
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests;

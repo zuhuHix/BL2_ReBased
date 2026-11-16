@@ -1,0 +1,8 @@
+# AI-assisted (Claude Code). Lane W6-SKILLS: skills, skill trees, the action skill and Phaselock (crates/ow-skills).
+#
+# No line. The references are Python tools on fake packages (tests/skill_stats_test.py, tests/skill_effects_test.py),
+# not ow-package commands, and the C++ CLI has no skill command (its one skill rule, the level-up skill effect, runs
+# inside --mission-run and --slice-run, which W6-MISSION and W6-FIRE gate). The lane adds no CLI command. Every case of
+# the two Python tests is re-expressed as a Rust test that pins the Python's answer and names its source
+# (crates/ow-skills/src/skills/tests.rs), and every rule has a Rust unit test (decision 2026-11-16-42). The
+# installed-game run for Maya is a local ignored test whose output stays under local/.
