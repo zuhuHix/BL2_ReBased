@@ -8,13 +8,15 @@
 //! (`ow_defs::DefStore`): each export is loaded at the prefix the store derives (8 for a component, 26 for an actor
 //! whose outer is a level, 4 for a level-streaming object), with its class default applied. One class cannot go
 //! through the store yet: `Engine.StaticMeshCollectionActor`. Its tags start 4 bytes in (decision 2026-09-10-09, and
-//! the C++ and Rust `--scene-records` prefix table), but the store reads every actor whose outer is a level from 26
-//! and fails on it ("invalid FName"). Its tags are therefore walked here with `ow_package::props::read_tagged` from 4,
+//! the C++ and Rust `--scene-records` prefix table), but the store's prefix rule (`ow_defs` `Loader::derive_prefix`,
+//! decision 2026-11-16-36: an actor whose outer is a level reads from 26, unchecked) fails on it ("invalid FName").
+//! Its tags are therefore walked here with `ow_package::props::read_tagged` from 4,
 //! typed by `ow_object::decode::ReflectionTyper`, and its untagged tail is read as decision 2026-09-10-09 records it:
 //! exactly 84 bytes per component reference, 16 floats of an affine rotation and translation matrix, 3 floats of
 //! Scale3D, 1 float of scale and one int whose meaning is not assigned. Every number must be finite and the matrix
 //! affine (the same checks as `tools/prepare_level.py`); a collection that fails them is a [`Gap`] and its
-//! components are excluded, never placed at a guessed pose.
+//! components are excluded, never placed at a guessed pose. A null entry is checked and dropped (the tool tolerates
+//! it); a component two entries list is a [`Gap`] and is excluded (the tool stops there).
 //!
 //! **Which components are placements.** The selection is `tools/prepare_level.py`'s (the Sanctuary manifest the
 //! engine benchmark drew), so the two can be compared component by component:
@@ -38,9 +40,12 @@
 //!
 //! **Meshes, materials and textures.** A placement's mesh reference is read from the component's own tags, not from
 //! the store's object: in `ParityMode::Off` the decoder skips a reference to an object of the engine-native class
-//! `Engine.StaticMesh` (see `own_tags`). An export reference is itself; an import is the first export of the scene's
-//! levels at its path and class (UNVERIFIED as the game's lookup), else what `PackageStore::resolve` gives, the C++
-//! resolver the tool calls. The mesh is decoded with `ow_assets::mesh::read_mesh` from 4 bytes in, as the tool runs
+//! `Engine.StaticMesh` (see `own_tags`). The decoder's own route, defining that class in the `ClassTable` before any
+//! decode, would give the store's handle instead, resolved through its identity policy (`FirstInScanOrder`: the
+//! first holder in scan order, slowly), not the reference the component names. An export reference is itself; an
+//! import is an export of the scene's levels at its path and class (`tools/prepare_level.py` `Scene.resolve`,
+//! narrowed; UNVERIFIED as the game's lookup), else what `PackageStore::resolve` gives, the C++ resolver the tool
+//! calls. The mesh is decoded with `ow_assets::mesh::read_mesh` from 4 bytes in, as the tool runs
 //! `--mesh`. Materials and textures go through the store (its identity policy picks their holder). A material's
 //! textures are the `ParameterValue`s of its `TextureParameterValues` and of its parents', and the `Texture` of each
 //! expression of the base `Material` (one level: material function calls are not followed). That is every texture
@@ -116,63 +121,73 @@ const COLLECTION_ENTRY: usize = 84;
 const AFFINE_TOLERANCE: f32 = 1e-5;
 /// How many parents a material chain may have before it is a [`Gap`] (a cycle or a corrupt chain).
 const MAX_MATERIAL_CHAIN: usize = 32;
-/// The bytes before a mesh's or a texture's tags, as the tool passes them (`--property-offset 4`).
-const ASSET_PREFIX: usize = 4;
 
 /// Why a scene could not be loaded at all. A part that cannot be read is not an error: it is a [`Gap`] or an
-/// [`Exclusion`] in the scene.
+/// [`Exclusion`] in the scene. This is the scene's error, not the host's: `ow-host` has no crate-wide error type.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub enum HostError {
-    /// The definition store failed outside one placement (a level-streaming object, a class lookup).
+pub enum SceneError {
+    /// The definition store failed outside one placement (a level-streaming object, a base-class lookup).
     Defs(DefError),
+    /// Something the scene needs is not there yet: a store `NotYet` (an unread class layout, say) outside one
+    /// placement.
+    NotYet(NotYet),
+    /// The object space refused a read (a stale handle).
+    Heap(HeapError),
     /// A level package could not be loaded (the persistent one, or one a level names).
     Store(StoreError),
     /// A level package's tables could not be read.
     Package(PackageError),
     /// A level-streaming object's `PackageName` is not a package name.
     BadLevelName { level: String, name: String },
-    /// A player start or terrain actor loaded but lacks a pose property of the expected type.
+    /// A level-streaming object, player start or terrain actor loaded but lacks a property of the expected type.
     Unreadable { object: String, reason: String },
 }
 
-impl fmt::Display for HostError {
+impl fmt::Display for SceneError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HostError::Defs(e) => write!(f, "{e}"),
-            HostError::Store(e) => write!(f, "{e}"),
-            HostError::Package(e) => write!(f, "{e}"),
-            HostError::BadLevelName { level, name } => {
+            SceneError::Defs(e) => write!(f, "{e}"),
+            SceneError::NotYet(n) => write!(f, "{n}"),
+            SceneError::Heap(e) => write!(f, "{e}"),
+            SceneError::Store(e) => write!(f, "{e}"),
+            SceneError::Package(e) => write!(f, "{e}"),
+            SceneError::BadLevelName { level, name } => {
                 write!(f, "{level} streams {name:?}, which is not a package name")
             }
-            HostError::Unreadable { object, reason } => write!(f, "{object}: {reason}"),
+            SceneError::Unreadable { object, reason } => write!(f, "{object}: {reason}"),
         }
     }
 }
 
-impl std::error::Error for HostError {}
+impl std::error::Error for SceneError {}
 
-impl From<DefError> for HostError {
+impl From<DefError> for SceneError {
+    /// A store `NotYet` or heap error is the scene's own variant; any other store error is `Defs`.
     fn from(e: DefError) -> Self {
-        HostError::Defs(e)
+        match e {
+            DefError::NotYet(n) => SceneError::NotYet(n),
+            DefError::Heap(h) => SceneError::Heap(h),
+            other => SceneError::Defs(other),
+        }
     }
 }
 
-impl From<StoreError> for HostError {
+impl From<StoreError> for SceneError {
     fn from(e: StoreError) -> Self {
-        HostError::Store(e)
+        SceneError::Store(e)
     }
 }
 
-impl From<PackageError> for HostError {
+impl From<PackageError> for SceneError {
     fn from(e: PackageError) -> Self {
-        HostError::Package(e)
+        SceneError::Package(e)
     }
 }
 
-impl From<HeapError> for HostError {
+impl From<HeapError> for SceneError {
     fn from(e: HeapError) -> Self {
-        HostError::Defs(DefError::Heap(e))
+        SceneError::Heap(e)
     }
 }
 
@@ -380,10 +395,33 @@ pub struct SceneMaterial {
     /// The material's class path.
     pub class: String,
     pub parent: Option<String>,
-    /// Every texture the material and its parents name (see the module documentation), first-seen order: keys of
-    /// [`Scene::textures`].
-    pub textures: Vec<String>,
+    /// Every texture the material and its parents name (see the module documentation), with the parameter or
+    /// expression that named it: the material's own instance parameters first, then each parent's, then the base
+    /// material's expressions. A texture named twice the same way is listed once.
+    pub textures: Vec<MaterialTexture>,
     pub status: MaterialStatus,
+}
+
+/// Where a material named a texture.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureSource {
+    /// A `TextureParameterValues` entry of the material or of a parent instance.
+    Instance,
+    /// The `Texture` of an expression of the base `Material`.
+    Expression,
+}
+
+/// One texture a material names, and how.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterialTexture {
+    /// The texture's object path: a key of [`Scene::textures`].
+    pub path: String,
+    /// The `ParameterName` of the instance entry, or of the expression where it declares one (a texture sample
+    /// parameter); `None` for an expression with no parameter name (or the name `None`).
+    pub parameter: Option<String>,
+    pub from: TextureSource,
 }
 
 /// A texture a scene material names. Decoded on demand by [`Scene::decode_texture`].
@@ -489,7 +527,7 @@ impl Scene {
         space: &mut ObjectSpace,
         assets: &SceneAssets,
         map: &PackageName,
-    ) -> Result<Scene, HostError> {
+    ) -> Result<Scene, SceneError> {
         let mut loader = Loader {
             defs,
             space,
@@ -511,6 +549,7 @@ impl Scene {
             },
             signatures: DetSet::new(),
             resolved: DetMap::new(),
+            level_paths: DetMap::new(),
         };
         loader.levels(map)?;
         for level in 0..loader.scene.levels.len() {
@@ -522,6 +561,9 @@ impl Scene {
     /// Decodes texture `path` (a key of [`Scene::textures`]) with `ow_assets::texture::read_texture`, from 4 bytes in,
     /// its streamed mips from [`Scene::assets`]. A texture with no holder, or of a class outside [`TEXTURE_CLASSES`]
     /// (a `TextureCube`, say), is `NotYet`.
+    ///
+    /// `defs` must be the store the scene was loaded with: a holder's package id means nothing in another store,
+    /// whose `PackageStore::get` panics on an id it did not hand out.
     pub fn decode_texture(
         &self,
         defs: &DefStore,
@@ -541,15 +583,20 @@ impl Scene {
         read_texture(
             defs.packages().get(holder.package),
             holder.export,
-            ASSET_PREFIX,
+            // An ordinary object's prefix, as the tool passes it (`--property-offset 4`).
+            PropertyPrefix::Ordinary.bytes(),
             &NoArrayTypes,
             &self.assets.tfc_root,
         )
         .map_err(TextureError::Refused)
     }
 
-    /// The effective material of each LOD 0 section of placement `p`: its override where it has one, else the
-    /// mesh's section material (`tools/prepare_level.py`'s rule). Empty for a mesh that did not decode.
+    /// The effective material of each LOD 0 section of placement `p`: the override at the section's slot where it
+    /// has one, else the mesh's section material. Empty for a mesh that did not decode.
+    ///
+    /// The tool's rule differs for a mesh with a triangle-less section: `prepare_level.py` drops such sections first
+    /// and then indexes `Materials` by the position in the shortened list, so every later section takes the override
+    /// of the slot before its own. Here `Materials[i]` always overrides section `i`.
     pub fn effective_materials(&self, p: &Placement) -> Vec<Option<String>> {
         let Some(mesh) = self.meshes.get(p.mesh.as_str()) else {
             return Vec::new();
@@ -590,9 +637,9 @@ impl Scene {
             for material in self.effective_materials(p).into_iter().flatten() {
                 if let Some(m) = self.materials.get(material.as_str()) {
                     for t in &m.textures {
-                        textures_all.insert(t.clone());
+                        textures_all.insert(t.path.clone());
                         if !hidden {
-                            textures_drawn.insert(t.clone());
+                            textures_drawn.insert(t.path.clone());
                         }
                     }
                 }
@@ -696,7 +743,7 @@ struct CollectionEntry {
 /// Why a component is not placed: an exclusion recorded in the scene, or an error that stops the load.
 enum Skip {
     Excluded(Exclusion),
-    Fatal(HostError),
+    Fatal(SceneError),
 }
 
 impl Skip {
@@ -706,7 +753,7 @@ impl Skip {
     }
 }
 
-impl<E: Into<HostError>> From<E> for Skip {
+impl<E: Into<SceneError>> From<E> for Skip {
     fn from(e: E) -> Self {
         Skip::Fatal(e.into())
     }
@@ -714,6 +761,19 @@ impl<E: Into<HostError>> From<E> for Skip {
 
 /// What a reference resolved to: the export `(package, index)` that defines it, if any.
 type Resolved = Result<Option<(PackageId, i32)>, StoreError>;
+
+/// One level's collection actors, read before its components.
+#[derive(Debug, Default)]
+struct Collections {
+    /// Component export -> its tail pose.
+    poses: DetMap<i32, CollectionEntry>,
+    /// Collection export -> its `bHidden`.
+    hidden: DetMap<i32, bool>,
+    /// Collection export -> why it could not be read.
+    broken: DetMap<i32, String>,
+    /// Components two entries list (a gap; never placed).
+    listed_twice: DetSet<i32>,
+}
 
 /// The load in progress.
 struct Loader<'a> {
@@ -726,21 +786,22 @@ struct Loader<'a> {
     signatures: DetSet<String>,
     /// Mesh references already resolved by the package store, whose global fallback reads files on every call.
     resolved: DetMap<(PackageId, i32), Resolved>,
+    /// Per level package: folded export path -> the exports at it, in export order (built on first use).
+    level_paths: DetMap<PackageId, DetMap<String, Vec<i32>>>,
 }
 
 impl Loader<'_> {
     // ------------------------------------------------------------------------------------------------- levels
 
     /// The persistent level and every level a `LevelStreaming*` object names, breadth first, each once (folded).
-    fn levels(&mut self, map: &PackageName) -> Result<(), HostError> {
-        let streaming = self.class("Engine.LevelStreaming");
+    fn levels(&mut self, map: &PackageName) -> Result<(), SceneError> {
         let mut pending = VecDeque::from([map.as_str().to_string()]);
         let mut seen = DetSet::new();
         while let Some(name) = pending.pop_front() {
             if !seen.insert(name.to_ascii_lowercase()) {
                 continue;
             }
-            let parsed = PackageName::parse(&name).map_err(|_| HostError::BadLevelName {
+            let parsed = PackageName::parse(&name).map_err(|_| SceneError::BadLevelName {
                 level: self.scene.map.clone(),
                 name: name.clone(),
             })?;
@@ -749,6 +810,8 @@ impl Loader<'_> {
                 name: name.clone(),
                 package,
             });
+            // Looked up once a level has loaded, so a missing map is reported as such.
+            let streaming = self.base_class("Engine.LevelStreaming")?;
             let count = self.package(package).exports.len();
             for index in 1..=i32::try_from(count).unwrap_or(i32::MAX) {
                 let class = self.class_of(package, index)?;
@@ -759,8 +822,17 @@ impl Loader<'_> {
                     self.defs
                         .load_export(self.space, package, index, PropertyPrefix::Ordinary)?;
                 let sub = match read(self.space, o, "PackageName") {
-                    Ok(Some(Value::Name(n))) => self.space.names.text(*n).to_string(),
-                    _ => continue,
+                    Ok(Some(Value::Name(n))) => Ok(self.space.names.text(*n).to_string()),
+                    Ok(Some(v)) => Err(format!("PackageName is a {}, not a name", v.kind_name())),
+                    Ok(None) => Err("the class declares no PackageName".to_string()),
+                    Err(reason) => Err(reason),
+                };
+                let sub = match sub {
+                    Ok(sub) => sub,
+                    Err(reason) => {
+                        let path = self.package(package).path_of(index)?;
+                        return Err(bad(&format!("{name}:{path}"), &reason));
+                    }
                 };
                 if sub != "None" {
                     pending.push_back(sub);
@@ -771,28 +843,39 @@ impl Loader<'_> {
     }
 
     /// Everything of level `level`, in export order.
-    fn level(&mut self, level: usize) -> Result<(), HostError> {
+    fn level(&mut self, level: usize) -> Result<(), SceneError> {
         let level_key = u32::try_from(level).unwrap_or(u32::MAX);
         let package = self.scene.levels[level].package;
         let count = i32::try_from(self.package(package).exports.len()).unwrap_or(i32::MAX);
-        let player_start = self.class("Engine.PlayerStart");
-        let light = self.class("Engine.LightComponent");
-        let terrain = self.class("Engine.Terrain");
+        let player_start = self.base_class("Engine.PlayerStart")?;
+        let light = self.base_class("Engine.LightComponent")?;
+        let terrain = self.base_class("Engine.Terrain")?;
 
         // Collection tails first: they pose components that come before them in export order.
-        let mut collections: DetMap<i32, CollectionEntry> = DetMap::new();
-        let mut collection_hidden: DetMap<i32, bool> = DetMap::new();
-        let mut broken: DetMap<i32, String> = DetMap::new();
+        let mut collections = Collections::default();
         for index in 1..=count {
             if self.class_of(package, index)? != MESH_COLLECTION {
                 continue;
             }
             match self.collection(package, index) {
                 Ok((hidden, entries)) => {
-                    collection_hidden.insert(index, hidden);
+                    collections.hidden.insert(index, hidden);
                     for (component, entry) in entries {
-                        if collections.insert(component, entry).is_some() {
-                            broken.insert(index, "a component listed twice".to_string());
+                        // A component two entries list has no one pose. The tool stops there
+                        // (`prepare_level.py` `Scene.build`, "Duplicate collection component"); here it
+                        // is a gap, and `placement` excludes the component.
+                        if collections.poses.insert(component, entry).is_some()
+                            && collections.listed_twice.insert(component)
+                        {
+                            let path = self.package(package).path_of(component)?;
+                            self.scene.gaps.push(Gap {
+                                part: GapPart::Collection,
+                                object: format!("{}:{path}", self.scene.levels[level].name),
+                                not_yet: NotYet::not_read(
+                                    "a component two StaticMeshCollectionActor entries list",
+                                    RECORD,
+                                ),
+                            });
                         }
                     }
                 }
@@ -806,7 +889,7 @@ impl Loader<'_> {
                             RECORD,
                         ),
                     });
-                    broken.insert(index, reason);
+                    collections.broken.insert(index, reason);
                 }
             }
         }
@@ -822,7 +905,7 @@ impl Loader<'_> {
                 continue;
             }
             if class == STATIC_MESH_COMPONENT {
-                self.component(level, key, &path, &collections, &collection_hidden, &broken)?;
+                self.component(level, key, &path, &collections)?;
             } else if self.is_child(&class, light) {
                 let outer = self.package(package).object(index)?.outer;
                 let in_collection = outer > 0 && self.class_of(package, outer)? == LIGHT_COLLECTION;
@@ -886,11 +969,9 @@ impl Loader<'_> {
         level: usize,
         key: ExportKey,
         path: &str,
-        collections: &DetMap<i32, CollectionEntry>,
-        collection_hidden: &DetMap<i32, bool>,
-        broken: &DetMap<i32, String>,
-    ) -> Result<(), HostError> {
-        match self.placement(level, key, path, collections, collection_hidden, broken) {
+        collections: &Collections,
+    ) -> Result<(), SceneError> {
+        match self.placement(level, key, path, collections) {
             Ok(p) => {
                 self.scene.placements.insert(key, p);
             }
@@ -908,9 +989,7 @@ impl Loader<'_> {
         level: usize,
         key: ExportKey,
         path: &str,
-        collections: &DetMap<i32, CollectionEntry>,
-        collection_hidden: &DetMap<i32, bool>,
-        broken: &DetMap<i32, String>,
+        collections: &Collections,
     ) -> Result<Placement, Skip> {
         let package = self.scene.levels[level].package;
         let component = self
@@ -931,7 +1010,11 @@ impl Loader<'_> {
         };
         let component_pose = component_pose(self.space, component).map_err(Skip::load_failed)?;
 
-        let (pose, owner_hidden) = if let Some(entry) = collections.get(&key.export) {
+        let (pose, owner_hidden) = if collections.listed_twice.contains(&key.export) {
+            return Err(Skip::Excluded(Exclusion::CollectionUnreadable(
+                "listed by two collection entries".to_string(),
+            )));
+        } else if let Some(entry) = collections.poses.get(&key.export) {
             let (scale3d, scale, scale_source) = if tags.sets_scale {
                 (
                     component_pose.scale3d,
@@ -947,12 +1030,13 @@ impl Loader<'_> {
                 scale,
                 scale_source,
             };
-            let hidden = collection_hidden
+            let hidden = collections
+                .hidden
                 .get(&entry.collection)
                 .copied()
                 .unwrap_or(false);
             (pose, hidden)
-        } else if let Some(reason) = broken.get(&outer) {
+        } else if let Some(reason) = collections.broken.get(&outer) {
             return Err(Skip::Excluded(Exclusion::CollectionUnreadable(
                 reason.clone(),
             )));
@@ -1053,7 +1137,8 @@ impl Loader<'_> {
             package,
             self.defs.mode(),
         );
-        let tagged = props::read_tagged(pkg, index, 4, &typer).map_err(|e| prop_text(&e))?;
+        let tagged = props::read_tagged(pkg, index, PropertyPrefix::Ordinary.bytes(), &typer)
+            .map_err(|e| prop_text(&e))?;
         let mut hidden = false;
         let mut refs = Vec::new();
         for entry in &tagged.entries {
@@ -1109,7 +1194,12 @@ impl Loader<'_> {
             if !affine {
                 return Err("a non-affine tail matrix".into());
             }
-            if component <= 0 {
+            // A null entry poses nothing: its 84 bytes are checked and dropped, as the tool zips the two arrays
+            // and keeps the pose under reference 0, which no component has (`prepare_level.py` `Scene.build`).
+            if component == 0 {
+                continue;
+            }
+            if component < 0 {
                 return Err(format!("component reference {component} is not an export"));
             }
             let mut matrix = [0f32; 16];
@@ -1127,7 +1217,7 @@ impl Loader<'_> {
         Ok((hidden, out))
     }
 
-    fn terrain(&mut self, level: usize, key: ExportKey, path: &str) -> Result<(), HostError> {
+    fn terrain(&mut self, level: usize, key: ExportKey, path: &str) -> Result<(), SceneError> {
         let package = self.scene.levels[level].package;
         let o =
             self.defs
@@ -1165,11 +1255,11 @@ impl Loader<'_> {
 
     // ------------------------------------------------------------------------------------ meshes and materials
 
-    /// The mesh reference `reference` of level `package` names, decoded once. An export is itself. An import is the
-    /// first export of the scene's levels, in load order, with the import's path and class name (the objects the
-    /// game has loaded with the map; UNVERIFIED as the game's lookup), else what the package store resolves it to (C++
+    /// The mesh reference `reference` of level `package` names, decoded once. An export is itself. An import is an
+    /// export of the scene's levels with the import's path and class name (`in_levels`, the tool's `Scene.resolve`
+    /// narrowed; UNVERIFIED as the game's lookup), else what the package store resolves it to (C++
     /// `PackageStore::resolve`, whose global fallback reads candidate files in scan order).
-    fn mesh(&mut self, package: PackageId, reference: i32) -> Result<String, HostError> {
+    fn mesh(&mut self, package: PackageId, reference: i32) -> Result<String, SceneError> {
         let resolved = match self.resolved.get(&(package, reference)) {
             Some(r) => r.clone(),
             None => {
@@ -1220,7 +1310,8 @@ impl Loader<'_> {
         let decoded = read_mesh(
             self.defs.packages().get(holder.package),
             holder.export,
-            ASSET_PREFIX,
+            // An ordinary object's prefix, as the tool passes it (`--property-offset 4`).
+            PropertyPrefix::Ordinary.bytes(),
             &NoArrayTypes,
         );
         let mut section_materials = Vec::new();
@@ -1254,7 +1345,7 @@ impl Loader<'_> {
         &mut self,
         package: PackageId,
         reference: i32,
-    ) -> Result<Option<String>, HostError> {
+    ) -> Result<Option<String>, SceneError> {
         if reference == 0 {
             return Ok(None);
         }
@@ -1280,13 +1371,13 @@ impl Loader<'_> {
     }
 
     /// Material handle `o`: its path, its chain read once (module documentation).
-    fn material(&mut self, o: ObjRef) -> Result<String, HostError> {
+    fn material(&mut self, o: ObjRef) -> Result<String, SceneError> {
         let (path, _) = self.locate(o)?;
         if self.scene.materials.contains_key(path.as_str()) {
             return Ok(path);
         }
-        let instance = self.class("Engine.MaterialInstance");
-        let base = self.class("Engine.Material");
+        let instance = self.base_class("Engine.MaterialInstance")?;
+        let base = self.base_class("Engine.Material")?;
         let mut entry = SceneMaterial {
             class: String::new(),
             parent: None,
@@ -1313,13 +1404,13 @@ impl Loader<'_> {
             if depth == 1 {
                 entry.class = class_path.clone();
             }
-            let read = if instance.is_some_and(|i| self.space.classes.is_child_of(class, i)) {
+            let read = if self.space.classes.is_child_of(class, instance) {
                 self.instance_textures(m, &mut entry.textures)
                     .and_then(|()| read_object(self.space, m, "Parent"))
                     .map(|parent| {
                         cursor = parent;
                     })
-            } else if base.is_some_and(|b| self.space.classes.is_child_of(class, b)) {
+            } else if self.space.classes.is_child_of(class, base) {
                 self.expression_textures(m, &mut entry.textures)
             } else {
                 entry.status = MaterialStatus::NotYet(NotYet::not_read(
@@ -1350,8 +1441,12 @@ impl Loader<'_> {
         Ok(path)
     }
 
-    /// The textures of a material instance's `TextureParameterValues`.
-    fn instance_textures(&mut self, m: ObjRef, out: &mut Vec<String>) -> Result<(), String> {
+    /// The textures of a material instance's `TextureParameterValues`, with their `ParameterName`s.
+    fn instance_textures(
+        &mut self,
+        m: ObjRef,
+        out: &mut Vec<MaterialTexture>,
+    ) -> Result<(), String> {
         let values = match read(self.space, m, "TextureParameterValues")? {
             Some(Value::Array(items)) => items.clone(),
             Some(_) => return Err("TextureParameterValues is not an array".into()),
@@ -1359,28 +1454,50 @@ impl Loader<'_> {
         };
         for item in values.iter() {
             if let Some(Value::Object(Some(t))) = struct_field(self.space, item, "ParameterValue") {
-                self.texture(*t, out).map_err(|e| e.to_string())?;
+                let parameter = match struct_field(self.space, item, "ParameterName") {
+                    Some(Value::Name(n)) => parameter_name(&self.space.names.text(*n)),
+                    _ => None,
+                };
+                self.texture(*t, parameter, TextureSource::Instance, out)
+                    .map_err(|e| e.to_string())?;
             }
         }
         Ok(())
     }
 
-    /// The `Texture` of each expression of a base material.
-    fn expression_textures(&mut self, m: ObjRef, out: &mut Vec<String>) -> Result<(), String> {
+    /// The `Texture` of each expression of a base material, with the expression's `ParameterName` where its class
+    /// declares one.
+    fn expression_textures(
+        &mut self,
+        m: ObjRef,
+        out: &mut Vec<MaterialTexture>,
+    ) -> Result<(), String> {
         let expressions = read_objects(self.space, m, "Expressions")?;
         for e in expressions.into_iter().flatten() {
             self.defs
                 .ensure_loaded(self.space, e)
                 .map_err(|e| e.to_string())?;
             if let Some(t) = read_object(self.space, e, "Texture")? {
-                self.texture(t, out).map_err(|e| e.to_string())?;
+                let parameter = match read(self.space, e, "ParameterName")? {
+                    Some(Value::Name(n)) => parameter_name(&self.space.names.text(*n)),
+                    _ => None,
+                };
+                self.texture(t, parameter, TextureSource::Expression, out)
+                    .map_err(|e| e.to_string())?;
             }
         }
         Ok(())
     }
 
-    /// Texture handle `t`: located once and added to `out` once.
-    fn texture(&mut self, t: ObjRef, out: &mut Vec<String>) -> Result<(), HostError> {
+    /// Texture handle `t`, named by `parameter` from `from`: located once, and added to `out` unless the same entry is
+    /// there already.
+    fn texture(
+        &mut self,
+        t: ObjRef,
+        parameter: Option<String>,
+        from: TextureSource,
+        out: &mut Vec<MaterialTexture>,
+    ) -> Result<(), SceneError> {
         let (path, holder) = self.locate(t)?;
         if !self.scene.textures.contains_key(path.as_str()) {
             let class = self.space.heap.get(t)?.class;
@@ -1403,36 +1520,63 @@ impl Loader<'_> {
                 .textures
                 .insert(path.clone(), SceneTexture { class, holder });
         }
-        if !out.contains(&path) {
-            out.push(path);
+        let entry = MaterialTexture {
+            path,
+            parameter,
+            from,
+        };
+        if !out.contains(&entry) {
+            out.push(entry);
         }
         Ok(())
     }
 
-    /// Import `reference` of `package` as an export of one of the scene's levels: the first, in load order, at the
-    /// import's path whose class has the import's class name.
+    /// Import `reference` of `package` as an export of one of the scene's levels: in load order, the first export at
+    /// the import's path (folded) whose class has the import's class name. Every export at that path is tried, not
+    /// only the first.
+    ///
+    /// This is the lookup of `tools/prepare_level.py` `Scene.resolve`, narrowed in two ways (decision 2026-11-16-46):
+    /// the tool searches every package it has read so far (`Startup`, then the levels, then whatever earlier
+    /// `--resolve` calls loaded), this searches the scene's levels only; and the tool accepts an import with no class
+    /// name, this does not. What is not found here goes to `PackageStore::resolve`, as in the tool.
     fn in_levels(
-        &self,
+        &mut self,
         package: PackageId,
         reference: i32,
-    ) -> Result<Option<(PackageId, i32)>, HostError> {
+    ) -> Result<Option<(PackageId, i32)>, SceneError> {
         if reference >= 0 {
             return Ok(None);
         }
         let from = self.package(package);
-        let path = from.path_of(reference)?;
+        let path = from.path_of(reference)?.to_ascii_lowercase();
         let class = from.object(reference)?.class_name.clone();
-        for level in &self.scene.levels {
-            let pkg = self.package(level.package);
-            if let Some(index) = pkg.find_export(&path)? {
-                let object = pkg.object(index)?;
+        for level in 0..self.scene.levels.len() {
+            let id = self.scene.levels[level].package;
+            if !self.level_paths.contains_key(&id) {
+                let pkg = self.package(id);
+                let mut index: DetMap<String, Vec<i32>> = DetMap::new();
+                for export in 1..=i32::try_from(pkg.exports.len()).unwrap_or(i32::MAX) {
+                    let at = pkg.path_of(export)?.to_ascii_lowercase();
+                    index.entry(at).or_default().push(export);
+                }
+                self.level_paths.insert(id, index);
+            }
+            let candidates = self
+                .level_paths
+                .get(&id)
+                .and_then(|index| index.get(&path))
+                .cloned()
+                .unwrap_or_default();
+            let pkg = self.package(id);
+            for export in candidates {
+                let object = pkg.object(export)?;
                 let found = if object.class == 0 {
                     "Class"
                 } else {
                     pkg.object(object.class)?.name.as_str()
                 };
                 if found == class {
-                    return Ok(Some((level.package, index)));
+                    return Ok(Some((id, export)));
                 }
             }
         }
@@ -1448,7 +1592,7 @@ impl Loader<'_> {
     /// The object path of store object `o` and, for an export, its holder. The store's handles name the export of
     /// the holder its policy chose (`Origin::Resource` while unloaded, `Origin::Export` once loaded); a reference no
     /// holder has stays a stand-in naming the import (a negative index).
-    fn locate(&self, o: ObjRef) -> Result<(String, Option<Holder>), HostError> {
+    fn locate(&self, o: ObjRef) -> Result<(String, Option<Holder>), SceneError> {
         let (package, index) = match self.space.heap.get(o)?.origin {
             Origin::Export { package, index } | Origin::Resource { package, index } => {
                 (package, index)
@@ -1468,7 +1612,7 @@ impl Loader<'_> {
     }
 
     /// The class path of export or import `index` of `package`, as `--exports` prints it (`Class` for a class).
-    fn class_of(&self, package: PackageId, index: i32) -> Result<String, HostError> {
+    fn class_of(&self, package: PackageId, index: i32) -> Result<String, SceneError> {
         let pkg = self.package(package);
         let class = pkg.object(index)?.class;
         Ok(if class == 0 {
@@ -1478,8 +1622,16 @@ impl Loader<'_> {
         })
     }
 
-    /// The layout of the class at `path`, where the store has one (cached; a class it cannot lay out is `None`).
-    fn class(&mut self, path: &str) -> Option<ClassId> {
+    /// The layout of a class the scene needs (`Engine.PlayerStart`, say). A store failure is the scene's error, never
+    /// an empty result: without the class, no export could be recognised as one of its kind.
+    fn base_class(&mut self, path: &str) -> Result<ClassId, SceneError> {
+        Ok(self.defs.class_id(self.space, path)?)
+    }
+
+    /// The layout of an export's class, cached. `None` where the store cannot lay it out (an engine-native class no
+    /// package exports, such as `Engine.Model`): such an export is then of none of the base classes, which is what
+    /// the store can say about it.
+    fn export_class(&mut self, path: &str) -> Option<ClassId> {
         if let Some(c) = self.classes.get(path) {
             return *c;
         }
@@ -1488,14 +1640,12 @@ impl Loader<'_> {
         c
     }
 
-    fn is_child(&mut self, class_path: &str, base: Option<ClassId>) -> bool {
-        let Some(base) = base else {
-            return false;
-        };
+    /// Whether an export of class `class_path` is `base` or a subclass of it.
+    fn is_child(&mut self, class_path: &str, base: ClassId) -> bool {
         if class_path == "Class" {
             return false;
         }
-        match self.class(class_path) {
+        match self.export_class(class_path) {
             Some(c) => self.space.classes.is_child_of(c, base),
             None => false,
         }
@@ -1508,6 +1658,11 @@ impl Loader<'_> {
             .map(|l| l.path().as_str().to_string())
             .unwrap_or_default()
     }
+}
+
+/// A `ParameterName` value: `None` for the name `None`.
+fn parameter_name(name: &str) -> Option<String> {
+    (name != "None").then(|| name.to_string())
 }
 
 /// The object path of `index` in `package` as the game names it: an import's path is full; an export whose outermost
@@ -1553,7 +1708,13 @@ struct OwnTags {
 /// a class (`ow_object::decode`, "defaults: skipped StaticMeshComponent.StaticMesh"), so the store's slot is always
 /// `None`. A component that does not tag it has none of its own; its archetype's is not read (as the tool).
 fn own_tags(package: &Package, index: i32) -> Result<OwnTags, String> {
-    let tagged = props::read_tagged(package, index, 8, &NoArrayTypes).map_err(|e| prop_text(&e))?;
+    let tagged = props::read_tagged(
+        package,
+        index,
+        PropertyPrefix::Component.bytes(),
+        &NoArrayTypes,
+    )
+    .map_err(|e| prop_text(&e))?;
     let mut tags = OwnTags {
         static_mesh: None,
         sets_scale: false,
@@ -1572,8 +1733,13 @@ fn own_tags(package: &Package, index: i32) -> Result<OwnTags, String> {
 /// A mission pickup spawner's or failsafe's `PreviewMesh` reference, from its own tags (26 bytes in). The cooked
 /// class does not declare `PreviewMesh` (an editor-only property), so the store's decoder drops the tag.
 fn preview_mesh(package: &Package, owner: i32) -> Result<Option<i32>, String> {
-    let tagged =
-        props::read_tagged(package, owner, 26, &NoArrayTypes).map_err(|e| prop_text(&e))?;
+    let tagged = props::read_tagged(
+        package,
+        owner,
+        PropertyPrefix::PlacedActor.bytes(),
+        &NoArrayTypes,
+    )
+    .map_err(|e| prop_text(&e))?;
     Ok(tagged
         .entries
         .iter()
@@ -1587,8 +1753,8 @@ fn prop_text(e: &PropError) -> String {
     e.to_string()
 }
 
-fn bad(object: &str, reason: &str) -> HostError {
-    HostError::Unreadable {
+fn bad(object: &str, reason: &str) -> SceneError {
+    SceneError::Unreadable {
         object: object.to_string(),
         reason: reason.to_string(),
     }

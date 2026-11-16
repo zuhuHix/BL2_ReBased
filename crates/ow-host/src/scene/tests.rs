@@ -287,8 +287,8 @@ fn tail_row(at: [f32; 3], scale3d: [f32; 3]) -> Vec<u8> {
 /// `Terrain_0` with 23 `TerrainComponent_0`; 24 `Model_0`; 25 `LevelStreamingKismet_0` naming `Test_Sub`; then the
 /// assets: 26 `Meshes`, 27 `Meshes.Box`, 28 `Materials`, 29 `Mati_Red` (parent `Mat_Base`, textures `Tex_Red` and
 /// `Cube_Sky`), 30 `Mat_Base` with expression 31 (texture `Tex_Base`), 32 `Tex_Red`, 33 `Tex_Base`, 34 `Cube_Sky`.
-/// `broken_tail` cuts the collection's tail short by 4 bytes.
-fn test_p(broken_tail: bool) -> Vec<u8> {
+/// `variant.tail` spoils collection 10's tail; `variant.extras` appends the exports of [`extras`].
+fn test_p(variant: Variant) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let c = Classes::new(&mut p);
     let gone_package = p.add_import("Core", "Package", 0, "Missing");
@@ -370,10 +370,17 @@ fn test_p(broken_tail: bool) -> Vec<u8> {
 
     let tags = [p.array_tag("StaticMeshComponents", 2, &ints(&[11, 12]))];
     let mut collection = payload(&mut p, 4, &tags);
+    let row0 = collection.len();
     collection.extend(tail_row([500.0, 0.0, 0.0], [0.5, 0.5, 0.5]));
     collection.extend(tail_row([600.0, 0.0, 0.0], [2.0, 2.0, 2.0]));
-    if broken_tail {
-        collection.truncate(collection.len() - 4);
+    match variant.tail {
+        Tail::Good => {}
+        Tail::Short => collection.truncate(collection.len() - 4),
+        // The first row's Scale3D.X, then its matrix[3] (the affine column).
+        Tail::NonFinite => {
+            collection[row0 + 64..row0 + 68].copy_from_slice(&f32::NAN.to_le_bytes())
+        }
+        Tail::NonAffine => collection[row0 + 12..row0 + 16].copy_from_slice(&0.5f32.to_le_bytes()),
     }
     let class = c.get("StaticMeshCollectionActor");
     assert_eq!(
@@ -501,7 +508,95 @@ fn test_p(broken_tail: bool) -> Vec<u8> {
     );
     let sky = payload(&mut p, 4, &[]);
     assert_eq!(add(&mut p, c.get("TextureCube"), "Cube_Sky", 28, sky), cube);
+    if variant.extras {
+        extras(&mut p, &c, box_mesh);
+    }
     p.build()
+}
+
+/// How collection 10's tail is spoilt.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+enum Tail {
+    #[default]
+    Good,
+    /// 4 bytes short.
+    Short,
+    /// A NaN in the first row.
+    NonFinite,
+    /// A non-zero affine column in the first row.
+    NonAffine,
+}
+
+/// Which `Test_P` to build.
+#[derive(Debug, Clone, Copy, Default)]
+struct Variant {
+    tail: Tail,
+    extras: bool,
+}
+
+/// The exports after 34 (invented values): 35 `StaticMeshCollectionActor_1` (`bHidden`) listing 36, a null entry
+/// and 11 (which collection 10 lists already); 36 `StaticMeshComponent_11`; 37 `WillowMissionPickupSpawner_1`
+/// whose `PreviewMesh` is 4, not its own 38; 39 `StaticMeshComponent_13` of actor 3, with a payload shorter than a
+/// component's prefix; 40 `WillowInteractiveObject_1` holding 41 and 42, which differ only in `CastShadow`.
+fn extras(p: &mut PackageBuilder, c: &Classes, box_mesh: i32) {
+    let mesh_component = c.get("StaticMeshComponent");
+    let tags = [
+        p.bool_tag("bHidden", true),
+        p.array_tag("StaticMeshComponents", 3, &ints(&[36, 0, 11])),
+    ];
+    let mut collection = payload(p, 4, &tags);
+    collection.extend(tail_row([700.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
+    collection.extend(tail_row([800.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
+    collection.extend(tail_row([900.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
+    let class = c.get("StaticMeshCollectionActor");
+    assert_eq!(
+        add(p, class, "StaticMeshCollectionActor_1", 2, collection),
+        35
+    );
+    let tags = [p.object_tag("StaticMesh", box_mesh)];
+    let comp = payload(p, 8, &tags);
+    assert_eq!(
+        add(p, mesh_component, "StaticMeshComponent_11", 35, comp),
+        36
+    );
+
+    let tags = [p.object_tag("PreviewMesh", 4)];
+    let spawner = payload(p, 26, &tags);
+    let class = c.get("WillowMissionPickupSpawner");
+    assert_eq!(
+        add(p, class, "WillowMissionPickupSpawner_1", 2, spawner),
+        37
+    );
+    let tags = [p.object_tag("StaticMesh", box_mesh)];
+    let comp = payload(p, 8, &tags);
+    assert_eq!(
+        add(p, mesh_component, "StaticMeshComponent_12", 37, comp),
+        38
+    );
+
+    assert_eq!(
+        add(p, mesh_component, "StaticMeshComponent_13", 3, ints(&[0])),
+        39
+    );
+
+    let io = payload(p, 26, &[]);
+    let class = c.get("WillowInteractiveObject");
+    assert_eq!(add(p, class, "WillowInteractiveObject_1", 2, io), 40);
+    let tags = [p.object_tag("StaticMesh", box_mesh)];
+    let comp = payload(p, 8, &tags);
+    assert_eq!(
+        add(p, mesh_component, "StaticMeshComponent_14", 40, comp),
+        41
+    );
+    let tags = [
+        p.object_tag("StaticMesh", box_mesh),
+        p.bool_tag("CastShadow", true),
+    ];
+    let comp = payload(p, 8, &tags);
+    assert_eq!(
+        add(p, mesh_component, "StaticMeshComponent_15", 40, comp),
+        42
+    );
 }
 
 /// `Test_Sub.upk`: `StaticMeshActor_0` holding `StaticMeshComponent_0` (export 4), whose mesh is an import of
@@ -553,28 +648,34 @@ impl Drop for Scratch {
     }
 }
 
-fn load(name: &str, broken_tail: bool) -> (Scratch, DefStore, Result<Scene, HostError>) {
+fn load(name: &str, variant: Variant) -> (Scratch, DefStore, Result<Scene, SceneError>) {
     let dir = Scratch::new(name);
     let files = [
         ("Core.upk", core()),
         ("Engine.upk", engine()),
         ("WillowGame.upk", willow_game()),
-        ("Test_P.upk", test_p(broken_tail)),
+        ("Test_P.upk", test_p(variant)),
         ("Test_Sub.upk", test_sub()),
     ];
     let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
-    let mut defs = DefStore::from_synthetic(
+    let defs = DefStore::from_synthetic(
         &dir.0,
         &refs,
         IdentityPolicy::FirstInScanOrder,
         ParityMode::Off,
     )
     .expect("the store");
+    let (defs, scene) = load_from(defs, &dir.0);
+    (dir, defs, scene)
+}
+
+/// `Test_P` through `defs`, in a new object space.
+fn load_from(mut defs: DefStore, dir: &Path) -> (DefStore, Result<Scene, SceneError>) {
     let mut space = ObjectSpace::new();
-    let assets = SceneAssets::new(dir.0.clone());
+    let assets = SceneAssets::new(dir.to_path_buf());
     let map = PackageName::parse("Test_P").unwrap();
     let scene = Scene::load(&mut defs, &mut space, &assets, &map);
-    (dir, defs, scene)
+    (defs, scene)
 }
 
 fn key(level: u32, export: i32) -> ExportKey {
@@ -583,7 +684,7 @@ fn key(level: u32, export: i32) -> ExportKey {
 
 #[test]
 fn placements_and_exclusions_follow_the_owner_rules() {
-    let (_dir, _defs, scene) = load("placements", false);
+    let (_dir, _defs, scene) = load("placements", Variant::default());
     let scene = scene.expect("the scene");
     let levels: Vec<&str> = scene.levels.iter().map(|l| l.name.as_str()).collect();
     assert_eq!(levels, ["Test_P", "Test_Sub"]);
@@ -631,7 +732,7 @@ fn placements_and_exclusions_follow_the_owner_rules() {
 
 #[test]
 fn poses_keep_the_serialized_values_and_the_class_defaults() {
-    let (_dir, _defs, scene) = load("poses", false);
+    let (_dir, _defs, scene) = load("poses", Variant::default());
     let scene = scene.expect("the scene");
     let Pose::Attached { actor, component } = scene.placements.get(&key(0, 4)).unwrap().pose else {
         panic!("an attached pose");
@@ -683,7 +784,7 @@ fn poses_keep_the_serialized_values_and_the_class_defaults() {
 
 #[test]
 fn the_hidden_filter_reads_the_component_and_the_owner_flags() {
-    let (_dir, _defs, scene) = load("hidden", false);
+    let (_dir, _defs, scene) = load("hidden", Variant::default());
     let scene = scene.expect("the scene");
     let hidden: Vec<(ExportKey, HiddenFlags)> = scene
         .placements
@@ -718,7 +819,7 @@ fn the_hidden_filter_reads_the_component_and_the_owner_flags() {
 
 #[test]
 fn a_mesh_no_file_holds_is_not_yet_and_an_import_resolves_in_the_loaded_levels() {
-    let (_dir, _defs, scene) = load("meshes", false);
+    let (_dir, _defs, scene) = load("meshes", Variant::default());
     let scene = scene.expect("the scene");
     let paths: Vec<&str> = scene.meshes.keys().map(String::as_str).collect();
     assert_eq!(paths, ["Meshes.Box", "Missing.Meshes.Gone"]);
@@ -753,18 +854,27 @@ fn a_mesh_no_file_holds_is_not_yet_and_an_import_resolves_in_the_loaded_levels()
 
 #[test]
 fn materials_name_their_textures_and_textures_decode_on_demand() {
-    let (_dir, defs, scene) = load("textures", false);
+    let (_dir, defs, scene) = load("textures", Variant::default());
     let scene = scene.expect("the scene");
     let red = scene.materials.get("Materials.Mati_Red").unwrap();
     assert_eq!(red.status, MaterialStatus::Read);
     assert_eq!(red.class, "Engine.MaterialInstanceConstant");
     assert_eq!(red.parent.as_deref(), Some("Materials.Mat_Base"));
+    let named = |path: &str, parameter: Option<&str>, from| MaterialTexture {
+        path: path.to_string(),
+        parameter: parameter.map(str::to_string),
+        from,
+    };
     assert_eq!(
         red.textures,
         [
-            "Materials.Tex_Red",
-            "Materials.Cube_Sky",
-            "Materials.Tex_Base"
+            named(
+                "Materials.Tex_Red",
+                Some("Diffuse"),
+                TextureSource::Instance
+            ),
+            named("Materials.Cube_Sky", Some("Sky"), TextureSource::Instance),
+            named("Materials.Tex_Base", None, TextureSource::Expression),
         ]
     );
     let placement = scene.placements.get(&key(0, 4)).unwrap();
@@ -800,7 +910,7 @@ fn materials_name_their_textures_and_textures_decode_on_demand() {
 
 #[test]
 fn lights_terrain_and_bsp_are_counted_and_named_as_gaps() {
-    let (_dir, _defs, scene) = load("census", false);
+    let (_dir, _defs, scene) = load("census", Variant::default());
     let scene = scene.expect("the scene");
     let lights: Vec<(&str, LightCount)> =
         scene.lights.iter().map(|(c, n)| (c.as_str(), *n)).collect();
@@ -848,7 +958,13 @@ fn lights_terrain_and_bsp_are_counted_and_named_as_gaps() {
 
 #[test]
 fn a_collection_tail_off_the_recorded_layout_is_a_gap_not_a_guess() {
-    let (_dir, _defs, scene) = load("broken", true);
+    let (_dir, _defs, scene) = load(
+        "broken",
+        Variant {
+            tail: Tail::Short,
+            extras: false,
+        },
+    );
     let scene = scene.expect("the scene");
     assert!(!scene.placements.contains_key(&key(0, 11)));
     assert!(
@@ -860,6 +976,102 @@ fn a_collection_tail_off_the_recorded_layout_is_a_gap_not_a_guess() {
         scene.excluded.get(&key(0, 12))
     );
     assert!(scene.gaps.iter().any(|g| g.part == GapPart::Collection));
+}
+
+#[test]
+fn a_non_finite_or_non_affine_tail_is_a_gap() {
+    for (tail, reason) in [
+        (Tail::NonFinite, "a non-finite tail value"),
+        (Tail::NonAffine, "a non-affine tail matrix"),
+    ] {
+        let variant = Variant {
+            tail,
+            extras: false,
+        };
+        let (_dir, _defs, scene) = load(&format!("{tail:?}"), variant);
+        let scene = scene.expect("the scene");
+        for export in [11, 12] {
+            let excluded = &scene.excluded.get(&key(0, export)).unwrap().reason;
+            assert_eq!(
+                excluded,
+                &Exclusion::CollectionUnreadable(reason.to_string()),
+                "{tail:?}"
+            );
+        }
+        assert!(scene.gaps.iter().any(|g| g.part == GapPart::Collection));
+    }
+}
+
+#[test]
+fn collection_listings_owner_previews_failed_loads_and_near_duplicates() {
+    let variant = Variant {
+        tail: Tail::Good,
+        extras: true,
+    };
+    let (_dir, _defs, scene) = load("extras", variant);
+    let scene = scene.expect("the scene");
+    // Component 11 is listed by collections 10 and 35: a gap, and not placed.
+    assert_eq!(
+        scene.excluded.get(&key(0, 11)).map(|e| &e.reason),
+        Some(&Exclusion::CollectionUnreadable(
+            "listed by two collection entries".to_string()
+        ))
+    );
+    let listed: Vec<&str> = scene
+        .gaps
+        .iter()
+        .filter(|g| g.part == GapPart::Collection)
+        .map(|g| g.object.as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        ["Test_P:TheWorld.PersistentLevel.StaticMeshCollectionActor_0.StaticMeshComponent_5"]
+    );
+    // Collection 35's null entry is skipped; its own bHidden hides 36.
+    let p = scene.placements.get(&key(0, 36)).unwrap();
+    assert_eq!(
+        p.hidden,
+        HiddenFlags {
+            hidden_game: false,
+            owner_hidden: true
+        }
+    );
+    let Pose::Collection { matrix, .. } = p.pose else {
+        panic!("a collection pose");
+    };
+    assert_eq!(matrix[12], 700.0);
+    // A spawner whose PreviewMesh names another component is an unsupported owner of its own component.
+    assert_eq!(
+        scene.excluded.get(&key(0, 38)).map(|e| &e.reason),
+        Some(&Exclusion::UnsupportedOwner(
+            "WillowGame.WillowMissionPickupSpawner".to_string()
+        ))
+    );
+    assert!(matches!(
+        scene.excluded.get(&key(0, 39)).map(|e| &e.reason),
+        Some(Exclusion::LoadFailed(_))
+    ));
+    // Two components that differ in one flag of DUPLICATE_FLAGS are both placed.
+    assert!(scene.placements.contains_key(&key(0, 41)));
+    assert!(scene.placements.contains_key(&key(0, 42)));
+}
+
+#[test]
+fn two_loads_give_the_same_scene() {
+    let variant = Variant {
+        tail: Tail::Good,
+        extras: true,
+    };
+    let (dir, defs, first) = load("twice", variant);
+    drop(defs);
+    let again = DefStore::open(
+        dir.0.clone(),
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let (_defs, second) = load_from(again, &dir.0);
+    assert_eq!(first.expect("the first"), second.expect("the second"));
 }
 
 #[test]
@@ -885,7 +1097,7 @@ fn a_map_no_file_holds_is_an_error() {
     assert!(
         matches!(
             result,
-            Err(HostError::Store(StoreError::PackageNotFound(_)))
+            Err(SceneError::Store(StoreError::PackageNotFound(_)))
         ),
         "{result:?}"
     );
@@ -1011,7 +1223,7 @@ fn sanctuary_on_the_installed_game() {
             .iter()
             .flatten()
             .filter_map(|m| scene.materials.get(m.as_str()))
-            .flat_map(|m| m.textures.iter().map(String::as_str))
+            .flat_map(|m| m.textures.iter().map(|t| t.path.as_str()))
             .collect();
         let _ = writeln!(materials, "{}	{}", p.path, textures.join(" "));
     }
@@ -1142,7 +1354,7 @@ fn sanctuary_on_the_installed_game() {
         .flat_map(|p| scene.effective_materials(p))
         .flatten()
         .filter_map(|m| scene.materials.get(m.as_str()))
-        .flat_map(|m| m.textures.iter())
+        .flat_map(|m| m.textures.iter().map(|t| &t.path))
         .filter(|t| decoded_set.contains(*t))
         .collect::<DetSet<_>>()
         .len();
