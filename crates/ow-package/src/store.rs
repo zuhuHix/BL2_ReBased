@@ -32,13 +32,17 @@
 //! though: a load after `scan`, and a package the global fallback matched, each get a new id. For file identity,
 //! compare `get(id).source`. Every package handed out stays alive for the store's lifetime.
 //!
-//! **Candidate files.** The global fallback reads each candidate file at most once per store (until the next
-//! [`scan`](PackageStore::scan)) to keep its folded export paths, which tell exactly where `Package::find_export` would
-//! match (the first export with that path, an error past a path that cannot be built counting as no match, as the C++
-//! fallback counts it). A later lookup skips a file whose paths do not hold its path without loading it again; the C++
-//! loads every candidate afresh on each lookup. The file that holds the path is loaded afresh and that load is returned,
-//! as in the C++. The answers are the C++'s as long as the files do not change during the store's life, which the
-//! store's path cache already assumes (decision 2026-11-16-63).
+//! **Candidate files.** The global fallback keeps, per candidate file it has read (until the next
+//! [`scan`](PackageStore::scan)), a 64-bit hash of each folded export path up to the first path that cannot be built,
+//! with the file's size and modification time when it was read. A later lookup skips a file whose hashes do not hold
+//! its path, without loading it again; the C++ loads every candidate afresh on each lookup. A hash that does hold the
+//! path is confirmed by loading the file afresh (`try_file`), and that load is returned, as in the C++, so a hash
+//! collision only costs a load. On the first read the load just made is searched with `find_export` itself. So the
+//! answers are the C++'s, with two limits (decision 2026-11-16-63):
+//! - a file whose size or modification time has changed since it was read is read again, so a rewritten file is
+//!   searched as it now is (the C++ fallback and the review fix of PR #299 see rewrites too); a rewrite that keeps
+//!   both the size and the modification time is not noticed, and the file is skipped by its old paths;
+//! - a file that fails to load is not remembered: it is tried again on the next lookup, as the C++ tries it.
 //!
 //! Status: a port. The fallback rule's evidence is the C++ record (PACKAGE_GLOBAL_INDEX.md); whether the game picks
 //! the same file for a path held by several packages is UNVERIFIED (object identity, W3-DEFS).
@@ -160,11 +164,11 @@ pub struct PackageStore {
     global_root_matches: DetMap<String, PathBuf>,
     global_misses: DetSet<String>,
     global_index: Option<GlobalIndex>,
-    /// Scan position -> what the global fallback read of that file (module documentation, "Candidate files"); `None`
-    /// for a file that did not load.
-    global_files: FixedHashMap<u32, Option<FileExports>>,
-    /// How many times the global fallback loaded a package file (`find_global`), for the tests.
-    global_file_loads: usize,
+    /// Scan position -> what the global fallback read of that file (module documentation, "Candidate files").
+    global_files: FixedHashMap<u32, FileExports>,
+    /// File stem -> how many times the global fallback loaded it (`find_global`), for the tests.
+    #[cfg(test)]
+    global_file_loads: FixedHashMap<String, usize>,
     check: Option<ResolveCheck>,
     check_log: Vec<String>,
 }
@@ -540,31 +544,51 @@ impl PackageStore {
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         for position in merge(rooted, &index.any_root) {
-            let path = &self.indexed[position as usize];
-            match self.global_files.get(&position) {
-                // Read before: a file that did not load, or whose paths do not hold this one, is not here.
-                Some(None) => continue,
-                Some(Some(file)) if file.find(global_path).is_none() => continue,
-                Some(Some(_)) => {
-                    self.global_file_loads += 1;
-                    if let Some(found) = try_file(path, global_path) {
-                        return Some(found);
-                    }
+            let path = self.indexed[position as usize].clone();
+            let stamp = file_stamp(&path);
+            if let Some(file) = self
+                .global_files
+                .get(&position)
+                .filter(|f| stamp.is_some() && f.stamp == stamp)
+            {
+                if !file.may_hold(global_path) {
+                    continue;
                 }
-                None => {
-                    self.global_file_loads += 1;
-                    let package = Package::load(path).ok();
-                    let file = package.as_deref().map(FileExports::read);
-                    let index = file.as_ref().and_then(|f| f.find(global_path));
-                    self.global_files.insert(position, file);
-                    if let (Some(package), Some(index)) = (package, index) {
-                        return Some((package, index));
-                    }
+                // A hash that holds the path: the file loaded afresh says whether it does (a collision does not).
+                self.count_load(&path);
+                if let Some(found) = try_file(&path, global_path) {
+                    return Some(found);
                 }
+                continue;
+            }
+            self.count_load(&path);
+            let Ok(package) = Package::load(&path) else {
+                // Not remembered: the next lookup tries the file again, as the C++ does.
+                self.global_files.remove(&position);
+                continue;
+            };
+            let found = package.find_export(global_path).ok().flatten();
+            self.global_files
+                .insert(position, FileExports::read(&package, stamp));
+            if let Some(index) = found {
+                return Some((package, index));
             }
         }
         None
     }
+
+    /// Counts a load of `path` by the global fallback (tests only).
+    #[cfg(test)]
+    fn count_load(&mut self, path: &Path) {
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        *self.global_file_loads.entry(stem).or_default() += 1;
+    }
+
+    #[cfg(not(test))]
+    fn count_load(&mut self, _path: &Path) {}
 
     /// The files that could hold `global_path`, in scan order: the candidates [`find_global`](Self::find_global) tries,
     /// from the global index (built on first use, as for the global fallback): the files whose roots include the
@@ -599,41 +623,60 @@ impl PackageStore {
     }
 }
 
-/// What the global fallback keeps of a candidate file: its export paths, so that a later lookup can tell without
-/// loading the file again whether `Package::find_export` would match there.
+/// What the global fallback keeps of a candidate file (module documentation, "Candidate files").
 #[derive(Debug)]
 struct FileExports {
     /// `<package name>.`, folded: the prefix `find_export` strips.
     prefix: String,
-    /// Each export's path, folded -> the first export with that path, up to the first export whose path cannot be
-    /// built (`find_export` fails there unless an earlier export matched).
-    by_path: FixedHashMap<String, i32>,
+    /// The hash of each export's folded path, up to the first export whose path cannot be built (`find_export` fails
+    /// there unless an earlier export matched).
+    hashes: FixedHashSet<u64>,
+    /// The file's size and modification time when it was read; `None` when they could not be read (the file is then
+    /// read again on every lookup).
+    stamp: Option<FileStamp>,
 }
 
 impl FileExports {
-    fn read(package: &Package) -> FileExports {
-        let mut by_path: FixedHashMap<String, i32> = FixedHashMap::default();
+    fn read(package: &Package, stamp: Option<FileStamp>) -> FileExports {
+        let mut hashes: FixedHashSet<u64> = FixedHashSet::default();
         for index in 1..=package.exports.len() as i32 {
             match package.path_of(index) {
                 Ok(path) => {
-                    by_path.entry(fold(&path)).or_insert(index);
+                    hashes.insert(path_hash(&fold(&path)));
                 }
                 Err(_) => break,
             }
         }
         FileExports {
             prefix: fold(&format!("{}.", package.name)),
-            by_path,
+            hashes,
+            stamp,
         }
     }
 
-    /// The export `Package::find_export(global_path)` gives in this file: `Some` exactly where it gives `Ok(Some)`;
-    /// `None` where it gives `Ok(None)` or an error (both "not here" to the global fallback).
-    fn find(&self, global_path: &str) -> Option<i32> {
+    /// Whether `Package::find_export(global_path)` may match in this file: `false` only where it gives `Ok(None)` or an
+    /// error (both "not here" to the global fallback); `true` may be a hash collision.
+    fn may_hold(&self, global_path: &str) -> bool {
         let wanted = fold(global_path);
         let wanted = wanted.strip_prefix(&self.prefix).unwrap_or(&wanted);
-        self.by_path.get(wanted).copied()
+        self.hashes.contains(&path_hash(wanted))
     }
+}
+
+/// A file's size and modification time.
+type FileStamp = (u64, std::time::SystemTime);
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// A fixed 64-bit hash of a folded path (the standard library's `DefaultHasher` with its fixed keys).
+fn path_hash(text: &str) -> u64 {
+    use std::hash::Hasher as _;
+    let mut h = std::hash::DefaultHasher::new();
+    h.write(text.as_bytes());
+    h.finish()
 }
 
 /// Loads `path` and looks for `global_path` in it; any failure is "not here".
@@ -1027,7 +1070,7 @@ mod tests {
         let mut loads = Vec::new();
         for reference in [-2, -3, -4, -5, -6, -7, -2] {
             answers.push(resolve_in(&tree, &mut store, reference).map_err(|e| e.to_string()));
-            loads.push(store.global_file_loads);
+            loads.push(store.global_file_loads.values().sum::<usize>());
         }
         let found = |name: &str, index| Ok((name.to_string(), index));
         let missing = |object: &str| {
@@ -1058,12 +1101,143 @@ mod tests {
                 .count(),
             6
         );
-        // Scan order: Afile, Bfile, Broken, Cfile, Dfile. ObjA reads Afile and Bfile (a match); ObjB reads Broken (it
-        // does not load) and Cfile; ObjC reads Dfile; each once. The miss reads no file again. Extra is in Bfile, read
-        // before: that one file is loaded afresh for the match, as the C++ returns a fresh candidate. Gone reads
-        // nothing; ObjA again is the cached match.
-        assert_eq!(loads, [2, 4, 5, 5, 6, 6, 6]);
-        assert_eq!(store.global_files.len(), 5);
+        // Scan order: Afile, Bfile, Broken, Cfile, Dfile. ObjA reads Afile and Bfile (a match). ObjB skips both, tries
+        // Broken (it does not load, and is not remembered) and reads Cfile; ObjC tries Broken again and reads Dfile;
+        // each readable file once. The miss and Gone only try Broken again. Extra's hash is in Bfile, read before:
+        // that one file is loaded afresh to confirm it, as the C++ returns a fresh candidate. ObjA again is the cached
+        // match.
+        assert_eq!(loads, [2, 4, 6, 7, 8, 9, 9]);
+        let per_file: std::collections::BTreeMap<_, _> =
+            store.global_file_loads.clone().into_iter().collect();
+        let expected: std::collections::BTreeMap<String, usize> = [
+            ("Afile", 1),
+            ("Bfile", 2),
+            ("Broken", 4),
+            ("Cfile", 1),
+            ("Dfile", 1),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        assert_eq!(per_file, expected);
+        assert_eq!(store.global_files.len(), 4, "Broken is not remembered");
+        // A new scan forgets every file read.
+        store.scan().unwrap();
+        assert!(store.global_files.is_empty());
+    }
+
+    /// Decision 2026-11-16-63 (review r1 of PR #362): a file that failed to load is tried again on a later lookup, and a
+    /// file read before is read again when its size or modification time changed, so both are searched as they now
+    /// are. The check oracle's full scan agrees on every lookup.
+    #[test]
+    fn a_failed_or_rewritten_candidate_is_read_again() {
+        let tree = Tree::new("again");
+        tree.write(
+            "Source.upk",
+            &package(
+                &[
+                    ("Core", "Package", 0, "GDX"),
+                    ("Core", "Object", -1, "ObjA"),
+                    ("Core", "Object", -1, "ObjB"),
+                    ("Core", "Object", -1, "ObjC"),
+                    ("Core", "Object", -1, "Nowhere"),
+                ],
+                &[],
+            ),
+        );
+        // Scan order: Aaa (does not load yet), Bbb (holds ObjA), Ccc (holds nothing asked yet).
+        tree.write("Aaa.upk", &[1, 2, 3]);
+        tree.write("Bbb.upk", &package(&[], &[("GDX", 0), ("ObjA", 1)]));
+        let ccc = tree.write("Ccc.upk", &package(&[], &[("GDX", 0)]));
+        let mut store = tree.store();
+        store.set_resolve_check(Some(ResolveCheck::default()));
+        // A path no file holds: every file is tried, and Bbb and Ccc are read (Aaa does not load).
+        assert!(matches!(
+            resolve_in(&tree, &mut store, -5),
+            Err(StoreError::ImportNotFound { .. })
+        ));
+        assert_eq!(store.global_files.len(), 2);
+        assert_eq!(
+            resolve_in(&tree, &mut store, -2).unwrap(),
+            ("Bbb".into(), 2)
+        );
+        // Aaa becomes readable and holds ObjB; Ccc, read before, now holds ObjC (a different size).
+        tree.write("Aaa.upk", &package(&[], &[("GDX", 0), ("ObjB", 1)]));
+        std::fs::write(&ccc, package(&[], &[("GDX", 0), ("Pad", 1), ("ObjC", 1)])).unwrap();
+        assert_eq!(
+            resolve_in(&tree, &mut store, -3).unwrap(),
+            ("Aaa".into(), 2)
+        );
+        assert_eq!(
+            resolve_in(&tree, &mut store, -4).unwrap(),
+            ("Ccc".into(), 3)
+        );
+        let log = store.take_check_log();
+        assert_eq!(
+            log.iter()
+                .filter(|l| l.starts_with("OWRESOLVECHECK same"))
+                .count(),
+            4
+        );
+    }
+
+    /// The summary stops where `find_export` would fail (an export whose path cannot be built), and the first file in
+    /// scan order wins between two whose summaries are both cached; the check oracle agrees on each.
+    #[test]
+    fn the_summary_follows_find_export_past_a_broken_path_and_keeps_scan_order() {
+        let tree = Tree::new("summary");
+        tree.write(
+            "Source.upk",
+            &package(
+                &[
+                    ("Core", "Package", 0, "GDX"),
+                    ("Core", "Object", -1, "Obj"),
+                    ("Core", "Object", -1, "Late"),
+                    ("Core", "Object", -1, "Other"),
+                    ("Core", "Object", -1, "Dup"),
+                ],
+                &[],
+            ),
+        );
+        // Afile: GDX.Obj, then an export whose outer is itself (its path cannot be built), then GDX.Late.
+        tree.write(
+            "Afile.upk",
+            &package(&[], &[("GDX", 0), ("Obj", 1), ("Loop", 3), ("Late", 1)]),
+        );
+        tree.write("Bfile.upk", &package(&[], &[("GDX", 0), ("Dup", 1)]));
+        tree.write("Cfile.upk", &package(&[], &[("GDX", 0), ("Dup", 1)]));
+        tree.write("Dfile.upk", &package(&[], &[("GDX", 0), ("Other", 1)]));
+        let mut store = tree.store();
+        store.set_resolve_check(Some(ResolveCheck::default()));
+        // Other reads every file (Afile up to its broken export) and matches Dfile; the root cache then points there.
+        assert_eq!(
+            resolve_in(&tree, &mut store, -4).unwrap(),
+            ("Dfile".into(), 2)
+        );
+        assert_eq!(store.global_files.len(), 4);
+        // Late is past Afile's broken export: find_export fails there, so no file holds it (Afile is skipped by its
+        // summary).
+        assert!(matches!(
+            resolve_in(&tree, &mut store, -3),
+            Err(StoreError::ImportNotFound { .. })
+        ));
+        // Dup: both Bfile and Cfile hold it and both summaries are cached; the first in scan order wins.
+        assert_eq!(
+            resolve_in(&tree, &mut store, -5).unwrap(),
+            ("Bfile".into(), 2)
+        );
+        // Obj is before the broken export: Afile's summary holds it.
+        assert_eq!(
+            resolve_in(&tree, &mut store, -2).unwrap(),
+            ("Afile".into(), 2)
+        );
+        let log = store.take_check_log();
+        assert_eq!(
+            log.iter()
+                .filter(|l| l.starts_with("OWRESOLVECHECK same"))
+                .count(),
+            4
+        );
     }
 
     #[test]
