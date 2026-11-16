@@ -13,6 +13,8 @@ struct Toy {
     gates: DetMap<(usize, Gate), bool>,
     locked: Option<usize>,
     log: Vec<String>,
+    /// The nodes whose `CanRun` was asked, in order.
+    asked: Vec<usize>,
 }
 
 impl TreeWorld for Toy {
@@ -23,6 +25,7 @@ impl TreeWorld for Toy {
         Ok(self.gates.get(&(node, gate)).copied().unwrap_or(true))
     }
     fn can_run(&mut self, node: usize) -> Result<Option<String>, VmError> {
+        self.asked.push(node);
         Ok(self.fails.get(&node).cloned())
     }
     fn start(&mut self, node: usize) -> Result<(), VmError> {
@@ -277,6 +280,25 @@ fn a_node_that_must_stop_when_it_cannot_run() {
     w.draws = vec![0.0];
     let change = tree.state_update(&mut w, 1.2).unwrap();
     assert_eq!((change.stopped, change.started), (Some((4, true)), Some(6)));
+}
+
+/// The running leaf's check asks its script `CanRun` once, also with `bStopIfCannotRun` (whose whole eligibility
+/// test is run with that answer); the selection pass after it asks on its own (review r1 L1).
+#[test]
+fn the_running_check_asks_can_run_once() {
+    let mut tree = beast();
+    let mut w = Toy::default();
+    w.fails.insert(1, "NotScripted".to_string());
+    w.fails.insert(3, "NoPathToPerch".to_string());
+    tree.nodes[4].stop_if_cannot_run = true;
+    tree.state_update(&mut w, 1.0).unwrap();
+    assert_eq!(tree.current, Some(4));
+    w.asked.clear();
+    let change = tree.state_update(&mut w, 1.2).unwrap();
+    assert_eq!(change, Change::default(), "it can still run and stays");
+    assert_eq!(w.asked.first(), Some(&4));
+    assert_eq!(w.asked.get(1), Some(&1), "then the selection from the root: {:?}", w.asked);
+    assert_eq!(tree.nodes[4].action_fail_name, None);
 }
 
 #[test]

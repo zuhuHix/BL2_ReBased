@@ -10,7 +10,7 @@
 //! requests and the stub lines the actions' script reached. Every result is UNVERIFIED: no live record holds a lone
 //! bullymong's action choices.
 //!
-//! **Set-ups of the run, not rules** (decisions 2026-11-16-59 and -60): Reference mode (the stock spawn stops in Off
+//! **Set-ups of the run, not rules** (decisions 2026-11-16-59 and -66): Reference mode (the stock spawn stops in Off
 //! on a definition-store limit outside this lane); `AIDef` and `TargetingDef` set as live; the live iterator weights
 //! written in memory; the exposure per case; an open-field movement host (every path exists).
 

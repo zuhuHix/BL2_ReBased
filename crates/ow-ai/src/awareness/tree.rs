@@ -153,7 +153,9 @@ pub trait TreeWorld {
     fn can_run(&mut self, node: usize) -> Result<Option<String>, VmError>;
     /// Raises `Start` on action node `node`'s action (the start of its state).
     fn start(&mut self, node: usize) -> Result<(), VmError>;
-    /// Raises `Stop` on action node `node`'s action, and puts it back to its default state.
+    /// Raises `Stop` on action node `node`'s action. The engine then puts the action back in its default state; that
+    /// call is not read (NATIVE_AI_AWARENESS.md, "Not read yet"), so a world that cannot tell the action is already
+    /// there answers `NotYet` instead of carrying on with it in another state.
     fn stop(&mut self, node: usize, failed: bool) -> Result<(), VmError>;
     /// Whether action node `node`'s action is running with its non-interruptible flag set.
     fn locked(&mut self, node: usize) -> Result<bool, VmError>;
@@ -217,6 +219,18 @@ impl Tree {
 
     /// Node eligibility (G26, in order; the first failure answers false).
     pub fn eligible(&mut self, w: &mut dyn TreeWorld, now: f32, node: usize) -> Result<bool, VmError> {
+        self.eligible_with(w, now, node, None)
+    }
+
+    /// [`Tree::eligible`], with the action's `CanRun` answer already asked in this pass (`Some`): step 4 uses it
+    /// instead of asking the script again, so one update asks once and keeps that answer's failure name.
+    fn eligible_with(
+        &mut self,
+        w: &mut dyn TreeWorld,
+        now: f32,
+        node: usize,
+        asked: Option<Option<String>>,
+    ) -> Result<bool, VmError> {
         let n = &self.nodes[node];
         // 1. not before NextTimedRun.
         if n.next_timed_run != 0.0 && now < n.next_timed_run {
@@ -237,7 +251,10 @@ impl Tree {
             if !n.has_action {
                 return Ok(false);
             }
-            let fail = w.can_run(node)?;
+            let fail = match asked {
+                Some(answer) => answer,
+                None => w.can_run(node)?,
+            };
             let ok = fail.is_none();
             self.nodes[node].action_fail_name = fail;
             if !ok {
@@ -443,12 +460,14 @@ impl Tree {
         w.start(leaf)
     }
 
-    /// Stopping a state: `CurrentState` cleared, `Stop` raised on the action, and the completion walk of the path.
+    /// Stopping a state: `Stop` raised on the action, `CurrentState` cleared, and the completion walk of the path. A
+    /// `Stop` that fails (a `NotYet` of the world's) leaves the tree as it was.
     pub fn stop_state(&mut self, w: &mut dyn TreeWorld, now: f32, failed: bool) -> Result<Option<usize>, VmError> {
-        let Some(leaf) = self.current.take() else {
+        let Some(leaf) = self.current else {
             return Ok(None);
         };
         w.stop(leaf, failed)?;
+        self.current = None;
         self.complete(w, now, failed);
         Ok(Some(leaf))
     }
@@ -512,14 +531,15 @@ impl Tree {
                 return Ok(change);
             }
             let fail = w.can_run(leaf)?;
+            self.nodes[leaf].action_fail_name = fail.clone();
             let stop = if fail.is_some() {
                 true
             } else if self.nodes[leaf].stop_if_cannot_run {
-                !self.eligible(w, now, leaf)?
+                // The whole eligibility test, with the answer just given (asked once per update).
+                !self.eligible_with(w, now, leaf, Some(fail))?
             } else {
                 false
             };
-            self.nodes[leaf].action_fail_name = fail;
             if stop {
                 self.stop_state(w, now, true)?;
                 change.stopped = Some((leaf, true));
