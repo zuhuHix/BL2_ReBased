@@ -24,7 +24,9 @@ game.
   object on a hit and a swing, and the report's `down.fee.<n>` rows. A bridged chain or bleed frame that fails is
   recorded as the bridge's guard records it (`<step>: mission script: <text>`) and the run goes on, as the C++ guard
   does (review r1 of PR #356): a failed hit carries on with an empty report (its `hit.<id>.N.*` rows 0, the hit counted,
-  the kill rows and the down state processed), a failed swing with an empty swing (`arrival.*` 0, no ratio). Test:
+  the kill rows and the down state processed), a failed swing with an empty swing (`arrival.*` 0, no ratio). A
+  `NotYet` is not a script error: it stops the step in a hit, a swing and a bleed frame alike, with no made-up rows
+  (review r2). Test:
   `a_bridged_hit_or_swing_that_fails_keeps_its_rows_with_zeros_as_the_cxx_guard`. One ordering is not the C++'s: when
   the step then fails outside the guard (its player report), the C++ lists the guard's error under the next step,
   this port under the same one.
@@ -80,18 +82,26 @@ event is dropped); Reference logs the labelled note `note: combat-run (Rust): th
 own class provider; ...` and runs it as before. Tests: `the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it`
 (Reference) and `off_mode_refuses_a_sequence_step_whose_events_raise_on_its_own_class_provider`.
 
-**The order tripwire** (decision 35's named difference; review r1 of PR #356). A death sequence `B1 -> B2` whose B1
-broadcasts `Custom`: the C++ re-enters the running provider and prints `B1, C, K, B2` in the hit's `events`; this port
-defers `Custom` and prints `B1, B2, C, K`, and a later `CompareBool` in B2 could branch differently. The port does not
-reproduce the re-entry (`Provider` methods take `&mut self`), so each deferral onto a running provider records where
-that provider stood (a script behavior of the run marks its provider's trace length before it runs; a raise from a
-handler that marks nothing is judged conservatively: more than one behavior ran). When the provider is back and its
-own run went on past that mark, the C++ order differs: `Off` answers `NotYet { NotPorted }` (the deferred event is
-dropped), `Reference` logs `note: combat-run (Rust): an event raised on a running behavior provider was deferred past
-behaviors that provider ran after the raise; ...` and runs it as before. A raise by the last behavior that runs keeps
-the C++ order and trips nothing. Tests: `a_broadcast_in_the_middle_of_a_death_sequence_is_not_yet_in_off_and_a_note_in_reference`
-and `a_raise_by_the_last_behavior_is_not_tripped_and_an_unmarked_one_is_judged_conservatively`, both modes. The 16
-pinned C++ lists of `ow-cli` trip nothing.
+**The order tripwire** (decision 35's named difference; reviews r1 and r2 of PR #356). A death sequence `B1 -> B2`
+whose B1 broadcasts `Custom`: the C++ re-enters the running provider and prints `B1, C, K, B2` in the hit's `events`
+(its inner raise lists the provider's lines at the moment of the raise); this port defers `Custom` and prints `B1, B2,
+C, K`, and a later `CompareBool` in B2 could branch differently. The port does not reproduce the re-entry (`Provider`
+methods take `&mut self`), so each event deferred onto a running provider records the provider's trace length when
+the raising behavior started (a script behavior of the run marks it; a handler that marks nothing is judged
+conservatively: more than one behavior ran) and the length of the events list at the deferral. The broadcast's class
+share gets the same mark whenever the class provider is running (review r2). When the provider is back, the C++ list
+would differ, and the tripwire trips, if after the deferral: its own run went on past the raising behavior; anything
+was listed before the provider's own final report of lines (a note, another provider's lines, a second broadcast, the
+next context of a loop); or a second event was deferred onto the same held provider. `Off` answers `NotYet {
+NotPorted }` (the deferred events are dropped); `Reference` logs `note: combat-run (Rust): an event raised on a running
+behavior provider was deferred past what the run did after the raise; ...` and runs them as before. A raise by the
+last behavior that runs, with nothing listed after it, trips nothing. A raise made while a provider is being made
+(its consumer registration) is not checked. Tests, each in both modes:
+`a_broadcast_in_the_middle_of_a_death_sequence_is_not_yet_in_off_and_a_note_in_reference`,
+`a_raise_by_the_last_behavior_is_not_tripped_and_an_unmarked_one_is_judged_conservatively`,
+`events_deferred_by_a_deferred_event_trip_on_the_second_deferral_onto_one_provider` (the full events list) and
+`a_broadcasts_class_share_onto_the_running_class_provider_is_checked`; `marked_leaves_no_stale_entry`. The 16 pinned
+C++ lists of `ow-cli` trip nothing.
 
 **Not done in this lane.**
 
@@ -108,7 +118,7 @@ pinned C++ lists of `ow-cli` trip nothing.
 **Verified (automated, local, pc-hummer, on `origin/main` 7f739404, after FIX-KERNEL-NATIVES; review r1).** `cargo build
 --workspace --locked` clean; `cargo test --workspace --locked` 45 binaries, 1,613 passed, 0 failed, 21 ignored (1,606
 before review r1); `cargo build --release -p ow-cli --locked` clean; `tests/crate_edges_test.py` OK; `decisions_index.py
---check` OK, 1 added. `ow-combat` 109 tests (review r1 added the order tripwire's two tests, the guard's, the injured
+--check` OK, 1 added. After review r2: 1,615 passed, 0 failed, 21 ignored; `ow-combat` 111. `ow-combat` 109 tests (review r1 added the order tripwire's two tests, the guard's, the injured
 path's, `mayahealth`'s, the relink's and the pool build's; `ow-mission` one, the class defaults). First round: 6 bridge
 tests on a fake bridge over the toy classes, each in both modes: the C++ texts without a bridge, the health pool, the
 kill credit, cash and the bleed frames, the gains, and two runs of the same steps in one process giving the same
@@ -144,14 +154,15 @@ are not on disk in CI, and `combat_test.py` is not yet whole on the Rust binary.
   round: 10 rows, 6 equal, 4 differ (the swings' `ratio.*` were 0: the bridge's zero-filled controller), 7 missing.
   After review r1 (the bridge's objects from their class defaults): 16 rows, all 16 equal (health, arrival, ratio, and
   `down.total`, `down.successive`, `down.bleed_over`, `down.bleed_wall`, `down.camera`, `down.respawn_health`), the
-  fee row missing (open item 2). Off: 0 rows (the pool is `NotYet` at `maya`, the bridge's script reaches the unbound
+  fee row missing (open item 2; since review r2 its `NotYet` stops the `bleed` step after every other row was written).
+  No tripwire note. Off: 0 rows (the pool is `NotYet` at `maya`, the bridge's script reaches the unbound
   `Actor.LocalPlayerControllers`, and the spawn stops as above).
 - **S-d, the kill credit** (`maya:8`, a baby L6 spawned without its pawn balance, one lethal shotgun hit, `tick:0`).
   The C++ prints 9 rows: award 50, credit 35 (the live record's 50 / 35, COMBAT_KILL_XP.md), the hit, the loot. Before:
-  refused (exit 3). After review r1: 9 rows, 7 equal, among them the kill row (award 50, credit 35), the loot rows and
-  the next tick's gain of 35. The 2 that differ are the hit's `arriving` and `applied` (0 against 9999): the hit makes
-  its credit, then stops at `Actor.Destroy` of the mind (open item 3), and the bridge guard carries on with an empty
-  report, as the C++ guard would for that error. Off: 0 rows.
+  refused (exit 3). After review r2: 2 rows, both equal (the baby's health and maximum); the hit makes its credit (the
+  next tick's gain and the pool read 35, equal to the C++), then stops at `Actor.Destroy` of the mind (open item 3),
+  whose `NotYet` now stops the step, so the hit, kill and loot rows (7) are missing rather than printed as zeros (review
+  r1 had printed 9 rows, 2 of them zeros against 9999). Off: 0 rows.
 - **Replay across processes:** the clean reruns of the Reference runs above gave the same rows as the first runs; the 15
   W6-COMBAT steps give the same 20 rows after review r1.
 
