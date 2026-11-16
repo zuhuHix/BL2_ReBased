@@ -176,6 +176,11 @@ impl World {
         let actor_class = vm.find_class(ACTOR_CLASS)?;
         let query = query::install(&mut vm)?;
         let actors = vm.add_service(Actors::new(actor_class))?;
+        // The game info falls back to the placed WorldInfo's Game (decision 2026-11-16-49).
+        query
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?
+            .follow_world_info(actors.clone());
         let timers = vm.add_service(Timers::new())?;
         let balance = vm.add_service(balance)?;
         let walk: ActorWalkFn = Rc::new(|vm: &Vm, which| {
