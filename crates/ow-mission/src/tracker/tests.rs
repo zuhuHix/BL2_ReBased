@@ -126,6 +126,7 @@ fn willowgame() -> Vec<u8> {
     d.prop("Bool", mission, "bActivateInitialObjectiveSet", 0);
     d.prop("Str", mission, "MissionName", 0);
     d.prop("Object", mission, "MissionWeapon", object);
+    d.prop("Object", mission, "GameStageRegion", object);
     d.array_of(mission, "Dependencies", "Object", object);
     d.prop("Bool", mission, "bPlotCritical", 0);
     d.prop("Bool", mission, "bRepeatable", 0);
@@ -239,6 +240,8 @@ struct Mission {
     /// Event name -> (link id, behavior name).
     events: Vec<(&'static str, Vec<(i32, &'static str)>)>,
     weapon_objective: Option<&'static str>,
+    /// Whether the mission names a `GameStageRegion` (an invented region object).
+    stage_region: bool,
     dependency: Option<(&'static str, u8)>,
     dependencies: Vec<&'static str>,
     provider: bool,
@@ -281,6 +284,7 @@ fn toy_mission() -> Mission {
             ("GoB", vec![(0, "AdvB")]),
         ],
         weapon_objective: None,
+        stage_region: false,
         dependency: None,
         dependencies: Vec::new(),
         provider: true,
@@ -385,6 +389,13 @@ fn mission_package(m: &Mission) -> Vec<u8> {
         payload.extend_from_slice(&none);
         let w = p.add_export(c, "ToyWeapon", payload);
         mission_tags.extend(p.object_tag("MissionWeapon", w));
+    }
+    if m.stage_region {
+        let c = class(&mut p, "WillowGame", "MissionWeaponBalanceDefinition");
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend_from_slice(&none);
+        let region = p.add_export(c, "ToyRegion", payload);
+        mission_tags.extend(p.object_tag("GameStageRegion", region));
     }
     if let Some((objective, status)) = m.dependency {
         let mut body = p.object_tag("Objective", lookup(objective));
@@ -852,19 +863,29 @@ fn availability_needs_the_dependencies() {
 
 /// The lent weapon (observed, FIRE_MISSION_GOLDEN_TRACE.md lane L2): granted inside Active after the status, removed
 /// inside Complete after the status and before the reward; not at ReadyToTurnIn. Only when the weapon's objective is
-/// the mission's.
+/// the mission's. Off mode (decision 2026-11-16-81, the bridge note): the grant also needs the mission's
+/// `GameStageRegion`; the removal needs only a `MissionWeapon`.
 #[test]
 fn the_lent_weapon_sits_in_the_status_routine() {
+    for (region, granted) in [(true, true), (false, false)] {
+        let mut toy = toy_mission();
+        toy.weapon_objective = Some("Count3");
+        toy.stage_region = region;
+        let mut off = Env::new(&toy);
+        let m = off.mission();
+        let vm = &mut off.vm;
+        assert!(m.accept(vm, &DetSet::new()).unwrap());
+        let shown = short(&m.drain());
+        assert_eq!(shown.first().map(String::as_str), Some("status:Active"));
+        assert_eq!(shown.iter().any(|e| e == "mission_weapon_granted"), granted, "region {region}: {shown:?}");
+        m.load_state("status=2
+active=ToyMission.SetC
+");
+        assert!(m.turn_in_mission(vm).unwrap());
+        assert_eq!(short(&m.drain()), ["status:Complete", "mission_weapon_removed", "R:Done", "reward"], "region {region}");
+    }
     let mut toy = toy_mission();
     toy.weapon_objective = Some("Count3");
-    // Off mode: the weapon's region-stage condition is not read, so the status routine refuses before it changes
-    // anything.
-    let mut off = Env::new(&toy);
-    let m = off.mission();
-    let refused = m.accept(&mut off.vm, &DetSet::new()).unwrap_err();
-    assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotRead));
-    assert_eq!(m.status(), Status::NotStarted);
-    assert!(m.drain().is_empty());
     let mut env = Env::with_mode(&toy, ParityMode::Reference);
     let m = env.mission();
     assert!(m.lends_weapon());

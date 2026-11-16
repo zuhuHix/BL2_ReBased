@@ -74,7 +74,10 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Actor.VisibleCollidingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | low | |
 | Actor.CollidingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 6 sites | UNVERIFIED | medium | |
 | Actor.OverlappingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | medium | |
-| Actor.LocalPlayerControllers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 69 sites; HUD/menu code iterates it | UNVERIFIED | high | |
+| Actor.LocalPlayerControllers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 69 sites; HUD/menu code iterates it | UNVERIFIED | high | `crates/ow-vm/src/natives_core.rs` (Off only: the world's local players from `ow_world::actors::Actors::add_local_player`, the bridge's controller; decision 2026-11-16-81) |
+| MissionTracker.GetObjectivesProgress | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: the mission screen's script at accept and turn-in | UNVERIFIED | medium | |
+| AIComponent.ActivateEvent | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: an AI component's script event | UNVERIFIED | medium | |
+| Trigger.TriggerDetachSprites | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) (not resolved) | Fire: a trigger's script | UNVERIFIED | low | |
 | Actor.AllOwnedComponents | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
 | Actor.GetALocalPlayerController | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 7 sites | UNVERIFIED | high | |
 | WorldInfo.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | persistent level WorldInfo; Kismet/behavior lookups | UNVERIFIED | high | |

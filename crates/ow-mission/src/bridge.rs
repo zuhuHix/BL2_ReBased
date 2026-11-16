@@ -598,6 +598,11 @@ impl MissionScript {
             .place_world_info(world_info)?;
         let controller = new_object(vm, "WillowGame.WillowPlayerController")?;
         set(&mut vm.space, controller, "WorldInfo", Value::Object(Some(world_info)))?;
+        // The one local player (`Actor.LocalPlayerControllers`, decision 2026-11-16-81).
+        actors
+            .try_borrow_mut()
+            .map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?
+            .add_local_player(controller)?;
         // The one globals instance every GetWillowGlobals / GetGearboxGlobals call returns (NATIVE_CONTROLLER_HELPERS.md).
         let globals = new_object(vm, "WillowGame.WillowGlobals")?;
         // ... which is the world's globals object too (what the evaluator's no-context resolver answers with).

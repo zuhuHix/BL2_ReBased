@@ -34,9 +34,11 @@
 //! **Not modelled, as in the C++:** `RequiredObjectivesComplete` and `Failed`, the level-load replay (B5), blocking
 //! sets, `ObjectiveCleared`. Four more the C++ also does not model answer `NotYet` in `ParityMode::Off` where the data
 //! shows them, decided before anything changes, and keep the C++ behaviour in `ParityMode::Reference` (architecture R3;
-//! decision 2026-11-15-34): a collection or branching objective set (refused at construction), the lent weapon's
-//! region-stage condition (refused in the Active and Complete status routine), `bRepeatable` on a Complete mission
-//! (`can_start`), and a plot-critical activation that finds a pending kickoff record.
+//! decision 2026-11-15-34): a collection or branching objective set (refused at construction), `bRepeatable` on a
+//! Complete mission (`can_start`), and a plot-critical activation that finds a pending kickoff record. The lent
+//! weapon's grant and removal follow the bridge note in Off mode (decision 2026-11-16-81: granted inside Active only
+//! when the mission has a `GameStageRegion`, removed inside Complete when it has a `MissionWeapon`) and the C++ in
+//! Reference.
 //!
 //! **The dialog** (lane W5-DIALOG, `crate::dialog`, decision 2026-11-15-32). As the C++ tracker owns its
 //! `DialogSystem`, each [`MissionSystem`] owns one `Rc<RefCell<DialogSystem>>` over the mission's package
@@ -323,6 +325,8 @@ struct Data {
     objectives: DetMap<String, Objective>,
     initial_set: String,
     weapon_objective: String,
+    /// Whether the mission names a `GameStageRegion` (the lent weapon's grant condition, Off mode).
+    stage_region: bool,
     dependency_objective: String,
     activate_initial_set: bool,
     dependency_active: bool,
@@ -558,6 +562,7 @@ impl MissionSystem {
         if let Some(definition) = load_ref(vm, weapon.as_ref())? {
             d.weapon_objective = ref_path(vm, prop(&vm.space, definition, "MissionObjective")?.as_ref())?;
         }
+        d.stage_region = matches!(prop(&vm.space, mission, "GameStageRegion")?, Some(Value::Object(Some(_))));
         if let Some(Value::Array(list)) = prop(&vm.space, mission, "Dependencies")? {
             for dep in list.iter() {
                 d.dependencies.push(ref_path(vm, Some(dep))?);
@@ -857,8 +862,8 @@ impl MissionSystem {
         self.data().objectives.values().any(|o| o.optional)
     }
 
-    /// The grant condition of the bridge note: a `MissionWeapon` is set and the weapon's own mission objective is one
-    /// of this mission's objectives (its region-stage condition is not applied, UNVERIFIED).
+    /// The C++ grant condition: a `MissionWeapon` is set and the weapon's own mission objective is one of this
+    /// mission's objectives. Off mode also needs the mission's `GameStageRegion` (the status routine; UNVERIFIED).
     pub fn lends_weapon(&self) -> bool {
         lends(self.data())
     }
@@ -1266,10 +1271,6 @@ impl MissionSystem {
             // Rules neither side models, decided before anything changes (Off mode; Reference keeps the C++).
             if vm.parity == ParityMode::Off {
                 let d = &self.inner.data;
-                if matches!(status, Status::Active | Status::Complete) && lends(d) {
-                    return Err(NotYet::not_read("the lent mission weapon's region-stage condition", BRIDGE_RECORD)
-                    .into());
-                }
                 if status == Status::Active && d.plot_critical && s.kickoff_pending {
                     return Err(
                         NotYet::not_read("a plot-critical mission overwriting a pending kickoff record", RECORD).into()
@@ -1295,13 +1296,23 @@ impl MissionSystem {
             }
         }
         self.emit(EffectKind::StatusChanged, status.name().to_string(), String::new(), String::new());
-        if self.lends_weapon() {
-            let weapon = self.data().weapon.clone();
-            match status {
-                Status::Active => self.emit(EffectKind::MissionWeaponGranted, weapon, String::new(), String::new()),
-                Status::Complete => self.emit(EffectKind::MissionWeaponRemoved, weapon, String::new(), String::new()),
-                _ => {}
+        // The lent weapon. Reference: the C++, granted and removed when `lends`. Off (decision 2026-11-16-81, the bridge
+        // note's "Mission weapon granting" and "Complete"): granted inside Active only when `lends` and the mission
+        // has a `GameStageRegion`; removed inside Complete when the mission has a `MissionWeapon`. UNVERIFIED.
+        let (grant, remove) = {
+            let d = self.data();
+            match vm.parity {
+                ParityMode::Reference => (lends(d), lends(d)),
+                _ => (lends(d) && d.stage_region, !d.weapon.is_empty()),
             }
+        };
+        let weapon = self.data().weapon.clone();
+        match status {
+            Status::Active if grant => self.emit(EffectKind::MissionWeaponGranted, weapon, String::new(), String::new()),
+            Status::Complete if remove => {
+                self.emit(EffectKind::MissionWeaponRemoved, weapon, String::new(), String::new())
+            }
+            _ => {}
         }
         self.notify(vm, Notification::StatusChanged);
         self.fire(vm, "Default", link::STATUS_BASE + i32::from(status.number()))?;

@@ -628,6 +628,8 @@ fn the_bridge_objects_start_from_their_class_defaults() {
     assert_eq!(get(space, o.controller, "ReceivedMeleeDamageModifier").unwrap(), Value::Float(1.0));
     assert_eq!(get(space, o.controller, "Role").unwrap(), Value::Byte(3));
     assert!(env.script.errors().is_empty(), "{:?}", env.script.errors());
+    // The controller is the world's one local player (`Actor.LocalPlayerControllers`, decision 2026-11-16-81).
+    assert_eq!(env.world.actors().borrow().local_players(), [o.controller]);
 }
 
 /// `AcceptMission` reaches `ActivateMission`; the status routine's hook runs `UpdateMissionStatus` with the status
