@@ -16,12 +16,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{StartCause, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalSize};
+use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 use crate::gpu::{AdapterSummary, FrameOutcome, Gpu};
+use crate::render::Drawer;
 use crate::sim::{HostCommand, Simulation};
 use crate::stats::{FrameTimer, MAX_SAMPLES};
 
@@ -89,8 +90,19 @@ pub struct RunReport {
 /// Runs the event loop on this (the main) thread until the run ends. Errors before the loop starts (no display, an
 /// event loop already made) come back as `Err`; everything after is in the report's [`Outcome`].
 pub fn run<S: Simulation>(options: RunOptions, sim: S) -> Result<RunReport, String> {
+    run_with(options, sim, None)
+}
+
+/// [`run`] with a renderer plugged in (lane H2's seam): `drawer` is attached once the device exists, draws each
+/// frame instead of the simulation's clear colour, and hears the window's input. With `None` this is [`run`].
+pub fn run_with<S: Simulation>(
+    options: RunOptions,
+    sim: S,
+    drawer: Option<Box<dyn Drawer>>,
+) -> Result<RunReport, String> {
     let event_loop = EventLoop::new().map_err(|e| format!("cannot start the event loop: {e}"))?;
     let mut app = App::new(options, sim);
+    app.drawer = drawer;
     event_loop.run_app(&mut app).map_err(|e| format!("event loop: {e}"))?;
     Ok(app.report)
 }
@@ -100,6 +112,8 @@ struct App<S> {
     sim: S,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
+    /// The renderer plugged in by [`run_with`], if any.
+    drawer: Option<Box<dyn Drawer>>,
     pending: Vec<HostCommand>,
     /// When a `--frames` run fails, set when the window opens.
     deadline: Option<Instant>,
@@ -120,6 +134,7 @@ impl<S: Simulation> App<S> {
             sim,
             window: None,
             gpu: None,
+            drawer: None,
             pending: Vec::new(),
             deadline: None,
             last_step: None,
@@ -156,9 +171,11 @@ impl<S: Simulation> App<S> {
     }
 
     fn open(&mut self, event_loop: &ActiveEventLoop) {
-        let attributes = Window::default_attributes()
-            .with_title(WINDOW_TITLE)
-            .with_inner_size(LogicalSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1));
+        let attributes = Window::default_attributes().with_title(WINDOW_TITLE);
+        let attributes = match self.drawer.as_ref().and_then(|d| d.window_size()) {
+            Some((w, h)) => attributes.with_inner_size(PhysicalSize::new(w, h)),
+            None => attributes.with_inner_size(LogicalSize::new(WINDOW_SIZE.0, WINDOW_SIZE.1)),
+        };
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(e) => return self.stop(event_loop, Outcome::Failed(format!("cannot open the window: {e}"))),
@@ -167,6 +184,11 @@ impl<S: Simulation> App<S> {
             Ok(gpu) => {
                 self.report.adapter = Some(gpu.adapter.clone());
                 self.report.present_mode = Some(format!("{:?}", gpu.present_mode()));
+                if let Some(drawer) = self.drawer.as_mut()
+                    && let Err(e) = drawer.attach(gpu.device(), gpu.queue(), gpu.format())
+                {
+                    return self.stop(event_loop, Outcome::Failed(format!("attaching the renderer: {e}")));
+                }
                 let size = window.inner_size();
                 self.pending.push(HostCommand::Resized { width: size.width, height: size.height });
                 self.gpu = Some(gpu);
@@ -205,8 +227,19 @@ impl<S: Simulation> App<S> {
         };
         self.pending.clear();
         let Some(gpu) = self.gpu.as_mut() else { return };
-        match gpu.render(snapshot.clear) {
+        let rendered = match self.drawer.as_mut() {
+            Some(drawer) => gpu.render_with(&mut |device, queue, encoder, view, size| {
+                drawer.encode(device, queue, encoder, view, size, dt)
+            }),
+            None => gpu.render(snapshot.clear),
+        };
+        match rendered {
             Ok(FrameOutcome::Presented) => {
+                if let Some(drawer) = self.drawer.as_mut()
+                    && let Err(e) = drawer.presented(gpu.device(), gpu.queue())
+                {
+                    return self.stop(event_loop, Outcome::Failed(e));
+                }
                 let presented_at = Instant::now();
                 if let Some(last) = self.last_present {
                     self.report.timer.push(presented_at.duration_since(last));
@@ -246,6 +279,9 @@ impl<S: Simulation> ApplicationHandler for App<S> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if let Some(drawer) = self.drawer.as_mut() {
+            drawer.window_event(&event);
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.pending.push(HostCommand::CloseRequested);
@@ -266,6 +302,12 @@ impl<S: Simulation> ApplicationHandler for App<S> {
             }
             WindowEvent::RedrawRequested => self.frame(event_loop),
             _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        if let (Some(drawer), DeviceEvent::MouseMotion { delta }) = (self.drawer.as_mut(), event) {
+            drawer.mouse_motion(delta.0, delta.1);
         }
     }
 

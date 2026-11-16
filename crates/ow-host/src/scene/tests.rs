@@ -860,10 +860,11 @@ fn materials_name_their_textures_and_textures_decode_on_demand() {
     assert_eq!(red.status, MaterialStatus::Read);
     assert_eq!(red.class, "Engine.MaterialInstanceConstant");
     assert_eq!(red.parent.as_deref(), Some("Materials.Mat_Base"));
-    let named = |path: &str, parameter: Option<&str>, from| MaterialTexture {
+    let named = |path: &str, parameter: Option<&str>, from, depth| MaterialTexture {
         path: path.to_string(),
         parameter: parameter.map(str::to_string),
         from,
+        depth,
     };
     assert_eq!(
         red.textures,
@@ -871,12 +872,20 @@ fn materials_name_their_textures_and_textures_decode_on_demand() {
             named(
                 "Materials.Tex_Red",
                 Some("Diffuse"),
-                TextureSource::Instance
+                TextureSource::Instance,
+                0
             ),
-            named("Materials.Cube_Sky", Some("Sky"), TextureSource::Instance),
-            named("Materials.Tex_Base", None, TextureSource::Expression),
+            named(
+                "Materials.Cube_Sky",
+                Some("Sky"),
+                TextureSource::Instance,
+                0
+            ),
+            named("Materials.Tex_Base", None, TextureSource::Expression, 1),
         ]
     );
+    // The fixture's base material declares no TwoSided.
+    assert_eq!(red.two_sided, None);
     let placement = scene.placements.get(&key(0, 4)).unwrap();
     assert_eq!(
         scene.effective_materials(placement),

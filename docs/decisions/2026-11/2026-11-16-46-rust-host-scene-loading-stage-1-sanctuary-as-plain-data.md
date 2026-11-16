@@ -54,7 +54,9 @@ it was checked against is `tools/prepare_level.py`, the tool that built the mani
       matrix, Scale3D, a scale and an int whose meaning is not assigned. The values must be finite and the matrix
       affine, as in the tool.
     - A collection that fails these checks is a gap, and its components are excluded.
-    - A null entry is checked and its 84 bytes dropped, as the tool zips the two arrays and tolerates it.
+    - A null entry is checked and its 84 bytes dropped. The tool zips the two arrays and keeps that pose under
+      reference 0, which no component has, so it tolerates one null entry per level and stops on a second
+      ("Duplicate collection component"); the scene drops every null.
     - A component two entries list is a gap and is excluded. The tool stops the whole build there ("Duplicate
       collection component", `prepare_level.py` `Scene.build`).
     - The scale rule is decision 2026-09-18-04's: the component's own `Scale3D` and `Scale` when its tags set either.
@@ -88,7 +90,10 @@ it was checked against is `tools/prepare_level.py`, the tool that built the mani
     - Their holder is the store's `FirstInScanOrder` choice, so it may be another map's copy of the same path.
     - A section's effective material is the override at its slot (`Materials[i]` for section `i`), else the mesh's.
       The tool differs for a mesh with a triangle-less section: it drops such sections, then indexes `Materials` by
-      the position in the shortened list. No Sanctuary mesh has such a section, so no placement differs here.
+      the position in the shortened list. No Sanctuary mesh has such a section, so no placement differs here. How
+      that was checked: in the tool's rerun output (`scene.json`), every mesh's section slots run 0, 1, 2, ... with
+      none skipped (0 meshes of 433 skip one), and the stage-2 draw plan of the scene skipped 0 empty sections
+      (decision 2026-11-16-51).
 - **Verified (automated).** Eleven `ow-host` tests on invented packages, built with the testkit: toy `Core`, `Engine`
   and `WillowGame` code packages, and two map packages. They cover:
   - the placement and exclusion set, and the streamed level;
