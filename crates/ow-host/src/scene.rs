@@ -1702,14 +1702,14 @@ impl Loader<'_> {
 }
 
 /// A `ParameterName` value: `None` for the name `None`.
-fn parameter_name(name: &str) -> Option<String> {
+pub(crate) fn parameter_name(name: &str) -> Option<String> {
     (name != "None").then(|| name.to_string())
 }
 
 /// The object path of `index` in `package` as the game names it: an import's path is full; an export whose outermost
 /// export is a `Package` object is named by its path in the file, any other by `<file stem>.<path in the file>` (the
 /// definition store's rule, `ow_defs::identity`).
-fn full_path(package: &Package, index: i32) -> Result<String, PackageError> {
+pub(crate) fn full_path(package: &Package, index: i32) -> Result<String, PackageError> {
     let path = package.path_of(index)?;
     if index <= 0 {
         return Ok(path);
@@ -1804,7 +1804,7 @@ fn bad(object: &str, reason: &str) -> SceneError {
 // ---------------------------------------------------------------------------------------------- value readers
 
 /// Property `name` of loaded object `o`, or `None` where its class declares no such property.
-fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<Option<&'w Value>, String> {
+pub(crate) fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<Option<&'w Value>, String> {
     let class = space.heap.get(o).map_err(|e| e.to_string())?.class;
     let Some(p) = space.prop(class, name) else {
         return Ok(None);
@@ -1815,7 +1815,7 @@ fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<Option<&'w 
         .map_err(|e| format!("{name}: {e}"))
 }
 
-fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjRef>, String> {
+pub(crate) fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjRef>, String> {
     match read(space, o, name)? {
         Some(Value::Object(r)) => Ok(*r),
         None => Ok(None),
@@ -1823,7 +1823,7 @@ fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjR
     }
 }
 
-fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Vec<Option<ObjRef>>, String> {
+pub(crate) fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Vec<Option<ObjRef>>, String> {
     match read(space, o, name)? {
         Some(Value::Array(items)) => items
             .iter()
@@ -1837,7 +1837,7 @@ fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Vec<Option
     }
 }
 
-fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, String> {
+pub(crate) fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, String> {
     match read(space, o, name)? {
         Some(Value::Bool(b)) => Ok(*b),
         Some(v) => Err(format!("{name} is a {}, not a bool", v.kind_name())),
@@ -1845,7 +1845,7 @@ fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, String>
     }
 }
 
-fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f32, String> {
+pub(crate) fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f32, String> {
     match read(space, o, name)? {
         Some(Value::Float(f)) => Ok(*f),
         Some(v) => Err(format!("{name} is a {}, not a float", v.kind_name())),
@@ -1854,7 +1854,7 @@ fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f32, String>
 }
 
 /// Field `name` of struct value `v`, or `None`.
-fn struct_field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v Value> {
+pub(crate) fn struct_field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v Value> {
     let s = v.as_struct()?;
     let layout = space.classes.struct_layout(s.ty)?;
     let (entry, _) = layout.field(space.names.find(name)?)?;
@@ -1873,7 +1873,7 @@ fn read_vector(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<[f32; 3], S
     Ok(out)
 }
 
-fn read_rotator(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Rotator, String> {
+pub(crate) fn read_rotator(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Rotator, String> {
     let v = read(space, o, name)?.ok_or_else(|| format!("the class declares no {name}"))?;
     let mut out = [0i32; 3];
     for (slot, field) in out.iter_mut().zip(["Pitch", "Yaw", "Roll"]) {

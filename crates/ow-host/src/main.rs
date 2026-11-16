@@ -24,7 +24,9 @@ use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_host::camera::FlyCamera;
 use ow_host::draw::DrawPlan;
-use ow_host::render::{DrawReport, SceneDrawer};
+use ow_host::lighting::SceneLights;
+use ow_host::material::{Blend, MaterialLibrary, decode_texture};
+use ow_host::render::{DrawReport, Lighting, SceneDrawer};
 use ow_host::scene::{Scene, SceneAssets};
 
 /// How far above a player start the camera starts, uu (`tools/prepare_level.py` raises its camera by 100).
@@ -166,13 +168,49 @@ fn scene_window(
         }
     };
     let loaded = started.elapsed();
-    let plan = DrawPlan::build(&scene);
+    // Lane H8: the materials' and lights' reads, then the plan with them; the named-only plan for the counts before.
+    let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
+    let lights = SceneLights::read(&mut defs, &mut space, &scene);
+    let materials_read = started.elapsed();
+    let before = DrawPlan::build(&scene).stats;
+    let plan = DrawPlan::build_with(&scene, Some(&library));
     let planned = started.elapsed();
     let s = plan.stats;
+    println!(
+        "materials and lights read in {} ms: {} materials, {} textures only cooked lists name",
+        millis(materials_read - loaded),
+        library.materials.len(),
+        library.textures.len()
+    );
+    let lighting = Lighting::from_scene(&lights);
+    match &lights.sun {
+        Some(sun) => println!(
+            "sun {}:{}, brightness {}, toward {:?}; sky light {}; exposure {}",
+            sun.level,
+            sun.path,
+            sun.brightness,
+            sun.toward(),
+            lights.sky.as_ref().map_or("none".to_string(), |k| format!("{}:{}", k.level, k.path)),
+            lighting.exposure
+        ),
+        None => println!("no directional light: the viewer's constant light"),
+    }
+    let l = &lights.lightmaps;
+    println!(
+        "lightmaps (not decoded): {} LightMapTexture2D, {} ShadowMap2D, {} ShadowMap1D; the texture reader on the first: {}",
+        l.light_map_textures,
+        l.shadow_maps_2d,
+        l.shadow_maps_1d,
+        match &l.decodable {
+            Some(Ok(())) => "decoded".to_string(),
+            Some(Err(e)) => e.clone(),
+            None => "none to try".to_string(),
+        }
+    );
     println!("scene {map}: {} levels, {} placements, loaded in {} ms", scene.levels.len(), s.placements, millis(loaded));
     println!(
         "draw plan in {} ms: {} drawn, {} hidden, {} without a decoded mesh, {} refused transforms, {} mirrored",
-        millis(planned - loaded),
+        millis(planned - materials_read),
         s.drawn,
         s.hidden,
         s.no_mesh,
@@ -180,17 +218,39 @@ fn scene_window(
         s.mirrored
     );
     println!(
-        "{} meshes, {} materials with diffuse candidates, {} batches, {} section instances ({} empty sections skipped)",
+        "{} meshes, {} material slots, {} batches, {} section instances ({} empty sections skipped)",
         plan.meshes.len(),
-        plan.diffuse.len(),
+        plan.slots.len(),
         plan.batches.len(),
         s.instances,
         s.empty_sections
     );
     println!(
-        "untextured section instances: {} with no material, {} with a material not in the scene, {} whose material \
-         names no diffuse",
-        s.untextured_no_material, s.untextured_unknown_material, s.untextured_no_diffuse
+        "untextured section instances before (named diffuse only): {} with no material, {} with a material not in \
+         the scene, {} whose material names no diffuse",
+        before.untextured_no_material, before.untextured_unknown_material, before.untextured_no_diffuse
+    );
+    println!(
+        "untextured section instances after: {} with no material, {} with a material not in the scene, {} with no \
+         diffuse; {} textured by a fallback rule, {} by a constant colour",
+        s.untextured_no_material,
+        s.untextured_unknown_material,
+        s.untextured_no_diffuse,
+        s.fallback_textured,
+        s.constant_coloured
+    );
+    println!(
+        "section instances by blend: {} opaque, {} masked, {} translucent, {} additive, {} modulate, {} sky",
+        s.blend_count(Blend::Opaque),
+        s.blend_count(Blend::Masked),
+        s.blend_count(Blend::Translucent),
+        s.blend_count(Blend::Additive),
+        s.blend_count(Blend::Modulate),
+        s.sky_instances
+    );
+    println!(
+        "translucent section instances not drawn for want of an opacity: {} with no diffuse",
+        s.translucent_skipped
     );
     let start = scene.player_starts.values().next();
     let camera = match start {
@@ -205,10 +265,11 @@ fn scene_window(
         None => println!("no player start: camera at the origin"),
     }
     // The texture source owns the scene and the store, and decodes one texture at a time while the renderer uploads.
-    let source = Box::new(move |path: &str| scene.decode_texture(&defs, path).map_err(|e| e.to_string()));
+    let source = Box::new(move |path: &str| decode_texture(&defs, &scene, &library, path));
     let report = Rc::new(RefCell::new(DrawReport::default()));
     let drawer = SceneDrawer::new(
         plan,
+        lighting,
         source,
         camera,
         size,
@@ -233,6 +294,11 @@ fn scene_window(
         u.fallbacks,
         u.grey_materials,
         r.draw_calls
+    );
+    println!(
+        "translucent slots not drawn because their diffuse has no alpha below 255: {} ({} section instances); \
+         {} blended instances drawn one by one",
+        u.translucent_without_alpha, u.translucent_skipped_instances, r.blended_instances
     );
     if let Some((w, h)) = r.size {
         println!("drawable size {w}x{h}");
@@ -309,7 +375,7 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         }
     };
     print!("{spawn_text}");
-    let sanctuary::Loaded { scene, defs, collision, .. } = loaded;
+    let sanctuary::Loaded { scene, mut defs, mut space, collision, .. } = loaded;
     let Some(window) = window else {
         let Some(script) = script else { return ExitCode::from(2) };
         let started = Instant::now();
@@ -326,7 +392,18 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         };
     };
     let scripted = script.is_some();
-    let plan = DrawPlan::build(&scene);
+    // Drawn with the materials and lights as `scene_window` draws them (lane H8); drawing never feeds the simulation.
+    let read_started = Instant::now();
+    let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
+    let lights = SceneLights::read(&mut defs, &mut space, &scene);
+    let lighting = Lighting::from_scene(&lights);
+    println!(
+        "materials and lights read in {} ms: {} materials; exposure {}",
+        millis(read_started.elapsed()),
+        library.materials.len(),
+        lighting.exposure
+    );
+    let plan = DrawPlan::build_with(&scene, Some(&library));
     println!(
         "draw plan: {} drawn, {} batches, {} section instances; eye {} uu above the pawn's centre, vertical FOV {} \
          degrees, step {} s, at most {} steps a frame",
@@ -338,7 +415,7 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         ow_core::fmt::fmt_f(play::step_seconds(), 6),
         play::MAX_STEPS_PER_FRAME
     );
-    let source = Box::new(move |path: &str| scene.decode_texture(&defs, path).map_err(|e| e.to_string()));
+    let source = Box::new(move |path: &str| decode_texture(&defs, &scene, &library, path));
     let stats = Rc::new(RefCell::new(PlayStats::default()));
     let draw = Rc::new(RefCell::new(PlayDrawReport::default()));
     let end_shot = window.screenshot.as_ref().map(|p| {
@@ -347,6 +424,7 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
     });
     let drawer = PlayDrawer::new(
         plan,
+        lighting,
         source,
         window.size,
         window.screenshot.clone().map(|p| (u64::from(args::SCREENSHOT_FRAME), p)),
