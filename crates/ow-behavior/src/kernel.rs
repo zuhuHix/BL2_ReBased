@@ -32,9 +32,13 @@
 //!
 //! **Latent behaviors** (G2). A handler may set [`RunInfo::wait`]: its selected links all start new threads now, and
 //! the behavior runs again on this thread at [`ow_vm::latent::kernel_resume_at`] (`now + max(wait, 1/60)`), with
-//! `initial_run` false and the same `state`. A negative wait means finished. A latent thread whose sequence was
-//! disabled while it waited ends without running (G1); the record's check before **each** behavior of a running
-//! thread is not applied, as in the C++.
+//! `initial_run` false and the same `state`. A negative wait means finished.
+//!
+//! **G1 is applied only in part, as in the C++.** The record ends every thread of a sequence that is no longer
+//! enabled, at its start and before each behavior. Here only a resumed latent thread of a disabled sequence ends
+//! without running. A thread waiting on a delayed link and a thread parked by the 60-behavior cap still run after
+//! their sequence was disabled, and a running thread is not stopped between behaviors. That is the C++ behaviour,
+//! kept for parity; the record's rule is UNVERIFIED in the game and an open item (decision 2026-11-15-30).
 //!
 //! **Section C, enabling.** Enabling a sequence fires `OnBehaviorSequenceEnabled` on it after its enabled bit is set;
 //! disabling fires `OnBehaviorSequenceDisabled` before the bit is cleared. Enabling a sequence with
@@ -48,6 +52,10 @@
 //! falls due before its end runs in the same call. A thread parked at the current time (the 60-behavior cap) waits for
 //! the next call. Which clock the game's kernel reads is UNVERIFIED.
 //!
+//! **An N9 exception** (architecture 5.1). Game time is to come only from `Vm::clock`; this kernel keeps the C++
+//! provider's own `f64` time, for parity with `--behavior-run`'s `tick:<s>` steps. Moving it onto `Vm::clock` is a
+//! follow-up; [`Provider::tick`] already takes `&mut Vm`, so the switch changes no signature.
+//!
 //! **Context objects and input bindings** (G2, read coarsely). The objects a behavior runs on ([`Provider::contexts`])
 //! are those of its Context-type variable link, else the consumer's own object. Before a handler runs, each Input link
 //! whose property is a `...BehaviorContextData` struct gets the first linked object in its `ContextObject` and its
@@ -57,6 +65,15 @@
 //! the shared behavior object and clears it after (the C++ ran on a per-provider copy). The game's per-thread copy of a
 //! latent behavior is the handler's `state` here.
 //!
+//! **Errors.** A handler, a boundary description or the bind itself may fail; the run then stops with that error
+//! (as a C++ exception unwinds), and the properties the bind wrote get their earlier values back first, so a failed
+//! run leaves the shared definition as it was. A sequence whose disabled event fails stays enabled.
+//!
+//! **The behavior's `Outer` is the store's.** The C++ sets each behavior copy's `Outer` to its provider
+//! (`src/behavior.cpp`, for `BehaviorHelpers`' outer fallback). The kernel runs on the shared definitions, whose
+//! outer is the export's own (the provider, for a behavior cooked as its subobject), and does not rewrite it: forcing
+//! one provider as the outer of a definition another provider may share would be wrong.
+//!
 //! **Names.** Event and sequence names compare case-insensitively (FNames). The C++ compares the texts exactly; the
 //! two differ only for a caller that spells a name in another case.
 
@@ -65,7 +82,7 @@ use std::rc::Rc;
 
 use ow_core::{DetMap, NotYet};
 use ow_object::heap::Step;
-use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::ids::{ObjRef, PropAddr, PropId};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::latent::kernel_resume_at;
@@ -260,6 +277,11 @@ impl Provider {
     }
 
     /// The kernel over already decoded data.
+    ///
+    /// Precondition: `data` keeps the invariants [`provider::decode`] checks: every event's and behavior's
+    /// `start..start + length` lies inside its sequence's links, every link names a behavior of the sequence, and
+    /// every variable link names variables of the sequence. Data edited past them makes the kernel panic when it
+    /// follows the bad range or index.
     pub fn from_data(data: ProviderData) -> Self {
         let enabled = data.sequences.iter().map(|s| s.enabled_on_spawn).collect();
         let events = data
@@ -361,11 +383,28 @@ impl Provider {
         &mut self.run
     }
 
+    /// Behavior `id`.
+    ///
+    /// # Panics
+    /// If `id` names no behavior of this provider. The ids the kernel hands to handlers always do; use
+    /// [`Provider::get_behavior`] for an id from elsewhere.
     pub fn behavior(&self, id: BehaviorId) -> &Behavior {
         &self.data.sequences[id.sequence].behaviors[id.index]
     }
 
+    /// Behavior `id`, or `None` when the provider has no such behavior.
+    pub fn get_behavior(&self, id: BehaviorId) -> Option<&Behavior> {
+        self.data
+            .sequences
+            .get(id.sequence)?
+            .behaviors
+            .get(id.index)
+    }
+
     /// The name of the sequence `id` belongs to.
+    ///
+    /// # Panics
+    /// If `id.sequence` names no sequence of this provider.
     pub fn sequence_name(&self, id: BehaviorId) -> &str {
         &self.data.sequences[id.sequence].name
     }
@@ -512,9 +551,10 @@ impl Provider {
                     p.fire_in(vm, s, SEQUENCE_ENABLED_EVENT, &DetMap::new(), -1, &[])
                 } else {
                     // ... the disabled event before it is cleared.
-                    let fired = p.fire_in(vm, s, SEQUENCE_DISABLED_EVENT, &DetMap::new(), -1, &[]);
+                    // A failed event leaves the bit set, as the C++ exception skips the clear.
+                    p.fire_in(vm, s, SEQUENCE_DISABLED_EVENT, &DetMap::new(), -1, &[])?;
                     p.enabled[s] = false;
-                    fired
+                    Ok(())
                 }
             })?;
         }
@@ -562,6 +602,10 @@ impl Provider {
     /// The objects variable link `link` of behavior `id` resolves to: a named-variable reference resolves to the
     /// first same-named variable of the sequence that is not itself a reference; an object variable contributes its
     /// live object when it has one; a named Kismet variable contributes the object bound to that name, if any.
+    ///
+    /// # Panics
+    /// If `id.sequence` names no sequence, or `link` names a variable index outside it. The links of the provider's
+    /// own behaviors and events always fit (`provider::decode` checks them).
     pub fn linked_objects(&self, id: BehaviorId, link: &VariableLink) -> Vec<ObjRef> {
         let variables = &self.data.sequences[id.sequence].variables;
         let mut result = Vec::new();
@@ -595,6 +639,9 @@ impl Provider {
 
     /// The objects behavior `id` runs on: those of its Context-type variable link, else `own` (the consumer's own
     /// object). G2, UNVERIFIED. An empty list means the behavior does not run.
+    ///
+    /// # Panics
+    /// If `id` names no behavior of this provider (as [`Provider::behavior`]).
     pub fn contexts(&self, id: BehaviorId, own: ObjRef) -> Vec<ObjRef> {
         let behavior = self.behavior(id);
         match behavior
@@ -658,6 +705,9 @@ impl Provider {
     /// The object behavior property `property` reads, as a stock path (`""` is None): through its Input variable link
     /// if it has one (the variable's current value), else the behavior object's own property. `Ok(None)` (and an
     /// entry in `errors`) when the linked value is unknown.
+    ///
+    /// # Panics
+    /// If `id` names no behavior of this provider (as [`Provider::behavior`]).
     pub fn object_input(
         &mut self,
         vm: &Vm,
@@ -690,6 +740,9 @@ impl Provider {
     }
 
     /// The same for an int property; the second value tells whether it came from a variable.
+    ///
+    /// # Panics
+    /// If `id` names no behavior of this provider (as [`Provider::behavior`]).
     pub fn int_input(
         &mut self,
         vm: &Vm,
@@ -769,8 +822,15 @@ impl Provider {
         Ok(())
     }
 
-    /// The runner's input binding of `BehaviorContextData` properties (module documentation), before a run.
-    fn bind_context_inputs(&mut self, vm: &mut Vm, id: BehaviorId) -> Result<(), BehaviorError> {
+    /// The runner's input binding of `BehaviorContextData` properties (module documentation), before a run. Each
+    /// property's value is pushed to `saved` before it is first written, so a failure can be undone
+    /// ([`Self::restore_context_inputs`]).
+    fn bind_context_inputs(
+        &mut self,
+        vm: &mut Vm,
+        id: BehaviorId,
+        saved: &mut Vec<(PropId, Value)>,
+    ) -> Result<(), BehaviorError> {
         let behavior = self.behavior(id).clone();
         for link in behavior
             .variables
@@ -783,6 +843,12 @@ impl Provider {
             };
             if !Self::is_context_data(vm, &value) {
                 continue;
+            }
+            let class = vm.space.heap.get(behavior.object)?.class;
+            if let Some(p) = vm.space.prop(class, &link.property)
+                && !saved.iter().any(|(q, _)| *q == p)
+            {
+                saved.push((p, value.clone()));
             }
             let first = self.linked_objects(id, link).first().copied();
             Self::write_context_field(
@@ -801,6 +867,15 @@ impl Provider {
             )?;
         }
         Ok(())
+    }
+
+    /// After a failed run: the properties the bind wrote get back the values `saved` holds, last saved first. The
+    /// writes put back a value the same slot held a moment before, so they meet the slot's checks; should one fail
+    /// all the same, the run's own error is the one returned and the rest are still restored.
+    fn restore_context_inputs(vm: &mut Vm, o: ObjRef, saved: Vec<(PropId, Value)>) {
+        for (p, value) in saved.into_iter().rev() {
+            let _ = vm.space.write(o, PropAddr::scalar(p), value);
+        }
     }
 
     /// After a run: `ContextObject` is None again (the selector stays).
@@ -1090,6 +1165,37 @@ impl Provider {
         }
     }
 
+    /// Runs `handler` for behavior `id`: its selected ids (a boundary class lists the call and selects its fixed
+    /// outputs).
+    fn call_handler(
+        &mut self,
+        vm: &mut Vm,
+        handler: Handler,
+        id: BehaviorId,
+        event: &str,
+        class: &str,
+        name: &str,
+    ) -> Result<Vec<i32>, BehaviorError> {
+        match handler {
+            Handler::Run(f) => f(vm, self, id, event),
+            Handler::Boundary { describe, outputs } => {
+                self.boundary.push(format!("{event} -> {class}:{name}"));
+                let fields = match describe {
+                    Some(d) => d(vm, self, id)?,
+                    None => DetMap::new(),
+                };
+                self.boundary_calls.push(BoundaryCall {
+                    event: event.to_string(),
+                    class: class.to_string(),
+                    name: name.to_string(),
+                    sequence: self.data.sequences[id.sequence].name.clone(),
+                    fields,
+                });
+                Ok(outputs)
+            }
+        }
+    }
+
     /// A2 (module documentation): one behavior of a thread; what follows it is pushed as work.
     fn run_behavior(&mut self, vm: &mut Vm, at: ThreadAt) -> Result<(), BehaviorError> {
         let ThreadAt {
@@ -1142,26 +1248,21 @@ impl Provider {
             wait: -1.0,
             state,
         };
-        self.bind_context_inputs(vm, id)?;
-        let mut ids = match handler {
-            Handler::Run(f) => f(vm, self, id, &event)?,
-            Handler::Boundary { describe, outputs } => {
-                self.boundary.push(format!("{event} -> {class}:{name}"));
-                let fields = match describe {
-                    Some(d) => d(vm, self, id)?,
-                    None => DetMap::new(),
-                };
-                self.boundary_calls.push(BoundaryCall {
-                    event: event.clone(),
-                    class: class.clone(),
-                    name: name.clone(),
-                    sequence: self.data.sequences[s].name.clone(),
-                    fields,
-                });
-                outputs
+        // The bind writes into the shared behavior definition: whatever fails after the first write (the bind
+        // itself, the handler, the description, the clear), the properties it wrote get their earlier values back
+        // before the error is returned, so a failed run leaves the definition as it found it.
+        let mut saved = Vec::new();
+        let result = match self.bind_context_inputs(vm, id, &mut saved) {
+            Ok(()) => self.call_handler(vm, handler, id, &event, &class, &name),
+            Err(e) => Err(e),
+        };
+        let mut ids = match result.and_then(|ids| self.clear_context_inputs(vm, id).map(|()| ids)) {
+            Ok(ids) => ids,
+            Err(e) => {
+                Self::restore_context_inputs(vm, self.behavior(id).object, saved);
+                return Err(e);
             }
         };
-        self.clear_context_inputs(vm, id)?;
         let wait = self.run.wait;
         let state = self.run.state.take();
         if default_output {

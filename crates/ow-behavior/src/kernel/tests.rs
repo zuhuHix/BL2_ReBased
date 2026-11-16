@@ -898,3 +898,117 @@ fn sequences_are_addressed_by_their_first_name() {
     p.set_sequence_enabled(&mut env.vm, "S", false).unwrap();
     assert!(!p.sequence_enabled("S"));
 }
+
+// ------------------------------------------------------------------------------------------------ review r1
+
+#[test]
+fn a_failed_run_leaves_the_shared_definition_as_it_was() {
+    let mut env = Env::of(&variables_spec("BVAR_Int"));
+    let mut p = env.provider("P");
+    let pawn = toy_object(&mut env, "Pawn");
+    let object = p.behaviors("S")[0].object;
+    let class = env.vm.space.heap.get(object).unwrap().class;
+    let ctx = PropAddr::scalar(env.vm.space.prop(class, "Ctx").unwrap());
+    let cooked = env.vm.space.read(object, ctx).unwrap().clone();
+    assert_eq!(
+        env.vm.defs.origin(object, ctx),
+        ow_defs::overlay::ValueOrigin::Cooked
+    );
+    let seen = Rc::new(Cell::new(false));
+    let sink = seen.clone();
+    p.handle(
+        "WillowGame.Behavior_ToyInputs",
+        Handler::run(move |vm, p, id, _| {
+            // The bind happened: the context object is in the definition while the handler runs.
+            let o = p.behavior(id).object;
+            let ctx = provider::property(&vm.space, o, "Ctx")?.unwrap();
+            sink.set(
+                provider::field(&vm.space, &ctx, "ContextObject") != Some(&Value::Object(None)),
+            );
+            Err(BehaviorError::Data("boom".into()))
+        }),
+    );
+    let e = p
+        .fire_event(&mut env.vm, "Go", &DetMap::new(), -1, &[None, Some(pawn)])
+        .unwrap_err();
+    assert_eq!(e.to_string(), "boom");
+    assert!(seen.get(), "the handler ran with the input bound");
+    // Back to the cooked value (selector included) and still a cooked element.
+    assert_eq!(env.vm.space.read(object, ctx).unwrap(), &cooked);
+    assert_eq!(
+        env.vm.defs.origin(object, ctx),
+        ow_defs::overlay::ValueOrigin::Cooked
+    );
+
+    // A boundary description that fails: the same.
+    p.report_at_boundary(
+        "WillowGame.Behavior_ToyInputs",
+        Some(Rc::new(|_: &mut Vm, _: &mut Provider, _: BehaviorId| {
+            Err(BehaviorError::Data("no fields".into()))
+        })),
+        Vec::new(),
+    );
+    let e = p
+        .fire_event(&mut env.vm, "Go", &DetMap::new(), -1, &[None, Some(pawn)])
+        .unwrap_err();
+    assert_eq!(e.to_string(), "no fields");
+    assert_eq!(env.vm.space.read(object, ctx).unwrap(), &cooked);
+    // The successful path still leaves the C++ state: ContextObject None, the selector 4.
+    p.report_at_boundary("WillowGame.Behavior_ToyInputs", None, Vec::new());
+    p.fire_event(&mut env.vm, "Go", &DetMap::new(), -1, &[None, Some(pawn)])
+        .unwrap();
+    let after = env.vm.space.read(object, ctx).unwrap().clone();
+    assert_eq!(
+        provider::field(&env.vm.space, &after, "ContextObject"),
+        Some(&Value::Object(None))
+    );
+    assert_eq!(
+        provider::field(&env.vm.space, &after, "BehaviorContext"),
+        Some(&Value::Byte(USE_CONTEXT_OBJECT))
+    );
+}
+
+#[test]
+fn a_failed_disabled_event_leaves_the_sequence_enabled() {
+    let mut env = Env::of(&enabling());
+    let mut p = env.provider("P");
+    p.handle(
+        "WillowGame.Behavior_ToySame",
+        Handler::run(|_, _, _, _| Err(BehaviorError::Data("refused".into()))),
+    );
+    let e = p.set_sequence_enabled(&mut env.vm, "C", false).unwrap_err();
+    assert_eq!(e.to_string(), "refused");
+    assert!(p.sequence_enabled("C"));
+}
+
+#[test]
+fn a_latent_wait_and_its_own_delayed_link_due_together_run_link_first() {
+    // T selects its id-0 link to N (delay 0.5) and waits 0.5: N is parked before T, so it runs first.
+    let spec = Spec::new(
+        "P",
+        vec![Seq {
+            name: "S",
+            enabled_on_spawn: Some(true),
+            events: vec![ev("Go", (0, 1))],
+            behaviors: vec![
+                beh("T", "Behavior_ToyInputs", (1, 1)),
+                beh("N", "Behavior_ToySame", (0, 0)),
+            ],
+            links: vec![(0, -1, 0.0), (1, 0, 0.5)],
+            ..Seq::default()
+        }],
+        vec![],
+    );
+    let mut env = Env::of(&spec);
+    let mut p = env.provider("P");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    p.handle(
+        "WillowGame.Behavior_ToyInputs",
+        latent_handler(0.5, seen.clone()),
+    );
+    event(&mut env, &mut p, "Go");
+    assert_eq!(p.trace, ["Go -> T"]);
+    p.tick(&mut env.vm, 0.5).unwrap();
+    assert_eq!(p.trace, ["Go -> T", "Go -> N", "Go -> T"]);
+    assert_eq!(*seen.borrow(), [(true, true, 0), (false, true, 1)]);
+}

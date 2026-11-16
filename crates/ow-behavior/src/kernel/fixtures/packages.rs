@@ -33,7 +33,9 @@ pub const LINK_TYPES: [&str; 4] = [
 
 fn core() -> Vec<u8> {
     let mut d = Declarations::new(&[]);
-    d.cls("Object", 0);
+    let object = d.cls("Object", 0);
+    // The class of a package export (a package cooked into another file holds one).
+    d.cls("Package", object);
     d.build()
 }
 
@@ -235,6 +237,9 @@ pub struct Spec {
     pub class: &'static str,
     pub sequences: Vec<Seq>,
     pub block: Vec<Word>,
+    /// When set, the provider sits in an export of class `Core.Package` of that name, as a package cooked into
+    /// another file holds it: its path is then `<name>.<provider>` in every file that holds it (a cooked copy).
+    pub outer_package: Option<&'static str>,
 }
 
 impl Spec {
@@ -244,6 +249,7 @@ impl Spec {
             class: "BehaviorProviderDefinition",
             sequences,
             block,
+            outer_package: None,
         }
     }
 }
@@ -275,6 +281,13 @@ pub fn provider_package(spec: &Spec) -> Vec<u8> {
         r
     };
     let provider = p.add_export(provider_class, spec.name, Vec::new());
+    if let Some(outer) = spec.outer_package {
+        let package_class = p.add_import("Core", "Class", core, "Package");
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend_from_slice(&p.none());
+        let package = p.add_export(package_class, outer, payload);
+        p.set_outer(provider, package);
+    }
     // Behavior exports, sequence by sequence.
     let mut behavior_refs: Vec<Vec<i32>> = Vec::new();
     for sequence in &spec.sequences {
