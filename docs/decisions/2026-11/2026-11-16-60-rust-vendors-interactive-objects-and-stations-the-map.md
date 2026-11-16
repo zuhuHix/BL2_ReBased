@@ -8,7 +8,9 @@ a line says how it was confirmed. No parsing behaviour of the reader changes.
 - **What changed.** `crates/ow-mission/src/vendors.rs`, `interactive.rs` and the new `stations.rs` (one `pub mod`
   line in `crates/ow-mission/src/lib.rs`, the line the brief allows), their test modules
   (`vendors/tests.rs`, `interactive/tests.rs`, `stations/tests.rs`), and the ignored installed-game run
-  `crates/ow-mission/tests/w7_worldlogic_installed.rs`. No dependency, no `Cargo.toml` change, no other crate edited.
+  `crates/ow-mission/tests/w7_worldlogic_installed.rs`. Review r1 of PR #361 added `ow_items::registry::decode_at`
+  (the registry's own reading at a given prefix, made public; the registry's reading at 4 is unchanged) and one
+  paragraph in `docs/verification/VENDORS.md` section 3. No dependency, no `Cargo.toml` change.
 - **Rule R2 decides the split.** The use key's path, the afford check, the use and the payment order, the item
   status of a shop row, the featured price, buy-back, station registration, the checkpoint, `CanResurrectHere`, the
   respawn placement order and the exit-point round robin are installed script. The VM runs them; this lane wrote no
@@ -19,15 +21,19 @@ a line says how it was confirmed. No parsing behaviour of the reader changes.
 - **Vendors.**
   - The machine reading ports `tools/prepare_vendors.py`'s: opportunity point, population factory, shop kind,
     balance, the `Inventory` and `FeaturedItem` attachments, the level-first package order, the streamed levels.
-  - Placed actors are read as the tool reads them: the first of the prefixes 4, 8, 26 whose tag walk ends exactly at
-    the payload's end. The registry's tag lookup reads at 4 only (right for definitions, not for placed actors), so
-    `MapView` has its own small reader with a local copy of the registry's value conversion (`plain`, private to
-    `ow-items`; a shared one is an open item).
+  - Placed actors are read as the tool reads them: the first of the prefixes 4, 8, 26 that decodes with no trailing
+    byte, any failure at a prefix giving way to the next. The registry's tag lookup reads at 4 only (right for
+    definitions, not for placed actors), so `MapView` calls `ow_items::registry::decode_at` (the registry's own
+    walk and value conversion, `%.9g` floats included) at each prefix. An object that fits no prefix, or a referenced
+    object that does not decode, is recorded with its reason (`MachineRead::Skipped`, `Skip`), never dropped.
+  - The factory of a population is the tool's `factory_of`: the first export below the definition in package and
+    export order. A repeated configuration name keeps its last configuration, as the tool's dict does.
   - Reference mode reproduces the tool's listing (`loot_pools.expand` and `flatten`); Off mode refuses it.
   - Off mode: `GenerateInventory` (native, not read) is `NotYet`; `roll_attachment` fires one attachment's pool
     through W4-POOLS' Off roll with no variance formula (the machine's is not read). Not the shelf.
   - Prices: `trunc(value * markup)` in single precision with `markup = level * 0.14 + 4.1`, the shape the live dump
-    confirmed on 79 of 79 rows (VENDORS.md section 3); the two attributes are live values. The featured item's cap
+    confirmed on 79 of 79 rows (VENDORS.md section 3, which writes `floor`; the two agree on every live, positive row,
+    the truncation is the script's cast, and a negative product is UNVERIFIED); the two attributes are live values. The featured item's cap
     (`GetCappedCurrencyAmount`) is not read, so none is applied. The sale price is `NotYet`. Buy-back is the item's
     monetary value (script).
   - The shop reset: `MinutesBetweenShopResets * 60` from the class default (script); the countdown is `NotYet`.
@@ -44,10 +50,16 @@ a line says how it was confirmed. No parsing behaviour of the reader changes.
   - So an interactive object's use stops in Off at `IsComponentUsable`, the first native its script reaches. The
     definition's `OnUsedBy` event native is not read either.
 - **Stations.** `stations()` reads the placed fast-travel, level-travel and New-U stations with their definition,
-  `bInitiallyActive`, destination, exit points and touch values. Their natives (`GetTravelStationDefinition`,
+  `bInitiallyActive`, destination, exit points and touch values, each `None` when untagged or unresolved (the class
+  defaults are not read; no default is invented). Their natives (`GetTravelStationDefinition`,
   `GetIsRegistered`, `TouchDenied`, `IsFastTravelEnabled`, `FindTravelStation`, the exit-point updates) are not read
   and left unbound.
-- **The installed Sanctuary, headless** (ignored test, output under `local/p2/w7-worldlogic/`, stage 8):
+- **Payment details.** A golden-key cost above 1,000 is refused: a guard of ours against looping on bad data,
+  UNVERIFIED (the record reads that the native never refuses). Another cost is negated with wrapping, so `i32::MIN`
+  stays a negative delta that `AddCurrencyOnHand` clamps to 0. In the use-target walk, ignoring a blocking hit after
+  the choice is our reading of the record (UNVERIFIED).
+- **The installed Sanctuary, headless** (ignored test, output under `local/p2/w7-worldlogic/`, stage 8; since
+  review r1 it asserts every count below and, when `local/slice/vendors.json` is present, the field comparison):
   - 10 levels.
   - **8 vending machines**: 2 weapons, 3 Ammo Dump, 2 Dr. Zed, 1 Black Market, the set VENDORS.md section 1 records.
   - The Reference listing equals `tools/prepare_vendors.py`'s `local/slice/vendors.json` on **1,846 of 1,846

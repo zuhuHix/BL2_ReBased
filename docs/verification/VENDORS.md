@@ -57,6 +57,11 @@ package's `Init_MarkupCalc_P1` / `P2` give this shape: offset plus unowned item 
 attributes carry no value in the packages, which is why the live read was needed. The arithmetic is done in single
 precision, and the featured item uses the same markup. The player's own commerce markup read 1.0.
 
+`floor` and truncation toward zero give the same price for every live row, since each value and markup is positive.
+The featured item's price is truncated: the script's float-to-int cast in `WillowVendingMachine.GetFeaturedItem`.
+The Rust port (`ow_mission::vendors::shop_price`, decision 2026-11-16-60) truncates. For a negative product, which no
+data gives, the stock price native was not read, so which rounding the game uses there is `UNVERIFIED`.
+
 `UNVERIFIED`: the price the game pays when the player sells. The same native quote, asked about the player's own
 backpack items, returned the buy formula, not a sale price. The host pays the item's monetary value on a sale until a
 live sale is observed. Buy-back is also `UNVERIFIED`.

@@ -3,9 +3,12 @@
 //!
 //! Run: `cargo test -p ow-mission --test w7_worldlogic_installed -- --ignored --nocapture` (`OW_GAME` names the
 //! install; the default is the Steam folder). It reads the packages read-only and writes game data only under the
-//! workspace's ignored `local/p2/w7-worldlogic/` (AGENTS.md rule 1). `report.json`'s `reference_listing` has the
-//! shape of `tools/prepare_vendors.py`'s `machines` (id, kind, inventory and featured rows of pool, probability and
-//! leaves), so the two can be compared field by field.
+//! workspace's ignored `local/p2/w7-worldlogic/` (AGENTS.md rule 1).
+//!
+//! It asserts the counts the lane recorded (decision 2026-11-16-60) and, when `local/slice/vendors.json`
+//! (`tools/prepare_vendors.py`'s output at stage 8) is present, compares the Reference listing with it field by field:
+//! each machine's id and kind, each row's pool and probability (value and int/float kind), each leaf's balance,
+//! weight and class; every one must agree and the compared count must be the recorded one.
 
 use std::path::{Path, PathBuf};
 
@@ -35,6 +38,222 @@ use ow_object::heap::ObjectSpace;
 const MAP: &str = "Sanctuary_P";
 const STAGE: i32 = 8;
 const SEED: u32 = 20_261_116;
+
+/// The counts recorded for the installed Sanctuary (decision 2026-11-16-60).
+const MACHINES: usize = 8;
+const ATTACHMENTS: usize = 58;
+const ATTACHMENTS_ROLLED: usize = 52;
+const OBJECTS: usize = 198;
+const STATIONS: usize = 4;
+const COMPARED_FIELDS: usize = 1_846;
+
+// ---- a minimal JSON reader for the tool's output (test code: objects, arrays, strings, numbers, literals) ----
+
+struct Json<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl Json<'_> {
+    fn ws(&mut self) {
+        while self.i < self.b.len() && self.b[self.i].is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+
+    fn eat(&mut self, c: u8) -> Result<(), String> {
+        self.ws();
+        if self.b.get(self.i) == Some(&c) {
+            self.i += 1;
+            Ok(())
+        } else {
+            Err(format!("expected {} at byte {}", c as char, self.i))
+        }
+    }
+
+    fn value(&mut self, depth: u32) -> Result<Pv, String> {
+        if depth > 64 {
+            return Err("nested too deep".into());
+        }
+        self.ws();
+        match self.b.get(self.i) {
+            Some(b'{') => {
+                self.i += 1;
+                let mut m = DetMap::new();
+                self.ws();
+                if self.b.get(self.i) == Some(&b'}') {
+                    self.i += 1;
+                    return Ok(Pv::Map(m));
+                }
+                loop {
+                    self.ws();
+                    let Pv::Str(k) = self.string()? else { unreachable!() };
+                    self.eat(b':')?;
+                    m.insert(k, self.value(depth + 1)?);
+                    self.ws();
+                    match self.b.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(b'}') => {
+                            self.i += 1;
+                            return Ok(Pv::Map(m));
+                        }
+                        _ => return Err(format!("bad object at byte {}", self.i)),
+                    }
+                }
+            }
+            Some(b'[') => {
+                self.i += 1;
+                let mut v = Vec::new();
+                self.ws();
+                if self.b.get(self.i) == Some(&b']') {
+                    self.i += 1;
+                    return Ok(Pv::List(v));
+                }
+                loop {
+                    v.push(self.value(depth + 1)?);
+                    self.ws();
+                    match self.b.get(self.i) {
+                        Some(b',') => self.i += 1,
+                        Some(b']') => {
+                            self.i += 1;
+                            return Ok(Pv::List(v));
+                        }
+                        _ => return Err(format!("bad array at byte {}", self.i)),
+                    }
+                }
+            }
+            Some(b'"') => self.string(),
+            Some(b't') => self.word("true", Pv::Bool(true)),
+            Some(b'f') => self.word("false", Pv::Bool(false)),
+            Some(b'n') => self.word("null", Pv::Null),
+            Some(_) => self.number(),
+            None => Err("unexpected end".into()),
+        }
+    }
+
+    fn word(&mut self, w: &str, v: Pv) -> Result<Pv, String> {
+        if self.b[self.i..].starts_with(w.as_bytes()) {
+            self.i += w.len();
+            Ok(v)
+        } else {
+            Err(format!("bad literal at byte {}", self.i))
+        }
+    }
+
+    fn number(&mut self) -> Result<Pv, String> {
+        let start = self.i;
+        while self.i < self.b.len() && matches!(self.b[self.i], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
+            self.i += 1;
+        }
+        let t = std::str::from_utf8(&self.b[start..self.i]).map_err(|e| e.to_string())?;
+        if t.contains(['.', 'e', 'E']) {
+            t.parse().map(Pv::Float).map_err(|e| format!("{t}: {e}"))
+        } else {
+            t.parse().map(Pv::Int).map_err(|e| format!("{t}: {e}"))
+        }
+    }
+
+    fn string(&mut self) -> Result<Pv, String> {
+        self.eat(b'"')?;
+        let mut out = String::new();
+        loop {
+            let Some(&c) = self.b.get(self.i) else { return Err("unterminated string".into()) };
+            self.i += 1;
+            match c {
+                b'"' => return Ok(Pv::Str(out)),
+                b'\\' => {
+                    let e = *self.b.get(self.i).ok_or("bad escape")?;
+                    self.i += 1;
+                    match e {
+                        b'n' => out.push('\n'),
+                        b't' => out.push('\t'),
+                        b'u' => {
+                            let hex = std::str::from_utf8(self.b.get(self.i..self.i + 4).ok_or("bad escape")?)
+                                .map_err(|e| e.to_string())?;
+                            let code = u32::from_str_radix(hex, 16).map_err(|e| e.to_string())?;
+                            out.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+                            self.i += 4;
+                        }
+                        other => out.push(other as char),
+                    }
+                }
+                _ => {
+                    // Copy one UTF-8 sequence whole.
+                    let start = self.i - 1;
+                    let mut end = self.i;
+                    while end < self.b.len() && (self.b[end] & 0xC0) == 0x80 {
+                        end += 1;
+                    }
+                    out.push_str(std::str::from_utf8(&self.b[start..end]).map_err(|e| e.to_string())?);
+                    self.i = end;
+                }
+            }
+        }
+    }
+}
+
+fn parse_json(text: &str) -> Result<Pv, String> {
+    let mut j = Json { b: text.as_bytes(), i: 0 };
+    j.value(0)
+}
+
+/// The differences between our listing (`report.json`'s rows) and the tool's machines; the count of fields compared.
+fn compare(ours: &[Pv], tool: &Pv, diffs: &mut Vec<String>) -> usize {
+    let theirs = tool.at("machines").items();
+    let mut fields = 0usize;
+    if ours.len() != theirs.len() {
+        diffs.push(format!("{} machines against {}", ours.len(), theirs.len()));
+    }
+    for m in ours {
+        let id = m.at("id").as_str().unwrap_or("");
+        let Some(t) = theirs.iter().find(|t| t.at("id").as_str() == Some(id)) else {
+            diffs.push(format!("{id}: not in the tool's output"));
+            continue;
+        };
+        fields += 1;
+        if m.at("kind") != t.at("kind") {
+            diffs.push(format!("{id}: kind {:?} against {:?}", m.at("kind"), t.at("kind")));
+        }
+        for config in ["inventory", "featured"] {
+            let (a, b) = (m.at(config).items(), t.at(config).items());
+            if a.len() != b.len() {
+                diffs.push(format!("{id} {config}: {} rows against {}", a.len(), b.len()));
+                continue;
+            }
+            for (ra, rb) in a.iter().zip(b) {
+                fields += 2;
+                if ra.at("pool") != rb.at("pool") {
+                    diffs.push(format!("{id} {config}: pool {:?} against {:?}", ra.at("pool"), rb.at("pool")));
+                }
+                // The value and its int or float kind, as the tool's JSON writes it.
+                if ra.at("probability") != rb.at("probability") {
+                    diffs.push(format!(
+                        "{id} {config}: probability {:?} against {:?}",
+                        ra.at("probability"),
+                        rb.at("probability")
+                    ));
+                }
+                let (la, lb) = (ra.at("items").items(), rb.at("items").items());
+                if la.len() != lb.len() {
+                    diffs.push(format!("{id} {config}: {} leaves against {}", la.len(), lb.len()));
+                    continue;
+                }
+                for (x, y) in la.iter().zip(lb) {
+                    fields += 3;
+                    for k in ["balance", "class"] {
+                        if x.at(k) != y.at(k) {
+                            diffs.push(format!("{id} {config}: {k} {:?} against {:?}", x.at(k), y.at(k)));
+                        }
+                    }
+                    if x.at("weight").number() != y.at("weight").number() {
+                        diffs.push(format!("{id} {config}: weight {:?} against {:?}", x.at("weight"), y.at("weight")));
+                    }
+                }
+            }
+        }
+    }
+    fields
+}
 
 fn game() -> PathBuf {
     std::env::var_os("OW_GAME")
@@ -141,6 +360,8 @@ fn installed_sanctuary_world_logic() {
         *kinds.entry(m.kind.name()).or_insert(0) += 1;
     }
     summary.push(format!("vending machines {} {kinds:?}, skipped points {}", machines.len(), skipped.len()));
+    assert!(skipped.is_empty(), "skipped shop points: {skipped:?}");
+    assert_eq!(machines.len(), MACHINES, "{kinds:?}");
     let mut listed = Vec::new();
     for (level, m) in &machines {
         let mut values = view.values(*level).unwrap();
@@ -155,10 +376,28 @@ fn installed_sanctuary_world_logic() {
             ("featured", rows_json(&featured)),
         ]));
     }
+    let tool_file = workspace().join("local").join("slice").join("vendors.json");
+    match std::fs::read_to_string(&tool_file) {
+        Ok(text) => {
+            let tool = parse_json(&text).unwrap();
+            assert_eq!(tool.at("stage").number(), Some(f64::from(STAGE)), "the tool's output is at another stage");
+            let mut diffs = Vec::new();
+            let fields = compare(&listed, &tool, &mut diffs);
+            summary.push(format!(
+                "prepare_vendors.py comparison: {fields} fields compared, {} difference(s)",
+                diffs.len()
+            ));
+            assert!(diffs.is_empty(), "differences from prepare_vendors.py: {diffs:#?}");
+            assert_eq!(fields, COMPARED_FIELDS);
+        }
+        Err(e) => summary.push(format!("prepare_vendors.py comparison: not run ({}: {e})", tool_file.display())),
+    }
     report.insert("reference_listing".to_string(), Pv::List(listed));
 
     // ---- interactive objects and stations (package data, mode-free) ----
-    let objects = census(&view);
+    let (objects, object_skips) = census(&view);
+    assert!(object_skips.is_empty(), "skipped objects: {object_skips:?}");
+    assert_eq!(objects.len(), OBJECTS);
     let mut by_class: DetMap<String, (usize, usize, usize)> = DetMap::new();
     for o in &objects {
         let key = format!(
@@ -204,34 +443,35 @@ fn installed_sanctuary_world_logic() {
         "  with a use-cost behavior: {costly}; use resolved in Off mode: 0 (the script stops at the unread \
          WillowInteractiveObject.IsComponentUsable)"
     ));
-    let found_stations = stations(&view);
+    let (found_stations, station_skips) = stations(&view);
+    assert!(station_skips.is_empty(), "skipped stations: {station_skips:?}");
+    assert_eq!(found_stations.len(), STATIONS);
     summary.push(format!("travel stations {}:", found_stations.len()));
     let mut station_rows = Vec::new();
     for st in &found_stations {
         summary.push(format!(
-            "  {}:{} {} definition {} initially_active {:?} exit points {} touch {:?}",
+            "  {}:{} {} definition {} initially_active {:?} exit points {:?} touch {:?} / {:?}",
             st.level,
             st.path.rsplit('.').next().unwrap_or(""),
             st.kind.name(),
             st.definition.as_deref().unwrap_or("-"),
             st.initially_active,
             st.exit_points,
-            st.touch
+            st.touch_radius,
+            st.touch_height
         ));
         station_rows.push(map(vec![
             ("level", s(&st.level)),
             ("path", s(&st.path)),
             ("kind", s(st.kind.name())),
             ("definition", st.definition.as_deref().map_or(Pv::Null, s)),
-            ("exit_points", Pv::Int(i64::try_from(st.exit_points).unwrap())),
+            ("exit_points", st.exit_points.map_or(Pv::Null, |n| Pv::Int(i64::try_from(n).unwrap()))),
         ]));
     }
     report.insert("stations".to_string(), Pv::List(station_rows));
     drop(view);
     // The package-data half is written before the Off rolls, so a failure there keeps it.
-    std::fs::write(out_dir.join("summary.txt"), summary.join("
-") + "
-").unwrap();
+    std::fs::write(out_dir.join("summary.txt"), summary.join("\n") + "\n").unwrap();
     std::fs::write(out_dir.join("report.json"), Pv::Map(report.clone()).to_json()).unwrap();
 
     // ---- Off: each attachment's pool fired once through W4-POOLS' roll ----
@@ -298,6 +538,8 @@ fn installed_sanctuary_world_logic() {
     for (what, n) in &not_yet {
         summary.push(format!("  {n} x {what}"));
     }
+    assert_eq!((attachment_counts.0, attachment_counts.1), (ATTACHMENTS, ATTACHMENTS_ROLLED), "{not_yet:#?}");
+    assert!(not_yet.keys().all(|k| !k.starts_with("error:")), "{not_yet:#?}");
     report.insert("off_rolls".to_string(), Pv::List(off_rows));
 
     let text = summary.join("\n") + "\n";

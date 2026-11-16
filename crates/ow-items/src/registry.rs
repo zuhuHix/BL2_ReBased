@@ -823,9 +823,32 @@ fn error_text(error: &dyn std::error::Error) -> String {
 /// `ow-package --properties <export> --property-offset 4 --array-schema <schema>`, as `decoded()` and
 /// `static_arrays()` read it. Fails where the C++ command fails (the range checks, the export's path, the walk).
 fn decode(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Decoded, props::PropError> {
-    props::property_range(pkg, export, 4)?;
+    decode_from(pkg, export, 4, typer).map(|(d, _)| d)
+}
+
+/// `ow-package --properties <export> --property-offset <start> --array-schema <schema>` as the tools read it
+/// (`weapon_recipe.plain` of the result): the tagged properties of `export`, walked from `start` bytes into its
+/// payload, as a dict by name, and where the walk stopped (from the payload's start), so a caller can tell an exact
+/// walk from one that leaves trailing bytes (the tools' `trailing_bytes`). The registry's own reading is `start` 4.
+/// Added for lane W7-WORLDLOGIC (review r1 of PR #361), which reads placed actors at the tools' prefixes.
+pub fn decode_at(
+    pkg: &Package,
+    export: i32,
+    start: usize,
+    typer: &SchemaTyper,
+) -> Result<(Pv, usize), props::PropError> {
+    decode_from(pkg, export, start, typer).map(|(d, end)| (d.props, end))
+}
+
+fn decode_from(
+    pkg: &Package,
+    export: i32,
+    start: usize,
+    typer: &SchemaTyper,
+) -> Result<(Decoded, usize), props::PropError> {
+    props::property_range(pkg, export, start)?;
     pkg.path_of(export)?;
-    let walked = props::read_tagged(pkg, export, 4, typer)?;
+    let walked = props::read_tagged(pkg, export, start, typer)?;
     let mut map = DetMap::new();
     let mut statics: DetMap<String, Vec<(i32, Pv)>> = DetMap::new();
     for e in walked.entries.iter().filter(|e| e.tag.is_some()) {
@@ -847,10 +870,13 @@ fn decode(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Decoded, pr
             (k, v.into_iter().map(|(_, x)| x).collect())
         })
         .collect();
-    Ok(Decoded {
-        props: Pv::Map(map),
-        statics,
-    })
+    Ok((
+        Decoded {
+            props: Pv::Map(map),
+            statics,
+        },
+        walked.end,
+    ))
 }
 
 /// `Path(file).relative_to(root).as_posix()`.

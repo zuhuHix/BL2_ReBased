@@ -30,9 +30,9 @@
 //! `SetStationActivatedState` other than registration was not traced).
 //!
 //! **What this module owns:** reading the placed stations of a map ([`stations`]), which a world spawns before the
-//! script can register or choose them.
+//! script can register or choose them. A field the packages leave untagged is `None`, never a default (rule R3).
 
-use crate::vendors::MapView;
+use crate::vendors::{MapView, Skip};
 use ow_items::registry::Pv;
 
 #[cfg(test)]
@@ -83,24 +83,37 @@ pub struct Station {
     pub kind: StationKind,
     /// The station's definition (`TravelDefinition`, else `StationDefinition`, else `InteractiveObjectDefinition`).
     pub definition: Option<String>,
-    /// A fast-travel definition's `bInitiallyActive` (untagged reads false: the class default is not read here).
+    /// A fast-travel definition's `bInitiallyActive` when the definition tags it; `None` when untagged (the class
+    /// default is not read here), for another kind, or when the definition does not resolve.
     pub initially_active: Option<bool>,
     /// `TeleportDest`.
     pub teleport_dest: Option<String>,
-    /// The number of `ExitPoints` of the destination.
-    pub exit_points: usize,
-    /// `StationTouchRadius` and `StationTouchHeight` when tagged.
-    pub touch: Option<(f64, f64)>,
+    /// The number of `ExitPoints` the destination tags (an untagged array counts 0, an empty array); `None` when the
+    /// station names no destination or the destination does not resolve.
+    pub exit_points: Option<usize>,
+    /// `StationTouchRadius` and `StationTouchHeight`, each when tagged (the class defaults are not read here).
+    pub touch_radius: Option<f64>,
+    pub touch_height: Option<f64>,
 }
 
 fn text(v: &Pv) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty() && *s != "None").map(str::to_string)
 }
 
-/// The placed travel stations of every level of `view`, in level then export order.
-pub fn stations(view: &MapView) -> Vec<Station> {
+/// The placed travel stations of every level of `view`, in level then export order, and what had to be left out
+/// (a station or a referenced object that did not decode), with the reason.
+pub fn stations(view: &MapView) -> (Vec<Station>, Vec<Skip>) {
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     for level in &view.levels {
+        // A referenced object: `None` when absent; a decode failure is recorded and also gives `None`.
+        let follow = |path: &str, skipped: &mut Vec<Skip>| match level.props(path) {
+            Ok(p) => p,
+            Err(e) => {
+                skipped.push(Skip::new(&level.name, path, e));
+                None
+            }
+        };
         for (path, class) in &level.exports {
             if path.matches('.').count() != 2 || !path.starts_with("TheWorld.PersistentLevel.") {
                 continue;
@@ -108,25 +121,27 @@ pub fn stations(view: &MapView) -> Vec<Station> {
             let Some(kind) = StationKind::of_class(class) else {
                 continue;
             };
-            let props = level.props(path).unwrap_or(Pv::Null);
+            let props = match level.props(path) {
+                Ok(Some(p)) => p,
+                Ok(None) => continue,
+                Err(e) => {
+                    skipped.push(Skip::new(&level.name, path, e));
+                    continue;
+                }
+            };
             let definition = ["TravelDefinition", "StationDefinition", "InteractiveObjectDefinition"]
                 .iter()
                 .find_map(|k| text(props.at(k)));
             let initially_active = match (kind, &definition) {
-                (StationKind::FastTravel, Some(d)) => level.props(d).map(|p| p.at("bInitiallyActive").truthy()),
+                (StationKind::FastTravel, Some(d)) => follow(d, &mut skipped)
+                    .and_then(|p| p.get("bInitiallyActive").map(Pv::truthy)),
                 _ => None,
             };
             let teleport_dest = text(props.at("TeleportDest"));
             let exit_points = teleport_dest
                 .as_deref()
-                .and_then(|d| level.props(d))
-                .map_or(0, |p| p.at("ExitPoints").items().len());
-            let touch = match (props.at("StationTouchRadius").number(), props.at("StationTouchHeight").number()) {
-                (Some(r), Some(h)) => Some((r, h)),
-                (Some(r), None) => Some((r, 0.0)),
-                (None, Some(h)) => Some((0.0, h)),
-                (None, None) => None,
-            };
+                .and_then(|d| follow(d, &mut skipped))
+                .map(|p| p.at("ExitPoints").items().len());
             out.push(Station {
                 level: level.name.clone(),
                 path: path.clone(),
@@ -135,9 +150,10 @@ pub fn stations(view: &MapView) -> Vec<Station> {
                 initially_active,
                 teleport_dest,
                 exit_points,
-                touch,
+                touch_radius: props.get("StationTouchRadius").and_then(Pv::number),
+                touch_height: props.get("StationTouchHeight").and_then(Pv::number),
             });
         }
     }
-    out
+    (out, skipped)
 }

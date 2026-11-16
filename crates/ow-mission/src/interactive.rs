@@ -44,7 +44,7 @@ use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
 use ow_vm::error::VmError;
 
-use crate::vendors::MapView;
+use crate::vendors::{MapView, Skip};
 use ow_items::registry::Pv;
 
 #[cfg(test)]
@@ -66,8 +66,10 @@ pub const UT_PRIMARY: u8 = 0;
 pub const UT_SECONDARY: u8 = 1;
 /// The currency type of golden keys (`ECurrencyType` 3), which the controller counts, not the replication info.
 pub const GOLDEN_KEYS: u8 = 3;
-/// The largest golden-key cost [`payment`] spends key by key; above it the cost is refused as bad data (ours, not the
-/// game's: the golden chest costs one).
+/// The largest golden-key cost [`payment`] spends key by key; above it the cost is refused as bad data. A guard of
+/// ours, UNVERIFIED as anything the game does: NATIVE_CONTROLLER_HELPERS.md reads that the native `PayForUsedObject`
+/// never refuses, and fires `SpendGoldenKey` once per unit of any cost. The guard keeps bad data from looping; the
+/// golden chest costs one.
 pub const MAX_GOLDEN_KEY_COST: i32 = 1_000;
 
 /// The classes whose cost query was read, and the native keys this module binds.
@@ -134,7 +136,7 @@ pub struct UseChoice {
 /// |---|---|
 /// | carries the skip flag | passed over; it neither is chosen nor blocks |
 /// | another player's trade proxy | remembered as the trade proxy (the first one); never the usable object |
-/// | usable, none chosen yet, primary use available (the component entry's flag, else the object's answer) | chosen; later hits are looked at only for a trade proxy |
+/// | usable, none chosen yet, primary use available (the component entry's flag, else the object's answer) | chosen; later hits are looked at only for a trade proxy (UNVERIFIED reading: the record says the walk then continues only to look for a trade proxy, which this reads as a blocking hit after the choice changing nothing) |
 /// | anything else that blocks | ends the walk |
 /// | anything else | passed over |
 ///
@@ -229,8 +231,9 @@ pub enum Payment {
     AddCurrency { currency: u8, delta: i32 },
 }
 
-/// The payment of a cost (module documentation). A golden-key amount above [`MAX_GOLDEN_KEY_COST`] and an amount whose
-/// negation overflows are refused as bad data.
+/// The payment of a cost (module documentation). A golden-key amount above [`MAX_GOLDEN_KEY_COST`] is refused (our
+/// guard). Any other amount is negated with wrapping, so `i32::MIN` stays `i32::MIN`, a negative delta that
+/// `AddCurrencyOnHand` clamps to 0 (UNVERIFIED how the native negates; no data gives such a cost).
 pub fn payment(cost: Option<UseCost>) -> Result<Payment, String> {
     let Some(c) = cost else {
         return Ok(Payment::Nothing);
@@ -242,10 +245,7 @@ pub fn payment(cost: Option<UseCost>) -> Result<Payment, String> {
         // A cost of 0 or less spends no key; in range it converts exactly.
         return Ok(Payment::SpendGoldenKeys(u32::try_from(c.amount.max(0)).unwrap_or(0)));
     }
-    let delta = c
-        .amount
-        .checked_neg()
-        .ok_or_else(|| format!("a use cost of {} cannot be negated", c.amount))?;
+    let delta = c.amount.wrapping_neg();
     Ok(Payment::AddCurrency {
         currency: c.currency,
         delta,
@@ -492,11 +492,22 @@ fn interactive_class(class: &str) -> bool {
 }
 
 /// The interactive objects of every level of `view`: placed actors of an interactive class, then opportunity points
-/// whose population is a treasure or shop population, each with the definition its use reaches. A use runs as
-/// script on the VM; in Off mode it stops at `IsComponentUsable` (`NotYet`), so no object's use resolves there yet.
-pub fn census(view: &MapView) -> Vec<CensusObject> {
+/// whose population is a treasure or shop population, each with the definition its use reaches, and what had to be
+/// left out (an actor, point, factory or balance that did not decode), with the reason. The factory of a population
+/// is the tool's (`LevelView::factory_of`). A use runs as script on the VM; in Off mode it stops at
+/// `IsComponentUsable` (`NotYet`), so no object's use resolves there yet.
+pub fn census(view: &MapView) -> (Vec<CensusObject>, Vec<Skip>) {
     let mut out = Vec::new();
+    let mut skipped = Vec::new();
     for level in &view.levels {
+        // A referenced object: `None` when absent; a decode failure is recorded and also gives `None`.
+        let follow = |path: &str, skipped: &mut Vec<Skip>| match level.props(path) {
+            Ok(p) => p,
+            Err(e) => {
+                skipped.push(Skip::new(&level.name, path, e));
+                None
+            }
+        };
         let below = |definition: &Option<String>| -> (bool, bool) {
             let Some(d) = definition else {
                 return (false, false);
@@ -512,7 +523,17 @@ pub fn census(view: &MapView) -> Vec<CensusObject> {
             if path.matches('.').count() != 2 || !path.starts_with("TheWorld.PersistentLevel.") {
                 continue;
             }
-            let props = level.props(path).unwrap_or(Pv::Null);
+            if !interactive_class(class) && short(class) != "WillowPopulationOpportunityPoint" {
+                continue;
+            }
+            let props = match level.props(path) {
+                Ok(Some(p)) => p,
+                Ok(None) => continue,
+                Err(e) => {
+                    skipped.push(Skip::new(&level.name, path, e));
+                    continue;
+                }
+            };
             if interactive_class(class) {
                 let definition = text(props.at("InteractiveObjectDefinition"));
                 let (has_provider, has_cost_behavior) = below(&definition);
@@ -534,21 +555,13 @@ pub fn census(view: &MapView) -> Vec<CensusObject> {
             if !popdef.starts_with(TREASURE) && !popdef.starts_with(crate::vendors::POPULATION) {
                 continue;
             }
-            let depth = popdef.matches('.').count() + 1;
-            let factory = level
-                .lookup
-                .below(&popdef)
-                .into_iter()
-                .find(|(p, c)| p.matches('.').count() == depth && c.contains("PopulationFactory"));
-            let (class, definition) = match &factory {
+            let (class, definition) = match level.factory_of(&popdef) {
                 Some((f, c)) => {
-                    let fp = level.lookup.get(f);
-                    let fp: &Pv = fp.as_deref().unwrap_or(&Pv::Null);
-                    let balance = text(fp.at("ObjectBalanceDefinition")).and_then(|b| level.lookup.get(&b));
-                    let definition = text(fp.at("ObjectDefinition")).or_else(|| {
-                        balance.as_deref().and_then(|b| text(b.at("DefaultInteractiveObject")))
-                    });
-                    (short(c).to_string(), definition)
+                    let fp = follow(&f, &mut skipped).unwrap_or(Pv::Null);
+                    let balance = text(fp.at("ObjectBalanceDefinition")).and_then(|b| follow(&b, &mut skipped));
+                    let definition = text(fp.at("ObjectDefinition"))
+                        .or_else(|| balance.as_ref().and_then(|b| text(b.at("DefaultInteractiveObject"))));
+                    (short(&c).to_string(), definition)
                 }
                 None => (String::new(), None),
             };
@@ -564,5 +577,5 @@ pub fn census(view: &MapView) -> Vec<CensusObject> {
             });
         }
     }
-    out
+    (out, skipped)
 }

@@ -58,7 +58,8 @@ fn map(mode: ParityMode) -> Map {
 #[test]
 fn the_placed_stations_are_read_with_their_definition_and_exit_points() {
     let m = map(ParityMode::Off);
-    let found = stations(&m.view);
+    let (found, skipped) = stations(&m.view);
+    assert!(skipped.is_empty(), "{skipped:?}");
     assert_eq!(found.len(), 2);
     let fast = &found[0];
     assert_eq!(fast.kind, StationKind::FastTravel);
@@ -66,13 +67,13 @@ fn the_placed_stations_are_read_with_their_definition_and_exit_points() {
     assert_eq!(fast.definition.as_deref(), Some("Defs.Station_Toy"));
     assert_eq!(fast.initially_active, Some(true));
     assert_eq!(fast.teleport_dest.as_deref(), Some("TheWorld.PersistentLevel.StationTeleporterDestination_0"));
-    assert_eq!(fast.exit_points, 2);
-    assert_eq!(fast.touch, None);
+    assert_eq!(fast.exit_points, Some(2));
+    assert_eq!((fast.touch_radius, fast.touch_height), (None, None));
     let newu = &found[1];
     assert_eq!(newu.kind, StationKind::Resurrect);
     assert_eq!(newu.initially_active, None);
-    assert_eq!(newu.exit_points, 0);
-    assert_eq!(newu.touch, Some((500.0, 24.0)));
+    assert_eq!(newu.exit_points, None, "no destination: no count");
+    assert_eq!((newu.touch_radius, newu.touch_height), (Some(500.0), Some(24.0)));
 }
 
 #[test]
@@ -85,7 +86,8 @@ fn only_the_three_station_classes_are_stations() {
 #[test]
 fn the_census_lists_placed_objects_then_shop_and_treasure_points() {
     let m = map(ParityMode::Off);
-    let objects = census(&m.view);
+    let (objects, skipped) = census(&m.view);
+    assert!(skipped.is_empty(), "{skipped:?}");
     let rows: Vec<(&str, Origin, &str, Option<&str>, bool, bool)> = objects
         .iter()
         .map(|o| {
