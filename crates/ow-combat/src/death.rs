@@ -10,9 +10,12 @@
 //! (W5-WORLD: the world's destroy rule, which removes the actor where the C++ only sets `bDeleteMe` and logs
 //! `Destroy <name>`).
 
+use std::rc::Rc;
+
+use ow_behavior::kernel::natives;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
-use ow_vm::api::Vm;
+use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 use ow_vm::interp::instantiate_from_defaults;
 
@@ -27,6 +30,9 @@ use crate::hit::{
 
 /// The records of death.
 pub const RECORD: &str = "COMBAT_DEATH.md; NATIVE_COMBAT_GROUNDWORK.md section 4.2";
+
+/// This crate's name as the owner of the consumer handles it gives out (`ow_behavior::kernel::natives`).
+pub const CONSUMER_OWNER: &str = "ow-combat";
 
 /// A behavior event the death chain raises on a pawn's providers (`BodyClassDeathDefinition.OnKilledBy`,
 /// `OnPlayDeathPizazz`, `OnDeathNonGib`, `OnDeathGib`, and a custom event a script behavior broadcasts). The owner of
@@ -169,11 +175,12 @@ pub fn prepare_for_death(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
     if let Some(mut handle) = get(vm, pawn, "ConsumerHandle")?
         && field(vm, &handle, "PID").is_some_and(|pid| integer(&pid) == -1)
     {
-        let pid = with_state(vm, |s| {
-            let pid = s.next_consumer;
+        // The handle is claimed in the kernel's consumer table, so the kernel natives route it here.
+        let from = with_state(vm, |s| s.next_consumer)?;
+        let pid = natives::allocate(vm, CONSUMER_OWNER, from)?;
+        with_state(vm, |s| {
             s.consumers.insert(pid, pawn);
-            s.next_consumer = s.next_consumer.saturating_add(1);
-            pid
+            s.next_consumer = pid.saturating_add(1);
         })?;
         set_field(vm, &mut handle, "PID", Value::Int(pid));
         set(vm, pawn, "ConsumerHandle", handle)?;
@@ -300,17 +307,16 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
             },
         )?;
     }
-    // IBehaviorConsumer.GetBehaviorConsumerHandle on the pawn: its ConsumerHandle.
-    bind_fn(vm, "WillowGame.WillowPawn.GetBehaviorConsumerHandle", |c| {
-        let me = this(c, "GetBehaviorConsumerHandle")?;
-        required(c.vm, me, "ConsumerHandle", "combat death")
-    })?;
+    // IBehaviorConsumer.GetBehaviorConsumerHandle (the pawn's ConsumerHandle) and
+    // BehaviorKernel.ActivateBehaviorOutputLink are the behavior kernel pack's (ow_behavior::kernel::natives).
     // BehaviorKernel.BroadcastBehaviorEventFromScript(ConsumerHandle, EventName, ...): a script behavior raises a
-    // named event on every provider the consumer has registered.
-    bind_fn(
+    // named event on every provider the consumer has registered. The kernel pack routes the handles this crate
+    // gave out here.
+    natives::route(
         vm,
-        "GearboxFramework.BehaviorKernel.BroadcastBehaviorEventFromScript",
-        |c| {
+        CONSUMER_OWNER,
+        natives::BROADCAST_FROM_SCRIPT,
+        Rc::new(|c: &mut NativeCall<'_>| {
             let event = arg_text(c, 1)?;
             let pawn = consumer_of(c.vm, c.arg(0)?)?;
             note(c.vm, format!("BroadcastBehaviorEventFromScript {event}"))?;
@@ -327,23 +333,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
                 )?;
             }
             Ok(Value::None)
-        },
-    )?;
-    // ActivateBehaviorOutputLink(KernelInfo, OutputLinkId) only appends the id to the running script behavior's list
-    // (duplicates kept, call order). Static.
-    bind_fn(
-        vm,
-        "GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink",
-        |c| {
-            // An output link id is an int; the low 32 bits as the C++ `int(integer())`.
-            let id = crate::hit::access::low_i32(integer(c.arg(1)?));
-            with_state(c.vm, |s| {
-                if let Some(list) = s.selected.last_mut() {
-                    list.push(id);
-                }
-            })?;
-            Ok(Value::None)
-        },
+        }),
     )?;
 
     // Expression evaluators (Behavior_Conditional's conditions; the natives' bodies are unread, so these three are the

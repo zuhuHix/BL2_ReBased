@@ -318,23 +318,22 @@ fn run_script_behavior(
         .function(apply)
         .map(|d| d.params.clone())
         .unwrap_or_default();
-    with_state(vm, |s| s.selected.push(Vec::new()))?;
-    let mut result = Ok(());
-    for context in p.contexts(id, pawn) {
-        let args = params
-            .iter()
-            .map(|d| match vm.space.names.text(d.name).as_ref() {
-                "ContextObject" => Value::Object(Some(context)),
-                "SelfObject" => Value::Object(Some(pawn)),
-                _ => vm.space.classes.zero_value(&d.kind),
-            })
-            .collect();
-        if let Err(e) = vm.call(apply, Some(behavior.object), args) {
-            result = Err(e);
-            break;
+    let contexts = p.contexts(id, pawn);
+    // The output links go to the behavior kernel pack's shared collector (ow_behavior::kernel::natives::collect).
+    let (result, ids) = ow_behavior::kernel::natives::collect(vm, |vm| {
+        for context in contexts {
+            let args = params
+                .iter()
+                .map(|d| match vm.space.names.text(d.name).as_ref() {
+                    "ContextObject" => Value::Object(Some(context)),
+                    "SelfObject" => Value::Object(Some(pawn)),
+                    _ => vm.space.classes.zero_value(&d.kind),
+                })
+                .collect();
+            vm.call(apply, Some(behavior.object), args)?;
         }
-    }
-    let ids = with_state(vm, |s| s.selected.pop().unwrap_or_default())?;
+        Ok::<(), VmError>(())
+    })?;
     result.map(|()| ids)
 }
 
