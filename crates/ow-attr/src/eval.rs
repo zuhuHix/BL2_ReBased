@@ -534,6 +534,9 @@ pub(crate) fn base_value_of(
     read_of(sys, attr, source, override_source, true, cx)
 }
 
+/// The class of a designer attribute (the C++ reads its `BaseValue` as its value; [`fold`]).
+const DESIGNER_DEFINITION: &str = "WillowGame.DesignerAttributeDefinition";
+
 /// The value chain on a resolved context: one fold, each resolver receiving the previous result (0.0 first); the
 /// last result is the value; an empty chain is 0.0. A None entry in a value chain is not read (the record says what
 /// a None entry does only for add and remove), so it is `NotYet { NotRead }`.
@@ -549,6 +552,19 @@ fn fold(
         context,
         base,
     })?;
+    // The C++ stand-in, `ParityMode::Reference` only (lane FIX-DESIGNER-RESOLVER, decision 2026-11-16-62): a designer
+    // attribute is its own `BaseValue`, evaluated on the context (`src/progression.cpp:117`; the game's designers' code
+    // sets it at run time). Off reads the value chain on the designer object the context resolver answered.
+    let reference = cx
+        .world
+        .parts()
+        .defs
+        .is_some_and(|d| d.mode() == ow_core::ParityMode::Reference);
+    if reference && class_path(cx.world.parts().space, attr) == DESIGNER_DEFINITION {
+        let data = required(cx, attr, "BaseValue")?;
+        let data = init_data(cx.world.parts().space, &data)?;
+        return evaluate_init(sys, &data, Some(context), None, cx);
+    }
     let chain = required(cx, attr, "ValueResolverChain")?;
     let mut previous = 0.0f32;
     for entry in elements("ValueResolverChain", &chain)? {

@@ -1046,6 +1046,54 @@ impl AttrWorld for Vm {
         })
     }
 
+    /// Runs the resolver class's script `GetAttributeContext` (virtual lookup on the resolver's class) with
+    /// `Attribute` and `AttributeContextSource` by parameter name, any other parameter its zero value (lane
+    /// FIX-DESIGNER-RESOLVER, decision 2026-11-16-62). What the script reaches is the VM's as for any call: an unbound
+    /// or unread native stops it (its `NotYet`, or the stub policy's answer). A class with no such function, or whose
+    /// function is native, is `NotYet { NotRead }`: no script rule to run. An answer that is not an object reference
+    /// is bad data.
+    fn script_context(
+        &mut self,
+        resolver: ObjRef,
+        attribute: ObjRef,
+        source: Option<ObjRef>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        let class = self.space.heap.get(resolver)?.class;
+        let class_path = self
+            .space
+            .classes
+            .get_layout(class)
+            .map(|l| l.path().as_str().to_string())
+            .unwrap_or_default();
+        let function = self.find_method(class, "GetAttributeContext", None)?;
+        let Some(function) = function.filter(|f| self.function(*f).is_some_and(|d| !d.is_native())) else {
+            return Err(NotYet::not_read(
+                format!("{class_path}.GetAttributeContext: no script function to run"),
+                "NATIVE_ATTRIBUTES.md section 5",
+            )
+            .into());
+        };
+        let params = self.function(function).map(|d| d.params.clone()).unwrap_or_default();
+        let args = params
+            .iter()
+            .map(|d| match self.space.names.text(d.name).as_ref() {
+                "Attribute" => Value::Object(Some(attribute)),
+                "AttributeContextSource" => Value::Object(source),
+                _ => self.space.classes.zero_value(&d.kind),
+            })
+            .collect();
+        match self.call(function, Some(resolver), args)?.ret {
+            Value::Object(o) | Value::Interface(o) => Ok(o),
+            other => Err(AttrError::BadData {
+                reason: format!(
+                    "{class_path}.GetAttributeContext returned a {}, not an object",
+                    other.kind_name()
+                )
+                .into(),
+            }),
+        }
+    }
+
     /// The VM's own pair ([`Vm::global_slots`]).
     fn global_slots(&mut self) -> &mut GlobalSlots {
         &mut self.global_slots
