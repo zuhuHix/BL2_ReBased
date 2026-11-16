@@ -144,6 +144,10 @@ pub enum AssetError {
     LodUnavailable,
     /// "mesh vertex has no UV set"
     NoUvSet,
+    /// "export is not LightMapTexture2D or ShadowMapTexture2D" ([`read_lighting_texture`]; no C++ counterpart)
+    NotLightingTexture,
+    /// "lighting texture payload does not end where its class's trailer does" ([`read_lighting_texture`])
+    LightingTrailer,
 }
 
 impl fmt::Display for AssetError {
@@ -208,6 +212,10 @@ impl fmt::Display for AssetError {
             E::SectionRange => "invalid mesh section range",
             E::LodUnavailable => "selected mesh LOD is unavailable",
             E::NoUvSet => "mesh vertex has no UV set",
+            E::NotLightingTexture => "export is not LightMapTexture2D or ShadowMapTexture2D",
+            E::LightingTrailer => {
+                "lighting texture payload does not end where its class's trailer does"
+            }
         };
         f.write_str(text)
     }
@@ -434,6 +442,64 @@ pub fn read_texture(
         class == "Texture2D" || class == "TerrainWeightMapTexture",
         AssetError::NotTexture,
     )?;
+    read_mips(
+        package,
+        index,
+        property_offset,
+        typer,
+        tfc_root,
+        &class,
+        None,
+    )
+}
+
+/// Bytes after the mip records of a `Texture2D` or `ShadowMapTexture2D` export (lane H9-LIGHTMAPS census of the
+/// installed Sanctuary levels: all 945 `Texture2D` and 65 `ShadowMapTexture2D` exports whose records parsed). What
+/// the bytes hold is not read.
+pub const TEXTURE_TRAILER: usize = 36;
+/// Bytes after the mip records of a `LightMapTexture2D` export: the `Texture2D` trailer and one more 32-bit word
+/// (all 136 in the same census; UNVERIFIED as the word's meaning, which is not read).
+pub const LIGHTMAP_TRAILER: usize = TEXTURE_TRAILER + 4;
+
+/// Reads a `LightMapTexture2D` or `ShadowMapTexture2D` export (lane H9-LIGHTMAPS; the C++ reader has no
+/// counterpart and [`read_texture`] still refuses them). The tags, mip records and mip data read as a `Texture2D`'s;
+/// the payload must then end exactly [`LIGHTMAP_TRAILER`] or [`TEXTURE_TRAILER`] bytes after the records, the
+/// structural oracle the layout was checked with.
+pub fn read_lighting_texture(
+    package: &Package,
+    index: i32,
+    property_offset: usize,
+    typer: &dyn ArrayTyper,
+    tfc_root: &Path,
+) -> Result<TextureAsset, AssetError> {
+    let class = class_name(package, index)?;
+    let trailer = match class.as_str() {
+        "LightMapTexture2D" => LIGHTMAP_TRAILER,
+        "ShadowMapTexture2D" => TEXTURE_TRAILER,
+        _ => return Err(AssetError::NotLightingTexture),
+    };
+    read_mips(
+        package,
+        index,
+        property_offset,
+        typer,
+        tfc_root,
+        &class,
+        Some(trailer),
+    )
+}
+
+/// The tags, mip records and resident mips of texture export `index` of class `class`; with `trailer`, the payload
+/// must end that many bytes after the records.
+fn read_mips(
+    package: &Package,
+    index: i32,
+    property_offset: usize,
+    typer: &dyn ArrayTyper,
+    tfc_root: &Path,
+    class: &str,
+    trailer: Option<usize>,
+) -> Result<TextureAsset, AssetError> {
     let (native_at, object_end) = walk_properties(package, index, property_offset, typer)?;
     let mut r = package.reader();
     let (format, cache) = texture_properties(package, &mut r, index, property_offset, object_end)?;
@@ -472,6 +538,12 @@ pub fn read_texture(
             height,
             inline_at,
         });
+    }
+    if let Some(trailer) = trailer {
+        check(
+            object_end.checked_sub(r.pos()) == Some(trailer),
+            AssetError::LightingTrailer,
+        )?;
     }
 
     let mut asset = TextureAsset {
@@ -706,6 +778,16 @@ mod tests {
     /// A Texture2D-like export (invented values): a 4-byte prefix, a `Format` and a `TextureFileCacheName` tag,
     /// `None`, 16 bytes, then the mip records (`assets_test.py`'s `texture_mips`).
     fn texture_package(class: &str, format: &str, mips: &[(&[u8], u32, u32, u32)]) -> Package {
+        texture_package_with(class, format, mips, 0)
+    }
+
+    /// [`texture_package`] with `trailer` invented bytes after the mip records.
+    fn texture_package_with(
+        class: &str,
+        format: &str,
+        mips: &[(&[u8], u32, u32, u32)],
+        trailer: usize,
+    ) -> Package {
         let mut b = PackageBuilder::new_empty();
         b.names(["None"]);
         let cls = b.add_import("Core", "Class", 0, class);
@@ -725,8 +807,52 @@ mod tests {
             }
             payload.extend(words(&[*width, *height]));
         }
+        payload.extend(vec![0x5au8; trailer]);
         b.add_export(cls, "Probe", payload);
         Package::from_decoded(Default::default(), "probe".into(), b.build()).unwrap()
+    }
+
+    #[test]
+    fn lighting_textures_read_as_textures_and_end_at_their_trailer() {
+        let gray: &[u8] = &[7, 9, 11, 13];
+        let lighting =
+            |p: &Package| read_lighting_texture(p, 1, 4, &SchemaTyper::new_empty(), Path::new("."));
+        let lm = texture_package_with(
+            "LightMapTexture2D",
+            "PF_G8",
+            &[(gray, 0, 2, 2)],
+            LIGHTMAP_TRAILER,
+        );
+        let asset = lighting(&lm).unwrap();
+        assert_eq!((asset.mips.len(), asset.mips[0].width), (1, 2));
+        // The C++-parity reader still refuses the class.
+        assert_eq!(
+            read(&lm).unwrap_err().to_string(),
+            "export is not Texture2D or TerrainWeightMapTexture"
+        );
+        let sm = texture_package_with(
+            "ShadowMapTexture2D",
+            "PF_G8",
+            &[(gray, 0, 2, 2)],
+            TEXTURE_TRAILER,
+        );
+        assert!(lighting(&sm).is_ok());
+        // A trailer of another size, or another class, is refused.
+        for (class, trailer) in [
+            ("LightMapTexture2D", TEXTURE_TRAILER),
+            ("ShadowMapTexture2D", LIGHTMAP_TRAILER),
+        ] {
+            let p = texture_package_with(class, "PF_G8", &[(gray, 0, 2, 2)], trailer);
+            assert_eq!(
+                lighting(&p).unwrap_err().to_string(),
+                "lighting texture payload does not end where its class's trailer does"
+            );
+        }
+        let plain = texture_package_with("Texture2D", "PF_G8", &[(gray, 0, 2, 2)], TEXTURE_TRAILER);
+        assert_eq!(
+            lighting(&plain).unwrap_err().to_string(),
+            "export is not LightMapTexture2D or ShadowMapTexture2D"
+        );
     }
 
     fn read(package: &Package) -> Result<TextureAsset, AssetError> {

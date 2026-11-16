@@ -43,6 +43,15 @@
 //! UNVERIFIED: the game draws them, and their look waits for a graph reading. The sky strip is sampled through its
 //! own clamped sampler; the other textures repeat.
 //!
+//! **Baked lighting** (lane H9-LIGHTMAPS). Group 2 binds a batch's light map atlases (coefficients 0 and 1) and its
+//! shadow atlas, uploaded linear, with a clamped sampler; vertex buffer 2 holds a per-vertex light map's samples (a
+//! zero buffer for every other draw). An instance with a light map takes it as its indirect light instead of the sky
+//! term: `coefficient 0 x scale 0 + coefficient 1 x scale 1` (texels or vertex samples, each channel over 255). The
+//! sun is then multiplied by the shadow map's visibility: the texel as is for a shadow-factor map, or for a distance
+//! field a smooth step of width [`DISTANCE_FIELD_HALF_WIDTH`] around one half. **The decode is a fit, UNVERIFIED**:
+//! the coefficient textures' encoding (linear or gamma), how the game combines them and its shadow-map penumbra are
+//! not read; only the data path is (decision `2026-11-16-65-*`).
+//!
 //! **Lighting** ([`Lighting`]) is the packages' when the caller reads them ([`Lighting::from_scene`]): the
 //! dominant directional light along its direction, and the sky light as a hemisphere term (its lower colour facing
 //! down, its upper colour facing up), the sum scaled by one exposure. Unlit materials take their colour as is.
@@ -66,7 +75,8 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::{Controls, FlyCamera};
 use crate::draw::{
-    BatchKey, DrawPlan, Instance, MaterialSlot, VERTEX_BYTES, back_to_front, pick_from,
+    BatchKey, DrawPlan, Instance, LightMode, MaterialSlot, ShadowMode, VERTEX_BYTES, back_to_front,
+    pick_from,
 };
 use crate::frame::Mat4;
 use crate::lighting::SceneLights;
@@ -92,9 +102,15 @@ pub const AMBIENT: f32 = 0.35;
 pub const SUN: f32 = 0.75;
 /// The grey of an untextured or undecoded draw (sRGB bytes).
 pub const GREY: [u8; 4] = [180, 180, 180, 255];
-/// Bytes of one instance: the column-major 4x4 world matrix, then the normal matrix's three columns, each padded to
-/// four floats.
-const INSTANCE_BYTES: u64 = 112;
+/// Bytes of one instance: the column-major 4x4 world matrix, the normal matrix's three columns (each padded to four
+/// floats), then the baked lighting (lane H9): the light map rectangle, the shadow map rectangle, coefficient 0's
+/// scale with the light mode, coefficient 1's scale with the shadow mode.
+const INSTANCE_BYTES: u64 = 176;
+/// Bytes of one per-vertex light map sample in its vertex buffer: two `FColor`s.
+const VERTEX_LIGHT_BYTES: u64 = 8;
+/// Half the width of the band around one half over which a distance-field shadow map goes from shadowed to lit
+/// (a host choice: the game's penumbra scale is not read; UNVERIFIED).
+pub const DISTANCE_FIELD_HALF_WIDTH: f32 = 0.05;
 /// Bytes of the per-frame uniforms: view-projection, sun direction, sun, sky upper, sky lower, exposure.
 const GLOBALS_BYTES: u64 = 144;
 
@@ -125,6 +141,12 @@ struct Material {
 @group(1) @binding(3) var<uniform> material: Material;
 // The sky strip's own sampler: clamped, so a column or row at the strip's edge does not blend with the other edge.
 @group(1) @binding(4) var strip_sampler: sampler;
+@group(2) @binding(0) var light_map_0: texture_2d<f32>;
+@group(2) @binding(1) var light_map_1: texture_2d<f32>;
+@group(2) @binding(2) var shadow_map: texture_2d<f32>;
+@group(2) @binding(3) var light_sampler: sampler;
+
+const DISTANCE_FIELD_HALF_WIDTH: f32 = 0.05;
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -137,12 +159,27 @@ struct VertexIn {
     @location(7) n0: vec4<f32>,
     @location(8) n1: vec4<f32>,
     @location(9) n2: vec4<f32>,
+    @location(10) light_uv: vec2<f32>,
+    // Light map rectangle, shadow map rectangle, (scale 0, light mode), (scale 1, shadow mode).
+    @location(11) l0: vec4<f32>,
+    @location(12) l1: vec4<f32>,
+    @location(13) l2: vec4<f32>,
+    @location(14) l3: vec4<f32>,
+    // A per-vertex light map's two samples, B G R A bytes each (one attribute: the default limit is 16).
+    @location(15) samples: vec2<u32>,
 };
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) light_uv: vec2<f32>,
+    @location(3) @interpolate(flat) l0: vec4<f32>,
+    @location(4) @interpolate(flat) l1: vec4<f32>,
+    @location(5) @interpolate(flat) l2: vec4<f32>,
+    @location(6) @interpolate(flat) l3: vec4<f32>,
+    @location(7) s0: vec3<f32>,
+    @location(8) s1: vec3<f32>,
 };
 
 @vertex
@@ -153,6 +190,13 @@ fn vs_main(v: VertexIn) -> VertexOut {
     let normal_matrix = mat3x3<f32>(v.n0.xyz, v.n1.xyz, v.n2.xyz);
     out.normal = normal_matrix * v.normal;
     out.uv = v.uv;
+    out.light_uv = v.light_uv;
+    out.l0 = v.l0;
+    out.l1 = v.l1;
+    out.l2 = v.l2;
+    out.l3 = v.l3;
+    out.s0 = unpack4x8unorm(v.samples.x).zyx;
+    out.s1 = unpack4x8unorm(v.samples.y).zyx;
     return out;
 }
 
@@ -163,6 +207,9 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) ve
     let strip_sky = textureSample(colour, strip_sampler, vec2<f32>(material.sky.x, in.uv.y));
     let strip_cloud = textureSample(colour, strip_sampler, vec2<f32>(material.sky.x, material.flags.y));
     let cloud = textureSample(data, colour_sampler, in.uv).r;
+    let coefficient_0 = textureSample(light_map_0, light_sampler, in.light_uv * in.l0.xy + in.l0.zw).rgb;
+    let coefficient_1 = textureSample(light_map_1, light_sampler, in.light_uv * in.l0.xy + in.l0.zw).rgb;
+    let shadow_texel = textureSample(shadow_map, light_sampler, in.light_uv * in.l1.xy + in.l1.zw).r;
     if (material.flags.x > 0.5) {
         // The sky record's formula (NATIVE_SKY_APPROXIMATION.md): the strip at the time-of-day column and the dome's
         // V, the clouds' colour from the strip's horizon row, mixed by the cloud texture's R times the cap opacity.
@@ -188,8 +235,19 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) ve
             unit = n / len;
             sun = globals.sun.rgb * max(dot(unit, normalize(globals.sun_dir.xyz)), 0.0);
         }
-        let sky = mix(globals.sky_lower.rgb, globals.sky_upper.rgb, unit.z * 0.5 + 0.5);
-        light = (sky + sun) * globals.params.x;
+        var indirect = mix(globals.sky_lower.rgb, globals.sky_upper.rgb, unit.z * 0.5 + 0.5);
+        if (in.l2.w > 1.5) {
+            indirect = coefficient_0 * in.l2.xyz + coefficient_1 * in.l3.xyz;
+        } else if (in.l2.w > 0.5) {
+            indirect = in.s0 * in.l2.xyz + in.s1 * in.l3.xyz;
+        }
+        var visible = 1.0;
+        if (in.l3.w > 1.5) {
+            visible = smoothstep(0.5 - DISTANCE_FIELD_HALF_WIDTH, 0.5 + DISTANCE_FIELD_HALF_WIDTH, shadow_texel);
+        } else if (in.l3.w > 0.5) {
+            visible = shadow_texel;
+        }
+        light = (indirect + sun * visible) * globals.params.x;
     }
     let rgb = base.rgb * light;
     if (material.params.w > 0.5 && material.params.w < 1.5) {
@@ -207,12 +265,36 @@ fn matrix_bytes(m: &Mat4, out: &mut Vec<u8>) {
 }
 
 /// One instance as the instance buffer holds it ([`INSTANCE_BYTES`]).
-fn instance_bytes(i: &Instance, out: &mut Vec<u8>) {
+/// `light`/`shadow` false drop the instance's light map or shadow map (their textures did not decode).
+fn instance_bytes(i: &Instance, light: bool, shadow: bool, out: &mut Vec<u8>) {
     matrix_bytes(&i.world, out);
     for col in &i.normal {
         for v in col.iter().chain(&[0.0]) {
             out.extend_from_slice(&v.to_le_bytes());
         }
+    }
+    let l = &i.light;
+    let mode = match l.mode {
+        LightMode::Texture if light => 2.0,
+        LightMode::Vertex if light => 1.0,
+        _ => 0.0f32,
+    };
+    let shadowed = match l.shadow {
+        ShadowMode::DistanceField if shadow => 2.0,
+        ShadowMode::Factor if shadow => 1.0,
+        _ => 0.0f32,
+    };
+    let (mode, shadowed) = ([mode], [shadowed]);
+    let values = l
+        .lightmap_rect
+        .iter()
+        .chain(&l.shadow_rect)
+        .chain(&l.scales[0])
+        .chain(&mode)
+        .chain(&l.scales[1])
+        .chain(&shadowed);
+    for v in values {
+        out.extend_from_slice(&v.to_le_bytes());
     }
 }
 
@@ -299,6 +381,12 @@ pub struct UploadStats {
     pub blended_undecoded: usize,
     /// Section instances of the slots of `translucent_without_alpha` and `blended_undecoded`, not drawn.
     pub skipped_instances: usize,
+    /// Lighting slots uploaded (lane H9), and those whose light map or shadow map textures did not all decode (their
+    /// instances are drawn without the part that failed).
+    pub lightings: usize,
+    pub lighting_failed: usize,
+    /// Bytes of per-vertex light map samples uploaded.
+    pub vertex_light_bytes: u64,
 }
 
 /// The scene's light as the shader takes it.
@@ -453,6 +541,11 @@ pub struct SceneRenderer {
     lighting: Lighting,
     material_groups: Vec<wgpu::BindGroup>,
     default_group: wgpu::BindGroup,
+    lighting_groups: Vec<wgpu::BindGroup>,
+    default_lighting: wgpu::BindGroup,
+    /// By lighting slot: a per-vertex light map's samples.
+    vertex_lights: Vec<Option<wgpu::Buffer>>,
+    zero_light: wgpu::Buffer,
     meshes: Vec<GpuMesh>,
     instances: Option<wgpu::Buffer>,
     batches: Vec<GpuBatch>,
@@ -539,9 +632,27 @@ impl SceneRenderer {
                 },
             ],
         });
+        let lighting_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lighting"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                texture_entry(2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("scene"),
-            bind_group_layouts: &[Some(&globals_layout), Some(&material_layout)],
+            bind_group_layouts: &[
+                Some(&globals_layout),
+                Some(&material_layout),
+                Some(&lighting_layout),
+            ],
             immediate_size: 0,
         });
         let pipeline = |pass: Pass, two_sided: bool, mirrored: bool| {
@@ -587,15 +698,23 @@ impl SceneRenderer {
                         Some(wgpu::VertexBufferLayout {
                             array_stride: VERTEX_BYTES as u64,
                             step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                            attributes: &wgpu::vertex_attr_array![
+                                0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 10 => Float32x2
+                            ],
                         }),
                         Some(wgpu::VertexBufferLayout {
                             array_stride: INSTANCE_BYTES,
                             step_mode: wgpu::VertexStepMode::Instance,
                             attributes: &wgpu::vertex_attr_array![
                                 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
-                                7 => Float32x4, 8 => Float32x4, 9 => Float32x4
+                                7 => Float32x4, 8 => Float32x4, 9 => Float32x4,
+                                11 => Float32x4, 12 => Float32x4, 13 => Float32x4, 14 => Float32x4
                             ],
+                        }),
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: VERTEX_LIGHT_BYTES,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![15 => Uint32x2],
                         }),
                     ],
                 },
@@ -808,6 +927,101 @@ impl SceneRenderer {
         }
         upload.slots = material_groups.len();
 
+        // Lighting (lane H9): one group per lighting slot, the atlases linear; a per-vertex slot's samples in a
+        // vertex buffer of its own, every other draw reading a zero buffer as long as the longest mesh.
+        let light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lighting"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let black = upload_rgba(device, queue, &[(1, 1, &[0, 0, 0, 255][..])], false)
+            .create_view(&Default::default());
+        let lit = upload_rgba(device, queue, &[(1, 1, &[255, 255, 255, 255][..])], false)
+            .create_view(&Default::default());
+        let lighting_group =
+            |c0: &wgpu::TextureView, c1: &wgpu::TextureView, shadow: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("lighting"),
+                    layout: &lighting_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(c0),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(c1),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(shadow),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&light_sampler),
+                        },
+                    ],
+                })
+            };
+        let default_lighting = lighting_group(&black, &black, &lit);
+        let mut lighting_groups = Vec::with_capacity(plan.lightings.len());
+        // Per lighting slot: whether its light map and its shadow map are usable.
+        let mut lighting_ok = Vec::with_capacity(plan.lightings.len());
+        let mut vertex_lights = Vec::with_capacity(plan.lightings.len());
+        for l in &plan.lightings {
+            let mut fetch_linear = |key: &Option<String>| match key {
+                Some(k) => fetch(k, false, &mut upload)
+                    .map(|(view, _)| Some(view))
+                    .ok_or(()),
+                None => Ok(None),
+            };
+            let c0 = fetch_linear(&l.textures[0]);
+            let c1 = fetch_linear(&l.textures[1]);
+            let shadow = fetch_linear(&l.shadow);
+            let light_ok = c0.is_ok() && c1.is_ok();
+            let shadow_ok = shadow.is_ok();
+            if !light_ok || !shadow_ok {
+                upload.lighting_failed += 1;
+            }
+            let c0 = c0.ok().flatten().unwrap_or_else(|| black.clone());
+            let c1 = c1.ok().flatten().unwrap_or_else(|| black.clone());
+            let shadow = shadow.ok().flatten().unwrap_or_else(|| lit.clone());
+            lighting_groups.push(lighting_group(&c0, &c1, &shadow));
+            lighting_ok.push((light_ok, shadow_ok));
+            vertex_lights.push(l.samples.as_ref().map(|samples| {
+                let bytes: Vec<u8> = samples.iter().flatten().copied().collect();
+                upload.vertex_light_bytes += bytes.len() as u64;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("vertex light"),
+                    contents: &bytes,
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+            }));
+        }
+        upload.lightings = lighting_groups.len();
+        let longest = plan
+            .meshes
+            .iter()
+            .map(|m| m.vertices.len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let zero_bytes = (longest as u64)
+            .checked_mul(VERTEX_LIGHT_BYTES)
+            .ok_or("the zero light buffer's size overflows")?;
+        fits("the zero light buffer", zero_bytes)?;
+        let zero_light = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("no vertex light"),
+            size: zero_bytes,
+            usage: wgpu::BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
+
         let mut meshes = Vec::with_capacity(plan.meshes.len());
         for m in &plan.meshes {
             let (vertices, indices) = (m.vertex_bytes(), m.index_bytes());
@@ -866,8 +1080,14 @@ impl SceneRenderer {
                 .entry(pipeline_key)
                 .or_insert_with(|| pipeline(pass, b.key.two_sided, b.key.mirrored));
             let instance_offset = instance_data.len() as u64;
+            let (light_ok, shadow_ok) = b
+                .key
+                .lighting
+                .and_then(|l| lighting_ok.get(l as usize))
+                .copied()
+                .unwrap_or((false, false));
             for i in &b.instances {
-                instance_bytes(i, &mut instance_data);
+                instance_bytes(i, light_ok, shadow_ok, &mut instance_data);
             }
             batches.push(GpuBatch {
                 key: b.key,
@@ -904,6 +1124,10 @@ impl SceneRenderer {
             lighting,
             material_groups,
             default_group,
+            lighting_groups,
+            default_lighting,
+            vertex_lights,
+            zero_light,
             meshes,
             instances,
             batches,
@@ -1008,6 +1232,16 @@ impl SceneRenderer {
                 .and_then(|m| self.material_groups.get(m as usize))
                 .unwrap_or(&self.default_group);
             pass.set_bind_group(1, group, &[]);
+            let lighting = b.key.lighting.map(|l| l as usize);
+            let light_group = lighting
+                .and_then(|l| self.lighting_groups.get(l))
+                .unwrap_or(&self.default_lighting);
+            pass.set_bind_group(2, light_group, &[]);
+            let vertex_light = lighting
+                .and_then(|l| self.vertex_lights.get(l))
+                .and_then(Option::as_ref)
+                .unwrap_or(&self.zero_light);
+            pass.set_vertex_buffer(2, vertex_light.slice(..));
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             let end = b.instance_offset + u64::from(b.instances) * INSTANCE_BYTES;
             pass.set_vertex_buffer(1, instances.slice(b.instance_offset..end));

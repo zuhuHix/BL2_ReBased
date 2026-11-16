@@ -23,6 +23,7 @@ pub mod render;
 pub mod camera;
 pub mod material;
 pub mod lighting;
+pub mod lightmap;
 
 /// The code packages every Borderlands 2 install holds in `WillowGame/CookedPCConsole`. Only their presence is
 /// checked; nothing is read from them here.

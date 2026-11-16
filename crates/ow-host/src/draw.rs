@@ -36,13 +36,22 @@
 //! candidates and draws opaque and lit, as stage 2 did. Blended instances (translucent, additive, modulate) are drawn
 //! after the opaque ones in back-to-front order ([`back_to_front`]).
 //!
+//! **Baked lighting** (lane H9-LIGHTMAPS). With a [`SceneLighting`] ([`DrawPlan::build_lit`]), each vertex carries
+//! its mesh's light-map UV set (`LightMapCoordinateIndex`), and each instance whose component has a light map carries
+//! what the renderer needs for it ([`InstanceLight`]): a texture light map's atlas rectangle and coefficient scales,
+//! or a per-vertex one's scales, and the dominant light's shadow map rectangle. Instances whose textures differ are
+//! batched apart ([`LightingSlot`]); a per-vertex light map is a slot of its own, since its samples are per component.
+//! A component whose light map cannot be applied (its mesh has no such UV set, or the per-vertex samples do not match
+//! the vertex count) is drawn as before and counted.
+//!
 //! Status: UNVERIFIED as the game's look. This is the B2 benchmark's level of drawing: one diffuse texture, a sun and
-//! ambient light.
+//! ambient light, and the baked light maps where read.
 
 use ow_assets::mesh::MeshLod;
 use ow_core::DetMap;
 
 use crate::frame::{self, Affine, Mat4, Ue3Matrix};
+use crate::lightmap::{COEFFICIENTS, LightMap, SAMPLE_BYTES, SceneLighting};
 use crate::material::{Blend, DEFAULT_CLIP, DiffuseSource, MaterialLibrary, SkyInputs};
 use crate::scene::{MeshStatus, Pose, Scene, SceneMaterial};
 
@@ -183,17 +192,19 @@ pub fn pick_diffuse(material: &SceneMaterial) -> Option<String> {
     pick_from(&diffuse_candidates(material), &|_| true).map(|c| c.path.clone())
 }
 
-/// One vertex as the renderer uploads it: position in uu, the packed normal unpacked, the first UV set.
+/// One vertex as the renderer uploads it: position in uu, the packed normal unpacked, the first UV set, and the
+/// light-map UV set (the first set too when the mesh is built without one).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    pub lightmap_uv: [f32; 2],
 }
 
-/// Bytes per uploaded vertex: 8 floats.
-pub const VERTEX_BYTES: usize = 32;
+/// Bytes per uploaded vertex: 10 floats.
+pub const VERTEX_BYTES: usize = 40;
 
 /// A section's index range in its mesh's index buffer.
 #[non_exhaustive]
@@ -213,12 +224,20 @@ pub struct MeshData {
     pub indices: Vec<u32>,
     /// By section slot.
     pub sections: Vec<SectionRange>,
+    /// Every vertex has the light-map UV set asked for ([`MeshData::from_lod_with`]).
+    pub lightmap_uvs: bool,
 }
 
 impl MeshData {
     /// LOD 0 of a decoded mesh. `None` for an LOD with no vertex, an index past the vertices, or a section's range
     /// past the index buffer (`ow-assets` checks these already; this keeps the renderer from trusting it blindly).
     pub fn from_lod(path: &str, lod: &MeshLod) -> Option<MeshData> {
+        Self::from_lod_with(path, lod, 0)
+    }
+
+    /// [`MeshData::from_lod`] with UV set `lightmap_set` as the light-map UVs (the first set where a vertex lacks it,
+    /// and then [`MeshData::lightmap_uvs`] is false).
+    pub fn from_lod_with(path: &str, lod: &MeshLod, lightmap_set: usize) -> Option<MeshData> {
         if lod.vertices.is_empty()
             || lod
                 .indices
@@ -230,12 +249,17 @@ impl MeshData {
         let vertices = lod
             .vertices
             .iter()
-            .map(|v| Vertex {
-                position: v.position,
-                normal: v.normal,
-                uv: v.uvs.first().copied().unwrap_or([0.0, 0.0]),
+            .map(|v| {
+                let uv = v.uvs.first().copied().unwrap_or([0.0, 0.0]);
+                Vertex {
+                    position: v.position,
+                    normal: v.normal,
+                    uv,
+                    lightmap_uv: v.uvs.get(lightmap_set).copied().unwrap_or(uv),
+                }
             })
             .collect();
+        let lightmap_uvs = lod.vertices.iter().all(|v| v.uvs.len() > lightmap_set);
         let mut sections = Vec::with_capacity(lod.sections.len());
         for s in &lod.sections {
             let count = s.face_count.checked_mul(3)?;
@@ -253,14 +277,21 @@ impl MeshData {
             vertices,
             indices: lod.indices.clone(),
             sections,
+            lightmap_uvs,
         })
     }
 
-    /// The vertices as the vertex buffer holds them: position, normal, UV, little-endian `f32`s.
+    /// The vertices as the vertex buffer holds them: position, normal, UV, light-map UV, little-endian `f32`s.
     pub fn vertex_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.vertices.len() * VERTEX_BYTES);
         for v in &self.vertices {
-            for f in v.position.iter().chain(&v.normal).chain(&v.uv) {
+            for f in v
+                .position
+                .iter()
+                .chain(&v.normal)
+                .chain(&v.uv)
+                .chain(&v.lightmap_uv)
+            {
                 out.extend_from_slice(&f.to_le_bytes());
             }
         }
@@ -283,6 +314,8 @@ pub struct BatchKey {
     pub section: u32,
     /// Index into [`DrawPlan::slots`] (the section's material); `None` draws untextured, opaque and lit.
     pub material: Option<u32>,
+    /// Index into [`DrawPlan::lightings`]; `None` for instances with no light map or shadow map applied.
+    pub lighting: Option<u32>,
     pub two_sided: bool,
     /// Drawn with the other front face ([`Affine::mirrors`]).
     pub mirrored: bool,
@@ -310,12 +343,54 @@ pub fn normal_matrix(affine: &Affine) -> [[f32; 3]; 3] {
     [cross(b, c), cross(c, a), cross(a, b)].map(|col| col.map(|v| (v * sign) as f32))
 }
 
-/// One drawn placement of a batch: its world matrix and its normal matrix ([`normal_matrix`]).
+/// How an instance's light map is applied ([`InstanceLight::mode`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LightMode {
+    /// No light map: the scene's sky term.
+    #[default]
+    None,
+    /// The batch's per-vertex samples.
+    Vertex,
+    /// The batch's atlas textures.
+    Texture,
+}
+
+/// How an instance's shadow map is read ([`InstanceLight::shadow`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadowMode {
+    /// None: the sun is unshadowed.
+    #[default]
+    None,
+    /// The texel is the light's visibility.
+    Factor,
+    /// The texel is a distance field, thresholded at one half (UNVERIFIED reading).
+    DistanceField,
+}
+
+/// An instance's baked lighting (module documentation).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct InstanceLight {
+    pub mode: LightMode,
+    /// The light map's atlas rectangle: UV scale then bias.
+    pub lightmap_rect: [f32; 4],
+    /// The scales of coefficients 0 and 1.
+    pub scales: [[f32; 3]; 2],
+    pub shadow: ShadowMode,
+    /// The shadow map's atlas rectangle: UV scale then bias.
+    pub shadow_rect: [f32; 4],
+}
+
+/// One drawn placement of a batch: its world matrix and its normal matrix ([`normal_matrix`]), and its baked
+/// lighting.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Instance {
     pub world: Mat4,
     pub normal: [[f32; 3]; 3],
+    pub light: InstanceLight,
 }
 
 impl Instance {
@@ -323,8 +398,23 @@ impl Instance {
         Instance {
             world: affine.to_engine(),
             normal: normal_matrix(affine),
+            light: InstanceLight::default(),
         }
     }
+}
+
+/// What identifies a texture lighting slot: its coefficient 0 and 1 atlases and its shadow atlas.
+type LightingKey = (Option<String>, Option<String>, Option<String>);
+
+/// The lighting textures or samples a batch binds: coefficient 0 and 1 atlases (keys of
+/// [`SceneLighting::textures`]), the shadow atlas, or a per-vertex light map's samples.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LightingSlot {
+    pub textures: [Option<String>; 2],
+    pub shadow: Option<String>,
+    /// One sample per LOD 0 vertex of the batch's mesh.
+    pub samples: Option<Vec<[u8; SAMPLE_BYTES]>>,
 }
 
 /// One instanced draw: a mesh section and its placements, in placement order.
@@ -374,6 +464,16 @@ pub struct PlanStats {
     /// Sanctuary's water decals in white, an additive one would lay a grey veil and a modulate one darken by about
     /// half. Counted under `untextured_no_diffuse` and `by_blend` too.
     pub blended_skipped: usize,
+    /// Drawn placements lit by a texture light map, by a per-vertex one, and with a shadow map (lane H9).
+    pub lit_texture: usize,
+    pub lit_vertex: usize,
+    pub shadowed: usize,
+    /// Drawn placements whose light map was not applied: the mesh lacks the light-map UV set, or the per-vertex
+    /// samples do not match the mesh's vertex count.
+    pub lightmap_no_uvs: usize,
+    pub lightmap_vertex_mismatch: usize,
+    /// Texture light maps with a third coefficient texture, which the renderer does not bind (none on Sanctuary).
+    pub third_coefficient: usize,
 }
 
 impl PlanStats {
@@ -472,6 +572,8 @@ pub struct DrawPlan {
     pub meshes: Vec<MeshData>,
     /// The materials the batches use, first-use order.
     pub slots: Vec<MaterialSlot>,
+    /// The lighting the batches bind, first-use order.
+    pub lightings: Vec<LightingSlot>,
     /// Sorted by [`BatchKey`].
     pub batches: Vec<Batch>,
     pub stats: PlanStats,
@@ -530,13 +632,24 @@ impl DrawPlan {
 
     /// The plan with each material read through `library` when given (module documentation).
     pub fn build_with(scene: &Scene, library: Option<&MaterialLibrary>) -> DrawPlan {
+        Self::build_lit(scene, library, None)
+    }
+
+    /// [`DrawPlan::build_with`], with the baked lighting of `lighting` when given (module documentation).
+    pub fn build_lit(
+        scene: &Scene,
+        library: Option<&MaterialLibrary>,
+        lighting: Option<&SceneLighting>,
+    ) -> DrawPlan {
         let mut stats = PlanStats::default();
+        let mut lightings: Vec<LightingSlot> = Vec::new();
+        let mut lighting_ids: DetMap<LightingKey, u32> = DetMap::new();
         let mut meshes: Vec<MeshData> = Vec::new();
         let mut mesh_ids: DetMap<String, Option<u32>> = DetMap::new();
         let mut slots: Vec<MaterialSlot> = Vec::new();
         let mut slot_ids: DetMap<String, u32> = DetMap::new();
         let mut batches: DetMap<BatchKey, Vec<Instance>> = DetMap::new();
-        for p in scene.placements.values() {
+        for (key, p) in scene.placements.iter() {
             stats.placements += 1;
             if p.is_hidden() {
                 stats.hidden += 1;
@@ -549,7 +662,12 @@ impl DrawPlan {
                         Some(MeshStatus::Decoded(asset)) => asset
                             .lods
                             .first()
-                            .and_then(|lod| MeshData::from_lod(&p.mesh, lod))
+                            .and_then(|lod| {
+                                let set = lighting
+                                    .and_then(|l| l.uv_sets.get(p.mesh.as_str()).copied())
+                                    .unwrap_or(0);
+                                MeshData::from_lod_with(&p.mesh, lod, set)
+                            })
                             .map(|data| {
                                 meshes.push(data);
                                 u32::try_from(meshes.len() - 1).unwrap_or(u32::MAX)
@@ -571,9 +689,75 @@ impl DrawPlan {
             stats.drawn += 1;
             let mirrored = affine.mirrors();
             stats.mirrored += usize::from(mirrored);
-            let instance = Instance::new(&affine);
-            let effective = scene.effective_materials(p);
+            let mut instance = Instance::new(&affine);
             let mesh = &meshes[mesh_id as usize];
+            let lighting_id = match lighting.and_then(|l| l.components.get(key)) {
+                Some(light) => {
+                    let mut slot = LightingSlot::default();
+                    match &light.light_map {
+                        Some(LightMap::Texture {
+                            textures,
+                            scales,
+                            uv_scale,
+                            uv_bias,
+                        }) if mesh.lightmap_uvs => {
+                            slot.textures = [textures[0].clone(), textures[1].clone()];
+                            stats.third_coefficient +=
+                                usize::from(textures[COEFFICIENTS - 1].is_some());
+                            instance.light.mode = LightMode::Texture;
+                            instance.light.lightmap_rect =
+                                [uv_scale[0], uv_scale[1], uv_bias[0], uv_bias[1]];
+                            instance.light.scales = [scales[0], scales[1]];
+                            stats.lit_texture += 1;
+                        }
+                        Some(LightMap::Vertex { samples, scales })
+                            if samples.len() == mesh.vertices.len() =>
+                        {
+                            slot.samples = Some(samples.clone());
+                            instance.light.mode = LightMode::Vertex;
+                            instance.light.scales = [scales[0], scales[1]];
+                            stats.lit_vertex += 1;
+                        }
+                        Some(LightMap::Texture { .. }) => stats.lightmap_no_uvs += 1,
+                        Some(LightMap::Vertex { .. }) => stats.lightmap_vertex_mismatch += 1,
+                        None => {}
+                    }
+                    if let Some(shadow) = light.shadow.as_ref().filter(|_| mesh.lightmap_uvs) {
+                        slot.shadow = Some(shadow.texture.clone());
+                        instance.light.shadow = if shadow.shadow_factor {
+                            ShadowMode::Factor
+                        } else {
+                            ShadowMode::DistanceField
+                        };
+                        instance.light.shadow_rect = [
+                            shadow.uv_scale[0],
+                            shadow.uv_scale[1],
+                            shadow.uv_bias[0],
+                            shadow.uv_bias[1],
+                        ];
+                        stats.shadowed += 1;
+                    }
+                    if slot == LightingSlot::default() {
+                        None
+                    } else if slot.samples.is_some() {
+                        // Per-vertex samples belong to this component alone.
+                        lightings.push(slot);
+                        Some(u32::try_from(lightings.len() - 1).unwrap_or(u32::MAX))
+                    } else {
+                        let id = (
+                            slot.textures[0].clone(),
+                            slot.textures[1].clone(),
+                            slot.shadow.clone(),
+                        );
+                        Some(*lighting_ids.entry(id).or_insert_with(|| {
+                            lightings.push(slot);
+                            u32::try_from(lightings.len() - 1).unwrap_or(u32::MAX)
+                        }))
+                    }
+                }
+                None => None,
+            };
+            let effective = scene.effective_materials(p);
             for (slot, range) in mesh.sections.iter().enumerate() {
                 if range.index_count == 0 {
                     stats.empty_sections += 1;
@@ -623,20 +807,22 @@ impl DrawPlan {
                     .and_then(|i| i.two_sided)
                     .or_else(|| material.and_then(|(_, sm)| sm.two_sided))
                     .unwrap_or(true);
-                let key = BatchKey {
+                let batch = BatchKey {
                     mesh: mesh_id,
                     section: u32::try_from(slot).unwrap_or(u32::MAX),
                     material: index,
+                    lighting: lighting_id,
                     two_sided,
                     mirrored,
                 };
-                batches.entry(key).or_default().push(instance);
+                batches.entry(batch).or_default().push(instance);
                 stats.instances += 1;
             }
         }
         DrawPlan {
             meshes,
             slots,
+            lightings,
             batches: batches
                 .into_iter()
                 .map(|(key, instances)| Batch { key, instances })
