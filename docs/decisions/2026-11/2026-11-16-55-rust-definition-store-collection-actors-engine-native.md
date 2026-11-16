@@ -68,17 +68,23 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
     `defs: archetype <path> not applied: a class default object's subobject, its prefix not recorded` once per path.
     A probe of three such Engine templates found their tags parsing only from 16 bytes in; that is an observation, not
     a recovered rule, and `PropertyPrefix` (W3-DECODE) has no 16-byte case. It is left to that owner (open item).
-- **Verified (automated).** Five `ow-defs` tests on invented packages (toy `Core`, `Engine` and a map), each in both
-  modes: a collection actor loads from 4 and `load_export` at 26 is a `PrefixMismatch`, and its mesh and light entries
-  come back in order with a null element; a short tail, a non-affine matrix and a non-collection object are refused;
-  an exported and an imported `StaticMesh` are one native-class handle per path that never loads (with the
-  `defs: no holder` line); a placed component takes a two-deep archetype chain then its own tags in Off and class
-  defaults in Reference, `instance` too, and a template archetype is logged once and not applied; a cyclic archetype and
-  one of an unrelated class are `NotYet` in Off and load in Reference. Each test was checked to fail with its fix
-  disabled.
+- **Verified (automated).** Seven `ow-defs` tests on invented packages (toy `Core`, `Engine` and a map; five from the
+  first round, two from review r1), each in both modes unless named: a collection actor loads from 4 and `load_export`
+  at 26 is a `PrefixMismatch`, and its mesh and light entries come back in order with a null element; a short tail, a
+  non-affine matrix and a non-collection object are refused; an exported and an imported `StaticMesh` are one
+  native-class handle per path that never loads (with the `defs: no holder` line); a placed component takes a two-deep
+  archetype chain then its own tags in Off and class defaults in Reference, `instance` too, and a template archetype is
+  logged once and not applied; a cyclic archetype and one of an unrelated class, one with no holder and a chain of 17
+  are `NotYet` in Off and load in Reference, while a chain of exactly 16 loads in both (the depth boundary); a reference
+  to a code object (`Core.Function`) is left to the decoder in Off; a level of an engine-native class is the outer in
+  both modes. Each test was checked to fail with its fix disabled.
 - **Verified (local, installed game, pc-hummer; outputs under ignored `local/p2/fix-defs-collection/` only).** A local
-  driver built once against `origin/main` f481008 and once against this branch: `find` of every export under
-  `TheWorld.PersistentLevel` of the 26 `Sanctuary*` files (32,556 objects), in each mode.
+  driver built against `origin/main` f481008 ("before") and against f481008 with the `ow-defs` files of 79a5e1f, the
+  first round ("after"): `find` of every export under `TheWorld.PersistentLevel` of the 26 `Sanctuary*` files
+  (32,556 objects), in each mode. Rerun with the `ow-defs` files of 2f5ed03 (review r1: code classes left to the
+  decoder, class default archetypes by name): every object's values, every collection, every `StaticMesh` slot, the
+  logs and H2's placements are byte-identical to the 79a5e1f run in both modes, so the counts below hold for the
+  landed code.
   - **Collection actors.** Before, in both modes: all 154 fail (118 mesh, 30 light, 6 blocking). After: all 154 load.
     `collection` reads 118 mesh collections with 10,223 components and no null, and 30 light collections with 2,197
     components (1,967 point, 226 spot, 4 light shaft). Every tail has the exact size and passes the checks. Oracles:
@@ -104,8 +110,9 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
     - Off failures: the same 616 before and after (354 `ShadowMap1D`, 127 `Model`, 127 `Polys`, 4 `WiringMesh`, all
       engine-native objects looked up directly and now `NotADefinition`, and 4 components that fail as before).
 - **Fix 3 beyond level objects (review r1, M2).** The Sanctuary measurement above covers objects placed in levels. The
-  Off consumers that read archetypes outside levels were checked on `origin/main` ce6f681 against ce6f681 with this
-  lane's `ow-defs` files (the release `ow-cli` of each, `OW_PARITY` unset, so Off; outputs under ignored `local/`):
+  Off consumers that read archetypes outside levels were checked on `origin/main` ce6f681 against ce6f681 with the
+  `ow-defs` files of 2f5ed03 (the release `ow-cli` of each, `OW_PARITY` unset, so Off; outputs under ignored
+  `local/`):
   - **GD_\* pawn archetypes** (the ignored check `real_pawn_archetypes`, every census path of the game root whose first
     holder derives from `Engine.Pawn`, both modes): 946 paths, 42 loaded at 26 and 904 at 4 in both modes, before and
     after; the per-path files are identical. `GD_Marcus.Character.Pawn_Marcus` (read at 4, decision 36),
@@ -122,23 +129,25 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
     ("inside a class default object"). The steps after those gaps, where a spawned or placed pawn's
     archetype-derived values would be used, were therefore not exercised: **open**, to be rerun when they are.
 - **H2's scene** (`ow-host` `Scene::load` on `Sanctuary_P`, Off, unchanged code, driven from the local driver), on
-  `origin/main` f481008 and again on 7f73940 (after H2-DRAW), each against this branch. Before and after, on both: 10 levels, 4,446 placements, 305 hidden, 4,141 drawn, 143 excluded (122 with no mesh, 16 mission
-  previews, 5 duplicates), 430 meshes (418 drawn), LOD 0 triangles 1,348,542 and 1,280,100 drawn, the same gaps. The
-  placement and exclusion lists are byte-identical, poses and flags included. This lane changes none of them, for
-  three reasons:
+  `origin/main` f481008 and again on 7f73940 (after H2-DRAW), each against this lane's 79a5e1f, and with 2f5ed03's
+  `ow-defs` on f481008. Before and after, on all: 10 levels, 4,446 placements, 305 hidden, 4,141 drawn, 143 excluded
+  (122 with no mesh, 16 mission previews, 5 duplicates), 430 meshes (418 drawn), LOD 0 triangles 1,348,542 and 1,280,100
+  drawn, the same gaps. The placement and exclusion lists are byte-identical, poses and flags included. This lane
+  changes none of them, for three reasons:
   - the scene reads collection actors itself (its tags from 4 and the tail);
   - it reads `StaticMesh` from the component's own tags;
-  - every placed `StaticMeshComponent`'s archetype is a template (or none), which fix 3 does not apply, and no
-    placement owner (`StaticMeshActor`, `InterpActor`, `WiringActor`, `WillowInteractiveObject`) has another kind of
-    archetype in Sanctuary.
-  The scene can now switch to `DefStore::collection` and the store's `StaticMesh` slot; that is `ow-host`'s change,
-  not made here. Against `tools/prepare_level.py`, rerun on the same install with the Rust reader (whose commands
-  do not go through `ow-defs`): 4,446 placements, 21 excluded, 433 meshes, as decision 2026-11-16-46 recorded, and its
-  placement set equals the scene's (4,446 in both, none in one only). Against the benchmark record (4,470 placements, 4,163 drawn):
-  the 24-placement difference decision 2026-11-16-46 could not explain is unchanged, since neither the scene nor the
-  tool moved.
-- **Gates** (pc-hummer, rebased on `origin/main` 7f73940): `cargo build --workspace --locked` clean; `cargo test
-  --workspace --locked` 1,598 passed, 0 failed, 21 ignored; `cargo build --release -p ow-cli --locked` clean;
+  - every placed `StaticMeshComponent`'s archetype is a template (or none), which fix 3 does not apply, and no placement
+    owner (`StaticMeshActor`, `InterpActor`, `WiringActor`, `WillowInteractiveObject`) has another kind of archetype in
+    Sanctuary.
+  The scene can now switch to `DefStore::collection` and the store's `StaticMesh` slot; that is `ow-host`'s change, not
+  made here. Against `tools/prepare_level.py`, rerun on the same install with the Rust reader (whose commands do not go
+  through `ow-defs`): 4,446 placements, 21 excluded, 433 meshes, as decision 2026-11-16-46 recorded, and its placement
+  set equals the scene's (4,446 in both, none in one only). Against the benchmark record (4,470 placements, 4,163
+  drawn): the 24-placement difference decision 2026-11-16-46 could not explain is unchanged, since neither the scene nor
+  the tool moved.
+- **Gates** (pc-hummer; the first round on `origin/main` 7f73940, review r1 at 2f5ed03): `cargo build --workspace
+  --locked` clean; `cargo test --workspace --locked` 1,600 passed, 0 failed, 21 ignored at 2f5ed03 (1,598 in the first
+  round); `cargo build --release -p ow-cli --locked` clean;
   `tests/crate_edges_test.py` OK; `tools/decisions_index.py --check --baseline origin/main` OK, 1 added;
   `tools/verify_packages.py --reader target/release/ow-package.exe`: 9 packages, decoded bytes, counts and export fields
   match, 3,339/3,339 class bodies exact; ctest 173/173 with the release binary present.

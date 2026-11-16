@@ -473,6 +473,11 @@ fn an_archetype_that_cannot_be_followed_is_not_yet_in_off() {
                 (mode, other) => panic!("{name} in {mode:?}: {other:?}"),
             }
         }
+        // The boundary: Deep_1's chain is exactly 16 archetypes (Deep_2 .. Deep_17), which loads in both modes;
+        // Deep_0's 17 above is one too many.
+        let deep_1 = ObjectPath::parse("Map_Test.Deep_1").unwrap();
+        let o = t.defs.find(&mut t.w, &deep_1).unwrap().unwrap();
+        assert!(t.defs.is_loaded(&t.w, o), "Deep_1 in {mode:?}");
     }
 }
 
