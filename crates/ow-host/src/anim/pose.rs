@@ -80,6 +80,7 @@ impl fmt::Display for AnimError {
 impl std::error::Error for AnimError {}
 
 /// A bone's local transform in `f64`.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Local {
     pub rotation: Quat,
@@ -96,6 +97,7 @@ impl Local {
 }
 
 /// The reference skeleton: parents, the bind pose, and its model-space matrices and their inverses.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Skeleton {
     pub names: Vec<String>,
@@ -106,6 +108,7 @@ pub struct Skeleton {
 }
 
 /// One pose: per bone its local transform and its model-space matrix.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Pose {
     pub locals: Vec<Local>,

@@ -28,6 +28,7 @@
 //! keys follow the mesh bones' convention is checked on the installed clips by the influence spread of
 //! `ow-host`'s `anim::report`, not in the running game.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use ow_core::NotYet;
@@ -130,10 +131,28 @@ impl AnimSet {
                 limit: self.sequences.len(),
             })?;
         let tracks_n = self.track_bones.len();
+        let root = mesh
+            .bones
+            .first()
+            .map(|b| b.name.clone())
+            .unwrap_or_default();
+        if self.track_bones.first() != Some(&root) {
+            return Err(ActorXError::RootTrack {
+                found: self.track_bones.first().cloned(),
+                root,
+            });
+        }
+        // One map of the mesh's bone names, so binding is not quadratic in the bone count.
+        let by_name: BTreeMap<&str, usize> = mesh
+            .bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.name.as_str(), i))
+            .collect();
         let mut tracks: Vec<Option<Vec<BoneTransform>>> = vec![None; mesh.bones.len()];
         for (t, name) in self.track_bones.iter().enumerate() {
-            let bone = mesh
-                .bone_index(name)
+            let bone = *by_name
+                .get(name.as_str())
                 .ok_or_else(|| ActorXError::UnknownTrackBone(name.clone()))?;
             if tracks[bone].is_some() {
                 return Err(ActorXError::DuplicateBone(name.clone()));
@@ -361,7 +380,7 @@ mod tests {
             "BONENAMES",
             0,
             120,
-            &[bone_name("Child"), bone_name("Root")],
+            &[bone_name("Root"), bone_name("Child")],
         ));
         f.extend(chunk(
             "ANIMINFO",
@@ -371,13 +390,16 @@ mod tests {
         ));
         let id = [0.0, 0.0, 0.0, 1.0];
         // Stored as the export stores them (mirrored): the game's Child translation (0, 5, f) is written (0, -5, f).
+        // Each frame holds the Root key, then the Child key. Root's frame-1 rotation (0, 0, 0.8, 0.6) reads as
+        // (0, -0, 0.8, -0.6) in the game's frame and is kept; a reader that also conjugated the root would give
+        // (-0, 0, -0.8, -0.6).
         let keys = [
+            key([0.0; 3], id),
             key([0.0, -5.0, 0.0], id),
-            key([0.0; 3], id),
+            key([0.0; 3], [0.0, 0.0, 0.8, 0.6]),
             key([0.0, -5.0, 1.0], [0.0, 0.0, 0.6, 0.8]),
-            key([0.0; 3], id),
-            key([0.0, -5.0, 2.0], id),
             key([1.0, 0.0, 0.0], id),
+            key([0.0, -5.0, 2.0], id),
         ];
         f.extend(chunk("ANIMKEYS", 0, 32, &keys));
         f.extend(chunk("SCALEKEYS", 0, 16, &[]));
@@ -389,7 +411,7 @@ mod tests {
         let set = read_psa(&two_clip_psa()).unwrap();
         assert_eq!(
             set.track_bones,
-            vec!["Child".to_string(), "Root".to_string()]
+            vec!["Root".to_string(), "Child".to_string()]
         );
         assert_eq!(set.sequences.len(), 2);
         let a = set.sequence("A").unwrap();
@@ -397,12 +419,13 @@ mod tests {
             (a.frame_rate, a.frame_count, a.group.as_str()),
             (30.0, 2, "None")
         );
-        assert_eq!(a.key(1, 0, 2).unwrap().translation, [0.0, 5.0, 1.0]);
+        assert_eq!(a.key(1, 1, 2).unwrap().translation, [0.0, 5.0, 1.0]);
         // (0, 0, 0.6, 0.8) written mirrored is (0, -0, 0.6, -0.8) in the game's frame.
-        assert_eq!(a.key(1, 0, 2).unwrap().rotation, [0.0, -0.0, 0.6, -0.8]);
+        assert_eq!(a.key(1, 1, 2).unwrap().rotation, [0.0, -0.0, 0.6, -0.8]);
+        assert_eq!(a.key(1, 0, 2).unwrap().rotation, [0.0, -0.0, 0.8, -0.6]);
         let b = set.sequence("B").unwrap();
         assert_eq!((b.frame_rate, b.frame_count), (15.0, 1));
-        assert_eq!(b.key(0, 1, 2).unwrap().translation, [1.0, 0.0, 0.0]);
+        assert_eq!(b.key(0, 0, 2).unwrap().translation, [1.0, 0.0, 0.0]);
         assert!(set.ignored_chunks.is_empty());
     }
 
@@ -474,20 +497,38 @@ mod tests {
         let set = read_psa(&two_clip_psa()).unwrap();
         let clip = set.bind(0, &mesh).unwrap();
         assert_eq!((clip.frame_count, clip.frame_rate), (2, 30.0));
-        // Mesh bone 1 is "Child", track 0: conjugated (a non-root bone).
+        // Mesh bone 1 is "Child", track 1: conjugated (a non-root bone).
         let child = clip.tracks[1].as_ref().unwrap();
         assert_eq!(child[1].translation, [0.0, 5.0, 1.0]);
         assert_eq!(child[1].rotation, [-0.0, 0.0, -0.6, -0.8]);
-        // Mesh bone 0 is "Root", track 1: kept as stored.
-        assert_eq!(
-            clip.tracks[0].as_ref().unwrap()[0].rotation,
-            [0.0, -0.0, 0.0, -1.0]
-        );
+        // Mesh bone 0 is "Root", track 0: kept as stored, so its Z stays positive.
+        let root = clip.tracks[0].as_ref().unwrap();
+        assert_eq!(root[1].rotation, [0.0, -0.0, 0.8, -0.6]);
+        assert!(root[1].rotation[2] > 0.0, "the root is not conjugated");
         let mut other = set.clone();
-        other.track_bones[0] = "Missing".into();
+        other.track_bones[1] = "Missing".into();
         assert_eq!(
             other.bind(0, &mesh),
             Err(ActorXError::UnknownTrackBone("Missing".into()))
+        );
+        // A set whose first track is not the mesh's root is refused, not bound with the wrong rule.
+        let mut swapped = set.clone();
+        swapped.track_bones.swap(0, 1);
+        assert_eq!(
+            swapped.bind(0, &mesh),
+            Err(ActorXError::RootTrack {
+                found: Some("Child".into()),
+                root: "Root".into()
+            })
+        );
+        let mut empty = set.clone();
+        empty.track_bones.clear();
+        assert_eq!(
+            empty.bind(0, &mesh),
+            Err(ActorXError::RootTrack {
+                found: None,
+                root: "Root".into()
+            })
         );
         assert!(set.bind(9, &mesh).is_err());
     }

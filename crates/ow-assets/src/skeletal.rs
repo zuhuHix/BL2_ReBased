@@ -34,6 +34,7 @@
 //! two bones share a name; each point has one to four influences with weights in 0..=1 summing to 1 within 1e-3.
 //! Nothing is clamped or renormalised.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use ow_core::NotYet;
@@ -412,12 +413,13 @@ pub(crate) fn read_bones(
 ) -> Result<Vec<Bone>, ActorXError> {
     c.expect_size(120)?;
     let mut out: Vec<Bone> = Vec::with_capacity(c.count);
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for i in 0..c.count {
         let r = c.record(i);
         let name = fixed_name(&r[..64])
             .ok_or(ActorXError::BadName { chunk, index: i })?
             .to_string();
-        if out.iter().any(|b| b.name == name) {
+        if !seen.insert(name.clone()) {
             return Err(ActorXError::DuplicateBone(name));
         }
         if !skeleton {
@@ -494,6 +496,9 @@ fn read_influences(
         }
         let point = index(i64::from(i32_at(r, 4)), points, "RAWWEIGHTS", i)?;
         let bone = index(i64::from(i32_at(r, 8)), bones, "RAWWEIGHTS", i)?;
+        if out[point].iter().any(|w| w.bone == bone) {
+            return Err(ActorXError::RepeatedInfluence { point, bone });
+        }
         if out[point].len() == MAX_INFLUENCES {
             return Err(ActorXError::TooManyInfluences { point });
         }
@@ -610,13 +615,15 @@ pub(crate) mod tests {
         f.extend(chunk("MATT0000", 0, 88, &mats));
         // A child bone rotated 90 degrees about Z in the game's frame, at (0, 5, 0) under the root. The game's
         // child rotation q = (0, 0, s, s) (s = sqrt(1/2)) is stored inverted, (0, 0, -s, s), then mirrored: (0, 0, -s, -s).
+        // The root's rotation is stored as it is, then mirrored: the game's (0, 0, 0.6, -0.8) is written
+        // (0, 0, 0.6, 0.8). A reader that also inverted the root would give (0, 0, -0.6, -0.8).
         let s = std::f32::consts::FRAC_1_SQRT_2;
         f.extend(chunk(
             "REFSKELT",
             0,
             120,
             &[
-                bone_record("Root", 0, [0.0, 0.0, 0.0, 1.0], [0.0; 3]),
+                bone_record("Root", 0, [0.0, 0.0, 0.6, 0.8], [0.0; 3]),
                 bone_record("Child", 0, [0.0, 0.0, -s, -s], [0.0, -5.0, 0.0]),
             ],
         ));
@@ -663,7 +670,11 @@ pub(crate) mod tests {
         assert_eq!(m.bones[1].bind.translation, [0.0, 5.0, 0.0]);
         let s = std::f32::consts::FRAC_1_SQRT_2;
         assert_eq!(m.bones[1].bind.rotation, [0.0, 0.0, s, s]);
-        assert_eq!(m.bones[0].bind.rotation, [0.0, -0.0, 0.0, -1.0]);
+        assert_eq!(m.bones[0].bind.rotation, [0.0, -0.0, 0.6, -0.8]);
+        assert!(
+            m.bones[0].bind.rotation[2] > 0.0,
+            "the root is not inverted"
+        );
         assert_eq!(m.bone_index("Child"), Some(1));
     }
 
@@ -706,10 +717,23 @@ pub(crate) mod tests {
                 ..
             })
         ));
+        // Point 3 weighted 0.5 + 0.5 on the same bone: refused, though the weights sum to 1.
         let mut w = good_weights();
-        w.extend([(0.0, 0, 0), (0.0, 0, 0), (0.0, 0, 0), (0.0, 0, 0)]);
+        w[5] = (0.5, 3, 0);
         assert_eq!(
             read_psk(&quad_psk(&w)),
+            Err(ActorXError::RepeatedInfluence { point: 3, bone: 0 })
+        );
+    }
+
+    #[test]
+    fn refuses_a_fifth_influence() {
+        // Five distinct bones on point 0, read straight through the influence table (the quad has two bones).
+        let records: Vec<Vec<u8>> = (0..5).map(|b| weight(0.2, 0, b)).collect();
+        let file = chunk("RAWWEIGHTS", 0, 12, &records);
+        let chunks = actorx::chunks(&file).unwrap();
+        assert_eq!(
+            read_influences(chunks[0], 1, 8),
             Err(ActorXError::TooManyInfluences { point: 0 })
         );
     }

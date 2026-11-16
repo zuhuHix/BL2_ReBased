@@ -9,7 +9,7 @@
 //!   the two hands; the body: from the middle of the feet to the middle of the toes), the `R_` bone of a pair lies
 //!   on the right (`up x forward`) and the `L_` bone on the left. A mirrored reading puts them the other way round,
 //!   so this checks the export-to-game conversion of `ow_assets::actorx` against the game's own bone names. It is
-//!   a structural check, not an observation of the running game.
+//!   a structural check, not an observation of the running game. [`run`] fails when it does not hold.
 //!
 //! Per clip: frames, rate and length (`frames / rate`); for the chosen clips, poses at the start, on frame 1, at the
 //! middle and at the loop end, with every bone's model-space position: every bone finite, the largest bone distance from the root, and the **influence spread** (for vertices
@@ -29,6 +29,7 @@ use super::skin::{influence_positions, skin, skin_matrices};
 
 /// What the report reads: a mesh, its sets, and the clips to pose-check (absolute clips; additive ones, which are
 /// deltas for the AnimTree's additive nodes, are listed in `additive` and only loaded).
+#[non_exhaustive]
 pub struct MeshSpec<'a> {
     pub mesh: &'a str,
     pub sets: &'a [&'a str],
@@ -38,6 +39,7 @@ pub struct MeshSpec<'a> {
 }
 
 /// Which bones give "forward" and which pair is checked.
+#[non_exhaustive]
 #[derive(Clone, Copy)]
 pub enum Handedness {
     /// `Camera` to the middle of `L_Hand` and `R_Hand`; checks `L_Hand` / `R_Hand`.
@@ -78,11 +80,23 @@ pub const MAYA: [MeshSpec<'static>; 2] = [
 ];
 
 /// Why the report could not be made.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum ReportError {
-    Load { file: String, error: ActorXError },
-    Anim { what: String, error: AnimError },
+    Load {
+        file: String,
+        error: ActorXError,
+    },
+    Anim {
+        what: String,
+        error: AnimError,
+    },
     Missing(String),
+    /// The handedness check failed: the `L_`/`R_` pair is not on its own side (the JSON of the check).
+    Handedness {
+        mesh: String,
+        check: String,
+    },
 }
 
 impl std::fmt::Display for ReportError {
@@ -91,6 +105,9 @@ impl std::fmt::Display for ReportError {
             ReportError::Load { file, error } => write!(f, "{file}: {error}"),
             ReportError::Anim { what, error } => write!(f, "{what}: {error}"),
             ReportError::Missing(what) => write!(f, "missing {what}"),
+            ReportError::Handedness { mesh, check } => {
+                write!(f, "{mesh}: handedness check failed: {check}")
+            }
         }
     }
 }
@@ -100,7 +117,7 @@ impl std::error::Error for ReportError {
         match self {
             ReportError::Load { error, .. } => Some(error),
             ReportError::Anim { error, .. } => Some(error),
-            ReportError::Missing(_) => None,
+            ReportError::Missing(_) | ReportError::Handedness { .. } => None,
         }
     }
 }
@@ -181,7 +198,13 @@ fn mesh_report(root: &Path, spec: &MeshSpec<'_>) -> Result<String, ReportError> 
     let nearest_max = nearest.last().copied().unwrap_or(0.0);
     let nearest_median = nearest.get(nearest.len() / 2).copied().unwrap_or(0.0);
     let half = [0, 1, 2].map(|k| (hi[k] - lo[k]) / 2.0);
-    let hand = handedness(&mesh, &bind, spec.hand)?;
+    let (hand, hand_ok) = handedness(&mesh, &bind, spec.hand)?;
+    if !hand_ok {
+        return Err(ReportError::Handedness {
+            mesh: spec.mesh.into(),
+            check: hand,
+        });
+    }
 
     let mut sets = Vec::new();
     let mut checks = Vec::new();
@@ -286,7 +309,12 @@ fn mid(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [0, 1, 2].map(|k| (a[k] + b[k]) / 2.0)
 }
 
-fn handedness(mesh: &SkeletalMesh, pose: &Pose, kind: Handedness) -> Result<String, ReportError> {
+/// The check's JSON and whether it passed.
+pub(super) fn handedness(
+    mesh: &SkeletalMesh,
+    pose: &Pose,
+    kind: Handedness,
+) -> Result<(String, bool), ReportError> {
     let b = |n: &str| bone(mesh, pose, n);
     let (origin, front, left, right) = match kind {
         Handedness::Arms => (
@@ -308,14 +336,16 @@ fn handedness(mesh: &SkeletalMesh, pose: &Pose, kind: Handedness) -> Result<Stri
     let side = [-forward[1], forward[0]];
     let along = |p: [f64; 3]| (p[0] - origin[0]) * side[0] + (p[1] - origin[1]) * side[1];
     let (l, r) = (along(left), along(right));
-    Ok(format!(
+    let ok = l < 0.0 && r > 0.0;
+    let text = format!(
         "{{\"forward_xy\":[{},{}],\"left_side\":{},\"right_side\":{},\"ok\":{}}}",
         num(forward[0]),
         num(forward[1]),
         num(l),
         num(r),
-        l < 0.0 && r > 0.0
-    ))
+        ok
+    );
+    Ok((text, ok))
 }
 
 /// The same clip with every non-root track's rotation conjugated back: the keys as the file stores them.
