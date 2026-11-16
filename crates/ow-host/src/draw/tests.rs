@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::frame;
+use crate::material::{Blend, DiffuseSource, MaterialLibrary};
 use crate::scene::{
     ActorPose, ComponentPose, ExportKey, HiddenFlags, MaterialStatus, MaterialTexture, Placement,
     ScaleSource, Scene, SceneAssets, SceneMesh, TextureSource,
@@ -193,7 +194,11 @@ fn the_plan_uploads_each_mesh_once_and_batches_its_placements() {
     );
     // Meshes.B's second section has no triangles.
     assert_eq!((s.instances, s.empty_sections), (4, 1));
-    let firsts: Vec<&str> = plan.diffuse.iter().map(|c| c[0].path.as_str()).collect();
+    let firsts: Vec<&str> = plan
+        .slots
+        .iter()
+        .map(|c| c.diffuse[0].path.as_str())
+        .collect();
     assert_eq!(firsts, ["Tex.Base_Dif", "Tex.Glass_Dif"]);
     assert_eq!(
         (
@@ -208,10 +213,10 @@ fn the_plan_uploads_each_mesh_once_and_batches_its_placements() {
         .iter()
         .map(|b| (b.key, b.instances.len()))
         .collect();
-    let key = |mesh, texture, two_sided, mirrored| BatchKey {
+    let key = |mesh, material, two_sided, mirrored| BatchKey {
         mesh,
         section: 0,
-        texture: Some(texture),
+        material: Some(material),
         two_sided,
         mirrored,
     };
@@ -394,6 +399,200 @@ fn a_mesh_with_no_vertex_or_an_index_past_them_is_refused() {
     assert!(MeshData::from_lod("M", &empty).is_none());
 }
 
+/// A library over `scene()`'s materials: `Mats.Base` translucent with no named diffuse but a fallback texture, and
+/// `Mats.Glass` the sky.
+fn library(scene: &Scene) -> MaterialLibrary {
+    use crate::material::{MaterialInfo, SkyInputs};
+    let info = |blend, diffuse, sky| MaterialInfo {
+        base: None,
+        blend_name: None,
+        blend,
+        lighting_model: None,
+        two_sided: Some(false),
+        opacity_mask_clip: 0.5,
+        cooked_textures: Vec::new(),
+        expression_classes: Vec::new(),
+        scalars: Vec::new(),
+        diffuse,
+        sky,
+        error: None,
+    };
+    let mut l = MaterialLibrary::default();
+    let _ = scene;
+    l.materials.insert(
+        "Mats.Base".into(),
+        info(Blend::Translucent, DiffuseSource::Named, None),
+    );
+    let sky = SkyInputs {
+        strip: "Tex.Strip".into(),
+        clouds: "Tex.Clouds".into(),
+        time_of_day: 128.0,
+        sky_brightness: 1.0,
+        cloud_brightness: 1.0,
+        cloud_cap_opacity: 1.0,
+    };
+    l.materials.insert(
+        "Mats.Glass".into(),
+        info(Blend::Opaque, DiffuseSource::Named, Some(sky)),
+    );
+    l
+}
+
+#[test]
+fn a_library_gives_each_slot_its_blend_and_the_sky_its_inputs() {
+    let s = scene();
+    let plan = DrawPlan::build_with(&s, Some(&library(&s)));
+    let st = plan.stats;
+    // Three Meshes.A instances of the translucent Mats.Base, one Meshes.B instance of the sky.
+    assert_eq!(st.blend_count(Blend::Translucent), 3);
+    assert_eq!((st.blend_count(Blend::Opaque), st.sky_instances), (0, 1));
+    let base = &plan.slots[0];
+    assert_eq!(
+        (base.blend, base.clip, base.sky.is_some()),
+        (Blend::Translucent, 0.5, false)
+    );
+    assert!(
+        plan.slots[1]
+            .sky
+            .as_ref()
+            .is_some_and(|k| k.column() == 0.5)
+    );
+    // Without a library: opaque, named only, as stage 2.
+    let plain = DrawPlan::build(&s);
+    assert_eq!(plain.stats.blend_count(Blend::Opaque), 4);
+}
+
+#[test]
+fn a_fallback_texture_or_constant_fills_a_material_with_no_named_diffuse() {
+    use crate::material::MaterialInfo;
+    let mut s = scene();
+    s.materials
+        .insert("Mats.Plain".into(), material(vec![], Some(false)));
+    s.materials
+        .insert("Mats.Black".into(), material(vec![], Some(false)));
+    let rows = [
+        placement(
+            "Meshes.A",
+            attached([0.0; 3], [1.0; 3]),
+            false,
+            vec![Some("Mats.Plain".into())],
+        ),
+        placement(
+            "Meshes.A",
+            attached([0.0; 3], [1.0; 3]),
+            false,
+            vec![Some("Mats.Black".into())],
+        ),
+    ];
+    for (i, p) in rows.into_iter().enumerate() {
+        let key = ExportKey {
+            level: 2,
+            export: i32::try_from(i).unwrap() + 1,
+        };
+        s.placements.insert(key, p);
+    }
+    let named_only = DrawPlan::build(&s).stats;
+    assert_eq!(named_only.untextured_no_diffuse, 2);
+    let mut l = MaterialLibrary::default();
+    let info = |diffuse| MaterialInfo {
+        base: None,
+        blend_name: None,
+        blend: Blend::Opaque,
+        lighting_model: None,
+        two_sided: None,
+        opacity_mask_clip: crate::material::DEFAULT_CLIP,
+        cooked_textures: Vec::new(),
+        expression_classes: Vec::new(),
+        scalars: Vec::new(),
+        diffuse,
+        sky: None,
+        error: None,
+    };
+    l.materials.insert(
+        "Mats.Plain".into(),
+        info(DiffuseSource::CookedDif("Tex.Plain_Dif".into())),
+    );
+    l.materials.insert(
+        "Mats.Black".into(),
+        info(DiffuseSource::Constant([0.0, 0.0, 0.0])),
+    );
+    let st = DrawPlan::build_with(&s, Some(&l)).stats;
+    assert_eq!(
+        (
+            st.untextured_no_diffuse,
+            st.fallback_textured,
+            st.constant_coloured
+        ),
+        (0, 1, 1)
+    );
+}
+
+#[test]
+fn a_translucent_material_with_nothing_to_draw_is_not_batched() {
+    use crate::material::MaterialInfo;
+    let mut s = scene();
+    s.materials
+        .insert("Mats.Water".into(), material(vec![], Some(false)));
+    let key = ExportKey {
+        level: 2,
+        export: 1,
+    };
+    s.placements.insert(
+        key,
+        placement(
+            "Meshes.A",
+            attached([0.0; 3], [1.0; 3]),
+            false,
+            vec![Some("Mats.Water".into())],
+        ),
+    );
+    let mut l = MaterialLibrary::default();
+    l.materials.insert(
+        "Mats.Water".into(),
+        MaterialInfo {
+            base: None,
+            blend_name: Some("BLEND_Translucent".into()),
+            blend: Blend::Translucent,
+            lighting_model: None,
+            two_sided: None,
+            opacity_mask_clip: crate::material::DEFAULT_CLIP,
+            cooked_textures: Vec::new(),
+            expression_classes: Vec::new(),
+            scalars: Vec::new(),
+            diffuse: DiffuseSource::None,
+            sky: None,
+            error: None,
+        },
+    );
+    let before = DrawPlan::build(&s);
+    let plan = DrawPlan::build_with(&s, Some(&l));
+    let st = plan.stats;
+    assert_eq!((st.translucent_skipped, st.untextured_no_diffuse), (1, 1));
+    assert_eq!(st.instances + 1, before.stats.instances);
+    let water = plan
+        .slots
+        .iter()
+        .position(|m| m.path == "Mats.Water")
+        .map(|i| u32::try_from(i).unwrap());
+    assert!(water.is_some());
+    assert!(plan.batches.iter().all(|b| b.key.material != water));
+}
+
+#[test]
+fn blended_instances_are_ordered_far_to_near() {
+    let items = [
+        (0, 0, [10.0, 0.0, 0.0]),
+        (0, 1, [300.0, 0.0, 0.0]),
+        (1, 0, [-50.0, 0.0, 0.0]),
+        (2, 0, [0.0, 300.0, 0.0]),
+    ];
+    // (0,1) and (2,0) tie at 300: batch order breaks the tie.
+    assert_eq!(
+        back_to_front(&items, [0.0; 3]),
+        [(0, 1), (2, 0), (1, 0), (0, 0)]
+    );
+}
+
 #[test]
 fn the_diffuse_is_picked_by_parameter_name() {
     // A child's parameter replaces its parent's of the same name; the folded name is the key.
@@ -522,9 +721,9 @@ fn sanctuary_plan_on_the_installed_game() {
     );
     let _ = writeln!(
         r,
-        "meshes {} materials with diffuse candidates {} batches {} section instances {} empty sections {}",
+        "meshes {} material slots {} batches {} section instances {} empty sections {}",
         plan.meshes.len(),
-        plan.diffuse.len(),
+        plan.slots.len(),
         plan.batches.len(),
         s.instances,
         s.empty_sections
@@ -535,11 +734,11 @@ fn sanctuary_plan_on_the_installed_game() {
         "batches: mirrored {}, two-sided {}, untextured {}",
         by(&|k| k.mirrored),
         by(&|k| k.two_sided),
-        by(&|k| k.texture.is_none())
+        by(&|k| k.material.is_none())
     );
     let mut groups = ow_core::DetSet::new();
     for b in &plan.batches {
-        groups.insert((b.key.mesh, b.key.texture));
+        groups.insert((b.key.mesh, b.key.material));
     }
     let _ = writeln!(r, "distinct (mesh, texture) pairs {}", groups.len());
     let mut meshes = ow_core::DetSet::new();

@@ -44,7 +44,7 @@ use crate::movement::collide::CollisionWorld;
 use crate::movement::geom::{V3, floor_index};
 use crate::movement::mover::{MoveInput, Mover};
 use crate::movement::walk::{PathDigest, ScriptCursor, Segment};
-use crate::render::{DrawReport, Drawer, SceneRenderer, TextureSource};
+use crate::render::{DrawReport, Drawer, Lighting, SceneRenderer, TextureSource};
 use crate::sim::{HostCommand, PlayInput, SimError, Simulation, Snapshot, ViewPose};
 
 /// The simulation step: `--walk`'s, decision D13's default 1/60 s, as `f64`.
@@ -512,6 +512,7 @@ pub fn start_shot_due(frame: u64, presented: u64, finished: bool) -> bool {
 /// H2's scene renderer seen from the snapshot's view.
 pub struct PlayDrawer {
     plan: Option<DrawPlan>,
+    lighting: Lighting,
     textures: TextureSource,
     renderer: Option<SceneRenderer>,
     view: Option<ViewPose>,
@@ -530,6 +531,7 @@ pub struct PlayDrawer {
 impl PlayDrawer {
     pub fn new(
         plan: DrawPlan,
+        lighting: Lighting,
         textures: TextureSource,
         window: Option<(u32, u32)>,
         start_shot: Option<(u64, PathBuf)>,
@@ -538,6 +540,7 @@ impl PlayDrawer {
     ) -> PlayDrawer {
         PlayDrawer {
             plan: Some(plan),
+            lighting,
             textures,
             renderer: None,
             view: None,
@@ -556,7 +559,7 @@ impl PlayDrawer {
         let (view, size) = (self.view.ok_or("no view yet")?, self.size.ok_or("no frame yet")?);
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
-        let rgba = renderer.capture(device, queue, size, &vp)?;
+        let rgba = renderer.capture(device, queue, size, &vp, view.eye)?;
         let png = ow_assets::png::encode(size.0, size.1, &rgba).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -574,11 +577,12 @@ impl Drawer for PlayDrawer {
     fn attach(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Result<(), String> {
         let started = Instant::now();
         let plan = self.plan.take().ok_or("the scene is attached already")?;
-        let renderer = SceneRenderer::new(device, queue, format, &plan, &mut self.textures)?;
+        let renderer = SceneRenderer::new(device, queue, format, &plan, self.lighting, &mut self.textures)?;
         let mut report = self.report.borrow_mut();
         report.draw.upload_time = started.elapsed();
         report.draw.upload = renderer.upload;
         report.draw.draw_calls = renderer.draw_calls();
+        report.draw.blended_instances = renderer.blended_instances();
         self.renderer = Some(renderer);
         Ok(())
     }
@@ -608,7 +612,7 @@ impl Drawer for PlayDrawer {
         let view = self.view.ok_or("the simulation gave no view")?;
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
-        renderer.encode(device, queue, encoder, target, size, &vp);
+        renderer.encode(device, queue, encoder, target, size, &vp, view.eye);
         Ok(())
     }
 

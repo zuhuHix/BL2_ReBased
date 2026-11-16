@@ -29,6 +29,13 @@
 //! **Sidedness** is the base material's `TwoSided`; a material whose chain gives none (or a section with no material)
 //! is drawn two-sided, so that nothing is hidden by a guess.
 //!
+//! **Material slots** (lane H8-MATERIALS). With a [`MaterialLibrary`] ([`DrawPlan::build_with`]), each section's
+//! material becomes a [`MaterialSlot`]: its diffuse candidates (named, or the one texture the library's fallback
+//! rules found), an unconnected-input constant colour, its blend mode, unlit or lit, its opacity mask clip value, and
+//! the sky inputs of the sky dome's material. Without one ([`DrawPlan::build`]) a slot has only the named
+//! candidates and draws opaque and lit, as stage 2 did. Blended instances (translucent, additive, modulate) are drawn
+//! after the opaque ones in back-to-front order ([`back_to_front`]).
+//!
 //! Status: UNVERIFIED as the game's look. This is the B2 benchmark's level of drawing: one diffuse texture, a sun and
 //! ambient light.
 
@@ -36,6 +43,7 @@ use ow_assets::mesh::MeshLod;
 use ow_core::DetMap;
 
 use crate::frame::{self, Affine, Mat4, Ue3Matrix};
+use crate::material::{Blend, DEFAULT_CLIP, DiffuseSource, MaterialLibrary, SkyInputs};
 use crate::scene::{MeshStatus, Pose, Scene, SceneMaterial};
 
 /// A material channel the tool names (`prepare_level.py` `CHANNELS` values).
@@ -273,8 +281,8 @@ pub struct BatchKey {
     pub mesh: u32,
     /// The section slot.
     pub section: u32,
-    /// Index into [`DrawPlan::diffuse`] (the section's material's diffuse candidates); `None` draws untextured.
-    pub texture: Option<u32>,
+    /// Index into [`DrawPlan::slots`] (the section's material); `None` draws untextured, opaque and lit.
+    pub material: Option<u32>,
     pub two_sided: bool,
     /// Drawn with the other front face ([`Affine::mirrors`]).
     pub mirrored: bool,
@@ -350,8 +358,110 @@ pub struct PlanStats {
     pub untextured_no_material: usize,
     /// Untextured because the section's material is not in [`Scene::materials`].
     pub untextured_unknown_material: usize,
-    /// Untextured because the material names no diffuse texture by parameter (the tool's inferences not ported).
+    /// Untextured because the material has no diffuse: by parameter, and (with a library) by the fallback rules, as
+    /// a constant colour or as the sky.
     pub untextured_no_diffuse: usize,
+    /// Textured by a fallback rule of the library (unnamed sample, cooked `_Dif`, sole cooked texture).
+    pub fallback_textured: usize,
+    /// Drawn with an unconnected input's constant colour.
+    pub constant_coloured: usize,
+    /// Section instances by blend mode (the sky dome counted under `sky_instances` instead).
+    pub by_blend: [usize; 5],
+    /// Section instances of the sky dome's material.
+    pub sky_instances: usize,
+    /// Section instances of a translucent material with neither a diffuse nor a constant, not batched: their opacity
+    /// is the stripped graph's, and drawing them opaque grey covered Sanctuary's water decals in white. Counted under
+    /// `untextured_no_diffuse` and `by_blend` too.
+    pub translucent_skipped: usize,
+}
+
+impl PlanStats {
+    /// The section instances of `blend`.
+    pub fn blend_count(&self, blend: Blend) -> usize {
+        self.by_blend[blend_index(blend)]
+    }
+}
+
+/// The place of `blend` in [`PlanStats::by_blend`].
+fn blend_index(blend: Blend) -> usize {
+    match blend {
+        Blend::Opaque => 0,
+        Blend::Masked => 1,
+        Blend::Translucent => 2,
+        Blend::Additive => 3,
+        Blend::Modulate => 4,
+    }
+}
+
+/// How a section's material is drawn (module documentation).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialSlot {
+    /// The material's object path.
+    pub path: String,
+    /// The diffuse candidates in the tool's order; empty draws untextured.
+    pub diffuse: Vec<DiffuseCandidate>,
+    /// An unconnected input's constant, drawn instead of a texture.
+    pub constant: Option<[f32; 3]>,
+    pub blend: Blend,
+    pub unlit: bool,
+    /// The opacity mask clip value of a masked material.
+    pub clip: f32,
+    /// The sky dome's inputs: drawn first, unlit, behind everything.
+    pub sky: Option<SkyInputs>,
+}
+
+impl MaterialSlot {
+    /// The slot of `material` at `path`, read with `library` when given.
+    fn new(
+        path: &str,
+        material: &SceneMaterial,
+        library: Option<&MaterialLibrary>,
+    ) -> MaterialSlot {
+        let named = diffuse_candidates(material);
+        let info = library.and_then(|l| l.materials.get(path));
+        let mut slot = MaterialSlot {
+            path: path.to_string(),
+            diffuse: named,
+            constant: None,
+            blend: Blend::Opaque,
+            unlit: false,
+            clip: DEFAULT_CLIP,
+            sky: None,
+        };
+        if let Some(info) = info {
+            slot.blend = info.blend;
+            slot.unlit = info.unlit();
+            slot.clip = info.opacity_mask_clip;
+            slot.sky = info.sky.clone();
+            if slot.diffuse.is_empty() {
+                if let Some(t) = info.diffuse.texture() {
+                    slot.diffuse.push(DiffuseCandidate {
+                        path: t.to_string(),
+                        priority: 0,
+                        stub: is_stub(t),
+                    });
+                } else if let DiffuseSource::Constant(c) = info.diffuse {
+                    slot.constant = Some(c);
+                }
+            }
+        }
+        slot
+    }
+}
+
+/// The order blended instances are drawn in: farthest from `eye` first (by each instance's origin), ties in
+/// `(batch, instance)` order. `items` are `(batch, instance, origin)`; the result keeps `(batch, instance)`.
+pub fn back_to_front(items: &[(usize, u32, [f32; 3])], eye: [f32; 3]) -> Vec<(usize, u32)> {
+    let mut keyed: Vec<(f64, usize, u32)> = items
+        .iter()
+        .map(|&(b, i, o)| {
+            let d = [0, 1, 2].map(|k| f64::from(o[k]) - f64::from(eye[k]));
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2], b, i)
+        })
+        .collect();
+    keyed.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    keyed.into_iter().map(|(_, b, i)| (b, i)).collect()
 }
 
 /// Everything the renderer needs from a scene.
@@ -359,9 +469,8 @@ pub struct PlanStats {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawPlan {
     pub meshes: Vec<MeshData>,
-    /// The diffuse candidates of each textured material the batches use ([`diffuse_candidates`]), first-use order,
-    /// equal lists shared.
-    pub diffuse: Vec<Vec<DiffuseCandidate>>,
+    /// The materials the batches use, first-use order.
+    pub slots: Vec<MaterialSlot>,
     /// Sorted by [`BatchKey`].
     pub batches: Vec<Batch>,
     pub stats: PlanStats,
@@ -413,13 +522,18 @@ pub fn world_affine(pose: &Pose) -> Option<Affine> {
 }
 
 impl DrawPlan {
-    /// The plan for every placement of `scene` that is not hidden (module documentation).
+    /// The plan for every placement of `scene` that is not hidden, its materials by named diffuse only (stage 2).
     pub fn build(scene: &Scene) -> DrawPlan {
+        Self::build_with(scene, None)
+    }
+
+    /// The plan with each material read through `library` when given (module documentation).
+    pub fn build_with(scene: &Scene, library: Option<&MaterialLibrary>) -> DrawPlan {
         let mut stats = PlanStats::default();
         let mut meshes: Vec<MeshData> = Vec::new();
         let mut mesh_ids: DetMap<String, Option<u32>> = DetMap::new();
-        let mut diffuse: Vec<Vec<DiffuseCandidate>> = Vec::new();
-        let mut diffuse_ids: DetMap<Vec<DiffuseCandidate>, u32> = DetMap::new();
+        let mut slots: Vec<MaterialSlot> = Vec::new();
+        let mut slot_ids: DetMap<String, u32> = DetMap::new();
         let mut batches: DetMap<BatchKey, Vec<Instance>> = DetMap::new();
         for p in scene.placements.values() {
             stats.placements += 1;
@@ -465,25 +579,52 @@ impl DrawPlan {
                     continue;
                 }
                 let path = effective.get(slot).and_then(|m| m.as_deref());
-                let material = path.and_then(|m| scene.materials.get(m));
-                let candidates = material.map(diffuse_candidates).unwrap_or_default();
-                match (path, material, candidates.is_empty()) {
-                    (None, _, _) => stats.untextured_no_material += 1,
-                    (Some(_), None, _) => stats.untextured_unknown_material += 1,
-                    (Some(_), Some(_), true) => stats.untextured_no_diffuse += 1,
-                    (Some(_), Some(_), false) => {}
-                }
-                let texture = (!candidates.is_empty()).then(|| {
-                    *diffuse_ids.entry(candidates.clone()).or_insert_with(|| {
-                        diffuse.push(candidates);
-                        u32::try_from(diffuse.len() - 1).unwrap_or(u32::MAX)
+                let material = path.and_then(|m| scene.materials.get(m).map(|sm| (m, sm)));
+                let index = material.map(|(m, sm)| {
+                    *slot_ids.entry(m.to_string()).or_insert_with(|| {
+                        slots.push(MaterialSlot::new(m, sm, library));
+                        u32::try_from(slots.len() - 1).unwrap_or(u32::MAX)
                     })
                 });
+                let made = index.and_then(|i| slots.get(i as usize));
+                match (path, made) {
+                    (None, _) => stats.untextured_no_material += 1,
+                    (Some(_), None) => stats.untextured_unknown_material += 1,
+                    (Some(_), Some(m)) if m.sky.is_some() => {}
+                    (Some(_), Some(m)) if m.constant.is_some() => stats.constant_coloured += 1,
+                    (Some(_), Some(m)) if m.diffuse.is_empty() => stats.untextured_no_diffuse += 1,
+                    (Some(_), Some(m)) => {
+                        let named =
+                            material.is_some_and(|(_, sm)| !diffuse_candidates(sm).is_empty());
+                        if !named && !m.diffuse.is_empty() {
+                            stats.fallback_textured += 1;
+                        }
+                    }
+                }
+                match made {
+                    Some(m) if m.sky.is_some() => stats.sky_instances += 1,
+                    Some(m) => stats.by_blend[blend_index(m.blend)] += 1,
+                    None => stats.by_blend[blend_index(Blend::Opaque)] += 1,
+                }
+                if made.is_some_and(|m| {
+                    m.blend == Blend::Translucent
+                        && m.sky.is_none()
+                        && m.constant.is_none()
+                        && m.diffuse.is_empty()
+                }) {
+                    stats.translucent_skipped += 1;
+                    continue;
+                }
+                let two_sided = library
+                    .and_then(|l| path.and_then(|m| l.materials.get(m)))
+                    .and_then(|i| i.two_sided)
+                    .or_else(|| material.and_then(|(_, sm)| sm.two_sided))
+                    .unwrap_or(true);
                 let key = BatchKey {
                     mesh: mesh_id,
                     section: u32::try_from(slot).unwrap_or(u32::MAX),
-                    texture,
-                    two_sided: material.and_then(|m| m.two_sided).unwrap_or(true),
+                    material: index,
+                    two_sided,
                     mirrored,
                 };
                 batches.entry(key).or_default().push(instance);
@@ -492,7 +633,7 @@ impl DrawPlan {
         }
         DrawPlan {
             meshes,
-            diffuse,
+            slots,
             batches: batches
                 .into_iter()
                 .map(|(key, instances)| Batch { key, instances })

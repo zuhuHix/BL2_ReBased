@@ -3,9 +3,12 @@
 //! `cargo test -p ow-host --locked -- --ignored render::tests`.
 
 use super::*;
-use crate::draw::{Batch, DiffuseCandidate, Instance, MeshData, SectionRange, Vertex};
+use crate::draw::{
+    Batch, DiffuseCandidate, Instance, MaterialSlot, MeshData, SectionRange, Vertex,
+};
 use crate::executor::block_on;
 use crate::frame::{self, Affine};
+use crate::material::{Blend, SkyInputs};
 use ow_core::units::Rotator;
 
 /// Validation errors the device reported, in order.
@@ -80,13 +83,13 @@ fn plan(mesh: MeshData, scale3d: [f32; 3], two_sided: bool) -> (DrawPlan, Affine
     let key = BatchKey {
         mesh: 0,
         section: 0,
-        texture: None,
+        material: None,
         two_sided,
         mirrored: affine.mirrors(),
     };
     let plan = DrawPlan {
         meshes: vec![mesh],
-        diffuse: Vec::new(),
+        slots: Vec::new(),
         batches: vec![Batch {
             key,
             instances: vec![Instance::new(&affine)],
@@ -94,6 +97,19 @@ fn plan(mesh: MeshData, scale3d: [f32; 3], two_sided: bool) -> (DrawPlan, Affine
         stats: Default::default(),
     };
     (plan, affine)
+}
+
+/// An opaque, lit material slot with `diffuse` candidates.
+fn slot(diffuse: Vec<DiffuseCandidate>) -> MaterialSlot {
+    MaterialSlot {
+        path: "Mats.Probe".into(),
+        diffuse,
+        constant: None,
+        blend: Blend::Opaque,
+        unlit: false,
+        clip: crate::material::DEFAULT_CLIP,
+        sky: None,
+    }
 }
 
 /// Whether the centre pixel shows the (grey, lit) triangle rather than the sky clear colour, which is bluer.
@@ -104,12 +120,13 @@ fn drawn_at_centre(device: &wgpu::Device, queue: &wgpu::Queue, plan: &DrawPlan) 
         queue,
         wgpu::TextureFormat::Rgba8UnormSrgb,
         plan,
+        Lighting::viewer(),
         &mut none,
     )
     .unwrap();
     let camera = FlyCamera::at([0.0; 3], Rotator::default());
     let vp = camera.view_projection(32, 32).unwrap();
-    let rgba = r.capture(device, queue, (32, 32), &vp).unwrap();
+    let rgba = r.capture(device, queue, (32, 32), &vp, [0.0; 3]).unwrap();
     let px = &rgba[(16 * 32 + 16) * 4..][..4];
     (i32::from(px[2]) - i32::from(px[0])).abs() < 8
 }
@@ -169,11 +186,14 @@ fn the_upload_counts_what_it_sends() {
     };
     // The first material's best candidate does not decode: it falls back to the next. The second has only that one:
     // it is drawn grey, and the failure is not decoded twice.
-    p.diffuse = vec![
-        vec![candidate("Tex.Broken", 100), candidate("Tex.Fine", 90)],
-        vec![candidate("Tex.Broken", 100)],
+    p.slots = vec![
+        slot(vec![
+            candidate("Tex.Broken", 100),
+            candidate("Tex.Fine", 90),
+        ]),
+        slot(vec![candidate("Tex.Broken", 100)]),
     ];
-    p.batches[0].key.texture = Some(0);
+    p.batches[0].key.material = Some(0);
     let mut source = |path: &str| -> Result<TextureAsset, String> {
         if path != "Tex.Fine" {
             return Err("invented failure".into());
@@ -185,6 +205,7 @@ fn the_upload_counts_what_it_sends() {
         &queue,
         wgpu::TextureFormat::Rgba8UnormSrgb,
         &p,
+        Lighting::viewer(),
         &mut source,
     )
     .unwrap();
@@ -201,6 +222,7 @@ fn the_upload_counts_what_it_sends() {
         &queue,
         wgpu::TextureFormat::R8Unorm,
         &p,
+        Lighting::viewer(),
         &mut source,
     );
     assert!(refused.is_err());
@@ -239,6 +261,222 @@ fn fine_texture() -> Result<TextureAsset, String> {
         std::path::Path::new("."),
     )
     .map_err(|e| e.to_string())
+}
+
+#[test]
+fn the_scenes_lights_set_the_exposure() {
+    use crate::lighting::{SceneLights, SkyLight, Sun};
+    let mut lights = SceneLights::default();
+    assert_eq!(Lighting::from_scene(&lights), Lighting::viewer());
+    lights.sun = Some(Sun {
+        path: "S".into(),
+        level: "L".into(),
+        rotation: Rotator::default(),
+        color: [1.0, 0.5, 0.5],
+        brightness: 4.0,
+        tags_at: 0,
+    });
+    lights.sky = Some(SkyLight {
+        path: "K".into(),
+        level: "L".into(),
+        color: [0.25, 0.5, 1.0],
+        brightness: 1.0,
+        lower_color: [1.0, 1.0, 1.0],
+        lower_brightness: 0.5,
+    });
+    let l = Lighting::from_scene(&lights);
+    assert_eq!(
+        (l.sun, l.sky_upper, l.sky_lower),
+        ([4.0, 2.0, 2.0], [0.25, 0.5, 1.0], [0.5; 3])
+    );
+    // The brightest sum is red: 4 + 0.25.
+    assert_eq!(l.exposure, 1.0 / 4.25);
+    assert_eq!(l.sun_direction, [-1.0, 0.0, 0.0]);
+}
+
+/// A 4 x 4 PF_A8R8G8B8 texture of one colour (`bgra` as stored) with its one mip, through the `ow-assets` reader.
+fn solid_texture(bgra: [u8; 4]) -> Result<TextureAsset, String> {
+    use ow_package::package::Package;
+    use ow_package::testkit::{PackageBuilder, words};
+    let mut b = PackageBuilder::new_empty();
+    b.names(["None"]);
+    let class = b.add_import("Core", "Class", 0, "Texture2D");
+    let mut payload = words(&[0]);
+    let detail = b.fname("EPixelFormat", 0);
+    let value = b.fname("PF_A8R8G8B8", 0);
+    payload.extend(b.tag_detail("Format", "ByteProperty", &detail, &value));
+    payload.extend(b.none());
+    payload.extend(vec![0u8; 16]);
+    payload.extend(words(&[1, 0, 64, 64, 0]));
+    for _ in 0..16 {
+        payload.extend(bgra);
+    }
+    payload.extend(words(&[4, 4]));
+    b.add_export(class, "Probe", payload);
+    let package = Package::from_decoded(Default::default(), "probe".into(), b.build())
+        .map_err(|e| e.to_string())?;
+    ow_assets::texture::read_texture(
+        &package,
+        1,
+        4,
+        &ow_package::props::NoArrayTypes,
+        std::path::Path::new("."),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The centre pixel of `slots` drawn on two triangles: batch 0 on the first slot at `near` uu, batch 1 (when there is
+/// a second slot) at 200 uu, unlit unless the slot says otherwise. Every slot's diffuse is `Tex.<index>` from
+/// `colours` (BGRA).
+fn centre_of(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    slots: Vec<MaterialSlot>,
+    near: f32,
+    colours: &[[u8; 4]],
+) -> [u8; 4] {
+    let mut batches = Vec::new();
+    for (i, distance) in [near, 200.0].into_iter().enumerate().take(slots.len()) {
+        let affine = frame::Placement::new([distance, 0.0, 0.0], Rotator::default(), 1.0, [1.0; 3])
+            .affine()
+            .unwrap();
+        batches.push(Batch {
+            key: BatchKey {
+                mesh: 0,
+                section: 0,
+                material: Some(u32::try_from(i).unwrap()),
+                two_sided: true,
+                mirrored: false,
+            },
+            instances: vec![Instance::new(&affine)],
+        });
+    }
+    let plan = DrawPlan {
+        meshes: vec![triangle(true)],
+        slots,
+        batches,
+        stats: Default::default(),
+    };
+    let colours = colours.to_vec();
+    let mut source = |path: &str| -> Result<TextureAsset, String> {
+        let index: usize = path
+            .trim_start_matches("Tex.")
+            .parse()
+            .map_err(|_| "a path")?;
+        solid_texture(colours[index])
+    };
+    let mut r = SceneRenderer::new(
+        device,
+        queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &plan,
+        Lighting::viewer(),
+        &mut source,
+    )
+    .unwrap();
+    let camera = FlyCamera::at([0.0; 3], Rotator::default());
+    let vp = camera.view_projection(32, 32).unwrap();
+    let rgba = r.capture(device, queue, (32, 32), &vp, [0.0; 3]).unwrap();
+    let px = &rgba[(16 * 32 + 16) * 4..][..4];
+    [px[0], px[1], px[2], px[3]]
+}
+
+fn unlit(texture: usize, blend: Blend) -> MaterialSlot {
+    let mut s = slot(vec![DiffuseCandidate {
+        path: format!("Tex.{texture}"),
+        priority: 100,
+        stub: false,
+    }]);
+    s.unlit = true;
+    s.blend = blend;
+    s
+}
+
+#[test]
+#[ignore = "needs a GPU adapter or the software fallback"]
+fn blend_modes_draw_as_their_material_says() {
+    let Some((device, queue, errors)) = headless() else {
+        panic!("no adapter, not even the software fallback");
+    };
+    // BGRA as stored: red with alpha 0, red opaque, white at half alpha.
+    let colours = [[0, 0, 255, 0], [0, 0, 255, 255], [255, 255, 255, 128]];
+    let clear = centre_of(&device, &queue, vec![], 200.0, &colours);
+    // Masked: alpha 0 under the clip value is discarded, alpha 255 is drawn.
+    assert_eq!(
+        centre_of(
+            &device,
+            &queue,
+            vec![unlit(0, Blend::Masked)],
+            200.0,
+            &colours
+        ),
+        clear
+    );
+    assert_eq!(
+        centre_of(
+            &device,
+            &queue,
+            vec![unlit(1, Blend::Masked)],
+            200.0,
+            &colours
+        ),
+        [255, 0, 0, 255]
+    );
+    // Translucent: white at half alpha over the sky lands between the two.
+    let half = centre_of(
+        &device,
+        &queue,
+        vec![unlit(2, Blend::Translucent)],
+        200.0,
+        &colours,
+    );
+    assert!(
+        half[0] > clear[0] && half[0] < 255,
+        "{half:?} over {clear:?}"
+    );
+    // Translucent over a diffuse with alpha 255 everywhere: its opacity is the graph's, unknown, so it is not drawn.
+    assert_eq!(
+        centre_of(
+            &device,
+            &queue,
+            vec![unlit(1, Blend::Translucent)],
+            200.0,
+            &colours
+        ),
+        clear
+    );
+    // Additive: the red adds to what is behind (red channel full, blue kept from the sky).
+    let added = centre_of(
+        &device,
+        &queue,
+        vec![unlit(1, Blend::Additive)],
+        200.0,
+        &colours,
+    );
+    assert_eq!((added[0], added[2]), (255, clear[2]));
+    // The sky: drawn first with no depth test, so a farther opaque triangle covers it.
+    let mut sky = unlit(1, Blend::Opaque);
+    sky.sky = Some(SkyInputs {
+        strip: "Tex.1".into(),
+        clouds: "Tex.1".into(),
+        time_of_day: 0.0,
+        sky_brightness: 1.0,
+        cloud_brightness: 1.0,
+        cloud_cap_opacity: 0.0,
+    });
+    assert_eq!(
+        centre_of(&device, &queue, vec![sky.clone()], 200.0, &colours),
+        [255, 0, 0, 255]
+    );
+    let covered = centre_of(
+        &device,
+        &queue,
+        vec![sky, unlit(2, Blend::Opaque)],
+        100.0,
+        &colours,
+    );
+    assert_eq!(covered, [255, 255, 255, 255]);
+    assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }
 
 #[test]
