@@ -224,8 +224,8 @@ command reads it, and the mapping is written into `crates/README.md`):
 | `cmd/census.rs` | W4-VMTOOLS | `--native-census`, `--vm-sweep`, `--native-selftest`, `--no-static`, `--top`, `--limit`, `--all` |
 | `cmd/items.rs` | W4-REGISTRY | `--item-registry` with `--cooked <dir>`, `[--overlay <file>]` (Rust-only) |
 | `cmd/items_roll.rs` | W4-ROLL | `--item-roll <balance path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (NotYet, exit 3); `--item-roll --census <file> --cooked <dir> [--rolls <n>]` (item_roll.py's census rolls); `--item-roll --weapons <file> --cooked <dir> [--seeds <n>]` (weapon_gen_parity's requests) (Rust-only) |
-| `cmd/items_stats.rs` | W4-STATS | `--item-stats` and `--item-card`, each with `--cooked <dir>` and either `--data <definition-data json file>` or the `--item-roll` modifiers, `[--overlay <file>]` (Rust-only) |
-| `cmd/items_pools.rs` | W4-POOLS | `--item-pool <pool path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (Rust-only) |
+| `cmd/items_stats.rs` | W4-STATS | `--item-stats` and `--item-card`, each with `--cooked <dir>` and one of: `<balance path> --stage <n> --seed <n> [--count <n>]`; `--weapons <file> [--seeds <n>]`; `--requests <file> --output <file>` (one line per request); `--data <definition-data json file> [--level <n>] [--overlay <file>]`; each with `[--colours <file>]` (Rust-only) |
+| `cmd/items_pools.rs` | W4-POOLS | `--item-pool <pool path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--package <file>]` (default `WillowGame/CookedPCConsole/Startup.upk`), `[--python-sum 3.12\|3.14]`, `[--overlay <file>]` (NotYet, exit 3); `--item-pool --parity <file> --cooked <dir> [--seeds <n>] [--package <file>] [--python-sum 3.12\|3.14]` (the parity requests; `<file>` under `local/` only) (Rust-only) |
 | `cmd/behavior.rs` | W5-BEHAVIOR | `--behavior-dump`, `--behavior-run` |
 | `cmd/kismet.rs` | W5-KISMET | `--kismet-census`, `--kismet-run`, `--remote`, `--originator`, `--op` |
 | `cmd/mover.rs` | W5-DIALOG | `--mover-event`, `--mover-probe` |
@@ -1006,9 +1006,41 @@ impl Rolled { pub fn definition_data(&self) -> Result<DefinitionData, ItemError>
 // instantiates the item (W4-STATS instantiate_stats, or the world's weapon actor), then calls roll_candidate with
 // RollCx::with_item. roll in Off mode without an instance answers NotYet for the parts that need one (name expressions,
 // context-dependent rarity terms); RollCx has no hook that instantiates.
-pub fn instantiate_stats(data: &DefinitionData, cx: &mut EvalCx) -> Result<ObjRef, ItemError>;  // the weapon/item object the stats live on
-pub fn card(stats_object: ObjRef, cx: &mut EvalCx) -> Result<Card, ItemError>;                 // AttributePresentationDefinition rounding
-pub fn roll_pool(pool: &ObjectPath, cx: &mut RollCx) -> Result<Vec<DefinitionData>, ItemError>;   // the oracle: loot_pools.roll_pool_crt
+// As shipped by W4-STATS (PR #323, decision 2026-11-15-24). stats.rs, Off mode (every value through ow-attr):
+pub struct Instance { pub object: ObjRef, pub external: ItemStats /* an item's owner stacks; empty for a weapon */ }
+pub fn instantiate_stats(data: &DefinitionData, level: i32, sys: &AttributeSystem, cx: &mut EvalCx,
+    known: &DetMap<String, ObjRef> /* objects the caller holds, by path; the rest from the world's store */)
+    -> Result<Instance, ItemError>;   // allocates the instance of the kind's class, writes ExpLevel, then instantiate_onto
+pub fn instantiate_onto(object: ObjRef, data: &DefinitionData, sys: &AttributeSystem, cx: &mut EvalCx,
+    known: &DetMap<String, ObjRef>) -> Result<Instance, ItemError>;   // the same on an object the caller has (the weapon actor)
+// The three weapon steps instantiate_onto runs, each public (W5-EQUIP's override of CalculateWeaponBaseValues binds the first):
+pub fn weapon_base_values(weapon: ObjRef, weapon_type: ObjRef, sys: &AttributeSystem, cx: &mut EvalCx) -> Result<(), ItemError>;
+pub fn weapon_part_base_values(weapon: ObjRef, barrel: Option<ObjRef>, body: Option<ObjRef>, sys: &AttributeSystem,
+    cx: &mut EvalCx) -> Result<(), ItemError>;
+pub fn apply_weapon_effects(weapon: ObjRef, weapon_type: ObjRef, parts: &[ObjRef], names: &[ObjRef], sys: &AttributeSystem,
+    cx: &mut EvalCx) -> Result<ow_attr::api::Applied, ItemError>;   // the records an unequip removes
+// Open (W5-EQUIP's unequip): instantiate_onto drops the Applied records apply_weapon_effects returns.
+// cards.rs: the Reference card (tools/weapon_stats.evaluate field for field) and the Off-mode numbers of an instance.
+pub fn weapon_card(stats: &StatsData, recipe: &WeaponRecipe, level: i64, text: &CardText) -> Result<WeaponCard, ItemError>;
+    // WeaponCard::to_pv is the generator's JSON shape
+pub fn instance_numbers(weapon: ObjRef, sys: &AttributeSystem, cx: &mut EvalCx)
+    -> Result<Vec<(&'static str, Option<f64>, Option<Num>)>, ItemError>;   // damage, fire rate, reload, magazine, spread
+// As shipped by W4-POOLS (PR #324, decision 2026-11-15-25). pools.rs:
+pub fn roll_pool(pools: &PoolData, reg: Option<&Registry> /* Off mode expands balances from it */, source: &ObjectPath,
+    request: &PoolRequest, cx: &mut RollCx) -> Result<Vec<PoolDrop>, ItemError>;
+    // Reference: loot_pools.py's CrtRand path (roll_crt / roll_pool_crt); Off: SpawnBalancedInventoryFromPool (NATIVE_LOOT)
+#[non_exhaustive] pub struct PoolRequest { pub listing: Listing /* Every (Reference only), OnDeath (Off's default),
+    Readied (NotYet) */, pub variance: Option<Pv> /* Off only */, pub python_sum: PySum /* Reference only */ }
+    // ::for_mode(mode), with_listing, with_variance, with_python_sum
+#[non_exhaustive] pub struct PoolDrop { pub balance: String, pub chain: Vec<String> /* outermost first */,
+    pub candidate: Option<PoolCandidate> /* Off: for roll_candidate */, pub drop_on_death: Option<bool> /* None: untagged */ }
+impl PoolData { pub fn new(CensusInput) -> Result<PoolData, ItemError>; pub fn one_file(census, root, file) -> CensusInput;
+                pub fn from_files(census, root, files: &[&str]) -> CensusInput; /* several packages, owner the first holder
+                in the given order, for W6-LOOT; not an oracle reading */ }
+// A pool drop has no DefinitionData until its item is instantiated (instantiate_stats) and rolled (roll_candidate).
+// Draw order: roll_pool returns its drops after all pool draws, while the native spawns each item inside the pick
+// loop (the item's own roll runs before the next pick). Through one generator the stream order therefore differs
+// from the native's; the game's sequence is reproduced in neither case (UNVERIFIED, decision 2026-11-15-25).
 ```
 
 The stats of an item **are attributes on an instance object** in every case: offline, `instantiate_stats` makes a
@@ -1116,6 +1148,19 @@ borrows one only for a short scope and never across `call_script`. That rule is 
 the review bar's first check; the VM enforces it: any call while a service is borrowed is `VmError::ServiceBorrowed`,
 naming the first borrowed service in registration order.
 
+*Object states (W5-STATES, decision 2026-11-15-27; Off mode only, Reference keeps the C++ name-only approximation;
+every rule UNVERIFIED in the running game).* The state frames are a crate-private VM service, borrowed only for short
+scopes.
+
+```rust
+pub fn states::process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmError>;   // one state-code step (the latent poll first), for W5-WORLD's actor tick
+pub fn states::probe_enabled(vm: &mut Vm, object: ObjRef, name: &str) -> Result<bool, VmError>;  // the probe rule for world events (Tick, Touch); NotYet for the 22 unnamed probe ids
+pub fn states::forget(vm: &mut Vm, object: ObjRef) -> Result<(), VmError>;   // drop a frame; every path that frees objects calls it (world destroy, sweep's release_unreferenced)
+pub fn states::latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<LatentAction>, VmError>;   // with latent_pending, for the world's destroy and tick
+pub fn states::send_world_event(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<bool, VmError>;   // an event through the state chain, probe-gated (find_event looks it up)
+pub fn latent::kernel_resume_at(now: f64, wait: f64) -> Option<f64>;   // the behavior kernel's wait: None when negative or NaN, else now + max(wait, 1/60), for W5-BEHAVIOR
+```
+
 ### 3.9 Native packs, world and host
 
 - **Everything a native needs is reachable from `&mut Vm`** (review finding 2): the object space, the store, the
@@ -1123,10 +1168,34 @@ naming the first borrowed service in registration order.
   VM service. `ow-world` registers the `WorldHooks` service of 3.8 (globals, game info, engine queries) and, as a
   separate service typed in `ow-world`, the balance state; `Vm`'s `AttrWorld` implementation calls the hooks; without it those methods return
   `NotYet { LayerAbsent("ow-world") }`, which is how W3-CORENAT and the W3 attribute lanes run before wave 5.
-- `ow-world::World { vm: Vm }` is a thin owner: `World::new` registers the packs, `World::tick(dt)` advances
-  `vm.clock` and runs actor ticks by `TickGroup` (per-actor timers inside each actor's tick, as the record orders
-  them), then latent code. Every native-pack crate exports `pub struct Pack; impl NativePack for Pack`. `ow-cli` and
-  `ow-host` assemble the packs they need.
+- `ow-world::World { pub vm: Vm, .. }` is a thin owner (as shipped by W5-WORLD, PR #325, decision 2026-11-15-26;
+  every rule UNVERIFIED in the running game):
+  - `World::new(vm, BalanceState, &[&dyn NativePack])` installs the services on the VM, registers `world::Pack`
+    (`Actor.Spawn`, `Actor.Destroy`, the nine timer natives, `EvaluateInitializationData`, the `GetWorldInfo`
+    natives), then the given packs in order. `WorldError { Vm, Clock, BadDelta }`.
+  - Services, each reachable from `&mut Vm`: `query::WorldQuery` (globals, game info, and the engine-query handlers
+    keyed by `QueryKind`, registered by W5-POOLS, W5-EQUIP and W6-SKILLS; a kind with no handler is
+    `NotYet { LayerAbsent }` naming its lane), `world::BalanceState { snapshot, region_stages }`, `actors::Actors`
+    (the level list), `timers::Timers`, and `ow_vm::natives_core::ActorSource` (an `ActorWalkFn` over the actor list,
+    which `AllActors` / `DynamicActors` use when it exists; without it they keep the C++ list).
+  - `set_state_step` and `set_physics_step` take an `ActorStep` (`Rc<dyn Fn(&mut Vm, ObjRef, f32) -> Result<(),
+    VmError>>`), each set once: the state-code step (W5-STATES' `process_state`) and the physics step (the host).
+    Without one, an actor that needs it is `NotYet { LayerAbsent }`.
+  - Free functions for the packs above: `actors::{spawn, destroy, set_owner, send_event, is_destroyed, actors_of}`,
+    `timers::{update_pass, timers_of}`, `query::install`. The timers API is the `Timers` service keyed by (name,
+    object): `set`, `clear`, `clear_all`, `pause`, `is_active`, `count`, `rate`, `set_dilation`, `of`.
+  - `World::tick(real_dt) -> Step` copies `WorldInfo.TimeDilation` into the clock, advances it, writes the world
+    times, then ticks actors by `TickGroup` 0 to 4 (each actor's group read once, before the clock advances). One
+    actor's tick is, in order: `Tick(DeltaTime)`, the state-code step, the timer pass, `LifeSpan`, then physics. The
+    state-code step runs inside each actor's tick, not after all actors.
+  - Open: the iterators take a fixed list when the loop starts, where the record reads the game's walk as live (an
+    actor spawned in the body is visited, a removal skips the next one); a live walk is a contract follow-up.
+  - Open: an actor spawned during a tick is first ticked in the next one; spawn step 11's newly-spawned list, which in
+    public UE3 ticks it in the same frame, is the unread alternative.
+  - Open: where single player sets a local actor's `RemoteRole` to none is not read; until then `RemoteRole` 2 stops
+    the tick with `NotYet { NotRead }` (W6).
+- Every native-pack crate exports `pub struct Pack; impl NativePack for Pack`. `ow-cli` and `ow-host` assemble the
+  packs they need.
 - The behavior kernel (`ow-behavior`) keeps a handler registry keyed by behavior class; `ow-combat` (damage and
   loot-spawn behaviors, the latter in `loot.rs`), `ow-skills` and `ow-mission` register handlers for the classes they
   own from their `NativePack::register`. `ow-inventory` registers none (it has no edge to `ow-behavior`). An unregistered class reached at run time is
