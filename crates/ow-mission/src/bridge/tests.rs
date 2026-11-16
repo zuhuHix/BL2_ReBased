@@ -319,7 +319,40 @@ fn willowgame() -> Vec<u8> {
     t.class("WillowPlayerPawn", engine_pawn);
     let ai_pawn = t.class("WillowAIPawn", willow_pawn);
     t.prop("Object", ai_pawn, "BodyClass", 0, object);
+    t.prop("Object", ai_pawn, "MissionDirectives", 0, object);
     t.build()
+}
+
+/// `TestDirector`: an invented director archetype at the stock path [`MARCUS_PAWN`] (a `WillowAIPawn` outside any
+/// level), whose `BodyClass` names `TestMission`'s `Body_Toy` by import and whose `MissionDirectives` names
+/// `Directives_Toy`, an export of this package (a `GlobalsDefinition` with an invented interaction distance of 7).
+/// No provider at [`MARCUS_PROVIDER`], so placing him binds no use chain.
+fn director_package() -> Vec<u8> {
+    let mut p = PackageBuilder::new_empty();
+    let none = p.none();
+    let willow = p.add_import("Core", "Package", 0, "WillowGame");
+    let mission = p.add_import("Core", "Package", 0, "TestMission");
+    let body = p.add_import("GearboxFramework", "BodyClassDefinition", mission, "Body_Toy");
+    let package_class = p.add_import("Core", "Class", 0, "Package");
+    let mut empty = 0i32.to_le_bytes().to_vec();
+    empty.extend_from_slice(&none);
+    let gd = p.add_export(package_class, "GD_Marcus", empty.clone());
+    let character = p.add_export(package_class, "Character", empty);
+    p.set_outer(character, gd);
+    let c = p.add_import("Core", "Class", willow, "GlobalsDefinition");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(p.float_tag("PlayerInteractionDistance", 7.0));
+    payload.extend_from_slice(&none);
+    let directives = p.add_export(c, "Directives_Toy", payload);
+    p.set_outer(directives, character);
+    let c = p.add_import("Core", "Class", willow, "WillowAIPawn");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(p.object_tag("BodyClass", body));
+    payload.extend(p.object_tag("MissionDirectives", directives));
+    payload.extend_from_slice(&none);
+    let pawn = p.add_export(c, "Pawn_Marcus", payload);
+    p.set_outer(pawn, character);
+    p.build()
 }
 
 /// `ToyMission`: one set `SetA` {`Only` (count 1)} that completes the mission, no provider, a reward whose credit
@@ -422,6 +455,7 @@ impl Env {
             ("GearboxFramework.upk".into(), gearbox()),
             ("WillowGame.upk".into(), willowgame()),
             ("TestMission.upk".into(), mission_package(optional, multiplier, items)),
+            ("TestDirector.upk".into(), director_package()),
         ];
         let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         let defs =
@@ -1240,4 +1274,63 @@ fn a_bridge_dialog_event_is_seen_by_the_tracker_in_reference_mode() {
 #[test]
 fn a_bridge_dialog_event_is_seen_by_the_tracker_in_off_mode() {
     a_bridge_dialog_event_is_seen_by_the_tracker(ParityMode::Off);
+}
+
+/// The director (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48): each placement makes a new object from his
+/// archetype (the C++ `placeMarcus`, `instantiateExport` at 4), not the definition store's object for the path. His
+/// references are the store's objects: his body class is the store's `Body_Toy`, which the dialog loads, so his
+/// component's event speaks under its name tag; his directive table is a new object made from its export (the C++
+/// `loadRef`), with its tags.
+fn the_director_is_a_new_object_with_the_store_s_references(mode: ParityMode) {
+    let mut env = Env::with_mode(false, mode);
+    let (m, s) = (env.mission.clone(), env.script.clone());
+    m.dialog().borrow_mut().set_test_line_length(1.0);
+    m.accept(env.vm(), &DetSet::new()).unwrap();
+    m.drain();
+    // (The toy has no experience curve, so the accept's ExpEarn already left an error; only later ones count here.)
+    let earlier = s.errors().len();
+    let name = PackageName::parse("TestDirector").unwrap();
+    assert!(s.place_marcus(env.vm(), &name, MARCUS_PAWN).unwrap());
+    let director = s.director().expect("a director");
+    let body = env.object("Body_Toy");
+    let vm = env.vm();
+    let find = |vm: &mut Vm, path: &str| vm.defs.find(&mut vm.space, &ObjectPath::parse(path).unwrap()).unwrap().unwrap();
+    let archetype = find(vm, MARCUS_PAWN);
+    assert_ne!(director, archetype, "{mode:?}: a new object, not the store's");
+    assert_eq!(prop(&vm.space, director, "BodyClass").unwrap(), Some(Value::Object(Some(body))));
+    let Value::Object(Some(directives)) = get(&vm.space, director, "MissionDirectives").unwrap() else {
+        panic!("no directive table");
+    };
+    assert_ne!(directives, find(vm, "GD_Marcus.Character.Directives_Toy"));
+    assert_eq!(get(&vm.space, directives, "PlayerInteractionDistance").unwrap(), Value::Float(7.0));
+    // His component's event: the body class is read through the store (no stand-in, no error).
+    let component = s.inner.o.globals;
+    s.inner.state.borrow_mut().dialog_component = Some(component);
+    let tag_use = Value::Object(Some(env.object("Tag_Use")));
+    let got = env.call(
+        "GearboxFramework.GearboxDialogComponent.TriggerEvent",
+        Some(component),
+        vec![tag_use, Value::Object(None), Value::Object(None)],
+        MissionScript::n_trigger_event,
+    );
+    assert_eq!(got.unwrap(), Value::None);
+    assert_eq!(
+        dialog_lines(&m),
+        [("Tag_Use".to_string(), "DialogName_Toy".to_string(), "started".to_string())]
+    );
+    // A second placement makes another new object.
+    assert!(s.place_marcus(env.vm(), &name, MARCUS_PAWN).unwrap());
+    assert_ne!(s.director(), Some(director));
+    assert!(m.errors().is_empty(), "{:?}", m.errors());
+    assert_eq!(s.errors().len(), earlier, "{:?}", s.errors());
+}
+
+#[test]
+fn the_director_is_a_new_object_with_the_store_s_references_in_reference_mode() {
+    the_director_is_a_new_object_with_the_store_s_references(ParityMode::Reference);
+}
+
+#[test]
+fn the_director_is_a_new_object_with_the_store_s_references_in_off_mode() {
+    the_director_is_a_new_object_with_the_store_s_references(ParityMode::Off);
 }

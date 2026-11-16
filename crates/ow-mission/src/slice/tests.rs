@@ -676,6 +676,9 @@ fn startup(health: bool) -> Vec<u8> {
 struct Map {
     /// The dummy's pawn archetype at the stock path.
     pawn: bool,
+    /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Note`, an invented `Behavior_RemoteEvent` export
+    /// of the package (event name `InventedNote`), to check the pawn's references resolve through the store.
+    pawn_reference: bool,
     /// An OnTakeDamage `Behavior_AIHold` on the dummy.
     hold: bool,
     /// An OnSpawned condition of another class on sequence `Odd`.
@@ -710,7 +713,19 @@ fn dynamic(map: Map) -> Vec<u8> {
     p.set_outer(provider, class);
     if map.pawn {
         let c = class_import(&mut p, "Engine", "Pawn");
-        let pawn = p.add_export(c, "Pawn_TargetDummy", empty);
+        let mut payload = empty.clone();
+        if map.pawn_reference {
+            let note_class = class_import(&mut p, "Engine", "Behavior_RemoteEvent");
+            let mut note = 0i32.to_le_bytes().to_vec();
+            note.extend(p.name_tag("EventName", "InventedNote"));
+            note.extend_from_slice(&none);
+            let note = p.add_export(note_class, "Pawn_Note", note);
+            p.set_outer(note, character);
+            payload = 0i32.to_le_bytes().to_vec();
+            payload.extend(p.object_tag("Controller", note));
+            payload.extend_from_slice(&none);
+        }
+        let pawn = p.add_export(c, "Pawn_TargetDummy", payload);
         p.set_outer(pawn, character);
     }
     // The mission package's objects, by import.
@@ -1359,4 +1374,44 @@ fn a_scripted_run_replays_identically() {
     let first = run();
     assert!(first.len() > 10, "{first:?}");
     assert_eq!(first, run());
+}
+
+/// The dummy's pawn (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48): a new object made from the archetype (the C++
+/// `placeDummyPawn`, `instantiateExport` at 4), not the definition store's object for the path, whose reference is the
+/// store's object for its path and reads; every call of the bridge's `instantiate_export` makes another object.
+#[test]
+fn the_dummy_s_pawn_is_a_new_object_with_the_store_s_references() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut env = Env::new(
+            Map {
+                pawn: true,
+                pawn_reference: true,
+                ..Map::default()
+            },
+            mode,
+        );
+        env.spawn();
+        // (The spawn's own errors are the fixture's, by design: [`dynamic`]; only later ones count here.)
+        let earlier = env.slice.errors().len();
+        let pawn = env.slice.dummy_pawn().expect("the archetype gives a pawn");
+        let vm = env.vm();
+        let find = |vm: &mut Vm, path: &str| {
+            vm.defs.find(&mut vm.space, &ow_core::ObjectPath::parse(path).unwrap()).unwrap().unwrap()
+        };
+        let archetype = find(vm, DUMMY_PAWN);
+        assert_ne!(pawn, archetype, "{mode:?}: a new object, not the store's");
+        let note = find(vm, "GD_TargetDummy.Character.Pawn_Note");
+        assert_eq!(prop(&vm.space, pawn, "Controller").unwrap(), Some(Value::Object(Some(note))));
+        let event = prop(&vm.space, note, "EventName").unwrap().unwrap();
+        assert_eq!(text(&vm.space, Some(&event)), "InventedNote");
+        // Each call makes another object from the same export.
+        let ow_object::heap::Origin::Export { package, index } = vm.space.heap.get(pawn).unwrap().origin else {
+            panic!("the pawn is made from its export");
+        };
+        let again = bridge::instantiate_export(vm, package, index, PropertyPrefix::Ordinary).unwrap();
+        let third = bridge::instantiate_export(vm, package, index, PropertyPrefix::Ordinary).unwrap();
+        assert!(again != pawn && third != pawn && again != third, "{mode:?}");
+        assert_eq!(prop(&vm.space, again, "Controller").unwrap(), Some(Value::Object(Some(note))));
+        assert_eq!(env.slice.errors().len(), earlier, "{mode:?}: {:?}", env.slice.errors());
+    }
 }

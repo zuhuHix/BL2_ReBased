@@ -1358,6 +1358,54 @@ impl DefStore {
         })
     }
 
+    /// A new object made from export `index` of `package` on every call (the C++ `Runtime::instantiateExport`, which
+    /// builds a fresh object each time; the mission bridge's director and the slice's dummy pawn are made so): the
+    /// export's class defaults and its tags, decoded from the export again, with every reference it decodes resolved
+    /// through the store as a definition's are (the store's object for the path, loaded when read; module
+    /// documentation, "Lazy loading"). Its origin is `Origin::Export` of `package` and `index`, its outer `None`.
+    ///
+    /// It is not one of the store's objects: the identity map does not hold it, [`DefStore::find`] never returns it,
+    /// two calls give two objects, and writing to it changes no definition. No overlay is applied to it (the C++ has
+    /// none). The export is the one given, not the path's holder under the policy (the C++ reads the package it was
+    /// handed). `prefix` is checked against the prefix the store derives for the export, as [`DefStore::load_export`]
+    /// checks it ([`DefError::PrefixMismatch`], or [`DefError::NotYet`] where none derives). An index that is not
+    /// positive is the decoder's "unsupported exported object request" (the C++ text); a code export or a class
+    /// default object is [`DefError::NotADefinition`].
+    pub fn instance(
+        &mut self,
+        w: &mut ObjectSpace,
+        package: PackageId,
+        index: i32,
+        prefix: PropertyPrefix,
+    ) -> Result<ObjRef, DefError> {
+        if index <= 0 {
+            return Err(DecodeError::UnsupportedRequest.into());
+        }
+        let pkg = self.packages.shared(package);
+        pkg.object(index).map_err(package_error)?;
+        let path = full_path(&pkg, index).map_err(package_error)?;
+        self.run(w, |l| {
+            let class_name = l.cx.code.class_name(l.cx.store, package, index);
+            if is_class_default(&path) || is_code_class(&class_name) {
+                return Err(DefError::NotADefinition(path.clone()));
+            }
+            let derived = l.derive_prefix(package, index, &path)?;
+            if derived != prefix {
+                return Err(DefError::PrefixMismatch {
+                    object: path.clone(),
+                    derived,
+                    given: prefix,
+                });
+            }
+            let made = cdo::instantiate_export(l.cx, package, index, prefix);
+            if made.is_err() {
+                // A failed decode frees what it allocated, handles included: forget those (as a failed load does).
+                l.linker.handles.borrow_mut().prune(l.cx.space);
+            }
+            Ok(made?.object)
+        })
+    }
+
     /// Every file holding `path`, in the store's scan order, whatever the policy (for audits: the policy's choice is
     /// the first under `FirstInScanOrder`), each holder's file loaded into the package store (so `Owner::id` is set),
     /// and the candidate files that failed to load or search, reported in `Holders::failures`. Only the files the
