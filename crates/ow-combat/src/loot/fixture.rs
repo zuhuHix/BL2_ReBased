@@ -16,8 +16,9 @@
 //! `Balance_Two` (two playthrough entries), `List_Loop` (a list that includes itself) with `Balance_Loop`, the
 //! batch's damage source `WillowDmgSource_Shotgun` and stock damage type `GD_Impact.DamageType.DmgType_Normal`, the
 //! definition fields the Rust evaluator reads (`engine_loot`), `Balance_Unread` (a pool chance through an unread
-//! resolver class, `ToyUnreadValueResolver`) and `Balance_Partial` (`Pool_Partial`, a coin and `Pool_Self`, a pool
-//! that holds itself).
+//! resolver class, `ToyUnreadValueResolver`), `Balance_Partial` (`Pool_Partial`, a coin and `Pool_Self`, a pool
+//! that holds itself) and `Balance_Bare` (`Pool_Bare`, whose quantity definition is a `ToyBareDefinition` without
+//! the evaluator's fields, then `Pool_Coins`).
 
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT};
 use ow_package::testkit::{Export, PackageBuilder, ints};
@@ -144,6 +145,8 @@ pub fn willow_game_loot(
     w.cls("WillowDmgSource_Shotgun", 0);
     // A value resolver class no resolver registry knows (the evaluator's `NotYet`).
     w.cls("ToyUnreadValueResolver", 0);
+    // An initialization definition class that declares none of the fields the Rust evaluator reads.
+    w.cls("ToyBareDefinition", 0);
     let loot_pawn = w.cls("WillowLootPawn", ai_pawn);
     w.array_of(loot_pawn, "ItemPoolList", "Struct", pool_info);
     w.prop("Int", loot_pawn, "GameStageForSpawnedInventory", 0, 0);
@@ -434,6 +437,28 @@ pub fn toy_pawns_loot(p: &mut PackageBuilder, core: i32, engine: i32, willow: i3
     let four = data(p, "Quantity", 4.0, 1.0);
     let pool_partial = item_pool(p, "Pool_Partial", entries, Some(four), false, None);
     let partial_info = info(p, pool_partial, 1.0);
+    // A quantity whose definition lacks the fields the Rust evaluator reads (a data error the C++ does not raise:
+    // it reads an absent field as disabled), then the coin pool, so the roll is seen to go on.
+    let bare_class = p.add_import("Core", "Class", willow, "ToyBareDefinition");
+    let none = object_payload(p, Vec::new());
+    let bare = p.add_export(bare_class, "Bare_0", none);
+    let mut quantity = p.float_tag("BaseValueConstant", 1.0);
+    quantity.extend(p.float_tag("BaseValueScaleConstant", 1.0));
+    quantity.extend(p.object_tag("InitializationDefinition", bare));
+    quantity.extend_from_slice(&p.none());
+    let quantity = p.struct_tag("Quantity", "AttributeInitializationData", &quantity);
+    let entries = vec![entry(p, None, Some(coin), 1.0, true)];
+    let pool_bare = item_pool(p, "Pool_Bare", entries, Some(quantity), false, None);
+    let mut bare_info = info(p, pool_bare, 1.0);
+    bare_info.extend(info(p, pool_coins, 1.0));
+    let empty = entry_empty(p);
+    let tags = vec![
+        p.int_tag("BaseItemGameStage", 1),
+        p.array_tag("DefaultItemPoolList", 2, &bare_info),
+        p.array_tag("PlayThroughs", 1, &empty),
+    ];
+    let payload = object_payload(p, tags);
+    p.add_export(pawn_balance_class, "Balance_Bare", payload);
     for (name, own) in [("Balance_Unread", unread_info), ("Balance_Partial", partial_info)] {
         let empty = entry_empty(p);
         let tags = vec![

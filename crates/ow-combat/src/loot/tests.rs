@@ -827,9 +827,14 @@ fn key_of(vm: &mut Vm, path: &str) -> String {
 #[test]
 fn the_pool_native_is_the_loot_one_whichever_pack_registers_first() {
     for mode in [ParityMode::Reference, ParityMode::Off] {
-        // ow-inventory's natives first, then loot.
+        // ow-inventory's natives first, then loot. The fixture's key differs from the installed one (`object` where
+        // the installed `SpawnedInventory` is an `array`), so this order test cannot put both packs on one key; it
+        // shows that ow-inventory leaves the fixture's key unbound and loot then binds it.
         let (mut w, _dir) = world(mode);
         ow_inventory::spawn::register(&mut w.vm).unwrap();
+        let key = key_of(&mut w.vm, FROM_POOL);
+        assert_ne!(key, ow_inventory::spawn::FROM_POOL);
+        assert!(!w.vm.has_native(&key), "ow-inventory binds nothing on the fixture's key");
         enable(&mut w.vm).unwrap();
         let key = key_of(&mut w.vm, FROM_POOL);
         assert!(w.vm.has_native(&key));
@@ -886,6 +891,29 @@ fn a_not_yet_in_a_pool_chance_stops_the_reference_death_roll() {
     assert!(errors.starts_with("hit:0:10::Bullet: "), "{errors}");
     assert!(errors.contains("ToyUnreadValueResolver"), "{errors}");
     assert_eq!(drop_count(&run.world().vm).unwrap(), 0, "no roll recorded");
+}
+
+#[test]
+fn a_data_error_in_a_pool_quantity_is_not_evaluated_and_the_reference_roll_goes_on() {
+    // Pool_Bare's quantity definition lacks ValueFormula and the other fields the Rust evaluator reads: an attribute
+    // system data error (the C++ reads the fields as absent). Reference reports the pool, as the C++ reports what it
+    // catches, and rolls the next pool.
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    run.apply("player:8");
+    run.apply("spawn:ToyPawns/Pawn_Loot:4:6:Balance_Bare");
+    run.apply("hit:0:10::Bullet");
+    assert!(!run.failed(), "{:?}", run.errors());
+    let drops = drops(&run.world().vm).unwrap();
+    assert_eq!(drops.len(), 1);
+    let pools = &drops[0].pools;
+    assert_eq!(pools.len(), 2);
+    assert_eq!(leaf(&pools[0].pool), "Pool_Bare");
+    assert!(pools[0].error.contains("ValueFormula"), "{:?}", pools[0]);
+    assert!(!pools[0].tried && pools[0].items.is_empty());
+    assert_eq!(leaf(&pools[1].pool), "Pool_Coins");
+    assert!(pools[1].error.is_empty() && pools[1].tried && pools[1].items.len() == 3, "{:?}", pools[1]);
+    let events = with_state(&run.world().vm, |s| s.events.clone()).unwrap();
+    assert!(events.iter().any(|e| e.starts_with("loot Pool_Bare: not evaluated (") && e.contains("ValueFormula")), "{events:?}");
 }
 
 #[test]
