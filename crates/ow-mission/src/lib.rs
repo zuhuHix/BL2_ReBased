@@ -14,5 +14,6 @@ pub mod interactive;
 pub mod kismet;
 pub mod mover;
 pub mod slice;
+pub mod stations;
 pub mod tracker;
 pub mod vendors;
