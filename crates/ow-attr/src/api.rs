@@ -170,6 +170,11 @@ pub enum EngineQuery {
     /// source (`PlayerSkillAttributeValueResolver`, NATIVE_ATTRIBUTES.md section 6); `Ok(None)` when the player or
     /// the tree is missing, or the tree has no such skill. Added by W3-ATTREVAL (an additive change, section 7).
     PlayerSkill { definition: ObjRef },
+    /// The world's game replication info (the `GRI` of the world's `WorldInfo`), whatever the source: the source is
+    /// not read. `Ok(None)`: the world has no world info or no replication info (a front-end or offline evaluation).
+    /// The answer is not checked for class here; the reader checks it (`PlayThroughCountAttributeValueResolver`,
+    /// NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3). Added by FIX-PLAYTHROUGH-OFF (an additive change, section 7).
+    GameReplicationInfo,
 }
 
 /// The world the attribute system reads and edits: the running VM (`ow_vm::Vm`), an offline world
@@ -1057,6 +1062,7 @@ mod tests {
             EngineQuery::PlayerController,
             EngineQuery::AttributeContextSource,
             EngineQuery::PlayerSkill { definition: s },
+            EngineQuery::GameReplicationInfo,
         ] {
             let e = w.engine_query(q, s).err().unwrap();
             assert_eq!(missing(e).0, Missing::LayerAbsent("ow-world"));

@@ -13,7 +13,8 @@
 //!
 //! **What it does not model**, each answered with `NotYet`, never a stand-in: more than one player (decision D12;
 //! the game info and the party are not modelled); a game info (`game_info` is `Ok(None)`, the contract's answer for an
-//! offline world); engine queries other than the player controller of the controller itself; change notifications
+//! offline world); engine queries other than the player controller of the controller itself and the game replication
+//! info (answered with this world's, whatever the source); change notifications
 //! (they dispatch the owner class's native or script, which only the running world has); a random source unless one
 //! is given ([`OfflineWorld::with_rng`]).
 
@@ -379,7 +380,8 @@ impl AttrWorld for OfflineWorld {
         Ok(None)
     }
 
-    /// The player controller of the controller is itself; every other query needs the running world.
+    /// The player controller of the controller is itself, and the game replication info is this world's (the query
+    /// does not read its source); every other query needs the running world.
     fn engine_query(
         &mut self,
         q: EngineQuery,
@@ -387,6 +389,7 @@ impl AttrWorld for OfflineWorld {
     ) -> Result<Option<ObjRef>, AttrError> {
         match q {
             EngineQuery::PlayerController if source == self.controller => Ok(Some(self.controller)),
+            EngineQuery::GameReplicationInfo => Ok(Some(self.game_replication_info)),
             other => Err(NotYet::layer_absent(
                 format!("engine query {other:?} from {source:?} in the offline world"),
                 "ow-world",
@@ -561,6 +564,51 @@ mod tests {
                 .unwrap(),
             &Value::Byte(2)
         );
+    }
+
+    #[test]
+    fn the_world_answers_its_game_replication_info_and_the_count_reads_it() {
+        // The query answers this world's replication info whatever the source; the playthrough count
+        // (NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3, Off mode: no store) reads its CurrentPlaythrough, a byte in this
+        // synthetic fixture. Installed field 0: Normal 1, TVHM 2, UVHM 2; a non-zero field: UVHM 3.
+        for (pt, field0, field1) in [
+            (Playthrough::NORMAL, 1.0, 1.0),
+            (Playthrough::TVHM, 2.0, 2.0),
+            (Playthrough::UVHM, 2.0, 3.0),
+        ] {
+            let mut fx = Fx::new();
+            let a0 = fx.playthrough_count_attr(0);
+            let a1 = fx.playthrough_count_attr(1);
+            let s = BalanceSnapshot::new(
+                pt,
+                OpLevel::NONE,
+                PlayerCount::SINGLE,
+                ExpLevel::new(8),
+                GameStage(8),
+                AwesomeLevel::new(0),
+                LevelCapUpgrades::NONE,
+            )
+            .unwrap();
+            let mut world = OfflineWorld::new(fx.space_only(), None, s).unwrap();
+            let gri = world.game_replication_info();
+            for source in [world.controller(), world.replication_info(), gri] {
+                assert_eq!(
+                    world
+                        .engine_query(EngineQuery::GameReplicationInfo, source)
+                        .unwrap(),
+                    Some(gri)
+                );
+            }
+            let sys = AttributeSystem::standard().unwrap();
+            let controller = world.controller();
+            for (attr, want) in [(a0, field0), (a1, field1)] {
+                let v = sys
+                    .value_of(attr, Some(controller), None, &mut EvalCx::new(&mut world))
+                    .unwrap()
+                    .expect("the no-context chain resolves");
+                assert_eq!(v.value, want, "{pt:?}");
+            }
+        }
     }
 
     #[test]
