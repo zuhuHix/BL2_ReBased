@@ -8,6 +8,8 @@
 //! - `--no-vsync` (with `--window` or `--frames`): asks for a present mode without vsync, for timing runs.
 //! - `--time-limit S` (with `--frames`): fail the run if its frames are not presented within S seconds, instead of
 //!   the default limit of `app::frames_time_limit` (60 s plus 1 s per frame).
+//! - `ow-host --game <install> --walk`: checks the install, loads Sanctuary and its collision, and runs the scripted
+//!   walk from its player start headless, printing positions and counts (lane H4; no window: H2 stage 2 draws).
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!
@@ -18,6 +20,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --walk\n       \
                          ow-host --headless-probe";
 
 /// What to run.
@@ -29,6 +32,8 @@ pub enum Command {
     /// Check the install, then run the window: until closed (`frames: None`) or for that many presented frames,
     /// within `time_limit` seconds when given.
     Window { game: PathBuf, frames: Option<u32>, vsync: bool, time_limit: Option<u32> },
+    /// Check the install, then the scripted Sanctuary walk, headless.
+    Walk { game: PathBuf },
     /// Instance and adapter only, no window.
     HeadlessProbe,
 }
@@ -41,6 +46,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut time_limit: Option<u32> = None;
     let mut no_vsync = false;
     let mut probe = false;
+    let mut walk = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -68,16 +74,23 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
             "--headless-probe" => probe = set_once(probe, "--headless-probe")?,
+            "--walk" => walk = set_once(walk, "--walk")?,
             other => return Err(format!("unknown argument {other}")),
         }
     }
     if probe {
-        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync {
+        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync || walk {
             return Err("--headless-probe takes no other argument".into());
         }
         return Ok(Command::HeadlessProbe);
     }
     let game = game.ok_or("--game is required")?;
+    if walk {
+        if window || frames.is_some() || time_limit.is_some() || no_vsync {
+            return Err("--walk takes only --game".into());
+        }
+        return Ok(Command::Walk { game });
+    }
     if window && frames.is_some() {
         return Err("--window and --frames exclude each other".into());
     }
@@ -124,6 +137,22 @@ mod tests {
             p(&["--game", "X", "--frames", "300", "--time-limit", "15"]),
             Ok(Command::Window { game: "X".into(), frames: Some(300), vsync: true, time_limit: Some(15) })
         );
+    }
+
+    #[test]
+    fn the_walk_takes_only_the_game() {
+        assert_eq!(p(&["--game", "X", "--walk"]), Ok(Command::Walk { game: "X".into() }));
+        assert_eq!(p(&["--walk", "--game", "X"]), Ok(Command::Walk { game: "X".into() }));
+        for bad in [
+            &["--walk"][..],
+            &["--game", "X", "--walk", "--window"],
+            &["--game", "X", "--walk", "--frames", "5"],
+            &["--game", "X", "--walk", "--no-vsync"],
+            &["--game", "X", "--walk", "--walk"],
+            &["--headless-probe", "--walk"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} was accepted");
+        }
     }
 
     #[test]

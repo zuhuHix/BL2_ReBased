@@ -119,6 +119,20 @@ are from process start to exit.
   redraw at all did not happen. That the deadline's own wake-up ends such a run is `UNVERIFIED`: the code covers it
   (the deadline is checked on every wake-up, and the loop always waits on it), but no run showed it.
 
+### Host movement (Rust, H4): lane H4, 2026-11-16
+Movement and collision (decision `docs/decisions/2026-11/2026-11-16-52-host-movement-and-collision-h4.md`).
+- **Every change to `ow-host/src/movement*` or `ow-assets/src/collision.rs`:** the workspace build and tests above
+  (the synthetic movement and body tests are among them).
+- **On a machine with the game installed**, after a change to the mover, the sweep or the collision build: a release
+  build, then `ow-host --game <install> --walk`. It opens no window, so it needs no lock. Pass is exit 0 with
+  `result: PASS`, and the collision counts unchanged unless the change explains them. A stall at a wall is
+  reported by name and is not a failure; a stall with nothing in the way is.
+
+**Baseline (2026-11-16, zuhu desktop, release build, lane H4):** placements 4,446; blocking 3,855, of them 3,124
+with hulls; 299 meshes with a body (494 hulls); 4,219 brushes, 0 refused. Walk: PASS, 1,050 ticks, 3,562.2 uu
+travelled, no start-solid tick; two named wall stalls (segments 4 and 5). Workspace tests 1,500 passed, 0 failed, 17
+ignored (on main 54880df plus this lane).
+
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records
