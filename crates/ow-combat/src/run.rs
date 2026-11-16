@@ -267,8 +267,9 @@ struct Held {
     reported: usize,
 }
 
-/// One deferred raise: the pawn, which provider, the event and its output values.
-type Deferred = (ObjRef, Which, String, DetMap<String, String>);
+/// One deferred raise: the pawn, which provider, the event, its output values, and whether a pawn whose class has no
+/// provider is skipped (a broadcast's class target, as the C++ catches that error).
+type Deferred = (ObjRef, Which, String, DetMap<String, String>, bool);
 
 /// The most deferred raises one outermost raise drains (a Rust-only bound: events that keep raising each other on
 /// running providers are a runaway, reported as an error rather than run forever).
@@ -537,20 +538,21 @@ fn as_raise(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> Result<(), VmError>) -> Resu
     result
 }
 
-/// The drain of [`as_raise`].
+/// The drain of [`as_raise`], depth first as the C++ re-entry runs them: what a drained event defers runs before the
+/// events deferred ahead of it. No provider runs at the outermost drain, so a drained event that would be deferred
+/// again names a provider held outside every raise: an error at once.
 fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
     for _ in 0..DEFERRED_BUDGET {
         let next = {
-            let mut s = service
-                .try_borrow_mut()
-                .map_err(|_| VmError::ServiceBorrowed("Providers"))?;
+            let mut s = borrow(service)?;
             if s.deferred.is_empty() {
                 None
             } else {
-                Some(s.deferred.remove(0))
+                let item = s.deferred.remove(0);
+                Some((item, s.deferred.len()))
             }
         };
-        let Some((pawn, which, name, outputs)) = next else {
+        let Some(((pawn, which, name, outputs, skip_missing), rest)) = next else {
             return Ok(());
         };
         let death = if which == Which::Death {
@@ -558,7 +560,27 @@ fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
         } else {
             None
         };
-        fire_or_defer(vm, pawn, which, death, &name, &outputs)?;
+        let deferred_again = match fire_or_defer(vm, pawn, which, death, &name, &outputs) {
+            Err(VmError::Script { message, .. })
+                if skip_missing && message.contains("has no behavior provider") =>
+            {
+                Ok(false)
+            }
+            other => other,
+        }?;
+        let mut s = borrow(service)?;
+        if deferred_again {
+            let which = match which {
+                Which::Class => "class",
+                Which::Death => "death",
+            };
+            return Err(error(format!(
+                "combat-run: {name} was raised on the {which} provider of a pawn while that provider is held outside the raise"
+            )));
+        }
+        // What this event deferred (pushed after the `rest` already waiting) runs next.
+        let own = s.deferred.split_off(rest);
+        s.deferred.splice(0..0, own);
     }
     Err(error(format!(
         "combat-run: more than {DEFERRED_BUDGET} behavior events raised on running providers (a runaway)"
@@ -566,7 +588,7 @@ fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
 }
 
 /// Fires `name` with `outputs` on the provider of `which` of `pawn` and lists what ran, or defers it when that
-/// provider is running.
+/// provider is running. True when it was deferred.
 fn fire_or_defer(
     vm: &mut Vm,
     pawn: ObjRef,
@@ -574,19 +596,22 @@ fn fire_or_defer(
     death: Option<ObjRef>,
     name: &str,
     outputs: &DetMap<String, String>,
-) -> Result<(), VmError> {
+) -> Result<bool, VmError> {
     let done = with_provider(vm, pawn, which, death, |vm, p, reported| {
         p.fire_event(vm, name, outputs, -1, &[])
             .map_err(provider_error)?;
         report_lines(vm, p, reported)
     })?;
     if done.is_none() {
-        providers(vm)?
-            .try_borrow_mut()
-            .map_err(|_| VmError::ServiceBorrowed("Providers"))?
-            .deferred
-            .push((pawn, which, name.to_string(), outputs.clone()));
+        defer(vm, (pawn, which, name.to_string(), outputs.clone(), false))?;
+        return Ok(true);
     }
+    Ok(false)
+}
+
+/// Appends a deferred raise.
+fn defer(vm: &Vm, item: Deferred) -> Result<(), VmError> {
+    borrow(&providers(vm)?)?.deferred.push(item);
     Ok(())
 }
 
@@ -613,13 +638,24 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
             None => object(vm, event.pawn, "MyDeathDef")?,
         };
         let none = DetMap::new();
+        let mut death_deferred = false;
         if definition.is_some() {
-            fire_or_defer(vm, event.pawn, Which::Death, definition, &event.name, &none)?;
+            death_deferred =
+                fire_or_defer(vm, event.pawn, Which::Death, definition, &event.name, &none)?;
         }
         if event.broadcast {
-            // A pawn whose class has no provider has nothing more to raise it to (the C++ catches the error).
+            // The C++ order is [death provider, class provider]: once the death share waits, the class share waits
+            // right behind it. A pawn whose class has no provider has nothing more to raise it to (the C++ catches
+            // the error).
+            if death_deferred {
+                defer(
+                    vm,
+                    (event.pawn, Which::Class, event.name.clone(), none, true),
+                )?;
+                return Ok(());
+            }
             match fire_or_defer(vm, event.pawn, Which::Class, None, &event.name, &none) {
-                Ok(()) => {}
+                Ok(_) => {}
                 Err(VmError::Script { message, .. })
                     if message.contains("has no behavior provider") => {}
                 Err(e) => return Err(e),
@@ -627,6 +663,22 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
         }
         Ok(())
     })
+}
+
+/// Enables or disables the sequences `name` of the pawn's class provider (the `sequence` step): one raise, since the
+/// enabled and disabled events run behaviors that may raise on the same provider ([`as_raise`]). False when there is
+/// no such sequence, or when the provider is running (the C++ would re-enter; no step reaches that).
+fn set_sequence(vm: &mut Vm, pawn: ObjRef, name: &str, on: bool) -> Result<bool, VmError> {
+    let mut changed = false;
+    as_raise(vm, |vm| {
+        // As the C++ step, the lines its events add are not listed here (a later raise of the provider lists them).
+        changed = with_provider(vm, pawn, Which::Class, None, |vm, p, _| {
+            p.set_sequence_enabled(vm, name, on).map_err(provider_error)
+        })?
+        .unwrap_or(false);
+        Ok(())
+    })?;
+    Ok(changed)
 }
 
 /// `NotifyTakeHit`'s raise (NATIVE_DAMAGE_DEATH.md section 5): `OnTakeDamage` on the pawn's class provider with the
@@ -658,7 +710,7 @@ fn raise_take_damage(vm: &mut Vm, event: &TakeDamageEvent) -> Result<(), VmError
     outputs.insert("DamageSource".to_string(), source);
     let pawn = event.pawn;
     as_raise(vm, |vm| {
-        fire_or_defer(vm, pawn, Which::Class, None, "OnTakeDamage", &outputs)
+        fire_or_defer(vm, pawn, Which::Class, None, "OnTakeDamage", &outputs).map(|_| ())
     })
 }
 
@@ -1108,13 +1160,7 @@ impl Run {
                     return Err(error("combat-run: sequence:<pawn>:<name>:on|off"));
                 }
                 let pawn = self.pawns[index].enemy.pawn;
-                let name = at(2)?.to_string();
-                let changed =
-                    with_provider(&mut self.world.vm, pawn, Which::Class, None, |vm, p, _| {
-                        p.set_sequence_enabled(vm, &name, on)
-                            .map_err(provider_error)
-                    })?
-                    .unwrap_or(false);
+                let changed = set_sequence(&mut self.world.vm, pawn, at(2)?, on)?;
                 Ok(format!("{{\"changed\":{}}}", flag(changed)))
             }
             "cash" => Err(error(

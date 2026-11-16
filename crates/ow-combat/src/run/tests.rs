@@ -312,7 +312,7 @@ fn a_class_with_no_behavior_provider_is_said_and_sequence_refuses() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// A behavior event raised on a provider that is running (review r1 of PR #335)
+// Behavior events raised on providers that are running (reviews r1 and r2 of PR #335)
 // ---------------------------------------------------------------------------------------------------------------
 
 // The invented provider packages of the `ow-behavior` tests (the same file; it uses only `ow_package::testkit`).
@@ -320,31 +320,65 @@ fn a_class_with_no_behavior_provider_is_said_and_sequence_refuses() {
 #[path = "../../../ow-behavior/src/kernel/fixtures/packages.rs"]
 mod packages;
 
-/// A VM over the `ow-behavior` fixture's install, a provider `ToyDeath` and an invented package `Reentry`: a pawn class
-/// with `AIClass` and `MyDeathDef`, and a holder class with `BehaviorProviderDefinition` (the AI class's and the
-/// death definition's field). The death sequence: `OnPlayDeathPizazz` -> A, `OnDeathNonGib` -> B, `Custom` -> C;
-/// A and B are `Behavior_ToySame`, C `Behavior_ToyDifferent`. The test registers their handlers: on `OnDeathNonGib`,
-/// B broadcasts `Custom` through the combat state's raise, as `BroadcastBehaviorEventFromScript` does.
-fn reentry_vm() -> (Vm, ow_object::ids::ObjRef, ow_object::ids::ObjRef, Dir) {
+/// The pawn, its death definition holder, and the folder of a [`reentry_vm`].
+struct Reentry {
+    vm: Vm,
+    pawn: ow_object::ids::ObjRef,
+    death: ow_object::ids::ObjRef,
+    _dir: Dir,
+}
+
+/// A VM over the `ow-behavior` fixture's install, two providers and an invented package `Reentry`: a pawn class with
+/// `AIClass` and `MyDeathDef`, and a holder class with `BehaviorProviderDefinition` (the AI class's and the death
+/// definition's field).
+///
+/// - `ToyDeath` (the death definition's): `OnPlayDeathPizazz` -> A, `OnDeathNonGib` -> B, `Custom` -> C, and `E1`
+///   to `E4` -> P1 to P4.
+/// - `ToyClass` (the AI class's), sequence `Main`: `Custom` -> K, `OnBehaviorSequenceDisabled` -> S, `Ping` -> Q.
+///
+/// Every behavior is `Behavior_ToySame`, whose test handler raises by the event it runs for: on `OnDeathNonGib` a
+/// broadcast of `Custom` (as `BroadcastBehaviorEventFromScript` does); on `E1` the death events `E2` then `E4`; on
+/// `E2` the death event `E3`; on `OnBehaviorSequenceDisabled` a broadcast of `Ping`.
+fn reentry_vm() -> Reentry {
     use ow_behavior::registry::{Handler, register};
     use packages::{Seq, Spec, beh, ev, install, provider_package};
+    let events = |names: &[&'static str]| -> Vec<packages::Ev> {
+        (0..names.len())
+            .map(|i| ev(names[i], (i as u32, 1)))
+            .collect()
+    };
+    let behaviors = |names: &[&'static str]| -> Vec<packages::Beh> {
+        names
+            .iter()
+            .map(|n| beh(n, "Behavior_ToySame", (0, 0)))
+            .collect()
+    };
+    let links = |n: u32| -> Vec<(u32, i32, f32)> { (0..n).map(|i| (i, -1, 0.0)).collect() };
+    let death_events = [
+        "OnPlayDeathPizazz",
+        "OnDeathNonGib",
+        "Custom",
+        "E1",
+        "E2",
+        "E3",
+        "E4",
+    ];
     let death = Seq {
         name: "Death",
         enabled_on_spawn: Some(true),
-        events: vec![
-            ev("OnPlayDeathPizazz", (0, 1)),
-            ev("OnDeathNonGib", (1, 1)),
-            ev("Custom", (2, 1)),
-        ],
-        behaviors: vec![
-            beh("A", "Behavior_ToySame", (0, 0)),
-            beh("B", "Behavior_ToySame", (0, 0)),
-            beh("C", "Behavior_ToyDifferent", (0, 0)),
-        ],
-        links: vec![(0, -1, 0.0), (1, -1, 0.0), (2, -1, 0.0)],
+        events: events(&death_events),
+        behaviors: behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4"]),
+        links: links(7),
         ..Seq::default()
     };
-    let spec = Spec::new("ToyDeath", vec![death], vec![]);
+    let class = Seq {
+        name: "Main",
+        enabled_on_spawn: Some(true),
+        events: events(&["Custom", "OnBehaviorSequenceDisabled", "Ping"]),
+        behaviors: behaviors(&["K", "S", "Q"]),
+        links: links(3),
+        ..Seq::default()
+    };
     let mut d = ow_package::testkit::reflect::Declarations::new(&["Object"]);
     let core = d.p.add_import("Core", "Package", 0, "Core");
     let object = d.p.add_import("Core", "Class", core, "Object");
@@ -353,7 +387,16 @@ fn reentry_vm() -> (Vm, ow_object::ids::ObjRef, ow_object::ids::ObjRef, Dir) {
     d.prop("Object", pawn_class, "MyDeathDef", object);
     let holder = d.cls("ToyHolder", object);
     d.prop("Object", holder, "BehaviorProviderDefinition", object);
-    let mut files = install(&[("ToyDeath", provider_package(&spec))]);
+    let mut files = install(&[
+        (
+            "ToyDeath",
+            provider_package(&Spec::new("ToyDeath", vec![death], vec![])),
+        ),
+        (
+            "ToyClass",
+            provider_package(&Spec::new("ToyClass", vec![class], vec![])),
+        ),
+    ]);
     files.push(("Reentry.upk".into(), d.build()));
     let dir = std::env::temp_dir().join(format!(
         "ow-combat-reentry-{}-{}",
@@ -385,19 +428,11 @@ fn reentry_vm() -> (Vm, ow_object::ids::ObjRef, ow_object::ids::ObjRef, Dir) {
         s.on_behavior_event = Some(Rc::new(raise_behavior_event))
     })
     .unwrap();
-    let bpd = vm
-        .defs
-        .find(
-            &mut vm.space,
-            &ow_core::ObjectPath::parse("ToyDeath").unwrap(),
-        )
-        .unwrap()
-        .unwrap();
-    let make = |vm: &mut Vm, path: &str| make(vm, path);
     let pawn = make(&mut vm, "Reentry.ToyDeathPawn");
-    let class_holder = make(&mut vm, "Reentry.ToyHolder");
-    let death_holder = make(&mut vm, "Reentry.ToyHolder");
-    for h in [class_holder, death_holder] {
+    let mut holders = Vec::new();
+    for provider in ["ToyClass", "ToyDeath"] {
+        let bpd = def(&mut vm, provider);
+        let h = make(&mut vm, "Reentry.ToyHolder");
         crate::hit::access::set(
             &mut vm,
             h,
@@ -405,7 +440,9 @@ fn reentry_vm() -> (Vm, ow_object::ids::ObjRef, ow_object::ids::ObjRef, Dir) {
             Value::Object(Some(bpd)),
         )
         .unwrap();
+        holders.push(h);
     }
+    let (class_holder, death_holder) = (holders[0], holders[1]);
     crate::hit::access::set(&mut vm, pawn, "AIClass", Value::Object(Some(class_holder))).unwrap();
     crate::hit::access::set(
         &mut vm,
@@ -414,66 +451,67 @@ fn reentry_vm() -> (Vm, ow_object::ids::ObjRef, ow_object::ids::ObjRef, Dir) {
         Value::Object(Some(death_holder)),
     )
     .unwrap();
-    let broadcast = Handler::run(move |vm: &mut Vm, _p, _id, event: &str| {
-        if event == "OnDeathNonGib" {
+    let handler = Handler::run(move |vm: &mut Vm, _p, _id, event: &str| {
+        let raise = |vm: &mut Vm, name: &str, broadcast: bool| -> Result<(), VmError> {
             let hook = crate::hit::with_state(vm, |s| s.on_behavior_event.clone())?.unwrap();
             let raised = BehaviorEvent {
                 pawn,
-                definition: None,
+                definition: if broadcast { None } else { Some(death_holder) },
                 killer: None,
-                name: "Custom".into(),
-                broadcast: true,
+                name: name.into(),
+                broadcast,
             };
-            hook(vm, &raised)?;
+            hook(vm, &raised)
+        };
+        match event {
+            "OnDeathNonGib" => raise(vm, "Custom", true)?,
+            "E1" => {
+                raise(vm, "E2", false)?;
+                raise(vm, "E4", false)?;
+            }
+            "E2" => raise(vm, "E3", false)?,
+            "OnBehaviorSequenceDisabled" => raise(vm, "Ping", true)?,
+            _ => {}
         }
         Ok(Vec::new())
     });
-    register(&mut vm, "WillowGame.Behavior_ToySame", broadcast).unwrap();
-    register(
-        &mut vm,
-        "WillowGame.Behavior_ToyDifferent",
-        Handler::run(|_, _, _, _| Ok(Vec::new())),
-    )
-    .unwrap();
-    (vm, pawn, death_holder, Dir(dir))
+    register(&mut vm, "WillowGame.Behavior_ToySame", handler).unwrap();
+    Reentry {
+        vm,
+        pawn,
+        death: death_holder,
+        _dir: Dir(dir),
+    }
 }
 
-#[test]
-fn an_event_raised_on_a_running_provider_runs_after_it_once_and_on_the_same_provider() {
-    let (mut vm, pawn, death, _dir) = reentry_vm();
-    for name in ["OnPlayDeathPizazz", "OnDeathNonGib"] {
-        let event = BehaviorEvent {
-            pawn,
-            definition: Some(death),
-            killer: None,
-            name: name.into(),
-            broadcast: false,
-        };
-        raise_behavior_event(&mut vm, &event).unwrap();
-    }
-    let lines: Vec<String> = crate::hit::with_state(&vm, |s| s.events.clone())
+/// The `behavior ...` and `provider error: ...` events so far.
+fn behavior_lines(vm: &Vm) -> Vec<String> {
+    crate::hit::with_state(vm, |s| s.events.clone())
         .unwrap()
         .into_iter()
         .filter(|e| e.starts_with("behavior ") || e.starts_with("provider error"))
-        .collect();
-    // B's broadcast reaches the pawn's class provider at once (it is not running: made then) and the running death
-    // provider after B's event returns.
-    assert_eq!(
-        lines,
-        [
-            "behavior OnPlayDeathPizazz -> A",
-            "behavior Custom -> C",
-            "behavior OnDeathNonGib -> B",
-            "behavior Custom -> C",
-        ],
-        "{lines:?}"
-    );
-    let service = providers(&vm).unwrap();
+        .collect()
+}
+
+fn raise_death(r: &mut Reentry, name: &str) {
+    let event = BehaviorEvent {
+        pawn: r.pawn,
+        definition: Some(r.death),
+        killer: None,
+        name: name.into(),
+        broadcast: false,
+    };
+    raise_behavior_event(&mut r.vm, &event).unwrap();
+}
+
+/// After a raise: every provider is back, nothing waits, no raise is open.
+fn settled(vm: &Vm, providers_made: usize) {
+    let service = providers(vm).unwrap();
     let s = service.borrow();
     assert_eq!(
         s.held.len(),
-        2,
-        "one class and one death provider for the pawn, no copy"
+        providers_made,
+        "one provider per pawn and kind, no copy"
     );
     assert!(
         s.held.values().all(|h| h.provider.is_some()),
@@ -484,14 +522,74 @@ fn an_event_raised_on_a_running_provider_runs_after_it_once_and_on_the_same_prov
 }
 
 #[test]
-fn a_take_damage_raise_on_a_running_provider_is_drained_by_its_own_outermost_raise() {
-    let (mut vm, pawn, _death, _dir) = reentry_vm();
-    // The class provider is running (taken out by hand): the raise is deferred, then drained by the same outermost
-    // raise, which finds it still running and gives up only at the budget, as a runaway.
+fn a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the_class_one() {
+    let mut r = reentry_vm();
+    raise_death(&mut r, "OnPlayDeathPizazz");
+    raise_death(&mut r, "OnDeathNonGib");
+    // The C++ targets [death, class] in that order; the running death provider's share waits for B's event, and the
+    // class provider's waits right behind it.
+    assert_eq!(
+        behavior_lines(&r.vm),
+        [
+            "behavior OnPlayDeathPizazz -> A",
+            "behavior OnDeathNonGib -> B",
+            "behavior Custom -> C",
+            "behavior Custom -> K",
+        ]
+    );
+    settled(&r.vm, 2);
+}
+
+#[test]
+fn events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it() {
+    let mut r = reentry_vm();
+    raise_death(&mut r, "E1");
+    // E1 raises E2 then E4; E2 raises E3. Depth first, as the C++ re-entry runs them: E1, E2, E3, E4.
+    assert_eq!(
+        behavior_lines(&r.vm),
+        [
+            "behavior E1 -> P1",
+            "behavior E2 -> P2",
+            "behavior E3 -> P3",
+            "behavior E4 -> P4"
+        ]
+    );
+    settled(&r.vm, 1);
+}
+
+#[test]
+fn the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it() {
+    let mut r = reentry_vm();
+    assert!(set_sequence(&mut r.vm, r.pawn, "Main", false).unwrap());
+    // S (the disabled event) broadcasts Ping: the death provider has no Ping, and the class provider, held by the
+    // step, takes it once the step has put it back. No runaway, no error. By then Main is disabled, so Q does not
+    // run: the C++ re-enters and runs Q before the bit is cleared (decision 2026-11-15-35, the deferral's cost).
+    assert_eq!(
+        behavior_lines(&r.vm),
+        ["behavior OnBehaviorSequenceDisabled -> S"]
+    );
+    let service = providers(&r.vm).unwrap();
+    let trace = service.borrow().held[&(r.pawn, Which::Class)]
+        .provider
+        .as_ref()
+        .unwrap()
+        .trace
+        .clone();
+    assert_eq!(trace, ["OnBehaviorSequenceDisabled -> S"]);
+    drop(service);
+    settled(&r.vm, 2);
+    assert!(!set_sequence(&mut r.vm, r.pawn, "NoSuchSequence", true).unwrap());
+}
+
+#[test]
+fn a_raise_on_a_provider_held_outside_every_raise_fails_at_once_naming_the_hold() {
+    let mut r = reentry_vm();
+    // The class provider is held by hand, outside any raise: the take-damage raise defers to it, and its drain finds
+    // it still held.
     {
-        let service = providers(&vm).unwrap();
+        let service = providers(&r.vm).unwrap();
         service.borrow_mut().held.insert(
-            (pawn, Which::Class),
+            (r.pawn, Which::Class),
             Held {
                 provider: None,
                 reported: 0,
@@ -499,22 +597,119 @@ fn a_take_damage_raise_on_a_running_provider_is_drained_by_its_own_outermost_rai
         );
     }
     let event = TakeDamageEvent {
-        pawn,
+        pawn: r.pawn,
         instigator: None,
         damage_type: None,
         damage: 1.0,
         shield_damage: 0.0,
         source: None,
     };
-    let e = raise_take_damage(&mut vm, &event).unwrap_err();
-    assert!(
-        error_text(&e).contains("raised on running providers (a runaway)"),
-        "{e}"
+    let e = raise_take_damage(&mut r.vm, &event).unwrap_err();
+    assert_eq!(
+        error_text(&e),
+        "combat-run: OnTakeDamage was raised on the class provider of a pawn while that provider is held outside the raise"
     );
-    let service = providers(&vm).unwrap();
+    let service = providers(&r.vm).unwrap();
     assert!(
         service.borrow().deferred.is_empty(),
         "a failed raise leaves nothing deferred"
     );
     assert_eq!(service.borrow().depth, 0);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// AdjustDamage's stages left out, through a real hit (review r2 of PR #335)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A hit with no instigator on a bare copy of `archetype` (no mind, so the source stages read nothing the toy classes
+/// lack), with `prepare` applied to the copy first.
+fn bare_hit(
+    mode: ParityMode,
+    archetype: &str,
+    damage_type: Option<&str>,
+    prepare: impl FnOnce(&mut Run, ow_object::ids::ObjRef),
+) -> Result<crate::hit::HitReport, VmError> {
+    let (mut run, _dir) = fresh(mode);
+    run.apply("spawn:ToyPawns/Pawn_Armored:4");
+    run.apply("pool:0:Pool_Ammo");
+    let victim = crate::hit::instantiate_copy(&mut run.world().vm, "ToyPawns", archetype)
+        .unwrap()
+        .unwrap();
+    prepare(&mut run, victim);
+    let vm = &mut run.world().vm;
+    let t = damage_type.map(|p| def(vm, p));
+    crate::hit::hit_with_type(vm, victim, None, 100.0, t, None)
+}
+
+#[test]
+fn a_damage_surface_no_region_names_is_not_yet_in_off_mode_and_flesh_in_reference_mode() {
+    // The default region of BodyClass_Toy names no surface.
+    match bare_hit(
+        ParityMode::Off,
+        "Pawn_Bodied",
+        Some("DamageType_Toy"),
+        |_, _| {},
+    ) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(
+                n.to_string()
+                    .contains("the damage surface of a hit whose region names none"),
+                "{n}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    let r = bare_hit(
+        ParityMode::Reference,
+        "Pawn_Bodied",
+        Some("DamageType_Toy"),
+        |_, _| {},
+    )
+    .unwrap();
+    assert!(
+        r.events
+            .iter()
+            .any(|e| e == "AdjustDamage surface=1 modifier=0.5"),
+        "{:?}",
+        r.events
+    );
+    assert_eq!(r.applied, 50.0, "100 x 1.0 (the region) x 0.5 (flesh)");
+    // Without a damage type the surface selects nothing: Off goes on.
+    let r = bare_hit(ParityMode::Off, "Pawn_Bodied", None, |_, _| {});
+    assert!(
+        matches!(&r, Err(VmError::NotYet(n)) if n.to_string().contains("PlayerAvertDeathChance")),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_victim_with_a_shield_pool_is_not_yet_in_off_mode_and_noted_in_reference_mode() {
+    let shield = |run: &mut Run, victim| {
+        let reference = run.pawns[0].pools[0].clone();
+        crate::hit::access::set(&mut run.world().vm, victim, "ShieldArmor", reference).unwrap();
+    };
+    match bare_hit(ParityMode::Off, "Pawn_Armored", None, shield) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotPorted);
+            assert!(n.to_string().contains("shield stage"), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let r = bare_hit(ParityMode::Reference, "Pawn_Armored", None, shield).unwrap();
+    assert!(
+        r.events.iter().any(|e| e == "note: AdjustDamage shield stage for a victim with a shield pool is not implemented"),
+        "{:?}",
+        r.events
+    );
+    assert_eq!(
+        r.applied, 80.0,
+        "the shield is not modelled: 100 / (1 + 0.25) reaches health"
+    );
+    // An invalid reference is no shield: Off reaches the next refusal, averted death.
+    let r = bare_hit(ParityMode::Off, "Pawn_Armored", None, |_, _| {});
+    assert!(
+        matches!(&r, Err(VmError::NotYet(n)) if n.to_string().contains("PlayerAvertDeathChance")),
+        "{r:?}"
+    );
 }
