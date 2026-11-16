@@ -22,7 +22,7 @@
 //! **The view.** The eye is the pawn's centre plus `BaseEyeHeight` 70 (read live, `MovementParams::maya`, the same as
 //! `--walk`'s [`Mover::eye`]); the game's eye-height easing and bob (`NATIVE_PLAYER_MOVEMENT.md` section 15) are not
 //! applied. The field of view is the record's default (section 19): 70 degrees horizontal at 16:9, which the game
-//! stores as the vertical angle `2 atan(tan(35 deg) x 0.5625)`, about 43.07 degrees ([`vertical_fov_deg`]); kept
+//! stores as the vertical angle `2 atan(tan(35 deg) x 0.5625)`, 42.996 degrees ([`vertical_fov_deg`]); kept
 //! vertical at other aspects. UNVERIFIED in the running game, as is everything about the pawn's movement.
 //!
 //! **Host choices, not the game's:** [`TURN_PER_PIXEL`] (the game's mouse sensitivity is not read), the bindings,
@@ -134,9 +134,9 @@ impl InputCollector {
         use winit::event::{ElementState, MouseButton, WindowEvent};
         use winit::keyboard::PhysicalKey;
         match event {
-            WindowEvent::KeyboardInput { event, .. } => {
+            WindowEvent::KeyboardInput { event, is_synthetic, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    self.key(code, event.state == ElementState::Pressed, event.repeat);
+                    self.key(code, event.state == ElementState::Pressed, event.repeat, *is_synthetic);
                 }
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.click(),
@@ -145,9 +145,15 @@ impl InputCollector {
         }
     }
 
-    /// A key went down (`down`) or up; `repeat` for the system's auto-repeat of a held key.
-    pub fn key(&mut self, code: winit::keyboard::KeyCode, down: bool, repeat: bool) {
+    /// A key went down (`down`) or up; `repeat` for the system's auto-repeat of a held key; `synthetic` for the
+    /// presses and releases winit makes up when the window gains or loses focus with keys held. A made-up press is
+    /// ignored, so coming back to the window with W or space held neither walks nor jumps (review r1 of PR #355);
+    /// a made-up release still releases.
+    pub fn key(&mut self, code: winit::keyboard::KeyCode, down: bool, repeat: bool, synthetic: bool) {
         use winit::keyboard::KeyCode;
+        if down && synthetic {
+            return;
+        }
         let press = down && !repeat;
         match code {
             KeyCode::Escape if press => self.want_grab = false,
@@ -217,8 +223,10 @@ pub struct PlayStats {
     pub max_steps_in_frame: u32,
     /// The path digest over every step's location (`crate::movement::walk::PathDigest`, the one `--walk` prints).
     pub digest: PathDigest,
-    /// For a scripted run: at each segment's end, its name, the steps so far and the digest so far.
-    pub segments: Vec<(String, u64, PathDigest)>,
+    /// For a scripted run, one entry per script segment in script order, a segment of no tick included: its index
+    /// in the script, its name, the steps and the digest at its end (for a segment of no tick, those before the next
+    /// step, as `walk::run` records it).
+    pub segments: Vec<(usize, String, u64, PathDigest)>,
     /// The pawn's location every [`TRACE_EVERY`] steps (step count, location).
     pub trace: Vec<(u64, V3)>,
     pub end: V3,
@@ -242,6 +250,8 @@ pub struct PlayWorld {
     viewport: (u32, u32),
     sim_time: Duration,
     stats: Rc<RefCell<PlayStats>>,
+    /// The next script segment to report in [`PlayStats::segments`].
+    reported: usize,
 }
 
 impl PlayWorld {
@@ -262,6 +272,19 @@ impl PlayWorld {
             viewport: (0, 0),
             sim_time: Duration::ZERO,
             stats,
+            reported: 0,
+        }
+    }
+
+    /// Reports every script segment before `limit` not reported yet, at the steps and digest so far.
+    fn report_segments_before(&mut self, limit: usize) {
+        let Some(cursor) = &self.script else { return };
+        let mut stats = self.stats.borrow_mut();
+        while self.reported < limit {
+            let Some(s) = cursor.script().get(self.reported) else { break };
+            let (steps, digest) = (stats.steps, stats.digest);
+            stats.segments.push((self.reported, s.name.to_string(), steps, digest));
+            self.reported = self.reported.saturating_add(1);
         }
     }
 
@@ -269,23 +292,26 @@ impl PlayWorld {
         &self.mover
     }
 
-    /// The next step's input: the script's, or the player's (nothing while the fly camera is on). `None`: the script
-    /// is done.
-    fn next_input(&mut self) -> Option<MoveInput> {
+    /// The next step's input and, for a script, the segment it comes from: the script's, or the player's (nothing
+    /// while the fly camera is on). `None`: the script is done.
+    fn next_input(&mut self) -> Option<(Option<usize>, MoveInput)> {
         if let Some(cursor) = self.script.as_mut() {
-            return cursor.next_input().map(|(_, input)| input);
+            return cursor.next_input().map(|(segment, input)| (Some(segment), input));
         }
         if self.fly.is_some() {
-            return Some(MoveInput::default());
+            return Some((None, MoveInput::default()));
         }
         let axis = |plus: bool, minus: bool| f64::from(u8::from(plus)) - f64::from(u8::from(minus));
         let (yaw, pitch) = std::mem::take(&mut self.turn);
-        Some(MoveInput::new(
-            axis(self.held.forward, self.held.back),
-            axis(self.held.right, self.held.left),
-            std::mem::take(&mut self.jump),
-            yaw,
-            pitch,
+        Some((
+            None,
+            MoveInput::new(
+                axis(self.held.forward, self.held.back),
+                axis(self.held.right, self.held.left),
+                std::mem::take(&mut self.jump),
+                yaw,
+                pitch,
+            ),
         ))
     }
 
@@ -344,7 +370,11 @@ impl Simulation for PlayWorld {
         self.accumulator += real_dt.as_secs_f64();
         let mut taken = 0u32;
         while self.accumulator >= dt && taken < MAX_STEPS_PER_FRAME && !self.finished() {
-            let Some(input) = self.next_input() else { break };
+            let Some((segment, input)) = self.next_input() else { break };
+            // Segments the cursor passed without a tick end where the previous one did.
+            if let Some(segment) = segment {
+                self.report_segments_before(segment);
+            }
             self.prev_eye = self.mover.eye();
             self.mover.tick(&self.world, &input, dt);
             self.accumulator -= dt;
@@ -357,15 +387,19 @@ impl Simulation for PlayWorld {
                 let step = stats.steps;
                 stats.trace.push((step, self.mover.location));
             }
-            if let Some(cursor) = &self.script
+            drop(stats);
+            if let (Some(segment), Some(cursor)) = (segment, &self.script)
                 && cursor.at_segment_end()
-                && let Some(s) = cursor.script().get(cursor.segment())
             {
-                let (steps, digest) = (stats.steps, stats.digest);
-                stats.segments.push((s.name.to_string(), steps, digest));
+                self.report_segments_before(segment.saturating_add(1));
             }
         }
         let finished = self.finished();
+        if finished {
+            // Trailing segments of no tick.
+            let total = self.script.as_ref().map_or(0, |c| c.script().len());
+            self.report_segments_before(total);
+        }
         {
             let mut stats = self.stats.borrow_mut();
             stats.frames = stats.frames.saturating_add(1);
@@ -438,7 +472,7 @@ pub fn stats_text(s: &PlayStats) -> String {
     for (step, at) in &s.trace {
         let _ = writeln!(out, "play t={} at {}", ow_core::fmt::fmt_f(*step as f64 * step_seconds(), 2), p3(*at));
     }
-    for (i, (name, steps, digest)) in s.segments.iter().enumerate() {
+    for (i, name, steps, digest) in &s.segments {
         let _ = writeln!(out, "play segment {i} {name}: steps {steps}, digest {:016x}", digest.0);
     }
     let _ = writeln!(
@@ -468,6 +502,13 @@ pub struct PlayDrawReport {
     pub end_shot: Option<Result<PathBuf, String>>,
 }
 
+/// Whether the start screenshot (asked for at presented frame `frame`) is due at presented frame `presented`: at
+/// that frame, or earlier when the run is finishing, so a script shorter than `frame` frames still gets one (it is
+/// then the same frame as the end shot).
+pub fn start_shot_due(frame: u64, presented: u64, finished: bool) -> bool {
+    presented >= frame || finished
+}
+
 /// H2's scene renderer seen from the snapshot's view.
 pub struct PlayDrawer {
     plan: Option<DrawPlan>,
@@ -477,7 +518,8 @@ pub struct PlayDrawer {
     finished: bool,
     size: Option<(u32, u32)>,
     window: Option<(u32, u32)>,
-    /// The start screenshot after this many presented frames, and the end one when the snapshot says finished.
+    /// The start screenshot after this many presented frames (or on the last frame, [`start_shot_due`]), and the
+    /// end one when the snapshot says finished.
     start_shot: Option<(u64, PathBuf)>,
     end_shot: Option<PathBuf>,
     presented: u64,
@@ -581,11 +623,12 @@ impl Drawer for PlayDrawer {
             report.draw.size = self.size;
         }
         self.last_present = Some(now);
-        if let Some((frame, path)) = self.start_shot.clone()
-            && frame == self.presented
-        {
-            let shot = self.shoot(device, queue, &path);
-            self.report.borrow_mut().start_shot = Some(shot);
+        match self.start_shot.take() {
+            Some((frame, path)) if start_shot_due(frame, self.presented, self.finished) => {
+                let shot = self.shoot(device, queue, &path);
+                self.report.borrow_mut().start_shot = Some(shot);
+            }
+            other => self.start_shot = other,
         }
         if self.finished
             && let Some(path) = self.end_shot.take()

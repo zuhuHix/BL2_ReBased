@@ -39,6 +39,15 @@ pub const WINDOW_TITLE: &str = "BL2_ReBased";
 pub const WINDOW_SIZE: (u32, u32) = (1280, 720);
 /// How long the loop waits after a frame it could not draw.
 pub const SKIP_WAIT: Duration = Duration::from_millis(10);
+/// How many frames in a row a finished simulation may fail to present (a minimised or hidden window) before the run
+/// ends without a last presented frame: about a second at [`SKIP_WAIT`] (review r1 of PR #355).
+pub const FINISHED_SKIP_LIMIT: u32 = 100;
+
+/// Whether a run whose simulation says `finished` ends now: on a presented frame at once, else after
+/// [`FINISHED_SKIP_LIMIT`] frames in a row that could not be presented.
+pub fn finished_run_ends(finished: bool, presented: bool, skips_since_finished: u32) -> bool {
+    finished && (presented || skips_since_finished >= FINISHED_SKIP_LIMIT)
+}
 /// The fixed part of a `--frames` run's default time limit.
 pub const FRAMES_TIME_BASE: Duration = Duration::from_secs(60);
 /// The part of the default limit per frame asked for: a whole second, about 4 times the slowest frame seen so far
@@ -167,6 +176,8 @@ struct App<S> {
     backing_off: bool,
     /// Set by the first [`App::stop`]; the outcome it recorded is final.
     stopped: bool,
+    /// Frames in a row not presented since the simulation said finished.
+    skips_since_finished: u32,
     report: RunReport,
 }
 
@@ -187,6 +198,7 @@ impl<S: Simulation> App<S> {
             last_present: None,
             backing_off: false,
             stopped: false,
+            skips_since_finished: 0,
             report: RunReport {
                 outcome: Outcome::Closed,
                 adapter: None,
@@ -329,13 +341,23 @@ impl<S: Simulation> App<S> {
                 self.report.elapsed = presented_at.duration_since(first);
                 self.report.presented += 1;
                 self.backing_off = false;
-                if self.options.frames.is_some_and(|n| self.report.presented >= u64::from(n)) || snapshot.finished {
+                if self.options.frames.is_some_and(|n| self.report.presented >= u64::from(n))
+                    || finished_run_ends(snapshot.finished, true, 0)
+                {
                     self.stop(event_loop, Outcome::Completed);
                 }
             }
             Ok(_) => {
                 self.report.skipped += 1;
                 self.backing_off = true;
+                // A script that finishes while the window cannot present (minimised, hidden) ends without its last
+                // frame after a bounded wait, instead of waiting for the window to come back.
+                if snapshot.finished {
+                    self.skips_since_finished = self.skips_since_finished.saturating_add(1);
+                }
+                if finished_run_ends(snapshot.finished, false, self.skips_since_finished) {
+                    self.stop(event_loop, Outcome::Completed);
+                }
             }
             Err(e) => self.stop(event_loop, Outcome::Failed(e.to_string())),
         }
@@ -430,6 +452,15 @@ mod tests {
         assert!(!app.record_stop(Outcome::Completed));
         assert!(!app.record_stop(Outcome::Closed));
         assert_eq!(app.report.outcome, Outcome::Failed("deadline".into()));
+    }
+
+    #[test]
+    fn a_finished_run_ends_on_a_present_or_after_bounded_skips() {
+        assert!(finished_run_ends(true, true, 0));
+        assert!(!finished_run_ends(true, false, FINISHED_SKIP_LIMIT - 1));
+        assert!(finished_run_ends(true, false, FINISHED_SKIP_LIMIT));
+        assert!(!finished_run_ends(false, true, 0));
+        assert!(!finished_run_ends(false, false, u32::MAX));
     }
 
     #[test]

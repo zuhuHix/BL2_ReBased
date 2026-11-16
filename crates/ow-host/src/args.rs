@@ -19,7 +19,9 @@
 //!   person, from its player start: WASD, the mouse, space to jump, Escape to let go of the cursor (a click takes it
 //!   again), F1 for the fly camera. Runs until the window is closed. `--play-script FILE` drives the pawn from a
 //!   script instead (`movement::walk::parse_script`) and ends when it does; `--size` and `--no-vsync` work as for
-//!   `--map`, and `--screenshot PATH` writes the start frame there and the end frame beside it as `<stem>_end.png`.
+//!   `--map`, and `--screenshot PATH` writes the start frame there (presented frame 30, or the last frame of a
+//!   scripted run that ends sooner) and, for a scripted run only, its last frame beside it as `<stem>_end.png`; an
+//!   interactive run never finishes, so it writes no end frame.
 //!   `NAME` may leave off `_P` (`Sanctuary` is `Sanctuary_P`). A heavy run: the caller takes the machine lock.
 //! - `ow-host --game <install> --map NAME --play-script FILE` (no `--play`): the same script through the same
 //!   simulation with no window, at uneven frame times (`play::HEADLESS_FRAMES`), printing the path digests.
