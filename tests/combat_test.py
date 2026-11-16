@@ -168,17 +168,28 @@ NATIVE = FUNC_NATIVE | FUNC_PUBLIC
 
 
 class Toy:
-    """Reflection helpers over one package: classes, properties, structs, functions (as in tests/mission_script_test.py)."""
+    """Reflection helpers over one package: classes, properties, structs, functions (as in tests/mission_script_test.py).
+
+    Every toy class derives from one toy root class, `Engine.Object` (`root`: the export in Engine, an import of it in
+    the other packages), and every object or class property names it, so that the Rust reflection, which refuses an
+    object property without a class and a class property without a metaclass, reads these packages too (the C++ reads
+    them either way)."""
     def __init__(self, kinds):
         self.p = Package()
         self.none = self.p.fname('None')
         self.imp = {n: self.p.add_import('Class', n) for n in
                     ('Class', 'Function', 'ScriptStruct', 'Enum') + tuple(k + 'Property' for k in kinds)}
+        self.root = 0
 
-    def cls(self, name, super_ref=0): return self.p.add_export(self.imp['Class'], name, w32(0) * 4, super_ref=super_ref)
+    def import_root(self):                      # the other packages derive from Engine's toy root class
+        self.root = self.p.add_import_full('Class', self.p.add_import_full('Package', 0, 'Engine'), 'Object')
 
-    def prop(self, kind, owner, name, flags=0, type_ref=0):
-        payload = w32(0) + self.none + w32(0) + u32(1) + u64(flags) + self.none + w32(0) + w32(type_ref)
+    def cls(self, name, super_ref=0): return self.p.add_export(self.imp['Class'], name, w32(0) * 4, super_ref=super_ref or self.root)
+
+    def prop(self, kind, owner, name, flags=0, type_ref=0, dim=1):
+        # type references: an object property's class; a class property's class, then its metaclass; else the struct, inner or enum
+        refs = w32(type_ref or self.root) if kind == 'Object' else w32(self.root, type_ref or self.root) if kind == 'Class' else w32(type_ref)
+        payload = w32(0) + self.none + w32(0) + u32(dim) + u64(flags) + self.none + w32(0) + refs
         return self.p.add_export(self.imp[kind + 'Property'], name, payload, outer=owner)
 
     def array_of(self, owner, name, inner_kind, inner_ref=0):
@@ -210,11 +221,17 @@ class Toy:
 def build_engine():
     T = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Class', 'Name'))
     p = T.p
+    T.root = T.cls('Object')
     actor = T.cls('Actor')
     T.prop('Byte', actor, 'Role')
     T.prop('Object', actor, 'WorldInfo')
     T.prop('Object', actor, 'Owner')
     T.prop('Bool', actor, 'bCanTarget')
+    # what the Rust world's actor spawn reads and writes (W5-WORLD: the pool manager is spawned as an actor); toy
+    # layouts, unread by the C++
+    for name in ('bCollideWorld', 'bCollideWhenPlacing'): T.prop('Bool', actor, name)
+    for name in ('Location', 'Rotation', 'CreationTime'): T.prop('Float', actor, name)
+    T.prop('Object', actor, 'Instigator')
     T.function(actor, 'SetCanTarget', [('Bool', 'bCanTargetIn', 0)], None, NATIVE)
     T.function(actor, 'CanTarget', [], None, NATIVE, 'Bool')
     p.add_export(T.imp['Enum'], 'ENetRole', w32(0) + T.none + w32(0) + w32(len(ROLES)) + b''.join(p.fname(r) for r in ROLES), outer=actor)
@@ -227,6 +244,7 @@ def build_engine():
     T.function(actor, 'GetResourcePoolCurrentValueOrDefault', [('Struct', 'PoolReference', CPF_OUT, reference), ('Float', 'DefaultValue', 0)], None, NATIVE, 'Float')
     world = T.cls('WorldInfo', super_ref=actor)
     T.prop('Float', world, 'TimeSeconds')
+    T.prop('Byte', world, 'NetMode')
     T.prop('Object', world, 'Game')
     T.prop('Object', world, 'GRI')
     controller = T.cls('Controller', super_ref=actor)
@@ -285,8 +303,11 @@ def build_engine():
     T.function(pool, 'Reinitialize', [], lambda ids: (lambda a: (a.return_nothing(), a.end(), a)[2])(Asm()))
 
     manager = T.cls('ResourcePoolManager', super_ref=actor)
-    T.array_of(manager, 'ResourcePools', 'Object')
+    T.prop('Object', manager, 'ResourcePools', dim=16)          # ResourcePools[16] (NATIVE_COMBAT_GROUNDWORK.md section 1.1)
     T.prop('Byte', manager, 'NextPoolGUID')
+    # the manager's class default object holds Role = ROLE_Authority (the Rust world spawns the manager from its class
+    # defaults; the C++ sets Role on the manager it makes)
+    p.add_export(manager, 'Default__ResourcePoolManager', w32(0) + Tags(p).tag('Role', 'ByteProperty', 1, bytes([3]), p.fname('None')) + T.none)
     T.function(manager, 'CreatePool', [('Object', 'Mgr', CPF_OUT), ('Object', 'ActorOwner', 0), ('Object', 'PoolDefinition', 0), ('Bool', 'bReinitializeExistingPool', CPF_OPT)],
                None, NATIVE | FUNC_STATIC, ('Struct', reference))
     T.function(manager, 'DeletePoolByReference', [('Struct', 'PoolReference', CPF_OUT, reference)], None, NATIVE)
@@ -311,6 +332,7 @@ def build_engine():
 def build_gearbox():
     """The AI component's demigod hold natives, invented body-less declarations (the real ones are native)."""
     T = Toy(('Byte', 'Object', 'Bool', 'Name', 'Float'))
+    T.import_root()
     T.cls('NoContextNeededAttributeContextResolver')
     T.prop('Float', T.cls('ConstantAttributeValueResolver'), 'ConstantValue')
     component = T.cls('AIComponent')
@@ -323,6 +345,7 @@ def build_gearbox():
 def build_willowgame():
     T = Toy(('Byte', 'Object', 'Int', 'Float', 'Bool', 'Class', 'Struct', 'Array'))
     p = T.p
+    T.import_root()
     engine = p.add_import_full('Package', 0, 'Engine')
     gearbox = p.add_import_full('Package', 0, 'GearboxFramework')
     pawn = p.add_import_full('Class', engine, 'Pawn')
