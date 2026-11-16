@@ -278,6 +278,10 @@ pub fn handler(dialog: Rc<RefCell<DialogSystem>>) -> Handler {
 }
 
 /// Registers [`handler`] for [`BEHAVIOR_CLASS`] in the VM's behavior registry (a second registration is refused).
+///
+/// For a VM with one dialog system (the CLI, tests): every provider of the VM then talks through `dialog`. A mission
+/// tracker that keeps its own dialog system uses [`handler`] on its own provider instead (`Provider::handle`), with
+/// the same `Rc` it gives the dialog component's `TriggerEvent` native, so the dialog state is not split in two.
 pub fn register(vm: &mut Vm, dialog: Rc<RefCell<DialogSystem>>) -> Result<(), VmError> {
     registry::register(vm, BEHAVIOR_CLASS, handler(dialog))
 }

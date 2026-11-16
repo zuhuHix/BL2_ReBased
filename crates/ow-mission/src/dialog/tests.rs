@@ -295,6 +295,7 @@ struct Ids {
     child: i32,
     three_tag: i32,
     three: i32,
+    fourth: i32,
     body_npc: i32,
     body_plain: i32,
     g_dlc: i32,
@@ -314,6 +315,7 @@ fn fixture() -> (Vec<u8>, Ids) {
     let marcus = k.add(name_tag, "DialogName_Marcus", names, &[]);
     let echo_name = k.add(name_tag, "DialogName_Echo", names, &[]);
     let speaker = k.add(name_tag, "DialogName_Speaker", names, &[]);
+    let fourth = k.add(name_tag, "DialogName_Fourth", names, &[]);
     let hi = k.add(object, "Ak_Hi", 0, &[]);
     let tag_low = k.tag_object("Tag_Low", p_low, &[]);
     let tag_high = k.tag_object("Tag_High", p_high, &[]);
@@ -456,11 +458,11 @@ fn fixture() -> (Vec<u8>, Ids) {
     );
     let _ = no_match_group;
 
-    // A group whose one act has three TalkData entries: the random pick chooses among them.
+    // A group whose one act has four TalkData entries: the random pick chooses among them.
     let three_tag = k.tag_object("Tag_Three", p_low, &[]);
     let three_act = k.talk_act(
         "Act_Three",
-        &[(marcus, hi), (echo_name, hi), (speaker, hi)],
+        &[(marcus, hi), (echo_name, hi), (speaker, hi), (fourth, hi)],
         0.0,
         vec![],
     );
@@ -536,6 +538,7 @@ fn fixture() -> (Vec<u8>, Ids) {
         child,
         three_tag,
         three,
+        fourth,
         body_npc,
         body_plain,
         g_dlc,
@@ -958,27 +961,28 @@ fn register_talker_keeps_one_pawn_per_name_tag_and_gives_it_an_actor_once() {
 
 #[test]
 fn the_talk_data_pick_follows_the_vm_s_parity_mode() {
-    // Reference: the C++ mt19937 seeded 12345; Off: the world's Dialog stream. Each picks among the three entries.
-    let expected_reference = usize::try_from(Mt19937::new(12345).next_u32() % 3).unwrap();
-    let expected_off = usize::from(
-        ow_core::rand::GameRng::from_world_seed(0, ParityMode::Off)
-            .crt(CrtStream::Dialog)
-            .rand15(),
-    ) % 3;
-    for (mode, expected) in [
-        (ParityMode::Reference, expected_reference),
-        (ParityMode::Off, expected_off),
-    ] {
+    // Four entries, so the two generators give different, non-zero picks. Reference: the C++ mt19937 seeded 12345,
+    // whose first output 3992670690 % 4 = 2. Off: the world's Dialog stream for the VM's world seed 0, whose first
+    // rand15 is 19707, % 4 = 3.
+    assert_eq!(Mt19937::new(12345).next_u32(), 3_992_670_690);
+    let off_draw = ow_core::rand::GameRng::from_world_seed(0, ParityMode::Off)
+        .crt(CrtStream::Dialog)
+        .rand15();
+    assert_eq!(off_draw, 19_707);
+    let mut picked = Vec::new();
+    for mode in [ParityMode::Reference, ParityMode::Off] {
         let (mut f, mut d) = fx(mode);
         d.set_test_line_length(1.0);
-        let names = [f.ids.marcus, f.ids.echo_name, f.ids.speaker].map(|i| f.path(i));
+        let names = [f.ids.marcus, f.ids.echo_name, f.ids.speaker, f.ids.fourth].map(|i| f.path(i));
         for n in &names {
             d.register_talker(n, None);
         }
         let (group, tag) = (f.ids.three, f.ids.three_tag);
         trigger(&mut f, &mut d, group, tag).unwrap();
-        assert_eq!(f.lines.borrow()[0].0.talker, names[expected], "{mode:?}");
+        let talker = f.lines.borrow()[0].0.talker.clone();
+        picked.push(names.iter().position(|n| *n == talker).unwrap());
     }
+    assert_eq!(picked, [2, 3], "Reference picks entry 2, Off entry 3");
 }
 
 // ---------------------------------------------------------------------------------------------------------------
