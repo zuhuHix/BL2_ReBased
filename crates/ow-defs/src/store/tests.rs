@@ -314,6 +314,60 @@ fn identity_is_by_path_whichever_file_holds_it() {
 }
 
 #[test]
+fn candidate_lists_are_the_store_s_and_a_prefetched_holder_is_adopted_once() {
+    // Lane FIX-SCENE-LOAD: the cached candidate lists are the package store's own, whatever the case or form of the
+    // path, and a holder file the prefetch read is handed to the store under the id `load_path` gives.
+    let mut t = World::off("prefetch");
+    for path in [
+        "GD_Test.Part_A",
+        "gd_test.part_b",
+        "GD_TEST.Part_A.Sub",
+        "Startup.Other",
+        "Nothing.Here",
+    ] {
+        let cached = t
+            .defs
+            .handles
+            .borrow_mut()
+            .candidates(&mut t.defs.packages, path);
+        let fresh = t.defs.packages.global_candidates(path);
+        assert_eq!(cached.to_vec(), fresh, "{path}");
+    }
+    // The prefetch kept only the files that hold the path it read for (GD_Test.Part_A: GD_Test and Startup); a
+    // lookup releases them.
+    let mut held: Vec<String> = t
+        .defs
+        .handles
+        .borrow()
+        .held
+        .keys()
+        .map(|f| f.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    held.sort();
+    assert_eq!(held, ["GD_Test", "Startup"]);
+    t.defs.handles.borrow_mut().release();
+    let a = t.get("GD_Test.Part_A");
+    assert_eq!(t.read(a, "ClipSize"), Value::Int(7));
+    let file = t
+        .defs
+        .handles
+        .borrow()
+        .file_ids
+        .iter()
+        .find(|(f, _)| f.file_stem().is_some_and(|s| s == "GD_Test"))
+        .map(|(f, &id)| (f.clone(), id))
+        .expect("GD_Test's id is kept");
+    assert_eq!(t.defs.packages.load_path(&file.0).unwrap(), file.1);
+    assert!(t.defs.handles.borrow().held.is_empty());
+    // A new store whose first lookup reads the candidates together: the holder is the scan order's first, kept
+    // loaded once (adopted), and the same object as above.
+    let mut u = World::off("prefetch-first");
+    let a = u.get("GD_Test.Part_A");
+    assert_eq!(u.read(a, "ClipSize"), Value::Int(7));
+    assert!(u.defs.handles.borrow().held.is_empty());
+}
+
+#[test]
 fn resolve_ref_goes_through_the_path() {
     let mut t = World::off("resolve");
     let a = t.get("GD_Test.Part_A");

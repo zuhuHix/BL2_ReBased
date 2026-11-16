@@ -144,9 +144,14 @@
 //!
 //! **Cost.** Under [`IdentityPolicy::FirstInScanOrder`] the first holder lookup builds the package store's global index
 //! (`PackageStore::global_candidates`), which reads every package of the tree once, as the C++ global fallback does on
-//! its first use (about 6.6 s for the 934 files of the installed `CookedPCConsole`, measured locally). Holder answers
-//! are cached per path. A candidate file a lookup reads is kept only as a list of its export paths; only holders'
-//! files stay loaded in the package store.
+//! its first use (about 6.6 s for the 934 files of the installed `CookedPCConsole`, measured locally; since lane
+//! FIX-SCENE-LOAD the store reads them on worker threads, about 1 s for Sanctuary's load). Holder answers are cached
+//! per path. A candidate file a lookup reads is kept only as a list of its export paths; only holders' files stay
+//! loaded in the package store. Since lane FIX-SCENE-LOAD (decision 2026-11-16-68) a path's candidate list is asked of
+//! the package store once per first segment, the first lookup of a segment reads all its candidates' export paths
+//! together on worker threads, a holder file read that way is handed to the package store (`PackageStore::adopt`)
+//! instead of being decoded again, and a loaded definition's slots move into its handle without a walk over the heap
+//! (`ObjectSpace::free_newest`). The answers are unchanged: the same holders, ids and objects.
 //!
 //! Status: implemented (W3-DEFS, decision 2026-11-15-16). Identity, the holder rules, the prefix rule and the overlay
 //! formats are this project's conventions or the tools', UNVERIFIED as rules of the game; the decode is W3-DECODE's.
@@ -155,6 +160,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use ow_container::ContainerError;
 use ow_core::{FixedHashMap, FixedHashSet, NotYet, ObjectPath, ParityMode};
@@ -477,17 +483,101 @@ struct Handles {
     /// The export paths of every candidate file a holder lookup read, or why it could not be read: read once, and no
     /// package kept for it (only a holder's file is loaded into the package store).
     files: FixedHashMap<PathBuf, Result<Rc<FileIndex>, PackageError>>,
+    /// The global index's candidate files by a path's first segment ([`candidate_segment`]): asked of the package
+    /// store once per segment (lane FIX-SCENE-LOAD; the store builds a new list on every call).
+    candidates: FixedHashMap<String, Rc<[PathBuf]>>,
+    /// A holder's file -> its package store id, once loaded (the store keeps every package it loads, so the id holds
+    /// for the store's life).
+    file_ids: FixedHashMap<PathBuf, PackageId>,
+    /// Packages [`Handles::prefetch`] read that hold the path it was asked for, kept until the lookup that asked
+    /// hands them to the package store or drops them ([`Handles::release`]).
+    held: FixedHashMap<PathBuf, Arc<Package>>,
     /// Paths whose `defs: no holder` line was logged.
     no_holder_logged: FixedHashSet<String>,
 }
 
 impl Handles {
-    /// The export paths of `file`, read on first use.
-    fn file_index(&mut self, file: &Path) -> Result<Rc<FileIndex>, PackageError> {
-        self.files
-            .entry(file.to_path_buf())
-            .or_insert_with(|| FileIndex::read(file).map(Rc::new))
-            .clone()
+    /// The files `PackageStore::global_candidates` gives for `path`, asked once per first segment: the store's list
+    /// depends on the segment alone, and its global index stays as built while the tree is not scanned again (the
+    /// caches here already assume that).
+    fn candidates(&mut self, store: &mut PackageStore, path: &str) -> Rc<[PathBuf]> {
+        let segment = candidate_segment(path);
+        if let Some(files) = self.candidates.get(&segment) {
+            return Rc::clone(files);
+        }
+        let files: Rc<[PathBuf]> = store.global_candidates(path).into();
+        self.candidates.insert(segment, Rc::clone(&files));
+        self.prefetch(&files, path);
+        files
+    }
+
+    /// Reads the export paths of every file of `files` not read yet, on worker threads (at most [`READ_THREADS`]),
+    /// as [`Handles::file_index`] would read each one; keeps the package of each that holds `path`. A lookup walks a
+    /// segment's candidates in scan order and reads them one by one; reading them together gives each file the same
+    /// index (a pure function of its bytes), only sooner, and possibly for a file the walk would not have reached.
+    fn prefetch(&mut self, files: &[PathBuf], path: &str) {
+        let todo: Vec<&PathBuf> = files
+            .iter()
+            .filter(|f| !self.files.contains_key(*f))
+            .collect();
+        if todo.len() < 2 {
+            return;
+        }
+        let read = parallel_map(&todo, |file| match FileIndex::read_with_package(file) {
+            Ok((index, package)) => {
+                let holds = matches!(index.find(path), Ok(Some(_)));
+                (Ok(index), holds.then_some(package))
+            }
+            Err(e) => (Err(e), None),
+        });
+        for (file, (index, package)) in todo.into_iter().zip(read) {
+            self.files.insert(file.clone(), index.map(Rc::new));
+            if let Some(package) = package {
+                self.held.insert(file.clone(), package);
+            }
+        }
+    }
+
+    /// Drops the packages [`Handles::prefetch`] kept that no lookup handed to the package store.
+    fn release(&mut self) {
+        self.held.clear();
+    }
+
+    /// The export paths of `file`, read on first use; with the package itself when this call read it, for
+    /// [`Handles::file_id`] to keep.
+    fn file_index(
+        &mut self,
+        file: &Path,
+    ) -> (Result<Rc<FileIndex>, PackageError>, Option<Arc<Package>>) {
+        if let Some(index) = self.files.get(file) {
+            return (index.clone(), self.held.remove(file));
+        }
+        let (index, package) = match FileIndex::read_with_package(file) {
+            Ok((index, package)) => (Ok(Rc::new(index)), Some(package)),
+            Err(e) => (Err(e), None),
+        };
+        self.files.insert(file.to_path_buf(), index.clone());
+        (index, package)
+    }
+
+    /// The package store id of holder file `file`: the store's own load of it (`PackageStore::load_path`), or, when
+    /// [`Handles::file_index`] has just read it, that package handed to the store (`PackageStore::adopt`, which keys
+    /// it by the same normalised path and gives the id `load_path` would), so that the file is decoded once.
+    fn file_id(
+        &mut self,
+        store: &mut PackageStore,
+        file: &Path,
+        fresh: Option<Arc<Package>>,
+    ) -> Result<PackageId, StoreError> {
+        if let Some(&id) = self.file_ids.get(file) {
+            return Ok(id);
+        }
+        let id = match fresh {
+            Some(package) => store.adopt(package)?,
+            None => store.load_path(file)?,
+        };
+        self.file_ids.insert(file.to_path_buf(), id);
+        Ok(id)
     }
 
     fn prune(&mut self, space: &ObjectSpace) {
@@ -703,20 +793,20 @@ impl Linker<'_> {
         let mut answer = None;
         match self.policy {
             IdentityPolicy::FirstInScanOrder => {
-                for file in cx.store.global_candidates(path) {
+                let files = self.handles.borrow_mut().candidates(cx.store, path);
+                for file in files.iter() {
                     // As the store's global fallback: a file that fails to load or whose search fails is no holder.
-                    let found = self
-                        .handles
-                        .borrow_mut()
-                        .file_index(&file)
-                        .and_then(|index| index.find(path));
+                    let (index, fresh) = self.handles.borrow_mut().file_index(file);
+                    let found = index.and_then(|index| index.find(path));
                     if let Ok(Some(export)) = found {
                         // Only the holder's file is loaded: its definition is decoded from it.
-                        let id = cx.store.load_path(&file)?;
-                        answer = cx.code.resolve_ref(cx.store, id, export);
+                        let id = self.handles.borrow_mut().file_id(cx.store, file, fresh);
+                        self.handles.borrow_mut().release();
+                        answer = cx.code.resolve_ref(cx.store, id?, export);
                         break;
                     }
                 }
+                self.handles.borrow_mut().release();
             }
             IdentityPolicy::Loaded(set) => {
                 for name in &set.packages {
@@ -735,6 +825,38 @@ impl Linker<'_> {
             .insert(key.to_string(), answer);
         Ok(answer)
     }
+}
+
+/// The key `PackageStore::global_candidates` files a path under: its first `.`-separated segment, ASCII case folded
+/// (the store's `first_segment`). [`Handles::candidates`] caches by it; a test checks the two agree.
+fn candidate_segment(path: &str) -> String {
+    path.split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+/// The most worker threads [`Handles::prefetch`] uses.
+const READ_THREADS: usize = 16;
+
+/// `f` of each item, computed on worker threads (at most [`READ_THREADS`]), in the items' order.
+fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, READ_THREADS);
+    let per_thread = items.len().div_ceil(threads).max(1);
+    let f = &f;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = items
+            .chunks(per_thread)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(f).collect::<Vec<R>>()))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
 }
 
 /// One installed overlay.
@@ -896,7 +1018,9 @@ impl Loader<'_, '_> {
         let (package, index) = target;
         let prefix = self.derive_prefix(package, index, path)?;
         let (made, tags_end) = self.instantiate(package, index, prefix)?;
-        let built = self.cx.space.free(made)?;
+        // `made` is new and nothing older refers to it: its slots move into the handle without a walk over the heap
+        // (`ObjectSpace::free_newest`; lane FIX-SCENE-LOAD).
+        let built = self.cx.space.free_newest(made)?;
         let class = built.class;
         {
             let object = self.cx.space.heap.get_mut(o)?;
@@ -1133,7 +1257,7 @@ impl Loader<'_, '_> {
             }
         };
         let (made, _) = self.build_over(target.0, target.1, prefix, base)?;
-        let slots = self.cx.space.free(made)?.slots;
+        let slots = self.cx.space.free_newest(made)?.slots;
         Ok(Some(slots))
     }
 
@@ -1803,12 +1927,14 @@ impl DefStore {
     pub fn owners(&mut self, path: &ObjectPath) -> Result<Holders, DefError> {
         let mut out = Holders::default();
         let path = dotted(path.as_str());
-        for file in self.packages.global_candidates(&path) {
-            let found = self
-                .handles
-                .borrow_mut()
-                .file_index(&file)
-                .and_then(|index| index.find(&path));
+        let files = self
+            .handles
+            .borrow_mut()
+            .candidates(&mut self.packages, &path);
+        for file in files.iter() {
+            let file = file.clone();
+            let (index, fresh) = self.handles.borrow_mut().file_index(&file);
+            let found = index.and_then(|index| index.find(&path));
             let export = match found {
                 Err(e) => {
                     out.failures.push(FileFailure::new(file, package_error(e)));
@@ -1817,7 +1943,11 @@ impl DefStore {
                 Ok(Some(export)) => export,
                 Ok(None) => continue,
             };
-            let id = match self.packages.load_path(&file) {
+            let id = match self
+                .handles
+                .borrow_mut()
+                .file_id(&mut self.packages, &file, fresh)
+            {
                 Ok(id) => id,
                 Err(e) => {
                     out.failures.push(FileFailure::new(file, e.into()));
@@ -1845,6 +1975,7 @@ impl DefStore {
                 Some(filed),
             ));
         }
+        self.handles.borrow_mut().release();
         Ok(out)
     }
 
