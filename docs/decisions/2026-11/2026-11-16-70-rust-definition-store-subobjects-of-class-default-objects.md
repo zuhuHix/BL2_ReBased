@@ -31,20 +31,30 @@ session and no native code was read: every rule here is **UNVERIFIED** as a rule
   - For contrast, outside class default objects: components parse from 8 (267,229, as the store already reads them).
   - The installed `DLC` tree (1,096 files; the 2 that do not read are the texture payload files
     `SANCTUARY_SCENE_IMPORT_GAPS.md` names) holds no object inside a class default object.
-- **The rule now** (`Loader::derive_prefix`): an export whose class derives from `Core.Component` and whose chain of
-  outer exports reaches a class default object reads from 16 (`PropertyPrefix::Template`) when its stream parses there,
-  else `NotYet`. A non-component inside a class default object keeps the ordinary 4. `PropertyPrefix::from_bytes`
-  still refuses 16, the C++'s three prefixes.
+- **The rule now** (`Loader::derive_prefix`, `template_fits`): an export whose class derives from `Core.Component` and
+  whose chain of outer exports reaches a class default object reads from 16 (`PropertyPrefix::Template`) only when it
+  fits the census's layout in full, else `NotYet`:
+  - at least 16 bytes, a zero word at 0, and a name at 4 equal to the export's own name;
+  - its tag stream from 16 ends at its `None`;
+  - after the `None`, nothing, or exactly one 4-byte word of 0.
+  (Review r1 of PR #370, H1 and M1: the first round checked only the stream from 16, which a template with more
+  before its tags could pass through the name table's first entry, and took any tail.) A non-component inside a class
+  default object keeps the ordinary 4; an export named `Default__...` inside one is a class default object itself, not
+  a subobject (L2). `PropertyPrefix::from_bytes` still refuses 16, the C++'s three prefixes.
 - **The modes.** Under `ParityMode::Off`, an object inside a class default object is a definition: `find`,
   `resolve_ref`, `load_export` and `instance` load it from its holder with its archetype applied (decision 55's rule).
-  Under `ParityMode::Reference` it stays a stand-in, as in the C++. The class default object itself is unchanged in both
+  Under `ParityMode::Reference` it stays a stand-in, as in the C++, and `load_export` refuses it as not a definition
+  before deriving any prefix, as `instance` does (review r1, M2). The class default object itself is unchanged in both
   modes.
 - **The archetype chain.** Templates are now followed as archetypes in Off, from their derived prefix. Decision 55's
   skip and its `defs: archetype ... not applied` line are gone; a dominant light template is a `NotYet` for the
   object made from it.
 - **Verified (automated).** On invented packages:
-  - `a_template_loads_from_16_in_off_only` (new): a template with the recorded 16 bytes loads in Off from 16.
-    `load_export` at 8 is a `PrefixMismatch`. One with an 8-byte prefix is `NotYet`. Neither loads in Reference.
+  - `a_template_loads_from_16_in_off_only` (new): a template with the recorded 16 bytes loads in Off from 16, and one
+    with a single zero word after its tags too. `load_export` at 8 is a `PrefixMismatch`. An 8-byte prefix, a non-zero
+    word 0, another name at 4, a non-zero trailing word and two trailing words are each `NotYet` (the header and the
+    tail rule were each checked to make the test fail when removed). A `Default__` object inside a class default
+    object is a class default object. In Reference none loads, and `load_export` gives `NotADefinition`.
   - `a_placed_object_takes_its_archetype_s_values_in_off_only` (changed): two components whose archetype is the template
     take its values in Off and class defaults in Reference.
   - `ow-object`'s prefix test: 16 is not a C++ prefix.
@@ -52,8 +62,9 @@ session and no native code was read: every rule here is **UNVERIFIED** as a rule
 - **Verified (local, installed game, pc-hummer; `origin/main` e002de5 against this lane; outputs under ignored
   `local/`).**
   - **Every object inside a class default object, through the store** (711): before, `NotADefinition` in both modes.
-    After, in Off, 708 load and 3 are `NotYet` (the dominant light templates); in Reference all 711 stay
-    `NotADefinition`.
+    After, in Off, 708 load (the 599 templates and the 109 non-components) and 3 are `NotYet` (the dominant light
+    templates); in Reference all 711 stay `NotADefinition`. Rerun with review r1's full layout check: the same 708 and
+    the same 3.
   - **Level objects** (decision 55's driver, the 32,556 exports under `TheWorld.PersistentLevel` of the 26
     `Sanctuary*` files).
     - Reference: every loaded object's values identical.
@@ -69,11 +80,17 @@ session and no native code was read: every rule here is **UNVERIFIED** as a rule
     35aeaa0, which touches neither `ow-defs` nor `ow-object`, with and without this lane's three files). Before, the
     pawn's `Att_Phaselock_Duration` and `LockDurationFormula` stopped at
     `Default__DesignerAttributeDefinition.ValueResolver`. After, both are **5**: equal to the Reference run and to the
-    recorded lock 5 at grade 0 (`PHASELOCK_STOCK_DATA.md`). The Reference output is identical.
+    recorded lock 5 at grade 0 (`PHASELOCK_STOCK_DATA.md`). The Reference output is identical. Rerun with review r1's
+    check: still 5, the Reference output still identical.
 - **UNVERIFIED.**
   - That the 16 bytes are what the engine writes for a template: two words and the object's own name. They are an
     observation of every installed template, not a reading of the serializer, and the last word is not understood.
   - What the dominant light templates' extra word and their placed copies' variable preamble are.
   - That the game applies a template's values to the objects made from it, in this order.
-- **Open.** Dominant light components, templates and placed alike. The template word at 12. Decision 55's other open
-  items stand.
+- **Open.**
+  - Dominant light components, templates and placed alike.
+  - The template word at 12.
+  - Load time (review r1, L4): each object made from a template rebuilds its archetype chain, so H2's Off scene load
+    went from 41.7 s to 55.3 s. A cache of built archetype values per target would keep references to store handles
+    that a failed load may free, so it needs a liveness check of every reference it holds; not added here.
+  - Decision 55's other open items stand.

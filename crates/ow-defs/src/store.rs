@@ -83,9 +83,9 @@
 //! **Prefix by class.** Where an export's tags start is derived from the export itself, so the order loads happen in
 //! cannot change a decode:
 //! - an export whose class derives from `Core.Component` and whose chain of outer exports reaches a class default
-//!   object (a template) reads from 16 (`PropertyPrefix::Template`) when its tag stream parses there, else `NotYet`
-//!   (decision 2026-11-16-70: in the installed packages every such component but the three dominant light templates
-//!   parses there, with its own name as a name at 4);
+//!   object (a template) reads from 16 (`PropertyPrefix::Template`) when it fits the layout decision 2026-11-16-70
+//!   recorded from every installed template (a zero word, its own name at 4, its tags from 16 ending at the export's
+//!   end or one zero word before it; 599 of 602 do, the three dominant light templates do not), else `NotYet`;
 //! - an export whose class path contains `CollectionActor` (`Engine.StaticMeshCollectionActor`,
 //!   `Engine.StaticLightCollectionActor`) reads from 4 (`PropertyPrefix::Ordinary`) without a check, wherever it is:
 //!   the C++ `--scene-records` rule (`src/cli.cpp`) and decision 2026-09-10-09. Its untagged tail lists its
@@ -983,17 +983,17 @@ impl Loader<'_, '_> {
             .map(|k| self.cx.code.class(k).path.to_ascii_lowercase())
             .collect();
         let has = |p: &str| chain.iter().any(|c| c == p);
-        // A component inside a class default object (a template): 16 bytes, under the structural check (decision
-        // 2026-11-16-70). The classes whose templates carry more before their tags (the dominant light components)
-        // fail the check and are `NotYet`.
+        // A component inside a class default object (a template): 16 bytes, under the structural check of decision
+        // 2026-11-16-70 (`template_fits`). The classes whose templates carry more before their tags (the dominant
+        // light components) fail it and are `NotYet`.
         if has("core.component") && self.outer_chain_reaches_class_default(&pkg, entry.outer) {
-            return if tags_parse(&pkg, &entry, PropertyPrefix::Template.bytes()) {
+            return if template_fits(&pkg, &entry) {
                 Ok(PropertyPrefix::Template)
             } else {
                 Err(DefError::NotYet(NotYet::not_read(
                     format!(
-                        "the property prefix of {path}: a component inside a class default object whose tags do not \
-                         parse from 16 bytes in"
+                        "the property prefix of {path}: a component inside a class default object whose bytes do not \
+                         fit the recorded 16-byte template layout"
                     ),
                     CDO_RECORD,
                 )))
@@ -1062,9 +1062,9 @@ impl Loader<'_, '_> {
 
     /// `ParityMode::Off`: the slots of export `index` of `package`'s archetype, with that archetype's own archetype
     /// applied first, and so on; `None` where the class default object is the base (no archetype, or the class
-    /// default object of the export's own class, or a class default object's subobject, which is logged). `chain` holds
-    /// the archetypes already followed, for the cycle guard and the depth budget. Every other archetype that cannot be
-    /// followed is a `NotYet`, never class defaults instead.
+    /// default object of the export's own class). `chain` holds the archetypes already followed, for the cycle guard
+    /// and the depth budget. Every other archetype that cannot be followed is a `NotYet`, never class defaults
+    /// instead.
     fn archetype_slots(
         &mut self,
         package: PackageId,
@@ -1402,19 +1402,54 @@ impl Loader<'_, '_> {
     }
 }
 
-/// Whether `path` names an object inside a class default object (a segment before its last starts `Default__`).
+/// Whether `path` names an object inside a class default object (a segment before its last starts `Default__`) that
+/// is not itself a class default object (its last segment does not).
 fn inside_class_default(path: &str) -> bool {
     let dotted_path = dotted(path);
     let segments: Vec<&str> = dotted_path.split('.').collect();
-    segments
-        .split_last()
-        .is_some_and(|(_, outers)| outers.iter().any(|s| s.starts_with("Default__")))
+    segments.split_last().is_some_and(|(last, outers)| {
+        !last.starts_with("Default__") && outers.iter().any(|s| s.starts_with("Default__"))
+    })
 }
 
 /// Whether the store loads the object at `path` although it is inside a class default object: in `ParityMode::Off`
 /// only (module documentation, "Subobjects of class default objects"); the C++ reads no such object.
 fn loads_inside_class_default(mode: ParityMode, path: &str) -> bool {
     mode != ParityMode::Reference && inside_class_default(path)
+}
+
+/// Whether export `entry` fits the template layout of decision 2026-11-16-70 (a census of every installed template:
+/// 599 of 602 fit, the 3 dominant light templates do not; UNVERIFIED as the engine's format): at least 16 bytes, a
+/// zero word at 0, a name at 4 equal to the export's own name, its tag stream from 16 ending at its `None`, and after
+/// it either nothing or exactly one 4-byte word of 0 (the 89 templates of six classes that carry a native tail when
+/// placed).
+fn template_fits(pkg: &Package, entry: &ObjectEntry) -> bool {
+    let (Ok(start), Ok(size)) = (usize::try_from(entry.offset), usize::try_from(entry.size)) else {
+        return false;
+    };
+    let Some(payload) = start.checked_add(size).and_then(|end| pkg.data.get(start..end)) else {
+        return false;
+    };
+    if payload.len() < PropertyPrefix::Template.bytes() {
+        return false;
+    }
+    let mut r = Reader::new(payload);
+    let header = r.i32().is_ok_and(|w| w == 0)
+        && tables::read_name(&mut r, &pkg.names).is_ok_and(|n| n == entry.name);
+    if !header {
+        return false;
+    }
+    match tags_end(pkg, entry, PropertyPrefix::Template.bytes()) {
+        Some(end) if end == size => true,
+        Some(end) => size - end == 4 && payload[end..] == [0, 0, 0, 0],
+        None => false,
+    }
+}
+
+/// Where export `entry`'s tag stream from `prefix` bytes in ends (just past its `None` tag, from the payload start),
+/// when it reaches its `None` inside the export's serial data.
+fn tags_end(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> Option<usize> {
+    walk_tags(pkg, entry, prefix).map(|(_, end)| end)
 }
 
 /// Whether export `entry`'s tag stream, read from `prefix` bytes into its payload, reaches its `None` tag inside the
@@ -1427,6 +1462,11 @@ fn tags_parse(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> bool {
 /// The names of the tags in export `entry`'s stream from `prefix` bytes in, in order, when the stream reaches its
 /// `None` tag inside the export's serial data; `None` otherwise.
 fn tag_names(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> Option<Vec<String>> {
+    walk_tags(pkg, entry, prefix).map(|(names, _)| names)
+}
+
+/// The tag names and where the stream ends (`tag_names`, `tags_end`).
+fn walk_tags(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> Option<(Vec<String>, usize)> {
     let start = usize::try_from(entry.offset).ok()?;
     let size = usize::try_from(entry.size).ok()?;
     let payload = start
@@ -1441,7 +1481,7 @@ fn tag_names(pkg: &Package, entry: &ObjectEntry, prefix: usize) -> Option<Vec<St
     loop {
         let name = tables::read_name(&mut r, &pkg.names).ok()?;
         if name == "None" {
-            return Some(names);
+            return Some((names, r.pos()));
         }
         let ty = tables::read_name(&mut r, &pkg.names).ok()?;
         let (value_size, array_index) = (r.i32().ok()?, r.i32().ok()?);
@@ -1674,6 +1714,11 @@ impl DefStore {
         let pkg = self.packages.shared(package);
         pkg.object(index).map_err(package_error)?;
         let path = full_path(&pkg, index).map_err(package_error)?;
+        if is_class_default(&path) && !loads_inside_class_default(self.mode, &path) {
+            return Err(DefError::NotADefinition(format!(
+                "{path}: a class default object, or inside one"
+            )));
+        }
         self.run(w, |l| {
             let key = path_key(&path);
             let mine =
