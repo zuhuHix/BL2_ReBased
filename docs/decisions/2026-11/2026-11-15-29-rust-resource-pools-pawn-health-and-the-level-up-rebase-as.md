@@ -46,23 +46,61 @@ and NATIVE_ATTRIBUTES.md sections 5 and 8, all read from the executable. The C++
   - A manager is made by spawning a `ResourcePoolManager` actor owned by the owner (`actors::spawn`), only with an
     authoritative owner and a world that has a `WorldInfo`. The C++ instantiates one without the spawn rules.
   - `ResourcePools` must be declared with 16 elements. Any other count is a typed error, where the C++ pads a
-    one-element synthetic array.
+    one-element synthetic array (rule 5: the bound stays). **Handoff to W6:** two C++ fixtures declare it otherwise and
+    must change to `ResourcePools[16]` when their lanes move them to the Rust binary: `tests/combat_test.py:288` (a
+    dynamic array) and `tests/mission_script_test.py:361` (a single object).
   - `Controller.GetResourcePoolForResourceDefinition` takes an omitted `bCreatePoolIfOneDoesntExist` as true, the
     record's default.
   - The engine query reads only one resource owner resolver, the controller resolver with a controller source (the
     record: a controller resolves to itself). It then returns the slot the owner's manager map gives. Every other
-    resolver class or source is `NotYet { NotRead }`. A None resolver, a None manager or no entry gives `Ok(None)`.
+    resolver class or source is `NotYet { NotRead }`. A None manager or no entry gives `Ok(None)`.
+  - The resolver's property is `ResourceDefinition.ResourceContextResolver`. The record does not name it, and it was
+    checked locally against the installed `Engine.upk` (ignored test `installed_game_pool_classes`, output under
+    `local/`): all 31 installed resources hold an `Engine.ControllerAttributeContextResolver` there. A None resolver
+    giving `Ok(None)` is UNVERIFIED (fitted: no installed resource has one).
+  - **Open contract follow-up (hub decision, review r1 of PR #329):** the query re-implements the controller
+    resolver, more narrowly than `ow-attr/src/context_resolvers/actors.rs`. It should dispatch the resource's resolver
+    through the `AttributeSystem` registry. A handler receives only `WorldParts`, not the evaluator, so this needs a
+    contract change.
+  - `SetCurrentValue` writes out the C++ comparison form `max(minimum, min(value, maximum))` with `<`, so a NaN value
+    gives the minimum, as the C++ does.
+  - The "Too many ResourcePools" log line names the definition's object path and the owner's.
 - **`NotYet` where the record is silent, and the Reference stand-ins.** In `ParityMode::Off` the following are
   `NotYet { NotRead }`. Each refusal is decided before anything changes.
   - `ResetIdleTimer` has no note (NATIVE_INDEX.md: "none (guess)").
-  - The "current value changed" hook of any pool subclass. Only the base class's hook is read, and it is empty.
+  - The "current value changed" hook of the two pool subclasses the record names as unread (NATIVE_LEVEL_UP_ATTRIBUTES.md
+    section 4): `ExperienceResourcePool` and `AmmoResourcePool`. On the installed game (local check, the same ignored
+    test) the resources' pool classes are:
+    - Health: `Engine.HealthResourcePool` (7 definitions);
+    - Shield: `WillowGame.ShieldResourcePool` (4);
+    - six ammo resources: `WillowGame.AmmoResourcePool`; `Ammo_Grenade_Protean` uses `Engine.ResourcePool`;
+    - Experience: `WillowGame.ExperienceResourcePool`;
+    - the rest (accuracy, cooldowns and others, 13 definitions): `Engine.ResourcePool`.
+
+    The record names no hook for the health or shield class, so they pass (review r1 narrowed the refusal from every
+    subclass).
   - The class-level pawn attributes and the ten status-effect resistances of `RecalculateAttributeInitializedState`,
     whenever their conditions hold. The record does not name the properties they land in.
 
+  **Impact: Off mode cannot create a real pool.** Every installed `InitializeAuthoritative` calls `ResetIdleTimer`, so
+  every real `CreatePool` is refused in Off mode until that native is read; a Ghidra read of it is the cheap fix. The
+  refusal leaves the manager as it was: `create_pool_at_index` empties the slot again, `create_pool` restores
+  `NextPoolGUID`, and no map entry is made. The new pool object stays unreferenced, and what the script did to other
+  objects before the refusal is not undone (test
+  `an_off_mode_refusal_inside_initialize_authoritative_leaves_the_manager_as_it_was`).
+
   `ParityMode::Reference` keeps the C++ reading for all three: it stamps the world time, skips the hook, and skips both
-  class-level parts (`src/mission_script.cpp`: "not modelled"; for Maya's class the data are 0 and 1). No tracked test
-  pins them. **For the architecture 6.1 table (the hub's edit):** three Reference-only rows owned by W5-POOLS, each
-  replaced by its Off-mode `NotYet` test in `pools/tests.rs`.
+  class-level parts without reading their conditions (`CharacterClass`, `Pawn` and `MyWillowPawn` are not read;
+  `src/mission_script.cpp`: "not modelled"; for Maya's class the data are 0 and 1). **For the architecture 6.1 table
+  (the hub's edit):** three Reference-only rows owned by W5-POOLS. What the tracked C++ fixtures pin:
+  - `tests/mission_script_test.py` scenarios S7 and S7b (`--slice-run`, the level-up through the C++ bridge) pin the
+    skipped class-level parts: its controller is rebased with no class-level read. Its pool is a `HealthResourcePool`,
+    which the narrowed hook rule lets through.
+  - `tests/combat_test.py` (`--combat-run`) pins pool creation and the pawn's health natives with hooks skipped.
+  - Neither fixture's invented `InitializeAuthoritative` calls `ResetIdleTimer`, so no tracked test reaches that
+    stand-in; only the installed script does.
+
+  Each stand-in is replaced by its Off-mode `NotYet` test in `pools/tests.rs`.
 
   These are always `NotYet`:
   - `CreatePoolAtIndex` with no manager;
@@ -75,7 +113,9 @@ and NATIVE_ATTRIBUTES.md sections 5 and 8, all read from the executable. The C++
   `--combat-run`, `--mission-run` and `--slice-run` (W6 lanes). Its `--run` leaves them unbound, as the Rust `--run`
   does. So `tests/rust_parity.d/worldpools.txt` holds no line, and says why.
 - **Verified (automated, local, pc-hummer).**
-  - 29 `ow-world` unit tests on an invented `Engine.upk`. Its natives are declared with the record's signatures, so
+  - 36 `ow-world` unit tests on an invented `Engine.upk` (29, plus 7 after review r1 of PR #329: the refusal inside
+    `InitializeAuthoritative`, the narrowed hook, NaN, the order of the refusals in `SetHealth` and the controller
+    lookup, the log line, and Reference mode reading no class-level condition). Its natives are declared with the record's signatures, so
     every call goes through the derived key, and its pool script bodies are invented. They cover every rule above: the
     clamp order and the authority gate, integer truncation, the idle stamp, `UpdateLastValues`' 0.0001,
     `PoolIsNowFull`, the reference rule, each `CreatePool` outcome (slot 0 with GUID 0, the refusal, the reinit quirk,
@@ -94,8 +134,10 @@ and NATIVE_ATTRIBUTES.md sections 5 and 8, all read from the executable. The C++
     Output: `local/p2/w5-pools/health_1_80.txt`. This shows that the VM, the installed script and the evaluator agree
     with the recorded formula. It is not a new real-game observation.
 - **Open items.**
-  - The three Reference stand-ins above: read `ResetIdleTimer`, the subclass hooks, and the pawn and status-component
-    properties of the class-level parts (Ghidra).
+  - The three Reference stand-ins above: read `ResetIdleTimer` first (it blocks every real pool in Off mode), then the
+    experience and ammo hooks, and the pawn and status-component properties of the class-level parts (Ghidra).
+  - Dispatch the pool query's resource resolver through the `AttributeSystem` registry (contract follow-up above).
+  - W6: `ResourcePools[16]` in `tests/combat_test.py:288` and `tests/mission_script_test.py:361`.
   - The `WillowMind` and `WillowVehicle` versions; the vehicle pool provider; resource owner resolvers other than the
     controller one, and pawn sources.
   - Whether `CreatePoolAtIndex` makes a manager.
