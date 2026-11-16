@@ -39,12 +39,17 @@
 //! to the first name in byte order), a looping timer re-armed at its due time plus its rate, at most 32 callbacks
 //! per call; it stops after a callback that logged.
 //!
-//! **Not ported: the Kismet entry points** ([`Mover::remote_event`] and the rest that run the action's installed
-//! sequence). They need the Kismet sequence runner of lane W5-KISMET (`ow_mission::kismet`), which is not on main
-//! yet, so each returns `NotYet { LayerAbsent }` (decision 2026-11-15-32). Only the C++ error that comes before any
-//! Kismet work is ported: an action path with no `.` has no owning sequence ("mover action path has no owning
-//! sequence", reported in [`Dispatch::errors`] as the C++ catches it). Their result shapes ([`Dispatch`],
-//! [`Request`], [`Variable`]) are the C++ ones.
+//! **The Kismet entry points** ([`Mover::remote_event`] and the rest) run the installed sequence that owns the
+//! action: its path is the action path up to the last `.` ("mover action path has no owning sequence" without one).
+//! The executor is lane W5-KISMET's ([`crate::kismet`], decision 2026-11-15-31). It runs over a decode context of
+//! its own (a package store on the VM store's cooked root, a reflection index, an object space and a decode state),
+//! built at the first sequence call, as the C++ builds its `Kismet` lazily; its handlers only record requests, so they
+//! need no VM. Only this mover's Matinee action is bound: its `Play` and `Reverse` inputs request motion (+1 / -1);
+//! every other `Engine.SequenceAction` input (and another input of the action) is listed at the host boundary as
+//! `<Class>:<op> <- <input>`, not run. One call ([`Dispatch`]) clears the per-call state, runs its entry, then every
+//! impulse due; what the C++ throws in it is reported in [`Dispatch::errors`], followed by the decode log lines of the
+//! call as `runtime: <line>`. The sequence's objects are the decode context's, not the VM's (the C++ shares one
+//! runtime): the actor and the action the notifications run on are the VM's, and the executor reads only its own.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -57,13 +62,18 @@ use ow_core::{NotYet, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_defs::store::DefError;
+use ow_object::decode::{DecodeState, ValueCx};
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{FuncId, ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::prefix::PropertyPrefix;
+use ow_object::reflect::CodeIndex;
 use ow_object::value::Value;
+use ow_package::store::PackageStore;
 use ow_vm::api::{NativeCall, NativeFn, StubPolicy, Vm};
 use ow_vm::error::VmError;
+
+use crate::kismet::{Kismet, KismetError};
 
 /// The record of what was observed of movers.
 pub const RECORD: &str = "SANCTUARY_MOVER_PROTOTYPE.md";
@@ -80,9 +90,6 @@ pub const MAX_ADVANCE: f64 = 60.0;
 /// The most timer callbacks one [`Mover::advance`] runs.
 pub const MAX_CALLBACKS: usize = 32;
 
-const SEQUENCE_LAYER: &str = "the Kismet sequence runner (ow_mission::kismet, lane W5-KISMET)";
-const SEQUENCE_RECORD: &str = "decision 2026-11-15-32 (the mover's Kismet entry points)";
-
 /// Why binding a mover or one of its calls failed.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +102,9 @@ pub enum MoverError {
     Def(DefError),
     /// The call left a line in the VM log (the C++ throws the first line); the text is that line.
     Logged(String),
+    /// The Kismet executor failed (`crate::kismet::KismetError`, whose text is the C++ text); kept as that text,
+    /// because the executor's error is neither `Clone` nor `PartialEq`.
+    Kismet(String),
     /// Something this port does not have yet.
     NotYet(NotYet),
 }
@@ -104,7 +114,9 @@ impl MoverError {
     /// text, anything else its text and causes.
     pub fn cpp_text(&self) -> String {
         match self {
-            MoverError::Binding(text) | MoverError::Logged(text) => text.clone(),
+            MoverError::Binding(text) | MoverError::Logged(text) | MoverError::Kismet(text) => {
+                text.clone()
+            }
             MoverError::Vm(VmError::Script { message, .. }) => message.clone(),
             MoverError::Vm(VmError::Def(e)) | MoverError::Def(e) => chain(e),
             MoverError::Vm(e) => chain(e),
@@ -136,6 +148,7 @@ impl fmt::Display for MoverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             MoverError::Binding(text) => write!(f, "mover: {text}"),
+            MoverError::Kismet(text) => write!(f, "mover: kismet: {text}"),
             MoverError::Vm(e) => write!(f, "mover: {e}"),
             MoverError::Def(e) => write!(f, "mover: {e}"),
             MoverError::Logged(line) => write!(f, "mover: the call logged {line:?}"),
@@ -150,8 +163,14 @@ impl std::error::Error for MoverError {
             MoverError::Vm(e) => Some(e),
             MoverError::Def(e) => Some(e),
             MoverError::NotYet(n) => Some(n),
-            MoverError::Binding(_) | MoverError::Logged(_) => None,
+            MoverError::Binding(_) | MoverError::Logged(_) | MoverError::Kismet(_) => None,
         }
+    }
+}
+
+impl From<KismetError> for MoverError {
+    fn from(e: KismetError) -> Self {
+        MoverError::Kismet(e.to_string())
     }
 }
 
@@ -265,7 +284,27 @@ pub struct Mover {
     shared: Rc<RefCell<Shared>>,
     diagnostics: Vec<String>,
     store_notes: Vec<String>,
+    package: String,
     action_path: String,
+    sequence: Option<Box<Sequence>>,
+    record: Rc<RefCell<Record>>,
+}
+
+/// What the bound handlers record during one sequence call.
+#[derive(Debug, Default)]
+struct Record {
+    motion: i32,
+    host_boundary: Vec<String>,
+    requests: Vec<Request>,
+}
+
+/// The executor's decode context and the executor, once built.
+struct Sequence {
+    store: PackageStore,
+    code: CodeIndex,
+    space: ObjectSpace,
+    state: DecodeState,
+    kismet: Option<Kismet>,
 }
 
 impl fmt::Debug for Mover {
@@ -276,6 +315,16 @@ impl fmt::Debug for Mover {
             .field("action_path", &self.action_path)
             .finish_non_exhaustive()
     }
+}
+
+/// A world-acting op the host may execute, listed (C++ `Impl::boundary`).
+fn boundary(record: &mut Record, class: &str, op: &str, desc: String) {
+    record.host_boundary.push(format!("{class}:{op} <- {desc}"));
+    record.requests.push(Request {
+        class: class.to_string(),
+        op: op.to_string(),
+        input: desc,
+    });
 }
 
 /// The C++ size check of an export's property prefix (`Runtime::applyTaggedDefaults`).
@@ -448,7 +497,10 @@ impl Mover {
             shared,
             diagnostics,
             store_notes,
+            package: package.to_string(),
             action_path: action_path.to_string(),
+            sequence: None,
+            record: Rc::new(RefCell::new(Record::default())),
         })
     }
 
@@ -727,82 +779,271 @@ impl Mover {
         })
     }
 
-    /// The Kismet sequence that owns the action: its path is the action path up to the last `.` (C++
-    /// `Impl::sequence`). An action path with no `.` is the C++ error; any other is `NotYet` (the runner is lane
-    /// W5-KISMET's).
-    fn sequence(&self, what: &str) -> MoverError {
-        if !self.action_path.contains('.') {
-            return binding("mover action path has no owning sequence");
-        }
-        MoverError::NotYet(NotYet::layer_absent(
-            format!(
-                "the mover's Kismet sequence for {} ({what})",
-                self.action_path
-            ),
-            SEQUENCE_LAYER,
-            SEQUENCE_RECORD,
+    /// The owning sequence's path and the action's name (C++ `Impl::sequence`).
+    fn split_action(&self) -> Result<(String, String), MoverError> {
+        let dot = self
+            .action_path
+            .rfind('.')
+            .ok_or_else(|| binding("mover action path has no owning sequence"))?;
+        Ok((
+            self.action_path[..dot].to_string(),
+            self.action_path[dot + 1..].to_string(),
         ))
     }
 
-    /// One sequence call (C++ `Impl::dispatch`): the per-call state cleared, then the sequence. A C++ error is
-    /// reported in [`Dispatch::errors`], as the C++ catches it; a `NotYet` is returned.
-    fn dispatch(&mut self, what: &str) -> Result<Dispatch, MoverError> {
-        self.vm.log.clear();
-        let mut out = Dispatch::default();
-        let failed = self.sequence(what);
-        if failed.is_not_yet() {
-            return Err(failed);
+    /// Builds the executor at the first call (a failure is retried at the next, as the C++ leaves its `Kismet`
+    /// unset), with this mover's handlers.
+    fn ensure_sequence(&mut self) -> Result<(), MoverError> {
+        let (sequence_path, action_name) = self.split_action()?;
+        if self.sequence.is_none() {
+            let root = self.vm.defs.packages().root().to_path_buf();
+            let store = PackageStore::open(root).map_err(|e| binding(chain(&e)))?;
+            self.sequence = Some(Box::new(Sequence {
+                store,
+                code: CodeIndex::new(),
+                space: ObjectSpace::new(),
+                state: DecodeState::new(),
+                kismet: None,
+            }));
         }
-        out.errors.push(failed.cpp_text());
-        out.errors
-            .extend(self.vm.log.iter().map(|line| format!("runtime: {line}")));
-        Ok(out)
+        let mode = self.vm.parity;
+        let Some(seq) = self.sequence.as_deref_mut() else {
+            return Ok(());
+        };
+        if seq.kismet.is_some() {
+            return Ok(());
+        }
+        let mut cx = ValueCx::new(
+            &mut seq.store,
+            &mut seq.code,
+            &mut seq.space,
+            &mut seq.state,
+            mode,
+        );
+        let package = cx
+            .code
+            .package(cx.store, &self.package)
+            .map_err(|e| binding(chain(&e)))?;
+        let mut kismet = Kismet::new(&mut cx, package, &sequence_path)?;
+        let record = Rc::clone(&self.record);
+        // Only this mover's Matinee action is bound; everything else is reported at the host boundary.
+        kismet.handle(
+            "Engine.SeqAct_Interp",
+            Rc::new(
+                move |k: &mut Kismet, cx: &mut ValueCx<'_>, op: usize, input: i32| {
+                    let desc = k.input_desc(cx, op, input)?;
+                    let mut r = record.borrow_mut();
+                    if k.ops()[op].name == action_name && (desc == "Play" || desc == "Reverse") {
+                        r.motion = if desc == "Play" { 1 } else { -1 };
+                    } else {
+                        boundary(&mut r, &k.ops()[op].cls, &k.ops()[op].name, desc);
+                    }
+                    Ok(())
+                },
+            ),
+        );
+        let record = Rc::clone(&self.record);
+        kismet.handle(
+            "Engine.SequenceAction",
+            Rc::new(
+                move |k: &mut Kismet, cx: &mut ValueCx<'_>, op: usize, input: i32| {
+                    let desc = k.input_desc(cx, op, input)?;
+                    boundary(
+                        &mut record.borrow_mut(),
+                        &k.ops()[op].cls,
+                        &k.ops()[op].name,
+                        desc,
+                    );
+                    Ok(())
+                },
+            ),
+        );
+        seq.kismet = Some(kismet);
+        Ok(())
     }
 
-    /// A remote event through the action's installed Kismet sequence (C++ `Mover::remoteEvent`). Only the C++
-    /// error for an action with no owning sequence is ported; the rest is `NotYet`.
-    pub fn remote_event(&mut self, name: &str) -> Result<Dispatch, MoverError> {
-        self.dispatch(&format!("remote event {name}"))
+    /// One sequence call (C++ `Impl::dispatch`): the per-call state cleared, `entry`, then every impulse due now.
+    fn dispatch(
+        &mut self,
+        entry: impl FnOnce(&mut Kismet, &mut ValueCx<'_>, &mut Dispatch) -> Result<(), MoverError>,
+    ) -> Dispatch {
+        let mut out = Dispatch::default();
+        self.vm.log.clear();
+        *self.record.borrow_mut() = Record::default();
+        if let Some(seq) = self.sequence.as_deref_mut() {
+            seq.state.log.clear();
+        }
+        let mode = self.vm.parity;
+        let ran = self.ensure_sequence().and_then(|()| {
+            let seq = self
+                .sequence
+                .as_deref_mut()
+                .ok_or_else(|| binding("mover sequence missing"))?;
+            let kismet = seq
+                .kismet
+                .as_mut()
+                .ok_or_else(|| binding("mover sequence missing"))?;
+            let mut cx = ValueCx::new(
+                &mut seq.store,
+                &mut seq.code,
+                &mut seq.space,
+                &mut seq.state,
+                mode,
+            );
+            kismet.trace.clear();
+            kismet.errors.clear();
+            entry(kismet, &mut cx, &mut out)?;
+            kismet.run(&mut cx)?;
+            out.trace = kismet.trace.clone();
+            out.errors = kismet.errors.clone();
+            Ok(())
+        });
+        if let Err(e) = ran {
+            out.errors.push(e.cpp_text());
+        }
+        if let Some(seq) = self.sequence.as_deref() {
+            out.errors
+                .extend(seq.state.log.iter().map(|line| format!("runtime: {line}")));
+        }
+        let record = std::mem::take(&mut *self.record.borrow_mut());
+        out.motion = record.motion;
+        out.host_boundary = record.host_boundary;
+        out.requests = record.requests;
+        out
     }
 
-    /// A mission behavior's remote event (C++ `Mover::missionEvent`); as [`Mover::remote_event`].
-    pub fn mission_event(&mut self, mission: &str, name: &str) -> Result<Dispatch, MoverError> {
-        self.dispatch(&format!("mission {mission} remote event {name}"))
+    /// A remote event through the action's installed Kismet sequence (C++ `Mover::remoteEvent`).
+    pub fn remote_event(&mut self, name: &str) -> Dispatch {
+        self.dispatch(|k, cx, out| {
+            out.matched = k.remote_event(cx, name)?;
+            Ok(())
+        })
     }
 
-    /// The end of the host-driven motion, to the sequence (C++ `Mover::motionFinished`); as
-    /// [`Mover::remote_event`].
-    pub fn motion_finished(&mut self, reverse: bool) -> Result<Dispatch, MoverError> {
-        self.dispatch(if reverse { "Reversed" } else { "Completed" })
+    /// A mission behavior's remote event: the `WillowSeqEvent_MissionRemoteEvent` ops bound to that mission (C++
+    /// `Mover::missionEvent`).
+    pub fn mission_event(&mut self, mission: &str, name: &str) -> Dispatch {
+        self.dispatch(|k, cx, out| {
+            out.matched = k.mission_remote_event(cx, mission, name)?;
+            Ok(())
+        })
     }
 
-    /// Enters one event op by name (C++ `Mover::sequenceEvent`); as [`Mover::remote_event`].
-    pub fn sequence_event(&mut self, op: &str) -> Result<Dispatch, MoverError> {
-        self.dispatch(&format!("event {op}"))
+    /// Reports the end of the host-driven motion to the sequence: fires the action's "Completed" or "Reversed"
+    /// (C++ `Mover::motionFinished`).
+    pub fn motion_finished(&mut self, reverse: bool) -> Dispatch {
+        let action = self.split_action().map(|(_, a)| a).unwrap_or_default();
+        self.dispatch(|k, cx, out| {
+            if let Some(op) = k.find(&action) {
+                k.fire_named(cx, op, if reverse { "Reversed" } else { "Completed" })?;
+                out.matched = 1;
+            }
+            Ok(())
+        })
     }
 
-    /// Enters every event whose Originator is `object` (C++ `Mover::originatorEvent`); as
-    /// [`Mover::remote_event`].
-    pub fn originator_event(&mut self, object: &str) -> Result<Dispatch, MoverError> {
-        self.dispatch(&format!("originator {object}"))
+    /// Enters one event op by name (C++ `Mover::sequenceEvent`); a name that is no `Engine.SequenceEvent` op is an
+    /// error line.
+    pub fn sequence_event(&mut self, name: &str) -> Dispatch {
+        self.dispatch(|k, cx, out| {
+            let event = cx
+                .code
+                .find_class(cx.store, "Engine.SequenceEvent")
+                .map_err(|e| binding(e.to_string()))?;
+            match k.find(name) {
+                Some(op) if cx.code.is_child_of(k.ops()[op].class, event) => {
+                    k.activate_event(cx, op)?;
+                    out.matched = 1;
+                    out.entered.push(k.ops()[op].name.clone());
+                }
+                _ => k.errors.push(format!("no sequence event named {name}")),
+            }
+            Ok(())
+        })
     }
 
-    /// Fires output `desc` of op `op` (C++ `Mover::output`); as [`Mover::remote_event`].
-    pub fn output(&mut self, op: &str, desc: &str) -> Result<Dispatch, MoverError> {
-        self.dispatch(&format!("output {op}.{desc}"))
+    /// Enters every event whose `Originator` is the object at `object_path` (C++ `Mover::originatorEvent`).
+    pub fn originator_event(&mut self, object_path: &str) -> Dispatch {
+        self.dispatch(|k, cx, out| {
+            for op in k.events_for_originator(cx, object_path)? {
+                k.activate_event(cx, op)?;
+                out.matched += 1;
+                out.entered.push(k.ops()[op].name.clone());
+            }
+            Ok(())
+        })
     }
 
-    /// Advances sequence time (C++ `Mover::advanceSequence`); as [`Mover::remote_event`]. The C++ finds the
-    /// sequence before it checks `seconds`.
-    pub fn advance_sequence(&mut self, seconds: f64) -> Result<Dispatch, MoverError> {
-        let _ = seconds;
-        self.dispatch("sequence time")
+    /// Fires output `desc` of op `name` (an op the host executed; C++ `Mover::output`). An op with no such output
+    /// does nothing; a name that is no op is an error line.
+    pub fn output(&mut self, name: &str, desc: &str) -> Dispatch {
+        self.dispatch(|k, cx, out| {
+            let Some(op) = k.find(name) else {
+                k.errors.push(format!("no sequence op named {name}"));
+                return Ok(());
+            };
+            if k.output_index(cx, op, desc)?.is_none() {
+                return Ok(());
+            }
+            k.fire_named(cx, op, desc)?;
+            out.matched = 1;
+            Ok(())
+        })
     }
 
-    /// The variables linked to an op's variable link (C++ `Mover::variables`). The C++ does not catch here: an
-    /// action with no owning sequence is an error, the rest `NotYet`.
-    pub fn variables(&mut self, op: &str, desc: &str) -> Result<Vec<Variable>, MoverError> {
-        Err(self.sequence(&format!("variables of {op}.{desc}")))
+    /// Advances sequence time by `seconds` (finite, 0 to 60) and runs what is due (C++ `Mover::advanceSequence`).
+    pub fn advance_sequence(&mut self, seconds: f64) -> Dispatch {
+        self.dispatch(|k, cx, _| {
+            if !seconds.is_finite() || !(0.0..=MAX_ADVANCE).contains(&seconds) {
+                return Err(binding("invalid sequence time delta"));
+            }
+            k.tick(cx, seconds)?;
+            Ok(())
+        })
+    }
+
+    /// The variables linked to op `name`'s variable link `desc`: each variable's name and, for an object variable,
+    /// the path of the object its `ObjValue` names (C++ `Mover::variables`). The C++ does not catch here.
+    pub fn variables(&mut self, name: &str, desc: &str) -> Result<Vec<Variable>, MoverError> {
+        self.ensure_sequence()?;
+        let mode = self.vm.parity;
+        let Some(seq) = self.sequence.as_deref_mut() else {
+            return Ok(Vec::new());
+        };
+        let Some(kismet) = seq.kismet.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let mut cx = ValueCx::new(
+            &mut seq.store,
+            &mut seq.code,
+            &mut seq.space,
+            &mut seq.state,
+            mode,
+        );
+        let Some(op) = kismet.find(name) else {
+            return Ok(Vec::new());
+        };
+        let mut result = Vec::new();
+        for variable in kismet.variables(&mut cx, op, desc)? {
+            let object = cx.space.heap.get(variable)?;
+            let mut entry = Variable {
+                name: cx.space.names.text(object.name).into_owned(),
+                object: String::new(),
+            };
+            if let Some(Value::Object(Some(o))) =
+                crate::kismet::property(cx.space, variable, "ObjValue")?
+                && let Origin::Export { package, index } | Origin::Resource { package, index } =
+                    cx.space.heap.get(o)?.origin
+            {
+                entry.object = cx
+                    .store
+                    .get(package)
+                    .path_of(index)
+                    .map_err(|e| binding(chain(&e)))?;
+            }
+            result.push(entry);
+        }
+        Ok(result)
     }
 }
 

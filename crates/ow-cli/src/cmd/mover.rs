@@ -7,10 +7,10 @@
 //!   Exit 1 when any event failed.
 //! - `<package> --mover-event <actor> <action> --cooked <dir> <event>` binds the mover the same way and sends the
 //!   remote event through the action's Kismet sequence, printing `{"event","matched","motion","trace",
-//!   "host_boundary","errors"}` (and, after requested motion, the notifications and the motion's end). The sequence
-//!   runner is lane W5-KISMET's and not ported: an action whose path names an owning sequence prints nothing on
-//!   stdout, says so on stderr and exits 3 (decision 2026-11-15-32). An action with no owning sequence prints the
-//!   C++ output (its error in `errors`, exit 1).
+//!   "host_boundary","errors"}` and, after requested motion, `"start_steps","finish_steps","start_error",
+//!   "finish_error","finished_trace","finished_errors"` (the notifications and the motion's end). Exit 1 when nothing
+//!   matched, no motion was requested or anything failed. The sequence runs on lane W5-KISMET's executor
+//!   (decision 2026-11-15-32).
 //!
 //! Both load the source package first, as the C++ does before it reads the options, and run on a thread of
 //! `ow_vm::interp::STACK_SIZE` bytes. A binding failure prints `ow-package: <the C++ text>` and exits 1. `mode` is the
@@ -162,12 +162,12 @@ fn list(out: &mut String, name: &str, lines: &[String]) {
 
 /// `--mover-event` (C++ `argc != 8`): the remote event through the action's sequence, then, when it requested
 /// motion, the start and finish notifications and the motion's end. Exit 1 when nothing matched, no motion was
-/// requested or anything failed. The sequence itself is `NotYet` (module documentation).
+/// requested or anything failed.
 fn event(args: &[String], mode: ParityMode, out: &mut String) -> Result<u8, Failure> {
     // A gameplay command: an unbound native is refused (architecture section 3.8); nothing is allowed yet.
     let mut mover = bind(args, 7, mode, StubPolicy::refuse_all())?;
     let name = &args[6];
-    let dispatch = mover.remote_event(name)?;
+    let dispatch = mover.remote_event(name);
     let mut text = format!(
         "{{\"event\":{},\"matched\":{},\"motion\":{}",
         quote(name),
@@ -182,7 +182,7 @@ fn event(args: &[String], mode: ParityMode, out: &mut String) -> Result<u8, Fail
         let reverse = dispatch.motion < 0;
         let start = mover.notify(false, reverse);
         let finish = mover.notify(true, reverse);
-        let done = mover.motion_finished(reverse)?;
+        let done = mover.motion_finished(reverse);
         let error = |r: &ow_mission::mover::MoverResult| {
             r.error
                 .as_ref()

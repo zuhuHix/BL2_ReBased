@@ -1,13 +1,12 @@
 # AI-assisted (Claude Code). Lane W5-DIALOG: --mover-probe, --mover-event (crates/ow-cli/src/cmd/mover.rs, crates/ow-mission/src/mover.rs).
 #
-# Both commands need a package file and a cooked folder. No package may be tracked, and the only tracked test that
-# runs --mover-probe is tests/vm_test.py, which also runs commands other lanes own (it is W4-INTERP2's whole-file
-# gate). So these lines pin the paths that need no package: a source package that does not exist is the reader's
-# error before the options are read, for both commands. The invented-package comparisons (tests/vm_test.py's make():
-# the mover, the broken mover and the truncated mover, each with the right, swapped and missing exports, a short
-# command line and a wrong option; both commands) were run locally against the C++ binary: 25 of 25 identical in exit
-# code, stdout and stderr (decision 2026-11-15-32). Every rule has a Rust unit test on an invented package
-# (crates/ow-mission/src/mover/tests.rs).
+# tests/mover_parity_test.py builds an invented install (a toy mover and a toy Kismet sequence) and diffs both
+# commands on both binaries, with two differences checked on purpose (the stub policy of --mover-event, and the
+# store-derived prefix of a non-actor bound as the actor; decision 2026-11-15-32). It needs the C++ binary as its first
+# argument, as tests/item_roll_rust_test.py does. The diff lines below pin the paths that need no package: a source
+# package that does not exist is the reader's error before the options are read, for both commands. Every rule also
+# has a Rust unit test on an invented package (crates/ow-mission/src/mover/tests.rs).
+python tests/mover_parity_test.py build/Release/ow-package.exe {bin}
 diff tests/no-such-package.upk --mover-probe PlacedMover PlacedAction --cooked tests exit=1 stderr
 diff tests/no-such-package.upk --mover-event PlacedMover PlacedAction --cooked tests OpenDoor exit=1 stderr
 diff tests/no-such-package.upk --mover-probe PlacedMover exit=1 stderr
