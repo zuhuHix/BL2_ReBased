@@ -98,12 +98,30 @@ class Tags:
     def none(self): return self.p.fname('None')
 
 
+def object_import(p):
+    """The toy Core.Object (build_core): every object property names it and every toy class derives from it, so a reader
+    that types properties by reflection (the Rust one refuses an object property whose class reference is 0) reads the
+    same layouts the C++ does."""
+    return p.add_import_full('Class', p.add_import_full('Package', 0, 'Core'), 'Object')
+
+
+def build_core():
+    """The toy Core package: the class Object (and Package, the class of a package export)."""
+    p = Package()
+    imp = p.add_import('Class', 'Class')
+    obj = p.add_export(imp, 'Object', w32(0) * 4)
+    p.add_export(imp, 'Package', w32(0) * 4, super_ref=obj)
+    return p
+
+
 def declarations(p, kinds):
     """Toy reflection helpers over package `p` (same 40-byte property header as tests/kismet_test.py)."""
     imp = {n: p.add_import('Class', n) for n in ('Class', 'ScriptStruct', 'Enum') + tuple(k + 'Property' for k in kinds)}
     none = p.fname('None')
+    object_ref = object_import(p)
 
     def prop(kind, owner, name, type_ref=0):
+        if kind == 'Object' and type_ref == 0: type_ref = object_ref
         payload = w32(0) + none + w32(0) + u32(1) + u64(0) + none + w32(0) + w32(type_ref)
         return p.add_export(imp[kind + 'Property'], name, payload, outer=owner)
 
@@ -118,7 +136,7 @@ def declarations(p, kinds):
         payload = w32(0) * 4 if defaults is None else bytes(52) + defaults
         return p.add_export(imp['ScriptStruct'], name, payload)
 
-    def cls(name, super_ref=0): return p.add_export(imp['Class'], name, w32(0) * 4, super_ref=super_ref)
+    def cls(name, super_ref=0): return p.add_export(imp['Class'], name, w32(0) * 4, super_ref=super_ref or object_ref)
 
     def enum(owner, name, values):
         return p.add_export(imp['Enum'], name, w32(0) + none + w32(0) + w32(len(values)) + b''.join(p.fname(v) for v in values),
@@ -228,7 +246,7 @@ def build_engine():
 
 def build_things():
     p = Package()
-    imp = p.add_import('Class', 'Object')
+    imp = object_import(p)
     none = p.fname('None')
     group = p.add_export(imp, 'DamageType', w32(0) + none)
     for leaf in ('ToyFire', 'ToyIce'): p.add_export(imp, leaf, w32(0) + none, outer=group)
@@ -457,6 +475,7 @@ def write(root, **variant):
 
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
+    (root / 'Core.upk').write_bytes(build_core().build())
     (root / 'GearboxFramework.upk').write_bytes(build_gearbox().build())
     (root / 'WillowGame.upk').write_bytes(build_willowgame().build())
     (root / 'Things.upk').write_bytes(build_things().build())

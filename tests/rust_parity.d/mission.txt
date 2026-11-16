@@ -1,0 +1,16 @@
+# AI-assisted (Claude Code). Lane W6-MISSION: --mission-run (crates/ow-cli/src/cmd/mission.rs, crates/ow-mission/src/
+# {tracker,bridge}.rs).
+#
+# The tracker-only --mission-run section of tests/behavior_test.py is in behavior.txt (that whole file now runs on the
+# Rust binary). tests/mission_script_test.py cannot be a line: one file holds the --mission-run scenarios and the
+# --slice-run ones (lane W6-FIRE), and its dialog scenario (E) needs the dialog system (lane W5-DIALOG). Locally, with
+# every --mission-run on the Rust binary and every other command on the C++ one, all its --mission-run checks outside
+# scenario E pass, and 19 of its 34 --mission-run commands give the C++ stdout and exit code byte for byte; the 15 that
+# differ are scenario E's, which exit 3 (NotYet) here (decision 2026-11-15-34). A diff line needs a tracked package,
+# and none may be tracked, so the invented-package rules are Rust unit tests (crates/ow-mission/src/tracker/tests.rs,
+# crates/ow-mission/src/bridge/tests.rs).
+#
+# The source package is loaded before the options are read, as in the C++: these lines need no package file.
+diff missing.upk --mission-run ToyMission --cooked . accept exit=1 stderr
+diff README.md --mission-run ToyMission --cooked . accept exit=1 stderr
+diff missing.upk --mission-run ToyMission exit=1 stderr

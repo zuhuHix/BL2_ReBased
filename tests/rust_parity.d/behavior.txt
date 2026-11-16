@@ -1,15 +1,13 @@
 # AI-assisted (Claude Code). Lane W5-BEHAVIOR: --behavior-dump, --behavior-run (crates/ow-cli/src/cmd/behavior.rs,
 # crates/ow-behavior).
 #
-# tests/behavior_test.py cannot be a line yet, for two reasons outside this lane: its last section runs --mission-run
-# (lane W6-MISSION), and its toy packages declare object properties whose class reference is 0, which the C++ reads
-# and the Rust reflection refuses (`<property> names no class`, crates/ow-object/src/reflect.rs). A diff line needs a
-# tracked package, and none may be tracked. So the invented-package parity is pinned in Rust instead:
+# tests/behavior_test.py runs on the Rust binary since lane W6-MISSION (decision 2026-11-15-34): its last section is
+# --mission-run, and its toy packages now declare every object property with a class (the toy Core.Object, a
+# fixture-only change granted to that lane; no assertion changed), which the Rust reflection requires. The C++ binary
+# passes the file too. The invented-package parity of W5-BEHAVIOR stays pinned in Rust as well:
 # crates/ow-cli/src/cmd/behavior.rs `the_output_is_the_cxx_output_on_the_invented_install` runs 15 commands on invented
-# packages (the behavior_test.py providers with every object property naming a class) and compares stdout and exit
-# code with what the C++ binary printed for the same bytes. The same packages are the ow-behavior unit tests' fixtures
-# (crates/ow-behavior/src/kernel/fixtures/packages.rs). Locally, 112 commands over behavior_test.py's own builders in
-# that typed form matched the C++ byte for byte, and the installed game's providers were compared too (counts in
-# decision 2026-11-15-30).
+# packages and compares stdout and exit code with what the C++ binary printed for the same bytes (decision
+# 2026-11-15-30).
+python tests/behavior_test.py {bin}
 diff missing.upk --behavior-dump ToyProvider --cooked . exit=1 stderr
 diff missing.upk --behavior-run ToyProvider --cooked . tick:1 exit=1 stderr

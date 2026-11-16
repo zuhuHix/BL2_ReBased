@@ -196,6 +196,22 @@ CPF_PARM, CPF_OUT, CPF_OPT, CPF_RET = 0x80, 0x100, 0x10, 0x400
 ROLES = ['ROLE_None', 'ROLE_SimulatedProxy', 'ROLE_AutonomousProxy', 'ROLE_Authority']
 
 
+def object_import(p):
+    """The toy Core.Object (build_core): every object property names it and every toy class derives from it, so a reader
+    that types properties by reflection (the Rust one refuses an object property whose class reference is 0) reads the
+    same layouts the C++ does."""
+    return p.add_import_full('Class', p.add_import_full('Package', 0, 'Core'), 'Object')
+
+
+def build_core():
+    """The toy Core package: the class Object (and Package, the class of a package export)."""
+    p = Package()
+    imp = p.add_import('Class', 'Class')
+    obj = p.add_export(imp, 'Object', w32(0) * 4)
+    p.add_export(imp, 'Package', w32(0) * 4, super_ref=obj)
+    return p
+
+
 class Toy:
     """Reflection helpers over one package: classes, properties, structs, functions."""
     def __init__(self, kinds):
@@ -203,11 +219,13 @@ class Toy:
         self.none = self.p.fname('None')
         self.imp = {n: self.p.add_import('Class', n) for n in
                     ('Class', 'Function', 'ScriptStruct', 'Enum') + tuple(k + 'Property' for k in kinds)}
+        self.object = object_import(self.p)
 
-    def cls(self, name, super_ref=0): return self.p.add_export(self.imp['Class'], name, w32(0) * 4, super_ref=super_ref)
+    def cls(self, name, super_ref=0): return self.p.add_export(self.imp['Class'], name, w32(0) * 4, super_ref=super_ref or self.object)
 
-    def prop(self, kind, owner, name, flags=0, type_ref=0, tail=None):
-        payload = w32(0) + self.none + w32(0) + u32(1) + u64(flags) + self.none + w32(0) + (w32(type_ref) if tail is None else tail)
+    def prop(self, kind, owner, name, flags=0, type_ref=0, tail=None, dim=1):
+        if kind == 'Object' and type_ref == 0 and tail is None: type_ref = self.object
+        payload = w32(0) + self.none + w32(0) + u32(dim) + u64(flags) + self.none + w32(0) + (w32(type_ref) if tail is None else tail)
         return self.p.add_export(self.imp[kind + 'Property'], name, payload, outer=owner)
 
     def array_of(self, owner, name, inner_kind, inner_ref=0):
@@ -219,14 +237,23 @@ class Toy:
     def struct_(self, owner, name, defaults=None):
         return self.p.add_export(self.imp['ScriptStruct'], name, w32(0) * 4 if defaults is None else bytes(52) + defaults, outer=owner)
 
-    def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None, locals_=()):
-        """declared: [(kind, name, extra flags[, type ref])]; `body(ids)` returns an Asm (None for a native). Children are exported
-        first, in reverse declaration order, the return value before them (as in the real packages)."""
-        ordered = ([(result, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET, 0)] if result else []) + \
-                  [(d[0], d[1], CPF_PARM | d[2], d[3] if len(d) > 3 else 0) for d in reversed(declared)] + [(k, n, 0, 0) for k, n in locals_]
-        func_index = len(self.p.exports) + 1 + len(ordered)
+    def function(self, owner, name, declared, body=None, flags=FUNC_FINAL | FUNC_DEFINED | FUNC_PUBLIC, result=None, native=0, friendly=None, locals_=(),
+                 result_ref=0):
+        """declared: [(kind, name, extra flags[, type ref])]; locals_: [(kind, name[, type ref])]; `body(ids)` returns an Asm (None for a
+        native). Children are exported first, in reverse declaration order, the return value before them (as in the real packages). An
+        array parameter or local without a type ref gets an inner object property (its element), as every array property has one."""
+        ordered = ([(result, 'ReturnValue', CPF_PARM | CPF_OUT | CPF_RET, result_ref)] if result else []) + \
+                  [(d[0], d[1], CPF_PARM | d[2], d[3] if len(d) > 3 else 0) for d in reversed(declared)] + \
+                  [(l[0], l[1], 0, l[2] if len(l) > 2 else 0) for l in locals_]
+        inners = sum(1 for kind, _, _, type_ref in ordered if kind == 'Array' and type_ref == 0)
+        func_index = len(self.p.exports) + 1 + len(ordered) + inners
         ids = {}
-        for kind, pname, pflags, type_ref in ordered: ids[pname] = self.prop(kind, func_index, pname, pflags, type_ref)
+        for kind, pname, pflags, type_ref in ordered:
+            if kind == 'Array' and type_ref == 0:
+                ids[pname] = self.prop(kind, func_index, pname, pflags, len(self.p.exports) + 2)
+                self.prop('Object', ids[pname], pname)
+            else:
+                ids[pname] = self.prop(kind, func_index, pname, pflags, type_ref)
         asm = body(ids) if body else None
         script = bytes(asm.b) if asm else b''
         memory = len(script) + 4 * asm.refs if asm else 0
@@ -269,8 +296,10 @@ def build_engine():
     T.prop('Object', context_data, 'ContextObject')
     T.prop('Byte', context_data, 'BehaviorContext')
     T.prop('Byte', context_data, 'bSupportsDefaultOutputLink')
-    T.function(behavior_base, 'GetBehaviorContext', [('Struct', 'ContextData', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
-                                                     ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', CPF_OPT)],
+    # the struct types the parameters name (a reader that types parameters by reflection needs them; the C++ reads values by field name)
+    engine_parameters = T.struct_(behavior_base, 'BehaviorParameters')
+    T.function(behavior_base, 'GetBehaviorContext', [('Struct', 'ContextData', 0, context_data), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
+                                                     ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', CPF_OPT, engine_parameters)],
                None, FUNC_NATIVE | FUNC_PUBLIC, 'Object')
     contexts = ['BCONTEXT_Self', 'BCONTEXT_Instigator']
     p.add_export(toy.imp['Enum'], 'EBehaviorContext', w32(0) + toy.none + w32(0) + w32(len(contexts)) + b''.join(p.fname(c) for c in contexts),
@@ -315,6 +344,21 @@ def build_engine():
     T.prop('Struct', definition, 'ValueFormula', type_ref=formula)
     T.prop('Struct', definition, 'ConditionalInitialization', type_ref=conditional)
     T.prop('Byte', definition, 'BaseValueMode')
+    # The definition's other evaluation steps, declared and left unset (so off), as the installed class declares them: a reader
+    # that requires the declarations (the Rust evaluator) then reads the same values the C++ defaults to.
+    variance = T.struct_(definition, 'RandomVariance')
+    T.prop('Bool', variance, 'bEnabled')
+    T.prop('Bool', variance, 'bUseIntegerRandomization')
+    T.prop('Struct', variance, 'LowerBound', type_ref=aid)
+    T.prop('Struct', variance, 'UpperBound', type_ref=aid)
+    T.prop('Struct', definition, 'RandomVariance', type_ref=variance)
+    restriction = T.struct_(definition, 'AttributeInitializationRange')
+    T.prop('Bool', restriction, 'bEnableMinValueRestriction')
+    T.prop('Struct', restriction, 'MinValue', type_ref=aid)
+    T.prop('Bool', restriction, 'bEnableMaxValueRestriction')
+    T.prop('Struct', restriction, 'MaxValue', type_ref=aid)
+    T.prop('Struct', definition, 'RangeRestriction', type_ref=restriction)
+    T.prop('Byte', definition, 'RoundingMode')
     evaluate = T.function(definition, 'EvaluateInitializationData', [('Struct', 'InitializationData', 0, aid), ('Object', 'ContextSource', 0),
                                                                     ('Object', 'OptionalOverrideContextSource', CPF_OPT)], None,
                           FUNC_NATIVE | FUNC_PUBLIC | 0x2000, 'Float')['__self__']
@@ -358,7 +402,7 @@ def build_pool_graph(T, aid, definition, evaluate):
     min_value = attribute(T, pool, 'MinValue')
     T.cls('HealthResourcePool', super_ref=pool)
     manager = T.cls('ResourcePoolManager')
-    T.prop('Object', manager, 'ResourcePools')
+    T.prop('Object', manager, 'ResourcePools', dim=16)    # a static array of 16 pool slots, as the game's class declares it
     T.function(manager, 'RecalculateBaseValues', [('Object', 'Mgr', 0)], None, native)
     T.function(pool, 'GetMaxValue', [('Bool', 'bBase', CPF_OPT)], None, native, 'Float')
     T.function(pool, 'SetCurrentValue', [('Float', 'Value', 0)], None, native)
@@ -418,6 +462,8 @@ def build_gearbox():
     math = T.cls('SimpleMathValueResolver')
     T.prop('Struct', math, 'Argument', type_ref=aid)
     T.prop('Byte', math, 'Operand')
+    T.prop('Byte', math, 'Arg1Option')      # unset: 0, the previous value (what the C++ always uses)
+    T.prop('Struct', math, 'Arg1Attribute', type_ref=aid)
     p.add_export(toy.imp['Enum'], 'EMathValueResolverOperand', w32(0) + toy.none + w32(0) + w32(len(OPERANDS)) + b''.join(p.fname(o) for o in OPERANDS),
                  outer=math)
     # Dialog vocabulary (names as the dialog code reads them)
@@ -523,13 +569,17 @@ def build_gearbox():
     path_struct = T.struct_(0, 'NameBasedObjectPath')
     T.array_of(path_struct, 'PathComponentNames', 'Name')
     T.prop('Byte', path_struct, 'IsSubobjectMask')
-    activate_link = T.function(kernel, 'ActivateBehaviorOutputLink', [('Struct', 'KernelInfo', CPF_OUT), ('Int', 'OutputLinkId', 0)], None, native)['__self__']
-    is_enabled = T.function(kernel, 'IsBehaviorSequenceEnabled', [('Struct', 'ConsumerHandle', 0), ('Object', 'ProviderDefinition', 0), ('Name', 'BehaviorSequenceName', 0)],
-                            None, native, 'Bool')['__self__']
-    T.function(kernel, 'ActivateBehaviorEventFromScript', [('Struct', 'ConsumerHandle', 0), ('Object', 'ProviderDefinition', 0), ('Name', 'EventName', 0),
+    # the struct types the parameters name: the kernel's run information and event data (empty here), and the pawn's consumer handle (WillowGame's)
+    kernel_info = T.struct_(0, 'BehaviorKernelInfo')
+    T.struct_(0, 'BehaviorParameters')
+    handle_struct = p.add_import_full('ScriptStruct', p.add_import_full('Package', 0, 'WillowGame'), 'BehaviorConsumerHandle')
+    activate_link = T.function(kernel, 'ActivateBehaviorOutputLink', [('Struct', 'KernelInfo', CPF_OUT, kernel_info), ('Int', 'OutputLinkId', 0)], None, native)['__self__']
+    is_enabled = T.function(kernel, 'IsBehaviorSequenceEnabled', [('Struct', 'ConsumerHandle', 0, handle_struct), ('Object', 'ProviderDefinition', 0),
+                                                                  ('Name', 'BehaviorSequenceName', 0)], None, native, 'Bool')['__self__']
+    T.function(kernel, 'ActivateBehaviorEventFromScript', [('Struct', 'ConsumerHandle', 0, handle_struct), ('Object', 'ProviderDefinition', 0), ('Name', 'EventName', 0),
                                                            ('Int', 'EventOutputToActivate', CPF_OPT), ('Array', 'Parameters', CPF_OPT)], None, native)
     resolve = T.function(helpers, 'ResolveBehaviorProviderDefinitionReference', [('Object', 'SourceBehavior', 0), ('Object', 'ProviderReference', 0),
-                                                                                    ('Struct', 'PathName', 0)], None, native, 'Object')['__self__']
+                                                                                    ('Struct', 'PathName', 0, path_struct)], None, native, 'Object')['__self__']
     willow = p.add_import_full('Package', 0, 'WillowGame')
     get_handle = p.add_import_full('Function', p.add_import_full('Class', willow, 'WillowPawn'), 'GetBehaviorConsumerHandle')
     is_seq = T.cls('Behavior_IsSequenceEnabled')
@@ -550,8 +600,8 @@ def build_gearbox():
         a.patch(done); a.patch(none_at)
         a.return_nothing(); a.end(); return a
     T.function(is_seq, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
-                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
-               is_sequence_enabled, locals_=[('Struct', 'Handle'), ('Object', 'Provider')])
+                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0, p.exports.index([e for e in p.exports if e[3] == p.fname('BehaviorParameters')][0]) + 1), ('Struct', 'KernelInfo', CPF_OUT, kernel_info)],
+               is_sequence_enabled, locals_=[('Struct', 'Handle', handle_struct), ('Object', 'Provider')])
     return p
 
 
@@ -577,7 +627,7 @@ def build_willowgame():
     T.function(object_cls, 'NotEqual_ObjectObject', [('Object', 'P0', 0), ('Object', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=119, friendly='!=')
     T.function(object_cls, 'Subtract_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Float', native=175, friendly='-')
     T.function(object_cls, 'Greater_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, FUNC_NATIVE | 0x1000 | 0x23000, 'Bool', native=177, friendly='>')
-    T.cls('GlobalAttributeValueResolver')
+    T.prop('Byte', T.cls('GlobalAttributeValueResolver'), 'GlobalAttribute')     # unset: slot 0, the level slot the curve reads
     reward = T.struct_(0, 'MissionRewardData')
     for field in ('ExperienceRewardPercentage', 'CreditRewardMultiplier', 'OtherCurrencyReward'): T.prop('Struct', reward, field, type_ref=aid)
     T.prop('Byte', reward, 'CurrencyRewardType')
@@ -658,7 +708,7 @@ def build_willowgame():
     consumer_handle = T.struct_(0, 'BehaviorConsumerHandle')
     T.prop('Int', consumer_handle, 'PID')
     T.prop('Struct', willow_pawn, 'ConsumerHandle', type_ref=consumer_handle)
-    T.function(willow_pawn, 'GetBehaviorConsumerHandle', [], None, native, 'Struct')
+    T.function(willow_pawn, 'GetBehaviorConsumerHandle', [], None, native, 'Struct', result_ref=consumer_handle)
     ai_pawn = T.cls('WillowAIPawn', super_ref=willow_pawn)
     reactions = ['MissionReactionLevelLoad', 'MissionReactionStatusChanged', 'MissionReactionObjectiveSetChanged',
                  'MissionReactionObjectiveUpdated', 'MissionReactionObjectiveCleared', 'MissionReactionObjectiveComplete']
@@ -740,6 +790,9 @@ def build_willowgame():
     player_class_prop = T.prop('Object', controller, 'PlayerClass')
     last_level_up = T.prop('Float', controller, 'LastLevelUpTime')
     T.prop('Object', controller, 'ResourcePoolManager')
+    # what the level-up rebase reads to decide its class-level parts (unset here: the toy has neither part)
+    T.prop('Object', controller, 'CharacterClass')
+    T.prop('Object', controller, 'MyWillowPawn')
     time_seconds = p.add_import_full('FloatProperty', p.add_import_full('Class', engine, 'WorldInfo'), 'TimeSeconds')
     run_behaviors = p.add_import_full('Function', p.add_import_full('Class', engine, 'BehaviorBase'), 'RunBehaviors')
     T.function(controller, 'GetMaxExpLevel', [], None, native, 'Int')
@@ -794,7 +847,7 @@ def build_willowgame():
             struct.pack_into('<H', a.b, end_at, a.here())
             a.raw(0x30)
             a.raw(0x04); a.local(ids, 'Count'); a.end(); return a
-        T.function(ai_pawn, name, [('Array', 'Out', CPF_OUT)], body, result='Int', locals_=[('Int', 'Count'), ('Struct', 'Data'), ('Object', 'Tracker')])
+        T.function(ai_pawn, name, [('Array', 'Out', CPF_OUT)], body, result='Int', locals_=[('Int', 'Count'), ('Struct', 'Data', director_data), ('Object', 'Tracker')])
 
     def eligible(a, ids, member, tracker_call, add, int_equal, cast):     # begins and CanStartMission
         at1 = a.jump_if_not(lambda: (a.raw(0x2D), member(d_begins)()))
@@ -849,6 +902,8 @@ def build_willowgame():
     resolve_fn = p.add_import_full('Function', helpers_cls, 'ResolveBehaviorProviderDefinitionReference')
     fire_fn = p.add_import_full('Function', kernel_cls, 'ActivateBehaviorEventFromScript')
     path_struct_ref = p.add_import_full('ScriptStruct', gearbox_pkg, 'NameBasedObjectPath')
+    kernel_info_ref = p.add_import_full('ScriptStruct', gearbox_pkg, 'BehaviorKernelInfo')
+    parameters_ref = p.add_import_full('ScriptStruct', gearbox_pkg, 'BehaviorParameters')
     remote = T.cls('Behavior_RemoteCustomEvent')
     event_name = T.prop('Name', remote, 'CustomEventName')
     remote_provider = T.prop('Object', remote, 'SequenceProvider')
@@ -865,8 +920,8 @@ def build_willowgame():
     get_handle_local = [e for e in p.exports if e[3] == p.fname('GetBehaviorConsumerHandle')]
     get_handle_local = p.exports.index(get_handle_local[0]) + 1
     T.function(remote, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
-                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
-               remote_body, locals_=[('Struct', 'Handle'), ('Object', 'Provider')])
+                                                  ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0, parameters_ref), ('Struct', 'KernelInfo', CPF_OUT, kernel_info_ref)],
+               remote_body, locals_=[('Struct', 'Handle', consumer_handle), ('Object', 'Provider')])
     # Behavior_PlayAIMissionContextDialog (the class the bridge's handler covers) as a probe of GetBehaviorContext: it resolves its PlayerWhoUsedMe
     # struct and selects output 0 for None, 2 for SelfObject and 1 for any other object, so the cascade line says what the resolver returned.
     engine_pkg = p.add_import_full('Package', 0, 'Engine')
@@ -895,7 +950,7 @@ def build_willowgame():
         a.patch(end_a); a.patch(end_b)
         a.return_nothing(); a.end(); return a
     T.function(probe, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
-                                                 ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+                                                 ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0, parameters_ref), ('Struct', 'KernelInfo', CPF_OUT, kernel_info_ref)],
                probe_body, locals_=[('Object', 'Resolved')])
     show = T.cls('Behavior_ShowMissionInterface')
 
@@ -905,7 +960,7 @@ def build_willowgame():
                   lambda: a.call(play_movie, lambda: a.local(ids, 'SelfObject'), lambda: a.local(ids, 'SelfObject')))
         a.return_nothing(); a.end(); return a
     T.function(show, 'ApplyBehaviorToContext', [('Object', 'ContextObject', 0), ('Object', 'SelfObject', 0), ('Object', 'MyInstigatorObject', 0),
-                                                ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0), ('Struct', 'KernelInfo', CPF_OUT)],
+                                                ('Object', 'OtherEventParticipantObject', 0), ('Struct', 'EventData', 0, parameters_ref), ('Struct', 'KernelInfo', CPF_OUT, kernel_info_ref)],
                show_body)
 
     director_list('GetEligibleMissions', eligible)
@@ -1611,6 +1666,7 @@ def earned_of(script): return [(e['amount'], e['source'], e['type']) for e in sc
 
 with tempfile.TemporaryDirectory() as folder:
     root = Path(folder)
+    (root / 'Core.upk').write_bytes(build_core().build())
     (root / 'Engine.upk').write_bytes(build_engine().build())
     (root / 'GearboxFramework.upk').write_bytes(build_gearbox().build())
     (root / 'WillowGame.upk').write_bytes(build_willowgame().build())
