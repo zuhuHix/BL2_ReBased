@@ -7,7 +7,7 @@ use std::rc::Rc;
 use ow_attr::AttributeSystem;
 use ow_attr::api::{AppliedEffect, Applied, EvalCx, InitData};
 use ow_attr::stack::ModifierType;
-use ow_core::ParityMode;
+use ow_core::{NotYet, ParityMode};
 use ow_core::notyet::Missing;
 use ow_defs::DefStore;
 use ow_object::heap::{ObjectSpace, Origin};
@@ -120,6 +120,8 @@ impl World {
         class(&mut space, "Test.UnreadContextResolver", object, vec![]);
         // A value resolver class with no entry: adding or removing a modifier through it is NotYet.
         class(&mut space, "Test.UnreadValueResolver", object, vec![]);
+        // The flaky value resolver of the rollback test (registered by that test only).
+        class(&mut space, "Test.FlakyValueResolver", object, vec![]);
         let decls = vec![decl(&mut space, "Type", byte.clone(), 0), decl(&mut space, "Value", PropKind::Float, 0)];
         let modifier = class(&mut space, "Core.AttributeModifier", object, decls);
         // Definitions: one class for item definitions, weapon types and parts.
@@ -749,4 +751,167 @@ fn unequip_tries_every_record_and_empties_both_arrays_before_it_reports_the_firs
     assert_eq!(w.float(c, "Bonus"), 0.0, "the records after the failing one were removed");
     assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
     assert!(w.records(item, "PartExternalAttributeModifiers").0.is_empty());
+}
+
+// ---- review r2: a rollback that fails, and what a rollback keeps -----------------------------------------------
+
+/// A writable value resolver over the context's `Bonus` whose storage fails once `broken` is set; reading its value
+/// sets it. So an effect whose value reads it breaks the resolver for every later add or remove.
+struct Flaky {
+    broken: Rc<std::cell::Cell<bool>>,
+}
+
+impl ow_attr::api::ValueResolver for Flaky {
+    fn value(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _context: ObjRef,
+        _previous: f32,
+        _cx: &mut EvalCx<'_>,
+    ) -> Result<f32, ow_attr::api::AttrError> {
+        self.broken.set(true);
+        Ok(0.0)
+    }
+
+    fn storage(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        context: ObjRef,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<Option<ow_attr::api::Storage>, ow_attr::api::AttrError> {
+        if self.broken.get() {
+            return Err(NotYet::not_read("the flaky test resolver, once broken", "a test").into());
+        }
+        let parts = cx.world.parts();
+        let class = parts.space.heap.get(context)?.class;
+        let p = parts.space.prop(class, "Bonus").expect("Bonus");
+        ow_attr::storage::storage_of(parts.space, context, p)
+    }
+}
+
+fn live_modifiers(w: &World) -> usize {
+    let c = w.class("Core.AttributeModifier");
+    w.vm.space.live(c).count()
+}
+
+fn stack_len(w: &World, o: ObjRef) -> usize {
+    match w.get(o, "BonusModifierStack") {
+        Value::Array(a) => a.len(),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_rollback_that_fails_is_reported_naming_both_errors() {
+    let mut w = World::new();
+    let broken = Rc::new(std::cell::Cell::new(false));
+    let attrs = AttributeSystem::standard()
+        .unwrap()
+        .with_value_resolver("Test.FlakyValueResolver", Flaky { broken: broken.clone() })
+        .unwrap();
+    w.vm.attrs = Rc::new(attrs);
+    // The flaky attribute: the controller's Bonus through the flaky resolver.
+    let ctx = w.obj("Engine.ControllerAttributeContextResolver", "Test.Flaky.Context");
+    let k = w.obj("Test.FlakyValueResolver", "Test.Flaky.Value");
+    let flaky = w.obj("Engine.AttributeDefinition", "Test.Flaky");
+    w.set(flaky, "ContextResolverChain", Value::array(vec![Value::Object(Some(ctx))]));
+    w.set(flaky, "ValueResolverChain", Value::array(vec![Value::Object(Some(k))]));
+    // The definition's effect adds through the flaky resolver (it works: nothing broke it yet). The part's effect, in
+    // a later apply call, reads the flaky attribute for its value, which breaks the resolver, and its own context
+    // does not resolve: that call fails, and the equip's rollback of the definition's effect fails on the broken
+    // storage. (Within one apply call ow-attr cleans up itself; this test is about the equip's own rollback.)
+    let e1 = w.effect(Some(flaky), 2, 2.0);
+    let unread = w.unread_attribute();
+    let mut e2 = w.effect(Some(unread), 2, 1.0);
+    let reads_flaky = w.st(
+        "Engine.AttributeInitializationDefinition.AttributeInitializationData",
+        vec![
+            ("BaseValueAttribute", Value::Object(Some(flaky))),
+            ("BaseValueScaleConstant", Value::Float(1.0)),
+        ],
+    );
+    let at = {
+        let ty = w.vm.space.classes.struct_by_path("Engine.AttributeEffect.AttributeEffectData").unwrap();
+        let id = w.vm.space.names.find("BaseModifierValue").unwrap();
+        w.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0 as usize
+    };
+    e2.struct_mut().unwrap().fields[at] = reads_flaky;
+    let def = w.definition("Test.Shield", vec![e1]);
+    let part = w.definition("Test.Part", vec![e2]);
+    let item = w.item(Some(def), &[part]);
+    let c = w.controller;
+    let e = apply_item_external_effects(&mut w.vm, item).unwrap_err();
+    let text = e.to_string();
+    assert!(text.contains("the cleanup after a failure failed"), "{text}");
+    assert!(text.contains("the flaky test resolver"), "the rollback's error: {text}");
+    assert!(text.contains("UnreadContextResolver"), "the apply's error: {text}");
+    assert!(!matches!(e, VmError::NotYet(_)), "the rollback error outranks the apply's NotYet");
+    // The inconsistent state the error reports: the first modifier is still on the stack, and no record names it.
+    assert_eq!(stack_len(&w, c), 1);
+    assert_eq!(w.float(c, "Bonus"), 2.0);
+    assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
+}
+
+#[test]
+fn a_rollback_frees_the_modifiers_it_removed() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let unread = w.unread_attribute();
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let e2 = w.effect(Some(unread), 2, 1.0);
+    let def = w.definition("Test.Shield", vec![e1]);
+    let part = w.definition("Test.Part", vec![e2]);
+    let item = w.item(Some(def), &[part]);
+    let before = live_modifiers(&w);
+    assert!(apply_item_external_effects(&mut w.vm, item).is_err());
+    assert_eq!(live_modifiers(&w), before, "the definition's modifier was freed with its removal");
+}
+
+#[test]
+fn a_failed_equip_of_one_item_leaves_another_item_s_modifier_in_place() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let def_a = w.definition("Test.ShieldA", vec![e1]);
+    let a = w.item(Some(def_a), &[]);
+    apply_item_external_effects(&mut w.vm, a).unwrap();
+    let c = w.controller;
+    let a_modifier = w.records(a, "ExternalAttributeModifiers").0[0].modifier;
+    let unread = w.unread_attribute();
+    let e2 = w.effect(Some(good), 2, 0.5);
+    let e3 = w.effect(Some(unread), 2, 1.0);
+    let def_b = w.definition("Test.ShieldB", vec![e2, e3]);
+    let b = w.obj("WillowGame.WillowItem", "Item_B");
+    let data = w.st("Test.ItemDefinitionData", vec![("ItemDefinition", Value::Object(Some(def_b)))]);
+    w.set(b, "DefinitionData", data);
+    let pawn = w.pawn;
+    w.set(b, "Instigator", Value::Object(Some(pawn)));
+    assert!(apply_item_external_effects(&mut w.vm, b).is_err());
+    assert_eq!(w.float(c, "Bonus"), 2.0, "A's value");
+    assert_eq!(w.get(c, "BonusModifierStack"), Value::array(vec![Value::Object(Some(a_modifier))]));
+    assert!(w.records(b, "ExternalAttributeModifiers").0.is_empty());
+}
+
+#[test]
+fn existing_part_records_stay_identical_after_a_failure() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let unread = w.unread_attribute();
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let e2 = w.effect(Some(unread), 2, 1.0);
+    let def = w.definition("Test.Shield", vec![e1, e2]);
+    let item = w.item(Some(def), &[]);
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let held = AppliedEffect {
+        context: w.pawn,
+        attribute: good,
+        modifier: w.obj("Core.AttributeModifier", "Held"),
+    };
+    let parts = Value::array(applied_values(&w.vm, ty, &Applied(vec![held])).unwrap());
+    w.set(item, "PartExternalAttributeModifiers", parts.clone());
+    assert!(apply_item_external_effects(&mut w.vm, item).is_err());
+    assert_eq!(w.get(item, "PartExternalAttributeModifiers"), parts);
+    assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
 }

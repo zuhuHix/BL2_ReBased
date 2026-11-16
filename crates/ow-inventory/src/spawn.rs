@@ -25,8 +25,9 @@
 //! are called on it; the script event `InitializeInventory(balance, manufacturer, grade-or-level, ContextSource)`
 //! runs; `bDropOnDeath` is set; the actor is appended to the out array. A step that fails after the actor exists
 //! destroys it again, and a pick that fails destroys every actor the call made before the error is returned
-//! ([`spawn_picks`]), so an `Err` leaves no spawned inventory behind, unless the world's destroy itself refuses one
-//! (a `Role` below authority, for one; `ow_world::actors::destroy`). The first error is returned either way. Two choices this port makes where the
+//! ([`spawn_picks`]), so an `Err` leaves no spawned inventory behind. A destroy that fails or that the world refuses
+//! (an actor whose `Role` is below authority, for one; `ow_world::actors::destroy`) is reported: the error then names
+//! the cleanup's failure and the step's, and outranks the step's. Two choices this port makes where the
 //! record is silent, each UNVERIFIED:
 //! - the actor is spawned by the level's `WorldInfo` (its location, rotation and instigator): where the native places
 //!   the actor is not read;
@@ -55,7 +56,7 @@ use ow_vm::error::VmError;
 use ow_world::actors::{SpawnRequest, actors_of, destroy, send_event, spawn};
 use ow_world::world::BalanceState;
 
-use crate::equip::{bad, item_error, object_of, write};
+use crate::equip::{bad, cleanup_failed, item_error, object_of, text, write};
 
 /// The record this module follows.
 pub const RECORD: &str = "NATIVE_LOOT.md (ItemPool spawn natives)";
@@ -251,7 +252,8 @@ pub fn resolve(vm: &mut Vm, candidate: &PoolCandidate) -> Result<Option<Resolved
 }
 
 /// One spawn of a resolved pick (module documentation). `Ok(None)`: the spawn gave nothing. An `Err` after the actor
-/// was made destroys it again before it returns (a failure of that destroy is not returned: the first error is).
+/// was made destroys it again before it returns; a destroy that fails or is refused makes the error the cleanup's
+/// ([`cleanup_failed`], naming both).
 pub fn spawn_one(
     vm: &mut Vm,
     balance: ObjRef,
@@ -294,16 +296,29 @@ pub fn spawn_one(
     })();
     match filled {
         Ok(()) => Ok(Some(item)),
-        Err(e) => {
-            let _ = destroy(vm, item);
-            Err(e)
-        }
+        Err(e) => match destroyed(vm, item) {
+            Ok(()) => Err(e),
+            Err(why) => Err(cleanup_failed(WHAT, &e, &why)),
+        },
+    }
+}
+
+/// Destroys `item` after a failed spawn; `Err` says why it is still there (a destroy that errs or refuses, for one an
+/// actor whose `Role` is below authority).
+fn destroyed(vm: &mut Vm, item: ObjRef) -> Result<(), String> {
+    match destroy(vm, item) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!(
+            "the world refused to destroy the spawned {}",
+            ow_attr::eval::class_path(&vm.space, item)
+        )),
+        Err(e) => Err(format!("destroying the spawned actor: {}", text(&e))),
     }
 }
 
 /// `quantity` picks (module documentation, step 2): `pick` answers each pick's resolved spawn (`None`: the pick
 /// failed), then [`spawn_one`] runs. Returns the actors made and whether every pick spawned. An `Err` destroys every
-/// actor this call made before it returns.
+/// actor this call made before it returns; one it cannot destroy makes the error the cleanup's ([`cleanup_failed`]).
 pub fn spawn_picks(
     vm: &mut Vm,
     balance: ObjRef,
@@ -323,10 +338,16 @@ pub fn spawn_picks(
             Ok(Some(item)) => made.push(item),
             Ok(None) => all = false,
             Err(e) => {
+                let mut failures = Vec::new();
                 for item in made {
-                    let _ = destroy(vm, item);
+                    if let Err(why) = destroyed(vm, item) {
+                        failures.push(why);
+                    }
                 }
-                return Err(e);
+                if failures.is_empty() {
+                    return Err(e);
+                }
+                return Err(cleanup_failed("ItemPool spawn", &e, &failures.join("; ")));
             }
         }
     }
