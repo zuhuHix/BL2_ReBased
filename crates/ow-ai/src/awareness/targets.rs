@@ -69,7 +69,7 @@ pub fn valid_target(c: &Component, senses: &mut dyn Senses, actor: Option<ObjRef
     }
     // 7. the AI's own pawn is a registered targetable (found in the world's registry) with an allegiance; a pawn that
     // drives a vehicle is not a direct target (its vehicle is, below).
-    if !me.can_be_targeted || !senses.targetables()?.contains(&c.pawn) {
+    if !me.can_be_targeted || !senses.is_registered(c.pawn)? {
         return Ok(false);
     }
     // 8. the Base-chain exclusion accepts a normal pawn at once (G26, UNVERIFIED reading).

@@ -25,9 +25,9 @@ use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-struct ToyHost {
-    exposure: DetMap<ObjRef, f32>,
-    registry: Vec<ObjRef>,
+pub(crate) struct ToyHost {
+    pub(crate) exposure: DetMap<ObjRef, f32>,
+    pub(crate) registry: Vec<ObjRef>,
 }
 
 impl Host for ToyHost {
@@ -42,18 +42,20 @@ impl Host for ToyHost {
     }
 }
 
-struct Env {
-    vm: Vm,
-    dir: PathBuf,
-    mind: ObjRef,
-    component: ObjRef,
-    ai: ObjRef,
-    player: ObjRef,
-    globals: ObjRef,
-    aidef: ObjRef,
-    targeting: ObjRef,
-    vector: StructId,
-    controller_class: ClassId,
+pub(crate) struct Env {
+    pub(crate) vm: Vm,
+    pub(crate) dir: PathBuf,
+    pub(crate) mind: ObjRef,
+    pub(crate) component: ObjRef,
+    pub(crate) ai: ObjRef,
+    pub(crate) player: ObjRef,
+    pub(crate) globals: ObjRef,
+    pub(crate) aidef: ObjRef,
+    pub(crate) targeting: ObjRef,
+    pub(crate) vector: StructId,
+    pub(crate) controller_class: ClassId,
+    pub(crate) tree_node: StructId,
+    pub(crate) object: ClassId,
 }
 
 impl Drop for Env {
@@ -62,26 +64,31 @@ impl Drop for Env {
     }
 }
 
-fn decl(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
+pub(crate) fn decl(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
     PropertyDecl::new(vm.space.names.intern(name), kind)
 }
 
-fn class(vm: &mut Vm, path: &str, base: ClassId, props: &[(&str, PropKind)]) -> ClassId {
+pub(crate) fn class(vm: &mut Vm, path: &str, base: ClassId, props: &[(&str, PropKind)]) -> ClassId {
     let props = props.iter().map(|(n, k)| decl(vm, n, k.clone())).collect();
     vm.space.classes.define(path, Some(base), props).unwrap()
 }
 
-fn make(vm: &mut Vm, c: ClassId, name: &str) -> ObjRef {
+pub(crate) fn make(vm: &mut Vm, c: ClassId, name: &str) -> ObjRef {
     vm.space.alloc(c, name, None, Origin::Runtime).unwrap()
 }
 
-fn vec3(env_vector: StructId, v: [f32; 3]) -> Value {
+pub(crate) fn vec3(env_vector: StructId, v: [f32; 3]) -> Value {
     Value::structure(env_vector, v.iter().map(|x| Value::Float(*x)).collect())
 }
 
 /// An invented world: an AI pawn at the origin facing +X with a mind and a component bound to an invented AI and
 /// targeting definition (the live iterator weights), and a player 3,000 uu in front, enemies by default opinion.
-fn env(mode: ParityMode) -> Env {
+pub(crate) fn env(mode: ParityMode) -> Env {
+    env_with(mode, &[])
+}
+
+/// [`env`] with more invented packages in the store.
+pub(crate) fn env_with(mode: ParityMode, extra: &[(&str, Vec<u8>)]) -> Env {
     let dir = std::env::temp_dir().join(format!("ow-ai-vm-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let core = {
@@ -108,10 +115,16 @@ fn env(mode: ParityMode) -> Env {
         t.p.add_export_with(e);
         t.build()
     };
-    let files: [(&str, &[u8]); 2] = [("Core.upk", core.as_slice()), ("WillowGame.upk", willowgame.as_slice())];
+    let mut files: Vec<(String, &[u8])> = vec![("Core.upk".into(), core.as_slice()), ("WillowGame.upk".into(), willowgame.as_slice())];
+    for (name, bytes) in extra {
+        files.push((format!("{name}.upk"), bytes.as_slice()));
+    }
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), *b)).collect();
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).expect("store");
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
-    let object = vm.space.classes.define("Toy.ToyObject", None, vec![]).unwrap();
+    // Rooted at the toy Core's Object, so a package class (an action) and these classes share one root.
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let object = vm.space.classes.define("Toy.ToyObject", Some(core_object), vec![]).unwrap();
     let o = PropKind::Object { class: object };
     let (x, y, z) = (decl(&mut vm, "X", PropKind::Float), decl(&mut vm, "Y", PropKind::Float), decl(&mut vm, "Z", PropKind::Float));
     let vector = vm.space.classes.define_struct("Toy.ToyObject.Vector", None, vec![x, y, z]).unwrap();
@@ -156,7 +169,31 @@ fn env(mode: ParityMode) -> Env {
         ("MyWillowMind", o.clone()),
     ]);
     let controller_class = class(&mut vm, "Engine.Controller", object, &[("Pawn", o.clone())]);
-    let aidef_class = class(&mut vm, "Toy.ToyAIDefinition", object, &[("TargetSearchRadius", PropKind::Float)]);
+    let range = {
+        let (lo, hi) = (decl(&mut vm, "MinVal", PropKind::Float), decl(&mut vm, "MaxVal", PropKind::Float));
+        vm.space.classes.define_struct("Toy.ToyObject.ToyRange", None, vec![lo, hi]).unwrap()
+    };
+    let node_fields: Vec<(&str, PropKind)> = vec![
+        ("Type", PropKind::Byte { enum_: None }),
+        ("Children", PropKind::Array(Box::new(PropKind::Int))),
+        ("Resource", o.clone()),
+        ("CanRunIf", o.clone()),
+        ("TimedStart", PropKind::Struct(range)),
+        ("TimedReset", PropKind::Struct(range)),
+        ("TimedFail", PropKind::Struct(range)),
+        ("bStopIfCannotRun", PropKind::Bool),
+        ("bInterrupt", PropKind::Bool),
+        ("Weights", PropKind::Array(Box::new(PropKind::Float))),
+        ("LoopCountMax", PropKind::Array(Box::new(PropKind::Int))),
+        ("Conditions", PropKind::Array(Box::new(o.clone()))),
+        ("Action", PropKind::Object { class: core_object }),
+    ];
+    let node_fields = node_fields.into_iter().map(|(n, k)| decl(&mut vm, n, k)).collect();
+    let tree_node = vm.space.classes.define_struct("Toy.ToyObject.ToyTreeNode", None, node_fields).unwrap();
+    let aidef_class = class(&mut vm, "Toy.ToyAIDefinition", object, &[
+        ("TargetSearchRadius", PropKind::Float),
+        ("NodeList", PropKind::Array(Box::new(PropKind::Struct(tree_node)))),
+    ]);
     let targeting_class = class(&mut vm, "Toy.ToyTargetingDefinition", object, &[
         ("bOverrideSearchRadius", PropKind::Bool),
         ("SearchRadius", PropKind::Float),
@@ -234,17 +271,17 @@ fn env(mode: ParityMode) -> Env {
     for (o, name, v) in sets {
         assert!(set(&mut vm, o, name, v).unwrap(), "{name}");
     }
-    Env { vm, dir, mind, component, ai, player, globals, aidef, targeting, vector, controller_class }
+    Env { vm, dir, mind, component, ai, player, globals, aidef, targeting, vector, controller_class, tree_node, object }
 }
 
-fn host(e: &Env, exposure: f32) -> ToyHost {
+pub(crate) fn host(e: &Env, exposure: f32) -> ToyHost {
     let mut map = DetMap::new();
     map.insert(e.player, exposure);
     ToyHost { exposure: map, registry: vec![e.player, e.ai] }
 }
 
 /// Advances the VM's world time to `t` and ticks the mind.
-fn tick_at(e: &mut Env, h: &mut ToyHost, t: f32) -> TickReport {
+pub(crate) fn tick_at(e: &mut Env, h: &mut ToyHost, t: f32) -> TickReport {
     let dt = t - e.vm.clock.time_seconds();
     e.vm.clock.advance(dt);
     tick_mind(&mut e.vm, h, e.mind, e.globals).unwrap()
@@ -363,8 +400,7 @@ fn the_adapter_tests_a_controller_as_its_pawn() {
         let mut h = host(&e, 0.0);
         let controller = make(&mut e.vm, e.controller_class, "ToyPlayerController_0");
         let mut senses = VmSenses { vm: &mut e.vm, host: &mut h };
-        let err = senses.tested_actor(controller).unwrap_err();
-        assert!(matches!(err, VmError::NotYet(_)), "{mode:?}: a controller without a pawn");
+        assert_eq!(senses.tested_actor(controller).unwrap(), controller, "{mode:?}: no pawn: tested as itself");
         set(senses.vm, controller, "Pawn", Value::Object(Some(e.player))).unwrap();
         assert_eq!(senses.tested_actor(controller).unwrap(), e.player);
         assert_eq!(senses.tested_actor(e.ai).unwrap(), e.ai, "the mind's pawn is the AI pawn");

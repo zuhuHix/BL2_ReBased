@@ -19,8 +19,12 @@
 //! - [`iterators`]: the Knowledge iterators (distances, exposure, can-fire, threat) and the Prioritization ones.
 //! - [`targets`]: `ValidTarget`, `FindTargets`, `AddTarget`, removal, `ValidCurrentTarget`, `ChooseBestTarget`,
 //!   `SetTarget` and `TargetChanged`.
-//! - [`tick`]: one AI tick of a component, in the recorded order.
+//! - [`tick`]: the awareness half of one AI tick of a component, in the recorded order.
 //! - [`vm`]: the adapter over the VM objects (pawn, mind, component, definitions) and the script-facing natives.
+//! - [`tree`] (part 2, decision 2026-11-16-66): the action tree: eligibility, selection, activation, completion,
+//!   `Finish`, the periodic state update and the timed fail.
+//! - [`actions`] (part 2): the tree over the VM, the action objects' script events, the whole AI tick
+//!   ([`actions::tick_brain`]), and the actions' natives; movement goes to the host ([`actions::Locomotion`]).
 //!
 //! **What the engine and the host answer** ([`Senses`]): each actor's facts (location, facing, kind, flags), the AI
 //! pawn's opinion of another actor, the exposure of a target to a viewer (the engine's visibility service: line of
@@ -31,11 +35,13 @@ use ow_core::units::Rotator;
 use ow_object::ids::ObjRef;
 use ow_vm::error::VmError;
 
+pub mod actions;
 pub mod iterators;
 pub mod record;
 pub mod targets;
 pub mod threat;
 pub mod tick;
+pub mod tree;
 pub mod vm;
 
 #[cfg(test)]
@@ -69,9 +75,12 @@ pub trait Senses {
     /// How many AIs have `actor` as their current target (`WillowPawn.NumAICurrentlyTargeting`); 1 when the actor has
     /// no readable counter (NATIVE_AI_MELEE.md, `WillowTI_PrioritizeIdle`).
     fn targeted_by(&mut self, actor: ObjRef) -> Result<i32, VmError>;
-    /// `ValidTarget` step 2 (G26): the actor the test is about. A controller is replaced by its pawn (`NotYet` when it
-    /// has none); an actor whose controller has a pawn is replaced by that pawn; any other actor is itself.
+    /// `ValidTarget` step 2 (G26): the actor the test is about. A controller whose pawn is set is replaced by that
+    /// pawn, and so is an actor whose controller has a pawn; anything else, a controller without a pawn included, is
+    /// tested as itself (NATIVE_AI_AWARENESS.md, "ValidTarget", step 2).
     fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError>;
+    /// Whether `actor` is in the world's registry of targetables (`ValidTarget` step 7), without listing it.
+    fn is_registered(&mut self, actor: ObjRef) -> Result<bool, VmError>;
 }
 
 /// The unit facing vector of a rotator (pitch and yaw; roll does not turn the facing), as the dot products of

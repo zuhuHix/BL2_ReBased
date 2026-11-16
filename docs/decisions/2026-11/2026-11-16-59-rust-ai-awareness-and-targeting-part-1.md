@@ -41,7 +41,8 @@ den-spawned bullymong on one map (Three Horns Divide).
     - `FindTargets` walks the host's registry of targetables. It skips an entry the AI can't target, one the AI
       regards as Neutral, and one beyond the horizontal search radius. Height does not count, as live.
     - `ValidTarget` follows the base and Willow order of G26. Step 2 is the adapter's: a controller is tested as its
-      pawn (`NotYet` without one), and an actor whose controller has a pawn as that pawn. Step 7 requires the AI's own
+      pawn, and so is an actor whose controller has a pawn; a controller without a pawn is tested as itself (G26 step 2
+      replaces only when the pawn is set; decision 2026-11-16-66, review r2 L1). Step 7 requires the AI's own
       pawn in the host's registry. Live: the player, None, the AI's own pawn, a same-allegiance pawn, a cloaked player
       and an AI without an allegiance all give the recorded answers.
     - The radius test compares the squared horizontal distance with the squared radius in f64, as the note reads it;

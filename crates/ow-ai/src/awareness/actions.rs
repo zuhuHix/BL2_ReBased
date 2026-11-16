@@ -1,0 +1,772 @@
+//! Owner: lane W7-AI (part 2). The action tree over the VM: the tree read from the AI definition, one action object
+//! per action node with its script events run through the VM, the brain's tick in the recorded order, and the
+//! script-facing natives of the actions. AI-assisted (Claude Code). Decision 2026-11-16-66.
+//!
+//! **The brain** ([`tick_brain`], one AI tick of a mind; NATIVE_AI_MELEE.md "AIComponent: cadence", L8 section 3.1):
+//! 1. the first tick builds the tree and the action objects and raises `Init` on each;
+//! 2. part 1's tick ([`super::vm::tick_mind`]): the target update when due;
+//! 3. on hold: the running action is stopped;
+//! 4. the target events: from no target to one, the tree's timed starts are re-armed; `Target_Lost` and
+//!    `Target_Acquired` go to the running action first, then every other action in node order (L8 section 3.4);
+//! 5. the running action's `Update`, then the tree's timed fail;
+//! 6. when the state update is due: [`Tree::state_update`].
+//!
+//! `ActionSequence.Finish` is called from inside an action's own script, while the tree is in use: the native queues
+//! the call and the brain applies it ([`Tree::finish`]) as soon as that script call returns. The note reads the
+//! re-selection as happening inside `Finish`; here it happens right after the script returns (UNVERIFIED either way).
+//!
+//! **Building the actions** (G26, "the AI initialisation hook ... creates one action object per action node, raises
+//! `Init` on each"). Each action node's `Action` archetype is copied; on the copy `MyWillowPawn` is the pawn (live, L8:
+//! "each `Action_AnimAttack` carries its pawn in `MyWillowPawn`") and `MyWillowMind` the mind (its own `Init` script
+//! reads it, so the creator sets it; UNVERIFIED). The other context fields (`AI`, `MyGearboxMind`, `MyGearboxPawn`,
+//! `WillowAI`) and the flags (`bInitialized`, `bDoWorkFinished`) are set by native code that is not read
+//! (NATIVE_AI_ACTION_SEQUENCE.md, "Not read"): they stay at the archetype's values. The tree's run state starts as a
+//! reset tree (every `ActiveChild` -1); what the first-run reset writes is not read.
+//!
+//! **What the actions reach** ([`Pack`]):
+//! - `ActionSequence.Finish` (G26) and `TriggerBehavior` (G25: the event for the pawn's behavior consumer; sent through
+//!   the behavior kernel's consumer routing, `BehaviorKernel.BroadcastBehaviorEventFromScript` with the pawn's
+//!   handle, decision 2026-11-16-50);
+//! - the AI component's holds (G26: `Hold` / `Release` / `OnHold` on `Holds`, and the same on `TargetHolds`);
+//! - movement, through the host ([`Locomotion`]): path creation on the navigation handle, path validity, arrival,
+//!   `CanMoveTo`, the movement speed and the nearest nav-mesh point. The latent ones (`FollowPath`, `WaitForPath`,
+//!   `FinishPath`, `WaitForPawnToTurn`, `WaitForPawnToStop`) answer `NotYet`: the VM's latent actions are `Sleep`
+//!   only, and a host-driven latent action is an `ow-vm` seam;
+//! - `StartAtomic`, `StopAtomic`, `IsAtomic`, `IsRunning`, `IsActionReadyToFinish`, `RangeIsValid` and
+//!   `GetRangeValue` were read by this lane as analyst (NATIVE_AI_ACTION_SEQUENCE.md). Under the clean-room rule they
+//!   are not implemented here: `NotYet` outside Reference, and unbound under Reference. For the same reason the tree's
+//!   "locked" question (a running action with its non-interruptible flag) is `NotYet`.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use ow_combat::hit::access::{array, field, get, number, object, set, set_field, truth};
+use ow_combat::hit::call_method;
+use ow_core::rand::{CrtStream, Rand15};
+use ow_core::{DetMap, NotYet, ParityMode};
+use ow_object::ids::ObjRef;
+use ow_object::value::Value;
+use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
+use ow_vm::error::VmError;
+
+use super::targets::Effect;
+use super::tick::TickReport;
+use super::tree::{Change, Gate, Node, NodeKind, Range, Tree, TreeWorld};
+use super::vm::{Host, state, tick_mind};
+use super::{DECISION, RECORD_AWARENESS, RECORD_MELEE, Vec3};
+
+#[cfg(test)]
+mod tests;
+
+/// The note of the natives this lane read as analyst.
+pub const RECORD_ACTIONS: &str = "docs/verification/NATIVE_AI_ACTION_SEQUENCE.md";
+
+/// What the host answers about movement (module documentation). The handle is the mind's navigation handle object;
+/// the pawn is the action's pawn.
+pub trait Locomotion {
+    /// A path from the handle's pawn to `dest` (`CreatePathToLocation`, `CreateConstrainedPath`): whether one exists.
+    fn create_path(&mut self, vm: &mut Vm, handle: ObjRef, dest: Vec3) -> Result<bool, VmError>;
+    /// `ClearPath(bStopMovement, ...)`.
+    fn clear_path(&mut self, vm: &mut Vm, handle: ObjRef, stop: bool) -> Result<bool, VmError>;
+    fn path_is_valid(&mut self, vm: &mut Vm, pawn: ObjRef) -> Result<bool, VmError>;
+    fn invalidate_path(&mut self, vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError>;
+    fn reached_destination(&mut self, vm: &mut Vm, pawn: ObjRef) -> Result<bool, VmError>;
+    fn can_move_to(&mut self, vm: &mut Vm, pawn: ObjRef, goal: Vec3) -> Result<bool, VmError>;
+    /// `SetPawnMovementSpeed(stance)`, the stance byte as given.
+    fn set_movement_speed(&mut self, vm: &mut Vm, pawn: ObjRef, speed: u8) -> Result<(), VmError>;
+    /// The nearest point on the nav mesh to the pawn, if any.
+    fn nearest_on_navmesh(&mut self, vm: &mut Vm, pawn: ObjRef) -> Result<Option<Vec3>, VmError>;
+}
+
+/// One mind's tree and its action objects.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct Brain {
+    pub tree: Tree,
+    /// Per node: the action object (action nodes only).
+    pub actions: Vec<Option<ObjRef>>,
+    can_run_if: Vec<Option<ObjRef>>,
+    conditions: Vec<Vec<Option<ObjRef>>>,
+    pub pawn: ObjRef,
+    pub mind: ObjRef,
+}
+
+/// The brains of every mind, the queued `Finish` calls, and the movement host (a VM service).
+#[derive(Default)]
+pub struct Brains {
+    brains: DetMap<ObjRef, Brain>,
+    /// `(action, bFailed)`, in call order.
+    finishes: Vec<(ObjRef, bool)>,
+    locomotion: Option<Rc<RefCell<dyn Locomotion>>>,
+}
+
+impl std::fmt::Debug for Brains {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Brains")
+            .field("brains", &self.brains.keys().collect::<Vec<_>>())
+            .field("finishes", &self.finishes)
+            .field("locomotion", &self.locomotion.is_some())
+            .finish()
+    }
+}
+
+fn brains(vm: &mut Vm) -> Result<Rc<RefCell<Brains>>, VmError> {
+    match vm.service::<Brains>() {
+        Some(b) => Ok(b),
+        None => vm.add_service(Brains::default()),
+    }
+}
+
+fn borrow(b: &Rc<RefCell<Brains>>) -> Result<std::cell::RefMut<'_, Brains>, VmError> {
+    b.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("ow_ai::awareness::actions::Brains"))
+}
+
+/// Sets the movement host the natives ask.
+pub fn install_locomotion(vm: &mut Vm, host: Rc<RefCell<dyn Locomotion>>) -> Result<(), VmError> {
+    let b = brains(vm)?;
+    borrow(&b)?.locomotion = Some(host);
+    Ok(())
+}
+
+/// `mind`'s brain, if built (a copy).
+pub fn brain(vm: &Vm, mind: ObjRef) -> Option<Brain> {
+    vm.service::<Brains>()?.try_borrow().ok()?.brains.get(&mind).cloned()
+}
+
+fn error(message: String) -> VmError {
+    VmError::Script { function: "ai actions".to_string(), message }
+}
+
+fn object_of(v: Option<Value>) -> Option<ObjRef> {
+    match v {
+        Some(Value::Object(o)) => o,
+        _ => None,
+    }
+}
+
+fn range(vm: &Vm, node: &Value, name: &str) -> Range {
+    let Some(r) = field(vm, node, name) else {
+        return Range::default();
+    };
+    let at = |n: &str| field(vm, &r, n).map_or(0.0, |v| number(&v) as f32);
+    Range::new(at("MinVal"), at("MaxVal"))
+}
+
+fn ints(v: Option<Value>) -> Vec<i64> {
+    v.and_then(|v| v.elements().map(<[Value]>::to_vec))
+        .unwrap_or_default()
+        .iter()
+        .map(ow_combat::hit::access::integer)
+        .collect()
+}
+
+/// The tree of `mind`'s component, read from its `AIDef.NodeList` (`NotYet` while `AIDef` is unbound, as part 1).
+pub fn read_tree(vm: &mut Vm, mind: ObjRef) -> Result<Brain, VmError> {
+    let pawn = object(vm, mind, "Pawn")?.ok_or_else(|| error("the mind has no Pawn".to_string()))?;
+    let component = object(vm, mind, "AIComponent")?.ok_or_else(|| error("the mind has no AIComponent".to_string()))?;
+    let aidef = object(vm, component, "AIDef")?.ok_or_else(|| -> VmError {
+        NotYet::not_read("AIComponent.AIDef unset: the native that binds it when the AI starts is not read", DECISION)
+            .into()
+    })?;
+    let list = array(vm, aidef, "NodeList")?;
+    let mut nodes = Vec::new();
+    let (mut actions, mut can_run_if, mut conditions) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, data) in list.iter().enumerate() {
+        let kind_byte = field(vm, data, "Type").map_or(0, |v| ow_combat::hit::access::integer(&v));
+        let kind = u8::try_from(kind_byte)
+            .ok()
+            .and_then(NodeKind::of)
+            .ok_or_else(|| error(format!("node {i} has the node type {kind_byte}")))?;
+        let mut children = Vec::new();
+        for c in ints(field(vm, data, "Children")) {
+            children.push(usize::try_from(c).map_err(|_| error(format!("node {i} names child {c}")))?);
+        }
+        let mut n = Node::new(kind, children);
+        n.has_resource = object_of(field(vm, data, "Resource")).is_some();
+        let gate = object_of(field(vm, data, "CanRunIf"));
+        n.has_can_run_if = gate.is_some();
+        let conds: Vec<Option<ObjRef>> = field(vm, data, "Conditions")
+            .and_then(|v| v.elements().map(<[Value]>::to_vec))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| object_of(Some(v)))
+            .collect();
+        n.conditions = conds.iter().map(Option::is_some).collect();
+        n.timed_start = range(vm, data, "TimedStart");
+        n.timed_reset = range(vm, data, "TimedReset");
+        n.timed_fail = range(vm, data, "TimedFail");
+        n.stop_if_cannot_run = field(vm, data, "bStopIfCannotRun").is_some_and(|v| truth(vm, &v));
+        n.interrupt = field(vm, data, "bInterrupt").is_some_and(|v| truth(vm, &v));
+        n.weights = field(vm, data, "Weights")
+            .and_then(|v| v.elements().map(<[Value]>::to_vec))
+            .unwrap_or_default()
+            .iter()
+            .map(|v| number(v) as f32)
+            .collect();
+        n.loop_count_max =
+            ints(field(vm, data, "LoopCountMax")).into_iter().map(|x| i32::try_from(x).unwrap_or(i32::MAX)).collect();
+        let archetype = object_of(field(vm, data, "Action"));
+        n.has_action = archetype.is_some();
+        let action = match archetype {
+            Some(a) if kind == NodeKind::Action => {
+                let made = ow_combat::hit::copy_of(vm, a)?;
+                set(vm, made, "MyWillowPawn", Value::Object(Some(pawn)))?;
+                set(vm, made, "MyWillowMind", Value::Object(Some(mind)))?;
+                Some(made)
+            }
+            _ => None,
+        };
+        nodes.push(n);
+        actions.push(action);
+        can_run_if.push(gate);
+        conditions.push(conds);
+    }
+    Ok(Brain { tree: Tree::new(nodes)?, actions, can_run_if, conditions, pawn, mind })
+}
+
+/// The tree's world over the VM ([`TreeWorld`]).
+struct VmTree<'a> {
+    vm: &'a mut Vm,
+    brain: &'a Brain,
+}
+
+impl VmTree<'_> {
+    fn action(&self, node: usize) -> Result<ObjRef, VmError> {
+        self.brain
+            .actions
+            .get(node)
+            .copied()
+            .flatten()
+            .ok_or_else(|| error(format!("node {node} has no action object")))
+    }
+
+    fn event(&mut self, node: usize, name: &str, args: Vec<Value>) -> Result<Option<Value>, VmError> {
+        let action = self.action(node)?;
+        event(self.vm, action, name, args).map(Some)
+    }
+}
+
+impl TreeWorld for VmTree<'_> {
+    fn rand(&mut self) -> f32 {
+        // The engine's integer random divided by 32768 (G26).
+        f32::from(self.vm.rng.crt(CrtStream::AiDecision).rand15()) / 32768.0
+    }
+
+    fn evaluate(&mut self, node: usize, gate: Gate) -> Result<bool, VmError> {
+        let evaluator = match gate {
+            Gate::CanRunIf => self.brain.can_run_if.get(node).copied().flatten(),
+            Gate::Condition(i) => self.brain.conditions.get(node).and_then(|c| c.get(i)).copied().flatten(),
+        };
+        let Some(evaluator) = evaluator else {
+            return Ok(true);
+        };
+        let evaluator = ow_combat::hit::access::loaded(self.vm, evaluator)?;
+        match call_method(self.vm, evaluator, "Evaluate", vec![Value::Object(Some(self.brain.pawn))])? {
+            Some(v) => Ok(truth(self.vm, &v)),
+            None => Err(NotYet::not_read(
+                format!("the evaluator {} has no Evaluate", ow_combat::hit::access::class_name(self.vm, evaluator)),
+                RECORD_MELEE,
+            )
+            .into()),
+        }
+    }
+
+    fn can_run(&mut self, node: usize) -> Result<Option<String>, VmError> {
+        let answer = self.event(node, "CanRun", vec![])?;
+        Ok(match answer {
+            Some(Value::Name(n)) => {
+                let text = self.vm.space.names.text(n).into_owned();
+                (!text.eq_ignore_ascii_case("None")).then_some(text)
+            }
+            _ => None,
+        })
+    }
+
+    fn start(&mut self, node: usize) -> Result<(), VmError> {
+        self.event(node, "Start", vec![]).map(|_| ())
+    }
+
+    fn stop(&mut self, node: usize, _failed: bool) -> Result<(), VmError> {
+        self.event(node, "Stop", vec![]).map(|_| ())
+    }
+
+    fn locked(&mut self, _node: usize) -> Result<bool, VmError> {
+        Err(NotYet::not_ported(
+            "whether a running action is locked (its running and non-interruptible flags): awaiting a clean-room \
+             implementation from the analyst note",
+            RECORD_ACTIONS,
+        )
+        .into())
+    }
+}
+
+/// What one brain tick did.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BrainReport {
+    /// Part 1's tick.
+    pub awareness: TickReport,
+    /// The `Target_*` events sent, with the action nodes that got them in order.
+    pub events: Vec<(String, Vec<usize>)>,
+    /// Starts and stops, in order.
+    pub changes: Vec<Change>,
+    /// Whether the brain was built in this tick.
+    pub built: bool,
+}
+
+/// What [`dry_select`] found: the leaf picked, if any, and each action node's `CanRun` failure name by node index.
+pub type DrySelection = (Option<usize>, Vec<(usize, String)>);
+
+/// The leaf the selection pass picks for `mind` now, and each action node's `CanRun` failure name, without starting
+/// anything (for a report: the state update needs the lock rule before it selects; module documentation). The
+/// selection's own writes (the next active children, the failure names) stay, as a selection pass leaves them.
+pub fn dry_select(vm: &mut Vm, mind: ObjRef) -> Result<DrySelection, VmError> {
+    let Some(mut brain) = take(vm, mind)? else {
+        return Err(error("dry_select: the mind's brain is not built".to_string()));
+    };
+    let now = vm.clock.time_seconds();
+    let snapshot = brain.clone();
+    let picked = brain.tree.select(&mut VmTree { vm, brain: &snapshot }, now);
+    let fails =
+        brain.tree.nodes.iter().enumerate().filter_map(|(i, n)| n.action_fail_name.clone().map(|f| (i, f))).collect();
+    put(vm, mind, brain)?;
+    Ok((picked?, fails))
+}
+
+/// Raises the script event `name` on `action`; an action class without it is an error (every `ActionSequence`
+/// declares its events).
+fn event(vm: &mut Vm, action: ObjRef, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
+    match call_method(vm, action, name, args)? {
+        Some(v) => Ok(v),
+        None => Err(error(format!("the action {} has no {name}", ow_combat::hit::access::class_name(vm, action)))),
+    }
+}
+
+fn take(vm: &mut Vm, mind: ObjRef) -> Result<Option<Brain>, VmError> {
+    let b = brains(vm)?;
+    Ok(borrow(&b)?.brains.remove(&mind))
+}
+
+fn put(vm: &mut Vm, mind: ObjRef, brain: Brain) -> Result<(), VmError> {
+    let b = brains(vm)?;
+    borrow(&b)?.brains.insert(mind, brain);
+    Ok(())
+}
+
+/// Applies the queued `Finish` calls of `brain`'s actions.
+fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Change>) -> Result<(), VmError> {
+    loop {
+        let next = {
+            let b = brains(vm)?;
+            let mut b = borrow(&b)?;
+            let at = b.finishes.iter().position(|(a, _)| brain.actions.contains(&Some(*a)));
+            at.map(|i| b.finishes.remove(i))
+        };
+        let Some((action, failed)) = next else {
+            return Ok(());
+        };
+        let Some(node) = brain.actions.iter().position(|a| *a == Some(action)) else {
+            continue;
+        };
+        let snapshot = brain.clone();
+        let change = brain.tree.finish(&mut VmTree { vm, brain: &snapshot }, now, node, failed)?;
+        changes.push(change);
+    }
+}
+
+/// One AI tick of `mind` at the VM's world time, `dt` the frame's delta (module documentation).
+pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRef) -> Result<BrainReport, VmError> {
+    let mut report = BrainReport::default();
+    let now = vm.clock.time_seconds();
+    let mut brain = match take(vm, mind)? {
+        Some(b) => b,
+        None => {
+            let b = read_tree(vm, mind)?;
+            for action in b.actions.iter().flatten() {
+                event(vm, *action, "Init", vec![])?;
+            }
+            report.built = true;
+            b
+        }
+    };
+    let result = tick_with(vm, host, mind, globals, now, &mut brain, &mut report);
+    put(vm, mind, brain)?;
+    result.map(|()| report)
+}
+
+fn tick_with(
+    vm: &mut Vm,
+    host: &mut dyn Host,
+    mind: ObjRef,
+    globals: ObjRef,
+    now: f32,
+    brain: &mut Brain,
+    report: &mut BrainReport,
+) -> Result<(), VmError> {
+    report.awareness = tick_mind(vm, host, mind, globals)?;
+    let on_hold = state(vm, mind).is_some_and(|s| s.on_hold);
+    if on_hold {
+        let snapshot = brain.clone();
+        if let Some(leaf) = brain.tree.stop_state(&mut VmTree { vm, brain: &snapshot }, now, false)? {
+            report.changes.push(Change { stopped: Some((leaf, false)), ..Change::default() });
+        }
+        return Ok(());
+    }
+    for effect in report.awareness.effects.clone() {
+        let (name, target) = match effect {
+            Effect::TimedStartsReArmed => {
+                let snapshot = brain.clone();
+                brain.tree.rearm_timed_starts(&mut VmTree { vm, brain: &snapshot }, now);
+                continue;
+            }
+            Effect::TargetLost(t) => ("Target_Lost", t),
+            Effect::TargetAcquired(t) => ("Target_Acquired", t),
+            _ => continue,
+        };
+        let _ = target;
+        // The running action first, then every other action in node order (L8).
+        let mut order: Vec<usize> = brain.tree.current.into_iter().collect();
+        order.extend((0..brain.actions.len()).filter(|&i| brain.actions[i].is_some() && Some(i) != brain.tree.current));
+        let name_value = Value::Name(vm.space.names.intern(name));
+        for &node in &order {
+            if let Some(action) = brain.actions[node] {
+                event(vm, action, "ActivateEvent", vec![name_value.clone()])?;
+            }
+        }
+        report.events.push((name.to_string(), order));
+    }
+    if let Some(leaf) = brain.tree.current
+        && let Some(action) = brain.actions[leaf]
+    {
+        event(vm, action, "Update", vec![])?;
+    }
+    apply_finishes(vm, brain, now, &mut report.changes)?;
+    let snapshot = brain.clone();
+    let timed = brain.tree.timed_fail_tick(&mut VmTree { vm, brain: &snapshot }, now)?;
+    if timed != Change::default() {
+        report.changes.push(timed);
+    }
+    if report.awareness.state_update {
+        let snapshot = brain.clone();
+        let change = brain.tree.state_update(&mut VmTree { vm, brain: &snapshot }, now)?;
+        if change != Change::default() {
+            report.changes.push(change);
+        }
+        apply_finishes(vm, brain, now, &mut report.changes)?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The natives
+// ---------------------------------------------------------------------------------------------------------------
+
+pub const FINISH: &str = "GearboxFramework.ActionSequence.Finish";
+pub const TRIGGER_BEHAVIOR: &str = "GearboxFramework.ActionSequence.TriggerBehavior";
+pub const READ_AS_ANALYST: [&str; 7] = [
+    "GearboxFramework.ActionSequence.StartAtomic",
+    "GearboxFramework.ActionSequence.StopAtomic",
+    "GearboxFramework.ActionSequence.IsAtomic",
+    "GearboxFramework.ActionSequence.IsRunning",
+    "GearboxFramework.ActionSequence.IsActionReadyToFinish",
+    "GearboxFramework.ActionSequence.RangeIsValid",
+    "GearboxFramework.ActionSequence.GetRangeValue",
+];
+pub const LATENT_MOVES: [&str; 5] = [
+    "WillowGame.WillowActionSequencePawn.FollowPath",
+    "WillowGame.WillowActionSequencePawn.WaitForPath",
+    "WillowGame.WillowActionSequencePawn.FinishPath",
+    "WillowGame.WillowActionSequencePawn.WaitForPawnToTurn",
+    "WillowGame.WillowActionSequencePawn.WaitForPawnToStop",
+];
+
+/// Binds the actions' natives the VM declares (module documentation, "What the actions reach").
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Pack;
+
+fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
+    let Ok(id) = vm.find_function(path) else {
+        return Ok(());
+    };
+    let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
+        return Ok(());
+    };
+    if !vm.has_native(&key) {
+        vm.register_native(&key, f)?;
+    }
+    Ok(())
+}
+
+impl NativePack for Pack {
+    fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
+        brains(vm)?;
+        bind(vm, FINISH, Rc::new(n_finish))?;
+        bind(vm, TRIGGER_BEHAVIOR, Rc::new(n_trigger_behavior))?;
+        for (list, path) in
+            [("Holds", "GearboxFramework.AIComponent.Hold"), ("TargetHolds", "GearboxFramework.AIComponent.HoldTarget")]
+        {
+            bind(vm, path, hold_body(list, true))?;
+        }
+        for (list, path) in [
+            ("Holds", "GearboxFramework.AIComponent.Release"),
+            ("TargetHolds", "GearboxFramework.AIComponent.ReleaseTarget"),
+        ] {
+            bind(vm, path, hold_body(list, false))?;
+        }
+        for (list, path) in [
+            ("Holds", "GearboxFramework.AIComponent.OnHold"),
+            ("TargetHolds", "GearboxFramework.AIComponent.TargetOnHold"),
+        ] {
+            bind(
+                vm,
+                path,
+                Rc::new(move |c: &mut NativeCall<'_>| {
+                    let me = this(c)?;
+                    Ok(Value::Bool(!array(c.vm, me, list)?.is_empty()))
+                }),
+            )?;
+        }
+        bind_locomotion(vm)?;
+        for path in LATENT_MOVES {
+            bind(
+                vm,
+                path,
+                Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                    Err(NotYet::layer_absent(
+                        format!("{path}: a latent movement action"),
+                        "ow-vm (latent actions other than Sleep; a host-driven latent action is a seam)",
+                        RECORD_AWARENESS,
+                    )
+                    .into())
+                }),
+            )?;
+        }
+        if vm.parity == ParityMode::Off {
+            for path in READ_AS_ANALYST {
+                bind(
+                    vm,
+                    path,
+                    Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                        Err(NotYet::not_ported(
+                            format!("{path}: awaiting a clean-room implementation from the analyst note"),
+                            RECORD_ACTIONS,
+                        )
+                        .into())
+                    }),
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn this(c: &NativeCall<'_>) -> Result<ObjRef, VmError> {
+    c.this.ok_or_else(|| error("an action native called without an object".to_string()))
+}
+
+fn arg_name(c: &NativeCall<'_>, i: usize) -> Result<Option<ow_object::ids::NameId>, VmError> {
+    if i >= c.arg_count() {
+        return Ok(None);
+    }
+    Ok(match c.arg(i)? {
+        Value::Name(n) => Some(*n),
+        _ => None,
+    })
+}
+
+// ActionSequence.Finish(optional bool bFailed): queued (module documentation).
+fn n_finish(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let action = this(c)?;
+    let failed = c.arg_count() > 0 && c.has(0) && truth(c.vm, c.arg(0)?);
+    let b = brains(c.vm)?;
+    borrow(&b)?.finishes.push((action, failed));
+    Ok(Value::None)
+}
+
+// ActionSequence.TriggerBehavior(OutputName): the event for the pawn's behavior consumer, through the kernel's
+// consumer routing (`BroadcastBehaviorEventFromScript` with the pawn's handle).
+fn n_trigger_behavior(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let action = this(c)?;
+    let Some(name) = arg_name(c, 0)? else {
+        return Ok(Value::None);
+    };
+    let Some(pawn) = object(c.vm, action, "MyWillowPawn")? else {
+        return Ok(Value::None);
+    };
+    let Some(handle) = get(c.vm, pawn, "ConsumerHandle")? else {
+        return Ok(Value::None);
+    };
+    let f = c.vm.find_function(ow_behavior::kernel::natives::BROADCAST_FROM_SCRIPT)?;
+    c.vm.call(f, None, vec![handle, Value::Name(name)])?;
+    Ok(Value::None)
+}
+
+/// `Hold` / `Release` on the component's list `list` of (`HoldName`, `Tag`) pairs (G26): a hold is added unless the same
+/// pair is there or the tag is None; a release removes the pair. The Willow head-look side effects
+/// (`SetLookAtTarget`) are presentation and not sent; the Willow `OnHold` extra case is not read.
+fn hold_body(list: &'static str, add: bool) -> NativeFn {
+    Rc::new(move |c: &mut NativeCall<'_>| {
+        let me = this(c)?;
+        let name = c.arg(0)?.clone();
+        let tag = match c.arg(1)? {
+            Value::Object(o) => *o,
+            _ => None,
+        };
+        let mut items = array(c.vm, me, list)?;
+        let same = |vm: &Vm, v: &Value| {
+            field(vm, v, "HoldName").as_ref() == Some(&name) && object_of(field(vm, v, "Tag")) == tag
+        };
+        let at = items.iter().position(|v| same(c.vm, v));
+        if add {
+            if tag.is_none() || at.is_some() {
+                return Ok(Value::None);
+            }
+            let class = c.vm.space.heap.get(me)?.class;
+            let entry_kind =
+                c.vm.space
+                    .classes
+                    .props(class)
+                    .map_err(ow_object::heap::HeapError::from)?
+                    .into_iter()
+                    .find(|(_, d)| c.vm.space.names.text(d.name).eq_ignore_ascii_case(list))
+                    .and_then(|(_, d)| match &d.kind {
+                        ow_object::layout::PropKind::Array(inner) => Some((**inner).clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| error(format!("the component has no {list} array")))?;
+            let mut entry = c.vm.space.classes.default_value(&entry_kind).map_err(ow_object::heap::HeapError::from)?;
+            set_field(c.vm, &mut entry, "HoldName", name.clone());
+            set_field(c.vm, &mut entry, "Tag", Value::Object(tag));
+            items.push(entry);
+        } else if let Some(i) = at {
+            items.remove(i);
+        } else {
+            return Ok(Value::None);
+        }
+        set(c.vm, me, list, Value::Array(Rc::new(items)))?;
+        Ok(Value::None)
+    })
+}
+
+fn locomotion(vm: &mut Vm) -> Result<Rc<RefCell<dyn Locomotion>>, VmError> {
+    let b = brains(vm)?;
+    let b = borrow(&b)?;
+    b.locomotion.clone().ok_or_else(|| {
+        NotYet::layer_absent("the AI's movement", "the host (ow_ai::awareness::actions::install_locomotion)", DECISION)
+            .into()
+    })
+}
+
+fn vector(vm: &Vm, v: &Value) -> Vec3 {
+    let axis = |n: &str| field(vm, v, n).map_or(0.0, |x| number(&x) as f32);
+    [axis("X"), axis("Y"), axis("Z")]
+}
+
+/// The pawn of an action native's object (an action: its `MyWillowPawn`).
+fn action_pawn(c: &mut NativeCall<'_>) -> Result<ObjRef, VmError> {
+    let me = this(c)?;
+    object(c.vm, me, "MyWillowPawn")?.ok_or_else(|| error("the action has no MyWillowPawn".to_string()))
+}
+
+/// The movement natives answered by [`Locomotion`] for the action's pawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Move {
+    PathIsValid,
+    Invalidate,
+    Reached,
+    CanMoveTo,
+    Speed,
+}
+
+fn bind_locomotion(vm: &mut Vm) -> Result<(), VmError> {
+    let path_body: NativeFn = Rc::new(|c: &mut NativeCall<'_>| {
+        let handle = this(c)?;
+        let dest = vector(c.vm, c.arg(1)?);
+        let host = locomotion(c.vm)?;
+        let ok = host
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("the AI's movement host"))?
+            .create_path(c.vm, handle, dest)?;
+        Ok(Value::Bool(ok))
+    });
+    bind(vm, "GearboxFramework.GearboxNavigationHandle.CreatePathToLocation", path_body.clone())?;
+    bind(vm, "WillowGame.WillowNavigationHandle.CreateConstrainedPath", path_body)?;
+    let clear: NativeFn = Rc::new(|c: &mut NativeCall<'_>| {
+        let handle = this(c)?;
+        let stop = c.arg_count() > 0 && truth(c.vm, c.arg(0)?);
+        let host = locomotion(c.vm)?;
+        let ok = host
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("the AI's movement host"))?
+            .clear_path(c.vm, handle, stop)?;
+        Ok(Value::Bool(ok))
+    });
+    bind(vm, "GearboxFramework.GearboxNavigationHandle.ClearPath", clear.clone())?;
+    bind(vm, "WillowGame.WillowNavigationHandle.ClearPath", clear)?;
+    for (path, op) in [
+        ("WillowGame.WillowActionSequencePawn.PathIsValid", Move::PathIsValid),
+        ("WillowGame.WillowActionSequencePawn.InvalidatePath", Move::Invalidate),
+        ("WillowGame.WillowActionSequencePawn.ReachedDestination", Move::Reached),
+        ("WillowGame.WillowActionSequencePawn.CanMoveTo", Move::CanMoveTo),
+        ("WillowGame.WillowActionSequencePawn.SetPawnMovementSpeed", Move::Speed),
+    ] {
+        bind(
+            vm,
+            path,
+            Rc::new(move |c: &mut NativeCall<'_>| {
+                let pawn = action_pawn(c)?;
+                let goal = match op {
+                    Move::CanMoveTo => vector(c.vm, c.arg(0)?),
+                    _ => [0.0; 3],
+                };
+                let speed = match op {
+                    Move::Speed => u8::try_from(ow_combat::hit::access::integer(c.arg(0)?)).unwrap_or(0),
+                    _ => 0,
+                };
+                let host = locomotion(c.vm)?;
+                let mut h = host.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("the AI's movement host"))?;
+                Ok(match op {
+                    Move::PathIsValid => Value::Bool(h.path_is_valid(c.vm, pawn)?),
+                    Move::Invalidate => {
+                        h.invalidate_path(c.vm, pawn)?;
+                        Value::None
+                    }
+                    Move::Reached => Value::Bool(h.reached_destination(c.vm, pawn)?),
+                    Move::CanMoveTo => Value::Bool(h.can_move_to(c.vm, pawn, goal)?),
+                    Move::Speed => {
+                        h.set_movement_speed(c.vm, pawn, speed)?;
+                        Value::None
+                    }
+                })
+            }),
+        )?;
+    }
+    bind(
+        vm,
+        "WillowGame.WillowPawn.GetNearestPositionOnNavMesh",
+        Rc::new(|c: &mut NativeCall<'_>| {
+            let pawn = this(c)?;
+            let host = locomotion(c.vm)?;
+            let point = host
+                .try_borrow_mut()
+                .map_err(|_| VmError::ServiceBorrowed("the AI's movement host"))?
+                .nearest_on_navmesh(c.vm, pawn)?;
+            let kind =
+                c.vm.function(c.function)
+                    .and_then(|d| d.result.as_ref())
+                    .map(|r| r.kind.clone())
+                    .ok_or_else(|| error("GetNearestPositionOnNavMesh declares no result".to_string()))?;
+            let mut based = c.vm.space.classes.default_value(&kind).map_err(ow_object::heap::HeapError::from)?;
+            if let Some(p) = point
+                && let Some(mut position) = field(c.vm, &based, "Position")
+            {
+                for (axis, x) in ["X", "Y", "Z"].iter().zip(p) {
+                    set_field(c.vm, &mut position, axis, Value::Float(x));
+                }
+                set_field(c.vm, &mut based, "Position", position);
+            }
+            Ok(based)
+        }),
+    )?;
+    Ok(())
+}
