@@ -17,6 +17,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
+use ow_package::testkit::Export;
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::{FunctionDecl, NativePack, Vm};
 
@@ -50,7 +51,9 @@ struct Env {
     player: ObjRef,
     globals: ObjRef,
     aidef: ObjRef,
+    targeting: ObjRef,
     vector: StructId,
+    controller_class: ClassId,
 }
 
 impl Drop for Env {
@@ -86,8 +89,27 @@ fn env(mode: ParityMode) -> Env {
         t.class("Object", 0);
         t.build()
     };
-    let defs = DefStore::from_synthetic(&dir, &[("Core.upk", core.as_slice())], IdentityPolicy::FirstInScanOrder, mode)
-        .expect("store");
+    // A toy WillowGame with only the threat enum, in an order unlike the game's (GetThreatLevel answers by name).
+    let willowgame = {
+        let mut t = ScriptToy::new(&[]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let component = t.class("WillowAIComponent", object);
+        let values = ["ETL_SeenInThreatRadius", "ETL_NoThreat", "ETL_InThreatRadius", "ETL_Provoked"];
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend_from_slice(&t.none);
+        payload.extend(0i32.to_le_bytes());
+        payload.extend((values.len() as i32).to_le_bytes());
+        for v in values {
+            payload.extend(t.p.fname(v, 0));
+        }
+        let mut e = Export::new(t.import("Enum"), "EThreatLevel", payload);
+        e.outer = component;
+        t.p.add_export_with(e);
+        t.build()
+    };
+    let files: [(&str, &[u8]); 2] = [("Core.upk", core.as_slice()), ("WillowGame.upk", willowgame.as_slice())];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).expect("store");
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let object = vm.space.classes.define("Toy.ToyObject", None, vec![]).unwrap();
     let o = PropKind::Object { class: object };
@@ -131,7 +153,9 @@ fn env(mode: ParityMode) -> Env {
         ("LastAttackedTime", PropKind::Float),
         ("LastHurtTime", PropKind::Float),
         ("LastAttacker", o.clone()),
+        ("MyWillowMind", o.clone()),
     ]);
+    let controller_class = class(&mut vm, "Engine.Controller", object, &[("Pawn", o.clone())]);
     let aidef_class = class(&mut vm, "Toy.ToyAIDefinition", object, &[("TargetSearchRadius", PropKind::Float)]);
     let targeting_class = class(&mut vm, "Toy.ToyTargetingDefinition", object, &[
         ("bOverrideSearchRadius", PropKind::Bool),
@@ -210,7 +234,7 @@ fn env(mode: ParityMode) -> Env {
     for (o, name, v) in sets {
         assert!(set(&mut vm, o, name, v).unwrap(), "{name}");
     }
-    Env { vm, dir, mind, component, ai, player, globals, aidef, vector }
+    Env { vm, dir, mind, component, ai, player, globals, aidef, targeting, vector, controller_class }
 }
 
 fn host(e: &Env, exposure: f32) -> ToyHost {
@@ -301,5 +325,78 @@ fn the_attacked_native_provokes() {
         // Aware 0.1 s after the stamp, not before.
         assert!(!threat::is_aware(&s, 2.05, e.player).unwrap());
         assert!(threat::is_aware(&s, 2.2, e.player).unwrap());
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of PR #357
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A tick whose settings read fails (`TargetingDef` swapped to None) keeps the held state: the records, the target
+/// and their times are all there for the next tick.
+#[test]
+fn a_failed_settings_read_keeps_the_state() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut e = env(mode);
+        let mut h = host(&e, 1.0);
+        tick_at(&mut e, &mut h, 0.25);
+        tick_at(&mut e, &mut h, 0.5);
+        let before = state(&e.vm, e.mind).unwrap();
+        assert_eq!(before.current, Some(e.player));
+        set(&mut e.vm, e.component, "TargetingDef", Value::Object(None)).unwrap();
+        e.vm.clock.advance(0.25);
+        let err = tick_mind(&mut e.vm, &mut h, e.mind, e.globals).unwrap_err();
+        assert!(matches!(err, VmError::NotYet(_)), "{mode:?}");
+        assert_eq!(state(&e.vm, e.mind).as_ref(), Some(&before), "{mode:?}: nothing lost");
+        set(&mut e.vm, e.component, "TargetingDef", Value::Object(Some(e.targeting))).unwrap();
+        tick_at(&mut e, &mut h, 1.0);
+        assert_eq!(state(&e.vm, e.mind).unwrap().current, Some(e.player));
+    }
+}
+
+/// G26 step 2 in the adapter: a controller is tested as its pawn (`NotYet` without one); a pawn whose controller has
+/// a pawn is tested as that pawn. And the idle counter of an actor without one is 1.
+#[test]
+fn the_adapter_tests_a_controller_as_its_pawn() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut e = env(mode);
+        let mut h = host(&e, 0.0);
+        let controller = make(&mut e.vm, e.controller_class, "ToyPlayerController_0");
+        let mut senses = VmSenses { vm: &mut e.vm, host: &mut h };
+        let err = senses.tested_actor(controller).unwrap_err();
+        assert!(matches!(err, VmError::NotYet(_)), "{mode:?}: a controller without a pawn");
+        set(senses.vm, controller, "Pawn", Value::Object(Some(e.player))).unwrap();
+        assert_eq!(senses.tested_actor(controller).unwrap(), e.player);
+        assert_eq!(senses.tested_actor(e.ai).unwrap(), e.ai, "the mind's pawn is the AI pawn");
+        assert_eq!(senses.tested_actor(e.player).unwrap(), e.player, "a controller with no Pawn property");
+        let s = settings(senses.vm, e.mind, e.globals).unwrap();
+        let c = Component::new(e.ai, s);
+        assert!(super::super::targets::valid_target(&c, &mut senses, Some(controller)).unwrap());
+        assert_eq!(senses.targeted_by(controller).unwrap(), 1, "no counter: 1");
+        assert_eq!(senses.targeted_by(e.player).unwrap(), 0);
+    }
+}
+
+/// `GetThreatLevel` on a component the adapter has not ticked: built from its settings, so a Friendly target answers
+/// `ETL_SeenInThreatRadius` and an enemy `ETL_NoThreat` (no record), each as the installed enum's byte.
+#[test]
+fn get_threat_level_without_state_keeps_the_friendly_rule() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut e = env(mode);
+        let component_class = e.vm.space.heap.get(e.component).unwrap().class;
+        let mut d = FunctionDecl::native(ObjectPath::parse(GET_THREAT).unwrap(), GET_THREAT).with_owner(component_class);
+        d.params = vec![decl(&mut e.vm, "Target", PropKind::Object { class: component_class }).with_flags(PropertyDecl::PARAM)];
+        let f = e.vm.declare_function(d).unwrap();
+        Pack.register(&mut e.vm).unwrap();
+        let h: Rc<RefCell<dyn Host>> = Rc::new(RefCell::new(host(&e, 0.0)));
+        install(&mut e.vm, h, e.globals).unwrap();
+        set(&mut e.vm, e.component, "MyWillowMind", Value::Object(Some(e.mind))).unwrap();
+        assert!(state(&e.vm, e.mind).is_none());
+        let enemy = e.vm.call(f, Some(e.component), vec![Value::Object(Some(e.player))]).unwrap().ret;
+        assert_eq!(enemy, Value::Byte(1), "{mode:?}: ETL_NoThreat in the toy order");
+        let beasts = get(&mut e.vm, e.ai, "Allegiance").unwrap().unwrap();
+        set(&mut e.vm, e.player, "Allegiance", beasts).unwrap();
+        let friend = e.vm.call(f, Some(e.component), vec![Value::Object(Some(e.player))]).unwrap().ret;
+        assert_eq!(friend, Value::Byte(0), "{mode:?}: ETL_SeenInThreatRadius in the toy order");
     }
 }

@@ -64,6 +64,14 @@ pub fn calc_exposure(
 ) -> Result<(), VmError> {
     let target = c.records[index].target;
     let fraction = senses.exposure(c.pawn, target)?;
+    // A non-finite answer would read as full sight (NaN compares false with every threshold); the game shows 0 to 1
+    // and -1, so anything not finite is the host's error.
+    if !fraction.is_finite() {
+        return Err(VmError::Script {
+            function: "ai awareness".to_string(),
+            message: format!("the host's exposure answer is not finite ({fraction}); expected 0 to 1, or -1"),
+        });
+    }
     let r = &mut c.records[index];
     let level = Exposure::of(fraction);
     if (r.exposure == Exposure::None) != (level == Exposure::None) {
@@ -137,8 +145,13 @@ pub fn calc_threat(
 
 /// `PrioritizeTarget(record)`: `Priority = sum(OnePriority * Weight) / sum(Weight)` over the Prioritization
 /// iterators; the record keeps its priority when the weight sum is not positive (G25; live, L8: 134 samples to 5e-8
-/// with the weights 1, 1, 0.4 and 1 and the Idle and Attacking iterators at weight 0). An iterator with weight 0
-/// adds nothing and is not evaluated; one whose inputs are not read answers `NotYet` when its weight is not 0.
+/// with the weights 1, 1, 0.4 and 1 and the Idle and Attacking iterators at weight 0). One whose inputs are not read
+/// answers `NotYet` when its weight is not 0. A priority that is not finite is refused (it would win any sort).
+///
+/// **An iterator with weight 0 is skipped** (UNVERIFIED): it adds nothing to the priority, but in the game it still
+/// runs. That matters only for `WillowTI_PrioritizeAttacking`, whose run keeps the record's decaying damage meter
+/// (`TotalDamagePct`, an update-state iterator): that meter is not modelled here (its hit history is not read), so it
+/// stays 0, as L8 read it in a fight where the player did no damage.
 pub fn prioritize(
     c: &mut Component,
     senses: &mut dyn Senses,
@@ -202,7 +215,14 @@ pub fn prioritize(
     let r = &mut c.records[index];
     r.one_priority = last;
     if weights > 0.0 {
-        r.priority = sum / weights;
+        let priority = sum / weights;
+        if !priority.is_finite() {
+            return Err(VmError::Script {
+                function: "ai awareness".to_string(),
+                message: format!("a target's priority is not finite ({priority})"),
+            });
+        }
+        r.priority = priority;
     }
     Ok(())
 }

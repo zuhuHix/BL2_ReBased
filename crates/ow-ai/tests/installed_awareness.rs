@@ -67,9 +67,11 @@ fn world(cooked: PathBuf, mode: ParityMode) -> World {
     World::new(vm, BalanceState::new(snapshot), &packs).expect("world")
 }
 
-/// The run's host: the player is the one registered targetable; the exposure is the case's.
+/// The run's host: the player and the bullymong are the registered targetables (the AI's own pawn must be one,
+/// `ValidTarget` step 7); the exposure is the case's.
 struct RunHost {
     player: ObjRef,
+    ai: ObjRef,
     exposure: f32,
 }
 
@@ -78,7 +80,7 @@ impl Host for RunHost {
         Ok(self.exposure)
     }
     fn targetables(&mut self, _vm: &mut Vm) -> Result<Vec<ObjRef>, VmError> {
-        Ok(vec![self.player])
+        Ok(vec![self.player, self.ai])
     }
     fn can_be_targeted(&mut self, _vm: &mut Vm, _actor: ObjRef) -> Result<bool, VmError> {
         Ok(true)
@@ -146,7 +148,7 @@ fn one(cooked: PathBuf, case: &Case, live: bool) -> String {
     let globals = ow_combat::hit::stock_object(vm, ow_ai::awareness::vm::GLOBALS_PATH).expect("globals");
     place(vm, enemy.pawn, [0.0, 0.0, 0.0]);
     place(vm, player.pawn, case.at);
-    let mut host = RunHost { player: player.pawn, exposure: case.exposure };
+    let mut host = RunHost { player: player.pawn, ai: enemy.pawn, exposure: case.exposure };
     let mut outcome = String::from("ok");
     let mut t = 0.0f32;
     while t < 1.25 {

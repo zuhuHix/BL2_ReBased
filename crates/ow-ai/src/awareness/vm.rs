@@ -159,10 +159,26 @@ impl Senses for VmSenses<'_> {
     }
 
     fn targeted_by(&mut self, actor: ObjRef) -> Result<i32, VmError> {
+        // 1 when the actor has no readable counter (NATIVE_AI_MELEE.md, `WillowTI_PrioritizeIdle`).
         Ok(match get(self.vm, actor, "NumAICurrentlyTargeting")? {
             Some(Value::Int(i)) => i,
-            _ => 0,
+            _ => 1,
         })
+    }
+
+    fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError> {
+        let vm = &mut *self.vm;
+        if is_a(vm, actor, "Engine.Controller")? {
+            return object(vm, actor, "Pawn")?.ok_or_else(|| {
+                NotYet::not_read("ValidTarget of a controller without a pawn", RECORD_AWARENESS).into()
+            });
+        }
+        if let Some(controller) = object(vm, actor, "Controller")?
+            && let Some(pawn) = object(vm, controller, "Pawn")?
+        {
+            return Ok(pawn);
+        }
+        Ok(actor)
     }
 }
 
@@ -299,13 +315,21 @@ pub fn state(vm: &Vm, mind: ObjRef) -> Option<Component> {
 }
 
 /// Takes `mind`'s state out of the service (made from its settings on first use), with the fields script can change
-/// read back from the VM (module documentation, "Writes after a tick").
+/// read back from the VM (module documentation, "Writes after a tick"). Everything that can fail is read first: a
+/// failed read (a `NotYet` settings read, say) leaves the held state where it is.
 fn take(vm: &mut Vm, mind: ObjRef, globals: ObjRef) -> Result<Component, VmError> {
-    let m = minds(vm)?;
-    let held = borrow(&m)?.minds.remove(&mind);
     let settings = settings(vm, mind, globals)?;
     let pawn = object(vm, mind, "Pawn")?.ok_or_else(|| missing(vm, mind, "Pawn"))?;
     let component = object(vm, mind, "AIComponent")?.ok_or_else(|| missing(vm, mind, "AIComponent"))?;
+    let last_state_update = float(vm, component, "LastStateUpdateTime")?;
+    let last_target_update = float(vm, component, "LastTargetUpdateTime")?;
+    let on_hold = !ow_combat::hit::access::array(vm, component, "Holds")?.is_empty();
+    let scripted_target = object(vm, component, "ScriptedTarget")?;
+    let provoked = flag(vm, mind, "bProvoked")?;
+    let provoked_location = get(vm, mind, "ProvokedLocation")?;
+    let provoked_location = vector(vm, provoked_location);
+    let m = minds(vm)?;
+    let held = borrow(&m)?.minds.remove(&mind);
     let mut c = match held {
         Some(mut c) => {
             c.settings = settings;
@@ -314,21 +338,23 @@ fn take(vm: &mut Vm, mind: ObjRef, globals: ObjRef) -> Result<Component, VmError
         }
         None => {
             let mut c = Component::new(pawn, settings);
-            c.last_state_update = float(vm, component, "LastStateUpdateTime")?;
-            c.last_target_update = float(vm, component, "LastTargetUpdateTime")?;
+            c.last_state_update = last_state_update;
+            c.last_target_update = last_target_update;
             c
         }
     };
-    c.on_hold = !ow_combat::hit::access::array(vm, component, "Holds")?.is_empty();
-    c.scripted_target = object(vm, component, "ScriptedTarget")?;
-    c.provoked = flag(vm, mind, "bProvoked")?;
-    let provoked_location = get(vm, mind, "ProvokedLocation")?;
-    c.provoked_location = vector(vm, provoked_location);
+    c.on_hold = on_hold;
+    c.scripted_target = scripted_target;
+    c.provoked = provoked;
+    c.provoked_location = provoked_location;
     Ok(c)
 }
 
-/// Puts `mind`'s state back and writes the script-visible fields; applies the counter effects.
+/// Puts `mind`'s state back (first, so a failed write keeps it) and writes the script-visible fields; applies the
+/// counter effects.
 fn put(vm: &mut Vm, mind: ObjRef, c: Component, effects: &[Effect]) -> Result<(), VmError> {
+    let m = minds(vm)?;
+    borrow(&m)?.minds.insert(mind, c.clone());
     let component = object(vm, mind, "AIComponent")?.ok_or_else(|| missing(vm, mind, "AIComponent"))?;
     set(vm, component, "CurrentTarget", Value::Object(c.current))?;
     set(vm, component, "LastStateUpdateTime", Value::Float(c.last_state_update))?;
@@ -347,8 +373,6 @@ fn put(vm: &mut Vm, mind: ObjRef, c: Component, effects: &[Effect]) -> Result<()
             set(vm, *actor, "NumAICurrentlyTargeting", Value::Int(n.wrapping_add(*delta)))?;
         }
     }
-    let m = minds(vm)?;
-    borrow(&m)?.minds.insert(mind, c);
     Ok(())
 }
 
@@ -375,11 +399,12 @@ pub fn mind_attacked_by(
     let mut c = take(vm, mind, globals)?;
     let now = vm.clock.time_seconds();
     let result = threat::mind_attacked_by(&mut c, &mut VmSenses { vm: &mut *vm, host }, now, attacker, damaged);
-    let component = object(vm, mind, "AIComponent")?.ok_or_else(|| missing(vm, mind, "AIComponent"))?;
-    set(vm, component, "LastAttackedTime", Value::Float(c.last_attacked_time))?;
-    set(vm, component, "LastHurtTime", Value::Float(c.last_hurt_time))?;
-    set(vm, component, "LastAttacker", Value::Object(c.last_attacker))?;
+    let (attacked, hurt, last) = (c.last_attacked_time, c.last_hurt_time, c.last_attacker);
     put(vm, mind, c, &[])?;
+    let component = object(vm, mind, "AIComponent")?.ok_or_else(|| missing(vm, mind, "AIComponent"))?;
+    set(vm, component, "LastAttackedTime", Value::Float(attacked))?;
+    set(vm, component, "LastHurtTime", Value::Float(hurt))?;
+    set(vm, component, "LastAttacker", Value::Object(last))?;
     result
 }
 
@@ -467,24 +492,40 @@ fn n_is_aware(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Bool(aware))
 }
 
-// WillowAIComponent.GetThreatLevel(Target): the level as the installed enum's byte (by name).
+// WillowAIComponent.GetThreatLevel(Target): the level as the installed enum's byte (by name). A component the adapter
+// has not ticked yet is built from its settings (no records), so the Friendly rule still applies.
 fn n_get_threat(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let component = this(c)?;
-    let target = arg_object(c, 0)?;
-    let mind = {
+    let Some(target) = arg_object(c, 0)? else {
+        return enum_byte(c.vm, ThreatLevel::NoThreat);
+    };
+    let tracked = {
         let m = minds(c.vm)?;
         let m = borrow(&m)?;
-        m.minds.keys().copied().find(|&mind| {
-            m.minds.contains_key(&mind) && mind_component(c.vm, mind) == Some(component)
-        })
+        m.minds
+            .keys()
+            .copied()
+            .find(|&mind| mind_component(c.vm, mind) == Some(component))
     };
-    let (Some(mind), Some(target)) = (mind, target) else {
-        return enum_byte(c.vm, ThreatLevel::NoThreat);
+    let mind = match tracked {
+        Some(m) => m,
+        // The AI start binds the component's `MyWillowMind` (G26, "Holds, OnHold, ClearState, InitAI").
+        None => object(c.vm, component, "MyWillowMind")?.ok_or_else(|| -> VmError {
+            NotYet::not_read(
+                "GetThreatLevel on a component the adapter has not ticked and whose MyWillowMind is unset",
+                RECORD_AWARENESS,
+            )
+            .into()
+        })?,
     };
-    let Some(state) = state(c.vm, mind) else {
-        return enum_byte(c.vm, ThreatLevel::NoThreat);
+    let (host, globals) = host_and_globals(c.vm)?;
+    let state = match state(c.vm, mind) {
+        Some(s) => s,
+        None => {
+            let pawn = object(c.vm, mind, "Pawn")?.ok_or_else(|| missing(c.vm, mind, "Pawn"))?;
+            Component::new(pawn, settings(c.vm, mind, globals)?)
+        }
     };
-    let (host, _) = host_and_globals(c.vm)?;
     let mut host = host
         .try_borrow_mut()
         .map_err(|_| VmError::ServiceBorrowed("the AI host"))?;

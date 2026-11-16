@@ -40,15 +40,26 @@ den-spawned bullymong on one map (Three Horns Divide).
   - **The list.**
     - `FindTargets` walks the host's registry of targetables. It skips an entry the AI can't target, one the AI
       regards as Neutral, and one beyond the horizontal search radius. Height does not count, as live.
-    - `ValidTarget` follows the base and Willow order of G26. Live: the player, None, the AI's own pawn, a
-      same-allegiance pawn, a cloaked player and an AI without an allegiance all give the recorded answers.
+    - `ValidTarget` follows the base and Willow order of G26. Step 2 is the adapter's: a controller is tested as its
+      pawn (`NotYet` without one), and an actor whose controller has a pawn as that pawn. Step 7 requires the AI's own
+      pawn in the host's registry. Live: the player, None, the AI's own pawn, a same-allegiance pawn, a cloaked player
+      and an AI without an allegiance all give the recorded answers.
+    - The radius test compares the squared horizontal distance with the squared radius in f64, as the note reads it;
+      an entry exactly on the radius is in the list (the edge is not read).
     - The removal pass runs first. A pawn on foot has no hand-off; a vehicle answers `NotYet`.
     - A lone list never drops a record by distance. (Live, a den member's list was not cut at 4,096. Its list comes
       from the den.)
   - **Choosing.**
     - The priority is the weighted mean of the Prioritization iterators: nearby, exposed (unclamped), previous, bonus;
       the formula is live-confirmed to 5e-8. Idle and Attacking are `NotYet` when their weight is not 0: their inputs
-      are not read.
+      are not read. Idle's count is 1 for an actor with no readable counter (G25). A priority that is not finite is
+      refused.
+    - **A weight-0 iterator is skipped (UNVERIFIED).** It adds nothing to the priority, but in the game it still runs.
+      That matters for `WillowTI_PrioritizeAttacking`, whose run keeps the record's decaying damage meter
+      (`TotalDamagePct`). The meter is not modelled here, because its hit history is not read, so it stays 0. L8 read 0
+      too, but in a fight where the player did no damage, so the skip is untested.
+    - **The exposure** is the host's fraction. A value that is not finite is refused as the host's error, because NaN
+      would read as full sight; -1.0, which the game shows, is kept.
     - `ChooseBestTarget` takes the highest valid record, with ties in list order. `ValidCurrentTarget` needs level 2
       or more and a target that isn't `bHidden`; a scripted target is the only valid one; the evaluators are `NotYet`.
     - `SetTarget` gives `Target_Lost`, then `Target_Acquired`. `TargetChanged` re-arms the timed starts, sets
@@ -73,6 +84,11 @@ den-spawned bullymong on one map (Three Horns Divide).
     weights and fields), the mind, the pawn's cylinder and `GD_Globals.General.Globals.AICloseThreatRadius`.
   - **Writes.** It writes back `CurrentTarget`, both update times, `bProvoked`, `ProvokedLocation` and the target's
     counter. Before each tick it reads back what script can change: `bProvoked`, `Holds`, `ScriptedTarget`.
+  - **No state is lost on a failed read** (review r1). Everything that can fail is read before the held state is taken
+    out, and the state is put back before the writes.
+  - `GetThreatLevel` on a component the adapter has not ticked builds the component from its settings, so the
+    Friendly rule applies. It finds such a component's mind through its `MyWillowMind`, which the AI start binds
+    (G26).
   - **Unbound definitions.** A component whose `AIDef` or `TargetingDef` is None answers `NotYet`. The native that
     binds them at AI start is not read: installed script never sets `AIDef`.
   - **The natives** (`awareness::vm::Pack`): `WillowMind.NotifyAttackedBy` (which `WillowAIPawn.TakeDamage` calls),
@@ -83,8 +99,10 @@ den-spawned bullymong on one map (Three Horns Divide).
     collects links with `ow_behavior::kernel::natives::collect` and routes consumers there (decision 2026-11-16-50).
 
 - **Verified (automated, local, pc-hummer).**
-  - 22 `ow-ai` unit tests on invented data: 19 on the rules (mode-free, since there is no stand-in) and 3 on the VM
-    adapter over invented classes, each in both modes.
+  - 30 `ow-ai` unit tests on invented data: 24 on the rules (mode-free, since there is no stand-in) and 6 on the VM
+    adapter over invented classes, each in both modes. Review r1 added 8 of them: the kept state, the
+    controller-to-pawn step in the rules and in the adapter, the non-finite exposure and priority, the registry
+    clause, the radius edge, and `GetThreatLevel` without state.
   - **The installed run** (`installed_awareness.rs`, ignored; output in `local/p2/w7-ai-awareness/installed_run.json`).
     A stock regular bullymong (level 5) and a level-8 player pawn, spawned as `--combat-run` spawns them, eight
     placements, 1.25 s each.
@@ -105,16 +123,17 @@ den-spawned bullymong on one map (Three Horns Divide).
     - The exposure is given per case: there is no level geometry headless.
 
 - **Open items.**
-  - **Analyst questions** (each answers `NotYet` or is noted; no executable was read here):
-    - the native that binds `AIComponent.AIDef` and `TargetingDef` at AI start;
-    - the actor's "can be targeted" (`ITargetable`) answer;
-    - the writer of a fresh record's level 1;
-    - the code that lowers a level after `ForgetTime`, and when it removes the record instead;
-    - `WillowTI_PrioritizeAttacking`'s hit history, and `WillowTI_PrioritizeIdle` with a maximum of 0 or less
-      (`MaxAICurrentlyTargeting` read 0 live, L8; with a weight, a non-positive maximum is `NotYet`);
-    - `GetParentComponent` (how a den member is told apart);
-    - `CanTickAI`;
-    - the three pawn notifications of `TargetChanged`.
+  - **Analyst questions** (each rule answers `NotYet` or is noted; no executable was read here):
+    - Which native binds `AIComponent.AIDef` and `TargetingDef` when the AI starts, and from where?
+    - What does an actor's `ITargetable` "can be targeted" answer test?
+    - What writes the level 1 that a fresh record shows, when the code writes 0?
+    - Which code lowers a threat level after `ForgetTime`, and when does it remove the record instead?
+    - How does `WillowTI_PrioritizeAttacking` fill its meter from the hit history, and does it run at weight 0?
+    - What does `WillowTI_PrioritizeIdle` do with a `MaxAICurrentlyTargeting` of 0 or less? It read 0 live (L8); here,
+      with a weight, it is `NotYet`.
+    - How is a den member's parent found (`GetParentComponent`)?
+    - What does `WillowMind.CanTickAI` test?
+    - What are the three pawn notifications of `TargetChanged`?
   - **The cooked against the live weights** of `GD_AI_Targeting.Targeting_ShortRange` (Idle 0.5 and Attacking 0.25
     cooked; 0 and 0 live), and the fifth Knowledge entry (`WillowTI_CalcCombat` cooked, None live). This looks like
     an overlay applied at run time (open question 19, micropatch), or a per-pawn copy. It decides whether the

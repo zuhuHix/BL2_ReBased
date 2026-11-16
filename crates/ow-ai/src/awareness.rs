@@ -66,8 +66,12 @@ pub trait Senses {
     fn exposure(&mut self, viewer: ObjRef, target: ObjRef) -> Result<f32, VmError>;
     /// The world's registry of targetables, in its order (`FindTargets` walks it).
     fn targetables(&mut self) -> Result<Vec<ObjRef>, VmError>;
-    /// How many AIs have `actor` as their current target (`WillowPawn.NumAICurrentlyTargeting`).
+    /// How many AIs have `actor` as their current target (`WillowPawn.NumAICurrentlyTargeting`); 1 when the actor has
+    /// no readable counter (NATIVE_AI_MELEE.md, `WillowTI_PrioritizeIdle`).
     fn targeted_by(&mut self, actor: ObjRef) -> Result<i32, VmError>;
+    /// `ValidTarget` step 2 (G26): the actor the test is about. A controller is replaced by its pawn (`NotYet` when it
+    /// has none); an actor whose controller has a pawn is replaced by that pawn; any other actor is itself.
+    fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError>;
 }
 
 /// The unit facing vector of a rotator (pitch and yaw; roll does not turn the facing), as the dot products of

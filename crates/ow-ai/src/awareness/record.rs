@@ -58,7 +58,8 @@ pub enum Exposure {
 impl Exposure {
     /// The three-level byte of an exposure fraction (`WillowTI_CalcExposure`, NATIVE_AI_MELEE.md): below 0.4 none,
     /// below 0.9 half, else full. UNVERIFIED thresholds: the game showed 0.0 none, 0.5 half, 1.0 full (L8); -1.0, the
-    /// value the game shows on a fresh record, is below 0.4.
+    /// value the game shows on a fresh record, is below 0.4. A fraction that is not finite would read as full (NaN
+    /// compares false with both thresholds): `WillowTI_CalcExposure` refuses one before it gets here.
     pub fn of(fraction: f32) -> Exposure {
         if fraction < 0.4 {
             Exposure::None

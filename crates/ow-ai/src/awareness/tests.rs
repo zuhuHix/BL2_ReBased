@@ -23,6 +23,8 @@ struct Toy {
     exposure: DetMap<ObjRef, f32>,
     registry: Vec<ObjRef>,
     targeted: DetMap<ObjRef, i32>,
+    /// Controllers: the pawn each one is tested as (`None`: it has no pawn).
+    controllers: DetMap<ObjRef, Option<ObjRef>>,
 }
 
 impl Senses for Toy {
@@ -40,6 +42,13 @@ impl Senses for Toy {
     }
     fn targeted_by(&mut self, actor: ObjRef) -> Result<i32, VmError> {
         Ok(self.targeted.get(&actor).copied().unwrap_or(0))
+    }
+    fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError> {
+        match self.controllers.get(&actor) {
+            Some(Some(pawn)) => Ok(*pawn),
+            Some(None) => Err(ow_core::NotYet::not_read("a controller without a pawn", "test").into()),
+            None => Ok(actor),
+        }
     }
 }
 
@@ -75,8 +84,9 @@ fn world() -> World {
             facts,
             opinions,
             exposure: DetMap::new(),
-            registry: vec![player, other],
+            registry: vec![player, other, ai],
             targeted: DetMap::new(),
+            controllers: DetMap::new(),
         },
         ai,
         player,
@@ -524,4 +534,74 @@ fn a_den_member_is_not_yet() {
     c.settings.has_parent = true;
     let e = tick(&mut c, &mut w.toy, 0.2).unwrap_err();
     assert!(matches!(e, VmError::NotYet(n) if n.missing == Missing::NotPorted));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of PR #357
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A non-finite exposure from the host is refused (it would read as full sight); -1.0, which the game shows, is not.
+#[test]
+fn a_non_finite_exposure_is_the_host_s_error() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut w = world();
+        w.toy.exposure.insert(w.player, bad);
+        let mut c = component(&w);
+        let e = tick(&mut c, &mut w.toy, 0.2).unwrap_err();
+        assert!(e.to_string().contains("exposure answer is not finite"), "{bad}: {e}");
+    }
+    let mut w = world();
+    w.toy.exposure.insert(w.player, -1.0);
+    let mut c = component(&w);
+    run(&mut c, &mut w, 0.0, 0.5);
+    assert_eq!(c.record(w.player).unwrap().exposure, Exposure::None);
+    assert_eq!(c.current, None);
+}
+
+/// A priority that is not finite is refused (it would win the sort).
+#[test]
+fn a_non_finite_priority_is_refused() {
+    let mut w = world();
+    let mut c = component(&w);
+    c.records.push(super::Record::new(w.player));
+    c.records[0].bonus_priority = f32::INFINITY;
+    let e = super::iterators::prioritize(&mut c, &mut w.toy, 0).unwrap_err();
+    assert!(e.to_string().contains("priority is not finite"), "{e}");
+}
+
+/// G26 step 7: the AI's own pawn must be in the world's registry of targetables.
+#[test]
+fn an_ai_outside_the_registry_has_no_valid_target() {
+    let mut w = world();
+    let c = component(&w);
+    assert!(valid_target(&c, &mut w.toy, Some(w.player)).unwrap());
+    w.toy.registry.retain(|a| *a != w.ai);
+    assert!(!valid_target(&c, &mut w.toy, Some(w.player)).unwrap());
+}
+
+/// G26 step 2: a controller with a pawn is tested as that pawn; one without a pawn is `NotYet`.
+#[test]
+fn a_controller_is_tested_as_its_pawn() {
+    let mut w = world();
+    let controller = w.space.alloc(w.class, "ToyController_0", None, Origin::Runtime).unwrap();
+    let c = component(&w);
+    w.toy.controllers.insert(controller, Some(w.player));
+    assert!(valid_target(&c, &mut w.toy, Some(controller)).unwrap(), "the player's controller");
+    w.toy.controllers.insert(controller, Some(w.other));
+    assert!(!valid_target(&c, &mut w.toy, Some(controller)).unwrap(), "a friendly pawn's controller");
+    w.toy.controllers.insert(controller, None);
+    let e = valid_target(&c, &mut w.toy, Some(controller)).unwrap_err();
+    assert!(matches!(e, VmError::NotYet(n) if n.missing == Missing::NotRead));
+}
+
+/// The list's radius test compares squares: exactly on the radius is in the list, a hair beyond is not.
+#[test]
+fn the_radius_edge_is_in_the_list() {
+    for (x, listed) in [(4096.0f32, true), (4096.01, false)] {
+        let mut w = world();
+        place(&mut w.toy, w.player, [x, 0.0, 0.0]);
+        let mut c = component(&w);
+        tick(&mut c, &mut w.toy, 0.2).unwrap();
+        assert_eq!(c.record(w.player).is_some(), listed, "{x}");
+    }
 }
