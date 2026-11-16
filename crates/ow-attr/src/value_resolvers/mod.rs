@@ -1,7 +1,9 @@
 //! Owner: lane W3-ATTREVAL. The value resolver classes the notes read (NATIVE_ATTRIBUTES.md section 6; the Noun
 //! resolver, added by lane FIX-NOUN, from NATIVE_NOUN_ATTRIBUTES.md; the PlayThroughCount resolver, lane
 //! FIX-PLAYTHROUGH: the C++ reading, its native rule noted in NATIVE_PLAYTHROUGH_ATTRIBUTES.md; the Targetable
-//! resolver, lane W6-COMBAT-RUN2: the C++ stand-in in Reference only, its native not read), one module file each.
+//! resolver, lane W6-COMBAT-RUN2: the C++ stand-in in Reference only, its native not read; the Currency, Random,
+//! AmmoDropWeight and Constraint resolvers, lane FIX-ATTR-RESOLVERS: the same, their natives read for a fresh
+//! implementer in NATIVE_ATTR_RESOLVERS.md, decision 2026-11-16-73), one module file each.
 //! [`register`] is what [`AttributeSystem::standard`] calls (placed by W2-ATTRAPI); a class not registered here stays
 //! `NotYet { NotRead }` (the registry's answer).
 //!
@@ -17,21 +19,27 @@
 use crate::api::AttrError;
 use crate::registry::AttributeSystem;
 
+mod ammo_drop_weight;
 mod attribute_slot_effect;
 mod badass;
 mod conditional;
 mod constant;
+mod constraint;
+mod currency;
 mod global;
 mod manufacturer;
 pub(crate) mod noun;
 mod object_property;
 mod player_skill;
 mod playthrough_count;
+mod random;
 mod resource_pool_state;
 mod simple_math;
 mod targetable;
 mod weapon_type;
 
+#[cfg(test)]
+mod attr_resolver_tests;
 #[cfg(test)]
 mod designer_tests;
 #[cfg(test)]
@@ -49,7 +57,7 @@ pub(crate) mod testworld;
 pub(crate) const RECORD: &str = "NATIVE_ATTRIBUTES.md section 6";
 
 /// Every value resolver class this module implements, by its class path in the packages.
-pub(crate) const CLASSES: [&str; 14] = [
+pub(crate) const CLASSES: [&str; 18] = [
     "Engine.ObjectPropertyAttributeValueResolver",
     "GearboxFramework.ConstantAttributeValueResolver",
     "GearboxFramework.SimpleMathValueResolver",
@@ -64,6 +72,10 @@ pub(crate) const CLASSES: [&str; 14] = [
     "GearboxFramework.NounAttributeValueResolver",
     "WillowGame.PlayThroughCountAttributeValueResolver",
     "WillowGame.TargetableAttributeValueResolver",
+    "WillowGame.CurrencyAttributeValueResolver",
+    "GearboxFramework.RandomAttributeValueResolver",
+    "WillowGame.AmmoDropWeightAttributeValueResolver",
+    "GearboxFramework.ConstraintAttributeValueResolver",
 ];
 
 /// Registers every value resolver class this module implements ([`CLASSES`], in that order).
@@ -81,5 +93,9 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_value_resolver(CLASSES[10], weapon_type::WeaponType)?
         .with_value_resolver(CLASSES[11], noun::Noun)?
         .with_value_resolver(CLASSES[12], playthrough_count::PlayThroughCount)?
-        .with_value_resolver(CLASSES[13], targetable::Targetable)
+        .with_value_resolver(CLASSES[13], targetable::Targetable)?
+        .with_value_resolver(CLASSES[14], currency::Currency)?
+        .with_value_resolver(CLASSES[15], random::Random)?
+        .with_value_resolver(CLASSES[16], ammo_drop_weight::AmmoDropWeight)?
+        .with_value_resolver(CLASSES[17], constraint::Constraint)
 }

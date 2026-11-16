@@ -54,6 +54,7 @@ pub enum QueryKind {
     AttributeContextSource,
     PlayerSkill,
     GameReplicationInfo,
+    LocalPlayerPool,
 }
 
 impl QueryKind {
@@ -67,6 +68,7 @@ impl QueryKind {
             EngineQuery::AttributeContextSource => QueryKind::AttributeContextSource,
             EngineQuery::PlayerSkill { .. } => QueryKind::PlayerSkill,
             EngineQuery::GameReplicationInfo => QueryKind::GameReplicationInfo,
+            EngineQuery::LocalPlayerPool { .. } => QueryKind::LocalPlayerPool,
             _ => return None,
         })
     }
@@ -79,6 +81,9 @@ impl QueryKind {
             QueryKind::PlayerSkill => "ow-skills (lane W6-SKILLS)",
             QueryKind::GameReplicationInfo => {
                 "the map load that makes the game replication info (a handler for this query)"
+            }
+            QueryKind::LocalPlayerPool => {
+                "the combat run's Reference stand-in of the local player's pool (ow-combat; decision 2026-11-16-73)"
             }
             QueryKind::PlayerController | QueryKind::AttributeContextSource => {
                 "a handler for this query (the engine rule is not read: NATIVE_ATTRIBUTES.md sections 5, 10)"

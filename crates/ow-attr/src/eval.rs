@@ -766,7 +766,7 @@ pub(crate) fn evaluate_init(
 /// `randomBetween`'s (the only oracle; the native generator's mapping is unread), used in both parity modes as a
 /// reading, like the CrtRand script-stream convention. The live item game-stage offset reaching both ends fits the
 /// inclusive integer reading.
-fn random_between(
+pub(crate) fn random_between(
     low: f32,
     high: f32,
     integer: bool,

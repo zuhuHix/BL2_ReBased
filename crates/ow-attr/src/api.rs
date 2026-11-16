@@ -175,6 +175,11 @@ pub enum EngineQuery {
     /// The answer is not checked for class here; the reader checks it (`PlayThroughCountAttributeValueResolver`,
     /// NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3). Added by FIX-PLAYTHROUGH-OFF (an additive change, section 7).
     GameReplicationInfo,
+    /// The local player's pool for the `ResourceDefinition` object `resource`, whatever the source: the C++ stand-in
+    /// `CombatSystem::localPlayerPool` (`src/combat_loot.cpp`) that `AmmoDropWeightAttributeValueResolver` reads under
+    /// `ParityMode::Reference` (its native body is not read). `Ok(None)`: no local player or no such pool. Added by
+    /// FIX-ATTR-RESOLVERS (an additive change, section 7; decision 2026-11-16-73).
+    LocalPlayerPool { resource: ObjRef },
 }
 
 /// The world the attribute system reads and edits: the running VM (`ow_vm::Vm`), an offline world
