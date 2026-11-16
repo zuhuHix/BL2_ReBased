@@ -42,6 +42,13 @@ pub enum TreeError {
     /// A node is not an object of a package export.
     NotAnExport(String),
     TooManyNodes,
+    /// A node links to an object of another file than the tree's. Nodes are keyed by export index, which is only
+    /// unique within one file, so such a link is refused rather than aliased.
+    OtherFile {
+        node: String,
+        file: String,
+        tree_file: String,
+    },
     Graph(GraphError),
 }
 
@@ -54,6 +61,13 @@ impl fmt::Display for TreeError {
             TreeError::BadValue { node, prop, reason } => write!(f, "{node}.{prop}: {reason}"),
             TreeError::NotAnExport(p) => write!(f, "{p} is not a package export"),
             TreeError::TooManyNodes => write!(f, "the tree has more than {MAX_NODES} nodes"),
+            TreeError::OtherFile {
+                node,
+                file,
+                tree_file,
+            } => {
+                write!(f, "{node} is in {file}, not in the tree's file {tree_file}")
+            }
             TreeError::Graph(e) => write!(f, "{e}"),
         }
     }
@@ -419,7 +433,8 @@ pub fn load_tree(
     let mut skel_controls = Vec::new();
     while let Some(o) = work.pop() {
         r.defs.ensure_loaded(r.space, o)?;
-        let (node_path, _, id) = r.path_of(o)?;
+        let (node_path, node_file, id) = r.path_of(o)?;
+        same_file(&file, &node_file, &node_path)?;
         if nodes.contains_key(&id) {
             continue;
         }
@@ -452,7 +467,8 @@ pub fn load_tree(
                 let node = match target {
                     Some(c) => {
                         r.defs.ensure_loaded(r.space, c)?;
-                        let (_, _, child_id) = r.path_of(c)?;
+                        let (child_path, child_file, child_id) = r.path_of(c)?;
+                        same_file(&file, &child_file, &child_path)?;
                         work.push(c);
                         Some(child_id)
                     }
@@ -479,6 +495,19 @@ pub fn load_tree(
     tree.skel_controls = skel_controls;
     graph::check(&tree)?;
     Ok(tree)
+}
+
+/// Refuses `node` unless it is in the tree's file (`tree_file`): node keys are export indices of that one file.
+pub fn same_file(tree_file: &str, file: &str, node: &str) -> Result<(), TreeError> {
+    if file.eq_ignore_ascii_case(tree_file) {
+        Ok(())
+    } else {
+        Err(TreeError::OtherFile {
+            node: node.into(),
+            file: file.into(),
+            tree_file: tree_file.into(),
+        })
+    }
 }
 
 fn with_node(e: TreeError, node: &str) -> TreeError {

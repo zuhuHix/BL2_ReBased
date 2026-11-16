@@ -11,6 +11,7 @@ use super::eval::{
     directional,
 };
 use super::graph::{GraphError, MAX_DEPTH, check};
+use super::load::{TreeError, same_file};
 use crate::anim::pose::{Local, Skeleton, Wrap};
 
 const ID: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -125,7 +126,7 @@ fn list_library() -> ClipLibrary {
 #[test]
 fn blend_weights_sum_to_one_and_ramp_linearly() {
     let (t, lib, sk) = (list_tree(0.2), list_library(), skeleton());
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     assert!(close(b1(&d.locals().unwrap()).translation[0], 10.0, 1e-9));
     d.inputs.select.insert("posture".into(), 2);
     for step in 1..=4 {
@@ -168,7 +169,7 @@ fn the_additive_delta_on_the_identity_base_is_the_delta() {
         hold("ADD_Delta", 2, [0.0, 0.0, S, S], [1.0, 2.0, 3.0]),
     ]);
     let sk = skeleton();
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     let out = b1(&d.locals().unwrap());
     assert!(close(out.translation[0], 1.0, 1e-9) && close(out.translation[2], 3.0, 1e-9));
     let s = f64::from(S);
@@ -180,14 +181,14 @@ fn the_additive_delta_on_the_identity_base_is_the_delta() {
     if let Some(n) = half.nodes.get_mut(&2) {
         n.kind = Kind::Additive { child2_weight: 0.5 };
     }
-    let mut d = Driver::new(&half, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&half, &lib, &sk, Inputs::default()).unwrap();
     let out = b1(&d.locals().unwrap());
     assert!(close(out.translation[1], 1.0, 1e-9));
     let angle = 2.0 * ow_core::num::acos_f64(out.rotation[3]);
     assert!(close(angle, std::f64::consts::FRAC_PI_4, 1e-6), "{angle}");
     // A missing additive clip adds nothing (not the bind pose).
     let lib = library(vec![hold("Base", 2, ID, [5.0, 0.0, 0.0])]);
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     assert!(close(b1(&d.locals().unwrap()).translation[0], 5.0, 1e-9));
     assert!(d.log.missing_clips.contains("ADD_Delta"));
 }
@@ -216,7 +217,7 @@ fn a_slot_plays_once_then_blends_back() {
         hold("Shot", 4, ID, [30.0, 0.0, 0.0]),
     ]);
     let (t, sk) = (slot_tree(), skeleton());
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.play("Slot", Play::once("Shot", 0.1, 0.1)).unwrap();
     let x = |d: &mut Driver<'_>| b1(&d.locals().unwrap()).translation[0];
     assert!(close(x(&mut d), 10.0, 1e-9), "starts on the source");
@@ -266,7 +267,7 @@ fn special_moves_take_the_recorded_blend_rules() {
     let sk = skeleton();
     let x = |d: &mut Driver<'_>| b1(&d.locals().unwrap()).translation[0];
     // OnAnimEnd drops the blend-out: fully on the move until its last moment.
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.play(
         "WeaponAction",
         Play::once("Move", 0.1, 0.2).with_ending(Ending::OnAnimEnd),
@@ -275,12 +276,12 @@ fn special_moves_take_the_recorded_blend_rules() {
     d.tick(0.35).unwrap();
     assert!(close(x(&mut d), 30.0, 1e-9));
     // A clip (0.4 s) shorter than blend-in plus blend-out (0.3 + 0.3) plays with no blend at all.
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.play("WeaponAction", Play::once("Move", 0.3, 0.3))
         .unwrap();
     assert!(close(x(&mut d), 30.0, 1e-9));
     // Loop never ends.
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.play(
         "WeaponAction",
         Play::once("Move", 0.0, 0.0).with_ending(Ending::Loop),
@@ -334,7 +335,7 @@ fn a_single_clip_path_equals_the_sampler() {
     let t = slot_tree();
     let lib = library(vec![slide("Idle", 5)]);
     let sk = skeleton();
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.tick(0.137).unwrap();
     let time = d.node_time(3).unwrap();
     let tree_pose = sk.pose_from_locals(d.locals().unwrap()).unwrap();
@@ -353,8 +354,8 @@ fn a_single_clip_path_equals_the_sampler() {
 fn ticks_are_deterministic_over_dt() {
     let lib = list_library();
     let (t, sk) = (list_tree(0.2), skeleton());
-    let mut coarse = Driver::new(&t, &lib, &sk, Inputs::default());
-    let mut fine = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut coarse = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    let mut fine = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     coarse.inputs.select.insert("posture".into(), 1);
     fine.inputs.select.insert("posture".into(), 1);
     coarse.tick(0.1).unwrap();
@@ -369,7 +370,7 @@ fn ticks_are_deterministic_over_dt() {
         b.translation[0]
     );
     // The same steps give the same bits.
-    let mut again = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut again = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     again.inputs.select.insert("posture".into(), 1);
     again.tick(0.1).unwrap();
     assert_eq!(b1(&again.locals().unwrap()), a);
@@ -393,7 +394,7 @@ fn not_yet_nodes_are_refused_or_passed_through_and_counted() {
     ]);
     let lib = library(vec![hold("Idle", 2, ID, [10.0, 0.0, 0.0])]);
     let sk = skeleton();
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     match d.locals() {
         Err(EvalError::NotYet(n)) => {
             assert!(n.what.contains("Test.Node") && n.what.contains("T.Camera"))
@@ -455,7 +456,7 @@ fn speed_bands_scale_rates_and_report_notifies() {
     idle.notifies = vec![Notify::new(0.5, "Test.IdleNotify")];
     let lib = library(vec![idle, walk]);
     let sk = skeleton();
-    let mut d = Driver::new(&t, &lib, &sk, Inputs::default());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
     d.inputs.speed = 200.0;
     // At 200 uu/s over base 100 the walk plays at twice its rate: 0.3 s of ticks is 0.6 s of clip.
     d.tick(0.3).unwrap();
@@ -487,4 +488,376 @@ fn installed_report() {
     let out = std::env::var_os("OW_H7_OUT").expect("set OW_H7_OUT");
     let text = super::report::run(std::path::Path::new(&cooked), &roots).unwrap();
     std::fs::write(out, text).unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------- review r1 of PR #354
+
+/// A clip for the two-bone skeleton with one transform per bone held for `frames` frames at 10 fps; `None` leaves
+/// the bone untracked.
+fn clip2(
+    name: &str,
+    frames: usize,
+    root: Option<([f32; 4], [f32; 3])>,
+    b1: Option<([f32; 4], [f32; 3])>,
+) -> ClipInfo {
+    let track =
+        |t: Option<([f32; 4], [f32; 3])>| t.map(|(r, p)| vec![BoneTransform::new(r, p); frames]);
+    ClipInfo::new(
+        BoundClip::new(name, 10.0, frames, vec![track(root), track(b1)]),
+        1.0,
+        Vec::new(),
+    )
+}
+
+/// Same up to sign, entry by entry within `eps`.
+fn same_rotation(a: [f64; 4], b: [f64; 4], eps: f64) -> bool {
+    let plus = (0..4).all(|k| close(a[k], b[k], eps));
+    let minus = (0..4).all(|k| close(a[k], -b[k], eps));
+    plus || minus
+}
+
+/// Base: Root turned 90 degrees about Z, B1 turned 90 degrees about Z at (5, 0, 0). Delta: both bones turned 90
+/// degrees about X, B1 moved by (1, 2, 3).
+fn rotated_base_and_delta() -> ClipLibrary {
+    let x90 = [S, 0.0, 0.0, S];
+    let z90 = [0.0, 0.0, S, S];
+    library(vec![
+        clip2(
+            "Base",
+            2,
+            Some((z90, [0.0; 3])),
+            Some((z90, [5.0, 0.0, 0.0])),
+        ),
+        clip2(
+            "ADD_Delta",
+            2,
+            Some((x90, [0.0; 3])),
+            Some((x90, [1.0, 2.0, 3.0])),
+        ),
+    ])
+}
+
+/// What the additive rule gives on that base: for B1 (a child) the delta after the base, Z90 * X90 =
+/// (0.5, 0.5, 0.5, 0.5), and (5, 0, 0) + (1, 2, 3); for the root the delta before the base, X90 * Z90 =
+/// (0.5, -0.5, 0.5, 0.5). A replace rule would give X90 and (1, 2, 3); a blend rule something between.
+fn assert_rotated_additive(out: &[Local]) {
+    assert!(
+        same_rotation(out[1].rotation, [0.5, 0.5, 0.5, 0.5], 1e-6),
+        "{:?}",
+        out[1].rotation
+    );
+    assert!(close(out[1].translation[0], 6.0, 1e-6));
+    assert!(close(out[1].translation[1], 2.0, 1e-6));
+    assert!(close(out[1].translation[2], 3.0, 1e-6));
+    assert!(
+        same_rotation(out[0].rotation, [0.5, -0.5, 0.5, 0.5], 1e-6),
+        "{:?}",
+        out[0].rotation
+    );
+}
+
+#[test]
+fn the_additive_delta_on_a_rotated_and_moved_base() {
+    let t = tree(vec![
+        (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+        (
+            2,
+            node(
+                "T.Add",
+                Kind::Additive { child2_weight: 1.0 },
+                &[("Base", Some(3)), ("Add", Some(4))],
+            ),
+        ),
+        (3, node("T.Base", seq("Base", true), &[])),
+        (4, node("T.Delta", seq("ADD_Delta", true), &[])),
+    ]);
+    let (lib, sk) = (rotated_base_and_delta(), skeleton());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    assert_rotated_additive(&d.locals().unwrap());
+}
+
+#[test]
+fn the_sequence_add_clip_path_applies_the_same_delta() {
+    // WillowAnimNodeSequenceAdditiveBlend: one node playing Base with ADD_Delta on top.
+    let mut p = SequenceParams::new(Some("Base".into()), 1.0, true, true);
+    p.add_clip = Some("ADD_Delta".into());
+    let t = tree(vec![
+        (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+        (2, node("T.SeqAdd", Kind::Sequence(p), &[])),
+    ]);
+    let (lib, sk) = (rotated_base_and_delta(), skeleton());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    assert_rotated_additive(&d.locals().unwrap());
+}
+
+#[test]
+fn an_untracked_bone_of_an_additive_clip_adds_nothing() {
+    // B1's bind translation is (10, 0, 0). The additive clip tracks only the root, so B1 must stay at the base's
+    // (10, 0, 0), not (20, 0, 0) from the bind pose added as a delta.
+    let t = tree(vec![
+        (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+        (
+            2,
+            node(
+                "T.Add",
+                Kind::Additive { child2_weight: 1.0 },
+                &[("Base", Some(3)), ("Add", Some(4))],
+            ),
+        ),
+        (3, node("T.Base", seq("Base", true), &[])),
+        (4, node("T.Delta", seq("ADD_RootOnly", true), &[])),
+    ]);
+    let lib = library(vec![
+        clip2(
+            "Base",
+            2,
+            Some((ID, [0.0; 3])),
+            Some((ID, [10.0, 0.0, 0.0])),
+        ),
+        clip2("ADD_RootOnly", 2, Some((ID, [0.0, 0.0, 1.0])), None),
+    ]);
+    let sk = skeleton();
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    let out = d.locals().unwrap();
+    assert!(
+        close(out[1].translation[0], 10.0, 1e-9),
+        "{:?}",
+        out[1].translation
+    );
+    assert!(close(out[0].translation[2], 1.0, 1e-9));
+}
+
+/// Three bones in a chain: Root, B1 under it, B2 under B1.
+fn skeleton3() -> Skeleton {
+    let bones = vec![
+        Bone::new("Root", None, BoneTransform::new(ID, [0.0; 3])),
+        Bone::new("B1", Some(0), BoneTransform::new(ID, [10.0, 0.0, 0.0])),
+        Bone::new("B2", Some(1), BoneTransform::new(ID, [10.0, 0.0, 0.0])),
+    ];
+    Skeleton::new(&SkeletalMesh::new(
+        bones,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ))
+    .unwrap()
+}
+
+/// Every bone of the three-bone skeleton held at (`x`, 0, 0).
+fn all_at(name: &str, x: f32) -> ClipInfo {
+    let track = Some(vec![BoneTransform::new(ID, [x, 0.0, 0.0]); 2]);
+    ClipInfo::new(
+        BoundClip::new(name, 10.0, 2, vec![track.clone(), track.clone(), track]),
+        1.0,
+        Vec::new(),
+    )
+}
+
+#[test]
+fn per_bone_blends_mask_the_branch_and_log_a_missing_bone() {
+    let per_bone = |branches: &[&str], w: f32| {
+        tree(vec![
+            (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+            (
+                2,
+                node(
+                    "T.Split",
+                    Kind::PerBone {
+                        branches: branches.iter().map(|b| b.to_string()).collect(),
+                        child2_weight: w,
+                    },
+                    &[("Source", Some(3)), ("Target", Some(4))],
+                ),
+            ),
+            (3, node("T.Source", seq("Source", true), &[])),
+            (4, node("T.Target", seq("Target", true), &[])),
+        ])
+    };
+    let lib = library(vec![all_at("Source", 1.0), all_at("Target", 3.0)]);
+    let sk = skeleton3();
+    let xs = |t: &TreeDef| {
+        let mut d = Driver::new(t, &lib, &sk, Inputs::default()).unwrap();
+        let out = d.locals().unwrap();
+        (
+            out.iter().map(|l| l.translation[0]).collect::<Vec<_>>(),
+            d.log.missing_bones.clone(),
+        )
+    };
+    // The branch from B1 takes the target: B1 and B2 (below it), not the root.
+    let (x, missing) = xs(&per_bone(&["B1"], 1.0));
+    assert!(
+        close(x[0], 1.0, 1e-9) && close(x[1], 3.0, 1e-9) && close(x[2], 3.0, 1e-9),
+        "{x:?}"
+    );
+    assert!(missing.is_empty());
+    // At weight 0.5 the branch is half way.
+    let (x, _) = xs(&per_bone(&["B1"], 0.5));
+    assert!(
+        close(x[0], 1.0, 1e-9) && close(x[1], 2.0, 1e-9) && close(x[2], 2.0, 1e-9),
+        "{x:?}"
+    );
+    // A branch bone the skeleton lacks is logged and masks nothing; the other branch still applies.
+    let (x, missing) = xs(&per_bone(&["Nope", "B2"], 1.0));
+    assert!(
+        close(x[0], 1.0, 1e-9) && close(x[1], 1.0, 1e-9) && close(x[2], 3.0, 1e-9),
+        "{x:?}"
+    );
+    assert!(missing.contains("Nope"));
+}
+
+#[test]
+fn the_back_half_of_directional_mirrors_the_front() {
+    let quarter = std::f64::consts::FRAC_PI_2;
+    // 135 degrees right: half backward, half right. 135 degrees left: half backward, half left.
+    let w = directional(1.5 * quarter, 4);
+    assert!(
+        close(w[1], 0.5, 1e-12) && close(w[3], 0.5, 1e-12) && w[0] == 0.0 && w[2] == 0.0,
+        "{w:?}"
+    );
+    let w = directional(-1.5 * quarter, 4);
+    assert!(close(w[1], 0.5, 1e-12) && close(w[2], 0.5, 1e-12), "{w:?}");
+    // Straight back from either side, and exactly sideways.
+    assert!(close(directional(-std::f64::consts::PI, 4)[1], 1.0, 1e-12));
+    let w = directional(quarter, 4);
+    assert!(close(w[3], 1.0, 1e-12) && close(w[0], 0.0, 1e-12) && close(w[1], 0.0, 1e-12));
+}
+
+#[test]
+fn stop_on_last_frame_drops_the_blend_out() {
+    let t = tree(vec![
+        (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+        (
+            2,
+            node(
+                "T.Move",
+                Kind::SpecialMove,
+                &[("Normal", Some(3)), ("Child1", None)],
+            )
+            .with_name("WeaponAction"),
+        ),
+        (3, node("T.Idle", seq("Idle", true), &[])),
+    ]);
+    // A 1 s move (10 frames at 10 fps).
+    let lib = library(vec![
+        hold("Idle", 4, ID, [10.0, 0.0, 0.0]),
+        hold("Move", 10, ID, [30.0, 0.0, 0.0]),
+    ]);
+    let sk = skeleton();
+    let x = |d: &mut Driver<'_>| b1(&d.locals().unwrap()).translation[0];
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    d.play(
+        "WeaponAction",
+        Play::once("Move", 0.1, 0.4).with_ending(Ending::StopOnLastFrame),
+    )
+    .unwrap();
+    d.tick(0.9).unwrap();
+    // 0.1 s before the end: with a 0.4 s blend-out it would be 3/4 of the way back; StopOnLastFrame keeps it full.
+    assert!(close(x(&mut d), 30.0, 1e-9));
+    d.tick(0.2).unwrap();
+    assert!(!d.is_playing("WeaponAction"));
+    assert!(close(x(&mut d), 10.0, 1e-9));
+}
+
+#[test]
+fn rate_scale_speeds_up_sequences_and_one_shots() {
+    // A 10-frame slide at 10 fps whose RateScale is 2: the export's rate already holds it (10 fps), so the clip's own
+    // length is 2 s, and it plays 2 clip seconds per real second.
+    let mut fast = slide("Fast", 10);
+    fast.rate_scale = 2.0;
+    let t = tree(vec![
+        (1, node("T.Root", Kind::Root, &[("Child", Some(2))])),
+        (
+            2,
+            node(
+                "T.Slot",
+                Kind::Slot,
+                &[("Source", Some(3)), ("Channel 0", None)],
+            ),
+        ),
+        (3, node("T.Fast", seq("Fast", true), &[])),
+    ]);
+    let lib = library(vec![fast, hold("Shot", 10, ID, [30.0, 0.0, 0.0])]);
+    let sk = skeleton();
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    d.tick(0.1).unwrap();
+    // 0.1 real seconds: 0.2 clip seconds, sampled at 0.1 s of the export: frame 1, x = 11.
+    assert!(close(d.node_time(3).unwrap(), 0.2, 1e-12));
+    assert!(close(b1(&d.locals().unwrap()).translation[0], 11.0, 1e-9));
+    // A one-shot of a RateScale-2 clip ends after half its clip length in real time; its blend times stay real
+    // seconds (0.1 s in: half way at 0.05 s).
+    let mut shot = hold("Shot2", 10, ID, [30.0, 0.0, 0.0]);
+    shot.rate_scale = 2.0;
+    let lib2 = library(vec![hold("Idle", 4, ID, [10.0, 0.0, 0.0]), shot]);
+    let t2 = slot_tree();
+    let mut d = Driver::new(&t2, &lib2, &sk, Inputs::default()).unwrap();
+    d.play("Slot", Play::once("Shot2", 0.1, 0.0)).unwrap();
+    d.tick(0.05).unwrap();
+    assert!(close(b1(&d.locals().unwrap()).translation[0], 20.0, 1e-5));
+    d.tick(0.9).unwrap();
+    assert!(d.is_playing("Slot"));
+    d.tick(0.1).unwrap();
+    assert!(
+        !d.is_playing("Slot"),
+        "a 2 s clip at RateScale 2 ends after 1 s"
+    );
+}
+
+#[test]
+fn bad_requests_and_inputs_are_refused_and_loops_can_stop() {
+    let lib = library(vec![
+        hold("Idle", 4, ID, [10.0, 0.0, 0.0]),
+        hold("Shot", 4, ID, [30.0, 0.0, 0.0]),
+    ]);
+    let (t, sk) = (slot_tree(), skeleton());
+    let mut d = Driver::new(&t, &lib, &sk, Inputs::default()).unwrap();
+    let mut nan = Play::once("Shot", 0.1, 0.1);
+    nan.rate = f32::NAN;
+    assert!(matches!(d.play("Slot", nan), Err(EvalError::BadPlay(_))));
+    let mut zero = Play::once("Shot", 0.1, 0.1);
+    zero.rate = 0.0;
+    assert!(matches!(d.play("Slot", zero), Err(EvalError::BadPlay(_))));
+    assert!(matches!(
+        d.play("Slot", Play::once("Shot", f32::INFINITY, 0.1)),
+        Err(EvalError::BadPlay(_))
+    ));
+    // A loop runs until stopped.
+    d.play(
+        "Slot",
+        Play::once("Shot", 0.0, 0.0).with_ending(Ending::Loop),
+    )
+    .unwrap();
+    d.tick(10.0).unwrap();
+    assert!(d.is_playing("Slot"));
+    assert_eq!(d.stop("Slot"), Ok(true));
+    assert!(!d.is_playing("Slot"));
+    assert_eq!(d.stop("Slot"), Ok(false));
+    assert_eq!(d.stop("Nope"), Err(EvalError::NoSuchNode("Nope".into())));
+    // Inputs that are not finite.
+    d.inputs.speed = f32::NAN;
+    assert_eq!(d.tick(0.1), Err(EvalError::BadInput("speed")));
+    d.inputs.speed = 0.0;
+    d.inputs.direction = f32::INFINITY;
+    assert_eq!(d.tick(0.1), Err(EvalError::BadInput("direction")));
+    let inputs = Inputs {
+        direction: f32::NAN,
+        ..Inputs::default()
+    };
+    assert_eq!(
+        Driver::new(&t, &lib, &sk, inputs).err(),
+        Some(EvalError::BadInput("direction"))
+    );
+}
+
+#[test]
+fn a_node_from_another_file_is_refused() {
+    assert!(same_file("GD_A_SF", "gd_a_sf", "X.Node").is_ok());
+    assert_eq!(
+        same_file("GD_A_SF", "GD_B_SF", "X.Node"),
+        Err(TreeError::OtherFile {
+            node: "X.Node".into(),
+            file: "GD_B_SF".into(),
+            tree_file: "GD_A_SF".into()
+        })
+    );
 }

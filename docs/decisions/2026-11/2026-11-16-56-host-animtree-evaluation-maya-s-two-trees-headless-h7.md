@@ -69,6 +69,11 @@ structural, against the tree data, or against stage 1's sampler.
   - a one-shot ramps in and out linearly;
   - a missing clip gives the bind pose, except below an additive input, where it gives no change;
   - every playing sequence ticks whatever its weight;
+  - a `ScaleRate` node reached by two paths takes the scale of the first path the depth-first walk from the root
+    takes;
+  - a selection past a list's last child takes the last child;
+  - a slot's or special move's source (the pose under the one-shot) is its first linked child;
+  - `Driver::stop` ends a one-shot at once, with no blend-out;
   - a later AnimSet's clip wins over an earlier one of the same name;
   - sync groups (`SynchGroupName`, `AnimGroups`) and `bForceAlwaysSlave` are not applied;
   - the default blend time of a list with no `BlendTime` is 0.2 s.
@@ -79,15 +84,22 @@ structural, against the tree data, or against stage 1's sampler.
     times and slots. Notifies are reported only from nodes with weight after pass 0.
   - Deterministic: the same steps give the same bits, and ten ticks of 0.01 s match one of 0.1 s within 1e-9 for
     these linear rules.
-  - Clip times are in the clip's own seconds (`SequenceLength` units); the export's folded `RateScale` is divided
-    back out to sample.
+  - Clip times are in the clip's own seconds (`SequenceLength` units) and advance by `dt * Rate * RateScale`; the
+    export's folded `RateScale` is divided back out to sample. A one-shot runs at `|rate| * RateScale` clip seconds
+    per real second; its blend times are real seconds, scaled into clip seconds when it starts, and the record's
+    "shorter than blend-in plus blend-out" rule uses the play length in real seconds (`length / (|rate| *
+    RateScale)`).
+  - Requests and inputs are checked: a play rate must be finite and above 0, blend times finite, and speed,
+    direction and the default blend time finite (`EvalError::BadPlay`, `EvalError::BadInput`).
   - Root motion (`RootBoneOption`, `RootRotationOption`) and notifies are read and reported; neither is applied.
 - **Guards.**
-  - Nodes are loaded from a work list, each once by export index, at most 4,096.
+  - Nodes are loaded from a work list, each once by export index, at most 4,096. A node or child in another file
+    than the tree's is refused (`TreeError::OtherFile`): export indices are only unique within one file.
   - The finished graph is checked by one iterative depth-first walk: dangling links, cycles, and a depth budget of
     64.
   - Evaluation recursion stops at the same budget.
-  - `effective_weights` walks at most 100,000 path steps.
+  - `effective_weights` walks at most 100,000 path steps; the steps it drops are counted in the log and reported
+    (0 on the installed trees).
   - `NextControl` chains stop at 64.
 - **Synthetic proof** (`tests.rs`, invented values):
   - blend weights summing to 1 and ramping linearly, including a switch mid-blend;
@@ -148,6 +160,19 @@ structural, against the tree data, or against stage 1's sampler.
     of `Idle` at the node's time: worst bone difference 0 uu (the check fails the report above 1e-4).
   - **Third person:** standing for 1 s, then walking forward at 200 uu/s for 2 s, physics set to walking. Every pose
     finite; the farthest bone is 139-152 uu. The walk's footstep notifies are reported.
+- **Review r1 of PR #354** (one commit on top of the first).
+  - Fixed: an additive clip's untracked bones were sampled at their bind local and so added the bind pose again;
+    they are now the identity delta.
+  - Fixed: `RateScale` was missing from the advance of sequences and one-shots, so a clip with `RateScale` other
+    than 1 played that many times too slowly. `Reload_Jakobs` has `RateScale` 1, so its 61 ticks are unchanged.
+  - Added: the cross-file refusal, the request and input checks, `stop`, and the truncation count above.
+  - The installed report gives the same numbers as before both fixes. The installed `ADD_*` clips track every
+    bone (0 untracked), and the clips on the weighted paths have `RateScale` 1. The pistol's `ADD_Fire_Recoil`
+    (`RateScale` 2) and `ADD_Fire_Revolver_Recoil` (2.5) would have been affected, but no evaluated node plays them
+    yet.
+  - Tests added: the additive rule on a rotated and moved base (for a child bone and the root), the sequence node's
+    own `add_clip`, untracked bones, per-bone masking with a missing branch bone, the directional back half,
+    `StopOnLastFrame`, `RateScale` 2 for sequences and one-shots, bad requests and inputs, and the file check.
 - **Open items.**
   - The native rules of the five `NotYet` classes, the aim offset's profiles, and the skeletal controls.
   - Which child each Willow blend list picks (their selection natives).

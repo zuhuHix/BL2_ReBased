@@ -384,10 +384,11 @@ fn log_json(tree: &TreeDef, driver: &Driver<'_>) -> String {
         .collect();
     format!(
         "\"not_yet_passed_through\":[{}],\"missing_clips\":[{}],\"missing_branch_bones\":[{}],\
-         \"notifies_not_applied\":[{}]",
+         \"weight_walk_truncated\":{},\"notifies_not_applied\":[{}]",
         passed.join(","),
         missing.join(","),
         bones.join(","),
+        driver.log.weight_walk_truncated,
         notifies.join(",")
     )
 }
@@ -395,6 +396,7 @@ fn log_json(tree: &TreeDef, driver: &Driver<'_>) -> String {
 /// For each clip whose name starts `ADD_` (any case): the largest key translation (uu) and the largest key rotation
 /// (degrees, from identity) over every track, and the same for every other clip. Additive clips that hold deltas
 /// sit near zero; absolute clips hold bone offsets. A structural check of what the export's additive keys are.
+/// Untracked bones are counted: in an additive clip they are the identity delta (`eval`), not the bind pose.
 fn delta_check(lib: &ClipLibrary, names: &[&str]) -> String {
     let mut rows = Vec::new();
     let mut absolute_t: f64 = 0.0;
@@ -405,6 +407,7 @@ fn delta_check(lib: &ClipLibrary, names: &[&str]) -> String {
         };
         let mut t_max: f64 = 0.0;
         let mut r_max: f64 = 0.0;
+        let untracked = info.clip.tracks.iter().filter(|t| t.is_none()).count();
         for keys in info.clip.tracks.iter().flatten() {
             for k in keys {
                 let t = k.translation.map(f64::from);
@@ -417,9 +420,11 @@ fn delta_check(lib: &ClipLibrary, names: &[&str]) -> String {
         }
         if name.to_ascii_uppercase().starts_with("ADD_") {
             rows.push(format!(
-                "{{\"clip\":{},\"set\":{},\"max_translation\":{},\"max_rotation_degrees\":{}}}",
+                "{{\"clip\":{},\"set\":{},\"untracked_bones\":{untracked},\"rate_scale\":{},\
+                 \"max_translation\":{},\"max_rotation_degrees\":{}}}",
                 json_quote(name),
                 json_quote(set),
+                num(f64::from(info.rate_scale)),
                 num(t_max),
                 num(r_max)
             ));
@@ -464,7 +469,8 @@ pub fn run(cooked: &Path, roots: &[PathBuf]) -> Result<String, ReportError> {
     let arms = read_psk_file(&locate(roots, "SkeletalMesh3/Hands_Siren.psk")?).map_err(setup)?;
     let arms_skeleton = Skeleton::new(&arms).map_err(setup)?;
     let lib = library(&mut defs, &mut space, &arms, &HANDS_SETS, roots)?;
-    let mut d = Driver::new(&hands, &lib, &arms_skeleton, Inputs::default());
+    let mut d = Driver::new(&hands, &lib, &arms_skeleton, Inputs::default())
+        .map_err(|e| ReportError::Failed(e.to_string()))?;
     d.unsupported = Unsupported::PassFirstChild;
     let dt = 1.0 / 30.0;
     let mut rows = Vec::new();
@@ -513,6 +519,9 @@ pub fn run(cooked: &Path, roots: &[PathBuf]) -> Result<String, ReportError> {
         .find(|n| matches!(n.kind, Kind::Slot))
         .map(|n| n.path.rsplit('.').next().unwrap_or("").to_string())
         .ok_or_else(|| ReportError::Failed("no slot node".into()))?;
+    let reload_scale = lib
+        .find("Reload_Jakobs")
+        .map_or(1.0, |(_, i)| f64::from(i.rate_scale));
     d.play(&slot, Play::once("Reload_Jakobs", 0.2, 0.2))
         .map_err(|e| ReportError::Failed(e.to_string()))?;
     // Tick until the one-shot has finished (at most 20 s), keeping the range of every pose on the way.
@@ -525,11 +534,14 @@ pub fn run(cooked: &Path, roots: &[PathBuf]) -> Result<String, ReportError> {
         ticks += 1;
     }
     if d.is_playing(&slot) {
-        return Err(ReportError::Failed("the reload one-shot did not finish within 20 s".into()));
+        return Err(ReportError::Failed(
+            "the reload one-shot did not finish within 20 s".into(),
+        ));
     }
     rows.push(format!(
-        "{{\"phase\":\"reload\",\"ticks\":{ticks},\"end_time\":{},\"farthest_bone_min\":{},\
+        "{{\"phase\":\"reload\",\"ticks\":{ticks},\"clip_rate_scale\":{},\"end_time\":{},\"farthest_bone_min\":{},\
          \"farthest_bone_max\":{}}}",
+        num(reload_scale),
         num(d.elapsed()),
         num(far_min),
         num(far_max)
@@ -573,7 +585,8 @@ pub fn run(cooked: &Path, roots: &[PathBuf]) -> Result<String, ReportError> {
     let body_lib = library(&mut defs, &mut space, &body_mesh, &BODY_SETS, roots)?;
     let mut inputs = Inputs::default();
     inputs.select.insert("physics".into(), 1);
-    let mut b = Driver::new(&body, &body_lib, &body_skeleton, inputs);
+    let mut b = Driver::new(&body, &body_lib, &body_skeleton, inputs)
+        .map_err(|e| ReportError::Failed(e.to_string()))?;
     b.unsupported = Unsupported::PassFirstChild;
     let mut rows = Vec::new();
     run_ticks(&body_skeleton, &mut b, 30, dt, "standing", &mut rows)?;

@@ -11,13 +11,24 @@
 //!   shorter than their sum, unless looping; only `Loop` loops).
 //! - Fitted to the tree data (four directional nodes' stored weights): forward/side weights `1 - |a| / 90 deg` and
 //!   `|a| / 90 deg` for a direction `a` in the front half. The back half mirrors it, UNVERIFIED.
-//! - **Stand-ins, UNVERIFIED** (no record, script or C++ settles them): weights move linearly to their target over
-//!   the blend time; a blend is the weight-normalised sum of translations and the sign-aligned, normalised sum of
-//!   rotations; an additive delta is scaled from identity by its weight and applied on the base (rotation: after the
-//!   base for a child bone, before it for the root, which is one order in the export's own convention; translation:
-//!   added); a slot's one-shot ramps in and out linearly; a sequence whose clip no AnimSet has gives the bind pose;
-//!   a missing additive clip is the identity delta (no change); every playing sequence ticks whatever its weight (its notifies are reported only while it has weight); a later AnimSet's clip wins over an earlier one of the same
-//!   name; sync groups are not applied.
+//! - **Clip time.** A node's time is in the clip's own seconds (`SequenceLength` units) and advances by
+//!   `dt * Rate * RateScale` (times the play-rate scale of `ScaleRate` nodes above it); the export folds `RateScale`
+//!   into its frame rate, so it is divided back out to sample. A one-shot advances at `|rate| * RateScale` clip
+//!   seconds per real second; its blend times are real seconds, scaled into clip seconds when it starts.
+//! - **Stand-ins, UNVERIFIED** (no record, script or C++ settles them):
+//!   - weights move linearly to their target over the blend time;
+//!   - a blend is the weight-normalised sum of translations and the sign-aligned, normalised sum of rotations;
+//!   - an additive delta is scaled from identity by its weight and applied on the base (rotation: after the base
+//!     for a child bone, before it for the root, which is one order in the export's own convention; translation:
+//!     added); a missing additive clip, and every bone an additive clip does not track, is the identity delta;
+//!   - a slot's one-shot ramps in and out linearly; [`Driver::stop`] ends it at once, with no blend-out;
+//!   - a slot's or special move's source is its first linked child;
+//!   - a selection past a list's last child takes the last child;
+//!   - a `ScaleRate` node reached by two paths takes the first path's scale (depth-first from the root);
+//!   - a sequence whose clip no AnimSet has gives the bind pose;
+//!   - every playing sequence ticks whatever its weight (its notifies are reported only while it has weight);
+//!   - a later AnimSet's clip wins over an earlier one of the same name;
+//!   - sync groups are not applied.
 
 use std::fmt;
 
@@ -193,6 +204,10 @@ pub enum EvalError {
     NoSuchClip(String),
     /// `dt` is negative or not finite.
     BadStep,
+    /// A play request's rate is not finite and above 0, or a blend time is not finite.
+    BadPlay(String),
+    /// An input is not finite (the name of the input).
+    BadInput(&'static str),
 }
 
 impl fmt::Display for EvalError {
@@ -204,6 +219,8 @@ impl fmt::Display for EvalError {
             EvalError::NoSuchNode(n) => write!(f, "no node {n} of that kind"),
             EvalError::NoSuchClip(c) => write!(f, "no AnimSet has clip {c}"),
             EvalError::BadStep => write!(f, "the time step is negative or not finite"),
+            EvalError::BadPlay(why) => write!(f, "bad play request: {why}"),
+            EvalError::BadInput(name) => write!(f, "input {name} is not finite"),
         }
     }
 }
@@ -224,7 +241,8 @@ impl From<AnimError> for EvalError {
     }
 }
 
-/// A one-shot in progress.
+/// A one-shot in progress. Every time here is in the clip's own seconds: the request's blend times (real seconds)
+/// are multiplied by the clip's speed (`|rate| * RateScale`) when it starts.
 #[derive(Debug, Clone, PartialEq)]
 struct Shot {
     play: Play,
@@ -233,6 +251,8 @@ struct Shot {
     length: f64,
     blend_in: f64,
     blend_out: f64,
+    /// Clip seconds per real second.
+    speed: f64,
 }
 
 impl Shot {
@@ -292,6 +312,9 @@ pub struct EvalLog {
     pub missing_clips: DetSet<String>,
     /// Branch bones of per-bone blends that the skeleton does not have.
     pub missing_bones: DetSet<String>,
+    /// Path steps [`Driver::effective_weights`] dropped at its [`MAX_WEIGHT_VISITS`] budget, summed over ticks
+    /// (0 on the installed trees). Notify relevance is then incomplete; reports show the count.
+    pub weight_walk_truncated: u64,
     pub notifies: Vec<NotifyEvent>,
 }
 
@@ -309,13 +332,15 @@ pub struct Driver<'a> {
 
 impl<'a> Driver<'a> {
     /// A driver with every node at its stored state: sequences at their `CurrentTime`, playing as `bPlaying` (or
-    /// `bAutoStart`) says, lists on their selected child (input 0 unless set), weights at their targets.
+    /// `bAutoStart`) says, lists on their selected child (input 0 unless set), weights at their targets. Refuses
+    /// inputs that are not finite.
     pub fn new(
         tree: &'a TreeDef,
         clips: &'a ClipLibrary,
         skeleton: &'a Skeleton,
         inputs: Inputs,
-    ) -> Self {
+    ) -> Result<Self, EvalError> {
+        check_inputs(&inputs)?;
         let mut d = Driver {
             tree,
             clips,
@@ -345,7 +370,7 @@ impl<'a> Driver<'a> {
             }
             d.state.insert(*id, s);
         }
-        d
+        Ok(d)
     }
 
     /// A sequence node's time (its clip's own seconds), or `None` for another kind of node.
@@ -382,15 +407,29 @@ impl<'a> Driver<'a> {
             .clips
             .find(&play.clip)
             .ok_or_else(|| EvalError::NoSuchClip(play.clip.clone()))?;
+        if !(play.rate.is_finite() && play.rate > 0.0) {
+            return Err(EvalError::BadPlay(format!(
+                "rate of {} must be finite and above 0",
+                play.clip
+            )));
+        }
+        if !(play.blend_in.is_finite() && play.blend_out.is_finite()) {
+            return Err(EvalError::BadPlay(format!(
+                "blend times of {} must be finite",
+                play.clip
+            )));
+        }
         let length = info.length();
-        let rate = f64::from(play.rate).abs();
+        // Clip seconds per real second; the blend times below are real seconds until they are scaled by it.
+        let speed = f64::from(play.rate) * f64::from(info.rate_scale);
         let mut blend_in = f64::from(play.blend_in).max(0.0);
         let mut blend_out = f64::from(play.blend_out).max(0.0);
         if special {
             if matches!(play.ending, Ending::StopOnLastFrame | Ending::OnAnimEnd) {
                 blend_out = 0.0;
             }
-            if play.ending != Ending::Loop && rate > 0.0 && length / rate < blend_in + blend_out {
+            // The record's rule, on the play length in real seconds.
+            if play.ending != Ending::Loop && length / speed < blend_in + blend_out {
                 blend_in = 0.0;
                 blend_out = 0.0;
             }
@@ -400,11 +439,32 @@ impl<'a> Driver<'a> {
                 play,
                 time: 0.0,
                 length,
-                blend_in,
-                blend_out,
+                blend_in: blend_in * speed,
+                blend_out: blend_out * speed,
+                speed,
             });
         }
         Ok(())
+    }
+
+    /// Stops the one-shot on the named slot or special-move node at once (no blend-out: a stand-in), so a `Loop`
+    /// shot can end. `Ok(false)` when nothing was playing there.
+    pub fn stop(&mut self, node_name: &str) -> Result<bool, EvalError> {
+        let id = self
+            .tree
+            .nodes
+            .iter()
+            .find_map(|(id, n)| {
+                let short = n.path.rsplit('.').next().unwrap_or(&n.path);
+                let named = n.name == node_name || short == node_name;
+                (named && matches!(n.kind, Kind::Slot | Kind::SpecialMove)).then_some(*id)
+            })
+            .ok_or_else(|| EvalError::NoSuchNode(node_name.into()))?;
+        Ok(self
+            .state
+            .get_mut(&id)
+            .and_then(|s| s.shot.take())
+            .is_some())
     }
 
     /// Whether a one-shot is playing on the named node.
@@ -459,6 +519,7 @@ impl<'a> Driver<'a> {
         if !dt.is_finite() || dt < 0.0 {
             return Err(EvalError::BadStep);
         }
+        check_inputs(&self.inputs)?;
         self.refresh_rate_scales();
         let ids: Vec<NodeId> = self.tree.nodes.keys().copied().collect();
         // Pass 0 moves the blend weights; pass 1 advances clip times, with the notify relevance taken from the
@@ -466,7 +527,9 @@ impl<'a> Driver<'a> {
         let mut weights = DetMap::new();
         for pass in 0..2 {
             if pass == 1 {
-                weights = self.effective_weights();
+                let (w, dropped) = self.weights_counted();
+                weights = w;
+                self.log.weight_walk_truncated += dropped;
             }
             for &id in &ids {
                 let Some(node) = self.tree.nodes.get(&id) else {
@@ -520,7 +583,12 @@ impl<'a> Driver<'a> {
                         {
                             let before = s.time;
                             let length = info.length();
-                            let mut after = before + dt * f64::from(p.rate) * s.rate_scale;
+                            // The clip's own seconds advance by Rate times its RateScale (and the play-rate
+                            // scale of ScaleRate nodes above it).
+                            let mut after = before
+                                + dt * f64::from(p.rate)
+                                    * f64::from(info.rate_scale)
+                                    * s.rate_scale;
                             let mut wrapped = false;
                             if length > 0.0 {
                                 if p.looping {
@@ -542,7 +610,7 @@ impl<'a> Driver<'a> {
                             && let Some((_, info)) = clips.find(&shot.play.clip)
                         {
                             let before = shot.time;
-                            let mut after = before + dt * f64::from(shot.play.rate).abs();
+                            let mut after = before + dt * shot.speed;
                             let mut wrapped = false;
                             if shot.play.ending == Ending::Loop && shot.length > 0.0 {
                                 wrapped = after >= shot.length;
@@ -604,12 +672,22 @@ impl<'a> Driver<'a> {
     /// child weights along the path (a `NotYet` node passes its weight to its first child, as evaluation does
     /// under [`Unsupported::PassFirstChild`]). Walks at most [`MAX_WEIGHT_VISITS`] path steps.
     pub fn effective_weights(&self) -> DetMap<NodeId, f64> {
+        self.weights_counted().0
+    }
+
+    /// [`Driver::effective_weights`] and how many path steps it dropped at the budget.
+    fn weights_counted(&self) -> (DetMap<NodeId, f64>, u64) {
         let mut out: DetMap<NodeId, f64> = DetMap::new();
         let mut stack = vec![(self.tree.root, 1.0f64)];
         let mut visits = 0usize;
+        let mut dropped = 0u64;
         while let Some((id, w)) = stack.pop() {
             visits += 1;
-            if visits > MAX_WEIGHT_VISITS || w <= 0.0 {
+            if visits > MAX_WEIGHT_VISITS {
+                dropped += 1;
+                continue;
+            }
+            if w <= 0.0 {
                 continue;
             }
             *out.entry(id).or_insert(0.0) += w;
@@ -641,7 +719,7 @@ impl<'a> Driver<'a> {
                 Kind::Sequence(_) => {}
             }
         }
-        out
+        (out, dropped)
     }
 
     /// The pose now: one local transform per skeleton bone.
@@ -844,7 +922,20 @@ impl<'a> Driver<'a> {
         };
         let t = time / f64::from(info.rate_scale);
         let wrap = if looping { Wrap::Loop } else { Wrap::Clamp };
-        Ok(self.skeleton.sample(&info.clip, t, wrap)?.locals)
+        let mut locals = self.skeleton.sample(&info.clip, t, wrap)?.locals;
+        if additive {
+            // The sampler keeps the bind local for a bone the clip does not track; as a delta that would add the
+            // bind pose again. An untracked bone of an additive clip changes nothing.
+            for (local, track) in locals.iter_mut().zip(&info.clip.tracks) {
+                if track.is_none() {
+                    *local = Local {
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        translation: [0.0; 3],
+                    };
+                }
+            }
+        }
+        Ok(locals)
     }
 
     /// `base` with `delta` applied at weight `w` (stand-in, module notes).
@@ -890,6 +981,20 @@ impl<'a> Driver<'a> {
         }
         mask
     }
+}
+
+/// Refuses inputs that would carry NaN or infinity into weights, rates or blend times.
+fn check_inputs(inputs: &Inputs) -> Result<(), EvalError> {
+    if !inputs.speed.is_finite() {
+        return Err(EvalError::BadInput("speed"));
+    }
+    if !inputs.direction.is_finite() {
+        return Err(EvalError::BadInput("direction"));
+    }
+    if !(inputs.default_blend_time.is_finite() && inputs.default_blend_time >= 0.0) {
+        return Err(EvalError::BadInput("default_blend_time"));
+    }
+    Ok(())
 }
 
 /// Memoised poses by (node, additive context).
