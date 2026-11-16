@@ -379,7 +379,7 @@ fn a_start_that_finishes_at_once_is_bounded() {
         w.script.borrow_mut().start_finishes = true;
         let err = brain_at(&mut w, &mut h, 0.25).unwrap_err();
         let text = err.to_string();
-        assert!(text.contains("ToyAction") && text.contains("node 2") && text.contains("finished more than"), "{text}");
+        assert!(text.contains("Finish calls") && text.contains("the last from ToyAction (node 2)"), "{text}");
         let starts = w.script.borrow().log.iter().filter(|l| *l == "Start Patrol").count();
         assert!(starts > 1 && starts < 30, "{mode:?}: {starts} starts");
     }
@@ -424,6 +424,38 @@ fn a_failed_build_is_kept() {
         assert_eq!(again, first, "{mode:?}");
         assert_eq!(w.e.vm.space.heap.len(), objects, "{mode:?}: nothing copied again");
         assert!(w.script.borrow().log.is_empty(), "no Init raised");
+    }
+}
+
+/// The setup checks are not kept (review r2): a mind whose AIDef is unbound at its first tick builds once it is bound;
+/// a failure kept for one AIDef is not answered for another.
+#[test]
+fn a_setup_failure_is_not_kept() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        let vm = &mut w.e.vm;
+        let good = ow_combat::hit::access::array(vm, w.e.aidef, "NodeList").unwrap();
+        set(vm, w.e.component, "AIDef", Value::Object(None)).unwrap();
+        let first = brain_at(&mut w, &mut h, 0.25).unwrap_err();
+        assert!(matches!(&first, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {first}");
+        set(&mut w.e.vm, w.e.component, "AIDef", Value::Object(Some(w.e.aidef))).unwrap();
+        let built = brain_at(&mut w, &mut h, 0.3125).unwrap();
+        assert!(built.built, "{mode:?}: built once the AIDef is bound");
+        // A kept failure, then another AIDef: built for that one.
+        let mut w = world(mode);
+        let vm = &mut w.e.vm;
+        let mut bad = good.clone();
+        ow_combat::hit::access::set_field(vm, &mut bad[2], "Type", Value::Byte(9));
+        set(vm, w.e.aidef, "NodeList", Value::Array(Rc::new(bad))).unwrap();
+        let mut h = host(&w.e, 1.0);
+        assert!(brain_at(&mut w, &mut h, 0.25).is_err());
+        let vm = &mut w.e.vm;
+        let class = vm.space.heap.get(w.e.aidef).unwrap().class;
+        let other = make(vm, class, "OtherDef");
+        set(vm, other, "NodeList", Value::Array(Rc::new(good.clone()))).unwrap();
+        set(vm, w.e.component, "AIDef", Value::Object(Some(other))).unwrap();
+        assert!(brain_at(&mut w, &mut h, 0.3125).unwrap().built, "{mode:?}: another AIDef is built");
     }
 }
 

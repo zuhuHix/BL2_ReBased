@@ -40,7 +40,8 @@ replaces the actor only when the pawn is set, so such a controller is now tested
   event the class does not have is an error, not a silent skip, and so is one that declares other parameters than
   the adapter passes. `Init`, `Start`, `Stop`, `Update` and `CanRun` declare none in the installed packages
   (`ActionSequence` and all its overrides, read with `research/script_disasm.py`); action script that needs the frame
-  time reads `WorldInfo.DeltaSeconds`, which is the world's to set.
+  time reads `WorldInfo.DeltaSeconds`, which is the world's to set. Nothing writes it yet (there is no map load),
+  so such script reads the class default: the frame time it sees is UNVERIFIED until the world sets it.
   - Natives bound: `ActionSequence.Finish` (queued, applied as soon as the action's script returns: the note reads
     the re-selection as happening inside `Finish`; UNVERIFIED either way), `TriggerBehavior` (through the behavior
     kernel's consumer routing, decision 2026-11-16-50), the component's `Hold` / `Release` / `OnHold` and their
@@ -66,12 +67,15 @@ replaces the actor only when the pawn is set, so such a controller is now tested
 - **Review r1 of this PR.**
   - After `Stop`, the engine's "back to the default state" call is not read (NATIVE_AI_AWARENESS.md, "Not read
     yet"). An action that `Stop` leaves in its rest state (its state once built and initialised) needs nothing more;
-    one left in another state is `NotYet`, and the tree is left as it was.
+    one left in another state is `NotYet`, and the running state is left as it was.
   - Queued `Finish` calls are applied after the target events too, so an action finished by an event handler gets
-    no `Update`. One application runs at most four per tree node, then stops with an error naming the action (a
-    Rust-only bound: a `Start` that calls `Finish` at once with no `TimedReset` would never settle).
-  - A brain that fails to build is kept with its error, which later ticks answer again without copying the
-    archetypes or raising `Init` again.
+    no `Update`. One application runs at most four per tree node, then stops with an error naming the action of
+    the last call (a Rust-only bound: a `Start` that calls `Finish` at once with no `TimedReset` would never
+    settle).
+  - (Review r2.) The mind's pawn, component and `AIDef` are checked on every tick until the build succeeds, and
+    their errors are not kept: a mind ticked before possession or before its `AIDef` is bound builds once they are
+    there. A brain that fails to build after that is kept with its error and the pawn and `AIDef` it was made for,
+    which later ticks answer again while both are the same, without copying the archetypes or raising `Init` again.
   - With `bStopIfCannotRun`, the running leaf's `CanRun` is asked once per update; the eligibility test reuses that
     answer, and its failure name.
 - **Review r2 of part 1, folded in.**
@@ -81,11 +85,11 @@ replaces the actor only when the pawn is set, so such a controller is now tested
 - **Verified.**
   - Synthetic tests (invented values only): 11 on the tree (a beast-shaped invented tree: priority order, timed start
     and reset, random weights and loop counts, sequences, the failure block, the state update, `bStopIfCannotRun`,
-    the timed fail, the `NotYet` answers, one `CanRun` per update), 8 on the adapter in both parity modes (an
+    the timed fail, the `NotYet` answers, one `CanRun` per update), 9 on the adapter in both parity modes (an
     invented action class whose events are script run by the VM: the brain perceives, chooses and starts, the target
     event order, `Finish` switching actions; holds; movement to the host and the unread latent moves; the `Finish`
-    bound; the rest state after `Stop`; a failed build kept; an event's declared parameters; a `Finish` from an event
-    before `Update`). `ow-ai` lib tests: 49 pass.
+    bound; the rest state after `Stop`; a failed build kept, a setup failure not kept; an event's declared
+    parameters; a `Finish` from an event before `Update`). `ow-ai` lib tests: 50 pass.
   - Installed headless run (ignored test, Reference mode, a stock regular bullymong and the player, the live iterator
     weights as in part 1, an open-field `Locomotion` stand-in, frames of 1/16 s), at four placements: 3,000 uu in
     front, 500 in front, 800 behind with no exposure, 6,000 in front. **All UNVERIFIED.** Rerun after review r1:
