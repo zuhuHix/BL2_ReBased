@@ -11,26 +11,39 @@ check, decoder or reader changed, and no dependency was added.
   `find_export`), as the C++ `findGlobal` does. The misses are cached per path, but many different paths share the same
   candidate files, so the same files were loaded again and again. A cache in `ow-host` could not help, because the paths
   differ.
-- **The change.** The store keeps, per candidate file it has read (by scan position, until the next `scan`), the file's
-  export paths, folded, each with the first export that has it (`FileExports`). Building stops at the first export
-  whose path cannot be built, so a lookup answers exactly where `Package::find_export` gives `Ok(Some)`. An error past
-  that point, and no match, are both "not here", as `try_file` counts them. A later lookup skips a file whose paths do
-  not hold its path, without loading it.
-  - A file that failed to load is remembered as no candidate.
-  - The file that holds the path is still returned as a fresh load, as the C++ returns its fresh candidate: on the
-    first read the load just made, later a new `try_file`.
+- **The change.** The store keeps, per candidate file it has read (by scan position, until the next `scan`), a 64-bit
+  hash of each folded export path, up to the first export whose path cannot be built (`find_export` fails there unless
+  an earlier export matched), and the file's size and modification time when it was read (`FileExports`). A later
+  lookup skips a file whose hashes do not hold its path, without loading it.
+  - A hash that holds the path is confirmed by loading the file afresh (`try_file`), and that load is returned, as the
+    C++ returns its fresh candidate; a hash collision therefore costs one load and cannot change an answer. On the
+    first read of a file, the load just made is searched with `find_export` itself. Only hashes are kept (review r1 of
+    PR #362, M2: the first round kept every path as a string).
+  - A file that fails to load is not remembered: it is tried again on the next lookup, as the C++ tries it on every
+    lookup (review r1, M1).
+  - A file whose size or modification time differs from when it was read is read again (review r1, M1).
   - The C++ check oracle (`ResolveCheck`, the full scan on every lookup) is unchanged and still runs `try_file` on
     every file.
-- **What could differ from the C++.** Only a file that changes on disk during the store's life: the store would skip
-  it by its old paths. The store's path cache (`load_path`) already assumes files do not change. The candidate lists,
-  the scan order and the order of files tried are unchanged.
-- **Verified (automated).** New test `the_global_fallback_reads_each_candidate_file_once` (invented packages, five
-  candidate files under one root, one of them unreadable): seven lookups (three matches in three files, a miss, a path
-  held by a file read before, a second miss, a cached match). Each answer agrees with the check oracle's full scan
-  (six `OWRESOLVECHECK same` lines, no disagreement), and the fallback's file loads are counted after each lookup:
-  2, 4, 5, 5, 6, 6, 6. That is each file read once (five reads), plus one fresh load of a file that was read before
-  and holds a later path. The old fallback reloaded every candidate on each lookup. The existing global-fallback tests
-  and `tests/global_resolve_test.py` (ctest) pass unchanged.
+- **What could differ from the C++.** The candidate lists, the scan order and the order of files tried are unchanged.
+  The C++ loads every candidate afresh on every lookup, so it sees any change to a file at once, and since the review
+  fix of PR #299 (`the_global_answer_is_the_package_it_matched`) so does this store's answer. One case remains: a file
+  rewritten during the store's life with its size and modification time both unchanged is skipped by its old paths,
+  so a path it gained is not found there. (The first round said the store's path cache already assumes files do not
+  change; that was wrong as a defence, since the fallback was made robust to rewrites, and is withdrawn.)
+- **Verified (automated).** Invented packages, the check oracle on in every test, each lookup's answer agreeing with
+  its full scan:
+  - `the_global_fallback_reads_each_candidate_file_once`: five candidate files under one root, one unreadable; seven
+    lookups (three matches in three files, a miss, a path held by a file read before, a second miss, a cached match).
+    Loads after each lookup 2, 4, 6, 7, 8, 9, 9, per file: each readable file once, the one with a later match once
+    more (its fresh load), and the unreadable file on each of the four lookups that reach it. `scan` then empties the
+    cache.
+  - `a_failed_or_rewritten_candidate_is_read_again`: a file that failed to load is found holding a path once it
+    loads, and a file read before is found holding a path it gained by a rewrite (checked to fail with the size and
+    time check removed).
+  - `the_summary_follows_find_export_past_a_broken_path_and_keeps_scan_order`: a path after an export whose path
+    cannot be built is not found there, one before it is; of two files whose summaries are both cached, the first in
+    scan order answers.
+  - The existing global-fallback tests and `tests/global_resolve_test.py` (ctest) pass unchanged.
 - **Verified (local, installed game, pc-hummer; outputs under ignored `local/p2/fix-pkg-lookup/` only).** A local
   driver ran `Scene::load` on `Sanctuary_P` (Off) and then H8's `MaterialLibrary::read`. It was built twice on H8's
   tree (`feature/rust-h8-materials` cb81a1d, whose `ow-package` equals `main`'s): once as it is, once with this
@@ -39,9 +52,13 @@ check, decoder or reader changed, and no dependency was added.
   - Material read: 86.2 / 88.3 s before, 5.7 / 5.5 s after.
   - Both read 381 materials and 136 textures that only cooked lists name, over 4,446 placements. The full `Debug`
     dump of the library (materials and textures, 1,385,899 bytes) is byte-identical before and after.
+  - **Memory** (review r1, M2; one run each, the same driver on `origin/main` 60413ba, H8 landed, with three
+    `store.rs`; peak working set polled every 250 ms): before, 3,227 MiB (material read 86.6 s); the first round's
+    string summaries, 3,393 MiB (5.7 s); the hashes, 3,143 MiB (5.5 s). The three libraries are byte-identical.
 - **Gates** (pc-hummer, on `origin/main` 60413ba, with H8-MATERIALS landed):
   - `cargo build --workspace --locked`: clean.
-  - `cargo test --workspace --locked`: 1,690 passed, 0 failed, 25 ignored.
+  - `cargo test --workspace --locked`: 1,690 passed, 0 failed, 25 ignored; 1,692, 0, 25 after review r1 (three tests
+    added, one changed).
   - `cargo build --release -p ow-cli --locked`: clean.
   - `tests/crate_edges_test.py`: OK.
   - `tools/decisions_index.py --check --baseline origin/main`: OK, 1 added.
