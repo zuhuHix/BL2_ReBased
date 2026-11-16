@@ -310,7 +310,7 @@ fn balance(e: BalanceError) -> MissionError {
 }
 
 /// An error's text with its causes (the C++ `what()` of a rethrown exception).
-fn error_text(error: &dyn std::error::Error) -> String {
+pub(crate) fn error_text(error: &dyn std::error::Error) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
     while let Some(c) = cause {
@@ -334,7 +334,7 @@ fn to_vm(e: MissionError, function: &str) -> VmError {
 
 /// The definition store's object for a stand-in of a package export (through the identity policy, as every path is
 /// one object); any other value as it is.
-fn store_object(vm: &mut Vm, v: &Value) -> Result<Value, MissionError> {
+pub(crate) fn store_object(vm: &mut Vm, v: &Value) -> Result<Value, MissionError> {
     let Value::Object(Some(o)) = v else {
         return Ok(v.clone());
     };
@@ -424,7 +424,7 @@ fn new_object(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
 
 /// A copy of export `index` of `package` decoded from `prefix` on (the C++ `instantiateExport`; module documentation,
 /// "The director is a copy"): a new object of the export's class with its tags, references as stand-ins.
-fn instantiate_copy(
+pub(crate) fn instantiate_copy(
     vm: &mut Vm,
     package: PackageId,
     index: i32,

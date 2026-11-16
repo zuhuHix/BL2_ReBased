@@ -22,6 +22,7 @@ use ow_package::testkit::PackageBuilder;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT, FunctionSpec, Param, ScriptToy};
 use ow_package::testkit::Export;
+use ow_object::ids::PropAddr;
 use ow_vm::api::{NativePack, Vm};
 use ow_world::world::World;
 
@@ -30,7 +31,7 @@ use crate::tracker::Status;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-const KINDS: [&str; 9] = ["Byte", "Object", "Bool", "Float", "Array", "Struct", "Name", "Int", "Str"];
+const KINDS: [&str; 10] = ["Byte", "Object", "Bool", "Float", "Array", "Struct", "Name", "Int", "Str", "Class"];
 const NATIVE: u32 = 0x400 | 0x20000;
 const STATIC: u32 = 0x2000;
 const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
@@ -125,6 +126,45 @@ fn engine() -> Vec<u8> {
     enum_export(&mut t, targetable, "EChangeStatus", &["CHANGE_Toggle", "CHANGE_Enable", "CHANGE_Disable"]);
     let remote = t.class("Behavior_RemoteEvent", object);
     t.prop("Name", remote, "EventName", 0, 0);
+    // The health pool stand-in's vocabulary: the pool, its manager, the pawn's reference to it, and the curve's
+    // definition class (every evaluation step present and off).
+    let pool = t.class("ResourcePool", object);
+    for name in ["Definition", "AssociatedProvider"] {
+        t.prop("Object", pool, name, 0, object);
+    }
+    for name in ["bIsAuthoritative", "bCreatedAndNotModified"] {
+        t.prop("Bool", pool, name, 0, 0);
+    }
+    for name in [
+        "MaxValueBaseValue", "MaxValue", "MinValueBaseValue", "MinValue", "CurrentValue", "LastCurrentValue",
+        "LastMinValue", "LastMaxValue",
+    ] {
+        t.prop("Float", pool, name, 0, 0);
+    }
+    t.prop("Byte", pool, "PoolGUID", 0, 0);
+    let manager = t.class("ResourcePoolManager", object);
+    toy_array_of(&mut t, manager, "ResourcePools", "Object", object);
+    let reference = toy_struct(&mut t, actor, "ResourcePoolReference", None);
+    t.prop("Object", reference, "PoolManager", 0, object);
+    t.prop("Byte", reference, "PoolIndexInManager", 0, 0);
+    t.prop("Byte", reference, "PoolGUID", 0, 0);
+    t.prop("Object", reference, "Data", 0, object);
+    t.prop("Struct", pawn, "HealthPool", 0, reference);
+    let definition = t.class("AttributeInitializationDefinition", object);
+    for (name, flags) in [
+        ("ValueFormula", &["bEnabled"][..]),
+        ("ConditionalInitialization", &["bEnabled"][..]),
+        ("RandomVariance", &["bEnabled"][..]),
+        ("RangeRestriction", &["bEnableMinValueRestriction", "bEnableMaxValueRestriction"][..]),
+    ] {
+        let st = toy_struct(&mut t, definition, &format!("Toy{name}"), None);
+        for flag in flags {
+            t.prop("Bool", st, flag, 0, 0);
+        }
+        t.prop("Struct", definition, name, 0, st);
+    }
+    t.prop("Byte", definition, "BaseValueMode", 0, 0);
+    t.prop("Byte", definition, "RoundingMode", 0, 0);
     t.build()
 }
 
@@ -390,6 +430,17 @@ fn willowgame() -> Vec<u8> {
     t.prop("Struct", condition, "ObjectiveStatesToLinkTo", 0, objective_states);
     toy_array_of(&mut t, condition, "ObjectiveSetRestrictions", "Object", object);
     t.class("ToyOtherEnableCondition", object);
+    // The player's class and its health pool data (the stand-in's inputs).
+    let resource = t.class("ResourceDefinition", object);
+    let mut class_tail = object.to_le_bytes().to_vec();
+    class_tail.extend(object.to_le_bytes());
+    t.prop_tail("Class", resource, "DefaultResourcePoolClass", 0, &class_tail);
+    let pool_definition = t.class("ResourcePoolDefinition", object);
+    t.prop("Object", pool_definition, "Resource", 0, object);
+    t.prop("Struct", pool_definition, "BaseMaxValue", 0, aid);
+    t.prop("Float", pool_definition, "BaseMinValue", 0, 0);
+    let player_class = t.class("PlayerClassDefinition", object);
+    t.prop("Object", player_class, "HealthPoolDefinition", 0, object);
     let status = t.class("Behavior_AttemptStatusEffect", object);
     t.prop("Object", status, "StatusEffect", 0, object);
     let willow_pawn = t.class("WillowPawn", engine_pawn);
@@ -511,8 +562,10 @@ fn change_behavior(p: &mut PackageBuilder, outer: i32, name: &str, leaf: &str, s
 }
 
 /// `Startup`: `ToyMission` (set `SetA` {`RockPaper_GoToRange`} that completes it; its provider's `SetA` activation
-/// enables the dummy's `MissionAsked` and asks the same of a provider `Elsewhere`), `Other`, and the globals.
-fn startup() -> Vec<u8> {
+/// enables the dummy's `MissionAsked` and asks the same of a provider `Elsewhere`), `Other`, and the globals. With
+/// `health`, also the player's class at the stock path with a health pool definition (base maximum 100, invented),
+/// its resource naming `Engine.ResourcePool`, and an experience curve whose every step is off (R(n) = 0).
+fn startup(health: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let c = class_import(&mut p, "WillowGame", "MissionDefinition");
@@ -572,6 +625,49 @@ fn startup() -> Vec<u8> {
     payload.extend_from_slice(&none);
     let globals = p.add_export(c, "Globals", payload);
     p.set_outer(globals, general);
+    if health {
+        let mut empty = 0i32.to_le_bytes().to_vec();
+        empty.extend_from_slice(&none);
+        let chain = |p: &mut PackageBuilder, names: &[&str]| -> i32 {
+            let mut outer = 0;
+            for n in names {
+                let r = p.add_export(package_class, n, empty.clone());
+                if outer != 0 {
+                    p.set_outer(r, outer);
+                }
+                outer = r;
+            }
+            outer
+        };
+        let formulas = chain(&mut p, &["GD_Balance_Experience", "Formulas"]);
+        let c = class_import(&mut p, "Engine", "AttributeInitializationDefinition");
+        let curve = p.add_export(c, "Init_ExperienceRequiredForLevel", empty.clone());
+        p.set_outer(curve, formulas);
+        let character = chain(&mut p, &["GD_Siren", "Character"]);
+        let pool_class = class_import(&mut p, "Engine", "ResourcePool");
+        let c = class_import(&mut p, "WillowGame", "ResourceDefinition");
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend(p.tag("DefaultResourcePoolClass", "ClassProperty", &pool_class.to_le_bytes()));
+        payload.extend_from_slice(&none);
+        let resource = p.add_export(c, "Health", payload);
+        p.set_outer(resource, character);
+        let c = class_import(&mut p, "WillowGame", "ResourcePoolDefinition");
+        let mut base = p.float_tag("BaseValueConstant", 100.0);
+        base.extend(p.float_tag("BaseValueScaleConstant", 1.0));
+        base.extend_from_slice(&none);
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend(p.object_tag("Resource", resource));
+        payload.extend(p.struct_tag("BaseMaxValue", "AttributeInitializationData", &base));
+        payload.extend_from_slice(&none);
+        let pool = p.add_export(c, "HealthPool", payload);
+        p.set_outer(pool, character);
+        let c = class_import(&mut p, "WillowGame", "PlayerClassDefinition");
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend(p.object_tag("HealthPoolDefinition", pool));
+        payload.extend_from_slice(&none);
+        let class = p.add_export(c, "CharClass_Siren", payload);
+        p.set_outer(class, character);
+    }
     p.build()
 }
 
@@ -584,6 +680,8 @@ struct Map {
     hold: bool,
     /// An OnSpawned condition of another class on sequence `Odd`.
     odd_condition: bool,
+    /// The player's class and its health pool data in `Startup` ([`startup`]).
+    health: bool,
 }
 
 /// `Sanctuary_Dynamic`: the dummy's provider at the stock path. Sequences (each enabled / disabled event raises the
@@ -781,7 +879,7 @@ fn build(map: Map, mode: ParityMode) -> (World, PathBuf) {
         ("Engine.upk".into(), engine()),
         ("GearboxFramework.upk".into(), gearbox()),
         ("WillowGame.upk".into(), willowgame()),
-        ("Startup.upk".into(), startup()),
+        ("Startup.upk".into(), startup(map.health)),
         ("Sanctuary_Dynamic.upk".into(), dynamic(map)),
     ];
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
@@ -1012,7 +1110,8 @@ fn a_hit_without_a_damage_raises_the_event() {
     assert!(events.iter().any(|e| e.kind == HostKind::StatusEffect && e.a == "Other"));
 }
 
-/// The player's hit through the stock pawn chain is lane W6-COMBAT's: `NotYet` with a pawn and a damage, in both
+/// The player's hit through the stock pawn chain is not wired into the slice yet (W6-COMBAT-RUN2): `NotYet` with a
+/// pawn and a damage, in both
 /// modes; without a pawn the event is raised directly, as the C++.
 #[test]
 fn the_pawn_hit_chain_is_not_yet() {
@@ -1028,7 +1127,7 @@ fn the_pawn_hit_chain_is_not_yet() {
         assert!(env.slice.dummy_pawn().is_some(), "the archetype gives a pawn");
         let s = env.slice.clone();
         let e = s.damage_dummy(env.vm(), INCENDIARY_IMPACT, "", 10.0).unwrap_err();
-        assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::LayerAbsent(_))), "{e:?}");
+        assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotPorted)), "{e:?}");
         assert!(!env.slice.not_yet().is_empty());
     }
     let mut env = Env::off();
@@ -1053,11 +1152,11 @@ fn the_ai_hold_stand_in_by_mode() {
     env.spawn();
     let s = env.slice.clone();
     let e = s.hit_dummy(env.vm(), false).unwrap_err();
-    assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::LayerAbsent(_))), "{e:?}");
+    assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotPorted)), "{e:?}");
 }
 
-/// The health pool stand-in: `health:` is `NotYet` in Off mode; in Reference mode it is the C++ (no class data here,
-/// so no pool and no health events).
+/// The health pool stand-in: `health:` is `NotYet` in Off mode; in Reference mode it is the C++ (no class data in the
+/// plain fixture, so no pool and no health events).
 #[test]
 fn the_health_stand_in_by_mode() {
     let mut env = Env::off();
@@ -1068,6 +1167,81 @@ fn the_health_stand_in_by_mode() {
     let s = env.slice.clone();
     s.set_player_health(env.vm(), 20.0).unwrap();
     assert!(env.slice.drain().is_empty());
+}
+
+/// The value of int property `name` of `o` (test helper).
+fn int_of(vm: &Vm, o: ObjRef, name: &str) -> i32 {
+    match prop(&vm.space, o, name).unwrap() {
+        Some(Value::Int(i)) => i,
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+/// A stand-in for the installed `ExpLevelUp`, which the toy controller's empty script lacks: one level and one skill
+/// point on the controller's replication info (invented; the bridge's own tests cover the script path).
+fn level_up_stand_in(vm: &mut Vm) {
+    let f: ow_vm::api::NativeFn = Rc::new(|c| {
+        let controller = c.this.expect("the controller");
+        let pri = match prop(&c.vm.space, controller, "PlayerReplicationInfo").unwrap() {
+            Some(Value::Object(Some(o))) => o,
+            other => panic!("{other:?}"),
+        };
+        for name in ["ExpLevel", "GeneralSkillPoints"] {
+            let v = int_of(c.vm, pri, name);
+            let class = c.vm.space.heap.get(pri)?.class;
+            let p = c.vm.space.prop(class, name).unwrap();
+            c.vm.space.write(pri, PropAddr::scalar(p), Value::Int(v + 1))?;
+        }
+        Ok(Value::None)
+    });
+    vm.override_script("WillowGame.WillowPlayerController.ExpLevelUp", f).unwrap();
+}
+
+/// What the stand-in reproduces (Reference): `player:` builds the pool over the class's `HealthPoolDefinition` (its
+/// resource's `DefaultResourcePoolClass`, in a manager on the controller) and seeds it full; a level-up then reports
+/// the C++ order Level, SkillPoints, MaxHealth, Health; and the player pawn's `HealthPool` points at the pool (the
+/// C++ `linkPlayerHealth`: the manager, slot 0, the pool). Off: the same level-up is `NotYet { NotRead }`.
+#[test]
+fn the_health_stand_in_reproduces_the_cxx_events() {
+    let health = Map {
+        health: true,
+        ..Map::default()
+    };
+    let mut env = Env::new(health, ParityMode::Reference);
+    level_up_stand_in(env.vm());
+    let s = env.slice.clone();
+    s.set_player_experience(env.vm(), 3, 0).unwrap();
+    s.cheat_level_up(env.vm()).unwrap();
+    let events: Vec<(HostKind, String, String)> = s.drain().into_iter().map(|e| (e.kind, e.a, e.b)).collect();
+    let text = |x: &str| x.to_string();
+    assert_eq!(
+        events,
+        [
+            (HostKind::Level, text("4"), text("")),
+            (HostKind::SkillPoints, text("1"), text("")),
+            (HostKind::MaxHealth, text("100.000000"), text("")),
+            (HostKind::Health, text("100.000000"), text("100.000000")),
+        ],
+        "{:?}",
+        s.errors()
+    );
+    let controller = s.script().player_controller();
+    let manager = match prop(&env.world.vm.space, controller, "ResourcePoolManager").unwrap() {
+        Some(Value::Object(Some(m))) => m,
+        other => panic!("no manager: {other:?}"),
+    };
+    let pawn = s.script().player_pawn(env.vm()).unwrap();
+    let reference = prop(&env.world.vm.space, pawn, "HealthPool").unwrap().expect("the pawn's reference");
+    let r = ow_world::pools::read_ref(&env.world.vm.space, &reference).unwrap();
+    assert_eq!((r.manager, r.index), (Some(manager), 0));
+    assert!(r.data.is_some(), "the cached pool");
+
+    let mut env = Env::new(health, ParityMode::Off);
+    level_up_stand_in(env.vm());
+    let s = env.slice.clone();
+    s.set_player_experience(env.vm(), 3, 0).unwrap();
+    let e = s.cheat_level_up(env.vm()).unwrap_err();
+    assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotRead)), "{e:?}");
 }
 
 /// The tick adds its seconds to `WorldInfo.TimeSeconds` (the C++ `advanceTime`), as a float.

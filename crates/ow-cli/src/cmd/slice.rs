@@ -16,7 +16,8 @@
 //! `health:<current>`, `tick:<s>`.
 //!
 //! **What is not here** (decision 2026-11-16-38): the player's hit through the stock pawn chain (`pawnhit:` once the
-//! dummy has a pawn) is lane W6-COMBAT's, so that step stops the command with `NotYet` (exit 3) after the earlier
+//! dummy has a pawn) is not wired into the slice yet (follow-up W6-COMBAT-RUN2), so that step stops the command with
+//! `NotYet` (exit 3) after the earlier
 //! steps' output; before the spawn it raises the event directly and prints the empty hit report, as the C++. The
 //! level-up's health pool (`health:`, and the `max_health` / `health` events) is a C++ stand-in reproduced only under
 //! `OW_PARITY=reference`; in Off mode `health:` and a level-up of a class that names a health pool are `NotYet`.
@@ -39,6 +40,7 @@
 //! `std::stoi` text, a `NotYet`) leaves the earlier steps' text on stdout, then `ow-package: <message>` on stderr with
 //! exit code 1 (a `NotYet`: 3). The VM runs on its own thread (`ow_vm::interp::on_vm_stack`). Lines end in `\n`.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -143,23 +145,26 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     let _ = command;
     let args = args.to_vec();
     let ran = on_vm_stack(move || {
-        let mut out = String::new();
-        let mut outcome = execute(&args, mode, IdentityPolicy::FirstInScanOrder, &mut out);
+        let (mut out, mut err) = (String::new(), String::new());
+        let mut outcome = execute(&args, mode, IdentityPolicy::FirstInScanOrder, &mut out, &mut err);
         let refused = match &outcome {
             Err(f) => f.message.contains(COPY_REFUSAL),
             Ok(_) => out.contains(COPY_REFUSAL),
         };
         if refused && let Some(set) = load_set(&args) {
+            // The rerun's output replaces the first run's, stderr lines included (they would print twice).
             out.clear();
-            outcome = execute(&args, mode, IdentityPolicy::Loaded(set), &mut out);
+            err.clear();
+            outcome = execute(&args, mode, IdentityPolicy::Loaded(set), &mut out, &mut err);
         }
-        (outcome, out)
+        (outcome, out, err)
     });
-    let (outcome, out) = match ran {
-        Ok(pair) => pair,
-        Err(e) => (Err(Failure::from(format!("the VM thread failed: {e}"))), String::new()),
+    let (outcome, out, err) = match ran {
+        Ok(three) => three,
+        Err(e) => (Err(Failure::from(format!("the VM thread failed: {e}"))), String::new(), String::new()),
     };
     let _ = std::io::stdout().lock().write_all(out.as_bytes());
+    let _ = std::io::stderr().lock().write_all(err.as_bytes());
     match outcome {
         Ok(code) => ExitCode::from(code),
         Err(f) => {
@@ -203,8 +208,28 @@ fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Fa
     Ok(vm)
 }
 
-/// `args[0]` is the source package, `args[1]` the mode. Returns the exit code.
-fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut String) -> Result<u8, Failure> {
+/// `args[0]` is the source package, `args[1]` the mode. Returns the exit code. The stderr lines the run writes before
+/// its end (`timedlines:`'s stopped lines) go to `err`, which the caller prints after stdout, as `out` is buffered.
+fn execute(
+    args: &[String],
+    mode: ParityMode,
+    policy: IdentityPolicy,
+    out: &mut String,
+    err: &mut String,
+) -> Result<u8, Failure> {
+    let stopped = Rc::new(RefCell::new(String::new()));
+    let result = execute_with(args, mode, policy, out, &stopped);
+    err.push_str(&stopped.borrow());
+    result
+}
+
+fn execute_with(
+    args: &[String],
+    mode: ParityMode,
+    policy: IdentityPolicy,
+    out: &mut String,
+    stopped: &Rc<RefCell<String>>,
+) -> Result<u8, Failure> {
     let source = Package::load(Path::new(&args[0])).map_err(|e| error_text(&e))?;
     if args.len() < 5 || args[3] != "--cooked" {
         return Err(USAGE.to_string().into());
@@ -217,7 +242,7 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
     let completed: DetSet<String> = slice.mission().dependencies().iter().cloned().collect();
     out.push_str("{\"steps\":[");
     for (i, step) in args[5..].iter().enumerate() {
-        let (ok, extra) = run_step(vm, &slice, &completed, step)?;
+        let (ok, extra) = run_step(vm, &slice, &completed, step, stopped)?;
         let _ = write!(
             out,
             "{}{{\"step\":{},\"ok\":{},\"status\":{}",
@@ -326,7 +351,13 @@ const EMPTY_HIT: &str = "{\"health_before\":0,\"health_after\":0,\"arriving\":0,
                          \"demigod_before\":false,\"demigod_after\":false,\"events\":[]}";
 
 /// One step (module documentation).
-fn run_step(vm: &mut Vm, slice: &FireMissionSlice, completed: &DetSet<String>, step: &str) -> Result<StepResult, Failure> {
+fn run_step(
+    vm: &mut Vm,
+    slice: &FireMissionSlice,
+    completed: &DetSet<String>,
+    step: &str,
+    stopped: &Rc<RefCell<String>>,
+) -> Result<StepResult, Failure> {
     let usage = || Failure::from(USAGE.to_string());
     let mut ok = true;
     let mut extra = None;
@@ -372,10 +403,11 @@ fn run_step(vm: &mut Vm, slice: &FireMissionSlice, completed: &DetSet<String>, s
         with_dialog(slice, |d| d.set_test_line_length(length))?;
     } else if let Some(seconds) = step.strip_prefix("timedlines:") {
         let length = stod(seconds)?;
+        let sink = stopped.clone();
         with_dialog(slice, |d| {
             d.set_timed_line_player(move |_| length);
-            d.on_line_stopped = Some(Box::new(|line| {
-                let _ = writeln!(std::io::stderr().lock(), "dialog line stopped while playing: {line}");
+            d.on_line_stopped = Some(Box::new(move |line| {
+                let _ = writeln!(sink.borrow_mut(), "dialog line stopped while playing: {line}");
             }));
         })?;
     } else if let Some(tag) = step.strip_prefix("talker:") {

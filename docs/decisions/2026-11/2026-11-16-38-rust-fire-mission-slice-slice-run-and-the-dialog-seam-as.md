@@ -32,7 +32,8 @@ NATIVE_PROGRESSION.md, NATIVE_LEVEL_UP_ATTRIBUTES.md), UNVERIFIED, except what t
     behavior; it had no other caller). The mission screen's stand-in writes the director and the UI manager in the
     property's declared kind (`set_reference`): the installed movie class declares some of those properties as
     interfaces, which the invented packages did not, so on the installed game the screen was "not hosted" before.
-    `TriggerEvent` hands the dialog the store's object for the director's body class (`store_object`, below). The
+    `TriggerEvent` hands the dialog the store's object for the director's body class (`store_object`, below), and
+    `store_object`, `instantiate_copy` and `error_text` are `pub(crate)` so the slice reuses them (one place each). The
     `MarcusUse::on_use_tag` comment no longer calls the dialog another lane's.
   - `tracker.rs`: `MissionSystem::with_dialog` (the borrow and its "in use" refusal in one place); the documentation
     of `dialog` states its two rules (never replace `DialogSystem::on_line`, where the tracker's sink lives; never
@@ -72,19 +73,9 @@ NATIVE_PROGRESSION.md, NATIVE_LEVEL_UP_ATTRIBUTES.md), UNVERIFIED, except what t
 
   | Stand-in | Reference (the C++) | Off | Pinned by |
   |---|---|---|---|
-  | the player's health pool after a level-up (`max_health`, `health`; the `health:` input) | a pool built by hand on
-  the controller over the class's `HealthPoolDefinition`, seeded at `player:` / `health:`, its maximum and current
-  reported after the skill points | `NotYet { NotRead }` at `health:` and at a level-up of a class that names a health
-  pool (the class-defaults routine that builds pools is not read) | unit test `the_health_stand_in_by_mode`;
-  `mission_script_test.py` S7 / S7b (local, below) |
-  | `Behavior_AIHold` on the dummy before it has a mind | a recorded no-op | `NotYet { LayerAbsent("ow-combat (lane
-  W6-COMBAT)") }` | unit test `the_ai_hold_stand_in_by_mode`; the installed run (the Idle sequence's hold at the
-  registration) |
-  | 18 of the 20 natives the C++ logs as zero-result stubs on the installed Fire route (`REFERENCE_STUBS` in
-  `cmd/slice.rs`, each entry with its reason: `Actor.LocalPlayerControllers`, `MissionTracker.GetObjectivesProgress`,
-  `Object.Localize`, the GFx and Leviathan calls, ...) | allowed as logged zero-result stubs (`StubPolicy::Refuse {
-  allow }`, the logged texts are the C++ ones) | refused, `VmError::UnboundNative` (architecture 3.8) | CLI unit test
-  `the_reference_allow_list_is_reference_only`; the installed run |
+  | the player's health pool after a level-up (`max_health`, `health`; the `health:` input) | at `player:` / `health:` a pool built by hand over the class's `HealthPoolDefinition` (the resource's `DefaultResourcePoolClass`, in a `ResourcePoolManager` on the controller, the controller as provider) and seeded (full, or the given current); the player pawn's `HealthPool` reference set to it (the C++ `linkPlayerHealth`: the manager, slot 0, the pool's GUID byte, the pool); after a level-up its maximum and current reported after the skill points, the C++ order Level, SkillPoints, MaxHealth, Health | `NotYet { NotRead }` at `health:` and at a level-up of a class that names a health pool (the class-defaults routine that builds pools is not read) | unit tests `the_health_stand_in_reproduces_the_cxx_events` (an invented class, pool and resource: the four events in order and the pawn's reference in Reference, `NotYet { NotRead }` at `cheatlevel` in Off) and `the_health_stand_in_by_mode`; `mission_script_test.py` S7 / S7b (local, below) |
+  | `Behavior_AIHold` on the dummy before it has a mind | a recorded no-op | `NotYet { NotPorted }`: the mind comes with the combat chain, which `ow-combat` has (W6-COMBAT) but the slice does not wire yet (follow-up W6-COMBAT-RUN2) | unit test `the_ai_hold_stand_in_by_mode`; the installed run (the Idle sequence's hold at the registration) |
+  | 18 of the 20 natives the C++ logs as zero-result stubs on the installed Fire route (`REFERENCE_STUBS` in `cmd/slice.rs`, each entry with its reason: `Actor.LocalPlayerControllers`, `MissionTracker.GetObjectivesProgress`, `Object.Localize`, the GFx and Leviathan calls, ...) | allowed as logged zero-result stubs (`StubPolicy::Refuse { allow }`, the logged texts are the C++ ones) | refused, `VmError::UnboundNative` (architecture 3.8) | CLI unit test `the_reference_allow_list_is_reference_only`; the installed run |
 
   The allow-list was approved by the hub (R3: Reference only). It **deliberately differs from `--mission-run`**, whose
   VM refuses these natives in both modes: decision 2026-11-15-34's refusal of `Actor.LocalPlayerControllers` and
@@ -93,32 +84,38 @@ NATIVE_PROGRESSION.md, NATIVE_LEVEL_UP_ATTRIBUTES.md), UNVERIFIED, except what t
   route, `Actor.SetTimer` and `Actor.ClearTimer`, are not listed: the Rust world binds them (lane W5-WORLD), so the Rust
   stub list lacks their lines. The slice never runs the world tick, so no timer fires and nothing else differs.
 
-  Not stand-ins, `NotYet` in both modes: the player's hit through the stock pawn chain (`pawnhit:` once the dummy has
-  a pawn; lane W6-COMBAT; unit test `the_pawn_hit_chain_is_not_yet`), and the level-up's skill behaviors (the bridge's
-  `RunBehaviors` inside the level-up, decision 2026-11-15-34; lane W6-SKILLS). Read but UNVERIFIED in both modes:
-  Toggle as a flip of the current state.
-- **Verified (automated, local, pc-hummer).**
-  - 18 slice unit tests on invented packages (`slice/tests.rs`: the registration order, the verdicts against the
+  Not stand-ins, `NotYet { NotPorted }` in both modes: the player's hit through the stock pawn chain (`pawnhit:` once
+  the dummy has a pawn; the combat chain is not wired into the slice yet, follow-up W6-COMBAT-RUN2; unit test
+  `the_pawn_hit_chain_is_not_yet`), and the level-up's skill behaviors (the bridge's `RunBehaviors` inside the
+  level-up, decision 2026-11-15-34; lane W6-SKILLS). Read but UNVERIFIED in both modes: Toggle as a flip of the
+  current state.
+- **Verified (automated, local, pc-hummer, on origin/main 34117d3).**
+  - 20 slice unit tests on invented packages (`slice/tests.rs`: the registration order, the verdicts against the
     tracker, restrictions, another mission's state, objective-specific conditions, the unsupported condition class,
-    the dummy's and the mission's sequence changes, the range wrapper, the direct hit, each stand-in by mode, the game
-    time, the shared dialog, the C++ event names, the missing provider's text, and replay determinism: one scripted
-    run on two fresh worlds in one process gives identical events, errors, trace and report); 3 CLI unit tests.
-    `tests/rust_parity.d/slice.txt`, 4 lines.
+    the dummy's and the mission's sequence changes, the range wrapper, the direct hit, each stand-in by mode and what
+    the health pool reproduces, the game time, the mission's dialog, the C++ event names, the missing provider's text,
+    and replay determinism: one scripted run on two fresh worlds in one process gives identical events, errors, trace
+    and report); 3 CLI unit tests. `cargo test --workspace`: every test passes, `cargo build` gives no warning.
+  - ctest, all 173 entries registered and passing. The 7 that run the Rust binary (`rust-parity`, `item-registry-rust`,
+    `item-roll-rust`, `item-stats-rust`, `item-pools-rust`, `mover-rust`, `def-dump-synthetic`) register only when
+    `target/release/ow-package.exe` exists at configure time; an earlier count of 166 was a configure from before the
+    release binary was built, and so had run without them. `rust-parity` runs `tests/rust_parity.d/slice.txt` (4
+    lines, all passing; 48 of 48 lines in 23 files).
   - `tests/mission_script_test.py`'s 20 `--slice-run` commands, replayed on both binaries (a local harness): with the
     fixture changes above, 13 of 20 give the C++ stdout and exit code byte for byte under `OW_PARITY=reference` (all of
     D, S7 and F, and the inside-the-guard calls of S7b, S9 and S10); the other 7 reach the level-up's skill behaviors
     and exit 3. In Off mode 5 of 20 (D, F and the S7 call without a level-up); every other call is a level-up, and
-    there the health pool is `NotYet`. Before the fixture changes: 5 of 20 in both modes.
-  - `--mission-run` keeps PR #337's numbers on invented packages after these seams: its 34 commands of that file
-    give 34 of 34 identical under Reference and 33 of 34 under Off (the one difference is scenario W's lent weapon,
+    there the health pool is `NotYet`. The C++ binary passes the whole file.
+  - `--mission-run` keeps PR #337's numbers on invented packages after these seams: its 34 commands of that file give
+    34 of 34 identical under Reference and 33 of 34 under Off (the one difference is scenario W's lent weapon,
     `NotYet` by decision 2026-11-15-34).
   - The installed game, local only (output under `local/`): `tools/verify_fire_event_order.py` with the Rust reader,
-    `OW_PARITY=reference`, on origin/main 34117d3: **29 of 33 rules hold** (the C++: 33 of 33; the same 29 before the
-    rebase onto #336 and #337). Of the default run's 22 steps, 20 give the C++
-    step record byte for byte; the turn-in and the reward confirmation differ (below). All 17 step records of the
-    lines run match; it differs only in its error line (below) and so its exit code (1). In Off mode the run stops
-    at the
+    `OW_PARITY=reference`: **29 of 33 rules hold** (the C++: 33 of 33). Of the default run's 22 steps, 20 give the C++
+    step record byte for byte; the turn-in and the reward confirmation differ (below). All 17 step records of the lines
+    run match; it differs only in its error line (below) and so its exit code (1). In Off mode the run stops at the
     accept (refused natives) and at the spawn (the dummy's hold, `NotYet`, exit 3), so the tool reads no JSON.
+  - **The hub accepted 29/33 for this PR; the remaining 4 rules move to FIX-PLAYTHROUGH (#341, 2 turn-in rules) and
+    FIX-DIRECTOR-STORE (2 no-errors rules).**
 - **Open items.**
   - `ow-attr`: `WillowGame.PlayThroughCountAttributeValueResolver` is `NotYet { NotRead }`; the installed turn-in's
     reward percentage reaches it, so the turn-in has no experience and no reward page (2 of the 4 failing rules, and
@@ -127,7 +124,7 @@ NATIVE_PROGRESSION.md, NATIVE_LEVEL_UP_ATTRIBUTES.md), UNVERIFIED, except what t
     even after FIX-DEFS-PREFIX (decision 36): `EvaluateInitializationData` on one of them (`StartLingerTimer` at the
     use key) is a heap error line ("no slot"), in both installed runs (the other 2 failing rules: "the run has no
     errors"). Loading the director through the store, which #336 now allows, would remove it and `store_object`.
-  - W6-SKILLS (the level-up's skill behaviors: S7b's refill, S9, S10) and W6-COMBAT, now landed (#335): the slice
-    still answers `NotYet` for `pawnhit:` and the hold; wiring the combat chain into the slice is a follow-up. The 77
-    installed `--mission-run` missions were not rerun after the screen seam.
+  - W6-SKILLS (the level-up's skill behaviors: S7b's refill, S9, S10), and W6-COMBAT-RUN2 (wiring the landed combat
+    chain, #335, into the slice's `pawnhit:` and the dummy's hold). The 77 installed `--mission-run` missions were not
+    rerun after the screen seam.
   - The 18 Reference stubs: each is an unread rule; Off mode refuses them until it is read.
