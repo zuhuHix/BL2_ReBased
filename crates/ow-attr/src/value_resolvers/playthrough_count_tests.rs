@@ -545,27 +545,67 @@ fn off_a_world_that_cannot_answer_the_query_stops_the_read() {
 }
 
 #[test]
-fn off_a_byte_playthrough_reads_as_its_number_and_a_float_is_bad_data() {
-    // Note section 1 reads CurrentPlaythrough as an int. A class declaring it as a byte (the offline world's
-    // synthetic fixture does) reads the same number; another kind is bad data, not a guess.
-    let mut fx = Fx::new();
-    let c = gri_class(&mut fx, WILLOW_GRI, None, PropKind::Byte { enum_: None });
-    let g = fx.obj(
-        c,
-        "WillowGameReplicationInfo_0",
-        vec![("CurrentPlaythrough", Value::Byte(2))],
-    );
-    let field1 = count_attr(&mut fx, 1, vec![]);
-    assert_eq!(value_in(&mut fx, Some(g), field1), Ok(3.0));
+fn off_note_s1_a_playthrough_that_is_not_an_int_is_bad_data() {
+    // Note section 1 reads CurrentPlaythrough as an int. Any other kind, a byte or a float, is bad data, not a guess.
+    let kinds = [
+        (PropKind::Byte { enum_: None }, Value::Byte(2)),
+        (PropKind::Float, Value::Float(1.0)),
+    ];
+    for (kind, v) in kinds {
+        let mut fx = Fx::new();
+        let c = gri_class(&mut fx, WILLOW_GRI, None, kind);
+        let g = fx.obj(
+            c,
+            "WillowGameReplicationInfo_0",
+            vec![("CurrentPlaythrough", v)],
+        );
+        for include_three in [0, 1] {
+            let attr = count_attr(&mut fx, include_three, vec![]);
+            let got = value_in(&mut fx, Some(g), attr);
+            assert!(matches!(got, Err(AttrError::BadData { .. })), "{got:?}");
+        }
+    }
+}
 
+#[test]
+fn off_note_s3_row1_a_native_stand_in_ancestry_cannot_answer() {
+    // Note section 3, first row, asks whether the GRI is a WillowGameReplicationInfo. An ancestry that ends at an
+    // engine-native stand-in (a class defined only by its import path, with no super class) cannot answer that, so
+    // the read is NotYet { NotRead } from the class test, not the first row's 1.0.
     let mut fx = Fx::new();
-    let c = gri_class(&mut fx, WILLOW_GRI, None, PropKind::Float);
-    let g = fx.obj(
-        c,
-        "WillowGameReplicationInfo_0",
-        vec![("CurrentPlaythrough", Value::Float(1.0))],
-    );
-    let attr = count_attr(&mut fx, 0, vec![]);
-    let got = value_in(&mut fx, Some(g), attr);
-    assert!(matches!(got, Err(AttrError::BadData { .. })), "{got:?}");
+    willow_gri(&mut fx, 0); // the class exists, so the test is asked
+    let decls = vec![PropertyDecl::new(
+        fx.w.space.names.intern("CurrentPlaythrough"),
+        PropKind::Int,
+    )];
+    let native =
+        fx.w.space
+            .classes
+            .define("Engine.NativeStandInReplicationInfo", None, decls)
+            .unwrap();
+    fx.w.space.classes.mark_native(native).unwrap();
+    let sub =
+        fx.w.space
+            .classes
+            .define("Invented.ReplicationInfoOverStandIn", Some(native), vec![])
+            .unwrap();
+    for class in [native, sub] {
+        let g = fx.obj(
+            class,
+            &format!("ReplicationInfo_{}", fx.w.space.heap.len()),
+            vec![("CurrentPlaythrough", Value::Int(1))],
+        );
+        for include_three in [0, 1] {
+            let attr = count_attr(&mut fx, include_three, vec![]);
+            for got in [
+                value_in(&mut fx, Some(g), attr),
+                base_in(&mut fx, Some(g), attr),
+            ] {
+                match got {
+                    Err(AttrError::NotYet(e)) => assert_eq!(e.missing, Missing::NotRead),
+                    other => panic!("expected NotYet NotRead, got {other:?}"),
+                }
+            }
+        }
+    }
 }

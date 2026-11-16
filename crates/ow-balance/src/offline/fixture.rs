@@ -259,7 +259,7 @@ impl Fx {
         let decls = vec![plain(&mut space, "ExpLevel", PropKind::IntAttribute)];
         class(&mut space, super::REPLICATION_INFO_CLASS, pri, decls);
         let gri = class(&mut space, "Engine.GameReplicationInfo", info, vec![]);
-        let decls = vec![d(&mut space, "CurrentPlaythrough", byte())];
+        let decls = vec![d(&mut space, "CurrentPlaythrough", PropKind::Int)];
         class(&mut space, super::GAME_REPLICATION_INFO_CLASS, gri, decls);
         class(&mut space, super::GLOBALS_CLASS, object, vec![]);
 

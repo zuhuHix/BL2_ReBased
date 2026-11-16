@@ -462,7 +462,7 @@ mod tests {
         );
         assert_eq!(
             read(world.game_replication_info(), "CurrentPlaythrough"),
-            Value::Byte(0)
+            Value::Int(0)
         );
         assert_eq!(
             read(world.replication_info(), "Owner"),
@@ -562,15 +562,15 @@ mod tests {
             space
                 .read(world.game_replication_info(), PropAddr::scalar(p))
                 .unwrap(),
-            &Value::Byte(2)
+            &Value::Int(2)
         );
     }
 
     #[test]
     fn the_world_answers_its_game_replication_info_and_the_count_reads_it() {
         // The query answers this world's replication info whatever the source; the playthrough count
-        // (NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3, Off mode: no store) reads its CurrentPlaythrough, a byte in this
-        // synthetic fixture. Installed field 0: Normal 1, TVHM 2, UVHM 2; a non-zero field: UVHM 3.
+        // (NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3, Off mode: no store) reads its CurrentPlaythrough, an int as the
+        // note reads it (the int path). Installed field 0: Normal 1, TVHM 2, UVHM 2; a non-zero field: UVHM 3.
         for (pt, field0, field1) in [
             (Playthrough::NORMAL, 1.0, 1.0),
             (Playthrough::TVHM, 2.0, 2.0),

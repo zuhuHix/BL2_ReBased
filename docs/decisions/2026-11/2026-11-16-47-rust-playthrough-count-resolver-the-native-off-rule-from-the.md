@@ -26,8 +26,13 @@ disassembler run, and no other worktree's `local/`. Reference mode (the C++ read
 - **Get-base is get** (section 2).
 - **Writes** (add, remove, set-base): the class default, `storage` = `Ok(None)`. Each answers false and nothing
   changes (section 2, checklist item 6). This lane built them as the note says rather than leaving them `NotYet`.
-- **Value kinds.** `CurrentPlaythrough` is read as an `Int`, or a `Byte` widened (the offline world's synthetic
-  fixture declares a byte). Any other kind is `BadData`. `IncludePlaythroughThree` must be an `Int` or `Byte`.
+- **Value kinds.** `CurrentPlaythrough` and `IncludePlaythroughThree` must be `Int`, as note section 1 reads them.
+  Any other kind, a byte included, is `BadData` (review r1 of PR #347; the offline world's synthetic fixture now
+  declares `CurrentPlaythrough` as an int).
+- **A replication info whose ancestry ends at an engine-native stand-in** cannot answer the class test, so the read
+  is `NotYet { NotRead }` (the shared `is_a` rule of the context resolvers), not the first row's 1.0.
+- **Reference's write refusal** keeps its kind and record (`NotYet { NotPorted }`, the note); only its text changed,
+  to "the C++ has no write for this class" (accepted in review r1 of PR #347).
 - **Not in the note (this lane's choice):** a world that cannot answer the query (`NotYet`, for example the trait's
   default `LayerAbsent("ow-world")`) stops the read with that `NotYet`. Only `Ok(None)` is the first row. "This
   world does not say" is not "this world has no replication info".
@@ -42,7 +47,7 @@ No existing kind or method changed.
 
 **Tests (synthetic, rule 9).**
 
-- 17 Off tests in `playthrough_count_tests.rs`, each naming its note section. They cover:
+- 18 Off tests in `playthrough_count_tests.rs`, each naming its note section. They cover:
   - no replication info, a replication info of another class, and a subclass;
   - CP -1, -7 and `i32::MIN`;
   - the clamped and unclamped rows at CP 0, 1, 2 and 5;
@@ -53,7 +58,8 @@ No existing kind or method changed.
   - a `== 2` conditional, the same in TVHM and UVHM;
   - get-base = get;
   - writes false and unchanged;
-  - a world that cannot answer, and byte and float kinds.
+  - a world that cannot answer, a byte and a float playthrough (bad data), and a native stand-in ancestry
+    (`NotRead`).
 - 1 new Reference test: the world's playthrough is not read.
 - 1 new `ow-world` test: the kind's `LayerAbsent` and a registered handler.
 - 1 new `ow-balance` test: the offline world answers the query for any source, and the count over its synthetic
@@ -84,6 +90,10 @@ did, so its totals are not decision 40's 858 / 300. Sources: the `OfflineWorld` 
     the base these sweeps ran on).
   - 3 stops whose text mentions the count's name are left. They are present in Reference too, so they do not stop
     at this resolver.
+- **Rerun after review r1** (byte arm dropped; tree on main 20f40c27, which holds FIX-NOUN-OFF; under `after3/`).
+  - The count still reads 1 / 2 / 2, so the installed reflection declares `CurrentPlaythrough` as an int.
+  - Controller numbers: unchanged.
+  - Mind: Off attributes 306, init definitions 168 (167 in TVHM and UVHM), now equal to Reference.
 
 **Open.**
 
