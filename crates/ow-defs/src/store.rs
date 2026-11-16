@@ -52,11 +52,14 @@
 //!   reads from 26 (`PropertyPrefix::PlacedActor`);
 //! - an export of a class deriving from neither `Core.Component` nor `Engine.Actor` reads from 4
 //!   (`PropertyPrefix::Ordinary`, the value every C++ definition consumer passes);
-//! - any other export (a `Core.Component` subclass that is not an actor component, such as the distribution
-//!   subobjects PHASELOCK_STOCK_DATA.md records at 4, 8 or 16; an actor that is not placed in a level, such as an
-//!   archetype) is read from its derived prefix only when a structural check holds: the tag stream from that prefix
-//!   parses cleanly to its `None` tag within the export's serial size. Otherwise the load is `DefError::NotYet`, never
-//!   a guessed prefix.
+//! - any other export is read from its derived prefix only when a structural check holds: the tag stream from that
+//!   prefix parses cleanly to its `None` tag within the export's serial size. Otherwise the load is
+//!   `DefError::NotYet`, never a guessed prefix. The derived prefix is 8 for a `Core.Component` subclass that is not
+//!   an actor component (such as the distribution subobjects PHASELOCK_STOCK_DATA.md records at 4, 8 or 16); 26 for
+//!   an actor whose chain of outer exports reaches a level but whose outer is not the level itself; and 4
+//!   (`PropertyPrefix::Ordinary`) for an actor whose outer chain reaches no level, such as an archetype (every pawn
+//!   archetype, Marcus's), which is the prefix every C++ read of such an actor passes (`combat.cpp` `spawnEnemy`,
+//!   `mission_script.cpp` `placeMarcus`; decision 2026-11-16-36).
 //!
 //! The byte counts are the C++ and the tools' (`ow_object::prefix`); the per-class rule is this store's and UNVERIFIED
 //! as a rule of the game, as the prefixes are. It belongs to the implementation and may be refined later (a 16-byte
@@ -849,10 +852,15 @@ impl Loader<'_, '_> {
         if !actor && !component {
             return Ok(PropertyPrefix::Ordinary);
         }
-        let derived = if actor {
+        let derived = if !actor {
+            PropertyPrefix::Component
+        } else if self.outer_chain_reaches_level(&pkg, package, entry.outer) {
+            // Inside a level but not directly: no C++ call reads such an actor, so 26 only under the check.
             PropertyPrefix::PlacedActor
         } else {
-            PropertyPrefix::Component
+            // An actor no level holds (an archetype): the C++ reads every one at 4 (`combat.cpp` spawnEnemy,
+            // `mission_script.cpp` placeMarcus, `slice.cpp`; decision 2026-11-16-36).
+            PropertyPrefix::Ordinary
         };
         if tags_parse(&pkg, &entry, derived.bytes()) {
             Ok(derived)
@@ -865,6 +873,26 @@ impl Loader<'_, '_> {
                 RECORD,
             )))
         }
+    }
+
+    /// Whether the export chain of outers from `outer` (an export reference of `package`) reaches an export of class
+    /// `Level`. The walk follows exports only (an import or 0 ends it) and stops after as many steps as the package
+    /// has exports, so a cyclic or broken chain ends as "no level".
+    fn outer_chain_reaches_level(&mut self, pkg: &Package, package: PackageId, outer: i32) -> bool {
+        let mut at = outer;
+        for _ in 0..pkg.exports.len() {
+            if at <= 0 {
+                return false;
+            }
+            if self.cx.code.class_name(self.cx.store, package, at) == "Level" {
+                return true;
+            }
+            match pkg.object(at) {
+                Ok(e) => at = e.outer,
+                Err(_) => return false,
+            }
+        }
+        false
     }
 
     fn apply_pending(&mut self, target: (PackageId, i32), o: ObjRef) {

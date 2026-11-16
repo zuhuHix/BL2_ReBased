@@ -176,6 +176,7 @@ def build_engine(broken=False, ghost=False, undecodable=False):
     function(mover, 'InterpolationStarted', [('Object', 'InterpAction', 0), ('Object', 'GroupInst', 0)], started)
     function(mover, 'InterpolationFinished', [('Object', 'InterpAction', 0)], finish)
     function(mover, 'Callback', [], back)
+    cls('Level')   # a placed actor's outer (build_doors); declared last, so no other index moves
     return p
 
 
@@ -217,8 +218,12 @@ def build_doors():
     ]
     for (c, name, body), index in zip(ops, (open_, close, inner, lamp)):
         assert p.add_export(cls(c), name, w32(0) + body + none, outer=seq) == index
-    p.add_export(cls('InterpActor'), 'PlacedMover', bytes(26) + t_float('Delay', 0.5) + none)
+    # The placed actor lives in a level (the last export, so no index moves): the Rust definition store reads an actor
+    # from 26 only when its outer is a Level (decision 2026-11-16-36), as the C++ mover's actor is a level's.
+    level = 8
+    assert p.add_export(cls('InterpActor'), 'PlacedMover', bytes(26) + t_float('Delay', 0.5) + none, outer=level) == 6
     p.add_export(cls('SeqAct_Interp'), 'LoneAction', w32(0) + none)
+    assert p.add_export(cls('Level'), 'TheLevel', w32(0) + none) == level
     return p
 
 
@@ -264,30 +269,30 @@ def main():
         def field(name, wanted):
             return lambda r: None if doc(r)[name] == wanted else f'{name} is {doc(r)[name]!r}, expected {wanted!r}'
 
-        probe = ('--mover-probe', 'PlacedMover', 'Seq.InnerAction', '--cooked', '<cooked>')
+        probe = ('--mover-probe', 'TheLevel.PlacedMover', 'Seq.InnerAction', '--cooked', '<cooked>')
         same(good, *probe, expect=lambda r: None if r[0] == 0 else f'exit {r[0]}')
-        same(good, '--mover-probe', 'PlacedMover', 'LoneAction', '--cooked', '<cooked>')
+        same(good, '--mover-probe', 'TheLevel.PlacedMover', 'LoneAction', '--cooked', '<cooked>')
         same(broken, *probe, expect=lambda r: None if r[0] == 1 else f'exit {r[0]}')
         # An import no file holds, evaluated by the notifications and the callback: silent in the C++, a store note in
         # the Rust that fails nothing.
         same(ghost, *probe, expect=lambda r: None if r[0] == 0 else f'exit {r[0]}')
         # A notification body that does not decode fails the binding: stderr, nothing on stdout, exit 1.
         same(undecodable, *probe, expect=lambda r: None if r[0] == 1 and not r[1] else f'exit {r[0]}, stdout {r[1]!r}')
-        event = lambda name, action='Seq.InnerAction': ('--mover-event', 'PlacedMover', action, '--cooked', '<cooked>', name)
+        event = lambda name, action='Seq.InnerAction': ('--mover-event', 'TheLevel.PlacedMover', action, '--cooked', '<cooked>', name)
         same(good, *event('OpenDoor'), expect=field('motion', 1))
         same(good, *event('CloseDoor'), expect=field('motion', -1))
         same(good, *event('Nobody'), expect=field('matched', 0))
         same(good, *event('OpenDoor', 'LoneAction'), expect=field('errors', ['mover action path has no owning sequence']))
         # Binding failures and bad command lines: the C++ error text on stderr.
-        same(good, '--mover-event', 'PlacedMover', 'Ghost.InnerAction', '--cooked', '<cooked>', 'OpenDoor')
-        same(good, '--mover-event', 'PlacedMover', 'Seq.InnerAction', '--cooked', '<cooked>')
-        same(good, '--mover-event', 'PlacedMover', 'Seq.InnerAction', '--wrong', '<cooked>', 'OpenDoor')
+        same(good, '--mover-event', 'TheLevel.PlacedMover', 'Ghost.InnerAction', '--cooked', '<cooked>', 'OpenDoor')
+        same(good, '--mover-event', 'TheLevel.PlacedMover', 'Seq.InnerAction', '--cooked', '<cooked>')
+        same(good, '--mover-event', 'TheLevel.PlacedMover', 'Seq.InnerAction', '--wrong', '<cooked>', 'OpenDoor')
 
         # A second difference on purpose: an export that is not an actor, asked for as the placed actor. The C++ decodes
         # it from the 26-byte prefix anyway and fails on what it reads there; the Rust definition store derives the
         # export's own prefix and refuses the mismatch (DefError::PrefixMismatch, decision 2026-11-15-32). Both fail the
         # binding with nothing on stdout.
-        for args in (('--mover-event', 'Seq.InnerAction', 'PlacedMover', '--cooked', '<cooked>', 'OpenDoor'),
+        for args in (('--mover-event', 'Seq.InnerAction', 'TheLevel.PlacedMover', '--cooked', '<cooked>', 'OpenDoor'),
                      ('--mover-probe', 'Seq.Lamp', 'Seq.InnerAction', '--cooked', '<cooked>')):
             a, b, label = both(good, *args)
             compared += 1
