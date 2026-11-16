@@ -1540,7 +1540,7 @@ impl Run {
                 .iter()
                 .filter(|d| d.pawn == pawn)
             {
-                batch.add(drop);
+                batch.add(drop)?;
             }
             self.pawns.pop();
             self.results.truncate(saved_results);

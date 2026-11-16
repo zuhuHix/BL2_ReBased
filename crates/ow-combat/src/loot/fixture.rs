@@ -14,8 +14,10 @@
 //! `Balance_Low` (experience level) and `Balance_None` (no playthrough), and the toy pawn `Pawn_Loot`, whose
 //! `TakeDamage` calls `DropLootOnDeath` and then `SetHealth(0)`. Rust-only additions (not in the Python test):
 //! `Balance_Two` (two playthrough entries), `List_Loop` (a list that includes itself) with `Balance_Loop`, the
-//! batch's damage source `WillowDmgSource_Shotgun` and stock damage type `GD_Impact.DamageType.DmgType_Normal`, and
-//! the definition fields the Rust evaluator reads (`engine_loot`).
+//! batch's damage source `WillowDmgSource_Shotgun` and stock damage type `GD_Impact.DamageType.DmgType_Normal`, the
+//! definition fields the Rust evaluator reads (`engine_loot`), `Balance_Unread` (a pool chance through an unread
+//! resolver class, `ToyUnreadValueResolver`) and `Balance_Partial` (`Pool_Partial`, a coin and `Pool_Self`, a pool
+//! that holds itself).
 
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT};
 use ow_package::testkit::{Export, PackageBuilder, ints};
@@ -140,6 +142,8 @@ pub fn willow_game_loot(
     );
     // The source a loot batch kills with (the run's `hit:<n>:9999:<type>:Shotgun`); the Python toy lacks it.
     w.cls("WillowDmgSource_Shotgun", 0);
+    // A value resolver class no resolver registry knows (the evaluator's `NotYet`).
+    w.cls("ToyUnreadValueResolver", 0);
     let loot_pawn = w.cls("WillowLootPawn", ai_pawn);
     w.array_of(loot_pawn, "ItemPoolList", "Struct", pool_info);
     w.prop("Int", loot_pawn, "GameStageForSpawnedInventory", 0, 0);
@@ -183,6 +187,14 @@ fn entry(p: &mut PackageBuilder, pool: Option<i32>, balance: Option<i32>, weight
     out.extend(p.bool_tag("bDropOnDeath", drop));
     out.extend_from_slice(&p.none());
     out
+}
+
+/// One `PlayThroughData` entry with empty custom lists.
+fn entry_empty(p: &mut PackageBuilder) -> Vec<u8> {
+    let mut entry = p.array_tag("CustomItemPoolIncludedLists", 0, &[]);
+    entry.extend(p.array_tag("CustomItemPoolList", 0, &[]));
+    entry.extend_from_slice(&p.none());
+    entry
 }
 
 /// The tags of one `ItemPoolInfo` entry.
@@ -382,16 +394,56 @@ pub fn toy_pawns_loot(p: &mut PackageBuilder, core: i32, engine: i32, willow: i3
     let tags = vec![p.array_tag("ItemPoolIncludedLists", 1, &ints(&[looping]))];
     let payload = object_payload(p, tags);
     assert_eq!(p.add_export(list_class, "List_Loop", payload), looping);
-    let mut entry = p.array_tag("CustomItemPoolIncludedLists", 0, &[]);
-    entry.extend(p.array_tag("CustomItemPoolList", 0, &[]));
-    entry.extend_from_slice(&p.none());
+    let empty = entry_empty(p);
     let tags = vec![
         p.int_tag("BaseItemGameStage", 1),
         p.array_tag("DefaultItemPoolIncludedLists", 1, &ints(&[looping])),
-        p.array_tag("PlayThroughs", 1, &entry),
+        p.array_tag("PlayThroughs", 1, &empty),
     ];
     let payload = object_payload(p, tags);
     p.add_export(pawn_balance_class, "Balance_Loop", payload);
+    // A pool chance through a resolver nobody has read: the evaluator answers NotYet.
+    let unread_class = p.add_import("Core", "Class", willow, "ToyUnreadValueResolver");
+    let none = object_payload(p, Vec::new());
+    let unread = p.add_export(unread_class, "Unread_0", none);
+    let tags = vec![
+        p.array_tag("ContextResolverChain", 1, &ints(&[no_context])),
+        p.array_tag("ValueResolverChain", 1, &ints(&[unread])),
+    ];
+    let payload = object_payload(p, tags);
+    let attr_unread = p.add_export(attribute_class, "Attr_Unread", payload);
+    let mut chance = p.float_tag("BaseValueConstant", 0.0);
+    chance.extend(p.object_tag("BaseValueAttribute", attr_unread));
+    chance.extend(p.float_tag("BaseValueScaleConstant", 1.0));
+    chance.extend_from_slice(&p.none());
+    let mut unread_info = p.object_tag("ItemPool", pool_half);
+    unread_info.extend(p.struct_tag("PoolProbability", "AttributeInitializationData", &chance));
+    unread_info.extend_from_slice(&p.none());
+    // A pool that holds itself (weight 1000) and a coin (weight 1e-6): its picks nest until the depth bound; and a
+    // pool of a coin and that pool, so a roll can make items before the error.
+    let selfish = p.next_export();
+    let entries = vec![
+        entry(p, Some(selfish), None, 1000.0, true),
+        entry(p, None, Some(coin), 1e-6, true),
+    ];
+    assert_eq!(item_pool(p, "Pool_Self", entries, None, false, None), selfish);
+    let entries = vec![
+        entry(p, None, Some(coin), 1.0, true),
+        entry(p, Some(selfish), None, 1.0, true),
+    ];
+    let four = data(p, "Quantity", 4.0, 1.0);
+    let pool_partial = item_pool(p, "Pool_Partial", entries, Some(four), false, None);
+    let partial_info = info(p, pool_partial, 1.0);
+    for (name, own) in [("Balance_Unread", unread_info), ("Balance_Partial", partial_info)] {
+        let empty = entry_empty(p);
+        let tags = vec![
+            p.int_tag("BaseItemGameStage", 1),
+            p.array_tag("DefaultItemPoolList", 1, &own),
+            p.array_tag("PlayThroughs", 1, &empty),
+        ];
+        let payload = object_payload(p, tags);
+        p.add_export(pawn_balance_class, name, payload);
+    }
     let loot_pawn = p.add_import("Core", "Class", willow, "WillowLootPawn");
     let tags = vec![
         p.object_tag("AIClass", ai_class),

@@ -80,18 +80,13 @@ fn the_balance_spawn_needs_the_item_source() {
     ));
 }
 
-fn declare(w: &mut World, name: &str, key: &str) -> ow_object::ids::FuncId {
-    let path = ow_core::ObjectPath::parse(&format!("WillowGame.ItemPool.{name}")).unwrap();
-    let decl = FunctionDecl::native(path, key).with_static(true);
-    w.vm.declare_function(decl).unwrap()
-}
-
 #[test]
-fn the_pool_spawn_is_not_ported_and_a_none_balance_spawns_nothing() {
+fn the_pool_spawn_is_left_to_ow_combat_and_a_none_balance_spawns_nothing() {
     let mut w = World::new();
     register(&mut w.vm).unwrap();
-    let pool = declare(&mut w, "SpawnBalancedInventoryFromPool", FROM_POOL);
-    assert!(matches!(missing(w.vm.call(pool, None, vec![]).unwrap_err()), Missing::NotPorted));
+    // ow-combat::loot owns the pool native's key (review r1 of PR #340): nothing is bound for it here.
+    assert!(!w.vm.has_native(FROM_POOL));
+    assert!(w.vm.has_native(FROM_BALANCE));
     let path = ow_core::ObjectPath::parse("WillowGame.ItemPool.SpawnBalancedInventoryFromInventoryBalanceDefinition").unwrap();
     let object = w.class("Core.Object");
     let p = |w: &mut World, n: &str, k: ow_object::layout::PropKind, out: bool| {
