@@ -15,6 +15,14 @@
 //! - `--map NAME` (with `--window` or `--frames`, lane H2): loads that map's scene from the install and draws it from
 //!   its player start; `--size WxH` asks for a window of that many physical pixels, `--screenshot PATH` writes a PNG
 //!   of an early frame.
+//! - `ow-host --game <install> --map NAME --play` (lane H4-PLAY): walks the map as the pawn in the window, first
+//!   person, from its player start: WASD, the mouse, space to jump, Escape to let go of the cursor (a click takes it
+//!   again), F1 for the fly camera. Runs until the window is closed. `--play-script FILE` drives the pawn from a
+//!   script instead (`movement::walk::parse_script`) and ends when it does; `--size` and `--no-vsync` work as for
+//!   `--map`, and `--screenshot PATH` writes the start frame there and the end frame beside it as `<stem>_end.png`.
+//!   `NAME` may leave off `_P` (`Sanctuary` is `Sanctuary_P`). A heavy run: the caller takes the machine lock.
+//! - `ow-host --game <install> --map NAME --play-script FILE` (no `--play`): the same script through the same
+//!   simulation with no window, at uneven frame times (`play::HEADLESS_FRAMES`), printing the path digests.
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!
@@ -27,6 +35,8 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE\n       \
                          ow-host --headless-probe";
 
 /// What to run.
@@ -53,6 +63,17 @@ pub enum Command {
         size: Option<(u32, u32)>,
         screenshot: Option<PathBuf>,
     },
+    /// Walk map `map` in the window (lane H4-PLAY), from the player or from `script`.
+    Play {
+        game: PathBuf,
+        map: String,
+        script: Option<PathBuf>,
+        vsync: bool,
+        size: Option<(u32, u32)>,
+        screenshot: Option<PathBuf>,
+    },
+    /// The script through the play simulation with no window.
+    PlayHeadless { game: PathBuf, map: String, script: PathBuf },
 }
 
 /// `WxH` with both parts positive whole numbers.
@@ -74,6 +95,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut map: Option<String> = None;
     let mut size: Option<(u32, u32)> = None;
     let mut screenshot: Option<PathBuf> = None;
+    let mut play = false;
+    let mut play_script: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -120,6 +143,13 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--screenshot given twice".into());
                 }
             }
+            "--play-script" => {
+                let path = it.next().ok_or("--play-script needs a file")?;
+                if play_script.replace(PathBuf::from(path)).is_some() {
+                    return Err("--play-script given twice".into());
+                }
+            }
+            "--play" => play = set_once(play, "--play")?,
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
             "--headless-probe" => probe = set_once(probe, "--headless-probe")?,
@@ -131,17 +161,40 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         return Err("--size and --screenshot need --map".into());
     }
     if probe {
-        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync || walk || map.is_some() {
+        if game.is_some()
+            || window
+            || frames.is_some()
+            || time_limit.is_some()
+            || no_vsync
+            || walk
+            || map.is_some()
+            || play
+            || play_script.is_some()
+        {
             return Err("--headless-probe takes no other argument".into());
         }
         return Ok(Command::HeadlessProbe);
     }
     let game = game.ok_or("--game is required")?;
     if walk {
-        if window || frames.is_some() || time_limit.is_some() || no_vsync || map.is_some() {
+        if window || frames.is_some() || time_limit.is_some() || no_vsync || map.is_some() || play || play_script.is_some() {
             return Err("--walk takes only --game".into());
         }
         return Ok(Command::Walk { game });
+    }
+    if play || play_script.is_some() {
+        let map = map.ok_or("--play and --play-script need --map")?;
+        if window || frames.is_some() || time_limit.is_some() {
+            return Err("--play runs until it is closed or its script ends: no --window, --frames or --time-limit".into());
+        }
+        if play {
+            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot });
+        }
+        if no_vsync || size.is_some() || screenshot.is_some() {
+            return Err("--play-script without --play opens no window: no --no-vsync, --size or --screenshot".into());
+        }
+        let script = play_script.ok_or("--play-script needs a file")?;
+        return Ok(Command::PlayHeadless { game, map, script });
     }
     if window && frames.is_some() {
         return Err("--window and --frames exclude each other".into());
@@ -153,9 +206,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         if !(window || frames.is_some()) {
             return Err("--map needs --window or --frames".into());
         }
-        if screenshot.is_some() && frames.is_some_and(|n| n <= SCREENSHOT_FRAME) {
+        if screenshot.is_some() && frames.is_some_and(|n| n < SCREENSHOT_FRAME) {
             return Err(format!(
-                "--screenshot is taken after frame {SCREENSHOT_FRAME}: --frames must be more than that"
+                "--screenshot is taken on frame {SCREENSHOT_FRAME}: --frames must be at least that"
             ));
         }
         return Ok(Command::Scene { game, map, frames, vsync: !no_vsync, time_limit, size, screenshot });
@@ -169,7 +222,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     Ok(Command::Check { game })
 }
 
-/// The presented frame a `--screenshot` is taken after (lane H2): a `--frames` run must present more than this.
+/// The presented frame a `--screenshot` is taken on (lane H2): a `--frames` run must present at least this many (the
+/// shot is written as that frame is presented, before the run counts its frames and stops).
 pub const SCREENSHOT_FRAME: u32 = 30;
 
 fn set_once(already: bool, flag: &str) -> Result<bool, String> {
@@ -248,7 +302,54 @@ mod tests {
             &["--game", "X", "--window", "--map", "A", "--size", "0x10"],
             &["--game", "X", "--window", "--map", "A", "--size", "wide"],
             &["--headless-probe", "--map", "A"],
-            &["--game", "X", "--frames", "30", "--map", "A", "--screenshot", "a.png"],
+            &["--game", "X", "--frames", "29", "--map", "A", "--screenshot", "a.png"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} was accepted");
+        }
+        // The shot is taken on frame 30, so 30 frames are enough (H2-DRAW review r2).
+        assert!(p(&["--game", "X", "--frames", "30", "--map", "A", "--screenshot", "a.png"]).is_ok());
+    }
+
+    #[test]
+    fn play_needs_a_map_and_runs_with_or_without_a_window() {
+        assert_eq!(
+            p(&["--game", "X", "--map", "Sanctuary", "--play"]),
+            Ok(Command::Play {
+                game: "X".into(),
+                map: "Sanctuary".into(),
+                script: None,
+                vsync: true,
+                size: None,
+                screenshot: None,
+            })
+        );
+        assert_eq!(
+            p(&["--game", "X", "--map", "S", "--play", "--play-script", "w.txt", "--size", "1280x720", "--screenshot", "a.png", "--no-vsync"]),
+            Ok(Command::Play {
+                game: "X".into(),
+                map: "S".into(),
+                script: Some("w.txt".into()),
+                vsync: false,
+                size: Some((1280, 720)),
+                screenshot: Some("a.png".into()),
+            })
+        );
+        assert_eq!(
+            p(&["--game", "X", "--map", "S", "--play-script", "w.txt"]),
+            Ok(Command::PlayHeadless { game: "X".into(), map: "S".into(), script: "w.txt".into() })
+        );
+        for bad in [
+            &["--game", "X", "--play"][..],
+            &["--game", "X", "--play-script", "w.txt"],
+            &["--game", "X", "--map", "S", "--play", "--window"],
+            &["--game", "X", "--map", "S", "--play", "--frames", "60"],
+            &["--game", "X", "--map", "S", "--play", "--play"],
+            &["--game", "X", "--map", "S", "--play-script", "a", "--play-script", "b"],
+            &["--game", "X", "--map", "S", "--play-script", "w.txt", "--size", "10x10"],
+            &["--game", "X", "--map", "S", "--play-script", "w.txt", "--no-vsync"],
+            &["--game", "X", "--walk", "--play"],
+            &["--headless-probe", "--play"],
+            &["--game", "X", "--map", "S", "--play-script"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }

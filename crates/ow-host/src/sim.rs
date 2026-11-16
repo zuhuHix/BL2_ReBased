@@ -14,6 +14,8 @@
 use std::fmt;
 use std::time::Duration;
 
+use ow_core::units::Rotator;
+
 /// What the host tells the simulation, in the order it happened since the last step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -22,6 +24,42 @@ pub enum HostCommand {
     Resized { width: u32, height: u32 },
     /// The window was asked to close; this is the last step.
     CloseRequested,
+    /// The player's input since the last step (lane H4-PLAY, `crate::play`).
+    Play(PlayInput),
+}
+
+/// The player's input gathered by the host since the last step: the keys held now, the presses since the last step,
+/// and the view turn in whole rotator units (65,536 per turn). The host turns mouse pixels into rotator units, so
+/// the message carries no float and the simulation never sees a pixel.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayInput {
+    pub forward: bool,
+    pub back: bool,
+    pub left: bool,
+    pub right: bool,
+    /// The fly camera's up and down (E and Q) and its fast key (Shift).
+    pub up: bool,
+    pub down: bool,
+    pub fast: bool,
+    /// Jump was pressed since the last step.
+    pub jump: bool,
+    /// The fly camera was toggled (F1) since the last step.
+    pub toggle_fly: bool,
+    /// Turn since the last step, rotator units: yaw right positive, pitch up positive.
+    pub yaw: i32,
+    pub pitch: i32,
+}
+
+/// Where the view is: an eye position in uu (Z-up) and a rotation, for the renderer to build its matrices from
+/// through `crate::frame`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewPose {
+    pub eye: [f32; 3],
+    pub rotation: Rotator,
+    /// The view is the debugging fly camera, not the pawn's eye.
+    pub fly: bool,
 }
 
 /// What the simulation gives the host after a step: everything the renderer may read.
@@ -34,8 +72,14 @@ pub struct Snapshot {
     pub sim_time: Duration,
     /// The drawable size the simulation last heard of.
     pub viewport: (u32, u32),
-    /// The colour the frame is cleared to, linear RGBA.
+    /// The colour the frame is cleared to, linear RGBA. On an sRGB surface (the host asks for one when the adapter
+    /// offers it, `crate::gpu`) the hardware encodes it, so the presented clear looks lighter than these numbers
+    /// read as sRGB bytes would.
     pub clear: [f64; 4],
+    /// The view to draw from, when the simulation has one (the play mode); `None` leaves the drawer's own camera.
+    pub view: Option<ViewPose>,
+    /// The simulation has nothing more to do (a scripted play run reached its script's end): the host stops.
+    pub finished: bool,
 }
 
 /// Why a step failed. The host stops the frame loop and exits with an error.
@@ -85,7 +129,14 @@ impl Simulation for StubWorld {
         }
         self.step += 1;
         self.sim_time = self.sim_time.saturating_add(real_dt);
-        Ok(Snapshot { step: self.step, sim_time: self.sim_time, viewport: self.viewport, clear: STUB_CLEAR })
+        Ok(Snapshot {
+            step: self.step,
+            sim_time: self.sim_time,
+            viewport: self.viewport,
+            clear: STUB_CLEAR,
+            view: None,
+            finished: false,
+        })
     }
 }
 

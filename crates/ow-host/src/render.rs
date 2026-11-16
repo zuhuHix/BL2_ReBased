@@ -798,6 +798,9 @@ pub trait Drawer {
         format: wgpu::TextureFormat,
     ) -> Result<(), String>;
     fn window_event(&mut self, event: &winit::event::WindowEvent);
+    /// The simulation's snapshot of this frame, before [`Drawer::encode`] (lane H4-PLAY: the play mode's view comes
+    /// this way). The default ignores it.
+    fn snapshot(&mut self, _snapshot: &crate::sim::Snapshot) {}
     /// Raw mouse motion in pixels (right and down positive).
     fn mouse_motion(&mut self, dx: f64, dy: f64);
     /// Encodes the frame into `target` of `size`, `dt` after the last one.
