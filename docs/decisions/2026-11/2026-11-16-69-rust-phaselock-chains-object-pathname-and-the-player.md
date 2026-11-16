@@ -21,14 +21,21 @@ correction in `docs/verification/NATIVE_ACTION_SKILL.md`.
   BLCMM_DUMP_CROSSCHECK.md). Its use for a data subobject (`...Att_X:Resolver_0`) follows the same rule and is
   UNVERIFIED: no record holds a live read of one. A plain definition (`GD_Siren_Skills.Misc.Att_Phaselock_Duration`)
   reads as the stock paths of the records.
-- An object read from a package uses that package's export and import tables (the file's own package is not part of a
-  cooked object's path); an object made at run time uses the VM's outer links; a package with no outer is its name.
-  Any other object with no outer, and None, are `NotYet { NotRead }`: the game's transient package and levels are not
-  modelled, and the answer for None is not read.
+- An object read from a package uses that package's export and import tables, with `ow_defs::identity::full_path`'s
+  rule for the file (now public; review r1 of PR #368): an export whose outermost export is a `Package` (a package
+  cooked into another file, as `Startup.upk` holds the `GD_*` packages) is named by its path in the file; any other
+  export starts with the file's own package, the file stem, so a map's actor reads
+  `<Map>.TheWorld:PersistentLevel.<Actor>` (the recorded form); an import's chain already ends at its package. A class
+  default object is `<class package>.Default__<class>`. An object made at run time uses the VM's outer links; a package
+  with no outer is its name. Any other object with no outer, and None, are `NotYet { NotRead }`: the game's transient
+  package is not modelled, and the answer for None is not read.
 - The callers on the duration chain (`WillowPawn.GetInstancedDesignerAttribute`, `InstancedDesignerAttribute.Initialize`)
   store the string and compare it with the same call on the same definition, so the chain does not depend on the
   unconfirmed case.
-- Test: `path_name::tests::the_path_name_joins_the_outer_chain_with_the_subobject_delimiter` (both modes).
+- Tests (both modes): `path_name::tests::the_path_name_joins_the_outer_chain_with_the_subobject_delimiter` (run-time
+  objects) and `package_paths_lead_with_the_file_stem_unless_the_top_export_is_a_package` (an invented map-shaped file:
+  `Sanctuary_Toy.TheWorld:PersistentLevel.Actor_1`, a cooked group's `GD_Toy.Def:Sub`, an import, a class default
+  object).
 
 **The player-controller context query** (`EngineQuery::PlayerController`, which `PlayerControllerAttributeContextResolver`
 asks; `World::new` now registers a handler for it). The rule is NATIVE_ITEM_RULES.md's (read from the executable by an
@@ -41,9 +48,10 @@ earlier lane), implemented in `ow_attr::context_resolvers::player_controller_of`
 | else | None |
 
 The interface tests are the class index's (`implements_interface`, the test `BalancedActor` already used, now shared;
-a native stand-in ancestry is `NotYet`, no store is `NotYet { LayerAbsent("ow-defs") }`). Behaviour change for both: a
-store with no package that could hold the interface (an empty one) now has no implementer, as a store whose packages
-lack the class already had, where it was a store error. Both interfaces were checked
+a native stand-in ancestry is `NotYet`, no store is `NotYet { LayerAbsent("ow-defs") }`). A store with no package at
+all has no implementer, where it was a store error; a store with packages but without the interface's package
+(`WillowGame.upk` missing) is `NotYet { NotRead }` naming it, so a missing package never reads as "no implementer"
+(review r1 of PR #368; test `player_tests::a_store_without_the_interfaces_package_is_not_yet`). Both interfaces were checked
 as class exports of the installed `WillowGame.upk`, and `IPlayerMaster` declares one function,
 `GetPlayerMasterPlayerController`. The C++ refuses this resolver, so both parity modes run the rule. Tests:
 `player_tests::the_player_controller_rule_in_both_modes` (an invented `WillowGame.upk` with both interfaces),

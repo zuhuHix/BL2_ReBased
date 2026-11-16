@@ -51,8 +51,9 @@ impl ContextResolver for BalancedActor {
 /// Whether the class of `o` implements the interface class at `interface` (the class index's
 /// `CodeIndex::implements`, the test `Vm::implements` and the VM's `InterfaceCast` use): the interface table of the
 /// class or of a super class names the interface or a class derived from it. A class with no package export behind it
-/// implements nothing; a store whose code packages hold no such interface (or no package that could) has no implementer
-/// (false); a "no" over an
+/// implements nothing; a store whose code packages hold no such interface (or, for an empty store, no package that could)
+/// has no implementer (false); a store with packages but without the interface's package is `NotYet { NotRead }`; a
+/// "no" over an
 /// ancestry through an engine-native stand-in class is not proven, so it is `NotYet { NotRead }`; a world without a
 /// definition store is `NotYet { LayerAbsent("ow-defs") }`. `who` names the caller in those texts. Shared by
 /// [`BalancedActor`] and `ow-world`'s player-controller query (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
@@ -75,9 +76,22 @@ pub fn implements_interface(
     let (code, store) = defs.code_mut();
     let key = match code.find_class(store, interface) {
         Ok(key) => Some(key),
-        // No such interface class, or no package that could hold it: nothing implements it.
-        Err(ReflectError::ClassNotFound(_))
-        | Err(ReflectError::Store(ow_package::store::StoreError::PackageNotFound(_))) => None,
+        // No such interface class: nothing implements it. A missing package is that only in a store that holds no
+        // package at all; with packages indexed, the interface's package is missing and the answer is not known
+        // (review r1 of PR #368).
+        Err(ReflectError::ClassNotFound(_)) => None,
+        Err(ReflectError::Store(ow_package::store::StoreError::PackageNotFound(_)))
+            if store.indexed_package_count() == 0 =>
+        {
+            None
+        }
+        Err(ReflectError::Store(ow_package::store::StoreError::PackageNotFound(name))) => {
+            return Err(NotYet::not_read(
+                format!("{who}: the package {name} that holds {interface} is not in the store"),
+                RECORD,
+            )
+            .into());
+        }
         Err(e) => return Err(DefError::from(e).into()),
     };
     let implements = match (key, code.key_of(class)) {

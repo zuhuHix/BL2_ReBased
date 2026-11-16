@@ -257,7 +257,7 @@ pub(crate) fn is_class_default(path: &str) -> bool {
 /// (a package cooked into another file, as `Startup.upk` holds `GD_*` packages) is named by its path in the file; any
 /// other export is named after the file: `<file stem>.<path in the file>`. `Package::find_export` drops that leading
 /// stem again, so either form finds the export in its own file.
-pub(crate) fn full_path(package: &Package, reference: i32) -> Result<String, PackageError> {
+pub fn full_path(package: &Package, reference: i32) -> Result<String, PackageError> {
     let path = package.path_of(reference)?;
     if reference <= 0 {
         return Ok(path);

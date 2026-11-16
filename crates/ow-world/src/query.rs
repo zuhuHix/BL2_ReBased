@@ -264,8 +264,6 @@ fn world_info_game(space: &ObjectSpace, info: ObjRef) -> Result<Option<ObjRef>, 
     }
 }
 
-/// Adds the [`WorldQuery`] service to `vm` and sets the hooks over it (once per VM: a second call is refused by
-/// `add_service`).
 /// The [`QueryKind::PlayerController`] handler (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69): the rule of
 /// `ow_attr::context_resolvers::player_controller_of` (NATIVE_ITEM_RULES.md: the source if it is an
 /// `IPlayerBehavior`, else through `IPlayerMaster`, else None; UNVERIFIED in the running game).
@@ -282,6 +280,8 @@ pub fn player_controller_handler() -> QueryFn {
     })
 }
 
+/// Adds the [`WorldQuery`] service to `vm` and sets the hooks over it (once per VM: a second call is refused by
+/// `add_service`).
 pub fn install(vm: &mut Vm) -> Result<Rc<RefCell<WorldQuery>>, VmError> {
     let state = vm.add_service(WorldQuery::new())?;
     vm.set_world_hooks(Rc::new(RefCell::new(Hooks {
