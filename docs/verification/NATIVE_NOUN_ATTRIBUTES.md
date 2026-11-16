@@ -49,74 +49,76 @@ in every operation.
 ## 3. The key
 
 The key is **the name of the resolver's own outer object**: in the installed data, the attribute definition that
-owns the resolver (for example `Attribute_HealthMultiplier`). It is a name comparison, number suffix included. A
-resolver with no outer has no key and finds nothing (section 4, step 1). If the outer's name is invalid the native
-uses the text `<uninitialized>` as the key; that cannot happen with loaded objects.
+owns the resolver (for example `Attribute_HealthMultiplier`). Entries match by name equality, number suffix
+included. A resolver with no outer has no key: it behaves as on a context that is not a provider (section 4).
 
-## 4. Finding the entry (every operation starts here)
+## 4. Which store, and what each operation returns
 
-The lookup takes the resolver, the context and one flag, "this is a read" (get and get-base) or "this is a write"
-(add, remove, set-base). In order:
+Terms. A **provider** is a context that implements `INounAttributeProvider`. Its **entry** for the key is the first
+`NounState` element, in array order, whose `NounName` equals the key. **Strategy** is the resolver's
+`ReplicationStrategy`. **Client** means the world's net mode is the network-client mode; **standalone or server** is
+every other mode (the slice is single player, so always this one). `d` is the resolver's `DefaultValue`, evaluated as
+ordinary initialization data (the evaluator the script's `AttributeInitializationDefinition.EvaluateInitializationData`
+uses) with the context as the source and no override source, in single precision.
 
-1. No outer: nothing found.
-2. The context is asked for the `INounAttributeProvider` interface. Not a provider: nothing found.
-3. The provider hands over its `NounState` array and, when it has one, its replicated array with its fill count and
-   capacity. Nothing found when the resolver's strategy is not 0 and the provider handed over no replicated array,
-   or when the strategy is 0 and it handed over no `NounState` array. Which arrays each of the four providers hands
-   over was not read (expected: all four hand over `NounState`, the three with `ReplicatedNouns` hand that over too).
-4. Network client only (the world's net mode is the client mode) and a strategy that is not 0: a write finds
-   nothing; a read searches only the replicated array (step 7). A standalone game or a server skips this step.
-5. Search the `NounState` entries in array order for `NounName` equal to the key. The first match is the result.
-6. **No match: create the entry, for a read and a write alike.** In this order:
-   1. Evaluate `DefaultValue` as ordinary initialization data (the same evaluator the script's
-      `AttributeInitializationDefinition.EvaluateInitializationData` uses) with the context as the source and no
-      override source. Call the result `d` (single-precision float).
-   2. If the strategy is not 0 and the provider handed over a replicated array: when its count is below its capacity,
-      write a replicated entry at index `count` (key, `Value` = `d`, `bOnlyRelevantToOwner` true exactly when the
-      strategy is 1), add 1 to the count, tell the provider its replicated copy changed (an interface call whose
-      body was not read), and remember that index. When it is full, log an error ("Too many
-      ReplicatedNouns! No room for ..."; which names fill it was not read), write nothing to the replicated array and
-      remember -1. Otherwise (strategy
-      0, or no replicated array) remember -1.
-   3. Append a `NounAttributeState` to `NounState`: `NounName` = key, `Value` = `d`, `BaseValue` = `d`,
-      `ModifierStack` empty, `ReplicationStrategy` = the resolver's, `IndexInReplicationArray` = the remembered index.
-   4. The result is the new entry.
-7. (Client read of a replicated noun only.) Search the replicated array's first `count` entries for the key; the first
-   match is the result, else nothing found. No entry is created.
+| Context | Strategy | Net mode | Store used | Missing entry created? | Get / get-base | Writes (add, remove, set-base) |
+|---|---|---|---|---|---|---|
+| not a provider, or the resolver has no outer | any | any | none | no | 0.0 / 0.0 | false |
+| provider | 0 | any | `NounState` | yes, by reads and writes alike | entry `Value` / entry `BaseValue` | applied to the entry (section 5) |
+| provider with a replicated array | 1 or 2 | standalone or server | `NounState`, mirrored into `ReplicatedNouns` | yes, by reads and writes alike, with a replicated slot | entry `Value` / entry `BaseValue` | applied to the entry, then mirrored |
+| provider without a replicated array | 1 or 2 | standalone or server | none | no | 0.0 / 0.0 | false |
+| provider with a replicated array | 1 or 2 | client | `ReplicatedNouns` only (its first `NumReplicatedNouns` slots, by `NounName`) | no | slot `Value`, or 0.0 when no slot matches / 0.0 | false |
 
-## 5. The operations
+A provider that hands over no `NounState` array behaves as "not a provider" for strategy 0. Which arrays each of the
+four providers hands over was not read; expected: all four hand over `NounState`, and the three that declare
+`ReplicatedNouns` hand that over too (so `GearboxMind` would be "without a replicated array"). Every installed mind
+noun has strategy 0, so the data never meets the row "provider without a replicated array".
 
-Outputs are floats for the reads and true / false for the writes.
+**A created entry** holds: `NounName` = the key, `Value` = `BaseValue` = `d`, an empty `ModifierStack`,
+`ReplicationStrategy` = the resolver's, and `IndexInReplicationArray` = the replicated slot it got, or -1 when it got
+none (strategy 0, no replicated array, or the array was full, which logs an error). A slot it gets is the next free
+one (index `NumReplicatedNouns`, which then grows by one), filled with the key, `d`, and `bOnlyRelevantToOwner` true
+exactly for strategy 1 (`NOUNREP_RepToOwnerOnly`); the provider is then told its replicated copy changed (an
+interface call whose body was not read).
 
-- **Get:** the found entry's `Value` (on a client, a replicated entry's `Value`). Nothing found: 0.0. Because of
-  step 6, the first get of a noun on a provider creates it and returns `d`.
-- **Get-base:** the found entry's `BaseValue`. Nothing found: 0.0. A client reading a replicated noun gets 0.0 (the
-  replicated entry has no base).
-- **Add a modifier:** a null modifier answers false before the lookup. Otherwise look up (a write). Nothing found:
-  false. If the modifier is already in the entry's `ModifierStack`: false, nothing changes. Otherwise append it,
-  recompute (below), mirror (below), true.
-- **Remove a modifier:** a null modifier answers false before the lookup. Otherwise look up (a write). Nothing found:
-  false. Remove **every** occurrence of the modifier from the entry's stack; none was there: false, nothing changes.
-  Otherwise recompute, mirror, true.
-- **Set-base(x):** look up (a write); nothing found: false. Set `BaseValue` = x, recompute, mirror, true. On a
-  provider without the entry, the lookup first creates it from `d` (step 6), then the base is overwritten.
+Two orderings change behaviour:
+
+- `d` is evaluated **before** the entry is appended, so a `DefaultValue` that reads other nouns of the same context
+  sees `NounState` without the new entry, and an entry those reads create comes before it.
+- The replicated slot is assigned **when the entry is created**, and only then; an existing entry never gains one
+  later.
+
+## 5. The operations on an entry
+
+Each operation below works on the entry the table gives (created first where the table says so). Where the table
+says "none", reads return 0.0 and writes return false, and nothing changes.
+
+- **Get:** the entry's `Value`. The chain's previous value is ignored. So the first get of a noun on a provider
+  returns `d` and leaves the new entry behind.
+- **Get-base:** the entry's `BaseValue`.
+- **Add a modifier:** a null modifier returns false and nothing is looked up or created. If the modifier is already
+  in the entry's `ModifierStack`, that is, the same `AttributeModifier` object is there (identity, not equal values):
+  false, nothing changes. Otherwise it is appended, the value recomputed and mirrored: true.
+- **Remove a modifier:** a null modifier returns false and nothing is looked up or created. Every occurrence of that
+  same modifier object (identity, as for add) is removed from the entry's stack. None was there: false, nothing
+  changes. Otherwise the value is recomputed and mirrored: true.
+- **Set-base(x):** `BaseValue` = x, then the value is recomputed and mirrored: true. On a provider without the entry,
+  the entry is created from `d` first, then its base is overwritten.
 - **Recompute:** `Value` = `(BaseValue + sum PreAdd) * ((1 + sum of positive Scale) / (1 - sum of zero-or-negative
-  Scale)) + sum PostAdd`, single precision, sums taken in stack order, over the entry's own `ModifierStack`. The
-  modifier type is read from each `AttributeModifier` (Scale, PreAdd, PostAdd; any other type is skipped). This is the
-  same arithmetic as the property stacks (NATIVE_ATTRIBUTES.md section 3), without the integer truncation (a noun is a
+  Scale)) + sum PostAdd`, single precision, sums taken in stack order, over the entry's own `ModifierStack`. Each
+  `AttributeModifier`'s type selects its sum (Scale, PreAdd, PostAdd; any other type is skipped). This is the same
+  arithmetic as the property stacks (NATIVE_ATTRIBUTES.md section 3), without the integer truncation (a noun is a
   float). No clamp.
-- **Mirror:** when the entry's `IndexInReplicationArray` is not -1 and the provider handed over a replicated array,
-  write the new `Value` into that replicated entry and tell the provider its replicated copy changed.
+- **Mirror:** when the entry has a replicated slot (`IndexInReplicationArray` is not -1) and the provider has a
+  replicated array, that slot's `Value` becomes the new `Value` and the provider is told its replicated copy changed.
 - No operation raises the attribute change notification of NATIVE_ATTRIBUTES.md section 4 (a noun is not a
-  property). The writes do not touch `DefaultValue`, and a later read never re-evaluates it once the entry exists.
+  property). The writes do not touch `DefaultValue`, and once the entry exists `d` is never evaluated again.
 
 ## 6. Edge cases
 
 - Two resolvers whose outers share a name share one entry on a given context (the key is the name only). Not seen in
   the installed data.
 - A noun entry persists on its context for that object's lifetime; a fresh context (a new mind) starts empty.
-- The order of the creation step matters only if evaluating `DefaultValue` reads other nouns on the same context:
-  the new entry is appended after that evaluation.
 - A context that is not a provider (for example the player controller) reads 0.0, not `DefaultValue`.
 
 ## 7. What the port does now (`ow-attr`, UNVERIFIED)
@@ -133,12 +135,19 @@ Outputs are floats for the reads and true / false for the writes.
 1. Key = the resolver's outer's name; no outer: reads 0.0, writes false.
 2. Provider = the context implements `INounAttributeProvider` (in the installed reflection, the same as "its class
    declares `NounState`"); not a provider: reads 0.0, writes false.
-3. Find by `NounName` in `NounState` order; create on a miss for reads and writes (section 4, step 6, in its order).
+3. Find by `NounName` in `NounState` order; create on a miss for reads and writes (section 4, with its two
+   orderings).
 4. Get = `Value`, get-base = `BaseValue`, ignoring the previous chain value.
 5. Add (dedupe), remove (all copies), set-base, each followed by the recompute and the mirror; true on success.
-6. Single player: the client branch (section 4, steps 4 and 7) is not needed; the replicated copy only matters for
-   `IsPhaselocked` on a pawn and is read only by clients.
+6. Single player: the client row of the table is not needed; the replicated copy only matters for `IsPhaselocked`
+   on a pawn and is read only by clients.
 7. `ow-attr`'s `Storage` has no form for a noun entry (its own base and modifier stack): the writes need one.
+8. **How the class values arrive.** In the game the AI class's starting values reach a noun only through the script's
+   `SetBaseValue` (section 1, `WillowPawn.ApplyAttributeStartingValues`). Until that has run on a context, the first
+   get returns `d`, not the class value: 1.0 for `Attribute_HealthMultiplier`, whatever the AI class lists. So the
+   Off rule gives class-specific numbers only once set-base works and the starting values are applied. Who calls
+   `ApplyAttributeStartingValues`, and when relative to the health pool's creation, is not read; it is a dependency
+   of this implementation.
 
 ## 9. What would confirm it (live, bl-sdk)
 

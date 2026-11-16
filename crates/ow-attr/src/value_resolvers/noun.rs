@@ -11,8 +11,14 @@
 //!   waits for a clean-room implementation from that note (docs/LANE_BRIEF.md, "Clean room (native code)").
 //!
 //! **The attribute.** The C++ reading is handed the attribute it serves; [`ValueResolver`] is not. Every installed
-//! Noun resolver (15) is a subobject of its one attribute definition (the packages), so the resolver's outer is
-//! taken as the attribute; a resolver whose outer is not an attribute definition is `NotYet { NotRead }`.
+//! Noun resolver (15) is a subobject of its one attribute definition and listed in that attribute's
+//! `ValueResolverChain` (the packages), so the resolver's outer is taken as the attribute. The assumption is checked:
+//! an outer that is not an attribute definition, or whose `ValueResolverChain` does not list this resolver, is
+//! `NotYet { NotRead }`.
+//!
+//! **Stricter than the C++.** Where `nounValue` falls back or skips, this reading answers `BadData`: an `AIClass`
+//! that is not an object reference (the C++ reads no starting values and falls back to `DefaultValue`), and a
+//! starting-value entry with no `Attribute` field (the C++ skips that entry). Neither shape is in the installed data.
 //!
 //! **Writes** (add, remove, set-base) answer `NotYet { NotPorted }` in both modes: the C++ has no noun write, and the
 //! native one waits with the Off rule.
@@ -51,22 +57,24 @@ fn awaiting(what: &str) -> AttrError {
 }
 
 /// The attribute this resolver serves, for the C++ reading, which is handed it: the resolver's outer, which must be
-/// an attribute definition.
+/// an attribute definition whose `ValueResolverChain` lists this resolver (module documentation).
 fn attribute(cx: &mut EvalCx<'_>, resolver: ObjRef) -> Result<ObjRef, AttrError> {
     ensure_loaded(cx, resolver)?;
-    let space = cx.world.parts().space;
-    let owner = space.heap.get(resolver)?.outer;
+    let owner = cx.world.parts().space.heap.get(resolver)?.outer;
     if let Some(a) = owner
-        && space
-            .prop(space.heap.get(a)?.class, "ValueResolverChain")
-            .is_some()
+        && let Some(chain) = property(cx, a, "ValueResolverChain")?
     {
-        return Ok(a);
+        for entry in elements("ValueResolverChain", &chain)? {
+            if object("ValueResolverChain entry", entry)? == Some(resolver) {
+                return Ok(a);
+            }
+        }
     }
+    let space = cx.world.parts().space;
     Err(NotYet::not_read(
         format!(
-            "NounAttributeValueResolver (reference reading) whose outer is {}, not an attribute definition: the \
-             resolver is not told which attribute it serves",
+            "NounAttributeValueResolver (reference reading) whose outer {} is not an attribute definition listing \
+             it in its ValueResolverChain: the resolver is not told which attribute it serves",
             owner.map_or_else(|| "None".to_string(), |o| class_path(space, o))
         ),
         CPP,
