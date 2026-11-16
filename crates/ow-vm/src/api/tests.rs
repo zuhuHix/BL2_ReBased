@@ -834,3 +834,19 @@ fn streams_of_the_other_mode_are_caught_in_debug_builds() {
     fx.vm.rng = GameRng::from_world_seed(0, ParityMode::Reference);
     let _ = fx.vm.call(twice, None, vec![]);
 }
+
+/// Decision 2026-11-16-80: the VM world's clock is its `TimeSeconds`, and `currency_on_hand` on a class with no
+/// `GetCurrencyOnHand` in its code is `NotYet { NotRead }`, never a silent 0. (The call itself is the one
+/// `ow_combat::hit::call_method` makes, over package code.)
+#[test]
+fn the_vm_world_answers_the_clock_and_refuses_a_class_without_the_currency_call() {
+    let mut fx = fixture(ParityMode::Off);
+    let vm = &mut fx.vm;
+    vm.clock.advance(2.5);
+    assert_eq!(AttrWorld::time_seconds(vm), Ok(Some(2.5)));
+    let info = vm.space.alloc(fx.sub_pool, "Toy_Info", None, Origin::Runtime).unwrap();
+    assert!(matches!(
+        vm.currency_on_hand(info, 1),
+        Err(AttrError::NotYet(n)) if n.missing == Missing::NotRead
+    ));
+}

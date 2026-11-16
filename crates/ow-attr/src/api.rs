@@ -181,6 +181,17 @@ pub enum EngineQuery {
     /// `Ok(None)`: no local player or no such pool. Added by
     /// FIX-ATTR-RESOLVERS (an additive change, section 7; decision 2026-11-16-73).
     LocalPlayerPool { resource: ObjRef },
+    /// Element `index` of the current world's controller list, whatever the source; `Ok(None)` past its end.
+    /// `AmmoDropWeightAttributeValueResolver` walks the list from 0 in `ParityMode::Off` (NATIVE_ATTR_RESOLVERS.md
+    /// section 4). Added by FIX-ATTR-RESOLVERS-OFF (an additive change, section 7; decision 2026-11-16-80).
+    WorldController { index: u32 },
+    /// The `ResourcePool` the controller `source` holds for the `ResourceDefinition` object `resource`, the way
+    /// `AmmoDropWeightAttributeValueResolver` finds it (NATIVE_ATTR_RESOLVERS.md section 4: a controller virtual
+    /// gives the controller whose resource-pool provider is asked for the pool reference, which is then resolved).
+    /// `Ok(None)`: that controller is skipped (no provider, or a reference that does not resolve). The virtual and the
+    /// provider's method are not read, so no world answers it yet. Added by FIX-ATTR-RESOLVERS-OFF (decision
+    /// 2026-11-16-80).
+    ControllerPool { resource: ObjRef },
 }
 
 /// The world the attribute system reads and edits: the running VM (`ow_vm::Vm`), an offline world
@@ -255,6 +266,29 @@ pub trait AttrWorld {
             "a context resolver whose GetAttributeContext is script",
             "ow-vm",
             "NATIVE_ATTRIBUTES.md section 5",
+        )
+        .into())
+    }
+
+    /// The current world's `TimeSeconds`; `Ok(None)` when there is no world (the reader then takes 0).
+    /// `RandomAttributeValueResolver`'s saved values expire against it in `ParityMode::Off` (NATIVE_ATTR_RESOLVERS.md
+    /// section 3). The default answers `NotYet { LayerAbsent("ow-vm") }`: a world with no clock (an offline world, a
+    /// roll's adapter, a unit test) does not claim to be "no world". Added by FIX-ATTR-RESOLVERS-OFF (decision
+    /// 2026-11-16-80).
+    fn time_seconds(&mut self) -> Result<Option<f32>, AttrError> {
+        Err(NotYet::layer_absent("the current world's TimeSeconds", "ow-vm", "NATIVE_ATTR_RESOLVERS.md section 3").into())
+    }
+
+    /// `WillowPlayerReplicationInfo.GetCurrencyOnHand(form)` of the replication info `info`, as a call of that
+    /// function would answer it (`CurrencyAttributeValueResolver` in `ParityMode::Off`, NATIVE_ATTR_RESOLVERS.md
+    /// section 2: "the same native rule the script call reaches"). The default answers `NotYet { LayerAbsent("ow-vm")
+    /// }`: only a world that runs the VM can make the call. Added by FIX-ATTR-RESOLVERS-OFF (decision 2026-11-16-80).
+    fn currency_on_hand(&mut self, info: ObjRef, form: u8) -> Result<i32, AttrError> {
+        let _ = (info, form);
+        Err(NotYet::layer_absent(
+            "WillowPlayerReplicationInfo.GetCurrencyOnHand from an attribute",
+            "ow-vm",
+            "NATIVE_ATTR_RESOLVERS.md section 2",
         )
         .into())
     }

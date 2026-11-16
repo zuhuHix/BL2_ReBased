@@ -55,6 +55,10 @@ pub enum QueryKind {
     PlayerSkill,
     GameReplicationInfo,
     LocalPlayerPool,
+    /// FIX-ATTR-RESOLVERS-OFF (decision 2026-11-16-80).
+    WorldController,
+    /// FIX-ATTR-RESOLVERS-OFF (decision 2026-11-16-80).
+    ControllerPool,
 }
 
 impl QueryKind {
@@ -69,6 +73,8 @@ impl QueryKind {
             EngineQuery::PlayerSkill { .. } => QueryKind::PlayerSkill,
             EngineQuery::GameReplicationInfo => QueryKind::GameReplicationInfo,
             EngineQuery::LocalPlayerPool { .. } => QueryKind::LocalPlayerPool,
+            EngineQuery::WorldController { .. } => QueryKind::WorldController,
+            EngineQuery::ControllerPool { .. } => QueryKind::ControllerPool,
             _ => return None,
         })
     }
@@ -84,6 +90,13 @@ impl QueryKind {
             }
             QueryKind::LocalPlayerPool => {
                 "the combat run's Reference stand-in of the local player's pool (ow-combat; decision 2026-11-16-73)"
+            }
+            QueryKind::WorldController => {
+                "the world's controller list (no world models it yet; decision 2026-11-16-80)"
+            }
+            QueryKind::ControllerPool => {
+                "a controller's pool for a resource (the controller virtual and the provider method are not read: \
+                 NATIVE_ATTR_RESOLVERS.md section 4, decision 2026-11-16-80)"
             }
             QueryKind::PlayerController | QueryKind::AttributeContextSource => {
                 "a handler for this query (the engine rule is not read: NATIVE_ATTRIBUTES.md sections 5, 10)"
