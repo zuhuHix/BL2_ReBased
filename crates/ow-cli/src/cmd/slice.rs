@@ -74,14 +74,14 @@ use crate::json::quote;
 /// differs from `--mission-run`, whose VM refuses every one of them in both modes (decision 2026-11-15-34).
 /// `Actor.SetTimer` and `Actor.ClearTimer`, which the C++ also stubs there, are not listed: the Rust world binds them.
 pub const REFERENCE_STUBS: &[(&str, &str)] = &[
-    ("AIComponent.ActivateEvent(name)", "the AI component's event dispatch; no AI component is modelled here"),
+    ("AIComponent.ActivateEvent(name)", "the AI component's event dispatch; read as analyst, not implemented (decision 81)"),
     ("Actor.AttachComponent(object)", "component attachment; the VM has no scene or component model"),
-    ("Actor.LocalPlayerControllers(class,object)", "the local-controller iterator; its rule is not read (decision 34)"),
+    ("Actor.LocalPlayerControllers(class,object)", "the local-controller iterator; the C++ has none (Off binds it, decision 81)"),
     ("GFxMoviePlayer.GetVariableObject(string,class)", "a Flash movie query; the mission screen is not hosted"),
     ("MissionTracker.AllExpansionSideMissionsComplete(object,object)", "a tracker query whose rule is not read"),
     ("MissionTracker.GetActivePrimaryObjectiveSet(object)", "a tracker query whose rule is not read"),
     ("MissionTracker.GetAllMissions(array)", "the tracker's mission list; one mission is modelled, the rule is not read"),
-    ("MissionTracker.GetObjectivesProgress(object,array,bool)", "a tracker query whose rule is not read (decision 34)"),
+    ("MissionTracker.GetObjectivesProgress(object,array,bool)", "a tracker query; read as analyst, not implemented (decision 81)"),
     ("MissionTracker.RegisterWaypoint(object,object)", "the HUD waypoint registry; presentation, not read"),
     ("Object.Localize(string,string,string)", "localized text lookup; no localization files are read"),
     ("PlayerController.IsLocalPlayerController()", "a controller query whose rule is not read"),

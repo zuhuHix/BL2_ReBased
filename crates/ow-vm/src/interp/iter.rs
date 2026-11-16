@@ -14,7 +14,8 @@
 //! C++ writes through the pointers.
 //!
 //! **Engine iterators.** The call sits under any `Context` wrappers and must be a numbered native with an iterator
-//! bound; the wrappers are resolved first (a None object skips the loop, counted as a None context), then the
+//! bound, or, outside `ParityMode::Reference`, a `FinalFunction` call of a native with an iterator bound (decision
+//! 2026-11-16-81; the C++ binds numbered natives only); the wrappers are resolved first (a None object skips the loop, counted as a None context), then the
 //! arguments are bound like an ordinary call and the iterator returns its list, which the loop walks with the call's
 //! out parameter as the loop variable. An object destroyed since the list was made is skipped (a handle the heap no
 //! longer knows is skipped too, Rust-only: the C++ list keeps its objects alive), and the variable reads None once the
@@ -29,6 +30,7 @@
 //! Status: a port of the C++ reading; UNVERIFIED in the running game (the C++ labels the iterator natives
 //! UNVERIFIED too: `DynamicActors` visits the same list as `AllActors`, and the list is taken when the loop starts).
 
+use ow_core::ParityMode;
 use ow_object::ids::FuncId;
 use ow_object::value::Value;
 use ow_script::decode::{Code, Expr};
@@ -190,6 +192,14 @@ fn engine(
     let call = unwrap_context(outer);
     let bound = if call.is_native_call() {
         match native_by_index(vm, call.native)? {
+            Some(function) => vm.iterator_for(function).map(|it| (function, it)),
+            None => None,
+        }
+    } else if vm.parity != ParityMode::Reference && call.op == op::FINAL_FUNCTION {
+        // A native iterator without a native index, called by reference (every `Actor.LocalPlayerControllers` site
+        // is; decision 2026-11-16-81): bound when an iterator is registered under its key. Reference keeps the C++,
+        // which binds numbered natives only.
+        match iterator_function(vm, f, call)? {
             Some(function) => vm.iterator_for(function).map(|it| (function, it)),
             None => None,
         }
@@ -767,6 +777,63 @@ mod tests {
         assert_eq!(r.on(s, "Core.Seeker.CountChildren", vec![crate_]), int(2));
         let census = r.vm.census.take().unwrap();
         assert_eq!(census.native_calls.get("Core.Actor.ChildActors"), Some(&1));
+    }
+
+    /// A native iterator with no native index, called by `FinalFunction` (as every `Actor.LocalPlayerControllers`
+    /// site is; decision 2026-11-16-81): outside Reference the loop walks the iterator registered under its key;
+    /// under Reference it stays the C++ stub site (the loop is skipped).
+    #[test]
+    fn a_final_function_iterator_binds_outside_reference() {
+        for (mode, expected) in [(ParityMode::Off, 2), (ParityMode::Reference, 0)] {
+            let mut x = actors();
+            let params = [
+                Param::new("Class", "BaseClass"),
+                Param {
+                    flags: CPF_OUT,
+                    type_ref: x.actor,
+                    ..Param::new("Object", "Actor")
+                },
+            ];
+            let actor = x.actor;
+            let local = x.toy.native(actor, "LocalOnes", &params, None, 0);
+            let object = x.toy.object;
+            class_param(&mut x.toy, local.get("BaseClass"), CPF_PARM, object);
+            let function = local.function;
+            // N = 0; foreach LocalOnes(C, A) N += 1; return N, with LocalOnes called by reference.
+            x.declare("CountLocal", &[], false, |ids, a| {
+                let (n, c, item) = (ids.get("N"), ids.get("C"), ids.get("A"));
+                let_(
+                    a,
+                    |a| {
+                        a.local(n);
+                    },
+                    |a| {
+                        a.raw(&[0x25]);
+                    },
+                );
+                a.stmt().raw(&[0x2F]).raw(&[0x1C]).reference(function);
+                a.local(c).local(item).raw(&[0x16]);
+                let at = a.bytes.len();
+                a.w(0);
+                count(a, n, 1);
+                a.stmt().raw(&[0x31]);
+                let end = a.here();
+                a.stmt().raw(&[0x30]);
+                patch_at(a, at, end);
+                returns(a, |a| {
+                    a.local(n);
+                });
+            });
+            let mut r = x.toy.run(mode);
+            let one = r.object("Core.Crate");
+            let two = r.object("Core.Crate");
+            let s = r.object("Core.Seeker");
+            let list = vec![Value::Object(Some(one)), Value::Object(Some(two))];
+            let fixed: crate::api::IteratorFn = Rc::new(move |_| Ok(IteratorResult::new(1, list.clone())));
+            r.vm.register_iterator("Actor.LocalOnes(class,object)", fixed).unwrap();
+            let actor = class(&mut r, "Core.Actor");
+            assert_eq!(r.on(s, "Core.Seeker.CountLocal", vec![actor]), int(expected), "{mode:?}");
+        }
     }
 
     #[test]

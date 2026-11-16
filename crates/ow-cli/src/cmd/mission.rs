@@ -32,8 +32,9 @@
 //! **Gameplay stub policy.** The VM refuses an unbound native (`StubPolicy::Refuse`, architecture 3.8), and the
 //! bridge's own C++ stubs answer `NotYet` outside `ParityMode::Reference`. On the installed game the controller script
 //! of accept and turn-in reaches `Actor.LocalPlayerControllers` and `MissionTracker.GetObjectivesProgress`, which the C++
-//! logs as stubs: here they stop the script run with an error line. Both stay refused until their rules are read (hub
-//! decision; decision 2026-11-15-34 has the installed counts).
+//! logs as stubs (decision 2026-11-15-34 has the installed counts). Outside Reference the first is bound since decision
+//! 2026-11-16-81 (the world's local players); the second, read as analyst there, stays refused (an error line) until a
+//! fresh lane implements its note.
 //!
 //! Order, as the C++: the source package is loaded first, then the arguments are checked, the store opens the cooked
 //! root, the mission is read from the source package by name. Output is written as it is produced, so a step that

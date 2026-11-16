@@ -42,7 +42,7 @@ use std::rc::Rc;
 use ow_attr::api::EvalCx;
 use ow_balance::stage::RegionStages;
 use ow_balance::types::BalanceSnapshot;
-use ow_core::NotYet;
+use ow_core::{NotYet, ParityMode};
 use ow_core::sim::{ClockError, Step, TickGroup};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
@@ -468,6 +468,12 @@ impl NativePack for Pack {
                     Ok(Value::Object(wi))
                 }),
             )?;
+        }
+        // WorldInfo.IsPlayInEditor, a stock UE3 native (public UnrealScript semantics): true only inside the editor's
+        // Play In Editor session. The shipped game never runs there, so false. Outside Reference only: the C++ does
+        // not bind it (R3; decision 2026-11-16-81).
+        if vm.parity != ParityMode::Reference {
+            vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
         }
         Ok(())
     }

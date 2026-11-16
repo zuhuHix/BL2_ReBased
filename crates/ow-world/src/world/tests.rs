@@ -273,6 +273,7 @@ fn package() -> Vec<u8> {
         Some(("Object", world_info)),
         NATIVE | STATIC,
     );
+    native(&mut t, world_info, "IsPlayInEditor", &[], Some(("Bool", 0)), NATIVE);
 
     let rearm = t.p.fname("Rearm", 0);
     let clear_me = t.p.fname("ClearMe", 0);
@@ -414,6 +415,10 @@ fn fx() -> Fx {
 }
 
 fn fx_with(begin: bool) -> Fx {
+    fx_in(begin, ParityMode::Off)
+}
+
+fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
         std::process::id(),
@@ -425,14 +430,14 @@ fn fx_with(begin: bool) -> Fx {
         &dir,
         &[("Engine.upk", &bytes)],
         IdentityPolicy::FirstInScanOrder,
-        ParityMode::Off,
+        mode,
     )
     .unwrap();
     let mut vm = Vm::new(
         ObjectSpace::new(),
         defs,
         Rc::new(AttributeSystem::new_empty()),
-        ParityMode::Off,
+        mode,
     );
     let notes = Rc::new(RefCell::new(Vec::new()));
     let sink = notes.clone();
@@ -1438,6 +1443,19 @@ fn evaluate_initialization_data_runs_the_evaluator() {
             Value::Float(6.0),
             "BaseValueConstant times BaseValueScaleConstant"
         );
+    });
+}
+
+/// `WorldInfo.IsPlayInEditor` (decision 2026-11-16-81): false outside Reference (the game never runs in the
+/// editor); unbound under Reference, as in the C++.
+#[test]
+fn is_play_in_editor_is_false_outside_reference() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        assert_eq!(x.call("WorldInfo.IsPlayInEditor", Some(wi), Vec::new()).unwrap(), Value::Bool(false));
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native("WorldInfo.IsPlayInEditor()"), "unbound under Reference");
     });
 }
 

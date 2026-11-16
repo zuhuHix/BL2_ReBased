@@ -225,6 +225,8 @@ pub struct Actors {
     begun_play: bool,
     world_info: Option<ObjRef>,
     destroying: Vec<ObjRef>,
+    /// The engine's local players' controllers, in player index order (`Actor.LocalPlayerControllers`).
+    local_players: Vec<ObjRef>,
 }
 
 impl Actors {
@@ -237,6 +239,7 @@ impl Actors {
             begun_play: false,
             world_info: None,
             destroying: Vec::new(),
+            local_players: Vec::new(),
         }
     }
 
@@ -263,6 +266,22 @@ impl Actors {
 
     fn refuse(what: &str) -> VmError {
         rule_error("Actors", what.to_string())
+    }
+
+    /// Adds `controller` as the next local player's controller (the engine's local player list, in player index
+    /// order; a single-player world has one). Who logs a local player in, and when, is the engine's (not read); the
+    /// caller that makes the player's controller adds it. A controller already listed is refused.
+    pub fn add_local_player(&mut self, controller: ObjRef) -> Result<(), VmError> {
+        if self.local_players.contains(&controller) {
+            return Err(Self::refuse("the controller is already a local player"));
+        }
+        self.local_players.push(controller);
+        Ok(())
+    }
+
+    /// The local players' controllers, in player index order.
+    pub fn local_players(&self) -> &[ObjRef] {
+        &self.local_players
     }
 
     /// Puts the level's `WorldInfo` at index 0 (the map load does this first).
@@ -309,10 +328,20 @@ impl Actors {
 
     /// The candidates of `AllActors` (`ActorWalk::All`: from index 0) or `DynamicActors` (from the first dynamic
     /// index, skipping `bStatic` actors), in list order, destroyed ones skipped. Hidden actors are not skipped.
+    /// `ActorWalk::LocalPlayers`: the local players' controllers in player index order, destroyed ones skipped.
     pub fn walk(&self, space: &ObjectSpace, which: ActorWalk) -> Result<Vec<ObjRef>, VmError> {
         let (start, dynamic) = match which {
             ActorWalk::All => (0, false),
             ActorWalk::Dynamic => (self.first_dynamic, true),
+            ActorWalk::LocalPlayers => {
+                let mut out = Vec::new();
+                for &o in &self.local_players {
+                    if !is_destroyed(space, o)? {
+                        out.push(o);
+                    }
+                }
+                return Ok(out);
+            }
             other => {
                 return Err(NotYet::not_ported(format!("the actor walk {other:?}"), RECORD).into());
             }

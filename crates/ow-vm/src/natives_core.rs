@@ -80,6 +80,9 @@ pub enum ActorWalk {
     All,
     /// `Actor.DynamicActors`.
     Dynamic,
+    /// `Actor.LocalPlayerControllers`: the engine's local players' controllers, in player index order (decision
+    /// 2026-11-16-81).
+    LocalPlayers,
 }
 
 /// The walk behind `Actor.AllActors` and `Actor.DynamicActors`: the actors a world's level lists give, in walk order,
@@ -129,7 +132,43 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     register_with(vm, Rc::new(LoadedStates))?;
     // Outside Reference only (W5-STATES): PushState, PopState and Actor.Sleep.
     crate::states::register(vm)?;
-    crate::latent::register(vm)
+    crate::latent::register(vm)?;
+    // Outside Reference only (decision 2026-11-16-81): the C++ has no local-player list and stubs the iterator.
+    if vm.parity != ParityMode::Reference {
+        vm.register_iterator("Actor.LocalPlayerControllers(class,object)", Rc::new(local_player_controllers))?;
+    }
+    Ok(())
+}
+
+/// `Actor.LocalPlayerControllers(BaseClass, out PC)` (NATIVE_ENGINE_CORE.md, "Actor.LocalPlayerControllers"): a None
+/// `BaseClass` yields nothing; otherwise the engine's local players' controllers in player index order (the world's
+/// [`ActorWalk::LocalPlayers`]), kept when their class is `BaseClass` or a child of it. The loop binds `PC` (index 1).
+/// Without an [`ActorSource`] there is no engine and no local player list: `NotYet { LayerAbsent }`. The list is taken
+/// when the loop starts (as `AllActors`).
+fn local_player_controllers(c: &mut NativeCall<'_>) -> Result<IteratorResult, VmError> {
+    let base = if c.has(0) { class(c, 0)? } else { None };
+    let Some(base) = base else {
+        return Ok(IteratorResult::new(1, Vec::new()));
+    };
+    let walk = match c.vm.service::<ActorSource>() {
+        Some(cell) => cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("ActorSource"))?.walk.clone(),
+        None => {
+            return Err(NotYet::layer_absent(
+                "Actor.LocalPlayerControllers: the engine's local player list",
+                "ow-world (an ActorSource service)",
+                "docs/verification/NATIVE_ENGINE_CORE.md",
+            )
+            .into());
+        }
+    };
+    let mut items = Vec::new();
+    for o in walk(c.vm, ActorWalk::LocalPlayers)? {
+        let own = c.vm.space.heap.get(o)?.class;
+        if c.vm.space.classes.is_child_of(own, base) {
+            items.push(Value::Object(Some(o)));
+        }
+    }
+    Ok(IteratorResult::new(1, items))
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -3030,6 +3069,41 @@ mod tests {
             let e = it(&mut call).unwrap_err();
             assert_eq!(not_yet(e), Missing::NotRead, "{key}");
         }
+    }
+
+    /// `Actor.LocalPlayerControllers` (decision 2026-11-16-81): outside Reference only; the world's local players in
+    /// order, filtered by BaseClass; a None BaseClass yields nothing; no world, `NotYet { LayerAbsent }`.
+    #[test]
+    fn local_player_controllers() {
+        let key = "Actor.LocalPlayerControllers(class,object)";
+        let iterate = |h: &mut H, base: Option<ClassId>| -> Result<Vec<Value>, VmError> {
+            let id = h.declare(key, 2, &[1]);
+            let it = h.vm.iterator_for(id).expect("bound outside Reference");
+            let args = vec![Arg::new(Value::Class(base), false, true), Arg::new(Value::None, true, true)];
+            let mut call = NativeCall::new(&mut h.vm, id, None, args);
+            Ok(it(&mut call)?.items)
+        };
+        let mut h = off();
+        let (actor, pawn) = (h.actor, h.pawn);
+        let e = iterate(&mut h, Some(actor)).unwrap_err();
+        assert!(matches!(not_yet(e), Missing::LayerAbsent(_)), "no world, no local player list");
+        let first = h.vm.instantiate(actor, "PC_0").unwrap();
+        let second = h.vm.instantiate(pawn, "PC_1").unwrap();
+        let level = h.vm.instantiate(pawn, "LevelPawn").unwrap();
+        let walk: ActorWalkFn = Rc::new(move |_vm: &Vm, which| {
+            Ok(match which {
+                ActorWalk::LocalPlayers => vec![first, second],
+                _ => vec![level],
+            })
+        });
+        h.vm.add_service(ActorSource::new(walk)).unwrap();
+        let o = |x| Value::Object(Some(x));
+        assert_eq!(iterate(&mut h, Some(actor)).unwrap(), vec![o(first), o(second)], "player index order");
+        assert_eq!(iterate(&mut h, Some(pawn)).unwrap(), vec![o(second)], "the class filter");
+        assert_eq!(iterate(&mut h, None).unwrap(), vec![], "a None BaseClass yields nothing");
+        let mut r = build(ParityMode::Reference, true, None);
+        let id = r.declare(key, 2, &[1]);
+        assert!(r.vm.iterator_for(id).is_none(), "Reference keeps the C++ (unbound)");
     }
 
     #[test]
