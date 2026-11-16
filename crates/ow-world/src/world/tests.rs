@@ -263,6 +263,8 @@ fn package() -> Vec<u8> {
         t.prop("Float", world_info, f, 0, 0);
     }
     t.prop("Byte", world_info, "NetMode", 0, 0);
+    // The game info the world's hooks fall back to (decision 2026-11-16-49).
+    t.prop("Object", world_info, "Game", 0, actor);
     native(
         &mut t,
         world_info,
@@ -1459,20 +1461,29 @@ fn get_world_info_and_the_services() {
     });
 }
 
-/// Decision 2026-11-16-49: `World::new` makes the query follow its actor list, so the game info is read from the
-/// placed `WorldInfo` (this fixture's declares no `Game`: bad data, not the unset game info's `NotYet`); a set game
-/// info still wins.
+/// Decision 2026-11-16-49: `World::new` makes the query follow its actor list, so with no game info set the game
+/// info is the placed `WorldInfo`'s `Game`: `NotYet` while it is None, that object once set; a set game info wins.
 #[test]
 fn the_worlds_game_info_follows_its_placed_world_info() {
     run(|| {
         let mut x = fx();
         assert!(matches!(
             ow_attr::api::AttrWorld::game_info(x.vm()).unwrap_err(),
-            ow_attr::api::AttrError::BadData { .. }
+            ow_attr::api::AttrError::NotYet(_)
         ));
-        let p = x.spawn("Probe");
-        x.w.query().borrow_mut().set_game_info(p);
-        assert_eq!(ow_attr::api::AttrWorld::game_info(x.vm()).unwrap(), Some(p));
+        let game = x.spawn("Probe");
+        let wi = x.wi;
+        set_field(&mut x.vm().space, wi, "Game", Value::Object(Some(game))).unwrap();
+        assert_eq!(
+            ow_attr::api::AttrWorld::game_info(x.vm()).unwrap(),
+            Some(game)
+        );
+        let other = x.spawn("Probe");
+        x.w.query().borrow_mut().set_game_info(other);
+        assert_eq!(
+            ow_attr::api::AttrWorld::game_info(x.vm()).unwrap(),
+            Some(other)
+        );
     });
 }
 
