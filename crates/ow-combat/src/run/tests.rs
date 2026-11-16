@@ -711,3 +711,47 @@ fn a_victim_with_a_shield_pool_is_not_yet_in_off_mode_and_noted_in_reference_mod
         "{r:?}"
     );
 }
+
+/// The game's `EffectiveNumPlayers` after `steps` on a fresh run (review r1 of PR #348, decision 2026-11-16-49).
+fn effective_players(mode: ParityMode, steps: &[&str]) -> Value {
+    let (mut run, _dir) = fresh(mode);
+    for step in steps {
+        run.apply(step);
+    }
+    assert!(!run.failed(), "{:?}", run.errors());
+    let vm = &mut run.world().vm;
+    let world = with_state(vm, |s| s.world).unwrap().unwrap();
+    let game = object(vm, world, "Game").unwrap().unwrap();
+    get(vm, game, "EffectiveNumPlayers").unwrap().unwrap()
+}
+
+/// Scenario setup for one local player: the run's first `player:` step sets the game's count from its default 0 to 1
+/// (the C++'s fixed `NumberOfPlayers` of 1); a second player leaves it, a later `players:<n>` wins, and a run with no
+/// player keeps the default. Both parity modes.
+#[test]
+fn the_first_player_makes_the_games_player_count_one() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        assert_eq!(effective_players(mode, &[]), Value::Int(0), "{mode:?}");
+        assert_eq!(
+            effective_players(mode, &["player:4"]),
+            Value::Int(1),
+            "{mode:?}"
+        );
+        assert_eq!(
+            effective_players(mode, &["player:4", "player:7"]),
+            Value::Int(1),
+            "{mode:?}"
+        );
+        assert_eq!(
+            effective_players(mode, &["player:4", "players:3"]),
+            Value::Int(3),
+            "{mode:?}"
+        );
+        // A count set before the first player is kept.
+        assert_eq!(
+            effective_players(mode, &["players:2", "player:4"]),
+            Value::Int(2),
+            "{mode:?}"
+        );
+    }
+}

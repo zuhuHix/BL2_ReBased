@@ -1092,6 +1092,9 @@ impl Run {
                 let level = stoi(at(1)?)?;
                 let player = hit::spawn_player(&mut self.world.vm, level)?;
                 self.players.push(player);
+                if self.players.len() == 1 {
+                    self.one_local_player()?;
+                }
                 Ok(format!("{{\"player\":{}}}", self.players.len() - 1))
             }
             "maya" => Err(error(
@@ -1190,6 +1193,26 @@ impl Run {
             "lootbatch" => self.loot_batch(parts),
             _ => Err(error(format!("combat-run: unknown step {step}"))),
         }
+    }
+
+    /// Scenario setup for a run with one local player (review r1 of PR #348, decision 2026-11-16-49): when the run spawns
+    /// its first player, the game's `EffectiveNumPlayers` becomes 1 if it still holds its class default 0. That is the
+    /// count the C++ evaluator stands in for every `NumberOfPlayers` condition operand (`src/progression.cpp:298`,
+    /// `AttributeContext::numberOfPlayers`), now that the port reads that attribute's chain from the game info. That
+    /// the game's login sets the count to 1 for one local player is UNVERIFIED. A later `players:<n>` step, or a count
+    /// already set, wins; a run whose game has no such property (a package set without `WillowGameInfo`) is unchanged.
+    fn one_local_player(&mut self) -> Result<(), VmError> {
+        let vm = &mut self.world.vm;
+        let Some(world) = with_state(vm, |s| s.world)? else {
+            return Ok(());
+        };
+        let Some(game) = object(vm, world, "Game")? else {
+            return Ok(());
+        };
+        if matches!(get(vm, game, "EffectiveNumPlayers")?, Some(Value::Int(0))) {
+            set(vm, game, "EffectiveNumPlayers", Value::Int(1))?;
+        }
+        Ok(())
     }
 
     fn spawn(&mut self, parts: &[&str]) -> Result<String, VmError> {

@@ -101,14 +101,21 @@ fn balanced_actor_is_the_source_when_its_class_implements_the_interface_in_both_
 }
 
 #[test]
-fn balanced_actor_without_the_interface_class_has_no_implementer() {
-    let (mut s, dir) = scene_with_store(ParityMode::Off, false, "nointerface");
-    let r = registered(&mut s, RESOLVER, vec![]);
-    let plain = package_object(&mut s, "TestPlain");
-    assert_eq!(walk(&s.sys, &[Some(r)], Some(plain), &mut s.w), Ok(None));
-    let _ = std::fs::remove_dir_all(&dir);
+fn balanced_actor_without_the_interface_class_has_no_implementer_in_both_modes() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut s, dir) = scene_with_store(mode, false, "nointerface");
+        let r = registered(&mut s, RESOLVER, vec![]);
+        let plain = package_object(&mut s, "TestPlain");
+        assert_eq!(
+            walk(&s.sys, &[Some(r)], Some(plain), &mut s.w),
+            Ok(None),
+            "{mode:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
+/// The no-store case has no mode (a world's mode is its store's); the stand-in case runs in both.
 #[test]
 fn balanced_actor_needs_the_store_and_a_known_ancestry() {
     // No store: the interface tables cannot be read.
@@ -120,21 +127,24 @@ fn balanced_actor_needs_the_store_and_a_known_ancestry() {
         Missing::LayerAbsent("ow-defs")
     );
     assert_eq!(walk(&s.sys, &[Some(r)], None, &mut s.w), Ok(None));
-    // A "no" over an engine-native stand-in is not proven.
-    let (mut s, dir) = scene_with_store(ParityMode::Off, true, "standin");
-    let r = registered(&mut s, RESOLVER, vec![]);
-    let native =
-        s.w.space
-            .classes
-            .define("Engine.NativeOnlyBalancedThing", None, vec![])
-            .unwrap();
-    s.w.space.classes.mark_native(native).unwrap();
-    let odd = s.w.obj(native, "Odd");
-    assert_eq!(
-        missing(walk(&s.sys, &[Some(r)], Some(odd), &mut s.w)),
-        Missing::NotRead
-    );
-    let _ = std::fs::remove_dir_all(&dir);
+    // A "no" over an engine-native stand-in is not proven, in either mode.
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut s, dir) = scene_with_store(mode, true, "standin");
+        let r = registered(&mut s, RESOLVER, vec![]);
+        let native =
+            s.w.space
+                .classes
+                .define("Engine.NativeOnlyBalancedThing", None, vec![])
+                .unwrap();
+        s.w.space.classes.mark_native(native).unwrap();
+        let odd = s.w.obj(native, "Odd");
+        assert_eq!(
+            missing(walk(&s.sys, &[Some(r)], Some(odd), &mut s.w)),
+            Missing::NotRead,
+            "{mode:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[test]
