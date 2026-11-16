@@ -375,19 +375,23 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
         "E4",
         "Chain",
         "Late",
+        "Down",
     ];
     // Chain (event 7) runs B1 (behavior 7), whose output link 0 runs B2 (behavior 8): a death sequence B1 -> B2.
     // Late (event 8) runs A1 (behavior 9), whose output link 0 runs A2 (behavior 10), the one that raises.
+    // Down (event 9) runs D1 (behavior 11), which broadcasts Custom.
     let mut death_behaviors =
-        behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4", "B1", "B2", "A1", "A2"]);
+        behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4", "B1", "B2", "A1", "A2", "D1"]);
     death_behaviors[7].links = (8, 1);
     death_behaviors[9].links = (10, 1);
     let mut death_links = links(8);
     death_links.push((8, 0, 0.0));
     death_links.push((9, -1, 0.0));
     death_links.push((10, 0, 0.0));
+    death_links.push((11, -1, 0.0));
     let mut death_event_list = events(&death_events);
     death_event_list[8].links = (9, 1);
+    death_event_list[9].links = (11, 1);
     let death = Seq {
         name: "Death",
         enabled_on_spawn: Some(true),
@@ -399,9 +403,10 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
     let class = Seq {
         name: "Main",
         enabled_on_spawn: Some(true),
-        events: events(&["Custom", "OnBehaviorSequenceDisabled", "Ping"]),
-        behaviors: behaviors(&["K", "S", "Q"]),
-        links: links(3),
+        // Up (event 3) runs U (behavior 3), which raises Down on the death provider.
+        events: events(&["Custom", "OnBehaviorSequenceDisabled", "Ping", "Up"]),
+        behaviors: behaviors(&["K", "S", "Q", "U"]),
+        links: links(4),
         ..Seq::default()
     };
     let mut d = ow_package::testkit::reflect::Declarations::new(&["Object"]);
@@ -526,6 +531,8 @@ fn reentry_vm_in(mode: ParityMode) -> Reentry {
             // A1 selects its output link 0 (to A2); A2, the last behavior, broadcasts Custom.
             "Late" if id.index == 9 => return Ok(vec![0]),
             "Late" if id.index == 10 => raise_at(vm, death, "Custom", true)?,
+            "Up" => raise_at(vm, at(Which::Class), "Down", false)?,
+            "Down" => raise_at(vm, death, "Custom", true)?,
             _ => {}
         }
         Ok(Vec::new())
@@ -694,13 +701,16 @@ fn a_raise_by_the_last_behavior_is_not_tripped_and_an_unmarked_one_is_judged_con
     }
 }
 
+/// E1 raises E2 then E4 on its own running provider; E2 raises E3. The behavior lines come out E1, E2, E3, E4, but a
+/// second event deferred onto the one held provider means the C++ ran E2 (and listed its lines) before E1's behavior
+/// went on to E4 (review r2 of PR #356): the tripwire. The full events list is asserted in both modes.
 #[test]
-fn events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it() {
-    let mut r = reentry_vm();
+fn events_deferred_by_a_deferred_event_trip_on_the_second_deferral_onto_one_provider() {
+    let events = |vm: &Vm| crate::hit::with_state(vm, |s| s.events.clone()).unwrap();
+    let mut r = reentry_vm_in(ParityMode::Reference);
     raise_death(&mut r, "E1");
-    // E1 raises E2 then E4; E2 raises E3. Depth first, as the C++ re-entry runs them: E1, E2, E3, E4.
     assert_eq!(
-        behavior_lines(&r.vm),
+        events(&r.vm),
         [
             "behavior E1 -> P1",
             "behavior E2 -> P2",
@@ -708,7 +718,78 @@ fn events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it() {
             "behavior E4 -> P4"
         ]
     );
+    let notes: Vec<&String> = r.vm.log.iter().filter(|l| l.starts_with(ORDER_NOTE)).collect();
+    assert_eq!(notes, [&format!("{ORDER_NOTE} (E2, E4)")]);
     settled(&r.vm, 1);
+
+    let mut r = reentry_vm_in(ParityMode::Off);
+    let event = BehaviorEvent {
+        pawn: r.pawn,
+        definition: Some(r.death),
+        killer: None,
+        name: "E1".into(),
+        broadcast: false,
+    };
+    let e = raise_behavior_event(&mut r.vm, &event).unwrap_err();
+    assert!(matches!(&e, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::NotPorted)), "{e:?}");
+    assert!(error_text(&e).starts_with("E2, E4 raised on a running behavior provider"), "{}", error_text(&e));
+    assert_eq!(events(&r.vm), ["behavior E1 -> P1"]);
+    assert!(!r.vm.log.iter().any(|l| l.starts_with(ORDER_NOTE)));
+    settled(&r.vm, 1);
+}
+
+/// A behavior of the running class provider raises an event on the death provider, whose behavior broadcasts: the
+/// broadcast's class share is deferred onto the class provider, which is held (review r2 of PR #356). Before, that
+/// share was never checked; now it is, and the death provider's lines listed after the deferral (before the class
+/// provider's own report) trip it.
+#[test]
+fn a_broadcasts_class_share_onto_the_running_class_provider_is_checked() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut r = reentry_vm_in(mode);
+        let pawn = r.pawn;
+        let raised = as_raise(&mut r.vm, |vm| {
+            fire_or_defer(vm, pawn, Which::Class, None, "Up", &DetMap::new()).map(|_| ())
+        });
+        match mode {
+            ParityMode::Off => {
+                let e = raised.unwrap_err();
+                assert!(error_text(&e).starts_with("Custom raised on a running behavior provider"), "{}", error_text(&e));
+            }
+            _ => {
+                raised.unwrap();
+                let notes: Vec<&String> = r.vm.log.iter().filter(|l| l.starts_with(ORDER_NOTE)).collect();
+                assert_eq!(notes, [&format!("{ORDER_NOTE} (Custom)")]);
+                assert_eq!(
+                    crate::hit::with_state(&r.vm, |s| s.events.clone()).unwrap(),
+                    [
+                        "behavior Down -> D1",
+                        "behavior Up -> U",
+                        "behavior Custom -> C",
+                        "behavior Custom -> K"
+                    ]
+                );
+            }
+        }
+        settled(&r.vm, 2);
+    }
+}
+
+/// A mark never outlives its behavior: the stack is back to its depth after `marked`, on success and on error (review
+/// r2 of PR #356).
+#[test]
+fn marked_leaves_no_stale_entry() {
+    let mut r = reentry_vm();
+    let pawn = r.pawn;
+    let depth = |vm: &Vm| providers(vm).unwrap().borrow().marks.borrow().len();
+    marked(&mut r.vm, pawn, Which::Death, 3, |vm| {
+        assert_eq!(depth(vm), 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(depth(&r.vm), 0);
+    let failed: Result<(), VmError> = marked(&mut r.vm, pawn, Which::Death, 3, |_| Err(error("boom")));
+    assert!(failed.is_err());
+    assert_eq!(depth(&r.vm), 0);
 }
 
 #[test]

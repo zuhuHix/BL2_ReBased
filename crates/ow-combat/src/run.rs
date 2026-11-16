@@ -280,18 +280,19 @@ type Deferred = (ObjRef, Which, String, DetMap<String, String>, bool, Mark);
 /// Where a provider that was running stood when an event was deferred onto it (the order tripwire, [`with_provider`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mark {
-    /// Deferred for another reason (a broadcast's class share queued behind its death share): not checked.
+    /// The target provider was not running (a broadcast's class share queued behind its death share while the class
+    /// provider is idle): not checked.
     NotHeld,
-    /// The provider's trace length when the raising behavior ran (a script behavior of this run marks it).
-    At(usize),
-    /// Raised by a handler that marks nothing: checked conservatively (more than one behavior ran).
-    Unknown,
+    /// The target provider was running. `trace`: its trace length when the raising behavior started (a script
+    /// behavior of this run marks it; `None` for a handler that marks nothing, checked conservatively: more than one
+    /// behavior ran). `notes`: the length of the events list at the deferral.
+    Held { trace: Option<usize>, notes: usize },
 }
 
 /// The note a `Reference` run logs when an event deferred onto a running provider runs after behaviors that provider
 /// ran after the raise ([`with_provider`]).
 pub const ORDER_NOTE: &str = "note: combat-run (Rust): an event raised on a running behavior provider was deferred \
-     past behaviors that provider ran after the raise; the C++ runs it inside, before them";
+     past what the run did after the raise; the C++ runs it inside the raise, so its lines come earlier";
 
 /// The most deferred raises one outermost raise drains (a Rust-only bound: events that keep raising each other on
 /// running providers are a runaway, reported as an error rather than run forever).
@@ -305,12 +306,16 @@ struct Providers {
     deferred: Vec<Deferred>,
     /// Raises in progress: only the outermost (depth 1) drains `deferred`.
     depth: u32,
-    /// The script behaviors running, innermost last: the pawn, which provider, its trace length then ([`Mark`]).
-    marks: Vec<(ObjRef, Which, usize)>,
+    /// The script behaviors running, innermost last: the pawn, which provider, its trace length then ([`Mark`]). Its
+    /// own cell, borrowed only for a push, a truncation or a lookup, so [`marked`] always clears its entry.
+    marks: Rc<RefCell<Vec<(ObjRef, Which, usize)>>>,
+    /// Where the running provider's own final report of lines began in the events list ([`report_lines`]), for the
+    /// innermost [`with_provider`].
+    report_at: Option<usize>,
 }
 
 /// Runs `f` as a behavior of the provider of `which` of `pawn` whose trace length is `len`, so a raise that `f` defers
-/// onto that same provider records where it stood ([`Mark::At`]).
+/// onto that same provider records where it stood ([`Mark::Held`]).
 fn marked<T>(
     vm: &mut Vm,
     pawn: ObjRef,
@@ -318,11 +323,44 @@ fn marked<T>(
     len: usize,
     f: impl FnOnce(&mut Vm) -> Result<T, VmError>,
 ) -> Result<T, VmError> {
-    let service = providers(vm)?;
-    borrow(&service)?.marks.push((pawn, which, len));
+    let marks = Rc::clone(&borrow(&providers(vm)?)?.marks);
+    let depth = {
+        let mut m = marks
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("Providers.marks"))?;
+        m.push((pawn, which, len));
+        m.len() - 1
+    };
     let result = f(vm);
-    borrow(&service)?.marks.pop();
-    result
+    // Back to the depth before the push whatever `f` did (review r2 of PR #356): a stale entry never survives.
+    let cleared = marks
+        .try_borrow_mut()
+        .map(|mut m| m.truncate(depth))
+        .map_err(|_| VmError::ServiceBorrowed("Providers.marks"));
+    let value = result?;
+    cleared?;
+    Ok(value)
+}
+
+/// The mark of an event about to be deferred onto the provider of `which` of `pawn` ([`Mark`]).
+fn held_mark(vm: &Vm, pawn: ObjRef, which: Which) -> Result<Mark, VmError> {
+    let service = providers(vm)?;
+    let s = borrow(&service)?;
+    let running = matches!(s.held.get(&(pawn, which)), Some(h) if h.provider.is_none());
+    if !running {
+        return Ok(Mark::NotHeld);
+    }
+    let trace = s
+        .marks
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("Providers.marks"))?
+        .iter()
+        .rev()
+        .find(|m| m.0 == pawn && m.1 == which)
+        .map(|m| m.2);
+    drop(s);
+    let notes = with_state(vm, |st| st.events.len())?;
+    Ok(Mark::Held { trace, notes })
 }
 
 /// The providers service, borrowed for a short scope (no script call inside).
@@ -550,25 +588,50 @@ fn with_provider<T>(
             }
         }
     };
-    let (start, before) = (p.trace.len(), borrow(&service)?.deferred.len());
+    // The order tripwire looks at what is deferred from here on: a raise made while the provider was being made
+    // (`make_provider` above, its consumer registration) falls before `before` and is not checked.
+    let (start, before, outer_report) = {
+        let mut s = borrow(&service)?;
+        (p.trace.len(), s.deferred.len(), s.report_at.take())
+    };
     let result = f(vm, &mut p, &mut reported);
     let end = p.trace.len();
     let back = Held {
         provider: Some(p),
         reported,
     };
-    let late: Vec<String> = {
+    let own_report = {
         let mut s = borrow(&service)?;
         s.held.insert((pawn, which), back);
-        s.deferred
+        std::mem::replace(&mut s.report_at, outer_report)
+    };
+    let notes_end = match own_report {
+        Some(at) => at,
+        None => with_state(vm, |st| st.events.len())?,
+    };
+    let late: Vec<String> = {
+        let s = borrow(&service)?;
+        let held: Vec<&Deferred> = s
+            .deferred
             .get(before..)
             .unwrap_or(&[])
             .iter()
-            .filter(|d| d.0 == pawn && d.1 == which)
+            .filter(|d| d.0 == pawn && d.1 == which && d.5 != Mark::NotHeld)
+            .collect();
+        // Two events deferred onto the one held provider: the C++ runs the first inside, before the raiser goes on to
+        // the second (review r2 of PR #356).
+        let second = held.len() > 1;
+        held.iter()
             .filter(|d| match d.5 {
                 Mark::NotHeld => false,
-                Mark::At(m) => end > m,
-                Mark::Unknown => end.saturating_sub(start) > 1,
+                Mark::Held { trace, notes } => {
+                    second
+                        // Its own run went on past the raising behavior.
+                        || trace.map_or(end.saturating_sub(start) > 1, |m| end > m)
+                        // Something was listed after the deferral and before the provider's own final report: the C++
+                        // lists the provider's lines at the raise, before it (review r2 of PR #356).
+                        || notes_end > notes
+                }
             })
             .map(|d| d.2.clone())
             .collect()
@@ -578,9 +641,12 @@ fn with_provider<T>(
     Ok(Some(value))
 }
 
-/// The order tripwire (review r1 of PR #356, decision 2026-11-16-54): events deferred onto a running provider that then
-/// ran more of its own behaviors run after those behaviors here, where the C++ re-enters and runs them first (the
-/// hit's events list and a later `CompareBool` can differ). `Off`: `NotYet { NotPorted }`; `Reference`: the labelled
+/// The order tripwire (reviews r1 and r2 of PR #356, decision 2026-11-16-54): an event deferred onto a running
+/// provider runs after whatever that provider's run did after the raise, where the C++ re-enters and runs it (and lists
+/// the provider's lines) at the raise. It trips when, after the deferral, the provider ran more of its own behaviors,
+/// anything was listed before the provider's own final report (a note, another provider's lines, a second broadcast),
+/// or a second event was deferred onto the same held provider (the hit's events list and a later `CompareBool` can
+/// differ). `Off`: `NotYet { NotPorted }`; `Reference`: the labelled
 /// [`ORDER_NOTE`], and the run goes on as before.
 fn order_tripwire(vm: &mut Vm, late: &[String]) -> Result<(), VmError> {
     if late.is_empty() {
@@ -593,8 +659,8 @@ fn order_tripwire(vm: &mut Vm, late: &[String]) -> Result<(), VmError> {
     }
     Err(NotYet::not_ported(
         format!(
-            "{events} raised on a running behavior provider whose sequence went on after the raise: the C++ runs it \
-             inside, before the behaviors that follow; this port defers it past them"
+            "{events} raised on a running behavior provider whose run went on after the raise (more behaviors, more \
+             listed lines, or a second deferred event): the C++ runs it inside the raise; this port defers it past them"
         ),
         RECORD,
     )
@@ -694,12 +760,7 @@ fn fire_or_defer(
         report_lines(vm, p, reported)
     })?;
     if done.is_none() {
-        let mark = borrow(&providers(vm)?)?
-            .marks
-            .iter()
-            .rev()
-            .find(|m| m.0 == pawn && m.1 == which)
-            .map_or(Mark::Unknown, |m| Mark::At(m.2));
+        let mark = held_mark(vm, pawn, which)?;
         defer(vm, (pawn, which, name.to_string(), outputs.clone(), false, mark))?;
         return Ok(true);
     }
@@ -714,6 +775,9 @@ fn defer(vm: &Vm, item: Deferred) -> Result<(), VmError> {
 
 /// Lists the provider's trace lines since `reported` and its errors as events (`behavior ...`, `provider error: ...`).
 fn report_lines(vm: &Vm, p: &mut Provider, reported: &mut usize) -> Result<(), VmError> {
+    // Where this provider's own report begins (the order tripwire's end of what counts as "listed after").
+    let at = with_state(vm, |st| st.events.len())?;
+    borrow(&providers(vm)?)?.report_at = Some(at);
     let lines: Vec<String> = p.trace.get(*reported..).unwrap_or(&[]).to_vec();
     *reported = p.trace.len();
     for line in lines {
@@ -745,9 +809,11 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
             // right behind it. A pawn whose class has no provider has nothing more to raise it to (the C++ catches
             // the error).
             if death_deferred {
+                // Checked like any deferral when the class provider itself is running (review r2 of PR #356).
+                let mark = held_mark(vm, event.pawn, Which::Class)?;
                 defer(
                     vm,
-                    (event.pawn, Which::Class, event.name.clone(), none, true, Mark::NotHeld),
+                    (event.pawn, Which::Class, event.name.clone(), none, true, mark),
                 )?;
                 return Ok(());
             }
@@ -1524,6 +1590,8 @@ impl Run {
                     hit::swing(vm, mind, victim, &delivery)
                 }) {
                     Ok(s) => s,
+                    // A NotYet is not a script error: it stops the step (review r2 of PR #356).
+                    Err(VmError::NotYet(n)) => return Err(VmError::NotYet(n)),
                     Err(e) => {
                         self.script_error(&e);
                         hit::Swing::default()
@@ -1615,6 +1683,8 @@ impl Run {
                     hit::hit(vm, pawn, Some(controller), damage, parts[3], Some(source_class))
                 }) {
                     Ok(r) => r,
+                    // A NotYet is not a script error: it stops the step (review r2 of PR #356).
+                    Err(VmError::NotYet(n)) => return Err(VmError::NotYet(n)),
                     Err(e) => {
                         self.script_error(&e);
                         HitReport::default()
@@ -2047,8 +2117,11 @@ impl Run {
             if let Some(v) = saved {
                 set(&mut self.world.vm, controller, "Pawn", v)?;
             }
-            if let Err(e) = frame {
-                self.script_errors.push(format!("mission script: {}", error_text(&e)));
+            match frame {
+                Ok(()) => {}
+                // As in the hit and the swing, a NotYet stops the step; only a script error is the guard's.
+                Err(VmError::NotYet(n)) => return Err(VmError::NotYet(n)),
+                Err(e) => self.script_errors.push(format!("mission script: {}", error_text(&e))),
             }
         }
         Ok(())
