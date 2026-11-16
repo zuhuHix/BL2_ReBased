@@ -4,10 +4,11 @@
 //!
 //! The steps, the report shape and every text are the C++ ones (`src/combat.hpp`, `combatRun`), with these
 //! exceptions:
-//! - **The mission bridge** (W6-MISSION) is not in the tree yet: a run with a `maya:` step is refused before any step
-//!   by the command (`--combat-run` in `ow-cli`), and `tick`, `cash`, `bleed` and `mayahealth` answer the C++ text of a
-//!   run without the bridge. So the S-d credit into Maya's pool and the whole S-f bleed-out are not reached here; their
-//!   natives are (`crate::down`, `crate::xp`).
+//! - **The mission bridge** (W6-MISSION's `ow_mission::bridge`) is not wired into this run yet; a follow-up lane wires
+//!   the `maya`, `tick`, `bleed`, `cash` and `mayahealth` steps against it (hub decision, review r1 of PR #335). Until
+//!   then a run with a `maya:` step is `NotYet { NotPorted }` before any step, and `tick`, `cash`, `bleed` and
+//!   `mayahealth` answer the C++ text of a run without the bridge. So the S-d credit into Maya's pool and the whole S-f
+//!   bleed-out are not reached here; their natives are (`crate::down`, `crate::xp`).
 //! - **Loot** (plan step S-g) is lane W6-LOOT's (`crate::loot`): `seed`, `rollpool`, `lootbatch` and the loot setup of
 //!   a spawn with a pawn balance are `NotYet { LayerAbsent("W6-LOOT") }` (the spawn itself is done first, so the pawn
 //!   and its rows exist), and a kill reports no `loot`.
@@ -259,18 +260,35 @@ enum Which {
     Death,
 }
 
-/// One provider and how many of its trace lines the events already list. `provider` is `None` while it runs.
+/// One provider and how many of its trace lines the events already list. `provider` is `None` while it runs (and
+/// while it is being made), so a raise that reaches it then is deferred, not run on a second copy.
 struct Held {
     provider: Option<Provider>,
     reported: usize,
 }
 
+/// One deferred raise: the pawn, which provider, the event and its output values.
+type Deferred = (ObjRef, Which, String, DetMap<String, String>);
+
+/// The most deferred raises one outermost raise drains (a Rust-only bound: events that keep raising each other on
+/// running providers are a runaway, reported as an error rather than run forever).
+pub const DEFERRED_BUDGET: usize = 10_000;
+
 /// The run's providers, one class provider and one death provider per pawn, made on first use.
 #[derive(Default)]
 struct Providers {
     held: DetMap<(ObjRef, Which), Held>,
-    /// Events raised on a provider that was running (module documentation).
-    deferred: Vec<(ObjRef, Which, String)>,
+    /// Events raised on a provider that was running (module documentation), drained by the outermost raise.
+    deferred: Vec<Deferred>,
+    /// Raises in progress: only the outermost (depth 1) drains `deferred`.
+    depth: u32,
+}
+
+/// The providers service, borrowed for a short scope (no script call inside).
+fn borrow(service: &Rc<RefCell<Providers>>) -> Result<std::cell::RefMut<'_, Providers>, VmError> {
+    service
+        .try_borrow_mut()
+        .map_err(|_| VmError::ServiceBorrowed("Providers"))
 }
 
 fn providers(vm: &Vm) -> Result<Rc<RefCell<Providers>>, VmError> {
@@ -434,7 +452,9 @@ fn definition_of(
 }
 
 /// Takes the provider of `which` of `pawn` out of the service (made on first use; `death` is the death definition),
-/// runs `f` on it and puts it back. `Ok(None)` when it is running already.
+/// runs `f` on it and puts it back. A placeholder marks it running from before it is made until it is back, so a raise
+/// that reaches it meanwhile is `Ok(None)` (deferred by the caller) and never makes a second provider over the same
+/// definition. A provider that fails to be made leaves no entry.
 fn with_provider<T>(
     vm: &mut Vm,
     pawn: ObjRef,
@@ -444,39 +464,130 @@ fn with_provider<T>(
 ) -> Result<Option<T>, VmError> {
     let service = providers(vm)?;
     let taken = {
-        let mut s = service
-            .try_borrow_mut()
-            .map_err(|_| VmError::ServiceBorrowed("Providers"))?;
+        let mut s = borrow(&service)?;
         match s.held.get_mut(&(pawn, which)) {
             Some(held) => match held.provider.take() {
                 Some(p) => Some((p, held.reported)),
                 None => return Ok(None),
             },
-            None => None,
+            None => {
+                let placeholder = Held {
+                    provider: None,
+                    reported: 0,
+                };
+                s.held.insert((pawn, which), placeholder);
+                None
+            }
         }
     };
     let (mut p, mut reported) = match taken {
         Some(pair) => pair,
         None => {
-            let definition = definition_of(vm, pawn, which, death)?;
-            let p = make_provider(vm, definition, pawn, which)?;
-            let reported = p.trace.len();
-            (p, reported)
+            let made = definition_of(vm, pawn, which, death)
+                .and_then(|d| make_provider(vm, d, pawn, which));
+            match made {
+                Ok(p) => {
+                    let reported = p.trace.len();
+                    (p, reported)
+                }
+                Err(e) => {
+                    borrow(&service)?.held.remove(&(pawn, which));
+                    return Err(e);
+                }
+            }
         }
     };
     let result = f(vm, &mut p, &mut reported);
-    service
-        .try_borrow_mut()
-        .map_err(|_| VmError::ServiceBorrowed("Providers"))?
-        .held
-        .insert(
-            (pawn, which),
-            Held {
-                provider: Some(p),
-                reported,
-            },
-        );
+    let back = Held {
+        provider: Some(p),
+        reported,
+    };
+    borrow(&service)?.held.insert((pawn, which), back);
     result.map(Some)
+}
+
+/// Runs `f` as one raise. The outermost raise then drains the raises deferred meanwhile, in order (each of which may
+/// defer more), at most [`DEFERRED_BUDGET`] of them; an inner raise leaves them to it. A failed outermost raise drops
+/// what it deferred: nothing runs after its error.
+fn as_raise(vm: &mut Vm, f: impl FnOnce(&mut Vm) -> Result<(), VmError>) -> Result<(), VmError> {
+    let service = providers(vm)?;
+    let step = |service: &Rc<RefCell<Providers>>, enter: bool| -> Result<u32, VmError> {
+        let mut s = service
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("Providers"))?;
+        s.depth = if enter {
+            s.depth.saturating_add(1)
+        } else {
+            s.depth.saturating_sub(1)
+        };
+        Ok(s.depth)
+    };
+    let depth = step(&service, true)?;
+    let mut result = f(vm);
+    if result.is_ok() && depth == 1 {
+        result = drain(vm, &service);
+    }
+    if result.is_err()
+        && depth == 1
+        && let Ok(mut s) = service.try_borrow_mut()
+    {
+        s.deferred.clear();
+    }
+    step(&service, false)?;
+    result
+}
+
+/// The drain of [`as_raise`].
+fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
+    for _ in 0..DEFERRED_BUDGET {
+        let next = {
+            let mut s = service
+                .try_borrow_mut()
+                .map_err(|_| VmError::ServiceBorrowed("Providers"))?;
+            if s.deferred.is_empty() {
+                None
+            } else {
+                Some(s.deferred.remove(0))
+            }
+        };
+        let Some((pawn, which, name, outputs)) = next else {
+            return Ok(());
+        };
+        let death = if which == Which::Death {
+            object(vm, pawn, "MyDeathDef")?
+        } else {
+            None
+        };
+        fire_or_defer(vm, pawn, which, death, &name, &outputs)?;
+    }
+    Err(error(format!(
+        "combat-run: more than {DEFERRED_BUDGET} behavior events raised on running providers (a runaway)"
+    )))
+}
+
+/// Fires `name` with `outputs` on the provider of `which` of `pawn` and lists what ran, or defers it when that
+/// provider is running.
+fn fire_or_defer(
+    vm: &mut Vm,
+    pawn: ObjRef,
+    which: Which,
+    death: Option<ObjRef>,
+    name: &str,
+    outputs: &DetMap<String, String>,
+) -> Result<(), VmError> {
+    let done = with_provider(vm, pawn, which, death, |vm, p, reported| {
+        p.fire_event(vm, name, outputs, -1, &[])
+            .map_err(provider_error)?;
+        report_lines(vm, p, reported)
+    })?;
+    if done.is_none() {
+        providers(vm)?
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("Providers"))?
+            .deferred
+            .push((pawn, which, name.to_string(), outputs.clone()));
+    }
+    Ok(())
 }
 
 /// Lists the provider's trace lines since `reported` and its errors as events (`behavior ...`, `provider error: ...`).
@@ -492,71 +603,30 @@ fn report_lines(vm: &Vm, p: &mut Provider, reported: &mut usize) -> Result<(), V
     Ok(())
 }
 
-/// Raises `name` on the provider of `which` of `pawn`, or defers it when that provider is running.
-fn raise_on(
-    vm: &mut Vm,
-    pawn: ObjRef,
-    which: Which,
-    death: Option<ObjRef>,
-    name: &str,
-) -> Result<(), VmError> {
-    let done = with_provider(vm, pawn, which, death, |vm, p, reported| {
-        p.fire_event(vm, name, &DetMap::new(), -1, &[])
-            .map_err(provider_error)?;
-        report_lines(vm, p, reported)
-    })?;
-    if done.is_none() {
-        providers(vm)?
-            .try_borrow_mut()
-            .map_err(|_| VmError::ServiceBorrowed("Providers"))?
-            .deferred
-            .push((pawn, which, name.to_string()));
-    }
-    Ok(())
-}
-
 /// A behavior event of the death chain: raised on the death definition's provider, a broadcast on the pawn's class
-/// provider too (C++ `raiseBehaviorEvent`); then the events deferred meanwhile, in order.
+/// provider too (C++ `raiseBehaviorEvent`). An event that reaches a running provider runs after the outermost raise's
+/// own event ([`as_raise`]).
 fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmError> {
-    let definition = match event.definition {
-        Some(d) => Some(d),
-        None => object(vm, event.pawn, "MyDeathDef")?,
-    };
-    if definition.is_some() {
-        raise_on(vm, event.pawn, Which::Death, definition, &event.name)?;
-    }
-    if event.broadcast {
-        // A pawn whose class has no provider has nothing more to raise it to (the C++ catches the error).
-        match raise_on(vm, event.pawn, Which::Class, None, &event.name) {
-            Ok(()) => {}
-            Err(VmError::Script { message, .. })
-                if message.contains("has no behavior provider") => {}
-            Err(e) => return Err(e),
+    as_raise(vm, |vm| {
+        let definition = match event.definition {
+            Some(d) => Some(d),
+            None => object(vm, event.pawn, "MyDeathDef")?,
+        };
+        let none = DetMap::new();
+        if definition.is_some() {
+            fire_or_defer(vm, event.pawn, Which::Death, definition, &event.name, &none)?;
         }
-    }
-    loop {
-        let next = {
-            let service = providers(vm)?;
-            let mut s = service
-                .try_borrow_mut()
-                .map_err(|_| VmError::ServiceBorrowed("Providers"))?;
-            if s.deferred.is_empty() {
-                None
-            } else {
-                Some(s.deferred.remove(0))
+        if event.broadcast {
+            // A pawn whose class has no provider has nothing more to raise it to (the C++ catches the error).
+            match fire_or_defer(vm, event.pawn, Which::Class, None, &event.name, &none) {
+                Ok(()) => {}
+                Err(VmError::Script { message, .. })
+                    if message.contains("has no behavior provider") => {}
+                Err(e) => return Err(e),
             }
-        };
-        let Some((pawn, which, name)) = next else {
-            break;
-        };
-        let death = if which == Which::Death {
-            object(vm, pawn, "MyDeathDef")?
-        } else {
-            None
-        };
-        raise_on(vm, pawn, which, death, &name)?;
-    }
-    Ok(())
+        }
+        Ok(())
+    })
 }
 
 /// `NotifyTakeHit`'s raise (NATIVE_DAMAGE_DEATH.md section 5): `OnTakeDamage` on the pawn's class provider with the
@@ -587,19 +657,9 @@ fn raise_take_damage(vm: &mut Vm, event: &TakeDamageEvent) -> Result<(), VmError
     };
     outputs.insert("DamageSource".to_string(), source);
     let pawn = event.pawn;
-    let done = with_provider(vm, pawn, Which::Class, None, |vm, p, reported| {
-        p.fire_event(vm, "OnTakeDamage", &outputs, -1, &[])
-            .map_err(provider_error)?;
-        report_lines(vm, p, reported)
-    })?;
-    if done.is_none() {
-        providers(vm)?
-            .try_borrow_mut()
-            .map_err(|_| VmError::ServiceBorrowed("Providers"))?
-            .deferred
-            .push((pawn, Which::Class, "OnTakeDamage".to_string()));
-    }
-    Ok(())
+    as_raise(vm, |vm| {
+        fire_or_defer(vm, pawn, Which::Class, None, "OnTakeDamage", &outputs)
+    })
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1492,13 +1552,12 @@ pub fn hit_json(report: &HitReport) -> String {
     )
 }
 
-/// The refusal of a run with a `maya` step (the C++ builds the mission bridge for it, which is W6-MISSION's), or
-/// `None`.
+/// The refusal of a run with a `maya` step, or `None`: the C++ builds the mission bridge for it, and the Rust bridge
+/// (W6-MISSION, `ow_mission::bridge`) is not wired into this run yet (module documentation).
 pub fn needs_bridge(steps: &[String]) -> Option<VmError> {
     steps.iter().any(|s| s.starts_with("maya:")).then(|| {
-        NotYet::layer_absent(
-            "a --combat-run with a maya step (the mission bridge's player)",
-            "W6-MISSION (ow-mission bridge.rs)",
+        NotYet::not_ported(
+            "a --combat-run with a maya step: the W6-MISSION bridge's player is not wired into --combat-run yet (a follow-up lane wires maya, tick, bleed and cash)",
             RECORD,
         )
         .into()
@@ -1506,7 +1565,7 @@ pub fn needs_bridge(steps: &[String]) -> Option<VmError> {
 }
 
 /// Runs `steps` on `world` and returns the report and whether a step failed (C++ `combatRun`). A run with a `maya`
-/// step needs the mission bridge and is refused (`NotYet`) before any step.
+/// step needs the mission bridge, not wired yet, and is refused (`NotYet`) before any step.
 pub fn combat_run(world: World, steps: &[String]) -> Result<(String, bool), VmError> {
     if let Some(refused) = needs_bridge(steps) {
         return Err(refused);

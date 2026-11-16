@@ -8,7 +8,10 @@
 //! and, for an AI instigator's blow on the player (plan step S-e), the AI damage scale of stage 1. Left out and said
 //! so in the events: the AI weapon scales, backstab, first/last shot, reflection, the shield stage, the hit-region
 //! cap, averted death and the protection timer. The result goes into the summary's `FinalDamage` and the summary is
-//! returned; the out arguments are not written (the live call showed them unset).
+//! returned; the out arguments are not written (the live call showed them unset). In `ParityMode::Off` each stage left out is `NotYet` where it would
+//! apply (the AI weapon scales, a globals definition without `GlobalAIDamageScale`, the shield stage, the impact
+//! definition's per-material modifier, a damage surface no region names, the hit-region cap, averted death, the
+//! protection timer); `ParityMode::Reference` says it in the events as the C++ does and goes on.
 //!
 //! **The 6.1 row "a property reading 0 with base 0 is the identity 1"** (architecture section 6.1, owner W6-COMBAT).
 //! `GetPawnDamageTypeModifier` reads the pawn's attribute that the damage type names. The VM does not run the stock
@@ -133,6 +136,30 @@ pub fn resistance(vm: &mut Vm, pawn: ObjRef, damage_type: ObjRef) -> Result<f32,
     Ok(to_f32(number(&value)))
 }
 
+/// How a stage `AdjustDamage` leaves out is missing in `ParityMode::Off`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gap {
+    /// The stage's rule is read but not written here.
+    NotPorted,
+    /// The data or rule the stage needs is not read.
+    NotRead,
+}
+
+/// A stage `AdjustDamage` leaves out (module documentation): `ParityMode::Reference` says it as the C++ does
+/// (`note: <text>`, once under `once` when the C++ says it once) and goes on; `ParityMode::Off` is `NotYet`.
+fn left_out(vm: &mut Vm, once: Option<&str>, text: &str, gap: Gap) -> Result<(), VmError> {
+    match (vm.parity, gap) {
+        (ParityMode::Reference, _) => match once {
+            Some(key) => note_once(vm, key, text),
+            None => note(vm, format!("note: {text}")),
+        },
+        (ParityMode::Off, Gap::NotPorted) => {
+            Err(NotYet::not_ported(text.to_string(), RECORD).into())
+        }
+        (ParityMode::Off, Gap::NotRead) => Err(NotYet::not_read(text.to_string(), RECORD).into()),
+    }
+}
+
 /// The critical-hit bonus of the instigator (stage 7, module documentation).
 fn crit_bonus(vm: &mut Vm, instigator: ObjRef, melee: bool) -> Result<f32, VmError> {
     let name = if melee {
@@ -239,16 +266,19 @@ pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             let g = globals(vm)?;
             match get(vm, g, "GlobalAIDamageScale")? {
                 Some(scale) => damage *= evaluate_for(vm, &scale, Some(inst))?,
-                None => note(
+                None => left_out(
                     vm,
-                    "note: the globals definition has no GlobalAIDamageScale (stage 1 read as 1)",
+                    None,
+                    "the globals definition has no GlobalAIDamageScale (stage 1 read as 1)",
+                    Gap::NotRead,
                 )?,
             }
             if matches!(kind, Some(0) | Some(3)) {
-                note_once(
+                left_out(
                     vm,
-                    "ai weapon scale",
+                    Some("ai weapon scale"),
                     "AdjustDamage stage 1: the AI weapon scales of bullet and rocket damage are not implemented",
+                    Gap::NotPorted,
                 )?;
             }
         }
@@ -396,6 +426,19 @@ pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             damage *= crit_bonus(vm, inst, kind == Some(1))?;
             store(vm, &mut summary, "bWasCrit", Value::Bool(true));
         }
+        // The C++ reads DefaultImpactResponse whatever the pipeline carries; the rule reads the impact definition's
+        // per-material table first, which is not written: Off refuses a region hit with an impact definition.
+        if region.is_some()
+            && vm.parity == ParityMode::Off
+            && object(vm, pipeline, "ImpactDefinition")?.is_some()
+        {
+            left_out(
+                vm,
+                None,
+                "AdjustDamage stage 7: the impact definition's per-material damage modifier (only the region's DefaultImpactResponse is read)",
+                Gap::NotPorted,
+            )?;
+        }
         if let Some(r) = region
             && let Some(response) = get(vm, r, "DefaultImpactResponse")?
             && let Some(percent) = field(vm, &response, "DamageModifierPercent")
@@ -419,9 +462,11 @@ pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         && let Ok(r) = ow_world::pools::read_ref(&vm.space, &shield)
         && ow_world::pools::resolve(&vm.space, r)?.1.is_some()
     {
-        note(
+        left_out(
             vm,
-            "note: AdjustDamage shield stage for a victim with a shield pool is not implemented",
+            None,
+            "AdjustDamage shield stage for a victim with a shield pool is not implemented",
+            Gap::NotPorted,
         )?;
     }
     store(vm, &mut summary, "ShieldReduction", Value::Float(0.0));
@@ -448,12 +493,24 @@ pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     // the damage type multiplies too.
     {
         let before = damage;
-        let mut surface = 1;
+        let mut surface = 0;
         if let Some(r) = region
             && let Some(t) = get(vm, r, "DefaultDamageSurfaceType")?
-            && integer(&t) != 0
         {
             surface = integer(&t);
+        }
+        if surface == 0 {
+            // The C++ reads flesh; the rule's physical-material and pawn defaults are not read. Without a damage type
+            // the surface selects nothing, so Off refuses only a hit with one.
+            if type_definition.is_some() && vm.parity == ParityMode::Off {
+                left_out(
+                    vm,
+                    None,
+                    "AdjustDamage stage 11: the damage surface of a hit whose region names none (the physical-material and pawn defaults)",
+                    Gap::NotRead,
+                )?;
+            }
+            surface = 1;
         }
         let mut modifier = 1.0f32;
         if let Some(t) = type_definition {
@@ -483,26 +540,29 @@ pub fn adjust_damage(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         && get(vm, r, "bTrackDamage")?.is_some_and(|v| truth(vm, &v))
     {
         let p = path_of(vm, Some(r));
-        note_once(
+        left_out(
             vm,
-            &format!("bTrackDamage {p}"),
-            format!("AdjustDamage hit-region cap (bTrackDamage) is not implemented for {p}"),
+            Some(&format!("bTrackDamage {p}")),
+            &format!("AdjustDamage hit-region cap (bTrackDamage) is not implemented for {p}"),
+            Gap::NotPorted,
         )?;
     }
     if let Some(v) = victim
         && attribute(vm, v, "PlayerAvertDeathChance", 0.0)? > 0.0
     {
-        note_once(
+        left_out(
             vm,
-            "averted",
+            Some("averted"),
             "AdjustDamage averted death is not implemented (the victim's PlayerAvertDeathChance is above 0)",
+            Gap::NotPorted,
         )?;
     }
     if is_player_controller(vm, victim_mind)? && instigator.is_some() && !player_instigator {
-        note_once(
+        left_out(
             vm,
-            "protection",
+            Some("protection"),
             "AdjustDamage protection timer (stage 15: a player victim hit by an AI) is not implemented; it only acts on a hit that would take health below half of the maximum",
+            Gap::NotPorted,
         )?;
     }
 

@@ -567,3 +567,40 @@ fn a_hit_runs_the_installed_take_damage_and_releases_its_pipeline() {
         "combat hit: no such stock object NoSuchType"
     );
 }
+
+#[test]
+fn an_unresolved_archetype_reference_is_refused_in_off_mode_and_kept_in_reference_mode() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _dir) = fresh(mode);
+        let vm = &mut run.world().vm;
+        // A stand-in for ToyPawns' import of the package Core: the store holds no definition at that path.
+        let package = {
+            let (_, store) = vm.defs.code_mut();
+            store
+                .load(&ow_core::PackageName::parse("ToyPawns").unwrap())
+                .unwrap()
+        };
+        let class = vm.find_class("Engine.Actor").unwrap();
+        let origin = ow_object::heap::Origin::Resource { package, index: -1 };
+        let stand_in = vm.space.alloc_stand_in(class, "Core", origin).unwrap();
+        let value = Value::Object(Some(stand_in));
+        match (mode, relink_value(vm, &value, 0)) {
+            (ParityMode::Off, Err(e)) => {
+                assert!(
+                    access::error_text(&e).contains("the archetype's reference Core"),
+                    "{e}"
+                )
+            }
+            (ParityMode::Reference, Ok(v)) => assert_eq!(v, value),
+            (m, other) => panic!("{m:?}: {other:?}"),
+        }
+        // Past the nesting bound.
+        match (mode, relink_value(vm, &Value::Int(1), RELINK_DEPTH + 1)) {
+            (ParityMode::Off, Err(e)) => {
+                assert!(access::error_text(&e).contains("nests deeper"), "{e}")
+            }
+            (ParityMode::Reference, Ok(v)) => assert_eq!(v, Value::Int(1)),
+            (m, other) => panic!("{m:?}: {other:?}"),
+        }
+    }
+}
