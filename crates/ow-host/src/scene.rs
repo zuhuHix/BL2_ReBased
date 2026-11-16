@@ -16,7 +16,8 @@
 //! Scale3D, 1 float of scale and one int whose meaning is not assigned. Every number must be finite and the matrix
 //! affine (the same checks as `tools/prepare_level.py`); a collection that fails them is a [`Gap`] and its
 //! components are excluded, never placed at a guessed pose. A null entry is checked and dropped (the tool tolerates
-//! it); a component two entries list is a [`Gap`] and is excluded (the tool stops there).
+//! one per level and stops on a second); a component two entries list is a [`Gap`] and is excluded (the tool stops
+//! there).
 //!
 //! **Which components are placements.** The selection is `tools/prepare_level.py`'s (the Sanctuary manifest the
 //! engine benchmark drew), so the two can be compared component by component:
@@ -73,6 +74,7 @@ use ow_object::decode::ReflectionTyper;
 use ow_object::heap::{HeapError, ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropAddr};
 use ow_object::prefix::PropertyPrefix;
+use ow_object::reflect::ReflectError;
 use ow_object::value::Value;
 use ow_package::PackageId;
 use ow_package::package::{Package, PackageError};
@@ -399,6 +401,8 @@ pub struct SceneMaterial {
     /// expression that named it: the material's own instance parameters first, then each parent's, then the base
     /// material's expressions. A texture named twice the same way is listed once.
     pub textures: Vec<MaterialTexture>,
+    /// The base material's `TwoSided`; `None` where the chain reaches no base material whose class declares it.
+    pub two_sided: Option<bool>,
     pub status: MaterialStatus,
 }
 
@@ -422,6 +426,10 @@ pub struct MaterialTexture {
     /// parameter); `None` for an expression with no parameter name (or the name `None`).
     pub parameter: Option<String>,
     pub from: TextureSource,
+    /// Where in the parent chain the entry was read: 0 for the material itself, 1 for its parent, and so on; an
+    /// expression has its base material's depth. A consumer that wants the tool's override order (a child's
+    /// parameter replaces its parent's of the same name) reads it from here.
+    pub depth: u32,
 }
 
 /// A texture a scene material names. Decoded on demand by [`Scene::decode_texture`].
@@ -519,6 +527,25 @@ pub struct Scene {
 }
 
 impl Scene {
+    /// A scene with no level and nothing in it.
+    pub(crate) fn empty(map: &str, assets: SceneAssets) -> Scene {
+        Scene {
+            map: map.to_string(),
+            assets,
+            levels: Vec::new(),
+            placements: OrderedMap::new(),
+            excluded: OrderedMap::new(),
+            meshes: OrderedMap::new(),
+            materials: OrderedMap::new(),
+            textures: OrderedMap::new(),
+            player_starts: OrderedMap::new(),
+            lights: OrderedMap::new(),
+            terrains: OrderedMap::new(),
+            models: OrderedMap::new(),
+            gaps: Vec::new(),
+        }
+    }
+
     /// Loads map `map` (a persistent level's package name) and every level it streams, through `defs` and `space`
     /// (the same object space on every call to the store). The scene keeps `assets` for [`Scene::decode_texture`];
     /// meshes need none of it. See the module documentation for what is read and how.
@@ -532,21 +559,8 @@ impl Scene {
             defs,
             space,
             classes: DetMap::new(),
-            scene: Scene {
-                map: map.as_str().to_string(),
-                assets: assets.clone(),
-                levels: Vec::new(),
-                placements: OrderedMap::new(),
-                excluded: OrderedMap::new(),
-                meshes: OrderedMap::new(),
-                materials: OrderedMap::new(),
-                textures: OrderedMap::new(),
-                player_starts: OrderedMap::new(),
-                lights: OrderedMap::new(),
-                terrains: OrderedMap::new(),
-                models: OrderedMap::new(),
-                gaps: Vec::new(),
-            },
+            bases: DetMap::new(),
+            scene: Scene::empty(map.as_str(), assets.clone()),
             signatures: DetSet::new(),
             resolved: DetMap::new(),
             level_paths: DetMap::new(),
@@ -781,6 +795,8 @@ struct Loader<'a> {
     space: &'a mut ObjectSpace,
     /// Class path -> its layout, where the store has one.
     classes: DetMap<String, Option<ClassId>>,
+    /// Base class path -> its layout (`base_class`).
+    bases: DetMap<String, ClassId>,
     scene: Scene,
     /// Duplicate signatures of interactive-object components seen so far.
     signatures: DetSet<String>,
@@ -815,7 +831,7 @@ impl Loader<'_> {
             let count = self.package(package).exports.len();
             for index in 1..=i32::try_from(count).unwrap_or(i32::MAX) {
                 let class = self.class_of(package, index)?;
-                if !self.is_child(&class, streaming) {
+                if !self.is_child(&class, streaming)? {
                     continue;
                 }
                 let o =
@@ -906,7 +922,7 @@ impl Loader<'_> {
             }
             if class == STATIC_MESH_COMPONENT {
                 self.component(level, key, &path, &collections)?;
-            } else if self.is_child(&class, light) {
+            } else if self.is_child(&class, light)? {
                 let outer = self.package(package).object(index)?.outer;
                 let in_collection = outer > 0 && self.class_of(package, outer)? == LIGHT_COLLECTION;
                 let mut n = self
@@ -918,7 +934,7 @@ impl Loader<'_> {
                 n.total = n.total.saturating_add(1);
                 n.in_collections = n.in_collections.saturating_add(u32::from(in_collection));
                 self.scene.lights.insert(class, n);
-            } else if self.is_child(&class, player_start) {
+            } else if self.is_child(&class, player_start)? {
                 let o = self.defs.load_export(
                     self.space,
                     package,
@@ -929,7 +945,7 @@ impl Loader<'_> {
                 self.scene
                     .player_starts
                     .insert(key, PlayerStart { path, class, pose });
-            } else if self.is_child(&class, terrain) {
+            } else if self.is_child(&class, terrain)? {
                 self.terrain(level, key, &path)?;
             } else if class == "Engine.Model" || class == "Engine.ModelComponent" {
                 let first = !self.scene.models.contains_key(&level_key);
@@ -1194,8 +1210,10 @@ impl Loader<'_> {
             if !affine {
                 return Err("a non-affine tail matrix".into());
             }
-            // A null entry poses nothing: its 84 bytes are checked and dropped, as the tool zips the two arrays
-            // and keeps the pose under reference 0, which no component has (`prepare_level.py` `Scene.build`).
+            // A null entry poses nothing: its 84 bytes are checked and dropped. The tool zips the two arrays and
+            // keeps the pose under reference 0, which no component has, so it tolerates one null per level and stops
+            // on a second ("Duplicate collection component", `prepare_level.py` `Scene.build`); every null is dropped
+            // here.
             if component == 0 {
                 continue;
             }
@@ -1361,6 +1379,7 @@ impl Loader<'_> {
                             class: String::new(),
                             parent: None,
                             textures: Vec::new(),
+                            two_sided: None,
                             status: MaterialStatus::Failed(e.to_string()),
                         },
                     );
@@ -1382,6 +1401,7 @@ impl Loader<'_> {
             class: String::new(),
             parent: None,
             textures: Vec::new(),
+            two_sided: None,
             status: MaterialStatus::Read,
         };
         let mut cursor = Some(o);
@@ -1404,14 +1424,20 @@ impl Loader<'_> {
             if depth == 1 {
                 entry.class = class_path.clone();
             }
+            // The depth this material sits at in the chain: 0 for the material asked for.
+            let at = u32::try_from(depth - 1).unwrap_or(u32::MAX);
             let read = if self.space.classes.is_child_of(class, instance) {
-                self.instance_textures(m, &mut entry.textures)
+                self.instance_textures(m, at, &mut entry.textures)
                     .and_then(|()| read_object(self.space, m, "Parent"))
                     .map(|parent| {
                         cursor = parent;
                     })
             } else if self.space.classes.is_child_of(class, base) {
-                self.expression_textures(m, &mut entry.textures)
+                entry.two_sided = match read(self.space, m, "TwoSided") {
+                    Ok(Some(Value::Bool(b))) => Some(*b),
+                    _ => None,
+                };
+                self.expression_textures(m, at, &mut entry.textures)
             } else {
                 entry.status = MaterialStatus::NotYet(NotYet::not_read(
                     "a material class outside Engine.Material and Engine.MaterialInstance",
@@ -1445,6 +1471,7 @@ impl Loader<'_> {
     fn instance_textures(
         &mut self,
         m: ObjRef,
+        depth: u32,
         out: &mut Vec<MaterialTexture>,
     ) -> Result<(), String> {
         let values = match read(self.space, m, "TextureParameterValues")? {
@@ -1458,7 +1485,7 @@ impl Loader<'_> {
                     Some(Value::Name(n)) => parameter_name(&self.space.names.text(*n)),
                     _ => None,
                 };
-                self.texture(*t, parameter, TextureSource::Instance, out)
+                self.texture(*t, parameter, TextureSource::Instance, depth, out)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -1470,6 +1497,7 @@ impl Loader<'_> {
     fn expression_textures(
         &mut self,
         m: ObjRef,
+        depth: u32,
         out: &mut Vec<MaterialTexture>,
     ) -> Result<(), String> {
         let expressions = read_objects(self.space, m, "Expressions")?;
@@ -1482,7 +1510,7 @@ impl Loader<'_> {
                     Some(Value::Name(n)) => parameter_name(&self.space.names.text(*n)),
                     _ => None,
                 };
-                self.texture(t, parameter, TextureSource::Expression, out)
+                self.texture(t, parameter, TextureSource::Expression, depth, out)
                     .map_err(|e| e.to_string())?;
             }
         }
@@ -1496,6 +1524,7 @@ impl Loader<'_> {
         t: ObjRef,
         parameter: Option<String>,
         from: TextureSource,
+        depth: u32,
         out: &mut Vec<MaterialTexture>,
     ) -> Result<(), SceneError> {
         let (path, holder) = self.locate(t)?;
@@ -1524,6 +1553,7 @@ impl Loader<'_> {
             path,
             parameter,
             from,
+            depth,
         };
         if !out.contains(&entry) {
             out.push(entry);
@@ -1623,32 +1653,43 @@ impl Loader<'_> {
     }
 
     /// The layout of a class the scene needs (`Engine.PlayerStart`, say). A store failure is the scene's error, never
-    /// an empty result: without the class, no export could be recognised as one of its kind.
+    /// an empty result: without the class, no export could be recognised as one of its kind. Cached: the store's
+    /// lookup by path is not, and the material walk asks for two of these per material.
     fn base_class(&mut self, path: &str) -> Result<ClassId, SceneError> {
-        Ok(self.defs.class_id(self.space, path)?)
+        if let Some(&c) = self.bases.get(path) {
+            return Ok(c);
+        }
+        let c = self.defs.class_id(self.space, path)?;
+        self.bases.insert(path.to_string(), c);
+        Ok(c)
     }
 
-    /// The layout of an export's class, cached. `None` where the store cannot lay it out (an engine-native class no
-    /// package exports, such as `Engine.Model`): such an export is then of none of the base classes, which is what
-    /// the store can say about it.
-    fn export_class(&mut self, path: &str) -> Option<ClassId> {
+    /// The layout of an export's class, cached. `None` only where no installed package exports the class (an
+    /// engine-native class such as `Engine.Model`, or a class of a package the install lacks): such an export is then
+    /// of none of the base classes. Any other store failure is the scene's error.
+    fn export_class(&mut self, path: &str) -> Result<Option<ClassId>, SceneError> {
         if let Some(c) = self.classes.get(path) {
-            return *c;
+            return Ok(*c);
         }
-        let c = self.defs.class_id(self.space, path).ok();
+        let c = match self.defs.class_id(self.space, path) {
+            Ok(c) => Some(c),
+            Err(DefError::Reflect(ReflectError::ClassNotFound(_)))
+            | Err(DefError::Store(StoreError::PackageNotFound(_))) => None,
+            Err(e) => return Err(e.into()),
+        };
         self.classes.insert(path.to_string(), c);
-        c
+        Ok(c)
     }
 
     /// Whether an export of class `class_path` is `base` or a subclass of it.
-    fn is_child(&mut self, class_path: &str, base: ClassId) -> bool {
+    fn is_child(&mut self, class_path: &str, base: ClassId) -> Result<bool, SceneError> {
         if class_path == "Class" {
-            return false;
+            return Ok(false);
         }
-        match self.export_class(class_path) {
+        Ok(match self.export_class(class_path)? {
             Some(c) => self.space.classes.is_child_of(c, base),
             None => false,
-        }
+        })
     }
 
     fn class_path(&self, class: ClassId) -> String {

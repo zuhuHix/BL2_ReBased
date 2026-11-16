@@ -56,6 +56,8 @@ pub enum GpuError {
     DeviceLost(String),
     /// wgpu reported a validation or out-of-memory error.
     Validation(String),
+    /// The renderer plugged in through [`Gpu::render_with`] could not encode its frame.
+    Draw(String),
 }
 
 impl fmt::Display for GpuError {
@@ -66,6 +68,7 @@ impl fmt::Display for GpuError {
             GpuError::Device(m) => write!(f, "device request refused: {m}"),
             GpuError::DeviceLost(m) => write!(f, "device lost: {m}"),
             GpuError::Validation(m) => write!(f, "wgpu error: {m}"),
+            GpuError::Draw(m) => write!(f, "drawing the frame: {m}"),
         }
     }
 }
@@ -108,6 +111,17 @@ impl Faults {
         self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
     }
 }
+
+/// What [`Gpu::render_with`] calls to encode a frame: the device, the queue, the encoder, the frame's view and its
+/// size in pixels.
+pub type DrawFrame<'a> = dyn FnMut(
+        &wgpu::Device,
+        &wgpu::Queue,
+        &mut wgpu::CommandEncoder,
+        &wgpu::TextureView,
+        (u32, u32),
+    ) -> Result<(), String>
+    + 'a;
 
 /// The device and the window's surface.
 pub struct Gpu {
@@ -186,8 +200,48 @@ impl Gpu {
         }
     }
 
+    /// The device, for a renderer to upload with (lane H2's seam).
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// The queue, for a renderer to upload with.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
+    /// The surface's texture format, which a renderer's pipelines target.
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
+    }
+
     /// Clears the next frame to `clear` (linear RGBA) and presents it.
     pub fn render(&mut self, clear: [f64; 4]) -> Result<FrameOutcome, GpuError> {
+        let [r, g, b, a] = clear;
+        self.render_with(&mut |_, _, encoder, view, _| {
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            }));
+            Ok(())
+        })
+    }
+
+    /// Acquires the next frame, lets `draw` encode into it (the device, the queue, the encoder, the frame's view and
+    /// its size in pixels) and presents it. An error of `draw` is [`GpuError::Draw`]; nothing is presented then.
+    pub fn render_with(
+        &mut self,
+        draw: &mut DrawFrame<'_>,
+    ) -> Result<FrameOutcome, GpuError> {
         self.check()?;
         if !self.drawable {
             return Ok(FrameOutcome::Skipped);
@@ -220,20 +274,8 @@ impl Gpu {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("ow-host frame") });
-        let [r, g, b, a] = clear;
-        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        }));
+        let size = (self.config.width, self.config.height);
+        draw(&self.device, &self.queue, &mut encoder, &view, size).map_err(GpuError::Draw)?;
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         self.queue.present(frame);

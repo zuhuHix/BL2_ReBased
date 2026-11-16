@@ -6,13 +6,30 @@
 //! `--walk` that could not load or did not pass its checks);
 //! 2 bad command line; 4 `--headless-probe` found no adapter (no GPU or driver: not a fault of the build).
 
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
+use std::time::Instant;
 
 use ow_host::app::{self, Outcome, RunOptions};
 use ow_host::args::{self, Command};
 use ow_host::gpu;
 use ow_host::sim::StubWorld;
 use ow_host::stats::millis;
+
+use ow_core::{PackageName, ParityMode};
+use ow_defs::DefStore;
+use ow_defs::identity::IdentityPolicy;
+use ow_host::camera::FlyCamera;
+use ow_host::draw::DrawPlan;
+use ow_host::render::{DrawReport, SceneDrawer};
+use ow_host::scene::{Scene, SceneAssets};
+
+/// The presented frame a `--screenshot` is taken after (lane H2).
+const SCREENSHOT_FRAME: u64 = 30;
+/// How far above a player start the camera starts, uu (`tools/prepare_level.py` raises its camera by 100).
+const EYE_HEIGHT: f32 = 100.0;
 use std::time::Duration;
 
 fn main() -> ExitCode {
@@ -35,6 +52,16 @@ fn main() -> ExitCode {
         },
         Command::Walk { game } => match check(&game) {
             Ok(()) => walk(&game),
+            Err(code) => code,
+        },
+        Command::Scene { game, map, frames, vsync, time_limit, size, screenshot } => match check(&game) {
+            Ok(()) => scene_window(
+                &game,
+                &map,
+                RunOptions { frames, vsync, time_limit: time_limit.map(|s| Duration::from_secs(u64::from(s))) },
+                size,
+                screenshot,
+            ),
             Err(code) => code,
         },
         Command::Window { game, frames, vsync, time_limit } => match check(&game) {
@@ -98,8 +125,124 @@ fn probe() -> ExitCode {
     }
 }
 
+/// `--map`: loads the scene, builds its draw plan and runs the window with it (lane H2).
+fn scene_window(
+    game: &Path,
+    map: &str,
+    options: RunOptions,
+    size: Option<(u32, u32)>,
+    screenshot: Option<PathBuf>,
+) -> ExitCode {
+    let Ok(install) = ow_host::find_install(game) else {
+        return ExitCode::from(1);
+    };
+    let Ok(name) = PackageName::parse(map) else {
+        eprintln!("ow-host: {map:?} is not a package name");
+        return ExitCode::from(2);
+    };
+    let started = Instant::now();
+    // The host runs no parity stand-in: the scene is read in ParityMode::Off.
+    let mut defs = match DefStore::open(install.cooked.clone(), IdentityPolicy::FirstInScanOrder, ParityMode::Off) {
+        Ok(defs) => defs,
+        Err(e) => {
+            eprintln!("ow-host: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut space = ow_object::heap::ObjectSpace::new();
+    let scene = match Scene::load(&mut defs, &mut space, &SceneAssets::new(install.cooked.clone()), &name) {
+        Ok(scene) => scene,
+        Err(e) => {
+            eprintln!("ow-host: loading {map}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let loaded = started.elapsed();
+    let plan = DrawPlan::build(&scene);
+    let planned = started.elapsed();
+    let s = plan.stats;
+    println!("scene {map}: {} levels, {} placements, loaded in {} ms", scene.levels.len(), s.placements, millis(loaded));
+    println!(
+        "draw plan in {} ms: {} drawn, {} hidden, {} without a decoded mesh, {} refused transforms, {} mirrored",
+        millis(planned - loaded),
+        s.drawn,
+        s.hidden,
+        s.no_mesh,
+        s.bad_transform,
+        s.mirrored
+    );
+    println!(
+        "{} meshes, {} textures, {} batches, {} section instances ({} empty sections skipped)",
+        plan.meshes.len(),
+        plan.textures.len(),
+        plan.batches.len(),
+        s.instances,
+        s.empty_sections
+    );
+    let start = scene.player_starts.values().next();
+    let camera = match start {
+        Some(p) => {
+            let [x, y, z] = p.pose.location;
+            FlyCamera::at([x, y, z + EYE_HEIGHT], p.pose.rotation)
+        }
+        None => FlyCamera::at([0.0; 3], Default::default()),
+    };
+    match start {
+        Some(p) => println!("camera at player start {} (+{} uu)", p.path, EYE_HEIGHT),
+        None => println!("no player start: camera at the origin"),
+    }
+    // The texture source owns the scene and the store, and decodes one texture at a time while the renderer uploads.
+    let source = Box::new(move |path: &str| scene.decode_texture(&defs, path).map_err(|e| e.to_string()));
+    let report = Rc::new(RefCell::new(DrawReport::default()));
+    let drawer = SceneDrawer::new(
+        plan,
+        source,
+        camera,
+        size,
+        screenshot.map(|path| (SCREENSHOT_FRAME, path)),
+        Rc::clone(&report),
+    );
+    let code = window_with(options, Some(Box::new(drawer)));
+    let r = report.borrow();
+    let u = r.upload;
+    println!(
+        "upload in {} ms: {} meshes ({} vertex and {} index bytes), {} instance bytes, {} textures ({} bytes), \
+         {} textures drawn grey; {} instanced draws per frame",
+        millis(r.upload_time),
+        u.meshes,
+        u.vertex_bytes,
+        u.index_bytes,
+        u.instance_bytes,
+        u.textures,
+        u.texture_bytes,
+        u.textures_failed,
+        r.draw_calls
+    );
+    if let Some((w, h)) = r.size {
+        println!("drawable size {w}x{h}");
+    }
+    if let (Some(median), Some(p95)) = (r.quantile(0.5), r.quantile(0.95)) {
+        println!(
+            "frame time over {} intervals (nearest rank): median {} ms, p95 {} ms",
+            r.intervals.len(),
+            millis(median),
+            millis(p95)
+        );
+    }
+    match &r.screenshot {
+        Some(Ok(path)) => println!("screenshot: {}", path.display()),
+        Some(Err(e)) => eprintln!("ow-host: screenshot failed: {e}"),
+        None => {}
+    }
+    code
+}
+
 fn window(options: RunOptions) -> ExitCode {
-    let report = match app::run(options, StubWorld::new()) {
+    window_with(options, None)
+}
+
+fn window_with(options: RunOptions, drawer: Option<Box<dyn ow_host::render::Drawer>>) -> ExitCode {
+    let report = match app::run_with(options, StubWorld::new(), drawer) {
         Ok(report) => report,
         Err(e) => {
             eprintln!("ow-host: {e}");

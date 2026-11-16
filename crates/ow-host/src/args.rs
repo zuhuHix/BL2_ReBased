@@ -12,6 +12,9 @@
 //!   walk from its player start headless, printing positions and counts (lane H4; no window: H2 stage 2 draws).
 //!   It loads the whole scene, so it is a heavy run: the caller takes the machine-wide lock first, as for window
 //!   runs (`docs/verification/GATES.md`); the host takes none itself.
+//! - `--map NAME` (with `--window` or `--frames`, lane H2): loads that map's scene from the install and draws it from
+//!   its player start; `--size WxH` asks for a window of that many physical pixels, `--screenshot PATH` writes a PNG
+//!   of an early frame.
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!
@@ -22,6 +25,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
+                         [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
                          ow-host --headless-probe";
 
@@ -38,6 +42,24 @@ pub enum Command {
     Walk { game: PathBuf },
     /// Instance and adapter only, no window.
     HeadlessProbe,
+    /// [`Command::Window`] drawing map `map`'s scene, in a window of `size` physical pixels when given, writing a
+    /// screenshot to `screenshot` when given.
+    Scene {
+        game: PathBuf,
+        map: String,
+        frames: Option<u32>,
+        vsync: bool,
+        time_limit: Option<u32>,
+        size: Option<(u32, u32)>,
+        screenshot: Option<PathBuf>,
+    },
+}
+
+/// `WxH` with both parts positive whole numbers.
+fn parse_size(text: &str) -> Option<(u32, u32)> {
+    let (w, h) = text.split_once(['x', 'X'])?;
+    let (w, h) = (w.parse::<u32>().ok()?, h.parse::<u32>().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
 }
 
 /// Parses the arguments after the program name. The error is a one-line reason; print [`USAGE`] after it.
@@ -49,6 +71,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut no_vsync = false;
     let mut probe = false;
     let mut walk = false;
+    let mut map: Option<String> = None;
+    let mut size: Option<(u32, u32)> = None;
+    let mut screenshot: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -73,6 +98,28 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err(format!("{flag} given twice"));
                 }
             }
+            "--map" => {
+                let name = it.next().and_then(|n| n.to_str()).ok_or("--map needs a package name")?;
+                if map.replace(name.to_string()).is_some() {
+                    return Err("--map given twice".into());
+                }
+            }
+            "--size" => {
+                let text = it.next().ok_or("--size needs WxH")?;
+                let parsed = text
+                    .to_str()
+                    .and_then(parse_size)
+                    .ok_or_else(|| format!("--size needs WxH in pixels, not {}", text.to_string_lossy()))?;
+                if size.replace(parsed).is_some() {
+                    return Err("--size given twice".into());
+                }
+            }
+            "--screenshot" => {
+                let path = it.next().ok_or("--screenshot needs a file")?;
+                if screenshot.replace(PathBuf::from(path)).is_some() {
+                    return Err("--screenshot given twice".into());
+                }
+            }
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
             "--headless-probe" => probe = set_once(probe, "--headless-probe")?,
@@ -80,15 +127,18 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
+    if map.is_none() && (size.is_some() || screenshot.is_some()) {
+        return Err("--size and --screenshot need --map".into());
+    }
     if probe {
-        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync || walk {
+        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync || walk || map.is_some() {
             return Err("--headless-probe takes no other argument".into());
         }
         return Ok(Command::HeadlessProbe);
     }
     let game = game.ok_or("--game is required")?;
     if walk {
-        if window || frames.is_some() || time_limit.is_some() || no_vsync {
+        if window || frames.is_some() || time_limit.is_some() || no_vsync || map.is_some() {
             return Err("--walk takes only --game".into());
         }
         return Ok(Command::Walk { game });
@@ -98,6 +148,12 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     }
     if time_limit.is_some() && frames.is_none() {
         return Err("--time-limit needs --frames".into());
+    }
+    if let Some(map) = map {
+        if !(window || frames.is_some()) {
+            return Err("--map needs --window or --frames".into());
+        }
+        return Ok(Command::Scene { game, map, frames, vsync: !no_vsync, time_limit, size, screenshot });
     }
     if window || frames.is_some() {
         return Ok(Command::Window { game, frames, vsync: !no_vsync, time_limit });
@@ -161,6 +217,32 @@ mod tests {
     fn the_probe_stands_alone() {
         assert_eq!(p(&["--headless-probe"]), Ok(Command::HeadlessProbe));
         assert!(p(&["--headless-probe", "--game", "X"]).is_err());
+    }
+
+    #[test]
+    fn a_scene_run_names_its_map() {
+        assert_eq!(
+            p(&["--game", "X", "--frames", "60", "--map", "Test_P", "--size", "1920x1080", "--screenshot", "a.png"]),
+            Ok(Command::Scene {
+                game: "X".into(),
+                map: "Test_P".into(),
+                frames: Some(60),
+                vsync: true,
+                time_limit: None,
+                size: Some((1920, 1080)),
+                screenshot: Some("a.png".into()),
+            })
+        );
+        for bad in [
+            &["--game", "X", "--map", "Test_P"][..],
+            &["--game", "X", "--window", "--size", "10x10"],
+            &["--game", "X", "--window", "--map", "A", "--map", "B"],
+            &["--game", "X", "--window", "--map", "A", "--size", "0x10"],
+            &["--game", "X", "--window", "--map", "A", "--size", "wide"],
+            &["--headless-probe", "--map", "A"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} was accepted");
+        }
     }
 
     #[test]
