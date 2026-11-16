@@ -71,6 +71,11 @@
 //! them are the definition store's objects for their paths, which load when read, as any definition's references do
 //! (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48; before it they were decoded outside the store, as stand-ins that
 //! could not be read). The director's provider (not an actor) is the store's definition.
+//!
+//! Every other reference of the director (his `BodyClass` among them) is therefore the store's **shared** definition
+//! for its path, not a copy: a write through one would change what every later `DefStore::find` of that path returns
+//! (the C++ writes to a stand-in of its own). Nothing here writes to them, and the slice only reads them; code that
+//! needs to write to one makes its own object first (`DefStore::instance`; decision 2026-11-16-48, open items).
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};

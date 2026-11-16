@@ -103,7 +103,8 @@ pub const REFERENCE_STUBS: &[(&str, &str)] = &[
     ("?.SpawnPlayerMovie", "a movie spawn the script reaches by name; the movie is not hosted"),
     (
         "GFxMovieDefinition.SpawnPlayerMovie(object,interface,object)",
-        "the same movie spawn where the store resolves the movie definition the C++ holds as a classless stand-in          (the turn-in's reward page; decision 2026-11-16-48); the movie is not hosted",
+        "the same movie spawn where the store resolves the movie definition the C++ holds as a classless stand-in \
+         (the turn-in's reward page; decision 2026-11-16-48); the movie is not hosted",
     ),
 ];
 
@@ -542,6 +543,7 @@ mod tests {
         assert_eq!(stub_policy(ParityMode::Off), StubPolicy::refuse_all());
         for (key, reason) in REFERENCE_STUBS {
             assert!(!reason.is_empty(), "{key} carries its reason");
+            assert!(!reason.contains("  "), "{key}: its reason has no run of spaces");
             assert!(stub_policy(ParityMode::Reference).allows_stub(key));
             assert!(!stub_policy(ParityMode::Off).allows_stub(key));
         }

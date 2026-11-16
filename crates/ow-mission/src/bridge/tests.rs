@@ -119,6 +119,8 @@ fn engine() -> Vec<u8> {
     t.prop("Object", context, "ContextObject", 0, object);
     t.prop("Byte", context, "BehaviorContext", 0, 0);
     t.prop("Struct", base, "ToyContextData", 0, context);
+    // The component base the store reads at 8 (the director's dialog component).
+    t.class("ActorComponent", object);
     t.build()
 }
 
@@ -320,19 +322,35 @@ fn willowgame() -> Vec<u8> {
     let ai_pawn = t.class("WillowAIPawn", willow_pawn);
     t.prop("Object", ai_pawn, "BodyClass", 0, object);
     t.prop("Object", ai_pawn, "MissionDirectives", 0, object);
+    t.prop("Object", ai_pawn, "AIClass", 0, object);
+    t.prop("Object", ai_pawn, "DialogComponent", 0, object);
+    // The director's AI class and dialog component (invented classes; the component is an actor component).
+    let ai_class = t.class("AIClassDefinition", object);
+    t.prop("Int", ai_class, "ToyLevel", 0, 0);
+    let actor_component = t.p.add_import("Core", "Class", engine, "ActorComponent");
+    let component = t.class("ToyDialogComponent", actor_component);
+    t.prop("Float", component, "ToyVolume", 0, 0);
     t.build()
 }
 
-/// `TestDirector`: an invented director archetype at the stock path [`MARCUS_PAWN`] (a `WillowAIPawn` outside any
-/// level), whose `BodyClass` names `TestMission`'s `Body_Toy` by import and whose `MissionDirectives` names
-/// `Directives_Toy`, an export of this package (a `GlobalsDefinition` with an invented interaction distance of 7).
-/// No provider at [`MARCUS_PROVIDER`], so placing him binds no use chain.
+/// `TestDirector`: invented director archetypes (`WillowAIPawn`s outside any level).
+/// - At the stock path [`MARCUS_PAWN`]: `BodyClass` names `TestMission`'s `Body_Toy` by import; `MissionDirectives`
+///   names `Directives_Toy` (a `GlobalsDefinition` with an invented interaction distance of 7); `AIClass` names
+///   `AIClass_Toy` (`ToyLevel` 3); `DialogComponent` names `Dialog_Toy`, his subobject, an actor component whose tags
+///   start 8 bytes in (`ToyVolume` 0.5).
+/// - `GD_Marcus.Character.Pawn_Imported`: `AIClass` and `DialogComponent` are imports of a package no file holds, so
+///   neither names an export.
+///
+/// No provider at [`MARCUS_PROVIDER`], so placing either binds no use chain.
 fn director_package() -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let willow = p.add_import("Core", "Package", 0, "WillowGame");
     let mission = p.add_import("Core", "Package", 0, "TestMission");
+    let nowhere = p.add_import("Core", "Package", 0, "GD_Nowhere");
     let body = p.add_import("GearboxFramework", "BodyClassDefinition", mission, "Body_Toy");
+    let lost_ai = p.add_import("WillowGame", "AIClassDefinition", nowhere, "AIClass_Lost");
+    let lost_dialog = p.add_import("WillowGame", "ToyDialogComponent", nowhere, "Dialog_Lost");
     let package_class = p.add_import("Core", "Class", 0, "Package");
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&none);
@@ -345,13 +363,34 @@ fn director_package() -> Vec<u8> {
     payload.extend_from_slice(&none);
     let directives = p.add_export(c, "Directives_Toy", payload);
     p.set_outer(directives, character);
+    let c = p.add_import("Core", "Class", willow, "AIClassDefinition");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(p.int_tag("ToyLevel", 3));
+    payload.extend_from_slice(&none);
+    let ai_class = p.add_export(c, "AIClass_Toy", payload);
+    p.set_outer(ai_class, character);
+    let c = p.add_import("Core", "Class", willow, "ToyDialogComponent");
+    let mut payload = [0i32, 0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    payload.extend(p.float_tag("ToyVolume", 0.5));
+    payload.extend_from_slice(&none);
+    let dialog = p.add_export(c, "Dialog_Toy", payload);
     let c = p.add_import("Core", "Class", willow, "WillowAIPawn");
     let mut payload = 0i32.to_le_bytes().to_vec();
     payload.extend(p.object_tag("BodyClass", body));
     payload.extend(p.object_tag("MissionDirectives", directives));
+    payload.extend(p.object_tag("AIClass", ai_class));
+    payload.extend(p.object_tag("DialogComponent", dialog));
     payload.extend_from_slice(&none);
     let pawn = p.add_export(c, "Pawn_Marcus", payload);
     p.set_outer(pawn, character);
+    p.set_outer(dialog, pawn);
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(p.object_tag("MissionDirectives", directives));
+    payload.extend(p.object_tag("AIClass", lost_ai));
+    payload.extend(p.object_tag("DialogComponent", lost_dialog));
+    payload.extend_from_slice(&none);
+    let imported = p.add_export(c, "Pawn_Imported", payload);
+    p.set_outer(imported, character);
     p.build()
 }
 
@@ -1279,8 +1318,9 @@ fn a_bridge_dialog_event_is_seen_by_the_tracker_in_off_mode() {
 /// The director (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48): each placement makes a new object from his
 /// archetype (the C++ `placeMarcus`, `instantiateExport` at 4), not the definition store's object for the path. His
 /// references are the store's objects: his body class is the store's `Body_Toy`, which the dialog loads, so his
-/// component's event speaks under its name tag; his directive table is a new object made from its export (the C++
-/// `loadRef`), with its tags.
+/// component's event speaks under its name tag; his directive table, his AI class (at 4) and his dialog component
+/// (at 8) are new objects made from their exports (the C++ `loadRef` and `instantiateExport`), with their tags. A
+/// reference that names no export (an import no package holds) is left as it is (the C++ `resourceIndex > 0`).
 fn the_director_is_a_new_object_with_the_store_s_references(mode: ParityMode) {
     let mut env = Env::with_mode(false, mode);
     let (m, s) = (env.mission.clone(), env.script.clone());
@@ -1303,6 +1343,16 @@ fn the_director_is_a_new_object_with_the_store_s_references(mode: ParityMode) {
     };
     assert_ne!(directives, find(vm, "GD_Marcus.Character.Directives_Toy"));
     assert_eq!(get(&vm.space, directives, "PlayerInteractionDistance").unwrap(), Value::Float(7.0));
+    let Value::Object(Some(ai_class)) = get(&vm.space, director, "AIClass").unwrap() else {
+        panic!("no AI class");
+    };
+    assert_ne!(ai_class, find(vm, "GD_Marcus.Character.AIClass_Toy"));
+    assert_eq!(get(&vm.space, ai_class, "ToyLevel").unwrap(), Value::Int(3));
+    let component = s.inner.state.borrow().dialog_component.expect("his dialog component");
+    assert_eq!(get(&vm.space, director, "DialogComponent").unwrap(), Value::Object(Some(component)));
+    assert_ne!(component, find(vm, "GD_Marcus.Character.Pawn_Marcus.Dialog_Toy"));
+    // Its tags start 8 bytes in: read from 4 the stream would not reach this value.
+    assert_eq!(get(&vm.space, component, "ToyVolume").unwrap(), Value::Float(0.5));
     // His component's event: the body class is read through the store (no stand-in, no error).
     let component = s.inner.o.globals;
     s.inner.state.borrow_mut().dialog_component = Some(component);
@@ -1321,6 +1371,19 @@ fn the_director_is_a_new_object_with_the_store_s_references(mode: ParityMode) {
     // A second placement makes another new object.
     assert!(s.place_marcus(env.vm(), &name, MARCUS_PAWN).unwrap());
     assert_ne!(s.director(), Some(director));
+    // An AI class and a component that name no export are left as the archetype's references: no object is made.
+    assert!(s.place_marcus(env.vm(), &name, "GD_Marcus.Character.Pawn_Imported").unwrap());
+    let imported = s.director().expect("a director");
+    let vm = env.vm();
+    for property in ["AIClass", "DialogComponent"] {
+        let Value::Object(Some(o)) = get(&vm.space, imported, property).unwrap() else {
+            panic!("{property}: no reference");
+        };
+        assert!(
+            matches!(vm.space.heap.get(o).unwrap().origin, Origin::Resource { index, .. } if index < 0),
+            "{mode:?}: {property} is the import's stand-in"
+        );
+    }
     assert!(m.errors().is_empty(), "{:?}", m.errors());
     assert_eq!(s.errors().len(), earlier, "{:?}", s.errors());
 }
