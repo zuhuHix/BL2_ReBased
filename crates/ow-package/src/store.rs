@@ -44,6 +44,10 @@
 //!   both the size and the modification time is not noticed, and the file is skipped by its old paths;
 //! - a file that fails to load is not remembered: it is tried again on the next lookup, as the C++ tries it.
 //!
+//! **Global index build.** The index is built on the first global lookup by decoding every file of the scan once to
+//! learn its roots. The files are decoded on worker threads (at most `INDEX_THREADS`, 16) and their roots folded into the
+//! index in scan order, so the index is the one a single pass builds (lane FIX-SCENE-LOAD, decision 2026-11-16-68).
+//!
 //! Status: a port. The fallback rule's evidence is the C++ record (PACKAGE_GLOBAL_INDEX.md); whether the game picks
 //! the same file for a path held by several packages is UNVERIFIED (object identity, W3-DEFS).
 
@@ -492,20 +496,13 @@ impl PackageStore {
         let mut by_root: FixedHashMap<String, Vec<u32>> = FixedHashMap::default();
         let mut any_root = Vec::new();
         let fail_in_build = self.check.as_ref().and_then(|c| c.fail_in_build.clone());
-        for (position, path) in self.indexed.iter().enumerate() {
+        // Each file's roots, read on worker threads (lane FIX-SCENE-LOAD: the pass decodes every package of the tree,
+        // which dominated a scene load), then folded here in scan order, as the single pass did: the index is the
+        // same whatever the threads' order.
+        let roots = file_roots(&self.indexed, fail_in_build.as_deref());
+        for (position, roots) in roots.into_iter().enumerate() {
             let position = position as u32;
-            let seam = fail_in_build.as_deref().is_some_and(|stem| {
-                path.file_stem()
-                    .is_some_and(|s| s.to_string_lossy() == stem)
-            });
-            let package = match (seam, Package::load(path)) {
-                (false, Ok(package)) => package,
-                _ => {
-                    any_root.push(position);
-                    continue;
-                }
-            };
-            match roots_of(&package) {
+            match roots {
                 Some(roots) => {
                     for root in roots {
                         by_root.entry(root).or_default().push(position);
@@ -686,6 +683,44 @@ fn try_file(path: &Path, global_path: &str) -> Option<(Arc<Package>, i32)> {
     let index = package.find_export(global_path).ok()??;
     Some((package, index))
 }
+
+/// The roots ([`roots_of`]) of every file of `files`, by scan position: `None` for a file that does not load, whose
+/// roots are not known, or whose stem is the check's `fail_in_build` seam. The files are split among worker threads
+/// (at most [`INDEX_THREADS`]); each loads its files one at a time and keeps only their roots.
+fn file_roots(files: &[PathBuf], fail_in_build: Option<&str>) -> Vec<Option<FixedHashSet<String>>> {
+    let roots_of_file = |path: &PathBuf| {
+        let seam = fail_in_build.is_some_and(|stem| {
+            path.file_stem()
+                .is_some_and(|s| s.to_string_lossy() == stem)
+        });
+        if seam {
+            return None;
+        }
+        Package::load(path)
+            .ok()
+            .and_then(|package| roots_of(&package))
+    };
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, INDEX_THREADS);
+    let per_thread = files.len().div_ceil(threads).max(1);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = files
+            .chunks(per_thread)
+            .map(|chunk| scope.spawn(move || chunk.iter().map(roots_of_file).collect::<Vec<_>>()))
+            .collect();
+        workers
+            .into_iter()
+            // A worker that panicked read nothing usable: its files count as unknown roots, as a load failure does.
+            .zip(files.chunks(per_thread))
+            .flat_map(|(worker, chunk)| worker.join().unwrap_or_else(|_| vec![None; chunk.len()]))
+            .collect()
+    })
+}
+
+/// The most worker threads [`PackageStore`]'s global index build uses.
+const INDEX_THREADS: usize = 16;
 
 /// The folded first segments a path matched in this package can start with: its stem's, and each export's
 /// outermost object's. `None` when they are not known: an outer chain that fails or does not end within the bound,
@@ -1260,6 +1295,34 @@ mod tests {
         // Nothing was loaded or cached: the fallback still answers as before.
         assert!(store.loaded.is_empty());
         assert!(store.global_matches.is_empty());
+    }
+
+    #[test]
+    fn the_index_read_on_worker_threads_keeps_the_scan_order() {
+        // More files than the most worker threads, holders and broken files spread among them, so the chunks
+        // the threads read meet: the candidates still come in scan order.
+        let tree = Tree::new("threads");
+        tree.write("Source.upk", &package(GDX_OBJ, &[]));
+        let mut expected = Vec::new();
+        for i in 0..(3 * INDEX_THREADS + 5) {
+            let name = format!("F{i:03}");
+            let bytes = match i % 4 {
+                0 => package(&[], HOLDS),
+                1 => vec![1, 2, 3],
+                _ => package(&[], &[("Unrelated", 0)]),
+            };
+            tree.write(&format!("{name}.upk"), &bytes);
+            if i % 4 < 2 {
+                expected.push(name);
+            }
+        }
+        let mut store = tree.store();
+        let names: Vec<String> = store
+            .global_candidates("GDX.Obj")
+            .iter()
+            .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, expected);
     }
 
     #[test]

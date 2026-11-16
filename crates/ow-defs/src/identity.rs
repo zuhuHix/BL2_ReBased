@@ -24,6 +24,7 @@
 //! (`Package::find_export`).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ow_core::{FixedHashMap, PackageName};
 use ow_package::PackageId;
@@ -186,8 +187,12 @@ pub(crate) struct FileIndex {
 }
 
 impl FileIndex {
-    /// Reads `file` and keeps only its paths; the package is dropped. A file that cannot be loaded is an error.
-    pub(crate) fn read(file: &Path) -> Result<FileIndex, PackageError> {
+    /// Reads `file` and keeps only its paths, handing back the package it loaded too: a caller that needs the file
+    /// loaded anyway keeps this load instead of decoding the file a second time, others drop it (lane
+    /// FIX-SCENE-LOAD). A file that cannot be loaded is an error.
+    pub(crate) fn read_with_package(
+        file: &Path,
+    ) -> Result<(FileIndex, Arc<Package>), PackageError> {
         let package = Package::load(file)?;
         let mut by_path = FixedHashMap::default();
         let mut broken = None;
@@ -202,11 +207,12 @@ impl FileIndex {
                 }
             }
         }
-        Ok(FileIndex {
+        let index = FileIndex {
             stem: package.name.to_ascii_lowercase(),
             by_path,
             broken,
-        })
+        };
+        Ok((index, package))
     }
 
     /// The first export at `path` (already `.`-separated), as `Package::find_export` answers it.

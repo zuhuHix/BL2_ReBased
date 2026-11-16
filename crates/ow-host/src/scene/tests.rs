@@ -1432,3 +1432,91 @@ fn sanctuary_on_the_installed_game() {
     std::fs::write(out.join("report.md"), &r).expect("report.md");
     print!("{r}");
 }
+
+/// A `fmt::Write` sink that keeps only the FNV-1a 64 digest and the length of what is written.
+struct Digest {
+    hash: u64,
+    bytes: u64,
+}
+
+impl Digest {
+    fn of(value: &dyn std::fmt::Debug) -> (u64, u64) {
+        let mut d = Digest {
+            hash: 0xcbf2_9ce4_8422_2325,
+            bytes: 0,
+        };
+        let _ = write!(d, "{value:?}");
+        (d.hash, d.bytes)
+    }
+}
+
+impl std::fmt::Write for Digest {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        for b in s.bytes() {
+            self.hash ^= u64::from(b);
+            self.hash = self.hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.bytes += s.len() as u64;
+        Ok(())
+    }
+}
+
+/// Lane FIX-SCENE-LOAD: Sanctuary's load times, and digests of everything the loads answer (the whole `Debug` output
+/// of the scene, the material library and the lights), so that a speed-up can be shown to change no answer. Writes
+/// `local/p2/scene-load/<OW_RUN_TAG or "run">.txt`. Run with
+/// `cargo test --release -p ow-host --locked -- --ignored sanctuary_load_digest_on_the_installed_game --nocapture`.
+#[test]
+#[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/scene-load/"]
+fn sanctuary_load_digest_on_the_installed_game() {
+    use crate::lighting::SceneLights;
+    use crate::material::MaterialLibrary;
+    let Some(root) = std::env::var_os("OW_BL2_ROOT") else {
+        panic!("set OW_BL2_ROOT to the Borderlands 2 install folder");
+    };
+    let install = crate::find_install(Path::new(&root)).expect("an install");
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/scene-load");
+    std::fs::create_dir_all(&out).expect("the output folder");
+    let tag = std::env::var("OW_RUN_TAG").unwrap_or_else(|_| "run".into());
+    let started = std::time::Instant::now();
+    let mut defs = DefStore::open(
+        install.cooked.clone(),
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .expect("the store");
+    let opened = started.elapsed();
+    let mut space = ObjectSpace::new();
+    let assets = SceneAssets::new(install.cooked.clone());
+    let map = PackageName::parse("Sanctuary_P").unwrap();
+    let scene = Scene::load(&mut defs, &mut space, &assets, &map).expect("the scene");
+    let loaded = started.elapsed();
+    let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
+    let materials = started.elapsed();
+    let lights = SceneLights::read(&mut defs, &mut space, &scene);
+    let lit = started.elapsed();
+    let ms = |d: std::time::Duration| d.as_millis();
+    let mut r = String::new();
+    let _ = writeln!(
+        r,
+        "# Sanctuary load ({tag}; local, timings and digests only)"
+    );
+    let _ = writeln!(
+        r,
+        "store open {} ms; Scene::load {} ms; MaterialLibrary::read {} ms; SceneLights::read {} ms; total {} ms",
+        ms(opened),
+        ms(loaded - opened),
+        ms(materials - loaded),
+        ms(lit - materials),
+        ms(lit)
+    );
+    for (what, value) in [
+        ("scene", &scene as &dyn std::fmt::Debug),
+        ("materials", &library),
+        ("lights", &lights),
+    ] {
+        let (hash, bytes) = Digest::of(value);
+        let _ = writeln!(r, "digest {what}: {hash:016x} over {bytes} bytes");
+    }
+    std::fs::write(out.join(format!("{tag}.txt")), &r).expect("the report");
+    print!("{r}");
+}

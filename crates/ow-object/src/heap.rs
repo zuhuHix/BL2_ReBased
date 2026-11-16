@@ -62,7 +62,7 @@ use ow_package::PackageId;
 use crate::ids::{ClassId, NameId, ObjRef, PropAddr, PropId, StructId};
 use crate::layout::{ClassTable, LayoutError, PropKind};
 use crate::names::NameTable;
-use crate::value::{DelegateValue, Value, clear_refs};
+use crate::value::{DelegateValue, Value, clear_refs, mentions};
 use ow_core::FixedHashSet;
 
 /// Where an object came from.
@@ -233,6 +233,14 @@ pub struct Heap {
     order: Vec<ObjRef>,
     stale_in_order: usize,
     count: usize,
+}
+
+/// Clears every reference for which `dead` is true held by `object`: its outer and its slots.
+fn clear_object_refs(object: &mut Object, dead: &dyn Fn(ObjRef) -> bool) {
+    if object.outer.is_some_and(dead) {
+        object.outer = None;
+    }
+    object.slots.iter_mut().for_each(|v| clear_refs(v, dead));
 }
 
 impl Heap {
@@ -574,32 +582,77 @@ impl Heap {
                 return Err(HeapError::FreedTwice(o));
             }
         }
-        let mut freed = Vec::with_capacity(objects.len());
-        for &o in objects {
-            let entry = &mut self.entries[o.index() as usize];
-            freed.push(entry.object.take().expect("checked above"));
-            if let Some(next) = entry.generation.checked_add(1) {
-                entry.generation = next;
-                self.free.push(o.index());
-            } else {
-                // Retired: the generation stays at u32::MAX with no object, so no handle matches it again.
-            }
-        }
+        let freed: Vec<Object> = objects.iter().map(|&o| self.take(o)).collect();
         let is_dead = |r: ObjRef| dead.contains(&r);
         for other in self.entries.iter_mut().filter_map(|e| e.object.as_mut()) {
-            if other.outer.is_some_and(is_dead) {
-                other.outer = None;
-            }
-            other.slots.iter_mut().for_each(|v| clear_refs(v, &is_dead));
+            clear_object_refs(other, &is_dead);
         }
-        self.count -= objects.len();
-        self.stale_in_order += objects.len();
+        self.forget(objects.len());
+        Ok(freed)
+    }
+
+    /// [`Heap::free`] for an object that no object created before it refers to: one just made, filled and moved
+    /// elsewhere, as the definition store's loads do (lane FIX-SCENE-LOAD). The references to it are cleared only in
+    /// the objects created after it (from the end of the creation order), not over the whole heap, which made a load
+    /// of many definitions quadratic. Everything else is [`Heap::free`]'s: the slot, its generation and the free list,
+    /// so later handles are the ones `free` would give. Debug builds check that no older object refers to it.
+    pub fn free_newest(&mut self, o: ObjRef) -> Result<Object, HeapError> {
+        self.get(o)?;
+        let at = self
+            .order
+            .iter()
+            .rposition(|&r| r == o)
+            .ok_or(HeapError::Stale(o))?;
+        let newer: Vec<ObjRef> = self.order[at + 1..].to_vec();
+        let is_dead = |r: ObjRef| r == o;
+        debug_assert!(
+            self.entries.iter().enumerate().all(|(index, e)| {
+                e.object.as_ref().is_none_or(|other| {
+                    let handle = ObjRef::new(index as u32, e.generation);
+                    handle == o
+                        || newer.contains(&handle)
+                        || !(other.outer.is_some_and(is_dead)
+                            || other.slots.iter().any(|v| mentions(v, &is_dead)))
+                })
+            }),
+            "free_newest: an object older than {o:?} refers to it"
+        );
+        let freed = self.take(o);
+        for r in newer {
+            if Self::is_current(&self.entries, r)
+                && let Some(other) = self.entries[r.index() as usize].object.as_mut()
+            {
+                clear_object_refs(other, &is_dead);
+            }
+        }
+        self.forget(1);
+        Ok(freed)
+    }
+
+    /// Takes `o`'s object out of its slot and retires the handle: the slot is reused with the next generation, or
+    /// retired if the generation would wrap. `o` must be current.
+    fn take(&mut self, o: ObjRef) -> Object {
+        let entry = &mut self.entries[o.index() as usize];
+        let object = entry.object.take().expect("checked by the caller");
+        if let Some(next) = entry.generation.checked_add(1) {
+            entry.generation = next;
+            self.free.push(o.index());
+        } else {
+            // Retired: the generation stays at u32::MAX with no object, so no handle matches it again.
+        }
+        object
+    }
+
+    /// The bookkeeping after `n` objects were taken: the count, and the creation order's stale entries, compacted
+    /// away now and then.
+    fn forget(&mut self, n: usize) {
+        self.count -= n;
+        self.stale_in_order += n;
         if self.stale_in_order > 32 && self.stale_in_order * 2 > self.order.len() {
             let entries = &self.entries;
             self.order.retain(|r| Self::is_current(entries, *r));
             self.stale_in_order = 0;
         }
-        Ok(freed)
     }
 
     /// The instances ([`Origin::is_instance`]) of class `base` or a subclass that are neither destroyed nor freed, in
@@ -703,6 +756,13 @@ impl ObjectSpace {
     pub fn free(&mut self, o: ObjRef) -> Result<Object, HeapError> {
         let mut freed = self.free_many(&[o])?;
         Ok(freed.pop().expect("one object freed"))
+    }
+
+    /// [`Heap::free_newest`] (an object no older object refers to), cleared out of every struct default too.
+    pub fn free_newest(&mut self, o: ObjRef) -> Result<Object, HeapError> {
+        let freed = self.heap.free_newest(o)?;
+        self.classes.clear_refs_in_defaults(&|r| r == o);
+        Ok(freed)
     }
 
     /// Frees a set of objects in one heap walk ([`Heap::free_many`]) and clears them out of every struct default.
@@ -1730,6 +1790,58 @@ mod tests {
         );
         assert_eq!(w.space.live(w.actor).collect::<Vec<_>>(), [a, keep]);
         assert!(w.space.free_many(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn free_newest_clears_the_newer_references_and_reuses_the_slot_as_free_does() {
+        // Two heaps built the same way: one frees with `free`, the other with `free_newest`.
+        let build = || {
+            let mut w = world();
+            let old = w.new_obj(w.actor, "Old");
+            let made = w.new_obj(w.actor, "Made");
+            let inner = w
+                .space
+                .alloc(w.info, "Inner", Some(made), Origin::Runtime)
+                .unwrap();
+            let newer = w.new_obj(w.actor, "Newer");
+            let target = w.p(w.actor, "Target");
+            w.space.write(newer, target.into(), obj(made)).unwrap();
+            (w, old, made, inner, newer, target)
+        };
+        let (mut a, _, made_a, inner_a, newer_a, target) = build();
+        let (mut b, _, made_b, inner_b, newer_b, _) = build();
+        let freed_a = a.space.free(made_a).unwrap();
+        let freed_b = b.space.free_newest(made_b).unwrap();
+        assert_eq!(format!("{freed_a:?}"), format!("{freed_b:?}"));
+        for (w, inner, newer) in [(&a, inner_a, newer_a), (&b, inner_b, newer_b)] {
+            assert_eq!(w.space.heap.get(inner).unwrap().outer, None);
+            assert_eq!(
+                w.space.read(newer, target.into()).unwrap(),
+                &Value::Object(None)
+            );
+        }
+        // The next allocation takes the same slot, with the same generation, in both.
+        let next_a = a.new_obj(a.actor, "Next");
+        let next_b = b.new_obj(b.actor, "Next");
+        assert_eq!(next_a, next_b);
+        assert_eq!(a.space.heap.count, b.space.heap.count);
+        // A stale handle is refused, as `free` refuses it.
+        assert_eq!(
+            b.space.free_newest(made_b).err(),
+            Some(HeapError::Stale(made_b))
+        );
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "an object older than")]
+    fn free_newest_checks_in_debug_builds_that_no_older_object_refers_to_it() {
+        let mut w = world();
+        let old = w.new_obj(w.actor, "Old");
+        let made = w.new_obj(w.actor, "Made");
+        let target = w.p(w.actor, "Target");
+        w.space.write(old, target.into(), obj(made)).unwrap();
+        let _ = w.space.free_newest(made);
     }
 
     #[test]
