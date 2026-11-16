@@ -10,9 +10,12 @@
 //! wake; the next run triggers the dialog; while a line is live the behavior polls every 0.1 s and selects Finished
 //! (id 1) on the first poll where the event's talk act is no longer live (at once when no line started).
 //! `bForcePlayImmediate` triggers in the first run and selects Finished, then Out. An application to an empty context
-//! list does not run (no Out, no Finished, no wait) and is listed in [`DialogSystem::not_run`]. The kernel side
-//! (contexts, latency, per-thread state) is the [`BehaviorRun`] trait: lane W5-BEHAVIOR's kernel is not on main yet,
-//! and the caller that runs a provider (lane W6-MISSION) adapts its run to it.
+//! list does not run (no Out, no Finished, no wait) and is listed in [`DialogSystem::not_run`]. It runs in lane
+//! W5-BEHAVIOR's kernel (`ow_behavior`, decision 2026-11-15-30): [`handler`] is its `HandlerFn`, which
+//! [`register`] adds to the VM's behavior registry under [`BEHAVIOR_CLASS`]; it reads the kernel's run record
+//! (`Provider::run_info`: the initial run, the linked outputs, the wait, and the per-thread state, which holds a
+//! [`DialogBehaviorState`]) and the behavior's Context link (`Provider::linked_objects`). With no Context link the
+//! application is one null entry, the mission, as the C++ asks the provider with no own object.
 //!
 //! **The dialog**: the group's last enabled `DialogEvents` entry for the tag; its inline talk act (`OutputAction`)
 //! or, with none, the act the group's link table points to (a `TalkActs` template or a node by `NodeID`); the talker
@@ -36,7 +39,8 @@
 //! - An object path is the path of the export (or import) the object came from in its package, the C++ `pathOf`.
 //! - The random `TalkData` pick: under `ParityMode::Reference` the C++ `std::mt19937` seeded 12345 (`rng() % n`), a
 //!   reference stand-in (architecture section 6.1); under `ParityMode::Off` the world's `CrtStream::Dialog`
-//!   (`rand15 % n`). How the game picks is not read (UNVERIFIED).
+//!   (`rand15 % n`). The mode is the VM's (`Vm::parity`), read at each pick. How the game picks is not read
+//!   (UNVERIFIED).
 //! - A chain of Trigger acts deeper than [`MAX_TRIGGER_DEPTH`] is an error (the C++ has no bound: package data could
 //!   recurse until the stack overflows).
 //! - A link entry that lacks `LinkNumber` or `ToNodeID` is [`DialogError::Malformed`] (the C++ reads through a null
@@ -44,8 +48,15 @@
 //!
 //! One `DialogSystem` works with one VM: every call takes it, and the objects it keeps are that VM's.
 
+use std::any::Any;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::rc::Rc;
+
+use ow_behavior::kernel::{BehaviorId, Provider};
+use ow_behavior::provider::BehaviorError;
+use ow_behavior::registry::{self, Handler};
 
 use ow_core::ParityMode;
 use ow_core::rand::{CrtStream, Rand15};
@@ -214,24 +225,74 @@ impl Default for DialogBehaviorState {
     }
 }
 
-/// The behavior kernel's side of one `Behavior_TriggerDialogEvent` run (C++ `BehaviorProvider` and its run record).
-pub trait BehaviorRun {
-    /// The behavior object (its `EventTag`, `Group` and `bForcePlayImmediate` are read).
-    fn behavior_object(&self) -> ObjRef;
-    /// The behavior's name, for [`DialogSystem::not_run`].
-    fn behavior_name(&self) -> String;
-    /// Whether this is the application's first run.
-    fn initial_run(&self) -> bool;
-    /// Whether any of the behavior's outputs is linked.
-    fn has_linked_outputs(&self) -> bool;
-    /// The objects the kernel resolves for the behavior's Context link (`None`: a null entry, the mission itself
-    /// when the link is empty; NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED).
-    fn contexts(&mut self, vm: &mut Vm) -> Result<Vec<Option<ObjRef>>, DialogError>;
-    /// Makes the run latent for `seconds`.
-    fn set_wait(&mut self, seconds: f64);
-    /// The per-thread state this behavior kept.
-    fn state(&self) -> Option<DialogBehaviorState>;
-    fn set_state(&mut self, state: Option<DialogBehaviorState>);
+/// The objects behavior `id` is applied to: those of its Context-type variable link, else one null entry (the C++
+/// `provider.contexts(behavior, nullptr)`: the mission, which is no actor).
+fn context_objects(provider: &Provider, id: BehaviorId) -> Vec<Option<ObjRef>> {
+    match provider
+        .behavior(id)
+        .variables
+        .iter()
+        .find(|l| l.link_type == "BVARLINK_Context")
+    {
+        Some(link) => provider
+            .linked_objects(id, link)
+            .into_iter()
+            .map(Some)
+            .collect(),
+        None => vec![None],
+    }
+}
+
+/// The dialog state the kernel keeps for this behavior's thread; a state of another type is an error.
+fn state_of(provider: &mut Provider) -> Result<Option<DialogBehaviorState>, DialogError> {
+    match &provider.run_info().state {
+        None => Ok(None),
+        Some(state) => state
+            .downcast_ref::<DialogBehaviorState>()
+            .copied()
+            .map(Some)
+            .ok_or_else(|| {
+                DialogError::Malformed("the behavior's state is not a dialog state".to_string())
+            }),
+    }
+}
+
+fn set_state(provider: &mut Provider, state: Option<DialogBehaviorState>) {
+    provider.run_info().state = state.map(|s| Rc::new(s) as Rc<dyn Any>);
+}
+
+/// The behavior class the dialog runs (its handler's registry key).
+pub const BEHAVIOR_CLASS: &str = "GearboxFramework.Behavior_TriggerDialogEvent";
+
+/// The kernel handler of [`BEHAVIOR_CLASS`] over `dialog` ([`DialogSystem::behavior`]; a dialog error becomes the
+/// kernel's error, the C++ exception through the kernel).
+pub fn handler(dialog: Rc<RefCell<DialogSystem>>) -> Handler {
+    Handler::run(
+        move |vm: &mut Vm, provider: &mut Provider, id: BehaviorId, _event: &str| {
+            let mut dialog = dialog.try_borrow_mut().map_err(|_| {
+                BehaviorError::Data("dialog: the dialog system is already in use".to_string())
+            })?;
+            Ok(dialog.behavior(vm, provider, id)?)
+        },
+    )
+}
+
+/// Registers [`handler`] for [`BEHAVIOR_CLASS`] in the VM's behavior registry (a second registration is refused).
+pub fn register(vm: &mut Vm, dialog: Rc<RefCell<DialogSystem>>) -> Result<(), VmError> {
+    registry::register(vm, BEHAVIOR_CLASS, handler(dialog))
+}
+
+/// The kernel's view of a dialog failure: VM, store and package errors keep their kinds; the dialog's own errors
+/// carry their C++ text.
+impl From<DialogError> for BehaviorError {
+    fn from(e: DialogError) -> Self {
+        match e {
+            DialogError::Vm(e) => BehaviorError::Vm(e),
+            DialogError::Def(e) => BehaviorError::Vm(e.into()),
+            DialogError::Package(e) => BehaviorError::Package(e),
+            other => BehaviorError::Data(other.cpp_text()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -515,7 +576,6 @@ pub struct DialogSystem {
     /// silence). Not called for a line whose audio had already ended.
     pub on_line_stopped: Option<Box<dyn FnMut(i32)>>,
     package: Option<PackageId>,
-    mode: ParityMode,
     player: Player,
     test_length: f64,
     now: f64,
@@ -555,14 +615,12 @@ impl fmt::Debug for DialogSystem {
 }
 
 impl DialogSystem {
-    /// The dialog of the mission package `package` (`None`: no package, so no dialog globals). `mode` is the run's
-    /// parity mode (module documentation, the random pick).
-    pub fn new(package: Option<PackageId>, mode: ParityMode) -> Self {
+    /// The dialog of the mission package `package` (`None`: no package, so no dialog globals).
+    pub fn new(package: Option<PackageId>) -> Self {
         DialogSystem {
             on_line: None,
             on_line_stopped: None,
             package,
-            mode,
             player: Player::None,
             test_length: -1.0,
             now: 0.0,
@@ -1337,7 +1395,7 @@ impl DialogSystem {
 
     /// The random `TalkData` pick (module documentation).
     fn pick(&mut self, vm: &mut Vm, count: usize) -> usize {
-        let draw = match self.mode {
+        let draw = match vm.parity {
             ParityMode::Reference => self.mt.next_u32() as usize,
             ParityMode::Off => usize::from(vm.rng.crt(CrtStream::Dialog).rand15()),
         };
@@ -1509,23 +1567,25 @@ impl DialogSystem {
     }
 
     /// `Behavior_TriggerDialogEvent.ApplyBehaviorToContext` (NATIVE_DIALOG.md; module documentation): the output
-    /// ids the run selects, in order (0 Out, 1 Finished).
+    /// ids behavior `id` of `provider` selects in this run, in order (0 Out, 1 Finished).
     pub fn behavior(
         &mut self,
         vm: &mut Vm,
-        run: &mut dyn BehaviorRun,
+        provider: &mut Provider,
+        id: BehaviorId,
     ) -> Result<Vec<i32>, DialogError> {
-        let behavior = run.behavior_object();
+        let behavior = provider.behavior(id).object;
         let tag = prop(vm, behavior, "EventTag")?;
         let group = prop(vm, behavior, "Group")?;
         let immediate = flag(vm, &prop(vm, behavior, "bForcePlayImmediate")?);
-        let initial = run.initial_run();
+        let initial = provider.run_info().initial_run;
         let mut ids = Vec::new();
         if initial {
-            // The objects the kernel resolves for the Context link. An empty list means the behavior does not run.
-            let contexts = run.contexts(vm)?;
+            // The objects the kernel resolves for the Context link (with none, the mission: one null entry). An empty
+            // list means the behavior does not run (NATIVE_BEHAVIOR_CONTEXT.md, UNVERIFIED).
+            let contexts = context_objects(provider, id);
             let Some(first) = contexts.first() else {
-                self.not_run.push(run.behavior_name());
+                self.not_run.push(provider.behavior(id).name.clone());
                 return Ok(ids);
             };
             let mut fresh = DialogBehaviorState::default();
@@ -1536,13 +1596,13 @@ impl DialogSystem {
                     }
                 }
             }
-            run.set_state(Some(fresh));
+            set_state(provider, Some(fresh));
         }
-        let mut state = run.state().unwrap_or_default();
+        let mut state = state_of(provider)?.unwrap_or_default();
         match &tag {
             Some(tag @ Value::Object(Some(_))) => {
                 if initial && !immediate {
-                    run.set_wait(FIRST_WAKE); // latent for one kernel wake; Out is selected below
+                    provider.run_info().wait = FIRST_WAKE; // latent for one kernel wake; Out is selected below
                 } else {
                     if state.handle.index < 0 || immediate {
                         let saved = self.instigator;
@@ -1552,19 +1612,19 @@ impl DialogSystem {
                             self.trigger(vm, &group.clone().unwrap_or(Value::None), tag);
                         self.instigator = saved;
                         state.handle = triggered?;
-                        run.set_state(Some(state));
+                        set_state(provider, Some(state));
                     }
                     if state.handle.index < 0
                         || !self.active(state.handle)
                         || immediate
-                        || !run.has_linked_outputs()
+                        || !provider.run_info().has_linked_outputs
                     {
                         ids.push(1); // Finished
                     } else {
-                        run.set_wait(POLL); // poll while the line is live
+                        provider.run_info().wait = POLL; // poll while the line is live
                     }
                     if immediate {
-                        run.set_state(None);
+                        set_state(provider, None);
                     }
                 }
             }

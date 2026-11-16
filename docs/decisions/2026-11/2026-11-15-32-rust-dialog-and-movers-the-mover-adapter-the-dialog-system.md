@@ -17,24 +17,33 @@ stays UNVERIFIED as a game rule.
     `variables` returns `Result<Vec<Variable>, MoverError>`, as the C++ does not catch there.
     `MoverError { Binding, Vm, Def, Logged, Kismet, NotYet }` has `source()` and `cpp_text()` (the C++ `what()`);
     `Kismet` holds the executor error's text, the C++ text, because `KismetError` is neither `Clone` nor `PartialEq`.
-  - `dialog::DialogSystem::new(package, ParityMode)`; every call takes the `&mut Vm` the system works with.
+  - `dialog::DialogSystem::new(package)`; every call takes the `&mut Vm` the system works with, and the random pick
+    reads that VM's parity mode (`Vm::parity`, R3: one source).
     `set_line_player`, `set_timed_line_player`, `set_test_line_length`, `line_ended`, `register_talker`,
     `pawn_dialog`, `trigger_on_component`, `set_tracked_mission`, `tick`, `advance_to`, `not_run`, `last_search`,
     `object_path`; the callbacks `on_line` (`LineSink`) and `on_line_stopped`. `DialogError { NotImplemented,
     Unresolved, Malformed, Vm, Def, Package }` has `source()` and `cpp_text()`.
-  - **The behavior seam.** `DialogSystem::behavior(vm, &mut dyn BehaviorRun)`: the trait is what the C++ body reads
-    from the `BehaviorProvider` and its run record (behavior object and name, initial run, linked outputs, the Context
-    link's objects, the wait, the per-thread state as `DialogBehaviorState`). Lane W5-BEHAVIOR's kernel is not on
-    main, so the caller that runs a provider (W6-MISSION) adapts its run to the trait; no `ow-behavior` type is named.
+  - **The behavior in the kernel** (hub decision, review r1 of PR #333). `DialogSystem::behavior(vm, &mut Provider,
+    BehaviorId)` runs on lane W5-BEHAVIOR's kernel types (decision 2026-11-15-30): the behavior object and name from
+    `Provider::behavior`, the initial run, the linked outputs, the wait and the per-thread state from
+    `Provider::run_info()` (the state an `Rc<dyn Any>` holding a `DialogBehaviorState`; another type there is an
+    error), and the Context link's objects from `Provider::linked_objects` (with no Context link, one null entry, as
+    the C++ asks the provider with no own object; `Provider::contexts` needs an own object). `dialog::handler`
+    makes the kernel's `HandlerFn` over an `Rc<RefCell<DialogSystem>>`, and `dialog::register` adds it to the VM's
+    behavior registry under `GearboxFramework.Behavior_TriggerDialogEvent` (`dialog::BEHAVIOR_CLASS`). A
+    `DialogError` becomes the kernel's `BehaviorError` (VM, store and package errors keep their kinds; the dialog's
+    own errors are `Data` with the C++ text).
 - **The mover binding** loads the actor and the action from the definition store (`DefStore::load_export` with the
   C++ prefixes, 26 and 4), one object per path as decision 2026-11-15-23 requires, not a copy as the C++ makes. The
   C++ prefix size check runs first with the C++ prefix ("object property prefix outside export"); a prefix the store
   derives differently is its `PrefixMismatch`. The ambient sound component is loaded by the store (its derived prefix,
-  8 for an `Engine.ActorComponent` subclass; the C++ forces 8). Every C++ check is kept, in the C++ order. Two
-  differences: the notification bytecode is decoded at the first call, not at binding (a function that does not
-  decode fails its first notification instead of the binding); and the store's own `defs: no holder for <path>`
-  lines, which have no C++ counterpart (its resource stand-ins are silent), are kept apart in `store_notes()` and do
-  not count as a loading diagnostic. Every other line the load logs does.
+  8 for an `Engine.ActorComponent` subclass; the C++ forces 8), after the C++ check that its reference resolves to
+  an export (`resourceIndex > 0`: a reference to an export, or an import the reflection resolves to one). Every C++
+  check is kept, in the C++ order; each notification's bytecode is decoded right after its signature check
+  (`ow_script::decode::decode`), so a body that does not decode fails the binding, as in the C++. One difference: the
+  store's own `defs: no holder for <path>` lines, which have no C++ counterpart (its resource stand-ins are silent),
+  are kept apart in `store_notes()`, at binding and in every lifecycle call: they are no loading diagnostic, fail no
+  call and do not stop the timer pass. Every other line logged does.
 - **Stub policy.** `--mover-event` is a gameplay command and refuses an unbound native (`StubPolicy::Refuse`, empty
   allow list), as architecture section 3.8 lists it. `--mover-probe` is not in that table; it keeps `LogAndZero`,
   the C++ `Runtime` behaviour, because `tests/vm_test.py` pins its broken-mover case by the logged `UNIMPLEMENTED`
@@ -62,26 +71,30 @@ stays UNVERIFIED as a game rule.
     to nothing;
   - the random `TalkData` pick is a new reference stand-in: under `ParityMode::Reference` the C++ `std::mt19937`
     seeded 12345 (`rng() % n`; checked against the C++ standard's value for the 10000th output); under
-    `ParityMode::Off` the world's `CrtStream::Dialog` (`rand15 % n`). How the game picks is not read. No tracked
+    `ParityMode::Off` the world's `CrtStream::Dialog` (`rand15 % n`), the mode read from the VM at each pick. How the
+    game picks is not read. No tracked
     test pins the C++ pick yet (every Fire act it would reach has one entry); it needs a row in architecture
     section 6.1, which this lane does not own;
   - a chain of more than 16 Trigger acts is `DialogError::Malformed` (the C++ has no bound), and a link entry without
     `LinkNumber` or `ToNodeID` is `Malformed` where the C++ reads through a null pointer. The C++ reads `LinkNumber`
     only once `FromNodeID` matched, and so does the port.
-- **Checks.** Rust unit tests on invented packages: 15 for the mover (`mover/tests.rs`: the probe sequence, rollback
+- **Checks.** Rust unit tests on invented packages: 18 for the mover (`mover/tests.rs`: the probe sequence, rollback
   after a logged or refused call, the binding refusals with the C++ texts, the timer rate and name checks, the
   callback limit, the delta bounds, the three natives' target checks, no owning sequence, a remote event's motion and
-  host boundary, the motion's end, the event, output and time entry points, the action's variables) and 22 for the
-  dialog
-  (`dialog/tests.rs`: the behavior's waits and outputs, the empty context list, `bForcePlayImmediate`, priority
+  host boundary, the motion's end, the event, output and time entry points, the action's variables, a store note in a
+  call, an undecodable notification, an ambient component that resolves to nothing) and 25 for the dialog
+  (`dialog/tests.rs`: the behavior run by the real kernel through the registry handler, its waits, outputs and
+  polls, no audio device, the empty context list, a context object as the instigator, `bForcePlayImmediate`, an
+  unlinked behavior, a dialog error as the kernel's error, priority
   blocking and interruption, the tracked-mission floor, echo and missing talkers, once per session, the last enabled
   entry, the template and node links, the no-match Trigger route, the not-implemented nodes, `GetDialogGroups`, the
-  globals' indices, the three players, `mt19937`). Against the C++ binary on the invented packages of
+  globals' indices, the three players, `mt19937`, the three-entry pick in each parity mode). Against the C++ binary on the invented packages of
   `tests/vm_test.py` (its `make()`: the mover, the broken mover and the truncated mover, with right, swapped and
   missing exports, a short command line and a wrong option, both commands): 25 of 25 identical in exit code, stdout
   and stderr. `tests/vm_test.py`'s `--mover-probe` site passes on the Rust binary. `tests/mover_parity_test.py` (in
   `mover.txt` and ctest `mover-rust`) builds an invented install, a toy mover with a toy Kismet sequence, and diffs both
-  commands on both binaries: 13 of 13 cases as expected, 11 byte-identical and 2 checked differences. One is the stub
+  commands on both binaries: 15 of 15 cases as expected, 13 byte-identical (among them an object constant naming an
+  import no file holds, and a notification that does not decode) and 2 checked differences. One is the stub
   policy (a finish notification reaching an unbound native: both fail it; the C++ text is the logged `UNIMPLEMENTED`,
   the Rust one `unbound native`, and the steps differ because the C++ runs on). The other is an export that is not an
   actor bound as the placed actor: both fail the binding with nothing on stdout; the C++ reads it from the 26-byte prefix
