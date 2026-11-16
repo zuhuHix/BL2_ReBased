@@ -227,6 +227,24 @@ fn the_upload_counts_what_it_sends() {
     );
     assert!(refused.is_err());
     assert_eq!(r.draw_calls(), 1);
+    // The same undecodable slot made translucent and drawn: grey would cover what is behind, so it is left out.
+    p.slots[1].blend = Blend::Translucent;
+    p.batches[0].key.material = Some(1);
+    let r = SceneRenderer::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &p,
+        Lighting::viewer(),
+        &mut source,
+    )
+    .unwrap();
+    let u = r.upload;
+    assert_eq!(
+        (u.grey_materials, u.blended_undecoded, u.skipped_instances),
+        (1, 1, 1)
+    );
+    assert_eq!((r.draw_calls(), r.blended_instances()), (0, 0));
     assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }
 
@@ -335,6 +353,18 @@ fn centre_of(
     near: f32,
     colours: &[[u8; 4]],
 ) -> [u8; 4] {
+    centre_sorted_from(device, queue, slots, near, colours, [0.0; 3])
+}
+
+/// [`centre_of`] with the blended instances sorted as seen from `sort_eye` (the camera stays at the origin).
+fn centre_sorted_from(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    slots: Vec<MaterialSlot>,
+    near: f32,
+    colours: &[[u8; 4]],
+    sort_eye: [f32; 3],
+) -> [u8; 4] {
     let mut batches = Vec::new();
     for (i, distance) in [near, 200.0].into_iter().enumerate().take(slots.len()) {
         let affine = frame::Placement::new([distance, 0.0, 0.0], Rotator::default(), 1.0, [1.0; 3])
@@ -376,7 +406,7 @@ fn centre_of(
     .unwrap();
     let camera = FlyCamera::at([0.0; 3], Rotator::default());
     let vp = camera.view_projection(32, 32).unwrap();
-    let rgba = r.capture(device, queue, (32, 32), &vp, [0.0; 3]).unwrap();
+    let rgba = r.capture(device, queue, (32, 32), &vp, sort_eye).unwrap();
     let px = &rgba[(16 * 32 + 16) * 4..][..4];
     [px[0], px[1], px[2], px[3]]
 }
@@ -398,8 +428,14 @@ fn blend_modes_draw_as_their_material_says() {
     let Some((device, queue, errors)) = headless() else {
         panic!("no adapter, not even the software fallback");
     };
-    // BGRA as stored: red with alpha 0, red opaque, white at half alpha.
-    let colours = [[0, 0, 255, 0], [0, 0, 255, 255], [255, 255, 255, 128]];
+    // BGRA as stored: red with alpha 0, red opaque, white at half alpha, mid grey opaque, red at half alpha.
+    let colours = [
+        [0, 0, 255, 0],
+        [0, 0, 255, 255],
+        [255, 255, 255, 128],
+        [128, 128, 128, 255],
+        [0, 0, 255, 128],
+    ];
     let clear = centre_of(&device, &queue, vec![], 200.0, &colours);
     // Masked: alpha 0 under the clip value is discarded, alpha 255 is drawn.
     assert_eq!(
@@ -454,6 +490,39 @@ fn blend_modes_draw_as_their_material_says() {
         &colours,
     );
     assert_eq!((added[0], added[2]), (255, clear[2]));
+    // Modulate: grey at 100 uu multiplies the opaque red at 200 behind it: red dimmed, green and blue stay 0.
+    let modulated = centre_of(
+        &device,
+        &queue,
+        vec![unlit(3, Blend::Modulate), unlit(1, Blend::Opaque)],
+        100.0,
+        &colours,
+    );
+    assert!(
+        modulated[0] > 0 && modulated[0] < 255 && modulated[1] == 0 && modulated[2] == 0,
+        "{modulated:?}"
+    );
+    // Translucent surfaces write no depth. Sorted from an eye at x 1000, the white one at 100 uu (nearer the camera)
+    // is drawn before the red one at 200 uu; the red one still shows through it.
+    let near_only = centre_of(
+        &device,
+        &queue,
+        vec![unlit(2, Blend::Translucent)],
+        100.0,
+        &colours,
+    );
+    let both = centre_sorted_from(
+        &device,
+        &queue,
+        vec![unlit(2, Blend::Translucent), unlit(4, Blend::Translucent)],
+        100.0,
+        &colours,
+        [1000.0, 0.0, 0.0],
+    );
+    assert!(
+        both[0] > near_only[0] && both[1] < near_only[1],
+        "{both:?} against the near one alone {near_only:?}"
+    );
     // The sky: drawn first with no depth test, so a farther opaque triangle covers it.
     let mut sky = unlit(1, Blend::Opaque);
     sky.sky = Some(SkyInputs {
