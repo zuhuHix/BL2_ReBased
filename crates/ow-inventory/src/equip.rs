@@ -12,8 +12,9 @@
 //! - `WillowGame.WillowWeapon.CalculateWeaponBaseValues()` is `ow-items`' `weapon_base_values` on the weapon and its
 //!   `DefinitionData.WeaponTypeDefinition` (decision 2026-11-15-24). The script writes each base with the attribute
 //!   let (opcode 0x5F), which this VM recomputes in `CombineForm::Vm5F`; the override passes the same form, so a
-//!   value the script and the rule write is the same in this world. A weapon without a type is refused
-//!   (`BadData`): the script would read every field through a None context and write zeros, which is no rule.
+//!   value the script and the rule write is the same in this world. A weapon without a type is
+//!   `NotYet { NotRead }`: the script would read every field through a None context and write the zeros that gives,
+//!   a path not ported ([`weapon_type_of`]).
 //!
 //! **Equip and unequip** (the external effects; an item's or weapon's own effects are applied at its
 //! initialisation, `ow-items` W4-STATS):
@@ -22,14 +23,16 @@
 //!   `ExternalAttributeModifiers` already holds records (the script's guard against applying twice). Otherwise the
 //!   definition's `ExternalAttributeEffects` are appended to `ExternalAttributeModifiers`; then, when
 //!   `PartExternalAttributeModifiers` is empty, each part's `ExternalAttributeEffects` to it; then the external
-//!   attribute slots ([`external_slots`]).
+//!   attribute slots ([`external_slots`]). Every read and refusal comes before the first apply, and a failed apply
+//!   takes back everything the call added (all or nothing; [`apply_item_external_effects`]).
 //! - [`apply_weapon_external_effects`] is `WillowWeapon.ApplyAllExternalAttributeEffects`: the same guard, then the
 //!   type's and every part's `ExternalAttributeEffects` into `ExternalAttributeModifiers` (no separate part guard),
 //!   with the instigator's `Controller` as the source (the weapon's script passes `Instigator.Controller` itself, not
 //!   the owning player controller it looks up for the slots), then the external slots.
 //! - [`remove_item_external_effects`] and [`remove_weapon_external_effects`] are the `RemoveAll...` scripts: each
 //!   record's modifier is removed from its context (`RemoveAttributeModifier`, notification on), then the array is
-//!   emptied; an item also empties its part records the same way.
+//!   emptied; an item also empties its part records the same way. Every record is tried and every array emptied
+//!   even when one removal fails; the first error is returned afterwards.
 //! - The parts are the definition data's part fields in their declared order, the material included and the name
 //!   parts not (the script walks them with the native iterator `AllParts`, whose order and whose `bool` argument are
 //!   not read: UNVERIFIED).
@@ -271,18 +274,58 @@ pub fn apply_attribute_effects(
     Ok(Value::array(out))
 }
 
-/// Removes every record of `object`'s array `name` from its context, then empties the array (the `RemoveAll...`
-/// scripts).
-fn remove_records(vm: &mut Vm, object: ObjRef, name: &str, what: &str) -> Result<(), VmError> {
-    let Some(v) = read(vm, object, name)? else {
-        return Err(bad(what, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, object))));
-    };
-    let applied = applied_from_values(vm, &v)?;
-    let attrs = vm.attrs.clone();
-    for r in applied.0 {
-        attrs.remove_modifier(r.attribute, Some(r.context), r.modifier, false, &mut EvalCx::new(vm))?;
+/// Removes every record of `object`'s arrays `names` from its context, then empties every array (the `RemoveAll...`
+/// scripts). Every record is tried (`ow-attr`'s `remove_effects`) and every array emptied whatever happens; the first
+/// error is returned afterwards. An array that does not read as records is an error before anything changes.
+fn remove_records(vm: &mut Vm, object: ObjRef, names: &[&str], what: &str) -> Result<(), VmError> {
+    let mut applied = Applied::default();
+    for name in names {
+        let v = required(vm, object, name, what)?;
+        applied.0.extend(applied_from_values(vm, &v)?.0);
     }
-    write(vm, object, name, Value::array(Vec::new()), what)
+    let attrs = vm.attrs.clone();
+    let removed = attrs.remove_effects(applied, &mut EvalCx::new(vm));
+    let mut first: Option<VmError> = removed.err().map(VmError::from);
+    for name in names {
+        if let Err(e) = write(vm, object, name, Value::array(Vec::new()), what) {
+            first.get_or_insert(e);
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
+/// Applies each effect list in order with `source` and the override `item`, adding each call's records to `done`
+/// (`ow-attr`'s `apply_effects` undoes a failing call itself).
+fn apply_lists(
+    vm: &mut Vm,
+    source: Option<ObjRef>,
+    item: ObjRef,
+    lists: &[Vec<EffectData>],
+    done: &mut Applied,
+) -> Result<(), VmError> {
+    let attrs = vm.attrs.clone();
+    for effects in lists {
+        let applied = attrs.apply_effects(effects, source, Some(item), &mut EvalCx::new(vm))?;
+        done.0.extend(applied.0);
+    }
+    Ok(())
+}
+
+/// Takes back everything `done` added and writes `originals` back into `item`'s arrays, after a failed equip. A
+/// failure of this cleanup is not returned: the caller's answer is the first error.
+fn undo(vm: &mut Vm, item: ObjRef, done: Applied, originals: &[(&str, Value)], what: &str) {
+    let attrs = vm.attrs.clone();
+    let _ = attrs.remove_effects(done, &mut EvalCx::new(vm));
+    for (name, v) in originals {
+        let _ = write(vm, item, name, v.clone(), what);
+    }
+}
+
+/// The array value `existing` with `added`'s records appended.
+fn appended(vm: &Vm, existing: &Value, ty: StructId, added: &Applied) -> Result<Value, VmError> {
+    let mut out = ow_attr::eval::elements("an AppliedAttributeEffect array", existing)?.to_vec();
+    out.extend(applied_values(vm, ty, added)?);
+    Ok(Value::array(out))
 }
 
 fn is_empty_array(v: &Value) -> bool {
@@ -389,96 +432,132 @@ pub fn external_slots(vm: &Vm, definition: ObjRef) -> Result<(), VmError> {
 }
 
 /// `WillowItem.ApplyAllExternalAttributeEffects` (module documentation).
+///
+/// **All or nothing.** Every read comes first (the controller, both record arrays, the parts, every effect list, and
+/// the external-slot check, which the script reaches last but which can only refuse here), so a refusal changes
+/// nothing. If an apply then fails, everything this call added is removed and both arrays keep their old values: an
+/// `Err` leaves the stacks and the records as they were, and a retry is not answered `AlreadyApplied`.
 pub fn apply_item_external_effects(vm: &mut Vm, item: ObjRef) -> Result<ExternalOutcome, VmError> {
     const WHAT: &str = "WillowItem.ApplyAllExternalAttributeEffects";
+    const OWN: &str = "ExternalAttributeModifiers";
+    const PARTS: &str = "PartExternalAttributeModifiers";
     let controller = equip_controller(vm, item)?;
-    let records = required(vm, item, "ExternalAttributeModifiers", WHAT)?;
+    let records = required(vm, item, OWN, WHAT)?;
     if !is_empty_array(&records) {
         return Ok(ExternalOutcome::AlreadyApplied);
     }
+    let parts_records = required(vm, item, PARTS, WHAT)?;
     let data = required(vm, item, "DefinitionData", WHAT)?;
     let definition = ow_attr::eval::object("ItemDefinition", &field(vm, &data, "ItemDefinition")?)?;
-    let ty = record_struct(vm, item, "ExternalAttributeModifiers", WHAT)?;
-    let effects = match definition {
-        Some(d) => external_effects(vm, d)?,
+    let ty = record_struct(vm, item, OWN, WHAT)?;
+    let pty = record_struct(vm, item, PARTS, WHAT)?;
+    let own = match definition {
+        Some(d) => vec![external_effects(vm, d)?],
         None => Vec::new(),
     };
-    let added = apply_attribute_effects(vm, controller, &effects, &records, Some(item), ty)?;
-    let count = ow_attr::eval::elements("ExternalAttributeModifiers", &added)?.len();
-    write(vm, item, "ExternalAttributeModifiers", added, WHAT)?;
-    let mut part_count = 0;
-    let parts_records = required(vm, item, "PartExternalAttributeModifiers", WHAT)?;
+    let mut parts = Vec::new();
     if is_empty_array(&parts_records) {
-        let pty = record_struct(vm, item, "PartExternalAttributeModifiers", WHAT)?;
-        let mut current = parts_records;
         for part in parts_of(vm, &data, &ITEM_PART_FIELDS)? {
-            let effects = external_effects(vm, part)?;
-            current = apply_attribute_effects(vm, controller, &effects, &current, Some(item), pty)?;
+            parts.push(external_effects(vm, part)?);
         }
-        part_count = ow_attr::eval::elements("PartExternalAttributeModifiers", &current)?.len();
-        write(vm, item, "PartExternalAttributeModifiers", current, WHAT)?;
     }
     if let Some(d) = definition {
         external_slots(vm, d)?;
     }
+    let (mut own_done, mut parts_done) = (Applied::default(), Applied::default());
+    let run = apply_lists(vm, controller, item, &own, &mut own_done)
+        .and_then(|()| apply_lists(vm, controller, item, &parts, &mut parts_done))
+        .and_then(|()| {
+            let a = appended(vm, &records, ty, &own_done)?;
+            let b = appended(vm, &parts_records, pty, &parts_done)?;
+            write(vm, item, OWN, a, WHAT)?;
+            write(vm, item, PARTS, b, WHAT)
+        });
+    if let Err(e) = run {
+        let mut done = own_done;
+        done.0.extend(parts_done.0);
+        undo(vm, item, done, &[(OWN, records), (PARTS, parts_records)], WHAT);
+        return Err(e);
+    }
     Ok(ExternalOutcome::Applied {
-        records: count,
-        part_records: part_count,
+        records: own_done.0.len(),
+        part_records: parts_done.0.len(),
     })
 }
 
 /// `WillowItem.RemoveAllExternalAttributeEffects` and `RemoveAllPartExternalAttributeEffects`.
 pub fn remove_item_external_effects(vm: &mut Vm, item: ObjRef) -> Result<(), VmError> {
     const WHAT: &str = "WillowItem.RemoveAllExternalAttributeEffects";
-    remove_records(vm, item, "ExternalAttributeModifiers", WHAT)?;
-    remove_records(vm, item, "PartExternalAttributeModifiers", WHAT)
+    remove_records(vm, item, &["ExternalAttributeModifiers", "PartExternalAttributeModifiers"], WHAT)
 }
 
-/// `WillowWeapon.ApplyAllExternalAttributeEffects` (module documentation).
+/// `WillowWeapon.ApplyAllExternalAttributeEffects` (module documentation), all or nothing as
+/// [`apply_item_external_effects`].
 pub fn apply_weapon_external_effects(vm: &mut Vm, weapon: ObjRef) -> Result<ExternalOutcome, VmError> {
     const WHAT: &str = "WillowWeapon.ApplyAllExternalAttributeEffects";
+    const OWN: &str = "ExternalAttributeModifiers";
     let source = match object_prop(vm, weapon, "Instigator", WHAT)? {
         Some(i) => object_prop(vm, i, "Controller", WHAT)?,
         None => None,
     };
-    let records = required(vm, weapon, "ExternalAttributeModifiers", WHAT)?;
+    let records = required(vm, weapon, OWN, WHAT)?;
     if !is_empty_array(&records) {
         return Ok(ExternalOutcome::AlreadyApplied);
     }
     let data = required(vm, weapon, "DefinitionData", WHAT)?;
     let weapon_type =
         ow_attr::eval::object("WeaponTypeDefinition", &field(vm, &data, "WeaponTypeDefinition")?)?;
-    let ty = record_struct(vm, weapon, "ExternalAttributeModifiers", WHAT)?;
-    let effects = match weapon_type {
-        Some(t) => external_effects(vm, t)?,
-        None => Vec::new(),
-    };
-    let mut current = apply_attribute_effects(vm, source, &effects, &records, Some(weapon), ty)?;
-    for part in parts_of(vm, &data, &WEAPON_PART_FIELDS)? {
-        let effects = external_effects(vm, part)?;
-        current = apply_attribute_effects(vm, source, &effects, &current, Some(weapon), ty)?;
+    let ty = record_struct(vm, weapon, OWN, WHAT)?;
+    let mut lists = Vec::new();
+    if let Some(t) = weapon_type {
+        lists.push(external_effects(vm, t)?);
     }
-    let count = ow_attr::eval::elements("ExternalAttributeModifiers", &current)?.len();
-    write(vm, weapon, "ExternalAttributeModifiers", current, WHAT)?;
+    for part in parts_of(vm, &data, &WEAPON_PART_FIELDS)? {
+        lists.push(external_effects(vm, part)?);
+    }
     if let Some(t) = weapon_type {
         external_slots(vm, t)?;
     }
+    let mut done = Applied::default();
+    let run = apply_lists(vm, source, weapon, &lists, &mut done).and_then(|()| {
+        let a = appended(vm, &records, ty, &done)?;
+        write(vm, weapon, OWN, a, WHAT)
+    });
+    if let Err(e) = run {
+        undo(vm, weapon, done, &[(OWN, records)], WHAT);
+        return Err(e);
+    }
     Ok(ExternalOutcome::Applied {
-        records: count,
+        records: done.0.len(),
         part_records: 0,
     })
 }
 
 /// `WillowWeapon.RemoveAllExternalAttributeEffects`.
 pub fn remove_weapon_external_effects(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
-    remove_records(vm, weapon, "ExternalAttributeModifiers", "WillowWeapon.RemoveAllExternalAttributeEffects")
+    remove_records(
+        vm,
+        weapon,
+        &["ExternalAttributeModifiers"],
+        "WillowWeapon.RemoveAllExternalAttributeEffects",
+    )
 }
 
-/// The weapon type of `weapon` (`DefinitionData.WeaponTypeDefinition`); None is refused (module documentation).
+/// The weapon type of `weapon` (`DefinitionData.WeaponTypeDefinition`). None is `NotYet { NotRead }`: the script
+/// reads every type field through a None context (an Accessed None, which gives zero values) and writes the bases
+/// from those zeros, and that path (the zero each read gives, `EvaluateInitializationData` on a zeroed struct) is not
+/// ported.
 pub fn weapon_type_of(vm: &Vm, weapon: ObjRef) -> Result<ObjRef, VmError> {
     let data = required(vm, weapon, "DefinitionData", CALCULATE_WEAPON_BASE_VALUES)?;
-    ow_attr::eval::object("WeaponTypeDefinition", &field(vm, &data, "WeaponTypeDefinition")?)?
-        .ok_or_else(|| bad(CALCULATE_WEAPON_BASE_VALUES, "the weapon has no WeaponTypeDefinition"))
+    let t = ow_attr::eval::object("WeaponTypeDefinition", &field(vm, &data, "WeaponTypeDefinition")?)?;
+    t.ok_or_else(|| {
+        NotYet::not_read(
+            "CalculateWeaponBaseValues on a weapon without a WeaponTypeDefinition (the script's Accessed None reads \
+             and the zero bases it writes from them)",
+            RECORD,
+        )
+        .into()
+    })
 }
 
 /// The forms of a base written by the attribute let in this VM (module documentation).

@@ -18,11 +18,15 @@
 //!   inside the pick loop (the roll returns every drop first, so the item rolls cannot interleave with the pool
 //!   draws as the native's do). A contract item for the hub, not a change here.
 //!
-//! **One spawn** ([`spawn_one`]): the candidate's definition must name an `InventoryClass`, else the pick fails; an
-//! actor of that class is spawned (`ow_world::actors::spawn`) and must be a `WillowInventory`;
+//! **One spawn** ([`resolve`], then [`spawn_one`]): the candidate's definition must name an `InventoryClass` that is
+//! a `WillowInventory`, else the pick fails; the definition, the manufacturer and the class's functions are found
+//! before anything is made. An actor of that class is then spawned (`ow_world::actors::spawn`);
 //! `SourceDefinitionName` = the balance's object name; `SetGameStage(candidate stage)` and `SetAwesomeLevel(awesome)`
 //! are called on it; the script event `InitializeInventory(balance, manufacturer, grade-or-level, ContextSource)`
-//! runs; `bDropOnDeath` is set; the actor is appended to the out array. Two choices this port makes where the
+//! runs; `bDropOnDeath` is set; the actor is appended to the out array. A step that fails after the actor exists
+//! destroys it again, and a pick that fails destroys every actor the call made before the error is returned
+//! ([`spawn_picks`]), so an `Err` leaves no spawned inventory behind, unless the world's destroy itself refuses one
+//! (a `Role` below authority, for one; `ow_world::actors::destroy`). The first error is returned either way. Two choices this port makes where the
 //! record is silent, each UNVERIFIED:
 //! - the actor is spawned by the level's `WorldInfo` (its location, rotation and instigator): where the native places
 //!   the actor is not read;
@@ -44,11 +48,11 @@ use ow_items::candidates::{PoolCandidate, expand, pick_candidate};
 use ow_items::merge::RollData;
 use ow_items::registry::{Pv, Registry};
 use ow_items::ItemError;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ClassId, ObjRef};
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
-use ow_world::actors::{SpawnRequest, actors_of, send_event, spawn};
+use ow_world::actors::{SpawnRequest, actors_of, destroy, send_event, spawn};
 use ow_world::world::BalanceState;
 
 use crate::equip::{bad, item_error, object_of, write};
@@ -104,7 +108,7 @@ fn find_opt(vm: &mut Vm, v: &Pv, what: &str) -> Result<Option<ObjRef>, VmError> 
 
 /// A registry value read for the expansion: a number as it is, `{"init": ...}` through the evaluator with `source`
 /// (the init as the tag stream holds it: an untagged constant 0, an untagged scale 1, as `ow-items`' roll reads it),
-/// nothing for no value.
+/// nothing for no value. A constant or scale that is present but not a number is `BadData`, never a default.
 fn registry_value(vm: &mut Vm, v: &Pv, source: Option<ObjRef>) -> Result<Option<f64>, ItemError> {
     const WHAT: &str = "a balance's spawn modifier";
     let wrap = |e: VmError| ItemError::BadData(format!("{WHAT}: {e}"));
@@ -115,14 +119,22 @@ fn registry_value(vm: &mut Vm, v: &Pv, source: Option<ObjRef>) -> Result<Option<
             let Some(init) = other.get("init") else {
                 return Err(ItemError::BadData(format!("{WHAT}: a registry value {}", other.to_json())));
             };
+            // An absent field is its untagged default; a present one must be a number. The registry holds the
+            // tag stream's single-precision value as a double, so the narrowing is exact.
+            let number = |name: &str, untagged: f64| -> Result<f32, ItemError> {
+                match init.at(name) {
+                    Pv::Null => Ok(untagged as f32),
+                    x => x
+                        .number()
+                        .map(|v| v as f32)
+                        .ok_or_else(|| ItemError::BadData(format!("{WHAT}: {name} is {}", x.to_json()))),
+                }
+            };
             let data = InitData {
-                base_value_constant: init.at("BaseValueConstant").number().unwrap_or(0.0) as f32,
+                base_value_constant: number("BaseValueConstant", 0.0)?,
                 base_value_attribute: find_opt(vm, init.at("BaseValueAttribute"), WHAT).map_err(wrap)?,
                 initialization_definition: find_opt(vm, init.at("InitializationDefinition"), WHAT).map_err(wrap)?,
-                base_value_scale_constant: match init.at("BaseValueScaleConstant") {
-                    Pv::Null => 1.0,
-                    x => x.number().unwrap_or(1.0) as f32,
-                },
+                base_value_scale_constant: number("BaseValueScaleConstant", 1.0)?,
             };
             let attrs = vm.attrs.clone();
             Ok(Some(f64::from(attrs.evaluate_init(&data, source, None, &mut EvalCx::new(vm))?)))
@@ -179,17 +191,32 @@ pub fn candidates(
     expand(&s.data, &record, stage, cap, &mut value).map_err(|e| item_error(FROM_BALANCE, e))
 }
 
-/// One spawn of `candidate` (module documentation). `Ok(None)`: this pick failed (no `InventoryClass`, a spawn that
-/// gave nothing, or not a `WillowInventory`).
-pub fn spawn_one(
+/// What one pick spawns, every object found and every class checked before anything is made.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resolved {
+    /// The class to spawn: the definition's `InventoryClass`, a `WillowInventory`.
+    pub class: ClassId,
+    pub manufacturer: ObjRef,
+    /// The stage stored on the item and the grade-or-level word `InitializeInventory` receives.
+    pub stage: i32,
+    pub grade_or_level: i32,
+}
+
+/// The three functions one spawn calls on the new inventory, in order (module documentation).
+pub const SPAWN_CALLS: [&str; 3] = ["SetGameStage", "SetAwesomeLevel", "InitializeInventory"];
+
+/// [`Resolved`] for a definition and manufacturer already found. `Ok(None)`: the pick fails as the record says (no
+/// `InventoryClass`, or one that is not a `WillowInventory`). The class must declare the three functions
+/// [`spawn_one`] calls; one it lacks is a data error, found here, before any actor exists.
+pub fn resolve_objects(
     vm: &mut Vm,
-    balance: ObjRef,
-    candidate: &PoolCandidate,
-    awesome: i32,
-    context: Option<ObjRef>,
-) -> Result<Option<ObjRef>, VmError> {
+    definition: ObjRef,
+    manufacturer: ObjRef,
+    stage: i32,
+    grade_or_level: i32,
+) -> Result<Option<Resolved>, VmError> {
     const WHAT: &str = "ItemPool spawn";
-    let definition = find(vm, &candidate.definition, WHAT)?;
     let class = match ow_attr::eval::property(&mut EvalCx::new(vm), definition, "InventoryClass")? {
         Some(Value::Class(c)) => c,
         Some(other) => return Err(bad(WHAT, format!("InventoryClass holds {}", other.kind_name()))),
@@ -198,6 +225,42 @@ pub fn spawn_one(
     let Some(class) = class else {
         return Ok(None);
     };
+    let willow = vm.find_class("Engine.WillowInventory")?;
+    if !vm.space.classes.is_child_of(class, willow) {
+        return Ok(None);
+    }
+    for name in SPAWN_CALLS {
+        if vm.find_method(class, name, None)?.is_none() {
+            return Err(bad(WHAT, format!("the inventory class declares no {name}")));
+        }
+    }
+    Ok(Some(Resolved {
+        class,
+        manufacturer,
+        stage,
+        grade_or_level,
+    }))
+}
+
+/// [`resolve_objects`] for a candidate: its definition and manufacturer found through the store.
+pub fn resolve(vm: &mut Vm, candidate: &PoolCandidate) -> Result<Option<Resolved>, VmError> {
+    const WHAT: &str = "ItemPool spawn";
+    let definition = find(vm, &candidate.definition, WHAT)?;
+    let manufacturer = find(vm, &candidate.manufacturer, WHAT)?;
+    resolve_objects(vm, definition, manufacturer, candidate.stage, candidate.grade_or_level)
+}
+
+/// One spawn of a resolved pick (module documentation). `Ok(None)`: the spawn gave nothing. An `Err` after the actor
+/// was made destroys it again before it returns (a failure of that destroy is not returned: the first error is).
+pub fn spawn_one(
+    vm: &mut Vm,
+    balance: ObjRef,
+    r: &Resolved,
+    awesome: i32,
+    context: Option<ObjRef>,
+) -> Result<Option<ObjRef>, VmError> {
+    const WHAT: &str = "ItemPool spawn";
+    let name = vm.space.heap.get(balance)?.name;
     let spawner = actors_of(vm)?
         .try_borrow()
         .map_err(|_| VmError::ServiceBorrowed("Actors"))?
@@ -209,32 +272,65 @@ pub fn spawn_one(
                 RECORD,
             ))
         })?;
-    let Some(item) = spawn(vm, spawner, &SpawnRequest::new(Some(class)))? else {
+    let Some(item) = spawn(vm, spawner, &SpawnRequest::new(Some(r.class)))? else {
         return Ok(None);
     };
-    let willow = vm.find_class("Engine.WillowInventory")?;
-    let item_class = vm.space.heap.get(item)?.class;
-    if !vm.space.classes.is_child_of(item_class, willow) {
-        return Ok(None);
+    let filled = (|| -> Result<(), VmError> {
+        write(vm, item, "SourceDefinitionName", Value::Name(name), WHAT)?;
+        call_method(vm, item, "SetGameStage", vec![Value::Int(r.stage)])?;
+        call_method(vm, item, "SetAwesomeLevel", vec![Value::Int(awesome)])?;
+        send_event(
+            vm,
+            item,
+            "InitializeInventory",
+            vec![
+                Value::Object(Some(balance)),
+                Value::Object(Some(r.manufacturer)),
+                Value::Int(r.grade_or_level),
+                Value::Object(context),
+            ],
+        )?;
+        write(vm, item, "bDropOnDeath", Value::Bool(true), WHAT)
+    })();
+    match filled {
+        Ok(()) => Ok(Some(item)),
+        Err(e) => {
+            let _ = destroy(vm, item);
+            Err(e)
+        }
     }
-    let name = vm.space.heap.get(balance)?.name;
-    write(vm, item, "SourceDefinitionName", Value::Name(name), WHAT)?;
-    call_method(vm, item, "SetGameStage", vec![Value::Int(candidate.stage)])?;
-    call_method(vm, item, "SetAwesomeLevel", vec![Value::Int(awesome)])?;
-    let manufacturer = find(vm, &candidate.manufacturer, WHAT)?;
-    send_event(
-        vm,
-        item,
-        "InitializeInventory",
-        vec![
-            Value::Object(Some(balance)),
-            Value::Object(Some(manufacturer)),
-            Value::Int(candidate.grade_or_level),
-            Value::Object(context),
-        ],
-    )?;
-    write(vm, item, "bDropOnDeath", Value::Bool(true), WHAT)?;
-    Ok(Some(item))
+}
+
+/// `quantity` picks (module documentation, step 2): `pick` answers each pick's resolved spawn (`None`: the pick
+/// failed), then [`spawn_one`] runs. Returns the actors made and whether every pick spawned. An `Err` destroys every
+/// actor this call made before it returns.
+pub fn spawn_picks(
+    vm: &mut Vm,
+    balance: ObjRef,
+    quantity: i32,
+    awesome: i32,
+    context: Option<ObjRef>,
+    mut pick: impl FnMut(&mut Vm) -> Result<Option<Resolved>, VmError>,
+) -> Result<(Vec<ObjRef>, bool), VmError> {
+    let mut made: Vec<ObjRef> = Vec::new();
+    let mut all = true;
+    for _ in 0..quantity.max(0) {
+        let step = pick(vm).and_then(|r| match r {
+            Some(r) => spawn_one(vm, balance, &r, awesome, context),
+            None => Ok(None),
+        });
+        match step {
+            Ok(Some(item)) => made.push(item),
+            Ok(None) => all = false,
+            Err(e) => {
+                for item in made {
+                    let _ = destroy(vm, item);
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok((made, all))
 }
 
 /// Calls `name` on `o` (its class's function; a class without one is a data error).
@@ -270,20 +366,17 @@ fn from_balance(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
     // The registry is keyed by the balance's object path.
     let path = object_path(call.vm, balance)?;
     let candidates = candidates(call.vm, &path, stage, context)?;
-    let mut all = !candidates.is_empty();
-    for _ in 0..quantity.max(0) {
-        let picked = pick_candidate(&candidates, call.vm.rng.crt(CrtStream::LootPool));
-        let spawned = match picked.choice.and_then(|i| candidates.get(i)) {
-            Some(c) => spawn_one(call.vm, balance, c, awesome, context)?,
-            None => None,
-        };
-        match spawned {
-            Some(item) => out.push(Value::Object(Some(item))),
-            None => all = false,
+    let (made, all) = spawn_picks(call.vm, balance, quantity, awesome, context, |vm| {
+        let picked = pick_candidate(&candidates, vm.rng.crt(CrtStream::LootPool));
+        match picked.choice.and_then(|i| candidates.get(i)) {
+            Some(c) => resolve(vm, c),
+            None => Ok(None),
         }
-    }
+    })?;
+    let every = all && !candidates.is_empty();
+    out.extend(made.into_iter().map(|o| Value::Object(Some(o))));
     call.set_out(5, Value::array(out))?;
-    Ok(Value::Bool(all))
+    Ok(Value::Bool(every))
 }
 
 /// `o`'s full object path, the form the registry and the definition store key objects by.

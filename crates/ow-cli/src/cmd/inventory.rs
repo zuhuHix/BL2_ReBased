@@ -426,7 +426,8 @@ fn source_entry_kind(vm: &mut Vm, getter: FuncId) -> Result<u8, String> {
 /// on the other `ow_inventory::manager::Pack` binds `CalculateWeaponBaseValues` and `ApplyAttributeEffects` to
 /// their Rust rules. For each weapon both make a `WillowWeapon` from its class defaults with that definition data
 /// and level, call `CalculateWeaponBaseValues`, then `ApplyAttributeEffects` with the weapon as the source once per
-/// holder (the type, then each part in definition-data order) on the holder's `WeaponAttributeEffects`. Compared:
+/// holder (the type, then each part in definition-data order) on the holder's `WeaponAttributeEffects`, each call
+/// given the previous call's records as its `OutModifiers` (so all but the first append to a non-empty array). Compared:
 /// each call's error, every numeric and array property of the weapon (floats bit for bit, a modifier by its `Type`
 /// and `Value`, any other object by its path), and each call's records. One line per weapon goes to `--output`, a
 /// summary to stdout; exit 0 when every weapon is identical.
@@ -634,7 +635,8 @@ struct WeaponRun {
     /// The VM steps `CalculateWeaponBaseValues` used (bytecode on the script side, 0 for the override): shown, not
     /// compared.
     steps: u64,
-    /// The records the `ApplyAttributeEffects` calls returned, summed (compared through the values).
+    /// The records the last `ApplyAttributeEffects` call returned: every call's, as each appends to the previous
+    /// call's array (compared through the values).
     records: usize,
 }
 
@@ -785,6 +787,9 @@ fn run_weapon_steps(vm: &mut Vm, r: &DiffRequest, run: &mut WeaponRun) -> Result
     let apply = vm
         .find_function(APPLY_ATTRIBUTE_EFFECTS)
         .map_err(|e| vm_text(&e))?;
+    // Each call gets the previous call's records as its OutModifiers, so every call after the first appends to a
+    // non-empty array (the script appends and never empties it).
+    let mut existing = Value::array(Vec::new());
     for (k, holder) in holders.iter().enumerate() {
         let effects = read_prop(vm, *holder, "WeaponAttributeEffects")
             .unwrap_or_else(|| Value::array(Vec::new()));
@@ -794,14 +799,17 @@ fn run_weapon_steps(vm: &mut Vm, r: &DiffRequest, run: &mut WeaponRun) -> Result
             vec![
                 Value::Object(Some(weapon)),
                 effects,
-                Value::array(Vec::new()),
+                existing.clone(),
                 Value::Object(None),
             ],
         );
         if let Ok(result) = &called
-            && let Some(Value::Array(items)) = result.outs.get(2)
+            && let Some(out) = result.outs.get(2)
         {
-            run.records += items.len();
+            if let Value::Array(items) = out {
+                run.records = items.len();
+            }
+            existing = out.clone();
         }
         let shown = match &called {
             Ok(result) => result
