@@ -53,12 +53,20 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
     W5-POOLS' native and logs nothing; no VM API lets this lane observe it. So those lines are missing from a hit's
     `events` (the `order` list still shows the calls). Contract item below.
   - A behavior event raised on a provider that is running (a death definition's `Behavior_CustomEvent` broadcasting
-    to its own provider) is deferred and raised once the outermost raise's own event has returned, in order; the C++
-    re-enters (`Provider` methods take `&mut self`). A provider is marked running from before it is made until it is
-    back, so a re-entrant raise never makes a second provider over the same definition; only the outermost raise
-    drains, `OnTakeDamage`'s raise included, at most 10,000 deferred events (a runaway is an error). Review r1 of PR
-    #335 found the first version hung on this path; the test
-    `run::tests::an_event_raised_on_a_running_provider_runs_after_it_once_and_on_the_same_provider` pins the order.
+    to its own provider) is deferred and raised once the outermost raise's own event has returned; the C++ re-enters
+    (`Provider` methods take `&mut self`). A provider is marked running from before it is made until it is back, so a
+    re-entrant raise never makes a second provider over the same definition. Only the outermost raise drains
+    (`OnTakeDamage`'s raise and the `sequence` step included), at most 10,000 deferred events (a runaway is an error).
+    The drain keeps the C++ order where deferring allows it (review r2 of PR #335): a broadcast whose death target
+    waits queues its class target right behind it (the C++ targets [death provider, class provider]), and what a
+    drained event defers runs before the events queued behind it (depth first: E1 raising E2 then E4, E2 raising E3,
+    runs E1, E2, E3, E4). A drained event that would wait again names a provider held outside every raise and is an
+    error at once. **The cost of deferring:** a deferred event runs on the provider's state after the running event,
+    so an event a sequence's disabled event raises on its own provider finds that sequence disabled (the C++ runs it
+    before the bit is cleared). Tests: `run::tests::a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the_class_one`,
+    `events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it`,
+    `the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it` and
+    `a_raise_on_a_provider_held_outside_every_raise_fails_at_once_naming_the_hold`.
   - The mission bridge (W6-MISSION, on main since e45490a) is not wired into the run yet: a follow-up lane wires the
     `maya`, `tick`, `bleed` and `cash` steps against it for S-d and S-f (hub decision, review r1 of PR #335). Until then
     a run with a `maya:` step is `NotYet { NotPorted }` before any step (exit 3), and `tick`, `cash`, `bleed` and
@@ -97,7 +105,7 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   static array of 16, the toy `Actor` and `WorldInfo` declare the fields the world's actor spawn reads, and the
   manager's class default object holds `Role` = 3. No assertion changed; the file passes on the C++ binary as before.
 - **Verified (automated, local, pc-hummer).**
-  - 58 `ow-combat` unit tests (after review r1 of PR #335) on the invented packages of `run/fixture.rs` (a Rust port of `combat_test.py`'s builders
+  - 62 `ow-combat` unit tests (after review r2 of PR #335) on the invented packages of `run/fixture.rs` (a Rust port of `combat_test.py`'s builders
     without their loot part, plus invented allegiances, hit regions, a resisting damage type, expression trees,
     currency and consumer handles), one per rule above; the re-entry tests run on the `ow-behavior` fixture's provider
     packages with one more invented package.
@@ -125,7 +133,9 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   - `registry::HandlerFn` does not receive the consumer (decision 2026-11-15-30 names the additive route); a handler that
     needs it can only be set per provider.
   - `ow_balance::xp::KillCredit::players` cannot hold a count outside the weight table.
-- **Open items.** The mission bridge's steps (S-d credit into Maya's pool, S-f's bleed-out and respawn: a follow-up
+- **Open items.** `AdjustDamage`'s backstab, first and last shot and reflection stages have no Off-mode `NotYet` yet,
+  and the impact definition check needs a region hit (`region.is_some()`); both are review r2 finding 5 of PR #335,
+  left to a follow-up. The mission bridge's steps (S-d credit into Maya's pool, S-f's bleed-out and respawn: a follow-up
   lane wires them against W6-MISSION's bridge);
   loot (W6-LOOT); the stages `AdjustDamage` leaves out; every native body the C++ reads by role (the down natives, the
   holds, the expression evaluators); the installed-game comparison after the three items above.

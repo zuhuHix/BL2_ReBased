@@ -1082,6 +1082,9 @@ pub fn willow_game() -> Vec<u8> {
     // DamageType, Momentum, HitInfo) and leaves its health as it is; the hit reads FinalDamage from the pipeline.
     let armored = w.cls("WillowArmoredPawn", ai_pawn);
     w.prop("Float", armored, "IntrinsicArmor", 0, 0);
+    // A shield pool reference (the shield stage of AdjustDamage looks for a valid one).
+    let pool_reference = w.import_full("ScriptStruct", actor, "ResourcePoolReference");
+    w.prop("Struct", armored, "ShieldArmor", 0, pool_reference);
     for n in ["ResistToy", "ResistToyBaseValue"] {
         w.prop("Float", armored, n, 0, 0);
     }
