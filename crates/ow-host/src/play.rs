@@ -680,6 +680,10 @@ pub struct PlayDrawer {
     presented: u64,
     last_present: Option<Instant>,
     report: Rc<RefCell<PlayDrawReport>>,
+    /// Maya's first-person arms, drawn over the scene when given (lane H6-SKIN, `crate::anim::arms`).
+    arms: Option<crate::anim::arms::ArmsLayer>,
+    /// The target format, for screenshots that draw the arms too.
+    format: Option<wgpu::TextureFormat>,
 }
 
 impl PlayDrawer {
@@ -708,15 +712,30 @@ impl PlayDrawer {
             presented: 0,
             last_present: None,
             report,
+            arms: None,
+            format: None,
         }
+    }
+
+    /// Draws the first-person arms too (lane H6-SKIN).
+    pub fn with_arms(mut self, arms: Option<crate::anim::arms::ArmsLayer>) -> PlayDrawer {
+        self.arms = arms;
+        self
     }
 
     fn shoot(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, path: &PathBuf) -> Result<PathBuf, String> {
         let (view, size) = (self.view.ok_or("no view yet")?, self.size.ok_or("no frame yet")?);
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
-        let mut rgba = renderer.capture(device, queue, size, &vp, view.eye)?;
-        // The capture draws the scene only: the overlay is painted onto it.
+        let eye = view.eye;
+        let mut rgba = match (&mut self.arms, self.format) {
+            (Some(arms), Some(format)) => crate::anim::arms::capture_with(device, queue, format, size, &mut |encoder, target| {
+                renderer.encode(device, queue, encoder, target, size, &vp, eye);
+                arms.encode(device, queue, encoder, target, size, &vp)
+            })?,
+            _ => renderer.capture(device, queue, size, &vp, eye)?,
+        };
+        // The capture draws the scene (and the arms) only: the overlay is painted onto it.
         crate::overlay::paint(&mut rgba, size.0, size.1, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
         let png = ow_assets::png::encode(size.0, size.1, &rgba).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
@@ -736,6 +755,10 @@ impl Drawer for PlayDrawer {
         let started = Instant::now();
         let plan = self.plan.take().ok_or("the scene is attached already")?;
         let renderer = SceneRenderer::new(device, queue, format, &plan, self.lighting, &mut self.textures)?;
+        if let Some(arms) = &mut self.arms {
+            arms.attach(device, format)?;
+        }
+        self.format = Some(format);
         let mut report = self.report.borrow_mut();
         report.draw.upload_time = started.elapsed();
         report.draw.upload = renderer.upload;
@@ -752,6 +775,9 @@ impl Drawer for PlayDrawer {
     fn snapshot(&mut self, snapshot: &Snapshot) {
         if snapshot.view.is_some() {
             self.view = snapshot.view;
+        }
+        if let Some(arms) = &mut self.arms {
+            arms.snapshot(snapshot.view, snapshot.sim_time);
         }
         self.finished = snapshot.finished;
         self.shot = snapshot.shot;
@@ -773,6 +799,9 @@ impl Drawer for PlayDrawer {
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
         renderer.encode(device, queue, encoder, target, size, &vp, view.eye);
+        if let Some(arms) = &mut self.arms {
+            arms.encode(device, queue, encoder, target, size, &vp)?;
+        }
         if let Some(overlay) = &self.overlay {
             overlay.encode(queue, encoder, target, size, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
         }

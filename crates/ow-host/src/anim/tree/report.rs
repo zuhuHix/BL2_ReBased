@@ -81,7 +81,7 @@ fn num(x: f64) -> String {
 }
 
 /// The export file of `rel` (such as `AnimSet/Base_Siren.psa`) in the first of `roots` that has it.
-fn locate(roots: &[PathBuf], rel: &str) -> Result<PathBuf, ReportError> {
+pub(crate) fn locate(roots: &[PathBuf], rel: &str) -> Result<PathBuf, ReportError> {
     roots
         .iter()
         .map(|r| r.join(rel))
@@ -171,7 +171,7 @@ fn set_tags(
 }
 
 /// A clip library of `sets` (object paths) for `mesh`, from the `.psa` exports under `roots` and the store's tags.
-fn library(
+pub(crate) fn library(
     defs: &mut DefStore,
     space: &mut ObjectSpace,
     mesh: &SkeletalMesh,

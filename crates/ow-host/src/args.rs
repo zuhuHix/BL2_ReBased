@@ -21,7 +21,9 @@
 //!   script instead (`movement::walk::parse_script`) and ends when it does; `--size` and `--no-vsync` work as for
 //!   `--map`, and `--screenshot PATH` writes the start frame there (presented frame 30, or the last frame of a
 //!   scripted run that ends sooner) and, for a scripted run only, its last frame beside it as `<stem>_end.png`; an
-//!   interactive run never finishes, so it writes no end frame.
+//!   interactive run never finishes, so it writes no end frame. `--arms DIR` (lane H6-SKIN) also draws Maya's
+//!   first-person arms, skinned on the GPU and posed by her hands AnimTree's idle; `DIR` is a UModel export folder
+//!   of `GD_Siren_Streaming_SF` under `local/` (`anim::arms`).
 //!   `NAME` may leave off `_P` (`Sanctuary` is `Sanctuary_P`). A heavy run: the caller takes the machine lock.
 //! - `--weapon FILE` (with `--play` or `--play-script`, lane H4-WEAPON): the weapon the left mouse button (or a script
 //!   segment with the `f` action) fires, named by a file (`weapon::parse_spec`); without it the weapon is the
@@ -40,7 +42,7 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--arms DIR] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
                          ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE [--weapon FILE]\n       \
                          ow-host --headless-probe";
 
@@ -77,6 +79,8 @@ pub enum Command {
         size: Option<(u32, u32)>,
         screenshot: Option<PathBuf>,
         weapon: Option<PathBuf>,
+        /// A UModel export folder to draw the first-person arms from (lane H6-SKIN).
+        arms: Option<PathBuf>,
     },
     /// The script through the play simulation with no window.
     PlayHeadless { game: PathBuf, map: String, script: PathBuf, weapon: Option<PathBuf> },
@@ -104,6 +108,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut play = false;
     let mut play_script: Option<PathBuf> = None;
     let mut weapon: Option<PathBuf> = None;
+    let mut arms: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -162,6 +167,12 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--weapon given twice".into());
                 }
             }
+            "--arms" => {
+                let path = it.next().ok_or("--arms needs a folder")?;
+                if arms.replace(PathBuf::from(path)).is_some() {
+                    return Err("--arms given twice".into());
+                }
+            }
             "--play" => play = set_once(play, "--play")?,
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
@@ -172,6 +183,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     }
     if weapon.is_some() && !(play || play_script.is_some()) {
         return Err("--weapon needs --play or --play-script".into());
+    }
+    if arms.is_some() && !play {
+        return Err("--arms needs --play".into());
     }
     if map.is_none() && (size.is_some() || screenshot.is_some()) {
         return Err("--size and --screenshot need --map".into());
@@ -204,7 +218,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             return Err("--play runs until it is closed or its script ends: no --window, --frames or --time-limit".into());
         }
         if play {
-            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon });
+            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon, arms });
         }
         if no_vsync || size.is_some() || screenshot.is_some() {
             return Err("--play-script without --play opens no window: no --no-vsync, --size or --screenshot".into());
@@ -338,6 +352,7 @@ mod tests {
                 size: None,
                 screenshot: None,
                 weapon: None,
+                arms: None,
             })
         );
         assert_eq!(
@@ -350,6 +365,20 @@ mod tests {
                 size: Some((1280, 720)),
                 screenshot: Some("a.png".into()),
                 weapon: None,
+                arms: None,
+            })
+        );
+        assert_eq!(
+            p(&["--game", "X", "--map", "S", "--play", "--arms", "exports"]),
+            Ok(Command::Play {
+                game: "X".into(),
+                map: "S".into(),
+                script: None,
+                vsync: true,
+                size: None,
+                screenshot: None,
+                weapon: None,
+                arms: Some("exports".into()),
             })
         );
         assert_eq!(
@@ -389,6 +418,9 @@ mod tests {
             &["--game", "X", "--walk", "--play"],
             &["--headless-probe", "--play"],
             &["--game", "X", "--map", "S", "--play-script"],
+            &["--game", "X", "--map", "S", "--play-script", "w.txt", "--arms", "e"],
+            &["--game", "X", "--map", "S", "--play", "--arms", "a", "--arms", "b"],
+            &["--game", "X", "--map", "S", "--play", "--arms"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }
