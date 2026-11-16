@@ -404,6 +404,10 @@ impl Fx {
                 vec![("GlobalAttribute", byte())],
             ),
             (
+                "WillowGame.PlayThroughCountAttributeValueResolver",
+                vec![("IncludePlaythroughThree", PropKind::Int)],
+            ),
+            (
                 "WillowGame.PlayerSkillAttributeValueResolver",
                 vec![("AssociatedSkill", obj_kind(object))],
             ),

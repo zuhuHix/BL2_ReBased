@@ -1,5 +1,7 @@
 //! Owner: lane W3-ATTREVAL. The value resolver classes the notes read (NATIVE_ATTRIBUTES.md section 6; the Noun
-//! resolver, added by lane FIX-NOUN, from NATIVE_NOUN_ATTRIBUTES.md), one module file each. [`register`] is what [`AttributeSystem::standard`] calls (placed by W2-ATTRAPI); a class not
+//! resolver, added by lane FIX-NOUN, from NATIVE_NOUN_ATTRIBUTES.md; the PlayThroughCount resolver, lane
+//! FIX-PLAYTHROUGH: the C++ reading, its native rule noted in NATIVE_PLAYTHROUGH_ATTRIBUTES.md), one module file
+//! each. [`register`] is what [`AttributeSystem::standard`] calls (placed by W2-ATTRAPI); a class not
 //! registered here stays `NotYet { NotRead }` (the registry's answer).
 //!
 //! Each resolver reads its own fields through [`crate::eval::property`], so a resolver object that is still an
@@ -23,12 +25,15 @@ mod manufacturer;
 mod noun;
 mod object_property;
 mod player_skill;
+mod playthrough_count;
 mod resource_pool_state;
 mod simple_math;
 mod weapon_type;
 
 #[cfg(test)]
 mod noun_tests;
+#[cfg(test)]
+mod playthrough_count_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -38,7 +43,7 @@ pub(crate) mod testworld;
 pub(crate) const RECORD: &str = "NATIVE_ATTRIBUTES.md section 6";
 
 /// Every value resolver class this module implements, by its class path in the packages.
-pub(crate) const CLASSES: [&str; 12] = [
+pub(crate) const CLASSES: [&str; 13] = [
     "Engine.ObjectPropertyAttributeValueResolver",
     "GearboxFramework.ConstantAttributeValueResolver",
     "GearboxFramework.SimpleMathValueResolver",
@@ -51,6 +56,7 @@ pub(crate) const CLASSES: [&str; 12] = [
     "WillowGame.ManufacturerAttributeValueResolver",
     "WillowGame.WeaponTypeAttributeValueResolver",
     "GearboxFramework.NounAttributeValueResolver",
+    "WillowGame.PlayThroughCountAttributeValueResolver",
 ];
 
 /// Registers every value resolver class this module implements ([`CLASSES`], in that order).
@@ -66,5 +72,6 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_value_resolver(CLASSES[8], badass::Badass)?
         .with_value_resolver(CLASSES[9], manufacturer::Manufacturer)?
         .with_value_resolver(CLASSES[10], weapon_type::WeaponType)?
-        .with_value_resolver(CLASSES[11], noun::Noun)
+        .with_value_resolver(CLASSES[11], noun::Noun)?
+        .with_value_resolver(CLASSES[12], playthrough_count::PlayThroughCount)
 }
