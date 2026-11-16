@@ -95,7 +95,8 @@ fn refuse_class_parts(
     };
     if class_part {
         return Err(NotYet::not_read(
-            "the class-level pawn attributes of RecalculateAttributeInitializedState (encumbrance resistance              and twelve damage modifiers: the pawn properties they land in are not named)",
+            "the class-level pawn attributes of RecalculateAttributeInitializedState (encumbrance resistance \
+             and twelve damage modifiers: the pawn properties they land in are not named)",
             RECORD,
         )
         .into());
@@ -111,7 +112,8 @@ fn refuse_class_parts(
         };
         if component.is_some() && willow_class {
             return Err(NotYet::not_read(
-                "the ten status-effect resistances RecalculateAttributeInitializedState re-initialises (the                  component properties they land in are not named)",
+                "the ten status-effect resistances RecalculateAttributeInitializedState re-initialises (the \
+                 component properties they land in are not named)",
                 RECORD,
             )
             .into());
