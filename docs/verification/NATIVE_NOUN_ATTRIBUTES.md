@@ -66,7 +66,7 @@ uses) with the context as the source and no override source, in single precision
 | not a provider, or the resolver has no outer | any | any | none | no | 0.0 / 0.0 | false |
 | provider | 0 | any | `NounState` | yes, by reads and writes alike | entry `Value` / entry `BaseValue` | applied to the entry (section 5) |
 | provider with a replicated array | 1 or 2 | standalone or server | `NounState`, mirrored into `ReplicatedNouns` | yes, by reads and writes alike, with a replicated slot | entry `Value` / entry `BaseValue` | applied to the entry, then mirrored |
-| provider without a replicated array | 1 or 2 | standalone or server | none | no | 0.0 / 0.0 | false |
+| provider without a replicated array | 1 or 2 | any | none | no | 0.0 / 0.0 | false |
 | provider with a replicated array | 1 or 2 | client | `ReplicatedNouns` only (its first `NumReplicatedNouns` slots, by `NounName`) | no | slot `Value`, or 0.0 when no slot matches / 0.0 | false |
 
 A provider that hands over no `NounState` array behaves as "not a provider" for strategy 0. Which arrays each of the
@@ -151,9 +151,10 @@ says "none", reads return 0.0 and writes return false, and nothing changes.
 
 ## 9. What would confirm it (live, bl-sdk)
 
-- On a spawned enemy, read its mind's `NounState` before and after the first reading of
-  `Attribute_HealthMultiplier`: an entry named `Attribute_HealthMultiplier` with value = base = the AI class's
-  starting value (or the default 1.0 when the class lists none).
+- On a spawned enemy, read its mind's `NounState` right after the spawn. If an entry named
+  `Attribute_HealthMultiplier` is there, expect value = base = the AI class's starting value (the script's
+  `SetBaseValue` made it, section 8). If it is not there, expect the first reading of the attribute to create it at
+  the default (1.0).
 - On a weapon with no `WeaponMaxReloadAnimTime` noun, read the attribute: 999 (its default) and a new entry.
 - Read `IsPhaselocked` on a Phaselocked enemy pawn and on a free one; check its `ReplicatedNouns` entry and
   `NumReplicatedNouns` (strategy 2).
