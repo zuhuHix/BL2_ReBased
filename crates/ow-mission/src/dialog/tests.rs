@@ -35,7 +35,6 @@ struct Pkg {
     instigator_var: i32,
     switch: i32,
     globals: i32,
-    behavior: i32,
     body: i32,
     name_tag: i32,
     expansion: i32,
@@ -132,10 +131,6 @@ impl Pkg {
             t.prop("Object", globals, f, 0, object);
         }
         toy_array_of(&mut t, globals, "NPCDialogGroups", "Object", group);
-        let behavior = t.class("Behavior_TriggerDialogEvent", object);
-        t.prop("Object", behavior, "EventTag", 0, tag);
-        t.prop("Object", behavior, "Group", 0, group);
-        t.prop("Bool", behavior, "bForcePlayImmediate", 0, 0);
         let body = t.class("BodyClassDefinition", object);
         t.prop("Object", body, "DialogName", 0, object);
         toy_array_of(&mut t, body, "DialogGroups", "Object", group);
@@ -160,7 +155,6 @@ impl Pkg {
             instigator_var,
             switch,
             globals,
-            behavior,
             body,
             name_tag,
             expansion,
@@ -283,7 +277,6 @@ impl Pkg {
 struct Ids {
     marcus: i32,
     echo_name: i32,
-    hi: i32,
     group: i32,
     act: i32,
     p_high: i32,
@@ -300,10 +293,8 @@ struct Ids {
     tag_trigger: i32,
     tag_switch: i32,
     child: i32,
-    behavior: i32,
-    behavior_now: i32,
-    behavior_none: i32,
-    behavior_nogroup: i32,
+    three_tag: i32,
+    three: i32,
     body_npc: i32,
     body_plain: i32,
     g_dlc: i32,
@@ -465,24 +456,24 @@ fn fixture() -> (Vec<u8>, Ids) {
     );
     let _ = no_match_group;
 
-    let behavior_class = k.behavior;
-    let make_behavior = |k: &mut Pkg, name: &str, tag: i32, group: i32, now: bool| {
-        let mut tags = Vec::new();
-        if tag != 0 {
-            tags.push(k.t.p.object_tag("EventTag", tag));
-        }
-        if group != 0 {
-            tags.push(k.t.p.object_tag("Group", group));
-        }
-        if now {
-            tags.push(k.t.p.bool_tag("bForcePlayImmediate", true));
-        }
-        k.add(behavior_class, name, 0, &tags)
-    };
-    let behavior = make_behavior(&mut k, "Behavior_Talk", tag_low, group, false);
-    let behavior_now = make_behavior(&mut k, "Behavior_Now", tag_low, group, true);
-    let behavior_none = make_behavior(&mut k, "Behavior_NoTag", 0, group, false);
-    let behavior_nogroup = make_behavior(&mut k, "Behavior_NoGroup", tag_low, 0, false);
+    // A group whose one act has three TalkData entries: the random pick chooses among them.
+    let three_tag = k.tag_object("Tag_Three", p_low, &[]);
+    let three_act = k.talk_act(
+        "Act_Three",
+        &[(marcus, hi), (echo_name, hi), (speaker, hi)],
+        0.0,
+        vec![],
+    );
+    let three = k.group_object(
+        class,
+        "Group_Three",
+        &[Event {
+            tag: three_tag,
+            enabled: true,
+            action: three_act,
+        }],
+        vec![],
+    );
 
     // GetDialogGroups: the body's groups, the name tag's DLC groups, the globals' NPC groups, the default template.
     let g_dlc = k.group_object(class, "Group_Dlc", &[], vec![]);
@@ -527,7 +518,6 @@ fn fixture() -> (Vec<u8>, Ids) {
     let ids = Ids {
         marcus,
         echo_name,
-        hi,
         group,
         act,
         p_high,
@@ -544,10 +534,8 @@ fn fixture() -> (Vec<u8>, Ids) {
         tag_trigger,
         tag_switch,
         child,
-        behavior,
-        behavior_now,
-        behavior_none,
-        behavior_nogroup,
+        three_tag,
+        three,
         body_npc,
         body_plain,
         g_dlc,
@@ -584,9 +572,14 @@ fn fx(mode: ParityMode) -> (Fx, DialogSystem) {
     let _ = std::fs::remove_dir_all(&dir);
     let (bytes, ids) = fixture();
     let file = format!("{PACKAGE}.upk");
+    let (gearbox, provider) = (kernel::gearbox(), kernel::provider_package());
     let defs = DefStore::from_synthetic(
         &dir,
-        &[(file.as_str(), &bytes)],
+        &[
+            (file.as_str(), &bytes),
+            ("GearboxFramework.upk", &gearbox),
+            ("TestBpd.upk", &provider),
+        ],
         IdentityPolicy::FirstInScanOrder,
         mode,
     )
@@ -599,7 +592,7 @@ fn fx(mode: ParityMode) -> (Fx, DialogSystem) {
     );
     let (code, store) = vm.defs.code_mut();
     let package = code.package(store, PACKAGE).unwrap();
-    let mut dialog = DialogSystem::new(Some(package), mode);
+    let mut dialog = DialogSystem::new(Some(package));
     let lines = Rc::new(RefCell::new(Vec::new()));
     let sink = lines.clone();
     dialog.on_line = Some(Box::new(move |line: &Line, outcome: &str| {
@@ -648,62 +641,6 @@ impl Fx {
     }
 }
 
-/// A behavior run as the kernel would drive it.
-struct Run {
-    object: ObjRef,
-    initial: bool,
-    linked: bool,
-    contexts: Vec<Option<ObjRef>>,
-    wait: Option<f64>,
-    state: Option<DialogBehaviorState>,
-}
-
-impl Run {
-    fn new(object: ObjRef) -> Run {
-        Run {
-            object,
-            initial: true,
-            linked: true,
-            contexts: vec![None],
-            wait: None,
-            state: None,
-        }
-    }
-
-    /// The next run of the same application.
-    fn resume(&mut self) {
-        self.initial = false;
-        self.wait = None;
-    }
-}
-
-impl BehaviorRun for Run {
-    fn behavior_object(&self) -> ObjRef {
-        self.object
-    }
-    fn behavior_name(&self) -> String {
-        "Behavior_Under_Test".to_string()
-    }
-    fn initial_run(&self) -> bool {
-        self.initial
-    }
-    fn has_linked_outputs(&self) -> bool {
-        self.linked
-    }
-    fn contexts(&mut self, _: &mut Vm) -> Result<Vec<Option<ObjRef>>, DialogError> {
-        Ok(self.contexts.clone())
-    }
-    fn set_wait(&mut self, seconds: f64) {
-        self.wait = Some(seconds);
-    }
-    fn state(&self) -> Option<DialogBehaviorState> {
-        self.state
-    }
-    fn set_state(&mut self, state: Option<DialogBehaviorState>) {
-        self.state = state;
-    }
-}
-
 fn marcus(f: &Fx, d: &mut DialogSystem) {
     let name =
         f.vm.defs
@@ -712,106 +649,6 @@ fn marcus(f: &Fx, d: &mut DialogSystem) {
             .path_of(f.ids.marcus)
             .unwrap();
     d.register_talker(&name, None);
-}
-
-#[test]
-fn the_behavior_waits_one_wake_then_talks_then_polls_until_the_line_ends() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    marcus(&f, &mut d);
-    d.set_test_line_length(2.0);
-    let b = f.object(f.ids.behavior);
-    let mut run = Run::new(b);
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![0]);
-    assert_eq!(run.wait, Some(FIRST_WAKE));
-    assert!(f.lines.borrow().is_empty());
-    run.resume();
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), Vec::<i32>::new());
-    assert_eq!(run.wait, Some(POLL));
-    let (line, outcome) = f.lines.borrow()[0].clone();
-    assert_eq!(outcome, "started");
-    assert_eq!(line.id, 1);
-    assert_eq!(line.event_tag, f.path(f.ids.tag_low));
-    assert_eq!(line.group, f.path(f.ids.group));
-    assert_eq!(line.talk_act, f.path(f.ids.act));
-    assert_eq!(line.ak_event, f.path(f.ids.hi));
-    assert_eq!(line.talker, f.path(f.ids.marcus));
-    assert_eq!(line.talker, "Names.DialogName_Marcus");
-    assert!(!line.echo);
-    assert_eq!(line.output_delay, 0.5);
-    // The audio ends at 2.0, the act at 2.5 (OutputDelay).
-    d.tick(2.0);
-    run.resume();
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), Vec::<i32>::new());
-    d.tick(0.5);
-    run.resume();
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![1]);
-    assert!(f.stopped.borrow().is_empty(), "the audio had ended");
-}
-
-#[test]
-fn without_an_audio_device_no_line_starts_and_the_behavior_finishes() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    marcus(&f, &mut d);
-    let b = f.object(f.ids.behavior);
-    let mut run = Run::new(b);
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![0]);
-    run.resume();
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![1]);
-    assert_eq!(f.outcomes(), ["no audio device"]);
-}
-
-#[test]
-fn an_empty_context_list_does_not_run() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    let b = f.object(f.ids.behavior);
-    let mut run = Run::new(b);
-    run.contexts.clear();
-    assert!(d.behavior(&mut f.vm, &mut run).unwrap().is_empty());
-    assert_eq!(run.wait, None);
-    assert_eq!(d.not_run(), ["Behavior_Under_Test"]);
-}
-
-#[test]
-fn force_play_immediate_triggers_in_the_first_run_and_finishes_then_outs() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    marcus(&f, &mut d);
-    d.set_test_line_length(2.0);
-    let b = f.object(f.ids.behavior_now);
-    let mut run = Run::new(b);
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![1, 0]);
-    assert_eq!(f.outcomes(), ["started"]);
-    assert_eq!(run.state, None, "the per-thread state is dropped");
-}
-
-#[test]
-fn a_behavior_without_a_tag_finishes_and_without_a_group_is_not_implemented() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    let b = f.object(f.ids.behavior_none);
-    let mut run = Run::new(b);
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![1, 0]);
-    let b = f.object(f.ids.behavior_nogroup);
-    let mut run = Run::new(b);
-    d.behavior(&mut f.vm, &mut run).unwrap();
-    run.resume();
-    let e = d.behavior(&mut f.vm, &mut run).unwrap_err();
-    assert_eq!(
-        e.cpp_text(),
-        "dialog: not implemented: a dialog event without a group (talker-owned events)"
-    );
-}
-
-#[test]
-fn an_unlinked_behavior_finishes_while_its_line_plays() {
-    let (mut f, mut d) = fx(ParityMode::Off);
-    marcus(&f, &mut d);
-    d.set_test_line_length(2.0);
-    let b = f.object(f.ids.behavior);
-    let mut run = Run::new(b);
-    run.linked = false;
-    d.behavior(&mut f.vm, &mut run).unwrap();
-    run.resume();
-    assert_eq!(d.behavior(&mut f.vm, &mut run).unwrap(), vec![1]);
-    assert_eq!(f.outcomes(), ["started"]);
 }
 
 /// Triggers `tag` on group `group` from the mission (no instigator).
@@ -1033,7 +870,7 @@ fn the_globals_give_priority_indices_and_without_them_every_index_is_minus_one()
     assert_eq!(d.index_of(&mut f.vm, &low).unwrap(), 1);
     assert_eq!(d.index_of(&mut f.vm, "Elsewhere").unwrap(), i32::MAX);
     assert_eq!(d.index_of(&mut f.vm, "").unwrap(), i32::MAX);
-    let mut none = DialogSystem::new(None, ParityMode::Off);
+    let mut none = DialogSystem::new(None);
     assert_eq!(none.index_of(&mut f.vm, &high).unwrap(), -1);
 }
 
@@ -1117,10 +954,513 @@ fn register_talker_keeps_one_pawn_per_name_tag_and_gives_it_an_actor_once() {
     d.register_talker("X", Some(b));
     assert_eq!(d.talkers.len(), 1);
     assert_eq!(d.talkers[0].actor, Some(a));
-    // The behavior's context object that is a talker's actor is the event's instigator.
-    let behavior = f.object(f.ids.behavior);
-    let mut run = Run::new(behavior);
-    run.contexts = vec![Some(a)];
-    d.behavior(&mut f.vm, &mut run).unwrap();
-    assert_eq!(run.state.unwrap().instigator, 0);
+}
+
+#[test]
+fn the_talk_data_pick_follows_the_vm_s_parity_mode() {
+    // Reference: the C++ mt19937 seeded 12345; Off: the world's Dialog stream. Each picks among the three entries.
+    let expected_reference = usize::try_from(Mt19937::new(12345).next_u32() % 3).unwrap();
+    let expected_off = usize::from(
+        ow_core::rand::GameRng::from_world_seed(0, ParityMode::Off)
+            .crt(CrtStream::Dialog)
+            .rand15(),
+    ) % 3;
+    for (mode, expected) in [
+        (ParityMode::Reference, expected_reference),
+        (ParityMode::Off, expected_off),
+    ] {
+        let (mut f, mut d) = fx(mode);
+        d.set_test_line_length(1.0);
+        let names = [f.ids.marcus, f.ids.echo_name, f.ids.speaker].map(|i| f.path(i));
+        for n in &names {
+            d.register_talker(n, None);
+        }
+        let (group, tag) = (f.ids.three, f.ids.three_tag);
+        trigger(&mut f, &mut d, group, tag).unwrap();
+        assert_eq!(f.lines.borrow()[0].0.talker, names[expected], "{mode:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The behavior, run by the real kernel (ow_behavior::kernel::Provider)
+// ---------------------------------------------------------------------------------------------------------------
+
+mod kernel {
+    //! A provider package for the kernel (`TestBpd.upk`) and the `GearboxFramework` package it needs: the
+    //! vocabulary the kernel reads (as `ow-behavior`'s own fixtures have it), `Behavior_TriggerDialogEvent`, and two
+    //! invented boundary classes that only show which output the dialog behavior selected. Every class roots in the
+    //! dialog package's toy `Object`, so the behavior's `EventTag` and `Group` take the dialog package's objects.
+
+    use ow_package::testkit::PackageBuilder;
+    use ow_package::testkit::reflect::Declarations;
+
+    pub const OUT: &str = "GearboxFramework.Behavior_ToyOut";
+    pub const FINISHED: &str = "GearboxFramework.Behavior_ToyFinished";
+
+    pub fn gearbox() -> Vec<u8> {
+        let mut d = Declarations::new(&[
+            "Int", "Float", "Bool", "Name", "Object", "Array", "Struct", "Byte",
+        ]);
+        let package = d.p.add_import("Core", "Package", 0, super::PACKAGE);
+        let object = d.p.add_import("Core", "Class", package, "Object");
+        let bpd = d.cls("BehaviorProviderDefinition", object);
+        let var_types = d.enum_(
+            bpd,
+            "EBehaviorVariableType",
+            &["BVAR_None", "BVAR_Object", "BVAR_Int"],
+        );
+        let link_types = d.enum_(
+            bpd,
+            "EBehaviorVariableLinkType",
+            &[
+                "BVARLINK_Unknown",
+                "BVARLINK_Context",
+                "BVARLINK_Output",
+                "BVARLINK_Input",
+            ],
+        );
+        let sub = d.struct_("SubarrayData", None);
+        d.prop("Int", sub, "ArrayIndexAndLength", 0);
+        let defaults = {
+            let mut t = d.p.bool_tag("bEnabled", true);
+            t.extend_from_slice(&d.none);
+            t
+        };
+        let user = d.struct_("BehaviorEventUserData", Some(&defaults));
+        d.prop("Name", user, "EventName", 0);
+        d.prop("Bool", user, "bEnabled", 0);
+        d.prop("Int", user, "MaxTriggerCount", 0);
+        d.prop("Float", user, "ReTriggerDelay", 0);
+        let event = d.struct_("BehaviorEventData2", None);
+        d.prop("Struct", event, "UserData", user);
+        d.prop("Struct", event, "OutputVariables", sub);
+        d.prop("Struct", event, "OutputLinks", sub);
+        let data = d.struct_("BehaviorData2", None);
+        d.prop("Object", data, "Behavior", object);
+        d.prop("Struct", data, "LinkedVariables", sub);
+        d.prop("Struct", data, "OutputLinks", sub);
+        let link = d.struct_("BehaviorOutputLinkData", None);
+        d.prop("Int", link, "LinkIdAndLinkedBehavior", 0);
+        d.prop("Float", link, "ActivateDelay", 0);
+        let var = d.struct_("BehaviorVariableData", None);
+        d.prop("Name", var, "Name", 0);
+        d.prop("Byte", var, "Type", var_types);
+        let vlink = d.struct_("BehaviorVariableLinkData2", None);
+        d.prop("Name", vlink, "PropertyName", 0);
+        d.prop("Byte", vlink, "VariableLinkType", link_types);
+        d.prop("Byte", vlink, "ConnectionIndex", 0);
+        d.prop("Struct", vlink, "LinkedVariables", sub);
+        let seq = d.struct_("BehaviorSequenceData", None);
+        d.prop("Name", seq, "BehaviorSequenceName", 0);
+        d.prop("Bool", seq, "bEnabledOnSpawn", 0);
+        d.prop("Bool", seq, "bSequenceEnabledMutex", 0);
+        d.prop("Object", seq, "CustomEnableCondition", object);
+        d.array_of(seq, "EventData2", "Struct", event);
+        d.array_of(seq, "BehaviorData2", "Struct", data);
+        d.array_of(seq, "VariableData", "Struct", var);
+        d.array_of(seq, "ConsolidatedOutputLinkData", "Struct", link);
+        d.array_of(seq, "ConsolidatedVariableLinkData", "Struct", vlink);
+        d.array_of(seq, "ConsolidatedLinkedVariables", "Int", 0);
+        d.array_of(bpd, "BehaviorSequences", "Struct", seq);
+        let trigger = d.cls("Behavior_TriggerDialogEvent", object);
+        d.prop("Object", trigger, "EventTag", object);
+        d.prop("Object", trigger, "Group", object);
+        d.prop("Bool", trigger, "bForcePlayImmediate", 0);
+        d.cls("Behavior_ToyOut", object);
+        d.cls("Behavior_ToyFinished", object);
+        d.build()
+    }
+
+    /// One dialog behavior of a sequence: name, event tag (an export name of the dialog package, or none), group
+    /// (likewise), `bForcePlayImmediate`, whether its outputs are linked (Out -> a `Behavior_ToyOut`, Finished -> a
+    /// `Behavior_ToyFinished`), and whether its Context link names the sequence's object variable.
+    #[derive(Clone, Copy)]
+    struct Talk {
+        sequence: &'static str,
+        event: &'static str,
+        tag: Option<&'static str>,
+        group: Option<&'static str>,
+        now: bool,
+        linked: bool,
+        context: bool,
+    }
+
+    const TALKS: [Talk; 5] = [
+        Talk {
+            sequence: "Main",
+            event: "OnTalk",
+            tag: Some("Tag_Low"),
+            group: Some("Group_Main"),
+            now: false,
+            linked: true,
+            context: false,
+        },
+        Talk {
+            sequence: "Now",
+            event: "OnNow",
+            tag: Some("Tag_Low"),
+            group: Some("Group_Main"),
+            now: true,
+            linked: true,
+            context: false,
+        },
+        Talk {
+            sequence: "Bare",
+            event: "OnBare",
+            tag: None,
+            group: Some("Group_Main"),
+            now: false,
+            linked: true,
+            context: false,
+        },
+        Talk {
+            sequence: "NoGroup",
+            event: "OnNoGroup",
+            tag: Some("Tag_Low"),
+            group: None,
+            now: false,
+            linked: false,
+            context: false,
+        },
+        Talk {
+            sequence: "Ctx",
+            event: "OnCtx",
+            tag: Some("Tag_Low"),
+            group: Some("Group_NoMatch"),
+            now: false,
+            linked: false,
+            context: true,
+        },
+    ];
+
+    fn packed(first: u32, length: u32) -> i32 {
+        i32::try_from((first << 16) | length).unwrap()
+    }
+
+    /// `TestBpd.Provider`: one sequence per [`TALKS`] entry, enabled on spawn, its event starting the dialog
+    /// behavior. The Unlinked case is `NoGroup`'s shape with a tag and group (sequence `Unlinked`).
+    pub fn provider_package() -> Vec<u8> {
+        let mut p = PackageBuilder::new_empty();
+        let gearbox = p.add_import("Core", "Package", 0, "GearboxFramework");
+        let provider_class = p.add_import("Core", "Class", gearbox, "BehaviorProviderDefinition");
+        let trigger = p.add_import("Core", "Class", gearbox, "Behavior_TriggerDialogEvent");
+        let out = p.add_import("Core", "Class", gearbox, "Behavior_ToyOut");
+        let finished = p.add_import("Core", "Class", gearbox, "Behavior_ToyFinished");
+        let dialog = p.add_import("Core", "Package", 0, super::PACKAGE);
+        let mut imports: Vec<(&str, i32)> = Vec::new();
+        let mut import = |p: &mut PackageBuilder, class: &str, name: &'static str| -> i32 {
+            if let Some(&(_, r)) = imports.iter().find(|(n, _)| *n == name) {
+                return r;
+            }
+            let r = p.add_import(super::PACKAGE, class, dialog, name);
+            imports.push((name, r));
+            r
+        };
+        let none = p.none();
+        let provider = p.add_export(provider_class, "Provider", Vec::new());
+        let mut talks: Vec<Talk> = TALKS.to_vec();
+        talks.push(Talk {
+            sequence: "Unlinked",
+            event: "OnUnlinked",
+            tag: Some("Tag_Low"),
+            group: Some("Group_Main"),
+            now: false,
+            linked: false,
+            context: false,
+        });
+        let mut sequences = Vec::new();
+        let sub = |p: &mut PackageBuilder, name: &str, (first, length): (u32, u32)| -> Vec<u8> {
+            let mut body = p.int_tag("ArrayIndexAndLength", packed(first, length));
+            body.extend_from_slice(&p.none());
+            p.struct_tag(name, "SubarrayData", &body)
+        };
+        let mut block = Vec::new();
+        for talk in &talks {
+            // The behaviors: the dialog behavior, then (linked) its Out and Finished targets.
+            let mut tags = 0i32.to_le_bytes().to_vec();
+            if let Some(t) = talk.tag {
+                let r = import(&mut p, "GearboxDialogEventTag", t);
+                tags.extend(p.object_tag("EventTag", r));
+            }
+            if let Some(g) = talk.group {
+                let r = import(&mut p, "GearboxDialogGroup", g);
+                tags.extend(p.object_tag("Group", r));
+            }
+            if talk.now {
+                tags.extend(p.bool_tag("bForcePlayImmediate", true));
+            }
+            tags.extend_from_slice(&none);
+            let name = format!("Talk{}", talk.sequence);
+            let mut refs = vec![p.add_export(trigger, &name, tags)];
+            if talk.linked {
+                for (class, n) in [(out, "Out"), (finished, "Finished")] {
+                    let mut payload = 0i32.to_le_bytes().to_vec();
+                    payload.extend_from_slice(&none);
+                    refs.push(p.add_export(class, &format!("{n}{}", talk.sequence), payload));
+                }
+            }
+            for &r in &refs {
+                p.set_outer(r, provider);
+            }
+            let mut body = p.name_tag("BehaviorSequenceName", talk.sequence);
+            body.extend(p.bool_tag("bEnabledOnSpawn", true));
+            // The event: its output variable (Ctx only) and its one link, to the dialog behavior.
+            let mut user = p.name_tag("EventName", talk.event);
+            user.extend_from_slice(&none);
+            let mut items = p.struct_tag("UserData", "BehaviorEventUserData", &user);
+            items.extend(sub(
+                &mut p,
+                "OutputVariables",
+                if talk.context { (0, 1) } else { (0, 0) },
+            ));
+            items.extend(sub(&mut p, "OutputLinks", (0, 1)));
+            items.extend_from_slice(&none);
+            body.extend(p.array_tag("EventData2", 1, &items));
+            let mut items = Vec::new();
+            for (i, &r) in refs.iter().enumerate() {
+                items.extend(p.object_tag("Behavior", r));
+                let vars = if i == 0 && talk.context {
+                    (1, 1)
+                } else {
+                    (0, 0)
+                };
+                items.extend(sub(&mut p, "LinkedVariables", vars));
+                let links = if i == 0 && talk.linked {
+                    (1, 2)
+                } else {
+                    (0, 0)
+                };
+                items.extend(sub(&mut p, "OutputLinks", links));
+                items.extend_from_slice(&none);
+            }
+            body.extend(p.array_tag("BehaviorData2", i32::try_from(refs.len()).unwrap(), &items));
+            // Links: 0 the event's (id -1), 1 Out (id 0), 2 Finished (id 1).
+            let mut links: Vec<(u32, u32)> = vec![(0, 0xFF)];
+            if talk.linked {
+                links.extend([(1, 0), (2, 1)]);
+            }
+            let mut items = Vec::new();
+            for (target, id) in &links {
+                items.extend(p.int_tag(
+                    "LinkIdAndLinkedBehavior",
+                    i32::from_le_bytes((target | (id << 24)).to_le_bytes()),
+                ));
+                items.extend(p.float_tag("ActivateDelay", 0.0));
+                items.extend_from_slice(&none);
+            }
+            body.extend(p.array_tag(
+                "ConsolidatedOutputLinkData",
+                i32::try_from(links.len()).unwrap(),
+                &items,
+            ));
+            if talk.context {
+                // Variable 0 `Who` (an object): the event's output, the behavior's Context.
+                let mut items = p.name_tag("Name", "Who");
+                items.extend(p.enum_tag("Type", "EBehaviorVariableType", "BVAR_Object"));
+                items.extend_from_slice(&none);
+                body.extend(p.array_tag("VariableData", 1, &items));
+                let mut items = Vec::new();
+                for (property, kind) in [
+                    ("Speaker", "BVARLINK_Output"),
+                    ("Context", "BVARLINK_Context"),
+                ] {
+                    items.extend(p.name_tag("PropertyName", property));
+                    items.extend(p.enum_tag("VariableLinkType", "EBehaviorVariableLinkType", kind));
+                    items.extend(p.byte_tag("ConnectionIndex", 0));
+                    items.extend(sub(&mut p, "LinkedVariables", (0, 1)));
+                    items.extend_from_slice(&none);
+                }
+                body.extend(p.array_tag("ConsolidatedVariableLinkData", 2, &items));
+                body.extend(p.array_tag("ConsolidatedLinkedVariables", 1, &0i32.to_le_bytes()));
+                block.extend(0i32.to_le_bytes());
+            }
+            body.extend_from_slice(&none);
+            sequences.extend(body);
+        }
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        payload.extend(p.array_tag(
+            "BehaviorSequences",
+            i32::try_from(talks.len()).unwrap(),
+            &sequences,
+        ));
+        payload.extend_from_slice(&none);
+        payload.extend(block);
+        p.set_payload(provider, payload);
+        p.build()
+    }
+}
+
+/// The kernel over `TestBpd.Provider` with the dialog's handler registered in the VM, and the two toy output
+/// classes at the boundary.
+fn kernel_fx() -> (Fx, Rc<RefCell<DialogSystem>>, Provider) {
+    let (mut f, d) = fx(ParityMode::Off);
+    let dialog = Rc::new(RefCell::new(d));
+    register(&mut f.vm, Rc::clone(&dialog)).unwrap();
+    let definition = {
+        let name = ow_core::PackageName::parse("TestBpd").unwrap();
+        let (_, store) = f.vm.defs.code_mut();
+        let id = store.load(&name).unwrap();
+        let index = store.get(id).find_export("Provider").unwrap().unwrap();
+        f.vm.defs
+            .load_export(
+                &mut f.vm.space,
+                id,
+                index,
+                ow_object::prefix::PropertyPrefix::Ordinary,
+            )
+            .unwrap()
+    };
+    let mut provider = Provider::new(&mut f.vm, definition).unwrap();
+    for class in [kernel::OUT, kernel::FINISHED] {
+        provider.report_at_boundary(class, None, Vec::new());
+    }
+    (f, dialog, provider)
+}
+
+fn fire(
+    f: &mut Fx,
+    provider: &mut Provider,
+    event: &str,
+    payload: &[Option<ObjRef>],
+) -> Result<(), BehaviorError> {
+    provider.fire_event(&mut f.vm, event, &ow_core::DetMap::new(), -1, payload)
+}
+
+fn boundary(event: &str, class: &str, name: &str) -> String {
+    format!("{event} -> {class}:{name}")
+}
+
+#[test]
+fn in_the_kernel_the_behavior_outs_waits_talks_polls_and_finishes() {
+    let (mut f, dialog, mut provider) = kernel_fx();
+    marcus(&f, &mut dialog.borrow_mut());
+    dialog.borrow_mut().set_test_line_length(1.0);
+    fire(&mut f, &mut provider, "OnTalk", &[]).unwrap();
+    // First run: Out at once, latent for one wake, no line yet.
+    assert_eq!(
+        provider.boundary,
+        [boundary("OnTalk", kernel::OUT, "OutMain")]
+    );
+    assert!(f.lines.borrow().is_empty());
+    // The next wake triggers the dialog; the line is live, so the behavior polls.
+    provider.tick(&mut f.vm, 0.05).unwrap();
+    assert_eq!(f.outcomes(), ["started"]);
+    assert_eq!(provider.boundary.len(), 1);
+    provider.tick(&mut f.vm, 0.5).unwrap();
+    assert_eq!(provider.boundary.len(), 1, "still live: no Finished");
+    // The test player's line ends at the dialog update that reaches 1.0 (here 2.0), and the act OutputDelay (0.5)
+    // after it; the next poll selects Finished.
+    dialog.borrow_mut().tick(2.0);
+    provider.tick(&mut f.vm, 0.5).unwrap();
+    assert_eq!(provider.boundary.len(), 1, "the act ends at 2.5");
+    dialog.borrow_mut().tick(0.5);
+    provider.tick(&mut f.vm, 0.5).unwrap();
+    assert_eq!(
+        provider.boundary,
+        [
+            boundary("OnTalk", kernel::OUT, "OutMain"),
+            boundary("OnTalk", kernel::FINISHED, "FinishedMain")
+        ]
+    );
+    assert!(provider.errors.is_empty(), "{:?}", provider.errors);
+}
+
+#[test]
+fn in_the_kernel_without_an_audio_device_the_behavior_finishes_on_its_second_run() {
+    let (mut f, dialog, mut provider) = kernel_fx();
+    marcus(&f, &mut dialog.borrow_mut());
+    fire(&mut f, &mut provider, "OnTalk", &[]).unwrap();
+    provider.tick(&mut f.vm, 0.05).unwrap();
+    assert_eq!(f.outcomes(), ["no audio device"]);
+    assert_eq!(
+        provider.boundary,
+        [
+            boundary("OnTalk", kernel::OUT, "OutMain"),
+            boundary("OnTalk", kernel::FINISHED, "FinishedMain")
+        ]
+    );
+}
+
+#[test]
+fn in_the_kernel_force_play_immediate_finishes_and_outs_in_the_first_run() {
+    let (mut f, dialog, mut provider) = kernel_fx();
+    marcus(&f, &mut dialog.borrow_mut());
+    dialog.borrow_mut().set_test_line_length(1.0);
+    fire(&mut f, &mut provider, "OnNow", &[]).unwrap();
+    assert_eq!(f.outcomes(), ["started"]);
+    let mut got = provider.boundary.clone();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            boundary("OnNow", kernel::FINISHED, "FinishedNow"),
+            boundary("OnNow", kernel::OUT, "OutNow")
+        ]
+    );
+    // Finished and Out in the first run: nothing waits.
+    let runs = provider.trace.len();
+    provider.tick(&mut f.vm, 1.0).unwrap();
+    assert_eq!(provider.trace.len(), runs);
+}
+
+#[test]
+fn in_the_kernel_a_behavior_without_a_tag_finishes_and_outs_at_once() {
+    let (mut f, _dialog, mut provider) = kernel_fx();
+    fire(&mut f, &mut provider, "OnBare", &[]).unwrap();
+    assert_eq!(provider.boundary.len(), 2);
+    assert!(f.lines.borrow().is_empty());
+}
+
+#[test]
+fn in_the_kernel_a_dialog_error_is_the_kernel_s_error() {
+    let (mut f, _dialog, mut provider) = kernel_fx();
+    fire(&mut f, &mut provider, "OnNoGroup", &[]).unwrap();
+    let e = provider.tick(&mut f.vm, 0.05).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "dialog: not implemented: a dialog event without a group (talker-owned events)"
+    );
+    assert!(matches!(e, BehaviorError::Data(_)));
+}
+
+#[test]
+fn in_the_kernel_an_unlinked_behavior_finishes_while_its_line_plays() {
+    let (mut f, dialog, mut provider) = kernel_fx();
+    marcus(&f, &mut dialog.borrow_mut());
+    dialog.borrow_mut().set_test_line_length(10.0);
+    fire(&mut f, &mut provider, "OnUnlinked", &[]).unwrap();
+    provider.tick(&mut f.vm, 0.05).unwrap();
+    assert_eq!(f.outcomes(), ["started"]);
+    // It selected Finished at once: no poll runs it again.
+    let runs = provider.trace.len();
+    provider.tick(&mut f.vm, 1.0).unwrap();
+    assert_eq!(provider.trace.len(), runs);
+}
+
+#[test]
+fn in_the_kernel_the_context_object_is_the_instigator_and_an_empty_context_does_not_run() {
+    let (mut f, dialog, mut provider) = kernel_fx();
+    // The speaker's pawn is the context object: it is the instigator, has no entry in Act_NoMatch, and its own
+    // groups (none) cannot talk the Trigger act's event, so no line plays (from the mission, Marcus would speak).
+    let actor = f.object(f.ids.p_high);
+    let speaker = f.path(f.ids.speaker);
+    dialog.borrow_mut().register_talker(&speaker, Some(actor));
+    marcus(&f, &mut dialog.borrow_mut());
+    dialog.borrow_mut().set_test_line_length(1.0);
+    fire(&mut f, &mut provider, "OnCtx", &[Some(actor)]).unwrap();
+    provider.tick(&mut f.vm, 0.05).unwrap();
+    assert!(f.lines.borrow().is_empty(), "{:?}", f.outcomes());
+    assert!(dialog.borrow().not_run().is_empty());
+    // Fired with no object: the Context variable is empty, so the behavior does not run at all.
+    let (mut f, dialog, mut provider) = kernel_fx();
+    fire(&mut f, &mut provider, "OnCtx", &[]).unwrap();
+    assert_eq!(dialog.borrow().not_run(), ["TalkCtx"]);
+}
+
+#[test]
+fn a_dialog_error_keeps_its_kind_in_the_kernel() {
+    let e: BehaviorError = DialogError::Vm(VmError::StepLimit).into();
+    assert!(matches!(e, BehaviorError::Vm(VmError::StepLimit)));
+    let e: BehaviorError = DialogError::Unresolved(None).into();
+    assert_eq!(e.to_string(), "dialog: unresolved object reference");
 }

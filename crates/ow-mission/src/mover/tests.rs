@@ -26,6 +26,10 @@ struct Opts {
     finished_param: &'static str,
     /// `SeqAct_Interp` declares `bReversePlayback`.
     reverse_prop: bool,
+    /// `InterpolationFinished` and `Callback` also evaluate an `ObjectConst` naming an import no file holds.
+    ghost: bool,
+    /// `InterpolationStarted`'s body ends inside an instruction (it does not decode).
+    undecodable: bool,
 }
 
 impl Default for Opts {
@@ -36,6 +40,8 @@ impl Default for Opts {
             timer: "Callback",
             finished_param: "InterpAction",
             reverse_prop: true,
+            ghost: false,
+            undecodable: false,
         }
     }
 }
@@ -174,7 +180,12 @@ fn package(o: &Opts) -> Vec<u8> {
     t.prop("Object", mover, "AmbientSoundComponent", 0, audio);
     let callback = t.p.fname("Callback", 0);
     let armed = t.p.fname(o.timer, 0);
-    let (broken, looping) = (o.broken, o.looping);
+    let (broken, looping, ghost_code, undecodable) = (o.broken, o.looping, o.ghost, o.undecodable);
+    // An import no installed file holds: its object and an audio component.
+    let ghost_package = t.p.add_import("Core", "Package", 0, "GhostPackage");
+    let ghost = t.p.add_import("Engine", "Object", ghost_package, "Phantom");
+    let ghost_audio =
+        t.p.add_import("Engine", "AudioComponent", ghost_package, "PhantomAudio");
     script(
         &mut t,
         mover,
@@ -191,6 +202,11 @@ fn package(o: &Opts) -> Vec<u8> {
         ],
         |a| {
             // bShouldSaveForCheckpoint = true; ClearTimer('Callback');
+            if undecodable {
+                // ObjectConst with its 4-byte operand cut short by the end of the body.
+                a.stmt().raw(&[0x20, 0x01]);
+                return;
+            }
             a.stmt().raw(&[0x14]).instance(checkpoint).raw(&[0x27]);
             a.stmt().final_function(clear_timer, |a| {
                 a.raw(&[0x21]).raw(&callback);
@@ -215,11 +231,17 @@ fn package(o: &Opts) -> Vec<u8> {
             if broken {
                 a.stmt().final_function(mystery, |_| {});
             }
+            if ghost_code {
+                a.stmt().raw(&[0x20]).reference(ghost);
+            }
         },
     );
     script(&mut t, mover, "Callback", &[], |a| {
         // bShouldSaveForCheckpoint = false;
         a.stmt().raw(&[0x14]).instance(checkpoint).raw(&[0x28]);
+        if ghost_code {
+            a.stmt().raw(&[0x20]).reference(ghost);
+        }
     });
 
     let delay_tag = t.p.float_tag("Delay", 0.5);
@@ -305,7 +327,11 @@ fn package(o: &Opts) -> Vec<u8> {
     let cue_tag = t.p.object_tag("SoundCue", cue);
     let payload = ordinary(&mut t, &[cue_tag]);
     let loud = t.p.add_export(audio, "LoudAudio", payload);
-    for (name, component) in [("QuietMover", idle), ("LoudMover", loud)] {
+    for (name, component) in [
+        ("QuietMover", idle),
+        ("LoudMover", loud),
+        ("GhostAudioMover", ghost_audio),
+    ] {
         let tag = t.p.object_tag("AmbientSoundComponent", component);
         let payload = placed(&mut t, &[tag]);
         t.p.add_export(mover, name, payload);
@@ -785,4 +811,52 @@ fn the_next_due_timer_is_the_earliest_and_a_tie_goes_to_the_first_name() {
     let timers: BTreeMap<String, Timer> = [timer("b", 1.0), timer("a", 1.0)].into_iter().collect();
     assert_eq!(next_due(&timers, 1.0).map(|t| t.name.as_str()), Some("a"));
     assert!(next_due(&timers, 0.99).is_none());
+}
+
+#[test]
+fn a_store_note_in_a_call_is_kept_apart_and_fails_nothing() {
+    let dir = cooked(&Opts {
+        ghost: true,
+        ..Opts::default()
+    });
+    on_stack(|| {
+        let mut m = mover(&dir, "PlacedMover");
+        // The note arises when the bytecode runs, not at binding.
+        assert!(m.store_notes().is_empty(), "{:?}", m.store_notes());
+        let finish = m.notify(true, false);
+        assert_eq!(finish.error, None);
+        assert!(
+            m.store_notes()
+                .iter()
+                .any(|n| n.starts_with("defs: no holder for ") && n.contains("Phantom")),
+            "{:?}",
+            m.store_notes()
+        );
+        // The callback evaluates it too; the timer pass neither fails nor stops on the note.
+        let timers = m.advance(10.0);
+        assert_eq!((timers.error, timers.checkpoint), (None, false));
+        assert!(timers.steps > 0);
+    });
+}
+
+#[test]
+fn a_notification_that_does_not_decode_fails_the_binding() {
+    let dir = cooked(&Opts {
+        undecodable: true,
+        ..Opts::default()
+    });
+    on_stack(|| {
+        let e = bind(&dir, "PlacedMover", "PlacedAction").unwrap_err();
+        assert!(matches!(e, MoverError::Binding(_)), "{e:?}");
+        assert!(!e.cpp_text().is_empty());
+    });
+}
+
+#[test]
+fn an_ambient_component_that_resolves_to_no_export_fails_the_binding() {
+    let dir = cooked(&Opts::default());
+    on_stack(|| {
+        let e = bind(&dir, "GhostAudioMover", "PlacedAction").unwrap_err();
+        assert_eq!(e.cpp_text(), "unresolved mover ambient component");
+    });
 }

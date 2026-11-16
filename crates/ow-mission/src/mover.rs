@@ -15,15 +15,20 @@
 //!    the prefix the C++ passes; a prefix the store derives differently is the store's `PrefixMismatch`;
 //! 2. the actor's class must be exactly `Engine.InterpActor` and the action's exactly `Engine.SeqAct_Interp`;
 //! 3. the two notifications must be script functions taking `InterpAction` (an object) first, and
-//!    `InterpolationStarted` `GroupInst` (an object) second, with exactly two and one parameters;
+//!    `InterpolationStarted` `GroupInst` (an object) second, with exactly two and one parameters; each one's bytecode
+//!    is decoded right after its check (`ow_script::decode::decode`, as the C++ decodes it here), so a body that does
+//!    not decode fails the binding with the decoder's text;
 //! 4. the action must declare `bReversePlayback` and the actor `bShouldSaveForCheckpoint`;
-//! 5. a non-null `AmbientSoundComponent` must be an export the store can load (the C++ instantiates it at 8 bytes;
-//!    the store derives the prefix, 8 for an `Engine.ActorComponent` subclass);
+//! 5. a non-null `AmbientSoundComponent` must resolve to an export before it is loaded (the C++ `resourceIndex > 0`:
+//!    a reference to an export, or an import that resolves to one), else "unresolved mover ambient component"; it is
+//!    then loaded by the store (the C++ instantiates it at 8 bytes; the store derives the prefix, 8 for an
+//!    `Engine.ActorComponent` subclass);
 //! 6. `Engine.Actor.SetTimer`, `Engine.Actor.ClearTimer` and `Engine.AudioComponent.Stop` must be natives, and are
 //!    bound to this mover (below);
 //! 7. loading must leave no diagnostic in the VM log ("mover object loading emitted a diagnostic: ..."). The store's
 //!    own `defs: no holder for <path>` lines have no C++ counterpart (the C++ resource stand-ins are silent) and are
-//!    kept apart in [`Mover::store_notes`].
+//!    kept apart in [`Mover::store_notes`]; so are those of every later lifecycle call, which therefore neither fail
+//!    the call nor stop [`Mover::advance`]'s timer loop.
 //!
 //! **The bound natives**, each refusing a call outside this binding:
 //! - `SetTimer(Rate, bLoop, Name, Obj)` on the actor only (an `Obj` other than the actor is refused): a rate that is
@@ -317,6 +322,43 @@ impl fmt::Debug for Mover {
     }
 }
 
+/// The prefix of the definition store's own log lines, which the C++ has no counterpart for.
+const STORE_NOTE: &str = "defs: no holder for ";
+
+fn is_store_note(line: &str) -> bool {
+    line.starts_with(STORE_NOTE)
+}
+
+/// A VM log split into the lines the C++ would have logged and the store's notes.
+fn split_notes(log: Vec<String>) -> (Vec<String>, Vec<String>) {
+    log.into_iter().partition(|line| !is_store_note(line))
+}
+
+/// Decodes script function `f`'s bytecode (its export, found by its path, read and decoded as the interpreter does)
+/// and reports the decoder's error, the C++ `script::decode` text.
+fn decode_code(vm: &mut Vm, f: FuncId) -> Result<(), MoverError> {
+    let path = vm
+        .function(f)
+        .map(|d| d.path.as_str().to_string())
+        .unwrap_or_default();
+    let Some((package_name, _)) = path.split_once('.') else {
+        return Err(binding(format!("function not found: {path}")));
+    };
+    let (code, store) = vm.defs.code_mut();
+    let package = code
+        .package(store, package_name)
+        .map_err(|e| binding(chain(&e)))?;
+    let index = code.find_export(store, package, &path);
+    if index <= 0 {
+        return Err(binding(format!("function not found: {path}")));
+    }
+    let pkg = store.shared(package);
+    let info =
+        ow_script::function::read_function(&pkg, index).map_err(|e| binding(e.to_string()))?;
+    ow_script::decode::decode(&pkg, &info).map_err(|e| binding(e.to_string()))?;
+    Ok(())
+}
+
 /// A world-acting op the host may execute, listed (C++ `Impl::boundary`).
 fn boundary(record: &mut Record, class: &str, op: &str, desc: String) {
     record.host_boundary.push(format!("{class}:{op} <- {desc}"));
@@ -468,6 +510,8 @@ impl Mover {
             if !shape || !param_is(&vm, f, 0, "InterpAction") {
                 return Err(binding("unsupported mover notification signature"));
             }
+            // The C++ decodes the notification's code here, so a body that does not decode fails the binding.
+            decode_code(&mut vm, f)?;
         }
         if !param_is(&vm, started, 1, "GroupInst") {
             return Err(binding("unsupported mover group parameter"));
@@ -480,9 +524,7 @@ impl Mover {
         let audio = Self::ambient(&mut vm, actor)?;
         let shared = Rc::new(RefCell::new(Shared::default()));
         Self::bind_natives(&mut vm, actor, audio, &shared)?;
-        let (diagnostics, store_notes): (Vec<String>, Vec<String>) = std::mem::take(&mut vm.log)
-            .into_iter()
-            .partition(|line| !line.starts_with("defs: no holder for "));
+        let (diagnostics, store_notes) = split_notes(std::mem::take(&mut vm.log));
         if let Some(first) = diagnostics.first() {
             return Err(binding(format!(
                 "mover object loading emitted a diagnostic: {first}"
@@ -512,6 +554,22 @@ impl Mover {
         let Value::Object(Some(resource)) = vm.space.read(actor, addr)?.clone() else {
             return Ok(None);
         };
+        // The C++ check before it instantiates: the reference resolves to an export (`resourceIndex > 0`). A
+        // reference to an export of a package is one; an import is one when it resolves to an export (the C++
+        // `resolveRef`), and an import that resolves to nothing, or an object from no package, is refused.
+        let resolves = match vm.space.heap.get(resource)?.origin {
+            Origin::Export { .. } => true,
+            Origin::Resource { index, .. } if index > 0 => true,
+            Origin::Resource { package, index } => {
+                let (code, store) = vm.defs.code_mut();
+                code.resolve_ref(store, package, index)
+                    .is_some_and(|(_, i)| i > 0)
+            }
+            _ => false,
+        };
+        if !resolves {
+            return Err(binding("unresolved mover ambient component"));
+        }
         let loaded = vm.defs.load(&mut vm.space, resource);
         vm.log.extend(vm.defs.take_log());
         match loaded {
@@ -670,7 +728,10 @@ impl Mover {
         let mut steps = 0;
         let outcome = (|| {
             operation(self, &mut steps)?;
-            if let Some(first) = self.vm.log.first() {
+            // The store's own `defs: no holder` lines are notes, not the C++ log (module documentation).
+            let (lines, notes) = split_notes(std::mem::take(&mut self.vm.log));
+            self.store_notes.extend(notes);
+            if let Some(first) = lines.first() {
                 return Err(MoverError::Logged(first.clone()));
             }
             let addr = declares(&self.vm, self.actor, "bShouldSaveForCheckpoint")?
@@ -770,7 +831,7 @@ impl Mover {
                 *steps = m.vm.steps();
                 called?;
                 sum = sum.checked_add(m.vm.steps()).ok_or(VmError::StepLimit)?;
-                if !m.vm.log.is_empty() {
+                if m.vm.log.iter().any(|line| !is_store_note(line)) {
                     break;
                 }
             }

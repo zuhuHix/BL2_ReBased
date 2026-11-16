@@ -45,8 +45,8 @@ class Package:
 
     def fname(self, text, number=0): return w32(self.name(text), number)
 
-    def add_import(self, class_name, outer, name):
-        self.imports.append((self.fname('Core'), self.fname(class_name), outer, self.fname(name)))
+    def add_import(self, class_name, outer, name, class_package='Core'):
+        self.imports.append((self.fname(class_package), self.fname(class_name), outer, self.fname(name)))
         return -len(self.imports)
 
     def add_export(self, cls, name, payload, outer=0, super_ref=0):
@@ -77,7 +77,10 @@ class Asm:
     def ref(self, r): self.b += struct.pack('<i', r); self.refs += 1
 
 
-def build_engine(broken=False):
+def build_engine(broken=False, ghost=False, undecodable=False):
+    """broken: the finish notification calls a native nothing implements. ghost: the finish notification and the
+    callback evaluate an object constant naming an import no installed file holds. undecodable: the start notification
+    ends inside an instruction."""
     p = Package()
     imp = {n: p.add_import('Class', 0, n) for n in
            ('Class', 'Function', 'ScriptStruct', 'IntProperty', 'FloatProperty', 'BoolProperty', 'StrProperty',
@@ -153,18 +156,23 @@ def build_engine(broken=False):
     delay = prop('Float', mover, 'Delay')
     prop('Object', mover, 'AmbientSoundComponent', audio)
     callback = p.fname('Callback')
+    phantom = p.add_import('Object', p.add_import('Package', 0, 'GhostPackage'), 'Phantom', class_package='Engine')
 
     started = Asm()   # bShouldSaveForCheckpoint = true; ClearTimer('Callback'); return;
     started.raw(0x14, 0x01); started.ref(checkpoint); started.raw(0x27)
     started.raw(0x1C); started.ref(clear); started.raw(0x21); started.b += callback; started.raw(0x16)
     started.raw(0x04, 0x0B, 0x53)
+    if undecodable: started = Asm(); started.raw(0x20, 0x01)   # an object constant cut short by the end
     finish = Asm()    # SetTimer(Delay, false, 'Callback'); [Mystery(0);] return;
     finish.raw(0x1C); finish.ref(timer); finish.raw(0x01); finish.ref(delay); finish.raw(0x28, 0x21)
     finish.b += callback; finish.raw(0x16)
     if broken: finish.raw(0x1C); finish.ref(mystery); finish.raw(0x25, 0x16)
+    if ghost: finish.raw(0x20); finish.ref(phantom)
     finish.raw(0x04, 0x0B, 0x53)
     back = Asm()      # bShouldSaveForCheckpoint = false; return;
-    back.raw(0x14, 0x01); back.ref(checkpoint); back.raw(0x28, 0x04, 0x0B, 0x53)
+    back.raw(0x14, 0x01); back.ref(checkpoint); back.raw(0x28)
+    if ghost: back.raw(0x20); back.ref(phantom)
+    back.raw(0x04, 0x0B, 0x53)
     function(mover, 'InterpolationStarted', [('Object', 'InterpAction', 0), ('Object', 'GroupInst', 0)], started)
     function(mover, 'InterpolationFinished', [('Object', 'InterpAction', 0)], finish)
     function(mover, 'Callback', [], back)
@@ -227,8 +235,9 @@ def main():
     failures, compared = [], 0
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        good, broken = root / 'good', root / 'broken'
-        for directory, engine in ((good, build_engine()), (broken, build_engine(broken=True))):
+        good, broken, ghost, undecodable = root / 'good', root / 'broken', root / 'ghost', root / 'undecodable'
+        for directory, engine in ((good, build_engine()), (broken, build_engine(broken=True)),
+                                  (ghost, build_engine(ghost=True)), (undecodable, build_engine(undecodable=True))):
             directory.mkdir()
             (directory / 'Engine.upk').write_bytes(engine.build())
             (directory / 'Doors.upk').write_bytes(build_doors().build())
@@ -259,6 +268,11 @@ def main():
         same(good, *probe, expect=lambda r: None if r[0] == 0 else f'exit {r[0]}')
         same(good, '--mover-probe', 'PlacedMover', 'LoneAction', '--cooked', '<cooked>')
         same(broken, *probe, expect=lambda r: None if r[0] == 1 else f'exit {r[0]}')
+        # An import no file holds, evaluated by the notifications and the callback: silent in the C++, a store note in
+        # the Rust that fails nothing.
+        same(ghost, *probe, expect=lambda r: None if r[0] == 0 else f'exit {r[0]}')
+        # A notification body that does not decode fails the binding: stderr, nothing on stdout, exit 1.
+        same(undecodable, *probe, expect=lambda r: None if r[0] == 1 and not r[1] else f'exit {r[0]}, stdout {r[1]!r}')
         event = lambda name, action='Seq.InnerAction': ('--mover-event', 'PlacedMover', action, '--cooked', '<cooked>', name)
         same(good, *event('OpenDoor'), expect=field('motion', 1))
         same(good, *event('CloseDoor'), expect=field('motion', -1))
@@ -277,7 +291,8 @@ def main():
                      ('--mover-probe', 'Seq.Lamp', 'Seq.InnerAction', '--cooked', '<cooked>')):
             a, b, label = both(good, *args)
             compared += 1
-            if not (a[0] == b[0] == 1 and a[1] == b[1] == b'' and a[2] and b'property prefix, not 26' in b[2]):
+            if not (a[0] == b[0] == 1 and a[1] == b[1] == b'' and b'invalid FName' in a[2]
+                    and b'property prefix, not 26' in b[2]):
                 failures.append(f'{label} (prefix): {a!r} / {b!r}')
 
         # The one difference on purpose: a finish notification that reaches an unbound native.
