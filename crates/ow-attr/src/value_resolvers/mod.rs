@@ -22,7 +22,7 @@ mod conditional;
 mod constant;
 mod global;
 mod manufacturer;
-mod noun;
+pub(crate) mod noun;
 mod object_property;
 mod player_skill;
 mod playthrough_count;

@@ -36,6 +36,8 @@ pub(crate) struct World {
     /// Answers to `EngineQuery::PlayerSkill` by skill definition; `None` here: the query is not modelled (the
     /// trait's default `LayerAbsent`).
     pub skills: Option<Vec<(ObjRef, Option<ObjRef>)>>,
+    /// How many change notifications [`AttrWorld::attribute_changed`] received.
+    pub notified: u32,
 }
 
 impl AttrWorld for World {
@@ -75,6 +77,7 @@ impl AttrWorld for World {
         _prop: PropId,
         _forms: NumForms,
     ) -> Result<(), AttrError> {
+        self.notified = self.notified.saturating_add(1);
         Ok(())
     }
     fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
@@ -558,6 +561,7 @@ impl Fx {
             slots: GlobalSlots::default(),
             streams: Vec::new(),
             skills: None,
+            notified: 0,
         };
         let c = Classes {
             object,

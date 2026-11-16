@@ -418,6 +418,17 @@ pub enum Storage {
         prop: PropId,
         kind: NumKind,
     },
+    /// A noun entry (`NounAttributeValueResolver`, NATIVE_NOUN_ATTRIBUTES.md section 5): element `index` of the
+    /// `NounAttributeState` array property `state` (`NounState`) on the provider `owner`, which holds its own value,
+    /// base and modifier stack. A float, recomputed in single precision; no change notification. Added by lane
+    /// FIX-NOUN-OFF (decision 2026-11-16-43). `#[non_exhaustive]`: the replicated slot may need a field once its
+    /// mirror is read.
+    #[non_exhaustive]
+    Noun {
+        owner: ObjRef,
+        state: PropId,
+        index: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -604,7 +615,8 @@ pub enum Refusal {
     NoValueResolvers,
     /// A value resolver entry is None (it counts as a failure).
     NullResolver,
-    /// The resolver class is not writable (every class except `ObjectPropertyAttributeValueResolver`).
+    /// The resolver class is not writable (every class except `ObjectPropertyAttributeValueResolver` and, in Off
+    /// mode, `NounAttributeValueResolver`), or a noun resolver found no store on the context.
     NotWritable,
     /// The property is neither a stack nor a plain attribute.
     NotAnAttribute,
