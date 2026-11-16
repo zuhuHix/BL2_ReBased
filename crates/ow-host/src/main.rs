@@ -66,12 +66,12 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::Play { game, map, script, vsync, size, screenshot } => match check(&game) {
-            Ok(()) => play(&game, &map, script.as_deref(), Some(PlayWindow { vsync, size, screenshot })),
+        Command::Play { game, map, script, vsync, size, screenshot, weapon } => match check(&game) {
+            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot })),
             Err(code) => code,
         },
-        Command::PlayHeadless { game, map, script } => match check(&game) {
-            Ok(()) => play(&game, &map, Some(&script), None),
+        Command::PlayHeadless { game, map, script, weapon } => match check(&game) {
+            Ok(()) => play(&game, &map, Some(&script), weapon.as_deref(), None),
             Err(code) => code,
         },
         Command::Window { game, frames, vsync, time_limit } => match check(&game) {
@@ -393,7 +393,7 @@ struct PlayWindow {
 }
 
 /// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY).
-fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow>) -> ExitCode {
+fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, window: Option<PlayWindow>) -> ExitCode {
     use ow_host::movement::sanctuary;
     use ow_host::play::{self, InputCollector, PlayDrawReport, PlayDrawer, PlayStats, PlayWorld};
     let Ok(install) = ow_host::find_install(game) else {
@@ -430,11 +430,56 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         }
     };
     print!("{spawn_text}");
+    // The held weapon (lane H4-WEAPON): the file's, evaluated through ow-items, or the equipped one (NotYet).
+    let stats = match weapon {
+        Some(path) => {
+            let spec = match std::fs::read_to_string(path).map_err(|e| e.to_string()).and_then(|t| ow_host::weapon::parse_spec(&t)) {
+                Ok(spec) => spec,
+                Err(e) => {
+                    eprintln!("ow-host: the weapon file {}: {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+            let started = Instant::now();
+            match ow_host::weapon::evaluate(&install.cooked, &spec) {
+                Ok(stats) => {
+                    println!(
+                        "weapon {} (level {}): damage {}, fire interval {} s, projectiles {}, range {} (evaluated in {} ms)",
+                        spec.definition,
+                        spec.level,
+                        ow_core::fmt::fmt_f(stats.damage, 2),
+                        ow_core::fmt::fmt_f(stats.fire_interval, 4),
+                        stats.projectiles.map_or_else(|| "unresolved".to_string(), |p| ow_core::fmt::fmt_f(p, 0)),
+                        stats.range.map_or_else(|| "none".to_string(), |r| format!("{} uu", ow_core::fmt::fmt_f(r, 0))),
+                        millis(started.elapsed())
+                    );
+                    Ok(stats)
+                }
+                Err(e) => {
+                    eprintln!("ow-host: the weapon {}: {e}", spec.definition);
+                    return ExitCode::from(1);
+                }
+            }
+        }
+        None => {
+            let not_yet = ow_host::weapon::equipped_weapon();
+            println!("weapon: {not_yet}");
+            Err(not_yet)
+        }
+    };
+    let gun = ow_host::weapon::Gun::new(stats);
+    // Each brush's placement, by `Brush::source` (the placement's ordinal), for the shot log.
+    let labels: Vec<String> = loaded
+        .scene
+        .placements
+        .values()
+        .map(|p| format!("{} ({})", p.path, p.mesh))
+        .collect();
     let sanctuary::Loaded { scene, mut defs, mut space, collision, .. } = loaded;
     let Some(window) = window else {
         let Some(script) = script else { return ExitCode::from(2) };
         let started = Instant::now();
-        return match play::run_headless(collision.world, mover, script, &play::HEADLESS_FRAMES) {
+        return match play::run_headless_with(collision.world, mover, script, &play::HEADLESS_FRAMES, gun, labels) {
             Ok(stats) => {
                 print!("{}", play::stats_text(&stats));
                 println!("headless play in {} ms", millis(started.elapsed()));
@@ -488,7 +533,7 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         end_shot,
         Rc::clone(&draw),
     );
-    let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats));
+    let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats)).with_gun(gun, labels, !scripted);
     let options = RunOptions { frames: None, vsync: window.vsync, time_limit: None };
     let code = match app::run_play(options, sim, Some(Box::new(drawer)), InputCollector::new(!scripted)) {
         Ok(report) => print_run(&report, options),

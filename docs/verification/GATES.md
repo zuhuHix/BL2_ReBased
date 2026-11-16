@@ -158,6 +158,23 @@ digest and all twenty segment digests. After review r1 of PR #355: a scripted wi
 workspace tests 1,607 passed, 0 failed, 21 ignored. Workspace tests 1,603 passed, 0 failed, 21 ignored (main 7f73940 plus this
 lane; the installed-game runs were made on main e126214 plus this lane).
 
+### Host held weapon (Rust, H4-WEAPON): lane H4-WEAPON, 2026-11-16
+Firing in the play mode (decision `docs/decisions/2026-11/2026-11-16-61-host-held-weapon-fire-in-the-play-mode-h4-weapon.md`).
+- **Every change to `ow-host/src/weapon*`, `overlay.rs`, or the play mode's trigger:** the workspace build and tests
+  (the `weapon`, `overlay` and `play` tests).
+- **On a machine with the game installed**, under the machine lock, with a firing script (`local/p2/h4-weapon/fire20.txt`
+  on the desktop) and a weapon file under ignored `local/`: `--map Sanctuary --play-script <script>` without and with
+  `--weapon <file>` (headless), then `--play --play-script <script> --weapon <file> --size 1280x720 --screenshot
+  <png> --no-vsync` (the window). Pass is exit 0 for all three; the same path digest for all three (firing moves
+  nothing); and the window's shot count and shot digest equal to the headless weapon run's. Look at the screenshots
+  for the crosshair, the placeholder and, on a frame within 2 s of a hit, the impact marker.
+
+**Baseline (2026-11-16, zuhu desktop, release build, lane H4-WEAPON, the Tediore pistol of the firing coverage
+recipes):** weapon damage 34.24, fire interval 0.2100 s, range 16384 uu; path digest `3413832365d19721`; no weapon 2
+shots, with the weapon 53 shots and shot digest `797e931e95ce7bb6`, headless and in the window (median frame
+0.780 ms). Workspace tests 1,687 passed, 0 failed, 23 ignored (main ce6f681 plus this lane; the installed-game runs on main
+f5cd6a4 plus this lane).
+
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records

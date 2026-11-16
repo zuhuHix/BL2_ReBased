@@ -18,9 +18,9 @@
 //! fold every tick's location into a [`PathDigest`]. Equal digests at every segment end mean the two runs put the
 //! pawn at the same bits on every tick.
 //!
-//! **Script text** ([`parse_script`], [`script_text`]): one segment per line, `seconds forward strafe jump yaw
-//! name...` (jump 0 or 1, yaw in rotator units per tick, the name the rest of the line); empty lines and lines
-//! starting with `#` are skipped.
+//! **Script text** ([`parse_script`], [`script_text`]): one segment per line, `seconds forward strafe actions yaw
+//! name...` (actions `0`, `1` or `j` for a jump on the first tick, `f` for the trigger held, `jf` for both; yaw in
+//! rotator units per tick; the name the rest of the line); empty lines and lines starting with `#` are skipped.
 
 use std::borrow::Cow;
 
@@ -42,11 +42,20 @@ pub struct Segment {
     pub jump: bool,
     /// View turn per tick, rotator units.
     pub yaw_per_tick: i32,
+    /// The trigger is held through the segment (the play mode's weapon, lane H4-WEAPON; `--walk` has no weapon and
+    /// ignores it, and firing moves nothing, so the path is the same).
+    pub fire: bool,
 }
 
 impl Segment {
     pub const fn new(name: &'static str, seconds: f64, forward: f64, strafe: f64, jump: bool, yaw_per_tick: i32) -> Segment {
-        Segment { name: Cow::Borrowed(name), seconds, forward, strafe, jump, yaw_per_tick }
+        Segment { name: Cow::Borrowed(name), seconds, forward, strafe, jump, yaw_per_tick, fire: false }
+    }
+
+    /// The same segment with the trigger held.
+    pub const fn firing(mut self) -> Segment {
+        self.fire = true;
+        self
     }
 
     fn moves(&self) -> bool {
@@ -176,10 +185,13 @@ pub fn parse_script(text: &str) -> Result<Vec<Segment>, String> {
         if !(seconds >= 0.0) || !(-1.0..=1.0).contains(&forward) || !(-1.0..=1.0).contains(&strafe) {
             return Err(bad("seconds must be 0 or more, forward and strafe within -1..1"));
         }
-        let jump = match words.next() {
-            Some("0") => false,
-            Some("1") => true,
-            _ => return Err(bad("jump must be 0 or 1")),
+        // The actions: 0 none, 1 or j jump on the first tick, f the trigger held, jf both.
+        let (jump, fire) = match words.next() {
+            Some("0") => (false, false),
+            Some("1" | "j") => (true, false),
+            Some("f") => (false, true),
+            Some("jf" | "fj" | "1f") => (true, true),
+            _ => return Err(bad("the actions must be 0, 1 (or j), f or jf")),
         };
         let yaw = words
             .next()
@@ -193,6 +205,7 @@ pub fn parse_script(text: &str) -> Result<Vec<Segment>, String> {
             strafe,
             jump,
             yaw_per_tick: yaw,
+            fire,
         });
     }
     Ok(out)
@@ -208,7 +221,12 @@ pub fn script_text(script: &[Segment]) -> String {
             ow_core::fmt::fmt_py_repr(s.seconds),
             ow_core::fmt::fmt_py_repr(s.forward),
             ow_core::fmt::fmt_py_repr(s.strafe),
-            u8::from(s.jump),
+            match (s.jump, s.fire) {
+                (false, false) => "0",
+                (true, false) => "1",
+                (false, true) => "f",
+                (true, true) => "jf",
+            },
             s.yaw_per_tick,
             s.name
         ));
