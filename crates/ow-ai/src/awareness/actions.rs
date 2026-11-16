@@ -57,9 +57,9 @@
 //!   reach `CreatePathToLocation`, so they run in the VM and need no binding. `PathData` is not written: the path is
 //!   the host's, and what the engine stores in that struct is not read;
 //! - `StartAtomic`, `StopAtomic`, `IsAtomic`, `IsRunning`, `IsActionReadyToFinish`, `RangeIsValid` and
-//!   `GetRangeValue` were read by this lane as analyst (NATIVE_AI_ACTION_SEQUENCE.md). Under the clean-room rule they
-//!   are not implemented here: `NotYet` outside Reference, and unbound under Reference. For the same reason the tree's
-//!   "locked" question (a running action with its non-interruptible flag) is `NotYet`.
+//!   `GetRangeValue`, read by W7-AI part 2 as analyst (NATIVE_AI_ACTION_SEQUENCE.md) and implemented from that note
+//!   alone by lane W7-AI-LOCK (decision 2026-11-16-72) in `ParityMode::Off`; under Reference they stay unbound (the
+//!   stub policy: there is no C++ AI). See [`LOCK`] for their rules and the tree's "locked" question.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -84,6 +84,47 @@ mod tests;
 
 /// The note of the natives this lane read as analyst.
 pub const RECORD_ACTIONS: &str = "docs/verification/NATIVE_AI_ACTION_SEQUENCE.md";
+
+/// Lane W7-AI-LOCK (decision 2026-11-16-72), the fresh implementer of NATIVE_AI_ACTION_SEQUENCE.md: the action-sequence
+/// natives, in `ParityMode::Off` (Reference keeps the stub policy), and the tree's "locked" question, in both modes.
+/// Every rule is the note's, UNVERIFIED in the running game:
+///
+/// - **`StartAtomic` / `StopAtomic` / `IsAtomic`:** on an action whose `bInitialized` is set, start and stop set and clear
+///   `bInAtomicSection` (no nesting, no count), and `IsAtomic` is true when both flags are set. On an action whose
+///   `bInitialized` is not set, the note's answer (nothing changes; false) is not given: who sets `bInitialized` when the
+///   AI creates its actions is not read (the note's "Not read"), and this port never sets it, so an action the game
+///   would have initialised cannot be told apart. That case is `NotYet { NotRead }`.
+/// - **`IsRunning`:** "this action is the AI tree's current leaf". This port keeps the tree's current node in Rust, not
+///   in `AIComponent.CurrentState`, so the answer is read from the brain that made the action: true when its tree runs
+///   this action. During that action's own `Start` or `Stop` event, whether the tree's current state already (or
+///   still) names it is not read: `NotYet { NotRead }`. An action no brain made answers false when its `AI` is unset
+///   (the note's first condition) and `NotYet` otherwise.
+/// - **`IsActionReadyToFinish`:** true when no latent action is pending in the action's state code and, up its
+///   `ParentSequence` chain, each parent answers true. An action of `WillowGame.WillowActionSequencePawn` (or a
+///   subclass), whose override the note did not read, is `NotYet { NotRead }`.
+/// - **`RangeIsValid` / `GetRangeValue`** on the `Range` struct (`MinVal`, `MaxVal`): valid when both ends are above zero
+///   and the minimum is not above the maximum; the value is 0 for an invalid range (no draw), else `min + (max - min) *
+///   r / 32767` in single precision, `r` one 15-bit draw of the AI stream (`CrtStream::AiDecision`; which C `rand()`
+///   stream the engine's call shares is UNVERIFIED).
+/// - **The tree's "locked" question** (the periodic update leaves a running action alone when "both its running and its
+///   non-interruptible flag" are set; the note reads the non-interruptible flag as `bInAtomicSection` and leaves which
+///   flag is "running" open): with `bInAtomicSection` clear the action is not locked, whatever the other flag; with it
+///   set, `NotYet { NotRead }` (the question stands in decision 72). In both modes: there is no C++ reading.
+pub const LOCK: &str = "W7-AI-LOCK, decision 2026-11-16-72";
+
+/// The class whose override of `IsActionReadyToFinish` was not read (the note).
+pub const ACTION_SEQUENCE_PAWN: &str = "WillowGame.WillowActionSequencePawn";
+
+/// The deepest `ParentSequence` chain followed (a Rust-only bound against a cycle in data).
+const PARENT_DEPTH: usize = 32;
+
+/// What a mind's tree is running, as the natives see it ([`LOCK`], `IsRunning`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Running {
+    /// The action, its `Start` or `Stop` event in progress.
+    Changing(ObjRef),
+    Action(ObjRef),
+}
 
 /// What the host answers about movement (module documentation). The handle is the mind's navigation handle object;
 /// the pawn is the action's pawn.
@@ -129,6 +170,10 @@ pub struct Brains {
     /// without building again while both are the same.
     failed_builds: DetMap<ObjRef, (ObjRef, ObjRef, VmError)>,
     locomotion: Option<Rc<RefCell<dyn Locomotion>>>,
+    /// Action object -> the mind whose brain made it.
+    owners: DetMap<ObjRef, ObjRef>,
+    /// Mind -> what its tree runs (absent: nothing).
+    running: DetMap<ObjRef, Running>,
 }
 
 impl std::fmt::Debug for Brains {
@@ -327,11 +372,19 @@ impl TreeWorld for VmTree<'_> {
     }
 
     fn start(&mut self, node: usize) -> Result<(), VmError> {
-        self.event(node, "Start", vec![]).map(|_| ())
+        let action = self.action(node)?;
+        set_running(self.vm, self.brain.mind, Some(Running::Changing(action)))?;
+        let result = self.event(node, "Start", vec![]).map(|_| ());
+        set_running(self.vm, self.brain.mind, Some(Running::Action(action)))?;
+        result
     }
 
     fn stop(&mut self, node: usize, _failed: bool) -> Result<(), VmError> {
-        self.event(node, "Stop", vec![])?;
+        let action = self.action(node)?;
+        set_running(self.vm, self.brain.mind, Some(Running::Changing(action)))?;
+        let result = self.event(node, "Stop", vec![]);
+        set_running(self.vm, self.brain.mind, None)?;
+        result?;
         // The engine's "back to the default state" call after Stop is not read (NATIVE_AI_AWARENESS.md, "Not read
         // yet"): an action that Stop left in its rest state needs nothing more; any other is NotYet.
         let action = self.action(node)?;
@@ -353,13 +406,29 @@ impl TreeWorld for VmTree<'_> {
         Ok(())
     }
 
-    fn locked(&mut self, _node: usize) -> Result<bool, VmError> {
-        Err(NotYet::not_ported(
-            "whether a running action is locked (its running and non-interruptible flags): awaiting a clean-room \
-             implementation from the analyst note",
-            RECORD_ACTIONS,
-        )
-        .into())
+    /// [`LOCK`]: not locked while `bInAtomicSection` is clear; `NotYet` while it is set.
+    fn locked(&mut self, node: usize) -> Result<bool, VmError> {
+        let action = self.action(node)?;
+        match get(self.vm, action, "bInAtomicSection")? {
+            Some(v) if !truth(self.vm, &v) => Ok(false),
+            Some(_) => Err(NotYet::not_read(
+                format!(
+                    "whether the running action {} is locked: it is in an atomic section (the non-interruptible flag, \
+                     the note's reading), and which flag is the update's \"running\" flag is not read",
+                    ow_combat::hit::access::class_name(self.vm, action)
+                ),
+                RECORD_ACTIONS,
+            )
+            .into()),
+            None => Err(NotYet::not_read(
+                format!(
+                    "whether the running action {} is locked: its class declares no bInAtomicSection",
+                    ow_combat::hit::access::class_name(self.vm, action)
+                ),
+                RECORD_ACTIONS,
+            )
+            .into()),
+        }
     }
 }
 
@@ -381,7 +450,7 @@ pub struct BrainReport {
 pub type DrySelection = (Option<usize>, Vec<(usize, String)>);
 
 /// The leaf the selection pass picks for `mind` now, and each action node's `CanRun` failure name, without starting
-/// anything (for a report: the state update needs the lock rule before it selects; module documentation). The
+/// anything (for a report: the state update selects only once the running action is not locked, [`LOCK`]). The
 /// selection's own writes (the next active children, the failure names) stay, as a selection pass leaves them.
 pub fn dry_select(vm: &mut Vm, mind: ObjRef) -> Result<DrySelection, VmError> {
     let Some(mut brain) = take(vm, mind)? else {
@@ -518,7 +587,24 @@ fn build(vm: &mut Vm, mind: ObjRef, pawn: ObjRef, aidef: ObjRef) -> Result<Brain
             b.rest_states[i] = vm.space.heap.get(*a)?.state;
         }
     }
+    let service = brains(vm)?;
+    let mut s = borrow(&service)?;
+    for action in b.actions.iter().flatten() {
+        s.owners.insert(*action, mind);
+    }
+    drop(s);
     Ok(b)
+}
+
+/// What `mind`'s tree runs, as the natives see it ([`LOCK`]); `None` for nothing.
+fn set_running(vm: &mut Vm, mind: ObjRef, what: Option<Running>) -> Result<(), VmError> {
+    let service = brains(vm)?;
+    let mut s = borrow(&service)?;
+    match what {
+        Some(r) => s.running.insert(mind, r),
+        None => s.running.remove(&mind),
+    };
+    Ok(())
 }
 
 fn tick_with(
@@ -676,23 +762,161 @@ impl NativePack for Pack {
                 }),
             )?;
         }
+        // The action-sequence natives ([`LOCK`]): Off only; under Reference they stay unbound (the stub policy).
         if vm.parity == ParityMode::Off {
-            for path in READ_AS_ANALYST {
-                bind(
-                    vm,
-                    path,
-                    Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
-                        Err(NotYet::not_ported(
-                            format!("{path}: awaiting a clean-room implementation from the analyst note"),
-                            RECORD_ACTIONS,
-                        )
-                        .into())
-                    }),
-                )?;
+            let bodies: [(&str, NativeFn); 7] = [
+                (READ_AS_ANALYST[0], Rc::new(|c| n_atomic(c, Some(true)))),
+                (READ_AS_ANALYST[1], Rc::new(|c| n_atomic(c, Some(false)))),
+                (READ_AS_ANALYST[2], Rc::new(|c| n_atomic(c, None))),
+                (READ_AS_ANALYST[3], Rc::new(n_is_running)),
+                (READ_AS_ANALYST[4], Rc::new(n_ready_to_finish)),
+                (READ_AS_ANALYST[5], Rc::new(|c| Ok(Value::Bool(arg_range(c)?.valid())))),
+                (READ_AS_ANALYST[6], Rc::new(n_range_value)),
+            ];
+            for (path, body) in bodies {
+                bind(vm, path, body)?;
             }
         }
         Ok(())
     }
+}
+
+/// `bInitialized` of an action, `NotYet` when it is not set ([`LOCK`]: who sets it is not read).
+fn initialized(c: &mut NativeCall<'_>, action: ObjRef, what: &str) -> Result<(), VmError> {
+    let set = get(c.vm, action, "bInitialized")?.is_some_and(|v| truth(c.vm, &v));
+    if set {
+        return Ok(());
+    }
+    Err(NotYet::not_read(
+        format!(
+            "{what} on {}, whose bInitialized is not set: who sets it when the AI creates its actions is not read \
+             (this port never sets it)",
+            ow_combat::hit::access::class_name(c.vm, action)
+        ),
+        RECORD_ACTIONS,
+    )
+    .into())
+}
+
+// ActionSequence.StartAtomic (Some(true)), StopAtomic (Some(false)), IsAtomic (None) ([`LOCK`]).
+fn n_atomic(c: &mut NativeCall<'_>, write: Option<bool>) -> Result<Value, VmError> {
+    let action = this(c)?;
+    let what = match write {
+        Some(true) => "StartAtomic",
+        Some(false) => "StopAtomic",
+        None => "IsAtomic",
+    };
+    initialized(c, action, what)?;
+    match write {
+        Some(on) => {
+            if !set(c.vm, action, "bInAtomicSection", Value::Bool(on))? {
+                return Err(error(format!("{what}: the action's class has no bInAtomicSection")));
+            }
+            Ok(Value::None)
+        }
+        None => Ok(Value::Bool(get(c.vm, action, "bInAtomicSection")?.is_some_and(|v| truth(c.vm, &v)))),
+    }
+}
+
+// ActionSequence.IsRunning ([`LOCK`]).
+fn n_is_running(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let action = this(c)?;
+    let service = brains(c.vm)?;
+    let (owner, running) = {
+        let s = borrow(&service)?;
+        let owner = s.owners.get(&action).copied();
+        let running = owner.and_then(|m| s.running.get(&m).copied());
+        (owner, running)
+    };
+    if owner.is_none() {
+        let ai = match get(c.vm, action, "AI")? {
+            Some(Value::Interface(o)) | Some(Value::Object(o)) => o,
+            _ => None,
+        };
+        if ai.is_none() {
+            return Ok(Value::Bool(false));
+        }
+        return Err(NotYet::not_read(
+            "IsRunning on an action this port's brains did not make, whose AI is set (its tree is not known here)",
+            RECORD_ACTIONS,
+        )
+        .into());
+    }
+    match running {
+        Some(Running::Changing(a)) if a == action => Err(NotYet::not_read(
+            "IsRunning during the action's own Start or Stop: whether the tree's current state already (or still) \
+             names it is not read",
+            RECORD_ACTIONS,
+        )
+        .into()),
+        Some(Running::Action(a)) => Ok(Value::Bool(a == action)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+// ActionSequence.IsActionReadyToFinish ([`LOCK`]).
+fn n_ready_to_finish(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let action = this(c)?;
+    ready_to_finish(c.vm, action, &mut ow_vm::states::latent_pending).map(Value::Bool)
+}
+
+/// [`LOCK`]'s `IsActionReadyToFinish` rule up the `ParentSequence` chain, with `pending` the "latent action pending in
+/// its state frame" question (a parameter so the tests can answer it without running state code).
+fn ready_to_finish(
+    vm: &mut Vm,
+    action: ObjRef,
+    pending: &mut dyn FnMut(&mut Vm, ObjRef) -> Result<bool, VmError>,
+) -> Result<bool, VmError> {
+    let mut at = action;
+    let mut seen = Vec::new();
+    loop {
+        if ow_combat::hit::access::is_a(vm, at, ACTION_SEQUENCE_PAWN)? {
+            return Err(NotYet::not_read(
+                format!(
+                    "IsActionReadyToFinish on {}: the {ACTION_SEQUENCE_PAWN} override is not read",
+                    ow_combat::hit::access::class_name(vm, at)
+                ),
+                RECORD_ACTIONS,
+            )
+            .into());
+        }
+        if pending(vm, at)? {
+            return Ok(false);
+        }
+        seen.push(at);
+        match object(vm, at, "ParentSequence")? {
+            None => return Ok(true),
+            Some(parent) => {
+                if seen.contains(&parent) || seen.len() >= PARENT_DEPTH {
+                    return Err(error(format!(
+                        "IsActionReadyToFinish: the ParentSequence chain loops or is deeper than {PARENT_DEPTH}"
+                    )));
+                }
+                at = parent;
+            }
+        }
+    }
+}
+
+/// The `Range` argument (`MinVal`, `MaxVal`).
+fn arg_range(c: &NativeCall<'_>) -> Result<Range, VmError> {
+    let v = c.arg(0)?;
+    let end = |name: &str| -> Result<f32, VmError> {
+        field(c.vm, v, name)
+            .map(|x| ow_combat::hit::access::to_f32(number(&x)))
+            .ok_or_else(|| error(format!("the range argument has no {name}")))
+    };
+    Ok(Range::new(end("MinVal")?, end("MaxVal")?))
+}
+
+// ActionSequence.GetRangeValue ([`LOCK`]).
+fn n_range_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let range = arg_range(c)?;
+    if !range.valid() {
+        return Ok(Value::Float(0.0));
+    }
+    let r = f32::from(c.vm.rng.crt(CrtStream::AiDecision).rand15());
+    Ok(Value::Float(range.min + (range.max - range.min) * r / 32767.0))
 }
 
 fn this(c: &NativeCall<'_>) -> Result<ObjRef, VmError> {
