@@ -7,6 +7,10 @@
 //! redraw go to [`Simulation::step`]; the [`Snapshot`] it returns is all the renderer reads. Redraws are asked for
 //! continuously; with vsync, acquiring the next frame paces the loop. While no frame can be drawn (minimised or
 //! occluded window) the loop waits [`SKIP_WAIT`] between tries instead of spinning.
+//!
+//! A `--frames` run has a deadline ([`frames_time_limit`], or `--time-limit`). It is checked on every wake-up of the
+//! loop, not only on redraws, and the loop always asks to be woken by it: a minimised window may get no redraw at all,
+//! and the run must still end.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,14 +23,24 @@ use winit::window::{Window, WindowId};
 
 use crate::gpu::{AdapterSummary, FrameOutcome, Gpu};
 use crate::sim::{HostCommand, Simulation};
+use crate::stats::{FrameTimer, MAX_SAMPLES};
 
 pub const WINDOW_TITLE: &str = "BL2_ReBased";
 /// The window's first inner size, in logical pixels.
 pub const WINDOW_SIZE: (u32, u32) = (1280, 720);
 /// How long the loop waits after a frame it could not draw.
 pub const SKIP_WAIT: Duration = Duration::from_millis(10);
-/// A `--frames` run that has not presented its frames by then stops with an error (a window kept minimised, say).
-pub const FRAMES_TIME_LIMIT: Duration = Duration::from_secs(120);
+/// The fixed part of a `--frames` run's default time limit.
+pub const FRAMES_TIME_BASE: Duration = Duration::from_secs(60);
+/// The part of the default limit per frame asked for: a whole second, about 4 times the slowest frame seen so far
+/// (252 ms with vsync on a sleeping display, 2026-11-16).
+pub const FRAMES_TIME_PER_FRAME: Duration = Duration::from_secs(1);
+
+/// The default time limit of `--frames n`: [`FRAMES_TIME_BASE`] plus [`FRAMES_TIME_PER_FRAME`] for each frame (360 s
+/// for 300). A run that has not presented its frames by then stops with an error (a window kept minimised, say).
+pub fn frames_time_limit(n: u32) -> Duration {
+    FRAMES_TIME_BASE.saturating_add(FRAMES_TIME_PER_FRAME.saturating_mul(n))
+}
 
 /// How to run the window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +48,15 @@ pub struct RunOptions {
     /// Stop after this many presented frames; `None` runs until the window is closed.
     pub frames: Option<u32>,
     pub vsync: bool,
+    /// Replaces [`frames_time_limit`] for a `--frames` run; ignored without `frames`.
+    pub time_limit: Option<Duration>,
+}
+
+impl RunOptions {
+    /// The time limit of a `--frames` run; `None` for a run until closed.
+    pub fn limit(&self) -> Option<Duration> {
+        self.frames.map(|n| self.time_limit.unwrap_or_else(|| frames_time_limit(n)))
+    }
 }
 
 /// How the run ended.
@@ -56,8 +79,9 @@ pub struct RunReport {
     pub present_mode: Option<String>,
     pub presented: u64,
     pub skipped: u64,
-    /// Wall-clock intervals between successive presents.
-    pub intervals: Vec<Duration>,
+    /// Wall-clock intervals between successive presents: all of them counted, at most [`MAX_SAMPLES`] kept for the
+    /// median, and none kept by a run until closed.
+    pub timer: FrameTimer,
     /// From the first present to the last.
     pub elapsed: Duration,
 }
@@ -77,7 +101,8 @@ struct App<S> {
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
     pending: Vec<HostCommand>,
-    started: Option<Instant>,
+    /// When a `--frames` run fails, set when the window opens.
+    deadline: Option<Instant>,
     last_step: Option<Instant>,
     first_present: Option<Instant>,
     last_present: Option<Instant>,
@@ -94,7 +119,7 @@ impl<S: Simulation> App<S> {
             window: None,
             gpu: None,
             pending: Vec::new(),
-            started: None,
+            deadline: None,
             last_step: None,
             first_present: None,
             last_present: None,
@@ -105,7 +130,7 @@ impl<S: Simulation> App<S> {
                 present_mode: None,
                 presented: 0,
                 skipped: 0,
-                intervals: Vec::new(),
+                timer: FrameTimer::new(if options.frames.is_some() { MAX_SAMPLES } else { 0 }),
                 elapsed: Duration::ZERO,
             },
         }
@@ -134,23 +159,29 @@ impl<S: Simulation> App<S> {
             }
             Err(e) => return self.stop(event_loop, Outcome::Failed(e.to_string())),
         }
-        self.started = Some(Instant::now());
+        self.deadline = self.options.limit().map(|limit| Instant::now() + limit);
         window.request_redraw();
         self.window = Some(window);
     }
 
-    fn frame(&mut self, event_loop: &ActiveEventLoop) {
-        let now = Instant::now();
-        if let (Some(_), Some(started)) = (self.options.frames, self.started) {
-            if now.duration_since(started) > FRAMES_TIME_LIMIT {
-                let message = format!(
-                    "{} of the frames presented within {} s",
-                    self.report.presented,
-                    FRAMES_TIME_LIMIT.as_secs()
-                );
-                return self.stop(event_loop, Outcome::Failed(message));
-            }
+    /// Stops a `--frames` run past its deadline; true when it did.
+    fn past_deadline(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let (Some(deadline), Some(n), Some(limit)) = (self.deadline, self.options.frames, self.options.limit()) else {
+            return false;
+        };
+        if Instant::now() < deadline || event_loop.exiting() {
+            return false;
         }
+        let message = format!("{} of {n} frames presented within the {} s limit", self.report.presented, limit.as_secs());
+        self.stop(event_loop, Outcome::Failed(message));
+        true
+    }
+
+    fn frame(&mut self, event_loop: &ActiveEventLoop) {
+        if self.past_deadline(event_loop) {
+            return;
+        }
+        let now = Instant::now();
         let dt = self.last_step.map_or(Duration::ZERO, |last| now.duration_since(last));
         self.last_step = Some(now);
         let snapshot = match self.sim.step(&self.pending, dt) {
@@ -163,7 +194,7 @@ impl<S: Simulation> App<S> {
             Ok(FrameOutcome::Presented) => {
                 let presented_at = Instant::now();
                 if let Some(last) = self.last_present {
-                    self.report.intervals.push(presented_at.duration_since(last));
+                    self.report.timer.push(presented_at.duration_since(last));
                 }
                 let first = *self.first_present.get_or_insert(presented_at);
                 self.last_present = Some(presented_at);
@@ -190,7 +221,10 @@ impl<S: Simulation> ApplicationHandler for App<S> {
         }
     }
 
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if self.past_deadline(event_loop) {
+            return;
+        }
         if let (StartCause::ResumeTimeReached { .. }, Some(window)) = (cause, &self.window) {
             window.request_redraw();
         }
@@ -224,13 +258,39 @@ impl<S: Simulation> ApplicationHandler for App<S> {
         if event_loop.exiting() {
             return;
         }
-        if self.backing_off {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + SKIP_WAIT));
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+        // Wake for the next try after a skipped frame, and in any case by the deadline.
+        let retry = self.backing_off.then(|| Instant::now() + SKIP_WAIT);
+        let wake = match (retry, self.deadline) {
+            (Some(retry), Some(deadline)) => Some(retry.min(deadline)),
+            (retry, deadline) => retry.or(deadline),
+        };
+        event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+        if !self.backing_off {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_limit_scales_with_the_frames() {
+        assert_eq!(frames_time_limit(300), Duration::from_secs(360));
+        assert_eq!(frames_time_limit(1), Duration::from_secs(61));
+        assert_eq!(frames_time_limit(u32::MAX), Duration::from_secs(60 + u64::from(u32::MAX)));
+    }
+
+    #[test]
+    fn the_limit_applies_to_frames_runs_only() {
+        let window = RunOptions { frames: None, vsync: true, time_limit: Some(Duration::from_secs(5)) };
+        assert_eq!(window.limit(), None);
+        let frames = RunOptions { frames: Some(10), vsync: true, time_limit: None };
+        assert_eq!(frames.limit(), Some(Duration::from_secs(70)));
+        let capped = RunOptions { time_limit: Some(Duration::from_secs(15)), ..frames };
+        assert_eq!(capped.limit(), Some(Duration::from_secs(15)));
     }
 }

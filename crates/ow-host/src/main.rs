@@ -11,7 +11,8 @@ use ow_host::app::{self, Outcome, RunOptions};
 use ow_host::args::{self, Command};
 use ow_host::gpu;
 use ow_host::sim::StubWorld;
-use ow_host::stats::{frame_stats, millis};
+use ow_host::stats::millis;
+use std::time::Duration;
 
 fn main() -> ExitCode {
     let raw: Vec<_> = std::env::args_os().skip(1).collect();
@@ -31,8 +32,12 @@ fn main() -> ExitCode {
             }
             Err(code) => code,
         },
-        Command::Window { game, frames, vsync } => match check(&game) {
-            Ok(()) => window(RunOptions { frames, vsync }),
+        Command::Window { game, frames, vsync, time_limit } => match check(&game) {
+            Ok(()) => window(RunOptions {
+                frames,
+                vsync,
+                time_limit: time_limit.map(|s| Duration::from_secs(u64::from(s))),
+            }),
             Err(code) => code,
         },
         _ => ExitCode::from(2),
@@ -91,13 +96,17 @@ fn window(options: RunOptions) -> ExitCode {
         report.skipped,
         millis(report.elapsed)
     );
-    if let Some(stats) = frame_stats(&report.intervals) {
+    if let Some(summary) = report.timer.summary() {
+        let median = match summary.median {
+            Some(median) if summary.sampled == summary.intervals => format!("median {} ms, ", millis(median)),
+            Some(median) => format!("median {} ms (of the first {}), ", millis(median), summary.sampled),
+            None => String::new(),
+        };
         println!(
-            "frame time over {} intervals: median {} ms, min {} ms, max {} ms",
-            stats.intervals,
-            millis(stats.median),
-            millis(stats.min),
-            millis(stats.max)
+            "frame time over {} intervals: {median}min {} ms, max {} ms",
+            summary.intervals,
+            millis(summary.min),
+            millis(summary.max)
         );
     }
     match (&report.outcome, options.frames) {
