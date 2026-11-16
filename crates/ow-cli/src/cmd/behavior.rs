@@ -16,9 +16,18 @@
 //! Order, as the C++: the source package is loaded first, then the arguments are checked, the store opens the cooked
 //! root, the source package is loaded again through the store by its name and the provider is found in it by path
 //! (a leading `<package>.` dropped, ASCII case folded). The provider is loaded from that file through the definition
-//! store (`DefStore::load_export`); a file that is not the path's holder under the store's identity policy is refused
-//! (the C++ reads the file it is given). Errors print `ow-package: <message>` with exit code 1 (a `NotYet` exit code
-//! 3). Lines end in `\n`.
+//! store (`DefStore::load_export`), whose identity policy is the first holder in scan order, so references resolve as
+//! the C++ global fallback resolves them.
+//!
+//! **Cooked copies.** A map package often holds a cooked copy of a provider whose path another file holds first.
+//! The store refuses to load that copy as the path's definition ("another file holds this path under the identity
+//! policy", [`COPY_REFUSAL`]); on that refusal only, the command opens a second store whose load set is the given
+//! file alone (`IdentityPolicy::Loaded`) and reads the provider and its subobjects from it, as the C++ reads the file
+//! it is given. Every other refusal is the command's error. In that second store a reference into another package is a
+//! stand-in named by its import path (the C++ resolves it), which changes what a behavior's own object reference
+//! reads as (`Provider::object_input`), not the dump.
+//!
+//! Errors print `ow-package: <message>` with exit code 1 (a `NotYet` exit code 3). Lines end in `\n`.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -46,6 +55,11 @@ use crate::args::{Command, USAGE};
 use crate::cmd::NOT_PORTED;
 use crate::cmd::properties::error_text;
 use crate::json::quote;
+
+/// The end of the definition store's refusal to load a file's copy of a path another file holds
+/// (`DefStore::load_export`): the only refusal the command answers with the second store. The test
+/// `a_cooked_copy_is_read_from_the_given_file` fails if the store's text changes.
+const COPY_REFUSAL: &str = ": another file holds this path under the identity policy";
 
 /// Why the command failed: its message, and whether it is a `NotYet` (exit code 3).
 struct Failure {
@@ -95,8 +109,10 @@ fn execute(args: &[String], mode: ParityMode, out: &mut String) -> Result<u8, Fa
     let name = PackageName::parse(&source.name).map_err(|e| format!("{}: {e}", source.name))?;
     let mut vm = open(&args[4], mode, IdentityPolicy::FirstInScanOrder)?;
     let provider = match find_provider(&mut vm, &name, &args[2]) {
-        // A cooked copy: read it from the given file (module documentation).
-        Err(BehaviorError::Vm(VmError::Def(DefError::NotADefinition(_)))) => {
+        // A cooked copy: read it from the given file (module documentation, "Cooked copies"). Only that refusal.
+        Err(BehaviorError::Vm(VmError::Def(DefError::NotADefinition(m))))
+            if m.ends_with(COPY_REFUSAL) =>
+        {
             vm = open(
                 &args[4],
                 mode,
@@ -379,7 +395,8 @@ mod tests {
     use packages::{install, provider_package, rules, toy_provider};
 
     /// The invented install the CLI tests run on: the code packages, `Things`, ToyProvider exact (`TestBpd`), with a
-    /// short value block (`TestShort`) and with an unknown link type (`TestLink`), and ToyRules (`TestRules`).
+    /// short value block (`TestShort`) and with an unknown link type (`TestLink`), ToyRules (`TestRules`), and a
+    /// cooked copy ([`cooked_copy`]).
     fn files() -> Vec<(String, Vec<u8>)> {
         install(&[
             (
@@ -407,7 +424,17 @@ mod tests {
                 )),
             ),
             ("TestRules", provider_package(&rules())),
+            ("AaCopy", provider_package(&cooked_copy())),
+            ("ZzCopy", provider_package(&cooked_copy())),
         ])
+    }
+
+    /// ToyProvider inside a package export `Shared`: `AaCopy` and `ZzCopy` both hold `Shared.ToyProvider`, and the
+    /// store's identity rule makes `AaCopy` (first in scan order) its holder, so `ZzCopy`'s is a cooked copy.
+    fn cooked_copy() -> packages::Spec {
+        let mut spec = toy_provider("exact", "BVAR_InstanceData", "BVARLINK_Input");
+        spec.outer_package = Some("Shared");
+        spec
     }
 
     /// Writes the invented install under ignored `local/` so the C++ binary can be run on the same bytes (the
@@ -552,6 +579,28 @@ mod tests {
             0,
             "{\"provider\":\"ToyRules\",\"values_decoded\":true,\"trace\":[\"Delay2 -> C4\",\"Delay2 -> C4\"],\"boundary\":[\"Delay2 -> WillowGame.Behavior_ToySame:C4\",\"Delay2 -> WillowGame.Behavior_ToySame:C4\"],\"errors\":[],\"diagnostics\":[]}",
         ),
+        (
+            "AaCopy",
+            &["--behavior-dump", "Shared.ToyProvider"],
+            0,
+            "{\"provider\":\"Shared.ToyProvider\",\"values_decoded\":true,\"diagnostics\":[],\"sequences\":[{\"name\":\"Main\",\"enabled_on_spawn\":true,\"condition\":\"\",\"variables\":[{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":-5,\"object\":\"Things.DamageType.ToyFire\"},{\"type\":\"BVAR_Int\",\"name\":\"Count\",\"word\":7,\"object\":\"\"},{\"type\":\"BVAR_NamedVariable\",\"name\":\"Ref\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Float\",\"name\":\"None\",\"word\":1069547520,\"object\":\"\"}],\"behavior_inputs\":[{\"behavior\":\"Cmp\",\"property\":\"ObjectA\",\"link\":\"BVARLINK_Input\",\"variables\":[0]},{\"behavior\":\"Cmp\",\"property\":\"ObjectB\",\"link\":\"BVARLINK_Input\",\"variables\":[1]}],\"graph\":[\"event OnHit -> Cmp id=-1 delay=0.000000\",\"WillowGame.Behavior_CompareObject:Cmp -> Same id=0 delay=0.000000\",\"WillowGame.Behavior_CompareObject:Cmp -> Diff id=1 delay=0.000000\"]},{\"name\":\"Extra\",\"enabled_on_spawn\":false,\"condition\":\"\",\"variables\":[{\"type\":\"BVAR_InstanceData\",\"name\":\"None\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":0,\"object\":\"\"}],\"behavior_inputs\":[],\"graph\":[]}]}",
+        ),
+        (
+            "ZzCopy",
+            &["--behavior-dump", "Shared.ToyProvider"],
+            0,
+            "{\"provider\":\"Shared.ToyProvider\",\"values_decoded\":true,\"diagnostics\":[],\"sequences\":[{\"name\":\"Main\",\"enabled_on_spawn\":true,\"condition\":\"\",\"variables\":[{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":-5,\"object\":\"Things.DamageType.ToyFire\"},{\"type\":\"BVAR_Int\",\"name\":\"Count\",\"word\":7,\"object\":\"\"},{\"type\":\"BVAR_NamedVariable\",\"name\":\"Ref\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Float\",\"name\":\"None\",\"word\":1069547520,\"object\":\"\"}],\"behavior_inputs\":[{\"behavior\":\"Cmp\",\"property\":\"ObjectA\",\"link\":\"BVARLINK_Input\",\"variables\":[0]},{\"behavior\":\"Cmp\",\"property\":\"ObjectB\",\"link\":\"BVARLINK_Input\",\"variables\":[1]}],\"graph\":[\"event OnHit -> Cmp id=-1 delay=0.000000\",\"WillowGame.Behavior_CompareObject:Cmp -> Same id=0 delay=0.000000\",\"WillowGame.Behavior_CompareObject:Cmp -> Diff id=1 delay=0.000000\"]},{\"name\":\"Extra\",\"enabled_on_spawn\":false,\"condition\":\"\",\"variables\":[{\"type\":\"BVAR_InstanceData\",\"name\":\"None\",\"word\":0,\"object\":\"\"},{\"type\":\"BVAR_Object\",\"name\":\"None\",\"word\":0,\"object\":\"\"}],\"behavior_inputs\":[],\"graph\":[]}]}",
+        ),
+        (
+            "ZzCopy",
+            &[
+                "--behavior-run",
+                "Shared.ToyProvider",
+                "event:OnHit:DamageType=Things.DamageType.ToyFire",
+            ],
+            0,
+            "{\"provider\":\"Shared.ToyProvider\",\"values_decoded\":true,\"trace\":[\"OnHit -> Cmp\",\"OnHit -> Same\"],\"boundary\":[\"OnHit -> WillowGame.Behavior_ToySame:Same\"],\"errors\":[],\"diagnostics\":[]}",
+        ),
     ];
 
     struct Install(std::path::PathBuf);
@@ -602,6 +651,43 @@ mod tests {
                 "{package} {args:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_cooked_copy_is_read_from_the_given_file() {
+        let install = install_dir("copy");
+        // The store's refusal for the copy ends with the text the command matches (pins COPY_REFUSAL).
+        let mut vm = open(
+            &install.0.display().to_string(),
+            ParityMode::Off,
+            IdentityPolicy::FirstInScanOrder,
+        )
+        .map_err(|f| f.message)
+        .unwrap();
+        let name = PackageName::parse("ZzCopy").unwrap();
+        match find_provider(&mut vm, &name, "Shared.ToyProvider") {
+            Err(BehaviorError::Vm(VmError::Def(DefError::NotADefinition(m)))) => {
+                assert!(m.ends_with(COPY_REFUSAL), "{m}")
+            }
+            other => panic!("expected the copy refusal, got {other:?}"),
+        }
+        // The holder loads directly; the command reads the copy from its own file (both pinned in CASES).
+        let aa = PackageName::parse("AaCopy").unwrap();
+        assert!(find_provider(&mut vm, &aa, "Shared.ToyProvider").is_ok());
+        let (result, _) = run_case(
+            &install.0,
+            "ZzCopy",
+            &["--behavior-dump", "Shared.ToyProvider"],
+        );
+        assert_eq!(result, Ok(0));
+        // Any other refusal is the command's error, not retried: a class export is not a definition.
+        let (result, _) = run_case(
+            &install.0,
+            "WillowGame",
+            &["--behavior-dump", "Behavior_CompareObject"],
+        );
+        let message = result.unwrap_err();
+        assert!(!message.ends_with(COPY_REFUSAL), "{message}");
     }
 
     #[test]

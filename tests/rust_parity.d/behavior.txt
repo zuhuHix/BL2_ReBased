@@ -5,7 +5,7 @@
 # (lane W6-MISSION), and its toy packages declare object properties whose class reference is 0, which the C++ reads
 # and the Rust reflection refuses (`<property> names no class`, crates/ow-object/src/reflect.rs). A diff line needs a
 # tracked package, and none may be tracked. So the invented-package parity is pinned in Rust instead:
-# crates/ow-cli/src/cmd/behavior.rs `the_output_is_the_cxx_output_on_the_invented_install` runs 12 commands on invented
+# crates/ow-cli/src/cmd/behavior.rs `the_output_is_the_cxx_output_on_the_invented_install` runs 15 commands on invented
 # packages (the behavior_test.py providers with every object property naming a class) and compares stdout and exit
 # code with what the C++ binary printed for the same bytes. The same packages are the ow-behavior unit tests' fixtures
 # (crates/ow-behavior/src/kernel/fixtures/packages.rs). Locally, 112 commands over behavior_test.py's own builders in

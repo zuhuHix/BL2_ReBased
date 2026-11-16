@@ -21,6 +21,13 @@
 //!   provider's `boundary` and `boundary_calls` (not run, not an error, never counted as implemented); it selects the
 //!   given outputs (the ids the class's installed script selects before it needs the host's answer; usually none), so
 //!   otherwise only its default (-1) links are followed, and only when it supports the default output.
+//!
+//! **What a handler is not given yet** (contract note for wave 6). [`HandlerFn`] receives the VM, the provider, the
+//! behavior and the event, but neither the consumer (the object the provider is registered on, the script's
+//! `SelfObject`) nor the context object the behavior is being applied to (G2 runs a behavior once per context). The
+//! kernel does not hold either yet. When W6 needs them, the route is additive: a new field on the `#[non_exhaustive]`
+//! [`crate::kernel::RunInfo`] (read through `Provider::run_info`), or a `Provider` accessor, set by the kernel before
+//! each call. Changing the `HandlerFn` signature is not that route: it breaks every registered handler.
 
 use std::cell::RefCell;
 use std::rc::Rc;
