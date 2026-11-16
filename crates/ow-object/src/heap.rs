@@ -596,6 +596,11 @@ impl Heap {
     /// the objects created after it (from the end of the creation order), not over the whole heap, which made a load
     /// of many definitions quadratic. Everything else is [`Heap::free`]'s: the slot, its generation and the free list,
     /// so later handles are the ones `free` would give. Debug builds check that no older object refers to it.
+    ///
+    /// # Precondition
+    /// No object created before `o` refers to it. A release build does not check this: on a breach an older object
+    /// keeps a stale handle (its `get` answers `Stale`) where [`Heap::free`] would have cleared it to `None`. Only
+    /// the definition store calls this (review r1 of PR #371).
     pub fn free_newest(&mut self, o: ObjRef) -> Result<Object, HeapError> {
         self.get(o)?;
         let at = self

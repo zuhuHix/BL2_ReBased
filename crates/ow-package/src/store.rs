@@ -712,9 +712,9 @@ fn file_roots(files: &[PathBuf], fail_in_build: Option<&str>) -> Vec<Option<Fixe
             .collect();
         workers
             .into_iter()
-            // A worker that panicked read nothing usable: its files count as unknown roots, as a load failure does.
-            .zip(files.chunks(per_thread))
-            .flat_map(|(worker, chunk)| worker.join().unwrap_or_else(|_| vec![None; chunk.len()]))
+            // A worker that panicked is a reader bug: its panic is raised again here, as the single pass would have
+            // panicked (review r1 of PR #371; ow-defs' `parallel_map` does the same).
+            .flat_map(|worker| worker.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
             .collect()
     })
 }
