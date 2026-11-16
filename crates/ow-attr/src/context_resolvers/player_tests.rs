@@ -82,3 +82,47 @@ fn the_player_controller_rule_in_both_modes() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Review r1 of PR #368: a store with packages but without `WillowGame.upk` cannot say whether the source implements
+/// the interfaces (their package is missing), so the rule answers `NotYet` naming it, not None; only a store with no
+/// package at all has no implementer.
+#[test]
+fn a_store_without_the_interfaces_package_is_not_yet() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-attr-player-nowillow-{}-{mode:?}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut d = Declarations::with_imports(&["Class", "Function", "StructProperty"]);
+        let base_body = class_body(&mut d.p, &ClassBodySpec::new(0, 1, 2));
+        let base = d.p.add_export(0, "TestBase", base_body);
+        d.default_object(base, "TestBase");
+        d.real_class("TestPlain", base, base, 2, &[], None);
+        let package = d.build();
+        let defs = DefStore::from_synthetic(
+            &dir,
+            &[("Engine.upk", package.as_slice())],
+            IdentityPolicy::FirstInScanOrder,
+            mode,
+        )
+        .unwrap();
+        let mut s = scene();
+        s.w.defs = Some(defs);
+        let class =
+            s.w.defs
+                .as_mut()
+                .unwrap()
+                .class_id(&mut s.w.space, "Engine.TestPlain")
+                .unwrap();
+        let plain = s.w.obj(class, "TestPlain");
+        match player_controller_of(s.w.parts(), plain) {
+            Err(AttrError::NotYet(n)) => {
+                assert_eq!(n.missing, Missing::NotRead, "{mode:?}");
+                assert!(n.what.contains("WillowGame"), "{}", n.what);
+            }
+            other => panic!("{mode:?}: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

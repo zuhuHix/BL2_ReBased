@@ -10,8 +10,11 @@
 //! read of one). Whether an object is a package is its class: `Core.Package`.
 //!
 //! **Which chain.** An object read from a package (an export, or a reference resolved through the store) uses that
-//! package's export and import tables: the path the package gives, the topmost entry being the outermost object (the
-//! file's own package is not part of a cooked object's path, as the stock paths of the records show). An object made
+//! package's export and import tables, with `ow_defs::identity::full_path`'s rule for the file (review r1 of PR #368):
+//! an export whose outermost export is a `Package` (a package cooked into another file, as `Startup.upk` holds the
+//! `GD_*` packages) is named by its path in the file; any other export starts with the file's own package, the file
+//! stem (a map's `<Map>.TheWorld:PersistentLevel.<Actor>`); an import's chain already ends at its package. A class
+//! default object is `<class package>.Default__<class>`. An object made
 //! at run time uses the VM's outer links; a package with no outer is its name, any other object with no outer is
 //! `NotYet { NotRead }`, since in the game its path starts at the transient package or a level, which the VM does not
 //! model. A None object is `NotYet { NotRead }` too (the
@@ -70,6 +73,18 @@ fn package_chain(vm: &Vm, package: PackageId, index: i32) -> Result<Vec<Link>, V
         at = entry.outer;
     }
     links.reverse();
+    // The file's own package leads when the rule of ow-defs' full_path adds it (module documentation).
+    let full = ow_defs::identity::full_path(p, index).map_err(|e| VmError::Script {
+        function: "Object.PathName".into(),
+        message: e.to_string(),
+    })?;
+    let in_file = p.path_of(index).map_err(|e| VmError::Script {
+        function: "Object.PathName".into(),
+        message: e.to_string(),
+    })?;
+    if full != in_file {
+        links.insert(0, (p.name.clone(), true));
+    }
     Ok(links)
 }
 
@@ -85,6 +100,26 @@ fn chain(vm: &Vm, o: ObjRef, depth: usize) -> Result<Vec<Link>, VmError> {
     match object.origin {
         Origin::Export { package, index } | Origin::Resource { package, index } => {
             package_chain(vm, package, index)
+        }
+        // A class default object: `<class package>.Default__<class>` (its outer is the class's package).
+        Origin::Default { class } => {
+            let path = vm
+                .space
+                .classes
+                .get_layout(class)
+                .map(|l| l.path().as_str().to_string())
+                .unwrap_or_default();
+            match path.split_once('.') {
+                Some((package, name)) => Ok(vec![
+                    (package.to_string(), true),
+                    (format!("Default__{name}"), false),
+                ]),
+                None => Err(NotYet::not_read(
+                    format!("Object.PathName of the class default object of {path}: its class has no package"),
+                    RECORD,
+                )
+                .into()),
+            }
         }
         _ => {
             let is_package = vm
@@ -209,4 +244,81 @@ mod tests {
             ));
         }
     }
+
+    /// Review r1 of PR #368: paths from a package's tables, in an invented map-shaped file `Sanctuary_Toy.upk` (a world,
+    /// its level, an actor in it), plus a group package cooked into the same file with a definition and its
+    /// subobject, an import, and a class default object.
+    #[test]
+    fn package_paths_lead_with_the_file_stem_unless_the_top_export_is_a_package() {
+        use ow_defs::identity::IdentityPolicy;
+        use ow_package::testkit::{Export, PackageBuilder};
+
+        let mut b = PackageBuilder::new_empty();
+        let core = b.add_import("Core", "Package", 0, "Core");
+        let engine = b.add_import("Core", "Package", 0, "Engine");
+        let package_class = b.add_import("Core", "Class", core, "Package");
+        let world_class = b.add_import("Core", "Class", engine, "World");
+        let level_class = b.add_import("Core", "Class", engine, "Level");
+        let actor_class = b.add_import("Core", "Class", engine, "Actor");
+        let world = b.add_export(world_class, "TheWorld", vec![0u8; 4]);
+        let mut e = Export::new(level_class, "PersistentLevel", vec![0u8; 4]);
+        e.outer = world;
+        let level = b.add_export_with(e);
+        let mut e = Export::new(actor_class, "Actor_1", vec![0u8; 4]);
+        e.outer = level;
+        let actor = b.add_export_with(e);
+        let group = b.add_export(package_class, "GD_Toy", vec![0u8; 4]);
+        let mut e = Export::new(actor_class, "Def", vec![0u8; 4]);
+        e.outer = group;
+        let def = b.add_export_with(e);
+        let mut e = Export::new(actor_class, "Sub", vec![0u8; 4]);
+        e.outer = def;
+        let sub = b.add_export_with(e);
+        let bytes = b.build();
+
+        let dir = std::env::temp_dir().join(format!("ow-vm-path-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for mode in [ParityMode::Off, ParityMode::Reference] {
+            let defs = DefStore::from_synthetic(
+                &dir,
+                &[("Sanctuary_Toy.upk", bytes.as_slice())],
+                IdentityPolicy::FirstInScanOrder,
+                mode,
+            )
+            .unwrap();
+            let mut space = ObjectSpace::new();
+            let object = space.classes.define("Core.Object", None, vec![]).unwrap();
+            let thing = space.classes.define("Engine.Thing", Some(object), vec![]).unwrap();
+            let mut vm = Vm::new(space, defs, Rc::new(AttributeSystem::new_empty()), mode);
+            let name = ow_core::PackageName::parse("Sanctuary_Toy").unwrap();
+            let id = vm.defs.code_mut().1.load(&name).unwrap();
+            let at = |vm: &mut Vm, index: i32, origin: fn(PackageId, i32) -> Origin| {
+                vm.space.alloc(thing, "X", None, origin(id, index)).unwrap()
+            };
+            let export = |package, index| Origin::Export { package, index };
+            let resource = |package, index| Origin::Resource { package, index };
+            let a = at(&mut vm, actor, export);
+            assert_eq!(path_name(&vm, a).unwrap(), "Sanctuary_Toy.TheWorld:PersistentLevel.Actor_1", "{mode:?}");
+            let l = at(&mut vm, level, resource);
+            assert_eq!(path_name(&vm, l).unwrap(), "Sanctuary_Toy.TheWorld:PersistentLevel", "{mode:?}");
+            let w = at(&mut vm, world, export);
+            assert_eq!(path_name(&vm, w).unwrap(), "Sanctuary_Toy.TheWorld", "{mode:?}");
+            // A package cooked into the file: named by its path in the file; its definition's subobject takes ':'.
+            let d = at(&mut vm, def, export);
+            assert_eq!(path_name(&vm, d).unwrap(), "GD_Toy.Def", "{mode:?}");
+            let s = at(&mut vm, sub, export);
+            assert_eq!(path_name(&vm, s).unwrap(), "GD_Toy.Def:Sub", "{mode:?}");
+            // An import's chain ends at its own package.
+            let i = at(&mut vm, actor_class, resource);
+            assert_eq!(path_name(&vm, i).unwrap(), "Engine.Actor", "{mode:?}");
+            // A class default object (review r1, L2).
+            let cdo = vm
+                .space
+                .alloc(thing, "Default__Thing", None, Origin::Default { class: thing })
+                .unwrap();
+            assert_eq!(path_name(&vm, cdo).unwrap(), "Engine.Default__Thing", "{mode:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
