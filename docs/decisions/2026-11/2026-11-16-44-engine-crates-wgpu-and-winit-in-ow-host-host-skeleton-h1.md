@@ -15,7 +15,10 @@ buffers), and each would need its own entry and the maintainer's yes.
 - `THIRD_PARTY.md`: a new section, "Engine crates: wgpu and winit (maintainer approval 2026-11-16)", and the Rust
   toolchain section's "Crates" and "Engine candidates" lines now point at it.
 - `crates/ow-host/Cargo.toml`: `wgpu = "=30.0.1"` and `winit = "=0.30.13"`, default features (no other feature was
-  needed). Engine crates live only in `ow-host` (architecture section 2.2). The workspace `Cargo.toml` is unchanged.
+  needed). Engine crates live only in `ow-host` (architecture section 2.2).
+- `Cargo.toml` (workspace): its header comment only (lines 4-6). It said "No third-party crates", which these two
+  crates make false; it now says the only ones are wgpu and winit, in `ow-host` alone, and that any other still
+  needs its `THIRD_PARTY.md` entry first. Members, resolver, package fields and lints are unchanged.
 - `Cargo.lock`: 254 third-party packages added, all from crates.io, every one at the version the benchmark's own lock
   holds (compared name by name).
 - `tests/crate_edges_test.py`: allows these two crates only in `ow-host`'s `[dependencies]`, pinned to exactly the
@@ -24,16 +27,20 @@ buffers), and each would need its own entry and the maintainer's yes.
   that comes from anywhere but crates.io. Six new cases (19 tests, 13 before).
 - `crates/ow-host/src/`: the host skeleton. `args.rs` (command line), `app.rs` (a winit event loop on the main thread,
   a window titled "BL2_ReBased", one simulation step and one frame per redraw, resize and close handled, a 10 ms
-  back-off while no frame can be drawn), `gpu.rs` (instance, adapter, device, surface; a frame that clears and
+  back-off while no frame can be drawn, and a `--frames` deadline that wakes the loop by itself, so a minimised
+  window that gets no redraw cannot hang the run), `gpu.rs` (instance, adapter, device, surface; a frame that clears and
   presents; the uncaptured-error handler and device-lost callback replaced by ones that record the first fault, so a
   device or surface error ends the run with a message instead of a panic), `sim.rs` (the host boundary of D18 and
   architecture 3.9: `Send` message types, `HostCommand` in and `Snapshot` out, behind a `Simulation` trait, and a
   `StubWorld` that counts steps; the simulation runs on the event-loop thread for now), `executor.rs` (the std-only
-  `block_on`), `stats.rs` (frame-time median, printed through `ow_core::fmt`).
+  `block_on`), `stats.rs` (frame times in fixed memory: a running count, minimum and maximum, and at most 100,000
+  intervals kept for the median, none in a `--window` run; printed through `ow_core::fmt`).
 
 **Commands.** `ow-host --game <install>` checks the install and stops, as before (no GPU needed). `--window` adds the
 window until it is closed; `--frames N` renders N presented frames and exits 0, printing the adapter and frame times;
-`--no-vsync` asks for `AutoNoVsync` instead of `AutoVsync`. Every window run needs `--game` (AGENTS.md rule 11), even
+`--no-vsync` asks for `AutoNoVsync` instead of `AutoVsync`. A `--frames N` run fails if its frames are not
+presented within 60 s plus 1 s per frame (360 s for 300; the slowest frames seen, 252 ms, fit four times over);
+`--time-limit S` replaces that limit. Every window run needs `--game` (AGENTS.md rule 11), even
 though nothing is read from the install yet. `ow-host --headless-probe` creates an instance and adapter with no window
 and prints the adapter's name, backend, type and driver; it exits 4 when no adapter exists, so CI can tell "no GPU"
 from a failure. Exit codes: 0 done, 1 refused or failed, 2 bad command line, 4 probe found no adapter.
@@ -46,8 +53,8 @@ option, and the permissive side is taken. Transitive licences are as each crate'
 licence files were not read.
 
 **Verified (zuhu desktop, i9-9900K, RTX 4070, Rust 1.96.0).**
-- `cargo build --workspace --locked` with no warnings; `cargo test --workspace --locked` passes, `ow-host` 18 unit
-  tests among them; `python tests/crate_edges_test.py` 19 tests OK.
+- `cargo build --workspace --locked` with no warnings; `cargo test --workspace --locked` passes, `ow-host` 22 unit
+  tests among them (18 before review r1); `python tests/crate_edges_test.py` 19 tests OK.
 - `ow-host --headless-probe`: "NVIDIA GeForce RTX 4070", backend Vulkan, DiscreteGpu, driver NVIDIA 621.01, exit 0.
 - `ow-host --game <install> --frames 300`, release build, under the machine run lock: window opened, 300 frames
   cleared and presented, 0 skipped, exit 0. With `--no-vsync`: median 0.171 ms over 299 intervals (min 0.164, max
@@ -62,4 +69,5 @@ provoked. Nothing was run on pc-hummer, the Linux laptop or CI. Whether CI's Win
 probe is not known. The host draws nothing from the game and the stub world is no `World`: H2 wires scene loading.
 
 **Sensitive files touched:** `Cargo.lock` and `crates/ow-host/Cargo.toml` (the lane brief granted the edit, which
-the files' headers otherwise forbid). The workspace `Cargo.toml` and `rust-toolchain.toml` are unchanged.
+the files' headers otherwise forbid), and the workspace `Cargo.toml`, whose header comment changed and nothing else
+(see "What changed"). `rust-toolchain.toml` is unchanged.

@@ -6,6 +6,8 @@
 //! - `ow-host --game <install> --window`: checks the install, then opens the window until it is closed.
 //! - `ow-host --game <install> --frames N`: the same, but exits after N presented frames and prints frame times.
 //! - `--no-vsync` (with `--window` or `--frames`): asks for a present mode without vsync, for timing runs.
+//! - `--time-limit S` (with `--frames`): fail the run if its frames are not presented within S seconds, instead of
+//!   the default limit of `app::frames_time_limit` (60 s plus 1 s per frame).
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!
@@ -15,7 +17,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N] [--no-vsync]\n       \
+pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          ow-host --headless-probe";
 
 /// What to run.
@@ -24,8 +26,9 @@ pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [-
 pub enum Command {
     /// Check the install and stop.
     Check { game: PathBuf },
-    /// Check the install, then run the window: until closed (`frames: None`) or for that many presented frames.
-    Window { game: PathBuf, frames: Option<u32>, vsync: bool },
+    /// Check the install, then run the window: until closed (`frames: None`) or for that many presented frames,
+    /// within `time_limit` seconds when given.
+    Window { game: PathBuf, frames: Option<u32>, vsync: bool, time_limit: Option<u32> },
     /// Instance and adapter only, no window.
     HeadlessProbe,
 }
@@ -35,6 +38,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut game: Option<PathBuf> = None;
     let mut window = false;
     let mut frames: Option<u32> = None;
+    let mut time_limit: Option<u32> = None;
     let mut no_vsync = false;
     let mut probe = false;
     let mut it = args.iter();
@@ -49,15 +53,16 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--game given twice".into());
                 }
             }
-            "--frames" => {
-                let text = it.next().ok_or("--frames needs a count")?;
+            "--frames" | "--time-limit" => {
+                let text = it.next().ok_or_else(|| format!("{flag} needs a number"))?;
                 let count = text
                     .to_str()
                     .and_then(|t| t.parse::<u32>().ok())
                     .filter(|&n| n > 0)
-                    .ok_or_else(|| format!("--frames needs a positive whole number, not {}", text.to_string_lossy()))?;
-                if frames.replace(count).is_some() {
-                    return Err("--frames given twice".into());
+                    .ok_or_else(|| format!("{flag} needs a positive whole number, not {}", text.to_string_lossy()))?;
+                let slot = if flag == "--frames" { &mut frames } else { &mut time_limit };
+                if slot.replace(count).is_some() {
+                    return Err(format!("{flag} given twice"));
                 }
             }
             "--window" => window = set_once(window, "--window")?,
@@ -67,7 +72,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         }
     }
     if probe {
-        if game.is_some() || window || frames.is_some() || no_vsync {
+        if game.is_some() || window || frames.is_some() || time_limit.is_some() || no_vsync {
             return Err("--headless-probe takes no other argument".into());
         }
         return Ok(Command::HeadlessProbe);
@@ -76,8 +81,11 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     if window && frames.is_some() {
         return Err("--window and --frames exclude each other".into());
     }
+    if time_limit.is_some() && frames.is_none() {
+        return Err("--time-limit needs --frames".into());
+    }
     if window || frames.is_some() {
-        return Ok(Command::Window { game, frames, vsync: !no_vsync });
+        return Ok(Command::Window { game, frames, vsync: !no_vsync, time_limit });
     }
     if no_vsync {
         return Err("--no-vsync needs --window or --frames".into());
@@ -104,10 +112,17 @@ mod tests {
 
     #[test]
     fn window_and_frames() {
-        assert_eq!(p(&["--game", "X", "--window"]), Ok(Command::Window { game: "X".into(), frames: None, vsync: true }));
+        assert_eq!(
+            p(&["--game", "X", "--window"]),
+            Ok(Command::Window { game: "X".into(), frames: None, vsync: true, time_limit: None })
+        );
         assert_eq!(
             p(&["--frames", "300", "--game", "X", "--no-vsync"]),
-            Ok(Command::Window { game: "X".into(), frames: Some(300), vsync: false })
+            Ok(Command::Window { game: "X".into(), frames: Some(300), vsync: false, time_limit: None })
+        );
+        assert_eq!(
+            p(&["--game", "X", "--frames", "300", "--time-limit", "15"]),
+            Ok(Command::Window { game: "X".into(), frames: Some(300), vsync: true, time_limit: Some(15) })
         );
     }
 
@@ -132,6 +147,10 @@ mod tests {
             &["--game", "X", "--game", "Y"],
             &["--game", "X", "--window", "--window"],
             &["--game", "X", "--fast"],
+            &["--game", "X", "--window", "--time-limit", "5"],
+            &["--game", "X", "--frames", "5", "--time-limit", "0"],
+            &["--game", "X", "--frames", "5", "--time-limit", "5", "--time-limit", "6"],
+            &["--headless-probe", "--time-limit", "5"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }

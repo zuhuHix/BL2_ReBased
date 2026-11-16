@@ -304,7 +304,10 @@ for wgpu's async calls, buffer bytes packed by hand, its own small matrix code),
 - **Transitive closure** (`Cargo.lock` after the change, read with `cargo metadata --format-version 1 --locked` on
   2026-11-16): 254 third-party packages, all from the crates.io registry (none from git or a path), at the same
   versions as the benchmark's lock. The count covers every target platform; on the Windows desktop, 87 of them are
-  compiled. Licence expressions as each crate's Cargo `license` field gives them (only wgpu's and winit's licence
+  compiled. It also counts 17 packages that cargo locks but does not build with the default features, on any target
+  (`cargo tree --target all -e normal,build` reaches 237): serde, serde_core and serde_derive (optional
+  dependencies of codespan-reporting and smol_str), 12 optional `objc2-*` crates, dispatch2 and termcolor. None of
+  them is a direct dependency, and serde is not part of the approval. Licence expressions as each crate's Cargo `license` field gives them (only wgpu's and winit's licence
   files were read): `MIT OR Apache-2.0` 124, `MIT` 59, `Apache-2.0 OR MIT` 14, `Apache-2.0` 10, `MIT/Apache-2.0` 9,
   `Zlib OR Apache-2.0 OR MIT` 8, `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` 6, `MIT OR Apache-2.0 OR Zlib`
   4, `Unlicense OR MIT` 3, `BSD-2-Clause OR Apache-2.0 OR MIT` 2, `BSD-3-Clause` 2, `BSD-3-Clause OR MIT OR
