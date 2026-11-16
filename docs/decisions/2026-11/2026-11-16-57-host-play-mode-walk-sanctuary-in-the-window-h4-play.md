@@ -72,7 +72,9 @@ pawn at the same bits on every step for the same inputs.
   - A scripted window run ends on the frame its script finishes on. If that frame cannot be presented (a minimised
     or hidden window), the run ends after 100 frames in a row that could not be presented (`app::FINISHED_SKIP_LIMIT`,
     about a second), without its end screenshot, instead of waiting for the window to come back. The start screenshot
-    is taken on presented frame 30, or on the last frame of a script that finishes sooner (review r1).
+    is taken on presented frame 30, or on the last frame of a script that finishes sooner (review r1). A minimised
+    window that gets no redraw at all never counts a skip, so that run still waits for the window; whether Windows
+    redraws a minimised window here is UNVERIFIED (not tried in a real window; review r2).
 - **Verified (automated, synthetic geometry).** Twelve `play` tests, one `app` test and one argument test (with the
   `--frames 30` nit among its cases):
   - one script through `walk::run` and through the play simulation at three frame-time patterns (uneven, steady 60
