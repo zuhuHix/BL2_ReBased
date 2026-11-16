@@ -63,7 +63,7 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
     runs E1, E2, E3, E4). A drained event that would wait again names a provider held outside every raise and is an
     error at once. **The cost of deferring:** a deferred event runs on the provider's state after the running event,
     so an event a sequence's disabled event raises on its own provider finds that sequence disabled (the C++ runs it
-    before the bit is cleared). Tests: `run::tests::a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the_class_one`,
+    before the bit is cleared). More generally, a deferred event's lines and native calls come after every behavior the raising event still runs, where the C++ runs them in the middle: a death sequence `B -> B2` whose B broadcasts `Custom` prints B, C, K, B2 in the C++ and B, B2, C, K here (review r3 of PR #335; no test pins it yet, and the installed-game comparison will show it where a death definition has a behavior after a broadcast). Tests: `run::tests::a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the_class_one`,
     `events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it`,
     `the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it` and
     `a_raise_on_a_provider_held_outside_every_raise_fails_at_once_naming_the_hold`.

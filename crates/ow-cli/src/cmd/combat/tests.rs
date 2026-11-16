@@ -4,7 +4,7 @@
 //!
 //! **Where the expected digests come from.** Each is the FNV-1a 64 of the C++ binary's stdout line (its newline read as `\n`) for that step list on
 //! the same package bytes (`cargo test -p ow-combat -- --ignored write_fixture` wrote them; `build/Release/
-//! ow-package.exe <dir>/ToyPawns.upk --combat-run --cooked <dir> <steps>` ran on them, 2026-11-16, pc-hummer), after
+//! ow-package.exe <dir>/ToyPawns.upk --combat-run --cooked <dir> <steps>` ran on them, 2026-11-16, pc-hummer; re-run on the r2 bytes at 881ea3c, unchanged), after
 //! [`normalize`]: the two timing fields removed (`milliseconds`, `elapsed_ms`: each binary's own clock) and every
 //! `"SetHealth <value>"` event line removed. Those lines are the C++ pool half's log, which the Rust `SetHealth`
 //! (W5-POOLS) does not write (`ow_combat::run`, module documentation). Nothing else is changed: the rest of each
