@@ -150,14 +150,14 @@ fn g9(x: f32) -> String {
 }
 
 /// Runs the parts in order; a part that cannot run writes why and the next part runs.
-fn run_all(root: PathBuf) -> String {
+fn run_all(root: PathBuf, mode: ParityMode) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "# AI-assisted (Claude Code). W6-SKILLS installed-game run for Maya, local only. ParityMode::Off."
+        "# AI-assisted (Claude Code). W6-SKILLS installed-game run for Maya, local only. {mode:?}."
     );
     let cooked = root.join("WillowGame").join("CookedPCConsole");
-    let defs = match DefStore::open(cooked, IdentityPolicy::FirstInScanOrder, ParityMode::Off) {
+    let defs = match DefStore::open(cooked, IdentityPolicy::FirstInScanOrder, mode) {
         Ok(d) => d,
         Err(e) => {
             let _ = writeln!(out, "store: {e}");
@@ -168,7 +168,7 @@ fn run_all(root: PathBuf) -> String {
         ObjectSpace::new(),
         defs,
         Rc::new(AttributeSystem::standard().unwrap()),
-        ParityMode::Off,
+        mode,
     );
     let packs: [&dyn NativePack; 3] = [
         &natives_core::Pack,
@@ -202,6 +202,7 @@ fn run_all(root: PathBuf) -> String {
         ("skills", part_skills),
         ("infobox", part_infobox),
         ("duration", part_duration),
+        ("chains", part_chains),
         ("schedule", part_schedule),
         ("lift", part_lift),
         ("cast", part_cast),
@@ -424,6 +425,47 @@ impl NumberFlagsFloat {
             ..Default::default()
         }
     }
+}
+
+/// The duration and cooldown chains through `ow-attr` (lane FIX-DESIGNER-RESOLVER, decision 2026-11-16-62): the
+/// designer attribute `Att_Phaselock_Duration`, the archetype's `LockDurationFormula` and the cooldown pool's
+/// `BaseMaxValue`, from the player's pawn and from its controller. Each answer, or where it stops, is written.
+fn part_chains(vm: &mut Vm, out: &mut String) -> Result<(), String> {
+    let attr = find(vm, "GD_Siren_Skills.Misc.Att_Phaselock_Duration")?;
+    let archetype = find(vm, "GD_Siren_Skills.Phaselock.ActionSkill_Phaselock")?;
+    let pool = find(vm, "D_Resourcepools.PlayerPools.ActiveSkillCooldownPool_Siren")?;
+    let controller = new_of(vm, "WillowGame.WillowPlayerController")?;
+    let pawn = new_of(vm, "WillowGame.WillowPlayerPawn")?;
+    set(vm, pawn, "Controller", Value::Object(Some(controller)))?;
+    set(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+    let formula = get(vm, archetype, "LockDurationFormula")?;
+    let cooldown = get(vm, pool, "BaseMaxValue")?;
+    let attrs = vm.attrs.clone();
+    for (label, source) in [("pawn", pawn), ("controller", controller)] {
+        let value = attrs.value_of(attr, Some(source), None, &mut EvalCx::new(vm));
+        let _ = writeln!(
+            out,
+            "{label}: Att_Phaselock_Duration = {}",
+            match value {
+                Ok(Some(v)) => g9(v.value),
+                Ok(None) => "no context (None)".to_string(),
+                Err(e) => format!("stops: {e}"),
+            }
+        );
+        for (name, data) in [("LockDurationFormula", &formula), ("cooldown BaseMaxValue", &cooldown)] {
+            let read = ow_attr::eval::init_data(&vm.space, data)
+                .and_then(|d| attrs.evaluate_init(&d, Some(source), None, &mut EvalCx::new(vm)));
+            let _ = writeln!(
+                out,
+                "{label}: {name} = {}",
+                match read {
+                    Ok(v) => g9(v),
+                    Err(e) => format!("stops: {e}"),
+                }
+            );
+        }
+    }
+    Ok(())
 }
 
 fn part_duration(vm: &mut Vm, out: &mut String) -> Result<(), String> {
@@ -715,9 +757,16 @@ fn installed_game_maya_skills_duration_and_lift() {
         eprintln!("OW_BL2_ROOT is not set: skipped");
         return;
     };
-    let text = ow_vm::interp::on_vm_stack(move || run_all(PathBuf::from(root))).unwrap();
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/w6-skills");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("maya_installed.txt"), &text).unwrap();
-    println!("{text}");
+    // Off first (the file name W6-SKILLS wrote), then Reference (lane FIX-DESIGNER-RESOLVER).
+    for (mode, file) in [
+        (ParityMode::Off, "maya_installed.txt"),
+        (ParityMode::Reference, "maya_installed_reference.txt"),
+    ] {
+        let root = PathBuf::from(&root);
+        let text = ow_vm::interp::on_vm_stack(move || run_all(root, mode)).unwrap();
+        std::fs::write(dir.join(file), &text).unwrap();
+        println!("{text}");
+    }
 }

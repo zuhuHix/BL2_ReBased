@@ -37,6 +37,10 @@ struct World {
     /// The engine's answers; a query not in the table answers `Ok(None)` (the lookup ran and found nothing).
     queries: Vec<((EngineQuery, ObjRef), ObjRef)>,
     slots: GlobalSlots,
+    /// A world that runs script: the answers of `script_context` by (resolver, source), and the calls it got
+    /// (resolver, attribute, source). With no entry, the trait's default (`NotYet { LayerAbsent("ow-vm") }`).
+    scripts: Vec<((ObjRef, ObjRef), Option<ObjRef>)>,
+    script_calls: Vec<(ObjRef, ObjRef, Option<ObjRef>)>,
 }
 
 impl AttrWorld for World {
@@ -69,6 +73,22 @@ impl AttrWorld for World {
     }
     fn rng(&mut self, _s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
         Err(NotYet::layer_absent("a random source", "ow-world", "test world").into())
+    }
+    fn script_context(
+        &mut self,
+        resolver: ObjRef,
+        attribute: ObjRef,
+        source: Option<ObjRef>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        self.script_calls.push((resolver, attribute, source));
+        match self
+            .scripts
+            .iter()
+            .find(|(k, _)| Some(k.0) == Some(resolver) && Some(k.1) == source)
+        {
+            Some((_, answer)) => Ok(*answer),
+            None => Err(NotYet::layer_absent("script", "ow-vm", "test world").into()),
+        }
     }
 }
 
@@ -204,6 +224,8 @@ impl World {
             game_info: Some(game_info),
             queries: Vec::new(),
             slots: GlobalSlots::default(),
+            scripts: Vec::new(),
+            script_calls: Vec::new(),
         };
         (w, classes)
     }
@@ -837,9 +859,10 @@ fn the_unported_resolvers_say_what_they_wait_for() {
             "WillowGame.InventoryAttributeContextResolver",
             Missing::NotRead,
         ),
+        // A script class (SCRIPTED): this world runs no script.
         (
             "Engine.ProjectileAttributeContextResolver",
-            Missing::NotRead,
+            Missing::LayerAbsent("ow-vm"),
         ),
     ];
     let player = s.player;
@@ -850,10 +873,11 @@ fn the_unported_resolvers_say_what_they_wait_for() {
             expected,
             "{path}"
         );
-        // A None source ends a chain without asking for what is missing, except for an unread class.
+        // A None source ends a chain without asking for what is missing, except for a script class, whose script
+        // decides what None gives.
         let none = walk(&s.sys, &[Some(r)], None, &mut s.w);
         if path.contains("Projectile") {
-            assert_eq!(missing(none), Missing::NotRead);
+            assert_eq!(missing(none), Missing::LayerAbsent("ow-vm"));
         } else {
             assert_eq!(none, Ok(None), "{path}");
             assert_eq!(
@@ -900,6 +924,7 @@ fn standard_registers_every_recorded_class_once_and_no_guessed_path() {
         .iter()
         .copied()
         .chain(UNREAD.iter().map(|&(path, _)| path))
+        .chain(SCRIPTED.iter().copied())
     {
         let r = if path == NO_CONTEXT {
             s.no_context
@@ -1139,9 +1164,9 @@ fn where_the_port_goes_past_the_cpp_subset() {
 
 /// `src/progression.cpp:85-87` treats `GameInfoAttributeContextResolver` and `DesignerAttributeContextResolver` as
 /// always resolving and keeps the object the chain held before them (the loot's artifact weights read a designer
-/// attribute that way). The port answers NATIVE_ATTRIBUTES.md section 5: GameInfo gives the game info, and Designer
-/// is script (`NotYet { LayerAbsent("ow-vm") }`). An expected difference, recorded as candidate stand-in rows in
-/// decision 2026-11-15-12 (owners W4-ROLL and W6-LOOT); both readings are UNVERIFIED.
+/// attribute that way). GameInfo: the port answers NATIVE_ATTRIBUTES.md section 5 (the game info) in both modes, a
+/// difference recorded in decision 2026-11-15-12. Designer: since lane FIX-DESIGNER-RESOLVER (decision 2026-11-16-62)
+/// `ParityMode::Reference` keeps the previous object as the C++ does, and Off runs the class script.
 #[test]
 fn where_the_cpp_keeps_the_previous_object_for_game_info_and_designer() {
     let mut s = scene();
@@ -1170,9 +1195,76 @@ fn where_the_cpp_keeps_the_previous_object_for_game_info_and_designer() {
     );
     assert_eq!(got, Ok(game_info));
     assert_ne!(got, Ok(cpp_answer));
-    // [PRI, Designer] from the player controller: the C++ keeps the replication info; the port waits for the VM.
+    // [PRI, Designer], Off (no store): the script, which this world does not run.
     let got = walk(&s.sys, &[Some(pri_r), Some(designer_r)], Some(pc), &mut s.w);
     assert_eq!(missing(got), Missing::LayerAbsent("ow-vm"));
+    // Reference: the C++ answer, the replication info kept; no script runs.
+    s.w.defs = Some(reference_store());
+    s.w.script_calls.clear();
+    let got = walk(&s.sys, &[Some(pri_r), Some(designer_r)], Some(pc), &mut s.w);
+    assert_eq!(got, Ok(cpp_answer));
+    assert!(s.w.script_calls.is_empty());
+}
+
+/// An empty store in `ParityMode::Reference` (the world's mode is its store's).
+fn reference_store() -> DefStore {
+    DefStore::new(
+        ow_package::store::PackageStore::new_empty(),
+        ow_defs::identity::IdentityPolicy::FirstInScanOrder,
+        ow_core::ParityMode::Reference,
+    )
+}
+
+/// The designer resolvers run their class script through the world (`AttrWorld::script_context`): the resolver, the
+/// definition and the step's source go in, its answer is the step's (an object, or None which ends the chain). The
+/// plain form in Reference is the C++ stand-in instead; the ByName form has no C++ reading and runs the script in both
+/// modes. A None source is None without a call, in both modes.
+#[test]
+fn the_designer_resolvers_run_their_script_through_the_world() {
+    for reference in [false, true] {
+        let mut s = scene();
+        if reference {
+            s.w.defs = Some(reference_store());
+        }
+        let object = s.c.object;
+        let pri_r = s.w.resolver(
+            object,
+            "WillowGame.PlayerReplicationInfoAttributeContextResolver",
+            vec![],
+        );
+        let plain = s.w.resolver(object, "WillowGame.DesignerAttributeContextResolver", vec![]);
+        let by_name =
+            s.w.resolver(object, "WillowGame.DesignerAttributeContextResolverByName", vec![]);
+        let (pc, pri) = (s.pc, s.pri);
+        let designer = s.w.obj(object, "InstancedDesignerAttribute_0");
+        s.w.scripts.push(((plain, pri), Some(designer)));
+        s.w.scripts.push(((by_name, pri), Some(designer)));
+        let attr = s.w.attr;
+
+        let got = walk(&s.sys, &[Some(pri_r), Some(plain)], Some(pc), &mut s.w);
+        if reference {
+            assert_eq!(got, Ok(Some(pri)), "the C++ keeps the previous object");
+            assert!(s.w.script_calls.is_empty());
+        } else {
+            assert_eq!(got, Ok(Some(designer)));
+            assert_eq!(s.w.script_calls, [(plain, attr, Some(pri))]);
+        }
+        s.w.script_calls.clear();
+        let got = walk(&s.sys, &[Some(pri_r), Some(by_name)], Some(pc), &mut s.w);
+        assert_eq!(got, Ok(Some(designer)), "reference={reference}");
+        assert_eq!(s.w.script_calls, [(by_name, attr, Some(pri))]);
+
+        // The script answers None: the chain ends there.
+        s.w.scripts.push(((by_name, pc), None));
+        s.w.script_calls.clear();
+        assert_eq!(walk(&s.sys, &[Some(by_name)], Some(pc), &mut s.w), Ok(None));
+        // A None source: None, no call.
+        s.w.script_calls.clear();
+        for r in [plain, by_name] {
+            assert_eq!(walk(&s.sys, &[Some(r)], None, &mut s.w), Ok(None));
+        }
+        assert!(s.w.script_calls.is_empty());
+    }
 }
 
 #[test]
@@ -1188,20 +1280,35 @@ fn an_unread_class_names_where_it_is_known_from() {
             other => panic!("{path}: expected NotYet, got {other:?}"),
         }
     }
-    let census: Vec<&str> = UNREAD
-        .iter()
-        .filter(|(_, record)| record.starts_with("research/"))
-        .map(|&(path, _)| path)
-        .collect();
-    assert_eq!(
-        census,
-        [
-            "Engine.OwnerAttributeContextResolver",
-            "Engine.GameReplicationInfoAttributeContextResolver",
-            "GearboxFramework.AIComponentAttributeContextResolver",
-            "WillowGame.InventoryDefinitionAttributeContextResolver",
-        ]
-    );
+    assert_eq!(UNREAD.len(), 1, "the other nine run their script (SCRIPTED)");
+}
+
+/// The classes whose `GetAttributeContext` is script ([`SCRIPTED`]) run it through the world in both modes, a None
+/// source included; a world that runs no script answers `NotYet { LayerAbsent("ow-vm") }`.
+#[test]
+fn a_scripted_class_runs_its_script_through_the_world_in_both_modes() {
+    for reference in [false, true] {
+        let mut s = scene();
+        if reference {
+            s.w.defs = Some(reference_store());
+        }
+        let (player, pc) = (s.player, s.pc);
+        let attr = s.w.attr;
+        for &path in SCRIPTED {
+            let r = registered(&mut s, path, vec![]);
+            s.w.scripts.push(((r, player), Some(pc)));
+            s.w.script_calls.clear();
+            assert_eq!(walk(&s.sys, &[Some(r)], Some(player), &mut s.w), Ok(Some(pc)), "{path}");
+            assert_eq!(s.w.script_calls, [(r, attr, Some(player))], "{path}");
+            // No answer in the table: the world's default, the script not run.
+            let other = s.pc;
+            assert_eq!(
+                missing(walk(&s.sys, &[Some(r)], Some(other), &mut s.w)),
+                Missing::LayerAbsent("ow-vm"),
+                "{path}"
+            );
+        }
+    }
 }
 
 /// Each class whose package was read from the installed packages (decision 2026-11-15-22) is reached through

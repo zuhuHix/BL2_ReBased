@@ -33,6 +33,8 @@ mod targetable;
 mod weapon_type;
 
 #[cfg(test)]
+mod designer_tests;
+#[cfg(test)]
 mod noun_tests;
 #[cfg(test)]
 mod playthrough_count_tests;

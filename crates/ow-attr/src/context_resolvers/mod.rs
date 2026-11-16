@@ -34,7 +34,7 @@ pub use actors::{
 };
 pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor};
 pub use inventory::{EquippedInventory, Inventory};
-pub use pending::{Designer, Skill, StatusEffectChance, Unread};
+pub use pending::{Designer, Script, Skill, StatusEffectChance, Unread};
 pub use pools::{ResourcePool, WeaponResourcePool};
 
 use ow_core::NotYet;
@@ -58,12 +58,8 @@ pub const READ_FROM_PACKAGES: &[&str] = &[
     "WillowGame.SkillAttributeContextResolver",
 ];
 
-/// Where an unread class is known from: the notes' list of classes not read.
-const NOT_READ_YET: &str = "NATIVE_ATTRIBUTES.md \"Not read yet\"";
 /// Where an unread class is known from: named in the notes' section 5 table, body not read in detail.
 const SECTION_5_UNREAD: &str = "NATIVE_ATTRIBUTES.md section 5 (named, not read in detail)";
-/// Where an unread class is known from: the native-function census only, not the notes.
-const CENSUS_ONLY: &str = "research/native_by_class.json (not in the notes)";
 
 /// Context resolver classes whose rule is not read, each under the path `research/native_by_class.json` records and
 /// with the place it is known from. Each is registered as [`Unread`], so a chain naming one says which class is
@@ -72,38 +68,26 @@ const CENSUS_ONLY: &str = "research/native_by_class.json (not in the notes)";
 /// Not listed (an unregistered class answers the registry's `NotYet { NotRead }` all the same): the context resolver
 /// classes the code packages export that no note names, `WillowGame.InstanceDataContextResolver` among them (the
 /// packages show it is a direct subclass of `Engine.AttributeContextResolver`; decision 2026-11-15-22 lists the rest).
-pub const UNREAD: &[(&str, &str)] = &[
-    ("Engine.ProjectileAttributeContextResolver", NOT_READ_YET),
-    ("Engine.VehicleAttributeContextResolver", NOT_READ_YET),
-    (
-        "GearboxFramework.PopulationMasterAttributeContextResolver",
-        NOT_READ_YET,
-    ),
-    (
-        "WillowGame.WillowInventoryManagerAttributeContextResolver",
-        NOT_READ_YET,
-    ),
-    (
-        "WillowGame.WillowInteractiveObjectAttributeContextResolver",
-        NOT_READ_YET,
-    ),
-    (
-        "WillowGame.CurrentProficiencySkillAttributeContextResolver",
-        SECTION_5_UNREAD,
-    ),
-    ("Engine.OwnerAttributeContextResolver", CENSUS_ONLY),
-    (
-        "Engine.GameReplicationInfoAttributeContextResolver",
-        CENSUS_ONLY,
-    ),
-    (
-        "GearboxFramework.AIComponentAttributeContextResolver",
-        CENSUS_ONLY,
-    ),
-    (
-        "WillowGame.InventoryDefinitionAttributeContextResolver",
-        CENSUS_ONLY,
-    ),
+pub const UNREAD: &[(&str, &str)] = &[(
+    "WillowGame.CurrentProficiencySkillAttributeContextResolver",
+    SECTION_5_UNREAD,
+)];
+
+/// Context resolver classes whose `GetAttributeContext` is a script function in the installed code packages (each
+/// decoded with `research/script_disasm.py`, flags Defined and Public, not native; lane FIX-DESIGNER-RESOLVER,
+/// decision 2026-11-16-62). Before, they were [`UNREAD`] (known from the notes' "Not read yet" list or the native
+/// census only). Each is registered as [`Script`], which runs that script through the world. The script is not
+/// restated here: what it reaches answers as the VM answers any call.
+pub const SCRIPTED: &[&str] = &[
+    "Engine.ProjectileAttributeContextResolver",
+    "Engine.VehicleAttributeContextResolver",
+    "GearboxFramework.PopulationMasterAttributeContextResolver",
+    "WillowGame.WillowInventoryManagerAttributeContextResolver",
+    "WillowGame.WillowInteractiveObjectAttributeContextResolver",
+    "Engine.OwnerAttributeContextResolver",
+    "Engine.GameReplicationInfoAttributeContextResolver",
+    "GearboxFramework.AIComponentAttributeContextResolver",
+    "WillowGame.InventoryDefinitionAttributeContextResolver",
 ];
 
 /// Registers every context resolver class this module implements under its recorded path ([`READ_FROM_PACKAGES`]
@@ -161,6 +145,9 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         )?;
     for &(class, record) in UNREAD {
         sys = sys.with_context_resolver(class, Unread::new(record))?;
+    }
+    for &class in SCRIPTED {
+        sys = sys.with_context_resolver(class, Script)?;
     }
     Ok(sys)
 }

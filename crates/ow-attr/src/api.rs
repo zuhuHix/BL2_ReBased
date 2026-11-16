@@ -230,6 +230,27 @@ pub trait AttrWorld {
         .into())
     }
 
+    /// Runs the script `GetAttributeContext(Attribute, AttributeContextSource)` of the context resolver object
+    /// `resolver` for `attribute` and `source` (None passes a None reference), and returns its answer (a None
+    /// reference ends the chain). For a
+    /// resolver class whose rule is script, which only a world that runs script can answer (lane FIX-DESIGNER-RESOLVER,
+    /// decision 2026-11-16-62). The default answers `NotYet { LayerAbsent("ow-vm") }`: every world that runs no script
+    /// (an offline world, a roll's adapter, a unit test) gives that.
+    fn script_context(
+        &mut self,
+        resolver: ObjRef,
+        attribute: ObjRef,
+        source: Option<ObjRef>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        let _ = (resolver, attribute, source);
+        Err(NotYet::layer_absent(
+            "a context resolver whose GetAttributeContext is script",
+            "ow-vm",
+            "NATIVE_ATTRIBUTES.md section 5",
+        )
+        .into())
+    }
+
     /// `GlobalAttributeValueResolver`'s slots. The world owns them because the game keeps one process-wide pair
     /// (`SetGlobalAttributeValue` stores into it; the XP curve sets slot 0 before it evaluates).
     fn global_slots(&mut self) -> &mut GlobalSlots;

@@ -2482,3 +2482,72 @@ fn a_panic_on_the_vm_thread_is_handed_back() {
     assert!(matches!(caught, Err(super::VmThreadError::Panicked)));
     assert_eq!(super::on_vm_stack(|| 7).unwrap(), 7);
 }
+
+/// `AttrWorld::script_context` on the VM (lane FIX-DESIGNER-RESOLVER, decision 2026-11-16-62): the resolver class's
+/// script `GetAttributeContext(Attribute, AttributeContextSource)` runs with the two by parameter name and its object
+/// is the answer (invented classes: `Echo` returns the source, `Mute` returns None, `Count` an int, `Native` declares
+/// the function native, `Plain` declares none). The answer is the same in both modes: the script is the rule.
+#[test]
+fn a_script_context_resolver_runs_its_get_attribute_context() {
+    use ow_attr::api::{AttrError, AttrWorld};
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty", "IntProperty"]);
+    let object = t.class("Object", 0);
+    let typed = |name: &str| Param {
+        type_ref: object,
+        ..param("Object", name, 0)
+    };
+    let params = [typed("Attribute"), typed("AttributeContextSource")];
+    let echo = t.class("Echo", object);
+    script(&mut t, echo, "GetAttributeContext", &params, Some(("Object", object)), &[], |ids, a| {
+        returns(a, |a| {
+            a.local(ids.get("AttributeContextSource"));
+        })
+    });
+    let mute = t.class("Mute", object);
+    script(&mut t, mute, "GetAttributeContext", &params, Some(("Object", object)), &[], |_, a| {
+        returns(a, |a| {
+            a.raw(&[0x2A]);
+        })
+    });
+    let count = t.class("Count", object);
+    script(&mut t, count, "GetAttributeContext", &params, Some(("Int", 0)), &[], |_, a| {
+        returns(a, |a| {
+            a.int_const(7);
+        })
+    });
+    let native_class = t.class("Native", object);
+    let mut s = spec(FUNC_NATIVE | FUNC_PUBLIC, "GetAttributeContext");
+    s.native = 0;
+    t.function(native_class, "GetAttributeContext", &params, Some(("Object", object)), &[], &s, |_| None);
+    t.class("Plain", object);
+    let bytes = t.build();
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut r = run_on(&bytes, mode);
+        let vm = &mut r.vm;
+        let make = |vm: &mut Vm, path: &str| {
+            let c = vm.find_class(path).unwrap();
+            vm.instantiate(c, "").unwrap()
+        };
+        let (attr, source) = (make(vm, "Core.Plain"), make(vm, "Core.Plain"));
+        let echo = make(vm, "Core.Echo");
+        assert_eq!(vm.script_context(echo, attr, Some(source)).unwrap(), Some(source), "{mode:?}");
+        assert_eq!(vm.script_context(echo, attr, None).unwrap(), None, "{mode:?}: a None source passes None");
+        let mute = make(vm, "Core.Mute");
+        assert_eq!(vm.script_context(mute, attr, Some(source)).unwrap(), None, "{mode:?}");
+        let count = make(vm, "Core.Count");
+        assert!(
+            matches!(vm.script_context(count, attr, Some(source)), Err(AttrError::BadData { .. })),
+            "{mode:?}"
+        );
+        for path in ["Core.Native", "Core.Plain"] {
+            let o = make(vm, path);
+            match vm.script_context(o, attr, Some(source)) {
+                Err(AttrError::NotYet(n)) => {
+                    assert_eq!(n.missing, Missing::NotRead, "{mode:?} {path}");
+                    assert!(n.what.contains("no script function to run"), "{}", n.what);
+                }
+                other => panic!("{mode:?} {path}: {other:?}"),
+            }
+        }
+    }
+}
