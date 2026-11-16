@@ -23,13 +23,17 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
     `DefError::Collection`: no offset search, no partial result. A null element keeps its entry. A component listed
     twice is left to the caller (the tool stops its build there).
   - `BlockingMeshCollectionActor` derives from `StaticMeshActorBase`, beside `StaticMeshCollectionActor`, not from it.
-    It now loads, but `collection` refuses it (`NotADefinition`): no record gives its array or tail.
+    It now loads, but `collection` refuses it (`NotADefinition`): no record gives its array or tail. The prefix rule
+    goes by the class's name (as the C++ does) and `collection` by inheritance; the module text says so (review r1,
+    L2).
 - **Fix 2: engine-native references in `ParityMode::Off`.** An object of a class no installed package exports
   (`Engine.StaticMesh`, which every `StaticMeshComponent` names) was a `NotYet` in Off, so the decoder skipped the
   property and the slot stayed `None`.
   - In Off the store now makes the handle itself, before the decoder sees the reference. It is a stand-in named after
     the object, of a class defined once at the path the export's class import (or the import) names, with no
-    properties, under `Core.Object`. The class is marked native, so no `IsA` answer through it passes for the game's
+    properties, under `Core.Object`. A code class (`Function`, `State`, `Package`, `Enum`, `ScriptStruct`, the
+    property classes) is left to the decoder as before, so no class is defined at `Core.Function` and the like
+    (review r1, M1). The class is marked native, so no `IsA` answer through it passes for the game's
     (the attribute resolvers' rule). Its origin is `Origin::Resource` of the object.
   - It is the store's object for the object's path (identity by path), and it stays a stand-in: it never loads, since
     its tags cannot be typed. A class something else defined at that path (an overlay, a native pack) is left to the
@@ -47,6 +51,13 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
     its own archetype's values (or its class defaults) with its own tags from its derived prefix. A class's default
     object as archetype gives its class default object.
   - The archetype's class must be the export's or one it derives from (its slots are then the first of the export's).
+  - A class default object as archetype is recognised by its name wherever it sits (review r1, L1: not only at the
+    top of its package); anything inside one is a template, below.
+  - The archetype's values are copied as they are. A reference to one of the archetype's own subobjects (the 17
+    Sanctuary NPCs' `DialogComponent`, for one) is therefore shared by every object made from that archetype, not
+    made per object as the game presumably does: **UNVERIFIED** (review r1, L4).
+  - Each step of a chain is its own decode load, so the decoder's resolve budget counts per step, not per chain (at
+    most 17 steps, each within the budget; review r1, L5).
   - An archetype no holder has, of an unrelated class, in a cycle, or more than 16 deep is a `NotYet` for the load,
     never class defaults in its place.
   - **Not followed: templates.** An archetype inside a class default object (the component a class's default actor
@@ -92,6 +103,24 @@ bounds check changed. There was no real-game session: every rule below is **UNVE
       it does not apply.
     - Off failures: the same 616 before and after (354 `ShadowMap1D`, 127 `Model`, 127 `Polys`, 4 `WiringMesh`, all
       engine-native objects looked up directly and now `NotADefinition`, and 4 components that fail as before).
+- **Fix 3 beyond level objects (review r1, M2).** The Sanctuary measurement above covers objects placed in levels. The
+  Off consumers that read archetypes outside levels were checked on `origin/main` ce6f681 against ce6f681 with this
+  lane's `ow-defs` files (the release `ow-cli` of each, `OW_PARITY` unset, so Off; outputs under ignored `local/`):
+  - **GD_\* pawn archetypes** (the ignored check `real_pawn_archetypes`, every census path of the game root whose first
+    holder derives from `Engine.Pawn`, both modes): 946 paths, 42 loaded at 26 and 904 at 4 in both modes, before and
+    after; the per-path files are identical. `GD_Marcus.Character.Pawn_Marcus` (read at 4, decision 36),
+    `GD_TargetDummy.Character.Pawn_TargetDummy` and `GD_PrimalBeast.Character.Pawn_PrimalBeast` load.
+  - **`--slice-run`** (the Fire mission, its director made with `instance` and the target dummy pawn; both of
+    `tools/verify_fire_event_order.py`'s step lists), **`--mission-run`** (the Fire mission's steps of
+    `tools/audio_slice_chain.py`) and **`--combat-run`** (`spawn:dummy|regular|adult|ranged|baby:8`, `tick:1`):
+    standard output and error byte-identical before and after (the combat output differs only in `elapsed_ms`).
+  - **The behavior kernel fixtures:** `tests/behavior_test.py` passes in both modes with this lane's binary, and the
+    workspace tests pass.
+  - **Not reached.** Every one of those runs stops on main at a gap of its own, the same before and after: the slice
+    at `Behavior_AIHold` on the target dummy (not ported), the mission run at the lent weapon's region-stage
+    condition (`NotYet`), and every combat spawn at a reference to `Default__WillowAIPawn.SpecialMoveComponent0`
+    ("inside a class default object"). The steps after those gaps, where a spawned or placed pawn's
+    archetype-derived values would be used, were therefore not exercised: **open**, to be rerun when they are.
 - **H2's scene** (`ow-host` `Scene::load` on `Sanctuary_P`, Off, unchanged code, driven from the local driver), on
   `origin/main` f481008 and again on 7f73940 (after H2-DRAW), each against this branch. Before and after, on both: 10 levels, 4,446 placements, 305 hidden, 4,141 drawn, 143 excluded (122 with no mesh, 16 mission
   previews, 5 duplicates), 430 meshes (418 drawn), LOD 0 triangles 1,348,542 and 1,280,100 drawn, the same gaps. The

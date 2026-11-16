@@ -68,7 +68,11 @@
 //! an archetype inside a class default object (a template, such as `Engine.Default__StaticMeshActor`'s component,
 //! the archetype of most placed components). No record or C++ read gives such a subobject's property prefix, so its
 //! values are not read; the class default object stays the base, as before this rule, and the store logs
-//! `defs: archetype <path> not applied: ...` once per path ([`DefStore::take_log`]). Decision 2026-11-16-55;
+//! `defs: archetype <path> not applied: ...` once per path ([`DefStore::take_log`]). Each archetype of a chain is
+//! built as its own decode load, so the decoder's resolve budget counts per step, not per chain (a chain has at most
+//! 17 steps, each within the budget). The archetype's values are copied as they are: a reference to one of the
+//! archetype's own subobjects (a pawn archetype's `DialogComponent`) is shared by every object made from it, not
+//! made per object (UNVERIFIED against the game, which instances such subobjects). Decision 2026-11-16-55;
 //! UNVERIFIED in the running game.
 //!
 //! **Prefix by class.** Where an export's tags start is derived from the export itself, so the order loads happen in
@@ -76,7 +80,10 @@
 //! - an export whose class path contains `CollectionActor` (`Engine.StaticMeshCollectionActor`,
 //!   `Engine.StaticLightCollectionActor`) reads from 4 (`PropertyPrefix::Ordinary`) without a check, wherever it is:
 //!   the C++ `--scene-records` rule (`src/cli.cpp`) and decision 2026-09-10-09. Its untagged tail lists its
-//!   components' entries ([`DefStore::collection`]);
+//!   components' entries ([`DefStore::collection`]). This rule goes by the class's name, as the C++ does, while
+//!   [`DefStore::collection`] goes by inheritance from the two engine classes: a class named so that derives from
+//!   neither (`Engine.BlockingMeshCollectionActor`) loads from 4 and `collection` refuses it, and a subclass whose
+//!   name does not contain `CollectionActor` would take the actor rules below (none is installed);
 //! - an export whose class derives from `Engine.ActorComponent` reads its tags from 8 bytes in
 //!   (`PropertyPrefix::Component`), the only case the C++ loads at 8 (`combat_death.cpp`) and the one
 //!   `tools/mission_closure.py` gives 8;
@@ -608,9 +615,11 @@ impl Linker<'_> {
 
     /// `ParityMode::Off` only: the store's handle for object `index` of `package` (an export, or an import no holder
     /// has) when its class is one no installed package exports, such as `Engine.StaticMesh` (module documentation,
-    /// "Engine-native classes in `ParityMode::Off`"). `None` in `ParityMode::Reference` (the decoder's C++ stand-in
-    /// answers there), for an export whose class is a class object's or in its own package, and for a class an
-    /// installed package exports or something else defined (the decoder answers those too).
+    /// "Engine-native classes"). `None` in `ParityMode::Reference` (the decoder's C++ stand-in answers there), for an
+    /// export whose class is a class object's or in its own package, for a code class (`Function`, `State`,
+    /// `Package`, `Enum`, a property class and the rest of `is_code_class`: the decoder handles references to code as
+    /// before), and for a class an installed package exports or something else defined (the decoder answers those
+    /// too).
     fn native_stand_in(
         &self,
         cx: &mut ValueCx<'_>,
@@ -638,6 +647,10 @@ impl Linker<'_> {
                 Err(e) => return Err(e.into()),
             }
         };
+        // Code is reflection's, not an engine-native object: left to the decoder, as before this rule.
+        if is_code_class(class_path.rsplit('.').next().unwrap_or_default()) {
+            return Ok(None);
+        }
         let classes = &mut cx.space.classes;
         let class = match classes.by_path(&class_path) {
             Some(id) if classes.get_layout(id).is_some_and(|l| l.is_defined()) => {
@@ -1094,8 +1107,9 @@ impl Loader<'_, '_> {
                 self.cx.code.class(class).path
             )));
         }
-        // A class's default object at the top of its package: the class default object.
-        if arch_entry.outer == 0 && arch_entry.name.starts_with("Default__") {
+        // A class's default object (the template check above has already taken anything inside one): the class
+        // default object.
+        if arch_entry.name.starts_with("Default__") {
             if arch_class == class {
                 return Ok(None);
             }

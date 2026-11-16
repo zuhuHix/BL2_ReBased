@@ -32,8 +32,9 @@ fn core() -> Vec<u8> {
 /// `Scale` and `StaticMesh`, an object of the class `Engine.StaticMesh`, which this package imports and does not
 /// export); `MeshActor`, whose default object holds the subobject `MeshComponent0` (tags from 8: `Count` 5, `Scale`
 /// 2, its archetype `Default__StaticMeshComponent`); and the two collection actors with their component arrays.
-/// `Default__StaticMeshComponent` sets `Count` 1.
-fn engine() -> Vec<u8> {
+/// `Default__StaticMeshComponent` sets `Count` 1. With `level_exported` false, `Level` is not exported (an
+/// engine-native class, as `Engine.Level` is in the installed game).
+fn engine(level_exported: bool) -> Vec<u8> {
     let mut d = Declarations::new(&["Int", "Float", "Object", "Array"]);
     let core = d.p.add_import("Core", "Package", 0, "Core");
     let object = d.p.add_import("Core", "Class", core, "Object");
@@ -44,8 +45,13 @@ fn engine() -> Vec<u8> {
     d.default_object(actor, "Actor");
     let actor_component = d.cls("ActorComponent", component);
     d.default_object(actor_component, "ActorComponent");
-    let level = d.cls("Level", object);
-    d.default_object(level, "Level");
+    if level_exported {
+        let level = d.cls("Level", object);
+        d.default_object(level, "Level");
+    } else {
+        // `Engine.Level` imported from this very package, which does not export it: an engine-native class.
+        d.p.add_import("Core", "Class", engine, "Level");
+    }
     let smc = d.cls("StaticMeshComponent", actor_component);
     d.prop("Int", smc, "Count", 0);
     d.prop("Float", smc, "Scale", 0);
@@ -105,7 +111,10 @@ fn mesh_entry(x: f32, scale: f32, flag: i32, w: f32) -> Vec<u8> {
 /// collection of one component with an 80-byte tail); 9 `Skewed` (one entry whose entry 15 is 2); 10 `Comp_Chain`
 /// (archetype 11); 11 `Arch_Comp` (a component archetype outside the level: `Scale` 4, its archetype 16); 12 and 13
 /// `Cycle_A` / `Cycle_B` (each the other's archetype); 14 `Odd` (its archetype the level, an unrelated class); 15
-/// `Comp_3` (`StaticMesh` -> the same import as `Comp_2`); 16 `Arch_Base` (an archetype: `Count` 6).
+/// `Comp_3` (`StaticMesh` -> the same import as `Comp_2`); 16 `Arch_Base` (an archetype: `Count` 6); 17 `Comp_4` (the
+/// same template archetype as `Comp_2`); 18 `No_Holder` (its archetype an import no file holds); 19 .. 36 `Deep_0` ..
+/// `Deep_17` (a chain of 17 archetypes from `Deep_0`); 37 `Comp_Code` (`StaticMesh` -> an import of class
+/// `Core.Function`, which the toy `Core` does not export).
 fn map() -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let core = p.add_import("Core", "Package", 0, "Core");
@@ -128,6 +137,8 @@ fn map() -> Vec<u8> {
     let env = p.add_import("Core", "Package", 0, "Env_Pkg");
     let meshes = p.add_import("Core", "Package", env, "Meshes");
     let rock = p.add_import("Engine", "StaticMesh", meshes, "Rock");
+    let no_arch = p.add_import("Engine", "StaticMeshComponent", meshes, "NoArch");
+    let func = p.add_import("Core", "Function", meshes, "SomeFunc");
     let none = p.none();
     let at = |prefix: usize, tags: &[Vec<u8>]| {
         let mut b = vec![0u8; prefix];
@@ -178,6 +189,25 @@ fn map() -> Vec<u8> {
     assert_eq!(add(&mut p, smc, "Comp_3", 1, 0, at(8, &tags)), 15);
     let tags = [p.int_tag("Count", 6)];
     assert_eq!(add(&mut p, smc, "Arch_Base", 0, 0, at(8, &tags)), 16);
+    assert_eq!(add(&mut p, smc, "Comp_4", 1, subobject, at(8, &[])), 17);
+    assert_eq!(add(&mut p, smc, "No_Holder", 1, no_arch, at(8, &[])), 18);
+    // Deep_0 (in the level) .. Deep_17: each the next one's instance, a chain of 17 archetypes from Deep_0.
+    for k in 0..18 {
+        let (outer, archetype) = (if k == 0 { 1 } else { 0 }, if k < 17 { 20 + k } else { 0 });
+        assert_eq!(
+            add(
+                &mut p,
+                smc,
+                &format!("Deep_{k}"),
+                outer,
+                archetype,
+                at(8, &[])
+            ),
+            19 + k
+        );
+    }
+    let tags = [p.object_tag("StaticMesh", func)];
+    assert_eq!(add(&mut p, smc, "Comp_Code", 1, 0, at(8, &tags)), 37);
     p.build()
 }
 
@@ -190,6 +220,10 @@ struct World {
 
 impl World {
     fn new(tag: &str, mode: ParityMode) -> World {
+        World::with_engine(tag, mode, true)
+    }
+
+    fn with_engine(tag: &str, mode: ParityMode, level_exported: bool) -> World {
         let dir = std::env::temp_dir().join(format!(
             "ow-defs-collection-{tag}-{mode:?}-{}",
             std::process::id()
@@ -197,7 +231,7 @@ impl World {
         let _ = std::fs::remove_dir_all(&dir);
         let files: [(&str, &[u8]); 3] = [
             ("Core.upk", &core()),
-            ("Engine.upk", &engine()),
+            ("Engine.upk", &engine(level_exported)),
             ("Map_Test.upk", &map()),
         ];
         let mut defs =
@@ -402,6 +436,9 @@ fn a_placed_object_takes_its_archetype_s_values_in_off_only() {
         let comp_2 = t.find("SMCA.Comp_2").unwrap();
         assert_eq!(t.read(comp_2, "Count"), Value::Int(1));
         assert_eq!(t.read(comp_2, "Scale"), Value::Float(0.0));
+        // A second component with the same template: not applied, and not logged again.
+        let comp_4 = t.find("Comp_4").unwrap();
+        assert_eq!(t.read(comp_4, "Count"), Value::Int(1));
         let line = "defs: archetype Engine.Default__MeshActor.MeshComponent0 not applied: \
                     a class default object's subobject, its prefix not recorded";
         let log = t.defs.take_log();
@@ -419,14 +456,59 @@ fn a_placed_object_takes_its_archetype_s_values_in_off_only() {
 fn an_archetype_that_cannot_be_followed_is_not_yet_in_off() {
     for mode in MODES {
         let mut t = World::new("arch-bad", mode);
-        for name in ["Cycle_A", "Odd"] {
+        for (name, why) in [
+            ("Cycle_A", "its archetype chain is a cycle"),
+            (
+                "Odd",
+                "is not Engine.StaticMeshComponent or a class it derives from",
+            ),
+            ("No_Holder", "no package holds it"),
+            ("Deep_0", "more than 16 archetypes deep"),
+        ] {
             match (mode, t.find(name)) {
                 (ParityMode::Off, Err(DefError::NotYet(n))) => {
-                    assert!(n.to_string().contains("the archetype"), "{name}: {n}");
+                    assert!(n.to_string().contains(why), "{name}: {n}");
                 }
                 (ParityMode::Reference, Ok(o)) => assert!(t.defs.is_loaded(&t.w, o)),
                 (mode, other) => panic!("{name} in {mode:?}: {other:?}"),
             }
         }
+    }
+}
+
+/// Review r1, M1: a reference to a code object whose class no installed package exports (`Core.Function`) is left to
+/// the decoder in `ParityMode::Off`, as before: the property is skipped, and no class is defined at that path.
+#[test]
+fn a_reference_to_code_is_not_made_a_native_stand_in() {
+    let mut t = World::new("code", ParityMode::Off);
+    let comp = t.find("Comp_Code").unwrap();
+    assert_eq!(t.mesh(comp), None);
+    assert!(
+        t.w.classes
+            .by_path("Core.Function")
+            .is_none_or(|c| !t.w.classes.layout(c).is_defined())
+    );
+}
+
+/// Fix 2: where `Engine.Level` is not exported (as in the installed game), a placed object's outer is the level's
+/// handle in both modes: a native-class stand-in that never loads. Under `ParityMode::Off` it was `None` before.
+#[test]
+fn a_level_of_an_engine_native_class_is_the_outer_in_both_modes() {
+    for mode in MODES {
+        let mut t = World::with_engine("level", mode, false);
+        let smca = t.find("SMCA").unwrap();
+        let level =
+            t.w.heap
+                .get(smca)
+                .unwrap()
+                .outer
+                .expect("the level as outer");
+        assert_eq!(t.class_path(level), "Engine.Level");
+        assert!(t.w.classes.is_native(t.w.heap.get(level).unwrap().class));
+        assert!(!t.defs.is_loaded(&t.w, level));
+        // The component inside the collection has the collection as its outer, and still reads from 8.
+        let comp_1 = t.find("SMCA.Comp_1").unwrap();
+        assert_eq!(t.w.heap.get(comp_1).unwrap().outer, Some(smca));
+        assert!(t.defs.collection(&mut t.w, smca).is_ok());
     }
 }
