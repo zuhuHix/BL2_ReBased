@@ -12,7 +12,7 @@ use ow_vm::error::VmError;
 use super::iterators::{calc_target_info, prioritize};
 use super::record::{ActorKind, Component, Opinion, Record};
 use super::threat::{get_threat, no_parent};
-use super::{RECORD_AWARENESS, RECORD_MELEE, Senses, Vec3, length_2d, sub};
+use super::{RECORD_AWARENESS, RECORD_MELEE, Senses, Vec3};
 
 /// What a target change does outside the component's own fields.
 #[non_exhaustive]
@@ -32,14 +32,17 @@ pub enum Effect {
     TargetingCount { actor: ObjRef, delta: i32 },
 }
 
-/// `ValidTarget(actor)`, base rule then the Willow override, in the order G26 reads (first failure is false). The
-/// caller passes a pawn: a controller is mapped to its pawn by the VM adapter (step 2). The global "no target all
-/// enemies" cheat (step 3) is off: nothing sets it here. Live, L9 section 4: the player true; None, the AI's own pawn
-/// and a same-allegiance bullymong false; a cloaked player false; an AI with its allegiance cleared false.
+/// `ValidTarget(actor)`, base rule then the Willow override, in the order G26 reads (first failure is false). Step 2,
+/// the controller-to-pawn replacement, is [`Senses::tested_actor`]; the rest of the test is about the actor it
+/// answers. The global "no target all enemies" cheat (step 3) is off: nothing sets it here. Live, L9 section 4: the
+/// player true; None, the AI's own pawn and a same-allegiance bullymong false; a cloaked player false; an AI with its
+/// allegiance cleared false.
 pub fn valid_target(c: &Component, senses: &mut dyn Senses, actor: Option<ObjRef>) -> Result<bool, VmError> {
     let Some(actor) = actor else {
         return Ok(false);
     };
+    // 2. a controller with a pawn (or an actor whose controller has one) is tested as that pawn.
+    let actor = senses.tested_actor(actor)?;
     let it = senses.facts(actor)?;
     let me = senses.facts(c.pawn)?;
     // 4. the actor can be targeted, and the AI has an allegiance (an AI without one has no valid target).
@@ -64,9 +67,9 @@ pub fn valid_target(c: &Component, senses: &mut dyn Senses, actor: Option<ObjRef
             .into());
         }
     }
-    // 7. the AI's own pawn is a registered targetable with an allegiance; a pawn that drives a vehicle is not a direct
-    // target (its vehicle is).
-    if !me.can_be_targeted {
+    // 7. the AI's own pawn is a registered targetable (found in the world's registry) with an allegiance; a pawn that
+    // drives a vehicle is not a direct target (its vehicle is, below).
+    if !me.can_be_targeted || !senses.targetables()?.contains(&c.pawn) {
         return Ok(false);
     }
     // 8. the Base-chain exclusion accepts a normal pawn at once (G26, UNVERIFIED reading).
@@ -120,7 +123,8 @@ pub fn add_target(
 ///
 /// UNVERIFIED for a lone component (open question 17): live, the list of a den member was not cut at the 4,096 radius
 /// (records to about 7 km, L8 section 3.4), because a den member's list comes from the den; a lone pawn's comes from
-/// this rule. Within means "not farther than" (the comparison's edge is not read).
+/// this rule. As the note reads it, the squared horizontal distance is compared with the squared radius (in f64 here);
+/// an entry exactly on the radius is kept (the comparison's edge is not read).
 pub fn find_targets(c: &mut Component, senses: &mut dyn Senses, now: f32) -> Result<Vec<usize>, VmError> {
     no_parent(c)?;
     let me = senses.facts(c.pawn)?;
@@ -133,7 +137,14 @@ pub fn find_targets(c: &mut Component, senses: &mut dyn Senses, now: f32) -> Res
         if me.has_allegiance && senses.opinion(c.pawn, entry)? == Opinion::Neutral {
             continue;
         }
-        if length_2d(sub(me.location, it.location)) > c.settings.search_radius {
+        // No oracle: the squares in f64 (NATIVE_AI_MELEE.md, "Search radius": X and Y squared against the radius
+        // squared).
+        let (dx, dy) = (
+            f64::from(it.location[0]) - f64::from(me.location[0]),
+            f64::from(it.location[1]) - f64::from(me.location[1]),
+        );
+        let r = f64::from(c.settings.search_radius);
+        if dx * dx + dy * dy > r * r {
             continue;
         }
         if let Some((index, true)) = add_target(c, senses, now, entry)? {
