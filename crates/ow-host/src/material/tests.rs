@@ -188,12 +188,6 @@ fn blend_names_and_the_sky_inputs() {
     );
 }
 
-// ------------------------------------------------------------------------------------------ installed driver
-
-/// Sanctuary's materials and lights on the installed game (`OW_BL2_ROOT`): counts by diffuse source, blend mode and
-/// lighting model, expression classes, the lights and the lightmap census. Writes `local/p2/h8-materials/report.md`
-/// and `materials.tsv` (game-derived, ignored). Run with
-/// `cargo test --release -p ow-host --locked -- --ignored sanctuary_materials_on_the_installed_game`.
 /// `Core.upk` for the store fixture: `Object` with the native `Color` struct (B, G, R, A bytes), and `Package`.
 fn store_core() -> Vec<u8> {
     use ow_package::testkit::reflect::Declarations;
@@ -327,6 +321,12 @@ fn a_refused_cooked_list_keeps_the_scalars_and_a_constant_is_linear() {
     }
 }
 
+// ------------------------------------------------------------------------------------------ installed driver
+
+/// Sanctuary's materials and lights on the installed game (`OW_BL2_ROOT`): counts by diffuse source, blend mode and
+/// lighting model, expression classes, the lights and the lightmap census. Writes `local/p2/h8-materials/report.md`
+/// and `materials.tsv` (game-derived, ignored). Run with
+/// `cargo test --release -p ow-host --locked -- --ignored sanctuary_materials_on_the_installed_game`.
 #[test]
 #[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/h8-materials/"]
 fn sanctuary_materials_on_the_installed_game() {

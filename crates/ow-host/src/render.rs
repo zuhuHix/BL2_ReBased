@@ -516,6 +516,15 @@ fn material_bytes(slot: Option<&MaterialSlot>, pass: Pass) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
+/// What a frame's render pass has bound so far: a draw sets only what differs.
+#[derive(Default)]
+struct Bound {
+    pipeline: Option<(Pass, bool, bool)>,
+    material: Option<Option<u32>>,
+    lighting: Option<Option<u32>>,
+    mesh: Option<u32>,
+}
+
 struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -1217,38 +1226,62 @@ impl SceneRenderer {
             return;
         };
         pass.set_bind_group(0, &self.globals_group, &[]);
-        let draw = |pass: &mut wgpu::RenderPass<'_>, b: &GpuBatch, range: std::ops::Range<u32>| {
-            let (Some(mesh), Some(pipeline)) = (
-                self.meshes.get(b.key.mesh as usize),
-                self.pipelines
-                    .get(&(b.pass, b.key.two_sided, b.key.mirrored)),
-            ) else {
-                return;
+        // The instance buffer is bound once and each batch addressed by its first instance; the pipeline, bind
+        // groups and mesh buffers are set only when they change from the previous draw (batches are sorted by mesh,
+        // then material, then lighting, so consecutive draws often share them).
+        pass.set_vertex_buffer(1, instances.slice(..));
+        let mut bound = Bound::default();
+        let mut draw =
+            |pass: &mut wgpu::RenderPass<'_>, b: &GpuBatch, range: std::ops::Range<u32>| {
+                let (Some(mesh), Some(pipeline)) = (
+                    self.meshes.get(b.key.mesh as usize),
+                    self.pipelines
+                        .get(&(b.pass, b.key.two_sided, b.key.mirrored)),
+                ) else {
+                    return;
+                };
+                let pipeline_key = (b.pass, b.key.two_sided, b.key.mirrored);
+                if bound.pipeline != Some(pipeline_key) {
+                    pass.set_pipeline(pipeline);
+                    bound.pipeline = Some(pipeline_key);
+                }
+                if bound.material != Some(b.key.material) {
+                    let group = b
+                        .key
+                        .material
+                        .and_then(|m| self.material_groups.get(m as usize))
+                        .unwrap_or(&self.default_group);
+                    pass.set_bind_group(1, group, &[]);
+                    bound.material = Some(b.key.material);
+                }
+                if bound.lighting != Some(b.key.lighting) {
+                    let lighting = b.key.lighting.map(|l| l as usize);
+                    let light_group = lighting
+                        .and_then(|l| self.lighting_groups.get(l))
+                        .unwrap_or(&self.default_lighting);
+                    pass.set_bind_group(2, light_group, &[]);
+                    let vertex_light = lighting
+                        .and_then(|l| self.vertex_lights.get(l))
+                        .and_then(Option::as_ref)
+                        .unwrap_or(&self.zero_light);
+                    pass.set_vertex_buffer(2, vertex_light.slice(..));
+                    bound.lighting = Some(b.key.lighting);
+                }
+                if bound.mesh != Some(b.key.mesh) {
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    bound.mesh = Some(b.key.mesh);
+                }
+                let Ok(base) = u32::try_from(b.instance_offset / INSTANCE_BYTES) else {
+                    return;
+                };
+                let first = b.first_index;
+                pass.draw_indexed(
+                    first..first + b.index_count,
+                    0,
+                    base + range.start..base + range.end,
+                );
             };
-            pass.set_pipeline(pipeline);
-            let group = b
-                .key
-                .material
-                .and_then(|m| self.material_groups.get(m as usize))
-                .unwrap_or(&self.default_group);
-            pass.set_bind_group(1, group, &[]);
-            let lighting = b.key.lighting.map(|l| l as usize);
-            let light_group = lighting
-                .and_then(|l| self.lighting_groups.get(l))
-                .unwrap_or(&self.default_lighting);
-            pass.set_bind_group(2, light_group, &[]);
-            let vertex_light = lighting
-                .and_then(|l| self.vertex_lights.get(l))
-                .and_then(Option::as_ref)
-                .unwrap_or(&self.zero_light);
-            pass.set_vertex_buffer(2, vertex_light.slice(..));
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            let end = b.instance_offset + u64::from(b.instances) * INSTANCE_BYTES;
-            pass.set_vertex_buffer(1, instances.slice(b.instance_offset..end));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            let first = b.first_index;
-            pass.draw_indexed(first..first + b.index_count, 0, range);
-        };
         let mut blended = Vec::new();
         for (i, b) in self.batches.iter().enumerate() {
             if b.pass.blended() {
