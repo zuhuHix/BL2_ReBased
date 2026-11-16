@@ -419,6 +419,10 @@ fn fx() -> Fx {
 }
 
 fn fx_with(begin: bool) -> Fx {
+    fx_in(begin, ParityMode::Off)
+}
+
+fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
         std::process::id(),
@@ -430,14 +434,14 @@ fn fx_with(begin: bool) -> Fx {
         &dir,
         &[("Engine.upk", &bytes)],
         IdentityPolicy::FirstInScanOrder,
-        ParityMode::Off,
+        mode,
     )
     .unwrap();
     let mut vm = Vm::new(
         ObjectSpace::new(),
         defs,
         Rc::new(AttributeSystem::new_empty()),
-        ParityMode::Off,
+        mode,
     );
     let notes = Rc::new(RefCell::new(Vec::new()));
     let sink = notes.clone();
@@ -1302,6 +1306,39 @@ fn destroy_is_not_yet_where_this_world_cannot_run_the_routine() {
             "nothing changed"
         );
         assert!(destroy(&mut x.w.vm, p).unwrap());
+    });
+}
+
+#[test]
+fn a_controller_is_the_cxx_stand_in_in_reference_and_not_yet_in_off() {
+    run(|| {
+        // Off: the controller and player case waits for its implementer; nothing changes before the refusal.
+        let mut x = fx();
+        let ctrl = x.spawn("Controller");
+        match destroy(&mut x.w.vm, ctrl).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert_eq!(n.record, crate::actors::RECORD_CONTROLLER);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, ctrl, "bDeleteMe").unwrap(), Value::Bool(false));
+        assert_eq!(field(&x.w.vm.space, ctrl, "bPendingDelete").unwrap(), Value::Bool(false));
+
+        // Reference: the C++ stand-in, marked and true; no event, still listed; a second destroy is true.
+        let mut x = fx_in(true, ParityMode::Reference);
+        let ctrl = x.spawn("Controller");
+        let notes_before = x.notes.borrow().len();
+        assert!(destroy(&mut x.w.vm, ctrl).unwrap());
+        assert_eq!(field(&x.w.vm.space, ctrl, "bDeleteMe").unwrap(), Value::Bool(true));
+        assert_eq!(field(&x.w.vm.space, ctrl, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert_eq!(x.notes.borrow().len(), notes_before, "no script event");
+        assert!(x.w.actors().borrow().list().contains(&ctrl), "the stand-in removes nothing");
+        assert!(destroy(&mut x.w.vm, ctrl).unwrap(), "already destroyed: true");
+        // Other actors keep the world's routine in Reference too.
+        let p = x.spawn("Probe");
+        assert!(destroy(&mut x.w.vm, p).unwrap());
+        assert!(!x.w.actors().borrow().list().contains(&p));
     });
 }
 

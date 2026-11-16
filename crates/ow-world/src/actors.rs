@@ -22,7 +22,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use ow_core::{FixedHashSet, NotYet};
+use ow_core::{FixedHashSet, NotYet, ParityMode};
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr, PropId};
 use ow_object::layout::PropKind;
@@ -33,6 +33,8 @@ use ow_vm::natives_core::ActorWalk;
 
 /// The record these rules come from.
 pub const RECORD: &str = "NATIVE_ENGINE_CORE.md (Spawning and lifetime, Iterators)";
+/// The record of the destroy routine's controller and player case (lane FIX-ACTOR-DESTROY, decision 2026-11-16-79).
+pub const RECORD_CONTROLLER: &str = "NATIVE_ACTOR_DESTROY.md (the controller and player case)";
 
 /// `ROLE_Authority` (NATIVE_ENGINE_CORE.md, "Conventions": the value is 3).
 pub const ROLE_AUTHORITY: u8 = 3;
@@ -675,8 +677,11 @@ fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, VmError> {
 ///
 /// - `true` for an actor already destroyed; `false` for a `bStatic` or `bNoDelete` actor, and for one whose `Role`
 ///   is below authority and that is not `bNetTemporary`.
-/// - `NotYet`, before anything changes, for the parts this world cannot run: a `Controller` (the controller and
-///   player case, not read), an actor with Kismet events in `GeneratedEvents` (the destroyed-event class is not
+/// - A `Controller`: in `ParityMode::Reference` the C++ stand-in (`src/combat_death.cpp`, `Actor.Destroy`: the
+///   actor is marked `bDeleteMe` and the answer is true; nothing else runs, it stays in the level list), decision
+///   2026-11-16-79; in `ParityMode::Off` `NotYet`: the controller and player case is now read
+///   (NATIVE_ACTOR_DESTROY.md) and its Off rule waits for a fresh implementer (docs/LANE_BRIEF.md, "Clean room").
+/// - `NotYet`, before anything changes, for the parts this world cannot run: an actor with Kismet events in `GeneratedEvents` (the destroyed-event class is not
 ///   confirmed: W5-KISMET), an actor in a state (`EndState` and the state frame: W5-STATES), an actor with a `Base`,
 ///   with attached actors based on it, or touching others (the unbase and untouch routines are physics natives, not
 ///   read), and a `Destroy` of an actor whose own destroy routine is running.
@@ -709,9 +714,16 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
     }
     let x = space.heap.get(actor)?;
     if class_named_in_chain(space, x.class, "Controller") {
-        return Err(
-            NotYet::not_read("the destroy routine's controller and player case", RECORD).into(),
-        );
+        if vm.parity == ParityMode::Reference {
+            // The C++ stand-in (module documentation): marked, nothing else.
+            set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
+            return Ok(true);
+        }
+        return Err(NotYet::not_read(
+            "the destroy routine's controller and player case in Off mode (read in the analyst note; its Off rule              waits for a fresh implementer)",
+            RECORD_CONTROLLER,
+        )
+        .into());
     }
     if x.state.is_some() {
         return Err(NotYet::layer_absent(
