@@ -187,6 +187,8 @@ impl World {
         });
         vm.add_service(ActorSource::new(walk))?;
         Pack.register(&mut vm)?;
+        crate::pools::Pack.register(&mut vm)?; // W5-POOLS seam (decision 2026-11-15-29)
+        crate::levelup::Pack.register(&mut vm)?;
         for p in packs {
             p.register(&mut vm)?;
         }
