@@ -26,6 +26,12 @@
 //! the given file alone (`IdentityPolicy::Loaded`), as `cmd/behavior.rs` does for a provider. In that store a reference
 //! into another package is a stand-in named by its import path (the C++ resolves it).
 //!
+//! **Gameplay stub policy.** The VM refuses an unbound native (`StubPolicy::Refuse`, architecture 3.8), and the
+//! bridge's own C++ stubs answer `NotYet` outside `ParityMode::Reference`. On the installed game the controller script
+//! of accept and turn-in reaches `Actor.LocalPlayerControllers` and `MissionTracker.GetObjectivesProgress`, which the C++
+//! logs as stubs: here they stop the script run with an error line. Both stay refused until their rules are read (hub
+//! decision; decision 2026-11-15-34 has the installed counts).
+//!
 //! Order, as the C++: the source package is loaded first, then the arguments are checked, the store opens the cooked
 //! root, the mission is read from the source package by name. Output is written as it is produced, so a step that
 //! fails (`usage: ...`, a `std::stoi` text, a load error) leaves the earlier steps' text on stdout, then

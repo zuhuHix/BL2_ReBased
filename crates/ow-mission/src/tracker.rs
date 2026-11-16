@@ -31,9 +31,12 @@
 //! - B7, link ids: 2 objective completed, 3 objective progress, 4 set activated, 5 set completed, 6 + status, 12
 //!   kickoff, 13 kickoff dialog only, 14 turn-in.
 //!
-//! **Not modelled, as in the C++:** `RequiredObjectivesComplete` and `Failed`, `bRepeatable`, collection and branching
-//! sets, the level-load replay (B5), blocking sets, `ObjectiveCleared`, the plot-critical kickoff overwrite, the
-//! lent weapon's region-stage condition.
+//! **Not modelled, as in the C++:** `RequiredObjectivesComplete` and `Failed`, the level-load replay (B5), blocking
+//! sets, `ObjectiveCleared`. Four more the C++ also does not model answer `NotYet` in `ParityMode::Off` where the data
+//! shows them, decided before anything changes, and keep the C++ behaviour in `ParityMode::Reference` (architecture R3;
+//! decision 2026-11-15-34): a collection or branching objective set (refused at construction), the lent weapon's
+//! region-stage condition (refused in the Active and Complete status routine), `bRepeatable` on a Complete mission
+//! (`can_start`), and a plot-critical activation that finds a pending kickoff record.
 //!
 //! **Dialog is not here yet.** The C++ tracker owns a `DialogSystem` (src/dialog.*, lane W5-DIALOG, whose Rust file
 //! `dialog.rs` is still a stub). So `GearboxFramework.Behavior_TriggerDialogEvent` has no handler: the kernel records
@@ -49,7 +52,7 @@
 //! from script) finds it there and nests its call on it, depth-first, as the C++ does. [`PROVIDER_BUSY`] is the
 //! refusal for a call that finds the slot empty, which no path of this crate produces.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
@@ -58,7 +61,7 @@ use ow_behavior::provider::{
     BehaviorError, class_path_of, enum_names, object_name, provider_path_leaf, stock_path,
 };
 use ow_behavior::registry::Handler;
-use ow_core::{DetMap, DetSet, NotYet, PackageName};
+use ow_core::{DetMap, DetSet, NotYet, PackageName, ParityMode};
 use ow_defs::store::DefError;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
@@ -72,6 +75,9 @@ mod tests;
 
 /// The record of the tracker rules.
 pub const RECORD: &str = "NATIVE_MISSION_DISPATCH.md section B";
+
+/// The record of the bridge's rules the tracker applies (availability, the lent weapon).
+pub const BRIDGE_RECORD: &str = "NATIVE_MISSION_SCRIPT_BRIDGE.md";
 
 /// The `NotYet` text of a nested event the Rust tracker cannot reach (module documentation, "Re-entrancy").
 pub const PROVIDER_BUSY: &str =
@@ -301,6 +307,8 @@ struct Data {
     summary: String,
     turn_in_description: String,
     plot_critical: bool,
+    /// `MissionDefinition.bRepeatable`.
+    repeatable: bool,
     dependencies: Vec<String>,
     sets: Vec<ObjectiveSet>,
     /// By objective name, in key order (the C++ `std::map`).
@@ -343,6 +351,8 @@ struct Inner {
     /// The provider, out of its slot while it runs.
     provider: RefCell<Option<Provider>>,
     has_provider: bool,
+    /// The provider was lost by a failed lend ([`lend`]): every later call is refused.
+    lost: Cell<bool>,
     hooks: RefCell<Hooks>,
 }
 
@@ -525,6 +535,7 @@ impl MissionSystem {
         d.initial_set = ref_path(vm, prop(&vm.space, mission, "InitialObjectiveSet")?.as_ref())?;
         d.activate_initial_set = flag(vm, mission, "bActivateInitialObjectiveSet", true)?;
         d.plot_critical = flag(vm, mission, "bPlotCritical", false)?;
+        d.repeatable = flag(vm, mission, "bRepeatable", false)?;
         // ObjectiveDependency { Objective, Status: EODS_Complete 0 / EODS_Active 1 } (B6).
         if let Some(dep) = prop(&vm.space, mission, "ObjectiveDependency")?
             && dep.as_struct().is_some()
@@ -554,6 +565,17 @@ impl MissionSystem {
                 read_set(vm, &mut d, reference, object)?;
             }
         }
+        // A collection or branching objective set is not modelled (module documentation): in Off mode the mission is
+        // refused before any state exists; Reference keeps the C++, which reports the set when it is reached.
+        if vm.parity == ParityMode::Off
+            && let Some(set) = d.sets.iter().find(|s| s.cls != OBJECTIVE_SET_CLASS)
+        {
+            return Err(NotYet::not_ported(
+                format!("an objective set of class {} ({}): collection and branching sets", set.cls, set.name),
+                RECORD,
+            )
+            .into());
+        }
         let provider = match prop(&vm.space, mission, "BehaviorProvider")? {
             Some(Value::Object(Some(o))) if is_package_object(&vm.space, o)? => Some(Provider::new(vm, o)?),
             _ => None,
@@ -572,6 +594,7 @@ impl MissionSystem {
                 state: RefCell::new(State::default()),
                 provider: RefCell::new(provider),
                 has_provider,
+                lost: Cell::new(false),
                 hooks: RefCell::new(Hooks::default()),
             }),
         };
@@ -599,7 +622,7 @@ impl MissionSystem {
                     let o = p.behavior(id).object;
                     let target = ref_path(vm, prop(&vm.space, o, "ObjectiveSetToAdvanceTo")?.as_ref())?;
                     let me = me(&w)?;
-                    lend(&me.inner.provider, p, || me.request_advance(vm, &target))?;
+                    lend(&me.inner.provider, &me.inner.lost, p, || me.request_advance(vm, &target))?;
                     Ok(Vec::new())
                 }),
             );
@@ -623,7 +646,7 @@ impl MissionSystem {
                     let o = p.behavior(id).object;
                     let path = ref_path(vm, prop(&vm.space, o, "MissionObjective")?.as_ref())?;
                     let me = me(&w)?;
-                    lend(&me.inner.provider, p, || me.update_by_path(vm, &path, 0))?;
+                    lend(&me.inner.provider, &me.inner.lost, p, || me.update_by_path(vm, &path, 0))?;
                     Ok(Vec::new())
                 }),
             );
@@ -790,8 +813,7 @@ impl MissionSystem {
     /// The grant condition of the bridge note: a `MissionWeapon` is set and the weapon's own mission objective is one
     /// of this mission's objectives (its region-stage condition is not applied, UNVERIFIED).
     pub fn lends_weapon(&self) -> bool {
-        let d = self.data();
-        !d.weapon.is_empty() && d.objectives.values().any(|o| o.path == d.weapon_objective)
+        lends(self.data())
     }
 
     pub fn objective_complete(&self, name: &str) -> bool {
@@ -830,9 +852,13 @@ impl MissionSystem {
     }
 
     /// `CanStartMission` (NATIVE_MISSION_SCRIPT_BRIDGE.md, "Availability queries", UNVERIFIED): NotStarted and the
-    /// dependencies met. Failed, repeatable Complete and the blocked-mission test are not modelled.
-    pub fn can_start(&self, completed: &DetSet<String>) -> bool {
-        self.status() == Status::NotStarted && self.available(completed, &DetMap::new())
+    /// dependencies met. Failed and the blocked-mission test are not modelled. A Complete mission with `bRepeatable`
+    /// (restarting it is not read): `NotYet` in `ParityMode::Off`; Reference answers the C++ false.
+    pub fn can_start(&self, completed: &DetSet<String>, mode: ParityMode) -> Result<bool, MissionError> {
+        if mode == ParityMode::Off && self.data().repeatable && self.status() == Status::Complete {
+            return Err(NotYet::not_read("CanStartMission of a Complete mission with bRepeatable", BRIDGE_RECORD).into());
+        }
+        Ok(self.status() == Status::NotStarted && self.available(completed, &DetMap::new()))
     }
 
     /// `CanEndMission`: ReadyToTurnIn (RequiredObjectivesComplete is not modelled).
@@ -969,6 +995,7 @@ impl MissionSystem {
     /// A named Kismet variable of the mission's provider bound to a world object (`None` clears it); no effect without
     /// a provider. Refused while the provider is running.
     pub fn bind_kismet_variable(&self, name: &str, object: Option<ObjRef>) -> Result<(), MissionError> {
+        self.usable()?;
         if !self.inner.has_provider {
             return Ok(());
         }
@@ -984,6 +1011,10 @@ impl MissionSystem {
     }
 }
 
+fn lends(d: &Data) -> bool {
+    !d.weapon.is_empty() && d.objectives.values().any(|o| o.path == d.weapon_objective)
+}
+
 fn progress_of(d: &Data, state: &State, name: &str) -> i32 {
     let Some(&value) = state.progress.get(name) else {
         return 0;
@@ -992,6 +1023,14 @@ fn progress_of(d: &Data, state: &State, name: &str) -> i32 {
         Some(o) if o.mask => bits(value),
         _ => value,
     }
+}
+
+/// The `NotYet` text of a call on a mission whose provider a failed [`lend`] lost.
+pub const PROVIDER_LOST: &str =
+    "a mission whose behavior provider was lost by a failed lend (every later call is refused)";
+
+fn lost_error() -> MissionError {
+    BehaviorError::Vm(VmError::NotYet(NotYet::not_ported(PROVIDER_LOST, RECORD)))
 }
 
 fn busy() -> MissionError {
@@ -1005,9 +1044,13 @@ fn busy() -> MissionError {
 /// when the slot is not empty (it holds the provider only while it is not running).
 pub fn lend<T>(
     slot: &RefCell<Option<Provider>>,
+    lost: &Cell<bool>,
     p: &mut Provider,
     f: impl FnOnce() -> Result<T, MissionError>,
 ) -> Result<T, MissionError> {
+    if lost.get() {
+        return Err(lost_error());
+    }
     if slot.borrow().is_some() {
         return Err(busy());
     }
@@ -1017,9 +1060,13 @@ pub fn lend<T>(
     let result = f();
     match slot.borrow_mut().take() {
         Some(back) => *p = back,
-        // f took the provider and did not put it back: a nested call failed between its take and its return. The
-        // slot's code always puts it back, so this cannot happen; refuse rather than run on the copy.
-        None => return Err(busy()),
+        // f took the provider and did not put it back. The slot's own code always puts it back, so this needs a caller
+        // that takes it itself; the provider is gone, so its owner is marked lost and every later call is refused,
+        // rather than letting the placeholder copy run.
+        None => {
+            lost.set(true);
+            return Err(lost_error());
+        }
     }
     result
 }
@@ -1064,6 +1111,7 @@ impl MissionSystem {
         vm: &mut Vm,
         f: impl FnOnce(&mut Provider, &mut Vm) -> Result<(), MissionError>,
     ) -> Result<(), MissionError> {
+        self.usable()?;
         if !self.inner.has_provider {
             return Ok(());
         }
@@ -1074,6 +1122,16 @@ impl MissionSystem {
         let result = f(&mut p, vm);
         *self.inner.provider.borrow_mut() = Some(p);
         result
+    }
+
+    /// Refused once the provider was lost ([`lend`]).
+    fn usable(&self) -> Result<(), MissionError> {
+        if self.inner.lost.get() { Err(lost_error()) } else { Ok(()) }
+    }
+
+    /// Whether a failed lend lost the provider (every later call is then refused).
+    pub fn is_lost(&self) -> bool {
+        self.inner.lost.get()
     }
 
     /// The provider's error lines joined to the tracker's, each once (the C++ `collectProviderErrors`).
@@ -1107,6 +1165,19 @@ impl MissionSystem {
             );
             if !allowed {
                 return Ok(false);
+            }
+            // Rules neither side models, decided before anything changes (Off mode; Reference keeps the C++).
+            if vm.parity == ParityMode::Off {
+                let d = &self.inner.data;
+                if matches!(status, Status::Active | Status::Complete) && lends(d) {
+                    return Err(NotYet::not_read("the lent mission weapon's region-stage condition", BRIDGE_RECORD)
+                    .into());
+                }
+                if status == Status::Active && d.plot_critical && s.kickoff_pending {
+                    return Err(
+                        NotYet::not_read("a plot-critical mission overwriting a pending kickoff record", RECORD).into()
+                    );
+                }
             }
             s.status = Some(status);
             if status == Status::Complete {
@@ -1170,6 +1241,7 @@ impl MissionSystem {
                 .push(format!("advance to unknown objective set {path}"));
             return Ok(false);
         };
+        // Reached only in Reference mode: Off refuses such a mission at construction.
         if set.cls != OBJECTIVE_SET_CLASS {
             self.inner
                 .state
@@ -1231,7 +1303,8 @@ impl MissionSystem {
     /// `bActivateInitialObjectiveSet`. Acceptance also writes the pending kickoff record, which the next
     /// [`MissionSystem::tick`] consumes. False when [`MissionSystem::can_start`] does not hold.
     pub fn accept(&self, vm: &mut Vm, completed: &DetSet<String>) -> Result<bool, MissionError> {
-        if !self.can_start(completed) {
+        self.usable()?;
+        if !self.can_start(completed, vm.parity)? {
             return Ok(false);
         }
         self.set_status(vm, Status::Active)?;
@@ -1246,6 +1319,7 @@ impl MissionSystem {
     /// `PlayKickoff` / `PlayKickoffDialogOnly`: `Default` with id 12 / 13, played at once (consuming the pending
     /// record). False unless Active.
     pub fn kickoff(&self, vm: &mut Vm, dialog_only: bool) -> Result<bool, MissionError> {
+        self.usable()?;
         if self.status() != Status::Active {
             return Ok(false);
         }
@@ -1262,6 +1336,7 @@ impl MissionSystem {
 
     /// `PlayTurnIn` with a mission: `Default` with id 14 and nothing else (bridge note).
     pub fn play_turn_in(&self, vm: &mut Vm) -> Result<(), MissionError> {
+        self.usable()?;
         self.fire(vm, "Default", link::TURN_IN)?;
         self.collect();
         Ok(())
@@ -1303,6 +1378,7 @@ impl MissionSystem {
     /// B1 (UNVERIFIED): updates are queued; one raised while another is applied waits its turn instead of nesting. A
     /// failure empties the queue.
     fn update(&self, vm: &mut Vm, name: &str, bit: i32) -> Result<bool, MissionError> {
+        self.usable()?;
         {
             let mut s = self.inner.state.borrow_mut();
             s.updates.push_back((name.to_string(), bit));
@@ -1355,11 +1431,13 @@ impl MissionSystem {
             if progress_of(d, &s, name) >= objective.count {
                 return Ok(false);
             }
+            // The zero-bit refusal comes before the progress entry is made, as in the C++ (`mission.cpp`), so a refused
+            // update leaves no `progress=` line in the save text.
+            if objective.mask && bit == 0 {
+                return Ok(false);
+            }
             let entry = s.progress.entry(name.to_string()).or_insert(0);
             if objective.mask {
-                if bit == 0 {
-                    return Ok(false);
-                }
                 *entry |= bit;
             } else {
                 // Below the count, which is an i32: the increment cannot pass i32::MAX.
@@ -1386,6 +1464,7 @@ impl MissionSystem {
 
     /// `RunMissionCustomEvent`: id 0, unless the mission is Complete (B4, UNVERIFIED).
     pub fn custom_event(&self, vm: &mut Vm, name: &str) -> Result<bool, MissionError> {
+        self.usable()?;
         if self.status() == Status::Complete {
             return Ok(false);
         }
@@ -1396,6 +1475,7 @@ impl MissionSystem {
 
     /// Turn-in: ReadyToTurnIn -> Complete and a `Reward` effect naming the XP attribute.
     pub fn turn_in_mission(&self, vm: &mut Vm) -> Result<bool, MissionError> {
+        self.usable()?;
         if !self.set_status(vm, Status::Complete)? {
             return Ok(false);
         }
@@ -1410,6 +1490,7 @@ impl MissionSystem {
     /// cleared; bridge note, UNVERIFIED; the "Loader" level wait, the tracked-mission switch and the dialog request
     /// are not modelled), then the provider's delayed links run.
     pub fn tick(&self, vm: &mut Vm, seconds: f64) -> Result<(), MissionError> {
+        self.usable()?;
         let pending = {
             let mut s = self.inner.state.borrow_mut();
             s.now += seconds;
@@ -1460,6 +1541,9 @@ impl MissionSystem {
     /// bit-mask objective's full mask; one whose count is outside 0..=30 refuses the text, where the C++ shift is
     /// undefined). The kickoff counts as heard once started (an assumption, UNVERIFIED).
     pub fn load_state(&self, text: &str) -> bool {
+        if self.is_lost() {
+            return false;
+        }
         let mut status = None;
         let mut active = String::new();
         let (mut objectives, mut sets) = (DetSet::new(), DetSet::new());

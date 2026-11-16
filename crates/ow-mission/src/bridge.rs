@@ -19,7 +19,8 @@
 //! world's natives answer. The experience curve and the mission reward are `ow-balance`'s (decision 2026-11-15-18).
 //!
 //! **Natives bound here**, each scoped to the bridge's own objects like the C++ (a call on another object is the
-//! unbound behaviour: an `UNIMPLEMENTED <key> (outside the mission bridge binding)` log line and the zero result):
+//! unbound behaviour: under the VM's stub policy, `VmError::UnboundNative` for a gameplay command; in
+//! `ParityMode::Reference` the C++ `UNIMPLEMENTED <key> (outside the mission bridge binding)` line and the zero result):
 //! - the tracker: `ActivateMission`, `CompleteMission`, `PlayTurnIn`, `GetMissionStatus`, `CanStartMission`,
 //!   `CanEndMission`, `GetCompletedBranch`, `IsDataValid`, `ValidateData`, `IsMissionObjectiveActive`,
 //!   `IsMissionObjectiveComplete`, `IsObjectiveSetActive`, `UpdateObjective`, `RegisterMissionObserver`;
@@ -38,7 +39,10 @@
 //! (`UNIMPLEMENTED ...` lines become the stub list, other new lines the notes), and a script that fails is recorded
 //! (`mission script: <error>`), never propagated, so the native state the caller already changed stays as it is. A
 //! failure that is a `NotYet` is also kept in [`MissionScript::not_yet`]. `--mission-run` is a gameplay command, so its
-//! VM refuses an unbound native (`StubPolicy::Refuse`): a native the C++ logs as a stub is an error line here.
+//! VM refuses an unbound native (`StubPolicy::Refuse`): a native the C++ logs as a stub is an error line here. The
+//! bridge's own C++ stubs (the "not implemented" paths of the reward natives, `GetBehaviorContext`'s instance-data
+//! path, `RunBehaviors` outside the level-up) keep the C++ stub line only in `ParityMode::Reference` and answer
+//! `NotYet` in Off mode (architecture R3; the table of decision 2026-11-15-34).
 //!
 //! **Not ported, by design or for another lane:**
 //! - The pawn health and hit chain (`CombatSystem`, src/combat*.cpp): lane W6-COMBAT. The bridge exposes the
@@ -55,8 +59,8 @@
 //!   the dialog system (lane W5-DIALOG): `NotYet { LayerAbsent }` when reached. `WillowDialogGlobalsDefinition.Get` is
 //!   bound (it only returns the globals object).
 //! - `GetExperienceReward` for a mission with optional objectives: the C++ logs "not implemented" and leaves their
-//!   terms out; here it is `NotYet { NotPorted }` (`ow_balance::xp::mission_xp` takes the terms; the bridge does not
-//!   collect the completed objectives' percentages yet).
+//!   terms out (kept in Reference mode); in Off mode it is `NotYet { NotPorted }` (`ow_balance::xp::mission_xp` takes
+//!   the terms; the bridge does not collect the completed objectives' percentages yet).
 //!
 //! **The director is a copy of his archetype**, as in the C++: `GD_Marcus.Character.Pawn_Marcus`, his
 //! `MissionDirectives` table, his `AIClass` and his `DialogComponent` are each instantiated from their export with the
@@ -81,7 +85,7 @@ use ow_balance::xp::{MissionXp, mission_xp};
 use ow_behavior::kernel::Provider;
 use ow_behavior::provider::{BehaviorError, enum_names, stock_path};
 use ow_behavior::registry::Handler;
-use ow_core::{DetMap, DetSet, NotYet, PackageName};
+use ow_core::{DetMap, DetSet, NotYet, PackageName, ParityMode};
 use ow_object::cdo::instantiate_export;
 use ow_object::decode::{DecodeState, ValueCx};
 use ow_object::heap::{ObjectSpace, Origin};
@@ -127,6 +131,9 @@ const LEVEL_UP_GUARD: usize = 200;
 const NEXT_SET_GUARD: usize = 64;
 
 const STUB_PREFIX: &str = "UNIMPLEMENTED ";
+
+/// The layer the mission's reward items need.
+const LOOT_LAYER: &str = "ow-combat loot (lane W6-LOOT)";
 
 /// The dialog layer the director's dialog needs.
 const DIALOG_LAYER: &str = "ow-mission dialog (lane W5-DIALOG)";
@@ -237,6 +244,8 @@ struct Bridge {
     /// The director's AI-definition provider, out of its slot while it runs (`crate::tracker::lend`).
     marcus: RefCell<Option<Provider>>,
     has_marcus: Cell<bool>,
+    /// The director's provider was lost by a failed lend: every later call on it is refused.
+    marcus_lost: Cell<bool>,
 }
 
 /// The bridge (module documentation). Cheap to clone: every clone is the same bridge.
@@ -474,13 +483,18 @@ fn key_of(vm: &Vm, f: FuncId) -> String {
     vm.function(f).map(|d| d.display_key().to_string()).unwrap_or_default()
 }
 
-/// A native of the bound class called on another object: the unbound behaviour (a log line and the zero result).
-fn outside_binding(c: &mut NativeCall<'_>) -> Value {
+/// A native of the bound class called on another object: the unbound behaviour. In `ParityMode::Reference`, or when
+/// the VM's stub policy allows the key, the C++ stub (a log line and the zero result); otherwise the policy's refusal
+/// (`VmError::UnboundNative`), as for any unbound native of a gameplay command.
+fn outside_binding(c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
     let key = key_of(c.vm, c.function);
+    if c.vm.parity != ParityMode::Reference && !c.vm.stub_policy.allows_stub(&key) {
+        return Err(BehaviorError::Vm(VmError::UnboundNative(key)));
+    }
     c.vm
         .log
         .push(format!("{STUB_PREFIX}{key} (outside the mission bridge binding)"));
-    zero_result(c)
+    Ok(zero_result(c))
 }
 
 fn zero_result(c: &NativeCall<'_>) -> Value {
@@ -531,8 +545,22 @@ impl MissionScript {
     /// Builds the graph on `world` for `mission`, binds the natives, delivers the mission data validation reply
     /// (the installed `ClientValidateMissionData` runs on the controller: a shortcut for the trigger, which was not
     /// read; the effect is the game's) and installs the tracker's hooks.
+    ///
+    /// **One bridge per fresh world.** `new` refuses a world that already has actors (it places its own `WorldInfo`
+    /// as the level's first actor). It is not transactional: after an error the objects it made stay in the world's
+    /// VM, its `WorldInfo` may already be placed and some natives may be bound, so **the world cannot be used after a
+    /// failed `new`** (drop it and build another). The CLI builds the bridge once and fails as a whole; a host or the
+    /// slice (W6-FIRE) must do the same.
     pub fn new(world: &mut World, mission: &MissionSystem) -> Result<MissionScript, MissionError> {
         let actors = world.actors();
+        if !actors
+            .try_borrow()
+            .map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?
+            .list()
+            .is_empty()
+        {
+            return Err(data("mission script bridge: the world already has actors (one bridge per fresh world)".to_string()));
+        }
         let world_query = world.query();
         let vm = &mut world.vm;
         let package = match vm.space.heap.get(mission.definition())?.origin {
@@ -618,6 +646,7 @@ impl MissionScript {
                 state: RefCell::new(BState::default()),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
+                marcus_lost: Cell::new(false),
             }),
         };
         script.bind_natives(vm)?;
@@ -762,8 +791,14 @@ impl MissionScript {
         }
     }
 
-    fn not_implemented(vm: &mut Vm, what: &str) {
-        vm.log.push(format!("{STUB_PREFIX}{what} (not implemented)"));
+    /// A path the C++ leaves out with a "not implemented" stub line (architecture R3): in `ParityMode::Reference` that
+    /// line, and the caller goes on as the C++ does; otherwise `unread`, the honest refusal.
+    fn not_implemented(vm: &mut Vm, what: &str, unread: NotYet) -> Result<(), MissionError> {
+        if vm.parity == ParityMode::Reference {
+            vm.log.push(format!("{STUB_PREFIX}{what} (not implemented)"));
+            return Ok(());
+        }
+        Err(unread.into())
     }
 
     fn completed(&self) -> DetSet<String> {
@@ -1147,12 +1182,14 @@ impl MissionScript {
     /// level, the percentage of `Reward` (or `AlternativeReward`) evaluated with the controller as the source.
     fn experience_reward(&self, vm: &mut Vm, alternate: bool) -> Result<i32, MissionError> {
         if self.inner.mission.has_optional_objective() {
-            return Err(NotYet::not_ported(
-                "GetExperienceReward of a mission with optional objectives (the completed optional objectives' \
-                 OptionalExperienceRewardPercentage terms; the C++ logs them as not implemented)",
-                RECORD,
-            )
-            .into());
+            Self::not_implemented(
+                vm,
+                "MissionDefinition.GetExperienceReward: optional objective experience",
+                NotYet::not_ported(
+                    "GetExperienceReward of a mission with optional objectives (the completed optional objectives'                      OptionalExperienceRewardPercentage terms)",
+                    RECORD,
+                ),
+            )?;
         }
         let reward = self.reward_data(vm, alternate)?;
         let pct = field(&vm.space, &reward, "ExperienceRewardPercentage")
@@ -1268,7 +1305,7 @@ impl MissionScript {
     // chain to NextMissionInChain, the untracking, the unlock queue and the fast-forward prompt.
     fn n_activate(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         if self.is_mission(c.vm, &c.arg(0)?.clone())? {
             let completed = self.completed();
@@ -1279,7 +1316,7 @@ impl MissionScript {
 
     fn n_complete(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         if self.is_mission(c.vm, &c.arg(0)?.clone())? {
             self.inner.mission.turn_in_mission(c.vm)?;
@@ -1290,7 +1327,7 @@ impl MissionScript {
     // PlayTurnIn with a mission fires "Default" with link id 14 and does nothing else.
     fn n_play_turn_in(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         if self.is_mission(c.vm, &c.arg(0)?.clone())? {
             self.inner.mission.play_turn_in(c.vm)?;
@@ -1300,7 +1337,7 @@ impl MissionScript {
 
     fn n_status(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         // No record: NotStarted.
         let mine = self.is_mission(c.vm, &c.arg(0)?.clone())?;
@@ -1311,15 +1348,16 @@ impl MissionScript {
     // the director's table) is NotStarted and is not offered here (the tracker holds one mission), UNVERIFIED.
     fn n_can_start(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let mine = self.is_mission(c.vm, &c.arg(0)?.clone())?;
-        Ok(Value::Bool(mine && self.inner.mission.can_start(&self.completed())))
+        let start = mine && self.inner.mission.can_start(&self.completed(), c.vm.parity)?;
+        Ok(Value::Bool(start))
     }
 
     fn n_can_end(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let mine = self.is_mission(c.vm, &c.arg(0)?.clone())?;
         Ok(Value::Bool(mine && self.inner.mission.can_end()))
@@ -1327,7 +1365,7 @@ impl MissionScript {
 
     fn n_branch(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let mine = self.is_mission(c.vm, &c.arg(0)?.clone())?;
         Ok(Value::Byte(if mine { self.inner.mission.completed_branch() } else { 0 }))
@@ -1337,7 +1375,7 @@ impl MissionScript {
     // playthrough's list whose MissionDef is that object; -1 when the playthrough index is out of range or none is.
     fn n_mission_index(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let wanted = arg_object(c, 0)?;
         for (i, record) in self.mission_list(c.vm)?.iter().enumerate() {
@@ -1353,7 +1391,7 @@ impl MissionScript {
     // GetCurrentPlaythrough: CurrentPlaythrough of the world's replication info (0 when absent); no side effects.
     fn n_playthrough(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Int(self.current_playthrough(c.vm)?))
     }
@@ -1361,7 +1399,7 @@ impl MissionScript {
     // IsPrimaryPlayer: true for the sole local controller of a standalone game.
     fn n_primary(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Bool(true))
     }
@@ -1369,7 +1407,7 @@ impl MissionScript {
     // GetHUDMovie: None without a WillowHUD (the VM graph has none, so the script skips its HUD branches).
     fn n_hud_movie(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Object(None))
     }
@@ -1377,7 +1415,7 @@ impl MissionScript {
     // Presentation only (hardware LCD text, UI sound): documented no-ops.
     fn n_controller_noop(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::None)
     }
@@ -1404,7 +1442,7 @@ impl MissionScript {
     // IsDataValid reports the tracker's bDataValidated flag; ValidateData, the only writer, sets it.
     fn n_data_valid(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let v = get(&c.vm.space, self.inner.o.tracker, "bDataValidated")?;
         Ok(Value::Bool(v.truth(&c.vm.space.names)))
@@ -1412,7 +1450,7 @@ impl MissionScript {
 
     fn n_validate(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         set(&mut c.vm.space, self.inner.o.tracker, "bDataValidated", Value::Bool(true))?;
         Ok(Value::None)
@@ -1420,7 +1458,7 @@ impl MissionScript {
 
     fn n_exp_earn(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let amount = arg_int(c, 0)?;
         let source = arg_int(c, 1)?;
@@ -1431,14 +1469,14 @@ impl MissionScript {
 
     fn n_max_level(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Int(MAX_LEVEL))
     }
 
     fn n_required(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let level = arg_int(c, 0)?;
         Ok(Value::Int(script_int(self.required(c.vm, level)?)?))
@@ -1450,7 +1488,7 @@ impl MissionScript {
 
     fn n_xp_reward(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let alternate = arg_truth(c, 1)?;
         Ok(Value::Int(self.experience_reward(c.vm, alternate)?))
@@ -1458,14 +1496,14 @@ impl MissionScript {
 
     fn n_game_stage(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Int(self.current_game_stage()))
     }
 
     fn n_currency_type(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let reward = self.reward_data(c.vm, arg_truth(c, 0)?)?;
         let t = field(&c.vm.space, &reward, "CurrencyRewardType").map_or(0, integer);
@@ -1478,12 +1516,16 @@ impl MissionScript {
     // OtherCurrencyReward, truncated.
     fn n_currency(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let reward = self.reward_data(c.vm, arg_truth(c, 1)?)?;
         let currency = field(&c.vm.space, &reward, "CurrencyRewardType").map_or(0, integer);
         if self.inner.mission.has_optional_objective() {
-            Self::not_implemented(c.vm, "MissionDefinition.GetCurrencyReward: optional objective currency rewards");
+            Self::not_implemented(
+                c.vm,
+                "MissionDefinition.GetCurrencyReward: optional objective currency rewards",
+                NotYet::not_ported("GetCurrencyReward: the optional objectives' currency rewards", RECORD),
+            )?;
         }
         let need = |name: &str| {
             field(&c.vm.space, &reward, name)
@@ -1501,7 +1543,11 @@ impl MissionScript {
             Self::not_implemented(
                 c.vm,
                 "MissionDefinition.GetCurrencyReward: credits need MissionCreditRewardFormula attribute values",
-            );
+                NotYet::not_read(
+                    "GetCurrencyReward's credits: GlobalsDefinition.MissionCreditRewardFormula x CreditRewardMultiplier                      (the formula's attribute values are not decoded in the record)",
+                    RECORD,
+                ),
+            )?;
         }
         Ok(Value::Int(0))
     }
@@ -1511,7 +1557,7 @@ impl MissionScript {
     // (UNVERIFIED).
     fn n_alternate(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let def = self.inner.mission.definition();
         let initial = prop(&c.vm.space, def, "InitialObjectiveSet")?;
@@ -1570,7 +1616,7 @@ impl MissionScript {
     // (NATIVE_LOOT.md, lane W6-LOOT).
     fn n_item_rewards(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.this_is_mission(c)? {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let alternate = field(&c.vm.space, c.arg(1)?, "bGrantAltReward").is_some_and(|v| v.truth(&c.vm.space.names));
         let reward = self.reward_data(c.vm, alternate)?;
@@ -1583,7 +1629,12 @@ impl MissionScript {
             Self::not_implemented(
                 c.vm,
                 "MissionDefinition.GetItemRewardsForPlayer: item rewards need balance generation and pool rolls (NATIVE_LOOT.md)",
-            );
+                NotYet::layer_absent(
+                    "GetItemRewardsForPlayer's reward items (balance generation and pool rolls)",
+                    LOOT_LAYER,
+                    RECORD,
+                ),
+            )?;
         }
         Ok(Value::None)
     }
@@ -1592,7 +1643,7 @@ impl MissionScript {
     // "can this objective be updated now", the tracker's Active classification; UpdateObjective only queues.
     fn n_objective_active(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let path = path_of(c.vm, c.arg(0)?)?;
         Ok(Value::Bool(self.inner.mission.objective_state(&path) == "Active"))
@@ -1600,7 +1651,7 @@ impl MissionScript {
 
     fn n_objective_complete(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let path = path_of(c.vm, c.arg(0)?)?;
         Ok(Value::Bool(self.inner.mission.objective_state(&path) == "Complete"))
@@ -1608,7 +1659,7 @@ impl MissionScript {
 
     fn n_set_active(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let path = path_of(c.vm, c.arg(0)?)?;
         Ok(Value::Bool(self.inner.mission.set_active(&path)))
@@ -1616,7 +1667,7 @@ impl MissionScript {
 
     fn n_update_objective(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let path = path_of(c.vm, c.arg(0)?)?;
         if !path.is_empty() {
@@ -1630,7 +1681,7 @@ impl MissionScript {
     // raises (MissionScript::notify).
     fn n_register_observer(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         if let Some(o) = arg_object(c, 0)? {
             self.inner.state.borrow_mut().observers.push(o);
@@ -1682,6 +1733,14 @@ impl MissionScript {
 
     fn n_run_behaviors(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.inner.state.borrow().in_level_up {
+            // The C++ runs RunBehaviors only inside its level-up stand-in and logs a stub elsewhere (R3: Reference only).
+            if c.vm.parity != ParityMode::Reference {
+                return Err(NotYet::not_ported(
+                    "BehaviorBase.RunBehaviors outside the level-up (the behavior collections it runs)",
+                    RECORD,
+                )
+                .into());
+            }
             let key = key_of(c.vm, c.function);
             c.vm
                 .log
@@ -1836,6 +1895,9 @@ impl MissionScript {
         if !self.inner.has_marcus.get() {
             return Ok(());
         }
+        if self.inner.marcus_lost.get() {
+            return Err(NotYet::not_ported(tracker::PROVIDER_LOST, RECORD).into());
+        }
         let taken = self.inner.marcus.borrow_mut().take();
         let Some(mut p) = taken else {
             return Err(NotYet::not_ported(tracker::PROVIDER_BUSY, RECORD).into());
@@ -1866,7 +1928,7 @@ impl MissionScript {
         };
         let apply = vm.find_method(class, "ApplyBehaviorToContext", state)?;
         self.inner.state.borrow_mut().selected.push(Vec::new());
-        let ran = lend(&self.inner.marcus, p, || {
+        let ran = lend(&self.inner.marcus, &self.inner.marcus_lost, p, || {
             for &context in &contexts {
                 let Some(f) = apply else {
                     self.inner
@@ -2066,7 +2128,11 @@ impl MissionScript {
         };
         let named = !name.is_empty() && name != "None";
         if base.is_some() && named {
-            Self::not_implemented(c.vm, "BehaviorBase.GetBehaviorContext instance-data path");
+            Self::not_implemented(
+                c.vm,
+                "BehaviorBase.GetBehaviorContext instance-data path",
+                NotYet::not_ported("GetBehaviorContext with an InstancedDataContextName (the instance-data path)", RECORD),
+            )?;
         }
         Ok(Value::Object(if named { None } else { base }))
     }
@@ -2074,7 +2140,7 @@ impl MissionScript {
     // GetBehaviorConsumerHandle (IBehaviorConsumer): a plain read of the pawn's own ConsumerHandle field.
     fn n_consumer_handle(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         let Some(director) = self.director().filter(|d| c.this == Some(*d)) else {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         };
         get(&c.vm.space, director, "ConsumerHandle")
     }
@@ -2093,7 +2159,7 @@ impl MissionScript {
     fn n_trigger_event(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         let component = self.inner.state.borrow().dialog_component;
         if c.this.is_none() || c.this != component {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Err(NotYet::layer_absent(
             "GearboxDialogComponent.TriggerEvent on the director's component (the talker's groups and the line)",
@@ -2105,7 +2171,7 @@ impl MissionScript {
 
     fn n_play_movie(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.controller) {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let movie = path_of(c.vm, c.arg(0)?)?;
         let director = path_of(c.vm, c.arg(1)?)?;
@@ -2272,7 +2338,7 @@ impl MissionScript {
             (s.ui_manager, s.screen_open, s.screen_movie)
         };
         if c.this.is_none() || c.this != ui {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::Object(if open { movie } else { None }))
     }
@@ -2281,7 +2347,7 @@ impl MissionScript {
     // modelled.
     fn n_close(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if c.this.is_none() || c.this != self.movie() {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         self.close_movie(c.vm)?;
         Ok(Value::None)
@@ -2289,7 +2355,7 @@ impl MissionScript {
 
     fn n_ui_sound(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if c.this.is_none() || c.this != self.movie() {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         Ok(Value::None)
     }
@@ -2297,7 +2363,7 @@ impl MissionScript {
     // DisplayRewardsPage(MissionReward): the page is a flag that waits for confirm_reward; nothing is drawn.
     fn n_rewards_page(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if c.this.is_none() || c.this != self.movie() {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         }
         let mission = match field(&c.vm.space, c.arg(0)?, "Mission") {
             Some(v) => path_of(c.vm, v)?,
@@ -2314,7 +2380,7 @@ impl MissionScript {
     // the row holds the mission object.
     fn n_quest_entries(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         let Some(movie) = self.movie().filter(|m| c.this == Some(*m)) else {
-            return Ok(outside_binding(c));
+            return outside_binding(c);
         };
         let director = self
             .director()
