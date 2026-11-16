@@ -46,7 +46,7 @@ use super::tick::{TickReport, tick};
 use super::{DECISION, RECORD_AWARENESS, RECORD_MELEE, Senses, Vec3, threat};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// The stock globals that hold `AICloseThreatRadius`.
 pub const GLOBALS_PATH: &str = "GD_Globals.General.Globals";
@@ -57,6 +57,10 @@ pub trait Host {
     fn exposure(&mut self, vm: &mut Vm, viewer: ObjRef, target: ObjRef) -> Result<f32, VmError>;
     /// The world's registry of targetables, in its order.
     fn targetables(&mut self, vm: &mut Vm) -> Result<Vec<ObjRef>, VmError>;
+    /// Whether `actor` is in that registry. The default lists the registry; a host that keeps a set answers directly.
+    fn is_registered(&mut self, vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
+        Ok(self.targetables(vm)?.contains(&actor))
+    }
     /// The actor's own "can be targeted" answer.
     fn can_be_targeted(&mut self, vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError>;
 }
@@ -166,12 +170,15 @@ impl Senses for VmSenses<'_> {
         })
     }
 
+    fn is_registered(&mut self, actor: ObjRef) -> Result<bool, VmError> {
+        self.host.is_registered(self.vm, actor)
+    }
+
     fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError> {
         let vm = &mut *self.vm;
+        // A controller without a pawn is tested as itself (step 2 replaces only when the pawn is set).
         if is_a(vm, actor, "Engine.Controller")? {
-            return object(vm, actor, "Pawn")?.ok_or_else(|| {
-                NotYet::not_read("ValidTarget of a controller without a pawn", RECORD_AWARENESS).into()
-            });
+            return Ok(object(vm, actor, "Pawn")?.unwrap_or(actor));
         }
         if let Some(controller) = object(vm, actor, "Controller")?
             && let Some(pawn) = object(vm, controller, "Pawn")?

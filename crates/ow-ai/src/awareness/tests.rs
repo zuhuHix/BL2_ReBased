@@ -44,11 +44,13 @@ impl Senses for Toy {
         Ok(self.targeted.get(&actor).copied().unwrap_or(0))
     }
     fn tested_actor(&mut self, actor: ObjRef) -> Result<ObjRef, VmError> {
-        match self.controllers.get(&actor) {
-            Some(Some(pawn)) => Ok(*pawn),
-            Some(None) => Err(ow_core::NotYet::not_read("a controller without a pawn", "test").into()),
-            None => Ok(actor),
-        }
+        Ok(match self.controllers.get(&actor) {
+            Some(Some(pawn)) => *pawn,
+            _ => actor,
+        })
+    }
+    fn is_registered(&mut self, actor: ObjRef) -> Result<bool, VmError> {
+        Ok(self.registry.contains(&actor))
     }
 }
 
@@ -579,7 +581,8 @@ fn an_ai_outside_the_registry_has_no_valid_target() {
     assert!(!valid_target(&c, &mut w.toy, Some(w.player)).unwrap());
 }
 
-/// G26 step 2: a controller with a pawn is tested as that pawn; one without a pawn is `NotYet`.
+/// G26 step 2: a controller with a pawn is tested as that pawn; one without a pawn is tested as itself (here an
+/// invented actor with its own facts: an enemy, so valid).
 #[test]
 fn a_controller_is_tested_as_its_pawn() {
     let mut w = world();
@@ -590,8 +593,10 @@ fn a_controller_is_tested_as_its_pawn() {
     w.toy.controllers.insert(controller, Some(w.other));
     assert!(!valid_target(&c, &mut w.toy, Some(controller)).unwrap(), "a friendly pawn's controller");
     w.toy.controllers.insert(controller, None);
-    let e = valid_target(&c, &mut w.toy, Some(controller)).unwrap_err();
-    assert!(matches!(e, VmError::NotYet(n) if n.missing == Missing::NotRead));
+    w.toy.facts.insert(controller, ActorFacts::new([0.0; 3], Rotator::new(0, 0, 0), ActorKind::Other));
+    assert!(valid_target(&c, &mut w.toy, Some(controller)).unwrap(), "tested as itself");
+    w.toy.facts.get_mut(&controller).unwrap().can_be_targeted = false;
+    assert!(!valid_target(&c, &mut w.toy, Some(controller)).unwrap(), "its own answer decides");
 }
 
 /// The list's radius test compares squares: exactly on the radius is in the list, a hair beyond is not.

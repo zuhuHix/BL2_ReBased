@@ -16,7 +16,8 @@
 //! 4. the running action's update and the tree's timed failures (part 2);
 //! 5. the state update under the same test (the tree's selection: part 2); then `LastStateUpdateTime = now`.
 //!
-//! What part 2 does is named in [`TickReport::pending`], not run and not an error.
+//! [`TickReport::pending`] names the tree's steps; [`super::actions::tick_brain`] runs them around this tick (part 2,
+//! decision 2026-11-16-66). `tick` alone, without a tree, leaves them pending: not run and not an error.
 
 use ow_object::ids::ObjRef;
 use ow_vm::error::VmError;
