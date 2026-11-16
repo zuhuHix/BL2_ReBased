@@ -27,32 +27,61 @@ fn f64v(v: Vec3) -> [f64; 3] {
     [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])]
 }
 
-/// Within one `f32` step of the pinned value (`f32::EPSILON` times its size, plus 1e-15 for the rounding residues
-/// near 0: P1 carries `2 cos(pi / 2)` as 1.2e-16 where the hand value is 0). The pins are `%.9g` text of `f32`
-/// values, read here as `f64`, so they are not bit-exact; and the Python sums its three products with compensated
-/// summation (`sum`, 3.12 and later), the Rust left to right.
+/// How many `f32` values lie between `a` and `b` (0 when equal; 0.0 and -0.0 count as equal). The bits of a finite
+/// `f32` read as a signed magnitude are ordered like the values, so the distance of the two orderings is the count.
+fn f32_steps(a: f32, b: f32) -> u32 {
+    let ordered = |x: f32| {
+        let bits = x.to_bits();
+        let magnitude = i64::from(bits & 0x7FFF_FFFF);
+        if bits >> 31 == 1 {
+            -magnitude
+        } else {
+            magnitude
+        }
+    };
+    // At most 2^32 apart, so the difference fits a u32 for any two finite values but the two infinities.
+    u32::try_from((ordered(a) - ordered(b)).unsigned_abs()).unwrap_or(u32::MAX)
+}
+
+/// The engine matrix equals the pinned one exactly: 0 `f32` steps. Each pin is the `%.9g` text of an `f32`, so
+/// `w as f32` gives back that exact `f32`. The Rust side is deterministic on the reference platform (N1), so the
+/// pin is fixed; the Python's compensated `sum` (3.12 and later) only matters when the pins are regenerated.
+///
+/// One exception: an entry that is mathematically 0 holds a rounding residue (`cos(pi / 2)`, `sin(pi)`, about
+/// 1e-16) whose sign follows how the angle was reached. P4's roll 32768 is wrapped to -32768 here and taken as +180
+/// degrees by the Python, so its `-sin(roll) cos(pitch)` residue has the other sign. Such entries (pin below 1e-15
+/// in size) only have to be below 1e-15 too.
 fn assert_pinned(got: &Affine, rows: [[f64; 3]; 3], translation: [f64; 3], what: &str) {
     let m = got.to_engine();
-    for i in 0..3 {
-        for (j, &w) in rows[i].iter().enumerate() {
-            let g = f64::from(m.cols[i][j]);
-            let step = f64::from(f32::EPSILON) * w.abs();
-            assert!(
-                close(g, w, step + 1e-15),
-                "{what} row {i} col {j}: got {}, want {}",
-                fmt_g(g, 9),
-                fmt_g(w, 9)
-            );
-        }
-        let (g, w) = (f64::from(m.cols[3][i]), translation[i]);
-        let step = f64::from(f32::EPSILON) * w.abs();
+    let check = |g: f32, w: f64, at: &str| {
+        let ok = if w.abs() < 1e-15 {
+            f64::from(g).abs() < 1e-15
+        } else {
+            // w is the %.9g text of an f32: the float-to-float `as` gives that f32 back exactly.
+            f32_steps(g, w as f32) == 0
+        };
         assert!(
-            close(g, w, step + 1e-15),
-            "{what} t {i}: got {}, want {}",
-            fmt_g(g, 9),
+            ok,
+            "{what} {at}: got {}, want {}",
+            fmt_g(f64::from(g), 9),
             fmt_g(w, 9)
         );
+    };
+    for i in 0..3 {
+        for (j, &w) in rows[i].iter().enumerate() {
+            check(m.cols[i][j], w, &format!("row {i} col {j}"));
+        }
+        check(m.cols[3][i], translation[i], &format!("t {i}"));
     }
+}
+
+#[test]
+fn f32_steps_counts_neighbours() {
+    assert_eq!(f32_steps(1.0, 1.0), 0);
+    assert_eq!(f32_steps(0.0, -0.0), 0);
+    assert_eq!(f32_steps(1.0, 1.0 + f32::EPSILON), 1);
+    assert_eq!(f32_steps(f32::from_bits(1), -f32::from_bits(1)), 2);
+    assert_eq!(f32_steps(-2.0, -2.0 - 2.0 * f32::EPSILON), 1);
 }
 
 #[test]
@@ -99,7 +128,7 @@ fn a_whole_turn_apart_gives_the_same_bits() {
 #[test]
 fn the_zero_rotator_is_the_identity() {
     assert_eq!(rotator_axes(Rotator::default()), Affine::IDENTITY.rows);
-    assert_eq!(Placement::default().affine(), Affine::IDENTITY);
+    assert_eq!(Placement::default().affine(), Some(Affine::IDENTITY));
     assert_eq!(Affine::IDENTITY.to_engine(), Mat4::IDENTITY);
 }
 
@@ -190,13 +219,13 @@ fn scale_applies_before_rotation_and_translation_last() {
         [2.0, 1.0, 1.0],
     );
     assert_vec(
-        p.affine().point([1.0, 0.0, 0.0]),
+        p.affine().expect("finite").point([1.0, 0.0, 0.0]),
         [10.0, 22.0, 30.0],
         1e-12,
         "point",
     );
     assert_vec(
-        p.affine().direction([1.0, 0.0, 0.0]),
+        p.affine().expect("finite").direction([1.0, 0.0, 0.0]),
         [0.0, 2.0, 0.0],
         1e-15,
         "direction",
@@ -210,14 +239,17 @@ fn a_component_is_placed_first_then_its_actor() {
     // at (110, 0, 0).
     let component = Placement::new([10.0, 0.0, 0.0], Rotator::default(), 1.0, [1.0; 3]);
     let actor = Placement::new([100.0, 0.0, 0.0], Rotator::new(0, 16384, 0), 2.0, [1.0; 3]);
-    let world = component_to_world(&component, &actor);
+    let world = component_to_world(&component, &actor).expect("finite");
     assert_vec(
         world.point([0.0; 3]),
         [100.0, 20.0, 0.0],
         1e-12,
         "component then actor",
     );
-    let wrong = actor.affine().then(&component.affine());
+    let wrong = actor
+        .affine()
+        .expect("finite")
+        .then(&component.affine().expect("finite"));
     assert_vec(
         wrong.point([0.0; 3]),
         [110.0, 0.0, 0.0],
@@ -228,7 +260,10 @@ fn a_component_is_placed_first_then_its_actor() {
     let p = [3.0, -4.0, 5.0];
     assert_vec(
         world.point(p),
-        actor.affine().point(component.affine().point(p)),
+        actor
+            .affine()
+            .expect("finite")
+            .point(component.affine().expect("finite").point(p)),
         1e-12,
         "composition",
     );
@@ -244,7 +279,7 @@ fn placements_match_the_python_composer() {
         [1.0; 3],
     );
     assert_pinned(
-        &p1.affine(),
+        &p1.affine().expect("finite"),
         [
             [1.22464685e-16, 2.0, 0.0],
             [-2.0, 1.22464685e-16, -0.0],
@@ -261,7 +296,7 @@ fn placements_match_the_python_composer() {
         [1.0, 2.0, 0.5],
     );
     assert_pinned(
-        &p2.affine(),
+        &p2.affine().expect("finite"),
         [
             [0.979922235, -0.979922235, 0.574025154],
             [2.23893285, 1.92218661, -0.540719867],
@@ -285,7 +320,7 @@ fn placements_match_the_python_composer() {
         [1.0; 3],
     );
     assert_pinned(
-        &component_to_world(&component, &actor),
+        &component_to_world(&component, &actor).expect("finite"),
         [
             [-1.38802898, 0.377251208, -0.425508201],
             [0.205306277, -0.0558000207, -0.719191015],
@@ -303,7 +338,7 @@ fn placements_match_the_python_composer() {
         [1.0, -1.0, 1.0],
     );
     assert_pinned(
-        &p4.affine(),
+        &p4.affine().expect("finite"),
         [
             [0.905627549, -0.413128436, 0.0957269892],
             [0.415034413, 0.909805715, 1.21902282e-16],
@@ -347,10 +382,17 @@ fn a_collection_matrix_scales_its_rows() {
         1.0,
         [0.97, 1.0, 1.0],
     );
-    assert_eq!(p.affine().to_engine().cols[3], a.to_engine().cols[3]);
+    assert_eq!(
+        p.affine().expect("finite").to_engine().cols[3],
+        a.to_engine().cols[3]
+    );
     for i in 0..3 {
         for j in 0..3 {
-            assert!(close(p.affine().rows[i][j], a.rows[i][j], 1e-15));
+            assert!(close(
+                p.affine().expect("finite").rows[i][j],
+                a.rows[i][j],
+                1e-15
+            ));
         }
     }
 }
@@ -384,7 +426,7 @@ fn the_engine_matrix_is_the_ue3_matrix_column_major() {
         1.25,
         [1.0, 2.0, 3.0],
     );
-    let a = p.affine();
+    let a = p.affine().expect("finite");
     let m = a.to_engine();
     for i in 0..3 {
         for j in 0..3 {
@@ -408,8 +450,12 @@ fn the_engine_matrix_is_the_ue3_matrix_column_major() {
 
 #[test]
 fn mat4_mul_applies_the_right_hand_side_first() {
-    let a = Placement::new([0.0, 0.0, 10.0], Rotator::default(), 1.0, [1.0; 3]).affine();
-    let b = Placement::new([0.0; 3], Rotator::new(0, 16384, 0), 1.0, [1.0; 3]).affine();
+    let a = Placement::new([0.0, 0.0, 10.0], Rotator::default(), 1.0, [1.0; 3])
+        .affine()
+        .expect("finite");
+    let b = Placement::new([0.0; 3], Rotator::new(0, 16384, 0), 1.0, [1.0; 3])
+        .affine()
+        .expect("finite");
     // b * a: move up 10, then turn; a point at (1, 0, 0) goes to (1, 0, 10), then (0, 1, 10).
     let ba = b.to_engine().mul(&a.to_engine());
     let got = ba.apply([1.0, 0.0, 0.0, 1.0]);
@@ -447,7 +493,7 @@ fn positions_cross_unchanged() {
 
 #[test]
 fn the_view_puts_right_up_forward_on_x_y_z() {
-    let v = view_matrix([0.0; 3], Rotator::default());
+    let v = view_matrix([0.0; 3], Rotator::default()).expect("finite");
     let at = |p: [f32; 3]| v.apply([p[0], p[1], p[2], 1.0]);
     assert_eq!(at([100.0, 0.0, 0.0]), [0.0, 0.0, 100.0, 1.0]);
     assert_eq!(at([0.0, 10.0, 0.0]), [10.0, 0.0, 0.0, 1.0]);
@@ -465,7 +511,7 @@ fn the_view_follows_the_camera() {
     // Eye at (100, 200, 300), yaw 16384 (facing +Y): a point 50 ahead is at view z 50; 20 to the camera's right (-X
     // in the world) is at view x 20; 5 above at view y 5.
     let eye = [100.0, 200.0, 300.0];
-    let v = view_matrix(eye, Rotator::new(0, 16384, 0));
+    let v = view_matrix(eye, Rotator::new(0, 16384, 0)).expect("finite");
     let at = |p: [f32; 3]| {
         let o = v.apply([p[0], p[1], p[2], 1.0]);
         [f64::from(o[0]), f64::from(o[1]), f64::from(o[2])]
@@ -516,6 +562,168 @@ fn a_bad_projection_is_refused() {
     assert!(perspective_reverse_z(90.0, 1.0, 0.0, 2.0).is_none());
     assert!(perspective_reverse_z(90.0, 1.0, 2.0, 2.0).is_none());
     assert!(perspective_reverse_z(90.0, 1.0, 1.0, f32::INFINITY).is_none());
+    assert!(perspective_reverse_z(90.0, 1.0, f32::NAN, 2.0).is_none());
+    // Inputs that pass the range test but give an entry beyond f32: the focal length of a 1e-38 degree fov, and the
+    // focal length over a 1e-45 aspect.
+    assert!(perspective_reverse_z(1e-38, 1.0, 1.0, 2.0).is_none());
+    assert!(perspective_reverse_z(90.0, 1e-45, 1.0, 2.0).is_none());
+    assert!(perspective_reverse_z_infinite(1e-38, 1.0, 1.0).is_none());
+    assert!(perspective_reverse_z_infinite(90.0, 1e-45, 1.0).is_none());
+    assert!(perspective_reverse_z_infinite(90.0, 1.0, 0.0).is_none());
+    assert!(perspective_reverse_z_infinite(90.0, 1.0, f32::INFINITY).is_none());
+    assert!(perspective_reverse_z_infinite(180.0, 1.0, 1.0).is_none());
+}
+
+#[test]
+fn the_infinite_form_has_depth_near_over_z() {
+    let p = perspective_reverse_z_infinite(90.0, 16.0 / 9.0, 10.0).expect("valid");
+    // a = 0, b = near: clip z is the constant near, clip w is z.
+    assert_eq!(p.cols[2], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(p.cols[3], [0.0, 0.0, 10.0, 0.0]);
+    let depth = |z: f32| {
+        let c = p.apply([0.0, 0.0, z, 1.0]);
+        c[2] / c[3]
+    };
+    assert_eq!(depth(10.0), 1.0);
+    assert_eq!(depth(20.0), 0.5);
+    assert_eq!(depth(1.0e6), 1.0e-5);
+    assert!(depth(1.0e30) > 0.0);
+    // x and y as in the finite form.
+    let finite = perspective_reverse_z(90.0, 16.0 / 9.0, 10.0, 100_000.0).expect("valid");
+    assert_eq!(p.cols[0], finite.cols[0]);
+    assert_eq!(p.cols[1], finite.cols[1]);
+    // The finite form's depth terms approach the infinite form's as far grows.
+    let far = perspective_reverse_z(90.0, 1.0, 10.0, 1.0e30).expect("valid");
+    assert!(close(f64::from(far.cols[2][2]), 0.0, 1e-28));
+    assert!(close(f64::from(far.cols[3][2]), 10.0, 1e-5));
+}
+
+#[test]
+fn a_mirroring_placement_has_a_negative_determinant() {
+    let plain = Placement::new(
+        [1.0, 2.0, 3.0],
+        Rotator::new(100, 200, 300),
+        2.0,
+        [1.0, 3.0, 0.5],
+    );
+    let a = plain.affine().expect("finite");
+    // The rotation's determinant is 1, so this is the product of the scales: 2 * 6 * 1.
+    assert!(close(a.determinant(), 12.0, 1e-12));
+    assert!(!a.mirrors());
+    // One negative component mirrors (P4 is such a placement); two cancel; a negative DrawScale flips all three.
+    for (case, (scale, scale_3d, mirrors)) in [
+        (1.0, [1.0, -1.0, 1.0], true),
+        (1.0, [-1.0, -1.0, 1.0], false),
+        (-1.0, [1.0, 1.0, 1.0], true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let p = Placement::new([0.0; 3], Rotator::new(4096, -8192, 2048), scale, scale_3d);
+        let m = p.affine().expect("finite");
+        assert_eq!(m.mirrors(), mirrors, "case {case}");
+        assert!(close(m.determinant().abs(), 1.0, 1e-12));
+    }
+    let p4 = Placement::new(
+        [0.0; 3],
+        Rotator::new(65536 + 1000, -70000, 32768),
+        1.0,
+        [1.0, -1.0, 1.0],
+    );
+    assert!(p4.affine().expect("finite").mirrors());
+    // A component mirror composes with its actor's: two mirrors make a proper transform.
+    let mirror = Placement::new([0.0; 3], Rotator::default(), 1.0, [-1.0, 1.0, 1.0]);
+    assert!(
+        !component_to_world(&mirror, &mirror)
+            .expect("finite")
+            .mirrors()
+    );
+    assert!(
+        component_to_world(&mirror, &plain)
+            .expect("finite")
+            .mirrors()
+    );
+    // Flattened: determinant 0, not a mirror.
+    let flat = Placement::new([0.0; 3], Rotator::default(), 1.0, [1.0, 0.0, 1.0]);
+    assert_eq!(flat.affine().expect("finite").determinant(), 0.0);
+    assert!(!flat.affine().expect("finite").mirrors());
+}
+
+#[test]
+fn bad_placement_floats_are_refused() {
+    let ok = Placement::default();
+    for (case, p) in [
+        Placement::new([f32::NAN, 0.0, 0.0], Rotator::default(), 1.0, [1.0; 3]),
+        Placement::new([0.0, f32::INFINITY, 0.0], Rotator::default(), 1.0, [1.0; 3]),
+        Placement::new([0.0; 3], Rotator::default(), f32::NAN, [1.0; 3]),
+        Placement::new(
+            [0.0; 3],
+            Rotator::default(),
+            1.0,
+            [1.0, 1.0, f32::NEG_INFINITY],
+        ),
+        // Each factor is finite, the product is not an f32.
+        Placement::new([0.0; 3], Rotator::default(), f32::MAX, [2.0, 1.0, 1.0]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(p.affine(), None, "case {case}");
+        assert_eq!(component_to_world(&p, &ok), None);
+        assert_eq!(component_to_world(&ok, &p), None);
+    }
+    // Two valid placements whose product leaves the f32 range.
+    let big = Placement::new([0.0; 3], Rotator::default(), 1.0e20, [1.0; 3]);
+    assert!(big.affine().is_some());
+    assert_eq!(component_to_world(&big, &big), None);
+    // is_finite is what a hand-composed Affine is checked with.
+    let composed = big
+        .affine()
+        .expect("finite")
+        .then(&big.affine().expect("finite"));
+    assert!(!composed.is_finite());
+    assert!(Affine::IDENTITY.is_finite());
+}
+
+#[test]
+fn a_bad_eye_is_refused() {
+    assert!(view_matrix([f32::NAN, 0.0, 0.0], Rotator::default()).is_none());
+    assert!(view_matrix([0.0, 0.0, f32::INFINITY], Rotator::default()).is_none());
+    // A finite eye whose dot with a diagonal axis leaves the f32 range.
+    assert!(view_matrix([f32::MAX, f32::MAX, 0.0], Rotator::new(0, 8192, 0)).is_none());
+    assert!(view_matrix([f32::MAX, 0.0, 0.0], Rotator::default()).is_some());
+}
+
+#[test]
+fn rotator_from_engine_at_the_poles_keeps_the_axes() {
+    // At the poles yaw and roll are one angle, so the returned rotator may differ from the input; its axes must
+    // not, within f32 rounding of the matrix and the half-unit rounding of each angle (one unit is about 1e-4 rad).
+    for r in [
+        Rotator::new(16384, 0, 0),
+        Rotator::new(16384, 1000, 2000),
+        Rotator::new(16384, -32768, 32767),
+        Rotator::new(-16384, -5000, 12345),
+        Rotator::new(-16384, 32767, -32768),
+        Rotator::new(16383, 30000, -20000),
+        Rotator::new(16383, -7, 9),
+        Rotator::new(-16383, 16384, 16384),
+    ] {
+        let m = Placement::new([0.0; 3], r, 1.0, [1.0; 3])
+            .affine()
+            .expect("finite")
+            .to_engine();
+        let back = rotator_from_engine(&m).expect("rotation");
+        let (want, got) = (rotator_axes(r), rotator_axes(back));
+        for k in 0..3 {
+            assert_vec(
+                got[k],
+                want[k],
+                1e-6,
+                &format!("{r:?} -> {back:?} axis {k}"),
+            );
+        }
+        assert!((-16384..=16384).contains(&back.pitch));
+    }
 }
 
 #[test]
@@ -569,6 +777,7 @@ fn rotators_round_trip_through_the_engine_matrix() {
                 let r = Rotator::new(pitch, yaw, roll);
                 let m = Placement::new([1.0, 2.0, 3.0], r, 2.5, [1.0, 3.0, 0.5])
                     .affine()
+                    .expect("finite")
                     .to_engine();
                 assert_eq!(rotator_from_engine(&m), Some(r), "rotator {r:?}");
                 checked += 1;
@@ -584,13 +793,16 @@ fn rotators_round_trip_through_the_engine_matrix() {
         [1.0; 3],
     )
     .affine()
+    .expect("finite")
     .to_engine();
     assert_eq!(
         rotator_from_engine(&m),
         Some(Rotator::new(100, -32768, -32768))
     );
     // A pitch past the pole is the same rotation as yaw and roll turned by half a turn.
-    let over = Placement::new([0.0; 3], Rotator::new(20000, 1000, 2000), 1.0, [1.0; 3]).affine();
+    let over = Placement::new([0.0; 3], Rotator::new(20000, 1000, 2000), 1.0, [1.0; 3])
+        .affine()
+        .expect("finite");
     let back = rotator_from_engine(&over.to_engine()).expect("rotation");
     assert_eq!(
         back,
@@ -602,10 +814,12 @@ fn rotators_round_trip_through_the_engine_matrix() {
 fn a_mirror_or_a_degenerate_matrix_has_no_rotator() {
     let mirrored = Placement::new([0.0; 3], Rotator::new(0, 100, 0), 1.0, [1.0, -1.0, 1.0])
         .affine()
+        .expect("finite")
         .to_engine();
     assert_eq!(rotator_from_engine(&mirrored), None);
     let flat = Placement::new([0.0; 3], Rotator::default(), 1.0, [1.0, 1.0, 0.0])
         .affine()
+        .expect("finite")
         .to_engine();
     assert_eq!(rotator_from_engine(&flat), None);
     let mut nan = Mat4::IDENTITY;
