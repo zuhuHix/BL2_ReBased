@@ -111,6 +111,9 @@ fn engine() -> Vec<u8> {
     native(&mut t, world, "IsMenuLevel", &[param("Str", "MapName", CPF_OPT, 0)], Some(("Bool", 0)), NATIVE | STATIC);
     let base = t.class("BehaviorBase", object);
     native(&mut t, base, "GetWorldInfo", &[], Some(("Object", object)), NATIVE);
+    let targetable = t.class("ITargetable", object);
+    enum_export(&mut t, targetable, "EChangeStatus", &["CHANGE_Toggle", "CHANGE_Enable", "CHANGE_Disable"]);
+    t.class("AkEvent", object);
     let context = toy_struct(&mut t, base, "BehaviorContextData", None);
     t.prop("Name", context, "InstancedDataContextName", 0, 0);
     t.prop("Object", context, "ContextObject", 0, object);
@@ -125,7 +128,8 @@ fn gearbox() -> Vec<u8> {
     let globals = t.class("GearboxGlobals", object);
     native(&mut t, globals, "GetGearboxGlobals", &[], Some(("Object", object)), NATIVE | STATIC);
     native(&mut t, globals, "GetBehaviorKernel", &[], Some(("Object", object)), NATIVE);
-    t.class("BehaviorProviderDefinition", object);
+    provider_vocabulary(&mut t, object);
+    dialog_vocabulary(&mut t, object);
     let path = toy_struct(&mut t, 0, "NameBasedObjectPath", None);
     t.prop("Name", path, "PathComponentNames", 0, 0);
     let provider = t.class("ToyPathHolder", object);
@@ -164,6 +168,7 @@ fn willowgame() -> Vec<u8> {
     toy_array_of(&mut t, reward, "RewardItemPools", "Object", object);
     t.prop("Struct", mission, "Reward", 0, reward);
     t.prop("Struct", mission, "AlternativeReward", 0, reward);
+    t.prop("Object", mission, "BehaviorProvider", 0, object);
     native(&mut t, mission, "GetExperienceReward", &[param("Object", "InWPC", 0, object), param("Bool", "bGetAltReward", 0, 0)], Some(("Int", 0)), NATIVE);
     native(&mut t, mission, "GetGameStage", &[], Some(("Int", 0)), NATIVE);
     native(&mut t, mission, "GetCurrencyRewardType", &[param("Bool", "bGetAltReward", 0, 0)], Some(("Byte", 0)), NATIVE);
@@ -312,7 +317,8 @@ fn willowgame() -> Vec<u8> {
     script(&mut t, controller, "ExpLevelUp", &[param("Bool", "bCheated", 0, 0)], None, |_, _| {});
     let willow_pawn = t.class("WillowPawn", engine_pawn);
     t.class("WillowPlayerPawn", engine_pawn);
-    t.class("WillowAIPawn", willow_pawn);
+    let ai_pawn = t.class("WillowAIPawn", willow_pawn);
+    t.prop("Object", ai_pawn, "BodyClass", 0, object);
     t.build()
 }
 
@@ -323,6 +329,7 @@ fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let willow = p.add_import("Core", "Package", 0, "WillowGame");
+    let dialog = dialog_data(&mut p);
     let class = |p: &mut PackageBuilder, name: &str| p.add_import("Core", "Class", willow, name);
     let c = class(&mut p, "MissionDefinition");
     let mission = p.add_export(c, "ToyMission", Vec::new());
@@ -360,6 +367,8 @@ fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
     }
     reward.extend_from_slice(&none);
     tags.extend(p.struct_tag("Reward", "MissionRewardData", &reward));
+    let provider = mission_provider(&mut p, mission, &dialog);
+    tags.extend(p.object_tag("BehaviorProvider", provider));
     tags.extend_from_slice(&none);
     p.set_payload(mission, tags);
     let package_class = p.add_import("Core", "Class", 0, "Package");
@@ -802,10 +811,12 @@ fn the_stand_ins_of_other_lanes_are_not_yet() {
     let inside = env.call("Engine.BehaviorBase.RunBehaviors", None, vec![], MissionScript::n_run_behaviors);
     assert!(inside.unwrap_err().not_yet().is_some());
     assert!(s.set_player_health(20.0).unwrap_err().not_yet().is_some());
+    // The director's dialog runs since the dialog landed (a_bridge_dialog_event_is_seen_by_the_tracker); its component
+    // without a director is a typed error, not a stub.
     let component = s.inner.o.globals;
     s.inner.state.borrow_mut().dialog_component = Some(component);
     let talk = env.call("GearboxFramework.GearboxDialogComponent.TriggerEvent", Some(component), vec![], MissionScript::n_trigger_event);
-    assert!(matches!(talk.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::LayerAbsent("ow-mission dialog (lane W5-DIALOG)")));
+    assert_eq!(talk.unwrap_err().to_string(), "mission script bridge: the director's component has no director");
 }
 
 /// Without a director the lists are empty and the use key does nothing; a package without the screen's classes has
@@ -968,4 +979,265 @@ fn a_lost_director_provider_refuses_its_readers() {
     assert!(lost(resolve));
     s.use_marcus(env.vm(), &DetSet::new()).unwrap();
     assert!(s.errors().iter().any(|e| e.contains(tracker::PROVIDER_LOST)), "{:?}", s.errors());
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The dialog: one dialog shared by the tracker's behavior and the bridge's component native
+// ---------------------------------------------------------------------------------------------------------------
+
+const VARIABLE_TYPES: [&str; 3] = ["BVAR_None", "BVAR_Object", "BVAR_Int"];
+const LINK_TYPES: [&str; 3] = ["BVARLINK_Unknown", "BVARLINK_Input", "BVARLINK_Output"];
+
+/// The provider vocabulary the kernel decodes (the same shape as `crate::tracker`'s test fixture).
+fn provider_vocabulary(t: &mut ScriptToy, object: i32) {
+    let bpd = t.class("BehaviorProviderDefinition", object);
+    enum_export(t, bpd, "EBehaviorVariableType", &VARIABLE_TYPES);
+    enum_export(t, bpd, "EBehaviorVariableLinkType", &LINK_TYPES);
+    let sub = toy_struct(t, 0, "SubarrayData", None);
+    t.prop("Int", sub, "ArrayIndexAndLength", 0, 0);
+    let defaults = {
+        let mut d = t.p.bool_tag("bEnabled", true);
+        d.extend_from_slice(&t.none);
+        d
+    };
+    let user = toy_struct(t, 0, "BehaviorEventUserData", Some(&defaults));
+    t.prop("Name", user, "EventName", 0, 0);
+    t.prop("Bool", user, "bEnabled", 0, 0);
+    t.prop("Int", user, "MaxTriggerCount", 0, 0);
+    t.prop("Float", user, "ReTriggerDelay", 0, 0);
+    let event = toy_struct(t, 0, "BehaviorEventData2", None);
+    t.prop("Struct", event, "UserData", 0, user);
+    t.prop("Struct", event, "OutputVariables", 0, sub);
+    t.prop("Struct", event, "OutputLinks", 0, sub);
+    let data = toy_struct(t, 0, "BehaviorData2", None);
+    t.prop("Object", data, "Behavior", 0, object);
+    t.prop("Struct", data, "LinkedVariables", 0, sub);
+    t.prop("Struct", data, "OutputLinks", 0, sub);
+    let link = toy_struct(t, 0, "BehaviorOutputLinkData", None);
+    t.prop("Int", link, "LinkIdAndLinkedBehavior", 0, 0);
+    t.prop("Float", link, "ActivateDelay", 0, 0);
+    let seq = toy_struct(t, 0, "BehaviorSequenceData", None);
+    t.prop("Name", seq, "BehaviorSequenceName", 0, 0);
+    t.prop("Bool", seq, "bEnabledOnSpawn", 0, 0);
+    t.prop("Bool", seq, "bSequenceEnabledMutex", 0, 0);
+    t.prop("Object", seq, "CustomEnableCondition", 0, object);
+    toy_array_of(t, seq, "EventData2", "Struct", event);
+    toy_array_of(t, seq, "BehaviorData2", "Struct", data);
+    toy_array_of(t, seq, "ConsolidatedOutputLinkData", "Struct", link);
+    toy_array_of(t, bpd, "BehaviorSequences", "Struct", seq);
+}
+
+/// The dialog vocabulary the component trigger and `Behavior_TriggerDialogEvent` read (the names `crate::dialog`
+/// reads; NATIVE_DIALOG.md), the smallest route: a group's events, a talk act's talk data, a body class.
+fn dialog_vocabulary(t: &mut ScriptToy, object: i32) {
+    let event = toy_struct(t, 0, "DialogEventData", None);
+    t.prop("Object", event, "Tag", 0, object);
+    t.prop("Bool", event, "bEnabled", 0, 0);
+    t.prop("Object", event, "OutputAction", 0, object);
+    let entry = toy_struct(t, 0, "TalkEntry", None);
+    t.prop("Object", entry, "NameTag", 0, object);
+    t.prop("Object", entry, "TalkAkEvent", 0, object);
+    t.class("GearboxDialogEventTag", object);
+    let group = t.class("GearboxDialogGroup", object);
+    toy_array_of(t, group, "DialogEvents", "Struct", event);
+    let talk = t.class("GearboxDialogAct_Talk", object);
+    toy_array_of(t, talk, "TalkData", "Struct", entry);
+    t.prop("Float", talk, "OutputDelay", 0, 0);
+    t.class("DialogNameTag", object);
+    let body = t.class("BodyClassDefinition", object);
+    t.prop("Object", body, "DialogName", 0, object);
+    toy_array_of(t, body, "DialogGroups", "Object", group);
+    let behavior = t.class("Behavior_TriggerDialogEvent", object);
+    t.prop("Object", behavior, "EventTag", 0, object);
+    t.prop("Object", behavior, "Group", 0, object);
+    t.prop("Bool", behavior, "bForcePlayImmediate", 0, 0);
+}
+
+/// The dialog objects of the mission package: a name tag, an audio event, two tags (`Tag_Use` for the director's
+/// component, `Tag_Mission` for the mission's behavior), a talk act for each whose one entry is the name tag's, one
+/// group listing both events, and a body class whose dialog name is the name tag and whose group is that group.
+struct DialogData {
+    tag_mission: i32,
+    group: i32,
+}
+
+fn dialog_data(p: &mut PackageBuilder) -> DialogData {
+    let none = p.none();
+    let gearbox = p.add_import("Core", "Package", 0, "GearboxFramework");
+    let engine = p.add_import("Core", "Package", 0, "Engine");
+    let class = |p: &mut PackageBuilder, outer: i32, name: &str| p.add_import("Core", "Class", outer, name);
+    let add = |p: &mut PackageBuilder, class: i32, name: &str, tags: Vec<Vec<u8>>| {
+        let mut payload = 0i32.to_le_bytes().to_vec();
+        for t in tags {
+            payload.extend(t);
+        }
+        payload.extend_from_slice(&none);
+        p.add_export(class, name, payload)
+    };
+    let c = class(p, gearbox, "DialogNameTag");
+    let name_tag = add(p, c, "DialogName_Toy", vec![]);
+    let c = class(p, engine, "AkEvent");
+    let ak = add(p, c, "Ak_Toy", vec![]);
+    let c = class(p, gearbox, "GearboxDialogEventTag");
+    let tag_use = add(p, c, "Tag_Use", vec![]);
+    let tag_mission = add(p, c, "Tag_Mission", vec![]);
+    let talk_data = |p: &mut PackageBuilder| {
+        let mut entry = p.object_tag("NameTag", name_tag);
+        entry.extend(p.object_tag("TalkAkEvent", ak));
+        entry.extend_from_slice(&none);
+        p.array_tag("TalkData", 1, &entry)
+    };
+    let c = class(p, gearbox, "GearboxDialogAct_Talk");
+    let t = talk_data(p);
+    let act_use = add(p, c, "Act_Use", vec![t]);
+    let t = talk_data(p);
+    let act_mission = add(p, c, "Act_Mission", vec![t]);
+    let mut events = Vec::new();
+    for (tag, act) in [(tag_use, act_use), (tag_mission, act_mission)] {
+        events.extend(p.object_tag("Tag", tag));
+        events.extend(p.bool_tag("bEnabled", true));
+        events.extend(p.object_tag("OutputAction", act));
+        events.extend_from_slice(&none);
+    }
+    let c = class(p, gearbox, "GearboxDialogGroup");
+    let t = p.array_tag("DialogEvents", 2, &events);
+    let group = add(p, c, "Group_Toy", vec![t]);
+    let c = class(p, gearbox, "BodyClassDefinition");
+    let t1 = p.object_tag("DialogName", name_tag);
+    let t2 = p.array_tag("DialogGroups", 1, &group.to_le_bytes());
+    add(p, c, "Body_Toy", vec![t1, t2]);
+    DialogData { tag_mission, group }
+}
+
+/// The mission's provider: one sequence `Main` whose event `Chat` (link id 0) runs `Talk`, a
+/// `Behavior_TriggerDialogEvent` of `Tag_Mission` on `Group_Toy` that plays at once (`bForcePlayImmediate`).
+fn mission_provider(p: &mut PackageBuilder, mission: i32, dialog: &DialogData) -> i32 {
+    let none = p.none();
+    let gearbox = p.add_import("Core", "Package", 0, "GearboxFramework");
+    let c = p.add_import("Core", "Class", gearbox, "BehaviorProviderDefinition");
+    let provider = p.add_export(c, "ToyMissionBpd", Vec::new());
+    p.set_outer(provider, mission);
+    let c = p.add_import("Core", "Class", gearbox, "Behavior_TriggerDialogEvent");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend(p.object_tag("EventTag", dialog.tag_mission));
+    payload.extend(p.object_tag("Group", dialog.group));
+    payload.extend(p.bool_tag("bForcePlayImmediate", true));
+    payload.extend_from_slice(&none);
+    let talk = p.add_export(c, "Talk", payload);
+    p.set_outer(talk, provider);
+    let sub = |p: &mut PackageBuilder, name: &str, first: i32, length: i32| {
+        let mut body = p.int_tag("ArrayIndexAndLength", (first << 16) | length);
+        body.extend_from_slice(&none);
+        p.struct_tag(name, "SubarrayData", &body)
+    };
+    let mut user = p.name_tag("EventName", "Chat");
+    user.extend_from_slice(&none);
+    let mut event = p.struct_tag("UserData", "BehaviorEventUserData", &user);
+    event.extend(sub(p, "OutputVariables", 0, 0));
+    event.extend(sub(p, "OutputLinks", 0, 1));
+    event.extend_from_slice(&none);
+    let mut data = p.object_tag("Behavior", talk);
+    data.extend(sub(p, "LinkedVariables", 0, 0));
+    data.extend(sub(p, "OutputLinks", 0, 0));
+    data.extend_from_slice(&none);
+    let mut link = p.int_tag("LinkIdAndLinkedBehavior", 0);
+    link.extend(p.float_tag("ActivateDelay", 0.0));
+    link.extend_from_slice(&none);
+    let mut seq = p.name_tag("BehaviorSequenceName", "Main");
+    seq.extend(p.bool_tag("bEnabledOnSpawn", true));
+    seq.extend(p.array_tag("EventData2", 1, &event));
+    seq.extend(p.array_tag("BehaviorData2", 1, &data));
+    seq.extend(p.array_tag("ConsolidatedOutputLinkData", 1, &link));
+    seq.extend_from_slice(&none);
+    let mut tags = 0i32.to_le_bytes().to_vec();
+    tags.extend(p.array_tag("BehaviorSequences", 1, &seq));
+    tags.extend_from_slice(&none);
+    p.set_payload(provider, tags);
+    provider
+}
+
+/// The dialog effects the tracker raised since the last drain: (tag, talker, outcome).
+fn dialog_lines(m: &MissionSystem) -> Vec<(String, String, String)> {
+    m.drain()
+        .into_iter()
+        .filter(|e| e.kind == EffectKind::Dialog)
+        .map(|e| {
+            let outcome = e
+                .detail
+                .split(';')
+                .find_map(|kv| kv.strip_prefix("outcome="))
+                .unwrap_or_default()
+                .to_string();
+            (e.a, e.c, outcome)
+        })
+        .collect()
+}
+
+/// One dialog serves the tracker and the bridge (decision 2026-11-15-34, addendum): the director's component
+/// `TriggerEvent` (the bridge) runs on the tracker's own `Rc`, so the line it starts is the tracker's `Dialog` effect,
+/// and the talker it registered (the director's name tag) is the one the tracker's dialog behavior then finds. Before
+/// the bridge's event the same behavior has no talker. Run in `mode`.
+fn a_bridge_dialog_event_is_seen_by_the_tracker(mode: ParityMode) {
+    let mut env = Env::with_mode(false, mode);
+    let (m, s) = (env.mission.clone(), env.script.clone());
+    m.dialog().borrow_mut().set_test_line_length(1.0);
+    m.accept(env.vm(), &DetSet::new()).unwrap();
+    m.drain();
+    // The tracker's dialog behavior first: Tag_Mission's one entry names DialogName_Toy, which nothing registered.
+    m.custom_event(env.vm(), "Chat").unwrap();
+    assert_eq!(
+        dialog_lines(&m),
+        [("Tag_Mission".to_string(), "DialogName_Toy".to_string(), "no talker".to_string())]
+    );
+    // The bridge: the director's component raises Tag_Use; the director's body class names DialogName_Toy.
+    let director = new_object(env.vm(), "WillowGame.WillowAIPawn").unwrap();
+    let body = env.object("Body_Toy");
+    set(&mut env.vm().space, director, "BodyClass", Value::Object(Some(body))).unwrap();
+    let component = s.inner.o.globals;
+    {
+        let mut st = s.inner.state.borrow_mut();
+        st.director = Some(director);
+        st.dialog_component = Some(component);
+    }
+    let tag_use = Value::Object(Some(env.object("Tag_Use")));
+    let got = env.call(
+        "GearboxFramework.GearboxDialogComponent.TriggerEvent",
+        Some(component),
+        vec![tag_use, Value::Object(None), Value::Object(None)],
+        MissionScript::n_trigger_event,
+    );
+    assert_eq!(got.unwrap(), Value::None);
+    assert_eq!(
+        dialog_lines(&m),
+        [("Tag_Use".to_string(), "DialogName_Toy".to_string(), "started".to_string())],
+        "the bridge's line is the tracker's effect"
+    );
+    assert_eq!(s.inner.state.borrow().use_.on_use_tag, "Tag_Use");
+    assert_eq!(s.inner.state.borrow().use_.on_use_group_count, 1);
+    // The tracker's dialog behavior again: its handler finds the talker the bridge registered, and the bridge's line,
+    // still live in the same group at the same priority, holds this one back.
+    m.custom_event(env.vm(), "Chat").unwrap();
+    assert_eq!(
+        dialog_lines(&m),
+        [("Tag_Mission".to_string(), "DialogName_Toy".to_string(), "blocked by priority".to_string())]
+    );
+    // Once the bridge's line has ended on the tracker's clock (the kernel's time hook), the behavior's line starts.
+    m.tick(env.vm(), 2.0).unwrap();
+    m.custom_event(env.vm(), "Chat").unwrap();
+    assert_eq!(
+        dialog_lines(&m),
+        [("Tag_Mission".to_string(), "DialogName_Toy".to_string(), "started".to_string())]
+    );
+    assert!(m.errors().is_empty(), "{:?}", m.errors());
+    assert!(Rc::ptr_eq(&m.dialog(), &env.mission.dialog()));
+}
+
+#[test]
+fn a_bridge_dialog_event_is_seen_by_the_tracker_in_reference_mode() {
+    a_bridge_dialog_event_is_seen_by_the_tracker(ParityMode::Reference);
+}
+
+#[test]
+fn a_bridge_dialog_event_is_seen_by_the_tracker_in_off_mode() {
+    a_bridge_dialog_event_is_seen_by_the_tracker(ParityMode::Off);
 }

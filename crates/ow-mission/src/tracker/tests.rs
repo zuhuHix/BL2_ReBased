@@ -905,19 +905,22 @@ fn a_sequence_state_change_names_the_provider_leaf() {
 /// The dialog behavior has no handler here (lane W5-DIALOG): the kernel's error line and its `NotYet`, and the branch
 /// stops.
 #[test]
-fn the_dialog_behavior_is_not_yet() {
-    let mut toy = toy_mission();
-    toy.behaviors.push(beh("Talk", "Behavior_TriggerDialogEvent", vec![]));
-    toy.events.push(("Chat", vec![(0, "Talk")]));
-    let mut env = Env::new(&toy);
-    let m = env.mission();
-    let vm = &mut env.vm;
-    m.accept(vm, &DetSet::new()).unwrap();
-    m.custom_event(vm, "Chat").unwrap();
-    assert!(m.errors().iter().any(|e| e.contains("GearboxFramework.Behavior_TriggerDialogEvent")), "{:?}", m.errors());
-    let n = m.not_yet();
-    assert_eq!(n.len(), 1);
-    assert_eq!(n[0].missing, Missing::NotPorted);
+fn the_dialog_behavior_runs_on_the_tracker_s_own_handler() {
+    // The handler is the mission's own (`dialog::handler` on its provider, decision 2026-11-15-34 addendum): no
+    // `unsupported behavior class` line and no NotYet. A behavior without an event tag finishes at once (NATIVE_DIALOG.md).
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut toy = toy_mission();
+        toy.behaviors.push(beh("Talk", "Behavior_TriggerDialogEvent", vec![]));
+        toy.events.push(("Chat", vec![(0, "Talk")]));
+        let mut env = Env::with_mode(&toy, mode);
+        let m = env.mission();
+        let vm = &mut env.vm;
+        m.accept(vm, &DetSet::new()).unwrap();
+        m.custom_event(vm, "Chat").unwrap();
+        assert!(m.errors().is_empty(), "{mode:?}: {:?}", m.errors());
+        assert!(m.not_yet().is_empty(), "{mode:?}");
+        assert!(m.dialog().borrow().not_run().is_empty(), "{mode:?}: one null context, the mission: it ran");
+    }
 }
 
 /// The hooks, in the C++ order: the status hook inside the routine (before the status effect), the observers after

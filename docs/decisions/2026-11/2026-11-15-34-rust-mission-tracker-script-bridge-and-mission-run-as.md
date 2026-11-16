@@ -154,3 +154,48 @@ lane L2).
     pool, the level-up skills and the combat calls are not).
   - The architecture's `cmd/mission.rs` row lists `--mission` and `--tick`; both are `--kismet-run`'s modifiers in
     the C++ (`crates/README.md` already says so) and are lane W5-KISMET's.
+
+## Addendum (2026-11-16): the dialog wired
+
+AI-assisted (Claude Code). W5-DIALOG landed as 413eafd (PR #333, decision 2026-11-15-32), and lane W6-MISSION wires it
+(branch `fix/rust-mission-dialog-wiring`; this addendum is named by decision 2026-11-16-39). No parsing behaviour
+changes; every dialog rule keeps W5-DIALOG's labels.
+
+- **One dialog per mission.** `MissionSystem` owns one `Rc<RefCell<DialogSystem>>` over the mission's package
+  (`MissionSystem::dialog`), as the C++ tracker owns its `DialogSystem`:
+  - `dialog::handler(rc)` runs `Behavior_TriggerDialogEvent` on the mission's own provider (`Provider::handle`), not
+    through the VM's registry;
+  - the provider's time hook advances the dialog clock to the kernel's time (the frame's without a provider);
+  - the status routine sets the tracked mission's priority floor (`MissionDialogGroup`, `bPlotCritical`) while
+    Active or ReadyToTurnIn;
+  - every line the dialog chooses is a `Dialog` effect with the C++ detail text.
+- **The bridge shares that `Rc`.** The director's `GearboxDialogComponent.TriggerEvent` does what the C++ does:
+  `pawn_dialog` of his body class, then `trigger_on_component` on `MissionSystem::dialog`. It records the tag as the
+  turned-in, dismissal or on-use dialog. There is no second dialog system and no second binding.
+- **`--mission-run`.** The dialog steps (`lines:`, `timedlines:`, `talker:`, `kismet:`, `component:`, `pawn:`) run as
+  in the C++. The exit-3 rule for the dialog behavior is gone: an unhandled behavior class gives the C++ line and
+  the C++ exit code.
+- **Tests (invented packages).**
+  - `a_bridge_dialog_event_is_seen_by_the_tracker_in_reference_mode` and `..._in_off_mode`: the bridge's `TriggerEvent`
+    starts a line that is the tracker's `Dialog` effect. The tracker's own dialog behavior has no talker before it;
+    after it, it finds the talker the bridge registered and is held back by that line, which is still live. It starts
+    once that line has ended on the tracker's clock.
+  - `the_dialog_behavior_runs_on_the_tracker_s_own_handler`, in both modes.
+- **Verified (automated, local, pc-hummer).**
+  - `tests/mission_script_test.py` with `--mission-run` on the Rust binary:
+    - Reference mode: all 34 `--mission-run` commands give the C++ stdout and exit code byte for byte (19 before),
+      and the whole file passes. Scenario E passes.
+    - Off mode: 33 of 34; scenario W, the lent weapon's unread condition, is the one left by design, and scenario E
+      passes. This needed the fixture to declare the toy Engine class `AkEvent`, the class of the dialog scenario's
+      `Ak_*` exports (a fixture-only change granted by the hub; decision 2026-11-16-39). Without it the Off-mode
+      definition store decodes a `TalkAkEvent` naming them as None (Reference keeps the reference), and 13 scenario E
+      runs chose no line (20 of 34).
+  - The installed game, local only (the 77 Sanctuary missions, both step lists of the first count):
+    - Reference: tracker 73 of 77 identical (49 before); the 4 others differ only in an objective name's case, the
+      first spelling the name table keeps (`ow-object`), which the dialog difference hid before. Bridge 1 of 77 (0
+      before); 76 stop on the refused natives (`LocalPlayerControllers` 76, `GetObjectivesProgress` 59).
+    - Off: tracker 58 of 77 (40 before): 13 objective-set-class refusals, 5 lent-weapon refusals, 1 name case. Bridge
+      1 of 77 (0 before): 63 refused natives, 13 set class.
+- **Open.**
+  - The name table's first-spelling rule against the package's own spelling (`ow-object`).
+  - The two refused natives (hub decision: they stay refused).
