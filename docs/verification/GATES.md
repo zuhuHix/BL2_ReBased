@@ -172,8 +172,8 @@ Firing in the play mode (decision `docs/decisions/2026-11/2026-11-16-61-host-hel
 **Baseline (2026-11-16, zuhu desktop, release build, lane H4-WEAPON, the Tediore pistol of the firing coverage
 recipes):** weapon damage 34.24, fire interval 0.2100 s, range 16384 uu; path digest `3413832365d19721`; no weapon 2
 shots, with the weapon 53 shots and shot digest `797e931e95ce7bb6`, headless and in the window (median frame
-0.780 ms). Workspace tests 1,687 passed, 0 failed, 23 ignored (main ce6f681 plus this lane; the installed-game runs on main
-f5cd6a4 plus this lane).
+0.780 ms). Workspace tests 1,712 passed, 0 failed, 25 ignored (main e002de5 plus this lane with review r1 of PR #366; the installed-game
+runs on main f5cd6a4 plus this lane).
 
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 

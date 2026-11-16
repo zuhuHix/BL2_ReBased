@@ -36,9 +36,12 @@ reader or bounds change. There was no real-game session: every rule used stays *
     change notification of WillowGame.WillowWeapon ... in the offline world: needs ow-world".
   - So the weapon is evaluated in an `ow_world::World`: the VM over the install's store, the core natives, and only
     the world's own packs. The VM dispatches a change to the owner class's registered override and does nothing
-    without one (NATIVE_ATTRIBUTES.md section 4; the weapon `ClipSize` override is still open there). No weapon
-    override is registered, so the notifications do nothing. This is UNVERIFIED as the game's behaviour, and the
-    offline world's refusal is reported here for the owners of `ow-balance` and `ow-cli`.
+    without one (NATIVE_ATTRIBUTES.md section 4; the weapon `ClipSize` override is still open there). No rule for
+    the weapon's override is registered, so a notification changes nothing. This is UNVERIFIED as the game's
+    behaviour, and the offline world's refusal is reported here for the owners of `ow-balance` and `ow-cli`.
+  - **The skip is visible** (review r1 of PR #366). `evaluate` registers a `WillowGame.WillowWeapon` override that only
+    records the notified properties, and the weapon line names them: "notifications not applied (NotYet,
+    NATIVE_ATTRIBUTES section 4): <names>". The numbers do not change.
   - **Cross-check.** For the same Tediore pistol, the Python tool's firing record under ignored `local/items/firing/`
     gives damage 34.2408, fire interval 0.21 s and trace range 16384. The Rust evaluation gives 34.24, 0.2100 s, 1
     projectile and 16384 uu. They agree, but this is the tool's reading, not the game's.
@@ -53,10 +56,16 @@ reader or bounds change. There was no real-game session: every rule used stays *
   - Not applied, each open: spread, the firing pattern, accuracy, kick and recoil, one ray per pellet, ammunition and
     reload, the burst, and bullets in flight (most guns are Bullet, NATIVE_WEAPON_FIRING.md section 1.2). Their rules
     are in `ow-combat::firing`; wiring them needs the firing mode's data and a `GameRng` stream.
+  - Two limits of the stepping (review r1 of PR #366): at most one shot per step, so a fire interval under 1/60 s is
+    capped at one step; and every gun is treated as automatic, so a semi-automatic firing mode's one shot per press is
+    not modelled.
 - **Input and determinism.**
   - The trigger is a field of the per-frame `PlayInput` message. The left button fires only while the cursor is held,
-    so the click that takes the cursor does not fire; a release lets go. Losing focus lets go, and the fly camera
-    never fires.
+    so the click that takes the cursor does not fire; a release lets go. Losing focus or letting go of the cursor
+    (Escape) lets go of the trigger too, and the fly camera never fires (review r1).
+  - A press is latched like the jump (review r1): the collector reports a click that began and ended between two
+    messages, and the simulation keeps a trigger message until a step uses it, so a click shorter than a frame or a
+    step still fires one shot.
   - A script holds the trigger with the `f` action (`jf` for a jump too). `--walk` ignores it: firing moves nothing,
     so a firing script's path digest equals a non-firing run's.
   - `PlayStats` keeps every shot with the label of the placement it hit, and a shot digest over each shot's step, end
@@ -75,8 +84,10 @@ reader or bounds change. There was no real-game session: every rule used stays *
   - Two `play` tests: a firing script gives the same path as `walk::run` and the same 20 shots at three frame-time
     patterns, and the script text keeps the trigger; the left button and fly rules.
   - One `args` test.
-  - Workspace: 1,687 passed, 0 failed, 23 ignored (main ce6f681 plus this lane; 1,616 on main f5cd6a4, where the
-    installed-game runs were made).
+  - Review r1 added three: the notification recorder and the weapon line's text; a press shorter than a step fires
+    once; and, in the left-button test, a click within a frame and Escape letting go of the trigger.
+  - Workspace: 1,712 passed, 0 failed, 25 ignored (main e002de5 plus this lane with review r1; 1,705, 0 failed, 25 ignored on 1075dc2 before
+    it; the installed-game runs below were made on main f5cd6a4 plus this lane).
 - **Verified (local, installed game, zuhu desktop, release build, every run under the machine lock and released
   afterwards; output under ignored `local/p2/h4-weapon/`).** The script `fire20.txt` (20 s, 1,200 steps) fires while
   standing, walking, jumping and turning.
@@ -92,6 +103,10 @@ reader or bounds change. There was no real-game session: every rule used stays *
   - The player's equipped weapon, which needs a save format (D9) or a starting loadout.
   - Damage to targets, which needs pawns in the play mode.
   - Spread, pattern, accuracy, kick, pellets, ammunition, reload, burst, bullets, spin-up.
+  - Semi-automatic per-press firing modes, and fire intervals under one step (1/60 s).
+  - A shared weapon builder in `ow-items`: `weapon.rs`'s definition data and balance snapshot duplicate `ow-cli`'s
+    `items_stats.rs` (which evaluates at level 1 unless told otherwise), a drift risk.
+  - The rule behind each notified weapon property (the `ClipSize` override and any other the weapon line names).
   - The weapon mesh and the game's HUD.
   - `OfflineWorld`'s refusal of change notifications, which keeps `ow-package --item-stats --data` from evaluating a
     weapon like this one.

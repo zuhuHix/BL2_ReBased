@@ -329,6 +329,15 @@ fn the_left_button_fires_once_the_cursor_is_held() {
     assert!(c.take().fire);
     c.left_button(false);
     assert!(!c.take().fire);
+    // L2: a click shorter than a frame still reaches the message, once.
+    c.left_button(true);
+    c.left_button(false);
+    assert!(c.take().fire);
+    assert!(!c.take().fire);
+    // L1: letting go of the cursor (Escape) lets go of a held trigger.
+    c.left_button(true);
+    c.set_look(false);
+    assert!(!c.take().fire);
     let mut scripted = InputCollector::new(false);
     scripted.set_look(true);
     scripted.left_button(true);
@@ -360,4 +369,27 @@ fn the_left_button_fires_once_the_cursor_is_held() {
         sim.step(&[HostCommand::Play(fire)], FRAME_60).unwrap();
     }
     assert_eq!(stats.borrow().shots.len(), before);
+}
+
+/// Review r1 of PR #366, L2: a trigger message that arrives on a frame too short for a step, and is let go by the next
+/// message, still fires one shot on the next step.
+#[test]
+fn a_press_shorter_than_a_step_fires_once() {
+    let stats = Rc::new(RefCell::new(PlayStats::default()));
+    let gun = crate::weapon::Gun::new(Ok(crate::weapon::WeaponStats::new(5.0, 0.5, None, None)));
+    let mut sim = PlayWorld::new(world(), pawn(), None, Rc::clone(&stats)).with_gun(gun, Vec::new(), false);
+    for _ in 0..30 {
+        sim.step(&[], FRAME_60).unwrap();
+    }
+    let fire = PlayInput { fire: true, ..PlayInput::default() };
+    // A 1 ms frame: no step runs, the trigger is latched.
+    sim.step(&[HostCommand::Play(fire)], Duration::from_millis(1)).unwrap();
+    assert_eq!(stats.borrow().shots.len(), 0);
+    // Let go in the next message, with a whole step of time: the latched press fires once.
+    sim.step(&[HostCommand::Play(PlayInput::default())], FRAME_60).unwrap();
+    assert_eq!(stats.borrow().shots.len(), 1);
+    for _ in 0..60 {
+        sim.step(&[HostCommand::Play(PlayInput::default())], FRAME_60).unwrap();
+    }
+    assert_eq!(stats.borrow().shots.len(), 1, "the latch is used once");
 }

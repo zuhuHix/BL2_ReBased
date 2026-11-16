@@ -20,7 +20,10 @@
 //! is evaluated in an `ow_world::World` instead: the VM over the install's store with the core natives, the world's
 //! own packs and no other, at the weapon's level. The VM dispatches a change to the owner class's registered
 //! override and does nothing without one (NATIVE_ATTRIBUTES.md section 4, UNVERIFIED); no weapon override is
-//! registered here (the weapon `ClipSize` override is still open in that record), so the notifications do nothing.
+//! registered for it (the weapon `ClipSize` override is still open in that record), so a notification changes
+//! nothing. It is not dropped silently, though: [`evaluate`] registers a `WillowGame.WillowWeapon` override that only
+//! records which properties were notified, and [`WeaponStats::notifications_not_applied`] names them, so the weapon
+//! line says what was skipped (review r1 of PR #366).
 //!
 //! **One shot** ([`Gun::step`], once per simulation step, so a script's shots are a function of its steps):
 //! - the trigger is held and the refire time is up: the weapon's fire interval (`firing::fire_interval` with no
@@ -35,11 +38,19 @@
 //! - Not applied, each open: spread, the firing pattern, accuracy, kick and recoil, one ray per pellet, ammunition
 //!   and reload, bullets in flight (most guns are Bullet, NATIVE_WEAPON_FIRING.md section 1.2), the burst. Their
 //!   rules are in `ow-combat::firing`; wiring them needs the weapon's firing mode and a `GameRng` stream.
+//! - **Two limits of the stepping** (review r1 of PR #366): at most one shot per simulation step, so a fire interval
+//!   under one step (1/60 s) is capped at one step; and every gun is treated as automatic (a held trigger keeps
+//!   firing), so the semi-automatic firing modes, one shot per press, are not modelled. Both are open.
+//!
+//! **A duplication to retire** (review r1 of PR #366): [`definition_data`] and the balance snapshot here repeat
+//! `ow-cli`'s `items_stats.rs` (`definition_data`, `snapshot`). The two can drift: that command evaluates `--data` at
+//! level 1 unless told otherwise, this one at the weapon's level. A shared builder in `ow-items` is a follow-up.
 //!
 //! Everything is UNVERIFIED in the running game.
 
 use std::path::Path;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
@@ -56,7 +67,7 @@ use ow_items::data::{DefinitionData, ItemKind};
 use ow_items::registry::WEAPON_SLOTS;
 use ow_items::stats::{instance_stat, instantiate_stats};
 use ow_object::heap::ObjectSpace;
-use ow_object::ids::PropAddr;
+use ow_object::ids::{PropAddr, PropId};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_world::world::{BalanceState, World};
@@ -160,9 +171,12 @@ pub fn parse_spec(text: &str) -> Result<WeaponSpec, String> {
     Ok(spec)
 }
 
+/// The class whose change notifications [`evaluate`] records.
+pub const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
+
 /// The weapon's numbers the play mode uses.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WeaponStats {
     /// `WeaponDamage`, per projectile.
     pub damage: f64,
@@ -172,11 +186,34 @@ pub struct WeaponStats {
     pub projectiles: Option<f64>,
     /// The `WeaponRange` property, uu, when the instance has one.
     pub range: Option<f64>,
+    /// The weapon properties whose change notification the evaluation raised and nothing applied, by name in the order
+    /// first raised (module documentation, "In which world").
+    pub notifications_not_applied: Vec<String>,
 }
 
 impl WeaponStats {
     pub fn new(damage: f64, fire_interval: f64, projectiles: Option<f64>, range: Option<f64>) -> WeaponStats {
-        WeaponStats { damage, fire_interval, projectiles, range }
+        WeaponStats { damage, fire_interval, projectiles, range, notifications_not_applied: Vec::new() }
+    }
+
+    /// The text the weapon line gives for [`WeaponStats::notifications_not_applied`].
+    pub fn notifications_text(&self) -> String {
+        if self.notifications_not_applied.is_empty() {
+            "no change notification raised".to_string()
+        } else {
+            format!(
+                "notifications not applied (NotYet, NATIVE_ATTRIBUTES section 4): {}",
+                self.notifications_not_applied.join(", ")
+            )
+        }
+    }
+}
+
+/// Adds `prop` to `seen` unless it is there: the recorder of [`evaluate`]'s notification override.
+pub fn record_notification(seen: &RefCell<Vec<PropId>>, prop: PropId) {
+    let mut seen = seen.borrow_mut();
+    if !seen.contains(&prop) {
+        seen.push(prop);
     }
 }
 
@@ -233,6 +270,17 @@ pub fn evaluate(cooked: &Path, spec: &WeaponSpec) -> Result<WeaponStats, ItemErr
     let world_error = |e: String| ItemError::BadData(format!("the world for the weapon: {e}"));
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::clone(&sys), ParityMode::Off);
     ow_vm::natives_core::register(&mut vm).map_err(|e| world_error(e.to_string()))?;
+    // The weapon's change notifications: recorded, not applied (module documentation).
+    let notified: Rc<RefCell<Vec<PropId>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&notified);
+    vm.register_attribute_notify(
+        WEAPON_CLASS,
+        Rc::new(move |_vm, _owner, prop, _forms| {
+            record_notification(&sink, prop);
+            Ok(())
+        }),
+    )
+    .map_err(|e| world_error(e.to_string()))?;
     let mut world =
         World::new(vm, BalanceState::new(snapshot(spec.level)?), &[]).map_err(|e| world_error(e.to_string()))?;
     let (object, damage, interval, projectiles) = {
@@ -258,7 +306,17 @@ pub fn evaluate(cooked: &Path, spec: &WeaponSpec) -> Result<WeaponStats, ItemErr
             _ => None,
         }
     });
-    Ok(WeaponStats { damage, fire_interval: interval, projectiles, range })
+    let notifications_not_applied = notified
+        .borrow()
+        .iter()
+        .map(|p| {
+            space
+                .classes
+                .decl(*p)
+                .map_or_else(|| format!("{p:?}"), |d| space.names.text(d.name).into_owned())
+        })
+        .collect();
+    Ok(WeaponStats { damage, fire_interval: interval, projectiles, range, notifications_not_applied })
 }
 
 /// Where a ray's length came from.
