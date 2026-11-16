@@ -108,6 +108,8 @@ struct App<S> {
     last_present: Option<Instant>,
     /// The last frame could not be drawn: wait [`SKIP_WAIT`] before the next try.
     backing_off: bool,
+    /// Set by the first [`App::stop`]; the outcome it recorded is final.
+    stopped: bool,
     report: RunReport,
 }
 
@@ -124,6 +126,7 @@ impl<S: Simulation> App<S> {
             first_present: None,
             last_present: None,
             backing_off: false,
+            stopped: false,
             report: RunReport {
                 outcome: Outcome::Closed,
                 adapter: None,
@@ -137,8 +140,19 @@ impl<S: Simulation> App<S> {
     }
 
     fn stop(&mut self, event_loop: &ActiveEventLoop, outcome: Outcome) {
-        self.report.outcome = outcome;
+        self.record_stop(outcome);
         event_loop.exit();
+    }
+
+    /// Records the run's outcome the first time only: after a deadline failure, an event already queued (a redraw
+    /// that presents frame N, a close) must not turn it into a success. True when this call recorded it.
+    fn record_stop(&mut self, outcome: Outcome) -> bool {
+        if self.stopped {
+            return false;
+        }
+        self.stopped = true;
+        self.report.outcome = outcome;
+        true
     }
 
     fn open(&mut self, event_loop: &ActiveEventLoop) {
@@ -178,7 +192,8 @@ impl<S: Simulation> App<S> {
     }
 
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
-        if self.past_deadline(event_loop) {
+        // A redraw queued before the run was stopped draws nothing.
+        if event_loop.exiting() || self.past_deadline(event_loop) {
             return;
         }
         let now = Instant::now();
@@ -276,6 +291,16 @@ impl<S: Simulation> ApplicationHandler for App<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_outcome_is_final() {
+        let options = RunOptions { frames: Some(10), vsync: true, time_limit: None };
+        let mut app = App::new(options, crate::sim::StubWorld::new());
+        assert!(app.record_stop(Outcome::Failed("deadline".into())));
+        assert!(!app.record_stop(Outcome::Completed));
+        assert!(!app.record_stop(Outcome::Closed));
+        assert_eq!(app.report.outcome, Outcome::Failed("deadline".into()));
+    }
 
     #[test]
     fn the_default_limit_scales_with_the_frames() {
