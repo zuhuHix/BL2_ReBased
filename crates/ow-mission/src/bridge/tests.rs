@@ -368,6 +368,10 @@ impl Drop for Env {
 
 impl Env {
     fn new(optional: bool) -> Env {
+        Env::with_mode(optional, ParityMode::Off)
+    }
+
+    fn with_mode(optional: bool, mode: ParityMode) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-mission-bridge-{}-{}",
             std::process::id(),
@@ -382,9 +386,9 @@ impl Env {
             ("TestMission.upk".into(), mission_package(optional)),
         ];
         let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-        let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, ParityMode::Off)
-            .expect("synthetic store");
-        let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::standard().unwrap()), ParityMode::Off);
+        let defs =
+            DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode).expect("synthetic store");
+        let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::standard().unwrap()), mode);
         let mut world = world(vm).expect("world");
         ow_vm::natives_core::register(&mut world.vm).expect("core natives");
         let name = PackageName::parse("TestMission").unwrap();
@@ -574,14 +578,65 @@ fn the_tracker_queries_answer_for_the_mission() {
 /// A native of a bound class called on another object: the unbound behaviour (a log line and the zero result).
 #[test]
 fn a_call_outside_the_binding_is_the_unbound_behaviour() {
+    // Off mode under the gameplay stub policy: the refusal of any unbound native.
     let mut env = Env::new(false);
+    let c = Some(env.script.player_controller());
+    let def = Value::Object(Some(env.mission.definition()));
+    let refused = env.call("WillowGame.MissionTracker.GetMissionStatus", c, vec![def.clone()], MissionScript::n_status);
+    assert!(matches!(refused, Err(BehaviorError::Vm(VmError::UnboundNative(k))) if k == "MissionTracker.GetMissionStatus(object)"));
+    // A policy that allows the key: the stub.
+    env.vm().stub_policy = ow_vm::api::StubPolicy::LogAndZero;
+    let before = env.vm().log.len();
+    let got = env.call("WillowGame.MissionTracker.GetMissionStatus", c, vec![def], MissionScript::n_status).unwrap();
+    assert_eq!(got, Value::Byte(0));
+    assert_eq!(env.vm().log[before], "UNIMPLEMENTED MissionTracker.GetMissionStatus(object) (outside the mission bridge binding)");
+    // Reference mode: the C++ stub line and zero, whatever the policy.
+    let mut env = Env::with_mode(false, ParityMode::Reference);
     let c = Some(env.script.player_controller());
     let def = Value::Object(Some(env.mission.definition()));
     let before = env.vm().log.len();
     let got = env.call("WillowGame.MissionTracker.GetMissionStatus", c, vec![def], MissionScript::n_status).unwrap();
     assert_eq!(got, Value::Byte(0));
-    let line = &env.vm().log[before];
-    assert_eq!(line, "UNIMPLEMENTED MissionTracker.GetMissionStatus(object) (outside the mission bridge binding)");
+    assert_eq!(env.vm().log[before], "UNIMPLEMENTED MissionTracker.GetMissionStatus(object) (outside the mission bridge binding)");
+}
+
+/// The C++ "not implemented" paths (architecture R3): Reference logs the C++ stub line and goes on; Off answers the
+/// honest `NotYet` (each caller names its kind: `NotRead` credits, `LayerAbsent` W6-LOOT items, `NotPorted` others).
+#[test]
+fn not_implemented_is_the_cxx_line_in_reference_and_not_yet_in_off() {
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let before = env.vm().log.len();
+    MissionScript::not_implemented(env.vm(), "X.Y: a path", NotYet::not_read("x", RECORD)).unwrap();
+    assert_eq!(env.vm().log[before], "UNIMPLEMENTED X.Y: a path (not implemented)");
+    env.call("Engine.BehaviorBase.RunBehaviors", None, vec![], MissionScript::n_run_behaviors).unwrap();
+    assert!(env.vm().log.last().unwrap().ends_with("(outside the level-up stand-in)"));
+    let mut env = Env::new(false);
+    let before = env.vm().log.len();
+    let refused = MissionScript::not_implemented(env.vm(), "X.Y: a path", NotYet::not_read("x", RECORD)).unwrap_err();
+    assert!(matches!(refused.not_yet(), Some(n) if n.missing == ow_core::Missing::NotRead));
+    assert_eq!(env.vm().log.len(), before, "no stub line in Off mode");
+    let outside = env.call("Engine.BehaviorBase.RunBehaviors", None, vec![], MissionScript::n_run_behaviors);
+    assert!(matches!(outside.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::NotPorted));
+}
+
+/// `GetExperienceReward` of a mission with an optional objective: `NotYet` in Off mode; Reference goes on as the C++
+/// (here to the reward data, whose percentage the invented reward does not hold).
+#[test]
+fn optional_objective_experience_by_mode() {
+    let mut env = Env::with_mode(true, ParityMode::Reference);
+    let def = Some(env.mission.definition());
+    let xp = env.call("WillowGame.MissionDefinition.GetExperienceReward", def, vec![Value::Object(None), Value::Bool(false)], MissionScript::n_xp_reward);
+    assert_eq!(xp.unwrap_err().to_string(), "mission script bridge: the reward has no ExperienceRewardPercentage");
+    assert!(env.vm().log.iter().any(|l| l == "UNIMPLEMENTED MissionDefinition.GetExperienceReward: optional objective experience (not implemented)"));
+}
+
+/// One bridge per fresh world: `new` refuses a world that already has actors.
+#[test]
+fn a_second_bridge_on_one_world_is_refused() {
+    let mut env = Env::new(false);
+    let mission = env.mission.clone();
+    let refused = MissionScript::new(&mut env.world, &mission).unwrap_err();
+    assert_eq!(refused.to_string(), "mission script bridge: the world already has actors (one bridge per fresh world)");
 }
 
 /// `IsPlayerOwned`: the owner chain's root, then its controller; the player's pawn is, an unowned object is not.
@@ -714,9 +769,6 @@ fn output_links_go_to_the_running_behavior() {
 fn the_stand_ins_of_other_lanes_are_not_yet() {
     let mut env = Env::new(false);
     let s = env.script.clone();
-    let before = env.vm().log.len();
-    env.call("Engine.BehaviorBase.RunBehaviors", None, vec![], MissionScript::n_run_behaviors).unwrap();
-    assert!(env.vm().log[before].ends_with("(outside the level-up stand-in)"));
     s.inner.state.borrow_mut().in_level_up = true;
     let inside = env.call("Engine.BehaviorBase.RunBehaviors", None, vec![], MissionScript::n_run_behaviors);
     assert!(inside.unwrap_err().not_yet().is_some());

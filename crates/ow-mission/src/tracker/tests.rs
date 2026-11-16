@@ -128,6 +128,7 @@ fn willowgame() -> Vec<u8> {
     d.prop("Object", mission, "MissionWeapon", object);
     d.array_of(mission, "Dependencies", "Object", object);
     d.prop("Bool", mission, "bPlotCritical", 0);
+    d.prop("Bool", mission, "bRepeatable", 0);
     let dependency = d.struct_("ObjectiveDependencyData", None);
     d.prop("Object", dependency, "Objective", object);
     d.prop("Byte", dependency, "Status", 0);
@@ -241,6 +242,8 @@ struct Mission {
     dependency: Option<(&'static str, u8)>,
     dependencies: Vec<&'static str>,
     provider: bool,
+    repeatable: bool,
+    plot_critical: bool,
 }
 
 /// `behavior_test.py`'s `build_mission`: SetA {Count3 (3), Echo (3)} -> NextSet SetB {Mask (bit mask, 2), auto-enable}
@@ -281,6 +284,8 @@ fn toy_mission() -> Mission {
         dependency: None,
         dependencies: Vec::new(),
         provider: true,
+        repeatable: false,
+        plot_critical: false,
     }
 }
 
@@ -367,6 +372,12 @@ fn mission_package(m: &Mission) -> Vec<u8> {
     mission_tags.extend(p.object_tag("InitialObjectiveSet", lookup(m.initial)));
     mission_tags.extend(p.bool_tag("bActivateInitialObjectiveSet", m.activate_initial));
     mission_tags.extend(p.str_tag("MissionName", "Toy mission"));
+    if m.repeatable {
+        mission_tags.extend(p.bool_tag("bRepeatable", true));
+    }
+    if m.plot_critical {
+        mission_tags.extend(p.bool_tag("bPlotCritical", true));
+    }
     if let Some(objective) = m.weapon_objective {
         let c = class(&mut p, "WillowGame", "MissionWeaponBalanceDefinition");
         let mut payload = 0i32.to_le_bytes().to_vec();
@@ -497,6 +508,10 @@ impl Drop for Env {
 
 impl Env {
     fn new(m: &Mission) -> Env {
+        Env::with_mode(m, ParityMode::Off)
+    }
+
+    fn with_mode(m: &Mission, mode: ParityMode) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-mission-tracker-{}-{}",
             std::process::id(),
@@ -511,16 +526,20 @@ impl Env {
             ("TestMission.upk".into(), mission_package(m)),
         ];
         let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
-        let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, ParityMode::Off)
-            .expect("synthetic store");
-        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let defs =
+            DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode).expect("synthetic store");
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
         ow_behavior::handlers::Pack.register(&mut vm).expect("world handlers");
         Env { vm, dir }
     }
 
     fn mission(&mut self) -> MissionSystem {
+        self.try_mission().expect("mission")
+    }
+
+    fn try_mission(&mut self) -> Result<MissionSystem, MissionError> {
         let name = PackageName::parse("TestMission").unwrap();
-        MissionSystem::new(&mut self.vm, &name, "ToyMission").expect("mission")
+        MissionSystem::new(&mut self.vm, &name, "ToyMission")
     }
 }
 
@@ -775,18 +794,21 @@ fn the_completed_branch_reads_the_last_set() {
     // A last set of another class gives 0.
     let mut other = toy;
     other.sets[0].class = "MissionObjectiveSetCollectionDefinition";
-    let mut env = Env::new(&other);
+    let mut env = Env::with_mode(&other, ParityMode::Reference);
     let m = env.mission();
     m.load_state("status=2\nactive=\n").then_some(()).unwrap();
     assert_eq!(m.completed_branch(), 0);
 }
 
-/// B3: a set of a class the tracker does not activate is an error line and stays inactive.
+/// B3: a set of a class the tracker does not activate. In Off mode the mission is refused at construction (`NotYet`,
+/// before any state exists); Reference keeps the C++ error line, and the set stays inactive.
 #[test]
-fn an_unsupported_set_class_is_an_error_line() {
+fn an_unsupported_set_class_is_not_yet_or_the_cxx_error_line() {
     let mut toy = toy_mission();
     toy.sets[0].class = "MissionObjectiveSetCollectionDefinition";
-    let mut env = Env::new(&toy);
+    let refused = Env::new(&toy).try_mission().unwrap_err();
+    assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotPorted), "{refused}");
+    let mut env = Env::with_mode(&toy, ParityMode::Reference);
     let m = env.mission();
     let vm = &mut env.vm;
     assert!(m.accept(vm, &DetSet::new()).unwrap());
@@ -807,10 +829,10 @@ fn availability_needs_the_dependencies() {
     let m = env.mission();
     assert_eq!(m.dependencies(), ["Before"]);
     let mut done = DetSet::new();
-    assert!(!m.can_start(&done));
+    assert!(!m.can_start(&done, ParityMode::Off).unwrap());
     assert!(!m.accept(&mut env.vm, &done).unwrap());
     done.insert("Before".to_string());
-    assert!(m.can_start(&done));
+    assert!(m.can_start(&done, ParityMode::Off).unwrap());
     let mut toy = toy_mission();
     toy.dependency = Some(("Count3", 1));
     let mut env = Env::new(&toy);
@@ -835,7 +857,15 @@ fn availability_needs_the_dependencies() {
 fn the_lent_weapon_sits_in_the_status_routine() {
     let mut toy = toy_mission();
     toy.weapon_objective = Some("Count3");
-    let mut env = Env::new(&toy);
+    // Off mode: the weapon's region-stage condition is not read, so the status routine refuses before it changes
+    // anything.
+    let mut off = Env::new(&toy);
+    let m = off.mission();
+    let refused = m.accept(&mut off.vm, &DetSet::new()).unwrap_err();
+    assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotRead));
+    assert_eq!(m.status(), Status::NotStarted);
+    assert!(m.drain().is_empty());
+    let mut env = Env::with_mode(&toy, ParityMode::Reference);
     let m = env.mission();
     assert!(m.lends_weapon());
     assert_eq!(m.weapon_definition(), "ToyWeapon");
@@ -952,12 +982,14 @@ fn lend_swaps_the_provider_and_refuses_an_occupied_slot() {
     let m = env.mission();
     let mut p = m.inner.provider.borrow_mut().take().unwrap();
     let before = p.path().to_string();
-    let seen = lend(&m.inner.provider, &mut p, || Ok(m.inner.provider.borrow().as_ref().map(|x| x.path().to_string())))
-        .unwrap();
+    let seen = lend(&m.inner.provider, &m.inner.lost, &mut p, || {
+        Ok(m.inner.provider.borrow().as_ref().map(|x| x.path().to_string()))
+    })
+    .unwrap();
     assert_eq!(seen.as_deref(), Some(before.as_str()));
     assert!(m.inner.provider.borrow().is_none(), "taken back");
     *m.inner.provider.borrow_mut() = Some(Provider::from_data(p.data().clone()));
-    let refused = lend(&m.inner.provider, &mut p, || Ok(()));
+    let refused = lend(&m.inner.provider, &m.inner.lost, &mut p, || Ok(()));
     assert!(matches!(refused, Err(e) if e.not_yet().is_some_and(|n| n.what == PROVIDER_BUSY)));
     let _ = &mut env;
 }
@@ -1007,4 +1039,92 @@ fn the_definition_is_read_with_the_cxx_texts() {
     assert_eq!(missing.to_string(), "mission not found: Nowhere");
     let wrong = MissionSystem::new(&mut env.vm, &name, "ToyMission.SetA").unwrap_err();
     assert_eq!(wrong.to_string(), "not a MissionDefinition: ToyMission.SetA");
+}
+
+/// A lend whose call takes the provider and does not give it back loses it: the mission is marked lost and every later
+/// call is refused (`PROVIDER_LOST`), instead of the placeholder copy running.
+#[test]
+fn a_lost_provider_makes_the_mission_unusable() {
+    let mut env = Env::new(&toy_mission());
+    let m = env.mission();
+    let mut p = m.inner.provider.borrow_mut().take().unwrap();
+    let lost = lend(&m.inner.provider, &m.inner.lost, &mut p, || {
+        drop(m.inner.provider.borrow_mut().take());
+        Ok(())
+    });
+    assert!(matches!(lost, Err(e) if e.not_yet().is_some_and(|n| n.what == PROVIDER_LOST)));
+    assert!(m.is_lost());
+    let vm = &mut env.vm;
+    for refused in [
+        m.accept(vm, &DetSet::new()).map(|_| ()),
+        m.kickoff(vm, false).map(|_| ()),
+        m.update_objective(vm, "Count3", 0).map(|_| ()),
+        m.custom_event(vm, "GoB").map(|_| ()),
+        m.turn_in_mission(vm).map(|_| ()),
+        m.tick(vm, 0.1),
+        m.play_turn_in(vm),
+        m.bind_kismet_variable("X", None),
+    ] {
+        assert!(matches!(refused, Err(e) if e.not_yet().is_some_and(|n| n.what == PROVIDER_LOST)));
+    }
+    assert!(!m.load_state("status=1\nactive=\n"));
+    assert_eq!(m.status(), Status::NotStarted);
+}
+
+/// B1 and the save text: a zero bit on a bit-mask objective is refused before its progress entry is made, so the save
+/// text has no `progress=` line for it (the C++ order, `mission.cpp`).
+#[test]
+fn a_refused_zero_bit_leaves_no_progress_line() {
+    let mut env = Env::new(&toy_mission());
+    let m = env.mission();
+    let vm = &mut env.vm;
+    m.accept(vm, &DetSet::new()).unwrap();
+    m.custom_event(vm, "GoB").unwrap();
+    assert!(!m.update_objective(vm, "Mask", 0).unwrap());
+    assert_eq!(m.save_state(), "status=1\nactive=ToyMission.SetB\n");
+}
+
+/// `CanStartMission` of a Complete repeatable mission: restarting is not read, so `NotYet` in Off mode; Reference
+/// answers the C++ false. A NotStarted repeatable mission starts as any other.
+#[test]
+fn a_repeatable_complete_mission_is_not_yet() {
+    let mut toy = toy_mission();
+    toy.repeatable = true;
+    let mut env = Env::new(&toy);
+    let m = env.mission();
+    assert!(m.can_start(&DetSet::new(), ParityMode::Off).unwrap());
+    assert!(m.load_state("status=3\nactive=\n"));
+    let refused = m.can_start(&DetSet::new(), ParityMode::Off).unwrap_err();
+    assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotRead));
+    assert!(m.accept(&mut env.vm, &DetSet::new()).is_err());
+    assert!(!m.can_start(&DetSet::new(), ParityMode::Reference).unwrap());
+    // Not repeatable: the C++ false in both modes.
+    let mut env = Env::new(&toy_mission());
+    let m = env.mission();
+    assert!(m.load_state("status=3\nactive=\n"));
+    assert!(!m.can_start(&DetSet::new(), ParityMode::Off).unwrap());
+}
+
+/// A plot-critical mission whose activation finds a pending kickoff record: the overwrite is not read, so Off refuses
+/// before the status changes; Reference keeps the C++ (the pending record stays).
+#[test]
+fn a_plot_critical_overwrite_is_not_yet() {
+    let mut toy = toy_mission();
+    toy.plot_critical = true;
+    let mut env = Env::new(&toy);
+    let m = env.mission();
+    assert!(m.plot_critical());
+    m.inner.state.borrow_mut().kickoff_pending = true;
+    let refused = m.accept(&mut env.vm, &DetSet::new()).unwrap_err();
+    assert!(matches!(refused.not_yet(), Some(n) if n.missing == Missing::NotRead));
+    assert_eq!(m.status(), Status::NotStarted);
+    let mut env = Env::with_mode(&toy, ParityMode::Reference);
+    let m = env.mission();
+    m.inner.state.borrow_mut().kickoff_pending = true;
+    assert!(m.accept(&mut env.vm, &DetSet::new()).unwrap());
+    assert!(m.kickoff_pending());
+    // Without a pending record a plot-critical mission is accepted in Off mode too.
+    let mut env = Env::new(&toy);
+    let m = env.mission();
+    assert!(m.accept(&mut env.vm, &DetSet::new()).unwrap());
 }
