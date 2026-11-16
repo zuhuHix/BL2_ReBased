@@ -66,8 +66,8 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::Play { game, map, script, vsync, size, screenshot, weapon } => match check(&game) {
-            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot })),
+        Command::Play { game, map, script, vsync, size, screenshot, weapon, arms } => match check(&game) {
+            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot, arms })),
             Err(code) => code,
         },
         Command::PlayHeadless { game, map, script, weapon } => match check(&game) {
@@ -390,6 +390,8 @@ struct PlayWindow {
     vsync: bool,
     size: Option<(u32, u32)>,
     screenshot: Option<PathBuf>,
+    /// The UModel export folder of the first-person arms (lane H6-SKIN).
+    arms: Option<PathBuf>,
 }
 
 /// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY).
@@ -506,6 +508,26 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         lighting.exposure,
         baked.components.len()
     );
+    // The arms load through the scene's store and object space, before the store moves into the texture source.
+    let arms = match &window.arms {
+        Some(dir) => match ow_host::anim::arms::load(&mut defs, &mut space, std::slice::from_ref(dir)) {
+            Ok(arms) => {
+                println!(
+                    "arms: {} bones, {} vertices, {} triangles, posed by {}",
+                    arms.skeleton.bone_count(),
+                    arms.mesh.vertices.len(),
+                    arms.mesh.triangle_count(),
+                    ow_host::anim::tree::report::HANDS_TREE
+                );
+                Some(ow_host::anim::arms::ArmsLayer::new(arms))
+            }
+            Err(e) => {
+                eprintln!("ow-host: loading the arms from {}: {e}", dir.display());
+                return ExitCode::from(1);
+            }
+        },
+        None => None,
+    };
     let plan = DrawPlan::build_lit(&scene, Some(&library), Some(&baked));
     println!(
         "draw plan: {} drawn, {} batches, {} section instances; eye {} uu above the pawn's centre, vertical FOV {} \
@@ -533,7 +555,8 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         window.screenshot.clone().map(|p| (u64::from(args::SCREENSHOT_FRAME), p)),
         end_shot,
         Rc::clone(&draw),
-    );
+    )
+    .with_arms(arms);
     let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats)).with_gun(gun, labels, !scripted);
     let options = RunOptions { frames: None, vsync: window.vsync, time_limit: None };
     let code = match app::run_play(options, sim, Some(Box::new(drawer)), InputCollector::new(!scripted)) {

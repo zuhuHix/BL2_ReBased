@@ -861,3 +861,25 @@ fn a_node_from_another_file_is_refused() {
         })
     );
 }
+
+#[test]
+fn a_resumed_driver_continues_where_it_stopped() {
+    // Saving the state and resuming it each tick (as the play window's arms do) equals one driver ticked throughout.
+    let lib = list_library();
+    let (t, sk) = (list_tree(0.2), skeleton());
+    let mut inputs = Inputs::default();
+    inputs.select.insert("posture".into(), 2);
+    let mut whole = Driver::new(&t, &lib, &sk, inputs.clone()).unwrap();
+    let mut saved = Driver::new(&t, &lib, &sk, inputs.clone()).unwrap().into_state();
+    for _ in 0..7 {
+        whole.tick(0.03).unwrap();
+        let mut d = Driver::resume(&t, &lib, &sk, inputs.clone(), saved).unwrap();
+        d.tick(0.03).unwrap();
+        assert_eq!(b1(&d.locals().unwrap()), b1(&whole.locals().unwrap()));
+        assert_eq!(d.elapsed(), whole.elapsed());
+        saved = d.into_state();
+    }
+    let mut bad = inputs;
+    bad.speed = f32::NAN;
+    assert_eq!(Driver::resume(&t, &lib, &sk, bad, saved).err(), Some(EvalError::BadInput("speed")));
+}

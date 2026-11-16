@@ -330,7 +330,45 @@ pub struct Driver<'a> {
     elapsed: f64,
 }
 
+/// A driver's state without its borrows, so an owner that cannot hold a borrowing [`Driver`] (a renderer that owns
+/// the tree, the clips and the skeleton) can keep it between frames: [`Driver::into_state`], then
+/// [`Driver::resume`] with the same tree, clips and skeleton.
+#[derive(Debug, Clone)]
+pub struct DriverState {
+    state: DetMap<NodeId, State>,
+    elapsed: f64,
+    unsupported: Unsupported,
+    log: EvalLog,
+}
+
 impl<'a> Driver<'a> {
+    /// The state, for [`Driver::resume`].
+    pub fn into_state(self) -> DriverState {
+        DriverState { state: self.state, elapsed: self.elapsed, unsupported: self.unsupported, log: self.log }
+    }
+
+    /// A driver over `tree`, `clips` and `skeleton` continuing from `saved`, which must come from a driver over the
+    /// same three (a node the state does not know starts at its stored state, as in [`Driver::new`]). Refuses inputs
+    /// that are not finite.
+    pub fn resume(
+        tree: &'a TreeDef,
+        clips: &'a ClipLibrary,
+        skeleton: &'a Skeleton,
+        inputs: Inputs,
+        saved: DriverState,
+    ) -> Result<Self, EvalError> {
+        let mut d = Driver::new(tree, clips, skeleton, inputs)?;
+        for (id, s) in saved.state {
+            if d.state.contains_key(&id) {
+                d.state.insert(id, s);
+            }
+        }
+        d.elapsed = saved.elapsed;
+        d.unsupported = saved.unsupported;
+        d.log = saved.log;
+        Ok(d)
+    }
+
     /// A driver with every node at its stored state: sequences at their `CurrentTime`, playing as `bPlaying` (or
     /// `bAutoStart`) says, lists on their selected child (input 0 unless set), weights at their targets. Refuses
     /// inputs that are not finite.

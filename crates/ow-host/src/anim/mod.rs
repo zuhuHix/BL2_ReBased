@@ -7,6 +7,8 @@
 //! - [`pose`]: the skeleton's bind matrices, the sampler (time to local transforms to model-space matrices) and its
 //!   two end rules, looping and clamping.
 //! - [`skin`]: linear blend skinning on the CPU, the reference the stage 2 GPU path will be tested against.
+//! - [`gpu`]: GPU skinning in our own WGSL with a bone palette, checked against [`skin`] (H6 stage 2).
+//! - [`arms`]: Maya's first-person arms in the play window, posed by the hands AnimTree and attached to the eye.
 //! - [`report`]: the installed-game check (counts, bind pose, clips) over UModel exports under `local/`.
 //!
 //! **Frames.** The data is already in the game's frame when it arrives (`ow_assets::actorx` undoes the export's
@@ -18,6 +20,8 @@
 //! has already folded it into the frame rate) and the game's own key interpolation (UE3 compresses keys; the export
 //! resamples them to one key per frame) are open items of the decision.
 
+pub mod arms;
+pub mod gpu;
 pub mod math;
 pub mod pose;
 pub mod report;
