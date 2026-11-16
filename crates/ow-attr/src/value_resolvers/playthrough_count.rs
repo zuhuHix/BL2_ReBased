@@ -61,12 +61,10 @@ fn mode(cx: &mut EvalCx<'_>) -> ParityMode {
     cx.world.parts().defs.map_or(ParityMode::Off, |d| d.mode())
 }
 
-/// An int field of `obj`: `Int`, or a `Byte` widened (a class may declare the playthrough as either; the note reads
-/// an int). Anything else is bad data.
+/// An int field of `obj` (note section 1 reads both fields as ints). Any other kind, a byte included, is bad data.
 fn int_field(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<i32, AttrError> {
     match required(cx, obj, name)? {
         Value::Int(i) => Ok(i),
-        Value::Byte(b) => Ok(i32::from(b)),
         other => Err(AttrError::BadData {
             reason: format!(
                 "PlayThroughCountAttributeValueResolver: {name} is a {}, not an int",
