@@ -10,6 +10,8 @@
 //!   the default limit of `app::frames_time_limit` (60 s plus 1 s per frame).
 //! - `ow-host --game <install> --walk`: checks the install, loads Sanctuary and its collision, and runs the scripted
 //!   walk from its player start headless, printing positions and counts (lane H4; no window: H2 stage 2 draws).
+//!   It loads the whole scene, so it is a heavy run: the caller takes the machine-wide lock first, as for window
+//!   runs (`docs/verification/GATES.md`); the host takes none itself.
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!

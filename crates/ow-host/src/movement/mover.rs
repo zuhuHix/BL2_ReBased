@@ -357,8 +357,10 @@ impl Mover {
     }
 
     /// Up by `MaxStepHeight`, across by `across`, back down onto a walkable floor (stand-in). Returns how far up the
-    /// pawn ended, or `None` (nothing moved) when the step does not land on a walkable floor or makes no progress.
-    fn step_up(&mut self, world: &CollisionWorld, across: V3, events: &mut TickEvents) -> Option<f64> {
+    /// pawn ended, or `None` (nothing moved) when the step does not land on a walkable floor or makes no progress. A
+    /// down trace that finds no floor is no step: the pawn would otherwise be carried over the obstacle and off a
+    /// ledge beyond it (review r1 of PR #349).
+    pub(super) fn step_up(&mut self, world: &CollisionWorld, across: V3, events: &mut TickEvents) -> Option<f64> {
         let p = self.params;
         let shape = p.shape;
         let start = self.location;
@@ -375,13 +377,11 @@ impl Mover {
         }
         let down = world.trace(&shape, over.end, sub(over.end, [0.0, 0.0, lifted + 2.0 * SKIN]));
         events.start_solid |= down.start_solid;
-        if down.start_solid || (down.blocked() && down.normal[2] < p.walkable_floor_z) {
+        if down.start_solid || !down.blocked() || down.normal[2] < p.walkable_floor_z {
             return None;
         }
         self.location = down.end;
-        if down.blocked() {
-            self.floor_normal = down.normal;
-        }
+        self.floor_normal = down.normal;
         Some(down.end[2] - start[2])
     }
 
@@ -402,32 +402,34 @@ impl Mover {
         }
     }
 
-    /// Section 7: the falling step.
+    /// Section 7: the falling step. Steps 1 and 2 (the air-control limit with its start kick, and the low-air-control
+    /// speed cap) are worked out once per tick, from the frame's `dt` and the horizontal speed at the tick's start, as
+    /// the record orders them before the sub-steps of step 3.
     fn fall(&mut self, world: &CollisionWorld, accel: V3, dt: f64, events: &mut TickEvents) {
         let p = self.params;
+        let mut a = horizontal(accel);
+        let old_h = length(horizontal(self.velocity));
+        if p.limit_fall_accel {
+            let mut limit = p.accel_rate * p.air_control;
+            if old_h < p.air_kick_speed && p.air_control > 0.0 {
+                limit += (p.air_kick_speed - old_h) / dt;
+            }
+            let m = length(a);
+            if m > limit {
+                a = scale(a, limit / m);
+            }
+        }
+        a[2] += p.gravity_z;
+        let cap_horizontal = p.air_control <= 0.05 && old_h >= p.ground_speed;
         let mut remaining = dt;
         let mut steps = 0u32;
         while remaining > 0.0 && steps < p.max_fall_substeps {
             steps = steps.saturating_add(1);
             let sub_dt = remaining.min(p.fall_substep);
             remaining -= sub_dt;
-            let mut a = horizontal(accel);
-            let h_speed = length(horizontal(self.velocity));
-            if p.limit_fall_accel {
-                let mut limit = p.accel_rate * p.air_control;
-                if h_speed < p.air_kick_speed && p.air_control > 0.0 {
-                    limit += (p.air_kick_speed - h_speed) / sub_dt;
-                }
-                let m = length(a);
-                if m > limit {
-                    a = scale(a, limit / m);
-                }
-            }
-            a[2] += p.gravity_z;
-            let old_h = h_speed;
             self.velocity = add(scale(self.velocity, 1.0 - p.fluid_friction * sub_dt), scale(a, sub_dt));
             // Section 7.2: at low air control, horizontal speed already at GroundSpeed may not grow.
-            if p.air_control <= 0.05 && old_h >= p.ground_speed {
+            if cap_horizontal {
                 let h = horizontal(self.velocity);
                 let s = length(h);
                 if s > old_h {

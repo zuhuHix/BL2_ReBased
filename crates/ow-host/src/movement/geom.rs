@@ -1,6 +1,6 @@
 //! Owner: lane H4-MOVEMENT. Vector helpers in `f64`, uu, Z-up. Every root goes through `ow_core::num` (N3).
 
-use ow_core::num::sqrt_f64;
+use ow_core::num::{sqrt_f64, trunc_i32_f64};
 
 /// A point or a direction in uu, Z-up, `f64`.
 pub type V3 = [f64; 3];
@@ -50,4 +50,18 @@ pub fn along_plane(a: V3, n: V3) -> V3 {
 
 pub fn is_finite(a: V3) -> bool {
     a.iter().all(|v| v.is_finite())
+}
+
+/// `x` rounded down to an index in `0..=max` (rule N5: no bare float-to-int `as`): NaN and negatives give 0, anything
+/// at or above `max` gives `max`. `max` is capped at `i32::MAX`, the range of the conversion used
+/// (`ow_core::num::trunc_i32_f64`, which truncates toward zero, so it rounds a non-negative value down).
+pub fn floor_index(x: f64, max: usize) -> usize {
+    let cap = max.min(i32::MAX as usize);
+    if !(x >= 0.0) {
+        return 0;
+    }
+    if x >= cap as f64 {
+        return cap;
+    }
+    usize::try_from(trunc_i32_f64(x)).unwrap_or(0)
 }

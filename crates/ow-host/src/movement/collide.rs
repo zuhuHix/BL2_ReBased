@@ -24,7 +24,7 @@
 //! ascending index (the grid's candidates sorted), and the nearest hit wins, the lower index on an exact tie. The
 //! same brushes and the same trace give the same bits.
 
-use super::geom::{V3, add, cross, dot, normalize, scale, sub};
+use super::geom::{V3, add, cross, dot, floor_index, normalize, scale, sub};
 use ow_core::num::sqrt_f64;
 
 /// How far short of a surface a trace stops, uu, along the surface normal (module documentation).
@@ -35,6 +35,17 @@ pub const CELL: f64 = 512.0;
 
 /// The most grid cells a world may have; a larger extent widens the cells instead.
 pub const MAX_CELLS: usize = 1 << 20;
+
+/// How far from the origin, uu, a brush's points may lie on any axis (our bound, not a game value: Sanctuary's
+/// farthest brush point is about 253,000 uu out). A hull or triangle beyond it is refused
+/// ([`BrushError::OutOfBounds`]), and [`CollisionWorld::new`] leaves out of its grid any brush built by hand beyond
+/// it, so the grid's size stays bounded.
+pub const WORLD_BOUND: f64 = 1_048_576.0;
+
+/// True when every coordinate of `p` is finite and within [`WORLD_BOUND`].
+fn in_bound(p: V3) -> bool {
+    p.iter().all(|v| v.is_finite() && v.abs() <= WORLD_BOUND)
+}
 
 /// The shape that moves, centred on its location. Z is the vertical axis; neither shape turns.
 #[non_exhaustive]
@@ -101,6 +112,8 @@ pub enum BrushError {
     TooManyPointsWithoutFaces,
     /// A degenerate triangle (no area).
     DegenerateTriangle,
+    /// A point beyond [`WORLD_BOUND`].
+    OutOfBounds,
 }
 
 impl std::fmt::Display for BrushError {
@@ -110,6 +123,7 @@ impl std::fmt::Display for BrushError {
             BrushError::Flat => "no face plane (flat or collinear points)",
             BrushError::TooManyPointsWithoutFaces => "too many points to search for faces without triangles",
             BrushError::DegenerateTriangle => "degenerate triangle",
+            BrushError::OutOfBounds => "a point beyond the world bound",
         })
     }
 }
@@ -157,6 +171,9 @@ impl Brush {
     pub fn from_hull(points: &[V3], triangles: &[[u32; 3]], source: u32) -> Result<Brush, BrushError> {
         if points.len() < 4 || points.iter().any(|p| !super::geom::is_finite(*p)) {
             return Err(BrushError::TooFewPoints);
+        }
+        if !points.iter().all(|p| in_bound(*p)) {
+            return Err(BrushError::OutOfBounds);
         }
         let (lo, hi) = bounds(points);
         let size = (0..3).map(|i| hi[i] - lo[i]).fold(0.0, f64::max);
@@ -206,6 +223,9 @@ impl Brush {
 
     /// A triangle as a thin solid: its plane both ways and the three planes through its edges, perpendicular to it.
     pub fn from_triangle(a: V3, b: V3, c: V3, source: u32) -> Result<Brush, BrushError> {
+        if ![a, b, c].iter().all(|p| in_bound(*p)) {
+            return Err(BrushError::OutOfBounds);
+        }
         let Some(n) = normalize(cross(sub(b, a), sub(c, a))) else {
             return Err(BrushError::DegenerateTriangle);
         };
@@ -263,23 +283,28 @@ pub struct CollisionWorld {
 }
 
 impl CollisionWorld {
-    /// A world of `brushes`, in that order.
+    /// A world of `brushes`, in that order. A brush whose bounds are not finite or lie beyond [`WORLD_BOUND`] is kept
+    /// in [`CollisionWorld::brushes`] but left out of the grid, so no trace ever hits it (the constructors refuse
+    /// such brushes; only one built by hand can be one).
     pub fn new(brushes: Vec<Brush>) -> CollisionWorld {
+        let gridded = |b: &Brush| in_bound(b.lo) && in_bound(b.hi);
         let (mut lo, mut hi) = ([0.0f64; 2], [0.0f64; 2]);
-        if let Some(first) = brushes.first() {
+        if let Some(first) = brushes.iter().find(|b| gridded(b)) {
             lo = [first.lo[0], first.lo[1]];
             hi = [first.hi[0], first.hi[1]];
         }
-        for b in &brushes {
+        for b in brushes.iter().filter(|b| gridded(b)) {
             for i in 0..2 {
                 lo[i] = lo[i].min(b.lo[i]);
                 hi[i] = hi[i].max(b.hi[i]);
             }
         }
         let mut cell = CELL;
+        // Both extents are at most twice the world bound, so each count is far below `MAX_CELLS` after a few
+        // doublings of the cell; `floor_index` caps it anyway.
         let span = |c: f64| -> (usize, usize) {
-            let cols = ((hi[0] - lo[0]) / c).floor().max(0.0) as usize + 1;
-            let rows = ((hi[1] - lo[1]) / c).floor().max(0.0) as usize + 1;
+            let cols = floor_index((hi[0] - lo[0]) / c, MAX_CELLS).saturating_add(1);
+            let rows = floor_index((hi[1] - lo[1]) / c, MAX_CELLS).saturating_add(1);
             (cols, rows)
         };
         let (mut columns, mut rows) = span(cell);
@@ -296,6 +321,9 @@ impl CollisionWorld {
             cells: vec![Vec::new(); columns * rows],
         };
         for index in 0..world.brushes.len() {
+            if !gridded(&world.brushes[index]) {
+                continue;
+            }
             let (lo, hi) = (world.brushes[index].lo, world.brushes[index].hi);
             let ((c0, r0), (c1, r1)) = (world.cell_of(lo), world.cell_of(hi));
             for r in r0..=r1 {
@@ -318,14 +346,7 @@ impl CollisionWorld {
 
     /// The grid cell holding X, Y of `p`, clamped into the grid.
     fn cell_of(&self, p: V3) -> (usize, usize) {
-        let index = |v: f64, o: f64, n: usize| -> usize {
-            let f = ((v - o) / self.cell).floor();
-            if f.is_nan() || f < 0.0 {
-                0
-            } else {
-                (f as usize).min(n - 1)
-            }
-        };
+        let index = |v: f64, o: f64, n: usize| -> usize { floor_index((v - o) / self.cell, n.saturating_sub(1)) };
         (index(p[0], self.origin[0], self.columns), index(p[1], self.origin[1], self.rows))
     }
 
@@ -415,7 +436,10 @@ fn clip(brush: &Brush, shape: &Shape, start: V3, end: V3) -> Clip {
             continue;
         }
         if d1 > d2 {
-            let f = (d1 - SKIN) / (d1 - d2);
+            // Clamped to 0 here, before the comparison: a start under the skin from the plane gives a negative
+            // fraction, below -1 for a short move, which would otherwise read as no entry and let the move end inside
+            // the brush (review r1 of PR #349).
+            let f = ((d1 - SKIN) / (d1 - d2)).max(0.0);
             if f > enter {
                 enter = f;
                 normal = p.n;
@@ -430,8 +454,8 @@ fn clip(brush: &Brush, shape: &Shape, start: V3, end: V3) -> Clip {
     if !starts_out {
         return Clip::StartSolid { escapes: ends_out };
     }
-    if enter < leave && enter > -1.0 {
-        return Clip::Hit { fraction: enter.max(0.0), normal };
+    if enter < leave && enter >= 0.0 {
+        return Clip::Hit { fraction: enter, normal };
     }
     Clip::Miss
 }

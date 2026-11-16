@@ -166,6 +166,16 @@ fn census_text(out: &mut String, c: &CollisionCensus) {
     );
     let by_level: Vec<String> = c.brushes_by_level.iter().map(|(l, n)| format!("{l} {n}")).collect();
     let _ = writeln!(out, "  brushes by level: {}", by_level.join(", "));
+    let beyond = c
+        .brushes_refused
+        .get(super::collide::BrushError::OutOfBounds.to_string().as_str())
+        .copied()
+        .unwrap_or(0);
+    let _ = writeln!(
+        out,
+        "  world bound +-{} uu: {beyond} hull(s) refused beyond it",
+        fmt_f(super::collide::WORLD_BOUND, 0)
+    );
     for (reason, n) in c.brushes_refused.iter() {
         let _ = writeln!(out, "  brush refused: {n} x {reason}");
     }

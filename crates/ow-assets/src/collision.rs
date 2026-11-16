@@ -21,6 +21,16 @@
 //! - An element with `bNoRBCollision` or `bPerPolyShape` set, an untyped aggregate field, a hull without volume, a
 //!   non-finite value or more than 4,096 hulls refuses the whole body, never part of it.
 //!
+//! **Stricter than `hulls()`, on purpose** (each refuses the body where the tool reads on):
+//! - a field tagged twice in one struct is refused; the tool's `fields()` keeps the last one;
+//! - an `ElemBox` that is tagged but has no `Min`/`Max` is refused; the tool skips an empty (falsy) `ElemBox`;
+//! - an `AggGeom` tag that did not decode as a struct is refused; the tool sees only decoded tags, so for it the body
+//!   simply has no aggregate and no hulls;
+//! - an aggregate field outside the four shape lists is accepted only when it is `false`, `0` or byte `0`; the tool
+//!   accepts any falsy value (`0.0`, an empty string or list, `None`).
+//!
+//! None of the four occurs on Sanctuary (no body was refused there).
+//!
 //! Which of these shapes the game's pawn movement tests against is UNVERIFIED in general. One live observation
 //! supports it for Sanctuary's stair ramps: the pawn's floor normal there equals the ramp hull's
 //! (`COLLISION_WALKING_VERIFICATION.md`, 2026-10-21). The cooked PhysX data and the per-polygon (kDOP) collision of a
