@@ -306,7 +306,12 @@ fn part_tree(vm: &mut Vm, out: &mut String) -> Result<(), String> {
         let ok = tree
             .upgrade(&mut EvalCx::new(vm), suspension)
             .map_err(|e| e.to_string())?;
-        grades.push(format!("{ok}:{}", tree.grade(suspension).unwrap_or(-1)));
+        grades.push(format!(
+            "{ok}:{}",
+            tree.grade(&mut EvalCx::new(vm), suspension)
+                .map_err(|e| e.to_string())?
+                .unwrap_or(-1)
+        ));
     }
     let _ = writeln!(
         out,

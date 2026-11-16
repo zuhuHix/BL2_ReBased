@@ -11,8 +11,8 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
 - **Edits outside the lane's files** (each granted): the new, comment-only `tests/rust_parity.d/skills.txt`; and, in
   review r1 of PR #342, two seam edits:
   - `crates/ow-world/src/pools.rs`: `stored_value` (and its `Stored`), the value rule of `set_current` (the integer
-    truncation, then its clamp order) without the write; `set_current` now calls it, so the rule exists once. Its
-    behaviour is unchanged (`ow-world`'s tests pass as before).
+    truncation, then its clamp order) without the write, with the bounds the clamp used (review r2); `set_current`
+    now calls it, so the rule exists once. Its behaviour is unchanged (`ow-world`'s tests pass as before).
   - `crates/ow-vm/src/natives_core.rs`: `Object.VInterpTo(vector,vector,float,float)`, next to `FInterpTo` and in its
     form (each axis in double, rounded once), with its unit test. It moved there from `ow-skills` (hub decision), so a
     later Core binding cannot fail on a duplicate key. The C++ has no `VInterpTo`: a C++ sweep that reaches it logs a
@@ -32,8 +32,8 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
     service and `Pack` (six `PlayerSkillTree` natives), and `register_player_skill_query`.
   - `action_skill`: the oracles `action_skill::oracle::{StartInputs, StartDecision, decide_start, cooldown_flags}`;
     `state_from_constraints`, `calculate_state`, `evaluate`, `is_skill_active`, `calculate_modifier_value`; `Pack`
-    (nine natives and the output-link collector `Selected`); `drain` (the cooldown pool's per-frame update,
-    `Drained`); `run_skill_behavior` and `skill_behavior_handlers`.
+    (nine natives); `drain` (the cooldown pool's per-frame update, `Drained`); `run_skill_behavior`,
+    `apply_to_contexts` and `skill_behavior_handlers`.
   - `phaselock`: `lock_duration` (the stack rule on given modifiers), `Schedule` (an oracle), `repeat_target_scale`,
     and the target score `AutoAim` / `Candidate` / `Scored` / `magnetism` / `score` / `pick_target`. The bob's
     restatement (`bob_target_z`, `vinterp_to`, `SCRIPT_PI`) is a test-only oracle (`phaselock::oracle`,
@@ -45,14 +45,13 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
   `HasTrainedASkillOfType`; `SkillEffectManager.IsSkillActive`; `SkillDefinition.DoesSkillPassMinGradeTest`;
   `Skill.CalculateModifierValue`, `CalculateModifierValueFromDefinitionEffectArray`,
   `CalculateStateBasedOnConstraints`; the `Evaluate` of `AttributeExpressionEvaluator`,
-  `VehiclePassengerExpressionEvaluator`, `HealthStateExpressionEvaluator`, `WeaponActionAvailableExpressionEvaluator`;
-  and `BehaviorKernel.ActivateBehaviorOutputLink` when no pack holds it.
+  `VehiclePassengerExpressionEvaluator`, `HealthStateExpressionEvaluator`, `WeaponActionAvailableExpressionEvaluator`.
+  `BehaviorKernel.ActivateBehaviorOutputLink` is **not** bound here (hub decision, review r2): `ow-mission` registers it
+  with `register_native` (a duplicate fails) and `ow-combat` skips a bound key (its links would come back empty), and
+  the skill behaviors never call it (below).
 - **Cross-owner items** (recorded, hub decision in review r1): `AttributeExpressionEvaluator.Evaluate` is an
   attribute-layer native bound here for now, because no pack binds it and the skill constraints need it; the hub
-  records one owner in ARCHITECTURE. `ActivateBehaviorOutputLink` is bound by `ow-combat` too, whose collector is
-  crate-private: whichever pack registers first holds the key, and a skill behavior run on a VM where another pack
-  holds it answers `NotYet { LayerAbsent }` naming a shared collector in `ow-behavior` (a contract item), never "no
-  links".
+  records one owner in ARCHITECTURE.
 - **What runs as installed script** (architecture R2) and is not restated: the cooldown's start
   (`StartActiveSkillCooldown` through the pool's own `RefillPercentage`), `IsActionSkillOnCooldown`,
   `ActionSkillCallback`, `SkillEffectManager.ActivateSkill`, `Skill.Activate` / `Deactivate`, the skill behaviors'
@@ -77,8 +76,9 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
     report and to test for a trained type. A `DefaultStartingGrade` outside `0..=MaxGrade` is bad data (no clamp).
   - Proficiencies (review r1, item 2): the `Initialize` native builds the tree without the globals' proficiency list
     (its field is not named in the record) and marks it so. On such a tree `HasTrainedASkillOfType(Proficiency)`, and
-    `SetSkillGrade` or `UpgradeSkill` for a skill the tree lacks whose type is Proficiency, are `NotYet { NotRead }`,
-    so a saved grade is never dropped as "not in this tree".
+    `SetSkillGrade`, `UpgradeSkill`, `GetSkillState`, the tree's grade and the two oracles that read them, for a skill
+    the tree lacks whose type is Proficiency, are `NotYet { NotRead }`, so a saved grade is never dropped as "not in
+    this tree" (the readers and oracles since review r2).
   - The constraint check: each failing constraint sets the result and only a Deactivated one stops (a Paused failure
     followed by a Deactivated one gives Deactivated). Phaselock's three constraints all fail to Deactivated, so both
     readings of the record's sentence agree for it.
@@ -91,15 +91,21 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
   - The drain (review r1, item 1): a delta that is not finite or is negative is refused, as `World::tick` refuses
     it. The step's target goes through `SetCurrentValue` only when the value it would store
     (`ow_world::pools::stored_value`: the truncation, then the clamp) differs from the current one, so a pool resting
-    at an extreme keeps its idle stamp; the edge test uses that stored value, so an integer truncation onto the
-    minimum counts. `NotYet`, before any write: a pool class other than `Engine.ResourcePool`, an attached
+    at an extreme keeps its idle stamp; the edge test uses that stored value and the bounds the clamp used, so an
+    integer truncation onto the minimum counts, and an integer-only pool with `MaxValue` 10.5 that fills to 10 has
+    reached its maximum. Which bound the native's edge test uses is not in the record (review r2: the bounds used,
+    rather than a `NotYet` for a fractional maximum). `NotYet`, before any write: a pool class other than `Engine.ResourcePool`, an attached
     regeneration pool, an integer-only pool whose step moves only its remainder, a step that reaches or leaves an
     extreme when the definition lists behaviors for those events, and idle regeneration without a level's world time.
-  - The skill behavior handlers (review r1, item 7): the installed `ApplyBehaviorToContext` runs once per context with
-    `ContextObject` and `SelfObject` set; the selected output links are returned in call order. Read from the
-    installed script: `Behavior_ActivateSkill` reads the instigator, the other participant and the kernel
-    information only under `bUseAdditionalSkillTarget`, and `Behavior_DeactivateSkill` never, so that flag is
-    `NotYet` and the other parameters may stay zero.
+  - The skill behavior handlers (review r1, item 7; r2, items 1 and 2): the installed `ApplyBehaviorToContext` runs
+    once per context with `ContextObject` and `SelfObject` set, and the answer is the empty list of output links.
+    Checked in the installed bytecode with `research/script_disasm.py` (local): neither
+    `Behavior_ActivateSkill.ApplyBehaviorToContext` nor `Behavior_DeactivateSkill.ApplyBehaviorToContext` calls
+    `ActivateBehaviorOutputLink`, and none of the six functions they reach (`Behavior_ActivateSkill` and
+    `Behavior_DeactivateSkill` of `ISkillBehavior`, `WillowPlayerController` and `WillowMind`) calls it or receives the
+    kernel information it takes. `Behavior_ActivateSkill` reads the instigator, the other participant and the kernel
+    information only under `bUseAdditionalSkillTarget`, and `Behavior_DeactivateSkill` never, so that flag set is
+    `NotYet`, that flag of another kind than a bool is bad data, and the other parameters may stay zero.
   - The target score is computed in doubles through the `ow_core::num` choke points; the native's precision is not
     read. `VInterpTo`'s precision is not read either.
 - **Where the Rust differs from the Python tools, on purpose** (each pinned by a test): single-precision numbers (the
@@ -128,15 +134,16 @@ ignored `local/analysis/`, not quoted). There was no real-game session: every ru
      `AttrWorld`, not the VM, so it answers `NotYet { LayerAbsent("ow-vm") }`. The game's duration chain stops there.
   3. The behavior kernel's script-facing natives (`RegisterBehaviorConsumer`, `IntializeBehaviorProviderForConsumer`,
      `BeginNondeterministicProviderRegistration`, the `ActionSkill.On*` event senders) are bound by no general pack
-     (only `ow-mission`'s bridge binds some, for its run), so `Skill.Activate` and the cast stop at them; the output-
-     link collector belongs there too.
+     (only `ow-mission`'s bridge binds some, for its run), so `Skill.Activate` and the cast stop at them. A shared
+     output-link collector would belong there too (`ow-mission` and `ow-combat` each bind `ActivateBehaviorOutputLink`
+     for their own runs); the skill behaviors need none, as checked above.
   4. `registry::HandlerFn` gives no consumer (decision 2026-11-15-30), so the skill behavior handlers are set per
      provider (`skill_behavior_handlers(consumer)`), as `ow-combat` does.
   5. Unread Core natives the lift and the designer attribute reach: `Object.VLerp` (`GetLiftLocation`) and
      `Object.PathName` (`GetInstancedDesignerAttribute`, `InstancedDesignerAttribute.Initialize`). Neither is read in
      any record, so neither is bound.
 - **Verified (automated, local, pc-hummer).**
-  - 63 `ow-skills` unit tests on synthetic objects (and the ignored installed-game run): every case of `tests/skill_stats_test.py` (5 tests: the seven
+  - 64 `ow-skills` unit tests on synthetic objects (and the ignored installed-game run): every case of `tests/skill_stats_test.py` (5 tests: the seven
     number formats, the two localization keys, the effect values, the three traced line shapes, the effect rows) and of
     `tests/skill_effects_test.py` (5 tests: the skill fields, the effect values, the conditions, the output folder, the
     formula value) re-expressed with the Python's answers, plus a test of every other rule above and each `NotYet`.

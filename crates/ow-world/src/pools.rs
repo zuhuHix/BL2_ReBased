@@ -528,6 +528,10 @@ pub struct Stored {
     pub current: f32,
     /// The new `RateRemainder` of an integer-only resource; `None` for any other (the field is not written).
     pub remainder: Option<f32>,
+    /// The minimum the clamp used.
+    pub minimum: f32,
+    /// The maximum the clamp used (truncated toward zero for an integer-only resource).
+    pub maximum: f32,
 }
 
 /// The value rule of [`set_current`], shared so a caller can test the stored value before it writes (seam for
@@ -553,7 +557,12 @@ pub fn stored_value(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<Option<Stor
     // does there (`f32::min`/`max` would drop the NaN and give the maximum).
     let low = if maximum < value { maximum } else { value };
     let current = if minimum < low { low } else { minimum };
-    Ok(Some(Stored { current, remainder }))
+    Ok(Some(Stored {
+        current,
+        remainder,
+        minimum,
+        maximum,
+    }))
 }
 
 /// `ResourcePool.SetCurrentValue(Value)` (record section 4, UNVERIFIED): nothing unless the pool is authoritative;

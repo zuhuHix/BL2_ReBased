@@ -483,7 +483,6 @@ pub struct Pack;
 
 impl NativePack for Pack {
     fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
-        bind_output_link(vm)?;
         let [
             active,
             min_grade,
@@ -806,10 +805,10 @@ pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
             rate,
         });
     }
-    let (min, max) = (
-        pool_float(vm, pool, "MinValue")?,
-        pool_float(vm, pool, "MaxValue")?,
-    );
+    // The edges are the bounds the clamp used (an integer-only pool's maximum is truncated, so a pool with
+    // MaxValue 10.5 fills to 10 and that counts as reaching its maximum). Which bound the native's edge test uses is
+    // not in the record (UNVERIFIED); this reads the one the stored value was clamped to.
+    let (min, max) = (stored.minimum, stored.maximum);
     let crosses = |edge: f32| (before == edge) != (stored.current == edge);
     if (crosses(min) || crosses(max))
         && let Some(def) = obj_value("Definition", &need(vm, pool, "Definition")?)?
@@ -866,88 +865,21 @@ pub const BEHAVIOR_CLASSES: [&str; 2] = [
     "WillowGame.Behavior_DeactivateSkill",
 ];
 
-/// The function whose calls select a running script behavior's output links (static, `KernelInfo` and the id).
-pub const OUTPUT_LINK: &str = "GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink";
-
-/// Who collects the output links the skill behaviors' scripts select (a VM service).
-#[derive(Debug, Default)]
-pub struct Selected {
-    /// One list per running skill behavior, innermost last.
-    frames: Vec<Vec<i32>>,
-    /// `Some(true)`: this pack bound [`OUTPUT_LINK`]; `Some(false)`: another pack bound it first, so the links go to
-    /// that pack's collector (`ow-combat`'s is crate-private: a shared collector in `ow-behavior` is a contract item);
-    /// `None`: the VM does not declare it, so no script can select a link.
-    mine: Option<bool>,
-}
-
-fn selected(vm: &Vm) -> Result<std::rc::Rc<std::cell::RefCell<Selected>>, VmError> {
-    vm.service::<Selected>().ok_or_else(|| {
-        NotYet::layer_absent(
-            "the skill behaviors' output links",
-            "ow-skills action_skill::Pack",
-            RECORD,
-        )
-        .into()
-    })
-}
-
-fn bind_output_link(vm: &mut Vm) -> Result<(), VmError> {
-    let state = match vm.service::<Selected>() {
-        Some(s) => s,
-        None => vm.add_service(Selected::default())?,
-    };
-    // A second registration on the same VM keeps the first answer (the binding found then is this pack's own).
-    if state
-        .try_borrow()
-        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
-        .mine
-        == Some(true)
-    {
-        return Ok(());
-    }
-    let declared = vm
-        .find_function(OUTPUT_LINK)
-        .ok()
-        .and_then(|f| vm.function(f).and_then(|d| d.native_key.clone()));
-    let mine = match declared {
-        None => None,
-        Some(key) if vm.has_native(&key) => Some(false),
-        Some(key) => {
-            let s = state.clone();
-            vm.register_native(
-                &key,
-                Rc::new(move |c: &mut NativeCall<'_>| {
-                    // The id is an int argument; a byte widens.
-                    let id = arg_int(c, 1, OUTPUT_LINK)?;
-                    let mut st = s.try_borrow_mut().map_err(|_| {
-                        VmError::ServiceBorrowed("ow_skills::action_skill::Selected")
-                    })?;
-                    if let Some(frame) = st.frames.last_mut() {
-                        frame.push(id);
-                    }
-                    Ok(Value::None)
-                }),
-            )?;
-            Some(true)
-        }
-    };
-    state
-        .try_borrow_mut()
-        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
-        .mine = mine;
-    Ok(())
-}
-
 /// Runs the installed `ApplyBehaviorToContext` of behavior `id` once per context (the behavior's Context link, else
-/// `consumer`), with `ContextObject` and `SelfObject` set and every other parameter at its zero value, and returns
-/// the output links the script selected (`ActivateBehaviorOutputLink`, in call order, duplicates kept), as
-/// `ow-combat` runs its script behaviors. The script then asks the context's `ISkillBehavior` to activate or
-/// deactivate the skill.
+/// `consumer`), with `ContextObject` and `SelfObject` set and every other parameter at its zero value. The script then
+/// asks the context's `ISkillBehavior` to activate or deactivate the skill.
 ///
-/// `NotYet` (before any call): another pack holds the output-link binding (its links cannot be seen here), or the
-/// script would read a zero-filled parameter. Read from the installed script (local listing): `Behavior_ActivateSkill`
-/// reads `MyInstigatorObject`, `OtherEventParticipantObject` and `KernelInfo` only when `bUseAdditionalSkillTarget`
-/// is set, and `Behavior_DeactivateSkill` never; so that flag is refused and the other parameters may stay zero.
+/// **It selects no output link, so the answer is the empty list.** Checked in the installed bytecode with
+/// `research/script_disasm.py` (local, review r2 of PR #342): neither `Behavior_ActivateSkill.ApplyBehaviorToContext`
+/// nor `Behavior_DeactivateSkill.ApplyBehaviorToContext` calls `BehaviorKernel.ActivateBehaviorOutputLink`, and none
+/// of the six `Behavior_ActivateSkill` / `Behavior_DeactivateSkill` functions they reach (`ISkillBehavior`,
+/// `WillowPlayerController`, `WillowMind`) calls it or receives the kernel information it needs. So this crate binds
+/// no output-link native, and the kernel follows only the behavior's default link, as for any behavior that selects
+/// none.
+///
+/// Refused before any call: `bUseAdditionalSkillTarget` set (`NotYet`), the one path on which the script reads the
+/// instigator, the other participant and the kernel information, which this handler zero-fills; and that flag of any
+/// kind other than a bool (bad data). A class without the flag (`Behavior_DeactivateSkill`) reads as not set.
 pub fn run_skill_behavior(
     vm: &mut Vm,
     p: &mut Provider,
@@ -955,53 +887,47 @@ pub fn run_skill_behavior(
     consumer: ObjRef,
 ) -> Result<Vec<i32>, VmError> {
     let object = p.behavior(id).object;
-    let class = vm.space.heap.get(object)?.class;
-    let Some(apply) = vm.find_method(class, "ApplyBehaviorToContext", None)? else {
+    let contexts = p.contexts(id, consumer);
+    apply_to_contexts(vm, object, &contexts, consumer)
+}
+
+/// The work of [`run_skill_behavior`] once the provider has given the behavior object and its contexts.
+pub fn apply_to_contexts(
+    vm: &mut Vm,
+    object: ObjRef,
+    contexts: &[ObjRef],
+    consumer: ObjRef,
+) -> Result<Vec<i32>, VmError> {
+    match get(vm, object, "bUseAdditionalSkillTarget")? {
+        None | Some(Value::Bool(false)) => {}
+        Some(Value::Bool(true)) => {
+            return Err(NotYet::not_read(
+                "Behavior_ActivateSkill with bUseAdditionalSkillTarget: its script reads the instigator, \
+                 the other participant and the kernel information, which this handler does not have",
+                RECORD,
+            )
+            .into());
+        }
+        Some(other) => {
+            return Err(script_error(
+                "run_skill_behavior",
+                format!(
+                    "bUseAdditionalSkillTarget: expected a bool, found {}",
+                    other.kind_name()
+                ),
+            ));
+        }
+    }
+    let Some(apply) = method_of(vm, object, "ApplyBehaviorToContext")? else {
         return Err(
             NotYet::not_read("a skill behavior without ApplyBehaviorToContext", RECORD).into(),
         );
     };
-    if let Some(Value::Bool(true)) = get(vm, object, "bUseAdditionalSkillTarget")? {
-        return Err(NotYet::not_read(
-            "Behavior_ActivateSkill with bUseAdditionalSkillTarget (its script reads the instigator, the other              participant and the kernel information, which this handler does not have)",
-            RECORD,
-        )
-        .into());
-    }
-    let state = selected(vm)?;
-    let mine = state
-        .try_borrow()
-        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
-        .mine;
-    if mine == Some(false) {
-        return Err(NotYet::layer_absent(
-            "the output links of a skill behavior (another pack binds ActivateBehaviorOutputLink)",
-            "a shared output-link collector in ow-behavior",
-            RECORD,
-        )
-        .into());
-    }
     let params = vm
         .function(apply)
         .map(|d| d.params.clone())
         .unwrap_or_default();
-    let push = |st: &std::rc::Rc<std::cell::RefCell<Selected>>,
-                frame: Option<Vec<i32>>|
-     -> Result<Vec<i32>, VmError> {
-        let mut s = st
-            .try_borrow_mut()
-            .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?;
-        Ok(match frame {
-            Some(f) => {
-                s.frames.push(f);
-                Vec::new()
-            }
-            None => s.frames.pop().unwrap_or_default(),
-        })
-    };
-    push(&state, Some(Vec::new()))?;
-    let mut result = Ok(());
-    for context in p.contexts(id, consumer) {
+    for &context in contexts {
         let args = params
             .iter()
             .map(|d| match vm.space.names.text(d.name).as_ref() {
@@ -1010,13 +936,9 @@ pub fn run_skill_behavior(
                 _ => vm.space.classes.zero_value(&d.kind),
             })
             .collect();
-        if let Err(e) = vm.call(apply, Some(object), args) {
-            result = Err(e);
-            break;
-        }
+        vm.call(apply, Some(object), args)?;
     }
-    let ids = push(&state, None)?;
-    result.map(|()| ids)
+    Ok(Vec::new())
 }
 
 /// The skill behavior handlers for a provider registered on `consumer`, to be set with `Provider::handle` (a handler

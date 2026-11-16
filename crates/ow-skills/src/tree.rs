@@ -511,10 +511,15 @@ impl SkillTree {
         self.set_grade(cx, skill, next)
     }
 
-    /// `GetSkillState(Skill, out State)`; `None` for a skill the tree does not know. A proficiency is
-    /// `NotYet { NotRead }` (no branch or tier to report).
-    pub fn skill_state(&self, skill: ObjRef) -> Result<Option<SkillStateData>, SkillError> {
+    /// `GetSkillState(Skill, out State)`; `None` for a skill the tree does not know (`NotYet` for an unknown
+    /// proficiency on a tree built without them). A proficiency is `NotYet { NotRead }` (no branch or tier to report).
+    pub fn skill_state(
+        &self,
+        cx: &mut EvalCx<'_>,
+        skill: ObjRef,
+    ) -> Result<Option<SkillStateData>, SkillError> {
         let Some(i) = self.index(skill) else {
+            self.unknown(cx, skill, "GetSkillState")?;
             return Ok(None);
         };
         let s = &self.skills[i];
@@ -596,9 +601,16 @@ impl SkillTree {
         Ok(false)
     }
 
-    /// The tree's grade of `skill` (`None` when the tree does not hold it).
-    pub fn grade(&self, skill: ObjRef) -> Option<i32> {
-        self.index(skill).map(|i| self.skills[i].grade)
+    /// The tree's grade of `skill`: `None` when the tree does not hold it (`NotYet` for an unknown proficiency on a
+    /// tree built without them).
+    pub fn grade(&self, cx: &mut EvalCx<'_>, skill: ObjRef) -> Result<Option<i32>, SkillError> {
+        match self.index(skill) {
+            Some(i) => Ok(Some(self.skills[i].grade)),
+            None => {
+                self.unknown(cx, skill, "the tree's grade")?;
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -643,12 +655,13 @@ pub mod oracle {
     /// `SkillTreeGFxObject.CanUpgradeSkill`, in its order: no state for the skill, a data issue; a locked tier or a
     /// player below level 5, locked; at `MaxGrade`, maxed; no unspent points, none; otherwise no failure.
     pub fn can_upgrade(
+        cx: &mut EvalCx<'_>,
         tree: &SkillTree,
         skill: ObjRef,
         exp_level: i32,
         points: i32,
     ) -> Result<UpgradeFailure, SkillError> {
-        let Some(state) = tree.skill_state(skill)? else {
+        let Some(state) = tree.skill_state(cx, skill)? else {
             return Ok(UpgradeFailure::DataIssue);
         };
         if !state.unlocked || exp_level < TRAINING_LEVEL {
@@ -684,6 +697,7 @@ pub mod oracle {
         points: &mut i32,
     ) -> Result<Option<i32>, SkillError> {
         let Some(i) = tree.index(skill) else {
+            tree.unknown(cx, skill, "ServerUpgradeSkill")?;
             return Ok(None);
         };
         let cost = upgrade_cost(tree.skills[i].skill_type);
@@ -693,7 +707,7 @@ pub mod oracle {
         *points = points
             .checked_sub(cost)
             .ok_or_else(|| SkillError::bad("the points underflow"))?;
-        Ok(tree.grade(skill))
+        tree.grade(cx, skill)
     }
 }
 
