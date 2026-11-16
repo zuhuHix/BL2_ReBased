@@ -73,6 +73,13 @@ fn toy_actions() -> Vec<u8> {
     let class = t.class("ToyAction", object);
     t.prop("Object", class, "MyWillowPawn", 0, object);
     t.prop("Object", class, "MyWillowMind", 0, object);
+    // The flags and links the action-sequence natives read (W7-AI-LOCK); `AI` is an object here, an interface in the
+    // game (the natives take either).
+    for flag in ["bInitialized", "bInAtomicSection", "bDoWorkFinished"] {
+        t.prop("Bool", class, flag, 0, 0);
+    }
+    t.prop("Object", class, "AI", 0, object);
+    t.prop("Object", class, "ParentSequence", 0, object);
     let note = t
         .function(class, "Note", &[Param::new("Name", "What")], None, &[], &FunctionSpec::new(NATIVE, "Note"), |_| None)
         .function;
@@ -194,6 +201,7 @@ fn world(mode: ParityMode) -> World {
     .unwrap();
     let failed = decl(vm, "bFailed", PropKind::Bool).with_flags(PropertyDecl::OPTIONAL);
     declare(vm, action_class, FINISH, vec![failed], None);
+    declare_lock_natives(vm, action_class);
     Pack.register(vm).unwrap();
     // The tree.
     let attack = make(vm, action_class, "Attack");
@@ -226,8 +234,7 @@ fn brain_at(w: &mut World, h: &mut super::super::vm::tests::ToyHost, t: f32) -> 
 }
 
 /// Perceive, choose, start: patrol without a target; on acquisition the events go to the running action first; the
-/// state update then needs the lock rule (NotYet, clean room) while the dry selection names the attack; the patrol's
-/// own Finish hands over to the attack at once.
+/// patrol is not atomic, so it is not locked (W7-AI-LOCK) and the state update hands over to the attack; (An atomic patrol is `an_atomic_running_action_is_not_yet_in_both_modes`.)
 #[test]
 fn the_brain_perceives_chooses_and_starts() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -246,18 +253,14 @@ fn the_brain_perceives_chooses_and_starts() {
         let patrol = b.actions[2].unwrap();
         assert_eq!(get(&mut w.e.vm, patrol, "MyWillowPawn").unwrap(), Some(Value::Object(Some(w.e.ai))));
         assert_eq!(w.script.borrow().log[..2], ["Init Attack", "Init Patrol"]);
-        // The player is noticed: the events, running action first; the state update stops at the lock rule.
-        let err = brain_at(&mut w, &mut h, 0.5).unwrap_err();
-        assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotPorted), "{mode:?}: {err}");
+        // The player is noticed: the events, running action first.
+        let next = brain_at(&mut w, &mut h, 0.5).unwrap();
         let log = w.script.borrow().log.clone();
         let acquired: Vec<&String> = log.iter().filter(|l| l.starts_with("Target_Acquired")).collect();
         assert_eq!(acquired, ["Target_Acquired Patrol", "Target_Acquired Attack"]);
-        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2), "nothing lost");
-        let (picked, fails) = dry_select(&mut w.e.vm, w.e.mind).unwrap();
-        assert_eq!((picked, fails), (Some(1), vec![]), "the attack would be picked");
-        // The patrol finishes from its own script: the attack starts at once (no lock question on that path).
-        w.script.borrow_mut().patrol_done = true;
-        let _ = brain_at(&mut w, &mut h, 0.625);
+        // Not locked (bInAtomicSection clear): the patrol can no longer stay (the attack interrupts), so it stops and
+        // the attack starts.
+        assert_eq!(next.changes.last().map(|c| (c.stopped, c.started)), Some((Some((2, true)), Some(1))), "{mode:?}");
         assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(1), "{mode:?}");
         assert!(w.script.borrow().log.iter().any(|l| l == "Start Attack"));
     }
@@ -329,8 +332,8 @@ impl Locomotion for ToyMoves {
     }
 }
 
-/// Movement goes to the host for the action's pawn; a latent move is `NotYet` (an ow-vm seam); the natives this lane
-/// read as analyst are `NotYet` outside Reference and unbound under it.
+/// Movement goes to the host for the action's pawn; a latent move is `NotYet` (an ow-vm seam). (The action-sequence
+/// natives, `NotYet` here until W7-AI-LOCK, have their own tests below.)
 #[test]
 fn movement_goes_to_the_host_and_the_unread_is_not_yet() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -345,7 +348,6 @@ fn movement_goes_to_the_host_and_the_unread_is_not_yet() {
             Some(PropKind::Bool),
         );
         let follow = declare(vm, w.action_class, "WillowGame.WillowActionSequencePawn.FollowPath", vec![], None);
-        let atomic = declare(vm, w.action_class, "GearboxFramework.ActionSequence.StartAtomic", vec![], None);
         Pack.register(vm).unwrap();
         let action = make(vm, w.action_class, "Mover");
         set(vm, action, "MyWillowPawn", Value::Object(Some(w.e.ai))).unwrap();
@@ -358,14 +360,6 @@ fn movement_goes_to_the_host_and_the_unread_is_not_yet() {
         assert_eq!(moves.borrow().calls, ["can move ToyBeast_0 to [100.0, 0.0, 0.0]"]);
         let err = vm.call(follow, Some(action), vec![]).unwrap_err();
         assert!(matches!(err, VmError::NotYet(n) if matches!(n.missing, Missing::LayerAbsent(_))), "{mode:?}: latent");
-        let key = vm.function(atomic).unwrap().native_key.clone().unwrap();
-        match mode {
-            ParityMode::Off => {
-                let err = vm.call(atomic, Some(action), vec![]).unwrap_err();
-                assert!(matches!(err, VmError::NotYet(n) if n.missing == Missing::NotPorted));
-            }
-            _ => assert!(!vm.has_native(&key), "unbound under Reference"),
-        }
     }
 }
 
@@ -489,5 +483,154 @@ fn a_finish_from_an_event_comes_before_the_update() {
         let at = log.iter().position(|l| l == "Target_Acquired Patrol").expect("the event");
         assert!(!log[at..].iter().any(|l| l == "Update Patrol"), "{mode:?}: {log:?}");
         assert!(log[at..].iter().any(|l| l == "Update Attack"), "{mode:?}: {log:?}");
+    }
+}
+
+/// Declares the seven action-sequence natives at their stock paths on the toy action class (as `Finish` is), so
+/// [`Pack`] binds them outside Reference. `RangeIsValid` and `GetRangeValue` take the invented range struct.
+fn declare_lock_natives(vm: &mut Vm, owner: ClassId) {
+    let range = vm.space.classes.struct_by_path("Toy.ToyObject.ToyRange").unwrap();
+    for (i, path) in READ_AS_ANALYST.iter().enumerate() {
+        let (params, result) = match i {
+            0 | 1 => (vec![], None),
+            2..=4 => (vec![], Some(PropKind::Bool)),
+            5 => (vec![decl(vm, "Range", PropKind::Struct(range))], Some(PropKind::Bool)),
+            _ => (vec![decl(vm, "Range", PropKind::Struct(range))], Some(PropKind::Float)),
+        };
+        declare(vm, owner, path, params, result);
+    }
+}
+
+fn call(w: &mut World, i: usize, this: ObjRef, args: Vec<Value>) -> Result<Value, VmError> {
+    let f = w.e.vm.find_function(READ_AS_ANALYST[i]).unwrap();
+    w.e.vm.call(f, Some(this), args).map(|r| r.ret)
+}
+
+fn not_read(r: Result<Value, VmError>, what: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead, "{}", n.what);
+            assert!(n.what.contains(what), "{what}: {}", n.what);
+        }
+        other => panic!("{what}: {other:?}"),
+    }
+}
+
+fn range(w: &World, min: f32, max: f32) -> Value {
+    let s = w.e.vm.space.classes.struct_by_path("Toy.ToyObject.ToyRange").unwrap();
+    Value::structure(s, vec![Value::Float(min), Value::Float(max)])
+}
+
+/// W7-AI-LOCK: the atomic flags (the note's rule once `bInitialized` is set; NotYet before, as who sets it is not
+/// read), and the range natives (valid ends; a value from one AI-stream draw over 32767, 0 with no draw when invalid).
+#[test]
+fn the_atomic_and_range_natives_follow_the_note_in_off() {
+    let mut w = world(ParityMode::Off);
+    let a = make(&mut w.e.vm, w.action_class, "Toy_Atomic");
+    let flag = |w: &mut World| get(&mut w.e.vm, a, "bInAtomicSection").unwrap();
+    // Not initialised: no answer.
+    not_read(call(&mut w, 0, a, vec![]), "bInitialized");
+    not_read(call(&mut w, 2, a, vec![]), "bInitialized");
+    assert_eq!(flag(&mut w), Some(Value::Bool(false)), "nothing changed");
+    set(&mut w.e.vm, a, "bInitialized", Value::Bool(true)).unwrap();
+    assert_eq!(call(&mut w, 2, a, vec![]).unwrap(), Value::Bool(false));
+    // Start, start again (no nesting), one stop ends it.
+    call(&mut w, 0, a, vec![]).unwrap();
+    call(&mut w, 0, a, vec![]).unwrap();
+    assert_eq!(flag(&mut w), Some(Value::Bool(true)));
+    assert_eq!(call(&mut w, 2, a, vec![]).unwrap(), Value::Bool(true));
+    call(&mut w, 1, a, vec![]).unwrap();
+    assert_eq!(call(&mut w, 2, a, vec![]).unwrap(), Value::Bool(false), "no count");
+    // The range natives.
+    for (min, max, valid) in [(1.0, 2.0, true), (2.0, 2.0, true), (0.0, 2.0, false), (1.0, 0.0, false), (3.0, 2.0, false)]
+    {
+        let r = range(&w, min, max);
+        assert_eq!(call(&mut w, 5, a, vec![r]).unwrap(), Value::Bool(valid), "{min} {max}");
+    }
+    let before = w.e.vm.rng.clone();
+    let r = range(&w, 0.0, 2.0);
+    assert_eq!(call(&mut w, 6, a, vec![r]).unwrap(), Value::Float(0.0));
+    assert_eq!(w.e.vm.rng, before, "no draw for an invalid range");
+    let mut expect = w.e.vm.rng.clone();
+    let draw = f32::from(expect.crt(ow_core::rand::CrtStream::AiDecision).rand15());
+    let r = range(&w, 1.0, 3.0);
+    assert_eq!(call(&mut w, 6, a, vec![r]).unwrap(), Value::Float(1.0 + 2.0 * draw / 32767.0));
+    assert_eq!(w.e.vm.rng, expect, "one draw of the AI stream");
+}
+
+/// Under Reference the seven natives stay unbound (the stub policy: there is no C++ AI); in Off they are bound.
+#[test]
+fn the_action_sequence_natives_stay_unbound_under_reference() {
+    for (mode, bound) in [(ParityMode::Reference, false), (ParityMode::Off, true)] {
+        let mut w = world(mode);
+        for path in READ_AS_ANALYST {
+            let f = w.e.vm.find_function(path).unwrap();
+            let key = w.e.vm.function(f).unwrap().native_key.clone().unwrap();
+            assert_eq!(w.e.vm.has_native(&key), bound, "{mode:?} {path}");
+        }
+    }
+}
+
+/// IsActionReadyToFinish: true with nothing pending up the parent chain; false when the action or a parent has a
+/// pending latent action; NotYet for a WillowActionSequencePawn; a looping chain is an error.
+#[test]
+fn ready_to_finish_walks_the_parent_chain() {
+    let mut w = world(ParityMode::Off);
+    let child = make(&mut w.e.vm, w.action_class, "Toy_Child");
+    let parent = make(&mut w.e.vm, w.action_class, "Toy_Parent");
+    assert_eq!(call(&mut w, 4, child, vec![]).unwrap(), Value::Bool(true), "no latent action pending, no parent");
+    set(&mut w.e.vm, child, "ParentSequence", Value::Object(Some(parent))).unwrap();
+    assert_eq!(call(&mut w, 4, child, vec![]).unwrap(), Value::Bool(true), "nor in the parent");
+    let vm = &mut w.e.vm;
+    assert_eq!(ready_to_finish(vm, child, &mut |_, _| Ok(false)), Ok(true));
+    assert_eq!(ready_to_finish(vm, child, &mut |_, o| Ok(o == parent)), Ok(false), "the parent is not ready");
+    assert_eq!(ready_to_finish(vm, child, &mut |_, o| Ok(o == child)), Ok(false));
+    set(vm, parent, "ParentSequence", Value::Object(Some(child))).unwrap();
+    assert!(matches!(ready_to_finish(vm, child, &mut |_, _| Ok(false)), Err(VmError::Script { .. })), "a loop");
+    // A WillowActionSequencePawn (an invented subclass at that path): its override is not read.
+    let pawn_class = class(vm, ACTION_SEQUENCE_PAWN, w.action_class, &[]);
+    let pawn = make(vm, pawn_class, "Toy_PawnAction");
+    not_read(call(&mut w, 4, pawn, vec![]), "WillowActionSequencePawn");
+}
+
+/// IsRunning: true for the tree's current action, false for the other one; an action no brain made answers false
+/// without an AI and NotYet with one; NotYet while its own Start or Stop is in progress.
+#[test]
+fn is_running_names_the_current_action() {
+    let mut w = world(ParityMode::Off);
+    let mut h = host(&w.e, 1.0);
+    let stray = make(&mut w.e.vm, w.action_class, "Toy_Stray");
+    assert_eq!(call(&mut w, 3, stray, vec![]).unwrap(), Value::Bool(false), "no AI");
+    let ai = w.e.ai;
+    set(&mut w.e.vm, stray, "AI", Value::Object(Some(ai))).unwrap();
+    not_read(call(&mut w, 3, stray, vec![]), "did not make");
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    let b = brain(&w.e.vm, w.e.mind).unwrap();
+    let (attack, patrol) = (b.actions[1].unwrap(), b.actions[2].unwrap());
+    assert_eq!(call(&mut w, 3, patrol, vec![]).unwrap(), Value::Bool(true));
+    assert_eq!(call(&mut w, 3, attack, vec![]).unwrap(), Value::Bool(false));
+    let mind = w.e.mind;
+    set_running(&mut w.e.vm, mind, Some(Running::Changing(patrol))).unwrap();
+    not_read(call(&mut w, 3, patrol, vec![]), "Start or Stop");
+    assert_eq!(call(&mut w, 3, attack, vec![]).unwrap(), Value::Bool(false));
+}
+
+/// The tree's lock: an atomic running action is NotYet in both modes (which flag is "running" is not read).
+#[test]
+fn an_atomic_running_action_is_not_yet_in_both_modes() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        brain_at(&mut w, &mut h, 0.25).unwrap();
+        let patrol = brain(&w.e.vm, w.e.mind).unwrap().actions[2].unwrap();
+        set(&mut w.e.vm, patrol, "bInAtomicSection", Value::Bool(true)).unwrap();
+        match brain_at(&mut w, &mut h, 0.5) {
+            Err(VmError::NotYet(n)) => {
+                assert_eq!(n.missing, Missing::NotRead, "{mode:?}");
+                assert!(n.what.contains("\"running\""), "{}", n.what);
+            }
+            other => panic!("{mode:?}: {other:?}"),
+        }
+        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2), "{mode:?}: nothing lost");
     }
 }
