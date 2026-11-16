@@ -19,12 +19,15 @@
 //! **Not read, so `NotYet`** (in `ParityMode::Off`; `Reference` keeps the C++ reading, a stand-in the W6 runs of
 //! `tests/combat_test.py` and `tests/mission_script_test.py` reach, decision 2026-11-15-29): `ResetIdleTimer` has no note
 //! (`NATIVE_INDEX.md`: "none (guess)"; the C++ stamps the idle-delay start time with the world time); the "current
-//! value changed" hook `SetCurrentValue` ends with is unread for the experience and ammo pools the record names
-//! ([`UNREAD_HOOK_CLASSES`]), so such a pool is `NotYet` before anything is written (the C++ skips every hook).
+//! value changed" hook `SetCurrentValue` ends with is taken as empty only for the classes of [`KNOWN_HOOK_CLASSES`]
+//! (an allow-list), so a pool of any other class is `NotYet` before anything is written (the C++ skips every hook).
 //!
 //! **Impact in Off mode:** every installed `InitializeAuthoritative` calls `ResetIdleTimer`, so **Off mode cannot
-//! create a real pool** until that native is read (a cheap Ghidra read). The refusal leaves the manager as it was:
-//! [`create_pool_at_index`] empties the slot again and [`create_pool`] restores `NextPoolGUID`; no map entry is made.
+//! create a real pool** until that native is read (a cheap Ghidra read). The refusal comes from inside the pool's
+//! script, so it is not decided before anything changes. What the natives changed is undone: [`create_pool_at_index`]
+//! empties the slot again, [`create_pool`] restores `NextPoolGUID` and destroys a manager it spawned, and
+//! [`controller_pool`] restores the controller's `ResourcePoolManager`; no map entry is made. The new pool object is
+//! left unreferenced, and what the script itself wrote before the refusal is **not** undone.
 //!
 //! Always `NotYet`: a `CreatePoolAtIndex` without a manager, a vehicle's pool provider in the controller lookup, a
 //! `DeletePool` whose manager is not the reference's, and every resource owner resolver but the controller one in the
@@ -68,10 +71,13 @@ pub const HEALTH_FLOOR: f32 = 1.0;
 /// The manager class.
 pub const MANAGER_CLASS: &str = "Engine.ResourcePoolManager";
 
-/// The pool subclasses whose "current value changed" hook the record names and did not read (NATIVE_LEVEL_UP_ATTRIBUTES.md
-/// section 4: the experience and ammo pools). On the installed game the health pool is `Engine.HealthResourcePool` and
-/// the shield pool `WillowGame.ShieldResourcePool` (decision 2026-11-15-29); the record names no hook for either.
-pub const UNREAD_HOOK_CLASSES: [&str; 2] = ["ExperienceResourcePool", "AmmoResourcePool"];
+/// The pool classes (exact class names) whose "current value changed" hook `SetCurrentValue` takes as empty; every
+/// other class is `NotYet` in Off mode (an allow-list). `ResourcePool`: read, empty (NATIVE_LEVEL_UP_ATTRIBUTES.md
+/// section 4). `HealthResourcePool` (the installed health pool's class) and `ShieldResourcePool` (the shield pool's):
+/// **UNVERIFIED, fitted**. The record names no hook for them, and "no hook" is inferred from that silence (decision
+/// 2026-11-15-29). The record names the experience and ammo pools' hooks as unread, so those two are refused.
+pub const KNOWN_HOOK_CLASSES: [&str; 3] =
+    ["ResourcePool", "HealthResourcePool", "ShieldResourcePool"];
 
 /// The attributes `ClearAttributeModifierStacks` empties (NATIVE_ATTRIBUTES.md section 8).
 pub const CLEARED_STACKS: [&str; 7] = [
@@ -553,24 +559,30 @@ pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError>
     Ok(())
 }
 
-/// Off mode: `NotYet` for an authoritative pool of one of the [`UNREAD_HOOK_CLASSES`] (the hook `SetCurrentValue` ends
-/// with). Reference mode skips every hook, as the C++.
+/// Off mode: `NotYet` for an authoritative pool whose class is not one of the [`KNOWN_HOOK_CLASSES`] (the hook
+/// `SetCurrentValue` ends with). Reference mode skips every hook, as the C++.
 fn current_hook_refusal(vm: &Vm, pool: ObjRef) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || !flag(&vm.space, pool, "bIsAuthoritative")? {
         return Ok(());
     }
-    for class in UNREAD_HOOK_CLASSES {
-        if is_a(&vm.space, pool, class)? {
-            return Err(NotYet::not_read(
-                format!(
-                    "the \"current value changed\" hook of {class} (the record names it, unread)"
-                ),
-                RECORD_POOL,
-            )
-            .into());
-        }
+    let class = vm.space.heap.get(pool)?.class;
+    let name = vm
+        .space
+        .classes
+        .get_layout(class)
+        .map(|l| l.path().name().to_string())
+        .unwrap_or_default();
+    if KNOWN_HOOK_CLASSES
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(&name))
+    {
+        return Ok(());
     }
-    Ok(())
+    Err(NotYet::not_read(
+        format!("the \"current value changed\" hook of pool class {name} (not read)"),
+        RECORD_POOL,
+    )
+    .into())
 }
 
 /// `ResourcePool.UpdateLastValues()` (record section 4): clears `bCreatedAndNotModified` when current moved from the
@@ -707,32 +719,57 @@ pub fn create_pool_at_index(
         return Ok(None);
     };
     let pool = ow_vm::interp::instantiate_from_defaults(vm, class)?;
-    set_slot(&mut vm.space, manager, index, Some(pool))?;
-    set_field(&mut vm.space, pool, "PoolGUID", Value::Byte(guid))?;
-    if is_authority(&vm.space, manager)? {
+    // Everything that can fail without changing the manager is looked up before the slot is written.
+    let init = if is_authority(&vm.space, manager)? {
         let owner = object(&vm.space, manager, "Owner")?;
-        let f = find_script(vm, pool, "InitializeAuthoritative")?;
-        let init = actors::call_with_zeros(
-            vm,
-            f,
-            Some(pool),
-            vec![Value::Object(Some(def)), Value::Object(owner)],
-        );
-        if let Err(e) = init {
-            // A refusal inside the pool's script (in Off mode, `ResetIdleTimer`, which every installed
-            // `InitializeAuthoritative` reaches): the slot is emptied again, so the manager is as it was (the caller
-            // restores `NextPoolGUID`) and no map entry is made. The new pool object is left unreferenced, and what the
-            // script did before the refusal to other objects is not undone.
-            set_slot(&mut vm.space, manager, index, None)?;
-            return Err(e);
-        }
+        Some((find_script(vm, pool, "InitializeAuthoritative")?, owner))
     } else {
-        set_field(&mut vm.space, pool, "Definition", Value::Object(Some(def)))?;
-    }
-    if let Some(resource) = data_object(vm, def, "Resource")? {
-        map_edit(vm, |m| m.set(manager, resource, index))?;
+        None
+    };
+    let resource = data_object(vm, def, "Resource")?;
+    maps_of(vm)?;
+    set_slot(&mut vm.space, manager, index, Some(pool))?;
+    let tail = fill_new_pool(vm, manager, pool, def, index, guid, init, resource);
+    if let Err(e) = tail {
+        // A refusal after the slot was written (in Off mode, `ResetIdleTimer` inside the installed
+        // `InitializeAuthoritative`): the slot is emptied again, so the manager is as it was (the caller restores
+        // `NextPoolGUID`) and no map entry is made. The new pool object is left unreferenced, and what the script
+        // itself wrote before the refusal is not undone.
+        set_slot(&mut vm.space, manager, index, None)?;
+        return Err(e);
     }
     Ok(Some(pool))
+}
+
+/// The tail of [`create_pool_at_index`] after the slot is written: the GUID, the start state (the script, or only the
+/// definition), the map entry.
+#[allow(clippy::too_many_arguments)]
+fn fill_new_pool(
+    vm: &mut Vm,
+    manager: ObjRef,
+    pool: ObjRef,
+    def: ObjRef,
+    index: u8,
+    guid: u8,
+    init: Option<(ow_object::ids::FuncId, Option<ObjRef>)>,
+    resource: Option<ObjRef>,
+) -> Result<(), VmError> {
+    set_field(&mut vm.space, pool, "PoolGUID", Value::Byte(guid))?;
+    match init {
+        Some((f, owner)) => {
+            actors::call_with_zeros(
+                vm,
+                f,
+                Some(pool),
+                vec![Value::Object(Some(def)), Value::Object(owner)],
+            )?;
+        }
+        None => set_field(&mut vm.space, pool, "Definition", Value::Object(Some(def)))?,
+    }
+    if let Some(resource) = resource {
+        map_edit(vm, |m| m.set(manager, resource, index))?;
+    }
+    Ok(())
 }
 
 /// The function `name` the pool's class sees; a class that has none is a typed error (the game's pool classes all
@@ -782,6 +819,21 @@ pub fn create_pool(
     let manager = ensure_manager(vm, mgr, owner)?;
     let Some(m) = manager else {
         return Ok(invalid(None));
+    };
+    let result = create_in(vm, m, def, reinitialize);
+    if result.is_err() && mgr.is_none() {
+        // A manager this call spawned does not outlive a refused creation.
+        actors::destroy(vm, m)?;
+    }
+    result
+}
+
+/// The body of [`create_pool`] once the manager `m` exists.
+fn create_in(vm: &mut Vm, m: ObjRef, def: ObjRef, reinitialize: bool) -> Result<Created, VmError> {
+    let manager = Some(m);
+    let invalid = |manager| Created {
+        manager,
+        reference: PoolRef::INVALID,
     };
     if !is_authority(&vm.space, m)? {
         return Ok(invalid(manager));
@@ -1449,27 +1501,33 @@ pub fn controller_pool(
         .into());
     }
     let found = pool_for_resource(vm, mgr, Some(controller), Some(res))?;
-    set_field(
-        &mut vm.space,
-        controller,
-        "ResourcePoolManager",
-        Value::Object(found.manager),
-    )?;
-    if found.reference.data.is_some() {
-        return Ok(found.reference);
+    let spawned = if mgr.is_none() { found.manager } else { None };
+    let result = if found.reference.data.is_some() || !create {
+        Ok(found)
+    } else {
+        data_object(vm, res, "DefaultResourcePoolDefinition")
+            .and_then(|def| create_pool(vm, found.manager, Some(controller), def, false))
+    };
+    match result {
+        Ok(made) => {
+            // The controller's field is written only once the call succeeded.
+            set_field(
+                &mut vm.space,
+                controller,
+                "ResourcePoolManager",
+                Value::Object(made.manager),
+            )?;
+            Ok(made.reference)
+        }
+        Err(e) => {
+            // A refused creation leaves the controller as it was: a manager this call spawned is destroyed and the
+            // field keeps its old value (it was never written).
+            if let Some(m) = spawned {
+                actors::destroy(vm, m)?;
+            }
+            Err(e)
+        }
     }
-    if !create {
-        return Ok(found.reference);
-    }
-    let def = data_object(vm, res, "DefaultResourcePoolDefinition")?;
-    let made = create_pool(vm, found.manager, Some(controller), def, false)?;
-    set_field(
-        &mut vm.space,
-        controller,
-        "ResourcePoolManager",
-        Value::Object(made.manager),
-    )?;
-    Ok(made.reference)
 }
 
 /// The pool natives, the manager natives, the two actor natives and the pawn's health natives as a [`NativePack`],

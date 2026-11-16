@@ -370,6 +370,8 @@ fn package() -> Vec<u8> {
     t.class("ExperienceResourcePool", pool);
     t.class("AmmoResourcePool", pool);
     t.class("HealthResourcePool", pool);
+    t.class("ShieldResourcePool", pool);
+    t.class("OddResourcePool", pool);
     // A pool whose InitializeAuthoritative calls ResetIdleTimer, as every installed one does: Definition = D;
     // ResetIdleTimer(); Note(11).
     let timed = t.class("TimedPool", pool);
@@ -2248,13 +2250,15 @@ fn an_off_mode_refusal_inside_initialize_authoritative_leaves_the_manager_as_it_
 }
 
 #[test]
-fn only_the_experience_and_ammo_hooks_are_refused() {
+fn only_the_allow_listed_pool_classes_pass_the_hook() {
     run(|| {
         let mut x = fx();
         for (class, refused) in [
             ("ExperienceResourcePool", true),
             ("AmmoResourcePool", true),
+            ("OddResourcePool", true),
             ("HealthResourcePool", false),
+            ("ShieldResourcePool", false),
             ("ResourcePool", false),
         ] {
             let pool = x.pool(class);
@@ -2384,5 +2388,84 @@ fn reference_mode_reads_no_class_level_condition() {
         let mut x = fx();
         let controller = x.new_obj("BareController");
         assert!(levelup::recalculate_attribute_initialized_state(x.vm(), controller).is_err());
+    });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r2 of PR #329
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The live (not destroyed) `ResourcePoolManager` objects: a destroyed actor leaves the level list and the live set.
+fn live_managers(x: &mut Fx) -> usize {
+    let c = x.vm().find_class("Engine.ResourcePoolManager").unwrap();
+    x.w.vm.space.live(c).count()
+}
+
+#[test]
+fn a_refused_create_pool_destroys_the_manager_it_spawned() {
+    run(|| {
+        let mut x = fx();
+        let controller = x.new_obj("Controller");
+        assert_eq!(live_managers(&mut x), 0);
+        let (_, def) = x.resource_with("TimedPool");
+        let e = x
+            .call(
+                "ResourcePoolManager.CreatePool",
+                None,
+                vec![
+                    Value::Object(None),
+                    Value::Object(Some(controller)),
+                    Value::Object(Some(def)),
+                    Value::Bool(false),
+                ],
+            )
+            .unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::NotRead));
+        assert_eq!(live_managers(&mut x), 0, "the spawned manager is destroyed again");
+        // The same call with a pool class that initialises keeps its spawned manager.
+        let (_, ok_def) = x.resource();
+        let (r, mgr) = x.create(None, Some(controller), Some(ok_def), false);
+        assert!(r.data.is_some() && mgr.is_some());
+        assert_eq!(live_managers(&mut x), 1);
+        // A manager the caller gave is kept.
+        let (controller, m) = x.controller_with_manager("Controller");
+        let (_, def) = x.resource_with("TimedPool");
+        assert!(
+            x.call(
+                "ResourcePoolManager.CreatePool",
+                None,
+                vec![
+                    Value::Object(Some(m)),
+                    Value::Object(Some(controller)),
+                    Value::Object(Some(def)),
+                    Value::Bool(false)
+                ]
+            )
+            .is_err()
+        );
+        assert!(!crate::actors::is_destroyed(&x.w.vm.space, m).unwrap());
+    });
+}
+
+#[test]
+fn a_refused_controller_lookup_leaves_the_controller_as_it_was() {
+    run(|| {
+        let mut x = fx();
+        let controller = x.new_obj("Controller");
+        let (resource, _) = x.resource_with("TimedPool");
+        let e = x
+            .call(
+                "Controller.GetResourcePoolForResourceDefinition",
+                Some(controller),
+                vec![Value::Object(Some(resource))],
+            )
+            .unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::NotRead));
+        assert_eq!(
+            x.get(controller, "ResourcePoolManager"),
+            Value::Object(None),
+            "never written"
+        );
+        assert_eq!(live_managers(&mut x), 0, "the spawned manager is destroyed");
     });
 }
