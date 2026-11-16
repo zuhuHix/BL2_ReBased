@@ -226,7 +226,16 @@ fn gearbox() -> Vec<u8> {
     t.prop("Struct", change, "ProviderDefinitionPathName", 0, path);
     t.prop("Name", change, "SequenceName", 0, 0);
     t.prop("Byte", change, "Action", 0, 0);
-    t.class("Behavior_AIHold", object);
+    // The hold behavior's script, invented: `ApplyBehaviorToContext(ContextObject)` passes its context to the native
+    // `ToySeen`, which the tests record.
+    let hold = t.class("Behavior_AIHold", object);
+    let seen = native(&mut t, hold, "ToySeen", &[param("Object", "What", 0, object)], None, NATIVE);
+    script(&mut t, hold, "ApplyBehaviorToContext", &[param("Object", "ContextObject", 0, object)], None, |a, ids| {
+        let context = ids.get("ContextObject");
+        a.final_function(seen, |a| {
+            a.local(context);
+        });
+    });
     t.class("Behavior_SpecialMove", object);
     t.build()
 }
@@ -1151,23 +1160,63 @@ fn the_pawn_hit_chain_is_not_yet() {
     assert!(s.damage_dummy(env.vm(), "", "", 10.0).unwrap(), "no pawn: the event is raised directly");
 }
 
-/// `Behavior_AIHold` on the dummy before it has a mind: the C++ no-op in Reference mode, `NotYet` in Off mode.
+/// The contexts the invented hold script passed to `ToySeen`.
+fn hold_seen(vm: &mut Vm) -> Rc<std::cell::RefCell<Vec<ObjRef>>> {
+    let seen = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let s = seen.clone();
+    let f = vm.find_function("GearboxFramework.Behavior_AIHold.ToySeen").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+            if let Value::Object(Some(o)) = c.arg(0)? {
+                s.borrow_mut().push(*o);
+            }
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    seen
+}
+
+/// `Behavior_AIHold` on the dummy (decision 2026-11-16-74): the C++ no-op in Reference mode, its script not run; in
+/// Off mode the script runs through the VM with the dummy's pawn as its context, and nothing runs without a pawn.
 #[test]
-fn the_ai_hold_stand_in_by_mode() {
-    let hold = Map {
-        hold: true,
-        ..Map::default()
-    };
-    let mut env = Env::new(hold, ParityMode::Reference);
-    env.spawn();
-    let s = env.slice.clone();
-    assert!(s.hit_dummy(env.vm(), false).unwrap());
-    assert!(env.slice.dummy_trace().unwrap().iter().any(|l| l.ends_with("Idle_Hold")));
-    let mut env = Env::new(hold, ParityMode::Off);
-    env.spawn();
-    let s = env.slice.clone();
-    let e = s.hit_dummy(env.vm(), false).unwrap_err();
-    assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotPorted)), "{e:?}");
+fn the_ai_hold_by_mode() {
+    for (mode, pawn) in [(ParityMode::Reference, true), (ParityMode::Off, true), (ParityMode::Off, false)] {
+        let mut env = Env::new(Map { hold: true, pawn, ..Map::default() }, mode);
+        let seen = hold_seen(env.vm());
+        env.spawn();
+        let s = env.slice.clone();
+        assert!(s.hit_dummy(env.vm(), false).unwrap(), "{mode:?}");
+        assert!(env.slice.dummy_trace().unwrap().iter().any(|l| l.ends_with("Idle_Hold")));
+        let expected: Vec<ObjRef> = match (mode, env.slice.dummy_pawn()) {
+            (ParityMode::Off, Some(p)) => vec![p],
+            _ => vec![],
+        };
+        assert_eq!(*seen.borrow(), expected, "{mode:?}, pawn {pawn}");
+    }
+}
+
+/// A dummy whose pawn has a controller: Off is `NotYet { NotRead }` (how a pawn context reaches its AI is not read),
+/// with the script not run; Reference keeps the no-op.
+#[test]
+fn the_ai_hold_of_a_pawn_with_a_controller_is_not_yet() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut env = Env::new(Map { hold: true, pawn: true, pawn_reference: true, ..Map::default() }, mode);
+        let seen = hold_seen(env.vm());
+        env.spawn();
+        let s = env.slice.clone();
+        let r = s.hit_dummy(env.vm(), false);
+        match mode {
+            ParityMode::Off => {
+                let e = r.unwrap_err();
+                assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotRead)), "{e:?}");
+            }
+            _ => assert!(r.unwrap()),
+        }
+        assert!(seen.borrow().is_empty(), "{mode:?}");
+    }
 }
 
 /// The health pool stand-in: `health:` is `NotYet` in Off mode; in Reference mode it is the C++ (no class data in the

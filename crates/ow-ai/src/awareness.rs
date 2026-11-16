@@ -23,6 +23,8 @@
 //! - [`vm`]: the adapter over the VM objects (pawn, mind, component, definitions) and the script-facing natives.
 //! - [`tree`] (part 2, decision 2026-11-16-66): the action tree: eligibility, selection, activation, completion,
 //!   `Finish`, the periodic state update and the timed fail.
+//! - [`holds`] (FIX-AIHOLD, decision 2026-11-16-74): the AI hold behavior's script through the VM, and the hold kinds
+//!   read as analyst (`NotYet` in Off).
 //! - [`actions`] (part 2): the tree over the VM, the action objects' script events, the whole AI tick
 //!   ([`actions::tick_brain`]), and the actions' natives; movement goes to the host ([`actions::Locomotion`]).
 //!
@@ -36,6 +38,7 @@ use ow_object::ids::ObjRef;
 use ow_vm::error::VmError;
 
 pub mod actions;
+pub mod holds;
 pub mod iterators;
 pub mod record;
 pub mod targets;

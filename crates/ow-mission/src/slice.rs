@@ -40,8 +40,12 @@
 //!   seeds it at `player:` / `health:`. Reproduced here under `ParityMode::Reference` only; in `ParityMode::Off` a
 //!   level-up of a class that names a health pool, and the `health:` input, are `NotYet { NotRead }` (the game builds
 //!   its pools in the class-defaults routine, not read).
-//! - `Behavior_AIHold` on the dummy before it has a mind: the C++ records it as a no-op (the dummy gets its mind and
-//!   AI component at its first pawn hit, through the combat chain). Reference: the no-op; Off: `NotYet { NotPorted }`.
+//! - `Behavior_AIHold` on the dummy: the C++ records it as a no-op before the dummy has a mind (it gets its mind and
+//!   AI component at its first pawn hit, through the combat chain). Reference: that no-op. Off (decision
+//!   2026-11-16-74): the installed script runs on each context through the VM ([`ow_ai::awareness::holds::apply`]):
+//!   the dummy's pawn answers no `IAIInterface` by the class tables, so the script places no hold; a context with a
+//!   controller or a mind is `NotYet { NotRead }` (how a pawn reaches its AI is not read, and the live hold did reach
+//!   it). Without a pawn there is no context and nothing runs.
 //! - The player's hit through the stock pawn chain (`damage_dummy` with a damage): `ow-combat` has it (W6-COMBAT), but
 //!   it is not wired into the slice yet (follow-up W6-COMBAT-RUN2), so `NotYet { NotPorted }` in both modes. Without
 //!   a damage (the host's call so far) `OnTakeDamage` is raised directly, as in the C++.
@@ -492,20 +496,24 @@ impl FireMissionSlice {
         // A special-move (animation) request on the pawn: its installed script asks the special-move component to play
         // the move and selects output 0 at once; output 1 follows when the move has ended (no animation system here).
         d.report_at_boundary("GearboxFramework.Behavior_SpecialMove", None, vec![0]);
-        // Behavior_AIHold is installed script that needs the pawn's AI component, which the dummy gets with its mind at
-        // its first pawn hit (the combat chain, not wired into the slice yet: W6-COMBAT-RUN2). Before that the C++
-        // records it as a no-op (Reference); Off: NotYet.
+        // Behavior_AIHold is installed script that reaches the context's AI component through IAIInterface. The C++
+        // records it as a no-op before the dummy has a mind (Reference, R3). Off: the script runs on each context
+        // through the VM, with the pawn question NotYet (module documentation; decision 2026-11-16-74).
+        let w = self.weak();
         d.handle(
             "GearboxFramework.Behavior_AIHold",
-            Handler::run(move |vm, _p, _id, _| {
+            Handler::run(move |vm, p, id, _| {
                 if vm.parity == ParityMode::Reference {
                     return Ok(Vec::new());
                 }
-                Err(NotYet::not_ported(
-                    format!("Behavior_AIHold on the target dummy (its mind and AI component come with {COMBAT_FOLLOW_UP})"),
-                    RECORD,
-                )
-                .into())
+                let s = Self::upgrade(&w)?;
+                let pawn = s.inner.state.borrow().dummy_pawn;
+                let Some(pawn) = pawn else {
+                    return Ok(Vec::new());
+                };
+                let contexts = p.contexts(id, pawn);
+                ow_ai::awareness::holds::apply(vm, p.behavior(id).object, &contexts)?;
+                Ok(Vec::new())
             }),
         );
         let w = self.weak();
