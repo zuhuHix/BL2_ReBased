@@ -2520,12 +2520,19 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
     s.native = 0;
     t.function(native_class, "GetAttributeContext", &params, Some(("Object", object)), &[], &s, |_| None);
     t.class("Plain", object);
-    // Parameters under other names: refused, not given zeros.
+    // Parameters under other names (either one): refused, not given zeros.
     let renamed = t.class("Renamed", object);
     let other = [typed("Definition"), typed("AttributeContextSource")];
     script(&mut t, renamed, "GetAttributeContext", &other, Some(("Object", object)), &[], |ids, a| {
         returns(a, |a| {
             a.local(ids.get("AttributeContextSource"));
+        })
+    });
+    let renamed_source = t.class("RenamedSource", object);
+    let other = [typed("Attribute"), typed("Source")];
+    script(&mut t, renamed_source, "GetAttributeContext", &other, Some(("Object", object)), &[], |ids, a| {
+        returns(a, |a| {
+            a.local(ids.get("Source"));
         })
     });
     let bytes = t.build();
@@ -2547,12 +2554,27 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
             matches!(vm.script_context(count, attr, Some(source)), Err(AttrError::BadData { .. })),
             "{mode:?}"
         );
-        let renamed = make(vm, "Core.Renamed");
-        match vm.script_context(renamed, attr, Some(source)) {
-            Err(AttrError::BadData { reason }) => {
-                assert!(reason.contains("has no parameter Attribute"), "{reason}")
+        // The name table keeps the first spelling it interned (case-insensitive): another spelling seen before the
+        // package loads must still bind (review r2 of PR #360).
+        {
+            let mut other = run_on(&bytes, mode);
+            let vm = &mut other.vm;
+            let first = vm.space.names.intern("attribute");
+            vm.space.names.intern("ATTRIBUTECONTEXTSOURCE");
+            let (attr, source) = (make(vm, "Core.Plain"), make(vm, "Core.Plain"));
+            let echo = make(vm, "Core.Echo");
+            assert_eq!(vm.space.names.text(first).as_ref(), "attribute", "the first spelling is kept");
+            assert_eq!(vm.script_context(echo, attr, Some(source)).unwrap(), Some(source), "{mode:?}");
+        }
+        for (path, wanted) in [("Core.Renamed", "Attribute"), ("Core.RenamedSource", "AttributeContextSource")] {
+            let o = make(vm, path);
+            match vm.script_context(o, attr, Some(source)) {
+                Err(AttrError::NotYet(n)) => {
+                    assert_eq!(n.missing, Missing::NotRead, "{mode:?} {path}");
+                    assert!(n.what.contains(&format!("has no parameter {wanted}: the parameters are bound by name")), "{}", n.what);
+                }
+                other => panic!("{mode:?} {path}: {other:?}"),
             }
-            other => panic!("{mode:?}: {other:?}"),
         }
         for path in ["Core.Native", "Core.Plain"] {
             let o = make(vm, path);
