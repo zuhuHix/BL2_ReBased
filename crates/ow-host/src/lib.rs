@@ -8,6 +8,7 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+pub mod scene;
 
 /// The code packages every Borderlands 2 install holds in `WillowGame/CookedPCConsole`. Only their presence is
 /// checked; nothing is read from them here.
