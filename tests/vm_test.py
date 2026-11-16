@@ -353,7 +353,10 @@ def make(inventory=False, mover=False, broken_mover=False, interfaces=False):
         # source-kind + list-length - 5, rather than implementing stock navigation.
         # Source at position 3 proves the bridge resolves enum names, not a constant.
         provider = p.add_export(imp['Class'], 'InventoryDataProviderGFxObject', w32(0) * 4, super_ref=obj)
-        cached = prop('ArrayProperty', provider, 'CachedObjects')
+        # The array names its inner property (an ObjectProperty of the fixture's Object class, the next export), as
+        # the real packages nest it.
+        cached = prop('ArrayProperty', provider, 'CachedObjects', type_ref=len(p.exports) + 2)
+        prop('ObjectProperty', cached, 'CachedObjects', type_ref=obj)
         entries = ['DummyA', 'DummyB', 'DummyC', 'EAK_Source', 'DummyMax']
         enum = p.add_export(imp['Enum'], 'SyntheticKinds', w32(0) + none + w32(0, len(entries))
                             + b''.join(p.fname(name) for name in entries), outer=provider)
