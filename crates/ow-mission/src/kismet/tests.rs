@@ -1,9 +1,9 @@
 //! Owner: lane W5-KISMET. Tests of the Kismet executor on invented packages (AGENTS.md rule 9), built with
 //! `ow_package::testkit`. The fixture re-expresses `tests/kismet_test.py` (toy `Engine`, `WillowGame`, `Missions`,
-//! `Other` and sequence packages carrying the public UE3 property names the executor reads), with one change: every
-//! toy class derives from a toy `Engine.Object` and every object property names that class, because the Rust
-//! reflection layer refuses an object property without a class (the C++ bag does not). Every case of the Python
-//! script has a test here with the same expected values; the cases after them cover the Rust-only rules of the module
+//! `Other` and sequence packages carrying the public UE3 property names the executor reads): every toy class derives
+//! from a toy `Engine.Object` and every object property names that class, because the Rust reflection layer refuses
+//! an object property without a class (the C++ bag does not). Every case of the Python script has a test here with the
+//! same expected values; the cases after them cover the Rust-only rules of the module
 //! documentation ("Differences from the C++").
 
 use std::cell::RefCell;

@@ -43,20 +43,20 @@ game; there was no session in this lane.
   - 36 unit tests in `kismet/tests.rs`: every case of `tests/kismet_test.py` with the same expected values, plus the
     ticks the Python script cannot reach, equal delays in activation order, handler lookup, the remote sink, the
     linked `Duration` variable, a float target variable, and each Rust-only error line above.
-  - `tests/rust_parity.d/kismet.txt`: four `diff` lines (the load-first order and its error text), 4/4 pass.
-  - `tests/kismet_test.py` passes on the C++ binary and fails on the Rust one, not because of the executor: its toy
+  - `tests/rust_parity.d/kismet.txt`: `python tests/kismet_test.py {bin}` and four `diff` lines (the load-first
+    order and its error text), 5/5 pass.
+  - `tests/kismet_test.py` passed on the C++ binary and failed on the Rust one, not because of the executor: its toy
     `Engine.upk` declares the object properties `LinkedOp`, `LinkedVariables`, `Originator` and
     `AssociatedMissionDefinition` with no class, which the Rust reflection layer refuses ("names no class"; the
     decoder also checks a reference against the declared class). With a fixture change that only roots the toy
     classes in a toy `Engine.Object` and names it in those properties, the script passes on both binaries and all 43
-    of its commands give byte-identical stdout, stderr and exit codes on both, in Off and in Reference mode. The
-    change is the lane's proposal to the hub (it is not this lane's file); the manifest line waits for it.
+    of its commands give byte-identical stdout, stderr and exit codes on both, in Off and in Reference mode. The hub
+    granted that change; it is in this lane's second commit (fixture only, no expected value changed).
   - The installed game (C++ `ow-package` of this branch, MSVC 14.50): `--kismet-census` of the 26 `Sanctuary*`
     packages is byte-identical, 26/26 (95 sequences, 2,180 ops, 3,150 outputs, 1,650 links, 0 unresolved, 0
     failed). The `--kismet-run` comparison over Sanctuary's event ops is in the lane's handoff. Outputs stay under
     `local/`.
 - **Open items.**
-  - The `tests/kismet_test.py` fixture change above, then its manifest line.
   - W5-WORLD's `Actor.Destroy` answers `NotYet` for an actor with Kismet `GeneratedEvents`. The destroyed-event class
     is not read, and `ow-world` cannot call `ow-mission`, so the hook needs a service seam in `ow-world`; not done
     here.

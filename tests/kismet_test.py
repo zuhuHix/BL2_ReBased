@@ -93,14 +93,20 @@ def build_engine():
         return index
 
     def struct_(name): return p.add_export(imp['ScriptStruct'], name, w32(0) * 4)
-    def cls(name, super_ref=0): return p.add_export(imp['Class'], name, w32(0) * 4, super_ref=super_ref)
+    root = []
+    def cls(name, super_ref=0):
+        # Every toy class derives from the toy Object class, which every object property names: the Rust reflection
+        # layer refuses an object property without a class and checks a reference against it (the C++ bag does not).
+        return p.add_export(imp['Class'], name, w32(0) * 4, super_ref=super_ref or (root[0] if root else 0))
 
+    root.append(cls('Object'))
+    obj = root[0]
     s_in = struct_('SeqOpInputLink')
     prop('Str', s_in, 'LinkDesc')
     prop('Bool', s_in, 'bDisabled')
     prop('Float', s_in, 'ActivateDelay')
     s_link = struct_('SeqOpOutputInputLink')
-    prop('Object', s_link, 'LinkedOp')
+    prop('Object', s_link, 'LinkedOp', obj)
     prop('Int', s_link, 'InputLinkIdx')
     s_out = struct_('SeqOpOutputLink')
     array_of(s_out, 'Links', 'Struct', s_link)
@@ -109,7 +115,7 @@ def build_engine():
     prop('Float', s_out, 'ActivateDelay')
     s_var = struct_('SeqVarLink')
     prop('Str', s_var, 'LinkDesc')
-    array_of(s_var, 'LinkedVariables', 'Object')
+    array_of(s_var, 'LinkedVariables', 'Object', obj)
 
     op = cls('SequenceOp')
     array_of(op, 'InputLinks', 'Struct', s_in)
@@ -119,7 +125,7 @@ def build_engine():
     cls('Sequence', op)
     event = cls('SequenceEvent', op)
     prop('Int', event, 'TriggerCount')
-    prop('Object', event, 'Originator')
+    prop('Object', event, 'Originator', obj)
     remote = cls('SeqEvent_RemoteEvent', event)
     prop('Name', remote, 'EventName')
     action = cls('SequenceAction', op)
@@ -149,17 +155,18 @@ def build_willowgame():
     imp_obj = p.add_import('Class', 'ObjectProperty')
     engine = p.add_import_full('Package', 0, 'Engine')
     remote = p.add_import_full('Class', engine, 'SeqEvent_RemoteEvent')
+    obj_class = p.add_import_full('Class', engine, 'Object')
     none = p.fname('None')
     mission = p.add_export(imp_class, 'WillowSeqEvent_MissionRemoteEvent', w32(0) * 4, super_ref=remote)
-    p.add_export(imp_obj, 'AssociatedMissionDefinition', w32(0) + none + w32(0) + u32(1) + u64(0) + none + w32(0) + w32(0),
+    p.add_export(imp_obj, 'AssociatedMissionDefinition', w32(0) + none + w32(0) + u32(1) + u64(0) + none + w32(0) + w32(obj_class),
                  outer=mission)
     return p
 
 
 def build_plain(group=None, leaves=()):
-    """A package of trivially named objects; only their identity is ever used."""
+    """A package of trivially named objects (class Engine.Object); only their identity is ever used."""
     p = Package()
-    imp = p.add_import('Class', 'Object')
+    imp = p.add_import_full('Class', p.add_import_full('Package', 0, 'Engine'), 'Object')
     none = p.fname('None')
     outer = p.add_export(imp, group, w32(0) + none) if group else 0
     for leaf in leaves: p.add_export(imp, leaf, w32(0) + none, outer=outer)
