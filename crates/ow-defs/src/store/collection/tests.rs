@@ -30,8 +30,10 @@ fn core() -> Vec<u8> {
 
 /// A toy `Engine`: `Actor`, `ActorComponent`, `Level`; `StaticMeshComponent` (an actor component with `Count`,
 /// `Scale` and `StaticMesh`, an object of the class `Engine.StaticMesh`, which this package imports and does not
-/// export); `MeshActor`, whose default object holds the subobject `MeshComponent0` (tags from 8: `Count` 5, `Scale`
-/// 2, its archetype `Default__StaticMeshComponent`); and the two collection actors with their component arrays.
+/// export); `MeshActor`, whose default object holds the template `MeshComponent0` (the recorded 16-byte prefix: a
+/// zero word, its own name, a zero word; tags `Count` 5, `Scale` 2; its archetype `Default__StaticMeshComponent`) and
+/// `OldTemplate` (tags from 8, `Count` 9: no stream from 16); and the two collection actors with their component
+/// arrays.
 /// `Default__StaticMeshComponent` sets `Count` 1. With `level_exported` false, `Level` is not exported (an
 /// engine-native class, as `Engine.Level` is in the installed game).
 fn engine(level_exported: bool) -> Vec<u8> {
@@ -63,7 +65,8 @@ fn engine(level_exported: bool) -> Vec<u8> {
     let smc_default = d.p.add_export(smc, "Default__StaticMeshComponent", payload);
     let mesh_actor = d.cls("MeshActor", actor);
     let mesh_actor_default = d.default_object(mesh_actor, "MeshActor");
-    let mut payload = ints(&[0, 0]);
+    let own_name = d.p.name("MeshComponent0");
+    let mut payload = ints(&[0, own_name, 0, 0]);
     payload.extend(d.p.int_tag("Count", 5));
     payload.extend(d.p.float_tag("Scale", 2.0));
     payload.extend_from_slice(&none);
@@ -71,6 +74,12 @@ fn engine(level_exported: bool) -> Vec<u8> {
     sub.outer = mesh_actor_default;
     sub.archetype = smc_default;
     d.p.add_export_with(sub);
+    let mut payload = ints(&[0, 0]);
+    payload.extend(d.p.int_tag("Count", 9));
+    payload.extend_from_slice(&none);
+    let mut old = Export::new(smc, "OldTemplate", payload);
+    old.outer = mesh_actor_default;
+    d.p.add_export_with(old);
     let mesh_collection = d.cls("StaticMeshCollectionActor", actor);
     d.array_of(mesh_collection, "StaticMeshComponents", "Object", smc);
     d.default_object(mesh_collection, "StaticMeshCollectionActor");
@@ -431,22 +440,21 @@ fn a_placed_object_takes_its_archetype_s_values_in_off_only() {
         assert_ne!(copy, comp_1);
         assert_eq!(t.read(copy, "Count"), Value::Int(if off { 6 } else { 1 }));
         assert_eq!(t.read(copy, "Scale"), Value::Float(3.0));
-        t.defs.take_log();
-        // The template's Count 5 and Scale 2 are not read: the class defaults stay.
-        let comp_2 = t.find("SMCA.Comp_2").unwrap();
-        assert_eq!(t.read(comp_2, "Count"), Value::Int(1));
-        assert_eq!(t.read(comp_2, "Scale"), Value::Float(0.0));
-        // A second component with the same template: not applied, and not logged again.
-        let comp_4 = t.find("Comp_4").unwrap();
-        assert_eq!(t.read(comp_4, "Count"), Value::Int(1));
-        let line = "defs: archetype Engine.Default__MeshActor.MeshComponent0 not applied: \
-                    a class default object's subobject, its prefix not recorded";
-        let log = t.defs.take_log();
-        assert_eq!(
-            log.iter().filter(|l| *l == line).count(),
-            usize::from(off),
-            "{log:?}"
-        );
+        // A template archetype is applied in Off (decision 2026-11-16-70): its Count 5 and Scale 2 under Comp_2's own
+        // tags, for a second component with the same template too.
+        for name in ["SMCA.Comp_2", "Comp_4"] {
+            let o = t.find(name).unwrap();
+            assert_eq!(
+                t.read(o, "Count"),
+                Value::Int(if off { 5 } else { 1 }),
+                "{name}"
+            );
+            assert_eq!(
+                t.read(o, "Scale"),
+                Value::Float(if off { 2.0 } else { 0.0 }),
+                "{name}"
+            );
+        }
     }
 }
 
@@ -515,5 +523,58 @@ fn a_level_of_an_engine_native_class_is_the_outer_in_both_modes() {
         let comp_1 = t.find("SMCA.Comp_1").unwrap();
         assert_eq!(t.w.heap.get(comp_1).unwrap().outer, Some(smca));
         assert!(t.defs.collection(&mut t.w, smca).is_ok());
+    }
+}
+
+/// Decision 2026-11-16-70: a component inside a class default object (a template) is a definition in `ParityMode::Off`,
+/// read from 16 bytes in; one whose tags do not parse there is `NotYet`. In `ParityMode::Reference` neither loads, as
+/// the C++ reads no such object.
+#[test]
+fn a_template_loads_from_16_in_off_only() {
+    for mode in MODES {
+        let mut t = World::new("template", mode);
+        let engine = t
+            .defs
+            .packages
+            .load(&PackageName::parse("Engine").unwrap())
+            .unwrap();
+        let path =
+            |name: &str| ObjectPath::parse(&format!("Engine.Default__MeshActor.{name}")).unwrap();
+        let found = t.defs.find(&mut t.w, &path("MeshComponent0"));
+        let old = t.defs.find(&mut t.w, &path("OldTemplate"));
+        if mode == ParityMode::Off {
+            let o = found.unwrap().unwrap();
+            assert!(t.defs.is_loaded(&t.w, o));
+            assert_eq!(t.read(o, "Count"), Value::Int(5));
+            assert_eq!(t.read(o, "Scale"), Value::Float(2.0));
+            let index = t
+                .defs
+                .packages
+                .get(engine)
+                .find_export("Default__MeshActor.MeshComponent0")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                t.defs
+                    .load_export(&mut t.w, engine, index, PropertyPrefix::Template)
+                    .unwrap(),
+                o
+            );
+            assert!(matches!(
+                t.defs
+                    .load_export(&mut t.w, engine, index, PropertyPrefix::Component),
+                Err(DefError::PrefixMismatch { .. })
+            ));
+            match old {
+                Err(DefError::NotYet(n)) => assert!(n.to_string().contains("16 bytes in"), "{n}"),
+                other => panic!("OldTemplate: {other:?}"),
+            }
+        } else {
+            assert!(
+                matches!(found, Err(DefError::NotADefinition(_))),
+                "{found:?}"
+            );
+            assert!(matches!(old, Err(DefError::NotADefinition(_))), "{old:?}");
+        }
     }
 }
