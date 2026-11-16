@@ -1,6 +1,6 @@
 //! Owner: lane W0-SCAFFOLD. The command dispatch table of the Rust `ow-package` (a frozen contract, architecture
 //! section 7): every command flag of `src/cli.cpp`'s usage and the Rust-only flags of architecture section 2.3, the
-//! command family (`cmd/<family>.rs`) each goes to and the lane that ports it. Options are listed with the commands
+//! command family (`cmd/<family>.rs`) each goes to. Options are listed with the commands
 //! that read them in `src/cli.cpp` (the Rust-only ones as architecture section 15 lists them). This table is the
 //! usage record only: each `cmd/` module parses its own trailing modifiers, and lanes never edit this table or
 //! `main.rs`. `tests/crate_edges_test.py` fails when a flag of the C++
@@ -41,35 +41,6 @@ pub enum Family {
     Mission,
     Slice,
     Combat,
-}
-
-impl Family {
-    /// The lane that ports this family (architecture section 8).
-    pub fn owner(self) -> &'static str {
-        match self {
-            Family::Tables => "W1-PKG",
-            Family::Properties => "W2-PROPS",
-            Family::Resolve => "W2-STORE",
-            Family::Script => "W2-SCRIPT",
-            Family::Classes => "W2-REFLECT",
-            Family::Assets => "W2-ASSETS",
-            Family::Objects => "W3-DECODE",
-            Family::Defs => "W3-DEFS",
-            Family::Vm => "W3-INTERP",
-            Family::Census => "W4-VMTOOLS",
-            Family::Items => "W4-REGISTRY",
-            Family::ItemsRoll => "W4-ROLL",
-            Family::ItemsStats => "W4-STATS",
-            Family::ItemsPools => "W4-POOLS",
-            Family::Behavior => "W5-BEHAVIOR",
-            Family::Kismet => "W5-KISMET",
-            Family::Mover => "W5-DIALOG",
-            Family::Inventory => "W5-EQUIP",
-            Family::Mission => "W6-MISSION",
-            Family::Slice => "W6-FIRE",
-            Family::Combat => "W6-COMBAT",
-        }
-    }
 }
 
 /// One dispatch entry.

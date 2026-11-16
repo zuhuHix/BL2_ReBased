@@ -1,7 +1,6 @@
 //! Owner: lane W0-SCAFFOLD. The Rust `ow-package` binary: the port of `src/cli.cpp`, with the same flags and, once
-//! each family is ported, byte-identical output and exit codes (architecture rule R7). Until a family is ported its
-//! commands print a "not ported to Rust yet" message and exit with code 3; the C++ `ow-package` in `build/Release`
-//! is the one to use for them.
+//! each family is ported, byte-identical output and exit codes (architecture rule R7). Every family is ported (lane
+//! W6-FIRE ported the last, decision 2026-11-16-38); exit code 3 now means a `NotYet` met during a command.
 //!
 //! `args.rs` holds the dispatch table and `cmd/` one file per command family. Lanes edit only their own `cmd/` file.
 

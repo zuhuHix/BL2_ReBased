@@ -277,8 +277,9 @@ def attribute(T, owner, name):
 
 ADD, SUB, MUL, DIV = 0, 1, 2, 3
 OPERANDS = ['MATHRESOLVEROPERAND_Add', 'MATHRESOLVEROPERAND_Sub', 'MATHRESOLVEROPERAND_Mul', 'MATHRESOLVEROPERAND_Div']
-COMPARISONS = ['OPERATOR_EqualTo', 'OPERATOR_NotEqualTo', 'OPERATOR_GreaterThan', 'OPERATOR_GreaterThanOrEqual',
-               'OPERATOR_LessThan', 'OPERATOR_LessThanOrEqual']
+# The installed EComparisonOperator order (LessThan before GreaterThan), which the Rust evaluator numbers by.
+COMPARISONS = ['OPERATOR_EqualTo', 'OPERATOR_NotEqualTo', 'OPERATOR_LessThan', 'OPERATOR_LessThanOrEqual',
+               'OPERATOR_GreaterThan', 'OPERATOR_GreaterThanOrEqual']
 
 
 def build_engine():
@@ -306,7 +307,8 @@ def build_engine():
     p.add_export(toy.imp['Enum'], 'EBehaviorContext', w32(0) + toy.none + w32(0) + w32(len(contexts)) + b''.join(p.fname(c) for c in contexts),
                  outer=behavior_base)
     actor = T.cls('Actor')
-    T.function(T.cls('PlayerController', super_ref=actor), 'IsPrimaryPlayer', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
+    # PlayerController derives from Engine.Controller, as installed (the player replication info resolver needs it).
+    T.function(T.cls('PlayerController', super_ref=T.cls('Controller', super_ref=actor)), 'IsPrimaryPlayer', [], None, FUNC_NATIVE | FUNC_PUBLIC, 'Bool')
     T.prop('Byte', actor, 'Role')
     T.prop('Object', actor, 'WorldInfo')
     T.prop('Object', actor, 'Owner')
@@ -370,6 +372,7 @@ def build_engine():
     p.add_export(toy.imp['Enum'], 'EComparisonOperator', w32(0) + toy.none + w32(0) + w32(len(COMPARISONS)) + b''.join(p.fname(c) for c in COMPARISONS),
                  outer=T.cls('AttributeExpression'))
     build_pool_graph(T, aid, definition, evaluate)
+    T.cls('Level')        # declared last (no index moves): the class of the map's PersistentLevel (see build_dynamic)
     return p
 
 
@@ -384,7 +387,8 @@ def build_pool_graph(T, aid, definition, evaluate):
     T.function(object_cls, 'GreaterEqual_FloatFloat', [('Float', 'P0', 0), ('Float', 'P1', 0)], None, operator, 'Bool', native=179, friendly='>=')
     T.function(object_cls, 'Not_PreBool', [('Bool', 'A', 0)], None, operator | 0x10, 'Bool', native=129, friendly='!')
     resource = T.cls('ResourceDefinition')
-    T.prop('Class', resource, 'DefaultResourcePoolClass')
+    # A ClassProperty names its metaclass after its property class, as the installed one does (Rust reads the class with it).
+    T.prop('Class', resource, 'DefaultResourcePoolClass', tail=w32(T.object) + w32(T.object))
     T.prop('Bool', resource, 'bIntegerOnlyUpdates')
     pool_def = T.cls('ResourcePoolDefinition')
     T.prop('Object', pool_def, 'Resource')
@@ -777,7 +781,8 @@ def build_willowgame():
     T.prop('Byte', status, 'Status')
     T.prop('Bool', status, 'bNeedsRewards')
     pri = T.cls('WillowPlayerReplicationInfo')
-    exp_level = T.prop('Int', pri, 'ExpLevel')
+    # ExpLevel carries the plain-attribute flag (bit 62), as installed: the object-property resolver reads only attributes.
+    exp_level = T.prop('Int', pri, 'ExpLevel', flags=1 << 62)
     next_at = T.prop('Int', pri, 'ExpPointsNextLevelAt')
     general_points = T.prop('Int', pri, 'GeneralSkillPoints')
     controller = T.cls('WillowPlayerController', super_ref=player_controller)
@@ -1371,7 +1376,8 @@ def build_dynamic():
     provider = p.add_export(chain('GearboxFramework', 'BehaviorProviderDefinition'), 'BehaviorProviderDefinition_5', b'', outer=outer)
     # the placed waypoint at the stock path (a placed actor: 26 bytes before its tags)
     world = p.add_export(package_class, 'TheWorld', w32(0) + none)
-    level = p.add_export(package_class, 'PersistentLevel', w32(0) + none, outer=world)
+    # PersistentLevel is an Engine.Level, as installed: a store reads a placed actor's 26-byte prefix only under a Level.
+    level = p.add_export(chain('Engine', 'Level'), 'PersistentLevel', w32(0) + none, outer=world)
     p.add_export(chain('WillowGame', 'WillowWaypoint'), 'WillowWaypoint_9',
                  bytes(26) + t.obj('LinkedObjective', chain('Startup', 'ToyMission', 'RockPaper_GoToRange')) + t.bool('bUpdateObjectiveOnPlayerTouch', True) + none, outer=level)
     mission, objective = chain('Startup', 'ToyMission'), chain('Startup', 'ToyMission', 'RockPaper_GoToRange')

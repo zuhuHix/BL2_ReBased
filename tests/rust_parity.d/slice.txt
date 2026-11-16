@@ -1,0 +1,15 @@
+# AI-assisted (Claude Code). Lane W6-FIRE: --slice-run (crates/ow-cli/src/cmd/slice.rs, crates/ow-mission/src/slice.rs).
+#
+# tests/mission_script_test.py cannot be a line: it also holds the --mission-run dialog scenario E (its steps still
+# NotYet in --mission-run), and its --slice-run scenarios S7b (the refill half), S9 and S10 reach the level-up's
+# skill behaviors (lane W6-SKILLS, NotYet). Locally, every --slice-run command of that file replayed on both
+# binaries: 13 of 20 give the C++ stdout and exit code byte for byte under OW_PARITY=reference, the other 7 stopping
+# on that NotYet; 5 of 20 in Off mode, where a level-up's health pool is NotYet (decision 2026-11-16-38). A diff line
+# needs a tracked package, and none may be tracked, so the invented-package rules are Rust unit tests
+# (crates/ow-mission/src/slice/tests.rs).
+#
+# The source package is loaded before the options are read, as in the C++: these lines need no package file.
+diff missing.upk --slice-run ToyMission --cooked . accept exit=1 stderr
+diff README.md --slice-run ToyMission --cooked . accept exit=1 stderr
+diff missing.upk --slice-run ToyMission exit=1 stderr
+diff README.md --slice-run exit=1 stderr

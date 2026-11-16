@@ -1,4 +1,6 @@
-//! The scaffold's promise: every command exits 3 with a "not ported" message until its lane ports it.
+//! The scaffold's promise was that every command exits 3 with a "not ported" message until its lane ports it. Every
+//! command is ported now (lane W6-FIRE ported `--slice-run`, the last, decision 2026-11-16-38), so what is left here are
+//! the two checks `main` makes before any command runs: no arguments, and the parity variable's value.
 //!
 //! This file drives the binary, so it may name the parity variable for the child process (tests/crate_edges_test.py
 //! allows the string in `crates/*/tests/`); it never reads the mode itself.
@@ -14,7 +16,7 @@ fn ow_package_with(args: &[&str], parity: Option<&str>) -> (Option<i32>, String)
         command.env(PARITY_VAR, value);
     }
     let out = command.output().unwrap();
-    assert!(out.stdout.is_empty(), "a stub prints nothing on stdout");
+    assert!(out.stdout.is_empty(), "these error paths print nothing on stdout");
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -23,20 +25,6 @@ fn ow_package_with(args: &[&str], parity: Option<&str>) -> (Option<i32>, String)
 
 fn ow_package(args: &[&str]) -> (Option<i32>, String) {
     ow_package_with(args, None)
-}
-
-// A lane that ports the example command switches it to another unported one.
-#[test]
-fn a_command_says_not_ported_and_exits_3() {
-    let (code, err) = ow_package(&["x", "--slice-run", "1"]);
-    assert_eq!(code, Some(3));
-    assert!(
-        err.contains("--slice-run is not ported to Rust yet (lane W6-FIRE)"),
-        "{err}"
-    );
-    let (code, err) = ow_package(&["x", "--slice-run"]);
-    assert_eq!(code, Some(3));
-    assert!(err.contains("(lane W6-FIRE)"), "{err}");
 }
 
 #[test]
@@ -57,6 +45,8 @@ fn a_bad_parity_value_is_an_error_with_exit_1() {
         err.trim_end(),
         "ow-package: OW_PARITY must be \"reference\" or unset, not \"Reference\""
     );
-    let (code, _) = ow_package_with(&["x", "--slice-run", "1"], Some("reference"));
-    assert_eq!(code, Some(3));
+    // A valid value reaches the command (its package error, not the parity error).
+    let (code, err) = ow_package_with(&["x", "--slice-run", "1"], Some("reference"));
+    assert_eq!(code, Some(1));
+    assert_eq!(err.trim_end(), "ow-package: cannot open input package");
 }

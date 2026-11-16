@@ -169,7 +169,7 @@ pub struct MarcusUse {
     pub director: String,
     /// Every script behavior of the run: `name(sequence) -> selected output ids`.
     pub cascade: Vec<String>,
-    /// The on-use dialog (empty: it stayed silent, or it was not reached; the dialog is lane W5-DIALOG).
+    /// The on-use dialog's tag (empty: the director's `TriggerEvent` was not called, or it was called with no tag).
     pub on_use_tag: String,
     pub on_use_speaker: String,
     pub on_use_target: String,
@@ -330,6 +330,34 @@ fn to_vm(e: MissionError, function: &str) -> VmError {
             message: error_text(&other),
         },
     }
+}
+
+/// The definition store's object for a stand-in of a package export (through the identity policy, as every path is
+/// one object); any other value as it is.
+fn store_object(vm: &mut Vm, v: &Value) -> Result<Value, MissionError> {
+    let Value::Object(Some(o)) = v else {
+        return Ok(v.clone());
+    };
+    let Origin::Resource { package, index } = vm.space.heap.get(*o)?.origin else {
+        return Ok(v.clone());
+    };
+    let found = vm.defs.resolve_ref(&mut vm.space, package, index);
+    let log = vm.defs.take_log();
+    vm.log.extend(log);
+    Ok(match found.map_err(BehaviorError::from)? {
+        Some(f) => Value::Object(Some(f)),
+        None => v.clone(),
+    })
+}
+
+/// Sets the object or interface property `name` of `o` to `target`, as the property's declared kind holds it (the
+/// installed movie class declares some of these as interfaces; seam of lane W6-FIRE, decision 2026-11-16-38).
+fn set_reference(space: &mut ObjectSpace, o: ObjRef, name: &str, target: ObjRef) -> Result<(), MissionError> {
+    let p = required_prop(space, o, name)?;
+    let interface = matches!(space.classes.decl(p).map(|d| &d.kind), Some(PropKind::Interface { .. }));
+    let v = if interface { Value::Interface(Some(target)) } else { Value::Object(Some(target)) };
+    space.write(o, PropAddr::scalar(p), v)?;
+    Ok(())
 }
 
 /// The class's short name (the C++ `cls->name`).
@@ -2191,6 +2219,10 @@ impl MissionScript {
             None => String::new(),
         };
         let body = prop(&c.vm.space, director, "BodyClass")?.unwrap_or(Value::None);
+        // The director is a copy of his archetype, so the body class is a stand-in of the archetype's package; the
+        // dialog loads a stand-in only through the mission package, so it gets the store's object for that export (the
+        // C++ loads the stand-in from its own package; seam of lane W6-FIRE, decision 2026-11-16-38).
+        let body = store_object(c.vm, &body)?;
         let dialog = self.inner.mission.dialog();
         let busy = || data("dialog: the dialog system is already in use".to_string());
         let pawn = dialog.try_borrow_mut().map_err(|_| busy())?.pawn_dialog(c.vm, &body)?;
@@ -2374,10 +2406,10 @@ impl MissionScript {
             vm.override_script(path, self.native(path, body))?;
         }
         let ui = vm.instantiate(manager_class, "")?;
-        set(&mut vm.space, self.inner.o.controller, "GFxUIManager", Value::Object(Some(ui)))?;
+        set_reference(&mut vm.space, self.inner.o.controller, "GFxUIManager", ui)?;
         let movie = vm.instantiate(movie_class, "")?;
         for name in ["MissionDirector", "FocusSubject", "ContextNPC"] {
-            set(&mut vm.space, movie, name, Value::Object(Some(director)))?;
+            set_reference(&mut vm.space, movie, name, director)?;
         }
         let mut s = self.inner.state.borrow_mut();
         s.ui_manager = Some(ui);
@@ -2659,10 +2691,12 @@ impl MissionScript {
         }
     }
 
-    /// Runs a script behavior's `ApplyBehaviorToContext` on the VM with `context` as its `ContextObject`.
-    pub fn apply_behavior(&self, vm: &mut Vm, behavior: ObjRef, context: ObjRef) {
+    /// Runs a script behavior's `ApplyBehaviorToContext` on the VM with `context` as its `ContextObject` (`None`: the
+    /// C++ null context, which the Fire slice passes for the dummy's objective behavior; seam of lane W6-FIRE, decision
+    /// 2026-11-16-38).
+    pub fn apply_behavior(&self, vm: &mut Vm, behavior: ObjRef, context: Option<ObjRef>) {
         self.run(vm, |vm| {
-            call_by_name(vm, behavior, "ApplyBehaviorToContext", vec![Value::Object(Some(context))]).map(|_| ())
+            call_by_name(vm, behavior, "ApplyBehaviorToContext", vec![Value::Object(context)]).map(|_| ())
         });
     }
 
