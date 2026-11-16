@@ -32,6 +32,14 @@
 //! though: a load after `scan`, and a package the global fallback matched, each get a new id. For file identity,
 //! compare `get(id).source`. Every package handed out stays alive for the store's lifetime.
 //!
+//! **Candidate files.** The global fallback reads each candidate file at most once per store (until the next
+//! [`scan`](PackageStore::scan)) to keep its folded export paths, which tell exactly where `Package::find_export` would
+//! match (the first export with that path, an error past a path that cannot be built counting as no match, as the C++
+//! fallback counts it). A later lookup skips a file whose paths do not hold its path without loading it again; the C++
+//! loads every candidate afresh on each lookup. The file that holds the path is loaded afresh and that load is returned,
+//! as in the C++. The answers are the C++'s as long as the files do not change during the store's life, which the
+//! store's path cache already assumes (decision 2026-11-16-63).
+//!
 //! Status: a port. The fallback rule's evidence is the C++ record (PACKAGE_GLOBAL_INDEX.md); whether the game picks
 //! the same file for a path held by several packages is UNVERIFIED (object identity, W3-DEFS).
 
@@ -152,6 +160,11 @@ pub struct PackageStore {
     global_root_matches: DetMap<String, PathBuf>,
     global_misses: DetSet<String>,
     global_index: Option<GlobalIndex>,
+    /// Scan position -> what the global fallback read of that file (module documentation, "Candidate files"); `None`
+    /// for a file that did not load.
+    global_files: FixedHashMap<u32, Option<FileExports>>,
+    /// How many times the global fallback loaded a package file (`find_global`), for the tests.
+    global_file_loads: usize,
     check: Option<ResolveCheck>,
     check_log: Vec<String>,
 }
@@ -213,6 +226,7 @@ impl PackageStore {
         self.global_root_matches.clear();
         self.global_misses.clear();
         self.global_index = None;
+        self.global_files.clear();
         let mut found = Vec::new();
         walk(&self.root, &mut found);
         for path in found {
@@ -510,6 +524,11 @@ impl PackageStore {
 
     /// C++ `findGlobal`: the first file in scan order that has the path, among the files that can have it. A file
     /// that fails to load or to search is no candidate.
+    ///
+    /// Each candidate file is loaded at most once per store to learn its export paths (`FileExports`); later lookups
+    /// skip the files whose paths do not hold `global_path` without loading them again. A file is loaded afresh only
+    /// where it holds the path, and the package returned is that fresh load, as the C++ returns its fresh candidate
+    /// (module documentation, "Candidate files").
     fn find_global(&mut self, global_path: &str) -> Option<(Arc<Package>, i32)> {
         if self.global_index.is_none() {
             self.build_global_index();
@@ -520,9 +539,31 @@ impl PackageStore {
             .get(&first_segment(global_path))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        merge(rooted, &index.any_root)
-            .into_iter()
-            .find_map(|position| try_file(&self.indexed[position as usize], global_path))
+        for position in merge(rooted, &index.any_root) {
+            let path = &self.indexed[position as usize];
+            match self.global_files.get(&position) {
+                // Read before: a file that did not load, or whose paths do not hold this one, is not here.
+                Some(None) => continue,
+                Some(Some(file)) if file.find(global_path).is_none() => continue,
+                Some(Some(_)) => {
+                    self.global_file_loads += 1;
+                    if let Some(found) = try_file(path, global_path) {
+                        return Some(found);
+                    }
+                }
+                None => {
+                    self.global_file_loads += 1;
+                    let package = Package::load(path).ok();
+                    let file = package.as_deref().map(FileExports::read);
+                    let index = file.as_ref().and_then(|f| f.find(global_path));
+                    self.global_files.insert(position, file);
+                    if let (Some(package), Some(index)) = (package, index) {
+                        return Some((package, index));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// The files that could hold `global_path`, in scan order: the candidates [`find_global`](Self::find_global) tries,
@@ -555,6 +596,43 @@ impl PackageStore {
         self.indexed
             .iter()
             .find_map(|path| try_file(path, global_path))
+    }
+}
+
+/// What the global fallback keeps of a candidate file: its export paths, so that a later lookup can tell without
+/// loading the file again whether `Package::find_export` would match there.
+#[derive(Debug)]
+struct FileExports {
+    /// `<package name>.`, folded: the prefix `find_export` strips.
+    prefix: String,
+    /// Each export's path, folded -> the first export with that path, up to the first export whose path cannot be
+    /// built (`find_export` fails there unless an earlier export matched).
+    by_path: FixedHashMap<String, i32>,
+}
+
+impl FileExports {
+    fn read(package: &Package) -> FileExports {
+        let mut by_path: FixedHashMap<String, i32> = FixedHashMap::default();
+        for index in 1..=package.exports.len() as i32 {
+            match package.path_of(index) {
+                Ok(path) => {
+                    by_path.entry(fold(&path)).or_insert(index);
+                }
+                Err(_) => break,
+            }
+        }
+        FileExports {
+            prefix: fold(&format!("{}.", package.name)),
+            by_path,
+        }
+    }
+
+    /// The export `Package::find_export(global_path)` gives in this file: `Some` exactly where it gives `Ok(Some)`;
+    /// `None` where it gives `Ok(None)` or an error (both "not here" to the global fallback).
+    fn find(&self, global_path: &str) -> Option<i32> {
+        let wanted = fold(global_path);
+        let wanted = wanted.strip_prefix(&self.prefix).unwrap_or(&wanted);
+        self.by_path.get(wanted).copied()
     }
 }
 
@@ -909,6 +987,83 @@ mod tests {
         tree.write("Dotted.upk", &package(&[], &[("GDX.Obj", 0)]));
         tree.write("Later.upk", &package(&[], HOLDS));
         assert_eq!(checked(&tree, -2).0.unwrap(), ("Dotted".into(), 1));
+    }
+
+    /// Lane FIX-PKG-LOOKUP (decision 2026-11-16-63): the global fallback reads each candidate file once per store, and
+    /// answers as the full scan does (the check oracle runs on every lookup here).
+    #[test]
+    fn the_global_fallback_reads_each_candidate_file_once() {
+        let tree = Tree::new("once");
+        tree.write(
+            "Source.upk",
+            &package(
+                &[
+                    ("Core", "Package", 0, "GDX"),
+                    ("Core", "Object", -1, "ObjA"),
+                    ("Core", "Object", -1, "ObjB"),
+                    ("Core", "Object", -1, "ObjC"),
+                    ("Core", "Object", -1, "Missing"),
+                    ("Core", "Object", -1, "Extra"),
+                    ("Core", "Object", -1, "Gone"),
+                ],
+                &[],
+            ),
+        );
+        // Every file below holds the root GDX, so each is a candidate for every path; Broken's roots are unknown.
+        tree.write("Afile.upk", &package(&[], &[("GDX", 0), ("Other", 1)]));
+        tree.write(
+            "Bfile.upk",
+            &package(&[], &[("GDX", 0), ("ObjA", 1), ("Extra", 1)]),
+        );
+        tree.write("Cfile.upk", &package(&[], &[("GDX", 0), ("ObjB", 1)]));
+        tree.write(
+            "Dfile.upk",
+            &package(&[], &[("GDX", 0), ("ObjC", 1), ("objc", 1)]),
+        );
+        tree.write("Broken.upk", &[1, 2, 3]);
+        let mut store = tree.store();
+        store.set_resolve_check(Some(ResolveCheck::default()));
+        let mut answers = Vec::new();
+        let mut loads = Vec::new();
+        for reference in [-2, -3, -4, -5, -6, -7, -2] {
+            answers.push(resolve_in(&tree, &mut store, reference).map_err(|e| e.to_string()));
+            loads.push(store.global_file_loads);
+        }
+        let found = |name: &str, index| Ok((name.to_string(), index));
+        let missing = |object: &str| {
+            Err(StoreError::ImportNotFound {
+                package: "GDX".into(),
+                object: object.into(),
+            }
+            .to_string())
+        };
+        assert_eq!(
+            answers,
+            [
+                found("Bfile", 2),
+                found("Cfile", 2),
+                // The first of two exports that fold to the same path.
+                found("Dfile", 2),
+                missing("Missing"),
+                found("Bfile", 3),
+                missing("Gone"),
+                found("Bfile", 2),
+            ]
+        );
+        // The check oracle's full scan agreed on every global lookup (a disagreement is an error above).
+        let log = store.take_check_log();
+        assert_eq!(
+            log.iter()
+                .filter(|l| l.starts_with("OWRESOLVECHECK same"))
+                .count(),
+            6
+        );
+        // Scan order: Afile, Bfile, Broken, Cfile, Dfile. ObjA reads Afile and Bfile (a match); ObjB reads Broken (it
+        // does not load) and Cfile; ObjC reads Dfile; each once. The miss reads no file again. Extra is in Bfile, read
+        // before: that one file is loaded afresh for the match, as the C++ returns a fresh candidate. Gone reads
+        // nothing; ObjA again is the cached match.
+        assert_eq!(loads, [2, 4, 5, 5, 6, 6, 6]);
+        assert_eq!(store.global_files.len(), 5);
     }
 
     #[test]
