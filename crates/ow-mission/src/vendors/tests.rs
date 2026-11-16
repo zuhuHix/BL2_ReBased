@@ -30,12 +30,27 @@ pub(crate) type Fields = Vec<(&'static str, V)>;
 #[derive(Default)]
 pub(crate) struct Syn {
     exports: Vec<(&'static str, &'static str, Fields)>,
+    /// Per export: the bytes before its tags (default: the 4-byte net index) and the bytes after them.
+    frames: Vec<(Vec<u8>, Vec<u8>)>,
     imports: Vec<(String, i32)>,
 }
 
 impl Syn {
     pub(crate) fn add(&mut self, path: &'static str, class: &'static str, fields: Fields) {
+        self.add_framed(path, class, fields, ints(&[0]), Vec::new());
+    }
+
+    /// [`Syn::add`] with `prefix` before the tags and `tail` after them (invented bytes).
+    pub(crate) fn add_framed(
+        &mut self,
+        path: &'static str,
+        class: &'static str,
+        fields: Fields,
+        prefix: Vec<u8>,
+        tail: Vec<u8>,
+    ) {
         self.exports.push((path, class, fields));
+        self.frames.push((prefix, tail));
     }
 
     fn import(&mut self, b: &mut PackageBuilder, class: &str, outer: i32, name: &str) -> i32 {
@@ -61,8 +76,10 @@ impl Syn {
         }
         let all: Vec<Fields> = self.exports.iter().map(|(_, _, f)| f.clone()).collect();
         for (i, fields) in all.iter().enumerate() {
-            let mut payload = ints(&[0]);
+            let (prefix, tail) = self.frames[i].clone();
+            let mut payload = prefix;
             payload.extend(self.body(&mut b, fields));
+            payload.extend(tail);
             b.set_payload(indices[i], payload);
         }
         b.build()
@@ -388,7 +405,9 @@ fn the_shop_price_is_value_times_markup_truncated_in_single_precision() {
     let m = Markup::new(0.5, 2.0);
     assert_eq!(m.at(3), 3.5);
     assert_eq!(shop_price(10, m.at(3)), Ok(35));
-    // Truncated toward zero.
+    // Truncated toward zero, the script's float-to-int cast. VENDORS.md section 3 writes floor: the same on every live
+    // (positive) row; for a negative product (no data gives one) trunc gives -13 where floor would give -14, and
+    // which the game's stock native does is UNVERIFIED.
     assert_eq!(shop_price(7, 1.99), Ok(13));
     assert_eq!(shop_price(-7, 1.99), Ok(-13));
     // The int converts to a float first: above 2^24 it rounds to an even value.
@@ -420,4 +439,76 @@ fn flatten_adds_shares_down_the_tree() {
     flatten(&tree, 2.0, &mut out, 0).unwrap();
     assert_eq!(out.get("Bal.A"), Some(&3.5));
     assert_eq!(out.get("Bal.B"), Some(&0.5));
+}
+
+#[test]
+fn a_placed_point_is_read_at_the_first_prefix_that_decodes_exactly() {
+    // 26 invented zero bytes before the tags: walked from 4 or from 8 they read as the `None` tag at once and leave
+    // the rest as trailing bytes, so only the 26-byte prefix decodes exactly.
+    let mut s = Syn::default();
+    s.add_framed(
+        "TheWorld.PersistentLevel.WillowPopulationOpportunityPoint_9",
+        POINT,
+        vec![
+            ("PopulationDef", V::Ref("GD_Population_Shopping.VendingMachine.Pop_Guns")),
+            ("ToyRadius", V::Float(5000.0)),
+            ("ToyOdds", V::Float(0.1)),
+        ],
+        vec![0u8; 26],
+        Vec::new(),
+    );
+    let map = open_map(ParityMode::Off, map_with(s));
+    let point = map.view.levels[0].props("TheWorld.PersistentLevel.WillowPopulationOpportunityPoint_9");
+    let point = point.unwrap().expect("held by the level");
+    assert_eq!(point.at("PopulationDef").as_str(), Some("GD_Population_Shopping.VendingMachine.Pop_Guns"));
+    // Floats as the registry's conversion gives them (`%.9g`, read back): a whole one is an int, 0.1f its 9 digits.
+    assert_eq!(point.at("ToyRadius"), &Pv::Int(5000));
+    assert_eq!(point.at("ToyOdds"), &Pv::Float(0.100000001));
+    let found = map.view.machines();
+    let MachineRead::Machine(m) = &found[0].1 else { panic!("{:?}", found[0]) };
+    assert_eq!((m.id.as_str(), m.kind), ("Toy_P:WillowPopulationOpportunityPoint_9", ShopKind::Weapons));
+}
+
+#[test]
+fn a_point_that_fits_no_prefix_is_skipped_with_the_reason() {
+    // A 4-byte prefix, the `None` tag and 3 invented trailing bytes: 4 leaves trailing bytes, 8 runs past the
+    // payload, 26 is past it.
+    let mut s = Syn::default();
+    s.add_framed(
+        "TheWorld.PersistentLevel.WillowPopulationOpportunityPoint_10",
+        POINT,
+        vec![],
+        ints(&[0]),
+        vec![1, 2, 3],
+    );
+    let map = open_map(ParityMode::Off, map_with(s));
+    let e = map.view.levels[0].props("TheWorld.PersistentLevel.WillowPopulationOpportunityPoint_10").unwrap_err();
+    assert!(e.contains("did not decode with an established prefix"), "{e}");
+    let found = map.view.machines();
+    let MachineRead::Skipped(reason) = &found[0].1 else { panic!("{:?}", found[0]) };
+    assert!(reason.contains("WillowPopulationOpportunityPoint_10") && reason.contains("did not decode"), "{reason}");
+}
+
+#[test]
+fn a_repeated_configuration_name_keeps_the_last_one() {
+    let mut s = Syn::default();
+    s.add("TheWorld.PersistentLevel.WillowPopulationOpportunityPoint_7", POINT, vec![(
+        "PopulationDef",
+        V::Ref("GD_Population_Shopping.VendingMachine.Pop_Twice"),
+    )]);
+    s.add("GD_Population_Shopping.VendingMachine.Pop_Twice", "WillowGame.WillowPopulationDefinition", vec![]);
+    s.add(
+        "GD_Population_Shopping.VendingMachine.Pop_Twice.Factory",
+        "WillowGame.PopulationFactoryVendingMachine",
+        vec![("ObjectBalanceDefinition", V::Ref("Bal.Twice"))],
+    );
+    s.add("Bal.Twice", "WillowGame.InteractiveObjectBalanceDefinition", vec![(
+        "DefaultLoot",
+        V::Array(vec![config("Inventory", "Pool.Stock", 1.0), config("Inventory", "Pool.Featured", 1.0)]),
+    )]);
+    let map = open_map(ParityMode::Off, map_with(s));
+    let found = map.view.machines();
+    let MachineRead::Machine(m) = &found[0].1 else { panic!("{:?}", found[0]) };
+    assert_eq!(m.inventory.len(), 1);
+    assert_eq!(m.inventory[0].pool, "Pool.Featured");
 }

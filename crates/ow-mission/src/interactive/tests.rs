@@ -116,7 +116,11 @@ fn the_cost_rules_compare_with_at_most_and_pay_by_negating() {
         currency: 0,
         delta: -50
     }));
-    assert!(payment(Some(UseCost::new(0, i32::MIN))).is_err());
+    // Wrapping: i32::MIN stays a negative delta, which AddCurrencyOnHand clamps to 0.
+    assert_eq!(payment(Some(UseCost::new(0, i32::MIN))), Ok(Payment::AddCurrency {
+        currency: 0,
+        delta: i32::MIN
+    }));
 }
 
 #[test]

@@ -30,7 +30,9 @@
 //! **Prices.**
 //! - The shop's price of an item, `trunc(value * markup)` in single precision, where `value` is the item's monetary
 //!   value (`ow-items`) and `markup = item_level * exponentializer + base_increase` ([`Markup`]): **confirmed (live)**
-//!   on 79 of 79 stock and featured rows at player level 8 (VENDORS.md section 3), with the two attribute values read
+//!   on 79 of 79 stock and featured rows at player level 8 (VENDORS.md section 3, which writes `floor`; every live
+//!   price and value is positive, where the two agree; the truncation is the script's float-to-int cast in
+//!   `GetFeaturedItem`, and for a negative product, which no data gives, it is UNVERIFIED which the stock native uses), with the two attribute values read
 //!   live ([`Markup::SANCTUARY_LIVE`]; the packages hold no value for them). The featured item's price is script
 //!   (`WillowVendingMachine.GetFeaturedItem`: a fixed cost when `FixedFeaturedItemCost` is above 0, else the item's
 //!   monetary value times the featured markup evaluated with the item as the source, truncated, then capped by
@@ -60,11 +62,11 @@ use ow_items::ItemError;
 use ow_items::pools::{
     EntryKind, PoolData, PoolDrop, PoolRequest, PyNum, PySum, Tree, Values, expand, roll_pool,
 };
-use ow_items::registry::{CensusInput, Holder, PathHolders, Props, Pv, Registry, TagLookup};
+use ow_items::registry::{CensusInput, Holder, PathHolders, Props, Pv, Registry, TagLookup, decode_at};
 use ow_items::roll::RollCx;
 use ow_object::prefix::PropertyPrefix;
 use ow_package::package::Package;
-use ow_package::props::{self, PropEntry, PropValue};
+use ow_package::props;
 use ow_package::schema::SchemaTyper;
 
 #[cfg(test)]
@@ -243,21 +245,17 @@ fn attachments(config: &Pv) -> Vec<Attachment> {
         .collect()
 }
 
-/// `prepare_vendors.build_machine`: the machine at the opportunity point `point_path` (decoded `point`), `id` its tool
-/// id. `lookup` resolves paths in the tool's package order.
-pub fn read_machine(lookup: &TagLookup, id: &str, point_path: &str, point: &Pv) -> MachineRead {
+/// `prepare_vendors.build_machine`: the machine at the opportunity point `point_path` (decoded `point`) of `level`,
+/// `id` its tool id. Paths resolve in the tool's package order (the level's lookup).
+pub fn read_machine(level: &LevelView, id: &str, point_path: &str, point: &Pv) -> MachineRead {
+    let lookup = &level.lookup;
     let Some(popdef) = text(point.at("PopulationDef")) else {
         return MachineRead::NotAShop;
     };
     if !popdef.starts_with(POPULATION) {
         return MachineRead::NotAShop;
     }
-    let depth = popdef.matches('.').count() + 1;
-    let factory = lookup
-        .below(&popdef)
-        .into_iter()
-        .find(|(p, c)| p.matches('.').count() == depth && c.contains("PopulationFactory"));
-    let Some((factory_path, factory_class)) = factory else {
+    let Some((factory_path, factory_class)) = level.factory_of(&popdef) else {
         return MachineRead::Skipped(format!("{popdef}: no population factory export"));
     };
     let Some(factory) = lookup.get(&factory_path) else {
@@ -274,11 +272,13 @@ pub fn read_machine(lookup: &TagLookup, id: &str, point_path: &str, point: &Pv) 
     };
     let definition =
         text(factory.at("ObjectDefinition")).or_else(|| text(balance.at("DefaultInteractiveObject")));
+    // The tool builds a dict by configuration name, so a repeated name keeps its last configuration.
     let config = |name: &str| -> Vec<Attachment> {
         balance
             .at("DefaultLoot")
             .items()
             .iter()
+            .rev()
             .find(|c| c.at("ConfigurationName").as_str() == Some(name))
             .map(attachments)
             .unwrap_or_default()
@@ -393,6 +393,9 @@ pub fn listing(
             unresolved.push("PoolProbability not resolved from the packages".to_string());
         }
         if pools.class_of(&a.pool).is_empty() {
+            // The tool expands it anyway, over no properties: its Quantity falls back to 1 and its gate to true,
+            // so it adds neither note, and with no entries the tree is not eligible, so it lists no leaf. The row
+            // below is that result (W4-POOLS' `expand` refuses a path the package does not export).
             unresolved.push("pool not found in the packages".to_string());
             rows.push(StockRow {
                 pool: a.pool.clone(),
@@ -578,51 +581,26 @@ pub struct LevelView {
 const PREFIXES: [PropertyPrefix; 3] =
     [PropertyPrefix::Ordinary, PropertyPrefix::Component, PropertyPrefix::PlacedActor];
 
-/// A walked value as the tool holds it after `plain_refs` (the registry's reading, `ow_items::registry`): a reference
-/// is its path or `None`, a struct a dict of its tags or fields, an array a list, an undecoded value `None`.
-fn plain(pkg: &Package, value: &PropValue) -> Result<Pv, String> {
-    Ok(match value {
-        PropValue::Int(i) => Pv::Int(i64::from(*i)),
-        PropValue::Float(x) => Pv::Float(f64::from(*x)),
-        PropValue::Bool(b) => Pv::Bool(*b),
-        PropValue::Byte(b) => Pv::Int(i64::from(*b)),
-        PropValue::Enum(t) | PropValue::Name(t) | PropValue::Str(t) => Pv::Str(t.clone()),
-        PropValue::Object(0) => Pv::Null,
-        PropValue::Object(r) => Pv::Str(pkg.path_of(*r).map_err(|e| e.to_string())?),
-        PropValue::Struct { fields, .. } => entries(pkg, fields)?,
-        PropValue::Array(values) => Pv::List(values.iter().map(|v| plain(pkg, v)).collect::<Result<_, _>>()?),
-        _ => Pv::Null,
-    })
-}
-
-/// A tag list (or a fixed struct's fields) as a dict by name; a later entry of a name replaces an earlier one.
-fn entries(pkg: &Package, list: &[PropEntry]) -> Result<Pv, String> {
-    let mut m = DetMap::new();
-    for e in list {
-        m.insert(e.name.clone(), plain(pkg, &e.value)?);
-    }
-    Ok(Pv::Map(m))
-}
-
-/// The tool's `Reader.props`: the tag stream of `export` after the first prefix of [`PREFIXES`] whose walk ends
-/// exactly at the payload's end.
-fn decode_exact(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Pv, String> {
+/// The tool's `Reader.props`: the decoded properties of `export` (`ow_items::registry::decode_at`, the registry's
+/// own reading and value conversion) after the first prefix of [`PREFIXES`] that decodes with no trailing byte. A
+/// prefix whose walk or conversion fails, or that leaves trailing bytes, gives way to the next, as the tool's loop
+/// does when `ow-package --properties` fails or reports trailing bytes.
+pub fn decode_exact(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Pv, String> {
     let mut last = String::new();
     for prefix in PREFIXES {
         let start = prefix.bytes();
-        let walked = props::read_tagged(pkg, export, start, typer);
+        let decoded = decode_at(pkg, export, start, typer);
         let range = props::property_range(pkg, export, start);
-        match (walked, range) {
-            (Ok(w), Ok((from, to))) => {
+        match (decoded, range) {
+            (Ok((pv, end)), Ok((from, to))) => {
                 // The payload's size: from the stream's start back to the payload's start, then to its end.
                 let size = to.saturating_sub(from).saturating_add(start);
-                if w.end == size {
-                    let tagged: Vec<PropEntry> = w.entries.into_iter().filter(|e| e.tag.is_some()).collect();
-                    return entries(pkg, &tagged);
+                if end == size {
+                    return Ok(pv);
                 }
-                last = format!("{} trailing byte(s) after prefix {start}", size.saturating_sub(w.end));
+                last = format!("{} trailing byte(s) after prefix {start}", size.saturating_sub(end));
             }
-            (Err(e), _) | (_, Err(e)) => last = e.to_string(),
+            (Err(e), _) | (_, Err(e)) => last = format!("prefix {start}: {e}"),
         }
     }
     Err(format!("did not decode with an established prefix ({last})"))
@@ -630,12 +608,45 @@ fn decode_exact(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Pv, S
 
 impl LevelView {
     /// The decoded properties of `path`: an object of this level's own package as the tool reads it
-    /// ([`decode_exact`]), anything else through [`LevelView::lookup`]. `None` when no package holds it or it does
-    /// not decode.
-    pub fn props(&self, path: &str) -> Option<Pv> {
+    /// ([`decode_exact`]), anything else through [`LevelView::lookup`]. `Ok(None)` when no package of the level's
+    /// order holds it; `Err` with the reason when it does not decode.
+    pub fn props(&self, path: &str) -> Result<Option<Pv>, String> {
         match self.own.get(path) {
-            Some(&export) => decode_exact(&self.package, export, &self.typer).ok(),
-            None => self.lookup.get(path).map(|p| (*p).clone()),
+            Some(&export) => decode_exact(&self.package, export, &self.typer).map(Some),
+            None if !self.lookup.holds(path) => Ok(None),
+            None => self.lookup.props(path).map(|p| Some((*p).clone())),
+        }
+    }
+
+    /// `prepare_vendors.factory_of`: the first export directly below `popdef` whose class names a population factory,
+    /// in the tool's order (the level's package, the map package, `Startup.upk`, each in export order).
+    pub fn factory_of(&self, popdef: &str) -> Option<(String, String)> {
+        let start = format!("{popdef}.");
+        let depth = popdef.matches('.').count() + 1;
+        self.pools
+            .exports()
+            .iter()
+            .find(|(p, c)| p.starts_with(&start) && p.matches('.').count() == depth && c.contains("PopulationFactory"))
+            .cloned()
+    }
+}
+
+/// An object the map reading had to leave out, and why.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skip {
+    /// The level package's file stem.
+    pub level: String,
+    pub path: String,
+    pub reason: String,
+}
+
+impl Skip {
+    pub fn new(level: &str, path: &str, reason: impl Into<String>) -> Self {
+        Skip {
+            level: level.to_string(),
+            path: path.to_string(),
+            reason: reason.into(),
         }
     }
 }
@@ -673,7 +684,10 @@ impl MapView {
             if !short(class).starts_with("LevelStreaming") {
                 continue;
             }
-            let Some(props) = first.props(path) else { continue };
+            let props = first
+                .props(path)
+                .map_err(|e| VendorError::Data(format!("{persistent}:{path}: {e}")))?;
+            let Some(props) = props else { continue };
             if let Some(name) = text(props.at("PackageName"))
                 && !names.contains(&name)
                 && has(&name)
@@ -764,7 +778,8 @@ impl MapView {
     }
 
     /// Every opportunity point of every level, in level then export order, read as a shop
-    /// (`prepare_vendors.build_document`'s loop). Points that are not shops are left out.
+    /// (`prepare_vendors.build_document`'s loop). Points that are not shops are left out; a point that does not
+    /// decode is a [`MachineRead::Skipped`] with the reason.
     pub fn machines(&self) -> Vec<(usize, MachineRead)> {
         let mut out = Vec::new();
         for (i, level) in self.levels.iter().enumerate() {
@@ -775,10 +790,18 @@ impl MapView {
                 if short(class) != "WillowPopulationOpportunityPoint" {
                     continue;
                 }
-                let Some(point) = level.props(path) else { continue };
                 let name = path.rsplit('.').next().unwrap_or(path);
                 let id = format!("{}:{name}", level.name);
-                match read_machine(&level.lookup, &id, path, &point) {
+                let point = match level.props(path) {
+                    Ok(Some(p)) => p,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        // Not known to be a shop: recorded, never dropped.
+                        out.push((i, MachineRead::Skipped(format!("{id}: the point did not decode: {e}"))));
+                        continue;
+                    }
+                };
+                match read_machine(level, &id, path, &point) {
                     MachineRead::NotAShop => {}
                     read => out.push((i, read)),
                 }
