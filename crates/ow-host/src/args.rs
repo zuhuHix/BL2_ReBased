@@ -42,12 +42,22 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--arms DIR] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--arms DIR] [--pawn NAME DIR X Y Z YAW]... [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
                          ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE [--weapon FILE]\n       \
                          ow-host --headless-probe";
 
+/// One `--pawn NAME DIR X Y Z YAW` (lane H-PAWNS): a pawn kind (`anim::pawns::KINDS`), the UModel export folder of
+/// its package, its location (uu) and its yaw (degrees).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PawnArg {
+    pub kind: String,
+    pub dir: PathBuf,
+    pub location: [f32; 3],
+    pub yaw_degrees: f64,
+}
+
 /// What to run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Command {
     /// Check the install and stop.
@@ -81,6 +91,8 @@ pub enum Command {
         weapon: Option<PathBuf>,
         /// A UModel export folder to draw the first-person arms from (lane H6-SKIN).
         arms: Option<PathBuf>,
+        /// Third-person pawns to draw (lane H-PAWNS), in the order given.
+        pawns: Vec<PawnArg>,
     },
     /// The script through the play simulation with no window.
     PlayHeadless { game: PathBuf, map: String, script: PathBuf, weapon: Option<PathBuf> },
@@ -109,6 +121,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut play_script: Option<PathBuf> = None;
     let mut weapon: Option<PathBuf> = None;
     let mut arms: Option<PathBuf> = None;
+    let mut pawns: Vec<PawnArg> = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -167,6 +180,27 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--weapon given twice".into());
                 }
             }
+            "--pawn" => {
+                let mut next = |what: &str| {
+                    it.next()
+                        .and_then(|a| a.to_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| format!("--pawn needs NAME DIR X Y Z YAW (missing {what})"))
+                };
+                let kind = next("NAME")?;
+                let dir = PathBuf::from(next("DIR")?);
+                let mut number = |what: &str| -> Result<f64, String> {
+                    let text = next(what)?;
+                    text.parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite() && v.abs() <= 1.0e7)
+                        .ok_or_else(|| format!("--pawn {what} must be a finite number, not {text}"))
+                };
+                let (x, y, z, yaw) = (number("X")?, number("Y")?, number("Z")?, number("YAW")?);
+                // Checked: each is finite and within 1e7 uu, so the f64-to-f32 `as` rounds and stays finite.
+                let location = [x as f32, y as f32, z as f32];
+                pawns.push(PawnArg { kind, dir, location, yaw_degrees: yaw });
+            }
             "--arms" => {
                 let path = it.next().ok_or("--arms needs a folder")?;
                 if arms.replace(PathBuf::from(path)).is_some() {
@@ -184,8 +218,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     if weapon.is_some() && !(play || play_script.is_some()) {
         return Err("--weapon needs --play or --play-script".into());
     }
-    if arms.is_some() && !play {
-        return Err("--arms needs --play".into());
+    if (arms.is_some() || !pawns.is_empty()) && !play {
+        return Err("--arms and --pawn need --play".into());
     }
     if map.is_none() && (size.is_some() || screenshot.is_some()) {
         return Err("--size and --screenshot need --map".into());
@@ -218,7 +252,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             return Err("--play runs until it is closed or its script ends: no --window, --frames or --time-limit".into());
         }
         if play {
-            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon, arms });
+            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon, arms, pawns });
         }
         if no_vsync || size.is_some() || screenshot.is_some() {
             return Err("--play-script without --play opens no window: no --no-vsync, --size or --screenshot".into());
@@ -353,6 +387,7 @@ mod tests {
                 screenshot: None,
                 weapon: None,
                 arms: None,
+                pawns: Vec::new(),
             })
         );
         assert_eq!(
@@ -366,6 +401,7 @@ mod tests {
                 screenshot: Some("a.png".into()),
                 weapon: None,
                 arms: None,
+                pawns: Vec::new(),
             })
         );
         assert_eq!(
@@ -379,6 +415,7 @@ mod tests {
                 screenshot: None,
                 weapon: None,
                 arms: Some("exports".into()),
+                pawns: Vec::new(),
             })
         );
         assert_eq!(
@@ -406,6 +443,24 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }
+        assert_eq!(
+            p(&["--game", "X", "--map", "S", "--play", "--pawn", "bullymong", "d", "1", "-2", "3.5", "225", "--pawn",
+                "maya", "e", "0", "0", "0", "0"]),
+            Ok(Command::Play {
+                game: "X".into(),
+                map: "S".into(),
+                script: None,
+                vsync: true,
+                size: None,
+                screenshot: None,
+                weapon: None,
+                arms: None,
+                pawns: vec![
+                    PawnArg { kind: "bullymong".into(), dir: "d".into(), location: [1.0, -2.0, 3.5], yaw_degrees: 225.0 },
+                    PawnArg { kind: "maya".into(), dir: "e".into(), location: [0.0; 3], yaw_degrees: 0.0 },
+                ],
+            })
+        );
         for bad in [
             &["--game", "X", "--play"][..],
             &["--game", "X", "--play-script", "w.txt"],
@@ -421,6 +476,10 @@ mod tests {
             &["--game", "X", "--map", "S", "--play-script", "w.txt", "--arms", "e"],
             &["--game", "X", "--map", "S", "--play", "--arms", "a", "--arms", "b"],
             &["--game", "X", "--map", "S", "--play", "--arms"],
+            &["--game", "X", "--map", "S", "--play-script", "w.txt", "--pawn", "maya", "e", "0", "0", "0", "0"],
+            &["--game", "X", "--map", "S", "--play", "--pawn", "maya", "e", "0", "0", "0"],
+            &["--game", "X", "--map", "S", "--play", "--pawn", "maya", "e", "0", "nan", "0", "0"],
+            &["--game", "X", "--map", "S", "--play", "--pawn", "maya", "e", "0", "0", "1e9", "0"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }
