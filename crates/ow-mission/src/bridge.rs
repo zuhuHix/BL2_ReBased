@@ -65,13 +65,12 @@
 //! 2026-11-15-34, addendum). `WillowDialogGlobalsDefinition.Get` returns the dialog globals object.
 //!
 //! **The director is a copy of his archetype**, as in the C++: `GD_Marcus.Character.Pawn_Marcus`, his
-//! `MissionDirectives` table, his `AIClass` and his `DialogComponent` are each instantiated from their export with the
-//! C++ prefix (4 bytes; 8 for the component) by `ow_object::cdo::instantiate_export` over a decode context of its own
-//! (the C++ `instantiateExport`, also what the Kismet executor uses), so references inside them are stand-ins, as the
-//! C++ leaves them. They are not loaded through the definition store because its prefix rule (decision
-//! 2026-11-15-16) gives an `Engine.Actor` export outside a level 26 bytes and refuses one whose tags do not parse
-//! from there, which the invented director's (4-byte) do not: a W3-DEFS open item, reported in the handoff. The
-//! director's provider (not an actor) is the store's definition.
+//! `MissionDirectives` table, his `AIClass` and his `DialogComponent` are each a new object made from their export on
+//! every call, with the C++ prefix (4 bytes; 8 for the component), by `DefStore::instance` (the C++
+//! `Runtime::instantiateExport`, `src/mission_script.cpp` `placeMarcus` and `loadRef`). The references decoded inside
+//! them are the definition store's objects for their paths, which load when read, as any definition's references do
+//! (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48; before it they were decoded outside the store, as stand-ins that
+//! could not be read). The director's provider (not an actor) is the store's definition.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -88,8 +87,6 @@ use ow_behavior::kernel::Provider;
 use ow_behavior::provider::{BehaviorError, enum_names, stock_path};
 use ow_behavior::registry::Handler;
 use ow_core::{DetMap, DetSet, NotYet, PackageName, ParityMode};
-use ow_object::cdo::instantiate_export;
-use ow_object::decode::{DecodeState, ValueCx};
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{FuncId, ObjRef, PropAddr, PropId};
 use ow_object::layout::PropKind;
@@ -332,24 +329,6 @@ fn to_vm(e: MissionError, function: &str) -> VmError {
     }
 }
 
-/// The definition store's object for a stand-in of a package export (through the identity policy, as every path is
-/// one object); any other value as it is.
-pub(crate) fn store_object(vm: &mut Vm, v: &Value) -> Result<Value, MissionError> {
-    let Value::Object(Some(o)) = v else {
-        return Ok(v.clone());
-    };
-    let Origin::Resource { package, index } = vm.space.heap.get(*o)?.origin else {
-        return Ok(v.clone());
-    };
-    let found = vm.defs.resolve_ref(&mut vm.space, package, index);
-    let log = vm.defs.take_log();
-    vm.log.extend(log);
-    Ok(match found.map_err(BehaviorError::from)? {
-        Some(f) => Value::Object(Some(f)),
-        None => v.clone(),
-    })
-}
-
 /// Sets the object or interface property `name` of `o` to `target`, as the property's declared kind holds it (the
 /// installed movie class declares some of these as interfaces; seam of lane W6-FIRE, decision 2026-11-16-38).
 fn set_reference(space: &mut ObjectSpace, o: ObjRef, name: &str, target: ObjRef) -> Result<(), MissionError> {
@@ -422,35 +401,29 @@ fn new_object(vm: &mut Vm, class_path: &str) -> Result<ObjRef, MissionError> {
     Ok(vm.instantiate(c, "")?)
 }
 
-/// A copy of export `index` of `package` decoded from `prefix` on (the C++ `instantiateExport`; module documentation,
-/// "The director is a copy"): a new object of the export's class with its tags, references as stand-ins.
-pub(crate) fn instantiate_copy(
+/// A new object made from export `index` of `package` on every call, its references the definition store's objects
+/// (the C++ `Runtime::instantiateExport`; `DefStore::instance`). The store's log lines go to the VM's log.
+pub(crate) fn instantiate_export(
     vm: &mut Vm,
     package: PackageId,
     index: i32,
     prefix: PropertyPrefix,
 ) -> Result<ObjRef, MissionError> {
-    let mode = vm.parity;
-    let mut state = DecodeState::new();
-    let (code, store) = vm.defs.code_mut();
-    let mut cx = ValueCx::new(store, code, &mut vm.space, &mut state, mode);
-    let made = instantiate_export(&mut cx, package, index, prefix);
-    vm.log.append(&mut state.log);
-    Ok(made.map_err(|e| BehaviorError::from(ow_defs::store::DefError::from(e)))?.object)
+    let made = vm.defs.instance(&mut vm.space, package, index, prefix);
+    vm.log.extend(vm.defs.take_log());
+    Ok(made?)
 }
 
-/// A copy of the export an object value names (a stand-in or a loaded object read from a package); `None` for None,
-/// a non-object value, or an object read from no package.
-fn copy_of(vm: &mut Vm, v: &Value, prefix: PropertyPrefix) -> Result<Option<ObjRef>, MissionError> {
+/// The export an object value names (the C++ `resourcePackage` / `resourceIndex`): a definition store object, loaded
+/// or not, or a stand-in; `None` for None, a non-object value, or an object read from no package.
+fn export_of(vm: &Vm, v: &Value) -> Result<Option<(PackageId, i32)>, MissionError> {
     let Value::Object(Some(o)) = v else {
         return Ok(None);
     };
-    match vm.space.heap.get(*o)?.origin {
-        Origin::Export { package, index } | Origin::Resource { package, index } => {
-            Ok(Some(instantiate_copy(vm, package, index, prefix)?))
-        }
-        _ => Ok(None),
-    }
+    Ok(match vm.space.heap.get(*o)?.origin {
+        Origin::Export { package, index } | Origin::Resource { package, index } => Some((package, index)),
+        _ => None,
+    })
 }
 
 /// Whether `o`'s class is `ancestor` or derives from it.
@@ -1824,22 +1797,27 @@ impl MissionScript {
         let Some(index) = store.get(id).find_export(path)?.filter(|&i| i > 0) else {
             return Ok(false);
         };
-        let director = instantiate_copy(vm, id, index, PropertyPrefix::Ordinary)?;
+        // mission_script.cpp:487, `instantiateExport(package, index, 4)`.
+        let director = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
         self.inner.state.borrow_mut().director = Some(director);
         set(&mut vm.space, director, "Role", Value::Byte(self.inner.o.authority))?;
         set(&mut vm.space, director, "WorldInfo", Value::Object(Some(self.inner.o.world_info)))?;
-        // The directive table is archetype data: a reference to a MissionDirectivesDefinition export, loaded.
+        // The directive table is archetype data: a reference to a MissionDirectivesDefinition export, made into its
+        // own object (mission_script.cpp:491-492, `loadRef`: `instantiateExport` at 4 of the reference's export).
         let directives = get(&vm.space, director, "MissionDirectives")?;
-        if let Some(o) = copy_of(vm, &directives, PropertyPrefix::Ordinary)? {
+        if let Some((package, index)) = export_of(vm, &directives)? {
+            let o = instantiate_export(vm, package, index, PropertyPrefix::Ordinary)?;
             set(&mut vm.space, director, "MissionDirectives", Value::Object(Some(o)))?;
         }
         // The constructor leaves the ConsumerHandle at -1 (invalid); the consumer registration assigns it once (below).
         self.set_pid(vm, director, -1)?;
         // What PlayOnUseDialog's guard needs: a mind whose AIClass is the archetype's AI class, and his dialog
-        // component, both loaded from the archetype (the mind is the bare WillowMind object).
+        // component, both made from the archetype's references (the mind is the bare WillowMind object;
+        // mission_script.cpp:498-511: only an export reference, `resourceIndex > 0`, is made, at 4 and at 8).
         if let Some(ai_class) = prop(&vm.space, director, "AIClass")?
-            && let Some(loaded) = copy_of(vm, &ai_class, PropertyPrefix::Ordinary)?
+            && let Some((package, index)) = export_of(vm, &ai_class)?.filter(|&(_, i)| i > 0)
         {
+            let loaded = instantiate_export(vm, package, index, PropertyPrefix::Ordinary)?;
             set(&mut vm.space, director, "AIClass", Value::Object(Some(loaded)))?;
             let director_class = vm.space.heap.get(director)?.class;
             if vm.space.prop(director_class, "MyWillowMind").is_some() {
@@ -1849,8 +1827,9 @@ impl MissionScript {
             }
         }
         if let Some(component) = prop(&vm.space, director, "DialogComponent")?
-            && let Some(loaded) = copy_of(vm, &component, PropertyPrefix::Component)?
+            && let Some((package, index)) = export_of(vm, &component)?.filter(|&(_, i)| i > 0)
         {
+            let loaded = instantiate_export(vm, package, index, PropertyPrefix::Component)?;
             self.inner.state.borrow_mut().dialog_component = Some(loaded);
             set(&mut vm.space, director, "DialogComponent", Value::Object(Some(loaded)))?;
         }
@@ -2218,11 +2197,9 @@ impl MissionScript {
             Some(o) => class_name(&c.vm.space, o)?,
             None => String::new(),
         };
+        // The body class is the definition store's object for its path (the director's references are; module
+        // documentation), which the dialog loads.
         let body = prop(&c.vm.space, director, "BodyClass")?.unwrap_or(Value::None);
-        // The director is a copy of his archetype, so the body class is a stand-in of the archetype's package; the
-        // dialog loads a stand-in only through the mission package, so it gets the store's object for that export (the
-        // C++ loads the stand-in from its own package; seam of lane W6-FIRE, decision 2026-11-16-38).
-        let body = store_object(c.vm, &body)?;
         let dialog = self.inner.mission.dialog();
         let busy = || data("dialog: the dialog system is already in use".to_string());
         let pawn = dialog.try_borrow_mut().map_err(|_| busy())?.pawn_dialog(c.vm, &body)?;

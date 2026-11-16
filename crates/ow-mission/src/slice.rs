@@ -71,7 +71,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 use ow_world::world::World;
 
-use crate::bridge::{self, Gain, MarcusUse, MissionLists, MissionScript, Toucher, error_text, instantiate_copy, store_object};
+use crate::bridge::{self, Gain, MarcusUse, MissionLists, MissionScript, Toucher, error_text, instantiate_export};
 use crate::dialog::DialogSystem;
 use crate::tracker::{self, EffectKind, MissionError, MissionSystem, Notification, field, field_value, integer, prop, ref_path, text};
 
@@ -1121,13 +1121,11 @@ impl FireMissionSlice {
         let Some(index) = store.get(id).find_export(DUMMY_PAWN)?.filter(|&i| i > 0) else {
             return Ok(());
         };
-        let pawn = instantiate_copy(vm, id, index, PropertyPrefix::Ordinary)?;
+        // slice.cpp:366, `instantiateExport(dummyPackage_, index, 4)`: a new object, its references the definition
+        // store's objects (the body class among them, which the dialog loads).
+        let pawn = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
         self.inner.state.borrow_mut().dummy_pawn = Some(pawn);
-        // The copy's references are stand-ins of its own package; the dialog loads a stand-in only through the mission
-        // package, so the body class is handed over as the store's object for its export (the C++ loads it from its
-        // own package).
         let body = prop(&vm.space, pawn, "BodyClass")?.unwrap_or(Value::None);
-        let body = store_object(vm, &body)?;
         self.inner.mission.with_dialog(|d| -> Result<(), MissionError> {
             let dialog = d.pawn_dialog(vm, &body)?;
             if !dialog.name_tag.is_empty() {

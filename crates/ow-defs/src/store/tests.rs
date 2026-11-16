@@ -553,6 +553,125 @@ fn an_actor_archetype_outside_a_level_reads_from_4() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `DefStore::instance` (lane FIX-DIRECTOR-STORE, decision 2026-11-16-48): a new object on every call, decoded from
+/// the export, whose references are the store's objects for their paths; the store's own object is untouched.
+#[test]
+fn an_instance_is_a_new_object_whose_references_are_the_store_s() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut t = World::new("instance", IdentityPolicy::FirstInScanOrder, mode);
+        let gd = t
+            .defs
+            .packages
+            .load(&PackageName::parse("GD_Test").unwrap())
+            .unwrap();
+        let first = t
+            .defs
+            .instance(&mut t.w, gd, 1, PropertyPrefix::Ordinary)
+            .unwrap();
+        let second = t
+            .defs
+            .instance(&mut t.w, gd, 1, PropertyPrefix::Ordinary)
+            .unwrap();
+        let stored = t.get("GD_Test.Part_A");
+        assert_ne!(first, second, "{mode:?}: a new object on every call");
+        assert_ne!(first, stored, "{mode:?}: not the store's object");
+        assert_eq!(
+            t.w.heap.get(first).unwrap().origin,
+            Origin::Export {
+                package: gd,
+                index: 1
+            }
+        );
+        assert!(!t.defs.is_loaded(&t.w, first) && !t.defs.is_unloaded(&t.w, first));
+        assert_eq!(t.read(first, "ClipSize"), Value::Int(7));
+        // Its reference is the store's object for the path, which loads like any definition's reference.
+        let next = t.object(first, "Next");
+        assert_eq!(next, t.object(stored, "Next"), "{mode:?}");
+        t.defs.ensure_loaded(&mut t.w, next).unwrap();
+        assert_eq!(next, t.get("GD_Test.Part_B"));
+        assert_eq!(t.read(next, "Damage"), Value::Float(2.5));
+        // Writing to an instance changes neither the other instance nor the definition.
+        let clip = t.key("ClipSize");
+        t.w.write(first, PropAddr::scalar(clip), Value::Int(99))
+            .unwrap();
+        assert_eq!(t.read(second, "ClipSize"), Value::Int(7));
+        assert_eq!(t.read(stored, "ClipSize"), Value::Int(7));
+        // The prefix is the store's: an actor component at 8, and any other given prefix refused.
+        assert!(
+            t.defs
+                .instance(&mut t.w, gd, 4, PropertyPrefix::Component)
+                .is_ok()
+        );
+        assert_eq!(
+            t.defs.instance(&mut t.w, gd, 4, PropertyPrefix::Ordinary),
+            Err(DefError::PrefixMismatch {
+                object: "GD_Test.Comp_A".into(),
+                derived: PropertyPrefix::Component,
+                given: PropertyPrefix::Ordinary,
+            })
+        );
+        // Not an export: the C++ text.
+        let e = t
+            .defs
+            .instance(&mut t.w, gd, 0, PropertyPrefix::Ordinary)
+            .unwrap_err();
+        assert_eq!(e.to_string(), "unsupported exported object request");
+        // A class default object is not a definition.
+        let core = t
+            .defs
+            .packages
+            .load(&PackageName::parse("Core").unwrap())
+            .unwrap();
+        let cdo_index = t.defs.code.find_export(&t.defs.packages, core, "Default__Thing");
+        assert!(cdo_index > 0);
+        assert!(matches!(
+            t.defs
+                .instance(&mut t.w, core, cdo_index, PropertyPrefix::Ordinary),
+            Err(DefError::NotADefinition(_))
+        ));
+    }
+}
+
+/// An actor archetype outside a level (the director's and the dummy's kind) instantiates at 4, as the C++ reads it.
+#[test]
+fn an_actor_archetype_instance_reads_from_4() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-defs-arch-instance-{mode:?}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files: [(&str, &[u8]); 3] = [
+            ("Core.upk", &core()),
+            ("Engine.upk", &engine()),
+            ("GD_Arch.upk", &gd_arch()),
+        ];
+        let mut defs =
+            DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
+        let mut w = ObjectSpace::new();
+        let id = defs
+            .packages
+            .load(&PackageName::parse("GD_Arch").unwrap())
+            .unwrap();
+        let a = defs
+            .instance(&mut w, id, 2, PropertyPrefix::Ordinary)
+            .unwrap();
+        let b = defs
+            .instance(&mut w, id, 2, PropertyPrefix::Ordinary)
+            .unwrap();
+        assert_ne!(a, b);
+        assert!(matches!(
+            defs.instance(&mut w, id, 2, PropertyPrefix::PlacedActor),
+            Err(DefError::PrefixMismatch { .. })
+        ));
+        assert!(matches!(
+            defs.instance(&mut w, id, 3, PropertyPrefix::Ordinary),
+            Err(DefError::NotYet(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[test]
 fn a_component_that_is_not_an_actor_component_needs_its_stream_to_parse() {
     // A class deriving from Core.Component but not Engine.ActorComponent: its derived prefix (8) is used only when
