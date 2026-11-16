@@ -728,10 +728,11 @@ impl PlayDrawer {
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
         let eye = view.eye;
+        let lighting = self.lighting;
         let mut rgba = match (&mut self.arms, self.format) {
             (Some(arms), Some(format)) => crate::anim::arms::capture_with(device, queue, format, size, &mut |encoder, target| {
                 renderer.encode(device, queue, encoder, target, size, &vp, eye);
-                arms.encode(device, queue, encoder, target, size, &vp)
+                arms.encode(device, queue, encoder, target, size, &lighting)
             })?,
             _ => renderer.capture(device, queue, size, &vp, eye)?,
         };
@@ -800,7 +801,7 @@ impl Drawer for PlayDrawer {
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
         renderer.encode(device, queue, encoder, target, size, &vp, view.eye);
         if let Some(arms) = &mut self.arms {
-            arms.encode(device, queue, encoder, target, size, &vp)?;
+            arms.encode(device, queue, encoder, target, size, &self.lighting)?;
         }
         if let Some(overlay) = &self.overlay {
             overlay.encode(queue, encoder, target, size, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));

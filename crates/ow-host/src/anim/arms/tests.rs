@@ -71,28 +71,37 @@ fn installed_gpu_matches_cpu() {
         let matrices = crate::anim::skin::skin_matrices(&arms.skeleton, &pose);
         let cpu = skin(&arms.mesh, &matrices).unwrap();
         let palette: Vec<Mat4> = matrices.iter().map(Affine::to_engine).collect();
-        let got = gpu.read_back(&device, &queue, &palette).unwrap();
+        let got = gpu
+            .read_back(&device, &queue, &palette, &Mat4::IDENTITY)
+            .unwrap();
         let m = worst(&got, &cpu);
         model_worst = model_worst.max(m);
+        // Placed as the window places them: the model-space result, then the placement.
         let placement = arms.placement(&pose, &view).unwrap();
-        let world: Vec<Affine> = matrices.iter().map(|s| s.then(&placement)).collect();
-        let cpu_world = skin(&arms.mesh, &world).unwrap();
+        // Positions of a few thousand uu: f64 to f32 rounds.
+        let cpu_world: Vec<[f32; 3]> = cpu
+            .iter()
+            .map(|p| placement.point(p.map(f64::from)).map(|c| c as f32))
+            .collect();
+        let mut model_palette = Vec::new();
+        arms.palette_into(&pose, &mut model_palette);
         let got_world = gpu
-            .read_back(&device, &queue, &arms.palette(&pose, &placement))
+            .read_back(&device, &queue, &model_palette, &placement.to_engine())
             .unwrap();
         let w = worst(&got_world, &cpu_world);
         world_worst = world_worst.max(w);
-        // Where the hands sit relative to the eye, in the view's frame (x forward, y right, z up).
-        let camera = pose.model[arms.camera_bone].translation;
+        // Where the hands sit in the view's frame (x forward, y right, z up): through the inverse of the posed
+        // Camera bone, which the placement puts at the eye with its axes on the view's.
+        let to_view = crate::anim::math::rigid_inverse(&pose.model[arms.camera_bone]);
         let hand = |name: &str| {
             arms.mesh
                 .bone_index(name)
                 .map(|i| pose.model[i].translation)
         };
-        let rel = |p: [f64; 3]| [p[0] - camera[0], p[1] - camera[1], p[2] - camera[2]];
+        let rel = |p: [f64; 3]| to_view.point(p);
         let _ = writeln!(
             text,
-            "t {} s: model worst {} uu, world worst {} uu; R_Hand from Camera {:?}, L_Hand {:?}",
+            "t {} s: model worst {} uu, world worst {} uu; in the view's frame R_Hand {:?}, L_Hand {:?}",
             fmt_g(f64::from(u8::try_from(step).unwrap()) * 0.5, 3),
             fmt_g(f64::from(m), 3),
             fmt_g(f64::from(w), 3),
@@ -111,4 +120,56 @@ fn installed_gpu_matches_cpu() {
     // Placed thousands of uu from the origin, f32 has a coarser step: 1e-3 uu there.
     assert!(world_worst <= 1e-3, "{text}");
     assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
+}
+
+#[test]
+fn whole_steps_carry_the_remainder_and_cap_a_stall() {
+    let step = 1.0 / 60.0;
+    let mut carry = 0.0;
+    // Less than a step: nothing yet, all carried.
+    assert_eq!(whole_steps(&mut carry, 0.01, step), 0);
+    // 0.01 + 0.01 = 0.02: one step, 0.00333 carried.
+    assert_eq!(whole_steps(&mut carry, 0.01, step), 1);
+    assert!((carry - (0.02 - step)).abs() < 1e-12);
+    // The same total in other frame times gives the same number of steps.
+    let (mut a, mut b) = (0.0, 0.0);
+    let mut sa = 0;
+    for dt in [0.007, 0.033, 0.004, 0.25, 0.016] {
+        sa += whole_steps(&mut a, dt, step);
+    }
+    let sb = whole_steps(&mut b, 0.007 + 0.033 + 0.004 + 0.25 + 0.016, step);
+    assert_eq!(sa, sb);
+    // A stall past the cap advances MAX_POSE_STEPS and drops the rest.
+    let mut c = 0.0;
+    assert_eq!(whole_steps(&mut c, 60.0, step), MAX_POSE_STEPS);
+    assert!(c < step);
+    // Bad input changes nothing.
+    let mut d = 0.005;
+    assert_eq!(whole_steps(&mut d, f64::NAN, step), 0);
+    assert_eq!(whole_steps(&mut d, -1.0, step), 0);
+    assert_eq!(d, 0.005);
+}
+
+#[test]
+fn the_arms_projection_has_its_own_near_plane() {
+    // A point 2 uu in front of the eye: inside the arms' clip volume (near 1 uu), outside the scene's (near 10 uu).
+    let view = ViewPose {
+        eye: [0.0; 3],
+        rotation: Rotator::default(),
+        fly: false,
+    };
+    let arms = ArmsLayer::view_projection(&view, (1280, 720)).unwrap();
+    let scene = crate::play::view_projection(&view, 1280, 720).unwrap();
+    let depth = |m: &Mat4| {
+        let c = m.apply([2.0, 0.0, 0.0, 1.0]);
+        c[2] / c[3]
+    };
+    // Reverse-Z: depth 1 at the near plane, falling toward 0; past the near plane it exceeds 1 (clipped).
+    assert!(
+        depth(&arms) > 0.0 && depth(&arms) <= 1.0,
+        "{}",
+        depth(&arms)
+    );
+    assert!(depth(&scene) > 1.0, "{}", depth(&scene));
+    assert!(ArmsLayer::view_projection(&view, (0, 720)).is_none());
 }

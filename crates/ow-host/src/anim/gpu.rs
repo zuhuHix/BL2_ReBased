@@ -8,15 +8,20 @@
 //! tests compare with the CPU reference ([`SkinnedMesh::read_back`]) is the data that is drawn, not a second path.
 //!
 //! **The palette** is one 4 x 4 matrix per bone, column-major, as `crate::frame::Affine::to_engine` gives it (the
-//! one conversion point, H3): for drawing, each bone's skin matrix followed by the mesh's placement in the world;
-//! for the tests, the skin matrices alone. The shader multiplies column vectors (`m * p`), as the scene shader does.
+//! one conversion point, H3): each bone's skin matrix, in the mesh's own (model) space. The skinned vertex is then
+//! placed in the world by one more matrix, the placement, after the weighted sum. Skinning in model space keeps a
+//! weight sum a little off 1 (`ow_assets::skeletal` allows 1e-3) from scaling the world position: off by 0.001 at
+//! 170 uu from the mesh's origin is 0.17 uu, where at 3,600 uu out in the world it would be 3.6 uu. The weights are
+//! used as stored, as in the CPU reference; nothing is renormalised. The shader multiplies column vectors (`m * p`),
+//! as the scene shader does.
 //!
 //! **Normals.** An ActorX mesh has none, so [`bind_normals`] builds them at the bind pose: the area-weighted face
 //! normals summed per welded point, with the face orientation of UE3's index order (`crate::render`: the order runs
 //! against the outward normal). Skinned with the palette's 3 x 3 part, which is a rotation here (no scale).
 //!
-//! **Look.** Plain diffuse: one flat colour, the scene's sun and ambient (`crate::render::SUN_DIRECTION`, `SUN`,
-//! `AMBIENT`), both faces drawn (the back face lit with the flipped normal). No texture or material: H8 owns them.
+//! **Look.** Plain diffuse: one flat colour lit by the scene's own [`Lighting`] (H8) with the scene shader's rule:
+//! the sun along its direction plus the sky's two hemispheres by the normal's height, times the exposure. Both faces
+//! are drawn (the back face lit with the flipped normal). No texture or material: H8 owns them.
 //!
 //! **Depth.** Its own reverse-Z depth buffer, cleared before the mesh is drawn over the scene's colour. The game's
 //! first-person depth handling is not read; drawing the arms over the world (they are never hidden by a wall) is a
@@ -28,7 +33,7 @@ use ow_assets::skeletal::SkeletalMesh;
 use wgpu::util::DeviceExt;
 
 use crate::frame::Mat4;
-use crate::render::{AMBIENT, DEPTH_FORMAT, SUN, SUN_DIRECTION};
+use crate::render::{DEPTH_FORMAT, Lighting};
 
 /// Most bones the palette holds (the installed arms have 47, the body 27).
 pub const MAX_BONES: usize = 256;
@@ -38,9 +43,14 @@ pub const WORKGROUP: u32 = 64;
 pub const SKIN_COLOR: [f32; 3] = [0.55, 0.42, 0.36];
 /// Bytes of one skinned vertex in the output buffer: position (vec4) and normal (vec4).
 pub const OUT_VERTEX_BYTES: u64 = 32;
+/// Bytes of the compute uniform: the placement (mat4) and the vertex count (vec4<u32>).
+const PARAMS_BYTES: u64 = 80;
+/// Bytes of the draw uniform: view-projection, sun direction, sun, sky upper, sky lower, exposure, colour.
+const GLOBALS_BYTES: u64 = 160;
 
 const SHADER: &str = r#"
 struct Params {
+    place: mat4x4<f32>,
     count: vec4<u32>,
 };
 
@@ -70,14 +80,18 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             sn = sn + w[k] * (m * n);
         }
     }
-    dst[2u * i] = vec4<f32>(sp.xyz, 1.0);
-    dst[2u * i + 1u] = vec4<f32>(sn.xyz, 0.0);
+    // Skinned in model space; then placed (module notes).
+    dst[2u * i] = params.place * vec4<f32>(sp.xyz, 1.0);
+    dst[2u * i + 1u] = params.place * vec4<f32>(sn.xyz, 0.0);
 }
 
 struct Globals {
     view_proj: mat4x4<f32>,
+    sun_dir: vec4<f32>,
     sun: vec4<f32>,
-    ambient: vec4<f32>,
+    sky_upper: vec4<f32>,
+    sky_lower: vec4<f32>,
+    params: vec4<f32>,
     color: vec4<f32>,
 };
 
@@ -102,11 +116,16 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) ve
     if (!front) {
         n = -n;
     }
+    // The scene shader's lit rule (crate::render, H8).
     let len = length(n);
-    var light = globals.ambient.x;
+    var unit = vec3<f32>(0.0, 0.0, 1.0);
+    var sun = vec3<f32>(0.0, 0.0, 0.0);
     if (len > 0.0) {
-        light = light + globals.sun.w * max(dot(n / len, normalize(globals.sun.xyz)), 0.0);
+        unit = n / len;
+        sun = globals.sun.rgb * max(dot(unit, normalize(globals.sun_dir.xyz)), 0.0);
     }
+    let sky = mix(globals.sky_lower.rgb, globals.sky_upper.rgb, unit.z * 0.5 + 0.5);
+    let light = (sky + sun) * globals.params.x;
     return vec4<f32>(globals.color.rgb * light, 1.0);
 }
 "#;
@@ -174,7 +193,7 @@ pub struct SkinnedMesh {
     out: wgpu::Buffer,
     indices: wgpu::Buffer,
     /// Kept with the mesh; the compute bind group reads it.
-    _params: wgpu::Buffer,
+    params: wgpu::Buffer,
     compute: wgpu::ComputePipeline,
     compute_group: wgpu::BindGroup,
     draw: wgpu::RenderPipeline,
@@ -269,13 +288,11 @@ impl SkinnedMesh {
                 .collect::<Vec<u8>>(),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("skin params"),
-            contents: &[vertex_count, 0, 0, 0]
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect::<Vec<u8>>(),
-            usage: wgpu::BufferUsages::UNIFORM,
+            size: PARAMS_BYTES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("skin shader"),
@@ -352,7 +369,7 @@ impl SkinnedMesh {
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("skin globals"),
-            size: 112,
+            size: GLOBALS_BYTES,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -429,7 +446,7 @@ impl SkinnedMesh {
             palette,
             out,
             indices,
-            _params: params,
+            params,
             compute,
             compute_group,
             draw,
@@ -443,13 +460,14 @@ impl SkinnedMesh {
         self.bone_count
     }
 
-    /// Writes the palette (one matrix per bone) and records the skinning pass. Refuses a palette of another length
-    /// or with a non-finite entry.
+    /// Writes the palette (one model-space matrix per bone) and the placement, and records the skinning pass.
+    /// Refuses a palette of another length, or a palette or placement with a non-finite entry.
     pub fn skin(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         palette: &[Mat4],
+        place: &Mat4,
     ) -> Result<(), String> {
         if palette.len() != self.bone_count {
             return Err(format!(
@@ -461,7 +479,15 @@ impl SkinnedMesh {
         if !palette.iter().all(Mat4::is_finite) {
             return Err("a palette matrix is not finite".into());
         }
+        if !place.is_finite() {
+            return Err("the placement is not finite".into());
+        }
         queue.write_buffer(&self.palette, 0, &palette_bytes(palette));
+        let mut params = palette_bytes(std::slice::from_ref(place));
+        for v in [self.vertex_count, 0, 0, 0] {
+            params.extend_from_slice(&v.to_le_bytes());
+        }
+        queue.write_buffer(&self.params, 0, &params);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("skin"),
             timestamp_writes: None,
@@ -499,7 +525,9 @@ impl SkinnedMesh {
     }
 
     /// Records the draw of the skinned vertices over `target` (its colour kept, a fresh depth buffer), seen through
-    /// `view_proj`. Call after [`SkinnedMesh::skin`] in the same encoder.
+    /// `view_proj` and lit by `lighting`. Call after [`SkinnedMesh::skin`] in the same encoder.
+    // The frame's parts, as `crate::render::SceneRenderer::encode` takes them (the same allow there).
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -508,24 +536,19 @@ impl SkinnedMesh {
         target: &wgpu::TextureView,
         size: (u32, u32),
         view_proj: &Mat4,
+        lighting: &Lighting,
     ) {
-        let mut globals = Vec::with_capacity(112);
-        for v in view_proj.cols.iter().flatten() {
-            globals.extend_from_slice(&v.to_le_bytes());
+        let mut globals = palette_bytes(std::slice::from_ref(view_proj));
+        for v3 in [
+            lighting.sun_direction,
+            lighting.sun,
+            lighting.sky_upper,
+            lighting.sky_lower,
+        ] {
+            globals.extend(floats(&[v3[0], v3[1], v3[2], 0.0]));
         }
-        let sun = [SUN_DIRECTION[0], SUN_DIRECTION[1], SUN_DIRECTION[2], SUN];
-        let rest = [
-            AMBIENT,
-            0.0,
-            0.0,
-            0.0,
-            SKIN_COLOR[0],
-            SKIN_COLOR[1],
-            SKIN_COLOR[2],
-            1.0,
-        ];
-        globals.extend(floats(&sun));
-        globals.extend(floats(&rest));
+        globals.extend(floats(&[lighting.exposure, 0.0, 0.0, 0.0]));
+        globals.extend(floats(&[SKIN_COLOR[0], SKIN_COLOR[1], SKIN_COLOR[2], 1.0]));
         queue.write_buffer(&self.globals, 0, &globals);
         let depth = self.depth_view(device, size.0, size.1);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -556,12 +579,14 @@ impl SkinnedMesh {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 
-    /// Skins with `palette` and reads the skinned positions back (blocking): one `[x, y, z]` per vertex. For tests.
+    /// Skins with `palette` and `place` and reads the skinned positions back (blocking): one `[x, y, z]` per vertex.
+    /// For tests.
     pub fn read_back(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         palette: &[Mat4],
+        place: &Mat4,
     ) -> Result<Vec<[f32; 3]>, String> {
         let bytes = u64::from(self.vertex_count) * OUT_VERTEX_BYTES;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -573,7 +598,7 @@ impl SkinnedMesh {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("skin readback"),
         });
-        self.skin(queue, &mut encoder, palette)?;
+        self.skin(queue, &mut encoder, palette, place)?;
         encoder.copy_buffer_to_buffer(&self.out, 0, &readback, 0, bytes);
         queue.submit([encoder.finish()]);
         let slice = readback.slice(..);

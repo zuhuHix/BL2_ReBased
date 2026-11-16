@@ -6,14 +6,25 @@
 //! **What is posed.** The hands tree (`GD_PlayerShared.Character.AnimTree_PlayerHands`) with no input set: the idle
 //! path, as H7's installed report drives it, with the same AnimSets (the hands component's three and the pistol's).
 //! Its two `NotYet` nodes are passed to their first child ([`Unsupported::PassFirstChild`]), as in that report.
-//! The clock is the simulation's (`Snapshot::sim_time`), so a scripted run poses the same way whatever the frame
-//! times.
+//! The clock is the simulation's (`Snapshot::sim_time`), and the pose advances in whole simulation steps
+//! (`crate::play::step_seconds`, 1/60 s), the remainder carried to the next frame. So the pose after `n` steps is the
+//! same whatever the frame times; which step a frame shows still depends on when it is drawn.
 //!
 //! **Where the arms go** (a host choice, UNVERIFIED: the game's rule, which `WillowAnimNode_AddCameraBone` takes part
 //! in, is not read). The posed `Camera` bone is put at the eye with its axes on the view's: the mesh's placement is
 //! the inverse of that bone's model matrix, then the eye's placement (`frame::Placement` of the eye and the view
 //! rotation, unit scale). The retired UE5 host anchored the arms on the same bone. Every matrix goes through
-//! `crate::frame` (`Affine::then`, `Affine::to_engine`): this module converts nothing itself.
+//! `crate::frame` (`Affine::then`, `Affine::to_engine`, the perspective and view matrices): this module converts
+//! nothing itself.
+//!
+//! **Their own projection** (a host choice, UNVERIFIED): the scene's vertical field of view
+//! (`crate::play::vertical_fov_deg`) with a near plane of [`ARMS_NEAR`] uu, not the scene's 10 uu
+//! (`crate::play::NEAR`), which cut the forearms where they run back toward the eye. The arms clear their own depth
+//! (`super::gpu`), so the two near planes do not meet. The game's first-person near plane and field of view are not
+//! read.
+//!
+//! **Debt.** [`capture_with`] repeats the readback of `crate::render::SceneRenderer::capture`, so the arms can be
+//! drawn into the same captured frame without changing that file; the two should become one helper.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -30,12 +41,18 @@ use super::tree::eval::DriverState;
 use super::tree::report::{HANDS_SETS, HANDS_TREE, library, locate};
 use super::tree::{ClipLibrary, Driver, Inputs, TreeDef, Unsupported, load_tree};
 use crate::frame::{Affine, Mat4, Placement};
+use crate::render::Lighting;
 use crate::sim::ViewPose;
 
 /// The bone the arms hang from (module notes).
 pub const CAMERA_BONE: &str = "Camera";
 /// The arms mesh in a UModel export folder of `GD_Siren_Streaming_SF`.
 pub const ARMS_MESH: &str = "SkeletalMesh3/Hands_Siren.psk";
+/// The arms' near plane, uu (module notes: a host choice).
+pub const ARMS_NEAR: f32 = 1.0;
+/// Most simulation steps one frame advances the pose by: a longer gap (a stall) is advanced in this many steps and
+/// the rest dropped, as the simulation itself drops time (`crate::play::MAX_STEPS_PER_FRAME`).
+pub const MAX_POSE_STEPS: u32 = 240;
 
 /// The arms, loaded: mesh, skeleton, tree, clips, bind normals, and the driver's state between frames.
 pub struct Arms {
@@ -79,8 +96,8 @@ pub fn load(
 }
 
 impl Arms {
-    /// Ticks the tree by `dt` seconds and returns the pose.
-    pub fn advance(&mut self, dt: f64) -> Result<Pose, String> {
+    /// Ticks the tree `steps` times by `step` seconds and returns the pose.
+    pub fn advance_steps(&mut self, steps: u32, step: f64) -> Result<Pose, String> {
         let mut d = match self.state.take() {
             Some(s) => Driver::resume(
                 &self.tree,
@@ -93,7 +110,9 @@ impl Arms {
         }
         .map_err(|e| e.to_string())?;
         d.unsupported = Unsupported::PassFirstChild;
-        d.tick(dt).map_err(|e| e.to_string())?;
+        for _ in 0..steps {
+            d.tick(step).map_err(|e| e.to_string())?;
+        }
         let locals = d.locals().map_err(|e| e.to_string())?;
         // Notifies are reported, not applied (H7); a long session must not keep them.
         d.log.notifies.clear();
@@ -112,12 +131,20 @@ impl Arms {
         placed.is_finite().then_some(placed)
     }
 
-    /// One palette matrix per bone: each bone's skin matrix, then `placement`, in the engine's form.
-    pub fn palette(&self, pose: &Pose, placement: &Affine) -> Vec<Mat4> {
-        skin_matrices(&self.skeleton, pose)
-            .iter()
-            .map(|s| s.then(placement).to_engine())
-            .collect()
+    /// Ticks the tree once by `dt` seconds and returns the pose.
+    pub fn advance(&mut self, dt: f64) -> Result<Pose, String> {
+        self.advance_steps(1, dt)
+    }
+
+    /// The palette into `out` (cleared first, its allocation kept): each bone's skin matrix in model space, in the
+    /// engine's form. The placement goes to the GPU apart (`super::gpu`).
+    pub fn palette_into(&self, pose: &Pose, out: &mut Vec<Mat4>) {
+        out.clear();
+        out.extend(
+            skin_matrices(&self.skeleton, pose)
+                .iter()
+                .map(Affine::to_engine),
+        );
     }
 }
 
@@ -125,21 +152,27 @@ impl Arms {
 /// simulation's clock.
 pub struct ArmsLayer {
     arms: Arms,
+    /// The palette of the last frame, its allocation reused.
+    palette: Vec<Mat4>,
     gpu: Option<SkinnedMesh>,
     view: Option<ViewPose>,
-    /// The simulation time of the last snapshot, and the one the pose was last advanced to.
+    /// The simulation time of the last snapshot, and of the last frame drawn.
     sim_time: Duration,
-    posed_at: Duration,
+    drawn_at: Duration,
+    /// Simulated seconds not yet advanced: less than one step after each frame.
+    carry: f64,
 }
 
 impl ArmsLayer {
     pub fn new(arms: Arms) -> ArmsLayer {
         ArmsLayer {
             arms,
+            palette: Vec::new(),
             gpu: None,
             view: None,
             sim_time: Duration::ZERO,
-            posed_at: Duration::ZERO,
+            drawn_at: Duration::ZERO,
+            carry: 0.0,
         }
     }
 
@@ -165,7 +198,29 @@ impl ArmsLayer {
         self.sim_time = sim_time;
     }
 
-    /// Advances the pose to the latest simulation time, skins, and draws over `target`.
+    /// How many whole simulation steps the pose advances by now, the remainder carried (module notes).
+    fn steps_due(&mut self) -> u32 {
+        let delta = self.sim_time.saturating_sub(self.drawn_at).as_secs_f64();
+        self.drawn_at = self.sim_time;
+        whole_steps(&mut self.carry, delta, crate::play::step_seconds())
+    }
+
+    /// The arms' view-projection: the scene's vertical field of view with the [`ARMS_NEAR`] plane, through
+    /// `crate::frame`. `None` for a zero size or a view the boundary refuses.
+    pub fn view_projection(view: &ViewPose, size: (u32, u32)) -> Option<Mat4> {
+        if size.0 == 0 || size.1 == 0 {
+            return None;
+        }
+        // u32 to f32 rounds above 2^24, far past any drawable.
+        let aspect = size.0 as f32 / size.1 as f32;
+        // The field of view is about 43 degrees: f64 to f32 rounds.
+        let fov = crate::play::vertical_fov_deg() as f32;
+        let projection = crate::frame::perspective_reverse_z_infinite(fov, aspect, ARMS_NEAR)?;
+        Some(projection.mul(&crate::frame::view_matrix(view.eye, view.rotation)?))
+    }
+
+    /// Advances the pose to the latest simulation time in whole steps, skins, and draws over `target` with the
+    /// arms' own projection, lit by the scene's `lighting`.
     pub fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -173,22 +228,40 @@ impl ArmsLayer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         size: (u32, u32),
-        view_proj: &Mat4,
+        lighting: &Lighting,
     ) -> Result<(), String> {
         let view = self.view.ok_or("the arms have no view yet")?;
-        let dt = self.sim_time.saturating_sub(self.posed_at).as_secs_f64();
-        self.posed_at = self.sim_time;
-        let pose = self.arms.advance(dt)?;
+        let steps = self.steps_due();
+        let pose = self
+            .arms
+            .advance_steps(steps, crate::play::step_seconds())?;
         let placement = self
             .arms
             .placement(&pose, &view)
             .ok_or("the arms' placement is not finite")?;
-        let palette = self.arms.palette(&pose, &placement);
+        let view_proj = ArmsLayer::view_projection(&view, size)
+            .ok_or("the arms' view matrices are not finite")?;
+        self.arms.palette_into(&pose, &mut self.palette);
         let gpu = self.gpu.as_mut().ok_or("the arms are not attached")?;
-        gpu.skin(queue, encoder, &palette)?;
-        gpu.draw(device, queue, encoder, target, size, view_proj);
+        gpu.skin(queue, encoder, &self.palette, &placement.to_engine())?;
+        gpu.draw(device, queue, encoder, target, size, &view_proj, lighting);
         Ok(())
     }
+}
+
+/// Adds `delta` seconds to `carry` and takes the whole `step`s out of it: their count, at most [`MAX_POSE_STEPS`]
+/// (steps past that are dropped with the carry). The carry stays below one step.
+pub fn whole_steps(carry: &mut f64, delta: f64, step: f64) -> u32 {
+    if delta.is_finite() && delta > 0.0 {
+        *carry += delta;
+    }
+    let whole = (*carry / step).floor();
+    if !(step > 0.0 && whole.is_finite() && whole >= 1.0) {
+        return 0;
+    }
+    *carry -= whole * step;
+    // Checked: 1 <= whole, and it is capped at MAX_POSE_STEPS, so the float-to-int `as` is exact here (N5).
+    whole.min(f64::from(MAX_POSE_STEPS)) as u32
 }
 
 /// Draws one frame with `encode` into a texture of its own and reads it back: `width` x `height` RGBA bytes, rows top

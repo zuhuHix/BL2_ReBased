@@ -27,22 +27,34 @@ The checks are against stage 1's CPU reference and H4-PLAY's path digests.
     reference. The skinned vertices go to a buffer that the draw then binds as its vertex buffer, so the GPU test's
     readback is the drawn data itself.
   - The palette is one column-major matrix per bone from `frame::Affine::to_engine`, so `frame.rs` stays the one
-    conversion point: each bone's skin matrix, then the mesh's placement.
+    conversion point. It holds each bone's skin matrix in model space. The mesh's placement in the world is applied
+    as one more matrix after the weighted sum, so a weight sum a little off 1 (the reader allows 1e-3) is not
+    scaled by the world position (review r1). The weights are used as stored, as in the CPU reference; nothing is
+    renormalised.
   - Refused at upload: more than 256 bones, a vertex naming a missing bone, more than four influences, an index past
-    the vertices. Refused when skinning: a palette of the wrong length or with a non-finite entry.
+    the vertices. Refused when skinning: a palette of the wrong length, or a palette or placement with a non-finite
+    entry.
   - **Normals** are built at the bind pose from the faces (an ActorX mesh has none). They are area-weighted, summed
     per welded point, and oriented against UE3's index order as `crate::render` settled it. A synthetic triangle
     checks the sign.
-  - **Look:** one flat skin colour (a host choice) under the scene's sun and ambient, both faces drawn. No texture
-    or material: H8 owns them.
+  - **Look:** one flat skin colour (a host choice), both faces drawn, lit by the scene's own `Lighting` (H8) with
+    the scene shader's rule: the sun along its direction plus the sky's two hemispheres by the normal's height,
+    times the exposure. Before review r1 it used stage 2's fixed sun and ambient, which made the hand look nearly
+    white in H8's exposed scene. No texture or material: H8 owns them.
   - **Depth:** a second pass after the scene, with its own depth buffer cleared, so the arms are never hidden by a
     wall. The game's first-person depth handling is not read; this is a host choice.
+  - **Their own projection (a host choice, UNVERIFIED):** the scene's vertical field of view with a 1 uu near plane
+    (`anim::arms::ARMS_NEAR`), through `frame::perspective_reverse_z_infinite`. The scene's 10 uu near plane cut the
+    forearms where they run back toward the eye (review r1). The arms clear their own depth, so the two planes do
+    not meet.
 - **Pose and placement** (`anim/arms.rs`).
   - The hands tree `GD_PlayerShared.Character.AnimTree_PlayerHands` is driven with no input set: its idle path,
     with the AnimSets of H7's report (the hands component's three, plus the pistol's for the weapon). Its two
     `NotYet` nodes are passed to their first child, as in that report.
-  - The clock is the simulation's (`Snapshot::sim_time`): the pose advances by the simulated time since the last
-    drawn frame, so a scripted run poses the same way whatever the frame times.
+  - The clock is the simulation's (`Snapshot::sim_time`). The pose advances in whole simulation steps (1/60 s), the
+    remainder carried to the next frame, at most 240 steps a frame. So the pose after `n` steps is the same whatever
+    the frame times; which step a frame shows still depends on when it is drawn. (Before review r1 the pose ticked by
+    each frame's time, so it depended on how the frame times summed.)
   - **Placement (a host choice, UNVERIFIED):** the posed `Camera` bone is put at the eye with its axes on the
     view's. The mesh's placement is the inverse of that bone's model matrix, then the eye's (`frame::Placement` of
     the eye and the view rotation, unit scale). The retired UE5 host anchored the arms on the same bone. The game's
@@ -54,14 +66,21 @@ The checks are against stage 1's CPU reference and H4-PLAY's path digests.
       100 uu away, within 1e-3);
     - bad meshes and palettes are refused;
     - the skinned strip is drawn where the CPU puts it (a 64 x 64 capture);
-    - a resumed driver matches an uninterrupted one.
+    - a resumed driver matches an uninterrupted one;
+    - review r1: a weight of 0.999 placed 3,600 uu out lands 0.01 uu from weight 1's spot (it would be 3.6 uu with
+      the placement inside the palette); the step count is the same for one frame or five of the same total, a
+      stall is capped, and bad times change nothing; a point 2 uu ahead is inside the arms' clip volume and
+      outside the scene's.
 
     The GPU tests need an adapter and are `#[ignore]`d in the ordinary run, as `render::tests` are; on the desktop
     (RTX 4070) all pass.
   - **Installed game, headless** (`anim::arms::tests::installed_gpu_matches_cpu`; `local/p2/h6-skin/gpu_vs_cpu.txt`):
     - `Hands_Siren` (47 bones, 2,204 vertices, 3,692 triangles), posed by the hands tree at six times 0.5 s apart.
     - GPU against CPU: worst 3.05e-5 uu in model space.
-    - Placed at an eye about 3,600 uu from the origin: worst 4.88e-4 uu, one `f32` step at that size.
+    - Placed at an eye about 3,600 uu from the origin: worst 4.88e-4 uu, one `f32` step at that size; 2.44e-4 uu
+      after review r1 (skinned in model space, then placed). The hands' positions in the view's frame (through the
+      inverse of the posed `Camera` bone): the right hand about 47 uu ahead, 17 right and 22 below the eye, the
+      left about 45 ahead, 9 right and 24 below.
     - The test fails above 1e-4 uu (model space) and 1e-3 uu (placed).
   - **Installed game, in the window** (under `tools/ue_lock.ps1`):
     - Run: `ow-host --game <install> --map Sanctuary --play --play-script walk60.txt --arms <export folder>
@@ -74,10 +93,12 @@ The checks are against stage 1's CPU reference and H4-PLAY's path digests.
     - Whether that matches where the game draws Maya's idle hands has not been compared with the game.
 - **Not done (optional in the brief):** the third-person body, the weapon mesh, textures.
 - **Open items.**
-  - The game's first-person placement and depth rules (the camera bone, `WillowAnimNode_AddCameraBone`, the
-    first-person field of view).
+  - The game's first-person placement and depth rules (the camera bone, `WillowAnimNode_AddCameraBone`).
+  - The game's first-person near plane and field of view (the arms use 1 uu and the scene's field of view).
   - A comparison with a frame of the running game (a capture-session ask).
   - The arms' material (H8).
   - The body mesh in third person.
   - The weapon AnimSet joining the component at run time (H7's open item).
   - A GATES entry for the GPU tests and the arms window run (proposed in the lane handoff).
+  - Debt: `anim::arms::capture_with` repeats `SceneRenderer::capture`'s readback; the two should become one helper.
+  - A new `Driver` is built from the saved state each frame (the palette's vector is reused).
