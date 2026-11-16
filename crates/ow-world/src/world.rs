@@ -54,7 +54,7 @@ use crate::actors::{
     self, Actors, actors_of, arg_object, byte, float, is_destroyed, object, physics, send_event,
     set_field,
 };
-use crate::query::{self, WorldQuery};
+use crate::query::{self, QueryKind, WorldQuery};
 use crate::timers::{self, Timers};
 
 /// The record of the tick.
@@ -181,6 +181,11 @@ impl World {
             .try_borrow_mut()
             .map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?
             .follow_world_info(actors.clone());
+        // The player-controller context query (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
+        query
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?
+            .register(QueryKind::PlayerController, query::player_controller_handler())?;
         let timers = vm.add_service(Timers::new())?;
         let balance = vm.add_service(balance)?;
         let walk: ActorWalkFn = Rc::new(|vm: &Vm, which| {

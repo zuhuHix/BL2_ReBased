@@ -181,8 +181,9 @@ maximum while not draining, and starts draining only when `OnReleasedTarget` dea
 cannot be lifted, or no target, the manager is never activated and the drain runs from the cast (section 7).
 
 Data (installed packages): Maya's pool is `D_Resourcepools.PlayerPools.ActiveSkillCooldownPool_Siren`: resource
-`ActiveSkillCooldown`, `BaseMaxValue` = the designer attribute `GD_Siren_Skills.Misc.Cooldown_Phaselock` (13, from
-PHASELOCK_STOCK_DATA), `BaseConsumptionRate` 1, no regeneration rates, no `OnResource*` behaviors, `StartingValue` and the
+`ActiveSkillCooldown`, `BaseMaxValue` = the attribute `GD_Siren_Skills.Misc.Cooldown_Phaselock` (13, from
+PHASELOCK_STOCK_DATA; an `InventoryAttributeDefinition` with a `PlayerControllerAttributeContextResolver` and a constant value
+resolver in the installed data, not a designer attribute: corrected 2026-11-16, decision 2026-11-16-69), `BaseConsumptionRate` 1, no regeneration rates, no `OnResource*` behaviors, `StartingValue` and the
 `StartWith*` flags left at their defaults (so the pool should start at 0, ready; the pool creation native was not read,
 UNVERIFIED). `bUpdateCurrentValueOnExtremaChange` is false (a maximum change does not move the current value). The class
 `CharClass_Siren` points to it as `SkillCooldownPoolDefinition`.

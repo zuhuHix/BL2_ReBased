@@ -186,7 +186,33 @@ pub fn ensure_loaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> 
         return Ok(());
     }
     match defs {
-        Some(defs) => Ok(defs.ensure_loaded(space, obj)?),
+        Some(defs) => {
+            defs.ensure_loaded(space, obj)?;
+            // A handle the store leaves a stand-in (an object inside a class default object, for one) holds no field
+            // although its class has some: reading it would be a heap error, so it is `NotYet` naming the object (lane
+            // FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
+            let o = space.heap.get(obj)?;
+            let fields = space.classes.get_layout(o.class).map_or(0, |l| l.slot_count());
+            if o.slots.is_empty() && fields > 0 {
+                let path = format!(
+                    "{} {}",
+                    space
+                        .classes
+                        .get_layout(o.class)
+                        .map_or_else(String::new, |l| l.path().as_str().to_string()),
+                    space.names.text(o.name)
+                );
+                return Err(NotYet::not_read(
+                    format!(
+                        "the reference ({path}) stays a stand-in the definition store does not load (an object inside \
+                         a class default object is one), so its fields cannot be read"
+                    ),
+                    CHAINS,
+                )
+                .into());
+            }
+            Ok(())
+        }
         None if slotless => Err(NotYet::layer_absent(
             format!("loading the unloaded definition {obj:?}"),
             "ow-defs",

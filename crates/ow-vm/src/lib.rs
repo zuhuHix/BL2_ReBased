@@ -14,6 +14,7 @@ pub mod error;
 pub mod interp;
 pub mod latent;
 pub mod natives_core;
+pub mod path_name;
 pub mod services;
 pub mod states;
 pub mod sweep;

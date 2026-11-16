@@ -441,6 +441,8 @@ fn register_with(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError
     strings(vm)?;
     vectors(vm)?;
     rotators(vm)?;
+    // Object.PathName (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
+    crate::path_name::register(vm)?;
     objects(vm, states)
 }
 
