@@ -51,10 +51,12 @@ The checks are against stage 1's CPU reference and H4-PLAY's path digests.
   - The hands tree `GD_PlayerShared.Character.AnimTree_PlayerHands` is driven with no input set: its idle path,
     with the AnimSets of H7's report (the hands component's three, plus the pistol's for the weapon). Its two
     `NotYet` nodes are passed to their first child, as in that report.
-  - The clock is the simulation's (`Snapshot::sim_time`). The pose advances in whole simulation steps (1/60 s), the
-    remainder carried to the next frame, at most 240 steps a frame. So the pose after `n` steps is the same whatever
-    the frame times; which step a frame shows still depends on when it is drawn. (Before review r1 the pose ticked by
-    each frame's time, so it depended on how the frame times summed.)
+  - The clock is the host's frame-time clock (`Snapshot::sim_time`, the sum of the real frame times, dropped time
+    included), cut into step-sized chunks (1/60 s) with the remainder carried, at most 240 chunks a frame. So the
+    pose after `n` chunks is the same whatever the frame times. It is not tied to `Snapshot::step`: after a stall
+    the simulation takes at most 8 steps and drops the rest, while the pose runs up to 240 chunks (on a 250 ms frame,
+    8 steps against 15 chunks). (Before review r1 the pose ticked by each frame's time; review r2 corrected this
+    sentence, which had said the pose drops time as the simulation does.)
   - **Placement (a host choice, UNVERIFIED):** the posed `Camera` bone is put at the eye with its axes on the
     view's. The mesh's placement is the inverse of that bone's model matrix, then the eye's (`frame::Placement` of
     the eye and the view rotation, unit scale). The retired UE5 host anchored the arms on the same bone. The game's
@@ -82,7 +84,9 @@ The checks are against stage 1's CPU reference and H4-PLAY's path digests.
       inverse of the posed `Camera` bone): the right hand about 47 uu ahead, 17 right and 22 below the eye, the
       left about 45 ahead, 9 right and 24 below.
     - The test fails above 1e-4 uu (model space) and 1e-3 uu (placed).
-  - **Installed game, in the window** (under `tools/ue_lock.ps1`):
+  - **Installed game, in the window** (under `tools/ue_lock.ps1`), all made **before review r1**, so with stage 2's
+    fixed lighting, the scene's 10 uu near plane and the per-frame clock; not re-run after review r1 or r2 (the
+    desktop was short of commit memory):
     - Run: `ow-host --game <install> --map Sanctuary --play --play-script walk60.txt --arms <export folder>
       --size 1280x720 --screenshot <png> --no-vsync`, with H4-PLAY's 60 s script.
     - Exit 0. All twenty segment digests ran, and the end digest is `d7b95ebfe14df774`, H4-PLAY's baseline: drawing

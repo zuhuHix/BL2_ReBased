@@ -143,6 +143,10 @@ fn whole_steps_carry_the_remainder_and_cap_a_stall() {
     let mut c = 0.0;
     assert_eq!(whole_steps(&mut c, 60.0, step), MAX_POSE_STEPS);
     assert!(c < step);
+    // A huge jump still leaves the carry in 0..step.
+    let mut e = 0.0;
+    assert_eq!(whole_steps(&mut e, 1.0e12, step), MAX_POSE_STEPS);
+    assert!((0.0..step).contains(&e), "{e}");
     // Bad input changes nothing.
     let mut d = 0.005;
     assert_eq!(whole_steps(&mut d, f64::NAN, step), 0);

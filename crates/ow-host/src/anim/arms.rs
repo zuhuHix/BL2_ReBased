@@ -6,9 +6,12 @@
 //! **What is posed.** The hands tree (`GD_PlayerShared.Character.AnimTree_PlayerHands`) with no input set: the idle
 //! path, as H7's installed report drives it, with the same AnimSets (the hands component's three and the pistol's).
 //! Its two `NotYet` nodes are passed to their first child ([`Unsupported::PassFirstChild`]), as in that report.
-//! The clock is the simulation's (`Snapshot::sim_time`), and the pose advances in whole simulation steps
-//! (`crate::play::step_seconds`, 1/60 s), the remainder carried to the next frame. So the pose after `n` steps is the
-//! same whatever the frame times; which step a frame shows still depends on when it is drawn.
+//! The clock is the host's frame-time clock (`Snapshot::sim_time`, the sum of the real frame times, dropped time
+//! included), cut into step-sized chunks (`crate::play::step_seconds`, 1/60 s) with the remainder carried to the
+//! next frame. So the pose after `n` chunks is the same whatever the frame times. It is not tied to
+//! `Snapshot::step`: after a stall the simulation takes at most `crate::play::MAX_STEPS_PER_FRAME` (8) steps and
+//! drops the rest, while the pose runs up to [`MAX_POSE_STEPS`] (240) chunks. On a 250 ms frame the simulation
+//! takes 8 steps and the arms 15.
 //!
 //! **Where the arms go** (a host choice, UNVERIFIED: the game's rule, which `WillowAnimNode_AddCameraBone` takes part
 //! in, is not read). The posed `Camera` bone is put at the eye with its axes on the view's: the mesh's placement is
@@ -50,8 +53,8 @@ pub const CAMERA_BONE: &str = "Camera";
 pub const ARMS_MESH: &str = "SkeletalMesh3/Hands_Siren.psk";
 /// The arms' near plane, uu (module notes: a host choice).
 pub const ARMS_NEAR: f32 = 1.0;
-/// Most simulation steps one frame advances the pose by: a longer gap (a stall) is advanced in this many steps and
-/// the rest dropped, as the simulation itself drops time (`crate::play::MAX_STEPS_PER_FRAME`).
+/// Most step-sized chunks one frame advances the pose by: a longer gap (a stall) is advanced in this many chunks and
+/// the rest dropped. Not the simulation's limit (`crate::play::MAX_STEPS_PER_FRAME`, 8): see the module notes.
 pub const MAX_POSE_STEPS: u32 = 240;
 
 /// The arms, loaded: mesh, skeleton, tree, clips, bind normals, and the driver's state between frames.
@@ -208,18 +211,10 @@ impl ArmsLayer {
     /// The arms' view-projection: the scene's vertical field of view with the [`ARMS_NEAR`] plane, through
     /// `crate::frame`. `None` for a zero size or a view the boundary refuses.
     pub fn view_projection(view: &ViewPose, size: (u32, u32)) -> Option<Mat4> {
-        if size.0 == 0 || size.1 == 0 {
-            return None;
-        }
-        // u32 to f32 rounds above 2^24, far past any drawable.
-        let aspect = size.0 as f32 / size.1 as f32;
-        // The field of view is about 43 degrees: f64 to f32 rounds.
-        let fov = crate::play::vertical_fov_deg() as f32;
-        let projection = crate::frame::perspective_reverse_z_infinite(fov, aspect, ARMS_NEAR)?;
-        Some(projection.mul(&crate::frame::view_matrix(view.eye, view.rotation)?))
+        crate::play::view_projection_near(view, size.0, size.1, ARMS_NEAR)
     }
 
-    /// Advances the pose to the latest simulation time in whole steps, skins, and draws over `target` with the
+    /// Advances the pose to the latest frame-time clock in step-sized chunks, skins, and draws over `target` with the
     /// arms' own projection, lit by the scene's `lighting`.
     pub fn encode(
         &mut self,
@@ -250,7 +245,8 @@ impl ArmsLayer {
 }
 
 /// Adds `delta` seconds to `carry` and takes the whole `step`s out of it: their count, at most [`MAX_POSE_STEPS`]
-/// (steps past that are dropped with the carry). The carry stays below one step.
+/// (steps past that are dropped with the carry). The carry is left in `0..step`, also after a huge jump, where
+/// `carry - whole * step` could round to a value outside it.
 pub fn whole_steps(carry: &mut f64, delta: f64, step: f64) -> u32 {
     if delta.is_finite() && delta > 0.0 {
         *carry += delta;
@@ -259,7 +255,11 @@ pub fn whole_steps(carry: &mut f64, delta: f64, step: f64) -> u32 {
     if !(step > 0.0 && whole.is_finite() && whole >= 1.0) {
         return 0;
     }
-    *carry -= whole * step;
+    *carry = (*carry - whole * step).rem_euclid(step);
+    if !(*carry >= 0.0 && *carry < step) {
+        // rem_euclid can round up to exactly `step` for a tiny negative input: that is a carry of 0.
+        *carry = 0.0;
+    }
     // Checked: 1 <= whole, and it is capped at MAX_POSE_STEPS, so the float-to-int `as` is exact here (N5).
     whole.min(f64::from(MAX_POSE_STEPS)) as u32
 }
