@@ -61,6 +61,8 @@ pub fn find_install(root: &Path) -> Result<Install, InstallError> {
     Ok(Install { root: root.to_path_buf(), cooked })
 }
 
+pub mod frame;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +115,3 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 }
-
-pub mod frame;

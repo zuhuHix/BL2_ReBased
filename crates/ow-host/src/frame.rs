@@ -11,21 +11,32 @@
 //! actor's matrix is the UE3 matrix stored column-major ([`Affine::to_engine`]). The one real change of axes is the
 //! view: [`view_matrix`] maps the camera's axes (X forward, Y right, Z up) to wgpu's view space (x right, y up,
 //! z into the screen), which is the cyclic swap (Y, Z, X) of a left-handed frame onto a left-handed frame. Its
-//! determinant is +1, so nothing is mirrored anywhere on the way to the screen.
+//! determinant is +1, so the view mirrors nothing. A placement can: a negative `DrawScale3D` (or `Scale3D`)
+//! component gives the model matrix a negative determinant ([`Affine::determinant`], [`Affine::mirrors`]).
 //!
 //! Why this and not a right-handed Y-up world (glTF's): that needs a reflection, and a reflection flips triangle
 //! winding, cross products and the sign of every roll. Keeping the game's frame puts every one of those risks in
 //! one 3x3 permutation that the tests pin, and leaves package data (vertices, normals, placements) as stored.
 //!
 //! **Clip space** is wgpu's: NDC x right, y up, depth 0..1. Depth is **reverse-Z** (near plane 1, far plane 0,
-//! compare `Greater`), as the Phase 0R wgpu benchmark (B2) used (`docs/verification/ENGINE_BENCHMARK.md`, "What was
-//! missing and had to be written"); with an `f32` depth buffer it keeps precision across Sanctuary's ten thousand
-//! and more uu. `local/bench/` was not on this PC, so only the record was read.
+//! compare `Greater`, clear to 0); with an `f32` depth buffer it keeps precision across Sanctuary's ten thousand
+//! and more uu. Two forms exist: [`perspective_reverse_z_infinite`] (no far plane, depth = near / z), which is the
+//! form the Phase 0R wgpu benchmark (B2) used (its `perspective_infinite_reverse_lh` call, read by the review of
+//! PR #343 in the benchmark source under the desktop's `local/bench/`, not on this PC;
+//! `docs/verification/ENGINE_BENCHMARK.md` names only reverse-Z), and [`perspective_reverse_z`] with a finite far
+//! plane.
 //!
-//! Front faces: the frame is proper, so the package's index order reaches the screen with its handedness intact.
-//! Which wgpu `FrontFace` value that is, is for the renderer lane (H2) to settle with a drawn test; the retired UE5
-//! host's OBJ adapter noted that UE3 index order gives face cross products opposite to the stored outward normals,
-//! which in this frame predicts counter-clockwise in NDC (UNVERIFIED until drawn).
+//! Front faces: the view is proper, so the package's index order reaches the screen with its handedness intact
+//! except where the model matrix mirrors; the renderer flips the front face for a draw whose
+//! [`Affine::determinant`] is negative (B2 used `FrontFace::Cw` for those draws). Which `FrontFace` value the
+//! unmirrored case takes is for the renderer lane (H2) to settle with a drawn test; the retired UE5 host's OBJ
+//! adapter noted that UE3 index order gives face cross products opposite to the stored outward normals, which in
+//! this frame predicts counter-clockwise in NDC (UNVERIFIED until drawn).
+//!
+//! **Bad input.** Everything built from game data returns `Option` and is `None` unless every output entry is a
+//! finite `f32`: [`Placement::affine`], [`component_to_world`], [`Affine::from_ue3_matrix`], [`view_matrix`], the
+//! two perspective forms and [`rotator_from_engine`]. [`Affine::then`] and [`Affine::to_engine`] take any
+//! [`Affine`]; a caller that builds or composes one by hand checks it with [`Affine::is_finite`] first.
 //!
 //! # Where each convention comes from
 //!
@@ -35,13 +46,20 @@
 //!   `Scale3D` x `Scale`), `tools/crosscheck_blcmm_dumps.py` `transform_matrix` (scale multiplies each row of the
 //!   rotation, row-vector points, translation last) and `compose` (component first, then actor). Composed that way,
 //!   4209 Sanctuary placements reproduced the running engine's own `_LocalToWorld` from its `obj dump` to 1e-3 on
-//!   rotation entries and 0.05 uu on translation (`docs/verification/BLCMM_DUMP_CROSSCHECK.md`, "Actor placement").
+//!   rotation entries and 0.05 cm on translation, the record's unit, which is one uu as the scene is placed
+//!   (`docs/verification/BLCMM_DUMP_CROSSCHECK.md`, "Actor placement").
 //!   That is the one convention here confirmed against the game, and how.
 //! - The cooked `Matrix` of a collection entry: `tools/crosscheck_blcmm_dumps.py` `actor_matrix` (rows times the
 //!   entry's scale, translation from the fourth row) and `tools/prepare_level.py` `collection_transforms` (refuses a
 //!   non-finite or non-affine matrix).
 //! - Rotator wrap: `src/natives_core.cpp:51-55` (`normalizeAxis`).
 //! - Direction to rotator: `src/interp.cpp:242-251` (`vectorToRotator`; truncation toward zero, roll 0).
+//!
+//! **Two rules also live in `ow-vm`**, ported faithfully from the C++: `natives_core.rs` `normalize_axis` (on `i64`)
+//! and the `Object.GetAxes` native, which, like the C++, does not wrap the axes before the trigonometry. This module
+//! wraps first, on purpose, so rotators a whole turn apart give the same bits; the two agree exactly for axes in
+//! -32768..=32767 and to the last bits of `f64` outside it. Moving both into `ow_core::units` is a follow-up, not
+//! this lane's.
 //!
 //! # Precision
 //!
@@ -73,6 +91,12 @@ const HALF_TURN: f64 = 32768.0;
 fn to_f32(x: f64) -> f32 {
     // Float-to-float `as` rounds to nearest even (infinity beyond the f32 range); it never saturates like float-to-int.
     x as f32
+}
+
+/// True when `x` rounds to a finite `f32` (finite and no larger than `f32::MAX`; a value between `f32::MAX` and the
+/// next power of two would round down to `f32::MAX`, but refusing it too costs nothing real).
+fn fits_f32(x: f64) -> bool {
+    x.is_finite() && x.abs() <= f64::from(f32::MAX)
 }
 
 /// Rotator units to radians, after the 16-bit wrap.
@@ -155,6 +179,28 @@ impl Affine {
         Affine { rows, translation }
     }
 
+    /// True when every entry rounds to a finite `f32`, so [`Affine::to_engine`] gives a finite matrix.
+    pub fn is_finite(&self) -> bool {
+        self.rows
+            .iter()
+            .flatten()
+            .chain(&self.translation)
+            .all(|&v| fits_f32(v))
+    }
+
+    /// The determinant of the 3x3 part. Negative for a mirroring placement (an odd number of negative scale
+    /// components), where the renderer flips the front face; zero for a flattened one.
+    pub fn determinant(&self) -> f64 {
+        let [x, y, z] = self.rows;
+        x[0] * (y[1] * z[2] - y[2] * z[1]) - x[1] * (y[0] * z[2] - y[2] * z[0])
+            + x[2] * (y[0] * z[1] - y[1] * z[0])
+    }
+
+    /// True when the transform mirrors ([`Affine::determinant`] below 0): draw it with the other front face.
+    pub fn mirrors(&self) -> bool {
+        self.determinant() < 0.0
+    }
+
     /// A point through the transform (`crosscheck_blcmm_dumps.py` `transform_point`).
     pub fn point(&self, p: [f64; 3]) -> [f64; 3] {
         let d = self.direction(p);
@@ -213,10 +259,11 @@ impl Affine {
             }
         }
         let w = planes[3];
-        Some(Affine {
+        let affine = Affine {
             rows,
             translation: [f64::from(w[0]), f64::from(w[1]), f64::from(w[2])],
-        })
+        };
+        affine.is_finite().then_some(affine)
     }
 }
 
@@ -275,8 +322,9 @@ impl Placement {
     }
 
     /// Scale, then rotation, then translation (`crosscheck_blcmm_dumps.py` `transform_matrix`: each row of the rotation
-    /// times its axis' scale, the location as translation).
-    pub fn affine(&self) -> Affine {
+    /// times its axis' scale, the location as translation). `None` when a location or scale value is NaN or
+    /// infinite, or a scaled row would not fit an `f32` (the fields are decoded package floats).
+    pub fn affine(&self) -> Option<Affine> {
         let axes = rotator_axes(self.rotation);
         let s = self.scale_vector();
         let mut rows = [[0.0; 3]; 3];
@@ -286,17 +334,20 @@ impl Placement {
             }
         }
         let l = self.location;
-        Affine {
+        let affine = Affine {
             rows,
             translation: [f64::from(l[0]), f64::from(l[1]), f64::from(l[2])],
-        }
+        };
+        affine.is_finite().then_some(affine)
     }
 }
 
 /// A component's world transform: its own placement first, then its actor's (`crosscheck_blcmm_dumps.py`
-/// `compose(component, actor)`). Not for a component with `PrePivot` or an absolute flag (module docs).
-pub fn component_to_world(component: &Placement, actor: &Placement) -> Affine {
-    component.affine().then(&actor.affine())
+/// `compose(component, actor)`). Not for a component with `PrePivot` or an absolute flag (module docs). `None` when
+/// either placement is refused by [`Placement::affine`] or the product does not fit an `f32`.
+pub fn component_to_world(component: &Placement, actor: &Placement) -> Option<Affine> {
+    let world = component.affine()?.then(&actor.affine()?);
+    world.is_finite().then_some(world)
 }
 
 /// An engine matrix: column-major, column vectors (`m * v`), as WGSL's `mat4x4<f32>` reads it; `cols[c][r]`.
@@ -324,6 +375,11 @@ impl Mat4 {
         Mat4 { cols }
     }
 
+    /// True when all 16 entries are finite.
+    pub fn is_finite(&self) -> bool {
+        self.cols.iter().flatten().all(|v| v.is_finite())
+    }
+
     /// `self * v` for a homogeneous column vector.
     pub fn apply(&self, v: [f32; 4]) -> [f32; 4] {
         let mut out = [0.0; 4];
@@ -348,8 +404,9 @@ pub fn position_from_engine(p: Vec3) -> Vec3 {
 }
 
 /// World to view space for a camera at `eye` looking along `rotation`: view x = the camera's right (its Y axis),
-/// view y = its up (Z), view z = its forward (X), each measured from the eye. A cyclic swap, determinant +1.
-pub fn view_matrix(eye: Vec3, rotation: Rotator) -> Mat4 {
+/// view y = its up (Z), view z = its forward (X), each measured from the eye. A cyclic swap, determinant +1. `None`
+/// when the eye is NaN or infinite, or so far out that the translation does not fit an `f32`.
+pub fn view_matrix(eye: Vec3, rotation: Rotator) -> Option<Mat4> {
     let [forward, right, up] = rotator_axes(rotation);
     let e = [f64::from(eye[0]), f64::from(eye[1]), f64::from(eye[2])];
     let dot = |a: [f64; 3]| a[0] * e[0] + a[1] * e[1] + a[2] * e[2];
@@ -363,39 +420,60 @@ pub fn view_matrix(eye: Vec3, rotation: Rotator) -> Mat4 {
         to_f32(-dot(forward)),
         1.0,
     ];
-    Mat4 { cols }
+    let view = Mat4 { cols };
+    view.is_finite().then_some(view)
 }
 
-/// View space to wgpu clip space, reverse-Z: a point at `near` gets depth 1, one at `far` depth 0 (use a `Greater`
-/// depth test and clear to 0). `vertical_fov_deg` is the full vertical angle in degrees; which angle the host passes
-/// (the game's FOV helpers, `NATIVE_PLAYER_MOVEMENT.md` section 18, `WEAPON_VISUALS.md` section 24) is the camera
-/// lane's. `None` unless 0 < fov < 180, aspect > 0 and 0 < near < far, all finite.
+/// View space to wgpu clip space, reverse-Z with a finite far plane: a point at `near` gets depth 1, one at `far`
+/// depth 0 (use a `Greater` depth test and clear to 0). `vertical_fov_deg` is the full vertical angle in degrees;
+/// which angle the host passes (the game's FOV helpers, `NATIVE_PLAYER_MOVEMENT.md` section 18, `WEAPON_VISUALS.md`
+/// section 24) is the camera lane's. `None` unless 0 < fov < 180, aspect > 0 and 0 < near < far, all finite, and
+/// every entry of the result is a finite `f32` (a fov of 1e-38 or an aspect of 1e-45 passes the first test and
+/// fails this one).
 pub fn perspective_reverse_z(
     vertical_fov_deg: f32,
     aspect: f32,
     near: f32,
     far: f32,
 ) -> Option<Mat4> {
+    if !(far.is_finite() && near < far) {
+        return None;
+    }
+    let (n, f) = (f64::from(near), f64::from(far));
+    // depth = a + b / z: 1 at z = near, 0 at z = far.
+    perspective(vertical_fov_deg, aspect, near, n / (n - f), n * f / (f - n))
+}
+
+/// View space to wgpu clip space, reverse-Z with no far plane: depth = near / z, 1 at `near` and falling toward 0
+/// with distance; the finite form's depth terms as far goes to infinity (a = 0, b = near). This is the form the B2
+/// benchmark used. `None` unless 0 < fov < 180, aspect > 0 and near > 0, all finite, and every entry of the result
+/// is a finite `f32`.
+pub fn perspective_reverse_z_infinite(
+    vertical_fov_deg: f32,
+    aspect: f32,
+    near: f32,
+) -> Option<Mat4> {
+    perspective(vertical_fov_deg, aspect, near, 0.0, f64::from(near))
+}
+
+/// The shared projection: x and y scaled by the focal length (x divided by the aspect), clip w = view z, clip z =
+/// `a` z + `b`.
+fn perspective(vertical_fov_deg: f32, aspect: f32, near: f32, a: f64, b: f64) -> Option<Mat4> {
     let fov_ok = vertical_fov_deg > 0.0 && vertical_fov_deg < 180.0;
-    let ok =
-        fov_ok && aspect.is_finite() && aspect > 0.0 && near > 0.0 && far.is_finite() && near < far;
-    if !ok {
+    if !(fov_ok && aspect.is_finite() && aspect > 0.0 && near.is_finite() && near > 0.0) {
         return None;
     }
     let half = f64::from(vertical_fov_deg) * (std::f64::consts::PI / 360.0);
     let focal = 1.0 / tan_f64(half);
-    let (n, f) = (f64::from(near), f64::from(far));
-    // depth = a + b / z: 1 at z = near, 0 at z = far.
-    let a = n / (n - f);
-    let b = n * f / (f - n);
-    Some(Mat4 {
+    let projection = Mat4 {
         cols: [
             [to_f32(focal / f64::from(aspect)), 0.0, 0.0, 0.0],
             [0.0, to_f32(focal), 0.0, 0.0],
             [0.0, 0.0, to_f32(a), 1.0],
             [0.0, 0.0, to_f32(b), 0.0],
         ],
-    })
+    };
+    projection.is_finite().then_some(projection)
 }
 
 /// The forward unit vector of a rotator (row X of [`rotator_axes`]): `interp.cpp:231-240` `rotatorToVector` for
@@ -421,8 +499,11 @@ pub fn direction_to_rotator(d: Vec3) -> Rotator {
 /// toward the roll-free right axis (-sin yaw, cos yaw, 0), which follows from the `GetAxes` rows: there Y and Z are
 /// the roll-free axes turned by roll. Each angle is rounded to the nearest unit (no oracle: the C++ has no matrix to
 /// rotator), so pitch lands in -16384..=16384 and yaw and roll in -32768..=32767. At pitch +-16384 yaw and roll are
-/// one angle and come back as one of the equivalent pairs. `None` when an axis is zero or not finite, or the matrix
-/// mirrors (negative determinant), since no rotator describes a mirror.
+/// one angle and may come back as another pair with the same axes. `None` when an axis is zero or not finite, or the
+/// matrix mirrors (negative determinant), since no rotator describes a mirror.
+///
+/// UNVERIFIED: the game's own matrix-to-rotator (if the input path uses one) is not read; this inverts `GetAxes`
+/// algebraically and is checked only by round trips in the tests.
 pub fn rotator_from_engine(m: &Mat4) -> Option<Rotator> {
     let axis = |c: usize| -> Option<[f64; 3]> {
         let v = [
