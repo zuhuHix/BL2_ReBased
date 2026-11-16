@@ -36,7 +36,7 @@ game. No parsing behaviour changes.
   | `IsBehaviorSequenceEnabled` | 2 | `mission_script.cpp` | routed, both modes |
   | `RemoveBehaviorProviderFromConsumer`, `ChangeBehaviorConsumerSuspensionStatus` | 1 each | no | not bound |
   | 10 others (`IsBehaviorKernelWatchingConsumer` and the debug listers) | 0 | no | not bound |
-  | `WillowPawn.GetBehaviorConsumerHandle` | 21 (interface) | `mission_script.cpp` (the director only), `combat_death.cpp` | a plain field read, both modes |
+  | `WillowPawn.GetBehaviorConsumerHandle` | 21 (interface) | `mission_script.cpp` (the director only), `combat_death.cpp` | Off: a plain field read; Reference: routed |
 
   "Not bound" means the VM's stub policy answers the call, as before this lane. With `LogAndZero`, that is the
   `UNIMPLEMENTED <key>` line and a zero value; with `Refuse`, it is `UnboundNative`. No record reads those rules.
@@ -54,11 +54,20 @@ game. No parsing behaviour changes.
   - `Provider::consumer()` / `set_consumer()`: the additive route of decision 2026-11-15-30. A handler can read the
     consumer without a change to `HandlerFn`.
 
-- **Routing.** A routed native goes to the owner of its handle's `PID`. A crate's handle runs that crate's body. If
-  that crate gave no body for the native, the call gets the VM's unbound behaviour (the stub policy), which is what
-  it got before the pack. A kernel handle runs the kernel rule. A handle nobody owns, the invalid -1 among them,
-  answers false and changes nothing (NATIVE_BEHAVIOR_CONTEXT.md; NATIVE_BEHAVIOR_POPULATION.md section C). A None
-  provider given to `ActivateBehaviorEventFromScript` fires nothing, whoever owns the handle (NATIVE_MARCUS_USE_CHAIN.md).
+- **Routing.** A routed native goes to the owner of its handle's `PID`.
+  - A crate's handle runs that crate's body. If that crate gave no body for the native, the call gets the VM's unbound
+    behaviour (the stub policy). On a VM that holds that crate alone, this is what the call got before the pack. Where
+    another crate had bound the native, the call used to reach that crate's body.
+  - A kernel handle runs the kernel rule.
+  - A handle nobody owns (the invalid -1 among them):
+    - **Off:** answers false and changes nothing (NATIVE_BEHAVIOR_CONTEXT.md; NATIVE_BEHAVIOR_POPULATION.md section C).
+    - **Reference (review r1):** gets what the C++ does. That is the body of the one crate that binds the native in the
+      C++, given with `natives::fallback`: `ow-mission` for `IsBehaviorSequenceEnabled` and
+      `ActivateBehaviorEventFromScript`, `ow-combat` for `BroadcastBehaviorEventFromScript`, whose note is written
+      for every `PID`, as `combat_death.cpp` writes it. When no crate binds it, the stub policy answers. Two crates'
+      fallbacks for one native have no C++ VM behind them: `NotYet { NotPorted }`.
+  - A None provider given to `ActivateBehaviorEventFromScript` fires nothing, whoever owns the handle (Off;
+    NATIVE_MARCUS_USE_CHAIN.md). In Reference the body the call reaches decides, as in the C++.
 
 - **The kernel rules, Off only.** Reference binds only what the C++ binds; these three stay unbound there.
   - `RegisterBehaviorConsumer`: a None consumer gets the handle -1. Otherwise the kernel makes a new process and
@@ -80,19 +89,25 @@ game. No parsing behaviour changes.
     modelled.
 
 - **The seam edits.**
-  - `ow-mission`: the bridge's own `selected` list, its `n_output_link` and its `n_consumer_handle` are gone. The use
-    chain claims the director's `PID` (0) as `"ow-mission"` and routes its two bodies, which are unchanged. Its script
-    behaviors collect their links through `collect`.
+  - `ow-mission`: the bridge's own `selected` list and its `n_output_link` are gone. The use chain allocates the
+    director's `PID` in the table as `"ow-mission"`: the lowest free one from 0, kept on the bridge. Its sequence check
+    compares against that `PID`, so a consumer the kernel registered first keeps its own (review r1). The bridge gives
+    its three bodies, which are unchanged, as routes and as Reference fallbacks: the sequence query, the event, and the
+    director-only `GetBehaviorConsumerHandle`. Its script behaviors collect their links through `collect`. In
+    Reference no kernel consumer exists, so the director still gets 0, as in the C++.
   - `ow-combat`: `CombatState::selected` and its bindings of `ActivateBehaviorOutputLink` and
     `GetBehaviorConsumerHandle` are gone. `prepare_for_death` allocates handles through the table as `"ow-combat"`
-    (from 100, as before), and the broadcast body is a route. **One edit outside the grant:** `run.rs`'s
+    (from 100, as before). The broadcast body and the handle read are routes and Reference fallbacks. **One edit outside the grant:** `run.rs`'s
     `run_script_behavior`, the reader of combat's old list, now wraps the run in `collect` (same calls, same order).
-  - `GetBehaviorConsumerHandle` follows the record for every object, a plain read of its `ConsumerHandle`. The C++
-    bridge read it for the director only and stubbed it for any other pawn. A class without the field is an error
-    (`... has no property ConsumerHandle`), as combat's was, with the pack's wording.
-  - A routed call on a handle nobody owns no longer writes combat's `BroadcastBehaviorEventFromScript <name>` note.
-    The note is still written for every handle combat owns. On a combat-only VM the only handles are combat's, so no
-    output changed (below).
+  - `GetBehaviorConsumerHandle`:
+    - **Off:** follows the record for every object, a plain read of its `ConsumerHandle`. A class without the field
+      is an error (`... has no property ConsumerHandle`).
+    - **Reference:** routed by the `PID` in the object's own `ConsumerHandle`, so it reaches the C++ bridge's
+      director-only body or combat's read (review r1).
+  - **Off only:** a routed call on a handle nobody owns no longer writes combat's
+    `BroadcastBehaviorEventFromScript <name>` note. Reference writes it, as the C++ does.
+  - A failed pass 1 of `IntializeBehaviorProviderForConsumer` removes the provider's slot, so the call can be made
+    again (review r1).
 
 - **How `ow-skills` should use it** (W6-SKILLS landed on main without an output-link binding: its two skill behaviors
   select no link). If a skill behavior that selects links is added, wrap its `ApplyBehaviorToContext` calls in
