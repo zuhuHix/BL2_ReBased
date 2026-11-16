@@ -13,7 +13,9 @@
 //! grabbed while the collector wants it: locked if the platform allows, else confined to the window, else left free
 //! and visible with the raw mouse motion still turning the view ([`Grab::Refused`], the typed fallback). Every change
 //! is kept in [`RunReport::cursor`]. A snapshot that says `finished` ends the run as [`Outcome::Completed`] after its
-//! frame is presented.
+//! frame is presented, or after [`FINISHED_SKIP_LIMIT`] frames in a row that could not be presented. A window that
+//! gets no redraw at all (some minimised windows) never counts a skip, so such a run still waits; UNVERIFIED in a real
+//! window.
 //!
 //! A `--frames` run has a deadline ([`frames_time_limit`], or `--time-limit`). It is checked on every wake-up of the
 //! loop, not only on redraws, and the loop always asks to be woken by it: a minimised window may get no redraw at all,
