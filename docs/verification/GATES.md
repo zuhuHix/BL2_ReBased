@@ -153,7 +153,9 @@ Walking a map in the window (decision `docs/decisions/2026-11/2026-11-16-57-host
 **Baseline (2026-11-16, zuhu desktop, RTX 4070, Vulkan, release build, lane H4-PLAY):** `--walk` digest
 `fd6551c9598c8ec7` (1,050 ticks); headless 3,600 steps, end digest `d7b95ebfe14df774`; the window with vsync (display
 asleep: median 252 ms) and with `--no-vsync` (87,516 frames in 60.3 s, median 0.680 ms, p95 0.711 ms) both gave that
-digest and all twenty segment digests. Workspace tests 1,603 passed, 0 failed, 21 ignored (main 7f73940 plus this
+digest and all twenty segment digests. After review r1 of PR #355: a scripted window run of exactly the `--walk` path
+(17.5 s, `--no-vsync`, median 0.688 ms) gave `--walk`'s nine segment digests and its end digest `fd6551c9598c8ec7`;
+workspace tests 1,607 passed, 0 failed, 21 ignored. Workspace tests 1,603 passed, 0 failed, 21 ignored (main 7f73940 plus this
 lane; the installed-game runs were made on main e126214 plus this lane).
 
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.

@@ -40,7 +40,9 @@ pawn at the same bits on every step for the same inputs.
   - The eye is the pawn's centre plus `BaseEyeHeight` 70, read live on 2026-10-21. It is the same `Mover::eye` as
     `--walk`'s. The game's eye-height easing, its starting `EyeHeight` 77 and the bob (section 15) are not applied.
   - The field of view is the record's default: 70 degrees horizontal at 16:9, which the game stores as the vertical
-    `2 atan(tan(35 deg) x 0.5625)`, 43.00 degrees (`NATIVE_PLAYER_MOVEMENT.md` sections 18-19). It is kept vertical
+    `2 atan(tan(35 deg) x 0.5625)`, 42.996 degrees, 43.00 to two places (`NATIVE_PLAYER_MOVEMENT.md` sections
+    18-19; the record rounds it to 43.0). Review r1 asked whether the figure is 43.07: it is not, and the play module's
+    own doc, which said "about 43.07", is corrected. It is kept vertical
     at other aspects. UNVERIFIED in the game, as is the profile FOV setting's effect.
   - The near plane (10 uu) is the host's.
 - **Bindings, all host choices.**
@@ -49,7 +51,9 @@ pawn at the same bits on every step for the same inputs.
   - Escape lets go of the cursor, and a left click takes it again.
   - F1 toggles the fly camera (`camera::FlyCamera`, with E and Q for up and down and Shift for fast). While it flies,
     the pawn gets no input.
-  - Losing focus releases every key and the cursor.
+  - Losing focus releases every key and the cursor. The presses winit makes up for keys held when the window gains
+    focus again (`is_synthetic`) are ignored, so coming back with W or space held neither walks nor jumps; a made-up
+    release still releases (review r1).
 - **Cursor grab, with a typed fallback.** The host locks the cursor; if the platform refuses, it confines it to the
   window. If both are refused, the cursor stays free and visible, and the raw mouse motion still turns the view
   (`app::Grab::Refused`, which carries the platform's reason). Every change is listed in the run report. A scripted run
@@ -62,8 +66,15 @@ pawn at the same bits on every step for the same inputs.
     so frames take one step, none, or the most, and time is dropped.
   - `--walk` and play turn a script into inputs through the same two functions. Both print a path digest (FNV-1a over
     every step's location bits) at each segment's end, so equal digests mean equal paths, bit for bit.
-- **Verified (automated, synthetic geometry).** Nine `play` tests, plus one argument test with the `--frames 30` nit
-  among its cases:
+  - Every script segment is reported by its script index, a segment that rounds to no tick included, with the digest
+    `walk::run` gives it (the one before the next step). Before review r1 play skipped such a segment, so every later
+    "play segment N" line was compared with the wrong `--walk` line.
+  - A scripted window run ends on the frame its script finishes on. If that frame cannot be presented (a minimised
+    or hidden window), the run ends after 100 frames in a row that could not be presented (`app::FINISHED_SKIP_LIMIT`,
+    about a second), without its end screenshot, instead of waiting for the window to come back. The start screenshot
+    is taken on presented frame 30, or on the last frame of a script that finishes sooner (review r1).
+- **Verified (automated, synthetic geometry).** Twelve `play` tests, one `app` test and one argument test (with the
+  `--frames 30` nit among its cases):
   - one script through `walk::run` and through the play simulation at three frame-time patterns (uneven, steady 60
     Hz, 3 ms) gives the same digests at every segment end, the same step count and the same end;
   - a 1 s frame takes 8 steps and drops the rest;
@@ -73,10 +84,13 @@ pawn at the same bits on every step for the same inputs.
   - F1 flies the camera and leaves the pawn still;
   - the collector turns pixels into whole units and keeps the fraction, ignores a NaN motion and clamps a wild one;
   - the keys: jump only on a press, Escape, a click, focus loss, and a scripted run ignoring WASD;
-  - the field of view is 43.00 degrees;
-  - the Sanctuary script reads back from its text.
+  - the field of view is 42.996 degrees;
+  - the Sanctuary script reads back from its text;
+  - review r1: segments of no tick at the start, middle and end keep their index and `walk::run`'s digests at two
+    frame-time patterns; made-up presses on focus are ignored and a made-up release releases; the start shot is due
+    on a finishing frame before frame 30; a finished run ends on a present or after the bounded number of skips.
 
-  Workspace: 1,603 passed, 0 failed, 21 ignored (main 7f73940 plus this lane).
+  Workspace: 1,603 passed, 0 failed, 21 ignored (main 7f73940 plus this lane); 1,607 after review r1.
 - **Verified (local, installed game, zuhu desktop, RTX 4070, Vulkan, release build, every run under the machine
   lock; output under ignored `local/p2/h4-play/`).** The script is `--walk`'s nine segments (17.5 s), then eleven more
   (42.5 s): 60 s and 3,600 steps.
@@ -98,6 +112,10 @@ pawn at the same bits on every step for the same inputs.
       because it is not serialized hidden; the retired pipeline hid its visual (`prepare_level.py`
       `HIDDEN_BOX_LRG_SOURCES`). It is the same box decision 52 left as an open question for collision. So the first
       thing a player sees here is that question.
+  - **After review r1** (same desktop, under the lock, released afterwards): `--walk` again PASS with digest
+    `fd6551c9598c8ec7`. A scripted window run of exactly the `--walk` path (17.5 s, `--no-vsync`): exit 0, 24,297
+    frames in 17.8 s, median 0.688 ms, p95 0.821 ms, both screenshots written. Its nine segment digests equal
+    `--walk`'s, and its end digest is `--walk`'s whole-path digest.
   - Not run: an interactive session (keys and mouse by hand) and the cursor grab. The grab would take the
     maintainer's cursor on a shared screen, so it is left to the maintainer. The key and grab paths are covered by
     the unit tests above, not by a window run.
@@ -106,6 +124,6 @@ pawn at the same bits on every step for the same inputs.
   - Whether `_Outer`'s BoxLrg blocks or shows in landed play (decision 52's real-game ask), now also a drawing
     question for H2.
   - The game's eye height easing and bob, mouse sensitivity, FOV setting and near plane.
-  - A minimised window presents no frames. A scripted window run keeps stepping while minimised, but it ends, and
-    takes its end screenshot, only on a presented frame, so it waits for the window to come back.
+  - A script that finishes while the window is minimised ends without its end screenshot (above), and with
+    `--screenshot` that fails the run.
   - Crouch, sprint and the other moves decision 52 left open.

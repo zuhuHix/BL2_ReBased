@@ -55,7 +55,7 @@ fn a_script_gives_the_walk_s_path_whatever_the_frame_times() {
         assert_eq!(run.digest, reference.digest);
         assert_eq!(run.end, reference.end);
         let walk_digests: Vec<_> = reference.segments.iter().map(|s| s.digest).collect();
-        let play_digests: Vec<_> = run.segments.iter().map(|s| s.2).collect();
+        let play_digests: Vec<_> = run.segments.iter().map(|s| s.3).collect();
         assert_eq!(play_digests, walk_digests);
     }
     // The uneven pattern really dropped time and took several steps in some frames; the 3 ms one took at most one.
@@ -173,24 +173,24 @@ fn the_collector_turns_pixels_into_whole_units_and_keeps_the_rest() {
     let wild = c.take();
     assert_eq!((wild.yaw, wild.pitch), (0, 0), "a NaN motion is ignored whole");
     c.mouse_motion(1e30, 0.0);
-    assert_eq!(c.take().yaw, MAX_TURN_PER_FRAME as i32, "a huge motion is clamped");
+    assert_eq!(c.take().yaw, ow_core::num::trunc_i32_f64(MAX_TURN_PER_FRAME), "a huge motion is clamped");
 }
 
 #[test]
 fn the_collector_s_keys() {
     let mut c = InputCollector::new(true);
-    c.key(KeyCode::KeyW, true, false);
-    c.key(KeyCode::KeyD, true, false);
-    c.key(KeyCode::Space, true, false);
+    c.key(KeyCode::KeyW, true, false, false);
+    c.key(KeyCode::KeyD, true, false, false);
+    c.key(KeyCode::Space, true, false, false);
     let a = c.take();
     assert!(a.forward && a.right && a.jump && !a.back);
     // The jump is a press: held or repeated, it does not come again.
-    c.key(KeyCode::Space, true, true);
+    c.key(KeyCode::Space, true, true, false);
     let b = c.take();
     assert!(b.forward && !b.jump);
-    c.key(KeyCode::F1, true, false);
+    c.key(KeyCode::F1, true, false, false);
     assert!(c.take().toggle_fly);
-    c.key(KeyCode::Escape, true, false);
+    c.key(KeyCode::Escape, true, false, false);
     assert!(!c.wants_grab());
     c.click();
     assert!(c.wants_grab());
@@ -200,8 +200,8 @@ fn the_collector_s_keys() {
     // A scripted run ignores the movement keys but still hears Escape and F1, and never wants the cursor.
     let mut s = InputCollector::new(false);
     assert!(!s.wants_grab());
-    s.key(KeyCode::KeyW, true, false);
-    s.key(KeyCode::F1, true, false);
+    s.key(KeyCode::KeyW, true, false, false);
+    s.key(KeyCode::F1, true, false, false);
     s.click();
     let t = s.take();
     assert!(!t.forward && t.toggle_fly && !s.wants_grab());
@@ -210,7 +210,8 @@ fn the_collector_s_keys() {
 #[test]
 fn the_field_of_view_is_the_record_s_default() {
     let v = vertical_fov_deg();
-    assert!((v - 43.0).abs() < 0.1, "{v}");
+    // 2 atan(tan(35 deg) x 0.5625) = 42.996 degrees, 43.00 to two places (review r1 of PR #355 asked).
+    assert!((v - 42.995_661).abs() < 1e-5, "{v}");
     let view = ViewPose { eye: [0.0; 3], rotation: Rotator::default(), fly: false };
     let m = view_projection(&view, 1280, 720).unwrap();
     let ahead = m.apply([500.0, 0.0, 0.0, 1.0]);
@@ -226,4 +227,56 @@ fn the_sanctuary_script_reads_back_from_its_text() {
     assert!(walk::parse_script("1.0 1 0 yes 0 x").is_err());
     assert!(walk::parse_script("-1 1 0 0 0 x").is_err());
     assert_eq!(walk::parse_script("# a comment\n\n0.5 0 0 0 0\n").unwrap().len(), 1);
+}
+
+/// Review r1 of PR #355, finding 1: segments of no tick (at the start, the middle and the end) keep their script
+/// index, so each play digest lines up with `walk::run`'s for the same segment.
+#[test]
+fn segments_of_no_tick_keep_their_place() {
+    let script = vec![
+        Segment::new("nothing first", 0.0, 0.0, 0.0, false, 0),
+        Segment::new("run", 1.0, 1.0, 0.0, false, 0),
+        // 0.004 s rounds to no tick at 1/60 s.
+        Segment::new("a blink", 0.004, 1.0, 0.0, true, 500),
+        Segment::new("jump and turn", 1.0, 1.0, 0.0, true, 200),
+        Segment::new("nothing last", 0.0, 0.0, 0.0, false, 0),
+    ];
+    let reference = walk::run(&world(), &mut pawn(), &script, step_seconds(), 1);
+    assert_eq!(walk::segment_ticks(&script[2], step_seconds()), 0);
+    for frames in [&HEADLESS_FRAMES[..], &[FRAME_60][..]] {
+        let run = run_headless(world(), pawn(), script.clone(), frames).unwrap();
+        let indices: Vec<usize> = run.segments.iter().map(|s| s.0).collect();
+        assert_eq!(indices, vec![0, 1, 2, 3, 4]);
+        for ((_, name, _, digest), walked) in run.segments.iter().zip(&reference.segments) {
+            assert_eq!(*name, walked.name);
+            assert_eq!(*digest, walked.digest, "segment {name}");
+        }
+        assert_eq!(run.digest, reference.digest);
+        // The text numbers each line by its script index.
+        let text = stats_text(&run);
+        assert!(text.contains("play segment 2 a blink:") && text.contains("play segment 4 nothing last:"), "{text}");
+    }
+}
+
+/// Finding 3: a press winit makes up when the window regains focus does not walk or jump; a made-up release
+/// releases.
+#[test]
+fn made_up_presses_on_focus_are_ignored() {
+    let mut c = InputCollector::new(true);
+    c.key(KeyCode::KeyW, true, false, true);
+    c.key(KeyCode::Space, true, false, true);
+    let a = c.take();
+    assert!(!a.forward && !a.jump);
+    c.key(KeyCode::KeyW, true, false, false);
+    assert!(c.take().forward);
+    c.key(KeyCode::KeyW, false, false, true);
+    assert!(!c.take().forward);
+}
+
+/// Finding 2: the start screenshot is due at its frame, or on a finishing frame before it.
+#[test]
+fn the_start_shot_is_taken_even_for_a_short_script() {
+    assert!(!start_shot_due(30, 29, false));
+    assert!(start_shot_due(30, 30, false));
+    assert!(start_shot_due(30, 3, true));
 }
