@@ -1,5 +1,6 @@
 //! `ow-host`: checks the Borderlands 2 install, then (with `--window` or `--frames N`) opens the host window and runs
-//! the frame loop; `--walk` runs the scripted Sanctuary walk headless (lane H4); `--headless-probe` prints the GPU adapter without a window. Commands and exit codes in
+//! the frame loop; `--walk` runs the scripted Sanctuary walk headless (lane H4); `--play` walks a map in the window
+//! and `--play-script` drives it from a script, in the window or headless (lane H4-PLAY); `--headless-probe` prints the GPU adapter without a window. Commands and exit codes in
 //! `args.rs` and below.
 //!
 //! Exit codes: 0 done; 1 refused or failed (no install, a GPU or window error, a `--frames` run closed early, a
@@ -60,6 +61,14 @@ fn main() -> ExitCode {
                 size,
                 screenshot,
             ),
+            Err(code) => code,
+        },
+        Command::Play { game, map, script, vsync, size, screenshot } => match check(&game) {
+            Ok(()) => play(&game, &map, script.as_deref(), Some(PlayWindow { vsync, size, screenshot })),
+            Err(code) => code,
+        },
+        Command::PlayHeadless { game, map, script } => match check(&game) {
+            Ok(()) => play(&game, &map, Some(&script), None),
             Err(code) => code,
         },
         Command::Window { game, frames, vsync, time_limit } => match check(&game) {
@@ -134,6 +143,7 @@ fn scene_window(
     let Ok(install) = ow_host::find_install(game) else {
         return ExitCode::from(1);
     };
+    let map = &ow_host::movement::sanctuary::resolve_map(&install, map);
     let Ok(name) = PackageName::parse(map) else {
         eprintln!("ow-host: {map:?} is not a package name");
         return ExitCode::from(2);
@@ -254,18 +264,156 @@ fn scene_window(
     if shot_failed { ExitCode::from(1) } else { code }
 }
 
-fn window(options: RunOptions) -> ExitCode {
-    window_with(options, None)
+/// The window part of a `--play` run.
+struct PlayWindow {
+    vsync: bool,
+    size: Option<(u32, u32)>,
+    screenshot: Option<PathBuf>,
 }
 
-fn window_with(options: RunOptions, drawer: Option<Box<dyn ow_host::render::Drawer>>) -> ExitCode {
-    let report = match app::run_with(options, StubWorld::new(), drawer) {
-        Ok(report) => report,
+/// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY).
+fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow>) -> ExitCode {
+    use ow_host::movement::sanctuary;
+    use ow_host::play::{self, InputCollector, PlayDrawReport, PlayDrawer, PlayStats, PlayWorld};
+    let Ok(install) = ow_host::find_install(game) else {
+        return ExitCode::from(1);
+    };
+    let script = match script {
+        Some(path) => match std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| ow_host::movement::walk::parse_script(&text))
+        {
+            Ok(script) => Some(script),
+            Err(e) => {
+                eprintln!("ow-host: the play script {}: {e}", path.display());
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    let map = sanctuary::resolve_map(&install, map);
+    let loaded = match sanctuary::load(&install, &map) {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("ow-host: loading {map}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    print!("{}", loaded.text);
+    let mut spawn_text = String::new();
+    let mover = match sanctuary::spawn(&loaded.scene, &loaded.collision.world, &mut spawn_text) {
+        Ok(mover) => mover,
         Err(e) => {
             eprintln!("ow-host: {e}");
             return ExitCode::from(1);
         }
     };
+    print!("{spawn_text}");
+    let sanctuary::Loaded { scene, defs, collision, .. } = loaded;
+    let Some(window) = window else {
+        let Some(script) = script else { return ExitCode::from(2) };
+        let started = Instant::now();
+        return match play::run_headless(collision.world, mover, script, &play::HEADLESS_FRAMES) {
+            Ok(stats) => {
+                print!("{}", play::stats_text(&stats));
+                println!("headless play in {} ms", millis(started.elapsed()));
+                if stats.finished { ExitCode::SUCCESS } else { ExitCode::from(1) }
+            }
+            Err(e) => {
+                eprintln!("ow-host: {e}");
+                ExitCode::from(1)
+            }
+        };
+    };
+    let scripted = script.is_some();
+    let plan = DrawPlan::build(&scene);
+    println!(
+        "draw plan: {} drawn, {} batches, {} section instances; eye {} uu above the pawn's centre, vertical FOV {} \
+         degrees, step {} s, at most {} steps a frame",
+        plan.stats.drawn,
+        plan.batches.len(),
+        plan.stats.instances,
+        ow_core::fmt::fmt_f(mover.params.base_eye_height, 0),
+        ow_core::fmt::fmt_f(play::vertical_fov_deg(), 2),
+        ow_core::fmt::fmt_f(play::step_seconds(), 6),
+        play::MAX_STEPS_PER_FRAME
+    );
+    let source = Box::new(move |path: &str| scene.decode_texture(&defs, path).map_err(|e| e.to_string()));
+    let stats = Rc::new(RefCell::new(PlayStats::default()));
+    let draw = Rc::new(RefCell::new(PlayDrawReport::default()));
+    let end_shot = window.screenshot.as_ref().map(|p| {
+        let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        p.with_file_name(format!("{stem}_end.png"))
+    });
+    let drawer = PlayDrawer::new(
+        plan,
+        source,
+        window.size,
+        window.screenshot.clone().map(|p| (u64::from(args::SCREENSHOT_FRAME), p)),
+        end_shot,
+        Rc::clone(&draw),
+    );
+    let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats));
+    let options = RunOptions { frames: None, vsync: window.vsync, time_limit: None };
+    let code = match app::run_play(options, sim, Some(Box::new(drawer)), InputCollector::new(!scripted)) {
+        Ok(report) => print_run(&report, options),
+        Err(e) => {
+            eprintln!("ow-host: {e}");
+            ExitCode::from(1)
+        }
+    };
+    let d = draw.borrow();
+    println!("upload in {} ms, {} instanced draws per frame", millis(d.draw.upload_time), d.draw.draw_calls);
+    if let (Some(median), Some(p95), Some(max)) = (d.draw.quantile(0.5), d.draw.quantile(0.95), d.draw.quantile(1.0)) {
+        println!(
+            "frame time over {} intervals (nearest rank): median {} ms, p95 {} ms, max {} ms",
+            d.draw.intervals.len(),
+            millis(median),
+            millis(p95),
+            millis(max)
+        );
+    }
+    let mut failed = false;
+    for (what, shot) in [("start", &d.start_shot), ("end", &d.end_shot)] {
+        match (shot, &window.screenshot) {
+            (Some(Ok(path)), _) => println!("screenshot {what}: {}", path.display()),
+            (Some(Err(e)), _) => {
+                eprintln!("ow-host: the {what} screenshot failed: {e}");
+                failed = true;
+            }
+            (None, Some(_)) if what == "start" || scripted => {
+                eprintln!("ow-host: no {what} screenshot was taken");
+                failed = true;
+            }
+            _ => {}
+        }
+    }
+    let s = stats.borrow();
+    print!("{}", play::stats_text(&s));
+    // A scripted run passes only when its script ran to the end.
+    if scripted && !s.finished {
+        eprintln!("ow-host: the play script did not finish");
+        failed = true;
+    }
+    if failed { ExitCode::from(1) } else { code }
+}
+
+fn window(options: RunOptions) -> ExitCode {
+    window_with(options, None)
+}
+
+fn window_with(options: RunOptions, drawer: Option<Box<dyn ow_host::render::Drawer>>) -> ExitCode {
+    match app::run_with(options, StubWorld::new(), drawer) {
+        Ok(report) => print_run(&report, options),
+        Err(e) => {
+            eprintln!("ow-host: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Prints a window run's report and gives its exit code.
+fn print_run(report: &app::RunReport, options: RunOptions) -> ExitCode {
     if let Some(adapter) = &report.adapter {
         println!(
             "adapter: {} ({}), backend: {}, driver: {}",
@@ -274,6 +422,9 @@ fn window_with(options: RunOptions, drawer: Option<Box<dyn ow_host::render::Draw
     }
     if let Some(mode) = &report.present_mode {
         println!("present mode asked for: {mode}");
+    }
+    for grab in &report.cursor {
+        println!("cursor: {grab:?}");
     }
     println!(
         "frames presented: {}, skipped: {}, first to last present: {} ms",

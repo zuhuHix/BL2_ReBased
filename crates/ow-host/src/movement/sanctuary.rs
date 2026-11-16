@@ -1,6 +1,8 @@
 //! Owner: lane H4-MOVEMENT. `ow-host --game <install> --walk`: Sanctuary's scene, its collision, and the scripted
 //! walk from its player start, run headless at the fixed simulation step, printed as text (counts, sampled
-//! positions, the segments and the result). Nothing is written to a file and nothing is drawn: H2 stage 2 draws.
+//! positions, the segments with their path digests, and the result). Nothing is written to a file and nothing is
+//! drawn. [`load`] and [`spawn`] are shared with the play mode (`crate::play`, lane H4-PLAY), so both start from the
+//! same collision and the same pawn.
 //!
 //! AI-assisted (Claude Code). Decision: `docs/decisions/2026-11/2026-11-16-52-*`.
 
@@ -15,7 +17,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 
 use super::collide::CollisionWorld;
-use super::level::{self, CollisionCensus};
+use super::level::{self, CollisionCensus, LevelCollision};
 use super::mover::{MovementParams, Mover, Physics};
 use super::walk::{self, SANCTUARY_SCRIPT, WalkReport};
 use crate::Install;
@@ -44,31 +46,52 @@ fn physics(p: Physics) -> &'static str {
     }
 }
 
-/// Loads Sanctuary from `install`, builds its collision and runs the walk.
-pub fn run(install: &Install) -> Result<WalkRun, String> {
+/// A map loaded for movement: its scene, the store and object space it was read with, its collision, and the load
+/// report's text.
+pub struct Loaded {
+    pub scene: Scene,
+    pub defs: DefStore,
+    pub space: ObjectSpace,
+    pub collision: LevelCollision,
+    pub text: String,
+}
+
+/// The package a map name means in `install`: the name itself when the install has `<name>.upk`, else `<name>_P`
+/// when it has that (so `Sanctuary` is `Sanctuary_P`), else the name as given (the load then reports it missing).
+pub fn resolve_map(install: &Install, name: &str) -> String {
+    let has = |n: &str| install.cooked.join(format!("{n}.upk")).is_file();
+    if !has(name) && has(&format!("{name}_P")) { format!("{name}_P") } else { name.to_string() }
+}
+
+/// Loads map `map` from `install` (ParityMode::Off, as every host run) and builds its collision.
+pub fn load(install: &Install, map: &str) -> Result<Loaded, String> {
     let started = Instant::now();
     let mut defs = DefStore::open(install.cooked.clone(), IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .map_err(|e| format!("definition store: {e}"))?;
     let mut space = ObjectSpace::new();
     let assets = SceneAssets::new(install.cooked.clone());
-    let map = PackageName::parse(MAP).map_err(|e| format!("{MAP}: {e:?}"))?;
-    let scene = Scene::load(&mut defs, &mut space, &assets, &map).map_err(|e| format!("scene: {e}"))?;
+    let name = PackageName::parse(map).map_err(|e| format!("{map}: {e:?}"))?;
+    let scene = Scene::load(&mut defs, &mut space, &assets, &name).map_err(|e| format!("scene: {e}"))?;
     let scene_time = started.elapsed();
     let built = Instant::now();
     let collision = level::build(&scene, &mut defs, &mut space);
     let build_time = built.elapsed();
-
-    let mut out = String::new();
+    let mut text = String::new();
     let _ = writeln!(
-        out,
-        "scene: {MAP}, {} levels, {} placements, loaded in {} s; collision built in {} s",
+        text,
+        "scene: {map}, {} levels, {} placements, loaded in {} s; collision built in {} s",
         scene.levels.len(),
         scene.placements.len(),
         fmt_f(scene_time.as_secs_f64(), 1),
         fmt_f(build_time.as_secs_f64(), 1)
     );
-    census_text(&mut out, &collision.census);
+    census_text(&mut text, &collision.census);
+    Ok(Loaded { scene, defs, space, collision, text })
+}
 
+/// Maya at the scene's first player start, facing its yaw, lifted out of solid when she starts in it (a host
+/// stand-in, [`Mover::lift_out_of_solid`]); the spawn lines go to `out`.
+pub fn spawn(scene: &Scene, world: &CollisionWorld, out: &mut String) -> Result<Mover, String> {
     let Some(start) = scene.player_starts.values().next() else {
         return Err("the scene has no player start".into());
     };
@@ -87,7 +110,7 @@ pub fn run(install: &Install) -> Result<WalkRun, String> {
         scene.player_starts.len()
     );
     let mut mover = Mover::spawn(MovementParams::maya(), location, view);
-    match mover.lift_out_of_solid(&collision.world) {
+    match mover.lift_out_of_solid(world) {
         Some(lift) => {
             let _ = writeln!(out, "spawn: lifted {} uu out of solid (host stand-in)", fmt_f(lift, 0));
         }
@@ -95,12 +118,20 @@ pub fn run(install: &Install) -> Result<WalkRun, String> {
             let _ = writeln!(out, "spawn: inside solid and no free height within {} uu", fmt_f(super::mover::SPAWN_LIFT, 0));
         }
     }
+    Ok(mover)
+}
+
+/// Loads Sanctuary from `install`, builds its collision and runs the walk.
+pub fn run(install: &Install) -> Result<WalkRun, String> {
+    let loaded = load(install, MAP)?;
+    let mut out = loaded.text.clone();
+    let mut mover = spawn(&loaded.scene, &loaded.collision.world, &mut out)?;
     let dt = f64::from(DEFAULT_STEP_SECONDS);
     let walked = Instant::now();
-    let report = walk::run(&collision.world, &mut mover, &SANCTUARY_SCRIPT, dt, SAMPLE_EVERY);
+    let report = walk::run(&loaded.collision.world, &mut mover, &SANCTUARY_SCRIPT, dt, SAMPLE_EVERY);
     let walk_time = walked.elapsed();
     walk_text(&mut out, &report, dt);
-    blockers(&mut out, &scene, &collision.world, &report);
+    blockers(&mut out, &loaded.scene, &loaded.collision.world, &report);
     let _ = writeln!(out, "walk: {} ticks in {} s of real time", report.ticks, fmt_f(walk_time.as_secs_f64(), 3));
     Ok(WalkRun { text: out, passed: report.passed() })
 }
@@ -200,7 +231,7 @@ fn walk_text(out: &mut String, r: &WalkReport, dt: f64) {
     for (i, s) in r.segments.iter().enumerate() {
         let _ = writeln!(
             out,
-            "segment {i} {}: from {} to {}, moved {} of {} at full speed, landings {}, stepped up {}{}",
+            "segment {i} {}: from {} to {}, moved {} of {} at full speed, landings {}, stepped up {}, digest {:016x}{}",
             s.name,
             p3(s.start),
             p3(s.end),
@@ -208,6 +239,7 @@ fn walk_text(out: &mut String, r: &WalkReport, dt: f64) {
             fmt_f(s.full_speed, 1),
             s.landings,
             fmt_f(s.stepped_up, 1),
+            s.digest.0,
             if s.stuck {
                 ", STUCK"
             } else if s.stalled {
@@ -220,7 +252,7 @@ fn walk_text(out: &mut String, r: &WalkReport, dt: f64) {
     let landing = r.first_landing.map_or_else(|| "never".to_string(), p3);
     let _ = writeln!(
         out,
-        "result: {} (fell through: {}, stuck: {}); travelled {} uu, first landing {}, lowest z {}, longest fall {} s, start-solid ticks {}",
+        "result: {} (fell through: {}, stuck: {}); travelled {} uu, first landing {}, lowest z {}, longest fall {} s, start-solid ticks {}, ticks {}, digest {:016x}",
         if r.passed() { "PASS" } else { "FAIL" },
         r.fell_through,
         r.stuck,
@@ -228,6 +260,8 @@ fn walk_text(out: &mut String, r: &WalkReport, dt: f64) {
         landing,
         fmt_f(r.lowest_z, 2),
         fmt_f(r.longest_fall, 2),
-        r.start_solid_ticks
+        r.start_solid_ticks,
+        r.ticks,
+        r.digest.0
     );
 }

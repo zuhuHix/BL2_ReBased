@@ -77,6 +77,7 @@ pub fn find_install(root: &Path) -> Result<Install, InstallError> {
 pub mod anim;
 pub mod frame;
 pub mod movement;
+pub mod play;
 
 #[cfg(test)]
 mod tests {

@@ -8,6 +8,13 @@
 //! continuously; with vsync, acquiring the next frame paces the loop. While no frame can be drawn (minimised or
 //! occluded window) the loop waits [`SKIP_WAIT`] between tries instead of spinning.
 //!
+//! **Play input** (lane H4-PLAY, [`run_play`]): with an [`InputCollector`] the window's keys, clicks, focus and raw
+//! mouse motion go to it, and each redraw sends its [`HostCommand::Play`] message before the step. The cursor is
+//! grabbed while the collector wants it: locked if the platform allows, else confined to the window, else left free
+//! and visible with the raw mouse motion still turning the view ([`Grab::Refused`], the typed fallback). Every change
+//! is kept in [`RunReport::cursor`]. A snapshot that says `finished` ends the run as [`Outcome::Completed`] after its
+//! frame is presented.
+//!
 //! A `--frames` run has a deadline ([`frames_time_limit`], or `--time-limit`). It is checked on every wake-up of the
 //! loop, not only on redraws, and the loop always asks to be woken by it: a minimised window may get no redraw at all,
 //! and the run must still end.
@@ -19,9 +26,10 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{DeviceEvent, DeviceId, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::gpu::{AdapterSummary, FrameOutcome, Gpu};
+use crate::play::InputCollector;
 use crate::render::Drawer;
 use crate::sim::{HostCommand, Simulation};
 use crate::stats::{FrameTimer, MAX_SAMPLES};
@@ -72,6 +80,21 @@ pub enum Outcome {
     Failed(String),
 }
 
+/// What the cursor grab got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Grab {
+    /// Not grabbed (never asked, or let go).
+    Released,
+    /// Locked in place and hidden.
+    Locked,
+    /// Kept inside the window and hidden (the platform refused a lock).
+    Confined,
+    /// The platform refused both; the cursor stays free and visible and the raw motion still turns the view. The
+    /// platform's reason.
+    Refused(String),
+}
+
 /// What a run did, for the binary to print.
 #[derive(Debug, Clone)]
 pub struct RunReport {
@@ -85,6 +108,8 @@ pub struct RunReport {
     pub timer: FrameTimer,
     /// From the first present to the last.
     pub elapsed: Duration,
+    /// Each cursor grab change of a play run, in order.
+    pub cursor: Vec<Grab>,
 }
 
 /// Runs the event loop on this (the main) thread until the run ends. Errors before the loop starts (no display, an
@@ -107,6 +132,21 @@ pub fn run_with<S: Simulation>(
     Ok(app.report)
 }
 
+/// [`run_with`] for the play mode: the window's input goes to `input` (module documentation).
+pub fn run_play<S: Simulation>(
+    options: RunOptions,
+    sim: S,
+    drawer: Option<Box<dyn Drawer>>,
+    input: InputCollector,
+) -> Result<RunReport, String> {
+    let event_loop = EventLoop::new().map_err(|e| format!("cannot start the event loop: {e}"))?;
+    let mut app = App::new(options, sim);
+    app.drawer = drawer;
+    app.input = Some(input);
+    event_loop.run_app(&mut app).map_err(|e| format!("event loop: {e}"))?;
+    Ok(app.report)
+}
+
 struct App<S> {
     options: RunOptions,
     sim: S,
@@ -114,6 +154,9 @@ struct App<S> {
     gpu: Option<Gpu>,
     /// The renderer plugged in by [`run_with`], if any.
     drawer: Option<Box<dyn Drawer>>,
+    /// The play mode's input ([`run_play`]), and the grab it has now.
+    input: Option<InputCollector>,
+    grab: Grab,
     pending: Vec<HostCommand>,
     /// When a `--frames` run fails, set when the window opens.
     deadline: Option<Instant>,
@@ -135,6 +178,8 @@ impl<S: Simulation> App<S> {
             window: None,
             gpu: None,
             drawer: None,
+            input: None,
+            grab: Grab::Released,
             pending: Vec::new(),
             deadline: None,
             last_step: None,
@@ -150,6 +195,7 @@ impl<S: Simulation> App<S> {
                 skipped: 0,
                 timer: FrameTimer::new(if options.frames.is_some() { MAX_SAMPLES } else { 0 }),
                 elapsed: Duration::ZERO,
+                cursor: Vec::new(),
             },
         }
     }
@@ -213,6 +259,33 @@ impl<S: Simulation> App<S> {
         true
     }
 
+    /// Grabs or lets go of the cursor to match what the play input wants, and tells the input whether the mouse
+    /// turns the view.
+    fn sync_grab(&mut self) {
+        let (Some(input), Some(window)) = (self.input.as_mut(), self.window.as_ref()) else { return };
+        let want = input.wants_grab();
+        let have = !matches!(self.grab, Grab::Released);
+        if want != have {
+            let got = if want {
+                match window.set_cursor_grab(CursorGrabMode::Locked) {
+                    Ok(()) => Grab::Locked,
+                    Err(_) => match window.set_cursor_grab(CursorGrabMode::Confined) {
+                        Ok(()) => Grab::Confined,
+                        Err(e) => Grab::Refused(e.to_string()),
+                    },
+                }
+            } else {
+                // Letting go cannot be refused in a way that matters: the cursor is shown either way.
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                Grab::Released
+            };
+            window.set_cursor_visible(!matches!(got, Grab::Locked | Grab::Confined));
+            self.report.cursor.push(got.clone());
+            self.grab = got;
+        }
+        input.set_look(!matches!(self.grab, Grab::Released));
+    }
+
     fn frame(&mut self, event_loop: &ActiveEventLoop) {
         // A redraw queued before the run was stopped draws nothing.
         if event_loop.exiting() || self.past_deadline(event_loop) {
@@ -221,11 +294,18 @@ impl<S: Simulation> App<S> {
         let now = Instant::now();
         let dt = self.last_step.map_or(Duration::ZERO, |last| now.duration_since(last));
         self.last_step = Some(now);
+        self.sync_grab();
+        if let Some(input) = self.input.as_mut() {
+            self.pending.push(HostCommand::Play(input.take()));
+        }
         let snapshot = match self.sim.step(&self.pending, dt) {
             Ok(snapshot) => snapshot,
             Err(e) => return self.stop(event_loop, Outcome::Failed(e.to_string())),
         };
         self.pending.clear();
+        if let Some(drawer) = self.drawer.as_mut() {
+            drawer.snapshot(&snapshot);
+        }
         let Some(gpu) = self.gpu.as_mut() else { return };
         let rendered = match self.drawer.as_mut() {
             Some(drawer) => gpu.render_with(&mut |device, queue, encoder, view, size| {
@@ -249,7 +329,7 @@ impl<S: Simulation> App<S> {
                 self.report.elapsed = presented_at.duration_since(first);
                 self.report.presented += 1;
                 self.backing_off = false;
-                if self.options.frames.is_some_and(|n| self.report.presented >= u64::from(n)) {
+                if self.options.frames.is_some_and(|n| self.report.presented >= u64::from(n)) || snapshot.finished {
                     self.stop(event_loop, Outcome::Completed);
                 }
             }
@@ -282,6 +362,9 @@ impl<S: Simulation> ApplicationHandler for App<S> {
         if let Some(drawer) = self.drawer.as_mut() {
             drawer.window_event(&event);
         }
+        if let Some(input) = self.input.as_mut() {
+            input.window_event(&event);
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.pending.push(HostCommand::CloseRequested);
@@ -306,8 +389,13 @@ impl<S: Simulation> ApplicationHandler for App<S> {
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
-        if let (Some(drawer), DeviceEvent::MouseMotion { delta }) = (self.drawer.as_mut(), event) {
-            drawer.mouse_motion(delta.0, delta.1);
+        if let DeviceEvent::MouseMotion { delta } = event {
+            if let Some(drawer) = self.drawer.as_mut() {
+                drawer.mouse_motion(delta.0, delta.1);
+            }
+            if let Some(input) = self.input.as_mut() {
+                input.mouse_motion(delta.0, delta.1);
+            }
         }
     }
 
