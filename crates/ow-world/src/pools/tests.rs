@@ -289,11 +289,15 @@ fn package() -> Vec<u8> {
     for n in [
         "UpdateLastValues",
         "PoolIsNowFull",
-        "ResetIdleTimer",
         "ClearAttributeModifierStacks",
     ] {
         native(&mut t, pool, n, &[], None, NATIVE);
     }
+    let reset_idle = {
+        let spec = FunctionSpec::new(NATIVE, "ResetIdleTimer");
+        t.function(pool, "ResetIdleTimer", &[], None, &[], &spec, |_| None)
+            .function
+    };
     // InitializeAuthoritative(D, P): Definition = D; AssociatedProvider = P; Note(10).
     let spec = FunctionSpec::new(SCRIPT, "InitializeAuthoritative");
     t.function(
@@ -364,6 +368,32 @@ fn package() -> Vec<u8> {
         Some(a)
     });
     t.class("ExperienceResourcePool", pool);
+    t.class("AmmoResourcePool", pool);
+    t.class("HealthResourcePool", pool);
+    // A pool whose InitializeAuthoritative calls ResetIdleTimer, as every installed one does: Definition = D;
+    // ResetIdleTimer(); Note(11).
+    let timed = t.class("TimedPool", pool);
+    let spec = FunctionSpec::new(SCRIPT, "InitializeAuthoritative");
+    t.function(
+        timed,
+        "InitializeAuthoritative",
+        &[p("Object", "D", pool_def), p("Object", "P", object)],
+        None,
+        &[],
+        &spec,
+        |ids| {
+            let mut a = Asm::new();
+            a.stmt()
+                .raw(&[EX_LET])
+                .instance(definition)
+                .local(ids.get("D"));
+            a.stmt().final_function(reset_idle, |_| {});
+            note(&mut a, note_fn, 11);
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        },
+    );
 
     // The manager.
     let manager = t.class("ResourcePoolManager", actor);
@@ -561,6 +591,9 @@ fn package() -> Vec<u8> {
         NATIVE,
     );
     t.class("WillowMind", controller);
+    // A controller-like class without CharacterClass, Pawn or MyWillowPawn, as the C++ fixtures declare it.
+    let bare = t.class("BareController", actor);
+    t.prop("Object", bare, "ResourcePoolManager", 0, manager);
     t.class("Thing", object);
     t.p.build()
 }
@@ -1892,15 +1925,12 @@ fn the_class_level_parts_are_not_yet_in_off_and_skipped_in_reference() {
                     x.set(controller, "CharacterClass", Value::Object(Some(plain)));
                     let done = levelup::recalculate_attribute_initialized_state(x.vm(), controller)
                         .unwrap();
-                    assert_eq!(
-                        (done.class_part_skipped, done.status_part_skipped),
-                        (false, false)
-                    );
+                    assert!(!done.class_parts_skipped);
                     assert_eq!(x.noted(pool), vec![10, 20, 21]);
                 }
                 _ => {
                     let done: Recalculated = result.unwrap();
-                    assert!(done.class_part_skipped);
+                    assert!(done.class_parts_skipped);
                     assert_eq!(x.noted(pool), vec![10, 20, 21]);
                 }
             }
@@ -2085,5 +2115,274 @@ fn installed_game_maya_health_pool_levels_1_to_80() {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("health_1_80.txt"), &out).unwrap();
         assert_eq!((bit_equal, follow_ok), (80, 80), "{out}");
+    });
+}
+
+/// The pool class of every installed `ResourcePoolDefinition`'s resource (`DefaultResourcePoolClass`), for the
+/// subclass-hook rule of `set_current`. Local only: writes `local/p2/w5-pools/pool_classes.txt`.
+#[test]
+#[ignore = "needs the installed game (OW_COOKED)"]
+fn installed_game_pool_classes() {
+    let Some(cooked) = std::env::var_os("OW_COOKED") else {
+        eprintln!("OW_COOKED is not set: skipped");
+        return;
+    };
+    run(move || {
+        use std::fmt::Write as _;
+        let mode = ParityMode::Off;
+        let mut defs = DefStore::open(
+            PathBuf::from(&cooked),
+            IdentityPolicy::FirstInScanOrder,
+            mode,
+        )
+        .unwrap();
+        let mut space = ObjectSpace::new();
+        let paths = defs
+            .exports_of_class("Engine.ResourcePoolDefinition")
+            .unwrap();
+        let mut out = String::new();
+        writeln!(
+            out,
+            "# AI-assisted (Claude Code). W5-POOLS, local only. definition resource pool_class"
+        )
+        .unwrap();
+        for path in paths {
+            let Ok(Some(def)) = defs.find(&mut space, &path) else {
+                writeln!(out, "{} (not loaded)", path.as_str()).unwrap();
+                continue;
+            };
+            let resource = object(&space, def, "Resource").ok().flatten();
+            let (res_path, class) = match resource {
+                Some(r) => {
+                    defs.ensure_loaded(&mut space, r).unwrap();
+                    let c = match field(&space, r, "DefaultResourcePoolClass") {
+                        Ok(Value::Class(Some(c))) => space
+                            .classes
+                            .get_layout(c)
+                            .map(|l| l.path().as_str().to_string())
+                            .unwrap_or_default(),
+                        other => format!("{other:?}"),
+                    };
+                    let resolver = match field(&space, r, "ResourceContextResolver") {
+                        Ok(Value::Object(Some(o))) => ow_attr::eval::class_path(&space, o),
+                        Ok(Value::Object(None)) => "None".to_string(),
+                        other => format!("{other:?}"),
+                    };
+                    (
+                        ow_attr::eval::class_path(&space, r) + " " + &object_path_of(&space, r),
+                        c + " resolver=" + &resolver,
+                    )
+                }
+                None => ("None".to_string(), "-".to_string()),
+            };
+            writeln!(out, "{} {res_path} {class}", path.as_str()).unwrap();
+        }
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/w5-pools");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pool_classes.txt"), &out).unwrap();
+    });
+}
+
+fn object_path_of(space: &ObjectSpace, o: ObjRef) -> String {
+    space
+        .heap
+        .get(o)
+        .map(|x| space.names.text(x.name).into_owned())
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of PR #329
+// ---------------------------------------------------------------------------------------------------------------
+
+#[test]
+fn an_off_mode_refusal_inside_initialize_authoritative_leaves_the_manager_as_it_was() {
+    run(|| {
+        let mut x = fx();
+        let (controller, m) = x.controller_with_manager("Controller");
+        let (resource, def) = x.resource_with("TimedPool");
+        let e = x
+            .call(
+                "ResourcePoolManager.CreatePool",
+                None,
+                vec![
+                    Value::Object(Some(m)),
+                    Value::Object(Some(controller)),
+                    Value::Object(Some(def)),
+                    Value::Bool(false),
+                ],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(vm_missing(e), Missing::NotRead),
+            "ResetIdleTimer is not read"
+        );
+        assert_eq!(
+            pools_of(&x.w.vm.space, m).unwrap(),
+            vec![],
+            "the slot is emptied again"
+        );
+        assert_eq!(
+            x.get(m, "NextPoolGUID"),
+            Value::Byte(0),
+            "the GUID counter is restored"
+        );
+        assert_eq!(
+            x.w.vm
+                .service::<PoolMaps>()
+                .unwrap()
+                .borrow()
+                .slot(m, resource),
+            None,
+            "no map entry"
+        );
+        // Reference mode: the C++ stamp, and the pool is made.
+        let mut r = fx_mode(ParityMode::Reference);
+        let (controller, m) = r.controller_with_manager("Controller");
+        let (_, def) = r.resource_with("TimedPool");
+        let (made, _) = r.create(Some(m), Some(controller), Some(def), false);
+        let pool = made.data.expect("made");
+        assert_eq!(r.noted(pool), vec![11]);
+        assert_eq!(r.f(pool, "PoolIdleDelayStartTime"), 12.5);
+    });
+}
+
+#[test]
+fn only_the_experience_and_ammo_hooks_are_refused() {
+    run(|| {
+        let mut x = fx();
+        for (class, refused) in [
+            ("ExperienceResourcePool", true),
+            ("AmmoResourcePool", true),
+            ("HealthResourcePool", false),
+            ("ResourcePool", false),
+        ] {
+            let pool = x.pool(class);
+            x.setf(pool, "MaxValue", 50.0);
+            let r = x.call(
+                "ResourcePool.SetCurrentValue",
+                Some(pool),
+                vec![Value::Float(5.0)],
+            );
+            assert_eq!(r.is_err(), refused, "{class}");
+            let want = if refused { 0.0 } else { 5.0 };
+            assert_eq!(x.f(pool, "CurrentValue"), want, "{class}");
+        }
+    });
+}
+
+#[test]
+fn set_current_value_of_nan_gives_the_minimum_as_the_c_comparison_does() {
+    run(|| {
+        let mut x = fx();
+        let pool = x.pool("ResourcePool");
+        x.setf(pool, "MinValue", 3.0);
+        x.setf(pool, "MaxValue", 50.0);
+        x.ret(
+            "ResourcePool.SetCurrentValue",
+            Some(pool),
+            vec![Value::Float(f32::NAN)],
+        );
+        assert_eq!(x.f(pool, "CurrentValue"), 3.0);
+    });
+}
+
+#[test]
+fn set_health_refuses_an_unread_hook_before_it_writes_the_pawns_cache() {
+    run(|| {
+        let mut x = fx();
+        let (p, _, m) = pawn(&mut x);
+        // An authoritative ammo pool in slot 0 with GUID 0, and an uncached reference to it on the pawn.
+        let ammo = x.pool("AmmoResourcePool");
+        let slots = prop_of(&x.w.vm.space, m, "ResourcePools").unwrap();
+        x.vm()
+            .space
+            .write(
+                m,
+                ow_object::ids::PropAddr::element(slots, 0),
+                Value::Object(Some(ammo)),
+            )
+            .unwrap();
+        let bare = x.ref_value(PoolRef::new(Some(m), 0, 0, None));
+        x.set(p, "HealthPool", bare.clone());
+        let e = x
+            .call("Pawn.SetHealth", Some(p), vec![Value::Float(10.0)])
+            .unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::NotRead));
+        assert_eq!(x.get(p, "HealthPool"), bare, "the cache is not written");
+    });
+}
+
+#[test]
+fn the_vehicle_refusal_comes_before_a_manager_is_made() {
+    run(|| {
+        let mut x = fx();
+        let controller = x.new_obj("Controller");
+        let car = x.new_obj("Vehicle");
+        x.set(controller, "Pawn", Value::Object(Some(car)));
+        let (resource, _) = x.resource();
+        let before = x.w.actors().borrow().list().len();
+        let e = x
+            .call(
+                "Controller.GetResourcePoolForResourceDefinition",
+                Some(controller),
+                vec![Value::Object(Some(resource))],
+            )
+            .unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::NotRead));
+        assert_eq!(
+            x.get(controller, "ResourcePoolManager"),
+            Value::Object(None)
+        );
+        assert_eq!(
+            x.w.actors().borrow().list().len(),
+            before,
+            "nothing spawned"
+        );
+    });
+}
+
+#[test]
+fn the_too_many_pools_line_names_the_definition_path_and_the_owner() {
+    run(|| {
+        let mut x = fx();
+        let (controller, m) = x.controller_with_manager("Controller");
+        for _ in 0..16 {
+            let (_, def) = x.resource();
+            x.create(Some(m), Some(controller), Some(def), false);
+        }
+        let (_, def) = x.resource();
+        x.create(Some(m), Some(controller), Some(def), false);
+        let line = x.w.vm.log.last().unwrap().clone();
+        let def_path = object_path(&x.w.vm.space, def);
+        let owner_path = object_path(&x.w.vm.space, controller);
+        assert_eq!(
+            line,
+            format!("Too many ResourcePools: {def_path} (owner {owner_path})")
+        );
+    });
+}
+
+#[test]
+fn reference_mode_reads_no_class_level_condition() {
+    run(|| {
+        let mut r = fx_mode(ParityMode::Reference);
+        let controller = r.new_obj("BareController");
+        let m = r.new_obj("ResourcePoolManager");
+        r.set(m, "Owner", Value::Object(Some(controller)));
+        r.set(controller, "ResourcePoolManager", Value::Object(Some(m)));
+        let (_, def) = r.resource();
+        let pool = r
+            .create(Some(m), Some(controller), Some(def), false)
+            .0
+            .data
+            .unwrap();
+        let done = levelup::recalculate_attribute_initialized_state(r.vm(), controller).unwrap();
+        assert!(done.class_parts_skipped);
+        assert_eq!(r.noted(pool), vec![10, 20, 21]);
+        // Off mode reads them, and this class declares none: a typed error, not a guess.
+        let mut x = fx();
+        let controller = x.new_obj("BareController");
+        assert!(levelup::recalculate_attribute_initialized_state(x.vm(), controller).is_err());
     });
 }

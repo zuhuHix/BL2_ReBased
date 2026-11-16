@@ -16,10 +16,16 @@
 //! rather than the manager's `ResourcePoolMap` property, because the object model holds a map property as
 //! `Value::None` (decision 2026-11-15-06). Creation records an entry, deletion removes it, lookups read it.
 //!
-//! **Not read, so `NotYet`** (in `ParityMode::Off`; `Reference` keeps the C++ reading, a stand-in pinned by no tracked
-//! test): `ResetIdleTimer` has no note (`NATIVE_INDEX.md`: "none (guess)"; the C++ stamps the idle-delay start
-//! time with the world time); the "current value changed" hook `SetCurrentValue` ends with is read only for the base
-//! class (empty), so a pool of any subclass is `NotYet` before anything is written (the C++ skips every hook).
+//! **Not read, so `NotYet`** (in `ParityMode::Off`; `Reference` keeps the C++ reading, a stand-in the W6 runs of
+//! `tests/combat_test.py` and `tests/mission_script_test.py` reach, decision 2026-11-15-29): `ResetIdleTimer` has no note
+//! (`NATIVE_INDEX.md`: "none (guess)"; the C++ stamps the idle-delay start time with the world time); the "current
+//! value changed" hook `SetCurrentValue` ends with is unread for the experience and ammo pools the record names
+//! ([`UNREAD_HOOK_CLASSES`]), so such a pool is `NotYet` before anything is written (the C++ skips every hook).
+//!
+//! **Impact in Off mode:** every installed `InitializeAuthoritative` calls `ResetIdleTimer`, so **Off mode cannot
+//! create a real pool** until that native is read (a cheap Ghidra read). The refusal leaves the manager as it was:
+//! [`create_pool_at_index`] empties the slot again and [`create_pool`] restores `NextPoolGUID`; no map entry is made.
+//!
 //! Always `NotYet`: a `CreatePoolAtIndex` without a manager, a vehicle's pool provider in the controller lookup, a
 //! `DeletePool` whose manager is not the reference's, and every resource owner resolver but the controller one in the
 //! engine query.
@@ -62,6 +68,11 @@ pub const HEALTH_FLOOR: f32 = 1.0;
 /// The manager class.
 pub const MANAGER_CLASS: &str = "Engine.ResourcePoolManager";
 
+/// The pool subclasses whose "current value changed" hook the record names and did not read (NATIVE_LEVEL_UP_ATTRIBUTES.md
+/// section 4: the experience and ammo pools). On the installed game the health pool is `Engine.HealthResourcePool` and
+/// the shield pool `WillowGame.ShieldResourcePool` (decision 2026-11-15-29); the record names no hook for either.
+pub const UNREAD_HOOK_CLASSES: [&str; 2] = ["ExperienceResourcePool", "AmmoResourcePool"];
+
 /// The attributes `ClearAttributeModifierStacks` empties (NATIVE_ATTRIBUTES.md section 8).
 pub const CLEARED_STACKS: [&str; 7] = [
     "MinValue",
@@ -100,14 +111,25 @@ pub(crate) fn is_a(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, V
     Ok(false)
 }
 
-/// The class name of `o` (its last path part).
-fn class_name(space: &ObjectSpace, o: ObjRef) -> Result<String, VmError> {
-    let c = space.heap.get(o)?.class;
-    Ok(space
-        .classes
-        .get_layout(c)
-        .map(|l| l.path().name().to_string())
-        .unwrap_or_default())
+/// The object path of `o` (its outer chain, outermost first, joined by dots), for messages. The walk stops after 64
+/// outers, a Rust-only bound against an outer cycle.
+pub(crate) fn object_path(space: &ObjectSpace, o: ObjRef) -> String {
+    let mut parts = Vec::new();
+    let mut cursor = Some(o);
+    while let Some(c) = cursor {
+        if parts.len() == 64 {
+            break;
+        }
+        match space.heap.get(c) {
+            Ok(x) => {
+                parts.push(space.names.text(x.name).into_owned());
+                cursor = x.outer;
+            }
+            Err(_) => break,
+        }
+    }
+    parts.reverse();
+    parts.join(".")
 }
 
 /// Loads `o` when it is one of the definition store's unloaded handles.
@@ -501,14 +523,7 @@ pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError>
     if !flag(&vm.space, pool, "bIsAuthoritative")? {
         return Ok(());
     }
-    let class = class_name(&vm.space, pool)?;
-    if vm.parity == ParityMode::Off && !class.eq_ignore_ascii_case("ResourcePool") {
-        return Err(NotYet::not_read(
-            format!("the \"current value changed\" hook of pool class {class} (only the base class's is read)"),
-            RECORD_POOL,
-        )
-        .into());
-    }
+    current_hook_refusal(vm, pool)?;
     let mut maximum = float(&vm.space, pool, "MaxValue")?;
     let minimum = float(&vm.space, pool, "MinValue")?;
     let mut value = value;
@@ -523,7 +538,10 @@ pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError>
         )?;
         value = whole;
     }
-    let current = minimum.max(value.min(maximum));
+    // The C++ form `std::max(minimum, std::min(value, maximum))`, written out so a NaN value gives the minimum as it
+    // does there (`f32::min`/`max` would drop the NaN and give the maximum).
+    let low = if maximum < value { maximum } else { value };
+    let current = if minimum < low { low } else { minimum };
     set_field(&mut vm.space, pool, "CurrentValue", Value::Float(current))?;
     let t = world_time(vm)?;
     set_field(
@@ -532,6 +550,26 @@ pub fn set_current(vm: &mut Vm, pool: ObjRef, value: f32) -> Result<(), VmError>
         "PoolIdleDelayStartTime",
         Value::Float(t),
     )?;
+    Ok(())
+}
+
+/// Off mode: `NotYet` for an authoritative pool of one of the [`UNREAD_HOOK_CLASSES`] (the hook `SetCurrentValue` ends
+/// with). Reference mode skips every hook, as the C++.
+fn current_hook_refusal(vm: &Vm, pool: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off || !flag(&vm.space, pool, "bIsAuthoritative")? {
+        return Ok(());
+    }
+    for class in UNREAD_HOOK_CLASSES {
+        if is_a(&vm.space, pool, class)? {
+            return Err(NotYet::not_read(
+                format!(
+                    "the \"current value changed\" hook of {class} (the record names it, unread)"
+                ),
+                RECORD_POOL,
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -674,12 +712,20 @@ pub fn create_pool_at_index(
     if is_authority(&vm.space, manager)? {
         let owner = object(&vm.space, manager, "Owner")?;
         let f = find_script(vm, pool, "InitializeAuthoritative")?;
-        actors::call_with_zeros(
+        let init = actors::call_with_zeros(
             vm,
             f,
             Some(pool),
             vec![Value::Object(Some(def)), Value::Object(owner)],
-        )?;
+        );
+        if let Err(e) = init {
+            // A refusal inside the pool's script (in Off mode, `ResetIdleTimer`, which every installed
+            // `InitializeAuthoritative` reaches): the slot is emptied again, so the manager is as it was (the caller
+            // restores `NextPoolGUID`) and no map entry is made. The new pool object is left unreferenced, and what the
+            // script did before the refusal to other objects is not undone.
+            set_slot(&mut vm.space, manager, index, None)?;
+            return Err(e);
+        }
     } else {
         set_field(&mut vm.space, pool, "Definition", Value::Object(Some(def)))?;
     }
@@ -777,19 +823,28 @@ pub fn create_pool(
         });
     }
     let Some(i) = empty else {
-        let path = ow_attr::eval::class_path(&vm.space, def);
-        let name = vm
-            .space
-            .heap
-            .get(def)
-            .map(|o| vm.space.names.text(o.name).into_owned())
-            .unwrap_or_default();
-        vm.log
-            .push(format!("Too many ResourcePools: {name} ({path})"));
+        // The game's on-screen message names the owner and the definition (section 1.3 step 7); the C++ logs the
+        // definition's object path.
+        let owner_path = match object(&vm.space, m, "Owner")? {
+            Some(o) => object_path(&vm.space, o),
+            None => "None".to_string(),
+        };
+        let line = format!(
+            "Too many ResourcePools: {} (owner {owner_path})",
+            object_path(&vm.space, def)
+        );
+        vm.log.push(line);
         return Ok(invalid(manager));
     };
     let guid = next_guid(&mut vm.space, m)?;
-    let reference = match create_pool_at_index(vm, m, Some(def), i32::from(i), guid)? {
+    let made = match create_pool_at_index(vm, m, Some(def), i32::from(i), guid) {
+        Ok(made) => made,
+        Err(e) => {
+            set_field(&mut vm.space, m, "NextPoolGUID", Value::Byte(guid))?;
+            return Err(e);
+        }
+    };
+    let reference = match made {
         Some(pool) => PoolRef::new(manager, i, guid, Some(pool)),
         None => PoolRef::INVALID,
     };
@@ -941,6 +996,10 @@ pub fn set_health(vm: &mut Vm, pawn: ObjRef, v: f32) -> Result<(), VmError> {
     } else {
         v
     };
+    // The hook refusal of `set_current` is decided before the pawn's cache is written.
+    if let Some(pool) = health_pool(&vm.space, pawn)? {
+        current_hook_refusal(vm, pool)?;
+    }
     match health_pool_cached(&mut vm.space, pawn)? {
         Some(pool) => set_current(vm, pool, v),
         None => set_field(&mut vm.space, pawn, "HealthVar", Value::Float(v)),
@@ -994,7 +1053,13 @@ const RECORD_QUERY: &str = "NATIVE_ATTRIBUTES.md section 5 (ResourcePoolAttribut
 /// own owner resolver (`ResourceContextResolver`) finds the owner from the source, then the owner's pool for the
 /// resource is the slot its manager's map gives. Only the controller resolver with a controller source is read here
 /// (the record: a controller source resolves to itself); any other resolver class or source is `NotYet`, and so is
-/// an owner without `ResourcePoolManager`. A None resolver, a None manager or no pool for the resource is `Ok(None)`.
+/// an owner without `ResourcePoolManager`. A None manager or no pool for the resource is `Ok(None)`.
+///
+/// The record does not name the property. `ResourceContextResolver` is the `ResourceDefinition` property checked
+/// locally against the installed `Engine.upk`: all 31 installed resources hold a `ControllerAttributeContextResolver`
+/// there (decision 2026-11-15-29). A None resolver giving `Ok(None)` is UNVERIFIED (fitted: no installed resource has
+/// one). The controller rule is re-implemented here, more narrowly than `ow-attr`'s resolver; dispatching through the
+/// `AttributeSystem` registry is an open contract follow-up.
 fn query_pool(
     maps: &RefCell<PoolMaps>,
     resource: ObjRef,
@@ -1366,6 +1431,23 @@ pub fn controller_pool(
     if mgr.is_none() && !create {
         return Ok(PoolRef::INVALID);
     }
+    // A controller driving a vehicle: the vehicle's pool provider is not read. Decided before a manager is made, so the
+    // refusal changes nothing; an existing manager's pool is still found first, as the record orders it.
+    if let Some(pawn) = object(&vm.space, controller, "Pawn")?
+        && is_a(&vm.space, pawn, "Vehicle")?
+    {
+        if let Some(m) = mgr {
+            let found = pool_for_resource(vm, Some(m), None, Some(res))?;
+            if found.reference.data.is_some() {
+                return Ok(found.reference);
+            }
+        }
+        return Err(NotYet::not_read(
+            "the pool lookup of a vehicle that provides pools (Controller.GetResourcePoolForResourceDefinition)",
+            RECORD,
+        )
+        .into());
+    }
     let found = pool_for_resource(vm, mgr, Some(controller), Some(res))?;
     set_field(
         &mut vm.space,
@@ -1375,15 +1457,6 @@ pub fn controller_pool(
     )?;
     if found.reference.data.is_some() {
         return Ok(found.reference);
-    }
-    if let Some(pawn) = object(&vm.space, controller, "Pawn")?
-        && is_a(&vm.space, pawn, "Vehicle")?
-    {
-        return Err(NotYet::not_read(
-            "the pool lookup of a vehicle that provides pools (Controller.GetResourcePoolForResourceDefinition)",
-            RECORD,
-        )
-        .into());
     }
     if !create {
         return Ok(found.reference);

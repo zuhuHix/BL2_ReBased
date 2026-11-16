@@ -19,9 +19,10 @@
 //!    and a `WillowCharacterClassDefinition`): ten attributes of the status component; `NotYet { NotRead }` in Off mode
 //!    when it applies, as step 1.
 //!
-//! In `ParityMode::Reference` steps 1 and 3 are skipped, as the C++ does (`src/mission_script.cpp`: "not modelled";
-//! for Maya's class the data are the constants 0 and 1). A stand-in pinned by no tracked test. Every refusal is
-//! decided before the rebase, so a `NotYet` changes nothing.
+//! In `ParityMode::Reference` steps 1 and 3 are skipped and their conditions are not read (no `CharacterClass`,
+//! `Pawn` or `MyWillowPawn`), as the C++ does (`src/mission_script.cpp`: "not modelled"; for Maya's class the data
+//! are the constants 0 and 1). A stand-in pinned by `tests/mission_script_test.py` (scenarios S7 and S7b, `--slice-run`)
+//! (W6 lanes). Every refusal is decided before the rebase, so a `NotYet` changes nothing.
 //!
 //! **Not read:** the `WillowMind` override (`NotYet`) and the `WillowVehicle` thunk (its own native, not registered
 //! here). No change notification is sent and no script event fires (record section 1).
@@ -50,10 +51,8 @@ pub const NATIVE_KEYS: [&str; 2] = [
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Recalculated {
-    /// Step 1 applied and was skipped (Reference mode only).
-    pub class_part_skipped: bool,
-    /// Step 3 applied and was skipped (Reference mode only).
-    pub status_part_skipped: bool,
+    /// Steps 1 and 3 were not run and their conditions not read (Reference mode, as the C++).
+    pub class_parts_skipped: bool,
     /// The manager whose pools were rebased (None: no manager, nothing rebased).
     pub manager: Option<ObjRef>,
 }
@@ -63,23 +62,46 @@ pub fn recalculate_attribute_initialized_state(
     vm: &mut Vm,
     controller: ObjRef,
 ) -> Result<Recalculated, VmError> {
-    let space = &vm.space;
-    if is_a(space, controller, "WillowMind")? {
+    if is_a(&vm.space, controller, "WillowMind")? {
         return Err(NotYet::not_read(
             "the WillowMind override of RecalculateAttributeInitializedState",
             RECORD,
         )
         .into());
     }
+    let skipped = vm.parity == ParityMode::Reference;
+    if !skipped {
+        refuse_class_parts(&vm.space, controller)?;
+    }
+    let manager = object(&vm.space, controller, "ResourcePoolManager")?;
+    pools::recalculate_base_values(vm, manager)?;
+    Ok(Recalculated {
+        class_parts_skipped: skipped,
+        manager,
+    })
+}
+
+/// Off mode: `NotYet` when step 1 or step 3 applies (module documentation). Reads `CharacterClass`, `Pawn` and, on a
+/// `WillowPlayerController`, `MyWillowPawn` and its `StatusEffectComp`.
+fn refuse_class_parts(
+    space: &ow_object::heap::ObjectSpace,
+    controller: ObjRef,
+) -> Result<(), VmError> {
     let class_def = object(space, controller, "CharacterClass")?;
     let pawn = object(space, controller, "Pawn")?;
     let class_part = match (pawn, class_def) {
         (Some(p), Some(_)) => !is_a(space, p, "Vehicle")?,
         _ => false,
     };
-    let status_part = if is_a(space, controller, "WillowPlayerController")? {
-        let my_pawn = object(space, controller, "MyWillowPawn")?;
-        let component = match my_pawn {
+    if class_part {
+        return Err(NotYet::not_read(
+            "the class-level pawn attributes of RecalculateAttributeInitializedState (encumbrance resistance              and twelve damage modifiers: the pawn properties they land in are not named)",
+            RECORD,
+        )
+        .into());
+    }
+    if is_a(space, controller, "WillowPlayerController")? {
+        let component = match object(space, controller, "MyWillowPawn")? {
             Some(p) => object(space, p, "StatusEffectComp")?,
             None => None,
         };
@@ -87,35 +109,15 @@ pub fn recalculate_attribute_initialized_state(
             Some(c) => is_a(space, c, "WillowCharacterClassDefinition")?,
             None => false,
         };
-        component.is_some() && willow_class
-    } else {
-        false
-    };
-    if vm.parity == ParityMode::Off {
-        if class_part {
+        if component.is_some() && willow_class {
             return Err(NotYet::not_read(
-                "the class-level pawn attributes of RecalculateAttributeInitializedState (encumbrance resistance \
-                 and twelve damage modifiers: the pawn properties they land in are not named)",
-                RECORD,
-            )
-            .into());
-        }
-        if status_part {
-            return Err(NotYet::not_read(
-                "the ten status-effect resistances RecalculateAttributeInitializedState re-initialises (the \
-                 component properties they land in are not named)",
+                "the ten status-effect resistances RecalculateAttributeInitializedState re-initialises (the                  component properties they land in are not named)",
                 RECORD,
             )
             .into());
         }
     }
-    let manager = object(&vm.space, controller, "ResourcePoolManager")?;
-    pools::recalculate_base_values(vm, manager)?;
-    Ok(Recalculated {
-        class_part_skipped: class_part,
-        status_part_skipped: status_part,
-        manager,
-    })
+    Ok(())
 }
 
 /// The two `RecalculateAttributeInitializedState` keys as a [`NativePack`]. `World::new` registers it.
