@@ -13,7 +13,7 @@
 //!   `|a| / 90 deg` for a direction `a` in the front half. The back half mirrors it, UNVERIFIED.
 //! - **Clip time.** A node's time is in the clip's own seconds (`SequenceLength` units) and advances by
 //!   `dt * Rate * RateScale` (times the play-rate scale of `ScaleRate` nodes above it); the export folds `RateScale`
-//!   into its frame rate, so it is divided back out to sample. A one-shot advances at `|rate| * RateScale` clip
+//!   into its frame rate, so it is divided back out to sample. A one-shot advances at `rate * RateScale` clip
 //!   seconds per real second; its blend times are real seconds, scaled into clip seconds when it starts.
 //! - **Stand-ins, UNVERIFIED** (no record, script or C++ settles them):
 //!   - weights move linearly to their target over the blend time;
@@ -242,7 +242,7 @@ impl From<AnimError> for EvalError {
 }
 
 /// A one-shot in progress. Every time here is in the clip's own seconds: the request's blend times (real seconds)
-/// are multiplied by the clip's speed (`|rate| * RateScale`) when it starts.
+/// are multiplied by the clip's speed (`rate * RateScale`) when it starts.
 #[derive(Debug, Clone, PartialEq)]
 struct Shot {
     play: Play,
@@ -422,6 +422,13 @@ impl<'a> Driver<'a> {
         let length = info.length();
         // Clip seconds per real second; the blend times below are real seconds until they are scaled by it.
         let speed = f64::from(play.rate) * f64::from(info.rate_scale);
+        // A stored RateScale of 0, below 0 or NaN would make a one-shot that never ends (review r2 of PR #354).
+        if !(speed.is_finite() && speed > 0.0) {
+            return Err(EvalError::BadPlay(format!(
+                "rate of {} times its RateScale must be finite and above 0",
+                play.clip
+            )));
+        }
         let mut blend_in = f64::from(play.blend_in).max(0.0);
         let mut blend_out = f64::from(play.blend_out).max(0.0);
         if special {

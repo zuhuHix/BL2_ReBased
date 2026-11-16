@@ -18,7 +18,7 @@ structural, against the tree data, or against stage 1's sampler.
      one script rule used.
   3. **Records:** `NATIVE_PHASELOCK_PRESENTATION.md` section 2.3 (read from the native, UNVERIFIED) gives the
      special-move blend times: negative ones become 0; `EC_StopOnLastFrame` and `EC_OnAnimEnd` drop the blend-out;
-     when the clip's length over `|rate|` is shorter than blend-in plus blend-out, both are 0 (unless it loops); only
+     when the clip's length over `rate` is shorter than blend-in plus blend-out, both are 0 (unless it loops); only
      `EC_Loop` loops. The node plays the clip as a full-body blend.
   4. **Tree data:** each node's class, children, clip names, `Rate`, `bLooping`, `bPlaying`, `CurrentTime`, speed
      `Constraints`, blend times, `Child2Weight`, `BaseSpeed`, branch bones and flag objects. They are read through
@@ -85,9 +85,9 @@ structural, against the tree data, or against stage 1's sampler.
   - Deterministic: the same steps give the same bits, and ten ticks of 0.01 s match one of 0.1 s within 1e-9 for
     these linear rules.
   - Clip times are in the clip's own seconds (`SequenceLength` units) and advance by `dt * Rate * RateScale`; the
-    export's folded `RateScale` is divided back out to sample. A one-shot runs at `|rate| * RateScale` clip seconds
+    export's folded `RateScale` is divided back out to sample. A one-shot runs at `rate * RateScale` clip seconds
     per real second; its blend times are real seconds, scaled into clip seconds when it starts, and the record's
-    "shorter than blend-in plus blend-out" rule uses the play length in real seconds (`length / (|rate| *
+    "shorter than blend-in plus blend-out" rule uses the play length in real seconds (`length / (rate *
     RateScale)`).
   - Requests and inputs are checked: a play rate must be finite and above 0, blend times finite, and speed,
     direction and the default blend time finite (`EvalError::BadPlay`, `EvalError::BadInput`).
