@@ -44,8 +44,14 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
   - **All or nothing** (review r1). Every read and refusal comes before the first apply: the controller, both record
     arrays, the parts, every effect list, and the external-slot check (the script reaches the slots last, but here
     they can only refuse, so the check moves first and changes no successful outcome). If an apply fails, everything
-    the call added is removed (`remove_effects`) and the arrays keep their old values, so an `Err` leaves the stacks
-    and the records as they were and a retry is not answered `AlreadyApplied`.
+    the call added is removed, each modifier whose removal succeeded is freed (no record or script copy names it),
+    and the arrays get their old values back; that apply error then leaves the stacks and the records as they were,
+    and a retry is not answered `AlreadyApplied`.
+  - **A rollback that fails is reported** (review r2). If a removal or a restore of that rollback fails, the error
+    names both failures and is the rollback's (not the apply's `NotYet` or data error), because the state is then not
+    the one before the call: a modifier no record names may stay on a stack (a retry would add a second copy, and no
+    unequip can remove it). Its modifier is not freed. Within one apply call `ow-attr` cleans up itself and returns
+    the call's own error (decision 2026-11-15-13); only the equip's rollback across calls is reported here.
   - Unequip removes each record's modifier from its context, then empties the arrays. Every record of both arrays is
     tried (`remove_effects`) and both arrays are emptied even when a removal fails; the first error is returned
     afterwards (review r1). The records live in the item's own arrays as `AppliedAttributeEffect` structs, where the
@@ -84,7 +90,8 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
   - `SourceDefinitionName` is the balance's name;
   - then `SetGameStage`, `SetAwesomeLevel`, the `InitializeInventory` event, and `bDropOnDeath` true;
   - a step that fails after the actor exists destroys it, and a pick that fails destroys every actor the call made
-    before the error is returned (unless the world's destroy refuses one, for a `Role` below authority);
+    before the error is returned; a destroy that fails or that the world refuses (an actor whose `Role` is below
+    authority, for one) is reported, the error naming both failures and being the cleanup's (review r2);
   - a spawn modifier's `BaseValueConstant` or `BaseValueScaleConstant` that is present but not a number is `BadData`
     (review r1); only an absent one takes the untagged default.
   - Two choices where the record is silent: the actor is spawned by the level's `WorldInfo`, and
@@ -129,12 +136,16 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
     source first, a trailing byte), all identical.
   - `tests/vm_test.py` on the Rust binary: its 11 `--inventory-move` sites pass. The file still fails 3 other sites
     (`MakePair`, a W3-DEFS follow-up; two `--mover-probe` sites, lane W5-DIALOG).
-  - 35 `ow-inventory` unit tests, on a VM built by hand and (for one spawn) on an invented `Engine.upk`:
+  - 40 `ow-inventory` unit tests, on a VM built by hand and (for one spawn) on an invented `Engine.upk`:
     - the overrides through declared script functions (records appended, the override source first, a VM without
       the functions refused, a typeless weapon `NotYet`);
     - item and weapon equip and unequip, the guards, the part guard and the external-slot `NotYet`;
     - after review r1: a failed item and weapon apply takes back what it added (stacks and records unchanged, the
       retry fails again), an external slot refuses before any effect is applied, unequip tries every record;
+    - after review r2: a rollback whose remove fails (a test resolver whose storage breaks after the add) is
+      reported naming both errors, with the modifier left on the stack as the error says; a rollback frees the
+      modifiers it removed; a failed equip of a second item leaves the first item's value and modifier in place;
+      existing part records stay identical after a failure; a destroy the world refuses is reported;
     - one spawn's order (`SourceDefinitionName`, then `SetGameStage`, `SetAwesomeLevel`, `InitializeInventory`, then
       `bDropOnDeath`), the answer false when a pick fails, a class that is no inventory refused with no actor made,
       and every actor destroyed after an error;

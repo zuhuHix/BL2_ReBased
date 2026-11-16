@@ -385,6 +385,14 @@ mod level {
             self.w.actors().borrow().list().len()
         }
 
+        /// Sets `Role` in the item class's defaults (a destroy refuses below authority).
+        pub fn set_item_role(&mut self, role: u8) {
+            let cdo = self.w.vm.defs.class_default(&mut self.w.vm.space, "Engine.TestItem").unwrap();
+            let class = self.w.vm.space.heap.get(cdo).unwrap().class;
+            let p = self.w.vm.space.prop(class, "Role").unwrap();
+            self.w.vm.space.write(cdo, ow_object::ids::PropAddr::scalar(p), Value::Byte(role)).unwrap();
+        }
+
         pub fn destroyed(&self, o: ObjRef) -> bool {
             is_destroyed(&self.w.vm.space, o).unwrap()
         }
@@ -462,3 +470,26 @@ fn an_error_after_a_spawn_destroys_every_actor_the_call_made() {
     assert!(made.iter().all(|o| l.destroyed(*o)), "and both destroyed again");
 }
 
+
+#[test]
+fn a_cleanup_the_world_refuses_is_reported_naming_both_errors() {
+    let mut l = level::level();
+    l.set_class(Some("Engine.TestItem"));
+    // Role below authority: the world refuses to destroy the spawned actors.
+    l.set_item_role(0);
+    let good = l.resolved(1);
+    let failing = l.resolved(99);
+    let e = l.spawn(vec![good, failing]).unwrap_err();
+    let text = e.to_string();
+    assert!(text.contains("the cleanup after a failure failed"), "{text}");
+    assert!(text.contains("refused to destroy"), "the cleanup's failure: {text}");
+    assert!(text.contains("invented failure"), "the step's: {text}");
+    let mut made: Vec<ObjRef> = Vec::new();
+    for (o, ..) in l.seen.borrow().iter() {
+        if !made.contains(o) {
+            made.push(*o);
+        }
+    }
+    assert_eq!(made.len(), 2);
+    assert!(made.iter().all(|o| !l.destroyed(*o)), "both actors are still there, as the error says");
+}

@@ -24,7 +24,8 @@
 //!   definition's `ExternalAttributeEffects` are appended to `ExternalAttributeModifiers`; then, when
 //!   `PartExternalAttributeModifiers` is empty, each part's `ExternalAttributeEffects` to it; then the external
 //!   attribute slots ([`external_slots`]). Every read and refusal comes before the first apply, and a failed apply
-//!   takes back everything the call added (all or nothing; [`apply_item_external_effects`]).
+//!   takes back everything the call added (all or nothing; [`apply_item_external_effects`]); a rollback that fails
+//!   is reported as such, naming both errors.
 //! - [`apply_weapon_external_effects`] is `WillowWeapon.ApplyAllExternalAttributeEffects`: the same guard, then the
 //!   type's and every part's `ExternalAttributeEffects` into `ExternalAttributeModifiers` (no separate part guard),
 //!   with the instigator's `Controller` as the source (the weapon's script passes `Instigator.Controller` itself, not
@@ -41,7 +42,7 @@
 
 use std::rc::Rc;
 
-use ow_attr::api::{AppliedEffect, Applied, EffectData, EvalCx, NumForms};
+use ow_attr::api::{AppliedEffect, Applied, EffectData, EvalCx, NumForms, RemoveModifierOutcome};
 use ow_attr::stack::ModifierType;
 use ow_attr::stack::CombineForm;
 use ow_core::NotYet;
@@ -311,13 +312,66 @@ fn apply_lists(
     Ok(())
 }
 
-/// Takes back everything `done` added and writes `originals` back into `item`'s arrays, after a failed equip. A
-/// failure of this cleanup is not returned: the caller's answer is the first error.
-fn undo(vm: &mut Vm, item: ObjRef, done: Applied, originals: &[(&str, Value)], what: &str) {
+/// The error of a failed step whose cleanup failed too: it names both, and it is the cleanup's, not the step's (the
+/// state is no longer the one before the call: a modifier no record names may be on a stack, or an actor may be
+/// left over), so a caller does not take it for the plain refusal `first` was.
+pub(crate) fn cleanup_failed(what: &str, first: &VmError, cleanup: &str) -> VmError {
+    VmError::Script {
+        function: what.to_string(),
+        message: format!(
+            "the cleanup after a failure failed, so the state is not the one before the call: {cleanup} (the \
+             failure: {})",
+            crate::equip::text(first)
+        ),
+    }
+}
+
+/// An error's text and its causes'.
+pub(crate) fn text(e: &dyn std::error::Error) -> String {
+    let mut t = e.to_string();
+    let mut cause = e.source();
+    while let Some(c) = cause {
+        t.push_str(": ");
+        t.push_str(&c.to_string());
+        cause = c.source();
+    }
+    t
+}
+
+/// Takes back everything `done` added and writes `originals` back into `item`'s arrays, after the failed equip whose
+/// error is `first`.
+///
+/// Each record's modifier is removed from its context; a modifier whose removal succeeded is freed (no record, and so
+/// no script copy, names it after a rollback), as `ow-attr`'s own failed apply frees its modifiers. A removal that
+/// fails or is refused leaves its modifier on the heap (a stack may still hold it). Every record is tried and every
+/// array written back whatever happens. When all of it succeeds the answer is `first`; otherwise it is
+/// [`cleanup_failed`], which names both and outranks `first`.
+fn undo(vm: &mut Vm, item: ObjRef, done: Applied, originals: &[(&str, Value)], what: &str, first: VmError) -> VmError {
     let attrs = vm.attrs.clone();
-    let _ = attrs.remove_effects(done, &mut EvalCx::new(vm));
+    let mut failures: Vec<String> = Vec::new();
+    let mut free: Vec<ObjRef> = Vec::new();
+    for r in done.0 {
+        let removed = attrs.remove_modifier(r.attribute, Some(r.context), r.modifier, false, &mut EvalCx::new(vm));
+        match removed {
+            Ok(RemoveModifierOutcome::Removed { .. } | RemoveModifierOutcome::PlainNoOp) => free.push(r.modifier),
+            Ok(other) => failures.push(format!("removing a modifier answered {other:?}")),
+            Err(e) => failures.push(format!("removing a modifier: {}", text(&e))),
+        }
+    }
+    if !free.is_empty()
+        && let Err(e) = vm.space.free_many(&free)
+    {
+        failures.push(format!("freeing the removed modifiers: {}", text(&e)));
+    }
     for (name, v) in originals {
-        let _ = write(vm, item, name, v.clone(), what);
+        if let Err(e) = write(vm, item, name, v.clone(), what) {
+            failures.push(format!("restoring {name}: {}", text(&e)));
+        }
+    }
+    if failures.is_empty() {
+        first
+    } else {
+        cleanup_failed(what, &first, &failures.join("; "))
     }
 }
 
@@ -435,8 +489,10 @@ pub fn external_slots(vm: &Vm, definition: ObjRef) -> Result<(), VmError> {
 ///
 /// **All or nothing.** Every read comes first (the controller, both record arrays, the parts, every effect list, and
 /// the external-slot check, which the script reaches last but which can only refuse here), so a refusal changes
-/// nothing. If an apply then fails, everything this call added is removed and both arrays keep their old values: an
-/// `Err` leaves the stacks and the records as they were, and a retry is not answered `AlreadyApplied`.
+/// nothing. If an apply then fails, everything this call added is removed, its modifiers freed, and both arrays get
+/// their old values back, so the apply's own error leaves the stacks and the records as they were and a retry is not
+/// answered `AlreadyApplied`. If that rollback fails too, the error says so and names both ([`cleanup_failed`]): the
+/// stacks may then hold a modifier no record names.
 pub fn apply_item_external_effects(vm: &mut Vm, item: ObjRef) -> Result<ExternalOutcome, VmError> {
     const WHAT: &str = "WillowItem.ApplyAllExternalAttributeEffects";
     const OWN: &str = "ExternalAttributeModifiers";
@@ -476,8 +532,7 @@ pub fn apply_item_external_effects(vm: &mut Vm, item: ObjRef) -> Result<External
     if let Err(e) = run {
         let mut done = own_done;
         done.0.extend(parts_done.0);
-        undo(vm, item, done, &[(OWN, records), (PARTS, parts_records)], WHAT);
-        return Err(e);
+        return Err(undo(vm, item, done, &[(OWN, records), (PARTS, parts_records)], WHAT, e));
     }
     Ok(ExternalOutcome::Applied {
         records: own_done.0.len(),
@@ -524,8 +579,7 @@ pub fn apply_weapon_external_effects(vm: &mut Vm, weapon: ObjRef) -> Result<Exte
         write(vm, weapon, OWN, a, WHAT)
     });
     if let Err(e) = run {
-        undo(vm, weapon, done, &[(OWN, records)], WHAT);
-        return Err(e);
+        return Err(undo(vm, weapon, done, &[(OWN, records)], WHAT, e));
     }
     Ok(ExternalOutcome::Applied {
         records: done.0.len(),
