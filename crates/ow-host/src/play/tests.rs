@@ -280,3 +280,84 @@ fn the_start_shot_is_taken_even_for_a_short_script() {
     assert!(start_shot_due(30, 30, false));
     assert!(start_shot_due(30, 3, true));
 }
+
+/// Lane H4-WEAPON: a script that fires gives the same shots (and the same path as `walk::run`, which ignores the
+/// trigger) at every frame-time pattern.
+#[test]
+fn a_firing_script_shoots_alike_whatever_the_frame_times() {
+    let firing = vec![
+        Segment::new("settle", 0.5, 0.0, 0.0, false, 0),
+        Segment::new("fire at the wall", 1.0, 0.0, 0.0, false, 0).firing(),
+        Segment::new("walk and fire", 1.0, 1.0, 0.0, false, 100).firing(),
+        Segment::new("stand", 0.5, 0.0, 0.0, false, 0),
+    ];
+    let gun = || crate::weapon::Gun::new(Ok(crate::weapon::WeaponStats::new(20.0, 0.1, Some(1.0), Some(3000.0))));
+    let reference = walk::run(&world(), &mut pawn(), &firing, step_seconds(), 1);
+    let runs: Vec<PlayStats> = [&HEADLESS_FRAMES[..], &[FRAME_60][..], &[Duration::from_millis(3)][..]]
+        .into_iter()
+        .map(|frames| run_headless_with(world(), pawn(), firing.clone(), frames, gun(), Vec::new()).unwrap())
+        .collect();
+    for run in &runs {
+        assert_eq!(run.digest, reference.digest, "firing moves nothing");
+        assert_eq!(run.shot_digest, runs[0].shot_digest);
+        assert_eq!(run.shots.len(), runs[0].shots.len());
+    }
+    // 2 s of trigger at a 0.1 s interval: 20 shots, all from the trigger segments' steps (31 to 150).
+    assert_eq!(runs[0].shots.len(), 20);
+    assert!(runs[0].shots.iter().all(|(s, _)| (31..=150).contains(&s.step)));
+    // The pawn faces yaw 2000, toward the wall at x 900: the first shot hits it.
+    let first = &runs[0].shots[0].0;
+    let hit = first.hit.expect("the wall");
+    assert!((hit.point[0] - 900.0).abs() < 0.1, "{hit:?}");
+    assert!(stats_text(&runs[0]).contains("play shot 0 step 31"));
+    // The script text keeps the trigger.
+    let text = walk::script_text(&firing);
+    assert_eq!(walk::parse_script(&text).unwrap(), firing);
+    assert!(text.lines().nth(1).unwrap().contains(" f "));
+    assert_eq!(walk::parse_script("1 0 0 jf 0 both").unwrap()[0].fire, true);
+    assert!(walk::parse_script("1 0 0 x 0 bad").is_err());
+}
+
+/// The player's trigger: the left button fires only while the cursor is held, and never while flying.
+#[test]
+fn the_left_button_fires_once_the_cursor_is_held() {
+    let mut c = InputCollector::new(true);
+    c.left_button(true);
+    assert!(!c.take().fire, "the click that takes the cursor does not fire");
+    c.set_look(true);
+    c.left_button(true);
+    assert!(c.take().fire);
+    c.left_button(false);
+    assert!(!c.take().fire);
+    let mut scripted = InputCollector::new(false);
+    scripted.set_look(true);
+    scripted.left_button(true);
+    assert!(!scripted.take().fire);
+
+    let stats = Rc::new(RefCell::new(PlayStats::default()));
+    let gun = crate::weapon::Gun::new(Ok(crate::weapon::WeaponStats::new(5.0, 0.5, None, None)));
+    let mut sim = PlayWorld::new(world(), pawn(), None, Rc::clone(&stats)).with_gun(gun, Vec::new(), false);
+    for _ in 0..30 {
+        sim.step(&[], FRAME_60).unwrap();
+    }
+    let fire = PlayInput { fire: true, ..PlayInput::default() };
+    let snap = sim.step(&[HostCommand::Play(fire)], FRAME_60).unwrap();
+    let shot = snap.shot.expect("a shot");
+    assert!(shot.this_frame && shot.damage_known && shot.impact.is_some());
+    // Held for a second at 0.5 s: shots on the first step and 30 steps later.
+    for _ in 0..59 {
+        sim.step(&[HostCommand::Play(fire)], FRAME_60).unwrap();
+    }
+    assert_eq!(stats.borrow().shots.len(), 2);
+    // While flying the trigger does nothing.
+    let toggle = PlayInput { toggle_fly: true, fire: true, ..PlayInput::default() };
+    for _ in 0..60 {
+        sim.step(&[HostCommand::Play(PlayInput { toggle_fly: false, ..toggle })], FRAME_60).unwrap();
+    }
+    let before = stats.borrow().shots.len();
+    sim.step(&[HostCommand::Play(toggle)], FRAME_60).unwrap();
+    for _ in 0..60 {
+        sim.step(&[HostCommand::Play(fire)], FRAME_60).unwrap();
+    }
+    assert_eq!(stats.borrow().shots.len(), before);
+}

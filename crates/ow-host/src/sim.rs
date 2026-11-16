@@ -46,6 +46,8 @@ pub struct PlayInput {
     pub jump: bool,
     /// The fly camera was toggled (F1) since the last step.
     pub toggle_fly: bool,
+    /// The trigger (left mouse) is held (lane H4-WEAPON).
+    pub fire: bool,
     /// Turn since the last step, rotator units: yaw right positive, pitch up positive.
     pub yaw: i32,
     pub pitch: i32,
@@ -80,6 +82,22 @@ pub struct Snapshot {
     pub view: Option<ViewPose>,
     /// The simulation has nothing more to do (a scripted play run reached its script's end): the host stops.
     pub finished: bool,
+    /// The last shot of the play mode's weapon, for the overlay (lane H4-WEAPON).
+    pub shot: Option<ShotView>,
+}
+
+/// The last shot, as the overlay draws it: where it hit and how long ago.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShotView {
+    /// The impact point, uu, when the ray hit something.
+    pub impact: Option<[f32; 3]>,
+    /// Simulation steps since it fired (0: on this frame's last step).
+    pub age_steps: u64,
+    /// It fired during this frame's steps.
+    pub this_frame: bool,
+    /// Its damage is a number (else `NotYet`).
+    pub damage_known: bool,
 }
 
 /// Why a step failed. The host stops the frame loop and exits with an error.
@@ -136,6 +154,7 @@ impl Simulation for StubWorld {
             clear: STUB_CLEAR,
             view: None,
             finished: false,
+            shot: None,
         })
     }
 }

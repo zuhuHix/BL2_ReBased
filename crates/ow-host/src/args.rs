@@ -23,6 +23,9 @@
 //!   scripted run that ends sooner) and, for a scripted run only, its last frame beside it as `<stem>_end.png`; an
 //!   interactive run never finishes, so it writes no end frame.
 //!   `NAME` may leave off `_P` (`Sanctuary` is `Sanctuary_P`). A heavy run: the caller takes the machine lock.
+//! - `--weapon FILE` (with `--play` or `--play-script`, lane H4-WEAPON): the weapon the left mouse button (or a script
+//!   segment with the `f` action) fires, named by a file (`weapon::parse_spec`); without it the weapon is the
+//!   player's equipped one, which is `NotYet`, and a shot still traces its ray but has no damage number.
 //! - `ow-host --game <install> --map NAME --play-script FILE` (no `--play`): the same script through the same
 //!   simulation with no window, at uneven frame times (`play::HEADLESS_FRAMES`), printing the path digests.
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
@@ -37,8 +40,8 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE [--weapon FILE]\n       \
                          ow-host --headless-probe";
 
 /// What to run.
@@ -73,9 +76,10 @@ pub enum Command {
         vsync: bool,
         size: Option<(u32, u32)>,
         screenshot: Option<PathBuf>,
+        weapon: Option<PathBuf>,
     },
     /// The script through the play simulation with no window.
-    PlayHeadless { game: PathBuf, map: String, script: PathBuf },
+    PlayHeadless { game: PathBuf, map: String, script: PathBuf, weapon: Option<PathBuf> },
 }
 
 /// `WxH` with both parts positive whole numbers.
@@ -99,6 +103,7 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut screenshot: Option<PathBuf> = None;
     let mut play = false;
     let mut play_script: Option<PathBuf> = None;
+    let mut weapon: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -151,6 +156,12 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--play-script given twice".into());
                 }
             }
+            "--weapon" => {
+                let path = it.next().ok_or("--weapon needs a file")?;
+                if weapon.replace(PathBuf::from(path)).is_some() {
+                    return Err("--weapon given twice".into());
+                }
+            }
             "--play" => play = set_once(play, "--play")?,
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
@@ -158,6 +169,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             "--walk" => walk = set_once(walk, "--walk")?,
             other => return Err(format!("unknown argument {other}")),
         }
+    }
+    if weapon.is_some() && !(play || play_script.is_some()) {
+        return Err("--weapon needs --play or --play-script".into());
     }
     if map.is_none() && (size.is_some() || screenshot.is_some()) {
         return Err("--size and --screenshot need --map".into());
@@ -190,13 +204,13 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             return Err("--play runs until it is closed or its script ends: no --window, --frames or --time-limit".into());
         }
         if play {
-            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot });
+            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon });
         }
         if no_vsync || size.is_some() || screenshot.is_some() {
             return Err("--play-script without --play opens no window: no --no-vsync, --size or --screenshot".into());
         }
         let script = play_script.ok_or("--play-script needs a file")?;
-        return Ok(Command::PlayHeadless { game, map, script });
+        return Ok(Command::PlayHeadless { game, map, script, weapon });
     }
     if window && frames.is_some() {
         return Err("--window and --frames exclude each other".into());
@@ -323,6 +337,7 @@ mod tests {
                 vsync: true,
                 size: None,
                 screenshot: None,
+                weapon: None,
             })
         );
         assert_eq!(
@@ -334,12 +349,34 @@ mod tests {
                 vsync: false,
                 size: Some((1280, 720)),
                 screenshot: Some("a.png".into()),
+                weapon: None,
             })
         );
         assert_eq!(
             p(&["--game", "X", "--map", "S", "--play-script", "w.txt"]),
-            Ok(Command::PlayHeadless { game: "X".into(), map: "S".into(), script: "w.txt".into() })
+            Ok(Command::PlayHeadless { game: "X".into(), map: "S".into(), script: "w.txt".into(), weapon: None })
         );
+        assert_eq!(
+            p(&["--game", "X", "--map", "S", "--play-script", "w.txt", "--weapon", "gun.txt"]),
+            Ok(Command::PlayHeadless {
+                game: "X".into(),
+                map: "S".into(),
+                script: "w.txt".into(),
+                weapon: Some("gun.txt".into()),
+            })
+        );
+        assert!(matches!(
+            p(&["--game", "X", "--map", "S", "--play", "--weapon", "gun.txt"]),
+            Ok(Command::Play { weapon: Some(_), .. })
+        ));
+        for bad in [
+            &["--game", "X", "--weapon", "gun.txt"][..],
+            &["--game", "X", "--map", "S", "--window", "--weapon", "gun.txt"],
+            &["--game", "X", "--map", "S", "--play", "--weapon", "a", "--weapon", "b"],
+            &["--game", "X", "--map", "S", "--play", "--weapon"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} was accepted");
+        }
         for bad in [
             &["--game", "X", "--play"][..],
             &["--game", "X", "--play-script", "w.txt"],

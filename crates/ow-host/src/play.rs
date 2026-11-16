@@ -45,7 +45,8 @@ use crate::movement::geom::{V3, floor_index};
 use crate::movement::mover::{MoveInput, Mover};
 use crate::movement::walk::{PathDigest, ScriptCursor, Segment};
 use crate::render::{DrawReport, Drawer, Lighting, SceneRenderer, TextureSource};
-use crate::sim::{HostCommand, PlayInput, SimError, Simulation, Snapshot, ViewPose};
+use crate::sim::{HostCommand, PlayInput, ShotView, SimError, Simulation, Snapshot, ViewPose};
+use crate::weapon::{Gun, RangeSource, Shot};
 
 /// The simulation step: `--walk`'s, decision D13's default 1/60 s, as `f64`.
 pub fn step_seconds() -> f64 {
@@ -139,7 +140,9 @@ impl InputCollector {
                     self.key(code, event.state == ElementState::Pressed, event.repeat, *is_synthetic);
                 }
             }
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => self.click(),
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                self.left_button(*state == ElementState::Pressed);
+            }
             WindowEvent::Focused(false) => self.focus_lost(),
             _ => {}
         }
@@ -174,6 +177,19 @@ impl InputCollector {
     /// A left click in the window: an interactive run takes the cursor again.
     pub fn click(&mut self) {
         self.want_grab = self.interactive;
+    }
+
+    /// The left mouse button (lane H4-WEAPON): while the cursor is held (the view turns) it is the trigger; else a
+    /// press only takes the cursor, so the click that takes it does not fire. A release always lets go of the
+    /// trigger.
+    pub fn left_button(&mut self, down: bool) {
+        if !down {
+            self.held.fire = false;
+        } else if self.look && self.interactive {
+            self.held.fire = true;
+        } else {
+            self.click();
+        }
     }
 
     /// The window lost focus: every key counts as released, a pending jump is dropped, the cursor is let go.
@@ -233,6 +249,10 @@ pub struct PlayStats {
     /// The script ran to its end.
     pub finished: bool,
     pub fly_toggles: u32,
+    /// Every shot of the weapon (lane H4-WEAPON), with the label of what it hit.
+    pub shots: Vec<(Shot, String)>,
+    /// A digest over every shot's step, end point and damage, so two runs that fire alike compare in one number.
+    pub shot_digest: PathDigest,
 }
 
 /// The play simulation (module documentation).
@@ -252,6 +272,14 @@ pub struct PlayWorld {
     stats: Rc<RefCell<PlayStats>>,
     /// The next script segment to report in [`PlayStats::segments`].
     reported: usize,
+    /// The held weapon (lane H4-WEAPON), the player's trigger, and the last shot (its step, impact, damage known).
+    gun: Gun,
+    fire: bool,
+    last_shot: Option<(u64, Option<V3>, bool)>,
+    /// What each brush's placement is called (by `Brush::source`), for the shot log.
+    labels: Vec<String>,
+    /// Print each shot as it fires (an interactive run).
+    echo: bool,
 }
 
 impl PlayWorld {
@@ -273,7 +301,40 @@ impl PlayWorld {
             sim_time: Duration::ZERO,
             stats,
             reported: 0,
+            gun: Gun::new(Err(crate::weapon::equipped_weapon())),
+            fire: false,
+            last_shot: None,
+            labels: Vec::new(),
+            echo: false,
         }
+    }
+
+    /// The same world with `gun` held, `labels` naming each brush's placement (by `Brush::source`) in the shot log,
+    /// and each shot printed as it fires when `echo` is set.
+    pub fn with_gun(mut self, gun: Gun, labels: Vec<String>, echo: bool) -> PlayWorld {
+        self.gun = gun;
+        self.labels = labels;
+        self.echo = echo;
+        self
+    }
+
+    /// One step's trigger: the script segment's, else the player's (never while the fly camera is on).
+    fn trigger(&self, segment: Option<usize>) -> bool {
+        match (&self.script, segment) {
+            (Some(cursor), Some(s)) => cursor.script().get(s).is_some_and(|s| s.fire),
+            (Some(_), None) => false,
+            (None, _) => self.fire && self.fly.is_none(),
+        }
+    }
+
+    /// The label of brush `brush`'s placement.
+    fn label(&self, brush: u32) -> String {
+        self.world
+            .brushes()
+            .get(brush as usize)
+            .and_then(|b| self.labels.get(b.source as usize))
+            .cloned()
+            .unwrap_or_else(|| format!("brush {brush}"))
     }
 
     /// Reports every script segment before `limit` not reported yet, at the steps and digest so far.
@@ -324,6 +385,7 @@ impl PlayWorld {
             };
         }
         self.held = *input;
+        self.fire = input.fire;
         match self.fly.as_mut() {
             Some(fly) => {
                 fly.yaw = (f64::from(fly.yaw) + f64::from(input.yaw)).rem_euclid(65536.0) as f32;
@@ -369,6 +431,7 @@ impl Simulation for PlayWorld {
         self.sim_time = self.sim_time.saturating_add(real_dt);
         self.accumulator += real_dt.as_secs_f64();
         let mut taken = 0u32;
+        let shots_before = self.stats.borrow().shots.len();
         while self.accumulator >= dt && taken < MAX_STEPS_PER_FRAME && !self.finished() {
             let Some((segment, input)) = self.next_input() else { break };
             // Segments the cursor passed without a tick end where the previous one did.
@@ -387,7 +450,21 @@ impl Simulation for PlayWorld {
                 let step = stats.steps;
                 stats.trace.push((step, self.mover.location));
             }
+            let step = stats.steps;
             drop(stats);
+            let held = self.trigger(segment);
+            if let Some(shot) = self.gun.step(&self.world, held, self.mover.eye(), self.mover.view, dt, step) {
+                let label = shot.hit.map_or_else(String::new, |h| self.label(h.brush));
+                let mut stats = self.stats.borrow_mut();
+                let end = shot.hit.map_or_else(|| add_v(shot.origin, shot.direction, shot.range), |h| h.point);
+                stats.shot_digest.push(end);
+                stats.shot_digest.push([shot.step as f64, *shot.damage.as_ref().unwrap_or(&-1.0), shot.range]);
+                self.last_shot = Some((shot.step, shot.hit.map(|h| h.point), shot.damage.is_ok()));
+                if self.echo {
+                    println!("{}", shot_text(stats.shots.len(), &shot, &label));
+                }
+                stats.shots.push((shot, label));
+            }
             if let (Some(segment), Some(cursor)) = (segment, &self.script)
                 && cursor.at_segment_end()
             {
@@ -435,15 +512,34 @@ impl Simulation for PlayWorld {
             clear: crate::sim::STUB_CLEAR,
             view: Some(self.view(self.accumulator / dt)),
             finished,
+            shot: self.last_shot.map(|(step, impact, damage_known)| ShotView {
+                impact: impact.map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]),
+                age_steps: self.stats.borrow().steps.saturating_sub(step),
+                this_frame: self.stats.borrow().shots.len() > shots_before,
+                damage_known,
+            }),
         })
     }
 }
 
 /// Runs `script` from `mover` in `world` through [`PlayWorld`] with no window, the frame times cycling through
-/// `frames` (each frame one [`Simulation::step`] with no messages), until the script is done.
+/// `frames` (each frame one [`Simulation::step`] with no messages), until the script is done. The weapon is the
+/// player's equipped one, which is `NotYet` ([`crate::weapon::equipped_weapon`]); [`run_headless_with`] gives one.
 pub fn run_headless(world: CollisionWorld, mover: Mover, script: Vec<Segment>, frames: &[Duration]) -> Result<PlayStats, SimError> {
+    run_headless_with(world, mover, script, frames, Gun::new(Err(crate::weapon::equipped_weapon())), Vec::new())
+}
+
+/// [`run_headless`] with `gun` held and `labels` naming each brush's placement in the shot log.
+pub fn run_headless_with(
+    world: CollisionWorld,
+    mover: Mover,
+    script: Vec<Segment>,
+    frames: &[Duration],
+    gun: Gun,
+    labels: Vec<String>,
+) -> Result<PlayStats, SimError> {
     let stats = Rc::new(RefCell::new(PlayStats::default()));
-    let mut sim = PlayWorld::new(world, mover, Some(script), Rc::clone(&stats));
+    let mut sim = PlayWorld::new(world, mover, Some(script), Rc::clone(&stats)).with_gun(gun, labels, false);
     let frames = if frames.is_empty() { &HEADLESS_FRAMES[..] } else { frames };
     // Ten million frames at the shortest pattern frame is hours of game time: a guard, not a limit anyone meets.
     for i in 0..10_000_000usize {
@@ -454,6 +550,39 @@ pub fn run_headless(world: CollisionWorld, mover: Mover, script: Vec<Segment>, f
     }
     let out = stats.borrow().clone();
     Ok(out)
+}
+
+/// `origin + direction x length`.
+fn add_v(origin: V3, direction: V3, length: f64) -> V3 {
+    [origin[0] + direction[0] * length, origin[1] + direction[1] * length, origin[2] + direction[2] * length]
+}
+
+/// One shot's log line: where it went, what it hit, and its damage number or why there is none.
+pub fn shot_text(n: usize, shot: &Shot, label: &str) -> String {
+    let f = |x: f64| ow_core::fmt::fmt_f(x, 2);
+    let p3 = |v: V3| format!("{} {} {}", f(v[0]), f(v[1]), f(v[2]));
+    let range = match shot.range_source {
+        RangeSource::Weapon => format!("{} uu (WeaponRange)", f(shot.range)),
+        _ => format!("{} uu (host probe range, no weapon range)", f(shot.range)),
+    };
+    let hit = match &shot.hit {
+        Some(h) => format!("hit {} (normal {}) on {label} after {} uu", p3(h.point), p3(h.normal), f(h.distance)),
+        None => "no hit".to_string(),
+    };
+    let damage = match &shot.damage {
+        Ok(d) => {
+            let pellets = shot.projectiles.map_or_else(String::new, |p| format!(" x{} projectiles", f(p)));
+            format!("damage {} per projectile{pellets} (WeaponDamage); against the target: {}", f(*d), crate::weapon::target_damage())
+        }
+        Err(e) => format!("damage: {e}"),
+    };
+    format!(
+        "shot {n} step {} t={}: from {} along {} for {range}: {hit}; {damage}",
+        shot.step,
+        f(shot.step as f64 * step_seconds()),
+        p3(shot.origin),
+        p3(shot.direction),
+    )
 }
 
 /// The text of a play run's stats: steps, frames, drops, each segment's digest (the same digests `--walk` prints for
@@ -472,6 +601,9 @@ pub fn stats_text(s: &PlayStats) -> String {
     for (step, at) in &s.trace {
         let _ = writeln!(out, "play t={} at {}", ow_core::fmt::fmt_f(*step as f64 * step_seconds(), 2), p3(*at));
     }
+    for (i, (shot, label)) in s.shots.iter().enumerate() {
+        let _ = writeln!(out, "play {}", shot_text(i, shot, label));
+    }
     for (i, name, steps, digest) in &s.segments {
         let _ = writeln!(out, "play segment {i} {name}: steps {steps}, digest {:016x}", digest.0);
     }
@@ -488,6 +620,7 @@ pub fn stats_text(s: &PlayStats) -> String {
         p3(s.end),
         s.digest.0
     );
+    let _ = writeln!(out, "play shots: {}, shot digest {:016x}", s.shots.len(), s.shot_digest.0);
     out
 }
 
@@ -515,6 +648,9 @@ pub struct PlayDrawer {
     lighting: Lighting,
     textures: TextureSource,
     renderer: Option<SceneRenderer>,
+    /// The placeholder first-person overlay (lane H4-WEAPON) and the last shot it draws.
+    overlay: Option<crate::overlay::Overlay>,
+    shot: Option<ShotView>,
     view: Option<ViewPose>,
     finished: bool,
     size: Option<(u32, u32)>,
@@ -543,6 +679,8 @@ impl PlayDrawer {
             lighting,
             textures,
             renderer: None,
+            overlay: None,
+            shot: None,
             view: None,
             finished: false,
             size: None,
@@ -559,7 +697,9 @@ impl PlayDrawer {
         let (view, size) = (self.view.ok_or("no view yet")?, self.size.ok_or("no frame yet")?);
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
-        let rgba = renderer.capture(device, queue, size, &vp, view.eye)?;
+        let mut rgba = renderer.capture(device, queue, size, &vp, view.eye)?;
+        // The capture draws the scene only: the overlay is painted onto it.
+        crate::overlay::paint(&mut rgba, size.0, size.1, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
         let png = ow_assets::png::encode(size.0, size.1, &rgba).map_err(|e| e.to_string())?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -584,6 +724,7 @@ impl Drawer for PlayDrawer {
         report.draw.draw_calls = renderer.draw_calls();
         report.draw.blended_instances = renderer.blended_instances();
         self.renderer = Some(renderer);
+        self.overlay = Some(crate::overlay::Overlay::new(device, format));
         Ok(())
     }
 
@@ -595,6 +736,7 @@ impl Drawer for PlayDrawer {
             self.view = snapshot.view;
         }
         self.finished = snapshot.finished;
+        self.shot = snapshot.shot;
     }
 
     fn mouse_motion(&mut self, _dx: f64, _dy: f64) {}
@@ -613,6 +755,9 @@ impl Drawer for PlayDrawer {
         let vp = view_projection(&view, size.0, size.1).ok_or("the view's matrices are not finite")?;
         let renderer = self.renderer.as_mut().ok_or("the scene is not attached")?;
         renderer.encode(device, queue, encoder, target, size, &vp, view.eye);
+        if let Some(overlay) = &self.overlay {
+            overlay.encode(queue, encoder, target, size, &crate::overlay::rects(size.0, size.1, self.shot.as_ref(), &vp));
+        }
         Ok(())
     }
 
