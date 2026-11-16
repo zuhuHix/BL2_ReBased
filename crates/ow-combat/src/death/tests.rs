@@ -5,7 +5,6 @@ use ow_core::ParityMode;
 use ow_object::value::Value;
 
 use super::*;
-use crate::hit::state;
 use crate::run::tests::{def, fresh, make};
 
 fn native(
@@ -131,22 +130,18 @@ fn an_output_link_is_appended_to_the_running_behaviors_list() {
     let f = vm
         .find_function("GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink")
         .unwrap();
+    // No running behavior: nothing kept (the next run starts empty).
     vm.call(f, None, vec![Value::Object(None), Value::Int(4)])
         .unwrap();
-    assert!(
-        state(vm).unwrap().borrow().selected.is_empty(),
-        "no running behavior: nothing kept"
-    );
-    with_state(vm, |s| s.selected.push(Vec::new())).unwrap();
-    for id in [2, 0, 2] {
-        vm.call(f, None, vec![Value::Object(None), Value::Int(id)])
-            .unwrap();
-    }
-    assert_eq!(
-        with_state(vm, |s| s.selected.pop()).unwrap(),
-        Some(vec![2, 0, 2]),
-        "call order, duplicates kept"
-    );
+    // The links go to the behavior kernel pack's shared collector, which this crate's pack registers.
+    let ((), ids) = ow_behavior::kernel::natives::collect(vm, |vm| {
+        for id in [2, 0, 2] {
+            vm.call(f, None, vec![Value::Object(None), Value::Int(id)])
+                .unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(ids, vec![2, 0, 2], "call order, duplicates kept");
 }
 
 #[test]

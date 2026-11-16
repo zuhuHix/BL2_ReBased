@@ -89,6 +89,7 @@ use ow_balance::types::{
 };
 use ow_balance::xp::{MissionXp, mission_xp};
 use ow_behavior::kernel::Provider;
+use ow_behavior::kernel::natives;
 use ow_behavior::provider::{BehaviorError, enum_names, stock_path};
 use ow_behavior::registry::Handler;
 use ow_core::{DetMap, DetSet, NotYet, PackageName, ParityMode};
@@ -128,6 +129,9 @@ pub const MAX_LEVEL: i32 = 50;
 
 /// The first handle the consumer registration gives out (UNVERIFIED: the allocator's base); -1 is invalid.
 const MARCUS_PID: i32 = 0;
+
+/// This crate's name as the owner of the director's consumer handle (`ow_behavior::kernel::natives`).
+pub const CONSUMER_OWNER: &str = "ow-mission";
 
 /// A level-up loop guard (the C++ 200).
 const LEVEL_UP_GUARD: usize = 200;
@@ -227,8 +231,6 @@ struct BState {
     in_level_up: bool,
     pawn_game_stage: i64,
     use_: MarcusUse,
-    /// The running script behaviors' recorded output ids (innermost last).
-    selected: Vec<Vec<i32>>,
     screen_open: bool,
     ui_manager: Option<ObjRef>,
     screen_movie: Option<ObjRef>,
@@ -1939,37 +1941,38 @@ impl MissionScript {
             (x.class, x.state)
         };
         let apply = vm.find_method(class, "ApplyBehaviorToContext", state)?;
-        self.inner.state.borrow_mut().selected.push(Vec::new());
-        let ran = lend(&self.inner.marcus, &self.inner.marcus_lost, p, || {
-            for &context in &contexts {
-                let Some(f) = apply else {
-                    self.inner
-                        .state
-                        .borrow_mut()
-                        .errors
-                        .push(format!("no ApplyBehaviorToContext on {}", behavior.class));
-                    break;
-                };
-                let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
-                let args = params
-                    .iter()
-                    .map(|param| {
-                        let name = vm.space.names.text(param.name);
-                        if name.eq_ignore_ascii_case("ContextObject") {
-                            Value::Object(Some(context))
-                        } else if name.eq_ignore_ascii_case("SelfObject") {
-                            Value::Object(Some(director))
-                        } else {
-                            vm.space.classes.zero_value(&param.kind)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let object = behavior.object;
-                self.run(vm, |vm| vm.call(f, Some(object), args).map(|_| ()).map_err(BehaviorError::Vm));
-            }
-            Ok(())
-        });
-        let ids = self.inner.state.borrow_mut().selected.pop().unwrap_or_default();
+        // The output links go to the behavior kernel pack's shared collector.
+        let (ran, ids) = natives::collect(vm, |vm| {
+            lend(&self.inner.marcus, &self.inner.marcus_lost, p, || {
+                for &context in &contexts {
+                    let Some(f) = apply else {
+                        self.inner
+                            .state
+                            .borrow_mut()
+                            .errors
+                            .push(format!("no ApplyBehaviorToContext on {}", behavior.class));
+                        break;
+                    };
+                    let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
+                    let args = params
+                        .iter()
+                        .map(|param| {
+                            let name = vm.space.names.text(param.name);
+                            if name.eq_ignore_ascii_case("ContextObject") {
+                                Value::Object(Some(context))
+                            } else if name.eq_ignore_ascii_case("SelfObject") {
+                                Value::Object(Some(director))
+                            } else {
+                                vm.space.classes.zero_value(&param.kind)
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let object = behavior.object;
+                    self.run(vm, |vm| vm.call(f, Some(object), args).map(|_| ()).map_err(BehaviorError::Vm));
+                }
+                Ok(())
+            })
+        })?;
         ran?;
         if contexts.is_empty() {
             return Ok(ids);
@@ -2018,18 +2021,25 @@ impl MissionScript {
     }
 
     /// The stock use chain's natives (NATIVE_MARCUS_USE_CHAIN.md, NATIVE_MISSION_DISPATCH.md A2,
-    /// NATIVE_CONTROLLER_HELPERS.md; all UNVERIFIED), bound when the director is placed.
+    /// NATIVE_CONTROLLER_HELPERS.md; all UNVERIFIED), bound when the director is placed. The behavior kernel's
+    /// natives are the kernel pack's (`ow_behavior::kernel::natives`: `ActivateBehaviorOutputLink`,
+    /// `WillowPawn.GetBehaviorConsumerHandle`); the director's handle is claimed there, so the two kernel natives
+    /// below reach this bridge for his handle only.
     fn bind_use(&self, vm: &mut Vm) -> Result<(), MissionError> {
-        const BOUND: [(&str, Body); 6] = [
-            ("GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink", MissionScript::n_output_link),
-            ("GearboxFramework.BehaviorKernel.IsBehaviorSequenceEnabled", MissionScript::n_sequence_enabled),
-            ("GearboxFramework.BehaviorKernel.ActivateBehaviorEventFromScript", MissionScript::n_event_from_script),
+        const ROUTED: [(&str, Body); 2] = [
+            (natives::IS_SEQUENCE_ENABLED, MissionScript::n_sequence_enabled),
+            (natives::EVENT_FROM_SCRIPT, MissionScript::n_event_from_script),
+        ];
+        for (path, body) in ROUTED {
+            natives::route(vm, CONSUMER_OWNER, path, self.native(path, body))?;
+        }
+        natives::claim(vm, MARCUS_PID, CONSUMER_OWNER)?;
+        const BOUND: [(&str, Body); 2] = [
             (
                 "GearboxFramework.BehaviorHelpers.ResolveBehaviorProviderDefinitionReference",
                 MissionScript::n_resolve_provider,
             ),
             ("Engine.BehaviorBase.GetBehaviorContext", MissionScript::n_behavior_context),
-            ("WillowGame.WillowPawn.GetBehaviorConsumerHandle", MissionScript::n_consumer_handle),
         ];
         for (path, body) in BOUND {
             bind(vm, path, self.native(path, body))?;
@@ -2047,16 +2057,6 @@ impl MissionScript {
         let path = "WillowGame.WillowPlayerController.ClientGFxPlayMovie";
         vm.override_script(path, self.native(path, MissionScript::n_play_movie))?;
         Ok(())
-    }
-
-    // ActivateBehaviorOutputLink(KernelInfo, OutputLinkId) only appends the id to the running behavior's list
-    // (duplicates kept, call order).
-    fn n_output_link(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
-        let id = arg_int(c, 1)?;
-        if let Some(top) = self.inner.state.borrow_mut().selected.last_mut() {
-            top.push(id);
-        }
-        Ok(Value::None)
     }
 
     // IsBehaviorSequenceEnabled(ConsumerHandle, ProviderDefinition, SequenceName): true only when the consumer has
@@ -2162,13 +2162,6 @@ impl MissionScript {
     }
 
     // GetBehaviorConsumerHandle (IBehaviorConsumer): a plain read of the pawn's own ConsumerHandle field.
-    fn n_consumer_handle(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
-        let Some(director) = self.director().filter(|d| c.this == Some(*d)) else {
-            return outside_binding(c);
-        };
-        get(&c.vm.space, director, "ConsumerHandle")
-    }
-
     fn n_dialog_globals(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if let Some(g) = self.inner.state.borrow().dialog_globals {
             return Ok(Value::Object(Some(g)));

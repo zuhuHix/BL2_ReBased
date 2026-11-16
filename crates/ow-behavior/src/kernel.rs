@@ -92,6 +92,8 @@ use crate::provider::{
 };
 use crate::registry::{self, Handler, Registry};
 
+pub mod natives;
+
 /// The records of the kernel rules.
 pub const RECORD_DISPATCH: &str = "docs/verification/NATIVE_MISSION_DISPATCH.md (A1, A2)";
 pub const RECORD_KERNEL: &str = "docs/verification/NATIVE_BEHAVIOR_POPULATION.md (sections C, G)";
@@ -245,6 +247,8 @@ pub struct Provider {
     budget: usize,
     depth: u32,
     registered: bool,
+    /// The consumer the provider is registered on, when its registrar says (module `natives`).
+    consumer: Option<ObjRef>,
     run: RunInfo,
     /// Unhandled behavior classes, the execution limit, unknown inputs (the C++ texts).
     pub errors: Vec<String>,
@@ -310,6 +314,7 @@ impl Provider {
             budget: 0,
             depth: 0,
             registered: false,
+            consumer: None,
             run: RunInfo::default(),
             errors: Vec::new(),
             not_yet: Vec::new(),
@@ -371,6 +376,18 @@ impl Provider {
 
     pub fn registered(&self) -> bool {
         self.registered
+    }
+
+    /// The consumer the provider is registered on (the script's `SelfObject`), when its registrar set it: the kernel
+    /// natives do (`natives`); a crate that builds its own providers may. The additive route of decision
+    /// 2026-11-15-30 for handlers that need the consumer.
+    pub fn consumer(&self) -> Option<ObjRef> {
+        self.consumer
+    }
+
+    /// Sets the consumer [`Provider::consumer`] answers.
+    pub fn set_consumer(&mut self, consumer: Option<ObjRef>) {
+        self.consumer = consumer;
     }
 
     /// The kernel's time in seconds.

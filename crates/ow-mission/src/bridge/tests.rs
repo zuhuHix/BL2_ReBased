@@ -20,7 +20,7 @@ use ow_object::heap::ObjectSpace;
 use ow_package::testkit::script::{Asm, CPF_OPT, CPF_OUT, FunctionSpec, Param, ScriptToy};
 use ow_package::testkit::{Export, PackageBuilder};
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
-use ow_vm::api::{Arg, FunctionDecl, NativeCall, Vm};
+use ow_vm::api::{Arg, FunctionDecl, NativeCall, NativePack, Vm};
 
 use super::*;
 use crate::tracker::Status;
@@ -121,6 +121,13 @@ fn engine() -> Vec<u8> {
     t.prop("Struct", base, "ToyContextData", 0, context);
     // The component base the store reads at 8 (the director's dialog component).
     t.class("ActorComponent", object);
+    let resolve = [
+        param("Struct", "ContextData", 0, context),
+        param("Object", "SelfObject", 0, object),
+        param("Object", "MyInstigatorObject", 0, object),
+        param("Object", "OtherEventParticipantObject", 0, object),
+    ];
+    native(&mut t, base, "GetBehaviorContext", &resolve, Some(("Object", object)), NATIVE);
     t.build()
 }
 
@@ -136,6 +143,34 @@ fn gearbox() -> Vec<u8> {
     t.prop("Name", path, "PathComponentNames", 0, 0);
     let provider = t.class("ToyPathHolder", object);
     t.prop("Struct", provider, "ToyPath", 0, path);
+    // The behavior kernel's script-facing natives (ow_behavior::kernel::natives) and the provider resolver.
+    let helpers = t.class("BehaviorHelpers", object);
+    let resolve = [
+        param("Object", "SourceBehavior", 0, object),
+        param("Object", "ProviderReference", 0, object),
+        param("Struct", "PathName", 0, path),
+    ];
+    native(&mut t, helpers, "ResolveBehaviorProviderDefinitionReference", &resolve, Some(("Object", object)), NATIVE | STATIC);
+    let kernel = t.class("BehaviorKernel", object);
+    let handle = toy_struct(&mut t, kernel, "BehaviorConsumerHandle", None);
+    t.prop("Int", handle, "PID", 0, 0);
+    let link = [param("Int", "KernelInfo", 0, 0), param("Int", "OutputLinkId", 0, 0)];
+    native(&mut t, kernel, "ActivateBehaviorOutputLink", &link, None, NATIVE | STATIC);
+    let enabled = [
+        param("Struct", "ConsumerHandle", 0, handle),
+        param("Object", "ProviderDefinition", 0, object),
+        param("Name", "SequenceName", 0, 0),
+    ];
+    native(&mut t, kernel, "IsBehaviorSequenceEnabled", &enabled, Some(("Bool", 0)), NATIVE | STATIC);
+    let event = [
+        param("Struct", "ConsumerHandle", 0, handle),
+        param("Object", "ProviderDefinition", 0, object),
+        param("Name", "EventName", 0, 0),
+        param("Int", "EventOutputToActivate", CPF_OPT, 0),
+    ];
+    native(&mut t, kernel, "ActivateBehaviorEventFromScript", &event, None, NATIVE | STATIC);
+    let broadcast = [param("Struct", "ConsumerHandle", 0, handle), param("Name", "EventName", 0, 0)];
+    native(&mut t, kernel, "BroadcastBehaviorEventFromScript", &broadcast, None, NATIVE | STATIC);
     t.build()
 }
 
@@ -317,7 +352,13 @@ fn willowgame() -> Vec<u8> {
     });
     // An ExpLevelUp that does not raise the level: the loop's guard.
     script(&mut t, controller, "ExpLevelUp", &[param("Bool", "bCheated", 0, 0)], None, |_, _| {});
+    // The client movie RPC the use chain overrides (presentation; an empty body here).
+    script(&mut t, controller, "ClientGFxPlayMovie", &[], None, |_, _| {});
     let willow_pawn = t.class("WillowPawn", engine_pawn);
+    let handle = toy_struct(&mut t, willow_pawn, "ToyConsumerHandle", None);
+    t.prop("Int", handle, "PID", 0, 0);
+    t.prop("Struct", willow_pawn, "ConsumerHandle", 0, handle);
+    native(&mut t, willow_pawn, "GetBehaviorConsumerHandle", &[], Some(("Struct", handle)), NATIVE);
     t.class("WillowPlayerPawn", engine_pawn);
     let ai_pawn = t.class("WillowAIPawn", willow_pawn);
     t.prop("Object", ai_pawn, "BodyClass", 0, object);
@@ -861,17 +902,78 @@ fn the_provider_resolver_prefers_the_path_then_the_reference() {
     assert_eq!(got.unwrap(), Value::Object(None));
 }
 
-/// The output link native appends to the innermost running behavior's list only.
+
+/// The behavior kernel's natives have one owner (decision 2026-11-16-50): the world handlers with the kernel pack,
+/// the combat pack and the bridge's use chain, registered in every order, give the same world. Before the kernel
+/// pack, the bridge refused a key the combat pack had bound first (`duplicate native registration`), and the combat
+/// pack skipped a key the bridge had bound, so its script behaviors' output links went to the bridge's list.
 #[test]
-fn output_links_go_to_the_running_behavior() {
-    let mut env = Env::new(false);
-    let s = env.script.clone();
-    let _ = env.call("GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink", None, vec![Value::None, Value::Int(1)], MissionScript::n_output_link);
-    s.inner.state.borrow_mut().selected.push(Vec::new());
-    for id in [0, 2, 2] {
-        env.call("GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink", None, vec![Value::None, Value::Int(id)], MissionScript::n_output_link).unwrap();
+fn the_kernel_combat_and_mission_packs_give_one_world_in_every_order() {
+    #[derive(Debug, Clone, Copy)]
+    enum P {
+        Behavior,
+        Combat,
+        Mission,
     }
-    assert_eq!(s.inner.state.borrow().selected, [vec![0, 2, 2]], "duplicates kept, nothing before the run");
+    use P::{Behavior, Combat, Mission};
+    let orders = [
+        [Behavior, Combat, Mission],
+        [Behavior, Mission, Combat],
+        [Combat, Behavior, Mission],
+        [Combat, Mission, Behavior],
+        [Mission, Behavior, Combat],
+        [Mission, Combat, Behavior],
+    ];
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut worlds = Vec::new();
+        for order in orders {
+            let mut env = Env::with_mode(false, mode);
+            let s = env.script.clone();
+            for p in order {
+                let vm = env.vm();
+                match p {
+                    Behavior => {
+                        ow_behavior::handlers::Pack.register(vm).unwrap();
+                        natives::Pack.register(vm).unwrap();
+                    }
+                    Combat => ow_combat::hit::Pack.register(vm).unwrap(),
+                    Mission => s.bind_use(vm).unwrap(),
+                }
+            }
+            let vm = env.vm();
+            // A pawn the combat pack hands a handle to.
+            let pawn = new_object(vm, "WillowGame.WillowAIPawn").unwrap();
+            s.set_pid(vm, pawn, -1).unwrap();
+            ow_combat::death::prepare_for_death(vm, pawn).unwrap();
+            let call = |vm: &mut Vm, path: &str, this: Option<ObjRef>, args: Vec<Value>| {
+                let f = vm.find_function(path).unwrap();
+                vm.call(f, this, args).map(|r| r.ret)
+            };
+            let handle = call(vm, natives::CONSUMER_HANDLE, Some(pawn), vec![]).unwrap();
+            let custom = Value::Name(vm.space.names.intern("Custom"));
+            call(vm, natives::BROADCAST_FROM_SCRIPT, None, vec![handle.clone(), custom]).unwrap();
+            // The director's handle reaches the bridge's body (no director placed: not registered, false).
+            let marcus = with_field(&vm.space, &handle, "PID", Value::Int(MARCUS_PID)).unwrap();
+            let idle = Value::Name(vm.space.names.intern("Idle"));
+            let enabled = call(vm, natives::IS_SEQUENCE_ENABLED, None, vec![marcus, Value::Object(Some(pawn)), idle]);
+            let (_, links) = natives::collect(vm, |vm| {
+                for id in [1, 0, 1] {
+                    call(vm, natives::OUTPUT_LINK, None, vec![Value::Int(0), Value::Int(id)]).unwrap();
+                }
+            })
+            .unwrap();
+            let events = ow_combat::hit::with_state(vm, |c| c.events.clone()).unwrap();
+            let owners = [MARCUS_PID, 100].map(|pid| natives::owner_of(vm, pid).unwrap());
+            worlds.push(format!("{handle:?} {events:?} {enabled:?} {links:?} {owners:?} {:?}", vm.log));
+        }
+        let first = worlds[0].clone();
+        for (order, world) in orders.iter().zip(&worlds) {
+            assert_eq!(world, &first, "{mode:?} {order:?}");
+        }
+        assert!(first.contains("BroadcastBehaviorEventFromScript Custom"), "{first}");
+        assert!(first.contains("Ok(Bool(false)) [1, 0, 1]"), "{first}");
+        assert!(first.contains(r#"[Some(Crate("ow-mission")), Some(Crate("ow-combat"))]"#), "{first}");
+    }
 }
 
 /// The level-up's `RunBehaviors` outside the level-up is the C++ log line; inside it is `NotYet` (lane W6-SKILLS);

@@ -123,8 +123,6 @@ pub struct CombatState {
     pub(crate) next_consumer: i32,
     /// `enable_deaths` ran.
     pub deaths: bool,
-    /// The output links the running script behaviors selected (`ActivateBehaviorOutputLink`), innermost last.
-    pub(crate) selected: Vec<Vec<i32>>,
     pub on_take_damage: Option<TakeDamageFn>,
     pub on_behavior_event: Option<BehaviorEventFn>,
     pub injured_definition: Option<ObjectFn>,
@@ -299,6 +297,8 @@ impl NativePack for Pack {
                 ..CombatState::default()
             })?;
         }
+        // The behavior kernel's natives have one owner (ow-behavior); this pack routes its consumers to it.
+        ow_behavior::kernel::natives::Pack.register(vm)?;
         register_hit(vm)?;
         crate::damage::register(vm)?;
         crate::death::register(vm)?;
