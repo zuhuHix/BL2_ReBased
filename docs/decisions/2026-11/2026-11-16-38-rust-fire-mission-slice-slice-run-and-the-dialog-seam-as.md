@@ -90,7 +90,7 @@ NATIVE_PROGRESSION.md, NATIVE_LEVEL_UP_ATTRIBUTES.md), UNVERIFIED, except what t
   level-up, decision 2026-11-15-34; lane W6-SKILLS). Read but UNVERIFIED in both modes: Toggle as a flip of the
   current state.
 - **Verified (automated, local, pc-hummer, on origin/main 34117d3).**
-  - 20 slice unit tests on invented packages (`slice/tests.rs`: the registration order, the verdicts against the
+  - 19 slice unit tests on invented packages (`slice/tests.rs`: the registration order, the verdicts against the
     tracker, restrictions, another mission's state, objective-specific conditions, the unsupported condition class,
     the dummy's and the mission's sequence changes, the range wrapper, the direct hit, each stand-in by mode and what
     the health pool reproduces, the game time, the mission's dialog, the C++ event names, the missing provider's text,
