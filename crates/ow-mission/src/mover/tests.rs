@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use ow_core::notyet::Missing;
 use ow_package::testkit::ints;
+use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::{Asm, CPF_OPT, FunctionSpec, Param, ScriptToy};
 
 use super::*;
@@ -103,8 +103,42 @@ fn package(o: &Opts) -> Vec<u8> {
         "BoolProperty",
         "NameProperty",
         "ObjectProperty",
+        "StrProperty",
+        "ArrayProperty",
+        "StructProperty",
     ]);
     let object = t.class("Object", 0);
+    // Toy Kismet declarations carrying the property names the executor reads (as the W5-KISMET tests do).
+    let s_in = toy_struct(&mut t, object, "SeqOpInputLink", None);
+    t.prop("Str", s_in, "LinkDesc", 0, 0);
+    t.prop("Bool", s_in, "bDisabled", 0, 0);
+    t.prop("Float", s_in, "ActivateDelay", 0, 0);
+    let s_link = toy_struct(&mut t, object, "SeqOpOutputInputLink", None);
+    t.prop("Object", s_link, "LinkedOp", 0, object);
+    t.prop("Int", s_link, "InputLinkIdx", 0, 0);
+    let s_out = toy_struct(&mut t, object, "SeqOpOutputLink", None);
+    toy_array_of(&mut t, s_out, "Links", "Struct", s_link);
+    t.prop("Str", s_out, "LinkDesc", 0, 0);
+    t.prop("Bool", s_out, "bDisabled", 0, 0);
+    t.prop("Float", s_out, "ActivateDelay", 0, 0);
+    let s_var = toy_struct(&mut t, object, "SeqVarLink", None);
+    t.prop("Str", s_var, "LinkDesc", 0, 0);
+    toy_array_of(&mut t, s_var, "LinkedVariables", "Object", object);
+    let op = t.class("SequenceOp", object);
+    toy_array_of(&mut t, op, "InputLinks", "Struct", s_in);
+    toy_array_of(&mut t, op, "OutputLinks", "Struct", s_out);
+    toy_array_of(&mut t, op, "VariableLinks", "Struct", s_var);
+    t.prop("Int", op, "ActivateCount", 0, 0);
+    let sequence = t.class("Sequence", op);
+    let event = t.class("SequenceEvent", op);
+    t.prop("Int", event, "TriggerCount", 0, 0);
+    t.prop("Object", event, "Originator", 0, object);
+    let remote = t.class("SeqEvent_RemoteEvent", event);
+    t.prop("Name", remote, "EventName", 0, 0);
+    let seq_action = t.class("SequenceAction", op);
+    let toggle = t.class("SeqAct_ToyToggle", seq_action); // invented: a world action the host gets
+    let var_object = t.class("SeqVar_Object", object);
+    t.prop("Object", var_object, "ObjValue", 0, object);
     let mystery = native(&mut t, object, "Mystery", &[]);
     let actor = t.class("Actor", object);
     let set_timer = native(
@@ -130,7 +164,7 @@ fn package(o: &Opts) -> Vec<u8> {
     let audio = t.class("AudioComponent", object);
     t.prop("Object", audio, "SoundCue", 0, object);
     native(&mut t, audio, "Stop", &[]);
-    let action = t.class("SeqAct_Interp", object);
+    let action = t.class("SeqAct_Interp", seq_action);
     if o.reverse_prop {
         t.prop("Bool", action, "bReversePlayback", 0, 0);
     }
@@ -190,7 +224,7 @@ fn package(o: &Opts) -> Vec<u8> {
 
     let delay_tag = t.p.float_tag("Delay", 0.5);
     let payload = placed(&mut t, &[delay_tag]);
-    t.p.add_export(mover, "PlacedMover", payload);
+    let placed_mover = t.p.add_export(mover, "PlacedMover", payload);
     let fast = t.p.float_tag("Delay", 0.1);
     let payload = placed(&mut t, &[fast]);
     t.p.add_export(mover, "FastMover", payload);
@@ -199,13 +233,68 @@ fn package(o: &Opts) -> Vec<u8> {
     t.p.add_export(mover, "SlowMover", payload);
     let payload = ordinary(&mut t, &[]);
     t.p.add_export(action, "PlacedAction", payload);
-    // An action inside a sequence object: its path has an owning sequence (`Seq`).
+    // A sequence `Seq` owning the mover's action: remote events OpenDoor (Play, and the lamp on) and CloseDoor
+    // (Reverse); the action's Completed turns the lamp off; its Data variable names PlacedMover.
+    let base = t.p.next_export();
+    let (seq, open, close, inner, lamp, var) =
+        (base, base + 1, base + 2, base + 3, base + 4, base + 5);
     let payload = ordinary(&mut t, &[]);
-    let seq = t.p.add_export(object, "Seq", payload);
-    let payload = ordinary(&mut t, &[]);
-    let mut inner = ow_package::testkit::Export::new(action, "InnerAction", payload);
-    inner.outer = seq;
-    t.p.add_export_with(inner);
+    assert_eq!(t.p.add_export(sequence, "Seq", payload), seq);
+    let in_seq = |t: &mut ScriptToy, class: i32, name: &str, tags: &[Vec<u8>]| {
+        let payload = ordinary(t, tags);
+        let mut e = ow_package::testkit::Export::new(class, name, payload);
+        e.outer = seq;
+        t.p.add_export_with(e)
+    };
+    let inputs = |t: &mut ScriptToy, descs: &[&str]| {
+        let mut body = Vec::new();
+        for d in descs {
+            body.extend(t.p.str_tag("LinkDesc", d));
+            body.extend(t.none);
+        }
+        t.p.array_tag("InputLinks", i32::try_from(descs.len()).unwrap(), &body)
+    };
+    let outputs = |t: &mut ScriptToy, outs: &[(&str, &[(i32, i32)])]| {
+        let mut body = Vec::new();
+        for (desc, to) in outs {
+            let mut targets = Vec::new();
+            for &(target, input) in *to {
+                targets.extend(t.p.object_tag("LinkedOp", target));
+                targets.extend(t.p.int_tag("InputLinkIdx", input));
+                targets.extend(t.none);
+            }
+            body.extend(t.p.array_tag("Links", i32::try_from(to.len()).unwrap(), &targets));
+            body.extend(t.p.str_tag("LinkDesc", desc));
+            body.extend(t.none);
+        }
+        t.p.array_tag("OutputLinks", i32::try_from(outs.len()).unwrap(), &body)
+    };
+    let open_tags = [
+        t.p.name_tag("EventName", "OpenDoor"),
+        outputs(&mut t, &[("Out", &[(inner, 0), (lamp, 0)])]),
+    ];
+    assert_eq!(in_seq(&mut t, remote, "OpenEvent", &open_tags), open);
+    let close_tags = [
+        t.p.name_tag("EventName", "CloseDoor"),
+        outputs(&mut t, &[("Out", &[(inner, 1)])]),
+    ];
+    assert_eq!(in_seq(&mut t, remote, "CloseEvent", &close_tags), close);
+    let vars = {
+        let mut body = t.p.str_tag("LinkDesc", "Data");
+        body.extend(t.p.array_tag("LinkedVariables", 1, &var.to_le_bytes()));
+        body.extend(t.none);
+        t.p.array_tag("VariableLinks", 1, &body)
+    };
+    let inner_tags = [
+        inputs(&mut t, &["Play", "Reverse", "Stop"]),
+        outputs(&mut t, &[("Completed", &[(lamp, 1)]), ("Reversed", &[])]),
+        vars,
+    ];
+    assert_eq!(in_seq(&mut t, action, "InnerAction", &inner_tags), inner);
+    let lamp_tags = [inputs(&mut t, &["Turn On", "Turn Off"])];
+    assert_eq!(in_seq(&mut t, toggle, "Lamp", &lamp_tags), lamp);
+    let var_tags = [t.p.object_tag("ObjValue", placed_mover)];
+    assert_eq!(in_seq(&mut t, var_object, "MoverVar", &var_tags), var);
     let payload = placed(&mut t, &[]);
     t.p.add_export(actor, "PlainActor", payload);
     t.p.add_export(mover, "ShortMover", vec![0u8; 25]);
@@ -540,7 +629,7 @@ fn an_action_with_no_owning_sequence_is_the_cxx_dispatch_error() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
         let mut m = mover(&dir, "PlacedMover");
-        let d = m.remote_event("OpenDoor").unwrap();
+        let d = m.remote_event("OpenDoor");
         assert_eq!(
             (d.matched, d.motion, d.errors.clone()),
             (
@@ -558,10 +647,7 @@ fn an_action_with_no_owning_sequence_is_the_cxx_dispatch_error() {
             m.output("Op", "Out"),
             m.advance_sequence(-1.0),
         ] {
-            assert_eq!(
-                d.unwrap().errors,
-                ["mover action path has no owning sequence"]
-            );
+            assert_eq!(d.errors, ["mover action path has no owning sequence"]);
         }
         // `variables` does not catch, as the C++.
         let e = m.variables("Op", "Target").unwrap_err();
@@ -569,31 +655,108 @@ fn an_action_with_no_owning_sequence_is_the_cxx_dispatch_error() {
     });
 }
 
+/// The sequence calls of a mover bound to `Seq.InnerAction`.
+fn sequenced(dir: &Cooked) -> Mover {
+    bind(dir, "PlacedMover", "Seq.InnerAction").unwrap()
+}
+
 #[test]
-fn the_kismet_entry_points_are_not_yet() {
+fn a_remote_event_requests_motion_and_lists_the_other_actions_at_the_host_boundary() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = bind(&dir, "PlacedMover", "Seq.InnerAction").unwrap();
-        let e = m.remote_event("OpenDoor").unwrap_err();
-        assert!(e.is_not_yet());
-        let MoverError::NotYet(n) = &e else {
-            panic!("{e:?}")
-        };
-        assert!(matches!(n.missing, Missing::LayerAbsent(_)));
-        assert!(
-            e.cpp_text().contains("remote event OpenDoor"),
-            "{}",
-            e.cpp_text()
+        let mut m = sequenced(&dir);
+        let d = m.remote_event("OpenDoor");
+        assert_eq!((d.matched, d.motion), (1, 1));
+        assert!(d.errors.is_empty(), "{:?}", d.errors);
+        assert_eq!(d.host_boundary, ["Engine.SeqAct_ToyToggle:Lamp <- Turn On"]);
+        assert_eq!(d.requests.len(), 1);
+        assert_eq!(
+            (
+                d.requests[0].class.as_str(),
+                d.requests[0].op.as_str(),
+                d.requests[0].input.as_str()
+            ),
+            ("Engine.SeqAct_ToyToggle", "Lamp", "Turn On")
         );
-        assert!(m.motion_finished(false).unwrap_err().is_not_yet());
-        assert!(m.mission_event("M", "E").unwrap_err().is_not_yet());
-        assert!(m.sequence_event("Op").unwrap_err().is_not_yet());
-        assert!(m.originator_event("O").unwrap_err().is_not_yet());
-        assert!(m.output("Op", "Out").unwrap_err().is_not_yet());
-        assert!(m.advance_sequence(1.0).unwrap_err().is_not_yet());
-        assert!(m.variables("Op", "Target").unwrap_err().is_not_yet());
-        // The lifecycle calls do not need the sequence.
+        assert_eq!(d.trace[0], "event OpenEvent");
+        // The per-call state is cleared: Reverse is -1 and the lamp is not listed again.
+        let d = m.remote_event("CloseDoor");
+        assert_eq!((d.matched, d.motion), (1, -1));
+        assert!(d.host_boundary.is_empty());
+        let d = m.remote_event("Nobody");
+        assert_eq!((d.matched, d.motion), (0, 0));
+        // The lifecycle calls are unaffected by the sequence.
         assert_eq!(m.notify(false, false).error, None);
+    });
+}
+
+#[test]
+fn the_motion_end_fires_completed_or_reversed() {
+    let dir = cooked(&Opts::default());
+    on_stack(|| {
+        let mut m = sequenced(&dir);
+        let d = m.motion_finished(false);
+        assert_eq!(d.matched, 1);
+        assert_eq!(
+            d.host_boundary,
+            ["Engine.SeqAct_ToyToggle:Lamp <- Turn Off"]
+        );
+        let d = m.motion_finished(true);
+        assert_eq!(d.matched, 1);
+        assert!(d.host_boundary.is_empty() && d.errors.is_empty(), "{d:?}");
+    });
+}
+
+#[test]
+fn event_output_and_time_entry_points() {
+    let dir = cooked(&Opts::default());
+    on_stack(|| {
+        let mut m = sequenced(&dir);
+        let d = m.sequence_event("CloseEvent");
+        assert_eq!(
+            (d.matched, d.motion, d.entered.clone()),
+            (1, -1, vec!["CloseEvent".to_string()])
+        );
+        let d = m.sequence_event("Lamp");
+        assert_eq!(
+            (d.matched, d.errors.clone()),
+            (0, vec!["no sequence event named Lamp".to_string()])
+        );
+        let d = m.output("InnerAction", "Completed");
+        assert_eq!(d.matched, 1);
+        assert_eq!(
+            d.host_boundary,
+            ["Engine.SeqAct_ToyToggle:Lamp <- Turn Off"]
+        );
+        // An op with no such output does nothing; a name that is no op is an error line.
+        let d = m.output("Lamp", "Out");
+        assert_eq!((d.matched, d.errors.len()), (0, 0));
+        let d = m.output("Nope", "Out");
+        assert_eq!(d.errors, ["no sequence op named Nope"]);
+        let d = m.advance_sequence(-1.0);
+        assert_eq!(d.errors, ["invalid sequence time delta"]);
+        assert!(m.advance_sequence(1.0).errors.is_empty());
+        // No event has the mover as its originator.
+        assert_eq!(m.originator_event("PlacedMover").matched, 0);
+        assert_eq!(m.mission_event("M", "E").matched, 0);
+    });
+}
+
+#[test]
+fn the_action_s_variables_name_the_objects_they_hold() {
+    let dir = cooked(&Opts::default());
+    on_stack(|| {
+        let mut m = sequenced(&dir);
+        let v = m.variables("InnerAction", "Data").unwrap();
+        assert_eq!(
+            v,
+            [Variable {
+                name: "MoverVar".to_string(),
+                object: "PlacedMover".to_string()
+            }]
+        );
+        assert!(m.variables("Nope", "Data").unwrap().is_empty());
+        assert!(m.variables("InnerAction", "Other").unwrap().is_empty());
     });
 }
 

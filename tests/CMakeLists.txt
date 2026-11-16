@@ -197,6 +197,11 @@ if(EXISTS ${OW_RUST_PACKAGE})
   add_test(NAME item-pools-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/item_pools_rust_test.py
            $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
   set_tests_properties(item-pools-rust PROPERTIES TIMEOUT 300 LABELS rust ENVIRONMENT "OW_PARITY=reference")
+  # Lane W5-DIALOG: the Rust --mover-probe and --mover-event against the C++ binary on an invented toy mover and Kismet
+  # sequence (both binaries, byte for byte, with two differences checked on purpose; decision 2026-11-15-32).
+  add_test(NAME mover-rust COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/mover_parity_test.py
+           $<TARGET_FILE:ow-package> ${OW_RUST_PACKAGE})
+  set_tests_properties(mover-rust PROPERTIES TIMEOUT 300 LABELS rust)
   # Lane W3-DEFS: --def-dump is Rust-only (the C++ binary has no such command), so this runs the Rust binary alone.
   add_test(NAME def-dump-synthetic COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/def_dump_test.py ${OW_RUST_PACKAGE})
   set_tests_properties(def-dump-synthetic PROPERTIES TIMEOUT 120 LABELS rust)
