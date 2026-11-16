@@ -22,6 +22,7 @@ pub mod math;
 pub mod pose;
 pub mod report;
 pub mod skin;
+pub mod tree;
 
 pub use pose::{AnimError, Pose, Skeleton, Wrap};
 pub use skin::{skin, skin_matrices};
