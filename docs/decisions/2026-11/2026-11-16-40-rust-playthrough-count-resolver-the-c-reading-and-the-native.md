@@ -31,8 +31,9 @@ rule waits for a fresh implementer working from the note alone.
   (that attribute's only value resolver). Where the C++ refuses (the attribute read outside an expression), the port
   answers 1.
 - **"Always 1" is a new Reference stand-in** (architecture R3; the hub adds its ARCHITECTURE.md section 6.1 row).
-  Pinned by the installed Fire reward percentage and the init-definition sweeps below, and by
-  `playthrough_count_tests.rs`. Replaced by FIX-PLAYTHROUGH-OFF (the Off rule, from the note). Where it differs from
+  Pinned by no tracked test (the local installed-game sweeps below, Normal playthrough only, where every reading
+  gives 1); reproduced by `playthrough_count_tests.rs`. Replaced by FIX-PLAYTHROUGH-OFF (the Off rule, from the note);
+  replacement test: the Off-mode table cases of the note's section 3 on a synthetic replication info. Where it differs from
   the native rule: TVHM and UVHM read 2 natively and 1 here; the C++ refuses the attribute outside an expression,
   where the port answers 1.
 - `ParityMode::Off`: get and get-base are `NotYet { NotPorted }`, "native rule in NATIVE_PLAYTHROUGH_ATTRIBUTES.md,
