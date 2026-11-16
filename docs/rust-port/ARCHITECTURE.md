@@ -225,7 +225,7 @@ command reads it, and the mapping is written into `crates/README.md`):
 | `cmd/items.rs` | W4-REGISTRY | `--item-registry` with `--cooked <dir>`, `[--overlay <file>]` (Rust-only) |
 | `cmd/items_roll.rs` | W4-ROLL | `--item-roll <balance path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--overlay <file>]` (NotYet, exit 3); `--item-roll --census <file> --cooked <dir> [--rolls <n>]` (item_roll.py's census rolls); `--item-roll --weapons <file> --cooked <dir> [--seeds <n>]` (weapon_gen_parity's requests) (Rust-only) |
 | `cmd/items_stats.rs` | W4-STATS | `--item-stats` and `--item-card`, each with `--cooked <dir>` and one of: `<balance path> --stage <n> --seed <n> [--count <n>]`; `--weapons <file> [--seeds <n>]`; `--requests <file> --output <file>` (one line per request); `--data <definition-data json file> [--level <n>] [--overlay <file>]`; each with `[--colours <file>]` (Rust-only) |
-| `cmd/items_pools.rs` | W4-POOLS | `--item-pool <pool path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--package <file>]` (default `WillowGame/CookedPCConsole/Startup.upk`), `[--python-sum 3.12\|3.14]`, `[--overlay <file>]` (NotYet, exit 3); `--item-pool --parity <file> --cooked <dir> [--seeds <n>] [--package <file>] [--python-sum 3.12\|3.14]` (the parity requests; `<file>` under `local/` only) (Rust-only) |
+| `cmd/items_pools.rs` | W4-POOLS | `--item-pool <pool path>` with `--cooked <dir>`, `--stage <n>`, `--seed <n>`, `[--count <n>]`, `[--playthrough <index>]`, `[--op-level <n>]`, `[--package <file>]` (default `WillowGame/CookedPCConsole/Startup.upk`), `[--python-sum 3.12\|3.14]`, `[--overlay <file>]` (NotYet, exit 3); `--item-pool --parity <file> --cooked <dir> [--seeds <n>] [--package <file>] [--python-sum 3.12\|3.14]` (writes the parity requests' rolls to `<file>`, which must be under `local/`) (Rust-only) |
 | `cmd/behavior.rs` | W5-BEHAVIOR | `--behavior-dump`, `--behavior-run` |
 | `cmd/kismet.rs` | W5-KISMET | `--kismet-census`, `--kismet-run`, `--remote`, `--originator`, `--op` |
 | `cmd/mover.rs` | W5-DIALOG | `--mover-event`, `--mover-probe` |
@@ -1007,7 +1007,7 @@ impl Rolled { pub fn definition_data(&self) -> Result<DefinitionData, ItemError>
 // RollCx::with_item. roll in Off mode without an instance answers NotYet for the parts that need one (name expressions,
 // context-dependent rarity terms); RollCx has no hook that instantiates.
 // As shipped by W4-STATS (PR #323, decision 2026-11-15-24). stats.rs, Off mode (every value through ow-attr):
-pub struct Instance { pub object: ObjRef, pub external: ItemStats /* an item's owner stacks; empty for a weapon */ }
+#[non_exhaustive] pub struct Instance { pub object: ObjRef, pub external: ItemStats /* an item's owner stacks; empty for a weapon */ }
 pub fn instantiate_stats(data: &DefinitionData, level: i32, sys: &AttributeSystem, cx: &mut EvalCx,
     known: &DetMap<String, ObjRef> /* objects the caller holds, by path; the rest from the world's store */)
     -> Result<Instance, ItemError>;   // allocates the instance of the kind's class, writes ExpLevel, then instantiate_onto
@@ -1043,7 +1043,8 @@ impl PoolData { pub fn new(CensusInput) -> Result<PoolData, ItemError>; pub fn o
 // from the native's; the game's sequence is reproduced in neither case (UNVERIFIED, decision 2026-11-15-25).
 ```
 
-The stats of an item **are attributes on an instance object** in every case: offline, `instantiate_stats` makes a
+In Off mode the stats of an item **are attributes on an instance object** (the Reference card, `weapon_card`, reads
+the roll's tag streams through `RollData` instead, decision 2026-11-15-24): offline, `instantiate_stats` makes a
 detached object of the item's class in the offline `ObjectSpace`; in the world it is the weapon actor. One path.
 
 ### 3.8 `ow-vm` (contract W2-VMAPI)
@@ -1155,7 +1156,7 @@ scopes.
 ```rust
 pub fn states::process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmError>;   // one state-code step (the latent poll first), for W5-WORLD's actor tick
 pub fn states::probe_enabled(vm: &mut Vm, object: ObjRef, name: &str) -> Result<bool, VmError>;  // the probe rule for world events (Tick, Touch); NotYet for the 22 unnamed probe ids
-pub fn states::forget(vm: &mut Vm, object: ObjRef) -> Result<(), VmError>;   // drop a frame; every path that frees objects calls it (world destroy, sweep's release_unreferenced)
+pub fn states::forget(vm: &mut Vm, object: ObjRef) -> Result<(), VmError>;   // drop a frame; every path that frees objects should call it (world destroy, sweep's release_unreferenced; neither does yet: open)
 pub fn states::latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<LatentAction>, VmError>;   // with latent_pending, for the world's destroy and tick
 pub fn states::send_world_event(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<bool, VmError>;   // an event through the state chain, probe-gated (find_event looks it up)
 pub fn latent::kernel_resume_at(now: f64, wait: f64) -> Option<f64>;   // the behavior kernel's wait: None when negative or NaN, else now + max(wait, 1/60), for W5-BEHAVIOR
@@ -1175,7 +1176,8 @@ pub fn latent::kernel_resume_at(now: f64, wait: f64) -> Option<f64>;   // the be
     natives), then the given packs in order. `WorldError { Vm, Clock, BadDelta }`.
   - Services, each reachable from `&mut Vm`: `query::WorldQuery` (globals, game info, and the engine-query handlers
     keyed by `QueryKind`, registered by W5-POOLS, W5-EQUIP and W6-SKILLS; a kind with no handler is
-    `NotYet { LayerAbsent }` naming its lane), `world::BalanceState { snapshot, region_stages }`, `actors::Actors`
+    `NotYet { LayerAbsent }` naming its lane, or for the player controller and context source the unread engine
+    rule; a kind missing from `QueryKind` is `NotYet { NotPorted }`), `world::BalanceState { snapshot, region_stages }`, `actors::Actors`
     (the level list), `timers::Timers`, and `ow_vm::natives_core::ActorSource` (an `ActorWalkFn` over the actor list,
     which `AllActors` / `DynamicActors` use when it exists; without it they keep the C++ list).
   - `set_state_step` and `set_physics_step` take an `ActorStep` (`Rc<dyn Fn(&mut Vm, ObjRef, f32) -> Result<(),
@@ -1194,6 +1196,9 @@ pub fn latent::kernel_resume_at(now: f64, wait: f64) -> Option<f64>;   // the be
     public UE3 ticks it in the same frame, is the unread alternative.
   - Open: where single player sets a local actor's `RemoteRole` to none is not read; until then `RemoteRole` 2 stops
     the tick with `NotYet { NotRead }` (W6).
+  - Open: the world's events (`Tick`, timer callbacks, spawn and destroy events) go through `actors::send_event`
+    (`find_method` on the heap state), so they get no probe gate and no parent-state lookup; moving them to
+    `states::send_world_event` is a follow-up.
 - Every native-pack crate exports `pub struct Pack; impl NativePack for Pack`. `ow-cli` and `ow-host` assemble the
   packs they need.
 - The behavior kernel (`ow-behavior`) keeps a handler registry keyed by behavior class; `ow-combat` (damage and
@@ -1247,7 +1252,7 @@ Tests assert the `NotYet` cases as well as the working ones, so a lane that fill
    so LLVM cannot fold a constant `pow` at compile time (which would test the compiler's folding, not the runtime);
    the same table form covers `exp`, `ln` and the trig choke points on invented inputs.
 2. **Bitwise differential runs** compare `to_bits()`, never a tolerance: Rust vs C++ CLI on synthetic packages (every
-   lane), Rust vs Python on real packages (items: the 2,919,834-field parity), Rust vs recorded live rows (golden cards,
+   lane), Rust vs Python on real packages (items: the weapon-card field parity, 3,460,004 fields as shipped), Rust vs recorded live rows (golden cards,
    XP curve, health base).
 3. **Replay determinism**: every scripted run (`--combat-run`, `--slice-run`, `--mission-run`) is executed twice in
    one test with the same seed and dt sequence; the call traces must be identical.
@@ -1294,7 +1299,7 @@ passes every ctest entry the C++ CLI passes. From wave 1 on, no new rule is writ
 | `ow-vm` | `vm_test.py`, `natives_test.py`, `runtime_test.py` with the Rust binary; C++ `--vm-sweep`, `--native-census`. (`ui_trace_returns_test.py` tests a Python tool on fake data: re-expressed as Rust unit tests, not a Rust gate.) | the three tests pass on the Rust binary, the stand-in-pinning cases of 6.1 under `OW_PARITY=reference`; `--vm-sweep` JSON identical to C++ on the 9 packages under `OW_PARITY=reference` (`Rand`/`FRand` on VmLcg), apart from decision 2026-11-15-07's string-unit differences and decision 2026-11-15-23's causes A and B (hub decision, W4-VMTOOLS) | freeze `vm.cpp`, `interp.cpp`, `natives*.cpp` |
 | `ow-attr` | union of evaluator fixtures: `card_rounding_cases.json`, `weapon_balance_test.py`, the cases of `weapon_gen_test.py` (which drives `ow-weapongen`, so its cases are re-expressed; the file is deleted with the C++ generator, not passed), the cases of `skill_stats_test.py`, `prepare_stock_shield_test.py`, evaluator rows of `mission_script_test.py` and `combat_test.py` | every fixture of every current evaluator reproduced by the one Rust evaluator (re-expressed as Rust tests on synthetic packages); shapes outside the read set return `NotYet`, with a test each | freeze `progression.*`; the Python evaluators frozen with their tools (section 9) |
 | `ow-balance` | REALGAME_GROUND_TRUTH rows; `mission_script_test.py` | XP curve 1-59, health base at 2/8/17/70, Fire XP 395 at stage 8, skill points `max(0, L-4)`, Sanctuary PT1 stage 7..9 (8..11 after WelcomeToSanctuary) reproduced; PT2/PT3 branches typed and `NotYet` where unread | `tools/slice_values.py` deleted at the gate |
-| `ow-items` | `item_registry.py` JSON; `item_roll.py --census` + `item_roll.check`; `weapon_gen_parity.py`; `loot_pools.py` (its CrtRand path, `roll_crt`/`roll_pool_crt`, not the `random.Random` one); `tools/real_game/golden_card_compare.py` | registry JSON identical (schema `openwillow-item-registry/1`, Python float and escape format); 35,660 census rolls pass `item_roll.check` (runtime-state weights and windows as 6.1 says); 2,919,834 fields equal to Python bit for bit; 7,680 pool rolls equal to `roll_pool_crt`; 69/69 golden cards with the live overlay (52-53 without, reported) | `weapon_gen.*`, `weapon_gen_cli.cpp`, the manifest tool and the tests that drive only `ow-weapongen` (`weapon_gen_test.py`, `weapon_gen_parity_test.py`) deleted at the gate, their cases re-expressed first; Python per section 9 |
+| `ow-items` | `item_registry.py` JSON; `item_roll.py --census` + `item_roll.check`; `weapon_gen_parity.py`; `loot_pools.py` (its CrtRand path, `roll_crt`/`roll_pool_crt`, not the `random.Random` one); `tools/real_game/golden_card_compare.py` | registry JSON identical (schema `openwillow-item-registry/1`, Python float and escape format); 35,660 census rolls pass `item_roll.check` (runtime-state weights and windows as 6.1 says); every compared field equal to Python bit for bit (3,460,004 as shipped, decision 2026-11-15-24); 7,680 pool rolls equal to `roll_pool_crt`; 69/69 golden cards with the live overlay (52-53 without, reported) | `weapon_gen.*`, `weapon_gen_cli.cpp`, the manifest tool and the tests that drive only `ow-weapongen` (`weapon_gen_test.py`, `weapon_gen_parity_test.py`) deleted at the gate, their cases re-expressed first; Python per section 9 |
 | `ow-world`, `ow-combat` | `combat_test.py`, `verify_combat_pawn.py --vm` | `combat_test.py` on the Rust binary; `--vm` 97 PASS / 0 FAIL / 4 MISSING / 1 OPEN reproduced (loot rows against the live rows, not the C++ stand-in inventories) | freeze `combat*.cpp` |
 | `ow-behavior` | `behavior_test.py` with the Rust binary | the test passes on the Rust binary; Fire event order (below) | freeze `behavior.*` |
 | `ow-skills` | the cases of `skill_effects_test.py` and `skill_stats_test.py` (Python tools on fake packages: re-expressed as Rust unit tests on `testkit` packages); NATIVE_SKILL_BEHAVIOURS live captures | the re-expressed cases pass; Phaselock duration `5 + 0.5 g`; the 2026-11-06 skills live capture rows reproduced where they are numbers | `tools/skill_stats.py` deleted at the gate |
@@ -1850,7 +1855,8 @@ W1-NUM is the lane to start first and review first.
   `WillowWeapon.CalculateWeaponBaseValues` through `override_script` is W5-EQUIP's job, not this lane's.
 - Owns: `crates/ow-items/src/{stats,cards}.rs`, `crates/ow-cli/src/cmd/items_stats.rs`.
 - Inputs: W4-ROLL (data), W3-ATTREVAL, W3-ATTRCTX, W3-ATTREFFECTS, W3-BALANCE.
-- Done when: 2,919,834 fields bit-equal to Python (`weapon_gen_parity.py` given the Rust output); golden cards 69/69
+- Done when: every compared field bit-equal to Python (`weapon_gen_parity.py` given the Rust output; 3,460,004 fields
+  as shipped, 2,919,834 in the shape before PR #57's second review, decision 2026-11-15-24); golden cards 69/69
   with the live overlay (`tools/real_game/golden_card_compare.py`); the `prepare_stock_shield_test.py` card
   reproduced at its level through the real evaluator; then `src/weapon_gen.*`, `weapon_gen_cli.cpp`,
   `tools/weapon_gen_manifest.py`, `tests/weapon_gen_test.py` and `tests/weapon_gen_parity_test.py` deleted (D4), their
@@ -1871,7 +1877,7 @@ W1-NUM is the lane to start first and review first.
 | Lane | Goal | Owns | Inputs | Size / game / model |
 |---|---|---|---|---|
 | W5-WORLD | `World { vm }`, the `WorldHooks` service behind `Vm`'s `AttrWorld` (globals, game info, engine queries, balance state), actor spawn/destroy, `AllActors`/`DynamicActors` iterators, tick groups, **per-actor timers from NATIVE_ENGINE_CORE.md "Actor timers"** (the `Timers` array on the actor: replace-not-add on (name, object), `Count` grown by `TimerTimeDilation * delta` unless paused, due when `Count > Rate` strictly, a loop fires `floor(Count / Rate)` times, culling during the pass with the length re-read, pause, `GetTimerCount`/`GetTimerRate`, the order from the actor tick; dilation of the delta UNVERIFIED), `EvaluateInitializationData` native | `ow-world/src/{world,query,actors,timers}.rs` | W4-INTERP2, W3-CORENAT, W3-BALANCE, W1-SIM | L / yes / Opus high |
-| W5-STATES | States, `GotoState`/`Enable`/`Disable` per NATIVE_ENGINE_CORE, latent functions with the 1/60 floor, label jumps | `ow-vm/src/{states,latent}.rs` | W4-INTERP2, W1-SIM | M-L / yes / Opus high |
+| W5-STATES | States, `GotoState`/`Enable`/`Disable` per NATIVE_ENGINE_CORE, latent `Sleep` (the record's half-delta poll; the 1/60 floor is the behavior kernel's wait, `latent::kernel_resume_at`, decision 2026-11-15-27), label jumps | `ow-vm/src/{states,latent}.rs` | W4-INTERP2, W1-SIM | M-L / yes / Opus high |
 | W5-POOLS | Resource pools, pool manager natives, pawn health glue, level-up rebase (verified live: base and max rewritten, current untouched) | `ow-world/src/{pools,levelup}.rs` | W5-WORLD, W3-ATTREFFECTS | M / yes / Opus medium |
 | W5-BEHAVIOR | Provider decode (fitted variable block via `raw_tail`), kernel dispatch rules A1/A2, the handler registry (packs above register the classes they own; unregistered is `NotYet`), the world-only handlers; `--behavior-dump`, `--behavior-run` | `ow-behavior/src/{provider,kernel,registry,handlers/}`, `ow-cli/src/cmd/behavior.rs` | W5-WORLD | L / yes / Opus high |
 | W5-KISMET | Kismet sequence ops, impulse stack, logic ops; `--kismet-census`, `--kismet-run` | `ow-mission/src/kismet.rs`, `ow-cli/src/cmd/kismet.rs` | W5-WORLD | M / yes / Opus medium |
