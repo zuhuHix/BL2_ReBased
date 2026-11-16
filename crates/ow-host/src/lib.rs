@@ -72,6 +72,7 @@ pub fn find_install(root: &Path) -> Result<Install, InstallError> {
 }
 
 pub mod frame;
+pub mod movement;
 
 #[cfg(test)]
 mod tests {

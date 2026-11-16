@@ -1,8 +1,9 @@
 //! `ow-host`: checks the Borderlands 2 install, then (with `--window` or `--frames N`) opens the host window and runs
-//! the frame loop; `--headless-probe` prints the GPU adapter without a window. Commands and exit codes in
+//! the frame loop; `--walk` runs the scripted Sanctuary walk headless (lane H4); `--headless-probe` prints the GPU adapter without a window. Commands and exit codes in
 //! `args.rs` and below.
 //!
-//! Exit codes: 0 done; 1 refused or failed (no install, a GPU or window error, a `--frames` run closed early);
+//! Exit codes: 0 done; 1 refused or failed (no install, a GPU or window error, a `--frames` run closed early, a
+//! `--walk` that could not load or did not pass its checks);
 //! 2 bad command line; 4 `--headless-probe` found no adapter (no GPU or driver: not a fault of the build).
 
 use std::process::ExitCode;
@@ -32,6 +33,10 @@ fn main() -> ExitCode {
             }
             Err(code) => code,
         },
+        Command::Walk { game } => match check(&game) {
+            Ok(()) => walk(&game),
+            Err(code) => code,
+        },
         Command::Window { game, frames, vsync, time_limit } => match check(&game) {
             Ok(()) => window(RunOptions {
                 frames,
@@ -53,6 +58,26 @@ fn check(game: &std::path::Path) -> Result<(), ExitCode> {
         Err(e) => {
             eprintln!("ow-host refuses to start: {e}. The original game must be installed (AGENTS.md rule 11).");
             Err(ExitCode::from(1))
+        }
+    }
+}
+
+fn walk(game: &std::path::Path) -> ExitCode {
+    let install = match ow_host::find_install(game) {
+        Ok(install) => install,
+        Err(e) => {
+            eprintln!("ow-host --walk: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match ow_host::movement::sanctuary::run(&install) {
+        Ok(run) => {
+            print!("{}", run.text);
+            if run.passed { ExitCode::SUCCESS } else { ExitCode::from(1) }
+        }
+        Err(e) => {
+            eprintln!("ow-host --walk: {e}");
+            ExitCode::from(1)
         }
     }
 }
