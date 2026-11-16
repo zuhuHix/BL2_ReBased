@@ -1,0 +1,7 @@
+# AI-assisted (Claude Code). Lane W5-POOLS: resource pools, pawn health and the level-up rebase (crates/ow-world/src/{pools,levelup}.rs).
+#
+# No line. The C++ binary binds its pool natives (src/combat.cpp, src/mission_script.cpp) only inside --combat-run,
+# --mission-run and --slice-run, which the W6 lanes gate. Its --run leaves them unbound, as the Rust --run does, so a
+# diff of --run would compare two stub logs and test nothing of this lane. Every rule has a Rust unit test on an
+# invented package instead (crates/ow-world/src/pools/tests.rs, decision 2026-11-15-29). The installed-game check of
+# Maya's health pool at levels 1 to 80 is a local ignored test whose output stays under local/.
