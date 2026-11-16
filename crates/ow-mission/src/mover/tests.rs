@@ -249,10 +249,11 @@ fn package(o: &Opts) -> Vec<u8> {
     let placed_mover = t.p.add_export(mover, "PlacedMover", payload);
     let fast = t.p.float_tag("Delay", 0.1);
     let payload = placed(&mut t, &[fast]);
-    t.p.add_export(mover, "FastMover", payload);
+    let fast_mover = t.p.add_export(mover, "FastMover", payload);
     let slow = t.p.float_tag("Delay", 5000.0);
     let payload = placed(&mut t, &[slow]);
-    t.p.add_export(mover, "SlowMover", payload);
+    let slow_mover = t.p.add_export(mover, "SlowMover", payload);
+    let mut in_level = vec![placed_mover, fast_mover, slow_mover];
     let payload = ordinary(&mut t, &[]);
     t.p.add_export(action, "PlacedAction", payload);
     // A sequence `Seq` owning the mover's action: remote events OpenDoor (Play, and the lamp on) and CloseDoor
@@ -318,8 +319,8 @@ fn package(o: &Opts) -> Vec<u8> {
     let var_tags = [t.p.object_tag("ObjValue", placed_mover)];
     assert_eq!(in_seq(&mut t, var_object, "MoverVar", &var_tags), var);
     let payload = placed(&mut t, &[]);
-    t.p.add_export(actor, "PlainActor", payload);
-    t.p.add_export(mover, "ShortMover", vec![0u8; 25]);
+    in_level.push(t.p.add_export(actor, "PlainActor", payload));
+    in_level.push(t.p.add_export(mover, "ShortMover", vec![0u8; 25]));
     let payload = ordinary(&mut t, &[]);
     let cue = t.p.add_export(object, "Cue", payload);
     let payload = ordinary(&mut t, &[]);
@@ -334,7 +335,16 @@ fn package(o: &Opts) -> Vec<u8> {
     ] {
         let tag = t.p.object_tag("AmbientSoundComponent", component);
         let payload = placed(&mut t, &[tag]);
-        t.p.add_export(mover, name, payload);
+        in_level.push(t.p.add_export(mover, name, payload));
+    }
+    // A placed actor lives in a level: the definition store reads an actor from 26 only when its outer is a `Level`
+    // (decision 2026-11-16-36), as the C++ mover's actor is a level's (`TheWorld.PersistentLevel.<actor>`). The level
+    // is the last export, so no other index moves.
+    let level = t.class("Level", object);
+    let payload = ordinary(&mut t, &[]);
+    let the_level = t.p.add_export(level, "TheLevel", payload);
+    for a in in_level {
+        t.p.set_outer(a, the_level);
     }
     t.p.build()
 }
@@ -399,7 +409,7 @@ fn reverse_flag(m: &Mover) -> bool {
 fn the_probe_sequence_runs_the_installed_notifications_and_their_timer() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         assert!(m.loading_diagnostics().is_empty());
         for reverse in [false, true] {
             let start = m.notify(false, reverse);
@@ -427,7 +437,7 @@ fn a_call_that_logs_fails_and_is_rolled_back() {
         ..Opts::default()
     });
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         assert_eq!(m.notify(false, false).error, None);
         let finish = m.notify(true, false);
         assert!(text(&finish).starts_with("UNIMPLEMENTED "), "{finish:?}");
@@ -454,7 +464,7 @@ fn under_a_refusing_stub_policy_an_unbound_native_fails_the_call_and_is_rolled_b
         let mut m = Mover::new(
             dir.0.clone(),
             "Engine",
-            "PlacedMover",
+            "TheLevel.PlacedMover",
             "PlacedAction",
             ParityMode::Off,
             StubPolicy::refuse_all(),
@@ -477,7 +487,7 @@ fn a_failed_reverse_restores_the_action_flag() {
         ..Opts::default()
     });
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         assert!(m.notify(true, true).error.is_some());
         assert!(!reverse_flag(&m));
     });
@@ -490,12 +500,12 @@ fn the_binding_refuses_what_the_cxx_refuses() {
         let err = |actor: &str, action: &str| bind(&dir, actor, action).unwrap_err().cpp_text();
         // Swapped: the action is too short for a placed actor's prefix.
         assert_eq!(
-            err("PlacedAction", "PlacedMover"),
+            err("PlacedAction", "TheLevel.PlacedMover"),
             "object property prefix outside export"
         );
         // 25 bytes: shorter than the 26-byte prefix.
         assert_eq!(
-            err("ShortMover", "PlacedAction"),
+            err("TheLevel.ShortMover", "PlacedAction"),
             "object property prefix outside export"
         );
         assert_eq!(
@@ -504,7 +514,7 @@ fn the_binding_refuses_what_the_cxx_refuses() {
         );
         // An actor that is not exactly an InterpActor.
         assert_eq!(
-            err("PlainActor", "PlacedAction"),
+            err("TheLevel.PlainActor", "PlacedAction"),
             "mover binding has unsupported classes"
         );
     });
@@ -513,7 +523,7 @@ fn the_binding_refuses_what_the_cxx_refuses() {
         ..Opts::default()
     });
     on_stack(|| {
-        let e = bind(&dir, "PlacedMover", "PlacedAction").unwrap_err();
+        let e = bind(&dir, "TheLevel.PlacedMover", "PlacedAction").unwrap_err();
         assert_eq!(e.cpp_text(), "unsupported mover notification signature");
     });
     let dir = cooked(&Opts {
@@ -521,7 +531,7 @@ fn the_binding_refuses_what_the_cxx_refuses() {
         ..Opts::default()
     });
     on_stack(|| {
-        let e = bind(&dir, "PlacedMover", "PlacedAction").unwrap_err();
+        let e = bind(&dir, "TheLevel.PlacedMover", "PlacedAction").unwrap_err();
         assert_eq!(e.cpp_text(), "missing mover lifecycle properties");
     });
 }
@@ -530,7 +540,7 @@ fn the_binding_refuses_what_the_cxx_refuses() {
 fn set_timer_refuses_a_rate_past_an_hour_and_a_name_with_no_method() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "SlowMover");
+        let mut m = mover(&dir, "TheLevel.SlowMover");
         let finish = m.notify(true, false);
         assert_eq!(text(&finish), "unsupported mover timer");
         assert!(m.timers().is_empty());
@@ -540,7 +550,7 @@ fn set_timer_refuses_a_rate_past_an_hour_and_a_name_with_no_method() {
         ..Opts::default()
     });
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         assert_eq!(text(&m.notify(true, false)), "unsupported mover timer");
     });
 }
@@ -552,7 +562,7 @@ fn a_looping_timer_stops_at_the_callback_limit_and_is_rolled_back() {
         ..Opts::default()
     });
     on_stack(|| {
-        let mut m = mover(&dir, "FastMover");
+        let mut m = mover(&dir, "TheLevel.FastMover");
         assert_eq!(m.notify(true, false).error, None);
         let before = m.timers();
         // 0.1 s apart, 10 s: about a hundred callbacks are due, more than 32.
@@ -572,7 +582,7 @@ fn a_looping_timer_stops_at_the_callback_limit_and_is_rolled_back() {
 fn advance_refuses_a_bad_delta() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         for bad in [-1.0, 60.5, f64::NAN, f64::INFINITY] {
             let r = m.advance(bad);
             assert_eq!(text(&r), "invalid mover timer delta");
@@ -587,7 +597,7 @@ fn advance_refuses_a_bad_delta() {
 fn the_natives_refuse_targets_outside_the_binding() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "QuietMover");
+        let mut m = mover(&dir, "TheLevel.QuietMover");
         let action = m.action;
         let set = m.vm.find_function("Engine.Actor.SetTimer").unwrap();
         let clear = m.vm.find_function("Engine.Actor.ClearTimer").unwrap();
@@ -632,7 +642,7 @@ fn the_natives_refuse_targets_outside_the_binding() {
     });
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "LoudMover");
+        let mut m = mover(&dir, "TheLevel.LoudMover");
         let stop = m.vm.find_function("Engine.AudioComponent.Stop").unwrap();
         let actor = m.actor;
         let class = m.vm.space.heap.get(actor).unwrap().class;
@@ -654,7 +664,7 @@ fn the_natives_refuse_targets_outside_the_binding() {
 fn an_action_with_no_owning_sequence_is_the_cxx_dispatch_error() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         let d = m.remote_event("OpenDoor");
         assert_eq!(
             (d.matched, d.motion, d.errors.clone()),
@@ -683,7 +693,7 @@ fn an_action_with_no_owning_sequence_is_the_cxx_dispatch_error() {
 
 /// The sequence calls of a mover bound to `Seq.InnerAction`.
 fn sequenced(dir: &Cooked) -> Mover {
-    bind(dir, "PlacedMover", "Seq.InnerAction").unwrap()
+    bind(dir, "TheLevel.PlacedMover", "Seq.InnerAction").unwrap()
 }
 
 #[test]
@@ -763,7 +773,7 @@ fn event_output_and_time_entry_points() {
         assert_eq!(d.errors, ["invalid sequence time delta"]);
         assert!(m.advance_sequence(1.0).errors.is_empty());
         // No event has the mover as its originator.
-        assert_eq!(m.originator_event("PlacedMover").matched, 0);
+        assert_eq!(m.originator_event("TheLevel.PlacedMover").matched, 0);
         assert_eq!(m.mission_event("M", "E").matched, 0);
     });
 }
@@ -778,7 +788,7 @@ fn the_action_s_variables_name_the_objects_they_hold() {
             v,
             [Variable {
                 name: "MoverVar".to_string(),
-                object: "PlacedMover".to_string()
+                object: "TheLevel.PlacedMover".to_string()
             }]
         );
         assert!(m.variables("Nope", "Data").unwrap().is_empty());
@@ -820,7 +830,7 @@ fn a_store_note_in_a_call_is_kept_apart_and_fails_nothing() {
         ..Opts::default()
     });
     on_stack(|| {
-        let mut m = mover(&dir, "PlacedMover");
+        let mut m = mover(&dir, "TheLevel.PlacedMover");
         // The note arises when the bytecode runs, not at binding.
         assert!(m.store_notes().is_empty(), "{:?}", m.store_notes());
         let finish = m.notify(true, false);
@@ -846,7 +856,7 @@ fn a_notification_that_does_not_decode_fails_the_binding() {
         ..Opts::default()
     });
     on_stack(|| {
-        let e = bind(&dir, "PlacedMover", "PlacedAction").unwrap_err();
+        let e = bind(&dir, "TheLevel.PlacedMover", "PlacedAction").unwrap_err();
         assert!(matches!(e, MoverError::Binding(_)), "{e:?}");
         assert!(!e.cpp_text().is_empty());
     });
@@ -856,7 +866,7 @@ fn a_notification_that_does_not_decode_fails_the_binding() {
 fn an_ambient_component_that_resolves_to_no_export_fails_the_binding() {
     let dir = cooked(&Opts::default());
     on_stack(|| {
-        let e = bind(&dir, "GhostAudioMover", "PlacedAction").unwrap_err();
+        let e = bind(&dir, "TheLevel.GhostAudioMover", "PlacedAction").unwrap_err();
         assert_eq!(e.cpp_text(), "unresolved mover ambient component");
     });
 }

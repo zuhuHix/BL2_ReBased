@@ -435,6 +435,124 @@ fn the_prefix_comes_from_the_class_and_load_export_only_checks_it() {
     ));
 }
 
+/// `GD_Arch.upk`, invented for the archetype prefix test (decision 2026-11-16-36): `Character` (a package object)
+/// holding the actor archetypes `Pawn_Arch` (tags from 4 bytes in, a stream that runs past 26 bytes so a 26-byte read
+/// lands inside it) and `Pawn_Bad` (no tag stream from 4); `Pawn_Top`, an actor archetype with no outer; `TheLevel`
+/// holding the placed actor `Holder` (26), which holds `Nested` (tags from 26) and `NestedAt4` (tags from 4).
+fn gd_arch() -> Vec<u8> {
+    let mut p = PackageBuilder::new_empty();
+    let (_, _, actor, level, package) = class_imports(&mut p);
+    let none = p.none();
+    let at4 = |p: &mut PackageBuilder| {
+        let mut b = ints(&[0]);
+        b.extend(p.name_tag("Label", "A_Label_Long_Enough"));
+        b.extend(p.int_tag("Count", 3));
+        b.extend_from_slice(&none);
+        b
+    };
+    let at26 = || {
+        let mut b = vec![0u8; 26];
+        b.extend_from_slice(&none);
+        b
+    };
+    assert_eq!(p.add_export(package, "Character", ints(&[0])), 1);
+    let payload = at4(&mut p);
+    assert!(payload.len() > 26 + none.len());
+    let mut arch = ow_package::testkit::Export::new(actor, "Pawn_Arch", payload);
+    arch.outer = 1;
+    assert_eq!(p.add_export_with(arch), 2);
+    let mut bad = ow_package::testkit::Export::new(actor, "Pawn_Bad", ints(&[0, i32::MAX, 0]));
+    bad.outer = 1;
+    assert_eq!(p.add_export_with(bad), 3);
+    let payload = at4(&mut p);
+    assert_eq!(p.add_export(actor, "Pawn_Top", payload), 4);
+    assert_eq!(p.add_export(level, "TheLevel", ints(&[0])), 5);
+    let mut holder = ow_package::testkit::Export::new(actor, "Holder", at26());
+    holder.outer = 5;
+    assert_eq!(p.add_export_with(holder), 6);
+    let mut nested = ow_package::testkit::Export::new(actor, "Nested", at26());
+    nested.outer = 6;
+    assert_eq!(p.add_export_with(nested), 7);
+    let payload = at4(&mut p);
+    let mut nested4 = ow_package::testkit::Export::new(actor, "NestedAt4", payload);
+    nested4.outer = 6;
+    assert_eq!(p.add_export_with(nested4), 8);
+    p.build()
+}
+
+#[test]
+fn an_actor_archetype_outside_a_level_reads_from_4() {
+    let dir = std::env::temp_dir().join(format!("ow-defs-arch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files: [(&str, &[u8]); 3] = [
+        ("Core.upk", &core()),
+        ("Engine.upk", &engine()),
+        ("GD_Arch.upk", &gd_arch()),
+    ];
+    let mut defs = DefStore::from_synthetic(
+        &dir,
+        &files,
+        IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let mut w = ObjectSpace::new();
+    let arch_id = defs
+        .packages
+        .load(&PackageName::parse("GD_Arch").unwrap())
+        .unwrap();
+    let find = |defs: &mut DefStore, w: &mut ObjectSpace, path: &str| {
+        defs.find(w, &ObjectPath::parse(path).unwrap())
+    };
+    // An archetype inside a package object, and one with no outer: both load through the store at 4.
+    // (`load_export` names the export by its path in the file.)
+    for (path, index, in_file) in [
+        ("GD_Arch.Character.Pawn_Arch", 2, "Character.Pawn_Arch"),
+        ("GD_Arch.Pawn_Top", 4, "GD_Arch.Pawn_Top"),
+    ] {
+        let o = find(&mut defs, &mut w, path).unwrap().unwrap();
+        assert!(defs.is_loaded(&w, o), "{path}");
+        assert_eq!(
+            defs.load_export(&mut w, arch_id, index, PropertyPrefix::Ordinary)
+                .unwrap(),
+            o
+        );
+        assert_eq!(
+            defs.load_export(&mut w, arch_id, index, PropertyPrefix::PlacedActor),
+            Err(DefError::PrefixMismatch {
+                object: in_file.into(),
+                derived: PropertyPrefix::Ordinary,
+                given: PropertyPrefix::PlacedActor,
+            })
+        );
+    }
+    // An archetype whose stream does not parse from 4 is NotYet: no other prefix is tried.
+    assert!(matches!(
+        find(&mut defs, &mut w, "GD_Arch.Character.Pawn_Bad"),
+        Err(DefError::NotYet(_))
+    ));
+    // A placed actor still reads from 26, without a check.
+    let holder = find(&mut defs, &mut w, "GD_Arch.TheLevel.Holder")
+        .unwrap()
+        .unwrap();
+    assert!(defs.is_loaded(&w, holder));
+    assert_eq!(
+        defs.load_export(&mut w, arch_id, 6, PropertyPrefix::PlacedActor)
+            .unwrap(),
+        holder
+    );
+    // An actor inside a level but not directly: 26 only under the check, never 4.
+    let nested = find(&mut defs, &mut w, "GD_Arch.TheLevel.Holder.Nested")
+        .unwrap()
+        .unwrap();
+    assert!(defs.is_loaded(&w, nested));
+    assert!(matches!(
+        find(&mut defs, &mut w, "GD_Arch.TheLevel.Holder.NestedAt4"),
+        Err(DefError::NotYet(_))
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_component_that_is_not_an_actor_component_needs_its_stream_to_parse() {
     // A class deriving from Core.Component but not Engine.ActorComponent: its derived prefix (8) is used only when
@@ -1185,4 +1303,227 @@ fn real_loads_in_one_store() {
     );
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("loads.txt"), text).unwrap();
+}
+
+/// One loaded definition's slots as text (decision 2026-11-16-36's sample): references by their path in their
+/// package (or their name), names and classes by text, floats through `ow_core::fmt`.
+fn render(defs: &DefStore, w: &ObjectSpace, v: &Value, out: &mut String) {
+    use std::fmt::Write as _;
+    let object = |o: ObjRef, out: &mut String| match w.heap.get(o) {
+        Ok(x) => match x.origin {
+            Origin::Resource { package, index } | Origin::Export { package, index } => {
+                match defs.packages.get(package).path_of(index) {
+                    Ok(p) => out.push_str(&p),
+                    Err(e) => {
+                        let _ = write!(out, "<{e}>");
+                    }
+                }
+            }
+            _ => out.push_str(&w.names.text(x.name)),
+        },
+        Err(e) => {
+            let _ = write!(out, "<{e}>");
+        }
+    };
+    match v {
+        Value::None => out.push_str("none"),
+        Value::Int(i) => {
+            let _ = write!(out, "{i}");
+        }
+        Value::Float(f) => out.push_str(&ow_core::fmt::fmt_shortest_cpp(f64::from(*f))),
+        Value::Bool(b) => {
+            let _ = write!(out, "{b}");
+        }
+        Value::Byte(b) => {
+            let _ = write!(out, "b{b}");
+        }
+        Value::Str(s) => {
+            let _ = write!(out, "{s:?}");
+        }
+        Value::Name(n) => {
+            let _ = write!(out, "n:{}", w.names.text(*n));
+        }
+        Value::Object(o) | Value::Interface(o) => match o {
+            Some(o) => object(*o, out),
+            None => out.push_str("null"),
+        },
+        Value::Class(c) => match c {
+            Some(c) => {
+                let _ = write!(out, "c:{}", w.classes.layout(*c).path().as_str());
+            }
+            None => out.push_str("null"),
+        },
+        Value::Struct(s) => {
+            out.push('{');
+            for f in &s.fields {
+                render(defs, w, f, out);
+                out.push(',');
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for item in items.iter() {
+                render(defs, w, item, out);
+                out.push(',');
+            }
+            out.push(']');
+        }
+        Value::Delegate(d) => match d {
+            Some(d) => {
+                if let Some(o) = d.object {
+                    object(o, out);
+                }
+                let _ = write!(out, ".{}", w.names.text(d.function));
+            }
+            None => out.push_str("unbound"),
+        },
+    }
+}
+
+/// A 64-bit FNV-1a digest of `text`.
+fn digest(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+fn mode_tag(mode: ParityMode) -> &'static str {
+    match mode {
+        ParityMode::Off => "off",
+        _ => "reference",
+    }
+}
+
+/// A local check on the installed game, not run by default (decision 2026-11-16-36): for every export of each package
+/// named in `OW_DEFS_FILES` (comma separated) under the cooked root `OW_DEFS_REAL_ROOT`, the derived prefix (or the
+/// error), and in each parity mode `load_export` at that prefix in one store, its outcome and a digest of the loaded
+/// slots, written to `prefixes.tsv` and `loads-<mode>.tsv` in `OW_DEFS_LOCAL_OUT` (under local/: the paths are game
+/// data). Run once before and once after a prefix change and compare the files.
+#[test]
+#[ignore = "needs the installed game (OW_DEFS_REAL_ROOT), OW_DEFS_FILES and OW_DEFS_LOCAL_OUT under local/"]
+fn real_prefix_sample() {
+    use std::fmt::Write as _;
+    let out = local_out();
+    let root = PathBuf::from(std::env::var("OW_DEFS_REAL_ROOT").expect("OW_DEFS_REAL_ROOT"));
+    let files = std::env::var("OW_DEFS_FILES").expect("OW_DEFS_FILES");
+    let files: Vec<&str> = files.split(',').filter(|f| !f.is_empty()).collect();
+    std::fs::create_dir_all(&out).unwrap();
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut defs =
+            DefStore::open(root.clone(), IdentityPolicy::FirstInScanOrder, mode).unwrap();
+        let mut w = ObjectSpace::new();
+        let (mut prefixes, mut loads) = (String::new(), String::new());
+        for name in &files {
+            let id = defs
+                .packages
+                .load(&PackageName::parse(name).unwrap())
+                .unwrap();
+            let pkg = defs.packages.shared(id);
+            for index in 1..=i32::try_from(pkg.exports.len()).unwrap() {
+                let path = pkg.path_of(index).unwrap_or_else(|e| format!("<{e}>"));
+                let derived = defs.run(&mut w, |l| l.derive_prefix(id, index, &path));
+                let derived_text = match &derived {
+                    Ok(p) => p.bytes().to_string(),
+                    Err(DefError::NotYet(_)) => "NotYet".to_string(),
+                    Err(e) => format!("error {e}"),
+                };
+                let _ = writeln!(prefixes, "{name}\t{index}\t{path}\t{derived_text}");
+                let outcome = match derived {
+                    Ok(p) => match defs.load_export(&mut w, id, index, p) {
+                        Ok(o) => {
+                            let slots = &w.heap.get(o).unwrap().slots;
+                            let mut text = String::new();
+                            for v in slots {
+                                render(&defs, &w, v, &mut text);
+                                text.push('|');
+                            }
+                            format!("ok {} slots {:016x}", slots.len(), digest(&text))
+                        }
+                        Err(DefError::NotYet(_)) => "NotYet".to_string(),
+                        Err(e) => format!("error {}", e.to_string().replace(['\t', '\n'], " ")),
+                    },
+                    Err(_) => "no prefix".to_string(),
+                };
+                let _ = writeln!(loads, "{name}\t{index}\t{path}\t{outcome}");
+            }
+        }
+        if mode == ParityMode::Off {
+            std::fs::write(out.join("prefixes.tsv"), prefixes).unwrap();
+        }
+        std::fs::write(out.join(format!("loads-{}.tsv", mode_tag(mode))), loads).unwrap();
+    }
+}
+
+/// A local check on the installed game, not run by default (decision 2026-11-16-36): every path of the census of
+/// `OW_DEFS_REAL_ROOT` whose first holder's class derives from `Engine.Pawn` (class defaults are not census entries),
+/// that holder's derived prefix, and `find` in one store per parity mode; one line per path in `pawns-<mode>.tsv` and
+/// the counts in `pawns-summary.txt`, in `OW_DEFS_LOCAL_OUT` (under local/).
+#[test]
+#[ignore = "needs the installed game (OW_DEFS_REAL_ROOT) and OW_DEFS_LOCAL_OUT under local/"]
+fn real_pawn_archetypes() {
+    use std::fmt::Write as _;
+    let out = local_out();
+    let root = PathBuf::from(std::env::var("OW_DEFS_REAL_ROOT").expect("OW_DEFS_REAL_ROOT"));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut summary = String::new();
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut defs =
+            DefStore::open(root.clone(), IdentityPolicy::FirstInScanOrder, mode).unwrap();
+        let mut w = ObjectSpace::new();
+        let census = defs.census().unwrap();
+        let pawn = {
+            let (code, store) = defs.code_mut();
+            code.find_class(store, "Engine.Pawn").unwrap()
+        };
+        let mut is_pawn: FixedHashMap<String, bool> = FixedHashMap::default();
+        let mut lines = String::new();
+        let mut counts: std::collections::BTreeMap<(String, String), u32> = Default::default();
+        for entry in &census.entries {
+            let Some(first) = entry.holders.first() else {
+                continue;
+            };
+            if !is_pawn.contains_key(&first.class) {
+                let (code, store) = defs.code_mut();
+                let yes = code
+                    .find_class(store, &first.class)
+                    .is_ok_and(|k| code.is_child_of(k, pawn));
+                is_pawn.insert(first.class.clone(), yes);
+            }
+            if !is_pawn[&first.class] {
+                continue;
+            }
+            let id = defs.packages.load_path(&first.file).unwrap();
+            let derived = defs.run(&mut w, |l| l.derive_prefix(id, first.export, &entry.path));
+            let derived = match derived {
+                Ok(p) => p.bytes().to_string(),
+                Err(DefError::NotYet(_)) => "NotYet".to_string(),
+                Err(e) => format!("error {e}"),
+            };
+            let found = match ObjectPath::parse(&entry.path) {
+                Ok(path) => match defs.find(&mut w, &path) {
+                    Ok(Some(o)) if defs.is_loaded(&w, o) => "loaded".to_string(),
+                    Ok(Some(_)) => "not loaded".to_string(),
+                    Ok(None) => "no holder".to_string(),
+                    Err(DefError::NotYet(_)) => "NotYet".to_string(),
+                    Err(e) => format!("error {}", e.to_string().replace(['\t', '\n'], " ")),
+                },
+                Err(e) => format!("bad path {e}"),
+            };
+            *counts.entry((derived.clone(), found.clone())).or_default() += 1;
+            let _ = writeln!(lines, "{}\t{}\t{derived}\t{found}", entry.path, first.class);
+        }
+        let tag = mode_tag(mode);
+        std::fs::write(out.join(format!("pawns-{tag}.tsv")), lines).unwrap();
+        let _ = writeln!(
+            summary,
+            "mode {tag}: census files {}, failures {}",
+            census.files.len(),
+            census.failures.len()
+        );
+        for ((derived, found), n) in &counts {
+            let _ = writeln!(summary, "  prefix {derived}\t{found}\t{n}");
+        }
+    }
+    std::fs::write(out.join("pawns-summary.txt"), summary).unwrap();
 }
