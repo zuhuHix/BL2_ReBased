@@ -16,7 +16,8 @@
 //! 2026-11-15-08). References decoded inside a definition are such handles: loading one definition never loads
 //! what it references. [`DefStore::find`], [`DefStore::resolve_ref`] and [`DefStore::load`] return the object
 //! **loaded**: its class default object and its own tags are applied in place, so the handle stays the same
-//! [`ObjRef`], and its origin becomes `Origin::Export` with the filed id. Because loads do not nest, no load ever
+//! [`ObjRef`], and its origin becomes `Origin::Export` with the filed id. (Under `ParityMode::Off` its archetype's
+//! values stand in for the class default object's: "Archetypes" below.) Because loads do not nest, no load ever
 //! reaches an object that is still being built: references among definitions, cyclic ones included, are always
 //! handles, and an object is handed out loaded only once it is complete. The decoder's `InstantiationCycle` therefore
 //! cannot arise from the store's loads.
@@ -38,13 +39,44 @@
 //!   (filed id of the importing package, import index), one stand-in per import, only where it does not resolve;
 //! - under `ParityMode::Reference`, the decoder's `?` stand-in for a reference outside its package's tables (decision
 //!   2026-11-15-08) is kept;
-//! - a stand-in of an engine-native class (`ClassTable::is_native`, Reference mode only) is kept.
+//! - an object of an engine-native class (`ClassTable::is_native`) is kept as a stand-in (below, "Engine-native
+//!   classes").
 //!
 //! [`DefStore::ensure_loaded`] returns all three unchanged; [`DefStore::load`] refuses them with
 //! [`DefError::NotADefinition`].
 //!
+//! **Engine-native classes.** An object whose class no installed package exports (`Engine.StaticMesh`, whose objects
+//! every `StaticMeshComponent` names) has no layout in the packages. Under `ParityMode::Reference` the decoder makes
+//! its C++ stand-in, of a class defined at the class's path with no properties under `Core.Object` and marked native
+//! (decision 2026-11-15-08). Under `ParityMode::Off` the decoder refuses such a reference (`NotYet`, the property
+//! skipped), so the store makes the handle itself before the decoder sees the reference: a stand-in named after the
+//! object, of the same kind of class (defined once at the path the export's class import or the import names, no
+//! properties, under `Core.Object`, marked native so no `IsA` answer through it passes for the game's), with
+//! `Origin::Resource` of the object. It is the store's object for the object's path like any other (identity by path,
+//! the record being `tools/prepare_level.py`, which resolves a component's `StaticMesh` reference by its path), and it
+//! stays a stand-in: it never loads, as its tags cannot be typed. A class something else defined at that path (an
+//! overlay, a native pack) is left to the decoder. Decision 2026-11-16-55; UNVERIFIED as anything of the game.
+//!
+//! **Archetypes.** Under `ParityMode::Reference` a loaded definition starts from its class default object, as the C++
+//! `instantiateExport` does: the C++ never follows the export table's archetype reference. Under `ParityMode::Off` it
+//! starts from its archetype's values instead, then takes its own tags. The archetype is the path the export's
+//! archetype reference names, its holder chosen by the identity policy. Its values are, in turn, its own archetype's
+//! values (or its class default object's, for none) with its own tags from its derived prefix applied; a class's
+//! default object as archetype gives its class default object. The archetype's class must be the export's or one it
+//! derives from (its slots are then the first of the export's). An archetype no holder has, of another class, in a
+//! cycle or more than 16 deep is a `NotYet` for the load, never class defaults in its place. One kind is not followed:
+//! an archetype inside a class default object (a template, such as `Engine.Default__StaticMeshActor`'s component,
+//! the archetype of most placed components). No record or C++ read gives such a subobject's property prefix, so its
+//! values are not read; the class default object stays the base, as before this rule, and the store logs
+//! `defs: archetype <path> not applied: ...` once per path ([`DefStore::take_log`]). Decision 2026-11-16-55;
+//! UNVERIFIED in the running game.
+//!
 //! **Prefix by class.** Where an export's tags start is derived from the export itself, so the order loads happen in
 //! cannot change a decode:
+//! - an export whose class path contains `CollectionActor` (`Engine.StaticMeshCollectionActor`,
+//!   `Engine.StaticLightCollectionActor`) reads from 4 (`PropertyPrefix::Ordinary`) without a check, wherever it is:
+//!   the C++ `--scene-records` rule (`src/cli.cpp`) and decision 2026-09-10-09. Its untagged tail lists its
+//!   components' entries ([`DefStore::collection`]);
 //! - an export whose class derives from `Engine.ActorComponent` reads its tags from 8 bytes in
 //!   (`PropertyPrefix::Component`), the only case the C++ loads at 8 (`combat_death.cpp`) and the one
 //!   `tools/mission_closure.py` gives 8;
@@ -137,6 +169,16 @@ use crate::tail::{Tail, Tails};
 // The record a `NotYet` of this crate names.
 pub const RECORD: &str = "docs/rust-port/ARCHITECTURE.md section 3.4 (lane W3-DEFS)";
 
+/// The record of the collection actors, the engine-native stand-ins in `ParityMode::Off` and the archetypes.
+pub const COLLECTION_RECORD: &str =
+    "docs/decisions/2026-11/2026-11-16-55-rust-definition-store-collection-actors-engine-native.md";
+
+/// The text the C++ `--scene-records` prefix rule looks for in an export's class path (`src/cli.cpp`).
+const COLLECTION_ACTOR: &str = "CollectionActor";
+
+/// How many archetypes deep a load follows (module documentation, "Archetypes"); deeper is a `NotYet`.
+const MAX_ARCHETYPE_DEPTH: usize = 16;
+
 /// Why a definition store operation failed. The layer variants are transparent: they print as the inner error, and
 /// their `source()` is the inner error's cause. The `From` conversions flatten: a `NotYet` or a heap error from the
 /// decode, reflection and store layers is [`DefError::NotYet`] or [`DefError::Heap`] (a container's `NotYet` inside a
@@ -190,6 +232,11 @@ pub enum DefError {
         derived: PropertyPrefix,
         given: PropertyPrefix,
     },
+    /// A collection actor whose component array or tail is outside the recorded layout ([`DefStore::collection`]).
+    Collection {
+        object: String,
+        reason: String,
+    },
     NotYet(NotYet),
 }
 
@@ -231,6 +278,9 @@ impl fmt::Display for DefError {
                 derived.bytes(),
                 given.bytes()
             ),
+            DefError::Collection { object, reason } => {
+                write!(f, "collection actor {object}: {reason}")
+            }
             DefError::NotYet(e) => e.fmt(f),
         }
     }
@@ -410,6 +460,8 @@ struct Handles {
     files: FixedHashMap<PathBuf, Result<Rc<FileIndex>, PackageError>>,
     /// Paths whose `defs: no holder` line was logged.
     no_holder_logged: FixedHashSet<String>,
+    /// Archetype paths inside a class default object whose `defs: archetype .. not applied` line was logged.
+    template_logged: FixedHashSet<String>,
 }
 
 impl Handles {
@@ -492,9 +544,12 @@ impl Linker<'_> {
         match self.holder_of(cx, &path, &key)? {
             Some(target) => self.handle_for_target(cx, path, key, target),
             None => {
-                let o = cx
-                    .resource(package, reference)?
-                    .ok_or(DecodeError::UnsupportedRequest)?;
+                let o = match self.native_stand_in(cx, package, reference)? {
+                    Some(o) => o,
+                    None => cx
+                        .resource(package, reference)?
+                        .ok_or(DecodeError::UnsupportedRequest)?,
+                };
                 let mut handles = self.handles.borrow_mut();
                 if handles.no_holder_logged.insert(key.clone()) {
                     cx.state.log.push(format!("defs: no holder for {path}"));
@@ -525,9 +580,12 @@ impl Linker<'_> {
             return Ok(o);
         }
         let class_name = cx.code.class_name(cx.store, target.0, target.1);
-        let o = cx
-            .resource(target.0, target.1)?
-            .ok_or(DecodeError::UnsupportedRequest)?;
+        let o = match self.native_stand_in(cx, target.0, target.1)? {
+            Some(o) => o,
+            None => cx
+                .resource(target.0, target.1)?
+                .ok_or(DecodeError::UnsupportedRequest)?,
+        };
         let why = if is_class_default(&path) {
             Some(Stay::ClassDefault)
         } else if is_code_class(&class_name) {
@@ -546,6 +604,65 @@ impl Linker<'_> {
         handles.by_target.insert(target, o);
         handles.by_path.insert(key, o);
         Ok(o)
+    }
+
+    /// `ParityMode::Off` only: the store's handle for object `index` of `package` (an export, or an import no holder
+    /// has) when its class is one no installed package exports, such as `Engine.StaticMesh` (module documentation,
+    /// "Engine-native classes in `ParityMode::Off`"). `None` in `ParityMode::Reference` (the decoder's C++ stand-in
+    /// answers there), for an export whose class is a class object's or in its own package, and for a class an
+    /// installed package exports or something else defined (the decoder answers those too).
+    fn native_stand_in(
+        &self,
+        cx: &mut ValueCx<'_>,
+        package: PackageId,
+        index: i32,
+    ) -> Result<Option<ObjRef>, DecodeError> {
+        if cx.mode == ParityMode::Reference {
+            return Ok(None);
+        }
+        let pkg = cx.store.shared(package);
+        let entry = pkg.object(index)?.clone();
+        // The class path the decoder would fail to find (`ValueCx::object_class`): an export's class import that
+        // resolves to no class, or an import's recorded class.
+        let class_path = if index > 0 {
+            if entry.class >= 0 || cx.code.class_at(cx.store, package, entry.class)?.is_some() {
+                return Ok(None);
+            }
+            pkg.path_of(entry.class)?
+        } else {
+            let path = format!("{}.{}", entry.class_package, entry.class_name);
+            match cx.code.find_class(cx.store, &path) {
+                Ok(_) => return Ok(None),
+                Err(ReflectError::ClassNotFound(_))
+                | Err(ReflectError::Store(StoreError::PackageNotFound(_))) => path,
+                Err(e) => return Err(e.into()),
+            }
+        };
+        let classes = &mut cx.space.classes;
+        let class = match classes.by_path(&class_path) {
+            Some(id) if classes.get_layout(id).is_some_and(|l| l.is_defined()) => {
+                if !classes.is_native(id) {
+                    return Ok(None);
+                }
+                id
+            }
+            _ => {
+                let object = classes
+                    .by_path("Core.Object")
+                    .filter(|&o| classes.get_layout(o).is_some_and(|l| l.is_defined()))
+                    .ok_or_else(|| DecodeError::NoClass {
+                        object: class_path.clone(),
+                    })?;
+                let id = classes.define(&class_path, Some(object), Vec::new())?;
+                classes.mark_native(id)?;
+                id
+            }
+        };
+        let origin = Origin::Resource {
+            package: cx.code.filed_id(package),
+            index,
+        };
+        Ok(Some(cx.space.alloc_stand_in(class, &entry.name, origin)?))
     }
 
     /// The holder of `path` under the policy (module documentation of `crate::identity`), cached by its key.
@@ -755,8 +872,8 @@ impl Loader<'_, '_> {
     ) -> Result<(), DefError> {
         let (package, index) = target;
         let prefix = self.derive_prefix(package, index, path)?;
-        let instance = cdo::instantiate_export(self.cx, package, index, prefix)?;
-        let built = self.cx.space.free(instance.object)?;
+        let (made, tags_end) = self.instantiate(package, index, prefix)?;
+        let built = self.cx.space.free(made)?;
         let class = built.class;
         {
             let object = self.cx.space.heap.get_mut(o)?;
@@ -789,14 +906,14 @@ impl Loader<'_, '_> {
             }
         }
         if let (Ok(start), Ok(size)) = (usize::try_from(entry.offset), usize::try_from(entry.size))
-            && instance.tags_end <= size
+            && tags_end <= size
             && start
                 .checked_add(size)
                 .is_some_and(|end| end <= pkg.data.len())
         {
             self.tails
                 .spans
-                .insert(o, (package, start + instance.tags_end..start + size));
+                .insert(o, (package, start + tags_end..start + size));
         }
         if !self.class_props.contains_key(&class) {
             let props = self
@@ -831,6 +948,11 @@ impl Loader<'_, '_> {
         let Some(class) = self.cx.code.class_at(self.cx.store, package, entry.class)? else {
             return Ok(PropertyPrefix::Ordinary);
         };
+        // A collection actor reads from 4 wherever it is, without a check: the C++ scene records' rule (`src/cli.cpp`
+        // `--scene-records`, a class path naming `CollectionActor`), decision 2026-09-10-09.
+        if self.cx.code.class(class).path.contains(COLLECTION_ACTOR) {
+            return Ok(PropertyPrefix::Ordinary);
+        }
         let chain: Vec<String> = self
             .cx
             .code
@@ -873,6 +995,171 @@ impl Loader<'_, '_> {
                 RECORD,
             )))
         }
+    }
+
+    /// A new object made from export `index` of `package`, and where its tags ended (from the payload start): the
+    /// decoder's `cdo::instantiate_export` (class defaults, then the export's tags from `prefix`) in
+    /// `ParityMode::Reference` and for an export with no archetype to apply; otherwise, in `ParityMode::Off`, the
+    /// archetype's values, then the export's tags (module documentation, "Archetypes").
+    fn instantiate(
+        &mut self,
+        package: PackageId,
+        index: i32,
+        prefix: PropertyPrefix,
+    ) -> Result<(ObjRef, usize), DefError> {
+        let base = if self.cx.mode == ParityMode::Reference {
+            None
+        } else {
+            self.archetype_slots(package, index, &mut Vec::new())?
+        };
+        match base {
+            None => {
+                let made = cdo::instantiate_export(self.cx, package, index, prefix)?;
+                Ok((made.object, made.tags_end))
+            }
+            Some(base) => self.build_over(package, index, prefix, base),
+        }
+    }
+
+    /// `ParityMode::Off`: the slots of export `index` of `package`'s archetype, with that archetype's own archetype
+    /// applied first, and so on; `None` where the class default object is the base (no archetype, or the class
+    /// default object of the export's own class, or a class default object's subobject, which is logged). `chain` holds
+    /// the archetypes already followed, for the cycle guard and the depth budget. Every other archetype that cannot be
+    /// followed is a `NotYet`, never class defaults instead.
+    fn archetype_slots(
+        &mut self,
+        package: PackageId,
+        index: i32,
+        chain: &mut Vec<(PackageId, i32)>,
+    ) -> Result<Option<Vec<Value>>, DefError> {
+        let pkg = self.cx.store.shared(package);
+        let entry = pkg.object(index).map_err(package_error)?.clone();
+        if entry.archetype == 0 {
+            return Ok(None);
+        }
+        let path = full_path(&pkg, entry.archetype).map_err(package_error)?;
+        let not_yet = |why: String| {
+            DefError::NotYet(NotYet::not_read(
+                format!("the archetype {path} of {}: {why}", entry.name),
+                COLLECTION_RECORD,
+            ))
+        };
+        let Some(class) = self.cx.code.class_at(self.cx.store, package, entry.class)? else {
+            return Err(DecodeError::NullClass.into());
+        };
+        // A subobject of a class default object (a template, such as the component a class's default actor holds):
+        // where its tags start is not recorded, so its values are not read and the class default object stays the
+        // base, as before this rule. Logged once per path.
+        let dotted_path = dotted(&path);
+        let segments: Vec<&str> = dotted_path.split('.').collect();
+        if segments
+            .split_last()
+            .is_some_and(|(_, outers)| outers.iter().any(|s| s.starts_with("Default__")))
+        {
+            let mut handles = self.linker.handles.borrow_mut();
+            if handles.template_logged.insert(path_key(&path)) {
+                self.cx.state.log.push(format!(
+                    "defs: archetype {path} not applied: a class default object's subobject, its prefix not recorded"
+                ));
+            }
+            return Ok(None);
+        }
+        let key = path_key(&path);
+        let Some(target) = self.linker.holder_of(self.cx, &path, &key)? else {
+            return Err(not_yet("no package holds it".into()));
+        };
+        if chain.contains(&target) {
+            return Err(not_yet("its archetype chain is a cycle".into()));
+        }
+        if chain.len() >= MAX_ARCHETYPE_DEPTH {
+            return Err(not_yet(format!(
+                "more than {MAX_ARCHETYPE_DEPTH} archetypes deep"
+            )));
+        }
+        chain.push(target);
+        let arch_pkg = self.cx.store.shared(target.0);
+        let arch_entry = arch_pkg.object(target.1).map_err(package_error)?.clone();
+        let Some(arch_class) = self
+            .cx
+            .code
+            .class_at(self.cx.store, target.0, arch_entry.class)?
+        else {
+            return Err(not_yet("its class is not in an installed package".into()));
+        };
+        // Its slots are a prefix of the export's only when its class is the export's or one it derives from.
+        if !self.cx.code.super_chain(class).any(|k| k == arch_class) {
+            return Err(not_yet(format!(
+                "its class {} is not {} or a class it derives from",
+                self.cx.code.class(arch_class).path,
+                self.cx.code.class(class).path
+            )));
+        }
+        // A class's default object at the top of its package: the class default object.
+        if arch_entry.outer == 0 && arch_entry.name.starts_with("Default__") {
+            if arch_class == class {
+                return Ok(None);
+            }
+            let defaults = cdo::class_default(self.cx, arch_class)?;
+            return Ok(Some(self.cx.space.heap.get(defaults)?.slots.clone()));
+        }
+        let prefix = self.derive_prefix(target.0, target.1, &path)?;
+        let base = match self.archetype_slots(target.0, target.1, chain)? {
+            Some(base) => base,
+            None => {
+                let defaults = cdo::class_default(self.cx, arch_class)?;
+                self.cx.space.heap.get(defaults)?.slots.clone()
+            }
+        };
+        let (made, _) = self.build_over(target.0, target.1, prefix, base)?;
+        let slots = self.cx.space.free(made)?.slots;
+        Ok(Some(slots))
+    }
+
+    /// A new object of export `index`'s class: its class default object's slots, `base` over the first of them (an
+    /// archetype's slots, of the class or a class it derives from), then the export's tags from `prefix`.
+    fn build_over(
+        &mut self,
+        package: PackageId,
+        index: i32,
+        prefix: PropertyPrefix,
+        base: Vec<Value>,
+    ) -> Result<(ObjRef, usize), DefError> {
+        let pkg = self.cx.store.shared(package);
+        let entry = pkg.object(index).map_err(package_error)?.clone();
+        let made = self.cx.load(|cx| {
+            let class = cx
+                .code
+                .class_at(cx.store, package, entry.class)?
+                .ok_or(DecodeError::NullClass)?;
+            let defaults = cdo::class_default(cx, class)?;
+            let id = cx.layout(class)?;
+            let mut slots = cx.space.heap.get(defaults)?.slots.clone();
+            let Some(head) = slots.get_mut(..base.len()) else {
+                return Err(DecodeError::NotYet(NotYet::not_read(
+                    format!(
+                        "{}: an archetype of {} slots for a class of {}",
+                        entry.name,
+                        base.len(),
+                        slots.len()
+                    ),
+                    COLLECTION_RECORD,
+                )));
+            };
+            head.clone_from_slice(&base);
+            let object =
+                cx.space
+                    .alloc(id, &entry.name, None, Origin::Export { package, index })?;
+            cx.space.heap.get_mut(object)?.slots = slots;
+            match cx.apply_tags(object, class, package, index, prefix.bytes()) {
+                Ok(end) => Ok((object, end)),
+                Err(error) => {
+                    // Nothing refers to the new object yet; freeing it only gives its slot back.
+                    let _ = cx.space.free(object);
+                    Err(error)
+                }
+            }
+        })?;
+        Ok(made)
     }
 
     /// Whether the export chain of outers from `outer` (an export reference of `package`) reaches an export of class
@@ -1360,7 +1647,8 @@ impl DefStore {
 
     /// A new object made from export `index` of `package` on every call (the C++ `Runtime::instantiateExport`, which
     /// builds a fresh object each time; the mission bridge's director and the slice's dummy pawn are made so): the
-    /// export's class defaults and its tags, decoded from the export again, with every reference it decodes resolved
+    /// export's class defaults (under `ParityMode::Off`, its archetype's values: module documentation, "Archetypes")
+    /// and its tags, decoded from the export again, with every reference it decodes resolved
     /// through the store as a definition's are (the store's object for the path, loaded when read; module
     /// documentation, "Lazy loading"). Its origin is `Origin::Export` of `package` and `index`, its outer `None`.
     ///
@@ -1397,12 +1685,12 @@ impl DefStore {
                     given: prefix,
                 });
             }
-            let made = cdo::instantiate_export(l.cx, package, index, prefix);
+            let made = l.instantiate(package, index, prefix);
             if made.is_err() {
                 // A failed decode frees what it allocated, handles included: forget those (as a failed load does).
                 l.linker.handles.borrow_mut().prune(l.cx.space);
             }
-            Ok(made?.object)
+            Ok(made?.0)
         })
     }
 
@@ -1669,6 +1957,12 @@ fn build_census(files: &[PathBuf]) -> CensusBuilt {
         first_class,
     }
 }
+
+mod collection;
+pub use collection::{
+    Collection, CollectionEntry, CollectionKind, CollectionPose, LIGHT_ENTRY_BYTES,
+    MESH_ENTRY_BYTES,
+};
 
 #[cfg(test)]
 mod tests;
