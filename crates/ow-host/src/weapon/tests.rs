@@ -110,3 +110,24 @@ fn without_a_weapon_each_press_traces_and_the_damage_is_not_yet() {
     }
     assert_eq!(fired, 2);
 }
+
+/// Review r1 of PR #366, M1: the notification recorder keeps each property once, in the order first raised, and the
+/// weapon line names them.
+#[test]
+fn notifications_are_recorded_once_and_named() {
+    use ow_object::ids::{ClassId, PropId};
+    let seen = std::cell::RefCell::new(Vec::new());
+    let a = PropId { slot: 7, declared_in: ClassId::new(2) };
+    let b = PropId { slot: 9, declared_in: ClassId::new(2) };
+    for p in [a, b, a, a, b] {
+        record_notification(&seen, p);
+    }
+    assert_eq!(seen.into_inner(), vec![a, b]);
+    let mut stats = WeaponStats::new(1.0, 0.1, None, None);
+    assert_eq!(stats.notifications_text(), "no change notification raised");
+    stats.notifications_not_applied = vec!["ClipSize".into(), "Other".into()];
+    assert_eq!(
+        stats.notifications_text(),
+        "notifications not applied (NotYet, NATIVE_ATTRIBUTES section 4): ClipSize, Other"
+    );
+}

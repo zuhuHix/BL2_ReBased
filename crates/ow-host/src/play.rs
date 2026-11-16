@@ -109,6 +109,8 @@ pub struct InputCollector {
     want_grab: bool,
     /// Whether mouse motion turns the view: set by the host from the grab it got.
     look: bool,
+    /// The trigger was pressed since the last message (a click shorter than a frame still counts).
+    fire_press: bool,
 }
 
 impl InputCollector {
@@ -124,10 +126,14 @@ impl InputCollector {
 
     /// The host says whether mouse motion should turn the view (the cursor is grabbed, or grabbing was refused and
     /// the raw motion is used with a visible cursor).
+    /// With the cursor let go (Escape, focus lost, a refused grab with no fallback) the trigger is let go too, so a
+    /// held button does not keep firing behind the menu-less cursor (review r1 of PR #366).
     pub fn set_look(&mut self, look: bool) {
         self.look = look;
         if !look {
             self.turn = [0.0; 2];
+            self.held.fire = false;
+            self.fire_press = false;
         }
     }
 
@@ -187,6 +193,7 @@ impl InputCollector {
             self.held.fire = false;
         } else if self.look && self.interactive {
             self.held.fire = true;
+            self.fire_press = true;
         } else {
             self.click();
         }
@@ -218,6 +225,10 @@ impl InputCollector {
         self.turn[0] -= f64::from(yaw);
         self.turn[1] -= f64::from(pitch);
         let mut out = self.held;
+        // Held now, or pressed since the last message (review r1 of PR #366: a click shorter than a frame).
+        // The latch is taken first: `held || take(..)` would skip the take while held and fire again next frame.
+        let pressed = std::mem::take(&mut self.fire_press);
+        out.fire = self.held.fire || pressed;
         out.jump = std::mem::take(&mut self.jump);
         out.toggle_fly = std::mem::take(&mut self.toggle_fly);
         out.yaw = yaw;
@@ -275,6 +286,9 @@ pub struct PlayWorld {
     /// The held weapon (lane H4-WEAPON), the player's trigger, and the last shot (its step, impact, damage known).
     gun: Gun,
     fire: bool,
+    /// The trigger came in a message since the last step: a press that ended before any step still fires one (latched
+    /// as the jump is; review r1 of PR #366).
+    fire_latched: bool,
     last_shot: Option<(u64, Option<V3>, bool)>,
     /// What each brush's placement is called (by `Brush::source`), for the shot log.
     labels: Vec<String>,
@@ -303,6 +317,7 @@ impl PlayWorld {
             reported: 0,
             gun: Gun::new(Err(crate::weapon::equipped_weapon())),
             fire: false,
+            fire_latched: false,
             last_shot: None,
             labels: Vec::new(),
             echo: false,
@@ -318,12 +333,14 @@ impl PlayWorld {
         self
     }
 
-    /// One step's trigger: the script segment's, else the player's (never while the fly camera is on).
-    fn trigger(&self, segment: Option<usize>) -> bool {
+    /// One step's trigger: the script segment's, else the player's, held or latched since the last step (never while
+    /// the fly camera is on). The latch is used up by the step either way.
+    fn trigger(&mut self, segment: Option<usize>) -> bool {
+        let latched = std::mem::take(&mut self.fire_latched);
         match (&self.script, segment) {
             (Some(cursor), Some(s)) => cursor.script().get(s).is_some_and(|s| s.fire),
             (Some(_), None) => false,
-            (None, _) => self.fire && self.fly.is_none(),
+            (None, _) => (self.fire || latched) && self.fly.is_none(),
         }
     }
 
@@ -386,6 +403,7 @@ impl PlayWorld {
         }
         self.held = *input;
         self.fire = input.fire;
+        self.fire_latched |= input.fire;
         match self.fly.as_mut() {
             Some(fly) => {
                 fly.yaw = (f64::from(fly.yaw) + f64::from(input.yaw)).rem_euclid(65536.0) as f32;

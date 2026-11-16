@@ -389,13 +389,14 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
             match ow_host::weapon::evaluate(&install.cooked, &spec) {
                 Ok(stats) => {
                     println!(
-                        "weapon {} (level {}): damage {}, fire interval {} s, projectiles {}, range {} (evaluated in {} ms)",
+                        "weapon {} (level {}): damage {}, fire interval {} s, projectiles {}, range {}; {} (evaluated in {} ms)",
                         spec.definition,
                         spec.level,
                         ow_core::fmt::fmt_f(stats.damage, 2),
                         ow_core::fmt::fmt_f(stats.fire_interval, 4),
                         stats.projectiles.map_or_else(|| "unresolved".to_string(), |p| ow_core::fmt::fmt_f(p, 0)),
                         stats.range.map_or_else(|| "none".to_string(), |r| format!("{} uu", ow_core::fmt::fmt_f(r, 0))),
+                        stats.notifications_text(),
                         millis(started.elapsed())
                     );
                     Ok(stats)
