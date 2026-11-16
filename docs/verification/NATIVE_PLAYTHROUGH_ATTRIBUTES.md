@@ -42,7 +42,7 @@ Writing CP for that replication info's `CurrentPlaythrough`, as stored:
 |---|---|
 | No world, no `WorldInfo` or no `GRI`, or a `GRI` that is not a `WillowGameReplicationInfo` (a subclass counts) | 1.0 |
 | CP < 0 | 1.0 |
-| CP >= 0, `IncludePlaythroughThree` = 0 | min(CP + 1, 2) |
+| CP >= 0, `IncludePlaythroughThree` = 0 | CP + 1, clamped to 1..2 (`max(1, min(CP + 1, 2))`) |
 | CP >= 0, `IncludePlaythroughThree` not 0 | CP + 1 |
 
 `PlaythroughOverride` plays no part. With the installed field (0): Normal 1, TVHM 2, **UVHM 2**. With a non-zero
