@@ -28,7 +28,8 @@ use ow_core::ParityMode;
 
 use crate::args::{Command, Family};
 
-/// The exit code of a command that is not ported to Rust yet. Distinct from the C++ codes (0 success, 1 error).
+/// The exit code of a command that met a `NotYet` (a rule, layer or native not ported or read yet). Distinct from the
+/// C++ codes (0 success, 1 error). Every command is ported (decision 2026-11-16-38).
 pub const NOT_PORTED: u8 = 3;
 
 /// Runs `command`'s family with the whole command line (`args`, without the program name) and the parity mode
@@ -57,14 +58,4 @@ pub fn run(command: &'static Command, args: &[String], mode: ParityMode) -> Exit
         Family::Slice => slice::run(command, args, mode),
         Family::Combat => combat::run(command, args, mode),
     }
-}
-
-/// Says that `command` is not ported yet and returns [`NOT_PORTED`].
-pub fn not_ported(command: &Command) -> ExitCode {
-    eprintln!(
-        "ow-package (Rust): {} is not ported to Rust yet (lane {}); use the C++ build/Release/ow-package.exe",
-        command.flag,
-        command.family.owner()
-    );
-    ExitCode::from(NOT_PORTED)
 }

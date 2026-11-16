@@ -168,7 +168,8 @@ impl Status {
 pub enum EffectKind {
     /// `a` = the event name.
     RemoteEvent,
-    /// A line chosen by `Behavior_TriggerDialogEvent` (lane W5-DIALOG; never emitted yet).
+    /// A line the mission's dialog chose (`Behavior_TriggerDialogEvent` or the director's `TriggerEvent`): `a` tag, `b`
+    /// group, `c` talker, `detail` the C++ text.
     Dialog,
     /// `a` = provider path leaf, `b` = sequence, `c` = action (`CHANGE_Enable` / `Disable` / `Toggle`).
     SetSequence,
@@ -1177,9 +1178,24 @@ impl MissionSystem {
     }
 
     /// The mission's dialog (module documentation): the one the dialog behavior of its provider runs on, which the
-    /// script bridge's dialog-component native shares.
+    /// script bridge's dialog-component native shares. Two rules for a holder of this `Rc` (review of PR #337):
+    /// - do not replace `DialogSystem::on_line`: the tracker's sink lives there, and every chosen line becomes a
+    ///   `Dialog` effect through it;
+    /// - do not `dialog::register` it on the VM: the mission's provider runs it through its own handler, and a
+    ///   registry handler would make every other provider of the VM talk through this mission's dialog.
     pub fn dialog(&self) -> Rc<RefCell<DialogSystem>> {
         self.inner.dialog.clone()
+    }
+
+    /// Runs `f` on the mission's dialog; refused when the dialog is already in use (a call from inside one of its own
+    /// calls, which no path of this crate makes).
+    pub fn with_dialog<T>(&self, f: impl FnOnce(&mut DialogSystem) -> T) -> Result<T, MissionError> {
+        let mut d = self
+            .inner
+            .dialog
+            .try_borrow_mut()
+            .map_err(|_| data_error("dialog: the dialog system is already in use".to_string()))?;
+        Ok(f(&mut d))
     }
 
     /// The dialog line as a `Dialog` effect (the C++ `onLine`).

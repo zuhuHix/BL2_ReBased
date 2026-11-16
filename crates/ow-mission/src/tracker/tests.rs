@@ -902,8 +902,8 @@ fn a_sequence_state_change_names_the_provider_leaf() {
     );
 }
 
-/// The dialog behavior has no handler here (lane W5-DIALOG): the kernel's error line and its `NotYet`, and the branch
-/// stops.
+/// The dialog behavior runs on the mission's own handler (`dialog::handler` on its provider), in both modes: no
+/// `unsupported behavior class` line and no `NotYet`.
 #[test]
 fn the_dialog_behavior_runs_on_the_tracker_s_own_handler() {
     // The handler is the mission's own (`dialog::handler` on its provider, decision 2026-11-15-34 addendum): no
