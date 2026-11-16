@@ -26,8 +26,9 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
     records to `OutModifiers` and never empties it, so the override appends too.
   - `WillowGame.WillowWeapon.CalculateWeaponBaseValues` is `ow_items::stats::weapon_base_values` on the weapon and
     its `DefinitionData.WeaponTypeDefinition`. The script writes each base with the attribute let (opcode 0x5F), which
-    this VM recomputes in `CombineForm::Vm5F`, so the override passes `Vm5F` too. A weapon without a type is refused
-    (`BadData`); the script would read every field through a None context and write zeros.
+    this VM recomputes in `CombineForm::Vm5F`, so the override passes `Vm5F` too. A weapon without a type is
+    `NotYet { NotRead }` (review r1): the script reads every field through a None context (an Accessed None, giving
+    zero values) and writes the bases from those zeros, a path not ported.
   - Each function is loaded before it is bound (`Vm::override_script` takes only a declared script function).
 - **Equip and unequip** (read from the installed script with `research/script_disasm.py`, 2026-11-16; listings under
   ignored `local/analysis/`):
@@ -40,9 +41,20 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
   - A weapon's: the same guard; the type's and every part's effects into `ExternalAttributeModifiers`, with
     `Instigator.Controller` itself as the source (the weapon's script does not use the owning-controller lookup for
     its effects).
-  - Unequip removes each record's modifier from its context, then empties the arrays. The records live in the item's
-    own arrays as `AppliedAttributeEffect` structs, where the script keeps them, so a script and a Rust remove see the
-    same records.
+  - **All or nothing** (review r1). Every read and refusal comes before the first apply: the controller, both record
+    arrays, the parts, every effect list, and the external-slot check (the script reaches the slots last, but here
+    they can only refuse, so the check moves first and changes no successful outcome). If an apply fails, everything
+    the call added is removed (`remove_effects`) and the arrays keep their old values, so an `Err` leaves the stacks
+    and the records as they were and a retry is not answered `AlreadyApplied`.
+  - Unequip removes each record's modifier from its context, then empties the arrays. Every record of both arrays is
+    tried (`remove_effects`) and both arrays are emptied even when a removal fails; the first error is returned
+    afterwards (review r1). The records live in the item's own arrays as `AppliedAttributeEffect` structs, where the
+    script keeps them, so a script and a Rust remove see the same records.
+  - **A second implementation** (architecture rule R2). `apply_item_external_effects` and
+    `apply_weapon_external_effects` restate the installed `ApplyAllExternalAttributeEffects` scripts in Rust, and no
+    differential test compares them with the script yet: running the script needs the native part iterator
+    `AllParts` (not read, unbound), `GetOwningPlayerController`, `GetAttributeSlotMaxActivated` and the external slot
+    native. Listed under Open.
   - The parts are the definition data's part fields in declared order, the material included and the name parts not.
     The script walks them with the native iterator `AllParts`, whose order and `bool` argument are not read.
   - The external slots (`WillowInventory.ApplyExternalSlotEffectModifiers`, NATIVE_ATTRIBUTES.md section 9) read the
@@ -66,9 +78,15 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
 - **Spawn natives** (NATIVE_LOOT.md). `SpawnBalancedInventoryFromInventoryBalanceDefinition` expands the balance at
   `min(stage, cap)` (`ow_items::candidates::expand`), picks `Quantity` times on `CrtStream::LootPool`
   (`pick_candidate`), and spawns one inventory per pick. One spawn:
-  - the definition's `InventoryClass` is spawned and must be a `WillowInventory`;
+  - the definition's `InventoryClass` must be a `WillowInventory` declaring the three functions called below; the
+    definition, the manufacturer and the class are resolved before anything is spawned (review r1), and a class that
+    is no inventory fails the pick with no actor made;
   - `SourceDefinitionName` is the balance's name;
-  - then `SetGameStage`, `SetAwesomeLevel`, the `InitializeInventory` event, and `bDropOnDeath` true.
+  - then `SetGameStage`, `SetAwesomeLevel`, the `InitializeInventory` event, and `bDropOnDeath` true;
+  - a step that fails after the actor exists destroys it, and a pick that fails destroys every actor the call made
+    before the error is returned (unless the world's destroy refuses one, for a `Role` below authority);
+  - a spawn modifier's `BaseValueConstant` or `BaseValueScaleConstant` that is present but not a number is `BadData`
+    (review r1); only an absent one takes the untagged default.
   - Two choices where the record is silent: the actor is spawned by the level's `WorldInfo`, and
     `SourceResponsibleName` is not written (the record does not say which field of the context source it is taken
     from; it is telemetry only).
@@ -84,15 +102,24 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
   other `ow_inventory::manager::Pack` binds the two overrides. Each weapon is a `WillowWeapon` from its class defaults
   with its definition data and level. Both worlds run `CalculateWeaponBaseValues`, then `ApplyAttributeEffects` with
   the weapon as the source once per holder (the type, then each part) on the holder's `WeaponAttributeEffects`.
-  Compared: every numeric and array property of the weapon (floats bit for bit, a modifier by its type and value),
-  each call's records and errors. Both worlds bind the three `AttributeDefinitionBase` natives the installed script
-  calls (`ResolveContext`, `AddAttributeModifier`, `RemoveAttributeModifier`) to `ow-attr`, in the harness only.
+  Each call gets the previous call's records as its `OutModifiers`, so every call after the first appends to a
+  non-empty array. Compared: each call's error and records (as structs: context and attribute by path, the modifier
+  by its type and value), and every numeric and array property of the weapon (floats bit for bit). Both worlds bind
+  the three `AttributeDefinitionBase` natives the installed script calls (`ResolveContext`, `AddAttributeModifier`,
+  `RemoveAttributeModifier`) to `ow-attr`, in the harness only.
+  - **What it proves, and what not** (review r1). Both sides run the same `ow-attr` evaluator, the same VM attribute
+    let and the same harness-bound attribute natives. So it shows that each override reads the same fields in the
+    same order and writes the same values as the installed script in this VM; it does not show that the evaluator,
+    the let or those natives are the game's. Only the weapon's numeric and array properties are compared (its struct,
+    name, object and string properties are not), and the first call of each weapon starts from an empty
+    `OutModifiers`.
 - **Verified on the installed game** (pc-hummer, 2026-11-16; outputs under ignored `local/p2/W5-EQUIP/`):
-  - The differential test on 50 weapons: 50 balances spread over the 249 weapon balances, stages 1 to 50, rolled
-    with this branch's Reference `--item-card --requests`; 31 weapon types. **50 of 50 identical**, 19,610 values
-    compared, 369 records made on each side, every weapon with records. The script side ran at least 208 bytecode
-    steps per weapon, the override 1. Two deliberate breaks of the Rust side were each caught on all 50 weapons
-    (bases not written; the last effect of each call dropped).
+  - The differential test on 50 weapons (its scope is the paragraph above): 50 balances spread over the 249 weapon
+    balances, stages 1 to 50, rolled with this branch's Reference `--item-card --requests`; 31 weapon types. **50 of
+    50 identical**, 19,610 values compared, 369 records made on each side, every weapon with records. The script side
+    ran at least 208 bytecode steps per weapon, the override 1. Two deliberate breaks of the Rust side were each
+    caught on all 50 weapons (bases not written; the last effect of each call dropped). After review r1, with the
+    chained `OutModifiers`: the same numbers, 50 of 50.
   - `--inventory-move`, C++ against Rust on the installed `WillowGame.upk`: 126 requests (counts 1 to 12, 40 and
     2048, both deltas, starts at both ends and the middle, and six refused requests), all identical.
   - The native keys the pack registers equal the keys the Rust loader derives from the installed packages.
@@ -102,14 +129,19 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
     source first, a trailing byte), all identical.
   - `tests/vm_test.py` on the Rust binary: its 11 `--inventory-move` sites pass. The file still fails 3 other sites
     (`MakePair`, a W3-DEFS follow-up; two `--mover-probe` sites, lane W5-DIALOG).
-  - 27 `ow-inventory` unit tests on a VM built by hand:
+  - 35 `ow-inventory` unit tests, on a VM built by hand and (for one spawn) on an invented `Engine.upk`:
     - the overrides through declared script functions (records appended, the override source first, a VM without
-      the functions refused, a typeless weapon refused);
+      the functions refused, a typeless weapon `NotYet`);
     - item and weapon equip and unequip, the guards, the part guard and the external-slot `NotYet`;
+    - after review r1: a failed item and weapon apply takes back what it added (stacks and records unchanged, the
+      retry fails again), an external slot refuses before any effect is applied, unequip tries every record;
+    - one spawn's order (`SourceDefinitionName`, then `SetGameStage`, `SetAwesomeLevel`, `InitializeInventory`, then
+      `bDropOnDeath`), the answer false when a pick fails, a class that is no inventory refused with no actor made,
+      and every actor destroyed after an error;
     - the equip controller;
     - the five manager natives, the readied-weapon loop, both queries;
-    - the spawn natives' parts that need no store (the registry value reader, the cap, the missing layers, the pool
-      `NotYet`, a None balance).
+    - the spawn natives' parts that need no store (the registry value reader and its refusals, the cap, the missing
+      layers, the pool `NotYet`, a None balance).
   - 3 `ow-cli` tests of the harness's input and comparison.
 - **Open.**
   - A tracked parity line for `--inventory-move` on an invented package needs a tracked test file that runs only that
@@ -122,5 +154,7 @@ decisions 2026-11-15-13 (attribute effects), 2026-11-15-24 (item stats), 2026-11
   - The spawn natives on the installed game need a level load (its `WorldInfo`) and the natives `InitializeInventory`
     reaches. Only unit tests cover them.
   - Binding `SpawnBalancedInventoryFromPool` over `ow_items::pools` (the contract item above).
+  - A differential test of `apply_item_external_effects` and `apply_weapon_external_effects` against the installed
+    `ApplyAllExternalAttributeEffects` scripts (a second implementation under rule R2 until then; see above).
   - `AllParts`' order and argument, `InitializeAttributeSlots` and the external slots, `FindLeastValuable*`,
     `ItemActors`, where the spawn native places an actor, the field `SourceResponsibleName` is taken from.

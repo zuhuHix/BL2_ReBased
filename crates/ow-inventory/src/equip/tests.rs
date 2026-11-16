@@ -116,6 +116,10 @@ impl World {
         class(&mut space, "Engine.ObjectPropertyAttributeValueResolver", object, decls);
         class(&mut space, "Engine.ControllerAttributeContextResolver", object, vec![]);
         class(&mut space, "Engine.WeaponAttributeContextResolver", object, vec![]);
+        // A context resolver class the attribute system has no entry for: resolving through it is NotYet.
+        class(&mut space, "Test.UnreadContextResolver", object, vec![]);
+        // A value resolver class with no entry: adding or removing a modifier through it is NotYet.
+        class(&mut space, "Test.UnreadValueResolver", object, vec![]);
         let decls = vec![decl(&mut space, "Type", byte.clone(), 0), decl(&mut space, "Value", PropKind::Float, 0)];
         let modifier = class(&mut space, "Core.AttributeModifier", object, decls);
         // Definitions: one class for item definitions, weapon types and parts.
@@ -236,7 +240,23 @@ impl World {
         v
     }
 
-    fn attribute(&mut self, path: &str, context: &str, property: &str) -> ObjRef {
+    /// An attribute on the controller's `Bonus` whose context resolver class is not registered: resolving it, so
+    /// applying or removing a modifier through it, is `NotYet`.
+    pub(crate) fn unread_attribute(&mut self) -> ObjRef {
+        self.attribute("Test.UnreadBonus", "Test.UnreadContextResolver", "Bonus")
+    }
+
+    /// An attribute on the controller whose value resolver class is not registered.
+    pub(crate) fn unread_value_attribute(&mut self) -> ObjRef {
+        let c = self.obj("Engine.ControllerAttributeContextResolver", "Test.UnreadValue.Context");
+        let k = self.obj("Test.UnreadValueResolver", "Test.UnreadValue.Value");
+        let a = self.obj("Engine.AttributeDefinition", "Test.UnreadValue");
+        self.set(a, "ContextResolverChain", Value::array(vec![Value::Object(Some(c))]));
+        self.set(a, "ValueResolverChain", Value::array(vec![Value::Object(Some(k))]));
+        a
+    }
+
+    pub(crate) fn attribute(&mut self, path: &str, context: &str, property: &str) -> ObjRef {
         let c = self.obj(context, &format!("{path}.Context"));
         let n = Value::Name(self.vm.space.names.intern(property));
         let k = self.obj("Engine.ObjectPropertyAttributeValueResolver", &format!("{path}.Value"));
@@ -467,12 +487,13 @@ fn bind_overrides_refuses_a_vm_that_lacks_the_script_functions() {
 }
 
 #[test]
-fn calculate_weapon_base_values_refuses_a_weapon_without_a_type() {
+fn calculate_weapon_base_values_without_a_type_is_not_read() {
     let mut w = World::new();
     let (_, bases) = declare_and_bind(&mut w);
     let weapon = w.weapon(None, &[]);
     let e = w.vm.call(bases, Some(weapon), vec![]).unwrap_err();
-    assert!(e.to_string().contains("no WeaponTypeDefinition"), "{e}");
+    assert!(e.to_string().contains("without a WeaponTypeDefinition"), "{e}");
+    assert_eq!(missing(e), Missing::NotRead);
     // With a type the override reaches ow-items' rule, which reads the type's fields: this invented type has none.
     let t = w.definition("Test.Type", vec![]);
     let weapon = w.weapon(Some(t), &[]);
@@ -630,4 +651,102 @@ fn item_errors_keep_their_kinds_in_the_vm() {
     let b = item_error("x", ItemError::BadData("why".into()));
     assert!(matches!(b, VmError::Script { .. }));
     let _ = EvalCx::new;
+}
+
+// ---- review r1: all or nothing ---------------------------------------------------------------------------------
+
+#[test]
+fn a_failed_item_apply_takes_back_what_it_added_and_a_retry_fails_again() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let unread = w.unread_attribute();
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let def = w.definition("Test.Shield", vec![e1]);
+    let e2 = w.effect(Some(good), 2, 0.5);
+    let e3 = w.effect(Some(unread), 2, 1.0);
+    let part = w.definition("Test.Part", vec![e2, e3]);
+    let item = w.item(Some(def), &[part]);
+    let c = w.controller;
+    let before = w.get(c, "BonusModifierStack");
+    // The definition's effect and the part's first effect are applied, then the part's second one fails.
+    assert_eq!(missing(apply_item_external_effects(&mut w.vm, item).unwrap_err()), Missing::NotRead);
+    assert_eq!(w.float(c, "Bonus"), 0.0, "the stack is back as it was");
+    assert_eq!(w.get(c, "BonusModifierStack"), before);
+    assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
+    assert!(w.records(item, "PartExternalAttributeModifiers").0.is_empty());
+    // The retry is not answered AlreadyApplied: it fails the same way and still leaves nothing.
+    assert_eq!(missing(apply_item_external_effects(&mut w.vm, item).unwrap_err()), Missing::NotRead);
+    assert_eq!(w.float(c, "Bonus"), 0.0);
+}
+
+#[test]
+fn an_external_slot_refuses_before_any_effect_is_applied() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let def = w.definition("Test.ClassMod", vec![e1]);
+    let slot = w.st(
+        "Test.AttributeSlotEffectData",
+        vec![("bExternalSlot", Value::Bool(true)), ("bRunEffectsAsSkill", Value::Bool(false))],
+    );
+    w.set(def, "AttributeSlotEffects", Value::array(vec![slot]));
+    let e2 = w.effect(Some(good), 2, 0.5);
+    let part = w.definition("Test.Part", vec![e2]);
+    let item = w.item(Some(def), &[part]);
+    let c = w.controller;
+    let before = w.get(c, "BonusModifierStack");
+    assert_eq!(missing(apply_item_external_effects(&mut w.vm, item).unwrap_err()), Missing::NotRead);
+    assert_eq!(w.float(c, "Bonus"), 0.0);
+    assert_eq!(w.get(c, "BonusModifierStack"), before, "the stack is unchanged after the Err");
+    assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
+    assert_eq!(missing(apply_item_external_effects(&mut w.vm, item).unwrap_err()), Missing::NotRead);
+}
+
+#[test]
+fn a_failed_weapon_apply_takes_back_what_it_added() {
+    let mut w = World::new();
+    let a = w.weapon_bonus;
+    let c = w.controller_bonus;
+    let unread = w.unread_attribute();
+    let e1 = w.effect(Some(a), 2, 1.0);
+    let e2 = w.effect(Some(c), 2, 3.0);
+    let t = w.definition("Test.Type", vec![e1, e2]);
+    let e3 = w.effect(Some(unread), 2, 1.0);
+    let part = w.definition("Test.Barrel", vec![e3]);
+    let weapon = w.weapon(Some(t), &[part]);
+    assert_eq!(missing(apply_weapon_external_effects(&mut w.vm, weapon).unwrap_err()), Missing::NotRead);
+    let controller = w.controller;
+    assert_eq!(w.float(weapon, "Bonus"), 0.0);
+    assert_eq!(w.float(controller, "Bonus"), 0.0);
+    assert!(w.records(weapon, "ExternalAttributeModifiers").0.is_empty());
+}
+
+#[test]
+fn unequip_tries_every_record_and_empties_both_arrays_before_it_reports_the_first_error() {
+    let mut w = World::new();
+    let good = w.controller_bonus;
+    let e1 = w.effect(Some(good), 2, 2.0);
+    let def = w.definition("Test.Shield", vec![e1]);
+    let e2 = w.effect(Some(good), 2, 0.5);
+    let part = w.definition("Test.Part", vec![e2]);
+    let item = w.item(Some(def), &[part]);
+    apply_item_external_effects(&mut w.vm, item).unwrap();
+    let c = w.controller;
+    assert_eq!(w.float(c, "Bonus"), 2.5);
+    // A record that cannot be removed (its attribute's value resolver is not read) goes first in the item's own list.
+    let unread = w.unread_value_attribute();
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let stray = AppliedEffect {
+        context: c,
+        attribute: unread,
+        modifier: w.obj("Core.AttributeModifier", "Stray"),
+    };
+    let mut own = w.records(item, "ExternalAttributeModifiers");
+    own.0.insert(0, stray);
+    let v = Value::array(applied_values(&w.vm, ty, &own).unwrap());
+    w.set(item, "ExternalAttributeModifiers", v);
+    assert_eq!(missing(remove_item_external_effects(&mut w.vm, item).unwrap_err()), Missing::NotRead);
+    assert_eq!(w.float(c, "Bonus"), 0.0, "the records after the failing one were removed");
+    assert!(w.records(item, "ExternalAttributeModifiers").0.is_empty());
+    assert!(w.records(item, "PartExternalAttributeModifiers").0.is_empty());
 }
