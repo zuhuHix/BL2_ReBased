@@ -35,6 +35,8 @@ use ow_object::value::Value;
 use ow_vm::api::{Vm, WorldHooks};
 use ow_vm::error::VmError;
 
+use ow_attr::context_resolvers::{RECORD_PLAYER_CONTROLLER, player_controller_of};
+
 use crate::actors::Actors;
 
 /// The record behind the hooks.
@@ -264,6 +266,22 @@ fn world_info_game(space: &ObjectSpace, info: ObjRef) -> Result<Option<ObjRef>, 
 
 /// Adds the [`WorldQuery`] service to `vm` and sets the hooks over it (once per VM: a second call is refused by
 /// `add_service`).
+/// The [`QueryKind::PlayerController`] handler (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69): the rule of
+/// `ow_attr::context_resolvers::player_controller_of` (NATIVE_ITEM_RULES.md: the source if it is an
+/// `IPlayerBehavior`, else through `IPlayerMaster`, else None; UNVERIFIED in the running game).
+pub fn player_controller_handler() -> QueryFn {
+    Rc::new(|q, source, w| {
+        if !matches!(q, EngineQuery::PlayerController) {
+            return Err(NotYet::not_ported(
+                format!("engine query {q:?} sent to the player-controller handler"),
+                RECORD_PLAYER_CONTROLLER,
+            )
+            .into());
+        }
+        player_controller_of(w, source)
+    })
+}
+
 pub fn install(vm: &mut Vm) -> Result<Rc<RefCell<WorldQuery>>, VmError> {
     let state = vm.add_service(WorldQuery::new())?;
     vm.set_world_hooks(Rc::new(RefCell::new(Hooks {
@@ -303,6 +321,22 @@ mod tests {
             AttrError::NotYet(n) => n.missing,
             other => panic!("expected NotYet, got {other:?}"),
         }
+    }
+
+    /// The player-controller handler runs `player_controller_of` (its cases are tested in `ow-attr`): here, a VM
+    /// whose store holds no code package cannot tell an interface (the empty store has no `IPlayerBehavior`, so no
+    /// implementer: None), and another query kind sent to it is refused (lane FIX-PHASELOCK-CHAIN).
+    #[test]
+    fn the_player_controller_handler_runs_the_rule_and_refuses_other_queries() {
+        let (mut vm, o) = vm_with_object();
+        let handler = player_controller_handler();
+        let parts = WorldParts::new(&mut vm.space, Some(&mut vm.defs));
+        assert_eq!(handler(EngineQuery::PlayerController, o, parts).unwrap(), None);
+        let parts = WorldParts::new(&mut vm.space, Some(&mut vm.defs));
+        assert_eq!(
+            missing(handler(EngineQuery::GameReplicationInfo, o, parts).unwrap_err()),
+            Missing::NotPorted
+        );
     }
 
     #[test]

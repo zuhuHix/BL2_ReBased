@@ -22,6 +22,10 @@ use crate::api::{AttrWorld, ContextResolver, EngineQuery, GlobalSlots, NumForms,
 #[path = "balanced_tests.rs"]
 mod balanced_tests;
 
+/// The player-controller rule over synthetic code packages (decision 2026-11-16-69).
+#[path = "player_tests.rs"]
+mod player_tests;
+
 // ---------------------------------------------------------------------------------------------------------------
 // The world
 // ---------------------------------------------------------------------------------------------------------------

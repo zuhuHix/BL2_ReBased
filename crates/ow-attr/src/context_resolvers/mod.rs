@@ -24,6 +24,7 @@ mod actors;
 mod balanced;
 mod inventory;
 mod pending;
+mod player;
 mod pools;
 #[cfg(test)]
 mod tests;
@@ -32,9 +33,12 @@ pub use actors::{
     Actor, Controller, GameInfo, NoContextNeeded, OffHandWeapon, Pawn, PlayerController,
     PlayerReplicationInfo, Weapon, WillowMind,
 };
-pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor};
+pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor, implements_interface};
 pub use inventory::{EquippedInventory, Inventory};
 pub use pending::{Designer, Script, Skill, StatusEffectChance, Unread};
+pub use player::{
+    PLAYER_BEHAVIOR_INTERFACE, PLAYER_MASTER_INTERFACE, RECORD_PLAYER_CONTROLLER, player_controller_of,
+};
 pub use pools::{ResourcePool, WeaponResourcePool};
 
 use ow_core::NotYet;

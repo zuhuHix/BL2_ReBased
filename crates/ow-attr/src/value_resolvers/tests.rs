@@ -1254,13 +1254,13 @@ fn an_unloaded_definition_needs_the_store() {
         missing(eval(&mut fx, of_def(handle), None).unwrap_err()),
         Missing::LayerAbsent("ow-defs")
     );
-    // With a store, its answer comes through: the store did not make this object, so it is left as it is, and reading
-    // its slots fails in the heap (the ow-defs contract).
+    // With a store, its answer comes through: the store did not make this object, so it is left as it is. Its class has
+    // fields and it holds none, so the read is `NotYet` naming it, not a heap error (lane FIX-PHASELOCK-CHAIN, decision
+    // 2026-11-16-69).
     fx.w.defs = Some(DefStore::new_empty());
-    assert!(matches!(
-        eval(&mut fx, of_def(handle), None).unwrap_err(),
-        AttrError::Heap(ow_object::heap::HeapError::SlotMissing { .. })
-    ));
+    let e = eval(&mut fx, of_def(handle), None).unwrap_err();
+    assert!(e.to_string().contains("stays a stand-in the definition store does not load"), "{e}");
+    assert_eq!(missing(e), Missing::NotRead);
     // A loaded (runtime) definition needs no store at all.
     let (m, l, p, o) = (fx.k(2.0), fx.k(3.0), fx.k(2.0), fx.k(1.0));
     let f = fx.formula(m, l, p, o);

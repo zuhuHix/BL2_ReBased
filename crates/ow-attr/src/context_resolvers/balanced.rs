@@ -8,7 +8,7 @@ use ow_object::ids::ObjRef;
 use ow_object::reflect::ReflectError;
 
 use super::{RECORD, native_stand_in};
-use crate::api::{AttrError, ContextResolver, EvalCx};
+use crate::api::{AttrError, ContextResolver, EvalCx, WorldParts};
 use crate::registry::AttributeSystem;
 
 /// The balanced-actor interface. NATIVE_CONTROLLER_HELPERS.md and NATIVE_INVENTORY_SORT.md name it `IBalancedActor`;
@@ -43,41 +43,56 @@ impl ContextResolver for BalancedActor {
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<ObjRef>, AttrError> {
         let Some(s) = source else { return Ok(None) };
-        let parts = cx.world.parts();
-        let space = &*parts.space;
-        let class = space.heap.get(s)?.class;
-        let Some(defs) = parts.defs else {
-            return Err(NotYet::layer_absent(
-                format!(
-                    "{WHO}: the interface table of the source's class (this world has no definition store)"
-                ),
-                "ow-defs",
-                RECORD,
-            )
-            .into());
-        };
-        let (code, store) = defs.code_mut();
-        let interface = match code.find_class(store, BALANCED_ACTOR_INTERFACE) {
-            Ok(key) => Some(key),
-            Err(ReflectError::ClassNotFound(_)) => None,
-            Err(e) => return Err(DefError::from(e).into()),
-        };
-        let implements = match (interface, code.key_of(class)) {
-            (Some(interface), Some(class)) => code.implements(store, class, interface),
-            _ => false,
-        };
-        if implements {
-            return Ok(Some(s));
-        }
-        match native_stand_in(space, class) {
-            Some(path) => Err(NotYet::not_read(
-                format!(
-                    "{WHO}: whether an object of the native stand-in class {path} implements {BALANCED_ACTOR_INTERFACE}"
-                ),
-                RECORD,
-            )
-            .into()),
-            None => Ok(None),
-        }
+        let implements = implements_interface(cx.world.parts(), s, BALANCED_ACTOR_INTERFACE, WHO)?;
+        Ok(implements.then_some(s))
+    }
+}
+
+/// Whether the class of `o` implements the interface class at `interface` (the class index's
+/// `CodeIndex::implements`, the test `Vm::implements` and the VM's `InterfaceCast` use): the interface table of the
+/// class or of a super class names the interface or a class derived from it. A class with no package export behind it
+/// implements nothing; a store whose code packages hold no such interface (or no package that could) has no implementer
+/// (false); a "no" over an
+/// ancestry through an engine-native stand-in class is not proven, so it is `NotYet { NotRead }`; a world without a
+/// definition store is `NotYet { LayerAbsent("ow-defs") }`. `who` names the caller in those texts. Shared by
+/// [`BalancedActor`] and `ow-world`'s player-controller query (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
+pub fn implements_interface(
+    parts: WorldParts<'_>,
+    o: ObjRef,
+    interface: &str,
+    who: &str,
+) -> Result<bool, AttrError> {
+    let space = &*parts.space;
+    let class = space.heap.get(o)?.class;
+    let Some(defs) = parts.defs else {
+        return Err(NotYet::layer_absent(
+            format!("{who}: the interface table of the source's class (this world has no definition store)"),
+            "ow-defs",
+            RECORD,
+        )
+        .into());
+    };
+    let (code, store) = defs.code_mut();
+    let key = match code.find_class(store, interface) {
+        Ok(key) => Some(key),
+        // No such interface class, or no package that could hold it: nothing implements it.
+        Err(ReflectError::ClassNotFound(_))
+        | Err(ReflectError::Store(ow_package::store::StoreError::PackageNotFound(_))) => None,
+        Err(e) => return Err(DefError::from(e).into()),
+    };
+    let implements = match (key, code.key_of(class)) {
+        (Some(key), Some(class)) => code.implements(store, class, key),
+        _ => false,
+    };
+    if implements {
+        return Ok(true);
+    }
+    match native_stand_in(space, class) {
+        Some(path) => Err(NotYet::not_read(
+            format!("{who}: whether an object of the native stand-in class {path} implements {interface}"),
+            RECORD,
+        )
+        .into()),
+        None => Ok(false),
     }
 }
