@@ -36,6 +36,8 @@ pub(crate) struct World {
     /// Answers to `EngineQuery::PlayerSkill` by skill definition; `None` here: the query is not modelled (the
     /// trait's default `LayerAbsent`).
     pub skills: Option<Vec<(ObjRef, Option<ObjRef>)>>,
+    /// Answers to `EngineQuery::LocalPlayerPool` by resource; `None` here: the query is not modelled.
+    pub local_pools: Option<Vec<(ObjRef, Option<ObjRef>)>>,
     /// How many change notifications [`AttrWorld::attribute_changed`] received.
     pub notified: u32,
 }
@@ -60,6 +62,12 @@ impl AttrWorld for World {
                 .iter()
                 .find(|(d, _)| *d == definition)
                 .and_then(|(_, s)| *s)),
+            (EngineQuery::LocalPlayerPool { resource }, _) if self.local_pools.is_some() => Ok(self
+                .local_pools
+                .iter()
+                .flatten()
+                .find(|(r, _)| *r == resource)
+                .and_then(|(_, p)| *p)),
             _ => Err(NotYet::layer_absent(
                 format!("engine query {q:?} from {source:?}"),
                 "ow-world",
@@ -415,6 +423,33 @@ impl Fx {
                 vec![("ValueToResolve", byte())],
             ),
             (
+                "GearboxFramework.ConstraintAttributeValueResolver",
+                vec![("Constraints", PropKind::Struct(range))],
+            ),
+            (
+                "WillowGame.CurrencyAttributeValueResolver",
+                vec![("FormOfCurrency", byte())],
+            ),
+            (
+                "GearboxFramework.RandomAttributeValueResolver",
+                vec![
+                    ("LowerBound", PropKind::Struct(aid)),
+                    ("UpperBound", PropKind::Struct(aid)),
+                    ("bUseIntegerRandomization", PropKind::Bool),
+                ],
+            ),
+            (
+                "WillowGame.AmmoDropWeightAttributeValueResolver",
+                vec![
+                    ("Resource", obj_kind(object)),
+                    ("ResourceThreshold", PropKind::Struct(aid)),
+                    ("AboveThresholdWeight", PropKind::Struct(aid)),
+                    ("MinBelowThresholdWeight", PropKind::Struct(aid)),
+                    ("MaxBelowThresholdWeight", PropKind::Struct(aid)),
+                    ("NoPoolWeight", PropKind::Struct(aid)),
+                ],
+            ),
+            (
                 "WillowGame.PlayerSkillAttributeValueResolver",
                 vec![("AssociatedSkill", obj_kind(object))],
             ),
@@ -565,6 +600,7 @@ impl Fx {
             slots: GlobalSlots::default(),
             streams: Vec::new(),
             skills: None,
+            local_pools: None,
             notified: 0,
         };
         let c = Classes {

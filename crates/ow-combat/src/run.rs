@@ -1014,6 +1014,8 @@ impl Run {
         if let Ok(startup) = ow_core::PackageName::parse("Startup") {
             let _ = vm.defs.code_mut().1.load(&startup);
         }
+        // The drop weights' local player (Reference only: the C++ stand-in; decision 2026-11-16-73).
+        crate::loot::register_local_player_pool(vm, info)?;
         with_state(vm, |s| {
             s.world = Some(info);
             s.authority = authority;

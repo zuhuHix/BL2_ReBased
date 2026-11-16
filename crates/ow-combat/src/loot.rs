@@ -1369,3 +1369,112 @@ pub fn inventories_json(vm: &mut Vm, inventories: &[Value]) -> Result<String, Vm
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------------------------------------------
+// The local player's pool (Reference: the C++ stand-in the drop weights read)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The record of the local player's pool stand-in.
+const LOCAL_POOL_CPP: &str = "src/combat_loot.cpp (CombatSystem::localPlayerPawn, localPlayerPool)";
+
+/// One property of `o` read in the object space, its definition loaded first when it is an unloaded handle; `None`
+/// when the class does not declare it.
+fn read_prop(
+    w: &mut ow_attr::api::WorldParts<'_>,
+    o: ObjRef,
+    name: &str,
+) -> Result<Option<Value>, ow_attr::api::AttrError> {
+    if let Some(d) = w.defs.as_deref_mut()
+        && d.is_unloaded(w.space, o)
+    {
+        d.ensure_loaded(w.space, o)
+            .map_err(|e| ow_attr::api::AttrError::World(format!("loading {name}'s holder: {e}")))?;
+    }
+    let class = w.space.heap.get(o)?.class;
+    let Some(p) = w.space.prop(class, name) else {
+        return Ok(None);
+    };
+    Ok(Some(w.space.read(o, ow_object::ids::PropAddr::scalar(p))?.clone()))
+}
+
+fn prop_object(
+    w: &mut ow_attr::api::WorldParts<'_>,
+    o: ObjRef,
+    name: &str,
+) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+    Ok(read_prop(w, o, name)?.as_ref().and_then(object_of))
+}
+
+/// The C++ `localPlayerPool` on world info `info`: the first replication info of `info.GRI.PRIArray` whose `Owner`
+/// is a `WillowPlayerController` gives the local player (its `Pawn`; the walk ends there, pawn or not); the answer is
+/// that pawn's `HealthPool` resolved (`ow_world::pools::health_pool`), kept only when the pool's definition holds
+/// `resource`. Anything missing on the way is `Ok(None)`, as the C++'s null.
+fn local_player_pool(
+    w: &mut ow_attr::api::WorldParts<'_>,
+    info: ObjRef,
+    resource: ObjRef,
+) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+    let Some(gri) = prop_object(w, info, "GRI")? else { return Ok(None) };
+    let Some(players) = read_prop(w, gri, "PRIArray")? else { return Ok(None) };
+    let controller_class = w.space.classes.by_path("WillowGame.WillowPlayerController");
+    let entries: Vec<Value> = match &players {
+        Value::Array(items) => items.iter().cloned().collect(),
+        _ => Vec::new(),
+    };
+    for entry in entries {
+        let Some(pri) = object_of(&entry) else { continue };
+        let Some(owner) = prop_object(w, pri, "Owner")? else { continue };
+        let is_player = match controller_class {
+            Some(k) => w.space.classes.is_child_of(w.space.heap.get(owner)?.class, k),
+            None => false,
+        };
+        if !is_player {
+            continue;
+        }
+        let Some(pawn) = prop_object(w, owner, "Pawn")? else { return Ok(None) };
+        if read_prop(w, pawn, "HealthPool")?.is_none() {
+            return Ok(None);
+        }
+        let pool = ow_world::pools::health_pool(w.space, pawn)
+            .map_err(|e| ow_attr::api::AttrError::World(format!("the local player's health pool: {e}")))?;
+        let Some(pool) = pool else { return Ok(None) };
+        let held = match prop_object(w, pool, "Definition")? {
+            Some(d) => prop_object(w, d, "Resource")?,
+            None => None,
+        };
+        return Ok((held == Some(resource)).then_some(pool));
+    }
+    Ok(None)
+}
+
+/// Registers the answer to `EngineQuery::LocalPlayerPool` over the run's world info (the C++ stand-in the drop
+/// weights read; `AmmoDropWeightAttributeValueResolver`, lane FIX-ATTR-RESOLVERS, decision 2026-11-16-73).
+/// `ParityMode::Reference` only, once; Off registers nothing, so the query stays `NotYet` there (its resolver is
+/// `NotYet` in Off before it asks). UNVERIFIED: the C++ looks at the local player whatever the context, and only at
+/// the health pool; the game's native is not read.
+pub fn register_local_player_pool(vm: &mut Vm, info: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Reference {
+        return Ok(());
+    }
+    let Some(service) = vm.service::<ow_world::query::WorldQuery>() else {
+        return Err(NotYet::layer_absent(
+            "the world query service the local player's pool registers on",
+            "ow-world (World::new installs it)",
+            LOCAL_POOL_CPP,
+        )
+        .into());
+    };
+    let mut q = service
+        .try_borrow_mut()
+        .map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?;
+    if q.has_handler(ow_world::query::QueryKind::LocalPlayerPool) {
+        return Ok(());
+    }
+    let handler: ow_world::query::QueryFn = Rc::new(move |query, _source, mut w| match query {
+        ow_attr::api::EngineQuery::LocalPlayerPool { resource } => local_player_pool(&mut w, info, resource),
+        other => Err(ow_attr::api::AttrError::World(format!(
+            "the local player's pool handler was given {other:?}"
+        ))),
+    });
+    q.register(ow_world::query::QueryKind::LocalPlayerPool, handler)
+}

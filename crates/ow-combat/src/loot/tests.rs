@@ -953,3 +953,45 @@ fn the_drop_loot_override_body_is_not_yet_in_off_mode() {
     }
     assert_eq!(drop_count(vm).unwrap(), 0);
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The local player's pool (lane FIX-ATTR-RESOLVERS, decision 2026-11-16-73)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The local player's pool through the world's query, from `source`.
+fn local_pool(run: &mut crate::run::Run, resource: ObjRef, source: ObjRef) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+    use ow_attr::api::{AttrWorld, EngineQuery};
+    run.world().vm.engine_query(EngineQuery::LocalPlayerPool { resource }, source)
+}
+
+#[test]
+fn the_local_player_pool_is_the_first_players_health_pool_for_its_resource_in_reference_only() {
+    let (mut run, _d) = fresh(ParityMode::Reference);
+    run.apply("spawn:ToyPawns/Pawn_Toy:4");
+    let pawn = run.enemy(0).expect("spawned").pawn;
+    let vm = &mut run.world().vm;
+    let pool = ow_world::pools::health_pool(&vm.space, pawn).unwrap().expect("the toy pawn's health pool");
+    let definition = crate::hit::access::object(vm, pool, "Definition").unwrap().expect("a pool definition");
+    let resource = crate::hit::access::object(vm, definition, "Resource").unwrap().expect("a resource");
+    // No player yet: nothing.
+    assert_eq!(local_pool(&mut run, resource, pawn).unwrap(), None);
+    // A player whose pawn holds that pool (the toy pawn stands in for the player's): its pool, for its resource only.
+    run.apply("player:8");
+    let vm = &mut run.world().vm;
+    let controller = with_state(vm, |s| s.players[0]).unwrap();
+    crate::hit::access::set(vm, controller, "Pawn", Value::Object(Some(pawn))).unwrap();
+    assert_eq!(local_pool(&mut run, resource, pawn).unwrap(), Some(pool));
+    assert_eq!(local_pool(&mut run, definition, pawn).unwrap(), None, "another resource: none");
+}
+
+#[test]
+fn off_mode_registers_no_local_player_pool() {
+    let (mut run, _d) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let actor = vm.find_class("Engine.Actor").unwrap();
+    let o = ow_vm::interp::instantiate_from_defaults(vm, actor).unwrap();
+    match local_pool(&mut run, o, o) {
+        Err(ow_attr::api::AttrError::NotYet(n)) => assert!(matches!(n.missing, Missing::LayerAbsent(_))),
+        other => panic!("{other:?}"),
+    }
+}
