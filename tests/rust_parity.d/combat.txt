@@ -1,0 +1,11 @@
+# Lane W6-COMBAT (AI-assisted, Claude Code): --combat-run (decision 2026-11-15-35).
+#
+# tests/combat_test.py is not a line yet. Its fixture runs on the Rust binary since this lane, and every check before
+# its loot section passes there except two. Those two read the "SetHealth <value>" event lines, which the C++ pool half
+# writes and the Rust SetHealth (W5-POOLS) does not; that needs an observer seam in ow-world's pools. The loot section
+# is lane W6-LOOT's. The invented-package parity of --combat-run is pinned in Rust instead: crates/ow-cli/src/cmd/combat
+# compares sixteen step lists on the packages of crates/ow-combat/src/run/fixture.rs with the C++ binary's output for
+# the same bytes. CI has no such package on disk, so the lines below are the refusals before a run.
+diff missing.upk --combat-run --cooked . spawn:dummy:1 exit=1 stderr
+diff README.md --combat-run --cooked . spawn:dummy:1 exit=1 stderr
+diff tests/rust_parity.d/README.md --combat-run exit=1 stderr
