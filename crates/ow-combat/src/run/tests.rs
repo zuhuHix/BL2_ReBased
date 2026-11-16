@@ -192,7 +192,7 @@ fn the_steps_refuse_with_the_cxx_texts() {
 }
 
 #[test]
-fn the_loot_steps_answer_in_off_mode_and_a_maya_run_waits_for_its_lane() {
+fn the_loot_steps_answer_in_off_mode_and_a_maya_step_needs_the_bridge() {
     let (text, _) = run_steps(
         ParityMode::Off,
         &[
@@ -208,12 +208,12 @@ fn the_loot_steps_answer_in_off_mode_and_a_maya_run_waits_for_its_lane() {
     assert!(!errors.contains("seed:3"), "{text}");
     assert!(errors.contains("rollpool:0:Pool_Coins: combat-run: WillowAIPawn has no property GameStageForSpawnedInventory"), "{text}");
     assert!(errors.contains("lootbatch:dummy:1:1:1: lootbatch in Off mode"), "{text}");
+    // A maya step run without the bridge (the caller builds it, lane W6-COMBAT-RUN2): the C++ text.
     let steps: Vec<String> = vec!["spawn:ToyPawns/Pawn_Toy:4".into(), "maya:8".into()];
     let (w, _dir) = world(ParityMode::Off);
-    match combat_run(w, &steps) {
-        Err(VmError::NotYet(n)) => assert!(n.to_string().contains("W6-MISSION"), "{n}"),
-        other => panic!("{other:?}"),
-    }
+    let (text, failed) = combat_run(w, &steps).unwrap();
+    assert!(failed);
+    assert!(errors_of(&text).contains("maya:8: combat-run: maya needs the mission bridge"), "{text}");
 }
 
 #[test]
@@ -338,6 +338,11 @@ struct Reentry {
 /// broadcast of `Custom` (as `BroadcastBehaviorEventFromScript` does); on `E1` the death events `E2` then `E4`; on
 /// `E2` the death event `E3`; on `OnBehaviorSequenceDisabled` a broadcast of `Ping`.
 fn reentry_vm() -> Reentry {
+    reentry_vm_in(ParityMode::Off)
+}
+
+/// [`reentry_vm`] in `mode`.
+fn reentry_vm_in(mode: ParityMode) -> Reentry {
     use ow_behavior::registry::{Handler, register};
     use packages::{Seq, Spec, beh, ev, install, provider_package};
     let events = |names: &[&'static str]| -> Vec<packages::Ev> {
@@ -360,13 +365,19 @@ fn reentry_vm() -> Reentry {
         "E2",
         "E3",
         "E4",
+        "Chain",
     ];
+    // Chain (event 7) runs B1 (behavior 7), whose output link 0 runs B2 (behavior 8): a death sequence B1 -> B2.
+    let mut death_behaviors = behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4", "B1", "B2"]);
+    death_behaviors[7].links = (8, 1);
+    let mut death_links = links(8);
+    death_links.push((8, 0, 0.0));
     let death = Seq {
         name: "Death",
         enabled_on_spawn: Some(true),
         events: events(&death_events),
-        behaviors: behaviors(&["A", "B", "C", "P1", "P2", "P3", "P4"]),
-        links: links(7),
+        behaviors: death_behaviors,
+        links: death_links,
         ..Seq::default()
     };
     let class = Seq {
@@ -410,14 +421,14 @@ fn reentry_vm() -> Reentry {
         &dir,
         &refs,
         IdentityPolicy::FirstInScanOrder,
-        ParityMode::Off,
+        mode,
     )
     .unwrap();
     let mut vm = Vm::new(
         ObjectSpace::new(),
         defs,
         Rc::new(AttributeSystem::new_empty()),
-        ParityMode::Off,
+        mode,
     );
     ow_vm::natives_core::register(&mut vm).unwrap();
     crate::hit::Pack.register(&mut vm).unwrap();
@@ -449,7 +460,7 @@ fn reentry_vm() -> Reentry {
         Value::Object(Some(death_holder)),
     )
     .unwrap();
-    let handler = Handler::run(move |vm: &mut Vm, _p, _id, event: &str| {
+    let handler = Handler::run(move |vm: &mut Vm, _p, id: BehaviorId, event: &str| {
         let raise = |vm: &mut Vm, name: &str, broadcast: bool| -> Result<(), VmError> {
             let hook = crate::hit::with_state(vm, |s| s.on_behavior_event.clone())?.unwrap();
             let raised = BehaviorEvent {
@@ -469,6 +480,11 @@ fn reentry_vm() -> Reentry {
             }
             "E2" => raise(vm, "E3", false)?,
             "OnBehaviorSequenceDisabled" => raise(vm, "Ping", true)?,
+            // B1 broadcasts Custom, then selects its output link 0 (to B2).
+            "Chain" if id.index == 7 => {
+                raise(vm, "Custom", true)?;
+                return Ok(vec![0]);
+            }
             _ => {}
         }
         Ok(Vec::new())
@@ -538,6 +554,43 @@ fn a_broadcast_from_a_running_death_provider_runs_on_the_death_provider_then_the
     settled(&r.vm, 2);
 }
 
+/// The order a death sequence prints when a behavior broadcasts and the sequence goes on after it (item 4 of lane
+/// W6-COMBAT-RUN2, decision 2026-11-16-54). The C++ re-enters the running death provider: B1, then Custom on the death
+/// provider (C) and on the class provider (K), then B2, so `B1, C, K, B2`. This port defers Custom until the
+/// outermost raise's own event has returned, so `B1, B2, C, K`: a named difference (decision 2026-11-15-35, the cost
+/// of deferring), pinned here so a change to the deferral shows.
+#[test]
+fn a_broadcast_in_the_middle_of_a_death_sequence_runs_after_the_sequence_unlike_the_cxx() {
+    const CXX_ORDER: [&str; 4] = [
+        "behavior Chain -> B1",
+        "behavior Custom -> C",
+        "behavior Custom -> K",
+        "behavior Chain -> B2",
+    ];
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut r = reentry_vm_in(mode);
+        raise_death(&mut r, "Chain");
+        let got = behavior_lines(&r.vm);
+        assert_eq!(
+            got,
+            [
+                "behavior Chain -> B1",
+                "behavior Chain -> B2",
+                "behavior Custom -> C",
+                "behavior Custom -> K",
+            ],
+            "{mode:?}"
+        );
+        assert_ne!(got, CXX_ORDER, "the C++ order is not reproduced: the difference is named");
+        let mut sorted_got = got.clone();
+        sorted_got.sort();
+        let mut sorted_cxx = CXX_ORDER.map(String::from).to_vec();
+        sorted_cxx.sort();
+        assert_eq!(sorted_got, sorted_cxx, "the same behaviors run, only the order differs");
+        settled(&r.vm, 2);
+    }
+}
+
 #[test]
 fn events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it() {
     let mut r = reentry_vm();
@@ -557,8 +610,16 @@ fn events_deferred_by_a_deferred_event_run_before_the_ones_queued_behind_it() {
 
 #[test]
 fn the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it() {
-    let mut r = reentry_vm();
+    let mut r = reentry_vm_in(ParityMode::Reference);
     assert!(set_sequence(&mut r.vm, r.pawn, "Main", false).unwrap());
+    // The tripwire's labelled note (Reference): Ping was deferred to the provider the step held.
+    assert_eq!(
+        r.vm.log
+            .iter()
+            .filter(|l| l.starts_with(SEQUENCE_DEFERRAL_NOTE))
+            .collect::<Vec<_>>(),
+        [&format!("{SEQUENCE_DEFERRAL_NOTE} (Ping)")]
+    );
     // S (the disabled event) broadcasts Ping: the death provider has no Ping, and the class provider, held by the
     // step, takes it once the step has put it back. No runaway, no error. By then Main is disabled, so Q does not
     // run: the C++ re-enters and runs Q before the bit is cleared (decision 2026-11-15-35, the deferral's cost).
@@ -576,6 +637,31 @@ fn the_sequence_step_is_one_raise_so_its_events_reach_the_provider_after_it() {
     assert_eq!(trace, ["OnBehaviorSequenceDisabled -> S"]);
     drop(service);
     settled(&r.vm, 2);
+    assert!(!set_sequence(&mut r.vm, r.pawn, "NoSuchSequence", true).unwrap());
+}
+
+#[test]
+fn off_mode_refuses_a_sequence_step_whose_events_raise_on_its_own_class_provider() {
+    let mut r = reentry_vm_in(ParityMode::Off);
+    let e = set_sequence(&mut r.vm, r.pawn, "Main", false).unwrap_err();
+    assert!(matches!(&e, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::NotPorted)), "{e:?}");
+    assert!(error_text(&e).contains("raised Ping on the same class provider"), "{}", error_text(&e));
+    // Nothing deferred runs after the refusal (Ping is dropped, so nothing lists S: the provider's trace holds it),
+    // nothing is left deferred, every provider is back, and no note.
+    assert!(behavior_lines(&r.vm).is_empty());
+    let service = providers(&r.vm).unwrap();
+    let trace = service.borrow().held[&(r.pawn, Which::Class)]
+        .provider
+        .as_ref()
+        .unwrap()
+        .trace
+        .clone();
+    assert_eq!(trace, ["OnBehaviorSequenceDisabled -> S"]);
+    drop(service);
+    // The broadcast made the death provider too (it has no Ping), as in Reference.
+    settled(&r.vm, 2);
+    assert!(!r.vm.log.iter().any(|l| l.starts_with(SEQUENCE_DEFERRAL_NOTE)));
+    // A step whose events raise nothing on the provider is not refused.
     assert!(!set_sequence(&mut r.vm, r.pawn, "NoSuchSequence", true).unwrap());
 }
 
@@ -753,5 +839,267 @@ fn the_first_player_makes_the_games_player_count_one() {
             Value::Int(2),
             "{mode:?}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The mission bridge's player (lane W6-COMBAT-RUN2, decision 2026-11-16-54), through a fake bridge over the toy
+// classes: a controller, its replication info listed in the game's PRIArray, a player pawn; ExpEarn adds to the
+// fake's pool, as the real bridge's native does.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// A [`PlayerBridge`] over invented objects.
+struct FakeBridge {
+    controller: ObjRef,
+    pawn: ObjRef,
+    class: Option<ObjRef>,
+    level: std::cell::Cell<i32>,
+    pool: Rc<std::cell::Cell<f32>>,
+    set: std::cell::RefCell<Vec<(i32, i64)>>,
+}
+
+impl PlayerBridge for FakeBridge {
+    fn player_controller(&self) -> ObjRef {
+        self.controller
+    }
+    fn player_pawn(&self, _vm: &mut Vm) -> Result<ObjRef, VmError> {
+        Ok(self.pawn)
+    }
+    fn set_player_experience(&self, vm: &mut Vm, level: i32, experience: i64) -> Result<(), VmError> {
+        let info = object(vm, self.controller, "PlayerReplicationInfo")?.unwrap();
+        set(vm, info, "ExpLevel", Value::Int(level))?;
+        self.level.set(level);
+        // As the bridge: the C++ float(int64_t).
+        self.pool.set(experience as f32);
+        self.set.borrow_mut().push((level, experience));
+        Ok(())
+    }
+    fn update_experience_pool(&self, _vm: &mut Vm) -> Result<(), VmError> {
+        Ok(())
+    }
+    fn take_gains(&self) -> Vec<BridgeGain> {
+        vec![BridgeGain::new("experience", 7, 0.0, 0.0)]
+    }
+    fn player_level(&self, _vm: &Vm) -> Result<i32, VmError> {
+        Ok(self.level.get())
+    }
+    fn experience_pool(&self) -> f32 {
+        self.pool.get()
+    }
+    fn errors(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn player_class(&self, _vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
+        Ok(self.class)
+    }
+}
+
+/// A bridged run over the fixture in `mode`. With `class`, the player's class names the toy `Pool_Health` definition
+/// as its health pool (it has no `BaseMaxValue`: the C++ seed's error path).
+fn bridged(mode: ParityMode, class: bool) -> (Run, Rc<FakeBridge>, Dir) {
+    let (mut w, dir) = world(mode);
+    let vm = &mut w.vm;
+    let roles = ow_behavior::provider::enum_names(vm, "Engine", "Actor.ENetRole").unwrap();
+    let authority = u8::try_from(roles.iter().position(|r| r == "ROLE_Authority").unwrap()).unwrap();
+    let info = make(vm, "Engine.WorldInfo");
+    set(vm, info, "Role", Value::Byte(authority)).unwrap();
+    let gri = make(vm, "WillowGame.WillowGameReplicationInfo");
+    set(vm, info, "GRI", Value::Object(Some(gri))).unwrap();
+    let controller = make(vm, "WillowGame.WillowPlayerController");
+    let pri = make(vm, "WillowGame.WillowPlayerReplicationInfo");
+    set(vm, controller, "PlayerReplicationInfo", Value::Object(Some(pri))).unwrap();
+    set(vm, controller, "Role", Value::Byte(authority)).unwrap();
+    set(vm, pri, "Owner", Value::Object(Some(controller))).unwrap();
+    set(vm, gri, "PRIArray", Value::array(vec![Value::Object(Some(pri))])).unwrap();
+    let pawn = make(vm, "WillowGame.WillowPlayerPawn");
+    set(vm, pawn, "Controller", Value::Object(Some(controller))).unwrap();
+    let pool = Rc::new(std::cell::Cell::new(0.0f32));
+    let earned = Rc::clone(&pool);
+    vm.override_script(
+        "WillowGame.WillowPlayerController.ExpEarn",
+        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+            let amount = crate::hit::access::integer(c.arg(0)?);
+            earned.set(earned.get() + amount as f32);
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    let class = if class {
+        let definition = def(vm, "ToyPawns.Pool_Health");
+        let c = make(vm, "WillowGame.AIClassDefinition");
+        set(vm, c, "HealthPoolDefinition", Value::Object(Some(definition))).unwrap();
+        Some(c)
+    } else {
+        None
+    };
+    w.actors().borrow_mut().place_world_info(info).unwrap();
+    let fake = Rc::new(FakeBridge {
+        controller,
+        pawn,
+        class,
+        level: std::cell::Cell::new(0),
+        pool,
+        set: std::cell::RefCell::new(Vec::new()),
+    });
+    let bridge: Rc<dyn PlayerBridge> = fake.clone();
+    (Run::with_bridge(w, Some(bridge)).unwrap(), fake, dir)
+}
+
+/// The report without its timing fields (`milliseconds`, `elapsed_ms`).
+fn untimed(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"milliseconds\":").or_else(|| rest.find("\"elapsed_ms\":")) {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let end = tail.find([',', '}']).unwrap_or(tail.len());
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn the_bridge_steps_without_the_bridge_answer_the_cxx_texts() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (text, failed) = run_steps(mode, &["tick:1", "cash:1", "mayahealth:1", "bleed:1"]);
+        assert!(failed);
+        for e in [
+            "tick:1: combat-run: tick needs the mission bridge",
+            "cash:1: combat-run: cash needs the mission bridge (the step maya:<level>)",
+            "mayahealth:1: combat-run: mayahealth needs the mission bridge (the step maya:<level>)",
+            "bleed:1: combat-run: bleed needs the mission bridge (the step maya:<level>)",
+        ] {
+            assert!(errors_of(&text).contains(e), "{mode:?}: {e}: {text}");
+        }
+        let (mut run, _dir) = fresh(mode);
+        run.apply("maya:8");
+        assert_eq!(
+            run.errors(),
+            ["maya:8: combat-run: maya needs the mission bridge (it is built when a maya step is among the steps)"]
+        );
+    }
+}
+
+#[test]
+fn maya_sets_the_bridge_player_and_builds_the_cxx_health_pool_only_in_reference_mode() {
+    // Reference: the C++ stand-in pool (manager on the controller, the class's definition, the pawn's reference to
+    // slot 0); the toy definition has no BaseMaxValue, so the seed is the C++ script error, and the step goes on.
+    let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    run.apply("maya:4:short3");
+    assert_eq!(*fake.set.borrow(), [(4, 0), (4, -3)], "short3 is 3 short of a next level of 0");
+    assert_eq!(
+        run.errors(),
+        [
+            "maya:4:short3: mission script: mission script bridge: the health pool definition has no BaseMaxValue",
+            "maya:4:short3: mission script: mission script bridge: the health pool definition has no BaseMaxValue",
+        ]
+    );
+    let vm = &mut run.world().vm;
+    let manager = object(vm, fake.controller, "ResourcePoolManager").unwrap().expect("a manager");
+    let reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
+    assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), Some(manager));
+    let pool = field(vm, &reference, "Data").as_ref().and_then(object_of).expect("a pool");
+    assert_eq!(object(vm, pool, "AssociatedProvider").unwrap(), Some(fake.controller));
+    // The run's player count follows the bridge's player (decision 2026-11-16-49's setup, extended).
+    let world = with_state(vm, |s| s.world).unwrap().unwrap();
+    let game = object(vm, world, "Game").unwrap().unwrap();
+    assert_eq!(get(vm, game, "EffectiveNumPlayers").unwrap(), Some(Value::Int(1)));
+
+    // Off: the experience is set, then the stand-in pool is NotYet; nothing is built.
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("maya:4");
+    assert_eq!(*fake.set.borrow(), [(4, 0)]);
+    assert_eq!(run.errors().len(), 1);
+    assert!(run.errors()[0].contains("only ParityMode::Reference reproduces"), "{:?}", run.errors());
+    let vm = &mut run.world().vm;
+    assert_eq!(object(vm, fake.controller, "ResourcePoolManager").unwrap(), None);
+}
+
+#[test]
+fn a_bridged_kill_credits_what_the_bridge_pool_gained() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, fake, _dir) = bridged(mode, false);
+        for step in ["spawn:ToyPawns/Pawn_Doomed:5", "maya:4", "players:1", "hit:0:10::Bullet"] {
+            run.apply(step);
+        }
+        // Reference: a player class without a health pool builds none, quietly (the C++ ensureHealthPool). Off: the
+        // stand-in pool is NotYet, and the kill goes on.
+        let pool_errors: Vec<&String> = run.errors().iter().filter(|e| !e.starts_with("maya:4:")).collect();
+        assert!(pool_errors.is_empty(), "{mode:?}: {:?}", run.errors());
+        let gained = player::credit(0.0, fake.pool.get()).unwrap();
+        assert!(gained > 0, "{mode:?}: the kill credited the bridge's pool");
+        let report = run.report(0.0);
+        let at = report
+            .find("\"kill.Doomed.L5.p4\":{\"award\":")
+            .unwrap_or_else(|| panic!("{mode:?}: {report}"));
+        let row = &report[at..at + report[at..].find('}').unwrap()];
+        assert!(row.ends_with(&format!(",\"credit\":{gained}")), "{mode:?}: {row}");
+    }
+}
+
+#[test]
+fn cash_and_bleed_frames_on_the_bridge() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, fake, _dir) = bridged(mode, false);
+        run.apply("cash:250");
+        let vm = &mut run.world().vm;
+        let info = object(vm, fake.controller, "PlayerReplicationInfo").unwrap().unwrap();
+        assert_eq!(crate::down::currency_on_hand(vm, info, 0).unwrap(), 250);
+        // One second in frames of 0.25 s: four frames, the time a float sum; no injury (the pawn is in no state).
+        run.apply("bleed:1:0.25");
+        run.apply("bleed:1:0");
+        run.apply("bleed:1:2:3");
+        let report = run.report(0.0);
+        assert!(report.contains("{\"step\":\"bleed:1:0.25\",\"result\":{\"time\":1,\"down\":{\"state\":\"\",\"injury\":0"), "{mode:?}: {report}");
+        assert_eq!(
+            run.errors(),
+            [
+                "bleed:1:0: combat-run: bleed: the frame time must be positive",
+                "bleed:1:2:3: combat-run: bleed:<seconds>[:<dt>]",
+            ],
+            "{mode:?}"
+        );
+    }
+    assert_eq!(player::frames(50.0, 1.0 / 60.0).unwrap(), 3000);
+    assert_eq!(player::frames(0.5, 1.0).unwrap(), 1, "lround: half away from zero");
+    assert!(player::frames(1.0, 1e-300).is_err());
+    assert_eq!(player::credit(28116.0, 28151.0).unwrap(), 35);
+    assert!(player::credit(0.0, f32::INFINITY).is_err());
+}
+
+#[test]
+fn tick_lists_the_bridge_gains_and_the_player() {
+    let (mut run, _fake, _dir) = bridged(ParityMode::Off, false);
+    run.apply("tick:2");
+    let report = run.report(0.0);
+    assert!(
+        report.contains("{\"step\":\"tick:2\",\"result\":{\"gains\":[{\"kind\":\"experience\",\"amount\":7,\"health\":0,\"maximum\":0}],\"player\":{\"level\":0,\"experience\":0,\"next_level_at\":0,"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_bridged_run_replays_to_the_same_report_in_both_modes() {
+    let steps = [
+        "spawn:ToyPawns/Pawn_Doomed:5",
+        "maya:4",
+        "players:1",
+        "cash:120",
+        "hit:0:10::Bullet",
+        "bleed:0.5",
+        "tick:1",
+    ];
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let reports: Vec<String> = (0..2)
+            .map(|_| {
+                let (mut run, _fake, _dir) = bridged(mode, true);
+                for s in steps {
+                    run.apply(s);
+                }
+                untimed(&run.report(0.0))
+            })
+            .collect();
+        assert_eq!(reports[0], reports[1], "{mode:?}");
     }
 }

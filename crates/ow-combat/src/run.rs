@@ -4,11 +4,11 @@
 //!
 //! The steps, the report shape and every text are the C++ ones (`src/combat.hpp`, `combatRun`), with these
 //! exceptions:
-//! - **The mission bridge** (W6-MISSION's `ow_mission::bridge`) is not wired into this run yet; a follow-up lane wires
-//!   the `maya`, `tick`, `bleed`, `cash` and `mayahealth` steps against it (hub decision, review r1 of PR #335). Until
-//!   then a run with a `maya:` step is `NotYet { NotPorted }` before any step, and `tick`, `cash`, `bleed` and
-//!   `mayahealth` answer the C++ text of a run without the bridge. So the S-d credit into Maya's pool and the whole S-f
-//!   bleed-out are not reached here; their natives are (`crate::down`, `crate::xp`).
+//! - **The mission bridge** (W6-MISSION's `ow_mission::bridge`, lane W6-COMBAT-RUN2): a run with a `maya` step is
+//!   built over it, as the C++ (`player::PlayerBridge`, which `ow-cli` implements over the bridge). The `maya`, `tick`,
+//!   `cash`, `bleed` and `mayahealth` steps, the S-d credit into the player's pool and the S-f bleed-out are in
+//!   `run/player.rs`; without the bridge those steps answer the C++ texts. The player's health pool is the C++ bridge's
+//!   hand-built stand-in, `ParityMode::Reference` only (decision 2026-11-16-54).
 //! - **Loot** (plan step S-g, lane W6-LOOT): the rules are `crate::loot`'s; this module holds the steps (`seed`,
 //!   `rollpool`, `lootbatch`), the loot setup of a spawn with a pawn balance and a kill's `loot` report, as the C++.
 //!   In `Off` mode the death roll is the installed script's, so a kill records no roll and `lootbatch` is `NotYet`
@@ -52,6 +52,10 @@ use crate::hit::access::{
     set, truth,
 };
 use crate::hit::{self, Enemy, HitReport, Player, TakeDamageEvent, call_method, note, with_state};
+
+mod player;
+pub use player::{BridgeGain, PlayerBridge};
+use player::{Episode, Fee, HealthPool};
 
 /// The record of the run.
 pub const RECORD: &str = "src/combat.hpp (combatRun); COMBAT_GOLDEN_TRACE.md; the COMBAT_* records";
@@ -452,6 +456,16 @@ fn definition_of(
     })
 }
 
+/// Whether the pawn's AI class names a behavior provider definition (`AIClass` -> `BehaviorProviderDefinition`), the
+/// class test of what [`definition_of`] reads for [`Which::Class`]. A broadcast's class share skips a pawn without
+/// one, as the C++ catches that error; any other failure of the class provider is an error here.
+fn has_class_provider(vm: &mut Vm, pawn: ObjRef) -> Result<bool, VmError> {
+    Ok(match object(vm, pawn, "AIClass")? {
+        Some(class) => object(vm, class, "BehaviorProviderDefinition")?.is_some(),
+        None => false,
+    })
+}
+
 /// Takes the provider of `which` of `pawn` out of the service (made on first use; `death` is the death definition),
 /// runs `f` on it and puts it back. A placeholder marks it running from before it is made until it is back, so a raise
 /// that reaches it meanwhile is `Ok(None)` (deferred by the caller) and never makes a second provider over the same
@@ -560,14 +574,11 @@ fn drain(vm: &mut Vm, service: &Rc<RefCell<Providers>>) -> Result<(), VmError> {
         } else {
             None
         };
-        let deferred_again = match fire_or_defer(vm, pawn, which, death, &name, &outputs) {
-            Err(VmError::Script { message, .. })
-                if skip_missing && message.contains("has no behavior provider") =>
-            {
-                Ok(false)
-            }
-            other => other,
-        }?;
+        let deferred_again = if skip_missing && !has_class_provider(vm, pawn)? {
+            false
+        } else {
+            fire_or_defer(vm, pawn, which, death, &name, &outputs)?
+        };
         let mut s = borrow(service)?;
         if deferred_again {
             let which = match which {
@@ -654,11 +665,8 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
                 )?;
                 return Ok(());
             }
-            match fire_or_defer(vm, event.pawn, Which::Class, None, &event.name, &none) {
-                Ok(_) => {}
-                Err(VmError::Script { message, .. })
-                    if message.contains("has no behavior provider") => {}
-                Err(e) => return Err(e),
+            if has_class_provider(vm, event.pawn)? {
+                fire_or_defer(vm, event.pawn, Which::Class, None, &event.name, &none)?;
             }
         }
         Ok(())
@@ -668,6 +676,13 @@ fn raise_behavior_event(vm: &mut Vm, event: &BehaviorEvent) -> Result<(), VmErro
 /// Enables or disables the sequences `name` of the pawn's class provider (the `sequence` step): one raise, since the
 /// enabled and disabled events run behaviors that may raise on the same provider ([`as_raise`]). False when there is
 /// no such sequence, or when the provider is running (the C++ would re-enter; no step reaches that).
+///
+/// **The tripwire** (decision 2026-11-16-54). An event the step's own events raise on this same class provider is
+/// deferred until the step has put the provider back, so it runs on the provider with the sequence already changed,
+/// where the C++ re-enters and runs it before the change is complete (decision 2026-11-15-35, the cost of deferring).
+/// That run is not the C++ one, so when the step leaves such an event deferred: `Off` answers `NotYet { NotPorted }`
+/// (the sequence change itself has happened; the deferred event is dropped, not run), and `Reference` logs the
+/// labelled note [`SEQUENCE_DEFERRAL_NOTE`] and runs it as before.
 fn set_sequence(vm: &mut Vm, pawn: ObjRef, name: &str, on: bool) -> Result<bool, VmError> {
     let mut changed = false;
     as_raise(vm, |vm| {
@@ -676,10 +691,35 @@ fn set_sequence(vm: &mut Vm, pawn: ObjRef, name: &str, on: bool) -> Result<bool,
             p.set_sequence_enabled(vm, name, on).map_err(provider_error)
         })?
         .unwrap_or(false);
+        let own: Vec<String> = borrow(&providers(vm)?)?
+            .deferred
+            .iter()
+            .filter(|d| d.0 == pawn && d.1 == Which::Class)
+            .map(|d| d.2.clone())
+            .collect();
+        if !own.is_empty() {
+            let events = own.join(", ");
+            if vm.parity == ow_core::ParityMode::Reference {
+                vm.log.push(format!("{SEQUENCE_DEFERRAL_NOTE} ({events})"));
+            } else {
+                return Err(NotYet::not_ported(
+                    format!(
+                        "the sequence step's events raised {events} on the same class provider: the C++ runs them \
+                         inside the step, before the sequence change is complete; this port defers them past it"
+                    ),
+                    RECORD,
+                )
+                .into());
+            }
+        }
         Ok(())
     })?;
     Ok(changed)
 }
+
+/// The note a `Reference` run logs when the sequence step's own events raise on its class provider ([`set_sequence`]).
+pub const SEQUENCE_DEFERRAL_NOTE: &str = "note: combat-run (Rust): the sequence step deferred events on its own class \
+     provider; they run after the sequence change, where the C++ runs them inside it";
 
 /// `NotifyTakeHit`'s raise (NATIVE_DAMAGE_DEATH.md section 5): `OnTakeDamage` on the pawn's class provider with the
 /// damage type definition and source as the event's `DamageType` and `DamageSource` outputs (stock paths); the
@@ -732,10 +772,11 @@ struct Spawned {
 }
 
 /// A kill's row (`kill.<class>.L<level>.p<player level>[.<tag>]`): the award `CalculateExperiencePointsForKill`
-/// returned (the credit into a pool needs the mission bridge).
+/// returned and, with the mission bridge, the experience its pool gained.
 struct KillRow {
     id: String,
     award: f64,
+    credit: Option<i32>,
 }
 
 /// The scripted run over a world (C++ `Run`).
@@ -752,6 +793,17 @@ pub struct Run {
     drops_seen: usize,
     results: Vec<String>,
     errors: Vec<String>,
+    /// The mission bridge's player (a run with a `maya` step), with the state of its steps.
+    bridge: Option<Rc<dyn PlayerBridge>>,
+    health: HealthPool,
+    episode: Episode,
+    injuries: i32,
+    /// When the respawn happened, while its dialog (the fee) is still due; negative when none is.
+    respawn_at: f64,
+    fee_rows: Vec<Fee>,
+    /// The bridge's errors the steps already listed, and the script errors of the step running.
+    bridge_errors_seen: usize,
+    script_errors: Vec<String>,
 }
 
 impl std::fmt::Debug for Run {
@@ -767,7 +819,14 @@ impl Run {
     /// A run over `world`, whose VM holds the combat pack (`hit::Pack`): finds `ROLE_Authority` by its enum name,
     /// makes the level's `WorldInfo` (authority) and places it, loads `Startup` when the set has it, sets the raises of
     /// the providers and enables deaths (C++ `CombatSystem` and `Run` constructors).
-    pub fn new(mut world: World) -> Result<Run, VmError> {
+    pub fn new(world: World) -> Result<Run, VmError> {
+        Run::with_bridge(world, None)
+    }
+
+    /// [`Run::new`], over the mission bridge's player when `bridge` is given (a run with a `maya` step). The bridge has
+    /// placed the level's `WorldInfo` already (its `MissionScript::new`), so the run uses that one, as the C++ combat
+    /// system of the bridge does, and places none.
+    pub fn with_bridge(mut world: World, bridge: Option<Rc<dyn PlayerBridge>>) -> Result<Run, VmError> {
         let vm = &mut world.vm;
         let roles = ow_behavior::provider::enum_names(vm, "Engine", "Actor.ENetRole")
             .map_err(provider_error)?;
@@ -776,14 +835,29 @@ impl Run {
             .position(|r| r == "ROLE_Authority")
             .and_then(|i| u8::try_from(i).ok())
             .ok_or_else(|| error("combat: ENetRole has no ROLE_Authority"))?;
-        let class = vm.find_class("Engine.WorldInfo")?;
-        let info = ow_vm::interp::instantiate_from_defaults(vm, class)?;
-        crate::hit::access::set_required(vm, info, "Role", Value::Byte(authority), "combat")?;
-        world
+        let placed = world
             .actors()
-            .try_borrow_mut()
+            .try_borrow()
             .map_err(|_| VmError::ServiceBorrowed("Actors"))?
-            .place_world_info(info)?;
+            .world_info();
+        let info = match (&bridge, placed) {
+            (Some(_), Some(info)) => info,
+            (Some(_), None) => {
+                return Err(error("combat-run: the mission bridge placed no WorldInfo"));
+            }
+            (None, _) => {
+                let vm = &mut world.vm;
+                let class = vm.find_class("Engine.WorldInfo")?;
+                let info = ow_vm::interp::instantiate_from_defaults(vm, class)?;
+                crate::hit::access::set_required(vm, info, "Role", Value::Byte(authority), "combat")?;
+                world
+                    .actors()
+                    .try_borrow_mut()
+                    .map_err(|_| VmError::ServiceBorrowed("Actors"))?
+                    .place_world_info(info)?;
+                info
+            }
+        };
         let vm = &mut world.vm;
         if let Ok(startup) = ow_core::PackageName::parse("Startup") {
             let _ = vm.defs.code_mut().1.load(&startup);
@@ -794,6 +868,16 @@ impl Run {
             s.on_take_damage = Some(Rc::new(raise_take_damage));
             s.on_behavior_event = Some(Rc::new(raise_behavior_event));
         })?;
+        if let Some(b) = &bridge {
+            // The injured definition the player's class names (C++ `MissionScript::injuredDefinition`): the store's
+            // definition of the reference (the C++ makes a copy; nothing writes to it).
+            let b = Rc::clone(b);
+            let hook: hit::ObjectFn = Rc::new(move |vm: &mut Vm| match b.player_class(vm)? {
+                Some(class) => object(vm, class, "CharacterInjuredDefinition"),
+                None => Ok(None),
+            });
+            with_state(vm, |s| s.injured_definition = Some(hook))?;
+        }
         if vm.service::<Providers>().is_none() {
             vm.add_service(Providers::default())?;
         }
@@ -811,6 +895,14 @@ impl Run {
             drops_seen: 0,
             results: Vec::new(),
             errors: Vec::new(),
+            bridge,
+            health: HealthPool::default(),
+            episode: Episode::new(),
+            injuries: 0,
+            respawn_at: -1.0,
+            fee_rows: Vec::new(),
+            bridge_errors_seen: 0,
+            script_errors: Vec::new(),
         })
     }
 
@@ -916,6 +1008,17 @@ impl Run {
                 format!("{{\"error\":{}}}", json_quote(&text))
             }
         };
+        // A script run the bridge's guard caught: the step failed (C++ `script_->errors`).
+        if let Some(b) = &self.bridge {
+            let all = b.errors();
+            for e in all.iter().skip(self.bridge_errors_seen) {
+                self.errors.push(format!("{step}: {e}"));
+            }
+            self.bridge_errors_seen = all.len();
+        }
+        for e in std::mem::take(&mut self.script_errors) {
+            self.errors.push(format!("{step}: {e}"));
+        }
         if parts.len() > 1
             && !NO_STATE.contains(&parts[0])
             && let Ok(index) = stoul(parts[1])
@@ -1096,10 +1199,8 @@ impl Run {
                 }
                 Ok(format!("{{\"player\":{}}}", self.players.len() - 1))
             }
-            "maya" => Err(error(
-                "combat-run: maya needs the mission bridge (it is built when a maya step is among the steps)",
-            )),
-            "tick" => Err(error("combat-run: tick needs the mission bridge")),
+            "maya" => self.maya(parts),
+            "tick" => self.tick(parts),
             "players" => {
                 let n = stoi(at(1)?)?;
                 let vm = &mut self.world.vm;
@@ -1170,15 +1271,9 @@ impl Run {
                 let changed = set_sequence(&mut self.world.vm, pawn, at(2)?, on)?;
                 Ok(format!("{{\"changed\":{}}}", flag(changed)))
             }
-            "cash" => Err(error(
-                "combat-run: cash needs the mission bridge (the step maya:<level>)",
-            )),
-            "bleed" => Err(error(
-                "combat-run: bleed needs the mission bridge (the step maya:<level>)",
-            )),
-            "mayahealth" => Err(error(
-                "combat-run: mayahealth needs the mission bridge (the step maya:<level>)",
-            )),
+            "cash" => self.cash(parts),
+            "bleed" => self.bleed_step(parts),
+            "mayahealth" => self.maya_health(parts),
             "swing" => self.swing(parts),
             "hit" => self.hit(parts),
             "seed" => {
@@ -1195,7 +1290,8 @@ impl Run {
     }
 
     /// Scenario setup for a run with one local player (review r1 of PR #348, decision 2026-11-16-49): when the run spawns
-    /// its first player, the game's `EffectiveNumPlayers` becomes 1 if it still holds its class default 0. That is the
+    /// its first player (a `player:` step, or since decision 2026-11-16-54 a `maya:` step: the bridge's player), the
+    /// game's `EffectiveNumPlayers` becomes 1 if it still holds its class default 0. That is the
     /// count the C++ evaluator stands in for every `NumberOfPlayers` condition operand (`src/progression.cpp:298`,
     /// `AttributeContext::numberOfPlayers`), now that the port reads that attribute's chain from the game info. That
     /// the game's login sets the count to 1 for one local player is UNVERIFIED. A later `players:<n>` step, or a count
@@ -1293,7 +1389,7 @@ impl Run {
                 "combat-run: swing:<attacker>:<kind or definition path>[:<cause damage path>]",
             ));
         }
-        if self.players.is_empty() {
+        if self.bridge.is_none() && self.players.is_empty() {
             return Err(error(
                 "combat-run: a swing needs a player to hit (the step maya:<level>, Maya's VM pawn, or player:<level>)",
             ));
@@ -1330,10 +1426,21 @@ impl Run {
                 None => return Err(error(format!("combat-run: {package} has no {cause}"))),
             }
         };
-        let victim = self.players[0].pawn;
         let vm = &mut self.world.vm;
         let delivery = hit::delivery_of(vm, definition_object, cause_object)?;
-        let swing = hit::swing(vm, mind, victim, &delivery)?;
+        let swing = match self.bridge.clone() {
+            // The bridge's player pawn is the victim, with the controller's Pawn set to it (C++ `swingAtPlayer`).
+            Some(b) => match player::with_player_pawn(vm, &*b, |vm, victim| {
+                hit::swing(vm, mind, victim, &delivery)
+            }) {
+                Ok(s) => s,
+                Err(e) => return Ok(self.script_error(&e)),
+            },
+            None => {
+                let victim = self.players[0].pawn;
+                hit::swing(vm, mind, victim, &delivery)?
+            }
+        };
         let id = format!("{row_class}.L{level}");
         self.row(&format!("arrival.{id}"), swing.arrival);
         let ratio = if swing.arrival > 0.0 {
@@ -1344,8 +1451,12 @@ impl Run {
         if swing.arrival > 0.0 {
             self.row(&format!("ratio.{id}"), ratio);
         }
-        Ok(format!(
-            "{{\"definition\":{},\"source\":{},\"damage_type\":{},\"arrival\":{},\"applied\":{},\"ratio\":{},\"shield_damage\":{},\"health_lost\":{},\"hit\":{},\"player\":null}}",
+        let player = match self.bridge {
+            Some(_) => self.player_json()?,
+            None => "null".to_string(),
+        };
+        let mut out = format!(
+            "{{\"definition\":{},\"source\":{},\"damage_type\":{},\"arrival\":{},\"applied\":{},\"ratio\":{},\"shield_damage\":{},\"health_lost\":{},\"hit\":{},\"player\":{player}",
             json_quote(&delivery.what),
             json_quote(&swing.source),
             json_quote(&swing.damage_type),
@@ -1355,7 +1466,15 @@ impl Run {
             num(swing.hit.shield_damage),
             num(swing.hit.health_before - swing.hit.health_after),
             hit_json(&swing.hit)
-        ))
+        );
+        if self.bridge.is_some() {
+            self.track_down()?;
+            if self.episode.active {
+                let _ = write!(out, ",\"down\":{}", self.down_json()?);
+            }
+        }
+        out.push('}');
+        Ok(out)
     }
 
     fn hit(&mut self, parts: &[&str]) -> Result<String, VmError> {
@@ -1364,7 +1483,7 @@ impl Run {
                 "combat-run: hit:<pawn>:<damage>:<damage type path>[:<source>]",
             ));
         }
-        if self.players.is_empty() {
+        if self.players.is_empty() && self.bridge.is_none() {
             return Err(error(
                 "combat-run: a hit needs a player (the step player:<level> or maya:<level>) first",
             ));
@@ -1384,31 +1503,52 @@ impl Run {
             let s = &self.pawns[index];
             (s.enemy.pawn, s.row_class.clone(), s.level)
         };
-        let instigator = self.players[0].controller;
+        let bridge = self.bridge.clone();
         let vm = &mut self.world.vm;
         let source_class = vm.find_class(&source)?;
-        let report = hit::hit(
-            vm,
-            pawn,
-            Some(instigator),
-            damage,
-            parts[3],
-            Some(source_class),
-        )?;
-        // The kills this hit made (the experience natives record them): one row per kill.
+        let (pool_before, level_before) = match &bridge {
+            Some(b) => (b.experience_pool(), b.player_level(vm)?),
+            None => (0.0, 0),
+        };
+        let report = match &bridge {
+            // The bridge's controller is the instigator, its Pawn the player's while the chain runs (C++
+            // `hitFromPlayer`); an error is the bridge guard's.
+            Some(b) => {
+                let controller = b.player_controller();
+                match player::with_player_pawn(vm, &**b, |vm, _| {
+                    hit::hit(vm, pawn, Some(controller), damage, parts[3], Some(source_class))
+                }) {
+                    Ok(r) => r,
+                    Err(e) => return Ok(self.script_error(&e)),
+                }
+            }
+            None => {
+                let instigator = self.players[0].controller;
+                hit::hit(vm, pawn, Some(instigator), damage, parts[3], Some(source_class))?
+            }
+        };
+        // The kills this hit made (the experience natives record them): one row per kill, the credit being what the
+        // bridge player's pool gained.
         let kills = with_state(vm, |s| s.kills.clone())?;
         for kill in kills.iter().skip(self.kills_seen) {
             if kill.killed != Some(pawn) {
                 continue;
             }
-            let player_level = kill.credits.first().map_or(0, |c| c.player_level);
+            let player_level = kill.credits.first().map_or(level_before, |c| c.player_level);
             let mut id = format!("kill.{row_class}.L{level}.p{player_level}");
             if !self.kill_tag.is_empty() {
                 let _ = write!(id, ".{}", self.kill_tag);
             }
+            let credit = match &bridge {
+                Some(b) if !kill.credits.is_empty() => {
+                    Some(player::credit(pool_before, b.experience_pool())?)
+                }
+                _ => None,
+            };
             self.kill_rows.push(KillRow {
                 id,
                 award: f64::from(kill.award),
+                credit,
             });
         }
         self.kills_seen = kills.len();
@@ -1424,6 +1564,11 @@ impl Run {
         if let Some(loot) = self.loot_after(pawn, &key)? {
             result.pop();
             let _ = write!(result, ",\"loot\":{loot}}}");
+        }
+        if self.bridge.is_some() && (self.episode.active || self.injuries > 0) {
+            self.track_down()?;
+            result.pop();
+            let _ = write!(result, ",\"down\":{}}}", self.down_json()?);
         }
         Ok(result)
     }
@@ -1527,7 +1672,7 @@ impl Run {
                 "combat-run: lootbatch:<kind>:<level>:<stage>:<count>[:<tag>]",
             ));
         }
-        if self.players.is_empty() {
+        if self.players.is_empty() && self.bridge.is_none() {
             return Err(error(
                 "combat-run: a loot batch needs a player (the step maya:<level> or player:<level>) first",
             ));
@@ -1576,6 +1721,310 @@ impl Run {
             self.row(&k, v);
         }
         Ok(format!("{{\"kills\":{}}}", batch.kills()))
+    }
+
+    // ---- the mission bridge's player (`run/player.rs`) ----------------------------------------------------------
+
+    /// A bridged chain's error, as the bridge's guard records it (`mission script: <text>`), and the step's result.
+    fn script_error(&mut self, e: &VmError) -> String {
+        let text = error_text(e);
+        self.script_errors.push(format!("mission script: {text}"));
+        format!("{{\"error\":{}}}", json_quote(&format!("mission script: {text}")))
+    }
+
+    fn bridge_or(&self, refusal: &str) -> Result<Rc<dyn PlayerBridge>, VmError> {
+        self.bridge.clone().ok_or_else(|| error(refusal))
+    }
+
+    /// `maya:<level>[:<experience> | :short<n>]`: the bridge's player at that level with that experience (default 0;
+    /// `short<n>` is n points short of the next level), its health pool full for the level (the Reference stand-in,
+    /// `player::HealthPool`). May be given again between kills (the level is an input).
+    fn maya(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        let b = self.bridge_or(
+            "combat-run: maya needs the mission bridge (it is built when a maya step is among the steps)",
+        )?;
+        let level = stoi(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
+        let vm = &mut self.world.vm;
+        b.set_player_experience(vm, level, 0)?;
+        self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
+        if let Some(amount) = parts.get(2) {
+            let experience = match amount.strip_prefix("short") {
+                Some(n) => player::next_level_at(vm, b.player_controller())?
+                    .checked_sub(stoll(n)?)
+                    .ok_or_else(|| error("stoll argument out of range"))?,
+                None => stoll(amount)?,
+            };
+            b.set_player_experience(vm, level, experience)?;
+            self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
+        }
+        let pawn = b.player_pawn(vm)?;
+        crate::down::prepare_player_pawn(vm, pawn)?;
+        // The bridge's player is the run's one local player: the same scenario setup as the first `player:` step
+        // (decision 2026-11-16-49; lane W6-COMBAT-RUN2 extends it to the `maya` step, decision 2026-11-16-54).
+        self.one_local_player()?;
+        // The C++ also loads two references of the globals definition here (the death camera's end time): the
+        // definition store loads a definition's references when they are read, so nothing is needed.
+        Ok(format!("{{\"player\":{}}}", self.player_json()?))
+    }
+
+    /// `tick:<seconds>`: game time passes and the experience pool's per-frame update runs; the level-up's gains.
+    fn tick(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: tick needs the mission bridge")?;
+        let seconds = stod(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
+        self.advance_time(seconds)?;
+        b.update_experience_pool(&mut self.world.vm)?;
+        let gains: Vec<String> = b
+            .take_gains()
+            .iter()
+            .map(|g| {
+                format!(
+                    "{{\"kind\":\"{}\",\"amount\":{},\"health\":{},\"maximum\":{}}}",
+                    g.kind,
+                    g.amount,
+                    num(f64::from(g.health)),
+                    num(f64::from(g.maximum))
+                )
+            })
+            .collect();
+        Ok(format!(
+            "{{\"gains\":[{}],\"player\":{}}}",
+            gains.join(","),
+            self.player_json()?
+        ))
+    }
+
+    /// `cash:<amount>`: the player's credits on hand (a state input: the respawn fee is a share of it).
+    fn cash(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: cash needs the mission bridge (the step maya:<level>)")?;
+        let amount = stoll(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
+        let vm = &mut self.world.vm;
+        let info = player::replication_info(vm, b.player_controller())?;
+        crate::down::set_currency_on_hand(vm, info, 0, amount)?;
+        Ok("{}".to_string())
+    }
+
+    /// `mayahealth:<share>`: the player's health set to that share of the maximum (the Reference stand-in pool).
+    fn maya_health(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: mayahealth needs the mission bridge (the step maya:<level>)")?;
+        let share = stod(parts.get(1).copied().ok_or_else(|| error("invalid vector subscript"))?)?;
+        let pawn = b.player_pawn(&mut self.world.vm)?;
+        let maximum = number(&self.call(pawn, "GetMaxHealth", Vec::new())?.ret);
+        let current = crate::hit::access::to_f32(share * maximum);
+        self.health
+            .ensure_and_seed(&mut self.world.vm, &*b, current, &mut self.script_errors)?;
+        Ok("{}".to_string())
+    }
+
+    /// `bleed:<seconds>[:<dt>]` (plan step S-f): game time passes in frames of dt seconds (default 1/60) and, while
+    /// the player's pawn is injured, its installed `Tick` runs each frame; the callbacks the game's animations, death
+    /// camera and station time are played at the live delays. Rows `down.*` per injury.
+    fn bleed_step(&mut self, parts: &[&str]) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: bleed needs the mission bridge (the step maya:<level>)")?;
+        if parts.len() < 2 || parts.len() > 3 {
+            return Err(error("combat-run: bleed:<seconds>[:<dt>]"));
+        }
+        let log_before = self.world.vm.log.len();
+        let seconds = stod(parts[1])?;
+        let dt = match parts.get(2) {
+            Some(d) => stod(d)?,
+            None => 1.0 / 60.0,
+        };
+        self.bleed(&*b, seconds, dt)?;
+        let now = self.world_now()?;
+        let down = self.down_json()?;
+        let player = self.player_json()?;
+        let log: Vec<String> = self.world.vm.log[log_before..]
+            .iter()
+            .filter(|l| !l.starts_with(hit::STUB_PREFIX))
+            .map(|l| json_quote(l))
+            .collect();
+        Ok(format!(
+            "{{\"time\":{},\"down\":{down},\"player\":{player},\"log\":[{}]}}",
+            num(now),
+            log.join(",")
+        ))
+    }
+
+    /// The world's `TimeSeconds` (0 without one).
+    fn world_now(&mut self) -> Result<f64, VmError> {
+        let vm = &mut self.world.vm;
+        let Some(world) = with_state(vm, |s| s.world)? else {
+            return Ok(0.0);
+        };
+        player::number_of(vm, world, "TimeSeconds")
+    }
+
+    /// Game time passes (C++ `MissionScript::advanceTime`: the sum in double, stored as the float).
+    fn advance_time(&mut self, seconds: f64) -> Result<(), VmError> {
+        let vm = &mut self.world.vm;
+        let Some(world) = with_state(vm, |s| s.world)? else {
+            return Ok(());
+        };
+        if let Some(t) = get(vm, world, "TimeSeconds")? {
+            let sum = crate::hit::access::to_f32(number(&t) + seconds);
+            set(vm, world, "TimeSeconds", Value::Float(sum))?;
+        }
+        Ok(())
+    }
+
+    /// The bridge's player as JSON (C++ `playerJson`).
+    fn player_json(&mut self) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: no mission bridge")?;
+        let vm = &mut self.world.vm;
+        let pawn = b.player_pawn(vm)?;
+        let level = b.player_level(vm)?;
+        let next = player::next_level_at(vm, b.player_controller())?;
+        let health = number(&self.call(pawn, "GetHealth", Vec::new())?.ret);
+        let max = number(&self.call(pawn, "GetMaxHealth", Vec::new())?.ret);
+        Ok(format!(
+            "{{\"level\":{level},\"experience\":{},\"next_level_at\":{next},\"health\":{},\"max_health\":{}}}",
+            num(f64::from(b.experience_pool())),
+            num(health),
+            num(max)
+        ))
+    }
+
+    /// The down state as JSON (C++ `downJson`).
+    fn down_json(&mut self) -> Result<String, VmError> {
+        let b = self.bridge_or("combat-run: no mission bridge")?;
+        let now = self.world_now()?;
+        let vm = &mut self.world.vm;
+        let pawn = b.player_pawn(vm)?;
+        player::down_json(vm, pawn, &self.episode, now)
+    }
+
+    /// Starts the record of an injury when the player's pawn has just entered its injured state (C++ `trackDown`).
+    fn track_down(&mut self) -> Result<(), VmError> {
+        let b = self.bridge_or("combat-run: no mission bridge")?;
+        let pawn = b.player_pawn(&mut self.world.vm)?;
+        if self.episode.active || !player::is_injured_state(&self.world.vm, pawn)? {
+            return Ok(());
+        }
+        let now = self.world_now()?;
+        self.injuries = self
+            .injuries
+            .checked_add(1)
+            .ok_or_else(|| error("combat-run: too many injuries"))?;
+        let vm = &mut self.world.vm;
+        let mut e = Episode::new();
+        e.active = true;
+        e.number = self.injuries;
+        e.down_at = now;
+        e.total = player::number_of(vm, pawn, "TotalBleedoutTime")?;
+        e.successive = player::number_of(vm, pawn, "NumSuccessiveInjuries")?;
+        let (n, total, successive) = (e.number, e.total, e.successive);
+        self.episode = e;
+        self.row(&format!("down.total.{n}"), total);
+        self.row(&format!("down.successive.{n}"), successive);
+        Ok(())
+    }
+
+    /// Game time in frames (C++ `bleed`): time moves on, then, in the injured state, the callbacks that are due and
+    /// the script `Tick`. A frame's script error is recorded (the bridge's guard) and the next frame runs.
+    fn bleed(&mut self, b: &dyn PlayerBridge, seconds: f64, dt: f64) -> Result<(), VmError> {
+        if dt <= 0.0 || dt.is_nan() {
+            return Err(error("combat-run: bleed: the frame time must be positive"));
+        }
+        let frames = player::frames(seconds, dt)?;
+        for _ in 0..frames.max(0) {
+            self.advance_time(dt)?;
+            let now = self.world_now()?;
+            self.track_down()?;
+            let n = self.episode.number.to_string();
+            let controller = b.player_controller();
+            let pawn = b.player_pawn(&mut self.world.vm)?;
+            let saved = get(&mut self.world.vm, controller, "Pawn")?;
+            if saved.is_some() {
+                set(&mut self.world.vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+            }
+            let frame = self.bleed_frame(b, pawn, now, dt, &n);
+            if let Some(v) = saved {
+                set(&mut self.world.vm, controller, "Pawn", v)?;
+            }
+            if let Err(e) = frame {
+                self.script_errors.push(format!("mission script: {}", error_text(&e)));
+            }
+        }
+        Ok(())
+    }
+
+    /// One frame's body of [`Run::bleed`], with the controller's `Pawn` set to the player's.
+    fn bleed_frame(&mut self, b: &dyn PlayerBridge, pawn: ObjRef, now: f64, dt: f64, n: &str) -> Result<(), VmError> {
+        let injured = |run: &Run| player::is_injured_state(&run.world.vm, pawn);
+        if self.episode.active && injured(self)? {
+            if !self.episode.targeted && now - self.episode.down_at >= player::SPECIAL_MOVE_END - player::EPSILON {
+                player::call_state(&mut self.world.vm, pawn, "SwitchToSidearm", Vec::new())?;
+                self.episode.targeted = true;
+                self.episode.targeted_at = now;
+            }
+            // N5: the frame time as the script's float.
+            let tick = crate::hit::access::to_f32(dt);
+            player::call_state(&mut self.world.vm, pawn, "Tick", vec![Value::Float(tick)])?;
+            let vm = &mut self.world.vm;
+            if self.episode.dead_at < 0.0 && player::number_of(vm, pawn, "InjuredDeadState")? >= 1.0 {
+                self.episode.dead_at = now;
+                // The script's own timer at that frame: the bleed-out total plus the part of the last frame past it.
+                let over = player::number_of(vm, pawn, "flInjuredTargetedTime")? - self.episode.total;
+                self.row(&format!("down.bleed_over.{n}"), over);
+                if self.episode.targeted_at >= 0.0 {
+                    let wall = now - self.episode.targeted_at;
+                    self.row(&format!("down.bleed_wall.{n}"), wall);
+                }
+            }
+            if self.episode.dead_at >= 0.0
+                && !self.episode.ragdolled
+                && injured(self)?
+                && now - self.episode.dead_at >= player::RAGDOLL_DELAY - player::EPSILON
+            {
+                player::call_state(&mut self.world.vm, pawn, "InjuredDeathAnimDone", Vec::new())?;
+                self.episode.ragdolled = true;
+            }
+            if self.episode.dead_at >= 0.0
+                && !self.episode.camera_ended
+                && injured(self)?
+                && player::number_of(&mut self.world.vm, pawn, "bInjuredDeadCameraActive")? != 0.0
+            {
+                // The camera's per-frame view request (out: location, rotation, field of view); the script ends the
+                // camera (EndInjuredDeadCamera -> InjuredRespawn) when its time is up.
+                let tick = crate::hit::access::to_f32(dt);
+                player::call_state(&mut self.world.vm, pawn, "CalcInjuredDeadCamera", vec![Value::Float(tick)])?;
+                if player::number_of(&mut self.world.vm, pawn, "bInjuredDeadCameraActive")? == 0.0 {
+                    self.episode.camera_ended = true;
+                    let since = now - self.episode.dead_at;
+                    self.row(&format!("down.camera.{n}"), since);
+                }
+            }
+        }
+        if self.episode.active && !injured(self)? {
+            // The state ended inside this frame: a second wind, or the respawn.
+            self.episode.active = false;
+            let health = number(&self.call(pawn, "GetHealth", Vec::new())?.ret);
+            let max = number(&self.call(pawn, "GetMaxHealth", Vec::new())?.ret);
+            let ratio = health / max.max(1e-9);
+            let key = if self.episode.camera_ended {
+                "down.respawn_health."
+            } else {
+                "down.second_wind_health."
+            };
+            self.row(&format!("{key}{n}"), ratio);
+            if self.episode.camera_ended {
+                self.respawn_at = now;
+            }
+        }
+        if self.respawn_at >= 0.0 && now - self.respawn_at >= player::RESPAWN_DIALOG_DELAY - player::EPSILON {
+            self.respawn_at = -1.0;
+            let vm = &mut self.world.vm;
+            let info = player::replication_info(vm, b.player_controller())?;
+            let cash = crate::down::currency_on_hand(vm, info, 0)?;
+            player::call_state(vm, pawn, "ShowRespawnDialog", Vec::new())?;
+            let after = crate::down::currency_on_hand(&mut self.world.vm, info, 0)?;
+            self.fee_rows.push(Fee {
+                injury: n.to_string(),
+                cash,
+                charged: cash.checked_sub(after).ok_or_else(|| error("combat-run: the fee is out of range"))?,
+            });
+        }
+        Ok(())
     }
 
     /// A pawn's state (C++ `stateJson`): the natives' answers, the plain variables, the health reference and every
@@ -1666,10 +2115,25 @@ impl Run {
             };
             let _ = write!(
                 out,
-                "{}{}:{{\"award\":{}}}",
+                "{}{}:{{\"award\":{}",
                 if first { "" } else { "," },
                 json_quote(&id),
                 num(k.award)
+            );
+            if let Some(c) = k.credit {
+                let _ = write!(out, ",\"credit\":{c}");
+            }
+            out.push('}');
+            first = false;
+        }
+        for fee in &self.fee_rows {
+            let _ = write!(
+                out,
+                "{}{}:{{\"cash\":{},\"fee\":{}}}",
+                if first { "" } else { "," },
+                json_quote(&format!("down.fee.{}", fee.injury)),
+                fee.cash,
+                fee.charged
             );
             first = false;
         }
@@ -1760,26 +2224,30 @@ pub fn hit_json(report: &HitReport) -> String {
     )
 }
 
-/// The refusal of a run with a `maya` step, or `None`: the C++ builds the mission bridge for it, and the Rust bridge
-/// (W6-MISSION, `ow_mission::bridge`) is not wired into this run yet (module documentation).
-pub fn needs_bridge(steps: &[String]) -> Option<VmError> {
-    steps.iter().any(|s| s.starts_with("maya:")).then(|| {
-        NotYet::not_ported(
-            "a --combat-run with a maya step: the W6-MISSION bridge's player is not wired into --combat-run yet (a follow-up lane wires maya, tick, bleed and cash)",
-            RECORD,
-        )
-        .into()
-    })
+/// Whether the run is built over the mission bridge (C++ `combatRun`: a `maya` step is among the steps). The caller
+/// builds the bridge (`ow-cli`, over the stock Fire mission, as the C++) and passes it to [`combat_run_with`].
+pub fn wants_bridge(steps: &[String]) -> bool {
+    steps.iter().any(|s| s.starts_with("maya:"))
 }
 
-/// Runs `steps` on `world` and returns the report and whether a step failed (C++ `combatRun`). A run with a `maya`
-/// step needs the mission bridge, not wired yet, and is refused (`NotYet`) before any step.
+/// The C++ mission the bridge of a `maya` run is built over: it only gives the bridge its curve and globals; nothing of
+/// it is played (package, path).
+pub const BRIDGE_MISSION: (&str, &str) = ("Startup", "GD_Z1_RockPaperGenocide.M_RockPaperGenocide_Fire");
+
+/// Runs `steps` on `world` and returns the report and whether a step failed (C++ `combatRun`), without the bridge. A
+/// run with a `maya` step needs it: [`combat_run_with`].
 pub fn combat_run(world: World, steps: &[String]) -> Result<(String, bool), VmError> {
-    if let Some(refused) = needs_bridge(steps) {
-        return Err(refused);
-    }
+    combat_run_with(world, steps, None)
+}
+
+/// [`combat_run`] over the mission bridge's player when `bridge` is given.
+pub fn combat_run_with(
+    world: World,
+    steps: &[String],
+    bridge: Option<Rc<dyn PlayerBridge>>,
+) -> Result<(String, bool), VmError> {
     let started = Instant::now();
-    let mut run = Run::new(world)?;
+    let mut run = Run::with_bridge(world, bridge)?;
     for step in steps {
         run.apply(step);
     }

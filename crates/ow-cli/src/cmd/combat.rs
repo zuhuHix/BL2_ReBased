@@ -5,7 +5,11 @@
 //! cooked folder, applies the steps and prints the JSON report of `ow_combat::run` (one line), exit 0 when no step
 //! failed and 1 when one did. The source package loads first, as the C++ loads it before it reads the mode; the
 //! package argument is any package (the archetypes name their own). Errors before the run print `ow-package:
-//! <message>` with exit 1; a `NotYet` (a run with a `maya` step, whose W6-MISSION bridge is not wired in yet) exits 3.
+//! <message>` with exit 1; a `NotYet` before the run exits 3.
+//!
+//! **The mission bridge** (lane W6-COMBAT-RUN2). A run with a `maya` step is built over W6-MISSION's bridge, as the
+//! C++ `combatRun`: the stock Fire mission of `Startup` gives the bridge its curve and globals (nothing of it is
+//! played), and [`MissionBridge`] hands the run the bridge's player (`ow_combat::run::PlayerBridge`).
 //!
 //! **The world.** A definition store over the cooked folder (first holder in scan order), the standard attribute
 //! system, the Core natives, and `World::new` with the combat pack (`ow_combat::hit::Pack`) after the world's own
@@ -29,10 +33,15 @@ use ow_balance::types::{
     AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
     Playthrough,
 };
-use ow_core::ParityMode;
+use ow_behavior::provider::BehaviorError;
+use ow_combat::run::{BridgeGain, PlayerBridge};
+use ow_core::{ObjectPath, PackageName, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
+use ow_mission::bridge::{Gain, MissionScript, PLAYER_CLASS_PATH};
+use ow_mission::tracker::MissionSystem;
 use ow_object::heap::ObjectSpace;
+use ow_object::ids::ObjRef;
 use ow_package::package::Package;
 use ow_vm::api::{NativePack, StubPolicy, Vm};
 use ow_vm::error::VmError;
@@ -118,6 +127,95 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     })
 }
 
+/// The mission bridge's player for the run (module documentation).
+pub struct MissionBridge {
+    script: MissionScript,
+}
+
+/// A bridge error as a VM error (its `NotYet` stays one).
+fn mission_error(e: BehaviorError) -> VmError {
+    match e {
+        BehaviorError::Vm(v) => v,
+        other => VmError::Script {
+            function: "mission script bridge".into(),
+            message: other.to_string(),
+        },
+    }
+}
+
+impl MissionBridge {
+    /// Builds the bridge on `world` (which must have no actors yet) over the C++ mission
+    /// (`ow_combat::run::BRIDGE_MISSION`).
+    pub fn new(world: &mut World) -> Result<MissionBridge, VmError> {
+        let (package, path) = ow_combat::run::BRIDGE_MISSION;
+        let package = PackageName::parse(package).map_err(|e| VmError::Script {
+            function: "combat-run".into(),
+            message: e.to_string(),
+        })?;
+        let mission = MissionSystem::new(&mut world.vm, &package, path).map_err(mission_error)?;
+        let script = MissionScript::new(world, &mission).map_err(mission_error)?;
+        Ok(MissionBridge { script })
+    }
+}
+
+impl PlayerBridge for MissionBridge {
+    fn player_controller(&self) -> ObjRef {
+        self.script.player_controller()
+    }
+
+    fn player_pawn(&self, vm: &mut Vm) -> Result<ObjRef, VmError> {
+        self.script.player_pawn(vm).map_err(mission_error)
+    }
+
+    fn set_player_experience(&self, vm: &mut Vm, level: i32, experience: i64) -> Result<(), VmError> {
+        self.script
+            .set_player_experience(vm, level, experience)
+            .map_err(mission_error)
+    }
+
+    fn update_experience_pool(&self, vm: &mut Vm) -> Result<(), VmError> {
+        self.script.update_experience_pool(vm).map_err(mission_error)
+    }
+
+    /// The C++ kinds by name; the bridge produces no health gains (its module documentation).
+    fn take_gains(&self) -> Vec<BridgeGain> {
+        self.script
+            .take_gains()
+            .into_iter()
+            .map(|g| match g {
+                Gain::Experience(n) => BridgeGain::new("experience", n, 0.0, 0.0),
+                Gain::Level(n) => BridgeGain::new("level", n, 0.0, 0.0),
+                Gain::SkillPoints(n) => BridgeGain::new("skill_points", n, 0.0, 0.0),
+                _ => BridgeGain::new("unknown", 0, 0.0, 0.0),
+            })
+            .collect()
+    }
+
+    fn player_level(&self, vm: &Vm) -> Result<i32, VmError> {
+        self.script.player_level(vm).map_err(mission_error)
+    }
+
+    fn experience_pool(&self) -> f32 {
+        self.script.experience_pool()
+    }
+
+    fn errors(&self) -> Vec<String> {
+        self.script.errors()
+    }
+
+    /// The player's class by its stock path (the definition store's first holder; the C++ copies it from the
+    /// mission's package, `Startup`).
+    fn player_class(&self, vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
+        let path = ObjectPath::parse(PLAYER_CLASS_PATH).map_err(|e| VmError::Script {
+            function: "combat-run".into(),
+            message: e.to_string(),
+        })?;
+        let found = vm.defs.find(&mut vm.space, &path);
+        vm.log.extend(vm.defs.take_log());
+        found.map_err(VmError::Def)
+    }
+}
+
 fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure> {
     let source = args
         .first()
@@ -127,11 +225,13 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
         return Err(Failure::Message(USAGE.to_string()));
     }
     let steps = &args[4..];
-    if let Some(refused) = ow_combat::run::needs_bridge(steps) {
-        return Err(vm_failure(refused));
-    }
-    let world = world(Path::new(&args[3]), mode).map_err(vm_failure)?;
-    ow_combat::run::combat_run(world, steps).map_err(vm_failure)
+    let mut world = world(Path::new(&args[3]), mode).map_err(vm_failure)?;
+    let bridge: Option<Rc<dyn PlayerBridge>> = if ow_combat::run::wants_bridge(steps) {
+        Some(Rc::new(MissionBridge::new(&mut world).map_err(vm_failure)?))
+    } else {
+        None
+    };
+    ow_combat::run::combat_run_with(world, steps, bridge).map_err(vm_failure)
 }
 
 #[cfg(test)]

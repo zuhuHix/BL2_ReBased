@@ -232,6 +232,21 @@ fn combat_run_equals_the_cxx_binary_on_the_invented_packages() {
     }
 }
 
+/// Replay determinism (lane W6-COMBAT-RUN2): each list run twice in the same process, in each mode, prints the same
+/// line once the two timing fields are removed.
+#[test]
+fn every_list_replays_to_the_same_report_in_the_same_process() {
+    let install = Install::new();
+    for (name, steps, _, _) in CASES {
+        for mode in [ParityMode::Reference, ParityMode::Off] {
+            let (first, a) = report(&install, steps, mode);
+            let (second, b) = report(&install, steps, mode);
+            assert_eq!(a, b, "{name} ({mode:?})");
+            assert_eq!(normalize(&first), normalize(&second), "{name} ({mode:?})");
+        }
+    }
+}
+
 #[test]
 fn off_mode_refuses_each_attribute_the_toy_classes_do_not_declare() {
     let install = Install::new();
@@ -252,14 +267,10 @@ fn off_mode_refuses_each_attribute_the_toy_classes_do_not_declare() {
 }
 
 #[test]
-fn a_run_with_a_maya_step_is_not_yet_before_any_step() {
-    let args: Vec<String> = ["ToyPawns.upk", "--combat-run", "--cooked", "x", "maya:8"]
+fn a_run_with_a_maya_step_is_built_over_the_mission_bridge() {
+    let args: Vec<String> = ["ToyPawns.upk", "--combat-run", "--cooked", "x", "spawn:dummy:1", "maya:8"]
         .map(String::from)
         .to_vec();
-    match ow_combat::run::needs_bridge(&args[4..]) {
-        Some(ow_vm::error::VmError::NotYet(n)) => {
-            assert!(n.to_string().contains("W6-MISSION"), "{n}")
-        }
-        other => panic!("{other:?}"),
-    }
+    assert!(ow_combat::run::wants_bridge(&args[4..]));
+    assert!(!ow_combat::run::wants_bridge(&args[4..5]));
 }
