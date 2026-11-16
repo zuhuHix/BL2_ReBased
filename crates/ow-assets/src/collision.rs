@@ -26,10 +26,13 @@
 //! - an `ElemBox` that is tagged but has no `Min`/`Max` is refused; the tool skips an empty (falsy) `ElemBox`;
 //! - an `AggGeom` tag that did not decode as a struct is refused; the tool sees only decoded tags, so for it the body
 //!   simply has no aggregate and no hulls;
-//! - an aggregate field outside the four shape lists is accepted only when it is `false`, `0` or byte `0`; the tool
-//!   accepts any falsy value (`0.0`, an empty string or list, `None`).
 //!
-//! None of the four occurs on Sanctuary (no body was refused there).
+//! **Different from `hulls()` both ways:** an aggregate field outside the four shape lists is accepted only when it is
+//! `false`, `0` or byte `0`. The tool's `shapes()` iterates every aggregate field, so it accepts an empty string or
+//! list (refused here) and raises an uncaught `TypeError` on `0`, `0.0`, `False` or `None` (accepted here for the
+//! first three).
+//!
+//! None of these four cases occurs on Sanctuary (no body was refused there).
 //!
 //! Which of these shapes the game's pawn movement tests against is UNVERIFIED in general. One live observation
 //! supports it for Sanctuary's stair ramps: the pawn's floor normal there equals the ramp hull's
