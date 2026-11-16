@@ -2520,6 +2520,14 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
     s.native = 0;
     t.function(native_class, "GetAttributeContext", &params, Some(("Object", object)), &[], &s, |_| None);
     t.class("Plain", object);
+    // Parameters under other names: refused, not given zeros.
+    let renamed = t.class("Renamed", object);
+    let other = [typed("Definition"), typed("AttributeContextSource")];
+    script(&mut t, renamed, "GetAttributeContext", &other, Some(("Object", object)), &[], |ids, a| {
+        returns(a, |a| {
+            a.local(ids.get("AttributeContextSource"));
+        })
+    });
     let bytes = t.build();
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let mut r = run_on(&bytes, mode);
@@ -2539,6 +2547,13 @@ fn a_script_context_resolver_runs_its_get_attribute_context() {
             matches!(vm.script_context(count, attr, Some(source)), Err(AttrError::BadData { .. })),
             "{mode:?}"
         );
+        let renamed = make(vm, "Core.Renamed");
+        match vm.script_context(renamed, attr, Some(source)) {
+            Err(AttrError::BadData { reason }) => {
+                assert!(reason.contains("has no parameter Attribute"), "{reason}")
+            }
+            other => panic!("{mode:?}: {other:?}"),
+        }
         for path in ["Core.Native", "Core.Plain"] {
             let o = make(vm, path);
             match vm.script_context(o, attr, Some(source)) {

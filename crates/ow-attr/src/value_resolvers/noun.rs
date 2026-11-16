@@ -72,9 +72,9 @@ const NOUN_STATE: &str = "NounState";
 
 pub(crate) struct Noun;
 
-/// The world's parity mode: its store's. A world without a store runs the Rust rules (`Off`).
+/// The world's parity mode ([`crate::eval::parity`]).
 fn mode(cx: &mut EvalCx<'_>) -> ParityMode {
-    cx.world.parts().defs.map_or(ParityMode::Off, |d| d.mode())
+    crate::eval::parity(cx)
 }
 
 /// Reference mode's writes: the C++ reading has none.

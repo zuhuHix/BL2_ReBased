@@ -16,8 +16,13 @@ ignored installed test `crates/ow-skills/src/phaselock/installed.rs` (both modes
 `NotYet { LayerAbsent("ow-vm") }`, which is what every world that runs no script gives (an offline world, the
 roll's adapter `ow_items::RollWorld`, which is not changed and so answers that `NotYet` during a roll, unit-test
 worlds). `ow-vm`'s `impl AttrWorld for Vm` finds the function by virtual lookup on the resolver's class and calls it with
-the two arguments by parameter name. A class with no such function, or a native one, is `NotYet { NotRead }`; an answer
-that is not an object reference is bad data; whatever the script reaches answers as the VM answers any call. This is
+the two arguments by parameter name; a function that lacks either name is bad data, never given a zero (review r1 of
+PR #360). A class with no such function, or a native one, is `NotYet { NotRead }`; an answer that is not an object
+reference is bad data; whatever the script reaches answers as the VM answers any call. **Under a permissive stub
+policy** (`LogAndZero`, the Reference CLI runs) an unbound native inside a context script gives its zero value, so the
+chain may end as None and the attribute keep its constant; under the strict policy (`Refuse`) the same call is an
+error, which reaches the caller as `AttrError::World`. Section 6.1 of ARCHITECTURE.md lists the two Reference-only
+stand-ins of this lane. This is
 the same pattern as `attribute_changed`, which already runs script through the world. No crate edge changes
 (`ow-vm` already depends on `ow-attr`); `tests/crate_edges_test.py` passes.
 
@@ -29,8 +34,12 @@ the same pattern as `attribute_changed`, which already runs script through the w
   designer attribute for that definition, else None. That agrees with NATIVE_ATTRIBUTES.md section 5.
 - `ParityMode::Off`: the script runs. `ParityMode::Reference`, the plain form only: the C++ stand-in, which treats the
   class as always resolving and keeps the object the chain held before it (`src/progression.cpp:85-87`, the 6.1
-  stand-in this lane was asked to keep). The C++ has no reading of the `ByName` form (it refuses the class), so that
-  form runs the script in both modes. A None source is None in both modes.
+  stand-in this lane was asked to keep). That step never ends the chain in the C++, even on null; so in Reference a None
+  source falls back to the engine globals object, as `NoContextNeeded` does, and the value-side stand-in below still
+  gives the `BaseValue` (review r1 of PR #360; test
+  `a_designer_base_value_attribute_with_a_none_source_gives_its_base_value_in_reference`). The C++ has no reading of
+  the `ByName` form (it refuses the class), so that form runs the script in both modes. In Off, and for `ByName`, a
+  None source is None.
 - **The value-side stand-in, Reference only.** The C++ also answers a `WillowGame.DesignerAttributeDefinition`'s value
   as its own `BaseValue`, evaluated on the context (`src/progression.cpp:117`). Without it, the Reference context (the
   previous object) would be read by the definition's value chain, which reads the designer object, and the Reference

@@ -1074,6 +1074,18 @@ impl AttrWorld for Vm {
             .into());
         };
         let params = self.function(function).map(|d| d.params.clone()).unwrap_or_default();
+        // Both arguments are bound by name; a function that lacks either name is refused rather than given a zero
+        // (review r1 of PR #360).
+        for wanted in ["Attribute", "AttributeContextSource"] {
+            if !params.iter().any(|d| self.space.names.text(d.name).as_ref() == wanted) {
+                return Err(AttrError::BadData {
+                    reason: format!(
+                        "{class_path}.GetAttributeContext has no parameter {wanted}"
+                    )
+                    .into(),
+                });
+            }
+        }
         let args = params
             .iter()
             .map(|d| match self.space.names.text(d.name).as_ref() {
