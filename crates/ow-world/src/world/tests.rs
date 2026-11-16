@@ -259,7 +259,12 @@ fn package() -> Vec<u8> {
     };
 
     let world_info = t.class("WorldInfo", actor);
-    for f in ["TimeSeconds", "RealTimeSeconds", "TimeDilation"] {
+    for f in [
+        "TimeSeconds",
+        "RealTimeSeconds",
+        "TimeDilation",
+        "DeltaSeconds",
+    ] {
         t.prop("Float", world_info, f, 0, 0);
     }
     t.prop("Byte", world_info, "NetMode", 0, 0);
@@ -882,6 +887,11 @@ fn the_tick_writes_world_time_and_copies_the_time_dilation() {
         assert_eq!(
             field(&x.w.vm.space, wi, "RealTimeSeconds").unwrap(),
             Value::Float(0.2)
+        );
+        // The frame's dilated delta (lane W5-MAPLOAD).
+        assert_eq!(
+            field(&x.w.vm.space, wi, "DeltaSeconds").unwrap(),
+            Value::Float(0.1)
         );
         let p = x.spawn("Probe");
         assert_eq!(
