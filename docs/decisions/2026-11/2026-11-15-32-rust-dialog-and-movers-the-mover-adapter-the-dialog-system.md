@@ -93,24 +93,27 @@ stays UNVERIFIED as a game rule.
   missing exports, a short command line and a wrong option, both commands): 25 of 25 identical in exit code, stdout
   and stderr. `tests/vm_test.py`'s `--mover-probe` site passes on the Rust binary. `tests/mover_parity_test.py` (in
   `mover.txt` and ctest `mover-rust`) builds an invented install, a toy mover with a toy Kismet sequence, and diffs both
-  commands on both binaries: 15 of 15 cases as expected, 13 byte-identical (among them an object constant naming an
-  import no file holds, and a notification that does not decode) and 2 checked differences. One is the stub
-  policy (a finish notification reaching an unbound native: both fail it; the C++ text is the logged `UNIMPLEMENTED`,
-  the Rust one `unbound native`, and the steps differ because the C++ runs on). The other is an export that is not an
-  actor bound as the placed actor: both fail the binding with nothing on stdout; the C++ reads it from the 26-byte prefix
-  and fails on what it finds ("invalid FName"), the store derives the export's own prefix and refuses the mismatch.
+  commands on both binaries: 15 of 15 cases as expected, 12 byte-identical (among them an object constant naming an
+  import no file holds, and a notification that does not decode) and 3 checked differences of 2 kinds. One kind is
+  the stub policy (1 case: a finish notification reaching an unbound native: both fail it; the C++ text is the
+  logged `UNIMPLEMENTED`, the Rust one `unbound native`, and the steps differ because the C++ runs on). The other is
+  an export that is not an actor bound as the placed actor (2 cases, one per command): both fail the binding with
+  nothing on stdout; the C++ reads it from the 26-byte prefix and fails on what it finds ("invalid FName"), the store
+  derives the export's own prefix and refuses the mismatch.
   `mover.txt` also holds three package-free diff lines (a missing source package).
-- **The installed game's movers** (output under `local/` only). The installed packages hold 3,249 `InterpActor` and
-  1,006 `SeqAct_Interp` exports, 120 packages with both. Bounded run: every one in the Sanctuary packages, up to 3 of
-  each elsewhere; a probe pairs an actor with its package's first action, an event pairs each action with the first
-  actor. Under `ParityMode::Reference`: `--mover-probe` 498 of 498 identical to the C++ (exit code, stdout, stderr).
-  `--mover-event` on the Sanctuary packages after the wiring: for each of the 113 `SeqAct_Interp` exports of the
-  Sanctuary packages that share a package with an `InterpActor` (2 more have none), every remote-event name of its own
-  sequence (768) plus one unmatched name, with the package's first `InterpActor`: 881 of 881 identical to the C++ in
-  exit code, stdout and stderr (Rust under `OW_PARITY=reference`). 29 of them request motion (22 play, 7 reverse) and
-  so also run both notifications and the motion's end; 134 carry error lines (unsupported ops, unresolved links), the
-  same on both. Under `ParityMode::Off` (a partial run, the first 19
-  packages by name): 504 of 504 differ, all for one cause. Building `Engine.Actor`'s class defaults logs
+- **The installed game's movers** (output under `local/` only). Every count below is from the release binaries
+  built from commit d1b403f's runtime code (the review r2 commit after it changes only tests and documentation),
+  run on 2026-11-16, the C++ `ow-package` of the same branch beside it. The installed packages hold 3,249
+  `InterpActor` and 1,006 `SeqAct_Interp` exports, 120 packages with both. Bounded run (866 cases): every one in the
+  Sanctuary packages, up to 3 of each elsewhere; a probe pairs an actor with its package's first action, an event
+  pairs each action with the first actor and sends an unmatched name. Under `ParityMode::Reference`: `--mover-probe`
+  498 of 498 and `--mover-event` 368 of 368 identical to the C++ (exit code, stdout, stderr). Sanctuary
+  `--mover-event` with real names: for each of the 113 `SeqAct_Interp` exports of the Sanctuary packages that share
+  a package with an `InterpActor` (2 more have none), every remote-event name of its own sequence (768) plus one
+  unmatched name, with the package's first `InterpActor`: 881 of 881 identical (Rust under `OW_PARITY=reference`).
+  29 of them request motion (22 play, 7 reverse) and so also run both notifications and the motion's end; 134 carry
+  error lines (unsupported ops, unresolved links), the same on both. Under `ParityMode::Off`, the same 866 cases:
+  866 of 866 differ, all for one cause. Building `Engine.Actor`'s class defaults logs
   `defaults: skipped Actor.ReplicatedCollisionType (ByteProperty)` (an enum value its declared enum lacks, the Off
   rule of decision 2026-11-15-08), and the mover's C++ check "loading emitted a diagnostic" refuses the binding. The
-  check is kept, not loosened; the open question belongs to the decoder.
+  check is kept, not loosened; the open question belongs to the decoder (a hub follow-up).
