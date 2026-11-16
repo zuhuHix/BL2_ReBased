@@ -439,6 +439,13 @@ impl Fx {
                     ("ValueIfNotMatched", PropKind::Struct(aid)),
                 ],
             ),
+            (
+                "GearboxFramework.NounAttributeValueResolver",
+                vec![
+                    ("DefaultValue", PropKind::Struct(aid)),
+                    ("ReplicationStrategy", byte()),
+                ],
+            ),
             (NO_CONTEXT, vec![]),
             (
                 "Test.TargetContextResolver",
