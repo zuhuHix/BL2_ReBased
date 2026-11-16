@@ -86,11 +86,16 @@ pub fn vertical_fov_deg() -> f64 {
 /// Projection times view for `view` in a `width` x `height` drawable (reverse-Z, no far plane), through
 /// `crate::frame`. `None` for a zero size or a view the boundary refuses.
 pub fn view_projection(view: &ViewPose, width: u32, height: u32) -> Option<Mat4> {
+    view_projection_near(view, width, height, NEAR)
+}
+
+/// [`view_projection`] with another near plane, uu (the first-person arms use their own: `crate::anim::arms`).
+pub fn view_projection_near(view: &ViewPose, width: u32, height: u32, near: f32) -> Option<Mat4> {
     if width == 0 || height == 0 {
         return None;
     }
     let aspect = width as f32 / height as f32;
-    let projection = frame::perspective_reverse_z_infinite(vertical_fov_deg() as f32, aspect, NEAR)?;
+    let projection = frame::perspective_reverse_z_infinite(vertical_fov_deg() as f32, aspect, near)?;
     Some(projection.mul(&frame::view_matrix(view.eye, view.rotation)?))
 }
 
