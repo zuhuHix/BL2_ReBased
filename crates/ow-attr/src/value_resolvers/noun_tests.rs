@@ -303,6 +303,31 @@ fn reference_needs_the_attribute_as_the_outer() {
     assert_eq!(missing(n.value(attr, mind).unwrap_err()), Missing::NotRead);
 }
 
+#[test]
+fn reference_needs_the_outer_to_list_the_resolver() {
+    let mut n = fixture();
+    n.mode(ParityMode::Reference);
+    // A owns the resolver but lists none; B lists it but does not own it.
+    let ctx = n.fx.no_context();
+    let a = n.fx.attr("Attribute_A", vec![ctx], vec![]);
+    let c = n.fx.by_path("GearboxFramework.NounAttributeValueResolver");
+    let r =
+        n.fx.w
+            .space
+            .alloc(c, "NounAttributeValueResolver_0", Some(a), Origin::Runtime)
+            .unwrap();
+    let k = n.fx.k(2.0);
+    let p = n.fx.w.space.prop(c, "DefaultValue").unwrap();
+    n.fx.w.space.write(r, PropAddr::scalar(p), k).unwrap();
+    let ctx = n.fx.no_context();
+    let b = n.fx.attr("Attribute_B", vec![ctx], vec![r]);
+    let three = n.fx.k(3.0);
+    let class = n.ai_class(vec![(a, three)]);
+    let mind = n.mind(Some(class), vec![]);
+    assert_eq!(missing(n.value(b, mind).unwrap_err()), Missing::NotRead);
+    assert_eq!(missing(n.base(b, mind).unwrap_err()), Missing::NotRead);
+}
+
 // ----- Off mode: the native rule waits for a clean-room implementation -----
 
 fn not_ported_awaiting(r: Result<f32, AttrError>) {
