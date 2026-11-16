@@ -57,6 +57,7 @@ fn triangle(against: bool) -> MeshData {
         position,
         normal,
         uv: [0.0, 0.0],
+        lightmap_uv: [position[1] / 200.0 + 0.25, position[2] / 200.0 + 0.25],
     })
     .to_vec();
     let indices = if against {
@@ -72,6 +73,7 @@ fn triangle(against: bool) -> MeshData {
             first_index: 0,
             index_count: 3,
         }],
+        lightmap_uvs: true,
     }
 }
 
@@ -84,12 +86,14 @@ fn plan(mesh: MeshData, scale3d: [f32; 3], two_sided: bool) -> (DrawPlan, Affine
         mesh: 0,
         section: 0,
         material: None,
+        lighting: None,
         two_sided,
         mirrored: affine.mirrors(),
     };
     let plan = DrawPlan {
         meshes: vec![mesh],
         slots: Vec::new(),
+        lightings: Vec::new(),
         batches: vec![Batch {
             key,
             instances: vec![Instance::new(&affine)],
@@ -212,7 +216,7 @@ fn the_upload_counts_what_it_sends() {
     let u = r.upload;
     assert_eq!(
         (u.meshes, u.vertex_bytes, u.index_bytes, u.instance_bytes),
-        (1, 96, 12, 112)
+        (1, 120, 12, 176)
     );
     assert_eq!((u.textures, u.textures_failed, u.texture_bytes), (1, 1, 84));
     assert_eq!((u.fallbacks, u.grey_materials), (1, 1));
@@ -293,6 +297,7 @@ fn the_scenes_lights_set_the_exposure() {
         color: [1.0, 0.5, 0.5],
         brightness: 4.0,
         tags_at: 0,
+        light_guid: None,
     });
     lights.sky = Some(SkyLight {
         path: "K".into(),
@@ -375,6 +380,7 @@ fn centre_sorted_from(
                 mesh: 0,
                 section: 0,
                 material: Some(u32::try_from(i).unwrap()),
+                lighting: None,
                 two_sided: true,
                 mirrored: false,
             },
@@ -384,6 +390,7 @@ fn centre_sorted_from(
     let plan = DrawPlan {
         meshes: vec![triangle(true)],
         slots,
+        lightings: Vec::new(),
         batches,
         stats: Default::default(),
     };
@@ -575,4 +582,134 @@ fn the_report_quantiles_use_the_nearest_rank() {
     assert_eq!(r.quantile(0.5), Some(Duration::from_millis(10)));
     assert_eq!(r.quantile(0.95), Some(Duration::from_millis(19)));
     assert_eq!(r.quantile(1.0), Some(Duration::from_millis(20)));
+}
+
+/// The centre pixel of the triangle 200 uu ahead, two-sided, its material lit and white, with `light` and the
+/// lighting slot `slot`; every `Tex.<n>` (diffuse or lighting) is the solid BGRA colour `colours[n]`.
+fn lit_centre(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    light: crate::draw::InstanceLight,
+    slot: crate::draw::LightingSlot,
+    lighting: Lighting,
+    colours: &[[u8; 4]],
+) -> [u8; 4] {
+    let (mut p, _) = plan(triangle(true), [1.0; 3], true);
+    p.slots = vec![slot_of("Tex.0")];
+    p.lightings = vec![slot];
+    p.batches[0].key.material = Some(0);
+    p.batches[0].key.lighting = Some(0);
+    p.batches[0].instances[0].light = light;
+    let colours = colours.to_vec();
+    let mut source = |path: &str| -> Result<TextureAsset, String> {
+        let index: usize = path
+            .trim_start_matches("Tex.")
+            .parse()
+            .map_err(|_| "a path")?;
+        solid_texture(colours[index])
+    };
+    let mut r = SceneRenderer::new(
+        device,
+        queue,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        &p,
+        lighting,
+        &mut source,
+    )
+    .unwrap();
+    let camera = FlyCamera::at([0.0; 3], Rotator::default());
+    let vp = camera.view_projection(32, 32).unwrap();
+    let rgba = r.capture(device, queue, (32, 32), &vp, [0.0; 3]).unwrap();
+    let px = &rgba[(16 * 32 + 16) * 4..][..4];
+    [px[0], px[1], px[2], px[3]]
+}
+
+/// A lit opaque slot whose diffuse is `path`.
+fn slot_of(path: &str) -> MaterialSlot {
+    slot(vec![DiffuseCandidate {
+        path: path.into(),
+        priority: 100,
+        stub: false,
+    }])
+}
+
+#[test]
+#[ignore = "needs a GPU adapter or the software fallback"]
+fn light_maps_and_shadow_maps_light_the_surface_as_the_fit_says() {
+    use crate::draw::{InstanceLight, LightMode, LightingSlot, ShadowMode};
+    let Some((device, queue, errors)) = headless() else {
+        panic!("no adapter, not even the software fallback");
+    };
+    // BGRA: white, mid grey, black, the shadow atlas's lit texel, its shadowed texel.
+    let colours = [
+        [255, 255, 255, 255],
+        [128, 128, 128, 255],
+        [0, 0, 0, 255],
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+    ];
+    // No sky, no sun: only what the light map gives, times exposure 1. Linear 128/255 is sRGB 188 on the target.
+    let dark = Lighting {
+        sun_direction: [-1.0, 0.0, 0.0],
+        sun: [0.0; 3],
+        sky_upper: [0.0; 3],
+        sky_lower: [0.0; 3],
+        exposure: 1.0,
+    };
+    let near =
+        |px: [u8; 4], want: [u8; 3]| px[..3].iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 3);
+    let rect = [1.0, 1.0, 0.0, 0.0];
+    let atlas = |c0: usize, c1: usize| LightingSlot {
+        textures: [Some(format!("Tex.{c0}")), Some(format!("Tex.{c1}"))],
+        ..Default::default()
+    };
+    let mut light = InstanceLight {
+        mode: LightMode::Texture,
+        lightmap_rect: rect,
+        scales: [[1.0; 3], [0.0; 3]],
+        ..Default::default()
+    };
+    // Coefficient 0 at scale 1.
+    let px = lit_centre(&device, &queue, light, atlas(1, 2), dark, &colours);
+    assert!(near(px, [188, 188, 188]), "{px:?}");
+    // Coefficient 1 at scale 0.5: linear 0.251, sRGB 137.
+    light.scales = [[1.0; 3], [0.5; 3]];
+    let px = lit_centre(&device, &queue, light, atlas(2, 1), dark, &colours);
+    assert!(near(px, [137, 137, 137]), "{px:?}");
+    // Without the light map (mode none), the same zero sky leaves the surface black.
+    light.mode = LightMode::None;
+    let px = lit_centre(&device, &queue, light, atlas(1, 1), dark, &colours);
+    assert!(near(px, [0, 0, 0]), "{px:?}");
+    // Per-vertex samples: B G R A, coefficient 0 red 128.
+    let vertex = LightingSlot {
+        samples: Some(vec![[0, 0, 128, 0, 0, 0, 0, 0]; 3]),
+        ..Default::default()
+    };
+    light.mode = LightMode::Vertex;
+    light.scales = [[1.0; 3], [1.0; 3]];
+    let px = lit_centre(&device, &queue, light, vertex, dark, &colours);
+    assert!(near(px, [188, 0, 0]), "{px:?}");
+    // The sun at full incidence (the triangle faces -X), half strength: a distance-field texel of 255 lets it
+    // through, one of 0 shadows it.
+    let sunny = Lighting {
+        sun: [0.502; 3],
+        ..dark
+    };
+    let shadowed = |texel: usize| LightingSlot {
+        textures: [Some("Tex.2".into()), Some("Tex.2".into())],
+        shadow: Some(format!("Tex.{texel}")),
+        samples: None,
+    };
+    let light = InstanceLight {
+        mode: LightMode::Texture,
+        lightmap_rect: rect,
+        shadow: ShadowMode::DistanceField,
+        shadow_rect: rect,
+        ..Default::default()
+    };
+    let px = lit_centre(&device, &queue, light, shadowed(3), sunny, &colours);
+    assert!(near(px, [188, 188, 188]), "{px:?}");
+    let px = lit_centre(&device, &queue, light, shadowed(4), sunny, &colours);
+    assert!(near(px, [0, 0, 0]), "{px:?}");
+    assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
 }

@@ -25,6 +25,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_host::camera::FlyCamera;
 use ow_host::draw::DrawPlan;
 use ow_host::lighting::SceneLights;
+use ow_host::lightmap::{self, SceneLighting};
 use ow_host::material::{Blend, MaterialLibrary, decode_texture};
 use ow_host::render::{DrawReport, Lighting, SceneDrawer};
 use ow_host::scene::{Scene, SceneAssets};
@@ -171,9 +172,10 @@ fn scene_window(
     // Lane H8: the materials' and lights' reads, then the plan with them; the named-only plan for the counts before.
     let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
     let lights = SceneLights::read(&mut defs, &mut space, &scene);
+    let baked = SceneLighting::read(&defs, &scene, lights.sun.as_ref().and_then(|s| s.light_guid));
     let materials_read = started.elapsed();
     let before = DrawPlan::build(&scene).stats;
-    let plan = DrawPlan::build_with(&scene, Some(&library));
+    let plan = DrawPlan::build_lit(&scene, Some(&library), Some(&baked));
     let planned = started.elapsed();
     let s = plan.stats;
     println!(
@@ -197,7 +199,8 @@ fn scene_window(
     }
     let l = &lights.lightmaps;
     println!(
-        "lightmaps (not decoded): {} LightMapTexture2D, {} ShadowMap2D, {} ShadowMap1D; the texture reader on the first: {}",
+        "lightmap exports: {} LightMapTexture2D, {} ShadowMap2D, {} ShadowMap1D; the lighting texture reader on the \
+         first: {}",
         l.light_map_textures,
         l.shadow_maps_2d,
         l.shadow_maps_1d,
@@ -206,6 +209,32 @@ fn scene_window(
             Some(Err(e)) => e.clone(),
             None => "none to try".to_string(),
         }
+    );
+    let c = &baked.census;
+    println!(
+        "baked lighting: {} components read, {} refused; {} texture light maps, {} per-vertex, {} none; {} shadowed; \
+         {} lighting textures; {} shadow vertex buffers not read",
+        c.parsed,
+        c.refused,
+        c.texture_light_maps,
+        c.vertex_light_maps,
+        c.no_light_map,
+        c.shadowed,
+        baked.textures.len(),
+        c.shadow_vertex_buffers
+    );
+    for e in baked.errors.iter().take(5) {
+        println!("  refused: {e}");
+    }
+    println!(
+        "lit placements: {} by a texture light map, {} per vertex, {} shadowed; not applied: {} without the light-map \
+         UVs, {} with a vertex count mismatch; {} lighting slots",
+        s.lit_texture,
+        s.lit_vertex,
+        s.shadowed,
+        s.lightmap_no_uvs,
+        s.lightmap_vertex_mismatch,
+        plan.lightings.len()
     );
     println!("scene {map}: {} levels, {} placements, loaded in {} ms", scene.levels.len(), s.placements, millis(loaded));
     println!(
@@ -265,7 +294,7 @@ fn scene_window(
         None => println!("no player start: camera at the origin"),
     }
     // The texture source owns the scene and the store, and decodes one texture at a time while the renderer uploads.
-    let source = Box::new(move |path: &str| decode_texture(&defs, &scene, &library, path));
+    let source = Box::new(move |path: &str| texture_or_lighting(&defs, &scene, &library, &baked, path));
     let report = Rc::new(RefCell::new(DrawReport::default()));
     let drawer = SceneDrawer::new(
         plan,
@@ -328,6 +357,21 @@ fn scene_window(
         (None, None) => false,
     };
     if shot_failed { ExitCode::from(1) } else { code }
+}
+
+/// A renderer texture: a lighting texture by its key ([`lightmap::KEY_PREFIX`]), else a material's.
+fn texture_or_lighting(
+    defs: &ow_defs::DefStore,
+    scene: &ow_host::scene::Scene,
+    library: &MaterialLibrary,
+    baked: &SceneLighting,
+    path: &str,
+) -> Result<ow_assets::texture::TextureAsset, String> {
+    if path.starts_with(lightmap::KEY_PREFIX) {
+        baked.decode(defs, scene, path)
+    } else {
+        decode_texture(defs, scene, library, path)
+    }
 }
 
 /// The window part of a `--play` run.
@@ -397,13 +441,15 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
     let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
     let lights = SceneLights::read(&mut defs, &mut space, &scene);
     let lighting = Lighting::from_scene(&lights);
+    let baked = SceneLighting::read(&defs, &scene, lights.sun.as_ref().and_then(|s| s.light_guid));
     println!(
-        "materials and lights read in {} ms: {} materials; exposure {}",
+        "materials and lights read in {} ms: {} materials; exposure {}; {} components with baked lighting",
         millis(read_started.elapsed()),
         library.materials.len(),
-        lighting.exposure
+        lighting.exposure,
+        baked.components.len()
     );
-    let plan = DrawPlan::build_with(&scene, Some(&library));
+    let plan = DrawPlan::build_lit(&scene, Some(&library), Some(&baked));
     println!(
         "draw plan: {} drawn, {} batches, {} section instances; eye {} uu above the pawn's centre, vertical FOV {} \
          degrees, step {} s, at most {} steps a frame",
@@ -415,7 +461,7 @@ fn play(game: &Path, map: &str, script: Option<&Path>, window: Option<PlayWindow
         ow_core::fmt::fmt_f(play::step_seconds(), 6),
         play::MAX_STEPS_PER_FRAME
     );
-    let source = Box::new(move |path: &str| decode_texture(&defs, &scene, &library, path));
+    let source = Box::new(move |path: &str| texture_or_lighting(&defs, &scene, &library, &baked, path));
     let stats = Rc::new(RefCell::new(PlayStats::default()));
     let draw = Rc::new(RefCell::new(PlayDrawReport::default()));
     let end_shot = window.screenshot.as_ref().map(|p| {

@@ -194,6 +194,139 @@ fn blend_names_and_the_sky_inputs() {
 /// lighting model, expression classes, the lights and the lightmap census. Writes `local/p2/h8-materials/report.md`
 /// and `materials.tsv` (game-derived, ignored). Run with
 /// `cargo test --release -p ow-host --locked -- --ignored sanctuary_materials_on_the_installed_game`.
+/// `Core.upk` for the store fixture: `Object` with the native `Color` struct (B, G, R, A bytes), and `Package`.
+fn store_core() -> Vec<u8> {
+    use ow_package::testkit::reflect::Declarations;
+    let mut d = Declarations::new(&["Byte"]);
+    let object = d.cls("Object", 0);
+    d.default_object(object, "Object");
+    let color = d.struct_in(object, "Color", 0, None);
+    for f in ["A", "R", "G", "B"] {
+        d.prop("Byte", color, f, 0);
+    }
+    let package = d.cls("Package", object);
+    d.default_object(package, "Package");
+    d.build()
+}
+
+/// `Engine.upk` for the store fixture: the material classes with the properties the reads need.
+fn store_engine() -> Vec<u8> {
+    use ow_package::testkit::reflect::Declarations;
+    let mut d = Declarations::new(&["Int", "Float", "Struct", "Object", "Array", "Name"]);
+    let core = d.p.add_import("Core", "Package", 0, "Core");
+    let object = d.p.add_import("Core", "Class", core, "Object");
+    let color = d.p.add_import("Core", "ScriptStruct", object, "Color");
+    let interface = d.cls("MaterialInterface", object);
+    d.default_object(interface, "MaterialInterface");
+    let material = d.cls("Material", interface);
+    let input = d.struct_in(material, "ColorMaterialInput", 0, None);
+    d.prop("Struct", input, "Constant", color);
+    for mask in ["MaskA", "MaskB", "MaskG", "MaskR", "Mask"] {
+        d.prop("Int", input, mask, 0);
+    }
+    d.prop("Object", input, "Expression", object);
+    d.prop("Struct", material, "DiffuseColor", input);
+    d.array_of(material, "Expressions", "Object", object);
+    d.default_object(material, "Material");
+    let instance = d.cls("MaterialInstance", interface);
+    d.prop("Object", instance, "Parent", interface);
+    let scalar = d.struct_in(instance, "ScalarParameterValue", 0, None);
+    d.prop("Float", scalar, "ParameterValue", 0);
+    d.prop("Name", scalar, "ParameterName", 0);
+    d.array_of(instance, "ScalarParameterValues", "Struct", scalar);
+    d.default_object(instance, "MaterialInstance");
+    let constant = d.cls("MaterialInstanceConstant", instance);
+    d.default_object(constant, "MaterialInstanceConstant");
+    d.build()
+}
+
+/// `Mats.upk`: `Base`, a material whose cooked list names itself (refused); `Inst`, an instance of it with a
+/// `Time_of_Day` scalar; `Plain`, a material with an empty cooked list and an unconnected `DiffuseColor` of red 128.
+fn store_mats() -> Vec<u8> {
+    use ow_package::testkit::PackageBuilder;
+    let mut p = PackageBuilder::new_empty();
+    p.names(["None"]);
+    let engine = p.add_import("Core", "Package", 0, "Engine");
+    let material = p.add_import("Core", "Class", engine, "Material");
+    let constant = p.add_import("Core", "Class", engine, "MaterialInstanceConstant");
+    let colour = |p: &mut PackageBuilder| {
+        let mut input = p.struct_tag("Constant", "Color", &[0, 0, 128, 255]);
+        input.extend(p.none());
+        let mut tags = vec![0u8; 4];
+        tags.extend(p.struct_tag("DiffuseColor", "ColorMaterialInput", &input));
+        tags.extend(p.none());
+        tags
+    };
+    let mut base = colour(&mut p);
+    base.extend(words(&[0, 0, 7, 1, 2, 3, 4, 9, 1, 1]));
+    assert_eq!(p.add_export(material, "Base", base), 1);
+    let mut scalar = p.name_tag("ParameterName", "Time_of_Day");
+    scalar.extend(p.float_tag("ParameterValue", 5.0));
+    scalar.extend(p.none());
+    let mut inst = vec![0u8; 4];
+    inst.extend(p.object_tag("Parent", 1));
+    inst.extend(p.array_tag("ScalarParameterValues", 1, &scalar));
+    inst.extend(p.none());
+    p.add_export(constant, "Inst", inst);
+    let mut plain = colour(&mut p);
+    plain.extend(words(&[0, 0, 7, 1, 2, 3, 4, 9, 0]));
+    p.add_export(material, "Plain", plain);
+    p.build()
+}
+
+#[test]
+fn a_refused_cooked_list_keeps_the_scalars_and_a_constant_is_linear() {
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::ObjectSpace;
+    let dir = std::env::temp_dir().join(format!("ow-host-material-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files = [
+        ("Core.upk", store_core()),
+        ("Engine.upk", store_engine()),
+        ("Mats.upk", store_mats()),
+    ];
+    let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    let mut defs = DefStore::from_synthetic(
+        &dir,
+        &refs,
+        IdentityPolicy::FirstInScanOrder,
+        ow_core::ParityMode::Off,
+    )
+    .expect("the store");
+    let mut space = ObjectSpace::new();
+    let mut scene = Scene::empty("Mats", crate::scene::SceneAssets::new(dir.clone()));
+    for path in ["Mats.Inst", "Mats.Plain"] {
+        scene.materials.insert(path.into(), scene_material(vec![]));
+    }
+    let library = MaterialLibrary::read(&mut defs, &mut space, &scene);
+    let _ = std::fs::remove_dir_all(&dir);
+    // H8 review r2 L2: the cooked list is refused, and the instance's scalar is still there.
+    let inst = library.materials.get("Mats.Inst").expect("Mats.Inst");
+    assert!(
+        inst.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Mats.Base")),
+        "{:?}",
+        inst.error
+    );
+    assert_eq!(inst.scalar("Time_of_Day"), Some(5.0));
+    // H8 review r2 L3: an unconnected DiffuseColor of red 128 is linear 0.2195 (byte/255 to the power 2.2).
+    match &library
+        .materials
+        .get("Mats.Plain")
+        .expect("Mats.Plain")
+        .diffuse
+    {
+        &DiffuseSource::Constant([r, g, b]) => {
+            assert!(
+                (r - 0.2195).abs() < 1e-3 && g == 0.0 && b == 0.0,
+                "{r} {g} {b}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 #[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/h8-materials/"]
 fn sanctuary_materials_on_the_installed_game() {

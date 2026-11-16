@@ -217,6 +217,7 @@ fn the_plan_uploads_each_mesh_once_and_batches_its_placements() {
         mesh,
         section: 0,
         material: Some(material),
+        lighting: None,
         two_sided,
         mirrored,
     };
@@ -592,6 +593,95 @@ fn a_blended_material_with_nothing_to_draw_is_not_batched() {
         .map(|i| u32::try_from(i).unwrap());
     assert!(water.is_some());
     assert!(plan.batches.iter().all(|b| b.key.material != water));
+}
+
+#[test]
+fn baked_lighting_goes_to_each_instance_and_splits_the_batches() {
+    use crate::lightmap::{ComponentLight, LightMap, SceneLighting, ShadowMap};
+    let s = scene();
+    let key = |export| ExportKey { level: 0, export };
+    let key_of = |c: &str| Some(format!("lightmap:Test_P.{c}"));
+    let mut l = SceneLighting::default();
+    l.uv_sets.insert("Meshes.A".into(), 0);
+    // Export 1: atlas textures and a distance-field shadow map; export 2: per-vertex samples for the three vertices;
+    // export 3 (the mirrored one): per-vertex samples of the wrong count.
+    l.components.insert(
+        key(1),
+        ComponentLight {
+            light_map: Some(LightMap::Texture {
+                textures: [key_of("Env"), key_of("Bounce"), None],
+                scales: [[1.0; 3], [4.0; 3], [0.0; 3]],
+                uv_scale: [0.5, 0.25],
+                uv_bias: [0.125, 0.0],
+            }),
+            shadow: Some(ShadowMap {
+                texture: "lightmap:Test_P.Shadow".into(),
+                uv_scale: [1.0, 0.5],
+                uv_bias: [0.0, 0.5],
+                shadow_factor: false,
+            }),
+        },
+    );
+    let vertex = |n| ComponentLight {
+        light_map: Some(LightMap::Vertex {
+            samples: vec![[1, 2, 3, 0, 4, 5, 6, 0]; n],
+            scales: [[2.0; 3], [3.0; 3], [0.0; 3]],
+        }),
+        shadow: None,
+    };
+    l.components.insert(key(2), vertex(3));
+    l.components.insert(key(3), vertex(2));
+    let plan = DrawPlan::build_lit(&s, None, Some(&l));
+    let st = plan.stats;
+    assert_eq!(
+        (
+            st.lit_texture,
+            st.lit_vertex,
+            st.shadowed,
+            st.lightmap_vertex_mismatch,
+            st.lightmap_no_uvs
+        ),
+        (1, 1, 1, 1, 0)
+    );
+    assert_eq!(plan.lightings.len(), 2);
+    assert_eq!(
+        plan.lightings[0].textures,
+        [key_of("Env"), key_of("Bounce")]
+    );
+    assert_eq!(
+        plan.lightings[0].shadow.as_deref(),
+        Some("lightmap:Test_P.Shadow")
+    );
+    assert_eq!(plan.lightings[1].samples.as_ref().map(Vec::len), Some(3));
+    let lit = |id| {
+        plan.batches
+            .iter()
+            .find(|b| b.key.lighting == Some(id))
+            .map(|b| (b.instances.len(), b.instances[0].light))
+            .unwrap()
+    };
+    let (n, light) = lit(0);
+    assert_eq!(n, 1);
+    assert_eq!(light.mode, LightMode::Texture);
+    assert_eq!(
+        (light.lightmap_rect, light.scales),
+        ([0.5, 0.25, 0.125, 0.0], [[1.0; 3], [4.0; 3]])
+    );
+    assert_eq!(
+        (light.shadow, light.shadow_rect),
+        (ShadowMode::DistanceField, [1.0, 0.5, 0.0, 0.5])
+    );
+    let (_, light) = lit(1);
+    assert_eq!(
+        (light.mode, light.scales, light.shadow),
+        (LightMode::Vertex, [[2.0; 3], [3.0; 3]], ShadowMode::None)
+    );
+    // The two unmirrored Meshes.A placements batched together without lighting are apart with it: one batch more.
+    assert_eq!(DrawPlan::build(&s).batches.len() + 1, plan.batches.len());
+    // A light-map UV set the mesh does not have: neither map is applied.
+    l.uv_sets.insert("Meshes.A".into(), 1);
+    let st = DrawPlan::build_lit(&s, None, Some(&l)).stats;
+    assert_eq!((st.lit_texture, st.lightmap_no_uvs, st.shadowed), (0, 1, 0));
 }
 
 #[test]

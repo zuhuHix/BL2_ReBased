@@ -30,7 +30,8 @@
 //! tool takes no rule (UNVERIFIED difference; one Sanctuary material takes the rule in the tool).
 //! The scene keeps no null texture override (`Scene::load` drops a `TextureParameterValues` entry whose value is
 //! null), so an instance that nulls its parent's diffuse parameter keeps the parent's texture here and does not block
-//! the unnamed-sample rule, where the tool's parameter dict holds the null (a known difference, not counted).
+//! the unnamed-sample rule, where the tool's parameter dict holds the null (a known difference; on Sanctuary none
+//! outside the 15 inspected materials, by the material-by-material comparison of decision 58).
 //!
 //! **Where a node-graph evaluator would fit.** Cooked materials keep only their parameter expressions (their graphs
 //! are stripped); [`MaterialInfo::expression_classes`] counts what survives. An evaluator of the surviving graph, or of

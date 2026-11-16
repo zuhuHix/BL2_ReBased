@@ -41,7 +41,8 @@ no bounds check was loosened, and `ow-package` and `ow-assets` are unchanged.
       `DiffuseColor` reads as an unconnected one with the default's black constant, where the tool takes no rule.
       Second, the scene drops a null `TextureParameterValues` override, so an instance that nulls its parent's
       diffuse parameter keeps the parent's texture and does not block the unnamed-sample rule, where the tool's
-      parameter dict holds the null. Neither was counted on Sanctuary.
+      parameter dict holds the null. On Sanctuary neither changes a material's diffuse: none differs from the tool
+      outside the 15 inspected materials, by the material-by-material comparison.
     - A refused cooked list does not cost the chain's scalars: the instances' scalars are merged before the error is
       reported (review r1).
   - **The cooked list** is read with the tool's recovered prefix (`cooked_texture_references`): two empty arrays, a

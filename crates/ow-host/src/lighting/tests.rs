@@ -64,6 +64,7 @@ fn colours_are_linear_and_the_sun_shines_along_its_forward_axis() {
         color: [1.0; 3],
         brightness: 2.0,
         tags_at: 0,
+        light_guid: None,
     };
     // Pitched straight down: the light shines down, so the sun is straight up.
     let t = sun.toward();

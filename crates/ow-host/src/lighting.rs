@@ -18,9 +18,9 @@
 //! the direction toward the light is its negative. `FColor` bytes become linear colour as UE3's `FLinearColor` does it,
 //! each byte over 255 to the power 2.2 (public UE3 behaviour, UNVERIFIED for BL2).
 //!
-//! **Lightmaps** are counted, not decoded: `Engine.LightMapTexture2D` (and the shadow maps) are not classes the
-//! `ow-assets` texture reader takes ([`LightmapCensus::decodable`] says what it answered for the first one), and the
-//! components' lightmap data and UV placement are in untagged bytes no reader here knows.
+//! **Lightmaps** are counted here ([`LightmapCensus`]); since lane H9 [`crate::lightmap`] reads them and
+//! `ow_assets::texture::read_lighting_texture` decodes their textures ([`LightmapCensus::decodable`] says what it
+//! answered for the first one).
 //!
 //! Status: UNVERIFIED as the game's lighting: the values are the packages', how BL2 combines them with its lightmaps
 //! and post process is not read.
@@ -52,6 +52,8 @@ pub struct Sun {
     pub brightness: f32,
     /// Where the component's tags start in its export.
     pub tags_at: usize,
+    /// The component's `LightGuid` (A, B, C, D), which the shadow maps cast for this light carry (lane H9).
+    pub light_guid: Option<[i32; 4]>,
 }
 
 impl Sun {
@@ -81,8 +83,8 @@ pub struct LightmapCensus {
     pub light_map_textures: usize,
     pub shadow_maps_2d: usize,
     pub shadow_maps_1d: usize,
-    /// What the `ow-assets` texture reader answered for the first `LightMapTexture2D`: `Ok(())` decoded, else its
-    /// error.
+    /// What `ow_assets::texture::read_lighting_texture` answered for the first `LightMapTexture2D`: `Ok(())`
+    /// decoded, else its error.
     pub decodable: Option<Result<(), String>>,
 }
 
@@ -131,7 +133,7 @@ impl SceneLights {
                         lights.lightmaps.light_map_textures += 1;
                         if lights.lightmaps.decodable.is_none() {
                             let pkg = defs.packages().get(package);
-                            let tried = ow_assets::texture::read_texture(
+                            let tried = ow_assets::texture::read_lighting_texture(
                                 pkg,
                                 index,
                                 PropertyPrefix::Ordinary.bytes(),
@@ -148,7 +150,7 @@ impl SceneLights {
                         lights.suns += 1;
                         if lights.sun.is_none() {
                             match read_sun(defs, space, package, index) {
-                                Ok((rotation, color, brightness, tags_at)) => {
+                                Ok((rotation, color, brightness, tags_at, light_guid)) => {
                                     lights.sun = Some(Sun {
                                         path,
                                         level: level.name.clone(),
@@ -156,6 +158,7 @@ impl SceneLights {
                                         color,
                                         brightness,
                                         tags_at,
+                                        light_guid,
                                     });
                                 }
                                 Err(e) => lights.errors.push(format!("{}:{path}: {e}", level.name)),
@@ -185,13 +188,17 @@ impl SceneLights {
     }
 }
 
+/// What [`read_sun`] reads: the actor's rotation, the linear colour, the brightness, where the tags start and the
+/// `LightGuid`.
+type SunRead = (Rotator, [f32; 3], f32, usize, Option<[i32; 4]>);
+
 /// The directional light actor `index`'s rotation, and its component's linear colour, brightness and tag start.
 fn read_sun(
     defs: &mut DefStore,
     space: &mut ObjectSpace,
     package: u32,
     index: i32,
-) -> Result<(Rotator, [f32; 3], f32, usize), String> {
+) -> Result<SunRead, String> {
     let actor = defs
         .load_export(space, package, index, PropertyPrefix::PlacedActor)
         .map_err(|e| e.to_string())?;
@@ -228,7 +235,14 @@ fn read_sun(
             _ => None,
         })
         .ok_or("LightColor is not a colour")?;
-    Ok((rotation, linear_color(color), brightness, tags_at))
+    let light_guid = crate::lightmap::guid_of(&entries, "LightGuid");
+    Ok((
+        rotation,
+        linear_color(color),
+        brightness,
+        tags_at,
+        light_guid,
+    ))
 }
 
 /// The `R`, `G`, `B` bytes of a decoded `Color` struct's fields.
