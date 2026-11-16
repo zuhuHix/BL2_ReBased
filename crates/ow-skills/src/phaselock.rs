@@ -1,49 +1,31 @@
-//! Owner: lane W6-SKILLS. Phaselock: the lock duration `5 + 0.5 g` as the attribute rule gives it, the cast's
-//! schedule, the auto-aim target score that picks what is lifted, the hover bob, and `VInterpTo`, the one native the
-//! installed lift script needs that no pack binds. AI-assisted (Claude Code).
+//! Owner: lane W6-SKILLS. Phaselock: the lock duration as the attribute stack rule gives it, the cast's schedule (an
+//! oracle), and the auto-aim target score that picks what is lifted. AI-assisted (Claude Code).
 //!
-//! **The lift runs as installed script** (architecture R2): `LiftActionSkill.GetLiftLocation`,
-//! `GetBobLocation` and `UpdateLiftedPawn` run on the VM, with the world's and the Core natives plus [`Pack`]'s
-//! `VInterpTo`; there is no `ow-ai` edge (the lifted pawn is moved by that script). What here restates script is an
-//! oracle the installed-game run compares the script against ([`Schedule`], [`bob_target_z`]), not a second path the
-//! game runs.
+//! **The lift runs as installed script** (architecture R2): `LiftActionSkill.GetLiftLocation`, `GetBobLocation` and
+//! `UpdateLiftedPawn` run on the VM with the world's and the Core natives (`Object.VInterpTo` is `ow-vm`'s,
+//! `natives_core`, review r1 of PR #342); there is no `ow-ai` edge (the lifted pawn is moved by that script). Nothing
+//! here is a second path the game runs: [`Schedule`] is an oracle, and the bob's restatement lives only in the tests
+//! (`oracle`, `#[cfg(test)]`).
 //!
 //! **Evidence.**
-//! - The duration: `Att_Phaselock_Duration` is a designer attribute whose base is 5; Suspension adds PostAdd `0.5 g`
-//!   on its `Value` stack (data, PHASELOCK_STOCK_DATA.md; the engine rule, NATIVE_ATTRIBUTES.md section 5). The stack
-//!   rule is `ow-attr`'s. UNVERIFIED in the game for g > 0 (no Suspension cast was timed).
+//! - The duration: `Att_Phaselock_Duration` is a designer attribute whose base is 5 in the data; Suspension adds
+//!   PostAdd `0.5 g` on its `Value` stack (data, PHASELOCK_STOCK_DATA.md; the engine rule, NATIVE_ATTRIBUTES.md
+//!   section 5). The stack rule is `ow-attr`'s; [`lock_duration`] only hands it the modifiers. Other modifiers
+//!   (Thoughtlock and the rest) come through the same stack. UNVERIFIED in the game for g > 0.
 //! - The schedule: script formulas, data numbers (NATIVE_ACTION_SKILL.md section 7). **Confirmed live** for the base
 //!   first lock (release 5.7 s and end 6.7 s, within about two frames, two casts, 2026-11-12); the other rows were not
 //!   seen.
-//! - The bob: **confirmed live** (2026-10-02: this rule on the game's own frame times reproduced a lifted bullymong's
-//!   height over 435 frames with RMS error 0.001 uu; NATIVE_PHASELOCK_TARGETING.md section 5).
+//! - The bob: **confirmed live** to RMS 0.001 uu (2026-10-02, 435 frames; NATIVE_PHASELOCK_TARGETING.md section 5).
 //! - The target score: read from the executable (NATIVE_PHASELOCK_TARGETING.md sections 2-3), UNVERIFIED in the game.
 //!   Its arithmetic precision is not read; it is done in doubles through the `ow_core::num` choke points.
 
-use std::rc::Rc;
-
 use ow_attr::stack::{CombineForm, Modifier, ModifierId, ModifierType, NumKind, combine};
-use ow_combat::hit::bind;
-use ow_core::NotYet;
 use ow_core::num::{ln_f64, sqrt_f64};
-use ow_object::value::Value;
-use ow_vm::api::{NativeCall, NativePack, Vm};
-use ow_vm::error::VmError;
 
 /// The record of the schedule.
 pub const RECORD: &str = "NATIVE_ACTION_SKILL.md section 7";
 /// The record of the target score and the bob.
 pub const RECORD_TARGETING: &str = "NATIVE_PHASELOCK_TARGETING.md sections 2-3, 5";
-
-/// The lock duration attribute's base (`Att_Phaselock_Duration`, data; PHASELOCK_STOCK_DATA.md).
-pub const LOCK_BASE: f32 = 5.0;
-/// Suspension's base and per-grade value on the lock duration (data; PHASELOCK_STOCK_DATA.md).
-pub const SUSPENSION_PER_GRADE: f32 = 0.5;
-/// The pi the bob script multiplies by: the float constant in the installed `GetBobLocation` is the single nearest
-/// to pi (`0x40490FDB`), which script listings print as `3.14159` (six significant digits), the form
-/// NATIVE_PHASELOCK_TARGETING.md section 5 quotes. Found in the installed bytecode (a local check, decision
-/// 2026-11-16-42); with `3.14159f32` the script's bob differs by one or more ulps.
-pub const SCRIPT_PI: f32 = std::f32::consts::PI;
 
 // ---------------------------------------------------------------------------------------------------------------
 // The lock duration
@@ -64,22 +46,13 @@ pub fn lock_duration(base: f32, modifiers: &[(ModifierType, f32)]) -> f32 {
     combine(base, &mods, CombineForm::default(), NumKind::Float).to_f32()
 }
 
-/// Maya's lock duration with Suspension at `grade` (0 for untrained): Suspension's PostAdd is its grade rule's value
-/// (start 1, interval 1: `0.5 + 0.5 x (g - 1)`), so the duration is `5 + 0.5 g`.
-pub fn maya_lock_duration(grade: i32) -> f32 {
-    if grade < 1 {
-        return lock_duration(LOCK_BASE, &[]);
-    }
-    // grade >= 1: the effect's steps are grade - 1 (int -> float, exact for any grade a tree holds).
-    let post = SUSPENSION_PER_GRADE + SUSPENSION_PER_GRADE * (grade - 1) as f32;
-    lock_duration(LOCK_BASE, &[(ModifierType::PostAdd, post)])
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 // The schedule (an oracle for the installed script)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The timers a cast on a liftable target sets, in seconds after the cast (section 7): the actor's
+/// **An oracle, not for gameplay callers** (it restates the installed `LiftActionSkill.OnActionSkillStarted` and
+/// `PhaseLockTarget`, which the game runs; the installed-game run and the tests compare against it). The timers a cast
+/// on a liftable target sets, in seconds after the cast (section 7): the actor's
 /// `SkillDuration = LiftDuration + LockDuration(Maya) x TimeScale(target)`, `LockTarget` at the lift's end,
 /// `StartOutro` at `SkillDuration - LockFadeOutTime`, the release at `SkillDuration`, `EndSkill` at
 /// `SkillDuration + ReleaseBufferTime`. Single precision, one rounding per operation, as the script's float operators.
@@ -262,138 +235,44 @@ pub fn pick_target(a: &AutoAim, candidates: &[Candidate], tan_half_fov: f64) -> 
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// The bob (an oracle for the installed `GetBobLocation`)
+// The bob, restated for the tests only
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The bob's target height: `LiftEndLocation.Z + LiftBobAmplitude x sin((now - SkillStartTime) x LiftBobFrequency x
-/// pi)` ([`SCRIPT_PI`]), before the `VInterpTo` smoothing (section 5). Single precision per operation, with `sin` in double
-/// through the choke point, as the VM's `Sin` native.
-pub fn bob_target_z(end_z: f32, amplitude: f32, frequency: f32, elapsed: f32) -> f32 {
-    let angle = elapsed * frequency * SCRIPT_PI;
-    // f64 -> f32: the sine of a finite angle is within [-1, 1], always representable (the VM's Sin rounds so).
-    let sine = ow_core::num::sin_f64(f64::from(angle)) as f32;
-    end_z + amplitude * sine
-}
+/// The bob's restatement, an oracle the installed-game run compares the installed `GetBobLocation` against (test
+/// only: the game runs the script).
+#[cfg(test)]
+pub(crate) mod oracle {
+    /// The pi the bob script multiplies by: the float constant in the installed `GetBobLocation` is the single
+    /// nearest to pi (`0x40490FDB`), which script listings print as `3.14159` (six significant digits), the form
+    /// NATIVE_PHASELOCK_TARGETING.md section 5 quotes. Found in the installed bytecode (a local check, decision
+    /// 2026-11-16-42).
+    pub const SCRIPT_PI: f32 = std::f32::consts::PI;
 
-/// `VInterpTo` on one axis set: the target when `speed <= 0` or the squared distance is below 0.0001, else the
-/// current value moved by `clamp(dt x speed, 0, 1)` of the remaining difference (NATIVE_PHASELOCK_TARGETING.md
-/// section 5). Each component in double, rounded once to single, the form of the VM's `FInterpTo`. Confirmed in the
-/// game as part of the bob rule (above).
-pub fn vinterp_to(current: [f64; 3], target: [f64; 3], dt: f64, speed: f64) -> [f64; 3] {
-    let d = [
-        target[0] - current[0],
-        target[1] - current[1],
-        target[2] - current[2],
-    ];
-    if speed <= 0.0 || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 0.0001 {
-        return target.map(round_single);
+    /// The bob's target height: `LiftEndLocation.Z + LiftBobAmplitude x sin((now - SkillStartTime) x
+    /// LiftBobFrequency x pi)`, before the `VInterpTo` smoothing (section 5). Single precision per operation, with
+    /// `sin` in double through the choke point, as the VM's `Sin` native.
+    pub fn bob_target_z(end_z: f32, amplitude: f32, frequency: f32, elapsed: f32) -> f32 {
+        let angle = elapsed * frequency * SCRIPT_PI;
+        // f64 -> f32: the sine of a finite angle is within [-1, 1], always representable (the VM's Sin rounds so).
+        let sine = ow_core::num::sin_f64(f64::from(angle)) as f32;
+        end_z + amplitude * sine
     }
-    let alpha = (dt * speed).clamp(0.0, 1.0);
-    [0, 1, 2].map(|i| round_single(current[i] + d[i] * alpha))
-}
 
-fn round_single(x: f64) -> f64 {
-    ow_core::num::f32r(x)
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// The native
-// ---------------------------------------------------------------------------------------------------------------
-
-/// The function path [`Pack`] binds.
-pub const VINTERP_TO: &str = "Core.Object.VInterpTo";
-
-fn vector_of(c: &NativeCall<'_>, i: usize) -> Result<[f64; 3], VmError> {
-    let v = c.arg(i)?;
-    let s = v.as_struct().ok_or_else(|| bad(i, "expected a vector"))?;
-    let layout =
-        c.vm.space
-            .classes
-            .struct_layout(s.ty)
-            .ok_or_else(|| bad(i, "a struct this VM does not know"))?;
-    let mut out = [0.0; 3];
-    for (k, n) in ["X", "Y", "Z"].iter().enumerate() {
-        let entry =
-            c.vm.space
-                .names
-                .find(n)
-                .and_then(|id| layout.field(id))
-                .map(|(e, _)| e)
-                .ok_or_else(|| bad(i, "a vector without its axes"))?;
-        out[k] = match s
-            .fields
-            .get(usize::try_from(entry).map_err(|_| bad(i, "an entry out of range"))?)
-        {
-            Some(Value::Float(x)) => f64::from(*x),
-            _ => return Err(bad(i, "an axis that is not a float")),
-        };
-    }
-    Ok(out)
-}
-
-fn float_arg(c: &NativeCall<'_>, i: usize) -> Result<f64, VmError> {
-    match c.arg(i)? {
-        Value::Float(x) => Ok(f64::from(*x)),
-        _ => Err(bad(i, "expected a float")),
-    }
-}
-
-fn bad(i: usize, why: &str) -> VmError {
-    VmError::Script {
-        function: "Object.VInterpTo".to_string(),
-        message: format!("argument {i}: {why}"),
-    }
-}
-
-fn make_vector(vm: &Vm, [x, y, z]: [f64; 3]) -> Result<Value, VmError> {
-    let classes = &vm.space.classes;
-    let layout = classes
-        .struct_by_path("Core.Object.Vector")
-        .and_then(|s| classes.struct_layout(s))
-        .ok_or_else(|| {
-            VmError::from(NotYet::layer_absent(
-                "the Core.Object.Vector struct",
-                "ow-object reflection of the Core package",
-                RECORD_TARGETING,
-            ))
-        })?;
-    let mut value = layout.zero().clone();
-    let Some(s) = value.struct_mut() else {
-        return Err(VmError::Decode(
-            "Core.Object.Vector: the zero value is not a struct".to_string(),
-        ));
-    };
-    for (n, v) in [("X", x), ("Y", y), ("Z", z)] {
-        let entry = vm
-            .space
-            .names
-            .find(n)
-            .and_then(|id| layout.field(id))
-            .map(|(e, _)| e as usize)
-            .filter(|&e| e < s.fields.len())
-            .ok_or_else(|| VmError::Decode(format!("Core.Object.Vector has no field {n}")))?;
-        // A rounded double holds a single exactly (vinterp_to rounds each axis once).
-        s.fields[entry] = Value::Float(v as f32);
-    }
-    Ok(value)
-}
-
-/// `VInterpTo` as a [`NativePack`], bound by path (`ow_combat::hit::bind`): skipped when the VM does not declare it,
-/// and the first binding of the key wins, so a Core pack that binds it later takes precedence only if registered first.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Pack;
-
-impl NativePack for Pack {
-    fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
-        bind(
-            vm,
-            VINTERP_TO,
-            Rc::new(|c: &mut NativeCall<'_>| {
-                let (current, target) = (vector_of(c, 0)?, vector_of(c, 1)?);
-                let (dt, speed) = (float_arg(c, 2)?, float_arg(c, 3)?);
-                make_vector(c.vm, vinterp_to(current, target, dt, speed))
-            }),
-        )
+    /// `VInterpTo` as the record reads it (NATIVE_PHASELOCK_TARGETING.md section 5), written here from the record,
+    /// apart from `ow-vm`'s binding: the target when `speed <= 0` or the squared distance is below 0.0001, else the
+    /// current value moved by `clamp(dt x speed, 0, 1)` of the difference, each axis in double and rounded once. The
+    /// precision is UNVERIFIED.
+    pub fn vinterp_to(current: [f64; 3], target: [f64; 3], dt: f64, speed: f64) -> [f64; 3] {
+        let d = [
+            target[0] - current[0],
+            target[1] - current[1],
+            target[2] - current[2],
+        ];
+        if speed <= 0.0 || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 0.0001 {
+            return target.map(ow_core::num::f32r);
+        }
+        let alpha = (dt * speed).clamp(0.0, 1.0);
+        [0, 1, 2].map(|i| ow_core::num::f32r(current[i] + d[i] * alpha))
     }
 }
 

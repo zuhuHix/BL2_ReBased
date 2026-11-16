@@ -10,11 +10,10 @@
 //! **The tree's memory is the native class's own** (the record describes what it holds, not its layout), so a
 //! [`SkillTree`] is Rust state: the natives keep one per `PlayerSkillTree` object in the VM service [`Trees`].
 //!
-//! **Script restated, not run** (architecture R2, a second implementation until a differential test exists):
-//! [`can_upgrade`] is `SkillTreeGFxObject.CanUpgradeSkill`, [`upgrade_cost`] is
-//! `WillowPlayerController.GetSkillUpgradeCost`, and [`server_upgrade`] is the point half of `ServerUpgradeSkill`.
-//! The installed script calls the natives below; these restatements exist for callers that have no VM yet. A
-//! differential test against the installed script is Open (it needs the skill manager's behavior-kernel natives).
+//! **Script restated as oracles only** (architecture R2): [`oracle::can_upgrade`] is `SkillTreeGFxObject.CanUpgradeSkill`,
+//! [`oracle::upgrade_cost`] is `WillowPlayerController.GetSkillUpgradeCost`, and [`oracle::server_upgrade`] is the
+//! point half of `ServerUpgradeSkill`. The game runs that script, which calls the natives below; the oracles are for a
+//! differential test against it (Open: it needs the behavior kernel's script natives) and not for gameplay callers.
 //!
 //! **Choices where the record is silent, each UNVERIFIED.** The branch's points (unlock rule, `GetBranchState`) count
 //! every skill of its tiers; the tier's points (`GetTierState`) count only as many of its skills as the tier's layout
@@ -233,26 +232,41 @@ pub struct TierStateData {
     pub unlocked: bool,
 }
 
-/// The runtime tree of one player (the native's private memory, as the record describes it).
+/// The runtime tree of one player (the native's private memory, as the record describes it). The fields are private
+/// so the tier flags always match the definition's shape; every index into them is checked.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillTree {
-    pub def: TreeDef,
+    def: TreeDef,
     /// Every skill: the branches' skills in tree order, then the proficiencies.
-    pub skills: Vec<TreeSkill>,
+    skills: Vec<TreeSkill>,
     /// One flag per tier, per branch.
-    pub unlocked: Vec<Vec<bool>>,
+    unlocked: Vec<Vec<bool>>,
     /// The first skill of type Action found at build time.
-    pub action_skill: Option<ObjRef>,
+    action_skill: Option<ObjRef>,
+    /// Whether the globals' proficiency skills were given to [`SkillTree::initialize`]. When not, a proficiency is
+    /// missing from the tree for a reason this crate cannot see, so every answer that depends on one is `NotYet`.
+    proficiencies_read: bool,
+}
+
+fn no_proficiencies(what: &str) -> SkillError {
+    NotYet::not_read(
+        format!(
+            "{what}: this tree was built without the globals' proficiency skills (the field is not named in the record)"
+        ),
+        RECORD,
+    )
+    .into()
 }
 
 impl SkillTree {
     /// `PlayerSkillTree.Initialize(Definition)`: builds the records from `def`, appends `proficiencies` (the globals'
-    /// proficiency skills), records the action skill, then resets without proficiency preservation (every grade at
+    /// proficiency skills; `None` when they are not read, the native's case, which makes every answer about a
+    /// proficiency `NotYet`), records the action skill, then resets without proficiency preservation (every grade at
     /// its `DefaultStartingGrade`, only the root's first tier unlocked).
     pub fn initialize(
         cx: &mut EvalCx<'_>,
         def: TreeDef,
-        proficiencies: &[ObjRef],
+        proficiencies: Option<&[ObjRef]>,
     ) -> Result<SkillTree, SkillError> {
         let mut skills = Vec::new();
         for (b, branch) in def.branches.iter().enumerate() {
@@ -262,7 +276,7 @@ impl SkillTree {
                 }
             }
         }
-        for &p in proficiencies {
+        for &p in proficiencies.unwrap_or(&[]) {
             skills.push(tree_skill(cx, p, None)?);
         }
         let action_skill = skills
@@ -279,25 +293,71 @@ impl SkillTree {
             skills,
             unlocked,
             action_skill,
+            proficiencies_read: proficiencies.is_some(),
         };
         tree.reset(false)?;
         Ok(tree)
+    }
+
+    /// The definition the tree was built from.
+    pub fn def(&self) -> &TreeDef {
+        &self.def
+    }
+
+    /// Every skill the tree holds.
+    pub fn skills(&self) -> &[TreeSkill] {
+        &self.skills
+    }
+
+    /// The tree's recorded action skill (`GetActionSkill`).
+    pub fn action_skill(&self) -> Option<ObjRef> {
+        self.action_skill
+    }
+
+    /// Whether tier `t` of branch `b` is unlocked (`None` for a tier the tree does not have).
+    pub fn unlocked(&self, b: usize, t: usize) -> Option<bool> {
+        self.unlocked.get(b).and_then(|x| x.get(t)).copied()
+    }
+
+    fn flag(&self, b: usize, t: usize) -> Result<bool, SkillError> {
+        self.unlocked(b, t)
+            .ok_or_else(|| SkillError::bad("a tier the tree does not have"))
     }
 
     fn index(&self, skill: ObjRef) -> Option<usize> {
         self.skills.iter().position(|s| s.definition == skill)
     }
 
+    /// For a skill the tree does not hold: `NotYet` when the tree lacks its proficiencies and the skill is one (it
+    /// may belong to the tree), else the native's "not in this tree".
+    fn unknown(&self, cx: &mut EvalCx<'_>, skill: ObjRef, what: &str) -> Result<(), SkillError> {
+        if !self.proficiencies_read && read_skill(cx, skill)?.skill_type == SkillType::Proficiency {
+            return Err(no_proficiencies(what));
+        }
+        Ok(())
+    }
+
     /// The internal reset (NATIVE_SKILLS.md 3.1): every grade to its `DefaultStartingGrade` (proficiencies keep
     /// theirs when `ignore_proficiencies`), every tier locked, then the root's first tier unlocked. Returns the refund:
-    /// the points spent before minus after.
+    /// the points spent before minus after. A `DefaultStartingGrade` outside `0..=MaxGrade` is bad data, refused
+    /// before anything changes (the record does not say the reset clamps it).
     pub fn reset(&mut self, ignore_proficiencies: bool) -> Result<i32, SkillError> {
+        if let Some(s) = self
+            .skills
+            .iter()
+            .find(|s| s.default_grade < 0 || s.default_grade > s.max_grade.max(0))
+        {
+            return Err(SkillError::bad(format!(
+                "DefaultStartingGrade {} outside 0..={}",
+                s.default_grade, s.max_grade
+            )));
+        }
         let before = self.points_spent()?;
         for s in &mut self.skills {
             if ignore_proficiencies && s.skill_type == SkillType::Proficiency {
                 continue;
             }
-            s.grade = s.default_grade.clamp(0, s.max_grade.max(0));
+            s.grade = s.default_grade;
         }
         for tiers in &mut self.unlocked {
             tiers.iter_mut().for_each(|t| *t = false);
@@ -332,8 +392,8 @@ impl SkillTree {
             .ok_or_else(|| SkillError::bad("no such tier"))?;
         let mut sum = 0i32;
         for d in tier.skills.iter().take(tier.cells) {
-            if let Some(i) = self.index(*d) {
-                sum = checked_add(sum, self.skills[i].grade)?;
+            if let Some(s) = self.index(*d).and_then(|i| self.skills.get(i)) {
+                sum = checked_add(sum, s.grade)?;
             }
         }
         Ok(sum)
@@ -350,26 +410,49 @@ impl SkillTree {
 
     /// The unlock rule of NATIVE_SKILLS.md 2.3 for branch `b`: at the first locked tier, unlock it when the branch's
     /// points reach its cumulative requirement, and stop either way (one tier per call); then, when every tier is
-    /// unlocked and the branch holds its unlock total, unlock the first tier of every child.
+    /// unlocked and the branch holds its unlock total, unlock the first tier of every child. A branch the tree does
+    /// not have is bad data.
     ///
     /// A branch whose first tier is locked opens nothing itself: that tier opens only by the reset (the root) or by
     /// its parent (the record), so the walk starts once it is open. (Read so because a first tier's cumulative
     /// requirement is 0, and a walk from it would open it on the first grade the load path sets.)
     pub fn run_unlock(&mut self, b: usize) -> Result<(), SkillError> {
-        if !self.unlocked[b].first().copied().unwrap_or(false) {
+        let branch = self
+            .def
+            .branches
+            .get(b)
+            .ok_or_else(|| SkillError::bad("a branch the tree does not have"))?
+            .clone();
+        let flags = self
+            .unlocked
+            .get(b)
+            .ok_or_else(|| SkillError::bad("a branch the tree does not have"))?;
+        if !flags.first().copied().unwrap_or(false) {
             return Ok(());
         }
+        let first_locked = flags.iter().position(|u| !u);
         let points = self.branch_points(b)?;
-        let branch = &self.def.branches[b];
-        if let Some(t) = self.unlocked[b].iter().position(|u| !u)
-            && points >= branch.tiers[t].cumulative
-        {
-            self.unlocked[b][t] = true;
+        if let Some(t) = first_locked {
+            let need = branch
+                .tiers
+                .get(t)
+                .ok_or_else(|| SkillError::bad("a tier the tree does not have"))?
+                .cumulative;
+            if points >= need
+                && let Some(f) = self.unlocked.get_mut(b).and_then(|x| x.get_mut(t))
+            {
+                *f = true;
+            }
         }
-        if self.unlocked[b].iter().all(|u| *u) && points >= branch.unlock_total {
-            for &c in &branch.children.clone() {
-                if let Some(first) = self.unlocked[c].first_mut() {
-                    *first = true;
+        let all = self.unlocked.get(b).is_some_and(|x| x.iter().all(|u| *u));
+        if all && points >= branch.unlock_total {
+            for &c in &branch.children {
+                let flags = self
+                    .unlocked
+                    .get_mut(c)
+                    .ok_or_else(|| SkillError::bad("a child branch the tree does not have"))?;
+                if let Some(f) = flags.first_mut() {
+                    *f = true;
                 }
             }
         }
@@ -377,10 +460,17 @@ impl SkillTree {
     }
 
     /// `SetSkillGrade(Skill, Grade)`: clamped to `0..=MaxGrade`; when it changed, the unlock rule of the skill's
-    /// branch runs and the answer is true. False for an unknown skill or an unchanged grade. No tier check (the load
+    /// branch runs and the answer is true. False for an unknown skill or an unchanged grade (`NotYet` for an unknown
+    /// proficiency on a tree built without them, so a saved grade is not dropped silently). No tier check (the load
     /// and replay path).
-    pub fn set_grade(&mut self, skill: ObjRef, grade: i32) -> Result<bool, SkillError> {
+    pub fn set_grade(
+        &mut self,
+        cx: &mut EvalCx<'_>,
+        skill: ObjRef,
+        grade: i32,
+    ) -> Result<bool, SkillError> {
         let Some(i) = self.index(skill) else {
+            self.unknown(cx, skill, "SetSkillGrade")?;
             return Ok(false);
         };
         let s = &mut self.skills[i];
@@ -396,9 +486,11 @@ impl SkillTree {
     }
 
     /// `UpgradeSkill(Skill)`: false (no change) for a skill not in the tree, a locked tier or a maxed skill;
-    /// otherwise grade + 1 through [`SkillTree::set_grade`]. A proficiency (no tier) is `NotYet { NotRead }`.
-    pub fn upgrade(&mut self, skill: ObjRef) -> Result<bool, SkillError> {
+    /// otherwise grade + 1 through [`SkillTree::set_grade`]. A proficiency (no tier) is `NotYet { NotRead }`, and so
+    /// is an unknown proficiency on a tree built without them.
+    pub fn upgrade(&mut self, cx: &mut EvalCx<'_>, skill: ObjRef) -> Result<bool, SkillError> {
         let Some(i) = self.index(skill) else {
+            self.unknown(cx, skill, "UpgradeSkill")?;
             return Ok(false);
         };
         let s = &self.skills[i];
@@ -409,14 +501,14 @@ impl SkillTree {
             )
             .into());
         };
-        if !self.unlocked[b][t] || s.grade >= s.max_grade {
+        if !self.flag(b, t)? || s.grade >= s.max_grade {
             return Ok(false);
         }
         let next = s
             .grade
             .checked_add(1)
             .ok_or_else(|| SkillError::bad("a grade overflows"))?;
-        self.set_grade(skill, next)
+        self.set_grade(cx, skill, next)
     }
 
     /// `GetSkillState(Skill, out State)`; `None` for a skill the tree does not know. A proficiency is
@@ -438,7 +530,7 @@ impl SkillTree {
             branch: b,
             tier: t,
             grade: s.grade,
-            unlocked: self.unlocked[b][t],
+            unlocked: self.flag(b, t)?,
         }))
     }
 
@@ -456,7 +548,7 @@ impl SkillTree {
         Ok(Some(BranchStateData {
             points: self.branch_points(b)?,
             max_points,
-            unlocked: self.unlocked[b].first().copied().unwrap_or(false),
+            unlocked: self.unlocked(b, 0).unwrap_or(false),
         }))
     }
 
@@ -469,25 +561,28 @@ impl SkillTree {
         let Some(b) = self.def.branches.iter().position(|x| x.object == branch) else {
             return Ok(None);
         };
-        if tier >= self.def.branches[b].tiers.len() {
+        let Some(unlocked) = self.unlocked(b, tier) else {
             return Ok(None);
-        }
+        };
         Ok(Some(TierStateData {
             points: self.tier_points(b, tier)?,
-            unlocked: self.unlocked[b][tier],
+            unlocked,
         }))
     }
 
     /// `HasTrainedASkillOfType(Type)`: a skill of that type with grade above 0 whose tier is unlocked. A skill outside
-    /// every tier of that type is `NotYet { NotRead }`.
+    /// every tier of that type is `NotYet { NotRead }`, and so is the Proficiency type on a tree built without them.
     pub fn has_trained_of_type(&self, t: SkillType) -> Result<bool, SkillError> {
+        if t == SkillType::Proficiency && !self.proficiencies_read {
+            return Err(no_proficiencies("HasTrainedASkillOfType(Proficiency)"));
+        }
         for s in self
             .skills
             .iter()
             .filter(|s| s.skill_type == t && s.grade > 0)
         {
             match s.place {
-                Some((b, tier)) if self.unlocked[b][tier] => return Ok(true),
+                Some((b, tier)) if self.flag(b, tier)? => return Ok(true),
                 Some(_) => {}
                 None => {
                     return Err(NotYet::not_read(
@@ -527,70 +622,79 @@ fn tree_skill(
 // Script restated (module documentation)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// `ESkillTreeFailureReason` (the UI's answer).
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpgradeFailure {
-    NoSkillPoints,
-    SkillLocked,
-    SkillMaxed,
-    DataIssue,
-    NoFailure,
-}
+/// **Oracles, not for gameplay callers.** `SkillTreeGFxObject.CanUpgradeSkill`, `GetSkillUpgradeCost` and the point
+/// half of `ServerUpgradeSkill` are world-only installed script, which the game runs (architecture R2). These restate
+/// them for a differential test against that script (Open); nothing compares them with it yet, so no gameplay code may
+/// call them in its place.
+pub mod oracle {
+    use super::*;
 
-/// `SkillTreeGFxObject.CanUpgradeSkill`, in its order: no state for the skill, a data issue; a locked tier or a
-/// player below level 5, locked; at `MaxGrade`, maxed; no unspent points, none; otherwise no failure.
-pub fn can_upgrade(
-    tree: &SkillTree,
-    skill: ObjRef,
-    exp_level: i32,
-    points: i32,
-) -> Result<UpgradeFailure, SkillError> {
-    let Some(state) = tree.skill_state(skill)? else {
-        return Ok(UpgradeFailure::DataIssue);
-    };
-    if !state.unlocked || exp_level < TRAINING_LEVEL {
-        return Ok(UpgradeFailure::SkillLocked);
+    /// `ESkillTreeFailureReason` (the UI's answer).
+    #[non_exhaustive]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum UpgradeFailure {
+        NoSkillPoints,
+        SkillLocked,
+        SkillMaxed,
+        DataIssue,
+        NoFailure,
     }
-    let max = tree
-        .skills
-        .iter()
-        .find(|s| s.definition == skill)
-        .map(|s| s.max_grade)
-        .unwrap_or(0);
-    if state.grade >= max {
-        return Ok(UpgradeFailure::SkillMaxed);
-    }
-    if points <= 0 {
-        return Ok(UpgradeFailure::NoSkillPoints);
-    }
-    Ok(UpgradeFailure::NoFailure)
-}
 
-/// `GetSkillUpgradeCost`: 0 for a Proficiency skill, otherwise 1.
-pub fn upgrade_cost(t: SkillType) -> i32 {
-    if t == SkillType::Proficiency { 0 } else { 1 }
-}
-
-/// The point half of `ServerUpgradeSkill(Skill)`: with at least the cost unspent, `UpgradeSkill`; only on true is the
-/// cost subtracted. Returns the new grade, or `None` when nothing changed. The grade's effects and the client update
-/// that follow in the script are the skill manager's ([`crate::action_skill`]).
-pub fn server_upgrade(
-    tree: &mut SkillTree,
-    skill: ObjRef,
-    points: &mut i32,
-) -> Result<Option<i32>, SkillError> {
-    let Some(i) = tree.index(skill) else {
-        return Ok(None);
-    };
-    let cost = upgrade_cost(tree.skills[i].skill_type);
-    if *points < cost || !tree.upgrade(skill)? {
-        return Ok(None);
+    /// `SkillTreeGFxObject.CanUpgradeSkill`, in its order: no state for the skill, a data issue; a locked tier or a
+    /// player below level 5, locked; at `MaxGrade`, maxed; no unspent points, none; otherwise no failure.
+    pub fn can_upgrade(
+        tree: &SkillTree,
+        skill: ObjRef,
+        exp_level: i32,
+        points: i32,
+    ) -> Result<UpgradeFailure, SkillError> {
+        let Some(state) = tree.skill_state(skill)? else {
+            return Ok(UpgradeFailure::DataIssue);
+        };
+        if !state.unlocked || exp_level < TRAINING_LEVEL {
+            return Ok(UpgradeFailure::SkillLocked);
+        }
+        let max = tree
+            .skills
+            .iter()
+            .find(|s| s.definition == skill)
+            .map(|s| s.max_grade)
+            .unwrap_or(0);
+        if state.grade >= max {
+            return Ok(UpgradeFailure::SkillMaxed);
+        }
+        if points <= 0 {
+            return Ok(UpgradeFailure::NoSkillPoints);
+        }
+        Ok(UpgradeFailure::NoFailure)
     }
-    *points = points
-        .checked_sub(cost)
-        .ok_or_else(|| SkillError::bad("the points underflow"))?;
-    Ok(tree.grade(skill))
+
+    /// `GetSkillUpgradeCost`: 0 for a Proficiency skill, otherwise 1.
+    pub fn upgrade_cost(t: SkillType) -> i32 {
+        if t == SkillType::Proficiency { 0 } else { 1 }
+    }
+
+    /// The point half of `ServerUpgradeSkill(Skill)`: with at least the cost unspent, `UpgradeSkill`; only on true is the
+    /// cost subtracted. Returns the new grade, or `None` when nothing changed. The grade's effects and the client update
+    /// that follow in the script are the skill manager's ([`crate::action_skill`]).
+    pub fn server_upgrade(
+        cx: &mut EvalCx<'_>,
+        tree: &mut SkillTree,
+        skill: ObjRef,
+        points: &mut i32,
+    ) -> Result<Option<i32>, SkillError> {
+        let Some(i) = tree.index(skill) else {
+            return Ok(None);
+        };
+        let cost = upgrade_cost(tree.skills[i].skill_type);
+        if *points < cost || !tree.upgrade(cx, skill)? {
+            return Ok(None);
+        }
+        *points = points
+            .checked_sub(cost)
+            .ok_or_else(|| SkillError::bad("the points underflow"))?;
+        Ok(tree.grade(skill))
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -653,7 +757,7 @@ fn this_tree(c: &NativeCall<'_>, key: &str) -> Result<ObjRef, VmError> {
 fn with_tree<R>(
     c: &mut NativeCall<'_>,
     key: &str,
-    f: impl FnOnce(&mut SkillTree) -> Result<R, SkillError>,
+    f: impl FnOnce(&mut EvalCx<'_>, &mut SkillTree) -> Result<R, SkillError>,
 ) -> Result<R, VmError> {
     let this = this_tree(c, key)?;
     let trees = install(c.vm)?;
@@ -661,7 +765,10 @@ fn with_tree<R>(
         .try_borrow_mut()
         .map_err(|_| VmError::ServiceBorrowed("ow_skills::tree::Trees"))?;
     match trees.get_mut(this) {
-        Some(t) => Ok(f(t)?),
+        Some(t) => {
+            let mut cx = EvalCx::new(&mut *c.vm);
+            Ok(f(&mut cx, t)?)
+        }
         None => Err(NotYet::not_read(
             format!("{key} on a PlayerSkillTree that was never initialized"),
             RECORD,
@@ -697,8 +804,10 @@ fn skill_type_of_byte(b: u8) -> Option<SkillType> {
 }
 
 /// The tree natives as a [`NativePack`]: `Initialize` builds the [`SkillTree`] of the object (a second call is a
-/// no-op, as the record says) with no proficiencies (reading the globals' list is Open: the field is not named in the
-/// record); the others read or change it.
+/// no-op, as the record says) marked as built without the globals' proficiencies (the field is not named in the
+/// record), so every answer about a proficiency is `NotYet`; the others read or change it. Not bound:
+/// `GetSkillState`, `GetBranchState` and `GetTierState`, whose out structs this crate does not write yet (Open; the
+/// installed `ServerUpgradeSkill` calls `GetSkillState`, so a spend through the script stops there).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pack;
 
@@ -731,7 +840,7 @@ impl NativePack for Pack {
                 let tree = {
                     let mut cx = EvalCx::new(&mut *c.vm);
                     let d = read_tree(&mut cx, def)?;
-                    SkillTree::initialize(&mut cx, d, &[])?
+                    SkillTree::initialize(&mut cx, d, None)?
                 };
                 trees
                     .try_borrow_mut()
@@ -745,9 +854,9 @@ impl NativePack for Pack {
             upgrade,
             Rc::new(move |c: &mut NativeCall<'_>| {
                 let skill = obj_arg(c, 0)?;
-                with_tree(c, upgrade, |t| {
+                with_tree(c, upgrade, |cx, t| {
                     Ok(Value::Bool(match skill {
-                        Some(s) => t.upgrade(s)?,
+                        Some(s) => t.upgrade(cx, s)?,
                         None => false,
                     }))
                 })
@@ -770,9 +879,9 @@ impl NativePack for Pack {
                         });
                     }
                 };
-                with_tree(c, set, |t| {
+                with_tree(c, set, |cx, t| {
                     Ok(Value::Bool(match skill {
-                        Some(s) => t.set_grade(s, grade)?,
+                        Some(s) => t.set_grade(cx, s, grade)?,
                         None => false,
                     }))
                 })
@@ -782,14 +891,14 @@ impl NativePack for Pack {
             vm,
             spent,
             Rc::new(move |c: &mut NativeCall<'_>| {
-                with_tree(c, spent, |t| Ok(Value::Int(t.points_spent()?)))
+                with_tree(c, spent, |_, t| Ok(Value::Int(t.points_spent()?)))
             }),
         )?;
         bind(
             vm,
             action,
             Rc::new(move |c: &mut NativeCall<'_>| {
-                with_tree(c, action, |t| Ok(Value::Object(t.action_skill)))
+                with_tree(c, action, |_, t| Ok(Value::Object(t.action_skill)))
             }),
         )?;
         bind(
@@ -812,7 +921,7 @@ impl NativePack for Pack {
                     function: trained.to_string(),
                     message: format!("SkillType {b} is outside ESkillType"),
                 })?;
-                with_tree(c, trained, |tree| {
+                with_tree(c, trained, |_, tree| {
                     Ok(Value::Bool(tree.has_trained_of_type(t)?))
                 })
             }),

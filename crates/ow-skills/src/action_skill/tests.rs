@@ -14,6 +14,7 @@ use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 use ow_vm::api::{FunctionDecl, Vm};
 
+use super::oracle::*;
 use super::*;
 use crate::skills::fixture::Fx;
 
@@ -889,4 +890,166 @@ fn the_skill_behavior_handlers_cover_activate_and_deactivate() {
         .map(|(c, _)| *c)
         .collect();
     assert_eq!(classes, BEHAVIOR_CLASSES.to_vec());
+}
+
+/// Review r1 of PR #342, item 1: a pool resting at its minimum with a negative rate stores nothing, so its idle stamp
+/// stays; the edge test uses the value SetCurrentValue would store, so an integer truncation onto the minimum counts.
+#[test]
+fn the_drain_tests_the_stored_value_and_keeps_the_idle_stamp_at_rest() {
+    let mut p = pool_world("Engine.ResourcePool");
+    set_pool(&mut p, "CurrentValue", Value::Float(0.0));
+    set_pool(&mut p, "PoolIdleDelayStartTime", Value::Float(7.0));
+    let d = drain(&mut p.vm, p.pool, 1.0).unwrap();
+    assert_eq!((d.before, d.after), (0.0, 0.0));
+    let stamp = number(
+        "PoolIdleDelayStartTime",
+        &need(&mut p.vm, p.pool, "PoolIdleDelayStartTime").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stamp, 7.0, "no SetCurrentValue, so the stamp did not move");
+
+    // Integer-only: from 1 with a step of -0.6 the target is 0.4, which the pool truncates to 0 (the minimum).
+    let mut p = pool_world("Engine.ResourcePool");
+    let resource = obj_value("Resource", &need(&mut p.vm, p.def, "Resource").unwrap())
+        .unwrap()
+        .unwrap();
+    let rc = p.vm.space.heap.get(resource).unwrap().class;
+    let id = p.vm.space.prop(rc, "bIntegerOnlyUpdates").unwrap();
+    p.vm.space
+        .write(
+            resource,
+            ow_object::ids::PropAddr::scalar(id),
+            Value::Bool(true),
+        )
+        .unwrap();
+    set_pool(&mut p, "CurrentValue", Value::Float(1.0));
+    set_pool(&mut p, "ConsumptionRate", Value::Float(0.6));
+    let c = p.vm.space.heap.get(p.def).unwrap().class;
+    let prop = p.vm.space.prop(c, "OnResourceDepleted").unwrap();
+    let b = p.vm.instantiate(c, "Behavior").unwrap();
+    p.vm.space
+        .write(
+            p.def,
+            ow_object::ids::PropAddr::scalar(prop),
+            Value::Array(Rc::new(vec![Value::Object(Some(b))])),
+        )
+        .unwrap();
+    assert!(
+        matches!(drain(&mut p.vm, p.pool, 1.0), Err(VmError::NotYet(_))),
+        "the truncation reaches the minimum"
+    );
+    assert_eq!(current(&mut p), 1.0, "nothing written");
+    p.vm.space
+        .write(
+            p.def,
+            ow_object::ids::PropAddr::scalar(prop),
+            Value::Array(Rc::new(vec![])),
+        )
+        .unwrap();
+    let d = drain(&mut p.vm, p.pool, 1.0).unwrap();
+    assert_eq!(d.after, 0.0);
+    // At 0 with the same step the value stays 0 but the remainder would move: not read.
+    assert!(matches!(
+        drain(&mut p.vm, p.pool, 1.0),
+        Err(VmError::NotYet(_))
+    ));
+}
+
+/// Review r1 of PR #342, item 1: a delta that is not finite or is negative is refused before anything is written.
+#[test]
+fn the_drain_refuses_a_bad_delta() {
+    let mut p = pool_world("Engine.ResourcePool");
+    set_pool(&mut p, "CurrentValue", Value::Float(5.0));
+    for dt in [f32::NAN, f32::INFINITY, -0.5] {
+        assert!(
+            matches!(drain(&mut p.vm, p.pool, dt), Err(VmError::Script { .. })),
+            "{dt}"
+        );
+    }
+    assert_eq!(current(&mut p), 5.0);
+}
+
+/// Review r1 of PR #342, item 6: data of the wrong kind is an error, never read as "nothing" or false, and the weapon
+/// evaluator with no source is `NotYet` (what the native answers is not read).
+#[test]
+fn wrong_kinds_and_a_missing_source_are_errors_not_answers() {
+    let mut v = vm_world();
+    let object = v.vm.find_class("Core.Object").unwrap();
+    let int = PropKind::Int;
+    let decls = vec![
+        PropertyDecl::new(v.vm.space.names.intern("ActiveSkills"), int.clone()),
+        PropertyDecl::new(v.vm.space.names.intern("bSubjectToGradeRules"), int),
+    ];
+    let bad =
+        v.vm.space
+            .classes
+            .define("Invented.BadData", Some(object), decls)
+            .unwrap();
+    let o = v.vm.instantiate(bad, "Bad").unwrap();
+    Pack.register(&mut v.vm).unwrap();
+    assert!(matches!(
+        is_skill_active(&mut v.vm, o, Some(v.controller), Some(v.skill_def)),
+        Err(VmError::Script { .. })
+    ));
+    let min_grade = f(&mut v.vm, NATIVE_PATHS[1]);
+    assert!(matches!(
+        v.vm.call(min_grade, Some(o), vec![Value::Int(1)]),
+        Err(VmError::Script { .. })
+    ));
+    let weapon_c =
+        v.vm.find_class("WillowGame.WeaponActionAvailableExpressionEvaluator")
+            .unwrap();
+    let weapon = v.vm.instantiate(weapon_c, "Weapon").unwrap();
+    let id = f(&mut v.vm, NATIVE_PATHS[8]);
+    assert!(matches!(
+        v.vm.call(id, Some(weapon), vec![Value::Object(None)]),
+        Err(VmError::NotYet(_))
+    ));
+}
+
+/// Review r1 of PR #342, item 7: the pack collects the output links a skill behavior's script selects when it holds
+/// the `ActivateBehaviorOutputLink` binding; another pack's binding is recorded so the behavior run answers `NotYet`
+/// instead of "no links"; an undeclared function leaves nothing to collect.
+#[test]
+fn the_output_link_collector_knows_who_holds_the_binding() {
+    let declare_link = |vm: &mut Vm| {
+        let object = vm.find_class("Core.Object").unwrap();
+        vm.space
+            .classes
+            .define("GearboxFramework.BehaviorKernel", Some(object), vec![])
+            .unwrap();
+        let struct_kind = PropKind::Int;
+        declare(vm, OUTPUT_LINK, vec![struct_kind, PropKind::Int], None)
+    };
+    // Bound here: a call appends to the innermost frame.
+    let mut v = vm_world();
+    let link = declare_link(&mut v.vm);
+    Pack.register(&mut v.vm).unwrap();
+    let state = selected(&v.vm).unwrap();
+    assert_eq!(state.borrow().mine, Some(true));
+    state.borrow_mut().frames.push(Vec::new());
+    v.vm.call(link, None, vec![Value::Int(0), Value::Int(2)])
+        .unwrap();
+    v.vm.call(link, None, vec![Value::Int(0), Value::Int(2)])
+        .unwrap();
+    assert_eq!(
+        state.borrow_mut().frames.pop(),
+        Some(vec![2, 2]),
+        "call order, duplicates kept"
+    );
+    // Bound by another pack first.
+    let mut v = vm_world();
+    let link = declare_link(&mut v.vm);
+    let key = v.vm.function(link).unwrap().native_key.clone().unwrap();
+    v.vm.register_native(
+        &key,
+        Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::None)),
+    )
+    .unwrap();
+    Pack.register(&mut v.vm).unwrap();
+    assert_eq!(selected(&v.vm).unwrap().borrow().mine, Some(false));
+    // Undeclared.
+    let mut v = vm_world();
+    Pack.register(&mut v.vm).unwrap();
+    assert_eq!(selected(&v.vm).unwrap().borrow().mine, None);
 }

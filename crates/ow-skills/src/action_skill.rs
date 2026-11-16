@@ -13,8 +13,8 @@
 //! **What runs as installed script** (architecture R2): `StartActiveSkillCooldown` (the refill, through the pool's
 //! own `RefillPercentage`), `IsActionSkillOnCooldown`, `ActionSkillCallback`, `ServerStartActionSkill`,
 //! `SkillEffectManager.ActivateSkill`, `Skill.Activate` and `Deactivate`, and the behaviors' `ApplyBehaviorToContext`.
-//! This module binds the natives they call. [`decide_start`] restates `ServerStartActionSkill`'s decision list for
-//! callers without a VM (a second implementation until a differential test exists: Open).
+//! This module binds the natives they call. [`oracle::decide_start`] restates `ServerStartActionSkill`'s decision list
+//! as an oracle for a differential test against the script (Open), not for gameplay callers.
 //!
 //! **Bound by function path** ([`ow_combat::hit::bind`]): a native whose function the VM does not declare is skipped,
 //! and the first binding of a key wins, so this pack and `ow-combat`'s evaluator natives never collide.
@@ -56,102 +56,109 @@ pub const PHYS_LADDER: u8 = 9;
 // The start decision (`ServerStartActionSkill`, restated)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// What `ServerStartActionSkill` reads (section 2), gathered by the caller.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct StartInputs {
-    /// The pawn (a vehicle's driver when the pawn is a vehicle) is on a ladder (`Physics` 9).
-    pub on_ladder: bool,
-    /// The tree knows an action skill.
-    pub has_action_skill: bool,
-    /// The cooldown pool is valid and its current value is above 0.
-    pub on_cooldown: bool,
-    /// On cooldown and the current value is below the pool's maximum.
-    pub cooling_down: bool,
-    /// `IsSkillActive` for the action skill and this controller.
-    pub active: bool,
-    /// The definition is the one named `Skill_Gunzerking` (its one special case).
-    pub gunzerking: bool,
-    /// In a vehicle whose seat is not an attached-rider seat.
-    pub vehicle_seat_refuses: bool,
-    /// `bCanBeToggledOff`.
-    pub can_be_toggled_off: bool,
-    /// The action skill object allows another automatic active-ability activation now.
-    pub active_ability_allowed: bool,
-    /// The action skill object allows another automatic cooldown-ability activation now.
-    pub cooldown_ability_allowed: bool,
-}
+/// **Oracles, not for gameplay callers.** `ServerStartActionSkill` and `IsActionSkillOnCooldown` are world-only installed
+/// script, which the game runs (architecture R2). These restate their decision for a differential test against that
+/// script, which is Open until the behavior kernel's script natives are bound; until then nothing compares them with
+/// the script, so no gameplay code may call them in its place.
+pub mod oracle {
 
-/// What `ServerStartActionSkill` does (section 2). The target variable is cleared after every branch.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartDecision {
-    /// On a ladder: nothing else changes (the target is not even stored).
-    RefusedOnLadder,
-    /// No action skill in the tree: nothing.
-    NoActionSkill,
-    /// In a vehicle seat that is not an attached rider's: nothing.
-    RefusedVehicleSeat,
-    /// Ask the manager to activate it with the tree's grade and `ActionSkillCallback` (the manager may still refuse:
-    /// activation not allowed, the grade test, or a failed constraint inside `Skill.Activate`).
-    Activate,
-    /// A second press of a skill that can be toggled off: deactivate it.
-    ToggleOff,
-    /// The active-ability path (`ServerStartActionSkillActiveAbility`).
-    ActiveAbility,
-    /// The cooldown-ability path (`ServerStartActionSkillCooldownAbility`).
-    CooldownAbility,
-    /// None of the branches applies (a press during Phaselock's lock or its cooldown).
-    Nothing,
-}
+    /// What `ServerStartActionSkill` reads (section 2), gathered by the caller.
+    #[non_exhaustive]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct StartInputs {
+        /// The pawn (a vehicle's driver when the pawn is a vehicle) is on a ladder (`Physics` 9).
+        pub on_ladder: bool,
+        /// The tree knows an action skill.
+        pub has_action_skill: bool,
+        /// The cooldown pool is valid and its current value is above 0.
+        pub on_cooldown: bool,
+        /// On cooldown and the current value is below the pool's maximum.
+        pub cooling_down: bool,
+        /// `IsSkillActive` for the action skill and this controller.
+        pub active: bool,
+        /// The definition is the one named `Skill_Gunzerking` (its one special case).
+        pub gunzerking: bool,
+        /// In a vehicle whose seat is not an attached-rider seat.
+        pub vehicle_seat_refuses: bool,
+        /// `bCanBeToggledOff`.
+        pub can_be_toggled_off: bool,
+        /// The action skill object allows another automatic active-ability activation now.
+        pub active_ability_allowed: bool,
+        /// The action skill object allows another automatic cooldown-ability activation now.
+        pub cooldown_ability_allowed: bool,
+    }
 
-/// `ServerStartActionSkill`'s decision list (NATIVE_ACTION_SKILL.md section 2, the consistent reading; UNVERIFIED in
-/// the game, except that a cast during a put-down uses no cooldown, which is the constraint inside `Activate`).
-pub fn decide_start(i: StartInputs) -> StartDecision {
-    if i.on_ladder {
-        return StartDecision::RefusedOnLadder;
+    /// What `ServerStartActionSkill` does (section 2). The target variable is cleared after every branch.
+    #[non_exhaustive]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum StartDecision {
+        /// On a ladder: nothing else changes (the target is not even stored).
+        RefusedOnLadder,
+        /// No action skill in the tree: nothing.
+        NoActionSkill,
+        /// In a vehicle seat that is not an attached rider's: nothing.
+        RefusedVehicleSeat,
+        /// Ask the manager to activate it with the tree's grade and `ActionSkillCallback` (the manager may still refuse:
+        /// activation not allowed, the grade test, or a failed constraint inside `Skill.Activate`).
+        Activate,
+        /// A second press of a skill that can be toggled off: deactivate it.
+        ToggleOff,
+        /// The active-ability path (`ServerStartActionSkillActiveAbility`).
+        ActiveAbility,
+        /// The cooldown-ability path (`ServerStartActionSkillCooldownAbility`).
+        CooldownAbility,
+        /// None of the branches applies (a press during Phaselock's lock or its cooldown).
+        Nothing,
     }
-    if !i.has_action_skill {
-        return StartDecision::NoActionSkill;
-    }
-    // Only for Skill_Gunzerking the cooling-down flag is "cooling down and not active"; the cooldown refusal is not
-    // waived (Corrections, NATIVE_ACTION_SKILL.md).
-    let cooling_down = if i.gunzerking {
-        i.cooling_down && !i.active
-    } else {
-        i.cooling_down
-    };
-    if !i.on_cooldown && !i.active {
-        if i.vehicle_seat_refuses {
-            return StartDecision::RefusedVehicleSeat;
+
+    /// `ServerStartActionSkill`'s decision list (NATIVE_ACTION_SKILL.md section 2, the consistent reading; UNVERIFIED in
+    /// the game, except that a cast during a put-down uses no cooldown, which is the constraint inside `Activate`).
+    pub fn decide_start(i: StartInputs) -> StartDecision {
+        if i.on_ladder {
+            return StartDecision::RefusedOnLadder;
         }
-        return StartDecision::Activate;
-    }
-    if i.can_be_toggled_off {
-        return StartDecision::ToggleOff;
-    }
-    if i.active && !cooling_down {
-        return if i.active_ability_allowed {
-            StartDecision::ActiveAbility
+        if !i.has_action_skill {
+            return StartDecision::NoActionSkill;
+        }
+        // Only for Skill_Gunzerking the cooling-down flag is "cooling down and not active"; the cooldown refusal is not
+        // waived (Corrections, NATIVE_ACTION_SKILL.md).
+        let cooling_down = if i.gunzerking {
+            i.cooling_down && !i.active
         } else {
-            StartDecision::Nothing
+            i.cooling_down
         };
+        if !i.on_cooldown && !i.active {
+            if i.vehicle_seat_refuses {
+                return StartDecision::RefusedVehicleSeat;
+            }
+            return StartDecision::Activate;
+        }
+        if i.can_be_toggled_off {
+            return StartDecision::ToggleOff;
+        }
+        if i.active && !cooling_down {
+            return if i.active_ability_allowed {
+                StartDecision::ActiveAbility
+            } else {
+                StartDecision::Nothing
+            };
+        }
+        if cooling_down {
+            return if i.cooldown_ability_allowed {
+                StartDecision::CooldownAbility
+            } else {
+                StartDecision::Nothing
+            };
+        }
+        StartDecision::Nothing
     }
-    if cooling_down {
-        return if i.cooldown_ability_allowed {
-            StartDecision::CooldownAbility
-        } else {
-            StartDecision::Nothing
-        };
-    }
-    StartDecision::Nothing
-}
 
-/// The cooldown flags of section 5 from the pool's current and maximum values: `(on_cooldown, cooling_down)`, where
-/// on cooldown is `current > 0` and cooling down is on cooldown and `current < max`. Ready is `current <= 0`.
-pub fn cooldown_flags(current: f32, max: f32) -> (bool, bool) {
-    let on = current > 0.0;
-    (on, on && current < max)
+    /// The cooldown flags of section 5 from the pool's current and maximum values: `(on_cooldown, cooling_down)`, where
+    /// on cooldown is `current > 0` and cooling down is on cooldown and `current < max`. Ready is `current <= 0`.
+    pub fn cooldown_flags(current: f32, max: f32) -> (bool, bool) {
+        let on = current > 0.0;
+        (on, on && current < max)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -228,10 +235,16 @@ pub(crate) fn need(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Value, VmError>
     Ok(ow_attr::eval::required(&mut cx, o, name)?)
 }
 
-fn obj_of(v: &Value) -> Option<ObjRef> {
+/// An object (or interface) value; `Value::None` reads as no object; any other kind is bad data, never "no object"
+/// (review r1 of PR #342, item 6).
+fn obj_value(what: &str, v: &Value) -> Result<Option<ObjRef>, VmError> {
     match v {
-        Value::Object(o) | Value::Interface(o) => *o,
-        _ => None,
+        Value::Object(o) | Value::Interface(o) => Ok(*o),
+        Value::None => Ok(None),
+        other => Err(script_error(
+            what,
+            format!("expected an object, found {}", other.kind_name()),
+        )),
     }
 }
 
@@ -297,7 +310,7 @@ fn pawn_of(vm: &mut Vm, o: ObjRef) -> Result<Option<ObjRef>, VmError> {
         return Ok(Some(o));
     }
     if crate::skills::is_a(space, o, "Engine.Controller")? {
-        return Ok(need(vm, o, "Pawn").ok().as_ref().and_then(obj_of));
+        return obj_value("Pawn", &need(vm, o, "Pawn")?);
     }
     Ok(None)
 }
@@ -311,7 +324,7 @@ fn arg_obj(c: &NativeCall<'_>, i: usize) -> Result<Option<ObjRef>, VmError> {
     if i >= c.arg_count() {
         return Ok(None);
     }
-    Ok(obj_of(c.arg(i)?))
+    obj_value("an argument", c.arg(i)?)
 }
 
 fn arg_int(c: &NativeCall<'_>, i: usize, what: &str) -> Result<i32, VmError> {
@@ -347,12 +360,13 @@ pub fn calculate_state(
     skill: ObjRef,
     activation: bool,
 ) -> Result<SkillState, VmError> {
-    let definition = obj_of(&need(vm, skill, "Definition")?).ok_or_else(|| {
-        VmError::from(NotYet::not_read(
-            "a constraint check on a skill with no definition",
-            RECORD,
-        ))
-    })?;
+    let definition =
+        obj_value("Definition", &need(vm, skill, "Definition")?)?.ok_or_else(|| {
+            VmError::from(NotYet::not_read(
+                "a constraint check on a skill with no definition",
+                RECORD,
+            ))
+        })?;
     let current = skill_state_of_byte(byte_of(&need(vm, skill, "SkillState")?, "SkillState")?)
         .ok_or_else(|| {
             script_error(
@@ -360,7 +374,7 @@ pub fn calculate_state(
                 "SkillState outside ESkillState",
             )
         })?;
-    let instigator = obj_of(&need(vm, skill, "SkillInstigator")?);
+    let instigator = obj_value("SkillInstigator", &need(vm, skill, "SkillInstigator")?)?;
     let def = read_skill(&mut EvalCx::new(vm), definition)?;
     let state = state_from_constraints(&def.constraints, activation, current, |e| {
         Ok(evaluate(vm, e, instigator)?)
@@ -381,15 +395,25 @@ pub fn is_skill_active(
     definition: Option<ObjRef>,
 ) -> Result<bool, VmError> {
     let list = need(vm, manager, "ActiveSkills")?;
-    let skills: Vec<ObjRef> = list
-        .elements()
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(obj_of)
-        .collect();
+    let entries = list.elements().ok_or_else(|| {
+        script_error(
+            "IsSkillActive",
+            format!(
+                "ActiveSkills: expected an array, found {}",
+                list.kind_name()
+            ),
+        )
+    })?;
+    let mut skills = Vec::with_capacity(entries.len());
+    for e in entries {
+        // A None entry holds no skill; any other kind is bad data.
+        if let Some(o) = obj_value("ActiveSkills", e)? {
+            skills.push(o);
+        }
+    }
     for s in skills {
-        let d = obj_of(&need(vm, s, "Definition")?);
-        let i = obj_of(&need(vm, s, "SkillInstigator")?);
+        let d = obj_value("Definition", &need(vm, s, "Definition")?)?;
+        let i = obj_value("SkillInstigator", &need(vm, s, "SkillInstigator")?)?;
         let state = byte_of(&need(vm, s, "SkillState")?, "SkillState")?;
         if d == definition && i == controller && state != SkillState::Deactivated.byte() {
             return Ok(true);
@@ -459,6 +483,7 @@ pub struct Pack;
 
 impl NativePack for Pack {
     fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
+        bind_output_link(vm)?;
         let [
             active,
             min_grade,
@@ -487,7 +512,18 @@ impl NativePack for Pack {
             Rc::new(move |c: &mut NativeCall<'_>| {
                 let me = this(c, min_grade)?;
                 let grade = arg_int(c, 0, min_grade)?;
-                let subject = matches!(need(c.vm, me, "bSubjectToGradeRules")?, Value::Bool(true));
+                let subject = match need(c.vm, me, "bSubjectToGradeRules")? {
+                    Value::Bool(b) => b,
+                    other => {
+                        return Err(script_error(
+                            min_grade,
+                            format!(
+                                "bSubjectToGradeRules: expected a bool, found {}",
+                                other.kind_name()
+                            ),
+                        ));
+                    }
+                };
                 Ok(Value::Bool(passes_min_grade_test(subject, grade)))
             }),
         )?;
@@ -627,8 +663,13 @@ impl NativePack for Pack {
             vm,
             weapon,
             Rc::new(move |c: &mut NativeCall<'_>| {
+                // A None source: what the native answers is not read (it reaches the controller's script).
                 let Some(o) = arg_obj(c, 0)? else {
-                    return Ok(Value::Bool(false));
+                    return Err(NotYet::not_read(
+                        "WeaponActionAvailableExpressionEvaluator with no source",
+                        crate::skills::RECORD_CONSTRAINTS,
+                    )
+                    .into());
                 };
                 if !crate::skills::is_a(&c.vm.space, o, "WillowGame.WillowPlayerController")? {
                     return Err(NotYet::not_read("WeaponActionAvailableExpressionEvaluator on a source that is not a player controller", crate::skills::RECORD_CONSTRAINTS).into());
@@ -667,14 +708,28 @@ fn pool_float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
 /// The base `ResourcePool` per-frame update for `dt` seconds (NATIVE_SKILLS.md 5.2): nothing while
 /// `RegenerationDisabled` is non-zero; the net rate is `ActiveRegenerationRate + PassiveRegenerationRate -
 /// ConsumptionRate`, plus `OnIdleRegenerationRate` once `OnIdleRegenerationDelay` has passed since
-/// `PoolIdleDelayStartTime`; the new value `current + rate x dt` goes through `SetCurrentValue` (the clamp, the
-/// integer remainder kept in `RateRemainder`, the idle stamp), and only when it differs from the current value.
+/// `PoolIdleDelayStartTime`; the new value `current + rate x dt + RateRemainder` goes through `SetCurrentValue` (the
+/// truncation, the clamp, the remainder, the idle stamp) only when the value `SetCurrentValue` would store
+/// ([`ow_world::pools::stored_value`]) differs from the current one, so a pool resting at an extreme keeps its idle
+/// stamp. The edge test (reaching or leaving the minimum or the maximum) uses that stored value too, so an integer
+/// truncation that lands on the minimum counts.
 ///
-/// `NotYet`, checked before anything is written: a pool class other than `Engine.ResourcePool` (the experience pool
-/// overrides the update), an attached `RegenerationPool` (its charge rule is not read), and a step that reaches or
-/// leaves the minimum or the maximum when the definition lists behaviors for that event (which list fires on which
-/// event is read from field order only, UNVERIFIED in the record). Status: UNVERIFIED in the running game.
+/// Refused before anything is written: a delta that is not finite or is negative (bad data, as `World::tick`);
+/// `NotYet` for a pool class other than `Engine.ResourcePool` (the experience pool overrides the update), an attached
+/// `RegenerationPool` (its charge rule is not read), an integer-only pool whose step moves only its remainder, and a
+/// step that reaches or leaves an extreme when the definition lists behaviors for those events (which list fires on
+/// which event is read from field order only, UNVERIFIED in the record). Status: UNVERIFIED in the running game.
 pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
+    // A delta that is not finite or is negative is refused, as `World::tick` refuses it (`WorldError::BadDelta`).
+    if !dt.is_finite() || dt < 0.0 {
+        return Err(script_error(
+            "drain",
+            format!(
+                "a frame delta must be finite and not negative (got {})",
+                ow_core::fmt::fmt_g(f64::from(dt), 9)
+            ),
+        ));
+    }
     let class = ow_attr::eval::class_path(&vm.space, pool);
     if class != "Engine.ResourcePool" {
         return Err(NotYet::not_read(
@@ -683,7 +738,7 @@ pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
         )
         .into());
     }
-    if obj_of(&need(vm, pool, "RegenerationPool")?).is_some() {
+    if obj_value("RegenerationPool", &need(vm, pool, "RegenerationPool")?)?.is_some() {
         return Err(NotYet::not_read(
             "the per-frame update with a regeneration pool attached",
             RECORD_DRAIN,
@@ -721,20 +776,43 @@ pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
     }
     let remainder = pool_float(vm, pool, "RateRemainder")?;
     let target = before + rate * dt + remainder;
+    // The value SetCurrentValue would store (its truncation, then its clamp order), which both tests below use.
+    let Some(stored) = ow_world::pools::stored_value(vm, pool, target)? else {
+        // Not authoritative: SetCurrentValue stores nothing.
+        return Ok(Drained {
+            before,
+            after: before,
+            rate,
+        });
+    };
+    let changed = stored.current.to_bits() != before.to_bits();
+    if !changed {
+        if stored
+            .remainder
+            .is_some_and(|r| r.to_bits() != remainder.to_bits())
+        {
+            // An integer-only pool whose step moves only the kept fraction: whether the native writes the fraction
+            // (and moves the idle stamp) without a value change is not read.
+            return Err(NotYet::not_read(
+                "the per-frame update of an integer-only pool whose step changes only its remainder",
+                RECORD_DRAIN,
+            )
+            .into());
+        }
+        // Nothing changes (a pool resting at an extreme): no SetCurrentValue, so the idle stamp stays.
+        return Ok(Drained {
+            before,
+            after: before,
+            rate,
+        });
+    }
     let (min, max) = (
         pool_float(vm, pool, "MinValue")?,
         pool_float(vm, pool, "MaxValue")?,
     );
-    let projected = if target < min {
-        min
-    } else if target > max {
-        max
-    } else {
-        target
-    };
-    let crosses = |edge: f32| (before == edge) != (projected == edge);
+    let crosses = |edge: f32| (before == edge) != (stored.current == edge);
     if (crosses(min) || crosses(max))
-        && let Some(def) = obj_of(&need(vm, pool, "Definition")?)
+        && let Some(def) = obj_value("Definition", &need(vm, pool, "Definition")?)?
     {
         for list in [
             "OnResourceDepleted",
@@ -752,9 +830,7 @@ pub fn drain(vm: &mut Vm, pool: ObjRef, dt: f32) -> Result<Drained, VmError> {
             }
         }
     }
-    if target.to_bits() != before.to_bits() {
-        ow_world::pools::set_current(vm, pool, target)?;
-    }
+    ow_world::pools::set_current(vm, pool, target)?;
     let after = pool_float(vm, pool, "CurrentValue")?;
     Ok(Drained {
         before,
@@ -790,9 +866,88 @@ pub const BEHAVIOR_CLASSES: [&str; 2] = [
     "WillowGame.Behavior_DeactivateSkill",
 ];
 
+/// The function whose calls select a running script behavior's output links (static, `KernelInfo` and the id).
+pub const OUTPUT_LINK: &str = "GearboxFramework.BehaviorKernel.ActivateBehaviorOutputLink";
+
+/// Who collects the output links the skill behaviors' scripts select (a VM service).
+#[derive(Debug, Default)]
+pub struct Selected {
+    /// One list per running skill behavior, innermost last.
+    frames: Vec<Vec<i32>>,
+    /// `Some(true)`: this pack bound [`OUTPUT_LINK`]; `Some(false)`: another pack bound it first, so the links go to
+    /// that pack's collector (`ow-combat`'s is crate-private: a shared collector in `ow-behavior` is a contract item);
+    /// `None`: the VM does not declare it, so no script can select a link.
+    mine: Option<bool>,
+}
+
+fn selected(vm: &Vm) -> Result<std::rc::Rc<std::cell::RefCell<Selected>>, VmError> {
+    vm.service::<Selected>().ok_or_else(|| {
+        NotYet::layer_absent(
+            "the skill behaviors' output links",
+            "ow-skills action_skill::Pack",
+            RECORD,
+        )
+        .into()
+    })
+}
+
+fn bind_output_link(vm: &mut Vm) -> Result<(), VmError> {
+    let state = match vm.service::<Selected>() {
+        Some(s) => s,
+        None => vm.add_service(Selected::default())?,
+    };
+    // A second registration on the same VM keeps the first answer (the binding found then is this pack's own).
+    if state
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
+        .mine
+        == Some(true)
+    {
+        return Ok(());
+    }
+    let declared = vm
+        .find_function(OUTPUT_LINK)
+        .ok()
+        .and_then(|f| vm.function(f).and_then(|d| d.native_key.clone()));
+    let mine = match declared {
+        None => None,
+        Some(key) if vm.has_native(&key) => Some(false),
+        Some(key) => {
+            let s = state.clone();
+            vm.register_native(
+                &key,
+                Rc::new(move |c: &mut NativeCall<'_>| {
+                    // The id is an int argument; a byte widens.
+                    let id = arg_int(c, 1, OUTPUT_LINK)?;
+                    let mut st = s.try_borrow_mut().map_err(|_| {
+                        VmError::ServiceBorrowed("ow_skills::action_skill::Selected")
+                    })?;
+                    if let Some(frame) = st.frames.last_mut() {
+                        frame.push(id);
+                    }
+                    Ok(Value::None)
+                }),
+            )?;
+            Some(true)
+        }
+    };
+    state
+        .try_borrow_mut()
+        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
+        .mine = mine;
+    Ok(())
+}
+
 /// Runs the installed `ApplyBehaviorToContext` of behavior `id` once per context (the behavior's Context link, else
-/// `consumer`), with `ContextObject` and `SelfObject` set and every other parameter at its zero value. The script
-/// then asks the context's `ISkillBehavior` to activate or deactivate the skill.
+/// `consumer`), with `ContextObject` and `SelfObject` set and every other parameter at its zero value, and returns
+/// the output links the script selected (`ActivateBehaviorOutputLink`, in call order, duplicates kept), as
+/// `ow-combat` runs its script behaviors. The script then asks the context's `ISkillBehavior` to activate or
+/// deactivate the skill.
+///
+/// `NotYet` (before any call): another pack holds the output-link binding (its links cannot be seen here), or the
+/// script would read a zero-filled parameter. Read from the installed script (local listing): `Behavior_ActivateSkill`
+/// reads `MyInstigatorObject`, `OtherEventParticipantObject` and `KernelInfo` only when `bUseAdditionalSkillTarget`
+/// is set, and `Behavior_DeactivateSkill` never; so that flag is refused and the other parameters may stay zero.
 pub fn run_skill_behavior(
     vm: &mut Vm,
     p: &mut Provider,
@@ -806,10 +961,46 @@ pub fn run_skill_behavior(
             NotYet::not_read("a skill behavior without ApplyBehaviorToContext", RECORD).into(),
         );
     };
+    if let Some(Value::Bool(true)) = get(vm, object, "bUseAdditionalSkillTarget")? {
+        return Err(NotYet::not_read(
+            "Behavior_ActivateSkill with bUseAdditionalSkillTarget (its script reads the instigator, the other              participant and the kernel information, which this handler does not have)",
+            RECORD,
+        )
+        .into());
+    }
+    let state = selected(vm)?;
+    let mine = state
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?
+        .mine;
+    if mine == Some(false) {
+        return Err(NotYet::layer_absent(
+            "the output links of a skill behavior (another pack binds ActivateBehaviorOutputLink)",
+            "a shared output-link collector in ow-behavior",
+            RECORD,
+        )
+        .into());
+    }
     let params = vm
         .function(apply)
         .map(|d| d.params.clone())
         .unwrap_or_default();
+    let push = |st: &std::rc::Rc<std::cell::RefCell<Selected>>,
+                frame: Option<Vec<i32>>|
+     -> Result<Vec<i32>, VmError> {
+        let mut s = st
+            .try_borrow_mut()
+            .map_err(|_| VmError::ServiceBorrowed("ow_skills::action_skill::Selected"))?;
+        Ok(match frame {
+            Some(f) => {
+                s.frames.push(f);
+                Vec::new()
+            }
+            None => s.frames.pop().unwrap_or_default(),
+        })
+    };
+    push(&state, Some(Vec::new()))?;
+    let mut result = Ok(());
     for context in p.contexts(id, consumer) {
         let args = params
             .iter()
@@ -819,9 +1010,13 @@ pub fn run_skill_behavior(
                 _ => vm.space.classes.zero_value(&d.kind),
             })
             .collect();
-        vm.call(apply, Some(object), args)?;
+        if let Err(e) = vm.call(apply, Some(object), args) {
+            result = Err(e);
+            break;
+        }
     }
-    Ok(Vec::new())
+    let ids = push(&state, None)?;
+    result.map(|()| ids)
 }
 
 /// The skill behavior handlers for a provider registered on `consumer`, to be set with `Provider::handle` (a handler
