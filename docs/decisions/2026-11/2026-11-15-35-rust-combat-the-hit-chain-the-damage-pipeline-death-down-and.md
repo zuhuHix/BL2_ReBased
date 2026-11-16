@@ -33,21 +33,36 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   `DamageTypeExpModifiers`) the result is its `NotYet` in both modes, where the C++ logs and goes on. None is reached by
   the slice's kills. `PlayerCount` holds 1 to 4, so a game count outside the weight table (the `WillowGameInfo`
   default 0) is passed as a count past the table's rows, which reads as bonus 0 and weight 1, the record's rule; a
-  table of four rows or more would make that `NotYet` (contract item below).
+  table of four rows or more makes that `NotYet` (contract item below). **The installed table has four rows**
+  (`GD_Globals.General.Globals.ExpAwardWeights`, counted locally through `--def-dump`; `ExpScaleByLevelDifference` has
+  six), so on the installed game every credit of a run whose game keeps the default `EffectiveNumPlayers` of 0 is
+  `NotYet` until the contract item is settled; a `players:<n>` step of 1 to 4 sets the count.
 - **Where the Rust differs from the C++, and why.**
   - Each spawn is instantiated from its package export with the C++ 4-byte prefix (`ow_object::cdo::instantiate_export`,
     as W5-KISMET does), and its resource references are then relinked to the definition store's objects by path. The
     store itself refuses every pawn archetype of the installed game: it derives a 26-byte prefix for an `Actor`
     subclass export outside a level, and their tags do not parse there (checked locally on `Pawn_TargetDummy` and
-    `Pawn_PrimalBeast`). The swing's definitions are read the same way, as the C++ reads them.
+    `Pawn_PrimalBeast`). The swing's definitions are read the same way, as the C++ reads them. A reference the store
+    resolves to no definition, and a value nested deeper than the relink bound, are kept as the C++ keeps its resource
+    stand-ins in `Reference` mode and refused in `Off` mode (review r1 of PR #335).
+  - `hit::stock_object` (the damage type of a `hit` step, the globals definition) takes the store's first holder of
+    the path as one shared object; the C++ makes a copy, looked up in the victim's package first and then in Startup.
+    The two read the same values unless cooked copies of the path differ between files.
   - The pool manager is the world's spawned actor (W5-POOLS), so a run places the level's `WorldInfo` in the actor list.
   - **`SetHealth` events.** The C++ pool half logs `SetHealth <value>` into the event list. The Rust `SetHealth` is
     W5-POOLS' native and logs nothing; no VM API lets this lane observe it. So those lines are missing from a hit's
     `events` (the `order` list still shows the calls). Contract item below.
-  - A behavior event raised on a provider that is running is raised after the running event returns, not inside it
-    (`Provider` methods take `&mut self`); the C++ re-enters.
-  - The mission bridge (W6-MISSION) is not in the tree: a run with a `maya:` step is `NotYet` before any step (exit 3).
-    `tick`, `cash`, `bleed` and `mayahealth` answer the C++ texts of a run without the bridge. Loot (W6-LOOT): `seed`,
+  - A behavior event raised on a provider that is running (a death definition's `Behavior_CustomEvent` broadcasting
+    to its own provider) is deferred and raised once the outermost raise's own event has returned, in order; the C++
+    re-enters (`Provider` methods take `&mut self`). A provider is marked running from before it is made until it is
+    back, so a re-entrant raise never makes a second provider over the same definition; only the outermost raise
+    drains, `OnTakeDamage`'s raise included, at most 10,000 deferred events (a runaway is an error). Review r1 of PR
+    #335 found the first version hung on this path; the test
+    `run::tests::an_event_raised_on_a_running_provider_runs_after_it_once_and_on_the_same_provider` pins the order.
+  - The mission bridge (W6-MISSION, on main since e45490a) is not wired into the run yet: a follow-up lane wires the
+    `maya`, `tick`, `bleed` and `cash` steps against it for S-d and S-f (hub decision, review r1 of PR #335). Until then
+    a run with a `maya:` step is `NotYet { NotPorted }` before any step (exit 3), and `tick`, `cash`, `bleed` and
+    `mayahealth` answer the C++ texts of a run without the bridge. Loot (W6-LOOT): `seed`,
     `rollpool`, `lootbatch` and the loot setup of a spawn with a pawn balance are `NotYet { LayerAbsent }` (the spawn is
     made first, so the pawn and its rows exist), and a kill reports no `loot`.
   - None of the C++'s per-provider behavior handlers (`Behavior_AIHold`, `Behavior_Conditional`, `Behavior_CustomEvent`,
@@ -65,6 +80,13 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   - An attribute the VM object's class does not declare: `Reference` reads the stage's identity and notes it once, as the
     C++; `Off` is `NotYet { NotRead }`. A C++ "not implemented" site: `Reference` logs `UNIMPLEMENTED <what> (not
     implemented)` and goes on; `Off` is `NotYet { NotPorted }`.
+  - The stages `AdjustDamage` leaves out (review r1 of PR #335): `Reference` keeps the C++ `note:` texts and goes on;
+    `Off` is `NotYet` where each would apply: the AI weapon scales of a bullet or rocket and the shield stage of a
+    victim with a valid shield pool (`NotPorted`; the shield matters for the slice, S-e's bullymong hits Maya's shield),
+    a globals definition without `GlobalAIDamageScale` (`NotRead`), a region hit whose pipeline carries an impact
+    definition (its per-material modifier, `NotPorted`; the C++ reads the region's `DefaultImpactResponse` whatever the
+    pipeline carries), a hit with a damage type whose region names no surface (`NotRead`: the C++ reads flesh), the
+    hit-region cap, averted death and the protection timer (`NotPorted`). None of the 16 pinned step lists reaches them.
   - The stub policy of `--combat-run`: `Off` refuses every unbound native (`Refuse`, nothing allowed); `Reference` is
     `LogAndZero`, the C++ run's handling of every unbound native.
   - Where NATIVE_DOWN_TIMERS.md (read after the C++) differs from the C++, `Off` takes the record: `SetSecondWindReason`
@@ -75,9 +97,10 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   static array of 16, the toy `Actor` and `WorldInfo` declare the fields the world's actor spawn reads, and the
   manager's class default object holds `Role` = 3. No assertion changed; the file passes on the C++ binary as before.
 - **Verified (automated, local, pc-hummer).**
-  - 53 `ow-combat` unit tests on the invented packages of `run/fixture.rs` (a Rust port of `combat_test.py`'s builders
+  - 58 `ow-combat` unit tests (after review r1 of PR #335) on the invented packages of `run/fixture.rs` (a Rust port of `combat_test.py`'s builders
     without their loot part, plus invented allegiances, hit regions, a resisting damage type, expression trees,
-    currency and consumer handles), one per rule above.
+    currency and consumer handles), one per rule above; the re-entry tests run on the `ow-behavior` fixture's provider
+    packages with one more invented package.
   - `--combat-run` against the C++ binary on the same package bytes: sixteen step lists (the scenarios of
     `combat_test.py` without loot, plus three that run `AdjustDamage` on an armored toy pawn). After removing the two
     timing fields and the `SetHealth` lines, the Rust report is byte-identical to the C++ one: all 16 in `Reference`
@@ -102,6 +125,7 @@ unless a line says otherwise; the C++ is the oracle for every text and number, w
   - `registry::HandlerFn` does not receive the consumer (decision 2026-11-15-30 names the additive route); a handler that
     needs it can only be set per provider.
   - `ow_balance::xp::KillCredit::players` cannot hold a count outside the weight table.
-- **Open items.** The mission bridge's steps (S-d credit into Maya's pool, S-f's bleed-out and respawn: W6-MISSION);
+- **Open items.** The mission bridge's steps (S-d credit into Maya's pool, S-f's bleed-out and respawn: a follow-up
+  lane wires them against W6-MISSION's bridge);
   loot (W6-LOOT); the stages `AdjustDamage` leaves out; every native body the C++ reads by role (the down natives, the
   holds, the expression evaluators); the installed-game comparison after the three items above.

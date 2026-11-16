@@ -14,8 +14,9 @@
 //! - `IsInjured`: the C++ answers `bIsInjured`; the record's `WillowAIPawn` override also answers the AI pawn's own
 //!   `bInjured` byte (when the class declares it; an invented class that does not has no such byte to add).
 //!
-//! **The mission bridge.** `maya`, `bleed`, `cash` and the injured definition need W6-MISSION's player
-//! (`run.rs` refuses those steps until it lands); the natives and [`prepare_player_pawn`] are here for it.
+//! **The mission bridge.** `maya`, `bleed`, `cash` and the injured definition need W6-MISSION's player, which a
+//! follow-up lane wires into the run (`run.rs` refuses those steps until then); the natives and
+//! [`prepare_player_pawn`] are here for it.
 
 use ow_core::ParityMode;
 use ow_object::ids::{ObjRef, PropAddr};

@@ -5,7 +5,7 @@
 //! cooked folder, applies the steps and prints the JSON report of `ow_combat::run` (one line), exit 0 when no step
 //! failed and 1 when one did. The source package loads first, as the C++ loads it before it reads the mode; the
 //! package argument is any package (the archetypes name their own). Errors before the run print `ow-package:
-//! <message>` with exit 1; a `NotYet` (a run with a `maya` step, which needs W6-MISSION's bridge) exits 3.
+//! <message>` with exit 1; a `NotYet` (a run with a `maya` step, whose W6-MISSION bridge is not wired in yet) exits 3.
 //!
 //! **The world.** A definition store over the cooked folder (first holder in scan order), the standard attribute
 //! system, the Core natives, and `World::new` with the combat pack (`ow_combat::hit::Pack`) after the world's own

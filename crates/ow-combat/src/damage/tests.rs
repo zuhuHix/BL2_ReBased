@@ -261,3 +261,55 @@ fn the_source_kind_is_the_last_table_class_the_source_derives_from() {
     let other = vm.find_class("WillowGame.WillowDamagePipeline").unwrap();
     assert_eq!(source_kind(vm, Some(other)), None);
 }
+
+#[test]
+fn a_stage_left_out_is_not_yet_in_off_mode_and_a_note_in_reference_mode() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    match left_out(vm, None, "a stage", Gap::NotPorted) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.missing, Missing::NotPorted),
+        other => panic!("{other:?}"),
+    }
+    match left_out(vm, Some("k"), "a datum", Gap::NotRead) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.missing, Missing::NotRead),
+        other => panic!("{other:?}"),
+    }
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    let vm = &mut run.world().vm;
+    left_out(vm, None, "every time", Gap::NotPorted).unwrap();
+    left_out(vm, None, "every time", Gap::NotPorted).unwrap();
+    left_out(vm, Some("k"), "once", Gap::NotRead).unwrap();
+    left_out(vm, Some("k"), "once", Gap::NotRead).unwrap();
+    let events = crate::hit::with_state(vm, |s| s.events.clone()).unwrap();
+    assert_eq!(
+        events,
+        ["note: every time", "note: every time", "note: once"]
+    );
+}
+
+#[test]
+fn an_ai_bullet_is_not_yet_at_the_weapon_scales_in_off_mode() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _dir) = fresh(mode);
+        run.apply("spawn:ToyPawns/Pawn_Armored:4");
+        run.apply("spawn:ToyPawns/Pawn_Toy:4");
+        let victim = run.enemy(0).unwrap().pawn;
+        let attacker = run.enemy(1).unwrap().mind;
+        let vm = &mut run.world().vm;
+        let bullet = vm.find_class("WillowGame.WillowDmgSource_Bullet").unwrap();
+        let r = crate::hit::hit_with_type(vm, victim, Some(attacker), 100.0, None, Some(bullet));
+        match (mode, r) {
+            (ParityMode::Off, Err(VmError::NotYet(n))) => {
+                assert_eq!(n.missing, Missing::NotPorted);
+                assert!(n.to_string().contains("the AI weapon scales"), "{n}");
+            }
+            (ParityMode::Reference, Ok(r)) => assert!(
+                r.events.iter().any(|e| e
+                    == "note: AdjustDamage stage 1: the AI weapon scales of bullet and rocket damage are not implemented"),
+                "{:?}",
+                r.events
+            ),
+            (m, other) => panic!("{m:?}: {other:?}"),
+        }
+    }
+}

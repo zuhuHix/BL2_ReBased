@@ -1144,10 +1144,17 @@ pub fn copy_of(vm: &mut Vm, archetype: ObjRef) -> Result<ObjRef, VmError> {
 pub const RELINK_DEPTH: u32 = 16;
 
 /// `value` with every resource stand-in it holds (an object the decoder left as a reference, `Origin::Resource`)
-/// replaced by the definition store's object of the same path, when the store holds one; nested structs and arrays
-/// are followed to [`RELINK_DEPTH`] levels.
+/// replaced by the definition store's object of the same path; nested structs and arrays are followed to
+/// [`RELINK_DEPTH`] levels. A stand-in the store resolves to no definition, and a value nested deeper than the bound:
+/// `ParityMode::Reference` keeps them as they are (the C++ keeps its resource stand-ins); `ParityMode::Off` refuses
+/// them, naming the path, so nothing reads an unresolved reference as an empty object.
 fn relink_value(vm: &mut Vm, value: &Value, depth: u32) -> Result<Value, VmError> {
     if depth > RELINK_DEPTH {
+        if vm.parity == ParityMode::Off {
+            return Err(error(format!(
+                "combat: an archetype value nests deeper than {RELINK_DEPTH} levels (its references are not relinked)"
+            )));
+        }
         return Ok(value.clone());
     }
     Ok(match value {
@@ -1164,11 +1171,26 @@ fn relink_value(vm: &mut Vm, value: &Value, depth: u32) -> Result<Value, VmError
                 Ok(parsed) => {
                     let r = vm.defs.find(&mut vm.space, &parsed);
                     vm.log.extend(vm.defs.take_log());
-                    r.ok().flatten()
+                    r
                 }
-                Err(_) => None,
+                Err(e) => Err(ow_defs::store::DefError::NotADefinition(format!(
+                    "{path}: {e}"
+                ))),
             };
-            Value::Object(Some(found.unwrap_or(*o)))
+            match (found, vm.parity) {
+                (Ok(Some(d)), _) => Value::Object(Some(d)),
+                (_, ParityMode::Reference) => value.clone(),
+                (Ok(None), ParityMode::Off) => {
+                    return Err(error(format!(
+                        "combat: the archetype's reference {path} resolves to no definition in the store"
+                    )));
+                }
+                (Err(e), ParityMode::Off) => {
+                    return Err(error(format!(
+                        "combat: the archetype's reference {path} does not load: {e}"
+                    )));
+                }
+            }
         }
         Value::Struct(s) => {
             let mut fields = Vec::with_capacity(s.fields.len());
