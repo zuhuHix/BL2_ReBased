@@ -25,6 +25,7 @@ use std::fmt;
 use ow_core::NotYet;
 
 /// One record of a chunk: its name, type flag, record size, record count and the record bytes.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Chunk<'a> {
     pub name: &'a str,
@@ -100,6 +101,8 @@ pub enum ActorXError {
     DuplicateBone(String),
     /// A point has more than four influences.
     TooManyInfluences { point: usize },
+    /// A point names one bone twice.
+    RepeatedInfluence { point: usize, bone: usize },
     /// A point has no influence.
     Unweighted { point: usize },
     /// An influence's weight is outside 0..=1.
@@ -118,6 +121,9 @@ pub enum ActorXError {
     BadSequence { sequence: usize },
     /// A track names a bone the mesh does not have.
     UnknownTrackBone(String),
+    /// The set's first track is not the mesh's root bone (`None`: the set has no track). The root's keys are kept
+    /// as stored and every other track's conjugated, so the two must name the same bone.
+    RootTrack { found: Option<String>, root: String },
     /// Something this reader does not support yet.
     NotYet(NotYet),
 }
@@ -180,6 +186,9 @@ impl fmt::Display for ActorXError {
                 )
             }
             ActorXError::DuplicateBone(name) => write!(f, "two bones are named {name}"),
+            ActorXError::RepeatedInfluence { point, bone } => {
+                write!(f, "point {point} names bone {bone} twice")
+            }
             ActorXError::TooManyInfluences { point } => {
                 write!(f, "point {point} has more than 4 influences")
             }
@@ -210,6 +219,10 @@ impl fmt::Display for ActorXError {
                 f,
                 "animation {sequence} has a bad frame count, rate or bone count"
             ),
+            ActorXError::RootTrack { found, root } => match found {
+                Some(name) => write!(f, "the first track is {name}, not the mesh's root {root}"),
+                None => write!(f, "the set has no track, so none is the mesh's root {root}"),
+            },
             ActorXError::UnknownTrackBone(name) => {
                 write!(f, "track bone {name} is not a bone of the mesh")
             }

@@ -50,7 +50,8 @@ the checks below are structural or cross-tool checks, not observations of the ga
   - **Handedness check, from the game's bone names** (`anim::report`). With Z up and forward taken from the mesh
     (arms: `Camera` to the middle of the hands; body: feet to toes), the `R_` bone of each pair lies on the right
     (`up x forward`) and the `L_` bone on the left, for both meshes. A Y-mirrored reading would swap them. This rests
-    on the names meaning what they say; no frame of the running game was compared.
+    on the names meaning what they say; no frame of the running game was compared. The report fails when the
+    check does not hold (review r1 of PR #350).
 - **The bone convention.** ActorX stores every non-root bone with its inverse rotation. The reader conjugates each
   non-root bone's quaternion after the frame conversion, so a `BoneTransform` maps the bone's frame to its parent's
   as `p = q p' q* + t` (Hamilton). How this was checked:
@@ -63,11 +64,17 @@ the checks below are structural or cross-tool checks, not observations of the ga
     (`tools/prepare_character_anims.py` `frames`). The worst difference is 1.04e-3 uu on frames 0 and 1 of nine clips
     (MD5 text keeps six decimals).
   - Both checks compare two UModel outputs, not UModel with the game.
+  - **Which track is the root.** The rule is applied per mesh bone: the track bound to the mesh's root (bone 0) is
+    kept as stored, every other track is conjugated. `AnimSet::bind` refuses a set whose first track is not the
+    mesh's root (`ActorXError::RootTrack`), so a set that put another bone first cannot be bound under a rule meant
+    for the root. All six installed sets (the 159 clips) have `Root` as track 0, and `Root` is bone 0 of both meshes.
 - **Checks in the readers.** Every record size is the one the format has. Every count meets its chunk's bytes, and
   products use checked arithmetic. Every index is in range, every number finite, and every quaternion of unit length
   (squared length 0.99..=1.01). Bones are in parent order with one root (ActorX gives the root parent 0); this is the
   cycle guard, and composition walks bones in index order with no recursion, its depth bounded by the bone count.
-  Bone names are unique. Each point has one to four influences with weights in 0..=1 summing to 1 within 1e-3. Each
+  Bone names are unique (checked through an ordered set; track names are matched through an ordered map, so no
+  lookup is quadratic in the bone count). Each point has one to four influences on distinct bones (one bone named
+  twice in a point is refused; the installed meshes have none), with weights in 0..=1 summing to 1 within 1e-3. Each
   sequence's first frame is the sum of the frames before it, and the key table holds exactly frames x tracks.
   Nothing is clamped or renormalised.
 - **Typed `NotYet`.** Unsupported inputs return `NotYet`:

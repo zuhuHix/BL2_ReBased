@@ -260,7 +260,8 @@ fn engine_matrices_are_the_frame_module_s() {
 
 /// The installed-game report: `OW_H6_ANIM_EXPORTS` names UModel's export folder for `GD_Siren_Streaming_SF`
 /// (under `local/`), `OW_H6_ANIM_OUT` the JSON file to write (under `local/`). Run with
-/// `cargo test -p ow-host --lib anim::tests::installed_report -- --ignored`.
+/// `cargo test -p ow-host --lib anim::tests::installed_report -- --ignored`. It fails if the report does, including
+/// a failed handedness check.
 #[test]
 #[ignore = "needs UModel exports of the installed game under local/"]
 fn installed_report() {
@@ -268,4 +269,33 @@ fn installed_report() {
     let out = std::env::var_os("OW_H6_ANIM_OUT").expect("set OW_H6_ANIM_OUT");
     let text = super::report::run(std::path::Path::new(&root), &super::report::MAYA).unwrap();
     std::fs::write(out, text).unwrap();
+}
+
+#[test]
+fn the_handedness_check_tells_right_from_left() {
+    // Camera at the origin looking along +X; R_Hand on +Y (the game's right), L_Hand on -Y.
+    let arms = |left_y: f32, right_y: f32| {
+        let bone = |name: &str, p: [f32; 3]| {
+            Bone::new(
+                name,
+                if name == "Camera" { None } else { Some(0) },
+                t(ID, p),
+            )
+        };
+        let bones = vec![
+            bone("Camera", [0.0; 3]),
+            bone("L_Hand", [20.0, left_y, -10.0]),
+            bone("R_Hand", [20.0, right_y, -10.0]),
+        ];
+        SkeletalMesh::new(bones, Vec::new(), Vec::new(), Vec::new(), Vec::new())
+    };
+    let check = |mesh: &SkeletalMesh| {
+        let pose = Skeleton::new(mesh).unwrap().bind_pose();
+        super::report::handedness(mesh, &pose, super::report::Handedness::Arms)
+            .unwrap()
+            .1
+    };
+    assert!(check(&arms(-8.0, 8.0)));
+    // The same arms mirrored in Y: refused.
+    assert!(!check(&arms(8.0, -8.0)));
 }
