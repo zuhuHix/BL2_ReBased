@@ -172,13 +172,13 @@ fn set_grade_clamps_skips_the_tier_check_and_answers_whether_it_changed() {
         tree.set_grade(&mut t.fx.cx(), t.a[3], 99).unwrap(),
         "no tier check on the load path"
     );
-    assert_eq!(tree.grade(t.a[3]), Some(5));
+    assert_eq!(tree.grade(&mut t.fx.cx(), t.a[3]).unwrap(), Some(5));
     assert!(
         !tree.set_grade(&mut t.fx.cx(), t.a[3], 7).unwrap(),
         "unchanged after the clamp"
     );
     assert!(tree.set_grade(&mut t.fx.cx(), t.a[3], -3).unwrap());
-    assert_eq!(tree.grade(t.a[3]), Some(0));
+    assert_eq!(tree.grade(&mut t.fx.cx(), t.a[3]).unwrap(), Some(0));
     let other = t.fx.skill("Pkg.Other", "o", "SKILL_TYPE_Passive", 1);
     assert!(
         !tree.set_grade(&mut t.fx.cx(), other, 1).unwrap(),
@@ -193,7 +193,7 @@ fn reset_refunds_before_minus_after_and_restores_default_grades() {
     t.fx.set(t.b[0], "DefaultStartingGrade", Value::Int(1));
     let mut tree = initialized(&mut t);
     assert_eq!(
-        tree.grade(t.b[0]),
+        tree.grade(&mut t.fx.cx(), t.b[0]).unwrap(),
         Some(1),
         "initialize resets to DefaultStartingGrade"
     );
@@ -230,7 +230,7 @@ fn tier_points_count_only_the_cells_and_branch_points_every_skill() {
     assert_eq!(branch.max_points, 20);
     assert!(!branch.unlocked);
     assert_eq!(tree.tier_state(t.branch_a, 7).unwrap(), None);
-    let state = tree.skill_state(t.b[3]).unwrap().unwrap();
+    let state = tree.skill_state(&mut t.fx.cx(), t.b[3]).unwrap().unwrap();
     assert_eq!(
         (state.branch, state.tier, state.grade, state.unlocked),
         (2, 0, 4, false)
@@ -267,7 +267,10 @@ fn a_proficiency_outside_every_tier_is_not_yet() {
         tree.upgrade(&mut t.fx.cx(), p),
         Err(SkillError::NotYet(_))
     ));
-    assert!(matches!(tree.skill_state(p), Err(SkillError::NotYet(_))));
+    assert!(matches!(
+        tree.skill_state(&mut t.fx.cx(), p),
+        Err(SkillError::NotYet(_))
+    ));
     assert!(
         tree.set_grade(&mut t.fx.cx(), p, 2).unwrap(),
         "the load path sets it"
@@ -278,7 +281,11 @@ fn a_proficiency_outside_every_tier_is_not_yet() {
         "proficiencies are not spent points"
     );
     assert_eq!(tree.reset(true).unwrap(), 0);
-    assert_eq!(tree.grade(p), Some(2), "kept when ignoring proficiencies");
+    assert_eq!(
+        tree.grade(&mut t.fx.cx(), p).unwrap(),
+        Some(2),
+        "kept when ignoring proficiencies"
+    );
 }
 
 #[test]
@@ -287,25 +294,25 @@ fn the_ui_check_and_the_server_spend_in_their_order() {
     let mut tree = initialized(&mut t);
     let other = t.fx.skill("Pkg.Other", "o", "SKILL_TYPE_Passive", 1);
     assert_eq!(
-        can_upgrade(&tree, other, 10, 3).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, other, 10, 3).unwrap(),
         UpgradeFailure::DataIssue
     );
     assert_eq!(
-        can_upgrade(&tree, t.action, 4, 3).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, t.action, 4, 3).unwrap(),
         UpgradeFailure::SkillLocked,
         "below level 5"
     );
     assert_eq!(
-        can_upgrade(&tree, t.a[0], 10, 3).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, t.a[0], 10, 3).unwrap(),
         UpgradeFailure::SkillLocked,
         "a locked tier"
     );
     assert_eq!(
-        can_upgrade(&tree, t.action, 5, 0).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, t.action, 5, 0).unwrap(),
         UpgradeFailure::NoSkillPoints
     );
     assert_eq!(
-        can_upgrade(&tree, t.action, 5, 1).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, t.action, 5, 1).unwrap(),
         UpgradeFailure::NoFailure
     );
     let mut points = 1;
@@ -315,7 +322,7 @@ fn the_ui_check_and_the_server_spend_in_their_order() {
     );
     assert_eq!(points, 0);
     assert_eq!(
-        can_upgrade(&tree, t.action, 5, 1).unwrap(),
+        can_upgrade(&mut t.fx.cx(), &tree, t.action, 5, 1).unwrap(),
         UpgradeFailure::SkillMaxed
     );
     assert_eq!(
@@ -323,7 +330,7 @@ fn the_ui_check_and_the_server_spend_in_their_order() {
         None,
         "no point"
     );
-    assert_eq!(tree.grade(t.a[0]), Some(0));
+    assert_eq!(tree.grade(&mut t.fx.cx(), t.a[0]).unwrap(), Some(0));
     let mut points = 2;
     assert_eq!(
         server_upgrade(&mut t.fx.cx(), &mut tree, t.a[3], &mut points).unwrap(),
@@ -516,6 +523,28 @@ fn a_tree_without_its_proficiencies_is_not_yet_for_them() {
     assert!(!tree.set_grade(&mut cx, other, 1).unwrap());
     assert!(!tree.upgrade(&mut cx, other).unwrap());
     assert!(!tree.has_trained_of_type(SkillType::Kill).unwrap());
+    // Review r2 of PR #342, item 3: the readers and the oracles too.
+    assert!(matches!(
+        tree.skill_state(&mut cx, p),
+        Err(SkillError::NotYet(_))
+    ));
+    assert!(matches!(tree.grade(&mut cx, p), Err(SkillError::NotYet(_))));
+    assert!(matches!(
+        can_upgrade(&mut cx, &tree, p, 10, 3),
+        Err(SkillError::NotYet(_))
+    ));
+    let mut points = 3;
+    assert!(matches!(
+        server_upgrade(&mut cx, &mut tree, p, &mut points),
+        Err(SkillError::NotYet(_))
+    ));
+    assert_eq!(points, 3);
+    assert_eq!(tree.skill_state(&mut cx, other).unwrap(), None);
+    assert_eq!(tree.grade(&mut cx, other).unwrap(), None);
+    assert_eq!(
+        can_upgrade(&mut cx, &tree, other, 10, 3).unwrap(),
+        UpgradeFailure::DataIssue
+    );
 }
 
 /// Review r1 of PR #342, item 8: a `DefaultStartingGrade` outside `0..=MaxGrade` is refused (no clamp), and an

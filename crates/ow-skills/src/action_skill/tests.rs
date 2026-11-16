@@ -1007,49 +1007,178 @@ fn wrong_kinds_and_a_missing_source_are_errors_not_answers() {
     ));
 }
 
-/// Review r1 of PR #342, item 7: the pack collects the output links a skill behavior's script selects when it holds
-/// the `ActivateBehaviorOutputLink` binding; another pack's binding is recorded so the behavior run answers `NotYet`
-/// instead of "no links"; an undeclared function leaves nothing to collect.
+/// Review r2 of PR #342, item 2: the skill behavior run on a synthetic `ApplyBehaviorToContext` (a native the test
+/// binds, recording its arguments). Once per context, with `ContextObject` and `SelfObject` set and the rest zero; the
+/// answer is the empty list (the installed scripts select no link); `bUseAdditionalSkillTarget` is `NotYet` before any
+/// call, and that flag of another kind is bad data; a class without the flag reads as not set.
 #[test]
-fn the_output_link_collector_knows_who_holds_the_binding() {
-    let declare_link = |vm: &mut Vm| {
-        let object = vm.find_class("Core.Object").unwrap();
-        vm.space
-            .classes
-            .define("GearboxFramework.BehaviorKernel", Some(object), vec![])
-            .unwrap();
-        let struct_kind = PropKind::Int;
-        declare(vm, OUTPUT_LINK, vec![struct_kind, PropKind::Int], None)
-    };
-    // Bound here: a call appends to the innermost frame.
+fn the_skill_behavior_run_calls_the_script_once_per_context() {
     let mut v = vm_world();
-    let link = declare_link(&mut v.vm);
-    Pack.register(&mut v.vm).unwrap();
-    let state = selected(&v.vm).unwrap();
-    assert_eq!(state.borrow().mine, Some(true));
-    state.borrow_mut().frames.push(Vec::new());
-    v.vm.call(link, None, vec![Value::Int(0), Value::Int(2)])
-        .unwrap();
-    v.vm.call(link, None, vec![Value::Int(0), Value::Int(2)])
-        .unwrap();
-    assert_eq!(
-        state.borrow_mut().frames.pop(),
-        Some(vec![2, 2]),
-        "call order, duplicates kept"
+    let object = v.vm.find_class("Core.Object").unwrap();
+    let obj = PropKind::Object { class: object };
+    let flag = PropertyDecl::new(
+        v.vm.space.names.intern("bUseAdditionalSkillTarget"),
+        PropKind::Bool,
     );
-    // Bound by another pack first.
-    let mut v = vm_world();
-    let link = declare_link(&mut v.vm);
-    let key = v.vm.function(link).unwrap().native_key.clone().unwrap();
-    v.vm.register_native(
-        &key,
-        Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::None)),
-    )
-    .unwrap();
-    Pack.register(&mut v.vm).unwrap();
-    assert_eq!(selected(&v.vm).unwrap().borrow().mine, Some(false));
-    // Undeclared.
-    let mut v = vm_world();
-    Pack.register(&mut v.vm).unwrap();
-    assert_eq!(selected(&v.vm).unwrap().borrow().mine, None);
+    let activate =
+        v.vm.space
+            .classes
+            .define(
+                "WillowGame.Behavior_ActivateSkill",
+                Some(object),
+                vec![flag],
+            )
+            .unwrap();
+    let wrong = PropertyDecl::new(
+        v.vm.space.names.intern("bUseAdditionalSkillTarget"),
+        PropKind::Int,
+    );
+    let odd =
+        v.vm.space
+            .classes
+            .define("Invented.OddBehavior", Some(object), vec![wrong])
+            .unwrap();
+    let plain =
+        v.vm.space
+            .classes
+            .define("Invented.PlainBehavior", Some(object), vec![])
+            .unwrap();
+    let names = [
+        "ContextObject",
+        "KernelInfo",
+        "SelfObject",
+        "MyInstigatorObject",
+    ];
+    let kinds = vec![obj.clone(), PropKind::Int, obj.clone(), obj.clone()];
+    let calls: Rc<std::cell::RefCell<Vec<Vec<Value>>>> = Rc::default();
+    for class in [
+        "WillowGame.Behavior_ActivateSkill",
+        "Invented.OddBehavior",
+        "Invented.PlainBehavior",
+    ] {
+        let path = format!("{class}.ApplyBehaviorToContext");
+        let owner = v.vm.find_class(class).unwrap();
+        let params = names
+            .iter()
+            .zip(kinds.clone())
+            .map(|(n, k)| PropertyDecl::new(v.vm.space.names.intern(n), k))
+            .collect();
+        let leaf = class.rsplit('.').next().unwrap();
+        let decl = FunctionDecl::native(
+            ow_core::ObjectPath::parse(&path).unwrap(),
+            format!("{leaf}.ApplyBehaviorToContext(x)"),
+        )
+        .with_owner(owner)
+        .with_params(params);
+        v.vm.declare_function(decl).unwrap();
+        let seen = calls.clone();
+        ow_combat::hit::bind_fn(&mut v.vm, &path, move |c| {
+            seen.borrow_mut().push(
+                (0..c.arg_count())
+                    .map(|i| c.arg(i).unwrap().clone())
+                    .collect(),
+            );
+            Ok(Value::None)
+        })
+        .unwrap();
+    }
+    let behavior =
+        v.vm.instantiate(activate, "Behavior_ActivateSkill_0")
+            .unwrap();
+    let (c1, c2, consumer) = (v.controller, v.pawn, v.manager);
+    let links = apply_to_contexts(&mut v.vm, behavior, &[c1, c2], consumer).unwrap();
+    assert!(
+        links.is_empty(),
+        "the installed scripts select no output link"
+    );
+    let seen = calls.borrow().clone();
+    assert_eq!(seen.len(), 2, "once per context");
+    assert_eq!(
+        seen[0],
+        vec![
+            Value::Object(Some(c1)),
+            Value::Int(0),
+            Value::Object(Some(consumer)),
+            Value::Object(None)
+        ]
+    );
+    assert_eq!(seen[1][0], Value::Object(Some(c2)));
+    // The flag set: NotYet, before any call.
+    let p =
+        v.vm.space
+            .prop(activate, "bUseAdditionalSkillTarget")
+            .unwrap();
+    v.vm.space
+        .write(
+            behavior,
+            ow_object::ids::PropAddr::scalar(p),
+            Value::Bool(true),
+        )
+        .unwrap();
+    let e = apply_to_contexts(&mut v.vm, behavior, &[c1], consumer).unwrap_err();
+    assert!(
+        matches!(e, VmError::NotYet(ref n) if n.missing == Missing::NotRead),
+        "{e:?}"
+    );
+    assert_eq!(calls.borrow().len(), 2, "no call made");
+    // The flag of another kind: bad data.
+    let o = v.vm.instantiate(odd, "Odd").unwrap();
+    assert!(matches!(
+        apply_to_contexts(&mut v.vm, o, &[c1], consumer),
+        Err(VmError::Script { .. })
+    ));
+    // No flag at all (Behavior_DeactivateSkill's shape): not set.
+    let q = v.vm.instantiate(plain, "Plain").unwrap();
+    assert!(
+        apply_to_contexts(&mut v.vm, q, &[c1], consumer)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(calls.borrow().len(), 3);
+}
+
+/// Review r2 of PR #342, item 4: the edge test uses the bounds the clamp used, so an integer-only pool whose
+/// `MaxValue` is 10.5 fills to 10 and that counts as reaching its maximum (the record is silent on which bound the
+/// native tests; UNVERIFIED).
+#[test]
+fn an_integer_pool_reaches_its_truncated_maximum() {
+    let mut p = pool_world("Engine.ResourcePool");
+    let resource = obj_value("Resource", &need(&mut p.vm, p.def, "Resource").unwrap())
+        .unwrap()
+        .unwrap();
+    let rc = p.vm.space.heap.get(resource).unwrap().class;
+    let id = p.vm.space.prop(rc, "bIntegerOnlyUpdates").unwrap();
+    p.vm.space
+        .write(
+            resource,
+            ow_object::ids::PropAddr::scalar(id),
+            Value::Bool(true),
+        )
+        .unwrap();
+    set_pool(&mut p, "MaxValue", Value::Float(10.5));
+    set_pool(&mut p, "CurrentValue", Value::Float(9.0));
+    set_pool(&mut p, "ConsumptionRate", Value::Float(-2.0));
+    let c = p.vm.space.heap.get(p.def).unwrap().class;
+    let prop = p.vm.space.prop(c, "OnResourceRegenerated").unwrap();
+    let b = p.vm.instantiate(c, "Behavior").unwrap();
+    p.vm.space
+        .write(
+            p.def,
+            ow_object::ids::PropAddr::scalar(prop),
+            Value::Array(Rc::new(vec![Value::Object(Some(b))])),
+        )
+        .unwrap();
+    assert!(
+        matches!(drain(&mut p.vm, p.pool, 1.0), Err(VmError::NotYet(_))),
+        "9 + 2 is clamped to the truncated maximum 10: the edge is reached"
+    );
+    assert_eq!(current(&mut p), 9.0, "nothing written");
+    p.vm.space
+        .write(
+            p.def,
+            ow_object::ids::PropAddr::scalar(prop),
+            Value::Array(Rc::new(vec![])),
+        )
+        .unwrap();
+    assert_eq!(drain(&mut p.vm, p.pool, 1.0).unwrap().after, 10.0);
 }
