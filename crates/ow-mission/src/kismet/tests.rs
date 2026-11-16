@@ -1775,3 +1775,37 @@ fn equal_delays_run_in_activation_order_and_earlier_ones_first() {
         assert_eq!(*host.borrow(), host_lines(&["C", "A", "B"]));
     });
 }
+
+#[test]
+fn a_reference_to_an_instantiated_export_lands_like_a_stand_in() {
+    let ops = vec![
+        event("Ev", "Ping", &[t("SB", 0)]),
+        op("SB", "SeqAct_SetBool", &["In"], vec![out("Out", &[])]).vars(&[("Target", &["VarDst"])]),
+    ];
+    with_kismet(&ops, &[("VarDst", 0)], |k, cx, _| {
+        let sb = k.find("SB").unwrap();
+        let var = k.variables(cx, sb, "Target").unwrap()[0];
+        // The variable is an instantiated export (Origin::Export), as a definition store's holder would give.
+        assert!(matches!(
+            cx.space.heap.get(var).unwrap().origin,
+            Origin::Export { .. }
+        ));
+        let package = k.package();
+        let found = resource(cx.space, &Value::Object(Some(var)));
+        assert_eq!(found.map(|(p, _)| p), Some(package));
+        assert_eq!(found.map(|(_, i)| k.find_by_index(i).is_none()), Some(true));
+        // An op's own object (also Origin::Export) resolves to that op.
+        let op_object = k.ops()[sb].object;
+        let (p, i) = resource(cx.space, &Value::Object(Some(op_object))).unwrap();
+        assert_eq!((p, k.find_by_index(i)), (package, Some(sb)));
+        assert_eq!(resource(cx.space, &Value::Object(None)), None);
+    });
+}
+
+#[test]
+#[should_panic]
+fn an_op_position_out_of_range_panics() {
+    with_kismet(&chain_ops(), &[], |k, cx, _| {
+        let _ = k.prop(cx, 99, "TriggerCount");
+    });
+}
