@@ -57,7 +57,7 @@ check, decoder or reader changed, and no dependency was added.
     string summaries, 3,393 MiB (5.7 s); the hashes, 3,143 MiB (5.5 s). The three libraries are byte-identical.
 - **Gates** (pc-hummer, on `origin/main` 60413ba, with H8-MATERIALS landed):
   - `cargo build --workspace --locked`: clean.
-  - `cargo test --workspace --locked`: 1,690 passed, 0 failed, 25 ignored; 1,692, 0, 25 after review r1 (three tests
+  - `cargo test --workspace --locked`: 1,690 passed, 0 failed, 25 ignored; 1,692, 0, 25 after review r1 (two tests
     added, one changed).
   - `cargo build --release -p ow-cli --locked`: clean.
   - `tests/crate_edges_test.py`: OK.

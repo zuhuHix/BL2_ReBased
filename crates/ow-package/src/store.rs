@@ -529,10 +529,11 @@ impl PackageStore {
     /// C++ `findGlobal`: the first file in scan order that has the path, among the files that can have it. A file
     /// that fails to load or to search is no candidate.
     ///
-    /// Each candidate file is loaded at most once per store to learn its export paths (`FileExports`); later lookups
-    /// skip the files whose paths do not hold `global_path` without loading them again. A file is loaded afresh only
-    /// where it holds the path, and the package returned is that fresh load, as the C++ returns its fresh candidate
-    /// (module documentation, "Candidate files").
+    /// A candidate's export paths are kept as hashes (`FileExports`), so later lookups skip a file whose paths do not
+    /// hold `global_path` without loading it again. A file is loaded afresh where its hashes hold the path (a hash
+    /// collision costs one extra load), where it failed to load before (it is retried, as the C++ does), and where its
+    /// size or modification time changed; the package returned is that fresh load, as the C++ returns its fresh
+    /// candidate (module documentation, "Candidate files", review r2 of PR #362).
     fn find_global(&mut self, global_path: &str) -> Option<(Arc<Package>, i32)> {
         if self.global_index.is_none() {
             self.build_global_index();
