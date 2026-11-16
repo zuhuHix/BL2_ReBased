@@ -1,10 +1,12 @@
 ## 2026-11-15: Rust interpreter closes the sweep's cause C gaps; the C++ VM is frozen
 
 AI-assisted (Claude Code). Lane FIX-VMGAPS of the Rust port closes the three interpreter gaps decision 2026-11-15-23
-listed as cause C (five WillowGame functions), then freezes the C++ script VM as architecture section 6 says for the
-`ow-vm` gate. It builds on decisions 2026-11-15-02 (the typed heap), 2026-11-15-20 (static arrays as consecutive
-slots), 2026-11-15-23 (the sweep and its gate differences A and B) and 2026-11-15-27 (object states). Every rule below
-is a port of the C++ reading; none was observed in the running game, so all stay UNVERIFIED there.
+listed as cause C (five WillowGame functions), then freezes the C++ script VM on the sweep clause of the amended
+`ow-vm` gate (architecture section 6), which decision 23 set as the freeze condition. The gate's test-file clauses are
+not all met (`tests/vm_test.py`, below). It builds on decisions 2026-11-15-02 (the typed heap), 2026-11-15-20 (static
+arrays as consecutive slots), 2026-11-15-23 (the sweep and its gate differences A and B) and 2026-11-15-27 (object
+states). Every rule below is a port of the C++ reading; none was observed in the running game, so all stay UNVERIFIED
+there.
 
 - **The three gaps, the C++ rule each follows, and where the port puts it.**
   - **A static array used as a whole** (decision 20's open item).
@@ -20,6 +22,13 @@ is a port of the C++ reading; none was observed in the running game, so all stay
       whole in its local, which slots cannot hold; no sweep of the nine code packages meets these.
     - *Met by:* `WillowPlayerController.ClientTravelToSession` (passes its own static-array parameter on) and
       `OnDestroyForTravelComplete` (passes a static-array property), both to `PlayerController.ClientTravelToSession`.
+    - *Real-data cover for `read_parameter`:* five functions with an `out` static-array parameter, which the sweep
+      calls from the host with a zero array: Engine `OnlineGameInterface.ReadPlatformSpecificSessionInfo` and
+      `OnlineGameInterface.ReadPlatformSpecificSessionInfoBySessionName`, and IpDrv
+      `OnlineGameInterfaceImpl.ReadPlatformSpecificSessionInfoBySessionName`,
+      `MeshBeaconHost.OnReceivedClientCreateNewSessionResult` and `MeshBeaconClient.OnTravelRequestReceived`. A first
+      version of this lane refused every `out` static-array parameter, and all five failed with its `NotYet`; with
+      `read_parameter` they run to the end, and the Engine and IpDrv sweeps are again the results in the table below.
   - **A `None` given to a native's struct parameter.**
     - *C++:* an element read past the end of a dynamic array, and a struct member read through an object that lacks
       the property, give `None`. The Rust interpreter already gave the same `None`. The C++ vector and rotator natives
@@ -49,6 +58,10 @@ is a port of the C++ reading; none was observed in the running game, so all stay
       write (`eval::fit_for_heap`, which every property write and every heap-array item goes through) now turn a Byte
       for an Int slot into the Int of the same number. That conversion loses nothing. A Byte for a Float slot, and
       every other mismatch, is still refused.
+    - *Why not Float:* the C++ value keeps a float in its `f` field and an int, byte or bool in its `i` field. A byte
+      in a float slot therefore reads as 0 wherever the C++ reads the float field directly, but as its number through
+      `number()`, so no single lossless conversion gives both. An Int shares the byte's `i` field, so for Int there is
+      one.
     - *Met by:* `FrontEndPlayerListGFxObject.OnPlayerDetailsLoaded`, through `AddPlayerDetailsButton`.
     - *Not reproduced:* a later C++ assignment to such an element keeps the byte kind and wraps to 8 bits. The Rust
       element is an Int, as declared, so it does not wrap. The sweeps do not meet this.
@@ -67,7 +80,8 @@ is a port of the C++ reading; none was observed in the running game, so all stay
   - `static_array_elements_are_their_own_slots` now expects a whole static array to read as its elements, where it
     expected `NotYet`.
 - **Evidence.** Local runs on pc-hummer, release builds, outputs under ignored `local/`. Rust 1.96.0 on `origin/main`
-  9cfbe10 plus this lane; C++ with MSVC 14.50 (`build/Release/ow-package.exe` of this tree). "C++ with A" is that
+  9cfbe10 plus this lane (the nine sweeps repeated on 89a2523 with the same result; the test-file counts on dc388cc,
+  which changes only documents); C++ with MSVC 14.50 (`build/Release/ow-package.exe` of this tree). "C++ with A" is that
   binary rebuilt with decision 23's A patch (both decode loops read an ObjectProperty-tagged value as a class when the
   declaration says ClassProperty), built from a local, uncommitted change that was restored before the commit. It
   reproduces decision 23's WillowGame C++-with-A list exactly.
@@ -107,23 +121,38 @@ is a port of the C++ reading; none was observed in the running game, so all stay
         Rust takes the C++ with A's steps at each, 40, 32, 560, 28 and 42, where it took 23, 15, 284, 17 and 38. Those
         17 + 17 + 276 + 11 + 4 = 325 steps are the whole change.
       - So the remaining +339 steps against the C++ with A were already in the residue decision 23 recorded (+14
-        with the five functions stopping 325 steps short) and come from the functions decision 23 attributes to cause
-        B. That attribution was not repeated function by function here. A partial local bisection of
-        `WillowPlayerController` alone found its differences at single attempts of 7 or 14 steps, present before and
-        after this lane.
+        with the five functions stopping 325 steps short). That they are cause B rests on decision 23's attribution;
+        it was not re-bisected here. A partial local bisection of `WillowPlayerController` alone found differences
+        at single attempts of 7 or 14 steps, present before and after this lane, and did not check what they are.
   - **Times** of the Rust sweep loop are unchanged (WillowGame 11.78 s, Engine 5.01 s, GearboxFramework 4.91 s,
     against 0.64, 0.21 and 0.12 s in the C++).
+  - **The gate's test-file clauses, on the Rust binary.** Each file was run whole, and also through a local harness
+    that runs every statement of the file on its own. A failed statement is recorded and the run goes on; an assert
+    site passes when it ran and every run of it passed. The C++ binary passes all 103 assert sites of `vm_test.py`
+    under it (decision 23 counted 101 sites with its own harness, which counted differently).
+    - `tests/natives_test.py`: passes; 7 of 7 sites.
+    - `tests/vm_states_test.py` under `OW_PARITY=reference` (the `GotoState` stand-in cases of section 6.1): passes;
+      15 of 15 sites.
+    - `tests/runtime_test.py`: passes; 15 of 15 sites.
+    - `tests/vm_test.py`: fails as a file; 91 of 103 sites pass. The 12 that fail are other lanes': `MakePair` 1
+      (W3-DEFS), `--inventory-move` 10 (W5-EQUIP) and `--mover-probe` 1 (W5-DIALOG), the three groups decision 23
+      counted as 1, 11 and 1. The binary without this lane gives the same 91 of 103 under the same harness.
   - Nothing was checked in the running game; this lane had no session.
-- **The freeze.** The `ow-vm` gate as amended (architecture section 6, "identical to C++ under Reference apart from
-  decision 2026-11-15-07's string-unit differences and decision 2026-11-15-23's causes A and B") is met on the nine
-  packages. So `src/vm.cpp`, `src/interp.cpp`, `src/natives.cpp`, `src/natives_core.cpp`, `src/census.cpp`,
+- **The freeze.** The sweep clause of the amended `ow-vm` gate (architecture section 6, "`--vm-sweep` JSON identical
+  to C++ on the 9 packages under `OW_PARITY=reference` ... apart from decision 2026-11-15-07's string-unit differences
+  and decision 2026-11-15-23's causes A and B"), which decision 23 set as the freeze condition, is met. The gate's
+  test-file clause is not: `tests/vm_test.py` fails on the Rust binary until W3-DEFS, W5-EQUIP and W5-DIALOG land
+  their parts. So `src/vm.cpp`, `src/interp.cpp`, `src/natives.cpp`, `src/natives_core.cpp`, `src/census.cpp`,
   `src/census.hpp`, `src/vm_sweep.cpp`, `src/vm.hpp` and `src/natives.hpp` open with a `// FROZEN (...)` header
-  like the one W3-SWITCH put on `src/package.*`. It names this lane, decisions 23 and 28 and the gate. Only the
+  like the one W3-SWITCH put on `src/package.*`. It names this lane, decisions 23 and 28 and the sweep clause, and
+  says the test-file clauses are not all met. Only the
   comments change; the code is as it was, and the C++ stays the differential reference until W7-RETIRE deletes it.
 - **Open items.**
+  - The `ow-vm` gate's `tests/vm_test.py` clause: 91 of 103 sites on the Rust binary, the rest W3-DEFS', W5-EQUIP's
+    and W5-DIALOG's.
   - The three whole-static-array uses that stay `NotYet` (assignment, an aliasing `out` argument, a parameter given
     another shape), until script that needs them is found.
   - `natives_core.rs` reading a non-struct argument as zeros itself, as the C++ `comp` does (the hub's follow-up);
     the interpreter conversion would then go.
-  - Cause B's step residue in WillowGame (+339) has not been bisected to its functions. Decision 23's pattern
-    attribution stands.
+  - Cause B's step residue in WillowGame (+339) has not been bisected to its functions; it rests on decision 23's
+    attribution.

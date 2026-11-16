@@ -18,7 +18,7 @@
 //! `foreach` over dynamic arrays and engine iterators (`iter.rs`), delegates (`delegate.rs`), and the interface
 //! context and casts through `Vm::implements`. A static array read as a whole is the array of its elements, and a
 //! callee's static-array parameter takes such an array one element a slot (decision 2026-11-15-28); assigning one
-//! whole, or passing it `out` aliased, stays `NotYet`.
+//! whole, passing it `out` aliased, and a static-array parameter given a value of another shape stay `NotYet`.
 //!
 //! **State code** (W5-STATES, `crate::states`): a state's code runs as a frame with no locals, from the position the
 //! object's state frame holds; a `GotoLabel` and a latent call hand control back to `crate::states`. Under
