@@ -395,7 +395,9 @@ pub fn listing(
         if pools.class_of(&a.pool).is_empty() {
             // The tool expands it anyway, over no properties: its Quantity falls back to 1 and its gate to true,
             // so it adds neither note, and with no entries the tree is not eligible, so it lists no leaf. The row
-            // below is that result (W4-POOLS' `expand` refuses a path the package does not export).
+            // below is that result (W4-POOLS' `expand` refuses a path the package does not export). A pool that is
+            // exported but fails to decode is different: the tool writes a row with a note, while `expand` here
+            // returns the error, which stops the listing (open item; none of the Sanctuary pools fails).
             unresolved.push("pool not found in the packages".to_string());
             rows.push(StockRow {
                 pool: a.pool.clone(),
@@ -584,7 +586,10 @@ const PREFIXES: [PropertyPrefix; 3] =
 /// The tool's `Reader.props`: the decoded properties of `export` (`ow_items::registry::decode_at`, the registry's
 /// own reading and value conversion) after the first prefix of [`PREFIXES`] that decodes with no trailing byte. A
 /// prefix whose walk or conversion fails, or that leaves trailing bytes, gives way to the next, as the tool's loop
-/// does when `ow-package --properties` fails or reports trailing bytes.
+/// does when `ow-package --properties` fails or reports trailing bytes. One known difference from the tool: a tagged
+/// property the walker leaves undecoded (`Raw`, a delegate) is kept as `Null` by the registry's conversion, where
+/// the tool's JSON has no value for it; every read here asks for a named property, so a `Null` and an absent one
+/// read alike, except for `Pv::get`, which sees the `Null` as tagged (no property read here is of those kinds).
 pub fn decode_exact(pkg: &Package, export: i32, typer: &SchemaTyper) -> Result<Pv, String> {
     let mut last = String::new();
     for prefix in PREFIXES {

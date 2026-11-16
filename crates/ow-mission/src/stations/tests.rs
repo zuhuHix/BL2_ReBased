@@ -27,11 +27,18 @@ fn map(mode: ParityMode) -> Map {
             ]),
         )],
     );
+    // A destination that tags no ExitPoints.
+    s.add(
+        "TheWorld.PersistentLevel.StationTeleporterDestination_1",
+        "WillowGame.StationTeleporterDestination",
+        vec![],
+    );
     for e in ["StationTeleporterExitPoint_0", "StationTeleporterExitPoint_1"] {
         let path: &'static str = Box::leak(format!("{LEVEL}{e}").into_boxed_str());
         s.add(path, "WillowGame.StationTeleporterExitPoint", vec![]);
     }
     s.add("TheWorld.PersistentLevel.ResurrectTravelStation_0", "WillowGame.ResurrectTravelStation", vec![
+        ("TeleportDest", V::Ref("TheWorld.PersistentLevel.StationTeleporterDestination_1")),
         ("StationTouchRadius", V::Float(500.0)),
         ("StationTouchHeight", V::Float(24.0)),
     ]);
@@ -72,7 +79,8 @@ fn the_placed_stations_are_read_with_their_definition_and_exit_points() {
     let newu = &found[1];
     assert_eq!(newu.kind, StationKind::Resurrect);
     assert_eq!(newu.initially_active, None);
-    assert_eq!(newu.exit_points, None, "no destination: no count");
+    assert_eq!(newu.teleport_dest.as_deref(), Some("TheWorld.PersistentLevel.StationTeleporterDestination_1"));
+    assert_eq!(newu.exit_points, None, "ExitPoints untagged: no count, no default");
     assert_eq!((newu.touch_radius, newu.touch_height), (Some(500.0), Some(24.0)));
 }
 
