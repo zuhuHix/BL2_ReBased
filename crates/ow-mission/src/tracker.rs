@@ -853,9 +853,10 @@ impl MissionSystem {
 
     /// `CanStartMission` (NATIVE_MISSION_SCRIPT_BRIDGE.md, "Availability queries", UNVERIFIED): NotStarted and the
     /// dependencies met. Failed and the blocked-mission test are not modelled. A Complete mission with `bRepeatable`
-    /// (restarting it is not read): `NotYet` in `ParityMode::Off`; Reference answers the C++ false.
-    pub fn can_start(&self, completed: &DetSet<String>, mode: ParityMode) -> Result<bool, MissionError> {
-        if mode == ParityMode::Off && self.data().repeatable && self.status() == Status::Complete {
+    /// (restarting it is not read): `NotYet` in `ParityMode::Off`; Reference answers the C++ false. The mode is the
+    /// VM's (`vm.parity`, the one source, architecture R3).
+    pub fn can_start(&self, completed: &DetSet<String>, vm: &Vm) -> Result<bool, MissionError> {
+        if vm.parity == ParityMode::Off && self.data().repeatable && self.status() == Status::Complete {
             return Err(NotYet::not_read("CanStartMission of a Complete mission with bRepeatable", BRIDGE_RECORD).into());
         }
         Ok(self.status() == Status::NotStarted && self.available(completed, &DetMap::new()))
@@ -1304,7 +1305,7 @@ impl MissionSystem {
     /// [`MissionSystem::tick`] consumes. False when [`MissionSystem::can_start`] does not hold.
     pub fn accept(&self, vm: &mut Vm, completed: &DetSet<String>) -> Result<bool, MissionError> {
         self.usable()?;
-        if !self.can_start(completed, vm.parity)? {
+        if !self.can_start(completed, vm)? {
             return Ok(false);
         }
         self.set_status(vm, Status::Active)?;

@@ -111,6 +111,11 @@ fn engine() -> Vec<u8> {
     native(&mut t, world, "IsMenuLevel", &[param("Str", "MapName", CPF_OPT, 0)], Some(("Bool", 0)), NATIVE | STATIC);
     let base = t.class("BehaviorBase", object);
     native(&mut t, base, "GetWorldInfo", &[], Some(("Object", object)), NATIVE);
+    let context = toy_struct(&mut t, base, "BehaviorContextData", None);
+    t.prop("Name", context, "InstancedDataContextName", 0, 0);
+    t.prop("Object", context, "ContextObject", 0, object);
+    t.prop("Byte", context, "BehaviorContext", 0, 0);
+    t.prop("Struct", base, "ToyContextData", 0, context);
     t.build()
 }
 
@@ -121,6 +126,10 @@ fn gearbox() -> Vec<u8> {
     native(&mut t, globals, "GetGearboxGlobals", &[], Some(("Object", object)), NATIVE | STATIC);
     native(&mut t, globals, "GetBehaviorKernel", &[], Some(("Object", object)), NATIVE);
     t.class("BehaviorProviderDefinition", object);
+    let path = toy_struct(&mut t, 0, "NameBasedObjectPath", None);
+    t.prop("Name", path, "PathComponentNames", 0, 0);
+    let provider = t.class("ToyPathHolder", object);
+    t.prop("Struct", provider, "ToyPath", 0, path);
     t.build()
 }
 
@@ -142,8 +151,15 @@ fn willowgame() -> Vec<u8> {
     toy_array_of(&mut t, mission, "ObjectiveSetDefs", "Object", object);
     t.prop("Object", mission, "InitialObjectiveSet", 0, object);
     t.prop("Bool", mission, "bActivateInitialObjectiveSet", 0, 0);
+    let aid = toy_struct(&mut t, 0, "AttributeInitializationData", None);
+    t.prop("Float", aid, "BaseValueConstant", 0, 0);
+    t.prop("Object", aid, "BaseValueAttribute", 0, object);
+    t.prop("Object", aid, "InitializationDefinition", 0, object);
+    t.prop("Float", aid, "BaseValueScaleConstant", 0, 0);
     let reward = toy_struct(&mut t, 0, "MissionRewardData", None);
     t.prop("Byte", reward, "CurrencyRewardType", 0, 0);
+    t.prop("Struct", reward, "CreditRewardMultiplier", 0, aid);
+    t.prop("Struct", reward, "OtherCurrencyReward", 0, aid);
     toy_array_of(&mut t, reward, "RewardItems", "Object", object);
     toy_array_of(&mut t, reward, "RewardItemPools", "Object", object);
     t.prop("Struct", mission, "Reward", 0, reward);
@@ -300,9 +316,10 @@ fn willowgame() -> Vec<u8> {
     t.build()
 }
 
-/// `ToyMission`: one set `SetA` {`Only` (count 1)} that completes the mission, no provider; `Other`, a second
-/// mission of the package; `GD_Globals.General.Globals` with an invented interaction distance.
-fn mission_package(optional: bool) -> Vec<u8> {
+/// `ToyMission`: one set `SetA` {`Only` (count 1)} that completes the mission, no provider, a reward whose credit
+/// multiplier is `multiplier` and which lists `Other` as a reward item when `items`; `Other`, a second mission of the
+/// package; `GD_Globals.General.Globals` with an invented interaction distance.
+fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let willow = p.add_import("Core", "Package", 0, "WillowGame");
@@ -329,15 +346,22 @@ fn mission_package(optional: bool) -> Vec<u8> {
     tags.extend(p.array_tag("ObjectiveSetDefs", 1, &set.to_le_bytes()));
     tags.extend(p.object_tag("InitialObjectiveSet", set));
     tags.extend(p.bool_tag("bActivateInitialObjectiveSet", true));
+    let c = class(&mut p, "MissionDefinition");
+    let mut other = 0i32.to_le_bytes().to_vec();
+    other.extend_from_slice(&none);
+    let other = p.add_export(c, "Other", other);
     let mut reward = p.byte_tag("CurrencyRewardType", 0);
+    let mut credits = p.float_tag("BaseValueConstant", multiplier);
+    credits.extend(p.float_tag("BaseValueScaleConstant", 1.0));
+    credits.extend_from_slice(&none);
+    reward.extend(p.struct_tag("CreditRewardMultiplier", "AttributeInitializationData", &credits));
+    if items {
+        reward.extend(p.array_tag("RewardItems", 1, &other.to_le_bytes()));
+    }
     reward.extend_from_slice(&none);
     tags.extend(p.struct_tag("Reward", "MissionRewardData", &reward));
     tags.extend_from_slice(&none);
     p.set_payload(mission, tags);
-    let c = class(&mut p, "MissionDefinition");
-    let mut other = 0i32.to_le_bytes().to_vec();
-    other.extend_from_slice(&none);
-    p.add_export(c, "Other", other);
     let package_class = p.add_import("Core", "Class", 0, "Package");
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&none);
@@ -372,6 +396,11 @@ impl Env {
     }
 
     fn with_mode(optional: bool, mode: ParityMode) -> Env {
+        Env::with_reward(optional, 0.0, false, mode)
+    }
+
+    /// A reward with credit multiplier `multiplier` and, with `items`, one reward item.
+    fn with_reward(optional: bool, multiplier: f32, items: bool, mode: ParityMode) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-mission-bridge-{}-{}",
             std::process::id(),
@@ -383,7 +412,7 @@ impl Env {
             ("Engine.upk".into(), engine()),
             ("GearboxFramework.upk".into(), gearbox()),
             ("WillowGame.upk".into(), willowgame()),
-            ("TestMission.upk".into(), mission_package(optional)),
+            ("TestMission.upk".into(), mission_package(optional, multiplier, items)),
         ];
         let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
         let defs =
@@ -692,7 +721,7 @@ fn exp_earn_records_the_call() {
 }
 
 /// The mission's reward natives: the game stage (0 without a region stage), the currency type of the reward, no
-/// currency for type 0 with a zero multiplier (the data's multiplier is absent here: a typed error), and
+/// currency for type 0 with a zero multiplier, and
 /// `GetExperienceReward` of a mission with an optional objective is `NotYet`.
 #[test]
 fn the_reward_natives_answer_from_the_data() {
@@ -702,7 +731,7 @@ fn the_reward_natives_answer_from_the_data() {
     let t = env.call("WillowGame.MissionDefinition.GetCurrencyRewardType", def, vec![Value::Bool(false)], MissionScript::n_currency_type);
     assert_eq!(t.unwrap(), Value::Byte(0));
     let c = env.call("WillowGame.MissionDefinition.GetCurrencyReward", def, vec![Value::Object(None), Value::Bool(false)], MissionScript::n_currency);
-    assert_eq!(c.unwrap_err().to_string(), "mission script bridge: the reward has no CreditRewardMultiplier");
+    assert_eq!(c.unwrap(), Value::Int(0), "a zero credit multiplier: 0 credits");
     let items = env.call("WillowGame.MissionDefinition.GetItemRewardsForPlayer", def, vec![Value::Object(None), Value::Object(None)], MissionScript::n_item_rewards);
     assert_eq!(items.unwrap(), Value::None);
     let mut env = Env::new(true);
@@ -808,4 +837,135 @@ fn the_report_has_the_cxx_keys() {
         "{\"player_status\":-1,\"needs_rewards\":false,\"player_level\":0,\"experience_pool\":0,\
          \"interaction_distance\":420,\"exp_earned\":[],\"stubs\":[],\"notes\":[]}"
     );
+}
+
+/// The last line `env`'s VM logged.
+fn last_log(env: &mut Env) -> String {
+    env.vm().log.last().cloned().unwrap_or_default()
+}
+
+/// `GetCurrencyReward` with a non-zero credit multiplier (the credit formula's values are not decoded): `NotYet {
+/// NotRead }` in Off mode; Reference logs the C++ line and answers 0 credits.
+#[test]
+fn credits_with_a_multiplier_by_mode() {
+    let args = || vec![Value::Object(None), Value::Bool(false)];
+    let mut env = Env::with_reward(false, 2.0, false, ParityMode::Off);
+    let def = Some(env.mission.definition());
+    let off = env.call("WillowGame.MissionDefinition.GetCurrencyReward", def, args(), MissionScript::n_currency);
+    assert!(matches!(off.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::NotRead));
+    let mut env = Env::with_reward(false, 2.0, false, ParityMode::Reference);
+    let def = Some(env.mission.definition());
+    let got = env.call("WillowGame.MissionDefinition.GetCurrencyReward", def, args(), MissionScript::n_currency);
+    assert_eq!(got.unwrap(), Value::Int(0));
+    assert_eq!(
+        last_log(&mut env),
+        "UNIMPLEMENTED MissionDefinition.GetCurrencyReward: credits need MissionCreditRewardFormula attribute values (not implemented)"
+    );
+}
+
+/// `GetCurrencyReward` of a mission with an optional objective (their currency rewards are not ported): `NotYet {
+/// NotPorted }` in Off mode; Reference logs the C++ line and goes on (a zero multiplier: 0 credits).
+#[test]
+fn optional_objective_currency_by_mode() {
+    let args = || vec![Value::Object(None), Value::Bool(false)];
+    let mut env = Env::with_mode(true, ParityMode::Off);
+    let def = Some(env.mission.definition());
+    let off = env.call("WillowGame.MissionDefinition.GetCurrencyReward", def, args(), MissionScript::n_currency);
+    assert!(matches!(off.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::NotPorted));
+    let mut env = Env::with_mode(true, ParityMode::Reference);
+    let def = Some(env.mission.definition());
+    let got = env.call("WillowGame.MissionDefinition.GetCurrencyReward", def, args(), MissionScript::n_currency);
+    assert_eq!(got.unwrap(), Value::Int(0));
+    assert_eq!(
+        last_log(&mut env),
+        "UNIMPLEMENTED MissionDefinition.GetCurrencyReward: optional objective currency rewards (not implemented)"
+    );
+}
+
+/// `GetItemRewardsForPlayer` with a reward item (balance generation and pool rolls are lane W6-LOOT's): `NotYet {
+/// LayerAbsent }` in Off mode; Reference logs the C++ line and gives no items.
+#[test]
+fn reward_items_by_mode() {
+    let args = || vec![Value::Object(None), Value::Object(None)];
+    let mut env = Env::with_reward(false, 0.0, true, ParityMode::Off);
+    let def = Some(env.mission.definition());
+    let off = env.call("WillowGame.MissionDefinition.GetItemRewardsForPlayer", def, args(), MissionScript::n_item_rewards);
+    assert!(matches!(off.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::LayerAbsent(LOOT_LAYER)));
+    let mut env = Env::with_reward(false, 0.0, true, ParityMode::Reference);
+    let def = Some(env.mission.definition());
+    let got = env.call("WillowGame.MissionDefinition.GetItemRewardsForPlayer", def, args(), MissionScript::n_item_rewards);
+    assert_eq!(got.unwrap(), Value::None);
+    assert_eq!(
+        last_log(&mut env),
+        "UNIMPLEMENTED MissionDefinition.GetItemRewardsForPlayer: item rewards need balance generation and pool rolls (NATIVE_LOOT.md) (not implemented)"
+    );
+}
+
+/// The default value of the struct type that property `prop` of class `class` declares.
+fn struct_zero(vm: &mut Vm, class: &str, prop: &str) -> Value {
+    let c = vm.find_class(class).unwrap();
+    let p = vm.space.prop(c, prop).expect("struct property");
+    let Some(PropKind::Struct(ty)) = vm.space.classes.decl(p).map(|d| d.kind.clone()) else {
+        panic!("{class}.{prop} is not a struct");
+    };
+    vm.space.classes.struct_defaults(ty).unwrap()
+}
+
+/// A `BehaviorContextData` value with selector `selector` and instance-data name `name`.
+fn context_data(env: &mut Env, selector: u8, name: &str) -> Value {
+    let vm = env.vm();
+    let zero = struct_zero(vm, "Engine.BehaviorBase", "ToyContextData");
+    let named = Value::Name(vm.space.names.intern(name));
+    let v = with_field(&vm.space, &zero, "BehaviorContext", Value::Byte(selector)).unwrap();
+    with_field(&vm.space, &v, "InstancedDataContextName", named).unwrap()
+}
+
+/// `GetBehaviorContext` with a named `InstancedDataContextName` (the instance-data path is not ported): `NotYet {
+/// NotPorted }` in Off mode; Reference logs the C++ line and answers None. Without a name the selector decides.
+#[test]
+fn instance_data_context_by_mode() {
+    let mut env = Env::new(false);
+    let a = env.script.player_controller();
+    let unnamed = context_data(&mut env, 0, "None");
+    let got = env.call("Engine.BehaviorBase.GetBehaviorContext", None, vec![unnamed, Value::Object(Some(a))], MissionScript::n_behavior_context);
+    assert_eq!(got.unwrap(), Value::Object(Some(a)));
+    let named = context_data(&mut env, 0, "ToyInstance");
+    let off = env.call("Engine.BehaviorBase.GetBehaviorContext", None, vec![named, Value::Object(Some(a))], MissionScript::n_behavior_context);
+    assert!(matches!(off.unwrap_err().not_yet(), Some(n) if n.missing == ow_core::Missing::NotPorted));
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let a = env.script.player_controller();
+    let named = context_data(&mut env, 0, "ToyInstance");
+    let got = env.call("Engine.BehaviorBase.GetBehaviorContext", None, vec![named, Value::Object(Some(a))], MissionScript::n_behavior_context);
+    assert_eq!(got.unwrap(), Value::Object(None));
+    assert_eq!(last_log(&mut env), "UNIMPLEMENTED BehaviorBase.GetBehaviorContext instance-data path (not implemented)");
+}
+
+/// Once the director's provider is lost (a failed lend), every reader and caller of it is refused with
+/// `PROVIDER_LOST`: the registration check (`IsBehaviorSequenceEnabled`, `ActivateBehaviorEventFromScript`), the
+/// provider resolver's path branch and the use key (whose script run records the refusal).
+#[test]
+fn a_lost_director_provider_refuses_its_readers() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    s.inner.has_marcus.set(true);
+    s.inner.marcus_lost.set(true);
+    let other = Value::Object(Some(env.object("Other")));
+    let lost = |r: Result<Value, MissionError>| matches!(r, Err(e) if e.not_yet().is_some_and(|n| n.what == tracker::PROVIDER_LOST));
+    let enabled = env.call("GearboxFramework.BehaviorKernel.IsBehaviorSequenceEnabled", None, vec![Value::None, other.clone(), Value::None], MissionScript::n_sequence_enabled);
+    assert!(lost(enabled));
+    let fire = env.call("GearboxFramework.BehaviorKernel.ActivateBehaviorEventFromScript", None, vec![Value::None, other, Value::None], MissionScript::n_event_from_script);
+    assert!(lost(fire));
+    let vm = env.vm();
+    let zero = struct_zero(vm, "GearboxFramework.ToyPathHolder", "ToyPath");
+    let named = Value::Name(vm.space.names.intern("Somewhere"));
+    let path = with_field(&vm.space, &zero, "PathComponentNames", named).unwrap();
+    let resolve = env.call(
+        "GearboxFramework.BehaviorHelpers.ResolveBehaviorProviderDefinitionReference",
+        None,
+        vec![Value::Object(None), Value::Object(None), path],
+        MissionScript::n_resolve_provider,
+    );
+    assert!(lost(resolve));
+    s.use_marcus(env.vm(), &DetSet::new()).unwrap();
+    assert!(s.errors().iter().any(|e| e.contains(tracker::PROVIDER_LOST)), "{:?}", s.errors());
 }
