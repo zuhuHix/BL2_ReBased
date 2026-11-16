@@ -1,6 +1,7 @@
 //! Owner: lane H2-DRAW. Tests of the draw plan on an invented scene (AGENTS.md rule 9): every path and value is made up.
 
 use super::*;
+use crate::frame;
 use crate::scene::{
     ActorPose, ComponentPose, ExportKey, HiddenFlags, MaterialStatus, MaterialTexture, Placement,
     ScaleSource, Scene, SceneAssets, SceneMesh, TextureSource,
@@ -192,7 +193,16 @@ fn the_plan_uploads_each_mesh_once_and_batches_its_placements() {
     );
     // Meshes.B's second section has no triangles.
     assert_eq!((s.instances, s.empty_sections), (4, 1));
-    assert_eq!(plan.textures, ["Tex.Base_Dif", "Tex.Glass_Dif"]);
+    let firsts: Vec<&str> = plan.diffuse.iter().map(|c| c[0].path.as_str()).collect();
+    assert_eq!(firsts, ["Tex.Base_Dif", "Tex.Glass_Dif"]);
+    assert_eq!(
+        (
+            s.untextured_no_material,
+            s.untextured_unknown_material,
+            s.untextured_no_diffuse
+        ),
+        (0, 0, 0)
+    );
     let batches: Vec<(BatchKey, usize)> = plan
         .batches
         .iter()
@@ -215,9 +225,9 @@ fn the_plan_uploads_each_mesh_once_and_batches_its_placements() {
     );
     // The two placements of one batch keep their own matrices, in placement order: yaw 16384 turns X onto Y.
     let first = &plan.batches[0].instances;
-    assert_eq!(first[0].cols[3], [1.0, 2.0, 3.0, 1.0]);
-    assert_eq!(first[1].cols[3], [9.0, 2.0, 3.0, 1.0]);
-    assert!(first[0].cols[0][1] > 0.999);
+    assert_eq!(first[0].world.cols[3], [1.0, 2.0, 3.0, 1.0]);
+    assert_eq!(first[1].world.cols[3], [9.0, 2.0, 3.0, 1.0]);
+    assert!(first[0].world.cols[0][1] > 0.999);
 }
 
 #[test]
@@ -225,7 +235,7 @@ fn a_mirroring_placement_has_its_own_batch_key() {
     let plan = DrawPlan::build(&scene());
     let mirrored: Vec<&Batch> = plan.batches.iter().filter(|b| b.key.mirrored).collect();
     assert_eq!(mirrored.len(), 1);
-    let m = mirrored[0].instances[0];
+    let m = mirrored[0].instances[0].world;
     // DrawScale3D (-1, 1, 1) under yaw 16384: the X axis points along -Y.
     assert!(m.cols[0][1] < -0.999);
     assert!(
@@ -244,9 +254,144 @@ fn a_mirroring_placement_has_its_own_batch_key() {
 fn a_collection_pose_scales_each_row_by_scale3d_times_scale() {
     let plan = DrawPlan::build(&scene());
     let b = plan.batches.iter().find(|b| b.key.mesh == 1).unwrap();
-    let m = b.instances[0];
+    let m = b.instances[0].world;
     assert_eq!(m.cols[0], [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(m.cols[3], [500.0, 0.0, 0.0, 1.0]);
+}
+
+/// `n` through `m` (column vectors, 3x3 columns as given).
+fn apply3(m: &[[f32; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    let mut out = [0.0; 3];
+    for (c, col) in m.iter().enumerate() {
+        for (r, cell) in out.iter_mut().enumerate() {
+            *cell += f64::from(col[r]) * v[c];
+        }
+    }
+    out
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[test]
+fn normals_stay_perpendicular_under_a_non_uniform_scale() {
+    // DrawScale3D (4, 1, 1), no rotation; a face at 45 degrees: normal (1, 1, 0), a tangent (1, -1, 0).
+    let affine = frame::Placement::new([0.0; 3], Rotator::default(), 1.0, [4.0, 1.0, 1.0])
+        .affine()
+        .unwrap();
+    let n = normal_matrix(&affine);
+    let normal = apply3(&n, [1.0, 1.0, 0.0]);
+    let tangent = affine.direction([1.0, -1.0, 0.0]);
+    assert!(dot(normal, tangent).abs() < 1e-9, "{normal:?} {tangent:?}");
+    // The transformed normal is (1, 4, 0) up to length; the model matrix would have given (4, 1, 0).
+    assert!((normal[1] / normal[0] - 4.0).abs() < 1e-9);
+    // A rotated, mirrored, non-uniform transform: still perpendicular, and still on the outward side.
+    let affine = frame::Placement::new(
+        [5.0; 3],
+        Rotator::new(3000, 12000, -7000),
+        1.5,
+        [-2.0, 1.0, 3.0],
+    )
+    .affine()
+    .unwrap();
+    assert!(affine.mirrors());
+    let n = normal_matrix(&affine);
+    for (normal, tangent) in [
+        ([1.0, 1.0, 0.0], [1.0, -1.0, 0.0]),
+        ([0.0, 0.3, 1.0], [0.0, 1.0, -0.3]),
+    ] {
+        let turned = apply3(&n, normal);
+        assert!(dot(turned, affine.direction(tangent)).abs() < 1e-5);
+        assert!(dot(turned, affine.direction(normal)) > 0.0);
+    }
+}
+
+#[test]
+fn a_candidate_that_does_not_decode_is_skipped_for_the_next() {
+    let m = material(
+        vec![
+            texture("Tex.Main", Some("p_Diffuse"), 0),
+            texture("Tex.Layer", Some("Diffuse_A"), 0),
+            texture("Common_Textures.Stub.StubGray", Some("Diffuse_B"), 1),
+        ],
+        None,
+    );
+    let candidates = diffuse_candidates(&m);
+    let pick =
+        |usable: &dyn Fn(&str) -> bool| pick_from(&candidates, usable).map(|c| c.path.as_str());
+    assert_eq!(pick(&|_| true), Some("Tex.Main"));
+    assert_eq!(pick(&|p| p != "Tex.Main"), Some("Tex.Layer"));
+    // A stub is still taken when it is all that decodes.
+    assert_eq!(
+        pick(&|p| p.starts_with("Common")),
+        Some("Common_Textures.Stub.StubGray")
+    );
+    assert_eq!(pick(&|_| false), None);
+}
+
+#[test]
+fn untextured_sections_are_counted_by_cause() {
+    let mut s = scene();
+    s.materials.insert(
+        "Mats.Plain".into(),
+        material(vec![texture("Tex.N", Some("p_Normal"), 0)], Some(false)),
+    );
+    let mut bare = mesh(1);
+    bare.section_materials = vec![None];
+    s.meshes.insert("Meshes.Bare".into(), bare);
+    let rows = [
+        placement("Meshes.Bare", attached([0.0; 3], [1.0; 3]), false, vec![]),
+        placement(
+            "Meshes.A",
+            attached([0.0; 3], [1.0; 3]),
+            false,
+            vec![Some("Mats.Nowhere".into())],
+        ),
+        placement(
+            "Meshes.A",
+            attached([0.0; 3], [1.0; 3]),
+            false,
+            vec![Some("Mats.Plain".into())],
+        ),
+    ];
+    for (i, p) in rows.into_iter().enumerate() {
+        let key = ExportKey {
+            level: 1,
+            export: i32::try_from(i).unwrap() + 1,
+        };
+        s.placements.insert(key, p);
+    }
+    let st = DrawPlan::build(&s).stats;
+    assert_eq!(
+        (
+            st.untextured_no_material,
+            st.untextured_unknown_material,
+            st.untextured_no_diffuse
+        ),
+        (1, 1, 1)
+    );
+}
+
+#[test]
+fn a_mesh_with_no_vertex_or_an_index_past_them_is_refused() {
+    let SceneMesh {
+        status: MeshStatus::Decoded(asset),
+        ..
+    } = mesh(1)
+    else {
+        panic!("a decoded mesh");
+    };
+    let lod = &asset.lods[0];
+    assert!(MeshData::from_lod("M", lod).is_some());
+    let mut past = lod.clone();
+    past.indices[2] = 3;
+    assert!(MeshData::from_lod("M", &past).is_none());
+    let mut empty = lod.clone();
+    empty.vertices.clear();
+    empty.indices.clear();
+    empty.sections.clear();
+    assert!(MeshData::from_lod("M", &empty).is_none());
 }
 
 #[test]
@@ -259,7 +404,7 @@ fn the_diffuse_is_picked_by_parameter_name() {
         ],
         None,
     );
-    assert_eq!(pick_diffuse(&m), Some("Tex.Child"));
+    assert_eq!(pick_diffuse(&m).as_deref(), Some("Tex.Child"));
     // A real texture replaces a stub; a stub never replaces a real one.
     let m = material(
         vec![
@@ -268,7 +413,7 @@ fn the_diffuse_is_picked_by_parameter_name() {
         ],
         None,
     );
-    assert_eq!(pick_diffuse(&m), Some("Tex.Real"));
+    assert_eq!(pick_diffuse(&m).as_deref(), Some("Tex.Real"));
     // Higher priority wins between real textures: p_Diffuse (100) over Diffuse_A (90), whatever the order.
     let m = material(
         vec![
@@ -277,7 +422,7 @@ fn the_diffuse_is_picked_by_parameter_name() {
         ],
         None,
     );
-    assert_eq!(pick_diffuse(&m), Some("Tex.Main"));
+    assert_eq!(pick_diffuse(&m).as_deref(), Some("Tex.Main"));
     // Aliases count; other channels and unnamed entries do not.
     let m = material(
         vec![
@@ -287,9 +432,9 @@ fn the_diffuse_is_picked_by_parameter_name() {
         ],
         None,
     );
-    assert_eq!(pick_diffuse(&m), Some("Tex.Alias"));
+    assert_eq!(pick_diffuse(&m).as_deref(), Some("Tex.Alias"));
     let m = material(vec![texture("Tex.Normal", Some("p_Normal"), 0)], None);
-    assert_eq!(pick_diffuse(&m), None);
+    assert_eq!(pick_diffuse(&m).as_deref(), None);
     assert_eq!(
         channel_for_parameter("EmissiveOpacityInput"),
         Some(Channel::Emissive)
@@ -377,9 +522,9 @@ fn sanctuary_plan_on_the_installed_game() {
     );
     let _ = writeln!(
         r,
-        "meshes {} textures {} batches {} section instances {} empty sections {}",
+        "meshes {} materials with diffuse candidates {} batches {} section instances {} empty sections {}",
         plan.meshes.len(),
-        plan.textures.len(),
+        plan.diffuse.len(),
         plan.batches.len(),
         s.instances,
         s.empty_sections

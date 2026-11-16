@@ -19,8 +19,16 @@
 //!
 //! **Textures** are decoded one at a time through the source the caller gives (on the installed game,
 //! [`crate::scene::Scene::decode_texture`], that is `ow-assets`) and uploaded with every resident mip that halves the
-//! one before; the CPU copy is dropped at once. A texture that does not decode or is larger than the device allows
-//! is drawn with a plain grey one, and counted.
+//! one before; the CPU copy is dropped at once. Each material's diffuse is the best of its candidates that decodes
+//! ([`crate::draw::pick_from`]): a candidate that does not decode, or has no mip the device takes, is skipped for the
+//! next, as the tool skips it; a material with none left is drawn with a plain grey texture. Both are counted.
+//!
+//! **Normals** go through each instance's normal matrix (the inverse transpose of its 3x3, computed on the CPU in
+//! `f64`, [`crate::draw::normal_matrix`]), not the model matrix, so non-uniform scales light slanted faces correctly.
+//!
+//! **Targets** are 8-bit RGBA or BGRA, sRGB or not ([`capture_order`]). The shader writes linear colour; on an
+//! sRGB target the hardware encodes it, on a plain one it is stored as is (darker). The window's surface asks for an
+//! sRGB format when the adapter offers one (`crate::gpu`).
 //!
 //! **No panic on the device's errors**: they go to the uncaptured-error handler of [`crate::gpu`] in a window run;
 //! the headless context of the tests installs its own.
@@ -32,10 +40,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ow_assets::texture::TextureAsset;
+use ow_core::DetMap;
 use wgpu::util::DeviceExt;
 
 use crate::camera::{Controls, FlyCamera};
-use crate::draw::{BatchKey, DrawPlan, VERTEX_BYTES};
+use crate::draw::{BatchKey, DrawPlan, Instance, VERTEX_BYTES, pick_from};
 use crate::frame::Mat4;
 
 /// The front face of a draw whose transform does not mirror (module documentation).
@@ -58,8 +67,9 @@ pub const AMBIENT: f32 = 0.35;
 pub const SUN: f32 = 0.75;
 /// The grey of an untextured or undecoded draw (sRGB bytes).
 pub const GREY: [u8; 4] = [180, 180, 180, 255];
-/// Bytes of one instance: a column-major 4x4 matrix.
-const INSTANCE_BYTES: u64 = 64;
+/// Bytes of one instance: the column-major 4x4 world matrix, then the normal matrix's three columns, each padded to
+/// four floats.
+const INSTANCE_BYTES: u64 = 112;
 /// Bytes of the per-frame uniforms: view-projection, sun, ambient.
 const GLOBALS_BYTES: u64 = 96;
 
@@ -82,6 +92,9 @@ struct VertexIn {
     @location(4) m1: vec4<f32>,
     @location(5) m2: vec4<f32>,
     @location(6) m3: vec4<f32>,
+    @location(7) n0: vec4<f32>,
+    @location(8) n1: vec4<f32>,
+    @location(9) n2: vec4<f32>,
 };
 
 struct VertexOut {
@@ -95,7 +108,8 @@ fn vs_main(v: VertexIn) -> VertexOut {
     let model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
     var out: VertexOut;
     out.clip = globals.view_proj * (model * vec4<f32>(v.position, 1.0));
-    out.normal = (model * vec4<f32>(v.normal, 0.0)).xyz;
+    let normal_matrix = mat3x3<f32>(v.n0.xyz, v.n1.xyz, v.n2.xyz);
+    out.normal = normal_matrix * v.normal;
     out.uv = v.uv;
     return out;
 }
@@ -116,10 +130,30 @@ fn fs_main(in: VertexOut, @builtin(front_facing) front: bool) -> @location(0) ve
 }
 "#;
 
-/// The 16 floats of a matrix as the instance buffer holds them, column by column.
+/// The 16 floats of a matrix, column by column.
 fn matrix_bytes(m: &Mat4, out: &mut Vec<u8>) {
     for v in m.cols.iter().flatten() {
         out.extend_from_slice(&v.to_le_bytes());
+    }
+}
+
+/// One instance as the instance buffer holds it ([`INSTANCE_BYTES`]).
+fn instance_bytes(i: &Instance, out: &mut Vec<u8>) {
+    matrix_bytes(&i.world, out);
+    for col in &i.normal {
+        for v in col.iter().chain(&[0.0]) {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
+/// Whether captured bytes of `format` come in RGBA order (`Some(false)`), BGRA order (`Some(true)`), or are a format
+/// the capture does not convert (`None`).
+pub fn capture_order(format: wgpu::TextureFormat) -> Option<bool> {
+    match format {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => Some(false),
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => Some(true),
+        _ => None,
     }
 }
 
@@ -170,10 +204,15 @@ pub struct UploadStats {
     pub vertex_bytes: u64,
     pub index_bytes: u64,
     pub instance_bytes: u64,
+    /// Textures decoded and uploaded.
     pub textures: usize,
-    /// Textures drawn grey instead: not decoded, or no mip fits the device.
+    /// Candidate textures that did not decode, or had no mip the device takes (each skipped for the next).
     pub textures_failed: usize,
     pub texture_bytes: u64,
+    /// Materials drawn with a later candidate because a better one failed.
+    pub fallbacks: usize,
+    /// Materials with candidates of which none decoded, drawn grey.
+    pub grey_materials: usize,
 }
 
 struct GpuMesh {
@@ -205,14 +244,31 @@ pub struct SceneRenderer {
 }
 
 impl SceneRenderer {
-    /// Uploads `plan` for drawing into `format` targets, decoding its textures through `textures`.
+    /// Uploads `plan` for drawing into `format` targets, decoding its textures through `textures`. `Err` for a target
+    /// format the renderer does not draw into ([`capture_order`]), a buffer larger than the device allows, or more
+    /// instances in a batch than a draw can count.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         plan: &DrawPlan,
         textures: &mut dyn FnMut(&str) -> Result<TextureAsset, String>,
-    ) -> SceneRenderer {
+    ) -> Result<SceneRenderer, String> {
+        if capture_order(format).is_none() {
+            return Err(format!(
+                "the renderer draws into 8-bit RGBA or BGRA targets, not {format:?}"
+            ));
+        }
+        let max_buffer = device.limits().max_buffer_size;
+        let fits = |what: &str, bytes: u64| {
+            if bytes > max_buffer {
+                Err(format!(
+                    "{what} of {bytes} bytes exceed the device's {max_buffer}-byte buffers"
+                ))
+            } else {
+                Ok(())
+            }
+        };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -274,7 +330,8 @@ impl SceneRenderer {
                             array_stride: INSTANCE_BYTES,
                             step_mode: wgpu::VertexStepMode::Instance,
                             attributes: &wgpu::vertex_attr_array![
-                                3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
+                                3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4,
+                                7 => Float32x4, 8 => Float32x4, 9 => Float32x4
                             ],
                         }),
                     ],
@@ -362,27 +419,57 @@ impl SceneRenderer {
         let grey = upload_rgba(device, queue, &[(1, 1, &GREY[..])]);
         let grey_group = group(&grey.create_view(&Default::default()));
         let max_dimension = device.limits().max_texture_dimension_2d;
-        let mut texture_groups = Vec::with_capacity(plan.textures.len());
-        for path in &plan.textures {
-            let decoded = textures(path).ok();
-            let chain = decoded
-                .as_ref()
-                .map(|t| mip_chain(t, max_dimension))
-                .unwrap_or_default();
-            match (&decoded, chain.is_empty()) {
-                (Some(t), false) => {
-                    let levels: Vec<(u32, u32, &[u8])> = chain
-                        .iter()
-                        .map(|&i| (t.mips[i].width, t.mips[i].height, t.mips[i].rgba.as_slice()))
-                        .collect();
-                    upload.texture_bytes += levels.iter().map(|l| l.2.len() as u64).sum::<u64>();
-                    let texture = upload_rgba(device, queue, &levels);
-                    texture_groups.push(group(&texture.create_view(&Default::default())));
-                    upload.textures += 1;
+        // Each candidate path decoded at most once: its bind group, or `None` when it failed.
+        let mut uploaded: DetMap<String, Option<wgpu::BindGroup>> = DetMap::new();
+        let mut texture_groups = Vec::with_capacity(plan.diffuse.len());
+        for candidates in &plan.diffuse {
+            let best = pick_from(candidates, &|_| true).map(|c| c.path.clone());
+            let chosen = loop {
+                let failed = |path: &str| matches!(uploaded.get(path), Some(None));
+                let Some(pick) = pick_from(candidates, &|path| !failed(path)) else {
+                    break None;
+                };
+                let path = pick.path.clone();
+                if let Some(Some(group)) = uploaded.get(&path) {
+                    break Some((path, group.clone()));
                 }
-                _ => {
-                    texture_groups.push(group(&grey.create_view(&Default::default())));
-                    upload.textures_failed += 1;
+                let decoded = textures(&path).ok();
+                let chain = decoded
+                    .as_ref()
+                    .map(|t| mip_chain(t, max_dimension))
+                    .unwrap_or_default();
+                match (&decoded, chain.is_empty()) {
+                    (Some(t), false) => {
+                        let levels: Vec<(u32, u32, &[u8])> = chain
+                            .iter()
+                            .map(|&i| {
+                                (t.mips[i].width, t.mips[i].height, t.mips[i].rgba.as_slice())
+                            })
+                            .collect();
+                        upload.texture_bytes +=
+                            levels.iter().map(|l| l.2.len() as u64).sum::<u64>();
+                        let texture = upload_rgba(device, queue, &levels);
+                        let group = group(&texture.create_view(&Default::default()));
+                        upload.textures += 1;
+                        uploaded.insert(path.clone(), Some(group.clone()));
+                        break Some((path, group));
+                    }
+                    _ => {
+                        upload.textures_failed += 1;
+                        uploaded.insert(path, None);
+                    }
+                }
+            };
+            match chosen {
+                Some((path, group)) => {
+                    if best.as_deref() != Some(path.as_str()) {
+                        upload.fallbacks += 1;
+                    }
+                    texture_groups.push(group);
+                }
+                None => {
+                    upload.grey_materials += 1;
+                    texture_groups.push(grey_group.clone());
                 }
             }
         }
@@ -390,6 +477,8 @@ impl SceneRenderer {
         let mut meshes = Vec::with_capacity(plan.meshes.len());
         for m in &plan.meshes {
             let (vertices, indices) = (m.vertex_bytes(), m.index_bytes());
+            fits("vertices", vertices.len() as u64)?;
+            fits("indices", indices.len() as u64)?;
             upload.vertex_bytes += vertices.len() as u64;
             upload.index_bytes += indices.len() as u64;
             meshes.push(GpuMesh {
@@ -418,18 +507,20 @@ impl SceneRenderer {
                 continue;
             };
             let instance_offset = instance_data.len() as u64;
-            for m in &b.instances {
-                matrix_bytes(m, &mut instance_data);
+            for i in &b.instances {
+                instance_bytes(i, &mut instance_data);
             }
             batches.push(GpuBatch {
                 key: b.key,
                 first_index: range.first_index,
                 index_count: range.index_count,
                 instance_offset,
-                instances: u32::try_from(b.instances.len()).unwrap_or(u32::MAX),
+                instances: u32::try_from(b.instances.len())
+                    .map_err(|_| format!("a batch of {} instances", b.instances.len()))?,
             });
         }
         upload.instance_bytes = instance_data.len() as u64;
+        fits("instances", upload.instance_bytes)?;
         let instances = (!instance_data.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("instances"),
@@ -438,7 +529,7 @@ impl SceneRenderer {
             })
         });
 
-        SceneRenderer {
+        Ok(SceneRenderer {
             format,
             pipelines,
             globals,
@@ -450,7 +541,7 @@ impl SceneRenderer {
             batches,
             depth: None,
             upload,
-        }
+        })
     }
 
     /// The number of instanced draws a frame issues.
@@ -550,6 +641,8 @@ impl SceneRenderer {
         view_proj: &Mat4,
     ) -> Result<Vec<u8>, String> {
         let (width, height) = size;
+        let bgra = capture_order(self.format)
+            .ok_or_else(|| format!("no capture conversion for {:?}", self.format))?;
         let target = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("capture"),
             size: wgpu::Extent3d {
@@ -622,10 +715,6 @@ impl SceneRenderer {
             None => return Err("the capture buffer was not mapped".into()),
         }
         let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
-        let bgra = matches!(
-            self.format,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-        );
         let mut out = Vec::with_capacity((row * u64::from(height)) as usize);
         for y in 0..u64::from(height) {
             let start = (y * padded) as usize;
@@ -824,7 +913,7 @@ impl Drawer for SceneDrawer {
     ) -> Result<(), String> {
         let started = Instant::now();
         let plan = self.plan.take().ok_or("the scene is attached already")?;
-        let renderer = SceneRenderer::new(device, queue, format, &plan, &mut self.textures);
+        let renderer = SceneRenderer::new(device, queue, format, &plan, &mut self.textures)?;
         let mut report = self.report.borrow_mut();
         report.upload_time = started.elapsed();
         report.upload = renderer.upload;

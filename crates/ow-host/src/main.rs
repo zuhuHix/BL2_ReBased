@@ -26,8 +26,6 @@ use ow_host::draw::DrawPlan;
 use ow_host::render::{DrawReport, SceneDrawer};
 use ow_host::scene::{Scene, SceneAssets};
 
-/// The presented frame a `--screenshot` is taken after (lane H2).
-const SCREENSHOT_FRAME: u64 = 30;
 /// How far above a player start the camera starts, uu (`tools/prepare_level.py` raises its camera by 100).
 const EYE_HEIGHT: f32 = 100.0;
 use std::time::Duration;
@@ -172,12 +170,17 @@ fn scene_window(
         s.mirrored
     );
     println!(
-        "{} meshes, {} textures, {} batches, {} section instances ({} empty sections skipped)",
+        "{} meshes, {} materials with diffuse candidates, {} batches, {} section instances ({} empty sections skipped)",
         plan.meshes.len(),
-        plan.textures.len(),
+        plan.diffuse.len(),
         plan.batches.len(),
         s.instances,
         s.empty_sections
+    );
+    println!(
+        "untextured section instances: {} with no material, {} with a material not in the scene, {} whose material \
+         names no diffuse",
+        s.untextured_no_material, s.untextured_unknown_material, s.untextured_no_diffuse
     );
     let start = scene.player_starts.values().next();
     let camera = match start {
@@ -199,7 +202,7 @@ fn scene_window(
         source,
         camera,
         size,
-        screenshot.map(|path| (SCREENSHOT_FRAME, path)),
+        screenshot.clone().map(|path| (u64::from(args::SCREENSHOT_FRAME), path)),
         Rc::clone(&report),
     );
     let code = window_with(options, Some(Box::new(drawer)));
@@ -207,7 +210,8 @@ fn scene_window(
     let u = r.upload;
     println!(
         "upload in {} ms: {} meshes ({} vertex and {} index bytes), {} instance bytes, {} textures ({} bytes), \
-         {} textures drawn grey; {} instanced draws per frame",
+         {} candidate textures failed, {} materials on a later candidate, {} materials grey; {} instanced draws \
+         per frame",
         millis(r.upload_time),
         u.meshes,
         u.vertex_bytes,
@@ -216,6 +220,8 @@ fn scene_window(
         u.textures,
         u.texture_bytes,
         u.textures_failed,
+        u.fallbacks,
+        u.grey_materials,
         r.draw_calls
     );
     if let Some((w, h)) = r.size {
@@ -229,12 +235,23 @@ fn scene_window(
             millis(p95)
         );
     }
-    match &r.screenshot {
-        Some(Ok(path)) => println!("screenshot: {}", path.display()),
-        Some(Err(e)) => eprintln!("ow-host: screenshot failed: {e}"),
-        None => {}
-    }
-    code
+    // A screenshot asked for and not written fails the run, whatever the window did.
+    let shot_failed = match (&screenshot, &r.screenshot) {
+        (_, Some(Ok(path))) => {
+            println!("screenshot: {}", path.display());
+            false
+        }
+        (_, Some(Err(e))) => {
+            eprintln!("ow-host: screenshot failed: {e}");
+            true
+        }
+        (Some(_), None) => {
+            eprintln!("ow-host: no screenshot: the run ended before frame {}", args::SCREENSHOT_FRAME);
+            true
+        }
+        (None, None) => false,
+    };
+    if shot_failed { ExitCode::from(1) } else { code }
 }
 
 fn window(options: RunOptions) -> ExitCode {

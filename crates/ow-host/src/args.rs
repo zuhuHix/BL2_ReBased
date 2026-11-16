@@ -153,6 +153,11 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
         if !(window || frames.is_some()) {
             return Err("--map needs --window or --frames".into());
         }
+        if screenshot.is_some() && frames.is_some_and(|n| n <= SCREENSHOT_FRAME) {
+            return Err(format!(
+                "--screenshot is taken after frame {SCREENSHOT_FRAME}: --frames must be more than that"
+            ));
+        }
         return Ok(Command::Scene { game, map, frames, vsync: !no_vsync, time_limit, size, screenshot });
     }
     if window || frames.is_some() {
@@ -163,6 +168,9 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     }
     Ok(Command::Check { game })
 }
+
+/// The presented frame a `--screenshot` is taken after (lane H2): a `--frames` run must present more than this.
+pub const SCREENSHOT_FRAME: u32 = 30;
 
 fn set_once(already: bool, flag: &str) -> Result<bool, String> {
     if already { Err(format!("{flag} given twice")) } else { Ok(true) }
@@ -240,6 +248,7 @@ mod tests {
             &["--game", "X", "--window", "--map", "A", "--size", "0x10"],
             &["--game", "X", "--window", "--map", "A", "--size", "wide"],
             &["--headless-probe", "--map", "A"],
+            &["--game", "X", "--frames", "30", "--map", "A", "--screenshot", "a.png"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} was accepted");
         }

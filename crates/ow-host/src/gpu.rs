@@ -169,6 +169,10 @@ impl Gpu {
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or_else(|| GpuError::Surface("the adapter cannot present to this window".into()))?;
         config.present_mode = if vsync { wgpu::PresentMode::AutoVsync } else { wgpu::PresentMode::AutoNoVsync };
+        // An sRGB format when the adapter offers one (lane H2's renderer writes linear colour).
+        if let Some(&srgb) = surface.get_capabilities(&adapter).formats.iter().find(|f| f.is_srgb()) {
+            config.format = srgb;
+        }
         surface.configure(&device, &config);
         let gpu = Gpu {
             instance,

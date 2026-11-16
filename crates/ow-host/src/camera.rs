@@ -27,6 +27,7 @@ pub const FOV_DEG: f32 = 70.0;
 pub const NEAR: f32 = 10.0;
 
 /// The keys and button the camera listens to, held or not.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Controls {
     pub forward: bool,
@@ -41,6 +42,7 @@ pub struct Controls {
 }
 
 /// The camera.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlyCamera {
     /// uu.
