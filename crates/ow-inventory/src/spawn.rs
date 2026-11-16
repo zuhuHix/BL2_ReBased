@@ -11,12 +11,9 @@
 //!   2. `Quantity` times, one weighted pick among them with replacement (`ow_items::candidates::pick_candidate`, on
 //!      the world's `CrtStream::LootPool`), and one inventory spawned for it ([`spawn_one`]);
 //!   3. the answer is true when every requested spawn succeeded; zero candidates spawn nothing and answer false.
-//! - `ItemPool.SpawnBalancedInventoryFromPool` is `NotYet { NotPorted }`. W4-POOLS' `ow_items::pools::roll_pool`
-//!   (decision 2026-11-15-25) serves the offline roll, and the native needs four things its shape does not give: the
-//!   caller's stage (the roll takes the snapshot's), the caller's `GameStageVarianceFormula` object (the roll takes
-//!   registry data), the native's `ContextSource` for every evaluation (the roll evaluates with none), and a spawn
-//!   inside the pick loop (the roll returns every drop first, so the item rolls cannot interleave with the pool
-//!   draws as the native's do). A contract item for the hub, not a change here.
+//! - `ItemPool.SpawnBalancedInventoryFromPool` is not bound here: `ow-combat::loot` owns that key (hub decision,
+//!   review r1 of PR #340; decision 2026-11-16-41, which settles how the native and W4-POOLS'
+//!   `ow_items::pools::roll_pool` differ). [`FROM_POOL`] stays as the key the installed package declares.
 //!
 //! **One spawn** ([`resolve`], then [`spawn_one`]): the candidate's definition must name an `InventoryClass` that is
 //! a `WillowInventory`, else the pick fails; the definition, the manufacturer and the class's functions are found
@@ -61,7 +58,7 @@ use crate::equip::{bad, cleanup_failed, item_error, object_of, text, write};
 /// The record this module follows.
 pub const RECORD: &str = "NATIVE_LOOT.md (ItemPool spawn natives)";
 
-/// The native keys, as the loader derives them from the installed `WillowGame.upk`.
+/// The native keys, as the loader derives them from the installed `WillowGame.upk` (this module binds the first).
 pub const FROM_BALANCE: &str =
     "ItemPool.SpawnBalancedInventoryFromInventoryBalanceDefinition(object,int,int,int,object,array)";
 pub const FROM_POOL: &str = "ItemPool.SpawnBalancedInventoryFromPool(object,int,int,object,array,object,float,bool)";
@@ -446,18 +443,12 @@ pub fn object_path(vm: &Vm, o: ObjRef) -> Result<String, VmError> {
     Ok(names.join("."))
 }
 
-/// Registers the two spawn natives.
+/// Registers the balance spawn native. `SpawnBalancedInventoryFromPool` is not bound here: `ow-combat::loot` binds
+/// it (hub decision, review r1 of PR #340, decision 2026-11-16-41), so the key has one owner whatever order the packs
+/// register in.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     let balance: NativeFn = Rc::new(from_balance);
-    vm.register_native(FROM_BALANCE, balance)?;
-    let pool: NativeFn = Rc::new(|_call: &mut NativeCall<'_>| {
-        Err(NotYet::not_ported(
-            "ItemPool.SpawnBalancedInventoryFromPool: ow_items::pools::roll_pool takes the snapshot's stage, registry              variance data and no context source, and returns the drops before any spawn (a contract item, module              documentation)",
-            RECORD,
-        )
-        .into())
-    });
-    vm.register_native(FROM_POOL, pool)
+    vm.register_native(FROM_BALANCE, balance)
 }
 
 #[cfg(test)]

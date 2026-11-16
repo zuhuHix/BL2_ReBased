@@ -2,15 +2,18 @@
 # decision 2026-11-16-41).
 #
 # tests/combat_loot_standin_test.py pins the C++ stand-in inventories (7 SpawnBalancedInventoryFromPool calls of
-# Pool_Coins at stage 4 make 21 of them, architecture section 6.1), so it runs only with mode=reference. Its Rust-native
-# replacement test is crates/ow-combat/src/loot/tests.rs
-# `off_mode_makes_no_stand_in_inventory_the_pool_native_is_not_yet_before_any_draw`: in Off mode the pool native is
-# NotYet before anything is drawn or spawned (ow_items::pools::roll_pool lacks the native's context source, the
-# caller's variance object and the native's return value).
+# Pool_Coins at stage 4 make 21 of them, architecture section 6.1), so it runs only with mode=reference. Its Off test,
+# crates/ow-combat/src/loot/tests.rs `off_mode_makes_no_stand_in_inventory_the_pool_native_is_not_yet_before_any_draw`,
+# is a placeholder: it pins that the pool native is NotYet before anything is drawn or spawned
+# (ow_items::pools::roll_pool lacks the native's context source, the caller's variance object and the native's return
+# value). The 6.1 row stays open until the Off pool native lands with real ow-items rolls.
 #
-# tests/combat_test.py's loot section passes on the Rust binary in Reference mode; the file as a whole is not a line
-# (W6-COMBAT's two SetHealth-event checks, and in Off mode the death roll is the installed script, which records
-# nothing). The invented-package parity of the S-g steps is pinned in Rust instead: loot/tests.rs
+# tests/combat_test.py is not a line. On the Rust binary in Reference mode three of its checks fail: W6-COMBAT's two
+# SetHealth-event checks, and in the loot section the random quantity of Pool_Rand, because the Rust evaluator
+# refuses an initialization definition without ValueFormula, ConditionalInitialization, RangeRestriction and
+# RoundingMode where the C++ evaluator accepts it (an ow-attr Reference gap, decision 2026-11-16-41). In Off mode its
+# loot section fails by design (the death roll is the installed script, which records nothing). The invented-package
+# parity of the S-g steps is pinned in Rust instead: loot/tests.rs
 # `the_sg_step_lists_equal_the_cxx_binary_in_reference_mode` compares twelve step lists with the C++ binary's output
 # for the same bytes.
 python tests/combat_loot_standin_test.py {bin} mode=reference

@@ -682,7 +682,8 @@ fn a_batch_sums_the_rolls_per_pool_with_the_cxx_keys() {
             pool("Pool_Money_1or2", 0.25, true, true, vec![item("M", 6, true), item("M", 6, true)]),
             errored.clone(),
         ],
-    });
+    })
+    .unwrap();
     batch.add(&LootDrop {
         pawn,
         stage: 7,
@@ -692,7 +693,8 @@ fn a_batch_sums_the_rolls_per_pool_with_the_cxx_keys() {
             pool("Pool_Money_1or2", 0.5, true, false, vec![item("M", 6, false)]),
             errored,
         ],
-    });
+    })
+    .unwrap();
     assert_eq!(batch.kills(), 2);
     let got: Vec<(String, f64)> = batch.rows("t");
     let expect: Vec<(&str, f64)> = vec![
@@ -726,19 +728,189 @@ fn a_batch_sums_the_rolls_per_pool_with_the_cxx_keys() {
 // The loot-spawn behavior handlers
 // ---------------------------------------------------------------------------------------------------------------
 
-#[test]
-fn the_loot_spawn_behaviors_are_registered_and_answer_not_yet_naming_the_consumer() {
-    let (mut run, _dir) = fresh(ParityMode::Off);
-    let vm = &mut run.world().vm;
-    for class in SPAWN_BEHAVIORS {
-        assert!(matches!(registry::lookup(vm, class).unwrap(), Handler::Run(_)), "{class}");
-        let e = spawn_behavior_not_yet(class);
-        let n = e.not_yet().expect("a NotYet");
-        assert_eq!(n.missing, Missing::NotPorted);
-        assert!(n.what.contains(class) && n.what.contains("SelfObject"), "{n}");
+// The invented provider packages of the `ow-behavior` tests (that crate's file; it uses only `ow_package::testkit`).
+#[allow(dead_code)]
+#[path = "../../../ow-behavior/src/kernel/fixtures/packages.rs"]
+mod packages;
+
+static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// A VM in `mode` over the `ow-behavior` fixture's install, its `WillowGame` replaced by one that declares
+/// `Behavior_SpawnLoot`, and the provider `ToyLoot`: event `Ping` runs that behavior, then `After`. Loot is enabled.
+fn spawn_loot_provider(mode: ParityMode) -> (Vm, ow_behavior::kernel::Provider, crate::run::tests::Dir) {
+    use packages::{Seq, Spec, beh, ev, install, provider_package};
+    let main = Seq {
+        name: "Main",
+        enabled_on_spawn: Some(true),
+        events: vec![ev("Ping", (0, 1))],
+        behaviors: vec![
+            beh("Loot", "Behavior_SpawnLoot", (1, 1)),
+            beh("After", "Behavior_SpawnLoot", (0, 0)),
+        ],
+        links: vec![(0, -1, 0.0), (1, -1, 0.0)],
+        ..Seq::default()
+    };
+    let mut files = install(&[("ToyLoot", provider_package(&Spec::new("ToyLoot", vec![main], vec![])))]);
+    let mut d = ow_package::testkit::reflect::Declarations::new(&["Object", "Struct", "Bool"]);
+    let core = d.p.add_import("Core", "Package", 0, "Core");
+    let object = d.p.add_import("Core", "Class", core, "Object");
+    let context = d.struct_("ToyContext", None);
+    d.prop("Bool", context, "bSupportsDefaultOutputLink", 0);
+    let class = d.cls("Behavior_SpawnLoot", object);
+    d.prop("Struct", class, "Context", context);
+    for f in &mut files {
+        if f.0 == "WillowGame.upk" {
+            f.1 = d.build();
+        }
     }
-    // Enabling twice registers nothing twice.
-    enable(vm).unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "ow-combat-loot-behavior-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let refs: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+    let defs =
+        ow_defs::DefStore::from_synthetic(&dir, &refs, ow_defs::identity::IdentityPolicy::FirstInScanOrder, mode)
+            .unwrap();
+    let mut vm = Vm::new(
+        ow_object::heap::ObjectSpace::new(),
+        defs,
+        std::rc::Rc::new(ow_attr::AttributeSystem::new_empty()),
+        mode,
+    );
+    ow_vm::natives_core::register(&mut vm).unwrap();
+    enable(&mut vm).unwrap();
+    let definition = crate::run::tests::def(&mut vm, "ToyLoot");
+    let p = ow_behavior::kernel::Provider::new(&mut vm, definition).unwrap();
+    (vm, p, crate::run::tests::Dir(dir))
+}
+
+#[test]
+fn a_loot_spawn_behavior_is_unsupported_on_its_branch_and_the_event_goes_on_in_both_modes() {
+    for mode in [ParityMode::Reference, ParityMode::Off] {
+        let (mut vm, mut p, _dir) = spawn_loot_provider(mode);
+        // Nothing is registered for the loot-spawn classes: the registry's default answers.
+        for class in SPAWN_BEHAVIORS {
+            assert_eq!(
+                ow_behavior::registry::lookup(&vm, class).unwrap_err().missing,
+                Missing::NotPorted,
+                "{class}"
+            );
+        }
+        // The event returns: the branch stops at the unsupported behavior (recorded with its NotYet), not the event.
+        p.fire_event(&mut vm, "Ping", &ow_core::DetMap::new(), -1, &[]).unwrap();
+        assert_eq!(
+            p.errors,
+            vec!["unsupported behavior class WillowGame.Behavior_SpawnLoot (Loot)".to_string()],
+            "{mode:?}"
+        );
+        assert_eq!(p.not_yet.len(), 1);
+        assert_eq!(p.not_yet[0].missing, Missing::NotPorted);
+        assert!(p.trace.contains(&"Ping -> Loot".to_string()), "{:?}", p.trace);
+        assert!(!p.trace.contains(&"Ping -> After".to_string()), "{:?}", p.trace);
+        // And a second event still runs.
+        p.fire_event(&mut vm, "Ping", &ow_core::DetMap::new(), -1, &[]).unwrap();
+        assert_eq!(p.errors.len(), 2);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// One owner for the pool native's key, and no half-done enable (review r1 of PR #340)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The key the fixture's package set declares for `path`.
+fn key_of(vm: &mut Vm, path: &str) -> String {
+    declared_native_key(vm, path).expect("declared native")
+}
+
+#[test]
+fn the_pool_native_is_the_loot_one_whichever_pack_registers_first() {
+    for mode in [ParityMode::Reference, ParityMode::Off] {
+        // ow-inventory's natives first, then loot.
+        let (mut w, _dir) = world(mode);
+        ow_inventory::spawn::register(&mut w.vm).unwrap();
+        enable(&mut w.vm).unwrap();
+        let key = key_of(&mut w.vm, FROM_POOL);
+        assert!(w.vm.has_native(&key));
+        assert!(!w.vm.has_native(ow_inventory::spawn::FROM_POOL));
+        // Loot first, then ow-inventory's natives.
+        let (mut w, _dir) = world(mode);
+        enable(&mut w.vm).unwrap();
+        ow_inventory::spawn::register(&mut w.vm).unwrap();
+        let key = key_of(&mut w.vm, FROM_POOL);
+        assert!(w.vm.has_native(&key));
+        assert!(w.vm.has_native(ow_inventory::spawn::FROM_BALANCE));
+    }
+}
+
+#[test]
+fn enable_refuses_a_loot_key_another_pack_bound_before_binding_anything() {
+    for path in [FROM_POOL, SETUP] {
+        let (mut w, _dir) = world(ParityMode::Reference);
+        let key = key_of(&mut w.vm, path);
+        let other: ow_vm::api::NativeFn = std::rc::Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::None));
+        w.vm.register_native(&key, other).unwrap();
+        let before = w.vm.rng.crt(REFERENCE_STREAM).clone();
+        for _ in 0..2 {
+            // A second call is refused too: no half-done state answers Ok.
+            match enable(&mut w.vm).unwrap_err() {
+                VmError::Registration { key: k, .. } => assert_eq!(k, key),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(w.vm.service::<LootState>().is_none());
+        assert_eq!(*w.vm.rng.crt(REFERENCE_STREAM), before, "no reseed");
+        // The other key was not bound either (every key is checked before any is bound).
+        let other_path = if path == FROM_POOL { SETUP } else { FROM_POOL };
+        let other_key = key_of(&mut w.vm, other_path);
+        assert!(!w.vm.has_native(&other_key), "{path}");
+    }
+    // After a success, a second call does nothing.
+    let (mut w, _dir) = world(ParityMode::Reference);
+    enable(&mut w.vm).unwrap();
+    enable(&mut w.vm).unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// What the Reference death roll catches (review r1 of PR #340)
+// ---------------------------------------------------------------------------------------------------------------
+
+#[test]
+fn a_not_yet_in_a_pool_chance_stops_the_reference_death_roll() {
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    run.apply("player:8");
+    run.apply("spawn:ToyPawns/Pawn_Loot:4:6:Balance_Unread");
+    run.apply("hit:0:10::Bullet");
+    let errors = run.errors().join("\n");
+    assert!(errors.starts_with("hit:0:10::Bullet: "), "{errors}");
+    assert!(errors.contains("ToyUnreadValueResolver"), "{errors}");
+    assert_eq!(drop_count(&run.world().vm).unwrap(), 0, "no roll recorded");
+}
+
+#[test]
+fn a_rule_error_is_reported_on_its_pool_and_keeps_the_items_made_before_it() {
+    // Pool_Partial: four picks between a coin and Pool_Self, whose picks nest until the depth bound (a rule error).
+    // Some seed makes a coin before the first nesting pick.
+    let mut kept = None;
+    for seed in 0..64u32 {
+        let (mut run, _dir) = fresh(ParityMode::Reference);
+        run.apply(&format!("seed:{seed}"));
+        run.apply("player:8");
+        run.apply("spawn:ToyPawns/Pawn_Loot:4:6:Balance_Partial");
+        run.apply("hit:0:10::Bullet");
+        assert!(!run.failed(), "{:?}", run.errors());
+        let drops = drops(&run.world().vm).unwrap();
+        let pool = &drops[0].pools[0];
+        assert_eq!(pool.error, "combat loot: item pools nest too deep");
+        assert!(!pool.tried);
+        if !pool.items.is_empty() {
+            kept = Some(pool.items.clone());
+            break;
+        }
+    }
+    let kept = kept.expect("a seed with an item before the error");
+    assert!(kept.iter().all(|i| i.balance == "Bal_Coin" && !i.dropped), "{kept:?}");
 }
 
 #[test]

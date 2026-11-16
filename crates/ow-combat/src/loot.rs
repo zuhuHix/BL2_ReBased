@@ -50,23 +50,24 @@
 //! **The loot-spawn behaviors** (`Behavior_SpawnItems`, `Behavior_SpawnLoot`, `Behavior_SpawnLootAroundPoint`,
 //! `Behavior_SpawnLootAtPoints`, `Behavior_DropItems`) are script classes (`research/native_by_class.json` lists no
 //! native for any of them) whose rules NATIVE_LOOT.md has not read. Their installed `ApplyBehaviorToContext` needs the
-//! consumer (`SelfObject`), which `ow_behavior::registry::HandlerFn` does not receive (decision 2026-11-15-30), so the
-//! handlers registered here answer `NotYet { NotPorted }` naming that input; a provider's own handlers still come
-//! first (the combat run lists `Behavior_SpawnItems` at its death providers' boundary, as the C++ does).
+//! consumer (`SelfObject`), which `ow_behavior::registry::HandlerFn` does not receive (decision 2026-11-15-30). **No
+//! handler is registered for them, in either mode** (review r1 of PR #340): the kernel's default for an unregistered
+//! class is what the C++ does (`src/behavior.cpp`: it records `unsupported behavior class ...`, here with the
+//! registry's `NotYet { NotPorted }`, and stops that branch only), where a registered handler that returns an error
+//! would abort the whole event. A provider's own handlers still come first (the combat run lists
+//! `Behavior_SpawnItems` at its death providers' boundary, as the C++ does).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use ow_attr::api::EvalCx;
-use ow_behavior::provider::BehaviorError;
-use ow_behavior::registry::{self, Handler};
 use ow_core::fmt::{fmt_f, fmt_g, json_quote};
 use ow_core::num::trunc_i32;
 use ow_core::rand::{CrtRand, CrtStream, Rand15, frand_f32};
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::{ClassId, ObjRef};
 use ow_object::value::Value;
-use ow_vm::api::{NativeCall, NativePack, Vm};
+use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
 use ow_vm::error::VmError;
 use ow_world::world::BalanceState;
 
@@ -74,7 +75,7 @@ use crate::hit::access::{
     array, error, error_text, field, get, integer, loaded, number, object_of, path_of, required,
     set_required, truth,
 };
-use crate::hit::{arg_object, bind_fn, evaluate_for, not_implemented, note, with_state};
+use crate::hit::{arg_object, evaluate_for, not_implemented, note, with_state};
 
 /// The records this module follows.
 pub const RECORD: &str = "NATIVE_LOOT.md; COMBAT_LOOT.md; src/combat_loot.cpp";
@@ -107,7 +108,7 @@ pub const SETUP: &str = "WillowGame.AIPawnBalanceDefinition.SetupPawnItemPoolLis
 pub const FROM_POOL: &str = "WillowGame.ItemPool.SpawnBalancedInventoryFromPool";
 pub const DROP_LOOT: &str = "WillowGame.WillowPawn.DropLootOnDeath";
 
-/// The loot-spawn behavior classes (module documentation).
+/// The loot-spawn behavior classes, left unregistered (module documentation).
 pub const SPAWN_BEHAVIORS: [&str; 5] = [
     "WillowGame.Behavior_SpawnItems",
     "WillowGame.Behavior_SpawnLoot",
@@ -164,6 +165,7 @@ pub struct LootDrop {
 }
 
 /// The death rolls so far, in order. A VM service ([`enable`]).
+#[non_exhaustive]
 #[derive(Debug, Default)]
 pub struct LootState {
     pub drops: Vec<LootDrop>,
@@ -218,28 +220,52 @@ fn push_drop(vm: &Vm, drop: LootDrop) -> Result<(), VmError> {
 // Set-up
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Binds the loot natives (each only when the package set declares it native, as `crate::hit::bind`), overrides
-/// `DropLootOnDeath` in Reference mode, registers the loot-spawn behavior handlers and adds the [`LootState`]
-/// service; in Reference mode the loot generator restarts from [`DEFAULT_SEED`]. Once per VM (a second call does
-/// nothing). The C++ binds these only with `enableDeaths`; the combat run calls this right after it.
+/// The native key the loader derived for `path`, when the package set declares that function native.
+fn declared_native_key(vm: &mut Vm, path: &str) -> Option<String> {
+    let id = vm.find_function(path).ok()?;
+    vm.function(id).and_then(|d| d.native_key.clone())
+}
+
+/// Binds the loot natives where the package set declares them native, overrides `DropLootOnDeath` in Reference mode,
+/// restarts the Reference loot generator from [`DEFAULT_SEED`], and adds the [`LootState`] service last. Once per
+/// VM: a call after a successful one does nothing. A native key that is already bound (another pack's, or one an
+/// earlier call bound before it failed) is refused before anything is bound (`VmError::Registration`): the key has
+/// one owner (review r1 of PR #340). The C++ binds these only with `enableDeaths`; the combat run calls this right
+/// after it. No behavior handler is registered (module documentation).
 pub fn enable(vm: &mut Vm) -> Result<(), VmError> {
     if vm.service::<LootState>().is_some() {
         return Ok(());
     }
-    vm.add_service(LootState::default())?;
-    if vm.parity == ParityMode::Reference {
-        seed(vm, DEFAULT_SEED);
+    let natives: [(&str, NativeFn); 2] = [
+        (FROM_POOL, Rc::new(spawn_from_pool_native)),
+        (SETUP, Rc::new(setup_native)),
+    ];
+    let mut bound = Vec::new();
+    for (path, f) in natives {
+        let Some(key) = declared_native_key(vm, path) else {
+            continue;
+        };
+        if vm.has_native(&key) {
+            return Err(VmError::Registration {
+                key,
+                reason: "a loot native's key is already bound (ow-combat::loot owns it)",
+            });
+        }
+        bound.push((key, f));
     }
-    bind_fn(vm, FROM_POOL, spawn_from_pool_native)?;
-    bind_fn(vm, SETUP, setup_native)?;
+    for (key, f) in bound {
+        vm.register_native(&key, f)?;
+    }
     if vm.parity == ParityMode::Reference {
         // The C++ catches the override's error: a set without the script function (or with a native one) keeps it.
         match vm.override_script(DROP_LOOT, Rc::new(drop_loot_native)) {
             Ok(()) | Err(VmError::Registration { .. }) => {}
             Err(e) => return Err(e),
         }
+        seed(vm, DEFAULT_SEED);
     }
-    register_behaviors(vm)
+    vm.add_service(LootState::default())?;
+    Ok(())
 }
 
 /// The loot pack for a host: [`enable`].
@@ -260,30 +286,6 @@ pub fn seed(vm: &mut Vm, n: u32) {
         ParityMode::Off => OFF_STREAM,
     };
     *vm.rng.crt(stream) = CrtRand::new(n);
-}
-
-/// What a loot-spawn behavior handler answers (module documentation).
-fn spawn_behavior_not_yet(class: &str) -> BehaviorError {
-    BehaviorError::Vm(
-        NotYet::not_ported(
-            format!(
-                "{class}: its installed ApplyBehaviorToContext needs the consumer (SelfObject), which the kernel's \
-                 handler does not receive (a RunInfo field or Provider accessor, W5-BEHAVIOR); the class's rule is \
-                 not read (NATIVE_LOOT.md, Not read yet)"
-            ),
-            RECORD,
-        )
-        .into(),
-    )
-}
-
-/// The loot-spawn behavior handlers (module documentation).
-fn register_behaviors(vm: &mut Vm) -> Result<(), VmError> {
-    for class in SPAWN_BEHAVIORS {
-        let handler = Handler::run(move |_vm, _p, _id, _event| Err(spawn_behavior_not_yet(class)));
-        registry::register(vm, class, handler)?;
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -993,7 +995,7 @@ fn roll_pools(
             continue;
         };
         if flag(vm, pool, "bAutoReadyItems")? {
-            skipped += 1;
+            skipped = count_up(skipped, "carried-gear pools")?;
             continue;
         }
         let mut rolled = LootPool {
@@ -1019,28 +1021,40 @@ fn roll_pools(
             }
             rolled.tried = rolled.chance > 0.0 && rolled.roll <= rolled.chance;
             if rolled.tried {
-                let mut made = Vec::new();
+                // The items go straight into the record, as the C++ `spawnFromPool` appends them: an error part way
+                // keeps the ones made before it (none of them dropped).
                 rolled.returned =
-                    spawn_from_pool(vm, pool, drop.stage, drop.awesome, Some(pawn), true, &mut made, 0)?;
-                for mut item in made {
+                    spawn_from_pool(vm, pool, drop.stage, drop.awesome, Some(pawn), true, &mut rolled.items, 0)?;
+                for item in &mut rolled.items {
                     let is_weapon = match (item.class, weapon) {
                         (Some(k), Some(w)) => vm.space.classes.is_child_of(k, w),
                         _ => false,
                     };
                     item.dropped = is_dropped(item.drop_on_death, drop.below_kill_z, is_weapon);
-                    rolled.items.push(item);
                 }
             }
             Ok(())
         })();
-        if let Err(e) = attempt {
-            // A probability or pool the evaluator does not cover: reported, nothing dropped for this pool (C++).
-            rolled.error = error_text(&e);
-            rolled.tried = false;
+        match attempt {
+            Ok(()) => {}
+            // The C++ catches its `RuntimeError` only: a rule error of this unit or of the data is reported and
+            // nothing is dropped for this pool. A `NotYet` (an unread resolver, a missing layer) and the VM's own
+            // errors (a borrowed service, a stale handle) stop the roll (review r1 of PR #340).
+            Err(e @ VmError::Script { .. }) => {
+                rolled.error = error_text(&e);
+                rolled.tried = false;
+            }
+            Err(e) => return Err(e),
         }
         drop.pools.push(rolled);
     }
     Ok(skipped)
+}
+
+/// `n + 1`, or an error naming what overflowed (checked arithmetic over data).
+fn count_up(n: usize, what: &str) -> Result<usize, VmError> {
+    n.checked_add(1)
+        .ok_or_else(|| error(format!("{UNIT}: too many {what}")))
 }
 
 /// The script's drop test: an item with its flag set is dropped unless the pawn is below the level's `KillZ` and the
@@ -1103,7 +1117,7 @@ pub fn drop_loot(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
         if !rolled.tried {
             continue;
         }
-        tried += 1;
+        tried = count_up(tried, "tried pools")?;
         let mut text = format!(
             "loot {} chance={} roll={} returned {}",
             leaf(&rolled.pool),
@@ -1118,7 +1132,9 @@ pub fn drop_loot(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
                 item.level,
                 if item.dropped { "" } else { " (destroyed)" }
             ));
-            dropped += usize::from(item.dropped);
+            if item.dropped {
+                dropped = count_up(dropped, "dropped items")?;
+            }
         }
         note(vm, text)?;
     }
@@ -1259,10 +1275,15 @@ impl Batch {
         Batch::default()
     }
 
-    /// Adds one kill's death roll.
-    pub fn add(&mut self, drop: &LootDrop) {
-        self.kills += 1;
-        *self.stages.entry(drop.stage).or_insert(0) += 1;
+    /// Adds one kill's death roll. A counter past `u32` is an error (checked arithmetic).
+    pub fn add(&mut self, drop: &LootDrop) -> Result<(), VmError> {
+        let up = |n: u32, what: &str| -> Result<u32, VmError> {
+            n.checked_add(1)
+                .ok_or_else(|| error(format!("{UNIT}: a loot batch counts too many {what}")))
+        };
+        self.kills = up(self.kills, "kills")?;
+        let at_stage = self.stages.entry(drop.stage).or_insert(0);
+        *at_stage = up(*at_stage, "kills at one stage")?;
         for pool in &drop.pools {
             let sum = self.sums.entry(leaf(&pool.pool).to_string()).or_default();
             sum.chance = if sum.chance < 0.0 { pool.chance } else { sum.chance.min(pool.chance) };
@@ -1274,12 +1295,16 @@ impl Batch {
             sum.items += pool.items.len() as f64;
             for item in &pool.items {
                 sum.dropped += f64::from(u8::from(item.dropped));
-                self.level_mismatches += u32::from(item.level != drop.stage);
+                if item.level != drop.stage {
+                    self.level_mismatches = up(self.level_mismatches, "level mismatches")?;
+                }
             }
             if pool.tried && pool.pool.contains("Pool_Money_1or2") {
-                *self.quantities.entry(pool.items.len()).or_insert(0) += 1;
+                let n = self.quantities.entry(pool.items.len()).or_insert(0);
+                *n = up(*n, "money quantities")?;
             }
         }
+        Ok(())
     }
 
     /// The kills added.
