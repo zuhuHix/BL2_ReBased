@@ -1459,6 +1459,23 @@ fn get_world_info_and_the_services() {
     });
 }
 
+/// Decision 2026-11-16-49: `World::new` makes the query follow its actor list, so the game info is read from the
+/// placed `WorldInfo` (this fixture's declares no `Game`: bad data, not the unset game info's `NotYet`); a set game
+/// info still wins.
+#[test]
+fn the_worlds_game_info_follows_its_placed_world_info() {
+    run(|| {
+        let mut x = fx();
+        assert!(matches!(
+            ow_attr::api::AttrWorld::game_info(x.vm()).unwrap_err(),
+            ow_attr::api::AttrError::BadData { .. }
+        ));
+        let p = x.spawn("Probe");
+        x.w.query().borrow_mut().set_game_info(p);
+        assert_eq!(ow_attr::api::AttrWorld::game_info(x.vm()).unwrap(), Some(p));
+    });
+}
+
 #[test]
 fn the_world_natives_without_a_world_are_not_yet() {
     run(|| {

@@ -1,4 +1,4 @@
-//! Owner: lane W3-ATTRCTX. The resolvers whose rule this layer cannot run yet (an unrecorded interface, script)
+//! Owner: lane W3-ATTRCTX. The resolvers whose rule this layer cannot run yet (an unread proxy test, script)
 //! and the classes not read at all. Each answers `NotYet`, naming what is missing; a None source is None where the
 //! record says the resolver works on a source.
 
@@ -12,32 +12,6 @@ use crate::registry::AttributeSystem;
 /// The answer of a resolver whose rule is script: the VM runs it, so the layer missing is `ow-vm`.
 fn script(what: &'static str) -> AttrError {
     NotYet::layer_absent(what, "ow-vm", RECORD).into()
-}
-
-/// `BalancedActorAttributeContextResolver` (confidence medium-low): the source if it implements the balanced-actor
-/// interface, else None. That interface class is not recorded and the C++ has no such rule, so a source is
-/// `NotYet { NotRead }`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BalancedActor;
-
-impl ContextResolver for BalancedActor {
-    fn resolve(
-        &self,
-        _sys: &AttributeSystem,
-        _resolver: ObjRef,
-        _attr: ObjRef,
-        source: Option<ObjRef>,
-        _cx: &mut EvalCx<'_>,
-    ) -> Result<Option<ObjRef>, AttrError> {
-        match source {
-            None => Ok(None),
-            Some(_) => Err(NotYet::not_read(
-                "BalancedActorAttributeContextResolver: the balanced-actor interface (its class is not recorded)",
-                RECORD,
-            )
-            .into()),
-        }
-    }
 }
 
 /// `StatusEffectChanceModifierResolver` (confidence medium-low, "not read in detail"): the source if it is a

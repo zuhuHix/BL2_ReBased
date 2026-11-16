@@ -18,6 +18,10 @@ use ow_object::value::Value;
 use super::*;
 use crate::api::{AttrWorld, ContextResolver, EngineQuery, GlobalSlots, NumForms, WorldParts};
 
+/// The BalancedActor resolver over synthetic code packages (decision 2026-11-16-49).
+#[path = "balanced_tests.rs"]
+mod balanced_tests;
+
 // ---------------------------------------------------------------------------------------------------------------
 // The world
 // ---------------------------------------------------------------------------------------------------------------
@@ -634,6 +638,58 @@ fn game_info() {
     assert_eq!(walk(&s.sys, &chain, Some(pc), &mut s.w), Ok(None));
 }
 
+/// `ActorAttributeContextResolver` (its class script, decision 2026-11-16-49): an actor of any kind is itself; an object
+/// that is not an actor, and a None source, are None. The rule reads no mode: the C++ refuses the class.
+#[test]
+fn actor_is_the_source_cast_to_actor() {
+    let mut s = scene();
+    let r = registered(
+        &mut s,
+        "GearboxFramework.ActorAttributeContextResolver",
+        vec![],
+    );
+    let (pc, thing) = (s.pc, s.thing);
+    three_rules(&mut s, r, pc, pc, Some(thing));
+    for o in [
+        s.player,
+        s.enemy,
+        s.mind,
+        s.pri,
+        s.gun,
+        s.projectile,
+        s.vehicle,
+    ] {
+        assert_eq!(
+            walk(&s.sys, &[Some(r)], Some(o), &mut s.w),
+            Ok(Some(o)),
+            "{o:?}"
+        );
+    }
+    assert_eq!(walk(&s.sys, &[Some(r)], None, &mut s.w), Ok(None));
+    // A None source stops the chain: the NoContextNeeded after it is not asked for the globals.
+    let chain = [Some(r), Some(s.no_context)];
+    assert_eq!(walk(&s.sys, &chain, None, &mut s.w), Ok(None));
+    // The next step gets the actor: Actor then Pawn from a controller is the controller's pawn.
+    let pawn = registered(&mut s, "Engine.PawnAttributeContextResolver", vec![]);
+    let player = s.player;
+    assert_eq!(
+        walk(&s.sys, &[Some(r), Some(pawn)], Some(pc), &mut s.w),
+        Ok(Some(player))
+    );
+    // An ancestry through an engine-native stand-in cannot answer.
+    let native =
+        s.w.space
+            .classes
+            .define("Engine.NativeOnlyActorThing", None, vec![])
+            .unwrap();
+    s.w.space.classes.mark_native(native).unwrap();
+    let odd = s.w.obj(native, "Odd");
+    assert_eq!(
+        missing(walk(&s.sys, &[Some(r)], Some(odd), &mut s.w)),
+        Missing::NotRead
+    );
+}
+
 #[test]
 fn willow_mind() {
     let mut s = scene();
@@ -764,11 +820,7 @@ fn equipped_inventory() {
 #[test]
 fn the_unported_resolvers_say_what_they_wait_for() {
     let mut s = scene();
-    let cases: [(&str, Missing); 6] = [
-        (
-            "Engine.BalancedActorAttributeContextResolver",
-            Missing::NotRead,
-        ),
+    let cases: [(&str, Missing); 5] = [
         (
             "WillowGame.StatusEffectChanceModifierResolver",
             Missing::NotRead,
@@ -834,6 +886,7 @@ fn standard_registers_every_recorded_class_once_and_no_guessed_path() {
         "Engine.WeaponAttributeContextResolver",
         "Engine.ResourcePoolAttributeContextResolver",
         "Engine.GameInfoAttributeContextResolver",
+        "GearboxFramework.ActorAttributeContextResolver",
         "Engine.BalancedActorAttributeContextResolver",
         "WillowGame.PlayerReplicationInfoAttributeContextResolver",
         "WillowGame.WillowMindAttributeContextResolver",

@@ -1,6 +1,7 @@
 //! Owner: lane W3-ATTRCTX. The actor resolvers: NoContextNeeded, Controller, Pawn, Weapon, OffHandWeapon,
 //! PlayerReplicationInfo, PlayerController, GameInfo, and WillowMind (NATIVE_ATTRIBUTES.md section 5; WillowMind from
-//! the C++ oracle). Plain property hops over the object space; UNVERIFIED in the running game.
+//! the C++ oracle); Actor from its class script (lane FIX-ATTR-CONTEXTS, decision 2026-11-16-49). Plain property hops
+//! over the object space; UNVERIFIED in the running game.
 
 use ow_object::ids::ObjRef;
 
@@ -243,6 +244,35 @@ impl ContextResolver for GameInfo {
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<ObjRef>, AttrError> {
         cx.world.game_info()
+    }
+}
+
+/// `GearboxFramework.ActorAttributeContextResolver` (script; lane FIX-ATTR-CONTEXTS, decision 2026-11-16-49): the
+/// source if it is an `Engine.Actor`, else None (a None source included). Its only function,
+/// `GetAttributeContext`, is script that returns the source cast to `Actor`, read from the installed
+/// `GearboxFramework.upk` with `research/script_disasm.py` (it decodes exactly). The rule is that cast, run here
+/// without the VM. The C++ evaluator refuses the class ("unsupported attribute context resolver",
+/// `src/progression.cpp`), so there is no Reference reading and both modes answer the same. A class ancestry through
+/// an engine-native stand-in is `NotYet { NotRead }` ([`is_a`]). UNVERIFIED in the running game.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Actor;
+
+impl ContextResolver for Actor {
+    fn resolve(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _attr: ObjRef,
+        source: Option<ObjRef>,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        let Some(s) = source else { return Ok(None) };
+        let parts = cx.world.parts();
+        if is_a(parts.space, s, ACTOR)? {
+            Ok(Some(s))
+        } else {
+            Ok(None)
+        }
     }
 }
 

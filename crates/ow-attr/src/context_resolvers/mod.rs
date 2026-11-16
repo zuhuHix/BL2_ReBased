@@ -21,6 +21,7 @@
 //! its resolver does, so each rule keeps its label.
 
 mod actors;
+mod balanced;
 mod inventory;
 mod pending;
 mod pools;
@@ -28,16 +29,17 @@ mod pools;
 mod tests;
 
 pub use actors::{
-    Controller, GameInfo, NoContextNeeded, OffHandWeapon, Pawn, PlayerController,
+    Actor, Controller, GameInfo, NoContextNeeded, OffHandWeapon, Pawn, PlayerController,
     PlayerReplicationInfo, Weapon, WillowMind,
 };
+pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor};
 pub use inventory::{EquippedInventory, Inventory};
-pub use pending::{BalancedActor, Designer, Skill, StatusEffectChance, Unread};
+pub use pending::{Designer, Skill, StatusEffectChance, Unread};
 pub use pools::{ResourcePool, WeaponResourcePool};
 
 use ow_core::NotYet;
 use ow_object::heap::ObjectSpace;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ClassId, ObjRef};
 use ow_object::value::Value;
 
 use crate::api::{AttrError, EvalCx};
@@ -73,10 +75,6 @@ const CENSUS_ONLY: &str = "research/native_by_class.json (not in the notes)";
 pub const UNREAD: &[(&str, &str)] = &[
     ("Engine.ProjectileAttributeContextResolver", NOT_READ_YET),
     ("Engine.VehicleAttributeContextResolver", NOT_READ_YET),
-    (
-        "GearboxFramework.ActorAttributeContextResolver",
-        NOT_READ_YET,
-    ),
     (
         "GearboxFramework.PopulationMasterAttributeContextResolver",
         NOT_READ_YET,
@@ -138,6 +136,7 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_context_resolver("WillowGame.SkillAttributeContextResolver", Skill)?
         .with_context_resolver("Engine.ResourcePoolAttributeContextResolver", ResourcePool)?
         .with_context_resolver("Engine.GameInfoAttributeContextResolver", GameInfo)?
+        .with_context_resolver("GearboxFramework.ActorAttributeContextResolver", Actor)?
         .with_context_resolver(
             "Engine.BalancedActorAttributeContextResolver",
             BalancedActor,
@@ -181,23 +180,34 @@ pub(crate) fn is_a(space: &ObjectSpace, o: ObjRef, base_path: &str) -> Result<bo
     if space.classes.is_child_of(class, base) {
         return Ok(true);
     }
+    match native_stand_in(space, class) {
+        Some(path) => Err(NotYet::not_read(
+            format!("whether an object of the native stand-in class {path} is a {base_path}"),
+            RECORD,
+        )
+        .into()),
+        None => Ok(false),
+    }
+}
+
+/// The path of the first engine-native stand-in class (a class defined only by its import path, with no super
+/// class) on the ancestry of `class`, itself included; `None` when the whole ancestry is known. A "no" over such an
+/// ancestry is not proven, so a caller answers `NotYet` there instead.
+pub(crate) fn native_stand_in(space: &ObjectSpace, class: ClassId) -> Option<String> {
     let mut cursor = Some(class);
     while let Some(c) = cursor {
         if space.classes.is_native(c) {
-            let path = space
-                .classes
-                .get_layout(c)
-                .map(|l| l.path().as_str().to_string())
-                .unwrap_or_default();
-            return Err(NotYet::not_read(
-                format!("whether an object of the native stand-in class {path} is a {base_path}"),
-                RECORD,
-            )
-            .into());
+            return Some(
+                space
+                    .classes
+                    .get_layout(c)
+                    .map(|l| l.path().as_str().to_string())
+                    .unwrap_or_default(),
+            );
         }
         cursor = space.classes.get_layout(c).and_then(|l| l.super_class());
     }
-    Ok(false)
+    None
 }
 
 /// The object reference held by property `name` of `o`: `Ok(None)` when the class declares no such property,

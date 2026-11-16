@@ -5,6 +5,13 @@
 //! - `globals` and `game_info`: the objects the world was given ([`WorldQuery::set_globals`],
 //!   [`WorldQuery::set_game_info`]). The running game always has both (`progression.cpp:84,87`), so an unset one is
 //!   `NotYet { LayerAbsent }` naming the map load that makes it, never a silent None.
+//! - The game info falls back to the level's `WorldInfo.Game` (lane FIX-ATTR-CONTEXTS, decision 2026-11-16-49): with
+//!   none set, a query that follows the actor list ([`WorldQuery::follow_world_info`], which `World::new` calls)
+//!   answers the `Game` of the `WorldInfo` placed there. That is the engine's game-info object, which the C++
+//!   combat world also makes there (`CombatSystem::enableDeaths`, `src/combat_death.cpp`; in Rust
+//!   `ow_combat::death::enable_deaths`). A None `Game`, or no `WorldInfo` placed, is still the `NotYet` above.
+//!   Which object the game's own `GameInfoAttributeContextResolver` answers is NATIVE_ATTRIBUTES.md section 5's
+//!   "the game info" (confidence medium); that it is `WorldInfo.Game` is UNVERIFIED in the running game.
 //! - `engine_query`: the handler registered for the query's kind ([`WorldQuery::register`]). The packs that own the
 //!   engine state register them: resource pools (W5-POOLS, this crate), inventory and equipped items (W5-EQUIP,
 //!   `ow-inventory`), player skills (W6-SKILLS), the game replication info (the map load, not built yet; added by
@@ -22,9 +29,13 @@ use std::rc::Rc;
 
 use ow_attr::api::{AttrError, EngineQuery, WorldParts};
 use ow_core::{DetMap, NotYet};
+use ow_object::heap::ObjectSpace;
 use ow_object::ids::ObjRef;
+use ow_object::value::Value;
 use ow_vm::api::{Vm, WorldHooks};
 use ow_vm::error::VmError;
+
+use crate::actors::Actors;
 
 /// The record behind the hooks.
 pub const RECORD: &str =
@@ -83,6 +94,8 @@ pub type QueryFn =
 pub struct WorldQuery {
     globals: Option<ObjRef>,
     game_info: Option<ObjRef>,
+    /// The actor list whose placed `WorldInfo`'s `Game` is the game info when none is set.
+    actors: Option<Rc<RefCell<Actors>>>,
     handlers: DetMap<QueryKind, QueryFn>,
 }
 
@@ -91,6 +104,7 @@ impl std::fmt::Debug for WorldQuery {
         f.debug_struct("WorldQuery")
             .field("globals", &self.globals)
             .field("game_info", &self.game_info)
+            .field("follows_world_info", &self.actors.is_some())
             .field("handlers", &self.handlers.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -106,9 +120,14 @@ impl WorldQuery {
         self.globals = Some(o);
     }
 
-    /// The game info object, made by the map load.
+    /// The game info object, made by the map load. It wins over [`WorldQuery::follow_world_info`].
     pub fn set_game_info(&mut self, o: ObjRef) {
         self.game_info = Some(o);
+    }
+
+    /// With no game info set, answer the `Game` of the `WorldInfo` placed in `actors` (module documentation).
+    pub fn follow_world_info(&mut self, actors: Rc<RefCell<Actors>>) {
+        self.actors = Some(actors);
     }
 
     pub fn globals(&self) -> Option<ObjRef> {
@@ -163,16 +182,37 @@ impl WorldHooks for Hooks {
             })
     }
 
-    fn game_info(&mut self, _w: WorldParts<'_>) -> Result<ObjRef, AttrError> {
-        self.read("the game info object", WorldQuery::game_info)?
-            .ok_or_else(|| {
+    fn game_info(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError> {
+        let (set, actors) =
+            self.read("the game info object", |s| (s.game_info, s.actors.clone()))?;
+        if let Some(game) = set {
+            return Ok(game);
+        }
+        let world_info = match actors {
+            Some(actors) => actors
+                .try_borrow()
+                .map_err(|_| {
+                    AttrError::World("the game info object: the actor list is borrowed".into())
+                })?
+                .world_info(),
+            None => None,
+        };
+        match world_info {
+            Some(info) => world_info_game(w.space, info)?.ok_or_else(|| {
                 NotYet::layer_absent(
-                    "the game info object of this world",
-                    "the map load that makes it (WorldQuery::set_game_info)",
+                    "the game info object of this world (its WorldInfo's Game is None)",
+                    "the map load that spawns the game info into WorldInfo.Game (or WorldQuery::set_game_info)",
                     RECORD,
                 )
                 .into()
-            })
+            }),
+            None => Err(NotYet::layer_absent(
+                "the game info object of this world",
+                "the map load that makes it (WorldQuery::set_game_info, or a placed WorldInfo's Game)",
+                RECORD,
+            )
+            .into()),
+        }
     }
 
     fn engine_query(
@@ -198,6 +238,27 @@ impl WorldHooks for Hooks {
             )
             .into()),
         }
+    }
+}
+
+/// The `Game` reference of the `WorldInfo` `info`: `Ok(None)` for a None reference. A class without an object property
+/// `Game` is bad data, never a default.
+fn world_info_game(space: &ObjectSpace, info: ObjRef) -> Result<Option<ObjRef>, AttrError> {
+    let class = space.heap.get(info)?.class;
+    let Some(prop) = space.prop(class, "Game") else {
+        return Err(AttrError::BadData {
+            reason: "the game info object: the placed WorldInfo's class declares no Game".into(),
+        });
+    };
+    match space.read(info, prop.into())? {
+        Value::Object(r) => Ok(*r),
+        other => Err(AttrError::BadData {
+            reason: format!(
+                "the game info object: WorldInfo.Game holds {}, not an object reference",
+                other.kind_name()
+            )
+            .into(),
+        }),
     }
 }
 
@@ -260,6 +321,112 @@ mod tests {
         q.borrow_mut().set_game_info(o);
         assert_eq!(vm.globals().unwrap(), o);
         assert_eq!(vm.game_info().unwrap(), Some(o));
+    }
+
+    /// A VM with an invented `WorldInfo` class (an object property `Game`) and a `Thing` class without one, an
+    /// installed query service following an actor list, and that list.
+    fn vm_with_world_info() -> (
+        Vm,
+        Rc<RefCell<WorldQuery>>,
+        Rc<RefCell<Actors>>,
+        ObjRef,
+        ObjRef,
+        ObjRef,
+    ) {
+        use ow_object::layout::{PropKind, PropertyDecl};
+        let mut space = ObjectSpace::new();
+        let actor = space
+            .classes
+            .define("Invented.Actor", None, Vec::new())
+            .unwrap();
+        let game_prop = PropertyDecl::new(
+            space.names.intern("Game"),
+            PropKind::Object { class: actor },
+        );
+        let info_class = space
+            .classes
+            .define("Invented.WorldInfo", Some(actor), vec![game_prop])
+            .unwrap();
+        let info = space
+            .alloc(info_class, "WorldInfo_0", None, Origin::Runtime)
+            .unwrap();
+        let game = space.alloc(actor, "Game_0", None, Origin::Runtime).unwrap();
+        let thing = space
+            .alloc(actor, "Thing_0", None, Origin::Runtime)
+            .unwrap();
+        let mut vm = Vm::new(
+            space,
+            DefStore::new_empty(),
+            Rc::new(AttributeSystem::new_empty()),
+            ParityMode::Off,
+        );
+        let q = install(&mut vm).unwrap();
+        let actors = Rc::new(RefCell::new(Actors::new(actor)));
+        q.borrow_mut().follow_world_info(actors.clone());
+        (vm, q, actors, info, game, thing)
+    }
+
+    fn set_game(vm: &mut Vm, info: ObjRef, game: Option<ObjRef>) {
+        let class = vm.space.heap.get(info).unwrap().class;
+        let prop = vm.space.prop(class, "Game").unwrap();
+        vm.space
+            .write(info, prop.into(), Value::Object(game))
+            .unwrap();
+    }
+
+    /// Decision 2026-11-16-49: with no game info set, the game info is the placed `WorldInfo`'s `Game`; no
+    /// `WorldInfo`, or a None `Game`, is still `NotYet`; a set game info wins.
+    #[test]
+    fn the_game_info_falls_back_to_the_placed_world_infos_game() {
+        let (mut vm, q, actors, info, game, thing) = vm_with_world_info();
+        // No WorldInfo placed yet.
+        assert!(matches!(
+            missing(vm.game_info().unwrap_err()),
+            Missing::LayerAbsent(_)
+        ));
+        actors.borrow_mut().place_world_info(info).unwrap();
+        // Placed, with a None Game.
+        assert!(matches!(
+            missing(vm.game_info().unwrap_err()),
+            Missing::LayerAbsent(_)
+        ));
+        set_game(&mut vm, info, Some(game));
+        assert_eq!(vm.game_info().unwrap(), Some(game));
+        // The globals do not follow the WorldInfo.
+        assert!(matches!(
+            missing(vm.globals().unwrap_err()),
+            Missing::LayerAbsent(_)
+        ));
+        // A set game info wins over the WorldInfo's.
+        q.borrow_mut().set_game_info(thing);
+        assert_eq!(vm.game_info().unwrap(), Some(thing));
+    }
+
+    #[test]
+    fn a_world_info_without_game_or_a_borrowed_list_is_an_error_not_a_panic() {
+        let (mut vm, q, _actors, _info, _game, thing) = vm_with_world_info();
+        // A WorldInfo whose class declares no Game is bad data.
+        let other = Rc::new(RefCell::new(Actors::new(
+            vm.space.heap.get(thing).unwrap().class,
+        )));
+        other.borrow_mut().place_world_info(thing).unwrap();
+        q.borrow_mut().follow_world_info(other.clone());
+        assert!(matches!(
+            vm.game_info().unwrap_err(),
+            AttrError::BadData { .. }
+        ));
+        // The actor list borrowed elsewhere.
+        let held = other.borrow_mut();
+        assert!(matches!(vm.game_info().unwrap_err(), AttrError::World(_)));
+        drop(held);
+        // A query that follows no list answers as before.
+        let (mut plain, o) = vm_with_object();
+        install(&mut plain).unwrap();
+        assert!(matches!(
+            missing(plain.game_info().unwrap_err()),
+            Missing::LayerAbsent(_)
+        ));
+        let _ = o;
     }
 
     #[test]
