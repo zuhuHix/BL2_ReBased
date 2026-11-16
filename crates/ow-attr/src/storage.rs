@@ -33,6 +33,7 @@ use crate::registry::AttributeSystem;
 use crate::stack::{
     CombineForm, Combined, Modifier, ModifierType, NumKind, combine, plain_apply, store_as,
 };
+use crate::value_resolvers::noun;
 
 /// The class of the modifier objects a stack holds and `ApplyAttributeEffects` creates (NATIVE_WEAPON_RULES.md
 /// section 1, NATIVE_SKILLS.md section 4).
@@ -157,8 +158,8 @@ fn stack_items(
 }
 
 /// The value of a stack attribute with base `base` and stack `items`, in `kind` and `form`. A null element is
-/// skipped, as the C++ recompute skips it.
-fn stack_value(
+/// skipped, as the C++ recompute skips it. The noun store recomputes with it too (`value_resolvers::noun`).
+pub(crate) fn stack_value(
     space: &ObjectSpace,
     base: f32,
     items: &[Value],
@@ -227,12 +228,22 @@ fn notify(
 }
 
 /// The property a storage notifies for: a stack attribute's value property, or the plain property.
-fn notify_prop(s: Storage) -> (ObjRef, PropId) {
+fn notify_prop(s: Storage) -> Option<(ObjRef, PropId)> {
     match s {
         Storage::Stack {
             owner, companions, ..
-        } => (owner, companions.value),
-        Storage::Plain { owner, prop, .. } => (owner, prop),
+        } => Some((owner, companions.value)),
+        Storage::Plain { owner, prop, .. } => Some((owner, prop)),
+        // A noun is not a property: no notification (NATIVE_NOUN_ATTRIBUTES.md section 5).
+        Storage::Noun { .. } => None,
+    }
+}
+
+/// The notification after a success on `s`, where `s` has one.
+fn notify_storage(s: Storage, suppress_notify: bool, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    match notify_prop(s) {
+        Some((owner, prop)) => notify(owner, prop, suppress_notify, cx),
+        None => Ok(()),
     }
 }
 
@@ -276,11 +287,15 @@ pub(crate) fn add_to(
                 }
                 AddModifierOutcome::AppliedInPlace
             }
+            Storage::Noun {
+                owner,
+                state,
+                index,
+            } => noun::add(space, owner, state, index, modifier)?,
         }
     };
     if outcome.succeeded() {
-        let (owner, prop) = notify_prop(s);
-        notify(owner, prop, suppress_notify, cx)?;
+        notify_storage(s, suppress_notify, cx)?;
     }
     Ok(outcome)
 }
@@ -295,15 +310,21 @@ pub(crate) fn remove_from(
     cx: &mut EvalCx<'_>,
 ) -> Result<RemoveModifierOutcome, AttrError> {
     let forms = cx.forms;
-    let Storage::Stack {
-        owner,
-        companions,
-        kind,
-    } = s
-    else {
-        let (owner, prop) = notify_prop(s);
-        notify(owner, prop, suppress_notify, cx)?;
-        return Ok(RemoveModifierOutcome::PlainNoOp);
+    let (owner, companions, kind) = match s {
+        Storage::Stack {
+            owner,
+            companions,
+            kind,
+        } => (owner, companions, kind),
+        Storage::Plain { .. } => {
+            notify_storage(s, suppress_notify, cx)?;
+            return Ok(RemoveModifierOutcome::PlainNoOp);
+        }
+        Storage::Noun {
+            owner,
+            state,
+            index,
+        } => return noun::remove(cx.world.parts().space, owner, state, index, modifier),
     };
     let count = {
         let space: &mut ObjectSpace = cx.world.parts().space;
@@ -353,10 +374,14 @@ pub(crate) fn set_base_of(
             Storage::Plain { owner, prop, kind } => {
                 space.write(owner, PropAddr::scalar(prop), to_value(store_as(v, kind)))?;
             }
+            Storage::Noun {
+                owner,
+                state,
+                index,
+            } => noun::set_base(space, owner, state, index, v)?,
         }
     }
-    let (owner, prop) = notify_prop(s);
-    notify(owner, prop, suppress_notify, cx)
+    notify_storage(s, suppress_notify, cx)
 }
 
 /// Where the attribute property `p` of `owner` keeps its number: a stack attribute (the stack flag, with its
@@ -478,6 +503,11 @@ pub(crate) fn attribute_value_by_name(
         Some(Storage::Plain { owner, prop, .. }) => {
             read_number(space, owner, prop, "the plain attribute")
         }
+        Some(Storage::Noun {
+            owner,
+            state,
+            index,
+        }) => noun::entry_number(space, owner, state, index, "Value"),
         None => Ok(0.0),
     }
 }

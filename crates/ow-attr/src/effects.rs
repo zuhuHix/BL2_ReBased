@@ -79,7 +79,8 @@ fn add_chain(
             Some(r) => match storage_at(sys, r, context, cx)? {
                 None => AddModifierOutcome::Refused(Refusal::NotWritable),
                 Some(s) => {
-                    if matches!(s, Storage::Stack { .. }) {
+                    // A noun entry's modifier stack holds the object too.
+                    if matches!(s, Storage::Stack { .. } | Storage::Noun { .. }) {
                         *on_stack = true;
                     }
                     storage::add_to(s, modifier, suppress_notify, cx)?

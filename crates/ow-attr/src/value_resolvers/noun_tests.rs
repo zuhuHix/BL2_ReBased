@@ -11,10 +11,13 @@ use ow_object::value::Value;
 use ow_package::store::PackageStore;
 
 use super::testworld::{Fx, system};
-use crate::api::{AttrError, EvalCx, InitData};
+use crate::api::{
+    AddModifierOutcome, AttrError, EffectData, EvalCx, InitData, Refusal, RemoveModifierOutcome,
+};
+use crate::stack::{CombineForm, Combined, Modifier, ModifierId, ModifierType, NumKind, combine};
 
 /// The extra classes: the starting-value struct and an AI class holding a list of them, the noun store's entry
-/// struct, a mind (an `AIClass` and a `NounState`) and a context with neither.
+/// struct, a mind (an `AIClass` and a `NounState`), a context with neither, and the modifier class.
 struct Noun {
     fx: Fx,
     start: StructId,
@@ -22,6 +25,7 @@ struct Noun {
     ai_class: ClassId,
     mind: ClassId,
     plain: ClassId,
+    modifier: ClassId,
 }
 
 fn fixture() -> Noun {
@@ -89,6 +93,14 @@ fn fixture() -> Noun {
         .classes
         .define("Test.NotAProvider", Some(object), vec![])
         .unwrap();
+    let decls = vec![
+        d(space, "Type", PropKind::Byte { enum_: None }),
+        d(space, "Value", PropKind::Float),
+    ];
+    let modifier = space
+        .classes
+        .define("Core.AttributeModifier", Some(object), decls)
+        .unwrap();
     Noun {
         fx,
         start,
@@ -96,6 +108,7 @@ fn fixture() -> Noun {
         ai_class,
         mind,
         plain,
+        modifier,
     }
 }
 
@@ -328,55 +341,640 @@ fn reference_needs_the_outer_to_list_the_resolver() {
     assert_eq!(missing(n.base(b, mind).unwrap_err()), Missing::NotRead);
 }
 
-// ----- Off mode: the native rule waits for a clean-room implementation -----
+// ----- Off mode: the native rule (NATIVE_NOUN_ATTRIBUTES.md), implemented from the note alone -----
 
-fn not_ported_awaiting(r: Result<f32, AttrError>) {
-    match r {
-        Err(AttrError::NotYet(e)) => {
-            assert_eq!(e.missing, Missing::NotPorted);
-            assert!(
-                e.what.contains("awaiting clean-room implementation"),
-                "{}",
-                e.what
-            );
-            assert_eq!(e.record, "NATIVE_NOUN_ATTRIBUTES.md");
+const SCALE: u8 = 0;
+const PRE: u8 = 1;
+const POST: u8 = 2;
+
+/// One `NounState` element as the tests read it back.
+#[derive(Debug, Clone, PartialEq)]
+struct Entry {
+    name: String,
+    value: f32,
+    base: f32,
+    stack: Vec<Option<ObjRef>>,
+    strategy: u8,
+    slot: i32,
+}
+
+impl Noun {
+    /// The one value resolver of `attr` gets `field` = `v`.
+    fn set_resolver(&mut self, attr: ObjRef, field: &str, v: Value) {
+        let r = self.resolver_of(attr);
+        let c = self.fx.w.space.heap.get(r).unwrap().class;
+        let p = self.fx.w.space.prop(c, field).unwrap();
+        self.fx.w.space.write(r, PropAddr::scalar(p), v).unwrap();
+    }
+
+    /// An `AttributeModifier` of type `kind` and value `value`.
+    fn modifier(&mut self, kind: u8, value: f32) -> ObjRef {
+        self.fx.obj(
+            self.modifier,
+            "AttributeModifier",
+            vec![("Type", Value::Byte(kind)), ("Value", Value::Float(value))],
+        )
+    }
+
+    /// A noun store element with every field given.
+    fn full_noun(&mut self, e: &Entry) -> Value {
+        let n = self.fx.name(&e.name);
+        let stack = Value::array(e.stack.iter().map(|m| Value::Object(*m)).collect());
+        let state = self.state;
+        self.fx.st(
+            state,
+            vec![
+                ("NounName", n),
+                ("Value", Value::Float(e.value)),
+                ("BaseValue", Value::Float(e.base)),
+                ("ModifierStack", stack),
+                ("ReplicationStrategy", Value::Byte(e.strategy)),
+                ("IndexInReplicationArray", Value::Int(e.slot)),
+            ],
+        )
+    }
+
+    /// The `NounState` of `ctx`, element by element.
+    fn entries(&self, ctx: ObjRef) -> Vec<Entry> {
+        let space = &self.fx.w.space;
+        let p = space.prop(self.mind, "NounState").unwrap();
+        let items = space.read(ctx, PropAddr::scalar(p)).unwrap().clone();
+        let f = |e: &Value, n: &str| crate::eval::field(space, e, n).unwrap().clone();
+        items
+            .elements()
+            .unwrap()
+            .iter()
+            .map(|e| Entry {
+                name: match f(e, "NounName") {
+                    Value::Name(n) => space.names.text(n).into_owned(),
+                    other => panic!("{other:?}"),
+                },
+                value: crate::eval::number("Value", &f(e, "Value")).unwrap(),
+                base: crate::eval::number("BaseValue", &f(e, "BaseValue")).unwrap(),
+                stack: f(e, "ModifierStack")
+                    .elements()
+                    .unwrap()
+                    .iter()
+                    .map(|m| crate::eval::object("m", m).unwrap())
+                    .collect(),
+                strategy: match f(e, "ReplicationStrategy") {
+                    Value::Byte(b) => b,
+                    other => panic!("{other:?}"),
+                },
+                slot: match f(e, "IndexInReplicationArray") {
+                    Value::Int(i) => i,
+                    other => panic!("{other:?}"),
+                },
+            })
+            .collect()
+    }
+
+    fn add(
+        &mut self,
+        attr: ObjRef,
+        ctx: ObjRef,
+        m: ObjRef,
+    ) -> Result<AddModifierOutcome, AttrError> {
+        let sys = system();
+        sys.add_modifier(attr, Some(ctx), m, false, &mut EvalCx::new(&mut self.fx.w))
+    }
+
+    fn remove(
+        &mut self,
+        attr: ObjRef,
+        ctx: ObjRef,
+        m: ObjRef,
+    ) -> Result<RemoveModifierOutcome, AttrError> {
+        let sys = system();
+        sys.remove_modifier(attr, Some(ctx), m, false, &mut EvalCx::new(&mut self.fx.w))
+    }
+
+    fn set_base(&mut self, attr: ObjRef, ctx: ObjRef, v: f32) -> Result<bool, AttrError> {
+        let sys = system();
+        sys.set_base(attr, Some(ctx), v, false, &mut EvalCx::new(&mut self.fx.w))
+    }
+
+    /// A fresh entry as section 4 creates it.
+    fn created(name: &str, d: f32) -> Entry {
+        Entry {
+            name: name.to_string(),
+            value: d,
+            base: d,
+            stack: vec![],
+            strategy: 0,
+            slot: -1,
         }
-        other => panic!("expected NotYet NotPorted, got {other:?}"),
     }
 }
 
+/// An Off-mode fixture (a store in Off mode).
+fn off() -> Noun {
+    let mut n = fixture();
+    n.mode(ParityMode::Off);
+    n
+}
+
 #[test]
-fn off_is_not_ported_yet_with_or_without_a_store() {
+fn off_first_get_creates_the_entry_from_the_default() {
+    // Section 4 "A created entry", section 5 "Get"; checklist 3 and 4.
     for with_store in [false, true] {
         let mut n = fixture();
         if with_store {
             n.mode(ParityMode::Off);
         }
-        let default = n.fx.k(1.0);
+        let default = n.fx.data(InitData {
+            base_value_scale_constant: 0.5,
+            ..InitData::constant(3.0)
+        });
         let attr = n.attr("Attribute_HealthMultiplier", default);
-        let four = n.fx.k(4.0);
-        let class = n.ai_class(vec![(attr, four)]);
-        let mind = n.mind(Some(class), vec![]);
-        not_ported_awaiting(n.value(attr, mind));
-        not_ported_awaiting(n.base(attr, mind));
+        let mind = n.mind(None, vec![]);
+        assert_eq!(n.value(attr, mind), Ok(1.5));
+        assert_eq!(
+            n.entries(mind),
+            vec![Noun::created("Attribute_HealthMultiplier", 1.5)]
+        );
+        // The second read finds the entry; get-base is its BaseValue.
+        assert_eq!(n.base(attr, mind), Ok(1.5));
+        assert_eq!(n.entries(mind).len(), 1);
     }
 }
 
 #[test]
-fn writes_are_not_ported_yet_in_either_mode() {
-    for mode in [ParityMode::Off, ParityMode::Reference] {
-        let mut n = fixture();
-        n.mode(mode);
-        let default = n.fx.k(1.0);
-        let attr = n.attr("Attribute_HealthMultiplier", default);
-        let resolver = n.resolver_of(attr);
-        let mind = n.mind(None, vec![]);
-        let sys = system();
-        let r = sys.value_resolver(&n.fx.w.space, resolver).unwrap();
-        let mut cx = EvalCx::new(&mut n.fx.w);
-        assert!(matches!(
-            r.storage(&sys, resolver, mind, &mut cx),
-            Err(AttrError::NotYet(ref e)) if e.missing == Missing::NotPorted
-        ));
+fn off_get_base_alone_creates_the_entry_too() {
+    // Section 4 table: "yes, by reads and writes alike"; section 5 "Get-base".
+    let mut n = off();
+    let default = n.fx.k(2.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.base(attr, mind), Ok(2.0));
+    assert_eq!(n.entries(mind), vec![Noun::created("Attribute_A", 2.0)]);
+}
+
+#[test]
+fn off_reads_an_existing_entry_and_never_reevaluates_the_default() {
+    // Section 5 "Get", "Get-base"; the last bullet of section 5 (`d` is never evaluated again).
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_HealthMultiplier", default);
+    let stored = n.noun("Attribute_HealthMultiplier", 6.0, 4.0);
+    let mind = n.mind(None, vec![stored]);
+    assert_eq!(n.value(attr, mind), Ok(6.0));
+    assert_eq!(n.base(attr, mind), Ok(4.0));
+    // A created entry keeps its `d` when DefaultValue changes later.
+    let fresh = n.mind(None, vec![]);
+    assert_eq!(n.value(attr, fresh), Ok(1.0));
+    let nine = n.fx.k(9.0);
+    n.set_resolver(attr, "DefaultValue", nine);
+    assert_eq!(n.value(attr, fresh), Ok(1.0));
+    assert_eq!(n.entries(fresh).len(), 1);
+}
+
+#[test]
+fn off_ignores_the_previous_chain_value() {
+    // Section 2 and section 5 "Get": the chain's previous value is ignored; checklist 4.
+    let mut n = off();
+    let default = n.fx.k(2.0);
+    let attr = n.attr("Attribute_A", default);
+    let r = n.resolver_of(attr);
+    let k = n.fx.constant(50.0);
+    let p =
+        n.fx.w
+            .space
+            .prop(n.fx.c.attribute, "ValueResolverChain")
+            .unwrap();
+    let chain = Value::array(vec![Value::Object(Some(k)), Value::Object(Some(r))]);
+    n.fx.w
+        .space
+        .write(attr, PropAddr::scalar(p), chain)
+        .unwrap();
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.value(attr, mind), Ok(2.0));
+}
+
+#[test]
+fn off_key_is_the_outer_name_first_match_number_included() {
+    // Section 3 (name equality, the number included) and section 4 "entry" (the first match in array order).
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_X", default);
+    let first = n.noun("Attribute_X", 5.0, 5.0);
+    let second = n.noun("Attribute_X", 8.0, 8.0);
+    let mind = n.mind(None, vec![first, second]);
+    assert_eq!(n.value(attr, mind), Ok(5.0));
+    // `Attribute_X_1` is another name (the same base with a number): no match, so an entry is created.
+    let numbered = n.noun("Attribute_X_1", 7.0, 7.0);
+    let other = n.mind(None, vec![numbered]);
+    assert_eq!(n.value(attr, other), Ok(1.0));
+    let names: Vec<String> = n.entries(other).into_iter().map(|e| e.name).collect();
+    assert_eq!(names, ["Attribute_X_1", "Attribute_X"]);
+}
+
+#[test]
+fn off_key_comes_from_any_outer() {
+    // Section 3: the key is the outer's name; Off does not need the outer to be the attribute.
+    let mut n = off();
+    let c = n.fx.by_path("GearboxFramework.NounAttributeValueResolver");
+    let holder = n.fx.obj(n.plain, "Attribute_Elsewhere", vec![]);
+    let k = n.fx.k(4.0);
+    let r =
+        n.fx.w
+            .space
+            .alloc(c, "Noun_0", Some(holder), Origin::Runtime)
+            .unwrap();
+    let p = n.fx.w.space.prop(c, "DefaultValue").unwrap();
+    n.fx.w.space.write(r, PropAddr::scalar(p), k).unwrap();
+    let ctx = n.fx.no_context();
+    let attr = n.fx.attr("Attribute_Listing", vec![ctx], vec![r]);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.value(attr, mind), Ok(4.0));
+    assert_eq!(
+        n.entries(mind),
+        vec![Noun::created("Attribute_Elsewhere", 4.0)]
+    );
+}
+
+#[test]
+fn off_two_outers_with_one_name_share_one_entry() {
+    // Section 6, first bullet.
+    let mut n = off();
+    let one = n.fx.k(1.0);
+    let a = n.attr("Attribute_Shared", one);
+    let two = n.fx.k(2.0);
+    let b = n.attr("Attribute_Shared", two);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.set_base(a, mind, 6.0), Ok(true));
+    assert_eq!(n.value(b, mind), Ok(6.0));
+    assert_eq!(n.entries(mind).len(), 1);
+}
+
+#[test]
+fn off_no_outer_reads_zero_and_writes_false() {
+    // Section 3 (no outer: as not a provider), section 4 table row 1; checklist 1.
+    let mut n = off();
+    let c = n.fx.by_path("GearboxFramework.NounAttributeValueResolver");
+    let k = n.fx.k(3.0);
+    let loose = n.fx.obj(c, "Loose", vec![("DefaultValue", k)]);
+    let ctx = n.fx.no_context();
+    let attr = n.fx.attr("Attribute_Loose", vec![ctx], vec![loose]);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    assert_eq!(n.value(attr, mind), Ok(0.0));
+    assert_eq!(n.base(attr, mind), Ok(0.0));
+    let refused = AddModifierOutcome::Refused(Refusal::NotWritable);
+    assert_eq!(n.add(attr, mind, m), Ok(refused));
+    let refused = RemoveModifierOutcome::Refused(Refusal::NotWritable);
+    assert_eq!(n.remove(attr, mind, m), Ok(refused));
+    assert_eq!(n.set_base(attr, mind, 5.0), Ok(false));
+    assert!(n.entries(mind).is_empty());
+}
+
+#[test]
+fn off_a_context_that_is_not_a_provider_reads_zero_not_the_default() {
+    // Section 4 table row 1, section 6 last bullet; checklist 2. The strategy does not matter there.
+    for strategy in [0, 1, 2] {
+        let mut n = off();
+        let default = n.fx.k(999.0);
+        let attr = n.attr("Attribute_A", default);
+        n.set_resolver(attr, "ReplicationStrategy", Value::Byte(strategy));
+        let controller = n.fx.obj(n.plain, "Controller", vec![]);
+        let m = n.modifier(PRE, 1.0);
+        assert_eq!(n.value(attr, controller), Ok(0.0));
+        assert_eq!(n.base(attr, controller), Ok(0.0));
+        let refused = AddModifierOutcome::Refused(Refusal::NotWritable);
+        assert_eq!(n.add(attr, controller, m), Ok(refused));
+        let refused = RemoveModifierOutcome::Refused(Refusal::NotWritable);
+        assert_eq!(n.remove(attr, controller, m), Ok(refused));
+        assert_eq!(n.set_base(attr, controller, 5.0), Ok(false));
     }
+}
+
+#[test]
+fn off_the_default_is_evaluated_before_the_entry_is_appended() {
+    // Section 4, "Two orderings change behaviour", first bullet.
+    let mut n = off();
+    let three = n.fx.k(3.0);
+    let b = n.attr("Attribute_B", three);
+    let reads_b = n.fx.of_attr(b);
+    let a = n.attr("Attribute_A", reads_b);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.value(a, mind), Ok(3.0));
+    assert_eq!(
+        n.entries(mind),
+        vec![
+            Noun::created("Attribute_B", 3.0),
+            Noun::created("Attribute_A", 3.0)
+        ]
+    );
+}
+
+#[test]
+fn off_a_fresh_context_starts_empty() {
+    // Section 6, second bullet.
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_A", default);
+    let first = n.mind(None, vec![]);
+    let second = n.mind(None, vec![]);
+    assert_eq!(n.set_base(attr, first, 7.0), Ok(true));
+    assert_eq!(n.value(attr, second), Ok(1.0));
+    assert_eq!(n.value(attr, first), Ok(7.0));
+}
+
+#[test]
+fn off_add_appends_recomputes_and_refuses_the_same_object() {
+    // Section 5 "Add a modifier" (identity, not equal values); checklist 5.
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 2.0);
+    let twin = n.modifier(PRE, 2.0);
+    // A write on a fresh provider creates the entry first.
+    assert_eq!(n.add(attr, mind, m), Ok(AddModifierOutcome::Added));
+    assert_eq!(n.value(attr, mind), Ok(12.0));
+    assert_eq!(n.base(attr, mind), Ok(10.0));
+    assert_eq!(n.add(attr, mind, m), Ok(AddModifierOutcome::Duplicate));
+    assert_eq!(n.entries(mind)[0].stack, vec![Some(m)]);
+    assert_eq!(n.add(attr, mind, twin), Ok(AddModifierOutcome::Added));
+    assert_eq!(n.value(attr, mind), Ok(14.0));
+    assert_eq!(n.entries(mind)[0].stack, vec![Some(m), Some(twin)]);
+}
+
+#[test]
+fn off_remove_takes_every_copy_and_refuses_an_absent_one() {
+    // Section 5 "Remove a modifier"; checklist 5.
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_A", default);
+    let m = n.modifier(PRE, 1.0);
+    let other = n.modifier(POST, 3.0);
+    let absent = n.modifier(PRE, 1.0);
+    let held = Entry {
+        name: "Attribute_A".to_string(),
+        value: 0.0,
+        base: 10.0,
+        stack: vec![Some(m), Some(other), Some(m)],
+        strategy: 0,
+        slot: -1,
+    };
+    let held = n.full_noun(&held);
+    let mind = n.mind(None, vec![held]);
+    let before = n.entries(mind);
+    assert_eq!(
+        n.remove(attr, mind, absent),
+        Ok(RemoveModifierOutcome::NotPresent)
+    );
+    assert_eq!(n.entries(mind), before);
+    assert_eq!(
+        n.remove(attr, mind, m),
+        Ok(RemoveModifierOutcome::Removed { count: 2 })
+    );
+    assert_eq!(n.entries(mind)[0].stack, vec![Some(other)]);
+    assert_eq!(n.value(attr, mind), Ok(13.0));
+}
+
+#[test]
+fn off_remove_on_a_fresh_provider_creates_the_entry_and_answers_false() {
+    // Section 4 table (writes create the entry too) and section 5 "Remove": none was there.
+    let mut n = off();
+    let default = n.fx.k(5.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    assert_eq!(
+        n.remove(attr, mind, m),
+        Ok(RemoveModifierOutcome::NotPresent)
+    );
+    assert_eq!(n.entries(mind), vec![Noun::created("Attribute_A", 5.0)]);
+}
+
+#[test]
+fn off_set_base_creates_from_the_default_then_overwrites_the_base() {
+    // Section 5 "Set-base(x)"; checklist 5.
+    let mut n = off();
+    let default = n.fx.k(5.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.set_base(attr, mind, 8.0), Ok(true));
+    assert_eq!(n.entries(mind), vec![Noun::created("Attribute_A", 8.0)]);
+    // With a stack, set-base recomputes the value.
+    let m = n.modifier(POST, 0.5);
+    assert_eq!(n.add(attr, mind, m), Ok(AddModifierOutcome::Added));
+    assert_eq!(n.set_base(attr, mind, 2.0), Ok(true));
+    assert_eq!(n.base(attr, mind), Ok(2.0));
+    assert_eq!(n.value(attr, mind), Ok(2.5));
+}
+
+#[test]
+fn off_recompute_is_the_single_precision_formula() {
+    // Section 5 "Recompute": (base + pre) * ((1 + up) / (1 - down)) + post, down the zero-or-negative scales, sums
+    // in stack order, other types skipped, no truncation, no clamp.
+    let mut n = off();
+    let default = n.fx.k(0.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.set_base(attr, mind, 1.1), Ok(true));
+    let mods = [
+        (PRE, 0.3_f32),
+        (SCALE, 0.7),
+        (SCALE, -0.3),
+        (SCALE, 0.0),
+        (POST, 0.1),
+        (7, 100.0),
+    ];
+    for (kind, v) in mods {
+        let m = n.modifier(kind, v);
+        assert_eq!(n.add(attr, mind, m), Ok(AddModifierOutcome::Added));
+    }
+    let (base, pre, up, down, post) = (1.1_f32, 0.3_f32, 0.7_f32, -0.3_f32 + 0.0, 0.1_f32);
+    let expected = (base + pre) * ((1.0 + up) / (1.0 - down)) + post;
+    let got = n.value(attr, mind).unwrap();
+    assert_eq!(got.to_bits(), expected.to_bits());
+    // The world's default combine form is WeaponGen; the noun keeps single precision anyway. These inputs tell the
+    // two forms apart, so the check above is not vacuous.
+    let as_mods: Vec<Modifier> = [
+        (PRE, 0.3_f32),
+        (SCALE, 0.7),
+        (SCALE, -0.3),
+        (SCALE, 0.0),
+        (POST, 0.1),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, (k, v))| Modifier {
+        kind: ModifierType::from_raw(i64::from(*k)).unwrap(),
+        value: *v,
+        id: ModifierId(u64::try_from(i).unwrap()),
+    })
+    .collect();
+    let wide = combine(base, &as_mods, CombineForm::WeaponGen, NumKind::Float);
+    assert_ne!(wide, Combined::Float(expected));
+    // No clamp and no truncation: a negative fractional result stays as it is.
+    assert_eq!(n.set_base(attr, mind, -5.25), Ok(true));
+    let expected = (-5.25_f32 + pre) * ((1.0 + up) / (1.0 - down)) + post;
+    assert_eq!(n.value(attr, mind).unwrap().to_bits(), expected.to_bits());
+    assert!(expected < 0.0 && expected.fract() != 0.0);
+}
+
+#[test]
+fn off_writes_raise_no_change_notification() {
+    // Section 5, "No operation raises the attribute change notification".
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let m = n.modifier(PRE, 1.0);
+    assert_eq!(n.add(attr, mind, m), Ok(AddModifierOutcome::Added));
+    assert_eq!(
+        n.remove(attr, mind, m),
+        Ok(RemoveModifierOutcome::Removed { count: 1 })
+    );
+    assert_eq!(n.set_base(attr, mind, 3.0), Ok(true));
+    assert_eq!(n.fx.w.notified, 0);
+}
+
+#[test]
+fn off_a_bad_modifier_leaves_the_entry_as_it_was() {
+    // Section 5 reads each modifier's type at the recompute; a modifier object without `Type` is a data error here,
+    // and nothing is written.
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    assert_eq!(n.set_base(attr, mind, 4.0), Ok(true));
+    let before = n.entries(mind);
+    let not_a_modifier = n.fx.obj(n.plain, "NotAModifier", vec![]);
+    assert!(matches!(
+        n.add(attr, mind, not_a_modifier),
+        Err(AttrError::BadData { .. })
+    ));
+    assert_eq!(n.entries(mind), before);
+}
+
+#[test]
+fn off_class_values_arrive_only_through_set_base() {
+    // Checklist 8: the AI class's starting value is not read by the Off rule; the first get gives `d`, and the
+    // class value arrives once the script's set-base has run.
+    let mut n = off();
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_HealthMultiplier", default);
+    let four = n.fx.k(4.0);
+    let class = n.ai_class(vec![(attr, four)]);
+    let mind = n.mind(Some(class), vec![]);
+    assert_eq!(n.value(attr, mind), Ok(1.0));
+    assert_eq!(n.set_base(attr, mind, 4.0), Ok(true));
+    assert_eq!(n.value(attr, mind), Ok(4.0));
+}
+
+#[test]
+fn off_applied_effects_stay_on_the_noun_stack_until_removed() {
+    // Section 5 "Add" / "Remove" through AttributeEffect: the noun's stack holds the modifier object the apply made,
+    // so it is not freed after the call (the `Storage::Noun` addition).
+    let mut n = off();
+    let default = n.fx.k(10.0);
+    let attr = n.attr("Attribute_A", default);
+    let mind = n.mind(None, vec![]);
+    let sys = system();
+    let effect = EffectData::new(Some(attr), ModifierType::PreAdd, InitData::constant(2.5));
+    let applied = sys
+        .apply_effects(&[effect], Some(mind), None, &mut EvalCx::new(&mut n.fx.w))
+        .unwrap();
+    assert_eq!(applied.0.len(), 1);
+    let m = applied.0[0].modifier;
+    assert!(!n.fx.w.space.heap.get(m).unwrap().destroyed);
+    assert_eq!(n.entries(mind)[0].stack, vec![Some(m)]);
+    assert_eq!(n.value(attr, mind), Ok(12.5));
+    sys.remove_effects(applied, &mut EvalCx::new(&mut n.fx.w))
+        .unwrap();
+    assert_eq!(n.value(attr, mind), Ok(10.0));
+    assert!(n.entries(mind)[0].stack.is_empty());
+}
+
+#[test]
+fn off_a_replicated_strategy_on_a_provider_is_not_ported() {
+    // Section 4 table rows 3 to 5: the outcome needs what the note marks as not read (which arrays a provider hands
+    // over; the replicated-copy-changed call). Nothing is created.
+    for strategy in [1, 2] {
+        let mut n = off();
+        let default = n.fx.k(0.0);
+        let attr = n.attr("IsPhaselocked", default);
+        n.set_resolver(attr, "ReplicationStrategy", Value::Byte(strategy));
+        let mind = n.mind(None, vec![]);
+        let m = n.modifier(PRE, 1.0);
+        assert_eq!(
+            missing(n.value(attr, mind).unwrap_err()),
+            Missing::NotPorted
+        );
+        assert_eq!(missing(n.base(attr, mind).unwrap_err()), Missing::NotPorted);
+        assert_eq!(
+            missing(n.add(attr, mind, m).unwrap_err()),
+            Missing::NotPorted
+        );
+        assert_eq!(
+            missing(n.set_base(attr, mind, 1.0).unwrap_err()),
+            Missing::NotPorted
+        );
+        assert!(n.entries(mind).is_empty());
+    }
+}
+
+#[test]
+fn off_a_strategy_outside_the_table_is_not_read() {
+    // Section 1: the enum has 0 to 2 (then the MAX sentinel); the table has no row for anything else.
+    let mut n = off();
+    let default = n.fx.k(0.0);
+    let attr = n.attr("Attribute_A", default);
+    n.set_resolver(attr, "ReplicationStrategy", Value::Byte(3));
+    let mind = n.mind(None, vec![]);
+    assert_eq!(missing(n.value(attr, mind).unwrap_err()), Missing::NotRead);
+}
+
+#[test]
+fn off_an_entry_with_a_replicated_slot_reads_but_is_not_written() {
+    // Section 5 "Mirror": writing needs the provider's replicated array and its change call (not read). Reads are
+    // the entry's own fields.
+    let mut n = off();
+    let default = n.fx.k(0.0);
+    let attr = n.attr("Attribute_A", default);
+    let slotted = Entry {
+        name: "Attribute_A".to_string(),
+        value: 5.0,
+        base: 5.0,
+        stack: vec![],
+        strategy: 2,
+        slot: 0,
+    };
+    let slotted = n.full_noun(&slotted);
+    let mind = n.mind(None, vec![slotted]);
+    assert_eq!(n.value(attr, mind), Ok(5.0));
+    let before = n.entries(mind);
+    let m = n.modifier(PRE, 1.0);
+    assert_eq!(
+        missing(n.add(attr, mind, m).unwrap_err()),
+        Missing::NotPorted
+    );
+    assert_eq!(
+        missing(n.set_base(attr, mind, 1.0).unwrap_err()),
+        Missing::NotPorted
+    );
+    assert_eq!(n.entries(mind), before);
+}
+
+// ----- Reference mode has no writes -----
+
+#[test]
+fn reference_writes_are_not_ported() {
+    let mut n = fixture();
+    n.mode(ParityMode::Reference);
+    let default = n.fx.k(1.0);
+    let attr = n.attr("Attribute_HealthMultiplier", default);
+    let resolver = n.resolver_of(attr);
+    let mind = n.mind(None, vec![]);
+    let sys = system();
+    let r = sys.value_resolver(&n.fx.w.space, resolver).unwrap();
+    let mut cx = EvalCx::new(&mut n.fx.w);
+    assert!(matches!(
+        r.storage(&sys, resolver, mind, &mut cx),
+        Err(AttrError::NotYet(ref e)) if e.missing == Missing::NotPorted
+    ));
 }
