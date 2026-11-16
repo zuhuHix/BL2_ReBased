@@ -38,11 +38,14 @@
 //! region-stage condition (refused in the Active and Complete status routine), `bRepeatable` on a Complete mission
 //! (`can_start`), and a plot-critical activation that finds a pending kickoff record.
 //!
-//! **Dialog is not here yet.** The C++ tracker owns a `DialogSystem` (src/dialog.*, lane W5-DIALOG, whose Rust file
-//! `dialog.rs` is still a stub). So `GearboxFramework.Behavior_TriggerDialogEvent` has no handler: the kernel records
-//! its `unsupported behavior class` line and its `NotYet { NotPorted }` and stops that branch, where the C++ plays the
-//! line. The tracked mission's dialog priority floor (`MissionDialogGroup`, `bPlotCritical`), the dialog clock and the
-//! `Dialog` effect are absent for the same reason.
+//! **The dialog** (lane W5-DIALOG, `crate::dialog`, decision 2026-11-15-32). As the C++ tracker owns its
+//! `DialogSystem`, each [`MissionSystem`] owns one `Rc<RefCell<DialogSystem>>` over the mission's package
+//! ([`MissionSystem::dialog`]): `dialog::handler` runs `GearboxFramework.Behavior_TriggerDialogEvent` on the mission's
+//! own provider, the provider's time hook advances the dialog clock to the kernel's time (the frame's time without a
+//! provider), the status routine sets the tracked mission's priority floor (`MissionDialogGroup`, `bPlotCritical`)
+//! while Active or ReadyToTurnIn, and every line the dialog chooses is a `Dialog` effect (`a` tag, `b` group, `c` talker,
+//! `detail` `act=..;ak=..;talker=echo|pawn;outcome=..;line=<id>`). The script bridge's dialog-component native uses
+//! the same `Rc`, so the dialog state is not split in two (decision 2026-11-15-34, addendum).
 //!
 //! **Re-entrancy.** The C++ tracker is re-entrant: a behavior handler calls back into the tracker, which fires more
 //! events on the same provider; a script hook calls natives that read or change the tracker. Here the state is behind
@@ -69,6 +72,8 @@ use ow_object::prefix::PropertyPrefix;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
+
+use crate::dialog::{self, DialogSystem, Line};
 
 #[cfg(test)]
 mod tests;
@@ -309,6 +314,8 @@ struct Data {
     plot_critical: bool,
     /// `MissionDefinition.bRepeatable`.
     repeatable: bool,
+    /// `MissionDefinition.MissionDialogGroup`'s path ("" when none): the tracked mission's dialog floor.
+    dialog_group: String,
     dependencies: Vec<String>,
     sets: Vec<ObjectiveSet>,
     /// By objective name, in key order (the C++ `std::map`).
@@ -354,6 +361,8 @@ struct Inner {
     /// The provider was lost by a failed lend ([`lend`]): every later call is refused.
     lost: Cell<bool>,
     hooks: RefCell<Hooks>,
+    /// The mission's dialog, shared with the script bridge's dialog-component native (module documentation).
+    dialog: Rc<RefCell<DialogSystem>>,
 }
 
 /// One mission and its provider (module documentation). Cheap to clone: every clone is the same mission.
@@ -536,6 +545,7 @@ impl MissionSystem {
         d.activate_initial_set = flag(vm, mission, "bActivateInitialObjectiveSet", true)?;
         d.plot_critical = flag(vm, mission, "bPlotCritical", false)?;
         d.repeatable = flag(vm, mission, "bRepeatable", false)?;
+        d.dialog_group = ref_path(vm, prop(&vm.space, mission, "MissionDialogGroup")?.as_ref())?;
         // ObjectiveDependency { Objective, Status: EODS_Complete 0 / EODS_Active 1 } (B6).
         if let Some(dep) = prop(&vm.space, mission, "ObjectiveDependency")?
             && dep.as_struct().is_some()
@@ -587,6 +597,10 @@ impl MissionSystem {
             Vec::new()
         };
         let has_provider = provider.is_some();
+        let package = match vm.space.heap.get(mission)?.origin {
+            Origin::Export { package, .. } | Origin::Resource { package, .. } => Some(package),
+            _ => None,
+        };
         let system = MissionSystem {
             inner: Rc::new(Inner {
                 data: d,
@@ -596,18 +610,50 @@ impl MissionSystem {
                 has_provider,
                 lost: Cell::new(false),
                 hooks: RefCell::new(Hooks::default()),
+                dialog: Rc::new(RefCell::new(DialogSystem::new(package))),
             }),
         };
+        system.bind_dialog_sink();
         system.bind_behaviors(actions);
         Ok(system)
     }
 
-    /// The four mission behaviors on the provider (C++ `provider.handle(...)`).
+    /// Every line the dialog chooses is a `Dialog` effect (the C++ `dialog_.onLine`).
+    fn bind_dialog_sink(&self) {
+        let w = Rc::downgrade(&self.inner);
+        self.inner.dialog.borrow_mut().on_line = Some(Box::new(move |line: &Line, outcome: &str| {
+            if let Some(inner) = w.upgrade() {
+                MissionSystem { inner }.emit_dialog(line, outcome);
+            }
+        }));
+    }
+
+    /// The mission behaviors on the provider (C++ `provider.handle(...)`), the dialog behavior over the mission's own
+    /// dialog, and the dialog clock on the kernel's time.
     fn bind_behaviors(&self, actions: Vec<String>) {
         let mut slot = self.inner.provider.borrow_mut();
         let Some(p) = slot.as_mut() else {
             return;
         };
+        p.handle(dialog::BEHAVIOR_CLASS, dialog::handler(self.inner.dialog.clone()));
+        {
+            // The C++ `provider.onTime = dialog_.advanceTo(time)`. The hook cannot fail: a dialog already in use (a
+            // time step inside a dialog call, which no path makes) is an error line, not a silent skip.
+            let w = Rc::downgrade(&self.inner);
+            p.on_time = Some(Rc::new(move |_vm: &mut Vm, time: f64| {
+                let Some(inner) = w.upgrade() else {
+                    return;
+                };
+                match inner.dialog.try_borrow_mut() {
+                    Ok(mut d) => d.advance_to(time),
+                    Err(_) => inner
+                        .state
+                        .borrow_mut()
+                        .errors
+                        .push("dialog: the dialog clock was stepped while the dialog system was in use".to_string()),
+                };
+            }));
+        }
         let weak = Rc::downgrade(&self.inner);
         let me = move |w: &Weak<Inner>| {
             w.upgrade().map(|inner| MissionSystem { inner }).ok_or_else(|| {
@@ -1130,6 +1176,40 @@ impl MissionSystem {
         if self.inner.lost.get() { Err(lost_error()) } else { Ok(()) }
     }
 
+    /// The mission's dialog (module documentation): the one the dialog behavior of its provider runs on, which the
+    /// script bridge's dialog-component native shares.
+    pub fn dialog(&self) -> Rc<RefCell<DialogSystem>> {
+        self.inner.dialog.clone()
+    }
+
+    /// The dialog line as a `Dialog` effect (the C++ `onLine`).
+    fn emit_dialog(&self, line: &Line, outcome: &str) {
+        self.emit(EffectKind::Dialog, line.event_tag.clone(), line.group.clone(), line.talker.clone());
+        let detail = format!(
+            "act={};ak={};talker={};outcome={outcome};line={}",
+            line.talk_act,
+            line.ak_event,
+            if line.echo { "echo" } else { "pawn" },
+            line.id
+        );
+        if let Some(e) = self.inner.state.borrow_mut().effects.last_mut() {
+            e.detail = detail;
+        }
+    }
+
+    /// `updateTrackedMission`: while Active or ReadyToTurnIn the mission is the tracked one, its `MissionDialogGroup`
+    /// the dialog's priority floor. Refused when the dialog is in use (no path does that).
+    fn update_tracked_mission(&self) -> Result<(), MissionError> {
+        let tracked = matches!(self.status(), Status::Active | Status::ReadyToTurnIn);
+        let d = self.data();
+        let group = if tracked { d.dialog_group.as_str() } else { "" };
+        let mut dialog = self.inner.dialog.try_borrow_mut().map_err(|_| {
+            data_error("dialog: the dialog system is already in use (the tracked mission)".to_string())
+        })?;
+        dialog.set_tracked_mission(group, d.plot_critical);
+        Ok(())
+    }
+
     /// Whether a failed lend lost the provider (every later call is then refused).
     pub fn is_lost(&self) -> bool {
         self.inner.lost.get()
@@ -1185,7 +1265,7 @@ impl MissionSystem {
                 s.active_set.clear();
             }
         }
-        // updateTrackedMission: the dialog's priority floor (lane W5-DIALOG, module documentation): nothing here.
+        self.update_tracked_mission()?;
         if let Some(f) = self.hooks().status {
             f(vm, status.number());
         }
@@ -1507,8 +1587,16 @@ impl MissionSystem {
             s.heard_kickoff = true;
             s.kickoff_pending = false;
         }
-        // The C++ advances its dialog clock from the kernel's time, or by the frame without a provider: no dialog here.
-        self.with_provider(vm, |p, vm| p.tick(vm, seconds))?;
+        // The dialog clock follows the kernel's time (its time hook), or the frame's without a provider (the C++).
+        if self.inner.has_provider {
+            self.with_provider(vm, |p, vm| p.tick(vm, seconds))?;
+        } else {
+            self.inner
+                .dialog
+                .try_borrow_mut()
+                .map_err(|_| data_error("dialog: the dialog system is already in use (the tick)".to_string()))?
+                .tick(seconds);
+        }
         self.collect();
         Ok(())
     }
@@ -1606,6 +1694,9 @@ impl MissionSystem {
         s.progress = progress;
         s.kickoff_pending = false;
         s.heard_kickoff = status != Status::NotStarted;
+        drop(s);
+        // The C++ updateTrackedMission; a dialog in use (no path) leaves the floor as it was.
+        let _ = self.update_tracked_mission();
         true
     }
 }

@@ -55,12 +55,14 @@
 //! - `BehaviorBase.RunBehaviors` inside the level-up, the C++ stand-in that applies the OnLevelUp skills' effects by
 //!   their data (swaps 7b, 9, 10): `NotYet { NotPorted }` (skills are lane W6-SKILLS). Outside the level-up it is the
 //!   C++ log line and nothing.
-//! - The dialog: the director's `GearboxDialogComponent.TriggerEvent` and the turned-in and dismissal dialog tags need
-//!   the dialog system (lane W5-DIALOG): `NotYet { LayerAbsent }` when reached. `WillowDialogGlobalsDefinition.Get` is
-//!   bound (it only returns the globals object).
 //! - `GetExperienceReward` for a mission with optional objectives: the C++ logs "not implemented" and leaves their
 //!   terms out (kept in Reference mode); in Off mode it is `NotYet { NotPorted }` (`ow_balance::xp::mission_xp` takes
 //!   the terms; the bridge does not collect the completed objectives' percentages yet).
+//!
+//! **The dialog** is the mission's (`MissionSystem::dialog`, lane W5-DIALOG): the director's
+//! `GearboxDialogComponent.TriggerEvent` runs the tag on that same `Rc<RefCell<DialogSystem>>` the tracker's dialog
+//! behavior runs on, so one dialog state serves both, as the C++ bridge calls `mission_.dialog()` (decision
+//! 2026-11-15-34, addendum). `WillowDialogGlobalsDefinition.Get` returns the dialog globals object.
 //!
 //! **The director is a copy of his archetype**, as in the C++: `GD_Marcus.Character.Pawn_Marcus`, his
 //! `MissionDirectives` table, his `AIClass` and his `DialogComponent` are each instantiated from their export with the
@@ -98,6 +100,7 @@ use ow_vm::api::{CallResult, NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 use ow_world::world::{BalanceState, World, WorldError};
 
+use crate::dialog::DialogSystem;
 use crate::tracker::{
     self, EffectKind, MissionError, MissionSystem, Notification, field, field_value, integer, integer32, lend, load_ref, prop,
     text,
@@ -134,9 +137,6 @@ const STUB_PREFIX: &str = "UNIMPLEMENTED ";
 
 /// The layer the mission's reward items need.
 const LOOT_LAYER: &str = "ow-combat loot (lane W6-LOOT)";
-
-/// The dialog layer the director's dialog needs.
-const DIALOG_LAYER: &str = "ow-mission dialog (lane W5-DIALOG)";
 
 /// One `ExpEarn` call as the script made it: amount, source, and the type (-1: the optional argument was omitted).
 #[non_exhaustive]
@@ -2166,19 +2166,64 @@ impl MissionScript {
         Ok(Value::Object(g))
     }
 
-    // GearboxDialogComponent.TriggerEvent on the director's component: the turned-in dialog, the dismissal dialog and
-    // the on-use dialog all go through the dialog system (NATIVE_DIALOG.md, NATIVE_DIALOG_GROUPS.md): lane W5-DIALOG.
+    // GearboxDialogComponent.TriggerEvent(EventTag, Other, ObjectParameter, optional EventData) on the director's
+    // component (NATIVE_DIALOG.md "Component TriggerEvent", NATIVE_DIALOG_GROUPS.md; UNVERIFIED): the speaker is the
+    // director, whose body class gives the name tag and the groups (`DialogSystem::pawn_dialog`); the tag runs through
+    // the mission's dialog (`DialogSystem::trigger_on_component`), the same one the tracker's dialog behavior uses, and
+    // a line that starts reaches the host as the tracker's `Dialog` effect. The tag, the speaker and the other object's
+    // class are recorded too: inside ServerCompleteMission as the turned-in dialog, while the screen closes as the
+    // dismissal dialog, otherwise as the on-use dialog (with the speaker's group count, first and last). Returns the
+    // zero event data.
     fn n_trigger_event(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
-        let component = self.inner.state.borrow().dialog_component;
+        let (component, turning_in, closing) = {
+            let s = self.inner.state.borrow();
+            (s.dialog_component, s.turning_in, s.closing)
+        };
         if c.this.is_none() || c.this != component {
             return outside_binding(c);
         }
-        Err(NotYet::layer_absent(
-            "GearboxDialogComponent.TriggerEvent on the director's component (the talker's groups and the line)",
-            DIALOG_LAYER,
-            RECORD,
-        )
-        .into())
+        let director = self
+            .director()
+            .ok_or_else(|| data("mission script bridge: the director's component has no director".to_string()))?;
+        let tag = c.arg(0)?.clone();
+        let other = match arg_object(c, 1)? {
+            Some(o) => class_name(&c.vm.space, o)?,
+            None => String::new(),
+        };
+        let body = prop(&c.vm.space, director, "BodyClass")?.unwrap_or(Value::None);
+        let dialog = self.inner.mission.dialog();
+        let busy = || data("dialog: the dialog system is already in use".to_string());
+        let pawn = dialog.try_borrow_mut().map_err(|_| busy())?.pawn_dialog(c.vm, &body)?;
+        let tag_path = path_of(c.vm, &tag)?;
+        let speaker = stock_path(c.vm, director)?;
+        if turning_in {
+            self.inner.mission.note(EffectKind::TurnInDialog, &tag_path, &speaker, &other);
+        } else if closing {
+            self.inner.mission.note(EffectKind::DismissalDialog, &tag_path, &speaker, &other);
+        } else {
+            let first = match pawn.groups.first() {
+                Some(g) => DialogSystem::object_path(c.vm, g)?,
+                None => String::new(),
+            };
+            let last = match pawn.groups.last() {
+                Some(g) => DialogSystem::object_path(c.vm, g)?,
+                None => String::new(),
+            };
+            let mut s = self.inner.state.borrow_mut();
+            s.use_.on_use_tag = tag_path;
+            s.use_.on_use_speaker = speaker;
+            s.use_.on_use_target = other;
+            s.use_.on_use_group_count = pawn.groups.len();
+            s.use_.on_use_first_group = first;
+            s.use_.on_use_last_group = last;
+        }
+        if !pawn.name_tag.is_empty() && matches!(tag, Value::Object(Some(_))) {
+            dialog
+                .try_borrow_mut()
+                .map_err(|_| busy())?
+                .trigger_on_component(c.vm, &pawn.name_tag, &pawn.groups, &tag)?;
+        }
+        Ok(zero_result(c))
     }
 
     fn n_play_movie(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {

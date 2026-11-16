@@ -11,12 +11,15 @@
 //! `script:accept`, `script:turnin`, `script:screen`, `script:use`, `stage:<n>`, `player:<level>:<experience>`,
 //! `pool`. Every dependency of the mission counts as complete (the C++ probe).
 //!
-//! **Not here yet: the dialog steps** `lines:`, `timedlines:`, `talker:`, `component:`, `pawn:` and `kismet:` with a
-//! talker. They drive the C++ `DialogSystem` (lane W5-DIALOG, `ow_mission::dialog` is still a stub), so they stop the
-//! command with `NotYet` (exit 3) after the earlier steps' output. `kismet:<variable>|` (no talker) only clears the
-//! provider's named Kismet variable and runs. A mission whose provider reaches `Behavior_TriggerDialogEvent` records
-//! the kernel's `unsupported behavior class` line where the C++ plays the line; the command then exits 3. A behavior
-//! class neither binary handles gives the same error line in both, and the C++ exit code.
+//! The dialog steps drive the mission's dialog (`MissionSystem::dialog`, lane W5-DIALOG): `lines:<s>` (a test line
+//! player: every line lasts that long), `timedlines:<s>` (a timed line player; a line stopped while it plays is the
+//! stderr line `dialog line stopped while playing: <id>`), `talker:<name tag path>` (a pawn that can talk),
+//! `kismet:<variable>|<name tag path>` (a new talker bound to the mission's named Kismet variable; no tag clears the
+//! variable), `component:<speaker name tag>|<event tag>|<group>[,<group>...]` (a pawn's component `TriggerEvent`) and
+//! `pawn:<body class>|<event tag>` (the component `TriggerEvent` of a pawn with that body class; its dialog groups and
+//! the groups searched are printed with the step). An object a step names is an export of the source package (`no
+//! such object: <path>` otherwise). A behavior class neither binary handles gives the same error line in both, and the
+//! C++ exit code.
 //!
 //! **Cooked copies.** The C++ reads the mission and its data from the file it is given. The definition store gives each
 //! object path one holder (the first file in scan order), so when another file holds the same paths (several mission
@@ -52,7 +55,10 @@ use ow_core::{DetSet, NotYet, PackageName, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::{IdentityPolicy, LoadSet};
 use ow_mission::bridge::{self, MissionScript};
-use ow_mission::tracker::MissionSystem;
+use ow_mission::dialog::{DialogSystem, Line};
+use ow_mission::tracker::{MissionSystem, find_object};
+use ow_object::ids::ObjRef;
+use ow_object::value::Value;
 use ow_object::heap::ObjectSpace;
 use ow_package::package::Package;
 use ow_vm::api::{NativePack, Vm};
@@ -67,14 +73,6 @@ use crate::json::quote;
 /// documentation, "Cooked copies").
 const COPY_REFUSAL: &str = "another file holds this path under the identity policy";
 
-/// The layer the dialog steps need (module documentation).
-const DIALOG_LAYER: &str = "ow-mission dialog (lane W5-DIALOG)";
-
-/// The dialog behavior class the C++ tracker binds (`DialogSystem::behavior`).
-const DIALOG_CLASS: &str = "GearboxFramework.Behavior_TriggerDialogEvent";
-
-/// The record of the dialog steps.
-const DIALOG_RECORD: &str = "NATIVE_DIALOG.md";
 
 /// Why the command failed: its message, and whether it is a `NotYet` (exit code 3).
 #[derive(Debug)]
@@ -198,7 +196,7 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
         quote(mission.name())
     );
     for (i, step) in steps.iter().enumerate() {
-        let (ok, screen) = run_step(vm, &mission, script.as_ref(), &completed, step)?;
+        let (ok, screen) = run_step(vm, &mission, script.as_ref(), &completed, &name, step)?;
         let _ = write!(
             out,
             "{}{{\"step\":{},\"ok\":{},\"set\":{},\"status\":{}",
@@ -253,11 +251,9 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
         );
     }
     out.push_str("]}\n");
-    // The dialog behavior, which the C++ runs and the kernel here has no handler for, or a script run that stopped on a
-    // NotYet: the output is not the C++ output (module documentation). Other unhandled classes are unhandled in the C++
-    // as well (the same error line, the C++ exit code).
-    let dialog = mission.not_yet().iter().any(|n| n.what.contains(DIALOG_CLASS));
-    if dialog || script.as_ref().is_some_and(|s| !s.not_yet().is_empty()) {
+    // A script run that stopped on a NotYet: the output is not the C++ output (module documentation). An unhandled
+    // behavior class is unhandled in the C++ as well (the same error line, the C++ exit code).
+    if script.as_ref().is_some_and(|s| !s.not_yet().is_empty()) {
         return Ok(NOT_PORTED);
     }
     Ok(if errors.is_empty() { 0 } else { 1 })
@@ -272,9 +268,17 @@ fn run_step(
     mission: &MissionSystem,
     script: Option<&MissionScript>,
     completed: &DetSet<String>,
+    package: &PackageName,
     step: &str,
 ) -> Result<StepResult, Failure> {
     let usage = || Failure::from(USAGE.to_string());
+    // An object of the source package, by path (the C++ `object`).
+    let object_ref = |vm: &mut Vm, path: &str| -> Result<ObjRef, Failure> {
+        find_object(vm, package, path)?.ok_or_else(|| format!("no such object: {path}").into())
+    };
+    let object = |vm: &mut Vm, path: &str| -> Result<Value, Failure> { Ok(Value::Object(Some(object_ref(vm, path)?))) };
+    let dialog = mission.dialog();
+    let busy = || Failure::from("dialog: the dialog system is already in use".to_string());
     let mut ok = true;
     let mut screen = None;
     if step == "accept" {
@@ -296,24 +300,63 @@ fn run_step(
         s.set_player_experience(vm, stoi(level)?, stoll(xp)?)?;
     } else if let (true, Some(s)) = (step == "pool", script) {
         s.update_experience_pool(vm)?;
-    } else if step.starts_with("lines:")
-        || step.starts_with("timedlines:")
-        || step.starts_with("talker:")
-    {
-        return Err(NotYet::layer_absent(format!("the --mission-run step {step}"), DIALOG_LAYER, DIALOG_RECORD).into());
+    } else if let Some(seconds) = step.strip_prefix("lines:") {
+        let seconds = stod(seconds)?;
+        dialog.try_borrow_mut().map_err(|_| busy())?.set_test_line_length(seconds);
+    } else if let Some(seconds) = step.strip_prefix("timedlines:") {
+        let length = stod(seconds)?;
+        let mut d = dialog.try_borrow_mut().map_err(|_| busy())?;
+        d.set_timed_line_player(move |_: &Line| length);
+        d.on_line_stopped = Some(Box::new(|id: i32| {
+            let _ = writeln!(std::io::stderr().lock(), "dialog line stopped while playing: {id}");
+        }));
+    } else if let Some(tag) = step.strip_prefix("talker:") {
+        dialog.try_borrow_mut().map_err(|_| busy())?.register_talker(tag, None);
     } else if let Some(rest) = step.strip_prefix("kismet:") {
         let (variable, tag) = rest.split_once('|').ok_or_else(usage)?;
+        let mut actor = None;
         if !tag.is_empty() {
-            return Err(NotYet::layer_absent(
-                format!("the --mission-run step {step} (a talker bound to a Kismet variable)"),
-                DIALOG_LAYER,
-                DIALOG_RECORD,
-            )
-            .into());
+            // Any object stands for the pawn; its identity is what matters (the C++).
+            actor = Some(object_ref(vm, tag)?);
+            dialog.try_borrow_mut().map_err(|_| busy())?.register_talker(tag, actor);
         }
-        mission.bind_kismet_variable(variable, None)?;
-    } else if step.starts_with("component:") || step.starts_with("pawn:") {
-        return Err(NotYet::layer_absent(format!("the --mission-run step {step}"), DIALOG_LAYER, DIALOG_RECORD).into());
+        mission.bind_kismet_variable(variable, actor)?;
+    } else if let Some(rest) = step.strip_prefix("component:") {
+        let mut parts = rest.splitn(3, '|');
+        let (Some(speaker), Some(tag), Some(list)) = (parts.next(), parts.next(), parts.next()) else {
+            return Err(usage());
+        };
+        let mut groups = Vec::new();
+        for group in list.split(',') {
+            groups.push(object(vm, group)?);
+        }
+        let tag = object(vm, tag)?;
+        let mut d = dialog.try_borrow_mut().map_err(|_| busy())?;
+        ok = d.trigger_on_component(vm, speaker, &groups, &tag).map_err(BehaviorError::from)?;
+    } else if let Some(rest) = step.strip_prefix("pawn:") {
+        let (body, tag) = rest.split_once('|').ok_or_else(usage)?;
+        let body = object(vm, body)?;
+        let pawn = dialog.try_borrow_mut().map_err(|_| busy())?.pawn_dialog(vm, &body).map_err(BehaviorError::from)?;
+        ok = false;
+        if !pawn.name_tag.is_empty() {
+            let tag = object(vm, tag)?;
+            let mut d = dialog.try_borrow_mut().map_err(|_| busy())?;
+            ok = d.trigger_on_component(vm, &pawn.name_tag, &pawn.groups, &tag).map_err(BehaviorError::from)?;
+        }
+        let mut groups = Vec::new();
+        for g in &pawn.groups {
+            groups.push(quote(&DialogSystem::object_path(vm, g).map_err(BehaviorError::from)?));
+        }
+        let searched: Vec<String> = dialog.try_borrow().map_err(|_| busy())?.last_search().iter().map(|g| quote(g)).collect();
+        screen = Some((
+            "pawn",
+            format!(
+                "{{\"name_tag\":{},\"groups\":[{}],\"searched\":[{}]}}",
+                quote(&pawn.name_tag),
+                groups.join(","),
+                searched.join(",")
+            ),
+        ));
     } else if step == "turnin" {
         ok = mission.turn_in_mission(vm)?;
     } else if step == "kickoff" {

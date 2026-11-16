@@ -285,6 +285,7 @@ def build_engine():
     toy = Toy(('Byte', 'Object', 'Bool', 'Float', 'Array', 'Struct', 'Str', 'Name', 'FloatAttribute', 'Class'))
     p, T = toy.p, toy
     t = Tags(p)
+    T.cls('AkEvent')      # the class of the dialog scenario's Ak_* exports (a reader that types references needs it declared)
     changes = ['CHANGE_Toggle', 'CHANGE_Enable', 'CHANGE_Disable']
     p.add_export(toy.imp['Enum'], 'EChangeStatus', w32(0) + toy.none + w32(0) + w32(len(changes)) + b''.join(p.fname(c) for c in changes),
                  outer=T.cls('ITargetable'))
