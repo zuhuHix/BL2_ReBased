@@ -17,6 +17,13 @@ game; there was no session in this lane.
     `variable_value`, `prop`; `link_stats` for the census. Ops are addressed by their position in `ops()`.
   - `Handler = Rc<dyn Fn(&mut Kismet, &mut ValueCx, usize, i32) -> Result<(), KismetError>>`, bound by class path
     (any case) and found through the class chain, nearest first; `remote_sink` for remote events no op consumes.
+    `Handler` is **not frozen for world hosting** (hub decision, review r1 of PR #331): no trait is added now.
+  - A link, a variable or an event's reference lands on an object of this package whether it decodes to a stand-in
+    (`Origin::Resource`) or to an instantiated export (`Origin::Export`, what a definition store's holder resolves a
+    reference to). Over a decode context only stand-ins occur, so the outputs below are unchanged (rerun after
+    review r1).
+  - The methods that take an op position index `ops()` directly; an out-of-range position is a caller bug and
+    panics (documented on each).
   - `KismetError { SequenceNotFound, Reflect, Decode, Package, Heap }`: what the C++ throws. The wrappers are
     transparent (`Display` is the wrapped error's, `source()` its cause), so the CLI prints the C++ text. What the
     C++ reports as lines (unsupported op, unresolved link, the runaway guard) stays in `Kismet::errors`.
@@ -27,8 +34,10 @@ game; there was no session in this lane.
   fires its first output, at most 1,000 ops per run; `SeqAct_ActivateRemoteEvent`, `SeqAct_Gate` (with
   `AutoCloseCount`), `SeqAct_SetBool`, `SeqCond_CompareBool`, `SeqAct_Delay`; remote events of class
   `Engine.SeqEvent_RemoteEvent` exactly, mission remote events by mission path and name, events by `Originator`.
-  Not modelled, as in the C++: one input per op per run, `MaxTriggerCount` / `ReTriggerDelay`, latent ops other than
-  `Delay`.
+  Not modelled, as in the C++ (A4 records each): one input per op per run; `MaxTriggerCount` / `ReTriggerDelay`;
+  latent ops other than `Delay`; the native and script `Activated` / `Deactivated` events and `UpdateOp`;
+  `bSupportsMultipleActivations`; an already-active event queuing its activation in its parent sequence; the player
+  and network activation checks; a still-active non-latent op not propagating its outputs.
 - **Where the Rust differs from the C++, on purpose.** A property the C++ dereferences without a check (`bOpen`,
   `AutoCloseCount`, `CurrentCloseCount`, `bResult`, `DefaultValue`, `Duration`) crashes the C++ when the op's class
   lacks it; here it is an error line. A number is written in the slot's own kind (the C++ bag takes any kind). A
@@ -60,6 +69,13 @@ game; there was no session in this lane.
   - W5-WORLD's `Actor.Destroy` answers `NotYet` for an actor with Kismet `GeneratedEvents`. The destroyed-event class
     is not read, and `ow-world` cannot call `ow-mission`, so the hook needs a service seam in `ow-world`; not done
     here.
-  - The executor runs over a decode context, not over the VM: `Vm`/`DefStore` has no `instantiate_export` with the
-    decoder's stand-ins, so a world-hosted Kismet (W6-MISSION) needs that seam or its own context.
+  - World hosting. The executor runs over a decode context (`ValueCx`), as the C++ runs over its decode `Runtime`.
+    Hosting it in a world breaks in two places: the handler's context type (a `Handler` takes `&mut ValueCx` and
+    cannot reach `&mut Vm`), and resolution keyed on the reference's origin (a holder resolves to `Origin::Export`,
+    now accepted, while `Vm`/`DefStore` has no `instantiate_export` with the decoder's stand-ins). The consumers are
+    W5-DIALOG's mover and the host world; `src/mission.cpp` never uses `vm::Kismet`.
+  - ARCHITECTURE 3.8's stub-policy table lists `--kismet-run` as `Refuse { allow }`, but the command runs no VM
+    (its ops are native rules, as in the C++), so the policy does not arise. The hub syncs the table.
+  - `--tick 1e-400` reads as 0 where the MSVC `stod` throws (an underflow); the fix belongs in `ow_core::num`
+    (hub follow-up).
 - **UNVERIFIED.** Every rule above: none was confirmed in the running game.

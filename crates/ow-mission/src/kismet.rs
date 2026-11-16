@@ -20,9 +20,12 @@
 //! link order and their ops pushed last to first, so the first link's target runs next (depth-first in link order);
 //! an op already queued keeps its place; a link's delay is the target input's `ActivateDelay` plus the output's; a
 //! disabled input receives nothing; an input hit twice runs its op twice; an entered event fires all of its outputs;
-//! at most [`EXECUTION_LIMIT`] ops run per [`Kismet::run`] call (one frame). Not modelled, as in the C++: an op handles
-//! one input per run (the game sees all inputs with an impulse at once), event `MaxTriggerCount` / `ReTriggerDelay`
-//! checks, and latent ops other than `Delay`.
+//! at most [`EXECUTION_LIMIT`] ops run per [`Kismet::run`] call (one frame). Not modelled, as in the C++ (A4 records each):
+//! an op handles one input per run (the game sees all inputs with an impulse at once); event `MaxTriggerCount` /
+//! `ReTriggerDelay` checks; latent ops other than `Delay`; the native and script `Activated` / `Deactivated` events
+//! and `UpdateOp`; `bSupportsMultipleActivations`; an event that is already active queuing its activation in its
+//! parent sequence; the player and network activation checks; and an op that is still active and not latent not
+//! propagating its outputs.
 //!
 //! **The pure-logic ops** follow the public UE3 sequence model, as the C++ does; they are UNVERIFIED against the
 //! original game until a paired trace exists (`docs/verification/SANCTUARY_RPG_KISMET.md`).
@@ -153,6 +156,10 @@ pub struct Op {
 /// A host binding or a logic op: called with the executor, the decode context, the op's position in
 /// [`Kismet::ops`] and the activated input's index ([`EVENT_INPUT`] never reaches a handler). Handlers read the
 /// input's `LinkDesc` through [`Kismet::input_desc`] and fire outputs through [`Kismet::fire`].
+///
+/// **Not frozen for world hosting.** The handler gets a decode context (`ValueCx`), as the C++ executor works over the
+/// decode `Runtime`; a handler of a world-hosted executor needs the VM (`&mut Vm`), which this type cannot reach. The
+/// shape changes when the first world host (W5-DIALOG's mover, the host world) binds handlers (decision 2026-11-15-31).
 pub type Handler = Rc<dyn Fn(&mut Kismet, &mut ValueCx<'_>, usize, i32) -> Result<(), KismetError>>;
 
 /// Called with the name of a remote event no op of this sequence consumes (other sequences, mission systems).
@@ -323,13 +330,17 @@ fn lower(s: &str) -> String {
     s.to_ascii_lowercase()
 }
 
-/// The stand-in's package and export, where `v` is a reference to one.
+/// The package and export a reference names: a decoder stand-in's ([`Origin::Resource`], what the C++ executor and
+/// this one meet over a decode context), or an instantiated export's ([`Origin::Export`], what a definition store's
+/// holder resolves a reference to, so a world-hosted executor sees its links land). `None` for other objects.
 fn resource(space: &ObjectSpace, v: &Value) -> Option<(PackageId, i32)> {
     let Value::Object(Some(o)) = v else {
         return None;
     };
     match space.heap.get(*o).ok()?.origin {
-        Origin::Resource { package, index } => Some((package, index)),
+        Origin::Resource { package, index } | Origin::Export { package, index } => {
+            Some((package, index))
+        }
         _ => None,
     }
 }
@@ -444,6 +455,9 @@ impl Kismet {
     // -----------------------------------------------------------------------------------------------------------
 
     /// Property `name` of op `op`, or `None` where its class does not declare it.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn prop(
         &self,
         cx: &ValueCx<'_>,
@@ -461,6 +475,9 @@ impl Kismet {
     }
 
     /// The `LinkDesc` of input `input` of op `op`, empty when there is none.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn input_desc(
         &self,
         cx: &ValueCx<'_>,
@@ -501,6 +518,9 @@ impl Kismet {
     }
 
     /// The index of the output whose `LinkDesc` is `desc` (any case), or `None`.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn output_index(
         &self,
         cx: &ValueCx<'_>,
@@ -525,6 +545,9 @@ impl Kismet {
     // -----------------------------------------------------------------------------------------------------------
 
     /// Fires the output whose `LinkDesc` is `desc`; an error line when the op has none.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn fire_named(
         &mut self,
         cx: &mut ValueCx<'_>,
@@ -545,6 +568,9 @@ impl Kismet {
     /// target input's plus the output's) is above zero is queued for later, the others are collected and applied
     /// after the running op. A link that does not land on an op of this sequence is an error line; a null
     /// `LinkedOp` or a link without `InputLinkIdx` is skipped.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn fire(
         &mut self,
         cx: &mut ValueCx<'_>,
@@ -611,7 +637,8 @@ impl Kismet {
     /// A stand-in's name as its package spells it (the C++ `resource->name`), else its heap name.
     fn object_name(&self, cx: &ValueCx<'_>, o: ObjRef) -> Result<String, KismetError> {
         let object = cx.space.heap.get(o)?;
-        if let Origin::Resource { package, index } = object.origin
+        if let Origin::Resource { package, index } | Origin::Export { package, index } =
+            object.origin
             && let Ok(entry) = cx.store.get(package).object(index)
         {
             return Ok(entry.name.clone());
@@ -681,6 +708,9 @@ impl Kismet {
     }
 
     /// An impulse on input `input` of op `op`, after `delay` seconds plus the input's `ActivateDelay`.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn activate(
         &mut self,
         cx: &ValueCx<'_>,
@@ -700,6 +730,9 @@ impl Kismet {
 
     /// Enters event op `op`: traced, its `TriggerCount` counted, and queued to fire all of its outputs (disabled ones
     /// excepted) when it runs (A4, UNVERIFIED).
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn activate_event(&mut self, cx: &mut ValueCx<'_>, op: usize) -> Result<(), KismetError> {
         self.trace.push(format!("event {}", self.ops[op].name));
         self.count(cx, op, "TriggerCount")?;
@@ -970,6 +1003,9 @@ impl Kismet {
 
     /// The variables linked to op `op` through its variable links whose `LinkDesc` is `desc` (any case), in link
     /// order; references outside this package are left out.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn variables(
         &mut self,
         cx: &mut ValueCx<'_>,
@@ -1000,6 +1036,9 @@ impl Kismet {
 
     /// The value property of variable `i` of link `desc`: the first of `bValue`, `IntValue`, `FloatValue` its class
     /// declares (bool, int and float variables), with the variable; `None` when there is no such variable or value.
+    ///
+    /// # Panics
+    /// If `op` is not a position in [`Kismet::ops`] (a caller bug).
     pub fn variable_value(
         &mut self,
         cx: &mut ValueCx<'_>,
