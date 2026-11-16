@@ -1,0 +1,17 @@
+# AI-assisted (Claude Code). Lane W5-KISMET: --kismet-census, --kismet-run (crates/ow-cli/src/cmd/kismet.rs,
+# crates/ow-mission/src/kismet.rs).
+#
+# The source package is loaded before the options are read, as in the C++: these lines need no package file.
+diff README.md --kismet-census exit=1 stderr
+diff README.md --kismet-census --cooked local exit=1 stderr
+diff README.md --kismet-run Seq --cooked local --remote Ping exit=1 stderr
+diff missing.upk --kismet-run Seq exit=1 stderr
+#
+# Not yet a line: python tests/kismet_test.py {bin}
+# The script's toy Engine.upk declares its object properties (LinkedOp, LinkedVariables, Originator,
+# AssociatedMissionDefinition) with no class, which the Rust reflection layer refuses ("names no class"), so on the
+# Rust binary every run stops at the class layout (1 of its 43 commands gives the C++ output). With the fixture
+# change proposed in the lane's handoff (every toy class derives from a toy Engine.Object, which those properties
+# name; nothing else changes), the script passes on both binaries and all 43 commands print the same bytes and exit
+# codes on both, in both parity modes. The line goes here once that change to tests/kismet_test.py is granted.
+# Until then the same cases run as Rust unit tests (crates/ow-mission/src/kismet/tests.rs, decision 2026-11-15-31).
