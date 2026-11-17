@@ -16,14 +16,13 @@
 //! rather than the manager's `ResourcePoolMap` property, because the object model holds a map property as
 //! `Value::None` (decision 2026-11-15-06). Creation records an entry, deletion removes it, lookups read it.
 //!
-//! **Not read, so `NotYet`** (in `ParityMode::Off`; `Reference` keeps the C++ reading, a stand-in the W6 runs of
-//! `tests/combat_test.py` and `tests/mission_script_test.py` reach, decision 2026-11-15-29): `ResetIdleTimer` has no note
-//! (`NATIVE_INDEX.md`: "none (guess)"; the C++ stamps the idle-delay start time with the world time); the "current
-//! value changed" hook `SetCurrentValue` ends with is taken as empty only for the classes of [`KNOWN_HOOK_CLASSES`]
+//! **Off timer dispatch:** `ResetIdleTimer` delegates to [`ResetIdleTimerOff`], installed by ow-combat from
+//! NATIVE_RESOURCE_POOL_IDLE.md. Without that handler it refuses; Reference keeps the C++ stamp unchanged.
+//! The "current value changed" hook `SetCurrentValue` ends with is taken as empty only for the classes of [`KNOWN_HOOK_CLASSES`]
 //! (an allow-list), so a pool of any other class is `NotYet` before anything is written (the C++ skips every hook).
 //!
-//! **Impact in Off mode:** every installed `InitializeAuthoritative` calls `ResetIdleTimer`, so **Off mode cannot
-//! create a real pool** until that native is read (a cheap Ghidra read). The refusal comes from inside the pool's
+//! **Creation refusal in Off mode:** an unsupported idle hook can refuse inside `InitializeAuthoritative`.
+//! The refusal comes from inside the pool's
 //! script, so it is not decided before anything changes. What the natives changed is undone: [`create_pool_at_index`]
 //! empties the slot again, [`create_pool`] restores `NextPoolGUID` and destroys a manager it spawned, and
 //! [`controller_pool`] restores the controller's `ResourcePoolManager`; no map entry is made. The new pool object is
@@ -58,6 +57,11 @@ use crate::query::{QueryFn, QueryKind, WorldQuery};
 pub const RECORD: &str = "NATIVE_COMBAT_GROUNDWORK.md sections 1-2";
 /// The record of the pool natives.
 pub const RECORD_POOL: &str = "NATIVE_LEVEL_UP_ATTRIBUTES.md section 4";
+
+/// Off's timer handler is owned by ow-combat. Keeping this seam here preserves world's Reference binding and
+/// avoids a dependency from the world to combat. No callback runs while its service cell is borrowed.
+#[derive(Debug, Clone, Copy)]
+pub struct ResetIdleTimerOff(pub fn(&mut Vm, ObjRef) -> Result<(), VmError>);
 
 /// `ResourcePoolManager.ResourcePools[16]` (NATIVE_COMBAT_GROUNDWORK.md section 1.1).
 pub const POOL_SLOTS: u8 = 16;
@@ -1330,11 +1334,13 @@ fn natives() -> [(&'static str, Body); 26] {
         (RESET_IDLE_TIMER, |c| {
             let pool = this(c, RESET_IDLE_TIMER)?;
             if c.vm.parity == ParityMode::Off {
-                return Err(NotYet::not_read(
-                    "ResourcePool.ResetIdleTimer (no note; the C++ stamps PoolIdleDelayStartTime with the world time)",
-                    "NATIVE_INDEX.md (ResourcePool.ResetIdleTimer: none, a guess)",
-                )
-                .into());
+                let handler = c.vm.service::<ResetIdleTimerOff>().ok_or_else(|| NotYet::not_read(
+                    "ResourcePool.ResetIdleTimer: Off handler not installed",
+                    "NATIVE_RESOURCE_POOL_IDLE.md",
+                ))?;
+                let handler = handler.try_borrow().map_err(|_| VmError::ServiceBorrowed("ResetIdleTimerOff"))?.0;
+                handler(c.vm, pool)?;
+                return Ok(none());
             }
             let t = world_time(c.vm)?;
             set_field(
@@ -1583,6 +1589,16 @@ impl NativePack for Pack {
                 reason: "needs the world query service (World::new installs it first)",
             })?;
         let maps = vm.add_service(PoolMaps::new())?;
+        if vm.service::<ow_vm::api::WorldTimeQuery>().is_none() {
+            vm.add_service(ow_vm::api::WorldTimeQuery(|vm| {
+                let actors = actors::actors_of(vm)?;
+                let world = actors.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.world_info();
+                // World::new represents an existing world. Before its first actor is placed, its time is unknown.
+                world.map(Some).ok_or_else(|| NotYet::not_ported(
+                    "the existing world's first WorldInfo actor", "NATIVE_RESOURCE_POOL_IDLE.md",
+                ).into())
+            }))?;
+        }
         for (key, body) in natives() {
             vm.register_native(key, Rc::new(body))?;
         }

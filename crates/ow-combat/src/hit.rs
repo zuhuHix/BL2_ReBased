@@ -28,6 +28,7 @@
 //! - the "0 with base 0 is 1" reading of a pawn's damage-type resistance and the critical-hit bonus: `crate::damage`.
 
 pub mod access;
+pub mod pools;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -300,6 +301,7 @@ impl NativePack for Pack {
         // The behavior kernel's natives have one owner (ow-behavior); this pack routes its consumers to it.
         ow_behavior::kernel::natives::Pack.register(vm)?;
         register_hit(vm)?;
+        pools::register(vm)?;
         crate::damage::register(vm)?;
         crate::death::register(vm)?;
         crate::down::register(vm)?;
