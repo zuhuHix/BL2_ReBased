@@ -178,6 +178,61 @@ fn a_known_triangle_renders_with_each_winding() {
 
 #[test]
 #[ignore = "needs a GPU adapter or the software fallback"]
+fn world_callback_runs_once_with_or_without_static_instances() {
+    let (device, queue, errors) = headless().expect("no adapter, not even the software fallback");
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("world callback regression"),
+        size: wgpu::Extent3d {
+            width: 4,
+            height: 4,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let camera = FlyCamera::at([0.0; 3], Rotator::default());
+    let vp = camera.view_projection(4, 4).unwrap();
+    for has_static_instances in [false, true] {
+        let (mut p, _) = plan(triangle(true), [1.0; 3], true);
+        if !has_static_instances {
+            p.batches.clear();
+        }
+        let mut renderer = SceneRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            &p,
+            Lighting::viewer(),
+            &mut |_| Err("no texture requested by this fixture".into()),
+        )
+        .unwrap();
+        assert_eq!(renderer.instances.is_some(), has_static_instances);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut calls = 0;
+        renderer.encode_with(
+            &device,
+            &queue,
+            &mut encoder,
+            &view,
+            (4, 4),
+            &vp,
+            [0.0; 3],
+            &mut |_| calls += 1,
+        );
+        assert_eq!(calls, 1, "static instances: {has_static_instances}");
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+    assert_eq!(errors.lock().unwrap().as_slice(), &[] as &[String]);
+}
+
+#[test]
+#[ignore = "needs a GPU adapter or the software fallback"]
 fn the_upload_counts_what_it_sends() {
     let Some((device, queue, errors)) = headless() else {
         panic!("no adapter, not even the software fallback");

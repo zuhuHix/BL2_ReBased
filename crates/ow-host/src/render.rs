@@ -1242,6 +1242,7 @@ impl SceneRenderer {
             ..Default::default()
         });
         let Some(instances) = &self.instances else {
+            world(&mut pass);
             return;
         };
         pass.set_bind_group(0, &self.globals_group, &[]);
