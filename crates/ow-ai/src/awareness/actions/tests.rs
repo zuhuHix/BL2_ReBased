@@ -33,6 +33,9 @@ struct Script {
     /// Whether the patrol's Start enters the state `Busy`, and whether Stop leaves it again.
     start_enters: bool,
     stop_resets: bool,
+    stop_errors: bool,
+    query_start: bool,
+    start_answer: Option<Result<Value, VmError>>,
     /// Whether the patrol finishes when it hears `Target_Acquired`.
     finish_on_acquired: bool,
 }
@@ -177,6 +180,14 @@ fn world(mode: ParityMode) -> World {
             if name == "Patrol" && what == "Start" && finishes {
                 let f = c.vm.find_function(FINISH)?;
                 c.vm.call(f, Some(me), vec![Value::Bool(false)])?;
+            }
+            if name == "Patrol" && what == "Stop" && s.borrow().stop_errors {
+                return Err(error("invented Stop failure".to_string()));
+            }
+            if name == "Patrol" && what == "Start" && s.borrow().query_start {
+                let f = c.vm.find_function(READ_AS_ANALYST[3])?;
+                let answer = c.vm.call(f, Some(me), vec![]).map(|r| r.ret);
+                s.borrow_mut().start_answer = Some(answer);
             }
             // The patrol's script finishes it from Update when told to (as `AttackFinished` calls Finish).
             if what == "Update" && name == "Patrol" && s.borrow().patrol_done {
@@ -394,6 +405,16 @@ fn stop_must_leave_the_action_in_its_rest_state() {
         assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
         assert!(err.to_string().contains("in state Busy after Stop"), "{err}");
         assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2), "{mode:?}: the tree as it was");
+        let b = brain(&w.e.vm, w.e.mind).unwrap();
+        let action = b.actions[2].unwrap();
+        assert_eq!(
+            borrow(&brains(&mut w.e.vm).unwrap()).unwrap().running.get(&w.e.mind),
+            Some(&Running::Action(action))
+        );
+        assert_eq!(
+            w.e.vm.space.heap.get(action).unwrap().state.map(|n| w.e.vm.space.names.text(n).into_owned()),
+            Some("Busy".to_string())
+        );
         w.script.borrow_mut().stop_resets = true;
         let report = brain_at(&mut w, &mut h, 0.375).unwrap();
         assert_eq!(report.changes.first().and_then(|c| c.stopped), Some((2, false)), "{mode:?}: {report:?}");
@@ -531,6 +552,7 @@ fn the_atomic_and_range_natives_follow_the_note_in_off() {
     // Not initialised: no answer.
     not_read(call(&mut w, 0, a, vec![]), "bInitialized");
     not_read(call(&mut w, 2, a, vec![]), "bInitialized");
+    not_read(call(&mut w, 1, a, vec![]), "bInitialized");
     assert_eq!(flag(&mut w), Some(Value::Bool(false)), "nothing changed");
     set(&mut w.e.vm, a, "bInitialized", Value::Bool(true)).unwrap();
     assert_eq!(call(&mut w, 2, a, vec![]).unwrap(), Value::Bool(false));
@@ -593,26 +615,67 @@ fn ready_to_finish_walks_the_parent_chain() {
     not_read(call(&mut w, 4, pawn, vec![]), "WillowActionSequencePawn");
 }
 
-/// IsRunning: true for the tree's current action, false for the other one; an action no brain made answers false
-/// without an AI and NotYet with one; NotYet while its own Start or Stop is in progress.
+/// Ownership cannot substitute for the unrepresented AI setup. The represented null precondition on an
+/// unowned action is supported; assigning an arbitrary AI object does not represent its component/state link.
 #[test]
-fn is_running_names_the_current_action() {
+fn is_running_requires_represented_ai_setup() {
     let mut w = world(ParityMode::Off);
     let mut h = host(&w.e, 1.0);
     let stray = make(&mut w.e.vm, w.action_class, "Toy_Stray");
-    assert_eq!(call(&mut w, 3, stray, vec![]).unwrap(), Value::Bool(false), "no AI");
+    assert_eq!(call(&mut w, 3, stray, vec![]).unwrap(), Value::Bool(false), "represented null AI");
     let ai = w.e.ai;
     set(&mut w.e.vm, stray, "AI", Value::Object(Some(ai))).unwrap();
     not_read(call(&mut w, 3, stray, vec![]), "did not make");
+    w.script.borrow_mut().query_start = true;
     brain_at(&mut w, &mut h, 0.25).unwrap();
+    not_read(w.script.borrow().start_answer.clone().unwrap(), "setup is not represented");
     let b = brain(&w.e.vm, w.e.mind).unwrap();
-    let (attack, patrol) = (b.actions[1].unwrap(), b.actions[2].unwrap());
-    assert_eq!(call(&mut w, 3, patrol, vec![]).unwrap(), Value::Bool(true));
-    assert_eq!(call(&mut w, 3, attack, vec![]).unwrap(), Value::Bool(false));
-    let mind = w.e.mind;
-    set_running(&mut w.e.vm, mind, Some(Running::Changing(patrol))).unwrap();
-    not_read(call(&mut w, 3, patrol, vec![]), "Start or Stop");
-    assert_eq!(call(&mut w, 3, attack, vec![]).unwrap(), Value::Bool(false));
+    for action in [b.actions[1].unwrap(), b.actions[2].unwrap()] {
+        assert_eq!(get(&mut w.e.vm, action, "AI").unwrap(), Some(Value::Object(None)));
+        not_read(call(&mut w, 3, action, vec![]), "setup is not represented");
+        set(&mut w.e.vm, action, "AI", Value::Object(Some(ai))).unwrap();
+        not_read(call(&mut w, 3, action, vec![]), "setup is not represented");
+    }
+    // Absence of a service is unknown ownership, not a represented empty registry.
+    let mut e = env(ParityMode::Off);
+    let action = make(&mut e.vm, e.object, "UnrepresentedAction");
+    let f = declare(&mut e.vm, e.object, READ_AS_ANALYST[3], vec![], Some(PropKind::Bool));
+    e.vm.register_native(READ_AS_ANALYST[3], Rc::new(n_is_running)).unwrap();
+    assert!(e.vm.service::<Brains>().is_none());
+    not_read(e.vm.call(f, Some(action), vec![]).map(|r| r.ret), "no brains service");
+    assert!(e.vm.service::<Brains>().is_none(), "query does not manufacture a service");
+}
+
+/// A Stop error preserves the original error, tree/current-action agreement and the script's side effects.
+#[test]
+fn stop_error_keeps_the_running_action() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut w = world(mode);
+        let mut h = host(&w.e, 1.0);
+        w.script.borrow_mut().start_enters = true;
+        brain_at(&mut w, &mut h, 0.25).unwrap();
+        let action = brain(&w.e.vm, w.e.mind).unwrap().actions[2].unwrap();
+        w.script.borrow_mut().patrol_done = true;
+        w.script.borrow_mut().stop_resets = true;
+        w.script.borrow_mut().stop_errors = true;
+        let err = brain_at(&mut w, &mut h, 0.3125).unwrap_err();
+        assert_eq!(err, error("invented Stop failure".to_string()));
+        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2));
+        assert_eq!(
+            borrow(&brains(&mut w.e.vm).unwrap()).unwrap().running.get(&w.e.mind),
+            Some(&Running::Action(action))
+        );
+        assert_eq!(w.e.vm.space.heap.get(action).unwrap().state, None, "Stop side effect retained");
+        w.script.borrow_mut().stop_errors = false;
+        w.script.borrow_mut().has_target = true;
+        brain_at(&mut w, &mut h, 0.375).unwrap();
+        assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(1));
+        let attack = brain(&w.e.vm, w.e.mind).unwrap().actions[1].unwrap();
+        assert_eq!(
+            borrow(&brains(&mut w.e.vm).unwrap()).unwrap().running.get(&w.e.mind),
+            Some(&Running::Action(attack))
+        );
+    }
 }
 
 /// The tree's lock: an atomic running action is NotYet in both modes (which flag is "running" is not read).
