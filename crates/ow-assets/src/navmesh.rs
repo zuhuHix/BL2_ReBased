@@ -393,8 +393,9 @@ pub fn read_navmesh(package: &Package, index_: i32) -> Result<NavMesh, NavMeshEr
             shared.sort_unstable();
             shared.dedup();
             if shared.len() == 2 {
-                let edge = [p.verts[k], p.verts[(k + 1) % NUM_EDGES]];
-                if !(shared.contains(&edge[0]) && shared.contains(&edge[1])) {
+                let mut edge = [p.verts[k], p.verts[(k + 1) % NUM_EDGES]];
+                edge.sort_unstable();
+                if edge != [shared[0], shared[1]] {
                     return Err(NavMeshError::NeighbourNotOnEdge(t, k));
                 }
             }

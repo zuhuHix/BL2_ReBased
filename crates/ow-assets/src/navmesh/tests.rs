@@ -208,6 +208,11 @@ fn what_is_not_proven_is_refused() {
     m.polys[1].1 = [NONE, NONE, 0];
     cases.push((m, |e| matches!(e, NavMeshError::NeighbourNotOnEdge(0, 1))));
     let mut m = base.clone();
+    // Repeated endpoints cannot stand for the two distinct shared vertices, even when both occur in the neighbour.
+    m.polys[0].0 = [0, 0, 2];
+    m.polys[0].1 = [1, NONE, NONE];
+    cases.push((m, |e| matches!(e, NavMeshError::NeighbourNotOnEdge(0, 0))));
+    let mut m = base.clone();
     m.polys[0].2 = 1;
     cases.push((m, |e| matches!(e, NavMeshError::BadIndex("triangle data", 1))));
     let mut m = base.clone();

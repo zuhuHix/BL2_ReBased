@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**NAV-MESH review r2 (2026-11-17, zuhu desktop):** AI-assisted (Codex / GPT-6.1 Sol). One additional synthetic
+refusal-table case reproduces a neighbour edge with repeated endpoints: it failed before the sorted-pair check and
+passes after it. Workspace build and release CLI build clean; workspace tests 1,784 passed / 0 failed / 30 ignored;
+crate edges 19/19. After building the release Rust reader, configure with `OW_REQUIRE_TEST_TOOLS=ON` registered the
+seven Rust CTests absent from the earlier build: all 7 passed, 0 failed, 74.47 s. The prior 166 C++/Python checks
+apply to byte-identical inputs; they were not repeated. Fresh C++ reader verification: 9 packages, 3,339/3,339 class
+bodies exact. These are automated checks; no host, visual or running-game validation was performed.
+
 **NAV-MESH review r1 (2026-11-17, zuhu desktop, research/rust-navmesh):** AI-assisted (Codex / GPT-6.1 Sol),
 continuing partial Claude Code fixes. `cargo build --workspace --locked -j 2` clean; `cargo test --workspace --locked
 -j 2`: 1,784 passed / 0 failed / 30 ignored (1,782 passed before this fix round). The four synthetic navmesh tests
