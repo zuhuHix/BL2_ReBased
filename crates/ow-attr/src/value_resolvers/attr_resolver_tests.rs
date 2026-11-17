@@ -1,4 +1,4 @@
-//! The Currency, Random and AmmoDropWeight resolvers on a synthetic world (rule 9: invented objects and numbers;
+//! The Currency, Random, AmmoDropWeight and Constraint resolvers on a synthetic world (rule 9: invented objects and numbers;
 //! the class and field names are the packages' names, so the resolvers meet the shapes they read). Lane
 //! FIX-ATTR-RESOLVERS, decision 2026-11-16-73.
 
