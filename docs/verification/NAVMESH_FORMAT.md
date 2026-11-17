@@ -6,6 +6,8 @@ structural oracles; no native code, decompiler output or analysis database was o
 session. Raw exports, payloads and the exploration scripts' output stay under ignored `local/p2/navmesh/`. Everything
 below is **UNVERIFIED** as what the running game does with the data; what is proven is how the bytes divide.
 
+Review r1 fixes: AI-assisted (Codex / GPT-6.1 Sol), continuing the partial Claude Code fix round.
+
 ## 1. What is there
 
 Sanctuary's navigation is Gearbox's own mesh class, `Engine.GBXNavMesh`. There is no stock UE3 `NavigationMeshBase`
@@ -54,7 +56,7 @@ The tail is a run of arrays, each an `i32` count then its elements:
 **Polygons are triangles** (`NUM_EDGES` 3, and the 16-bit indices of `WORDSIZE` 2 make `NUM_EDGE_BYTES` 6).
 
 **The `SpecialMoves` element is not known.** No Sanctuary triangle has one, so its size was never seen. A reader must
-stop at a non-zero count; the Rust reader answers `NotYet`.
+stop at a positive count; the Rust reader answers `NotYet`. A negative count is malformed (`BadCount`).
 
 ## 3. What parses, and the structural oracles
 
@@ -76,17 +78,20 @@ Checks that hold on all four:
 - Every cross-level edge is 0 to 2. Every obstacle slot is below the obstacle count or `0xFFFF`.
 - The grid's index count is `XCells x YCells`. Every listed cell is indexed exactly once (the -1s are empty cells),
   every cell's triangles are in range, and every triangle is in some cell.
-- Every vertex lies inside the grid's extent (`Origin` plus cells times `CellSize`, in x and y).
-- Every path size's `StartIndex` is at most the triangle count.
+- Every vertex lies inside the grid's extent (`Origin` plus cells times `CellSize`, in x and y), with an inclusive
+  1 uu margin on each side. This is a reader tolerance for float rounding, not a game rule. No z extent is
+  inferred from the planar grid.
+- Every path size's `StartIndex` is nonnegative and at most the triangle count.
 
 **Neighbour slots are edges.** For every link between two triangles that share two vertex indices (26,276 in
 `Sanctuary_P`), the shared pair is the edge from vertex `k` to vertex `k + 1` of slot `k`. In the three small meshes
 every link is mutual. In `Sanctuary_P`, 4 of 30,928 links are one-way, each between triangles that share an edge.
 
-**World space, one point checked.** The lowest vertex of `Sanctuary_P` is at z 2720.0, and the `_Land` triangle under
+**World space, one point checked, UNVERIFIED.** The lowest vertex of `Sanctuary_P` is at z 2720.0, and the `_Land` triangle under
 the end point of H4's scripted walk (decision 2026-11-16-52) is at z 2720.0 there. That is the floor height H4's own
-collision gives (the pawn's centre at 2800.03, half height 80). So the vertices read as world uu without
-`CachedLocalToWorld`. One point is not a proof, and a mesh on a moving base (`MeshBase`) may differ.
+collision gives (the pawn's centre at 2800.03, half height 80). Taking the vertices as world uu without
+`CachedLocalToWorld` fits this one point. This is a comparison to the host collision, not a running-game height
+check or proof of world space; a mesh on a moving base (`MeshBase`) may differ.
 
 **Path sizes split the triangles into runs.** `Sanctuary_P` has three sizes: radius 22, 40 and 65, all of height 220,
 starting at triangles 0, 8,433 and 11,961. `_Dynamic` and `_Light` have the first two, `_Land` only the first. Reading
@@ -98,23 +103,32 @@ is **UNVERIFIED**.
 ## 4. What does not parse, or is not assigned
 
 - The `SpecialMoves` element (none present).
-- The eight trailing bytes of every mesh (zero; kept as read).
+- The eight trailing bytes of every mesh (zero; kept as read, any non-zero byte refused).
+- SpecialMovers (declared native) is not located; the 8 trailing bytes are a candidate (an empty array's count is
+  four zero bytes), UNVERIFIED. The reader does not assign them.
 - `ConnectedMeshes`: its elements are tagged structs the walker leaves untyped, so which mesh a cross-level link's
   `ConnectedNavmeshIdx` names is not resolved here. The array is 196 bytes in `_P` and 68 in the others.
 - What the obstacles are at run time: they reference objects of the level, and whether each blocks is game state.
 - The pylons: their tags parse completely (`PathSizes`, `NextPylon`, `NavGuid`, the cylinder and more), and each
   leaves 8 untyped bytes. No mesh data is in them.
-- Coverage: no Sanctuary navmesh triangle lies under the player start, or under the fence H4's walk stopped at. Only
-  the walk's end point is on a mesh (`_Land`). So the navmesh does not cover the whole walkable town.
+- Coverage as read (vertices taken as world uu, one point checked): no Sanctuary navmesh triangle lies under the
+  player start, or under the fence H4's walk stopped at. Only the walk's end point is on a mesh (`_Land`). Coverage
+  of the whole walkable town remains UNVERIFIED until the coordinate interpretation is confirmed.
 
 ## 5. What the Rust port has now
 
 `ow_assets::navmesh::read_navmesh(package, export)` reads a `GBXNavMesh` (decision 2026-11-16-75):
 - the vertices, triangles with neighbours, per-triangle data, path sizes, lookup grid and obstacles;
-- every check of section 3 applied, refusing rather than guessing;
-- a `NotYet` error on any special move, and a refusal of any tail that does not end eight bytes after the obstacles.
+- the structural oracles in section 3: local index bounds, used per-triangle data, complete triangle and cell
+  coverage, grid dimensions and planar extent (inclusive 1 uu margin), and neighbour edge slots where two distinct
+  vertex indices are shared. Cross-level mesh and triangle targets remain unresolved;
+- exactly eight zero bytes after the obstacles, with a `TrailingNotZero` error for any non-zero byte;
+- a `NotYet` error on a positive special-move count, `BadCount` on a negative count;
+- finite floats and counts bounded by the remaining bytes. The height comparison and path-size run interpretation
+  above remain observations, not additional reader checks.
 
-Two tests on invented meshes cover the reader. An ignored driver
+Four tests on invented meshes cover field round-tripping, refusal cases, each of the eight trailing bytes, and the
+inclusive planar margin at all four boundaries. An ignored driver
 (`sanctuary_navmeshes_on_the_installed_game`, `OW_BL2_ROOT`) prints the counts above.
 
 ## 6. Recommended next step
@@ -137,4 +151,4 @@ hub:
 
 For parity rather than a stand-in, the game's path-finder and modifiers would need an analyst lane under the
 clean-room rule (`docs/LANE_BRIEF.md`). Before any of this, check that the bullymong's map has a `GBXNavMesh` covering
-its area; Sanctuary's does not cover the player start.
+its area; Sanctuary's does not cover the player start as read (vertices taken as world uu, one point checked).

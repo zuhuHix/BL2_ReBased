@@ -15,6 +15,11 @@ struct Mesh {
     cells: Vec<Vec<u16>>,
     obstacles: Vec<(i32, i32)>,
     trailing: usize,
+    /// The value of the trailing bytes (H1 of review r1).
+    trailing_bytes: [u8; TRAILING_BYTES],
+    /// The lookup grid's origin and cell size as written.
+    origin: [f32; 3],
+    cell_size: [f32; 3],
 }
 
 fn square() -> Mesh {
@@ -30,6 +35,9 @@ fn square() -> Mesh {
         cells: vec![vec![0, 1]],
         obstacles: vec![],
         trailing: TRAILING_BYTES,
+        trailing_bytes: [0; TRAILING_BYTES],
+        origin: [-50.0, -50.0, 10.0],
+        cell_size: [100.0, 200.0, 0.0],
     }
 }
 
@@ -63,7 +71,7 @@ fn tail(m: &Mesh) -> Vec<u8> {
     }
     i32s(&mut t, m.grid.0);
     i32s(&mut t, m.grid.1);
-    [-50.0f32, -50.0, 10.0, 100.0, 200.0, 0.0].iter().for_each(|c| f32s(&mut t, *c));
+    m.origin.iter().chain(m.cell_size.iter()).for_each(|c| f32s(&mut t, *c));
     i32s(&mut t, m.cell_indices.len() as i32);
     m.cell_indices.iter().for_each(|c| i32s(&mut t, *c));
     i32s(&mut t, m.cells.len() as i32);
@@ -76,7 +84,7 @@ fn tail(m: &Mesh) -> Vec<u8> {
         i32s(&mut t, *o);
         i32s(&mut t, *s);
     }
-    t.extend(std::iter::repeat_n(0u8, m.trailing));
+    t.extend(m.trailing_bytes.iter().copied().cycle().take(m.trailing));
     t
 }
 
@@ -107,6 +115,35 @@ fn an_invented_mesh_reads_back() {
     assert_eq!(mesh.lookup.cell_size, [100.0, 200.0, 0.0]);
     assert!(mesh.obstacles.is_empty());
     assert_eq!(mesh.trailing, [0; TRAILING_BYTES]);
+}
+
+#[test]
+fn each_trailing_byte_must_be_zero() {
+    for byte in 0..TRAILING_BYTES {
+        let mut m = square();
+        m.trailing_bytes[byte] = 1;
+        assert!(matches!(
+            read_navmesh(&package(&m, "GBXNavMesh"), 1),
+            Err(NavMeshError::TrailingNotZero(b)) if b == m.trailing_bytes
+        ));
+    }
+}
+
+#[test]
+fn grid_margin_is_planar_and_inclusive() {
+    // The invented grid spans x [-50, 150], y [-50, 150]. Each boundary accepts exactly the 1 uu margin.
+    for (axis, boundary, direction) in [(0, -50.0, -1.0), (0, 150.0, 1.0), (1, -50.0, -1.0), (1, 150.0, 1.0)] {
+        let mut m = square();
+        m.vertices[0][axis] = boundary + direction * GRID_TOLERANCE;
+        // A lookup grid has no z extent check.
+        m.vertices[0][2] = 9000.0;
+        read_navmesh(&package(&m, "GBXNavMesh"), 1).unwrap();
+        m.vertices[0][axis] += direction * 0.25;
+        assert!(matches!(
+            read_navmesh(&package(&m, "GBXNavMesh"), 1),
+            Err(NavMeshError::VertexOutsideGrid(0))
+        ));
+    }
 }
 
 #[test]
@@ -152,6 +189,55 @@ fn what_is_not_proven_is_refused() {
     let mut m = base.clone();
     m.vertices[1][0] = f32::NAN;
     cases.push((m, |e| matches!(e, NavMeshError::NonFinite("vertex"))));
+    // Review r1 of PR #373: the checks the record listed and the reader lacked (H1, M1), and more refusals (L1, L2).
+    let mut m = base.clone();
+    m.trailing_bytes = [1; TRAILING_BYTES];
+    cases.push((m, |e| matches!(e, NavMeshError::TrailingNotZero([1, 1, 1, 1, 1, 1, 1, 1]))));
+    let mut m = base.clone();
+    m.poly_data.push((vec![], 0, [NONE; 6]));
+    cases.push((m, |e| matches!(e, NavMeshError::UnusedPolyData(1))));
+    let mut m = base.clone();
+    m.cells = vec![vec![0]];
+    cases.push((m, |e| matches!(e, NavMeshError::UncoveredTriangle(1))));
+    let mut m = base.clone();
+    m.vertices[3] = [0.0, 400.0, 10.0];
+    cases.push((m, |e| matches!(e, NavMeshError::VertexOutsideGrid(3))));
+    let mut m = base.clone();
+    // Triangle 0's neighbour 1 (edge 1 to 2) shares vertices 0 and 2 with triangle 1: not that edge.
+    m.polys[0].1 = [NONE, 1, NONE];
+    m.polys[1].1 = [NONE, NONE, 0];
+    cases.push((m, |e| matches!(e, NavMeshError::NeighbourNotOnEdge(0, 1))));
+    let mut m = base.clone();
+    m.polys[0].2 = 1;
+    cases.push((m, |e| matches!(e, NavMeshError::BadIndex("triangle data", 1))));
+    let mut m = base.clone();
+    m.cell_indices = vec![1, -1];
+    cases.push((m, |e| matches!(e, NavMeshError::BadIndex("lookup cell index", 1))));
+    let mut m = base.clone();
+    m.cell_indices = vec![0, -2];
+    cases.push((m, |e| matches!(e, NavMeshError::BadIndex("lookup cell index", -2))));
+    let mut m = base.clone();
+    m.grid = (-2, 1);
+    cases.push((m, |e| matches!(e, NavMeshError::BadLookup(_))));
+    let mut m = base.clone();
+    m.grid = (2, -1);
+    cases.push((m, |e| matches!(e, NavMeshError::BadLookup(_))));
+    let mut m = base.clone();
+    m.path_sizes[0].0 = f32::INFINITY;
+    cases.push((m, |e| matches!(e, NavMeshError::NonFinite("path size radius"))));
+    let mut m = base.clone();
+    m.origin[0] = f32::NAN;
+    cases.push((m, |e| matches!(e, NavMeshError::NonFinite("lookup origin"))));
+    let mut m = base.clone();
+    m.cell_size[1] = f32::NEG_INFINITY;
+    cases.push((m, |e| matches!(e, NavMeshError::NonFinite("lookup cell size"))));
+    let mut m = base.clone();
+    m.obstacles = vec![(99, 0)];
+    m.poly_data[0].2[0] = 0;
+    cases.push((m, |e| matches!(e, NavMeshError::Package(_))));
+    let mut m = base.clone();
+    m.poly_data[0].1 = -1;
+    cases.push((m, |e| matches!(e, NavMeshError::BadCount("special moves", -1))));
     for (i, (mesh, expected)) in cases.into_iter().enumerate() {
         let got = read_navmesh(&package(&mesh, "GBXNavMesh"), 1);
         match got {
@@ -171,6 +257,22 @@ fn what_is_not_proven_is_refused() {
     b.add_export(cls, "GBXNavMesh_0", payload);
     let p = Package::from_decoded(Default::default(), "probe".into(), b.build()).unwrap();
     assert!(matches!(read_navmesh(&p, 1), Err(NavMeshError::BadCount("vertices", 1_000_000))));
+    // An oversize nested count (a lookup cell's triangle list) is refused the same way (L1).
+    let mut nested = base.clone();
+    nested.cells = vec![vec![0, 1]];
+    let mut bytes = tail(&nested);
+    // The cell's count sits after the cell-list count, 2 u16 and the obstacle count and trailing bytes from the end.
+    let at = bytes.len() - TRAILING_BYTES - 4 - 2 * 2 - 4;
+    bytes[at..at + 4].copy_from_slice(&500_000i32.to_le_bytes());
+    let mut b = PackageBuilder::new_empty();
+    b.names(["None"]);
+    let mut payload = vec![0u8; PLACED_ACTOR_PREFIX];
+    payload.extend(b.none());
+    payload.extend(bytes);
+    let cls = b.add_import("Core", "Class", 0, "GBXNavMesh");
+    b.add_export(cls, "GBXNavMesh_0", payload);
+    let p = Package::from_decoded(Default::default(), "probe".into(), b.build()).unwrap();
+    assert!(matches!(read_navmesh(&p, 1), Err(NavMeshError::BadCount("lookup cell triangles", 500_000))));
     // Another class.
     assert!(matches!(
         read_navmesh(&package(&base, "Pylon"), 1),

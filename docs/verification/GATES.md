@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**NAV-MESH review r1 (2026-11-17, zuhu desktop, research/rust-navmesh):** AI-assisted (Codex / GPT-6.1 Sol),
+continuing partial Claude Code fixes. `cargo build --workspace --locked -j 2` clean; `cargo test --workspace --locked
+-j 2`: 1,784 passed / 0 failed / 30 ignored (1,782 passed before this fix round). The four synthetic navmesh tests
+pass; the ignored installed-package driver run separately passes 1 / 0, reading all four Sanctuary meshes with the
+stricter structural checks (12,092 / 191 / 148 / 46 triangles, unchanged). `crate_edges_test.py`: 19 tests OK.
+Fresh C++ Release build at `--parallel 2` clean; CTest at `-j 2`: 166/166, 0 failed, 404.61 s. Package verification:
+9 packages, decoded bytes/counts/export fields match, 3,339/3,339 class bodies exact. The optional `rust-parity`
+entry was not registered because the Rust release CLI is absent; the separate `py-rust_parity` entry passed.
+Installed-package checks are automated parsing evidence; no running-game, host or visual validation was performed.
+
 **Rust switch (2026-11-14, branch rust-switch):** on main 08bcf3e plus the switch, zuhu desktop: ctest 160/160 (177 entries before; the 17 removed covered only the UE5 host or its scripts: `anim-import-frames`, `controls-keys`, `movie-hud-switch`, `play-slice-launcher`, `suite-map-tracked` and 12 `py-*`), 189 s with `-j 4`; verify_packages 9 packages, decoded bytes, counts and export fields match, all class bodies exact; `cargo build --workspace --locked` clean and `cargo test --workspace --locked` 4 passed / 0 failed (`ow-host`'s install check; the other crates hold no tests yet); `python tools/decisions_index.py --check --baseline origin/main` OK, 1 added; `viewer_test.py` and `level_test.py` pass; `tools/leak_gate.py --staged` 0 errors (warnings: the `ci.yml` gate change, and `.rs`/`.toml`/`.lock` as file types the gate does not know yet).
 
 **Rust scaffold (2026-11-14, zuhu desktop, feature/rust-w0-scaffold on main 74d7dda, lane W0-SCAFFOLD after review r1):** 22 crates; ctest 161/161 (160 before; the new entry is `py-crate_edges`), 185 s with `-j 4`; verify_packages 9 packages, decoded bytes, counts and export fields match, 3,339/3,339 class bodies exact (the C++ reader, unchanged); `cargo build --workspace --locked` clean, `cargo test --workspace --locked` 28 passed / 0 failed (`ow-core` 17, `ow-cli` 6, `ow-host` 4, `ow-container` 1), `cargo build --release -p ow-cli --locked` clean; `python tests/crate_edges_test.py` 13 tests OK (same numbers after review r2); `python tools/decisions_index.py --check --baseline origin/main` OK, 0 added. The Rust `ow-package` exits 3 (not ported) for every command.
