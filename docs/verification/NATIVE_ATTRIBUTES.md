@@ -383,15 +383,19 @@ context to the object that carries the attributes. Confidence low (the helper's 
 - XP and level: `PlayerExperienceLevel` and `ExperienceCurrentValue` are simple (plain) attributes; adding an
   experience modifier through an effect would apply once, in place.
 
+Currency, Random, AmmoDropWeight and Constraint are now read in
+[NATIVE_ATTR_RESOLVERS.md](NATIVE_ATTR_RESOLVERS.md). Their Off rules await a fresh implementer; the readings remain
+**UNVERIFIED** in the running game.
+
 ## Not read yet
 - Bodies of `AttributeDefinitionMultiContext.StaticGetAttributeValues`, `GetDescriptors`, `GetDescriptorFromContext`, `UObject.GetAttributeModiferDescriptor`
   formatting; `AttributeMultiContextResolver` subclasses.
 - Context resolvers: `ProjectileAttributeContextResolver`, `ActorAttributeContextResolver`, `VehicleAttributeContextResolver`,
   `WillowInventoryManagerAttributeContextResolver`, `WillowInteractiveObjectAttributeContextResolver`,
   `ObjectPropertyContextResolver`, `BestTarget...`, `PopulationMaster...` (their registration could not be resolved by name).
-- Value resolvers: `TargetableAttributeValueResolver`, `StateAttributeResolver`, `RandomAttributeValueResolver`,
-  `NounAttributeValueResolver`, `TimeValueResolver`, `CurrencyAttributeValueResolver`, `LevelNameAttributeValueResolver`,
-  `ShopTimerRateValueResolver`, `AmmoDropWeightAttributeValueResolver`, `AmmoResourceUpgradeAttributeValueResolver`,
+- Value resolvers: `TargetableAttributeValueResolver`, `StateAttributeResolver`,
+  `NounAttributeValueResolver`, `TimeValueResolver`, `LevelNameAttributeValueResolver`,
+  `ShopTimerRateValueResolver`, `AmmoResourceUpgradeAttributeValueResolver`,
   `BlackMarketUpgradeAttributeValueResolver`, `ClassDropWeightValueResolver`, `DamageTypeAttributeValueResolver`, `PlayerStat...`,
   `AIResourceAttributeValueResolver`.
 - `AWillowInventory` interface bodies (slot computed value), `PopulationFactoryBalancedAIPawn.ApplyAttributeStartingValues`,

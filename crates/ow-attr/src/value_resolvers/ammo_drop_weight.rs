@@ -1,8 +1,8 @@
 //! `WillowGame.AmmoDropWeightAttributeValueResolver`: the weight of an ammo or health drop from what the player
 //! holds of a resource (lane FIX-ATTR-RESOLVERS, decision 2026-11-16-73). The class declares `Resource`,
 //! `ResourceThreshold`, `AboveThresholdWeight`, `MinBelowThresholdWeight`, `MaxBelowThresholdWeight` and
-//! `NoPoolWeight` (initialization data but the resource), and no script function: its get is a native no record has
-//! read (NATIVE_ATTRIBUTES.md, "Not read yet"). The death roll's ammo and health pools weigh their entries with it.
+//! `NoPoolWeight` (initialization data but the resource), and no script function: its get is a native read in
+//! NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer. The death roll's ammo and health pools weigh their entries with it.
 //! **Nothing here is a rule of the game**, and nothing is verified in the running game.
 //!
 //! **Parity modes** (architecture R3):
@@ -14,7 +14,8 @@
 //!   above it `AboveThresholdWeight`; below it `Max + (share / threshold) * (Min - Max)` of the two below-threshold
 //!   weights (`Min` when the threshold is not above 0). Single precision, the weights evaluated on the context in
 //!   the C++'s order (no-pool, or threshold, then above, or min then max).
-//! - `ParityMode::Off`: `NotYet { NotRead }` until the native is read (NATIVE_ATTR_RESOLVERS.md).
+//! - `ParityMode::Off`: `NotYet { NotRead }`; the native is read in NATIVE_ATTR_RESOLVERS.md,
+//!   and the Off rule awaits a fresh implementer.
 //!
 //! **Writes** (add, remove, set-base): `NotYet` in both modes.
 
@@ -25,14 +26,19 @@ use crate::api::{AttrError, EngineQuery, EvalCx, Storage, ValueResolver};
 use crate::eval::{evaluate_init, init_data, number, object, parity, property, required};
 use crate::registry::AttributeSystem;
 
-pub(crate) const RECORD: &str =
-    "NATIVE_ATTR_RESOLVERS.md (AmmoDropWeightAttributeValueResolver; NATIVE_ATTRIBUTES.md Not read yet)";
+pub(crate) const RECORD: &str = "NATIVE_ATTR_RESOLVERS.md (AmmoDropWeightAttributeValueResolver)";
 const CPP: &str = "src/progression.cpp (ammoDropWeight)";
 
 pub(crate) struct AmmoDropWeight;
 
 /// The weight `name` of the resolver, evaluated on the context.
-fn weight(sys: &AttributeSystem, cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef, name: &str) -> Result<f32, AttrError> {
+fn weight(
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
+    resolver: ObjRef,
+    context: ObjRef,
+    name: &str,
+) -> Result<f32, AttrError> {
     let v = required(cx, resolver, name)?;
     let data = init_data(cx.world.parts().space, &v)?;
     evaluate_init(sys, &data, Some(context), None, cx)
@@ -46,10 +52,15 @@ fn pool_number(cx: &mut EvalCx<'_>, pool: ObjRef, name: &str) -> Result<f32, Att
     }
 }
 
-fn read(sys: &AttributeSystem, cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
+fn read(
+    sys: &AttributeSystem,
+    cx: &mut EvalCx<'_>,
+    resolver: ObjRef,
+    context: ObjRef,
+) -> Result<f32, AttrError> {
     if parity(cx) != ParityMode::Reference {
         return Err(NotYet::not_read(
-            "AmmoDropWeightAttributeValueResolver in Off mode: its native is not read",
+            "AmmoDropWeightAttributeValueResolver in Off mode: native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer",
             RECORD,
         )
         .into());
@@ -59,21 +70,31 @@ fn read(sys: &AttributeSystem, cx: &mut EvalCx<'_>, resolver: ObjRef, context: O
         None => None,
     };
     let pool = match resource {
-        Some(resource) => cx.world.engine_query(EngineQuery::LocalPlayerPool { resource }, context)?,
+        Some(resource) => cx
+            .world
+            .engine_query(EngineQuery::LocalPlayerPool { resource }, context)?,
         None => None,
     };
     let Some(pool) = pool else {
         return weight(sys, cx, resolver, context, "NoPoolWeight");
     };
     let maximum = pool_number(cx, pool, "MaxValue")?;
-    let share = if maximum > 0.0 { pool_number(cx, pool, "CurrentValue")? / maximum } else { 0.0 };
+    let share = if maximum > 0.0 {
+        pool_number(cx, pool, "CurrentValue")? / maximum
+    } else {
+        0.0
+    };
     let threshold = weight(sys, cx, resolver, context, "ResourceThreshold")?;
     if share >= threshold {
         return weight(sys, cx, resolver, context, "AboveThresholdWeight");
     }
     let low = weight(sys, cx, resolver, context, "MinBelowThresholdWeight")?;
     let high = weight(sys, cx, resolver, context, "MaxBelowThresholdWeight")?;
-    Ok(if threshold > 0.0 { high + (share / threshold) * (low - high) } else { low })
+    Ok(if threshold > 0.0 {
+        high + (share / threshold) * (low - high)
+    } else {
+        low
+    })
 }
 
 impl ValueResolver for AmmoDropWeight {

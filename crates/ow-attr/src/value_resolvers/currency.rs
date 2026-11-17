@@ -1,6 +1,6 @@
 //! `WillowGame.CurrencyAttributeValueResolver`: an amount of currency on hand as an attribute value (lane
 //! FIX-ATTR-RESOLVERS, decision 2026-11-16-73). The class declares `FormOfCurrency` (an `ECurrencyType` byte) and no
-//! script function: its get is a native no record has read (NATIVE_ATTRIBUTES.md, "Not read yet"). The respawn fee
+//! script function: its get is a native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer. The respawn fee
 //! (`GlobalsDefinition.TeleportCost`, 0.07 of the cash) reads it through a controller context. **Nothing here is a
 //! rule of the game**, and nothing is verified in the running game.
 //!
@@ -12,8 +12,8 @@
 //!   slot without `CurrentAmount` is what the C++ refuses ("unsupported currency attribute"), here
 //!   `NotYet { NotRead }` naming it. The live fee rows match this arithmetic (COMBAT_DOWN_RESPAWN.md), which says
 //!   nothing about the native.
-//! - `ParityMode::Off`: `NotYet { NotRead }` until the native is read (the analyst note
-//!   NATIVE_ATTR_RESOLVERS.md says what is open).
+//! - `ParityMode::Off`: `NotYet { NotRead }`; the native is read in NATIVE_ATTR_RESOLVERS.md,
+//!   and the Off rule awaits a fresh implementer.
 //!
 //! **Writes** (add, remove, set-base): `NotYet` in both modes (`NotPorted` in Reference: the C++ has no write).
 
@@ -25,9 +25,8 @@ use crate::api::{AttrError, EvalCx, Storage, ValueResolver};
 use crate::eval::{byte, ensure_loaded, field, number, object, parity, property};
 use crate::registry::AttributeSystem;
 
-/// The record that lists the native as not read, and the analyst note.
-pub(crate) const RECORD: &str =
-    "NATIVE_ATTR_RESOLVERS.md (CurrencyAttributeValueResolver; NATIVE_ATTRIBUTES.md Not read yet)";
+/// The analyst note read by a fresh implementer of the Off rule.
+pub(crate) const RECORD: &str = "NATIVE_ATTR_RESOLVERS.md (CurrencyAttributeValueResolver)";
 /// The C++ stand-in Reference mode follows.
 const CPP: &str = "src/progression.cpp (CurrencyAttributeValueResolver)";
 
@@ -35,7 +34,10 @@ pub(crate) struct Currency;
 
 fn refused(what: impl Into<String>) -> AttrError {
     NotYet::not_read(
-        format!("CurrencyAttributeValueResolver (the C++ stand-in): {}", what.into()),
+        format!(
+            "CurrencyAttributeValueResolver (the C++ stand-in): {}",
+            what.into()
+        ),
         CPP,
     )
     .into()
@@ -43,7 +45,12 @@ fn refused(what: impl Into<String>) -> AttrError {
 
 /// Element `index` of `obj`'s property `name` (a static array, or a scalar at 0); `None` when the class does not
 /// declare it or the index is past its size.
-fn element(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str, index: u32) -> Result<Option<Value>, AttrError> {
+fn element(
+    cx: &mut EvalCx<'_>,
+    obj: ObjRef,
+    name: &str,
+    index: u32,
+) -> Result<Option<Value>, AttrError> {
     ensure_loaded(cx, obj)?;
     let space = cx.world.parts().space;
     let class = space.heap.get(obj)?.class;
@@ -70,12 +77,15 @@ fn reference(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f
         .ok_or_else(|| refused("the resolver declares no FormOfCurrency"))?;
     let at = byte("FormOfCurrency", &form)?;
     if property(cx, info, "Currency")?.is_none() {
-        return Err(refused("no replication info or no Currency table in the context"));
+        return Err(refused(
+            "no replication info or no Currency table in the context",
+        ));
     }
     let entry = element(cx, info, "Currency", u32::from(at))?
         .ok_or_else(|| refused(format!("no currency slot {at}")))?;
     let space = cx.world.parts().space;
-    let amount = field(space, &entry, "CurrentAmount").map_err(|_| refused(format!("slot {at} has no CurrentAmount")))?;
+    let amount = field(space, &entry, "CurrentAmount")
+        .map_err(|_| refused(format!("slot {at} has no CurrentAmount")))?;
     // The C++ `float(amount->number())`: an int amount to single precision.
     number("CurrentAmount", amount)
 }
@@ -83,7 +93,7 @@ fn reference(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f
 fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
     if parity(cx) != ParityMode::Reference {
         return Err(NotYet::not_read(
-            "CurrencyAttributeValueResolver in Off mode: its native is not read",
+            "CurrencyAttributeValueResolver in Off mode: native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer",
             RECORD,
         )
         .into());

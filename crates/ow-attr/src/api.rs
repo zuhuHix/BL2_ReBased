@@ -177,7 +177,8 @@ pub enum EngineQuery {
     GameReplicationInfo,
     /// The local player's pool for the `ResourceDefinition` object `resource`, whatever the source: the C++ stand-in
     /// `CombatSystem::localPlayerPool` (`src/combat_loot.cpp`) that `AmmoDropWeightAttributeValueResolver` reads under
-    /// `ParityMode::Reference` (its native body is not read). `Ok(None)`: no local player or no such pool. Added by
+    /// `ParityMode::Reference` (native read in NATIVE_ATTR_RESOLVERS.md; the Off rule awaits a fresh implementer).
+    /// `Ok(None)`: no local player or no such pool. Added by
     /// FIX-ATTR-RESOLVERS (an additive change, section 7; decision 2026-11-16-73).
     LocalPlayerPool { resource: ObjRef },
 }
