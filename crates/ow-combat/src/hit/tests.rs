@@ -397,9 +397,10 @@ fn a_player_joins_the_party_list_of_the_game_replication_info() {
     assert_eq!(with_state(vm, |s| s.players.len()).unwrap(), 2);
 }
 
+/// Reference: the C++ stand-in (a list of reasons, any hold).
 #[test]
 fn a_pawn_stays_demigod_until_every_hold_is_released() {
-    let (mut run, _dir) = fresh(ParityMode::Off);
+    let (mut run, _dir) = fresh(ParityMode::Reference);
     run.apply("spawn:ToyPawns/Pawn_Toy:4");
     let pawn = run.enemy(0).unwrap().pawn;
     assert!(!demigod(&mut run.world().vm, pawn).unwrap());
@@ -415,6 +416,21 @@ fn a_pawn_stays_demigod_until_every_hold_is_released() {
     run.apply("release:0:Other");
     assert!(!demigod(&mut run.world().vm, pawn).unwrap());
     assert!(!run.failed(), "{:?}", run.errors());
+}
+
+/// Off cannot apply the base list rule to the unread Willow virtual override.
+#[test]
+fn off_refuses_willow_holds_without_mutating_the_list() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    run.apply("spawn:ToyPawns/Pawn_Toy:4");
+    let mind = run.enemy(0).unwrap().mind;
+    let component = object(&mut run.world().vm, mind, "AIComponent").unwrap().unwrap();
+    for step in ["hold:0:Safe", "release:0:Safe"] {
+        run.apply(step);
+    }
+    assert_eq!(run.errors().len(), 2, "{:?}", run.errors());
+    assert!(run.errors().iter().all(|e| e.contains("AI hold virtual overrides")));
+    assert!(access::array(&mut run.world().vm, component, "DemigodHolds").unwrap().is_empty());
 }
 
 #[test]
@@ -532,7 +548,9 @@ fn not_implemented_and_an_undeclared_attribute_follow_the_parity_mode() {
 
 #[test]
 fn a_hit_runs_the_installed_take_damage_and_releases_its_pipeline() {
-    let (mut run, _dir) = fresh(ParityMode::Off);
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
+    let (mut run, _dir) = fresh(ParityMode::Reference);
     run.apply("spawn:ToyPawns/Pawn_Toy:4");
     run.apply("player:8");
     let (pawn, controller) = (

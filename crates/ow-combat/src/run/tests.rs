@@ -98,8 +98,10 @@ fn write_fixture() {
 
 #[test]
 fn a_spawned_pawn_gets_its_health_pool_from_its_class() {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
     let (text, failed) = run_steps(
-        ParityMode::Off,
+        ParityMode::Reference,
         &["spawn:ToyPawns/Pawn_Toy:4", "sethealth:0:0.5"],
     );
     assert!(!failed, "{text}");
@@ -235,8 +237,10 @@ fn a_spawn_with_a_pawn_balance_the_package_lacks_fails_before_the_pawn_is_listed
 
 #[test]
 fn a_repeated_row_takes_a_suffix_and_repeated_kills_a_letter() {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
     let (text, failed) = run_steps(
-        ParityMode::Off,
+        ParityMode::Reference,
         &[
             "spawn:ToyPawns/Pawn_Doomed:5",
             "spawn:ToyPawns/Pawn_Doomed:5",
@@ -261,8 +265,10 @@ fn a_repeated_row_takes_a_suffix_and_repeated_kills_a_letter() {
 
 #[test]
 fn the_kill_tag_names_the_kill_row() {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
     let (text, _) = run_steps(
-        ParityMode::Off,
+        ParityMode::Reference,
         &[
             "spawn:ToyPawns/Pawn_Doomed:5",
             "player:4",
@@ -278,8 +284,10 @@ fn the_kill_tag_names_the_kill_row() {
 
 #[test]
 fn a_step_naming_a_pawn_reports_its_state_and_the_others_do_not() {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
     let (text, _) = run_steps(
-        ParityMode::Off,
+        ParityMode::Reference,
         &["spawn:ToyPawns/Pawn_Toy:4", "base:0", "sethealth:0:5"],
     );
     let base = &text[text.find("\"step\":\"base:0\"").unwrap()
@@ -1218,7 +1226,9 @@ fn maya_builds_the_cxx_stand_in_pool_in_reference_and_the_game_s_pool_in_off() {
 
 #[test]
 fn a_bridged_kill_credits_what_the_bridge_pool_gained() {
-    for mode in [ParityMode::Off, ParityMode::Reference] {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
+    for mode in [ParityMode::Reference] {
         let (mut run, fake, _dir) = bridged(mode, false);
         for step in ["spawn:ToyPawns/Pawn_Doomed:5", "maya:4", "players:1", "hit:0:10::Bullet"] {
             run.apply(step);
@@ -1310,7 +1320,9 @@ fn a_bridged_run_replays_to_the_same_report_in_both_modes() {
 
 #[test]
 fn a_bridged_hit_or_swing_that_fails_keeps_its_rows_with_zeros_as_the_cxx_guard() {
-    for mode in [ParityMode::Off, ParityMode::Reference] {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
+    for mode in [ParityMode::Reference] {
         let (mut run, _fake, _dir) = bridged(mode, false);
         for step in [
             "spawn:ToyPawns/Pawn_Toy:4",
@@ -1338,7 +1350,7 @@ fn a_bridged_hit_or_swing_that_fails_keeps_its_rows_with_zeros_as_the_cxx_guard(
     }
     // A swing at a player pawn that has no TakeDamage (a controller object stands in for it): the arrival row is
     // written as 0, no ratio row, the step's error is the guard's.
-    for mode in [ParityMode::Off, ParityMode::Reference] {
+    for mode in [ParityMode::Reference] {
         let (mut run, _fake, _dir) =
             bridged_with(mode, false, "WillowGame.WillowPlayerReplicationInfo");
         run.apply("spawn:ToyPawns/Pawn_Toy:4");

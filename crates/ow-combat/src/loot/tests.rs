@@ -195,12 +195,12 @@ fn off_mode_makes_no_stand_in_inventory_the_pool_native_is_not_yet_before_any_dr
 }
 
 #[test]
-fn off_mode_runs_the_installed_drop_loot_script_and_records_no_roll() {
+fn off_mode_stops_before_loot_at_unread_willow_hold_virtual() {
     let steps = ["seed:3", "player:8", "spawn:ToyPawns/Pawn_Loot:4:6:Balance_Toy", "hit:0:10::Bullet"];
     let (text, failed) = run_steps(ParityMode::Off, &steps);
-    assert!(!failed, "{text}");
-    // The toy script is empty: it ran (the census lists it), and no roll is recorded or reported.
-    assert!(text.contains("WillowGame.WillowPawn.DropLootOnDeath"), "{text}");
+    assert!(failed && text.contains("AI hold virtual overrides"), "{text}");
+    // Off stops before the loot script at the unread Willow hold virtual.
+    assert!(!text.contains("WillowGame.WillowPawn.DropLootOnDeath"), "{text}");
     assert!(!text.contains("\"loot\":"), "{text}");
     assert!(!text.contains("DropLootOnDeath: item stage"), "{text}");
     let (text, failed) = run_steps(ParityMode::Reference, &steps);
@@ -306,7 +306,8 @@ fn the_setup_logs_the_cxx_event_line() {
 fn a_balance_with_no_playthrough_entry_gets_no_list_and_answers_false() {
     for mode in [ParityMode::Reference, ParityMode::Off] {
         let (text, failed) = run_steps(mode, &["spawn:ToyPawns/Pawn_Loot:4:6:Balance_None"]);
-        assert!(!failed, "{text}");
+        assert_eq!(failed, mode == ParityMode::Off, "{text}");
+        if failed { assert!(text.contains("AI hold virtual overrides"), "{text}"); }
         assert!(setup_of(&text).contains("\"pools\":[]"), "{text}");
     }
 }

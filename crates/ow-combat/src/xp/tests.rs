@@ -13,7 +13,8 @@ fn credits(steps: &[&str]) -> Vec<String> {
     let mut all = vec!["spawn:ToyPawns/Pawn_Doomed:5"];
     all.extend_from_slice(steps);
     all.push("hit:0:10::Bullet");
-    let (text, failed) = run_steps(ParityMode::Off, &all);
+    // The kill script reaches the C++ Willow hold stand-in; Off refuses that unread virtual.
+    let (text, failed) = run_steps(ParityMode::Reference, &all);
     assert!(!failed, "{text}");
     text.match_indices("AwardCombatExperienceToParty player_level=")
         .map(|(at, _)| {
@@ -61,7 +62,7 @@ fn a_player_count_outside_the_table_is_bonus_zero_weight_one() {
         credits(&["player:4"]),
         ["AwardCombatExperienceToParty player_level=4 victim_level=5 ExpEarn(45, 1, 1)"]
     );
-    let (mut run, _dir) = fresh(ParityMode::Off);
+    let (mut run, _dir) = fresh(ParityMode::Reference);
     let vm = &mut run.world().vm;
     let g = crate::hit::globals(vm).unwrap();
     assert_eq!(
@@ -79,7 +80,7 @@ fn a_player_count_outside_the_table_is_bonus_zero_weight_one() {
 
 #[test]
 fn the_award_is_recorded_with_the_victims_level_and_each_credit() {
-    let (mut run, _dir) = fresh(ParityMode::Off);
+    let (mut run, _dir) = fresh(ParityMode::Reference);
     run.apply("spawn:ToyPawns/Pawn_Doomed:5");
     run.apply("player:4");
     run.apply("hit:0:10::Bullet");

@@ -59,7 +59,7 @@ fn the_damage_source_multiplies_the_instigators_attribute() {
     );
     assert!(!failed, "{text}");
     assert!(text.contains("\"hit.Armored.L4.1.applied\":60"), "{text}");
-    // Off mode: the victim's mind does not declare ReceivedBulletDamageModifier, so the stage is NotYet.
+    // Off stops earlier at the unread Willow hold virtual, before the attribute stage.
     let (text, failed) = applied(
         ParityMode::Off,
         &[
@@ -71,7 +71,7 @@ fn the_damage_source_multiplies_the_instigators_attribute() {
     assert!(failed);
     assert!(
         text.contains(
-            "WillowMind.ReceivedBulletDamageModifier: the VM object's class does not declare it"
+            "AI hold virtual overrides"
         ),
         "{text}"
     );
@@ -288,7 +288,7 @@ fn a_stage_left_out_is_not_yet_in_off_mode_and_a_note_in_reference_mode() {
 }
 
 #[test]
-fn an_ai_bullet_is_not_yet_at_the_weapon_scales_in_off_mode() {
+fn an_ai_bullet_refuses_unread_willow_hold_before_weapon_scales() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let (mut run, _dir) = fresh(mode);
         run.apply("spawn:ToyPawns/Pawn_Armored:4");
@@ -300,8 +300,8 @@ fn an_ai_bullet_is_not_yet_at_the_weapon_scales_in_off_mode() {
         let r = crate::hit::hit_with_type(vm, victim, Some(attacker), 100.0, None, Some(bullet));
         match (mode, r) {
             (ParityMode::Off, Err(VmError::NotYet(n))) => {
-                assert_eq!(n.missing, Missing::NotPorted);
-                assert!(n.to_string().contains("the AI weapon scales"), "{n}");
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.to_string().contains("AI hold virtual overrides"), "{n}");
             }
             (ParityMode::Reference, Ok(r)) => assert!(
                 r.events.iter().any(|e| e

@@ -1188,7 +1188,13 @@ fn the_ai_hold_by_mode() {
         let seen = hold_seen(env.vm());
         env.spawn();
         let s = env.slice.clone();
-        assert!(s.hit_dummy(env.vm(), false).unwrap(), "{mode:?}");
+        let result = s.hit_dummy(env.vm(), false);
+        if mode == ParityMode::Off && pawn {
+            assert!(matches!(result.unwrap_err().not_yet().map(|n| &n.missing), Some(Missing::NotRead)));
+            assert!(seen.borrow().is_empty());
+            continue;
+        }
+        assert!(result.unwrap(), "{mode:?}");
         assert!(env.slice.dummy_trace().unwrap().iter().any(|l| l.ends_with("Idle_Hold")));
         let expected: Vec<ObjRef> = match (mode, env.slice.dummy_pawn()) {
             (ParityMode::Off, Some(p)) => vec![p],
