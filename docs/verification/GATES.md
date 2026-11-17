@@ -232,3 +232,11 @@ on Windows, so they run there. `serve_paths` skips nothing: it makes a directory
 that started processes then, `run_limit` (about 40 PowerShell runs), took 11.2 s on CI (PR #219, run 43062806521) and 15.4 s here, well under
 its 120 s timeout. On that CI run (Python 3.12) the new entries took 66 s of 172 s with LZO on. `weapon_reload_library`
 skips its junction case when `mklink /J` fails; on CI that skip fails the job.
+
+**H-PAWNS review correction (2026-11-17, desktop, PR #378 after 7c7c387):** AI-assisted
+(Codex/GPT-6.1 Sol). An empty static scene now still invokes the attached-world draw callback.
+The invented offscreen GPU regression checks exactly one callback with and without static instances:
+old code 0 passed / 1 failed; correction 1 passed / 0 failed, 191 filtered out, 0.46 s.
+The test is ignored by default because it needs an adapter; it was explicitly run locally.
+No new window, real-game session or visual/gameplay parity claim. Prior reported workspace and C++
+results were not rerun for this one-line rendering correction; final-head branch CI remains required.
