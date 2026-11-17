@@ -13,7 +13,9 @@
 //! evaluated from `BaseMaxValue` with the controller as the source, the pawn's `HealthPool` reference set to slot 0).
 //! That is a stand-in for the game's class-defaults routine; the Rust bridge does not build it
 //! (`MissionScript::set_player_health` is `NotYet`). Under architecture R3 it is reproduced here in
-//! `ParityMode::Reference` only; in `ParityMode::Off` the `maya` and `mayahealth` steps answer `NotYet { NotPorted }`.
+//! `ParityMode::Reference` only. In `ParityMode::Off` the game's own route runs instead (decision 2026-11-16-82): the
+//! controller's script `ApplyCharacterClassDefaults` on the VM, which creates the pool through `CreatePool`
+//! ([`HealthPool::ensure_off`]); it stops where that route meets an unread native (`ResetIdleTimer`).
 //!
 //! **Script errors.** The C++ runs a bridged hit, swing and each bleed frame inside the bridge's guard, which records
 //! the error (`mission script: <text>`) and goes on; the run lists those under the step. The same here: a bleed frame's
@@ -27,7 +29,7 @@ use std::fmt::Write as _;
 
 use ow_attr::api::EvalCx;
 use ow_core::fmt::json_quote;
-use ow_core::{NotYet, ParityMode};
+use ow_core::ParityMode;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -35,10 +37,6 @@ use ow_vm::error::VmError;
 use ow_vm::interp::instantiate_from_defaults;
 
 use crate::hit::access::{error, error_text, get, integer, number, object, set, set_field, to_f32};
-
-/// The record of the bridge half of the run.
-pub const RECORD: &str =
-    "src/combat_run.cpp (maya, tick, cash, bleed, mayahealth); COMBAT_GOLDEN_TRACE.md section D";
 
 /// The injured special move's end (`SwitchToSidearm`), seconds after the injury.
 pub const SPECIAL_MOVE_END: f64 = 2.28;
@@ -104,24 +102,14 @@ pub(crate) struct HealthPool {
     failed: bool,
 }
 
-/// The refusal of the stand-in in `Off` mode.
-fn pool_not_ported() -> VmError {
-    NotYet::not_ported(
-        "the player's health pool in --combat-run: the C++ bridge builds it by hand (a stand-in for the class-defaults \
-         routine; ensureHealthPool / seedHealthPool), which only ParityMode::Reference reproduces",
-        RECORD,
-    )
-    .into()
-}
-
 impl HealthPool {
     /// C++ `ensureHealthPool`: builds the manager and the pool once; false (and no pool, ever) when the data lacks a
     /// part, as the C++ gives up quietly. As the C++ catch, any error of the build other than a `NotYet` is false,
     /// with the manager and the pool cleared (review r1 of PR #356); a `NotYet` is passed on, also cleared. Then the
-    /// pawn is linked. `Off` mode: `NotYet`.
+    /// pawn is linked. `Off` mode uses the installed script route below.
     fn ensure(&mut self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<bool, VmError> {
         if vm.parity != ParityMode::Reference {
-            return Err(pool_not_ported());
+            return self.ensure_off(vm, bridge);
         }
         if self.pool.is_some() {
             return Ok(true);
@@ -147,6 +135,54 @@ impl HealthPool {
                 }
             }
         }
+    }
+
+    /// `ParityMode::Off` (decision 2026-11-16-82): the game's own route instead of the C++ stand-in. The controller's
+    /// installed script `ApplyCharacterClassDefaults(class, pawn)` runs on the VM: it makes the controller's manager
+    /// and creates the health pool through `Pawn.SetHealthResourcePoolDefinition` and `CreatePool`
+    /// (NATIVE_COMBAT_GROUNDWORK.md sections 1.8 and 1.10), whose own script sets the pool's starting values. The pool
+    /// kept is the one the pawn's `HealthPool` reference names afterwards. A `NotYet` from inside (the pool script's
+    /// `ResetIdleTimer`, NATIVE_RESOURCE_POOL_IDLE.md, until an implementer binds it) is passed on; no class, or no
+    /// pool afterwards, is false, as the stand-in gives up.
+    fn ensure_off(&mut self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<bool, VmError> {
+        if self.pool.is_some() {
+            return Ok(true);
+        }
+        if self.failed {
+            return Ok(false);
+        }
+        self.failed = true;
+        let Some(class) = bridge.player_class(vm)? else {
+            return Ok(false);
+        };
+        let controller = bridge.player_controller();
+        let pawn = bridge.player_pawn(vm)?;
+        // The arguments by parameter name (the pawn is `P`, the class the other one), not by position.
+        let class_id = vm.space.heap.get(controller)?.class;
+        let state = vm.space.heap.get(controller)?.state;
+        let Some(f) = vm.find_method(class_id, "ApplyCharacterClassDefaults", state)? else {
+            return Err(error("combat-run: the controller has no ApplyCharacterClassDefaults"));
+        };
+        let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
+        let mut args = Vec::with_capacity(params.len());
+        for p in &params {
+            let name = vm.space.names.text(p.name).into_owned();
+            args.push(if name.eq_ignore_ascii_case("P") {
+                Value::Object(Some(pawn))
+            } else if args.len() < 2 {
+                Value::Object(Some(class))
+            } else {
+                vm.space.classes.zero_value(&p.kind)
+            });
+        }
+        vm.call(f, Some(controller), args)?;
+        let Some(pool) = ow_world::pools::health_pool(&vm.space, pawn)? else {
+            return Ok(false);
+        };
+        self.manager = object(vm, controller, "ResourcePoolManager")?;
+        self.pool = Some(pool);
+        self.failed = false;
+        Ok(true)
     }
 
     /// Whether no pool is kept (tests).
@@ -224,9 +260,13 @@ impl HealthPool {
     }
 
     /// C++ `linkPlayerHealth`, which the C++ bridge runs on every fetch of the player's pawn (`pawnFor`): the pawn's
-    /// `HealthPool` reference to slot 0 of the manager, the pool's own GUID. Nothing without a pool (so nothing in
-    /// `Off` mode). As the C++ catch, an error other than a `NotYet` leaves the pawn as it is.
+    /// `HealthPool` reference to slot 0 of the manager, the pool's own GUID. Off keeps the script-written reference.
+    /// As the C++ catch, an error other than a `NotYet` leaves the pawn as it is.
     pub(crate) fn relink(&self, vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
+        // Off: the pawn's reference is the one `SetHealthResourcePoolDefinition` stored; nothing to relink.
+        if vm.parity != ParityMode::Reference {
+            return Ok(());
+        }
         match self.link(vm, pawn) {
             Err(VmError::NotYet(n)) => Err(VmError::NotYet(n)),
             _ => Ok(()),
@@ -267,6 +307,19 @@ impl HealthPool {
         let Some(pool) = self.pool else {
             return;
         };
+        // Off: the pool's own script set its starting values; a given share is set through `Pawn.SetHealth`
+        // (NATIVE_COMBAT_GROUNDWORK.md section 2), not the stand-in's seed.
+        if vm.parity != ParityMode::Reference {
+            if current >= 0.0 {
+                let set = bridge
+                    .player_pawn(vm)
+                    .and_then(|pawn| ow_world::pools::set_health(vm, pawn, current));
+                if let Err(e) = set {
+                    errors.push(format!("mission script: {}", error_text(&e)));
+                }
+            }
+            return;
+        }
         if let Err(e) = seed_pool(vm, pool, bridge.player_controller(), current) {
             errors.push(format!("mission script: {}", error_text(&e)));
         }

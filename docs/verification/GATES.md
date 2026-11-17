@@ -20,6 +20,16 @@ Fresh C++ Release build at `--parallel 2` clean; CTest at `-j 2`: 166/166, 0 fai
 entry was not registered because the Rust release CLI is absent; the separate `py-rust_parity` entry passed.
 Installed-package checks are automated parsing evidence; no running-game, host or visual validation was performed.
 
+**FIX-POOLS-OFF recovery (2026-11-17, pc-hummer, main 03df52d9 plus this lane):** AI-assisted
+(Claude Code; recovery: Codex / GPT-6.1 Sol). Workspace build passes (`--locked -j 2`), workspace tests
+1789 passed / 0 failed / 35 ignored. Recovered prior ctest: 173/173 (C++ unchanged); reader verification:
+9 packages, 3,339/3,339 class bodies exact (recovered Rust log and fresh C++ reader run). Fire checker self-test
+passes and 33/33 installed rules hold; combat checker self-test passes; crate edges 19 tests OK. Legacy Python
+combat suite: 3 identical failures on the saved main binary and this lane in Reference; not a pass. Saved installed
+combat trace checker: 8 PASS / 0 FAIL / 51 MISSING of 59, 43 loot rows not listed. Off CLI combat reaches unbound
+`ResourcePoolManager.ShutDown`; isolated slice still stops at #370's missing template holder. No host or real-game
+validation in this recovery. Decision 2026-11-16-82; full logs under ignored `local/p2/fix-pools-off/`.
+
 **Rust switch (2026-11-14, branch rust-switch):** on main 08bcf3e plus the switch, zuhu desktop: ctest 160/160 (177 entries before; the 17 removed covered only the UE5 host or its scripts: `anim-import-frames`, `controls-keys`, `movie-hud-switch`, `play-slice-launcher`, `suite-map-tracked` and 12 `py-*`), 189 s with `-j 4`; verify_packages 9 packages, decoded bytes, counts and export fields match, all class bodies exact; `cargo build --workspace --locked` clean and `cargo test --workspace --locked` 4 passed / 0 failed (`ow-host`'s install check; the other crates hold no tests yet); `python tools/decisions_index.py --check --baseline origin/main` OK, 1 added; `viewer_test.py` and `level_test.py` pass; `tools/leak_gate.py --staged` 0 errors (warnings: the `ci.yml` gate change, and `.rs`/`.toml`/`.lock` as file types the gate does not know yet).
 
 **Rust scaffold (2026-11-14, zuhu desktop, feature/rust-w0-scaffold on main 74d7dda, lane W0-SCAFFOLD after review r1):** 22 crates; ctest 161/161 (160 before; the new entry is `py-crate_edges`), 185 s with `-j 4`; verify_packages 9 packages, decoded bytes, counts and export fields match, 3,339/3,339 class bodies exact (the C++ reader, unchanged); `cargo build --workspace --locked` clean, `cargo test --workspace --locked` 28 passed / 0 failed (`ow-core` 17, `ow-cli` 6, `ow-host` 4, `ow-container` 1), `cargo build --release -p ow-cli --locked` clean; `python tests/crate_edges_test.py` 13 tests OK (same numbers after review r2); `python tools/decisions_index.py --check --baseline origin/main` OK, 0 added. The Rust `ow-package` exits 3 (not ported) for every command.

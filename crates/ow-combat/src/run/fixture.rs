@@ -621,9 +621,11 @@ pub fn willow_game() -> Vec<u8> {
     let controller = w.import_full("Class", engine, "Controller");
     let actor = w.import_full("Class", engine, "Actor");
     let set_health = w.import_full("Function", pawn, "SetHealth");
+    let set_health_definition = w.import_full("Function", pawn, "SetHealthResourcePoolDefinition");
+    let manager_property = w.import_full("ObjectProperty", controller, "ResourcePoolManager");
     let notify = w.import_full("Function", pawn, "NotifyTakeHit");
     let ai_class = w.cls("AIClassDefinition", 0);
-    w.prop("Object", ai_class, "HealthPoolDefinition", 0, 0);
+    let health_definition_property = w.prop("Object", ai_class, "HealthPoolDefinition", 0, 0);
     w.prop("Object", ai_class, "AIDef", 0, 0);
     let starting = w.strukt(ai_class, "AttributeStartingValue");
     w.prop("Object", starting, "Attribute", 0, 0);
@@ -1144,6 +1146,40 @@ pub fn willow_game() -> Vec<u8> {
     w.prop("Object", cause, "DamageTypeDefinition", 0, 0);
     let player_controller = w.cls("WillowPlayerController", controller);
     w.prop("Object", player_controller, "PlayerReplicationInfo", 0, 0);
+    // The game's route to the player's health pool, cut to its health step (NATIVE_COMBAT_GROUNDWORK.md section
+    // 1.10): ApplyCharacterClassDefaults(CharClass, P) { P.SetHealthResourcePoolDefinition(ResourcePoolManager,
+    // CharClass.HealthPoolDefinition); }
+    w.function(
+        player_controller,
+        "ApplyCharacterClassDefaults",
+        &[P("Object", "CharClass", 0, 0), P("Object", "P", 0, 0)],
+        None,
+        SCRIPT,
+        |ids| {
+            let mut a = Asm::new();
+            a.stmt().context(
+                |a| {
+                    a.local(ids("P"));
+                },
+                |a| {
+                    a.final_function(set_health_definition, |a| {
+                        a.instance(manager_property);
+                        a.context(
+                            |a| {
+                                a.local(ids("CharClass"));
+                            },
+                            |a| {
+                                a.instance(health_definition_property);
+                            },
+                        );
+                    });
+                },
+            );
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        },
+    );
     let last_exp = w.prop("Int", player_controller, "LastExp", 0, 0);
     // The attribute the armored pawn's stage 3 reads on a bullet hit by the player (an invented value through `attr`).
     w.prop(
