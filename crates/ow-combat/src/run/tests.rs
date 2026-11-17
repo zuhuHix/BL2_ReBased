@@ -1102,6 +1102,8 @@ fn bridged_with(mode: ParityMode, class: bool, pawn_class: &str) -> (Run, Rc<Fak
     set(vm, gri, "PRIArray", Value::array(vec![Value::Object(Some(pri))])).unwrap();
     let pawn = make(vm, pawn_class);
     set(vm, pawn, "Controller", Value::Object(Some(controller))).unwrap();
+    // The server's pawn, as the game's is when its class defaults are applied (the Off route's pool natives need it).
+    set(vm, pawn, "Role", Value::Byte(authority)).unwrap();
     let pool = Rc::new(std::cell::Cell::new(0.0f32));
     let earned = Rc::clone(&pool);
     vm.override_script(
@@ -1171,7 +1173,7 @@ fn the_bridge_steps_without_the_bridge_answer_the_cxx_texts() {
 }
 
 #[test]
-fn maya_sets_the_bridge_player_and_builds_the_cxx_health_pool_only_in_reference_mode() {
+fn maya_builds_the_cxx_stand_in_pool_in_reference_and_the_game_s_pool_in_off() {
     // Reference: the C++ stand-in pool (manager on the controller, the class's definition, the pawn's reference to
     // slot 0); the toy definition has no BaseMaxValue, so the seed is the C++ script error, and the step goes on.
     let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
@@ -1195,14 +1197,23 @@ fn maya_sets_the_bridge_player_and_builds_the_cxx_health_pool_only_in_reference_
     let game = object(vm, world, "Game").unwrap().unwrap();
     assert_eq!(get(vm, game, "EffectiveNumPlayers").unwrap(), Some(Value::Int(1)));
 
-    // Off: the experience is set, then the stand-in pool is NotYet; nothing is built.
+    // Off (decision 2026-11-16-82): the game's route. The controller's ApplyCharacterClassDefaults runs, the pawn's
+    // SetHealthResourcePoolDefinition makes the manager and the pool through CreatePool, and the pool's own script
+    // sets its values (the toy's InitializeAuthoritative: the definition's StartingValue as maximum and current).
+    // No stand-in seed, so no BaseMaxValue error.
     let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
     run.apply("maya:4");
     assert_eq!(*fake.set.borrow(), [(4, 0)]);
-    assert_eq!(run.errors().len(), 1);
-    assert!(run.errors()[0].contains("only ParityMode::Reference reproduces"), "{:?}", run.errors());
+    assert_eq!(run.errors(), Vec::<String>::new());
     let vm = &mut run.world().vm;
-    assert_eq!(object(vm, fake.controller, "ResourcePoolManager").unwrap(), None);
+    let manager = object(vm, fake.controller, "ResourcePoolManager").unwrap().expect("a manager");
+    let pool = ow_world::pools::health_pool(&vm.space, fake.pawn).unwrap().expect("the pawn's health pool");
+    let slots = ow_world::pools::pools_of(&vm.space, manager).unwrap();
+    assert_eq!(slots, [(0, pool)], "the pool is the manager's only one");
+    assert_eq!(object(vm, pool, "AssociatedProvider").unwrap(), Some(fake.controller));
+    let max = ow_world::pools::get_max_health(&vm.space, fake.pawn).unwrap();
+    assert_eq!(get(vm, fake.pawn, "HealthMaxVar").unwrap(), Some(Value::Float(max)));
+    assert_eq!(ow_world::pools::get_health(&vm.space, fake.pawn).unwrap(), max);
 }
 
 #[test]
@@ -1481,7 +1492,7 @@ fn the_bleed_step_plays_the_injured_state_at_the_cxx_delays() {
 }
 
 #[test]
-fn mayahealth_seeds_the_stand_in_pool_in_reference_and_is_not_yet_in_off() {
+fn mayahealth_seeds_the_stand_in_pool_in_reference_and_sets_the_game_s_pool_in_off() {
     let (mut run, _fake, _dir) = bridged(ParityMode::Reference, true);
     run.apply("maya:4");
     run.apply("mayahealth:0.5");
@@ -1490,15 +1501,16 @@ fn mayahealth_seeds_the_stand_in_pool_in_reference_and_is_not_yet_in_off() {
         errors,
         ["mayahealth:0.5: mission script: mission script bridge: the health pool definition has no BaseMaxValue"]
     );
-    let (mut run, _fake, _dir) = bridged(ParityMode::Off, true);
+    // Off (decision 2026-11-16-82): mayahealth makes the pool by the game's route, then sets the share of the
+    // maximum through Pawn.SetHealth.
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    run.apply("maya:4");
     run.apply("mayahealth:0.5");
-    assert_eq!(run.errors().len(), 1);
-    assert!(
-        run.errors()[0].starts_with("mayahealth:0.5: the player's health pool in --combat-run")
-            && run.errors()[0].contains("only ParityMode::Reference reproduces"),
-        "{:?}",
-        run.errors()
-    );
+    assert_eq!(run.errors(), Vec::<String>::new());
+    let vm = &mut run.world().vm;
+    let max = ow_world::pools::get_max_health(&vm.space, fake.pawn).unwrap();
+    assert!(max > 0.0, "{max}");
+    assert_eq!(ow_world::pools::get_health(&vm.space, fake.pawn).unwrap(), max * 0.5);
 }
 
 #[test]
@@ -1515,12 +1527,15 @@ fn the_maya_step_counts_the_player_before_the_pool_and_relinks_the_pawn_on_each_
     let vm = &mut run.world().vm;
     let reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
     assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), Some(manager));
-    // Off: no pool, nothing linked, and the count is set all the same.
+    // Off (decision 2026-11-16-82): the pawn's reference is the one the game's route stored (the controller's
+    // manager), not relinked by hand; the count is set all the same.
     let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
     run.apply("maya:4");
     let vm = &mut run.world().vm;
+    let manager = object(vm, fake.controller, "ResourcePoolManager").unwrap();
     let reference = get(vm, fake.pawn, "HealthPool").unwrap().unwrap();
-    assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), None);
+    assert!(manager.is_some());
+    assert_eq!(field(vm, &reference, "PoolManager").as_ref().and_then(object_of), manager);
     let world = with_state(vm, |s| s.world).unwrap().unwrap();
     let game = object(vm, world, "Game").unwrap().unwrap();
     assert_eq!(get(vm, game, "EffectiveNumPlayers").unwrap(), Some(Value::Int(1)));
