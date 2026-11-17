@@ -444,3 +444,84 @@ fn constraint_off_clamps_as_the_stand_in() {
         assert_eq!(value(&mut fx, a, source).unwrap(), want, "{v} {min:?} {max:?}");
     }
 }
+
+/// A lower bound that queries the same random resolver on a different context, once.
+/// This is a synthetic callback, not a newly inferred native rule.
+struct ReentrantBound {
+    random: ObjRef,
+    outer: ObjRef,
+    nested: ObjRef,
+}
+
+impl crate::api::ValueResolver for ReentrantBound {
+    fn value(
+        &self,
+        sys: &crate::registry::AttributeSystem,
+        _resolver: ObjRef,
+        context: ObjRef,
+        _previous: f32,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        if context == self.outer {
+            let space = cx.world.parts().space;
+            let class = space.heap.get(self.random)?.class;
+            let p = space.prop(class, "SavedRandomValues").unwrap();
+            assert!(crate::eval::elements("SavedRandomValues", space.read(self.random, PropAddr::scalar(p))?)?.is_empty(),
+                "expired entries must be removed before the lower bound runs");
+            return crate::api::ValueResolver::value(&super::random::Random, sys, self.random, self.nested, 0.0, cx);
+        }
+        Ok(0.0)
+    }
+}
+
+#[test]
+fn random_off_preserves_a_context_saved_by_reentrant_bound_evaluation() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    mode(&mut fx, ParityMode::Off);
+    let outer = fx.obj(c.pool, "Toy_Outer", vec![]);
+    let nested = fx.obj(c.pool, "Toy_Nested", vec![]);
+    let expired = fx.obj(c.pool, "Toy_Expired", vec![]);
+    let (a, r) = random_kept(&mut fx, &c, 5.0);
+    fx.w.clock = Some(Some(0.0));
+    value(&mut fx, a, expired).unwrap();
+    fx.w.clock = Some(Some(10.0));
+    let bound_class = fx.w.space.classes.define("Test.ReentrantBound", Some(fx.c.object), vec![]).unwrap();
+    let bound = fx.obj(bound_class, "Toy_Bound", vec![]);
+    let bound_attr = attr(&mut fx, bound);
+    let lower = fx.of_attr(bound_attr);
+    let p = fx.w.space.prop(c.random, "LowerBound").unwrap();
+    fx.w.space.write(r, PropAddr::scalar(p), lower).unwrap();
+    let sys = system().with_value_resolver("Test.ReentrantBound", ReentrantBound { random: r, outer, nested }).unwrap();
+    let got = sys.value_of(a, Some(outer), None, &mut EvalCx::new(&mut fx.w)).unwrap().unwrap().value;
+    let rows = saved(&mut fx, r);
+    assert_eq!(rows.len(), 2, "nested and outer entries both survive");
+    assert_eq!(rows[0].0, "Toy_Nested");
+    assert_eq!(rows[1], ("Toy_Outer".into(), got, 15.0));
+    assert_eq!(rows[0].2, 15.0);
+    let draws = fx.w.streams.len();
+    for (context, want) in [(nested, rows[0].1), (outer, got)] {
+        assert_eq!(sys.value_of(a, Some(context), None, &mut EvalCx::new(&mut fx.w)).unwrap().unwrap().value, want);
+    }
+    assert_eq!(fx.w.streams.len(), draws, "both contexts reuse their saved values");
+    assert_eq!(draws, 3, "one expired, one nested and one outer draw");
+}
+
+#[test]
+fn constraint_off_preserves_nan_while_reference_keeps_its_stand_in() {
+    for parity in [ParityMode::Off, ParityMode::Reference] {
+        let mut fx = Fx::new();
+        let c = classes(&mut fx);
+        mode(&mut fx, parity);
+        let source = fx.obj(c.pool, "Toy_Source", vec![]);
+        for (min, max, reference) in [(Some(2.0), None, 2.0), (None, Some(4.0), 4.0), (Some(2.0), Some(4.0), 2.0)] {
+            let a = clamped(&mut fx, f32::NAN, min, max);
+            let got = value(&mut fx, a, source).unwrap();
+            if parity == ParityMode::Off {
+                assert!(got.is_nan(), "unordered comparisons leave NaN unchanged");
+            } else {
+                assert_eq!(got, reference);
+            }
+        }
+    }
+}

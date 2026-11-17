@@ -224,3 +224,25 @@ fn a_player_pawn_prepared_for_the_down_state_has_the_world_and_its_info() {
         info
     );
 }
+
+#[test]
+fn attribute_currency_bridge_refuses_unrepresented_keys_only_in_off_mode() {
+    use ow_attr::api::{AttrError, AttrWorld};
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _dir) = fresh(mode);
+        let vm = &mut run.world().vm;
+        let info = make(vm, "WillowGame.WillowPlayerReplicationInfo");
+        // The Reference stand-in remains zero even if the synthetic currency slot is nonzero.
+        set_currency_on_hand(vm, info, 3, 17).unwrap();
+        assert_eq!(currency_on_hand(vm, info, 3).unwrap(), 0);
+        let got = AttrWorld::currency_on_hand(vm, info, 3);
+        if mode == ParityMode::Off {
+            assert!(matches!(got, Err(AttrError::NotYet(n)) if n.missing == ow_core::Missing::NotRead));
+        } else {
+            assert_eq!(got.unwrap(), 0);
+        }
+        set_currency_on_hand(vm, info, 0, 29).unwrap();
+        assert_eq!(AttrWorld::currency_on_hand(vm, info, 0).unwrap(), 29);
+        assert_eq!(AttrWorld::currency_on_hand(vm, info, 13).unwrap(), 0);
+    }
+}

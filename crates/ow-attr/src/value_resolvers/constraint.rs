@@ -12,7 +12,7 @@
 //! - `ParityMode::Off`, the native as NATIVE_ATTR_RESOLVERS.md section 5 reads it (lane FIX-ATTR-RESOLVERS-OFF, the
 //!   fresh implementer, decision 2026-11-16-80): the same clamp (the minimum, evaluated only when enabled, raises a
 //!   running value at or below it; then the maximum, evaluated only when enabled, lowers a value above it; neither
-//!   enabled: the running value unchanged, nothing evaluated). One rule serves both modes. UNVERIFIED in the game.
+//!   enabled: the running value unchanged, nothing evaluated). Off preserves an unordered running value. UNVERIFIED in the game.
 //!
 //! **Writes** (add, remove, set-base): `NotYet` in both modes.
 
@@ -53,14 +53,22 @@ fn read(
     context: ObjRef,
     previous: f32,
 ) -> Result<f32, AttrError> {
-    // Both modes: the note's rule is the stand-in's (module documentation).
+    let reference = parity(cx) == ParityMode::Reference;
     let range = required(cx, resolver, "Constraints")?;
     let mut value = previous;
     if let Some(min) = bound(sys, cx, &range, "bEnableMinValueRestriction", "MinValue", context)? {
-        value = value.max(min);
+        if reference {
+            value = value.max(min);
+        } else if value <= min {
+            value = min;
+        }
     }
     if let Some(max) = bound(sys, cx, &range, "bEnableMaxValueRestriction", "MaxValue", context)? {
-        value = value.min(max);
+        if reference {
+            value = value.min(max);
+        } else if value > max {
+            value = max;
+        }
     }
     Ok(value)
 }
