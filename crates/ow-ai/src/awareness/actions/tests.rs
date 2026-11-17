@@ -34,6 +34,8 @@ struct Script {
     start_enters: bool,
     stop_resets: bool,
     stop_errors: bool,
+    query_init: bool,
+    init_answers: Vec<(String, Result<Value, VmError>)>,
     query_start: bool,
     start_answer: Option<Result<Value, VmError>>,
     /// Whether the patrol finishes when it hears `Target_Acquired`.
@@ -162,6 +164,20 @@ fn world(mode: ParityMode) -> World {
                 s.borrow_mut().has_target = true;
             }
             s.borrow_mut().log.push(format!("{what} {name}"));
+            if what == "Init" && s.borrow().query_init {
+                let others = {
+                    let service = brains(c.vm)?;
+                    let registry = borrow(&service)?;
+                    registry.owners.keys().copied().filter(|a| *a != me).collect::<Vec<_>>()
+                };
+                let f = c.vm.find_function(READ_AS_ANALYST[3])?;
+                for action in std::iter::once(me).chain(others) {
+                    assert_eq!(get(c.vm, action, "AI")?, Some(Value::Object(None)), "setup remains unrepresented");
+                    let label = format!("{name} queries {}", name_of(c.vm, action));
+                    let answer = c.vm.call(f, Some(action), vec![]).map(|r| r.ret);
+                    s.borrow_mut().init_answers.push((label, answer));
+                }
+            }
             let (enters, resets, finishes, on_acquired) = {
                 let s = s.borrow();
                 (s.start_enters, s.stop_resets, s.start_finishes, s.finish_on_acquired)
@@ -695,5 +711,21 @@ fn an_atomic_running_action_is_not_yet_in_both_modes() {
             other => panic!("{mode:?}: {other:?}"),
         }
         assert_eq!(brain(&w.e.vm, w.e.mind).unwrap().tree.current, Some(2), "{mode:?}: nothing lost");
+    }
+}
+
+/// Every created action must already be owned when the first Init callback queries IsRunning.
+/// Null AI on a port-created action represents an unread setup, not a known unowned false case.
+#[test]
+fn init_queries_require_setup_for_self_and_other_created_actions() {
+    let mut w = world(ParityMode::Off);
+    let mut h = host(&w.e, 1.0);
+    w.script.borrow_mut().query_init = true;
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    let answers = w.script.borrow().init_answers.clone();
+    let labels: Vec<&str> = answers.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(labels, ["Attack queries Attack", "Attack queries Patrol", "Patrol queries Patrol", "Patrol queries Attack"]);
+    for (_, answer) in answers {
+        not_read(answer, "setup is not represented");
     }
 }
