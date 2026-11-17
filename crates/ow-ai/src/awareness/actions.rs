@@ -594,6 +594,15 @@ pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRe
 /// tick.
 fn build(vm: &mut Vm, mind: ObjRef, pawn: ObjRef, aidef: ObjRef) -> Result<Brain, VmError> {
     let mut b = read_tree_of(vm, mind, pawn, aidef)?;
+    {
+        let service = brains(vm)?;
+        let mut s = borrow(&service)?;
+        // Init may query this action or another created action. Register all of them first;
+        // release the service borrow before invoking any script callback.
+        for action in b.actions.iter().flatten() {
+            s.owners.insert(*action, mind);
+        }
+    }
     for action in b.actions.iter().flatten() {
         event(vm, *action, "Init", vec![])?;
     }
@@ -602,12 +611,6 @@ fn build(vm: &mut Vm, mind: ObjRef, pawn: ObjRef, aidef: ObjRef) -> Result<Brain
             b.rest_states[i] = vm.space.heap.get(*a)?.state;
         }
     }
-    let service = brains(vm)?;
-    let mut s = borrow(&service)?;
-    for action in b.actions.iter().flatten() {
-        s.owners.insert(*action, mind);
-    }
-    drop(s);
     Ok(b)
 }
 
