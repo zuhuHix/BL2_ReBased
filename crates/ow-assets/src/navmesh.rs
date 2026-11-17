@@ -2,7 +2,7 @@
 //! native data, the walkable triangles, their neighbours, the per-triangle data, the path sizes, the lookup grid and
 //! the obstacle list. Read only; nothing here finds a path.
 //!
-//! AI-assisted (Claude Code). Record: `docs/verification/NAVMESH_FORMAT.md`; decision
+//! AI-assisted (Claude Code; review r1 fixes: Codex / GPT-6.1 Sol). Record: `docs/verification/NAVMESH_FORMAT.md`; decision
 //! `docs/decisions/2026-11/2026-11-16-75-*`.
 //!
 //! **Where the data is.** A `GBXNavMesh` is a placed actor (its outer is the level), so its tags start 26 bytes in, the
@@ -14,7 +14,7 @@
 //!
 //! **The tail, in order** (each array an `i32` count then its elements; every field as the class declares it, in
 //! declaration order, which is the reverse of export order):
-//! 1. vertices: 3 `f32` each (uu, world space as far as checked: the record);
+//! 1. vertices: 3 `f32` each (taken as world uu, one point checked; UNVERIFIED: the record);
 //! 2. triangles: `Verts` 3 `u16`, `ConnectedPolys` 3 `u16`, `PolyDataIdx` `u16` (14 bytes); `0xFFFF` is "none";
 //!    neighbour `k` is across the edge from vertex `k` to vertex `k + 1` (every shared-edge link in Sanctuary);
 //! 3. per-triangle data: `CrossLevelConnections` (count, then `EdgeIdx`, `ConnectedNavmeshIdx`, `PolyIdx`, 3 `u16`),
@@ -25,12 +25,24 @@
 //! 5. the lookup grid: `XCells`, `YCells` `i32`, `Origin` and `CellSize` 3 `f32` each, `CellIndices` (count, `i32`
 //!    each, -1 for an empty cell), `Cells` (count, then per cell a count and its triangles as `u16`);
 //! 6. obstacles: count, then an object reference and `MinAffectedPathSize`, `i32` each;
-//! 7. eight bytes, zero in all four Sanctuary meshes, whose meaning is not assigned ([`NavMesh::trailing`]).
+//! 7. eight bytes, zero in all four Sanctuary meshes, whose meaning is not assigned ([`NavMesh::trailing`]); any
+//!    other value is refused ([`NavMeshError::TrailingNotZero`]).
 //!
-//! The order and sizes are fitted to the installed packages and checked by structural oracles (record): in all four
-//! Sanctuary meshes the arrays meet exactly and end eight bytes before the export's end, every index is in range,
-//! the grid's index count is `XCells x YCells`, every cell is listed once and every triangle is in some cell.
-//! **UNVERIFIED** beyond those meshes; the reader refuses a tail that does not end the same way rather than guess.
+//! `SpecialMovers` (declared native) is not located; the 8 trailing bytes are a candidate (an empty array's count is
+//! four zero bytes), UNVERIFIED. Nothing in this reader assigns them.
+//!
+//! The order and sizes are fitted to the installed packages and checked by structural oracles (record), and the
+//! reader enforces these checks, refusing a mesh that fails any:
+//! - the parts meet exactly and end with eight zero bytes;
+//! - local indices are in range (vertices, neighbours, per-triangle data, cross-level edges, obstacle slots, grid cells
+//!   and their triangles, path-size starts);
+//! - every per-triangle data entry is used by some triangle;
+//! - the grid's index count is `XCells x YCells`, every cell is listed exactly once, and every triangle is in some cell;
+//! - every vertex lies inside the grid's extent in plan, within [`GRID_TOLERANCE`];
+//! - wherever two triangles linked as neighbours share two vertex indices, those are the slot's edge (vertex `k` to
+//!   `k + 1`).
+//!
+//! **UNVERIFIED** beyond the Sanctuary meshes.
 
 use std::fmt;
 
@@ -48,6 +60,9 @@ pub const MAX_POLY_OBSTACLES: usize = 6;
 pub const NONE: u16 = 0xFFFF;
 /// Bytes after the obstacle list, zero in every mesh read so far.
 pub const TRAILING_BYTES: usize = 8;
+/// Inclusive margin outside the lookup grid's extent in x/y (uu). This is a reader tolerance for float rounding,
+/// not a game value; z is not checked against this planar lookup grid.
+pub const GRID_TOLERANCE: f32 = 1.0;
 
 /// A walkable triangle.
 #[non_exhaustive]
@@ -66,7 +81,7 @@ pub struct NavPoly {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CrossLevelLink {
     pub edge: u16,
-    /// An index of the mesh's `ConnectedMeshes` (tagged; not read here).
+    /// An index of the mesh's `ConnectedMeshes` (tagged; not read here). Fitted, UNVERIFIED.
     pub mesh: u16,
     pub poly: u16,
 }
@@ -89,7 +104,7 @@ pub struct NavPathSize {
     /// The two editor colours, the four bytes as stored.
     pub draw_color: [u8; 4],
     pub obstacle_draw_color: [u8; 4],
-    /// The first triangle of this size's run (the record: the sizes' runs follow each other).
+    /// The first triangle of this size's run (the record: the sizes' runs follow each other). Fitted, UNVERIFIED.
     pub start_index: i32,
 }
 
@@ -111,7 +126,7 @@ pub struct NavLookup {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NavObstacle {
-    /// A reference into the mesh's package (0 none).
+    /// A reference into the mesh's package (0 none). Fitted, UNVERIFIED.
     pub obstacle: i32,
     pub min_affected_path_size: i32,
 }
@@ -152,6 +167,16 @@ pub enum NavMeshError {
     SpecialMovesNotRead(i32),
     /// The tail does not end eight bytes after the obstacle list (the bytes left).
     UnexpectedEnd(usize),
+    /// The eight trailing bytes are not all zero (as read).
+    TrailingNotZero([u8; TRAILING_BYTES]),
+    /// A per-triangle data entry no triangle uses (its index).
+    UnusedPolyData(usize),
+    /// A triangle in no lookup cell (its index).
+    UncoveredTriangle(usize),
+    /// A vertex outside the lookup grid's extent (its index).
+    VertexOutsideGrid(usize),
+    /// Two neighbours share two vertex indices that are not the slot's edge (the triangle, the slot).
+    NeighbourNotOnEdge(usize, usize),
 }
 
 impl fmt::Display for NavMeshError {
@@ -171,6 +196,13 @@ impl fmt::Display for NavMeshError {
             ),
             NavMeshError::UnexpectedEnd(left) => {
                 write!(f, "navmesh: {left} bytes after the obstacle list, {TRAILING_BYTES} expected")
+            }
+            NavMeshError::TrailingNotZero(b) => write!(f, "navmesh: the trailing bytes are not zero: {b:?}"),
+            NavMeshError::UnusedPolyData(i) => write!(f, "navmesh: per-triangle data {i} is used by no triangle"),
+            NavMeshError::UncoveredTriangle(t) => write!(f, "navmesh: triangle {t} is in no lookup cell"),
+            NavMeshError::VertexOutsideGrid(v) => write!(f, "navmesh: vertex {v} lies outside the lookup grid"),
+            NavMeshError::NeighbourNotOnEdge(t, k) => {
+                write!(f, "navmesh: triangle {t}'s neighbour {k} shares two vertices that are not its edge {k}")
             }
         }
     }
@@ -275,6 +307,9 @@ pub fn read_navmesh(package: &Package, index_: i32) -> Result<NavMesh, NavMeshEr
             cross_level.push(CrossLevelLink { edge: u16_at(&mut r)?, mesh: u16_at(&mut r)?, poly: u16_at(&mut r)? });
         }
         let special = r.i32()?;
+        if special < 0 {
+            return Err(NavMeshError::BadCount("special moves", special));
+        }
         if special != 0 {
             return Err(NavMeshError::SpecialMovesNotRead(special));
         }
@@ -330,8 +365,12 @@ pub fn read_navmesh(package: &Package, index_: i32) -> Result<NavMesh, NavMeshEr
     let tail = r.take(TRAILING_BYTES)?;
     let mut trailing = [0u8; TRAILING_BYTES];
     trailing.copy_from_slice(tail);
+    if trailing != [0; TRAILING_BYTES] {
+        return Err(NavMeshError::TrailingNotZero(trailing));
+    }
 
     // The structural checks of the record.
+    let mut used = vec![false; poly_data.len()];
     for p in &polys {
         for v in p.verts {
             index("triangle vertex", v, vertices.len(), false)?;
@@ -340,6 +379,26 @@ pub fn read_navmesh(package: &Package, index_: i32) -> Result<NavMesh, NavMeshEr
             index("triangle neighbour", n, polys.len(), true)?;
         }
         index("triangle data", p.poly_data, poly_data.len(), true)?;
+        if let Some(u) = (p.poly_data != NONE).then(|| used.get_mut(usize::from(p.poly_data))).flatten() {
+            *u = true;
+        }
+    }
+    if let Some(i) = used.iter().position(|u| !u) {
+        return Err(NavMeshError::UnusedPolyData(i));
+    }
+    for (t, p) in polys.iter().enumerate() {
+        for (k, &n) in p.neighbours.iter().enumerate() {
+            let Some(q) = (n != NONE).then(|| polys.get(usize::from(n))).flatten() else { continue };
+            let mut shared: Vec<u16> = p.verts.iter().copied().filter(|v| q.verts.contains(v)).collect();
+            shared.sort_unstable();
+            shared.dedup();
+            if shared.len() == 2 {
+                let edge = [p.verts[k], p.verts[(k + 1) % NUM_EDGES]];
+                if !(shared.contains(&edge[0]) && shared.contains(&edge[1])) {
+                    return Err(NavMeshError::NeighbourNotOnEdge(t, k));
+                }
+            }
+        }
     }
     for d in &poly_data {
         for c in &d.cross_level {
@@ -373,10 +432,31 @@ pub fn read_navmesh(package: &Package, index_: i32) -> Result<NavMesh, NavMeshEr
     if listed.iter().any(|seen| !seen) {
         return Err(NavMeshError::BadLookup("a cell is never listed"));
     }
+    let mut covered = vec![false; polys.len()];
     for cell in &cells {
         for &t in cell {
             index("lookup cell triangle", t, polys.len(), false)?;
+            if let Some(c) = covered.get_mut(usize::from(t)) {
+                *c = true;
+            }
         }
+    }
+    if let Some(t) = covered.iter().position(|c| !c) {
+        return Err(NavMeshError::UncoveredTriangle(t));
+    }
+    // Compute Origin + cell count * CellSize in f64 before applying the reader margin. Promoting before the
+    // product avoids f32 overflow for finite cell sizes; x_cells and y_cells are nonnegative here.
+    let extent = |axis: usize, cells: i32| {
+        let start = f64::from(origin[axis]);
+        let end = start + f64::from(cells) * f64::from(cell_size[axis]);
+        (start.min(end) - f64::from(GRID_TOLERANCE), start.max(end) + f64::from(GRID_TOLERANCE))
+    };
+    let ((x0, x1), (y0, y1)) = (extent(0, x_cells), extent(1, y_cells));
+    if let Some(v) = vertices.iter().position(|p| {
+        let (x, y) = (f64::from(p[0]), f64::from(p[1]));
+        !(x >= x0 && x <= x1 && y >= y0 && y <= y1)
+    }) {
+        return Err(NavMeshError::VertexOutsideGrid(v));
     }
     Ok(NavMesh {
         path: package.path_of(index_)?,
