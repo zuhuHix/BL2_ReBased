@@ -27,7 +27,8 @@
 //! copy of the mission package, or a map package's cooked copies) the store refuses to load the copy the command
 //! needs ("another file holds this path under the identity policy", [`COPY_REFUSAL`]). On that refusal only, wherever
 //! it shows (the command's error, or an error line a run recorded), the whole command runs again on a store whose
-//! load set is `Startup` and the given file (`IdentityPolicy::Loaded`), as `--mission-run` does with its one file.
+//! load set is `Startup`, the given file, then the VM's code packages (`IdentityPolicy::Loaded`). The code
+//! packages make class templates visible while the explicit sources keep precedence over cooked copies.
 //!
 //! **Gameplay stub policy.** `--slice-run` is a gameplay command: its VM refuses an unbound native
 //! (`StubPolicy::Refuse`, architecture 3.8), so a native the C++ logs as a stub is a script error line here. Under
@@ -179,7 +180,8 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     }
 }
 
-/// `Startup` and the source package (once, when they are the same), when the source package loads.
+/// The explicit slice sources, then the existing VM code-package dependency set, each once. This is caller
+/// setup only; the real game's load order remains UNVERIFIED (decision 2026-11-17-03).
 fn load_set(args: &[String]) -> Option<LoadSet> {
     let source = Package::load(Path::new(args.first()?)).ok()?;
     let source = PackageName::parse(&source.name).ok()?;
@@ -187,6 +189,12 @@ fn load_set(args: &[String]) -> Option<LoadSet> {
     let mut packages = vec![startup];
     if !packages.contains(&source) {
         packages.push(source);
+    }
+    for name in ow_object::reflect::CODE_PACKAGES {
+        let name = PackageName::parse(name).ok()?;
+        if !packages.contains(&name) {
+            packages.push(name);
+        }
     }
     Some(LoadSet::new(packages))
 }
@@ -563,3 +571,7 @@ mod tests {
         assert!(!EMPTY_HIT.contains(' '));
     }
 }
+
+#[cfg(test)]
+#[path = "slice_tests.rs"]
+mod loadset_tests;
