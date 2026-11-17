@@ -1125,6 +1125,15 @@ impl AttrWorld for Vm {
     /// with no such function is `NotYet { NotRead }`; an answer that is not an int is bad data (decision
     /// 2026-11-16-80).
     fn currency_on_hand(&mut self, info: ObjRef, form: u8) -> Result<i32, AttrError> {
+        // The bound combat native still uses the Reference zero stand-in for keys. Off cannot
+        // answer until the owner controller's key count is represented (UNVERIFIED in game).
+        if self.parity != ParityMode::Reference && form == 3 {
+            return Err(NotYet::not_read(
+                "GetCurrencyOnHand: the owner controller's golden-key count is not represented",
+                "NATIVE_CONTROLLER_HELPERS.md (GetCurrencyOnHand)",
+            )
+            .into());
+        }
         let (class, state) = {
             let o = self.space.heap.get(info)?;
             (o.class, o.state)

@@ -146,36 +146,33 @@ fn native(sys: &AttributeSystem, cx: &mut EvalCx<'_>, resolver: ObjRef, context:
             i += 1;
         }
     }
-    let value = match found {
-        Some(v) => v,
-        None => {
-            let v = draw(sys, cx, resolver, context)?;
-            let space = cx.world.parts().space;
-            let class = space.heap.get(resolver)?.class;
-            let p = space.prop(class, "SavedRandomValues").ok_or_else(|| AttrError::BadData {
-                reason: "RandomAttributeValueResolver has no SavedRandomValues".into(),
-            })?;
-            let element = match space.classes.decl(p).map(|d| d.kind.clone()) {
-                Some(PropKind::Array(inner)) => space.classes.zero_value(&inner),
-                _ => {
-                    return Err(AttrError::BadData {
-                        reason: "RandomAttributeValueResolver.SavedRandomValues is not an array".into(),
-                    });
-                }
-            };
-            let mut entry = element;
-            set_field(space, &mut entry, "ContextName", Value::Name(key))?;
-            set_field(space, &mut entry, "SavedValue", Value::Float(v))?;
-            set_field(space, &mut entry, "ExpirationTime", Value::Float(clock + lifetime))?;
-            list.push(entry);
-            v
-        }
-    };
     let space = cx.world.parts().space;
     let class = space.heap.get(resolver)?.class;
-    if let Some(p) = space.prop(class, "SavedRandomValues") {
-        space.write(resolver, PropAddr::scalar(p), Value::array(list))?;
+    let p = space.prop(class, "SavedRandomValues").ok_or_else(|| AttrError::BadData {
+        reason: "RandomAttributeValueResolver has no SavedRandomValues".into(),
+    })?;
+    // Commit ordered cleanup before evaluating bounds: they may re-enter this resolver.
+    space.write(resolver, PropAddr::scalar(p), Value::array(list))?;
+    if let Some(value) = found {
+        return Ok(value);
     }
+    let value = draw(sys, cx, resolver, context)?;
+    let space = cx.world.parts().space;
+    let mut entry = match space.classes.decl(p).map(|d| d.kind.clone()) {
+        Some(PropKind::Array(inner)) => space.classes.zero_value(&inner),
+        _ => {
+            return Err(AttrError::BadData {
+                reason: "RandomAttributeValueResolver.SavedRandomValues is not an array".into(),
+            });
+        }
+    };
+    set_field(space, &mut entry, "ContextName", Value::Name(key))?;
+    set_field(space, &mut entry, "SavedValue", Value::Float(value))?;
+    set_field(space, &mut entry, "ExpirationTime", Value::Float(clock + lifetime))?;
+    // Append to the current array, preserving entries saved during bound evaluation.
+    let mut list = elements("SavedRandomValues", space.read(resolver, PropAddr::scalar(p))?)?.to_vec();
+    list.push(entry);
+    space.write(resolver, PropAddr::scalar(p), Value::array(list))?;
     Ok(value)
 }
 
