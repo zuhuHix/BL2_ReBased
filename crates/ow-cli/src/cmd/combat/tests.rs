@@ -10,9 +10,8 @@
 //! (W5-POOLS) does not write (`ow_combat::run`, module documentation). Nothing else is changed: the rest of each
 //! report, rows, events, call order, state, stubs, notes and errors, is byte-identical.
 //!
-//! Off mode equals the C++ on the scenarios that reach no stand-in. The armored scenarios read attributes the toy
-//! classes do not declare, which the C++ reads as the stage's identity (a Reference stand-in): they equal the C++ in
-//! Reference mode, and in Off mode each such hit is `NotYet` (pinned below).
+//! Every scenario's pawn report reaches the Willow hold query. Off refuses that unread virtual; Reference keeps
+//! the C++ stand-in. The armored scenarios also reach attributes not declared by these toy classes in Reference.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -31,79 +30,80 @@ const CASES: [(&str, &str, u64, bool); 16] = [
         "pools",
         "spawn:ToyPawns/Pawn_Toy:4 sethealth:0:0.5 sethealth:0:-3 sethealth:0:1.5 sethealth:0:500 setmax:0:99 pool:0:Pool_Health_Copy pool:0:Pool_Ammo pool:0:Pool_Ammo_Copy copyref:0:1 valid:0:3 unpool:0:1 valid:0:3 pool:0:Pool_Ammo valid:0:3 valid:0:4 destroyhealth:0 sethealth:0:7 pool:0:Pool_Health",
         0x7d03_6655_4536_18f2,
-        true,
+        false,
     ),
     (
         "hit",
         "spawn:ToyPawns/Pawn_Toy:4 player:8 hit:0:10::Bullet sethealth:0:40.5 hold:0:Safe hit:0:10::Bullet sethealth:0:40.5 hold:0:Other release:0:Safe hit:0:10::Bullet release:0:Other sethealth:0:40.5 hit:0:10::Bullet",
         0xe5f4_8be8_9c0b_a963,
-        true,
+        // Off refuses the unread Willow override (pinned below; decision 2026-11-16-83).
+        false,
     ),
     (
         "death",
         "spawn:ToyPawns/Pawn_Doomed:4 player:8 hit:0:10::Bullet destroyhealth:0",
         0x86ec_ba2d_c2ea_3bf0,
-        true,
+        false,
     ),
     (
         "xp1",
         "spawn:ToyPawns/Pawn_Doomed:5 player:4 players:1 hit:0:10::Bullet",
         0xc207_d47b_66fa_077e,
-        true,
+        false,
     ),
     (
         "xp2",
         "spawn:ToyPawns/Pawn_Doomed:5 player:4 player:7 players:2 hit:0:10::Bullet",
         0xf106_ebb9_b6f1_aa37,
-        true,
+        false,
     ),
     (
         "xp3",
         "spawn:ToyPawns/Pawn_Doomed:5 player:1 players:1 hit:0:10::Bullet",
         0xb4ad_0f14_88e9_6ec6,
-        true,
+        false,
     ),
     (
         "xp4",
         "spawn:ToyPawns/Pawn_Doomed:5 player:5 players:1 hit:0:10::Bullet",
         0x4365_a8f4_6ee9_eed7,
-        true,
+        false,
     ),
     (
         "xp5",
         "spawn:ToyPawns/Pawn_Doomed:5 player:4 hit:0:10::Bullet",
         0x2dac_9831_a0f8_c17c,
-        true,
+        false,
     ),
     (
         "swing",
         "spawn:ToyPawns/Pawn_Toy:4 player:8 swing:0:Melee_Toy swing:0:Throw_Toy:Cause_Toy swing:0:Throw_Toy swing:0:Pawn_Toy swing:0:NoSuchObject",
         0xeb15_1147_8b46_72da,
-        true,
+        false,
     ),
     (
         "swing2",
         "spawn:ToyPawns/Pawn_Toy:4 swing:0:Melee_Toy",
         0x5ed0_b100_bb5e_fd73,
-        true,
+        false,
     ),
     (
         "down",
         "spawn:ToyPawns/Pawn_Down:4 player:8 hit:0:10::Bullet",
         0x991a_9371_6809_5c9f,
-        true,
+        false,
     ),
     (
         "down2",
         "spawn:ToyPawns/Pawn_Down:4 bleed:1",
         0xa387_af0e_fc77_419f,
-        true,
+        false,
     ),
     (
         "down3",
         "spawn:ToyPawns/Pawn_Down:4 cash:100",
         0xad02_e542_28e8_011d,
-        true,
+        false,
     ),
     (
         "armor",
@@ -248,22 +248,29 @@ fn every_list_replays_to_the_same_report_in_the_same_process() {
 }
 
 #[test]
-fn off_mode_refuses_each_attribute_the_toy_classes_do_not_declare() {
+fn off_mode_stops_before_undeclared_attributes_at_the_willow_hold() {
     let install = Install::new();
     let (off, failed) = report(&install, CASES[13].1, ParityMode::Off);
     assert!(failed);
-    for text in [
-        "the attribute WillowMind.ReceivedBulletDamageModifier: the VM object's class does not declare it",
-        "the attribute WillowPlayerController.InstigatedMeleeDamageModifier: the VM object's class does not declare it",
-    ] {
-        assert!(off.contains(text), "{off}");
-    }
+    assert!(off.contains("AI hold virtual overrides"), "{off}");
     let (reference, failed) = report(&install, CASES[13].1, ParityMode::Reference);
     assert!(!failed, "{reference}");
     assert!(
         reference.contains("\"hit.Armored.L4.1.applied\":60"),
         "{reference}"
     );
+}
+
+/// Off refuses the unread Willow virtual override; Reference retains the C++ stand-in.
+#[test]
+fn off_mode_refuses_unread_willow_hold_virtuals() {
+    let install = Install::new();
+    let (off, failed) = report(&install, CASES[1].1, ParityMode::Off);
+    assert!(failed, "{off}");
+    assert!(off.contains("AI hold virtual overrides"), "{off}");
+    let (reference, failed) = report(&install, CASES[1].1, ParityMode::Reference);
+    assert!(!failed, "{reference}");
+    assert!(reference.contains("\"hit.Toy.L4.4.health_after\":0"), "{reference}");
 }
 
 #[test]

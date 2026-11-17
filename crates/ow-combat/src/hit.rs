@@ -25,7 +25,10 @@
 //!   ([`attribute`]);
 //! - a C++ "not implemented" log line (`UNIMPLEMENTED <what> (not implemented)`): Reference logs it and goes on; Off is
 //!   `NotYet { NotPorted }` ([`not_implemented`]);
-//! - the "0 with base 0 is 1" reading of a pawn's damage-type resistance and the critical-hit bonus: `crate::damage`.
+//! - the "0 with base 0 is 1" reading of a pawn's damage-type resistance and the critical-hit bonus: `crate::damage`;
+//! - the AI component's demigod hold (a list of reasons), `GearboxMind.GetAIComponent` (the mind's property) and the
+//!   hold behavior's pawn-to-mind context ([`ai_interface_for`]): Reference only. Off has NATIVE_AI_HOLDS.md's hold
+//!   rule and the hold behavior's own run ([`crate::holds`], decision 2026-11-16-83).
 
 pub mod access;
 pub mod pools;
@@ -111,7 +114,7 @@ pub struct CombatState {
     globals: Option<ObjRef>,
     /// Stock objects by path (damage types), loaded once.
     by_path: DetMap<String, ObjRef>,
-    /// AI component -> the reasons of its demigod holds.
+    /// AI component -> the reasons of its demigod holds (the Reference stand-in; Off keeps `DemigodHolds`).
     demigod_holds: DetMap<ObjRef, Vec<String>>,
     /// `WillowMind.SetAIDemigod`.
     mind_demigod: DetMap<ObjRef, bool>,
@@ -828,9 +831,33 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
         Ok(Value::None)
     })?;
 
-    // The AI component's demigod hold (the installed Behavior_AIHold script calls HoldDemigod / ReleaseDemigod for its
-    // type 3; the natives' bodies are unread, so the hold is kept as the list of reasons and DemigodOnHold answers
-    // "any hold": UNVERIFIED). WillowMind.GetAIDemigod / SetAIDemigod: a plain flag.
+    // Reference only (R3): the C++ stand-ins of the AI component's demigod hold and of GetAIComponent. The installed
+    // Behavior_AIHold script calls HoldDemigod / ReleaseDemigod for its type 3; the C++ keeps the hold as a list of
+    // reasons and DemigodOnHold answers "any hold" (UNVERIFIED), and GetAIComponent answers the mind's AIComponent
+    // property. Off has NATIVE_AI_HOLDS.md's rule instead (`crate::holds`: name and tag pairs on `DemigodHolds` and
+    // the other three lists; GetAIComponent `NotYet`, the note leaves it unresolved). Decision 2026-11-16-83.
+    if vm.parity == ParityMode::Reference {
+        register_hold_stand_ins(vm)?;
+    } else {
+        crate::holds::register(vm)?;
+    }
+    // WillowMind.GetAIDemigod / SetAIDemigod: a plain flag.
+    bind_fn(vm, "WillowGame.WillowMind.GetAIDemigod", |c| {
+        let me = this(c, "GetAIDemigod")?;
+        Ok(Value::Bool(with_state(c.vm, |s| {
+            s.mind_demigod.get(&me).copied().unwrap_or(false)
+        })?))
+    })?;
+    bind_fn(vm, "WillowGame.WillowMind.SetAIDemigod", |c| {
+        let me = this(c, "SetAIDemigod")?;
+        let on = c.has(0) && arg_truth(c, 0)?;
+        with_state(c.vm, |s| s.mind_demigod.insert(me, on))?;
+        Ok(Value::None)
+    })
+}
+
+/// The C++ stand-ins of the demigod hold and of `GearboxMind.GetAIComponent` (Reference only; see `register_hit`).
+fn register_hold_stand_ins(vm: &mut Vm) -> Result<(), VmError> {
     for owner in [
         "GearboxFramework.AIComponent",
         "WillowGame.WillowAIComponent",
@@ -867,18 +894,6 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
     bind_fn(vm, "GearboxFramework.GearboxMind.GetAIComponent", |c| {
         let me = this(c, "GetAIComponent")?;
         required(c.vm, me, "AIComponent", "combat hit")
-    })?;
-    bind_fn(vm, "WillowGame.WillowMind.GetAIDemigod", |c| {
-        let me = this(c, "GetAIDemigod")?;
-        Ok(Value::Bool(with_state(c.vm, |s| {
-            s.mind_demigod.get(&me).copied().unwrap_or(false)
-        })?))
-    })?;
-    bind_fn(vm, "WillowGame.WillowMind.SetAIDemigod", |c| {
-        let me = this(c, "SetAIDemigod")?;
-        let on = c.has(0) && arg_truth(c, 0)?;
-        with_state(c.vm, |s| s.mind_demigod.insert(me, on))?;
-        Ok(Value::None)
     })
 }
 
@@ -1348,7 +1363,8 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
 /// The object a hold behavior (the installed `Behavior_AIHold` script) is applied to for `context`: the live game
 /// applies it to the pawn, and the script asks the context for `IAIInterface`, which the class tables list for the
 /// mind and not for `WillowAIPawn`, so an AI pawn is answered by its mind (C++ `aiInterfaceFor`). A stand-in for the
-/// table gap, UNVERIFIED; any other object is returned as it is.
+/// table gap, UNVERIFIED; any other object is returned as it is. Reference only: Off runs
+/// [`crate::holds::apply_hold_behavior`].
 pub fn ai_interface_for(vm: &mut Vm, context: ObjRef) -> Result<ObjRef, VmError> {
     Ok(object(vm, context, "MyWillowMind")?.unwrap_or(context))
 }

@@ -13,6 +13,7 @@ pub mod death;
 pub mod down;
 pub mod firing;
 pub mod hit;
+pub mod holds;
 pub mod loot;
 pub mod run;
 pub mod xp;

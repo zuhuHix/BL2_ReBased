@@ -19,6 +19,10 @@
 //! - **A behavior event raised on a provider that is running** (a script behavior broadcasting to its own provider) is
 //!   raised after the running event returns, not inside it (`Provider` takes `&mut self`; the C++ re-enters).
 //! - **Timing fields** (`milliseconds`, `elapsed_ms`) are the Rust run's own.
+//! - **The AI holds** (decision 2026-11-16-83). In `Off` mode a pawn's `Behavior_AIHold` runs on the context itself
+//!   and stops `NotYet` on the pawn question, and the `hold` / `release` steps pass the pawn as the hold's tag,
+//!   because NATIVE_AI_HOLDS.md's rule refuses a None tag (`crate::holds`, which `hit::Pack` binds in `Off`). In
+//!   `Reference` mode both are the C++: the pawn-to-mind context, a None tag and the C++ demigod list.
 //!
 //! **The damage-dealing behavior handlers.** The C++ registers its handlers per provider, each knowing its pawn (the
 //! script's `SelfObject`): `Behavior_AIHold` and `Behavior_Conditional` on a pawn's class provider,
@@ -39,7 +43,7 @@ use ow_behavior::provider::BehaviorError;
 use ow_behavior::registry::Handler;
 use ow_core::fmt::{fmt_g, json_quote};
 use ow_core::num::{StrtodPrefix, strtod_prefix};
-use ow_core::{DetMap, NotYet};
+use ow_core::{DetMap, NotYet, ParityMode};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -434,6 +438,13 @@ fn make_provider(
                 "GearboxFramework.Behavior_AIHold",
                 Handler::run(move |vm, p, id, _| {
                     let object = p.behavior(id).object;
+                    // Off: the context itself, and the pawn question NotYet (decision 2026-11-16-83); Reference: the
+                    // C++ pawn-to-mind stand-in.
+                    if vm.parity == ParityMode::Off {
+                        let contexts = p.contexts(id, pawn);
+                        crate::holds::apply_hold_behavior(vm, object, &contexts)?;
+                        return Ok(Vec::new());
+                    }
                     for context in p.contexts(id, pawn) {
                         let target = hit::ai_interface_for(vm, context)?;
                         call_method(
@@ -1392,11 +1403,14 @@ impl Run {
                 } else {
                     "ReleaseDemigod"
                 };
-                self.call(
-                    component,
-                    function,
-                    vec![Value::Name(name), Value::Object(None)],
-                )?;
+                // The tag: None in Reference, as the C++ passes. In Off the note's rule refuses a None tag, so the step
+                // passes the pawn, the object the hold behavior passes as its context (a run set-up, not a rule:
+                // decision 2026-11-16-83).
+                let tag = match vm.parity {
+                    ParityMode::Off => Some(self.pawns[index].enemy.pawn),
+                    _ => None,
+                };
+                self.call(component, function, vec![Value::Name(name), Value::Object(tag)])?;
                 Ok("{}".to_string())
             }
             "attr" => {

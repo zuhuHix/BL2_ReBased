@@ -146,8 +146,10 @@ fn an_output_link_is_appended_to_the_running_behaviors_list() {
 
 #[test]
 fn the_tracker_native_logs_the_killed_stat_and_needs_no_objective() {
+    // This integration path uses the C++ Willow hold stand-in; Off refuses its unread virtuals.
+
     let (text, failed) = crate::run::tests::run_steps(
-        ParityMode::Off,
+        ParityMode::Reference,
         &[
             "spawn:ToyPawns/Pawn_Doomed:4",
             "player:8",
