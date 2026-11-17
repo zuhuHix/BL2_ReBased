@@ -72,6 +72,12 @@ pub trait WorldHooks {
     ) -> Result<Option<ObjRef>, AttrError>;
 }
 
+/// The represented engine world's first WorldInfo, or an explicitly absent world (`Ok(None)`).
+/// An unrepresented world must return an error. Installed by the world owner; a VM without this query cannot
+/// infer absence from a missing service or from its simulation clock. UNVERIFIED: NATIVE_RESOURCE_POOL_IDLE.md.
+#[derive(Debug, Clone, Copy)]
+pub struct WorldTimeQuery(pub fn(&Vm) -> Result<Option<ObjRef>, VmError>);
+
 // ---------------------------------------------------------------------------------------------------------------
 // Policies and limits
 // ---------------------------------------------------------------------------------------------------------------
@@ -753,6 +759,23 @@ impl Vm {
     /// The world hooks, if set.
     pub fn world_hooks(&self) -> Option<Rc<RefCell<dyn WorldHooks>>> {
         self.services.hooks()
+    }
+
+    /// Reads the represented World's stored float TimeSeconds; zero only for an explicitly absent world.
+    /// UNVERIFIED in game (NATIVE_RESOURCE_POOL_IDLE.md); this does not advance or substitute the VM clock.
+    pub fn world_time_seconds(&self) -> Result<f32, VmError> {
+        let query = self.service::<WorldTimeQuery>().ok_or_else(|| {
+            NotYet::layer_absent("the engine world-time query", "the world owner", "NATIVE_RESOURCE_POOL_IDLE.md")
+        })?;
+        let query = query.try_borrow().map_err(|_| VmError::ServiceBorrowed("WorldTimeQuery"))?.0;
+        let Some(world) = query(self)? else { return Ok(0.0) };
+        let class = self.space.heap.get(world)?.class;
+        if let Some(prop) = self.space.prop(class, "TimeSeconds")
+            && let Value::Float(time) = self.space.read(world, ow_object::ids::PropAddr::scalar(prop))?
+        {
+            return Ok(*time);
+        }
+        Err(NotYet::not_ported("the represented World's float TimeSeconds", "NATIVE_RESOURCE_POOL_IDLE.md").into())
     }
 
     // ---- calls -----------------------------------------------------------------------------------------------

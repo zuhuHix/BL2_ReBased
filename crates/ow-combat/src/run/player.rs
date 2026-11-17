@@ -15,7 +15,7 @@
 //! (`MissionScript::set_player_health` is `NotYet`). Under architecture R3 it is reproduced here in
 //! `ParityMode::Reference` only. In `ParityMode::Off` the game's own route runs instead (decision 2026-11-16-82): the
 //! controller's script `ApplyCharacterClassDefaults` on the VM, which creates the pool through `CreatePool`
-//! ([`HealthPool::ensure_off`]); it stops where that route meets an unread native (`ResetIdleTimer`).
+//! ([`HealthPool::ensure_off`]); unread hooks and other unsupported natives on that route still refuse.
 //!
 //! **Script errors.** The C++ runs a bridged hit, swing and each bleed frame inside the bridge's guard, which records
 //! the error (`mission script: <text>`) and goes on; the run lists those under the step. The same here: a bleed frame's
@@ -142,7 +142,7 @@ impl HealthPool {
     /// and creates the health pool through `Pawn.SetHealthResourcePoolDefinition` and `CreatePool`
     /// (NATIVE_COMBAT_GROUNDWORK.md sections 1.8 and 1.10), whose own script sets the pool's starting values. The pool
     /// kept is the one the pawn's `HealthPool` reference names afterwards. A `NotYet` from inside (the pool script's
-    /// `ResetIdleTimer`, NATIVE_RESOURCE_POOL_IDLE.md, until an implementer binds it) is passed on; no class, or no
+    /// `ResetIdleTimer` hook for an unread subclass, NATIVE_RESOURCE_POOL_IDLE.md) is passed on; no class, or no
     /// pool afterwards, is false, as the stand-in gives up.
     fn ensure_off(&mut self, vm: &mut Vm, bridge: &dyn PlayerBridge) -> Result<bool, VmError> {
         if self.pool.is_some() {
