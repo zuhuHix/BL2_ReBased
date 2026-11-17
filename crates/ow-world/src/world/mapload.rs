@@ -32,14 +32,15 @@
 
 use std::fmt;
 
-use ow_core::{DetMap, NotYet, PackageName};
+use ow_core::{DetMap, IdentError, NotYet, PackageName};
 use ow_defs::store::DefError;
 use ow_object::ids::ObjRef;
 use ow_object::prefix::PropertyPrefix;
 use ow_object::value::Value;
 use ow_package::PackageId;
-use ow_package::package::Package;
+use ow_package::package::{Package, PackageError};
 use ow_package::props::{self, NoArrayTypes};
+use ow_package::store::StoreError;
 use ow_vm::error::VmError;
 
 use super::World;
@@ -57,11 +58,32 @@ pub const MAX_LEVEL_ACTORS: usize = 1 << 20;
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum MapError {
-    /// A package or a level could not be found or read (the text says which and why).
-    Package(String),
+    /// Loading a map file failed; only `PackageNotFound` permits skipping a streaming level.
+    Store {
+        map: PackageName,
+        cause: StoreError,
+    },
+    InvalidName {
+        name: String,
+        cause: IdentError,
+    },
+    Package {
+        map: PackageName,
+        cause: PackageError,
+    },
+    MissingLevel(PackageName),
+    WrongLevelClass {
+        map: PackageName,
+        class: String,
+    },
+    Definition(DefError),
+    WorldNotEmpty,
     /// A level's actor list does not meet the recovered layout (NATIVE_MAP_LOAD.md, section 1).
-    Layout { level: String, reason: String },
-    /// The persistent level's `WorldInfo` did not load or is not a `WorldInfo`; nothing can be placed without it.
+    Layout {
+        level: String,
+        reason: String,
+    },
+    /// A level's first actor did not load or is not a `WorldInfo`.
     WorldInfo(String),
     /// The world refused a placement or a read (`Actors::place`, a property read).
     Vm(VmError),
@@ -70,17 +92,42 @@ pub enum MapError {
 impl fmt::Display for MapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MapError::Package(e) => write!(f, "map load: {e}"),
+            MapError::Store { map, cause } => write!(f, "map load: {map}: {cause}"),
+            MapError::InvalidName { name, cause } => {
+                write!(f, "map load: invalid package name {name:?}: {cause}")
+            }
+            MapError::Package { map, cause } => write!(f, "map load: {map}: {cause}"),
+            MapError::MissingLevel(map) => write!(f, "map load: {map} holds no {LEVEL_PATH}"),
+            MapError::WrongLevelClass { map, class } => write!(
+                f,
+                "map load: {map}'s {LEVEL_PATH} is a {class}, not a Level"
+            ),
+            MapError::Definition(e) => write!(f, "map load: a StreamingLevels entry: {e}"),
+            MapError::WorldNotEmpty => write!(
+                f,
+                "map load: the world already has actors (one map per fresh world)"
+            ),
             MapError::Layout { level, reason } => {
                 write!(f, "map load: {level}: {reason} ({RECORD}, section 1)")
             }
-            MapError::WorldInfo(e) => write!(f, "map load: the persistent level's WorldInfo: {e}"),
+            MapError::WorldInfo(e) => write!(f, "map load: the level's WorldInfo: {e}"),
             MapError::Vm(e) => write!(f, "map load: {e}"),
         }
     }
 }
 
-impl std::error::Error for MapError {}
+impl std::error::Error for MapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Store { cause, .. } => Some(cause),
+            Self::InvalidName { cause, .. } => Some(cause),
+            Self::Package { cause, .. } => Some(cause),
+            Self::Definition(cause) => Some(cause),
+            Self::Vm(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
 
 impl From<VmError> for MapError {
     fn from(e: VmError) -> Self {
@@ -224,9 +271,7 @@ pub fn load_map(world: &mut World, map: &PackageName) -> Result<MapReport, MapEr
         .list()
         .is_empty()
     {
-        return Err(MapError::Package(
-            "the world already has actors (one map per fresh world)".into(),
-        ));
+        return Err(MapError::WorldNotEmpty);
     }
     let vm = &mut world.vm;
     let actor_class = vm.find_class("Engine.Actor")?;
@@ -241,12 +286,7 @@ pub fn load_map(world: &mut World, map: &PackageName) -> Result<MapReport, MapEr
         nulls: list.actors.iter().filter(|&&r| r == 0).count(),
         ..LevelReport::default()
     };
-    let world_info =
-        load_actor(vm, package, list.actors[0]).map_err(|e| MapError::WorldInfo(e.to_string()))?;
-    let class = vm.space.heap.get(world_info).map_err(VmError::from)?.class;
-    if !vm.space.classes.is_child_of(class, world_info_class) {
-        return Err(MapError::WorldInfo("item 0 is not a WorldInfo".into()));
-    }
+    let world_info = load_world_info(vm, package, list.actors[0], world_info_class)?;
     actors
         .try_borrow_mut()
         .map_err(|_| VmError::ServiceBorrowed("Actors"))?
@@ -266,18 +306,24 @@ pub fn load_map(world: &mut World, map: &PackageName) -> Result<MapReport, MapEr
     // The streaming levels the persistent WorldInfo names, in order; each from its index 1.
     let mut missing_levels = Vec::new();
     for name in streaming_levels(vm, world_info)? {
-        let Ok(parsed) = PackageName::parse(&name) else {
-            missing_levels.push(name);
-            continue;
-        };
+        let parsed = PackageName::parse(&name).map_err(|cause| MapError::InvalidName {
+            name: name.clone(),
+            cause,
+        })?;
         let (package, list) = match level_of(vm, &parsed) {
             Ok(found) => found,
-            Err(MapError::Package(_)) => {
+            Err(MapError::Store {
+                cause: StoreError::PackageNotFound(_),
+                ..
+            }) => {
                 missing_levels.push(name);
                 continue;
             }
             Err(e) => return Err(e),
         };
+        // The structural list reader proves ownership and non-nullness, not the actor's class.
+        // Validate each streaming level's item 0 before omitting it from placement.
+        load_world_info(vm, package, list.actors[0], world_info_class)?;
         let mut report = LevelReport {
             name,
             listed: list.actors.len(),
@@ -312,30 +358,59 @@ fn level_of(
         .code_mut()
         .1
         .load(map)
-        .map_err(|e| MapError::Package(format!("{map}: {e}")))?;
+        .map_err(|cause| MapError::Store {
+            map: map.clone(),
+            cause,
+        })?;
     let pkg = vm.defs.packages().get(package);
     let level = pkg
         .find_export(LEVEL_PATH)
-        .map_err(|e| MapError::Package(format!("{map}: {e}")))?
-        .ok_or_else(|| MapError::Package(format!("{map} holds no {LEVEL_PATH}")))?;
+        .map_err(|cause| MapError::Package {
+            map: map.clone(),
+            cause,
+        })?
+        .ok_or_else(|| MapError::MissingLevel(map.clone()))?;
     let class = pkg
         .object(level)
-        .map_err(|e| MapError::Package(e.to_string()))?
+        .map_err(|cause| MapError::Package {
+            map: map.clone(),
+            cause,
+        })?
         .class;
     let class_name = pkg
         .object(class)
-        .map(|c| c.name.clone())
-        .unwrap_or_default();
+        .map_err(|cause| MapError::Package {
+            map: map.clone(),
+            cause,
+        })?
+        .name
+        .clone();
     if class_name != "Level" {
-        return Err(MapError::Package(format!(
-            "{map}'s {LEVEL_PATH} is a {class_name}, not a Level"
-        )));
+        return Err(MapError::WrongLevelClass {
+            map: map.clone(),
+            class: class_name,
+        });
     }
     let list = read_level_list(pkg, level).map_err(|reason| MapError::Layout {
         level: map.as_str().to_string(),
         reason,
     })?;
     Ok((package, list))
+}
+
+/// Checks the first entry for every level, including levels whose WorldInfo is not placed.
+fn load_world_info(
+    vm: &mut ow_vm::api::Vm,
+    package: PackageId,
+    first: i32,
+    world_info_class: ow_object::ids::ClassId,
+) -> Result<ObjRef, MapError> {
+    let object = load_actor(vm, package, first).map_err(|e| MapError::WorldInfo(e.to_string()))?;
+    let class = vm.space.heap.get(object).map_err(VmError::from)?.class;
+    if !vm.space.classes.is_child_of(class, world_info_class) {
+        return Err(MapError::WorldInfo("item 0 is not a WorldInfo".into()));
+    }
+    Ok(object)
 }
 
 /// Places `items` of level file `package` after the ones placed already, counting what was placed and refused.
@@ -421,7 +496,7 @@ fn streaming_levels(vm: &mut ow_vm::api::Vm, world_info: ObjRef) -> Result<Vec<S
         };
         vm.defs
             .ensure_loaded(&mut vm.space, o)
-            .map_err(|e| MapError::Package(format!("a StreamingLevels entry: {e}")))?;
+            .map_err(MapError::Definition)?;
         let class = vm.space.heap.get(o).map_err(VmError::from)?.class;
         let Some(name) = vm.space.prop(class, "PackageName") else {
             continue;

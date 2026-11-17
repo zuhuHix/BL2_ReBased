@@ -170,6 +170,23 @@ fn level_tail(level: i32, items: &[i32]) -> Vec<u8> {
 /// `streaming`, the WorldInfo's `StreamingLevels` names that package through a `LevelStreaming` (exported last). With
 /// `note_first`, actor 4 is a `Note`, which is not an actor class.
 fn map(actors: usize, listed: &[i32], streaming: Option<&str>, note_first: bool) -> Vec<u8> {
+    map_with_fault(actors, listed, streaming, note_first, None)
+}
+
+#[derive(Clone, Copy)]
+enum MapFault {
+    MissingLevel,
+    WrongLevelClass,
+    ActorFirst,
+}
+
+fn map_with_fault(
+    actors: usize,
+    listed: &[i32],
+    streaming: Option<&str>,
+    note_first: bool,
+    fault: Option<MapFault>,
+) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
@@ -188,14 +205,29 @@ fn map(actors: usize, listed: &[i32], streaming: Option<&str>, note_first: bool)
     items.extend_from_slice(listed);
     let mut level = payload(&mut p, 4, &[]);
     level.extend(level_tail(2, &items));
-    assert_eq!(add(&mut p, level_class, "PersistentLevel", 1, level), 2);
+    let level_name = if matches!(fault, Some(MapFault::MissingLevel)) {
+        "OtherLevel"
+    } else {
+        "PersistentLevel"
+    };
+    let level_class = if matches!(fault, Some(MapFault::WrongLevelClass)) {
+        note
+    } else {
+        level_class
+    };
+    assert_eq!(add(&mut p, level_class, level_name, 1, level), 2);
     let stream_ref = 4 + i32::try_from(actors).unwrap();
     let wi_tags = match streaming {
         Some(_) => vec![p.array_tag("StreamingLevels", 1, &ints(&[stream_ref]))],
         None => Vec::new(),
     };
     let wi = payload(&mut p, 26, &wi_tags);
-    assert_eq!(add(&mut p, world_info, "WorldInfo_0", 2, wi), 3);
+    let first_class = if matches!(fault, Some(MapFault::ActorFirst)) {
+        actor
+    } else {
+        world_info
+    };
+    assert_eq!(add(&mut p, first_class, "WorldInfo_0", 2, wi), 3);
     for k in 0..actors {
         let health = i32::try_from(k).unwrap() + 1;
         let tags = [p.int_tag("Health", health)];
@@ -317,6 +349,136 @@ fn a_listed_object_that_is_not_an_actor_is_refused_and_a_missing_level_is_report
     assert_eq!(report.missing_levels, ["Nowhere"]);
     // A second load into the same world is refused: one map per fresh world.
     assert!(again.unwrap_err().contains("already has actors"));
+}
+
+#[test]
+fn streaming_file_errors_are_not_missing_levels() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        for case in [
+            "absent",
+            "corrupt",
+            "ambiguous",
+            "invalid-name",
+            "missing-export",
+            "wrong-class",
+        ] {
+            let stream = if case == "invalid-name" {
+                "Bad/Name"
+            } else {
+                "Test_Sub"
+            };
+            let mut files = vec![
+                ("Core.upk", core()),
+                ("Engine.upk", engine()),
+                ("Test_P.upk", map(0, &[], Some(stream), false)),
+            ];
+            match case {
+                "corrupt" => files.push(("Test_Sub.upk", vec![0; 32])),
+                "ambiguous" => {
+                    files.push(("a/Test_Sub.upk", map(0, &[], None, false)));
+                    files.push(("b/Test_Sub.upk", map(0, &[], None, false)));
+                }
+                "missing-export" | "wrong-class" => {
+                    let fault = if case == "missing-export" {
+                        MapFault::MissingLevel
+                    } else {
+                        MapFault::WrongLevelClass
+                    };
+                    files.push((
+                        "Test_Sub.upk",
+                        map_with_fault(0, &[], None, false, Some(fault)),
+                    ));
+                }
+                _ => {}
+            }
+            let result = with_world(case, files, mode, |w| {
+                load_map(w, &PackageName::parse("Test_P").unwrap())
+            });
+            match case {
+                "absent" => assert_eq!(result.unwrap().missing_levels, ["Test_Sub"]),
+                "corrupt" => assert!(
+                    matches!(
+                        result,
+                        Err(MapError::Store {
+                            cause: StoreError::Package(_),
+                            ..
+                        })
+                    ),
+                    "{mode:?}: {result:?}"
+                ),
+                "ambiguous" => assert!(
+                    matches!(
+                        result,
+                        Err(MapError::Store {
+                            cause: StoreError::AmbiguousName(_),
+                            ..
+                        })
+                    ),
+                    "{mode:?}: {result:?}"
+                ),
+                "invalid-name" => assert!(
+                    matches!(
+                        result,
+                        Err(MapError::InvalidName {
+                            cause: IdentError::Separator { .. },
+                            ..
+                        })
+                    ),
+                    "{mode:?}: {result:?}"
+                ),
+                "missing-export" => assert!(
+                    matches!(result, Err(MapError::MissingLevel(_))),
+                    "{mode:?}: {result:?}"
+                ),
+                "wrong-class" => assert!(
+                    matches!(result, Err(MapError::WrongLevelClass { .. })),
+                    "{mode:?}: {result:?}"
+                ),
+                _ => unreachable!(),
+            }
+        }
+    }
+}
+
+#[test]
+fn every_levels_first_entry_must_be_a_world_info() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        for streaming in [false, true] {
+            let bad = map_with_fault(1, &[4], None, false, Some(MapFault::ActorFirst));
+            let files = if streaming {
+                vec![
+                    ("Core.upk", core()),
+                    ("Engine.upk", engine()),
+                    ("Test_P.upk", map(0, &[], Some("Test_Sub"), false)),
+                    ("Test_Sub.upk", bad),
+                ]
+            } else {
+                vec![
+                    ("Core.upk", core()),
+                    ("Engine.upk", engine()),
+                    ("Test_P.upk", bad),
+                ]
+            };
+            with_world(
+                if streaming {
+                    "stream-first"
+                } else {
+                    "persistent-first"
+                },
+                files,
+                mode,
+                |w| {
+                    let result = load_map(w, &PackageName::parse("Test_P").unwrap());
+                    assert!(
+                        matches!(result, Err(MapError::WorldInfo(_))),
+                        "{mode:?}: {result:?}"
+                    );
+                    // No actor from the bad level is placed; the persistent WorldInfo stays alone.
+                    assert_eq!(w.actors().borrow().list().len(), usize::from(streaming));
+                },
+            );
+        }
+    }
 }
 
 #[test]
