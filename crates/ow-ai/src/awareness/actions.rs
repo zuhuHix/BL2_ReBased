@@ -94,11 +94,10 @@ pub const RECORD_ACTIONS: &str = "docs/verification/NATIVE_AI_ACTION_SEQUENCE.md
 ///   `bInitialized` is not set, the note's answer (nothing changes; false) is not given: who sets `bInitialized` when the
 ///   AI creates its actions is not read (the note's "Not read"), and this port never sets it, so an action the game
 ///   would have initialised cannot be told apart. That case is `NotYet { NotRead }`.
-/// - **`IsRunning`:** "this action is the AI tree's current leaf". This port keeps the tree's current node in Rust, not
-///   in `AIComponent.CurrentState`, so the answer is read from the brain that made the action: true when its tree runs
-///   this action. During that action's own `Start` or `Stop` event, whether the tree's current state already (or
-///   still) names it is not read: `NotYet { NotRead }`. An action no brain made answers false when its `AI` is unset
-///   (the note's first condition) and `NotYet` otherwise.
+/// - **`IsRunning`:** requires the action's `AI` interface and that AI's component/current-state link. This port
+///   does not represent that setup: owned actions answer `NotYet { NotRead }`, even if a caller assigns `AI`.
+///   An action no brain made answers false when its `AI` is unset (the note's first condition) and `NotYet`
+///   otherwise. A missing brains service is not evidence that an action is unowned (decision 2026-11-17-05).
 /// - **`IsActionReadyToFinish`:** true when no latent action is pending in the action's state code and, up its
 ///   `ParentSequence` chain, each parent answers true. An action of `WillowGame.WillowActionSequencePawn` (or a
 ///   subclass), whose override the note did not read, is `NotYet { NotRead }`.
@@ -183,6 +182,8 @@ impl std::fmt::Debug for Brains {
             .field("finishes", &self.finishes)
             .field("failed_builds", &self.failed_builds)
             .field("locomotion", &self.locomotion.is_some())
+            .field("owners", &self.owners)
+            .field("running", &self.running)
             .finish()
     }
 }
@@ -381,29 +382,43 @@ impl TreeWorld for VmTree<'_> {
 
     fn stop(&mut self, node: usize, _failed: bool) -> Result<(), VmError> {
         let action = self.action(node)?;
+        let service = brains(self.vm)?;
         set_running(self.vm, self.brain.mind, Some(Running::Changing(action)))?;
-        let result = self.event(node, "Stop", vec![]);
-        set_running(self.vm, self.brain.mind, None)?;
-        result?;
-        // The engine's "back to the default state" call after Stop is not read (NATIVE_AI_AWARENESS.md, "Not read
-        // yet"): an action that Stop left in its rest state needs nothing more; any other is NotYet.
-        let action = self.action(node)?;
-        let now_in = self.vm.space.heap.get(action)?.state;
-        let rest = self.brain.rest_states.get(node).copied().flatten();
-        if now_in != rest {
-            let text = |vm: &Vm, n: Option<NameId>| n.map_or("none".to_string(), |n| vm.space.names.text(n).into_owned());
-            return Err(NotYet::not_read(
-                format!(
-                    "the action default-state call at state stop: {} is in state {} after Stop, not {}",
-                    ow_combat::hit::access::class_name(self.vm, action),
-                    text(self.vm, now_in),
-                    text(self.vm, rest)
-                ),
-                RECORD_AWARENESS,
-            )
-            .into());
+        let result = (|| {
+            self.event(node, "Stop", vec![])?;
+            // The engine's "back to the default state" call after Stop is not read (NATIVE_AI_AWARENESS.md, "Not read
+            // yet"): an action that Stop left in its rest state needs nothing more; any other is NotYet.
+            let now_in = self.vm.space.heap.get(action)?.state;
+            let rest = self.brain.rest_states.get(node).copied().flatten();
+            if now_in != rest {
+                let text =
+                    |vm: &Vm, n: Option<NameId>| n.map_or("none".to_string(), |n| vm.space.names.text(n).into_owned());
+                return Err(NotYet::not_read(
+                    format!(
+                        "the action default-state call at state stop: {} is in state {} after Stop, not {}",
+                        ow_combat::hit::access::class_name(self.vm, action),
+                        text(self.vm, now_in),
+                        text(self.vm, rest)
+                    ),
+                    RECORD_AWARENESS,
+                )
+                .into());
+            }
+            Ok(())
+        })();
+        // No service borrow crosses a VM call. Restore only adapter bookkeeping, never script side effects.
+        let running = result.as_ref().err().map(|_| Running::Action(action));
+        match borrow(&service) {
+            Ok(mut s) => {
+                if let Some(running) = running {
+                    s.running.insert(self.brain.mind, running);
+                } else {
+                    s.running.remove(&self.brain.mind);
+                }
+            }
+            Err(e) => return result.and(Err(e)),
         }
-        Ok(())
+        result
     }
 
     /// [`LOCK`]: not locked while `bInAtomicSection` is clear; `NotYet` while it is set.
@@ -821,12 +836,13 @@ fn n_atomic(c: &mut NativeCall<'_>, write: Option<bool>) -> Result<Value, VmErro
 // ActionSequence.IsRunning ([`LOCK`]).
 fn n_is_running(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let action = this(c)?;
-    let service = brains(c.vm)?;
-    let (owner, running) = {
+    let service = c.vm.service::<Brains>().ok_or_else(|| -> VmError {
+        NotYet::not_read("IsRunning: no brains service represents the action's ownership or AI setup", RECORD_ACTIONS)
+            .into()
+    })?;
+    let owner = {
         let s = borrow(&service)?;
-        let owner = s.owners.get(&action).copied();
-        let running = owner.and_then(|m| s.running.get(&m).copied());
-        (owner, running)
+        s.owners.get(&action).copied()
     };
     if owner.is_none() {
         let ai = match get(c.vm, action, "AI")? {
@@ -842,16 +858,12 @@ fn n_is_running(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     }
-    match running {
-        Some(Running::Changing(a)) if a == action => Err(NotYet::not_read(
-            "IsRunning during the action's own Start or Stop: whether the tree's current state already (or still) \
-             names it is not read",
-            RECORD_ACTIONS,
-        )
-        .into()),
-        Some(Running::Action(a)) => Ok(Value::Bool(a == action)),
-        _ => Ok(Value::Bool(false)),
-    }
+    Err(NotYet::not_read(
+        "IsRunning on an owned action: its AI interface/component/current-state setup is not represented; \
+         Rust tree ownership does not establish that setup",
+        RECORD_ACTIONS,
+    )
+    .into())
 }
 
 // ActionSequence.IsActionReadyToFinish ([`LOCK`]).
