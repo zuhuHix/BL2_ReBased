@@ -511,7 +511,7 @@ impl FireMissionSlice {
                 let Some(pawn) = pawn else {
                     return Ok(Vec::new());
                 };
-                let contexts = p.contexts(id, pawn);
+                let contexts = p.contexts_for(vm, id, pawn)?;
                 ow_ai::awareness::holds::apply(vm, p.behavior(id).object, &contexts)?;
                 Ok(Vec::new())
             }),

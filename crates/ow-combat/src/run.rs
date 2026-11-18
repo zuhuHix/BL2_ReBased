@@ -400,7 +400,7 @@ fn run_script_behavior(
         .function(apply)
         .map(|d| d.params.clone())
         .unwrap_or_default();
-    let contexts = p.contexts(id, pawn);
+    let contexts = p.contexts_for(vm, id, pawn)?;
     let len = p.trace.len();
     // The output links go to the behavior kernel pack's shared collector (ow_behavior::kernel::natives::collect).
     // A raise the script defers onto this provider records where it stood (the order tripwire).
@@ -441,11 +441,11 @@ fn make_provider(
                     // Off: the context itself, and the pawn question NotYet (decision 2026-11-16-83); Reference: the
                     // C++ pawn-to-mind stand-in.
                     if vm.parity == ParityMode::Off {
-                        let contexts = p.contexts(id, pawn);
+                        let contexts = p.contexts_for(vm, id, pawn)?;
                         crate::holds::apply_hold_behavior(vm, object, &contexts)?;
                         return Ok(Vec::new());
                     }
-                    for context in p.contexts(id, pawn) {
+                    for context in p.contexts_for(vm, id, pawn)? {
                         let target = hit::ai_interface_for(vm, context)?;
                         call_method(
                             vm,

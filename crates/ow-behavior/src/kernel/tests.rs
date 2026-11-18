@@ -1012,3 +1012,118 @@ fn a_latent_wait_and_its_own_delayed_link_due_together_run_link_first() {
     assert_eq!(p.trace, ["Go -> T", "Go -> N", "Go -> T"]);
     assert_eq!(*seen.borrow(), [(true, true, 0), (false, true, 1)]);
 }
+
+// Invented handles and properties only; no native/gameplay parity claim.
+fn explicit_context(env: &mut Env, p: &Provider, id: BehaviorId, value: Option<ObjRef>) {
+    Provider::write_context_field(
+        &mut env.vm,
+        p.behavior(id).object,
+        "Context",
+        "ContextObject",
+        Value::Object(value),
+    )
+    .unwrap();
+}
+
+#[test]
+fn runner_context_explicit_object_without_link_and_reference_unchanged() {
+    let mut env = Env::of(&rules());
+    let p = env.provider("ToyRules");
+    let id = BehaviorId { sequence: 0, index: 12 };
+    let own = toy_object(&mut env, "Own");
+    let other = toy_object(&mut env, "Explicit");
+    explicit_context(&mut env, &p, id, Some(other));
+    // Selector Self (zero) must not replace runner context selection.
+    assert_eq!(p.contexts_for(&env.vm, id, own).unwrap(), [other]);
+    env.vm.parity = ow_core::ParityMode::Reference;
+    assert_eq!(p.contexts_for(&env.vm, id, own).unwrap(), [own]);
+}
+
+#[test]
+fn runner_context_link_wins_even_when_empty() {
+    let mut env = Env::of(&variables_spec("BVAR_Int"));
+    let mut p = env.provider("P");
+    let id = BehaviorId {
+        sequence: 0,
+        index: 0,
+    };
+    let own = toy_object(&mut env, "Own");
+    let explicit = toy_object(&mut env, "Explicit");
+    let linked = toy_object(&mut env, "Linked");
+    explicit_context(&mut env, &p, id, Some(explicit));
+    assert!(p.contexts_for(&env.vm, id, own).unwrap().is_empty());
+    p.fire_event(&mut env.vm, "Go", &DetMap::new(), -1, &[None, Some(linked)])
+        .unwrap();
+    assert_eq!(p.contexts_for(&env.vm, id, own).unwrap(), [linked]);
+}
+
+#[test]
+fn runner_context_null_and_missing_fall_back_to_own() {
+    let mut env = Env::of(&rules());
+    let p = env.provider("ToyRules");
+    let own = toy_object(&mut env, "Own");
+    for index in [12, 1] {
+        assert_eq!(
+            p.contexts_for(&env.vm, BehaviorId { sequence: 0, index }, own)
+                .unwrap(),
+            [own]
+        );
+    }
+}
+
+#[test]
+fn runner_context_refuses_stale_consumer_behavior_and_link() {
+    use ow_object::heap::HeapError;
+    use ow_vm::error::VmError;
+    let mut env = Env::of(&variables_spec("BVAR_Int"));
+    let mut p = env.provider("P");
+    let id = BehaviorId {
+        sequence: 0,
+        index: 0,
+    };
+    let gone = toy_object(&mut env, "Gone");
+    env.vm.space.free(gone).unwrap();
+    let own = toy_object(&mut env, "Replacement");
+    p.data.sequences[0].variables[0].live = Some(gone);
+    assert_eq!(
+        p.contexts_for(&env.vm, id, own),
+        Err(VmError::Heap(HeapError::Stale(gone)))
+    );
+    p.data.sequences[0].behaviors[0].variables.clear();
+    assert_eq!(
+        p.contexts_for(&env.vm, id, gone),
+        Err(VmError::Heap(HeapError::Stale(gone)))
+    );
+    let behavior = p.behavior(id).object;
+    env.vm.space.free(behavior).unwrap();
+    assert_eq!(
+        p.contexts_for(&env.vm, id, own),
+        Err(VmError::Heap(HeapError::Stale(behavior)))
+    );
+}
+
+#[test]
+fn runner_context_refuses_unchecked_stale_explicit_object() {
+    use ow_object::heap::HeapError;
+    use ow_vm::error::VmError;
+    let mut env = Env::of(&rules());
+    let p = env.provider("ToyRules");
+    let id = BehaviorId {
+        sequence: 0,
+        index: 12,
+    };
+    let own = toy_object(&mut env, "Own");
+    let gone = toy_object(&mut env, "Gone");
+    explicit_context(&mut env, &p, id, Some(gone));
+    let behavior = p.behavior(id).object;
+    let class = env.vm.space.heap.get(behavior).unwrap().class;
+    let addr = PropAddr::scalar(env.vm.space.prop(class, "Context").unwrap());
+    let stale_value = env.vm.space.read(behavior, addr).unwrap().clone();
+    env.vm.space.free(gone).unwrap();
+    // Simulate unchecked storage corruption; normal writes refuse a stale reference.
+    *env.vm.space.heap.slot_mut(&env.vm.space.classes, behavior, addr).unwrap() = stale_value;
+    assert_eq!(
+        p.contexts_for(&env.vm, id, own),
+        Err(VmError::Heap(HeapError::Stale(gone)))
+    );
+}

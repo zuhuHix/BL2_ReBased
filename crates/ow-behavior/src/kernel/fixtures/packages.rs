@@ -108,6 +108,8 @@ fn willowgame() -> Vec<u8> {
     // No defaults: bSupportsDefaultOutputLink is false unless tagged.
     let context = d.struct_("ToyContext", None);
     d.prop("Bool", context, "bSupportsDefaultOutputLink", 0);
+    d.prop("Object", context, "ContextObject", object);
+    d.prop("Byte", context, "BehaviorContext", 0);
     let compare = d.cls("Behavior_CompareObject", object);
     d.prop("Object", compare, "ObjectA", object);
     d.prop("Object", compare, "ObjectB", object);
