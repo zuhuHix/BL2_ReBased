@@ -72,6 +72,20 @@ impl Drop for Fixture {
 #[test]
 fn off_slice_configures_int_roots_and_reference_has_no_backend() {
     use ow_world::world::localize::Localization;
+    let check = |cooked: &str| {
+        let off = open(cooked, ParityMode::Off, IdentityPolicy::FirstInScanOrder).unwrap();
+        assert_eq!(off.service::<Localization>().unwrap().borrow_mut().get("ToySection", "ToyKey", "ToyText").unwrap(), "third");
+        let reference = open(cooked, ParityMode::Reference, IdentityPolicy::FirstInScanOrder).unwrap();
+        assert!(reference.service::<Localization>().is_none());
+    };
+    const CHILD: &str = "OW_TEST_SLICE_LOCALIZE_RELATIVE_CHILD";
+    if std::env::var_os(CHILD).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        for cooked in [".", "../CookedPCConsole", "unused/.."] {
+            check(cooked);
+        }
+        println!("relative localisation checks completed");
+        return;
+    }
     let f = Fixture::new();
     let game = f.dir.join("Install");
     let cooked = game.join("WillowGame").join("CookedPCConsole");
@@ -83,11 +97,18 @@ fn off_slice_configures_int_roots_and_reference_has_no_backend() {
         let bytes: Vec<u8> = [0xfeff].into_iter().chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect();
         std::fs::write(dir.join("ToyText.int"), bytes).unwrap();
     }
-    let cooked = cooked.to_str().unwrap();
-    let off = open(cooked, ParityMode::Off, IdentityPolicy::FirstInScanOrder).unwrap();
-    assert_eq!(off.service::<Localization>().unwrap().borrow_mut().get("ToySection", "ToyKey", "ToyText").unwrap(), "third");
-    let reference = open(cooked, ParityMode::Reference, IdentityPolicy::FirstInScanOrder).unwrap();
-    assert!(reference.service::<Localization>().is_none());
+    check(cooked.to_str().unwrap());
+    // Set cwd only in the child test process; other parallel tests retain their own cwd.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["off_slice_configures_int_roots_and_reference_has_no_backend", "--nocapture"])
+        .env(CHILD, "1")
+        .current_dir(&cooked)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("relative localisation checks completed"), "child test did not run: {stdout}");
+    check(cooked.join("..").join("CookedPCConsole").to_str().unwrap());
 }
 
 #[test]

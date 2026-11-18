@@ -2,6 +2,17 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**Object.Localize path correction (2026-11-18, desktop):** AI-assisted (Codex/GPT-6.1 Sol).
+The CLI now derives localization roots from the package store's absolute, lexically normalized root.
+A child test process covers `--cooked .`, relative parent components and an absolute parent-component path
+without changing the parent test process's working directory. The regression failed before the fix (0 passed /
+1 failed) and passes within the workspace: 1,870 passed / 0 failed / 42 ignored. Workspace build and release
+CLI build pass; Rust CTests 7/7, 0 failed, 62.58 s. Fresh Reference capture matches saved main exactly
+(22/22 OK, 0 errors, 39 events); Off still exits 3 with the same partial output and Pawn IAIInterface refusal
+(12 emitted OK steps, 14 events; final errors array unavailable). Earlier C++/Python and Fire evidence is
+reused, not rerun. Logs are under ignored `local/p2/fix-localize-off/review-r2-*`. No host or real-game run;
+native/gameplay parity remains `UNVERIFIED`.
+
 **Object.Localize INT / Off (2026-11-17, desktop; operations recovery 2026-11-18):** AI-assisted
 (Codex/GPT-6.1 Sol). Workspace build and release CLI build pass (`--locked -j 2`); workspace tests
 1,870 passed / 0 failed / 42 ignored. Focused tests: 9 passed / 0 failed / 1 installed test ignored;

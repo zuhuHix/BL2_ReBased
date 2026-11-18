@@ -214,6 +214,7 @@ fn stub_policy(mode: ParityMode) -> StubPolicy {
 /// world-only behavior handlers, as `--mission-run` builds it.
 fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Failure> {
     let defs = DefStore::open(PathBuf::from(cooked), policy, mode).map_err(BehaviorError::from)?;
+    let cooked_root = defs.packages().root().to_path_buf();
     let attrs = AttributeSystem::standard().map_err(|e| error_text(&e))?;
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode).with_stub_policy(stub_policy(mode));
     ow_vm::natives_core::register(&mut vm).map_err(|e| error_text(&e))?;
@@ -221,7 +222,7 @@ fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Fa
     if mode != ParityMode::Reference {
         // This bounded CLI selects INT explicitly; it does not infer the game's global language/options.
         // No localization config/root list is represented elsewhere in this command.
-        let game = Path::new(cooked)
+        let game = cooked_root
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| "localization: cooked root has no install parent".to_string())?;
