@@ -274,3 +274,20 @@ old code 0 passed / 1 failed; correction 1 passed / 0 failed, 191 filtered out, 
 The test is ignored by default because it needs an adapter; it was explicitly run locally.
 No new window, real-game session or visual/gameplay parity claim. Prior reported workspace and C++
 results were not rerun for this one-line rendering correction; final-head branch CI remains required.
+
+**FIX-BEHAVIOR-CONTEXT-OBJECT (2026-11-18, pc-hummer, base 2fcae040):** AI-assisted
+(Codex / GPT-6.1 Sol). Off runner selection now uses the explicit context object when there is no Context link;
+a Context link still wins even when empty. Native/gameplay semantics remain UNVERIFIED. Corrected synthetic
+regression RED: 2 passed / 3 failed; GREEN: 5 passed / 0 failed (included in the workspace run).
+`cargo build --workspace --locked -j2`, `cargo test --workspace --locked -j2 --no-fail-fast` and the release CLI
+build exit 0; workspace totals 1,865 passed / 0 failed / 41 ignored. Seven Rust CTests: 7/7 passed, 13.46 s.
+Reused non-Rust CTests: 166/166; reused C++ reader verification: 9 packages, 3,339/3,339 class bodies exact.
+These were not rerun: the C++/Python input blobs match the earlier local evidence (506 paths checked against
+its source dadca792), and no src/tools/tests/CMakeLists input path changed. The earlier full 173-entry run had
+two Rust failures; those are superseded here only by the fresh seven-entry Rust run.
+Fresh parent/child Reference slice captures: both exit 0, 22 steps, 39 events, 0 errors, equal after excluding
+only timing fields. Off captures: both exit 3, identical truncated JSON with 12 complete steps and 14 events;
+the Pawn IAIInterface routing refusal remains. This does not establish an improvement in the installed Off run.
+Captures and failed regression attempts are ignored under `local/p2/fix-behavior-context-object/`.
+Fire checker self-test passes; installed C++ Fire check: 33 of 33 rules hold; crate edges: 19 tests OK.
+No host, visual, GPU or running-game validation; decision 2026-11-18-01.

@@ -887,7 +887,7 @@ pub fn run_skill_behavior(
     consumer: ObjRef,
 ) -> Result<Vec<i32>, VmError> {
     let object = p.behavior(id).object;
-    let contexts = p.contexts(id, consumer);
+    let contexts = p.contexts_for(vm, id, consumer)?;
     apply_to_contexts(vm, object, &contexts, consumer)
 }
 

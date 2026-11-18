@@ -1951,7 +1951,7 @@ impl MissionScript {
         let director = self
             .director()
             .ok_or_else(|| data("mission script bridge: the director's chain ran without a director".to_string()))?;
-        let contexts = p.contexts(id, director);
+        let contexts = p.contexts_for(vm, id, director)?;
         let (class, state) = {
             let x = vm.space.heap.get(behavior.object)?;
             (x.class, x.state)

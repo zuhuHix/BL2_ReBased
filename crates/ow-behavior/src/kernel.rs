@@ -654,7 +654,7 @@ impl Provider {
         result
     }
 
-    /// The objects behavior `id` runs on: those of its Context-type variable link, else `own` (the consumer's own
+    /// Reference selection: those of the Context-type variable link, else `own` (the consumer's own
     /// object). G2, UNVERIFIED. An empty list means the behavior does not run.
     ///
     /// # Panics
@@ -669,6 +669,59 @@ impl Provider {
             Some(link) => self.linked_objects(id, link),
             None => vec![own],
         }
+    }
+
+    /// Checked runner selection. Reference retains the reference runner's link-or-consumer rule.
+    /// Off also uses the behavior's explicit Context.ContextObject when there is no Context link.
+    /// UNVERIFIED in the running game: NATIVE_BEHAVIOR_CONTEXT lines 100-130 and
+    /// NATIVE_BEHAVIOR_POPULATION G2. An empty Context link is authoritative.
+    pub fn contexts_for(
+        &self,
+        vm: &Vm,
+        id: BehaviorId,
+        own: ObjRef,
+    ) -> Result<Vec<ObjRef>, ow_vm::error::VmError> {
+        use ow_core::ParityMode;
+        use ow_vm::error::VmError;
+
+        if vm.parity == ParityMode::Reference {
+            return Ok(self.contexts(id, own));
+        }
+        let behavior = self.behavior(id);
+        let class = vm.space.heap.get(behavior.object)?.class;
+        let contexts = if let Some(link) = behavior
+            .variables
+            .iter()
+            .find(|l| l.link_type == "BVARLINK_Context")
+        {
+            self.linked_objects(id, link)
+        } else {
+            let context = vm
+                .space
+                .prop(class, "Context")
+                .map(|p| vm.space.read(behavior.object, PropAddr::scalar(p)))
+                .transpose()?;
+            let explicit = match context {
+                None => None,
+                Some(value @ Value::Struct(_)) => {
+                    match provider::field(&vm.space, value, "ContextObject") {
+                        None | Some(Value::Object(None)) => None,
+                        Some(Value::Object(Some(object))) => Some(*object),
+                        _ => {
+                            return Err(VmError::Decode(
+                                "behavior Context.ContextObject is not an object".into(),
+                            ));
+                        }
+                    }
+                }
+                _ => return Err(VmError::Decode("behavior Context is not a struct".into())),
+            };
+            vec![explicit.unwrap_or(own)]
+        };
+        for &object in &contexts {
+            vm.space.heap.get(object)?;
+        }
+        Ok(contexts)
     }
 
     /// A property linked with a type that is neither Input nor Output means the link data was not understood: an
