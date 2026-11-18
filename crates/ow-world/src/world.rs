@@ -439,6 +439,7 @@ const EVALUATE: &str = "AttributeInitializationDefinition.EvaluateInitialization
 /// The world's natives as a [`NativePack`]: `Actor.Spawn`, `Actor.Destroy`, the nine timer natives,
 /// `AttributeInitializationDefinition.EvaluateInitializationData`, and the three `GetWorldInfo` natives. They find
 /// the world's services at call time, so without [`World::new`] they answer `NotYet`.
+/// Off mode also binds `Object.Localize`; its backend/readiness must be supplied explicitly by the caller.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pack;
 
@@ -446,6 +447,7 @@ impl NativePack for Pack {
     fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
         actors::register(vm)?;
         timers::register(vm)?;
+        localize::register(vm)?;
         // EvaluateInitializationData(InitializationData, ContextSource, optional OptionalOverrideContextSource), a
         // static native: the evaluator of ow-attr (NATIVE_ATTRIBUTES.md section 1, UNVERIFIED there). The C++ refuses
         // an override context source (`src/combat.cpp`); the evaluator reads it as the record does (tried first for
@@ -496,6 +498,8 @@ impl NativePack for Pack {
 
 /// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).
 pub mod mapload;
+
+pub mod localize;
 
 #[cfg(test)]
 mod tests;

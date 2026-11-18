@@ -218,6 +218,20 @@ fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Fa
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode).with_stub_policy(stub_policy(mode));
     ow_vm::natives_core::register(&mut vm).map_err(|e| error_text(&e))?;
     BehaviorPack.register(&mut vm).map_err(BehaviorError::from)?;
+    if mode != ParityMode::Reference {
+        // This bounded CLI selects INT explicitly; it does not infer the game's global language/options.
+        // No localization config/root list is represented elsewhere in this command.
+        let game = Path::new(cooked)
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| "localization: cooked root has no install parent".to_string())?;
+        let roots = ["Engine", "Gearbox", "WillowGame"]
+            .map(|name| game.join(name).join("Localization"))
+            .to_vec();
+        let backend = ow_world::world::localize::Localization::ready(roots, "INT", false)
+            .map_err(BehaviorError::from)?;
+        vm.add_service(backend).map_err(|e| error_text(&e))?;
+    }
     Ok(vm)
 }
 
