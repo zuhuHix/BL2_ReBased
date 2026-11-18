@@ -70,6 +70,27 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn off_slice_configures_int_roots_and_reference_has_no_backend() {
+    use ow_world::world::localize::Localization;
+    let f = Fixture::new();
+    let game = f.dir.join("Install");
+    let cooked = game.join("WillowGame").join("CookedPCConsole");
+    std::fs::create_dir_all(&cooked).unwrap();
+    for (root, value) in [("Engine", "first"), ("Gearbox", "second"), ("WillowGame", "third")] {
+        let dir = game.join(root).join("Localization").join("INT");
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = format!("[ToySection]\nToyKey={value}");
+        let bytes: Vec<u8> = [0xfeff].into_iter().chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect();
+        std::fs::write(dir.join("ToyText.int"), bytes).unwrap();
+    }
+    let cooked = cooked.to_str().unwrap();
+    let off = open(cooked, ParityMode::Off, IdentityPolicy::FirstInScanOrder).unwrap();
+    assert_eq!(off.service::<Localization>().unwrap().borrow_mut().get("ToySection", "ToyKey", "ToyText").unwrap(), "third");
+    let reference = open(cooked, ParityMode::Reference, IdentityPolicy::FirstInScanOrder).unwrap();
+    assert!(reference.service::<Localization>().is_none());
+}
+
+#[test]
 fn caller_exposes_code_template_without_exposing_unrelated_packages() {
     let f = Fixture::new();
     let mut unrelated = PackageBuilder::new_empty();

@@ -2,6 +2,19 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**Object.Localize INT / Off (2026-11-17, desktop; operations recovery 2026-11-18):** AI-assisted
+(Codex/GPT-6.1 Sol). Workspace build and release CLI build pass (`--locked -j 2`); workspace tests
+1,870 passed / 0 failed / 42 ignored. Focused tests: 9 passed / 0 failed / 1 installed test ignored;
+the first run's one path-separator assertion failure is preserved. Explicit installed test: 1 passed,
+3/3 INT lookups, no localized payload printed. Rust CTests: 7/7, 0 failed; Fire self-test passes and
+Reference installed checker: 33/33 rules. Saved-main Reference capture matches exactly: 22/22 OK,
+0 errors, 39 events. Off remains exit 3 after 12 complete emitted OK steps / 14 events at the earlier
+Pawn IAIInterface refusal; partial stdout and fatal stderr match saved main, final errors array unavailable.
+Unchanged C++/Python coverage is reused separately: 166/166 and 9 packages / 3,339 exact class bodies,
+not rerun here. The interrupted original workspace test had no completed exit; recovery ran the outstanding
+test/release gates only. Logs and binaries: ignored `local/p2/fix-localize-off/`. No host, visual or
+real-game validation; native behavior and gameplay parity remain `UNVERIFIED`. Decision 2026-11-17-11.
+
 **NAV-MESH review r2 (2026-11-17, zuhu desktop):** AI-assisted (Codex / GPT-6.1 Sol). One additional synthetic
 refusal-table case reproduces a neighbour edge with repeated endpoints: it failed before the sorted-pair check and
 passes after it. Workspace build and release CLI build clean; workspace tests 1,784 passed / 0 failed / 30 ignored;
