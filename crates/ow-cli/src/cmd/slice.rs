@@ -85,7 +85,7 @@ pub const REFERENCE_STUBS: &[(&str, &str)] = &[
     ("MissionTracker.GetObjectivesProgress(object,array,bool)", "a tracker query; the C++ has none (Off binds it, decision 2026-11-19-05)"),
     ("MissionTracker.RegisterWaypoint(object,object)", "the HUD waypoint registry; presentation, not read"),
     ("Object.Localize(string,string,string)", "localized text lookup; no localization files are read"),
-    ("PlayerController.IsLocalPlayerController()", "a controller query whose rule is not read"),
+    ("PlayerController.IsLocalPlayerController()", "a controller query; the C++ has none (Off binds it, decision 2026-11-19-15)"),
     ("QuestAcceptGFxMovie.UpdateMissionTextList()", "the mission screen's text list; the screen is not hosted"),
     ("Trigger.TriggerDetachSprites()", "editor sprites of a trigger; presentation"),
     ("WillowGFxMovie3D.FocusOn(object)", "the 3D movie's camera focus; presentation"),
