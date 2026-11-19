@@ -122,7 +122,9 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     let manager = ow_skills::action_skill::manager::Pack;
     // The player pawn data manager natives (FIX-PAWN-DATA-B): bound in Off only, too.
     let pawn_data = ow_world::world::pawn_data::Pack;
-    let packs: [&dyn NativePack; 3] = [&pack, &manager, &pawn_data];
+    // InitPlayerSkillTree (IMPL-INIT-PLAYER-SKILL-TREE, decision 2026-11-19-88): bound in Off only, too.
+    let skill_tree = ow_skills::tree::init::Pack;
+    let packs: [&dyn NativePack; 4] = [&pack, &manager, &pawn_data, &skill_tree];
     World::new(vm, BalanceState::new(snapshot), &packs).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => VmError::Script {
