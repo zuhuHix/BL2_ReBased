@@ -305,7 +305,7 @@ impl WorldStats {
             self.digest.push(p.location.map(f64::from));
             self.digest.push([f64::from(p.rotation.pitch), f64::from(p.rotation.yaw), f64::from(p.rotation.roll)]);
         }
-        if step % TRACE_EVERY == 0 {
+        if step.is_multiple_of(TRACE_EVERY) {
             self.trace.push((step, frame.ticks, frame.time_seconds));
         }
         self.last = frame;
@@ -522,7 +522,7 @@ impl Simulation for PlayWorld {
             stats.steps = stats.steps.saturating_add(1);
             stats.digest.push(self.mover.location);
             stats.end = self.mover.location;
-            if stats.steps % TRACE_EVERY == 0 {
+            if stats.steps.is_multiple_of(TRACE_EVERY) {
                 let step = stats.steps;
                 stats.trace.push((step, self.mover.location));
             }

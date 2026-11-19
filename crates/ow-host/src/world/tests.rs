@@ -271,7 +271,7 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: 
     p.build()
 }
 
-/// The exports of [`kismet_package`], by index.
+/// The exports of [`kismet_package_with`], by index.
 mod k {
     pub const PARENT: i32 = 1;
     pub const CHILD: i32 = 2;
@@ -298,7 +298,7 @@ fn vector_bytes(v: [f32; 3]) -> Vec<u8> {
     v.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
-/// `Test_K.upk`, an invented Kismet package (review r1 of #436), every op read through `read_graph`:
+/// `Test_K.upk` ([`kismet_package_with`]), an invented Kismet package (review r1 of #436), every op read through `read_graph`:
 /// - a parent sequence (1) and a child sequence (2) in it; in the child, a level-loaded event (3) linked to a finish op
 ///   (4) labelled `Out`; the child's output `Out` links to a Matinee op in the parent (5): the exit edge;
 /// - a remote event `Ping` (6) linked to an action firing `Ping` (7), which the name edge closes into a cycle, and the
@@ -308,12 +308,8 @@ fn vector_bytes(v: [f32; 3]) -> Vec<u8> {
 ///   720 degrees (two turns); and a track (13) whose middle key time is NaN;
 /// - (delta review of #436, finding 3) a level-loaded event (14) entering a second child sequence (15), in which only a
 ///   touch (16) reaches the finish op (17) labelled `Done`; the child's output `Done` links to a Matinee op (18).
-fn kismet_package() -> Vec<u8> {
-    kismet_package_with(true)
-}
-
-/// [`kismet_package`], whose remote event `Ping` (6) has no `EventName` tag unless `remote_named` (for
-/// [`engine_with`]`(false)`).
+///
+/// The remote event `Ping` (6) has no `EventName` tag unless `remote_named` (for [`engine_with`]`(false)`).
 fn kismet_package_with(remote_named: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
@@ -416,7 +412,7 @@ fn kismet_package_with(remote_named: bool) -> Vec<u8> {
     p.build()
 }
 
-/// A VM over a store of the invented `Engine.upk` and [`kismet_package`], whose folder lives as long as the guard
+/// A VM over a store of the invented `Engine.upk` and [`kismet_package_with`], whose folder lives as long as the guard
 /// (the store opens an object's file again when it loads it).
 struct KismetStore {
     vm: Vm,
@@ -436,6 +432,11 @@ fn kismet_store() -> KismetStore {
 
 /// [`kismet_store`] over [`engine_with`] and [`kismet_package_with`] of `remote_named`.
 fn kismet_store_with(remote_named: bool) -> KismetStore {
+    kismet_store_in(remote_named, ParityMode::Off)
+}
+
+/// [`kismet_store_with`] with the VM in `parity`.
+fn kismet_store_in(remote_named: bool, parity: ParityMode) -> KismetStore {
     let dir = std::env::temp_dir().join(format!(
         "ow-host-kismet-{}-{}",
         std::process::id(),
@@ -444,8 +445,8 @@ fn kismet_store_with(remote_named: bool) -> KismetStore {
     let _ = std::fs::remove_dir_all(&dir);
     let (engine, kismet) = (engine_with(remote_named), kismet_package_with(remote_named));
     let files: [(&str, &[u8]); 2] = [("Engine.upk", &engine), ("Test_K.upk", &kismet)];
-    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
-    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, parity).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), parity);
     let package = vm.defs.code_mut().1.load(&PackageName::parse("Test_K").unwrap()).unwrap();
     KismetStore { vm, package, dir }
 }
@@ -950,6 +951,42 @@ fn a_remote_event_whose_name_does_not_read_makes_the_graph_incomplete() {
     assert_eq!(start_of(&graph, remote), Start::Incomplete("a remote event with no EventName (x1)".into()));
 }
 
+/// Review r3 of #436, finding 1: the delta review's graph rules are Off's. On the gated child (a load event enters
+/// it, only a touch reaches its finish op), Off answers the op behind its output `StartupUnknown` (not read), and
+/// Reference keeps the pre-delta `AtLoad` (layer absent); an unnamed remote event is a fault in Off only.
+#[test]
+fn the_delta_graph_rules_are_off_s_and_reference_keeps_the_old_answers() {
+    use matinee::{Start, read_graph, start_of};
+    use ow_core::notyet::Missing;
+    let c = "Engine.InterpActor";
+    for parity in [ParityMode::Off, ParityMode::Reference] {
+        let mut store = kismet_store_in(true, parity);
+        let package = store.package;
+        let vm = &mut store.vm;
+        let graph = read_graph(vm, &[package].into_iter().collect()).unwrap();
+        assert!(graph.incomplete.is_empty(), "{parity:?}: {:?}", graph.incomplete);
+        let gated_op = vm.defs.resolve_ref(&mut vm.space, package, k::GATED_OP).unwrap().unwrap();
+        let start = start_of(&graph, gated_op);
+        let mut bindings = MatineeBindings::default();
+        let actor = vm.defs.resolve_ref(&mut vm.space, package, k::TOUCH).unwrap().unwrap();
+        bindings.bound.insert(actor);
+        bindings.by_actor.insert(actor, [gated_op].into_iter().collect());
+        bindings.starts.insert(gated_op, start.clone());
+        let refusal = physics_rule("PHYS_Interpolating", c, &Driver::of(&bindings, actor), parity).unwrap_err();
+        if parity == ParityMode::Off {
+            assert_eq!(start, Start::StartupUnknown { touch: true });
+            assert!(matches!(refusal.missing, Missing::NotRead), "{refusal}");
+        } else {
+            assert_eq!(start, Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
+            assert!(matches!(refusal.missing, Missing::LayerAbsent(_)), "{refusal}");
+        }
+        let mut unnamed = kismet_store_in(false, parity);
+        let package = unnamed.package;
+        let graph = read_graph(&mut unnamed.vm, &[package].into_iter().collect()).unwrap();
+        assert_eq!(graph.incomplete.is_empty(), parity == ParityMode::Reference, "{parity:?}: {:?}", graph.incomplete);
+    }
+}
+
 /// Delta review of #436, finding 5: a streamed level that places no actor holds the load event that starts the
 /// persistent level's Matinee op (through the remote event `Go`), so the scans must read the loader's levels, not the
 /// placed actors' packages.
@@ -1002,6 +1039,44 @@ fn a_matinee_refusal_mid_tick_stops_the_world_after_its_partial_writes() {
     step(&mut world, &mut frame, 0.25);
     assert_eq!(frame, stopped);
     assert_eq!(state(&world), at_stop, "no later tick ran");
+}
+
+/// Review r3 of #436, finding 2: a tick refused before it writes (a NaN delta) halts the world for good too, but
+/// without the partial-writes mark, and the clock and the time fields are as the load left them.
+#[test]
+fn a_tick_refused_before_it_writes_halts_without_partial_writes() {
+    let at = [5.0, 6.0, 7.0];
+    let (mut world, _) = builder_with(0, Some("PHYS_Interpolating"), true, at, 0)().unwrap();
+    let pawn = *world.actors().borrow().list().last().unwrap();
+    let wi = world.actors().borrow().world_info().unwrap();
+    let state = |world: &World| {
+        let space = &world.vm.space;
+        let times = ["TimeSeconds", "RealTimeSeconds", "DeltaSeconds"].map(|f| float(space, wi, f));
+        (world.vm.clock.tick(), times, transform(space, pawn).unwrap())
+    };
+    let loaded = state(&world);
+    let mut frame = WorldFrame::default();
+    step(&mut world, &mut frame, f32::NAN);
+    let halt = frame.halted.clone().expect("a NaN delta halts the tick");
+    assert!(!halt.partial_writes && !halt.not_yet, "{halt:?}");
+    assert!(halt.message.contains("the delta must be finite"), "{halt:?}");
+    assert_eq!(frame.ticks, 0);
+    assert_eq!(state(&world), loaded, "nothing was written");
+    // Terminal all the same: a good delta afterwards runs nothing.
+    let stopped = frame.clone();
+    step(&mut world, &mut frame, 0.25);
+    assert_eq!(frame, stopped);
+    assert_eq!(state(&world), loaded);
+    // Through the link, and in the report: no partial-writes wording.
+    let (mut link, _) = WorldLink::spawn(builder(0, [0.0; 3], 0)).unwrap();
+    let first = link.tick(f32::NAN);
+    let halt = first.halted.clone().expect("the link's first tick halts");
+    assert!(!halt.partial_writes, "{halt:?}");
+    assert_eq!(link.tick(1.0 / 60.0), first);
+    let stats = crate::play::WorldStats { last: first, ..Default::default() };
+    let text = crate::play::world_text(&stats);
+    assert!(text.contains("play world halted at tick 1 (error): world tick: the delta must be finite"), "{text}");
+    assert!(!text.contains("partial writes"), "{text}");
 }
 
 /// The invented movement tracks through `read_move` (review r1 of #436): a broken-tangent segment and yaw wound past
