@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-PLAYER-CLASS (2026-11-19, desktop, on main e59bff0):** AI-assisted (Claude Code, Claude Opus 5.5).
+`GBXDefinition.GetDefinition` and `LoadPlayerPawnDataAsync` in Off; the `maya` step's class select in Off.
+`cargo build --workspace` clean; `cargo test --workspace` 2,010 passed / 0 failed / 45 ignored; ctest at `-j 2`
+173/173, 0 failed, 357.40 s; verify_packages 9 packages, all class bodies exact. Installed, Off: `--combat-run
+maya:8` and slice-gate links 1, 3, 4, 5, 13 and 14 move from `FindAlreadyLoadedObject` with an empty path to
+`FindAlreadyLoadedObject` of `GD_Siren_Streaming.Pawn_Siren` (held by a package, not loaded); links 10 to 12
+unchanged (`AIComponent.ActivateEvent`).
+
 **FIX-POOL-SPAWN-B (2026-11-19, desktop, on main 79036dd):** AI-assisted (Claude Code, Claude Opus 5.5). The three
 `WillowInventory` natives bound in Off; `GetItemTossVelocity` NotYet in Off; Reference unbound. `cargo build
 --workspace` clean; `cargo test --workspace` 1,972 passed / 0 failed / 43 ignored (7 new `ow-inventory`, 7 new
