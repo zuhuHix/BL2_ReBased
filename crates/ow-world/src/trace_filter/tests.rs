@@ -353,3 +353,24 @@ fn a_terrain_on_either_side_of_the_owner_refuses() {
     w.space.write(q, PropAddr::scalar(field), Value::Object(Some(terrain))).unwrap();
     assert_eq!(tested(&w.space, q, controller, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
 }
+
+/// Review r2 of #514: a walked `Terrain` actor whose primitive names a stale explicit `Owner` (a handle that no longer
+/// resolves) refuses on the terrain, not with a lookup error: the walked actor is checked before the owner is resolved.
+/// The same stale owner on a non-terrain walked actor shows the lookup does fail once it is reached.
+#[test]
+fn a_walked_terrain_refuses_before_a_stale_owner_is_resolved() {
+    let mut w = world();
+    let prim = w.primitive;
+    let terrain = w.actor("Engine.Terrain", &["bCollideActors"]);
+    let stale = w.actor("Engine.StaticMeshActor", &[]);
+    let field = w.space.prop(prim, "Owner").unwrap();
+    let p = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    // The free clears every reference held in the heap, so the stale handle is put back in the slot directly: the
+    // primitive's Owner then names a handle that no longer resolves.
+    w.space.free(stale).unwrap();
+    *w.space.slot_mut(p, PropAddr::scalar(field)).unwrap() = Value::Object(Some(stale));
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    assert_eq!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
+    let walked = w.actor("Engine.StaticMeshActor", &["bWorldGeometry", "bCollideActors"]);
+    assert!(tested(&w.space, p, walked, box_test).is_err(), "the stale owner fails its lookup once reached");
+}
