@@ -703,12 +703,14 @@ pub const RECORD_SM_COMPONENT: &str = "NATIVE_SPECIAL_MOVE_COMPONENT.md";
 /// `GearboxPawn.GetSMComponent()`, coded from NATIVE_SPECIAL_MOVE_COMPONENT.md alone (UNVERIFIED in the running game):
 /// the pawn's `SMComponent` as it is, nothing created, checked or registered; None when the field is None.
 ///
-/// The game's pawn is expected to hold its own instance of the component (a default sub-object, copied per actor at
-/// spawn: stock UE3, UNVERIFIED in this game, the note's bl-sdk check settles it). A pawn
-/// whose `SMComponent` is not its own, that is whose component's outer is not the pawn (the class default's or an
-/// archetype's shared sub-object, which is what a pawn made from class defaults may hold), is
-/// `NotYet { NotRead }`: whether the port should answer that shared object is the note's open question 1, and
-/// answering it would let a `Play` on one pawn write the template. A class that declares no `SMComponent`, or one
+/// The game's pawn is expected to hold its own instance of the component: a default sub-object, copied per actor at
+/// spawn. The note's open question 1 is answered by stock UE3 component instancing, not by this game (UNVERIFIED
+/// here; the note's bl-sdk check settles it). Since decision 2026-11-19-44 the world's spawn makes that copy in Off
+/// (`ow_world::actors::instance_components`), outered to the new actor, so a spawned pawn's component is answered.
+/// A pawn whose component's outer is not the pawn is still `NotYet { NotRead }`. That is the class default's or an
+/// archetype's shared sub-object, held by a pawn the spawn did not instance (one made from class defaults by a
+/// caller that does not instance them). Answering that shared object would let a `Play` on one pawn write the
+/// template. A class that declares no `SMComponent`, or one
 /// holding a non-object, is a typed error.
 ///
 /// Reference: unbound. The C++ has no stand-in, so the VM's stub policy answers, as before (R3).
@@ -734,8 +736,9 @@ fn get_sm_component(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             if c.vm.space.heap.get(component)?.outer != Some(pawn) {
                 return Err(NotYet::not_read(
                     "GearboxPawn.GetSMComponent on a pawn whose SMComponent is not its own instance (a shared class \
-                     default or archetype sub-object): whether the port's pawn should hold its own instance \
-                     (NATIVE_SPECIAL_MOVE_COMPONENT.md open question 1)",
+                     default or archetype sub-object): the pawn was not made by a spawn that instances its \
+                     components (NATIVE_SPECIAL_MOVE_COMPONENT.md open question 1, answered by stock UE3 component \
+                     instancing, decision 2026-11-19-44)",
                     RECORD_SM_COMPONENT,
                 )
                 .into());

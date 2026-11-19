@@ -31,6 +31,9 @@ use ow_vm::api::{CallResult, NativeCall, Vm};
 use ow_vm::error::VmError;
 use ow_vm::natives_core::ActorWalk;
 
+mod instancing;
+pub use instancing::{COMPONENT_CLASS, instance_components};
+
 /// The record these rules come from.
 pub const RECORD: &str = "NATIVE_ENGINE_CORE.md (Spawning and lifetime, Iterators)";
 /// The record of the destroy routine's controller and player case (lane FIX-ACTOR-DESTROY, decision 2026-11-16-79).
@@ -546,11 +549,16 @@ fn collision(what: &'static str) -> VmError {
 /// 2. `NotYet`, before anything is made, for what needs collision, judged on the class defaults: the placement spot
 ///    search (`bCollideWorld`, or `bCollideWhenPlacing` outside a client, unless `bNoCollisionFail`); after play
 ///    began, the encroachment check or relocation of an actor that collides with actors (`bCollideActors`), and the
-///    base search of step 4. A template other than the class default object is `NotYet` too (how its instanced
-///    subobjects are copied is not read). An actor that does not collide with actors is taken to pass the
+///    base search of step 4. Under `ParityMode::Reference` a template other than the class default object is
+///    `NotYet` too (the C++ stand-in does not copy a template's sub-objects). In Off, since decision 2026-11-19-44,
+///    the actor is made from it; the collision pre-checks still read the class defaults (UNVERIFIED for an
+///    archetype whose flags differ). An actor that does not collide with actors is taken to pass the
 ///    encroachment check (UNVERIFIED: the check's internals are not read). The pre-checks are conservative: they
 ///    refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
-/// 3. The actor is made from the class defaults and appended to the level list; `CreationTime` = the world's
+/// 3. The actor is made from the class defaults (in `ParityMode::Off`, from the template: the class defaults or an
+///    archetype of the class) and appended to the level list. In Off it gets its own copy of each component the
+///    template owns ([`instance_components`]: public UE3 component instancing, UNVERIFIED in this game; decision
+///    2026-11-19-44). Then `CreationTime` = the world's
 ///    `TimeSeconds`, `WorldInfo`, `Location` and `Rotation` (the spawner's when omitted), the owner through
 ///    [`set_owner`] (`GainedChild`), then `Instigator` = **the spawner's** `Instigator`.
 /// 4. After play began: `PreBeginPlay`, `PostBeginPlay`, then `SetInitialState`; a base search when the actor has
@@ -597,11 +605,14 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     if begun && (flag(space, defaults, "bStatic")? || flag(space, defaults, "bNoDelete")?) {
         return Ok(None);
     }
+    let mut source = defaults;
     if let Some(t) = req.template {
         if space.heap.get(t)?.class != class {
             return Ok(None);
         }
-        if t != defaults {
+        if t != defaults && vm.parity == ParityMode::Off {
+            source = t;
+        } else if t != defaults {
             return Err(NotYet::not_read(
                 "Spawn with an ActorTemplate other than the class default object (how the template's instanced \
                  subobjects are copied)",
@@ -636,7 +647,21 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     };
     let instigator = object(space, spawner, "Instigator")?;
 
-    let actor = ow_vm::interp::instantiate_from_defaults(vm, class)?;
+    let actor = match vm.parity {
+        ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
+        ParityMode::Off => {
+            let actor = vm.instantiate(class, "")?;
+            if vm.defs.is_unloaded(&vm.space, source) {
+                let loaded = vm.defs.ensure_loaded(&mut vm.space, source);
+                vm.log.extend(vm.defs.take_log());
+                loaded?;
+            }
+            let slots = vm.space.heap.get(source)?.slots.clone();
+            vm.space.heap.get_mut(actor)?.slots = slots;
+            instance_components(vm, source, actor)?;
+            actor
+        }
+    };
     actors
         .try_borrow_mut()
         .map_err(borrow_mut_err)?
