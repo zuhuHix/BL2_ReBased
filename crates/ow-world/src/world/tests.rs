@@ -433,6 +433,7 @@ fn package() -> Vec<u8> {
     t.prop("Int", toy_component, "Payload", 0, 0);
     let toolbox = t.class("Toolbox", actor);
     t.prop("Object", toolbox, "Comp", 0, toy_component);
+    t.prop("Object", toolbox, "Thing", 0, object);
     t.p.build()
 }
 
@@ -1262,6 +1263,50 @@ fn an_off_spawn_from_an_archetype_copies_its_components() {
         assert_eq!(x.w.vm.space.heap.get(copy).unwrap().outer, Some(actor));
         assert_eq!(field(&x.w.vm.space, copy, "Payload").unwrap(), Value::Int(42));
         assert_eq!(field(&x.w.vm.space, archetype, "Comp").unwrap(), Value::Object(Some(component)));
+    });
+}
+
+/// A destroyed actor, a pending-delete archetype and an archetype with an `Owner` are refused as templates with
+/// `NotYet { NotRead }`, and so is an archetype holding a sub-object Off cannot copy; in each case nothing is made: the
+/// heap and the level list keep their counts (review r2 of #435, items 4 to 6).
+#[test]
+fn templates_off_cannot_spawn_from_leave_nothing_behind() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let probe = x.class("Probe");
+        let toolbox = x.class("Toolbox");
+        let gone = x.spawn("Probe");
+        assert!(destroy(&mut x.w.vm, gone).unwrap());
+        let pending = toy_archetype(&mut x, probe, "Probe_Pending");
+        set_field(&mut x.w.vm.space, pending, "bPendingDelete", Value::Bool(true)).unwrap();
+        let deleted = toy_archetype(&mut x, probe, "Probe_Deleted");
+        set_field(&mut x.w.vm.space, deleted, "bDeleteMe", Value::Bool(true)).unwrap();
+        let owned = toy_archetype(&mut x, probe, "Probe_Owned");
+        set_field(&mut x.w.vm.space, owned, "Owner", Value::Object(Some(wi))).unwrap();
+        let holder = toy_archetype(&mut x, toolbox, "Toolbox_Holder");
+        let thing_class = x.class("Object");
+        let plain = x.w.vm.space.alloc(thing_class, "PlainThing", Some(holder), ow_object::heap::Origin::Runtime).unwrap();
+        set_field(&mut x.w.vm.space, holder, "Thing", Value::Object(Some(plain))).unwrap();
+        for (class, template, what) in [
+            (probe, gone, "destroyed"),
+            (probe, pending, "pending-delete"),
+            (probe, deleted, "pending-delete"),
+            (probe, owned, "Owner is set"),
+            (toolbox, holder, "not a component"),
+        ] {
+            let (heap, list) = (x.w.vm.space.heap.len(), x.w.actors().borrow().list().len());
+            let req = SpawnRequest::new(Some(class)).with_template(Some(template));
+            match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+                VmError::NotYet(n) => {
+                    assert_eq!(n.missing, Missing::NotRead, "{what}");
+                    assert!(n.what.contains(what), "{what}: {n}");
+                }
+                e => panic!("{what}: expected NotYet, got {e}"),
+            }
+            assert_eq!(x.w.vm.space.heap.len(), heap, "{what}: nothing on the heap");
+            assert_eq!(x.w.actors().borrow().list().len(), list, "{what}: nothing in the level list");
+        }
     });
 }
 

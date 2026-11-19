@@ -32,7 +32,7 @@ use ow_vm::error::VmError;
 use ow_vm::natives_core::ActorWalk;
 
 mod instancing;
-pub use instancing::{COMPONENT_CLASS, instance_components};
+pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components};
 
 /// The record these rules come from.
 pub const RECORD: &str = "NATIVE_ENGINE_CORE.md (Spawning and lifetime, Iterators)";
@@ -579,8 +579,9 @@ fn collision(what: &'static str) -> VmError {
 /// physics-body and state-frame set-up of step 6, the zone and tick-group changes after `PreBeginPlay`, the
 /// per-component call of step 8.
 ///
-/// A failure part-way through (a `NotYet` after the actor is made) leaves the actor on the heap and in the level list,
-/// as before; nothing frees it (UNVERIFIED as the game's behaviour, which this port does not model).
+/// In Off nothing is left behind by a refusal before the actor joins the level list (review r2 of #435): the
+/// instancing's refusals and the fields written run before the actor is made, and a failure while making it frees
+/// it and its copies. A `NotYet` of the begin-play steps after that leaves the actor made, as step 4 says.
 ///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
@@ -655,13 +656,25 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     };
     let instigator = object(space, spawner, "Instigator")?;
 
+    // The fields written below exist before anything is made (review r2 of #435): a class without one fails here,
+    // with nothing left behind.
+    for name in ["CreationTime", "WorldInfo", "Location", "Rotation", "Instigator", "Owner"] {
+        prop_of(&vm.space, source, name)?;
+    }
     let actor = match vm.parity {
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
+            // Every refusal of the instancing runs before the actor is made; a failure while making it frees it.
+            let plan = plan_components(vm, source)?;
             let actor = vm.instantiate(class, "")?;
-            let slots = vm.space.heap.get(source)?.slots.clone();
-            vm.space.heap.get_mut(actor)?.slots = slots;
-            instance_components(vm, source, actor)?;
+            let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
+                vm.space.heap.get_mut(actor)?.slots = slots;
+                apply_plan(vm, &plan, actor)
+            });
+            if let Err(e) = made {
+                let _ = vm.space.free(actor);
+                return Err(e);
+            }
             actor
         }
     };
@@ -720,7 +733,8 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
 /// The archetype `t` of `class` an Off spawn is made from (decision 2026-11-19-44, review r1 of #435), loaded, or
 /// `NotYet { NotRead }` before anything is made:
 /// - a live actor (one in the level list) as the template: whether its run-time state is copied is not read;
-/// - a template whose properties are not loaded (a resource stand-in, its slots not the class layout's).
+/// - a template whose properties are not loaded (a resource stand-in, its slots not the class layout's);
+/// - a destroyed or pending-delete template (`bDeleteMe`, `bPendingDelete`), and one whose `Owner` is set.
 fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef) -> Result<ObjRef, VmError> {
     if actors.try_borrow().map_err(borrow_err)?.list.contains(&t) {
         return Err(NotYet::not_read(
@@ -728,6 +742,10 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
             RECORD,
         )
         .into());
+    }
+    // A destroyed or pending-delete template (review r2 of #435): what the game does with one is not read.
+    if vm.space.heap.get(t)?.destroyed {
+        return Err(NotYet::not_read("Spawn with a destroyed actor as its ActorTemplate", RECORD).into());
     }
     if vm.defs.is_unloaded(&vm.space, t) {
         let loaded = vm.defs.ensure_loaded(&mut vm.space, t);
@@ -743,6 +761,18 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
     if u32::try_from(vm.space.heap.get(t)?.slots.len()).ok() != Some(want) {
         return Err(NotYet::not_read(
             "Spawn with an ActorTemplate whose properties are not loaded (a stand-in with no slots)",
+            RECORD,
+        )
+        .into());
+    }
+    if flag(&vm.space, t, "bDeleteMe")? || flag(&vm.space, t, "bPendingDelete")? {
+        return Err(NotYet::not_read("Spawn with a pending-delete actor as its ActorTemplate", RECORD).into());
+    }
+    // The copied Owner would become the new actor's previous owner for the owner change (a spurious LostChild, a
+    // missing GainedChild): until the spawn's owner rules for a template are read, a template with an Owner waits.
+    if object(&vm.space, t, "Owner")?.is_some() {
+        return Err(NotYet::not_read(
+            "Spawn with an ActorTemplate whose Owner is set (the spawn's owner rules for a template are not read)",
             RECORD,
         )
         .into());
