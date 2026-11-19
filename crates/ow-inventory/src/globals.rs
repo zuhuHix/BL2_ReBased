@@ -101,6 +101,9 @@ pub fn declared_reference(vm: &mut Vm, o: ObjRef, name: &str, class: Option<&str
     }
 }
 
+/// The declared struct of `RarityLevelColors`' entries.
+pub const RARITY_LEVEL_COLOR: &str = "WillowGame.GlobalsDefinition.RarityLevelColor";
+
 /// The declared type of `TheGlobalsDefinition` (on `GearboxGlobals`) and of `PickupList`'s elements.
 pub const GEARBOX_GLOBALS_DEFINITION: &str = "GearboxFramework.GearboxGlobalsDefinition";
 pub const PICKUP_CLASS: &str = "WillowGame.WillowPickup";
@@ -115,7 +118,7 @@ pub fn globals_schemas(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), V
 }
 
 /// `PickupList`'s declaration on the globals' class: a dynamic array whose elements are `WillowPickup` references.
-fn pickup_list_declared(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
+pub fn pickup_list_declared(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
     let class = vm.space.heap.get(globals)?.class;
     let p = vm.space.prop(class, "PickupList").ok_or_else(|| bad(what, "the globals declare no PickupList"))?;
     let declared = vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim));
@@ -148,6 +151,9 @@ pub fn pickup_list(vm: &Vm, globals: ObjRef, what: &str) -> Result<Vec<Value>, V
 /// `RarityLevelColors` of `definition` as declared: a dynamic array of structs with `MinLevel`, `MaxLevel` (ints) and
 /// `DropLifeSpanType` (a byte), else a data error.
 pub fn rarity_bands(vm: &Vm, definition: ObjRef, what: &str) -> Result<Vec<(i32, i32, u8)>, VmError> {
+    if vm.defs.is_unloaded(&vm.space, definition) {
+        return Err(lazy_definition());
+    }
     let class = vm.space.heap.get(definition)?.class;
     let p = rarity_schema(vm, class, what)?;
     let entries = match vm.space.read(definition, PropAddr::scalar(p))? {
@@ -185,17 +191,21 @@ pub fn rarity_schema(vm: &Vm, class: ClassId, what: &str) -> Result<ow_object::i
         },
         other => return Err(bad(what, format!("RarityLevelColors is declared as {other:?}, not a dynamic array"))),
     };
+    // The declared struct itself, not any struct with the same field names (review r1 of #476).
+    if vm.space.classes.struct_by_path(RARITY_LEVEL_COLOR) != Some(ty) {
+        return Err(bad(what, format!("RarityLevelColors holds a struct that is not {RARITY_LEVEL_COLOR}")));
+    }
     let layout = vm.space.classes.struct_layout(ty).ok_or_else(|| bad(what, "RarityLevelColor has no layout"))?;
-    for (name, want) in [("MinLevel", "an int"), ("MaxLevel", "an int"), ("DropLifeSpanType", "a byte")] {
+    for (name, want) in [("MinLevel", "one int"), ("MaxLevel", "one int"), ("DropLifeSpanType", "one byte")] {
         let id = vm.space.names.find(name);
-        let kind = id.and_then(|id| layout.field(id)).map(|(_, d)| d.kind.clone());
-        let fits = match (name, &kind) {
-            ("DropLifeSpanType", Some(PropKind::Byte { .. })) => true,
-            ("MinLevel" | "MaxLevel", Some(PropKind::Int)) => true,
+        let decl = id.and_then(|id| layout.field(id)).map(|(_, d)| (d.kind.clone(), d.array_dim));
+        let fits = match (name, &decl) {
+            ("DropLifeSpanType", Some((PropKind::Byte { .. }, 1))) => true,
+            ("MinLevel" | "MaxLevel", Some((PropKind::Int, 1))) => true,
             _ => false,
         };
         if !fits {
-            return Err(bad(what, format!("RarityLevelColor.{name} is {kind:?}, not {want}")));
+            return Err(bad(what, format!("RarityLevelColor.{name} is declared as {decl:?}, not {want}")));
         }
     }
     Ok(p)
@@ -210,18 +220,32 @@ pub fn drop_life_span_type(bands: &[(i32, i32, u8)], level: i32) -> u8 {
 /// documentation).
 pub fn globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
     declared_reference(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
-    let class: ClassId = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
-    let held = object_of(&required(vm, globals, "TheGlobalsDefinition", what)?, what)?;
-    match held {
-        Some(d) if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) => Ok(d),
-        _ => Err(NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into()),
+    let first_load =
+        || -> VmError { NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into() };
+    // The validated holder first (review r1 of #476): None is the first load.
+    let Some(d) = object_of(&required(vm, globals, "TheGlobalsDefinition", what)?, what)? else {
+        return Err(first_load());
+    };
+    // A definition handle not loaded yet is not loaded here: a lazy load is a write.
+    if vm.defs.is_unloaded(&vm.space, d) {
+        return Err(lazy_definition());
     }
+    let class: ClassId = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
+    if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) { Ok(d) } else { Err(first_load()) }
+}
+
+/// The globals definition held as a handle the definition store has not loaded: a named `NotYet { NotRead }`, raised
+/// without loading it (a lazy load is a write; the world's set-up preloads the installed definition).
+fn lazy_definition() -> VmError {
+    NotYet::not_read("the globals definition's lazy load (the handle is not loaded, and a load is a write)", RECORD).into()
 }
 
 fn add_pickup(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowGlobals.AddPickup";
     let globals = this(c, WHAT)?;
     let pickup = c.arg(0)?.clone();
+    // The declared element class, exactly WillowPickup, before the list is read (review r1 of #476).
+    pickup_list_declared(c.vm, globals, WHAT)?;
     let mut list = pickup_list(c.vm, globals, WHAT)?;
     let class = c.vm.space.heap.get(globals)?.class;
     let p = c.vm.space.prop(class, "PickupList").ok_or_else(|| bad(WHAT, "the globals declare no PickupList"))?;

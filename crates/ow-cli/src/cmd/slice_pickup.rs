@@ -46,7 +46,16 @@ use crate::cmd::inventory::equip_run;
 /// The text that marks a refusal after the run's first write.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
-const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
+pub(crate) const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
+
+/// What the pickup world's set-up prepared for the preflight (lane IMPL-WILLOW-GLOBALS, review r1 of #476): the
+/// weapon class's default object, loaded at set-up, and the concrete class of the globals definition it installed.
+/// The preflight validates the declarations it will read on these before any value is read, and loads nothing.
+#[derive(Debug, Clone, Copy)]
+pub struct PickupSetup {
+    pub weapon_defaults: ObjRef,
+    pub definition_class: ClassId,
+}
 const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
 /// The note's fixture places (section 4), Maya at the origin facing +X.
 const AIMED_AT: [f32; 3] = [150.0, 0.0, 0.0];
@@ -166,17 +175,15 @@ pub fn touch(vm: &mut Vm, pickup: ObjRef, pawn: ObjRef) -> Result<(), VmError> {
 
 /// The pickup class the weapon class drops (from its class default object), with every check of the preflight
 /// (module documentation).
-pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
+pub fn preflight(vm: &mut Vm, setup: &PickupSetup) -> Result<ClassId, VmError> {
     let weapon = vm.find_class(WEAPON_CLASS)?;
     for field in ["Owner", "Instigator"] {
         if vm.space.prop(weapon, field).is_none() {
             return Err(error(format!("{WEAPON_CLASS} declares no {field}")));
         }
     }
-    let defaults = vm.defs.class_default(&mut vm.space, WEAPON_CLASS);
-    vm.log.extend(vm.defs.take_log());
-    let defaults = defaults.map_err(VmError::from)?;
-    let class = match read(vm, defaults, "DroppedPickupClass")? {
+    // The default object was loaded at set-up; the preflight only reads it.
+    let class = match read(vm, setup.weapon_defaults, "DroppedPickupClass")? {
         Value::Class(Some(c)) => c,
         other => return Err(error(format!("{WEAPON_CLASS}'s DroppedPickupClass is {other:?}"))),
     };
@@ -191,7 +198,7 @@ pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
     if !vm.class_declares_state(class, state)? {
         return Err(error("the pickup class declares no Pickup state"));
     }
-    globals_preflight(vm)?;
+    globals_preflight(vm, setup.definition_class)?;
     // The fixed fixture's initialisation reaches it: it must resolve, be declared native and be bound (review r3 of
     // #452). A failed lookup is that error; an unbound one is the VM's unbound-native error.
     bound_native(vm, GET_INVENTORY_DEFINITION)?;
@@ -218,7 +225,7 @@ fn bound_native(vm: &mut Vm, path: &str) -> Result<(), VmError> {
 ///   `RarityLevelColors` (else a data error);
 /// - the four natives on the route (`GetWillowGlobals`, `AddPickup`, `GetGlobalsDefinition`, `GetDropLifeSpanType`)
 ///   declared native and bound.
-fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
+fn globals_preflight(vm: &mut Vm, definition_class: ClassId) -> Result<(), VmError> {
     use ow_inventory::globals as g;
     const WHAT: &str = "the pickup's globals";
     let globals = g::world_globals(vm)?;
@@ -226,11 +233,19 @@ fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
     if !vm.space.classes.is_child_of(vm.space.heap.get(globals)?.class, willow) {
         return Err(error(format!("the world's globals are a {}, not a WillowGlobals", ow_attr::eval::class_path(&vm.space, globals))));
     }
-    // The declared schemas first, before any value is read (section 6.2, step 4).
+    // The declared schemas first, before any field value is read (section 6.2, step 4): the globals' own, and
+    // RarityLevelColors on the concrete definition class the set-up installed (review r1 of #476).
     g::globals_schemas(vm, globals, WHAT)?;
-    let definition_class = vm.find_class(g::GLOBALS_DEFINITION_CLASS)?;
     g::rarity_schema(vm, definition_class, WHAT)?;
     let definition = g::globals_definition(vm, globals, WHAT)?;
+    let held = vm.space.heap.get(definition)?.class;
+    if held != definition_class {
+        return Err(error(format!(
+            "the globals definition is a {}, not the set-up's {}",
+            ow_attr::eval::class_path(&vm.space, definition),
+            vm.space.classes.layout(definition_class).path().as_str()
+        )));
+    }
     g::pickup_list(vm, globals, WHAT)?;
     g::rarity_bands(vm, definition, WHAT)?;
     for path in [g::GET_WILLOW_GLOBALS, g::ADD_PICKUP, g::GET_GLOBALS_DEFINITION, g::GET_DROP_LIFE_SPAN_TYPE] {
@@ -267,8 +282,8 @@ fn drop_at(vm: &mut Vm, class: ClassId, weapon: ObjRef, spawner: ObjRef, at: [f3
 pub type Prepare<'a> = dyn FnMut(&mut Vm, &str, bool, &mut bool) -> Result<ObjRef, VmError> + 'a;
 
 /// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line.
-pub fn make(vm: &mut Vm, line: &str, decoy: bool) -> Result<Pickup, VmError> {
-    let class = preflight(vm)?;
+pub fn make(vm: &mut Vm, setup: &PickupSetup, line: &str, decoy: bool) -> Result<Pickup, VmError> {
+    let class = preflight(vm, setup)?;
     build(vm, class, line, decoy, &mut |vm, line, owned, wrote| {
         if owned {
             equip_run::prepare_line_typed(vm, line, wrote)

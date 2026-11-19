@@ -1097,10 +1097,11 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
         return;
     }
     let mut r = Ran::default();
-    let mut world = match crate::cmd::inventory::equip_run::pickup_world(cooked) {
+    // The set-up's errors stay typed and are graded by variant (review r1 of #476).
+    let (mut world, setup) = match crate::cmd::inventory::equip_run::pickup_world(cooked) {
         Ok(w) => w,
-        Err(text) => {
-            r.stop = Some(classify("setup", &text));
+        Err(e) => {
+            r.stop = Some(classify_error("setup", &e));
             ran[i] = Some(r);
             return;
         }
@@ -1108,7 +1109,7 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     let vm = &mut world.vm;
     r.steps.push("make".into());
     // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).
-    let p = match crate::cmd::slice_pickup::make(vm, EQUIP_WEAPON, driver == Driver::AimedPickup) {
+    let p = match crate::cmd::slice_pickup::make(vm, &setup, EQUIP_WEAPON, driver == Driver::AimedPickup) {
         Ok(p) => p,
         Err(e) => {
             r.stop = Some(classify_error("make", &e));

@@ -247,7 +247,8 @@ fn look_checks_the_touched_decoy_then_stops_at_the_missing_hud() {
 fn the_globals_preflight_refuses_a_world_without_globals() {
     let mut x = fx();
     ow_world::query::install(&mut x.vm).unwrap();
-    match globals_preflight(&mut x.vm).unwrap_err() {
+    let class = x.vm.find_class("Engine.ToyPickup").unwrap();
+    match globals_preflight(&mut x.vm, class).unwrap_err() {
         VmError::NotYet(n) => assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}"),
         e => panic!("{e}"),
     }
