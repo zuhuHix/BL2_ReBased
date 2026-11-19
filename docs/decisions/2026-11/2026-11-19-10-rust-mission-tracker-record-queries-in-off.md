@@ -4,7 +4,9 @@ AI-assisted (Claude Code). Lane FIX-MISSION-OBJECTIVES, the fresh implementer of
 (decision 2026-11-19-05). This lane coded from `docs/verification/NATIVE_MISSION_OBJECTIVES.md` alone and opened no
 analysis output. There was no real-game session, so every rule is **UNVERIFIED** in the running game. No dependency was
 added, no bounds check was loosened and no existing `NotYet` guard was relaxed. Reference (`OW_PARITY=reference`) keeps
-the C++ stubs (R3). The lane is stacked on `fix/rust-mission-off` (ffecf7b3), whose PR had not landed when it started.
+the C++ stubs (R3). The lane was stacked on `fix/rust-mission-off` (ffecf7b3), whose PR had not landed when it started;
+the hub rebased it onto main after that PR landed (#391), with the code unchanged. The installed runs below were made on
+the pre-rebase base.
 
 - **What changed** (`crates/ow-mission/src/bridge.rs`, outside Reference only, on the bridge's tracker, next to
   `GetObjectivesProgress`):
