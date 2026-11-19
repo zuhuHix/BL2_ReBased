@@ -14,10 +14,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels the run on its older head. Runs on main (and manual runs) are never cancelled
-# mid-way: there the group is the ref, and cancel-in-progress is false.
+# A new push to a pull request cancels the run on its older head. Every other run (a push to main, a manual run) gets a
+# group of its own, its run id, so it is never cancelled, neither mid-way nor while queued: GitHub keeps only one pending
+# run per group, so a shared main group would drop a queued main run when the next push arrives.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -50,7 +51,8 @@ jobs:
             exit 0
           fi
           # Three dots: the paths the pull request changes since it left its base, as the pull request page lists them.
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          # --no-renames lists both sides of a rename, so moving a file into docs/ (or docs/TOOLING.md away) is code.
+          git diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
           total=$(wc -l < "$RUNNER_TEMP/changed.txt")
           code=$(grep -v -E '^docs/|^[^/]+\.md$' "$RUNNER_TEMP/changed.txt" | wc -l || true)
           tooling=$(grep -c -x 'docs/TOOLING.md' "$RUNNER_TEMP/changed.txt" || true)
@@ -155,7 +157,7 @@ jobs:
         shell: pwsh
         run: |
           $select = @("$env:CTEST_SELECT" -split ' ' | Where-Object { $_ })
-          ctest --test-dir build -C Release --output-on-failure --parallel $env:NUMBER_OF_PROCESSORS @select
+          ctest --test-dir build -C Release --output-on-failure --no-tests=error --parallel $env:NUMBER_OF_PROCESSORS @select
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Case counts of the tests labelled needs-*

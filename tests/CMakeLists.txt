@@ -215,17 +215,31 @@ endif()
 # $<TARGET_FILE:ow-weapongen> or ow-weapon-firing-test) can give another result with OPENWILLOW_LZO off, so it gets the label
 # cxx-binary and CI runs it in both LZO legs (ctest -L cxx-binary in the LZO=OFF leg). Every other entry (Python, Node, or the
 # Rust binary alone) does not depend on LZO and runs once, in the LZO=ON leg, which runs everything. The names are read from the
-# add_test calls in this file, so a new entry of that kind is labelled without a list to keep up.
+# add_test calls in this file (comments removed first), so a new entry of that kind is labelled without a list to keep up.
+# Configure fails when a use of one of those binaries is found outside an add_test call this reading understood, so an entry
+# cannot drop out of the LZO=OFF leg unnoticed.
+set(ow_ws "[ \t\r\n]")
+set(ow_use "TARGET_FILE:ow-(package|weapongen)>|COMMAND${ow_ws}+ow-weapon-firing-test")
 file(READ ${CMAKE_CURRENT_LIST_FILE} ow_text)
-string(REGEX MATCHALL "add_test\\(NAME [^ ]+ COMMAND [^)]*" ow_calls "${ow_text}")
+string(REGEX REPLACE "#[^\n]*" "" ow_code "${ow_text}")
+string(REGEX MATCHALL "add_test\\(${ow_ws}*NAME${ow_ws}+[^ \t\r\n)]+${ow_ws}+COMMAND[^)]*" ow_calls "${ow_code}")
+set(ow_labelled_uses 0)
 foreach(ow_call IN LISTS ow_calls)
-  if(ow_call MATCHES "TARGET_FILE:ow-(package|weapongen)>|COMMAND ow-weapon-firing-test")
-    string(REGEX MATCH "^add_test\\(NAME ([^ ]+)" ow_match "${ow_call}")
+  string(REGEX MATCHALL "${ow_use}" ow_uses "${ow_call}")
+  if(ow_uses)
+    list(LENGTH ow_uses ow_count)
+    math(EXPR ow_labelled_uses "${ow_labelled_uses} + ${ow_count}")
+    string(REGEX MATCH "NAME${ow_ws}+([^ \t\r\n)]+)" ow_match "${ow_call}")
     if(TEST ${CMAKE_MATCH_1})
       set_property(TEST ${CMAKE_MATCH_1} APPEND PROPERTY LABELS cxx-binary)
     endif()
   endif()
 endforeach()
+string(REGEX MATCHALL "${ow_use}" ow_all_uses "${ow_code}")
+list(LENGTH ow_all_uses ow_count)
+if(NOT ow_count EQUAL ow_labelled_uses)
+  message(FATAL_ERROR "tests/CMakeLists.txt uses a C++ binary ${ow_count} times, but only ${ow_labelled_uses} of them are in an add_test(NAME <name> COMMAND ...) call that gets the label cxx-binary: write that test's add_test in this form")
+endif()
 
 # ctest -j starts the costliest entries first. A fresh CI build has no timing history (build/Testing/Temporary/CTestCostData.txt),
 # so the slowest entries carry a COST: seconds in a parallel run (-j 8) on the zuhu desktop, 2026-11-19. Order only, no timeout.

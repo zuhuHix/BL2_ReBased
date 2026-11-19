@@ -11,16 +11,21 @@ change with `OPENWILLOW_LZO`. Superseded runs kept their runners, docs-only pull
 and the 254 third-party crates in `Cargo.lock` were downloaded and built from scratch in three jobs.
 
 **What changed.**
-- **Concurrency.** Group `ci-<workflow>-<PR number or ref>`; `cancel-in-progress` only for `pull_request`, so a new
-  push to a pull request cancels the run on its older head, and runs on main are never cancelled mid-way.
+- **Concurrency.** Group `ci-<workflow>-<PR number>` for a pull request, with `cancel-in-progress`, so a new push
+  to a pull request cancels the run on its older head. Every other run is grouped by its own run id (review r1 of #485):
+  GitHub keeps only one pending run per group, so a shared group for main would cancel a queued main run when the next
+  push arrives, and that push's commits would miss the main-side leak gate and Windows runs.
 - **Docs-only skip.** A new `changes` job (ubuntu, `actions/checkout` with a blobless full fetch, plain
-  `git diff --name-only base...head`) feeds `if:` on the three Windows jobs. A pull request skips them only when every
+  `git diff --no-renames --name-only base...head`) feeds `if:` on the three Windows jobs. `--no-renames` lists both
+  sides of a rename, so a file moved into `docs/`, or `docs/TOOLING.md` moved away, counts as code. A pull request skips them only when every
   changed path is under `docs/` or is a top-level `*.md`, and `docs/TOOLING.md` is not among them. That exception is
   there because one test reads a doc: `tests/real_game_migration_test.py` (ctest `py-real_game_migration`) reads
   `docs/TOOLING.md`. No other test, tool a test runs, or Rust test reads a file under `docs/` or a top-level `*.md`
   (searched in `tests/`, `tools/`, `research/`, `crates/` and both `CMakeLists.txt`; the other hits were comments,
   synthetic paths inside temporary repositories, or record names in constants). Pushes to main, manual runs and an
-  empty diff run everything. The leak gate has no `needs:` and always runs.
+  empty diff run everything. The leak gate has no `needs:` and always runs. Open: a skipped job counts as passed
+  for a required status check. Main has no branch protection today; when the Windows checks become required, add an
+  `always()` summary job that fails unless the Windows jobs passed or were skipped on purpose.
 - **Parallel ctest.** `ctest --parallel <runner cores>`. The slowest entries get a `COST` in `tests/CMakeLists.txt`
   so they start first (order only; no timeout changed).
 - **The ignored `local/` folder** is created before ctest. Some tests make a temporary folder under it, and
@@ -28,9 +33,13 @@ and the 254 third-party crates in `Cargo.lock` were downloaded and built from sc
   parallel run that order is gone. A working checkout always has `local/`, so CI now has it too.
 - **Leg split.** `tests/CMakeLists.txt` labels `cxx-binary` every entry whose `add_test` command runs
   `$<TARGET_FILE:ow-package>`, `$<TARGET_FILE:ow-weapongen>` or `ow-weapon-firing-test`, read from its own
-  `add_test` calls so a new entry needs no list. That gives 25 entries with LZO on (23 with it off): the C++ reader,
+  `add_test` calls (comments removed, any spacing or line breaks) so a new entry needs no list. Configure fails when the
+  file uses one of those binaries outside an `add_test` call it labelled, so an entry cannot leave the LZO=OFF leg
+  unnoticed (checked on a throwaway project: a multi-line `add_test` is labelled, a use in `set_tests_properties`
+  fails configure). That gives 25 entries with LZO on (23 with it off): the C++ reader,
   container, assets, VM, mission, combat and weapon tests and the six Rust tests that compare against the C++ binary.
-  LZO=ON runs all 173 entries; LZO=OFF runs `-L cxx-binary` only. `level_test.py` and `viewer_test.py` run in LZO=ON
+  LZO=ON runs all 173 entries; LZO=OFF runs `-L cxx-binary` only, with `--no-tests=error` so a leg that selects
+  nothing fails. `level_test.py` and `viewer_test.py` run in LZO=ON
   only; the "reader refuses to run without arguments" check stays in both. The `needs-*` case-count step lists the
   `needs-*` entries of its leg's share (repeated `-L` options must all match), so it checks all 35 in LZO=ON and none
   in LZO=OFF, which runs none.
