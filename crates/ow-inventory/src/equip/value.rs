@@ -270,13 +270,20 @@ fn modifiers(vm: &Vm, stack: &Value, what: &str) -> Result<Vec<Modifier>, VmErro
 
 /// `RecomputeNormalizedDamageValues()` on `weapon` (module documentation).
 ///
-/// Everything that can refuse is settled before the first write (reviews of #428 and #446): each stack's modifiers
-/// are read before its base is evaluated, so a base resolver that changes a modifier does not change this recompute;
-/// and all six outputs, with the value each will hold, are checked against their declarations before any is written.
+/// Everything that can refuse is settled before the first write (reviews of #428 and #446), in this order: the six
+/// output addresses (each declared and readable on the weapon), then every stack's modifiers, then the bases (the only
+/// step that runs a resolver), then each staged value against its output's declaration, and only then the writes. So
+/// a class missing an output is refused before any resolver runs, and a base resolver that changes a modifier does
+/// not change this recompute.
 fn recompute_normalized_damage(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
     let what = NORMALIZED_DAMAGE;
     let data = required(vm, weapon, "DefinitionData", what)?;
-    let Some(definition) = object_of(&field(vm, &data, WEAPON.definition)?, what)? else {
+    // A bare None is an absent definition, as an empty object reference is (review r2 of #446).
+    let definition = match field(vm, &data, WEAPON.definition)? {
+        Value::None => None,
+        v => object_of(&v, what)?,
+    };
+    let Some(definition) = definition else {
         return Err(NotYet::not_read(
             "RecomputeNormalizedDamageValues on a weapon without a WeaponTypeDefinition",
             RECORD,
@@ -284,36 +291,51 @@ fn recompute_normalized_damage(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmErro
         .into());
     };
     loaded(vm, definition)?;
-    let form = super::let_forms().combine;
-    let mut staged = Vec::with_capacity(NORMALIZED.len() * 3);
+    // 1. The six output addresses.
+    let class = vm.space.heap.get(weapon)?.class;
+    let mut outputs = Vec::with_capacity(NORMALIZED.len());
+    for n in &NORMALIZED {
+        let mut at = Vec::with_capacity(3);
+        for name in [n.out_stack, n.out_base, n.out_value] {
+            let Some(p) = vm.space.prop(class, name) else {
+                return Err(bad(what, format!("the weapon declares no {name}")));
+            };
+            let a = PropAddr::scalar(p);
+            vm.space.read(weapon, a)?;
+            at.push(a);
+        }
+        outputs.push(at);
+    }
+    // 2. Every stack's modifiers, before any base is evaluated.
+    let mut stacks = Vec::with_capacity(NORMALIZED.len());
     for n in &NORMALIZED {
         let stack = required(vm, weapon, n.stack, what)?;
         let mods = modifiers(vm, &stack, what)?;
+        stacks.push((stack, mods));
+    }
+    // 3. The bases.
+    let form = super::let_forms().combine;
+    let mut writes = Vec::with_capacity(NORMALIZED.len() * 3);
+    for ((n, at), (stack, mods)) in NORMALIZED.iter().zip(outputs).zip(stacks) {
         let Some(base) = init_value(vm, definition, n.definition, weapon)? else {
             return Err(bad(what, format!("the weapon type definition declares no {}", n.definition)));
         };
         let value = combine(base, &mods, form, NumKind::Float).to_f32();
-        staged.push((n.out_stack, stack));
-        staged.push((n.out_base, Value::Float(base)));
-        staged.push((n.out_value, Value::Float(value)));
+        writes.push((at[0], stack));
+        writes.push((at[1], Value::Float(base)));
+        writes.push((at[2], Value::Float(value)));
     }
-    let class = vm.space.heap.get(weapon)?.class;
-    let mut writes = Vec::with_capacity(staged.len());
-    for (name, v) in staged {
-        let Some(p) = vm.space.prop(class, name) else {
-            return Err(bad(what, format!("the weapon declares no {name}")));
-        };
-        let a = PropAddr::scalar(p);
+    // 4. Every staged value against its output's declaration.
+    for (a, v) in &writes {
         let kind = &vm
             .space
             .classes
-            .decl(p)
-            .ok_or_else(|| bad(what, format!("{name} has no declaration")))?
+            .decl(a.prop)
+            .ok_or_else(|| bad(what, "an output property has no declaration"))?
             .kind;
-        vm.space.read(weapon, a)?;
-        vm.space.heap.check_value(&vm.space.classes, kind, &v)?;
-        writes.push((a, v));
+        vm.space.heap.check_value(&vm.space.classes, kind, v)?;
     }
+    // 5. The writes.
     for (a, v) in writes {
         vm.space.write(weapon, a, v)?;
     }
