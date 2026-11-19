@@ -79,6 +79,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert long == D + '2026-12/2026-12-01-01-' + '-'.join(['word'] * 12) + '.md', long
     case.count += 1
 
+    # Three-digit NN (from 100 on): valid, sorted as a number (99, then 100, then 101), and --name counts on from it.
+    # 01 to 99 stay valid; a three-digit NN with a leading zero is not a decision name.
+    n99 = (D + '2026-10/2026-10-02-99-ninety-nine.md', b'## 2026-10-02: Ninety nine\n\nAI-assisted (synthetic).\n')
+    n100 = (D + '2026-10/2026-10-02-100-one-hundred.md', b'## 2026-10-02: One hundred\n\nAI-assisted (synthetic).\n')
+    n101 = (D + '2026-10/2026-10-02-101-one-hundred-one.md', b'## 2026-10-02: One hundred one\n\nAI-assisted (synthetic).\n')
+    write_tree(case.root, new_layout(n101, n100, n99))
+    order = [line.split(':1 ', 1)[0] for line in run(case.root, '--grep', '2026-10-02').stdout.decode().splitlines()]
+    assert order == [B[0], C[0], n99[0], n100[0], n101[0]], order
+    name = run(case.root, '--name', 'Next', '--date', '2026-10-02').stdout.decode().strip()
+    assert name == D + '2026-10/2026-10-02-102-next.md', name
+    case.check(new_layout(n99, n100, n101), base, 0, b'3 added, 0 edited')
+    case.check(new_layout((D + '2026-10/2026-10-02-099-padded.md', b'## 2026-10-02: Padded\n\nAI-assisted (x).\n')),
+               base, 1, b'is not a decision file')
+
     # A Supersedes: line marks the old entry in the listing; the old file stays as it was.
     sup = (D + '2026-10/2026-10-06-01-replaces-beta.md',
            b'## 2026-10-06: Replaces beta\n\nAI-assisted (synthetic). Supersedes: is on its own line:\n\n'

@@ -1,7 +1,8 @@
 """Index, tail and check the decisions log: one file per decision under docs/decisions/YYYY-MM/.
 
 A decision is the file docs/decisions/YYYY-MM/YYYY-MM-DD-NN-slug.md. Its line 1 is `## YYYY-MM-DD: Title`, and a new
-one's body opens with "AI-assisted (<tool>)". NN is the entry's place within its day; slug is the title in lower case,
+one's body opens with "AI-assisted (<tool>)". NN is the entry's place within its day: two digits (01 to 99), or
+three from 100 on (no leading zero), sorted as a number, so 100 comes after 99; slug is the title in lower case,
 every run of other characters replaced by one hyphen, cut at a hyphen to at most 60 characters. DECISIONS.md is a
 stub that holds no entry. A decision file is never deleted or renamed. It changes only when a file added in the same
 change names it on a line `Edits: <path>`; a decision that replaces it is a new file with `Supersedes: <path>`.
@@ -22,7 +23,7 @@ REPO = Path(__file__).resolve().parents[1]
 LOG = 'DECISIONS.md'
 DIR = 'docs/decisions'
 ARCHIVE = re.compile(r'^docs/decisions/(\d{4}-\d{2})\.md$')
-NAME = re.compile(r'^docs/decisions/(\d{4}-\d{2})/((\d{4}-\d{2})-\d{2})-(\d{2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$')
+NAME = re.compile(r'^docs/decisions/(\d{4}-\d{2})/((\d{4}-\d{2})-\d{2})-(\d{2}|[1-9]\d{2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$')
 LINK = re.compile(rb'^(Edits|Supersedes): `?(docs/decisions/[^\s`]+)`?[ \t]*$', re.M)
 # In the stub, any line that looks like an entry heading, at any heading level and with or without the colon.
 LOOKS_LIKE_ENTRY = re.compile(rb'^#+[ \t]*\d{4}-\d{2}-\d{2}', re.M)
@@ -163,8 +164,8 @@ def next_name(tree, date, title):
         raise SystemExit('--date needs YYYY-MM-DD')
     taken = [int(NAME.match(p).group(4)) for p in decision_paths(tree) if NAME.match(p).group(2) == date]
     number = max(taken, default=0) + 1
-    if number > 99:
-        raise SystemExit('%s already has 99 decisions' % date)
+    if number > 999:
+        raise SystemExit('%s already has 999 decisions' % date)
     return '%s/%s/%s-%02d-%s.md' % (DIR, date[:7], date, number, slug(title))
 
 
