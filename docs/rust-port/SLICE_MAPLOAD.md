@@ -134,8 +134,10 @@ sequence for a slice driver (one `World`, Off):
      must skip a native that is already bound there. The lane picks one and says which.
    - **A call before this step**, for example from a bring-up run with no globals set-up, gets the owner's
      `NotYet { LayerAbsent }` naming the world's globals object, never None. This applies to `GetWillowGlobals`,
-     `GetGearboxGlobals` and `GetBehaviorKernel`. None would let `PostBeginPlay` skip work silently (decision
-     2026-11-19-94), so a missing set-up shows as a typed stop. `GetGlobalsDefinition` is an instance function: it is
+     `GetGearboxGlobals` and `GetBehaviorKernel`. **This is the port's own deviation** (decision 2026-11-19-94):
+     NATIVE_CONTROLLER_HELPERS.md says the game's getters answer None when there is no globals instance (no world,
+     for the two getters), and `GetBehaviorKernel` None as well. The port refuses instead because None would let
+     `PostBeginPlay` skip work silently, so a missing set-up shows as a typed stop. `GetGlobalsDefinition` is an instance function: it is
      called on the object the getters return, so it cannot run before that object exists, and its existing
      `NotYet { NotRead }` for an empty definition field stays.
    - **The one-owner test** (lane 4): on a synthetic map world built the map route's way, every key of the four natives
@@ -164,7 +166,8 @@ sequence for a slice driver (one `World`, Off):
      lists. **The full join schedule is UNVERIFIED:** when the streamed levels visible at load join, before or after
      the persistent level or some of each, was not read (section 5.2, "The order across levels"), and the per-point
      engine call each join makes is unread. Until the navigation lane lands, the bring-up has no join and #513's
-     iterator walks the empty list.
+     iterator walks the empty list. **On installed data it stays empty after that too:** the level's list pairs are
+     section 5.1's typed refusal until the level tail is decoded (section 4, lane 1).
 
    The game info is in the actor list, so in the routing:
    - its `PreBeginPlay` runs the script that spawns the replication info class into `WorldInfo.GRI`;
@@ -241,13 +244,14 @@ least as far on every link (section 6).
   persistent one when it is added. Also which classes join, and in what order across streamed levels.
 - **Q3:** where the map load calls `SpawnPlayActor`, and where `GamePlayers` is filled.
 
-Hand-back: the note's new sections with confidence levels, no implementation. **The navigation work is scoped from that
-answer**, not before:
-- if the list is read from the level's data, a new reader with package oracles (rule 4);
-- if it is a rebuild, an own-words rule.
+Hand-back: the note's new sections with confidence levels, no implementation. **The answer is in (#536):** each
+level's list is data in its untagged tail, joined onto the world's at load. The navigation lane implements
+NATIVE_MAP_LOAD.md section 5.3, its own implementer lane after #536.
 
-It is its own implementer lane, after the analyst's note (#536). Until then, #513's iterator walks the empty list,
-as it does today.
+**On installed data it still walks nothing.** Decoding a level's list pairs is section 5.1's typed refusal (their
+position after the URL is not decoded) until a structural decoder of the level tail exists; only a test can supply
+the pairs. So on Sanctuary the navigation lane stops at that refusal, and #513's iterator stays empty there even
+after the navigation lane lands, as it is today.
 
 **Lane 2, the game info** (H6; from NATIVE_MAP_LOAD.md section 3, clean room). It **proves class selection, the spawn
 and the typed bring-up stop, and nothing further**. Contents:
@@ -285,7 +289,8 @@ the auto-state implementer's PR, or to a follow-up after it.
 **The Off failure contract** (the review of #536; NATIVE_MAP_LOAD.md section 6.3):
 1. **A write-free preflight, before any write and before any script runs.** Refuse, as not-read refusals:
    - a `GetUniqueNetId` answer the port does not model, anything but the empty id;
-   - a remote role other than the single-player one;
+   - a remote role other than the single-player one. **Which role value that is** is #536's to name; until it does,
+     the value the lane accepts is a port answer, labelled UNVERIFIED in code and in the decision file;
    - a missing game info.
 2. **Preflight refusals and failures after script are told apart.** A preflight refusal leaves the world unchanged and
    is never marked. A refusal raised inside `Login` or `PostLogin`, or after them, is marked "stopped after partial
