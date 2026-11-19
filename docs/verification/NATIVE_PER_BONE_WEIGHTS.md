@@ -25,13 +25,16 @@ listing structure. **Every rule here is UNVERIFIED** in the running game.
 **Builds on** NATIVE_ANIM_NODE_INIT.md (#566, `research/rust-aimoffset-refresh-and-node-init` 07b2dd68), implementation
 F, and on #569's skeletal mesh data layer (`fix/rust-skeletal-mesh-layer` 10be0643, `reference_skeleton`).
 
-**How the fields were tied to names.** The fields each builder reads and writes sit exactly where #566 found the
-anim-node fields: one word later than the computed layout says, for everything after `CachedRootMotionDelta`. For
-`AnimNodeBlendPerBone` that covers `BranchStartBoneName`, `Child2PerBoneWeight` and `LocalToCompReqBones`. For
-`WillowAnimNodeFeatherBlend` it covers `BoneBlendTargets` (12-byte entries: `StartBoneName`, then `BlendWeight`),
-`bForceLocalSpaceBlend`, `Child2PerBoneWeight` and `LocalToCompReqBones`. The kinds agree too: a name array, a float
-array and a byte array. The component's `SkeletalMesh` is #566's fitted place. The mesh side is read through two
-things:
+**How the fields were tied to names (fitted, UNVERIFIED).** The fields below are named by fitting the executable's
+use of each node's data to the packages' computed class layout, with the same correction #566 describes. The details
+of that fit stay under ignored `local/analysis/`. The names and kinds are:
+- `AnimNodeBlendPerBone`: `BranchStartBoneName` (an array of names), `Child2PerBoneWeight` (an array of floats) and
+  `LocalToCompReqBones` (an array of bytes);
+- `WillowAnimNodeFeatherBlend`: `BoneBlendTargets` (an array of structs whose members are `StartBoneName`, a name, and
+  `BlendWeight`, a float), `bForceLocalSpaceBlend` (a bool), and the same two arrays;
+- the component's `SkeletalMesh`, as #566 fitted it.
+
+The mesh side is read through two things:
 - the mesh's reference skeleton: its bone count, and each bone's parent index;
 - the mesh's bone-name lookup, the same one the component's script native `MatchRefBone` uses.
 
@@ -103,31 +106,32 @@ It walks `LocalToCompReqBones` from the front. For the entry at the current plac
 - otherwise, `b`'s parent is inserted just before `b`, at the current place, and the walk looks at the inserted entry
   next. So the parent's own parent is handled the same way.
 
-**Result:** every listed bone's ancestors are in the list, each ahead of its descendants, and the root is in the list
-whenever any other bone is. The list holds bytes: a bone index is stored, and compared with the parents, by its low 8
-bits.
+**Result, for bone indices a byte can hold (a mesh of at most 256 bones):** every listed bone's ancestors are in the
+list, each ahead of its descendants, and the root is in the list whenever any other bone is. The list holds bytes: a
+bone index is stored, and compared with the parents, by its low 8 bits. Above that, the guarantee does not hold: a
+truncated index names a lower bone, whose ancestors are the ones visited, and the real bone's ancestors may never be.
+That is why section 6 refuses such a mesh.
 
 ## 5. The rule against Maya's data
 
-**Her skeleton:** 27 bones. Bone 0 is `Root`, and bone 1 is `Hips`, its child. Bones 2 to 9 are the two legs. Then
-come `Spine1` (10), `Spine2` (11), `Spine3` (12), `Neck` (13) and `Head` (14). `L_Clav` (15) and `R_Clav` (21) are
-children of `Spine3`, each with its arm below it. Every parent comes before its child.
+**Her skeleton:** 27 bones, every parent before its child. For the examples below: `Root` is bone 0, `Hips` bone 1,
+and `Spine1` bone 10.
 
-**`AnimNodeBlendPerBone_24` (`UpperBodySplit`, branch `Spine1`)** saved both arrays, which gives a structural oracle:
-- **the rule's weights:** 10 zeros (`Root`, `Hips`, the legs), then 17 ones (`Spine1` and everything below it);
-- **the rule's bone list:** `Root`, `Hips`, `Spine1` (0, 1, 10). Only `Spine1` differs from its parent; the parents
-  pass adds `Hips` and `Root` ahead of it;
-- **the saved arrays match exactly:** 27 weights, value for value, and the 3-entry list. The saved values are what the
-  editor's build produced, so this supports the read. It is not a game check.
+**`AnimNodeBlendPerBone_24` (`UpperBodySplit`, one branch bone, `Spine1`)** saved both arrays, which gives a
+structural oracle:
+- **the rule's weights:** 27 entries, 10 at 0.0 and 17 at 1.0. For example, `Hips` (1) is 0.0, and `Spine1` (10) is
+  1.0, as is every bone below it;
+- **the rule's bone list:** 3 entries, bones 0, 1 and 10. Only `Spine1` differs from its parent, and the parents pass
+  adds its two ancestors ahead of it;
+- **the saved arrays match exactly:** all 27 weights, value for value, and the 3-entry list. The saved values are what
+  the editor's build produced, so this supports the read. It is not a game check.
 
-**The five feather blends** saved both arrays empty, so the packages give no oracle for their builder. With
-`bForceLocalSpaceBlend` false on all five, the rule predicts:
-- **the four `UBMoveBlend` nodes** (`Spine1` 0.8, `Spine2` 0.9, `Spine3` 1.0):
-  - weights: 10 zeros, 0.8, 0.9, then 15 ones;
-  - list: `Root`, `Hips`, `Spine1`, `Spine2`, `Spine3` (5 entries);
-- **`UpperBodyFB` (`_1`)** (`Spine1` 0.2, `Spine2` 0.35, `Spine3` 0.55, `Neck` 0.8, `Head` 1, `L_Clav` 1, `R_Clav` 1):
-  - weights: 10 zeros, 0.2, 0.35, 0.55, 0.8, then 1.0 for `Head` and for both clavicles with their arms;
-  - list: `Root`, `Hips`, `Spine1`, `Spine2`, `Spine3`, `Neck`, `Head`, `L_Clav`, `R_Clav` (9 entries).
+**The five feather blends** saved both arrays empty, so the packages give no oracle for their builder. What follows
+is the rule's prediction only. `bForceLocalSpaceBlend` is false on all five:
+- **the four `UBMoveBlend` nodes** have 3 targets each (for example `Spine1` at 0.8 and `Spine2` at 0.9). The rule
+  predicts 27 weights, 10 of them 0.0, and a 5-entry list, starting with bones 0, 1 and 10;
+- **`UpperBodyFB` (`_1`)** has 7 targets (for example `Spine1` at 0.2 and `Head` at 1.0). The rule predicts 27
+  weights, 10 of them 0.0, and a 9-entry list, starting with bones 0, 1 and 10.
 
 ## 6. Proposed Off answer (for a separate implementer)
 
@@ -136,33 +140,45 @@ children of `Spine3`, each with its arm below it. Every parent comes before its 
 decided in the write-free preflight, before any write. Nothing is loaded there, and nothing is drawn (#518: a lazy load
 counts as a write).
 
-**Preflight**, per F node, at #566's place for it (tick order):
-1. **The condition.** It uses the component the initialisation sets as the node's `SkelComponent` (#566 implementation
-   A writes it earlier in the same pass), and that component's `SkeletalMesh`.
-   - If either is None, there is no build and no refusal. F's other steps still run, `Children[0].Weight` included.
-   - An unloaded mesh handle is #569's own refusal. It is not loaded.
-2. **The skeleton.** It comes from #569's `reference_skeleton(vm, mesh)`. That function's `NotYet { LayerAbsent }`
-   (no source installed, or no export for the mesh) and its `VmError::Script` (not a `SkeletalMesh`, or an export
-   that fails to parse) pass through unchanged. They are the layer's refusals.
-3. **The byte lists.** A mesh with more than 256 bones is `NotYet { NotRead }`, "the per-bone weight build of
+**Where it runs.** At every F initialisation, in #566's order: each F node's own place in tick order, and also each
+time an H node initialises its children again (#566 H), which can initialise an F node in a later child slot of an H
+node a second time. Each of those initialisations that builds is planned on its own.
+
+**The component.** The initialisation's component is the one the caller hands it, not one implementation A assigns:
+for an ordinary call, #551 section 2 step 4 supplies it; for H's nested calls, #566 H step 2 does.
+
+**Preflight**, per F initialisation, in this order:
+1. **The mesh field.** The component's class declares `SkeletalMesh` as an object reference, and its value is one;
+   otherwise `VmError::Script`, naming the class and the field. Only a real null reference (`Value::Object(None)`)
+   skips the build: then there is no build and no refusal, both arrays keep their values, and F's other steps still
+   run, `Children[0].Weight` included. Any other value (a missing field, or a value of another kind) is that error,
+   never a skip.
+2. **The skeleton.** For a non-null mesh, #569's `reference_skeleton(vm, mesh)` is called directly. Its errors pass
+   through unchanged: `NotYet` with kind `LayerAbsent` (no source installed, or no export for the mesh), `NotYet` for a mesh
+   the store has not loaded, and `VmError::Script` (not a `SkeletalMesh`, or an export that fails to parse). #569
+   checks the class before the load state, so no separate unloaded-handle check is added here; one would change which
+   error wins.
+3. **The byte lists.** A mesh with more than 256 bones is `NotYet` with kind `NotRead`, "the per-bone weight build of
    <class>: a mesh with more than 256 bones (the bone lists hold bytes)". The game's low-8-bit storage is not
    reproduced. Maya's mesh has 27 bones.
-4. **The fields.**
+4. **The builder's fields and their values.**
    - The node's class declares the fields the builder reads and writes, with these kinds:
      - `BranchStartBoneName`: an array of names;
-     - `BoneBlendTargets`: an array of structs with `StartBoneName` (a name) and `BlendWeight` (a float);
+     - `BoneBlendTargets`: an array of structs with the members `StartBoneName` (a name) and `BlendWeight` (a float);
      - `bForceLocalSpaceBlend`: a bool (feather blend only);
      - `Child2PerBoneWeight`: an array of floats;
      - `LocalToCompReqBones`: an array of bytes.
-   - Otherwise `VmError::Script`, naming the class and the field.
+   - The values read are of those kinds too: every element of `BranchStartBoneName` a name, and every element of
+     `BoneBlendTargets` a struct whose two members hold a name and a float.
+   - Otherwise `VmError::Script`, naming the class and the field (or the member).
 5. **The rules.** Both arrays are computed in the preflight from sections 2 to 4:
    - names are looked up with `ReferenceSkeleton::bone_index`, case-insensitively as names compare. A None name finds
      no bone;
    - the root's parent (`None` in #569) counts as the root itself;
    - the clamp and the 0.99999 bound are as in section 3.
 
-**Writes:** two plain property writes per built node, at F's place in #566's order: after implementation B's
-writes, and before `Children[0].Weight`.
+**Writes:** two plain property writes per F initialisation that builds, H's nested ones included, at F's place in
+#566's order: after implementation B's writes, and before `Children[0].Weight`.
 1. `Child2PerBoneWeight` := the computed weights (`n` floats).
 2. `LocalToCompReqBones` := the computed list (bytes).
 
@@ -177,7 +193,10 @@ writes, and before `Children[0].Weight`.
   - a partial weight inherited unchanged, which is still listed;
   - `bForceLocalSpaceBlend` set, which leaves the list empty;
 - the parents pass inserting a missing ancestor chain ahead of its bone;
-- no component or no mesh, with both arrays left untouched;
+- a null mesh, with both arrays left untouched; a mesh field that is missing or holds another kind, refused as
+  `VmError::Script`;
+- a `BoneBlendTargets` element whose members hold the wrong kinds, refused;
+- an F node under an H node, built at H's nested initialisation and again at its own;
 - more than 256 bones, refused;
 - the layer's own refusal passing through;
 - each refusal with the heap, the draws and the load counter unchanged.
@@ -215,11 +234,9 @@ this note's.
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
 1. After Maya spawns, on her mesh component's animation tree instance, the `UpperBodySplit` per-bone node:
-   `Child2PerBoneWeight` has 27 entries (10 zeros, then 17 ones), and `LocalToCompReqBones` is 0, 1, 10.
-2. Each `UBMoveBlend` feather node: weights 0.8 and 0.9 at bones 10 and 11, 1.0 from bone 12 down, zeros above; the
-   list is 0, 1, 10, 11, 12.
-3. The `UpperBodyFB` feather node: weights 0.2, 0.35, 0.55 and 0.8 at bones 10 to 13, and 1.0 at `Head` and below both
-   clavicles. The list has 9 entries: 0, 1, 10, 11, 12, 13, 14, 15, 21.
+   `Child2PerBoneWeight` has 27 entries (10 at 0.0, 17 at 1.0), and `LocalToCompReqBones` has 3 (bones 0, 1 and 10).
+2. Each `UBMoveBlend` feather node: 27 weights, with `Spine1` (10) at 0.8; a 5-entry list.
+3. The `UpperBodyFB` feather node: 27 weights, with `Spine1` (10) at 0.2; a 9-entry list.
 4. Optional: set one feather node's `bForceLocalSpaceBlend` in a session and reinitialise the tree; its list is then
    empty.
 
