@@ -1,7 +1,8 @@
-//! Owner: lane FIX-COMPUTE-VALUE. AI-assisted (Claude Code). An inventory's value: `ComputeValueOfParts` (weapon and
-//! item), implemented from NATIVE_INVENTORY_VALUE.md alone (decision
-//! 2026-11-19-36). Every rule is the record's reading of the executable, **UNVERIFIED** in the running game; the value
-//! formula the money step feeds matched 69 of 69 cards (the record's section 4), its order of effects did not.
+//! Owner: lanes FIX-COMPUTE-VALUE and FIX-VALUE-B. AI-assisted (Claude Code). An inventory value: `ComputeValueOfParts`
+//! (weapon and item) and a weapon `RecomputeNormalizedDamageValues`, implemented from NATIVE_INVENTORY_VALUE.md alone
+//! (decisions 2026-11-19-36 and 2026-11-19-45). Every rule is the record's reading of the executable, **UNVERIFIED**
+//! in the running game; the value formula the money step feeds matched 69 of 69 cards (the record's section 4), its
+//! order of effects did not.
 //!
 //! **ComputeValueOfParts()** writes three fields, in this order (section 1):
 //! 1. nothing without the definition data's first definition (`WeaponTypeDefinition`, `ItemDefinition`);
@@ -18,14 +19,29 @@
 //!    `D_Attributes.Inventory.InventoryPartMonetaryValueModifierTotal`; how that attribute reaches the property is not
 //!    read (UNVERIFIED), and this module writes only the property;
 //! 4. `MonetaryValue` = `ComputeMonetaryValue()`'s body, `crate::definition::monetary_value_of` (lane FIX-POOL-SPAWN-B,
-//!    which binds that native). It still answers `NotYet` for a `MonetaryValue` that reads an attribute or an
-//!    initialization definition, the context NATIVE_LOOT_SPAWN.md left open; NATIVE_INVENTORY_VALUE.md section 3 now
-//!    answers it (the inventory itself), so that refusal can be lifted there.
+//!    which binds that native), which evaluates with the inventory itself as context (section 3; lane FIX-VALUE-B,
+//!    decision 2026-11-19-45).
 //!
 //! The part walk is the `AllParts` order (NATIVE_EQUIP_PARTS.md section 2) **with the name parts**: the nine part
 //! slots, then the two name-part slots; empty slots are skipped.
 //!
 //! The mission rule of step 2 does not apply to weapons: the weapon rule has no mission-item case.
+//!
+//! **RecomputeNormalizedDamageValues()** (weapon only; section 5; lane FIX-VALUE-B, decision 2026-11-19-45) rebuilds
+//! two normalized damage values, instant-hit then melee. For each:
+//! - the normalized stack (`NormalizedInstantHitDamageModifierStack`, `NormalizedMeleeDamageModifierStack`) becomes a
+//!   copy of the weapon's stack (`InstantHitDamageModifierStack`, `MeleeDamageModifierStack`);
+//! - the base (`NormalizedInstantHitDamageBaseValue`, `NormalizedMeleeDamageBaseValue`) is the weapon type
+//!   definition's init value (`NormalizedInstantHitDamage`, `NormalizedMeleeDamage`) evaluated with **the weapon** as
+//!   context;
+//! - the value (`NormalizedInstantHitDamage`, `NormalizedMeleeDamage`) is that base with the copied stack applied by
+//!   the stack formula, as a float, nothing rounded. The combine is the single-precision form this VM's attribute let
+//!   uses (`super::let_forms`); which form the game uses is architecture 5.3's open question (UNVERIFIED). Modifiers
+//!   are read as `ow-attr` reads a stack: a None element and a modifier type outside the three are skipped.
+//!
+//! Both values are computed before anything is written. The writes are plain property writes: whether the native
+//! sends an attribute-change notification is not in the note (UNVERIFIED; none is sent). A weapon without a
+//! `WeaponTypeDefinition` is `NotYet { NotRead }` (the note does not say what the native does then).
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so under Reference both stay unbound and the stub
 //! policy answers them (architecture R3).
@@ -35,8 +51,10 @@
 
 use std::rc::Rc;
 
-use ow_attr::api::EvalCx;
+use ow_attr::api::{EvalCx, modifier_id_of};
+use ow_attr::stack::{Modifier, ModifierType, NumKind, combine};
 use ow_core::ParityMode;
+use ow_core::notyet::NotYet;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
@@ -50,6 +68,34 @@ pub const RECORD: &str = "NATIVE_INVENTORY_VALUE.md";
 /// The native keys [`register`] binds in Off (`ComputeMonetaryValue` is `crate::definition`'s, lane FIX-POOL-SPAWN-B).
 pub const WEAPON_VALUE: &str = "WillowWeapon.ComputeValueOfParts()";
 pub const ITEM_VALUE: &str = "WillowItem.ComputeValueOfParts()";
+pub const NORMALIZED_DAMAGE: &str = "WillowWeapon.RecomputeNormalizedDamageValues()";
+
+/// One normalized damage value: the weapon's stack, the type definition's init value, and the three outputs.
+struct Normalized {
+    stack: &'static str,
+    definition: &'static str,
+    out_stack: &'static str,
+    out_base: &'static str,
+    out_value: &'static str,
+}
+
+/// Instant-hit, then melee (section 5).
+const NORMALIZED: [Normalized; 2] = [
+    Normalized {
+        stack: "InstantHitDamageModifierStack",
+        definition: "NormalizedInstantHitDamage",
+        out_stack: "NormalizedInstantHitDamageModifierStack",
+        out_base: "NormalizedInstantHitDamageBaseValue",
+        out_value: "NormalizedInstantHitDamage",
+    },
+    Normalized {
+        stack: "MeleeDamageModifierStack",
+        definition: "NormalizedMeleeDamage",
+        out_stack: "NormalizedMeleeDamageModifierStack",
+        out_base: "NormalizedMeleeDamageBaseValue",
+        out_value: "NormalizedMeleeDamage",
+    },
+];
 
 /// The definition data's first definition and part slots, in the `AllParts` order, name parts last.
 struct Layout {
@@ -193,6 +239,61 @@ fn compute_value_of_parts(vm: &mut Vm, inv: ObjRef, layout: &Layout, what: &str)
     write(vm, inv, "MonetaryValue", money, what)
 }
 
+/// The modifiers of a stack array, read as `ow-attr` reads one (module documentation).
+fn modifiers(vm: &Vm, stack: &Value, what: &str) -> Result<Vec<Modifier>, VmError> {
+    let Value::Array(items) = stack else {
+        return Err(bad(what, format!("a modifier stack holds a {}, not an array", stack.kind_name())));
+    };
+    let mut mods = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        let Some(m) = object_of(item, what)? else { continue };
+        let raw = match required(vm, m, "Type", what)? {
+            Value::Byte(b) => i64::from(b),
+            Value::Int(i) => i64::from(i),
+            other => return Err(bad(what, format!("a modifier Type is a {}", other.kind_name()))),
+        };
+        let value = match required(vm, m, "Value", what)? {
+            Value::Float(x) => x,
+            other => return Err(bad(what, format!("a modifier Value is a {}", other.kind_name()))),
+        };
+        if let Some(kind) = ModifierType::from_raw(raw) {
+            mods.push(Modifier { kind, value, id: modifier_id_of(m) });
+        }
+    }
+    Ok(mods)
+}
+
+/// `RecomputeNormalizedDamageValues()` on `weapon` (module documentation).
+fn recompute_normalized_damage(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    let what = NORMALIZED_DAMAGE;
+    let data = required(vm, weapon, "DefinitionData", what)?;
+    let Some(definition) = object_of(&field(vm, &data, WEAPON.definition)?, what)? else {
+        return Err(NotYet::not_read(
+            "RecomputeNormalizedDamageValues on a weapon without a WeaponTypeDefinition",
+            RECORD,
+        )
+        .into());
+    };
+    loaded(vm, definition)?;
+    let form = super::let_forms().combine;
+    let mut out = Vec::with_capacity(NORMALIZED.len());
+    for n in &NORMALIZED {
+        let stack = required(vm, weapon, n.stack, what)?;
+        let mods = modifiers(vm, &stack, what)?;
+        let Some(base) = init_value(vm, definition, n.definition, weapon)? else {
+            return Err(bad(what, format!("the weapon type definition declares no {}", n.definition)));
+        };
+        let value = combine(base, &mods, form, NumKind::Float).to_f32();
+        out.push((n, stack, base, value));
+    }
+    for (n, stack, base, value) in out {
+        write(vm, weapon, n.out_stack, stack, what)?;
+        write(vm, weapon, n.out_base, Value::Float(base), what)?;
+        write(vm, weapon, n.out_value, Value::Float(value), what)?;
+    }
+    Ok(())
+}
+
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
     c.this.ok_or_else(|| bad(what, "called without an inventory"))
 }
@@ -202,7 +303,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 2] = [
+    let natives: [(&str, NativeFn); 3] = [
         (
             WEAPON_VALUE,
             Rc::new(|c: &mut NativeCall<'_>| {
@@ -216,6 +317,14 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
             Rc::new(|c: &mut NativeCall<'_>| {
                 let inv = this(c, ITEM_VALUE)?;
                 compute_value_of_parts(c.vm, inv, &ITEM, ITEM_VALUE)?;
+                Ok(Value::None)
+            }),
+        ),
+        (
+            NORMALIZED_DAMAGE,
+            Rc::new(|c: &mut NativeCall<'_>| {
+                let weapon = this(c, NORMALIZED_DAMAGE)?;
+                recompute_normalized_damage(c.vm, weapon)?;
                 Ok(Value::None)
             }),
         ),

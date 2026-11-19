@@ -5,6 +5,7 @@
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
+use ow_attr::api::{AttrError, ContextResolver, EvalCx, ValueResolver};
 use ow_core::notyet::Missing;
 use ow_core::rand::{CrtStream, Rand15};
 use ow_core::{ObjectPath, ParityMode};
@@ -54,7 +55,51 @@ struct T {
     base: ClassId,
     weapon: ClassId,
     item: ClassId,
+    /// Toy resolver classes: `Test.Same` (context = source), `Test.Worth` (30 on an inventory) and `Test.Unread`
+    /// (registered nowhere).
+    same: ClassId,
+    worth: ClassId,
+    unread: ClassId,
     next: u32,
+}
+
+/// A toy context resolver: the context is the source itself.
+struct Same;
+impl ContextResolver for Same {
+    fn resolve(
+        &self,
+        _: &AttributeSystem,
+        _: ObjRef,
+        _: ObjRef,
+        source: Option<ObjRef>,
+        _: &mut EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        Ok(source)
+    }
+}
+
+/// A toy value resolver: 30 on a `WillowInventory` context, a data error on any other, so a test sees which
+/// context the evaluation was given.
+struct Worth(ClassId);
+impl ValueResolver for Worth {
+    fn value(
+        &self,
+        _: &AttributeSystem,
+        _: ObjRef,
+        context: ObjRef,
+        _: f32,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        let space = cx.world.parts().space;
+        let class = space.heap.get(context)?.class;
+        if space.classes.is_child_of(class, self.0) {
+            Ok(30.0)
+        } else {
+            Err(AttrError::BadData {
+                reason: "Worth: the context is not an inventory".into(),
+            })
+        }
+    }
 }
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
@@ -79,10 +124,18 @@ fn world(mode: ParityMode) -> T {
             ("BaseValueScaleConstant", PropKind::Float),
         ],
     );
+    let objs = PropKind::Array(Box::new(obj.clone()));
+    let chains = vec![
+        decl(&mut space, "ContextResolverChain", objs.clone()),
+        decl(&mut space, "ValueResolverChain", objs),
+    ];
     let attribute = space
         .classes
-        .define("Engine.AttributeDefinition", Some(object), vec![])
+        .define("Engine.AttributeDefinition", Some(object), chains)
         .unwrap();
+    let same = space.classes.define("Test.Same", Some(object), vec![]).unwrap();
+    let worth = space.classes.define("Test.Worth", Some(object), vec![]).unwrap();
+    let unread = space.classes.define("Test.Unread", Some(object), vec![]).unwrap();
     let names = CURRENCIES.iter().map(|n| space.names.intern(n)).collect();
     let currency = space
         .classes
@@ -132,12 +185,12 @@ fn world(mode: ParityMode) -> T {
         .classes
         .define("WillowGame.WillowItem", Some(base), d)
         .unwrap();
-    let mut vm = Vm::new(
-        space,
-        DefStore::new_empty(),
-        Rc::new(AttributeSystem::new_empty()),
-        mode,
-    );
+    let attrs = AttributeSystem::new_empty()
+        .with_context_resolver("Test.Same", Same)
+        .unwrap()
+        .with_value_resolver("Test.Worth", Worth(base))
+        .unwrap();
+    let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(attrs), mode);
     vm.stub_policy = StubPolicy::refuse_all();
     for (path, result) in [
         (GENERATE_UNIQUE_ID, PropKind::Int),
@@ -161,6 +214,9 @@ fn world(mode: ParityMode) -> T {
         base,
         weapon,
         item,
+        same,
+        worth,
+        unread,
         next: 0,
     }
 }
@@ -200,6 +256,17 @@ impl T {
         self.set(d, "MonetaryValue", init);
         self.set(d, "FormOfCurrency", Value::Byte(form));
         d
+    }
+
+    /// The `BaseValueAttribute` of a definition made with `attribute: true`.
+    fn attribute_of(&mut self, d: ObjRef) -> ObjRef {
+        let class = self.vm.space.heap.get(d).unwrap().class;
+        let p = self.vm.space.prop(class, "MonetaryValue").unwrap();
+        let v = self.vm.space.read(d, PropAddr::scalar(p)).unwrap();
+        match ow_attr::eval::init_data(&self.vm.space, &v).unwrap().base_value_attribute {
+            Some(a) => a,
+            None => panic!("a definition without an attribute"),
+        }
     }
 
     fn weapon(&mut self, definition: Option<ObjRef>, manufacturer: Option<ObjRef>) -> ObjRef {
@@ -335,10 +402,14 @@ fn what_the_note_leaves_open_is_not_yet_and_no_definition_is_zero() {
         Value::Int(0),
         "no definition: 0"
     );
+    // An attribute the evaluator cannot read answers the evaluator's own NotYet (decision 2026-11-19-45).
     let d = t.definition(5.0, 1.0, 0, true);
+    let a = t.attribute_of(d);
+    let unread = t.obj(t.unread);
+    t.set(a, "ContextResolverChain", Value::array(vec![Value::Object(Some(unread))]));
     let w = t.weapon(Some(d), None);
     let text = not_read(t.call(COMPUTE_MONETARY_VALUE, w));
-    assert!(text.contains("open question 2"), "{text}");
+    assert!(text.contains("context resolver class Test.Unread"), "{text}");
     let text = not_read(t.value_of(f32::NAN, 1.0, 0));
     assert!(text.contains("int range"), "{text}");
     let text = not_read(t.value_of(3.0e9, 1.0, 0));
@@ -392,4 +463,23 @@ fn reference_leaves_the_three_unbound() {
         }
     }
     assert_eq!(*t.vm.rng.crt(ID_STREAM), before, "nothing drawn");
+}
+
+#[test]
+fn an_attribute_value_is_evaluated_with_the_inventory_as_context() {
+    // NATIVE_INVENTORY_VALUE.md section 3 (decision 2026-11-19-45): the base attribute's chains run on the inventory.
+    let mut t = world(ParityMode::Off);
+    let d = t.definition(5.0, 2.0, 0, true);
+    let a = t.attribute_of(d);
+    let (same, worth) = (t.obj(t.same), t.obj(t.worth));
+    t.set(a, "ContextResolverChain", Value::array(vec![Value::Object(Some(same))]));
+    t.set(a, "ValueResolverChain", Value::array(vec![Value::Object(Some(worth))]));
+    let w = t.weapon(Some(d), None);
+    assert_eq!(t.call(COMPUTE_MONETARY_VALUE, w).unwrap(), Value::Int(60), "30 x 2 on the weapon");
+    let i = t.item(Some(d), None);
+    assert_eq!(t.call(COMPUTE_MONETARY_VALUE, i).unwrap(), Value::Int(60), "and on an item");
+    // An attribute whose context chain is empty resolves no context: the constant stays the base (5 x 2).
+    let d = t.definition(5.0, 2.0, 0, true);
+    let w = t.weapon(Some(d), None);
+    assert_eq!(t.call(COMPUTE_MONETARY_VALUE, w).unwrap(), Value::Int(10));
 }
