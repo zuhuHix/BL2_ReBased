@@ -1,7 +1,7 @@
 ## 2026-11-19: InitPlayerSkillTree in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-INIT-PLAYER-SKILL-TREE, slice links 1, 3, 4, 5, 13 and 14. Coded
-from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 4700171f (clean room: lane
+from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 094415f3 (clean room: lane
 ANALYST-INIT-PLAYER-SKILL-TREE wrote it, decision 2026-11-19-78, PR #466). The executable and the analysis output were
 not opened. Synthetic fixtures only.
 
@@ -14,8 +14,11 @@ not opened. Synthetic fixtures only.
     clears the field first.
   - P3: the `WillowGame.PlayerSkillTree` class, with the store's own error unchanged.
   - P4: the world's globals (its own `NotYet` when there are none) and their `ThePlayerPawnDataManager`.
-  - P5: the controller's `PlayerClass` and its `SkillTreePath`, each checked to be declared with its kind.
-  - P6: a request exactly when P4 and P5 both give one.
+  - P5a: the controller's `PlayerClass`, read whether or not there is a manager.
+  - P5b: its `SkillTreePath`, read only when there is both a manager and a player class.
+  - Each is checked to be declared with its kind. A stored value of another kind is the note's data error ("holds a
+    <kind>, not ...").
+  - P6: a request exactly when P4 gives a manager and P5a a player class.
 - **Writes.**
   - W1: a new tree, with the controller as its outer and the VM's generated name.
   - W2: the controller's `PlayerSkillTree`.
@@ -34,13 +37,14 @@ not opened. Synthetic fixtures only.
 - **After a write.** With A1 to A5, no `NotYet` can follow W1. Should one surface, it stops the call with the "stopped
   after partial writes: " prefix, once, keeping its kind and record. Nothing is rolled back, and other errors
   propagate unchanged.
-- **Tests.** `tree/init_tests.rs` has seven tests on an invented `WillowGame.upk`:
+- **Tests.** `tree/init_tests.rs` has eight tests on an invented `WillowGame.upk`:
   - the slice minimum (the tree, its outer, the seven-argument record);
   - the dotless, empty, no-manager and no-class cases;
   - an existing tree refused with nothing made;
   - a world without globals;
   - a tree field of another kind;
   - the partial-writes mark;
+  - `SkillTreePath` read only for a request (P5b);
   - Reference.
 - **Installed `--slice-gate`, Off, strict: 0 ok / 14 not yet / 0 error, as before.**
   - Links 1, 3, 4, 5, 13 and 14 no longer stop at `InitPlayerSkillTree`. They still stop at `maya:8`, now at "stopped
