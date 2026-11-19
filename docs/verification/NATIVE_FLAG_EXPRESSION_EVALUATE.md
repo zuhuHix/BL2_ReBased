@@ -239,10 +239,11 @@ Nothing else is checked up front: a conditional the OR or AND never reaches is n
 **Per conditional, when it is reached** (in a nested expression too, each at its own turn). Earlier conditionals'
 writes stay; a refusal after any write (a store entry, a flag update, an expiry, a load) is marked "stopped after
 partial writes" by the caller.
-1. **Its type.** Types 2 and 3: `NotYet { NotRead }`, "FlagExpressionEvaluator.Evaluate: the timed flag tests
+1. **A None `FlagDefinition`** answers false (section 3, step 3.1), before the type check.
+2. **Its type.** Types 2 and 3: `NotYet { NotRead }`, "FlagExpressionEvaluator.Evaluate: the timed flag tests
    (HasBeenTrueForXSeconds, HasBeenFalseForXSeconds)". The value resolvers' timed tests and the held-false time were
    not read.
-2. **The path, per section 3 step 3.2:**
+3. **The path, per section 3 step 3.2:**
    - **The store path:** `NotYet { NotRead }`, "FlagExpressionEvaluator.Evaluate: a rule engine's own flag store". A
      non-None `R` is found with reads only, through the existing `QueryInterface` and the controller field.
    - **The definition path:** per section 4.0, with these refusals:
@@ -255,7 +256,7 @@ partial writes" by the caller.
      - a store the resolved context answers that is not a `GearboxMind`'s (`WillowPlayerController`'s, say):
        `NotYet { NotRead }`, "FlagDefinition: the flag store of a <class path> is not read";
      - a context resolver the attribute system does not bind: that system's own refusal, unchanged.
-3. **The function-call resolver** calls the named function through the VM, with no arguments; its answer, rounded,
+4. **The function-call resolver** calls the named function through the VM, with no arguments; its answer, rounded,
    sets the flag. The function's own refusal propagates unchanged.
 
 **Writes, in order** (each counted for the caller's partial-writes mark):
