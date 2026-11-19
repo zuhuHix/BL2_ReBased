@@ -20,7 +20,11 @@
 //!   `TheGlobalsDefinition` field (declared on `GearboxGlobals`), as NATIVE_WILLOW_GLOBALS.md (#469) reads it.
 //! - The plan checks that the receiver's method resolves to the native declaration. A script override, or any other
 //!   function, is a named `NotYet { NotRead }`.
-//! - The `Host` gets a shared view of the VM.
+//! - The `Host` gets a shared view of the VM. The globals come from a [`Globals`] provider that also gets a shared
+//!   view. Its Off form, [`WorldGlobals`], is prepared before the pass: it reads the world's object and its active
+//!   definition field, with no script, no binding and no definition-store lookup (review r3 of #467).
+//! - The planned handler call is built with its exact arguments and validated with `Vm::check_call`, then stored for
+//!   the commit.
 //! - The plan's mutable access is for resolving classes and methods (loading their code) and for def-store lookups,
 //!   which change no object the pass reads.
 //! - The planned event's handler is resolved, its parameters checked and its binding prepared, all in the plan.
@@ -152,35 +156,53 @@ pub fn hud_of(vm: &Vm, controller: ObjRef) -> Result<ObjRef, VmError> {
     })
 }
 
-/// The game's globals object and its `GlobalsDefinition`, as the pass needs them when it reaches the pickup list.
+/// The game's globals object and its `GlobalsDefinition`, as the pass needs them when it reaches the pickup list. The
+/// plan only reads: the provider answers from what was prepared before the pass (review r3 of #467).
 pub trait Globals {
-    fn resolve(&mut self, vm: &mut Vm) -> Result<(ObjRef, ObjRef), VmError>;
+    fn resolve(&self, vm: &Vm) -> Result<(ObjRef, ObjRef), VmError>;
 }
 
-/// The Off world's globals (module documentation): the attribute world's `WillowGlobals`, and its
-/// `TheGlobalsDefinition` (declared on `GearboxGlobals`) when the globals' `GetGlobalsDefinition` is the native
-/// declaration. That field holding no `GlobalsDefinition` is a named `NotYet { NotRead }`: the native's first load
-/// numbers the challenge list, which was not read (NATIVE_WILLOW_GLOBALS.md, #469, section 6 step 4).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WorldGlobals;
+/// The Off world's globals, prepared before the pass ([`WorldGlobals::prepare`]): the world's `WillowGlobals` and its
+/// active definition, the `TheGlobalsDefinition` field (declared on `GearboxGlobals`; the world's set-up fills it,
+/// NATIVE_WILLOW_GLOBALS.md section 6). Whatever refused while preparing is answered only when the pass reaches the
+/// pickup list.
+#[derive(Debug, Clone)]
+pub struct WorldGlobals(Result<(ObjRef, ObjRef), VmError>);
 
 /// The class `TheGlobalsDefinition` must hold for the getter to be a field read.
 pub const GLOBALS_DEFINITION_CLASS: &str = "WillowGame.GlobalsDefinition";
 
+impl WorldGlobals {
+    /// Resolves, before the pass:
+    /// - the world's globals object (the world's `NotYet { LayerAbsent }` without one);
+    /// - that its `GetGlobalsDefinition` is the native declaration;
+    /// - its active definition. That field holding no `GlobalsDefinition` is a named `NotYet { NotRead }`: the native's
+    ///   first load numbers the challenge list, which was not read (section 4).
+    ///
+    /// It reads fields and resolves classes and methods. It runs no script, binds nothing and looks nothing up in the
+    /// definition store.
+    pub fn prepare(vm: &mut Vm) -> Self {
+        WorldGlobals((|| {
+            let globals = {
+                let cx = ow_attr::api::EvalCx::new(vm);
+                cx.world.globals()?
+            };
+            native_getter(vm, globals, "GetGlobalsDefinition", "WillowGame.WillowGlobals.GetGlobalsDefinition")?;
+            let class = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
+            match object_field(vm, globals, "TheGlobalsDefinition")? {
+                Some(d) if vm.space.classes.is_child_of(class_of(vm, d)?, class) => Ok((globals, d)),
+                _ => Err(refused(
+                    "the globals' TheGlobalsDefinition holds no GlobalsDefinition, and the getter's first load (which \
+                     numbers the challenge list) was not read (NATIVE_WILLOW_GLOBALS.md section 4)",
+                )),
+            }
+        })())
+    }
+}
+
 impl Globals for WorldGlobals {
-    fn resolve(&mut self, vm: &mut Vm) -> Result<(ObjRef, ObjRef), VmError> {
-        let globals = {
-            let cx = ow_attr::api::EvalCx::new(vm);
-            cx.world.globals()?
-        };
-        native_getter(vm, globals, "GetGlobalsDefinition", "WillowGame.WillowGlobals.GetGlobalsDefinition")?;
-        let class = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
-        match object_field(vm, globals, "TheGlobalsDefinition")? {
-            Some(d) if vm.space.classes.is_child_of(class_of(vm, d)?, class) => Ok((globals, d)),
-            _ => Err(refused(
-                "the globals' TheGlobalsDefinition holds no GlobalsDefinition, and the getter's first load (which numbers                  the challenge list) was not read (NATIVE_WILLOW_GLOBALS.md section 4)",
-            )),
-        }
+    fn resolve(&self, _: &Vm) -> Result<(ObjRef, ObjRef), VmError> {
+        self.0.clone()
     }
 }
 
@@ -188,7 +210,8 @@ impl Globals for WorldGlobals {
 /// `NotYet`), then one pass of it with `host`, the Off world's globals resolved only when the pass reaches them.
 pub fn look(vm: &mut Vm, controller: ObjRef, host: &mut dyn Host) -> Result<Outcome, VmError> {
     let hud = hud_of(vm, controller)?;
-    tick(vm, hud, &mut WorldGlobals, host)
+    let globals = WorldGlobals::prepare(vm);
+    tick(vm, hud, &globals, host)
 }
 
 /// `e` as a refusal after a write: a `NotYet` marked once (at the start of its text), its kind and record kept; any
@@ -422,6 +445,25 @@ fn definition_of(vm: &mut Vm, pickup: ObjRef) -> Result<Option<ObjRef>, VmError>
             ow_attr::eval::class_path(&vm.space, inventory)
         )));
     };
+    // A missing layout is a named NotYet; a malformed one is a data error (NATIVE_INVENTORY_DEFINITION.md, as #462).
+    let missing = |what: String| refused(format!("GetInventoryDefinition on {what} (NATIVE_INVENTORY_DEFINITION.md)"));
+    let Some(prop) = vm.space.prop(class, "DefinitionData") else {
+        return Err(missing("a class without DefinitionData".into()));
+    };
+    let ty = match vm.space.classes.decl(prop).map(|d| (&d.kind, d.array_dim)) {
+        Some((PropKind::Struct(ty), 1)) => *ty,
+        other => return Err(bad(WHAT, format!("DefinitionData is declared as {other:?}, not one struct"))),
+    };
+    let declared = vm
+        .space
+        .names
+        .find(name)
+        .and_then(|id| vm.space.classes.struct_layout(ty).and_then(|l| l.field(id)).map(|(_, d)| (d.kind.clone(), d.array_dim)));
+    match declared {
+        None => return Err(missing(format!("a DefinitionData without {name}"))),
+        Some((PropKind::Object { .. }, 1)) => {}
+        Some(other) => return Err(bad(WHAT, format!("DefinitionData.{name} is declared as {other:?}, not one object"))),
+    }
     let data = required(vm, inventory, "DefinitionData", WHAT)?;
     object_of(&field(vm, &data, name)?, WHAT)
 }
@@ -456,10 +498,17 @@ fn suspended(vm: &mut Vm, owner: ObjRef, pawn: ObjRef) -> Result<bool, VmError> 
 }
 
 /// An event the plan raises on the recipient, with the handler it resolved and checked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Event {
-    Saw(ObjRef, FuncId),
-    ClearSeen(FuncId),
+    Saw(ObjRef, Checked),
+    ClearSeen(Checked),
+}
+
+/// A handler call built and checked in the plan (`Vm::check_call`): the function and its exact arguments.
+#[derive(Debug, Clone, PartialEq)]
+struct Checked {
+    f: FuncId,
+    args: Vec<Value>,
 }
 
 /// Everything the tick writes, decided before the first write.
@@ -501,14 +550,14 @@ fn hud_state(vm: &Vm, hud: ObjRef) -> Result<HudState, VmError> {
 }
 
 /// One pass of `hud` (module documentation), the globals resolved by `globals` when the pass reaches the pickup list.
-pub fn tick(vm: &mut Vm, hud: ObjRef, globals: &mut dyn Globals, host: &mut dyn Host) -> Result<Outcome, VmError> {
+pub fn tick(vm: &mut Vm, hud: ObjRef, globals: &dyn Globals, host: &mut dyn Host) -> Result<Outcome, VmError> {
     let state = hud_state(vm, hud)?;
     let plan = plan(vm, &state, globals, host)?;
     let mut wrote = false;
     commit(vm, hud, plan, &mut wrote).map_err(|e| if wrote { after_writes(e) } else { e })
 }
 
-fn plan(vm: &mut Vm, h: &HudState, globals: &mut dyn Globals, host: &mut dyn Host) -> Result<Plan, VmError> {
+fn plan(vm: &mut Vm, h: &HudState, globals: &dyn Globals, host: &mut dyn Host) -> Result<Plan, VmError> {
     let ended = |outcome| Plan { closest: None, flagged: Vec::new(), tail: None, outcome };
     let (Some(owner), Some(hud_definition)) = (h.owner, h.definition) else { return Ok(ended(Outcome::Idle)) };
     let view = host.view(vm, owner)?;
@@ -525,7 +574,7 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &mut dyn Globals, host: &mut dyn Hos
     let range = float(vm, hud_definition, "PickupRange")?;
     let defaults = vm.defs.class_default(&mut vm.space, PICKUP);
     vm.log.extend(vm.defs.take_log());
-    let shrink_duration = float(vm, defaults.map_err(VmError::Def)?, "PickupShrinkDuration")?;
+    let shrink_duration = float(vm, defaults.map_err(VmError::from)?, "PickupShrinkDuration")?;
     let pickup_class = vm.find_class(PICKUP)?;
 
     let v = view.location;
@@ -585,12 +634,14 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &mut dyn Globals, host: &mut dyn Hos
     let (tail, outcome) = match winner {
         None => {
             let event = match h.reported {
-                Some(_) => Some(Event::ClearSeen(handler(vm, h.recipient, "ClearSeenPickupable", 0)?)),
+                Some(_) => Some(Event::ClearSeen(handler(vm, h.recipient, "ClearSeenPickupable", None)?)),
                 None => None,
             };
             let tail =
-                Tail { seen_item: None, hover_before: None, event, hover_after: Some(None), seen_item_after: None };
-            (tail, Outcome::NoWinner { cleared: event.is_some() })
+                Tail { seen_item: None, hover_before: None, event: None, hover_after: Some(None), seen_item_after: None };
+            let cleared = event.is_some();
+            let tail = Tail { event, ..tail };
+            (tail, Outcome::NoWinner { cleared })
         }
         Some(w) => winner_tail(vm, h, w, v, look, look_flat, range, hover_particle)?,
     };
@@ -604,22 +655,30 @@ fn plan(vm: &mut Vm, h: &HudState, globals: &mut dyn Globals, host: &mut dyn Hos
     Ok(Plan { closest: closest.map(|c| c.1), flagged, tail: Some(tail), outcome })
 }
 
-/// The recipient's handler `name`, resolved and checked in the plan (review r1 of #467): a None recipient is a named
-/// `NotYet` (the native raises without a check); the handler must take `params` parameters (one object or interface
-/// for `SawPickupable`) and be callable (bound, or script that prepares).
-fn handler(vm: &mut Vm, recipient: Option<ObjRef>, name: &str, params: usize) -> Result<FuncId, VmError> {
+/// The recipient's handler `name`, resolved and checked in the plan (reviews r1 and r3 of #467):
+/// - a None recipient is a named `NotYet` (the native raises without a check);
+/// - the handler takes no argument, or `pickup` as its one object or interface parameter;
+/// - the exact call, its arguments as the commit passes them, is validated with `Vm::check_call` (the binding and
+///   entry checks), so a refusal at call entry comes before any write.
+fn handler(vm: &mut Vm, recipient: Option<ObjRef>, name: &str, pickup: Option<ObjRef>) -> Result<Checked, VmError> {
     let recipient = recipient.ok_or_else(|| {
         refused(format!("the HUD's WPlayerOwner is None and the tick raises {name} (the native raises without a check)"))
     })?;
     let f = method_of(vm, recipient, name)?;
     let kinds: Vec<PropKind> = vm.function(f).map(|d| d.params.iter().map(|p| p.kind.clone()).collect()).unwrap_or_default();
-    let fits = kinds.len() == params
+    let want = usize::from(pickup.is_some());
+    let fits = kinds.len() == want
         && kinds.iter().all(|k| matches!(k, PropKind::Object { .. } | PropKind::Interface { .. }));
     if !fits {
-        return Err(bad(WHAT, format!("{name}'s parameters are {kinds:?}, not {params} object reference(s)")));
+        return Err(bad(WHAT, format!("{name}'s parameters are {kinds:?}, not {want} object reference(s)")));
     }
     vm.prepare_call(f)?;
-    Ok(f)
+    let args = match pickup {
+        Some(w) => vec![handler_arg(vm, f, w)],
+        None => Vec::new(),
+    };
+    vm.check_call(f, args.clone())?;
+    Ok(Checked { f, args })
 }
 
 /// Section 5: the winner after the pawn test and the line check, None when either refuses it.
@@ -675,14 +734,16 @@ fn winner_tail(
     let hover_before = (h.hover != Some(w)).then_some(Some(w));
     let in_range = dot(to_w, to_w) < range * range;
     let event = if in_range && h.reported != Some(w) {
-        Some(Event::Saw(w, handler(vm, h.recipient, "SawPickupable", 1)?))
+        Some(Event::Saw(w, handler(vm, h.recipient, "SawPickupable", Some(w))?))
     } else {
         None
     };
     // Out of range: the seen-item slot took the winner's inventory first, and is emptied after `H` (section 7).
     let seen_item_after = (!in_range).then_some(None);
-    let tail = Tail { seen_item, hover_before, event, hover_after: None, seen_item_after };
-    Ok((tail, Outcome::Hover { winner: w, reported: event.is_some() }))
+    let tail = Tail { seen_item, hover_before, event: None, hover_after: None, seen_item_after };
+    let reported = event.is_some();
+    let tail = Tail { event, ..tail };
+    Ok((tail, Outcome::Hover { winner: w, reported }))
 }
 
 fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outcome, VmError> {
@@ -700,12 +761,12 @@ fn commit(vm: &mut Vm, hud: ObjRef, plan: Plan, wrote: &mut bool) -> Result<Outc
     if let Some(event) = tail.event {
         let recipient = object_field(vm, hud, "WPlayerOwner")?.ok_or_else(|| bad(WHAT, "no recipient for the event"))?;
         match event {
-            Event::Saw(w, f) => {
-                vm.call(f, Some(recipient), vec![handler_arg(vm, f, w)])?;
+            Event::Saw(w, call) => {
+                vm.call(call.f, Some(recipient), call.args)?;
                 write(vm, hud, "CachedBestPickup", obj(Some(w)), WHAT)?;
             }
-            Event::ClearSeen(f) => {
-                vm.call(f, Some(recipient), Vec::new())?;
+            Event::ClearSeen(call) => {
+                vm.call(call.f, Some(recipient), call.args)?;
                 write(vm, hud, "CachedBestPickup", obj(None), WHAT)?;
             }
         }

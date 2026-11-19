@@ -173,7 +173,7 @@ pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
     }
     let defaults = vm.defs.class_default(&mut vm.space, WEAPON_CLASS);
     vm.log.extend(vm.defs.take_log());
-    let defaults = defaults.map_err(VmError::Def)?;
+    let defaults = defaults.map_err(VmError::from)?;
     let class = match read(vm, defaults, "DroppedPickupClass")? {
         Value::Class(Some(c)) => c,
         other => return Err(error(format!("{WEAPON_CLASS}'s DroppedPickupClass is {other:?}"))),

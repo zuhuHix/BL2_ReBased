@@ -46,7 +46,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 use ow_vm::interp::instantiate_from_defaults;
 
-use super::{DiffRequest, diff_request, find_object, set_field, vm_text};
+use super::{DiffRequest, diff_request, set_field, vm_text};
 use crate::args::USAGE;
 use crate::cmd::properties::error_text;
 use crate::json::quote;
@@ -217,7 +217,7 @@ fn phase(vm: &mut Vm, path: &str, weapon: ObjRef, args: Vec<Value>) -> Option<St
 /// The controller's accuracy pool (module documentation): `CreatePool(Mgr, controller, ACCURACY_POOL, true)`, the
 /// manager written to `ResourcePoolManager` and the reference to `AccuracyPool`.
 fn accuracy_pool(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
-    let def = find_object(vm, ACCURACY_POOL).map_err(script)?;
+    let def = find_object_t(vm, ACCURACY_POOL)?;
     let f = vm.find_function(CREATE_POOL)?;
     let made = vm.call(
         f,
@@ -232,6 +232,15 @@ fn accuracy_pool(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
     let manager = made.outs.first().cloned().ok_or_else(|| script("the accuracy pool: CreatePool gave no manager".into()))?;
     write_t(vm, controller, "ResourcePoolManager", manager)?;
     write_t(vm, controller, "AccuracyPool", made.ret)
+}
+
+/// The installed object at `path`, its lookup's error kept typed (review r3 of #467): a definition store `NotYet` stays
+/// a `NotYet` (`VmError::from`), with its kind and record; an object no package holds is a script error of the run.
+fn find_object_t(vm: &mut Vm, path: &str) -> Result<ObjRef, VmError> {
+    let p = ow_core::ObjectPath::parse(path).map_err(|e| script(format!("{path}: {e}")))?;
+    let found = vm.defs.find(&mut vm.space, &p);
+    vm.log.extend(vm.defs.take_log());
+    found.map_err(VmError::from)?.ok_or_else(|| script(format!("{path}: no package holds it")))
 }
 
 /// A preparation error that is not the VM's own, as a script error of the run.
@@ -328,15 +337,15 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmE
 fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmError> {
     let weapon = make_t(vm, WEAPON)?;
     *wrote = true;
-    let weapon_type = find_object(vm, &r.weapon_type).map_err(script)?;
-    let balance = find_object(vm, &r.balance).map_err(script)?;
+    let weapon_type = find_object_t(vm, &r.weapon_type)?;
+    let balance = find_object_t(vm, &r.balance)?;
     let mut data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
         .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
     set_field(vm, &mut data, "WeaponTypeDefinition", Value::Object(Some(weapon_type))).map_err(script)?;
     set_field(vm, &mut data, "BalanceDefinition", Value::Object(Some(balance))).map_err(script)?;
     set_field(vm, &mut data, "GameStage", Value::Int(r.level)).map_err(script)?;
     for (field, part) in &r.parts {
-        let o = find_object(vm, part).map_err(script)?;
+        let o = find_object_t(vm, part)?;
         set_field(vm, &mut data, field, Value::Object(Some(o))).map_err(script)?;
     }
     write_t(vm, weapon, "DefinitionData", data)?;

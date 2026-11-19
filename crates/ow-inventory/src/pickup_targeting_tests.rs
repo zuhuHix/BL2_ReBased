@@ -109,6 +109,8 @@ fn willow_game() -> Vec<u8> {
             Some(a)
         },
     );
+    // An allowlisted item class declared without DefinitionData.
+    t.class("WillowItem", inventory);
     // A player controller with neither handler.
     t.class("ToyMuteController", player);
     let player_pawn = t.class("WillowPlayerPawn", pawn);
@@ -177,12 +179,12 @@ impl Host for Fixed {
 struct ToyGlobals {
     globals: ObjRef,
     definition: ObjRef,
-    resolved: u32,
+    resolved: std::cell::Cell<u32>,
 }
 
 impl Globals for ToyGlobals {
-    fn resolve(&mut self, _: &mut Vm) -> Result<(ObjRef, ObjRef), VmError> {
-        self.resolved += 1;
+    fn resolve(&self, _: &Vm) -> Result<(ObjRef, ObjRef), VmError> {
+        self.resolved.set(self.resolved.get() + 1);
         Ok((self.globals, self.definition))
     }
 }
@@ -288,7 +290,7 @@ fn fx() -> Fx {
             traced: 0,
             bounded: Vec::new(),
         },
-        provider: ToyGlobals { globals, definition: gd, resolved: 0 },
+        provider: ToyGlobals { globals, definition: gd, resolved: std::cell::Cell::new(0) },
     };
     x.set(gd, "HoverWidthPickup", Value::Float(100.0));
     x.set(gd, "ItemHoverProjectionHeight", Value::Float(20.0));
@@ -377,7 +379,7 @@ impl Fx {
     }
 
     fn tick(&mut self) -> Result<Outcome, VmError> {
-        tick(&mut self.vm, self.hud, &mut self.provider, &mut self.host)
+        tick(&mut self.vm, self.hud, &self.provider, &mut self.host)
     }
 
     fn seen(&self) -> Vec<(String, Option<ObjRef>)> {
@@ -618,12 +620,12 @@ fn the_headless_world_names_each_missing_layer() {
     let mut x = fx();
     let p = x.pickup([150.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
     let hud = x.hud;
-    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut Headless));
+    let n = not_yet(tick(&mut x.vm, hud, &x.provider, &mut Headless));
     assert_eq!(n.missing, Missing::LayerAbsent("a camera (the headless world has none)"));
-    assert_eq!(x.provider.resolved, 0, "the camera refuses before the globals are resolved");
-    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut BoundsOnly(x.host.view)));
+    assert_eq!(x.provider.resolved.get(), 0, "the camera refuses before the globals are resolved");
+    let n = not_yet(tick(&mut x.vm, hud, &x.provider, &mut BoundsOnly(x.host.view)));
     assert_eq!(n.missing, Missing::LayerAbsent("component bounds (the headless world has none)"));
-    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut TraceOnly(x.host.view)));
+    let n = not_yet(tick(&mut x.vm, hud, &x.provider, &mut TraceOnly(x.host.view)));
     assert_eq!(n.missing, Missing::LayerAbsent("collision (the headless world has none)"));
     assert!(!n.what.contains(PARTIAL_WRITES));
     assert_eq!(x.get(p, "bHasPickupParticleOffset"), Value::Bool(false), "nothing written");
@@ -766,7 +768,7 @@ fn the_shrink_refusal_comes_after_the_line_check() {
     let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
     x.set(p, "LifeSpan", Value::Float(30.0));
     let hud = x.hud;
-    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut TraceOnly(x.host.view)));
+    let n = not_yet(tick(&mut x.vm, hud, &x.provider, &mut TraceOnly(x.host.view)));
     assert_eq!(n.missing, Missing::LayerAbsent("collision (the headless world has none)"));
 }
 
@@ -789,11 +791,45 @@ fn the_world_globals_read_the_definition_field() {
     let mut x = fx();
     let q = ow_world::query::install(&mut x.vm).unwrap();
     q.borrow_mut().set_globals(x.globals);
-    let n = match WorldGlobals.resolve(&mut x.vm).unwrap_err() {
+    let n = match WorldGlobals::prepare(&mut x.vm).resolve(&x.vm).unwrap_err() {
         VmError::NotYet(n) => n,
         e => panic!("{e}"),
     };
     assert!(n.missing == Missing::NotRead && n.what.contains("TheGlobalsDefinition"), "{n}");
     x.set(x.globals, "TheGlobalsDefinition", Value::Object(Some(x.gd)));
-    assert_eq!(WorldGlobals.resolve(&mut x.vm).unwrap(), (x.globals, x.gd));
+    assert_eq!(WorldGlobals::prepare(&mut x.vm).resolve(&x.vm).unwrap(), (x.globals, x.gd));
+}
+
+/// The planned `SawPickupable` call is built and checked in the plan with its exact argument (review r3 of #467); the
+/// commit makes that call.
+#[test]
+fn the_handler_call_is_checked_with_its_exact_argument() {
+    let mut x = fx();
+    let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let checked = handler(&mut x.vm, Some(x.controller), "SawPickupable", Some(p)).unwrap();
+    assert_eq!(checked.args, vec![Value::Object(Some(p))]);
+    let none = handler(&mut x.vm, Some(x.controller), "ClearSeenPickupable", None).unwrap();
+    assert!(none.args.is_empty());
+}
+
+/// On an allowlisted class the missing layout is a named `NotYet { NotRead }` (NATIVE_INVENTORY_DEFINITION.md, as
+/// #462), not an ordinary error.
+#[test]
+fn a_missing_definition_layout_is_not_yet() {
+    let mut x = fx();
+    let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let bare = x.obj("WillowGame.WillowItem");
+    x.set(p, "Inventory", Value::Object(Some(bare)));
+    let n = not_yet(x.tick());
+    assert!(n.missing == Missing::NotRead && n.what.contains("without DefinitionData"), "{n}");
+}
+
+/// A `NotYet` from the definition store keeps its variant (`VmError::from`, review r3 of #467).
+#[test]
+fn a_definition_store_not_yet_keeps_its_variant() {
+    let n = ow_core::NotYet::not_read("a lazy handle", "NOTE.md");
+    match VmError::from(ow_defs::store::DefError::NotYet(n)) {
+        VmError::NotYet(n) => assert_eq!(n.record, "NOTE.md"),
+        e => panic!("{e}"),
+    }
 }
