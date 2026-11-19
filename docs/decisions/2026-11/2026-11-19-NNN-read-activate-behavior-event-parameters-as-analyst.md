@@ -22,8 +22,13 @@ The decision number is a placeholder.
     direction and Kismet targets;
   - every refusal before the first event fires, because the kernel's state is not on the heap and #518's counters do
     not see it.
-- **For the hub:** the port's script route without Parameters writes an empty object into every output-linked object
-  variable; the game binds nothing. Changing it alters current Off behavior.
+- **A recorded divergence, out of scope by the hub's ruling:** with no payload and an empty outputs map, the port
+  clears every output-linked object variable to None. This happens for the script route without Parameters,
+  `BroadcastBehaviorEventFromScript`, and the kernel's sequence enabled and disabled events. The game binds nothing.
+- **Review r1 of #549:**
+  - the preflight covers every sequence with an entry of the event's name, enabled or not, open or not (the hub's
+    ruling);
+  - the Kismet hand-off's relation to the type rule is stated.
 - **The probe** (local, uncommitted): on the #535 stack, link 9 reached `cast` and stopped at #523's noun
   strategy-2 `NotYet` before this native. #523 does not merge onto that base (its counter names), so the stop after
   this native is open.

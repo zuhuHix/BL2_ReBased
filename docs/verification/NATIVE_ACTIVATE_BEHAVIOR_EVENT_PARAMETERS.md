@@ -80,8 +80,10 @@ This note adds what the array does.
      | any other type | none | nothing |
 
      A type that does not match writes nothing and raises nothing: the variable keeps its value.
-   - A target that is a **named Kismet variable** also has the element handed to the Kismet variable (not read
-     further).
+   - A target that is a **named Kismet variable** also has the element handed to the Kismet variable. That hand-off
+     follows the type rule above where the resolved target has one of the types in the table: a match writes and then
+     hands over, a mismatch skips both. A resolved target of any other type is handed the element whatever its type.
+     What the Kismet variable does with it was not read (review r1 of #549; UNVERIFIED, read coarsely).
 4. **After the activation**, the kernel notifies its registered listeners of the event (name and filter). This step is
    the same with or without Parameters, it is not read, and the port does not model it today.
 5. **No filter callback** comes from script. The event entry's own filter object, when it has one, is consulted only
@@ -118,8 +120,11 @@ changes):
    port's own**: in the game the array is always typed.
 2. `VariableType` is read **by name** from the loaded `EBehaviorVariableType` (the port's fixtures order their toy enum
    differently on purpose).
-3. For every sequence that would fire the event (enabled, with an open entry of that name, as `fire_in` decides it),
-   for every `BVARLINK_Output` link whose connection index is below the length, and every target variable:
+3. For **every sequence of the provider that has an event entry of that name, enabled or not, open or not** (review
+   r1 of #549, the hub's ruling: `fire_event` re-checks each sequence's enabled state as it goes, so a behavior of an
+   earlier sequence can enable a later one before it fires; checking only the sequences enabled at preflight time
+   would let a later one fire with unchecked bindings), for every `BVARLINK_Output` link of those entries whose
+   connection index is below the length, and every target variable:
    - element `BVAR_Object`, variable `BVAR_Object`: the plain binding (answered);
    - element and variable types that do not match, or element `BVAR_None`: nothing (answered);
    - element `BVAR_Bool`, `BVAR_Int`, `BVAR_Float` or `BVAR_Vector` meeting a variable of the same type:
@@ -128,8 +133,9 @@ changes):
    - an `BVAR_Attribute` variable with a float element, or a `BVAR_DirectionVector` variable with a vector element:
      `NotYet { NotRead }`, "ActivateBehaviorEventFromScript: a Parameters entry into an attribute or direction
      variable";
-   - a named Kismet variable target: `NotYet { NotRead }`, "ActivateBehaviorEventFromScript: a Parameters entry into
-     a Kismet variable".
+   - a named Kismet variable target, whatever the element's type (the hand-off is not read past the type rule of
+     section 2, item 3): `NotYet { NotRead }`, "ActivateBehaviorEventFromScript: a Parameters entry into a Kismet
+     variable".
 4. Nothing is loaded in the preflight.
 
 **The writes:** the existing activation, with the binding of section 2 in place of the current empty-payload outputs:
@@ -142,11 +148,15 @@ comes from the preflight, unmarked. A refusal from a behavior downstream is that
 target `BVAR_Object` variables, so `Siren` becomes the caster and `Target` the target before the dialog, cooldown,
 provoke and hold behaviors run.
 
-**A related port divergence (for the hub; not part of this answer).** Without Parameters the port's script route calls
-`fire_event` with empty outputs and an empty payload, so every `BVARLINK_Output` link writes an empty object into its
-object variables. The game binds nothing without a payload (section 2, item 1): those variables keep their values.
-Changing that alters the current Off behavior of `Behavior_RemoteCustomEvent` and similar routes, so it is the hub's
-call.
+**A related port divergence (recorded; out of scope by the hub's ruling).** With no payload and an empty outputs map,
+the port's `fire_event` clears every object variable an output link targets: it sets the variable's stock path to the
+empty string and its live object to None, so the variable becomes None. The game binds nothing without a payload
+(section 2, item 1): those variables keep their values. The same empty-payload, empty-outputs path runs for:
+- `ActivateBehaviorEventFromScript` without Parameters (`Behavior_RemoteCustomEvent` and the like);
+- `BroadcastBehaviorEventFromScript`;
+- the sequence enabled and disabled events the kernel raises itself.
+
+The hub ruled all of them out of scope for this note (review r1 of #549); they stay a recorded divergence.
 
 ## 5. Link 9 after this native (a local probe)
 
