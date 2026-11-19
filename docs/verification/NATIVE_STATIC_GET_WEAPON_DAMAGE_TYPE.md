@@ -51,22 +51,39 @@ weapon type **already loaded** on entry, and the elemental part None.
 ## 4. Proposed Off answer (for a separate implementer)
 
 **Every rule below is UNVERIFIED.** Bind `WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)` in Off;
-Reference keeps the stub policy. Share the rule with `ow-combat`'s `weapon_damage_type`, but take its loading out
-first: that helper loads its definitions, and the native must not.
+Reference keeps the stub policy.
 
-**Preflight (write-free, loads nothing):**
-1. The argument is a `WeaponDefinitionData` struct with `WeaponTypeDefinition` and `ElementalPartDefinition`
-   object fields. Otherwise a `VmError::Script` naming the field.
-2. `WeaponTypeDefinition` set and an unloaded handle: `NotYet { NotRead }`, "StaticGetWeaponDamageType: the weapon
+**Sharing the rule.** A shared core can only **choose between references that are already read**: given the type's
+`DefaultDamageTypeDefinition` and, when set, the elemental part's `CustomDamageTypeDefinition`, it picks one. Taking
+the loading out of `ow-combat`'s `weapon_damage_type` (`crates/ow-combat/src/hit/shot.rs`) is not enough on its own.
+With a loaded elemental part that has a custom type and an unloaded weapon type, that helper returns the custom type
+without touching the weapon type, and Off must refuse there (check 2 below). `tools/weapon_recipe.py`'s
+`native_damage_type` can also return a custom type when the weapon type is absent, where the native answers None.
+So the Off validation stays with the native, and the shot pipeline's loading stays with its own caller.
+
+**Preflight (write-free, loads nothing), in the native's read order.** The first failing check answers, and nothing
+after it is looked at:
+1. The argument's `WeaponTypeDefinition` field is present and an object field. Otherwise a `VmError::Script`
+   naming the field.
+2. **The type is None:** the answer is None. The `ElementalPartDefinition` field is **not looked at**, so a missing or
+   mistyped elemental field still answers None (precedence (a)).
+3. The type is an unloaded handle: `NotYet` with missing kind `NotRead`, "StaticGetWeaponDamageType: the weapon
    type definition is not loaded (a load is a write)".
-3. `ElementalPartDefinition` set and an unloaded handle (checked only when the type is set, since step 1 of the rule
-   answers None first): `NotYet { NotRead }`, "StaticGetWeaponDamageType: the elemental part definition is not loaded
-   (a load is a write)".
-4. A set definition whose class declares no `DefaultDamageTypeDefinition` (the type) or no
-   `CustomDamageTypeDefinition` (the part), or declares it as a non-object: a `VmError::Script` naming the field.
+4. The type's class declares `DefaultDamageTypeDefinition` as an object. Otherwise a `VmError::Script` naming the
+   field. This is checked **before anything of the elemental part** (precedence (b) and (c)), since the native reads the
+   type's default first. So an invalid `DefaultDamageTypeDefinition` on a loaded type answers before the elemental
+   part's load refusal.
+5. The argument's `ElementalPartDefinition` field is present and an object field. Otherwise a `VmError::Script`
+   naming the field.
+6. The elemental part is set and an unloaded handle: `NotYet` with missing kind `NotRead`,
+   "StaticGetWeaponDamageType: the elemental part definition is not loaded (a load is a write)".
+7. A set elemental part's class declares `CustomDamageTypeDefinition` as an object. Otherwise a `VmError::Script`
+   naming the field.
 
-**The answer:** section 2's rule, as an object (None included). The damage type is returned as stored and never
-loaded.
+When both definitions' properties are malformed, check 4 (the type) answers.
+
+**The answer:** section 2's rule, as an object (None included). The selected damage-type handle is returned as
+stored, even when it is unloaded, and is never loaded.
 
 **Writes and the counters:** none. The native neither writes nor loads, so its refusals never carry the "stopped
 after partial writes: " prefix (#518's counters cannot move inside it).
@@ -89,8 +106,8 @@ bool)`**, the `FirstPersonMesh` reset in `ClientInitializeFromWeaponTypeDefiniti
 ## Open questions
 
 1. **UNVERIFIED:** that no other part (barrel, body, and so on) can supply a damage type. The native reads only the
-   elemental part; `tools/weapon_recipe.py` notes an "any part" variant that the tools use for names, which the
-   native does not.
+   elemental part. `tools/weapon_recipe.py` has an "any part" variant, which belongs to the weapon card. The name
+   expressions use `native_damage_type`, which follows the native.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
