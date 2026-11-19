@@ -17,7 +17,7 @@ number is pending from the maintainer (three digits); NNN is a placeholder.
   implement this one.
 - **Findings:**
   - **The callers:** `ClientInitializeFromWeaponTypeDefinition`, twice: the barrel's collection, then the weapon
-    type's, each with the weapon as the argument.
+    type's only while `MuzzleFlashPSTemplate` is still None, each with the weapon as the argument.
   - **The rule:** the first `ParticleEffects` entry whose `Expression` is None, or whose evaluator answers true for
     the argument, gives its `ParticleEffect`; otherwise None. The native writes and loads nothing of its own.
   - **The slice gun:** 6 entries, 5 attribute tests (corrosive, explosive, incendiary, shock, amp) and a default.

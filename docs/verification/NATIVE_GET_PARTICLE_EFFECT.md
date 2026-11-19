@@ -23,7 +23,7 @@ at the unbound `EffectCollectionDefinition.GetParticleEffect(object)`.
 - **Callers:** `WillowWeapon.ClientInitializeFromWeaponTypeDefinition`, twice, and no other script function in the
   nine code packages.
 - **On link 8:** the weapon's `InitializeInternal` calls `ClientInitializeFromWeaponTypeDefinition`
-  (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md section 2). That function first registers the weapon as a behavior
+  (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md section 2, on #539). That function first registers the weapon as a behavior
   consumer and initialises the type's and the parts' behavior providers. Then, for the muzzle flash:
   1. `MuzzleFlashPSTemplate` = None;
   2. if the barrel part is set and its `MuzzleFlashPSTemplates` (an `EffectCollectionDefinition`) is set:
@@ -52,8 +52,8 @@ entry that passes has none.
 **What it reads, and what it does not:**
 - **Selection** is by the evaluators only, in array order: no class, name, material or tag test of its own. Whatever
   the argument means to an entry comes from that entry's evaluator.
-- **The native writes nothing**, draws nothing and loads nothing of its own. The `ParticleSystem` is returned as a
-  reference. The native does not touch the particle system itself.
+- **The native writes nothing**, draws nothing and loads nothing of its own. The `ParticleSystem` handle is returned
+  as stored, loaded or not, and the native never loads it.
 - **The evaluators** may do anything their class does: read attributes of the context, resolve them, and so on.
   That is outside this native.
 - **A None argument** is passed to the evaluators as it is. What they do with it is theirs.
@@ -64,8 +64,8 @@ On link 8's weapon (`EQUIP_WEAPON`, the Bandit assault rifle):
 - the barrel part's `MuzzleFlashPSTemplates` is None, so step 2 of section 1 is skipped;
 - the weapon type's is `GD_Weap_AssaultRifle.Effects.AR_Default_MuzzleFlashes`, with **6 entries**:
   - entries 1 to 5 each have an `AttributeExpressionEvaluator`, testing in turn `WeaponDamage_Is_Corrosive`,
-    `_Explosive`, `_Incendiary`, `_Shock` and `_Amp` (the E-tech flash): each with operand 1 an attribute,
-    comparison 0 and constant 1;
+    `_Explosive`, `_Incendiary`, `_Shock` and `_Amp` (the E-tech flash). Each has operand 1 an attribute,
+    comparison 0 (`EqualTo`, NATIVE_ATTRIBUTES.md section 11) and constant 1;
   - entry 6 has no `Expression` and the default flash.
 
 So for this gun, the answer is the first of the five element flashes whose test passes, else the default flash.
@@ -88,22 +88,33 @@ calling an evaluator, therefore needs a load. Under #518 a lazy load counts as a
    set-up preloads the globals definition, or that this native may load and is marked.
 2. `ParticleEffects` is declared as an array of a struct with `Expression` and `ParticleEffect`. Otherwise a
    `VmError::Script` naming the field.
-3. Before the walk, every entry's `Expression` that is an unloaded handle refuses the same way: `NotYet { NotRead }`,
-   "GetParticleEffect: an entry's evaluator is not loaded". The walk could stop at an earlier entry, but checking
-   them all keeps the preflight free of evaluator calls.
+3. Before the walk, the entries are checked in array order up to and including the first entry with no
+   `Expression`. Later entries can never be reached, so they are not checked. An `Expression` in that range that is
+   an unloaded handle refuses the same way: `NotYet { NotRead }`, "GetParticleEffect: an entry's evaluator is not
+   loaded". This is a **port convention, not game behaviour**: the game evaluates entries on demand and would stop at
+   the first that passes, so this check is stricter than the game's. It keeps the preflight free of evaluator calls.
 
 **The walk** (only when the preflight passes): in array order, an entry with no `Expression` returns its
 `ParticleEffect`. Otherwise its `Evaluate` is called through the VM with the argument (the evaluator class's bound
 native or script):
-- true returns the entry's `ParticleEffect`;
-- false goes on to the next entry;
-- an error, including an unbound evaluator, passes through unchanged, kind and record kept.
+- `true` returns the entry's `ParticleEffect`;
+- `false` goes on to the next entry;
+- a return that is not a bool is a `VmError::Script`;
+- an error follows the error rule below.
 
 No entry passing returns None.
 
-**The counters.** The native itself writes nothing. A `NotYet` raised by an evaluator after `committed_writes()`,
-`draws()` or `load_transitions()` moved takes the "stopped after partial writes: " prefix (#518). The preflight's
-refusals come before any of that, so they never do.
+**The error rule.** The three counters `committed_writes()`, `draws()` and `load_transitions()` come from #518, which
+is open: it adds them, and the implementation builds on it or waits for it.
+- **On entry** to the native, before the preflight, snapshot the three counters.
+- **A `NotYet` from an evaluator:** when any counter has moved since that snapshot, it gets the "stopped after
+  partial writes: " prefix, once, with its kind and record kept, as `ow_attr::eval::after_partial_writes` does. When
+  none has moved, it passes through unchanged.
+- **Every other error** passes through unchanged, an unbound evaluator included.
+- **The preflight's refusals** come before any evaluator runs, so the counters cannot have moved and they never take
+  the prefix.
+
+The native itself writes nothing, so any movement comes from the evaluators.
 
 **Not a stand-in.** The port must not return the default (the entry with no `Expression`) without evaluating the
 earlier entries. On a gun whose element test passes, that would be the wrong flash.
