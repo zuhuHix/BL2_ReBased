@@ -59,7 +59,7 @@
 //!   case within a few units in the last place of a cutoff is not decided bit for bit (UNVERIFIED).
 
 use ow_core::NotYet;
-use ow_object::ids::{ClassId, FuncId, ObjRef};
+use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -403,7 +403,7 @@ fn native_getter(vm: &mut Vm, o: ObjRef, name: &str, declaration: &str) -> Resul
 }
 
 /// The weapon classes whose `GetInventoryDefinition` reads `DefinitionData.WeaponTypeDefinition`
-/// (NATIVE_INVENTORY_DEFINITION.md section 2, the same allowlist #462's native uses).
+/// (NATIVE_INVENTORY_DEFINITION.md section 2): #462's allowlist at 8e59258.
 const WEAPON_CLASSES: [&str; 4] = [
     "WillowGame.WillowWeapon",
     "WillowGame.WillowBuzzaxeWeapon",
@@ -423,14 +423,29 @@ const ITEM_CLASSES: [&str; 9] = [
     "WillowGame.WillowUsableCustomizationItem",
 ];
 const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
+/// #462's record for `GetInventoryDefinition`.
+const DEFINITION_RECORD: &str = "docs/verification/NATIVE_INVENTORY_DEFINITION.md (GetInventoryDefinition, the Off answers)";
 
-/// The definition of the pickup's inventory, read as `GetInventoryDefinition` answers it but by field reads only (the
-/// exact class chooses the `DefinitionData` field; exactly `Engine.WillowInventory` answers None; any other class is a
-/// named `NotYet`). None without an inventory. Nothing is run.
+/// The definition of the pickup's inventory, read as `GetInventoryDefinition` answers it but by field reads only. None
+/// without an inventory. The receiver's method must resolve to the native declaration (the guard kept from review r1
+/// of #467). Nothing is run.
 fn definition_of(vm: &mut Vm, pickup: ObjRef) -> Result<Option<ObjRef>, VmError> {
     let Some(inventory) = object_field(vm, pickup, "Inventory")? else { return Ok(None) };
     native_getter(vm, inventory, "GetInventoryDefinition", GET_INVENTORY_DEFINITION)?;
-    let class = class_of(vm, inventory)?;
+    inventory_definition_of(vm, inventory)
+}
+
+/// A copy of #462's read-only accessor `ow_inventory::definition::inventory_definition_of` (fix/rust-inventory-definition
+/// at 8e59258, NATIVE_INVENTORY_DEFINITION.md section 3), with the same rule, texts and record. #462 is not on main,
+/// which this branch now targets; once it lands, this copy is replaced by a call to that function (review r3 of #467,
+/// item 5).
+/// - The exact class chooses the field. Exactly `Engine.WillowInventory` answers None. Any other class is a named
+///   `NotYet { NotRead }`.
+/// - A missing layout is a named `NotYet { NotRead }`; a malformed one is a data error.
+fn inventory_definition_of(vm: &Vm, me: ObjRef) -> Result<Option<ObjRef>, VmError> {
+    const NATIVE: &str = "GetInventoryDefinition";
+    let not_read = |what: String| -> VmError { NotYet::not_read(what, DEFINITION_RECORD).into() };
+    let class = vm.space.heap.get(me)?.class;
     let classes = &vm.space.classes;
     let is = |paths: &[&str]| paths.iter().any(|p| classes.by_path(p) == Some(class));
     let name = if is(&WEAPON_CLASSES) {
@@ -440,32 +455,38 @@ fn definition_of(vm: &mut Vm, pickup: ObjRef) -> Result<Option<ObjRef>, VmError>
     } else if is(&["Engine.WillowInventory"]) {
         return Ok(None);
     } else {
-        return Err(refused(format!(
-            "GetInventoryDefinition on a {}: a class whose rule was not read (NATIVE_INVENTORY_DEFINITION.md)",
-            ow_attr::eval::class_path(&vm.space, inventory)
-        )));
+        let path = classes.layout(class).path().as_str().to_string();
+        return Err(not_read(format!("{NATIVE} on a {path}: a class whose engine rule was not read")));
     };
-    // A missing layout is a named NotYet; a malformed one is a data error (NATIVE_INVENTORY_DEFINITION.md, as #462).
-    let missing = |what: String| refused(format!("GetInventoryDefinition on {what} (NATIVE_INVENTORY_DEFINITION.md)"));
-    let Some(prop) = vm.space.prop(class, "DefinitionData") else {
-        return Err(missing("a class without DefinitionData".into()));
+    let prop = vm
+        .space
+        .prop(class, "DefinitionData")
+        .ok_or_else(|| not_read(format!("{NATIVE} on a class without DefinitionData")))?;
+    let decl = classes.decl(prop).ok_or_else(|| bad(NATIVE, "DefinitionData has no declaration"))?;
+    let ty = match (&decl.kind, decl.array_dim) {
+        (PropKind::Struct(ty), 1) => *ty,
+        (kind, dim) => return Err(bad(NATIVE, format!("DefinitionData is declared as {kind:?} x {dim}, not one struct"))),
     };
-    let ty = match vm.space.classes.decl(prop).map(|d| (&d.kind, d.array_dim)) {
-        Some((PropKind::Struct(ty), 1)) => *ty,
-        other => return Err(bad(WHAT, format!("DefinitionData is declared as {other:?}, not one struct"))),
-    };
-    let declared = vm
+    let field_decl = vm
         .space
         .names
         .find(name)
-        .and_then(|id| vm.space.classes.struct_layout(ty).and_then(|l| l.field(id)).map(|(_, d)| (d.kind.clone(), d.array_dim)));
-    match declared {
-        None => return Err(missing(format!("a DefinitionData without {name}"))),
+        .and_then(|id| classes.struct_layout(ty).and_then(|l| l.field(id).map(|(_, d)| (d.kind.clone(), d.array_dim))));
+    match field_decl {
+        None => return Err(not_read(format!("{NATIVE} on a DefinitionData without {name}"))),
         Some((PropKind::Object { .. }, 1)) => {}
-        Some(other) => return Err(bad(WHAT, format!("DefinitionData.{name} is declared as {other:?}, not one object"))),
+        Some((kind, dim)) => {
+            return Err(bad(
+                NATIVE,
+                format!("DefinitionData.{name} is declared as {kind:?} x {dim}, not one object reference"),
+            ));
+        }
     }
-    let data = required(vm, inventory, "DefinitionData", WHAT)?;
-    object_of(&field(vm, &data, name)?, WHAT)
+    let data = vm.space.read(me, PropAddr::scalar(prop))?.clone();
+    match field(vm, &data, name)? {
+        Value::Object(o) => Ok(o),
+        other => Err(bad(NATIVE, format!("DefinitionData.{name} holds {}, not an object reference", other.kind_name()))),
+    }
 }
 
 /// The pickup's particle offset (section 4) and whether it is non-zero (so the pass sets `bHasPickupParticleOffset`).
