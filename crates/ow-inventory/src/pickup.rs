@@ -16,6 +16,17 @@
 //!   `OnAllPickupsDetached` when no other pickup of the same holder is left, but names neither the list nor the holder
 //!   nor how the two global events are delivered.
 //!
+//! - **`DroppedPickup.GetPickupableInventory()` and `GetPickupableInventoryDefinition()`** (lane LINKS-6-8-NEXT,
+//!   decision 2026-11-19-40, assigned -103), coded from NATIVE_INVENTORY_EQUIP.md, "Pickup interface accessors"
+//!   (analyst lane G12, medium confidence: the implementers behind the interface table were not each read). They
+//!   write nothing.
+//!   - `GetPickupableInventory`: the pickup's `Inventory`, as stored (None included).
+//!   - `GetPickupableInventoryDefinition`: "that inventory's definition". It is read as the inventory's own
+//!     `GetInventoryDefinition()`, dispatched through the VM on the inventory's class, so the callee answers for itself
+//!     (an unbound one is `VmError::UnboundNative`, unchanged) (UNVERIFIED that the native asks that virtual).
+//!   - Where the note is silent, a named `NotYet { NotRead }`: a pickup with no `Inventory` ([`NO_INVENTORY`]), and an
+//!     inventory whose class declares no `GetInventoryDefinition` ([`NO_DEFINITION_QUERY`]).
+//!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so Reference binds nothing here (R3).
 
 use std::rc::Rc;
@@ -30,11 +41,45 @@ use crate::equip::{bad, object_of, required};
 /// The record these natives follow.
 pub const RECORD: &str = "NATIVE_PICKUP.md";
 
+/// The record of the two pickup accessors (lane G12).
+pub const RECORD_EQUIP: &str = "NATIVE_INVENTORY_EQUIP.md";
+/// The `NotYet` of a pickup with no inventory (the note is silent).
+pub const NO_INVENTORY: &str = "DroppedPickup.GetPickupableInventoryDefinition on a pickup with no Inventory";
+/// The `NotYet` of an inventory whose class has no definition query (the note is silent).
+pub const NO_DEFINITION_QUERY: &str =
+    "DroppedPickup.GetPickupableInventoryDefinition on an inventory whose class declares no GetInventoryDefinition";
+
 /// The native keys [`register`] binds in Off.
 pub const GET_INVENTORY_PAWN: &str = "WillowPlayerController.GetInventoryPawn()";
 pub const ADD_TO_NAVIGATION: &str = "DroppedPickup.AddToNavigation()";
 pub const REMOVE_PICKUP: &str = "WillowGlobals.RemovePickup(object)";
 pub const TOUCH_PICKUP_TRACE: &str = "DroppedPickup.TouchPickupTrace(vector,vector)";
+pub const GET_PICKUPABLE_INVENTORY: &str = "DroppedPickup.GetPickupableInventory()";
+pub const GET_PICKUPABLE_INVENTORY_DEFINITION: &str = "DroppedPickup.GetPickupableInventoryDefinition()";
+
+fn pickup_inventory(c: &mut NativeCall<'_>, what: &str) -> Result<Option<ow_object::ids::ObjRef>, VmError> {
+    let pickup = c.this.ok_or_else(|| bad(what, "called without a pickup"))?;
+    object_of(&required(c.vm, pickup, "Inventory", what)?, what)
+}
+
+fn get_pickupable_inventory(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    Ok(Value::Object(pickup_inventory(c, "DroppedPickup.GetPickupableInventory")?))
+}
+
+fn get_pickupable_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const WHAT: &str = "DroppedPickup.GetPickupableInventoryDefinition";
+    let Some(inventory) = pickup_inventory(c, WHAT)? else {
+        return Err(NotYet::not_read(NO_INVENTORY, RECORD_EQUIP).into());
+    };
+    let (class, state) = {
+        let x = c.vm.space.heap.get(inventory)?;
+        (x.class, x.state)
+    };
+    let Some(f) = c.vm.find_method(class, "GetInventoryDefinition", state)? else {
+        return Err(NotYet::not_read(NO_DEFINITION_QUERY, RECORD_EQUIP).into());
+    };
+    Ok(c.vm.call(f, Some(inventory), vec![])?.ret)
+}
 
 fn get_inventory_pawn(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowPlayerController.GetInventoryPawn";
@@ -63,8 +108,10 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 4] = [
+    let natives: [(&str, NativeFn); 6] = [
         (GET_INVENTORY_PAWN, Rc::new(get_inventory_pawn)),
+        (GET_PICKUPABLE_INVENTORY, Rc::new(get_pickupable_inventory)),
+        (GET_PICKUPABLE_INVENTORY_DEFINITION, Rc::new(get_pickupable_inventory_definition)),
         (ADD_TO_NAVIGATION, Rc::new(|_: &mut NativeCall<'_>| Ok(Value::None))),
         (
             REMOVE_PICKUP,

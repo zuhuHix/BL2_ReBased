@@ -44,11 +44,17 @@ fn engine() -> Vec<u8> {
     native(&mut t, dropped, "AddToNavigation", &[], None);
     let at = |name: &str| Param { type_ref: vector, ..Param::new("Struct", name) };
     native(&mut t, dropped, "TouchPickupTrace", &[at("StartLoc"), at("EndLoc")], Some(("Bool", 0)));
+    native(&mut t, dropped, "GetPickupableInventory", &[], Some(("Object", actor)));
+    native(&mut t, dropped, "GetPickupableInventoryDefinition", &[], Some(("Object", object)));
     // The packages' WillowInventory is an Engine class (lane IMPL-PICKUP found `definition` binding WillowGame paths).
     let inventory = t.class("WillowInventory", actor);
     native(&mut t, inventory, "GetManufacturer", &[], Some(("Object", object)));
     native(&mut t, inventory, "ComputeMonetaryValue", &[], Some(("Int", 0)));
     native(&mut t, inventory, "GenerateUniqueID", &[], Some(("Int", 0)));
+    native(&mut t, inventory, "GetInventoryDefinition", &[], Some(("Object", object)));
+    // An invented inventory class whose own definition query is a native nothing binds.
+    let unbound = t.class("ToyUnboundInventory", actor);
+    native(&mut t, unbound, "GetInventoryDefinition", &[], Some(("Object", object)));
     t.build()
 }
 
@@ -186,11 +192,58 @@ fn add_to_navigation_is_a_no_op_and_remove_pickup_is_not_yet() {
     assert_eq!(x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(thing)));
 }
 
-/// Reference binds none of the three (no C++ stand-in).
+/// The two pickup accessors (decision 2026-11-19-40, assigned -103): the pickup's `Inventory`, and that inventory's own
+/// `GetInventoryDefinition()` through the VM. A pickup with no inventory and an inventory class without the query are
+/// named `NotRead`s; an unbound callee is its own `UnboundNative`. Nothing is written.
+#[test]
+fn the_pickup_accessors_read_the_inventory_and_ask_its_definition() {
+    let mut x = fx(ParityMode::Off);
+    let definition = x.obj("Engine.Object");
+    let key = "WillowInventory.GetInventoryDefinition()";
+    x.vm
+        .register_native(key, Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(Some(definition)))))
+        .unwrap();
+    let pickup = x.obj("WillowGame.WillowPickup");
+    let (inventory_of, definition_of) =
+        ("Engine.DroppedPickup.GetPickupableInventory", "Engine.DroppedPickup.GetPickupableInventoryDefinition");
+    assert_eq!(x.call(inventory_of, pickup, vec![]).unwrap(), Value::Object(None));
+    match x.call(definition_of, pickup, vec![]) {
+        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == NO_INVENTORY && n.record == RECORD_EQUIP, "{n}"),
+        other => panic!("{other:?}"),
+    }
+    let item = x.obj("Engine.WillowInventory");
+    x.set(pickup, "Inventory", Value::Object(Some(item)));
+    assert_eq!(x.call(inventory_of, pickup, vec![]).unwrap(), Value::Object(Some(item)));
+    assert_eq!(x.call(definition_of, pickup, vec![]).unwrap(), Value::Object(Some(definition)));
+    let plain = x.obj("Engine.Actor");
+    x.set(pickup, "Inventory", Value::Object(Some(plain)));
+    match x.call(definition_of, pickup, vec![]) {
+        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == NO_DEFINITION_QUERY, "{n}"),
+        other => panic!("{other:?}"),
+    }
+    let unbound = x.obj("Engine.ToyUnboundInventory");
+    x.set(pickup, "Inventory", Value::Object(Some(unbound)));
+    match x.call(definition_of, pickup, vec![]) {
+        Err(VmError::UnboundNative(k)) => assert!(k.contains("GetInventoryDefinition"), "{k}"),
+        other => panic!("{other:?}"),
+    }
+    let class = x.vm.space.heap.get(pickup).unwrap().class;
+    let p = x.vm.space.prop(class, "Inventory").unwrap();
+    assert_eq!(x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(unbound)), "nothing written");
+}
+
+/// Reference binds none of them (no C++ stand-in).
 #[test]
 fn reference_binds_nothing() {
     let x = fx(ParityMode::Reference);
-    for key in [GET_INVENTORY_PAWN, ADD_TO_NAVIGATION, REMOVE_PICKUP, TOUCH_PICKUP_TRACE] {
+    for key in [
+        GET_INVENTORY_PAWN,
+        ADD_TO_NAVIGATION,
+        REMOVE_PICKUP,
+        TOUCH_PICKUP_TRACE,
+        GET_PICKUPABLE_INVENTORY,
+        GET_PICKUPABLE_INVENTORY_DEFINITION,
+    ] {
         assert!(!x.vm.has_native(key), "{key}");
     }
 }
