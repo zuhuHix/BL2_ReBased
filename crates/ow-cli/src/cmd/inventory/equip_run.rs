@@ -311,6 +311,25 @@ pub(crate) fn gate_world(cooked: &Path) -> Result<ow_world::world::World, String
     run_world(cooked, ParityMode::Off)
 }
 
+/// The installed globals definition the pickup world's globals hold (NATIVE_WILLOW_GLOBALS.md section 2: the
+/// configured `DefaultGlobalsDefinitionName`).
+pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
+
+/// [`gate_world`] with the world's one globals object, for `--slice-gate`'s links 6 and 7 (lane IMPL-WILLOW-GLOBALS,
+/// decision 2026-11-19-94; NATIVE_WILLOW_GLOBALS.md section 6, steps 1 and 4). World set-up, before the run writes
+/// anything: a `WillowGlobals` from its class defaults whose `TheGlobalsDefinition` is the installed
+/// [`GLOBALS_DEFINITION`], recorded as the world's globals (`WorldQuery::set_globals`). The other links' worlds are
+/// unchanged.
+pub(crate) fn pickup_world(cooked: &Path) -> Result<ow_world::world::World, String> {
+    let mut world = gate_world(cooked)?;
+    let vm = &mut world.vm;
+    let globals = make(vm, "WillowGame.WillowGlobals")?;
+    let definition = find_object(vm, GLOBALS_DEFINITION)?;
+    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition))).map_err(|e| vm_text(&e))?;
+    world.query().try_borrow_mut().map_err(|_| "the world query service is borrowed".to_string())?.set_globals(globals);
+    Ok(world)
+}
+
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as
 /// [`prepare_line_typed`].
 pub(crate) fn prepare_unowned_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {

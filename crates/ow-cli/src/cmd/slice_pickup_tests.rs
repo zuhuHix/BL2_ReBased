@@ -240,3 +240,15 @@ fn look_checks_the_touched_decoy_then_stops_at_the_missing_hud() {
         e => panic!("{e}"),
     }
 }
+
+/// The globals preflight (lane IMPL-WILLOW-GLOBALS): a world without its globals object is refused with the world's
+/// `NotYet { LayerAbsent }`, never a None, before the run writes anything.
+#[test]
+fn the_globals_preflight_refuses_a_world_without_globals() {
+    let mut x = fx();
+    ow_world::query::install(&mut x.vm).unwrap();
+    match globals_preflight(&mut x.vm).unwrap_err() {
+        VmError::NotYet(n) => assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}"),
+        e => panic!("{e}"),
+    }
+}

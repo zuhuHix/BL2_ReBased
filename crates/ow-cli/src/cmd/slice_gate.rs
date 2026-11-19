@@ -1097,7 +1097,7 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
         return;
     }
     let mut r = Ran::default();
-    let mut world = match crate::cmd::inventory::equip_run::gate_world(cooked) {
+    let mut world = match crate::cmd::inventory::equip_run::pickup_world(cooked) {
         Ok(w) => w,
         Err(text) => {
             r.stop = Some(classify("setup", &text));

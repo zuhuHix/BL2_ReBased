@@ -10,6 +10,7 @@
 
 pub mod definition;
 pub mod equip;
+pub mod globals;
 pub mod manager;
 pub mod navigation;
 pub mod pickup;
