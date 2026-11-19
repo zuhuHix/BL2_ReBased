@@ -2001,6 +2001,10 @@ impl Run {
         // evaluated, as the C++ context always counts 1 (review r1 of PR #356).
         self.one_local_player()?;
         let vm = &mut self.world.vm;
+        // Off: the controller's class through the game's script route first (decision 2026-11-19-41).
+        if vm.parity == ParityMode::Off {
+            b.select_player_class(vm)?;
+        }
         b.set_player_experience(vm, level, 0)?;
         self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
         if let Some(amount) = parts.get(2) {

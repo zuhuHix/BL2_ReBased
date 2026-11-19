@@ -42,6 +42,7 @@ use ow_mission::bridge::{Gain, MissionScript, PLAYER_CLASS_PATH};
 use ow_mission::tracker::MissionSystem;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::ObjRef;
+use ow_object::value::Value;
 use ow_package::package::Package;
 use ow_vm::api::{NativePack, StubPolicy, Vm};
 use ow_vm::error::VmError;
@@ -225,6 +226,33 @@ impl PlayerBridge for MissionBridge {
         let found = vm.defs.find(&mut vm.space, &path);
         vm.log.extend(vm.defs.take_log());
         found.map_err(VmError::Def)
+    }
+
+    /// Off: `ServerPlayerSelectClass(<Maya's class path>)` on the controller, once (a labelled harness input: the
+    /// class-select call NATIVE_PLAYER_CLASS.md section 1 names as the other route to Maya's class, decision
+    /// 2026-11-19-41). The installed script then finds the class (`GBXDefinition.GetDefinition`) and switches to it.
+    /// A controller that already has a `PlayerClass` is left as it is.
+    fn select_player_class(&self, vm: &mut Vm) -> Result<(), VmError> {
+        let controller = self.player_controller();
+        let class = vm.space.heap.get(controller)?.class;
+        let has_class = vm
+            .space
+            .prop(class, "PlayerClass")
+            .map(|p| vm.space.read(controller, ow_object::ids::PropAddr::scalar(p)).map(|v| !matches!(v, Value::Object(None))))
+            .transpose()?
+            .unwrap_or(false);
+        if has_class {
+            return Ok(());
+        }
+        let state = vm.space.heap.get(controller)?.state;
+        let Some(f) = vm.find_method(class, "ServerPlayerSelectClass", state)? else {
+            return Err(VmError::Script {
+                function: "combat-run".into(),
+                message: "the player's controller has no ServerPlayerSelectClass".into(),
+            });
+        };
+        vm.call(f, Some(controller), vec![Value::Str(PLAYER_CLASS_PATH.into())])?;
+        Ok(())
     }
 }
 

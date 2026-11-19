@@ -68,6 +68,8 @@ impl NativePack for Pack {
         if vm.parity != ParityMode::Reference {
             vm.register_native(GET_MANAGER, Rc::new(get_manager))?;
             vm.register_native(FIND_LOADED, Rc::new(find_loaded))?;
+            // The class route's two natives (NATIVE_PLAYER_CLASS.md; lane FIX-PLAYER-CLASS).
+            super::class_route::register(vm)?;
         }
         Ok(())
     }
@@ -137,12 +139,20 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     }
-    // Every class: the root of the manager's own class chain (`Core.Object` in the installed packages).
     let Some(me) = c.this else {
         return Ok(Value::Object(None));
     };
-    let mut base = c.vm.space.heap.get(me)?.class;
-    while let Some(up) = c.vm.space.classes.layout(base).super_class() {
+    Ok(Value::Object(lookup(c.vm, me, &path)?))
+}
+
+/// `FindAlreadyLoadedObject`'s lookup of a full `path` (module documentation), for the manager `me`: the object in
+/// memory, or None, or `NotYet` where the port cannot tell. `LoadPlayerPawnDataAsync` asks the same routine
+/// (NATIVE_PLAYER_CLASS.md section 3 step 2).
+pub(crate) fn lookup(vm: &mut Vm, me: ObjRef, path: &str) -> Result<Option<ObjRef>, VmError> {
+    let path = path.to_string();
+    // Every class: the root of the manager's own class chain (`Core.Object` in the installed packages).
+    let mut base = vm.space.heap.get(me)?.class;
+    while let Some(up) = vm.space.classes.layout(base).super_class() {
         base = up;
     }
     // Only instances (run-time objects and loaded definitions) are live; the store's unloaded handles are not. Only
@@ -150,18 +160,17 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     // whose full path the port cannot name (a run-time object with no outer) is skipped, but remembered: the game may
     // hold it at a path the port cannot build, so it turns a final None into `NotYet` (review r2 of #411).
     let leaf = path.rsplit(['.', ':']).next().unwrap_or_default();
-    let candidates: Vec<ObjRef> = c
-        .vm
+    let candidates: Vec<ObjRef> = vm
         .space
         .live(base)
         .filter(|o| {
-            c.vm.space.heap.get(*o).is_ok_and(|x| c.vm.space.names.text(x.name).eq_ignore_ascii_case(leaf))
+            vm.space.heap.get(*o).is_ok_and(|x| vm.space.names.text(x.name).eq_ignore_ascii_case(leaf))
         })
         .collect();
     let mut unnamed = false;
     for o in candidates {
-        match path_name(c.vm, o) {
-            Ok(full) if full.eq_ignore_ascii_case(&path) => return Ok(Value::Object(Some(o))),
+        match path_name(vm, o) {
+            Ok(full) if full.eq_ignore_ascii_case(&path) => return Ok(Some(o)),
             Ok(_) => continue,
             Err(VmError::NotYet(_)) => {
                 unnamed = true;
@@ -174,7 +183,7 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     // which loads no definition: a holder (a handle not loaded, or a path nothing has named yet) is not proof that the
     // game lacks the object, so that answer is `NotYet`. So is a candidate file the store could not read.
     let holders = match ow_core::ObjectPath::parse(&path) {
-        Ok(parsed) => Some(c.vm.defs.owners(&parsed).map_err(VmError::Def)?),
+        Ok(parsed) => Some(vm.defs.owners(&parsed).map_err(VmError::Def)?),
         // A string that is no object path names nothing any package holds.
         Err(_) => None,
     };
@@ -200,7 +209,7 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     }
-    Ok(Value::Object(None))
+    Ok(None)
 }
 
 /// The class `globals`' `ThePlayerPawnDataManager` is declared with.
