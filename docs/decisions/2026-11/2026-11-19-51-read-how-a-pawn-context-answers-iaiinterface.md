@@ -9,7 +9,7 @@ note `docs/verification/NATIVE_PAWN_AI_INTERFACE.md`. No code changes; a fresh i
 - **The rule** (the note's section 2, which the other records point at). `Behavior_AIHold` asks its context with
   `Object.QueryInterface`, naming `IAIInterface`. A pawn answers by `Pawn`'s rule, which no pawn class below it
   changes for this interface:
-  1. its own class's declared interfaces;
+  1. its own class's interfaces, those it inherits from its parent classes included (the note's section 2, step 1);
   2. else its `Controller`. Only when it has no `Controller`, the controller of a vehicle it drives. A controller that
      declines does not lead to the vehicle;
   3. else its `Mesh`;

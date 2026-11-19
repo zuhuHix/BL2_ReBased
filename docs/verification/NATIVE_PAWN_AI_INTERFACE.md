@@ -48,10 +48,10 @@ Asked for an interface class `I`, a pawn tries these steps in order and gives th
    question goes to the mesh component.
 4. Otherwise: none.
 
-**A question asked twice.** While an object is answering, a question that comes back to that same object, further
-down the same chain, gets none at once, which ends a cycle. The object that sent that inner question takes the none
-as its step's answer and goes on with its next step. So a pawn whose controller asks back about the pawn goes on to
-its `Mesh`.
+**A question asked twice (UNVERIFIED).** While an object is answering, a question that comes back to that same
+object, further down the same chain, gets none at once, which ends a cycle. The object that sent that inner question
+takes the none as its step's answer and goes on with its next step. So a pawn whose controller asks back about the
+pawn goes on to its `Mesh`. The last section has a live check for it.
 
 `GamePawn`, `GearboxPawn`, `WillowPawn` and `WillowPlayerPawn` do not change this rule. `Scout` and `WillowScout`
 keep it too.
@@ -99,6 +99,7 @@ is not a human player's. Otherwise it falls back to section 2. This is recorded 
 
 ## Open (each UNVERIFIED)
 
+- The rule for a question asked twice (section 2): that the inner question gets none and the asker goes on.
 - `GearboxMind`'s own answer: whether it adds steps before or after its class's declared interfaces.
 - `WillowPlayerController`'s answer for `IAIInterface`.
 - What a skeletal mesh component answers.
@@ -112,14 +113,18 @@ is not a human player's. Otherwise it falls back to section 2. This is recorded 
 - record the actual `ContextObject` and compare its identity with the pawn, the pawn's `Controller` and its
   `MyWillowMind`;
 - call `QueryInterface(IAIInterface)` on the context, and directly on the pawn's `Controller`, on `MyWillowMind` and
-  on the pawn's `Mesh`, and record each answer: expected the mind from the pawn, the mind from the controller, and
-  none from the mesh;
+  on the pawn's `Mesh`, and record each answer as the object or None: expected the mind from the pawn, the mind from
+  the controller, and None from the mesh;
 - read the answering object's `GetAIComponent()` and that component's `DemigodHolds` after the call: expected one
   entry, the name `Safe` with the pawn as its tag.
 
 **The rule's branches, on spawned pawns:**
-- **A present controller that declines:** a pawn possessed by a controller that does not answer (for example a player
-  pawn, asked for `IAIInterface`): expected the `Mesh`'s answer, with no vehicle asked.
+- **A present controller that declines, with a vehicle that would answer:** a player pawn (its `Controller` is its
+  `WillowPlayerController`) that also has a `DrivenVehicle` whose own `Controller` answers `IAIInterface` (query that
+  vehicle controller directly first, to show it would answer). Query the player controller directly for
+  `IAIInterface` and record the object or None. Then query the pawn, with the pawn's `Controller`,
+  the vehicle's controller and the `Mesh` hooked. Expected: the player controller declines, the vehicle's controller
+  is not asked, the `Mesh` is asked, and the pawn's answer is the `Mesh`'s.
 - **No controller, driving a vehicle:** a pawn with `Controller` cleared while `DrivenVehicle` has a controller:
   expected that controller's answer.
 - **No controller, nothing driven:** a pawn with `Controller` cleared: expected the `Mesh`'s answer, and none if the
@@ -127,6 +132,12 @@ is not a human player's. Otherwise it falls back to section 2. This is recorded 
 - **Dead and unpossessed:** a pawn just killed and one spawned but not yet possessed; record `Controller` on each and
   the query's answer.
 - **A pawn class that declares the interface, and one that inherits it:** if any pawn class in the packages lists
-  `IAIInterface`, query an instance and an instance of a subclass: expected the pawn itself from both.
+  `IAIInterface`, query an instance of it and an instance of a subclass that inherits the interface **without
+  declaring it again** (check the subclass's own interface list in the package): expected the pawn itself from both.
+  If no pawn class lists it, record that, and the step stays unobserved.
 - **`IPlayerMaster`:** on a `WillowAIPawn` whose base rule declines, query `IPlayerMaster` with `PlayerMaster` set and
   with it cleared: expected the player controller, then none.
+- **A question asked twice:** a pawn whose `Controller`'s own answer asks the pawn back (if no stock class does,
+  hook the controller's answer to ask the pawn). Record that the inner question to the pawn got None, the
+  controller's final answer, and whether the pawn then asked its `Mesh`. Expected: None, the controller's own result
+  without the pawn's, and the `Mesh` asked.
