@@ -208,6 +208,21 @@ writes `FocusObject` None, then `FocusOffset` the zero vector; `RecordMissionSta
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-121
 (placeholder); logs under ignored `local/p2/link10-next/`.
 
+**IMPL-ALL-EXPANSION-SIDE-MISSIONS (2026-11-19, pc-hummer, on fix/rust-mission-list-build 9b591ada, #496):**
+AI-assisted (Claude Code, Opus 5.5). `MissionTracker.AllExpansionSideMissionsComplete` in Off from #550's note: the
+list follows `GetAllMissions` (refusal replayed, `LayerAbsent` while unbuilt), then the side-mission walk.
+
+Results:
+- `cargo test -p ow-mission`: 222 passed / 0 failed (7 new rule tests, 1 new bridge test, 1 changed).
+- `cargo test --workspace`: 2,386 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK.
+- Installed Off `--slice-gate` strict (release build; a local merge with #546, #533, #497, #509, #512, #524 and #526,
+  never pushed; under the machine lock): 3 ok / 1 NotYet / 10 errors.
+  - Links 10 and 11 ok; link 12 passes 1 of 6 driver steps (`use`) and stops in `turnin` at the unbound
+    `WillowPlayerController.RefreshBalanceDataFromMissionCompletion(object)`, past this native.
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on the note #493 r1 5b880555, reviews r1 and r2 of #496 folded in):**
 AI-assisted (Claude Code, Opus 5.5). The tracker's MissionList build and the mission numbering in Off from
 NATIVE_MISSION_LIST_BUILD.md and the hub's rulings. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
