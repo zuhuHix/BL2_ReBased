@@ -7,12 +7,13 @@ three-digit numbers; the decisions check refuses it until then.
 - **The branch.** `fix/rust-set-anim-tree-template`, first stacked on #487, which links 6 and 7 need to reach this
   native. After #487 landed it was rebased onto main d72b96d4.
 - **The source.** NATIVE_SET_ANIM_TREE_TEMPLATE.md at `research/rust-set-anim-tree-template` c6ca2ef1 (analyst lane
-  ANALYST-SETANIMTREETEMPLATE). The rules were coded from that note alone.
+  ANALYST-SETANIMTREETEMPLATE), and the hub's section 5 ruling in that note at 466350b. The rules were coded from that note alone.
 - **Clean room.** This lane did not read the native and opened no `local/analysis/`, Ghidra or REA output.
 - **No dependency, no parsing change.** No real-game session took place, so every rule is **UNVERIFIED** in the running
   game. Reference is unchanged: nothing is bound there.
 
-**New module `ow_inventory::anim_tree`**, registered by the inventory pack in Off. It binds
+**First revision (superseded by the hub's ruling below; kept as the record).** New module `ow_inventory::anim_tree`,
+registered by the inventory pack in Off. It binds
 `SkeletalMeshComponent.SetAnimTreeTemplate(object)` as the note's section 4 gives it, with the hub's rulings from the
 review of #492 (the note at df863aff):
 - **Items 1 to 3**, in the note's order, are `NotYet` (not read):
@@ -21,16 +22,16 @@ review of #492 (the note at df863aff):
   - a set `Animations`.
   - The two fields read are checked against their declarations first; a mismatch is a data error naming the field.
 - **Item 4**, the engine-wide registry walk, has no condition. It is `NotYet` (layer absent), with the note's exact
-  what, layer and record. So in Off the native always ends there, before any write of its own.
+  what, layer and record. So in Off the native then always ended there, before any write of its own.
 - **The `NotYet` is returned unmarked.** The `make` step's write tracking adds "stopped after partial writes: ",
   because its `new` already wrote.
-- **Not coded:** the teardown's writes and the owner's `AnimTreeUpdated` event (the note's steps 2 and 3). They stay
-  unreachable until the hub rules on the note's section 5.
+- **Not coded then:** the teardown's writes and the owner's `AnimTreeUpdated` event (the note's steps 2 and 3). They
+  stayed unreachable until the hub ruled on the note's section 5.
 - **The slice's component** holds class defaults (`Owner` None, empty lists), because the port's `new` ignores the
   template. That is expected (the note's open question 5).
 - **Not bound:** the interface entry `IAnimBehavior.SetAnimTreeTemplate`, which is not on the slice path.
 
-**Tests** (synthetic, `ow_package::testkit`), 4 in `anim_tree_tests.rs`, each graded by `NotYet` kind:
+**Tests of the first revision** (synthetic, `ow_package::testkit`), 4 in `anim_tree_tests.rs`, each graded by `NotYet` kind:
 - the slice's call ends at the registry, unmarked, and writes nothing;
 - items 1 to 3 in order, none of them writing;
 - a data error;
@@ -67,7 +68,9 @@ registry: a port Off answer, UNVERIFIED, in the spirit of the empty OnlineSubsys
   - the preflight order;
   - the writes with no owner;
   - the event on an owner;
-  - the after-write marking, for an event refusal and an owner without the event;
+  - the after-write marking, for an event refusal;
+  - an owner class without the event: a data error, not a `NotYet`, since `Owner` is declared as an `Actor` and
+    `Actor` declares the event (hub, review of #495);
   - a data error;
   - Reference binding nothing.
 - **Verified** on main d72b96d4 with this branch: `cargo test --workspace` 2,413 passed / 0 failed / 46 ignored.

@@ -4,7 +4,7 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **IMPL-SETANIMTREETEMPLATE (2026-11-19, pc-hummer, on main d72b96d4 after #487 landed; the hub's section 5 ruling):**
 AI-assisted (Claude Code, Opus 5.5). `SkeletalMeshComponent.SetAnimTreeTemplate` in Off from
-NATIVE_SET_ANIM_TREE_TEMPLATE.md (df863aff): the preflight, an empty `ComponentRegistry` layer on the pickup world
+NATIVE_SET_ANIM_TREE_TEMPLATE.md (df863aff; the section 5 ruling at 466350b): the preflight, an empty `ComponentRegistry` layer on the pickup world
 (walk answers "nothing"), the teardown writes, and `AnimTreeUpdated` only with an `Owner`. `cargo build --workspace
 --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,413 passed / 0 failed / 46 ignored (8 new);
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors; links 6 and 7 get past the

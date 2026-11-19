@@ -259,8 +259,8 @@ fn with_an_owner_the_event_runs_on_it() {
     assert_eq!(x.get(mesh, "bAnimTreeInitialised"), Value::Bool(false));
 }
 
-/// A `NotYet` after the first write (from the owner's event, or an owner class without the event) is terminal:
-/// marked once, its kind and record kept, the writes not rolled back.
+/// A `NotYet` after the first write (from the owner's event) is terminal: marked once, its kind and record kept, the
+/// writes not rolled back. An owner class without the event is a data error after the writes, also not rolled back.
 #[test]
 fn a_not_yet_after_the_writes_is_marked_and_keeps_its_kind() {
     let mut x = fx(ParityMode::Off, true);
@@ -276,9 +276,10 @@ fn a_not_yet_after_the_writes_is_marked_and_keeps_its_kind() {
     let mesh = x.dirty_mesh();
     let plain = x.obj("Engine.Actor");
     x.set(mesh, "Owner", Value::Object(Some(plain)));
-    let n = not_yet(x.call(mesh, None));
-    assert_eq!((n.missing, n.record), (Missing::NotRead, RECORD));
-    assert_eq!(n.what, format!("stopped after partial writes: {NO_EVENT}"));
+    match x.call(mesh, None) {
+        Err(VmError::Script { message, .. }) => assert_eq!(message, NO_EVENT),
+        other => panic!("expected a data error, got {other:?}"),
+    }
     assert_eq!(x.get(mesh, "AnimTreeTemplate"), Value::Object(None), "kept");
 }
 

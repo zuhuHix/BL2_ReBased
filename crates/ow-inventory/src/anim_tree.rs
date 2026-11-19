@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-SETANIMTREETEMPLATE. AI-assisted (Claude Code). `SkeletalMeshComponent.SetAnimTreeTemplate` in
 //! Off, coded from NATIVE_SET_ANIM_TREE_TEMPLATE.md alone (analyst lane ANALYST-SETANIMTREETEMPLATE, the note at
-//! df863aff), with the hub's rulings: the review of #492, and the ruling on the note's section 5. This lane did not
+//! df863aff), with the hub's rulings: the review of #492, and the ruling on the note's section 5 (466350b). This lane did not
 //! read the native. Every rule is the note's reading of the executable, **UNVERIFIED** in the running game.
 //!
 //! On the slice path (links 6 and 7, `make`), `WillowWeapon.AttachMeshToPickup` calls it with None on a mesh component
@@ -33,7 +33,8 @@
 //! **The owner's event** (section 4, step 3): only with `Owner` set, `AnimTreeUpdated(component)` is dispatched as
 //! script on the owner's class and state. Any `NotYet` after the first write is terminal, marked once with the
 //! partial-writes prefix, its kind and record kept; nothing is rolled back. An owner class without the event is
-//! [`NO_EVENT`], `NotYet { NotRead }` (the note is silent: `Actor` declares it).
+//! [`NO_EVENT`], a data error: `Owner` is declared as an `Actor` and `Actor` declares the event (the note's
+//! section 2), so a class without it is an inconsistent class chain, not an unread rule (hub, review of #495).
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference binds nothing here, so Reference keeps the VM's stub policy.
 
@@ -63,7 +64,7 @@ pub const REGISTRY: &str = "the engine's registry of entries that name a skeleta
 pub const REGISTRY_LAYER: &str = "an engine-wide registry of component entries (the port holds none)";
 /// A registry entry naming the component: its handlers were not read.
 pub const REGISTRY_ENTRY: &str = "the tree teardown's handlers for a registry entry that names this component";
-/// An owner without the event (the note is silent).
+/// An owner whose class chain declares no event: a data error (module documentation).
 pub const NO_EVENT: &str = "SetAnimTreeTemplate's owner event on a class that declares no AnimTreeUpdated";
 
 /// The event sent to the owner.
@@ -174,7 +175,7 @@ fn notify_owner(vm: &mut Vm, component: ObjRef) -> Result<(), VmError> {
         (x.class, x.state)
     };
     let Some(f) = vm.find_method(class, EVENT, state)? else {
-        return Err(NotYet::not_read(NO_EVENT, RECORD).into());
+        return Err(bad(WHAT, NO_EVENT));
     };
     vm.call(f, Some(owner), vec![Value::Object(Some(component))])?;
     Ok(())
