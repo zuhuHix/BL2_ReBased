@@ -54,9 +54,9 @@ pub const DEFINITION_CLASS: &str = "WillowGame.MissionDefinition";
 /// The `NotYet` of a second build in one world.
 pub const SECOND_BUILD: &str = "a second run of the tracker's list build";
 /// The `NotYet` of a definition that would still need loading after set-up.
-pub const NEEDS_LOAD: &str = "the tracker's list build reached a definition that is not loaded at set-up";
+pub const NEEDS_LOAD: &str = "a mission reference into a package the set-up did not load";
 /// The `NotYet` of two definitions with the same name and number.
-pub const TIE: &str = "the insert side for equal mission names";
+pub const TIE: &str = "the visit order of equal mission names";
 /// The `NotYet` of the reorder pass's edge (section 3, step 6).
 pub const EDGE: &str = "a dependency that stands after its mission in the tracker's reorder pass";
 /// The `NotYet` of a chain member or a dependency outside the built set.

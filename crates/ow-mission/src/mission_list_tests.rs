@@ -299,7 +299,7 @@ fn the_second_pass_moves_a_missions_own_dependencies_before_it() {
 }
 
 /// The hub's steer: two definitions with the same object name and number (here in two loaded packages) are
-/// `NotYet { NotRead }`, "the insert side for equal mission names", before any write.
+/// `NotYet { NotRead }`, "the visit order of equal mission names", before any write.
 #[test]
 fn equal_mission_names_are_not_read() {
     let dir = std::env::temp_dir().join(format!("ow-mission-list-tie-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));

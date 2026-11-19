@@ -22,8 +22,9 @@ but get past the accessor to the unbound `SkeletalMeshComponent.SetAnimTreeTempl
 run; `UNVERIFIED` in game. Decision 2026-11-19-40 (assigned -103); logs under ignored `local/p2/links68/`.
 
 **IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on #486 and the note rebased onto #480 1f43a95b):** AI-assisted (Claude
+**IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on the note #493 r1 5b880555, on main 6f9789b):** AI-assisted (Claude
 Code, Opus 5.5). The tracker's MissionList build and the mission numbering in Off from NATIVE_MISSION_LIST_BUILD.md and
-the hub's rulings. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,361 passed /
+the hub's rulings. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,376 passed /
 0 failed / 46 ignored (8 new tests in `mission_list_tests.rs`, 1 new and 1 changed in the bridge); `crate_edges_test.py`
 19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 5 NotYet / 9 errors, the same as the base 1f43a95b,
 where links 10 to 12 stopped at `GetAllMissions`; here they pass 3 of 4 driver steps and stop in `accept` at "stopped

@@ -8,8 +8,9 @@ hub (three digits); NNN is a placeholder.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
 - **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
   relaxed.
-- **The base:** #486's two commits and the note's two, rebased locally onto #480 (1f43a95b), since the note's branch
-  still sat on #480's older head.
+- **The base:** the note #493 at its review r1 (5b880555, on main 6f9789b after #480 and #486 landed). The refusal
+  texts follow that fix: "a mission reference into a package the set-up did not load" and "the visit order of equal
+  mission names".
 
 **The hub's rulings, each a port Off answer, UNVERIFIED:**
 1. **When:** once, at the mission bridge's world set-up, right after the tracker is made and before any script runs or
@@ -28,7 +29,7 @@ hub (three digits); NNN is a placeholder.
      a mission.
    - Loaded packages with no missions still count toward the name indices; the key is the object name.
    - The order is fitted, not proven, and it is not a `NotYet`. Two definitions with the same object name and number
-     are `NotYet { NotRead }`, "the insert side for equal mission names": where the game's binary search puts the
+     are `NotYet { NotRead }`, "the visit order of equal mission names": where the game's binary search puts the
      second was not read.
 
 **What changed:**
@@ -72,3 +73,7 @@ both times.
 
 The bridge's `GetAllMissions` test now checks the built list and the second build's refusal. A new bridge test checks
 that a set-up refusal is answered, unchanged, by the first list read.
+
+**Open item (hub ruling of 2026-11-19, not now):** a `DlcExpansion` (or any mission reference) into a package set-up did
+not load stays `NotYet { NotRead }`, as the note says. The installed slice does not reach one. Adding expansion packages
+to the set-up's load list is a later lane.
