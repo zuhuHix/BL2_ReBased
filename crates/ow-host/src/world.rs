@@ -495,14 +495,13 @@ pub const MATINEE_OP_CLASS: &str = "Engine.SeqAct_Interp";
 /// read (it might be a Matinee op), an op
 /// whose `VariableLinks` is not an array of links, and a linked variable that may hold an actor the scan cannot see.
 /// Loads the ops and their variables into the world's object space.
-pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
+pub fn matinee_bound(vm: &mut Vm, packages: &ow_core::DetSet<ow_package::PackageId>) -> Result<MatineeBindings, String> {
     let mut out = MatineeBindings::default();
     let Ok(op_class) = vm.find_class(MATINEE_OP_CLASS) else {
         return Ok(out);
     };
-    let packages = map_packages(vm)?;
     let mut is_op: ow_core::DetMap<String, Option<bool>> = ow_core::DetMap::new();
-    for package in packages {
+    for &package in packages {
         let mut exports = Vec::new();
         {
             let pkg = vm.defs.packages().get(package);
@@ -630,28 +629,25 @@ pub fn read_op_variables(vm: &mut Vm, op: ObjRef, out: &mut MatineeBindings) -> 
 }
 
 /// [`matinee_bound`], then each op's start from the Kismet graph ([`matinee::start_of`]; lane H-MATINEE).
-pub fn scan_matinee(vm: &mut Vm) -> Result<MatineeBindings, String> {
-    let mut bindings = matinee_bound(vm).map_err(|e| format!("reading the Matinee bindings: {e}"))?;
-    let graph = matinee::read_graph(vm).map_err(|e| format!("reading the Kismet graph: {e}"))?;
+pub fn scan_matinee(vm: &mut Vm, packages: &ow_core::DetSet<ow_package::PackageId>) -> Result<MatineeBindings, String> {
+    let mut bindings = matinee_bound(vm, packages).map_err(|e| format!("reading the Matinee bindings: {e}"))?;
+    let graph = matinee::read_graph(vm, packages).map_err(|e| format!("reading the Kismet graph: {e}"))?;
     for &op in &graph.matinee {
         bindings.starts.insert(op, matinee::start_of(&graph, op));
     }
     Ok(bindings)
 }
 
-/// The packages (map files) that hold the world's placed actors.
-fn map_packages(vm: &Vm) -> Result<ow_core::DetSet<ow_package::PackageId>, String> {
-    let actors = ow_world::actors::actors_of(vm).map_err(|e| e.to_string())?;
-    let list = actors.try_borrow().map_err(|_| "the actor list is borrowed")?.list().to_vec();
-    let mut packages = ow_core::DetSet::new();
-    for o in list {
-        if let Ok(object) = vm.space.heap.get(o)
-            && let Origin::Export { package, .. } = object.origin
-        {
-            packages.insert(package);
-        }
+/// The packages of the levels the map load placed (review r1 of #436): the loader's own level list
+/// (`MapReport::levels`, the summary's `levels`), so a streaming level with no placed actor is scanned too. Each is
+/// already loaded; the store returns its id.
+pub fn level_packages(vm: &mut Vm, summary: &LoadSummary) -> Result<ow_core::DetSet<ow_package::PackageId>, String> {
+    let mut out = ow_core::DetSet::new();
+    for (level, ..) in &summary.levels {
+        let name = PackageName::parse(level).map_err(|e| format!("{level}: {e}"))?;
+        out.insert(vm.defs.code_mut().1.load(&name).map_err(|e| format!("{level}: {e}"))?);
     }
-    Ok(packages)
+    Ok(out)
 }
 
 /// What [`matinee_bound`] found.
@@ -720,8 +716,12 @@ pub enum Driver {
     Unbound,
     /// The scan was not complete, so whether an op names it is not known.
     Unknown,
-    /// Ops name it, and nothing starts any of them while the map loads ([`matinee::Start::NotAtLoad`]; lane H-MATINEE).
-    NotStarted,
+    /// Ops name it, and through the graph only a touch, a console command or nothing reaches any of them
+    /// ([`matinee::Start::NotAtLoad`]; lane H-MATINEE); `touch` when a touch reaches one. The startup paths outside the
+    /// graph are not ruled out, so this still answers `NotYet` ([`physics_rule`]).
+    NotStarted { touch: bool },
+    /// The Kismet graph is incomplete (its reasons), so how the ops that name it start is not known.
+    Incomplete(String),
     /// An op that names it starts from these level-load events ([`matinee::Start::AtLoad`]).
     AtLoad(String),
     /// An op that names it starts from these events, fired from outside the graph ([`matinee::Start::Outside`]).
@@ -742,12 +742,13 @@ impl Driver {
         let Some(ops) = bindings.by_actor.get(&actor).filter(|ops| !ops.is_empty()) else {
             return Driver::Bound;
         };
-        let (mut load, mut outside, mut unknown) = (Vec::new(), Vec::new(), false);
+        let (mut load, mut outside, mut unknown, mut touch) = (Vec::new(), Vec::new(), false, false);
         for op in ops {
             match bindings.starts.get(op) {
+                Some(matinee::Start::Incomplete(why)) => return Driver::Incomplete(why.clone()),
                 Some(matinee::Start::AtLoad(e)) => load.extend(e.iter().cloned()),
                 Some(matinee::Start::Outside(e)) => outside.extend(e.iter().cloned()),
-                Some(matinee::Start::NotAtLoad) => {}
+                Some(matinee::Start::NotAtLoad { touch: t }) => touch |= *t,
                 None => unknown = true,
             }
         }
@@ -763,7 +764,7 @@ impl Driver {
         } else if unknown {
             Driver::Bound
         } else {
-            Driver::NotStarted
+            Driver::NotStarted { touch }
         }
     }
 }
@@ -780,12 +781,13 @@ pub const ENGINE_RECORD: &str = "NATIVE_ENGINE_CORE.md";
 ///   interpolating mode is the one Matinee drives, and the world runs no other driver: it runs no Kismet, so the
 ///   object variables empty at load stay empty. UNVERIFIED in the running game, and so is that the game's
 ///   interpolating step does nothing else for such an actor. In `ParityMode::Reference` it answers `NotYet`: the C++
-///   reference has no host physics to stand in (rule R3). An actor named only by ops that nothing starts while the
-///   map loads moves nothing in Off too (lane H-MATINEE, `matinee`): an op that has not started has built no group
-///   instance and moves no actor. An op started by a level-load event answers `NotYet` for that event and the
-///   playback (layer absent: the world runs no Kismet); one started from outside the graph, `NotYet` naming the
-///   trigger (not read); a bound actor whose op's start was not worked out, `NotYet` for the playback; an actor the
-///   scan cannot judge, `NotYet` (not read).
+///   reference has no host physics to stand in (rule R3). An actor a Matinee op names answers `NotYet` in every case
+///   (lane H-MATINEE, `matinee`): an op a level-load event starts, for that event and the playback (layer absent: the
+///   world runs no Kismet); one events from outside the graph can start, naming them (not read); one the graph does
+///   not start at load, for the startup paths outside the graph that are not ruled out (a script calling the op's
+///   `SetPosition`, and a touch from a spawn overlap when a touch reaches the op; not read); an incomplete graph, for
+///   its reasons (not read); an op whose start was not worked out, for the playback; an actor the scan cannot judge,
+///   `NotYet` (not read).
 /// - `PHYS_Walking` and `PHYS_Falling`: `NotYet`. The H4 mover is the player pawn's and is not applied to other pawns:
 ///   the walking step itself is not read (NATIVE_PLAYER_MOVEMENT.md, "Not read yet"), a placed pawn's movement values
 ///   are not read, its acceleration comes from a controller that does not exist before begin play, and the collision
@@ -796,12 +798,21 @@ pub fn physics_rule(mode: &str, class: &str, driver: &Driver, parity: ParityMode
     match mode {
         "PHYS_None" => Ok(()),
         "PHYS_Interpolating" => match driver {
-            Driver::Unbound | Driver::NotStarted if parity == ParityMode::Off => Ok(()),
-            Driver::Unbound | Driver::NotStarted => Err(NotYet::not_ported(
+            Driver::Unbound if parity == ParityMode::Off => Ok(()),
+            Driver::Unbound => Err(NotYet::not_ported(
+                format!("the host's interpolating physics for an unbound {class} in Reference (the C++ has no host)"),
+                KISMET_RECORD,
+            )),
+            Driver::NotStarted { touch } => Err(NotYet::not_read(
                 format!(
-                    "the host's interpolating physics for a {class} no started op moves, in Reference (the C++ has no \
-                     host)"
+                    "whether a startup path outside the Kismet graph starts the Matinee op binding an interpolating \
+                     {class}: a script calling its SetPosition{}",
+                    if *touch { ", or a touch from an actor spawned overlapping its trigger" } else { "" }
                 ),
+                KISMET_RECORD,
+            )),
+            Driver::Incomplete(why) => Err(NotYet::not_read(
+                format!("how the Matinee op binding an interpolating {class} starts: the Kismet graph is incomplete ({why})"),
                 KISMET_RECORD,
             )),
             Driver::AtLoad(events) => Err(NotYet::layer_absent(
@@ -902,10 +913,11 @@ pub fn build_installed(cooked: PathBuf, map: String, mode: ParityMode) -> Result
     let mut world = World::new(vm, play_balance()?, &[]).map_err(|e| e.to_string())?;
     let name = PackageName::parse(&map).map_err(|e| format!("{map}: {e}"))?;
     let report = load_map(&mut world, &name).map_err(|e| format!("loading {map} into the world: {e}"))?;
-    let bindings = scan_matinee(&mut world.vm).map_err(|e| format!("{map}: {e}"))?;
-    install_physics(&mut world, bindings)?;
     let actors = world.actors().borrow().list().len();
     let mut summary = LoadSummary::from_report(&map, mode, &report, actors);
+    let packages = level_packages(&mut world.vm, &summary)?;
+    let bindings = scan_matinee(&mut world.vm, &packages).map_err(|e| format!("{map}: {e}"))?;
+    install_physics(&mut world, bindings)?;
     summary.load_time = started.elapsed();
     Ok((world, summary))
 }
