@@ -39,3 +39,13 @@ AI-assisted (Claude Code, Opus 5.5). Lane MAP-ROUTE-FOLLOWUP, implementer. The d
   at `setup` on the unbound `WillowGameInfo.IsEditor()`, before adopt;
 - no link changes. These follow-ups act after adopt, so the slice cannot reach them until the map route's setup
   passes.
+
+**Review r1 of #571:**
+1. **The waypoint:** on the map route, `place_waypoint` checks for the adopted world before any package load. It
+   matches the world's placed actors by their own export origins and the package metadata the store already holds,
+   and loads nothing. An uncached or unknown package is the typed refusal, and so is a missing export (it was a store
+   error or `false` before).
+2. **The globals definition:** on the map route, the adopted globals' `TheGlobalsDefinition` is read on every call and
+   never cached. A field cleared later, or pointed at an unloaded handle, is the typed refusal, with nothing loaded.
+   The default route keeps its cache.
+3. **Tests:** both cases are added to the adopt tests. The workspace (`-j 2`) passes 2,474 / 0 / 48 ignored.

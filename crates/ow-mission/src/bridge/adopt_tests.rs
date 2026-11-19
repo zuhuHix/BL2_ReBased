@@ -209,6 +209,22 @@ fn the_adopted_globals_give_their_own_definition() {
     set(&mut vm.space, definition, "PlayerInteractionDistance", Value::Float(9.0)).unwrap();
     set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(Some(definition))).unwrap();
     assert_eq!(script.player_interaction_distance(&mut m.world.vm).unwrap(), 9.0, "the globals' own, not the package's 420");
+    // Review r1 of #571, item 2: read on every call. An unloaded definition handle put there later is a typed refusal,
+    // with nothing loaded (the handle: an export reference the director's archetype holds, not loaded yet).
+    let director = ObjectPath::parse(MARCUS_PAWN).unwrap();
+    let vm = &mut m.world.vm;
+    let pawn = vm.defs.find(&mut vm.space, &director).unwrap().expect("the director archetype");
+    let Value::Object(Some(handle)) = get(&vm.space, pawn, "MissionDirectives").unwrap() else { panic!("no reference") };
+    assert!(vm.defs.is_unloaded(&vm.space, handle), "a handle the store has not loaded");
+    set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(Some(handle))).unwrap();
+    let loads = vm.defs.load_transitions();
+    let n = not_yet(script.player_interaction_distance(vm).unwrap_err());
+    assert_eq!(&*n.what, GLOBALS_UNLOADED);
+    assert_eq!(vm.defs.load_transitions(), loads, "nothing loaded");
+    assert!(vm.defs.is_unloaded(&vm.space, handle));
+    // And cleared again: the unset refusal, not the earlier definition.
+    set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(None)).unwrap();
+    assert_eq!(&*not_yet(script.player_interaction_distance(vm).unwrap_err()).what, GLOBALS_UNSET);
 }
 
 /// Item 2: a `NotYet` after adopt's first write carries the mark, once, its kind kept.
@@ -262,15 +278,25 @@ fn the_map_route_makes_no_director_and_takes_the_placed_waypoint() {
     // A placed actor of the map package stands for the waypoint (any export: the map route does not make it).
     const PLACED: &str = "GD_Marcus.Character.Directives_Toy";
     let objects = m.world.vm.space.heap.len();
+    let loads = m.world.vm.defs.load_transitions();
+    // Review r1 of #571, item 1: nothing is loaded first. An uncached package, an unknown one and (below) a missing
+    // export are each the typed refusal, not a store error or `false`.
     let n = not_yet(script.place_waypoint(&mut m.world.vm, &director, PLACED).unwrap_err());
     assert_eq!(&*n.what, waypoint_on_map(PLACED));
+    let unknown = PackageName::parse("NoSuchMap").unwrap();
+    let n = not_yet(script.place_waypoint(&mut m.world.vm, &unknown, PLACED).unwrap_err());
+    assert_eq!(&*n.what, waypoint_on_map(PLACED));
     assert_eq!(m.world.vm.space.heap.len(), objects, "nothing made");
+    assert_eq!(m.world.vm.defs.load_transitions(), loads, "nothing loaded");
     let vm = &mut m.world.vm;
     let (_, store) = vm.defs.code_mut();
     let id = store.load(&director).unwrap();
     let index = store.get(id).find_export(PLACED).unwrap().unwrap();
     let placed = vm.defs.load_export(&mut vm.space, id, index, PropertyPrefix::Ordinary).unwrap();
     m.world.actors().borrow_mut().place(placed).unwrap();
+    const MISSING: &str = "GD_Marcus.Character.NoSuchWaypoint";
+    let n = not_yet(script.place_waypoint(&mut m.world.vm, &director, MISSING).unwrap_err());
+    assert_eq!(&*n.what, waypoint_on_map(MISSING), "a missing export is the refusal, not false");
     let objects = m.world.vm.space.heap.len();
     assert!(script.place_waypoint(&mut m.world.vm, &director, PLACED).unwrap());
     assert!(script.has_waypoint());

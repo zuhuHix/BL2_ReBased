@@ -1455,7 +1455,9 @@ impl MissionScript {
     }
 
     fn globals_definition(&self, vm: &mut Vm) -> Result<Option<ObjRef>, MissionError> {
-        if let Some(cached) = self.inner.state.borrow().globals_definition {
+        if !self.inner.adopted
+            && let Some(cached) = self.inner.state.borrow().globals_definition
+        {
             return Ok(cached);
         }
         // The map route: the adopted globals' own TheGlobalsDefinition, not a fresh store lookup (review r1 of #556,
@@ -1476,7 +1478,7 @@ impl MissionScript {
             if vm.defs.is_unloaded(&vm.space, found) || vm.defs.is_failed(&vm.space, found) {
                 return Err(VmError::NotYet(NotYet::not_read(GLOBALS_UNLOADED, RECORD_MAP_ROUTE)).into());
             }
-            self.inner.state.borrow_mut().globals_definition = Some(Some(found));
+            // Read on every call, never cached (review r1 of #571, item 2): the adopted globals may change the field.
             return Ok(Some(found));
         }
         let found = self.mission_object(vm, GLOBALS_PATH)?;
@@ -3182,21 +3184,22 @@ impl MissionScript {
     /// `WillowWaypoint` of `package` at `path` runs its own script (`PostBeginPlay` at placement registers it as an
     /// observer). False when the package has no such actor.
     pub fn place_waypoint(&self, vm: &mut Vm, package: &PackageName, path: &str) -> Result<bool, MissionError> {
-        let (_, store) = vm.defs.code_mut();
-        let id = store.load(package).map_err(ow_defs::store::DefError::from)?;
-        let Some(index) = store.get(id).find_export(path)?.filter(|&i| i > 0) else {
-            return Ok(false);
-        };
-        // The map route (review r1 of #556, item 4): the map's own placed waypoint, the actor the map load placed from
-        // that export, which the bring-up already routed through begin play; none is made. Not placed: typed refusal.
+        // The map route (review r1 of #556, item 4; review r1 of #571, item 1): the map's own placed waypoint, the actor
+        // the map load placed from that export, which the bring-up already routed through begin play; none is made and
+        // nothing is loaded: the world's placed actors are matched by their export origins against the packages the
+        // store already holds. Not placed (an uncached package, a missing export included): a typed refusal.
         if self.inner.adopted {
-            let placed = self.placed_actor(vm, id, index)?;
-            let Some(waypoint) = placed else {
+            let Some(waypoint) = self.placed_actor(vm, package, path)? else {
                 return Err(VmError::NotYet(NotYet::not_read(waypoint_on_map(path), RECORD_MAP_ROUTE)).into());
             };
             self.inner.state.borrow_mut().waypoint = Some(waypoint);
             return Ok(true);
         }
+        let (_, store) = vm.defs.code_mut();
+        let id = store.load(package).map_err(ow_defs::store::DefError::from)?;
+        let Some(index) = store.get(id).find_export(path)?.filter(|&i| i > 0) else {
+            return Ok(false);
+        };
         let waypoint = vm
             .defs
             .load_export(&mut vm.space, id, index, PropertyPrefix::PlacedActor)?;
@@ -3207,15 +3210,24 @@ impl MissionScript {
         Ok(true)
     }
 
-    /// The actor of the world's list made from export `index` of package `package` (the map route), if any.
-    fn placed_actor(&self, vm: &Vm, package: ow_package::package::PackageId, index: i32) -> Result<Option<ObjRef>, MissionError> {
+    /// The actor of the world's list made from export `path` of package `package` (the map route), if any: each
+    /// placed actor's own export origin, its package's name and the export at that index read from the package the
+    /// store already holds. Nothing is loaded.
+    fn placed_actor(&self, vm: &Vm, package: &PackageName, path: &str) -> Result<Option<ObjRef>, MissionError> {
         let Some(actors) = self.inner.actors.as_ref().and_then(Weak::upgrade) else {
             return Err(data("mission script bridge: the map world's actors are gone".to_string()));
         };
         let list = actors.try_borrow().map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?.list().to_vec();
-        Ok(list.into_iter().find(|&a| {
-            matches!(vm.space.heap.get(a).map(|o| o.origin), Ok(Origin::Export { package: p, index: i }) if p == package && i == index)
-        }))
+        for a in list {
+            let Origin::Export { package: id, index } = vm.space.heap.get(a)?.origin else {
+                continue;
+            };
+            let held = vm.defs.packages().get(id);
+            if held.name.eq_ignore_ascii_case(package.as_str()) && held.find_export(path)? == Some(index) {
+                return Ok(Some(a));
+            }
+        }
+        Ok(None)
     }
 
     pub fn has_waypoint(&self) -> bool {
