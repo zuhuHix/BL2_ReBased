@@ -1660,15 +1660,26 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
 fn a_class_switch_that_stops_stops_every_later_step_in_off() {
     let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
     *fake.select_stop.borrow_mut() = Some(VmError::NotYet(ow_core::NotYet::not_read("an invented stop", "a record")));
+    // An enemy spawned before the stop, so a later pawn-indexed step would take a state snapshot.
+    run.apply("spawn:ToyPawns/Pawn_Toy:4");
+    let spawned = run.enemy(0).is_some();
+    let errors_before = run.errors().len();
     for step in ["maya:8", "maya:8", "players:1"] {
         run.apply(step);
     }
-    let errors = run.errors().to_vec();
+    let errors = run.errors()[errors_before..].to_vec();
     assert_eq!(errors.len(), 3, "{errors:?}");
     for (e, step) in errors.iter().zip(["maya:8", "maya:8", "players:1"]) {
         assert!(e.starts_with(&format!("{step}: ")) && e.contains("an invented stop"), "{e}");
     }
     assert_eq!(fake.selects.get(), 1, "the second maya step does not select again");
+    // A pawn-indexed step after the stop takes no state snapshot (its getters are script).
+    // The step's state snapshot would call the pawn's getters (natives and script); after the stop none run.
+    assert!(spawned, "the enemy spawned before the stop");
+    run.world().vm.census = Some(ow_vm::api::CallCensus::default());
+    run.apply("sethealth:0:1");
+    let census = run.world().vm.census.take().unwrap();
+    assert!(census.native_calls.is_empty() && census.script_calls.is_empty(), "{census:?}");
     assert!(fake.set.borrow().is_empty(), "no experience was set");
     // Reference never selects, so nothing is sticky there.
     let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);

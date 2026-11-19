@@ -71,6 +71,16 @@ decision 2026-11-19-41. It opened no raw analysis output, Ghidra or REA. The scr
     gate's rows gain a `harness` list with the `harness input:` lines their own steps logged, also when a step stops.
   - `LoadPlayerPawnDataAsync` checks the `Instigator` argument's kind like the others, and still does not pass it to
     the report.
+- **Delta review of #431 (last round).**
+  - `GetDefinition` no longer compares the class in holder records' path text. A new read-only
+    `DefStore::holder_class` returns the class of the export the identity policy would pick: it loads that class's
+    code, not the export. That class is compared with the requested one as a class. So a duplicate holder of another
+    class that the policy does not pick no longer refuses the lookup, and a class exported under an outer group
+    (metadata `Group.Class`, reflected as `File.Group.Class`) is recognized. A requested class with no package class to
+    compare is `NotYet`. Two synthetic tests cover these.
+  - After a latched class-switch stop, a pawn-indexed step takes no state snapshot either, because its getters are
+    script. The two-step test now spawns an enemy first and checks with the VM's call census that the step after the
+    stop runs no native or script call.
 - **Next.** An analyst read of the override's last call (its name, and whether it is plain script), then an
   implementer.
 - **UNVERIFIED.** Every rule above. Nothing was checked in the running game.

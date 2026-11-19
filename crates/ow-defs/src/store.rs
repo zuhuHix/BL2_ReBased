@@ -169,7 +169,7 @@ use ow_object::decode::{DecodeError, DecodeState, ReferenceResolver, ValueCx};
 use ow_object::heap::{HeapError, ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId, StructId};
 use ow_object::prefix::PropertyPrefix;
-use ow_object::reflect::{CodeIndex, ReflectError};
+use ow_object::reflect::{ClassKey, CodeIndex, ReflectError};
 use ow_object::value::Value;
 use ow_package::PackageId;
 use ow_package::package::{Package, PackageError};
@@ -1479,6 +1479,18 @@ impl Loader<'_, '_> {
         }
     }
 
+    /// The class of the export the policy picks for `text`, without loading that export (only the class's code):
+    /// `Ok(None)` where no holder exists or the class reference resolves to nothing.
+    fn holder_class(&mut self, text: &str) -> Result<Option<ClassKey>, DefError> {
+        let key = path_key(text);
+        let Some((package, index)) = self.linker.holder_of(self.cx, text, &key)? else {
+            return Ok(None);
+        };
+        let pkg = self.cx.store.shared(package);
+        let class_ref = pkg.object(index).map_err(package_error)?.class;
+        Ok(self.cx.code.class_at(self.cx.store, package, class_ref)?)
+    }
+
     fn find(&mut self, text: &str) -> Result<Option<ObjRef>, DefError> {
         let key = path_key(text);
         if is_class_default(text) && !loads_inside_class_default(self.cx.mode, text) {
@@ -1757,6 +1769,13 @@ impl DefStore {
         path: &ObjectPath,
     ) -> Result<Option<ObjRef>, DefError> {
         self.run(w, |l| l.find(path.as_str()))
+    }
+
+    /// The class of the export at `path` that [`DefStore::find`] would load (the holder the policy picks), without
+    /// loading that export: only the class's code is loaded. `Ok(None)` where no holder exists, or where its class
+    /// reference resolves to nothing. Compare it with [`CodeIndex::key_of`] of a class (lane FIX-PLAYER-CLASS-B).
+    pub fn holder_class(&mut self, w: &mut ObjectSpace, path: &ObjectPath) -> Result<Option<ClassKey>, DefError> {
+        self.run(w, |l| l.holder_class(path.as_str()))
     }
 
     /// The object `reference` of package `from` names, loaded: `None` for 0. `from` may be any id the package store

@@ -160,6 +160,32 @@ fn package() -> Vec<u8> {
         payload.extend_from_slice(&t.none);
         t.p.add_export(class, name, payload);
     }
+    // Review of #431: a class this file exports under an outer group, and a definition of it.
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let package_class = t.p.add_import("Core", "Class", core, "Package");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend_from_slice(&t.none);
+    let group = t.p.add_export(package_class, "ToyGroup", payload.clone());
+    let nested = t.class("NestedDefinition", definition);
+    t.p.set_outer(nested, group);
+    t.p.add_export(nested, "ToyNested", payload);
+    t.p.build()
+}
+
+/// A second file holding a cooked copy of `GearboxFramework.ToyClassDef` (inside a `GearboxFramework` package export)
+/// of another class. The store scans it after `GearboxFramework.upk`, so the policy picks the original.
+fn copy_package() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty"]);
+    let object = t.class("Object", 0);
+    let other = t.class("OtherDefinition", object);
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let package_class = t.p.add_import("Core", "Class", core, "Package");
+    let mut payload = 0i32.to_le_bytes().to_vec();
+    payload.extend_from_slice(&t.none);
+    let group =
+        t.p.add_export(package_class, "GearboxFramework", payload.clone());
+    let copy = t.p.add_export(other, "ToyClassDef", payload);
+    t.p.set_outer(copy, group);
     t.p.build()
 }
 
@@ -175,6 +201,11 @@ impl Drop for Fx {
 }
 
 fn fx(mode: ParityMode) -> Fx {
+    fx_with(mode, false)
+}
+
+/// [`fx`], with the cooked copy file too when `copy` is set.
+fn fx_with(mode: ParityMode, copy: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-class-route-{}-{}",
         std::process::id(),
@@ -182,13 +213,13 @@ fn fx(mode: ParityMode) -> Fx {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
-    let defs = DefStore::from_synthetic(
-        &dir,
-        &[("GearboxFramework.upk", &bytes)],
-        IdentityPolicy::FirstInScanOrder,
-        mode,
-    )
-    .unwrap();
+    let copied = copy_package();
+    let mut files: Vec<(&str, &[u8])> = vec![("GearboxFramework.upk", &bytes)];
+    if copy {
+        files.push(("ZzCopy.upk", &copied));
+    }
+    let defs =
+        DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(
         ObjectSpace::new(),
         defs,
@@ -464,4 +495,45 @@ fn a_wrong_class_loads_nothing_and_instigator_is_kind_checked() {
         matches!(&r, Err(VmError::Script { message, .. }) if message.contains("argument 3")),
         "{r:?}"
     );
+}
+
+/// Review of #431, item 1: a duplicate holder of another class that the identity policy does not pick does not refuse
+/// the lookup; the store loads the holder it picks, of the requested class.
+#[test]
+fn a_duplicate_holder_the_policy_does_not_pick_does_not_refuse() {
+    let mut x = fx_with(ParityMode::Off, true);
+    let class = x.class("PlayerClassDefinition");
+    let found = x
+        .get_definition(Some(class), "GearboxFramework.ToyClassDef")
+        .unwrap();
+    let Value::Object(Some(o)) = found else {
+        panic!("{found:?}")
+    };
+    assert_eq!(x.vm.space.heap.get(o).unwrap().class, class);
+}
+
+/// The nested class's path as reflection names it (its outer group included); the holder records name it
+/// `ToyGroup.NestedDefinition`, which a comparison of path text would not match.
+const NESTED: &str = "GearboxFramework.ToyGroup.NestedDefinition";
+
+/// Review of #431, item 2: a class this file exports under an outer group is compared as a class, not by its path
+/// text, so a definition of it is found; asked as its parent class, it is still refused before anything loads.
+#[test]
+fn a_class_under_an_outer_compares_as_the_class() {
+    let mut x = fx(ParityMode::Off);
+    let nested = x.vm.find_class(NESTED).expect("the nested class");
+    let found = x
+        .get_definition(Some(nested), "GearboxFramework.ToyNested")
+        .unwrap();
+    let Value::Object(Some(o)) = found else {
+        panic!("{found:?}")
+    };
+    assert_eq!(x.vm.space.heap.get(o).unwrap().class, nested);
+    let mut x = fx(ParityMode::Off);
+    let base = x.class("GBXDefinition");
+    let nested = x.vm.find_class(NESTED).expect("the nested class");
+    assert!(not_read(
+        &x.get_definition(Some(base), "GearboxFramework.ToyNested")
+    ));
+    assert_eq!(x.vm.space.live(nested).count(), 0, "nothing was loaded");
 }
