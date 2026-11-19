@@ -7,7 +7,8 @@ AI-assisted (Claude Code, Claude Opus 5.5). Lane FIX-PHASELOCK-CAST part A (slic
   the float `Lerp` beside it. No record of the executable and no C++ counterpart was used. Each axis is computed in
   double and rounded once, as `Lerp` does here. The native's own single-precision order is UNVERIFIED. Synthetic
   test `vlerp_is_one_rule_in_both_modes` covers alpha 0 and 1, an interior point, extrapolation above 1 and below 0,
-  and per-axis bit agreement with `Lerp`, in Off and in Reference.
+  and per-axis bit agreement with `Lerp`, in Off and in Reference. Reference now differs from the C++ here: the C++ VM
+  has no VLerp and logs a stub where Rust answers, the same as the `VInterpTo` precedent (decision 2026-11-16-42).
 - **`BeginNondeterministicProviderRegistration` and `ForceUnregisterBehaviorConsumer` (read, not implemented).** No
   record described them (the NATIVE_* notes, docs/verification and `src/` were searched), so this lane was the analyst
   only. Both were read in the saved Ghidra project (read-only, raw output under ignored `local/analysis/`). The
