@@ -31,6 +31,13 @@ now links here instead.
 6. SLICE_RUN_PLAN.md is updated.
 7. The pickup row is corrected, and the Q2 evidence is split into three reads.
 
+**Hub read of r1 (7885a3a), folded in.** Three changes:
+1. On the map route the bridge binds none of its four globals natives. Each native has exactly one owner (section 3,
+   step 2, the table).
+2. Lane 4's first PR depends only on lanes 2 and 3 and proves the typed auto-state stop; the full run depends on the
+   auto state.
+3. The navigation list is its own implementer lane, after #536.
+
 ## 1. Where the slice's worlds come from today
 
 No slice link loads a map into its VM world. The drivers build their worlds by hand:
@@ -86,7 +93,7 @@ The bridge's hand-made objects become the map's own, so the order of the bridge'
 sequence for a slice driver (one `World`, Off):
 
 1. **`World::new`** with the driver's packs, as today. The bridge's natives are bound now, by path, for their own
-   package (`register_native_for`, #519), except the two globals getters (below).
+   package (`register_native_for`, #519), except its four globals natives (below).
    - Natives that the bridge scopes to "its objects" (the tracker's, the controller's) resolve those objects from the
      world when called, not from objects the bridge made. Before the bridge adopts (step 7), a call to one of them is
      a typed `NotYet { LayerAbsent }`, naming the bridge's adoption. It never answers from an object the bridge would
@@ -100,14 +107,31 @@ sequence for a slice driver (one `World`, Off):
    This is a **harness input**, labelled as one. Where and when the engine makes its globals object was not read. The
    definition is the configured `DefaultGlobalsDefinitionName` (NATIVE_WILLOW_GLOBALS.md section 2). The pawn data
    set-up's timing is NATIVE_PAWN_DATA.md's open question 1.
-   - **Who answers `GetWillowGlobals` and `GetGearboxGlobals`:** on the map route, `ow-inventory`'s globals pack, the
-     world's getters, which answer from `WorldQuery`. The bridge does not bind its own getters on this route: it reads
-     the world's globals, and so does the pickup route.
-   - On the old routes nothing changes. `MissionScript::new` makes the globals and binds its own getters, and the pickup
-     route keeps `pickup_world`.
-   - **A call before this step**, for example from a bring-up run with no globals set-up, gets the world getter's
-     `NotYet { LayerAbsent }`. It is never None: None would let `PostBeginPlay` skip work silently (decision
-     2026-11-19-94). So a missing set-up shows as a typed stop.
+   - **The four globals natives, one owner each** (hub ruling on the read of 7885a3a). The bridge binds all four
+     itself today (`MissionScript`'s globals bindings), and each body reads the globals object the bridge made. On the
+     map route the bridge binds **none of the four**; each native has exactly one owner, which reads the globals object
+     the driver made in this step:
+
+     | Native | Owner (crate, function) | Reads |
+     |---|---|---|
+     | `WillowGlobals.GetWillowGlobals` | `ow-inventory`, `globals::register` (already bound there) | the world's globals, `globals::world_globals` |
+     | `GearboxGlobals.GetGearboxGlobals` | `ow-inventory`, `globals::register` (already bound there) | the same object |
+     | `WillowGlobals.GetGlobalsDefinition` | `ow-inventory`, `globals::register` (already bound there) | the receiver's `TheGlobalsDefinition`, which this step fills |
+     | `GearboxGlobals.GetBehaviorKernel` | `ow-behavior`, `kernel::natives` (new binding, next to the kernel's other natives) | the world's globals' `TheBehaviorKernel`, as stored; the kernel object is not modelled, so it is None, as the bridge answers today |
+
+   - **On the old routes nothing changes.** `MissionScript::new` makes the globals and binds its own four, and the
+     pickup route keeps `pickup_world`. So the map route's owners must not be bound into a bridge world, or the bridge
+     must skip a native that is already bound there. The lane picks one and says which.
+   - **A call before this step**, for example from a bring-up run with no globals set-up, gets the owner's
+     `NotYet { LayerAbsent }` naming the world's globals object, never None. This applies to `GetWillowGlobals`,
+     `GetGearboxGlobals` and `GetBehaviorKernel`. None would let `PostBeginPlay` skip work silently (decision
+     2026-11-19-94), so a missing set-up shows as a typed stop. `GetGlobalsDefinition` is an instance function: it is
+     called on the object the getters return, so it cannot run before that object exists, and its existing
+     `NotYet { NotRead }` for an empty definition field stays.
+   - **The one-owner test** (lane 4): on a synthetic map world built the map route's way, every key of the four natives
+     is bound exactly once, and by its owner. The test fails if two packs bind the same key, including one that
+     first-wins would skip silently. It records the binding pack per key: through `Vm::is_bound` and each owner's own
+     binding call, or a test-only registry hook.
 3. **`load_map(Sanctuary_P)`** (exists). This places `WorldInfo_2` first, then the persistent and streaming levels'
    actors.
 4. **The navigation list** (new). It fills `WorldInfo.NavigationPointList` and each point's `nextNavigationPoint` before
@@ -178,11 +202,11 @@ least as far on every link (section 6).
 
 | # | Lane | Kind | Owner | Depends on | Unblocks |
 |---|---|---|---|---|---|
-| 1 | ANALYST-MAPLOAD-NAVLIST-PLAYACTOR (9554) | analyst (clean room) | NATIVE_MAP_LOAD.md, new sections 5 and 6 | none | the navigation list; lane 3's open call site |
+| 1 | ANALYST-MAPLOAD-NAVLIST-PLAYACTOR (9554) | analyst (clean room) | NATIVE_MAP_LOAD.md, new sections 5 and 6 | none | the navigation lane (its own implementer, after #536); lane 3's open call site |
 | 2 | IMPL-MAPLOAD-GAMEINFO (H6) | implementer | `ow-world` `world/mapload/game_info.rs` (new); `bringup.rs`; the `mapload.rs` module wiring | none for its first PR | lane 3's merge; with the auto-state work, links 4 and 10 to 12 |
-| — | ANALYST-AUTO-STATE, then an implementer | analyst, then implementer | NATIVE_ENGINE_CORE.md or its own note; `ow-vm` `states.rs` | none | the game info's `InitGame` and `PreBeginPlay`, so the GRI and the tracker; lane 2's installed assertions past the stop; lane 4 |
+| — | ANALYST-AUTO-STATE, then an implementer | analyst, then implementer | NATIVE_AUTO_STATE.md; `ow-vm` `states.rs` | none | the game info's `InitGame` and `PreBeginPlay`, so the GRI and the tracker; lane 2's installed assertions past the stop; lane 4's full run |
 | 3 | IMPL-MAPLOAD-PLAYER | implementer | `ow-world` `world/mapload/player.rs` (new) | coding: none; merge: after lane 2 | link 1 (the map spawn); links 6 to 9 (the map's local player) |
-| 4 | IMPL-SLICE-MAP-WORLD | implementer | `ow-mission` `bridge.rs` and `slice.rs`; `ow-cli` `cmd/combat.rs`, `cmd/slice.rs`, `cmd/slice_gate.rs` | lanes 2 and 3, the auto-state implementer, #519 | every VM link measured on the map world, one driver family per PR |
+| 4 | IMPL-SLICE-MAP-WORLD | implementer | `ow-mission` `bridge.rs` and `slice.rs`; `ow-cli` `cmd/combat.rs`, `cmd/slice.rs`, `cmd/slice_gate.rs` | first PR: lanes 2 and 3, #519; the full run: also the auto-state implementer | every VM link measured on the map world, one driver family per PR |
 
 **Lane 1, analyst (9554).** From the executable and the level data, in own words:
 - **Q1:** where `NavigationPointList` and `nextNavigationPoint` come from at load. Three candidates: data in the
@@ -195,7 +219,7 @@ answer**, not before:
 - if the list is read from the level's data, a new reader with package oracles (rule 4);
 - if it is a rebuild, an own-words rule.
 
-It is a small item of its own, or added to lane 2 if the hub prefers. Until then, #513's iterator walks the empty list,
+It is its own implementer lane, after the analyst's note (#536). Until then, #513's iterator walks the empty list,
 as it does today.
 
 **Lane 2, the game info** (H6; from NATIVE_MAP_LOAD.md section 3, clean room). It **proves class selection, the spawn
@@ -259,8 +283,12 @@ The fixtures that stay on the old route until their own PR: `equip_run::pickup_w
     possess a pawn. The adopted bridge's `player_pawn` must be that same object (the controller's `Pawn`), and no
     `WillowPlayerPawn` may be allocated by the bridge. With no possessed pawn, the accessor must refuse, typed.
   - The old route's tests stay unchanged, byte for byte.
-  - The installed `--combat-run` with `--map Sanctuary_P` reports its first stop. Until the auto-state work lands, that
-    is expected to be the bring-up's typed stop, before the player exists.
+  - **It depends only on lanes 2 and 3 (and #519), not on the auto-state work.** On installed data it proves the
+    typed stop: the installed `--combat-run` with `--map Sanctuary_P` must end at the bring-up's typed
+    `GotoState('Auto')` stop, before the player exists, and report it as the first stop. The possessed-pawn proof is
+    the synthetic one above.
+  - **The full installed run**, the player spawned and adopted on Sanctuary, depends on the auto-state implementer as
+    well. It is a later PR, or a rerun once that lands.
 - **Later PRs, one family each:**
   - `--slice-run`: `FireMissionSlice::new` on the adopt path, with the waypoint, the director and the dummy (Q7);
   - the pickup, equip and phaselock worlds, with the globals of section 3, step 2;
