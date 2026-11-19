@@ -97,6 +97,23 @@ fn engine() -> Vec<u8> {
     t.prop("Int", odd_tail, "Scene", 0, 0);
     t.prop("Int", odd_tail, "PreviousLightEnvironment", 0, 0);
     t.prop("Bool", odd_tail, "bNeedsReattach", 0, 0);
+    // Review r2 of #520: a light component whose `bNeedsReattach` is its last slot (declared first: the toy's slots run
+    // in reverse declaration order), so a slot vector one short loses only it; and one with a struct `Scene` but a
+    // `PreviousLightEnvironment` that takes no object.
+    let tail_slot = t.class("TailSlotLight", object);
+    t.prop("Bool", tail_slot, "bNeedsReattach", 0, 0);
+    t.prop("Object", tail_slot, "LightEnvironment", 0, light);
+    t.prop("Bool", tail_slot, "bAttached", 0, 0);
+    t.prop("Object", tail_slot, "Owner", 0, object);
+    t.prop("Struct", tail_slot, "Scene", 0, pointer);
+    t.prop("Object", tail_slot, "PreviousLightEnvironment", 0, light);
+    let odd_prev = t.class("OddPrevLight", object);
+    t.prop("Object", odd_prev, "LightEnvironment", 0, light);
+    t.prop("Bool", odd_prev, "bAttached", 0, 0);
+    t.prop("Object", odd_prev, "Owner", 0, object);
+    t.prop("Struct", odd_prev, "Scene", 0, pointer);
+    t.prop("Int", odd_prev, "PreviousLightEnvironment", 0, 0);
+    t.prop("Bool", odd_prev, "bNeedsReattach", 0, 0);
     let pickup = t.class("WillowPickup", actor);
     t.prop("Bool", pickup, "bUseRBPhysics", 0, 0);
     t.prop("Object", pickup, "PickupParticles", 0, object);
@@ -604,4 +621,44 @@ fn the_light_environment_checks_mask_neither_the_no_op_nor_the_refusal() {
     unmarked(&not_yet(x.call(LIGHT_FN, tail, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
     assert_eq!(x.get(tail, "LightEnvironment"), Value::Object(Some(old)));
     assert_eq!(x.get(tail, "bNeedsReattach"), Value::Bool(false));
+}
+
+/// A destination slot missing from the object (review r2 of #520): an attached, ownerless component with an empty
+/// `Scene` whose slot vector is one short (`bNeedsReattach`'s slot gone). The call fails before any write: both light
+/// fields stay unchanged.
+#[test]
+fn a_missing_destination_slot_refuses_before_any_light_write() {
+    let mut x = fx(ParityMode::Off, true);
+    let old = x.obj("Engine.LightEnvironmentComponent");
+    let new = x.obj("Engine.LightEnvironmentComponent");
+    let mesh = x.obj("Engine.TailSlotLight");
+    x.set(mesh, "LightEnvironment", Value::Object(Some(old)));
+    x.set(mesh, "bAttached", Value::Bool(true));
+    let lights = |x: &Fx| (x.get(mesh, "LightEnvironment"), x.get(mesh, "PreviousLightEnvironment"));
+    let before = lights(&x);
+    let class = x.vm.space.heap.get(mesh).unwrap().class;
+    let flag = x.vm.space.prop(class, "bNeedsReattach").unwrap();
+    let slot = x.vm.space.classes.resolve(class, PropAddr::scalar(flag)).unwrap();
+    let slots = x.vm.space.heap.get(mesh).unwrap().slots.len();
+    assert_eq!(slot, slots - 1, "bNeedsReattach is the toy's last slot");
+    x.vm.space.heap.get_mut(mesh).unwrap().slots.truncate(slot);
+    let e = x.call(LIGHT_FN, mesh, vec![Value::Object(Some(new))]).unwrap_err();
+    assert!(!matches!(&e, VmError::NotYet(_)), "a heap error, not a NotYet: {e:?}");
+    assert_eq!(lights(&x), before, "neither light field written");
+}
+
+/// The scene refusal's place (review r2 of #520): an attached, ownerless component with a non-zero `Scene` and a
+/// `PreviousLightEnvironment` that takes no object is the scene's `NotRead`, unprefixed, with nothing written.
+#[test]
+fn the_scene_refusal_comes_before_the_destination_checks() {
+    let mut x = fx(ParityMode::Off, true);
+    let old = x.obj("Engine.LightEnvironmentComponent");
+    let new = x.obj("Engine.LightEnvironmentComponent");
+    let odd = x.obj("Engine.OddPrevLight");
+    x.set(odd, "LightEnvironment", Value::Object(Some(old)));
+    x.set(odd, "bAttached", Value::Bool(true));
+    x.with_scene(odd);
+    let before = light_fields(&x, odd);
+    unmarked(&not_yet(x.call(LIGHT_FN, odd, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_SCENE);
+    assert_eq!(light_fields(&x, odd), before, "nothing written");
 }

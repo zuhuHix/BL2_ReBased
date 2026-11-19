@@ -332,6 +332,11 @@ pub fn set_light_environment(vm: &mut Vm, component: ObjRef, new: Option<ObjRef>
     schemas(vm, component, &[("PreviousLightEnvironment", Want::Object), ("bNeedsReattach", Want::Bool)], WHAT)?;
     fits(vm, component, "PreviousLightEnvironment", &Value::Object(current), WHAT)?;
     fits(vm, component, "LightEnvironment", &value, WHAT)?;
+    // Each destination's slot read, immutably, before the first write (review r2 of #520): an object whose slot vector
+    // is short of a declared field is refused here, not after two writes.
+    for name in ["PreviousLightEnvironment", "LightEnvironment", "bNeedsReattach"] {
+        required(vm, component, name, WHAT)?;
+    }
     write(vm, component, "PreviousLightEnvironment", Value::Object(current), WHAT)?;
     let rest = (|| {
         write(vm, component, "LightEnvironment", value, WHAT)?;

@@ -9,7 +9,9 @@ in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace 
 each built: 0 ok / 5 NotYet / 9 errors before, 0 ok / 7 NotYet / 7 errors after. Links 6 and 7 stay at 0 of 1 step
 (`make`) and move from the unbound `PrimitiveComponent.SetLightEnvironment(object)` to "stopped after partial writes:
 WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up" (`NotYet { LayerAbsent }`). The other 12
-rows are byte-identical. ctest and verify_packages not run (no C++ change). No real-game session.
+rows are byte-identical. ctest and verify_packages not run (no C++ change). No real-game session. Review r2 of #520
+(the destinations' slots read before the first write; 2 tests): `cargo test --workspace -j 2` 2,463 passed / 0 failed
+/ 46 ignored; no slice-gate rerun (the slice's path has full slot vectors).
 
 **IMPL-ATTACH-MESH-TO-PICKUP part 1 (2026-11-19, zuhu desktop, on fix/rust-set-anim-tree-template c1c8a73, #495):**
 AI-assisted (Claude Code, Opus 5.5). `SetForceRefPose`, `SetHidden`, `SetOwnerNoSee`, `HideBoneByName` and

@@ -48,3 +48,15 @@ AI-assisted (Claude Code). Sol's review r1 of #520.
   the first write.
 - **Tests:** a prebound key; the no-op with a broken `bAttached`; the owner refusal ahead of broken `Scene` and
   `PreviousLightEnvironment` declarations; the Reference test asserts all eight keys unbound (14 tests in all).
+
+## Edits: review r2 of #520
+
+AI-assisted (Claude Code). Sol's review r2 of #520.
+- **The destinations' slots read before the first write.** On the attached path, after the owner and scene refusals
+  and the write-rule checks, `SetLightEnvironment` reads `PreviousLightEnvironment`, `LightEnvironment` and
+  `bNeedsReattach` through the heap's immutable read. An object whose slot vector is short of a declared field is
+  refused there (the heap's `SlotMissing`), not after `PreviousLightEnvironment` and `LightEnvironment` are written.
+- **Tests:** an attached, ownerless component one slot short (`bNeedsReattach` gone) fails with both light fields
+  unchanged (without the reads, both were written); an attached, ownerless component with a non-zero `Scene` and a
+  `PreviousLightEnvironment` that takes no object is the scene's `NotRead`, unprefixed, nothing written (17 tests in the
+  file; r1's count of 14 was one short). Synthetic toys only; UNVERIFIED in game, as before.
