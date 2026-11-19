@@ -193,7 +193,10 @@ fn a_missing_or_unfit_class_and_a_refused_spawn_leave_the_field_empty() {
         let before = listed(&f);
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.NoSuchGame"), ..PROBE });
         let e = e.unwrap_err();
-        assert!(e.to_string().contains(&not_found_text("Engine.NoSuchGame")), "{e}");
+        assert!(
+            matches!(&e, VmError::Script { message, .. } if message.starts_with(&not_found_text("Engine.NoSuchGame"))),
+            "no lazy load ran: unmarked ({e:?})"
+        );
         let e = spawn_game_info(&mut f.w, &GameInfoInput { default_game: Some("Engine.Thing"), ..PROBE }).unwrap_err();
         assert!(matches!(&e, VmError::Script { message, .. } if message.contains("is not a class WorldInfo.Game can hold")), "{e:?}");
         let cdo = f.w.vm.defs.class_default(&mut f.w.vm.space, "Engine.Collider").unwrap();
@@ -378,3 +381,4 @@ fn describe(space: &ow_object::heap::ObjectSpace, v: &Value) -> String {
         other => other.kind_name().to_string(),
     }
 }
+

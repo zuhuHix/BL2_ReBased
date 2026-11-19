@@ -29,8 +29,10 @@
 //! **Writes and marking** (the hub's rules): steps 1 and 2 read only. From step 3 on, a lazy load counts as a write.
 //! #518's three counters (the heap's committed writes, the definition store's load transitions and the game RNG's
 //! draws, [`WriteMark`]) are read before step 3; any `NotYet` returned after one moved is marked "stopped after partial
-//! writes", its kind and record kept ([`crate::actors::after_writes`]). The not-found stop is marked the same way when
-//! a lazy load already ran (review r1 of #537). Other errors are returned as they are.
+//! writes", its kind and record kept ([`crate::actors::after_writes`]). The not-found stop is marked with the same
+//! prefix when a lazy load already ran (review r1 of #537); it is a `VmError::Script`, so the mark sits at the start of
+//! its message, after the function name ("the game info routine"), not at the start of the error's text. Other errors
+//! are returned as they are.
 //!
 //! **The ini reader refuses instead of guessing** (review r1 of #537): a quoted value, a prefixed key (`+`, `-`, `.`,
 //! `!`, the ini's array and removal operators) and a second `DefaultGame` in the section are `NotYet { NotRead }`. A
@@ -289,7 +291,7 @@ pub fn spawn_game_info(world: &mut World, input: &GameInfoInput<'_>) -> Result<G
 /// The not-found stop (module documentation, step 3), marked when something was written or loaded since `mark`.
 fn not_found(vm: &Vm, mark: &WriteMark, path: &str) -> VmError {
     let text = not_found_text(path);
-    data_error(if mark.moved(vm) { format!("stopped after partial writes: {text}") } else { text })
+    data_error(if mark.moved(vm) { ow_core::notyet::mark_partial_writes(&text) } else { text })
 }
 
 /// Step 3: the lookup, the spawn and the store.
