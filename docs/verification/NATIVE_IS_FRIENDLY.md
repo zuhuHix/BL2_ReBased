@@ -108,13 +108,16 @@ Allegiances are compared as objects: the same object, not an equal one.
 - Cast Phaselock at a bullymong and hook `Pawn.IsFriendly`: record the caller (Maya's pawn), the argument (the
   target) and the result. Read both pawns' `Allegiance`, `CharmedChild` and `CharmedParent`.
 - Self target: call `IsFriendly` and `GetOpinion` on a pawn with itself as the argument, once with its `Allegiance`
-  set and once with it cleared. The expected answers are `SelfOpinion` with one, and Neutral without (section 4).
+  set and once with it cleared. Expected: `GetOpinion` returns `SelfOpinion` with an allegiance and Neutral without
+  one, and `IsFriendly` returns true exactly when that opinion is Friendly (section 4).
 - Death: call `GetOpinion` of Maya's pawn on a bullymong just before and just after it dies, and record both pawns'
   `Allegiance`, `CharmedChild` and `CharmedParent` each time (open question 3).
 - Charm transitions: hook the writes of `CharmedChild` and `CharmedParent` (and whatever script or native sets them
   during a charm), and record both fields on every pawn involved before and after each change (open question 2).
-- Three pawns for step 3 of section 2: a querying pawn Q, a target T and T's `CharmedParent` P. Vary P's opinion of
-  Q (Friendly, then not Friendly) and whether Q has a `CharmedParent`. Record `Q.GetOpinion(T)` each time. The
-  expected answer is Enemy only when P is friendly to Q and Q has no `CharmedParent`; otherwise the next rule.
+- Three pawns for step 3 of section 2: a querying pawn Q, a target T and T's `CharmedParent` P. T is neither Q's
+  `CharmedChild` nor Q's `CharmedParent`, and Q's generic opinion of T is Neutral to begin with (read it before the
+  charm), so an Enemy answer cannot come from the generic rule. Vary P's opinion of Q (Friendly, then not Friendly)
+  and whether Q has a `CharmedParent`. Record `Q.GetOpinion(T)` each time. The expected answer is Enemy only when P
+  is friendly to Q and Q has no `CharmedParent`; otherwise the Neutral baseline of the next rule.
 - Call `IsFriendly` on Maya's pawn with her own controller as the argument, and with None. Both should be false.
 - After a charm, read both pawns' `CharmedChild` and `CharmedParent`, and their `GetOpinion` of each other.
