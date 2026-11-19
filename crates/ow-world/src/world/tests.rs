@@ -2435,7 +2435,7 @@ fn the_world_natives_without_a_world_are_not_yet() {
 mod placement {
     use super::*;
     use crate::placement::{
-        BOUNDING_CYLINDER_OF, Bounds, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision,
+        BOUNDING_CYLINDER_OF, Bounds, ENCROACHMENT, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision,
         Sweep, Test, install_collision,
     };
 
@@ -2854,9 +2854,13 @@ mod placement {
     #[test]
     fn the_encroachment_and_relocation_not_yets_follow_the_live_actor() {
         run(|| {
+            // With a service the check (lane IMPL-ENCROACHMENT-CHECK) passes the attach and location steps (no
+            // primitive, not moved) and stops at the live actor's shape: Collider is not one of the extent's five
+            // classes.
+            let shape = format!("{BOUNDING_CYLINDER_OF} Engine.Collider");
             for (with_service, no_fail, want, layer) in [
                 (false, false, ENCROACHMENT, true),
-                (true, false, ENCROACHMENT_RULE, false),
+                (true, false, shape.as_str(), false),
                 (false, true, RELOCATION, false),
             ] {
                 let mut x = fx();
@@ -2877,6 +2881,151 @@ mod placement {
             let wi = x.wi;
             let probe = x.class("Probe");
             assert!(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap().is_some());
+        });
+    }
+
+    /// A live `Actor` spawned by the world (nothing collides yet), then set to collide with actors, with the spawn's
+    /// passed location and rotation (those it now holds): the encroachment check is then called on it directly.
+    fn live_collider(x: &mut Fx) -> (ObjRef, Value, Value) {
+        let a = x.spawn("Actor");
+        set_field(&mut x.w.vm.space, a, "bCollideActors", Value::Bool(true)).unwrap();
+        let location = field(&x.w.vm.space, a, "Location").unwrap();
+        let rotation = field(&x.w.vm.space, a, "Rotation").unwrap();
+        (a, location, rotation)
+    }
+
+    fn cylinder(x: &mut Fx, r: f32, h: f32, collides: bool) -> ObjRef {
+        let c = x.class("CylinderComponent");
+        let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
+        set_field(&mut x.w.vm.space, comp, "CollisionRadius", Value::Float(r)).unwrap();
+        set_field(&mut x.w.vm.space, comp, "CollisionHeight", Value::Float(h)).unwrap();
+        set_field(&mut x.w.vm.space, comp, "CollideActors", Value::Bool(collides)).unwrap();
+        comp
+    }
+
+    fn encroach_not_read(r: Result<(), VmError>) -> String {
+        match r.unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead, "{n}");
+                assert!(!n.what.starts_with("stopped after partial writes"), "the check returns it unmarked: {n}");
+                n.what.into_owned()
+            }
+            other => panic!("expected NotYet, got {other:?}"),
+        }
+    }
+
+    /// NATIVE_ENCROACHMENT_CHECK.md section 3, step 3, in its order (lane IMPL-ENCROACHMENT-CHECK), each refusal
+    /// unmarked and `NotRead` under the note's record: the service; the attach step for a primitive with
+    /// `CollideActors`, whatever `bAttached` says; the move for a passed location or rotation that differs; the level
+    /// part for a Blocked or Unsupported box test of the live shape; then no colliding primitive, no overlap, `Ok`.
+    #[test]
+    fn the_encroachment_check_follows_the_note_s_order() {
+        use crate::placement::encroachment::{ATTACH_STEP, LEVEL_PART, MOVE_STEP, RECORD_ENCROACHMENT, check};
+        run(|| {
+            let mut x = fx();
+            let (a, location, rotation) = live_collider(&mut x);
+            match check(&x.w.vm, a, &location, &rotation).unwrap_err() {
+                VmError::NotYet(n) => {
+                    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                    assert_eq!(n.what, ENCROACHMENT);
+                }
+                other => panic!("{other:?}"),
+            }
+            let s = script(&mut x, vec![Test::Blocked, Test::Unsupported], vec![], Test::Clear);
+            // The attach step: an unattached primitive with CollideActors is never taken to pass.
+            let comp = cylinder(&mut x, 10.0, 20.0, true);
+            set_field(&mut x.w.vm.space, comp, "bAttached", Value::Bool(false)).unwrap();
+            set_field(&mut x.w.vm.space, a, "CollisionComponent", Value::Object(Some(comp))).unwrap();
+            let what = encroach_not_read(check(&x.w.vm, a, &location, &rotation));
+            assert!(what.starts_with(ATTACH_STEP), "{what}");
+            match check(&x.w.vm, a, &location, &rotation).unwrap_err() {
+                VmError::NotYet(n) => assert_eq!(n.record, RECORD_ENCROACHMENT),
+                other => panic!("{other:?}"),
+            }
+            set_field(&mut x.w.vm.space, comp, "CollideActors", Value::Bool(false)).unwrap();
+            // The move: a passed location or rotation other than the live actor's.
+            for k in [0usize, 1] {
+                let (mut l, mut r) = (location.clone(), rotation.clone());
+                let moved = if k == 0 { &mut l } else { &mut r };
+                let f = &mut moved.struct_mut().unwrap().fields[0];
+                *f = match f {
+                    Value::Float(v) => Value::Float(*v + 1.0),
+                    Value::Int(v) => Value::Int(*v + 1),
+                    other => panic!("{other:?}"),
+                };
+                assert_eq!(encroach_not_read(check(&x.w.vm, a, &l, &r)), MOVE_STEP);
+            }
+            assert!(s.asked.borrow().is_empty(), "no query before the location step passes");
+            // The level part, with the live shape (the cylinder's extent).
+            assert_eq!(encroach_not_read(check(&x.w.vm, a, &location, &rotation)), LEVEL_PART);
+            assert_eq!(encroach_not_read(check(&x.w.vm, a, &location, &rotation)), LEVEL_PART);
+            check(&x.w.vm, a, &location, &rotation).unwrap();
+            let asked = s.asked.borrow();
+            assert_eq!(asked.len(), 3, "{asked:?}");
+            assert!(matches!(asked[0], Asked::Test([10.0, 10.0, 20.0], _, Mode::Template { complex: false })), "{asked:?}");
+        });
+    }
+
+    /// The port's overlap walk (note section 3, step 3.6), reached only once the attach step is read, so tested
+    /// directly: the actor itself and an actor based on it are skipped; a live primitive with no service bounds is the
+    /// overlap query's `NotRead`; bounds that miss the region leave the walk; bounds that meet it are the per-class
+    /// test's `NotRead`.
+    #[test]
+    fn the_encroachment_walk_needs_bounds_and_the_per_class_test() {
+        use crate::placement::encroachment::{OVERLAP_QUERY, PER_CLASS_TEST, walk};
+        run(|| {
+            let region = Bounds { min: [-1.0; 3], max: [1.0; 3] };
+            for (bounds, want) in [
+                (None, Some(OVERLAP_QUERY)),
+                (Some(Bounds { min: [5.0; 3], max: [6.0; 3] }), None),
+                (Some(Bounds { min: [0.0; 3], max: [2.0; 3] }), Some(PER_CLASS_TEST)),
+            ] {
+                let mut x = fx();
+                let (a, _, _) = live_collider(&mut x);
+                let own = cylinder(&mut x, 1.0, 1.0, true);
+                set_field(&mut x.w.vm.space, a, "CollisionComponent", Value::Object(Some(own))).unwrap();
+                // An actor based on the new one is skipped, its primitive never asked.
+                let rider = blocker(&mut x, "Actor", false, &[]);
+                set_field(&mut x.w.vm.space, rider, "Base", Value::Object(Some(a))).unwrap();
+                let model = Script {
+                    tests: RefCell::new(vec![]),
+                    sweeps: RefCell::new(vec![]),
+                    rest: Test::Clear,
+                    asked: RefCell::new(Vec::new()),
+                    bounds,
+                };
+                assert!(walk(&x.w.vm, &model, a, region).is_ok(), "only the actor itself and its rider");
+                blocker(&mut x, "Actor", false, &[]);
+                let got = walk(&x.w.vm, &model, a, region);
+                match want {
+                    None => got.unwrap(),
+                    Some(w) => {
+                        let what = encroach_not_read(got);
+                        assert!(what.starts_with(w), "{what}");
+                    }
+                }
+            }
+        });
+    }
+
+    /// Through the spawn: a live actor whose primitive has `CollideActors` stops at the attach step, marked by the
+    /// spawn's boundary, its kind kept; the actor stays made.
+    #[test]
+    fn a_spawn_s_attach_step_refusal_is_marked() {
+        use crate::placement::encroachment::ATTACH_STEP;
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            script(&mut x, vec![], vec![], Test::Clear);
+            let comp = cylinder(&mut x, 5.0, 5.0, true);
+            let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Collider").unwrap();
+            set_field(&mut x.w.vm.space, cdo, "CollisionComponent", Value::Object(Some(comp))).unwrap();
+            let before = count(&x);
+            let c = x.class("Collider");
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(c))).unwrap_err());
+            assert_eq!(missing, Missing::NotRead);
+            assert!(text.starts_with(&format!("stopped after partial writes: {ATTACH_STEP}")), "{text}");
+            assert_eq!(count(&x), before + 1, "made, past PreBeginPlay");
         });
     }
 

@@ -43,11 +43,12 @@
 //!    nothing made; a successful one gives the location.
 //!
 //! **After `PreBeginPlay`** (note section 6), only after play began and when the actor was not destroyed, decided on
-//! the live actor's `bCollideActors`. These run after the actor is made, so a `NotYet` is terminal and prefixed
-//! "stopped after partial writes", its kind kept:
-//! - `bNoCollisionFail` false: the flag false passes the check (the port's Off answer, not a reading: the spawn routine
-//!   calls it whatever the flag, open question 1, UNVERIFIED); true with no service `NotYet { LayerAbsent }`, true
-//!   with one `NotYet { NotRead }` (the check's rule);
+//! the live actor's `bCollideActors`. These run after the actor is made, so a `NotYet` is terminal, marked "stopped
+//! after partial writes" by the spawn's post-insertion boundary, its kind kept:
+//! - `bNoCollisionFail` false: the flag false passes the check with no write. That is a reading of the check's gate
+//!   (NATIVE_ENCROACHMENT_CHECK.md section 2, step 1), no longer the port's choice. The flag true runs the check
+//!   ([`encroachment`], lane IMPL-ENCROACHMENT-CHECK): no service `NotYet { LayerAbsent }`, then the note's attach
+//!   step, location step, shape, level part and overlap walk, each refusing with `NotYet { NotRead }`;
 //! - `bNoCollisionFail` true and the flag true: the relocation step, `NotYet { NotRead }`.
 
 use std::rc::Rc;
@@ -68,7 +69,6 @@ pub const RECORD: &str = "NATIVE_SPAWN_PLACEMENT.md";
 /// The note's names.
 pub const SPOT_SEARCH: &str = "the spawn placement spot search";
 pub const ENCROACHMENT: &str = "the post-spawn encroachment check";
-pub const ENCROACHMENT_RULE: &str = "the post-spawn encroachment check's rule";
 pub const RELOCATION: &str = "the post-spawn relocation step";
 /// The mark of a refusal after the actor was made.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
@@ -739,20 +739,26 @@ pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option
     }
 }
 
-/// The `NotYet` after `PreBeginPlay` for a live actor that collides with actors (module documentation): the
-/// relocation step's for a `bNoCollisionFail` spawn, else the encroachment check's. Prefixed: the actor was made.
-pub fn after_pre_begin_play(vm: &Vm, no_collision_fail: bool) -> VmError {
-    let n = if no_collision_fail {
-        NotYet::not_read(RELOCATION, RECORD)
-    } else {
-        match collision_model(vm) {
-            Ok(None) => NotYet::layer_absent(ENCROACHMENT, LAYER, RECORD),
-            Ok(Some(_)) => NotYet::not_read(ENCROACHMENT_RULE, RECORD),
-            Err(e) => return e,
-        }
-    };
-    NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+/// The step after `PreBeginPlay` for a live actor that collides with actors (module documentation): the relocation
+/// step's `NotYet { NotRead }` for a `bNoCollisionFail` spawn, else the encroachment check
+/// ([`encroachment::check`], NATIVE_ENCROACHMENT_CHECK.md) at the spawn's `location` and `rotation`. Unmarked: the
+/// spawn's post-insertion boundary marks every refusal after the actor was made.
+pub fn after_pre_begin_play(
+    vm: &Vm,
+    actor: ObjRef,
+    no_collision_fail: bool,
+    location: &Value,
+    rotation: &Value,
+) -> Result<(), VmError> {
+    if no_collision_fail {
+        return Err(NotYet::not_read(RELOCATION, RECORD).into());
+    }
+    encroachment::check(vm, actor, location, rotation)
 }
+
+/// The post-spawn encroachment check (lane IMPL-ENCROACHMENT-CHECK).
+#[path = "placement_encroachment.rs"]
+pub mod encroachment;
 
 /// The search's steps against a scripted service with the filter taken as read: these steps are not reached in Off
 /// (module documentation), so they are tested here directly. Invented geometry only.

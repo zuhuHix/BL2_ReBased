@@ -655,9 +655,9 @@ fn collision(what: &'static str) -> VmError {
 ///    `NotYet` too (the C++ stand-in does not copy a template's sub-objects). In Off, since decision 2026-11-19-44,
 ///    the actor is made from it, as public UE3's spawn copies its template's properties (UNVERIFIED in this game);
 ///    the collision pre-checks still read the class defaults (UNVERIFIED for an
-///    archetype whose flags differ). An actor that does not collide with actors is taken to pass the
-///    encroachment check (UNVERIFIED: the check's internals are not read). The pre-checks are conservative: they
-///    refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
+///    archetype whose flags differ). Under Reference an actor that does not collide with actors is taken to pass the
+///    encroachment check; in Off that is the check's gate, read (NATIVE_ENCROACHMENT_CHECK.md). The pre-checks are
+///    conservative: they refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
 ///
 ///    **In `ParityMode::Off`** (lane IMPL-SPAWN-PLACEMENT, decision 2026-11-19-79, NATIVE_SPAWN_PLACEMENT.md,
 ///    UNVERIFIED): the spot search reads the template's flags (`crate::placement::search_runs`) and runs through the
@@ -668,8 +668,9 @@ fn collision(what: &'static str) -> VmError {
 ///    `NotYet` up to the actor's insertion is marked "stopped after partial writes: ". A failed search returns
 ///    `None` with nothing made, a successful one gives the location the actor is made at. There is no eager
 ///    `bCollideActors` refusal in Off: the encroachment check (or the relocation step for a `bNoCollisionFail` spawn)
-///    is decided on the live actor after `PreBeginPlay` (`crate::placement::after_pre_begin_play`), terminal and
-///    prefixed "stopped after partial writes" (the actor stays made).
+///    is decided on the live actor after `PreBeginPlay` (`crate::placement::after_pre_begin_play`, the check from
+///    NATIVE_ENCROACHMENT_CHECK.md), terminal and marked "stopped after partial writes" by the post-insertion
+///    boundary (the actor stays made). A check that finds no encroachment lets the spawn go on to `PostBeginPlay`.
 /// 3. The actor is made from the class defaults (in `ParityMode::Off`, from the template: the class defaults or an
 ///    archetype of the class) and appended to the level list. In Off it gets its own copy of each component the
 ///    template owns ([`instance_components`]: public UE3 component instancing, UNVERIFIED in this game; decision
@@ -887,6 +888,8 @@ fn after_insertion(
         "WorldInfo",
         Value::Object(Some(world_info)),
     )?;
+    // The spawn's passed location and rotation, which the encroachment check compares with the live actor's.
+    let (placed, rotated) = (location.clone(), rotation.clone());
     set_field(&mut vm.space, actor, "Location", location)?;
     set_field(&mut vm.space, actor, "Rotation", rotation)?;
     set_owner(vm, actor, req.owner)?;
@@ -907,13 +910,14 @@ fn after_insertion(
         return Ok(None);
     }
     if flag(&vm.space, actor, "bCollideActors")? {
-        if off {
-            // On the live actor, after the destroyed check: terminal and prefixed (crate::placement).
-            return Err(crate::placement::after_pre_begin_play(vm, req.no_collision_fail));
+        if !off {
+            return Err(collision(
+                "the post-spawn encroachment check of an actor that PreBeginPlay made collide with actors",
+            ));
         }
-        return Err(collision(
-            "the post-spawn encroachment check of an actor that PreBeginPlay made collide with actors",
-        ));
+        // On the live actor, after the destroyed check (crate::placement): its refusals are unmarked here and marked
+        // by the spawn's post-insertion boundary; no encroachment goes on to PostBeginPlay.
+        crate::placement::after_pre_begin_play(vm, actor, req.no_collision_fail, &placed, &rotated)?;
     }
     // The world's lists (decision 2026-11-19-92; NATIVE_ACTOR_DESTROY_CONTROLLER.md section 4): a native begin-play
     // step adds a controller (unless it is being deleted) or a pawn at the head. Which step, and so where among the

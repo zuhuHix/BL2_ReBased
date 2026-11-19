@@ -160,13 +160,15 @@ live-actor write stay as they are.
 1. Before play began: not run (the record's step 6 onwards is skipped).
 2. **`PreBeginPlay` destroyed the actor:** the spawn returns None. This early return comes first, before any check.
 3. `req.no_collision_fail` false, play begun, the actor alive:
-   - the **live actor's** `bCollideActors` false: the check is taken to pass. This is the port's Off answer, not a
-     reading: the spawn routine calls the check whatever the flag, and whether the check returns at once for such an
-     actor is inside it (open question 1). UNVERIFIED;
+   - the **live actor's** `bCollideActors` false: the check passes with no write. Since NATIVE_ENCROACHMENT_CHECK.md
+     (section 2, step 1) this is a reading of the check's gate, no longer the port's choice. UNVERIFIED in the running
+     game;
    - `bCollideActors` true, with no collision service: a `NotYet` of kind `LayerAbsent`, "the post-spawn encroachment
      check";
-   - `bCollideActors` true, with a collision service: a `NotYet` of kind `NotRead`, "the post-spawn encroachment
-     check's rule" (open question 1).
+   - `bCollideActors` true, with a collision service: the check's steps of NATIVE_ENCROACHMENT_CHECK.md section 3
+     (lane IMPL-ENCROACHMENT-CHECK): the attach step, the location step, the live shape, the level part and the
+     overlap walk, each a `NotYet` of kind `NotRead` under that note, and no encroachment when the overlap set is
+     empty.
 4. **The relocation step:** only after play began, with `req.no_collision_fail` true, and the **live actor's**
    `bCollideActors` true (read after `PreBeginPlay`): a `NotYet` of kind `NotRead`, "the post-spawn relocation
    step". Otherwise it does not run.
@@ -341,8 +343,11 @@ world of convex brushes with a swept cylinder or capsule trace that reports a st
 
 ## Open questions
 
-1. The encroachment check's internals: which actors it tests against, whether an actor without `bCollideActors`
-   passes at once, and what touch notification sends.
+1. The encroachment check's internals. Partly answered by NATIVE_ENCROACHMENT_CHECK.md: an actor without
+   `bCollideActors` passes at once (the gate), and the check's candidates, skips and passes are read there. Still
+   open there: the per-class blocking test, the "is encroached" method and the push, the touch routine's writes, the
+   physics modes of the move, the hash query's primitive selection and the per-component attach step (its open
+   questions 1, 2, 3, 5 and 6).
 2. The relocation step for a `bNoCollisionFail` spawn of an actor that collides with actors.
 3. The bounding-cylinder rule for a template without a cylinder collision component.
 4. The trace filters are read (section 7), except three points: the primitive skip flag (bit 10 of its collision flag
