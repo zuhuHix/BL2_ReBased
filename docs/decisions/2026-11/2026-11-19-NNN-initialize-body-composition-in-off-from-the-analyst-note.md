@@ -28,7 +28,11 @@ on #522. The decision number is a placeholder.
       socket name the skeletal attach answers false and the owner retry (an actor attach with no socket name) takes it;
     - the `Parent` link, identifier `Parent` with both components skeletal (`NotRead`, hub ruling 3);
     - the pawn's `PostInitBodyComposition`: identifier `Mesh` on a skeletal component is `LayerAbsent`, "the new
-      Mesh's animation nodes (...)", layer "an animation-tree instance for the skeletal mesh".
+      Mesh's animation nodes (...)", layer "an animation-tree instance for the skeletal mesh";
+    - the hook's release of the pawn's old `Mesh` or `CylinderComponent` (a detach, then removal from a global list),
+      when the pawn already holds one, is `NotRead`, "InitializeBodyComposition: releasing the old <field>" (hub,
+      20:03Z: stock pawn defaults give a cylinder, so the cylinder branch is not plain writes). For `Mesh` the
+      animation-node `LayerAbsent` is reported first, so Maya's first stop is unchanged.
 - **The writes**, in the note's order, per made attachment in list order:
   - a component: made from its template (outered to the owner, the template's properties); its entry appended (4.1's
     table: `Name`, `Type`, `DeleteByOwner`, `ComponentData` with the new component, `BodyCompositionIndex` copied, the
@@ -52,18 +56,17 @@ on #522. The decision number is a placeholder.
 - **This lane's narrower answers** (named `NotRead`): a component parent that is not a skeletal component; a `Mesh`
   attachment whose component is not skeletal; a skeletal parent whose template is not loaded (its mesh asset cannot be
   read without a load); an instance-data type outside the note's list; a mode other than 0.
-- **Port answers, UNVERIFIED:** the release of the old `CylinderComponent` (its detach and the global list) is not
-  modelled; the global "attaching later" state is never set (section 7, item 5).
-- **A note order:** section 7 lists the attach before the `Parent` link, so Maya's attachment 1 (socket `Root` on the
-  new skeletal mesh) would meet the socket-table `LayerAbsent` before the `Parent` link `NotRead`. The note's closing
-  line names the `Parent` link as the next refusal; this lane follows the listed order.
+- **Port answer, UNVERIFIED:** the global "attaching later" state is never set (section 7, item 5).
+- **The order** (hub, 20:03Z): with an animation-tree layer, Maya's attachment 1 meets its socket attach (the
+  socket-table `LayerAbsent`, the mesh-data reader) before its `Parent` link, as section 7 lists them.
 - **`InitializePawnMeshes`** (#522) runs the build instead of its `LayerAbsent`, after one more write-free check: a
   body class that sets `UseRootMotion` or `UseRootRotation` is `NotYet { NotRead }` (the two mesh fields are named by
   fit only).
-- **Tests:** 14 in `world/body_composition_tests.rs`, on invented classes and structs: the cylinder made, entered,
+- **Tests:** 15 in `world/body_composition_tests.rs`, on invented classes and structs: the cylinder made, entered,
   collided, attached and posted; `bUseMeshForCollision`; the collision table for three types; a switch's copy and its
   gating; the packing's edge cases; the 32-switch limit; a custom head; the owner retry with `HeadMesh` and
-  `LightEnvironment`; a missing template; the animation-node `LayerAbsent` before any write; eight named refusals,
+  `LightEnvironment`; a missing template; the animation-node `LayerAbsent` before any write; the old cylinder's release `NotRead` (and an old `Mesh` still
+  meeting the animation nodes first); eight named refusals,
   write-free; the tracker; the script native's `NotPorted`.
 - **The slice** (installed, Off, strict, with #528 @ 9cd49c14 merged and `Engine.IsSplitScreen()` bound false, both
   locally only): 1 ok / 10 NotYet / 3 errors. Links 1, 3, 4, 5, 13 and 14 now stop in `maya:8` at the

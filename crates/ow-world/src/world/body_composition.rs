@@ -21,7 +21,8 @@
 //! **The preflight** ([`plan`]) reads and writes nothing, loads included: the call-wide checks (shapes, a rebuild, a
 //! client-side apply, a mode other than 0), then the walk (the note's section 3: bases, switches, records), and for
 //! each attachment the walk makes, in list order: object and template types, a hit region, both attach attempts, the
-//! `Parent` link, and the pawn's `PostInitBodyComposition` (the new `Mesh`'s animation nodes are `LayerAbsent`).
+//! `Parent` link, and the pawn's `PostInitBodyComposition` (the new `Mesh`'s animation nodes are `LayerAbsent`; the
+//! release of an old `Mesh` or `CylinderComponent` the pawn already holds is `NotRead`, [`releasing_old`]).
 //!
 //! **The writes** ([`build`]), in the note's order: per made attachment, in list order: a component is made from its
 //! template, its entry appended, its collision set, attached (the parent's attach, else the owner retry), then the
@@ -80,6 +81,12 @@ pub const ANIM_LAYER: &str = "an animation-tree instance for the skeletal mesh";
 pub const MENU_MODES: &str = "InitializeBodyComposition: the menu modes' visibility toggles";
 pub const MESH_NOT_SKELETAL: &str =
     "InitializeBodyComposition: a Mesh attachment whose component is not a skeletal mesh component";
+
+/// `"InitializeBodyComposition: releasing the old <field>"` (`Mesh` or `CylinderComponent`): the pawn hook detaches the
+/// pawn's old component and removes it from a global list, a step the note does not give a port answer for (hub, 20:03Z).
+pub fn releasing_old(field: &str) -> String {
+    format!("InitializeBodyComposition: releasing the old {field}")
+}
 
 /// `"InitializeBodyComposition: the socket and bone tables of <mesh>"`.
 pub fn socket_tables(mesh: &str) -> String {
@@ -494,14 +501,25 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 }
                 // The pawn's PostInitBodyComposition (section 4.5), mode 0.
                 let mut post = PostInit::default();
+                // A pawn field the hook releases first (a detach and a global list) is set: refused until the note
+                // gives a port answer (hub, 20:03Z). For `Mesh` the animation-node refusal is reported first.
+                let old_set = |name: &str| -> Result<bool, VmError> {
+                    Ok(read_prop(vm, owner, name)?.and_then(|v| object_of(&v)).is_some())
+                };
                 if name_is(vm, &a.parent_id, MESH_ID) {
                     if skeletal {
                         return Err(NotYet::layer_absent(ANIM_NODES, ANIM_LAYER, RECORD).into());
+                    }
+                    if old_set("Mesh")? {
+                        return Err(not_read(releasing_old("Mesh")));
                     }
                     return Err(not_read(MESH_NOT_SKELETAL));
                 }
                 if name_is(vm, &a.parent_id, CYLINDER_ID) {
                     require_prop(vm, owner_class, "CylinderComponent")?;
+                    if old_set("CylinderComponent")? {
+                        return Err(not_read(releasing_old("CylinderComponent")));
+                    }
                     if !mesh_for_collision {
                         require_prop(vm, owner_class, "CollisionComponent")?;
                     }

@@ -40,8 +40,8 @@ AI-assisted (Claude Code, Opus 5.5). `InstanceDataHelper.InitializeBodyCompositi
 write-free preflight, then the writes in the note's order under #518's counters. `InitializePawnMeshes` runs the build.
 
 Results:
-- `cargo test -p ow-world`: 263 passed / 0 failed / 5 ignored.
-- `cargo test --workspace`: 2,458 passed / 0 failed / 48 ignored (one existing ow-defs test warning).
+- `cargo test -p ow-world`: 264 passed / 0 failed / 5 ignored (with the hub's 20:03Z release refusal).
+- `cargo test --workspace`: 2,459 passed / 0 failed / 48 ignored (one existing ow-defs test warning).
 - Installed Off `--slice-gate` strict (release build; #528 @ 9cd49c14 merged and `Engine.IsSplitScreen()` bound false,
   both locally only; under the machine lock): 1 ok / 10 NotYet / 3 errors.
   - Links 1, 3, 4, 5, 13 and 14: 0 of their driver steps, stopping in `maya:8` at the preflight's `LayerAbsent` "the

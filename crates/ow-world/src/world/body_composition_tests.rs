@@ -150,6 +150,7 @@ fn env() -> Env {
         ("InstanceDataState", PropKind::Struct(set)),
         ("ReplicatedInstanceDataState", PropKind::Struct(rep)),
         ("CylinderComponent", o.clone()),
+        ("Mesh", o.clone()),
         ("HeadMesh", o.clone()),
         ("LightEnvironment", o.clone()),
     ]);
@@ -509,6 +510,33 @@ fn the_new_mesh_s_animation_nodes_are_layer_absent_and_write_free() {
     assert!(matches!(missing, Missing::LayerAbsent(l) if l == ANIM_LAYER), "{missing:?}");
     assert_eq!(what, ANIM_NODES);
     assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(None));
+}
+
+/// Hub, 20:03Z: a pawn that already holds a `CylinderComponent` (stock pawn defaults give one) meets the release of the
+/// old one, `NotRead`, before any write; with an old `Mesh` set, attachment 0's animation-node `LayerAbsent` still comes
+/// first (Maya's first stop is unchanged).
+#[test]
+fn releasing_the_old_cylinder_is_not_read_and_the_mesh_stop_is_unchanged() {
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let old = make(&mut e.vm, e.cylinder, "OldCylinder");
+    put(&mut e.vm, p, "CylinderComponent", Value::Object(Some(old)));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, releasing_old("CylinderComponent"));
+    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(Some(old)), "untouched");
+
+    let mut e = env();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0]);
+    let old = make(&mut e.vm, e.skeletal, "OldMesh");
+    put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    let (missing, what) = refused(&mut e, p);
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == ANIM_LAYER), "{missing:?}");
+    assert_eq!(what, ANIM_NODES);
 }
 
 /// The preflight's other refusals, each its named kind and text, write-free.
