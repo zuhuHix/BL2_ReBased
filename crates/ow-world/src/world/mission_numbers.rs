@@ -1,17 +1,22 @@
 //! Owner: lane IMPL-MISSION-NUMBERS (decision 2026-11-19-93). The two mission numbers of the online game settings
-//! refresh, and the mission screen's text list the accept reaches after it. AI-assisted (Claude Code).
+//! refresh, and the mission screen's calls the accept reaches after it. AI-assisted (Claude Code).
 //!
 //! Coded from NATIVE_MISSION_NUMBERS.md alone (analyst lane ANALYST-MISSION-NUMBERS, decision 2026-11-19-86). No
 //! native code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: the caller
 //! (`datastore::register`) binds nothing here under `ParityMode::Reference`, so the VM's stub policy answers there.
 //!
+//! **The conservative form** (the hub's heads-up of 2026-11-19, while #473's last review round runs): the parts of the
+//! note that rest on an unresolved read, or on a "no read-back" argument, answer a named `NotYet` in Off. The rules
+//! behind the two unread gates are coded and unit-tested behind [`Reads`], which the natives pass as [`Reads::OFF`]
+//! (nothing taken as read) until the note settles them.
+//!
 //! **`WillowPlayerController.GetActiveMissionNumber()`** (section 1). It writes nothing, so nothing is preflighted and
 //! nothing rolled back.
-//! 1. The world's `WorldInfo` (the level's, as `GetWorldInfo` answers), its `GRI` as a `WillowGameReplicationInfo`,
-//!    and that object's `MissionTracker`. The tracker's `IsDataValid()` is called through the VM. No world, a
-//!    replication info of another class, no tracker, or data not valid: the fallback (step 4). The note's engine-wide
-//!    condition (an unresolved global, read as "the game is running") is taken to hold in a running port world
-//!    (UNVERIFIED, the note's open question 1).
+//! 0. **The engine-wide condition** is a global the note did not resolve (open question 1): [`ENGINE_GATE`],
+//!    `NotYet { NotRead }`, before anything is read.
+//! 1. Taken as read: the world's `WorldInfo` (the level's, as `GetWorldInfo` answers), its `GRI` as a
+//!    `WillowGameReplicationInfo`, and that object's `MissionTracker`. The tracker's `IsDataValid()` is called
+//!    through the VM. No world, a replication info of another class, no tracker, or data not valid: the fallback.
 //! 2. The tracker's `ActiveMission` set: that definition's `MissionNumber`, with no status or plot-critical check.
 //! 3. Otherwise the tracker's `GetAllMissions(out)` list, through the VM, in its order. A definition with
 //!    `bPlotCritical` and no `DlcExpansion` has its `GetMissionStatus` asked through the VM. In progress (1, 2, 3)
@@ -20,9 +25,10 @@
 //!    steps 2 and 3 answer -1.
 //!
 //! **`WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`** (section 2):
-//! 1. A negative or omitted index is the controller's `GetCurrentPlaythrough()`, called through the VM. A controller
-//!    whose class declares no such function answers [`PLAYTHROUGH_QUERY`] (`NotYet { NotRead }`): the note reads the
-//!    virtual as that query, UNVERIFIED.
+//! 1. A negative or omitted index needs the controller's current-playthrough virtual, which the note reads as
+//!    `GetCurrentPlaythrough` without resolving it (open question 2): [`PLAYTHROUGH_QUERY`], `NotYet { NotRead }`.
+//!    Taken as read, it is the controller's `GetCurrentPlaythrough()` through the VM, and a class without it answers
+//!    the same `NotYet`.
 //! 2. Out of range (negative, or not below the length of `MissionPlaythroughs`): 0.
 //! 3. That playthrough's `MissionList`, in order. A record with a `MissionDef` that has `bPlotCritical` and no
 //!    `DlcExpansion` is graded by its own `Status` field. In progress answers its `MissionNumber` at once, Complete
@@ -30,29 +36,23 @@
 //!
 //! **Calls and data.** A tracker or controller function the VM does not bind is the VM's own answer (its `NotYet` or
 //! refusal), propagated unchanged. Inside the settings refresh, the refresh's write mark (decision 2026-11-19-80) turns
-//! such a `NotYet` into a terminal stop after partial writes. A definition or record that lacks one of the fields read
-//! here, or holds the wrong kind there, is bad data: a `VmError::Script` naming the field. A `None` entry in the
-//! tracker's list is bad data too (the note grades definitions only).
+//! such a `NotYet`, and these natives' own, into a terminal stop after partial writes, kind and record kept. A
+//! definition or record that lacks one of the fields read here, or holds the wrong kind there, is bad data: a
+//! `VmError::Script` naming the field. A `None` entry in the tracker's list is bad data too.
 //!
-//! **`QuestAcceptGFxMovie.UpdateMissionTextList()`** (section 3; the slice's accept reaches it through the
-//! controller's `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`):
-//! - With the movie's `MissionTextList` `None` it returns and changes nothing (the record's first step). That is the
-//!   port's case: the mission bridge's screen is a stand-in made from class defaults, and the movie's `Start`, the
-//!   only script seen to make the list, is not run. This is a **port Off answer for a headless world with no Flash
-//!   movie hosted**, UNVERIFIED (hub ruling of 2026-11-19 on UI-only side effects). It is read on the live object at
-//!   the call, so nothing is preflighted.
-//! - **The read-back check** (the note's, over every decoded script function of the code packages): the native's
-//!   fields are the movie's `MissionCategories` and `MissionTextList`. No script reads `MissionCategories`.
-//!   `MissionTextList` is read only by the movie's own script; the one reader links 10 to 12 can reach,
-//!   `GetSelectedIndex` (from the turn-in's `ClientSpawnMissionRewardUI`), reads its `HighlightedEntry`, which is None
-//!   with the list None whether or not the native ran. So nothing on the slice path reads back what the game would have
-//!   changed. Not covered: the 10 script functions the decoder cannot read (the note's open question 5).
-//! - With `MissionTextList` set (not the port's case) it answers [`TEXT_LIST`] (`NotYet { LayerAbsent }`), before
-//!   the native writes anything. It comes after the accept's own writes, so it is terminal: marked "stopped after
-//!   partial writes" ([`super::datastore::PARTIAL_WRITES`]), its kind kept, nothing rolled back (the note's step 3).
-//! - Then `SetFocus` asks `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`: the note's Off answers
-//!   for them (None, nothing) are not bound here. They stay Reference-only stubs, so in Off they would be the next
-//!   stop once the accept gets this far.
+//! **The mission screen** (section 3). The slice's accept reaches it through the controller's
+//! `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`, after the accept's own
+//! writes. The port's screen is a stand-in made from class defaults, so its script runs only on that path.
+//! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`:** [`TEXT_LIST`], `NotYet { LayerAbsent }`, whether or not
+//!   `MissionTextList` is set. The note's "nothing" for a missing list rests on a read-back check that is under review,
+//!   so it is not taken. It is marked "stopped after partial writes" ([`super::datastore::PARTIAL_WRITES`]), kind and
+//!   record kept, nothing rolled back.
+//! - **The focus pair that `SetFocus` calls next,** `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`:
+//!   [`FOCUS`], `NotYet { LayerAbsent }`, never the note's None and nothing. On the mission screen (a
+//!   `QuestAcceptGFxMovie`) it is marked in the same way. On any other movie nothing is known about the writes before
+//!   the call, so it is not marked.
+//! - **What the accept checks after the screen returns** (the note's section 3, step 5) is not read. Nothing here
+//!   answers for it.
 
 use ow_core::NotYet;
 use ow_object::ids::{ObjRef, PropAddr};
@@ -72,12 +72,36 @@ pub const PLOT_CRITICAL_NUMBER: &str = "WillowGame.WillowPlayerController.GetAct
 pub const UPDATE_MISSION_TEXT_LIST: &str = "WillowGame.QuestAcceptGFxMovie.UpdateMissionTextList";
 /// The replication info class the tracker hangs on.
 pub const GRI_CLASS: &str = "WillowGame.WillowGameReplicationInfo";
-/// The `NotYet` of a controller whose class declares no `GetCurrentPlaythrough` (section 2, Off step 1).
+/// `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`, the focus pair of the screen's `SetFocus`.
+pub const GET_VARIABLE_OBJECT: &str = "GFxUI.GFxMoviePlayer.GetVariableObject";
+pub const FOCUS_ON: &str = "WillowGame.WillowGFxMovie3D.FocusOn";
+/// The mission screen's class.
+pub const SCREEN_CLASS: &str = "WillowGame.QuestAcceptGFxMovie";
+/// The `NotYet` of the unresolved engine-wide condition of `GetActiveMissionNumber` (section 1, open question 1).
+pub const ENGINE_GATE: &str = "GetActiveMissionNumber's engine-wide condition (an unresolved global)";
+/// The `NotYet` of the controller's unresolved current-playthrough virtual (section 2, open question 2).
 pub const PLAYTHROUGH_QUERY: &str = "the controller's current playthrough query";
-/// The `NotYet` of a mission screen whose text list is set (section 3, Off step 3).
+/// The `NotYet` of the mission screen's text list update (section 3).
 pub const TEXT_LIST: &str = "the mission screen's Flash text list (not hosted)";
-/// The layer the port lacks for [`TEXT_LIST`].
+/// The `NotYet` of the screen's focus pair (section 3, step 4).
+pub const FOCUS: &str = "the mission screen's Flash focus (GetVariableObject, FocusOn; not hosted)";
+/// The layer the port lacks for [`TEXT_LIST`] and [`FOCUS`].
 pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
+
+/// Which of the note's unresolved reads are taken as read. The natives pass [`Reads::OFF`]; the tests also run the
+/// rules behind them with [`Reads::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reads {
+    /// The engine-wide condition of `GetActiveMissionNumber` (section 1, step 1).
+    pub engine_gate: bool,
+    /// The controller's current-playthrough virtual, read as `GetCurrentPlaythrough` (section 2, step 1).
+    pub playthrough: bool,
+}
+
+impl Reads {
+    pub const OFF: Reads = Reads { engine_gate: false, playthrough: false };
+    pub const ALL: Reads = Reads { engine_gate: true, playthrough: true };
+}
 
 /// The mission status numbers the scans grade (the note's status values).
 const IN_PROGRESS: [u8; 3] = [1, 2, 3];
@@ -222,22 +246,28 @@ fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError
     Ok(scan.end())
 }
 
-/// `GetActiveMissionNumber` on `controller` (module documentation).
-pub fn active_mission_number(vm: &mut Vm, controller: ObjRef) -> Result<i32, VmError> {
+/// `GetActiveMissionNumber` on `controller` (module documentation), with `reads` taken as read.
+pub fn active_mission_number(vm: &mut Vm, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActiveMissionNumber";
+    if !reads.engine_gate {
+        return Err(NotYet::not_read(ENGINE_GATE, RECORD).into());
+    }
     if let Some(tracker) = tracker(vm, UNIT)? {
         let n = from_tracker(vm, tracker, UNIT)?;
         if n != -1 {
             return Ok(n);
         }
     }
-    plot_critical_mission_number(vm, controller, -1)
+    plot_critical_mission_number(vm, controller, -1, reads)
 }
 
-/// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation).
-pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32) -> Result<i32, VmError> {
+/// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation), with `reads` taken as read.
+pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActivePlotCriticalMissionNumber";
     let index = if index < 0 {
+        if !reads.playthrough {
+            return Err(NotYet::not_read(PLAYTHROUGH_QUERY, RECORD).into());
+        }
         let Some(answer) = call_method(vm, controller, "GetCurrentPlaythrough", vec![])? else {
             return Err(NotYet::not_read(PLAYTHROUGH_QUERY, RECORD).into());
         };
@@ -278,27 +308,32 @@ fn struct_field(vm: &Vm, v: &Value, name: &str, unit: &str) -> Result<Value, VmE
 
 pub(crate) fn n_active_mission_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(ACTIVE_MISSION_NUMBER, "called with no controller".to_string()))?;
-    Ok(Value::Int(active_mission_number(c.vm, me)?))
+    Ok(Value::Int(active_mission_number(c.vm, me, Reads::OFF)?))
 }
 
 pub(crate) fn n_plot_critical_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(PLOT_CRITICAL_NUMBER, "called with no controller".to_string()))?;
     let index = if c.has(0) { int_of(c.arg(0)?, "PlaythroughIndex", PLOT_CRITICAL_NUMBER)? } else { -1 };
-    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index)?))
+    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index, Reads::OFF)?))
+}
+
+/// The screen's `NotYet` of `what`: marked after the accept's writes when `this` is the mission screen (module
+/// documentation), plain on any other receiver.
+fn screen_not_yet(vm: &Vm, this: Option<ObjRef>, what: &str) -> Result<Value, VmError> {
+    let on_screen = match (this, vm.space.classes.by_path(SCREEN_CLASS)) {
+        (Some(o), Some(screen)) => vm.space.classes.is_child_of(vm.space.heap.get(o)?.class, screen),
+        _ => false,
+    };
+    let what = if on_screen { format!("{}: {what}", super::datastore::PARTIAL_WRITES) } else { what.to_string() };
+    Err(NotYet::layer_absent(what, TEXT_LIST_LAYER, RECORD).into())
 }
 
 pub(crate) fn n_update_mission_text_list(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let me = c.this.ok_or_else(|| bad(UPDATE_MISSION_TEXT_LIST, "called with no movie".to_string()))?;
-    let list = object_of(field(c.vm, me, "MissionTextList", UPDATE_MISSION_TEXT_LIST)?, "MissionTextList", UPDATE_MISSION_TEXT_LIST)?;
-    match list {
-        None => Ok(Value::None),
-        Some(_) => Err(NotYet::layer_absent(
-            format!("{}: {TEXT_LIST}", super::datastore::PARTIAL_WRITES),
-            TEXT_LIST_LAYER,
-            RECORD,
-        )
-        .into()),
-    }
+    screen_not_yet(c.vm, c.this, TEXT_LIST)
+}
+
+pub(crate) fn n_focus(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    screen_not_yet(c.vm, c.this, FOCUS)
 }
 
 #[cfg(test)]

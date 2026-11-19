@@ -98,7 +98,11 @@ fn willow() -> Vec<u8> {
     let index = [param("Int", "PlaythroughIndex", CPF_OPT, 0)];
     t.function(pc, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     t.class("ToyBareController", object);
-    let movie = t.class("QuestAcceptGFxMovie", object);
+    let movie3d = t.class("WillowGFxMovie3D", object);
+    let spec = FunctionSpec::new(NATIVE, "FocusOn");
+    t.function(movie3d, "FocusOn", &[param("Object", "Target", 0, object)], None, &[], &spec, |_| None);
+    t.class("ToyOtherMovie", movie3d);
+    let movie = t.class("QuestAcceptGFxMovie", movie3d);
     t.prop("Object", movie, "MissionTextList", 0, object);
     let spec = FunctionSpec::new(NATIVE, "UpdateMissionTextList");
     t.function(movie, "UpdateMissionTextList", &[], None, &[], &spec, |_| None);
@@ -256,14 +260,16 @@ impl Toy {
         Ok(self.vm.call(f, Some(this), args)?.ret)
     }
 
+    /// The rule of section 1 with the note's two unresolved reads taken as read.
     fn active(&mut self) -> Result<Value, VmError> {
         let pc = self.pc;
-        self.call(ACTIVE_MISSION_NUMBER, pc, vec![])
+        active_mission_number(&mut self.vm, pc, Reads::ALL).map(Value::Int)
     }
 
+    /// The rule of section 2 with the current-playthrough virtual taken as read (an omitted index is -1).
     fn plot(&mut self, index: Option<i32>) -> Result<Value, VmError> {
         let pc = self.pc;
-        self.call(PLOT_CRITICAL_NUMBER, pc, index.map(Value::Int).into_iter().collect())
+        plot_critical_mission_number(&mut self.vm, pc, index.unwrap_or(-1), Reads::ALL).map(Value::Int)
     }
 }
 
@@ -392,7 +398,7 @@ fn a_controller_without_the_playthrough_query_is_not_read() {
     let mut t = toy(true);
     let bare = t.vm.find_class("WillowGame.ToyBareController").unwrap();
     let bare = t.vm.space.alloc(bare, "ToyBare", None, Origin::Runtime).unwrap();
-    match plot_critical_mission_number(&mut t.vm, bare, -1) {
+    match plot_critical_mission_number(&mut t.vm, bare, -1, Reads::ALL) {
         Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == PLAYTHROUGH_QUERY, "{n}"),
         other => panic!("{other:?}"),
     }
@@ -429,21 +435,62 @@ fn bad_data_is_a_script_error() {
     script_error(t.active(), "holds None");
 }
 
-/// Section 3: with `MissionTextList` None the native changes nothing; with a list set it is the named `LayerAbsent`,
-/// terminal after the accept's writes (marked, kind kept).
-#[test]
-fn the_text_list_is_nothing_when_none_and_layer_absent_when_set() {
-    let mut t = toy(true);
-    let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
-    let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
-    assert_eq!(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]).unwrap(), Value::None);
-    let wi = t.world_info;
-    set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
-    match t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]) {
+fn not_yet(r: Result<Value, VmError>, layer: bool, what: &str) {
+    match r {
         Err(VmError::NotYet(n)) => {
-            assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
-            assert_eq!(n.what, format!("{}: {TEXT_LIST}", crate::world::datastore::PARTIAL_WRITES));
+            if layer {
+                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+            } else {
+                assert_eq!(n.missing, Missing::NotRead, "{n}");
+            }
+            assert_eq!(n.what, what);
+            assert_eq!(n.record, RECORD);
         }
+        other => panic!("expected the NotYet {what:?}, got {other:?}"),
+    }
+}
+
+/// The conservative form: the bound natives answer the unresolved reads as named `NotRead`s before reading anything,
+/// whatever the world holds. An explicit, non-negative playthrough index needs no virtual and is answered.
+#[test]
+fn the_natives_answer_the_unresolved_reads_as_not_read() {
+    let mut t = toy(true);
+    let plot = t.mission(true, false, 12);
+    t.track(true, &[(plot, 1)]);
+    t.records(&[&[(Some(plot), 1)]]);
+    let pc = t.pc;
+    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, ENGINE_GATE);
+    assert_eq!(t.tracker_state.borrow().asked, 0, "nothing asked before the gate");
+    not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
+    not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(-1)]), false, PLAYTHROUGH_QUERY);
+    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(12));
+    // With the gate read, the fallback meets the unread virtual as well.
+    t.track(false, &[]);
+    match active_mission_number(&mut t.vm, pc, Reads { engine_gate: true, playthrough: false }) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.what, PLAYTHROUGH_QUERY),
         other => panic!("{other:?}"),
     }
+}
+
+/// Section 3 in the conservative form: the text list update is the named `LayerAbsent` with the list None or set, and
+/// the focus pair is too; on the mission screen both are marked after the accept's writes, on another movie the focus
+/// pair is not marked. Nothing on the screen changes.
+#[test]
+fn the_screen_calls_are_layer_absent_and_marked_on_the_mission_screen() {
+    let mut t = toy(true);
+    let marked = |what: &str| format!("{}: {what}", crate::world::datastore::PARTIAL_WRITES);
+    let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
+    let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
+    not_yet(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST));
+    let wi = t.world_info;
+    set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
+    not_yet(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST));
+    let focus = "WillowGame.WillowGFxMovie3D.FocusOn";
+    not_yet(t.call(focus, movie, vec![Value::Object(None)]), true, &marked(FOCUS));
+    let other = t.vm.find_class("WillowGame.ToyOtherMovie").unwrap();
+    let other = t.vm.space.alloc(other, "ToyOther", None, Origin::Runtime).unwrap();
+    not_yet(t.call(focus, other, vec![Value::Object(None)]), true, FOCUS);
+    let class = t.vm.space.heap.get(movie).unwrap().class;
+    let p = t.vm.space.prop(class, "MissionTextList").unwrap();
+    assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
 }

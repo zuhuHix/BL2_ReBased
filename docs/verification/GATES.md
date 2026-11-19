@@ -12,12 +12,13 @@ unbound native `GameEngine.GetOnlineSubsystem()` (graded error; NATIVE_LOGIN_STA
 earlier, at `BlackMarketUpgradeAttributeValueResolver`. ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/link1/`.
 **IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
-Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and `UpdateMissionTextList` in Off, from
-NATIVE_MISSION_NUMBERS.md (#473 at eb24ea43). `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
---locked -j 4` 2,196 passed / 0 failed / 46 ignored (10 new tests in `ow-world`); `crate_edges_test.py` 19 OK. Installed
-Off `--slice-gate` strict (release build): 0 ok / 14 NotYet / 0 errors. Links 10 to 12 get past both mission numbers and
-still pass 3 of 4 driver steps, stopping in `accept` at the bridge's own `MissionTracker.GetAllMissions` `LayerAbsent`
-("stopped after partial writes"); the other links are unchanged. ctest and verify_packages not run (no C++ change). No
+Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission screen's three calls in Off,
+from NATIVE_MISSION_NUMBERS.md (#473 at eb24ea43), in the hub's conservative form: the unresolved engine-wide condition
+and playthrough virtual are `NotRead`, and the screen calls are a marked `LayerAbsent`. `cargo build --workspace --locked
+-j 4` clean; `cargo test --workspace --locked -j 4` 2,197 passed / 0 failed / 46 ignored (11 new tests in `ow-world`);
+`crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 14 NotYet / 0 errors. Links 10
+to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after partial writes: GetActiveMissionNumber's
+engine-wide condition" (`NotRead`); the other links are unchanged. ctest and verify_packages not run (no C++ change). No
 real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under ignored
 `local/p2/mission-numbers/`.
 
