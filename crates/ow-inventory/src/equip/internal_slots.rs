@@ -26,12 +26,18 @@
 //! modifier are all set; one with a None modifier is a no-op); P0, every definition the call will touch loaded
 //! ([`load_attribute`]; the note's ruling: definition loads are not writes), after the reads that name them; each
 //! qualifying slot's context; and the chain check of every entry of every planned removal and add
-//! ([`ow_attr::AttributeSystem::check_modifier_chain`], read-only, no outcome predicted). The installed weapons' slot
+//! ([`ow_attr::AttributeSystem::check_modifier_chain`], through each resolver's write-free
+//! `ValueResolver::probe_storage`; no outcome predicted). The noun resolver's probe neither creates a missing entry
+//! nor misses a replicated slot's refusal (review r1 of #483); definition loads it may make are not writes under the
+//! note's ruling. The installed weapons' slot
 //! attributes hold their resolvers as store handles not yet loaded, so P0 is needed there.
 //!
-//! **Writes**, W1 to W3, in the note's order. A `NotYet` after the first write is terminal, keeps its kind and record
-//! and gets the "stopped after partial writes: " prefix (`ow_world::pools::after_partial_writes`); nothing is rolled
-//! back; other errors propagate unchanged.
+//! **Writes**, W1 to W3, in the note's order. A `NotYet` after the first write is terminal, matched by its typed
+//! variant, keeps its kind and record and gets the "stopped after partial writes: " prefix
+//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. The mark starts
+//! once the first removal returned (it may have written) or, with no removal, at W2: a refusal of the first removal is
+//! returned unmarked. With P0, P8 and P9 passed, such a `NotYet` comes only from a stack write's own consequences (a
+//! change notification's script), as the note's section 3 says.
 //!
 //! **Reference** (architecture R3): unbound, the stub policy answers it, as before.
 
@@ -87,9 +93,8 @@ fn qualifying(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Slot>, VmError> {
         let external = bool_field(vm, slot, "bExternalSlot", i)?;
         let attribute = object_of(&field(vm, slot, "AttributeToModify")?, INTERNAL_SLOTS)
             .map_err(|_| bad(INTERNAL_SLOTS, format!("slot {i}: AttributeToModify holds no object")))?;
-        let kind = match field(vm, slot, "ModifierType")? {
-            Value::Byte(b) => ModifierType::from_raw(i64::from(b))
-                .ok_or_else(|| bad(INTERNAL_SLOTS, format!("slot {i}: ModifierType {b} is outside the enum")))?,
+        let raw = match field(vm, slot, "ModifierType")? {
+            Value::Byte(b) => b,
             other => {
                 return Err(bad(INTERNAL_SLOTS, format!("slot {i}: ModifierType holds a {}, not a byte", other.kind_name())));
             }
@@ -104,6 +109,11 @@ fn qualifying(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Slot>, VmError> {
             }
         };
         if let (true, false, Some(attribute)) = (activated, external, attribute) {
+            // Off assumption (review r1 of #483), UNVERIFIED: a qualifying slot's type outside the enum is a data
+            // error. The note does not say what the native makes of one; `ow-attr`'s stack treats such a modifier as a
+            // no-op. A slot that does not qualify is not checked.
+            let kind = ModifierType::from_raw(i64::from(raw))
+                .ok_or_else(|| bad(INTERNAL_SLOTS, format!("slot {i}: ModifierType {raw} is outside the enum")))?;
             out.push(Slot { attribute, kind, value });
         }
     }
@@ -257,7 +267,7 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
             adds.push((slot, context));
         }
     }
-    // P9: the chain check of every entry of every planned removal and add (no stack touched; no outcome predicted).
+    // P9: the chain check of every entry of every planned removal and add (write-free probes; no outcome predicted).
     for &(context, attribute, _) in &removals {
         attrs.check_modifier_chain(attribute, context, &mut EvalCx::new(vm))?;
     }
@@ -270,12 +280,26 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
 /// W1 to W3 (module documentation); `existing` is what the out argument held. Returns the out array's new value.
 fn writes(vm: &mut Vm, item: ObjRef, flag: bool, plan: Plan, existing: Vec<Value>) -> Result<Value, VmError> {
     let attrs = vm.attrs.clone();
-    // W1: the removals, notifications on, results ignored.
-    for (context, attribute, modifier) in plan.removals {
-        attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(vm))?;
+    // W1: the removals, notifications on, results ignored. The partial-writes mark starts once the first operation
+    // may have written (review r1 of #483): a refusal of the very first removal, before it touched anything, is
+    // returned unmarked.
+    let mut first = true;
+    for &(context, attribute, modifier) in &plan.removals {
+        let r = attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(vm));
+        match r {
+            Ok(_) => first = false,
+            Err(e) if first => return Err(e.into()),
+            Err(e) => return Err(ow_world::pools::after_partial_writes(e.into())),
+        }
     }
-    // W2: the list emptied.
+    // W2: the list emptied. From here on every failure comes after a write.
     vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(Vec::new()))?;
+    writes_after(vm, item, flag, plan, existing).map_err(ow_world::pools::after_partial_writes)
+}
+
+/// W3, after W2's write (module documentation).
+fn writes_after(vm: &mut Vm, item: ObjRef, flag: bool, plan: Plan, existing: Vec<Value>) -> Result<Value, VmError> {
+    let attrs = vm.attrs.clone();
     // W3: the adds.
     let mut out = existing;
     let mut backup = Applied::default();
@@ -306,7 +330,7 @@ fn native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let existing = ow_attr::eval::elements("AttributeModifiers", call.arg(2)?)?.to_vec();
     let function = call.function;
     let plan = plan(call.vm, function, item, flag, max)?;
-    let out = writes(call.vm, item, flag, plan, existing).map_err(ow_world::pools::after_partial_writes)?;
+    let out = writes(call.vm, item, flag, plan, existing)?;
     call.set_out(2, out)?;
     Ok(Value::None)
 }
@@ -322,3 +346,6 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 #[cfg(test)]
 #[path = "internal_slots_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "internal_slots_store_tests.rs"]
+mod store_tests;

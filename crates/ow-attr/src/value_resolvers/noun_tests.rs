@@ -978,3 +978,31 @@ fn reference_writes_are_not_ported() {
         Err(AttrError::NotYet(ref e)) if e.missing == Missing::NotPorted
     ));
 }
+
+/// The read-only probe (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of #483): the chain check of an add on a
+/// context with no entry evaluates the default but appends nothing.
+#[test]
+fn off_the_chain_check_does_not_create_a_missing_entry() {
+    let mut n = off();
+    let default = n.fx.data(InitData::constant(3.0));
+    let attr = n.attr("Attribute_HealthMultiplier", default);
+    let mind = n.mind(None, vec![]);
+    let sys = system();
+    sys.check_modifier_chain(attr, mind, &mut EvalCx::new(&mut n.fx.w)).unwrap();
+    assert!(n.entries(mind).is_empty(), "nothing appended");
+}
+
+/// The probe refuses an entry with a replicated slot, as a write to it would be refused, so a preflight sees it.
+#[test]
+fn off_the_chain_check_refuses_a_replicated_slot() {
+    let mut n = off();
+    let default = n.fx.data(InitData::constant(3.0));
+    let attr = n.attr("Attribute_HealthMultiplier", default);
+    let e = Entry { slot: 2, ..Noun::created("Attribute_HealthMultiplier", 1.0) };
+    let noun = n.full_noun(&e);
+    let mind = n.mind(None, vec![noun]);
+    let sys = system();
+    let r = sys.check_modifier_chain(attr, mind, &mut EvalCx::new(&mut n.fx.w));
+    assert!(matches!(r, Err(AttrError::NotYet(_))), "{r:?}");
+    assert_eq!(n.entries(mind), vec![e], "unchanged");
+}

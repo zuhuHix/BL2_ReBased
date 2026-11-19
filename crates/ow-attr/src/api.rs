@@ -604,6 +604,20 @@ pub trait ValueResolver {
         let _ = (sys, resolver, context, cx);
         Ok(None)
     }
+
+    /// The read-only form of [`ValueResolver::storage`] for a preflight (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review
+    /// r1 of #483): it answers the same refusals an add or a remove through `storage` and its write would give, and
+    /// writes nothing. The default is `storage` itself, which writes nothing for every resolver class except
+    /// `NounAttributeValueResolver`, whose lookup creates a missing entry; that class overrides it.
+    fn probe_storage(
+        &self,
+        sys: &AttributeSystem,
+        resolver: ObjRef,
+        context: ObjRef,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<(), AttrError> {
+        self.storage(sys, resolver, context, cx).map(|_| ())
+    }
 }
 
 /// Where a writable attribute's number lives (NATIVE_ATTRIBUTES.md section 3).
