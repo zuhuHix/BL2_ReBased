@@ -170,6 +170,8 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(vm, m::ACTIVE_MISSION_NUMBER, Rc::new(m::n_active_mission_number))?;
         bind(vm, m::PLOT_CRITICAL_NUMBER, Rc::new(m::n_plot_critical_number))?;
         bind(vm, m::UPDATE_MISSION_TEXT_LIST, Rc::new(m::n_update_mission_text_list))?;
+        bind(vm, m::GET_VARIABLE_OBJECT, Rc::new(m::n_focus))?;
+        bind(vm, m::FOCUS_ON, Rc::new(m::n_focus))?;
     }
     for path in PROVIDER_FUNCTIONS {
         let Ok(f) = vm.find_function(path) else { continue };
