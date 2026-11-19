@@ -263,6 +263,12 @@ struct Function {
 /// (`Value::None` for a function with no return value).
 pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
 
+/// A class's own answer to `Object.QueryInterface` (the engine asks the object's class for it; lane
+/// IMPL-PAWN-AI-INTERFACE, decision 2026-11-19-62): called with the asked object and the interface class, `Ok(None)`
+/// for no answer. Registered per class with [`Vm::register_interface_rule`]; an object of a class with none (and no
+/// parent with one) answers by [`Vm::plain_interface`].
+pub type InterfaceRuleFn = Rc<dyn Fn(&mut Vm, ObjRef, ClassId) -> Result<Option<ObjRef>, VmError>>;
+
 /// What an engine iterator native (`Actor.AllActors`, `Actor.DynamicActors`) gives a `foreach`: the values the loop
 /// visits, in order, each assigned to the call's out parameter `out_param` (C++ `IteratorResult`).
 #[non_exhaustive]
@@ -457,6 +463,10 @@ pub struct Vm {
     natives: DetMap<String, NativeFn>,
     iterators: DetMap<String, IteratorFn>,
     notify: DetMap<ObjectPath, AttrNotifyFn>,
+    /// Per-class `QueryInterface` answers ([`InterfaceRuleFn`]).
+    interface_rules: DetMap<ClassId, InterfaceRuleFn>,
+    /// The (object, interface) questions being answered, outermost first ([`Vm::query_interface`]).
+    interface_asking: Vec<(ObjRef, ClassId)>,
     services: Services,
     /// The next number per class for an object made without a name (`<Class>_<n>`).
     unique_names: DetMap<ClassId, u32>,
@@ -523,6 +533,8 @@ impl Vm {
             natives: DetMap::new(),
             iterators: DetMap::new(),
             notify: DetMap::new(),
+            interface_rules: DetMap::new(),
+            interface_asking: Vec::new(),
             services: Services::new(),
             unique_names: DetMap::new(),
             steps: 0,
@@ -736,6 +748,72 @@ impl Vm {
             return Ok(true);
         }
         crate::interp::is_child(self, class, iface)
+    }
+
+    /// Binds `class`'s own `QueryInterface` answer (an [`InterfaceRuleFn`]); its subclasses use it too unless one has
+    /// its own. A class registered twice is refused, like a native key.
+    pub fn register_interface_rule(&mut self, class: ClassId, f: InterfaceRuleFn) -> Result<(), VmError> {
+        if self.interface_rules.contains_key(&class) {
+            return Err(VmError::Registration {
+                key: self.space.classes.layout(class).path().to_string(),
+                reason: "duplicate interface rule registration",
+            });
+        }
+        self.interface_rules.insert(class, f);
+        Ok(())
+    }
+
+    /// Whether `class` itself (not a parent) has a `QueryInterface` answer registered.
+    pub fn has_interface_rule(&self, class: ClassId) -> bool {
+        self.interface_rules.contains_key(&class)
+    }
+
+    /// The `QueryInterface` answer `class` uses: its own, else its nearest parent's, else `None` (the plain answer).
+    pub fn interface_rule_for(&self, class: ClassId) -> Option<InterfaceRuleFn> {
+        let mut cursor = Some(class);
+        while let Some(c) = cursor {
+            if let Some(f) = self.interface_rules.get(&c) {
+                return Some(f.clone());
+            }
+            cursor = self.space.classes.layout(c).super_class();
+        }
+        None
+    }
+
+    /// Whether the question (`this`, `iface`) is being answered further up the running chain.
+    pub fn interface_asked(&self, this: ObjRef, iface: ClassId) -> bool {
+        self.interface_asking.contains(&(this, iface))
+    }
+
+    /// The plain `Object` answer to `QueryInterface(iface)` (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): `this` when its
+    /// class is `iface` or derives from it, or implements it ([`Vm::implements`], parents' tables included); else
+    /// none. A "no" through an engine-native stand-in class is `NotYet` (decision 2026-11-15-08), as the casts answer
+    /// it.
+    pub fn plain_interface(&mut self, this: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
+        let own = self.space.heap.get(this)?.class;
+        let yes = self.space.classes.is_child_of(own, iface) || self.implements(own, iface);
+        if !yes {
+            crate::interp::is_child(self, own, iface)?;
+        }
+        Ok(yes.then_some(this))
+    }
+
+    /// `this`'s answer to `QueryInterface(iface)`, as the `Object.QueryInterface` native gives it: its class's
+    /// registered answer ([`Vm::interface_rule_for`]), else [`Vm::plain_interface`]. A question already being answered
+    /// further up the same chain gets none at once, which ends a cycle (NATIVE_PAWN_AI_INTERFACE.md, section 2, "A
+    /// question asked twice", UNVERIFIED); the asker takes the none as its step's answer.
+    pub fn query_interface(&mut self, this: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
+        if self.interface_asked(this, iface) {
+            return Ok(None);
+        }
+        let class = self.space.heap.get(this)?.class;
+        let Some(rule) = self.interface_rule_for(class) else {
+            return self.plain_interface(this, iface);
+        };
+        self.interface_asking.push((this, iface));
+        let answer = rule(self, this, iface);
+        self.interface_asking.pop();
+        answer
     }
 
     /// Replaces a **script** function with a host binding that runs instead of its bytecode (C++ `overrideScript`,

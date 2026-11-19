@@ -2,6 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-PAWN-AI-INTERFACE (2026-11-19, desktop, on main bb46e11):** AI-assisted (Claude Code, Claude Opus 5.5).
+`Pawn`'s `QueryInterface` rule for `IAIInterface` in Off (a per-class rule registry in `ow-vm`, `ow-combat`
+`pawn_interface`); the open answers are named `NotYet`s; Reference unchanged. `cargo build --workspace` clean; `cargo
+test --workspace` 2,099 passed / 0 failed / 45 ignored; ctest at `-j 2` 173/173, 0 failed, 538.78 s; verify_packages 9
+packages, all class bodies exact; `crate_edges_test.py` 19 OK. Installed, Off: `--slice-gate` strict 0/14/0,
+byte-identical before and after (no row reaches `Behavior_AIHold`; link 11 stops at `accept`, `GetDataStoreClient`);
+`--mission-run` Fire unchanged. **Rebased onto main 74c7b0a** (`ow-vm` `api.rs` kept both sides): `cargo build
+--workspace` clean; `cargo test -p ow-vm -p ow-combat -p ow-ai -p ow-mission -p ow-cli` 753 passed / 0 failed / 7
+ignored. Decision 2026-11-19-62; logs under ignored `local/p2/pawn-ai/`.
+
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps
 (preflight, context, out write, value chain). After the rebase: `cargo test -p ow-combat -p ow-attr -p ow-inventory

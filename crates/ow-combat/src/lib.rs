@@ -15,5 +15,6 @@ pub mod firing;
 pub mod hit;
 pub mod holds;
 pub mod loot;
+pub mod pawn_interface;
 pub mod run;
 pub mod xp;

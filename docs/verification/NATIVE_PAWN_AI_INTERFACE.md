@@ -8,7 +8,9 @@ offsets or listing structure is reproduced here, and raw output stays under igno
 is UNVERIFIED in the running game.** The prepared bl-sdk session (last section) is the confirmation.
 
 **Clean room.** The lane that wrote this note does not implement it. A fresh implementer codes the rules from this
-note alone. Section 2 is the rule; the other records point at it rather than restating it.
+note alone. Section 2 is the rule; the other records point at it rather than restating it. It is implemented in Off
+by lane IMPL-PAWN-AI-INTERFACE (decision 2026-11-19-62, `ow-combat` `pawn_interface`), with every answer listed under
+"Open" a named `NotYet`.
 
 **What it answers.** NATIVE_AI_HOLDS.md's open row, "How a pawn context reaches `IAIInterface`". The class tables of
 the packages list `IAIInterface` for `GearboxMind` and `WillowMind`, and not for `WillowAIPawn` or any of its

@@ -108,6 +108,8 @@ fn engine() -> Vec<u8> {
     native(&mut t, controller, "IsPrimaryPlayer", &[], Some(("Bool", 0)), NATIVE);
     let pawn = t.class("Pawn", actor);
     t.prop("Object", pawn, "Controller", 0, object);
+    t.prop("Object", pawn, "DrivenVehicle", 0, object);
+    t.prop("Object", pawn, "Mesh", 0, object);
     let world = t.class("WorldInfo", actor);
     t.prop("Object", world, "GRI", 0, object);
     t.prop("Bool", world, "bIsMenuLevel", 0, 0);
@@ -175,6 +177,8 @@ fn gearbox() -> Vec<u8> {
     native(&mut t, globals, "GetGearboxGlobals", &[], Some(("Object", object)), NATIVE | STATIC);
     native(&mut t, globals, "GetBehaviorKernel", &[], Some(("Object", object)), NATIVE);
     let bpd = t.class("BehaviorProviderDefinition", object);
+    // The interface Behavior_AIHold's context is asked for (decision 2026-11-19-62); no toy class lists it.
+    t.class("IAIInterface", object);
     let path = toy_struct(&mut t, 0, "NameBasedObjectPath", None);
     t.prop("Name", path, "PathComponentNames", 0, 0);
     let provider = t.class("ToyPathHolder", object);
@@ -1180,7 +1184,8 @@ fn hold_seen(vm: &mut Vm) -> Rc<std::cell::RefCell<Vec<ObjRef>>> {
 }
 
 /// `Behavior_AIHold` on the dummy (decision 2026-11-16-74): the C++ no-op in Reference mode, its script not run; in
-/// Off mode the script runs through the VM with the dummy's pawn as its context, and nothing runs without a pawn.
+/// Off mode the script runs through the VM with the dummy's pawn as its context (its pawn has nothing to ask, so `Pawn`'s
+/// rule answers none, decision 2026-11-19-62), and nothing runs without a pawn.
 #[test]
 fn the_ai_hold_by_mode() {
     for (mode, pawn) in [(ParityMode::Reference, true), (ParityMode::Off, true), (ParityMode::Off, false)] {
@@ -1189,11 +1194,6 @@ fn the_ai_hold_by_mode() {
         env.spawn();
         let s = env.slice.clone();
         let result = s.hit_dummy(env.vm(), false);
-        if mode == ParityMode::Off && pawn {
-            assert!(matches!(result.unwrap_err().not_yet().map(|n| &n.missing), Some(Missing::NotRead)));
-            assert!(seen.borrow().is_empty());
-            continue;
-        }
         assert!(result.unwrap(), "{mode:?}");
         assert!(env.slice.dummy_trace().unwrap().iter().any(|l| l.ends_with("Idle_Hold")));
         let expected: Vec<ObjRef> = match (mode, env.slice.dummy_pawn()) {
@@ -1204,8 +1204,8 @@ fn the_ai_hold_by_mode() {
     }
 }
 
-/// A dummy whose pawn has a controller: Off is `NotYet { NotRead }` (how a pawn context reaches its AI is not read),
-/// with the script not run; Reference keeps the no-op.
+/// A dummy whose pawn has a controller: Off is `NotYet { NotRead }` naming the controller's class, whose own
+/// `QueryInterface` answer is not read (decision 2026-11-19-62), with the script not run; Reference keeps the no-op.
 #[test]
 fn the_ai_hold_of_a_pawn_with_a_controller_is_not_yet() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -1218,6 +1218,7 @@ fn the_ai_hold_of_a_pawn_with_a_controller_is_not_yet() {
             ParityMode::Off => {
                 let e = r.unwrap_err();
                 assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotRead)), "{e:?}");
+                assert!(format!("{e:?}").contains("goes to its Controller"), "{e:?}");
             }
             _ => assert!(r.unwrap()),
         }
