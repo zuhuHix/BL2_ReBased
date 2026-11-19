@@ -32,6 +32,11 @@ fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
 }
 
 fn world(mode: ParityMode) -> W {
+    world_spelled(mode, INVENTORY_BASE, "WillowGame.WillowWeapon")
+}
+
+/// The world with the base and `WillowWeapon` defined under the spellings `base_path` and `weapon_path`.
+fn world_spelled(mode: ParityMode, base_path: &str, weapon_path: &str) -> W {
     let mut space = ObjectSpace::new();
     let object = space.classes.define("Core.Object", None, vec![]).unwrap();
     let obj = PropKind::Object { class: object };
@@ -52,9 +57,11 @@ fn world(mode: ParityMode) -> W {
             .unwrap_or_default();
         space.classes.define(path, Some(parent), d).unwrap()
     };
-    let base = class(&mut space, INVENTORY_BASE, object, None);
+    let base = class(&mut space, base_path, object, None);
     let weapon_base = class(&mut space, "Engine.Weapon", base, None);
-    let weapon = class(&mut space, "WillowGame.WillowWeapon", weapon_base, Some(wdata));
+    let weapon = class(&mut space, weapon_path, weapon_base, Some(wdata));
+    // A class with a read name in another package.
+    class(&mut space, "Test.WillowWeapon", weapon_base, Some(wdata));
     class(&mut space, "WillowGame.WillowTurretWeapon", weapon, None);
     class(&mut space, "Test.DlcWeapon", weapon, None);
     // A read weapon class whose struct declares both fields, and one with no DefinitionData at all.
@@ -74,6 +81,15 @@ fn world(mode: ParityMode) -> W {
     let ints = vec![decl(&mut space, "ItemDefinition", PropKind::Int)];
     let ints = space.classes.define_struct("Test.IntDefinitionData", None, ints).unwrap();
     class(&mut space, "WillowGame.WillowClassMod", base, Some(ints));
+    // A fixed-array DefinitionData, a fixed-array selected field, and an interface-typed selected field.
+    let d = vec![decl(&mut space, "DefinitionData", PropKind::Struct(idata)).with_array_dim(2)];
+    space.classes.define("WillowGame.WillowGrenadeMod", Some(base), d).unwrap();
+    let f = vec![decl(&mut space, "ItemDefinition", obj.clone()).with_array_dim(2)];
+    let arrays = space.classes.define_struct("Test.ArrayDefinitionData", None, f).unwrap();
+    class(&mut space, "WillowGame.WillowUsableItem", base, Some(arrays));
+    let f = vec![decl(&mut space, "ItemDefinition", PropKind::Interface { class: object })];
+    let iface = space.classes.define_struct("Test.InterfaceDefinitionData", None, f).unwrap();
+    class(&mut space, "WillowGame.WillowUsableCustomizationItem", base, Some(iface));
     let mut vm = Vm::new(space, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), mode);
     vm.stub_policy = StubPolicy::refuse_all();
     let key = "WillowInventory.GetInventoryDefinition()".to_string();
@@ -204,14 +220,39 @@ fn a_missing_layout_is_a_named_not_yet() {
 #[test]
 fn a_declared_but_malformed_layout_is_a_data_error() {
     let mut w = world(ParityMode::Off);
-    for path in ["WillowGame.WillowArtifact", "WillowGame.WillowClassMod"] {
+    for (path, said) in [
+        ("WillowGame.WillowArtifact", "DefinitionData is declared as Int x 1, not one struct"),
+        ("WillowGame.WillowGrenadeMod", "DefinitionData is declared as Struct("),
+        ("WillowGame.WillowClassMod", "DefinitionData.ItemDefinition is declared as Int x 1"),
+        ("WillowGame.WillowUsableItem", "DefinitionData.ItemDefinition is declared as Object {"),
+        ("WillowGame.WillowUsableCustomizationItem", "DefinitionData.ItemDefinition is declared as Interface {"),
+    ] {
         let o = w.obj(path);
         match w.call(o) {
-            Err(VmError::NotYet(n)) => panic!("{path}: a data error, not NotYet: {n}"),
-            Err(_) => {}
-            Ok(v) => panic!("{path}: expected a data error, got {v:?}"),
+            Err(VmError::Script { function, message }) => {
+                assert!(function.contains("GetInventoryDefinition"), "{path}: {function}");
+                assert!(message.contains(said), "{path}: {message}");
+            }
+            other => panic!("{path}: expected a data error, got {other:?}"),
         }
     }
+    // The array cases name their dimension.
+    let o = w.obj("WillowGame.WillowUsableItem");
+    assert!(format!("{:?}", w.call(o)).contains(" x 2, not one object reference"));
+}
+
+#[test]
+fn an_equivalent_spelling_matches_and_another_package_does_not() {
+    // `willowgame.WILLOWWEAPON` and `engine:WillowInventory` name the read classes under the VM's path rules.
+    let mut w = world_spelled(ParityMode::Off, "engine:WillowInventory", "willowgame.WILLOWWEAPON");
+    let (d, wdata) = (w.def(), w.wdata);
+    let g = w.inventory("WillowGame.WillowWeapon", wdata, &[Some(d)]);
+    assert_eq!(w.call(g).unwrap(), Value::Object(Some(d)));
+    let o = w.obj(INVENTORY_BASE);
+    assert_eq!(w.call(o).unwrap(), Value::Object(None));
+    // The same name in another package is not a read class.
+    let g = w.inventory("Test.WillowWeapon", wdata, &[Some(d)]);
+    assert!(not_read(w.call(g)).contains("Test.WillowWeapon"));
 }
 
 #[test]
