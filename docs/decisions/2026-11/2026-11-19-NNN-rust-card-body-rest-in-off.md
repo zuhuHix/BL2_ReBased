@@ -3,9 +3,9 @@
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CARD-BODY-REST, implementer. The decision number is pending from the hub
 (three digits); NNN is a placeholder.
 
-- **Sources:** `docs/verification/NATIVE_CARD_BODY_REST.md` (#532 at 27a9a6a6, analyst lane ANALYST-CARD-BODY-REST, not
-  this thread) and NATIVE_CACHE_WEAPON_CARD_BODY.md section 3.3 for the value V. No native code or analysis output was
-  opened.
+- **Sources:** `docs/verification/NATIVE_CARD_BODY_REST.md` (#532 at 5301a80d, which holds the band ruling;
+  analyst lane ANALYST-CARD-BODY-REST, not this thread) and NATIVE_CACHE_WEAPON_CARD_BODY.md section 3.3 for the
+  value V. No native code or analysis output was opened.
 - **Base:** #521 (fix/rust-cache-weapon-card-body at 83d4e909). Only #521's two remaining refusals change, the
   equal-priority order and the displayed value. The rest of #521 stays as it is.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game, and #532 is still in its hub read.
@@ -32,7 +32,9 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CARD-BODY-REST, implementer. The 
   - mode 0 at precision 8 or more with |n| strictly between half and twice 10^(P−8).
 
   The remap's four evaluations pass the attribute layer's refusals through unchanged.
-  - **Range check:** it is applied to the converted integer, the doubled sum rounded to even.
+  - **Range check:** it is applied to the converted integer, the doubled sum rounded to even, not to the doubled sum
+    itself as the note words it. A sum just past ±2^31 that rounds into range is accepted. Which reading the game
+    follows is the note's open question 3 (UNVERIFIED); the port keeps the converted-integer reading.
   - **Refusal texts:** each is the note's text with "WillowWeapon." before it, as #521's texts are.
 - **The preflight's card schema** also checks `bValueRemappingEnabled`, `bDisplayPercentAsFloat`, `bBiggerIsBetter`
   (bools), `SignStyle` and `RoundingMode` (bytes) and `FloatPrecision` (an int). It also checks `RemappingData`: the
