@@ -957,5 +957,7 @@ pub fn skill_behavior_handlers(consumer: ObjRef) -> Vec<(&'static str, Handler)>
         .collect()
 }
 
+pub mod manager;
+
 #[cfg(test)]
 mod tests;
