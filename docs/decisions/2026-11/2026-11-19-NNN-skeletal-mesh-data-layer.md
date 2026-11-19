@@ -62,5 +62,22 @@ No native code was read. Synthetic fixtures only.
     needs the socket objects loaded as a harness input, or a ruling.
 - **Checks:** `cargo test --workspace -j 2` 2,449 passed, 0 failed, 47 ignored; clippy shows nothing new; crate edges
   OK.
+- **Review r1 of #569:**
+  - **path safety:** the harness source takes the package and the leaf only as single plain file-name components (no
+    separator, `.` or `..`, colon or NUL), and refuses a file that resolves, links and junctions followed, outside
+    the canonical export root;
+  - **same-named meshes:** a mesh whose package holds another mesh export of the same name (in another group) is
+    refused `LayerAbsent` before the source is asked. The flat export layout cannot tell the two apart, so no two
+    cache entries can hold one file's bones;
+  - **duplicate bone names** under ASCII case folding are a script error before caching. The source's spelling and
+    order are kept;
+  - **the file lookup** uses the export entry's own spelling, not the name table's first one;
+  - **tests are strict:**
+    - the socket fixture must arrive unloaded;
+    - the installed probe asserts the unloaded-socket refusal and that every socket names a skeleton bone;
+    - new synthetic tests: name traversal, a junction or link out of the root, a missing export versus a malformed
+      ActorX file, the two same-named meshes, the spelling, and duplicate names;
+  - checks: `cargo test --workspace -j 2` 2,454 passed, 0 failed, 47 ignored. The probe is unchanged: 27 bones; 13
+    sockets refused while unloaded, all 13 on a skeleton bone after the harness load.
 - **UNVERIFIED.** The layer reports what the data holds. That the engine's bone order and parents match UModel's
   export rests on decision 2026-11-16-53's cross-tool bind-pose check, not on the running game.

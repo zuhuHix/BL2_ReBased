@@ -74,6 +74,8 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
     };
     let gd = {
         let mut t = ScriptToy::with_imports(&["Class"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let package_class = t.p.add_import("Core", "Class", core, "Package");
         let engine = t.p.add_import("Core", "Package", 0, "Engine");
         let mesh = t.p.add_import("Core", "Class", engine, "SkeletalMesh");
         let socket = t.p.add_import("Core", "Class", engine, "SkeletalMeshSocket");
@@ -88,7 +90,16 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         let s = t.p.add_export(socket, "Socket_0", empty.clone());
         t.p.set_outer(s, a);
         t.p.add_export(mesh, "Mesh_B", empty.clone());
-        t.p.add_export(other, "NotAMesh", empty);
+        t.p.add_export(other, "NotAMesh", empty.clone());
+        // Two same-named meshes in two groups (review r1 of #569, item 2), and a mesh whose spelling the test interns
+        // differently first (item 4).
+        let left = t.p.add_export(package_class, "Left", empty.clone());
+        let right = t.p.add_export(package_class, "Right", empty.clone());
+        let l = t.p.add_export(mesh, "Twin", empty.clone());
+        t.p.set_outer(l, left);
+        let r = t.p.add_export(mesh, "Twin", empty.clone());
+        t.p.set_outer(r, right);
+        t.p.add_export(mesh, "Mesh_C", empty);
         t.build()
     };
     vec![("Core.upk", core), ("Engine.upk", engine), ("GD_ToyMesh.upk", gd)]
@@ -162,7 +173,9 @@ fn the_skeleton_comes_from_the_source_and_is_cached() {
 /// skeletal mesh is a script error.
 #[test]
 fn bad_data_is_a_typed_error() {
-    for answer in [Err("a truncated chunk".to_string()), Ok(bones(&[None, Some(2), Some(0)])), Ok(bones(&[Some(0)]))] {
+    let mut twins = bones(&[None, Some(0)]);
+    twins.bones[1].name = "BONE0".to_string();
+    for answer in [Err("a truncated chunk".to_string()), Ok(bones(&[None, Some(2), Some(0)])), Ok(bones(&[Some(0)])), Ok(twins)] {
         let mut e = env();
         let a = find(&mut e, "GD_ToyMesh.Mesh_A");
         SkeletalMeshes::install(&mut e.vm, Box::new(Fixed { leaf: "Mesh_A", answer, reads: Rc::new(Cell::new(0)) })).unwrap();
@@ -187,14 +200,14 @@ fn an_unloaded_socket_is_refused_and_loads_nothing() {
     let Value::Object(Some(socket)) = e.vm.space.read(a, PropAddr::scalar(p)).unwrap().elements().unwrap()[0] else {
         panic!("a socket")
     };
-    if e.vm.defs.is_unloaded(&e.vm.space, socket) {
-        let heap = format!("{:?}", e.vm.space.heap);
-        let n = not_yet(sockets(&e.vm, a));
-        assert!(matches!(&n.missing, Missing::LayerAbsent(_)), "{n}");
-        assert!(e.vm.defs.is_unloaded(&e.vm.space, socket), "nothing loaded");
-        assert_eq!(format!("{:?}", e.vm.space.heap), heap);
-        e.vm.defs.ensure_loaded(&mut e.vm.space, socket).unwrap();
-    }
+    // Review r1 of #569, item 5: the fixture must give an unloaded handle, or the refusal is not tested.
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, socket), "the fixture's socket arrives unloaded");
+    let heap = format!("{:?}", e.vm.space.heap);
+    let n = not_yet(sockets(&e.vm, a));
+    assert!(matches!(&n.missing, Missing::LayerAbsent(_)), "{n}");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, socket), "nothing loaded");
+    assert_eq!(format!("{:?}", e.vm.space.heap), heap);
+    e.vm.defs.ensure_loaded(&mut e.vm.space, socket).unwrap();
     // The toy socket class declares no location fields: the read after the load is a script error, not a NotYet.
     assert!(matches!(sockets(&e.vm, a), Err(VmError::Script { .. })));
     let b = find(&mut e, "GD_ToyMesh.Mesh_B");
@@ -277,4 +290,33 @@ fn the_sockets_are_read_in_order() {
     assert!(matches!(not_yet(sockets(&h.vm, mesh)).missing, Missing::LayerAbsent(_)));
     // No source is installed here: the skeleton lookup names the layer.
     assert!(matches!(not_yet(reference_skeleton(&h.vm, mesh)).missing, Missing::LayerAbsent(_)));
+}
+
+/// Review r1 of #569, item 2: two meshes of one package with the same name (in two groups) are refused, whatever the
+/// source would answer, so no two cache entries can hold one file's bones.
+#[test]
+fn same_named_meshes_in_one_package_are_refused() {
+    let mut e = env();
+    let left = find(&mut e, "GD_ToyMesh.Left.Twin");
+    let right = find(&mut e, "GD_ToyMesh.Right.Twin");
+    assert_ne!(left, right);
+    let reads = Rc::new(Cell::new(0));
+    SkeletalMeshes::install(&mut e.vm, Box::new(Fixed { leaf: "Twin", answer: Ok(bones(&[None])), reads: reads.clone() })).unwrap();
+    for mesh in [left, right] {
+        let n = not_yet(reference_skeleton(&e.vm, mesh));
+        assert!(matches!(&n.missing, Missing::LayerAbsent(l) if *l == LAYER), "{n}");
+        assert!(n.what.contains("ambiguous"), "{n}");
+    }
+    assert_eq!(reads.get(), 0, "the source is not asked");
+}
+
+/// Review r1 of #569, item 4: the file lookup uses the export entry's own spelling, not the name table's first one.
+#[test]
+fn the_leaf_is_the_exports_own_spelling() {
+    let mut e = env();
+    e.vm.space.names.intern("MESH_C");
+    let c = find(&mut e, "GD_ToyMesh.Mesh_C");
+    let reads = Rc::new(Cell::new(0));
+    SkeletalMeshes::install(&mut e.vm, Box::new(Fixed { leaf: "Mesh_C", answer: Ok(bones(&[None])), reads })).unwrap();
+    assert_eq!(reference_skeleton(&e.vm, c).unwrap().len(), 1, "the source saw Mesh_C, not MESH_C");
 }

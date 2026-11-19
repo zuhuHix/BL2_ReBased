@@ -114,17 +114,36 @@ fn script(message: String) -> VmError {
     VmError::Script { function: UNIT.to_string(), message: format!("{UNIT}: {message}") }
 }
 
-/// The store's object path and file package of `o` (from its export table entry; nothing is loaded).
+/// The store's file package, object path and object name of `o`, from its export table entry (the entry's own
+/// spelling, not the name table's first one: review r1 of #569); nothing is loaded. A mesh whose package holds another
+/// mesh export of the same name (in another group) is refused: a flat export layout keyed by package and name cannot
+/// tell the two apart (review r1 of #569).
 fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
     let x = vm.space.heap.get(o)?;
-    let leaf = vm.space.names.text(x.name).into_owned();
+    let interned = vm.space.names.text(x.name).into_owned();
     if let Origin::Export { package, index } | Origin::Resource { package, index } = x.origin {
         let pkg = vm.defs.packages().get(package);
-        if let Ok(path) = ow_defs::identity::full_path(pkg, index) {
+        if let (Ok(path), Ok(entry)) = (ow_defs::identity::full_path(pkg, index), pkg.object(index)) {
+            let leaf = entry.name.clone();
+            let class_name = |e: &ow_package::tables::ObjectEntry| pkg.object(e.class).map(|c| c.name.clone()).ok();
+            let own_class = class_name(entry);
+            let twin = pkg.exports.iter().enumerate().any(|(i, e)| {
+                i64::try_from(i + 1).ok() != Some(i64::from(index))
+                    && e.name.eq_ignore_ascii_case(&leaf)
+                    && class_name(e) == own_class
+            });
+            if twin {
+                return Err(NotYet::layer_absent(
+                    format!("{UNIT}: {path}, whose package holds another mesh named {leaf} (the flat export layout is ambiguous)"),
+                    LAYER,
+                    RECORD,
+                )
+                .into());
+            }
             return Ok((pkg.name.clone(), path, leaf));
         }
     }
-    Err(NotYet::layer_absent(format!("{UNIT}: {leaf}, an object with no package export"), LAYER, RECORD).into())
+    Err(NotYet::layer_absent(format!("{UNIT}: {interned}, an object with no package export"), LAYER, RECORD).into())
 }
 
 /// Refuses an object the store has not loaded (module documentation, "Write-free").
@@ -174,10 +193,18 @@ pub fn reference_skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>
     Ok(skeleton)
 }
 
-/// A source's answer must be a skeleton: at least one bone, a root first, every other bone's parent before it.
+/// A source's answer must be a skeleton: at least one bone, a root first, every other bone's parent before it, and no
+/// two bone names equal under ASCII case folding (names compare case-insensitively; review r1 of #569). The source's
+/// spelling and order are kept.
 fn check_skeleton(s: &ReferenceSkeleton, path: &str) -> Result<(), VmError> {
     if s.bones.is_empty() {
         return Err(script(format!("the reference skeleton of {path} has no bones")));
+    }
+    let mut seen: ow_core::DetSet<String> = ow_core::DetSet::new();
+    for (i, b) in s.bones.iter().enumerate() {
+        if !seen.insert(b.name.to_ascii_lowercase()) {
+            return Err(script(format!("the reference skeleton of {path}: bone {i}'s name repeats an earlier bone's")));
+        }
     }
     for (i, b) in s.bones.iter().enumerate() {
         let ok = match b.parent {
