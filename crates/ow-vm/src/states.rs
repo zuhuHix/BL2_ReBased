@@ -1063,7 +1063,8 @@ fn auto_state(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmError> 
 /// The Off rule of `Auto` (NATIVE_AUTO_STATE.md section 5, lane IMPL-AUTO-STATE; UNVERIFIED in the running game):
 /// - the class's own state flags have [`STATE_AUTO`] set: no state (`GotoState` then behaves as for `None`, silent);
 /// - otherwise the chain is walked from the class to the root, and in each class its own declared states are looked
-///   at: the first class holding a state with the bit set gives that state. None found: no state.
+///   at: the first class holding a state with the bit set gives that state. None found: the census-oracle
+///   refusal [`AUTO_FLAGS_DISAGREE`] below (the class bit clear with no auto state in the chain).
 ///
 /// The typed refusals (section 5 item 2), both `NotYet { NotRead }` with record NATIVE_AUTO_STATE.md, raised before any
 /// write (`goto_state` resolves `Auto` before it touches the object):
