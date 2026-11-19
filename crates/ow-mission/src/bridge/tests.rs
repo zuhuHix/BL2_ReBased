@@ -287,6 +287,10 @@ fn willowgame() -> Vec<u8> {
     native(&mut t, globals, "GetGlobalsDefinition", &[], Some(("Object", object)), NATIVE);
     let definition = t.class("GlobalsDefinition", object);
     t.prop("Float", definition, "PlayerInteractionDistance", 0, 0);
+    // Its balance table (lane IMPL-REFRESH-BALANCE-DATA): the installed Globals export holds none, so it is empty.
+    let play_through = toy_struct(&mut t, definition, "PlayThroughData", None);
+    toy_array_of(&mut t, play_through, "BalanceDefinitions", "Object", object);
+    toy_array_of(&mut t, definition, "RegionBalanceData", "Struct", play_through);
 
     // The player.
     let pri = t.class("WillowPlayerReplicationInfo", object);
@@ -317,6 +321,7 @@ fn willowgame() -> Vec<u8> {
     t.p.add_export(controller, "Default__WillowPlayerController", defaults);
     native(&mut t, controller, "NativeGetMissionIndex", &[param("Object", "InMission", 0, object)], Some(("Int", 0)), NATIVE);
     native(&mut t, controller, "GetCurrentPlaythrough", &[], Some(("Int", 0)), NATIVE);
+    native(&mut t, controller, "RefreshBalanceDataFromMissionCompletion", &[param("Object", "Mission", 0, object)], Some(("Bool", 0)), NATIVE);
     native(&mut t, controller, "GetHUDMovie", &[], Some(("Object", object)), NATIVE);
     native(&mut t, controller, "UpdateLcdMissionStatus", &[], None, NATIVE);
     native(&mut t, controller, "PlayUIAkEvent", &[param("Object", "Event", 0, object)], None, NATIVE);
@@ -2144,3 +2149,35 @@ fn the_current_playthrough_is_the_world_s_on_any_controller_in_off() {
 
 #[path = "adopt_tests.rs"]
 mod adopt;
+
+/// `RefreshBalanceDataFromMissionCompletion` in Off (lane IMPL-REFRESH-BALANCE-DATA): before the bridge has looked up
+/// its globals definition, the named `LayerAbsent` (the lookup loads, the native loads nothing); after the harness
+/// preload, the plan's answer, here false (an empty table) with no write.
+#[test]
+fn the_balance_refresh_waits_for_the_globals_lookup() {
+    let path = "WillowGame.WillowPlayerController.RefreshBalanceDataFromMissionCompletion";
+    let mut env = Env::new(false);
+    let c = env.script.player_controller();
+    let def = env.mission.definition();
+    let call = |env: &mut Env| {
+        let vm = env.vm();
+        let f = vm.find_function(path).unwrap();
+        vm.call(f, Some(c), vec![Value::Object(Some(def))]).map(|r| r.ret)
+    };
+    let looked_up = env.script.inner.state.borrow().globals_definition.is_some();
+    if !looked_up {
+        match call(&mut env).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert!(matches!(n.missing, ow_core::Missing::LayerAbsent(_)), "{n}");
+                assert_eq!(n.what, "RefreshBalanceDataFromMissionCompletion: the globals definition");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let script = env.script.clone();
+    let preloaded = script.preload_balance_definitions(env.vm()).unwrap();
+    assert!(preloaded.is_empty(), "the toy table names no balance definition");
+    let before = format!("{:?}", env.vm().space.heap);
+    assert_eq!(call(&mut env).unwrap(), Value::Bool(false));
+    assert_eq!(format!("{:?}", env.vm().space.heap), before, "no write");
+}

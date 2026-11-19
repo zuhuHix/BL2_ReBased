@@ -316,6 +316,15 @@ writes `FocusObject` None, then `FocusOffset` the zero vector; `RecordMissionSta
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-121
 (placeholder); logs under ignored `local/p2/link10-next/`.
 
+**IMPL-REFRESH-BALANCE-DATA (2026-11-19, pc-hummer, on #554 6571aabb):** AI-assisted (Claude Code, Opus 5.5).
+`WillowPlayerController.RefreshBalanceDataFromMissionCompletion` in Off from the accepted
+NATIVE_REFRESH_BALANCE_DATA_FROM_MISSION_COMPLETION.md (#559 at be877676), with the harness preload of the region
+balance definitions. `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,395 passed / 0 failed / 46
+ignored (ow-mission 231); clippy no new warnings; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict
+(release build, under the machine lock) on a throwaway local merge with #546, #533, #497, #509, #512, #524 and #526,
+never pushed: 4 ok / 1 NotYet / 9 errors; **link 12 ok, 6 of 6 steps**. ctest and verify_packages not run (no C++
+change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/rbd-impl/`.
+
 **IMPL-ALL-EXPANSION-SIDE-MISSIONS (2026-11-19, pc-hummer, on fix/rust-mission-list-build 9b591ada, #496):**
 AI-assisted (Claude Code, Opus 5.5). `MissionTracker.AllExpansionSideMissionsComplete` in Off from #550's note: the
 list follows `GetAllMissions` (refusal replayed, `LayerAbsent` while unbuilt), then the side-mission walk.

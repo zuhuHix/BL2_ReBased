@@ -15,6 +15,7 @@ pub mod kismet;
 pub mod mission_list;
 pub mod mover;
 pub mod side_missions;
+pub mod balance_refresh;
 pub mod slice;
 pub mod stations;
 pub mod tracker;

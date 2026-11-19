@@ -970,11 +970,15 @@ impl MissionScript {
         // Off only: the C++ stubs it, and Reference keeps that stub (R3; decision 2026-11-19-05).
         // The same for the record queries of NATIVE_MISSION_OBJECTIVES.md (decision 2026-11-19-10).
         if vm.parity != ParityMode::Reference {
-            const OFF_ONLY: [(&str, Body); 4] = [
+            const OFF_ONLY: [(&str, Body); 5] = [
                 ("WillowGame.MissionTracker.GetObjectivesProgress", MissionScript::n_objectives_progress),
                 ("WillowGame.MissionTracker.GetActivePrimaryObjectiveSet", MissionScript::n_active_primary_set),
                 ("WillowGame.MissionTracker.GetAllMissions", MissionScript::n_all_missions),
                 ("WillowGame.MissionTracker.AllExpansionSideMissionsComplete", MissionScript::n_expansion_side_complete),
+                (
+                    "WillowGame.WillowPlayerController.RefreshBalanceDataFromMissionCompletion",
+                    MissionScript::n_refresh_balance,
+                ),
             ];
             for (path, body) in OFF_ONLY {
                 bind_optional(vm, path, self.native(path, body))?;
@@ -2128,6 +2132,67 @@ impl MissionScript {
         }
         let missions = crate::mission_list::missions(c.vm, self.inner.o.tracker)?;
         Ok(Value::Bool(side::walk(c.vm, &walk, &missions)?))
+    }
+
+    // RefreshBalanceDataFromMissionCompletion(Mission), Off only (lane IMPL-REFRESH-BALANCE-DATA,
+    // `crate::balance_refresh`): the plan reads only; the one write is `RegionGameStages`, after every check. The globals
+    // definition is the bridge's own `GetGlobalsDefinition` answer, taken only once the bridge has looked it up: the
+    // lookup loads, and the native loads nothing, so before it is `NotYet { LayerAbsent }` (the harness preload,
+    // [`MissionScript::preload_balance_definitions`], looks it up first).
+    fn n_refresh_balance(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        use crate::balance_refresh as balance;
+        if !self.on(c, self.inner.o.controller) {
+            return outside_binding(c);
+        }
+        let mission = if c.has(0) { c.arg(0)?.clone() } else { Value::Object(None) };
+        let Some(definition) = self.inner.state.borrow().globals_definition else {
+            return Err(NotYet::layer_absent(
+                "RefreshBalanceDataFromMissionCompletion: the globals definition",
+                "the bridge's globals definition lookup (not made in this world yet; the lookup loads)",
+                balance::RECORD,
+            )
+            .into());
+        };
+        let playthrough = self.current_playthrough(c.vm)?;
+        let out = balance::plan(c.vm, self.inner.o.controller, &mission, definition, playthrough)?;
+        if let Some(stages) = out.stages {
+            set(&mut c.vm.space, self.inner.o.controller, "RegionGameStages", stages)?;
+        }
+        Ok(Value::Bool(out.matched))
+    }
+
+    /// The harness preload for `RefreshBalanceDataFromMissionCompletion` (lane IMPL-REFRESH-BALANCE-DATA, the hub's
+    /// ruling on #559's residency question), Off only, at set-up before any step runs: the bridge's globals definition
+    /// looked up (a load), then every `GameBalanceDefinition` its `RegionBalanceData` names loaded. Returns their paths
+    /// for the harness log. A harness input, UNVERIFIED: the game has them resident. The expansions' tables are not
+    /// preloaded (the slice's mission has none).
+    pub fn preload_balance_definitions(&self, vm: &mut Vm) -> Result<Vec<String>, MissionError> {
+        if vm.parity != ParityMode::Off {
+            return Ok(Vec::new());
+        }
+        let Some(definition) = self.globals_definition(vm)? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        let Some(table) = prop(&vm.space, definition, "RegionBalanceData")? else {
+            return Ok(out);
+        };
+        for entry in table.elements().map(<[Value]>::to_vec).unwrap_or_default() {
+            let Some(list) = field(&vm.space, &entry, "BalanceDefinitions") else {
+                continue;
+            };
+            for b in list.elements().map(<[Value]>::to_vec).unwrap_or_default() {
+                if let Value::Object(Some(o)) = b {
+                    if vm.defs.is_unloaded(&vm.space, o) {
+                        let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+                        vm.log.extend(vm.defs.take_log());
+                        loaded.map_err(|e| BehaviorError::Vm(VmError::from(e)))?;
+                    }
+                    out.push(ow_vm::path_name::path_name(vm, o).unwrap_or_default());
+                }
+            }
+        }
+        Ok(out)
     }
 
     // RegisterMissionObserver: the observer is told "level load" at once and then every notification the tracker

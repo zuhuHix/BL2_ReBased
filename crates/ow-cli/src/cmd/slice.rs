@@ -155,6 +155,24 @@ pub(crate) fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_
     Ok(())
 }
 
+/// Off only (lane IMPL-REFRESH-BALANCE-DATA; the hub's ruling on #559): link 12's turn-in reaches
+/// `WillowPlayerController.RefreshBalanceDataFromMissionCompletion`, which loads nothing and refuses
+/// `NotYet { LayerAbsent }` while the bridge has not looked up its globals definition or while a region balance
+/// definition of its `RegionBalanceData` is an unloaded handle. So at set-up, before any step runs, the bridge's
+/// globals definition and those balance definitions are preloaded
+/// (`ow_mission::bridge::MissionScript::preload_balance_definitions`), each logged as a harness input. UNVERIFIED
+/// stand-in for the game's residency. `--slice-run` and `--slice-gate`'s Fire group both call it after
+/// `FireMissionSlice::new`.
+pub(crate) fn balance_setup(world: &mut ow_world::world::World, slice: &FireMissionSlice) -> Result<(), ow_mission::tracker::MissionError> {
+    if world.vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    for path in slice.script().preload_balance_definitions(&mut world.vm)? {
+        world.vm.log.push(format!("harness input: preload region balance definition {path} (UNVERIFIED stand-in for its residency)"));
+    }
+    Ok(())
+}
+
 impl From<String> for Failure {
     fn from(message: String) -> Self {
         Failure {
@@ -306,6 +324,7 @@ fn execute_with(
     if mode == ParityMode::Off {
         unlock_setup(&mut world).map_err(BehaviorError::Vm)?;
     }
+    balance_setup(&mut world, &slice)?;
     let vm = &mut world.vm;
     let completed: DetSet<String> = slice.mission().dependencies().iter().cloned().collect();
     out.push_str("{\"steps\":[");
