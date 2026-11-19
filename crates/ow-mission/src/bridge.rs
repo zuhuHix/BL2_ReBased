@@ -1939,24 +1939,31 @@ impl MissionScript {
         Ok(())
     }
 
-    // AllExpansionSideMissionsComplete(Controller, Expansion), Off mode only (NATIVE_MISSION_OBJECTIVES.md). A None
-    // controller is false. Otherwise the playthrough index comes from a controller virtual the note does not resolve
-    // by name, and the test walks the tracker's whole MissionList, which the bridge does not hold: NotYet { NotRead }
-    // naming both.
+    // AllExpansionSideMissionsComplete(Controller, Expansion), Off mode only (lane IMPL-ALL-EXPANSION-SIDE-MISSIONS,
+    // NATIVE_ALL_EXPANSION_SIDE_MISSIONS_COMPLETE.md section 5; `crate::side_missions`). Write-free. The index is the
+    // bridge's current playthrough. The list follows `GetAllMissions` (the hub's ruling on #550's review): the set-up
+    // build's refusal replayed, then LayerAbsent while no list was built; a built list is walked in its stand-in order.
     fn n_expansion_side_complete(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        use crate::side_missions::{self as side, Step};
         if !self.on(c, self.inner.o.tracker) {
             return outside_binding(c);
         }
-        if matches!(c.arg(0)?, Value::Object(None) | Value::None) {
-            return Ok(Value::Bool(false));
+        let controller = c.arg(0)?.clone();
+        let expansion = if c.has(1) { c.arg(1)?.clone() } else { Value::Object(None) };
+        let playthrough = self.current_playthrough(c.vm)?;
+        let step = side::prepare(c.vm, &controller, &expansion, |_| Ok(playthrough))?;
+        let walk = match step {
+            Step::Answer(b) => return Ok(Value::Bool(b)),
+            Step::Walk(w) => w,
+        };
+        if let Some(n) = self.inner.state.borrow().list_refusal.clone() {
+            return Err(n.into());
         }
-        Err(NotYet::not_read(
-            "MissionTracker.AllExpansionSideMissionsComplete with a controller (the controller virtual that gives the \
-             playthrough index is not resolved by name; the test walks the tracker's full MissionList, which the \
-             bridge does not hold)",
-            RECORD_OBJECTIVES,
-        )
-        .into())
+        if !self.inner.state.borrow().list_built {
+            return Err(NotYet::layer_absent(side::LIST, side::LIST_LAYER, side::RECORD).into());
+        }
+        let missions = crate::mission_list::missions(c.vm, self.inner.o.tracker)?;
+        Ok(Value::Bool(side::walk(c.vm, &walk, &missions)?))
     }
 
     // RegisterMissionObserver: the observer is told "level load" at once and then every notification the tracker

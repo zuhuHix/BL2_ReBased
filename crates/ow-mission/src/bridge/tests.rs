@@ -219,6 +219,9 @@ fn willowgame() -> Vec<u8> {
     }
     t.prop("Object", mission, "NextMissionInChain", 0, object);
     t.prop("Object", mission, "DlcExpansion", 0, object);
+    // The side-mission filter's other two fields (lane IMPL-ALL-EXPANSION-SIDE-MISSIONS).
+    t.prop("Bool", mission, "bRepeatable", 0, 0);
+    t.prop("Object", mission, "MarketingUnlock", 0, object);
     toy_array_of(&mut t, mission, "Dependencies", "Object", object);
     native(&mut t, mission, "GetExperienceReward", &[param("Object", "InWPC", 0, object), param("Bool", "bGetAltReward", 0, 0)], Some(("Int", 0)), NATIVE);
     native(&mut t, mission, "GetGameStage", &[], Some(("Int", 0)), NATIVE);
@@ -1018,8 +1021,9 @@ fn the_active_primary_objective_set_in_off_mode() {
 }
 
 /// `GetAllMissions` in Off mode answers the list built at set-up (lane IMPL-MISSIONLIST-BUILD): every mission
-/// definition of the loaded packages once, appended to the caller's array. `AllExpansionSideMissionsComplete` still
-/// waits for its playthrough virtual (`NotRead`); a None controller is false, as the note settles.
+/// definition of the loaded packages once, appended to the caller's array. `AllExpansionSideMissionsComplete` (lane
+/// IMPL-ALL-EXPANSION-SIDE-MISSIONS) walks that list: a None controller is false; the bridge's controller, whose one
+/// playthrough has no entry for the side missions, is false (the first counted mission has no entry).
 #[test]
 fn the_mission_list_queries_in_off_mode() {
     let mut env = Env::new(false);
@@ -1040,8 +1044,39 @@ fn the_mission_list_queries_in_off_mode() {
     let check = "WillowGame.MissionTracker.AllExpansionSideMissionsComplete";
     let none = tracker_call(&mut env, check, vec![Value::Object(None), Value::Object(None)]).unwrap().ret;
     assert_eq!(none, Value::Bool(false), "a None controller");
-    let refused = tracker_call(&mut env, check, vec![Value::Object(Some(c)), Value::Object(None)]).unwrap_err();
-    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead && n.record == RECORD_OBJECTIVES), "{refused}");
+    let walked = tracker_call(&mut env, check, vec![Value::Object(Some(c)), Value::Object(None)]).unwrap().ret;
+    assert_eq!(walked, Value::Bool(false), "a counted side mission with no playthrough entry");
+}
+
+/// `AllExpansionSideMissionsComplete` follows `GetAllMissions` on the list (the hub's ruling on #550's review): the
+/// set-up build's refusal is replayed unchanged, and a world whose list was not built is the named `LayerAbsent`,
+/// write-free. A None controller answers false before either.
+#[test]
+fn the_expansion_check_follows_the_list_s_state() {
+    let check = "WillowGame.MissionTracker.AllExpansionSideMissionsComplete";
+    let mut env = Env::with_list_refusal();
+    let c = env.script.player_controller();
+    let none = tracker_call(&mut env, check, vec![Value::Object(None), Value::Object(None)]).unwrap().ret;
+    assert_eq!(none, Value::Bool(false));
+    let all = tracker_call(&mut env, "WillowGame.MissionTracker.GetAllMissions", vec![Value::array(Vec::new())]).unwrap_err();
+    let got = tracker_call(&mut env, check, vec![Value::Object(Some(c)), Value::Object(None)]).unwrap_err();
+    match (&all, &got) {
+        (VmError::NotYet(a), VmError::NotYet(b)) => assert_eq!(a, b, "the same refusal as GetAllMissions"),
+        other => panic!("{other:?}"),
+    }
+    let mut env = Env::new(false);
+    let c = env.script.player_controller();
+    env.script.inner.state.borrow_mut().list_built = false;
+    let heap = format!("{:?}", env.vm().space.heap);
+    match tracker_call(&mut env, check, vec![Value::Object(Some(c)), Value::Object(None)]).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(matches!(&n.missing, ow_core::Missing::LayerAbsent(l) if *l == crate::side_missions::LIST_LAYER), "{n}");
+            assert_eq!(n.what, crate::side_missions::LIST);
+            assert_eq!(n.record, crate::side_missions::RECORD);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(format!("{:?}", env.vm().space.heap), heap, "write-free");
 }
 
 /// Reference keeps the C++ stubs (R3): none of the three record queries is bound there.
