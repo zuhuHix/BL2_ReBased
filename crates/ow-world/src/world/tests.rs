@@ -1848,14 +1848,17 @@ fn is_local_player_controller_without_a_world_is_not_yet() {
     });
 }
 
-/// `UIInteraction.GetDataStoreClient` (decision 2026-11-19-19): `NotYet { LayerAbsent }` outside Reference (no world
-/// models the engine's data store client); unbound under Reference.
+/// `UIInteraction.GetDataStoreClient` is the world's (decision 2026-11-19-65; its rules are tested in
+/// `datastore::tests`): bound outside Reference, unbound under Reference (R3). This fixture declares no
+/// `Engine.DataStoreClient`, so the call is a typed error that leaves nothing on the heap.
 #[test]
-fn get_data_store_client_is_not_yet_outside_reference() {
+fn get_data_store_client_is_the_worlds_outside_reference() {
     run(|| {
         let mut x = fx();
-        let r = x.call("UIInteraction.GetDataStoreClient", None, Vec::new());
-        assert!(matches!(&r, Err(VmError::NotYet(n)) if matches!(n.missing, ow_core::Missing::LayerAbsent(_))), "{r:?}");
+        assert!(x.w.vm.has_native("UIInteraction.GetDataStoreClient()"));
+        let heap = x.w.vm.space.heap.len();
+        assert!(x.call("UIInteraction.GetDataStoreClient", None, Vec::new()).is_err());
+        assert_eq!(x.w.vm.space.heap.len(), heap, "nothing made");
         let x = fx_in(true, ParityMode::Reference);
         assert!(!x.w.vm.has_native("UIInteraction.GetDataStoreClient()"), "unbound under Reference");
     });
