@@ -317,6 +317,7 @@ impl NativePack for Pack {
         crate::equip::natives::register(vm)?;
         crate::definition::register(vm)?;
         crate::equip::value::register(vm)?;
+        crate::pickup::register(vm)?;
         crate::spawn::register(vm)
     }
 }

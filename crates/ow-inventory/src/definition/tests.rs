@@ -173,7 +173,7 @@ fn world(mode: ParityMode) -> T {
     );
     let base = space
         .classes
-        .define("WillowGame.WillowInventory", Some(object), vec![])
+        .define("Engine.WillowInventory", Some(object), vec![])
         .unwrap();
     let d = vec![decl(&mut space, "DefinitionData", PropKind::Struct(wdata))];
     let weapon = space
