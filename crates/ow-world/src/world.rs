@@ -493,6 +493,10 @@ impl NativePack for Pack {
             vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
             vm.register_native(GET_DATA_STORE_CLIENT, Rc::new(get_data_store_client))?;
+            // WillowGameInfo.TravelPostCountdownInProcess (NATIVE_TRAVEL.md, UNVERIFIED; lane MAP-LOAD-C, decision
+            // 2026-11-19-20): whether the game info's TravelPostCountdownTime is above 0; nothing else is read or written.
+            // The C++ does not bind it, so Reference keeps the stub (R3).
+            vm.register_native(TRAVEL_COUNTDOWN, Rc::new(travel_countdown_in_process))?;
         }
         Ok(())
     }
@@ -564,6 +568,25 @@ fn get_data_store_client(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         "docs/decisions/2026-11/2026-11-19-19-rust-behavior-provider-natives-and-getdatastoreclient-in-off.md",
     )
     .into())
+}
+
+/// The native key of `WillowGameInfo.TravelPostCountdownInProcess()`.
+pub const TRAVEL_COUNTDOWN: &str = "WillowGameInfo.TravelPostCountdownInProcess()";
+
+/// `WillowGameInfo.TravelPostCountdownInProcess()` (NATIVE_TRAVEL.md): `TravelPostCountdownTime > 0` on the game info
+/// it is called on. A class that declares no int `TravelPostCountdownTime` is a typed error, never a default.
+fn travel_countdown_in_process(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = c.this.ok_or_else(|| VmError::Script {
+        function: TRAVEL_COUNTDOWN.to_string(),
+        message: "called with no game info".to_string(),
+    })?;
+    match actors::field(&c.vm.space, me, "TravelPostCountdownTime")? {
+        Value::Int(n) => Ok(Value::Bool(n > 0)),
+        other => Err(VmError::Script {
+            function: TRAVEL_COUNTDOWN.to_string(),
+            message: format!("TravelPostCountdownTime holds {}, not an int", other.kind_name()),
+        }),
+    }
 }
 
 /// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).

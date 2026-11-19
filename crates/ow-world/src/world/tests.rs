@@ -108,6 +108,7 @@ fn package() -> Vec<u8> {
         "FloatProperty",
         "BoolProperty",
         "NameProperty",
+        "StrProperty",
         "ByteProperty",
         "ObjectProperty",
         "ArrayProperty",
@@ -150,6 +151,12 @@ fn package() -> Vec<u8> {
         "bCollideActors",
         "bNetTemporary",
         "bShouldBaseAtStartup",
+        // The bring-up's fields (lane MAP-LOAD-C, NATIVE_MAP_LOAD.md sections 2.1 and 2.2).
+        "bScriptInitialized",
+        "bRouteBeginPlayEvenIfStatic",
+        "bLoadIfPhysXLevel0",
+        "bLoadIfPhysXLevel1",
+        "bLoadIfPhysXLevel2",
     ] {
         t.prop("Bool", actor, b, 0, 0);
     }
@@ -157,7 +164,7 @@ fn package() -> Vec<u8> {
         t.prop("Byte", actor, b, 0, 0);
     }
     t.prop("Byte", actor, "Physics", 0, physics);
-    for f in ["LifeSpan", "CreationTime"] {
+    for f in ["LifeSpan", "CreationTime", "LastRenderTime"] {
         t.prop("Float", actor, f, 0, 0);
     }
     for o in ["Owner", "Base", "Instigator", "WorldInfo"] {
@@ -264,8 +271,12 @@ fn package() -> Vec<u8> {
         "RealTimeSeconds",
         "TimeDilation",
         "DeltaSeconds",
+        "AudioTimeSeconds",
     ] {
         t.prop("Float", world_info, f, 0, 0);
+    }
+    for b in ["bBegunPlay", "bStartup"] {
+        t.prop("Bool", world_info, b, 0, 0);
     }
     t.prop("Byte", world_info, "NetMode", 0, 0);
     // The game info the world's hooks fall back to (decision 2026-11-16-49).
@@ -337,6 +348,14 @@ fn package() -> Vec<u8> {
         note(a, &ids, 13)
     });
     void(&mut t, probe, "Destroyed", &[], |_, a| note(a, &ids, 14));
+    // The game info's InitGame(Options, out Error) for the bring-up (lane MAP-LOAD-C).
+    void(
+        &mut t,
+        probe,
+        "InitGame",
+        &[Param::new("Str", "Options"), Param { flags: ow_package::testkit::script::CPF_OUT, ..Param::new("Str", "ErrorMessage") }],
+        |_, a| note(a, &ids, 17),
+    );
     void(
         &mut t,
         probe,
@@ -363,6 +382,10 @@ fn package() -> Vec<u8> {
     let ui = t.class("UIInteraction", object);
     native(&mut t, ui, "GetDataStoreClient", &[], Some(("Object", object)), NATIVE | STATIC);
     t.class("Thing", object);
+    // The travel countdown (lane MAP-LOAD-C, NATIVE_TRAVEL.md).
+    let willow_game = t.class("WillowGameInfo", actor);
+    t.prop("Int", willow_game, "TravelPostCountdownTime", 0, 0);
+    native(&mut t, willow_game, "TravelPostCountdownInProcess", &[], Some(("Bool", 0)), NATIVE);
 
     let definition = t.class("AttributeInitializationDefinition", object);
     native(
@@ -392,10 +415,10 @@ fn package() -> Vec<u8> {
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-struct Fx {
-    w: World,
-    wi: ObjRef,
-    notes: Rc<RefCell<Vec<(ObjRef, i32)>>>,
+pub(super) struct Fx {
+    pub(super) w: World,
+    pub(super) wi: ObjRef,
+    pub(super) notes: Rc<RefCell<Vec<(ObjRef, i32)>>>,
     dir: PathBuf,
 }
 
@@ -428,7 +451,7 @@ fn fx_with(begin: bool) -> Fx {
     fx_in(begin, ParityMode::Off)
 }
 
-fn fx_in(begin: bool, mode: ParityMode) -> Fx {
+pub(super) fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
         std::process::id(),
@@ -487,7 +510,7 @@ impl Fx {
         &mut self.w.vm
     }
 
-    fn class(&mut self, name: &str) -> ow_object::ids::ClassId {
+    pub(super) fn class(&mut self, name: &str) -> ow_object::ids::ClassId {
         self.w.vm.find_class(&format!("Engine.{name}")).unwrap()
     }
 
@@ -503,7 +526,7 @@ impl Fx {
         self.w.vm.space.names.intern(s)
     }
 
-    fn call(
+    pub(super) fn call(
         &mut self,
         function: &str,
         this: Option<ObjRef>,
@@ -562,7 +585,7 @@ impl Fx {
             .collect()
     }
 
-    fn all_notes(&self) -> Vec<(ObjRef, i32)> {
+    pub(super) fn all_notes(&self) -> Vec<(ObjRef, i32)> {
         self.notes.borrow().clone()
     }
 
@@ -575,7 +598,7 @@ impl Fx {
     }
 }
 
-fn run(f: impl FnOnce() + Send) {
+pub(super) fn run(f: impl FnOnce() + Send) {
     ow_vm::interp::on_vm_stack(f).unwrap();
 }
 

@@ -130,6 +130,8 @@ pub(super) fn engine() -> Vec<u8> {
     let actor = d.cls("Actor", object);
     d.prop("Int", actor, "Health", 0);
     d.prop("Bool", actor, "bStatic", 0);
+    d.prop("Bool", actor, "bScriptInitialized", 0);
+    d.prop("Bool", actor, "bRouteBeginPlayEvenIfStatic", 0);
     d.default_object(actor, "Actor");
     let game_info = d.cls("GameInfo", actor);
     d.default_object(game_info, "GameInfo");

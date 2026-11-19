@@ -691,7 +691,7 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
 
 /// Step 10's base search condition: no `Base`, collides with the world, `bShouldBaseAtStartup`, and `Physics`
 /// `PHYS_None` or `PHYS_Rotating`.
-fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, VmError> {
+pub(crate) fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, VmError> {
     Ok(object(space, o, "Base")?.is_none()
         && flag(space, o, "bCollideWorld")?
         && flag(space, o, "bShouldBaseAtStartup")?
