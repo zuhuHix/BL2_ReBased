@@ -23,11 +23,12 @@ on the unbound `ActionSkill.OnActionSkillActivated`, so it says nothing about th
 
 ## Where the cast calls it
 
-`LiftActionSkill.OnActionSkillStarted(TheWillowPawn, TheController, TheTargetPawn)` runs the parent's version and
+`LiftActionSkill.OnActionSkillStarted` (given the caster's pawn, its controller and the target pawn) runs the parent's
+version and
 `UpdateTargetPawn`. Then, on the authority (`Role` 3) with a target pawn, it:
 1. sets `SkillDuration` (`LiftDuration` plus an attribute evaluation on the caster);
-2. runs the statement `MyWillowPawn.GetSMComponent().Play(GetPlayerAnimation(TheTargetPawn), ...)` (the other
-   arguments omitted);
+2. plays, on the caster's special-move component (`GetSMComponent`), the special move `GetPlayerAnimation` picks for
+   the target;
 3. sets `SkillStartTime` to the world time;
 4. runs `SelectTarget(TheTargetPawn)`.
 
@@ -37,9 +38,8 @@ UnrealScript evaluates the context object of a call before its arguments. If `Ge
 ## GearboxPawn.GetSMComponent
 
 - **What it returns:** the pawn's `SMComponent` (a component property of `GearboxPawn`, class `SpecialMoveComponent`),
-  as it is. The native reaches it through the pawn's special-move interface (`ISpecialMoveInterface`); the body that
-  interface runs is a plain read of that field. `GearboxPawn` and `WillowPlayerPawn` each install their own
-  special-move interface table, and both give the same read here. Nothing is created, checked or registered.
+  as it is: a plain read of `SMComponent`, the same for `GearboxPawn` and `WillowPlayerPawn`. Nothing is created,
+  checked or registered.
 - **When the component exists:** it is a default sub-object, not something the native or a script makes. The class
   defaults of `GearboxPawn` and `WillowPlayerPawn` each hold a `SpecialMoveComponent0` sub-object, listed both in
   `SMComponent` and in the actor's `Components`. Maya's pawn archetype (`GD_Siren_Streaming.Pawn_Siren`, a
@@ -65,7 +65,7 @@ UnrealScript evaluates the context object of a call before its arguments. If `Ge
   - the slice's player is made from class defaults (link 1's scope), so its `SMComponent` may be the class default's
     own sub-object, shared, unless the port instances it.
 
-  Which of the two the port should answer with is the port's decision. The game answers with a per-pawn instance.
+  Which of the two the port should answer with is the port's decision. The game is expected to answer with a per-pawn instance (stock UE3), UNVERIFIED; the bl-sdk check below settles it.
 - **Live confirmation:** with bl-sdk in Sanctuary:
   - call `GetSMComponent()` on Maya's pawn twice, and on a second pawn;
   - expect the same object for Maya, a different one for the other pawn, and neither the archetype's template;
