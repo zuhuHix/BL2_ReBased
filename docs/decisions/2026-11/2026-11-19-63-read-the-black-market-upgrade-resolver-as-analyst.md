@@ -30,6 +30,16 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BLACKMARKET-RESOLVER, analyst 
   player-controller context chain and this resolver, tied to the assault-rifle ammo upgrade. It feeds Maya's rifle ammo
   pool maximum.
 
+**Review r1 of #451.** The note now says:
+- when each write happens: the cache only on a cold read with the globals found, the array only when short;
+- the Off order: preflight both effects, commit the cache, zero-fill, read;
+- the named `NotYet`s for unsupported writes;
+- missing globals (0.0) versus no engine-globals support (`LayerAbsent`), and that a warm cache skips the lookup;
+- the absent context (the resolver not reached) versus a rejected one (the cold cache still computed);
+- the unlisted upgrade's cold read.
+
+The live checks now name their starting states and before/after fields, and mark the open verification gaps.
+
 **Open (in the note).**
 
 - Which `WillowGame` class the context must be. `WillowPlayerController` is inferred.
