@@ -104,3 +104,22 @@ of 14, as on #452. Links 6 and 7 are errors at `make` (1 of 3 and 1 of 4 driver 
   decoy, and checks the decoy never reaches the bounds query. New cases: an exact tie, a win decided by the 0.25
   bonus, a script override, a missing handler, the shrink order, the out-of-range seen slot, and the globals not
   resolved before the camera.
+
+**Review r3 of #467** (a fix commit on 343bf8f0):
+- **The globals are prepared before the pass.** `WorldGlobals::prepare` reads the world's globals object, checks the
+  native declaration, and reads the active definition (`TheGlobalsDefinition`, which world set-up fills). Its outcome
+  is held for the pass. The `Globals` provider now gets only `&Vm`, and nothing on that path dispatches script or
+  calls `DefStore::find`. A refusal while preparing is still answered only when the pass reaches the pickup list.
+- **The definition in use** is the world's active one, not the stock path. Off does not assume the stock
+  configuration.
+- **The handler call** is built with its exact arguments and validated with `Vm::check_call` in the plan, then
+  stored for the commit. The testkit cannot declare a static-array parameter, so a test checks the stored call's
+  arguments instead of that exact case.
+- **Typed errors.** The definition-store lookups convert with `VmError::from`, so a `NotYet` keeps its variant, kind
+  and record: the pickup default here, the driver's class default, and the weapon definition, balance, parts and
+  accuracy pool lookups of `equip_run`'s typed preparation.
+- **A missing layout** on an allowlisted inventory class is a named `NotYet { NotRead }`, and a malformed one a data
+  error, as NATIVE_INVENTORY_DEFINITION.md says. #462's accessor replaces this copy once it lands.
+- **Tests:** 26 for the pass. New: the checked handler call, the missing layout, and a definition-store `NotYet`
+  keeping its variant.
+
