@@ -59,8 +59,9 @@
 //!   reported; [`MissionScript::set_player_health`] is `NotYet`. `--mission-run` prints no health, so its output does
 //!   not show this.
 //! - `BehaviorBase.RunBehaviors` inside the level-up, the C++ stand-in that applies the OnLevelUp skills' effects by
-//!   their data (swaps 7b, 9, 10): `NotYet { NotPorted }` (skills are lane W6-SKILLS). Outside the level-up it is the
-//!   C++ log line and nothing.
+//!   their data (swaps 7b, 9, 10): `NotYet { NotPorted }` in Reference (skills are lane W6-SKILLS). Outside the
+//!   level-up it is the C++ log line and nothing. Off does not use this binding: since decision 2026-11-19-54 the
+//!   behavior kernel pack runs the game's loop (`ow_behavior::kernel::run`, NATIVE_RUN_BEHAVIORS.md).
 //! - `GetExperienceReward` for a mission with optional objectives: the C++ logs "not implemented" and leaves their
 //!   terms out (kept in Reference mode); in Off mode it is `NotYet { NotPorted }` (`ow_balance::xp::mission_xp` takes
 //!   the terms; the bridge does not collect the completed objectives' percentages yet).
@@ -742,13 +743,18 @@ impl MissionScript {
         for (path, body) in BOUND {
             bind(vm, path, self.native(path, body))?;
         }
-        const OPTIONAL: [(&str, Body); 3] = [
+        const OPTIONAL: [(&str, Body); 2] = [
             ("WillowGame.WillowPawn.GetAWillowPawn", MissionScript::n_a_willow_pawn),
             ("WillowGame.WillowPawn.SetGameStage", MissionScript::n_set_game_stage),
-            ("Engine.BehaviorBase.RunBehaviors", MissionScript::n_run_behaviors),
         ];
         for (path, body) in OPTIONAL {
             bind_optional(vm, path, self.native(path, body))?;
+        }
+        // RunBehaviors: Reference keeps the C++ stand-in's binding (R3). Off runs the game's loop, which the behavior
+        // kernel pack binds (`ow_behavior::kernel::run`, NATIVE_RUN_BEHAVIORS.md; decision 2026-11-19-54).
+        if vm.parity == ParityMode::Reference {
+            let path = "Engine.BehaviorBase.RunBehaviors";
+            bind_optional(vm, path, self.native(path, MissionScript::n_run_behaviors))?;
         }
         // Off only: the C++ stubs it, and Reference keeps that stub (R3; decision 2026-11-19-05).
         // The same for the record queries of NATIVE_MISSION_OBJECTIVES.md (decision 2026-11-19-10).

@@ -93,6 +93,7 @@ use crate::provider::{
 use crate::registry::{self, Handler, Registry};
 
 pub mod natives;
+pub mod run;
 
 /// The records of the kernel rules.
 pub const RECORD_DISPATCH: &str = "docs/verification/NATIVE_MISSION_DISPATCH.md (A1, A2)";
