@@ -47,9 +47,9 @@ No gameplay state is read back from these settings on the accept path.
 ## 2. UIInteraction.GetDataStoreClient()
 
 A static native. It answers the data store client held by the engine's UI interaction object: the one the game
-viewport's UI controller holds. When the engine, its viewport or that UI object is missing, it answers the client of
-the `UIInteraction` class default object instead, and None only when that is missing too. A UI object that is present
-but holds no client gives None: the fallback is taken only when the object itself is missing. It changes nothing.
+viewport's UI controller holds. A present UI object answers its own client field, even when that field is empty
+(None). When the engine, its viewport or that UI object is missing, it answers the client field of the `UIInteraction`
+class default object instead, which can also be None. It changes nothing.
 
 In the shipped game the engine always has a client (public UE3: it is made when the engine starts), so None is not
 an answer the game gives once it is running (decision 2026-11-19-19, UNVERIFIED here).
@@ -67,8 +67,8 @@ It changes nothing and creates nothing.
 
 ## 4. The data store the route needs
 
-- **Registered globally.** The installed engine configuration lists `WillowGame.WillowOnlineGameSettings_DataStore`
-  among the client's global data store classes (next to the online game search store). It is not a player data store
+- **Listed in the global store configuration.** The installed engine configuration lists
+  `WillowGame.WillowOnlineGameSettings_DataStore` among the client's global data store classes (next to the online game search store). It is not a player data store
   class.
 - **Its defaults** (installed package): `Tag` is `WillowOnlineGameSettings`; `GameSettingsCfgList` has one entry,
   whose `GameSettingsClass` is `WillowGame.WillowOnlineGameSettings` and whose `GameSettings` and `Provider` are empty;
@@ -89,8 +89,9 @@ engine, not a game rule.
 role, `PlayerController.IsPrimaryPlayer` (already bound by the mission bridge) and `IsLocalPlayerController` (Off
 since decision 2026-11-19-15).
 
-**Branch 1, the online subsystem** (first in section 1, step 2). With no online subsystem in the world, there are no
-`Game` settings from it, and the refresh takes branch 2. This is not a `NotYet`.
+**Branch 1, the online subsystem** (first in section 1, step 2): the subsystem's `GetGameSettings` for the session
+named `Game`. Off has no online subsystem in the world, so `GetGameSettings` is never called: the branch is bypassed
+and the refresh takes branch 2. This is not a `NotYet`.
 
 **Branch 2, the data store:**
 - `GetDataStoreClient`: Off answers the world's one modelled client. While no lane models a client, it stays the
@@ -101,15 +102,20 @@ since decision 2026-11-19-15).
   names what fills it in a world with no online subsystem (open question 2), reading it is a named `NotYet` that
   names open question 2. It is never "empty, so return with no writes".
 
-**After the settings are found**, the writes of section 1 step 2, in order. Each is a named `NotYet` in Off until
-it is read, unless the index already has an Off rule for it:
-1. the level: the player replication info's `ExpLevel` plus the game replication info's `OverpowerLevelModifier`, then
-   `UpdateExpLevel`;
-2. `GetActiveMissionNumber` (NATIVE_CONTROLLER_HELPERS.md), then `UpdateActiveMission`;
-3. `GetActivePlotCriticalMissionNumber` (NATIVE_SAVE_LOAD.md), then `UpdateActivePlotMission`;
-4. `WillowGameReplicationInfo.GetCurrPlaythrough`, then `UpdatePlaythrough`;
-5. `GameEngine.GetDLCManager`; only with a manager, `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap`,
-   then `UpdateMapDlcContentId` and `UpdateDlcFlag`.
+**After the settings are found**, the steps of section 1 step 2, in order. While the settings entry read above is a
+named `NotYet`, none of them is reached in Off. Once it is not, each is listed with its Off answer. On 2026-11-19 no
+native below has an Off binding in `NATIVE_INDEX.md`, so each native is a named `NotYet` until it is read; field reads
+are plain reads, and the `Update...` steps are script, run as script:
+1. the level: `ExpLevel` (player replication info) plus `OverpowerLevelModifier` (game replication info), two field
+   reads; then the script `UpdateExpLevel`;
+2. the native `GetActiveMissionNumber` (NATIVE_CONTROLLER_HELPERS.md, no Off rule: named `NotYet`), then the script
+   `UpdateActiveMission`;
+3. the native `GetActivePlotCriticalMissionNumber` (NATIVE_SAVE_LOAD.md, no Off rule: named `NotYet`), then the script
+   `UpdateActivePlotMission`;
+4. `WillowGameReplicationInfo.GetCurrPlaythrough` (not indexed: named `NotYet`), then the script `UpdatePlaythrough`;
+5. `GameEngine.GetDLCManager` (not indexed: named `NotYet`). The gate is kept: only with a manager are
+   `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` asked (both named `NotYet`), then the scripts
+   `UpdateMapDlcContentId` and `UpdateDlcFlag`.
 
 Each `Update...` is script that writes one integer property through `Settings.SetIntProperty` (a native, not read:
 a named `NotYet`). The push to the online subsystem is not reached on this path (section 1, step 2).
