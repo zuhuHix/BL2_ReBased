@@ -191,3 +191,79 @@ fn reference_binds_nothing() {
     register(&mut w.vm).unwrap();
     assert!(!w.vm.has_native(INTERNAL_SLOTS));
 }
+
+/// An attribute on the item's `Bonus` whose value chain is `entries` (each a resolver class path, or None).
+fn chained(w: &mut World, name: &str, entries: &[Option<&str>]) -> ObjRef {
+    let c = w.obj("Engine.WeaponAttributeContextResolver", &format!("{name}.Context"));
+    let mut chain = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        chain.push(match e {
+            Some(class) => {
+                let r = w.obj(class, &format!("{name}.Value{i}"));
+                if *class == "Engine.ObjectPropertyAttributeValueResolver" {
+                    let n = Value::Name(w.vm.space.names.intern("Bonus"));
+                    w.set(r, "PropertyName", n);
+                }
+                Value::Object(Some(r))
+            }
+            None => Value::Object(None),
+        });
+    }
+    let a = w.obj("Engine.AttributeDefinition", name);
+    w.set(a, "ContextResolverChain", Value::array(vec![Value::Object(Some(c))]));
+    w.set(a, "ValueResolverChain", Value::array(chain));
+    a
+}
+
+/// P9 checks every entry of a planned add's chain, whether or not the add will reach it (the final note, review r1 of
+/// #471): a writable entry, then one whose resolver class is not read, is that class's `NotYet` before any write.
+#[test]
+fn every_chain_entry_is_checked_before_any_write() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let a = chained(&mut w, "Test.Chained", &[Some("Engine.ObjectPropertyAttributeValueResolver"), Some("Test.UnreadValueResolver")]);
+    let s0 = slot(&mut w, true, false, false, Some(a), 1.0);
+    let item = item_with(&mut w, class, vec![s0]);
+    let before = (w.float(item, "Bonus"), w.get(item, "AppliedAttributeSlotEffects"));
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::NotYet(_)), "{e:?}");
+    assert!(!format!("{e:?}").contains("partial writes"));
+    assert_eq!((w.float(item, "Bonus"), w.get(item, "AppliedAttributeSlotEffects")), before, "nothing written");
+}
+
+/// A None chain entry ends the check, as it ends the add in any order: the unread entry past it is not checked, and
+/// the add answers false, so nothing is recorded.
+#[test]
+fn a_none_entry_ends_the_chain_check() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let a = chained(&mut w, "Test.Stopped", &[None, Some("Test.UnreadValueResolver")]);
+    let s0 = slot(&mut w, true, false, false, Some(a), 1.0);
+    let item = item_with(&mut w, class, vec![s0]);
+    let out = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    assert_eq!(out, Value::array(vec![]), "a false add records nothing");
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]));
+}
+
+/// With the flag false, a backup record with a None modifier is a no-op (P7): no error, nothing removed for it.
+#[test]
+fn a_backup_record_without_a_modifier_is_a_no_op() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let slots = five(&mut w);
+    let item = item_with(&mut w, class, slots);
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let a = w.weapon_bonus;
+    let mut rec = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: a, modifier: item }])).unwrap();
+    let at = {
+        let id = w.vm.space.names.find("Modifier").unwrap();
+        w.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0
+    };
+    rec[0].struct_mut().unwrap().fields[at as usize] = Value::Object(None);
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(rec));
+    let raw = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap();
+    let out = applied_from_values(&w.vm, &raw).unwrap();
+    assert_eq!(out.0.len(), 2, "the two qualifying slots applied");
+    assert_eq!(w.float(item, "Bonus"), 3.0);
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]), "emptied");
+}

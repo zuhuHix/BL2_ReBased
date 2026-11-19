@@ -1,8 +1,8 @@
 ## 2026-11-19: ApplyInternalSlotEffectModifiers in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, slice link 8. Coded from
-docs/verification/NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md alone, the note's text at 4301807 (clean room: lane
-ANALYST-APPLY-SLOT-EFFECT-MODIFIERS wrote it, decision 2026-11-19-87, PR #471; its round-1 fix is pending). The
+docs/verification/NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md alone, the note's final text on main (a3c8e22, content
+d38aa0f; clean room: lane ANALYST-APPLY-SLOT-EFFECT-MODIFIERS wrote it, decision 2026-11-19-87, PR #471). The
 executable and the analysis output were not opened. Synthetic fixtures only. Stacked on #468 (decision 2026-11-19-82).
 
 - **What is bound (`ow-inventory` `equip/internal_slots.rs`, Off only).**
@@ -16,36 +16,44 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
 - **The note's Off assumptions, each UNVERIFIED.**
   - B1: the count stops at the declared dimension.
   - B2: contexts are resolved in the preflight.
-  - B3: a modifier is made only for a slot whose context resolved. Its outer is None, because the port has no
-    transient package.
-- **Preflight, P1 to P9, before any write.**
+  - B3: no modifier is made for a slot whose context did not resolve. One whose add then answers false still gets
+    its object, which stays where the chain left it: not recorded, and not rolled back. Its outer is None, because
+    the port has no transient package.
+- **Preflight, P0 to P9, before any write.**
   - P1 to P4 are shapes: the out argument's record struct, the five slot fields (`declared_slots`, the shape check of
     decision 2026-11-19-49 with a field list), `AppliedAttributeSlotEffects`, and the modifier class.
   - P5 to P7 are values: the count, each slot's five values (a `ModifierType` outside the enum is a data error), and
-    each record's three objects.
+    each record's three objects. With the flag false, a record is a removal only when its context, attribute and
+    modifier are all set; one with a None modifier is a no-op, neither checked nor run.
+  - P0, under the note's ruling that definition loads are not writes: every definition the call will touch is loaded.
+    That is each qualifying slot's attribute and each removal's attribute, with the entries of their two resolver
+    chains. A load's error comes back unchanged. P0 runs after the reads that name what it loads, and before P8.
   - P8: each qualifying slot's context, from the item.
-  - P9: for each removal and each add, a new read-only `ow-attr` test, `AttributeSystem::modifier_storages`. It is the
-    chain walk of the add and the remove up to the point where they touch a stack, which the note asks the
-    implementer to add.
-- **The lazy-load ruling.**
-  - P8 and P9 read only loaded definitions. After the cheap checks P1 to P7, an explicit pre-plan load step loads the
-    attributes the plan will use and the entries of their two resolver chains. One still unloaded after it is a named
-    `NotYet`.
-  - The step is needed on the installed data. Without it, every weapon's slot attribute holds its
-    `WeaponAttributeContextResolver` as an unloaded store handle, and the plan refused.
-- **Writes, W1 to W3.** A `NotYet` after a write is terminal and gets "stopped after partial writes: " through
-  `ow_world::pools::after_partial_writes`; nothing is rolled back.
-- **`ow-attr`.** Two public additions: `modifier_storages` (read-only) and `new_modifier` (the modifier constructor
+  - P9: the chain check. `AttributeSystem::check_modifier_chain` is new and read-only. It checks every entry of every
+    planned removal's and add's value-resolver chain, whether or not the operation will reach it:
+    - the entry's resolver class must be known, and its storage lookup must answer;
+    - a None entry ends the check;
+    - a "not writable" lookup does not end it.
+    It predicts no outcome. W1 and W3 run every planned operation and take its bool as it comes.
+- **P0 on the installed data.** P0 is needed there: every weapon's slot attribute holds its
+  `WeaponAttributeContextResolver` as an unloaded store handle.
+- **Writes, W1 to W3.** A `NotYet` after a write, for instance from a change notification's script, is terminal. It is
+  matched by its typed variant, keeps its kind and record, and gets "stopped after partial writes: " on its text through
+  `ow_world::pools::after_partial_writes`. Nothing is rolled back.
+- **`ow-attr`.** Two public additions: `check_modifier_chain` (read-only) and `new_modifier` (the modifier constructor
   the apply natives use).
-- **Tests.** Six tests in `equip/internal_slots_tests.rs`:
+- **Tests.** Nine tests in `equip/internal_slots_tests.rs`:
   - the flag true: records, backup list, values;
   - the flag false after true: removed then reapplied, not doubled;
   - true twice: doubled, as the note's correction says;
   - the count: 0, and past the dimension;
   - an unresolvable context refused with nothing written;
+  - every chain entry checked: a writable entry, then an unread one, is refused before any write;
+  - a None entry ending the check, with a false add and nothing recorded;
+  - a backup record without a modifier, as a no-op;
   - Reference.
 - **Installed runs, Off.**
-  - `--slice-gate`, strict: 0 ok / 13 not yet / 1 error. Link 8 passes this native and stops later in `init`, at the
+  - `--slice-gate`, strict: 0 ok / 13 not yet / 1 error (rerun on the final note's code). Link 8 passes this native and stops later in `init`, at the
     unbound native `WillowWeapon.CacheWeaponCard()`. That is the note's section 4 prediction off the name-part branch.
   - `--equip-run` on the 50 weapons: 49 stop at `CacheWeaponCard`, and the Jakobs sniper rifle stops earlier, as
     before (the note's open question 4).

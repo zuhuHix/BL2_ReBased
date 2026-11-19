@@ -57,31 +57,23 @@ fn storage_at(
     resolver.storage(sys, r, context, cx)
 }
 
-/// The storages an add or a remove of a modifier through `attr`'s value chain on `context` would touch, in chain
-/// order, found without writing anything: `None` when the chain would refuse (no value resolvers, a None entry, an
-/// entry whose resolver takes no writes). The same walk as [`add_chain`] and [`remove_modifier`] up to the point where
-/// they touch a stack (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97: the read-only test its note
-/// asks for). A resolver handle that is not loaded is loaded by the walk, as the add's own walk does; a caller that
-/// must not load checks first.
-pub(crate) fn modifier_storages(
+/// The chain check of an add or a remove of a modifier through `attr`'s value chain on `context`, without touching a
+/// stack (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97; its note's P9). Every entry is checked, whether
+/// or not the operation will reach it: an entry's value resolver class must be known and its storage lookup must
+/// answer, so an unknown class or a lookup `NotYet` comes back here. A None entry ends the check (the operation stops
+/// there in any order); a lookup that answers "not writable" does not (the entries past it are still checked). It
+/// predicts no outcome. A resolver handle that is not loaded is loaded by the lookup, as the add's own walk does.
+pub(crate) fn check_modifier_chain(
     sys: &AttributeSystem,
     attr: ObjRef,
     context: ObjRef,
     cx: &mut EvalCx<'_>,
-) -> Result<Option<Vec<Storage>>, AttrError> {
-    let chain = value_chain(cx, attr)?;
-    if chain.is_empty() {
-        return Ok(None);
+) -> Result<(), AttrError> {
+    for entry in value_chain(cx, attr)? {
+        let Some(r) = entry else { break };
+        storage_at(sys, r, context, cx)?;
     }
-    let mut out = Vec::with_capacity(chain.len());
-    for entry in chain {
-        let Some(r) = entry else { return Ok(None) };
-        match storage_at(sys, r, context, cx)? {
-            Some(s) => out.push(s),
-            None => return Ok(None),
-        }
-    }
-    Ok(Some(out))
+    Ok(())
 }
 
 /// [`new_modifier`] for a caller outside this crate (the slot natives make their own modifiers).
