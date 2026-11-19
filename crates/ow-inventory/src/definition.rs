@@ -43,7 +43,7 @@ use std::rc::Rc;
 use ow_attr::api::EvalCx;
 use ow_core::rand::{CrtStream, Rand15};
 use ow_core::{NotYet, ParityMode};
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
@@ -325,40 +325,71 @@ fn definition_not_read(what: String) -> VmError {
 pub fn inventory_definition_of(vm: &Vm, me: ObjRef) -> Result<Option<ObjRef>, VmError> {
     const NATIVE: &str = "GetInventoryDefinition";
     let class = vm.space.heap.get(me)?.class;
-    let path = vm.space.classes.layout(class).path().as_str().to_string();
-    let name = if READ_WEAPON_CLASSES.contains(&path.as_str()) {
+    // Each allowlisted path resolves through the class table, under the VM's path rules, and the receiver's class
+    // must be that exact class (review r1 of #462): a stored spelling never decides.
+    let classes = &vm.space.classes;
+    let is = |paths: &[&str]| paths.iter().any(|p| classes.by_path(p) == Some(class));
+    let name = if is(&READ_WEAPON_CLASSES) {
         "WeaponTypeDefinition"
-    } else if READ_ITEM_CLASSES.contains(&path.as_str()) {
+    } else if is(&READ_ITEM_CLASSES) {
         "ItemDefinition"
-    } else if path == INVENTORY_BASE {
+    } else if is(&[INVENTORY_BASE]) {
         // Step 3: None, with no diagnostic (the game's log line changes no state script can see).
         return Ok(None);
     } else {
         // Step 4: a plain Engine.Weapon, a subclass outside the two trees, or a descendant beyond the thirteen read
         // classes; its engine rule was not read.
+        let path = classes.layout(class).path().as_str().to_string();
         return Err(definition_not_read(format!(
             "{NATIVE} on a {path}: a class whose engine rule was not read"
         )));
     };
-    // Step 5: a missing layout is a named NotYet before anything is answered.
-    let data = crate::equip::read(vm, me, "DefinitionData")?
+    // Step 5: a missing layout is a named NotYet before anything is answered; a declared but malformed one is a
+    // data error (a scalar struct for DefinitionData, a scalar object reference for the field).
+    let prop = vm
+        .space
+        .prop(class, "DefinitionData")
         .ok_or_else(|| definition_not_read(format!("{NATIVE} on a class without DefinitionData")))?;
-    let ty = data.as_struct().map(|s| s.ty).ok_or_else(|| {
-        bad(NATIVE, format!("DefinitionData holds {}", data.kind_name()))
-    })?;
-    let declared = vm.space.names.find(name).is_some_and(|id| {
-        vm.space
-            .classes
+    let decl = classes
+        .decl(prop)
+        .ok_or_else(|| bad(NATIVE, "DefinitionData has no declaration"))?;
+    let ty = match (&decl.kind, decl.array_dim) {
+        (PropKind::Struct(ty), 1) => *ty,
+        (kind, dim) => {
+            return Err(bad(
+                NATIVE,
+                format!("DefinitionData is declared as {kind:?} x {dim}, not one struct"),
+            ));
+        }
+    };
+    let field_decl = vm.space.names.find(name).and_then(|id| {
+        classes
             .struct_layout(ty)
-            .is_some_and(|l| l.field(id).is_some())
+            .and_then(|l| l.field(id).map(|(_, d)| (d.kind.clone(), d.array_dim)))
     });
-    if !declared {
-        return Err(definition_not_read(format!(
-            "{NATIVE} on a DefinitionData without {name}"
-        )));
+    match field_decl {
+        None => {
+            return Err(definition_not_read(format!(
+                "{NATIVE} on a DefinitionData without {name}"
+            )));
+        }
+        Some((PropKind::Object { .. }, 1)) => {}
+        Some((kind, dim)) => {
+            return Err(bad(
+                NATIVE,
+                format!("DefinitionData.{name} is declared as {kind:?} x {dim}, not one object reference"),
+            ));
+        }
     }
-    // Step 6: a declared field that holds None answers None.
-    object_of(&field(vm, &data, name)?, name)
+    let data = vm.space.read(me, PropAddr::scalar(prop))?.clone();
+    // Step 6: the stored reference comes back unchanged, None included.
+    match field(vm, &data, name)? {
+        Value::Object(o) => Ok(o),
+        other => Err(bad(
+            NATIVE,
+            format!("DefinitionData.{name} holds {}, not an object reference", other.kind_name()),
+        )),
+    }
 }
 
 fn get_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
