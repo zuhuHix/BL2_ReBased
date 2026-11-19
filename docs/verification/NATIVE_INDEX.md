@@ -225,7 +225,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | PlayerSkillTree.UpdateBranchProgression | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | UI progress bars only | UNVERIFIED | medium | |
 | PlayerSkillTree.SaveSkillSaveGameData | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Quest save of grades | UNVERIFIED | medium | |
 | PlayerSkillTree.ApplySkillSaveGameData | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Save replay (script loads per skill instead) | UNVERIFIED | medium | |
-| WillowPlayerController.InitPlayerSkillTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Tree creation at class change | UNVERIFIED | medium | |
+| WillowPlayerController.InitPlayerSkillTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md), [NATIVE_INIT_PLAYER_SKILL_TREE.md](NATIVE_INIT_PLAYER_SKILL_TREE.md) | Tree creation at class change (order, gates, Off answers: the newer note) | UNVERIFIED | high | |
 | WillowPlayerController.ResetSkillTree | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Respec / load reset, refund | UNVERIFIED | high | |
 | WillowPlayerController.HasPlayerEarnedAnySkillPoints | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Skill UI gating | UNVERIFIED | high | |
 | WillowPlayerController.GetActionSkillDuration | [NATIVE_SKILLS.md](NATIVE_SKILLS.md) | Action skill active-ability time | UNVERIFIED | medium | |
@@ -623,3 +623,5 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowInventory.GetInventoryDefinition (weapons, items, the base) | [NATIVE_INVENTORY_DEFINITION.md](NATIVE_INVENTORY_DEFINITION.md) | links 6 and 7: the weapon's drop (`DropFrom`) before the pickup | UNVERIFIED | high | |
 | The spawn's placement spot search (world FindSpot, as `Actor.Spawn` and `Actor.FindSpot` reach it) | [NATIVE_SPAWN_PLACEMENT.md](NATIVE_SPAWN_PLACEMENT.md) | link 9: the cast's spawns (`ow_world::actors::spawn`) | UNVERIFIED | high | |
 | The spawn's post-`PreBeginPlay` encroachment check and the `bNoCollisionFail` relocation step | [NATIVE_SPAWN_PLACEMENT.md](NATIVE_SPAWN_PLACEMENT.md) | link 9 after play began | UNVERIFIED | high (when), not read (internals) | |
+| WillowPlayerController.InitPlayerSkillTree (Off answers and slice minimum) | [NATIVE_INIT_PLAYER_SKILL_TREE.md](NATIVE_INIT_PLAYER_SKILL_TREE.md) | links 1, 3, 4, 5, 13, 14: the stop at maya:8 inside OnPlayerClassChange | UNVERIFIED | high | |
+| WillowPlayerPawnDataManager.LoadSkillTreeDefinitionAsync | [NATIVE_INIT_PLAYER_SKILL_TREE.md](NATIVE_INIT_PLAYER_SKILL_TREE.md) | the skill tree definition request: delivered at once when loaded, queued otherwise, dropped without a dot | UNVERIFIED | medium | |
