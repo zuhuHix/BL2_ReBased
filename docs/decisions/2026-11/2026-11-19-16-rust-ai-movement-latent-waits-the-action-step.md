@@ -4,8 +4,8 @@ AI-assisted (Claude Code). Lane W7-AI part 3 (implementer), the fresh implemente
 `docs/verification/NATIVE_AI_MOVEMENT.md` (the analyst lane's note, branch `docs/rust-ai-part3-notes`). This lane coded
 from the note alone and opened no analysis output. There was no real-game session, so every rule is **UNVERIFIED** in
 the running game. No dependency was added, no bounds check was loosened and no existing `NotYet` guard was relaxed.
-Everything is `ParityMode::Off` only: there is no C++ AI, so Reference keeps what it had (R3). The lane is stacked on
-`feature/rust-vm-latent-host` (PR #389, 22e0964), whose host latent seam the waits use.
+Everything is `ParityMode::Off` only: there is no C++ AI, so Reference keeps what it had (R3). The lane was
+rebased onto main after #389 (the VM's host latent seam, which the waits use) landed.
 
 - **What was added.**
   - `crates/ow-ai/src/awareness/movement.rs` (+ tests), bound from `actions::Pack` before that pack's own `NotYet` for
@@ -45,7 +45,10 @@ Everything is `ParityMode::Off` only: there is no C++ AI, so Reference keeps wha
     the gate resumes at the next statement;
   - the fifth state change ends the step. The actor step allows five restarts, which is six runs; this one gives five
     runs;
-  - the note's million-statement guard is the VM's own step budget;
+  - the note's million-statement guard (clear the code and end the step) is not ported as such: the VM's per-run
+    step budget stands in for it, stricter, and errors with a step limit instead (review r1 of #397);
+  - a cleared `bInitialized` inside a `foreach` of the state code is `NotYet`, as a latent call or a `PushState`
+    there is: how the loop survives the stop is not read (review r1 of #397);
   - when the step runs the code out on an action with a `ParentSequence`, the parent's notice is
     `NotYet { NotRead }` (the `ExecuteSequence` wait is not read).
   - **The brain does not call the step yet.** Which entry point the AI component uses for a running tree action, with
@@ -55,8 +58,9 @@ Everything is `ParityMode::Off` only: there is no C++ AI, so Reference keeps wha
   - `AIComponent.GetTargetRecord` is `GetTargetRecordFor(CurrentTarget)`.
   - `GetTargetRecordFor(A)` returns the first non-empty record in `Targets` whose `Target` is `A`. No actor answers
     None.
-  - `bParent` climbs to the parent component, but no component has a parent in this port (`awareness::vm`, "No
-    parent"), so each searches its own list.
+  - `bParent` climbs to the parent component. No component has a parent in this port yet (`awareness::vm`, "No
+    parent"), so a lone one searches its own list; one whose awareness state says it has a parent is `NotYet` (the
+    den's records; review r1 of #397).
   - The port keeps its records in Rust and writes no `WillowMindTargetInfo` objects into `Targets`, so the answer is
     still None. That is the note's reason the attacks find no record at `Target_Acquired`.
   - Mirroring the records as VM objects needs the record's fields as the game fills them, which the note does not

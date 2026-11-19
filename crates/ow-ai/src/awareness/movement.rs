@@ -38,8 +38,9 @@
 //!
 //! **Target records** (`AIComponent.GetTargetRecord(optional bParent)`, `GetTargetRecordFor(A, optional bParent)`):
 //! the first non-empty record of the component's `Targets` whose `Target` is `A` (for `GetTargetRecord`, `A` is
-//! `CurrentTarget`); no actor answers None. With `bParent` the search climbs to the parent component; no component
-//! has a parent in this port (`super::vm`, "No parent"), so it searches its own list. The port keeps its records in
+//! `CurrentTarget`); no actor answers None. With `bParent` the search climbs to the parent component: no component
+//! has a parent in this port yet (`super::vm`, "No parent"), so a lone one searches its own list, and one whose
+//! awareness state says it has a parent is `NotYet` (the den's records). The port keeps its records in
 //! Rust (`super::record`) and writes no `WillowMindTargetInfo` objects into `Targets`, so these answer None, which is
 //! why the attacks' `Target_Acquired` finds no record (the note's explanation). Mirroring the records as VM objects
 //! needs the record's fields as the game fills them, which the note does not give: an open item.
@@ -374,10 +375,40 @@ fn record_for(vm: &mut Vm, component: ObjRef, actor: Option<ObjRef>) -> Result<V
     Ok(Value::Object(None))
 }
 
+/// The search with `bParent`: on a component with a parent the note climbs to the parent's records, which this port
+/// does not model (`super::vm`, "No parent"), so that case is `NotYet`; otherwise the component's own list.
+fn record_for_parent(
+    vm: &mut Vm,
+    component: ObjRef,
+    actor: Option<ObjRef>,
+    b_parent: bool,
+    has_parent: bool,
+) -> Result<Value, VmError> {
+    if b_parent && has_parent && actor.is_some() {
+        return Err(NotYet::not_ported(
+            "AIComponent.GetTargetRecordFor with bParent on a component with a parent (a population den member): the \
+             parent's records",
+            RECORD_MOVEMENT,
+        )
+        .into());
+    }
+    record_for(vm, component, actor)
+}
+
+/// The optional `bParent` argument at `index` (absent: false).
+fn b_parent(c: &NativeCall<'_>, index: usize) -> Result<bool, VmError> {
+    if index >= c.arg_count() {
+        return Ok(false);
+    }
+    Ok(truth(c.vm, c.arg(index)?))
+}
+
 fn n_target_record(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = this(c)?;
     let current = object(c.vm, me, "CurrentTarget")?;
-    record_for(c.vm, me, current)
+    let parent = b_parent(c, 0)?;
+    let has_parent = super::vm::component_has_parent(c.vm, me)?;
+    record_for_parent(c.vm, me, current, parent, has_parent)
 }
 
 fn n_target_record_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -386,7 +417,9 @@ fn n_target_record_for(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Object(o) => *o,
         _ => None,
     };
-    record_for(c.vm, me, actor)
+    let parent = b_parent(c, 1)?;
+    let has_parent = super::vm::component_has_parent(c.vm, me)?;
+    record_for_parent(c.vm, me, actor, parent, has_parent)
 }
 
 fn den_not_read() -> VmError {

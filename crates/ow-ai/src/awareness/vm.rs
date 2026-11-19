@@ -316,6 +316,27 @@ pub fn install(vm: &mut Vm, host: Rc<RefCell<dyn Host>>, globals: ObjRef) -> Res
     Ok(())
 }
 
+/// Whether `component` has a parent component, as the awareness state of the mind it belongs to says (a component
+/// whose mind the adapter has no state for is lone: module documentation, "No parent").
+pub(crate) fn component_has_parent(vm: &mut Vm, component: ObjRef) -> Result<bool, VmError> {
+    let held: Vec<(ObjRef, bool)> = match vm.service::<Minds>() {
+        Some(m) => m
+            .try_borrow()
+            .map_err(|_| VmError::ServiceBorrowed("ow_ai::awareness::vm::Minds"))?
+            .minds
+            .iter()
+            .map(|(mind, c)| (*mind, c.settings.has_parent))
+            .collect(),
+        None => Vec::new(),
+    };
+    for (mind, parent) in held {
+        if object(vm, mind, "AIComponent")? == Some(component) {
+            return Ok(parent);
+        }
+    }
+    Ok(false)
+}
+
 /// The awareness state of `mind`, if the adapter has it (a copy).
 pub fn state(vm: &Vm, mind: ObjRef) -> Option<Component> {
     vm.service::<Minds>()?.try_borrow().ok()?.minds.get(&mind).cloned()
