@@ -70,14 +70,13 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
   - Noun's probe runs the same strategy checks.
   - For a missing entry it evaluates only `DefaultValue` and appends nothing. A new entry would have no replicated
     slot, so it passes.
-  - For an existing entry it gives the replicated-slot refusal, `NotYet` (`NotRead`), that a write to the entry would
+  - For an existing entry it gives the replicated-slot refusal, `NotYet` (`NotPorted`), that a write to the entry would
     give. A planned add to such an entry is therefore refused in the preflight, and so is a planned removal: the
     conservative answer, because a removal of a modifier that is not on the stack writes nothing in the game. That
     case is UNVERIFIED.
 - **Off assumption, UNVERIFIED: a `ModifierType` outside the enum.** It is a data error only on a qualifying slot. The
   note does not say what the native makes of one, and `ow-attr`'s stack treats such a modifier as a no-op.
-- **The partial-writes mark** starts once the first removal returned, since it may have written, or at W2 when there
-  is no removal. A refusal of the very first removal, before it touched anything, is returned unmarked.
+- **The partial-writes mark** (r1, corrected in r2): every W1 failure is marked, the first removal's included.
 - **Tests:** eighteen, twelve of them new:
   - a post-write `NotYet`, prefixed with kind and record kept and the earlier writes left;
   - every entry of two removals naming one modifier checked;
@@ -88,3 +87,17 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
   - the noun case (no entry created, unprefixed `NotYet`);
   - P0 on a synthetic store (an unloaded attribute and its chain entry loaded; a failed load returned unchanged);
   - two more in `ow-attr`, for the noun probe (no entry created; a replicated slot refused).
+
+**Review r2 of #483.**
+- **The partial-writes mark on W1.** Every W1 failure is marked again, the first removal's included. A removal writes
+  the stack and the value before its change notification runs, so its `NotYet` can follow a write. The refusals that
+  come before any write were already decided by P9. r1 had left the first removal's refusal unmarked, which was wrong.
+- **Off assumption, UNVERIFIED: `DefaultValue` writes nothing.** The noun probe assumes that evaluating
+  `DefaultValue` writes nothing. Data whose `DefaultValue` names a `BaseValueAttribute` or an `InitializationDefinition`
+  could reach another noun attribute on the same context and create its entry. No data known to the port does this.
+- **The probe's default.** `ValueResolver::probe_storage`'s doc now says when an implementor must override it.
+- **Tests:**
+  - the first removal on a notifying property whose notification is a `NotYet`: prefixed, kind and record kept, the
+    stack change kept;
+  - the noun case names `Test.UnreadValueResolver`, and its control (no slot 1) creates the entry at W3;
+  - the failed load matches the store's typed decode error.

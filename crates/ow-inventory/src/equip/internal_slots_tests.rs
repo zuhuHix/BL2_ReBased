@@ -484,5 +484,57 @@ fn the_chain_check_creates_no_noun_entry() {
     let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
     let VmError::NotYet(n) = &e else { panic!("{e:?}") };
     assert!(!n.what.contains("partial writes"), "{n}");
+    assert!(n.what.contains("Test.UnreadValueResolver"), "slot 1's refusal: {n}");
     assert_eq!(w.get(item, "NounState"), Value::array(vec![]), "no noun entry created");
+    // The control: without slot 1 the call goes through, and W3's add creates the entry.
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0]);
+    call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    assert_eq!(w.get(item, "NounState").elements().unwrap().len(), 1, "the add created the entry");
+}
+
+/// The first removal's change notification is a `NotYet` (review r2 of #483): the removal wrote the stack and the value
+/// first, so the call stops marked, kind and record kept, and the stack change stays.
+#[test]
+fn the_first_removal_s_notification_not_yet_is_marked() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let modifier = w.class("Core.AttributeModifier");
+    let d = |w: &mut World, n: &str, k: PropKind, flags: u64| PropertyDecl::new(w.vm.space.names.intern(n), k).with_flags(flags);
+    let decls = vec![
+        d(&mut w, "Loud", PropKind::FloatAttribute, PropertyDecl::STACK_ATTRIBUTE | PropertyDecl::NOTIFY),
+        d(&mut w, "LoudBaseValue", PropKind::FloatAttribute, PropertyDecl::PLAIN_ATTRIBUTE),
+        d(&mut w, "LoudModifierStack", PropKind::Array(Box::new(PropKind::Object { class: modifier })), 0),
+    ];
+    let loud_class = w.vm.space.classes.define("Test.LoudSlotWeapon", Some(class), decls).unwrap();
+    let (v, b, s) = (w.vm.space.names.intern("Loud"), w.vm.space.names.intern("LoudBaseValue"), w.vm.space.names.intern("LoudModifierStack"));
+    w.vm.space.classes.link_attribute(loud_class, v, b, s).unwrap();
+    w.vm
+        .register_attribute_notify(
+            "Test.LoudSlotWeapon",
+            std::rc::Rc::new(|_vm, _owner, _prop, _forms| {
+                Err(ow_core::NotYet::not_read("the loud test notification", "TOY_NOTIFY.md").into())
+            }),
+        )
+        .unwrap();
+    let ctx = w.obj("Engine.WeaponAttributeContextResolver", "Test.Loud.Context");
+    let k = w.obj("Engine.ObjectPropertyAttributeValueResolver", "Test.Loud.Value");
+    let n = Value::Name(w.vm.space.names.intern("Loud"));
+    w.set(k, "PropertyName", n);
+    let loud = w.obj("Engine.AttributeDefinition", "Test.Loud");
+    w.set(loud, "ContextResolverChain", Value::array(vec![Value::Object(Some(ctx))]));
+    w.set(loud, "ValueResolverChain", Value::array(vec![Value::Object(Some(k))]));
+    let item = item_with(&mut w, loud_class, vec![]);
+    let m = w.obj("Core.AttributeModifier", "Test.LoudModifier");
+    w.set(m, "Type", Value::Byte(2));
+    w.set(m, "Value", Value::Float(1.0));
+    w.set(item, "LoudModifierStack", Value::array(vec![Value::Object(Some(m))]));
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let rec = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: loud, modifier: m }])).unwrap();
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(rec));
+    let e = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "stopped after partial writes: the loud test notification");
+    assert_eq!((n.missing.clone(), n.record), (Missing::NotRead, "TOY_NOTIFY.md"));
+    assert_eq!(w.get(item, "LoudModifierStack"), Value::array(vec![]), "the removal's stack change stays");
 }
