@@ -96,6 +96,7 @@ fn world() -> World {
     space.classes.define("Engine.InterpActor", Some(dynamic), vec![]).unwrap();
     space.classes.define("Engine.KActor", Some(dynamic), vec![]).unwrap();
     space.classes.define("Engine.StaticMeshActor", Some(actor), vec![]).unwrap();
+    space.classes.define("Engine.Terrain", Some(actor), vec![]).unwrap();
     let d = bools(&mut space, &["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors"]);
     let primitive = space.classes.define("Engine.PrimitiveComponent", Some(object), d).unwrap();
     World { space, primitive, next: 0 }
@@ -119,40 +120,70 @@ impl World {
 }
 
 #[test]
-fn an_unread_class_takes_its_nearest_read_ancestors_row() {
+fn only_the_read_classes_have_a_row() {
     let w = world();
     let row = |p: &str| row_of(&w.space, w.space.classes.by_path(p).unwrap());
-    assert_eq!(row("Test.UnreadPawn"), Row::Pawn);
-    assert_eq!(row("Engine.KActor"), Row::Mover);
-    assert_eq!(row("Engine.DynamicSMActor"), Row::Actor);
-    assert_eq!(row("Engine.StaticMeshActor"), Row::Actor);
-    assert_eq!(row("Engine.Volume"), Row::Volume);
+    assert_eq!(row("Engine.Actor"), Some(Row::Actor));
+    assert_eq!(row("Engine.StaticMeshActor"), Some(Row::Actor));
+    assert_eq!(row("Engine.Terrain"), Some(Row::Actor));
+    assert_eq!(row("Engine.Volume"), Some(Row::Volume));
+    assert_eq!(row("Engine.KActor"), Some(Row::Mover));
+    assert_eq!(row("Engine.InterpActor"), Some(Row::Mover));
+    assert_eq!(row("Engine.Pawn"), Some(Row::Pawn));
+    // No row is inherited: a subclass of a read class may override the filter.
+    assert_eq!(row("Test.UnreadPawn"), None);
+    assert_eq!(row("Engine.DynamicSMActor"), None);
 }
 
 #[test]
-fn a_primitive_is_tested_by_its_blocking_flag_and_its_owners_row() {
+fn a_candidate_is_unsupported_by_the_per_component_test() {
     let mut w = world();
     let prim = w.primitive;
     let non_zero = w.obj(prim, &["BlockNonZeroExtent"]);
     let zero = w.obj(prim, &["BlockZeroExtent"]);
     let geometry = w.actor("Engine.StaticMeshActor", &["bWorldGeometry"]);
+    let plain = w.actor("Engine.StaticMeshActor", &[]);
     let mover = w.actor("Engine.InterpActor", &[]);
-    let pawn = w.actor("Test.UnreadPawn", &["bStationary"]);
+    let pawn = w.actor("Engine.Pawn", &["bStationary"]);
     let box_test = Query::BoxTest { zero_extent: false, complex: false };
     let zero_test = Query::BoxTest { zero_extent: true, complex: false };
     let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
-    assert_eq!(t(&w, non_zero, geometry, box_test), Candidate::Tested);
-    assert_eq!(t(&w, non_zero, geometry, Query::BoxSweep), Candidate::Tested);
+    let per = Candidate::Unsupported(Unread::PerComponentTest);
+    assert_eq!(t(&w, non_zero, geometry, box_test), per);
+    assert_eq!(t(&w, non_zero, geometry, Query::BoxSweep), per);
+    assert_eq!(t(&w, non_zero, plain, box_test), Candidate::NotTested);
     // The wrong blocking flag for the query's kind.
     assert_eq!(t(&w, non_zero, geometry, zero_test), Candidate::NotTested);
     assert_eq!(t(&w, non_zero, geometry, Query::PointSweep), Candidate::NotTested);
-    assert_eq!(t(&w, zero, geometry, Query::PointSweep), Candidate::Tested);
-    assert_eq!(t(&w, zero, geometry, zero_test), Candidate::Tested);
+    assert_eq!(t(&w, zero, geometry, Query::PointSweep), per);
+    assert_eq!(t(&w, zero, geometry, zero_test), per);
     // Movers: sweeps only. Pawns: never.
     assert_eq!(t(&w, non_zero, mover, box_test), Candidate::NotTested);
-    assert_eq!(t(&w, non_zero, mover, Query::BoxSweep), Candidate::Tested);
+    assert_eq!(t(&w, non_zero, mover, Query::BoxSweep), per);
     assert_eq!(t(&w, non_zero, pawn, box_test), Candidate::NotTested);
     assert_eq!(t(&w, non_zero, pawn, Query::BoxSweep), Candidate::NotTested);
+}
+
+#[test]
+fn an_unread_owner_class_and_terrain_are_unsupported() {
+    let mut w = world();
+    let prim = w.primitive;
+    let blocking = w.obj(prim, &["BlockNonZeroExtent"]);
+    let idle = w.obj(prim, &[]);
+    let unread = w.actor("Test.UnreadPawn", &[]);
+    let terrain = w.actor("Engine.Terrain", &[]);
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
+    assert_eq!(
+        t(&w, blocking, unread, box_test),
+        Candidate::Unsupported(Unread::OwnerClass("Test.UnreadPawn".to_string()))
+    );
+    assert_eq!(Unread::OwnerClass("Test.UnreadPawn".into()).rule(), "the trace filter of Test.UnreadPawn");
+    // A primitive that does not block the query's kind is no candidate, whatever its owner's class.
+    assert_eq!(t(&w, idle, unread, box_test), Candidate::NotTested);
+    // A terrain primitive in the region is Unsupported, blocking or not.
+    assert_eq!(t(&w, idle, terrain, box_test), Candidate::Unsupported(Unread::TerrainHandling));
+    assert_eq!(t(&w, blocking, terrain, Query::BoxSweep), Candidate::Unsupported(Unread::TerrainHandling));
 }
 
 fn hit(x: f32, n: f32, fraction: f32) -> Hit {
@@ -160,12 +191,14 @@ fn hit(x: f32, n: f32, fraction: f32) -> Hit {
 }
 
 #[test]
-fn a_sweep_returns_the_smaller_fraction_and_walks_actors_to_five_units_past_the_bsp() {
-    // A 100-unit sweep: the BSP at 0.5; actors are walked up to 0.55.
+fn a_sweep_answers_the_bsp_alone_or_the_actors_alone() {
+    // A 100-unit sweep with the BSP at 0.5: actors are walked up to 0.55.
     let bsp = hit(50.0, 0.0, 0.5);
-    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(40.0, 1.0, 0.4)], 100.0), Ok(Some(hit(40.0, 1.0, 0.4))));
+    assert_eq!(choose_sweep_hit(Some(bsp), &[], 100.0), Ok(Some(bsp)));
     assert_eq!(choose_sweep_hit(Some(bsp), &[hit(60.0, 1.0, 0.6)], 100.0), Ok(Some(bsp)));
-    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(52.0, 1.0, 0.52)], 100.0), Ok(Some(bsp)));
+    // A BSP hit and an actor hit within reach: the comparator decides, unread.
+    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(40.0, 1.0, 0.4)], 100.0), Err(UnreadChoice::Comparator));
+    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(52.0, 1.0, 0.52)], 100.0), Err(UnreadChoice::Comparator));
     // Without a BSP hit, the whole sweep is walked and the smallest actor fraction kept.
     let actors = [hit(80.0, 1.0, 0.8), hit(30.0, 1.0, 0.3)];
     assert_eq!(choose_sweep_hit(None, &actors, 100.0), Ok(Some(hit(30.0, 1.0, 0.3))));
@@ -173,12 +206,22 @@ fn a_sweep_returns_the_smaller_fraction_and_walks_actors_to_five_units_past_the_
 }
 
 #[test]
-fn an_exact_tie_answers_only_when_the_tied_hits_agree() {
-    let bsp = hit(50.0, 0.0, 0.5);
-    assert_eq!(choose_sweep_hit(Some(bsp), &[bsp], 100.0), Ok(Some(bsp)));
-    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(50.0, 1.0, 0.5)], 100.0), Err(UnreadTieOrder));
-    assert_eq!(choose_sweep_hit(None, &[hit(20.0, 1.0, 0.2), hit(21.0, 1.0, 0.2)], 100.0), Err(UnreadTieOrder));
+fn the_reach_past_the_bsp_is_capped_at_the_end_point() {
+    // A 10-unit sweep, the BSP at 0.8: 5 units past it is 1.3, capped at 1, so a hit beyond the end is not walked.
+    let bsp = hit(8.0, 0.0, 0.8);
+    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(12.0, 1.0, 1.2)], 10.0), Ok(Some(bsp)));
+    assert_eq!(choose_sweep_hit(Some(bsp), &[hit(9.5, 1.0, 0.95)], 10.0), Err(UnreadChoice::Comparator));
+}
+
+#[test]
+fn every_tied_actor_hit_at_the_minimum_is_kept() {
+    let a = hit(20.0, 1.0, 0.2);
+    assert_eq!(choose_sweep_hit(None, &[a, a], 100.0), Ok(Some(a)));
+    assert_eq!(choose_sweep_hit(None, &[a, hit(21.0, 1.0, 0.2)], 100.0), Err(UnreadChoice::TieOrder));
+    assert_eq!(choose_sweep_hit(None, &[a, hit(20.0, 0.0, 0.2)], 100.0), Err(UnreadChoice::TieOrder));
+    // Three hits at the minimum, the third differing: still a tie that differs.
+    assert_eq!(choose_sweep_hit(None, &[a, a, hit(22.0, 1.0, 0.2)], 100.0), Err(UnreadChoice::TieOrder));
     // A tie above a smaller hit does not matter.
-    let actors = [hit(20.0, 1.0, 0.2), hit(21.0, 1.0, 0.2), hit(10.0, 1.0, 0.1)];
+    let actors = [a, hit(21.0, 1.0, 0.2), hit(10.0, 1.0, 0.1)];
     assert_eq!(choose_sweep_hit(None, &actors, 100.0), Ok(Some(hit(10.0, 1.0, 0.1))));
 }

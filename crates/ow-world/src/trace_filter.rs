@@ -1,27 +1,29 @@
 //! Owner: lane IMPL-SPAWN-TRACE-FILTERS (decision 2026-11-19-90). The spawn spot search's trace filters, in
 //! `ParityMode::Off`: which primitives a box test or a sweep tests, and which hit a sweep returns. Coded from
 //! `docs/verification/NATIVE_SPAWN_PLACEMENT.md` section 7 (analyst lane ANALYST-SPAWN-TRACE-FILTERS, decision
-//! 2026-11-19-84) alone, the implementer half of the clean room. AI-assisted (Claude Code). **Every rule here is
-//! UNVERIFIED in the running game.**
+//! 2026-11-19-84, at its review-r3 head) alone, the implementer half of the clean room. AI-assisted (Claude Code).
+//! **Every rule here is UNVERIFIED in the running game.**
 //!
 //! **The flag sets** (decimal, as the note gives them): every box test passes [`BOX_TEST`] (8902), with [`COMPLEX`]
 //! added in template mode for a `bCollideComplex` template; every sweep passes [`SWEEP`] (8326), and the sweep routine
 //! adds [`ONE_RESULT`]. The spawn's queries pass no source actor.
 //!
-//! **Who is tested** ([`tested`]): a primitive component that blocks the query's kind (`BlockNonZeroExtent` for a box
-//! test of a non-zero extent and for a box sweep, `BlockZeroExtent` for a zero-extent box test and for a point sweep),
-//! on an owner whose class row ([`Row`]) accepts the flag set. A box test always walks the actor collision hash; a
-//! sweep walks it only under the mask [`SWEEP_HASH_MASK`]. A class whose filter the note did not read takes the
-//! nearest read ancestor's row (UNVERIFIED: such a class may override the filter).
+//! **Who is a candidate** ([`tested`]): a primitive component that blocks the query's kind (`BlockZeroExtent` for a
+//! box test of extent (0, 0, 0) and for a point sweep, `BlockNonZeroExtent` otherwise), on an owner whose class row
+//! ([`Row`]) accepts the flag set. A box test always walks the actor collision hash; a sweep walks it only under the
+//! mask [`SWEEP_HASH_MASK`]. Only the classes the note read have a row ([`row_of`]); no row is inherited.
 //!
-//! **The note's Off policy for its unread points:** a tested candidate whose primitive skip flag is set makes the query
-//! Unsupported. The flag's name is unresolved, so a candidate whose flag cannot be read counts as one that may have it
-//! ([`Candidate::Tested`] carries no flag value; the caller answers Unsupported). The further per-component test is
-//! taken as passing, and a terrain-specific effect of bit 8192 is ignored.
+//! **The note's Off policy for what is unread:** wherever an unread rule decides the answer, the query is
+//! Unsupported, naming the rule ([`Unread`]). So:
+//! - every candidate is Unsupported, because the further per-component test runs for it and was not read (a
+//!   candidate's skip flag, also unresolved, is covered by the same answer);
+//! - a blocking primitive whose owner's class has no read row is Unsupported;
+//! - a `Terrain` actor's primitive is Unsupported (the terrain bit's handling was not read).
 //!
-//! **Which hit a sweep returns** ([`choose_sweep_hit`]): the BSP hit; the actor hits up to the BSP hit plus 5 units
-//! along the sweep (the whole sweep without one), the smallest fraction kept; then the smaller fraction of the two
-//! (the note's Off reading of an unread comparator). Exact ties with different locations or normals are Unsupported.
+//! **Which hit a sweep returns** ([`choose_sweep_hit`]): the BSP hit, or the actors' hit when there is no BSP hit.
+//! Actors are walked to the BSP hit plus 5 units along the sweep, capped at the end point (the whole sweep without a
+//! BSP hit). A BSP hit together with an actor hit is Unsupported (the comparator between them was not read). Among the
+//! actors every hit at the minimum fraction is kept, and a tie whose locations or normals differ is Unsupported.
 
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, ObjRef};
@@ -63,6 +65,12 @@ pub const SWEEP_HASH_MASK: u32 = 8347;
 /// How far past the BSP hit a sweep still walks the actors, in units along the sweep.
 pub const PAST_BSP: f32 = 5.0;
 
+/// The note's names for its unread rules.
+pub const PER_COMPONENT_TEST: &str = "the trace filter's per-component test";
+pub const TERRAIN_HANDLING: &str = "the trace filter's terrain handling";
+pub const BSP_ACTOR_COMPARATOR: &str = "the trace filter's comparator between a BSP hit and an actor hit";
+pub const TIE_ORDER: &str = "the trace filter's order among tied actor hits";
+
 /// One of the spawn's queries, as the filter sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Query {
@@ -93,8 +101,8 @@ impl Query {
     /// The primitive flag a candidate needs to block this query's kind.
     pub fn blocking_flag(self) -> &'static str {
         match self {
-            Query::BoxTest { zero_extent: false, .. } | Query::BoxSweep => "BlockNonZeroExtent",
             Query::BoxTest { zero_extent: true, .. } | Query::PointSweep => "BlockZeroExtent",
+            Query::BoxTest { zero_extent: false, .. } | Query::BoxSweep => "BlockNonZeroExtent",
         }
     }
 }
@@ -102,8 +110,7 @@ impl Query {
 /// The owner actor's filter, by class (note section 7, step 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
-    /// `Actor`, and the classes that keep its rule (`StaticMeshActor`, `Brush`, `Terrain`, and any class without a
-    /// nearer read ancestor).
+    /// `Actor`, `StaticMeshActor`, `Brush` and `Terrain`.
     Actor,
     Volume,
     /// `InterpActor` and `KActor`.
@@ -111,26 +118,22 @@ pub enum Row {
     Pawn,
 }
 
-/// The classes whose filter was read, nearest first when walking up from a class.
-const ROWS: [(&str, Row); 4] = [
-    ("Engine.Pawn", Row::Pawn),
+/// The classes whose filter was read. Only these have a row.
+const ROWS: [(&str, Row); 8] = [
+    ("Engine.Actor", Row::Actor),
+    ("Engine.StaticMeshActor", Row::Actor),
+    ("Engine.Brush", Row::Actor),
+    ("Engine.Terrain", Row::Actor),
     ("Engine.Volume", Row::Volume),
     ("Engine.InterpActor", Row::Mover),
     ("Engine.KActor", Row::Mover),
+    ("Engine.Pawn", Row::Pawn),
 ];
 
-/// The row of `class`: the nearest read ancestor's (itself included), else `Actor`'s.
-pub fn row_of(space: &ObjectSpace, class: ClassId) -> Row {
-    let mut at = Some(class);
-    while let Some(c) = at {
-        for (path, row) in ROWS {
-            if space.classes.by_path(path) == Some(c) {
-                return row;
-            }
-        }
-        at = space.classes.get_layout(c).and_then(|l| l.super_class());
-    }
-    Row::Actor
+/// The row of `class` when its filter was read; `None` for any other class (a subclass of a read class included,
+/// since it may override the filter).
+pub fn row_of(space: &ObjectSpace, class: ClassId) -> Option<Row> {
+    ROWS.into_iter().find(|(path, _)| space.classes.by_path(path) == Some(class)).map(|(_, row)| row)
 }
 
 /// The owner's flags a row reads. A flag a row does not read is not read from the object.
@@ -176,22 +179,54 @@ pub fn owner_tested(row: Row, o: &Owner, primitive_blocks_actors: bool, flags: u
     }
 }
 
+/// An unread rule that decides a query's answer (module documentation): the query is Unsupported, naming it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unread {
+    /// A candidate primitive: the further per-component test (and the skip flag) decide it.
+    PerComponentTest,
+    /// A blocking primitive whose owner's class has no read row; the class's path.
+    OwnerClass(String),
+    /// A primitive of a `Terrain` actor.
+    TerrainHandling,
+}
+
+impl Unread {
+    /// The note's name for the rule.
+    pub fn rule(&self) -> String {
+        match self {
+            Unread::PerComponentTest => PER_COMPONENT_TEST.to_string(),
+            Unread::OwnerClass(class) => format!("the trace filter of {class}"),
+            Unread::TerrainHandling => TERRAIN_HANDLING.to_string(),
+        }
+    }
+}
+
 /// A primitive's standing in one query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Candidate {
     /// The query does not test it.
     NotTested,
-    /// The query tests it. Its skip flag is unresolved and the further per-component test is taken as passing
-    /// (module documentation): the caller must hold its geometry and know its skip flag to answer, else Unsupported.
-    Tested,
+    /// The query's answer depends on an unread rule for it: Unsupported.
+    Unsupported(Unread),
 }
 
 /// The standing of `primitive`, owned by the actor `owner`, in `query` (module documentation).
 pub fn tested(space: &ObjectSpace, primitive: ObjRef, owner: ObjRef, query: Query) -> Result<Candidate, VmError> {
-    if !query.walks_actors() || !flag(space, primitive, query.blocking_flag())? {
+    if !query.walks_actors() {
         return Ok(Candidate::NotTested);
     }
-    let row = row_of(space, space.heap.get(owner)?.class);
+    let class = space.heap.get(owner)?.class;
+    if let Some(terrain) = space.classes.by_path("Engine.Terrain") {
+        if space.classes.is_child_of(class, terrain) {
+            return Ok(Candidate::Unsupported(Unread::TerrainHandling));
+        }
+    }
+    if !flag(space, primitive, query.blocking_flag())? {
+        return Ok(Candidate::NotTested);
+    }
+    let Some(row) = row_of(space, class) else {
+        return Ok(Candidate::Unsupported(Unread::OwnerClass(ow_attr::eval::class_path(space, owner))));
+    };
     let read = |name: &str| flag(space, owner, name);
     let mut o = Owner::default();
     match row {
@@ -215,7 +250,11 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, owner: ObjRef, query: Quer
     } else {
         false
     };
-    Ok(if owner_tested(row, &o, primitive_blocks, flags) { Candidate::Tested } else { Candidate::NotTested })
+    Ok(if owner_tested(row, &o, primitive_blocks, flags) {
+        Candidate::Unsupported(Unread::PerComponentTest)
+    } else {
+        Candidate::NotTested
+    })
 }
 
 /// One sweep hit: where, the surface normal, and the fraction of the whole sweep.
@@ -226,40 +265,48 @@ pub struct Hit {
     pub fraction: f32,
 }
 
-/// Why [`choose_sweep_hit`] cannot answer: an exact tie with different locations or normals (the order is unread).
+/// Why [`choose_sweep_hit`] cannot answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnreadTieOrder;
+pub enum UnreadChoice {
+    /// A BSP hit and an actor hit: their comparator was not read ([`BSP_ACTOR_COMPARATOR`]).
+    Comparator,
+    /// Actor hits tied at the minimum with different locations or normals ([`TIE_ORDER`]).
+    TieOrder,
+}
 
-/// The smallest-fraction hit of `hits`; an exact tie answers only when the tied hits agree.
-fn smallest(hits: impl Iterator<Item = Hit>) -> Result<Option<Hit>, UnreadTieOrder> {
-    let mut best: Option<Hit> = None;
-    let mut tied_apart = false;
-    for h in hits {
-        match best {
-            None => best = Some(h),
-            Some(b) if h.fraction < b.fraction => {
-                best = Some(h);
-                tied_apart = false;
-            }
-            Some(b) if h.fraction == b.fraction && (h.location != b.location || h.normal != b.normal) => {
-                tied_apart = true;
-            }
-            Some(_) => {}
+impl UnreadChoice {
+    /// The note's name for the rule.
+    pub fn rule(self) -> &'static str {
+        match self {
+            UnreadChoice::Comparator => BSP_ACTOR_COMPARATOR,
+            UnreadChoice::TieOrder => TIE_ORDER,
         }
     }
-    if tied_apart { Err(UnreadTieOrder) } else { Ok(best) }
 }
 
 /// The hit a sweep of `length` units returns (module documentation), from the BSP's hit and the actor hits, each
-/// fraction of the whole sweep. Actor hits beyond the BSP hit plus [`PAST_BSP`] units are not walked.
-pub fn choose_sweep_hit(bsp: Option<Hit>, actors: &[Hit], length: f32) -> Result<Option<Hit>, UnreadTieOrder> {
+/// fraction of the whole sweep. Actor hits beyond the BSP hit plus [`PAST_BSP`] units (capped at the end point) are
+/// not walked.
+pub fn choose_sweep_hit(bsp: Option<Hit>, actors: &[Hit], length: f32) -> Result<Option<Hit>, UnreadChoice> {
     let reach = match bsp {
-        Some(b) if length > 0.0 => b.fraction + PAST_BSP / length,
-        Some(_) => 0.0,
-        None => f32::INFINITY,
+        Some(b) if length > 0.0 => (b.fraction + PAST_BSP / length).min(1.0),
+        Some(b) => b.fraction,
+        None => 1.0,
     };
-    let actor = smallest(actors.iter().copied().filter(|h| h.fraction <= reach))?;
-    smallest(bsp.into_iter().chain(actor))
+    let walked: Vec<Hit> = actors.iter().copied().filter(|h| h.fraction <= reach).collect();
+    if let Some(b) = bsp {
+        return if walked.is_empty() { Ok(Some(b)) } else { Err(UnreadChoice::Comparator) };
+    }
+    let Some(min) = walked.iter().map(|h| h.fraction).reduce(f32::min) else {
+        return Ok(None);
+    };
+    let mut tied = walked.into_iter().filter(|h| h.fraction == min);
+    let first = tied.next().expect("the minimum is one of the hits");
+    if tied.any(|h| h.location != first.location || h.normal != first.normal) {
+        Err(UnreadChoice::TieOrder)
+    } else {
+        Ok(Some(first))
+    }
 }
 
 #[cfg(test)]
