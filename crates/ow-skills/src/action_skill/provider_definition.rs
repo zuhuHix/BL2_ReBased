@@ -7,16 +7,16 @@
 //! **The rule** (note section 4): the answer is the receiver's own `BehaviorProviderDefinition` field, as stored, None
 //! included. No archetype lookup, no class default, no load: a reference read is not a load, and the event that
 //! receives the definition loads or refuses it when it reads it.
-//! - **UNVERIFIED (low: a fitted step; the note's open question 1):** that the C++ interface method `ActionSkill`'s native
-//!   reaches is the one that reads this field. The note ties it by a structural fit, not by name. The hub ruled to take
-//!   it, labelled, rather than refuse. It agrees with the consumer registration (the skill registering with the
+//! - **UNVERIFIED (low: a fitted step; the note's open question 1):** that the C++ interface method `ActionSkill`'s
+//!   native reaches is the one that reads this field. The note ties it by a structural fit, not by name. The hub ruled
+//!   to take it, labelled, rather than refuse. It agrees with the consumer registration (the skill registering with the
 //!   archetype's definition) only if a spawned skill's field still names the archetype's subobject (open question 2).
 //! - A receiver whose class does not declare `BehaviorProviderDefinition` as an object reference is the port's data
 //!   error (`VmError::Script`, naming the field).
 //! - A receiver the definition store has not loaded is `NotYet { NotRead }`, "GetBehaviorProviderDefinition: an
 //!   unloaded receiver", unmarked: reading its field would need a load, and the rule loads nothing. So is a stand-in
-//!   with no slots whose class has some (an import or resource stand-in the store does not report as unloaded). The field is read
-//!   straight from the heap, never through a loading read.
+//!   with no slots whose class has some (an import or resource stand-in the store does not report as unloaded). The
+//!   field is read straight from the heap, never through a loading read.
 //!
 //! The native writes nothing, draws nothing and loads nothing, so there is no preflight and no partial-write mark.
 //! It is bound only for `ActionSkill`. Its subclasses call the same declaration: in the installed packages neither

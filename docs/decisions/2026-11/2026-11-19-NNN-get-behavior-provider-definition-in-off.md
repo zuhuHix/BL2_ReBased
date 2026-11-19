@@ -36,7 +36,7 @@ fixtures only.
   - Off binds and Reference does not;
   - a slotless stand-in of an `ActionSkill` class refused the same way, unmarked, nothing written, and the subclass's
     method lookup finding the declaration (review r1 of #560).
-- **Checks:** `cargo test --workspace -j 2` 2,449 passed, 0 failed, 46 ignored; clippy shows nothing new; crate edges
+- **Checks:** `cargo test --workspace -j 2` 2,449 passed, 0 failed, 46 ignored (the run before review r1 added one test); clippy shows nothing new; crate edges
   OK.
 - **Installed `--slice-gate`, Off, strict, under the machine lock,** on a throwaway local merge with #523 (d2227301),
   #535 (7f8fc7d7), #548 (22b29bfb) and #555 (0e9092a8), never pushed. The merge took #518's counter files, renamed

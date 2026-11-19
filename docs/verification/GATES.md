@@ -235,7 +235,7 @@ real-game run; `UNVERIFIED` in game. Decision 2026-11-19-169.
 **IMPL-GET-BEHAVIOR-PROVIDER-DEFINITION (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus
 5.5). `ActionSkill.GetBehaviorProviderDefinition` in Off from NATIVE_GET_BEHAVIOR_PROVIDER_DEFINITION.md (#553): the
 receiver's own field as stored, no load (low, a fitted step, UNVERIFIED). `cargo build --workspace -j 2` clean; `cargo test
---workspace -j 2` 2,449 passed / 0 failed / 46 ignored (ow-skills provider_definition 5); clippy no new warnings;
+--workspace -j 2` 2,449 passed / 0 failed / 46 ignored before review r1 (ow-skills provider_definition 6 after r1's added test); clippy no new warnings;
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build, under the machine lock) on a throwaway
 local merge with #523, #535, #548 (22b29bfb) and #555 (0e9092a8), never pushed: 1 ok / 3 NotYet / 10 errors. Link 9
 passes `spawn` (1 of 2) and gets past this native in `cast`, then stops at the unbound `Object.GetFuncName()`, the next
