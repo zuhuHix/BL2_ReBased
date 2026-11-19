@@ -8,97 +8,159 @@
 //! it, and no real-game session checked it. Off only: under `ParityMode::Reference` the C++ stand-in shares the
 //! template's slots as they are (R3), so the spawn there does not call this.
 //!
-//! **Which slots count.** A slot counts when its declared class (`PropKind::Object`, or an array of it) is
-//! `Core.Component` or a subclass of it. In public UE3 that is a `ComponentProperty`, which the port's reflection reads
-//! as an object property of its component class (`ow_object::layout::PropKind`). Only the class is checked, by its
-//! name. No property flag is read: the flag bits for "instanced" are not identified in this port (rule 4).
-//! - **Copied:** an object in such a slot, of a component class, whose outer is the template. "The template" is
-//!   matched by path (the same name and class under the same outers), because the definition store holds a class
-//!   default object and the handle of its `Default__<Class>` export, which its sub-objects' outers point at, as two
-//!   heap objects. A candidate the store has not loaded is loaded first, since its outer is set on load; a load
-//!   that fails stops the spawn with the store's error.
-//! - **Left as it is (a plain shared reference):** an object whose outer is anything else, such as another archetype's
-//!   component or an asset.
-//! - **Found transitively:** the actor's component fields are searched, then each found component's own component
-//!   fields, with the same outer test, until nothing new turns up (review r1 of #435). A component reached only
-//!   through another one is copied too, so no copy points at a template component.
-//! - **Re-pointed:** every reference to a copied component, in the new actor's slots and in the copies' own slots, at
-//!   any depth (arrays, structs). This covers `Components` and the named field holding the same object.
+//! **The rule for Off: copy and re-point correctly, or refuse with a named `NotYet`; never share a reference
+//! silently** (review r2 of #435).
 //!
-//! **UNVERIFIED, left shared.** These are not instanced, because the rule that would cover them is not read:
-//! - a component the template holds only inside a struct;
-//! - a non-component object outered to the template (public UE3's `instanced` / `editinlinenew` objects, which need
-//!   the unidentified flags);
-//! - a component's own sub-objects (nested sub-objects, outered to the template's component);
-//! - a component inherited from a parent class's default (its outer is that parent's `Default__` object, not the
-//!   template);
-//! - references to the template itself, or to its `Default__` export handle, held by the actor or a copy: they are not
-//!   re-pointed to the new actor.
+//! **Two steps.** [`plan_components`] works out what to copy and runs every refusal before anything is made, so a
+//! spawn calls it before it makes the actor. [`apply_plan`] then makes the copies and re-points; if a copy cannot be
+//! made, the copies made so far are freed and the caller frees the actor.
+//!
+//! **What is a component of the template.** An object reached from the template's slots, and then from each found
+//! component's slots, at any depth: scalars, arrays, structs, interfaces and delegate targets, whatever the field's
+//! declared type. It counts when:
+//! - its run-time class is `Core.Component` or a subclass, matched by path along the class's own layout chain. No
+//!   property flag is read: the flag bits for "instanced" are not identified in this port (rule 4); and
+//! - its owner (outer) is the template: by handle, or by canonical export identity (package and export index). A
+//!   class default object's sub-objects point at the handle of its `Default__<Class>` export in its class's package,
+//!   which is another heap object than the class default, so that export is the template's identity. A component the
+//!   store has not loaded is loaded first, since the store sets its outer on load, and a load that fails stops the
+//!   spawn. Ownership is never matched by name.
+//!
+//! **Re-pointed:** every reference to a copied component, in the new actor's slots and in the copies' own slots, at
+//! any depth, delegate targets included.
+//!
+//! **Refused with `NotYet { NotRead }`**, before anything is made:
+//! - a reference back to the template itself (or its `Default__` handle): whether it becomes the new actor is not
+//!   read;
+//! - a sub-object of the template that is not a component: public UE3's `instanced` objects need the unidentified
+//!   property flags;
+//! - a sub-object of one of the template's components (nested instancing);
+//! - a component owned by another class default object (inherited from a parent class's default).
+//!
+//! **Left as it is (a plain shared reference):** an object owned by anything else, such as another archetype's
+//! component or an asset. That is a reference the template does not own, so sharing it is the rule, not a fallback.
+//!
+//! **What a copy is.** The same class and name, outered to the new actor, its slots copied from the template's
+//! component and re-pointed. The copies' archetype link is not kept: the port's heap has no archetype field.
 //!
 //! **Lifetime, UNVERIFIED.** A copy refers to its actor (its outer, and often an `Owner` field), and the actor to the
 //! copy. `release_unreferenced` does not free such a loop; the port does not model the game's garbage collection.
-//!
-//! **What a copy is.** The same class and name, outered to the new actor. Its slots are copied from the template's
-//! component, with the references re-pointed as above. The copies' archetype link is not kept: the port's heap has
-//! no archetype field.
 
+use ow_core::NotYet;
 use ow_object::heap::Origin;
 use ow_object::ids::{ClassId, ObjRef};
-use ow_object::layout::PropKind;
-use ow_object::value::{StructValue, Value};
+use ow_object::value::{DelegateValue, StructValue, Value};
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 use std::rc::Rc;
 
-/// The class whose subclasses are components (public UE3 `Core.Component`), found by name.
+/// The class whose subclasses are components (public UE3 `Core.Component`), matched by path along a class's own
+/// layout chain (no lookup that could fail).
 pub const COMPONENT_CLASS: &str = "Core.Component";
 
+/// The record of this rule.
+pub const RECORD_INSTANCING: &str = "docs/decisions/2026-11/2026-11-19-44-rust-spawn-gives-each-actor-its-own-template-components.md";
+
+/// What a spawn from `template` will copy, worked out before anything is made ([`plan_components`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    pub template: ObjRef,
+    /// The template's components, in discovery order.
+    pub originals: Vec<ObjRef>,
+}
+
 /// Gives `actor`, just made from `template`'s slots, its own copy of each component `template` owns (module
-/// documentation). Answers the `(template component, copy)` pairs, in slot order. A class table with no
-/// `Core.Component` has no components: nothing is copied.
+/// documentation): [`plan_components`], then [`apply_plan`]. Answers the `(template component, copy)` pairs.
 pub fn instance_components(
     vm: &mut Vm,
     template: ObjRef,
     actor: ObjRef,
 ) -> Result<Vec<(ObjRef, ObjRef)>, VmError> {
-    let Ok(component) = vm.find_class(COMPONENT_CLASS) else {
-        return Ok(Vec::new());
-    };
-    // The actor's component fields first, then each found component's own, until nothing new turns up: a component
-    // reached only through another one is copied too (review r1 of #435).
-    let mut found: Vec<ObjRef> = Vec::new();
-    let mut scan = vec![actor];
+    let plan = plan_components(vm, template)?;
+    apply_plan(vm, &plan, actor)
+}
+
+/// Finds the components `template` owns, through its slots and then each found component's own, at any depth
+/// (scalars, arrays, structs, delegates), by each object's run-time class and owner, not the declared field type.
+/// Loads a candidate component the store has not loaded. Changes nothing else, so a spawn can run it before it makes
+/// the actor. `NotYet { NotRead }` for what Off cannot copy or re-point correctly (module documentation).
+pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
+    let identity = template_export(vm, template);
+    let mut originals: Vec<ObjRef> = Vec::new();
+    let mut seen: Vec<ObjRef> = Vec::new();
+    let mut scan = vec![template];
     let mut next = 0;
-    while let Some(&o) = scan.get(next) {
+    while let Some(&holder) = scan.get(next) {
         next += 1;
-        for r in component_refs(vm, o, component)? {
-            if found.contains(&r) || !vm.space.classes.is_child_of(vm.space.heap.get(r)?.class, component) {
+        let mut refs = Vec::new();
+        for v in &vm.space.heap.get(holder)?.slots {
+            collect_refs(v, &mut refs);
+        }
+        for r in refs {
+            if r == template || (identity.is_some() && export_of(vm, r) == identity) {
+                return Err(not_yet(
+                    "a reference back to the template itself (whether it becomes the new actor is not read)",
+                ));
+            }
+            if seen.contains(&r) {
                 continue;
             }
-            // An unloaded handle has no outer yet: the store sets it on load.
-            if vm.defs.is_unloaded(&vm.space, r) {
+            seen.push(r);
+            let component = is_component(vm, vm.space.heap.get(r)?.class);
+            // An unloaded component handle has no outer yet: the store sets it on load.
+            if component && vm.defs.is_unloaded(&vm.space, r) {
                 let loaded = vm.defs.ensure_loaded(&mut vm.space, r);
                 vm.log.extend(vm.defs.take_log());
                 loaded?;
             }
-            let outer = vm.space.heap.get(r)?.outer;
-            if let Some(outer) = outer
-                && same_object(vm, outer, template)?
-            {
-                found.push(r);
+            if owned_by(vm, r, template, identity) {
+                if !component {
+                    return Err(not_yet(&format!(
+                        "a sub-object of the template that is not a component (which ones are instanced needs the \
+                         unidentified property flags): {}",
+                        describe(vm, r)
+                    )));
+                }
+                originals.push(r);
                 scan.push(r);
+            } else if originals.iter().any(|&c| owned_by(vm, r, c, export_of(vm, c))) {
+                return Err(not_yet(&format!(
+                    "a sub-object of one of the template's components (nested instancing): {}",
+                    describe(vm, r)
+                )));
+            } else if component && let Some(owner) = default_outer(vm, r) {
+                return Err(not_yet(&format!(
+                    "a component of another class default object (inherited from a parent class's default): {} of \
+                     {owner}",
+                    describe(vm, r)
+                )));
             }
         }
     }
-    let mut pairs = Vec::with_capacity(found.len());
-    for original in found {
+    Ok(Plan { template, originals })
+}
+
+/// Makes the copies of `plan` for `actor` and re-points the actor's and the copies' references, delegates included.
+/// A copy that cannot be made frees the copies made so far and fails; the caller frees the actor.
+pub fn apply_plan(vm: &mut Vm, plan: &Plan, actor: ObjRef) -> Result<Vec<(ObjRef, ObjRef)>, VmError> {
+    let mut pairs: Vec<(ObjRef, ObjRef)> = Vec::with_capacity(plan.originals.len());
+    for &original in &plan.originals {
         let (c, name, slots) = {
             let o = vm.space.heap.get(original)?;
             (o.class, vm.space.names.text(o.name).to_string(), o.slots.clone())
         };
-        let copy = vm.space.alloc(c, &name, Some(actor), Origin::Runtime)?;
-        vm.space.heap.get_mut(copy)?.slots = slots;
-        pairs.push((original, copy));
+        let made = vm.space.alloc(c, &name, Some(actor), Origin::Runtime).map_err(VmError::from).and_then(|copy| {
+            vm.space.heap.get_mut(copy)?.slots = slots;
+            Ok(copy)
+        });
+        match made {
+            Ok(copy) => pairs.push((original, copy)),
+            Err(e) => {
+                let copies: Vec<ObjRef> = pairs.iter().map(|p| p.1).collect();
+                let _ = vm.space.free_many(&copies);
+                return Err(e);
+            }
+        }
     }
     if pairs.is_empty() {
         return Ok(pairs);
@@ -110,70 +172,109 @@ pub fn instance_components(
     Ok(pairs)
 }
 
-/// Whether `a` and `b` name the same object: the same heap object, or the same name and class under outers that name
-/// the same object (both `None` at the top). The definition store holds a class default object and its
-/// `Default__<Class>` export as two heap objects of one path: the class default (`Origin::Default`) and the export's
-/// handle, which a sub-object's outer points at.
-fn same_object(vm: &Vm, a: ObjRef, b: ObjRef) -> Result<bool, VmError> {
-    let (mut a, mut b) = (Some(a), Some(b));
-    while let (Some(x), Some(y)) = (a, b) {
-        if x == y {
-            return Ok(true);
-        }
-        let (ox, oy) = (vm.space.heap.get(x)?, vm.space.heap.get(y)?);
-        if ox.name != oy.name || ox.class != oy.class {
-            return Ok(false);
-        }
-        (a, b) = (ox.outer, oy.outer);
-    }
-    Ok(a.is_none() && b.is_none())
+fn not_yet(what: &str) -> VmError {
+    NotYet::not_read(format!("Spawn: {what}"), RECORD_INSTANCING).into()
 }
 
-/// The objects `o` holds in its component fields (scalar or array), in slot order. Each field's slots are found from
-/// its recorded first slot (`PropId::slot`); a field outside `o`'s slots is an error, never a silent cut.
-fn component_refs(vm: &Vm, o: ObjRef, component: ClassId) -> Result<Vec<ObjRef>, VmError> {
-    let class = vm.space.heap.get(o)?.class;
-    let slots = &vm.space.heap.get(o)?.slots;
-    let mut refs = Vec::new();
-    for (id, decl) in vm.space.classes.props(class).map_err(ow_object::heap::HeapError::Layout)? {
-        if !is_component_kind(vm, &decl.kind, component) {
-            continue;
+/// Whether `class` is `Core.Component` or a subclass, by the paths of its own layout chain.
+fn is_component(vm: &Vm, class: ClassId) -> bool {
+    let mut cursor = Some(class);
+    let mut steps = 0;
+    while let Some(c) = cursor {
+        let Some(layout) = vm.space.classes.get_layout(c) else {
+            return false;
+        };
+        if layout.path().as_str().eq_ignore_ascii_case(COMPONENT_CLASS) {
+            return true;
         }
-        let dim = u32::try_from(decl.array_dim).unwrap_or(0);
-        for k in 0..dim {
-            let at = usize::try_from(id.slot + k).unwrap_or(usize::MAX);
-            let value = slots.get(at).ok_or_else(|| VmError::Script {
-                function: "Spawn".to_string(),
-                message: format!(
-                    "{}: slot {at} of a component field is outside its {} slots",
-                    ow_attr::eval::class_path(&vm.space, o),
-                    slots.len()
-                ),
-            })?;
-            match value {
-                Value::Object(Some(r)) => refs.push(*r),
-                Value::Array(items) => refs.extend(items.iter().filter_map(|v| match v {
-                    Value::Object(Some(r)) => Some(*r),
-                    _ => None,
-                })),
-                _ => {}
-            }
+        steps += 1;
+        if steps > 256 {
+            return false;
         }
+        cursor = layout.super_class();
     }
-    Ok(refs)
+    false
 }
 
-/// An object property of `Core.Component` or a subclass, or an array of one.
-fn is_component_kind(vm: &Vm, kind: &PropKind, component: ClassId) -> bool {
-    match kind {
-        PropKind::Object { class } => vm.space.classes.is_child_of(*class, component),
-        PropKind::Array(inner) => matches!(inner.as_ref(), PropKind::Object { class }
-            if vm.space.classes.is_child_of(*class, component)),
-        _ => false,
+/// The template's canonical export identity: the export it was loaded from, or, for a class default object, the
+/// `Default__<Class>` export of its class's own package (its sub-objects' outers point at that export's handle,
+/// another heap object than the class default). Compared by package and export index, never by name.
+fn template_export(vm: &Vm, template: ObjRef) -> Option<(u32, i32)> {
+    if let Some(id) = export_of(vm, template) {
+        return Some(id);
+    }
+    let Origin::Default { class } = vm.space.heap.get(template).ok()?.origin else {
+        return None;
+    };
+    let code = vm.defs.code();
+    let info = code.class(code.key_of(class)?);
+    let package = vm.defs.packages().get(info.package);
+    let wanted = format!("Default__{}", info.name);
+    let at = package.exports.iter().position(|e| e.outer == 0 && e.name.eq_ignore_ascii_case(&wanted))?;
+    Some((info.package, i32::try_from(at).ok()? + 1))
+}
+
+/// The package export an object stands for (its origin), when it has one.
+fn export_of(vm: &Vm, o: ObjRef) -> Option<(u32, i32)> {
+    match vm.space.heap.get(o).ok()?.origin {
+        Origin::Export { package, index } | Origin::Resource { package, index } if index > 0 => Some((package, index)),
+        _ => None,
     }
 }
 
-/// `v` with every reference to a copied component replaced by its copy, at any depth.
+/// Whether `owner` is `o`'s outer: by handle, or by the outer's canonical export identity (`identity`, the owner's
+/// export), which covers an outer that is another handle of the same export and an object the store has not given an
+/// outer yet (its export's outer in the same package). Never by name.
+fn owned_by(vm: &Vm, o: ObjRef, owner: ObjRef, identity: Option<(u32, i32)>) -> bool {
+    let Ok(obj) = vm.space.heap.get(o) else {
+        return false;
+    };
+    if let Some(outer) = obj.outer {
+        return outer == owner || (identity.is_some() && export_of(vm, outer) == identity);
+    }
+    let (Some(identity), Some((package, index))) = (identity, export_of(vm, o)) else {
+        return false;
+    };
+    match vm.defs.packages().get(package).object(index) {
+        Ok(entry) => entry.outer > 0 && (package, entry.outer) == identity,
+        Err(_) => false,
+    }
+}
+
+/// `o`'s name and class, for a refusal's text.
+fn describe(vm: &Vm, o: ObjRef) -> String {
+    match vm.space.heap.get(o) {
+        Ok(x) => format!("{} ({})", vm.space.names.text(x.name), ow_attr::eval::class_path(&vm.space, o)),
+        Err(_) => format!("{o:?}"),
+    }
+}
+
+/// The name of `o`'s outer when that outer is a class default object (`Default__...`), by the outer's own name.
+fn default_outer(vm: &Vm, o: ObjRef) -> Option<String> {
+    let obj = vm.space.heap.get(o).ok()?;
+    let name = match obj.outer {
+        Some(outer) => vm.space.names.text(vm.space.heap.get(outer).ok()?.name).to_string(),
+        None => export_of(vm, o).and_then(|(p, i)| {
+            let pkg = vm.defs.packages().get(p);
+            let outer = pkg.object(i).ok()?.outer;
+            (outer > 0).then(|| pkg.object(outer).ok().map(|e| e.name.clone())).flatten()
+        })?,
+    };
+    name.starts_with("Default__").then_some(name)
+}
+
+/// Every object `v` refers to, at any depth (objects, interfaces, delegate targets, arrays, structs).
+fn collect_refs(v: &Value, out: &mut Vec<ObjRef>) {
+    match v {
+        Value::Object(Some(r)) | Value::Interface(Some(r)) => out.push(*r),
+        Value::Delegate(Some(DelegateValue { object: Some(r), .. })) => out.push(*r),
+        Value::Array(items) => items.iter().for_each(|i| collect_refs(i, out)),
+        Value::Struct(s) => s.fields.iter().for_each(|f| collect_refs(f, out)),
+        _ => {}
+    }
+}
+
+/// `v` with every reference to a copied component replaced by its copy, at any depth (delegate targets too).
 fn repoint(v: &Value, pairs: &[(ObjRef, ObjRef)]) -> Value {
     let swap = |r: &Option<ObjRef>| match r {
         Some(x) => Some(pairs.iter().find(|p| p.0 == *x).map_or(*x, |p| p.1)),
@@ -182,6 +283,7 @@ fn repoint(v: &Value, pairs: &[(ObjRef, ObjRef)]) -> Value {
     match v {
         Value::Object(r) => Value::Object(swap(r)),
         Value::Interface(r) => Value::Interface(swap(r)),
+        Value::Delegate(Some(d)) => Value::Delegate(Some(DelegateValue { object: swap(&d.object), function: d.function })),
         Value::Array(items) if items.iter().any(|i| refers(i, pairs)) => {
             Value::Array(Rc::new(items.iter().map(|i| repoint(i, pairs)).collect()))
         }
@@ -193,14 +295,11 @@ fn repoint(v: &Value, pairs: &[(ObjRef, ObjRef)]) -> Value {
     }
 }
 
-/// Whether `v` holds, at any depth, a reference to a copied component.
+/// Whether `v` holds, at any depth, a reference to a copied component (delegate targets too).
 fn refers(v: &Value, pairs: &[(ObjRef, ObjRef)]) -> bool {
-    match v {
-        Value::Object(Some(r)) | Value::Interface(Some(r)) => pairs.iter().any(|p| p.0 == *r),
-        Value::Array(items) => items.iter().any(|i| refers(i, pairs)),
-        Value::Struct(s) => s.fields.iter().any(|f| refers(f, pairs)),
-        _ => false,
-    }
+    let mut refs = Vec::new();
+    collect_refs(v, &mut refs);
+    refs.iter().any(|r| pairs.iter().any(|p| p.0 == *r))
 }
 
 #[cfg(test)]

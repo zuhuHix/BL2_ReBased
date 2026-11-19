@@ -93,3 +93,40 @@ loosened. The `NotYet` guards changed are listed under "Guards" below.
     - a component reached only through another component;
     - an Off spawn from an archetype that has a component. This one uses a world fixture with a synthetic `Core.upk`
       for `Core.Component`.
+- **Review r2 of #435.** The rule for Off is now: copy and re-point correctly, or refuse with a named `NotYet`; never
+  share a reference silently. Three of round 1's UNVERIFIED labels are replaced by refusals: the inherited component,
+  the reference to the template, and the actor left behind.
+  - **Two steps.** `plan_components` runs every refusal before the actor is made. `apply_plan` makes the copies and
+    re-points; if a copy cannot be made, the copies made so far are freed, and the spawn frees the actor. The fields
+    the spawn writes are checked on the template before anything is made, so nothing is left on the heap or in the
+    level list by a refusal before registration.
+  - **Discovery.** A component is found by its run-time class (`Core.Component` by path along its own layout chain:
+    no class lookup, so no lookup error turns into a spawn with shared references). It is found through any field
+    type, struct, array, interface or delegate target.
+  - **Delegates** bound to a copied component are rebound to the copy, at any depth.
+  - **Ownership** is by handle, or by canonical export identity (package and export index), never by name.
+    - For a class default object, that identity is the `Default__<Class>` export of its class's own package. The
+      installed `WillowPlayerController`'s `CollisionCylinder` is outered to that export's handle, another heap object
+      than the class default.
+    - `DefStore::find` on that path gives the class default itself, so it cannot stand in for the export's handle.
+  - **New `NotYet { NotRead }` refusals**, each naming the object:
+    - a reference (or delegate) back to the template;
+    - a non-component sub-object of the template;
+    - a sub-object of a template component (nested instancing);
+    - a component owned by another class default object;
+    - a destroyed or pending-delete (`bDeleteMe`, `bPendingDelete`) template;
+    - a template with `Owner` set: the spawn's owner rules for a template are not read.
+  - **Tests (ow-world):**
+    - delegates rebound, also inside a struct;
+    - a component held through an `Object` field or a struct;
+    - each refusal with the heap count unchanged;
+    - ownership by handle, not by name;
+    - no `Core.Component`;
+    - templates that are destroyed, pending-delete, owned, or that hold a non-component sub-object, each with the heap
+      and level-list counts unchanged.
+    - The class-default export identity is covered by the installed run only: a hand-made object has no export.
+  - **Installed** (pc-hummer):
+    - Phaselock Off: the cast still stops at `Pawn.IsFriendly(object)`. Before the export-identity fix it stopped
+      at the controller's `CollisionCylinder`, wrongly refused as another default's.
+    - Reference: byte-identical.
+    - `--slice-gate`: byte-identical, 0/11/3 and 0/14/0; link 9 is `notyet`, with no headless driver.
