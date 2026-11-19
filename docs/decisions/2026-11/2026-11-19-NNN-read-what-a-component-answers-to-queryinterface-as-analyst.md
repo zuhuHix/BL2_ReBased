@@ -15,10 +15,14 @@ placeholder until the numbering question is settled.
 - **Read:** `ActorComponent` replaces `Object`'s `QueryInterface` answer: the plain answer first, then the
   component's `Owner`, under a cycle guard, with no write. `SkeletalMeshComponent` shares that body; the classes
   between them were not compared.
-- **For slice link 11:** the port's Fire dummy has no `Controller`, so its question reaches its `Mesh`. The mesh
-  answers none (its owner is the dummy, which is still answering), so `Behavior_AIHold` makes no hold.
-  - The game's dummy has a mind, and the golden trace shows it demigod. So this is the game's rule on the port's
-    input, not the game's outcome, and the missing controller is recorded as open.
+- **For slice link 11:** for the port's Fire dummy, section 2's steps 1 and 2 returned None (the stop's own
+  text), so its question reaches its `Mesh`. Which way step 2 gave none was not observed.
+  - **In the local probe,** `Behavior_AIHold` then made no hold. That is an observation of the port with this rule,
+    not a guarantee of the pawn-first path: it holds when the mesh's `Owner` is the dummy (still answering, so the
+    guard gives none) or None.
+  - The game's dummy has a mind, and the golden trace shows it demigod. Its first-hit `Controller` and its answer's
+    route stay UNVERIFIED. So the port's result is the game's rule on the port's input, not the game's outcome.
+    Why the port's step 2 gives none is recorded as open.
 - **Off answer proposed:** register the rule for exactly `ActorComponent` and `SkeletalMeshComponent`. Other
   component classes keep the existing open `NotRead`.
 - **Probes:**
@@ -40,5 +44,13 @@ placeholder until the numbering question is settled.
    - a missing or mistyped `Owner` is a `VmError::Script`, with the exact texts given;
    - nothing is lazy-loaded, and an unloaded receiver or `Owner` is a named `NotRead`;
    - the VM's cycle and depth behaviour is kept.
-4. **The call paths:** pawn first (the cycle gives none) and a direct mesh query (owner forwarding), each with a test
-   the implementer owes.
+4. **The call paths:** pawn first, where the cycle gives none when `Owner` is the pawn, and a direct mesh query
+   (owner forwarding), each with a test the implementer owes.
+
+**Review r2 of #512 (three findings, fixed in the note).**
+1. **The summary** now says what the stop proves: steps 1 and 2 returned None. The live dummy's first-hit
+   `Controller` and its answer route stay UNVERIFIED.
+2. **The no-hold result** is stated as the local probe's observation. The cycle explanation is conditional on `Owner`
+   being the pawn.
+3. **The order (hub ruling):** the unloaded-receiver and unloaded-`Owner` checks run only after the plain answer has
+   returned None, so the plain answer is unchanged in every case.

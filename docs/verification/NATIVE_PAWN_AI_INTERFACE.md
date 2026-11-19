@@ -76,8 +76,8 @@ the pawn's player master, the `WillowPlayerController` that masters the pawn, wh
 - **Steps 1 and 2 give none** (no controller, a declining one, or the vehicle branch): step 3 asks the pawn's `Mesh`.
   A skeletal mesh component answers by `ActorComponent`'s rule (section 6, read since lane
   ANALYST-LINK11-QUERY-INTERFACE).
-  - Asked from the pawn, the mesh's owner is the pawn, already answering, so the mesh gives none and nothing is
-    held.
+  - Asked from the pawn, when the mesh's `Owner` is that pawn (already answering), the guard gives none, so the mesh
+    gives none and nothing is held. With another `Owner`, that owner's answer decides (section 6.3).
   - Asked directly, the mesh's owner can answer through its own controller (section 6.3).
   - The port's dummy meets the pawn-first case on slice link 11. Which way its step 2 gave none is not observed.
 
@@ -151,12 +151,15 @@ depends on how the mesh was reached.
 
 1. **Pawn first** (the slice's path: `Behavior_AIHold` asks the pawn, and the pawn's step 3 asks its mesh). The pawn is
    still answering this question.
-   - `Owner` is that pawn: the guard gives none, so the mesh answers none.
+   - `Owner` is that pawn: the pawn is still answering, so the guard gives none and the mesh answers none.
    - `Owner` is None: none.
-   - `Owner` is another actor: that actor's own answer, by its rule (not seen on the slice).
+   - `Owner` is another actor: that actor's own answer, by its rule. The pawn-first path therefore gives none only for
+     the first two cases.
 
-   So when the pawn's steps 1 and 2 gave none, the pawn's answer is **none**, and `Behavior_AIHold` returns without a
-   hold (section 1, NATIVE_AI_HOLDS.md): the dummy is not made demigod at that hit.
+   **In the local probe** (section 6.5), the port's dummy, whose steps 1 and 2 gave none, got no hold:
+   `Behavior_AIHold` returned without one (section 1, NATIVE_AI_HOLDS.md), and the dummy was not made demigod at that
+   hit. That is an observation of the port with this rule. Which `Owner` the port's mesh held was not read
+   (section 6.6).
 2. **A direct mesh query** (the mesh asked first, with nothing answering yet). `Owner` gets the question with no cycle,
    and answers by its own rule:
    - a pawn owner runs section 2 from step 1. A possessed pawn can then answer through its `Controller`, the mind,
@@ -196,6 +199,9 @@ The hub's rulings apply:
    - an object is the answer;
    - a `NotYet` or any other error passes through unchanged;
    - only a successful None goes on to step 3.
+   - **The order (hub ruling, review r2 of #512):** the unloaded-receiver check of step 3 runs only after the plain
+     answer has returned None, so the plain answer is unchanged in every case. The unloaded-`Owner` check also comes
+     only after a successful plain None, after the receiver check.
 3. **The `Owner` field.**
    - **A class with no `Owner` declaration:** `VmError::Script`, "ActorComponent.QueryInterface: <class path>
      declares no Owner".
