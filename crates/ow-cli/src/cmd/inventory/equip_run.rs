@@ -458,10 +458,21 @@ pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, 
 /// installed [`GLOBALS_DEFINITION`], loaded here (the allowed preload), recorded as the world's globals. Unlike
 /// [`pickup_world`] it checks only the holder's declaration it writes, not the pickup route's schemas (section 6.2,
 /// step 4, which the card does not read; review of #491).
+///
+/// The card's class setup (`equip::card::setup`) runs first, before any object is made. The `WillowGlobals` allocation
+/// is the set-up's first write, so a refusal after it is marked "stopped after partial writes" (review r1 of #521,
+/// item 3).
 pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmError> {
     let mut world = run_world_t(cooked, ParityMode::Off)?;
-    let vm = &mut world.vm;
-    let globals = make_t(vm, "WillowGame.WillowGlobals")?;
+    ow_inventory::equip::card::setup(&mut world.vm)?;
+    let globals = make_t(&mut world.vm, "WillowGame.WillowGlobals")?;
+    equip_globals(&mut world.vm, globals).map_err(ow_world::pools::after_partial_writes)?;
+    world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
+    Ok(world)
+}
+
+/// [`equip_world`]'s writes after the globals' allocation: the installed definition, loaded, held by `globals`.
+fn equip_globals(vm: &mut Vm, globals: ObjRef) -> Result<(), VmError> {
     let definition = find_object_t(vm, GLOBALS_DEFINITION)?;
     let loaded = vm.defs.ensure_loaded(&mut vm.space, definition);
     vm.log.extend(vm.defs.take_log());
@@ -473,9 +484,7 @@ pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmErr
         Some(ow_inventory::globals::GEARBOX_GLOBALS_DEFINITION),
         "the equip world's set-up",
     )?;
-    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
-    world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
-    Ok(world)
+    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))
 }
 
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as

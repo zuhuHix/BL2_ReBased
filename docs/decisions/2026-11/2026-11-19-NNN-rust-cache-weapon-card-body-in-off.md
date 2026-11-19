@@ -65,5 +65,37 @@ three-digit numbers. The decisions check refuses it until then.
   - after: link 8 `notyet`, 1 of 5 steps (`make`), stopped at `init` on "stopped after partial writes:
     WillowWeapon.CacheWeaponCard: the card's slot count", so the installed weapon has an activated slot past 0;
   - the other 13 rows are identical in the two runs: 0 ok / 6 NotYet / 8 errors overall in both.
+- **Review r1 of #521** (seven items; the hub's ruling: a preflight uses only non-loading lookups, class and code
+  loading happens in explicit setup, and a definition load during computation is a write):
+  1. **The preflight is read-only.** `equip::card::setup` (called by link 8's `equip_world` before any object is
+     made) finds the card's root classes, then each class a checked field declares, with its parents, until the
+     schema walk meets no reserved class. `card_schema` and `name_part_schema` find classes with
+     `ClassTable::by_path` only: a class not loaded yet is a `VmError::Script` naming it. The globals definition's
+     own class check still calls `Vm::find_class`, on a class the setup has loaded.
+  2. **The slot count comes first.** It is checked right after the type field is read, before any definition is
+     loaded. `cache_weapon_card` compares the definition store's settled handles (`DefStore::settled_handles`, new)
+     and the heap's object count before and after the computation. A `NotYet` after a change, whether from a
+     definition load or from attribute evaluation, is marked "stopped after partial writes".
+  3. **`equip_world`** runs the setup first. The `WillowGlobals` allocation is its first write, and a refusal after
+     it is marked.
+  4. **A reserved subclass** is resolved in setup, with its parents, before `named()` reads its ancestry.
+  5. **The base value** of each appended entry is read through `ow-attr` (`base_value_of`) in append order before
+     anything is written, and its typed refusal passes through. B itself is not used, since V is 0 with no record.
+  6. **First wins:** a key already bound keeps its handler.
+  7. **`Role`** must be an enum byte that names `ROLE_Authority` (checked in the schema). The authority is resolved
+     while computing, before the first card write.
+
+  Six new synthetic tests (27 in `equip::card::tests`):
+  - a plain-byte `Role`;
+  - a base-value read that refuses;
+  - the slot count before the type is read;
+  - the load mark;
+  - first wins;
+  - a three-package store in which the weapon's `BalanceDefinition` names a reserved subclass in another package.
+    The schema refuses it without loading it. The setup loads it with its parent, and the schema then stops at the
+    DLC set's missing list.
+
+  Installed gate after the fix: link 8 unchanged (1 of 5, stop `init` at the card's slot count), 0 ok / 6 NotYet / 8
+  errors.
 - **Not done:** the slot count's source, the stable order of equal priorities, the display conversion and value
   formula, the visit of other definition classes, and any live check.

@@ -7,7 +7,7 @@
 //! 1. **The globals definition** through the Off getter's rule ([`crate::globals::world_globals`],
 //!    [`crate::globals::globals_definition`]): no globals is the world's `NotYet { LayerAbsent }`, an unset
 //!    definition the getter's `NotYet { NotRead }`. A None `WeaponTypeDefinition` then does nothing more.
-//! 2. **The slot count** (body note section 4, step 3): which definition supplies it is not read, and its clamp always
+//! 2. **The slot count** (body note section 4, step 3; checked before any definition load, review r1 of #521): which definition supplies it is not read, and its clamp always
 //!    visits slot 0. So an activated slot from 1 to 18 is `NotYet { NotRead }` [`SLOT_COUNT`]; otherwise only slot 0
 //!    can contribute. Slot 0, when `bActivated`, looks up the presentations of its `AttributeToModify` and its
 //!    `ConstraintAttribute`; when it is `bIncludeInModifierText` it gives a slot entry (its `ComputedModifierValue`,
@@ -45,7 +45,9 @@
 //! **The preflight** ([`preflight`], body note section 4) replaces the outline's card refusal: NATIVE_WILLOW_GLOBALS.md
 //! section 6.2 steps 1 to 3 (the globals instance, its class, `TheGlobalsDefinition` holding a `GlobalsDefinition`,
 //! on a world set up per its section 6.1), the name-part schema, then the card schema ([`card_schema`]), each schema
-//! failure a `VmError::Script` naming the field. Nothing is written.
+//! failure a `VmError::Script` naming the field. Nothing is written, and nothing is loaded: classes are found with
+//! non-loading lookups. [`setup`] loads them first, at world set-up, together with every class a checked field
+//! declares and its parents (review r1 of #521).
 //!
 //! Classes the note names without a package are matched by their short name through the parent chain (the declared
 //! reference types); the port invents no package path. **Reference** binds nothing (architecture rule R3).
@@ -97,14 +99,63 @@ fn not_read(what: &'static str) -> VmError {
     NotYet::not_read(what, RECORD).into()
 }
 
-// ---- the preflight and the card schema -------------------------------------------------------------------------
+// ---- the setup, the preflight and the card schema --------------------------------------------------------------
+
+/// The classes the schema walk starts from.
+const ROOTS: [&str; 8] = [
+    WEAPON_CLASS,
+    WEAPON_TYPE_CLASS,
+    WEAPON_PART_CLASS,
+    super::name_parts::NAME_PART_CLASS,
+    crate::globals::GLOBALS_DEFINITION_CLASS,
+    "WillowGame.WeaponStatusEffectAttributePresentationDefinition",
+    "WillowGame.AttributePresentationDefinition",
+    GLOBALS_CLASS,
+];
+
+/// What stops the schema walk: a class a checked field declares that is only reserved (its declarations and parents
+/// not loaded yet), or a schema error.
+enum Walk {
+    Reserved(ClassId),
+    Bad(VmError),
+}
+
+impl From<VmError> for Walk {
+    fn from(e: VmError) -> Self {
+        Walk::Bad(e)
+    }
+}
+
+/// The card's explicit setup (the hub's ruling on #521: class and code loading happens at world set-up or pack bind,
+/// never in a preflight). It finds the [`ROOTS`], then each class a checked field declares, with its parents, until the
+/// schema walk meets no reserved class. It validates nothing: the preflight does that, read-only. A failed class
+/// lookup is returned as the VM gave it.
+pub fn setup(vm: &mut Vm) -> Result<(), VmError> {
+    for root in ROOTS {
+        vm.find_class(root)?;
+    }
+    for _ in 0..512 {
+        match walk(vm) {
+            Ok(()) | Err(Walk::Bad(_)) => return Ok(()),
+            Err(Walk::Reserved(c)) => {
+                let path = class_name(vm, c);
+                let id = vm.find_class(&path)?;
+                if !is_defined(vm, id) {
+                    return Err(schema(format!("{path} stays reserved after its lookup")));
+                }
+            }
+        }
+    }
+    Err(schema("the card setup met more than 512 reserved classes".into()))
+}
 
 /// The equip driver's preflight before the weapon is made (module documentation): the globals steps 1 to 3, the
-/// name-part schema, then the card schema. Unprefixed: nothing is written.
+/// name-part schema, then the card schema. Read-only and unprefixed: class lookups do not load (the setup did), and
+/// nothing is written. The globals definition's own class check finds a class the setup loaded.
 pub fn preflight(vm: &mut Vm) -> Result<(), VmError> {
     const WHAT: &str = "the equip driver's globals";
     let globals = crate::globals::world_globals(vm)?;
-    let willow = vm.find_class(GLOBALS_CLASS)?;
+    let willow = defined_class(vm, GLOBALS_CLASS, WHAT)?;
     if !vm.space.classes.is_child_of(vm.space.heap.get(globals)?.class, willow) {
         return Err(bad(
             WHAT,
@@ -116,11 +167,29 @@ pub fn preflight(vm: &mut Vm) -> Result<(), VmError> {
     card_schema(vm)
 }
 
-/// Whether class `c` or one of its parents has the short name `short` (the last segment of its path).
+fn is_defined(vm: &Vm, c: ClassId) -> bool {
+    vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined())
+}
+
+/// The defined class at `path`, without loading anything; a class not loaded yet is a data error of `what` (the
+/// card's setup loads the ones the card reads).
+pub(crate) fn defined_class(vm: &Vm, path: &str, what: &str) -> Result<ClassId, VmError> {
+    match vm.space.classes.by_path(path) {
+        Some(c) if is_defined(vm, c) => Ok(c),
+        _ => Err(bad(what, format!("class {path} is not loaded (equip::card::setup loads it before the preflight)"))),
+    }
+}
+
+/// Class `c`, defined, or the walk's [`Walk::Reserved`].
+fn need(vm: &Vm, c: ClassId) -> Result<ClassId, Walk> {
+    if is_defined(vm, c) { Ok(c) } else { Err(Walk::Reserved(c)) }
+}
+
+/// Whether class `c` or one of its parents has the short name `short` (its own name, after the last `.` or `:`).
 fn named(vm: &Vm, mut c: ClassId, short: &str) -> bool {
     loop {
         let Some(layout) = vm.space.classes.get_layout(c) else { return false };
-        if layout.path().as_str().rsplit('.').next() == Some(short) {
+        if layout.path().name() == short {
             return true;
         }
         match layout.super_class() {
@@ -145,45 +214,42 @@ fn declared(vm: &Vm, class: ClassId, name: &str) -> Result<(PropKind, i32), VmEr
     Ok((d.kind.clone(), d.array_dim))
 }
 
-/// The declared class `c`, with its own declarations loaded (a property's declared class can be only reserved until
-/// the class is found; finding a class is a load of the code package, not a write).
-fn defined(vm: &mut Vm, c: ClassId) -> Result<ClassId, VmError> {
-    let path = class_name(vm, c);
-    vm.find_class(&path)
-}
-
-/// `class.name`: one reference to a class named `target` (or a child of it); the declared class, loaded.
-fn reference(vm: &mut Vm, class: ClassId, name: &str, target: &str) -> Result<ClassId, VmError> {
-    match declared(vm, class, name)? {
-        (PropKind::Object { class: c }, 1) if named(vm, c, target) => defined(vm, c),
-        other => Err(schema(format!("{}.{name} is {other:?}, not one {target} reference", class_name(vm, class)))),
+/// `class.name`: one reference to a class named `target` (or a child of it); the declared class.
+fn reference(vm: &Vm, class: ClassId, name: &str, target: &str) -> Result<ClassId, Walk> {
+    let found = declared(vm, class, name)?;
+    if let (PropKind::Object { class: c }, 1) = found
+        && named(vm, need(vm, c)?, target)
+    {
+        return Ok(c);
     }
+    Err(schema(format!("{}.{name} is {found:?}, not one {target} reference", class_name(vm, class))).into())
 }
 
-/// `class.name`: a dynamic array of references to `target`; the declared class, loaded.
-fn references(vm: &mut Vm, class: ClassId, name: &str, target: &str) -> Result<ClassId, VmError> {
-    match declared(vm, class, name)? {
-        (PropKind::Array(inner), 1) if matches!(*inner, PropKind::Object { class: c } if named(vm, c, target)) => {
-            let PropKind::Object { class: c } = *inner else { unreachable!() };
-            defined(vm, c)
-        }
-        other => Err(schema(format!("{}.{name} is {other:?}, not an array of {target} references", class_name(vm, class)))),
+/// `class.name`: a dynamic array of references to `target`; the declared class.
+fn references(vm: &Vm, class: ClassId, name: &str, target: &str) -> Result<ClassId, Walk> {
+    let found = declared(vm, class, name)?;
+    if let (PropKind::Array(inner), 1) = &found
+        && let PropKind::Object { class: c } = **inner
+        && named(vm, need(vm, c)?, target)
+    {
+        return Ok(c);
     }
+    Err(schema(format!("{}.{name} is {found:?}, not an array of {target} references", class_name(vm, class))).into())
 }
 
-/// Whether struct `s`'s path ends with `short`.
+/// Whether struct `s`'s own name is `short`.
 fn struct_named(vm: &Vm, s: StructId, short: &str) -> bool {
-    vm.space.classes.struct_layout(s).is_some_and(|l| l.path().as_str().rsplit('.').next() == Some(short))
+    vm.space.classes.struct_layout(s).is_some_and(|l| l.path().name() == short)
 }
 
 /// `class.name`: a dynamic array of the struct named `short`; the struct.
-fn structs(vm: &Vm, class: ClassId, name: &str, short: &str) -> Result<StructId, VmError> {
+fn structs(vm: &Vm, class: ClassId, name: &str, short: &str) -> Result<StructId, Walk> {
     match declared(vm, class, name)? {
         (PropKind::Array(inner), 1) if matches!(*inner, PropKind::Struct(s) if struct_named(vm, s, short)) => {
             let PropKind::Struct(s) = *inner else { unreachable!() };
             Ok(s)
         }
-        other => Err(schema(format!("{}.{name} is {other:?}, not an array of {short}", class_name(vm, class)))),
+        other => Err(schema(format!("{}.{name} is {other:?}, not an array of {short}", class_name(vm, class))).into()),
     }
 }
 
@@ -198,65 +264,91 @@ enum Want<'a> {
     /// An int, or a byte.
     Index,
     Struct(&'a str),
+    /// A byte of an enum that names `ROLE_Authority` (what `slots::is_authority` reads; review r1 of #521, item 7).
+    Role,
 }
 
-fn kind_is(vm: &Vm, kind: &PropKind, want: Want<'_>) -> bool {
-    match (want, kind) {
-        (Want::Ref(t), PropKind::Object { class }) => named(vm, *class, t),
+fn kind_is(vm: &Vm, kind: &PropKind, want: Want<'_>) -> Result<bool, Walk> {
+    Ok(match (want, kind) {
+        (Want::Ref(t), PropKind::Object { class }) => named(vm, need(vm, *class)?, t),
         (Want::AnyRef, PropKind::Object { .. }) => true,
         (Want::Float, PropKind::Float) | (Want::Bool, PropKind::Bool) => true,
         (Want::Byte, PropKind::Byte { .. }) => true,
         (Want::Index, PropKind::Int | PropKind::Byte { .. }) => true,
         (Want::Struct(t), PropKind::Struct(s)) => struct_named(vm, *s, t),
+        (Want::Role, PropKind::Byte { enum_: Some(e) }) => vm
+            .space
+            .classes
+            .enum_layout(*e)
+            .and_then(|l| vm.space.names.find("ROLE_Authority").and_then(|n| l.index_of(n)))
+            .is_some(),
         _ => false,
-    }
+    })
 }
 
 /// Struct `s` declares each of `fields` as wanted (dimension 1).
-fn struct_fields(vm: &Vm, s: StructId, fields: &[(&str, Want<'_>)]) -> Result<(), VmError> {
+fn struct_fields(vm: &Vm, s: StructId, fields: &[(&str, Want<'_>)]) -> Result<(), Walk> {
     let layout = vm.space.classes.struct_layout(s).ok_or_else(|| schema("a card struct has no layout".into()))?;
     let path = layout.path().as_str().to_string();
     for (name, want) in fields {
         let d = vm.space.names.find(name).and_then(|id| layout.field(id)).map(|(_, d)| (d.kind.clone(), d.array_dim));
-        match d {
-            Some((k, 1)) if kind_is(vm, &k, *want) => {}
-            other => return Err(schema(format!("{path}.{name} is {other:?}, not the field the card reads"))),
+        let ok = match &d {
+            Some((k, 1)) => kind_is(vm, k, *want)?,
+            _ => false,
+        };
+        if !ok {
+            return Err(schema(format!("{path}.{name} is {d:?}, not the field the card reads")).into());
         }
     }
     Ok(())
 }
 
 /// `class` declares each of `fields` as wanted (dimension 1).
-fn class_fields(vm: &Vm, class: ClassId, fields: &[(&str, Want<'_>)]) -> Result<(), VmError> {
+fn class_fields(vm: &Vm, class: ClassId, fields: &[(&str, Want<'_>)]) -> Result<(), Walk> {
     for (name, want) in fields {
-        match declared(vm, class, name)? {
-            (k, 1) if kind_is(vm, &k, *want) => {}
-            other => return Err(schema(format!("{}.{name} is {other:?}, not the field the card reads", class_name(vm, class)))),
+        let found = declared(vm, class, name)?;
+        let ok = match &found {
+            (k, 1) => kind_is(vm, k, *want)?,
+            _ => false,
+        };
+        if !ok {
+            return Err(schema(format!("{}.{name} is {found:?}, not the field the card reads", class_name(vm, class))).into());
         }
     }
     Ok(())
 }
 
 /// `class.name`: a static array of the struct named `short`; the struct.
-fn static_structs(vm: &Vm, class: ClassId, name: &str, short: &str) -> Result<StructId, VmError> {
+fn static_structs(vm: &Vm, class: ClassId, name: &str, short: &str) -> Result<StructId, Walk> {
     match declared(vm, class, name)? {
         (PropKind::Struct(s), dim) if dim >= 1 && struct_named(vm, s, short) => Ok(s),
-        other => Err(schema(format!("{}.{name} is {other:?}, not a static array of {short}", class_name(vm, class)))),
+        other => Err(schema(format!("{}.{name} is {other:?}, not a static array of {short}", class_name(vm, class))).into()),
     }
 }
 
-/// The card schema of the body note's section 4, step 1, on the declared classes, before any write.
-pub fn card_schema(vm: &mut Vm) -> Result<(), VmError> {
-    let weapon = vm.find_class(WEAPON_CLASS)?;
-    let weapon_type = vm.find_class(WEAPON_TYPE_CLASS)?;
-    let part = vm.find_class(WEAPON_PART_CLASS)?;
-    let globals_definition = vm.find_class(crate::globals::GLOBALS_DEFINITION_CLASS)?;
-    let status = vm.find_class(&format!("WillowGame.{STATUS_PRESENTATION}"))?;
-    let presentation = vm.find_class(&format!("WillowGame.{PRESENTATION}"))?;
+/// The card schema of the body note's section 4, step 1, on the declared classes, before any write. Read-only: a
+/// class a checked field declares that is not loaded yet is a schema error naming it ([`setup`] loads it).
+pub fn card_schema(vm: &Vm) -> Result<(), VmError> {
+    walk(vm).map_err(|w| match w {
+        Walk::Bad(e) => e,
+        Walk::Reserved(c) => {
+            schema(format!("{} is not loaded (equip::card::setup loads it before the preflight)", class_name(vm, c)))
+        }
+    })
+}
+
+/// The schema walk: the checks of [`card_schema`], stopping at the first reserved class.
+fn walk(vm: &Vm) -> Result<(), Walk> {
+    let weapon = defined_class(vm, WEAPON_CLASS, SCHEMA)?;
+    let weapon_type = defined_class(vm, WEAPON_TYPE_CLASS, SCHEMA)?;
+    let part = defined_class(vm, WEAPON_PART_CLASS, SCHEMA)?;
+    let globals_definition = defined_class(vm, crate::globals::GLOBALS_DEFINITION_CLASS, SCHEMA)?;
+    let status = defined_class(vm, &format!("WillowGame.{STATUS_PRESENTATION}"), SCHEMA)?;
+    let presentation = defined_class(vm, &format!("WillowGame.{PRESENTATION}"), SCHEMA)?;
     // The balance (DefinitionData.BalanceDefinition, the outline's read) and its DLC set.
     let (data, _) = declared(vm, weapon, "DefinitionData")?;
     let PropKind::Struct(data) = data else {
-        return Err(schema(format!("{WEAPON_CLASS}.DefinitionData is not a struct")));
+        return Err(schema(format!("{WEAPON_CLASS}.DefinitionData is not a struct")).into());
     };
     struct_fields(vm, data, &[("BalanceDefinition", Want::Ref("InventoryBalanceDefinition"))])?;
     let balance = vm
@@ -269,17 +361,17 @@ pub fn card_schema(vm: &mut Vm) -> Result<(), VmError> {
             _ => None,
         })
         .ok_or_else(|| schema("WeaponDefinitionData.BalanceDefinition has no class".into()))?;
-    let balance = defined(vm, balance)?;
-    let mut balance_root = balance;
-    while !vm.space.classes.get_layout(balance_root).is_some_and(|l| l.path().as_str().ends_with(".InventoryBalanceDefinition")) {
+    let mut balance_root = need(vm, balance)?;
+    while vm.space.classes.get_layout(balance_root).is_none_or(|l| l.path().name() != "InventoryBalanceDefinition") {
         match vm.space.classes.get_layout(balance_root).and_then(|l| l.super_class()) {
             Some(s) => balance_root = s,
-            None => return Err(schema("BalanceDefinition is not an InventoryBalanceDefinition".into())),
+            None => return Err(schema("BalanceDefinition is not an InventoryBalanceDefinition".into()).into()),
         }
     }
     let dlc = reference(vm, balance_root, "DlcItemSet", "DownloadableItemSetDefinition")?;
     // The presentation lists on the DLC set and on the globals definition.
     for holder in [dlc, globals_definition] {
+        let holder = need(vm, holder)?;
         for list in LISTS {
             let l = reference(vm, holder, list, "AttributePresentationListDefinition")?;
             references(vm, l, "Attributes", PRESENTATION)?;
@@ -321,7 +413,7 @@ pub fn card_schema(vm: &mut Vm) -> Result<(), VmError> {
             ("bUseTwoAsBaseValueForPresentationIfContextFailsToResolve", Want::Bool),
         ],
     )?;
-    // The weapon's card, its slots and its replicated values.
+    // The weapon's card, its slots, its replicated values and its role.
     let stats = structs(vm, weapon, "WeaponCardModifierStats", "ModifierValuePresentationData")?;
     struct_fields(
         vm,
@@ -347,10 +439,15 @@ pub fn card_schema(vm: &mut Vm) -> Result<(), VmError> {
     )?;
     let replicated = match declared(vm, weapon, "ReplicatedWeaponCardModifierValues")? {
         (PropKind::Struct(s), dim) if dim >= 1 => s,
-        other => return Err(schema(format!("{WEAPON_CLASS}.ReplicatedWeaponCardModifierValues is {other:?}, not a static array of structs"))),
+        other => {
+            return Err(schema(format!(
+                "{WEAPON_CLASS}.ReplicatedWeaponCardModifierValues is {other:?}, not a static array of structs"
+            ))
+            .into());
+        }
     };
     struct_fields(vm, replicated, &[("ModifierValue", Want::Float), ("ModifierStatIndex", Want::Index)])?;
-    class_fields(vm, weapon, &[("Role", Want::Byte)])
+    class_fields(vm, weapon, &[("Role", Want::Role)])
 }
 
 // ---- the computation ---------------------------------------------------------------------------------------------
@@ -389,6 +486,8 @@ pub struct Card {
     /// The slot entries (S of them), then the appended entries.
     pub stats: Vec<Stat>,
     pub slot_entries: usize,
+    /// The weapon's `Role` is `ROLE_Authority`, resolved before any write (review r1 of #521, item 7).
+    pub authority: bool,
 }
 
 fn obj(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
@@ -537,6 +636,19 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     let Some(weapon_type) = object_of(&field(vm, &data, "WeaponTypeDefinition")?, NATIVE)? else {
         return Ok(None);
     };
+    // 2. The slot count, before any definition load (review r1 of #521, item 2).
+    let class = vm.space.heap.get(weapon)?.class;
+    let p = vm.space.prop(class, "AttributeSlots").ok_or_else(|| bad(NATIVE, "the weapon declares no AttributeSlots"))?;
+    let dim = vm.space.classes.decl(p).map(|d| d.array_dim).unwrap_or(0);
+    let dim = usize::try_from(dim).unwrap_or(0).min(SLOT_CLAMP);
+    let slot = |vm: &Vm, i: usize| -> Result<Value, VmError> {
+        Ok(vm.space.read(weapon, PropAddr::element(p, u32::try_from(i).unwrap_or(u32::MAX)))?.clone())
+    };
+    for i in 1..dim {
+        if flag(field(vm, &slot(vm, i)?, "bActivated")?, "bActivated")? {
+            return Err(not_read(SLOT_COUNT));
+        }
+    }
     loaded(vm, weapon_type)?;
     let dlc = match object_of(&field(vm, &data, "BalanceDefinition")?, NATIVE)? {
         Some(b) => {
@@ -551,19 +663,7 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     };
     let damage = damage_type(vm, &data, weapon_type)?;
     let lk = Lookup { dlc, globals_definition, damage };
-    // 2. The slot count, then slot 0.
-    let class = vm.space.heap.get(weapon)?.class;
-    let p = vm.space.prop(class, "AttributeSlots").ok_or_else(|| bad(NATIVE, "the weapon declares no AttributeSlots"))?;
-    let dim = vm.space.classes.decl(p).map(|d| d.array_dim).unwrap_or(0);
-    let dim = usize::try_from(dim).unwrap_or(0).min(SLOT_CLAMP);
-    let slot = |vm: &Vm, i: usize| -> Result<Value, VmError> {
-        Ok(vm.space.read(weapon, PropAddr::element(p, u32::try_from(i).unwrap_or(u32::MAX)))?.clone())
-    };
-    for i in 1..dim {
-        if flag(field(vm, &slot(vm, i)?, "bActivated")?, "bActivated")? {
-            return Err(not_read(SLOT_COUNT));
-        }
-    }
+    // Slot 0.
     let mut stats = Vec::new();
     let mut clear_slot_flag = false;
     if dim >= 1 {
@@ -589,8 +689,8 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     }
     let maps = accumulate(vm, weapon, &visited)?;
     // 5. The visits.
-    let type_class = vm.find_class(WEAPON_TYPE_CLASS)?;
-    let part_class = vm.find_class(WEAPON_PART_CLASS)?;
+    let type_class = defined_class(vm, WEAPON_TYPE_CLASS, NATIVE)?;
+    let part_class = defined_class(vm, WEAPON_PART_CLASS, NATIVE)?;
     let mut entries = Vec::new();
     for &d in &visited {
         let c = vm.space.heap.get(d)?.class;
@@ -619,11 +719,39 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     if appended.windows(2).any(|w| w[0].priority == w[1].priority) {
         return Err(not_read(TIE));
     }
-    if appended.iter().any(|e| e.record.is_some()) {
-        return Err(not_read(DISPLAY));
+    // In append order: the base value B (section 3.3, step 1), read for each entry so a refusal of its read passes
+    // through typed; then an entry with a record needs the display conversion. With no record V is 0 and the entry
+    // is displayed, so B is read and not used by what the port writes (review r1 of #521, item 5).
+    for e in &appended {
+        base_value(vm, weapon, e.presentation)?;
+        if e.record.is_some() {
+            return Err(not_read(DISPLAY));
+        }
     }
     stats.extend(appended.into_iter().map(|e| Stat { presentation: Some(e.presentation), constraint: None, value: 0.0, display: true }));
-    Ok(Some(Card { clear_slot_flag, stats, slot_entries }))
+    let authority = super::slots::is_authority(vm, weapon, NATIVE)?;
+    Ok(Some(Card { clear_slot_flag, stats, slot_entries, authority }))
+}
+
+/// The base value B of presentation `p` (section 3.3, step 1): 1 with no `Attribute`; else the attribute's base
+/// value with the weapon as context; when that context does not resolve, 1 or 2 by the presentation's two flags,
+/// else the no-context answer 0.
+fn base_value(vm: &mut Vm, weapon: ObjRef, p: ObjRef) -> Result<f32, VmError> {
+    let Some(a) = obj(vm, p, "Attribute")? else { return Ok(1.0) };
+    let sys = vm.attrs.clone();
+    let v = sys.base_value_of(a, Some(weapon), None, &mut ow_attr::api::EvalCx::new(vm))?;
+    if let Some(v) = v {
+        return Ok(v.value);
+    }
+    let one = "bUseOneAsBaseValueForPresentationIfContextFailsToResolve";
+    let two = "bUseTwoAsBaseValueForPresentationIfContextFailsToResolve";
+    Ok(if flag(required(vm, p, one, NATIVE)?, one)? {
+        1.0
+    } else if flag(required(vm, p, two, NATIVE)?, two)? {
+        2.0
+    } else {
+        0.0
+    })
 }
 
 /// `ModifierValuePresentationData` values of `stats`, of the declared element struct `ty`.
@@ -680,7 +808,7 @@ fn write_card(vm: &mut Vm, weapon: ObjRef, card: &Card) -> Result<(), VmError> {
     // 3. The entries.
     vm.space.write(weapon, PropAddr::scalar(stats_prop), Value::array(values))?;
     // 4. Replication on the authority.
-    if !super::slots::is_authority(vm, weapon, NATIVE)? {
+    if !card.authority {
         return Ok(());
     }
     let rep = prop(vm, "ReplicatedWeaponCardModifierValues")?;
@@ -707,10 +835,26 @@ fn write_card(vm: &mut Vm, weapon: ObjRef, card: &Card) -> Result<(), VmError> {
     Ok(())
 }
 
-/// `CacheWeaponCard` on `weapon` in Off (module documentation): compute, writing nothing (a `NotYet` unprefixed), then
-/// write (a `NotYet` after the first write marked).
+/// What the store and the heap hold: it changes when a definition is loaded (or fails to load) or an object is
+/// allocated, both writes in Off.
+fn load_mark(vm: &Vm) -> (usize, usize) {
+    (vm.defs.settled_handles(), vm.space.heap.len())
+}
+
+/// `f`'s result, a failure marked "stopped after partial writes" when `f` loaded a definition or allocated an object
+/// before it ([`load_mark`]; review r1 of #521, item 2). This covers the loads of attribute evaluation too.
+pub(crate) fn marked_after_loads<T>(
+    vm: &mut Vm,
+    f: impl FnOnce(&mut Vm) -> Result<T, VmError>,
+) -> Result<T, VmError> {
+    let before = load_mark(vm);
+    f(vm).map_err(|e| if load_mark(vm) == before { e } else { ow_world::pools::after_partial_writes(e) })
+}
+
+/// `CacheWeaponCard` on `weapon` in Off (module documentation): compute, then write. A `NotYet` with nothing written is
+/// unprefixed; one after a load of the computation or after the first card write is marked.
 pub fn cache_weapon_card(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
-    match compute(vm, weapon)? {
+    match marked_after_loads(vm, |vm| compute(vm, weapon))? {
         Some(card) => write_card(vm, weapon, &card).map_err(ow_world::pools::after_partial_writes),
         None => Ok(()),
     }
@@ -724,6 +868,10 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     let Ok(id) = vm.find_function(CACHE_WEAPON_CARD) else { return Ok(()) };
     let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else { return Ok(()) };
+    // First wins: a key bound before is kept (review r1 of #521, item 6).
+    if vm.has_native(&key) {
+        return Ok(());
+    }
     vm.register_native(
         &key,
         Rc::new(|c: &mut NativeCall<'_>| {

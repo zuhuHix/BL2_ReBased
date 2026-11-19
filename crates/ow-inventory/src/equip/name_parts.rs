@@ -57,12 +57,11 @@ const SCHEMA: &str = "ChooseRandomNameParts (the name-part schema)";
 
 /// The declared kinds the name-part rule reads (the note's section 5.1), checked on the declared classes; each
 /// failure is a `VmError::Script` naming the field.
-pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
-    let weapon = vm.find_class(WEAPON_CLASS)?;
-    let weapon_type = vm.find_class(WEAPON_TYPE_CLASS)?;
-    let part = vm.find_class(WEAPON_PART_CLASS)?;
-    let name_part = vm.find_class(NAME_PART_CLASS)?;
-    let vm = &*vm;
+pub fn name_part_schema(vm: &Vm) -> Result<(), VmError> {
+    // Read-only (the hub's ruling on #521): the classes are found without loading; the card's setup loads them.
+    let defined = |path: &str| super::card::defined_class(vm, path, SCHEMA);
+    let (weapon, weapon_type, part, name_part) =
+        (defined(WEAPON_CLASS)?, defined(WEAPON_TYPE_CLASS)?, defined(WEAPON_PART_CLASS)?, defined(NAME_PART_CLASS)?);
     let is_name_part = |kind: &PropKind| matches!(kind, PropKind::Object { class } if vm.space.classes.is_child_of(*class, name_part));
     // DefinitionData: a WeaponDefinitionData struct of object fields, the name parts typed as name parts.
     let data = declared(vm, weapon, "DefinitionData")?;

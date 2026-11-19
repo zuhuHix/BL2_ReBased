@@ -356,14 +356,14 @@ fn an_expression_not_yet_is_returned_unprefixed_and_writes_nothing() {
 
 #[test]
 fn the_name_part_schema_holds_on_the_declared_classes() {
-    let mut x = Fx::new(Schema::Good);
-    name_part_schema(&mut x.vm).unwrap();
+    let x = Fx::new(Schema::Good);
+    name_part_schema(&x.vm).unwrap();
 }
 
 #[test]
 fn a_struct_named_after_a_colon_holds_the_schema() {
-    let mut x = Fx::new(Schema::ColonStruct);
-    name_part_schema(&mut x.vm).unwrap();
+    let x = Fx::new(Schema::ColonStruct);
+    name_part_schema(&x.vm).unwrap();
 }
 
 #[test]
@@ -375,8 +375,8 @@ fn each_schema_failure_is_a_script_error_naming_the_field() {
         (Schema::NoExpLevel, "ExpLevel"),
         (Schema::SuffixStruct, "FooWeaponDefinitionData"),
     ] {
-        let mut x = Fx::new(schema);
-        match name_part_schema(&mut x.vm).unwrap_err() {
+        let x = Fx::new(schema);
+        match name_part_schema(&x.vm).unwrap_err() {
             VmError::Script { message: m, .. } => assert!(m.contains(field), "{field}: {m}"),
             other => panic!("{field}: expected VmError::Script, got {other:?}"),
         }

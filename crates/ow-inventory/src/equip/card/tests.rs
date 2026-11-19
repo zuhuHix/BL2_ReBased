@@ -38,6 +38,8 @@ enum Schema {
     OtherStats,
     /// The world records no globals object.
     NoGlobals,
+    /// `Role` declared a plain byte, with no enum (review r1 of #521, item 7).
+    PlainRole,
 }
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
@@ -76,7 +78,12 @@ impl Fx {
         let mut s = ObjectSpace::new();
         let object = s.classes.define("Core.Object", None, vec![]).unwrap();
         let obj = r(object);
-        let attr = s.classes.define("Engine.AttributeDefinition", Some(object), vec![]).unwrap();
+        // The attribute classes a base-value read walks (empty chains unless a test sets them).
+        let objs = arr(obj.clone());
+        let fields = vec![decl(&mut s, "ContextResolverChain", objs.clone()), decl(&mut s, "ValueResolverChain", objs)];
+        let attr_base = s.classes.define("Engine.AttributeDefinitionBase", Some(object), fields).unwrap();
+        let attr = s.classes.define("Engine.AttributeDefinition", Some(attr_base), vec![]).unwrap();
+        s.classes.define("Test.UnreadContextResolver", Some(object), vec![]).unwrap();
         let fields = vec![
             decl(&mut s, "BaseValueConstant", PropKind::Float),
             decl(&mut s, "BaseValueAttribute", obj.clone()),
@@ -190,7 +197,7 @@ impl Fx {
             decl(&mut s, "WeaponCardModifierStats", arr(PropKind::Struct(stats))),
             decl(&mut s, "AttributeSlots", PropKind::Struct(slot)).with_array_dim(SLOTS),
             decl(&mut s, "ReplicatedWeaponCardModifierValues", PropKind::Struct(rep)).with_array_dim(REP),
-            decl(&mut s, "Role", PropKind::Byte { enum_: Some(role) }),
+            decl(&mut s, "Role", PropKind::Byte { enum_: (schema != Schema::PlainRole).then_some(role) }),
         ];
         let weapon_class = s.classes.define(WEAPON_CLASS, Some(object), fields).unwrap();
         let weapon = s.alloc(weapon_class, "Weapon_0", None, Origin::Runtime).unwrap();
@@ -736,7 +743,9 @@ fn the_preflight_refuses_globals_of_another_class_and_an_unset_definition() {
 
 #[test]
 fn each_card_schema_failure_is_a_script_error_naming_the_field() {
-    for (schema, field) in [(Schema::IntBasePriority, "BasePriority"), (Schema::OtherStats, "WeaponCardModifierStats")] {
+    for (schema, field) in
+        [(Schema::IntBasePriority, "BasePriority"), (Schema::OtherStats, "WeaponCardModifierStats"), (Schema::PlainRole, "Role")]
+    {
         let mut x = Fx::with(schema, ParityMode::Off);
         let m = script(preflight(&mut x.vm).unwrap_err());
         assert!(m.contains(field), "{field}: {m}");
@@ -772,4 +781,205 @@ fn reference_binds_nothing() {
     let w = x.weapon;
     assert!(x.vm.call(f, Some(w), vec![]).is_err(), "Reference ran an unbound native");
     x.untouched();
+}
+
+// ---- Review r1 of #521 -------------------------------------------------------------------------------------------
+
+/// Item 7: a plain-byte `Role` fails before any card write (the authority is resolved while computing).
+#[test]
+fn a_role_with_no_authority_enum_fails_before_the_card_is_written() {
+    let mut x = Fx::with(Schema::PlainRole, ParityMode::Off);
+    let p = x.pres(1.0, None);
+    let t = x.t;
+    x.set(t, "CustomPresentations", Fx::objs(&[Some(p)]));
+    assert!(script(x.run().unwrap_err()).contains("Role"));
+    x.untouched();
+}
+
+/// Item 5: an appended entry's base value is read, and its refusal passes through typed with nothing written.
+#[test]
+fn an_appended_entry_whose_base_value_read_refuses_passes_the_refusal_through() {
+    let mut x = Fx::new();
+    let resolver = x.obj("Test.UnreadContextResolver");
+    let a = x.attribute();
+    x.set(a, "ContextResolverChain", Fx::objs(&[Some(resolver)]));
+    let p = x.pres(1.0, Some(a));
+    let t = x.t;
+    x.set(t, "CustomPresentations", Fx::objs(&[Some(p)]));
+    let n = not_yet(x.run().unwrap_err());
+    assert!(n.what.contains("Test.UnreadContextResolver"), "{}", n.what);
+    assert!(!n.what.contains("partial writes"), "nothing loaded or written: {}", n.what);
+    x.untouched();
+}
+
+/// Item 2: the slot count is checked before the type is read past its field: a type that would fail to read (a
+/// definition of another class, which declares no `DefaultDamageTypeDefinition`) is never reached.
+#[test]
+fn the_slot_count_comes_before_the_type_is_read() {
+    let mut x = Fx::new();
+    let other = x.obj("Test.Other");
+    x.data(&[("WeaponTypeDefinition", Some(other))]);
+    // Without the slot, the type's read is an error.
+    assert!(script(x.run().unwrap_err()).contains("DefaultDamageTypeDefinition"));
+    x.slot(1, true, false, None, None, 0.0);
+    refused(x.run().unwrap_err(), SLOT_COUNT);
+    x.untouched();
+}
+
+/// Item 2: a failure after the computation loaded or allocated is marked once; one with no change is not.
+#[test]
+fn a_failure_after_a_load_of_the_computation_is_marked() {
+    let mut x = Fx::new();
+    let e = marked_after_loads(&mut x.vm, |vm| -> Result<(), VmError> {
+        let c = vm.space.classes.by_path("Test.Other").unwrap();
+        vm.space.alloc(c, "Allocated", None, Origin::Runtime).unwrap();
+        Err(not_read(TIE))
+    })
+    .unwrap_err();
+    let n = not_yet(e);
+    assert!(n.what.starts_with("stopped after partial writes: "), "{}", n.what);
+    assert_eq!(n.what.matches("partial writes").count(), 1);
+    let e = marked_after_loads(&mut x.vm, |_| -> Result<(), VmError> { Err(not_read(TIE)) }).unwrap_err();
+    assert_eq!(not_yet(e).what, TIE);
+}
+
+/// Item 6: a key bound before registration keeps its first handler.
+#[test]
+fn a_key_bound_first_keeps_its_handler() {
+    let mut x = Fx::new();
+    let weapon = x.vm.space.classes.by_path(WEAPON_CLASS).unwrap();
+    let path = ObjectPath::parse(CACHE_WEAPON_CARD).unwrap();
+    let f = x.vm.declare_function(FunctionDecl::native(path, "Test.CardKey").with_owner(weapon)).unwrap();
+    let ran = Rc::new(std::cell::Cell::new(false));
+    let seen = ran.clone();
+    x.vm.register_native(
+        "Test.CardKey",
+        Rc::new(move |_: &mut ow_vm::api::NativeCall<'_>| {
+            seen.set(true);
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    register(&mut x.vm).unwrap();
+    let w = x.weapon;
+    x.vm.call(f, Some(w), vec![]).unwrap();
+    assert!(ran.get(), "the first handler ran");
+    x.untouched();
+}
+
+/// Items 1 and 4: the preflight is read-only. The schema meets a class a field declares that is only reserved, a
+/// subclass in another package, and refuses it without loading; the setup loads it with its parent, and the schema
+/// then goes on to its next refusal.
+mod reserved {
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use ow_attr::AttributeSystem;
+    use ow_core::ParityMode;
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::ObjectSpace;
+    use ow_package::testkit::reflect::toy_struct;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+    use ow_vm::error::VmError;
+
+    use super::super::{card_schema, setup};
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    const IMPORTS: [&str; 4] = ["Class", "ScriptStruct", "ObjectProperty", "StructProperty"];
+
+    fn engine() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&IMPORTS);
+        t.class("Object", 0);
+        t.build()
+    }
+
+    /// `WillowGame`: the card's root classes; the weapon's `DefinitionData.BalanceDefinition` names `ToyPkg.ToyBalance`.
+    fn willow_game() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&IMPORTS);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let object = t.p.add_import("Core", "Class", engine, "Object");
+        let toy = t.p.add_import("Core", "Package", 0, "ToyPkg");
+        let balance = t.p.add_import("Core", "Class", toy, "ToyBalance");
+        for c in [
+            "WeaponTypeDefinition",
+            "WeaponPartDefinition",
+            "WeaponNamePartDefinition",
+            "GearboxGlobalsDefinition",
+            "AttributePresentationDefinition",
+            "WillowGlobals",
+        ] {
+            t.class(c, object);
+        }
+        let gbx = t.class("GlobalsDefinition", object);
+        let _ = gbx;
+        let presentation = t.class("ToyPresentationBase", object);
+        t.class("WeaponStatusEffectAttributePresentationDefinition", presentation);
+        let weapon = t.class("WillowWeapon", object);
+        let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
+        t.prop("Object", data, "BalanceDefinition", 0, balance);
+        t.prop("Struct", weapon, "DefinitionData", 0, data);
+        t.build()
+    }
+
+    /// `ToyPkg`: `ToyBalance`, a subclass of `InventoryBalanceDefinition`, whose `DlcItemSet` names a DLC set that
+    /// declares none of the presentation lists.
+    fn toy_pkg() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&IMPORTS);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let object = t.p.add_import("Core", "Class", engine, "Object");
+        let dlc = t.class("DownloadableItemSetDefinition", object);
+        let base = t.class("InventoryBalanceDefinition", object);
+        t.prop("Object", base, "DlcItemSet", 0, dlc);
+        t.class("ToyBalance", base);
+        t.build()
+    }
+
+    #[test]
+    fn the_schema_refuses_a_reserved_class_and_the_setup_loads_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-inventory-card-reserved-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (e, w, k) = (engine(), willow_game(), toy_pkg());
+        let defs = DefStore::from_synthetic(
+            &dir,
+            &[("Engine.upk", e.as_slice()), ("WillowGame.upk", w.as_slice()), ("ToyPkg.upk", k.as_slice())],
+            IdentityPolicy::FirstInScanOrder,
+            ParityMode::Off,
+        )
+        .unwrap();
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        // Before the setup nothing is loaded: the schema finds no root class and loads none.
+        assert!(card_schema(&vm).is_err());
+        assert!(vm.space.classes.by_path("WillowGame.WillowWeapon").is_none());
+        // The roots alone (as a test of the read-only walk): the balance class is reserved, refused, not loaded.
+        vm.find_class("WillowGame.WillowWeapon").unwrap();
+        for c in ["WeaponTypeDefinition", "WeaponPartDefinition", "GlobalsDefinition", "AttributePresentationDefinition"] {
+            vm.find_class(&format!("WillowGame.{c}")).unwrap();
+        }
+        vm.find_class("WillowGame.WeaponStatusEffectAttributePresentationDefinition").unwrap();
+        let reserved = vm.space.classes.by_path("ToyPkg.ToyBalance").expect("the field reserves its class");
+        assert!(!vm.space.classes.get_layout(reserved).unwrap().is_defined());
+        let m = message(card_schema(&vm).unwrap_err());
+        assert!(m.contains("ToyPkg.ToyBalance is not loaded"), "{m}");
+        assert!(!vm.space.classes.get_layout(reserved).unwrap().is_defined(), "the schema loaded nothing");
+        // The setup loads it with its parent; the schema then refuses the next thing, the DLC set's missing list.
+        setup(&mut vm).unwrap();
+        let layout = vm.space.classes.get_layout(reserved).unwrap();
+        assert!(layout.is_defined() && layout.super_class().is_some(), "loaded with its ancestry");
+        let m = message(card_schema(&vm).unwrap_err());
+        assert!(m.contains("declares no WeaponAttributePresentationOverride"), "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn message(e: VmError) -> String {
+        match e {
+            VmError::Script { message, .. } => message,
+            other => panic!("expected VmError::Script, got {other:?}"),
+        }
+    }
 }
