@@ -1,6 +1,6 @@
 //! Tests of the headless pickup driver's own rules (lane IMPL-PICKUP, review r2 of #452) on an invented package built
 //! with `ow_package::testkit` (AGENTS.md rule 9): `ToyPickup`, a pickup class whose global `Touch` and whose `Pickup`
-//! state's `Touch` set different flags, and the stock `GotoState`.
+//! state's `Touch` set different flags, the stock `GotoState`, and `ToyController` with the slots `look` reads first.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -93,6 +93,10 @@ fn package() -> Vec<u8> {
     toy_touch(&mut t, pickup, object, global);
     let pickup_state = state(&mut t, pickup, "Pickup");
     toy_touch(&mut t, pickup_state, object, in_state);
+    // A controller with the two slots `look` reads first (the touched pickup, the HUD).
+    let controller = t.class("ToyController", object);
+    t.prop("Object", controller, "CurrentTouchedPickupable", 0, object);
+    t.prop("Object", controller, "myHUD", 0, object);
     t.build()
 }
 
@@ -199,5 +203,34 @@ fn a_not_yet_after_the_first_mutation_is_graded_as_partial_writes() {
             VmError::NotYet(n) => assert_eq!(n.missing, Missing::NotRead),
             e => panic!("{e}"),
         }
+    }
+}
+
+/// `look` in the targeting note's order (lane IMPL-PICKUP-TARGETING): the fixture's touched-slot check first (an
+/// ordinary error when the decoy is not touched), then the player's HUD, which the headless world does not have: a
+/// `NotYet { LayerAbsent }` naming it, marked "stopped after partial writes" in a run that has written.
+#[test]
+fn look_checks_the_touched_decoy_then_stops_at_the_missing_hud() {
+    let mut x = fx();
+    let c = x.vm.find_class("Engine.ToyController").unwrap();
+    let controller = ow_vm::interp::instantiate_from_defaults(&mut x.vm, c).unwrap();
+    let (aimed, decoy) = (x.pickup(), x.pickup());
+    let mut run = Pickup { weapon: aimed, pawn: aimed, controller, pickup: aimed, decoy: Some((decoy, decoy)), wrote: false };
+    let e = step(&mut x.vm, "look", &run).unwrap();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("CurrentTouchedPickupable")), "{e}");
+    let p = x.vm.space.prop(c, "CurrentTouchedPickupable").unwrap();
+    x.vm.space.write(controller, PropAddr::scalar(p), Value::Object(Some(decoy))).unwrap();
+    match step(&mut x.vm, "look", &run).unwrap() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::LayerAbsent("a HUD (the headless world spawns none)"));
+            assert_eq!(n.record, ow_inventory::pickup_targeting::RECORD);
+            assert!(!n.what.contains(PARTIAL_WRITES), "{n}");
+        }
+        e => panic!("{e}"),
+    }
+    run.wrote = true;
+    match step(&mut x.vm, "look", &run).unwrap() {
+        VmError::NotYet(n) => assert!(n.what.starts_with(PARTIAL_WRITES), "{n}"),
+        e => panic!("{e}"),
     }
 }
