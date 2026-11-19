@@ -188,7 +188,7 @@ pub fn engine() -> Vec<u8> {
     e.prop("Object", actor, "WorldInfo", 0, 0);
     e.prop("Object", actor, "Owner", 0, 0);
     e.prop("Bool", actor, "bCanTarget", 0, 0);
-    for b in ["bCollideWorld", "bCollideWhenPlacing"] {
+    for b in ["bCollideWorld", "bCollideWhenPlacing", "bDeleteMe"] {
         e.prop("Bool", actor, b, 0, 0);
     }
     for f in ["Location", "Rotation", "CreationTime"] {
@@ -299,6 +299,7 @@ pub fn engine() -> Vec<u8> {
     e.prop("Float", pawn, "HealthVar", 0, 0);
     e.prop("Float", pawn, "HealthMaxVar", 0, 0);
     e.prop("Bool", pawn, "bIsInjured", 0, 0);
+    e.prop("Bool", pawn, "bIsDead", 0, 0);
     e.prop("Bool", pawn, "bCanBeInjured", 0, 0);
     e.prop("Object", pawn, "Allegiance", 0, 0);
     e.native(
@@ -365,6 +366,7 @@ pub fn engine() -> Vec<u8> {
         Some(("Bool", 0)),
     );
     e.native(pawn, "IsInjured", &[], Some(("Bool", 0)));
+    e.native(pawn, "IsDead", &[], Some(("Bool", 0)));
     e.native(pawn, "GetHealth", &[], Some(("Float", 0)));
     e.native(pawn, "SetHealth", &[P("Float", "NewHealth", 0, 0)], None);
     e.native(pawn, "GetMaxHealth", &[], Some(("Float", 0)));

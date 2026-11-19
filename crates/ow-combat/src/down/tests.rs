@@ -102,6 +102,28 @@ fn an_ai_pawn_is_injured_by_its_own_byte_in_off_mode() {
 }
 
 #[test]
+fn a_pawn_is_dead_by_its_deletion_or_dead_flag_in_off_and_unbound_in_reference() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let pawn = make(vm, "WillowGame.WillowPlayerPawn");
+    let dead = |vm: &mut Vm| native(vm, "Engine.Pawn.IsDead", Some(pawn), Vec::new());
+    assert_eq!(dead(vm), Value::Bool(false));
+    set(vm, pawn, "bIsInjured", Value::Bool(true)).unwrap();
+    assert_eq!(dead(vm), Value::Bool(false), "a downed pawn is not dead");
+    set(vm, pawn, "bIsDead", Value::Bool(true)).unwrap();
+    assert_eq!(dead(vm), Value::Bool(true));
+    set(vm, pawn, "bIsDead", Value::Bool(false)).unwrap();
+    set(vm, pawn, "bDeleteMe", Value::Bool(true)).unwrap();
+    assert_eq!(dead(vm), Value::Bool(true), "a deleted actor is dead");
+    // Reference: the C++ binds no IsDead, so the stub policy answers (R3).
+    let (mut run, _dir) = fresh(ParityMode::Reference);
+    let vm = &mut run.world().vm;
+    let f = vm.find_function("Engine.Pawn.IsDead").unwrap();
+    let key = vm.function(f).and_then(|d| d.native_key.clone()).unwrap();
+    assert!(!vm.has_native(&key), "Reference binds none");
+}
+
+#[test]
 fn the_currency_is_added_within_its_caps_and_never_below_zero() {
     let (mut run, _dir) = fresh(ParityMode::Off);
     let vm = &mut run.world().vm;
