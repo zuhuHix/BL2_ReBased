@@ -98,16 +98,22 @@ content id and DLC flag). All their values start at 0.
    `GameSettings`, and the refresh goes on.
 5. The level write: `ExpLevel` (player replication info) plus `OverpowerLevelModifier` (game replication info), two
    field reads; then the script `UpdateExpLevel`, which writes through `SetIntProperty`.
-6. `GetActiveMissionNumber`, then the script `UpdateActiveMission`. Until a lane binds the rule of
+6. `GetActiveMissionNumber`, then the script `UpdateActiveMission`, which writes the number plus one. Until a lane binds the rule of
    NATIVE_CONTROLLER_HELPERS.md in Off, it answers its current named `NotYet` (a `NotYet` of kind not-read, "behind the
    online game settings refresh, not read", bound by decision 2026-11-19-65). The refresh stops there.
-7. `GetActivePlotCriticalMissionNumber`, then the script `UpdateActivePlotMission`. The same holds: its current
+7. `GetActivePlotCriticalMissionNumber`, then the script `UpdateActivePlotMission`, which writes the number plus one. The same holds: its current
    named `NotYet` from decision 2026-11-19-65, until the rule of NATIVE_SAVE_LOAD.md is bound in Off.
-8. `GetCurrPlaythrough` (the field read of section 3, in Off), then the script `UpdatePlaythrough`.
+8. `GetCurrPlaythrough` (the field read of section 3, in Off), then the script `UpdatePlaythrough`, which writes the
+   playthrough plus one.
 9. **The DLC gate:** `GetDLCManager`. **Hub ruling (2026-11-19, settled):** the port's engine has no DLC manager, the
    same kind of ruling as the online subsystem, so `GetDLCManager` answers None in Off and the refresh skips the two
    DLC writes. This is revisited when DLC content is in scope. With a manager (not the port's case),
-   `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` are named `NotYet`s.
+   `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` are asked (both named `NotYet`s), then the scripts
+   `UpdateMapDlcContentId` and `UpdateDlcFlag` make the two DLC writes.
+
+The six write steps, in order: `UpdateExpLevel` (level plus overpower level), `UpdateActiveMission` (plus one),
+`UpdateActivePlotMission` (plus one) and `UpdatePlaythrough` (plus one) before the DLC gate; then, only with a
+manager, `UpdateMapDlcContentId` and `UpdateDlcFlag`. In Off the last two are skipped.
 
 Every `Update...` step writes through `SetIntProperty`, section 3's rule in Off. The push to the online subsystem is
 not reached on this path.
@@ -124,8 +130,10 @@ not reached on this path.
 Each check says which case it tells apart.
 - **Startup, before any accept:** at the main menu and again just after a map loads, read the online game settings
   store's `GameSettingsCfgList[0]`: the classes of `GameSettings` and `Provider`, and the eight `Properties` with their
-  values. Filled at the main menu means initialisation at engine start; empty at the menu and filled after the map
-  means later (open question 1).
+  values. Filled at the main menu shows only that initialisation happened by the menu: engine start and menu
+  construction give the same result. Empty at the menu and filled after the map means later. To pin the time, hook the
+  store's creation and the first read that finds a populated entry from launch; until then the exact timing stays
+  UNVERIFIED (open question 1).
 - **Registration:** hook `UIDataStore_OnlineGameSettings.Registered` from launch. Record whether it fires for this
   store, when, and with which player (none, or the local player) (open question 1).
 - **The provider's settings source:** read `Provider.Settings` and `Provider.DataClass`. Expect the entry's

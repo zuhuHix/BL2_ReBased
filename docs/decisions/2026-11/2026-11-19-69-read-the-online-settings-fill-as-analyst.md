@@ -10,7 +10,8 @@ stop at the online game settings entry, open question 2 of NATIVE_ONLINE_GAME_SE
   settings provider (the store's `SettingsProviderClass`, else `UIDataProvider_Settings`) bound to it. It needs no
   online subsystem, no player and no configuration beyond the class defaults. When it runs was not read (public UE3:
   at engine start).
-- `WillowOnlineGameSettings`' defaults already list the eight integer properties the refresh writes.
+- `WillowOnlineGameSettings`' defaults already list eight integer properties. The refresh writes four of them before
+  the DLC gate, and two more only with a DLC manager.
 - `Settings.SetIntProperty` sets an existing integer property by id and otherwise does nothing.
   `GetCurrPlaythrough` reads the game replication info's `CurrentPlaythrough`. `GetDLCManager` reads the engine's
   `DLCManager`. The two DLC manager queries were not read past their entry. The two mission-number natives point to
