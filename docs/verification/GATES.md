@@ -396,15 +396,15 @@ no `OPENWILLOW_*` or `OW_*` variable, PowerShell 7's module path and a working d
 ### Host (Rust, H1): proposed by lane H1, 2026-11-16
 The host's first checks (decision `docs/decisions/2026-11/2026-11-16-44-engine-crates-wgpu-and-winit-in-ow-host-host-skeleton-h1.md`).
 CI already runs most of them: the "Windows / Rust workspace" job runs the build, the tests and the refusal check, and
-the Windows / MSVC jobs run ctest, which includes `crate_edges_test.py` (`py-crate_edges`). The one new CI step
+the Windows / MSVC LZO=ON job runs ctest, which includes `crate_edges_test.py` (`py-crate_edges`). The one new CI step
 proposed here is `--headless-probe`, which waits for the maintainer's yes on a workflow change
-(`.github/workflows/ci.yml` is unchanged).
+(`.github/workflows/ci.yml` has not gained it; "CI legs" below says how the jobs split the suite).
 - **CI, and every change to `ow-host`, `Cargo.lock` or `tests/crate_edges_test.py`:** `cargo build --workspace
   --locked`, `cargo test --workspace --locked` (the `ow-host` unit tests among them), `python tests/crate_edges_test.py`
   (also ctest `py-crate_edges`), and the existing refusal check (`ow-host --game <not an install>` must exit non-zero).
   Proposed, not yet in CI: `ow-host --headless-probe`: exit 0 prints the adapter; exit 4 means no adapter on that machine and counts as
-  "not run", not as a failure; any other exit fails. With the engine crates, the build downloads them from crates.io,
-  so the CI job's comment "nothing is downloaded" must change with the job.
+  "not run", not as a failure; any other exit fails. With the engine crates, the build downloads them from crates.io
+  (or restores them from the cargo cache); the CI job's comment says so since 2026-11-19.
 - **A machine with a GPU and a screen** (the zuhu desktop, pc-hummer), after a change to the window, device or frame
   loop: a release build, then `ow-host --game <install> --frames 300`, and again with `--no-vsync`, timed. Pass is
   exit 0 with 300 frames presented. Record the adapter, the backend, the median frame time and the wall time. The
@@ -528,7 +528,7 @@ The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/
 ## Tests outside ctest
 Since 2026-11-11 every `tests/*_test.py` that passes in a clean export (no `local/`, no build, no installed game, no network) under
 a Python with no third-party packages, with none of its cases skipped, runs in ctest as `py-<name>` (the list in `tests/CMakeLists.txt`, which `CMakeLists.txt` includes). CI also runs
-`level_test.py` and `viewer_test.py` directly. The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
+`level_test.py` and `viewer_test.py` directly (in the LZO=ON leg). The rest run only by hand (`python tests/<name>` or `node tests/<name>`); run those
 that cover what you touched. Times are serial on the zuhu desktop, 2026-11-11. The list of what stays out, each with its reason, is `OW_OUTSIDE_CTEST` in `tests/CMakeLists.txt`;
 `tests/realgame_registration_test.py` (ctest `py-realgame_registration`, since 2026-11-13) fails when a test of the real-game tools (one
 that imports `tests/realgame_test_env.py` or names a `tools/real_game/` path) is neither registered nor in that list with a reason.
@@ -540,6 +540,15 @@ ctest as `js-<name>` (`OW_NODE_TESTS`) and the 9 Python tests that need numpy as
 otherwise configure prints which group it left out, and everything else still runs. CI configures with
 `-DOW_REQUIRE_TEST_TOOLS=ON`, which turns a group left out into a configure error. CI's step "Case counts of the tests labelled
 needs-*" prints each such entry's case count and fails the job if any of them skipped a case.
+
+**CI legs (since 2026-11-19, decision `docs/decisions/2026-11/2026-11-19-90-ci-parallel-ctest-split-lzo-legs-cargo-cache-docs-only-skip.md`):**
+ctest runs in parallel (`--parallel` at the runner's core count). The LZO=ON job runs every entry; the LZO=OFF job runs only the
+entries labelled `cxx-binary` (`ctest -L cxx-binary`): those whose command runs `ow-package`, `ow-weapongen` or
+`ow-weapon-firing-test`, found by `tests/CMakeLists.txt` from its own `add_test` calls. The `needs-*` case-count step checks the
+`needs-*` entries of its job's share, so all of them in LZO=ON. CI creates the ignored `local/` folder before ctest, as a working
+checkout has it. A pull request whose every changed path is under `docs/` (except `docs/TOOLING.md`, which
+`real_game_migration_test.py` reads) or is a top-level `*.md` skips the three Windows jobs; the leak gate always runs. Locally,
+`ctest -j 8` is the same suite as serial ctest.
 
 Pillow (commit 2 of that lane, landed only with the maintainer's yes): CI installs `pillow==12.2.0`, and the 8 tests in
 `OW_PILLOW_PY_TESTS` (`gfx_to_swf`, `prepare_map_screen`, `prepare_minimap`, `prepare_mission_log`, `prepare_mission_screen`,

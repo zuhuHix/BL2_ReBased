@@ -210,3 +210,29 @@ elseif(OW_REQUIRE_TEST_TOOLS)
 else()
   message(STATUS "No Rust binary at ${OW_RUST_PACKAGE}: rust-parity is not registered (cargo build --release -p ow-cli --locked, then configure again)")
 endif()
+
+# CI's leg split (lane CI-OPTIMIZE, 2026-11-19). An entry whose command runs a binary built from src/ ($<TARGET_FILE:ow-package>,
+# $<TARGET_FILE:ow-weapongen> or ow-weapon-firing-test) can give another result with OPENWILLOW_LZO off, so it gets the label
+# cxx-binary and CI runs it in both LZO legs (ctest -L cxx-binary in the LZO=OFF leg). Every other entry (Python, Node, or the
+# Rust binary alone) does not depend on LZO and runs once, in the LZO=ON leg, which runs everything. The names are read from the
+# add_test calls in this file, so a new entry of that kind is labelled without a list to keep up.
+file(READ ${CMAKE_CURRENT_LIST_FILE} ow_text)
+string(REGEX MATCHALL "add_test\\(NAME [^ ]+ COMMAND [^)]*" ow_calls "${ow_text}")
+foreach(ow_call IN LISTS ow_calls)
+  if(ow_call MATCHES "TARGET_FILE:ow-(package|weapongen)>|COMMAND ow-weapon-firing-test")
+    string(REGEX MATCH "^add_test\\(NAME ([^ ]+)" ow_match "${ow_call}")
+    if(TEST ${CMAKE_MATCH_1})
+      set_property(TEST ${CMAKE_MATCH_1} APPEND PROPERTY LABELS cxx-binary)
+    endif()
+  endif()
+endforeach()
+
+# ctest -j starts the costliest entries first. A fresh CI build has no timing history (build/Testing/Temporary/CTestCostData.txt),
+# so the slowest entries carry a COST: seconds in a parallel run (-j 8) on the zuhu desktop, 2026-11-19. Order only, no timeout.
+set_tests_properties(py-land_batch PROPERTIES COST 110)
+set_tests_properties(py-real_game_pending py-controls_capture py-real_game_capture_safety PROPERTIES COST 85)
+set_tests_properties(audio-events-capture-synthetic PROPERTIES COST 60)
+set_tests_properties(py-leak_gate_policy py-leak_gate_hook py-leak_gate_repo py-leak_gate_push ue-lock-machine-wide PROPERTIES COST 35)
+if(TEST rust-parity)
+  set_tests_properties(rust-parity PROPERTIES COST 85)
+endif()

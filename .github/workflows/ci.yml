@@ -14,14 +14,72 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels the run on its older head. Runs on main (and manual runs) are never cancelled
+# mid-way: there the group is the ref, and cancel-in-progress is false.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  changes:
+    # Decides whether the Windows jobs run. Only a pull request whose every changed path is documentation skips them:
+    # a path under docs/ other than docs/TOOLING.md (tests/real_game_migration_test.py reads that one), or a *.md file
+    # at the top level. Pushes to main, manual runs, an empty diff and any other path run everything. Plain git, no
+    # third-party action. The leak gate does not depend on this job.
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Docs-only or code
+        id: diff
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "a $EVENT run: every job runs"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Three dots: the paths the pull request changes since it left its base, as the pull request page lists them.
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          total=$(wc -l < "$RUNNER_TEMP/changed.txt")
+          code=$(grep -v -E '^docs/|^[^/]+\.md$' "$RUNNER_TEMP/changed.txt" | wc -l || true)
+          tooling=$(grep -c -x 'docs/TOOLING.md' "$RUNNER_TEMP/changed.txt" || true)
+          echo "$total changed path(s); $code outside docs/ and the top-level *.md files; docs/TOOLING.md changed: $tooling"
+          if [ "$total" -gt 0 ] && [ "$code" -eq 0 ] && [ "$tooling" -eq 0 ]; then
+            echo "docs-only: the Windows jobs are skipped, the leak gate runs"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-test:
+    # The two legs split ctest (labels in tests/CMakeLists.txt). LZO=ON runs every entry. LZO=OFF runs only the entries
+    # labelled cxx-binary, which run a binary built from src/ and so can change with OPENWILLOW_LZO; the Python, Node
+    # and Rust-only entries do not depend on it and run once, in the LZO=ON leg.
     name: Windows / MSVC / LZO=${{ matrix.lzo }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        lzo: ["ON", "OFF"]
+        include:
+          - lzo: "ON"
+            ctest_select: ""
+          - lzo: "OFF"
+            ctest_select: "-L cxx-binary"
+    env:
+      CTEST_SELECT: ${{ matrix.ctest_select }}
     steps:
       - uses: actions/checkout@v5
 
@@ -46,6 +104,35 @@ jobs:
       # The Rust release binary for ctest's rust-parity entry (maintainer decision D15, lane W1-HARNESS): configure
       # registers that entry only when target/release/ow-package.exe exists, and OW_REQUIRE_TEST_TOOLS=ON fails the
       # configure without it. The entry runs tools/rust_parity.py over tests/rust_parity.d/ in the ctest step below.
+      # The cargo registry and target/ (lane CI-OPTIMIZE, maintainer approval 2026-11-19 for actions/cache). Both legs
+      # build the same release binary, so they share one key; only the LZO=ON leg saves it (the OFF leg restores only),
+      # so the two never race to write it. The key changes with Cargo.lock and the toolchain. A checkout gives every
+      # source file a new time stamp, so cargo rebuilds the workspace crates anyway: the cache saves the third-party
+      # crates' download and build. --locked stays on every cargo call.
+      - name: Cargo cache (restore and save)
+        if: matrix.lzo == 'ON'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msvc-release-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msvc-release-
+
+      - name: Cargo cache (restore only)
+        if: matrix.lzo != 'ON'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msvc-release-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-msvc-release-
+
       - name: Rust release binary for the parity manifest
         run: cargo build --release -p ow-cli --locked
 
@@ -54,19 +141,33 @@ jobs:
         run: cmake -S . -B build -A x64 -DOPENWILLOW_LZO=${{ matrix.lzo }} -DOW_REQUIRE_TEST_TOOLS=ON
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build --config Release --parallel
+
+      # A fresh checkout has no ignored local/ folder. Some tests write below it (a temporary folder each) and one
+      # skips its cases without it; with ctest's parallel run the test that used to create it first no longer runs
+      # first, so the folder is made here, as every working checkout has it.
+      - name: The ignored local/ folder
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force local | Out-Null
 
       - name: Synthetic CTest suites
-        run: ctest --test-dir build -C Release --output-on-failure
+        # In parallel, one entry per runner core. CTEST_SELECT is this leg's share (the matrix above).
+        shell: pwsh
+        run: |
+          $select = @("$env:CTEST_SELECT" -split ' ' | Where-Object { $_ })
+          ctest --test-dir build -C Release --output-on-failure --parallel $env:NUMBER_OF_PROCESSORS @select
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Case counts of the tests labelled needs-*
         # The tests that need Node or a Python module must run every case: any skip fails the job. Each entry's case count
         # comes from unittest's "Ran N tests", else the test's own "N passed" line; a test that prints no count says so.
+        # It checks every needs-* entry of this leg's share (CTEST_SELECT): all of them in LZO=ON, none in LZO=OFF.
         if: always()
         shell: pwsh
         run: |
           $log = Get-Content build/Testing/Temporary/LastTest.log -Raw
-          $names = @(ctest --test-dir build -C Release -N -L 'needs-' | Select-String 'Test +#\d+: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+          $select = @("$env:CTEST_SELECT" -split ' ' | Where-Object { $_ })
+          $names = @(ctest --test-dir build -C Release -N -L 'needs-' @select | Select-String 'Test +#\d+: (\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value })
           $bad = 0
           foreach ($name in $names) {
             $m = [regex]::Match($log, "(?ms)^\d+/\d+ Test: $([regex]::Escape($name))\r?\n.*?^Output:\r?\n-+\r?\n(.*?)^<end of output>")
@@ -84,10 +185,13 @@ jobs:
           "$($names.Count) entries labelled needs-*"
           if ($bad) { throw "$bad needs-* entries skipped cases or left no output" }
 
+      # Python only, so once, in the LZO=ON leg.
       - name: Scene preparation unit tests
+        if: matrix.lzo == 'ON'
         run: python tests/level_test.py
 
       - name: Map selector unit tests
+        if: matrix.lzo == 'ON'
         run: python tests/viewer_test.py
 
       - name: Reader refuses to run without arguments
@@ -99,12 +203,32 @@ jobs:
 
   rust-workspace:
     # The Cargo workspace (decision 2026-11-14-01: Rust replaces the UE5 host). rust-toolchain.toml pins the toolchain;
-    # the runner image's rustup installs it on the first cargo call. No third-party crates, so nothing is downloaded
-    # from crates.io. --locked fails the job if Cargo.lock is out of date.
+    # the runner image's rustup installs it on the first cargo call. The third-party crates in Cargo.lock (wgpu, winit
+    # and what they pull in, THIRD_PARTY.md) come from crates.io, or from the cache below. --locked fails the job if
+    # Cargo.lock is out of date.
     name: Windows / Rust workspace
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
+    env:
+      # No incremental-compilation data: a checkout's new time stamps make cargo rebuild the workspace crates in full
+      # anyway, and that data (several GB) would not fit the cache. It changes how cargo compiles, not what it builds.
+      CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@v5
+
+      # Same cache as the MSVC legs' (see there), under this job's own key: a debug build of the whole workspace and its
+      # tests.
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-rust-workspace-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rust-workspace-
 
       - name: Toolchain
         run: |
@@ -123,6 +247,16 @@ jobs:
           if cargo run --locked -q -p ow-host -- --game "$RUNNER_TEMP/no-game-here"; then
             echo "expected ow-host to refuse a folder that is not a Borderlands 2 install"; exit 1
           fi
+
+      # The last step: the cache step above saves target/ after it, at the end of the job. The workspace crates' own
+      # artifacts (about 3 GB of the 4 GB in target/debug/deps on the zuhu desktop) are rebuilt after every checkout,
+      # so only the third-party crates are kept. Workspace artifacts are named ow_* / libow_* (deps), ow-* (fingerprints
+      # and the binaries); the one third-party crate whose name starts with "ow", owned_ttf_parser, matches neither.
+      - name: Keep only the third-party crates in target/ for the cache
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue target/debug/deps/ow_*, target/debug/deps/libow_*, target/debug/.fingerprint/ow-*, target/debug/ow-*
+          "target/debug after pruning: {0:N0} MB" -f ((Get-ChildItem target/debug -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
 
   leak-gate:
     # tools/leak_gate.py (docs/TOOLING.md, "Leak gate"): game files, decompiler output, dumps and personal
