@@ -20,10 +20,24 @@ not implement it). The decision number is pending; NNN is a placeholder.
   - the function-call resolver calls a named script function at most once per `CheckRate`.
 - **The slice:**
   - Maya's `CanLiftTargetIf` is `IsTrue(Flag_Skills_CanPhaseLock)`, a computed flag: `IsFalse` of `DisablePhaseLock`,
-    `PhaseLockOnHold` and `IsPlayer`, all landing in the target mind's store;
-  - for an ordinary enemy the answer is true, with up to three entries written.
+    `PhaseLockOnHold` and `IsPlayer`;
+  - the target mind's `MyRuleEngine` picks the branch. With none (branch D, the port's case), `CanPhaseLock`'s
+    expression runs: the three inner flags land in the mind's store, and an ordinary enemy answers true, with up to
+    three entries written. With one (branch S), `CanPhaseLock` is read from the rule engine's own store, which was not
+    read, so no answer is predicted.
 - **Proposed Off answer:**
-  - the definition path in full;
-  - `NotYet { NotRead }` for a rule engine's own store, the timed tests and unread resolver or store classes;
-  - every store write signalled for the caller's partial-writes mark.
-- Every rule is UNVERIFIED in the running game; the note lists six open questions and one bl-sdk check.
+  - eager checks only for the receiver and the `FlagChain` shape; each conditional is checked when reached, earlier
+    writes kept;
+  - every case of the definition path stated, with `NotYet { NotRead }` for the unread parts: the store path, the
+    timed tests, `IsFalse` with neither an expression nor a value resolver, a computed answer's hand-off, and unread
+    resolver or store classes;
+  - the kinds follow `ow-attr`'s split; any reached handle may load, and a load counts as a write, as do store
+    entries, flag updates and expiry.
+- **Review r1 of #527, folded in.**
+  - every case of the definition path is stated (None context, empty or partial resolver chain, neither expression
+    nor resolver);
+  - the timed tests are bounded (clock, threshold, held-true time read; the rest refused);
+  - the store-path claim is limited to what the evaluator itself does;
+  - loads and the `NotYet` kinds are defined, and the checks are made lazy;
+  - the prediction and the live check are given per branch.
+- Every rule is UNVERIFIED in the running game; the note lists seven open questions and one bl-sdk check.
