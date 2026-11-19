@@ -20,10 +20,14 @@
 //! and the first binding of a key wins, so this pack and `ow-combat`'s evaluator natives never collide.
 //!
 //! **Not here, and why.** `Skill.AddSkillEffect` and `Skill.AdjustModifiers` (the record struct of an applied
-//! effect is not named in the record), the manager's per-frame skill refresh, `NotifySkillEvent` and the
-//! `ActionSkill` event natives (they need the behavior kernel's consumer natives, which no pack binds: contract item),
-//! `GetActionSkillDuration` and `SetActionSkillTime` (how a controller reaches its skill manager is not read). Each
+//! effect is not named in the record), the manager's per-frame skill refresh, `NotifySkillEvent`, the `ActionSkill`
+//! event natives other than the two below, `GetActionSkillDuration` and `SetActionSkillTime` (how a controller reaches its skill manager is not read). Each
 //! stays unbound, so a gameplay run refuses at it (`StubPolicy::Refuse`).
+//!
+//! **The `ActionSkill` event natives** `OnActionSkillActivated` and `OnActionSkillDeactivated` (section 9; lane
+//! FIX-PHASELOCK-CAST part B, decision 2026-11-19-12): Off only, through the behavior kernel's consumer table
+//! ([`EVENT_PATHS`]; the rule and what stays `NotYet` are on `register_events`). This pack registers the kernel pack
+//! for that table, as `ow-combat`'s does. Reference: unbound (no C++ stand-in).
 
 use std::rc::Rc;
 
@@ -681,7 +685,96 @@ impl NativePack for Pack {
                 )?))
             }),
         )?;
-        Ok(())
+        register_events(vm)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The `ActionSkill` event natives (NATIVE_ACTION_SKILL.md section 9), Off only
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The `ActionSkill` event natives this module binds in Off (lane FIX-PHASELOCK-CAST part B, decision 2026-11-19-12),
+/// with how many object parameters follow the consumer handle.
+pub const EVENT_PATHS: [(&str, usize); 2] = [
+    ("WillowGame.ActionSkill.OnActionSkillActivated", 2),
+    ("WillowGame.ActionSkill.OnActionSkillDeactivated", 1),
+];
+
+/// Section 9: each native builds a behavior event named after the function, attaches its object parameters in order,
+/// and delivers it to the action skill's provider for the consumer handle through the kernel; it returns nothing.
+/// The rule as bound here (all UNVERIFIED):
+/// - the event fires on the one provider the kernel registered for the handle's process, every link followed (no
+///   filter), the parameters as the event's positional payload (the kernel's payload rule, NATIVE_MARCUS_USE_CHAIN.md
+///   "Event payload to named variable");
+/// - a handle nobody owns (-1 among them): nothing fires (NATIVE_BEHAVIOR_CONTEXT.md, "kernel entry points given -1");
+/// - `NotYet { NotRead }`: a kernel process with no provider or several (which ones the delivery reaches is not read),
+///   and a handle another crate gave out (how such a consumer receives the event is not read).
+///
+/// Reference: unbound. The C++ has no stand-in, so the VM's stub policy answers, as before.
+fn register_events(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    // The kernel's consumer table answers who owns the handle (registering it again is a no-op).
+    ow_behavior::kernel::natives::Pack.register(vm)?;
+    for (path, objects) in EVENT_PATHS {
+        bind(
+            vm,
+            path,
+            Rc::new(move |c: &mut NativeCall<'_>| fire_action_skill_event(c, path, objects)),
+        )?;
+    }
+    Ok(())
+}
+
+fn fire_action_skill_event(
+    c: &mut NativeCall<'_>,
+    path: &'static str,
+    objects: usize,
+) -> Result<Value, VmError> {
+    use ow_behavior::kernel::natives::{
+        Owner, consumer_pid, owner_of, provider_paths, with_provider,
+    };
+    let event = path.rsplit('.').next().unwrap_or(path);
+    let pid = consumer_pid(c.vm, c.arg(0)?)
+        .ok_or_else(|| script_error(path, "the first argument is no BehaviorConsumerHandle"))?;
+    let payload = (1..=objects)
+        .map(|i| arg_obj(c, i))
+        .collect::<Result<Vec<_>, _>>()?;
+    match owner_of(c.vm, pid)? {
+        None => Ok(Value::None),
+        Some(Owner::Crate(name)) => Err(NotYet::not_read(
+            format!("{event} on a consumer handle {name} gave out (how that consumer receives it)"),
+            RECORD,
+        )
+        .into()),
+        Some(Owner::Kernel) => {
+            let paths = provider_paths(c.vm, pid)?.unwrap_or_default();
+            let [provider] = paths.as_slice() else {
+                return Err(NotYet::not_read(
+                    format!(
+                        "{event} on a consumer with {} providers (which of them the delivery reaches)",
+                        paths.len()
+                    ),
+                    RECORD,
+                )
+                .into());
+            };
+            with_provider(c.vm, pid, provider, |vm, p| {
+                p.fire_event(vm, event, &Default::default(), -1, &payload)
+            })?
+            .transpose()
+            .map_err(|e: BehaviorError| match e {
+                BehaviorError::Vm(v) => v,
+                other => script_error(path, other.to_string()),
+            })?;
+            Ok(Value::None)
+        }
+        Some(_) => Err(NotYet::not_read(
+            format!("{event} on a consumer of an owner kind this lane does not know"),
+            RECORD,
+        )
+        .into()),
     }
 }
 
@@ -961,3 +1054,6 @@ pub mod manager;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod events_tests;

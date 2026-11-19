@@ -318,6 +318,23 @@ pub fn process_of(vm: &Vm, consumer: ObjRef) -> Result<Option<i32>, VmError> {
     }
 }
 
+/// The stock paths of the providers the kernel registered on process `pid`, in registration order (lane
+/// FIX-PHASELOCK-CAST part B); `None` when the kernel holds no process `pid`, or without [`Pack`].
+pub fn provider_paths(vm: &Vm, pid: i32) -> Result<Option<Vec<String>>, VmError> {
+    match vm.service::<Kernel>() {
+        Some(k) => Ok(borrow(&k)?
+            .processes
+            .get(&pid)
+            .map(|p| p.providers.iter().map(|(q, _)| q.clone()).collect())),
+        None => Ok(None),
+    }
+}
+
+/// The `PID` of a `BehaviorConsumerHandle` struct value; `None` for anything else (lane FIX-PHASELOCK-CAST part B).
+pub fn consumer_pid(vm: &Vm, handle: &Value) -> Option<i32> {
+    handle_pid(vm, handle)
+}
+
 /// Lends out the provider at `path` that the kernel registered on process `pid`, runs `f` on it and puts it back.
 /// `None` when the process has no such provider; `NotYet` when it is already lent out.
 pub fn with_provider<T>(

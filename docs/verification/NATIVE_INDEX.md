@@ -367,7 +367,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Skill.NotifySkillEvent | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: Skill_Phaselock OnActivated/OnDeactivated provider events (tattoo glow) | UNVERIFIED | medium | |
 | Skill per-frame refresh: action-skill expiry handshake (internal) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: 120 s skill backstop, WantsToDeactivate / IsDeactivateBlocked | UNVERIFIED | medium | |
 | ActionSkill per-frame update (internal) | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: OnActionSkillTick every frame, NearingCompletion, timers | UNVERIFIED | medium | |
-| ActionSkill.OnActionSkillActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event at start (no behaviors linked) | UNVERIFIED | high | |
+| ActionSkill.OnActionSkillActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event at start (no behaviors linked) | UNVERIFIED | high | `crates/ow-skills/src/action_skill.rs` (Off only, with `OnActionSkillDeactivated`: the consumer's one kernel provider, objects as the positional payload; several or no providers, or a crate's handle, NotYet) |
 | ActionSkill.OnActionSkillDeactivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: provider event at end (deactivate DetonateAvailable, particle, sound) | UNVERIFIED | high | |
 | ActionSkill.OnActionSkillActiveAbilityActivated | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: second-press ability event (not allowed for Phaselock) | UNVERIFIED | high | |
 | ActionSkill.OnActionSkillActiveAbilityNotified | [NATIVE_ACTION_SKILL.md](NATIVE_ACTION_SKILL.md) | Maya: same family, not used by Phaselock | UNVERIFIED | high | |
