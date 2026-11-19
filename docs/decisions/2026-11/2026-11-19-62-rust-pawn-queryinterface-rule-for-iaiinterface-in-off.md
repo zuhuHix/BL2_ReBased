@@ -101,8 +101,8 @@ the running game. No dependency, no CLI flag and no parsing change. Reference is
       `TargetableAttributeValueResolver`, before any hit. The hold path is therefore covered only by the synthetic tests
       today.
 - **Review r1 of #456** (fix commits on top, no rebase).
-  1. **The slice's hold before its event writes.** `FireMissionSlice::damage_dummy` checks in Off, before
-     `OnTakeDamage` fires, the holds the firing would start at once on the contexts they would run on
+  1. **The slice's hold before its event writes** (narrowed in r2, below). `FireMissionSlice::damage_dummy` checks in
+     Off, before `OnTakeDamage` fires, the holds the firing would start at once on the contexts they would run on
      (`ow_combat::holds::preflight_hold_contexts`). Those holds are listed by the new read-only
      `Provider::immediate_behaviors` in `ow-behavior`, which shares its trigger gates with the firing, so a refusal
      there leaves the event's trigger count, its output variables and the behaviors queued ahead of the hold (`Hit`
@@ -135,6 +135,22 @@ the running game. No dependency, no CLI flag and no parsing change. Reference is
   - The slice's controller test used an invented `Behavior_RemoteEvent` export as the pawn's controller. That class
     now answers by its plain table, none, so the script runs. The refusal case uses an invented `GearboxMind`
     controller instead.
+- **Review r2 of #456** (one fix commit; the hub's ruling: preflight only what is cheap and certain).
+  1. and 2. `Provider::immediate_behaviors` is replaced by `Provider::certain_first_behavior`: the behavior the
+     firing runs before any other (the first link without a delay, in firing order), given only when it has no
+     variable links. Nothing runs before it, so its sequence is still enabled and its event still open when reached.
+     With no links, its context is not bound by the firing. The slice checks a hold ahead only when it is that
+     behavior. Any other hold (one after `Hit` in the fixture, one whose context is linked, one an earlier behavior
+     could skip) is checked by the firing, and its refusal is the terminal "stopped after partial writes" stop, kind
+     kept.
+  3. The interface-chain cap is checked before either answer, so a plain-table object at the end of a full chain is
+     refused too. A boundary test with a plain leaf covers it.
+  4. One delay predicate, `starts_now` (not above zero, a NaN included), is shared by the firing and the scan.
+  - Tests: `ow-behavior` `the_certain_first_behavior_is_the_one_the_firing_runs_first` (order, the link-id filter, a
+    closed event, a parked link, a NaN delay that the firing agrees with, a linked context). The slice now has the
+    hold first (refused before the event fires, trigger count 0, no `Hit`) and the hold after `Hit` (terminal,
+    trigger count 1, `Hit` raised). The r1 test with an invented two-answer pawn rule is gone: it modelled a hold
+    that the check now never sees.
 - **Open.**
   - For an analyst: `GearboxMind`'s own `QueryInterface` answer (the next step for the Fire dummy),
     `WillowPlayerController`'s, a skeletal mesh component's, and the `PlayerMaster` field.
