@@ -17,9 +17,13 @@
 //! - **`GlobalsDefinition.GetDropLifeSpanType(RarityLevel)`:** the `DropLifeSpanType` of the first `RarityLevelColors`
 //!   entry with `MinLevel <= RarityLevel <= MaxLevel`, both ends included; 3 when none holds it (an empty array
 //!   included). A pure read. A `RarityLevelColors` not declared as a dynamic array of that struct is a data error.
-//! - **`GearboxGlobals.GetPopulationMaster()`:** the globals' `ThePopulationMaster`, as it is (None included).
-//! - **`WillowGlobals.RemovePickup(Pickup)`** stays `ow_inventory::pickup`'s `NotYet { NotRead }`, raised before any
-//!   change: the two global events it fires first are not ported (the note's section 6, step 8).
+//! - **`GearboxGlobals.GetPopulationMaster()`:** the globals' `ThePopulationMaster`, as it is (None included; the
+//!   supported fixture's value). On a non-None master, `Destroyed` calls `RemoveSpawnedActor`, which is bound here to a
+//!   `NotYet { NotRead }` ("PopulationMaster.RemoveSpawnedActor", not read).
+//! - **`WillowGlobals.RemovePickup(Pickup)`** stays `ow_inventory::pickup`'s `NotYet { NotRead }`, "the pickup events of
+//!   RemovePickup", raised before any dispatch and any change to `PickupList` (section 6.3, step 7).
+//! - **The preflight's schemas** ([`globals_schemas`]): the declared reference types the note names, checked before any
+//!   value is read, each mismatch a data error (`VmError::Script`).
 //!
 //! Each native is bound by its function path when the VM declares it, and skipped when its key is already bound (the
 //! mission bridge binds the two getters in its own world). Reference binds nothing here (no C++ stand-in; R3).
@@ -49,21 +53,85 @@ pub const GLOBALS_DEFINITION_CLASS: &str = "WillowGame.GlobalsDefinition";
 /// The answer when no band holds the level.
 pub const NO_BAND: u8 = 3;
 
-/// The natives [`register`] binds in Off, by path.
+/// The population master's `RemoveSpawnedActor`, which `Destroyed` calls on a non-None master: not read (section 6.3,
+/// step 6).
+pub const REMOVE_SPAWNED_ACTOR: [&str; 2] =
+    ["GearboxFramework.PopulationMaster.RemoveSpawnedActor", "WillowGame.WillowPopulationMaster.RemoveSpawnedActor"];
+
+/// The natives [`register`] binds in Off, by path (and the two of [`REMOVE_SPAWNED_ACTOR`]).
 pub const PATHS: [&str; 6] =
     [GET_WILLOW_GLOBALS, GET_GEARBOX_GLOBALS, ADD_PICKUP, GET_GLOBALS_DEFINITION, GET_DROP_LIFE_SPAN_TYPE, GET_POPULATION_MASTER];
 
-/// The world's globals object (the getters' answer).
+/// The world's globals object (the getters' answer). None recorded is the note's *layer absent*, "the world's globals
+/// object" (section 6.3, step 1); any other error passes unchanged.
 pub fn world_globals(vm: &mut Vm) -> Result<ObjRef, VmError> {
     let cx = ow_attr::api::EvalCx::new(vm);
-    Ok(cx.world.globals()?)
+    match cx.world.globals() {
+        Ok(o) => Ok(o),
+        Err(e) => match VmError::from(e) {
+            VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_)) => Err(NotYet::layer_absent(
+                "the world's globals object",
+                "the world set-up that makes it (WorldQuery::set_globals)",
+                RECORD,
+            )
+            .into()),
+            other => Err(other),
+        },
+    }
+}
+
+/// The declared reference types the route needs (section 6.2, step 4, and the note's last round): the field `name` on
+/// `o`'s class, found through the parent chain, declared as one object reference whose class is exactly `class` (or
+/// any object reference when `class` is None). A mismatch is a data error (`VmError::Script`), raised before any
+/// value is read.
+pub fn declared_reference(vm: &mut Vm, o: ObjRef, name: &str, class: Option<&str>, what: &str) -> Result<(), VmError> {
+    let own = vm.space.heap.get(o)?.class;
+    let p = vm
+        .space
+        .prop(own, name)
+        .ok_or_else(|| bad(what, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
+    let declared = vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim));
+    let want = match class {
+        Some(path) => Some(vm.find_class(path)?),
+        None => None,
+    };
+    match declared {
+        Some((PropKind::Object { class: c }, 1)) if want.is_none_or(|w| w == c) => Ok(()),
+        other => Err(bad(what, format!("{name} is declared as {other:?}, not one {}", class.unwrap_or("object")))),
+    }
+}
+
+/// The declared type of `TheGlobalsDefinition` (on `GearboxGlobals`) and of `PickupList`'s elements.
+pub const GEARBOX_GLOBALS_DEFINITION: &str = "GearboxFramework.GearboxGlobalsDefinition";
+pub const PICKUP_CLASS: &str = "WillowGame.WillowPickup";
+
+/// The schemas of section 6.2 step 4 on the globals object, checked before any value is read: `TheGlobalsDefinition`
+/// (through the parent chain, declared as a `GearboxGlobalsDefinition`), `ThePopulationMaster` (an object reference)
+/// and `PickupList` (a dynamic array of `WillowPickup` references).
+pub fn globals_schemas(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
+    declared_reference(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
+    declared_reference(vm, globals, "ThePopulationMaster", None, what)?;
+    pickup_list_declared(vm, globals, what)
+}
+
+/// `PickupList`'s declaration on the globals' class: a dynamic array whose elements are `WillowPickup` references.
+fn pickup_list_declared(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<(), VmError> {
+    let class = vm.space.heap.get(globals)?.class;
+    let p = vm.space.prop(class, "PickupList").ok_or_else(|| bad(what, "the globals declare no PickupList"))?;
+    let declared = vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim));
+    let pickup = vm.find_class(PICKUP_CLASS)?;
+    match declared {
+        Some((PropKind::Array(inner), 1)) if matches!(*inner, PropKind::Object { class } if class == pickup) => Ok(()),
+        other => Err(bad(what, format!("PickupList is declared as {other:?}, not a dynamic array of WillowPickup"))),
+    }
 }
 
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
     c.this.ok_or_else(|| bad(what, "called without an object"))
 }
 
-/// `PickupList` of `globals` as declared: a dynamic array of object references, else a data error.
+/// `PickupList` of `globals` as declared: a dynamic array of object references, else a data error. (The preflight
+/// also checks the element class, [`globals_schemas`].)
 pub fn pickup_list(vm: &Vm, globals: ObjRef, what: &str) -> Result<Vec<Value>, VmError> {
     let class = vm.space.heap.get(globals)?.class;
     let p = vm.space.prop(class, "PickupList").ok_or_else(|| bad(what, "the globals declare no PickupList"))?;
@@ -133,16 +201,12 @@ pub fn drop_life_span_type(bands: &[(i32, i32, u8)], level: i32) -> u8 {
 /// `TheGlobalsDefinition` of `globals` when it holds a `GlobalsDefinition`, else the named `NotYet` (module
 /// documentation).
 pub fn globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
+    declared_reference(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
     let class: ClassId = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
     let held = object_of(&required(vm, globals, "TheGlobalsDefinition", what)?, what)?;
     match held {
         Some(d) if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) => Ok(d),
-        _ => Err(NotYet::not_read(
-            "GetGlobalsDefinition: TheGlobalsDefinition holds no GlobalsDefinition, and the native's first load, which \
-             numbers the challenge list, was not read (section 4)",
-            RECORD,
-        )
-        .into()),
+        _ => Err(NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into()),
     }
 }
 
@@ -198,6 +262,10 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
             }),
         ),
     ];
+    let refused: NativeFn = Rc::new(|_: &mut NativeCall<'_>| {
+        Err(NotYet::not_read("PopulationMaster.RemoveSpawnedActor", RECORD).into())
+    });
+    let natives = natives.into_iter().chain(REMOVE_SPAWNED_ACTOR.map(|p| (p, refused.clone())));
     for (path, f) in natives {
         let Ok(id) = vm.find_function(path) else { continue };
         let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else { continue };
