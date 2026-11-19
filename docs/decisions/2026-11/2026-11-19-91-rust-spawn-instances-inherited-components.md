@@ -78,6 +78,10 @@ changes and needs for its installed proof.
     components after it. The dummy's cylinder is read from the policy's holder file (the first in scan order).
   - **The commit boundary.** In Off, once the actor is in the level list, a `NotYet` from the writes and events after
     it is terminal, with "stopped after partial writes: " at the start and its kind and record kept. Reference is
-    unchanged.
+    unchanged. Review r2 of #478 moved the boundary earlier: a lazy definition load is a write, and an Off spawn can
+    load before it makes the actor (the archetype, a template component in the plan's second pass, an inherited
+    component's stand-in). Once one of those loads has run, every `NotYet` the spawn returns gets the same prefix. A
+    stand-in resolution counts as a load whether or not its handle was loaded before, because the store does not say
+    (conservative). Test: `a_refusal_after_the_spawns_lazy_load_is_prefixed`.
   - Synthetic tests: `an_inherited_component_with_two_stand_ins_is_refused`,
     `an_object_inside_an_inherited_component_is_refused` and `a_not_yet_after_registration_is_prefixed_in_off`.

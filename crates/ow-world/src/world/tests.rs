@@ -596,6 +596,12 @@ fn package() -> Vec<u8> {
         sub.archetype = parent_ref;
         t.p.add_export_with(sub);
     }
+    // `Toolbox_Pointer`: its `Thing` names `Toolbox_Arch`, so loading it gives a handle of that archetype the store has
+    // not loaded yet (review r2 of #478).
+    let mut pointer_payload = ow_package::testkit::ints(&[0]);
+    pointer_payload.extend(t.p.tag("Thing", "ObjectProperty", &arch_ref.to_le_bytes()));
+    pointer_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Pointer", pointer_payload));
     t.p.build()
 }
 
@@ -3186,6 +3192,41 @@ fn a_not_yet_after_registration_is_prefixed_in_off() {
                 e => panic!("{mode:?}: expected NotYet, got {e}"),
             }
             assert_eq!(x.w.actors().borrow().list().len(), list + 1, "{mode:?}: the actor stays registered");
+        }
+    });
+}
+
+/// Review r2 of #478: a lazy load is a write. A template the store has not loaded is loaded by the spawn, and the
+/// plan's refusal after that load (its reference back to itself) is terminal in Off: prefixed, its kind kept, nothing
+/// made.
+#[test]
+fn a_refusal_after_the_spawns_lazy_load_is_prefixed() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Pointer").unwrap();
+        let pointer = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        let Value::Object(Some(arch)) = field(&x.w.vm.space, pointer, "Thing").unwrap() else {
+            panic!("no archetype handle");
+        };
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, arch), "the archetype is not loaded yet");
+        let list = x.w.actors().borrow().list().len();
+        let toolbox = x.class("Toolbox");
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(arch));
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.what.starts_with("stopped after partial writes: "), "{n}");
+                assert!(n.what.contains("back to the template"), "{n}");
+            }
+            e => panic!("expected NotYet, got {e}"),
+        }
+        assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, arch), "the spawn loaded it");
+        assert_eq!(x.w.actors().borrow().list().len(), list, "nothing in the level list");
+        // With the archetype loaded, the same refusal writes nothing first and is not prefixed.
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => assert!(!n.what.starts_with("stopped after partial writes"), "{n}"),
+            e => panic!("expected NotYet, got {e}"),
         }
     });
 }

@@ -699,6 +699,11 @@ fn collision(what: &'static str) -> VmError {
 /// starts "stopped after partial writes", its kind and record kept ([`crate::pools::after_partial_writes`]).
 /// Reference is unchanged.
 ///
+/// **Lazy loads are writes** (review r2 of #478): before the actor is made, an Off spawn can load definitions, the
+/// archetype in [`archetype`] and the template's components and stand-ins in the plan
+/// ([`instancing::plan_components_tracked`]; the archetype flag came with review r2 of #481). Once one of those loads
+/// has run, every `NotYet` the spawn returns is terminal and prefixed the same way, its kind and record kept.
+///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
 pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
@@ -827,7 +832,7 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
             // Every refusal of the instancing runs before the actor is made; a failure while making it frees it.
-            let plan = plan_components(vm, source)?;
+            let plan = instancing::plan_components_tracked(vm, source, loaded)?;
             let actor = vm.instantiate(class, "")?;
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
