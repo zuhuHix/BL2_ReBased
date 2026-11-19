@@ -8,10 +8,14 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use super::access::{required, set_required};
+use ow_object::layout::PropKind;
+
+use super::access::{get, object, object_of, required, set_required};
 use super::{bind_fn, this};
 
 pub const RECORD: &str = "NATIVE_RESOURCE_POOL_IDLE.md";
+/// The record of the class starting values (lane FIX-MIND-ADOPT, decision 2026-11-19-26).
+pub const RECORD_STARTING: &str = "NATIVE_COMBAT_GROUNDWORK.md sections 1.10 and 1.11";
 
 fn float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
     match required(vm, pool, name, "resource pool")? {
@@ -81,6 +85,23 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
         ow_world::pools::delete_all_pools(c.vm, Some(manager))?;
         Ok(Value::None)
     })?;
+    bind_fn(vm, "Engine.Controller.ApplyCharacterClassStartingValues", |c| {
+        let controller = this(c, "Controller.ApplyCharacterClassStartingValues")?;
+        let class = match c.arg(0)? {
+            Value::Object(o) => *o,
+            _ => None,
+        };
+        apply_class_starting_values(c.vm, controller, class)?;
+        Ok(Value::None)
+    })?;
+    // The AI mind's class route reaches two natives no note has read yet (NATIVE_COMBAT_GROUNDWORK.md section 1.11):
+    // they answer `NotYet { NotRead }` by name instead of the stub policy's refusal.
+    for (path, what) in [
+        ("WillowGame.WillowPawn.SetDefaultPhysics", "WillowPawn.SetDefaultPhysics (not read)"),
+        ("WillowGame.WillowAIPawn.GetExpLevel", "WillowAIPawn.GetExpLevel (not read)"),
+    ] {
+        bind_fn(vm, path, move |_| Err(NotYet::not_read(what, RECORD_STARTING).into()))?;
+    }
     bind_fn(vm, "Engine.ResourcePool.GetTimeSeconds", |c| {
         this(c, "ResourcePool.GetTimeSeconds")?;
         Ok(Value::Float(c.vm.world_time_seconds()?))
@@ -93,6 +114,91 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
         let current = *current;
         Ok(Value::Bool(has_idle_delay_passed(c.vm, pool, current)?))
     })
+}
+
+/// `Controller.ApplyCharacterClassStartingValues(inCharacterClass)`, the `Controller` base (NATIVE_COMBAT_GROUNDWORK.md
+/// section 1.10 step 1, and section 1.11: `WillowMind` has no override). Every pool of the controller's
+/// `ResourcePoolManager` is deleted; then, with a class, one pool per entry of its `ResourcePools` in array order, then
+/// `AccuracyPoolDefinition` into `AccuracyPool` and `OffHandAccuracyPoolDefinition` into `OffHandAccuracyPool`, each only
+/// when set. The pools are made by `CreatePool` with the controller as owner. A manager that call spawns is written
+/// back to `ResourcePoolManager`.
+///
+/// Refused, `NotYet`:
+/// - a `WillowPlayerController` (or a subclass): its override ends with a script function whose name is not read
+///   (section 1.10 step 2);
+/// - a class listing one resource twice. The note does not give `CreatePool`'s reinitialise flag. After the delete no
+///   pool exists, so the flag can matter only for a second pool of the same resource; that case is refused before
+///   anything changes.
+///
+/// UNVERIFIED in the running game.
+pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
+    let unit = "Controller.ApplyCharacterClassStartingValues";
+    if let Ok(player) = vm.find_class("WillowGame.WillowPlayerController") {
+        let own = vm.space.heap.get(controller)?.class;
+        if vm.space.classes.is_child_of(own, player) {
+            return Err(NotYet::not_read(
+                "ApplyCharacterClassStartingValues on a WillowPlayerController (its override's last script call is not named)",
+                RECORD_STARTING,
+            )
+            .into());
+        }
+    }
+    let mut defs: Vec<Option<ObjRef>> = Vec::new();
+    let mut accuracy = (None, None);
+    if let Some(class) = class {
+        let class = super::access::loaded(vm, class)?;
+        if let Some(list) = get(vm, class, "ResourcePools")? {
+            for v in list.elements().unwrap_or(&[]) {
+                defs.push(object_of(v));
+            }
+        }
+        let mut resources = Vec::new();
+        for def in defs.iter().flatten() {
+            let def = super::access::loaded(vm, *def)?;
+            let resource = object(vm, def, "Resource")?;
+            if resource.is_some() && resources.contains(&resource) {
+                return Err(NotYet::not_read(
+                    "ApplyCharacterClassStartingValues for a class listing one resource twice (CreatePool's reinitialise flag is not given)",
+                    RECORD_STARTING,
+                )
+                .into());
+            }
+            resources.push(resource);
+        }
+        accuracy = (
+            object(vm, class, "AccuracyPoolDefinition")?,
+            object(vm, class, "OffHandAccuracyPoolDefinition")?,
+        );
+    }
+    let mut manager = object(vm, controller, "ResourcePoolManager")?;
+    ow_world::pools::delete_all_pools(vm, manager)?;
+    if class.is_none() {
+        return Ok(());
+    }
+    for def in defs.into_iter().flatten() {
+        let made = ow_world::pools::create_pool(vm, manager, Some(controller), Some(def), false)?;
+        manager = made.manager;
+        set_required(vm, controller, "ResourcePoolManager", Value::Object(manager), unit)?;
+    }
+    for (def, field) in [(accuracy.0, "AccuracyPool"), (accuracy.1, "OffHandAccuracyPool")] {
+        let Some(def) = def else { continue };
+        let made = ow_world::pools::create_pool(vm, manager, Some(controller), Some(def), false)?;
+        manager = made.manager;
+        set_required(vm, controller, "ResourcePoolManager", Value::Object(manager), unit)?;
+        let class_id = vm.space.heap.get(controller)?.class;
+        let ty = vm
+            .space
+            .prop(class_id, field)
+            .and_then(|p| vm.space.classes.decl(p))
+            .and_then(|d| match d.kind {
+                PropKind::Struct(t) => Some(t),
+                _ => None,
+            })
+            .ok_or_else(|| super::access::error(format!("{unit}: the controller has no struct property {field}")))?;
+        let v = ow_world::pools::ref_value(&vm.space, ty, made.reference)?;
+        set_required(vm, controller, field, v, unit)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
