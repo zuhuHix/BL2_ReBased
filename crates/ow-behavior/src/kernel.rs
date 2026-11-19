@@ -1000,6 +1000,60 @@ impl Provider {
         })
     }
 
+    /// Whether event entry `e` of sequence `s` is `event` and would trigger now: enabled, under its trigger count,
+    /// and past its retrigger delay.
+    fn event_open(&self, s: usize, e: usize, event: &str) -> bool {
+        let entry = &self.data.sequences[s].events[e];
+        if !entry.name.eq_ignore_ascii_case(event) || !entry.enabled {
+            return false;
+        }
+        let state = self.events[s][e];
+        if entry.max_trigger_count > 0 && state.trigger_count >= entry.max_trigger_count {
+            return false;
+        }
+        !(state.trigger_count >= 1 && self.now - state.last_trigger_time < entry.re_trigger_delay)
+    }
+
+    /// The behaviors that [`Provider::fire_event`] with `event` and `link_id` would start at once, in firing order:
+    /// the links without a delay of each event entry that would trigger now, on each sequence enabled now. Reads
+    /// only, so a caller can check them before the firing writes the event state (review r1 of #456, item 1). A
+    /// behavior that an earlier one enables, or that is reached through another behavior's outputs, is not listed:
+    /// what it does is known only once the firing runs.
+    pub fn immediate_behaviors(&self, event: &str, link_id: i32) -> Vec<BehaviorId> {
+        let mut out = Vec::new();
+        for s in 0..self.data.sequences.len() {
+            if !self.enabled[s] {
+                continue;
+            }
+            for e in 0..self.data.sequences[s].events.len() {
+                if !self.event_open(s, e, event) {
+                    continue;
+                }
+                let entry = &self.data.sequences[s].events[e];
+                for i in entry.start..entry.start + entry.length {
+                    let link = self.data.sequences[s].links[i];
+                    if (link_id == -1 || link.id == link_id) && link.delay <= 0.0 {
+                        out.push(BehaviorId { sequence: s, index: link.behavior });
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// How many times `event` has triggered on this provider, over every sequence.
+    pub fn event_trigger_count(&self, event: &str) -> i64 {
+        let mut total = 0;
+        for (s, sequence) in self.data.sequences.iter().enumerate() {
+            for (e, entry) in sequence.events.iter().enumerate() {
+                if entry.name.eq_ignore_ascii_case(event) {
+                    total += i64::from(self.events[s][e].trigger_count);
+                }
+            }
+        }
+        total
+    }
+
     fn fire_in(
         &mut self,
         vm: &mut Vm,
@@ -1010,19 +1064,11 @@ impl Provider {
         payload: &[Option<ObjRef>],
     ) -> Result<(), BehaviorError> {
         for e in 0..self.data.sequences[s].events.len() {
+            if !self.event_open(s, e, event) {
+                continue;
+            }
             let entry = &self.data.sequences[s].events[e];
-            if !entry.name.eq_ignore_ascii_case(event) || !entry.enabled {
-                continue;
-            }
             let state = self.events[s][e];
-            if entry.max_trigger_count > 0 && state.trigger_count >= entry.max_trigger_count {
-                continue;
-            }
-            if state.trigger_count >= 1
-                && self.now - state.last_trigger_time < entry.re_trigger_delay
-            {
-                continue;
-            }
             self.events[s][e] = EventState {
                 trigger_count: state.trigger_count.saturating_add(1),
                 last_trigger_time: self.now,

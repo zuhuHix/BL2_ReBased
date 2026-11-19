@@ -179,6 +179,8 @@ fn gearbox() -> Vec<u8> {
     let bpd = t.class("BehaviorProviderDefinition", object);
     // The interface Behavior_AIHold's context is asked for (decision 2026-11-19-62); no toy class lists it.
     t.class("IAIInterface", object);
+    // A mind, whose own QueryInterface answer is open (bound as NotYet in Off).
+    t.class("GearboxMind", object);
     let path = toy_struct(&mut t, 0, "NameBasedObjectPath", None);
     t.prop("Name", path, "PathComponentNames", 0, 0);
     let provider = t.class("ToyPathHolder", object);
@@ -692,6 +694,8 @@ struct Map {
     /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Note`, an invented `Behavior_RemoteEvent` export
     /// of the package (event name `InventedNote`), to check the pawn's references resolve through the store.
     pawn_reference: bool,
+    /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Mind`, an invented `GearboxMind` export.
+    pawn_mind: bool,
     /// An OnTakeDamage `Behavior_AIHold` on the dummy.
     hold: bool,
     /// An OnSpawned condition of another class on sequence `Odd`.
@@ -736,6 +740,14 @@ fn dynamic(map: Map) -> Vec<u8> {
             p.set_outer(note, character);
             payload = 0i32.to_le_bytes().to_vec();
             payload.extend(p.object_tag("Controller", note));
+            payload.extend_from_slice(&none);
+        }
+        if map.pawn_mind {
+            let mind_class = class_import(&mut p, "GearboxFramework", "GearboxMind");
+            let mind = p.add_export(mind_class, "Pawn_Mind", empty.clone());
+            p.set_outer(mind, character);
+            payload = 0i32.to_le_bytes().to_vec();
+            payload.extend(p.object_tag("Controller", mind));
             payload.extend_from_slice(&none);
         }
         let pawn = p.add_export(c, "Pawn_TargetDummy", payload);
@@ -921,7 +933,13 @@ fn build(map: Map, mode: ParityMode) -> (World, PathBuf) {
 
 impl Env {
     fn new(map: Map, mode: ParityMode) -> Env {
+        Env::with_world(map, mode, |_| {})
+    }
+
+    /// [`Env::new`], with `before` run on the world before the slice is built (and registers its rules).
+    fn with_world(map: Map, mode: ParityMode, before: impl FnOnce(&mut World)) -> Env {
         let (mut world, dir) = build(map, mode);
+        before(&mut world);
         let map_name = PackageName::parse("Sanctuary_Dynamic").unwrap();
         let slice = FireMissionSlice::new(&mut world, "ToyMission", &map_name, DUMMY_PROVIDER).expect("slice");
         Env { world, slice, dir }
@@ -1204,26 +1222,80 @@ fn the_ai_hold_by_mode() {
     }
 }
 
-/// A dummy whose pawn has a controller: Off is `NotYet { NotRead }` naming the controller's class, whose own
-/// `QueryInterface` answer is not read (decision 2026-11-19-62), with the script not run; Reference keeps the no-op.
+/// A dummy whose pawn's controller is a mind (review r1 of #456, item 1): in Off the hold is checked before
+/// `OnTakeDamage` fires, so its `NotYet { NotRead }` names `GearboxMind`'s open answer, is not a partial-writes stop,
+/// and leaves the event untriggered, the remote event `Hit` (queued ahead of the hold) unraised and the script not
+/// run. Reference keeps the no-op. A controller of a class with no open answer answers by its plain table, none here,
+/// so the script runs.
 #[test]
-fn the_ai_hold_of_a_pawn_with_a_controller_is_not_yet() {
+fn the_ai_hold_of_a_pawn_with_a_mind_is_refused_before_the_event_fires() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
-        let mut env = Env::new(Map { hold: true, pawn: true, pawn_reference: true, ..Map::default() }, mode);
+        let mut env = Env::new(Map { hold: true, pawn: true, pawn_mind: true, ..Map::default() }, mode);
         let seen = hold_seen(env.vm());
         env.spawn();
+        env.remotes();
         let s = env.slice.clone();
         let r = s.hit_dummy(env.vm(), false);
         match mode {
             ParityMode::Off => {
                 let e = r.unwrap_err();
-                assert!(matches!(e.not_yet().map(|n| &n.missing), Some(Missing::NotRead)), "{e:?}");
-                assert!(format!("{e:?}").contains("goes to its Controller"), "{e:?}");
+                let n = e.not_yet().expect("a NotYet");
+                assert_eq!(n.missing, Missing::NotRead, "{e:?}");
+                assert!(n.what.contains("goes to its Controller, a GearboxFramework.GearboxMind"), "{e:?}");
+                assert!(!n.what.contains("stopped after partial writes"), "{e:?}");
+                assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 0, "the event state is untouched");
+                assert_eq!(env.remotes(), Vec::<String>::new(), "Hit was not raised");
             }
-            _ => assert!(r.unwrap()),
+            _ => {
+                assert!(r.unwrap());
+                assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 1);
+            }
         }
         assert!(seen.borrow().is_empty(), "{mode:?}");
     }
+    let mut env = Env::new(Map { hold: true, pawn: true, pawn_reference: true, ..Map::default() }, ParityMode::Off);
+    let seen = hold_seen(env.vm());
+    env.spawn();
+    let s = env.slice.clone();
+    assert!(s.hit_dummy(env.vm(), false).unwrap());
+    assert_eq!(*seen.borrow(), vec![env.slice.dummy_pawn().unwrap()], "a plain controller: the script ran");
+}
+
+/// A hold refusal the check before the firing could not see (review r1 of #456, item 1): the event has triggered and
+/// `Hit` was raised, so the `NotYet` is terminal, prefixed "stopped after partial writes", its kind kept. The invented
+/// pawn rule declines the first question (the check) and refuses the second (the hold's own run).
+#[test]
+fn a_hold_refusal_inside_the_firing_is_terminal() {
+    let mut env = Env::with_world(Map { hold: true, pawn: true, ..Map::default() }, ParityMode::Off, |world| {
+        let vm = &mut world.vm;
+        let pawn = vm.find_class("Engine.Pawn").unwrap();
+        let asked = Rc::new(std::cell::Cell::new(0));
+        vm.register_interface_rule(
+            pawn,
+            Rc::new(move |_vm: &mut Vm, _this, _iface| {
+                asked.set(asked.get() + 1);
+                if asked.get() == 1 {
+                    Ok(None)
+                } else {
+                    Err(ow_core::NotYet::not_read("an invented answer read only on the second question", "invented")
+                        .into())
+                }
+            }),
+        )
+        .unwrap();
+    });
+    let seen = hold_seen(env.vm());
+    env.spawn();
+    env.remotes();
+    let s = env.slice.clone();
+    let e = s.hit_dummy(env.vm(), false).unwrap_err();
+    let n = e.not_yet().expect("a NotYet");
+    assert_eq!(n.missing, Missing::NotRead, "the kind is kept: {e:?}");
+    assert!(n.what.starts_with("stopped after partial writes: "), "{e:?}");
+    assert!(n.what.contains("an invented answer read only on the second question"), "{e:?}");
+    assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 1, "the event had triggered");
+    assert_eq!(env.remotes(), vec!["Hit".to_string()], "Hit, ahead of the hold, was raised");
+    assert!(seen.borrow().is_empty());
 }
 
 /// The health pool stand-in: `health:` is `NotYet` in Off mode; in Reference mode it is the C++ (no class data in the

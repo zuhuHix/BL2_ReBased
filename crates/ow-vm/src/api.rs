@@ -158,6 +158,9 @@ impl Default for Limits {
     }
 }
 
+/// How many objects may be answering one `QueryInterface` question at once ([`Vm::query_interface`]).
+pub const MAX_INTERFACE_DEPTH: usize = 64;
+
 /// The call census, off unless [`Vm::census`] is `Some` (the C++ `countCalls` counters, `vm.hpp`). Keys are function
 /// paths; counters accumulate until the caller clears them. `DetMap` because the C++ counters are `std::map` and
 /// the census output prints them in key order.
@@ -801,7 +804,9 @@ impl Vm {
     /// `this`'s answer to `QueryInterface(iface)`, as the `Object.QueryInterface` native gives it: its class's
     /// registered answer ([`Vm::interface_rule_for`]), else [`Vm::plain_interface`]. A question already being answered
     /// further up the same chain gets none at once, which ends a cycle (NATIVE_PAWN_AI_INTERFACE.md, section 2, "A
-    /// question asked twice", UNVERIFIED); the asker takes the none as its step's answer.
+    /// question asked twice", UNVERIFIED); the asker takes the none as its step's answer. A chain of more than
+    /// [`MAX_INTERFACE_DEPTH`] distinct objects answering in turn is an error (review r1 of #456, item 6): no rule
+    /// read so far hands a question on that far.
     pub fn query_interface(&mut self, this: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
         if self.interface_asked(this, iface) {
             return Ok(None);
@@ -810,6 +815,12 @@ impl Vm {
         let Some(rule) = self.interface_rule_for(class) else {
             return self.plain_interface(this, iface);
         };
+        if self.interface_asking.len() >= MAX_INTERFACE_DEPTH {
+            return Err(VmError::Script {
+                function: "Object.QueryInterface".to_string(),
+                message: format!("the question went through more than {MAX_INTERFACE_DEPTH} answering objects"),
+            });
+        }
         self.interface_asking.push((this, iface));
         let answer = rule(self, this, iface);
         self.interface_asking.pop();

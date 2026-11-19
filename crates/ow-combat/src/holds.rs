@@ -19,7 +19,8 @@
 //! - `<Kind>OnHold()`: whether the list has an entry.
 //!
 //! **Movement side effect.** A new pair is appended first. With a non-null Owner the owner's virtual controller
-//! lookup and the vector constant remain unresolved, so the call then returns NotYet without changing motion.
+//! lookup and the vector constant remain unresolved, so the call then returns NotYet without changing motion. That
+//! NotYet follows the append, so it is terminal: prefixed [`PARTIAL_WRITES`], its kind kept (review r1 of #456).
 //! With no owner there is no motion side effect. A duplicate returns before this lookup.
 //!
 //! **Which components.** An exact `AIComponent`, and an exact `WillowAIComponent`: the note's second reading
@@ -32,8 +33,9 @@
 //! **A pawn context** (lane IMPL-PAWN-AI-INTERFACE, decision 2026-11-19-62): in Off the script's `QueryInterface`
 //! answers by `Pawn`'s rule ([`crate::pawn_interface`], registered here), so the hold behavior runs on a pawn when the
 //! rule gives an answer or none, and stops at the rule's `NotYet` (a controller, a vehicle's controller or a mesh whose
-//! own answer is not read). Every context's question is asked before any script runs ([`apply_hold_behavior`]), so a
-//! refusal leaves every hold list as it was.
+//! own answer is not read). In Off every context's question is asked before any script runs
+//! ([`apply_hold_behavior`]), so such a refusal leaves every hold list as it was; a script's own refusal after an
+//! earlier context's script ran is terminal. Reference keeps its per-context order.
 //!
 //! **Reference** (R3) binds none of this: `crate::hit` keeps the C++ stand-ins there (the demigod hold as a list of
 //! reasons, `GetAIComponent` as the mind's property, the pawn-to-mind context).
@@ -103,15 +105,30 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     )
 }
 
+/// The text a hold refusal carries once a context's script has run (review r1 of #456, item 2), the kernel's
+/// `PARTIAL_WRITES` wording.
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
 /// Runs the hold behavior `behavior`'s installed script (`ApplyBehaviorToContext`) on each of `contexts`, with the
-/// context itself as `ContextObject` (decision 2026-11-16-74). Every context is judged first and only then is any
-/// script run, so a refusal changes nothing (the hub's rule: refusals before any write):
-/// - a pawn, in Off: the script's question, `QueryInterface(IAIInterface)`, is asked once ahead by `Pawn`'s rule
+/// context itself as `ContextObject` (decision 2026-11-16-74). What may refuse:
+/// - a pawn, in Off: the script's question, `QueryInterface(IAIInterface)`, answered by `Pawn`'s rule
 ///   ([`crate::pawn_interface`], which a world registers through [`register`]); its `NotYet` stops the run. A VM
 ///   whose pawn class has no rule is an error, not a quiet plain answer;
-/// - a pawn, under Reference: `NotYet { NotRead }`, as before this lane (Reference runs the C++ stand-in instead);
-/// - another context whose `Controller` or `MyWillowMind` is set: `NotYet { NotRead }` (its class's answer is not
-///   read); a context with neither runs the script.
+/// - another context, in Off: the same question by its class's own answer (an open answer bound as `NotYet`, such as
+///   a mind's), when the VM holds `IAIInterface`;
+/// - a pawn, under Reference: `NotYet { NotRead }`, as before lane IMPL-PAWN-AI-INTERFACE (Reference runs the C++
+///   stand-in instead);
+/// - a context that is not a pawn and whose `Controller` or `MyWillowMind` is set, in both modes: `NotYet { NotRead }`
+///   (its class's answer is not read); a context with neither runs the script.
+///
+/// **Order.** In Off every context is judged first ([`preflight_hold_contexts`]) and only then is any script run, so
+/// those refusals change nothing (the hub's rule: refusals before any write). A refusal from a script itself (an
+/// unread `GetAIComponent`, a hold override, a release out of order) after an earlier context's script has run may
+/// follow that script's hold writes, so it is terminal: a `NotYet` is prefixed [`PARTIAL_WRITES`], its kind kept, and
+/// other errors are returned unchanged (review r1 of #456, item 2). "Has run" is the honest bound: the port does not
+/// tell a script that held something from one that held nothing. Under Reference each context is judged just before
+/// its own script, as before this lane, so a plain context ahead of a pawn runs and the pawn then refuses (review r1
+/// of #456, item 5).
 ///
 /// An action class without the event is an error.
 pub fn apply_hold_behavior(
@@ -119,25 +136,54 @@ pub fn apply_hold_behavior(
     behavior: ObjRef,
     contexts: &[ObjRef],
 ) -> Result<(), VmError> {
-    for &context in contexts {
-        judge_context(vm, context)?;
+    let off = vm.parity == ParityMode::Off;
+    if off {
+        preflight_hold_contexts(vm, contexts)?;
     }
+    let mut ran = false;
     for &context in contexts {
-        if call_method(
+        if !off {
+            judge_context(vm, context)?;
+        }
+        let answer = match call_method(
             vm,
             behavior,
             "ApplyBehaviorToContext",
             vec![Value::Object(Some(context))],
-        )?
-        .is_none()
-        {
+        ) {
+            Err(e) if off && ran => return Err(after_partial_writes(e)),
+            other => other?,
+        };
+        if answer.is_none() {
             return Err(error(format!(
                 "the hold behavior {} has no ApplyBehaviorToContext",
                 class_name(vm, behavior)
             )));
         }
+        ran = true;
     }
     Ok(())
+}
+
+/// The refusals [`apply_hold_behavior`] checks before any script runs, for each of `contexts` in turn; writes nothing.
+/// A caller that knows a hold's contexts before an event writes anything (the mission slice, review r1 of #456, item
+/// 1) asks this first.
+pub fn preflight_hold_contexts(vm: &mut Vm, contexts: &[ObjRef]) -> Result<(), VmError> {
+    for &context in contexts {
+        judge_context(vm, context)?;
+    }
+    Ok(())
+}
+
+/// A refusal after an earlier context's script ran ([`apply_hold_behavior`]): a `NotYet` is prefixed
+/// [`PARTIAL_WRITES`] once, its kind kept; any other error is returned unchanged.
+pub fn after_partial_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) if !n.what.starts_with(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
 }
 
 /// Whether the hold behavior may run on `context` ([`apply_hold_behavior`]); writes nothing.
@@ -156,6 +202,11 @@ fn judge_context(vm: &mut Vm, context: ObjRef) -> Result<(), VmError> {
         let iface = vm.find_class(crate::pawn_interface::AI_INTERFACE)?;
         vm.query_interface(context, iface)?;
         return Ok(());
+    }
+    if vm.parity == ParityMode::Off
+        && let Some(iface) = vm.find_class_if_present(crate::pawn_interface::AI_INTERFACE)?
+    {
+        vm.query_interface(context, iface)?;
     }
     for link in ["Controller", "MyWillowMind"] {
         if object(vm, context, link)?.is_some() {
@@ -273,8 +324,11 @@ fn hold(list: &'static str, movement: bool) -> NativeFn {
         items.push(entry(c.vm, me, list, name, tag)?);
         set(c.vm, me, list, Value::Array(Rc::new(items)))?;
         if movement && object(c.vm, me, "Owner")?.is_some() {
+            // After the append: terminal, as the hub's rule has it for a NotYet that follows a write.
             return Err(NotYet::not_read(
-                "HoldMovement appended the pair; owner controller virtual and motion vector constant unresolved",
+                format!(
+                    "{PARTIAL_WRITES}: HoldMovement appended the pair; owner controller virtual and motion vector                      constant unresolved"
+                ),
                 RECORD_HOLDS,
             ).into());
         }

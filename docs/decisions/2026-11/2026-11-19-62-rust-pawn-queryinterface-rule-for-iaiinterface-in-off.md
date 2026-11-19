@@ -28,12 +28,12 @@ the running game. No dependency, no CLI flag and no parsing change. Reference is
 
     The three fields are read by name and must be declared: a class without one is an error, never "not set".
   - **What stays `NotYet` in Off** (the note's "Open" list). Steps 2 and 3 hand the question to another object, which
-    "answers by its own rule". That object is asked only when its class has a registered answer. Otherwise the step is
-    `NotYet { NotRead }` naming the open answer: `GearboxMind`'s own (the Fire dummy's mind is a `WillowMind`),
-    `WillowPlayerController`'s, a skeletal mesh component's, or for any other class, that class's own answer. No such
-    answer is registered yet, so in Off a pawn answers itself, none (nothing to ask), or a named `NotYet`.
+    "answers by its own rule". Since review r1 (item 3, below), that object is asked through the same dispatch as a
+    direct question. The open answers are bound as `NotYet { NotRead }` rules: `GearboxMind`'s own (the Fire dummy's
+    mind is a `WillowMind`), `WillowPlayerController`'s for `IAIInterface`, and a skeletal mesh component's. Any other
+    class answers by its plain table. Before review r1, any class without a registered answer was a `NotYet`.
   - **`WillowGame.WillowAIPawn`** (section 3): `Pawn`'s rule, then, only when it declines and the asked class is
-    `IPlayerMaster` (or derives from it), the player master step. Its field is identified by meaning only, so the step
+    exactly `IPlayerMaster` (review r1, item 4), the player master step. Its field is identified by meaning only, so the step
     is `NotYet`. For `IAIInterface` it answers exactly as `Pawn`.
   - **`WillowGame.WillowVehicle`**: its own rule is in the note for completeness only and is not implemented, so a
     vehicle's question is `NotYet`, not `Pawn`'s rule.
@@ -100,6 +100,41 @@ the running game. No dependency, no CLI flag and no parsing change. Reference is
     - `--combat-run ... player:8 spawn:dummy:1 ...` does not spawn the dummy in Off: it stops at
       `TargetableAttributeValueResolver`, before any hit. The hold path is therefore covered only by the synthetic tests
       today.
+- **Review r1 of #456** (fix commits on top, no rebase).
+  1. **The slice's hold before its event writes.** `FireMissionSlice::damage_dummy` checks in Off, before
+     `OnTakeDamage` fires, the holds the firing would start at once on the contexts they would run on
+     (`ow_combat::holds::preflight_hold_contexts`). Those holds are listed by the new read-only
+     `Provider::immediate_behaviors` in `ow-behavior`, which shares its trigger gates with the firing, so a refusal
+     there leaves the event's trigger count, its output variables and the behaviors queued ahead of the hold (`Hit`
+     in the fixture) untouched. A hold refusal inside a firing, which the check cannot see (a hold reached through
+     another behavior, or one enabled by an earlier one), follows the event's writes and is terminal: its `NotYet` is
+     prefixed "stopped after partial writes", its kind kept. `Provider::event_trigger_count` lets the tests read the
+     event state.
+  2. **Writes across the script loop.** In Off, a refusal from a context's script after an earlier context's script
+     ran is terminal in the same way; another error is unchanged. "Ran" is the honest bound: the port does not tell
+     a script that held something from one that held nothing. `HoldMovement`'s `NotYet` after it appends the pair
+     carries the prefix too, since it follows that write.
+  3. **One dispatch.** The open answers are bound in Off as rules that are `NotYet { NotRead }`: `GearboxMind`'s for
+     every interface, `WillowPlayerController`'s for `IAIInterface` only (the note's open item; other interfaces keep
+     the plain answer), and a skeletal mesh component's for every interface. A pawn's step now asks its object
+     through `Vm::query_interface`, the same dispatch as a direct question, and prefixes the step to a `NotYet`. So a
+     direct `QueryInterface` on a `WillowMind` is the same `NotYet`, and a controller of a class with no open answer
+     answers by its registered rule or its plain table, as a direct question does.
+  4. **Lookups.** Registration uses `find_class_if_present`: an absent class is skipped, and any other lookup failure
+     is the error, so a class that fails to load never takes a parent's rule. `WillowAIPawn`'s player master step is
+     taken for exactly `IPlayerMaster`.
+  5. **Reference order.** The two-pass check is Off's alone. Under Reference each context is judged just before its
+     script, as before this lane.
+  6. **Depth.** A question handed on through more than `MAX_INTERFACE_DEPTH` (64) answering objects is a VM error.
+  7. **Tests.** The `ow-ai` order test registers the pack and asserts the named `NotRead` with no script call (and
+     Reference's order). The test world's `WillowMind` derives from an invented `GearboxMind`, as the installed one
+     does.
+  - New synthetic tests: the slice's mind controller refused before the event fires (trigger count 0, no `Hit`),
+    and a refusal inside the firing as a terminal stop (trigger count 1, `Hit` raised). Also two contexts in `ow-ai`,
+    in both modes; the open answers asked directly and handed on; exact `IPlayerMaster`; and the depth bound.
+  - The slice's controller test used an invented `Behavior_RemoteEvent` export as the pawn's controller. That class
+    now answers by its plain table, none, so the script runs. The refusal case uses an invented `GearboxMind`
+    controller instead.
 - **Open.**
   - For an analyst: `GearboxMind`'s own `QueryInterface` answer (the next step for the Fire dummy),
     `WillowPlayerController`'s, a skeletal mesh component's, and the `PlayerMaster` field.

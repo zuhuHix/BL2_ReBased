@@ -147,7 +147,9 @@ pub(crate) fn env_with(mode: ParityMode, extra: &[(&str, Vec<u8>)]) -> Env {
         ("SelfOpinion", PropKind::Byte { enum_: None }),
         ("DefaultOpinion", PropKind::Byte { enum_: None }),
     ]);
-    let mind_class = class(&mut vm, "WillowGame.WillowMind", object, &[
+    // The installed WillowMind derives from GearboxMind, whose own QueryInterface answer is open (decision 2026-11-19-62).
+    let gearbox_mind = class(&mut vm, "GearboxFramework.GearboxMind", object, &[]);
+    let mind_class = class(&mut vm, "WillowGame.WillowMind", gearbox_mind, &[
         ("Pawn", o.clone()),
         ("AIComponent", o.clone()),
         ("SightViewCone", PropKind::Float),

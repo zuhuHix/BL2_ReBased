@@ -109,7 +109,9 @@ impl Env {
         classes.define("WillowGame.WillowPlayerController", Some(controller), vec![]).unwrap();
         classes.define("WillowGame.WillowAIPawn", Some(pawn), vec![]).unwrap();
         classes.define("WillowGame.WillowVehicle", Some(vehicle), vec![]).unwrap();
-        classes.define("WillowGame.IPlayerMaster", Some(object), vec![]).unwrap();
+        let master = classes.define("WillowGame.IPlayerMaster", Some(object), vec![]).unwrap();
+        classes.define("Toy.IToyPlayerMasterChild", Some(master), vec![]).unwrap();
+        classes.define("GearboxFramework.IAIInterface", Some(object), vec![]).unwrap();
         register(&mut vm).unwrap();
         let iface = class(&mut vm, "Engine.IToyThing");
         Env { vm, dir, iface }
@@ -226,29 +228,37 @@ fn with_no_controller_the_driven_vehicle_s_controller_then_the_mesh_then_none() 
 }
 
 /// The answers the note leaves open are named NotYets in Off, never a guess: `GearboxMind`'s (a `WillowMind`
-/// controller, as the Fire dummy's), `WillowPlayerController`'s, a skeletal mesh component's, and any other class's
-/// own answer.
+/// controller, as the Fire dummy's), `WillowPlayerController`'s for `IAIInterface`, and a skeletal mesh component's.
+/// They are bound as rules, so a direct question meets the same refusal as a handed-on one (review r1 of #456, item
+/// 3); a class with no open answer answers by the one dispatch, its plain table here.
 #[test]
 fn the_open_answers_are_named_not_yets() {
     let mut e = Env::new(ParityMode::Off);
+    let ai = e.vm.find_class(AI_INTERFACE).unwrap();
     let pawn = e.make("Engine.Pawn", "Pawn_0");
     let mind = e.make("WillowGame.WillowMind", "Mind_0");
     e.link(pawn, "Controller", mind);
     not_read(e.ask(pawn), "goes to its Controller, a WillowGame.WillowMind: GearboxMind's own QueryInterface answer");
+    not_read(e.ask(mind), "GearboxMind's own QueryInterface answer");
+    not_read(e.vm.query_interface(mind, ai), "GearboxMind's own QueryInterface answer");
     let player = e.make("WillowGame.WillowPlayerController", "Player_0");
     e.link(pawn, "Controller", player);
-    not_read(e.ask(pawn), "WillowPlayerController's QueryInterface answer");
+    not_read(e.vm.query_interface(pawn, ai), "WillowPlayerController's QueryInterface answer for IAIInterface");
+    not_read(e.vm.query_interface(player, ai), "WillowPlayerController's QueryInterface answer for IAIInterface");
+    assert_eq!(e.ask(player).unwrap(), None, "another interface: the plain answer");
+    assert_eq!(e.ask(pawn).unwrap(), None, "so the pawn goes on to its mesh, unset: none");
     let plain = e.make("Engine.Controller", "Plain_0");
     e.link(pawn, "Controller", plain);
-    not_read(e.ask(pawn), "the QueryInterface answer of Engine.Controller is not read");
+    assert_eq!(e.vm.query_interface(pawn, ai).unwrap(), None, "a plain controller: its plain answer");
     let lone = e.make("Engine.Pawn", "Lone_0");
     let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
     e.link(lone, "Mesh", mesh);
     not_read(e.ask(lone), "goes to its Mesh, a Engine.SkeletalMeshComponent: what a skeletal mesh component answers");
+    not_read(e.ask(mesh), "what a skeletal mesh component answers");
     let vehicle = e.make("Engine.Vehicle", "Vehicle_0");
     e.link(lone, "DrivenVehicle", vehicle);
-    e.link(vehicle, "Controller", plain);
-    not_read(e.ask(lone), "goes to its driven vehicle's Controller");
+    e.link(vehicle, "Controller", mind);
+    not_read(e.ask(lone), "goes to its driven vehicle's Controller, a WillowGame.WillowMind");
 }
 
 /// A question asked twice: a controller whose answer asks the pawn back gets none for it at once, and the pawn takes
@@ -289,6 +299,9 @@ fn willow_ai_pawn_adds_only_the_player_master_step() {
     assert_eq!(e.ask(pawn).unwrap(), None, "Pawn's rule: nothing to ask");
     let master = e.vm.find_class("WillowGame.IPlayerMaster").unwrap();
     not_read(e.vm.query_interface(pawn, master), "WillowAIPawn's QueryInterface(IPlayerMaster)");
+    // Exactly IPlayerMaster (review r1 of #456, item 4): an interface derived from it gets Pawn's none.
+    let child = e.vm.find_class("Toy.IToyPlayerMasterChild").unwrap();
+    assert_eq!(e.vm.query_interface(pawn, child).unwrap(), None);
     let answer = e.make("Engine.Object", "Answer_0");
     let controller = e.make("Engine.ToyAnsweringController", "Controller_0");
     e.link(pawn, "Controller", controller);
