@@ -613,6 +613,15 @@ impl Vm {
         crate::interp::find_function(self, path)
     }
 
+    /// [`Vm::find_function`], with a confirmed absence as `None` (a path not declared and either no code layer or no
+    /// export there); every other lookup failure is returned unchanged.
+    pub fn find_function_if_any(&mut self, path: &str) -> Result<Option<FuncId>, VmError> {
+        if let Some(found) = self.declared_function(path) {
+            return Ok(Some(found));
+        }
+        crate::interp::find_function_if_any(self, path)
+    }
+
     /// The declared function at `path`, if any (paths compare case-insensitively).
     pub(crate) fn declared_function(&self, path: &str) -> Option<FuncId> {
         ObjectPath::parse(path)

@@ -79,7 +79,8 @@ pub const CURRENCY_ENTRIES: usize = 13;
 /// The stream the two `GenerateUniqueID` draws come from (module documentation).
 pub const ID_STREAM: CrtStream = CrtStream::LootPool;
 
-/// Binds the four natives in Off, by function path: a function the VM does not declare is skipped, and a key some
+/// Binds the four natives in Off, by function path: a function confirmed absent (no declaration, no code layer or no
+/// export there) is skipped, every other lookup failure is returned unchanged (review r2 of #462), and a key some
 /// other pack bound first is left alone.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
@@ -95,7 +96,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (GET_INVENTORY_DEFINITION, Rc::new(get_inventory_definition)),
     ];
     for (path, f) in natives {
-        let Ok(id) = vm.find_function(path) else {
+        let Some(id) = vm.find_function_if_any(path)? else {
             continue;
         };
         let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {

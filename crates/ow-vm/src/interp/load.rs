@@ -129,6 +129,17 @@ pub(crate) fn find_function(vm: &mut Vm, path: &str) -> Result<FuncId, VmError> 
             "function {path}: loading functions from the code packages"
         )));
     }
+    find_function_if_any(vm, path)?
+        .ok_or_else(|| script_error(path, format!("function not found: {path}")))
+}
+
+/// [`find_function`] where a confirmed absence is `None`: no code layer, or a package that holds no export at the
+/// path. Every other failure (a malformed path, a package that fails to load, an export that is not a function) is
+/// the same error `find_function` gives.
+pub(crate) fn find_function_if_any(vm: &mut Vm, path: &str) -> Result<Option<FuncId>, VmError> {
+    if no_code_layer(vm) {
+        return Ok(None);
+    }
     let Some((package_name, rest)) = path.split_once('.') else {
         return Err(script_error(
             path,
@@ -143,10 +154,11 @@ pub(crate) fn find_function(vm: &mut Vm, path: &str) -> Result<FuncId, VmError> 
         (package, code.find_export(store, package, rest))
     };
     if index == 0 {
-        return Err(script_error(path, format!("function not found: {path}")));
+        return Ok(None);
     }
     function_at(vm, package, index)?
         .ok_or_else(|| script_error(path, format!("not a function: {path}")))
+        .map(Some)
 }
 
 /// The layout of loaded class `key` (defined on first use).

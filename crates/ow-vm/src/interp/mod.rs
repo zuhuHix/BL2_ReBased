@@ -90,7 +90,9 @@ pub use convert::{describe, describe_for_string};
 pub use load::instantiate_from_defaults;
 
 pub(crate) use eval::{Alias, alias_value, check_entry, is_a_named, is_child, prepare, run_frame, write_alias};
-pub(crate) use load::{class_at, declare_state_code, find_class, find_class_if_present, find_function};
+pub(crate) use load::{
+    class_at, declare_state_code, find_class, find_class_if_present, find_function, find_function_if_any,
+};
 
 /// The stack a thread running the VM needs (module documentation, "Stack depth"). Measured locally on one shape:
 /// `Limits::max_call_depth` (200) frames, each a statement nesting 252 expression levels that go eval -> native ->
