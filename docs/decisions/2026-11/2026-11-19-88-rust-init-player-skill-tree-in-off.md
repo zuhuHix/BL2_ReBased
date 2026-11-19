@@ -1,18 +1,22 @@
 ## 2026-11-19: InitPlayerSkillTree in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-INIT-PLAYER-SKILL-TREE, slice links 1, 3, 4, 5, 13 and 14. Coded
-from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 094415f3, landed unchanged as 8559e2dc (clean room: lane
+from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 094415f3; #466 is accepted, rebased onto main unchanged and waiting to merge (clean room: lane
 ANALYST-INIT-PLAYER-SKILL-TREE wrote it, decision 2026-11-19-78, PR #466). The executable and the analysis output were
 not opened. Synthetic fixtures only.
 
 - **What is bound (`ow-skills` `tree/init.rs`, Off only).** `WillowPlayerController.InitPlayerSkillTree()`, by its
   declaration's native key, in `--combat-run`'s world (and so the slice gate's links that use it). The note's
   section 5 is followed case by case.
-- **Preflight, before any write, in the note's order.**
+- **Preflight, before any write, in the note's order except that P5a, a read of the controller alone, comes before
+  P4. The preflight reads only resident definitions** (hub ruling: a lazy load is a write). A globals object or a
+  player class that is still an unloaded store handle is a named `NotYet` (`NotPorted`), and nothing is loaded.
   - P1: `PlayerSkillTree` must be declared as an object property (otherwise a data error).
   - P2: a set tree is the named `NotYet` (`NotRead`) for the reset of an existing tree. The only installed caller
     clears the field first.
-  - P3: the `WillowGame.PlayerSkillTree` class, with the store's own error unchanged.
+  - P3: the `WillowGame.PlayerSkillTree` class. Its metadata is resolved when the native is bound; a class the
+    binding could not resolve is looked up at the call, so its typed error is the answer. The tree field's declared
+    class must accept it, else the heap's typed `WrongClass` error, before the tree is made.
   - P4: the world's globals (its own `NotYet` when there are none) and their `ThePlayerPawnDataManager`.
   - P5a: the controller's `PlayerClass`, read whether or not there is a manager.
   - P5b: its `SkillTreePath`, read only when there is both a manager and a player class.
@@ -37,7 +41,7 @@ not opened. Synthetic fixtures only.
 - **After a write.** With A1 to A5, no `NotYet` can follow W1. Should one surface, it stops the call with the "stopped
   after partial writes: " prefix, once, keeping its kind and record. Nothing is rolled back, and other errors
   propagate unchanged.
-- **Tests.** `tree/init_tests.rs` has eight tests on an invented `WillowGame.upk`:
+- **Tests.** `tree/init_tests.rs` has eight tests (eleven after review r1 of #475) on an invented `WillowGame.upk`:
   - the slice minimum (the tree, its outer, the seven-argument record);
   - the dotless, empty, no-manager and no-class cases;
   - an existing tree refused with nothing made;
@@ -62,3 +66,12 @@ not opened. Synthetic fixtures only.
 - **UNVERIFIED.** Nothing here was checked in the running game. Still open, from the note: residency (open question
   3), the immediate-load switch (2), the delivery receiver (4), the reset of a tree with no branch list (1), and the
   existing-tree reset.
+
+**Review r1 of #475.**
+- The preflight reads only resident definitions; P3's class is resolved at setup and checked for assignability.
+- The request queue's mutable borrow is taken before W1, so a borrowed queue refuses before anything is made, and a
+  retry then queues the request.
+- The partial-writes mark is `ow_world::pools::after_partial_writes`, which checks the exact leading prefix.
+- P2's `NotYet` carries the note's exact text.
+- Tests: eleven. Three are new: an unloaded player class, an incompatible tree field, a borrowed queue. The P2 test
+  asserts the full message.

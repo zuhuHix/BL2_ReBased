@@ -22,8 +22,10 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// `WillowGame.upk`: the controller (with `PlayerSkillTree`, `PlayerClass` and the native), the tree class, the player
 /// class definition (with `SkillTreePath`, unless `no_path`), the globals and the pawn data manager. `odd_tree`
-/// declares `PlayerSkillTree` as a string instead (P1's data error).
-fn package(odd_tree: bool, no_path: bool) -> Vec<u8> {
+/// declares `PlayerSkillTree` as a string instead (P1's data error); `tree_of_manager` declares it as an object of the
+/// manager's class (a field the tree class cannot be assigned to). `ToyHolder`'s `Target` names `ToyClass`, a player
+/// class definition that stays an unloaded store handle when the holder is loaded.
+fn package(odd_tree: bool, no_path: bool, tree_of_manager: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty", "StrProperty"]);
     let object = t.class("Object", 0);
     let tree = t.class("PlayerSkillTree", object);
@@ -32,17 +34,28 @@ fn package(odd_tree: bool, no_path: bool) -> Vec<u8> {
         t.prop("Str", class_def, "SkillTreePath", 0, 0);
     }
     let controller = t.class("WillowPlayerController", object);
+    let manager = t.class("WillowPlayerPawnDataManager", object);
     if odd_tree {
         t.prop("Str", controller, "PlayerSkillTree", 0, 0);
+    } else if tree_of_manager {
+        t.prop("Object", controller, "PlayerSkillTree", 0, manager);
     } else {
         t.prop("Object", controller, "PlayerSkillTree", 0, tree);
     }
     t.prop("Object", controller, "PlayerClass", 0, class_def);
     let spec = FunctionSpec::new(NATIVE, "InitPlayerSkillTree");
     t.function(controller, "InitPlayerSkillTree", &[], None, &[], &spec, |_| None);
-    let manager = t.class("WillowPlayerPawnDataManager", object);
     let globals = t.class("WillowGlobals", object);
     t.prop("Object", globals, "ThePlayerPawnDataManager", 0, manager);
+    let holder = t.class("Holder", object);
+    t.prop("Object", holder, "Target", 0, class_def);
+    let mut d = 0i32.to_le_bytes().to_vec();
+    d.extend_from_slice(&t.none);
+    let toy_class = t.p.add_export(class_def, "ToyClass", d);
+    let mut h = 0i32.to_le_bytes().to_vec();
+    h.extend(t.p.object_tag("Target", toy_class));
+    h.extend_from_slice(&t.none);
+    t.p.add_export(holder, "ToyHolder", h);
     t.p.build()
 }
 
@@ -80,13 +93,17 @@ fn fx_with(mode: ParityMode, odd_tree: bool, with_globals: bool) -> Fx {
 }
 
 fn fx_full(mode: ParityMode, odd_tree: bool, with_globals: bool, no_path: bool) -> Fx {
+    fx_all(mode, odd_tree, with_globals, no_path, false)
+}
+
+fn fx_all(mode: ParityMode, odd_tree: bool, with_globals: bool, no_path: bool, tree_of_manager: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-init-tree-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let bytes = package(odd_tree, no_path);
+    let bytes = package(odd_tree, no_path, tree_of_manager);
     let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let class = vm.find_class("WillowGame.WillowGlobals").unwrap();
@@ -219,7 +236,11 @@ fn an_existing_tree_is_refused_before_any_write() {
     let before = x.objects();
     let VmError::NotYet(n) = x.call().unwrap_err() else { panic!("a NotYet") };
     assert_eq!(n.missing, Missing::NotRead);
-    assert!(n.what.starts_with("InitPlayerSkillTree: the reset of an existing skill tree"), "{n}");
+    assert_eq!(n.what, EXISTING_TREE, "the note's exact text");
+    assert_eq!(
+        n.what,
+        "InitPlayerSkillTree: the reset of an existing skill tree (NATIVE_SKILLS.md section 3.1 is not ported)"
+    );
     assert!(!n.what.contains(PARTIAL_WRITES));
     assert_eq!(x.tree(), Some(old));
     assert_eq!(x.objects(), before, "no object made");
@@ -295,4 +316,55 @@ fn the_skill_tree_path_is_read_only_for_a_request() {
     assert!(matches!(e, VmError::Script { .. }), "{e:?}");
     assert_eq!(x.objects(), before, "refused before the tree is allocated");
     assert_eq!(x.tree(), None);
+}
+
+/// An unloaded player class (review r1 of #475): P5b's read would need a load, a write, so it is a named `NotYet`
+/// before any write, and the handle stays unloaded.
+#[test]
+fn an_unloaded_player_class_is_a_not_yet_before_any_write() {
+    let mut x = fx();
+    x.ready("A.B");
+    let path = ow_core::ObjectPath::parse("WillowGame.ToyHolder").unwrap();
+    let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
+    let Value::Object(Some(handle)) = x.get(holder, "Target") else { panic!() };
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, handle));
+    let c = x.controller;
+    x.set(c, "PlayerClass", Value::Object(Some(handle)));
+    let before = x.objects();
+    let VmError::NotYet(n) = x.call().unwrap_err() else { panic!("a NotYet") };
+    assert!(n.what.contains("the player class") && n.what.contains("is not loaded"), "{n}");
+    assert!(!n.what.starts_with(PARTIAL_WRITES), "{n}");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, handle), "nothing loaded");
+    assert_eq!((x.objects(), x.tree()), (before, None));
+    assert!(x.requests().is_empty());
+}
+
+/// A tree field whose declared class cannot hold the tree (review r1 of #475): the heap's typed `WrongClass` error
+/// after P3 and before W1, so no tree is allocated.
+#[test]
+fn a_tree_field_of_an_incompatible_class_is_refused_before_the_tree_is_made() {
+    let mut x = fx_all(ParityMode::Off, false, true, false, true);
+    let before = x.objects();
+    let e = x.call().unwrap_err();
+    assert!(matches!(e, VmError::Heap(ow_object::heap::HeapError::WrongClass { .. })), "{e:?}");
+    assert_eq!(x.objects(), before, "no tree allocated");
+}
+
+/// A borrowed request queue (review r1 of #475): refused before W1, so a retry once the borrow is gone makes the tree
+/// and queues the request.
+#[test]
+fn a_borrowed_queue_is_refused_before_the_tree_is_made() {
+    let mut x = fx();
+    x.ready("A.B");
+    let queue = pending(&mut x.vm).unwrap();
+    let before = x.objects();
+    {
+        let _held = queue.borrow();
+        let e = x.call().unwrap_err();
+        assert!(matches!(e, VmError::ServiceBorrowed(_)), "{e:?}");
+        assert_eq!((x.objects(), x.tree()), (before, None), "nothing made");
+    }
+    x.call().unwrap();
+    assert!(x.tree().is_some());
+    assert_eq!(x.requests().len(), 1, "the retry queues the request");
 }
