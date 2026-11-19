@@ -100,13 +100,17 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
         apply_class_starting_values(c.vm, controller, class)?;
         Ok(Value::None)
     })?;
-    // The AI mind's class route reaches two natives no note has read yet (NATIVE_COMBAT_GROUNDWORK.md section 1.11):
-    // they answer `NotYet { NotRead }` by name instead of the stub policy's refusal.
-    for (path, what) in [
-        ("WillowGame.WillowPawn.SetDefaultPhysics", "WillowPawn.SetDefaultPhysics (not read)"),
-        ("WillowGame.WillowAIPawn.GetExpLevel", "WillowAIPawn.GetExpLevel (not read)"),
-    ] {
-        bind_fn(vm, path, move |_| Err(NotYet::not_read(what, RECORD_STARTING).into()))?;
+    // Two natives of the AI mind's class route (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).
+    bind_fn(vm, "WillowGame.WillowPawn.SetDefaultPhysics", |c| {
+        let pawn = this(c, "WillowPawn.SetDefaultPhysics")?;
+        set_default_physics(c.vm, pawn)?;
+        Ok(Value::None)
+    })?;
+    for path in ["WillowGame.WillowPawn.GetExpLevel", "WillowGame.WillowAIPawn.GetExpLevel"] {
+        bind_fn(vm, path, |c| {
+            let pawn = this(c, "WillowPawn.GetExpLevel")?;
+            get_exp_level(c.vm, pawn)
+        })?;
     }
     bind_fn(vm, "Engine.ResourcePool.GetTimeSeconds", |c| {
         this(c, "ResourcePool.GetTimeSeconds")?;
@@ -208,6 +212,78 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
         set_required(vm, controller, field, v, unit)?;
     }
     Ok(())
+}
+
+/// The record of the route natives (decision 2026-11-19-32).
+pub const RECORD_ROUTE: &str = "NATIVE_MIND_ROUTE.md";
+
+/// `WillowPawn.SetDefaultPhysics()` (NATIVE_MIND_ROUTE.md section 1), Off. The gates first. Nothing changes when:
+/// - the pawn is gone (`bDeleteMe` or `bIsDead`);
+/// - it has no `SMComponent`;
+/// - that component's `CurrentSMData.SMD` is a `SpecialMove_Spawned` (a pawn in its spawn move keeps its physics).
+///
+/// The gate on the pawn's `ObjectArchetype` being a `Pawn` always passes for a pawn here: its archetype is its template
+/// or its class default object, both pawns (UNVERIFIED; the port does not model `ObjectArchetype`).
+///
+/// Past the gates the native sets the default physics, copies `bCollideWorld` and, unless two pawn queries both answer
+/// true, the collision flags from the archetype. Those two queries are not named (the note's "Not read"), and an AI
+/// pawn's default physics also hangs on an unnamed navigation-handle query in its last case. No branch is picked: this
+/// is `NotYet { NotRead }`, decided before anything changes. UNVERIFIED in the running game.
+pub fn set_default_physics(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
+    let flag = |vm: &mut Vm, name: &str| -> Result<bool, VmError> {
+        Ok(matches!(get(vm, pawn, name)?, Some(Value::Bool(true))))
+    };
+    if flag(vm, "bDeleteMe")? || flag(vm, "bIsDead")? {
+        return Ok(());
+    }
+    let Some(component) = object(vm, pawn, "SMComponent")? else {
+        return Ok(());
+    };
+    let current = get(vm, component, "CurrentSMData")?;
+    let smd = current
+        .as_ref()
+        .and_then(|v| ow_combat_field(vm, v, "SMD"))
+        .and_then(|v| object_of(&v));
+    if let (Some(smd), Ok(spawned)) = (smd, vm.find_class("GearboxFramework.SpecialMove_Spawned")) {
+        let own = vm.space.heap.get(smd)?.class;
+        if vm.space.classes.is_child_of(own, spawned) {
+            return Ok(());
+        }
+    }
+    Err(NotYet::not_read(
+        "WillowPawn.SetDefaultPhysics past its gates: the two pawn queries that decide whether the collision flags are \
+         copied, and the navigation-handle query of an AI pawn's default physics, are not named (NATIVE_MIND_ROUTE.md \
+         section 1, not read)",
+        RECORD_ROUTE,
+    )
+    .into())
+}
+
+/// A field of a struct value by name.
+fn ow_combat_field(vm: &Vm, v: &Value, name: &str) -> Option<Value> {
+    let s = v.as_struct()?;
+    let id = vm.space.names.find(name)?;
+    let (index, _) = vm.space.classes.struct_layout(s.ty)?.field(id)?;
+    s.fields.get(usize::try_from(index).ok()?).cloned()
+}
+
+/// `GetExpLevel()` on a pawn (NATIVE_MIND_ROUTE.md section 2), Off: on a `WillowAIPawn`, the pawn's own `IBalancedActor`
+/// answer, its `ExpLevel` int as stored. Another pawn's `IBalancedActor` answer is not read: `NotYet { NotRead }`.
+/// UNVERIFIED in the running game.
+pub fn get_exp_level(vm: &mut Vm, pawn: ObjRef) -> Result<Value, VmError> {
+    let ai = vm.find_class("WillowGame.WillowAIPawn")?;
+    let own = vm.space.heap.get(pawn)?.class;
+    if !vm.space.classes.is_child_of(own, ai) {
+        return Err(NotYet::not_read(
+            "GetExpLevel on a pawn that is not a WillowAIPawn (its IBalancedActor answer is not read)",
+            RECORD_ROUTE,
+        )
+        .into());
+    }
+    match get(vm, pawn, "ExpLevel")? {
+        Some(v @ Value::Int(_)) => Ok(v),
+        _ => Err(super::access::error("WillowAIPawn.GetExpLevel: the pawn has no int ExpLevel")),
+    }
 }
 
 #[cfg(test)]

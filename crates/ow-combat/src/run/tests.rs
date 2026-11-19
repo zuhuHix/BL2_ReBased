@@ -1640,3 +1640,30 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
 }
+
+/// `SetDefaultPhysics` and `GetExpLevel` in Off (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).
+/// `SetDefaultPhysics` changes nothing for a pawn with no `SMComponent` or a dead one; past its gates it is `NotYet`
+/// (the collision queries are not named). `GetExpLevel` is an AI pawn's own `ExpLevel` and `NotYet` on any other pawn.
+/// Not covered here: the spawn-move gate (the fixture has no `SpecialMove_Spawned` class).
+#[test]
+fn the_route_natives_answer_what_the_note_settles() {
+    use crate::hit::pools::{get_exp_level, set_default_physics};
+    let (w, _dir) = world_with(ParityMode::Off, vec![("ToyRoute.upk", fixture::toy_route())]);
+    let mut run = Run::new(w).unwrap();
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    set_default_physics(vm, enemy.pawn).unwrap();
+    assert_eq!(get_exp_level(vm, enemy.pawn).unwrap(), Value::Int(4));
+    let pawn = make(vm, "ToyRoute.ToyRoutePawn");
+    let component = make(vm, "ToyRoute.ToySMComponent");
+    set(vm, pawn, "SMComponent", Value::Object(Some(component))).unwrap();
+    let refused = set_default_physics(vm, pawn).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    set(vm, pawn, "bIsDead", Value::Bool(true)).unwrap();
+    set_default_physics(vm, pawn).unwrap();
+    let player = make(vm, "WillowGame.WillowPlayerPawn");
+    let refused = get_exp_level(vm, player).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    // Reference binds neither (`hit::pools::register` returns before any Off rule); the fixture does not declare the
+    // two natives, so the Off bodies are called directly here.
+}

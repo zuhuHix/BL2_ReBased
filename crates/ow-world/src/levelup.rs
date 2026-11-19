@@ -24,7 +24,10 @@
 //! are the constants 0 and 1). A stand-in pinned by `tests/mission_script_test.py` (scenarios S7 and S7b, `--slice-run`)
 //! (W6 lanes). Every refusal is decided before the rebase, so a `NotYet` changes nothing.
 //!
-//! **Not read:** the `WillowMind` override (`NotYet`) and the `WillowVehicle` thunk (its own native, not registered
+//! **The `WillowMind` override** (NATIVE_MIND_ROUTE.md section 3, Off only; Reference has no stand-in and stays
+//! `NotYet`): its own parts first ([`mind_override`]), then the shared controller part above.
+//!
+//! **Not read:** the `WillowVehicle` thunk (its own native, not registered
 //! here). No change notification is sent and no script event fires (record section 1).
 
 use std::rc::Rc;
@@ -63,11 +66,14 @@ pub fn recalculate_attribute_initialized_state(
     controller: ObjRef,
 ) -> Result<Recalculated, VmError> {
     if is_a(&vm.space, controller, "WillowMind")? {
-        return Err(NotYet::not_read(
-            "the WillowMind override of RecalculateAttributeInitializedState",
-            RECORD,
-        )
-        .into());
+        if vm.parity == ParityMode::Reference {
+            return Err(NotYet::not_read(
+                "the WillowMind override of RecalculateAttributeInitializedState (no C++ stand-in)",
+                RECORD,
+            )
+            .into());
+        }
+        mind_override(vm, controller)?;
     }
     let skipped = vm.parity == ParityMode::Reference;
     if !skipped {
@@ -79,6 +85,64 @@ pub fn recalculate_attribute_initialized_state(
         class_parts_skipped: skipped,
         manager,
     })
+}
+
+/// The record of the mind's override (decision 2026-11-19-32).
+pub const RECORD_MIND: &str = "NATIVE_MIND_ROUTE.md section 3";
+
+/// `WillowMind`'s override, the parts before the shared controller part (NATIVE_MIND_ROUTE.md section 3), Off only.
+/// Every refusal is decided before anything changes:
+/// - **the mind's own part** (with both `AIClass` and `MyWillowPawn`) sets the pawn's `CommerceMarkup` and ten
+///   status-effect resistances from evaluations of the class's init data. The note does not name the context those are
+///   evaluated with, so it is `NotYet { NotRead }`;
+/// - **the skill refresh** (the world's game info a `WillowGameInfo`): its skill manager, through the script native
+///   `GetSkillManager` (made lazily, NATIVE_SKILL_MANAGER.md). Unless the manager's `bUpdatingSkills` is set, every
+///   `ActiveSkills` entry whose `SkillInstigator` is this mind is flagged and gets one call on the skill that is not
+///   read: a matching entry is `NotYet { NotRead }`; with none, the flag set and cleared again leaves nothing changed.
+///
+/// The shared controller part (steps 1 and 2 of the module documentation) then runs as for any controller. The note
+/// counts 13 writes in it where NATIVE_LEVEL_UP_ATTRIBUTES.md lists 12 (not reconciled); its class-level step stays
+/// `NotYet` either way.
+fn mind_override(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
+    let class = object(&vm.space, mind, "AIClass")?;
+    let pawn = object(&vm.space, mind, "MyWillowPawn")?;
+    if class.is_some() && pawn.is_some() {
+        return Err(NotYet::not_read(
+            "the WillowMind part of RecalculateAttributeInitializedState (CommerceMarkup and ten status-effect \
+             resistances from the AI class's init data: the context they are evaluated with is not named)",
+            RECORD_MIND,
+        )
+        .into());
+    }
+    let world_info = object(&vm.space, mind, "WorldInfo")?;
+    let game = match world_info {
+        Some(w) => object(&vm.space, w, "Game")?,
+        None => None,
+    };
+    let Some(game) = game.filter(|g| is_a(&vm.space, *g, "WillowGameInfo").unwrap_or(false)) else {
+        return Ok(());
+    };
+    let f = vm.find_function("WillowGame.WillowGameInfo.GetSkillManager")?;
+    let manager = match vm.call(f, Some(game), Vec::new())?.ret {
+        Value::Object(o) => o,
+        _ => None,
+    };
+    let Some(manager) = manager else { return Ok(()) };
+    if matches!(crate::actors::field(&vm.space, manager, "bUpdatingSkills")?, Value::Bool(true)) {
+        return Ok(());
+    }
+    let skills = crate::actors::objects(&vm.space, manager, "ActiveSkills")?;
+    for skill in skills.into_iter().flatten() {
+        if object(&vm.space, skill, "SkillInstigator")? == Some(mind) {
+            return Err(NotYet::not_read(
+                "the skill refresh of the WillowMind RecalculateAttributeInitializedState on a skill of this mind \
+                 (the call on the skill is not read)",
+                RECORD_MIND,
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Off mode: `NotYet` when step 1 or step 3 applies (module documentation). Reads `CharacterClass`, `Pawn` and, on a
