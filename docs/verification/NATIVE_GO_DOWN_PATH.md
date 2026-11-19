@@ -28,6 +28,10 @@ links meet.
 - **An unbound native in Off is an error, not a `NotYet`.** The combat run's Off stub policy is `Refuse`: a native that
   nothing binds stops the step with `UnboundNative`, which the gate grades `error`. Links 6 and 7 on main show it
   (section 6). So each native below needs an Off answer: a rule, or a named `NotYet`.
+- **Who adds the prefix.** Every native below that answers `NotRead` answers it at entry, before any write of its
+  own, as a plain `NotYet`. The native does not add "stopped after partial writes" itself: the layer that has
+  written adds it to an escaping `NotYet`, as the combat run, the slice gate and the attribute evaluator already do
+  (review r1 of #489).
 - **"Bound" means a binding string exists in `crates/`.** Some bindings are Off only (`Pawn.IsDead`), and a few may be
   Reference only. That was not separated here.
 - **The script order** of the down path is COMBAT_DOWN_RESPAWN.md's "What a run does": `TakeDamage` -> the
@@ -77,28 +81,41 @@ asks about is the adult, not Maya. The injured entry is the rest.
 
 **Off answer.** The port's worlds are standalone. So: false with no controller (own or vehicle driver's), else true.
 That the headless world counts as standalone, and that the byte is the net mode, are **Off assumptions** (UNVERIFIED).
-A world that models a network game answers `NotRead`, "Pawn.IsLocallyControlled on a networked world".
+A world that models a network game answers `NotRead`, "Pawn.IsLocallyControlled on a networked world". The
+networked-world test reuses the port's existing `WorldInfo.NetMode` read (the behavior kernel's `CanPlayBehaviorData`
+in `ow-behavior`'s `kernel/run.rs`, `NetMode` is not `NM_Client`), not a new reading of the byte.
 
 ### 3.2 The natives that hand straight to an overridable implementation
 
 Each of these unpacks its arguments and then calls the receiver's own overridable implementation. The project's
 class-table lookup finds no constructor pattern for these classes, so **none of the implementations was resolved**.
-This is the same limit NATIVE_CACHE_WEAPON_CARD.md met for `WillowWeapon`.
+This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`.
 
-- `Controller.IsLocalController` (also reached as `PlayerController.IsLocalController`);
+- `Controller.IsLocalController` (also reached as `PlayerController.IsLocalController`). `PlayerController`
+  declares its own `IsLocalController`, so `Engine.PlayerController.IsLocalController` is a separate native key with
+  the same body. The behavior kernel's `READ_ONLY_QUERIES` allow-lists only the `Controller` key. Binding one key does
+  not bind the other: a lane that binds them binds both, and adds the `PlayerController` key to that allow-list if a
+  preflight is to call it. Until then both answer `NotRead`, and the kernel's `PlayLocal` stays `NotYet`;
 - `WillowPawn.GetParent` (also reached as `WillowAIPawn.GetParent`);
 - `WillowPawn.SetDefaultStance` (also reached as `WillowPlayerPawn.SetDefaultStance` and `WillowAIPawn`'s);
 - `Actor.SetHidden(bool)`, `Actor.SetHardAttach(bool)` (its omitted argument defaults to the current `bHardAttach`)
   and `Actor.SetBase(Base, FloorNormal, Bone, AttachName)` (an omitted normal defaults to straight up);
-- `Pawn.InitRagdoll()` and `Pawn.TermRagdoll()`, both reached as `WillowPlayerPawn`'s;
+- `Pawn.TermRagdoll()`;
+- `WillowPlayerPawn.InitRagdoll()`. `WillowPlayerPawn` declares its own `InitRagdoll`, so this is a separate native key
+  from `Engine.Pawn.InitRagdoll`, with the same body. That body only calls the pawn class's own implementation, which
+  was not resolved, so whether the player pawn's ragdoll differs is not known. `ow-combat`'s `death.rs` already
+  binds `Engine.Pawn.InitRagdoll` to true, a presentation answer of the death chain (COMBAT_DEATH.md: the host builds
+  the ragdoll). **Off answer for the `WillowPlayerPawn` key:** the same presentation answer, true, with no write, under
+  that record's terms (a stand-in, UNVERIFIED). Its result is the script's only use of the call on this path. It is
+  not a reading of the implementation;
 - `WillowPlayerController.PlayCameraAnim(...)`, `StopCameraAnim(bool)` and `UpdateInputContext()`;
 - `WillowPlayerPawn.MarkDLEsForUpdate()`;
 - `WillowPawn.RefreshPawnGearLikenessComponents()`, which calls three such implementations in turn.
 
 **Off answer:** `NotYet`, kind `NotRead`, naming "<Class>.<Function>: the class's own implementation is not
-resolved", record this note. It answers before any write of its own. On links 13 and 14 the run has written before
-(the swings), so the text carries the "stopped after partial writes" prefix. Reading them needs a way to resolve a
-class's implementation of an overridable native, or a live trace.
+resolved", record this note: a plain `NotRead` at entry; the caller layer that wrote adds the "stopped after partial
+writes" prefix (section 1). `WillowPlayerPawn.InitRagdoll` is the exception above. Reading them
+needs a way to resolve a class's implementation of an overridable native, or a live trace.
 
 ### 3.3 `StatusEffectsComponent.ClearAllStatusEffects(bool)` (outline, medium-low)
 
@@ -116,7 +133,8 @@ last call) were **not read**. So the native writes
 script-visible state in several places through code that was not read.
 
 **Off answer:** `NotRead`, "StatusEffectsComponent.ClearAllStatusEffects: the per-kind removal and the skill manager
-step", record this note. It answers at entry, before any write, with the partial-write prefix.
+step", record this note: a plain `NotRead` at entry; the caller layer that wrote adds the "stopped after partial writes"
+prefix (section 1).
 
 ### 3.4 `WillowPawn.GetTechDeathIndexForDamageType(DamageType)` (partial, medium)
 
@@ -134,7 +152,8 @@ asks something about that kind (most likely whether the pawn is under that effec
 
 **Off answer.** Steps 1, 2 and 4 are pure reads and can be implemented. The answer is -1 whenever steps 1 to 3 say so
 without the test. When the test would decide the answer, it is `NotRead`, "GetTechDeathIndexForDamageType: the
-status-effect test of the damage type's kind", with the partial-write prefix. Writes: none.
+status-effect test of the damage type's kind": a plain `NotRead` at entry; the caller layer that wrote adds the "stopped
+after partial writes" prefix (section 1). Writes: none.
 
 ### 3.5 `WillowPlayerController.GetSkillManager()`
 
@@ -149,21 +168,23 @@ is `WorldInfo.Game` is an **Off assumption** (UNVERIFIED).
 
 | Native | Bound? | Record | Off answer |
 |---|---|---|---|
-| `Actor.Trace` (349 calls) | yes | NATIVE_ENGINE_CORE.md | as bound; most likely the death camera's per-frame view traces (not traced to the caller) |
+| `Actor.Trace` (349 calls) | no | none | `NotYet`, kind `LayerAbsent`, "Actor.Trace: the world's collision", as the spot search's refusal on main (4.5) |
 | `BehaviorBase.RunBehaviors` | yes | NATIVE_DOWN_TIMERS.md | as bound |
 | `PlayerController.IsLocalPlayerController`, `WillowDialogGlobalsDefinition.Get`, `WillowGameInfo.GetSkillManager` | yes | | as bound |
 | `Actor.SetCollision(bool, bool, bool)` | no | this note, 4.1 | `NotRead` (4.1) |
 | `Actor.SetCollisionSize(float, float)` | no | this note, 4.1 | `NotRead` (4.1) |
 | `Actor.SetBase`, `SetHardAttach`, `SetHidden` | no | 3.2 | `NotRead` |
 | `Actor.SetLocation`, `Actor.SetRotation` | no | NATIVE_RESPAWN_STATIONS.md (not read) | `NotRead` |
-| `Controller.IsUsingVehicle`, `IsUsingVehicleEx` | no | NATIVE_RESPAWN_STATIONS.md 3.1 | that note's |
+| `Controller.IsUsingVehicleEx` | no | NATIVE_RESPAWN_STATIONS.md 3.1 | that note's |
+| `Controller.IsUsingVehicle(bool)` | no | none (not read here; that note covers only the `Ex` form) | `NotRead`, "Controller.IsUsingVehicle" |
 | `Engine.GetCurrentWorldInfo()` | no | this note, 4.2 | the world's `WorldInfo` |
 | `Engine.IsSplitScreen()` | no | this note, 4.2 | false |
 | `GearboxDialogComponent.StopTalking` | no | NATIVE_DIALOG.md | that note's |
 | `InteractionProxy.IsInteractionDebugEnabled()` | no | this note, 4.2 | false |
 | `Pawn.IsLocallyControlled` | no | 3.1 | 3.1 |
 | `Pawn.SetAnchor`, `WillowGameInfo.ResetAI` | no | NATIVE_DOWN_TIMERS.md | that note's (no rule read for `ResetAI`'s entries: `NotRead`) |
-| `Pawn.TermRagdoll`, `WillowPlayerPawn.InitRagdoll` | no | 3.2 | `NotRead` |
+| `Pawn.TermRagdoll` | no | 3.2 | `NotRead` |
+| `WillowPlayerPawn.InitRagdoll` | no (a separate key from the bound `Engine.Pawn.InitRagdoll`) | 3.2, COMBAT_DEATH.md | true, the death chain's presentation answer (3.2) |
 | `WillowDialogGlobalsDefinition.StaticTriggerTemplateEvent` | no | NATIVE_DIALOG.md | that note's |
 | `WillowGlobals.GetCustomizationManager()` | no | this note, 4.2 | the field |
 | `WillowGlobals.GetEffectCoordinator()` | no | NATIVE_RESPAWN_STATIONS.md 3.2 | that note's |
@@ -175,7 +196,7 @@ is `WorldInfo.Game` is an **Off assumption** (UNVERIFIED).
 | `WillowPlayerPawn.MarkDLEsForUpdate` | no | 3.2 | `NotRead` |
 | `WillowPlayerPawn.SetDefaultStance` | no | 3.2 | `NotRead` |
 | `WillowPlayerPawn.SetShadowCasting(bool)` | no | this note, 4.4 | the rule of 4.4 |
-| a native iterator (`foreach` over an engine iterator) | | | which iterator was not identified from the counts |
+| a native iterator (`foreach` over an engine iterator) | no | none | see 4.5 |
 
 ### 4.1 `Actor.SetCollision` and `Actor.SetCollisionSize` (outline)
 
@@ -188,7 +209,8 @@ is `WorldInfo.Game` is an **Off assumption** (UNVERIFIED).
   are set. Two further steps follow that were not read, and the actor's `bNetDirty` is then set.
 
 **Off answer:** `NotRead`, naming "Actor.SetCollision: the collision hash and touch updates" and
-"Actor.SetCollisionSize: the component's world update", with the partial-write prefix. The flag and cylinder writes
+"Actor.SetCollisionSize: the component's world update", each a plain `NotRead` at entry; the caller layer that wrote
+adds the "stopped after partial writes" prefix (section 1). The flag and cylinder writes
 alone would leave a collision state that no collision layer saw. Once the world models collision, these are a read of
 their own.
 
@@ -214,7 +236,8 @@ their own.
 
 It unpacks a player and a byte and hands them to a statistics routine that builds an event record. Only its start was
 followed, and it was not read to the end. Its sibling `RecordCharacterRevivedEventForPlayer` is
-NATIVE_RESPAWN_STATIONS.md 3.5. Off: `NotRead`, "the killed-event statistics", with the partial-write prefix. If a
+NATIVE_RESPAWN_STATIONS.md 3.5. Off: `NotRead`, "the killed-event statistics", a plain `NotRead` at entry; the caller
+layer that wrote adds the "stopped after partial writes" prefix (section 1). If a
 later reading shows it touches only telemetry, that note's revived-event answer is the model.
 
 ### 4.4 `WillowPlayerPawn.SetShadowCasting(bool)`
@@ -227,6 +250,20 @@ declared `CastShadow` and `bCastDynamicShadow` exactly, so their identity is **n
 **Off answer:** with no entry to visit (the headless pawn has no instance data), it does nothing. An entry that would
 be visited answers `NotRead`, "SetShadowCasting: which component flags it sets".
 
+### 4.5 `Actor.Trace` and the native iterators (not read)
+
+- **`Actor.Trace`.** No crate binds it: the only mention is a test that expects the unimplemented stub in Reference.
+  Its 349 Reference calls on link 14 were stub calls, most likely the death camera's per-frame view traces (not
+  traced to the caller). It was not read here. **Off answer:** `NotYet`, kind `LayerAbsent`, "Actor.Trace: the world's
+  collision", record this note. That is the kind and reason of the spot search's refusal on main ("needs collision").
+  Since the camera traces every frame, this stops link 14 at the death camera until a collision layer answers
+  traces. With #477's BSP-only service, a trace is a read of its own (open question 6).
+- **The native iterators** (one on link 13's swing path, one on link 14). Reference counts a `foreach` over an unbound
+  iterator under one generic text, so the report does not say which iterator it was. **Off answer:** in Off the
+  VM's refusal for an unbound iterator stops the step and names the iterator native's key, so the first Off run past
+  link 4 names it. Until an iterator is bound and read, a lane that binds it answers `NotYet`, kind `NotRead`, "the
+  engine iterator <key>", record this note.
+
 ## 5. Link 4's swing path (met first by link 4, listed for completeness, not read here)
 
 `Controller.InGodMode`, `DamagePipeline.GetBarrelSourceTime`, `GetCanInflictFriendlyFire`, `GetPlantSourceTime`,
@@ -236,7 +273,9 @@ be visited answers `NotRead`, "SetShadowCasting: which component flags it sets".
 `WillowGameInfo.TravelPostCountdownInProcess`, `WillowGameInfo.UpdateTookDamageFromEnemyStats`,
 `WillowPawn.AdjustMomentumForSurfaceType`, `WillowPawn.GetMaxShieldStrength`, `WillowPawn.TryFullBodyGib`,
 `WillowPlayerController.ShakeView`, `WillowPlayerPawn.IsVulnerableToFriendlyFire`, and a native iterator. None of them
-is bound. The bound ones on that path (`WillowGameInfo.GetSkillManager` and others) are not listed.
+is bound, except `WillowGameInfo.TravelPostCountdownInProcess`, which is bound **Off only** (`ow-world`'s `world.rs`,
+NATIVE_TRAVEL.md): Reference counted it because the C++ binds none. The bound ones on that path
+(`WillowGameInfo.GetSkillManager` and others) are not listed.
 
 ## 6. The main reading (slice gate on main 0235937, Off, strict)
 
@@ -272,7 +311,10 @@ section 1.
 3. **The net-mode byte** of 3.1 and the game-info field of 3.5: `WorldInfo` cannot be laid out by the layout tool (a
    map property stops it), so the two fields are named by fit, not by layout.
 4. **The Off path beyond Reference's zeros** (section 1): a fresh stub diff once links 1 and 4 pass in Off.
-5. **The native iterator** each link reaches: the stub count does not say which one.
+5. **The native iterator** each link reaches: the stub count does not say which one (4.5).
+6. **`Actor.Trace`** (4.5): its native body, and whether a BSP-only collision service can answer the death camera's
+   traces.
+7. **`Controller.IsUsingVehicle`** (the non-`Ex` form): not read.
 
 ## Live checks that would settle each rule (bl-sdk, the RTSE way)
 

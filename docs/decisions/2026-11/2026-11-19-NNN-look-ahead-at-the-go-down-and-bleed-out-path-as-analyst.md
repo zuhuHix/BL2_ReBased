@@ -19,8 +19,15 @@ and writes docs only; another lane implements from the note alone.
     unread, so Off answers `NotRead` there), `GetVehicleLifetimeManager` (the field; its lazy creation is `NotRead`).
   - **Outline only, Off `NotRead`:** `StatusEffectsComponent.ClearAllStatusEffects`, `Actor.SetCollision`,
     `Actor.SetCollisionSize`, `RecordCharacterKilledEventForPlayer`.
-  - **Not resolved, Off `NotRead`:** thirteen natives that each hand straight to an overridable implementation the
-    class-table lookup could not resolve (the limit NATIVE_CACHE_WEAPON_CARD.md also met).
+  - **Not resolved, Off `NotRead`:** twelve natives that each hand straight to an overridable implementation the
+    class-table lookup could not resolve (the limit NATIVE_CACHE_WEAPON_CARD.md, #484, also met). The thirteenth,
+    `WillowPlayerPawn.InitRagdoll`, is a separate key from the bound `Engine.Pawn.InitRagdoll` and takes the death
+    chain's presentation answer, true (COMBAT_DEATH.md), as a stand-in (review r1 of #489).
+  - **Unbound and not read:** `Actor.Trace` (349 Reference stub calls on link 14; Off `NotYet` `LayerAbsent`, the
+    world's collision), `Controller.IsUsingVehicle` (`NotRead`) and the native iterators (named by the first Off run
+    past link 4).
+  - **The prefix:** each `NotRead` is a plain one at entry; the layer that has written adds "stopped after partial
+    writes".
   - **Already recorded elsewhere:** the vehicle, dialog, anchor, AI reset, effect coordinator and revived-event
     natives (NATIVE_RESPAWN_STATIONS.md, NATIVE_DIALOG.md, NATIVE_DOWN_TIMERS.md).
 - **The point for the gate.** In the combat run's Off stub policy an unbound native is an `error`, not a `NotYet`, so
