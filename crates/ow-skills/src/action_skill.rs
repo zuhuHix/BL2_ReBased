@@ -688,6 +688,7 @@ impl NativePack for Pack {
         register_events(vm)?;
         register_sm_component(vm)?;
         special_move::register(vm)?;
+        flag_expression::register(vm)?;
         register_cast_opinion(vm)?;
         register_cast_get_value(vm)
     }
@@ -1149,6 +1150,9 @@ pub mod manager;
 
 /// `SpecialMoveComponent.Play` and the natives it reaches (lane FIX-SM-PLAY, decision 2026-11-19-52), Off only.
 pub mod special_move;
+
+/// `FlagExpressionEvaluator.Evaluate` in Off (lane IMPL-FLAG-EXPRESSION-EVALUATE).
+pub mod flag_expression;
 
 #[cfg(test)]
 mod tests;
