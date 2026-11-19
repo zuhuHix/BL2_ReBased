@@ -55,7 +55,10 @@ Otherwise the requested location is used as it is. The flags are read from the t
   in one of two collision modes. *Template mode* uses complex (per-polygon) collision when the template has
   `bCollideComplex`; *simple mode* always uses simple collision.
 - "A sweep" traces a box (or a point) from a start to an end and reports the first hit, its location, its normal and
-  its fraction of the way. The sweeps use one fixed engine flag set (not identified here).
+  its fraction of the way.
+- **The filters are unread.** Every box test passes one engine flag set (8902 in decimal; with 131072 added in template
+  mode for a `bCollideComplex` template), and every sweep passes another (8326). These numbers choose which geometry and
+  which actors the query sees. What their bits mean was not read (open question 4).
 
 **The steps.** E = (Ex, Ey, Ez) is the extent; L is the location, changed in place; L0 is the requested location.
 
@@ -136,9 +139,10 @@ default object.
 4. **No cylinder extent** (the template's `CollisionComponent` is not a cylinder component, or there is none): a
    `NotYet` of kind `NotRead`, "the actor's bounding-cylinder rule". So a template without a cylinder in an empty
    collision model answers this, never "unchanged".
-5. **The first test (section 3, step 1).** It must be a query the service supports (section 7). Unsupported: a `NotYet`
-   of kind `NotRead`, naming the query ("an axis-aligned box test in template mode", for example). Supported and free:
-   L = requested.
+5. **The first test (section 3, step 1).** Today it answers the filter `NotYet` of section 7 ("the spawn spot search's
+   trace filter"). Once the filter is read, it must be a query the service supports for its whole region (section 7).
+   Unsupported: a `NotYet` of kind `NotRead`, naming the query ("an axis-aligned box test in template mode", for
+   example). Supported and free: L = requested.
 6. Steps 2 to 4 of section 3 run while every query they make is supported. The first unsupported query is a `NotYet`
    of kind `NotRead` naming it. None of these steps writes before the actor is made: the search only computes L.
 7. The search fails: the spawn returns None, nothing made.
@@ -175,10 +179,25 @@ each answered **Clear**, **Hit**, or **Unsupported**:
 - a box sweep: an extent, a start and an end; a hit carries its location, normal and fraction;
 - a point sweep: a start and an end.
 
-**Availability is per query.** It is the shape the implementation can test and the geometry it holds near the
-points. A query is answered only when both are covered. An empty candidate set inside covered geometry is Clear. An
-empty set because the points are outside the covered geometry is Unsupported, never Clear. The location stays
-unchanged (section 6, step 5) only after a **supported** first test reports Clear.
+**Availability is per query, and covers the whole query.** An answer needs three things for the whole region the
+query touches:
+- the shape the implementation can test;
+- the geometry it holds over that region, in the requested collision mode;
+- the query's filter (below).
+
+For a box test the region is the full box. For a sweep it is the full swept volume, from start to end, not just the
+two end points. If any part of the region lies outside the geometry the implementation covers, or if it cannot test
+the requested mode there, the answer is Unsupported. An empty candidate set is Clear only when the whole region is
+covered. The location stays unchanged (section 6, step 5) only after a **supported** first test reports Clear.
+
+**The filter (the choice of this note).** Every query depends on its unread flag set (section 3, "Terms"): the box
+tests and the box sweeps, the point sweep of the corner step, and the final sweep. So until the filter is read, every
+one of these queries answers a `NotYet` of kind `NotRead`, "the spawn spot search's trace filter (flag sets 8902 and
+8326)", even when the shape and the coverage would allow it. No Off filter is defined in its place.
+
+The consequence for section 6: past the service and extent checks, the first test, and so every search that reaches
+it, answers that `NotYet` until the filter is read. A later lane that reads the filter replaces this paragraph with
+its rule.
 
 **The host's movement collision** (lane H4, `crates/ow-host/src/movement/collide.rs`, decision 2026-11-16-52) is a
 world of convex brushes with a swept cylinder or capsule trace that reports a start inside solid.
@@ -195,7 +214,8 @@ world of convex brushes with a swept cylinder or capsule trace that reports a st
    passes at once, and what touch notification sends.
 2. The relocation step for a `bNoCollisionFail` spawn of an actor that collides with actors.
 3. The bounding-cylinder rule for a template without a cylinder collision component.
-4. The trace flag sets of the box tests and the line checks: which geometry they include.
+4. The trace filters: what the flag sets 8902 (box tests; 131072 added for complex collision) and 8326 (sweeps) select,
+   that is which geometry and which actors. Until this is read, every query of the search is a `NotYet` (section 7).
 5. Whether the net-mode test compares with the client mode only (as read), so a listen server counts as not a client.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
@@ -207,8 +227,9 @@ For every case, capture:
 1. **Client versus server flags.** Spawn a class with `bCollideWhenPlacing` only, at a blocked point. On a listen
    server, expect the search (a moved location or None). On a client, expect no search (the requested location). A
    client session may not be available: an open verification gap.
-2. **Class default versus archetype.** With an archetype whose `bCollideWorld` differs from its class default, spawn
-   both ways at a blocked point. Expect the archetype's flag to decide.
+2. **Class default versus archetype, both ways.** At a blocked point:
+   - an archetype with `bCollideWorld` over a class default without it: expect the search (a moved location or None);
+   - a class default with `bCollideWorld` under an archetype without it: expect no search (the requested location).
 3. **The no-cylinder fallback.** Spawn a template whose `CollisionComponent` is not a cylinder, at a blocked point.
    Read the extent the move implies from the final location (open question 3).
 4. **Floor hit versus floor miss.** At a point a little above a floor, and at a point over a gap, spawn a box that
@@ -221,9 +242,21 @@ For every case, capture:
 7. **The encroachment check.** Spawn, twice at the same open spot, a class with `bCollideActors` and `bBlockActors`.
    Expect the second spawn to return None, with `Destroyed` after `PreBeginPlay`, unless `bNoCollisionFail` is
    passed.
-8. **A `PreBeginPlay` flag change.** With a test class whose `PreBeginPlay` sets `bCollideActors`, repeat case 7. Expect
-   the check to follow the live flag.
-9. **The cast.** Spawn the Phaselock cast's actor classes as the slice does, and read their `bCollideWorld` and
+8. **A `PreBeginPlay` flag change, both ways.** Repeat case 7 with test classes whose `PreBeginPlay`:
+   - sets `bCollideActors` on a class that starts without it: expect the check to apply, so the second spawn returns
+     None;
+   - clears `bCollideActors` on a class that starts with it: expect the second spawn to succeed, if the check follows
+     the live flag (section 6).
+9. **Destroyed before the check.** A test class whose `PreBeginPlay` destroys the actor: expect None, `Destroyed` once,
+   and no encroachment effect (no touch events on the actor already at the spot).
+10. **The half-fraction split.** With a floor at a measured depth below a blocked spawn point, choose the requested
+    height so the slice's downward sweep hits the floor at a fraction just below 0.5, then just above 0.5. Expect the
+    two height rules of section 3, step 3.2: the first raised by Ez × (1 − 2t) + 1, the second lowered by Ez × (2t − 1)
+    and raised by 1. Expect the upward sweep only in the second case (a ceiling just above tells it apart).
+11. **A final sweep after a slice correction.** Set up a corner nudge (case 5) whose moved box is blocked but whose
+    slice step succeeds at a new height. Expect the final location to come from the sweep that starts at the corrected
+    height, aimed past the requested point.
+12. **The cast.** Spawn the Phaselock cast's actor classes as the slice does, and read their `bCollideWorld` and
    `bCollideWhenPlacing`, to know whether link 9 meets the search at all.
 
 A case that needs an invented test class depends on the SDK being able to define one. Where it cannot, the case is an
