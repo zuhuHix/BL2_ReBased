@@ -62,6 +62,22 @@ impl ow_attr::api::ContextResolver for Fixed {
     }
 }
 
+/// A context resolver that always answers None, registered for `Toy.NoneContextResolver`.
+struct NoneAnswer;
+
+impl ow_attr::api::ContextResolver for NoneAnswer {
+    fn resolve(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _attr: ObjRef,
+        _source: Option<ObjRef>,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+        Ok(None)
+    }
+}
+
 struct Fx {
     vm: Vm,
     conditional: StructId,
@@ -167,6 +183,7 @@ fn fx_with(world_info: bool) -> Fx {
     s.classes.define("Toy.OtherFlagValueResolver", Some(value_resolver), vec![]).unwrap();
     s.classes.define("Toy.PassContextResolver", Some(object), vec![]).unwrap();
     s.classes.define("Toy.FixedContextResolver", Some(object), vec![]).unwrap();
+    s.classes.define("Toy.NoneContextResolver", Some(object), vec![]).unwrap();
     let expression = s.classes.define("Engine.ExpressionEvaluator", Some(object), vec![]).unwrap();
     let decls = vec![
         d(&mut s, "FlagChain", PropKind::Array(Box::new(PropKind::Struct(conditional)))),
@@ -182,6 +199,8 @@ fn fx_with(world_info: bool) -> Fx {
         .with_context_resolver("Toy.PassContextResolver", Pass)
         .unwrap()
         .with_context_resolver("Toy.FixedContextResolver", Fixed)
+        .unwrap()
+        .with_context_resolver("Toy.NoneContextResolver", NoneAnswer)
         .unwrap();
     let mut vm = Vm::new(s, defs, Rc::new(attrs), ParityMode::Off);
     let actors = vm.add_service(ow_world::actors::Actors::new(actor)).unwrap();
@@ -499,7 +518,7 @@ fn the_definition_path_cases() {
 /// Branch S (the note's store path): with a rule engine `R` found for the context, a definition lacking a context
 /// resolver or a value resolver is "a rule engine's own flag store", `NotRead`, before any write. `R` is found on a
 /// rule engine owner (its `MyRuleEngine`), on a pawn's controller, on the controller of the vehicle a pawn drives, on
-/// a `RuleEngine` context and on a `Rule`'s engine; an owner other than a mind is `NotRead` (the port's choice).
+/// and on a `RuleEngine` context; an owner other than a mind is `NotRead` (the port's choice).
 #[test]
 fn the_store_path_with_a_rule_engine() {
     let mut x = fx();
@@ -527,7 +546,7 @@ fn the_store_path_with_a_rule_engine() {
     // A mind with no rule engine gives no R: the definition path runs.
     let free = x.obj("GearboxFramework.GearboxMind", "FreeMind");
     assert!(x.eval(e, Some(free)).unwrap());
-    // An owner other than a mind is the port's own refusal, before the definition is loaded: never marked.
+    // An owner other than a mind is the port's own refusal, before the definition is loaded: not marked.
     let other = x.obj("Toy.OtherRuleEngineOwner", "Other");
     let lazy = x.held("Held");
     let e = x.evaluator(&[(0, Some(lazy))], 1);
@@ -565,20 +584,21 @@ fn the_context_chain_and_the_minds_store() {
     assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap(), &[Value::Object(Some(f))]);
     x.set_entry(mind, 0, true, 0.0, 0.0);
     assert!(x.eval(e, Some(pawn)).unwrap(), "the mind's flag, read through the chain");
-    // A resolver answering None ends the chain: the later resolver would have answered the mind.
-    let none = x.obj("Toy.FixedContextResolver", "None");
+    // A resolver answering None ends the chain: the later resolver would have answered another mind, whose store
+    // would then have gained the definition (review r2 of #535: this fails if the chain went on past the None).
+    let none = x.obj("Toy.NoneContextResolver", "None");
     let other = x.obj("GearboxFramework.GearboxMind", "Other");
     let g = x.store_flag(vec![Value::Object(Some(none)), Value::Object(Some(fixed))]);
     let e = x.evaluator(&[(0, Some(g))], 1);
-    FIXED.with(|c| c.set(None));
-    // Both entries are the same resolver class, so `FIXED` is None for both: the first ends the chain.
+    FIXED.with(|c| c.set(Some(other)));
     assert!(!x.eval(e, Some(pawn)).unwrap(), "the pawn stays the context: no store");
-    assert_eq!(x.get(other, "DynamicFlagDefinitions").elements().unwrap().len(), 0);
+    assert_eq!(x.get(other, "DynamicFlagDefinitions").elements().unwrap().len(), 0, "the later resolver never ran");
     assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap().len(), 1, "the mind is untouched");
 }
 
 /// A resolver's answer is loaded when reached (note section 6), not refused: the answer here is the toy package's
-/// unloaded object, which then is no flag store of a mind (`NotRead`, marked: the load moved the counters).
+/// unloaded object. It is no flag provider, so the function flag's `IFlagProvider` query answers None and the flag is
+/// false, with the answer loaded.
 #[test]
 fn a_resolvers_answer_is_loaded() {
     let mut x = fx();

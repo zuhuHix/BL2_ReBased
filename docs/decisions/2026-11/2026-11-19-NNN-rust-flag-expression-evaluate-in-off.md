@@ -91,7 +91,8 @@ Synthetic fixtures only.
     (1f1a2bcc);
   - **the context resolvers' answers are loaded** when reached, and so is the flag store (`check_store`), instead of
     being refused `NotRead`. The non-loading check is kept for the rule engine search alone;
-  - **`R` is worked out before the first definition is loaded**, the note's order, so a refusal there is never marked;
+  - **`R` is worked out before the first definition is loaded**, the note's order, so a refusal there is not marked because of the definition's load (it can still be marked when an
+    earlier load of the receiver or a caller's writes moved the counters);
   - **two refusals are the port's own choices,** not questions of the note: a rule engine owner other than a
     `GearboxMind` (only the mind's `MyRuleEngine` is read), and a fractional function-call result (truncating and
     rounding disagree between 0.5 and 1, so only an integral result is taken). The message says so;

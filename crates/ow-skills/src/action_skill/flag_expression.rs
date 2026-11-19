@@ -9,7 +9,7 @@
 //! 1. a None `FlagDefinition` answers false, before the type check;
 //! 2. the timed tests (types 2 and 3) are `NotYet { NotRead }`;
 //! 3. the context's rule engine `R` (reads only, worked out once, before the first definition is loaded: the note's
-//!    order, so a refusal there is never marked); with `R`, the store path (the definition lacking a context or a value
+//!    order, so a refusal there is not marked because of the definition's load); with `R`, the store path (the definition lacking a context or a value
 //!    resolver) is `NotYet { NotRead }`, "a rule engine's own flag store";
 //! 4. the definition path (section 4.0): a None context answers false; the context passes through
 //!    `ContextResolverChain` (None entries skipped, a resolver answering None ends it and the context so far stays);
@@ -333,7 +333,7 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
                     return Err(script(format!("FlagEvalType {} is not a flag test", c.kind)));
                 }
                 // Step 3: the context's rule engine, by reads only, before the definition is loaded (the note's
-                // order), so a refusal there is never marked.
+                // order), so a refusal there is not marked because of the definition's load.
                 if engine.is_none() {
                     engine = Some(rule_engine(vm, context)?);
                 }
@@ -471,7 +471,7 @@ fn rule_engine_store(vm: &mut Vm, context: ObjRef) -> Result<Option<ObjRef>, VmE
         return Ok(Some(context));
     }
     if is_a(vm, context, "Engine.Pawn")? {
-        loaded(vm, context, "pawn")?;
+        load(vm, context)?;
         if let Some(controller) = object_field(vm, context, "Controller")?
             && rule_engine(vm, Some(controller))?.is_some()
         {
