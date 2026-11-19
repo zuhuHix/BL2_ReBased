@@ -31,18 +31,21 @@
 //!    { NotRead }` [`VISIT`] (its own visit is not read). Adding: an existing entry gains the increase; a new one takes
 //!    its record by the presentation's `Attribute` (the first map's, else the second's), is skipped when a record is
 //!    required and none exists, and starts at `BasePriority` plus the increase.
-//! 6. **The order** (section 3.3): entries with a priority of at least 0.0001 are appended, largest priority first. Two
-//!    appended entries of exactly equal priority are `NotYet { NotRead }` [`TIE`]: the sort is not stable. An appended
-//!    entry with a record needs the display conversion for `bShouldDisplay`, which is read in outline only: `NotYet
-//!    { NotRead }` [`DISPLAY`]. So every appended entry the port writes has no record: `ModifierValue` 0 and
-//!    `bShouldDisplay` true. The value formula of section 3.3 is therefore never reached in Off and is not coded.
-//! 7. **The writes**, in order: `WeaponCardModifierStats` emptied; each planned slot flag cleared; the slot entries
+//! 6. **The order** (NATIVE_CARD_BODY_REST.md section 2, lane IMPL-CARD-BODY-REST): a NaN priority among all the
+//!    entries is `NotYet { NotRead }` [`UNORDERED`]; otherwise the whole list, in first-insertion order, is sorted by
+//!    [`sort_entries`] (the engine's unstable sort, as the note's rules give it), and only then are the entries with a
+//!    priority of at least 0.0001 appended, in the sorted order.
+//! 7. **The values** (body note section 3.3; NATIVE_CARD_BODY_REST.md section 3): each appended entry's base value B,
+//!    then with no record `ModifierValue` 0 and `bShouldDisplay` true; with a record the value V ([`value_of`]) and
+//!    `bShouldDisplay` from the presentation's displayed form of V ([`shows`]), with the rest note's typed refusals
+//!    ([`REMAP_CONTEXT`], [`RANGE`], [`PRECISION`], [`CUTOFF`]), all raised before the first card write.
+//! 8. **The writes**, in order: `WeaponCardModifierStats` emptied; each planned slot flag cleared; the slot entries
 //!    and the appended entries written; on the authority (`Role` is `ROLE_Authority`), the displayed entries after the
 //!    slot entries fill the first `ReplicatedWeaponCardModifierValues` (at most 5), the rest left as they were.
 //!
-//! **The partial-writes mark** (the hub's rule, review r1 of #506): a `NotYet` met while computing (steps 1 to 6) comes
+//! **The partial-writes mark** (the hub's rule, review r1 of #506): a `NotYet` met while computing (steps 1 to 7) comes
 //! back unprefixed, since the native has written nothing; the caller layer that wrote before it (link 8's equip
-//! driver) marks it. Only a `NotYet` after the native's own first write (step 7) is marked here, through
+//! driver) marks it. Only a `NotYet` after the native's own first write (step 8) is marked here, through
 //! `ow_world::pools::after_partial_writes`. The computation's lazy definition loads are writes of the store; they run
 //! inside the caller's init, after its writes, so the caller's mark covers them.
 //!
@@ -79,8 +82,15 @@ pub const SLOT_COUNT_RECORD: &str = "docs/verification/NATIVE_CARD_SLOT_COUNT.md
 pub const CACHE_WEAPON_CARD: &str = "WillowGame.WillowWeapon.CacheWeaponCard";
 
 /// The refusal texts (body note section 4, step 3; each names the native).
-pub const TIE: &str = "WillowWeapon.CacheWeaponCard: the card order of equal-priority entries";
-pub const DISPLAY: &str = "WillowWeapon.CacheWeaponCard: the presentation's displayed value";
+/// The record of the order and the displayed value (#532), and its typed refusals (its section 4, item 3; each text
+/// is the note's, with the class name before it as #521's are).
+pub const REST_RECORD: &str = "docs/verification/NATIVE_CARD_BODY_REST.md";
+pub const UNORDERED: &str = "WillowWeapon.CacheWeaponCard: an unordered card priority";
+pub const REMAP_CONTEXT: &str =
+    "WillowWeapon.CacheWeaponCard: the remap's default context (the first local player's controller, by fit)";
+pub const RANGE: &str = "WillowWeapon.CacheWeaponCard: a displayed value outside the integer range";
+pub const PRECISION: &str = "WillowWeapon.CacheWeaponCard: the display rounding's intermediate precision";
+pub const CUTOFF: &str = "WillowWeapon.CacheWeaponCard: a displayed value at the display cutoff";
 pub const VISIT: &str =
     "WillowWeapon.CacheWeaponCard: the card visit of a definition that is neither a weapon type nor a weapon part";
 
@@ -96,10 +106,15 @@ const GLOBALS_CLASS: &str = "WillowGame.WillowGlobals";
 const STATUS_PRESENTATION: &str = "WeaponStatusEffectAttributePresentationDefinition";
 const PRESENTATION: &str = "AttributePresentationDefinition";
 const ATTRIBUTE: &str = "AttributeDefinition";
+const REMAP_STRUCT: &str = "AttributePresentationValueRemappingData";
 const LISTS: [&str; 2] = ["WeaponAttributePresentationOverride", "DefaultAttributePresentation"];
 
 fn not_read(what: &'static str) -> VmError {
     NotYet::not_read(what, RECORD).into()
+}
+
+fn rest(what: &'static str) -> VmError {
+    NotYet::not_read(what, REST_RECORD).into()
 }
 
 // ---- the setup, the preflight and the card schema --------------------------------------------------------------
@@ -436,8 +451,30 @@ fn walk(vm: &Vm) -> Result<(), Walk> {
             ("bDisplayAsPercentage", Want::Bool),
             ("bUseOneAsBaseValueForPresentationIfContextFailsToResolve", Want::Bool),
             ("bUseTwoAsBaseValueForPresentationIfContextFailsToResolve", Want::Bool),
+            // The displayed form (NATIVE_CARD_BODY_REST.md section 3; its section 4 puts these shapes here).
+            ("bValueRemappingEnabled", Want::Bool),
+            ("bDisplayPercentAsFloat", Want::Bool),
+            ("bBiggerIsBetter", Want::Bool),
+            ("SignStyle", Want::Byte),
+            ("RoundingMode", Want::Byte),
+            ("FloatPrecision", Want::Int),
+            ("RemappingData", Want::Struct(REMAP_STRUCT)),
         ],
     )?;
+    if let (PropKind::Struct(remap), _) = declared(vm, presentation, "RemappingData")? {
+        let init = Want::Struct("AttributeInitializationData");
+        struct_fields(
+            vm,
+            remap,
+            &[
+                ("bUseContextOverride", Want::Bool),
+                ("InputValueMn", init),
+                ("InputValueMx", init),
+                ("OutputValueMn", init),
+                ("OutputValueMx", init),
+            ],
+        )?;
+    }
     // The weapon's card, its slots, its replicated values and its role.
     let stats = structs(vm, weapon, "WeaponCardModifierStats", "ModifierValuePresentationData")?;
     struct_fields(
@@ -741,22 +778,27 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
             add(vm, &mut entries, &maps, p, 0.0, false)?;
         }
     }
-    // 6. The order, the tie and the display refusals, on the appended entries only.
-    let mut appended: Vec<Entry> = entries.into_iter().filter(|e| e.priority >= THRESHOLD).collect();
-    appended.sort_by(|a, b| b.priority.total_cmp(&a.priority));
-    if appended.windows(2).any(|w| w[0].priority == w[1].priority) {
-        return Err(not_read(TIE));
+    // 6. The order (NATIVE_CARD_BODY_REST.md section 2): a NaN priority is refused over all entries, before the sort;
+    // the whole list is sorted in first-insertion order, and only then filtered (the note's example H).
+    if entries.iter().any(|e| e.priority.is_nan()) {
+        return Err(rest(UNORDERED));
     }
-    // In append order: the base value B (section 3.3, step 1), read for each entry so a refusal of its read passes
-    // through typed; then an entry with a record needs the display conversion. With no record V is 0 and the entry
-    // is displayed, so B is read and not used by what the port writes (review r1 of #521, item 5).
-    for e in &appended {
-        base_value(vm, weapon, e.presentation)?;
-        if e.record.is_some() {
-            return Err(not_read(DISPLAY));
-        }
+    sort_entries(&mut entries, |e| e.priority);
+    // 7. In append order: the base value B (body note section 3.3, step 1), read for each entry so a refusal of its
+    // read passes through typed (review r1 of #521, item 5); then V and `bShouldDisplay` (the rest note's section 3).
+    for e in entries.into_iter().filter(|e| e.priority >= THRESHOLD) {
+        let b = base_value(vm, weapon, e.presentation)?;
+        let (value, display) = match e.record {
+            None => (0.0, true),
+            Some(r) => {
+                let percent = flag(required(vm, e.presentation, "bDisplayAsPercentage", NATIVE)?, "bDisplayAsPercentage")?;
+                let v = value_of(r, b, percent);
+                let d = display_of(vm, e.presentation, percent)?;
+                (v, shows(&d, v)?)
+            }
+        };
+        stats.push(Stat { presentation: Some(e.presentation), constraint: None, value, display });
     }
-    stats.extend(appended.into_iter().map(|e| Stat { presentation: Some(e.presentation), constraint: None, value: 0.0, display: true }));
     let authority = super::slots::is_authority(vm, weapon, NATIVE)?;
     Ok(Some(Card { clear_slot_flags, stats, slot_entries, authority }))
 }
@@ -797,6 +839,225 @@ fn base_value(vm: &mut Vm, weapon: ObjRef, p: ObjRef) -> Result<f32, VmError> {
     } else {
         0.0
     })
+}
+
+// ---- the order and the displayed form (NATIVE_CARD_BODY_REST.md, #532; UNVERIFIED in the running game) ----------
+
+/// "a is lower than b" (the rest note's section 2.1).
+fn lower(a: f32, b: f32) -> bool {
+    a < b
+}
+
+/// The card's sort (the rest note's section 2.1): descending by `p` for ordered values, not stable. `p(a) < p(b)` is
+/// "a is lower than b". A range of 8 or fewer: repeatedly the first lowest entry goes to the range's last place, and
+/// the range shrinks by one from the right. A range of 9 or more: the entry at offset `count / 2` is the pivot, moved
+/// to the front; a left cursor stops at entries strictly lower than the pivot, a right cursor (from the end) at
+/// entries not lower, each pair exchanged until the cursors cross; the pivot goes where the right cursor stopped, and
+/// the entries before it and those from the left cursor's stop onward are each sorted by the same rules. The caller
+/// refuses a NaN first ([`UNORDERED`]), so every comparison here is ordered.
+pub fn sort_entries<T>(v: &mut [T], p: impl Fn(&T) -> f32 + Copy) {
+    let n = v.len();
+    if n <= 1 {
+        return;
+    }
+    if n <= 8 {
+        for last in (1..n).rev() {
+            let mut low = 0;
+            for i in 1..=last {
+                if lower(p(&v[i]), p(&v[low])) {
+                    low = i;
+                }
+            }
+            v.swap(low, last);
+        }
+        return;
+    }
+    v.swap(0, n / 2);
+    let pivot = p(&v[0]);
+    let (mut left, mut right) = (1, n - 1);
+    loop {
+        while left < n && !lower(p(&v[left]), pivot) {
+            left += 1;
+        }
+        while right > 0 && lower(p(&v[right]), pivot) {
+            right -= 1;
+        }
+        if left >= right {
+            break;
+        }
+        v.swap(left, right);
+    }
+    v.swap(0, right);
+    let (before, after) = v.split_at_mut(left);
+    sort_entries(&mut before[..right], p);
+    sort_entries(after, p);
+}
+
+/// The value V of an entry with record `r` and base value `b` (body note section 3.3, step 2), in single precision:
+/// ((scale + 1) / (1 − negative scale)) × (pre-add + B) + post-add − B, then divided by B for a percentage when
+/// |B| is at least 0.00000001.
+pub fn value_of(r: Record, b: f32, percent: bool) -> f32 {
+    let v = ((r.scale + 1.0) / (1.0 - r.negative_scale)) * (r.pre_add + b) + r.post_add - b;
+    if percent && b.abs() >= SIZE { v / b } else { v }
+}
+
+/// The smallest size that shows, and the zero snap's bound (the rest note's section 3).
+const SIZE: f32 = 0.000_000_01;
+
+/// What the displayed form reads from a presentation (the rest note's section 3). `remap` is the four evaluated
+/// remap values `a`, `b`, `c`, `d` when the remap applies (enabled, not a percentage), else `None`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Display {
+    pub percent: bool,
+    pub remap: Option<[f32; 4]>,
+    pub sign_style: u8,
+    pub bigger_is_better: bool,
+    pub rounding: u8,
+    pub precision: i32,
+    pub percent_as_float: bool,
+}
+
+fn byte_of(v: Value, name: &str) -> Result<u8, VmError> {
+    match v {
+        Value::Byte(b) => Ok(b),
+        other => Err(bad(NATIVE, format!("{name} holds {}, not a byte", other.kind_name()))),
+    }
+}
+
+fn int_of(v: Value, name: &str) -> Result<i32, VmError> {
+    match v {
+        Value::Int(i) => Ok(i),
+        other => Err(bad(NATIVE, format!("{name} holds {}, not an int", other.kind_name()))),
+    }
+}
+
+/// Presentation `p`'s display fields, the remap evaluated when it applies (the rest note's section 3, "The remap").
+/// The card passes no context object, so a remap without `bUseContextOverride` needs the engine's default source,
+/// which is not read: [`REMAP_CONTEXT`]. With the override, the source is the call's context, None, and the four
+/// fields are evaluated in the order `InputValueMn`, `InputValueMx`, `OutputValueMn`, `OutputValueMx`, each refusal of
+/// the attribute layer passed through.
+fn display_of(vm: &mut Vm, p: ObjRef, percent: bool) -> Result<Display, VmError> {
+    let get = |vm: &Vm, name: &str| required(vm, p, name, NATIVE);
+    let enabled = flag(get(vm, "bValueRemappingEnabled")?, "bValueRemappingEnabled")?;
+    let remap = if enabled && !percent {
+        let data = get(vm, "RemappingData")?;
+        if !flag(field(vm, &data, "bUseContextOverride")?, "bUseContextOverride")? {
+            return Err(rest(REMAP_CONTEXT));
+        }
+        let mut out = [0.0; 4];
+        for (slot, name) in out.iter_mut().zip(["InputValueMn", "InputValueMx", "OutputValueMn", "OutputValueMx"]) {
+            let init = ow_attr::eval::init_data(&vm.space, &field(vm, &data, name)?)?;
+            let sys = vm.attrs.clone();
+            *slot = sys.evaluate_init(&init, None, None, &mut ow_attr::api::EvalCx::new(vm))?;
+        }
+        Some(out)
+    } else {
+        None
+    };
+    Ok(Display {
+        percent,
+        remap,
+        sign_style: byte_of(get(vm, "SignStyle")?, "SignStyle")?,
+        bigger_is_better: flag(get(vm, "bBiggerIsBetter")?, "bBiggerIsBetter")?,
+        rounding: byte_of(get(vm, "RoundingMode")?, "RoundingMode")?,
+        precision: int_of(get(vm, "FloatPrecision")?, "FloatPrecision")?,
+        percent_as_float: flag(get(vm, "bDisplayPercentAsFloat")?, "bDisplayPercentAsFloat")?,
+    })
+}
+
+/// The remap of `v` by `a`, `b`, `c`, `d` (the rest note's section 3): computed in double, rounded to single; the
+/// comparisons are between single values, so with a NaN among the four the last form applies.
+pub fn remap(v: f32, [a, b, c, d]: [f32; 4]) -> f32 {
+    let (a64, b64, c64, d64) = (f64::from(a), f64::from(b), f64::from(c), f64::from(d));
+    let slope = if a < b { (d64 - c64) / (b64 - a64) } else { 0.0 };
+    if v < a {
+        c
+    } else if v < b {
+        ((f64::from(v) - a64) * slope + c64) as f32
+    } else {
+        ((b64 - a64) * slope + c64) as f32
+    }
+}
+
+/// 10 to the power 0 to 10, each exact in single precision.
+const POW10: [f64; 11] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10];
+
+/// The integer n of rounding modes 0 to 3 from `w` at precision `p` (the rest note's section 3, step 5): the doubled
+/// sum converted to the nearest integer (ties to even), halved toward minus infinity, and negated for mode 3. With
+/// `single`, every step is rounded to single precision (the product of mode 0, then the doubled sum). `None` when the
+/// converted value is NaN, infinite or outside the signed 32-bit range.
+fn rounded(mode: u8, w: f32, p: usize, single: bool) -> Option<i64> {
+    let sum = if single {
+        let x = if mode == 0 { POW10[p] as f32 * w } else { w };
+        f64::from(match mode {
+            0 | 1 => 2.0 * x + 0.5,
+            2 => 2.0 * x - 0.5,
+            _ => -0.5 - 2.0 * x,
+        })
+    } else {
+        let x = if mode == 0 { POW10[p] * f64::from(w) } else { f64::from(w) };
+        match mode {
+            0 | 1 => 2.0 * x + 0.5,
+            2 => 2.0 * x - 0.5,
+            _ => -0.5 - 2.0 * x,
+        }
+    };
+    let k = sum.round_ties_even();
+    if k.is_nan() || k < f64::from(i32::MIN) || k > f64::from(i32::MAX) {
+        return None;
+    }
+    let half = (k as i64).div_euclid(2);
+    Some(if mode == 3 { -half } else { half })
+}
+
+/// Whether value `v` shows under presentation `d` in the card's mode (the rest note's section 3, steps 1 to 6, and the
+/// typed refusals of its section 4, item 3). Reads only.
+pub fn shows(d: &Display, v: f32) -> Result<bool, VmError> {
+    // 1. The zero snap (a NaN fails the test and snaps too).
+    let zero = v.is_nan() || v.abs() < SIZE;
+    let mut w = if zero { 0.0 } else { v };
+    // 2. Scale or remap.
+    if d.percent {
+        if !zero {
+            w = (f64::from(w) * 100.0) as f32;
+        }
+    } else if let Some(r) = d.remap {
+        w = remap(w, r);
+    }
+    // 3. The sign.
+    let negate = match d.sign_style {
+        3 => false,
+        4 => true,
+        1 if w < 0.0 => true,
+        2 if w > 0.0 => true,
+        _ => !d.bigger_is_better,
+    };
+    if negate {
+        w = -w;
+    }
+    // 5. The rounding (4, the inverse, is not in the card's mode; 6, no minimum of 1, leaves n as it is).
+    let mode = if d.percent && d.rounding == 0 && !d.percent_as_float { 1 } else { d.rounding };
+    let p = usize::try_from(d.precision.clamp(0, 10)).unwrap_or(0);
+    if mode > 3 {
+        return Ok(w.abs() >= SIZE);
+    }
+    let n = rounded(mode, w, p, false).ok_or_else(|| rest(RANGE))?;
+    if rounded(mode, w, p, true).is_none_or(|single| (single == 0) != (n == 0)) {
+        return Err(rest(PRECISION));
+    }
+    if mode != 0 || p <= 7 {
+        return Ok(n != 0);
+    }
+    // Mode 0 at precision 8 or more: the size |n| / 10^P against 0.00000001, boundary t = 10^(P−8).
+    let t = POW10[p - 8] as i64;
+    let m = n.abs();
+    if m >= 2 * t {
+        Ok(true)
+    } else if 2 * m <= t {
+        Ok(false)
+    } else {
+        Err(rest(CUTOFF))
+    }
 }
 
 /// `ModifierValuePresentationData` values of `stats`, of the declared element struct `ty`.

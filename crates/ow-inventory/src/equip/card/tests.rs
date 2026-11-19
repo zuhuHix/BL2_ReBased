@@ -44,6 +44,10 @@ enum Schema {
     ReservedGearbox,
     /// The weapon type declares no `AttributeSlotMaxActivated`.
     NoSlotMax,
+    /// The presentation's `FloatPrecision` declared a float (lane IMPL-CARD-BODY-REST).
+    FloatPrecision,
+    /// The remap struct's `bUseContextOverride` declared a byte (lane IMPL-CARD-BODY-REST).
+    RemapOverride,
 }
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
@@ -123,6 +127,22 @@ impl Fx {
         ] {
             fields.push(decl(&mut s, b, PropKind::Bool));
         }
+        // The displayed form's fields (NATIVE_CARD_BODY_REST.md section 3), with the remap struct.
+        for b in ["bValueRemappingEnabled", "bDisplayPercentAsFloat", "bBiggerIsBetter"] {
+            fields.push(decl(&mut s, b, PropKind::Bool));
+        }
+        for b in ["SignStyle", "RoundingMode"] {
+            fields.push(decl(&mut s, b, PropKind::Byte { enum_: None }));
+        }
+        let precision = if schema == Schema::FloatPrecision { PropKind::Float } else { PropKind::Int };
+        fields.push(decl(&mut s, "FloatPrecision", precision));
+        let over = if schema == Schema::RemapOverride { PropKind::Byte { enum_: None } } else { PropKind::Bool };
+        let mut remap = vec![decl(&mut s, "bUseContextOverride", over)];
+        for f in ["InputValueMn", "InputValueMx", "OutputValueMn", "OutputValueMx"] {
+            remap.push(decl(&mut s, f, PropKind::Struct(aid)));
+        }
+        let remap = s.classes.define_struct("Test.AttributePresentationValueRemappingData", None, remap).unwrap();
+        fields.push(decl(&mut s, "RemappingData", PropKind::Struct(remap)));
         let pres = s.classes.define("WillowGame.AttributePresentationDefinition", Some(object), fields).unwrap();
         let dmg = s.classes.define("Engine.DamageTypeDefinition", Some(object), vec![]).unwrap();
         let fields = vec![decl(&mut s, "WeaponCardPresentations", arr(r(pres)))];
@@ -732,32 +752,114 @@ fn a_card_attribute_adds_its_increase_to_an_existing_entry_and_needs_a_record_fo
     assert_eq!(x.shown(), vec![Some(pa), Some(p2)], "pa at 1 + 5 before p2 at 2");
 }
 
+/// NATIVE_CARD_BODY_REST.md section 3 through the card (lane IMPL-CARD-BODY-REST): an appended entry with a record
+/// gets V and `bShouldDisplay` from the displayed form. The presentation's attribute has no resolver, so its base
+/// value is the no-context answer, 0, unless the "one" flag makes it 1. Defaults: no percentage, no remap, sign style
+/// 0 with `bBiggerIsBetter` clear (the card rule negates), `Float` rounding at precision 0.
 #[test]
-fn an_appended_entry_with_a_record_is_the_display_refusal() {
-    // A record from the first map (a card attribute), from the second (a custom presentation), and from a zero value
-    // (a record is made on first sight).
-    for case in 0..3 {
+fn an_appended_entry_with_a_record_gets_its_value_and_display() {
+    // (list, effect kind, constant, the "one" flag, expected V, expected display)
+    let cases = [
+        // pre-add 2, B 0: V = (1 / 1) × (2 + 0) + 0 − 0 = 2; W = −2, n = −2: shown.
+        ("WeaponAttributeEffects", 1, 2.0, false, 2.0, true),
+        // The second map, by a custom presentation: the same.
+        ("ExternalAttributeEffects", 1, 2.0, false, 2.0, true),
+        // A zero value makes the record only: V = 0, snapped, n = 0: hidden.
+        ("WeaponAttributeEffects", 1, 0.0, false, 0.0, false),
+        // Scale 0.25 with B 1: V = 1.25 × 1 − 1 = 0.25; W = −0.25, n = floor(0.25) = 0: hidden.
+        ("WeaponAttributeEffects", 0, 0.25, true, 0.25, false),
+        // Post-add 0.6 with B 1: V = 1 × 1 + 0.6 − 1 = 0.6 (single precision); W = −0.6, n = floor(−0.1) = −1: shown.
+        ("WeaponAttributeEffects", 2, 0.6, true, (1.0f32 + 0.6) - 1.0, true),
+    ];
+    for (case, (list, kind, c, one, value, display)) in cases.into_iter().enumerate() {
         let mut x = Fx::new();
         let a = x.attribute();
         let pa = x.pres(1.0, Some(a));
+        x.set(pa, "bUseOneAsBaseValueForPresentationIfContextFailsToResolve", Value::Bool(one));
         let gd = x.gd;
         x.list(gd, LISTS[1], &[Some(pa)]);
         let t = x.t;
-        let (list, value) = match case {
-            0 => ("WeaponAttributeEffects", 2.0),
-            1 => ("ExternalAttributeEffects", 2.0),
-            _ => ("WeaponAttributeEffects", 0.0),
-        };
-        let e = x.effect(a, 1, value);
+        let e = x.effect(a, kind, c);
         x.set(t, list, Value::array(vec![e]));
-        if case == 1 {
+        if list == "ExternalAttributeEffects" {
             x.set(t, "CustomPresentations", Fx::objs(&[Some(pa)]));
         } else {
             let row = x.priority_row(a, 0.5);
             x.set(t, "WeaponCardAttributes", Value::array(vec![row]));
         }
-        refused(x.run().unwrap_err(), DISPLAY);
-        x.untouched();
+        x.run().unwrap();
+        let got = x.stats();
+        assert_eq!(got.len(), 1, "case {case}");
+        assert_eq!((got[0].presentation, got[0].value, got[0].display), (Some(pa), value, display), "case {case}");
+    }
+}
+
+/// A percentage divides V by B (|B| at least 0.00000001) and scales the shown form by 100; with B 0 V is not divided.
+#[test]
+fn a_percentage_entry_divides_by_its_base_value() {
+    for (one, value) in [(true, 2.0), (false, 2.0)] {
+        let mut x = Fx::new();
+        let a = x.attribute();
+        let pa = x.pres(1.0, Some(a));
+        x.set(pa, "bDisplayAsPercentage", Value::Bool(true));
+        x.set(pa, "bUseOneAsBaseValueForPresentationIfContextFailsToResolve", Value::Bool(one));
+        let gd = x.gd;
+        x.list(gd, LISTS[1], &[Some(pa)]);
+        let t = x.t;
+        let e = x.effect(a, 2, 2.0);
+        x.set(t, "WeaponAttributeEffects", Value::array(vec![e]));
+        let row = x.priority_row(a, 0.5);
+        x.set(t, "WeaponCardAttributes", Value::array(vec![row]));
+        x.run().unwrap();
+        // B 1: V = (1 + 2 − 1) / 1 = 2; B 0: V = 0 + 2 − 0 = 2, not divided.
+        assert_eq!((x.stats()[0].value, x.stats()[0].display), (value, true), "one {one}");
+    }
+}
+
+/// The remap needs the engine's default source unless `bUseContextOverride` is set: refused, nothing written. With the
+/// override, the four fields are evaluated with no source and V is remapped before the sign and the rounding.
+#[test]
+fn the_remap_is_refused_without_the_override_and_applied_with_it() {
+    let setup = |override_: bool, out_max: f32| {
+        let mut x = Fx::new();
+        let a = x.attribute();
+        let pa = x.pres(1.0, Some(a));
+        x.set(pa, "bValueRemappingEnabled", Value::Bool(true));
+        x.set(pa, "SignStyle", Value::Byte(3));
+        x.set(pa, "RoundingMode", Value::Byte(1));
+        let aid = x.aid;
+        let init = |x: &mut Fx, c: f32| x.st(aid, vec![("BaseValueConstant", Value::Float(c)), ("BaseValueScaleConstant", Value::Float(1.0))]);
+        let ty = match &x.vm.space.classes.decl(x.vm.space.prop(x.vm.space.heap.get(pa).unwrap().class, "RemappingData").unwrap()).unwrap().kind {
+            PropKind::Struct(s) => *s,
+            k => panic!("{k:?}"),
+        };
+        let fields = vec![
+            ("bUseContextOverride", Value::Bool(override_)),
+            ("InputValueMn", init(&mut x, 0.0)),
+            ("InputValueMx", init(&mut x, 10.0)),
+            ("OutputValueMn", init(&mut x, 0.0)),
+            ("OutputValueMx", init(&mut x, out_max)),
+        ];
+        let data = x.st(ty, fields);
+        x.set(pa, "RemappingData", data);
+        let gd = x.gd;
+        x.list(gd, LISTS[1], &[Some(pa)]);
+        let t = x.t;
+        let e = x.effect(a, 1, 5.0);
+        x.set(t, "WeaponAttributeEffects", Value::array(vec![e]));
+        let row = x.priority_row(a, 0.5);
+        x.set(t, "WeaponCardAttributes", Value::array(vec![row]));
+        x
+    };
+    let mut x = setup(false, 1.0);
+    let n = not_yet(x.run().unwrap_err());
+    assert_eq!((&*n.what, n.missing, n.record), (REMAP_CONTEXT, Missing::NotRead, REST_RECORD));
+    x.untouched();
+    // V = 5 maps to 0.5 (0 to 10 onto 0 to 1): IntRound gives 1, shown; onto 0 to 0.8, 0.4 gives 0, hidden.
+    for (out_max, display) in [(1.0, true), (0.8, false)] {
+        let mut x = setup(true, out_max);
+        x.run().unwrap();
+        assert_eq!((x.stats()[0].value, x.stats()[0].display), (5.0, display), "onto 0 to {out_max}");
     }
 }
 
@@ -777,14 +879,144 @@ fn an_entry_with_a_record_below_the_threshold_is_left_out_without_a_refusal() {
     assert!(x.stats().is_empty());
 }
 
+/// The rest note's section 2.2 examples, by letter (first-insertion order) and priority: the sort over all entries,
+/// then the filter at 0.0001.
+fn sorted(input: &[(char, f32)]) -> (String, String) {
+    let mut v = input.to_vec();
+    sort_entries(&mut v, |e| e.1);
+    let all: String = v.iter().map(|e| e.0).collect();
+    let kept: String = v.iter().filter(|e| e.1 >= THRESHOLD).map(|e| e.0).collect();
+    (all, kept)
+}
+
+fn letters(priorities: &[f32]) -> Vec<(char, f32)> {
+    priorities.iter().enumerate().map(|(i, p)| (char::from(b'a' + u8::try_from(i).unwrap()), *p)).collect()
+}
+
 #[test]
-fn two_appended_entries_of_equal_priority_are_the_tie_refusal() {
+fn the_sort_gives_the_rest_notes_examples() {
+    let cases: [(&str, Vec<f32>, &str, &str); 7] = [
+        ("A", vec![2.0, 5.0, 2.0, 2.0, 5.0], "bedca", "bedca"),
+        ("B", vec![1.0, 0.0, 1.0, 0.00005, 1.0], "ecadb", "eca"),
+        ("C", vec![3.0, 1.0, 3.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0], "hcaedgjibf", "hcaedgjibf"),
+        ("D", vec![1.0, 0.0, 1.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0, 0.0, 1.0], "ieckahfdjbg", "ieckahf"),
+        ("H", vec![2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0], "icgaedhbf", "icgae"),
+        ("J", vec![1.0; 10], "bcdjaghief", "bcdjaghief"),
+        ("K", vec![0.0001, 0.0002, 0.0001, 0.00009], "bcad", "bca"),
+    ];
+    for (name, priorities, all, kept) in cases {
+        assert_eq!(sorted(&letters(&priorities)), (all.to_string(), kept.to_string()), "example {name}");
+    }
+    // H': filtering first orders the tie differently, which is why the card sorts the whole list.
+    let filtered: Vec<(char, f32)> = letters(&[2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0]).into_iter().filter(|e| e.1 >= THRESHOLD).collect();
+    assert_eq!(sorted(&filtered).0, "cegia");
+}
+
+/// Example H through the card: ties among the appended entries follow the sort over all entries, hidden ones included.
+#[test]
+fn the_card_sorts_every_entry_then_filters() {
     let mut x = Fx::new();
-    let (p, q) = (x.pres(2.0, None), x.pres(2.0, None));
+    let ps: Vec<ObjRef> = [2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0, 0.0, 2.0].iter().map(|b| x.pres(*b, None)).collect();
+    let t = x.t;
+    x.set(t, "CustomPresentations", Fx::objs(&ps.iter().map(|p| Some(*p)).collect::<Vec<_>>()));
+    x.run().unwrap();
+    let want: Vec<Option<ObjRef>> = [8, 2, 6, 0, 4].iter().map(|i| Some(ps[*i])).collect();
+    assert_eq!(x.shown(), want, "i c g a e");
+    assert!(x.stats().iter().all(|s| s.value == 0.0 && s.display));
+}
+
+/// A NaN priority anywhere in the list, hidden ones included, is the unordered refusal before any write.
+#[test]
+fn a_nan_priority_is_the_unordered_refusal() {
+    let mut x = Fx::new();
+    let (p, q) = (x.pres(2.0, None), x.pres(f32::NAN, None));
     let t = x.t;
     x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
-    refused(x.run().unwrap_err(), TIE);
+    let n = not_yet(x.run().unwrap_err());
+    assert_eq!((&*n.what, n.missing, n.record), (UNORDERED, Missing::NotRead, REST_RECORD));
     x.untouched();
+}
+
+// ---- The displayed form (NATIVE_CARD_BODY_REST.md section 3) ------------------------------------------------------
+
+fn form(sign_style: u8, rounding: u8) -> Display {
+    Display { percent: false, remap: None, sign_style, bigger_is_better: false, rounding, precision: 0, percent_as_float: false }
+}
+
+fn rest_refused(r: Result<bool, VmError>, what: &str) {
+    let n = not_yet(r.unwrap_err());
+    assert_eq!((&*n.what, n.missing, n.record), (what, Missing::NotRead, REST_RECORD));
+}
+
+#[test]
+fn the_sign_runs_before_the_rounding() {
+    // Sign style 3 leaves W: 0.2 shows under IntCeil and hides under IntFloor; −0.2 the other way.
+    assert!(shows(&form(3, 3), 0.2).unwrap());
+    assert!(!shows(&form(3, 2), 0.2).unwrap());
+    assert!(!shows(&form(3, 3), -0.2).unwrap());
+    assert!(shows(&form(3, 2), -0.2).unwrap());
+    // An exact half rounds up: 0.5 gives 1, −0.5 gives 0.
+    assert!(shows(&form(3, 1), 0.5).unwrap());
+    assert!(!shows(&form(3, 1), -0.5).unwrap());
+    // Style 4 negates; style 0 is the card rule (negate unless bigger is better).
+    assert!(!shows(&form(4, 3), 0.2).unwrap());
+    assert!(!shows(&form(0, 3), 0.2).unwrap());
+    assert!(shows(&Display { bigger_is_better: true, ..form(0, 3) }, 0.2).unwrap());
+    // Style 1 negates a negative value, else the card rule; style 2 negates a positive one, else the card rule.
+    assert!(shows(&form(1, 3), -0.2).unwrap());
+    assert!(!shows(&form(1, 3), 0.2).unwrap());
+    assert!(!shows(&form(2, 3), 0.2).unwrap());
+    assert!(shows(&form(2, 3), -0.2).unwrap(), "-0.2 is not positive: the card rule negates it to 0.2, IntCeil 1");
+}
+
+#[test]
+fn the_zero_snap_the_percentage_and_the_precision() {
+    // Below 0.00000001 V is 0, even under IntCeil after a negation; a NaN snaps too.
+    assert!(!shows(&form(4, 3), -0.000_000_005).unwrap());
+    assert!(!shows(&form(3, 3), f32::NAN).unwrap());
+    // A percentage with Float rounding and no "as float" is IntRound: 0.004 is 0.4, hidden.
+    let pct = Display { percent: true, ..form(3, 0) };
+    assert!(!shows(&pct, 0.004).unwrap());
+    // As a float at precision 1, 0.4 is n = 4: shown; at precision 0, n = 0: hidden.
+    assert!(shows(&Display { percent_as_float: true, precision: 1, ..pct }, 0.004).unwrap());
+    assert!(!shows(&Display { percent_as_float: true, ..pct }, 0.004).unwrap());
+    // The precision is clamped to 0 to 10: below 0 is 0, so 0.4 hides; 12 is 10.
+    assert!(!shows(&Display { precision: -3, ..form(3, 0) }, 0.4).unwrap());
+    assert!(shows(&Display { precision: 12, ..form(3, 0) }, 0.000_000_03).unwrap());
+    // An unknown mode tests W itself.
+    assert!(shows(&form(3, 7), 0.000_000_02).unwrap());
+    assert!(!shows(&form(3, 7), 0.0).unwrap());
+}
+
+#[test]
+fn the_remap_maps_below_inside_and_above_its_input_range() {
+    let r = [0.0, 10.0, 1.0, 3.0];
+    assert_eq!(remap(-1.0, r), 1.0, "below a: c");
+    assert_eq!(remap(5.0, r), 2.0, "inside: (5 − 0) × 0.2 + 1");
+    assert_eq!(remap(20.0, r), 3.0, "from b on: (b − a) × s + c");
+    // a not below b: the slope is 0, so from b on the value is c.
+    assert_eq!(remap(20.0, [10.0, 10.0, 1.0, 3.0]), 1.0);
+    // A NaN output bound makes a NaN, which the rounding refuses as outside the integer range.
+    let nan = Display { remap: Some([0.0, 10.0, 0.0, f32::NAN]), ..form(3, 1) };
+    rest_refused(shows(&nan, 5.0), RANGE);
+}
+
+#[test]
+fn the_rounding_refusals() {
+    // Outside the integer range.
+    rest_refused(shows(&form(3, 1), 2.0e9), RANGE);
+    // Single-precision steps that change whether n is 0 (the rest note's two examples).
+    let below_half = 0.499_999_97_f32;
+    assert_eq!(below_half.to_bits() + 1, 0.5f32.to_bits(), "0.5 − 2^-25, the single value just below 0.5");
+    rest_refused(shows(&form(3, 1), below_half), PRECISION);
+    rest_refused(shows(&form(3, 2), -1.2e-8), PRECISION);
+    // Mode 0 at precision 8 or more: |n| between half and twice 10^(P−8) is the cutoff refusal.
+    let p8 = Display { precision: 8, ..form(3, 0) };
+    rest_refused(shows(&p8, 0.000_000_01), CUTOFF);
+    assert!(shows(&p8, 0.000_000_03).unwrap(), "n = 3, at least twice 1");
+    let p10 = Display { precision: 10, ..form(3, 0) };
+    rest_refused(shows(&p10, 0.000_000_01), CUTOFF);
+    assert!(shows(&p10, 0.000_000_03).unwrap(), "n = 300, at least twice 100");
 }
 
 #[test]
@@ -884,7 +1116,13 @@ fn the_preflight_refuses_globals_of_another_class_and_an_unset_definition() {
 #[test]
 fn each_card_schema_failure_is_a_script_error_naming_the_field() {
     for (schema, field) in
-        [(Schema::IntBasePriority, "BasePriority"), (Schema::OtherStats, "WeaponCardModifierStats"), (Schema::PlainRole, "Role")]
+        [
+            (Schema::IntBasePriority, "BasePriority"),
+            (Schema::OtherStats, "WeaponCardModifierStats"),
+            (Schema::PlainRole, "Role"),
+            (Schema::FloatPrecision, "FloatPrecision"),
+            (Schema::RemapOverride, "bUseContextOverride"),
+        ]
     {
         let mut x = Fx::with(schema, ParityMode::Off);
         let m = script(preflight(&mut x.vm).unwrap_err());
@@ -959,14 +1197,14 @@ fn a_failure_after_a_load_of_the_computation_is_marked() {
     let e = marked_after_loads(&mut x.vm, |vm| -> Result<(), VmError> {
         let c = vm.space.classes.by_path("Test.Other").unwrap();
         vm.space.alloc(c, "Allocated", None, Origin::Runtime).unwrap();
-        Err(not_read(TIE))
+        Err(not_read(VISIT))
     })
     .unwrap_err();
     let n = not_yet(e);
     assert!(n.what.starts_with("stopped after partial writes: "), "{}", n.what);
     assert_eq!(n.what.matches("partial writes").count(), 1);
-    let e = marked_after_loads(&mut x.vm, |_| -> Result<(), VmError> { Err(not_read(TIE)) }).unwrap_err();
-    assert_eq!(not_yet(e).what, TIE);
+    let e = marked_after_loads(&mut x.vm, |_| -> Result<(), VmError> { Err(not_read(VISIT)) }).unwrap_err();
+    assert_eq!(not_yet(e).what, VISIT);
 }
 
 // ---- Review r2 of #521 -------------------------------------------------------------------------------------------
@@ -1025,27 +1263,27 @@ fn a_draw_then_a_refusal_through_the_binding_is_marked() {
     );
     let e = x.effect;
     let effect = x.st(e, vec![("AttributeToModify", Value::Object(Some(a))), ("ModifierType", Value::Byte(1)), ("BaseModifierValue", init)]);
-    let (p, q) = (x.pres(2.0, None), x.pres(2.0, None));
+    let (p, q) = (x.pres(2.0, None), x.pres(f32::NAN, None));
     let t = x.t;
     x.set(t, "WeaponAttributeEffects", Value::array(vec![effect]));
     x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
     let (writes, draws, loads) = (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
     let w = x.weapon;
     let n = not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err());
-    assert_eq!(n.what, format!("stopped after partial writes: {TIE}"));
+    assert_eq!(n.what, format!("stopped after partial writes: {UNORDERED}"));
     assert_eq!(n.missing, Missing::NotRead);
-    assert_eq!(n.record, RECORD);
+    assert_eq!(n.record, REST_RECORD);
     assert_eq!(x.vm.rng.draws(), draws + 1, "one variance draw");
     assert_eq!((x.vm.space.heap.committed_writes(), x.vm.defs.load_transitions()), (writes, loads), "no heap write, no load");
     x.untouched();
-    // Without the draw the same tie is unmarked.
+    // Without the draw the same refusal is unmarked.
     let mut x = Fx::new();
     let f = declared(&mut x);
-    let (p, q) = (x.pres(2.0, None), x.pres(2.0, None));
+    let (p, q) = (x.pres(2.0, None), x.pres(f32::NAN, None));
     let t = x.t;
     x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
     let w = x.weapon;
-    assert_eq!(not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err()).what, TIE);
+    assert_eq!(not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err()).what, UNORDERED);
 }
 
 /// Item 2: the preflight's globals check looks the declared holder class up without loading it: a reserved
