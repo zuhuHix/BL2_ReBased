@@ -54,6 +54,8 @@ use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 
 pub mod natives;
+/// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
+pub mod value;
 
 /// The records this module reads.
 pub const RECORD: &str = "NATIVE_ATTRIBUTES.md sections 7 and 9; NATIVE_INVENTORY_EQUIP.md (equip); script read 2026-11-16";

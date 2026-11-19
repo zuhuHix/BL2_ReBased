@@ -191,33 +191,39 @@ fn this(c: &NativeCall<'_>, native: &str) -> Result<ObjRef, VmError> {
 }
 
 fn compute_monetary_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = this(c, "ComputeMonetaryValue")?;
+    monetary_value_of(c.vm, me)
+}
+
+/// `ComputeMonetaryValue()`'s body on the inventory `me` (module documentation). `ComputeValueOfParts` ends with this
+/// same body (NATIVE_INVENTORY_VALUE.md section 3; `crate::equip::value`).
+pub fn monetary_value_of(vm: &mut Vm, me: ObjRef) -> Result<Value, VmError> {
     const NATIVE: &str = "ComputeMonetaryValue";
-    let me = this(c, NATIVE)?;
-    let data = definition_data(c.vm, me, NATIVE)?;
-    let Some(definition) = inventory_definition(c.vm, &data)? else {
+    let data = definition_data(vm, me, NATIVE)?;
+    let Some(definition) = inventory_definition(vm, &data)? else {
         return Ok(Value::Int(0));
     };
     // The definition is a package object: load it before reading its properties.
-    if c.vm.defs.is_unloaded(&c.vm.space, definition) {
-        let r = c.vm.defs.ensure_loaded(&mut c.vm.space, definition);
-        let log = c.vm.defs.take_log();
-        c.vm.log.extend(log);
+    if vm.defs.is_unloaded(&vm.space, definition) {
+        let r = vm.defs.ensure_loaded(&mut vm.space, definition);
+        let log = vm.defs.take_log();
+        vm.log.extend(log);
         r.map_err(VmError::Def)?;
     }
-    let raw = crate::equip::required(c.vm, definition, "MonetaryValue", NATIVE)?;
-    let init = ow_attr::eval::init_data(&c.vm.space, &raw)?;
+    let raw = crate::equip::required(vm, definition, "MonetaryValue", NATIVE)?;
+    let init = ow_attr::eval::init_data(&vm.space, &raw)?;
     if init.base_value_attribute.is_some() || init.initialization_definition.is_some() {
         return Err(not_read(
             "ComputeMonetaryValue of a MonetaryValue that reads an attribute or an initialization definition \
              (the context the evaluation is given; NATIVE_LOOT_SPAWN.md open question 2)",
         ));
     }
-    let sys = c.vm.attrs.clone();
+    let sys = vm.attrs.clone();
     let value = {
-        let mut cx = EvalCx::new(&mut *c.vm);
+        let mut cx = EvalCx::new(&mut *vm);
         sys.evaluate_init(&init, None, None, &mut cx)?
     };
-    let cap = currency_cap_of(c.vm, definition)?;
+    let cap = currency_cap_of(vm, definition)?;
     monetary_value(value, cap).map(Value::Int).map_err(not_read)
 }
 
