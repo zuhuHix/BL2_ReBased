@@ -59,11 +59,16 @@ the mission); the caller ignores it.
 3. **The playthrough entry:** the controller's current-playthrough virtual (the same virtual
    NATIVE_PLAYTHROUGH_QUERY.md settles) gives an index into the table **by position**. `PlayThroughNumber` is not
    compared. An index not below the table's length gives false. A negative index trips the engine's array check (not
-   a case the virtual produces).
+   a case the virtual produces). **This is not the clamped lookup** of NATIVE_PROGRESSION.md, "Region game stage"
+   (step 3, "clamped to the table"): past the end this native answers false and searches nothing, so an implementer
+   must not reuse that clamp here (review r1 of #559).
 4. **The search**, in array order: every `BalanceDefinitions` entry of that playthrough entry (read with no None
    test), every `BalanceByRegion` entry of it, and every `MissionOverrides` entry of that. An override whose
    `Mission` is the completed mission (object identity) makes the result true and resets that entry's `Region`
-   (step 5). The search does not stop at the first match.
+   (step 5) at once, before the search goes on. The search does not stop at the first match. **One reset runs per
+   matching override, in search order, duplicates included:** two overrides naming the mission for the same region
+   reset that region twice (each reset removes at most one record). Nothing collects or de-duplicates the regions
+   (review r1 of #559).
 5. **The reset of a region** (the same routine as `WillowPlayerController.ResetGameStageForRegion`): walk
    `RegionGameStages` in order. The first record whose `RegionDef` is that region **and** whose `PlaythroughIdx` is
    the current playthrough (the virtual again) is removed from the array, and the reset stops. A record of that
@@ -103,10 +108,15 @@ its stub policy. Every rule below is **UNVERIFIED**.
    - **a `GameBalanceDefinition` handle the store has not loaded** is `NotYet { LayerAbsent }`,
      "RefreshBalanceDataFromMissionCompletion: the region balance definition <path>", layer "the definition store's
      load of a region balance definition (the native loads nothing)". See the note for the hub below;
-   - the overrides' `Mission` and `Region` are compared and collected by identity, without loading them.
-6. **The plan:** for each collected region, in order, the index of the `RegionGameStages` record it removes. Plan them
-   one after another against the array as the earlier removals leave it. A record that is not the
-   `RegionGameStageData` shape is `VmError::Script`.
+   - an override's `Mission` is compared with the completed mission by **object identity: the `ObjRef` itself**. The
+     port's store gives one object per export and loads it in place, so an unloaded handle that refers to the
+     completed mission is the same `ObjRef` as the loaded mission. The handle is **never resolved or loaded** for the
+     comparison: `ensure_loaded`, `find` or a read of its properties would load it, which is a write. (The store's
+     object path of the export, `ow_defs::identity::full_path`, names the same identity and serves for messages.) The
+     override's `Region` is taken the same way, as an `ObjRef`, without loading it.
+6. **The plan:** one reset per matching override, in search order, duplicates included (section 3, step 4): for each,
+   the index of the `RegionGameStages` record it removes, if any. Plan them one after another against the array as
+   the earlier removals leave it. A record that is not the `RegionGameStageData` shape is `VmError::Script`.
 
 **The writes:** `RegionGameStages` with the planned records removed, one array write. Answer true when any override
 matched, else false. No refusal comes after the write.
@@ -114,14 +124,15 @@ matched, else false. No refusal comes after the write.
 **The counter rule:** the native's own refusals all come from the preflight, so they are unmarked. Its caller,
 `UpdateMissionStatus`, wrote the entry's status first, so the caller layer marks them.
 
-**For the hub: the balance definitions' residency.** On the installed data the four first-playthrough
-`GameBalanceDefinition`s are references from the globals definition. Whether the port's store has loaded them when
-the turn-in runs depends on what loaded the globals definition and its references. If they are unloaded handles, the
-answer above refuses `LayerAbsent` on link 12 even though the answer would be false. The alternatives:
-- a harness preload of the globals definition's `RegionBalanceData` definitions (like #546's globals preload);
-- a ruling that this native's walk may load them as a counted write (the game has them resident).
+**The balance definitions' residency, and the hub's ruling.** On the installed data the four first-playthrough
+`GameBalanceDefinition`s are references from the globals definition. A second local probe on the same stack
+(section 6) read them at the turn-in: **all four (`Balance_P1_Zone1`, `Balance_P1_Zone1_Interlude`,
+`Balance_P1_Zone2`, `Balance_P1_Zone3`) are unloaded store handles** when this native is reached. So, without
+help, the answer above refuses `LayerAbsent` on link 12, even though the result would be false.
 
-The ruling decides.
+**Hub ruling (review r1 of #559):** the native keeps the `LayerAbsent` refusal while any of them is an unloaded
+handle. The slice harness loads them as a harness input before the turn-in, as #541 and #546 describe the globals
+preload. That load is the harness's, not the native's.
 
 ## 6. Link 12 after it (a local probe)
 
@@ -131,13 +142,15 @@ section 4).
 - Installed Off strict, under the lock: 4 ok / 1 NotYet / 9 errors.
 - **Link 12 is ok, 6 of 6 driver steps:** `use`, `turnin`, `tick:0.1`, `tick:1`, `confirmreward`, `close`. On that
   stack this native is link 12's last stop.
-- The probe's binding did not load the balance definitions. So the hub's call in section 5 decides whether the real
-  answer reaches the same result.
+- The probe's binding did not load the balance definitions. A second probe, on the same stack with a binding that
+  only reported their state, found all four `Balance_P1_*` handles **unloaded** at the turn-in. Under the hub's
+  ruling (section 5) the harness preloads them, and the native's real answer is then the same false with no write.
 
 ## Open questions
 
-1. **UNVERIFIED:** whether the port's store holds the globals definition's balance definitions loaded at the turn-in
-   (section 5, "For the hub").
+1. **Settled for the port:** the four first-playthrough balance definitions are unloaded handles at the turn-in
+   (section 6, the second probe). Per the hub's ruling the slice harness preloads them; the native refuses
+   `LayerAbsent` while any is unloaded.
 2. **UNVERIFIED:** overrides of the current-playthrough virtual in subclasses of `WillowPlayerController` (as in
    NATIVE_PLAYTHROUGH_QUERY.md).
 3. **UNVERIFIED:** a None `Region` in a matching override resets the first record with a None `RegionDef` for that

@@ -18,6 +18,12 @@ stays **UNVERIFIED**. The decision number is a placeholder.
   - the result is true when any override matched, and the caller ignores it.
 - **The slice:** the Fire mission is named by none of the first playthrough's 78 overrides, so the native answers
   false and writes nothing.
-- **Proposed Off answer:** a write-free preflight and one array write. **A hub call:** whether the balance
-  definitions may be loaded (a harness preload, or a counted load) or refused `LayerAbsent` when unloaded.
+- **Proposed Off answer:** a write-free preflight and one array write.
+- **Review r1 of #559:**
+  - one reset runs per matching override, in search order, duplicates included;
+  - past the table's end the native answers false (not the clamped region lookup);
+  - an override's `Mission` is compared by `ObjRef` identity without loading it;
+  - a second probe found the four `Balance_P1_*` handles unloaded at the turn-in;
+  - **hub ruling:** the native keeps the `LayerAbsent` refusal while any is unloaded, and the slice harness preloads
+    them as a harness input (as #541 and #546 do for the globals).
 - **The probe** (local, uncommitted, on #554's stack with a no-op binding): link 12 ok, 6 of 6 driver steps.
