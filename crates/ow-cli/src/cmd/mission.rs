@@ -149,6 +149,8 @@ fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Fa
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode);
     ow_vm::natives_core::register(&mut vm).map_err(|e| error_text(&e))?;
     BehaviorPack.register(&mut vm).map_err(BehaviorError::from)?;
+    // The AI component's event broadcast, Off only (lane FIX-ACTIVATE-EVENT, decision 2026-11-19-42).
+    ow_ai::awareness::actions::register_activate_event(&mut vm).map_err(|e| error_text(&e))?;
     Ok(vm)
 }
 

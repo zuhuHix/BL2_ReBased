@@ -756,6 +756,7 @@ impl NativePack for Pack {
     fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
         brains(vm)?;
         bind(vm, FINISH, Rc::new(n_finish))?;
+        register_activate_event(vm)?;
         bind(vm, TRIGGER_BEHAVIOR, Rc::new(n_trigger_behavior))?;
         // The Willow component's own Hold, Release and OnHold (other native keys): in Off `NotYet { NotRead }`, because
         // the note's second reading (NATIVE_AI_HOLDS.md, read 2026-11-19; decision 2026-11-19-43) found that
@@ -968,6 +969,80 @@ fn n_range_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn this(c: &NativeCall<'_>) -> Result<ObjRef, VmError> {
     c.this.ok_or_else(|| error("an action native called without an object".to_string()))
+}
+
+/// `AIComponent.ActivateEvent(EventName)`, the AI component's event broadcast (lane FIX-ACTIVATE-EVENT, decision
+/// 2026-11-19-42). Implemented from `docs/verification/NATIVE_SLICE_OFF_STOPS.md` alone (clean room: the analyst was
+/// lane FIX-SLICE-OFF-1); every rule is **UNVERIFIED** in the running game. `ParityMode::Off` only
+/// ([`register_activate_event`]); under Reference the key stays unbound, so the slice's C++ stub serves it.
+pub const ACTIVATE_EVENT: &str = "GearboxFramework.AIComponent.ActivateEvent";
+
+/// The analyst note of [`ACTIVATE_EVENT`].
+pub const RECORD_SLICE_STOPS: &str = "docs/verification/NATIVE_SLICE_OFF_STOPS.md";
+
+/// The note's rule, in order:
+/// - the component's `AI` interface or its `AIDef` unset: nothing happens, the answer is false;
+/// - a running node (`CurrentState` set, or this mind's brain running a node): the running action gets the event
+///   first through a routine the note did not open, so that is `NotYet { NotRead }` with nothing delivered;
+/// - otherwise every `AIDef.NodeList` node whose `Action` is set gets the script event `ActivateEvent(EventName)`, in
+///   list order (the objects in the definition's list, as the note reads; whether the game's list holds per-AI copies
+///   is the note's open question and does not change which objects this reads);
+/// - the answer is always false.
+///
+/// A component or node class that does not declare the fields read is bad data, never a default.
+fn n_activate_event(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = this(c)?;
+    let name = c.arg(0)?.clone();
+    let vm = &mut *c.vm;
+    let unit = "AIComponent.ActivateEvent";
+    let required = |vm: &mut Vm, o: ObjRef, f: &str| -> Result<Value, VmError> {
+        get(vm, o, f)?.ok_or_else(|| {
+            error(format!("{unit}: {} declares no {f}", ow_combat::hit::access::class_name(vm, o)))
+        })
+    };
+    let ai = match required(vm, me, "AI")? {
+        Value::Interface(o) | Value::Object(o) => o,
+        other => return Err(error(format!("{unit}: AI holds {}, not an interface", other.kind_name()))),
+    };
+    let definition = match required(vm, me, "AIDef")? {
+        Value::Object(o) => o,
+        other => return Err(error(format!("{unit}: AIDef holds {}, not an object", other.kind_name()))),
+    };
+    let (Some(ai), Some(definition)) = (ai, definition) else {
+        return Ok(Value::Bool(false));
+    };
+    // The running node: the component's own pointer, or the brain part 2 keeps for this mind.
+    let state = required(vm, me, "CurrentState")?;
+    let pointer_set = field(vm, &state, "Dummy").is_some_and(|v| number(&v) != 0.0);
+    let brain_running = brain(vm, ai).is_some_and(|b| b.tree.current.is_some());
+    if pointer_set || brain_running {
+        return Err(NotYet::not_read(
+            "AIComponent.ActivateEvent with a running node: the running action's first delivery (the note's \
+             \"What the running action's first delivery in ActivateEvent does beyond the event\")",
+            RECORD_SLICE_STOPS,
+        )
+        .into());
+    }
+    for node in array(vm, definition, "NodeList")? {
+        let action = match field(vm, &node, "Action") {
+            Some(Value::Object(o)) => o,
+            Some(other) => return Err(error(format!("{unit}: a node's Action holds {}", other.kind_name()))),
+            None => return Err(error(format!("{unit}: the AIDef's nodes declare no Action"))),
+        };
+        if let Some(action) = action {
+            event(vm, action, "ActivateEvent", vec![name.clone()])?;
+        }
+    }
+    Ok(Value::Bool(false))
+}
+
+/// Binds [`ACTIVATE_EVENT`] in `ParityMode::Off` (nothing under Reference). A key another pack bound first keeps its
+/// binding. Worlds that do not register [`Pack`] (the mission and slice runs) call this directly.
+pub fn register_activate_event(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    bind(vm, ACTIVATE_EVENT, Rc::new(n_activate_event))
 }
 
 fn arg_name(c: &NativeCall<'_>, i: usize) -> Result<Option<ow_object::ids::NameId>, VmError> {
