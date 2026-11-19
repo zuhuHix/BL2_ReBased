@@ -1,4 +1,4 @@
-# Native rules of WillowWeapon.AttachMeshToPickup, part 1 (draft, 2026-11-19)
+# Native rules of WillowWeapon.AttachMeshToPickup and the rest of the pickup's make step (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-ATTACH-MESH-TO-PICKUP (decision 2026-11-19-117, number to be
 given by the hub).
@@ -21,8 +21,10 @@ listing structure. Field names come from the cooked packages. **Every rule here 
 expects slice links 6 and 7 to stop next in their `make` step at the unbound `SkeletalMeshComponent.SetForceRefPose`,
 inside `WillowWeapon.AttachMeshToPickup`.
 
-**Scope.** This is part 1, as the hub allowed: the natives from `SetForceRefPose` through `Actor.AttachComponent`.
-Part 2 (section 6) lists what the rest of the `make` step reaches and was not written up here.
+**Scope.** Two parts, as the hub allowed:
+- part 1 (sections 1 to 5, #505) covers the natives from `SetForceRefPose` through `Actor.AttachComponent`;
+- part 2 (section 6) covers the rest of the `make` step: `SetLightEnvironment`, `InitializePickupForRBPhysics` and
+  `SpawnPickupParticles`, with where links 6 and 7 stop once the hub's scene-layer ruling on section 5 is in.
 
 ## Summary
 
@@ -33,6 +35,9 @@ Part 2 (section 6) lists what the rest of the `make` step reaches and was not wr
 | `PrimitiveComponent.SetOwnerNoSee(bool)` | the same for the owner-no-see flag | `bOwnerNoSee` (UNVERIFIED (fitted)), `bNeedsReattach` | medium | the rule of 3.2 |
 | `SkeletalMeshComponent.HideBoneByName(name,byte)` | looks the bone up in the component's skeletal mesh; on a match, hides it | none when there is no mesh or no match | medium | nothing with no mesh or a None name; otherwise `NotRead` (3.3) |
 | `Actor.AttachComponent(object)` | attaches the component to the world's scene with this actor as its owner, then lists it in `Components` | the component's owner and flags, `Components`, the scene | medium (outline) | with the slice world's empty scene layer: the flag clears, `Owner`, the `Components` append (hub ruling, 3.4); without it `NotYet`, kind `LayerAbsent` |
+| `PrimitiveComponent.SetLightEnvironment(object)` | when the environment changes: stores it, keeping the old one and reattaching only while attached | `LightEnvironment`, while attached `PreviousLightEnvironment` and `bNeedsReattach` | medium | the rule of 6.2 |
+| `WillowPickup.InitializePickupForRBPhysics()` | with `bUseRBPhysics`, sets the pickup up as a rigid body (outline) | the pickup's rotation rate, torque flags and physics; its mesh's physics | medium (outline) | nothing without `bUseRBPhysics`; otherwise `NotYet`, kind `LayerAbsent` (6.3) |
+| `WillowPickup.SpawnPickupParticles()` | makes, attaches and starts the pickup's particle component (outline) | `PickupParticleComponent`, the new component | medium (outline) | `NotYet`, kind `NotRead` or `LayerAbsent` (6.4) |
 
 Each answer is **Off only; Reference keeps the stub policy** (the C++ binds none of them, and `Actor.AttachComponent`
 is already a Reference stub in `crates/ow-cli/src/cmd/slice.rs`).
@@ -282,25 +287,139 @@ with the scene layer"). The question as it was put to the hub is kept below as t
 
     The next stop would then be the `make` step's next unbound native (section 6).
 
-## 6. Part 2 (not written up here): what the rest of the `make` step reaches
+## 6. Part 2: the rest of the `make` step
 
-After `AttachMeshToPickup` returns, `InventoryAssociated` and `InitializeFromInventory` go on. Part 2 reads these:
-- `PrimitiveComponent.SetLightEnvironment(LightEnvironmentComponent)` on the new mesh, with the pickup's
-  `DynamicLightEnvironment`. It is a class-table entry, not resolved yet;
-- `WillowPickup.InitializePickupForRBPhysics()`, native: the pickup's physics set-up, and a larger body;
-- `WillowInventory.PickupAssociated(Pickup)`: script with an empty body (`WillowWeapon` does not override it);
-- `SetPickupability(true)`, script:
-  - `bPickupable` = true;
-  - `RegisterMissionDirector`, which for a weapon reaches only the bound `GetInventoryDefinition`;
-  - `SetMissionMaterialParameter`, nothing for a non-mission item;
-  - `TryToSetInteractParticles(true)`. When `PickupParticles` is None, it reaches `SetInteractParticles` with the
-    globals definition's `PartPickup`, then the native `WillowPickup.SpawnPickupParticles()`. That is a class-table
-    entry of the pickup, already resolved but not yet read;
-- the harness's `GotoState('Pickup')`: `Object.GotoState` is bound, and `WillowPickup`'s `Pickup.BeginState` is an
-  empty body that does not call `DroppedPickup`'s.
+### 6.1 The script order after `AttachMeshToPickup`
 
-`DroppedPickup.AddToNavigation` is already bound (NATIVE_PICKUP.md). It is not on this route as decoded: it belongs to
-`DroppedPickup`'s `Pickup.BeginState`, which `WillowPickup` replaces.
+`WillowPickup.InventoryAssociated` goes on:
+1. it takes the pickup's `CollisionComponent` as a `MeshComponent`: the new skeletal mesh, which
+   `AttachMeshToPickup` set. It calls `SetLightEnvironment(DynamicLightEnvironment)` on it, with the pickup's own
+   light environment. In `WillowPickup`'s class defaults this is the default subobject `MyLightEnvironment`;
+2. `InitializePickupForRBPhysics()`, native;
+3. the inventory's `PickupAssociated(Self)`, script with an empty body (`WillowWeapon` does not override
+   `WillowInventory`'s).
+
+`InitializeFromInventory` then calls `SetPickupability(true)`, script:
+- `bPickupable` becomes true;
+- `RegisterMissionDirector`: for a weapon it reaches only the bound `GetInventoryDefinition`, and its cast to a
+  mission item definition fails;
+- `SetMissionMaterialParameter`: nothing for a non-mission item;
+- `TryToSetInteractParticles(true)`. For a pickup that is not a mission director, when `PickupParticles` is None
+  (the class default), it calls `SetInteractParticles` with the globals definition's `PartPickup`. That sets
+  `PickupParticles` and `bNetDirty`, then calls the native `SpawnPickupParticles()`.
+
+Then the harness's `GotoState('Pickup')`. `Object.GotoState` is bound, and `WillowPickup`'s `Pickup.BeginState` is
+an empty body that does not call `DroppedPickup`'s. `DroppedPickup.AddToNavigation` (bound, NATIVE_PICKUP.md) belongs
+to `DroppedPickup`'s `BeginState`, so it is not on this route as decoded.
+
+### 6.2 `PrimitiveComponent.SetLightEnvironment(LightEnvironmentComponent NewLightEnvironment)`
+
+It hands to a class-table entry. `SkeletalMeshComponent`'s table and `PrimitiveComponent`'s hold the same entry, so it
+is not overridden. The entry:
+1. when the argument is the current `LightEnvironment`, does nothing;
+2. otherwise, while the component is attached (`bAttached`), copies the current `LightEnvironment` into
+   `PreviousLightEnvironment`;
+3. stores the argument in `LightEnvironment`;
+4. while attached, runs the deferred reattach (2).
+
+**The fields.** `bAttached` sits where the layout tool places it in `ActorComponent`. `LightEnvironment` and
+`PreviousLightEnvironment` sit in `PrimitiveComponent` shifted from the tool's placement by the same amount as the
+bool word of 3.2. That consistent shift in a second, independent field group supports the identities of 3.2 as well,
+though both stay **UNVERIFIED (fitted)**.
+
+**Off answer:**
+1. The argument equals `LightEnvironment`: return, no write.
+2. Not attached (`bAttached` false): write `LightEnvironment`, nothing else. This is the native's own rule.
+3. Attached: preflight the deferred reattach (2) before any write. Then `PreviousLightEnvironment`, then
+   `LightEnvironment`, then `bNeedsReattach` = true.
+
+On the slice, under the hub's scene layer, `AttachComponent` leaves `bAttached` as it was (false). So the answer is
+case 2: one write, `LightEnvironment` = the pickup's `MyLightEnvironment`. Had a scene layer set `bAttached`, case 3
+would refuse, because `AttachComponent` set the component's `Owner` to the pickup.
+
+### 6.3 `WillowPickup.InitializePickupForRBPhysics()` (outline)
+
+The whole body runs only when the pickup's `bUseRBPhysics` (declared by `DroppedPickup`) is set. Without it the native
+does nothing. In `WillowPickup`'s class defaults, `bUseRBPhysics` is **true**, so the slice's pickup takes the body.
+With it, in outline:
+1. one of the pickup's class-table entries is called (not read), and its `RotationRate` is set to an engine constant
+   (by fit, zero);
+2. the pickup's primitive component (by fit, its `CollisionComponent`) is taken. With one, the native:
+   - reads the globals definition;
+   - sets three floats of the component to 1.0;
+   - raises a flag of the component, with a deferred reattach when it was not raised yet, and clears another;
+   - sets up the rigid body from the inventory's definition, or calls another of the pickup's entries when the
+     inventory has none;
+   - copies three pickup fields from the globals definition (not identified);
+   - sets the component's collision channels (about ten calls) and two more of its entries;
+3. another of the pickup's entries is called, by its place in the sequence the physics mode change (not read);
+4. with a component:
+   - when `bTorque` is clear, a spin from the globals definition is applied;
+   - otherwise the pickup's `Torque` is applied, and `bTorque` is cleared when `bTorqueTemporary` is set;
+5. a timer of 0.3 s is set on the pickup, under a name that was not identified.
+
+The layout tool places `bUseRBPhysics`, `Inventory`, `RotationRate`, `Torque`, `bTorque` and `bTorqueTemporary`
+exactly where the native reads them.
+
+**Off answer:**
+1. `bUseRBPhysics` false: return, no write. This is the native's own rule.
+2. Otherwise, before any write, `NotYet::layer_absent(what, layer, record)` with:
+   - `what`: "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up";
+   - `layer`: "a rigid-body physics layer (the port has none)";
+   - `record`: `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`.
+
+The body is almost entirely rigid-body physics: the body set-up, the collision channels, the spin and the torque.
+The few script-visible writes in it (`RotationRate`, `bTorque`, the timer) are interleaved with that work. So no
+part of it is offered as a port answer. The `make` step adds the "stopped after partial writes: " prefix.
+
+### 6.4 `WillowPickup.SpawnPickupParticles()` (outline; not reached on the slice in default Off)
+
+It hands to a class-table entry of `WillowPickup`, resolved with the constructor-to-table method. The entry:
+1. **No particle system:** when `PickupParticles` is None, it calls another of the pickup's entries (by its purpose,
+   the particles' removal; not read) and returns.
+2. **The component:** when `PickupParticleComponent` is None, it makes a new `ParticleSystemComponent` with the pickup
+   as its outer. It stores it in `PickupParticleComponent`, sets the component's translation to an offset the
+   pickup computes (not read), and attaches it with `Actor.AttachComponent` (3.4). When the component is still None,
+   it returns.
+3. **The template:**
+   - normally `PickupParticles`;
+   - when the globals definition is reachable and the pickup's cost currency is of one particular kind (by fit; the
+     kind was not mapped to a name), it uses the particle system of the item set
+     `GD_AnemonePackageDef.ItemSetDef_Anemone` instead, when that set has one. The set is found by name and loaded
+     on first use;
+   - it hands the template to the component (a native, not read).
+4. **Flags and colour:**
+   - three flags of the component are changed;
+   - a vector of the component is set to an engine constant;
+   - a colour is chosen: a default; a rarity colour from the globals definition when there is one; an override from
+     the inventory's definition when that has one. It is set on the component as a named colour parameter;
+5. **Show and start:** the component's `SetHidden(false)` entry (3.2), then a start call (by its purpose, the
+   activation; not read).
+
+The layout tool places `PickupParticleComponent` and `PickupParticles` exactly where the native reads them.
+
+**Off answer:**
+1. `PickupParticles` None: `NotYet { NotRead }`, "WillowPickup.SpawnPickupParticles with no particle system: the
+   particles' removal", record this note, before any write.
+2. Otherwise, before any write, `NotYet::layer_absent(what, layer, record)` with:
+   - `what`: "WillowPickup.SpawnPickupParticles: the pickup's particle effect";
+   - `layer`: "a particle-effects layer (the port has none)";
+   - `record`: this note.
+
+   The native makes a component, attaches it, and hands it a template, a colour and a start. None of that is
+   script-visible state the slice reads, apart from `PickupParticleComponent`. A port answer like 3.4's would be for
+   the hub. Section 6.5 shows the slice does not reach this native in default Off.
+
+### 6.5 Where links 6 and 7 stop
+
+With #492's "nothing" and the hub's scene layer for `AttachComponent` (section 5):
+1. `AttachMeshToPickup` completes (3.1 to 3.4 under the scene layer);
+2. `SetLightEnvironment` makes one write (6.2, case 2);
+3. **`WillowPickup.InitializePickupForRBPhysics` answers `NotYet { LayerAbsent }`** (6.3), because the pickup's
+   class default `bUseRBPhysics` is true. The `make` step prefixes it with "stopped after partial writes: ".
+
+So links 6 and 7 stop at `InitializePickupForRBPhysics`. `SetPickupability` and `SpawnPickupParticles` are not reached.
+Link 7 stops on its first gun, before the decoy is made.
 
 ## Open questions
 
@@ -316,6 +435,10 @@ After `AttachMeshToPickup` returns, `InventoryAssociated` and `InitializeFromInv
 4. `HideBoneByName`'s rebuild, transform mask and physics body options.
 5. `Actor.AttachComponent`: the component's own attach entry (render, collision, physics), whether it sets
    `bAttached`, the extra value for orthonormalized lighting, and the engine-wide notifier.
+6. `InitializePickupForRBPhysics`: the entries it calls, the three fields copied from the globals definition, and
+   the timer's name.
+7. `SpawnPickupParticles`: the removal entry, the particle offset, the template hand-over and activation, the three
+   flags, and which currency kind selects the item set's particle system.
 
 ## Live checks that would settle these rules (bl-sdk, the RTSE way; none run, no session granted)
 
@@ -327,5 +450,9 @@ After `AttachMeshToPickup` returns, `InventoryAssociated` and `InitializeFromInv
    On the pickup, record the length of `Components` before and after `AttachComponent`.
 2. **A hidden bone.** Drop a weapon whose type definition names a `BoneToHideOnMesh`, and read that bone's
    `BoneVisibilityStates` entry afterwards (expect `BVS_ExplicitlyHidden`).
-3. **No duplicate check.** Call `AttachComponent` twice with the same component on a test actor in a scratch session,
+3. **The physics set-up.** Hook `WillowPickup.InitializePickupForRBPhysics` on a drop, and record before and
+   after: `bUseRBPhysics`, `Physics`, `RotationRate`, `bTorque` and the pickup's timers.
+4. **The particles.** After a drop, read `PickupParticles`, `PickupParticleComponent` and its `Template`, and whether
+   the component is in the pickup's `Components`.
+5. **No duplicate check.** Call `AttachComponent` twice with the same component on a test actor in a scratch session,
    and read `Components` (expect the component twice, if the rule holds).
