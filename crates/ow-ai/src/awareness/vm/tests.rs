@@ -140,6 +140,7 @@ pub(crate) fn env_with(mode: ParityMode, extra: &[(&str, Vec<u8>)]) -> Env {
         ("NumAICurrentlyTargeting", PropKind::Int),
         ("CylinderComponent", o.clone()),
         ("DrivenVehicle", o.clone()),
+        ("Mesh", o.clone()),
     ]);
     let cylinder = class(&mut vm, "Toy.ToyCylinder", object, &[("CollisionRadius", PropKind::Float)]);
     let allegiance = class(&mut vm, "Toy.ToyAllegiance", object, &[

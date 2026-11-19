@@ -1454,8 +1454,14 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
 /// The object a hold behavior (the installed `Behavior_AIHold` script) is applied to for `context`: the live game
 /// applies it to the pawn, and the script asks the context for `IAIInterface`, which the class tables list for the
 /// mind and not for `WillowAIPawn`, so an AI pawn is answered by its mind (C++ `aiInterfaceFor`). A stand-in for the
-/// table gap, UNVERIFIED; any other object is returned as it is. Reference only: Off runs
-/// [`crate::holds::apply_hold_behavior`].
+/// table gap, UNVERIFIED; any other object is returned as it is. Reference only, and kept as the C++ has it (R3): Off
+/// runs [`crate::holds::apply_hold_behavior`] with `Pawn`'s rule ([`crate::pawn_interface`]).
+///
+/// NATIVE_PAWN_AI_INTERFACE.md (section 5) agrees that the mind answers a possessed AI pawn, and differs from this
+/// stand-in in what Off follows: the rule reads `Controller`, not `MyWillowMind`; the pawn's own class comes first;
+/// a declining controller leads to the `Mesh`, not a vehicle; with no controller it asks a driven vehicle's controller,
+/// then the `Mesh`, then answers none (the stand-in hands back the pawn); and the rule is every pawn class's, player
+/// pawns included.
 pub fn ai_interface_for(vm: &mut Vm, context: ObjRef) -> Result<ObjRef, VmError> {
     Ok(object(vm, context, "MyWillowMind")?.unwrap_or(context))
 }

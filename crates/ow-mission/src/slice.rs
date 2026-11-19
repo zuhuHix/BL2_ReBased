@@ -42,10 +42,11 @@
 //!   its pools in the class-defaults routine, not read).
 //! - `Behavior_AIHold` on the dummy: the C++ records it as a no-op before the dummy has a mind (it gets its mind and
 //!   AI component at its first pawn hit, through the combat chain). Reference: that no-op. Off (decision
-//!   2026-11-16-74): the installed script runs on each context through the VM ([`ow_ai::awareness::holds::apply`]):
-//!   the dummy's pawn answers no `IAIInterface` by the class tables, so the script places no hold; a context with a
-//!   controller or a mind is `NotYet { NotRead }` (how a pawn reaches its AI is not read, and the live hold did reach
-//!   it). Without a pawn there is no context and nothing runs.
+//!   2026-11-16-74): the installed script runs on each context through the VM ([`ow_ai::awareness::holds::apply`]).
+//!   A pawn context answers `IAIInterface` by `Pawn`'s rule (`ow_combat::pawn_interface`, decision 2026-11-19-62,
+//!   which [`FireMissionSlice::new`] registers): a pawn with nothing to ask answers none and the script places no
+//!   hold; a pawn whose controller's own answer is not read is `NotYet { NotRead }` naming it, with nothing run.
+//!   Without a pawn there is no context and nothing runs.
 //! - The player's hit through the stock pawn chain (`damage_dummy` with a damage): `ow-combat` has it (W6-COMBAT), but
 //!   it is not wired into the slice yet (follow-up W6-COMBAT-RUN2), so `NotYet { NotPorted }` in both modes. Without
 //!   a damage (the host's call so far) `OnTakeDamage` is raised directly, as in the C++.
@@ -349,6 +350,8 @@ impl FireMissionSlice {
             .map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?
             .world_info();
         let vm = &mut world.vm;
+        // Behavior_AIHold's pawn context answers by Pawn's QueryInterface rule in Off (decision 2026-11-19-62).
+        ow_combat::pawn_interface::register(vm)?;
         let definition = tracker::find_object(vm, dummy_package, dummy_path)?
             .ok_or_else(|| data(format!("dummy behavior provider not found: {dummy_path}")))?;
         let provider = Provider::new(vm, definition)?;
@@ -499,7 +502,7 @@ impl FireMissionSlice {
         d.report_at_boundary("GearboxFramework.Behavior_SpecialMove", None, vec![0]);
         // Behavior_AIHold is installed script that reaches the context's AI component through IAIInterface. The C++
         // records it as a no-op before the dummy has a mind (Reference, R3). Off: the script runs on each context
-        // through the VM, with the pawn question NotYet (module documentation; decision 2026-11-16-74).
+        // through the VM, a pawn context answering by Pawn's rule (module documentation; decisions 2026-11-16-74, 2026-11-19-62).
         let w = self.weak();
         d.handle(
             "GearboxFramework.Behavior_AIHold",

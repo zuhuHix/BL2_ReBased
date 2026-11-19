@@ -55,10 +55,13 @@ fn toy_holds() -> Vec<u8> {
     t.build()
 }
 
-/// Part 1's world with the toy hold behavior; the objects its script saw.
+/// Part 1's world with the toy hold behavior and an invented `GearboxFramework.IAIInterface` class; the objects its
+/// script saw.
 fn world(mode: ParityMode) -> (Env, ObjRef, Rc<RefCell<Vec<ObjRef>>>) {
     let mut e = env_with(mode, &[("ToyHolds", toy_holds())]);
     let vm = &mut e.vm;
+    let root = vm.find_class("Core.Object").unwrap();
+    vm.space.classes.define("GearboxFramework.IAIInterface", Some(root), vec![]).unwrap();
     let class = vm.find_class("ToyHolds.ToyHoldBehavior").unwrap();
     let behavior = make(vm, class, "Hold_57");
     let seen = Rc::new(RefCell::new(Vec::new()));
@@ -78,23 +81,37 @@ fn world(mode: ParityMode) -> (Env, ObjRef, Rc<RefCell<Vec<ObjRef>>>) {
     (e, behavior, seen)
 }
 
-/// A context with no AI to reach runs the installed-shaped script with itself as `ContextObject`; one whose
-/// `Controller` is set is `NotYet` (the pawn question), with nothing run.
+/// A context with no AI to reach runs the installed-shaped script with itself as `ContextObject`. A pawn: in Off,
+/// `Pawn`'s `QueryInterface` rule (lane IMPL-PAWN-AI-INTERFACE): a pawn with no controller, vehicle or mesh answers
+/// none and the script runs; one whose `Controller` is set asks that controller, whose own answer is not read, so it
+/// is `NotYet` with nothing run. Under Reference every pawn is `NotYet`, as before.
 #[test]
 fn the_script_runs_unless_the_context_has_an_ai() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let (mut e, behavior, seen) = world(mode);
         let vm = &mut e.vm;
+        Pack.register(vm).unwrap();
         let pawn_class = vm.space.heap.get(e.ai).unwrap().class;
         let dummy = make(vm, pawn_class, "ToyDummy_0");
         let plain = make(vm, e.object, "ToyThing_0");
         apply(vm, behavior, &[plain]).unwrap();
-        assert!(matches!(apply(vm, behavior, &[dummy]), Err(VmError::NotYet(_))));
-        assert_eq!(*seen.borrow(), [plain], "{mode:?}");
+        if mode == ParityMode::Off {
+            apply(vm, behavior, &[dummy]).unwrap();
+            assert_eq!(*seen.borrow(), [plain, dummy], "the pawn's rule answered none: the script ran");
+        } else {
+            assert!(matches!(apply(vm, behavior, &[dummy]), Err(VmError::NotYet(_))));
+            assert_eq!(*seen.borrow(), [plain], "{mode:?}");
+        }
+        let ran = seen.borrow().len();
         let err = apply(vm, behavior, &[e.ai]).unwrap_err();
         assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
-        assert!(err.to_string().contains("Pawn IAIInterface"), "{err}");
-        assert_eq!(seen.borrow().len(), 1, "nothing run for the pawn with a controller");
+        let words = if mode == ParityMode::Off {
+            "goes to its Controller, a WillowGame.WillowMind"
+        } else {
+            "Pawn IAIInterface"
+        };
+        assert!(err.to_string().contains(words), "{mode:?}: {err}");
+        assert_eq!(seen.borrow().len(), ran, "nothing run for the pawn with a controller");
         let other = vm.find_class("ToyHolds.ToyNotABehavior").unwrap();
         let wrong = make(vm, other, "NotAHold");
         assert!(apply(vm, wrong, &[plain]).unwrap_err().to_string().contains("no ApplyBehaviorToContext"));
@@ -140,8 +157,9 @@ fn context_order_and_script_errors_propagate_without_running_later_contexts() {
     let vm = &mut e.vm;
     let first = make(vm, e.object, "ToyFirst");
     let last = make(vm, e.object, "ToyLast");
+    // Every context is judged before any script runs (lane IMPL-PAWN-AI-INTERFACE): the pawn's refusal runs nothing.
     assert!(apply(vm, behavior, &[first, e.ai, last]).is_err());
-    assert_eq!(*seen.borrow(), [first]);
+    assert_eq!(*seen.borrow(), []);
     let mut failing = env_with(ParityMode::Off, &[("ToyHolds", toy_holds())]);
     let vm = &mut failing.vm;
     let behavior_class = vm.find_class("ToyHolds.ToyHoldBehavior").unwrap();
@@ -154,5 +172,5 @@ fn context_order_and_script_errors_propagate_without_running_later_contexts() {
     }))).unwrap();
     let err = apply(vm, behavior, &[last]).unwrap_err();
     assert!(err.to_string().contains("invented failure"), "{err}");
-    assert_eq!(*seen.borrow(), [first]);
+    assert_eq!(*seen.borrow(), []);
 }

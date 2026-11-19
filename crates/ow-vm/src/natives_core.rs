@@ -486,21 +486,17 @@ fn register_with(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError
 }
 
 fn interfaces(vm: &mut Vm) -> Result<(), VmError> {
-    // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object itself when its class is the
-    // interface class or derives from it, or implements it (`Vm::implements`, the C++ Runtime::implements, wired by
-    // W4-INTERP2); else None. A "no" through an engine-native stand-in class is NotYet (decision 2026-11-15-08), as
-    // the casts answer it: `Vm::implements` is a plain bool and its callers apply that check.
+    // Object.QueryInterface (NATIVE_CONTROLLER_HELPERS.md, UNVERIFIED): the object's class's own answer when one is
+    // registered (`Vm::register_interface_rule`; Pawn's in Off, lane IMPL-PAWN-AI-INTERFACE), else the plain answer:
+    // the object itself when its class is the interface class or derives from it, or implements it
+    // (`Vm::implements`, the C++ Runtime::implements, wired by W4-INTERP2); else None. A "no" through an engine-native
+    // stand-in class is NotYet (decision 2026-11-15-08), as the casts answer it (`Vm::plain_interface`).
     reg(vm, "Object.QueryInterface(class)", |c| {
         let want = class(c, 0)?;
         let (Some(this), Some(want)) = (c.this, want) else {
             return Ok(Value::Object(None));
         };
-        let own = c.vm.space.heap.get(this)?.class;
-        let yes = c.vm.space.classes.is_child_of(own, want) || c.vm.implements(own, want);
-        if !yes {
-            crate::interp::is_child(c.vm, own, want)?;
-        }
-        Ok(Value::Object(yes.then_some(this)))
+        Ok(Value::Object(c.vm.query_interface(this, want)?))
     })
 }
 
@@ -3173,6 +3169,41 @@ mod tests {
         let mut r = build(ParityMode::Reference, true, None);
         let id = r.declare(key, 2, &[1]);
         assert!(r.vm.iterator_for(id).is_none(), "Reference keeps the C++ (unbound)");
+    }
+
+    /// A class's registered `QueryInterface` answer (lane IMPL-PAWN-AI-INTERFACE): the native takes it for the class
+    /// and its subclasses (the nearest registration wins), other classes keep the plain answer, a second registration
+    /// is refused, and a question that comes back to an object already answering it gets none at once.
+    #[test]
+    fn query_interface_takes_a_registered_class_answer() {
+        let mut h = off();
+        let key = "Object.QueryInterface(class)";
+        let (object, actor, pawn) = (h.object, h.actor, h.pawn);
+        let leaf = h.vm.space.classes.define("Game.LeafPawn", Some(pawn), vec![]).unwrap();
+        let answer = h.vm.instantiate(object, "Answer").unwrap();
+        let p = h.vm.instantiate(leaf, "P").unwrap();
+        let a = h.vm.instantiate(actor, "A").unwrap();
+        let inner: Rc<RefCell<Vec<Option<ObjRef>>>> = Rc::new(RefCell::new(Vec::new()));
+        let seen = inner.clone();
+        h.vm
+            .register_interface_rule(
+                pawn,
+                Rc::new(move |vm: &mut Vm, this, iface| {
+                    // Asks itself back: the inner question gets none.
+                    seen.borrow_mut().push(vm.query_interface(this, iface)?);
+                    Ok(Some(answer))
+                }),
+            )
+            .unwrap();
+        let ask = |h: &mut H, o| h.call_on(key, o, vec![Value::Class(Some(actor))]);
+        assert_eq!(ask(&mut h, p), Value::Object(Some(answer)), "a subclass takes its parent's answer");
+        assert_eq!(*inner.borrow(), [None], "the question asked twice got none");
+        assert!(!h.vm.interface_asked(p, actor));
+        assert_eq!(ask(&mut h, a), Value::Object(Some(a)), "no rule: the plain answer");
+        h.vm.register_interface_rule(leaf, Rc::new(|_vm: &mut Vm, _this, _iface| Ok(None))).unwrap();
+        assert_eq!(ask(&mut h, p), Value::Object(None), "the nearest registration wins");
+        let again = h.vm.register_interface_rule(pawn, Rc::new(|_vm: &mut Vm, _this, _iface| Ok(None)));
+        assert!(matches!(again, Err(VmError::Registration { .. })), "{again:?}");
     }
 
     #[test]

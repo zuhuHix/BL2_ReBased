@@ -26,8 +26,14 @@
 //! (NATIVE_AI_HOLDS.md, read 2026-11-19 by lane LINK-1-NEXT; implemented by lane FIX-AI-HOLDS-SUBCLASS, decision
 //! 2026-11-19-43) found that `WillowAIComponent` keeps `AIComponent`'s routines for the movement, demigod, god and
 //! dialog kinds (and the target kind, `ow-ai`'s), replacing only the base kind. Any other subclass's table was not
-//! read: `NotYet { NotRead }`, as before. `GearboxMind.GetAIComponent` and the pawn IAIInterface routing remain NotYet.
-//! Damage-reader behavior is not proven.
+//! read: `NotYet { NotRead }`, as before. `GearboxMind.GetAIComponent` remains NotYet. Damage-reader behavior is not
+//! proven.
+//!
+//! **A pawn context** (lane IMPL-PAWN-AI-INTERFACE, decision 2026-11-19-62): in Off the script's `QueryInterface`
+//! answers by `Pawn`'s rule ([`crate::pawn_interface`], registered here), so the hold behavior runs on a pawn when the
+//! rule gives an answer or none, and stops at the rule's `NotYet` (a controller, a vehicle's controller or a mesh whose
+//! own answer is not read). Every context's question is asked before any script runs ([`apply_hold_behavior`]), so a
+//! refusal leaves every hold list as it was.
 //!
 //! **Reference** (R3) binds none of this: `crate::hit` keeps the C++ stand-ins there (the demigod hold as a list of
 //! reasons, `GetAIComponent` as the mind's property, the pawn-to-mind context).
@@ -70,12 +76,14 @@ fn error(message: String) -> VmError {
     }
 }
 
-/// Binds the four kinds' twelve natives and [`GET_AI_COMPONENT`] (`NotYet`) in Off; nothing under Reference. A key
-/// another pack bound first keeps its binding.
+/// Binds the four kinds' twelve natives, [`GET_AI_COMPONENT`] (`NotYet`) and the pawn `QueryInterface` rule
+/// ([`crate::pawn_interface::register`]) in Off; nothing under Reference. A key another pack bound first keeps its
+/// binding.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
+    crate::pawn_interface::register(vm)?;
     for (kind, list) in KINDS {
         bind(vm, &format!("{COMPONENT}.Hold{kind}"), hold(list, kind == "Movement"))?;
         bind(vm, &format!("{COMPONENT}.Release{kind}"), release(list))?;
@@ -95,34 +103,26 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     )
 }
 
-/// Off: runs the hold behavior `behavior`'s installed script (`ApplyBehaviorToContext`) on each of `contexts`, with
-/// the context itself as `ContextObject` (decision 2026-11-16-74). How a pawn context reaches its AI interface is not
-/// read (NATIVE_AI_HOLDS.md, "Not read": the class tables list `IAIInterface` for the mind only, yet the live hold
-/// reached the dummy's AI), so a context whose `Controller` or `MyWillowMind` is set is `NotYet { NotRead }` with
-/// nothing run; a context with neither runs the script, which can reach no AI component either way. An action class
-/// without the event is an error.
+/// Runs the hold behavior `behavior`'s installed script (`ApplyBehaviorToContext`) on each of `contexts`, with the
+/// context itself as `ContextObject` (decision 2026-11-16-74). Every context is judged first and only then is any
+/// script run, so a refusal changes nothing (the hub's rule: refusals before any write):
+/// - a pawn, in Off: the script's question, `QueryInterface(IAIInterface)`, is asked once ahead by `Pawn`'s rule
+///   ([`crate::pawn_interface`], which a world registers through [`register`]); its `NotYet` stops the run. A VM
+///   whose pawn class has no rule is an error, not a quiet plain answer;
+/// - a pawn, under Reference: `NotYet { NotRead }`, as before this lane (Reference runs the C++ stand-in instead);
+/// - another context whose `Controller` or `MyWillowMind` is set: `NotYet { NotRead }` (its class's answer is not
+///   read); a context with neither runs the script.
+///
+/// An action class without the event is an error.
 pub fn apply_hold_behavior(
     vm: &mut Vm,
     behavior: ObjRef,
     contexts: &[ObjRef],
 ) -> Result<(), VmError> {
     for &context in contexts {
-        if is_a(vm, context, "Engine.Pawn")? {
-            return Err(NotYet::not_read("Pawn IAIInterface routing is unread", RECORD_HOLDS).into());
-        }
-        for link in ["Controller", "MyWillowMind"] {
-            if object(vm, context, link)?.is_some() {
-                return Err(NotYet::not_read(
-                    format!(
-                        "Behavior_AIHold on {}, whose {link} is set: how a pawn context reaches its AI interface (the \
-                         class tables list IAIInterface for the mind only, and the live hold reached the dummy's AI)",
-                        class_name(vm, context)
-                    ),
-                    RECORD_HOLDS,
-                )
-                .into());
-            }
-        }
+        judge_context(vm, context)?;
+    }
+    for &context in contexts {
         if call_method(
             vm,
             behavior,
@@ -135,6 +135,39 @@ pub fn apply_hold_behavior(
                 "the hold behavior {} has no ApplyBehaviorToContext",
                 class_name(vm, behavior)
             )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the hold behavior may run on `context` ([`apply_hold_behavior`]); writes nothing.
+fn judge_context(vm: &mut Vm, context: ObjRef) -> Result<(), VmError> {
+    if is_a(vm, context, crate::pawn_interface::PAWN)? {
+        if vm.parity != ParityMode::Off {
+            return Err(NotYet::not_read("Pawn IAIInterface routing is unread", RECORD_HOLDS).into());
+        }
+        let class = vm.space.heap.get(context)?.class;
+        if vm.interface_rule_for(class).is_none() {
+            return Err(error(format!(
+                "the pawn {} has no QueryInterface rule registered (ow_combat::pawn_interface::register)",
+                class_name(vm, context)
+            )));
+        }
+        let iface = vm.find_class(crate::pawn_interface::AI_INTERFACE)?;
+        vm.query_interface(context, iface)?;
+        return Ok(());
+    }
+    for link in ["Controller", "MyWillowMind"] {
+        if object(vm, context, link)?.is_some() {
+            return Err(NotYet::not_read(
+                format!(
+                    "Behavior_AIHold on {}, which is not a pawn and whose {link} is set: its class's QueryInterface \
+                     answer is not read",
+                    class_name(vm, context)
+                ),
+                RECORD_HOLDS,
+            )
+            .into());
         }
     }
     Ok(())

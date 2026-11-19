@@ -1,6 +1,6 @@
 //! Owner: lane FIX-AIHOLD (the behavior run, analyst) and lane FIX-AIHOLD-NATIVES (the hold kinds, implementer). The
 //! AI hold behavior run through the VM, and the movement, demigod, god and dialog hold natives. AI-assisted (Claude
-//! Code). Decisions 2026-11-16-74 and 2026-11-16-83.
+//! Code). Decisions 2026-11-16-74, 2026-11-16-83 and 2026-11-19-62.
 //!
 //! **The behavior is script.** `Behavior_AIHold.ApplyBehaviorToContext` is installed script (read with
 //! `research/script_disasm.py`). It asks its context object for `IAIInterface` (`QueryInterface`); with no interface,
@@ -11,14 +11,14 @@
 //! event declares five more parameters, which the script does not read; they keep their defaults, as
 //! `ow-combat`'s class provider does).
 //!
-//! **The pawn question (not read).** The installed class tables list `IAIInterface` for `GearboxMind` and
-//! `WillowMind`, not for `WillowAIPawn` or its parents, so `QueryInterface` on a pawn answers None and the script does
-//! nothing. Yet in the running game the Fire dummy's own `Behavior_AIHold_59` made the pawn demigod
-//! (COMBAT_GOLDEN_TRACE.md, question 8). So either that behavior's context was not the pawn, or a pawn answers the
-//! interface in a way the tables do not show. Neither is read (NATIVE_AI_HOLDS.md, "Not read"). Until it is, a context
-//! that is a pawn, or has `Controller` or `MyWillowMind` set, is `NotYet`, rather than a silent no-op the game
-//! contradicts; a context with neither runs the script, which can reach no AI component either way (the component is
-//! the mind's).
+//! **The pawn question (read, UNVERIFIED).** The installed class tables list `IAIInterface` for `GearboxMind` and
+//! `WillowMind`, not for `WillowAIPawn` or its parents, yet in the running game the Fire dummy's own
+//! `Behavior_AIHold_59` made the pawn demigod (COMBAT_GOLDEN_TRACE.md, question 8). NATIVE_PAWN_AI_INTERFACE.md reads
+//! how a pawn answers: its class, then its `Controller` (or its driven vehicle's), then its `Mesh`. In Off that rule
+//! is `ow_combat::pawn_interface` (decision 2026-11-19-62, registered by [`Pack`]): a pawn with nothing to ask runs the
+//! script, which holds nothing; a step whose object's own answer is not read (the dummy's `WillowMind`, a
+//! `GearboxMind`) is `NotYet` naming it, with no context run. Under Reference a pawn context stays `NotYet` as
+//! before; in both modes a context that is not a pawn but has `Controller` or `MyWillowMind` set is `NotYet`.
 //!
 //! **The kinds.** The base and target holds are part 2's bindings ([`super::actions::Pack`], from G26). The movement,
 //! demigod, god and dialog kinds, and `GearboxMind.GetAIComponent` (`NotYet`: the note leaves it unresolved), are
@@ -34,9 +34,10 @@ use ow_vm::error::VmError;
 /// The analyst note of the hold kinds and of the pawn question.
 pub const RECORD_HOLDS: &str = ow_combat::holds::RECORD_HOLDS;
 
-/// Runs the hold behavior `behavior`'s installed script on each of `contexts` (module documentation). A context with
-/// an AI to reach is `NotYet` (the pawn question); an action class without the script event is an error. The one
-/// implementation is `ow_combat::holds::apply_hold_behavior`, which `--combat-run` uses too.
+/// Runs the hold behavior `behavior`'s installed script on each of `contexts` (module documentation). Every context is
+/// judged before any script runs; a context whose AI is not reachable by a read rule is `NotYet` (the pawn question);
+/// an action class without the script event is an error. The one implementation is
+/// `ow_combat::holds::apply_hold_behavior`, which `--combat-run` uses too.
 pub fn apply(vm: &mut Vm, behavior: ObjRef, contexts: &[ObjRef]) -> Result<(), VmError> {
     ow_combat::holds::apply_hold_behavior(vm, behavior, contexts)
 }

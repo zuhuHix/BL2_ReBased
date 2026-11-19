@@ -17,7 +17,7 @@ Off until a fresh implementer codes them from this note alone (decision 2026-11-
 | `AIComponent.HoldGod` / `ReleaseGod` / `GodOnHold` | the same shape | `Behavior_AIHold` Type 4 | high | UNVERIFIED |
 | `AIComponent.HoldDialog` / `ReleaseDialog` / `DialogOnHold` | the same shape | `Behavior_AIHold` Type 5 | high | UNVERIFIED |
 | `GearboxMind.GetAIComponent` | `native function AIComponent GetAIComponent()` (`IAIInterface`) | every `Behavior_AIHold` call | low | not resolved |
-| How a pawn context reaches `IAIInterface` | (the `QueryInterface` of a pawn) | `Behavior_AIHold` on a pawn's provider | high | read 2026-11-19: [NATIVE_PAWN_AI_INTERFACE.md](NATIVE_PAWN_AI_INTERFACE.md) (the pawn's `Controller` answers); UNVERIFIED |
+| How a pawn context reaches `IAIInterface` | (the `QueryInterface` of a pawn) | `Behavior_AIHold` on a pawn's provider | high | read 2026-11-19: [NATIVE_PAWN_AI_INTERFACE.md](NATIVE_PAWN_AI_INTERFACE.md) (the pawn's `Controller` answers); implemented in Off (decision 2026-11-19-62), the controller's own answer still `NotYet`; UNVERIFIED |
 
 The base kinds (`Hold` / `Release` / `OnHold`, `HoldTarget` / `ReleaseTarget` / `TargetOnHold`) are in
 NATIVE_AI_AWARENESS.md ("Holds, OnHold, ClearState, InitAI"); this note follows that wording.
@@ -86,7 +86,9 @@ unproven.
 
 - **How a pawn context reaches `IAIInterface`.** *Read 2026-11-19 in [NATIVE_PAWN_AI_INTERFACE.md](NATIVE_PAWN_AI_INTERFACE.md):
   a pawn answers by its own class first; then its `Controller`, or, only when it has no `Controller`, the controller of a vehicle it drives; then its `Mesh`; else none (that note's section 2 is the rule). For a possessed AI pawn the mind is expected to
-  answer (UNVERIFIED). The text below is the question as it stood.* The package class tables list `IAIInterface` for
+  answer (UNVERIFIED). Implemented in Off by lane IMPL-PAWN-AI-INTERFACE (decision 2026-11-19-62): the controller,
+  vehicle controller and mesh steps stay `NotYet` until their own answers are read (`GearboxMind`'s for the Fire
+  dummy). The text below is the question as it stood.* The package class tables list `IAIInterface` for
   `GearboxMind` and `WillowMind`, and not for `WillowAIPawn` or any of its parents, so by the tables `QueryInterface` on the Fire dummy's
   pawn answers None and the hold script does nothing. Yet the live dummy became demigod in its `Behavior_AIHold_59`
   call. Either that behavior's context was not the pawn (for example its mind), or a pawn answers the interface in a way
