@@ -25,3 +25,14 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-MISSION-NUMBERS, analyst only 
   - These treat "no Flash movie hosted" as the engine's fact. That is a hub call, with a named `LayerAbsent` refusal
     as the alternative.
 - Not implemented: an implementer lane binds these from the note.
+
+**Hub ruling on the screen (2026-11-19), folded in.** A UI-only side effect may be answered "nothing" in Off only when
+nothing on the slice path reads it back. The note now labels `UpdateMissionTextList`'s "nothing" as a port Off answer
+for a headless world with no Flash movie hosted (UNVERIFIED) and records the read-back check:
+- every script function of the nine code packages was decoded and searched (12,978, with 10 not decoded);
+- nothing reads `MissionCategories`;
+- `MissionTextList` is read only by the movie's own script. Its one reader the slice can reach, `GetSelectedIndex`,
+  reads None either way.
+
+The script path is also corrected: the slice's accept reaches the movie through `ClientUpdateUIMissionList` and
+`UpdateMissionList`, not `extAcceptConfirmed`.
