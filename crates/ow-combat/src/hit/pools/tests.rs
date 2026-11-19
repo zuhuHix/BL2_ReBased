@@ -309,8 +309,10 @@ fn shield_and_unknown_hooks_refuse_after_the_stamp_without_other_pool_mutations(
             let err = x
                 .call("ResourcePool.ResetIdleTimer", pool, vec![])
                 .unwrap_err();
-            assert!(matches!(err, VmError::NotYet(_)), "{err}");
-            assert!(err.to_string().contains(RECORD), "{err}");
+            // Typed: the note leaves these hooks unread, so the kind is NotRead (review r1 of #482).
+            let VmError::NotYet(n) = &err else { panic!("a NotYet: {err}") };
+            assert_eq!(n.missing, ow_core::Missing::NotRead, "{err}");
+            assert_eq!(n.record, RECORD, "{err}");
             assert_eq!(x.value(pool, "PoolIdleDelayStartTime"), Value::Float(21.5));
             assert_eq!(x.snapshot(pool), before);
         }
