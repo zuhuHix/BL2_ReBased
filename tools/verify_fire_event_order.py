@@ -147,21 +147,47 @@ def matches(event, kind, suffix, text=None):
             and (text is None or text in event.get("detail", "") + ";name_tag=" + event["c"]))
 
 
+def stop_of(run):
+    """The run's stop, as `--slice-run` reports a step that met a NotYet (its `stopped` key; decision 2026-11-19-37), or None."""
+    return run.get("stopped")
+
+
 def steps_of(run, steps=None):
-    """step label -> that step's events, from the records of the run (the labels follow STEPS, or `steps`)."""
+    """step label -> that step's events, from the records of the run (the labels follow STEPS, or `steps`), and the labels the run
+    finished. A run that stopped on a NotYet has records up to the step it stopped at; that step did not finish, and the later
+    steps did not run (they get no events and are not finished). Any other short run is refused."""
     steps = steps or STEPS
     records = run["steps"]
-    if len(records) != len(steps):
+    stop = stop_of(run)
+    if stop is None and len(records) != len(steps):
         raise ValueError(f"the run has {len(records)} step records, the step list has {len(steps)}")
-    return {label: record.get("events", []) for (label, _), record in zip(steps, records)}
+    if stop is not None and (not records or len(records) > len(steps) or records[-1].get("step") != stop.get("step")):
+        raise ValueError(f"a stopped run whose last record is not its stop step ({stop.get('step')}): {len(records)} records")
+    by_step = {label: [] for label, _ in steps}
+    by_step.update({label: record.get("events", []) for (label, _), record in zip(steps, records)})
+    finished = {label for (label, _), _ in zip(steps, records[:-1] if stop is not None else records)}
+    return by_step, finished
+
+
+def not_yet_text(run):
+    stop = stop_of(run)
+    return f"not yet: the run stopped at {stop.get('step')}: {stop.get('not_yet')}"
 
 
 def apply_rules(run, steps, rules):
-    """Returns a list of (title, ok, detail) for the rules, over the run's step records (labels from `steps`)."""
-    by_step = steps_of(run, steps)
+    """Returns a list of (title, ok, detail) for the rules, over the run's step records (labels from `steps`). `ok` is None (not yet,
+    never a pass) for a rule that needs a step a stopped run did not finish: its own step, every step for a whole-run rule, or a
+    step it lists."""
+    by_step, finished = steps_of(run, steps)
     whole = [event for (label, _) in steps for event in by_step[label]]
     results = []
     for title, label, mode, spec in rules:
+        needed = [lab for lab, _ in steps] if label is None else [label]
+        if mode == "not_in":
+            needed = needed + list(spec[1])
+        if any(lab not in finished for lab in needed):
+            results.append((title, None, not_yet_text(run)))
+            continue
         events = whole if label is None else by_step[label]
         ok, detail = True, ""
         if mode == "exact":
@@ -192,6 +218,13 @@ def check_lines(run):
 def check(run):
     """Returns a list of (title, ok, detail) for every rule, plus the dummy order and the error list."""
     results = apply_rules(run, STEPS, RULES)
+    if stop_of(run) is not None:
+        # the dummy's order spans the run: a stopped run has not run it all
+        for title in ("the dummy's behaviors ran in the observed order (AIHold_57 after SpecialMove_58)",
+                      "AIHold_57 runs right after SpecialMove_58 (the move's output 0)"):
+            results.append((title, None, not_yet_text(run)))
+        results.append(("the run has no errors", run.get("errors") == [], str(run.get("errors"))))
+        return results
     trace = [line.split(" -> ")[-1] for line in run.get("dummy_trace", [])]
     positions, at = [], 0
     for name in DUMMY_ORDER:
@@ -276,6 +309,20 @@ def self_test():
     shuffled = synthetic_run()
     shuffled["dummy_trace"] = [line for line in shuffled["dummy_trace"] if not line.endswith("Behavior_AIHold_57")]
     if all(ok for _, ok, _ in check(shuffled)): failures.append("a missing AIHold_57 was not caught")
+    # a run that stopped on a NotYet at the hit: the rules before it are graded, the hit's and the later ones are not yet, none fails
+    stopped = synthetic_run()
+    at = STEPS.index(("hit", "hit:fire"))
+    stopped["steps"] = stopped["steps"][:at + 1]
+    stopped["stopped"] = {"step": "hit:fire", "not_yet": "an invented NotYet"}
+    graded = check(stopped)
+    if any(ok is False for _, ok, _ in graded): failures.append("a stopped run failed a rule: " + str([t for t, ok, _ in graded if ok is False]))
+    if not any(ok is None for _, ok, _ in graded): failures.append("a stopped run graded no rule not yet")
+    if not any(ok is True and "accept" in t for t, ok, _ in graded): failures.append("a stopped run did not grade the accept")
+    try:
+        steps_of({"steps": stopped["steps"][:3], "stopped": {"step": "hit:fire"}})
+        failures.append("a stopped run whose last record is not its stop step was accepted")
+    except ValueError:
+        pass
     with_03a = synthetic_run()
     with_03a["steps"][STEPS.index(("range", "range"))]["events"].append({"kind": "dialog", "a": "VOSQ_RockPaperGeno_03a_LiveHypEng", "b": "", "c": "", "detail": ""})
     if all(ok for _, ok, _ in check(with_03a)): failures.append("03a in the no-line-player run was not caught")
@@ -308,10 +355,13 @@ def main():
         if args.lines_output: Path(args.lines_output).write_text(json.dumps(lines_run), encoding="utf-8")
     results = check(run) + (check_lines(lines_run) if lines_run else [])
     for title, ok, detail in results:
-        print(("PASS  " if ok else "FAIL  ") + title + ("" if ok else "  [" + detail + "]"))
-    failed = sum(1 for _, ok, _ in results if not ok)
-    print(f"{len(results) - failed} of {len(results)} rules hold")
-    return 1 if failed else 0
+        mark = "PASS  " if ok else ("NOTYET" if ok is None else "FAIL  ")
+        print(mark + (" " if mark == "NOTYET" else "") + title + ("" if ok else "  [" + detail + "]"))
+    failed = sum(1 for _, ok, _ in results if ok is False)
+    not_yet = sum(1 for _, ok, _ in results if ok is None)
+    held = len(results) - failed - not_yet
+    print(f"{held} of {len(results)} rules hold" + (f", {not_yet} not yet (a stopped run)" if not_yet else ""))
+    return 1 if failed else (3 if not_yet else 0)
 
 
 if __name__ == "__main__":

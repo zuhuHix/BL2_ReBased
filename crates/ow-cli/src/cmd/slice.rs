@@ -38,8 +38,14 @@
 //!
 //! Order, as the C++: the source package is loaded first, then the arguments are checked, the store opens the cooked
 //! root and the slice is built. Output is written as it is produced, so a step that fails (`usage: ...`, a
-//! `std::stoi` text, a `NotYet`) leaves the earlier steps' text on stdout, then `ow-package: <message>` on stderr with
-//! exit code 1 (a `NotYet`: 3). The VM runs on its own thread (`ow_vm::interp::on_vm_stack`). Lines end in `\n`.
+//! `std::stoi` text) leaves the earlier steps' text on stdout, then `ow-package: <message>` on stderr with exit code 1.
+//!
+//! **A stop** (Rust-only: the C++ has no `NotYet`; lane FIX-MISSION-SCRIPT-TEST, decision 2026-11-19-37). A step that
+//! meets a `NotYet` ends the run with a well-formed report instead of a cut-off one: that step's record has
+//! `"ok":false`, its events so far and `"not_yet":<text>`; no later step runs; the report's tail follows as usual, then
+//! `"stopped":{"step","not_yet"}`. A run that met any `NotYet` (a stop, or one a script run or the dummy's provider
+//! recorded and went on past) also lists their texts in `"not_yet":[..]`. Both keys appear only then, so a run that
+//! compares with the C++ keeps its bytes. The exit code is 3 and the stop's text goes to stderr as before. The VM runs on its own thread (`ow_vm::interp::on_vm_stack`). Lines end in `\n`.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -269,8 +275,19 @@ fn execute_with(
     let vm = &mut world.vm;
     let completed: DetSet<String> = slice.mission().dependencies().iter().cloned().collect();
     out.push_str("{\"steps\":[");
+    // A step that stops on a `NotYet` ends the run with a closed report (module documentation, "A stop"): its record
+    // has `"ok":false` and a `"not_yet"` text, and the report ends with `"stopped"`. Any other failure keeps the C++
+    // shape (the earlier steps' text, then the message).
+    let mut stop: Option<(String, String)> = None;
     for (i, step) in args[5..].iter().enumerate() {
-        let (ok, extra) = run_step(vm, &slice, &completed, step, stopped)?;
+        let (ok, extra) = match run_step(vm, &slice, &completed, step, stopped) {
+            Ok(result) => result,
+            Err(f) if f.not_yet => {
+                stop = Some((step.clone(), f.message));
+                (false, None)
+            }
+            Err(f) => return Err(f),
+        };
         let _ = write!(
             out,
             "{}{{\"step\":{},\"ok\":{},\"status\":{}",
@@ -281,6 +298,9 @@ fn execute_with(
         );
         if let Some((key, json)) = extra {
             let _ = write!(out, ",\"{key}\":{json}");
+        }
+        if let Some((_, text)) = &stop {
+            let _ = write!(out, ",\"not_yet\":{}", quote(text));
         }
         out.push_str(",\"events\":[");
         for (j, e) in slice.drain().iter().enumerate() {
@@ -296,6 +316,9 @@ fn execute_with(
             );
         }
         out.push_str("]}");
+        if stop.is_some() {
+            break;
+        }
     }
     let errors = slice.errors();
     let list = |lines: &[String]| lines.iter().map(|l| quote(l)).collect::<Vec<_>>().join(",");
@@ -328,13 +351,24 @@ fn execute_with(
     }
     let _ = write!(
         out,
-        "],\"dummy_enabled_sequences\":[{}],\"dummy_trace\":[{}]}}\n",
+        "],\"dummy_enabled_sequences\":[{}],\"dummy_trace\":[{}]",
         list(&slice.dummy_enabled_sequences()?),
         list(&slice.dummy_trace()?)
     );
-    // A NotYet anywhere (the slice's own, a script run's, an unhandled behavior class's): the output is not the C++
-    // output.
-    if !slice.not_yet().is_empty() {
+    // The `NotYet`s the run met, and the stop, only when there are any: the C++ never meets one, so a run that
+    // compares with the C++ keeps its bytes.
+    let not_yet: Vec<String> = slice.not_yet().iter().map(|n| n.to_string()).collect();
+    if !not_yet.is_empty() {
+        let _ = write!(out, ",\"not_yet\":[{}]", list(&not_yet));
+    }
+    if let Some((step, text)) = &stop {
+        let _ = write!(out, ",\"stopped\":{{\"step\":{},\"not_yet\":{}}}", quote(step), quote(text));
+        let _ = writeln!(stopped.borrow_mut(), "ow-package: {text}");
+    }
+    out.push_str("}\n");
+    // A NotYet anywhere (the slice's own, a script run's, an unhandled behavior class's, a step's): the output is not
+    // the C++ output.
+    if stop.is_some() || !not_yet.is_empty() {
         return Ok(NOT_PORTED);
     }
     Ok(if errors.is_empty() { 0 } else { 1 })
