@@ -397,6 +397,9 @@ fn fill_engine(with_settings_provider: bool) -> Vec<u8> {
             a.end();
             Some(a)
         });
+        // A provider subclass that shadows Settings with an int (review r3 of #464, item 4).
+        let shadow = t.class("ToyShadowProvider", settings_provider);
+        t.prop("Int", shadow, "Settings", 0, 0);
         let sub = t.class("ToySettingsProviderSub", settings_provider);
         let mut defaults = ow_package::testkit::ints(&[0]);
         defaults.extend(t.p.tag("SettingsArrayProviders", "ArrayProperty", &ow_package::testkit::ints(&[1, 5])));
@@ -441,10 +444,16 @@ fn fill_willow() -> Vec<u8> {
     let base = t.p.add_import("Core", "Class", engine, "UIDataStore_OnlineGameSettings");
     let settings = t.p.add_import("Core", "Class", engine, "Settings");
     let object = t.p.add_import("Core", "Class", engine, "Object");
+    // An object of a class no package exports (an engine-native class): the Off resolver makes a stand-in for it.
+    let native_class = t.p.add_import("Core", "Class", engine, "ToyNativeThing");
+    let things = t.p.add_import("Core", "Package", 0, "ToyThings");
+    let native_thing = t.p.add_import("Engine", "ToyNativeThing", things, "ToyNativeObject");
     let store = t.class("WillowOnlineGameSettings_DataStore", base);
+    t.prop("Object", store, "ToyNative", 0, native_class);
     let mut defaults = ow_package::testkit::ints(&[0]);
     let tag = t.p.fname("WillowOnlineGameSettings", 0);
     defaults.extend(t.p.tag("Tag", "NameProperty", &tag));
+    defaults.extend(t.p.object_tag("ToyNative", native_thing));
     defaults.extend_from_slice(&t.none);
     t.p.add_export(store, "Default__WillowOnlineGameSettings_DataStore", defaults);
     t.class("WillowOnlineGameSettings", settings);
@@ -474,14 +483,23 @@ fn fill_toy(settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
     fill_toy_with(true, settings_class, provider_class)
 }
 
+/// `Core.upk` for the fill (invented): its `Object`, the root the Off resolver gives an engine-native stand-in class.
+fn fill_core() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    t.class("Object", 0);
+    t.p.build()
+}
+
 /// The fill world, cold: registered, with nothing loaded or made.
 fn fill_cold(with_settings_provider: bool) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-world-fill-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, w) = (fill_engine(with_settings_provider), fill_willow());
-    let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
+    let (e, w, c) = (fill_engine(with_settings_provider), fill_willow(), fill_core());
+    let files: [(&str, &[u8]); 3] = [("Core.upk", &c), ("Engine.upk", &e), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    // `Core.Object` defined, as it always is in the installed game (the Off resolver roots stand-in classes there).
+    vm.find_class("Core.Object").unwrap();
     let step: Rc<RefCell<Option<NativeFn>>> = Rc::new(RefCell::new(None));
     let slot = step.clone();
     let f = vm.find_function("WillowGame.WillowPlayerController.ToyRefreshStep").unwrap();
@@ -821,3 +839,69 @@ fn a_nested_refreshs_write_marks_the_outer_refresh() {
     });
     expect_marked(t.refresh(), Missing::NotRead, "an invented outer NotYet");
 }
+
+/// The plan's read publishes nothing even when the class defaults reference an engine-native object (review r3 of
+/// #464, item 2): the resolver's stand-in is freed with the read, and the store made later gets its own.
+#[test]
+fn the_plans_read_frees_the_resolvers_stand_ins() {
+    let mut t = fill_cold(true);
+    let before = t.vm.space.heap.len();
+    let class = t.vm.find_class(GLOBAL_DATA_STORES[0]).unwrap();
+    assert!(plan_fill(&mut t.vm, class).unwrap().is_some());
+    assert_eq!(t.vm.space.heap.len(), before, "nothing left, the resolver's stand-in included");
+    t.client();
+    let store = t.vm.service::<DataStores>().unwrap().borrow().globals()[0];
+    assert!(matches!(read_field(&t.vm.space, store, "ToyNative", "test").unwrap(), Value::Object(Some(_))));
+}
+
+/// The provider's fields are checked on the selected provider class (review r3 of #464, item 4): a subclass that
+/// shadows `Settings` with an int is refused before anything is made.
+#[test]
+fn a_provider_that_shadows_its_settings_field_is_refused_before_anything_is_made() {
+    let mut t = fill_cold(true);
+    let cdo = t.vm.defs.class_default(&mut t.vm.space, GLOBAL_DATA_STORES[0]).unwrap();
+    let cfg = t.vm.space.classes.struct_by_path("Engine.UIDataStore_OnlineGameSettings.GameSettingsCfg").unwrap();
+    let mut entry = t.vm.space.classes.struct_defaults(cfg).unwrap();
+    let settings = t.vm.find_class("WillowGame.WillowOnlineGameSettings").unwrap();
+    struct_set(&t.vm.space, &mut entry, "GameSettingsClass", Value::Class(Some(settings)), "test").unwrap();
+    write_field(&mut t.vm.space, cdo, "GameSettingsCfgList", Value::array(vec![entry]), "test").unwrap();
+    let shadow = t.vm.find_class("Engine.ToyShadowProvider").unwrap();
+    write_field(&mut t.vm.space, cdo, "SettingsProviderClass", Value::Class(Some(shadow)), "test").unwrap();
+    let before = t.vm.space.heap.len();
+    assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err());
+    assert_eq!(t.vm.space.heap.len(), before, "nothing made");
+}
+
+/// A wrapped script's body is bound to its own call (review r3 of #464, item 5): run on another VM it is refused, and
+/// run while a service is borrowed it is `ServiceBorrowed`, before any bytecode.
+#[test]
+fn a_wrapped_body_runs_only_on_its_own_vm_with_no_service_borrowed() {
+    let mut t = toy(true);
+    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    t.vm.wrap_script(
+        SETTINGS_VIA_DATASTORE,
+        Rc::new(|_vm: &mut Vm, _this: Option<ObjRef>, body: &mut ow_vm::api::ScriptBody<'_>| {
+            let mut other = Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+            body(&mut other)
+        }),
+    )
+    .unwrap();
+    match t.call(SETTINGS_VIA_DATASTORE, Some(pc), vec![]) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("its own call's VM"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let mut t = toy(true);
+    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    t.vm.wrap_script(
+        SETTINGS_VIA_DATASTORE,
+        Rc::new(|vm: &mut Vm, _this: Option<ObjRef>, body: &mut ow_vm::api::ScriptBody<'_>| {
+            let stores = vm.service::<DataStores>().unwrap();
+            let _held = stores.borrow();
+            body(vm)
+        }),
+    )
+    .unwrap();
+    assert!(matches!(t.call(SETTINGS_VIA_DATASTORE, Some(pc), vec![]), Err(VmError::ServiceBorrowed(_))));
+}
+
+

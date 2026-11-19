@@ -7,7 +7,7 @@
 //! Reference binds nothing and the call stays the unbound native it was.
 
 use ow_attr::api::EvalCx;
-use ow_core::{NotYet, ParityMode};
+use ow_core::ParityMode;
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
@@ -76,9 +76,8 @@ fn get_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// is returned unchanged, kind and text.
 fn after_partial_writes(e: VmError) -> VmError {
     match e {
-        // The attribute library may have marked it already (its fold, review r1 of #458): the prefix is added once.
-        VmError::NotYet(n) if n.what.starts_with("stopped after partial writes") => VmError::NotYet(n),
-        VmError::NotYet(n) => NotYet::new(format!("stopped after partial writes: {}", n.what), n.missing, n.record).into(),
+        // The attribute library may have marked it already (its fold, review r1 of #458): the helper adds the prefix once.
+        VmError::NotYet(n) => n.after_partial_writes().into(),
         other => other,
     }
 }

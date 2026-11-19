@@ -31,7 +31,27 @@ pub struct NotYet {
     pub record: &'static str,
 }
 
+/// The mark of a failure after state was written (the hub's ruling): the text **starts** with this prefix.
+pub const PARTIAL_WRITES_PREFIX: &str = "stopped after partial writes: ";
+
+/// Whether `text` carries the partial-writes mark: one exact check, at its start (review r3 of #464, item 3), for
+/// every producer and consumer.
+pub fn is_partial_writes(text: &str) -> bool {
+    text.starts_with(PARTIAL_WRITES_PREFIX)
+}
+
+/// `text` with the partial-writes mark at its start, added once.
+pub fn mark_partial_writes(text: &str) -> String {
+    if is_partial_writes(text) { text.to_string() } else { format!("{PARTIAL_WRITES_PREFIX}{text}") }
+}
+
 impl NotYet {
+    /// This `NotYet` marked as after partial writes (once), its kind and record kept.
+    pub fn after_partial_writes(self) -> NotYet {
+        let what = mark_partial_writes(&self.what);
+        NotYet::new(what, self.missing, self.record)
+    }
+
     pub fn new(what: impl Into<Cow<'static, str>>, missing: Missing, record: &'static str) -> Self {
         NotYet {
             what: what.into(),
@@ -113,5 +133,23 @@ mod tests {
         );
         assert_eq!(e.missing, Missing::NotRead);
         assert_eq!(e.what, "resolver class A.B");
+    }
+}
+
+#[cfg(test)]
+mod partial_writes_tests {
+    use super::*;
+
+    /// One exact check at the start (review r3 of #464, item 3): the phrase inside a text is not the mark, so it is
+    /// prefixed; a marked text is left as it is.
+    #[test]
+    fn the_mark_is_an_exact_prefix_added_once() {
+        let inner = "an invented failure quoting stopped after partial writes: here";
+        assert!(!is_partial_writes(inner));
+        let marked = mark_partial_writes(inner);
+        assert!(is_partial_writes(&marked) && marked.ends_with(inner));
+        assert_eq!(mark_partial_writes(&marked), marked);
+        let n = NotYet::not_read("an invented NotYet", "an invented record").after_partial_writes();
+        assert!(is_partial_writes(&n.what) && n.missing == Missing::NotRead && n.record == "an invented record");
     }
 }

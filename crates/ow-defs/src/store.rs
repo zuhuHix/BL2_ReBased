@@ -2153,13 +2153,27 @@ impl DefStore {
         class_path: &str,
         read: impl FnOnce(&ObjectSpace, ObjRef) -> R,
     ) -> Result<R, DefError> {
-        self.run(w, |l| {
+        // The resolver allocates stand-ins and records identity entries outside the load's own tracking (review r3 of
+        // #464, item 2): the objects not in this snapshot are freed after the read, the identity entries of freed
+        // objects pruned, and the no-holder log put back, so the read leaves the store as it was.
+        let before: FixedHashSet<ObjRef> = w.heap.handles().into_iter().collect();
+        let (logged, log_len) = (self.handles.borrow().no_holder_logged.clone(), self.state.log.len());
+        let out = self.run(w, |l| {
             let key = l.cx.code.find_class(l.cx.store, class_path)?;
             Ok(l.cx.load_discarded(|cx| {
                 let o = cdo::class_default(cx, key)?;
                 Ok(read(cx.space, o))
             })?)
-        })
+        });
+        let fresh: Vec<ObjRef> = w.heap.handles().into_iter().filter(|o| !before.contains(o)).collect();
+        if !fresh.is_empty() {
+            w.free_many(&fresh).map_err(|e| DefError::from(ow_object::decode::DecodeError::Heap(e)))?;
+        }
+        let mut handles = self.handles.borrow_mut();
+        handles.prune(w);
+        handles.no_holder_logged = logged;
+        self.state.log.truncate(log_len);
+        out
     }
 }
 
