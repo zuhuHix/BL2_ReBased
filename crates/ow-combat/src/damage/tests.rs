@@ -59,7 +59,7 @@ fn the_damage_source_multiplies_the_instigators_attribute() {
     );
     assert!(!failed, "{text}");
     assert!(text.contains("\"hit.Armored.L4.1.applied\":60"), "{text}");
-    // Off stops earlier at the unread Willow hold virtual, before the attribute stage.
+    // Off stops earlier, at the Willow component's demigod list, before the attribute stage (the toy AIComponent declares no DemigodHolds (the combat fixture is pinned against the C++ digests); since decision 2026-11-19-43 Off reads the Willow component's demigod list, so it stops there).
     let (text, failed) = applied(
         ParityMode::Off,
         &[
@@ -71,7 +71,7 @@ fn the_damage_source_multiplies_the_instigators_attribute() {
     assert!(failed);
     assert!(
         text.contains(
-            "AI hold virtual overrides"
+            "AIComponent has no DemigodHolds array"
         ),
         "{text}"
     );
@@ -299,10 +299,8 @@ fn an_ai_bullet_refuses_unread_willow_hold_before_weapon_scales() {
         let bullet = vm.find_class("WillowGame.WillowDmgSource_Bullet").unwrap();
         let r = crate::hit::hit_with_type(vm, victim, Some(attacker), 100.0, None, Some(bullet));
         match (mode, r) {
-            (ParityMode::Off, Err(VmError::NotYet(n))) => {
-                assert_eq!(n.missing, Missing::NotRead);
-                assert!(n.to_string().contains("AI hold virtual overrides"), "{n}");
-            }
+            // the toy AIComponent declares no DemigodHolds (the combat fixture is pinned against the C++ digests); since decision 2026-11-19-43 Off reads the Willow component's demigod list, so it stops there.
+            (ParityMode::Off, Err(e)) => assert!(e.to_string().contains("AIComponent has no DemigodHolds array"), "{e}"),
             (ParityMode::Reference, Ok(r)) => assert!(
                 r.events.iter().any(|e| e
                     == "note: AdjustDamage stage 1: the AI weapon scales of bullet and rocket damage are not implemented"),

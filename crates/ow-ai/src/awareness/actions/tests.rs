@@ -325,6 +325,46 @@ fn holds_are_name_and_tag_pairs() {
     }
 }
 
+/// `WillowAIComponent`'s own `Hold`, `Release` and `OnHold` replace the base kind, unread (NATIVE_AI_HOLDS.md, read
+/// 2026-11-19; decision 2026-11-19-43): `NotYet { NotRead }` in Off, nothing changed; Reference keeps the base rule.
+#[test]
+fn willow_base_hold_kind_is_not_yet_in_off() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut e = env(mode);
+        let vm = &mut e.vm;
+        let (hn, tg) = (decl(vm, "HoldName", PropKind::Name), decl(vm, "Tag", PropKind::Object { class: e.object }));
+        let hold = vm.space.classes.define_struct("Toy.ToyObject.ToyHold", None, vec![hn, tg]).unwrap();
+        let holder =
+            class(vm, "Toy.ToyWillowHolder", e.object, &[("Holds", PropKind::Array(Box::new(PropKind::Struct(hold))))]);
+        let name = decl(vm, "HoldName", PropKind::Name);
+        let tag = decl(vm, "Tag", PropKind::Object { class: e.object });
+        let [hold_path, release_path, on_hold_path] = WILLOW_BASE_KIND;
+        let hold_f = declare(vm, holder, hold_path, vec![name.clone(), tag.clone()], None);
+        let release_f = declare(vm, holder, release_path, vec![name, tag], None);
+        let on_hold_f = declare(vm, holder, on_hold_path, vec![], Some(PropKind::Bool));
+        Pack.register(vm).unwrap();
+        let component = make(vm, holder, "ToyWillowComponent_1");
+        let t = make(vm, e.object, "ToyTag");
+        let n = Value::Name(vm.space.names.intern("Attack"));
+        let held = vm.call(hold_f, Some(component), vec![n.clone(), Value::Object(Some(t))]);
+        let released = vm.call(release_f, Some(component), vec![n, Value::Object(Some(t))]);
+        let on = vm.call(on_hold_f, Some(component), vec![]);
+        match mode {
+            ParityMode::Off => {
+                for r in [held.map(|_| ()), released.map(|_| ()), on.map(|_| ())] {
+                    assert!(matches!(r, Err(VmError::NotYet(ref n)) if n.missing == ow_core::Missing::NotRead), "{r:?}");
+                }
+                assert!(ow_combat::hit::access::array(vm, component, "Holds").unwrap().is_empty(), "nothing changed");
+            }
+            _ => {
+                held.unwrap();
+                released.unwrap();
+                assert_eq!(on.unwrap().ret, Value::Bool(false), "Reference: the base rule, as before");
+            }
+        }
+    }
+}
+
 struct ToyMoves {
     calls: Vec<String>,
 }

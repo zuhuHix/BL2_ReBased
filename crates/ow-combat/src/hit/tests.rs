@@ -418,19 +418,17 @@ fn a_pawn_stays_demigod_until_every_hold_is_released() {
     assert!(!run.failed(), "{:?}", run.errors());
 }
 
-/// Off cannot apply the base list rule to the unread Willow virtual override.
+/// Off reads the Willow component's demigod list (decision 2026-11-19-43: `WillowAIComponent` keeps the kind's base
+/// routine; the rule itself is tested in `crate::holds::tests`). On this fixture that is a typed error: the toy AIComponent declares no DemigodHolds (the combat fixture is pinned against the C++ digests); since decision 2026-11-19-43 Off reads the Willow component's demigod list, so it stops there.
 #[test]
-fn off_refuses_willow_holds_without_mutating_the_list() {
+fn off_reads_the_willow_components_demigod_list() {
     let (mut run, _dir) = fresh(ParityMode::Off);
     run.apply("spawn:ToyPawns/Pawn_Toy:4");
-    let mind = run.enemy(0).unwrap().mind;
-    let component = object(&mut run.world().vm, mind, "AIComponent").unwrap().unwrap();
     for step in ["hold:0:Safe", "release:0:Safe"] {
         run.apply(step);
     }
     assert_eq!(run.errors().len(), 2, "{:?}", run.errors());
-    assert!(run.errors().iter().all(|e| e.contains("AI hold virtual overrides")));
-    assert!(access::array(&mut run.world().vm, component, "DemigodHolds").unwrap().is_empty());
+    assert!(run.errors().iter().all(|e| e.contains("AIComponent has no DemigodHolds array")), "{:?}", run.errors());
 }
 
 #[test]
