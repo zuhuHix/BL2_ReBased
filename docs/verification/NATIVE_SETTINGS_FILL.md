@@ -30,8 +30,9 @@ the class defaults. For each entry of `GameSettingsCfgList`, in order:
 2. only if that worked, a new settings provider is made and stored as the entry's `Provider`. Its class is the store's
    `SettingsProviderClass` when that is `UIDataProvider_Settings` or a subclass of it, and `UIDataProvider_Settings`
    otherwise;
-3. the provider is then bound to the new settings object (it takes them as its source; the binding builds the
-   provider's own view of the settings' properties for the UI, which the refresh does not use).
+3. the provider is then bound to the new settings object: its `Settings` becomes that object and its `DataClass`
+   that object's class. The binding then builds the provider's per-setting list providers
+   (`SettingsArrayProviders`) for the UI. That last part was not read, and the refresh does not use it.
 
 For the Willow store, the defaults give one entry of class `WillowOnlineGameSettings` and a `SettingsProviderClass`
 of `Engine.UIDataProvider_Settings` (installed package). So after initialisation, `GameSettingsCfgList[0].GameSettings`
@@ -50,9 +51,9 @@ refresh takes the data store route.
 
 `WillowOnlineGameSettings`' class defaults already list, in `Properties`, eight integer properties. Each has
 advertisement type 1, and `PropertyMappings` names them: `CurrMission`, `PlayThrough`, `HostExpLevel`, `IsPublic`,
-`CurrPlotMission`, `DlcFlag`, `DlcMapPackageId` and `DlcMapContentId`. The refresh's five writes (level, active
-mission, active plot mission, playthrough, DLC content id and flag) each target one of these. All their values start
-at 0.
+`CurrPlotMission`, `DlcFlag`, `DlcMapPackageId` and `DlcMapContentId`. The refresh writes four of them before the
+DLC gate (level, active mission, active plot mission, playthrough), plus two when a DLC manager is present (DLC
+content id and DLC flag). All their values start at 0.
 
 ## 3. The natives the refresh meets
 
@@ -74,39 +75,72 @@ at 0.
 
 ## 4. What Off does
 
-- **The store's initialisation:** Off fills each entry as section 1 says, when the world's data store client makes
-  the store: a `WillowOnlineGameSettings` object from its class defaults as `GameSettings`, and a
-  `UIDataProvider_Settings` as `Provider`. The provider's binding (section 1, step 3) is UI-side. It is a named
-  `NotYet` only if something on the slice reads the provider (nothing on the accept path does). The moment of
-  initialisation (open question 1) is the client's creation in the port.
-- **`Registered`:** if the port runs the store's script `Registered` event, its property-notification native
-  (`AddPropertyNotificationChangeRequest`, not read) is a named `NotYet`.
-- **The settings entry read** (the NotYet IMPL-ONLINE-GAME-SETTINGS stops at): it answers the object above, so the
-  refresh goes on to its writes.
-- **`SetIntProperty`:** section 3's rule, in Off.
-- **`GetCurrPlaythrough`:** the field read, in Off.
-- **`GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber`:** the rules of their notes, wherever the port has
-  them in Off. Otherwise they stay named `NotYet`s.
-- **`GetDLCManager`:** the world engine's `DLCManager`. The port's engine has no DLC manager, as it has no online
-  subsystem: it answers None, and the refresh skips the DLC writes (the script tests the manager first). This is a
-  fact about our engine, the same kind of ruling as the online subsystem. Whether the shipped game always has a
-  manager is open (open question 2), and the hub should confirm it.
-- **With a manager** (not the port's case): `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` are named
-  `NotYet`s.
+**The provider's lifecycle, one answer for each moment:**
+- **At store creation** (when the world's data store client makes the store): Off makes both objects of section 1 for
+  each entry. `GameSettings` is a `WillowOnlineGameSettings` from its class defaults, and `Provider` is a
+  `UIDataProvider_Settings` (the class rule of section 1, step 2).
+- **At binding** (straight after): Off sets the provider's `Settings` to the new settings object and its `DataClass`
+  to that object's class. It does not build `SettingsArrayProviders`, because that part was not read: the array stays
+  empty.
+- **At registration:** Off does not run the store's script `Registered` event when it makes the store. Whether and
+  when the game runs it for a global store with no player is open question 1.
+- **The `NotYet`:** any call on the provider, native or script, answers the named `NotYet` "UIDataProvider_Settings:
+  the settings provider's list providers are not built (NATIVE_SETTINGS_FILL.md section 4)". That includes
+  `UIDataProvider.AddPropertyNotificationChangeRequest`, which `Registered` would make. Nothing on the accept path
+  calls the provider.
+
+**The refresh, in order** (NATIVE_ONLINE_GAME_SETTINGS.md section 5, carried forward):
+1. The gate: the controller's role, `IsPrimaryPlayer` and `IsLocalPlayerController`, as that note says.
+2. Branch 1, the online subsystem: bypassed, since the port has none (hub ruling).
+3. Branch 2, the data store: `GetDataStoreClient` and `FindDataStore`, as that note says.
+4. **The settings entry:** that note's named `NotYet` at the entry read (decision 2026-11-19-65's override of
+   `GetOnlineGameSettingsViaDatastore`) **is replaced** by the initialised object above. The read answers the entry's
+   `GameSettings`, and the refresh goes on.
+5. The level write: `ExpLevel` (player replication info) plus `OverpowerLevelModifier` (game replication info), two
+   field reads; then the script `UpdateExpLevel`, which writes through `SetIntProperty`.
+6. `GetActiveMissionNumber`, then the script `UpdateActiveMission`. Until a lane binds the rule of
+   NATIVE_CONTROLLER_HELPERS.md in Off, it answers its current named `NotYet` (a `NotYet` of kind not-read, "behind the
+   online game settings refresh, not read", bound by decision 2026-11-19-65). The refresh stops there.
+7. `GetActivePlotCriticalMissionNumber`, then the script `UpdateActivePlotMission`. The same holds: its current
+   named `NotYet` from decision 2026-11-19-65, until the rule of NATIVE_SAVE_LOAD.md is bound in Off.
+8. `GetCurrPlaythrough` (the field read of section 3, in Off), then the script `UpdatePlaythrough`.
+9. **The DLC gate:** `GetDLCManager`. **Hub ruling (2026-11-19, settled):** the port's engine has no DLC manager, the
+   same kind of ruling as the online subsystem, so `GetDLCManager` answers None in Off and the refresh skips the two
+   DLC writes. This is revisited when DLC content is in scope. With a manager (not the port's case),
+   `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` are named `NotYet`s.
+
+Every `Update...` step writes through `SetIntProperty`, section 3's rule in Off. The push to the online subsystem is
+not reached on this path.
 
 ## Open questions
 
 1. **UNVERIFIED:** when the client initialises its global stores in this executable (at engine start, as in public
    UE3, or later), and whether `Registered` runs for a global store with no player.
-2. **UNVERIFIED:** whether the shipped game's engine always has a `DLCManager` in single player, and what
-   `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` answer there.
+2. **UNVERIFIED, separate from the hub's ruling:** whether the shipped game's engine always has a `DLCManager` in
+   single player, and what `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap` answer there.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-- Right after the main menu, read the online game settings store's `GameSettingsCfgList[0]`: the class of
-  `GameSettings` and `Provider`, and the eight `Properties` with their values.
-- During a mission accept, hook `Settings.SetIntProperty` and record each property id and value. Compare them with
-  `GetCurrPlaythrough` + 1, the mission numbers + 1, and the player's level plus the overpower modifier.
-- Read `GameEngine.DLCManager` in single player, and call `HasCompatibilityData` and
+Each check says which case it tells apart.
+- **Startup, before any accept:** at the main menu and again just after a map loads, read the online game settings
+  store's `GameSettingsCfgList[0]`: the classes of `GameSettings` and `Provider`, and the eight `Properties` with their
+  values. Filled at the main menu means initialisation at engine start; empty at the menu and filled after the map
+  means later (open question 1).
+- **Registration:** hook `UIDataStore_OnlineGameSettings.Registered` from launch. Record whether it fires for this
+  store, when, and with which player (none, or the local player) (open question 1).
+- **The provider's settings source:** read `Provider.Settings` and `Provider.DataClass`. Expect the entry's
+  `GameSettings` object and its class (section 1, step 3). Also read `Provider.SettingsArrayProviders`: its length
+  shows whether the unread list build made one entry per localized setting.
+- **The writes:** during a mission accept, hook `Settings.SetIntProperty` and record each property id and value, in
+  order. Compare them with the player's level plus the overpower modifier, the mission numbers plus 1 and
+  `GetCurrPlaythrough` plus 1. Four calls mean no DLC manager; six mean one.
+- **The setter's misses:** call `SetIntProperty` with an id the settings do not list, and confirm `Properties` is
+  unchanged.
+- **The setter's type test:** call `SetIntProperty` on the id of a non-integer entry (add a float entry to a scratch
+  `Settings` object first), and confirm that entry is unchanged.
+- **The setter's first match:** on a scratch `Settings` object with two entries of one id, call `SetIntProperty` and
+  confirm that only the first entry changes.
+- **The DLC manager:** read `GameEngine.DLCManager` in single player, and call `HasCompatibilityData` and
   `StaticGetDlcContentIdForCurrentMap` on a base-game map (open question 2).
-- Call `SetIntProperty` with an id the settings do not list, and confirm `Properties` is unchanged.
+- **No check tells this case apart:** the provider class fallback of section 1, step 2 (a `SettingsProviderClass`
+  that is not a `UIDataProvider_Settings`). The installed data has only the default class.
