@@ -29,6 +29,7 @@ mod conditional;
 mod constant;
 mod constraint;
 mod currency;
+mod damage_type;
 mod global;
 mod manufacturer;
 pub(crate) mod noun;
@@ -46,6 +47,8 @@ mod attr_resolver_tests;
 #[cfg(test)]
 mod blackmarket_upgrade_tests;
 #[cfg(test)]
+mod damage_type_tests;
+#[cfg(test)]
 mod designer_tests;
 #[cfg(test)]
 mod noun_tests;
@@ -62,7 +65,7 @@ pub(crate) mod testworld;
 pub(crate) const RECORD: &str = "NATIVE_ATTRIBUTES.md section 6";
 
 /// Every value resolver class this module implements, by its class path in the packages.
-pub(crate) const CLASSES: [&str; 19] = [
+pub(crate) const CLASSES: [&str; 20] = [
     "Engine.ObjectPropertyAttributeValueResolver",
     "GearboxFramework.ConstantAttributeValueResolver",
     "GearboxFramework.SimpleMathValueResolver",
@@ -82,6 +85,7 @@ pub(crate) const CLASSES: [&str; 19] = [
     "WillowGame.AmmoDropWeightAttributeValueResolver",
     "GearboxFramework.ConstraintAttributeValueResolver",
     blackmarket_upgrade::CLASS,
+    damage_type::CLASS,
 ];
 
 /// Registers every value resolver class this module implements ([`CLASSES`], in that order).
@@ -104,5 +108,6 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_value_resolver(CLASSES[15], random::Random)?
         .with_value_resolver(CLASSES[16], ammo_drop_weight::AmmoDropWeight)?
         .with_value_resolver(CLASSES[17], constraint::Constraint)?
-        .with_value_resolver(CLASSES[18], blackmarket_upgrade::BlackMarketUpgrade)
+        .with_value_resolver(CLASSES[18], blackmarket_upgrade::BlackMarketUpgrade)?
+        .with_value_resolver(CLASSES[19], damage_type::DamageType)
 }

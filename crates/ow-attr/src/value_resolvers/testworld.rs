@@ -211,6 +211,7 @@ pub(crate) struct Classes {
     pub range: StructId,
     pub maker_sel: StructId,
     pub type_sel: StructId,
+    pub damage_sel: StructId,
     pub def_data: StructId,
     pub attribute: ClassId,
     pub multi: ClassId,
@@ -221,6 +222,8 @@ pub(crate) struct Classes {
     pub controller: ClassId,
     pub maker: ClassId,
     pub weapon_type: ClassId,
+    pub elemental: ClassId,
+    pub damage_type: ClassId,
     pub designer: ClassId,
     pub skill: ClassId,
     pub unlinked: ClassId,
@@ -387,8 +390,21 @@ impl Fx {
             )
             .unwrap();
         let fields = vec![
+            d(&mut space, "AssociatedDamageTypeName", PropKind::Name),
+            d(&mut space, "ValueIfMatched", PropKind::Struct(aid)),
+        ];
+        let damage_sel = space
+            .classes
+            .define_struct(
+                "WillowGame.DamageTypeAttributeValueResolver.DamageTypeSelectorData",
+                None,
+                fields,
+            )
+            .unwrap();
+        let fields = vec![
             d(&mut space, "WeaponTypeDefinition", obj_kind(object)),
             d(&mut space, "ManufacturerDefinition", obj_kind(object)),
+            d(&mut space, "ElementalPartDefinition", obj_kind(object)),
         ];
         let def_data = space
             .classes
@@ -537,6 +553,16 @@ impl Fx {
                 ],
             ),
             (
+                "WillowGame.DamageTypeAttributeValueResolver",
+                vec![
+                    (
+                        "DamageTypes",
+                        PropKind::Array(Box::new(PropKind::Struct(damage_sel))),
+                    ),
+                    ("ValueIfNotMatched", PropKind::Struct(aid)),
+                ],
+            ),
+            (
                 "GearboxFramework.NounAttributeValueResolver",
                 vec![
                     ("DefaultValue", PropKind::Struct(aid)),
@@ -615,10 +641,22 @@ impl Fx {
             .classes
             .define("Test.ManufacturerDefinition", Some(object), vec![])
             .unwrap();
-        let decls = vec![PropertyDecl::new(space.names.intern("WeaponType"), byte())];
+        let decls = vec![
+            PropertyDecl::new(space.names.intern("WeaponType"), byte()),
+            PropertyDecl::new(space.names.intern("DefaultDamageTypeDefinition"), obj_kind(object)),
+        ];
         let weapon_type = space
             .classes
             .define("Test.WeaponTypeDefinition", Some(object), decls)
+            .unwrap();
+        let decls = vec![PropertyDecl::new(space.names.intern("CustomDamageTypeDefinition"), obj_kind(object))];
+        let elemental = space
+            .classes
+            .define("Test.ElementalPartDefinition", Some(object), decls)
+            .unwrap();
+        let damage_type = space
+            .classes
+            .define("Test.DamageTypeDefinition", Some(object), vec![])
             .unwrap();
         let decls = vec![plain(&mut space, "Grade", PropKind::IntAttribute)];
         let skill = space
@@ -669,6 +707,7 @@ impl Fx {
             range,
             maker_sel,
             type_sel,
+            damage_sel,
             def_data,
             attribute,
             multi,
@@ -679,6 +718,8 @@ impl Fx {
             controller,
             maker,
             weapon_type,
+            elemental,
+            damage_type,
             designer,
             skill,
             unlinked,

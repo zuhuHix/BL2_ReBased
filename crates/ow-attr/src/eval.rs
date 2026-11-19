@@ -616,7 +616,7 @@ fn resident(cx: &mut EvalCx<'_>, obj: ObjRef, what: &str) -> Result<(), AttrErro
 }
 
 /// Property `name` of the resident `obj`, read without a load (`BadData` when its class has none).
-fn resident_field(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Value, AttrError> {
+pub(crate) fn resident_field(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Value, AttrError> {
     let space = cx.world.parts().space;
     let class = space.heap.get(obj)?.class;
     match space.prop(class, name) {
