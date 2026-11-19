@@ -60,8 +60,12 @@
 //! - `PlayLocal` when the owner's pawn's `Controller` answers `IsLocalController()` true (read as the stock "locally
 //!   controlled", UNVERIFIED). The owner's pawn is the owner itself when it is an `Engine.Pawn`; another owner's pawn
 //!   is not read: `NotYet`. No controller: false. The side tests run before any behavior, so `IsLocalController` is
-//!   called only when it is a bound native (the stock read-only query); a script override or an unbound native is
-//!   `NotYet` before it is invoked.
+//!   called only when its binding is on [`READ_ONLY_QUERIES`] (the stock `Controller.IsLocalController`, which no lane
+//!   binds yet); a script override, another binding or an unbound native is `NotYet` before it is invoked.
+//! - **What the preflight cannot know** (hub ruling, review r3 of #439): it refuses what is cheap and certain up front
+//!   (the dispatch shape, the VM's call-entry check including an unbound native in Off and the body's decoding). A
+//!   refusal the VM finds only inside a behavior that runs after an earlier one wrote state is the terminal
+//!   [`PARTIAL_WRITES`] stop; that is the rule, not a gap.
 //!
 //! The flags are tried in that order.
 //!
@@ -108,6 +112,10 @@ pub const ANIM_EVENTS: [&str; 4] = [
     "Engine.GearboxAnimDefinition.OnStart",
     "Engine.GearboxAnimDefinition.OnServerStart",
 ];
+/// The side tests' read-only queries: the only bindings a preflight may call (review r3 of #439, item 1). The stock
+/// `Controller.IsLocalController`, a query; no lane of the port binds it yet, so until one does, `PlayLocal` is
+/// `NotYet` in a run.
+pub const READ_ONLY_QUERIES: [&str; 1] = ["Controller.IsLocalController()"];
 /// The instance-data interface (NATIVE_BEHAVIOR_CONTEXT.md: the Engine `IInstanceData` interface).
 pub const INSTANCE_DATA_INTERFACE: &str = "Engine.IInstanceData";
 
@@ -606,16 +614,18 @@ fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<
         // The side tests run before any behavior (the preflight), so only a query known to change nothing is called
         // (review r2 of #439, item 2): a bound native `IsLocalController`, the stock read-only query. A script
         // override, or a native nothing binds, is refused before it is invoked.
+        // Only a binding on the allow-list of read-only queries the port registers (review r3 of #439, item 1): a
+        // subclass's own bound native could write, so any other resolved binding is refused too.
         let bound = vm
             .function(f)
             .filter(|d| d.is_native())
             .and_then(|d| d.native_key.clone())
-            .is_some_and(|key| vm.has_native(&key));
+            .is_some_and(|key| READ_ONLY_QUERIES.contains(&key.as_str()) && vm.has_native(&key));
         if !bound {
             return Err(NotYet::not_read(
                 format!(
-                    "CanPlayBehaviorData's PlayLocal: {} is not a bound native (a script override, or unbound), so \
-                     it is not known to change nothing",
+                    "CanPlayBehaviorData's PlayLocal: {} is not a bound native on the read-only allow-list (a script \
+                     override, another binding, or unbound), so it is not known to change nothing",
                     vm.function(f).map_or_else(String::new, |d| d.path.as_str().to_string())
                 ),
                 RECORD,
