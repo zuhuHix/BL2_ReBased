@@ -39,7 +39,8 @@ other players (level, current mission, playthrough, DLC). It is not mission logi
    - otherwise `FindDataStore` (section 3) looks up the tag `WillowOnlineGameSettings` for the controller's local
      player, and the answer is cast to `WillowOnlineGameSettings_DataStore`;
    - the settings are the `GameSettings` of that store's first `GameSettingsCfgList` entry, cast to
-     `WillowOnlineGameSettings`. With no store or no settings, the script does nothing more (the Off contract for this case is section 5).
+     `WillowOnlineGameSettings`. With no store or no settings, the script does nothing
+     more (the Off contract for this case is section 5).
 
 No gameplay state is read back from these settings on the accept path.
 
