@@ -31,7 +31,7 @@ mod tests;
 
 pub use actors::{
     Actor, Controller, GameInfo, NoContextNeeded, OffHandWeapon, Pawn, PlayerController,
-    PlayerReplicationInfo, Weapon, WillowMind,
+    PlayerReplicationInfo, Weapon, WillowMind, controller_of,
 };
 pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor, implements_interface};
 pub use inventory::{EquippedInventory, Inventory};

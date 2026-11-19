@@ -30,7 +30,8 @@
 //!   before it asks, for the same reason.)
 //!
 //! **The pack** ([`Pack`]) registers the natives, the queries (on a VM with W5-WORLD's query service), the two script
-//! overrides of `crate::equip`, and the spawn natives of `crate::spawn`.
+//! overrides of `crate::equip`, the Off attribute and slot natives of `crate::equip::natives`, and the spawn natives
+//! of `crate::spawn`.
 
 use std::rc::Rc;
 
@@ -313,6 +314,7 @@ impl NativePack for Pack {
         register_natives(vm)?;
         register_queries(vm)?;
         crate::equip::bind_overrides(vm)?;
+        crate::equip::natives::register(vm)?;
         crate::spawn::register(vm)
     }
 }

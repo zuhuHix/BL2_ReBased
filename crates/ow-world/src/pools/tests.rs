@@ -1774,7 +1774,7 @@ fn a_pawn_without_authority_gets_no_pool() {
 // ---------------------------------------------------------------------------------------------------------------
 
 #[test]
-fn the_resource_pool_query_finds_a_controllers_pool_through_the_controller_resolver() {
+fn the_resource_pool_query_finds_a_controllers_pool_through_the_controller_resolver_rule() {
     run(|| {
         let mut x = fx();
         let (controller, m) = x.controller_with_manager("Controller");
@@ -1793,12 +1793,16 @@ fn the_resource_pool_query_finds_a_controllers_pool_through_the_controller_resol
         );
         let (r, _) = x.create(Some(m), Some(controller), Some(def), false);
         assert_eq!(x.vm().engine_query(q, controller).unwrap(), r.data);
-        // A pawn source, or another resolver class: not read.
-        let (p, _, _) = pawn(&mut x);
-        assert!(matches!(
-            x.vm().engine_query(q, p).unwrap_err(),
-            ow_attr::api::AttrError::NotYet(_)
-        ));
+        // The controller rule on another source (`ow-attr`'s, lane FIX-EQUIP-NATIVES): an actor whose instigator is
+        // a pawn of this controller (a held weapon) finds the controller's pool; an object that is no actor has no
+        // controller, so no pool.
+        let p = x.new_obj("Pawn");
+        x.set(p, "Controller", Value::Object(Some(controller)));
+        let held = x.new_obj("Actor");
+        x.set(held, "Instigator", Value::Object(Some(p)));
+        assert_eq!(x.vm().engine_query(q, held).unwrap(), r.data);
+        assert_eq!(x.vm().engine_query(q, def).unwrap(), None);
+        // Another resolver class: not read.
         let pawn_resolver = x.new_obj("PawnAttributeContextResolver");
         x.set(
             resource,

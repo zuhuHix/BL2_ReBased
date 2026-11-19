@@ -33,6 +33,10 @@
 //! the lane's differential test of the two script overrides of `ow_inventory::equip` (the installed script against the
 //! Rust rule; [`script_diff`]). It is not a C++ command; `args.rs` lists only the C++ form in the usage text.
 //!
+//! **A second Rust-only form**, `<package> --inventory-move --equip-run <weapons file> --cooked <dir> --output <file>`,
+//! runs the installed spawn, equip and unequip script of each weapon on a gameplay world and lists where each phase
+//! stops (lane FIX-EQUIP-NATIVES; `equip_run`).
+//!
 //! `mode` is the run's parity mode, read once by `main`; it goes to the definition store and the VM.
 
 use std::cell::Cell;
@@ -61,6 +65,8 @@ use crate::args::{Command, USAGE};
 use crate::cmd::properties::error_text;
 use crate::cmd::tables::signed_number;
 use crate::json::quote;
+
+mod equip_run;
 
 /// The script function the adapter runs.
 pub const MOVE_DELTA: &str = "WillowGame.InventoryListPanelGFxObject.MoveDelta";
@@ -110,6 +116,9 @@ fn execute(args: &[String], mode: ParityMode, out: &mut String) -> Result<u8, St
     Package::load(Path::new(source)).map_err(|e| error_text(&e))?;
     if args.iter().any(|a| a == "--script-diff") {
         return script_diff(args, mode, out);
+    }
+    if args.iter().any(|a| a == "--equip-run") {
+        return equip_run::equip_run(args, mode, out);
     }
     if args.len() != 7 || args[5] != "--cooked" {
         return Err(USAGE.to_string());
@@ -433,8 +442,9 @@ fn source_entry_kind(vm: &mut Vm, getter: FuncId) -> Result<u8, String> {
 /// summary to stdout; exit 0 when every weapon is identical.
 ///
 /// Both VMs bind the three `AttributeDefinitionBase` natives the installed `ApplyAttributeEffects` script calls
-/// (`ResolveContext`, `AddAttributeModifier`, `RemoveAttributeModifier`) to `ow-attr`, here only: no lane binds them
-/// in a pack yet (a contract item in the lane's handoff).
+/// (`ResolveContext`, `AddAttributeModifier`, `RemoveAttributeModifier`) to `ow-attr`: the script side here, the
+/// Rust side through its pack in Off (`ow_inventory::equip::natives`, lane FIX-EQUIP-NATIVES) and here in Reference,
+/// where the pack binds none. Both are the same `ow-attr` calls.
 fn script_diff(args: &[String], mode: ParityMode, out: &mut String) -> Result<u8, String> {
     let mut list = None;
     let mut cooked = None;
@@ -553,7 +563,10 @@ fn diff_world(
     let attrs = AttributeSystem::standard().map_err(|e| error_text(&e))?;
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode);
     ow_vm::natives_core::register(&mut vm).map_err(|e| vm_text(&e))?;
-    bind_attribute_natives(&mut vm).map_err(|e| vm_text(&e))?;
+    // In Off the Rust side's pack binds the same three natives itself (`ow_inventory::equip::natives`).
+    if !(rust && mode == ParityMode::Off) {
+        bind_attribute_natives(&mut vm).map_err(|e| vm_text(&e))?;
+    }
     let snapshot = BalanceSnapshot::new(
         Playthrough::NORMAL,
         OpLevel::new(0).map_err(|e| error_text(&e))?,

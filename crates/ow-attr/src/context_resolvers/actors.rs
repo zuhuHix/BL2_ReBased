@@ -53,26 +53,32 @@ impl ContextResolver for Controller {
         source: Option<ObjRef>,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<ObjRef>, AttrError> {
-        const WHO: &str = "ControllerAttributeContextResolver";
         let Some(s) = source else { return Ok(None) };
         let parts = cx.world.parts();
-        let space = &*parts.space;
-        if is_a(space, s, CONTROLLER)? {
-            return Ok(Some(s));
-        }
-        if !is_a(space, s, ACTOR)? {
-            return Ok(None);
-        }
-        if let Some(instigator) = required_object_prop(space, s, "Instigator", WHO)? {
-            return required_object_prop(space, instigator, "Controller", WHO);
-        }
-        if !is_a(space, s, PAWN)? {
-            return Ok(None);
-        }
-        match required_object_prop(space, s, "DrivenVehicle", WHO)? {
-            Some(vehicle) => required_object_prop(space, vehicle, "Controller", WHO),
-            None => required_object_prop(space, s, "Controller", WHO),
-        }
+        controller_of(parts.space, s)
+    }
+}
+
+/// The rule of [`Controller`] on a source object, without an evaluation context: what the engine's other users of
+/// the rule call (the resource pool query of `ow-world`, whose resources name this resolver as their owner
+/// resolver; lane FIX-EQUIP-NATIVES).
+pub fn controller_of(space: &ow_object::heap::ObjectSpace, s: ObjRef) -> Result<Option<ObjRef>, AttrError> {
+    const WHO: &str = "ControllerAttributeContextResolver";
+    if is_a(space, s, CONTROLLER)? {
+        return Ok(Some(s));
+    }
+    if !is_a(space, s, ACTOR)? {
+        return Ok(None);
+    }
+    if let Some(instigator) = required_object_prop(space, s, "Instigator", WHO)? {
+        return required_object_prop(space, instigator, "Controller", WHO);
+    }
+    if !is_a(space, s, PAWN)? {
+        return Ok(None);
+    }
+    match required_object_prop(space, s, "DrivenVehicle", WHO)? {
+        Some(vehicle) => required_object_prop(space, vehicle, "Controller", WHO),
+        None => required_object_prop(space, s, "Controller", WHO),
     }
 }
 
