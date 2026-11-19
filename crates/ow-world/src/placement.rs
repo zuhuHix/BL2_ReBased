@@ -511,8 +511,6 @@ fn search(q: &Queries<'_>, e: [f32; 3], l0: [f32; 3], complex: bool) -> Result<O
     search_rest(q, e, l0, complex)
 }
 
-/// The spot search for a spawn of `template` at `location` (module documentation, steps 2 and 3): the location to
-/// make the actor at, or `None` when the search fails. Reads only; it runs before anything is made.
 /// One box sweep of the search (the level part, then the actor walk over the capped segment), for the crate's
 /// tests: the search reaches a sweep only behind a scripted first test.
 #[cfg(test)]
@@ -526,6 +524,8 @@ pub(crate) fn box_sweep_in(
     Queries { model: model.as_ref(), vm: Some(vm) }.box_sweep(extent, start, end)
 }
 
+/// The spot search for a spawn of `template` at `location` (module documentation, steps 2 and 3): the location to
+/// make the actor at, or `None` when the search fails. Reads only; it runs before anything is made.
 pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option<Value>, VmError> {
     let space = &vm.space;
     let Some(model) = collision_model(vm)? else {
