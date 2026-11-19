@@ -45,7 +45,8 @@ analysis output were not opened. Synthetic fixtures only.
     is a Script error, and the heap's committed writes, the RNG draws and the definition load transitions do not
     move;
   - a second registration, which binds nothing new, and Reference, which binds none of the five.
-- **Link 9.** With #523 and #535, this removes the `SetObjectBehaviorVariable` stop. The expected next stop is
-  `ActivateBehaviorEventFromScript` with `Parameters` (the note's section 4, open question 1).
+- **Link 9.** With #523 and #535, this removes the `SetObjectBehaviorVariable` stop. The observed next stop is the
+  unbound `ActionSkill.GetBehaviorProviderDefinition()`, an argument of the event fire, evaluated before it (GATES.md).
+  `ActivateBehaviorEventFromScript` with `Parameters` (the note's section 4, open question 1) is expected after it.
 - **UNVERIFIED.** Every rule is unconfirmed in the running game, the bool's stored value for true included. The note
   gives the live check.
