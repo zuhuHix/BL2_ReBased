@@ -22,8 +22,7 @@ change to parsing. Nothing here was checked in the running game: every rule is *
     `RecordCharacterRevivedEventForPlayer`;
   - read in part: `PopEffect`, `AddStationToNameListInOrder`;
   - not readable here: `GetTravelStationDefinition` (all three declarations), `Controller.IsDead`, `AddFastTravelLocation`,
-    `IsStationInList` and the pawn virtual `IsUsingVehicleEx` asks. Each forwards to a native virtual, and their
-    classes have no RTTI names, so the vtables were not found;
+    `IsStationInList` and the pawn's answer `IsUsingVehicleEx` asks for. The body was not located by this analysis; a bl-sdk live read settles it.;
   - not read: `MissionTracker.FastTravelStationRegistered`, a mission-objective routine too deep for this lane.
   Every one stays unbound in Off for a fresh implementer, or for a live read. Nothing this lane analysed is
   implemented here.
@@ -42,5 +41,5 @@ change to parsing. Nothing here was checked in the running game: every rule is *
   - Link 14 needs link 1 first: `GetPlayerPawnDataManager`, and the spawn's `TargetableAttributeValueResolver`.
   - Then a respawn with stations needs a map world that spawns Sanctuary's stations (`stations()`, D60) and the
     unbound natives above, in the order of the note's section 1.
-  - The live reads D60 names (`GetTravelStationDefinition` on each station) would settle the virtuals.
+  - The live reads D60 names (`GetTravelStationDefinition` on each station) would settle them.
   - `SetLocation` and `SetRotation` have no record.
