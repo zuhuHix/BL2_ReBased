@@ -16,30 +16,38 @@ loosened and no existing `NotYet` guard was relaxed.
     read" item). A `CurrentState` without the pointer field is bad data, not "not running".
   - Otherwise every `AIDef.NodeList` node whose `Action` is set gets the script event `ActivateEvent(EventName)`, in
     list order, and the answer is false.
-  - **Who receives it (review r1 of #429).** The note leaves open whether the game's list holds per-AI copies or the
-    archetypes. Here that decides the receiver: the Rust `AIDef` is the shared package definition, while ow-ai part 2's
-    brain keeps its own per-AI copies of the actions, and handlers write to the receiver. So a mind with a built brain
-    (running or not) is `NotYet { NotRead }`, and so is a set `Action` that no brain owns as a per-AI copy (a
-    definition's archetype or template). Both name the note's per-AI copies item. In practice no definition action is
-    delivered to until that item is settled.
-  - Every node is read and checked before any delivery, so an error or a `NotYet` leaves nothing delivered.
-  - A component or node class without the fields read, or a node `Action` of the wrong kind, is bad data.
+  - **Who receives it (reviews r1 and r2 of #429).** The note leaves open whether the game's list holds per-AI copies
+    or the archetypes, and so which AI's actions receive the event. The Rust `AIDef` is the shared package definition,
+    ow-ai part 2's brain keeps its own per-AI copies, and handlers write to the receiver. Owning a copy does not settle
+    it either: an AI without a brain could list another mind's copies (review r2). So in Off any set `Action` in the
+    list is `NotYet { NotRead }` naming the note's per-AI copies item, and so is a brain built for this component,
+    running or not, found through `AI` or, while `AI` is still unset, through its mind's `AIComponent`. **Off delivers
+    nothing.** The only answer Off gives itself is false: for `AI` or `AIDef` unset with no brain for the component,
+    or for a list with no `Action` set.
+  - Because nothing is delivered, no handler can write state before a later one fails.
+  - Every field is read and its kind checked first. A component, definition or node without a field read, or with a
+    field of the wrong kind (`NodeList` not an array, `CurrentState.Dummy` not an int, a node `Action` not an object),
+    is bad data.
 - **Reference is unchanged.** The key stays unbound there, so the slice's C++ stub (`REFERENCE_STUBS`) serves it, as
   before.
 - `crates/ow-cli/src/cmd/slice.rs` and `crates/ow-cli/src/cmd/mission.rs`: one call each to `register_activate_event`.
   Their worlds do not register ow-ai's packs, and registering the whole pack would also bind the hold natives under
   Reference.
 
-**Verified (automated, invented classes).** `ow-ai`: 5 tests after review r1; `ow-cli`: the stub-list test.
+**Verified (automated, invented classes).** `ow-ai`: 9 tests after review r2; `ow-cli`: the stub-list test.
 
-- In Off, the definition's own actions (owned by no brain) are `NotYet` naming the per-AI copies item, with nothing
-  delivered, also when only some are owned. Actions marked as owned per-AI copies (an invented stand-in) get the event
-  in list order (the root, which has no action, is skipped) and the answer is false. Under Reference nothing is bound.
-- In Off, an unset `AI` or `AIDef` (each, and both) does nothing and answers false.
+- In Off, a list with set actions is `NotYet` naming the per-AI copies item, with nothing delivered: the definition's
+  own actions, and the same actions marked as this mind's copies (an invented stand-in). Under Reference nothing is
+  bound.
+- In Off, two AIs: B's brain is built, A has none and its list holds B's copies. A's event is `NotYet` and B's handlers
+  do not run.
+- In Off, a brain built for the component's mind while the component's `AI` is unset is `NotYet`, not false.
+- In Off, an unset `AI` or `AIDef` (each, and both) with no brain, an empty list, and a list with no `Action` set
+  answer false.
 - In Off, a running node answers `NotYet { NotRead }` naming the first delivery; a built brain, running a node or not,
-  answers the per-AI copies `NotYet`. Nothing is delivered in any case.
-- In Off, a node `Action` of the wrong kind, and a `CurrentState` without its pointer field, are errors with nothing
-  delivered.
+  answers the per-AI copies `NotYet`.
+- In Off, a node `Action` of the wrong kind, a `NodeList` that is not an array, a `CurrentState.Dummy` that is not an
+  int, and a `CurrentState` without the pointer field are errors with nothing delivered.
 - `ow-cli`: under Reference the slice's stub list still lets `AIComponent.ActivateEvent(name)` through; Off refuses it.
 - Gate numbers are in `docs/verification/GATES.md`.
 
@@ -56,11 +64,12 @@ loosened and no existing `NotYet` guard was relaxed.
   before and after (status 1, exit 3). It stops earlier, at `script:use` on `GetDataStoreClient`, and does not reach
   `ActivateEvent`.
 
-- **After review r1** (the release binary of the fix commit, output under ignored `local/p2/fix-activate-event/r1/`):
-  `--slice-gate` strict still 0 / 14 / 0, and rows 10 to 12 are unchanged: `NotYet` at `accept` on
-  `UIInteraction.GetDataStoreClient`. No row stops at `ActivateEvent`. That `use` step raises no `NotYet` and no error
-  suggests the installed call there answers false for an unset `AI` or `AIDef`; that is inferred from the rows, not
-  traced.
+- **After reviews r1 and r2** (release binaries of the fix commits, output under ignored
+  `local/p2/fix-activate-event/r1/` and `r2/`): `--slice-gate` strict still 0 / 14 / 0, and the r2 rows are
+  byte-identical to r1's. Rows 10 to 12 are unchanged: `NotYet` at `accept` on `UIInteraction.GetDataStoreClient`. No
+  row stops at `ActivateEvent`. That the `use` step raises no `NotYet` and no error suggests the installed call there
+  answers false (no brain for that component, and `AI` or `AIDef` unset, or no `Action` set); that is inferred from the
+  rows, not traced.
 
 **Open.** The running action's first delivery (needs the analyst); the per-AI copies question (a bl-sdk read, as the
-note says), which now holds every delivery back; `GetDataStoreClient`, now link 10's stop.
+note says), which holds every delivery back in Off; `GetDataStoreClient`, now link 10's stop.
