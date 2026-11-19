@@ -52,8 +52,8 @@
 
 use std::rc::Rc;
 
-use ow_attr::api::{EvalCx, modifier_id_of};
-use ow_attr::stack::{Modifier, ModifierType, NumKind, combine};
+use ow_attr::api::EvalCx;
+use ow_attr::stack::NumKind;
 use ow_core::ParityMode;
 use ow_core::notyet::NotYet;
 use ow_object::ids::ObjRef;
@@ -244,35 +244,10 @@ fn compute_value_of_parts(vm: &mut Vm, inv: ObjRef, layout: &Layout, what: &str)
     write(vm, inv, "MonetaryValue", money, what)
 }
 
-/// The modifiers of a stack array, read as `ow-attr` reads one (module documentation).
-fn modifiers(vm: &Vm, stack: &Value, what: &str) -> Result<Vec<Modifier>, VmError> {
-    let Value::Array(items) = stack else {
-        return Err(bad(what, format!("a modifier stack holds a {}, not an array", stack.kind_name())));
-    };
-    let mut mods = Vec::with_capacity(items.len());
-    for item in items.iter() {
-        let Some(m) = object_of(item, what)? else { continue };
-        let raw = match required(vm, m, "Type", what)? {
-            Value::Byte(b) => i64::from(b),
-            Value::Int(i) => i64::from(i),
-            other => return Err(bad(what, format!("a modifier Type is a {}", other.kind_name()))),
-        };
-        let value = match required(vm, m, "Value", what)? {
-            Value::Float(x) => x,
-            other => return Err(bad(what, format!("a modifier Value is a {}", other.kind_name()))),
-        };
-        if let Some(kind) = ModifierType::from_raw(raw) {
-            mods.push(Modifier { kind, value, id: modifier_id_of(m) });
-        }
-    }
-    Ok(mods)
-}
-
 /// `RecomputeNormalizedDamageValues()` on `weapon` (module documentation).
 fn recompute_normalized_damage(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
     let what = NORMALIZED_DAMAGE;
-    let data = required(vm, weapon, "DefinitionData", what)?;
-    let Some(definition) = object_of(&field(vm, &data, WEAPON.definition)?, what)? else {
+    let Some(definition) = super::weapon_type_definition(vm, weapon, what)? else {
         return Err(NotYet::not_read(
             "RecomputeNormalizedDamageValues on a weapon without a WeaponTypeDefinition",
             RECORD,
@@ -280,15 +255,32 @@ fn recompute_normalized_damage(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmErro
         .into());
     };
     loaded(vm, definition)?;
+    // Every output property is looked up before the first write, so a class missing one changes nothing (review of
+    // #428).
+    let class = vm.space.heap.get(weapon)?.class;
+    for n in &NORMALIZED {
+        for name in [n.out_stack, n.out_base, n.out_value] {
+            if vm.space.prop(class, name).is_none() {
+                return Err(bad(what, format!("the weapon declares no {name}")));
+            }
+        }
+    }
     let form = super::let_forms().combine;
     let mut out = Vec::with_capacity(NORMALIZED.len());
     for n in &NORMALIZED {
         let stack = required(vm, weapon, n.stack, what)?;
-        let mods = modifiers(vm, &stack, what)?;
         let Some(base) = init_value(vm, definition, n.definition, weapon)? else {
             return Err(bad(what, format!("the weapon type definition declares no {}", n.definition)));
         };
-        let value = combine(base, &mods, form, NumKind::Float).to_f32();
+        // `ow-attr`'s own stack formula: a None element and a modifier type outside the three are skipped.
+        let items = match &stack {
+            Value::Array(items) => items.to_vec(),
+            other => return Err(bad(what, format!("a modifier stack holds a {}, not an array", other.kind_name()))),
+        };
+        let value = match ow_attr::storage::stack_value(&vm.space, base, &items, form, NumKind::Float)? {
+            Value::Float(x) => x,
+            other => return Err(bad(what, format!("the stack formula gave a {}", other.kind_name()))),
+        };
         out.push((n, stack, base, value));
     }
     for (n, stack, base, value) in out {

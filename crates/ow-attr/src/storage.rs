@@ -158,8 +158,9 @@ fn stack_items(
 }
 
 /// The value of a stack attribute with base `base` and stack `items`, in `kind` and `form`. A null element is
-/// skipped, as the C++ recompute skips it. The noun store recomputes with it too (`value_resolvers::noun`).
-pub(crate) fn stack_value(
+/// skipped, as the C++ recompute skips it, and so is a modifier whose type is outside the three. The noun store
+/// recomputes with it too (`value_resolvers::noun`), and `ow-inventory`'s normalized damage values (lane FIX-VALUE-C).
+pub fn stack_value(
     space: &ObjectSpace,
     base: f32,
     items: &[Value],

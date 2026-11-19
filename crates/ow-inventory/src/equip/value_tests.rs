@@ -57,6 +57,24 @@ impl ValueResolver for IsWeapon {
     }
 }
 
+/// A toy value resolver (review of #428): the context's `MonetaryValueModifierTotal`, read as the property holds it
+/// at that moment. It stands in for however the game's attribute reaches the total (not read, UNVERIFIED), so the
+/// test pins the order (the total is written before the money value reads it), not a resolver rule.
+struct ReadsTotal;
+impl ValueResolver for ReadsTotal {
+    fn value(&self, _: &AttributeSystem, _: ObjRef, context: ObjRef, _: f32, cx: &mut EvalCx<'_>) -> Result<f32, AttrError> {
+        let space = cx.world.parts().space;
+        let class = space.heap.get(context)?.class;
+        let prop = space
+            .prop(class, "MonetaryValueModifierTotal")
+            .ok_or_else(|| AttrError::BadData { reason: "ReadsTotal: no MonetaryValueModifierTotal".into() })?;
+        match space.read(context, PropAddr::scalar(prop))? {
+            Value::Float(x) => Ok(*x),
+            other => Err(AttrError::BadData { reason: format!("ReadsTotal: a {}", other.kind_name()).into() }),
+        }
+    }
+}
+
 /// Toy world hooks: only the globals object, made once (the mission-item rarity tests).
 struct GlobalsOnly(ObjRef);
 impl WorldHooks for GlobalsOnly {
@@ -109,6 +127,7 @@ impl Toy {
         s.classes.define("Engine.AttributeInitializationDefinition", Some(object), vec![]).unwrap();
         let constant = vec![decl(&mut s, "ConstantValue", PropKind::Float)];
         s.classes.define("GearboxFramework.ConstantAttributeValueResolver", Some(object), constant).unwrap();
+        s.classes.define("Test.ReadsTotal", Some(object), vec![]).unwrap();
         // The 13 entries `crate::definition`'s cap rule checks: three named, ten reserved (invented names).
         let mut currencies: Vec<String> =
             ["CURRENCY_Credits", "CURRENCY_Eridium", "CURRENCY_SeraphCrystals"].iter().map(|c| c.to_string()).collect();
@@ -152,6 +171,13 @@ impl Toy {
             wf.push(decl(&mut s, name, kind));
         }
         let weapon = s.classes.define("WillowGame.WillowWeapon", Some(inventory), wf).unwrap();
+        // A weapon-like class missing one normalized output (review of #428): the native refuses before any write.
+        let mut short = fields(&mut s, wdata);
+        for (name, stack) in NORMALIZED_FIELDS.iter().filter(|(n, _)| *n != "NormalizedMeleeDamage") {
+            let kind = if *stack { objs.clone() } else { PropKind::Float };
+            short.push(decl(&mut s, name, kind));
+        }
+        s.classes.define("Test.ShortWeapon", Some(inventory), short).unwrap();
         let modifier = vec![decl(&mut s, "Type", PropKind::Byte { enum_: None }), decl(&mut s, "Value", PropKind::Float)];
         s.classes.define("Engine.AttributeModifier", Some(object), modifier).unwrap();
         s.classes.define("Test.Same", Some(object), vec![]).unwrap();
@@ -166,6 +192,8 @@ impl Toy {
             .with_context_resolver("Test.Same", Same)
             .unwrap()
             .with_value_resolver("Test.IsWeapon", IsWeapon(weapon))
+            .unwrap()
+            .with_value_resolver("Test.ReadsTotal", ReadsTotal)
             .unwrap();
         let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(attrs), mode);
         for (path, key) in [
@@ -478,4 +506,80 @@ fn not_yet_kind(e: &VmError) -> Option<Missing> {
         VmError::NotYet(n) => Some(n.missing.clone()),
         _ => None,
     }
+}
+
+/// Review of #428, item (a): `MonetaryValue` is evaluated after `MonetaryValueModifierTotal` is written, with the
+/// inventory as context, so a value that reads the total through an attribute sees the new total. Base modifier 2,
+/// parts 1.5 and 3: total 9; the value reads it with scale 100 and gives 900 credits.
+#[test]
+fn the_monetary_value_reads_the_modifier_total_just_written() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 2.0, 0.0, 0);
+    let same = t.obj("Test.Same", "Same");
+    let reader = t.obj("Test.ReadsTotal", "ReadsTotal");
+    let attr = t.obj("Engine.AttributeDefinition", "ModifierTotal");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(same))]));
+    t.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(reader))]));
+    let aid = t.aid;
+    let money = t.st(aid, vec![("BaseValueAttribute", Value::Object(Some(attr))), ("BaseValueScaleConstant", Value::Float(100.0))]);
+    t.set(definition, "MonetaryValue", money);
+    let body = t.part("Body", 0.0, Some(1.5));
+    let barrel = t.part("Barrel", 0.0, Some(3.0));
+    let w = t.weapon(Some(definition), &[("BodyPartDefinition", body), ("BarrelPartDefinition", barrel)]);
+    t.set(w, "MonetaryValueModifierTotal", Value::Float(1.0));
+    t.call("WillowGame.WillowWeapon.ComputeValueOfParts", w).unwrap();
+    assert_eq!(t.get(w, "MonetaryValueModifierTotal"), Value::Float(9.0));
+    assert_eq!(t.get(w, "MonetaryValue"), Value::Int(900), "read the new total, not the old 1.0 (which gives 100)");
+}
+
+/// Review of #428, item (b): a negative scale goes to the divisor, and the combine runs in single precision step by
+/// step: (0.1 + 0.2) x (1 / (1 - -0.3)) gives 0.23076925 (bits 0x3e6c4ec6), where computing in double and rounding
+/// once would give 0.23076923.
+#[test]
+fn a_negative_scale_combines_in_single_precision() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let instant = t.init(0.1);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let melee = t.init(0.0);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let w = t.weapon(Some(definition), &[]);
+    let stack = Value::array(vec![t.modifier("PreAdd", 1, 0.2), t.modifier("Shrink", 0, -0.3)]);
+    t.set(w, "InstantHitDamageModifierStack", stack);
+    t.set(w, "MeleeDamageModifierStack", Value::array(vec![]));
+    t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap();
+    let Value::Float(v) = t.get(w, "NormalizedInstantHitDamage") else { panic!("not a float") };
+    assert_eq!(v.to_bits(), 0x3e6c_4ec6, "{v}");
+    let double_once = ((f64::from(0.1f32) + f64::from(0.2f32)) / (1.0 - f64::from(-0.3f32))) as f32;
+    assert_ne!(v.to_bits(), double_once.to_bits(), "the two precisions differ here, so the test pins one");
+}
+
+/// Review of #428, item (c): all six outputs are looked up before the first write, so a class missing one changes
+/// none of the other five.
+#[test]
+fn a_missing_normalized_output_changes_nothing() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let five = t.init(5.0);
+    t.set(definition, "NormalizedInstantHitDamage", five.clone());
+    t.set(definition, "NormalizedMeleeDamage", five);
+    let w = t.obj("Test.ShortWeapon", "Short_0");
+    let ty = t.wdata;
+    let data = t.st(ty, vec![("WeaponTypeDefinition", Value::Object(Some(definition)))]);
+    t.set(w, "DefinitionData", data);
+    let stack = Value::array(vec![t.modifier("PostAdd", 2, 1.0)]);
+    t.set(w, "InstantHitDamageModifierStack", stack.clone());
+    t.set(w, "MeleeDamageModifierStack", stack);
+    let before: Vec<Value> = ["NormalizedInstantHitDamageModifierStack", "NormalizedInstantHitDamageBaseValue", "NormalizedInstantHitDamage", "NormalizedMeleeDamageModifierStack", "NormalizedMeleeDamageBaseValue"]
+        .iter()
+        .map(|n| t.get(w, n))
+        .collect();
+    let f = t.vm.find_function("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues").unwrap();
+    let e = t.vm.call(f, Some(w), Vec::new()).unwrap_err();
+    assert!(e.to_string().contains("NormalizedMeleeDamage"), "{e}");
+    let after: Vec<Value> = ["NormalizedInstantHitDamageModifierStack", "NormalizedInstantHitDamageBaseValue", "NormalizedInstantHitDamage", "NormalizedMeleeDamageModifierStack", "NormalizedMeleeDamageBaseValue"]
+        .iter()
+        .map(|n| t.get(w, n))
+        .collect();
+    assert_eq!(after, before, "nothing was written");
 }
