@@ -102,6 +102,19 @@ fn the_slot_count_is_the_stored_one_inside_one_to_nineteen_else_nineteen() {
     }
 }
 
+/// The fixture's slot count (the installed class has 19; any count the declaration gives is read).
+const SLOTS: i32 = 7;
+
+/// Writes `slots` into `item`'s static `AttributeSlots`, element by element from index 0.
+fn set_slots(w: &mut World, item: ObjRef, slots: Vec<Value>) {
+    let class = w.vm.space.heap.get(item).unwrap().class;
+    let p = w.vm.space.prop(class, "AttributeSlots").unwrap();
+    for (i, v) in slots.into_iter().enumerate() {
+        let at = ow_object::ids::PropAddr::element(p, u32::try_from(i).unwrap());
+        w.vm.space.write(item, at, v).unwrap();
+    }
+}
+
 /// The slot classes the natives read: an item class with `AttributeSlots` and a definition class with
 /// `AttributeSlotMaxActivated` (invented here; the field names are the installed ones).
 fn slot_classes(w: &mut World) -> (ClassId, ClassId) {
@@ -125,10 +138,9 @@ fn slot_classes(w: &mut World) -> (ClassId, ClassId) {
         .classes
         .define_struct("Test.AttributeSlotData", None, decls)
         .unwrap();
-    let slots = PropertyDecl::new(
-        w.vm.space.names.intern("AttributeSlots"),
-        PropKind::Array(Box::new(PropKind::Struct(slot))),
-    );
+    // A static array of slot structs, as the installed `WillowInventory` declares `AttributeSlots[19]` (seven here).
+    let slots = PropertyDecl::new(w.vm.space.names.intern("AttributeSlots"), PropKind::Struct(slot))
+        .with_array_dim(SLOTS);
     let inventory = w.class("Engine.WillowInventory");
     let item = w.vm.space.classes.define("Test.SlotItem", Some(inventory), vec![slots]).unwrap();
     let max = PropertyDecl::new(w.vm.space.names.intern("AttributeSlotMaxActivated"), PropKind::Int);
@@ -190,7 +202,7 @@ fn only_activated_external_non_skill_slots_with_an_attribute_apply_within_the_co
         slot(&mut w, true, true, false, Some(a), 500.0),
     ];
     let item = w.vm.space.alloc(item_class, "Test.Item", None, Origin::Runtime).unwrap();
-    w.set(item, "AttributeSlots", Value::array(slots));
+    set_slots(&mut w, item, slots);
     let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
     let earlier = ow_attr::api::AppliedEffect {
         context: w.pawn,
@@ -216,6 +228,33 @@ fn only_activated_external_non_skill_slots_with_an_attribute_apply_within_the_co
 }
 
 #[test]
+fn every_declared_slot_is_read_and_a_dynamic_array_is_refused() {
+    let mut w = World::new();
+    let (item_class, _) = slot_classes(&mut w);
+    let a = w.controller_bonus;
+    let item = w.vm.space.alloc(item_class, "Test.Item", None, Origin::Runtime).unwrap();
+    // Only the last declared element is activated: it is read, so the whole declared dimension is walked.
+    let last = slot(&mut w, true, true, false, Some(a), 1.5);
+    let mut slots = vec![slot(&mut w, false, false, false, None, 0.0); usize::try_from(SLOTS - 1).unwrap()];
+    slots.push(last);
+    set_slots(&mut w, item, slots);
+    assert_eq!(attribute_slots(&w.vm, item).unwrap().len(), usize::try_from(SLOTS).unwrap());
+    assert_eq!(external_slot_effects(&w.vm, item, SLOTS).unwrap().len(), 1);
+    assert!(external_slot_effects(&w.vm, item, SLOTS - 1).unwrap().is_empty(), "past the count");
+    // A class that declares the slots as a dynamic array is not the installed shape: a data error.
+    let slot_ty = w.vm.space.classes.struct_by_path("Test.AttributeSlotData").unwrap();
+    let dynamic = PropertyDecl::new(
+        w.vm.space.names.intern("AttributeSlots"),
+        PropKind::Array(Box::new(PropKind::Struct(slot_ty))),
+    );
+    let object = w.class("Core.Object");
+    let other = w.vm.space.classes.define("Test.DynamicSlotItem", Some(object), vec![dynamic]).unwrap();
+    let odd = w.vm.space.alloc(other, "Test.Odd", None, Origin::Runtime).unwrap();
+    let e = external_slot_effects(&w.vm, odd, SLOTS).unwrap_err();
+    assert!(e.to_string().contains("other than slot structs"), "{e}");
+}
+
+#[test]
 fn the_slot_context_is_the_override_s_first() {
     let mut w = World::new();
     register(&mut w.vm).unwrap();
@@ -224,7 +263,7 @@ fn the_slot_context_is_the_override_s_first() {
     let a = w.weapon_bonus;
     let s = slot(&mut w, true, true, false, Some(a), 4.0);
     let item = w.vm.space.alloc(item_class, "Test.Item", None, Origin::Runtime).unwrap();
-    w.set(item, "AttributeSlots", Value::array(vec![s]));
+    set_slots(&mut w, item, vec![s]);
     let weapon = w.weapon(None, &[]);
     let controller = w.controller;
     let args = vec![
