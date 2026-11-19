@@ -12,6 +12,19 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-IS-EDITOR (2026-11-19, pc-hummer, on fix/rust-link1-after-login c42f2e35, #499):** AI-assisted (Claude Code, Opus
+5.5). `WillowGameInfo.IsEditor` answers false in Off (the hub's ruling). `cargo build --workspace --locked -j 4` clean;
+`cargo test --workspace --locked -j 4` 2,422 passed / 0 failed / 48 ignored; `crate_edges_test.py` 19 OK. Installed Off
+`--slice-gate` strict (release build, under the machine lock): 0 ok / 5 NotYet / 9 errors; links 1, 3, 4, 5, 13 and 14
+get past `IsEditor` and stop in `maya:8` at the unbound `Engine.IsSplitScreen()` (link 1: 0 of 1 driver step). ctest and
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+ignored `local/p2/is-editor/`.
+
+**IMPL-LINK1-AFTER-LOGIN (2026-11-19, pc-hummer, on fix/rust-engine-object-offline ea1ffe96, #501 on #479):** AI-assisted
+(Claude Code, Opus 5.5). `UpdateURL` and `SaveConfig` (nothing, under the read-back census) and `UpdateInputContext` in Off
+from NATIVE_LOGIN_URL_CONFIG_INPUT.md, review r1 of #499 folded in. `cargo test -p ow-world -p ow-cli --locked` 332 passed /
+0 failed / 8 ignored; the installed `off_url_and_config_have_no_readers` and
+
 **IMPL-LINK1-AFTER-LOGIN (2026-11-19, pc-hummer, on fix/rust-engine-object-offline aca14fa0, #501 on #479):**
 AI-assisted (Claude Code, Opus 5.5). `UpdateURL` and `SaveConfig` (nothing, under the read-back census) and
 `UpdateInputContext` in Off from NATIVE_LOGIN_URL_CONFIG_INPUT.md, review r1 of #499 folded in. `cargo build --workspace

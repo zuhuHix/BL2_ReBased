@@ -516,6 +516,8 @@ fn package() -> Vec<u8> {
     // The travel countdown (lane MAP-LOAD-C, NATIVE_TRAVEL.md).
     let willow_game = t.class("WillowGameInfo", actor);
     t.prop("Int", willow_game, "TravelPostCountdownTime", 0, 0);
+    // The editor query (lane IMPL-IS-EDITOR).
+    native(&mut t, willow_game, "IsEditor", &[], Some(("Bool", 0)), NATIVE);
     native(&mut t, willow_game, "TravelPostCountdownInProcess", &[], Some(("Bool", 0)), NATIVE);
 
     let definition = t.class("AttributeInitializationDefinition", object);
@@ -2192,6 +2194,22 @@ fn is_play_in_editor_is_false_outside_reference() {
         assert_eq!(x.call("WorldInfo.IsPlayInEditor", Some(wi), Vec::new()).unwrap(), Value::Bool(false));
         let x = fx_in(true, ParityMode::Reference);
         assert!(!x.w.vm.has_native("WorldInfo.IsPlayInEditor()"), "unbound under Reference");
+    });
+}
+
+/// `WillowGameInfo.IsEditor` (lane IMPL-IS-EDITOR, the hub's ruling): false in Off (the port always runs the game, never
+/// the editor), with nothing read or written; unbound under Reference, which keeps the stub policy.
+#[test]
+fn is_editor_is_false_in_off_and_unbound_in_reference() {
+    run(|| {
+        let mut x = fx();
+        let c = x.w.vm.find_class("Engine.WillowGameInfo").unwrap();
+        let game = x.w.vm.space.alloc(c, "ToyGame", None, ow_object::heap::Origin::Runtime).unwrap();
+        let before = format!("{:?}", x.w.vm.space.heap);
+        assert_eq!(x.call("WillowGameInfo.IsEditor", Some(game), Vec::new()).unwrap(), Value::Bool(false));
+        assert_eq!(format!("{:?}", x.w.vm.space.heap), before, "nothing written");
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native(crate::world::IS_EDITOR), "unbound under Reference");
     });
 }
 

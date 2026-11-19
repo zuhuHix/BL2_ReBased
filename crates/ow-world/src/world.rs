@@ -491,6 +491,10 @@ impl NativePack for Pack {
         // not bind it (R3; decision 2026-11-16-81).
         if vm.parity != ParityMode::Reference {
             vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
+            // WillowGameInfo.IsEditor (link 1's stop in `FindPlayerStart`; lane IMPL-IS-EDITOR, decision 2026-11-19-NNN):
+            // the hub's ruling, a port answer like the empty online-subsystem slot. The port always runs the game,
+            // never the editor, so false: no read, no write, UNVERIFIED in game.
+            vm.register_native(IS_EDITOR, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
             // The engine's data store client, its global stores and the online game settings route
             // (NATIVE_ONLINE_GAME_SETTINGS.md; lane IMPL-ONLINE-GAME-SETTINGS, decision 2026-11-19-65).
@@ -508,6 +512,8 @@ impl NativePack for Pack {
 }
 
 const IS_LOCAL_PLAYER_CONTROLLER: &str = "PlayerController.IsLocalPlayerController()";
+/// The native key of `WillowGameInfo.IsEditor()` (lane IMPL-IS-EDITOR).
+pub const IS_EDITOR: &str = "WillowGameInfo.IsEditor()";
 
 /// `PlayerController.IsLocalPlayerController()`, a stock UE3 native (public UE3 semantics: true when the controller's
 /// `Player` is a local player, not a network connection; decision 2026-11-19-15). Outside Reference only: the C++
