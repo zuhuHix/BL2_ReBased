@@ -1,9 +1,9 @@
-## 2026-11-20: Read the mission list build as analyst
+## 2026-11-19: Read the mission list build as analyst
 
 AI-assisted (Claude Code / Claude Opus 5.5).
 
-Lane ANALYST-MISSIONLIST-BUILD, analyst only, for slice links 10 to 12. Written on 2026-11-19. Every two-digit number
-of 2026-11-19 is taken on `origin`, so it is filed as the first decision of 2026-11-20; the hub may renumber it.
+Lane ANALYST-MISSIONLIST-BUILD, analyst only, for slice links 10 to 12. Every two-digit number of 2026-11-19 is taken,
+so `NNN` is a placeholder until the maintainer rules on three-digit numbers; the decisions check refuses it until then.
 
 Stacked on `fix/rust-link10-mission-list` (#486, 3bb3f6de). Links 10 to 12 stop in `accept` at the mission bridge's
 `MissionTracker.GetAllMissions` `NotYet` (layer absent): the bridge holds one record, not the game's list. This lane

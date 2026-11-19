@@ -1,6 +1,6 @@
 # Native rules of the mission tracker's list build: MissionTracker.MissionList and MissionDefinition.MissionNumber (draft, 2026-11-19)
 
-AI-assisted (Claude Code), analyst lane ANALYST-MISSIONLIST-BUILD (decision placeholder, see the decision file), for
+AI-assisted (Claude Code), analyst lane ANALYST-MISSIONLIST-BUILD (decision 2026-11-19-NNN, a placeholder), for
 slice links 10 to 12 (the Fire mission's accept, objective and turn-in). Links 10 to 12 stop at
 `MissionTracker.GetAllMissions`, which answers `NotYet` (layer absent) because the mission bridge holds one record and
 not the game's list (NATIVE_MISSION_OBJECTIVES.md; NATIVE_MISSION_NUMBERS.md, "The port's case today";
