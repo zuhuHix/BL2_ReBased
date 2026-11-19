@@ -21,9 +21,9 @@ use ow_world::query::WorldQuery;
 use super::*;
 use crate::equip::read_prop;
 
-/// The invented dimensions of `AttributeSlots` and of the replicated values (one more than [`REPLICATED`], so the cap
-/// shows).
-const SLOTS: i32 = 3;
+/// The invented dimensions of `AttributeSlots` (one more than the clamp's 19, so a count of 19 shows) and of the
+/// replicated values (one more than [`REPLICATED`], so the cap shows).
+const SLOTS: i32 = 20;
 const REP: i32 = 6;
 const ROLES: [&str; 4] = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority"];
 const AUTHORITY: u8 = 3;
@@ -42,6 +42,8 @@ enum Schema {
     PlainRole,
     /// `GearboxGlobalsDefinition` only reserved, not defined (review r2 of #521, item 2).
     ReservedGearbox,
+    /// The weapon type declares no `AttributeSlotMaxActivated`.
+    NoSlotMax,
 }
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
@@ -77,8 +79,18 @@ impl Fx {
     }
 
     fn with(schema: Schema, mode: ParityMode) -> Fx {
+        Fx::with_defs(schema, mode, DefStore::new_empty(), false)
+    }
+
+    /// [`Fx::with`] on `defs`; `core_from_store` takes `Core.Object` from the store's `Core.upk`, so the store's own
+    /// classes share the fixture's root.
+    fn with_defs(schema: Schema, mode: ParityMode, mut defs: DefStore, core_from_store: bool) -> Fx {
         let mut s = ObjectSpace::new();
-        let object = s.classes.define("Core.Object", None, vec![]).unwrap();
+        let object = if core_from_store {
+            defs.class_id(&mut s, "Core.Object").unwrap()
+        } else {
+            s.classes.define("Core.Object", None, vec![]).unwrap()
+        };
         let obj = r(object);
         // The attribute classes a base-value read walks (empty chains unless a test sets them).
         let objs = arr(obj.clone());
@@ -152,9 +164,12 @@ impl Fx {
                 decl(s, "TitleList", arr(r(name_part))),
             ]
         };
+        // The type's slot count is declared on its parent, as `WillowInventoryDefinition` declares it.
+        let fields = if schema == Schema::NoSlotMax { vec![] } else { vec![decl(&mut s, "AttributeSlotMaxActivated", PropKind::Int)] };
+        let inventory_definition = s.classes.define("WillowGame.WillowInventoryDefinition", Some(object), fields).unwrap();
         let mut fields = card_fields(&mut s);
         fields.push(decl(&mut s, "DefaultDamageTypeDefinition", r(wdmg)));
-        s.classes.define(WEAPON_TYPE_CLASS, Some(object), fields).unwrap();
+        s.classes.define(WEAPON_TYPE_CLASS, Some(inventory_definition), fields).unwrap();
         let mut fields = card_fields(&mut s);
         fields.push(decl(&mut s, "CustomDamageTypeDefinition", r(wdmg)));
         let part = s.classes.define(WEAPON_PART_CLASS, Some(object), fields).unwrap();
@@ -209,7 +224,7 @@ impl Fx {
         ];
         let weapon_class = s.classes.define(WEAPON_CLASS, Some(object), fields).unwrap();
         let weapon = s.alloc(weapon_class, "Weapon_0", None, Origin::Runtime).unwrap();
-        let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(AttributeSystem::standard().unwrap()), mode);
+        let mut vm = Vm::new(s, defs, Rc::new(AttributeSystem::standard().unwrap()), mode);
         let query = ow_world::query::install(&mut vm).unwrap();
         let mut x = Fx { vm, query, weapon, t: weapon, globals: weapon, gd: weapon, aid, effect, priority, mapping, n: 0 };
         x.set(weapon, "Role", Value::Byte(AUTHORITY));
@@ -551,15 +566,132 @@ fn slot_zero_not_included_or_not_activated_gives_no_entry() {
     }
 }
 
+// ---- The slot count and the slots past 0 (NATIVE_CARD_SLOT_COUNT.md) ----------------------------------------------
+
+/// The count is the type's `AttributeSlotMaxActivated`, 1 to 19 as it is and 19 otherwise: slots 0, 1, 18 and 19 are
+/// activated and marked, each with its own value and no presentation, so the entries show which slots ran.
 #[test]
-fn an_activated_slot_past_zero_is_the_slot_count_refusal_with_nothing_written() {
-    for i in 1..u32::try_from(SLOTS).unwrap() {
+fn the_count_is_the_types_slot_max_clamped_to_19() {
+    for (stored, ran) in [(0, vec![0, 1, 18]), (1, vec![0]), (19, vec![0, 1, 18]), (20, vec![0, 1, 18]), (-3, vec![0, 1, 18])] {
         let mut x = Fx::new();
-        let a = x.attribute();
-        x.slot(0, true, true, Some(a), None, 1.0);
-        x.slot(i, true, false, None, None, 0.0);
-        refused(x.run().unwrap_err(), SLOT_COUNT);
-        x.untouched();
+        let t = x.t;
+        x.set(t, "AttributeSlotMaxActivated", Value::Int(stored));
+        for i in [0u32, 1, 18, 19] {
+            x.slot(i, true, true, None, None, 10.0 + i as f32);
+        }
+        x.run().unwrap();
+        let values: Vec<f32> = x.stats().iter().map(|s| s.value).collect();
+        let want: Vec<f32> = ran.iter().map(|&i| 10.0 + i as f32).collect();
+        assert_eq!(values, want, "stored {stored}");
+        for i in [0u32, 1, 18, 19] {
+            assert_eq!(x.slot_flag(i), Value::Bool(!ran.contains(&i)), "stored {stored}, slot {i}: only a slot that ran is cleared");
+        }
+    }
+}
+
+/// The type's class default holds when no value is stored: the fixture's default 0 counts as 19.
+#[test]
+fn an_unset_count_takes_the_class_default() {
+    let mut x = Fx::new();
+    x.slot(18, true, true, None, None, 4.0);
+    x.run().unwrap();
+    assert_eq!(x.stats().iter().map(|s| s.value).collect::<Vec<_>>(), vec![4.0]);
+}
+
+/// A slot past 0 runs slot 0's step: its entry follows slot 0's, a skipped or unmarked slot gives none, and a None
+/// presentation clears that slot's own flag.
+#[test]
+fn a_slot_past_zero_runs_the_same_step() {
+    let mut x = Fx::new();
+    let (a, c) = (x.attribute(), x.attribute());
+    let (pa, pc) = (x.pres(1.0, Some(a)), x.pres(1.0, Some(c)));
+    let gd = x.gd;
+    x.list(gd, LISTS[1], &[Some(pa), Some(pc)]);
+    let t = x.t;
+    x.set(t, "AttributeSlotMaxActivated", Value::Int(5));
+    x.slot(0, true, true, Some(c), None, 1.0);
+    x.slot(1, true, true, Some(a), Some(c), 2.0);
+    x.slot(2, false, true, Some(a), None, 3.0);
+    x.slot(3, true, false, Some(a), None, 4.0);
+    x.slot(4, true, true, None, None, 5.0);
+    x.run().unwrap();
+    assert_eq!(
+        x.stats(),
+        vec![
+            Stat { presentation: Some(pc), constraint: None, value: 1.0, display: true },
+            Stat { presentation: Some(pa), constraint: Some(pc), value: 2.0, display: true },
+            Stat { presentation: None, constraint: None, value: 5.0, display: true },
+        ]
+    );
+    let flags: Vec<Value> = (0..5).map(|i| x.slot_flag(i)).collect();
+    let want = [true, true, true, false, false].map(Value::Bool);
+    assert_eq!(flags, want, "slot 4's None presentation clears its own flag; slot 3 was never marked");
+}
+
+#[test]
+fn a_count_not_declared_on_the_type_is_a_schema_error() {
+    let mut x = Fx::with(Schema::NoSlotMax, ParityMode::Off);
+    assert!(script(preflight(&mut x.vm).unwrap_err()).contains("AttributeSlotMaxActivated"));
+}
+
+/// An unloaded weapon type is refused before any load: `NotRead`, this lane's record, the handle left unloaded.
+#[test]
+fn an_unloaded_weapon_type_is_not_read_and_not_loaded() {
+    let dir = std::env::temp_dir().join(format!("ow-inventory-card-unloaded-type-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let bytes = unloaded::package();
+    let core = unloaded::core();
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("Core.upk", core.as_slice()), ("ToyPkg.upk", bytes.as_slice())],
+        ow_defs::identity::IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let mut x = Fx::with_defs(Schema::Good, ParityMode::Off, defs, true);
+    let holder = x.vm.defs.find(&mut x.vm.space, &ObjectPath::parse("ToyPkg.ToyHolder").unwrap()).unwrap().unwrap();
+    let handle = match read_prop(&x.vm, holder, "Type") {
+        Some(Value::Object(Some(o))) => o,
+        other => panic!("{other:?}"),
+    };
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, handle));
+    x.data(&[("WeaponTypeDefinition", Some(handle))]);
+    let n = not_yet(x.run().unwrap_err());
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(n.record, SLOT_COUNT_RECORD);
+    assert_eq!(n.what, "WillowWeapon.CacheWeaponCard: the weapon type ToyType is an unloaded definition handle");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, handle), "nothing loaded");
+    x.untouched();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+mod unloaded {
+    //! `ToyPkg.upk`: `ToyHolder`, whose `Type` names the export `ToyType`. Loading the holder leaves `ToyType` a store
+    //! handle not yet loaded.
+    use ow_package::testkit::script::ScriptToy;
+
+    /// `Core.upk`: `Object` (the fixture defines `Core.Object` by hand; the store finds it there).
+    pub(super) fn core() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        t.class("Object", 0);
+        t.p.build()
+    }
+
+    pub(super) fn package() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        // The hand-built fixture's `Core.Object`, so the handle fits the definition data's object fields.
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let holder = t.class("Holder", object);
+        t.prop("Object", holder, "Type", 0, object);
+        let mut empty = 0i32.to_le_bytes().to_vec();
+        empty.extend_from_slice(&t.none);
+        let ty = t.p.add_export(object, "ToyType", empty);
+        let mut h = 0i32.to_le_bytes().to_vec();
+        h.extend(t.p.object_tag("Type", ty));
+        h.extend_from_slice(&t.none);
+        t.p.add_export(holder, "ToyHolder", h);
+        t.p.build()
     }
 }
 
@@ -817,20 +949,6 @@ fn an_appended_entry_whose_base_value_read_refuses_passes_the_refusal_through() 
     let n = not_yet(x.run().unwrap_err());
     assert!(n.what.contains("Test.UnreadContextResolver"), "{}", n.what);
     assert!(!n.what.contains("partial writes"), "nothing loaded or written: {}", n.what);
-    x.untouched();
-}
-
-/// Item 2: the slot count is checked before the type is read past its field: a type that would fail to read (a
-/// definition of another class, which declares no `DefaultDamageTypeDefinition`) is never reached.
-#[test]
-fn the_slot_count_comes_before_the_type_is_read() {
-    let mut x = Fx::new();
-    let other = x.obj("Test.Other");
-    x.data(&[("WeaponTypeDefinition", Some(other))]);
-    // Without the slot, the type's read is an error.
-    assert!(script(x.run().unwrap_err()).contains("DefaultDamageTypeDefinition"));
-    x.slot(1, true, false, None, None, 0.0);
-    refused(x.run().unwrap_err(), SLOT_COUNT);
     x.untouched();
 }
 

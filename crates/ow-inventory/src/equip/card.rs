@@ -7,11 +7,15 @@
 //! 1. **The globals definition** through the Off getter's rule ([`crate::globals::world_globals`],
 //!    [`crate::globals::globals_definition`]): no globals is the world's `NotYet { LayerAbsent }`, an unset
 //!    definition the getter's `NotYet { NotRead }`. A None `WeaponTypeDefinition` then does nothing more.
-//! 2. **The slot count** (body note section 4, step 3; checked before any definition load, review r1 of #521): which definition supplies it is not read, and its clamp always
-//!    visits slot 0. So an activated slot from 1 to 18 is `NotYet { NotRead }` [`SLOT_COUNT`]; otherwise only slot 0
-//!    can contribute. Slot 0, when `bActivated`, looks up the presentations of its `AttributeToModify` and its
-//!    `ConstraintAttribute`; when it is `bIncludeInModifierText` it gives a slot entry (its `ComputedModifierValue`,
-//!    displayed), and a None presentation clears its `bIncludeInModifierText` (a planned write).
+//! 2. **The weapon type and the slots** (lane IMPL-CARD-SLOT-COUNT, NATIVE_CARD_SLOT_COUNT.md sections 2 to 4). A
+//!    weapon type that is an unloaded definition handle is `NotYet { NotRead }` ([`unloaded_type`]), before any load
+//!    and before the balance, damage-type and slot reads. The count is the type's `AttributeSlotMaxActivated` (its
+//!    class default when not stored), 1 to 19 as it is and 19 otherwise ([`super::natives::clamped_slot_max`], the
+//!    `GetAttributeSlotMaxActivated` rule), and never more than the weapon's declared `AttributeSlots`. Slots 0 to
+//!    count - 1 run the same step, in index order: a slot that is not `bActivated` is skipped; otherwise the
+//!    presentations of its `AttributeToModify` and its `ConstraintAttribute` are looked up, and when it is
+//!    `bIncludeInModifierText` it gives a slot entry (its `ComputedModifierValue`, displayed), a None presentation
+//!    clearing its `bIncludeInModifierText` (a planned write). Slots at or past the count are not read.
 //! 3. **The presentation lookup** ([`presentation`], section 2): the balance's DLC set's override then default list,
 //!    then the globals definition's; the first non-None `Attributes` entry whose `Attribute` is the attribute; a
 //!    `WeaponStatusEffectAttributePresentationDefinition` (by class name, through the parent chain) is replaced by the
@@ -32,7 +36,7 @@
 //!    entry with a record needs the display conversion for `bShouldDisplay`, which is read in outline only: `NotYet
 //!    { NotRead }` [`DISPLAY`]. So every appended entry the port writes has no record: `ModifierValue` 0 and
 //!    `bShouldDisplay` true. The value formula of section 3.3 is therefore never reached in Off and is not coded.
-//! 7. **The writes**, in order: `WeaponCardModifierStats` emptied; slot 0's flag cleared when planned; the slot entry
+//! 7. **The writes**, in order: `WeaponCardModifierStats` emptied; each planned slot flag cleared; the slot entries
 //!    and the appended entries written; on the authority (`Role` is `ROLE_Authority`), the displayed entries after the
 //!    slot entries fill the first `ReplicatedWeaponCardModifierValues` (at most 5), the rest left as they were.
 //!
@@ -68,12 +72,13 @@ use super::{WEAPON_PART_FIELDS, bad, effects_in, field, object_of, required};
 
 /// The record of this module.
 pub const RECORD: &str = "docs/verification/NATIVE_CACHE_WEAPON_CARD_BODY.md";
+/// The record of the slot count and the unloaded weapon type (lane IMPL-CARD-SLOT-COUNT).
+pub const SLOT_COUNT_RECORD: &str = "docs/verification/NATIVE_CARD_SLOT_COUNT.md";
 
 /// The native's script function.
 pub const CACHE_WEAPON_CARD: &str = "WillowGame.WillowWeapon.CacheWeaponCard";
 
 /// The refusal texts (body note section 4, step 3; each names the native).
-pub const SLOT_COUNT: &str = "WillowWeapon.CacheWeaponCard: the card's slot count";
 pub const TIE: &str = "WillowWeapon.CacheWeaponCard: the card order of equal-priority entries";
 pub const DISPLAY: &str = "WillowWeapon.CacheWeaponCard: the presentation's displayed value";
 pub const VISIT: &str =
@@ -86,8 +91,6 @@ const SCHEMA: &str = "WillowWeapon.CacheWeaponCard (the card schema)";
 pub const THRESHOLD: f32 = 0.0001;
 /// How many entries replication fills at most (the outline's step 7).
 pub const REPLICATED: usize = 5;
-/// The size the slot count's clamp falls back to (the outline's step 3).
-const SLOT_CLAMP: usize = 19;
 
 const GLOBALS_CLASS: &str = "WillowGame.WillowGlobals";
 const STATUS_PRESENTATION: &str = "WeaponStatusEffectAttributePresentationDefinition";
@@ -282,6 +285,7 @@ enum Want<'a> {
     Byte,
     /// An int, or a byte.
     Index,
+    Int,
     Struct(&'a str),
     /// A byte of an enum that names `ROLE_Authority` (what `slots::is_authority` reads; review r1 of #521, item 7).
     Role,
@@ -294,6 +298,7 @@ fn kind_is(vm: &Vm, kind: &PropKind, want: Want<'_>) -> Result<bool, Walk> {
         (Want::Float, PropKind::Float) | (Want::Bool, PropKind::Bool) => true,
         (Want::Byte, PropKind::Byte { .. }) => true,
         (Want::Index, PropKind::Int | PropKind::Byte { .. }) => true,
+        (Want::Int, PropKind::Int) => true,
         (Want::Struct(t), PropKind::Struct(s)) => struct_named(vm, *s, t),
         (Want::Role, PropKind::Byte { enum_: Some(e) }) => vm
             .space
@@ -417,6 +422,7 @@ fn walk(vm: &Vm) -> Result<(), Walk> {
             )?;
         }
     }
+    class_fields(vm, weapon_type, &[("AttributeSlotMaxActivated", Want::Int)])?;
     let damage = reference(vm, weapon_type, "DefaultDamageTypeDefinition", "WillowDamageTypeDefinition")?;
     reference(vm, part, "CustomDamageTypeDefinition", "WillowDamageTypeDefinition")?;
     references(vm, damage, "WeaponCardPresentations", PRESENTATION)?;
@@ -500,8 +506,8 @@ pub struct Stat {
 /// The whole card, computed before any write.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
-    /// Slot 0's `bIncludeInModifierText` is cleared.
-    pub clear_slot_flag: bool,
+    /// The slots whose `bIncludeInModifierText` is cleared, in index order.
+    pub clear_slot_flags: Vec<u32>,
     /// The slot entries (S of them), then the appended entries.
     pub stats: Vec<Stat>,
     pub slot_entries: usize,
@@ -655,20 +661,10 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     let Some(weapon_type) = object_of(&field(vm, &data, "WeaponTypeDefinition")?, NATIVE)? else {
         return Ok(None);
     };
-    // 2. The slot count, before any definition load (review r1 of #521, item 2).
-    let class = vm.space.heap.get(weapon)?.class;
-    let p = vm.space.prop(class, "AttributeSlots").ok_or_else(|| bad(NATIVE, "the weapon declares no AttributeSlots"))?;
-    let dim = vm.space.classes.decl(p).map(|d| d.array_dim).unwrap_or(0);
-    let dim = usize::try_from(dim).unwrap_or(0).min(SLOT_CLAMP);
-    let slot = |vm: &Vm, i: usize| -> Result<Value, VmError> {
-        Ok(vm.space.read(weapon, PropAddr::element(p, u32::try_from(i).unwrap_or(u32::MAX)))?.clone())
-    };
-    for i in 1..dim {
-        if flag(field(vm, &slot(vm, i)?, "bActivated")?, "bActivated")? {
-            return Err(not_read(SLOT_COUNT));
-        }
+    // 2. An unloaded weapon type is refused here, loading nothing (NATIVE_CARD_SLOT_COUNT.md section 4, step 3).
+    if vm.defs.is_unloaded(&vm.space, weapon_type) {
+        return Err(unloaded_type(vm, weapon_type));
     }
-    loaded(vm, weapon_type)?;
     let dlc = match object_of(&field(vm, &data, "BalanceDefinition")?, NATIVE)? {
         Some(b) => {
             loaded(vm, b)?;
@@ -682,19 +678,27 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     };
     let damage = damage_type(vm, &data, weapon_type)?;
     let lk = Lookup { dlc, globals_definition, damage };
-    // Slot 0.
+    // The slot count (section 2 of the slot-count note), then the slots 0 to count - 1.
+    let count = slot_count(vm, weapon_type)?;
+    let class = vm.space.heap.get(weapon)?.class;
+    let p = vm.space.prop(class, "AttributeSlots").ok_or_else(|| bad(NATIVE, "the weapon declares no AttributeSlots"))?;
+    let dim = vm.space.classes.decl(p).map(|d| d.array_dim).unwrap_or(0);
+    let count = count.min(u32::try_from(dim).unwrap_or(0));
     let mut stats = Vec::new();
-    let mut clear_slot_flag = false;
-    if dim >= 1 {
-        let s = slot(vm, 0)?;
-        if flag(field(vm, &s, "bActivated")?, "bActivated")? {
-            let modify = presentation(vm, &lk, object_of(&field(vm, &s, "AttributeToModify")?, NATIVE)?)?;
-            let constraint = presentation(vm, &lk, object_of(&field(vm, &s, "ConstraintAttribute")?, NATIVE)?)?;
-            if flag(field(vm, &s, "bIncludeInModifierText")?, "bIncludeInModifierText")? {
-                clear_slot_flag = modify.is_none();
-                let value = float(field(vm, &s, "ComputedModifierValue")?, "ComputedModifierValue")?;
-                stats.push(Stat { presentation: modify, constraint, value, display: true });
+    let mut clear_slot_flags = Vec::new();
+    for i in 0..count {
+        let s = vm.space.read(weapon, PropAddr::element(p, i))?.clone();
+        if !flag(field(vm, &s, "bActivated")?, "bActivated")? {
+            continue;
+        }
+        let modify = presentation(vm, &lk, object_of(&field(vm, &s, "AttributeToModify")?, NATIVE)?)?;
+        let constraint = presentation(vm, &lk, object_of(&field(vm, &s, "ConstraintAttribute")?, NATIVE)?)?;
+        if flag(field(vm, &s, "bIncludeInModifierText")?, "bIncludeInModifierText")? {
+            if modify.is_none() {
+                clear_slot_flags.push(i);
             }
+            let value = float(field(vm, &s, "ComputedModifierValue")?, "ComputedModifierValue")?;
+            stats.push(Stat { presentation: modify, constraint, value, display: true });
         }
     }
     let slot_entries = stats.len();
@@ -749,7 +753,24 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     }
     stats.extend(appended.into_iter().map(|e| Stat { presentation: Some(e.presentation), constraint: None, value: 0.0, display: true }));
     let authority = super::slots::is_authority(vm, weapon, NATIVE)?;
-    Ok(Some(Card { clear_slot_flag, stats, slot_entries, authority }))
+    Ok(Some(Card { clear_slot_flags, stats, slot_entries, authority }))
+}
+
+/// The weapon type `t` held as an unloaded definition handle: a named `NotYet { NotRead }`, raised without loading it
+/// (NATIVE_CARD_SLOT_COUNT.md section 4, step 3).
+fn unloaded_type(vm: &Vm, t: ObjRef) -> VmError {
+    let path = vm.space.heap.get(t).map(|o| vm.space.names.text(o.name).into_owned()).unwrap_or_else(|_| "?".into());
+    NotYet::not_read(format!("WillowWeapon.CacheWeaponCard: the weapon type {path} is an unloaded definition handle"), SLOT_COUNT_RECORD)
+        .into()
+}
+
+/// The card's slot count on weapon type `t` (NATIVE_CARD_SLOT_COUNT.md section 2): its `AttributeSlotMaxActivated`,
+/// clamped as `GetAttributeSlotMaxActivated` answers it. It writes nothing.
+fn slot_count(vm: &Vm, t: ObjRef) -> Result<u32, VmError> {
+    match required(vm, t, "AttributeSlotMaxActivated", NATIVE)? {
+        Value::Int(i) => Ok(u32::try_from(super::natives::clamped_slot_max(i)).unwrap_or(0)),
+        other => Err(bad(NATIVE, format!("AttributeSlotMaxActivated holds {}, not an int", other.kind_name()))),
+    }
 }
 
 /// The base value B of presentation `p` (section 3.3, step 1): 1 with no `Attribute`; else the attribute's base
@@ -817,12 +838,12 @@ fn write_card(vm: &mut Vm, weapon: ObjRef, card: &Card) -> Result<(), VmError> {
     let values = stat_values(vm, ty, &card.stats)?;
     // 1. The clear.
     vm.space.write(weapon, PropAddr::scalar(stats_prop), Value::array(Vec::new()))?;
-    // 2. Slot 0's flag.
-    if card.clear_slot_flag {
+    // 2. The planned slot flags.
+    for &i in &card.clear_slot_flags {
         let slots = prop(vm, "AttributeSlots")?;
-        let mut s = vm.space.read(weapon, PropAddr::element(slots, 0))?.clone();
+        let mut s = vm.space.read(weapon, PropAddr::element(slots, i))?.clone();
         set(vm, &mut s, "bIncludeInModifierText", Value::Bool(false))?;
-        vm.space.write(weapon, PropAddr::element(slots, 0), s)?;
+        vm.space.write(weapon, PropAddr::element(slots, i), s)?;
     }
     // 3. The entries.
     vm.space.write(weapon, PropAddr::scalar(stats_prop), Value::array(values))?;

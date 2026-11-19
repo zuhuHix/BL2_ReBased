@@ -118,6 +118,13 @@ bridge). Installed Off `--slice-gate` strict (release build, under the machine l
 current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and verify_packages not run (no C++ change).
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
+**IMPL-CARD-SLOT-COUNT (2026-11-19, desktop, on #521 at 83d4e90):** AI-assisted (Claude Code, Claude Opus 5.5). The
+card's slot count is the weapon type's clamped `AttributeSlotMaxActivated`, and slots 0 to count - 1 run one step; an
+unloaded weapon type is `NotRead`. `cargo test --workspace -j 2` 2,489 passed / 0 failed / 46 ignored (33 in
+`equip::card::tests`); logs `local/p2/sc2/`. Installed Off `--slice-gate` strict, under the lock: 0 ok / 5 NotYet / 9
+errors. Link 8 `error`, 1 of 5 steps, stop `init` at the unbound native `WillowWeapon.RecomputeAttributeBaseValues()`
+(before: `notyet` at the card's slot count). The other 13 rows are identical.
+
 **IMPL-CACHE-WEAPON-CARD-BODY r2 (2026-11-19, desktop, on #521 at d479a55):** AI-assisted (Claude Code, Claude Opus
 5.5). #518's three write counters (copied unchanged from 211484a) mark the card's refusals, random draws included.
 The preflight's globals check loads nothing, the setup resolves the name-part ancestry, and `equip_world` runs the
