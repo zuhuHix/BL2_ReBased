@@ -32,6 +32,21 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-BODY-COMPOSITION (2026-11-19, pc-hummer, on fix/rust-init-pawn-meshes 1551f039, #522):** AI-assisted (Claude
+Code, Opus 5.5). `InstanceDataHelper.InitializeBodyComposition` in Off: a write-free plan, then the writes in the
+note's order under #518's counters. `InitializePawnMeshes` now runs the build.
+
+Results:
+- `cargo test -p ow-world`: 259 passed / 0 failed / 5 ignored.
+- `cargo test --workspace`: 2,454 passed / 0 failed / 48 ignored (one existing ow-defs test warning).
+- Installed Off `--slice-gate` strict (release build; #528 merged and `Engine.IsSplitScreen()` bound false, both
+  locally only; under the machine lock): 1 ok / 10 NotYet / 3 errors.
+  - Links 1, 3, 4, 5, 13 and 14: 0 of their driver steps, stopping in `maya:8` at the build's write-free `NotRead`
+    "the special parent identifier's refresh" (Maya's attachment 0).
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **IMPL-INIT-PAWN-MESHES (2026-11-19, pc-hummer, on research/rust-init-pawn-meshes 5d284e27, #517 on #513):**
 AI-assisted (Claude Code, Opus 5.5). `WillowPawn` / `WillowPlayerPawn.InitializePawnMeshes()` in Off:
 - `BodyClass` None and an empty attachment list do nothing;
