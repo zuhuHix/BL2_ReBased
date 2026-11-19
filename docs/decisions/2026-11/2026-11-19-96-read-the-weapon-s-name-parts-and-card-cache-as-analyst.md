@@ -25,8 +25,17 @@ reads and writes docs only; another lane implements from the note alone.
     entries with a flag cleared when a slot has no presentation, and replication of up to 5 later entries on the
     authority;
   - not read: the presentation lookup, the type and part card entries, and the ordering;
-  - Off answers `NotRead` at entry, before any write of its own, with the partial-write prefix.
+  - Off answers `NotRead` whatever the data, and every path reaches the native. So the refusal is cheap and certain,
+    and the equip driver answers it in its preflight, before the weapon is made, with no prefix (review r1 of #484).
+    The native's own call-time answer stays for a run that skips the preflight; that one carries the partial-write
+    prefix;
+  - the game's first load of the globals definition writes (`TheGlobalsDefinition`, the challenge numbering). Off
+    never runs it: its getter answers `NotRead` while the field is unset (NATIVE_WILLOW_GLOBALS.md section 6.3). The
+    port's package and definition loads are not writes (NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 3). Once the
+    native is read, the equip driver runs the globals preflight of NATIVE_WILLOW_GLOBALS.md section 6.2, steps 1 to 3.
 - **The BulletSpeed weapon (H6's report): a real gap, not a fixture problem.** The installed `WeaponBulletSpeed`
   attribute's value resolver names `BulletSpeed`, a property no installed class declares. The resolver's answer for a
-  failed lookup is unread, so the port's typed `NotYet` is right.
+  failed lookup is unread, so the port's existing typed `NotRead` stays, with no change. Link 8's weapon carries no
+  BulletSpeed part. NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 4 calls the stopping weapon a sniper rifle, but
+  the BulletSpeed accessory is an assault-rifle part; that mismatch is flagged and stays UNVERIFIED.
 - **Not verified:** everything above in the running game; the vtable slot identity of `CacheWeaponCard`.

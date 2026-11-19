@@ -24,12 +24,12 @@ codes them from this note alone.
 | Native | Does | Writes | Confidence | Status |
 |---|---|---|---|---|
 | `WillowWeapon.ChooseRandomNameParts()` | picks the prefix and the title from the weapon type's and the parts' name-part lists, by level range, priority and expressions; no random draw | `DefinitionData.PrefixPartDefinition`, `DefinitionData.TitlePartDefinition` | high | UNVERIFIED |
-| `WillowWeapon.CacheWeaponCard()` | rebuilds the weapon card's modifier list from the activated attribute slots and the card attributes of the type and parts; publishes up to 5 values for replication on the authority | `WeaponCardModifierStats`; a slot's `bIncludeInModifierText`; `ReplicatedWeaponCardModifierValues`; maybe the globals definition (its first load) | medium (outline), low (identity of the body) | UNVERIFIED |
+| `WillowWeapon.CacheWeaponCard()` | rebuilds the weapon card's modifier list from the activated attribute slots and the card attributes of the type and parts; publishes up to 5 values for replication on the authority | `WeaponCardModifierStats`; a slot's `bIncludeInModifierText`; `ReplicatedWeaponCardModifierValues`; in the game, possibly the globals definition's first load (never in Off) | medium (outline), low (identity of the body) | UNVERIFIED |
 
 ## 1. Where they are called: the script of InitializeInternal
 
-`WillowWeapon.InitializeInternal(bForceSelectNameParts)` runs, after the parts and the first slot effects (NATIVE_INVENTORY_VALUE.md
-section 5):
+`WillowWeapon.InitializeInternal(bForceSelectNameParts)` runs, after the parts and the first slot effects
+(NATIVE_INVENTORY_VALUE.md section 5):
 1. `RecomputeNormalizedDamageValues` (first call).
 2. **The name-part branch**, taken when `bSelectRandomPartsOnInitialization` is true **or** the parameter
    `bForceSelectNameParts` is true:
@@ -50,8 +50,8 @@ reached after `ComputeValueOfParts`. NATIVE_INVENTORY_VALUE.md section 5 lists "
 `ComputeValueOfParts` (its third call) run again". Read with the converted jump target, the second
 `RecomputeNormalizedDamageValues` belongs to the branch, and the third `ComputeValueOfParts` does not.
 
-`CacheWeaponCard` is called as a virtual function. Its exec entry calls the weapon's own virtual implementation, so a
-subclass of `WillowWeapon` could replace it (none was looked for).
+`CacheWeaponCard` is an overridable native: what runs is the weapon class's own implementation, so a subclass of
+`WillowWeapon` could replace it (none was looked for).
 
 ## 2. ChooseRandomNameParts
 
@@ -92,12 +92,12 @@ comparison is "at most", so later wins ties; and the expressions run in And mode
 
 ## 3. CacheWeaponCard
 
-**Identity of the body (low confidence).** The exec entry calls a virtual slot, and the project's vtable lookup finds
-no constructor pattern for `WillowWeapon`, so the slot was not resolved through the vtable. The body described here
-is the one function in the executable that:
+**Identity of the body (low confidence).** Because the native is overridable, the script name does not lead straight
+to one body, and the project's class-table lookup could not resolve `WillowWeapon`'s implementation. The body described
+here was chosen by its behaviour: it is the one function in the executable that
 - rebuilds `WeaponCardModifierStats` and fills `ReplicatedWeaponCardModifierValues`;
 - walks the weapon's attribute slots and its parts;
-- is called directly by no function (so it is reached only through a vtable).
+- has no fixed caller, which fits an overridable native.
 
 Confirming that it is the `CacheWeaponCard` slot is open question 1.
 
@@ -109,13 +109,18 @@ Confirming that it is the `CacheWeaponCard` slot is open question 1.
 `WeaponCardPresentations`; `Role`.
 
 **Steps, as read:**
-1. **The globals definition:** the globals object, then its definition through `GetGlobalsDefinition`. That call can
-   be the definition's first load (NATIVE_WILLOW_GLOBALS.md section 4), which writes. With no globals, no definition,
-   or no `WeaponTypeDefinition`, the native does nothing more.
+1. **The globals definition:** the globals object, then its definition through `GetGlobalsDefinition`. In the game
+   that call can be the definition's first load (NATIVE_WILLOW_GLOBALS.md section 4). That load writes script-visible
+   state: it stores `TheGlobalsDefinition` and numbers the challenge list. Off never runs it; Off's getter answers
+   `NotRead` while the field is unset (NATIVE_WILLOW_GLOBALS.md section 6.3, step 3). The port's loading of a package
+   or a definition into its handle is not meant here: that is not a write (NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md
+   section 3). With no globals, no definition, or no `WeaponTypeDefinition`, the native does nothing more.
 2. **Clear:** `WeaponCardModifierStats` is emptied (its storage released).
-3. **The slots:** the weapon's attribute slot count is read and clamped. A value from 1 to 19 is used as it is;
-   anything else (0, negative, or above 19) counts as 19, the size of `AttributeSlots`. For each of those slots, in
-   order:
+3. **The slots:** a slot count is read and clamped. Which field or getter supplies it was **not read** (the reading
+   did not tie it to a name). A value from 1 to 19 is used as it is; anything else (0, negative, or above 19) counts
+   as 19, the size of `AttributeSlots`. That clamp differs from `ApplyInternalSlotEffectModifiers`' Off assumption B1
+   (NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 3), where a count of 0 or less visits no slot and only a count above
+   the dimension stops at 19. For each of those slots, in order:
    - a slot that is not `bActivated` is skipped;
    - the presentation of its `AttributeToModify` and of its `ConstraintAttribute` are looked up (step 4);
    - when the slot is `bIncludeInModifierText`: if the presentation of `AttributeToModify` is None, the slot's
@@ -133,9 +138,9 @@ Confirming that it is the `CacheWeaponCard` slot is open question 1.
      above.
    The list lookups, the "certain kind" test and the replacement were **not read** (open question 2).
 5. **Further card entries (not read):**
-   - a helper runs with the weapon and the globals definition;
-   - then a visitor is passed to the weapon type definition and to every part, the name parts included, through a
-     virtual call on each;
+   - a further step uses the weapon and the globals definition;
+   - then the weapon type definition and every part, the name parts included, each get a chance to contribute,
+     through behaviour each definition class may supply for itself;
    - then each presentation in the damage type's `WeaponCardPresentations` is processed.
    These presumably add the type's and parts' card attributes (for example `WeaponCardAttributes`) to
    `WeaponCardModifierStats`. That is an inference: their bodies were not read (open question 3).
@@ -151,9 +156,23 @@ Confirming that it is the `CacheWeaponCard` slot is open question 1.
 
 ## 4. The BulletSpeed weapon (lane H6's report)
 
-H6 reported that a weapon with the "BulletSpeed" accessory or prefix stops before these natives: an attribute names a
-property that the installed `WillowWeapon` does not declare. **That is a real gap of the installed data, not a fixture
-problem.**
+H6 reported that a weapon with a "BulletSpeed" part stops before these natives: an attribute names a property that
+the installed `WillowWeapon` does not declare. **That is a real gap of the installed data, not a fixture problem.**
+
+**Which weapon carries which part.**
+- **Link 8's weapon** (`EQUIP_WEAPON` in `crates/ow-cli/src/cmd/slice_gate.rs`) is a Bandit assault rifle: Bandit
+  barrel, body and material, Jakobs grip and stock, no sight, the prefix `Prefix_Grip_Jakobs` and a Bandit title. It
+  has no accessory and no BulletSpeed part, so it does not meet this gap.
+- **The stopping weapon** was another one, from H6's own probe. NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 4 calls
+  it a Jakobs sniper rifle that stops in `ApplyAllWeaponAttributeEffects`. **Mismatch, flagged:** the BulletSpeed
+  accessory found here, `AR_Accessory_Box_BulletSpeed`, is an assault-rifle accessory, and the reviewer's local census
+  puts it on a Jakobs assault rifle. So "sniper" is probably a misnaming. This lane did not re-run that census, and
+  it stays UNVERIFIED.
+- **The prefix is not the cause of that stop** on a weapon whose name parts are picked at random: `ChooseRandomNameParts`
+  runs after `ApplyAllWeaponAttributeEffects` (section 1). Whether `ApplyAllWeaponAttributeEffects` walks a prefix that
+  the definition data already holds was not read here.
+- NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md's open question 4 (which attribute names `BulletSpeed`, and on which class) is
+  answered below, as far as the packages go.
 - The installed attribute `D_Attributes.WeaponBullet.WeaponBulletSpeed` resolves its context through a
   `WeaponAttributeContextResolver` (the weapon), and its value through an `ObjectPropertyAttributeValueResolver` whose
   `PropertyName` is `BulletSpeed`.
@@ -165,10 +184,10 @@ problem.**
 - So the game itself meets a resolver whose property lookup fails. NATIVE_ATTRIBUTES.md section 3 says the resolver
   looks the property up by name on the context's class and caches it. **What it does when the lookup fails** (most
   likely a value of 0, and add or remove answering false, so the modifier has no effect) **was not read.**
-- **Off answer:** the port's `NotYet` for that property is the right answer until that rule is read, and it must stay
-  typed (`NotRead`, naming "the value resolver's answer for a property the context class does not declare",
-  NATIVE_ATTRIBUTES.md). Inventing a `BulletSpeed` field in a fixture, or mapping it to `ProjectileSpeedMultiplier`,
-  would be a fitted rule.
+- **Off answer: the existing `NotRead` stays; no change.** It is `ow-attr`'s `value_resolvers/object_property.rs`
+  `target()`, which answers `NotYet { NotRead }`, "ObjectPropertyAttributeValueResolver on a <class> context, which
+  has no property <name>". That is the right answer until the rule is read. Inventing a
+  `BulletSpeed` field in a fixture, or mapping it to `ProjectileSpeedMultiplier`, would be a fitted rule.
 - For the slice, choose a link 8 weapon without these parts, or read the rule (open question 4).
 
 ## 5. For an implementer: the Off answers, step by step
@@ -178,7 +197,10 @@ These follow the hub's rulings:
 - after the run's first write, a refusal keeps its typed outcome. A `NotYet` stays `VmError::NotYet` with its kind
   and record, its text gains the "stopped after partial writes" prefix, and every write already made stays (no Off
   rollback). Other errors pass through unchanged;
-- a lazy definition load counts as a write;
+- the game's first load of the globals definition writes script-visible state (it stores `TheGlobalsDefinition` and
+  numbers the challenge list, NATIVE_WILLOW_GLOBALS.md section 4), and Off never runs it: Off's getter answers
+  `NotRead` while the field is unset (that note's section 6.3, step 3). The port's package and definition loads are
+  not writes (NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 3);
 - the gate grades by the `VmError` variant, never by text.
 
 Both natives run inside the spawn's `InitializeInternal`, after the weapon was made and after the parts and the first
@@ -186,7 +208,19 @@ slot effects were written. So every call-time `NotYet` below carries the prefix.
 
 ### 5.1 Preflight (the equip driver, before the weapon is made)
 
-On the declared classes, checked once, each failure a `VmError::Script` naming the field:
+**First, the CacheWeaponCard refusal.** It is cheap and certain: every path through `InitializeInternal` reaches the
+native (section 1), and Off answers `NotRead` whatever the data (section 5.3). So the equip driver answers it here,
+before the weapon is made: `VmError::NotYet`, kind `NotRead`, the text of section 5.3, record this note, **with no
+prefix**, since nothing has been written. This is the preflight rule above, applied as NATIVE_WILLOW_GLOBALS.md
+section 6.2 applies it to the pickup drivers.
+- The refusal names `CacheWeaponCard` even where a call-time stop earlier in the init would have come first (an
+  expression `NotYet`, or the BulletSpeed lookup of section 4). The run cannot finish on either path, so the outcome
+  is the same variant; the gate row names the preflight's stop instead of the earlier one.
+- The native's own call-time answer (section 5.3) stays, for a run that skips this preflight.
+- When `CacheWeaponCard` is read, this refusal goes, and the globals preflight of section 5.3, step 1 replaces it.
+
+**Then the name-part schema,** for `ChooseRandomNameParts`. It is checked now so that it holds once the refusal above
+is gone. On the declared classes, checked once, each failure a `VmError::Script` naming the field:
 - `WillowWeapon.DefinitionData` is a `WeaponDefinitionData` struct with object fields `WeaponTypeDefinition`, the nine
   part slots of section 2, `PrefixPartDefinition` and `TitlePartDefinition` (the last two typed
   `WeaponNamePartDefinition`);
@@ -196,8 +230,10 @@ On the declared classes, checked once, each failure a `VmError::Script` naming t
   and `Expressions` is a dynamic array of `AttributeExpressionData`;
 - `ExpLevel` on the weapon is an int.
 
-For `CacheWeaponCard`, Off answers `NotRead` whatever the data (section 5.3), so its schema need not be preflighted.
-Whether a weapon reaches it is certain from the script: every path does.
+**Name-part class defaults.** Cooked data omits a field that holds its class default, so a name part with no stored
+value for one of these fields takes the default of `WeaponNamePartDefinition`: `MinExpLevelRequirement` 1,
+`MaxExpLevelRequirement` 100, `Priority` 1 (NATIVE_WEAPON_RULES.md section 5). The implementer reads the field through
+the class defaults, not as 0.
 
 ### 5.2 ChooseRandomNameParts at call time
 
@@ -214,18 +250,24 @@ There are no `NotYet`s of its own: every rule it uses is read.
 ### 5.3 CacheWeaponCard at call time
 
 **Off answers `NotYet` of kind `NotRead`**, naming "WillowWeapon.CacheWeaponCard: the card presentation lookup and
-the card attributes of the type and parts", record this note. It answers before any write of its own:
-- before the `GetGlobalsDefinition` call, so it cannot cause the first load;
+the card attributes of the type and parts", record this note. In the equip driver this answer comes from the
+preflight (section 5.1), with no prefix. At call time, for a run that skipped that preflight, it answers before
+anything of its own:
+- before the `GetGlobalsDefinition` call. In Off that getter never loads; it answers `NotRead` when the field is
+  unset. So the order decides which `NotRead` the run reports, not whether a write happens;
 - before the clear of step 2;
 - before the slot flag change of step 3.
-The text carries the "stopped after partial writes" prefix, since `InitializeInternal` has written before.
+At call time the text carries the "stopped after partial writes" prefix, since `InitializeInternal` has written
+before.
 
 Steps 4 to 6 are not read. An Off answer that ran steps 1 to 3 and then refused would leave a half-built card (the list
 cleared, slot flags changed). Refusing at entry leaves the card as the earlier steps left it.
 
 When the rest is read, the order to keep is section 3's:
-1. the definition, through the getter (a world set up per NATIVE_WILLOW_GLOBALS.md section 6.1 has it loaded, so no
-   first load runs);
+1. the definition, through the getter. The equip driver must then run the globals preflight of
+   NATIVE_WILLOW_GLOBALS.md section 6.2, steps 1 to 3 (the globals instance, its class, `TheGlobalsDefinition`
+   holding a `GlobalsDefinition`), before the weapon is made, on a world set up per that note's section 6.1. Off's
+   getter then answers the preloaded object, and no first load is ever asked for;
 2. the clear;
 3. the slot entries, with the flag clear;
 4. the further entries;
@@ -235,15 +277,16 @@ When the rest is read, the order to keep is section 3's:
 
 ## Open questions
 
-1. **Which vtable slot is `CacheWeaponCard`:** confirm that the body read in section 3 is the weapon's
-   implementation. That needs a vtable route for `WillowWeapon` (no constructor pattern was found) or a live trace.
+1. **Is the body read in section 3 `WillowWeapon`'s `CacheWeaponCard`:** confirming it needs a way to resolve the
+   weapon class's implementation of the overridable native (the class-table lookup failed for `WillowWeapon`), or a
+   live trace.
 2. **The presentation lookup:**
    - the two lists of the DLC item set and their order;
    - how an attribute is matched in `AttributePresentationListDefinition`;
    - which presentations are replaced by a damage-type-specific one, and how.
 3. **The further card entries and the processing:**
-   - the helper's body, the visitor's effect on the type and on each part, and the processing of
-     `WeaponCardPresentations`;
+   - the step that uses the weapon and the globals definition, what the type and each part contribute, and the
+     processing of `WeaponCardPresentations`;
    - the routine that orders or filters `WeaponCardModifierStats`.
 4. **A property lookup that fails** (section 4): what `ObjectPropertyAttributeValueResolver` answers for a name the
    context class does not declare, for read, add, remove and set-base.
