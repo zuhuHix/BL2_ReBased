@@ -220,25 +220,54 @@ fn a_missing_layout_is_a_named_not_yet() {
 #[test]
 fn a_declared_but_malformed_layout_is_a_data_error() {
     let mut w = world(ParityMode::Off);
-    for (path, said) in [
-        ("WillowGame.WillowArtifact", "DefinitionData is declared as Int x 1, not one struct"),
-        ("WillowGame.WillowGrenadeMod", "DefinitionData is declared as Struct("),
-        ("WillowGame.WillowClassMod", "DefinitionData.ItemDefinition is declared as Int x 1"),
-        ("WillowGame.WillowUsableItem", "DefinitionData.ItemDefinition is declared as Object {"),
-        ("WillowGame.WillowUsableCustomizationItem", "DefinitionData.ItemDefinition is declared as Interface {"),
+    // Each case: the class, the start of the diagnostic, and its end (the dimension and what was expected).
+    for (path, said, ends) in [
+        ("WillowGame.WillowArtifact", "DefinitionData is declared as Int", " x 1, not one struct"),
+        ("WillowGame.WillowGrenadeMod", "DefinitionData is declared as Struct(", " x 2, not one struct"),
+        ("WillowGame.WillowClassMod", "DefinitionData.ItemDefinition is declared as Int", " x 1, not one object reference"),
+        ("WillowGame.WillowUsableItem", "DefinitionData.ItemDefinition is declared as Object {", " x 2, not one object reference"),
+        (
+            "WillowGame.WillowUsableCustomizationItem",
+            "DefinitionData.ItemDefinition is declared as Interface {",
+            " x 1, not one object reference",
+        ),
     ] {
         let o = w.obj(path);
         match w.call(o) {
             Err(VmError::Script { function, message }) => {
                 assert!(function.contains("GetInventoryDefinition"), "{path}: {function}");
-                assert!(message.contains(said), "{path}: {message}");
+                assert!(message.starts_with(said) && message.ends_with(ends), "{path}: {message}");
             }
             other => panic!("{path}: expected a data error, got {other:?}"),
         }
     }
-    // The array cases name their dimension.
-    let o = w.obj("WillowGame.WillowUsableItem");
-    assert!(format!("{:?}", w.call(o)).contains(" x 2, not one object reference"));
+}
+
+#[test]
+fn registration_skips_only_a_confirmed_absence() {
+    // No code layer: the undeclared paths are absent, so registration succeeds and binds nothing.
+    let mut vm = Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    register(&mut vm).unwrap();
+    // A code layer whose package fails to load: the lookup's error comes back unchanged (review r2 of #462). The
+    // package is four invented bytes, not a package.
+    let dir = std::env::temp_dir().join(format!("ow-inventory-definition-{}", std::process::id()));
+    let defs = DefStore::from_synthetic(
+        &dir,
+        &[("Engine.upk", &[1u8, 2, 3, 4]), ("WillowGame.upk", &[1u8, 2, 3, 4])],
+        ow_defs::identity::IdentityPolicy::FirstInScanOrder,
+        ParityMode::Off,
+    )
+    .unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    // The first path register looks up.
+    let path = GENERATE_UNIQUE_ID;
+    let direct = format!("{:?}", vm.find_function(path).unwrap_err());
+    let got = register(&mut vm);
+    let _ = std::fs::remove_dir_all(&dir);
+    match got {
+        Err(e) => assert_eq!(format!("{e:?}"), direct, "the lookup's own error, unchanged"),
+        Ok(()) => panic!("a failed package load was skipped as an absence ({direct})"),
+    }
 }
 
 #[test]
