@@ -19,8 +19,22 @@ AI-assisted (Claude Code, Opus 5.5). Lane LINK-9-NEXT, which turned into an anal
     all zeros.
   - The four pawn classes share `Pawn`'s rule: their own `CylinderComponent` when it is a separate cylinder, else
     `Actor`'s.
-  - For link 9 the template has no cylinder at all and no attached component, so the extent is (0, 0, 0): a point
-    search. The link then stops at the missing collision service.
+  - For link 9 the template has no cylinder at all. Its components are loaded first (a write), and none is attached,
+    so the extent is (0, 0, 0): a point search.
+  - On the base, the cast's world has the `NoLevel` service. The zero-extent first test walks the only live actor, the
+    `WorldInfo`. So the link then stops either at a trace-filter refusal there, or, after success at L0, at the
+    post-spawn encroachment check (terminal, prefixed).
 - **#470's cylinder reader is not this rule.** It reads an archetype's `CylinderComponent` for link 2's fight area. It
   does not apply to link 9's class-default template, which has none.
 - Not implemented here: another lane codes the Off answers from the note.
+
+**Review r1 of #488 (fixed in the note).**
+1. The next stop is rewritten from the base code. The service is checked first (the cast's world has `NoLevel`), then
+   the zero-extent walk over the `WorldInfo`, then either a trace-filter refusal or success and the post-spawn
+   encroachment check. "#477 checks the extent first" is dropped.
+2. The template's components are lazy handles. A primitive entry is loaded as the template's own definition before
+   the spot search, and that load is a write, so every later `NotYet` is marked. `bAttached` is read from the loaded
+   entry, not assumed.
+3. The skip flag is a named `NotYet { NotRead }` (`trace_filter::SKIP_FLAG`), decided after the primitive, `bAttached`
+   and `CollideActors` tests.
+4. A missing field is `VmError::Script`, as the port's field reads answer it.
