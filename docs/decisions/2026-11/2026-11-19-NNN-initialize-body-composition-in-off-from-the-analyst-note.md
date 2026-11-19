@@ -1,75 +1,74 @@
 ## 2026-11-19: InstanceDataHelper.InitializeBodyComposition in Off from the analyst note
 
 AI-assisted (Claude Code). Lane IMPL-BODY-COMPOSITION, implementer (clean room). This lane coded
-`InstanceDataHelper.InitializeBodyComposition` from `docs/verification/NATIVE_INITIALIZE_BODY_COMPOSITION.md` alone:
-analyst lane ANALYST-BODY-COMPOSITION, PR #529 at cdf199be. It also used the hub's three rulings on that note's
-section 7 choices. This lane did not read the executable. There was no real-game session, so every rule stays
-**UNVERIFIED** in the running game. No dependency or crate edge was added, no bounds check was loosened, and
-Reference is unchanged. The lane is stacked on #522. The decision number is a placeholder.
+`InstanceDataHelper.InitializeBodyComposition` for the pawn wrapper from `docs/verification/NATIVE_INITIALIZE_BODY_COMPOSITION.md`
+alone (analyst lane ANALYST-BODY-COMPOSITION, PR #529 at its revised head 87c8b9cd) and the hub's rulings. This lane
+did not read the executable. There was no real-game session, so every rule stays **UNVERIFIED** in the running game.
+No dependency or crate edge was added, no bounds check was loosened, and Reference is unchanged. The lane is stacked
+on #522. The decision number is a placeholder.
 
 - **The write tracker:** #518's counters (`Heap::committed_writes` and `note_write`, `GameRng::draws`,
-  `DefStore::load_transitions`, and the VM's `note_write` calls) are copied unchanged from
-  `fix/rust-483-followup` @ 211484a5 in one commit, so the rebase folds.
-- **`ow-world` `world/body_composition.rs`, Off only:**
-  - **The plan** (write-free, load-free). It runs in walk order and decides what the walk makes: the base and switch
-    rules (no "base first"), removed attachments, a missing template.
-  - **The refusals**, raised before the first write, with the note's texts:
-    - call-wide, first: menu modes, and the client-side apply;
-    - then per attachment that would be made: object and template types, the teardown of a removed attachment, a
-      collision type, an actor's own named socket components, the socket and bone tables of a skeletal parent
-      (`LayerAbsent`), and the special parent identifier's refresh.
-  - **The writes**, in the note's order:
-    - each made attachment's entry: a component is made from its template, owned by the owner, its properties the
-      template's; its entry is appended, then it is attached to the actor (its `Components`, zero offset);
-    - switch entries (`Data` with `Float` 0) and custom entries (`Name`, `Replication`, `Type`, index);
-    - then, on authority, `SwitchStateBitField` and `ActiveSwitchValues` (zeroed, then packed), `bNetDirty` and
-      `bForceNetUpdate`.
-  - A `NotYet` after any counter moved is marked "stopped after partial writes", its kind kept.
-  - The script native writes its two structs to its out arguments. The pawn wrapper writes them to the pawn's own
-    fields.
+  `DefStore::load_transitions`, and the VM's `note_write` calls) are copied unchanged from `fix/rust-483-followup` @
+  211484a5 in one commit, so the rebase folds. A `NotYet` returned after any counter moved is marked "stopped after
+  partial writes", its kind kept.
+- **Scope** (the note's section 7): the pawn wrapper only, mode 0, the pawn's own `InstanceDataState` and
+  `ReplicatedInstanceDataState`. The script native, for the other callers, is `NotYet { NotPorted }`,
+  "InitializeBodyComposition called from script (its destinations)".
+- **`ow-world` `world/body_composition.rs`, Off only. The preflight** (write-free and load-free), in order:
+  - shapes (`VmError::Script`); a rebuild (`Data` not empty) and a client-side apply (`Role` not 3 with
+    `bNeedToApplyThisState`), both `NotRead`;
+  - the walk (section 3): a baseless attachment's parent is the owner; a base is read as its record stands (no "base
+    first"); a switch base makes its child when the switch's `Int` is the child's `SwitchIdentifier`, and the child's
+    parent is the switch's parent; a custom head or skin counts as not made; a removed attachment is skipped;
+  - for each attachment the walk makes, in list order:
+    - object and template types (`NotRead`);
+    - a hit region (`NotRead`);
+    - the attach: an actor parent with a socket name (`NotRead`, the actor's own socket components); a skeletal
+      parent with a socket name and a mesh asset (`LayerAbsent`, its socket and bone tables); with no mesh asset or no
+      socket name the skeletal attach answers false and the owner retry (an actor attach with no socket name) takes it;
+    - the `Parent` link, identifier `Parent` with both components skeletal (`NotRead`, hub ruling 3);
+    - the pawn's `PostInitBodyComposition`: identifier `Mesh` on a skeletal component is `LayerAbsent`, "the new
+      Mesh's animation nodes (...)", layer "an animation-tree instance for the skeletal mesh".
+- **The writes**, in the note's order, per made attachment in list order:
+  - a component: made from its template (outered to the owner, the template's properties); its entry appended (4.1's
+    table: `Name`, `Type`, `DeleteByOwner`, `ComponentData` with the new component, `BodyCompositionIndex` copied, the
+    rest zero); its collision flags (4.1's table, on a `PrimitiveComponent`, the owner's flags too); the actor attach
+    (`Owner`, and `Components` if not there); then `PostInitBodyComposition`: `CylinderComponent` and, unless the
+    body class's `bUseMeshForCollision`, `CollisionComponent` for identifier `CylinderComponent`; `HeadMesh` for a
+    `Data.Name` of `CustomHead`; the pawn's `LightEnvironment` on a mesh component;
+  - a switch: the whole `Data`, `Float` 0;
+  - a custom head or skin: `Name`, `Type`, `BodyCompositionIndex`, the rest zero (`Replication` and `Object`
+    included);
+  - after the walk, on authority: the switch packing exactly as section 5 (positions used up by unmade switches, the
+    width from `BitsRequiredForMaxSwitchValue` or the truncated `Float`, no mask, a width of 0 packing at the current
+    offset, at most 32 switches), then `bNetDirty` and `bForceNetUpdate`.
 - **The hub's rulings:**
   1. a component made from a template counts as valid;
-  2. the special parent identifier's refresh stays `NotYet { NotRead }`;
-  3. a custom head or skin entry is appended and nothing is applied.
-- **This lane's narrower answers**, each a named `NotYet { NotRead }` where the note does not give the rule:
-  - every collision type other than 0: the note names the flags for types 1, 2, 3, 6 and 9 "by fit only";
-  - a component made under a switch: its parent is not given;
-  - a component parent that is not a skeletal component;
-  - an instance-data type outside the note's list.
-- **`InitializePawnMeshes`** (#522) now runs the build instead of its `LayerAbsent`, after one more write-free check:
-  a body class that sets `UseRootMotion` or `UseRootRotation` is `NotYet { NotRead }`, because the two mesh fields
-  are named by fit only.
-- **Tests:** nine new and two updated, on invented classes and structs. They cover:
-  - a component made, entered and attached;
-  - a switch entered, with its component waiting;
-  - a custom head entry;
-  - a missing template;
-  - the socket-table `LayerAbsent`, write-free;
-  - the special-name, collision and actor-socket refusals, write-free;
-  - an object-template refusal;
-  - the tracker's marking;
-  - the script native's out arguments;
-  - the pawn wrapper's malformed list and its root-motion `NotRead`.
-- **The slice** (installed, Off, strict, with #528 merged and `Engine.IsSplitScreen()` bound false, both locally
-  only): 1 ok / 10 NotYet / 3 errors.
-  - Links 1, 3, 4, 5, 13 and 14 now stop in `maya:8` at the build's preflight, "InitializeBodyComposition: the special
-    parent identifier's refresh" (`NotRead`, ruling 2), on Maya's attachment 0 (parent identifier `Mesh`). Nothing is
-    written.
-  - The note's data puts the next stop after it at attachment 1's socket on the new skeletal mesh: the socket-table
-    `LayerAbsent`.
+  2. a custom head or skin entry is appended and nothing is applied;
+  3. the `Parent` link stays `NotYet { NotRead }`;
+  4. (19:58Z) the render-side hooks answer nothing where they write no field the script or a slice step reads. The
+     gear-likeness step and the mode-0 rendering setting (not read, render-side by the note) do nothing. The light
+     environment is a named field the note gives, so it is written rather than answered "nothing".
+- **This lane's narrower answers** (named `NotRead`): a component parent that is not a skeletal component; a `Mesh`
+  attachment whose component is not skeletal; a skeletal parent whose template is not loaded (its mesh asset cannot be
+  read without a load); an instance-data type outside the note's list; a mode other than 0.
+- **Port answers, UNVERIFIED:** the release of the old `CylinderComponent` (its detach and the global list) is not
+  modelled; the global "attaching later" state is never set (section 7, item 5).
+- **A note order:** section 7 lists the attach before the `Parent` link, so Maya's attachment 1 (socket `Root` on the
+  new skeletal mesh) would meet the socket-table `LayerAbsent` before the `Parent` link `NotRead`. The note's closing
+  line names the `Parent` link as the next refusal; this lane follows the listed order.
+- **`InitializePawnMeshes`** (#522) runs the build instead of its `LayerAbsent`, after one more write-free check: a
+  body class that sets `UseRootMotion` or `UseRootRotation` is `NotYet { NotRead }` (the two mesh fields are named by
+  fit only).
+- **Tests:** 14 in `world/body_composition_tests.rs`, on invented classes and structs: the cylinder made, entered,
+  collided, attached and posted; `bUseMeshForCollision`; the collision table for three types; a switch's copy and its
+  gating; the packing's edge cases; the 32-switch limit; a custom head; the owner retry with `HeadMesh` and
+  `LightEnvironment`; a missing template; the animation-node `LayerAbsent` before any write; eight named refusals,
+  write-free; the tracker; the script native's `NotPorted`.
+- **The slice** (installed, Off, strict, with #528 @ 9cd49c14 merged and `Engine.IsSplitScreen()` bound false, both
+  locally only): 1 ok / 10 NotYet / 3 errors. Links 1, 3, 4, 5, 13 and 14 now stop in `maya:8` at the
+  animation-node `LayerAbsent` on Maya's attachment 0, found in the preflight (no prefix, nothing written).
 
-**The hub's heads-up (2026-11-19, #529's review is tightening the note).** Until the revised note lands, the parts it
-will change are typed refusals in the preflight, before any write. Each is `NotYet { NotRead }`, record the note, and
-its text ends "(pending the revised note)":
-- a made attachment's entry (component, switch or custom): "the entry's field copy rules";
-- a component with no socket under a skeletal parent: "the attach's retry on the owner";
-- on authority, the switch packing's edge cases: a width of 0, more than 32 switches, values past 32 bits;
-- the script native's out arguments: "a state destination other than the pawn wrapper's".
-
-Collision values other than 0 and the special parent refresh were already refusals.
-
-So in production the build writes nothing yet. The walk, the write tracker and the writes stay in the code, covered by
-the tests through a test-only switch that lets the pending parts through on the test's own thread.
-
-Maya's first stop is unchanged, because attachment 0's special-parent check comes before its entry copy. The gate
-was not re-run for this change.
+**Superseded:** the first version of this lane implemented the note at cdf199be (the special refresh on `Mesh`, every
+collision type but 0 refused, entry index written as `i` + 1) and then held the parts the revision would change as
+"(pending the revised note)" refusals behind a test-only switch. Both are replaced by the above; the switch is gone.

@@ -189,16 +189,11 @@ pub fn initialize_pawn_meshes(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
     let inputs = crate::world::body_composition::Inputs {
         owner: Some(me),
         composition: composition.clone(),
-        set: read("InstanceDataState")?,
-        replicated: read("ReplicatedInstanceDataState")?,
+        set: read(crate::world::body_composition::SET)?,
+        replicated: read(crate::world::body_composition::REPLICATED)?,
         mode: 0,
     };
-    let sink = crate::world::body_composition::Sink::Properties {
-        owner: me,
-        set: "InstanceDataState",
-        replicated: "ReplicatedInstanceDataState",
-    };
-    crate::world::body_composition::build(c, inputs, &sink)?;
+    crate::world::body_composition::build(c.vm, inputs)?;
     Ok(Value::None)
 }
 
