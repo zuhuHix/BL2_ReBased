@@ -68,6 +68,8 @@ pub mod rebase;
 pub mod particle_effect;
 /// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
 pub mod value;
+// Lane IMPL-STATIC-GET-WEAPON-DAMAGE-TYPE: WillowWeapon.StaticGetWeaponDamageType in Off.
+pub mod damage_type;
 
 /// The records this module reads.
 pub const RECORD: &str = "NATIVE_ATTRIBUTES.md sections 7 and 9; NATIVE_INVENTORY_EQUIP.md (equip); script read 2026-11-16";
