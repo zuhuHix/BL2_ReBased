@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Code). Lane IMPL-ALL-EXPANSION-SIDE-MISSIONS, implementer (clean room). This lane coded the native
 from `docs/verification/NATIVE_ALL_EXPANSION_SIDE_MISSIONS_COMPLETE.md` alone (analyst lane
-ANALYST-LINK12-EXPANSION-SIDE-MISSIONS, #550 at 690ae348) and the hub's ruling on #550's review. This lane did not read
+ANALYST-LINK12-EXPANSION-SIDE-MISSIONS, #550 at its review-r1 head 32a09999) and the hub's ruling on #550's review. This lane did not read
 the executable. There was no real-game session, so every rule stays **UNVERIFIED** in the running game. No dependency
 or crate edge was added and Reference is unchanged. The lane is based on #496 (`fix/rust-mission-list-build` @
 9b591ada), which builds the tracker's list at set-up. The decision number is a placeholder.
@@ -30,6 +30,9 @@ or crate edge was added and Reference is unchanged. The lane is based on #496 (`
   by-name read); 1 new bridge test (the replayed refusal equals `GetAllMissions`'s; the `LayerAbsent`, write-free);
   #496's `the_mission_list_queries_in_off_mode` now expects the walk's false. The bridge fixture's
   `MissionDefinition` gains `bRepeatable` and `MarketingUnlock`.
+- **Review r1 of #554:** a non-byte `Status` is bad data (`VmError::Script`), as the other field reads are; tests
+  for an unloaded mission handle in the list (`LayerAbsent`, nothing loaded, the heap unchanged; this base has no
+  write or load counters) and a `Status` enum without `MS_Complete` (`VmError::Script`).
 - **The slice** (installed, Off, strict, on a local merge with #546, #533, #497, #509, #512, #524 and #526, never
   pushed): 3 ok / 1 NotYet / 10 errors. Links 10 and 11 ok. Link 12 passes 1 of 6 driver steps (`use`) and gets past
   this native to the unbound `WillowPlayerController.RefreshBalanceDataFromMissionCompletion(object)` in `turnin`.

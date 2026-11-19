@@ -27,7 +27,8 @@
 //!   `ParityMode::Reference` `GetObjectivesProgress` (NATIVE_SLICE_OFF_STOPS.md; the C++ stubs it, decision
 //!   2026-11-19-05) and the record queries `GetActivePrimaryObjectiveSet`, `GetAllMissions` and
 //!   `AllExpansionSideMissionsComplete` (NATIVE_MISSION_OBJECTIVES.md, decision 2026-11-19-10: the first in the
-//!   bridge's one-record terms; the other two `NotYet` past a None controller, as they walk the whole mission list);
+//!   bridge's one-record terms; the other two walk the tracker's list built at set-up, `crate::mission_list`, and
+//!   answer its refusal or `LayerAbsent` while it is not built; the expansion check is `crate::side_missions`);
 //! - the controller: `NativeGetMissionIndex`, `GetCurrentPlaythrough`, `ExpEarn`, `GetMaxExpLevel`,
 //!   `GetExpPointsRequiredForLevel`, `GetHUDMovie` (None), `UpdateLcdMissionStatus` and `PlayUIAkEvent`
 //!   (presentation: no-ops), `PlayerController.IsPrimaryPlayer`;

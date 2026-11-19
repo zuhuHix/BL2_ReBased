@@ -228,3 +228,85 @@ fn a_none_mission_is_skipped() {
     let Step::Walk(w) = step else { panic!() };
     assert!(walk(&e.vm, &w, &[Value::Object(None), Value::Object(Some(a))]).unwrap());
 }
+
+/// Review r1 of #554: an entry whose `Status` enum has no `MS_Complete`, and an entry whose `Status` is not a byte,
+/// are bad data.
+#[test]
+fn a_status_without_ms_complete_or_not_a_byte_is_a_script_error() {
+    let mut e = env();
+    let a = mission(&mut e, "A", false, false, None, None);
+    let object = e.vm.find_class("Core.Object").unwrap();
+    let names = ["MS_Active", "MS_Failed"].iter().map(|n| e.vm.space.names.intern(n)).collect();
+    let other_enum = e.vm.space.classes.define_enum("Test.EOtherStatus", names).unwrap();
+    for kind in [PropKind::Byte { enum_: Some(other_enum) }, PropKind::Int] {
+        let props = vec![decl(&mut e.vm, "MissionDef", PropKind::Object { class: object }), decl(&mut e.vm, "Status", kind.clone())];
+        let name = format!("Test.Entry{}", NEXT.fetch_add(1, Ordering::Relaxed));
+        let s = e.vm.space.classes.define_struct(&name, None, props).unwrap();
+        let status = if matches!(kind, PropKind::Int) { Value::Int(1) } else { Value::Byte(0) };
+        let entry = strukt(&e, s, vec![("MissionDef", Value::Object(Some(a))), ("Status", status)]);
+        let w = Walk { expansion: None, entries: vec![entry] };
+        let err = walk(&e.vm, &w, &[Value::Object(Some(a))]).unwrap_err();
+        assert!(matches!(&err, VmError::Script { function, .. } if function == UNIT), "{kind:?}: {err:?}");
+    }
+}
+
+/// Review r1 of #554: a mission handle the store has not loaded is the named `LayerAbsent`; nothing is loaded and the
+/// heap is unchanged (this base has no write or load counters). The handle comes from an invented package.
+#[test]
+fn an_unloaded_mission_in_the_list_is_layer_absent_and_loads_nothing() {
+    let dir = std::env::temp_dir().join(format!("ow-mission-side-lazy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "BoolProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let mission = t.class("MissionDefinition", object);
+        t.prop("Bool", mission, "bPlotCritical", 0, 0);
+        let holder = t.class("ToyMissionHolder", object);
+        t.prop("Object", holder, "Mission", 0, object);
+        t.build()
+    };
+    let missions = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let mission = t.p.add_import("Core", "Class", willow, "MissionDefinition");
+        let holder = t.p.add_import("Core", "Class", willow, "ToyMissionHolder");
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        let m = t.p.add_export(mission, "M_Toy", payload);
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.object_tag("Mission", m));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(holder, "Holder", payload);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> =
+        vec![("Core.upk", core.as_slice()), ("WillowGame.upk", willow.as_slice()), ("GD_ToyMissions.upk", missions.as_slice())];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let path = ow_core::ObjectPath::parse("GD_ToyMissions.Holder").unwrap();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let class = vm.space.heap.get(holder).unwrap().class;
+    let p = vm.space.prop(class, "Mission").unwrap();
+    let Value::Object(Some(m)) = vm.space.read(holder, PropAddr::scalar(p)).unwrap().clone() else { panic!() };
+    assert!(vm.defs.is_unloaded(&vm.space, m), "an unloaded store handle");
+    let heap = format!("{:?}", vm.space.heap);
+    let w = Walk { expansion: None, entries: Vec::new() };
+    match walk(&vm, &w, &[Value::Object(Some(m))]).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(matches!(&n.missing, Missing::LayerAbsent(l) if *l == LOAD_LAYER), "{n}");
+            assert_eq!(n.what, unloaded_mission("GD_ToyMissions.M_Toy"));
+            assert_eq!(n.record, RECORD);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(vm.defs.is_unloaded(&vm.space, m), "nothing loaded");
+    assert_eq!(format!("{:?}", vm.space.heap), heap, "the heap unchanged");
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}

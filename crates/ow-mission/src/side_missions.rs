@@ -3,7 +3,7 @@
 //! Code).
 //!
 //! **Clean room.** Implemented from `docs/verification/NATIVE_ALL_EXPANSION_SIDE_MISSIONS_COMPLETE.md` alone (analyst
-//! lane ANALYST-LINK12-EXPANSION-SIDE-MISSIONS, #550 at 690ae348) and the hub's ruling on #550's review; this lane did
+//! lane ANALYST-LINK12-EXPANSION-SIDE-MISSIONS, #550 at its review-r1 head 32a09999) and the hub's ruling on #550's review; this lane did
 //! not read the executable. **Every rule is UNVERIFIED in the running game.** Off only; Reference keeps the C++ stub.
 //!
 //! **The rule, in the note's order** (section 5), reading only and loading nothing:
@@ -175,7 +175,11 @@ pub fn walk(vm: &Vm, w: &Walk, missions: &[Value]) -> Result<bool, VmError> {
         let Some(entry) = entry else {
             return Ok(false);
         };
-        if field(vm, entry, "Status")? != Value::Byte(complete_value(vm, entry)?) {
+        let status = match field(vm, entry, "Status")? {
+            Value::Byte(b) => b,
+            other => return Err(script(format!("Status holds {}, not a byte", other.kind_name()))),
+        };
+        if status != complete_value(vm, entry)? {
             return Ok(false);
         }
     }
