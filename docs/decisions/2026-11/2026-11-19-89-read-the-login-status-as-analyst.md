@@ -26,10 +26,14 @@ Lane ANALYST-LOGIN-STATUS, analyst only. Number 89 was given by the hub. For sli
   - a populated slot: the object.
 
   None for an absent engine would assume status 0 (`LS_NotLoggedIn`), while the shipped offline result stays open.
-  When the stock gates (authority, a Willow replication info with a local owner, an id other than -1) and the absent
-  engine are known before the flow, the flow's preflight answers the `NotYet` before its writes. A path known only
-  later keeps the runtime check, terminal with the partial-writes prefix. A Steamworks subsystem whose login state
-  the world has not filled, and `SetName`'s URL and config writes, are named `NotYet`s (not read).
+  The engine's absence is stable, but the gates (authority, the replication info, its local owner, the controller
+  id) are not proven stable between the flow's start and the call. So the absence is checked at runtime,
+  terminal with the partial-writes prefix. It moves into the preflight only once a lane shows those gates cannot
+  change. A Steamworks subsystem whose login state
+  the world has not filled, a subsystem whose interfaces were never initialised, `UpdateURL` and `SaveConfig` when a
+  non-empty name reaches them (an empty name returns with no effects), and the two input natives each get a named
+  `NotYet` (not read). `SetupInputDevices` refuses before the clear of `InputContextSelector`, `UpdateInputContext`
+  after it.
 - **It supersedes #466 on one point:** `UIInteraction.GetLoginStatus` is script, and `GameEngine.GetOnlineSubsystem`
   is the first native. #466 stays as it is (hub ruling).
 
@@ -49,4 +53,6 @@ game's setting recorded apart; which object the subsystem's `PlayerInterface` ho
 and `ChangeName`; the two input natives.
 
 Edits (review r1 of #474): the preflight of the gated absence, the four engine cases, the supersede of #466's
-wording, and the live checks by return value and branch hooks.
+wording, and the live checks by return value and branch hooks. Edits (review r2 of #474): the runtime check for
+gates not proven stable, the two input natives' own answers, the never-initialised player interface, and
+`SetName`'s effects refused only when reached, with `GameInfo.ChangeName` read as script.
