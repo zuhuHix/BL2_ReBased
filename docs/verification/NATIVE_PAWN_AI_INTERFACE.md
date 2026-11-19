@@ -8,99 +8,125 @@ offsets or listing structure is reproduced here, and raw output stays under igno
 is UNVERIFIED in the running game.** The prepared bl-sdk session (last section) is the confirmation.
 
 **Clean room.** The lane that wrote this note does not implement it. A fresh implementer codes the rules from this
-note alone.
+note alone. Section 2 is the rule; the other records point at it rather than restating it.
 
 **What it answers.** NATIVE_AI_HOLDS.md's open row, "How a pawn context reaches `IAIInterface`". The class tables of
 the packages list `IAIInterface` for `GearboxMind` and `WillowMind`, and not for `WillowAIPawn` or any of its
-parents. Yet the live Fire dummy became demigod in its `Behavior_AIHold_59`, whose context is the pawn.
+parents. COMBAT_GOLDEN_TRACE.md (question 8) records that the live Fire dummy became demigod inside its
+`Behavior_AIHold_59` call at the first hit. Which object that call's context was is not recorded: that it was the
+pawn, and that the pawn's mind then answered, are this note's **expectations (UNVERIFIED)**.
 
 ## Summary
 
 | Question | Answer | Confidence | Status |
 |---|---|---|---|
-| Which object answers `IAIInterface` for a pawn context | the pawn's `Controller` (for an AI pawn, its mind), not the pawn | high | UNVERIFIED |
-| With no controller | the controller of the vehicle the pawn drives, if any; else the pawn's `Mesh` is asked; else none | high (order), medium (`Mesh`'s answer) | UNVERIFIED |
-| Which `AIComponent` gets the hold | the one the answering mind's `GetAIComponent()` returns (NATIVE_AI_HOLDS.md, "`GearboxMind.GetAIComponent`") | as that note | UNVERIFIED |
+| Which object answers `IAIInterface` for a pawn context | the first answer of section 2's steps: the pawn's own class, then its `Controller` (or, only with no `Controller`, a driven vehicle's controller), then its `Mesh` | high (the order) | UNVERIFIED |
+| A possessed AI pawn | its `Controller`, the mind, is expected to answer | high (the rule), medium (that the mind answers) | UNVERIFIED |
+| Which `AIComponent` gets the hold | the one the answering object's `GetAIComponent()` returns (NATIVE_AI_HOLDS.md, "`GearboxMind.GetAIComponent`") | as that note | UNVERIFIED |
 | `Pawn`, `GamePawn`, `GearboxPawn`, `WillowPawn`, `WillowPlayerPawn` | one rule, `Pawn`'s; none of them adds its own | high | UNVERIFIED |
-| `WillowAIPawn` | `Pawn`'s rule, plus one extra answer for `IPlayerMaster` only | high | UNVERIFIED |
+| `WillowAIPawn` | `Pawn`'s rule, then one extra answer for `IPlayerMaster` only | high | UNVERIFIED |
 
 ## 1. The script's question
 
 `Behavior_AIHold.ApplyBehaviorToContext` asks its `ContextObject` for the interface with the `Object` native
-`QueryInterface(IAIInterface)`. It does not use an interface cast. With no answer it returns, and nothing is held
-(NATIVE_AI_HOLDS.md, "The script that calls them"). The native passes the class to the object's own answer for its
-class, so what a pawn answers is that pawn class's rule, below.
+`QueryInterface`, naming the class `IAIInterface`. It does not use an interface cast. With no answer it returns, and
+nothing is held (NATIVE_AI_HOLDS.md, "The script that calls them"). The native passes the class to the object's own
+answer for its class, so what a pawn answers is that pawn class's rule, below.
 
 ## 2. The rule every pawn class uses (`Pawn`'s)
 
-Asked for an interface class `I`, a pawn answers by the first of these that gives a result:
+Asked for an interface class `I`, a pawn tries these steps in order and gives the first answer that is not none:
 
-1. **The pawn itself**, when its own class lists `I` among its interfaces (the plain `Object` answer: the class's
-   declared interfaces, as the package tables give them).
-2. **Its controller.** If the pawn's `Controller` is set, the same question goes to that controller, which answers by
-   its own rule. If the pawn has no `Controller` but drives a vehicle (`DrivenVehicle`) that has a `Controller`, the
-   question goes to that vehicle's controller instead.
-3. **Its mesh.** If there is still no answer and the pawn's `Mesh` is set, the question goes to the mesh component.
+1. **Its own class.** The pawn itself, when its own class lists `I` among its interfaces, its parents' included (the
+   plain `Object` answer: the declared interfaces, as the package tables give them).
+2. **One controller.**
+   - If the pawn's `Controller` is set, the question goes to that controller, which answers by its own rule. The
+     driven vehicle is **not** asked in this case, whatever the controller answers.
+   - Only if the pawn's `Controller` is not set: if the pawn drives a vehicle (`DrivenVehicle`) whose `Controller` is
+     set, the question goes to that controller instead.
+3. **Its mesh.** If steps 1 and 2 gave none (a declining controller included), and the pawn's `Mesh` is set, the
+   question goes to the mesh component.
 4. Otherwise: none.
 
-Each object refuses a question that is already being asked of it further up the same chain, so a cycle (a controller
-that asks back) ends with no answer.
+**A question asked twice.** While an object is answering, a question that comes back to that same object, further
+down the same chain, gets none at once, which ends a cycle. The object that sent that inner question takes the none
+as its step's answer and goes on with its next step. So a pawn whose controller asks back about the pawn goes on to
+its `Mesh`.
 
 `GamePawn`, `GearboxPawn`, `WillowPawn` and `WillowPlayerPawn` do not change this rule. `Scout` and `WillowScout`
 keep it too.
 
 ## 3. `WillowAIPawn`
 
-It runs `Pawn`'s rule first. Only when that gives no answer, and only for the interface class `IPlayerMaster`
-(declared in the `Engine` package), it asks the pawn's player master: the `WillowPlayerController` that masters the
-pawn. The field is read as `PlayerMaster` by its meaning; the layout tool does not place this class's fields exactly.
-For `IAIInterface` this changes nothing: a `WillowAIPawn` answers exactly as section 2 says.
+It runs section 2's rule first. Only when that gives none, and only when the asked class is `IPlayerMaster`, it asks
+the pawn's player master, the `WillowPlayerController` that masters the pawn, when one is set. The field is read as
+`PlayerMaster` by its meaning; the layout tool does not place this class's fields exactly (UNVERIFIED). For
+`IAIInterface` this changes nothing: a `WillowAIPawn` answers exactly as section 2 says.
 
-## 4. What this means for the Fire dummy (slice link 11)
+## 4. The Fire dummy (slice link 11): expectations, UNVERIFIED
 
-- The dummy is a `WillowAIPawn`, whose class lists no `IAIInterface`, so step 1 gives nothing.
-- Its `Controller` is its mind (a `WillowMind`, which possesses it). The mind's class lists `IAIInterface`, so the
-  mind answers. The mind's own answer was not read beyond that: whether `GearboxMind` adds a rule of its own was not
-  resolved, but the plain answer already gives the mind.
-- `Behavior_AIHold` then calls that mind's `GetAIComponent()` and applies `HoldDemigod('Safe', <the pawn>)` to the
-  component it returns. The tag is still the pawn (the context object), not the mind.
-- **A dummy with no controller** (not possessed yet, or unpossessed), driving nothing, asks its `Mesh`. A skeletal
-  mesh component is not expected to answer `IAIInterface` (its own answer was not read), so the hold does nothing.
+- The dummy is a `WillowAIPawn`, whose class and parents list no `IAIInterface`, so step 1 gives none.
+- **Expected:** its `Controller` is set and is its mind, a `WillowMind`, whose class lists `IAIInterface`, so step 2
+  gives the mind. That the dummy has a controller at its first hit, and that the mind answers yes, are not observed.
+  The mind's own rule was not read beyond the plain answer (whether `GearboxMind` adds steps of its own).
+- `Behavior_AIHold` then asks that mind for its AI component, and the component receives a demigod hold named `Safe`
+  whose tag is the pawn, the context object, not the mind.
+- **No controller and no driven vehicle:** step 3 asks the pawn's `Mesh`. What a skeletal mesh component answers is
+  not read (UNVERIFIED); if it answers none, nothing is held.
 
 ## 5. The port's current assumption (`crates/ow-combat/src/hit.rs`, `ai_interface_for`)
 
 The Reference stand-in answers a pawn context with the pawn's `MyWillowMind`, else the context itself. The reading
-**confirms the mind answers** for a possessed AI pawn, with these differences for an implementer:
+**agrees that the mind answers** for a possessed AI pawn, if its `Controller` is that mind. It differs here, and an
+implementer follows section 2:
 
-- the rule goes through the pawn's **`Controller`** field, not `MyWillowMind`. For a possessed AI pawn they are
-  expected to name the same mind, but that is not read here;
-- with no controller it asks the **driven vehicle's controller**, then the **`Mesh`**, and otherwise answers **none**,
-  so the hold does nothing. The stand-in instead hands back the pawn, which has no `IAIInterface`;
-- the pawn itself comes **first**: a pawn class that did list `IAIInterface` would answer for itself;
-- the same rule holds for every pawn class, player pawns included. A player pawn's question goes to its
-  `WillowPlayerController`, whose own answer for `IAIInterface` was not read.
+- the rule reads the pawn's **`Controller`** field, not `MyWillowMind`. Whether they can name different objects on a
+  possessed AI pawn is not read (UNVERIFIED);
+- the pawn's own class comes **first**: a pawn class that lists `IAIInterface` answers for itself;
+- with a controller that declines, the next step is the **`Mesh`**, not a vehicle;
+- with no controller, a driven vehicle's controller, then the **`Mesh`**, then **none**. The stand-in instead hands
+  back the pawn itself;
+- the rule is the same for every pawn class, player pawns included. A player pawn's question goes to its
+  `WillowPlayerController`, whose answer for `IAIInterface` is not read (UNVERIFIED).
 
-COMBAT_HIT_CHAIN.md's note ("the hold is applied to the pawn's mind") matches this rule for a possessed AI pawn.
+COMBAT_HIT_CHAIN.md's note ("the hold is applied to the pawn's mind") matches step 2 for a possessed AI pawn.
 
 ## Vehicles (not on the slice path)
 
 The `WillowVehicle` line answers `IAIInterface` and `IAnimBehavior` its own way. `IAnimBehavior` goes to the
 vehicle's `Mesh`. `IAIInterface` goes to its controller, its own or its driven-by pawn's, only when that controller
-is not a human player's. Otherwise it falls back to `Pawn`'s rule. This is recorded for completeness only.
+is not a human player's. Otherwise it falls back to section 2. This is recorded for completeness only.
 
-## Not read
+## Open (each UNVERIFIED)
 
-- `GearboxMind`'s own answer (whether it adds a rule before or after its class's declared interfaces).
+- `GearboxMind`'s own answer: whether it adds steps before or after its class's declared interfaces.
 - `WillowPlayerController`'s answer for `IAIInterface`.
 - What a skeletal mesh component answers.
-- Whether `Controller` and `MyWillowMind` can ever name different objects on a possessed AI pawn.
+- Whether `Controller` and `MyWillowMind` can name different objects on a possessed AI pawn.
+- What `Controller` holds on a dead pawn, and on one not possessed yet (the rule reads only the field).
+- `WillowAIPawn`'s `PlayerMaster` field identification.
 
 ## Live confirmation (bl-sdk, the prepared session)
 
-On the Fire dummy, in a hook of `Behavior_AIHold.ApplyBehaviorToContext`:
-- log the class of `ContextObject`, its `Controller` and `MyWillowMind`;
-- log what `QueryInterface(IAIInterface)` returns on the pawn: expected the mind, the same object as `Controller`;
-- read the mind's `GetAIComponent()` and that component's `DemigodHolds` after the call: expected one entry,
-  (`Safe`, the pawn).
+**On the Fire dummy, in a hook of `Behavior_AIHold.ApplyBehaviorToContext`:**
+- record the actual `ContextObject` and compare its identity with the pawn, the pawn's `Controller` and its
+  `MyWillowMind`;
+- call `QueryInterface(IAIInterface)` on the context, and directly on the pawn's `Controller`, on `MyWillowMind` and
+  on the pawn's `Mesh`, and record each answer: expected the mind from the pawn, the mind from the controller, and
+  none from the mesh;
+- read the answering object's `GetAIComponent()` and that component's `DemigodHolds` after the call: expected one
+  entry, the name `Safe` with the pawn as its tag.
 
-With a spawned AI pawn whose controller is cleared, the same query is expected to return none.
+**The rule's branches, on spawned pawns:**
+- **A present controller that declines:** a pawn possessed by a controller that does not answer (for example a player
+  pawn, asked for `IAIInterface`): expected the `Mesh`'s answer, with no vehicle asked.
+- **No controller, driving a vehicle:** a pawn with `Controller` cleared while `DrivenVehicle` has a controller:
+  expected that controller's answer.
+- **No controller, nothing driven:** a pawn with `Controller` cleared: expected the `Mesh`'s answer, and none if the
+  mesh declines.
+- **Dead and unpossessed:** a pawn just killed and one spawned but not yet possessed; record `Controller` on each and
+  the query's answer.
+- **A pawn class that declares the interface, and one that inherits it:** if any pawn class in the packages lists
+  `IAIInterface`, query an instance and an instance of a subclass: expected the pawn itself from both.
+- **`IPlayerMaster`:** on a `WillowAIPawn` whose base rule declines, query `IPlayerMaster` with `PlayerMaster` set and
+  with it cleared: expected the player controller, then none.

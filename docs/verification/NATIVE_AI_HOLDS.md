@@ -85,8 +85,8 @@ unproven.
 ## Not read
 
 - **How a pawn context reaches `IAIInterface`.** *Read 2026-11-19 in [NATIVE_PAWN_AI_INTERFACE.md](NATIVE_PAWN_AI_INTERFACE.md):
-  a pawn asks its own class first, then its `Controller` (for an AI pawn, the mind), then a driven vehicle's controller,
-  then its `Mesh`. The text below is the question as it stood.* The package class tables list `IAIInterface` for
+  a pawn answers by its own class first; then its `Controller`, or, only when it has no `Controller`, the controller of a vehicle it drives; then its `Mesh`; else none (that note's section 2 is the rule). For a possessed AI pawn the mind is expected to
+  answer (UNVERIFIED). The text below is the question as it stood.* The package class tables list `IAIInterface` for
   `GearboxMind` and `WillowMind`, and not for `WillowAIPawn` or any of its parents, so by the tables `QueryInterface` on the Fire dummy's
   pawn answers None and the hold script does nothing. Yet the live dummy became demigod in its `Behavior_AIHold_59`
   call. Either that behavior's context was not the pawn (for example its mind), or a pawn answers the interface in a way
