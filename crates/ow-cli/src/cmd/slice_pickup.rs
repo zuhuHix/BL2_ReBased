@@ -12,9 +12,13 @@
 //!   drops a decoy gun of the same line, with no owner, 45 uu to her side (section 4's fixture);
 //! - `touch`: the pickup's `Touch` by Maya's pawn, the `Pickup` state's handler (checked before the dispatch). Link 6
 //!   touches its one gun; link 7 touches the decoy;
-//! - `look` (link 7): first, Maya's controller must hold the decoy as `CurrentTouchedPickupable`; then the per-tick
-//!   pickup targeting (section 4), a native with no script name. It needs the player's view point and direction,
-//!   which the headless world does not have (no camera): `NotYet { LayerAbsent }`, never a fitted choice;
+//! - `look` (link 7): first, Maya's controller must hold the decoy as `CurrentTouchedPickupable` (the fixture's own
+//!   check); then one pass of the per-tick pickup targeting (`ow_inventory::pickup_targeting`, lane
+//!   IMPL-PICKUP-TARGETING, decision 2026-11-19-81) on her HUD, with the headless world's `Headless` layers. In
+//!   NATIVE_PICKUP_TARGETING.md's look order: no HUD is a named `NotYet { LayerAbsent }` (the headless world spawns
+//!   none); a HUD with no owner or `HUDDef` ends the pass, and the look then fails as an ordinary error (nothing seen);
+//!   otherwise the camera is the next `NotYet { LayerAbsent }`. A pass that does run must choose the aimed gun, and
+//!   Maya's `CurrentSeenPickupable` must then hold it (her `SawPickupable` handler);
 //! - `key`: the controller's `PickupSomething` (section 5).
 //!
 //! **Writes and refusals** (the hub's rule, reviews r2 and r3 of #452): the run's first write is the first mutation
@@ -40,7 +44,6 @@ use crate::cmd::inventory::equip_run;
 /// The text that marks a refusal after the run's first write.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
-const RECORD: &str = "NATIVE_PICKUP.md";
 const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
 const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
 /// The note's fixture places (section 4), Maya at the origin facing +X.
@@ -290,12 +293,16 @@ fn look(vm: &mut Vm, p: &Pickup) -> Result<(), VmError> {
     if touched != Some(decoy) {
         return Err(error(format!("look: Maya's CurrentTouchedPickupable is {touched:?}, not the decoy")));
     }
-    Err(NotYet::layer_absent(
-        "the per-tick pickup targeting (NATIVE_PICKUP.md section 4) needs the player's view point and direction",
-        "a camera (the headless world has none)",
-        RECORD,
-    )
-    .into())
+    use ow_inventory::pickup_targeting::{Headless, Outcome, look as target};
+    match target(vm, p.controller, &mut Headless)? {
+        Outcome::Hover { winner, .. } if winner == p.pickup => {}
+        other => return Err(error(format!("look: the targeting did not choose the aimed gun ({other:?})"))),
+    }
+    let seen = object(&read(vm, p.controller, "CurrentSeenPickupable")?);
+    if seen != Some(p.pickup) {
+        return Err(error(format!("look: Maya's CurrentSeenPickupable is {seen:?}, not the aimed gun")));
+    }
+    Ok(())
 }
 
 /// The links' evidence, from successful reads only: the gun is in Maya's inventory chain, its pickup is gone, and the
