@@ -983,25 +983,26 @@ pub const RECORD_SLICE_STOPS: &str = "docs/verification/NATIVE_SLICE_OFF_STOPS.m
 /// The note's rule, in order:
 /// - the component's `AI` interface or its `AIDef` unset: nothing happens, the answer is false;
 /// - a running node (`CurrentState` set): the running action gets the event first through a routine the note did not
-///   open, so that is `NotYet { NotRead }` with nothing delivered;
+///   open;
 /// - otherwise every `AIDef.NodeList` node whose `Action` is set gets the script event `ActivateEvent(EventName)`, in
 ///   list order;
 /// - the answer is always false.
 ///
-/// Which objects the game's list holds (per-AI copies or the archetypes) is the note's open question, and here it
-/// decides the receiver: the Rust `AIDef` is the shared package definition, and part 2's brain keeps its own per-AI
-/// copies of the actions. Handlers write to the receiver, so delivering to a definition's action would write to the
-/// shared template. So a mind with a built brain (running or not) is `NotYet { NotRead }`, and so is any set `Action`
-/// that no brain owns as a per-AI copy; both name that item. Every node is read and checked before any delivery, so an
-/// error or a `NotYet` leaves nothing delivered.
+/// What Off answers itself is only the case with no recipient: `AI` or `AIDef` unset with no brain for this
+/// component, or a list with no `Action` set, answers false. Every other case is `NotYet { NotRead }`:
+/// - a running node: the running action's first delivery (the note's "Not read" item);
+/// - a brain part 2 built for this component (found through `AI`, or through its mind's `AIComponent` while `AI` is
+///   still unset), running or not, or any set `Action` (reviews r1 and r2 of #429): the note leaves open which objects
+///   the game's list holds, per-AI copies or the archetypes. The Rust `AIDef` is the shared package definition, part
+///   2's brain keeps its own copies, and who owns a copy does not say which AI the game delivers to, so no receiver is
+///   picked until that is read.
 ///
-/// A component or node class that does not declare the fields read is bad data, never a default.
+/// So Off delivers nothing. That also keeps the event all-or-nothing: no handler runs, so none can write state before
+/// a later one fails. Every field is read and its kind checked before any answer; a component, definition or node
+/// without a field read, or with a field of the wrong kind, is bad data, never a default.
 fn n_activate_event(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    const PER_AI_COPIES: &str = "AIComponent.ActivateEvent: which objects AIDef.NodeList holds, per-AI copies or the \
-                                 archetypes (the note's open item \"which objects the game's list holds\"); the Rust \
-                                 AIDef is the shared definition and part 2's brain keeps its own per-AI copies";
+    const PER_AI_COPIES: &str = "AIComponent.ActivateEvent: which objects AIDef.NodeList holds, per-AI copies or the                                  archetypes, and so which AI receives the event (the note's open item \"which                                  objects the game's list holds\"); the Rust AIDef is the shared definition and part                                  2's brain keeps its own per-AI copies";
     let me = this(c)?;
-    let name = c.arg(0)?.clone();
     let vm = &mut *c.vm;
     let unit = "AIComponent.ActivateEvent";
     let required = |vm: &mut Vm, o: ObjRef, f: &str| -> Result<Value, VmError> {
@@ -1017,44 +1018,56 @@ fn n_activate_event(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Object(o) => o,
         other => return Err(error(format!("{unit}: AIDef holds {}, not an object", other.kind_name()))),
     };
-    let (Some(ai), Some(definition)) = (ai, definition) else {
+    // A brain part 2 built for this component, even while the component's `AI` is not filled in (review r2).
+    let mut has_brain = ai.is_some_and(|ai| brain(vm, ai).is_some());
+    if !has_brain {
+        let minds: Vec<ObjRef> = vm
+            .service::<Brains>()
+            .and_then(|s| s.try_borrow().ok().map(|s| s.brains.keys().copied().collect()))
+            .unwrap_or_default();
+        for mind in minds {
+            if object(vm, mind, "AIComponent")? == Some(me) {
+                has_brain = true;
+                break;
+            }
+        }
+    }
+    if has_brain {
+        return Err(NotYet::not_read(PER_AI_COPIES, RECORD_SLICE_STOPS).into());
+    }
+    let (Some(_), Some(definition)) = (ai, definition) else {
         return Ok(Value::Bool(false));
     };
     // The running node: the component's own pointer.
     let state = required(vm, me, "CurrentState")?;
-    let pointer = field(vm, &state, "Dummy")
-        .ok_or_else(|| error(format!("{unit}: the component's CurrentState declares no Dummy")))?;
-    if number(&pointer) != 0.0 {
+    let pointer = match field(vm, &state, "Dummy") {
+        Some(Value::Int(p)) => p,
+        Some(other) => return Err(error(format!("{unit}: CurrentState.Dummy holds {}, not an int", other.kind_name()))),
+        None => return Err(error(format!("{unit}: the component's CurrentState declares no Dummy"))),
+    };
+    if pointer != 0 {
         return Err(NotYet::not_read(
-            "AIComponent.ActivateEvent with a running node: the running action's first delivery (the note's \
-             \"What the running action's first delivery in ActivateEvent does beyond the event\")",
+            "AIComponent.ActivateEvent with a running node: the running action's first delivery (the note's              \"What the running action's first delivery in ActivateEvent does beyond the event\")",
             RECORD_SLICE_STOPS,
         )
         .into());
     }
-    // A built brain, running or not: its actions are per-AI copies that the definition's list does not hold.
-    if brain(vm, ai).is_some() {
-        return Err(NotYet::not_read(PER_AI_COPIES, RECORD_SLICE_STOPS).into());
-    }
-    // Read and check every node before delivering anything.
-    let mut actions = Vec::new();
-    for node in array(vm, definition, "NodeList")? {
-        match field(vm, &node, "Action") {
-            Some(Value::Object(Some(o))) => actions.push(o),
+    // Read and check every node.
+    let nodes = match required(vm, definition, "NodeList")? {
+        Value::Array(nodes) => nodes,
+        other => return Err(error(format!("{unit}: AIDef.NodeList holds {}, not an array", other.kind_name()))),
+    };
+    let mut recipients = 0usize;
+    for node in nodes.iter() {
+        match field(vm, node, "Action") {
+            Some(Value::Object(Some(_))) => recipients += 1,
             Some(Value::Object(None)) => {}
             Some(other) => return Err(error(format!("{unit}: a node's Action holds {}", other.kind_name()))),
             None => return Err(error(format!("{unit}: the AIDef's nodes declare no Action"))),
         }
     }
-    // An action no brain owns is the definition's own (an archetype or template), not a per-AI copy.
-    let owned = |vm: &Vm, action: ObjRef| {
-        vm.service::<Brains>().and_then(|s| s.try_borrow().ok().map(|s| s.owners.contains_key(&action))).unwrap_or(false)
-    };
-    if actions.iter().any(|&a| !owned(vm, a)) {
+    if recipients > 0 {
         return Err(NotYet::not_read(PER_AI_COPIES, RECORD_SLICE_STOPS).into());
-    }
-    for action in actions {
-        event(vm, action, "ActivateEvent", vec![name.clone()])?;
     }
     Ok(Value::Bool(false))
 }

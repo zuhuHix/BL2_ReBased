@@ -782,7 +782,9 @@ fn event_component(w: &mut World, ai: Option<ObjRef>, aidef: Option<ObjRef>) -> 
     let dummy = decl(vm, "Dummy", PropKind::Int);
     let pointer = vm.space.classes.define_struct("Toy.ToyObject.ToyPointer", None, vec![dummy]).unwrap();
     let o = PropKind::Object { class: core_object };
-    let c = class(vm, "Toy.ToyEventComponent", core_object, &[
+    // Under the fixture's own base class, so a mind's `AIComponent` can hold it.
+    let toy_object = vm.find_class("Toy.ToyObject").unwrap();
+    let c = class(vm, "Toy.ToyEventComponent", toy_object, &[
         ("AI", PropKind::Interface { class: core_object }),
         ("AIDef", o),
         ("CurrentState", PropKind::Struct(pointer)),
@@ -832,12 +834,11 @@ fn per_ai_not_yet(r: Result<Value, VmError>) {
     }
 }
 
-/// Off (review r1 M1): the definition's own actions, which no brain owns as per-AI copies, are `NotYet { NotRead }`
-/// naming the note's per-AI copies item, with nothing delivered; also when only some are unowned (review r1 L2: all
-/// nodes are checked before any delivery). Owned actions get the script event in list order (the root has no action)
-/// and the answer is false. Reference leaves the key unbound (the slice's C++ stub serves it).
+/// Off (reviews r1 and r2 of #429): any set node `Action` is `NotYet { NotRead }` naming the per-AI copies item, with
+/// nothing delivered: the definition's own actions, and the same actions marked as copies this mind owns (an invented
+/// stand-in). Reference leaves the key unbound (the slice's C++ stub serves it).
 #[test]
-fn activate_event_reaches_only_per_ai_copies_in_list_order() {
+fn activate_event_with_any_recipient_is_not_yet_and_delivers_nothing() {
     let mut w = world(ParityMode::Off);
     let (mind, aidef) = (w.e.mind, w.e.aidef);
     let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
@@ -845,18 +846,116 @@ fn activate_event_reaches_only_per_ai_copies_in_list_order() {
     assert!(invented_log(&w).is_empty());
     let actions = definition_actions(&mut w);
     assert_eq!(actions.len(), 2);
-    own(&mut w, &actions[..1]);
-    per_ai_not_yet(activate(&mut w, me, f));
-    assert!(invented_log(&w).is_empty(), "the owned first action got nothing either");
     own(&mut w, &actions);
-    assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
-    assert_eq!(invented_log(&w), ["Invented Attack", "Invented Patrol"]);
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert!(invented_log(&w).is_empty(), "owned copies get nothing either");
 
     let mut w = world(ParityMode::Reference);
     let (mind, aidef) = (w.e.mind, w.e.aidef);
     let (_me, f) = event_component(&mut w, Some(mind), Some(aidef));
     let key = w.e.vm.function(f).unwrap().native_key.clone().unwrap();
     assert!(!w.e.vm.has_native(&key), "Reference binds nothing");
+}
+
+/// Off (review r2): two AIs. AI B's brain is built and owns its per-AI copies; AI A has no brain, and its definition's
+/// list holds B's copies. A's event is `NotYet` with nothing delivered: B's handlers do not run.
+#[test]
+fn activate_event_does_not_reach_another_minds_copies() {
+    let mut w = world(ParityMode::Off);
+    let mut h = host(&w.e, 1.0);
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    let b_mind = w.e.mind;
+    let copies: Vec<ObjRef> = brain(&w.e.vm, b_mind).unwrap().actions.into_iter().flatten().collect();
+    assert!(!copies.is_empty());
+    let vm = &mut w.e.vm;
+    let mind_class = vm.space.heap.get(b_mind).unwrap().class;
+    let a_mind = make(vm, mind_class, "MindA");
+    let mut nodes = array(vm, w.e.aidef, "NodeList").unwrap();
+    let mut next = copies.iter();
+    for n in nodes.iter_mut() {
+        if object_of(field(vm, n, "Action")).is_some() {
+            set_field(vm, n, "Action", Value::Object(next.next().copied()));
+        }
+    }
+    let def_class = vm.space.heap.get(w.e.aidef).unwrap().class;
+    let a_def = make(vm, def_class, "DefA");
+    set(vm, a_def, "NodeList", Value::Array(Rc::new(nodes))).unwrap();
+    let (me, f) = event_component(&mut w, Some(a_mind), Some(a_def));
+    let before = invented_log(&w).len();
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert_eq!(invented_log(&w).len(), before, "B's handlers did not run");
+}
+
+/// Off (review r2): a brain built for this component's mind while the component's `AI` is still unset is `NotYet`,
+/// not the unset `false`.
+#[test]
+fn activate_event_finds_the_brain_while_ai_is_unset() {
+    let mut w = world(ParityMode::Off);
+    let mut h = host(&w.e, 1.0);
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, None, Some(aidef));
+    set(&mut w.e.vm, mind, "AIComponent", Value::Object(Some(me))).unwrap();
+    let before = invented_log(&w).len();
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert_eq!(invented_log(&w).len(), before);
+}
+
+/// Off (review r2): a valid list with no `Action` set answers false.
+#[test]
+fn activate_event_with_no_recipient_answers_false() {
+    let mut w = world(ParityMode::Off);
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    set(&mut w.e.vm, aidef, "NodeList", Value::Array(Rc::new(Vec::new()))).unwrap();
+    let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
+    let mut nodes = array(&mut w.e.vm, w.e.aidef, "NodeList").unwrap();
+    assert!(nodes.is_empty());
+    let mut w = world(ParityMode::Off);
+    let vm = &mut w.e.vm;
+    nodes = array(vm, w.e.aidef, "NodeList").unwrap();
+    for n in nodes.iter_mut() {
+        set_field(vm, n, "Action", Value::Object(None));
+    }
+    set(vm, w.e.aidef, "NodeList", Value::Array(Rc::new(nodes))).unwrap();
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
+}
+
+/// Off (review r2): a `NodeList` that is not an array, and a `CurrentState.Dummy` that is not an int, are errors.
+#[test]
+fn activate_event_with_malformed_fields_is_an_error() {
+    let mut w = world(ParityMode::Off);
+    let vm = &mut w.e.vm;
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let c = class(vm, "Toy.ToyIntListDef", core_object, &[("NodeList", PropKind::Int)]);
+    let def = make(vm, c, "IntListDef");
+    let mind = w.e.mind;
+    let (me, f) = event_component(&mut w, Some(mind), Some(def));
+    let e = activate(&mut w, me, f).unwrap_err();
+    assert!(e.to_string().contains("NodeList holds"), "{e}");
+
+    let mut w = world(ParityMode::Off);
+    let vm = &mut w.e.vm;
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let dummy = decl(vm, "Dummy", PropKind::Float);
+    let pointer = vm.space.classes.define_struct("Toy.ToyObject.ToyFloatPointer", None, vec![dummy]).unwrap();
+    let c = class(vm, "Toy.ToyFloatComponent", core_object, &[
+        ("AI", PropKind::Interface { class: core_object }),
+        ("AIDef", PropKind::Object { class: core_object }),
+        ("CurrentState", PropKind::Struct(pointer)),
+    ]);
+    let name = decl(vm, "EventName", PropKind::Name);
+    let f = declare(vm, c, ACTIVATE_EVENT, vec![name], Some(PropKind::Bool));
+    register_activate_event(vm).unwrap();
+    let me = make(vm, c, "Component");
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    set(&mut w.e.vm, me, "AI", Value::Interface(Some(mind))).unwrap();
+    set(&mut w.e.vm, me, "AIDef", Value::Object(Some(aidef))).unwrap();
+    let e = activate(&mut w, me, f).unwrap_err();
+    assert!(e.to_string().contains("not an int"), "{e}");
+    assert!(invented_log(&w).is_empty());
 }
 
 /// Off (review r1 L2, L5): a node `Action` of the wrong kind is an error with nothing delivered. The heap keeps a
