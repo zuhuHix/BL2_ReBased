@@ -275,7 +275,7 @@ is marked dirty for replication.
      (probe rule on the `EndState` bit); if that destroyed the actor the routine returns true. Then, if the actor has no
      state frame or the frame's probe mask includes `Destroyed`, script `Destroyed()` is sent. Both are normal script
      event calls. (This `EndState` condition is the least certain part of the routine.)
-  6. One world-level unregister call (not identified); if `Base` is set the actor is unbased; every actor in `Attached` whose `Base` is this actor is
+  6. One world-level unregister call (since read in NATIVE_ACTOR_DESTROY_CONTROLLER.md section 2: each class's world-drop step, which for a controller unlinks it from `WorldInfo.ControllerList` and for a pawn from `WorldInfo.PawnList`); if `Base` is set the actor is unbased; every actor in `Attached` whose `Base` is this actor is
      unbased (the list is copied first, then cleared); each actor in `Touching` whose own touching list includes this actor
      gets an untouch (script `UnTouch` is sent through the normal touch-removal routine); then `SetOwner(None)`
      (which sends `LostChild` to the old owner); then the world and, if present, the net driver are told so they drop the
