@@ -58,6 +58,12 @@ fn toy_holds() -> Vec<u8> {
 /// Part 1's world with the toy hold behavior and an invented `GearboxFramework.IAIInterface` class; the objects its
 /// script saw.
 fn world(mode: ParityMode) -> (Env, ObjRef, Rc<RefCell<Vec<ObjRef>>>) {
+    world_where(mode, Rc::new(|_| None))
+}
+
+/// [`world`], with `refuse` asked first on each object the script passes to `Seen`: its error is the native's, and
+/// the object is not seen.
+fn world_where(mode: ParityMode, refuse: Rc<dyn Fn(ObjRef) -> Option<VmError>>) -> (Env, ObjRef, Rc<RefCell<Vec<ObjRef>>>) {
     let mut e = env_with(mode, &[("ToyHolds", toy_holds())]);
     let vm = &mut e.vm;
     let root = vm.find_class("Core.Object").unwrap();
@@ -72,6 +78,9 @@ fn world(mode: ParityMode) -> (Env, ObjRef, Rc<RefCell<Vec<ObjRef>>>) {
         &key,
         Rc::new(move |c: &mut NativeCall<'_>| {
             if let Value::Object(Some(o)) = c.arg(0)? {
+                if let Some(e) = refuse(*o) {
+                    return Err(e);
+                }
                 s.borrow_mut().push(*o);
             }
             Ok(Value::None)
@@ -151,26 +160,68 @@ fn the_pack_binds_the_hold_kinds_in_off_only() {
     }
 }
 
+/// Off judges every context before any script runs (review r1 of #456, item 7): with the pack registered, a pawn
+/// whose controller's own answer is not read stops the run with the named `NotYet { NotRead }` and no script call,
+/// the contexts ahead of it included. Under Reference each context is judged just before its script (item 5): the
+/// plain context ahead of the pawn runs, then the pawn refuses.
 #[test]
-fn context_order_and_script_errors_propagate_without_running_later_contexts() {
-    let (mut e, behavior, seen) = world(ParityMode::Off);
-    let vm = &mut e.vm;
-    let first = make(vm, e.object, "ToyFirst");
-    let last = make(vm, e.object, "ToyLast");
-    // Every context is judged before any script runs (lane IMPL-PAWN-AI-INTERFACE): the pawn's refusal runs nothing.
-    assert!(apply(vm, behavior, &[first, e.ai, last]).is_err());
-    assert_eq!(*seen.borrow(), []);
-    let mut failing = env_with(ParityMode::Off, &[("ToyHolds", toy_holds())]);
-    let vm = &mut failing.vm;
-    let behavior_class = vm.find_class("ToyHolds.ToyHoldBehavior").unwrap();
-    let behavior = make(vm, behavior_class, "ToyFailingBehavior");
-    let last = make(vm, failing.object, "ToyFailingContext");
-    let f = vm.find_function("ToyHolds.ToyHoldBehavior.Seen").unwrap();
-    let key = vm.function(f).unwrap().native_key.clone().unwrap();
-    vm.register_native(&key, Rc::new(|_| Err(VmError::Script {
-        function: "ToySeen".into(), message: "invented failure".into(),
-    }))).unwrap();
-    let err = apply(vm, behavior, &[last]).unwrap_err();
-    assert!(err.to_string().contains("invented failure"), "{err}");
-    assert_eq!(*seen.borrow(), []);
+fn off_judges_every_context_first_and_reference_keeps_its_order() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut e, behavior, seen) = world(mode);
+        let vm = &mut e.vm;
+        Pack.register(vm).unwrap();
+        let first = make(vm, e.object, "ToyFirst");
+        let last = make(vm, e.object, "ToyLast");
+        let err = apply(vm, behavior, &[first, e.ai, last]).unwrap_err();
+        assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
+        assert!(!err.to_string().contains(ow_combat::holds::PARTIAL_WRITES), "{mode:?}: {err}");
+        match mode {
+            ParityMode::Off => {
+                assert!(err.to_string().contains("goes to its Controller, a WillowGame.WillowMind"), "{err}");
+                assert_eq!(*seen.borrow(), [], "no script call");
+            }
+            _ => assert_eq!(*seen.borrow(), [first], "Reference: the first context ran"),
+        }
+    }
+}
+
+/// A script's own refusal after an earlier context's script ran (review r1 of #456, item 2): in Off a `NotYet` is
+/// terminal, prefixed "stopped after partial writes" with its kind kept; on the first context it is not; another
+/// error is unchanged; Reference keeps the plain `NotYet`. The invented `Seen` native stands in for the unread
+/// `GetAIComponent`: it refuses on the context named `ToyUnread`.
+#[test]
+fn a_script_refusal_after_an_earlier_context_ran_is_terminal_in_off() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let names: Rc<RefCell<Vec<(ObjRef, &str)>>> = Rc::new(RefCell::new(Vec::new()));
+        let n = names.clone();
+        let (mut e, behavior, seen) = world_where(
+            mode,
+            Rc::new(move |o| match n.borrow().iter().find(|(x, _)| *x == o).map(|(_, w)| *w) {
+                Some("unread") => Some(ow_core::NotYet::not_read("an invented unread answer", "invented").into()),
+                Some("failing") => {
+                    Some(VmError::Script { function: "Seen".into(), message: "invented failure".into() })
+                }
+                _ => None,
+            }),
+        );
+        let vm = &mut e.vm;
+        Pack.register(vm).unwrap();
+        let first = make(vm, e.object, "ToyFirst");
+        let unread = make(vm, e.object, "ToyUnread");
+        let failing = make(vm, e.object, "ToyFailing");
+        names.borrow_mut().extend([(unread, "unread"), (failing, "failing")]);
+        let err = apply(vm, behavior, &[first, unread]).unwrap_err();
+        let VmError::NotYet(n) = &err else { panic!("{mode:?}: {err}") };
+        assert_eq!(n.missing, Missing::NotRead, "{mode:?}: the kind is kept");
+        let terminal = n.what.starts_with(ow_combat::holds::PARTIAL_WRITES);
+        assert_eq!(terminal, mode == ParityMode::Off, "{mode:?}: {err}");
+        assert_eq!(*seen.borrow(), [first], "{mode:?}");
+        let err = apply(vm, behavior, &[unread]).unwrap_err();
+        assert!(!err.to_string().contains(ow_combat::holds::PARTIAL_WRITES), "{mode:?}: first context: {err}");
+        let err = apply(vm, behavior, &[first, failing]).unwrap_err();
+        assert!(
+            matches!(&err, VmError::Script { message, .. } if message == "invented failure"),
+            "{mode:?}: another error is unchanged: {err}"
+        );
+    }
 }

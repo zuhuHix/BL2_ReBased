@@ -46,7 +46,11 @@
 //!   A pawn context answers `IAIInterface` by `Pawn`'s rule (`ow_combat::pawn_interface`, decision 2026-11-19-62,
 //!   which [`FireMissionSlice::new`] registers): a pawn with nothing to ask answers none and the script places no
 //!   hold; a pawn whose controller's own answer is not read is `NotYet { NotRead }` naming it, with nothing run.
-//!   Without a pawn there is no context and nothing runs.
+//!   Without a pawn there is no context and nothing runs. Before `OnTakeDamage` fires, the holds it would start at
+//!   once are checked on their contexts ([`ow_combat::holds::preflight_hold_contexts`]), so that refusal leaves the
+//!   event state and the other behaviors untouched. A hold refusal inside a firing (one the check could not see)
+//!   follows the event's writes, so it is terminal: its `NotYet` is prefixed "stopped after partial writes", its kind
+//!   kept (review r1 of #456, item 1).
 //! - The player's hit through the stock pawn chain (`damage_dummy` with a damage): `ow-combat` has it (W6-COMBAT), but
 //!   it is not wired into the slice yet (follow-up W6-COMBAT-RUN2), so `NotYet { NotPorted }` in both modes. Without
 //!   a damage (the host's call so far) `OnTakeDamage` is raised directly, as in the C++.
@@ -329,6 +333,9 @@ fn number(v: &Value) -> f64 {
     }
 }
 
+/// The hold behavior's class, which the slice handles and preflights.
+const HOLD_BEHAVIOR: &str = "GearboxFramework.Behavior_AIHold";
+
 impl FireMissionSlice {
     /// Builds the slice on `world` (a fresh one: [`MissionScript::new`]'s rule): mission `mission_path` of
     /// [`MISSION_PACKAGE`], the bridge with the waypoint and the director of `dummy_package`, the shared dialog, and the
@@ -505,7 +512,7 @@ impl FireMissionSlice {
         // through the VM, a pawn context answering by Pawn's rule (module documentation; decisions 2026-11-16-74, 2026-11-19-62).
         let w = self.weak();
         d.handle(
-            "GearboxFramework.Behavior_AIHold",
+            HOLD_BEHAVIOR,
             Handler::run(move |vm, p, id, _| {
                 if vm.parity == ParityMode::Reference {
                     return Ok(Vec::new());
@@ -516,7 +523,9 @@ impl FireMissionSlice {
                     return Ok(Vec::new());
                 };
                 let contexts = p.contexts_for(vm, id, pawn)?;
-                ow_ai::awareness::holds::apply(vm, p.behavior(id).object, &contexts)?;
+                // The event that started this behavior has written its state: a refusal here is terminal.
+                ow_ai::awareness::holds::apply(vm, p.behavior(id).object, &contexts)
+                    .map_err(ow_combat::holds::after_partial_writes)?;
                 Ok(Vec::new())
             }),
         );
@@ -1183,9 +1192,37 @@ impl FireMissionSlice {
         let mut outputs = DetMap::new();
         outputs.insert("DamageType".to_string(), damage_type.to_string());
         outputs.insert("DamageSource".to_string(), damage_source.to_string());
+        self.preflight_holds(vm, "OnTakeDamage")?;
         self.with_dummy(vm, |p, vm| p.fire_event(vm, "OnTakeDamage", &outputs, -1, &[]))?;
         self.pump(vm)?;
         Ok(true)
+    }
+
+    /// Off, with a pawn for the dummy: the hold behaviors that firing `event` would start at once are checked on the
+    /// contexts they would run on, before the firing writes anything (module documentation). Writes nothing.
+    fn preflight_holds(&self, vm: &mut Vm, event: &str) -> Result<(), MissionError> {
+        if vm.parity != ParityMode::Off {
+            return Ok(());
+        }
+        let Some(pawn) = self.inner.state.borrow().dummy_pawn else {
+            return Ok(());
+        };
+        self.with_dummy(vm, |p, vm| {
+            for id in p.immediate_behaviors(event, -1) {
+                if p.behavior(id).class != HOLD_BEHAVIOR {
+                    continue;
+                }
+                let contexts = p.contexts_for(vm, id, pawn)?;
+                ow_combat::holds::preflight_hold_contexts(vm, &contexts)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// How many times the dummy's `event` has triggered (tests: the event state a refusal leaves).
+    #[cfg(test)]
+    fn dummy_event_triggers(&self, event: &str) -> i64 {
+        self.inner.dummy.borrow().as_ref().map_or(0, |p| p.event_trigger_count(event))
     }
 
     /// The legacy host call: `true` is the incendiary impact damage type, `false` None.

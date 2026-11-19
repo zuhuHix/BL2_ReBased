@@ -10,7 +10,10 @@ packages, all class bodies exact; `crate_edges_test.py` 19 OK. Installed, Off: `
 byte-identical before and after (no row reaches `Behavior_AIHold`; link 11 stops at `accept`, `GetDataStoreClient`);
 `--mission-run` Fire unchanged. **Rebased onto main 74c7b0a** (`ow-vm` `api.rs` kept both sides): `cargo build
 --workspace` clean; `cargo test -p ow-vm -p ow-combat -p ow-ai -p ow-mission -p ow-cli` 753 passed / 0 failed / 7
-ignored. Decision 2026-11-19-62; logs under ignored `local/p2/pawn-ai/`.
+ignored. **Review r1 of #456:** `cargo test --workspace` 2,167 passed / 0 failed / 46 ignored; clippy flags nothing in
+the changed files; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict 0/14/0; no row names a QueryInterface
+rule (links 10 to 12 at `accept`, `GetDataStoreClient`; the combat links at `maya:8`). Decision 2026-11-19-62; logs
+under ignored `local/p2/pawn-ai/`.
 
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps

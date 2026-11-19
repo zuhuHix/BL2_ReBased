@@ -3206,6 +3206,44 @@ mod tests {
         assert!(matches!(again, Err(VmError::Registration { .. })), "{again:?}");
     }
 
+    /// A question handed on through more than `MAX_INTERFACE_DEPTH` distinct answering objects is a VM error, not a
+    /// stack overflow (review r1 of #456, item 6); a shorter chain answers.
+    #[test]
+    fn query_interface_bounds_the_chain_of_answering_objects() {
+        let mut h = off();
+        let (actor, pawn) = (h.actor, h.pawn);
+        let chain: Rc<RefCell<Vec<ObjRef>>> = Rc::new(RefCell::new(Vec::new()));
+        let links = chain.clone();
+        h.vm
+            .register_interface_rule(
+                pawn,
+                Rc::new(move |vm: &mut Vm, this, iface| {
+                    // Hands the question on to the next object of the chain; the last one declines.
+                    let next = {
+                        let objects = links.borrow();
+                        let at = objects.iter().position(|&o| o == this).unwrap();
+                        objects.get(at + 1).copied()
+                    };
+                    match next {
+                        Some(o) => vm.query_interface(o, iface),
+                        None => Ok(None),
+                    }
+                }),
+            )
+            .unwrap();
+        for i in 0..crate::api::MAX_INTERFACE_DEPTH {
+            let o = h.vm.instantiate(pawn, &format!("Link{i}")).unwrap();
+            chain.borrow_mut().push(o);
+        }
+        let first = chain.borrow()[0];
+        assert_eq!(h.vm.query_interface(first, actor).unwrap(), None, "a chain of the bound answers");
+        let o = h.vm.instantiate(pawn, "OneTooMany").unwrap();
+        chain.borrow_mut().push(o);
+        let err = h.vm.query_interface(first, actor).unwrap_err();
+        assert!(matches!(&err, VmError::Script { message, .. } if message.contains("answering objects")), "{err}");
+        assert!(!h.vm.interface_asked(first, actor), "the chain is unwound");
+    }
+
     #[test]
     fn query_interface() {
         let mut h = off();
