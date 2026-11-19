@@ -29,9 +29,11 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
     That is each qualifying slot's attribute and each removal's attribute, with the entries of their two resolver
     chains. A load's error comes back unchanged. P0 runs after the reads that name what it loads, and before P8.
   - P8: each qualifying slot's context, from the item.
-  - P9: the chain check. `AttributeSystem::check_modifier_chain` is new and read-only. It checks every entry of every
-    planned removal's and add's value-resolver chain, whether or not the operation will reach it:
-    - the entry's resolver class must be known, and its storage lookup must answer;
+  - P9: the chain check. `AttributeSystem::check_modifier_chain` is new and writes nothing. It checks every entry of
+    every planned removal's and add's value-resolver chain, whether or not the operation will reach it:
+    - the entry's resolver class must be known, and its write-free storage probe must answer. The probe is
+      `ValueResolver::probe_storage`, new in review r1 of #483. It defaults to the storage lookup, which writes nothing
+      for every class but the noun resolver;
     - a None entry ends the check;
     - a "not writable" lookup does not end it.
     It predicts no outcome. W1 and W3 run every planned operation and take its bool as it comes.
@@ -40,8 +42,10 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
 - **Writes, W1 to W3.** A `NotYet` after a write, for instance from a change notification's script, is terminal. It is
   matched by its typed variant, keeps its kind and record, and gets "stopped after partial writes: " on its text through
   `ow_world::pools::after_partial_writes`. Nothing is rolled back.
-- **`ow-attr`.** Two public additions: `check_modifier_chain` (read-only) and `new_modifier` (the modifier constructor
-  the apply natives use).
+- **`ow-attr`.** Three public additions:
+  - `check_modifier_chain`, which writes nothing;
+  - the `ValueResolver::probe_storage` trait method;
+  - `new_modifier`, the modifier constructor the apply natives use.
 - **Tests.** Nine tests in `equip/internal_slots_tests.rs`:
   - the flag true: records, backup list, values;
   - the flag false after true: removed then reapplied, not doubled;
@@ -59,3 +63,28 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
     before (the note's open question 4).
 - **UNVERIFIED.** Nothing here was checked in the running game. Still open, from the note: per-slot context resolution
   against B2 (open question 1), a count above 19 (2), the stale out records (3), and `BulletSpeed` (4).
+
+**Review r1 of #483.**
+- **P9 writes nothing.** In Off the noun resolver's storage lookup creates a missing `NounState` entry, so the chain
+  check now goes through a write-free probe, `ValueResolver::probe_storage`.
+  - Noun's probe runs the same strategy checks.
+  - For a missing entry it evaluates only `DefaultValue` and appends nothing. A new entry would have no replicated
+    slot, so it passes.
+  - For an existing entry it gives the replicated-slot refusal, `NotYet` (`NotRead`), that a write to the entry would
+    give. A planned add to such an entry is therefore refused in the preflight, and so is a planned removal: the
+    conservative answer, because a removal of a modifier that is not on the stack writes nothing in the game. That
+    case is UNVERIFIED.
+- **Off assumption, UNVERIFIED: a `ModifierType` outside the enum.** It is a data error only on a qualifying slot. The
+  note does not say what the native makes of one, and `ow-attr`'s stack treats such a modifier as a no-op.
+- **The partial-writes mark** starts once the first removal returned, since it may have written, or at W2 when there
+  is no removal. A refusal of the very first removal, before it touched anything, is returned unmarked.
+- **Tests:** eighteen, twelve of them new:
+  - a post-write `NotYet`, prefixed with kind and record kept and the earlier writes left;
+  - every entry of two removals naming one modifier checked;
+  - a not-writable entry not ending the check;
+  - a false add after an accepting entry, the object left (B3);
+  - the type check on qualifying slots only;
+  - P1 and P3 shapes;
+  - the noun case (no entry created, unprefixed `NotYet`);
+  - P0 on a synthetic store (an unloaded attribute and its chain entry loaded; a failed load returned unchanged);
+  - two more in `ow-attr`, for the noun probe (no entry created; a replicated slot refused).

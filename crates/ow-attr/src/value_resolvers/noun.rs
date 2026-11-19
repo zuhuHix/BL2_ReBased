@@ -243,6 +243,20 @@ fn entry(
     context: ObjRef,
     cx: &mut EvalCx<'_>,
 ) -> Result<Option<Storage>, AttrError> {
+    entry_with(sys, resolver, context, cx, true)
+}
+
+/// [`entry`], with `create` false for the read-only probe (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of
+/// #483): the same strategy checks; an existing entry's replicated slot refused as a write to it would be (the
+/// refusal `rewrite` gives, decided here so a preflight sees it); a missing entry only has its `DefaultValue`
+/// evaluated, and nothing is appended. A missing entry would be created with no replicated slot, so it passes.
+fn entry_with(
+    sys: &AttributeSystem,
+    resolver: ObjRef,
+    context: ObjRef,
+    cx: &mut EvalCx<'_>,
+    create: bool,
+) -> Result<Option<Storage>, AttrError> {
     ensure_loaded(cx, resolver)?;
     ensure_loaded(cx, context)?;
     let (key, state) = {
@@ -283,6 +297,9 @@ fn entry(
         let space = cx.world.parts().space;
         let items = entries(space, context, state)?;
         if let Some(index) = find(space, &items, key)? {
+            if !create {
+                replicated_slot_refused(space, element(&items, index)?)?;
+            }
             return Ok(Some(Storage::Noun {
                 owner: context,
                 state,
@@ -293,6 +310,9 @@ fn entry(
     // Missing: `d` first, then the element goes on the end of the array as it stands after that evaluation.
     let default = required(cx, resolver, "DefaultValue")?;
     let d = evaluate_value(sys, &default, Some(context), None, cx)?;
+    if !create {
+        return Ok(None);
+    }
     let space = cx.world.parts().space;
     let mut items = entries(space, context, state)?;
     let mut e = space.classes.struct_defaults(entry_struct(space, state)?)?;
@@ -346,6 +366,26 @@ fn stack_of(
     let items = entries(space, owner, state)?;
     let e = element(&items, index)?;
     Ok(elements("ModifierStack", field(space, e, "ModifierStack")?)?.to_vec())
+}
+
+/// The refusal of a write to an entry with a replicated slot (module documentation, "Mirror"), as `rewrite` gives it.
+fn replicated_slot_refused(space: &ObjectSpace, e: &Value) -> Result<(), AttrError> {
+    let slot = match field(space, e, "IndexInReplicationArray")? {
+        Value::Int(i) => *i,
+        other => {
+            return Err(bad(format!(
+                "IndexInReplicationArray holds a {}, not an int",
+                other.kind_name()
+            )));
+        }
+    };
+    if slot != -1 {
+        return Err(replication_not_read(format!(
+            "write to an entry with replicated slot {slot}: the mirror needs the provider's replicated array and \
+             its change call, which are not read"
+        )));
+    }
+    Ok(())
 }
 
 /// Rewrites element `index` with a new stack or base and the recomputed value (note section 5). Everything is
@@ -490,6 +530,20 @@ impl ValueResolver for Noun {
     ) -> Result<Option<Storage>, AttrError> {
         match mode(cx) {
             ParityMode::Off => entry(sys, resolver, context, cx),
+            ParityMode::Reference => Err(reference_write()),
+        }
+    }
+
+    /// The read-only probe (review r1 of #483): [`entry_with`] without creating; a replicated slot is refused here.
+    fn probe_storage(
+        &self,
+        sys: &AttributeSystem,
+        resolver: ObjRef,
+        context: ObjRef,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<(), AttrError> {
+        match mode(cx) {
+            ParityMode::Off => entry_with(sys, resolver, context, cx, false).map(|_| ()),
             ParityMode::Reference => Err(reference_write()),
         }
     }

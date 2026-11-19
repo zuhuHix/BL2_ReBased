@@ -267,3 +267,222 @@ fn a_backup_record_without_a_modifier_is_a_no_op() {
     assert_eq!(w.float(item, "Bonus"), 3.0);
     assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]), "emptied");
 }
+
+// ---- review r1 of #483 -------------------------------------------------------------------------------------------
+
+/// A toy value resolver over the context's `Bonus` whose read-only probe answers but whose write is refused: a refusal
+/// the preflight cannot see (as a change notification's script would be).
+struct WriteFails;
+
+impl ow_attr::api::ValueResolver for WriteFails {
+    fn value(
+        &self,
+        _sys: &ow_attr::AttributeSystem,
+        _resolver: ObjRef,
+        _context: ObjRef,
+        _previous: f32,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<f32, ow_attr::api::AttrError> {
+        Ok(0.0)
+    }
+
+    fn storage(
+        &self,
+        _sys: &ow_attr::AttributeSystem,
+        _resolver: ObjRef,
+        _context: ObjRef,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<Option<ow_attr::api::Storage>, ow_attr::api::AttrError> {
+        Err(ow_core::NotYet::not_read("the write-fails test resolver", "TOY_RECORD.md").into())
+    }
+
+    fn probe_storage(
+        &self,
+        _sys: &ow_attr::AttributeSystem,
+        _resolver: ObjRef,
+        _context: ObjRef,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<(), ow_attr::api::AttrError> {
+        Ok(())
+    }
+}
+
+fn with_write_fails(w: &mut World) {
+    let object = w.class("Core.Object");
+    w.vm.space.classes.define("Test.WriteFails", Some(object), vec![]).unwrap();
+    let attrs = ow_attr::AttributeSystem::standard().unwrap().with_value_resolver("Test.WriteFails", WriteFails).unwrap();
+    w.vm.attrs = std::rc::Rc::new(attrs);
+}
+
+/// A `NotYet` after a write (review r1 of #483): terminal, matched by its variant, "stopped after partial writes: "
+/// once, its kind and record kept; the earlier writes stay (slot 0's modifier on the stack, the list emptied).
+#[test]
+fn a_not_yet_after_a_write_is_prefixed_and_the_writes_stay() {
+    let mut w = World::new();
+    with_write_fails(&mut w);
+    let (class, f) = setup(&mut w);
+    let a = w.weapon_bonus;
+    let fails = chained(&mut w, "Test.Fails", &[Some("Test.WriteFails")]);
+    let s0 = slot(&mut w, true, false, false, Some(a), 2.5);
+    let s1 = slot(&mut w, true, false, false, Some(fails), 1.0);
+    let item = item_with(&mut w, class, vec![s0, s1]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "stopped after partial writes: the write-fails test resolver");
+    assert_eq!((n.missing.clone(), n.record), (Missing::NotRead, "TOY_RECORD.md"));
+    assert_eq!(w.float(item, "Bonus"), 2.5, "slot 0's add stays");
+    let backup = applied_from_values(&w.vm, &w.get(item, "AppliedAttributeSlotEffects")).unwrap();
+    assert_eq!(backup.0.len(), 1, "slot 0's record stays in the backup list");
+}
+
+/// P9 on a removal's chain (review r1 of #483): two backup records naming one modifier, through a chain whose second
+/// entry is not read. Executed in order, the second removal would stop at the first entry (the modifier already gone);
+/// the check still covers every entry, so the call is refused before any write.
+#[test]
+fn every_entry_of_every_removal_is_checked_before_any_write() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let a = chained(&mut w, "Test.TwoEntries", &[Some("Engine.ObjectPropertyAttributeValueResolver"), Some("Test.UnreadValueResolver")]);
+    let item = item_with(&mut w, class, vec![]);
+    let m = w.obj("Core.AttributeModifier", "Test.Shared");
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let r = ow_attr::api::AppliedEffect { context: item, attribute: a, modifier: m };
+    let recs = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![r, r])).unwrap();
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(recs.clone()));
+    let e = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::NotYet(_)), "{e:?}");
+    assert!(!format!("{e:?}").contains("partial writes"));
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(recs), "the list unchanged");
+}
+
+/// A "not writable" entry does not end the check: a playthrough-count entry (no store in Off), then an unread one.
+#[test]
+fn a_not_writable_entry_does_not_end_the_check() {
+    let mut w = World::new();
+    let object = w.class("Core.Object");
+    w.vm.space.classes.define("WillowGame.PlayThroughCountAttributeValueResolver", Some(object), vec![]).unwrap();
+    let (class, f) = setup(&mut w);
+    let a = chained(&mut w, "Test.NotWritableFirst", &[Some("WillowGame.PlayThroughCountAttributeValueResolver"), Some("Test.UnreadValueResolver")]);
+    let s0 = slot(&mut w, true, false, false, Some(a), 1.0);
+    let item = item_with(&mut w, class, vec![s0]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::NotYet(_)), "{e:?}");
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]));
+}
+
+/// B3 (review r1 of #483): an add the first entry accepts and the second refuses answers false, so nothing is
+/// recorded, and the object stays on the first entry's stack.
+#[test]
+fn a_false_add_after_an_accepting_entry_leaves_its_object() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let a = chained(&mut w, "Test.AcceptThenRefuse", &[Some("Engine.ObjectPropertyAttributeValueResolver"), Some("Engine.ObjectPropertyAttributeValueResolver")]);
+    // The second entry names a property that is not an attribute: not writable.
+    let chain = w.get(a, "ValueResolverChain");
+    let second = ow_attr::eval::object("e", &chain.elements().unwrap()[1]).unwrap().unwrap();
+    let n = Value::Name(w.vm.space.names.intern("DefinitionData"));
+    w.set(second, "PropertyName", n);
+    let s0 = slot(&mut w, true, false, false, Some(a), 4.0);
+    let item = item_with(&mut w, class, vec![s0]);
+    let out = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    assert_eq!(out, Value::array(vec![]), "the false add records nothing");
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]));
+    assert_eq!(w.float(item, "Bonus"), 4.0, "the object stays on the first entry's stack");
+}
+
+/// A type outside the enum is a data error only on a qualifying slot (review r1 of #483, an Off assumption): an
+/// external slot with one is not checked.
+#[test]
+fn the_modifier_type_is_checked_on_qualifying_slots_only() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let a = w.weapon_bonus;
+    let mut odd = slot(&mut w, true, true, false, Some(a), 1.0);
+    let ty = w.vm.space.classes.struct_by_path("Test.InternalSlotData").unwrap();
+    let at = {
+        let id = w.vm.space.names.find("ModifierType").unwrap();
+        w.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0 as usize
+    };
+    odd.struct_mut().unwrap().fields[at] = Value::Byte(9);
+    let item = item_with(&mut w, class, vec![odd.clone()]);
+    call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    let mut internal = odd;
+    let ext = {
+        let id = w.vm.space.names.find("bExternalSlot").unwrap();
+        w.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0 as usize
+    };
+    internal.struct_mut().unwrap().fields[ext] = Value::Bool(false);
+    let item = item_with(&mut w, class, vec![internal]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+}
+
+/// The shape checks (P1, P3, P6): each a data error before any write.
+#[test]
+fn the_shape_checks_refuse_before_any_write() {
+    // P6: a slot field of the wrong kind is caught by the declaration check (P2) already; a None attribute is fine.
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let item = item_with(&mut w, class, vec![]);
+    // P1: the out argument must be an array of records.
+    let object = w.class("Core.Object");
+    let params = vec![
+        param(&mut w, "bBackupSlotEffectsApplied", PropKind::Bool, 0),
+        param(&mut w, "MaxSlotsActivated", PropKind::Int, 0),
+        param(&mut w, "AttributeModifiers", PropKind::Array(Box::new(PropKind::Object { class: object })), PropertyDecl::OUT),
+    ];
+    let path = ow_core::ObjectPath::parse("Test.SlotWeapon.ApplyInternalSlotEffectModifiers").unwrap();
+    let g = w.vm.declare_function(FunctionDecl::native(path, INTERNAL_SLOTS).with_owner(class).with_params(params)).unwrap();
+    let e = call(&mut w, g, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "P1: {e:?}");
+    // P3: a class without AppliedAttributeSlotEffects.
+    let slotty = w.vm.space.classes.struct_by_path("Test.InternalSlotData").unwrap();
+    let decls = vec![PropertyDecl::new(w.vm.space.names.intern("AttributeSlots"), PropKind::Struct(slotty)).with_array_dim(SLOTS)];
+    let weapon = w.class("WillowGame.WillowWeapon");
+    let bare = w.vm.space.classes.define("Test.BareSlotWeapon", Some(weapon), decls).unwrap();
+    let item = item_with(&mut w, bare, vec![]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "P3: {e:?}");
+    let _ = object;
+}
+
+/// The noun case of review r1 of #483: slot 0's attribute goes through a noun resolver and the item holds no entry for
+/// it, and slot 1's value resolver is not read. The chain check of slot 0 must not create the entry, so the call is
+/// refused by slot 1's `NotYet`, unprefixed, with `NounState` unchanged.
+#[test]
+fn the_chain_check_creates_no_noun_entry() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let object = w.class("Core.Object");
+    let aid = w.vm.space.classes.struct_by_path("Engine.AttributeInitializationDefinition.AttributeInitializationData").unwrap();
+    let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
+    let fields = vec![
+        d(&mut w, "NounName", PropKind::Name),
+        d(&mut w, "Value", PropKind::Float),
+        d(&mut w, "BaseValue", PropKind::Float),
+        d(&mut w, "ModifierStack", PropKind::Array(Box::new(PropKind::Object { class: object }))),
+        d(&mut w, "ReplicationStrategy", PropKind::Byte { enum_: None }),
+        d(&mut w, "IndexInReplicationArray", PropKind::Int),
+    ];
+    let state = w.vm.space.classes.define_struct("GearboxFramework.INounAttributeProvider.NounAttributeState", None, fields).unwrap();
+    let decls = vec![d(&mut w, "NounState", PropKind::Array(Box::new(PropKind::Struct(state))))];
+    let noun_item = w.vm.space.classes.define("Test.NounSlotWeapon", Some(class), decls).unwrap();
+    let decls = vec![d(&mut w, "DefaultValue", PropKind::Struct(aid)), d(&mut w, "ReplicationStrategy", PropKind::Byte { enum_: None })];
+    let noun = w.vm.space.classes.define("GearboxFramework.NounAttributeValueResolver", Some(object), decls).unwrap();
+    // The attribute, with the noun resolver as its subobject (the key is the attribute's name).
+    let ctx = w.obj("Engine.WeaponAttributeContextResolver", "Test.NounAttr.Context");
+    let attr = w.obj("Engine.AttributeDefinition", "Attribute_ToyNoun");
+    let r = w.vm.space.alloc(noun, "NounAttributeValueResolver_0", Some(attr), Origin::Runtime).unwrap();
+    let default = w.init(3.0);
+    w.set(r, "DefaultValue", default);
+    w.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(ctx))]));
+    w.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(r))]));
+    let unread = chained(&mut w, "Test.UnreadValue", &[Some("Test.UnreadValueResolver")]);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let s1 = slot(&mut w, true, false, false, Some(unread), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0, s1]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert!(!n.what.contains("partial writes"), "{n}");
+    assert_eq!(w.get(item, "NounState"), Value::array(vec![]), "no noun entry created");
+}
