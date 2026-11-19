@@ -40,16 +40,17 @@ roll, `WillowPawn.DropLootOnDeath` (script), and the five loot-spawn behaviors b
 
 ## What DropLootOnDeath does with each spawned inventory
 
-NATIVE_LOOT.md covers the pool choice. After each firing pool's `SpawnBalancedInventoryFromPool(pool, item game stage,
-awesome level, Self, out SpawnedInventory)` call (no variance formula, default flags), the script walks the spawned
-inventories in order:
+NATIVE_LOOT.md covers the pool choice. For each firing pool the script calls the pool native with the pool, the item
+game stage, the awesome level and the dead pawn as context (no variance formula, default flags), and takes the spawned
+list back. It then walks that list in order, before the next pool rolls:
 
 1. An inventory whose `bDropOnDeath` is set, and which is either not a `WillowWeapon` or belongs to a pawn that died at
    or above the level's `KillZ`, is dropped:
    1. a telemetry record (`WillowLeviathanService.RecordItemSpawnedEventForAllPlayers`, not gameplay);
    2. its `ItemLocation` becomes 2 (the enum is not named in the package);
    3. its owner and `Instigator` become the dead pawn;
-   4. then `DropFrom(pawn Location, GetItemTossVelocity())`, with the other arguments omitted.
+   4. it is dropped at the pawn's location with the pawn's item toss velocity (`DropFrom`; the physics and torque
+      arguments are left at their defaults).
 2. Every other inventory is destroyed.
 3. The local array is emptied before the next pool.
 
@@ -82,64 +83,60 @@ Two rules. `WillowAIPawn` overrides the `WillowPawn` one.
     (read as its facing: UNVERIFIED). It is built with the engine's usual pitch and yaw conversion.
   - With the bool argument set: velocity = `F` × 200 + (0, 0, 150), with no randomness.
   - Without it, which is what `DropLootOnDeath` uses:
-    1. a random direction `R`: three C-runtime `rand()` draws per try, each mapped to [-1, 1] as
-       rand × (1 / 32767) × 2 - 1, retried until the point lies inside the unit ball, then normalised;
+    1. a random direction `R`: three C-runtime `rand()` draws per try, the first for x, the second for y and the third
+       for z, each mapped to [-1, 1] as rand × (1 / 32767) × 2 - 1. A try is kept when x² + y² + z² is at most 1 (a
+       point on the sphere's surface is kept), otherwise all three are drawn again; the kept point is then normalised;
     2. velocity = `F` × (the pawn's `Velocity` · `F` + 200) + `R` × 50 + (0, 0, 150);
     3. a result longer than 400 is scaled down to length 400.
-  - The draws are the same C-runtime generator other native rolls use, so a death drop draws three numbers per try,
-    after the pool roll's draws.
+  - The draws come from the same C-runtime generator as the other native rolls: three numbers per try, for each item
+    dropped (see "Draw order" below for where they fall).
 
 ## DropFrom and the pickup
 
-A weapon first goes through `Weapon.DropFrom`:
-1. if it cannot be thrown (`CanThrow` false), the answer is None and nothing changes;
-2. otherwise it enters state `Inactive`, ends firing (`ForceEndFire`) and detaches (`DetachWeapon`);
-3. then the shared `WillowInventory.DropFrom` runs, and the weapon's `AIController` is cleared.
+What dropping an inventory does, as outcomes:
 
-`WillowWeapon.DropFrom` also stops zooming first. `WillowItem.DropFrom` goes straight to the shared one.
-
-`WillowInventory.DropFrom(StartLocation, StartVelocity, bForceNoRBPhysics, bTorque, Torque)`:
-1. if `MissionDenyPickup()` says so, the inventory is destroyed and the answer is None;
-2. `CreatePickup(true, true, StartLocation)` (below); with no pickup, the inventory is destroyed and the answer is
-   None;
-3. the inventory's owner is cleared; the pickup gets physics `PHYS_Falling` and `Velocity = StartVelocity`;
-4. with `bForceNoRBPhysics` the pickup's `bUseRBPhysics` is cleared;
-5. torque:
-   - with the `bTorque` argument, the pickup gets that `Torque`, with `bTorqueTemporary` set;
-   - otherwise, if the inventory definition's `bTorque` is set, the pickup gets the definition's `Torque`, with
+- **A weapon that cannot be thrown** (`CanThrow` false) is not dropped: nothing changes and the answer is None.
+  Otherwise a weapon stops zooming (`WillowWeapon`), goes inactive, stops firing and detaches before the shared drop,
+  and its `AIController` is cleared afterwards. An item (`WillowItem`) goes straight to the shared drop.
+- **No pickup, no inventory.** The inventory is destroyed, and the answer is None, when a mission denies the pickup
+  (`MissionDenyPickup`), when the owner may not drop it (`CanInventoryBeDroppedByOwner` false), when it has no
+  `DroppedPickupClass`, or when the pickup actor cannot be spawned.
+- **The pickup.** A `DroppedPickupClass` actor is spawned for the inventory through its `ISpawnActor.SpawnForMap`
+  (the dropped-pickup variant, at the drop's start location; the remaining arguments were not all decoded:
+  UNVERIFIED). Before that, the inventory leaves its instigator's inventory manager, and its network update flags are
+  set.
+- **The inventory afterwards.** It records the pickup as its `AdditionalQueryInterfaceSource`, is based on the pickup,
+  and has no owner, no `Instigator` and no state.
+- **The pickup's motion.** It gets physics `PHYS_Falling` and the drop's start velocity. When the drop forces rigid-body
+  physics off, the pickup's `bUseRBPhysics` is cleared.
+- **Torque, in precedence order:**
+  1. torque passed with the drop: the pickup takes it, with `bTorqueTemporary` set;
+  2. otherwise the inventory definition's `bTorque`: the pickup takes the definition's `Torque`, with
      `bTorqueTemporary` cleared;
-   - otherwise the pickup's `bTorque` is cleared;
-6. `pickup.InitializeFromInventory(Self, Instigator, true)`, and the pickup is the answer.
+  3. otherwise the pickup's `bTorque` is cleared.
+- **Last,** the pickup is initialised from the inventory, with the instigator and pickup enabled, and the pickup is
+  the answer.
 
-`WillowInventory.CreatePickup(bDroppedPickup, ..., StartLocation)`:
-1. None when `CanInventoryBeDroppedByOwner()` is false;
-2. sets the network update flags;
-3. removes the inventory from its `Instigator`'s inventory manager, if there is one;
-4. None when `DroppedPickupClass` is None;
-5. spawns a `DroppedPickupClass` actor through the inventory's `ISpawnActor.SpawnForMap` (its dropped-pickup variant;
-   the remaining arguments, read as carrying `StartLocation`, were not all decoded: UNVERIFIED); None if that fails;
-6. records the pickup as the inventory's `AdditionalQueryInterfaceSource`, bases the inventory on the pickup, clears
-   the inventory's `Instigator`, leaves its state (`GotoState(None)`), and answers the pickup.
-
-`WillowPickup.InitializeFromInventory(Inv, Instigator, bEnablePickup)`:
-1. copies `RarityLevel` to `InventoryRarityLevel`, and sets `Inventory`, `Instigator` and `Manufacturer` (from
-   `Inv.GetManufacturer()`);
-2. for a `MissionItemDefinition`, registers with the mission tracker (directive, objective and waypoint) and may
-   disable pickup. Ordinary loot skips all of this;
-3. `InitializeDropLifespan()`, `InventoryAssociated()`, then `SetPickupability(bEnablePickup)`.
+What initialising the pickup does (`WillowPickup.InitializeFromInventory`):
+- it takes the inventory's `RarityLevel` as its `InventoryRarityLevel`, and the inventory, instigator and the
+  inventory's manufacturer;
+- a `MissionItemDefinition` registers with the mission tracker (directive, objective and waypoint) and may disable
+  pickup; ordinary loot skips this;
+- it then sets its drop lifespan, marks the inventory associated, and sets pickupability as asked.
 
 The pickup's rigid-body set-up, particles and lifespan are presentation and timers, not read further here.
 
 ## InitializeInventory (what a spawned inventory gets)
 
-The pool native runs the script event `InitializeInventory(balance, manufacturer, grade-or-level, context source)` on
-each new inventory (NATIVE_LOOT.md step 5.5). The installed script:
+The pool native runs the script event `InitializeInventory` on each new inventory, passing the balance, the
+manufacturer, the grade-or-level word and the context source (NATIVE_LOOT.md step 5.5). The installed script:
 
 - **`WillowWeapon`**, in order:
   1. `DefinitionData.UniqueId` = `GenerateUniqueID()`, and `DefinitionData.GameStage` = the inventory's `GameStage`;
-  2. with a balance: `WeaponTypeDefinition` = the balance's `GetInventoryDefinitionForManufacturerGrade(manufacturer,
-     grade)`. `BalanceDefinition`, `ManufacturerDefinition` and `ManufacturerGradeIndex` are set from the arguments,
-     and `ExpLevel` = the balance's `GetExpLevelFromManufacturerData(manufacturer, grade)` (NATIVE_LOOT.md);
+  2. with a balance: `WeaponTypeDefinition` is the balance's inventory definition for the given manufacturer and
+     grade (`GetInventoryDefinitionForManufacturerGrade`); `BalanceDefinition`, `ManufacturerDefinition` and
+     `ManufacturerGradeIndex` are set from the arguments; `ExpLevel` is the balance's level for that manufacturer and
+     grade (`GetExpLevelFromManufacturerData`, NATIVE_LOOT.md);
   3. the `WillowInventory` part (below);
   4. with a `WeaponTypeDefinition`: `bSelectRandomPartsOnInitialization` is set and `InitializeInternal()` runs. That
      is the weapon build: base values, ammo, part list collection, `ChooseRandomParts` (NATIVE_ITEM_RULES.md,
@@ -148,7 +145,8 @@ each new inventory (NATIVE_LOOT.md step 5.5). The installed script:
 - **`WillowItem`**: nothing without an `InventoryBalanceDefinition`.
   1. `UniqueId` and `GameStage` as for weapons;
   2. `ItemDefinition` = the balance's definition for the manufacturer and grade; nothing more without one;
-  3. `BalanceDefinition`; `ManufacturerDefinition` = the definition's `GetManufacturerOverrideOrDefault(manufacturer)`;
+  3. `BalanceDefinition`; `ManufacturerDefinition` is the definition's override for the given manufacturer, or that
+     manufacturer (`GetManufacturerOverrideOrDefault`);
      `ManufacturerGradeIndex`; `ExpLevel` as for weapons;
   4. the `WillowInventory` part;
   5. `bSelectRandomPartsOnInitialization` and `InitializeInternal()` (the item version of the build above).
@@ -180,18 +178,18 @@ All five are script classes with no native. The kernel runs their `ApplyBehavior
 
 - **`Behavior_SpawnLoot.ApplyBehaviorToContext`**:
   1. does nothing on a network client (`NetMode` 3), or when the context object is not an `IBalancedActor`;
-  2. for each of its `ItemPools`: `SpawnBalancedInventoryFromPool(pool, context.GetGameStage(),
-     context.GetAwesomeLevel(), context, out items)` (no variance formula, default flags);
+  2. for each of its `ItemPools`, calls the pool native with the pool, the context's game stage and awesome level, and
+     the context object as context (no variance formula, default flags), and takes the spawned list back;
   3. wraps each item in a `SpawnedDroppedLootData` (with the behavior's `bDisableRigidBodyPhysics`) and hands the
-     batch to `PlaceSpawnedItems(loot, context)`;
+     batch, with the context object, to its `PlaceSpawnedItems`;
   4. with `bIncludeLootFromLootableContext`, the context's `ILootable.GetDroppedLoot` items are placed the same way.
 - **`Behavior_SpawnLootAroundPoint.PlaceSpawnedItems`**:
   1. the centre is the behavior's attachment location, or the context object's location when that is zero; the
      orientation comes from the attachment data or the context;
   2. each item is scattered: a yaw of `Rand(32768)` × 2, a point `CircularScatterRadius` out along it from the centre,
      and a launch velocity of `SpawnVelocity` turned by one of four rules (`SpawnVelocityRelativeTo`);
-  3. then its `ItemLocation` becomes 2 and it is dropped with `DropFrom(that point, that velocity,
-     bDisableRigidBodyPhysics, bTorque, Torque)`. An item whose scatter fails is destroyed.
+  3. then its `ItemLocation` becomes 2 and it is dropped at the scatter point with the scatter velocity, passing on
+     the behavior's rigid-body and torque settings. An item whose scatter fails is destroyed.
 - **`Behavior_SpawnLootAtPoints`** attaches or drops each item at the context's spawn points in turn.
 - **`Behavior_SpawnItems`** and **`Behavior_DropItems`** were read only as far as the natives they call: pool spawns at
   a world-body attachment location, and a drop of the context's own items at its world-body location and rotation.
@@ -214,10 +212,12 @@ their branch. Nothing in them is a native rule to port, beyond the pool native, 
   - `ISpawnActor.SpawnForMap` for the pickup (NATIVE_INDEX.md lists its rows).
 
   The rest is installed script.
-- Draw order on the shared C-runtime generator: pool roll draws, then per inventory two `GenerateUniqueID` draws and
-  the parts roll (inside `InitializeInventory`, in the pool native's loop), then per dropped inventory the toss
-  draws. Whether `ow_core::rand`'s streams should share one generator here is the port's choice. The game's order is
-  as above (UNVERIFIED).
+- **Draw order** on the shared C-runtime generator, per pool: for each pool the death roll considers (those with
+  `bAutoReadyItems` false), in list order, first the `FRand` that decides whether it fires (drawn whether or not it
+  does); then, for a firing pool, that pool's roll, with each new inventory's two `GenerateUniqueID` draws and its
+  parts roll inside the pool native's loop; then the toss draws of each item dropped from that pool, in list order;
+  then the next pool. Whether `ow_core::rand`'s streams should share one generator here is the port's choice. The
+  game's order is as above (UNVERIFIED).
 - Where the pool native places the new inventory actor is still not read (NATIVE_LOOT.md "Spawning one inventory",
   and the UNVERIFIED choice in `ow_inventory::spawn`). On the kill path it does not decide where loot lies: `DropFrom`
   puts the pickup at the pawn's location with the toss velocity.
