@@ -272,6 +272,53 @@ fn has_player_class(vm: &Vm, controller: ObjRef) -> Result<bool, VmError> {
         .unwrap_or(false))
 }
 
+/// The rest of the streaming load's stand-in (hub ruling, lane SPAWN-COMPLETE, option (a)): the preloaded archetype's
+/// object references that live in the archetype's own package file are loaded too, one level deep, through the store,
+/// so the loads are the store's tracked ones. The game's reason: the whole streaming package is resident, so Maya's
+/// `BodyClass` (`GD_Siren_Streaming.BodyClass_Siren`, the same package as `GD_Siren_Streaming.Pawn_Siren`) is loaded
+/// by the time `ApplyCharacterClassDefaults` reads it off the archetype and hands it to `BodySelectClass`. An UNVERIFIED
+/// stand-in, like the preload it extends: which exports the game's streaming load makes resident is not read.
+///
+/// Only object-valued slots are read (arrays and structs are not walked). A reference to another package, or a handle
+/// whose load already failed, is left alone. Each load is logged; a fresh failure is the step's error. Returns the
+/// object paths loaded, in slot order.
+pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Result<Vec<String>, VmError> {
+    use ow_object::heap::Origin;
+    let package_of = |vm: &Vm, o: ObjRef| match vm.space.heap.get(o).map(|x| x.origin) {
+        Ok(Origin::Export { package, .. } | Origin::Resource { package, .. }) => Some(package),
+        _ => None,
+    };
+    let Some(home) = package_of(vm, archetype) else {
+        return Ok(Vec::new());
+    };
+    let mut refs: Vec<ObjRef> = Vec::new();
+    for v in &vm.space.heap.get(archetype)?.slots {
+        if let Value::Object(Some(r)) = v
+            && !refs.contains(r)
+        {
+            refs.push(*r);
+        }
+    }
+    let mut done = Vec::new();
+    for r in refs {
+        if package_of(vm, r) != Some(home) || !vm.defs.is_unloaded(&vm.space, r) || vm.defs.is_failed(&vm.space, r) {
+            continue;
+        }
+        let path = match vm.space.heap.get(r).map(|x| x.origin) {
+            Ok(Origin::Export { package, index } | Origin::Resource { package, index }) => {
+                ow_defs::identity::full_path(vm.defs.packages().get(package), index).unwrap_or_else(|_| format!("{r:?}"))
+            }
+            _ => format!("{r:?}"),
+        };
+        vm.log.push(format!("harness input: preload {path} (same package as the archetype; UNVERIFIED stand-in)"));
+        let loaded = vm.defs.ensure_loaded(&mut vm.space, r);
+        vm.log.extend(vm.defs.take_log());
+        loaded.map_err(VmError::Def)?;
+        done.push(path);
+    }
+    Ok(done)
+}
+
 /// The two Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
 /// 2026-11-19-41 and 2026-11-19-46). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
@@ -303,10 +350,15 @@ pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<
                         let loaded = vm.defs.find(&mut vm.space, &path);
                         vm.log.extend(vm.defs.take_log());
                         match loaded {
-                            Ok(found) => vm.log.push(format!(
-                                "harness input: preload {text}: {}",
-                                if found.is_some() { "loaded" } else { "found nothing" }
-                            )),
+                            Ok(found) => {
+                                vm.log.push(format!(
+                                    "harness input: preload {text}: {}",
+                                    if found.is_some() { "loaded" } else { "found nothing" }
+                                ));
+                                if let Some(archetype) = found {
+                                    load_same_package_references(vm, archetype)?;
+                                }
+                            }
                             Err(e) => {
                                 vm.log.push(format!("harness input: preload {text}: failed ({e})"));
                                 return Err(VmError::Def(e));

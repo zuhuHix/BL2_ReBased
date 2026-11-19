@@ -287,3 +287,94 @@ fn a_run_with_a_maya_step_is_built_over_the_mission_bridge() {
     assert!(ow_combat::run::wants_bridge(&args[4..]));
     assert!(!ow_combat::run::wants_bridge(&args[4..5]));
 }
+
+/// Hub ruling (a), lane SPAWN-COMPLETE: the streaming load's stand-in loads the preloaded archetype's references that
+/// live in the archetype's own package, and only those. Invented packages: `GD_ToyHome` holds the archetype and
+/// `HomeTarget`; `GD_ToyOther` holds `OtherTarget`. The archetype's `Same` names `HomeTarget` and its `Other` names
+/// `OtherTarget`; both are unloaded handles after the archetype loads.
+#[test]
+fn the_stand_in_loads_only_the_archetype_s_same_package_references() {
+    use std::rc::Rc;
+
+    use ow_attr::AttributeSystem;
+    use ow_core::ObjectPath;
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::ObjectSpace;
+    use ow_object::value::Value;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!("ow-cli-standin-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let arch = t.class("ToyArch", object);
+        t.prop("Object", arch, "Same", 0, object);
+        t.prop("Object", arch, "Other", 0, object);
+        t.build()
+    };
+    let none_only = |t: &ScriptToy| {
+        let mut p = ow_package::testkit::ints(&[0]);
+        p.extend_from_slice(&t.none);
+        p
+    };
+    let other = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let class = t.p.add_import("Core", "Class", willow, "ToyArch");
+        let payload = none_only(&t);
+        t.p.add_export(class, "OtherTarget", payload);
+        t.build()
+    };
+    let home = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let class = t.p.add_import("Core", "Class", willow, "ToyArch");
+        let other_package = t.p.add_import("Core", "Package", 0, "GD_ToyOther");
+        let other_target = t.p.add_import("WillowGame", "ToyArch", other_package, "OtherTarget");
+        let payload = none_only(&t);
+        let home_target = t.p.add_export(class, "HomeTarget", payload);
+        let mut arch = ow_package::testkit::ints(&[0]);
+        arch.extend(t.p.tag("Same", "ObjectProperty", &ow_package::testkit::ints(&[home_target])));
+        arch.extend(t.p.tag("Other", "ObjectProperty", &ow_package::testkit::ints(&[other_target])));
+        arch.extend_from_slice(&t.none);
+        t.p.add_export(class, "Pawn_Toy", arch);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Core.upk", core.as_slice()),
+        ("WillowGame.upk", willow.as_slice()),
+        ("GD_ToyHome.upk", home.as_slice()),
+        ("GD_ToyOther.upk", other.as_slice()),
+    ];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let path = ObjectPath::parse("GD_ToyHome.Pawn_Toy").unwrap();
+    let arch = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let class = vm.space.heap.get(arch).unwrap().class;
+    let read = |vm: &Vm, name: &str| {
+        let p = vm.space.prop(class, name).unwrap();
+        match vm.space.read(arch, ow_object::ids::PropAddr::scalar(p)).unwrap() {
+            Value::Object(Some(o)) => *o,
+            other => panic!("{name}: {other:?}"),
+        }
+    };
+    let (same, other) = (read(&vm, "Same"), read(&vm, "Other"));
+    assert!(vm.defs.is_unloaded(&vm.space, same) && vm.defs.is_unloaded(&vm.space, other), "both start unloaded");
+    let loaded = super::load_same_package_references(&mut vm, arch).unwrap();
+    assert_eq!(loaded, vec!["GD_ToyHome.HomeTarget".to_string()]);
+    assert!(!vm.defs.is_unloaded(&vm.space, same), "the same-package reference is loaded");
+    assert!(vm.defs.is_unloaded(&vm.space, other), "the other package's reference is not");
+    assert!(vm.log.iter().any(|l| l.contains("GD_ToyHome.HomeTarget") && l.contains("UNVERIFIED")), "logged");
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}
