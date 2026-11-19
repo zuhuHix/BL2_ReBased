@@ -53,17 +53,19 @@ While the pickup is in its `Pickup` state:
      controller nor a driven vehicle (UNVERIFIED in play);
    - not the pickup's own instigator while the pickup is still falling and moving upward (a pawn cannot catch what
      it just tossed on the way up);
-   - a clear trace between the toucher's location and the pickup's touch trace point (`TouchPickupTrace`, indexed).
-     NATIVE_INVENTORY_EQUIP.md gives its direction as from the pickup to the pawn. The script passes the pawn's
-     location first, and the native's direction was not re-read here, so the direction stays UNVERIFIED (only
-     "blocked or not" matters to the rule). If the trace fails, the touch is checked again after 0.5 seconds;
+   - a clear trace from the toucher to the pickup (`TouchPickupTrace`, indexed). **Direction resolved** by the
+     package declaration, whose parameters are `StartLoc` then `EndLoc`: the script passes the toucher's location as
+     the start and the pickup's touch trace point as the end. That point is the pickup's location raised by half its
+     bounding cylinder's height. This matches NATIVE_INVENTORY_EQUIP.md's `TouchPickupTrace(from, to)` and corrects
+     its prose ("from the pickup to the pawn"). What blocks the trace inside the native was not read: a named `NotYet`
+     in Off (Off contract, below). If the trace fails, the touch is checked again after 0.5 seconds;
    - the game info's `PickupQuery` agreeing (section 5, "PickupQuery").
 3. **The controller's side** (`WillowPlayerController.TouchedPickupable`): with the pickup enabled, it becomes the
    controller's `CurrentTouchedPickupable`. When the definition's `ShouldPlayerAutomaticallyPickup(controller)` answers
    true, the controller takes it at once, as the key would (section 5). That query defaults to the definition's
-   `bAutomaticallyPickup` flag, but a mission item with a directive answers true on its own rule
-   (NATIVE_INVENTORY_EQUIP.md). It is not the same test as the flag `GetCurrentPickupable` reads (section 4). A gun
-   has neither.
+   `bAutomaticallyPickup` flag, but a mission item with a mission directive answers true when the player is not in a
+   vehicle (NATIVE_INVENTORY_EQUIP.md). It is not the same test as the flag `GetCurrentPickupable` reads (section 4).
+   A gun has neither.
 4. **The touch ends** (`UnTouch`): the controller forgets it if it was the touched one.
 
 ## 4. The look: which pickup the player sees (link 7)
@@ -100,17 +102,22 @@ server, which records it only when it has an inventory and a definition).
 So, while the player touches some pickup, the one they aim at wins over the touched one. That is link 7's rule, as
 read.
 
-**The slice fixtures** (SLICE_GATE.md, the pickup links):
-- **Link 6** (one gun dropped 150 uu ahead of Maya, aimed at): the only pickup, so it alone can supply the touch.
-  Whether its manual-pickup collision (mesh-sized, NATIVE_INVENTORY_EQUIP.md) reaches Maya at that distance was not
-  read (UNVERIFIED; open question 5). Off: with no touch, the key takes nothing, which is the game's answer and not a
-  `NotYet`.
-- **Link 7** (the aimed gun, plus a nearer decoy 45 uu to Maya's side, about 90 degrees off her aim): the touch can
-  come from either gun, whichever overlaps Maya. The decoy fails the 0.9 cone, so the aimed gun is the only eligible
-  candidate. **Bounded case:** when Maya aims through the aimed gun's axis, its score is 1 whatever the capture
-  radius, so it is chosen if it passes the line check and a touch holds. Off may answer that case.
-- **Every other case is a named `NotYet` in Off:** a single candidate whose axis the ray does not pass through (its
-  eligibility needs the capture radius), and any ranking among several eligible candidates (open question 1).
+**The slice fixtures** (SLICE_GATE.md, the pickup links). Each fixture must establish the touched slot itself: a
+valid touch, which includes the touch trace and `PickupQuery` passing (section 3).
+- **Link 6** (one gun dropped 150 uu ahead of Maya, aimed at): **the touch source is that gun**, the only pickup.
+  Whether its manual-pickup collision (mesh-sized, NATIVE_INVENTORY_EQUIP.md) reaches Maya at 150 uu was not read
+  (open question 5).
+- **Link 7** (the aimed gun, plus a nearer decoy 45 uu to Maya's side, about 90 degrees off her aim): **the touch
+  source is the decoy**, the nearer gun, which fills the touched slot when its touch is valid. The aimed gun then
+  wins as the seen one. If the aimed gun also touches Maya, the answer is the same.
+- **The score-1 case (link 7):** the aimed gun must be enabled, within the pickup radius and inside the cone, and the
+  view ray must cross the scored vertical segment through its centre. Crossing the gun's vertical axis is not enough,
+  because the segment's height is not resolved. In that case its score is 1 whatever the capture radius, it is the
+  only eligible candidate (the decoy fails the cone), and it is chosen if it passes the line check.
+- **What Off answers** (Off contract, below): a touch whose validity cannot be settled is a named `NotYet`. An
+  observed empty touched slot gives no pickup, which is the game's answer and not a `NotYet`. Unresolved eligibility
+  (any case outside the score-1 case) and any ranking among several eligible candidates are named `NotYet`s
+  (open question 1).
 
 ## 5. The take
 
@@ -122,12 +129,13 @@ read.
    - **Without room**, only when ready-after-pickup is set and the pawn can use the item (the readiness gate of
      NATIVE_INVENTORY_EQUIP.md, step 5): a weapon swaps with the held one when that can be thrown (or none is held),
      and an equippable item with the item at its equipment location; then the take runs.
-   - **Otherwise** the "pickup failed" message shows, and the full-backpack statistic is updated.
+   - **Otherwise** the "pickup failed" message shows. The full-backpack statistic is updated only when the item needs
+     space (`GetInventorySpaceRequirement` above 0).
    - On success the price is paid (`PayForPickupable`, indexed).
 2. **The server take** (`PickupPickupable`) takes the current pickup, plus nearby bulk pickups when its definition
    allows bulk pickup:
-   - a bulk pickup is another live, enabled `WillowPickup` whose definition also allows it, within the pickup
-     radius of the first;
+   - a bulk pickup is another live, enabled `WillowPickup` of the same kind whose definition also allows bulk
+     pickup, within the pickup radius of the first (NATIVE_INVENTORY_EQUIP.md has the full condition);
    - for each pickup taken, while there is room and `PickupQuery` agrees, the pickup is given to the pawn: `GiveTo`,
      or a clone for each co-op pawn when the co-op range rule applies (the bulk list is capped at 4,
      NATIVE_INVENTORY_EQUIP.md);
@@ -153,7 +161,7 @@ The detailed take rules (afford, ready-after-pickup, the swap, bulk, announce, `
 auto-switch) are NATIVE_INVENTORY_EQUIP.md's "Finding and taking a pickup" and `AddInventory` sections. This section
 summarises them.
 
-**`PickupQuery`** (the slice's game info has no override, so the base `GameInfo` rule applies): a game info with a base
+**`PickupQuery`.** No Willow game info replaces it, so the base `GameInfo` rule applies. A game info with a base
 mutator asks the mutator's `OverridePickupQuery` first, and its answer stands when it overrides. Then a pawn with no
 inventory manager is refused. Otherwise the inventory manager's `HandlePickupQuery` answers:
 - no room: refused;
@@ -162,11 +170,24 @@ inventory manager is refused. Otherwise the inventory manager's `HandlePickupQue
   this passes;
 - otherwise yes.
 
-**Named `NotYet`s in Off** on this path, until read or ruled:
-- a base mutator on the game info (its `OverridePickupQuery`);
-- a pickup's inventory or a held inventory whose class replaces the query (for example `WillowUsableItem`);
-- the co-op clone branch (`ShouldUseCoopRange`, `CloneAndGiveToCoopPawns`);
-- the per-tick targeting outside the bounded case of section 4.
+**The supported slice dispatch:** the base `GameInfo.PickupQuery` with no base mutator, then
+`WillowInventoryManager.HandlePickupQuery`, with a `WillowWeapon` as the pickup's inventory and only `WillowWeapon`s and
+`WillowItem`s held.
+
+## Off contract
+
+Every branch this note leaves unresolved answers a named `NotYet` in Off, never a guess. Named here:
+- a touch whose validity cannot be settled, including what blocks `TouchPickupTrace` inside the native (section 3);
+- the per-tick targeting outside the score-1 case: unresolved eligibility and any multi-candidate ranking
+  (section 4, open question 1);
+- a `PickupQuery` target other than the supported slice dispatch above: a game info with a base mutator, another
+  game-info class, another inventory manager class, or a pickup's or a held inventory whose class replaces the query
+  (for example `WillowUsableItem`);
+- `GetInventoryPawn` on a pawn whose vehicle test is unresolved (open question 4): only a plain player pawn, which
+  answers as no vehicle, is supported;
+- the co-op clone branch (`ShouldUseCoopRange`, `CloneAndGiveToCoopPawns`).
+
+An observed empty touched slot is not one of these: the key takes nothing.
 
 ## 6. The pickup's destroy
 
@@ -183,7 +204,7 @@ inventory manager is refused. Otherwise the inventory manager's `HandlePickupQue
 - The take is script from end to end: the touch state, `GetCurrentPickupable`, `PickupSomething`,
   `PickupPickupable`, `GiveTo` and `AddInventory`. The natives it reaches are already indexed (the pickup accessors,
   the afford and pay pair, the inventory counts and limits, `TouchPickupTrace`), except those in the table below.
-- Link 7 needs the native targeting of section 4, within the bounded case it states. Pickups are not chosen by the
+- Link 7 needs the native targeting of section 4, within the score-1 case it states. Pickups are not chosen by the
   port's use-target choice (`ow_mission::interactive::choose_usable`): NATIVE_USE_INTERACTION.md says they have their
   own walk, which is section 4.
 
