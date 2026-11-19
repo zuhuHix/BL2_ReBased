@@ -79,8 +79,12 @@ not the game's list (`ow_mission::bridge`, decision 2026-11-19-10).
 - Bound by this note in the installed slice, with the tracker's data valid: the tracker branch reaches `GetAllMissions`
   and stops there with that `LayerAbsent`, marked by the refresh. That is links 10 to 12's next stop, unless the
   bridge's tracker holds the full list by then.
-- With the data not valid: both branches give the fallback's number (section 2), and the refresh goes on.
-- Which of the two holds at the accept is the bridge's `bDataValidated` at that moment; the implementer reads it.
+- With the data not valid, and in every case where step 2 computes the fallback: the fallback asks for the current
+  playthrough, whose virtual is not read (section 2, step 1). So it is that `NotYet { NotRead }`, which the refresh
+  marks.
+- So today no installed case of this native gets past a named `NotYet`. The two unresolved decisions that change its
+  result, the engine-wide condition and the playthrough virtual, are each a named `NotYet { NotRead }`. No Off
+  substitute is authorized for either.
 
 ## 2. `WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`
 
@@ -96,9 +100,9 @@ Read again in this lane; it agrees with NATIVE_SAVE_LOAD.md.
 4. The answer is the largest kept, else 0.
 
 **Off answers, step by step:**
-1. **The current playthrough:** the controller's `GetCurrentPlaythrough()` answer, called through the VM. If the
-   controller's class declares no such function, it is a `NotYet` of kind `NotRead`, "the controller's current
-   playthrough query" (UNVERIFIED that the virtual is it).
+1. **The current playthrough** (a negative index, the default): the controller's virtual that gives it was not read,
+   and its identity is not guessed. `NotYet { NotRead }`, "the controller's current-playthrough virtual". An explicit
+   index of 0 or more does not ask it.
 2. **The list:** the controller's `MissionPlaythroughs[p].MissionList` as the VM holds it. The mission bridge keeps one
    playthrough with the bridge's mission in it.
 3. Steps 2 to 4 above. Nothing is written. A record without a readable `MissionDef` or `Status`, or a definition
@@ -131,13 +135,9 @@ Why it is this chain:
   `ClientSpawnMissionRewardUI` (the turn-in's reward page).
 - So at the accept it is `UpdateMissionStatus`'s call, and at link 12's turn-in it can also be the reward page's.
 
-**Preflight and terminal refusals.** Both routes reach the native after the accept's or the turn-in's own writes (the
-mission's status at least).
-- Its cheap, certain checks come before its own first write: is `MissionTextList` None, and does the port host a Flash
-  movie.
-- A `NotYet` from it is still terminal for the step: its text starts "stopped after partial writes: ", its kind and
-  record are kept, and nothing is rolled back.
-- The same holds for `GetVariableObject` and `FocusOn` after it.
+**Terminal refusals.** Both routes reach the native after the accept's or the turn-in's own writes (the mission's
+status at least). So a `NotYet` from it is terminal for the step: its text starts "stopped after partial writes: ",
+its kind and record are kept, and nothing is rolled back.
 
 `extPopulateQuestEntries` drops the entries without a mission. It then calls the movie's `MissionTextList`:
 `EmptyData`, then one `AddDataEntry` per mission. It inserts header rows when there are redeemable or eligible
@@ -152,40 +152,36 @@ because no registration pattern was found for the class's table. NATIVE_GFX_BRID
 taken as the rule. Its first step: when `MissionTextList` is None, nothing at all happens.
 
 **Off answers, step by step.** Hub ruling of 2026-11-19: a UI-only side effect may be answered "nothing" in Off only
-when nothing on the slice path reads it back; otherwise it is a named `NotYet` of kind `LayerAbsent`.
-1. **The port's screen is a stand-in.** The mission bridge makes a VM object of `QuestAcceptGFxMovie` from its class
-   defaults. The movie's `Start`, the only script seen to create `MissionTextList` (a new `GFxTextListContainer`), is
-   not run. So `MissionTextList` is None, unless something sets it.
-2. **`UpdateMissionTextList` with `MissionTextList` None: nothing.** It returns and changes nothing (the record's first
-   step).
-   - **Label:** this is a port Off answer for a headless world with no Flash movie hosted, UNVERIFIED.
-   - It is read on the live object at the call, so nothing has to be preflighted.
-   - **The read-back check** (below) found nothing on links 10 to 12 that reads what the native would change.
-3. **`MissionTextList` set** (not the port's case): the record's steps follow. They write `MissionCategories` and the
-   list's displayed rows, and they need localised category labels (`Object.Localize`), the list's native rebuild and
-   its Flash refresh. The port has none of those. Off answers a `NotYet`: kind `LayerAbsent`, "the mission screen's
-   Flash text list (not hosted)".
-   - It is checked before the first write (emptying `MissionCategories`).
-   - It comes after the accept's own writes, so under the hub ruling it is terminal ("stopped after partial writes",
-     its kind kept), and nothing is rolled back.
-4. **What follows:**
-   - `MissionTextList.PositionHighlightBar()`: a call on a None object, which the VM skips, as it skipped `EmptyData`
-     and `AddDataEntry` in the probe.
-   - Then `SetFocus()` asks `GFxMoviePlayer.GetVariableObject("missions.selections.selection<N>")`. NATIVE_GFX_BRIDGE.md
-     says `None` for a missing movie. Off answer: None, since the stand-in hosts no movie (UNVERIFIED that an unhosted
-     movie counts as missing). The same ruling applies: the object is only passed on to `FocusOn`.
-   - Then `WillowGFxMovie3D.FocusOn(None)`: NATIVE_GFX_BRIDGE.md says a no-op is safe with `None` tolerance. Off
-     answer: nothing. **Label:** a port Off answer for a headless world with no Flash movie hosted, UNVERIFIED.
-   - The state these two could change (`FocusObject`, the focus offset, the movie's clip tables) has no reader on links
-     10 to 12 (the read-back check below). `GetVariableObject`'s result goes only to `FocusOn`.
-   - Both are listed today as Reference-only presentation stubs (`ow-cli`'s `REFERENCE_STUBS`). In Off they are
-     unbound, so each would be the next stop until bound.
-5. **Past `SetFocus`**, `extAcceptConfirmed` returns. What the slice's accept step checks after that was not read in
-   this lane.
+when nothing on the slice path reads it back; otherwise it is a named `NotYet` of kind `LayerAbsent`. The read-back
+check below does not cover every possible reader (review r2 of #473): the 10 undecoded functions and native readers
+are not accounted for. So no call here is answered "nothing".
+1. **`UpdateMissionTextList`** is the first call the port cannot support. Off answers `NotYet { LayerAbsent }`,
+   "the mission screen's Flash text list (not hosted)" (record NATIVE_GFX_BRIDGE.md), whether `MissionTextList` is
+   None or set.
+   - The check is certain before the native's own first write (emptying `MissionCategories`): the port hosts no Flash
+     movie.
+   - It comes after the accept's writes, so it is terminal: prefixed "stopped after partial writes: ", kind and record
+     kept, nothing rolled back.
+2. **Not reached:** `MissionTextList.PositionHighlightBar()`, `SetFocus()` with `GetVariableObject` and `FocusOn`. The
+   focus pair's own state (the clip tables, `FocusObject`, the 3D focus offset) is not answered "nothing" either. If a
+   later ruling lets the text list pass, `GetVariableObject` is the next unsupported call: `NotYet { LayerAbsent }`,
+   "a Flash movie query (not hosted)", terminal in the same way.
+3. **The return through the slice's real caller** (`ow_mission::bridge`, the `accept` the slice step calls):
+   - the bridge runs the controller's `AcceptMission` inside its script run, and records the error;
+   - an error whose text carries the partial-writes mark is terminal there. The run returns it, the bridge's `accept`
+     propagates it, and the slice step stops with it as a `NotYet` (typed, so graded `NotYet`). Later script runs on
+     that VM fail with it without running;
+   - so the bridge's own check, whether the mission's status changed between before and after the call, is not
+     reached on this path;
+   - without the mark, the run would record the `NotYet` and return normally, and `accept` would answer whether the
+     status changed. The slice gate grades the recorded `NotYet` first.
+   - No step of this return is untraced: it is the bridge's code. Its marked-error test is text-based on main today
+     and an exact prefix check with #464.
 
-**The read-back check** (lane ANALYST-MISSION-NUMBERS, under the hub ruling). Every script function of the nine code
-packages was decoded with `research/script_disasm.py`'s decoder: 12,978 functions, 10 of them not decoded. They were
-searched for the movie's two fields the native touches.
+**The read-back check** (lane ANALYST-MISSION-NUMBERS, under the hub ruling; evidence for a later ruling, not an Off
+answer). The script functions of the nine code packages were run through `research/script_disasm.py`'s decoder:
+12,978 functions, of which 12,968 decoded and 10 did not. The claims below cover the 12,968 that decoded, searched for
+the fields named.
 - **`MissionCategories`:** no script reads or writes it. Only the native itself uses it (NATIVE_GFX_BRIDGE.md).
 - **`MissionTextList`** is used only by the movie's own script: `Start` (which creates it, and is not run in the port),
   `extPopulateQuestEntries` and `SetFocus` (the calls above), `GetSelectedIndex`, `extFillOutQuestAllScreenDetails`,
@@ -206,8 +202,8 @@ searched for the movie's two fields the native touches.
 - **Not covered:** the 10 functions the decoder cannot read, and native readers other than the record's. One of the
   10 is `WillowGFxUIManager.PlayMovie`, which the bridge's stand-in manager does not reach on links 10 to 12 (it binds
   `GetPlayingMovie` only).
-- So the read-back is none in the port's case (`MissionTextList` None). If a later lane hosts the screen and sets the
-  list, step 3's `NotYet` applies instead.
+- So among the decoded script nothing on links 10 to 12 reads the state back. The 10 undecoded functions and any
+  native reader are open, which is why step 1 is a `NotYet`.
 
 ## Open questions
 
