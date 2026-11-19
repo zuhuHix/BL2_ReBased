@@ -34,7 +34,8 @@ loosened. The `NotYet` guards changed are listed under "Guards" below.
   - a component's own sub-objects (nested).
 - **Spawn** (`crates/ow-world/src/actors.rs`, `spawn`):
   - In Off the actor is made from the template's slots, then `instance_components` runs.
-  - An archetype (a template other than the class default) is now spawned in Off, as the brief asks. The collision
+  - An archetype (a template other than the class default) is now spawned in Off, as the brief asks and the hub
+    confirmed in review: public UE3's spawn copies its template's properties. **UNVERIFIED** in this game. The collision
     pre-checks still read the class defaults; for an archetype whose flags differ, that is UNVERIFIED.
   - Under Reference nothing changes: `instantiate_from_defaults` as before, and an archetype stays
     `NotYet { NotRead }`, because the C++ stand-in does not copy a template's sub-objects (R3).
