@@ -975,10 +975,12 @@ pub(crate) fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, 
 ///   NATIVE_ACTOR_DESTROY.md and NATIVE_ACTOR_DESTROY_CONTROLLER.md): a player controller whose `Player` is a
 ///   `LocalPlayer` gets `bPendingDestroy` and answers false; one with another `Player` (a network connection) is
 ///   `NotYet { NotPorted }`; any other controller takes the generic routine below.
-/// - **Off, the world-drop step** ([`plan_world_drop`], [`world_drop`]): preflighted before any write (a
-///   `GearboxMind` with `MyRuleEngine` set is `NotYet { NotRead }`; a controller or pawn in a world whose `WorldInfo`
-///   does not declare its list is `NotYet { LayerAbsent }`), run right after `Destroyed()`. A `NotYet` after the first
-///   write is marked [`PARTIAL_WRITES`] (kind kept); nothing is rolled back. All UNVERIFIED in the running game.
+/// - **Off, the world-drop step** ([`plan_world_drop`], [`world_drop`]; review r1 of #472): preflighted before any
+///   write. A controller answers the note's first refusal, the actor step's unread engine notification (`NotYet {
+///   NotRead }`), until it is read. A pawn in a world whose `WorldInfo` does not declare `PawnList` is `NotYet {
+///   LayerAbsent }`, and a pawn's drop is its `PawnList` unlink, run right after `Destroyed()`. A `NotYet` after the
+///   first write is marked [`PARTIAL_WRITES`] (kind kept); nothing is rolled back. All UNVERIFIED in the running
+///   game.
 /// - `NotYet`, before anything changes, for the parts this world cannot run: an actor with Kismet events in `GeneratedEvents` (the destroyed-event class is not
 ///   confirmed: W5-KISMET), an actor in a state (`EndState` and the state frame: W5-STATES), an actor with a `Base`,
 ///   with attached actors based on it, or touching others (the unbase and untouch routines are physics natives, not
@@ -1130,7 +1132,7 @@ fn after_writes(e: VmError) -> VmError {
 
 /// The world-drop step of one destroy, checked before the destroy's first write.
 #[derive(Debug)]
-struct WorldDrop {
+pub(crate) struct WorldDrop {
     /// The list the actor leaves, and its holder.
     list: Option<(WorldList, ObjRef)>,
     /// A controller: whether it is the authority (its pool manager is destroyed then).
@@ -1139,37 +1141,76 @@ struct WorldDrop {
     proxy: bool,
 }
 
-/// The world-drop step's preflight (NATIVE_ACTOR_DESTROY_CONTROLLER.md section 5, step 2), before any write:
-/// - a `GearboxMind` with `MyRuleEngine` set: `NotYet { NotRead }` (the rule engine's call is not read);
-/// - a controller or a pawn in a world that does not hold its list: `NotYet { LayerAbsent }`, never "not in the
-///   list"; a list that does not walk is bad data;
-/// - every field the step reads or writes is declared (a typed error otherwise).
-fn plan_world_drop(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Result<WorldDrop, VmError> {
+/// The text of the controller destroy's refusals (NATIVE_ACTOR_DESTROY_CONTROLLER.md section 5.2, in table order).
+pub const NOTIFICATION_NOT_READ: &str = "the actor step's engine notification at destroy";
+pub const LOOKUPS_NOT_READ: &str = "the mind's two engine lookups at destroy";
+pub const RULE_ENGINE_NOT_READ: &str = "the rule engine's call at its mind's destroy";
+
+/// The world-drop step's preflight (NATIVE_ACTOR_DESTROY_CONTROLLER.md sections 5.2 and 5.5, review r1 of #472),
+/// before any write. For a controller, the table's refusals in its order, the first found being the answer:
+/// 1. the actor step's engine notification: `NotYet { NotRead }` (not read, not proven irrelevant). It runs on every
+///    controller's destroy, so every Off controller destroy answers it until it is read;
+/// 2. a `GearboxMind`'s two engine lookups: `NotYet { NotRead }`;
+/// 3. a world that does not hold `ControllerList`: `NotYet { LayerAbsent }`;
+/// 4. a `GearboxMind` with `MyRuleEngine` set: `NotYet { NotRead }`.
+///
+/// For a pawn: a world that does not hold `PawnList` is `NotYet { LayerAbsent }`. A modelled list without the pawn is
+/// not a refusal. The actor step's notification also belongs to every other actor's destroy. The generic path omits
+/// it for non-controllers, a documented UNVERIFIED gap (the note's open question 6, a hub decision).
+///
+/// Every field the step reads or writes must be declared (a typed error otherwise), and a list that does not walk is
+/// bad data.
+pub(crate) fn plan_world_drop(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Result<WorldDrop, VmError> {
     let space = &vm.space;
     let class = space.heap.get(actor)?.class;
     let Some(list) = WorldList::of(space, actor)? else {
         return Ok(WorldDrop { list: None, authority: false, proxy: false });
     };
-    let mut drop = WorldDrop { list: None, authority: false, proxy: false };
     if list == WorldList::Controllers {
+        // Row 1 holds for every controller; the declarations are still checked first (bad data is not a NotYet).
         object(space, actor, "ResourcePoolManager")?;
-        drop.authority = byte(space, actor, "Role")? >= ROLE_AUTHORITY;
-        if class_named_in_chain(space, class, "GearboxMind") && object(space, actor, "MyRuleEngine")?.is_some() {
-            return Err(NotYet::not_read("the rule engine's call at its mind's destroy", RECORD_UNLINK).into());
+        if class_named_in_chain(space, class, "GearboxMind") {
+            object(space, actor, "MyRuleEngine")?;
         }
         if class_named_in_chain(space, class, "WillowMind") {
             object(space, actor, "InteractionProxy")?;
-            drop.proxy = true;
         }
+        return Err(NotYet::not_read(NOTIFICATION_NOT_READ, RECORD_UNLINK).into());
     }
+    Ok(WorldDrop { list: Some((list, list_ready(space, actors, actor, list)?)), authority: false, proxy: false })
+}
+
+/// The rows of section 5.2 after the notification, in order, for a controller whose notification and lookups are read
+/// (none are today): the controller list, then the rule engine. Kept so the order holds when the first rows are read;
+/// tested directly.
+#[cfg_attr(not(test), allow(dead_code))] // reached in tests only until rows 1 and 2 are read
+pub(crate) fn plan_controller_rows(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Result<WorldDrop, VmError> {
+    let space = &vm.space;
+    let class = space.heap.get(actor)?.class;
+    let holder = list_ready(space, actors, actor, WorldList::Controllers)?;
+    if class_named_in_chain(space, class, "GearboxMind") && object(space, actor, "MyRuleEngine")?.is_some() {
+        return Err(NotYet::not_read(RULE_ENGINE_NOT_READ, RECORD_UNLINK).into());
+    }
+    Ok(WorldDrop {
+        list: Some((WorldList::Controllers, holder)),
+        authority: byte(space, actor, "Role")? >= ROLE_AUTHORITY,
+        proxy: class_named_in_chain(space, class, "WillowMind") && {
+            object(space, actor, "InteractionProxy")?;
+            true
+        },
+    })
+}
+
+/// The holder of `list` for `actor`, checked: the world holds the list (else `NotYet { LayerAbsent }`), the actor
+/// declares the link, and the list walks.
+fn list_ready(space: &ObjectSpace, actors: &Rc<RefCell<Actors>>, actor: ObjRef, list: WorldList) -> Result<ObjRef, VmError> {
     let holder = list_holder(space, &*actors.try_borrow().map_err(borrow_err)?, list)?;
     let Some(holder) = holder else {
         return Err(NotYet::layer_absent(list.named(), "ow-world (the WorldInfo's list)", RECORD_UNLINK).into());
     };
     object(space, actor, list.next())?;
     list_members(space, holder, list)?;
-    drop.list = Some((list, holder));
-    Ok(drop)
+    Ok(holder)
 }
 
 /// The class's world-drop step, run right after `Destroyed()` (section 2, step 4; section 3, step 2), in order:
@@ -1179,8 +1220,9 @@ fn plan_world_drop(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Resu
 /// - a `WillowMind`: its `InteractionProxy`, when set, destroyed (a nested destroy; the field is not cleared);
 /// - a pawn: the `PawnList` unlink; its `NextPawn` is left.
 ///
-/// The actor step's engine notification changes no game state the note saw, and is not run.
-fn world_drop(vm: &mut Vm, actor: ObjRef, drop: &WorldDrop) -> Result<(), VmError> {
+/// The actor step's notification and the mind's lookups are refused in the preflight, so a controller reaches this
+/// step only through [`plan_controller_rows`] (tests, until they are read).
+pub(crate) fn world_drop(vm: &mut Vm, actor: ObjRef, drop: &WorldDrop) -> Result<(), VmError> {
     let Some((list, holder)) = drop.list else {
         return Ok(());
     };
