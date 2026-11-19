@@ -21,7 +21,9 @@ neither native has a C++ stand-in, so both stay unbound there (R3).
   - **`WillowPlayerPawnDataManager.FindAlreadyLoadedObject(Path)`**: the object already in memory at that full path,
     any class, never loading. The port reads "in memory" as an instance live in the heap (a run-time object or a
     loaded definition) whose full path equals `Path`, in any case. A run-time object with no outer that shares the
-    name is skipped (the port cannot name its full path).
+    name is skipped (the port cannot name its full path); when nothing else answers, such a skipped match makes the
+    result `NotYet { NotRead }` rather than None, since the game may hold it at a path the port cannot build (review
+    r2 of #411).
     - No instance at that path, but an installed package holds it, asked of the store's export tables
       (`DefStore::owners`, which loads no definition): `NotYet { NotRead }`. That covers a store handle that is not
       loaded (handles are not live instances) and a path nothing has named yet; a candidate file the store could not

@@ -1679,10 +1679,11 @@ fn find_already_loaded_object_asks_the_store_for_paths_not_in_memory() {
         assert!(handle.is_some_and(|h| x.w.vm.defs.is_unloaded(&x.w.vm.space, h)), "ToyTarget is an unloaded handle");
         assert_eq!(find(&mut x, "Engine.ToyArchetype").unwrap(), Value::Object(Some(loaded)));
         assert!(not_read(&find(&mut x, "engine.toytarget")), "an unloaded handle: {target:?}");
-        // A run-time object with no outer of the same name is skipped, and no package holds Engine.Nothing.
+        // A run-time object with no outer of the same name is skipped but remembered: no package holds Engine.Nothing,
+        // yet the game may hold that object at a path the port cannot name, so the answer is NotYet, not None.
         let thing = x.class("Thing");
         x.vm().space.alloc(thing, "Nothing", None, ow_object::heap::Origin::Runtime).unwrap();
-        assert_eq!(find(&mut x, "Engine.Nothing").unwrap(), Value::Object(None));
+        assert!(not_read(&find(&mut x, "Engine.Nothing")), "a skipped unnamed match is NotYet");
     });
 }
 
