@@ -28,7 +28,9 @@ controller, AI minds included (NATIVE_COMBAT_GROUNDWORK.md section 1.11), as in 
 ## 1. The base: Controller.ApplyCharacterClassStartingValues(Class)
 
 In this order:
-1. **Every pool of the controller's `ResourcePoolManager` is deleted.** This happens always, with or without a class.
+1. **Every pool of the controller's `ResourcePoolManager` is deleted**, with or without a class. The deletion itself
+   (`DeleteAllPools`, NATIVE_COMBAT_GROUNDWORK.md section 1.6) acts only on a manager whose own `Role` is the
+   authority; on any other manager it deletes nothing.
 2. With a class:
    1. one pool for each entry of the class's `ResourcePools`, in array order;
    2. then a pool for `AccuracyPoolDefinition`, when set, stored as the controller's `AccuracyPool`;
@@ -36,14 +38,25 @@ In this order:
 
    Each pool is made by the manager's pool creation, which takes the lowest free slot (NATIVE_COMBAT_GROUNDWORK.md
    sections 1.4 and 1.10).
-3. Nothing else: no attribute, inventory, pawn or health change, and no role check.
+3. Nothing else: no attribute, inventory, pawn or health change, and no check of the controller's role.
 
-**Stored references that are not recreated.** Neither native clears `AccuracyPool` or `OffHandAccuracyPool` (nor,
-in section 2, `ExpPool`, `SkillCooldownPool` or `MeleeSkillCooldownPool`). With no class, an unset definition, a
-controller that is not the authority, or no `PlayerClass`, the reference keeps what it held before step 1. Its pool
-was deleted in step 1, so the reference no longer names a live pool. By the manager's validity rule
-(NATIVE_COMBAT_GROUNDWORK.md section 1.2, the `PoolGUID` check) it then reads as not valid, unless a new pool in the
-same slot happens to carry the same GUID. That last outcome was not checked (UNVERIFIED; open question 2).
+**Stored references that are not recreated.** Neither native clears a stored pool reference. A reference that is not
+recreated keeps what it held before the call. Which ones are left, by the gate that applies:
+- **No class argument:** `AccuracyPool` and `OffHandAccuracyPool` (section 1). The three player-only references are
+  gated separately (section 2), not by the argument.
+- **An unset definition:** only that definition's own reference (`AccuracyPoolDefinition` → `AccuracyPool`, and so
+  on). The others are created as usual.
+- **A controller that is not the authority, or one with no `PlayerClass`:** `ExpPool`, `SkillCooldownPool` and
+  `MeleeSkillCooldownPool` (section 2). The two accuracy references follow the class argument as above.
+
+Whether a left reference is stale depends on step 1, that is, on the **manager's** authority (not the controller's):
+- **The manager is the authority:** step 1 emptied the reference's slot. By the validity rule
+  (NATIVE_COMBAT_GROUNDWORK.md section 1.2, the `PoolGUID` check) the reference reads as not valid while the slot
+  stays empty, or holds a new pool with another GUID. It reads as valid again only if a new pool in that slot carries
+  the same GUID, which was not checked (UNVERIFIED; open question 2).
+- **The manager is not the authority:** step 1 deleted nothing, so the left reference still names the pool it named
+  before, which is still live. What the creation steps then do on such a manager was not read here (UNVERIFIED; open
+  question 3).
 
 ## 2. The player-controller override
 
@@ -93,6 +106,8 @@ accuracy, experience, action-skill cooldown and melee cooldown.
    the argument, the override reads the field).
 2. After a class application that does not recreate a stored pool reference, whether the left reference can ever read
    as valid again (a new pool in the same slot with the same `PoolGUID`). UNVERIFIED.
+3. Whether the controller's manager can be other than the authority when the call runs (for example on a network
+   client, through `ClientNotifyClassChanged`'s path), and what pool creation does on such a manager. UNVERIFIED.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
@@ -102,3 +117,5 @@ accuracy, experience, action-skill cooldown and melee cooldown.
 - Before and after a class application, read `AccuracyPool`, `OffHandAccuracyPool`, `ExpPool`, `SkillCooldownPool`
   and `MeleeSkillCooldownPool` (manager, slot, GUID) and `IsResourcePoolValid` on each, for a class that leaves one
   of the definitions unset (open question 2).
+- On a network client, read the controller's `ResourcePoolManager.Role` and its pools before and after a class
+  application (open question 3).
