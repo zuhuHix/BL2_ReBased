@@ -373,31 +373,61 @@ fn a_multi_context_destination_refuses_before_the_variance_draw() {
     assert!(t.vm.rng.draws() > draws, "the control draws");
 }
 
-/// Review r1 of #572, case 2: a loaded destination whose value resolver is still an unloaded handle refuses in the
-/// preflight, without loading it. The refusal is unmarked, the counters are unchanged, and the handle stays unloaded.
+/// The world fixture's `Toy_LazyAttr`, loaded, with a resolving context chain (a runtime `PawnAttributeContextResolver`,
+/// review r2 of #572), its lazy value resolver, and a valid target (an `AttrTarget` pawn with the plain attribute the
+/// resolver names).
+fn lazy_destination(x: &mut crate::world::tests::Fx) -> (ObjRef, ObjRef, ObjRef) {
+    // The fixture world has no resolvers registered; these tests use the standard set.
+    x.w.vm.attrs = Rc::new(AttributeSystem::standard().unwrap());
+    x.class("AttributeInitializationDefinition");
+    let path = ObjectPath::parse("Engine.Toy_LazyAttr").unwrap();
+    let vm = &mut x.w.vm;
+    let attr = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let class = vm.space.heap.get(attr).unwrap().class;
+    let p = vm.space.prop(class, "ValueResolverChain").unwrap();
+    let reader = match vm.space.read(attr, PropAddr::scalar(p)).unwrap() {
+        Value::Array(a) => match a.first() {
+            Some(Value::Object(Some(r))) => *r,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    let resolver_class = x.class("PawnAttributeContextResolver");
+    let vm = &mut x.w.vm;
+    let resolver = vm.space.alloc(resolver_class, "Toy.PawnResolver", None, Origin::Runtime).unwrap();
+    let chain = vm.space.prop(class, "ContextResolverChain").unwrap();
+    vm.space.write(attr, PropAddr::scalar(chain), Value::Array(Rc::new(vec![Value::Object(Some(resolver))]))).unwrap();
+    let target_class = x.class("AttrTarget");
+    let target = x.w.vm.space.alloc(target_class, "Toy.Target", None, Origin::Runtime).unwrap();
+    (attr, reader, target)
+}
+
+fn fixture_data(x: &crate::world::tests::Fx, constant: f32, attribute: Option<ObjRef>, definition: Option<ObjRef>) -> Value {
+    let ty = x.w.vm.space.classes.struct_by_path("Engine.Object.AttributeInitializationData").unwrap();
+    Value::structure(ty, vec![Value::Float(constant), Value::Object(attribute), Value::Object(definition), Value::Float(1.0)])
+}
+
+fn counters_of(x: &crate::world::tests::Fx) -> (u64, u64, u64) {
+    (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions())
+}
+
+/// Review r1 of #572, case 2 (made to reach the resolver in review r2): a loaded destination whose context chain
+/// resolves to a valid target and whose value resolver is still an unloaded handle refuses in the preflight, without
+/// loading it. The refusal is unmarked, the counters are unchanged, and the handle stays unloaded.
 #[test]
 fn a_lazy_value_resolver_refuses_without_loading() {
     crate::world::tests::run(|| {
         let mut x = crate::world::tests::fx_in(true, ParityMode::Off);
-        x.class("AttributeInitializationDefinition");
-        let path = ObjectPath::parse("Engine.Toy_LazyAttr").unwrap();
-        let vm = &mut x.w.vm;
-        let attr = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
-        let class = x.w.vm.space.heap.get(attr).unwrap().class;
-        let p = x.w.vm.space.prop(class, "ValueResolverChain").unwrap();
-        let reader = match x.w.vm.space.read(attr, PropAddr::scalar(p)).unwrap() {
-            Value::Array(a) => match a.first() {
-                Some(Value::Object(Some(r))) => *r,
-                other => panic!("{other:?}"),
-            },
-            other => panic!("{other:?}"),
-        };
+        let (attr, reader, target) = lazy_destination(&mut x);
         assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, reader), "the fixture's resolver is lazy");
-        let ty = x.w.vm.space.classes.struct_by_path("Engine.Object.AttributeInitializationData").unwrap();
-        let data = Value::structure(ty, vec![Value::Float(3.0), Value::Object(None), Value::Object(None), Value::Float(1.0)]);
-        let before = (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions());
+        let data = fixture_data(&x, 3.0, None, None);
+        let before = counters_of(&x);
         let e = x
-            .call("AttributeInitializationDefinition.SetBaseValue", None, vec![Value::Object(Some(attr)), data, Value::Object(None), Value::Object(None)])
+            .call(
+                "AttributeInitializationDefinition.SetBaseValue",
+                None,
+                vec![Value::Object(Some(attr)), data, Value::Object(None), Value::Object(Some(target))],
+            )
             .unwrap_err();
         match &e {
             VmError::NotYet(n) => {
@@ -406,8 +436,127 @@ fn a_lazy_value_resolver_refuses_without_loading() {
             }
             other => panic!("{other:?}"),
         }
-        let after = (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions());
-        assert_eq!(after, before, "nothing written, drawn or loaded");
+        assert_eq!(counters_of(&x), before, "nothing written, drawn or loaded");
         assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, reader), "the resolver is still unloaded");
     });
+}
+
+/// The control of the test above (review r2 of #572): the same destination and target, set through `ow-attr`'s
+/// `set_base` with no preflight, does reach the resolver: it loads it and sets the target's attribute. So the
+/// preflight's refusal is what keeps the load from happening.
+#[test]
+fn without_the_preflight_the_set_reaches_and_loads_the_resolver() {
+    crate::world::tests::run(|| {
+        let mut x = crate::world::tests::fx_in(true, ParityMode::Off);
+        let (attr, reader, target) = lazy_destination(&mut x);
+        let loads = x.w.vm.defs.load_transitions();
+        let attrs = x.w.vm.attrs.clone();
+        let set = attrs.set_base(attr, Some(target), 3.0, false, &mut EvalCx::new(&mut x.w.vm)).unwrap();
+        assert!(set, "the set reaches the target");
+        assert!(x.w.vm.defs.load_transitions() > loads, "the resolver was loaded");
+        assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, reader));
+        let class = x.w.vm.space.heap.get(target).unwrap().class;
+        let p = x.w.vm.space.prop(class, "Toughness").unwrap();
+        assert_eq!(x.w.vm.space.read(target, PropAddr::scalar(p)).unwrap(), &Value::Float(3.0));
+    });
+}
+
+/// Review r2 of #572: the preflight checks only reachable branches. A conditional initialisation whose first entry
+/// has no expressions (it always holds) never reaches its default, so an unloaded attribute there does not refuse. The
+/// control (the same first entry with one expression, which may not hold) does reach the default and refuses.
+#[test]
+fn an_unreachable_conditional_branch_is_not_checked() {
+    crate::world::tests::run(|| {
+        let mut x = crate::world::tests::fx_in(true, ParityMode::Off);
+        x.class("AttributeInitializationDefinition");
+        let path = ObjectPath::parse("Engine.Toy_AttrHolder").unwrap();
+        let vm = &mut x.w.vm;
+        let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let unreached = crate::actors::object(&x.w.vm.space, holder, "Attr").unwrap().unwrap();
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, unreached));
+        let init_ty = x.w.vm.space.classes.struct_by_path("Engine.Object.AttributeInitializationData").unwrap();
+        // The definition's shape, as runtime declarations (invented).
+        let s = &mut x.w.vm.space;
+        let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
+        let object = s.classes.by_path("Engine.Object").unwrap();
+        let expr_fields = vec![
+            d(s, "AttributeOperand1", PropKind::Object { class: object }),
+            d(s, "ComparisonOperator", PropKind::Byte { enum_: None }),
+            d(s, "Operand2Usage", PropKind::Byte { enum_: None }),
+            d(s, "AttributeOperand2", PropKind::Object { class: object }),
+            d(s, "ConstantOperand2", PropKind::Float),
+        ];
+        let expr = s.classes.define_struct("Test.Expr", None, expr_fields).unwrap();
+        let entry_fields = vec![
+            d(s, "Expressions", PropKind::Array(Box::new(PropKind::Struct(expr)))),
+            d(s, "BaseValueIfTrue", PropKind::Struct(init_ty)),
+        ];
+        let entry = s.classes.define_struct("Test.CondEntry", None, entry_fields).unwrap();
+        let toggle = |s: &mut ObjectSpace, path: &str, names: &[&str]| {
+            let fields = names.iter().map(|n| PropertyDecl::new(s.names.intern(n), PropKind::Bool)).collect();
+            s.classes.define_struct(path, None, fields).unwrap()
+        };
+        let formula = toggle(s, "Test.Formula", &["bEnabled"]);
+        let variance = toggle(s, "Test.Variance", &["bEnabled"]);
+        let range = toggle(s, "Test.Range", &["bEnableMinValueRestriction", "bEnableMaxValueRestriction"]);
+        let cond_fields = vec![
+            d(s, "bEnabled", PropKind::Bool),
+            d(s, "ConditionalExpressionList", PropKind::Array(Box::new(PropKind::Struct(entry)))),
+            d(s, "DefaultBaseValue", PropKind::Struct(init_ty)),
+        ];
+        let cond = s.classes.define_struct("Test.Cond", None, cond_fields).unwrap();
+        let def_props = vec![
+            d(s, "ValueFormula", PropKind::Struct(formula)),
+            d(s, "ConditionalInitialization", PropKind::Struct(cond)),
+            d(s, "RandomVariance", PropKind::Struct(variance)),
+            d(s, "RangeRestriction", PropKind::Struct(range)),
+        ];
+        let def_class = s.classes.define("Test.CondDefinition", Some(object), def_props).unwrap();
+        let init = |constant: f32, attribute: Option<ObjRef>| {
+            Value::structure(init_ty, vec![Value::Float(constant), Value::Object(attribute), Value::Object(None), Value::Float(1.0)])
+        };
+        let off = |ty| Value::structure(ty, vec![Value::Bool(false)]);
+        let build = |x: &mut crate::world::tests::Fx, expressions: Vec<Value>, name: &str| -> ObjRef {
+            let s = &mut x.w.vm.space;
+            let first = Value::structure(entry, vec![Value::Array(Rc::new(expressions)), init(5.0, None)]);
+            let conditional = Value::structure(cond, vec![Value::Bool(true), Value::Array(Rc::new(vec![first])), init(0.0, Some(unreached))]);
+            let o = s.alloc(def_class, name, None, Origin::Runtime).unwrap();
+            for (prop, v) in [
+                ("ValueFormula", off(formula)),
+                ("ConditionalInitialization", conditional),
+                ("RandomVariance", off(variance)),
+                ("RangeRestriction", Value::structure(range, vec![Value::Bool(false), Value::Bool(false)])),
+            ] {
+                let p = s.prop(def_class, prop).unwrap();
+                s.write(o, PropAddr::scalar(p), v).unwrap();
+            }
+            o
+        };
+        let attr_class = x.class("AttributeDefinition");
+        let dest = x.w.vm.space.alloc(attr_class, "Toy.Dest", None, Origin::Runtime).unwrap();
+        let always = build(&mut x, Vec::new(), "Toy.Always");
+        let data = init_with(init_ty, always);
+        let attrs = x.w.vm.attrs.clone();
+        let before = counters_of(&x);
+        attrs.preflight_set_base_value(dest, &data, &mut EvalCx::new(&mut x.w.vm)).unwrap();
+        assert_eq!(counters_of(&x), before);
+        // The control: one expression with no first operand (its second is not checked), so the entry may fail and
+        // the default is reached: the unloaded attribute there refuses.
+        let e = Value::structure(expr, vec![Value::Object(None), Value::Byte(0), Value::Byte(0), Value::Object(Some(unreached)), Value::Float(1.0)]);
+        let maybe = build(&mut x, vec![e], "Toy.Maybe");
+        let data = init_with(init_ty, maybe);
+        let refused = attrs.preflight_set_base_value(dest, &data, &mut EvalCx::new(&mut x.w.vm)).unwrap_err();
+        assert!(format!("{refused:?}").contains(ow_attr::eval::PREFLIGHT_UNLOADED), "{refused:?}");
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, unreached), "nothing was loaded");
+    });
+}
+
+/// An `InitData` with no constant or attribute and `definition` as its initialisation definition.
+fn init_with(_ty: StructId, definition: ObjRef) -> ow_attr::api::InitData {
+    ow_attr::api::InitData {
+        base_value_constant: 0.0,
+        base_value_attribute: None,
+        initialization_definition: Some(definition),
+        base_value_scale_constant: 1.0,
+    }
 }

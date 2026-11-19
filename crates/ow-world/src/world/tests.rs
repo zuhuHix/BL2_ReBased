@@ -601,6 +601,14 @@ fn package() -> Vec<u8> {
     let attr_class = t.class("AttributeDefinition", attr_base);
     let reader_class = t.class("ObjectPropertyAttributeValueResolver", object);
     t.prop("Name", reader_class, "PropertyName", 0, 0);
+    // Review r2 of #572: a context resolver class `ow-attr` implements (a pawn resolves to itself) and a valid target,
+    // a pawn with a plain float attribute (the package flag bit 62); and `Toy_AttrHolder`, whose `Attr` names the
+    // attribute export `Toy_UnreachedAttr`, an unloaded handle once the holder is loaded.
+    t.class("PawnAttributeContextResolver", object);
+    let attr_target = t.class("AttrTarget", pawn);
+    t.prop("Float", attr_target, "Toughness", 1 << 62, 0);
+    let holder_class = t.class("AttrHolder", object);
+    t.prop("Object", holder_class, "Attr", 0, object);
     let lazy_attr_ref = t.p.next_export();
     let reader_ref = lazy_attr_ref + 1;
     let mut chain = ow_package::testkit::ints(&[1]);
@@ -610,9 +618,17 @@ fn package() -> Vec<u8> {
     lazy_attr.extend_from_slice(&t.none);
     t.p.add_export(attr_class, "Toy_LazyAttr", lazy_attr);
     let mut reader = 0i32.to_le_bytes().to_vec();
-    reader.extend(t.p.name_tag("PropertyName", "Payload"));
+    reader.extend(t.p.name_tag("PropertyName", "Toughness"));
     reader.extend_from_slice(&t.none);
     t.p.add_export(reader_class, "Toy_LazyReader", reader);
+    let unreached_ref = t.p.next_export();
+    let mut unreached = 0i32.to_le_bytes().to_vec();
+    unreached.extend_from_slice(&t.none);
+    t.p.add_export(attr_class, "Toy_UnreachedAttr", unreached);
+    let mut holder = 0i32.to_le_bytes().to_vec();
+    holder.extend(t.p.object_tag("Attr", unreached_ref));
+    holder.extend_from_slice(&t.none);
+    t.p.add_export(holder_class, "Toy_AttrHolder", holder);
     // An actor class with a component field, and its component class (a Core.Component), for the instancing test.
     // Core.Component, which `core_package` defines for the instancing test (review r1 of #435).
     let core = t.p.add_import("Core", "Package", 0, "Core");

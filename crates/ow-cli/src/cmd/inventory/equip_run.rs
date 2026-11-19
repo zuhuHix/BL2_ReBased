@@ -416,13 +416,13 @@ pub(crate) fn external_records(vm: &Vm, weapon: ObjRef) -> usize {
     records(vm, weapon)
 }
 
-/// The `SetBaseValue` harness preload of `--slice-gate`'s link 8 (the hub's ruling on #572; lane IMPL-SET-BASE-VALUE):
-/// the definitions the weapon type's `AnimThresholdValues` hand to `AttributeInitializationDefinition.SetBaseValue`,
-/// which the game keeps resident. These are each entry's destination `Attribute` and that attribute's context and value
-/// resolvers, and the `BaseValue`'s `BaseValueAttribute` and `InitializationDefinition`. Each unloaded one is loaded
-/// here, before the run writes anything, and logged as an UNVERIFIED harness input with its outcome. A failed load is
-/// logged and left: the native then refuses typed. A weapon with no type, or a type with no thresholds, preloads
-/// nothing.
+/// The `SetBaseValue` harness preload of `--slice-gate`'s link 8 (the hub's ruling on #572, narrowed in its review r2;
+/// lane IMPL-SET-BASE-VALUE): only the **destination** attributes the weapon type's `AnimThresholdValues` hand to
+/// `AttributeInitializationDefinition.SetBaseValue`, which the game keeps resident, and the resolvers each destination
+/// needs: its context resolvers, and its value resolvers up to the chain's first None (where the set stops). Each
+/// unloaded one is loaded here, before the run writes anything, and logged as an UNVERIFIED harness input with its
+/// outcome; a failed load is logged and left. Every other input (a `BaseValue`'s attribute or definition, their
+/// resolvers) is not preloaded: an unloaded one reaches the native and refuses, so the slice shows it.
 pub(crate) fn preload_threshold_attributes(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
     let Some(data) = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData") else { return Ok(()) };
     let Value::Object(Some(weapon_type)) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition")?.clone() else {
@@ -431,53 +431,59 @@ pub(crate) fn preload_threshold_attributes(vm: &mut Vm, weapon: ObjRef) -> Resul
     let Some(Value::Array(entries)) = ow_inventory::equip::read_prop(vm, weapon_type, "AnimThresholdValues") else {
         return Ok(());
     };
-    let mut wanted: Vec<ObjRef> = Vec::new();
+    let mut destinations: Vec<ObjRef> = Vec::new();
     for entry in entries.iter() {
-        if let Value::Object(Some(attr)) = ow_attr::eval::field(&vm.space, entry, "Attribute")?.clone() {
-            wanted.push(attr);
-        }
-        let base = ow_attr::eval::field(&vm.space, entry, "BaseValue")?.clone();
-        for name in ["BaseValueAttribute", "InitializationDefinition"] {
-            if let Value::Object(Some(o)) = ow_attr::eval::field(&vm.space, &base, name)?.clone() {
-                wanted.push(o);
-            }
+        if let Value::Object(Some(attr)) = ow_attr::eval::field(&vm.space, entry, "Attribute")?.clone()
+            && !destinations.contains(&attr)
+        {
+            destinations.push(attr);
         }
     }
-    let mut done: Vec<ObjRef> = Vec::new();
-    let mut i = 0;
-    while i < wanted.len() {
-        let o = wanted[i];
-        i += 1;
-        if done.contains(&o) {
+    for attr in destinations {
+        if !preload(vm, attr) {
             continue;
         }
-        done.push(o);
-        if vm.defs.is_unloaded(&vm.space, o) {
-            let path = object_path(vm, o);
-            vm.log.push(format!(
-                "harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"
-            ));
-            let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
-            vm.log.extend(vm.defs.take_log());
-            match loaded {
-                Ok(()) => vm.log.push(format!("harness input: preload {path}: loaded")),
-                Err(e) => {
-                    vm.log.push(format!("harness input: preload {path}: failed ({e})"));
-                    continue;
+        let mut resolvers: Vec<ObjRef> = Vec::new();
+        if let Some(Value::Array(rs)) = ow_inventory::equip::read_prop(vm, attr, "ContextResolverChain") {
+            resolvers.extend(rs.iter().filter_map(|r| match r {
+                Value::Object(Some(r)) => Some(*r),
+                _ => None,
+            }));
+        }
+        if let Some(Value::Array(rs)) = ow_inventory::equip::read_prop(vm, attr, "ValueResolverChain") {
+            for r in rs.iter() {
+                match r {
+                    Value::Object(Some(r)) => resolvers.push(*r),
+                    _ => break,
                 }
             }
         }
-        // An attribute definition's resolvers are resident with it.
-        for chain in ["ContextResolverChain", "ValueResolverChain"] {
-            if let Some(Value::Array(rs)) = ow_inventory::equip::read_prop(vm, o, chain) {
-                wanted.extend(rs.iter().filter_map(|r| match r {
-                    Value::Object(Some(r)) => Some(*r),
-                    _ => None,
-                }));
-            }
+        for r in resolvers {
+            preload(vm, r);
         }
     }
     Ok(())
+}
+
+/// Loads `o` when it is an unloaded handle, logging the harness input and its outcome; whether `o` is readable after.
+fn preload(vm: &mut Vm, o: ObjRef) -> bool {
+    if !vm.defs.is_unloaded(&vm.space, o) {
+        return true;
+    }
+    let path = object_path(vm, o);
+    vm.log.push(format!("harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+    vm.log.extend(vm.defs.take_log());
+    match loaded {
+        Ok(()) => {
+            vm.log.push(format!("harness input: preload {path}: loaded"));
+            true
+        }
+        Err(e) => {
+            vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+            false
+        }
+    }
 }
 
 /// `o`'s dotted path from its outer chain (names only), for a harness log line.

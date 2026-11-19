@@ -361,15 +361,6 @@ read after a harness load. No slice-gate change (nothing installs the source). c
 change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-184; probe output under ignored
 `local/analysis/skel/`.
 
-**IMPL-SET-BASE-VALUE (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5).
-`AttributeInitializationDefinition.SetBaseValue` in Off from NATIVE_ATTRIBUTES.md section 1. `cargo test --workspace -j
-2` 2,453 passed / 0 failed / 46 ignored (7 new in `ow-world`); clippy flags nothing in the changed lines;
-`crate_edges_test.py` OK. Installed Off `--slice-gate` strict on a local, unpushed merge with #558, #534 and #552, plus
-throwaway stand-ins for `GetParticleEffect` and `GetExpLevelFromManufacturerData`: 1 ok / 5 notyet / 8 error. Link 8 is
-1 of 5 at `init`, stopped at this native's preflight: its destination attribute is an unloaded handle (`NotYet {
-NotRead }`, marked after the script's earlier writes). With that handle loaded by the probe, the next stop is the
-unbound `WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)`. ctest and verify_packages not run (no C++
-change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
 **IMPL-SET-BASE-VALUE (2026-11-19, pc-hummer, on main d52bcc79, after review r1 of #572):** AI-assisted (Claude Code,
 Opus 5.5). `AttributeInitializationDefinition.SetBaseValue` in Off from NATIVE_ATTRIBUTES.md section 1, with the
 write-free, load-free preflight of review r1 and the hub's harness preload of the destination attribute.

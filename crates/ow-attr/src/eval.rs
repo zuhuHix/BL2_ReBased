@@ -1123,20 +1123,33 @@ fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut Eva
             parts.push(nested(cx, &formula, name)?);
         }
     } else if enabled(cx, &conditional, "bEnabled")? {
+        // Only the branches the evaluation can reach (review r2 of #572): an entry with no expressions always holds,
+        // so the scan stops there and neither a later entry nor the default is reached. An expression's second
+        // operand is checked only when its first is set.
         let list = field_of(cx, &conditional, "ConditionalExpressionList")?;
+        let mut always = false;
         for entry in elements("ConditionalExpressionList", &list)? {
             let exprs = {
                 let space = cx.world.parts().space;
                 crate::expr::read_expressions(space, field(space, entry, "Expressions")?)?
             };
             for e in &exprs {
-                for attr in [e.attribute_operand1, e.attribute_operand2].into_iter().flatten() {
-                    check_definition(sys, attr, false, cx)?;
+                if let Some(first) = e.attribute_operand1 {
+                    check_definition(sys, first, false, cx)?;
+                    if let Some(second) = e.attribute_operand2 {
+                        check_definition(sys, second, false, cx)?;
+                    }
                 }
             }
             parts.push(nested(cx, entry, "BaseValueIfTrue")?);
+            if exprs.is_empty() {
+                always = true;
+                break;
+            }
         }
-        parts.push(nested(cx, &conditional, "DefaultBaseValue")?);
+        if !always {
+            parts.push(nested(cx, &conditional, "DefaultBaseValue")?);
+        }
     }
     let variance = required(cx, definition, "RandomVariance")?;
     if enabled(cx, &variance, "bEnabled")? {
