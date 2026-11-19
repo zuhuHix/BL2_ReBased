@@ -435,9 +435,13 @@ pub struct NumForms {
 pub struct EvalCx<'a> {
     pub world: &'a mut dyn AttrWorld,
     pub forms: NumForms,
-    /// How many committed resolver writes this evaluation made (review r1 of #458, item 4): a resolver that writes
-    /// on a read ([`EvalCx::note_writes`]) makes a later `NotYet` of the same evaluation terminal, prefixed.
+    /// How many committed resolver writes the current outer evaluation made (review r1 of #458, item 4): a resolver
+    /// that writes on a read ([`EvalCx::note_writes`]) makes a later `NotYet` of the same evaluation terminal,
+    /// prefixed. Scoped to each outer evaluation (review r3, item 2): the outermost fold resets it, nested folds share
+    /// it, so a reused context does not carry one read's writes into another.
     committed: std::cell::Cell<u32>,
+    /// How deep the value folds of this context are nested (0: no evaluation running).
+    depth: std::cell::Cell<u32>,
 }
 
 impl<'a> EvalCx<'a> {
@@ -447,7 +451,21 @@ impl<'a> EvalCx<'a> {
             world,
             forms: NumForms::default(),
             committed: std::cell::Cell::new(0),
+            depth: std::cell::Cell::new(0),
         }
+    }
+
+    /// Enters a value fold: the outermost one starts a fresh write scope. Pair with [`EvalCx::leave_fold`].
+    pub(crate) fn enter_fold(&self) {
+        if self.depth.get() == 0 {
+            self.committed.set(0);
+        }
+        self.depth.set(self.depth.get().saturating_add(1));
+    }
+
+    /// Leaves a value fold.
+    pub(crate) fn leave_fold(&self) {
+        self.depth.set(self.depth.get().saturating_sub(1));
     }
 
     /// Records that a resolver committed writes during this evaluation (module documentation of `eval`, the fold).
@@ -455,7 +473,7 @@ impl<'a> EvalCx<'a> {
         self.committed.set(self.committed.get().saturating_add(1));
     }
 
-    /// Whether any resolver committed writes during this evaluation.
+    /// Whether any resolver committed writes during the current outer evaluation.
     pub fn wrote(&self) -> bool {
         self.committed.get() > 0
     }
@@ -513,8 +531,8 @@ pub trait ValueResolver {
     /// Whether this class is available to a read in this world's mode, checked by
     /// [`AttributeSystem::preflight_read`] before anything is evaluated (review r1 of #458, item 5). The default is
     /// available. A class implemented in one mode only refuses here in the other, as an unregistered class would.
-    fn available(&self, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-        let _ = cx;
+    fn available(&self, resolver: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        let _ = (resolver, cx);
         Ok(())
     }
 
