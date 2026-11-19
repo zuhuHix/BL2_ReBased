@@ -213,10 +213,17 @@ fn an_earlier_binding_keeps_its_key() {
     assert_eq!(e.vm.call(f, Some(p), vec![]).unwrap().ret, Value::Bool(true));
 }
 
-/// The lazy case's packages (invented): a toy WillowGame whose `BodyClassDefinition` declares an invented `NextBody`,
-/// and `GD_ToyBody.upk` with two body classes. `Holder`'s `NextBody` names `Target`, so reading it from the loaded holder
-/// gives `Target` as the store's unloaded handle (the slice's case: Maya's body class at link 1's stop).
-fn lazy_packages() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+/// The lazy cases' packages (invented).
+/// - A toy WillowGame whose `BodyClassDefinition` declares an invented `NextBody`.
+/// - The bodies: two body classes, `Holder` and `Target`. `Holder`'s `NextBody` names `Target`, so reading it from the
+///   loaded holder gives `Target` as the store's unloaded handle (the slice's case: Maya's body class at link 1's
+///   stop). With `nested`, both sit under a `Package` export `GD_ToyBody` of a file `Startup.upk` (a package cooked into
+///   another file); otherwise they are the file `GD_ToyBody.upk`'s own exports.
+/// - With `helper_package`, a toy `Engine.upk` declares `InstanceDataHelper`, a class the packages hold but the class
+///   table has not loaded.
+fn lazy_vm(nested: bool, helper_package: bool) -> (Vm, PathBuf, ObjRef, ClassId, ClassId) {
+    let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-lazy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
     let core = {
         let mut t = ScriptToy::new(&[]);
         t.class("Object", 0);
@@ -230,41 +237,53 @@ fn lazy_packages() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         t.prop("Object", definition, "NextBody", 0, object);
         t.build()
     };
-    let bodies = {
+    let engine = {
         let mut t = ScriptToy::with_imports(&["Class"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        t.class("InstanceDataHelper", object);
+        t.build()
+    };
+    let bodies = {
+        let mut t = ScriptToy::with_imports(&["Class", "Package"]);
         let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
         let definition = t.p.add_import("Core", "Class", willow, "BodyClassDefinition");
+        let outer = if nested {
+            let mut payload = ow_package::testkit::ints(&[0]);
+            payload.extend_from_slice(&t.none);
+            t.p.add_export_with(ow_package::testkit::Export::new(t.import("Package"), "GD_ToyBody", payload))
+        } else {
+            0
+        };
+        let export = |t: &mut ScriptToy, name: &str, payload: Vec<u8>| {
+            let mut e = ow_package::testkit::Export::new(definition, name, payload);
+            e.outer = outer;
+            t.p.add_export_with(e)
+        };
         let mut target = ow_package::testkit::ints(&[0]);
         target.extend_from_slice(&t.none);
-        let target = t.p.add_export(definition, "Target", target);
+        let target = export(&mut t, "Target", target);
         let mut holder = ow_package::testkit::ints(&[0]);
         holder.extend(t.p.tag("NextBody", "ObjectProperty", &ow_package::testkit::ints(&[target])));
         holder.extend_from_slice(&t.none);
-        t.p.add_export(definition, "Holder", holder);
+        export(&mut t, "Holder", holder);
         t.build()
     };
-    (core, willow, bodies)
-}
-
-/// Step 3, the slice's stop: a `BodyClass` the store has not loaded is the named `NotRead`, with the record and the
-/// handle's full path, no prefix, and the handle still unloaded.
-#[test]
-fn an_unloaded_body_class_is_not_read_and_stays_unloaded() {
-    let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-lazy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    let _ = std::fs::remove_dir_all(&dir);
-    let (core, willow, bodies) = lazy_packages();
-    let files: Vec<(&str, &[u8])> =
-        vec![("Core.upk", core.as_slice()), ("WillowGame.upk", willow.as_slice()), ("GD_ToyBody.upk", bodies.as_slice())];
+    let bodies_file = if nested { "Startup.upk" } else { "GD_ToyBody.upk" };
+    let mut files: Vec<(&str, &[u8])> =
+        vec![("Core.upk", core.as_slice()), ("WillowGame.upk", willow.as_slice()), (bodies_file, bodies.as_slice())];
+    if helper_package {
+        files.push(("Engine.upk", engine.as_slice()));
+    }
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     let object = vm.find_class("Core.Object").unwrap();
     let body = vm.find_class("WillowGame.BodyClassDefinition").unwrap();
-    class(&mut vm, HELPER, object, &[]);
+    if !helper_package {
+        class(&mut vm, HELPER, object, &[]);
+    }
     let pawn = class(&mut vm, WILLOW_PAWN, object, &[("BodyClass", PropKind::Object { class: body })]);
     let player = class(&mut vm, "WillowGame.WillowPlayerPawn", pawn, &[]);
-    let a = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
-    let b = native(&mut vm, "WillowGame.WillowPlayerPawn.InitializePawnMeshes", player);
-    register(&mut vm).unwrap();
     let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
     let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
     let class_id = vm.space.heap.get(holder).unwrap().class;
@@ -273,17 +292,99 @@ fn an_unloaded_body_class_is_not_read_and_stays_unloaded() {
         panic!("the holder names its target")
     };
     assert!(vm.defs.is_unloaded(&vm.space, target), "a genuinely unloaded handle");
-    let maya = make(&mut vm, player, "Maya_6");
-    set(&mut vm, maya, "BodyClass", Value::Object(Some(target)));
-    for f in [a, b] {
-        let err = vm.call(f, Some(maya), vec![]).unwrap_err();
-        let VmError::NotYet(n) = &err else { panic!("{err:?}") };
-        assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
-        assert_eq!(n.what, lazy_body_class("GD_ToyBody.Target"));
-        assert_eq!(n.record, RECORD);
-        assert!(!ow_core::notyet::is_partial_writes(&n.what));
-        assert!(vm.defs.is_unloaded(&vm.space, target), "nothing was loaded");
+    (vm, dir, target, pawn, player)
+}
+
+/// Step 3, the slice's stop: a `BodyClass` the store has not loaded is the named `NotRead`, with the record and the
+/// handle's full path as the store names it, no prefix, and the handle still unloaded. Both a plain file and a package
+/// cooked into another file (review r2 of #522: no `Startup.` prefix).
+#[test]
+fn an_unloaded_body_class_is_not_read_and_stays_unloaded() {
+    for nested in [false, true] {
+        let (mut vm, dir, target, pawn, player) = lazy_vm(nested, false);
+        let a = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
+        let b = native(&mut vm, "WillowGame.WillowPlayerPawn.InitializePawnMeshes", player);
+        register(&mut vm).unwrap();
+        let maya = make(&mut vm, player, "Maya_6");
+        set(&mut vm, maya, "BodyClass", Value::Object(Some(target)));
+        for f in [a, b] {
+            let err = vm.call(f, Some(maya), vec![]).unwrap_err();
+            let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+            assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+            assert_eq!(n.what, lazy_body_class("GD_ToyBody.Target"), "nested {nested}");
+            assert_eq!(n.record, RECORD);
+            assert!(!ow_core::notyet::is_partial_writes(&n.what));
+            assert!(vm.defs.is_unloaded(&vm.space, target), "nothing was loaded");
+        }
+        drop(vm);
+        let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Step 2 with the helper held by a package but not in the class table (review r2 of #522): still the named `NotRead`,
+/// the class is not loaded by the lookup, and the lazy body class stays unloaded.
+#[test]
+fn a_helper_only_in_a_package_is_not_loaded_by_the_lookup() {
+    let (mut vm, dir, target, pawn, player) = lazy_vm(false, true);
+    let a = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
+    register(&mut vm).unwrap();
+    assert!(vm.space.classes.by_path(HELPER).is_none(), "the helper is not in the class table");
+    let maya = make(&mut vm, player, "Maya_7");
+    set(&mut vm, maya, "BodyClass", Value::Object(Some(target)));
+    let err = vm.call(a, Some(maya), vec![]).unwrap_err();
+    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+    assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+    assert_eq!(n.what, NO_HELPER);
+    assert!(vm.space.classes.by_path(HELPER).is_none(), "the lookup loaded nothing");
+    assert!(vm.defs.is_unloaded(&vm.space, target), "the body class was not loaded either");
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Step 2 before step 3 (review r2 of #522): a missing helper is the named `NotRead` on a pawn with no BodyClass too.
+#[test]
+fn a_missing_helper_wins_over_a_none_body_class() {
+    let mut e = env(false, None);
+    let (a, b) = functions(&mut e);
+    let p = make(&mut e.vm, e.player, "Maya_8");
+    for f in [a, b] {
+        let err = e.vm.call(f, Some(p), vec![]).unwrap_err();
+        let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+        assert_eq!(n.what, NO_HELPER);
+    }
+}
+
+/// Step 5 needs only the attachment list (review r2 of #522): with the fields the note does not name left out of the
+/// classes (no `Mesh`, `InstanceDataState`, `ReplicatedInstanceDataState`, `UseRootMotion` or `UseRootRotation`), a
+/// non-empty list is still the `LayerAbsent`.
+#[test]
+fn the_layer_absent_does_not_need_the_unrelated_fields() {
+    let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-bare-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![("Core.upk", core.as_slice())];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let object = vm.find_class("Core.Object").unwrap();
+    class(&mut vm, HELPER, object, &[]);
+    let attachments = decl(&mut vm, "Attachments", PropKind::Array(Box::new(PropKind::Int)));
+    let composition = vm.space.classes.define_struct("WillowGame.BodyClassDefinition.BodyComposition", None, vec![attachments]).unwrap();
+    let body = class(&mut vm, "WillowGame.BodyClassDefinition", object, &[("BodyComposition", PropKind::Struct(composition))]);
+    let pawn = class(&mut vm, WILLOW_PAWN, object, &[("BodyClass", PropKind::Object { class: body })]);
+    let f = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
+    register(&mut vm).unwrap();
+    let bc = make(&mut vm, body, "BodyClass_Bare");
+    set(&mut vm, bc, "BodyComposition", Value::structure(composition, vec![Value::array(vec![Value::Int(1)])]));
+    let p = make(&mut vm, pawn, "Pawn_9");
+    set(&mut vm, p, "BodyClass", Value::Object(Some(bc)));
+    let err = vm.call(f, Some(p), vec![]).unwrap_err();
+    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n:?}");
+    assert_eq!(n.what, BUILD);
     drop(vm);
     let _ = std::fs::remove_dir_all(&dir);
 }

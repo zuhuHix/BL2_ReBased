@@ -89,17 +89,18 @@ fn class_path_of(vm: &Vm, o: ObjRef) -> Result<String, VmError> {
     Ok(vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string()))
 }
 
-/// The full object path of a definition handle, from its package's export table when it stands for an export (an
-/// unloaded handle has no outer in the heap yet), without loading anything: `<package>.<export path>`. Any other
-/// object: its heap outer chain.
+/// The full object path of a definition handle, as the definition store names it (`ow_defs::identity::full_path` on
+/// its package's export table, so a package cooked into another file is not prefixed with that file's stem), without
+/// loading anything (an unloaded handle has no outer in the heap yet). Any other object: its heap outer chain.
 pub fn handle_path(vm: &Vm, o: ObjRef) -> String {
     if let Ok(x) = vm.space.heap.get(o)
         && let Origin::Export { package, index } | Origin::Resource { package, index } = x.origin
         && index > 0
     {
-        let pkg = vm.defs.packages().get(package);
-        if let Ok(inner) = pkg.path_of(index) {
-            return format!("{}.{inner}", pkg.name);
+        // The game's name for the export (review r2 of #522): a package cooked into another file (`Startup.upk`
+        // holding `GD_*`) is named by its path in the file, any other export after the file's stem.
+        if let Ok(path) = ow_defs::identity::full_path(vm.defs.packages().get(package), index) {
+            return path;
         }
     }
     object_path(&vm.space, o)

@@ -2,63 +2,52 @@
 
 AI-assisted (Claude Code). Lane IMPL-INIT-PAWN-MESHES, implementer (clean room). This lane coded
 `WillowPawn.InitializePawnMeshes()` and `WillowPlayerPawn.InitializePawnMeshes()` from
-`docs/verification/NATIVE_INIT_PAWN_MESHES.md` alone, the analyst lane ANALYST-INIT-PAWN-MESHES, PR #517 at
-5d284e27. This lane did not read the executable. There was no real-game session, so every rule stays **UNVERIFIED** in
-the running game. No dependency or crate edge was added, no bounds check was loosened, and Reference is unchanged. The
-decision number is a placeholder until the hub assigns one.
+`docs/verification/NATIVE_INIT_PAWN_MESHES.md` alone: analyst lane ANALYST-INIT-PAWN-MESHES, PR #517, at its
+review-r1 head 3217b58b. This lane did not read the executable. There was no real-game session, so every rule stays
+**UNVERIFIED** in the running game. No dependency or crate edge was added, no bounds check was loosened, and Reference
+is unchanged. The decision number is a placeholder until the hub assigns one.
 
 - **`ow-world` `world/pawn_meshes.rs` (new), Off only.** It binds one rule under both keys, first-wins: a key another
-  pack bound first keeps its binding, and no other binding of these keys exists today. In order, writing nothing:
-  1. the receiver must be a `WillowGame.WillowPawn`, or a `VmError::Script`;
-  2. `BodyClass` must be declared, as an object reference;
-  3. no `Engine.InstanceDataHelper` class: nothing;
-  4. `BodyClass` None: nothing;
-  5. **an unloaded (lazy) `BodyClass`:** `NotYet { NotRead }`, naming the unloaded body class's attachment list
-     (the hub's ruling on #517 r1: a load is a store write, so nothing is loaded);
-  6. `BodyComposition.Attachments` must be declared, and an empty list gives nothing;
-  7. a non-empty list: the receiver's `InstanceDataState`, `ReplicatedInstanceDataState` and `Mesh`, and the body
-     class's `UseRootMotion` and `UseRootRotation`, are checked, then `NotYet { LayerAbsent }` with the note's text,
-     layer and record.
-- **Nothing is written before the `LayerAbsent`** (the hub's ruling on 9554's open question 4): no switch entry, no
-  network flag, and no root-motion write, which comes after the composition build in the note's order. So there is
-  no "stopped after partial writes" prefix of the native's own.
-- **The declaration errors** are `VmError::Script` with the texts "WillowPawn.InitializePawnMeshes: <class path> has
-  no <field>" and "WillowPawn.InitializePawnMeshes: <class path>.<field> is not <kind>". The class path is the
-  receiver's (or the body class's) class.
-- **Tests:** five in `world/pawn_meshes_tests.rs`, on invented classes and a toy Core. They cover:
-  - the three empty cases, under both keys;
-  - the `LayerAbsent`, with the heap length and both objects' slots unchanged;
-  - a mistyped `Mesh`'s exact error;
-  - a receiver that is not a pawn;
+  pack bound first keeps its binding, and no other binding of these keys exists today.
+- **The note's section 6 preflight**, in five steps. It writes nothing and loads nothing: class lookups use
+  `vm.space.classes.by_path` alone, never `find_class` (hub ruling, review r1 of #522).
+  1. **The receiver:** none is `VmError::Script` "called with no pawn". A class that is not `WillowGame.WillowPawn` or
+     a subclass is "<class path> is not a WillowPawn". The function is `WillowPawn.InitializePawnMeshes`.
+  2. **The helper class:** `Engine.InstanceDataHelper` not in the class table is `NotYet { NotRead }`,
+     "WillowPawn.InitializePawnMeshes: the Engine.InstanceDataHelper class is not loaded". This is checked before the
+     body class, whatever the body class holds. A class a package holds but the table has not loaded counts as absent.
+  3. **The body class:**
+     - a class with no `BodyClass` is "<class path> declares no BodyClass";
+     - a non-object value is "BodyClass holds <kind>, not an object";
+     - None does nothing;
+     - an unloaded or failed definition handle is `NotYet { NotRead }`, "WillowPawn.InitializePawnMeshes: the
+       attachment list of the unloaded body class <object path>". The path is the store's name for the export
+       (`ow_defs::identity::full_path`). Nothing is loaded (hub ruling, review r1 of #517: a load is a store write).
+  4. **The attachments:** a malformed composition is "<class path> has no BodyComposition.Attachments array". An empty
+     list does nothing; that also covers the root-motion writes inside the gate.
+  5. **A non-empty list:** `NotYet { LayerAbsent }` with the note's text, layer and record, as soon as the non-empty
+     array is established. No other field is checked.
+- **Nothing is written in Off** (the note's hub rulings 1 and 2): no switch entry, no network flag and no root-motion
+  write. So there is no "stopped after partial writes" prefix of the native's own; a caller that wrote before adds it.
+- **Tests:** ten in `world/pawn_meshes_tests.rs`, on invented classes and toy packages. They cover:
+  - each answer above, under both keys;
+  - the `LayerAbsent` with the heap unchanged, and with the unrelated fields left out of the classes;
+  - a missing helper on a pawn with no `BodyClass`;
+  - a helper only in a package, which the lookup does not load;
+  - a genuinely unloaded store handle, in a plain file and in a package cooked into another file;
   - first-wins.
-- **Pending:** 9554's revision of #517 brings the helper predicate and the receiver error. This lane rebases onto it
-  when it lands.
 - **The gate** (installed, Off, strict, with `Engine.IsSplitScreen()` bound false locally only): 0 ok / 11 NotYet / 3
-  errors. Link 1 stops in `maya:8` at step 5's `NotRead`, because Maya's `BodyClass_Siren` is an unloaded handle at
-  that point. So under the lazy ruling the `LayerAbsent` of step 7 is not reached on the slice. Reaching it needs the
-  body class loaded earlier, by the caller or the world's set-up, which is a question for the hub.
+  errors.
+  - Link 1 stops in `maya:8` at step 3's `NotRead`, because Maya's `BodyClass_Siren` is an unloaded handle at that
+    point.
+  - Reaching the `LayerAbsent` needs the body class loaded before the native runs. The hub ruled that the spawn loads
+    it (lane SPAWN-COMPLETE).
 
-**Rebased onto #517's review-r1 head (3217b58b).** The rule now follows that note's section 6:
-- the receiver texts are "called with no pawn" and "<class path> is not a WillowPawn";
-- the helper class is looked up in the class table alone, so nothing can load. When it is absent, the answer is
-  `NotYet { NotRead }`, "WillowPawn.InitializePawnMeshes: the Engine.InstanceDataHelper class is not loaded", no longer
-  "nothing";
-- the body-class texts are "<class path> declares no BodyClass" and "BodyClass holds <kind>, not an object";
-- the lazy text is "WillowPawn.InitializePawnMeshes: the attachment list of the unloaded body class <object path>";
-- any malformed composition gives "<class path> has no BodyComposition.Attachments array";
-- the extra field preflight before the `LayerAbsent` is dropped, as the note no longer names it.
-
-So two cases now answer "nothing": `BodyClass` None and an empty list. Six tests.
-
-**Review r1 of #522 (five findings, fixed).**
-1. **Non-loading lookups (hub ruling):** `WillowPawn` and `Engine.InstanceDataHelper` are looked up with
-   `vm.space.classes.by_path`, never `find_class`, so no class code is loaded and no function registered before a
-   refusal.
-2. **The helper first:** checked right after the receiver, before `BodyClass`. A missing helper is the named
-   `NotRead` whatever the body class holds.
-3. **No masking:** the `LayerAbsent` comes as soon as the non-empty array is established. The field checks the note
-   does not name are gone, and the mistyped-`Mesh` test is replaced by a malformed-`Attachments` one.
-4. **The note's templates:** the receiver, `BodyClass` and attachment texts are the note's. The lazy refusal names the
-   handle's full object path, read from its package's export table without loading (`handle_path`).
-5. **The slice's case:** a test builds a genuinely unloaded store handle and checks the `NotRead`, its record, the full
-   path, no prefix, and that the handle is still unloaded. Seven tests.
+**History.**
+- The first version (5d284e27) answered a missing helper with "nothing" and checked fields the note does not name.
+- Rebasing onto 3217b58b and review r1 of #522 replaced both with the steps above.
+- **Review r2 of #522:**
+  - `handle_path` uses `ow_defs::identity::full_path`, so a body class in a package cooked into `Startup.upk` is
+    `GD_ToyBody.Target`, not `Startup.GD_ToyBody.Target`;
+  - three tests were added: the nested package, the missing helper with no `BodyClass`, and the bare-class
+    `LayerAbsent` together with a helper held only by a package.
