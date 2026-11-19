@@ -244,6 +244,16 @@ fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world
 /// [`run_world`] with its errors typed, for the Off pickup gate's set-up only (reviews r1 and r2 of #476): the shared
 /// runner keeps its own diagnostics.
 fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, VmError> {
+    place_world_info_t(bare_world_t(cooked, mode, |_| Ok(()))?)
+}
+
+/// [`run_world_t`]'s world before its `WorldInfo` is placed, with no object made yet: `before` runs on the VM first,
+/// right after the core natives are registered (the card's class setup, review r2 of #521, item 5).
+fn bare_world_t(
+    cooked: &Path,
+    mode: ParityMode,
+    before: impl FnOnce(&mut Vm) -> Result<(), VmError>,
+) -> Result<ow_world::world::World, VmError> {
     use ow_balance::types::{
         AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
         Playthrough,
@@ -252,6 +262,7 @@ fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World
     let attrs = AttributeSystem::standard()?;
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode);
     ow_vm::natives_core::register(&mut vm)?;
+    before(&mut vm)?;
     let balance = |e: &dyn std::error::Error| script(error_text(e));
     let snapshot = BalanceSnapshot::new(
         Playthrough::NORMAL,
@@ -266,11 +277,10 @@ fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World
     let combat = ow_combat::hit::Pack;
     let inventory = ow_inventory::manager::Pack;
     let packs: [&dyn ow_vm::api::NativePack; 2] = [&combat, &inventory];
-    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs).map_err(|e| match e {
+    ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => script(error_text(&other)),
-    })?;
-    place_world_info_t(world)
+    })
 }
 
 /// [`place_world_info`] with its errors typed (the pickup gate's set-up).
@@ -459,16 +469,28 @@ pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, 
 /// [`pickup_world`] it checks only the holder's declaration it writes, not the pickup route's schemas (section 6.2,
 /// step 4, which the card does not read; review of #491).
 ///
-/// The card's class setup (`equip::card::setup`) runs first, before any object is made. The `WillowGlobals` allocation
-/// is the set-up's first write, so a refusal after it is marked "stopped after partial writes" (review r1 of #521,
-/// item 3).
+/// The card's class setup (`equip::card::setup`) runs first, before the world exists and before any object is made
+/// (review r2 of #521, item 5). From there the three counts of `equip::card::load_mark` (heap writes, random draws,
+/// definition loads) are tracked from the first allocation, the `WorldInfo`'s default instantiation included: a
+/// refusal after any of them moved is marked "stopped after partial writes".
 pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmError> {
-    let mut world = run_world_t(cooked, ParityMode::Off)?;
-    ow_inventory::equip::card::setup(&mut world.vm)?;
+    let mut world = bare_world_t(cooked, ParityMode::Off, ow_inventory::equip::card::setup)?;
+    let before = ow_inventory::equip::card::load_mark(&world.vm);
+    match equip_world_objects(&mut world) {
+        Ok(()) => Ok(world),
+        Err(e) if ow_inventory::equip::card::load_mark(&world.vm) == before => Err(e),
+        Err(e) => Err(ow_world::pools::after_partial_writes(e)),
+    }
+}
+
+/// [`equip_world`]'s objects: the `WorldInfo`, then the globals holding the installed definition.
+fn equip_world_objects(world: &mut ow_world::world::World) -> Result<(), VmError> {
+    let info = make_t(&mut world.vm, "Engine.WorldInfo")?;
+    world.actors().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("Actors"))?.place_world_info(info)?;
     let globals = make_t(&mut world.vm, "WillowGame.WillowGlobals")?;
-    equip_globals(&mut world.vm, globals).map_err(ow_world::pools::after_partial_writes)?;
+    equip_globals(&mut world.vm, globals)?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
-    Ok(world)
+    Ok(())
 }
 
 /// [`equip_world`]'s writes after the globals' allocation: the installed definition, loaded, held by `globals`.

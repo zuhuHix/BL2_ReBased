@@ -85,19 +85,31 @@ pub fn world_globals(vm: &mut Vm) -> Result<ObjRef, VmError> {
 /// any object reference when `class` is None). A mismatch is a data error (`VmError::Script`), raised before any
 /// value is read.
 pub fn declared_reference(vm: &mut Vm, o: ObjRef, name: &str, class: Option<&str>, what: &str) -> Result<(), VmError> {
+    let want = match class {
+        Some(path) => Some(vm.find_class(path)?),
+        None => None,
+    };
+    declared_reference_to(vm, o, name, want, class.unwrap_or("object"), what)
+}
+
+/// [`declared_reference`] with the class already found (`label` names it in the error): it loads nothing.
+pub fn declared_reference_to(
+    vm: &Vm,
+    o: ObjRef,
+    name: &str,
+    want: Option<ClassId>,
+    label: &str,
+    what: &str,
+) -> Result<(), VmError> {
     let own = vm.space.heap.get(o)?.class;
     let p = vm
         .space
         .prop(own, name)
         .ok_or_else(|| bad(what, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
     let declared = vm.space.classes.decl(p).map(|d| (d.kind.clone(), d.array_dim));
-    let want = match class {
-        Some(path) => Some(vm.find_class(path)?),
-        None => None,
-    };
     match declared {
         Some((PropKind::Object { class: c }, 1)) if want.is_none_or(|w| w == c) => Ok(()),
-        other => Err(bad(what, format!("{name} is declared as {other:?}, not one {}", class.unwrap_or("object")))),
+        other => Err(bad(what, format!("{name} is declared as {other:?}, not one {label}"))),
     }
 }
 
@@ -219,7 +231,22 @@ pub fn drop_life_span_type(bands: &[(i32, i32, u8)], level: i32) -> u8 {
 /// `TheGlobalsDefinition` of `globals` when it holds a `GlobalsDefinition`, else the named `NotYet` (module
 /// documentation).
 pub fn globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
-    declared_reference(vm, globals, "TheGlobalsDefinition", Some(GEARBOX_GLOBALS_DEFINITION), what)?;
+    let gearbox = vm.find_class(GEARBOX_GLOBALS_DEFINITION)?;
+    let class = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
+    globals_definition_of(vm, globals, gearbox, class, what)
+}
+
+/// [`globals_definition`] with its two classes already found (the declared `GearboxGlobalsDefinition` and the
+/// `GlobalsDefinition` it must hold): it loads nothing and writes nothing, so a preflight may call it (review r2 of
+/// #521, item 2).
+pub fn globals_definition_of(
+    vm: &Vm,
+    globals: ObjRef,
+    gearbox: ClassId,
+    class: ClassId,
+    what: &str,
+) -> Result<ObjRef, VmError> {
+    declared_reference_to(vm, globals, "TheGlobalsDefinition", Some(gearbox), GEARBOX_GLOBALS_DEFINITION, what)?;
     let first_load =
         || -> VmError { NotYet::not_read("the globals definition's first load, which numbers the challenge list", RECORD).into() };
     // The validated holder first (review r1 of #476): None is the first load.
@@ -230,7 +257,6 @@ pub fn globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<Ob
     if vm.defs.is_unloaded(&vm.space, d) {
         return Err(lazy_definition());
     }
-    let class: ClassId = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
     if vm.space.classes.is_child_of(vm.space.heap.get(d)?.class, class) { Ok(d) } else { Err(first_load()) }
 }
 

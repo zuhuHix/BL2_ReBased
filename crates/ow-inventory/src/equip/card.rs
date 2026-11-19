@@ -102,12 +102,13 @@ fn not_read(what: &'static str) -> VmError {
 // ---- the setup, the preflight and the card schema --------------------------------------------------------------
 
 /// The classes the schema walk starts from.
-const ROOTS: [&str; 8] = [
+const ROOTS: [&str; 9] = [
     WEAPON_CLASS,
     WEAPON_TYPE_CLASS,
     WEAPON_PART_CLASS,
     super::name_parts::NAME_PART_CLASS,
     crate::globals::GLOBALS_DEFINITION_CLASS,
+    crate::globals::GEARBOX_GLOBALS_DEFINITION,
     "WillowGame.WeaponStatusEffectAttributePresentationDefinition",
     "WillowGame.AttributePresentationDefinition",
     GLOBALS_CLASS,
@@ -134,19 +135,34 @@ pub fn setup(vm: &mut Vm) -> Result<(), VmError> {
     for root in ROOTS {
         vm.find_class(root)?;
     }
-    for _ in 0..512 {
+    let mut lookups = 0;
+    let mut resolve = |vm: &mut Vm, c: ClassId| -> Result<(), VmError> {
+        lookups += 1;
+        if lookups > 512 {
+            return Err(schema("the card setup met more than 512 reserved classes".into()));
+        }
+        let path = class_name(vm, c);
+        let id = vm.find_class(&path)?;
+        if is_defined(vm, id) { Ok(()) } else { Err(schema(format!("{path} stays reserved after its lookup"))) }
+    };
+    loop {
         match walk(vm) {
-            Ok(()) | Err(Walk::Bad(_)) => return Ok(()),
-            Err(Walk::Reserved(c)) => {
-                let path = class_name(vm, c);
-                let id = vm.find_class(&path)?;
-                if !is_defined(vm, id) {
-                    return Err(schema(format!("{path} stays reserved after its lookup")));
-                }
-            }
+            Ok(()) | Err(Walk::Bad(_)) => break,
+            Err(Walk::Reserved(c)) => resolve(vm, c)?,
         }
     }
-    Err(schema("the card setup met more than 512 reserved classes".into()))
+    // The classes the name-part schema's references declare, with every parent (review r2 of #521, item 4): its
+    // `is_child_of` test needs the whole chain, and a reserved class has no parent yet.
+    for start in super::name_parts::name_part_references(vm) {
+        let mut c = Some(start);
+        while let Some(class) = c {
+            if !is_defined(vm, class) {
+                resolve(vm, class)?;
+            }
+            c = vm.space.classes.get_layout(class).and_then(|l| l.super_class());
+        }
+    }
+    Ok(())
 }
 
 /// The equip driver's preflight before the weapon is made (module documentation): the globals steps 1 to 3, the
@@ -162,7 +178,10 @@ pub fn preflight(vm: &mut Vm) -> Result<(), VmError> {
             format!("the world's globals are a {}, not a WillowGlobals", ow_attr::eval::class_path(&vm.space, globals)),
         ));
     }
-    crate::globals::globals_definition(vm, globals, WHAT)?;
+    // Both classes by `by_path` only (review r2 of #521, item 2): the setup found them.
+    let gearbox = defined_class(vm, crate::globals::GEARBOX_GLOBALS_DEFINITION, WHAT)?;
+    let class = defined_class(vm, crate::globals::GLOBALS_DEFINITION_CLASS, WHAT)?;
+    crate::globals::globals_definition_of(vm, globals, gearbox, class, WHAT)?;
     super::name_parts::name_part_schema(vm)?;
     card_schema(vm)
 }
@@ -835,14 +854,15 @@ fn write_card(vm: &mut Vm, weapon: ObjRef, card: &Card) -> Result<(), VmError> {
     Ok(())
 }
 
-/// What the store and the heap hold: it changes when a definition is loaded (or fails to load) or an object is
-/// allocated, both writes in Off.
-fn load_mark(vm: &Vm) -> (usize, usize) {
-    (vm.defs.settled_handles(), vm.space.heap.len())
+/// The write tracker (the hub's design, review r2 of #521; #518's counters): the heap's committed writes, the random
+/// streams' draws and the store's load transitions, three counts that only grow. Each is a write in Off.
+pub fn load_mark(vm: &Vm) -> (u64, u64, u64) {
+    (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions())
 }
 
-/// `f`'s result, a failure marked "stopped after partial writes" when `f` loaded a definition or allocated an object
-/// before it ([`load_mark`]; review r1 of #521, item 2). This covers the loads of attribute evaluation too.
+/// `f`'s result, a failure marked "stopped after partial writes" when any of the three counts of [`load_mark`] moved
+/// before it (review r2 of #521, item 1): a heap write, a random draw (an effect's variance, for one) or a definition
+/// load, the ones attribute evaluation makes included.
 pub(crate) fn marked_after_loads<T>(
     vm: &mut Vm,
     f: impl FnOnce(&mut Vm) -> Result<T, VmError>,

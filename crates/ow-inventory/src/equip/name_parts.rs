@@ -55,6 +55,44 @@ pub const NAME_PART_CLASS: &str = "WillowGame.WeaponNamePartDefinition";
 
 const SCHEMA: &str = "ChooseRandomNameParts (the name-part schema)";
 
+/// The classes the name-part schema's references declare: `DefinitionData`'s `PrefixPartDefinition` and
+/// `TitlePartDefinition`, and the elements of `PrefixList` and `TitleList` on the type and the part. The card's setup
+/// resolves them and their parents (review r2 of #521, item 4). Read-only; a class or field the schema would refuse is
+/// skipped, and [`name_part_schema`] reports it.
+pub(crate) fn name_part_references(vm: &Vm) -> Vec<ClassId> {
+    let defined = |path: &str| super::card::defined_class(vm, path, SCHEMA).ok();
+    let mut out = Vec::new();
+    let mut push = |kind: &PropKind| match kind {
+        PropKind::Object { class } => out.push(*class),
+        PropKind::Array(inner) => {
+            if let PropKind::Object { class } = **inner {
+                out.push(class);
+            }
+        }
+        _ => {}
+    };
+    if let Some(weapon) = defined(WEAPON_CLASS)
+        && let Ok(PropKind::Struct(ty)) = declared(vm, weapon, "DefinitionData")
+        && let Some(layout) = vm.space.classes.struct_layout(ty)
+    {
+        for name in ["PrefixPartDefinition", "TitlePartDefinition"] {
+            if let Some((_, d)) = vm.space.names.find(name).and_then(|id| layout.field(id)) {
+                push(&d.kind);
+            }
+        }
+    }
+    for path in [WEAPON_TYPE_CLASS, WEAPON_PART_CLASS] {
+        if let Some(class) = defined(path) {
+            for list in ["PrefixList", "TitleList"] {
+                if let Some(d) = vm.space.prop(class, list).and_then(|p| vm.space.classes.decl(p)) {
+                    push(&d.kind);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The declared kinds the name-part rule reads (the note's section 5.1), checked on the declared classes; each
 /// failure is a `VmError::Script` naming the field.
 pub fn name_part_schema(vm: &Vm) -> Result<(), VmError> {

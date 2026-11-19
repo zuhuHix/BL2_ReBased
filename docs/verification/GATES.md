@@ -98,6 +98,14 @@ bridge). Installed Off `--slice-gate` strict (release build, under the machine l
 current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and verify_packages not run (no C++ change).
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
+**IMPL-CACHE-WEAPON-CARD-BODY r2 (2026-11-19, desktop, on #521 at d479a55):** AI-assisted (Claude Code, Claude Opus
+5.5). #518's three write counters (copied unchanged from 211484a) mark the card's refusals, random draws included.
+The preflight's globals check loads nothing, the setup resolves the name-part ancestry, and `equip_world` runs the
+setup before the world exists. `cargo test --workspace -j 2`: 2,486 passed / 0 failed / 46 ignored (30 in
+`equip::card::tests`). Logs are in `local/p2/cwcb-r2/`. Installed Off `--slice-gate` strict, under the lock: 0 ok /
+6 NotYet / 8 errors. Link 8 is unchanged at 1 of 5 (stop `init` at the card's slot count), and the other rows match
+r1.
+
 **IMPL-CACHE-WEAPON-CARD-BODY r1 (2026-11-19, desktop, on #506 at 848ffc6):** AI-assisted (Claude Code, Claude Opus
 5.5). The preflight is read-only, with an explicit card setup; the slot count comes first; loads are tracked; base values
 are read; first-wins binding; `Role` is checked as an enum. `cargo test --workspace -j 2` 2,481 passed / 0 failed / 46

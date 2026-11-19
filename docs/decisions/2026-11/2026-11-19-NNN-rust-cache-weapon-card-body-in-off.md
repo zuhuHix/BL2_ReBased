@@ -97,5 +97,35 @@ three-digit numbers. The decisions check refuses it until then.
 
   Installed gate after the fix: link 8 unchanged (1 of 5, stop `init` at the card's slot count), 0 ok / 6 NotYet / 8
   errors.
+- **Review r2 of #521** (five items):
+  1. **The write tracker** is #518's three monotonic counters, taken from #518 (origin/fix/rust-483-followup at
+     211484a) unchanged so the stack folds: `Heap::committed_writes`, `GameRng::draws` and
+     `DefStore::load_transitions`. `equip::card::load_mark` records them when the computation starts. A refusal is
+     marked "stopped after partial writes" if and only if one of them moved, so a random draw now counts as a write.
+     The r1 snapshot (`DefStore::settled_handles` and the heap's object count) is gone (item 3).
+  2. **The preflight's globals check loads nothing.** `globals::globals_definition_of` takes the declared
+     `GearboxGlobalsDefinition` and the `GlobalsDefinition` as classes already found. The preflight finds both with
+     `by_path` (`defined_class`), and the setup finds them as card roots. `globals_definition` keeps its `find_class`
+     lookups for its other callers.
+  3. `settled_handles` is dropped (superseded by `load_transitions`).
+  4. **The name-part ancestry.** After the card schema walk, the setup resolves each class the name-part schema's
+     references declare: `DefinitionData`'s prefix and title parts, and `PrefixList` / `TitleList` on the type and the
+     part. It resolves each with every parent, so `is_child_of` holds for a reserved subclass of
+     `WeaponNamePartDefinition`.
+  5. **`equip_world`** runs the card setup on the VM before the world is built and before any object is made. It
+     then records the three counters and tracks from the first allocation, the `WorldInfo`'s default instantiation
+     included.
+
+  Three new synthetic tests (30 in `equip::card::tests`):
+  - through the native's binding, an effect whose initialization definition has an enabled `RandomVariance` draws
+    once, and then two equal-priority entries tie. The tie is marked once and the draw is counted, with no heap write
+    and no load; without the draw the same tie is unmarked;
+  - a reserved `GearboxGlobalsDefinition` is a preflight data error naming it, and it stays reserved;
+  - a four-package store in which the type's `PrefixList` names a reserved subclass of the name part in another
+    package. Before the setup it fails `is_child_of`; after the setup it holds.
+
+  The `reserved` store fixtures gain a `GearboxFramework` package, since the setup now resolves that root.
+  Installed gate after the fix: link 8 unchanged (1 of 5, stop `init` at the card's slot count), and the other 13
+  rows are identical to r1. 0 ok / 6 NotYet / 8 errors.
 - **Not done:** the slot count's source, the stable order of equal priorities, the display conversion and value
   formula, the visit of other definition classes, and any live check.

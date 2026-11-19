@@ -1846,13 +1846,6 @@ impl DefStore {
             )
     }
 
-    /// How many of the store's handles have settled (loaded, or failed to load). It only grows: a caller that reads it
-    /// before and after some work knows whether that work loaded a definition, which in Off is a write (lane
-    /// IMPL-CACHE-WEAPON-CARD-BODY, review r1 of #521).
-    pub fn settled_handles(&self) -> usize {
-        self.handles.borrow().entries.values().filter(|e| matches!(e, Entry::Loaded { .. } | Entry::Failed { .. })).count()
-    }
-
     /// Whether `obj` is a handle whose load already failed: [`DefStore::ensure_loaded`] returns that error again and
     /// changes nothing (one of the [`DefStore::is_unloaded`] handles; review r2 of #480, L2).
     pub fn is_failed(&self, w: &ObjectSpace, obj: ObjRef) -> bool {

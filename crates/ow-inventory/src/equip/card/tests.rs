@@ -40,6 +40,8 @@ enum Schema {
     NoGlobals,
     /// `Role` declared a plain byte, with no enum (review r1 of #521, item 7).
     PlainRole,
+    /// `GearboxGlobalsDefinition` only reserved, not defined (review r2 of #521, item 2).
+    ReservedGearbox,
 }
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
@@ -126,10 +128,16 @@ impl Fx {
         let fields = vec![decl(&mut s, "DlcItemSet", r(dlc))];
         let balance = s.classes.define("Test.InventoryBalanceDefinition", Some(object), fields).unwrap();
         // The globals and their definition.
-        let gbx_def = s.classes.define("GearboxFramework.GearboxGlobalsDefinition", Some(object), vec![]).unwrap();
+        let gbx_def = if schema == Schema::ReservedGearbox {
+            s.classes.declare("GearboxFramework.GearboxGlobalsDefinition").unwrap()
+        } else {
+            s.classes.define("GearboxFramework.GearboxGlobalsDefinition", Some(object), vec![]).unwrap()
+        };
         let fields = lists(&mut s);
-        s.classes.define(crate::globals::GLOBALS_DEFINITION_CLASS, Some(gbx_def), fields).unwrap();
-        let fields = vec![decl(&mut s, "TheGlobalsDefinition", r(gbx_def))];
+        let parent = if schema == Schema::ReservedGearbox { object } else { gbx_def };
+        s.classes.define(crate::globals::GLOBALS_DEFINITION_CLASS, Some(parent), fields).unwrap();
+        let holder = if schema == Schema::ReservedGearbox { obj.clone() } else { r(gbx_def) };
+        let fields = vec![decl(&mut s, "TheGlobalsDefinition", holder)];
         let gbx = s.classes.define("GearboxFramework.GearboxGlobals", Some(object), fields).unwrap();
         s.classes.define("WillowGame.WillowGlobals", Some(gbx), vec![]).unwrap();
         // The type, the part and the name part (a part).
@@ -843,6 +851,96 @@ fn a_failure_after_a_load_of_the_computation_is_marked() {
     assert_eq!(not_yet(e).what, TIE);
 }
 
+// ---- Review r2 of #521 -------------------------------------------------------------------------------------------
+
+/// An initialization definition whose `RandomVariance` is enabled (bounds 0 and 1): evaluating an effect that names it
+/// draws once from the attribute-variance stream.
+fn variance_definition(x: &mut Fx) -> ObjRef {
+    let (aid, object) = (x.aid, x.vm.space.classes.by_path("Core.Object").unwrap());
+    let sp = &mut x.vm.space;
+    let enabled = |sp: &mut ObjectSpace, path: &str, extra: Vec<PropertyDecl>| {
+        let mut fields = vec![decl(sp, "bEnabled", PropKind::Bool)];
+        fields.extend(extra);
+        sp.classes.define_struct(path, None, fields).unwrap()
+    };
+    let formula = enabled(sp, "Test.AttributeInitializationFormula", vec![]);
+    let conditional = enabled(sp, "Test.ConditionalInitialization", vec![]);
+    let extra = vec![
+        decl(sp, "LowerBound", PropKind::Struct(aid)),
+        decl(sp, "UpperBound", PropKind::Struct(aid)),
+        decl(sp, "bUseIntegerRandomization", PropKind::Bool),
+    ];
+    let variance = enabled(sp, "Test.AttributeInitializationRandomVariance", extra);
+    let fields =
+        vec![decl(sp, "bEnableMinValueRestriction", PropKind::Bool), decl(sp, "bEnableMaxValueRestriction", PropKind::Bool)];
+    let range = sp.classes.define_struct("Test.AttributeInitializationRangeRestriction", None, fields).unwrap();
+    let fields = vec![
+        decl(sp, "ValueFormula", PropKind::Struct(formula)),
+        decl(sp, "ConditionalInitialization", PropKind::Struct(conditional)),
+        decl(sp, "RandomVariance", PropKind::Struct(variance)),
+        decl(sp, "RangeRestriction", PropKind::Struct(range)),
+        decl(sp, "BaseValueMode", PropKind::Byte { enum_: None }),
+        decl(sp, "RoundingMode", PropKind::Byte { enum_: None }),
+    ];
+    sp.classes.define("Test.AttributeInitializationDefinition", Some(object), fields).unwrap();
+    let d = x.obj("Test.AttributeInitializationDefinition");
+    let bound = |x: &mut Fx, c: f32| x.st(aid, vec![("BaseValueConstant", Value::Float(c)), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let (low, high) = (bound(x, 0.0), bound(x, 1.0));
+    let v = x.st(variance, vec![("bEnabled", Value::Bool(true)), ("LowerBound", low), ("UpperBound", high)]);
+    x.set(d, "RandomVariance", v);
+    d
+}
+
+/// Item 1: a random draw is a write. Through the native's binding, an effect whose value draws from the variance
+/// stream, then two appended entries of equal priority: the tie refusal, marked once, with the draw counted and
+/// nothing else written.
+#[test]
+fn a_draw_then_a_refusal_through_the_binding_is_marked() {
+    let mut x = Fx::new();
+    let f = declared(&mut x);
+    let d = variance_definition(&mut x);
+    let a = x.attribute();
+    let aid = x.aid;
+    let init = x.st(
+        aid,
+        vec![("InitializationDefinition", Value::Object(Some(d))), ("BaseValueScaleConstant", Value::Float(1.0))],
+    );
+    let e = x.effect;
+    let effect = x.st(e, vec![("AttributeToModify", Value::Object(Some(a))), ("ModifierType", Value::Byte(1)), ("BaseModifierValue", init)]);
+    let (p, q) = (x.pres(2.0, None), x.pres(2.0, None));
+    let t = x.t;
+    x.set(t, "WeaponAttributeEffects", Value::array(vec![effect]));
+    x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
+    let (writes, draws, loads) = (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let w = x.weapon;
+    let n = not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err());
+    assert_eq!(n.what, format!("stopped after partial writes: {TIE}"));
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(n.record, RECORD);
+    assert_eq!(x.vm.rng.draws(), draws + 1, "one variance draw");
+    assert_eq!((x.vm.space.heap.committed_writes(), x.vm.defs.load_transitions()), (writes, loads), "no heap write, no load");
+    x.untouched();
+    // Without the draw the same tie is unmarked.
+    let mut x = Fx::new();
+    let f = declared(&mut x);
+    let (p, q) = (x.pres(2.0, None), x.pres(2.0, None));
+    let t = x.t;
+    x.set(t, "CustomPresentations", Fx::objs(&[Some(p), Some(q)]));
+    let w = x.weapon;
+    assert_eq!(not_yet(x.vm.call(f, Some(w), vec![]).unwrap_err()).what, TIE);
+}
+
+/// Item 2: the preflight's globals check looks the declared holder class up without loading it: a reserved
+/// `GearboxGlobalsDefinition` is a data error naming it, and stays reserved.
+#[test]
+fn the_preflight_globals_check_loads_no_class() {
+    let mut x = Fx::with(Schema::ReservedGearbox, ParityMode::Off);
+    let m = script(preflight(&mut x.vm).unwrap_err());
+    assert!(m.contains("GearboxFramework.GearboxGlobalsDefinition is not loaded"), "{m}");
+    let c = x.vm.space.classes.by_path("GearboxFramework.GearboxGlobalsDefinition").unwrap();
+    assert!(!x.vm.space.classes.get_layout(c).unwrap().is_defined(), "still reserved");
+}
+
 /// Item 6: a key bound before registration keeps its first handler.
 #[test]
 fn a_key_bound_first_keeps_its_handler() {
@@ -879,7 +977,7 @@ mod reserved {
     use ow_defs::DefStore;
     use ow_defs::identity::IdentityPolicy;
     use ow_object::heap::ObjectSpace;
-    use ow_package::testkit::reflect::toy_struct;
+    use ow_package::testkit::reflect::{toy_array_of, toy_struct};
     use ow_package::testkit::script::ScriptToy;
     use ow_vm::api::Vm;
     use ow_vm::error::VmError;
@@ -888,10 +986,20 @@ mod reserved {
 
     static NEXT: AtomicU32 = AtomicU32::new(0);
     const IMPORTS: [&str; 4] = ["Class", "ScriptStruct", "ObjectProperty", "StructProperty"];
+    const NAME_IMPORTS: [&str; 3] = ["Class", "ArrayProperty", "ObjectProperty"];
 
     fn engine() -> Vec<u8> {
         let mut t = ScriptToy::with_imports(&IMPORTS);
         t.class("Object", 0);
+        t.build()
+    }
+
+    /// `GearboxFramework`: `GearboxGlobalsDefinition`, the globals holder's declared type (a card root).
+    fn gearbox() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&IMPORTS);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let object = t.p.add_import("Core", "Class", engine, "Object");
+        t.class("GearboxGlobalsDefinition", object);
         t.build()
     }
 
@@ -906,7 +1014,6 @@ mod reserved {
             "WeaponTypeDefinition",
             "WeaponPartDefinition",
             "WeaponNamePartDefinition",
-            "GearboxGlobalsDefinition",
             "AttributePresentationDefinition",
             "WillowGlobals",
         ] {
@@ -944,10 +1051,15 @@ mod reserved {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let (e, w, k) = (engine(), willow_game(), toy_pkg());
+        let (e, g, w, k) = (engine(), gearbox(), willow_game(), toy_pkg());
         let defs = DefStore::from_synthetic(
             &dir,
-            &[("Engine.upk", e.as_slice()), ("WillowGame.upk", w.as_slice()), ("ToyPkg.upk", k.as_slice())],
+            &[
+                ("Engine.upk", e.as_slice()),
+                ("GearboxFramework.upk", g.as_slice()),
+                ("WillowGame.upk", w.as_slice()),
+                ("ToyPkg.upk", k.as_slice()),
+            ],
             IdentityPolicy::FirstInScanOrder,
             ParityMode::Off,
         )
@@ -973,6 +1085,73 @@ mod reserved {
         assert!(layout.is_defined() && layout.super_class().is_some(), "loaded with its ancestry");
         let m = message(card_schema(&vm).unwrap_err());
         assert!(m.contains("declares no WeaponAttributePresentationOverride"), "{m}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `WillowGame` for the name-part test: the card's roots; the type's `PrefixList` holds `ToyPkg.ToyNamePart`.
+    fn willow_names() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&NAME_IMPORTS);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let object = t.p.add_import("Core", "Class", engine, "Object");
+        let toy = t.p.add_import("Core", "Package", 0, "ToyPkg");
+        let toy_name_part = t.p.add_import("Core", "Class", toy, "ToyNamePart");
+        for c in [
+            "WillowWeapon",
+            "WeaponPartDefinition",
+            "WeaponNamePartDefinition",
+            "GlobalsDefinition",
+            "AttributePresentationDefinition",
+            "WeaponStatusEffectAttributePresentationDefinition",
+            "WillowGlobals",
+        ] {
+            t.class(c, object);
+        }
+        let ty = t.class("WeaponTypeDefinition", object);
+        toy_array_of(&mut t, ty, "PrefixList", "Object", toy_name_part);
+        t.build()
+    }
+
+    /// `ToyPkg` for the name-part test: `ToyNamePart`, a subclass of `WillowGame.WeaponNamePartDefinition`.
+    fn toy_names() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&NAME_IMPORTS);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let name_part = t.p.add_import("Core", "Class", willow, "WeaponNamePartDefinition");
+        t.class("ToyNamePart", name_part);
+        t.build()
+    }
+
+    /// Review r2 of #521, item 4: a `PrefixList` entry class that is a reserved subclass of the name part fails
+    /// `is_child_of` until its ancestry is loaded; the setup resolves it, so the name-part test holds.
+    #[test]
+    fn the_setup_resolves_a_name_part_subclass_with_its_ancestry() {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-inventory-card-names-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (e, g, w, k) = (engine(), gearbox(), willow_names(), toy_names());
+        let defs = DefStore::from_synthetic(
+            &dir,
+            &[
+                ("Engine.upk", e.as_slice()),
+                ("GearboxFramework.upk", g.as_slice()),
+                ("WillowGame.upk", w.as_slice()),
+                ("ToyPkg.upk", k.as_slice()),
+            ],
+            IdentityPolicy::FirstInScanOrder,
+            ParityMode::Off,
+        )
+        .unwrap();
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let name_part = vm.find_class("WillowGame.WeaponNamePartDefinition").unwrap();
+        vm.find_class("WillowGame.WeaponTypeDefinition").unwrap();
+        let toy = vm.space.classes.by_path("ToyPkg.ToyNamePart").expect("the list reserves its class");
+        assert!(!vm.space.classes.get_layout(toy).unwrap().is_defined());
+        assert!(!vm.space.classes.is_child_of(toy, name_part), "a reserved class has no parent yet");
+        setup(&mut vm).unwrap();
+        assert!(vm.space.classes.get_layout(toy).unwrap().is_defined());
+        assert!(vm.space.classes.is_child_of(toy, name_part), "the setup loaded its ancestry");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
