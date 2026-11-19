@@ -7,6 +7,7 @@ fn ran_ok(steps: &[&str]) -> Option<Ran> {
         steps: steps.iter().map(|s| (*s).to_string()).collect(),
         stop: None,
         error_lines: Vec::new(),
+        new_rows: Vec::new(),
     })
 }
 
@@ -84,6 +85,7 @@ fn a_stop_blocks_the_links_that_need_it_and_missing_evidence_is_an_error() {
         steps: vec!["spawn:baby:6".into()],
         stop: Some((Outcome::NotYet, stop_of_not_yet("spawn:baby:6", &n))),
         error_lines: Vec::new(),
+        new_rows: Vec::new(),
     });
     ran[index("enemy_attacks_maya")] = ran_ok(&["spawn:adult:7", "swing:1:melee"]);
     ran[index("go_down")] = ran_ok(&["cash:3000"]);
@@ -176,12 +178,14 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
         steps: vec!["use".into(), "accept".into()],
         stop: None,
         error_lines: vec![("use".into(), "mission script: unbound native A.B(name)".into())],
+        new_rows: Vec::new(),
     });
     let n = NotYet::not_read("Pawn routing", "NATIVE_AI_HOLDS.md");
     ran[index("mission_objective")] = Some(Ran {
         steps: vec!["hit:fire".into()],
         stop: Some((Outcome::NotYet, stop_of_not_yet("hit:fire", &n))),
         error_lines: Vec::new(),
+        new_rows: Vec::new(),
     });
     let past = rows(&ran, Grading::PastErrors, |_| true);
     let r = |name| &past[index(name)];
@@ -200,4 +204,59 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
     let strict = rows(&ran, Grading::Strict, |_| true);
     assert_eq!(strict[index("mission_accept")].result, Outcome::Error);
     assert_eq!(strict[index("mission_objective")].blocked_by, Some("mission_accept"));
+}
+
+/// A link's own rows (review r1 of #392): the kill's death roll writes `loot.<row class>.L<level>.<n>.*`
+/// (`ow_combat::loot::loot_rows`, keyed by the hit's id), which is link 5's evidence; `loot.roll.*` comes only from a
+/// `rollpool` step, which the gate does not run.
+#[test]
+fn link_5_is_graded_on_the_loot_rows_of_link_3_s_kill() {
+    let kill_rows = vec![
+        "hit.PrimalBeastBaby.L6.1.arriving".to_string(),
+        "kill.PrimalBeastBaby.L6.p8".to_string(),
+        "loot.PrimalBeastBaby.L6.1.item_stage".to_string(),
+        "loot.PrimalBeastBaby.L6.1.pools_tried".to_string(),
+    ];
+    let ran = Ran { new_rows: kill_rows, ..Ran::default() };
+    assert!(evidence_in(Some(&ran), "kill."));
+    assert!(evidence_in(Some(&ran), "loot."));
+    assert_eq!(LINKS[index("loot_drop_on_kill")].evidence, Evidence::Row("loot."));
+    let no_roll = Ran { new_rows: vec!["kill.PrimalBeastBaby.L6.p8".into()], ..Ran::default() };
+    assert!(!evidence_in(Some(&no_roll), "loot."), "a kill whose death roll made no rows");
+    assert!(!evidence_in(None, "loot."));
+}
+
+/// The reviewer's case: link 4's swing lands with arrival 0 (no `ratio.` row, no error) and link 13's later swings by
+/// the same adult write `ratio.` rows. Link 4 is graded on its own rows only: an error, and link 13 is blocked by it.
+#[test]
+fn a_link_is_not_graded_on_a_later_link_s_rows() {
+    let mut ran = vec![None; LINKS.len()];
+    ran[index("spawn_maya")] = ran_ok(&["maya:8", "players:1"]);
+    ran[index("enemy_attacks_maya")] = Some(Ran {
+        steps: vec!["spawn:adult:7".into(), "swing:0:melee".into()],
+        new_rows: vec!["health.PrimalBeastAdult.L7".into(), "arrival.PrimalBeastAdult.L7".into()],
+        ..Ran::default()
+    });
+    ran[index("go_down")] = Some(Ran {
+        steps: vec!["swing:0:melee".into()],
+        new_rows: vec!["arrival.PrimalBeastAdult.L7#2".into(), "ratio.PrimalBeastAdult.L7".into(), "down.total.1".into()],
+        ..Ran::default()
+    });
+    let graded = rows(&ran, Grading::Strict, |i| match LINKS[i].evidence {
+        Evidence::Row(prefix) => evidence_in(ran[i].as_ref(), prefix),
+        _ => true,
+    });
+    let attack = &graded[index("enemy_attacks_maya")];
+    assert_eq!(attack.result, Outcome::Error);
+    assert!(attack.stop.as_ref().unwrap().text.contains("ratio."));
+    assert_eq!(graded[index("go_down")].blocked_by, Some("enemy_attacks_maya"));
+}
+
+/// The per-link diff counts a repeated id each time (two kills of one class give the same kill id).
+#[test]
+fn new_ids_is_a_multiset_difference() {
+    let before = vec!["kill.A.L1.p8".to_string(), "health.A.L1".to_string()];
+    let after = ["health.A.L1", "kill.A.L1.p8", "kill.A.L1.p8", "loot.A.L1.2.items_dropped"];
+    assert_eq!(new_ids(&before, after.into_iter()), vec!["kill.A.L1.p8".to_string(), "loot.A.L1.2.items_dropped".into()]);
+    assert!(new_ids(&before, before.iter().map(String::as_str)).is_empty());
 }

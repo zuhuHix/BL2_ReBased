@@ -37,7 +37,12 @@ game.
 - **Grading.**
   - **Strict, the default and the gate.** A link stops at its first `NotYet`, error line, failed step or step error. With
     no stop it is ok only if its evidence is there:
-    - a row of the combat report: `kill.`, `ratio.`, `loot.roll.`, `down.total.` or `down.respawn_health.`;
+    - a row of the combat report **that the link's own steps added** (review r1 of #392: not any row of the final
+      report, which a later link's swings could fill): `kill.`, `ratio.`, `loot.`, `down.total.` or
+      `down.respawn_health.`. Link 5 has no steps and is graded on the rows link 3's hit added: its death roll writes
+      `loot.<row class>.L<level>.<n>.*` (`ow_combat::loot::loot_rows`). The first version tested `loot.roll.`, which only
+      the `rollpool` step writes, so link 5 could never be ok. The combat run gained a read-only `Run::row_ids` for
+      this;
     - for the Fire links, the mission status after the link: 1, 2 or 3.
 
     Without the evidence the link is an error. A link whose prerequisite is not ok is not run: it takes that link's
@@ -56,7 +61,8 @@ game.
     - a stop present exactly when the result is not ok;
     - `blocked_by` and `after_errors_in` name an earlier link that is not ok, and a blocked row carries that link's
       result;
-    - no ok row without a driver.
+    - no ok row without a driver;
+    - no `error_lines` on an ok row, nor on any row under strict grading (review r1 of #392).
   - It prints the per-link table and the counts, and can write them as markdown and JSON.
   - It passes only 14 ok under strict grading (exit 0). A past-errors run never passes. A malformed run exits 2.
 - **Proof.**

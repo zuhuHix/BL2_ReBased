@@ -1086,6 +1086,13 @@ impl Run {
         &self.errors
     }
 
+    /// The ids of the report's rows so far, read only: the value rows, then one id per kill row (a repeated kill id
+    /// repeats; the report letters them). Lane SLICE-RUN-OFF: the slice gate grades each link on the rows its own steps
+    /// added.
+    pub fn row_ids(&self) -> impl Iterator<Item = &str> {
+        self.rows.keys().map(String::as_str).chain(self.kill_rows.iter().map(|k| k.id.as_str()))
+    }
+
     /// Pawn `n` of the spawn steps, in spawn order.
     pub fn enemy(&self, n: usize) -> Option<Enemy> {
         self.pawns.get(n).map(|s| s.enemy)
