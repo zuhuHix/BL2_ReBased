@@ -4,6 +4,12 @@
 //!
 //! **Why Off only.** Reference keeps its stub policy (a zero for an unbound native), so Reference is unchanged.
 //!
+//! **Placeholders lose to nothing registered earlier, and win over everything registered later.** Binding is
+//! first-wins ([`bind_fn`] skips a key already bound), and this module registers last in `ow_combat::hit::Pack`. So a
+//! real binding of one of these keys from a pack registered after the combat pack (the skill manager, pawn data or
+//! skill tree packs `cmd/combat.rs` adds) would silently lose to the placeholder here. A lane that gives one of them a
+//! real answer must replace its entry here, or register its pack before the combat pack.
+//!
 //! **No prefix here.** Each `NotYet` below is answered at the native's entry, before any write of its own, as a plain
 //! `NotYet`. The layer that wrote before (the combat run, the slice gate, the attribute evaluator) marks an escaping
 //! `NotYet` "stopped after partial writes" (NATIVE_GO_DOWN_PATH.md section 1). Grade by the kind, never by text.
@@ -33,7 +39,7 @@ use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
-use crate::hit::access::{error, integer, is_a, required, truth};
+use crate::hit::access::{error, get, integer, is_a, required, truth};
 use crate::hit::{arg_object, arg_truth, bind_fn, call_method, this, with_state};
 
 /// Where these rules are written down.
@@ -77,8 +83,8 @@ pub const NOT_READ: [(&str, &str, &str); 9] = [
     ),
     ("Engine.Actor.SetCollision", "Actor.SetCollision: the collision hash and touch updates", RECORD),
     ("Engine.Actor.SetCollisionSize", "Actor.SetCollisionSize: the component's world update", RECORD),
-    ("Engine.Actor.SetLocation", "Actor.SetLocation: not read", RECORD),
-    ("Engine.Actor.SetRotation", "Actor.SetRotation: not read", RECORD),
+    ("Engine.Actor.SetLocation", "Actor.SetLocation: not read", RECORD_RESPAWN),
+    ("Engine.Actor.SetRotation", "Actor.SetRotation: not read", RECORD_RESPAWN),
     ("Engine.Controller.IsUsingVehicle", "Controller.IsUsingVehicle", RECORD),
     (
         "WillowGame.WillowLeviathanService.RecordCharacterKilledEventForPlayer",
@@ -157,6 +163,18 @@ fn world(vm: &Vm) -> Result<ObjRef, VmError> {
         .ok_or_else(|| NotYet::layer_absent("the world's WorldInfo", "ow-world (World::new)", RECORD).into())
 }
 
+/// The actor's world (notes 3.1 and 3.5): the receiver's own `WorldInfo` field when its class declares it and it is
+/// set, as the behavior kernel's `CanPlayBehaviorData` reads it; else the world's (the combat state's); with neither,
+/// `NotYet { LayerAbsent }`, "the world's WorldInfo".
+fn actor_world(vm: &mut Vm, me: ObjRef) -> Result<ObjRef, VmError> {
+    if let Some(v) = get(vm, me, "WorldInfo")? {
+        if let Some(w) = crate::hit::access::object_of(&v) {
+            return Ok(w);
+        }
+    }
+    world(vm)
+}
+
 /// The local players: the level's list when the VM has a world's actor service, else the controllers the combat
 /// run made.
 fn local_player_count(vm: &Vm) -> Result<usize, VmError> {
@@ -193,7 +211,7 @@ fn networked(vm: &mut Vm, world: ObjRef, what: &str) -> Result<bool, VmError> {
 }
 
 /// `Pawn.IsLocallyControlled` (3.1): the pawn's `Controller`, else its `DrivenVehicle`'s; none is false; a standalone
-/// world is true (an Off assumption); a networked one is `NotRead`.
+/// world ([`actor_world`]) is true (an Off assumption); a networked one is `NotRead`.
 fn is_locally_controlled(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "Pawn.IsLocallyControlled";
     let me = this(c, WHAT)?;
@@ -206,7 +224,7 @@ fn is_locally_controlled(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if controller.is_none() {
         return Ok(Value::Bool(false));
     }
-    let world = world(c.vm)?;
+    let world = actor_world(c.vm, me)?;
     if networked(c.vm, world, WHAT)? {
         return Err(NotYet::not_read("Pawn.IsLocallyControlled on a networked world", RECORD).into());
     }
@@ -218,13 +236,13 @@ fn object_required(vm: &mut Vm, o: ObjRef, name: &str, what: &str) -> Result<Opt
     Ok(crate::hit::access::object_of(&required(vm, o, name, what)?))
 }
 
-/// `WillowPlayerController.GetSkillManager` (3.5): the world's game info (`WorldInfo.Game`, an Off assumption) when
-/// it is a `WillowGameInfo`, through its own `GetSkillManager`; else None. It writes nothing.
+/// `WillowPlayerController.GetSkillManager` (3.5): the controller's world's game info (`WorldInfo.Game`, an Off
+/// assumption) when it is a `WillowGameInfo`, through its own `GetSkillManager`; else None. No world is not a None
+/// answer but a missing layer ([`actor_world`]: `NotYet { LayerAbsent }`). It writes nothing.
 fn get_skill_manager(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "WillowPlayerController.GetSkillManager";
-    let Some(world) = with_state(c.vm, |s| s.world)? else {
-        return Ok(Value::Object(None));
-    };
+    let me = this(c, WHAT)?;
+    let world = actor_world(c.vm, me)?;
     let Some(game) = object_required(c.vm, world, "Game", WHAT)? else {
         return Ok(Value::Object(None));
     };

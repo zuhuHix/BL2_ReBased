@@ -60,8 +60,10 @@
 //! - `PlayLocal` when the owner's pawn's `Controller` answers `IsLocalController()` true (read as the stock "locally
 //!   controlled", UNVERIFIED). The owner's pawn is the owner itself when it is an `Engine.Pawn`; another owner's pawn
 //!   is not read: `NotYet`. No controller: false. The side tests run before any behavior, so `IsLocalController` is
-//!   called only when its binding is on [`READ_ONLY_QUERIES`] (the stock `Controller.IsLocalController`, which no lane
-//!   binds yet); a script override, another binding or an unbound native is `NotYet` before it is invoked.
+//!   called only when its binding is on [`READ_ONLY_QUERIES`] (the stock `Controller.IsLocalController`). Since lane
+//!   IMPL-GO-DOWN-NATIVES (`ow_combat::go_down`, Off) that key is bound to a plain `NotYet { NotRead }` (the class's
+//!   own implementation is not resolved), so `PlayLocal` gets that native's `NotRead` in the preflight, and nothing is
+//!   written. A script override, another binding or an unbound native is `NotYet` before it is invoked.
 //! - **What the preflight cannot know** (hub ruling, review r3 of #439): it refuses what is cheap and certain up front
 //!   (the dispatch shape, the VM's call-entry check including an unbound native in Off and the body's decoding). A
 //!   refusal the VM finds only inside a behavior that runs after an earlier one wrote state is the terminal
@@ -113,8 +115,10 @@ pub const ANIM_EVENTS: [&str; 4] = [
     "Engine.GearboxAnimDefinition.OnServerStart",
 ];
 /// The side tests' read-only queries: the only bindings a preflight may call (review r3 of #439, item 1). The stock
-/// `Controller.IsLocalController`, a query; no lane of the port binds it yet, so until one does, `PlayLocal` is
-/// `NotYet` in a run.
+/// `Controller.IsLocalController`, a query. In Off it is bound (`ow_combat::go_down`, lane IMPL-GO-DOWN-NATIVES) to a
+/// `NotYet { NotRead }` that writes nothing, so `PlayLocal` gets that `NotRead` in the preflight. The separate
+/// `PlayerController.IsLocalController` key is not listed: a preflight that resolves it refuses `NotYet` before invoking
+/// it, the same kind its binding would answer.
 pub const READ_ONLY_QUERIES: [&str; 1] = ["Controller.IsLocalController()"];
 /// The instance-data interface (NATIVE_BEHAVIOR_CONTEXT.md: the Engine `IInstanceData` interface).
 pub const INSTANCE_DATA_INTERFACE: &str = "Engine.IInstanceData";

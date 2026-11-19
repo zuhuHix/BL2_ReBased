@@ -85,7 +85,7 @@ fn env(mode: ParityMode) -> Env {
     // An invented NetMode enum, standalone not first, so the rule reads it by name.
     let names = ["NM_Client", "NM_Standalone", "NM_ListenServer"].map(|n| vm.space.names.intern(n)).to_vec();
     let net_mode = vm.space.classes.define_enum("Engine.WorldInfo.ENetMode", names).unwrap();
-    let actor = class(&mut vm, "Engine.Actor", object, &[]);
+    let actor = class(&mut vm, "Engine.Actor", object, &[("WorldInfo", o.clone())]);
     let world_info = class(&mut vm, "Engine.WorldInfo", actor, &[
         ("NetMode", PropKind::Byte { enum_: Some(net_mode) }),
         ("Game", o.clone()),
@@ -168,6 +168,7 @@ fn world(e: &mut Env, net_mode: u8) -> ObjRef {
 
 const STANDALONE: u8 = 1;
 const CLIENT: u8 = 0;
+const LISTEN_SERVER: u8 = 2;
 
 #[test]
 fn reference_binds_none_of_them() {
@@ -274,7 +275,8 @@ fn the_controller_skill_manager_is_the_willow_game_infos() {
     e.vm.register_native(&key, Rc::new(move |_| Ok(Value::Object(Some(manager))))).unwrap();
     super::register(&mut e.vm).unwrap();
     let c = make(&mut e.vm, e.controller, "WPC_0");
-    assert_eq!(e.vm.call(f, Some(c), vec![]).unwrap().ret, Value::Object(None), "no world");
+    let err = e.vm.call(f, Some(c), vec![]).unwrap_err();
+    assert!(matches!(kind(&err), Some(Missing::LayerAbsent(_))), "no world is a missing layer, not None: {err:?}");
     let w = world(&mut e, STANDALONE);
     let other = make(&mut e.vm, e.object, "NotAGameInfo");
     set(&mut e.vm, w, "Game", Value::Object(Some(other))).unwrap();
@@ -359,4 +361,122 @@ fn the_vehicle_test_and_the_dialog_stop() {
     set(&mut e.vm, d, "EventData", Value::Object(Some(data))).unwrap();
     let err = e.vm.call(stop, Some(d), vec![Value::Name(none), Value::Bool(false)]).unwrap_err();
     assert!(matches!(kind(&err), Some(Missing::NotPorted)), "a live line: {err:?}");
+}
+
+/// Section 3.1, review r1 of #500: the own controller, a driverless vehicle, a listen server, and the actor's own
+/// `WorldInfo` read before the combat state's.
+#[test]
+fn is_locally_controlled_reads_the_actor_s_own_world() {
+    let mut e = env(ParityMode::Off);
+    let f = native(&mut e.vm, "Engine.Pawn.IsLocallyControlled", e.pawn, &[], Some(PropKind::Bool));
+    super::register(&mut e.vm).unwrap();
+    let me = make(&mut e.vm, e.pawn, "Pawn_8");
+    let controller = make(&mut e.vm, e.controller, "Controller_8");
+    set(&mut e.vm, me, "Controller", Value::Object(Some(controller))).unwrap();
+    let err = e.vm.call(f, Some(me), vec![]).unwrap_err();
+    assert!(matches!(kind(&err), Some(Missing::LayerAbsent(_))), "a controller and no world: {err:?}");
+    let own = make(&mut e.vm, e.world_info, "OwnWorld");
+    set(&mut e.vm, own, "NetMode", Value::Byte(STANDALONE)).unwrap();
+    set(&mut e.vm, me, "WorldInfo", Value::Object(Some(own))).unwrap();
+    assert_eq!(e.vm.call(f, Some(me), vec![]).unwrap().ret, Value::Bool(true), "the own controller, the own world");
+    world(&mut e, CLIENT);
+    assert_eq!(e.vm.call(f, Some(me), vec![]).unwrap().ret, Value::Bool(true), "the actor's world wins");
+    set(&mut e.vm, own, "NetMode", Value::Byte(LISTEN_SERVER)).unwrap();
+    assert!(not_read(&e.vm.call(f, Some(me), vec![]).unwrap_err()), "a listen server is networked");
+    let other = make(&mut e.vm, e.pawn, "Pawn_9");
+    let vehicle = make(&mut e.vm, e.pawn, "Vehicle_9");
+    set(&mut e.vm, other, "DrivenVehicle", Value::Object(Some(vehicle))).unwrap();
+    assert_eq!(e.vm.call(f, Some(other), vec![]).unwrap().ret, Value::Bool(false), "a vehicle with no controller");
+}
+
+/// Section 3.4, review r1 of #500: every kind of the test refuses, any other answers -1, and a missing status-effect
+/// component answers -1 with a death definition set.
+#[test]
+fn tech_death_kinds_and_the_missing_component() {
+    let mut e = env(ParityMode::Off);
+    let f = native(
+        &mut e.vm,
+        "WillowGame.WillowPawn.GetTechDeathIndexForDamageType",
+        e.willow_pawn,
+        &[("DamageType", PropKind::Object { class: e.object }, 0)],
+        Some(PropKind::Int),
+    );
+    super::register(&mut e.vm).unwrap();
+    let me = make(&mut e.vm, e.willow_pawn, "Enemy_3");
+    let dt = make(&mut e.vm, e.damage_type, "DT_Toy2");
+    let def = make(&mut e.vm, e.object, "Death_2");
+    set(&mut e.vm, me, "MyDeathDef", Value::Object(Some(def))).unwrap();
+    set(&mut e.vm, dt, "DamageType", Value::Byte(1)).unwrap();
+    let call = |e: &mut Env| e.vm.call(f, Some(me), vec![Value::Object(Some(dt))]);
+    assert_eq!(call(&mut e).unwrap().ret, Value::Int(-1), "no status-effect component");
+    let comp = make(&mut e.vm, e.object, "Effects_3");
+    set(&mut e.vm, me, "StatusEffectComp", Value::Object(Some(comp))).unwrap();
+    for k in 0..=8u8 {
+        set(&mut e.vm, dt, "DamageType", Value::Byte(k)).unwrap();
+        let tested = super::TECH_DEATH_KINDS.contains(&i64::from(k));
+        match call(&mut e) {
+            Ok(r) => assert!(!tested && r.ret == Value::Int(-1), "kind {k}: {:?}", r.ret),
+            Err(err) => assert!(tested && not_read(&err), "kind {k}: {err:?}"),
+        }
+    }
+}
+
+/// Section 4.2, review r1 of #500: more than one local player is split screen.
+#[test]
+fn split_screen_with_two_players() {
+    let mut e = env(ParityMode::Off);
+    let engine = class(&mut e.vm, "Engine.Engine", e.object, &[]);
+    let split = native(&mut e.vm, "Engine.Engine.IsSplitScreen", engine, &[], Some(PropKind::Bool));
+    super::register(&mut e.vm).unwrap();
+    let en = make(&mut e.vm, engine, "GameEngine_1");
+    let one = make(&mut e.vm, e.controller, "WPC_1");
+    crate::hit::with_state(&e.vm, |s| s.players.push(one)).unwrap();
+    assert_eq!(e.vm.call(split, Some(en), vec![]).unwrap().ret, Value::Bool(false), "one player");
+    let two = make(&mut e.vm, e.controller, "WPC_2");
+    crate::hit::with_state(&e.vm, |s| s.players.push(two)).unwrap();
+    assert_eq!(e.vm.call(split, Some(en), vec![]).unwrap().ret, Value::Bool(true), "two players");
+}
+
+/// Review r1 of #500: the out vehicle, a live line's other half, `SetAnchor`'s kind and more section 3.2 keys.
+#[test]
+fn the_out_vehicle_the_half_line_and_the_named_kinds() {
+    let mut e = env(ParityMode::Off);
+    let o = PropKind::Object { class: e.object };
+    let ex = native(
+        &mut e.vm,
+        "Engine.Controller.IsUsingVehicleEx",
+        e.controller,
+        &[("bCheckDrivenVehicle", PropKind::Bool, PropertyDecl::OPTIONAL), ("Vehicle", o.clone(), PropertyDecl::OUT | PropertyDecl::OPTIONAL)],
+        Some(PropKind::Bool),
+    );
+    let stop = native(
+        &mut e.vm,
+        "GearboxFramework.GearboxDialogComponent.StopTalking",
+        e.dialog,
+        &[("Tag", PropKind::Name, PropertyDecl::OPTIONAL), ("bForce", PropKind::Bool, PropertyDecl::OPTIONAL)],
+        None,
+    );
+    let anchor = native(&mut e.vm, "Engine.Pawn.SetAnchor", e.pawn, &[("NewAnchor", o.clone(), 0)], None);
+    let stance = native(&mut e.vm, "WillowGame.WillowPlayerPawn.SetDefaultStance", e.player_pawn, &[], None);
+    let hidden = native(&mut e.vm, "Engine.Actor.SetHidden", e.pawn, &[("bNewHidden", PropKind::Bool, 0)], None);
+    super::register(&mut e.vm).unwrap();
+    let c = make(&mut e.vm, e.controller, "Controller_6");
+    let stale = make(&mut e.vm, e.pawn, "StaleVehicle");
+    let r = e.vm.call(ex, Some(c), vec![Value::Bool(true), Value::Object(Some(stale))]).unwrap();
+    assert_eq!(r.ret, Value::Bool(false));
+    assert_eq!(r.outs.get(1), Some(&Value::Object(None)), "the out vehicle is cleared: {:?}", r.outs);
+    let d = make(&mut e.vm, e.dialog, "Dialog_1");
+    let data = make(&mut e.vm, e.event_data, "Event_1");
+    set(&mut e.vm, d, "EventData", Value::Object(Some(data))).unwrap();
+    let none = e.vm.space.names.intern("None");
+    assert_eq!(
+        e.vm.call(stop, Some(d), vec![Value::Name(none), Value::Bool(false)]).unwrap().ret,
+        Value::None,
+        "event data with no live act is no live line"
+    );
+    let p = make(&mut e.vm, e.player_pawn, "Maya_3");
+    let err = e.vm.call(anchor, Some(p), vec![Value::Object(None)]).unwrap_err();
+    assert!(matches!(kind(&err), Some(Missing::NotPorted)), "SetAnchor: {err:?}");
+    assert!(not_read(&e.vm.call(stance, Some(p), vec![]).unwrap_err()), "SetDefaultStance");
+    assert!(not_read(&e.vm.call(hidden, Some(p), vec![Value::Bool(true)]).unwrap_err()), "SetHidden");
 }

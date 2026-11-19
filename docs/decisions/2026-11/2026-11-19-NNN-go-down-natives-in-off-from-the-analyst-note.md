@@ -55,3 +55,22 @@ a placeholder until the hub assigns one.
   the unbound `GameEngine.GetOnlineSubsystem()`, which is not on this lane's list. The installed Off gate on this
   branch gave 0 ok, 5 notyet, 9 error of 14. Its JSONL is byte-identical to that of main d72b96d, run back to back
   under the machine lock.
+
+**Review r1 of #500 (five findings, fixed).**
+1. **The actor's world.** `GetSkillManager` and `IsLocallyControlled` read the receiver's own `WorldInfo` field
+   first, as the behavior kernel's `CanPlayBehaviorData` does, and fall back to the combat state's world. With
+   neither, the answer is `NotYet { LayerAbsent }`, "the world's WorldInfo", not a None skill manager. The None
+   answer stays for a game info that is not a `WillowGameInfo`.
+2. **`ow-behavior`'s kernel documentation** now says that `Controller.IsLocalController` is bound and allow-listed.
+   `PlayLocal` gets the native's `NotRead` in the preflight, and nothing is written.
+3. **The module documentation** says that binding is first-wins. A lane that gives one of these keys a real answer
+   replaces the placeholder entry here, or registers its pack before the combat pack.
+4. **Tests added:**
+   - `IsLocallyControlled`: the own-controller path, a listen server, a driven vehicle with no controller, and the
+     actor's own world;
+   - `GetTechDeathIndexForDamageType`: every kind from 0 to 8, and a missing status-effect component;
+   - `IsSplitScreen` with two players;
+   - `IsUsingVehicleEx`'s out vehicle;
+   - `StopTalking` with event data but no live act;
+   - `SetAnchor`'s `NotPorted`, and `SetDefaultStance` and `SetHidden`.
+5. **The record** for `SetLocation` and `SetRotation` is NATIVE_RESPAWN_STATIONS.md, as the note's table says.
