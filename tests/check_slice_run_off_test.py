@@ -170,10 +170,18 @@ class Parse(unittest.TestCase):
         rows = all_ok()
         self.assertEqual((rows[1]['driver'], rows[1]['result']), ('sanctuary-walk', 'ok'))
         self.assertEqual(chk.counts(chk.parse(lines(rows))), {'ok': 14, 'notyet': 0, 'error': 0})
-        for steps in (['load', 'spawn', 'walk'], [], 'fight_area'):
-            rows[1] = dict(rows[1], steps=steps)
+        good = rows[1]
+        for steps in (['load', 'spawn', 'walk'], [], 'fight_area', ['fight_area'], ['spawn', 'load', 'walk', 'fight_area'],
+                      ['load', 'spawn', 'walk', 'fight_area', 'fight_area'], ['load', 'walk', 'fight_area']):
+            rows[1] = dict(good, steps=steps)
             with self.assertRaises(chk.Malformed, msg=f'an ok sanctuary-walk row with steps {steps!r}'):
                 chk.parse(lines(rows))
+        # Review r1 of #470: another driver cannot carry an ok reach_fight_area row, even with the four steps.
+        for driver in ('combat-run', 'slice-run'):
+            rows[1] = dict(good, driver=driver)
+            with self.assertRaises(chk.Malformed, msg=f'an ok reach_fight_area row driven by {driver}'):
+                chk.parse(lines(rows))
+        rows[1] = good
         rows[1] = dict(rows[1], steps=['load', 'spawn', 'walk'], result='notyet', stop=stop())
         chk.parse(lines(rows))
 
