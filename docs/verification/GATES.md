@@ -191,6 +191,12 @@ Results:
   - The JSONL is byte-identical to the same build without this change.
   - Link 1 is 0 of 1 driver step, still at `InitializePawnMeshes`' lazy-`BodyClass` `NotRead`: the body class arrives
     through `BodySelectClass`'s script assignment, after the spawn.
+- With the hub's option (a) (the harness stand-in for the streaming load also loads the archetype's same-package
+  references): `cargo test -p ow-cli` 114 + 2 passed / 1 ignored; `cargo test --workspace` 2,447 passed / 0 failed /
+  46 ignored.
+  - The same installed gate gave 1 ok / 10 NotYet / 3 errors.
+  - Link 1 is 0 of 1, now at `InitializePawnMeshes`' `LayerAbsent` (the body composition build), past the lazy
+    `BodyClass`. Links 3, 4, 5, 13 and 14 stop at the same place.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN.

@@ -28,3 +28,28 @@ The decision number is a placeholder until the hub assigns one.
     `InitializePawnMeshes`.
   - So a spawn-time load cannot reach it. Where that load belongs instead (the caller that hands the body class to
     `BodySelectClass`, or a VM rule for an assignment of a definition handle) is a question for the hub.
+
+**Where Maya's body class gets loaded (hub ruling, option (a)).** The route, read from the installed script:
+1. `WillowPlayerController.ApplyCharacterClassDefaults` asks the pawn data manager for the player class's
+   `PawnArchetypePath` archetype (`FindAlreadyLoadedObject`).
+2. It reads that archetype's `BodyClass` and passes it to `P.BodySelectClass`.
+3. `BodySelectClass` assigns it, and `ApplyBodyClassStartingValues` calls `InitializePawnMeshes` first.
+
+The only other script caller is `WillowPawn.PostBeginPlay`, with the pawn's own `BodyClass`. The game has the body
+class resident because the whole streaming package is: `BodyClass_Siren` shares `GD_Siren_Streaming` with
+`Pawn_Siren`.
+
+- **`ow-cli` `cmd/combat.rs`, `load_same_package_references`:**
+  - The harness's stand-in for the streaming load (`apply_class_inputs`, which preloads the archetype) now also loads
+    the archetype's object references that live in the archetype's own package file. It goes one level deep, through
+    the store, so the loads are the store's tracked ones.
+  - Other packages' references and handles whose load already failed are left alone.
+  - Each load is logged. It is an UNVERIFIED stand-in, like the preload it extends.
+  - Natives stay load-free, and there is no VM assignment rule.
+- **Test:** an invented archetype whose same-package reference is loaded and whose other-package reference is not.
+- **The slice** (installed, Off, strict, with #522 merged and `Engine.IsSplitScreen()` bound false, both locally
+  only): 1 ok / 10 NotYet / 3 errors.
+  - Link 1 is 0 of 1 driver step. It now stops in `maya:8` at `InitializePawnMeshes`' `NotYet { LayerAbsent }`, "the
+    body composition build (InstanceDataHelper.InitializeBodyComposition: component instancing and attachment to the
+    pawn's mesh)": past the lazy-`BodyClass` `NotRead`, at the component layer the note names.
+  - Links 3, 4, 5, 13 and 14 stop at the same place.
