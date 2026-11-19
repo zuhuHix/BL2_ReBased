@@ -231,14 +231,14 @@ pub const LINKS: [Link; 14] = [
     link(
         "phaselock_enemy",
         Driver::Phaselock,
-        &["cast"],
+        &["spawn", "cast"],
         &[],
         Evidence::NotChosen(
             "what a lock leaves on its target is not settled, so a cast that returns is not yet evidence",
         ),
         "the installed LiftActionSkill.OnActionSkillStarted on Maya's Phaselock skill, with a player pawn, its \
-         controller and an AI pawn from class defaults, on its own world (as ow-skills' installed run; decision \
-         2026-11-16-42)",
+         controller and an AI pawn each spawned by the world's own spawn (their components their own; decision \
+         2026-11-19-70), on its own world (decision 2026-11-16-42)",
     ),
     link(
         "mission_accept",
@@ -922,8 +922,19 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
+    // The cast's actors are spawned by the world first (decision 2026-11-19-70), then the cast runs on them.
+    r.steps.push("spawn".into());
+    let actors = match phaselock_actors(&mut world.vm) {
+        Ok(a) => a,
+        Err(e) => {
+            let text = ow_combat::hit::access::error_text(&e);
+            step_error(&mut r, "spawn", &text, grading);
+            ran[i] = Some(r);
+            return;
+        }
+    };
     r.steps.push("cast".into());
-    if let Err(e) = phaselock_cast(&mut world.vm) {
+    if let Err(e) = phaselock_cast(&mut world.vm, actors) {
         let text = ow_combat::hit::access::error_text(&e);
         step_error(&mut r, "cast", &text, grading);
     }
@@ -1057,20 +1068,17 @@ fn script_error(message: String) -> ow_vm::error::VmError {
     }
 }
 
-fn phaselock_cast(vm: &mut ow_vm::api::Vm) -> Result<(), ow_vm::error::VmError> {
+/// The cast's three actors: Maya's pawn, her controller, the target.
+type CastActors = (Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>);
+
+fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<(), ow_vm::error::VmError> {
     let path = ow_core::ObjectPath::parse(PHASELOCK_SKILL).map_err(|e| script_error(e.to_string()))?;
     let found = vm.defs.find(&mut vm.space, &path);
     vm.log.extend(vm.defs.take_log());
     let skill = found
         .map_err(ow_vm::error::VmError::Def)?
         .ok_or_else(|| script_error(format!("{PHASELOCK_SKILL}: no package holds it")))?;
-    let make = |vm: &mut ow_vm::api::Vm, class: &str| -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
-        let c = vm.find_class(class)?;
-        Ok(Some(ow_vm::interp::instantiate_from_defaults(vm, c)?))
-    };
-    let pawn = make(vm, "WillowGame.WillowPlayerPawn")?;
-    let controller = make(vm, "WillowGame.WillowPlayerController")?;
-    let target = make(vm, "WillowGame.WillowAIPawn")?;
+    let (pawn, controller, target) = actors;
     let f = vm.find_function(PHASELOCK_CAST)?;
     vm.call(
         f,
@@ -1082,6 +1090,28 @@ fn phaselock_cast(vm: &mut ow_vm::api::Vm) -> Result<(), ow_vm::error::VmError> 
         ],
     )?;
     Ok(())
+}
+
+/// The cast's actors (lane LINK-9-CAST-SPAWN, decision 2026-11-19-70): Maya's pawn, her controller and the target, each
+/// spawned through the world's own spawn (`ow_world::actors::spawn`, the level's `WorldInfo` as the spawner, a plain
+/// request: no template, no owner, the spawner's place), so each actor gets its own copy of its components (decision
+/// 2026-11-19-44) as a spawned actor does. Nothing is made by hand. A spawn the world refuses (`None`) is a typed error;
+/// a rule the spawn has not read is its own `NotYet`, which is the cast's stop.
+pub fn phaselock_actors(vm: &mut ow_vm::api::Vm) -> Result<CastActors, ow_vm::error::VmError> {
+    let spawner = ow_world::actors::actors_of(vm)?
+        .try_borrow()
+        .map_err(|_| ow_vm::error::VmError::ServiceBorrowed("Actors"))?
+        .world_info()
+        .ok_or_else(|| script_error("the cast's world has no WorldInfo to spawn from".into()))?;
+    let mut spawn = |class: &str| -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
+        let c = vm.find_class(class)?;
+        let made = ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(c)))?;
+        made.map(Some).ok_or_else(|| script_error(format!("the world's spawn refused a {class}")))
+    };
+    let pawn = spawn("WillowGame.WillowPlayerPawn")?;
+    let controller = spawn("WillowGame.WillowPlayerController")?;
+    let target = spawn("WillowGame.WillowAIPawn")?;
+    Ok((pawn, controller, target))
 }
 
 /// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).

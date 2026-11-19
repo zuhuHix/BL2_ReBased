@@ -1376,6 +1376,41 @@ fn a_held_level_list_refuses_before_anything_is_made() {
     });
 }
 
+/// A plain spawn from the class defaults, the slice gate's cast actors' (decision 2026-11-19-70): each actor gets its
+/// own copy of the class default's component, outered to it, and two actors get two copies; the class default keeps
+/// its own.
+#[test]
+fn a_plain_spawn_gives_each_actor_its_own_class_default_component() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Toolbox").unwrap();
+        let component_class = x.class("ToyComponent");
+        let component = x
+            .w
+            .vm
+            .space
+            .alloc(component_class, "ToyComponent0", Some(cdo), ow_object::heap::Origin::Runtime)
+            .unwrap();
+        set_field(&mut x.w.vm.space, component, "Payload", Value::Int(9)).unwrap();
+        set_field(&mut x.w.vm.space, cdo, "Comp", Value::Object(Some(component))).unwrap();
+        let mut copies = Vec::new();
+        for _ in 0..2 {
+            let actor = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(toolbox))).unwrap().unwrap();
+            let Value::Object(Some(copy)) = field(&x.w.vm.space, actor, "Comp").unwrap() else {
+                panic!("no component");
+            };
+            assert_ne!(copy, component);
+            assert_eq!(x.w.vm.space.heap.get(copy).unwrap().outer, Some(actor));
+            assert_eq!(field(&x.w.vm.space, copy, "Payload").unwrap(), Value::Int(9));
+            copies.push(copy);
+        }
+        assert_ne!(copies[0], copies[1], "each actor its own");
+        assert_eq!(field(&x.w.vm.space, cdo, "Comp").unwrap(), Value::Object(Some(component)));
+    });
+}
+
 /// An archetype of `class`: a new object with the class defaults' slots.
 fn toy_archetype(x: &mut Fx, class: ow_object::ids::ClassId, name: &str) -> ObjRef {
     let path = x.w.vm.space.classes.get_layout(class).unwrap().path().as_str().to_string();

@@ -149,7 +149,7 @@ fn links_8_and_9_have_their_own_drivers_and_their_own_evidence() {
     let (equip, cast) = (&LINKS[index("equip_gun")], &LINKS[index("phaselock_enemy")]);
     assert_eq!((equip.driver.name(), cast.driver.name()), ("equip-run", "phaselock-cast"));
     assert_eq!(equip.steps, ["make", "init", "bases", "equip", "unequip"], "the spawn's init runs first");
-    assert_eq!(cast.steps, ["cast"]);
+    assert_eq!(cast.steps, ["spawn", "cast"], "the world spawns the cast's actors first (decision 2026-11-19-70)");
     assert!(equip.needs.is_empty() && cast.needs.is_empty());
     assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::NotChosen(_)));
     // The weapon line parses as an --equip-run line.
@@ -164,7 +164,7 @@ fn a_driver_s_own_evidence_decides_and_a_stop_wins_over_it() {
     // Steps that ran with no stop: ok only when the driver's own check found its evidence (the shared `evident`).
     ran[e] = Some(Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip", "unequip"]).unwrap() });
     // Link 9 is never ok, even with its driver's flag set: no evidence check is chosen.
-    ran[c] = Some(Ran { evident: true, ..ran_ok(&["cast"]).unwrap() });
+    ran[c] = Some(Ran { evident: true, ..ran_ok(&["spawn", "cast"]).unwrap() });
     assert!(evident(e, &ran, &status) && !evident(c, &ran, &status));
     let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
     assert_eq!(graded[e].result, Outcome::Ok);
