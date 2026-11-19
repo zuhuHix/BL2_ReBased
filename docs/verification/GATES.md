@@ -278,6 +278,21 @@ AI-assisted (Claude Code, Opus 5.5). In Off, `FlagExpressionEvaluator.Evaluate` 
 `ow-skills`); clippy flags nothing in ow-skills. Slice not probed in this lane. ctest and verify_packages not run (no C++
 change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-175.
 
+**IMPL-GET-FUNC-NAME (2026-11-19, pc-hummer, on origin/main d52bcc79):** AI-assisted (Claude Code, Opus 5.5).
+`Object.GetFuncName()` in Off: the innermost running script function's name; `NotRead` with no script frame.
+
+Results:
+- `cargo test -p ow-vm`: 208 passed / 0 failed / 1 ignored (3 new).
+- `cargo test --workspace -j 2`: 2,447 passed / 0 failed / 46 ignored; clippy clean in the new files;
+  `crate_edges_test.py` OK.
+- Installed Off `--slice-gate` strict (a local merge with #535, #548, #555, #560, #523 and the link 9 spawn branches,
+  never pushed; under the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and `cast` (2 of 2); the
+  cast returns, graded error only for the unchosen evidence check. Without this binding the same merge stops at the
+  unbound `Object.GetFuncName()`.
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
