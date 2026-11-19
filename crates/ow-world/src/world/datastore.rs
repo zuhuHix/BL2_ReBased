@@ -41,15 +41,22 @@
 //!   Then, only for an entry that got one, a new provider becomes its `Provider`: of the store's
 //!   `SettingsProviderClass` when that is `UIDataProvider_Settings` or a subclass, else `UIDataProvider_Settings`.
 //! - **At binding** (straight after): the provider's `Settings` becomes the new settings object and its `DataClass`
-//!   that object's class. `SettingsArrayProviders` is not built and stays empty (the note's unread part).
+//!   that object's class. `SettingsArrayProviders` is not built: it is set empty when the provider is made, whatever
+//!   a provider subclass's defaults hold (the note's unread part; review r1 of #464, item 6).
+//! - **Publishing** (review r1 of #464, item 3): each entry's `GameSettings`, then its `Provider`, is written into the
+//!   store's list as soon as it is made, in the note's order, so the writes made before a failure stay visible.
 //! - **At registration:** the store's script `Registered` is not run (the note's open question 1).
 //! - **The provider:** every native declared on `UIDataProvider`, `UIDynamicDataProvider` and `UIDataProvider_Settings`
 //!   ([`PROVIDER_FUNCTIONS`]) answers [`PROVIDER_NOT_YET`] when called on a settings provider. Another provider gets
-//!   a `NotYet` of kind `NotRead` naming the native. The settings provider's own script functions are overridden to
-//!   the same named `NotYet`. Script functions it inherits from its base classes are not overridden: they run as
-//!   script, and stop at their first native call (UNVERIFIED gap).
-//! - **Preflight** (the hub's ruling): the plan (the class defaults' list and classes, the provider class and its two
-//!   fields, each entry's fields) is read before anything is made. A refusal there leaves nothing.
+//!   a `NotYet` of kind `NotRead` naming the native. The script functions of those three classes are refused at
+//!   dispatch with the same named `NotYet` when the receiver is a settings provider, inherited ones included (review
+//!   r1 of #464, item 4); on another receiver they run as script. Functions of the provider's further bases
+//!   (`UIRoot`, `Object`) are not the provider's and are not refused (UNVERIFIED gap).
+//! - **Preflight** (the hub's ruling; review r1 of #464, item 2): the plan is checked before anything is made. First
+//!   the declarations alone (the provider class, every field the fill reads or writes and its kind), then the class
+//!   defaults' values (the list's classes, the provider class) through a read that publishes nothing
+//!   (`DefStore::with_class_default`), then that every write's value is assignable to its field. A refusal there
+//!   leaves nothing, not even the class default object.
 //!
 //! The installed `GetOnlineGameSettingsViaDatastore` script is no longer overridden: it reads the filled entry
 //! (`GameSettingsCfgList[0].GameSettings`) as installed.
@@ -62,17 +69,22 @@
 //! - `GameEngine.GetDLCManager`: None (the hub's ruling: the port's engine has no DLC manager), so the refresh skips
 //!   the two DLC writes.
 //!
-//! [`UNREAD`] (the two mission numbers and the DLC manager's two queries) stay `NotYet { NotRead }`. A `NotYet` that
-//! comes after this refresh wrote state (the store's fill, or a setting) is terminal: [`PARTIAL_WRITES`], its kind
-//! kept, nothing rolled back. A refresh begins at its data store client lookup, which resets that mark. Other errors
-//! propagate unchanged.
+//! [`UNREAD`] (the two mission numbers and the DLC manager's two queries) stay `NotYet { NotRead }`.
+//!
+//! **The refresh's write mark** (review r1 of #464, item 1): the refresh is the controller's script [`REFRESH`], run
+//! as script; the port wraps it (`Vm::wrap_script`) and keeps one mark per running refresh. A write inside it (the
+//! store's fill, a setting) sets the mark. A `NotYet` that leaves a refresh whose mark is set, from anything the
+//! refresh called, is terminal: [`PARTIAL_WRITES`], its kind kept, nothing rolled back. Other errors leave unchanged.
+//! A lookup or a setter called outside a refresh marks nothing, and a second lookup inside one does not clear its
+//! mark. A nested refresh that wrote marks the outer one too.
 
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::ids::{ClassId, ObjRef, PropAddr};
+use ow_object::ids::{ClassId, ObjRef, PropAddr, StructId};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
-use ow_vm::api::{NativeCall, NativeFn, Vm};
+use ow_vm::api::{CallResult, NativeCall, NativeFn, ScriptBody, ScriptWrapFn, Vm};
 use ow_vm::error::VmError;
 
 /// The record these rules come from.
@@ -88,7 +100,9 @@ pub const GET_DATA_STORE_CLIENT: &str = "Engine.UIInteraction.GetDataStoreClient
 pub const FIND_DATA_STORE: &str = "Engine.DataStoreClient.FindDataStore";
 /// The class of the engine's data store client.
 pub const CLIENT_CLASS: &str = "Engine.DataStoreClient";
-/// The controller's script that reads the settings entry (overridden in Off; module documentation).
+/// The controller's refresh, wrapped for its write mark (module documentation).
+pub const REFRESH: &str = "WillowGame.WillowPlayerController.UpdateOnlineGameSettings";
+/// The controller's script that reads the settings entry (run as script since decision 2026-11-19-80).
 pub const SETTINGS_VIA_DATASTORE: &str = "WillowGame.WillowPlayerController.GetOnlineGameSettingsViaDatastore";
 /// The controller's script that looks the store up (run as script).
 pub const SETTINGS_DATASTORE: &str = "GetOnlineGameSettingsDatastore";
@@ -110,8 +124,8 @@ pub const UNREAD: [&str; 4] = [
 pub struct DataStores {
     client: Option<ObjRef>,
     globals: Vec<ObjRef>,
-    /// Whether the current refresh wrote state (module documentation).
-    written: bool,
+    /// One mark per running refresh, innermost last: whether it wrote state (module documentation).
+    refresh: Vec<bool>,
 }
 
 impl DataStores {
@@ -126,7 +140,7 @@ impl DataStores {
     }
 }
 
-/// Binds this module's natives and the settings-entry override (Off only; the caller checks the mode).
+/// Binds this module's natives, the provider refusals and the refresh's wrapper (Off only; the caller checks the mode).
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.service::<DataStores>().is_none() {
         vm.add_service(DataStores::default())?;
@@ -137,13 +151,12 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(
             vm,
             path,
-            Rc::new(move |c: &mut NativeCall<'_>| -> Result<Value, VmError> {
-                let refusal: VmError = NotYet::not_read(
+            Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                Err(NotYet::not_read(
                     format!("{path}: behind the online game settings refresh, not read (section 5)"),
                     RECORD,
                 )
-                .into();
-                Err(if written(c.vm)? { after_writes(refusal) } else { refusal })
+                .into())
             }),
         )?;
     }
@@ -152,27 +165,63 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     bind(vm, GET_DLC_MANAGER, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Object(None))))?;
     for path in PROVIDER_FUNCTIONS {
         let Ok(f) = vm.find_function(path) else { continue };
-        let native = vm.function(f).is_some_and(|d| d.is_native());
-        let own = path.starts_with("Engine.UIDataProvider_Settings.");
-        let refuse: NativeFn = Rc::new(move |c: &mut NativeCall<'_>| -> Result<Value, VmError> {
-            let settings_provider = match (c.this, c.vm.space.classes.by_path(PROVIDER_CLASS)) {
-                (Some(o), Some(p)) => c.vm.space.classes.is_child_of(c.vm.space.heap.get(o)?.class, p),
-                _ => false,
-            };
-            let refusal: VmError = if settings_provider {
-                NotYet::not_read(PROVIDER_NOT_YET, RECORD_FILL).into()
-            } else {
-                NotYet::not_read(format!("{path} on a provider that is not a settings provider: not read"), RECORD_FILL).into()
-            };
-            Err(if written(c.vm)? { after_writes(refusal) } else { refusal })
-        });
-        if native {
-            bind(vm, path, refuse)?;
-        } else if own {
-            vm.override_script(path, refuse)?;
+        if vm.function(f).is_some_and(|d| d.is_native()) {
+            bind(
+                vm,
+                path,
+                Rc::new(move |c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                    if is_settings_provider(c.vm, c.this)? {
+                        Err(NotYet::not_read(PROVIDER_NOT_YET, RECORD_FILL).into())
+                    } else {
+                        let what = format!("{path} on a provider that is not a settings provider: not read");
+                        Err(NotYet::not_read(what, RECORD_FILL).into())
+                    }
+                }),
+            )?;
+        } else {
+            // A script function: refused at dispatch for a settings provider, run as script for anything else.
+            let wrap: ScriptWrapFn = Rc::new(|vm: &mut Vm, this: Option<ObjRef>, body: &mut ScriptBody<'_>| {
+                if is_settings_provider(vm, this)? {
+                    return Err(NotYet::not_read(PROVIDER_NOT_YET, RECORD_FILL).into());
+                }
+                body(vm)
+            });
+            vm.wrap_script(path, wrap)?;
         }
     }
+    if vm.find_function(REFRESH).is_ok() {
+        vm.wrap_script(REFRESH, Rc::new(refresh))?;
+    }
     Ok(())
+}
+
+/// Whether `this` is a `UIDataProvider_Settings` (or a subclass).
+fn is_settings_provider(vm: &Vm, this: Option<ObjRef>) -> Result<bool, VmError> {
+    Ok(match (this, vm.space.classes.by_path(PROVIDER_CLASS)) {
+        (Some(o), Some(p)) => vm.space.classes.is_child_of(vm.space.heap.get(o)?.class, p),
+        _ => false,
+    })
+}
+
+/// The refresh's wrapper (module documentation): its own mark for the length of its script; a `NotYet` that leaves
+/// it after a write is marked [`PARTIAL_WRITES`]; a write marks the outer refresh too.
+fn refresh(vm: &mut Vm, _this: Option<ObjRef>, body: &mut ScriptBody<'_>) -> Result<CallResult, VmError> {
+    let stores = service(vm)?;
+    stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.refresh.push(false);
+    let result = body(vm);
+    let popped = stores.try_borrow_mut().map(|mut s| {
+        let wrote = s.refresh.pop().unwrap_or(false);
+        if wrote && let Some(outer) = s.refresh.last_mut() {
+            *outer = true;
+        }
+        wrote
+    });
+    match (result, popped) {
+        (Err(e), Ok(true)) => Err(after_writes(e)),
+        (result, Ok(_)) => result,
+        (Err(e), Err(_)) => Err(e),
+        (Ok(_), Err(_)) => Err(VmError::ServiceBorrowed("DataStores")),
+    }
 }
 
 /// Binds `f` to the native `path` declares; a path the package set does not declare as a native binds nothing.
@@ -208,8 +257,6 @@ fn after_writes(e: VmError) -> VmError {
 pub fn data_store_client(vm: &mut Vm) -> Result<ObjRef, VmError> {
     let stores = service(vm)?;
     let mut s = stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
-    // A refresh begins here (module documentation): its write mark starts clear.
-    s.written = false;
     if let Some(client) = s.client {
         return Ok(client);
     }
@@ -226,16 +273,20 @@ pub fn data_store_client(vm: &mut Vm) -> Result<ObjRef, VmError> {
     let mut globals = Vec::with_capacity(classes.len());
     for (class, plan) in classes.into_iter().zip(&plans) {
         let store = ow_vm::interp::instantiate_from_defaults(vm, class).map_err(after_writes)?;
-        s.written = true;
+        if let Some(mark) = s.refresh.last_mut() {
+            *mark = true;
+        }
         globals.push(store);
         s.globals = globals.clone();
         if let Some(plan) = plan {
-            apply_fill(vm, store, plan).map_err(after_writes)?;
+            apply_fill(vm, store, plan, &mut ow_vm::interp::instantiate_from_defaults).map_err(after_writes)?;
         }
     }
     let client = ow_vm::interp::instantiate_from_defaults(vm, client_class).map_err(after_writes)?;
     s.client = Some(client);
-    s.written = true;
+    if let Some(mark) = s.refresh.last_mut() {
+        *mark = true;
+    }
     Ok(client)
 }
 
@@ -388,64 +439,141 @@ struct FillPlan {
     provider: ClassId,
 }
 
-/// The plan for a store of `class` (None for a store that is not an online game settings store), with every field it
-/// will write checked on the classes (the cheap and certain part, before any write).
+const FILL_UNIT: &str = "UIDataStore_OnlineGameSettings (the settings fill)";
+
+/// The declared kind of `class.name`, or bad data.
+fn prop_kind(space: &ow_object::heap::ObjectSpace, class: ClassId, name: &str) -> Result<PropKind, VmError> {
+    space
+        .prop(class, name)
+        .and_then(|p| space.classes.decl(p))
+        .map(|d| d.kind.clone())
+        .ok_or_else(|| fill_error(FILL_UNIT, format!("{} declares no {name}", class_name(space, class))))
+}
+
+/// The declared kind of field `name` of struct `ty`, or bad data.
+fn field_kind(space: &ow_object::heap::ObjectSpace, ty: StructId, name: &str) -> Result<PropKind, VmError> {
+    let id = space.names.find(name);
+    id.and_then(|id| space.classes.struct_layout(ty).and_then(|l| l.field(id)).map(|(_, d)| d.kind.clone()))
+        .ok_or_else(|| fill_error(FILL_UNIT, format!("the settings entry struct declares no {name}")))
+}
+
+fn class_name(space: &ow_object::heap::ObjectSpace, class: ClassId) -> String {
+    space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_default()
+}
+
+/// Whether a field of `kind` holds an object (`Object`) or a class (`Class`) whose class is `c`.
+fn holds(space: &ow_object::heap::ObjectSpace, kind: &PropKind, c: ClassId) -> bool {
+    match kind {
+        PropKind::Object { class } => space.classes.is_child_of(c, *class),
+        PropKind::Class { meta } => space.classes.is_child_of(c, *meta),
+        _ => false,
+    }
+}
+
+/// The plan for a store of `class` (None for a store that is not an online game settings store). Nothing is made and
+/// nothing is published on any path (module documentation, "Preflight"): the declarations first, then the class
+/// defaults' values through a read that publishes nothing, then the assignability of every value the fill writes.
 fn plan_fill(vm: &mut Vm, class: ClassId) -> Result<Option<FillPlan>, VmError> {
-    const UNIT: &str = "UIDataStore_OnlineGameSettings (the settings fill)";
     let Some(settings_store) = vm.space.classes.by_path(SETTINGS_STORE_CLASS) else {
         return Ok(None);
     };
     if !vm.space.classes.is_child_of(class, settings_store) {
         return Ok(None);
     }
-    let path = vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_default();
-    let defaults = vm.defs.class_default(&mut vm.space, &path);
-    vm.log.extend(vm.defs.take_log());
-    let defaults = defaults?;
+    // 1. The declarations alone.
     let provider_base = vm.find_class(PROVIDER_CLASS)?;
-    let provider = match read_field(&vm.space, defaults, "SettingsProviderClass", UNIT)? {
-        Value::Class(Some(c)) if vm.space.classes.is_child_of(c, provider_base) => c,
-        Value::Class(_) => provider_base,
-        other => return Err(fill_error(UNIT, format!("SettingsProviderClass holds {}", other.kind_name()))),
-    };
-    for field in ["Settings", "DataClass"] {
-        if vm.space.prop(provider, field).is_none() {
-            return Err(fill_error(UNIT, format!("the provider class declares no {field}")));
-        }
+    let space = &vm.space;
+    let bad_kind = |what: &str| fill_error(FILL_UNIT, format!("{what} is not declared as the fill needs"));
+    let (settings_field, data_class_field) = (prop_kind(space, provider_base, "Settings")?, prop_kind(space, provider_base, "DataClass")?);
+    if !matches!(settings_field, PropKind::Object { .. }) {
+        return Err(bad_kind("UIDataProvider_Settings.Settings"));
     }
-    let list = read_field(&vm.space, defaults, "GameSettingsCfgList", UNIT)?;
-    let Some(list) = list.elements() else {
-        return Err(fill_error(UNIT, "GameSettingsCfgList is not an array".to_string()));
+    if !matches!(data_class_field, PropKind::Class { .. }) {
+        return Err(bad_kind("UIDataProvider_Settings.DataClass"));
+    }
+    if !matches!(prop_kind(space, provider_base, "SettingsArrayProviders")?, PropKind::Array(_)) {
+        return Err(bad_kind("UIDataProvider_Settings.SettingsArrayProviders"));
+    }
+    if !matches!(prop_kind(space, class, "SettingsProviderClass")?, PropKind::Class { .. }) {
+        return Err(bad_kind("SettingsProviderClass"));
+    }
+    let PropKind::Array(inner) = prop_kind(space, class, "GameSettingsCfgList")? else {
+        return Err(bad_kind("GameSettingsCfgList"));
     };
-    let mut entries = Vec::with_capacity(list.len());
-    for entry in list {
-        for field in ["GameSettings", "Provider"] {
-            struct_index(&vm.space, entry, field, UNIT)?;
+    let PropKind::Struct(cfg) = *inner else {
+        return Err(bad_kind("GameSettingsCfgList"));
+    };
+    if !matches!(field_kind(space, cfg, "GameSettingsClass")?, PropKind::Class { .. }) {
+        return Err(bad_kind("GameSettingsCfg.GameSettingsClass"));
+    }
+    let (settings_slot, provider_slot) = (field_kind(space, cfg, "GameSettings")?, field_kind(space, cfg, "Provider")?);
+    // 2. The class defaults' values, read without publishing the class default object.
+    let path = class_name(space, class);
+    let read = vm.defs.with_class_default(&mut vm.space, &path, |space, defaults| {
+        let provider = match read_field(space, defaults, "SettingsProviderClass", FILL_UNIT)? {
+            Value::Class(c) => c,
+            other => return Err(fill_error(FILL_UNIT, format!("SettingsProviderClass holds {}", other.kind_name()))),
+        };
+        let list = read_field(space, defaults, "GameSettingsCfgList", FILL_UNIT)?;
+        let Some(list) = list.elements() else {
+            return Err(fill_error(FILL_UNIT, "GameSettingsCfgList is not an array".to_string()));
+        };
+        let mut entries = Vec::with_capacity(list.len());
+        for entry in list {
+            match struct_get(space, entry, "GameSettingsClass", FILL_UNIT)? {
+                Value::Class(c) => entries.push(c),
+                other => return Err(fill_error(FILL_UNIT, format!("GameSettingsClass holds {}", other.kind_name()))),
+            }
         }
-        match struct_get(&vm.space, entry, "GameSettingsClass", UNIT)? {
-            Value::Class(c) => entries.push(c),
-            other => return Err(fill_error(UNIT, format!("GameSettingsClass holds {}", other.kind_name()))),
+        Ok((provider, entries))
+    });
+    vm.log.extend(vm.defs.take_log());
+    let (provider, entries) = read??;
+    let space = &vm.space;
+    let provider = match provider {
+        Some(c) if space.classes.is_child_of(c, provider_base) => c,
+        _ => provider_base,
+    };
+    // 3. Every value the fill writes is assignable to its field.
+    if !holds(space, &provider_slot, provider) {
+        return Err(fill_error(FILL_UNIT, format!("GameSettingsCfg.Provider cannot hold a {}", class_name(space, provider))));
+    }
+    for &c in entries.iter().flatten() {
+        for (kind, field) in [(&settings_slot, "GameSettingsCfg.GameSettings"), (&settings_field, "UIDataProvider_Settings.Settings"), (&data_class_field, "UIDataProvider_Settings.DataClass")] {
+            if !holds(space, kind, c) {
+                return Err(fill_error(FILL_UNIT, format!("{field} cannot hold a {}", class_name(space, c))));
+            }
         }
     }
     Ok(Some(FillPlan { entries, provider }))
 }
 
-/// Applies a fill plan to the new store (section 4): each entry's settings object from its class defaults, then its
-/// provider bound to it (`Settings`, `DataClass`); `SettingsArrayProviders` stays empty; `Registered` is not run.
-fn apply_fill(vm: &mut Vm, store: ObjRef, plan: &FillPlan) -> Result<(), VmError> {
-    const UNIT: &str = "UIDataStore_OnlineGameSettings (the settings fill)";
-    let list = read_field(&vm.space, store, "GameSettingsCfgList", UNIT)?;
+/// Applies a fill plan to the new store (section 4), publishing as it goes (module documentation): for each entry,
+/// its settings object from its class defaults, written into the store's list; then its provider, made with an empty
+/// `SettingsArrayProviders`, written into the list; then the provider bound to the settings (`Settings`,
+/// `DataClass`). `Registered` is not run. `make` makes each object from its class defaults
+/// (`instantiate_from_defaults`; a test passes one that fails).
+fn apply_fill(
+    vm: &mut Vm,
+    store: ObjRef,
+    plan: &FillPlan,
+    make: &mut dyn FnMut(&mut Vm, ClassId) -> Result<ObjRef, VmError>,
+) -> Result<(), VmError> {
+    let list = read_field(&vm.space, store, "GameSettingsCfgList", FILL_UNIT)?;
     let mut entries = list.elements().map(<[Value]>::to_vec).unwrap_or_default();
-    for (entry, class) in entries.iter_mut().zip(&plan.entries) {
-        let Some(class) = class else { continue };
-        let settings = ow_vm::interp::instantiate_from_defaults(vm, *class)?;
-        struct_set(&vm.space, entry, "GameSettings", Value::Object(Some(settings)), UNIT)?;
-        let provider = ow_vm::interp::instantiate_from_defaults(vm, plan.provider)?;
-        write_field(&mut vm.space, provider, "Settings", Value::Object(Some(settings)), UNIT)?;
-        write_field(&mut vm.space, provider, "DataClass", Value::Class(Some(*class)), UNIT)?;
-        struct_set(&vm.space, entry, "Provider", Value::Object(Some(provider)), UNIT)?;
+    for (i, class) in plan.entries.iter().enumerate().take(entries.len()) {
+        let Some(class) = *class else { continue };
+        let settings = make(vm, class)?;
+        struct_set(&vm.space, &mut entries[i], "GameSettings", Value::Object(Some(settings)), FILL_UNIT)?;
+        write_field(&mut vm.space, store, "GameSettingsCfgList", Value::array(entries.clone()), FILL_UNIT)?;
+        let provider = make(vm, plan.provider)?;
+        write_field(&mut vm.space, provider, "SettingsArrayProviders", Value::array(vec![]), FILL_UNIT)?;
+        struct_set(&vm.space, &mut entries[i], "Provider", Value::Object(Some(provider)), FILL_UNIT)?;
+        write_field(&mut vm.space, store, "GameSettingsCfgList", Value::array(entries.clone()), FILL_UNIT)?;
+        write_field(&mut vm.space, provider, "Settings", Value::Object(Some(settings)), FILL_UNIT)?;
+        write_field(&mut vm.space, provider, "DataClass", Value::Class(Some(class)), FILL_UNIT)?;
     }
-    write_field(&mut vm.space, store, "GameSettingsCfgList", Value::array(entries), UNIT)
+    Ok(())
 }
 
 /// `Settings.SetIntProperty(PropertyId, Value)` in Off (section 3): the first `Properties` entry with that
@@ -512,15 +640,14 @@ fn get_curr_playthrough(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     }
 }
 
-/// Notes that this refresh wrote state (the store's fill, a setting), so a later `NotYet` of the refresh is marked.
+/// Notes that the running refresh, if any, wrote state (module documentation).
 fn mark_written(vm: &Vm) -> Result<(), VmError> {
-    service(vm)?.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.written = true;
+    let stores = service(vm)?;
+    let mut s = stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
+    if let Some(mark) = s.refresh.last_mut() {
+        *mark = true;
+    }
     Ok(())
-}
-
-/// Whether this refresh wrote state.
-fn written(vm: &Vm) -> Result<bool, VmError> {
-    Ok(service(vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.written)
 }
 
 #[cfg(test)]

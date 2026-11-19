@@ -1,7 +1,7 @@
 //! Tests of the engine's data store client and the online game settings route (decision 2026-11-19-65) on invented
 //! packages (AGENTS.md rule 9). AI-assisted (Claude Code).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -14,7 +14,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::script::{Asm, CPF_OPT, FunctionSpec, Param, ScriptToy};
-use ow_vm::api::{NativeCall, Vm};
+use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 
 use super::*;
@@ -115,6 +115,8 @@ struct Toy {
     dir: PathBuf,
     /// Whether the toy store lookup asks the real getter and lookup (else it answers None).
     route: Rc<Cell<bool>>,
+    /// What the fill toy's refresh does between its entry and its return (`ToyRefreshStep`; None: nothing).
+    step: Rc<RefCell<Option<NativeFn>>>,
 }
 
 impl Drop for Toy {
@@ -153,7 +155,7 @@ fn toy(with_client: bool) -> Toy {
     )
     .unwrap();
     register(&mut vm).unwrap();
-    Toy { vm, dir, route }
+    Toy { vm, dir, route, step: Rc::new(RefCell::new(None)) }
 }
 
 impl Toy {
@@ -322,6 +324,8 @@ fn a_failure_after_the_first_write_is_marked() {
 ///   (`GameSettingsClass`, `GameSettings`, `Provider`) and its `SettingsProviderClass`;
 /// - `UIDataProvider` (native `AddPropertyNotificationChangeRequest`), `UIDynamicDataProvider` (`DataClass`) and
 ///   `UIDataProvider_Settings` (`Settings`, `SettingsArrayProviders` of ints, and a script `OnSettingValueUpdated`);
+/// - `UIDynamicDataProvider.CleanupDataProvider`, a script the settings provider inherits, and the provider subclass
+///   `ToySettingsProviderSub`, whose class defaults hold `SettingsArrayProviders` = [5];
 /// - `Settings`, with `Properties` of `SettingsProperty` (`PropertyId`, `Data` of `SettingsData`: `Type`, `Value1`), the
 ///   enum `ESettingsDataType` (`SDT_Empty`, `SDT_Int32`, `SDT_Float`) and the native `SetIntProperty`;
 /// - `GameEngine.GetDLCManager`, static native.
@@ -375,6 +379,13 @@ fn fill_engine(with_settings_provider: bool) -> Vec<u8> {
     t.function(provider, "AddPropertyNotificationChangeRequest", &[], None, &[], &spec, |_| None);
     let dynamic = t.class("UIDynamicDataProvider", provider);
     t.prop_tail("Class", dynamic, "DataClass", 0, &class_tail(object));
+    let spec = FunctionSpec::new(SCRIPT, "CleanupDataProvider");
+    t.function(dynamic, "CleanupDataProvider", &[], None, &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     if with_settings_provider {
         let settings_provider = t.class("UIDataProvider_Settings", dynamic);
         t.prop("Object", settings_provider, "Settings", 0, object);
@@ -386,6 +397,11 @@ fn fill_engine(with_settings_provider: bool) -> Vec<u8> {
             a.end();
             Some(a)
         });
+        let sub = t.class("ToySettingsProviderSub", settings_provider);
+        let mut defaults = ow_package::testkit::ints(&[0]);
+        defaults.extend(t.p.tag("SettingsArrayProviders", "ArrayProperty", &ow_package::testkit::ints(&[1, 5])));
+        defaults.extend_from_slice(&t.none);
+        t.p.add_export(sub, "Default__ToySettingsProviderSub", defaults);
     }
     let settings = t.class("Settings", object);
     let mut payload = ow_package::testkit::ints(&[0]);
@@ -417,7 +433,8 @@ fn fill_engine(with_settings_provider: bool) -> Vec<u8> {
 
 /// `WillowGame.upk` for the fill (invented): the store (an online game settings store, its `Tag` default), the
 /// settings class `WillowOnlineGameSettings` (a `Settings`), the replication info with `CurrentPlaythrough` and
-/// `GetCurrPlaythrough`, and a toy controller whose `GetActiveMissionNumber` is native.
+/// `GetCurrPlaythrough`, and a toy controller whose `GetActiveMissionNumber` is native, with the refresh
+/// `UpdateOnlineGameSettings`: a script that calls the invented native `ToyRefreshStep` (the test's step) and returns.
 fn fill_willow() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "IntProperty", "ObjectProperty"]);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
@@ -438,6 +455,16 @@ fn fill_willow() -> Vec<u8> {
     let pc = t.class("WillowPlayerController", object);
     let spec = FunctionSpec::new(NATIVE, "GetActiveMissionNumber");
     t.function(pc, "GetActiveMissionNumber", &[], Some(("Int", 0)), &[], &spec, |_| None);
+    let spec = FunctionSpec::new(NATIVE, "ToyRefreshStep");
+    let step = t.function(pc, "ToyRefreshStep", &[], None, &[], &spec, |_| None).function;
+    let spec = FunctionSpec::new(SCRIPT, "UpdateOnlineGameSettings");
+    t.function(pc, "UpdateOnlineGameSettings", &[], None, &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().final_function(step, |_| {});
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.p.build()
 }
 
@@ -447,14 +474,36 @@ fn fill_toy(settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
     fill_toy_with(true, settings_class, provider_class)
 }
 
-fn fill_toy_with(with_settings_provider: bool, settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
+/// The fill world, cold: registered, with nothing loaded or made.
+fn fill_cold(with_settings_provider: bool) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-world-fill-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let (e, w) = (fill_engine(with_settings_provider), fill_willow());
     let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let step: Rc<RefCell<Option<NativeFn>>> = Rc::new(RefCell::new(None));
+    let slot = step.clone();
+    let f = vm.find_function("WillowGame.WillowPlayerController.ToyRefreshStep").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+            let f = slot.borrow().clone();
+            match f {
+                Some(f) => f(c),
+                None => Ok(Value::None),
+            }
+        }),
+    )
+    .unwrap();
     register(&mut vm).unwrap();
+    Toy { vm, dir, route: Rc::new(Cell::new(true)), step }
+}
+
+fn fill_toy_with(with_settings_provider: bool, settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
+    let mut t = fill_cold(with_settings_provider);
+    let vm = &mut t.vm;
     let cdo = vm.defs.class_default(&mut vm.space, GLOBAL_DATA_STORES[0]).unwrap();
     let cfg = vm.space.classes.struct_by_path("Engine.UIDataStore_OnlineGameSettings.GameSettingsCfg").unwrap();
     let mut entry = vm.space.classes.struct_defaults(cfg).unwrap();
@@ -463,10 +512,21 @@ fn fill_toy_with(with_settings_provider: bool, settings_class: Option<&str>, pro
     write_field(&mut vm.space, cdo, "GameSettingsCfgList", Value::array(vec![entry]), "test").unwrap();
     let provider = provider_class.map(|c| vm.find_class(c).unwrap());
     write_field(&mut vm.space, cdo, "SettingsProviderClass", Value::Class(provider), "test").unwrap();
-    Toy { vm, dir, route: Rc::new(Cell::new(true)) }
+    t
 }
 
 impl Toy {
+    /// Sets what the refresh's step does.
+    fn on_step(&self, f: impl Fn(&mut NativeCall<'_>) -> Result<Value, VmError> + 'static) {
+        *self.step.borrow_mut() = Some(Rc::new(f));
+    }
+
+    /// Runs the refresh (the wrapped script) on a new toy controller.
+    fn refresh(&mut self) -> Result<Value, VmError> {
+        let pc = self.make("WillowGame.WillowPlayerController", "ToyPC");
+        self.call(REFRESH, Some(pc), vec![])
+    }
+
     /// The world's one settings entry after the client is made: (GameSettings, Provider).
     fn entry(&mut self) -> (Option<ObjRef>, Option<ObjRef>) {
         self.client();
@@ -543,17 +603,71 @@ fn the_store_fills_its_entry_at_creation() {
     assert_eq!(t.entry(), (None, None), "an entry without a class gets neither object");
 }
 
-/// The fill is planned before anything is made: with no `UIDataProvider_Settings` class to make the provider from, the
-/// getter refuses with no instance left on the heap and no client or store kept.
+/// The fill is planned before anything is made (review r1 of #464, item 2): on a cold world with no
+/// `UIDataProvider_Settings` class, the getter refuses with the **full** heap count unchanged (class default objects
+/// included, which `heap.live` leaves out) and no client or store kept.
 #[test]
 fn a_fill_that_cannot_be_planned_leaves_nothing() {
-    let mut t = fill_toy_with(false, Some("WillowGame.WillowOnlineGameSettings"), None);
-    let object = t.vm.find_class("Engine.Object").unwrap();
-    let before = t.vm.space.heap.live(&t.vm.space.classes, object).count();
+    let mut t = fill_cold(false);
+    let before = t.vm.space.heap.len();
     assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err(), "no UIDataProvider_Settings class");
-    assert_eq!(t.vm.space.heap.live(&t.vm.space.classes, object).count(), before, "nothing made");
+    assert_eq!(t.vm.space.heap.len(), before, "nothing made, not even the store's class default object");
     let s = t.vm.service::<DataStores>().unwrap();
     assert!(s.borrow().client().is_none() && s.borrow().globals().is_empty());
+}
+
+/// The plan's read of the class defaults publishes nothing: on a cold world the read leaves the full heap count as it
+/// was, and the getter then builds the class default object and fills the store as usual.
+#[test]
+fn the_plans_read_of_the_class_defaults_publishes_nothing() {
+    let mut t = fill_cold(true);
+    let before = t.vm.space.heap.len();
+    let tag = t.vm.defs.with_class_default(&mut t.vm.space, GLOBAL_DATA_STORES[0], |space, cdo| read_field(space, cdo, "Tag", "test"));
+    assert!(matches!(tag.unwrap().unwrap(), Value::Name(_)));
+    assert_eq!(t.vm.space.heap.len(), before, "the read freed what it built");
+    let class = t.vm.find_class(GLOBAL_DATA_STORES[0]).unwrap();
+    assert!(plan_fill(&mut t.vm, class).unwrap().is_some());
+    assert_eq!(t.vm.space.heap.len(), before, "the whole plan made nothing");
+    t.client();
+    assert!(t.vm.space.heap.len() > before, "the getter made the store");
+}
+
+/// A provider subclass whose class defaults hold a non-empty `SettingsArrayProviders` gets it empty (review r1 of
+/// #464, item 6).
+#[test]
+fn a_provider_subclass_starts_with_no_array_providers() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), Some("Engine.ToySettingsProviderSub"));
+    let cdo = t.vm.defs.class_default(&mut t.vm.space, "Engine.ToySettingsProviderSub").unwrap();
+    let held = read_field(&t.vm.space, cdo, "SettingsArrayProviders", "test").unwrap();
+    assert_eq!(held.elements().map(<[Value]>::len), Some(1), "the fixture's default holds one");
+    let (_, provider) = t.entry();
+    let provider = provider.unwrap();
+    assert_eq!(ow_attr::eval::class_path(&t.vm.space, provider), "Engine.ToySettingsProviderSub");
+    let arrays = read_field(&t.vm.space, provider, "SettingsArrayProviders", "test").unwrap();
+    assert_eq!(arrays.elements().map(<[Value]>::len), Some(0));
+}
+
+/// The writes are published in the note's order (review r1 of #464, item 3): when the provider cannot be made, the
+/// entry already holds its settings object, and its `Provider` stays empty.
+#[test]
+fn a_provider_failure_keeps_the_settings_written_before_it() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let class = t.vm.find_class(GLOBAL_DATA_STORES[0]).unwrap();
+    let plan = plan_fill(&mut t.vm, class).unwrap().unwrap();
+    let store = ow_vm::interp::instantiate_from_defaults(&mut t.vm, class).unwrap();
+    let provider_class = plan.provider;
+    let mut make = |vm: &mut Vm, c: ClassId| -> Result<ObjRef, VmError> {
+        if c == provider_class {
+            return Err(VmError::NotYet(ow_core::NotYet::not_read("an invented provider failure", "an invented record")));
+        }
+        ow_vm::interp::instantiate_from_defaults(vm, c)
+    };
+    assert!(apply_fill(&mut t.vm, store, &plan, &mut make).is_err());
+    let list = read_field(&t.vm.space, store, "GameSettingsCfgList", "test").unwrap();
+    let e = list.elements().unwrap()[0].clone();
+    let settings = struct_get(&t.vm.space, &e, "GameSettings", "test").unwrap();
+    assert!(matches!(settings, Value::Object(Some(_))), "the settings object is published: {settings:?}");
+    assert_eq!(struct_get(&t.vm.space, &e, "Provider", "test").unwrap(), Value::Object(None));
 }
 
 /// `SetIntProperty` (section 3): the first entry with the id gets the value when its type is `SDT_Int32`; a float
@@ -573,7 +687,8 @@ fn set_int_property_writes_the_first_integer_match_only() {
 }
 
 /// `GetCurrPlaythrough` reads `CurrentPlaythrough`; `GetDLCManager` answers None (the hub's ruling); a call on the
-/// settings provider is the named `NotYet`, for a native and for the provider's own script.
+/// settings provider is the named `NotYet`, for a native, for the provider's own script, and for a script it inherits
+/// (review r1 of #464, item 4), refused at dispatch. On another receiver the inherited script runs as script.
 #[test]
 fn the_engine_reads_and_the_provider_refusal() {
     let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
@@ -583,10 +698,20 @@ fn the_engine_reads_and_the_provider_refusal() {
     assert_eq!(t.call(GET_DLC_MANAGER, None, vec![]).unwrap(), Value::Object(None));
     let (_, provider) = t.entry();
     let provider = provider.unwrap();
-    // The client lookup began a refresh; the fill wrote, so a refusal here is marked.
-    for path in ["Engine.UIDataProvider.AddPropertyNotificationChangeRequest", "Engine.UIDataProvider_Settings.OnSettingValueUpdated"] {
-        not_yet(t.call(path, Some(provider), vec![]), |m| *m == Missing::NotRead, PROVIDER_NOT_YET);
+    // No refresh runs here, so nothing is marked.
+    for path in [
+        "Engine.UIDataProvider.AddPropertyNotificationChangeRequest",
+        "Engine.UIDataProvider_Settings.OnSettingValueUpdated",
+        "Engine.UIDynamicDataProvider.CleanupDataProvider",
+    ] {
+        match t.call(path, Some(provider), vec![]) {
+            Err(VmError::NotYet(n)) => assert!(n.what == PROVIDER_NOT_YET && n.missing == Missing::NotRead, "{path}: {n}"),
+            other => panic!("{path}: {other:?}"),
+        }
     }
+    let dynamic = t.make("Engine.UIDynamicDataProvider", "ToyDynamicProvider");
+    let cleanup = "Engine.UIDynamicDataProvider.CleanupDataProvider";
+    assert_eq!(t.call(cleanup, Some(dynamic), vec![]).unwrap(), Value::None, "run as script on another receiver");
     let other = t.make("Engine.UIDataProvider", "ToyOtherProvider");
     not_yet(
         t.call("Engine.UIDataProvider.AddPropertyNotificationChangeRequest", Some(other), vec![]),
@@ -595,28 +720,104 @@ fn the_engine_reads_and_the_provider_refusal() {
     );
 }
 
-/// The refresh's order on the filled entry: a setting written, then the unread `GetActiveMissionNumber`, whose
-/// `NotYet` is marked as after partial writes (kind kept); a later refresh that writes nothing before it is not marked.
+fn expect_marked(r: Result<Value, VmError>, missing: Missing, what: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, missing, "{n}");
+            assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains(what), "{n}");
+        }
+        other => panic!("expected a marked NotYet naming {what:?}, got {other:?}"),
+    }
+}
+
+fn expect_unmarked(r: Result<Value, VmError>, what: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => assert!(!n.what.contains(PARTIAL_WRITES) && n.what.contains(what), "{n}"),
+        other => panic!("expected an unmarked NotYet naming {what:?}, got {other:?}"),
+    }
+}
+
+const MISSION: &str = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
+
+/// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then the
+/// unread `GetActiveMissionNumber`: its `NotYet` leaves the refresh marked, kind kept. A second lookup does not clear
+/// the mark.
 #[test]
-fn a_not_yet_after_a_settings_write_is_marked() {
+fn a_not_yet_after_the_refreshs_fill_is_marked_past_a_second_lookup() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    t.on_step(|c| {
+        data_store_client(c.vm)?;
+        data_store_client(c.vm)?;
+        let pc = c.this;
+        let f = c.vm.find_function(MISSION)?;
+        Ok(c.vm.call(f, pc, vec![])?.ret)
+    });
+    expect_marked(t.refresh(), Missing::NotRead, "GetActiveMissionNumber");
+}
+
+/// A `NotYet` from outside the listed bindings, after a setting was written in the refresh, is marked as it leaves the
+/// refresh (kind kept); a non-`NotYet` error leaves unchanged.
+#[test]
+fn any_not_yet_leaving_the_refresh_after_a_write_is_marked() {
     let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
     let (settings, _) = t.entry();
     let settings = settings.unwrap();
     t.set_properties(settings, &[(1, 1, 0)]);
-    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
-    let mission = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
-    t.client();
+    let write = move |c: &mut NativeCall<'_>| -> Result<(), VmError> {
+        let f = c.vm.find_function(SET_INT_PROPERTY)?;
+        c.vm.call(f, Some(settings), vec![Value::Int(1), Value::Int(31)])?;
+        Ok(())
+    };
+    t.on_step(move |c| {
+        write(c)?;
+        Err(ow_core::NotYet::not_ported("an invented NotYet outside the bindings", "an invented record").into())
+    });
+    expect_marked(t.refresh(), Missing::NotPorted, "an invented NotYet outside the bindings");
+    assert_eq!(t.properties(settings), [(1, 1, 31)], "the write stays: nothing rolled back");
+    t.on_step(move |c| {
+        write(c)?;
+        Err(VmError::ServiceBorrowed("an invented service"))
+    });
+    assert!(matches!(t.refresh(), Err(VmError::ServiceBorrowed("an invented service"))), "other errors unchanged");
+}
+
+/// Outside a refresh nothing is marked: a lookup and a setting called standalone leave no mark, so a later unread
+/// call, standalone or in a refresh that writes nothing first, is unmarked.
+#[test]
+fn writes_outside_a_refresh_leave_no_mark() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let (settings, _) = t.entry();
+    let settings = settings.unwrap();
+    t.set_properties(settings, &[(1, 1, 0)]);
     t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(1), Value::Int(31)]).unwrap();
-    match t.call(mission, Some(pc), vec![]).unwrap_err() {
-        VmError::NotYet(n) => {
-            assert_eq!(n.missing, Missing::NotRead);
-            assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains("GetActiveMissionNumber"), "{n}");
+    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    expect_unmarked(t.call(MISSION, Some(pc), vec![]), "GetActiveMissionNumber");
+    t.on_step(|c| {
+        data_store_client(c.vm)?;
+        let pc = c.this;
+        let f = c.vm.find_function(MISSION)?;
+        Ok(c.vm.call(f, pc, vec![])?.ret)
+    });
+    expect_unmarked(t.refresh(), "GetActiveMissionNumber");
+    assert!(t.vm.service::<DataStores>().unwrap().borrow().refresh.is_empty(), "no refresh left open");
+}
+
+/// A nested refresh that wrote (the first lookup's fill) marks the outer one: the outer refresh's later `NotYet` is
+/// marked.
+#[test]
+fn a_nested_refreshs_write_marks_the_outer_refresh() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let depth = Rc::new(Cell::new(0));
+    t.on_step(move |c| {
+        if depth.get() == 0 {
+            depth.set(1);
+            let f = c.vm.find_function(REFRESH)?;
+            let pc = c.this;
+            c.vm.call(f, pc, vec![])?;
+            return Err(ow_core::NotYet::not_read("an invented outer NotYet", "an invented record").into());
         }
-        e => panic!("{e}"),
-    }
-    t.client();
-    match t.call(mission, Some(pc), vec![]).unwrap_err() {
-        VmError::NotYet(n) => assert!(!n.what.contains(PARTIAL_WRITES), "a refresh that wrote nothing: {n}"),
-        e => panic!("{e}"),
-    }
+        data_store_client(c.vm)?;
+        Ok(Value::None)
+    });
+    expect_marked(t.refresh(), Missing::NotRead, "an invented outer NotYet");
 }

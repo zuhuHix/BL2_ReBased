@@ -225,7 +225,7 @@ struct BState {
     not_yet: Vec<NotYet>,
     /// A script run that failed after a behavior walk had written state (`ow_behavior::kernel::run::PARTIAL_WRITES`):
     /// the run stops there and this VM runs no more script (review r1 of #439, item 2b).
-    partial: Option<String>,
+    partial: Option<MissionError>,
     exp_earned: Vec<ExpEarn>,
     gains: Vec<Gain>,
     pool: f32,
@@ -481,9 +481,16 @@ fn call_by_name(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<
     Ok(vm.call(f, Some(o), args)?)
 }
 
-/// The terminal error of a script run that stopped after a behavior walk wrote state (`MissionScript::run`).
-fn stopped_error(text: String) -> MissionError {
-    BehaviorError::Vm(VmError::NotYet(NotYet::not_read(text, RECORD)))
+/// Whether `e` is a stop after partial writes (`ow_behavior::kernel::run::PARTIAL_WRITES`), by its variant (review r1
+/// of #464, item 5): a `NotYet` or a script error whose own text **starts** with the mark, as the behavior walk and the
+/// online game settings refresh make them. Any other error is not terminal, whatever its text quotes.
+pub fn is_partial_stop(e: &MissionError) -> bool {
+    let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
+    match e {
+        BehaviorError::Vm(VmError::NotYet(n)) => n.what.starts_with(mark),
+        BehaviorError::Vm(VmError::Script { message, .. }) => message.starts_with(mark),
+        _ => false,
+    }
 }
 
 /// The registry key of the native at `path`, or the C++ refusal for a script function.
@@ -838,8 +845,8 @@ impl MissionScript {
     /// once and returned, so the hook or native that ran this script fails with it and everything above unwinds at
     /// once, and a later run on that VM fails the same way without running.
     fn run(&self, vm: &mut Vm, script: impl FnOnce(&mut Vm) -> Result<(), MissionError>) -> Result<(), MissionError> {
-        if let Some(text) = self.inner.state.borrow().partial.clone() {
-            return Err(stopped_error(text));
+        if let Some(stop) = self.inner.state.borrow().partial.clone() {
+            return Err(stop);
         }
         let before = vm.log.len();
         self.inner.state.borrow_mut().depth += 1;
@@ -853,10 +860,11 @@ impl MissionScript {
                 if let Some(n) = e.not_yet() {
                     s.not_yet.push(n.clone());
                 }
-                if text.contains(ow_behavior::kernel::run::PARTIAL_WRITES) {
-                    s.partial = Some(text.clone());
-                }
                 s.errors.push(format!("mission script: {text}"));
+                // The typed error itself is kept and returned (its variant and kind), not rebuilt from its text.
+                if is_partial_stop(&e) {
+                    s.partial = Some(e);
+                }
             }
         }
         if s.depth == 0 {
@@ -869,7 +877,7 @@ impl MissionScript {
             }
         }
         match s.partial.clone() {
-            Some(text) => Err(stopped_error(text)),
+            Some(stop) => Err(stop),
             None => Ok(()),
         }
     }
@@ -1117,7 +1125,7 @@ impl MissionScript {
     /// The failure that stopped a script run after a behavior walk had written state, if one did (review r1 of #439,
     /// item 2b). The caller stops its run at that step and does not reuse the VM.
     pub fn partial_stop(&self) -> Option<String> {
-        self.inner.state.borrow().partial.clone()
+        self.inner.state.borrow().partial.as_ref().map(|e| error_text(e))
     }
 
     /// Natives without an implementation that the script reached, `Class.Name(types) xN`, in key order.
