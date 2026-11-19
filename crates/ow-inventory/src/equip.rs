@@ -56,6 +56,8 @@ use ow_vm::error::VmError;
 pub mod natives;
 /// The name-part and card-cache natives (lane IMPL-CACHE-WEAPON-CARD).
 pub mod name_parts;
+/// `CacheWeaponCard`'s body in Off (lane IMPL-CACHE-WEAPON-CARD-BODY).
+pub mod card;
 /// The attribute slot natives (`InitializeAttributeSlots`; lane IMPL-INIT-ATTRIBUTE-SLOTS).
 pub mod slots;
 /// `ApplyInternalSlotEffectModifiers` (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS).

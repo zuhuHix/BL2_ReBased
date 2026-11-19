@@ -406,16 +406,11 @@ pub(crate) fn external_records(vm: &Vm, weapon: ObjRef) -> usize {
     records(vm, weapon)
 }
 
-/// The run's world (module documentation), for `--slice-gate`.
-pub(crate) fn gate_world(cooked: &Path) -> Result<ow_world::world::World, String> {
-    run_world(cooked, ParityMode::Off)
-}
-
 /// The installed globals definition the pickup world's globals hold (NATIVE_WILLOW_GLOBALS.md section 2: the
 /// configured `DefaultGlobalsDefinitionName`).
 pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 
-/// [`gate_world`] with the world's one globals object, for `--slice-gate`'s links 6 and 7 (lane IMPL-WILLOW-GLOBALS,
+/// The run's world in Off ([`run_world_t`]) with the world's one globals object, for `--slice-gate`'s links 6 and 7 (lane IMPL-WILLOW-GLOBALS,
 /// decision 2026-11-19-94; NATIVE_WILLOW_GLOBALS.md section 6.1). It is world set-up, done before the run writes
 /// anything, and it keeps its errors typed (review r1 of #476):
 /// - a `WillowGlobals` from its class defaults, whose `TheGlobalsDefinition` is the installed [`GLOBALS_DEFINITION`],
@@ -452,9 +447,35 @@ pub(crate) fn pickup_world(
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
 }
 
-/// [`gate_world`], typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).
+/// The run's world in Off, typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).
 pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, SetupError> {
     run_world_typed(cooked, ParityMode::Off)
+}
+
+/// The run's world in Off ([`run_world_t`]) with the world's one globals object, for `--slice-gate`'s link 8 (lane IMPL-CACHE-WEAPON-CARD-BODY,
+/// NATIVE_CACHE_WEAPON_CARD_BODY.md section 4; NATIVE_WILLOW_GLOBALS.md section 6.1). World set-up, before the run
+/// writes anything, its errors typed: a `WillowGlobals` from its class defaults whose `TheGlobalsDefinition` is the
+/// installed [`GLOBALS_DEFINITION`], loaded here (the allowed preload), recorded as the world's globals. Unlike
+/// [`pickup_world`] it checks only the holder's declaration it writes, not the pickup route's schemas (section 6.2,
+/// step 4, which the card does not read; review of #491).
+pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmError> {
+    let mut world = run_world_t(cooked, ParityMode::Off)?;
+    let vm = &mut world.vm;
+    let globals = make_t(vm, "WillowGame.WillowGlobals")?;
+    let definition = find_object_t(vm, GLOBALS_DEFINITION)?;
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, definition);
+    vm.log.extend(vm.defs.take_log());
+    loaded.map_err(VmError::from)?;
+    ow_inventory::globals::declared_reference(
+        vm,
+        globals,
+        "TheGlobalsDefinition",
+        Some(ow_inventory::globals::GEARBOX_GLOBALS_DEFINITION),
+        "the equip world's set-up",
+    )?;
+    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
+    world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
+    Ok(world)
 }
 
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as

@@ -898,10 +898,10 @@ fn link_of(driver: Driver) -> Option<usize> {
 /// Link 8 (module documentation): `make` prepares the weapon and its owner as `--equip-run` does, then each of its
 /// phases runs in turn, the spawn's `init` first. The evidence is the run's own ([`equip_evident`]).
 ///
-/// Before the weapon is made, `make` runs the weapon init's preflight (lane IMPL-CACHE-WEAPON-CARD,
-/// NATIVE_CACHE_WEAPON_CARD.md section 5.1, [`ow_inventory::equip::name_parts::preflight`]): Off answers
-/// `CacheWeaponCard` with `NotYet { NotRead }` whatever the data, so the stop is that refusal, unprefixed and graded by
-/// its variant, with nothing written.
+/// The world has the globals object (`equip_run::equip_world`, NATIVE_WILLOW_GLOBALS.md section 6.1). Before the weapon
+/// is made, `make` runs the weapon init's preflight (lane IMPL-CACHE-WEAPON-CARD-BODY, NATIVE_CACHE_WEAPON_CARD_BODY.md
+/// section 4, [`ow_inventory::equip::card::preflight`]): NATIVE_WILLOW_GLOBALS.md section 6.2 steps 1 to 3, the name-part schema and
+/// the card schema, each failure returned unprefixed and graded by its variant, with nothing written.
 ///
 /// **The partial-writes mark is this layer's** (review r1 of #506; the hub's rule that the caller layer that wrote adds
 /// it): `make` writes the weapon and its owner, so every phase's `NotYet` after it is terminal and gets "stopped after
@@ -909,26 +909,24 @@ fn link_of(driver: Driver) -> Option<usize> {
 /// marked only when its failure came after the weapon was allocated ([`make_marked`], review r2 of #506), so the
 /// preflight's refusal and a failure before any write stay unprefixed. The init's natives
 /// (`ChooseRandomNameParts`, `CacheWeaponCard`, `ApplyInternalSlotEffectModifiers`) return their pre-write `NotYet`s
-/// unprefixed. When the card is read, the globals preflight of NATIVE_WILLOW_GLOBALS.md section
-/// 6.2, steps 1 to 3, on a world set up per its section 6.1, replaces the refusal (review of #491); this lane adds no
-/// globals set-up.
+/// unprefixed.
 fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Equip) else { return };
     if !should_run(i, Driver::Equip, ran) {
         return;
     }
     let mut r = Ran::default();
-    let mut world = match crate::cmd::inventory::equip_run::gate_world(cooked) {
+    let mut world = match crate::cmd::inventory::equip_run::equip_world(cooked) {
         Ok(w) => w,
-        Err(text) => {
-            r.stop = Some(classify("setup", &text));
+        Err(e) => {
+            r.stop = Some(classify_error("setup", &e));
             ran[i] = Some(r);
             return;
         }
     };
     let vm = &mut world.vm;
     r.steps.push("make".into());
-    if let Err(e) = ow_inventory::equip::name_parts::preflight(vm) {
+    if let Err(e) = ow_inventory::equip::card::preflight(vm) {
         r.stop = Some(classify_error("make", &e));
         ran[i] = Some(r);
         return;

@@ -98,6 +98,13 @@ bridge). Installed Off `--slice-gate` strict (release build, under the machine l
 current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and verify_packages not run (no C++ change).
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
+**IMPL-CACHE-WEAPON-CARD-BODY (2026-11-19, desktop, on #506 at 848ffc6):** AI-assisted (Claude Code, Claude Opus 5.5).
+`CacheWeaponCard`'s body in Off (`ow-inventory` `equip::card`) and link 8's globals world. `cargo test --workspace -j
+2` 2,475 passed / 0 failed / 46 ignored (21 new in `equip::card::tests`); clippy flags nothing in the changed files;
+logs `local/p2/cwcb/`. Installed Off `--slice-gate` strict, under the machine run lock: 0 ok / 6 NotYet / 8 errors.
+Link 8 `notyet`, 1 of 5 steps, stop `init` at "stopped after partial writes: WillowWeapon.CacheWeaponCard: the card's
+slot count" (before: 0 of 5, stop `make`). The other 13 rows are identical to the before run.
+
 **IMPL-CACHE-WEAPON-CARD r2 (2026-11-19, desktop, on main 7668d07):** AI-assisted (Claude Code, Claude Opus 5.5).
 Link 8's `make` keeps its typed error and is marked only after the weapon's allocation; struct own names by
 `ObjectPath::name()`. `cargo test -j 2 -p ow-inventory -p ow-cli`: ow-inventory 196 passed / 0 failed, ow-cli 115

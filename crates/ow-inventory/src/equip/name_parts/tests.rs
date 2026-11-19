@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
 use ow_core::ParityMode;
-use ow_core::notyet::Missing;
 use ow_defs::DefStore;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropAddr};
@@ -353,30 +352,7 @@ fn an_expression_not_yet_is_returned_unprefixed_and_writes_nothing() {
     assert_eq!(x.picks(), (Some(old), Some(old)), "the prefix pick computed before the refusal is not written");
 }
 
-// ---- CacheWeaponCard and the preflight -----------------------------------------------------------------------
-
-#[test]
-fn cache_weapon_card_at_call_time_is_an_unprefixed_not_read() {
-    let mut x = Fx::new(Schema::Good);
-    let w = x.weapon;
-    let before = read_prop(&x.vm, w, "DefinitionData");
-    let n = not_yet(cache_weapon_card(&mut x.vm, w).unwrap_err());
-    assert_eq!(n.missing, Missing::NotRead);
-    assert_eq!(n.what, CACHE_WEAPON_CARD_NOT_READ, "no prefix: the native writes nothing (review r1 of #506)");
-    assert_eq!(n.record, RECORD);
-    assert_eq!(read_prop(&x.vm, w, "DefinitionData"), before);
-}
-
-#[test]
-fn the_preflight_refuses_the_card_first_unprefixed_whatever_the_schema() {
-    for schema in [Schema::Good, Schema::IntPriority, Schema::NoExpLevel] {
-        let mut x = Fx::new(schema);
-        let n = not_yet(preflight(&mut x.vm).unwrap_err());
-        assert_eq!(n.missing, Missing::NotRead);
-        assert_eq!(n.what, CACHE_WEAPON_CARD_NOT_READ, "no prefix: nothing written yet");
-        assert_eq!(n.record, RECORD);
-    }
-}
+// ---- The name-part schema ----------------------------------------------------------------------------------
 
 #[test]
 fn the_name_part_schema_holds_on_the_declared_classes() {
@@ -409,45 +385,34 @@ fn each_schema_failure_is_a_script_error_naming_the_field() {
 
 // ---- Registration ---------------------------------------------------------------------------------------------
 
-/// Declares both natives on the weapon class with invented keys and registers them.
-fn declared(x: &mut Fx) -> (ow_object::ids::FuncId, ow_object::ids::FuncId) {
+/// Declares the native on the weapon class with an invented key and registers it.
+fn declared(x: &mut Fx) -> ow_object::ids::FuncId {
     let weapon = x.vm.space.classes.by_path(WEAPON_CLASS).unwrap();
-    let mut declare = |path: &str, key: &str| {
-        let path = ow_core::ObjectPath::parse(path).unwrap();
-        x.vm.declare_function(FunctionDecl::native(path, key).with_owner(weapon)).unwrap()
-    };
-    let choose = declare(CHOOSE_RANDOM_NAME_PARTS, "Test.ChooseKey");
-    let card = declare(CACHE_WEAPON_CARD, "Test.CardKey");
+    let path = ow_core::ObjectPath::parse(CHOOSE_RANDOM_NAME_PARTS).unwrap();
+    let choose = x.vm.declare_function(FunctionDecl::native(path, "Test.ChooseKey").with_owner(weapon)).unwrap();
     register(&mut x.vm).unwrap();
-    (choose, card)
+    choose
 }
 
 #[test]
-fn register_binds_both_natives_by_their_own_keys_in_off() {
+fn register_binds_the_native_by_its_own_key_in_off() {
     let mut x = Fx::new(Schema::Good);
-    let (choose, card) = declared(&mut x);
+    let choose = declared(&mut x);
     let pick = x.part_name(1, 100, 1.0, vec![]);
     let t = x.holder(WEAPON_TYPE_CLASS, &[Some(pick)], &[]);
     x.data(Some(t), &[], (None, None));
     let w = x.weapon;
     x.vm.call(choose, Some(w), vec![]).unwrap();
     assert_eq!(x.picks(), (Some(pick), None));
-    let n = not_yet(x.vm.call(card, Some(w), vec![]).unwrap_err());
-    assert_eq!(n.what, CACHE_WEAPON_CARD_NOT_READ);
 }
 
 #[test]
-fn reference_binds_neither_native() {
+fn reference_binds_nothing() {
     let mut x = Fx::in_mode(Schema::Good, ParityMode::Reference);
-    let (_, card) = declared(&mut x);
+    let choose = declared(&mut x);
     let w = x.weapon;
-    match x.vm.call(card, Some(w), vec![]) {
-        Err(VmError::NotYet(n)) => assert!(!n.what.contains(CACHE_WEAPON_CARD_NOT_READ), "{}", n.what),
-        Err(_) => {}
-        Ok(v) => panic!("Reference ran an unbound native: {v:?}"),
-    }
+    assert!(x.vm.call(choose, Some(w), vec![]).is_err(), "Reference ran an unbound native");
 }
-
 
 // ---- Item 3 of review r1 of #506: untagged fields read through the class defaults -------------------------------
 

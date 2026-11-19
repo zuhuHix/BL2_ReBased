@@ -22,21 +22,17 @@
 //!     writes" prefix is added by the caller layer that wrote (review r1 of #506, the hub's rule; the same as
 //!     `ApplyInternalSlotEffectModifiers`, #483): in `--slice-gate`'s link 8, the equip driver, whose `make` step
 //!     wrote before the init runs.
-//! - **`WillowWeapon.CacheWeaponCard()`** (sections 3 and 5.3): Off answers `NotYet { NotRead }` at entry, before the
-//!   globals definition is asked for, before the clear and before any slot flag changes ([`cache_weapon_card`]).
-//!   It writes nothing, so its answer is unprefixed; the caller layer that wrote marks it (review r1 of #506).
-//! - **The preflight** of a driver that makes a weapon and runs its init ([`preflight`], section 5.1), before the
-//!   weapon is made: first the `CacheWeaponCard` refusal with **no** prefix (every init path reaches it and Off
-//!   answers `NotRead` whatever the data), then the name-part schema ([`name_part_schema`]), each failure a
-//!   `VmError::Script` naming the field. While [`CACHE_WEAPON_CARD_READ`] is false the refusal always comes first; the
-//!   schema check is kept so that it holds once the card is read and the refusal goes.
+//! - **The name-part schema** ([`name_part_schema`], section 5.1), each failure a `VmError::Script` naming the field,
+//!   run by the equip driver's preflight ([`super::card::preflight`]) before the weapon is made.
+//! - **`WillowWeapon.CacheWeaponCard()`** is [`super::card`]'s (lane IMPL-CACHE-WEAPON-CARD-BODY): the body note
+//!   replaced the outline's refusal at entry (section 5.3) and the preflight's card refusal (section 5.1).
 //!
-//! **Reference** (architecture rule R3): the C++ VM binds neither native, so [`register`] binds nothing there.
+//! **Reference** (architecture rule R3): the C++ VM does not bind the native, so [`register`] binds nothing there.
 
 use std::rc::Rc;
 
 use ow_attr::api::{Comparison, EvalCx, ExprData, ExprMode, Operand2Usage};
-use ow_core::{NotYet, ParityMode};
+use ow_core::ParityMode;
 use ow_object::ids::{ClassId, ObjRef};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -48,42 +44,14 @@ use super::{WEAPON_PART_FIELDS, bad, field, object_of, read, write};
 /// The record of this module.
 pub const RECORD: &str = "docs/verification/NATIVE_CACHE_WEAPON_CARD.md";
 
-/// The script functions of the two natives.
+/// The native's script function.
 pub const CHOOSE_RANDOM_NAME_PARTS: &str = "WillowGame.WillowWeapon.ChooseRandomNameParts";
-pub const CACHE_WEAPON_CARD: &str = "WillowGame.WillowWeapon.CacheWeaponCard";
 
 /// The classes the name-part rule reads.
 pub const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
 pub const WEAPON_TYPE_CLASS: &str = "WillowGame.WeaponTypeDefinition";
 pub const WEAPON_PART_CLASS: &str = "WillowGame.WeaponPartDefinition";
 pub const NAME_PART_CLASS: &str = "WillowGame.WeaponNamePartDefinition";
-
-/// Whether `CacheWeaponCard`'s presentation lookup and card entries are read (the note's open questions 2 and 3).
-/// While false, Off refuses the native and the preflight refuses it first.
-pub const CACHE_WEAPON_CARD_READ: bool = false;
-
-/// The text of `CacheWeaponCard`'s Off refusal (the note's section 5.3).
-pub const CACHE_WEAPON_CARD_NOT_READ: &str =
-    "WillowWeapon.CacheWeaponCard: the card presentation lookup and the card attributes of the type and parts";
-
-/// `CacheWeaponCard`'s Off refusal, unprefixed: `NotYet { NotRead }` citing the note.
-pub fn cache_weapon_card_refusal() -> VmError {
-    NotYet::not_read(CACHE_WEAPON_CARD_NOT_READ, RECORD).into()
-}
-
-/// `CacheWeaponCard` at call time in Off (module documentation): the refusal, unprefixed, before anything of its own.
-pub fn cache_weapon_card(_vm: &mut Vm, _weapon: ObjRef) -> Result<(), VmError> {
-    Err(cache_weapon_card_refusal())
-}
-
-/// The preflight of a driver that makes a weapon and runs its init (module documentation), before the weapon is
-/// made: the `CacheWeaponCard` refusal, unprefixed, then the name-part schema.
-pub fn preflight(vm: &mut Vm) -> Result<(), VmError> {
-    if !CACHE_WEAPON_CARD_READ {
-        return Err(cache_weapon_card_refusal());
-    }
-    name_part_schema(vm)
-}
 
 const SCHEMA: &str = "ChooseRandomNameParts (the name-part schema)";
 
@@ -187,7 +155,7 @@ fn declared(vm: &Vm, class: ClassId, name: &str) -> Result<PropKind, VmError> {
 const NATIVE: &str = "WillowWeapon.ChooseRandomNameParts";
 
 /// A loaded definition `o` (a lazy one loads; loading is not a write).
-fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
+pub(crate) fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
         let r = vm.defs.ensure_loaded(&mut vm.space, o);
         vm.log.extend(vm.defs.take_log());
@@ -349,15 +317,14 @@ fn set(vm: &Vm, data: &mut Value, name: &str, v: Option<ObjRef>) -> Result<(), V
     Ok(())
 }
 
-/// Binds both natives in `ParityMode::Off` by each declaration's own native key (a package without the function binds
-/// none); Reference binds nothing (module documentation).
+/// Binds the native in `ParityMode::Off` by its declaration's own native key (a package without the function binds
+/// nothing); Reference binds nothing (module documentation).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
     type Body = fn(&mut Vm, ObjRef) -> Result<(), VmError>;
-    let natives: [(&str, Body); 2] =
-        [(CHOOSE_RANDOM_NAME_PARTS, choose_random_name_parts), (CACHE_WEAPON_CARD, cache_weapon_card)];
+    let natives: [(&str, Body); 1] = [(CHOOSE_RANDOM_NAME_PARTS, choose_random_name_parts)];
     for (path, body) in natives {
         let Ok(id) = vm.find_function(path) else {
             continue;

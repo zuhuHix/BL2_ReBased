@@ -320,7 +320,7 @@ struct ValueInputs {
 }
 
 /// Whether `item`'s `Role` is the `ROLE_Authority` entry of the enum its declaration names.
-fn is_authority(vm: &Vm, item: ObjRef, what: &str) -> Result<bool, VmError> {
+pub(crate) fn is_authority(vm: &Vm, item: ObjRef, what: &str) -> Result<bool, VmError> {
     let class = vm.space.heap.get(item)?.class;
     let p = vm
         .space
