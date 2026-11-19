@@ -148,7 +148,11 @@ section 3: for an upgrade listed twice, the lookup answers its first position, w
     shorter than index + 1. Then it is zero-filled up to index + 1 entries.
 - **The Off order (the hub's ruling in review r1 of #451):**
   1. Preflight both effects before either write: decide whether each write is needed (as above), and that the world
-     can make it.
+     can make it. On a cold lookup the preflight takes the effective index from the **pending** cache assignments
+     (review r2 of #451): the asked upgrade's position as the walk would assign it (its last occurrence when it is
+     listed twice), or -1 when it is not listed. It does not read the field again. If that index needs array growth
+     and growth is unsupported, the answer is the array-growth `NotYet` below, with both the cache fields and the array
+     untouched.
   2. Commit the cache assignments.
   3. Zero-fill the array.
   4. Read the entry.
@@ -189,8 +193,10 @@ upgrade definitions and `PC.BlackMarketUpgrades` (length and entries) before and
 1. **Cold cache, accepted controller, empty array.** Start a fresh character in a fresh process (all nine caches -1,
    the array empty). Call `Att_BM_AssaultRifleAmmo.GetValue(PC)`. Expect 0.0, all nine caches at their positions in
    `GD_Globals.General.Globals.BlackMarketUpgrades`, and the array grown with zeros to the assault-rifle position + 1.
-2. **Warm cache.** Repeat the call. Expect the same value and no change to any cache or to the array. Whether the
-   globals lookup was skipped can only be seen by hooking it; if the SDK cannot hook a native helper, this part is an
+2. **Warm cache.** After check 1 the assault-rifle field is warm. Set a **different** listed upgrade's
+   `CachedUpgradeIndex` (the pistol's, say) back to -1, then repeat the assault-rifle call. Expect the same value, the
+   pistol field still -1 (a warm read runs no walk, so it reassigns nothing), the other caches unchanged, and the array
+   unchanged. If the SDK cannot write the field, or cannot read it back after the call, write detection here is an
    open verification gap.
 3. **Growth keeps entries.** On a character with a saved level 2 at the assault-rifle position and an array shorter
    than another upgrade's position, read that other upgrade's attribute. Expect the array grown with zeros, and the
@@ -204,8 +210,16 @@ upgrade definitions and `PC.BlackMarketUpgrades` (length and entries) before and
    player-controller context resolver. If that resolver answers None for it, this case collapses into case 6 and needs
    another non-None, non-controller context; that may be an open verification gap.
 8. **Missing globals versus an unlisted upgrade.** Missing globals cannot be set up in a running game: an open
-   verification gap. An unlisted upgrade needs a definition outside the list. The SDK may build one as a transient
-   object; if not, an open verification gap. Expected: its field stays -1, the nine listed fields assigned, 0.0.
+   verification gap. The unlisted case:
+   - **Setup.** Construct a transient `BlackMarketUpgradeDefinition` outside the globals list. Bind it by setting the
+     assault-rifle attribute's resolver (its `AssociatedBlackMarketUpgrade`) to the transient object, keeping the
+     original to restore afterwards. Set the transient field and the nine listed fields to -1.
+   - **Read before and after one `GetValue(PC)`:** the transient field, the nine listed fields, and
+     `PC.BlackMarketUpgrades` (length and entries).
+   - **Expected:** 0.0; the transient field still -1; the nine listed fields assigned their positions; the array
+     unchanged.
+   - Restore the resolver's original upgrade. If the SDK cannot construct the object or set the resolver's field,
+     this case is an open verification gap.
 9. **Duplicate entries.** The installed list has none; testing it needs a modified globals list in memory. Expected:
    the duplicate's cache holds its last position, and `LookupBlackMarketUpgradeIndex` answers its first. If the SDK
    cannot edit the array in place, an open verification gap.
