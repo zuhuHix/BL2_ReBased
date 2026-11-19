@@ -19,6 +19,11 @@ Reference is unchanged (the C++ VM has no binding; Reference leaves it unbound).
   does not declare is `NotYet { NotRead }`; the name is `ObjectPath::name` (splits at `.` and `:`). Two more tests:
   state-scoped functions, state code and unknown frames; a call through the binding from bytecode, and a native
   calling back into script (the callee's name, then the caller's).
+- **Review r2 of #564:** the interpreter's state-code flag (`interp::is_state_code`, set only by W5-STATES'
+  `declare_state_code`) is the only state-code test; the path-suffix fallback is gone, so an ordinary declaration
+  spelled `.<state code>` is answered like any function. The state-code test now builds its frame through
+  `declare_state_code` and checks the name table is unchanged before the refusal; the state-scoped fixture is
+  `Toy.ToySkill.ToyState:OnToyEvent`, so the `ObjectPath::name` split at `:` is covered.
 - **Tests (first round):** 3 (the innermost function's name, back to the outer after the inner returns; the no-frame `NotRead`,
   write-free; Off binds, Reference does not).
 - **The slice** (installed, Off, strict, a local merge never pushed): this branch with #535 @ 7f8fc7d7, #548 @

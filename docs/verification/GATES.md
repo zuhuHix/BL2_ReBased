@@ -282,8 +282,11 @@ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-175.
 `Object.GetFuncName()` in Off: the innermost running script function's name; `NotRead` with no script frame.
 
 Results:
-- `cargo test -p ow-vm`: 208 passed / 0 failed / 1 ignored (3 new).
-- `cargo test --workspace -j 2`: 2,447 passed / 0 failed / 46 ignored; clippy clean in the new files;
+- `cargo test -p ow-vm`, round 1: 208 passed / 0 failed / 1 ignored (3 new). Review r1 of #564 added 2 tests (state
+  functions, state code and unknown frames; the binding from bytecode and a native calling back): 210 passed / 0
+  failed / 1 ignored. Review r2 of #564 (state code only through the interpreter's flag, built by
+  `declare_state_code`; the `:` split covered; tests changed, not added): 210 passed / 0 failed / 1 ignored.
+- `cargo test --workspace -j 2`, round 1: 2,447 passed / 0 failed / 46 ignored; clippy clean in the new files;
   `crate_edges_test.py` OK.
 - Installed Off `--slice-gate` strict (a local merge with #535, #548, #555, #560, #523 and the link 9 spawn branches,
   never pushed; under the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and `cast` (2 of 2); the

@@ -10,8 +10,9 @@
 //! **Off only** (Reference keeps its stub policy: the C++ VM has no binding), first-wins. Write-free: it reads the
 //! VM's stack of running script functions and the name table. Refusals, each `NotYet { NotRead }` (review r1 of #564):
 //! - no script function running (a native called from outside bytecode): [`NO_FRAME`];
-//! - the innermost frame is a state's code (W5-STATES runs it as a function whose path ends `.<state code>`): its name
-//!   in the game is the state's, which the port does not guess ([`STATE_CODE`]);
+//! - the innermost frame is a state's code (the interpreter's state-code flag, set only by W5-STATES'
+//!   `declare_state_code`; review r2 of #564: the flag is the only test, not the path's spelling): its name in the
+//!   game is the state's, which the port does not guess ([`STATE_CODE`]);
 //! - the innermost frame's function is not declared in the VM: [`UNKNOWN`].
 //!
 //! The name is the function path's last component (`ObjectPath::name`, which splits at `.` and `:`).
@@ -36,8 +37,6 @@ pub const NO_FRAME: &str =
 pub const STATE_CODE: &str = "GetFuncName: inside state code";
 /// The `NotYet { NotRead }` for a frame whose function the VM does not declare.
 pub const UNKNOWN: &str = "GetFuncName: the running function is not declared in the VM";
-/// The path suffix of a state's code (`crate::states`).
-const STATE_CODE_SUFFIX: &str = ".<state code>";
 
 /// Binds `Object.GetFuncName()` in Off, unless another pack bound it first.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -58,9 +57,6 @@ pub(crate) fn get_func_name(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(decl) = c.vm.function(f) else {
         return Err(NotYet::not_read(UNKNOWN, RECORD).into());
     };
-    if decl.path.as_str().ends_with(STATE_CODE_SUFFIX) {
-        return Err(NotYet::not_read(STATE_CODE, RECORD).into());
-    }
     let name = decl.path.name().to_string();
     let id = match c.vm.space.names.find(&name) {
         Some(id) => id,
@@ -134,23 +130,40 @@ mod tests {
     fn state_functions_state_code_and_unknown_frames() {
         let mut vm = vm(ParityMode::Off);
         let in_state = vm
-            .declare_function(FunctionDecl::script(ObjectPath::parse("Toy.ToySkill.ToyState.OnToyEvent").unwrap()))
+            .declare_function(FunctionDecl::script(ObjectPath::parse("Toy.ToySkill.ToyState:OnToyEvent").unwrap()))
             .unwrap();
-        let state_code = vm
-            .declare_function(FunctionDecl::script(ObjectPath::parse("Toy.ToySkill.ToyState.<state code>").unwrap()))
+        // State code as W5-STATES declares it (the interpreter's flag), and an ordinary declaration spelled the same
+        // way, which is a function like any other (review r2 of #564).
+        let object = vm.space.classes.define("Core.Object", None, vec![]).unwrap();
+        let state_code = crate::interp::declare_state_code(
+            &mut vm,
+            0,
+            object,
+            "Toy.ToySkill.ToyState.<state code>",
+            ow_script::function::FunctionInfo::default(),
+        )
+        .unwrap();
+        let spelled = vm
+            .declare_function(FunctionDecl::script(ObjectPath::parse("Toy.ToySkill.OtherState.<state code>").unwrap()))
             .unwrap();
         let native = vm.declare_function(FunctionDecl::native(ObjectPath::parse("Core.Object.GetFuncName").unwrap(), KEY)).unwrap();
         vm.code.stack.push(in_state);
         let mut c = NativeCall::new(&mut vm, native, None, Vec::new());
         let Value::Name(n) = get_func_name(&mut c).unwrap() else { panic!() };
-        assert_eq!(vm.space.names.text(n), "OnToyEvent", "a state-scoped function");
+        assert_eq!(vm.space.names.text(n), "OnToyEvent", "a state-scoped function, past the ':'");
         vm.code.stack.push(state_code);
+        let names = format!("{:?}", vm.space.names);
         let mut c = NativeCall::new(&mut vm, native, None, Vec::new());
         match get_func_name(&mut c).unwrap_err() {
             VmError::NotYet(n) => assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, STATE_CODE)),
             other => panic!("{other:?}"),
         }
-        assert!(vm.space.names.find("<state code>").is_none(), "no made-up name interned");
+        assert_eq!(format!("{:?}", vm.space.names), names, "no name-table write before the refusal");
+        vm.code.stack.pop();
+        vm.code.stack.push(spelled);
+        let mut c = NativeCall::new(&mut vm, native, None, Vec::new());
+        let Value::Name(n) = get_func_name(&mut c).unwrap() else { panic!() };
+        assert_eq!(vm.space.names.text(n), "<state code>", "an ordinary function is answered, whatever its spelling");
         vm.code.stack.clear();
         vm.code.stack.push(ow_object::ids::FuncId::new(9_999));
         let mut c = NativeCall::new(&mut vm, native, None, Vec::new());
