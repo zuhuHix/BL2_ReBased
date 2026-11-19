@@ -34,7 +34,7 @@ fn snapshot() -> BalanceSnapshot {
 }
 
 /// A world over `defs`, with no packs.
-fn world_over(defs: DefStore, mode: ParityMode) -> World {
+pub(super) fn world_over(defs: DefStore, mode: ParityMode) -> World {
     let vm = Vm::new(
         ObjectSpace::new(),
         defs,
@@ -109,7 +109,7 @@ fn sanctuary_in(mode: ParityMode) {
 use ow_package::testkit::reflect::Declarations;
 use ow_package::testkit::{Export, PackageBuilder, ints};
 
-fn core() -> Vec<u8> {
+pub(super) fn core() -> Vec<u8> {
     let mut d = Declarations::new(&["Int"]);
     let object = d.cls("Object", 0);
     d.default_object(object, "Object");
@@ -120,15 +120,23 @@ fn core() -> Vec<u8> {
 
 /// `Engine.upk`: `Actor` (a `Health` to tell objects apart), `WorldInfo` with its `StreamingLevels`, `LevelStreaming`
 /// with its `PackageName`, `World`, `Level`, and a non-actor `Note`.
-fn engine() -> Vec<u8> {
-    let mut d = Declarations::new(&["Int", "Object", "Array", "Name"]);
+///
+/// For the bring-up (lane MAP-LOAD-NATIVES): `Actor.bStatic`, a `GameInfo` actor class, `WorldInfo.Game` and
+/// `WorldInfo.bBegunPlay`.
+pub(super) fn engine() -> Vec<u8> {
+    let mut d = Declarations::new(&["Int", "Object", "Array", "Name", "Bool"]);
     let core = d.p.add_import("Core", "Package", 0, "Core");
     let object = d.p.add_import("Core", "Class", core, "Object");
     let actor = d.cls("Actor", object);
     d.prop("Int", actor, "Health", 0);
+    d.prop("Bool", actor, "bStatic", 0);
     d.default_object(actor, "Actor");
+    let game_info = d.cls("GameInfo", actor);
+    d.default_object(game_info, "GameInfo");
     let world_info = d.cls("WorldInfo", actor);
     d.array_of(world_info, "StreamingLevels", "Object", object);
+    d.prop("Object", world_info, "Game", game_info);
+    d.prop("Bool", world_info, "bBegunPlay", 0);
     d.default_object(world_info, "WorldInfo");
     let streaming = d.cls("LevelStreaming", object);
     d.prop("Name", streaming, "PackageName", 0);
@@ -169,7 +177,7 @@ fn level_tail(level: i32, items: &[i32]) -> Vec<u8> {
 /// on), the level's list naming `listed` of them (export indices) after the WorldInfo and a null entry. With
 /// `streaming`, the WorldInfo's `StreamingLevels` names that package through a `LevelStreaming` (exported last). With
 /// `note_first`, actor 4 is a `Note`, which is not an actor class.
-fn map(actors: usize, listed: &[i32], streaming: Option<&str>, note_first: bool) -> Vec<u8> {
+pub(super) fn map(actors: usize, listed: &[i32], streaming: Option<&str>, note_first: bool) -> Vec<u8> {
     map_with_fault(actors, listed, streaming, note_first, None)
 }
 
@@ -247,7 +255,7 @@ fn map_with_fault(
 }
 
 /// A world over a fresh store holding `files` in `mode`, run on the VM's thread.
-fn with_world<T: Send>(
+pub(super) fn with_world<T: Send>(
     name: &str,
     files: Vec<(&'static str, Vec<u8>)>,
     mode: ParityMode,
