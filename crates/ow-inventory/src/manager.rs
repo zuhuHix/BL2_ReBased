@@ -420,6 +420,7 @@ impl NativePack for Pack {
         crate::globals::register(vm)?;
         crate::equip::slots::register(vm)?;
         crate::equip::internal_slots::register(vm)?;
+        crate::anim_tree::register(vm)?;
         crate::spawn::register(vm)
     }
 }
