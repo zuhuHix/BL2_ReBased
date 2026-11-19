@@ -70,24 +70,23 @@ While the pickup is in its `Pickup` state:
 
 ## 4. The look: which pickup the player sees (link 7)
 
-The player controller's per-tick targeting, a native, chooses at most one **seen** pickup. Read with medium
-confidence, as a rule and not as its structure:
-- **Candidates** are the live pickups the game's globals keep a list of (`WillowGlobals`; a destroyed pickup leaves
-  the list, section 6), skipping disabled ones.
-- **Within the pickup radius** (`GlobalsDefinition.PickupRadius`), a pickup must lie inside a narrow cone around the
-  view direction (the cosine of the angle is above 0.9).
-- **The cone is horizontal:** only the yaw of the view and of the direction to the pickup count, not the pitch.
-- **Each candidate gets a score** divided by its distance. The score measures how close the view ray passes to a
-  short vertical segment through the pickup's centre: 1 when the ray passes through the axis, falling to 0 at a
-  capture radius, and 0 beyond it. The pickup already seen gets a wider radius and a taller segment, and 0.25 added to
-  its score before the division, so the choice holds steady. A candidate whose score is not positive is not chosen.
-  The best ratio wins. The capture radius and the segment's base height come from values passed in that were not
-  resolved (UNVERIFIED; open question 1).
-- **A line check** from just in front of the winner (25 units back toward the viewer) to the view point must not hit
-  anything but the pickup or its base. Otherwise there is no seen pickup this tick.
-- **The events.** When the winner is within the pickup radius and differs from the last seen one, the controller's
-  `SawPickupable` event is raised with it. When there is no winner and one was seen, `ClearSeenPickupable` is
-  raised. The same pass also drives the interaction highlight and icon, which are presentation.
+A per-tick native chooses at most one **seen** pickup. **[NATIVE_PICKUP_TARGETING.md](NATIVE_PICKUP_TARGETING.md)
+(decision 2026-11-19-74, review r1 of #461) is the rule now**, and wins where this summary is shorter. In brief:
+- **The pass is the player HUD's** (`WillowHUD`), not the controller's. It reads the HUD's owner, the owner's view
+  point and the HUD's `HUDDef`, and raises its events on the HUD's `WPlayerOwner` (the owner controller).
+- **Candidates** are the `bPickupable` pickups of the globals' list (`WillowGlobals.PickupList`; a destroyed pickup
+  leaves the list, section 6). A pickup is scored when it lies within the HUD definition's range,
+  **`HUDDefinition.PickupRange`** (not `GlobalsDefinition.PickupRadius`, as an earlier draft of this note said), or
+  always when the globals definition has a hover particle, and inside a horizontal cone (a cosine above 0.9, yaw only).
+- **The score and the ranking** are resolved there: the view ray against a vertical segment through the pickup's
+  centre, a capture radius from `GlobalsDefinition.HoverWidthPickup`, a bonus and a wider radius for the pickup
+  already hovered, divided by the distance, the highest value winning, ties to the earlier list entry.
+- **A line check** from 25 units back from the winner toward the viewer, to the view point, must not hit anything but
+  the pickup or its base, **except that no trace runs when the winner is within a quarter of `PickupRange`
+  horizontally**.
+- **The events.** When the winner is within `PickupRange` and differs from the last reported one, `SawPickupable` is
+  raised with it. When there is no winner and one was reported, `ClearSeenPickupable` is raised. Each is raised before
+  the HUD records the change. The same pass also drives the interaction highlight and icon, which are presentation.
 
 On the controller, `SawPickupable` records the pickup as `CurrentSeenPickupable` (on a client, after asking the
 server, which records it only when it has an inventory and a definition).
@@ -110,14 +109,14 @@ valid touch, which includes the touch trace and `PickupQuery` passing (section 3
 - **Link 7** (the aimed gun, plus a nearer decoy 45 uu to Maya's side, about 90 degrees off her aim): **the touch
   source is the decoy**, the nearer gun, which fills the touched slot when its touch is valid. The aimed gun then
   wins as the seen one. If the aimed gun also touches Maya, the answer is the same.
-- **The score-1 case (link 7):** the aimed gun must be enabled, within the pickup radius and inside the cone, and the
-  view ray must cross the scored vertical segment through its centre. Crossing the gun's vertical axis is not enough,
-  because the segment's height is not resolved. In that case its score is 1 whatever the capture radius, it is the
-  only eligible candidate (the decoy fails the cone), and it is chosen if it passes the line check.
+- **Link 7's look** is NATIVE_PICKUP_TARGETING.md section 11: with a supplied view at Maya's location aimed at the
+  gun, the decoy fails the cone and the aimed gun is the only scored candidate. The fixture's placements alone give no
+  camera geometry.
 - **What Off answers** (Off contract, below): a touch whose validity cannot be settled is a named `NotYet`. An
-  observed empty touched slot gives no pickup, which is the game's answer and not a `NotYet`. Unresolved eligibility
-  (any case outside the score-1 case) and any ranking among several eligible candidates are named `NotYet`s
-  (open question 1).
+  observed empty touched slot gives no pickup, which is the game's answer and not a `NotYet`. **The touched slot stays
+  the key's prerequisite** (rule 1 above): the look only matters once the player touches some pickup. The look itself
+  answers as NATIVE_PICKUP_TARGETING.md section 10 says, in its order: the touched-slot check first, then no HUD, a HUD
+  with no owner or definition (nothing seen), and no camera.
 
 ## 5. The take
 
@@ -178,8 +177,9 @@ inventory manager is refused. Otherwise the inventory manager's `HandlePickupQue
 
 Every branch this note leaves unresolved answers a named `NotYet` in Off, never a guess. Named here:
 - a touch whose validity cannot be settled, including what blocks `TouchPickupTrace` inside the native (section 3);
-- the per-tick targeting outside the score-1 case: unresolved eligibility and any multi-candidate ranking
-  (section 4, open question 1);
+- the per-tick targeting's own named `NotYet`s, which NATIVE_PICKUP_TARGETING.md section 10 lists (the HUD, the
+  camera, the pickup's bounds, collision for the trace, and the rest); eligibility and the ranking are values there,
+  not `NotYet`s;
 - a `PickupQuery` target other than the supported slice dispatch above: a game info with a base mutator, another
   game-info class, another inventory manager class, or a pickup's or a held inventory whose class replaces the query
   (for example `WillowUsableItem`);
@@ -204,7 +204,7 @@ An observed empty touched slot is not one of these: the key takes nothing.
 - The take is script from end to end: the touch state, `GetCurrentPickupable`, `PickupSomething`,
   `PickupPickupable`, `GiveTo` and `AddInventory`. The natives it reaches are already indexed (the pickup accessors,
   the afford and pay pair, the inventory counts and limits, `TouchPickupTrace`), except those in the table below.
-- Link 7 needs the native targeting of section 4, within the score-1 case it states. Pickups are not chosen by the
+- Link 7 needs the native targeting of section 4, as NATIVE_PICKUP_TARGETING.md gives it. Pickups are not chosen by the
   port's use-target choice (`ow_mission::interactive::choose_usable`): NATIVE_USE_INTERACTION.md says they have their
   own walk, which is section 4.
 
@@ -213,12 +213,12 @@ An observed empty touched slot is not one of these: the key takes nothing.
 | `WillowPlayerController.GetInventoryPawn` | the controller's pawn; when that pawn answers as a vehicle, the vehicle's `Driver` instead. This is the pawn that will own the item, and it does not conflict with `AddInventory`'s own "not a vehicle" readiness test (NATIVE_INVENTORY_EQUIP.md) | medium |
 | `WillowGlobals.RemovePickup(Pickup)` | removes the pickup from the globals' list, firing the two global events of section 6 | medium |
 | `DroppedPickup.AddToNavigation` | does nothing in this build | high |
-| the per-tick pickup targeting (no script name; it raises `SawPickupable` and `ClearSeenPickupable`) | section 4 | medium |
+| the per-tick pickup targeting (the HUD's, no script name; it raises `SawPickupable` and `ClearSeenPickupable`) | NATIVE_PICKUP_TARGETING.md | high |
 
 ## Open questions
 
-1. **UNVERIFIED:** the capture radius and the segment height of section 4's score, and which pickups count as
-   disabled there.
+1. Answered by NATIVE_PICKUP_TARGETING.md (decision 2026-11-19-74): the capture radius, the segment and which
+   pickups count (`bPickupable`). Its own open questions and live checks carry what stays UNVERIFIED.
 2. **UNVERIFIED:** whether a pickup thrown by the player (the full-backpack swap of section 5) can be touched again
    on its way down, as the touch rule of section 3 suggests.
 3. Settled by the script: no Willow game info replaces `PickupQuery`, so the base rule of section 5 applies.

@@ -8,46 +8,62 @@ view cone, the distance term, the line check, and how `SawPickupable` and `Clear
 read from the game executable with Ghidra (`tools/ghidra/run.ps1 -ReadOnly` and two small local listing scripts,
 read-only, under the machine lock). Field names come from the cooked packages through `tools/ghidra/class_layout.py`;
 for `WillowPickup` its layout is 16 bytes short of the native class, and every field named here is consistent once
-that is allowed for. Written in our own words, as behaviour only: no decompiler output, pseudo-code, addresses,
-offsets or call structure is reproduced here. **Every rule is UNVERIFIED in the running game.** The last section lists
-the live observations that would confirm them.
+that is allowed for. The HUD script that sets the events' recipient was read with `research/script_disasm.py`.
+Written in our own words, as behaviour only: no decompiler output, pseudo-code, addresses, offsets or call structure
+is reproduced here. **Every rule is UNVERIFIED in the running game.** The last section lists the live observations
+that would confirm them.
 
-**Clean room.** This lane implements nothing. Everything here stays unported, or `NotYet` in Off, until a fresh
+**Clean room.** This lane implements nothing. Everything here stays unported, or a named `NotYet` in Off, until a fresh
 implementer codes it from this note alone.
 
 ## Summary
 
 | Piece | Kind | Confidence | Status |
 |---|---|---|---|
-| The pass: who runs it, and when it does nothing | native (the Willow HUD's per-tick pass; no script name) | high | UNVERIFIED |
+| The pass: who runs it, its order, and when it does nothing | native (the Willow HUD's per-tick pass; no script name) | high | UNVERIFIED |
 | Candidates and eligibility (`WillowGlobals.PickupList`, `bPickupable`, the range, the 0.9 horizontal cone) | native | high | UNVERIFIED |
-| The score (a vertical segment through the pickup, the view ray, the capture radius) and the ranking | native | high | UNVERIFIED |
+| The score (a vertical segment through the pickup, the view ray, the capture radius), its cutoffs, and the ranking | native | high | UNVERIFIED |
 | The line check and the pawn test before it | native | high | UNVERIFIED |
-| `SawPickupable` / `ClearSeenPickupable`, and the 0.5 view check before them | native | high | UNVERIFIED |
+| `SawPickupable` / `ClearSeenPickupable`: the 0.5 view check, the recipient (`WillowHUD.WPlayerOwner`) and the order of events and writes | native, and the HUD's script for the recipient | high; medium for the recipient field | UNVERIFIED |
 | The shrink bookkeeping in the same pass (`BeginShrinking`) | native | medium | UNVERIFIED |
 | Presentation in the same pass (hover particles, highlight colour, interaction icon) | native | medium (not read in detail) | UNVERIFIED |
 
-## 1. Who runs it, and what it reads
+## 1. Who runs it, what it reads, and in what order
 
 - **The pass belongs to the player's HUD** (`WillowHUD`), not to the controller: a native per-tick pass of the HUD. It
-  reads the HUD's owner (`HUD.PlayerOwner`, the player controller) and the HUD's own definition (a `HUDDefinition`).
-  With no owner or no HUD definition, the pass does nothing at all this tick: no event is raised and nothing changes.
+  reads the HUD's owner (`HUD.PlayerOwner`, the player controller) and the HUD's own definition (`WillowHUD.HUDDef`, a
+  `HUDDefinition`).
 - **The view.** The pass asks the owner for its player view point: a location `V` and a rotation (pitch and yaw). That
   is the point and direction the player's camera shows. The headless world has no camera (hub ruling): this is the
-  input a later host lane supplies. Everything below that says "view" means this location and rotation.
+  input a later host lane supplies. Everything below that says "view" means this location and rotation. The view's
+  direction comes from the engine's sine table for the rotation's angle units (16384 steps per turn), not from exact
+  trigonometry.
 - **The HUD keeps two pickups between ticks:**
-  - the **hover pickup** `H`: the pickup currently highlighted, the one the score favours;
-  - the **reported pickup** `S`: the last pickup `SawPickupable` was raised for.
+  - the **hover pickup** `H` (`WillowHUD.CachedHoverPickup`): the pickup currently highlighted, the one the score
+    favours;
+  - the **reported pickup** `S` (`WillowHUD.CachedBestPickup`): the last pickup `SawPickupable` was raised for.
 
-  It also keeps a nearest-pickup slot, a side duty (section 3), and a per-tick "seen item" slot used by the
-  presentation.
-- **The events** are raised on the object the HUD keeps for its owner. The controller's script handles both events
+  It also keeps a nearest-pickup slot (`WillowHUD.ClosestPickup`), a side duty (section 3), and a per-tick "seen
+  item" slot used by the presentation (`WillowHUD.SavedLookAtInventory`). These four names fit the native's accesses in
+  the class's declared field order (medium confidence for the names; the roles are read).
+- **The order at the start of a tick:**
+  1. the nearest-pickup slot is emptied;
+  2. with no owner (`PlayerOwner` None) or no HUD definition (`HUDDef` None), the pass ends: no event, and `H`, `S`
+     and the seen-item slot stay as they were;
+  3. the view point and rotation are read from the owner. This comes before the pawn test, so both branches of
+     section 2 need the view;
+  4. the pawn test of section 2, then scoring (sections 3 and 4).
+- **The events' recipient** is the HUD's `WPlayerOwner`, not `PlayerOwner` itself. The HUD's script sets it once, in
+  `WillowHUD.PostBeginPlay`, to `PlayerOwner` cast to `WillowPlayerController`, so for Maya's HUD it is her controller
+  (read from the script). The field is identified by its place in the class's declared order, two fields before
+  `HUDDef` (`WPlayerOwner`, `WPRI`, `HUDDef`): medium confidence for the field, high for the script that sets it. The
+  native raises both events on it **without a None check**. The controller's script handles both
   (NATIVE_PICKUP.md section 4: `SawPickupable` records `CurrentSeenPickupable`).
 
 ## 2. When there is no scoring
 
-- **The owner has no pawn** (`Controller.Pawn` is None): the pass only keeps its nearest-pickup slot, over the HUD's
-  `PostRenderedActors`. It raises no event and leaves `H` and `S` as they are.
+- **The owner has no pawn** (`Controller.Pawn` is None): the pass only refills its nearest-pickup slot, over the HUD's
+  `PostRenderedActors`, using the view point. It raises no event and leaves `H` and `S` as they are.
 - **Scoring is suspended** when the owner controller is in its `Dead` state, or when its pawn, or the vehicle the pawn
   drives (`Pawn.DrivenVehicle`), answers a suspend query. For a `WillowPlayerPawn` that query always answers no.
   While suspended, no candidate is scored, so there is no winner (section 6 then applies).
@@ -62,12 +78,18 @@ For each counted pickup `P` (location `L`), when scoring is not suspended:
    inventory. Nothing on the targeting path reads it.
 2. **The range or highlight gate:** `P` is considered when the globals definition has a hover particle
    (`GlobalsDefinition.PartItemHover` is set), or when the distance from `V` to `L` is below the HUD definition's
-   `HUDDefinition.PickupRange`.
+   `HUDDefinition.PickupRange` (strictly below; the comparison is of squared distances, in single precision).
    - Correction to NATIVE_PICKUP.md section 4: the range is the HUD definition's `PickupRange`, not
      `GlobalsDefinition.PickupRadius`.
    - With a hover particle set, the range does not gate scoring. It still gates the event (section 7).
-3. **The cone:** the angle between the view's horizontal direction (the yaw alone) and the horizontal direction from
-   `V` to `L` (height ignored) must have a cosine above 0.9.
+3. **The cone:** the cosine between the view's horizontal direction (the yaw alone, the pitch taken as 0) and the
+   horizontal direction from `V` to `L` (height dropped) must be strictly above 0.9.
+   - **The cutoff:** the horizontal offset from `V` to `L` is made a unit vector only when its squared length is above
+     1e-8. Below that it is used as it is, so its cosine is at most about 1e-4 and the pickup **fails the cone**. A
+     pickup straight above or below the view point (zero horizontal separation) is therefore never scored.
+   - **Precision:** the native normalises with a fast single-precision reciprocal square root refined once, so its
+     cosine can differ from an exact one in the last bits. Off answer: the cosine in single precision with an exact
+     square root; a case within a few units in the last place of 0.9 is not decided bit for bit (UNVERIFIED).
 4. A pickup that passes 2 and 3 is scored (section 4).
 
 ## 4. The score
@@ -77,51 +99,70 @@ For a candidate `P`, with "current" meaning `P` is the hover pickup `H`:
   `GetPickupParticleOffset` answers: the inventory definition's `WillowInventoryDefinition.PickupFlagOffset`, turned by
   `P`'s rotation (its x, y and z along `P`'s forward, right and up axes). The offset is zero when that vector is zero
   or there is no definition. Reading a non-zero offset also sets `P`'s `bHasPickupParticleOffset`.
-- **A vertical segment** through `C`:
+- **A vertical segment** through `C`, from its bottom to its top:
   - top: `C` raised by `GlobalsDefinition.ItemHoverProjectionHeight`, times 1.25 when current;
   - bottom: `C` lowered by half the height of `P`'s components' bounding box, times 0.75, or times 1.5 when current.
 - **The view ray:** from `V` along the full view direction (pitch and yaw), with a length of 100 times the distance
   from `V` to the segment's top.
-- **The distance `d`:** between the closest points of the two lines (segment and ray). It only counts when both closest
-  points lie inside their pieces. With either piece of near-zero length, the lines parallel, or a closest point
-  outside its piece, there is no score.
+- **The distance `d`:** between the closest points of the two lines through the segment and the ray, in single
+  precision. It only counts when both closest points lie inside their pieces. The cutoffs, all definite:
+  - **a near-zero piece:** a piece (segment or ray) whose three components (end minus start) are each below 0.0001 in
+    magnitude gives no `d`. The segment is near-zero when its top and bottom coincide, for example a zero hover
+    height with a zero bounds height;
+  - **parallel lines:** no `d` when the magnitude of `|s|² |r|² − (s·r)²` is below 1e-8, with `s` and `r` the segment
+    and ray vectors (single precision). A view pitched straight up or down along the segment is this case;
+  - **inside:** each closest point's position along its piece, as a fraction from its start, must lie in 0 to 1,
+    both ends included; otherwise no `d`.
 - **The capture radius:** `R = GlobalsDefinition.HoverWidthPickup × 0.1`, times 1.5 when current.
-- **The score:** `(R − d) / R` when there is a `d` and it is at most `R`, else 0. The score lies between 0 and 1, and
-  is 1 when the ray passes through the segment.
+- **The score:** `(R − d) / R` when there is a `d` and it is at most `R`, else 0. With a positive `R` the score lies
+  between 0 and 1, and is 1 when the ray passes through the segment.
+  - **A zero or negative capture radius** (`HoverWidthPickup` at most 0): the candidate is never chosen. A `d` above
+    `R` scores 0; with `R` exactly 0 and `d` exactly 0 the native divides 0 by 0, a value that is not a number and
+    never ranks. Off answer: score 0.
 - **The ranking value:** a candidate with a score above 0 gets the value `(score, plus 0.25 when current) / |L − V|`.
-  The distance is to the pickup's location `L`, not to `C`. The highest value wins; on a tie the earlier candidate in
-  list order is kept. A candidate whose score is 0 is never chosen.
+  The distance is to the pickup's location `L`, not to `C`. The best value starts at 0 and a candidate replaces it
+  only when its value is strictly greater: the highest value wins, on an exact tie the earlier candidate in list order
+  is kept, and a candidate whose score is 0 is never chosen. `|L − V|` cannot be 0 for a scored candidate (it already
+  failed the cone).
 
 ## 5. The line check
 
 When there is a winner `W` (the pass runs these only in a game world, which the port always is):
 1. **The pawn test:** if the owner's pawn is a `WillowPlayerPawn` and it is `bDeleteMe`, `bIsInjured` or `bIsDead`,
    there is no winner this tick.
-2. **The trace:** if the horizontal distance from `V` to `W` is more than `HUDDefinition.PickupRange × 0.25`, a world
-   line check runs from a point 25 units back from `W` toward `V` (along the direction from `V` to `W`) to `V`. If it
-   is blocked by anything other than `W` or `W`'s `Base`, there is no winner. Within that horizontal distance no trace
-   runs.
+2. **The trace exemption:** the trace runs only when the horizontal distance from `V` to `W` is strictly more than
+   `HUDDefinition.PickupRange × 0.25`. Within that distance no trace runs and `W` stays the winner.
+3. **The trace:** a world line check from a point 25 units back from `W` toward `V` (along the direction from `V` to
+   `W`, pitch and yaw) to `V`. A hit on `W` itself or on `W`'s `Base` is allowed. A hit on anything else means no
+   winner. No hit keeps `W`.
 
 ## 6. No winner
 
-When there is no winner (no candidate, suspended scoring, or a refusal in section 5):
-- if a pickup was reported (`S` set), `ClearSeenPickupable` is raised and `S` is emptied;
-- if there was a hover pickup, its highlight is switched off and `H` is emptied.
+When there is no winner (no candidate, suspended scoring, or a refusal in section 5), in this order:
+1. the seen-item slot is emptied;
+2. if a pickup was reported (`S` set), `ClearSeenPickupable` is raised on `WPlayerOwner`, **then** `S` is emptied. The
+   controller's handler runs while the HUD still holds the old `S`;
+3. if there was a hover pickup, its highlight is switched off and `H` is emptied.
 
 ## 7. A winner: the events
 
-With a winner `W`:
-1. **The pickup's item:** `W`'s inventory and its definition are read. With no definition, nothing more happens this
-   tick: no event, and `H` and `S` stay as they were.
-2. **A second view check:** the cosine between the view direction and the direction from `V` to `W` must be above
+With a winner `W`, in this order:
+1. **The seen-item slot** takes `W`'s inventory, and the HUD's presentation step is called with `W` (open question
+   1; it writes nothing the targeting reads).
+2. **The pickup's item:** `W`'s inventory's definition is read. With no definition, nothing more happens this tick: no
+   event, and `H` and `S` stay as they were.
+3. **A second view check:** the cosine between the view direction and the direction from `V` to `W` must be above
    0.5. It is horizontal when the globals definition has a hover particle, and in three dimensions otherwise. When it
-   fails, nothing more happens this tick.
-3. **The hover pickup** becomes `W`. A different previous hover pickup has its highlight switched off first.
-4. **In range** (the distance from `V` to `W` below `HUDDefinition.PickupRange`): if `W` is not the reported pickup,
-   `SawPickupable(W)` is raised and `S` becomes `W`. Raising it again for the same pickup does not happen.
-5. **Out of range:** no event, and `S` keeps its old value. A pickup reported earlier stays reported, and
-   `ClearSeenPickupable` is not raised. The presentation shows the hover particle instead.
-6. The highlight, its colour and the interaction icon follow: presentation (section 9).
+   fails, nothing more happens this tick (`H` and `S` unchanged).
+4. **The hover pickup:** when `W` is not already `H`, the old hover pickup's highlight is switched off first, then
+   `H` becomes `W`. When `W` is `H`, nothing changes here.
+5. **In range** (the distance from `V` to `W` strictly below `HUDDefinition.PickupRange`): if `W` is not `S`,
+   `SawPickupable(W)` is raised on `WPlayerOwner`, **then** `S` becomes `W`. When `W` is already `S`, no event and no
+   write.
+6. **Out of range:** no event, and `S` keeps its old value. A pickup reported earlier stays reported, and
+   `ClearSeenPickupable` is not raised. The presentation shows the hover particle instead, and the seen-item slot is
+   emptied.
+7. The highlight, its colour and the interaction icon follow: presentation (section 9).
 
 ## 8. The shrink bookkeeping (a side duty of the same pass)
 
@@ -140,41 +181,67 @@ They were not read in detail.
 
 ## 10. Off answers, step by step (for an implementer)
 
-Each step is answered with a value (a plain read or a computed rule), None, or a named `NotYet`.
+Each step is answered with a value (a plain read or a computed rule), None, or a named `NotYet`. Its kind is given in
+words: "layer absent" (a part the headless world does not have yet) or "not read".
+
+**What a headless `look` answers, in order.** A driver of link 7 checks these in this order and stops at the first
+that answers a `NotYet`; nothing before the view writes anything the targeting reads.
+1. **The touched-slot prerequisite** (the fixture's own check, NATIVE_PICKUP.md section 4): Maya's controller holds the
+   decoy as `CurrentTouchedPickupable`. #452's driver checks this first and refuses with an ordinary error when it
+   does not hold. That is the fixture's check, not the pass's, and it stays first.
+2. **No HUD in the world:** a named `NotYet` of kind layer absent, naming the player's HUD (its owner and its
+   `HUDDef`). This is the pass's first answer while the world has no HUD.
+3. **A HUD with no owner or no `HUDDef`:** a value: the pass ends (section 1, step 2). The look then sees nothing,
+   with no event and no `NotYet`.
+4. **No camera:** a named `NotYet` of kind layer absent, naming the view point and rotation. This is the answer once a
+   HUD with an owner and a definition exists.
+
+#452's driver (at a1bd92f2) goes from step 1 straight to step 4's camera answer, because its world has no HUD to ask
+about. Both are layer-absent answers before any write, so the link's stop kind is the same. By this note's order the
+strict answer while no HUD exists is step 2's, and an implementer of the pass (decision 2026-11-19-81's lane) should
+answer the HUD first, or supply a HUD and answer the camera.
 
 | Step | Off answer |
 |---|---|
-| The HUD and its owner (section 1) | the world has no HUD: `NotYet { LayerAbsent }` naming the HUD (its owner and its `HUDDefinition`) until a host lane provides one; which `HUDDefinition` the player's HUD holds is open question 2 |
-| No owner or no HUD definition | value: nothing happens |
-| The view point `V` and rotation | `NotYet { LayerAbsent }` naming the view (the camera, hub ruling) until a host lane supplies it |
+| The HUD (section 1) | the world has no HUD: a named `NotYet` (layer absent) naming the HUD, its owner and its `HUDDef`, until a host lane provides one; which `HUDDefinition` the player's HUD holds is open question 2 |
+| No owner or no HUD definition | value: the pass ends; only the nearest slot is emptied |
+| The view point `V` and rotation | a named `NotYet` (layer absent) naming the view (the camera, hub ruling) until a host lane supplies it; read before the pawn test |
+| The events' recipient `WPlayerOwner` | value: a plain read. When it is None, a named `NotYet` (not read: the native raises without a check), decided when the pass starts, before any write |
 | No pawn | value: no event, `H` and `S` unchanged; the nearest slot is not needed (no reader on the targeting path) |
 | Suspended: the controller in its `Dead` state | value: no scoring, section 6 |
-| Suspended: the pawn's query | value: no for a `WillowPlayerPawn`; a pawn of another class, or a driven vehicle, `NotYet { NotRead }` |
+| Suspended: the pawn's query | value: no for a `WillowPlayerPawn`; a pawn of another class, or a driven vehicle, a named `NotYet` (not read) |
 | Candidates, `bPickupable`, the class test | values: plain reads of `WillowGlobals.PickupList` and the flag |
-| The range gate, `PartItemHover`, `PickupRange` | values: plain reads |
-| The 0.9 horizontal cone | value: the rule of section 3 |
+| The range gate, `PartItemHover`, `PickupRange` | values: plain reads; strictly below the range |
+| The 0.9 horizontal cone | value: the rule of section 3, including the 1e-8 cutoff (zero horizontal separation fails) |
 | The particle offset | value: `PickupFlagOffset` turned by the pickup's rotation; also sets `bHasPickupParticleOffset` |
-| The bounding-box height | `NotYet { LayerAbsent }` naming the pickup's component bounds, while the world has none |
-| The score, the radius, the ranking | values: the formulas of section 4 (plain reads of `HoverWidthPickup` and `ItemHoverProjectionHeight`) |
+| The bounding-box height | a named `NotYet` (layer absent) naming the pickup's component bounds, while the world has none |
+| The score, the radius, the ranking | values: the formulas and cutoffs of section 4 (plain reads of `HoverWidthPickup` and `ItemHoverProjectionHeight`); a radius at most 0 scores 0 |
 | The pawn test before the trace | value: the three flags |
-| The trace | value: no trace within `PickupRange × 0.25` horizontally; otherwise `NotYet { LayerAbsent }` naming collision |
+| The trace | value: no trace within `PickupRange × 0.25` horizontally; otherwise a named `NotYet` (layer absent) naming collision |
 | The definition, the 0.5 check, the range | values: section 7 |
-| `SawPickupable` / `ClearSeenPickupable` | values: raised as sections 6 and 7 say; the script side is NATIVE_PICKUP.md's |
-| The shrink bookkeeping | value: nothing when no counted pickup's `LifeSpan` is above `PickupShrinkDuration`; otherwise `NotYet { NotRead }` (the enable query and the HUD's limit are open question 3) |
+| `SawPickupable` / `ClearSeenPickupable` | values: raised on `WPlayerOwner` as sections 6 and 7 say, each event **before** its write to `S`; the handlers are NATIVE_PICKUP.md's script |
+| The shrink bookkeeping | value: nothing when no counted pickup's `LifeSpan` is above `PickupShrinkDuration`; otherwise a named `NotYet` (not read: the enable query and the HUD's limit are open question 3) |
 | Presentation | value: nothing (nothing the rules read changes) |
 
 ## 11. Link 7 with the score resolved
 
-Link 7's fixture: the aimed gun, and a nearer decoy about 90 degrees off the aim (NATIVE_PICKUP.md section 4).
-- **The decoy** fails the 0.9 cone, so it is never scored.
+Link 7's fixture: the aimed gun dropped 150 uu ahead of Maya, and a nearer decoy 45 uu to her side (NATIVE_PICKUP.md
+section 4). Those placements are relative to her pawn. They give no camera geometry: the view point `V` and its
+rotation are the camera's, which the headless world does not have. So the cone and the score below are conditional
+on a supplied view.
+- **With a supplied view at about Maya's location, its yaw toward the aimed gun:** the decoy is about 90 degrees off
+  the view's yaw, a cosine near 0, so it fails the 0.9 cone and is never scored. The aimed gun passes the cone.
+- **With any other supplied view** (a camera behind or above the pawn, or a yaw elsewhere), both cosines must be
+  recomputed from that view with section 3's rule. The fixture's distances alone settle neither.
 - **The aimed gun** is scored when it is `bPickupable`, within `PickupRange` (or the globals definition has a hover
   particle), and inside the cone. Its score is 1 when the view ray passes through its segment, and lower as the ray
   passes further off, down to 0 at the capture radius.
   - The segment's extent needs the gun's bounds height and `ItemHoverProjectionHeight`.
   - The radius needs `HoverWidthPickup`.
   - Being the only scored candidate, it wins with any positive score.
-- **It is reported** (`SawPickupable`) when it also passes the pawn test, the trace (when more than a quarter of
-  `PickupRange` away horizontally), the definition read and the 0.5 view check, and lies within `PickupRange`.
+- **It is reported** (`SawPickupable` on Maya's controller) when it also passes the pawn test, the trace (when more
+  than a quarter of `PickupRange` away horizontally), the definition read and the 0.5 view check, and lies within
+  `PickupRange`.
 
 ## Open questions
 
@@ -183,17 +250,40 @@ Link 7's fixture: the aimed gun, and a nearer decoy about 90 degrees off the aim
 2. **UNVERIFIED:** which `HUDDefinition` the player's HUD holds, and so the `PickupRange` value, and whether the
    slice's globals definition has a hover particle (`PartItemHover`).
 3. **UNVERIFIED:** the shrink bookkeeping's enable query on the HUD and the limit the HUD holds (section 8).
-4. **UNVERIFIED:** that the object the events are raised on is the owner controller (consistent with the script
-   side, not traced to where the HUD sets it).
+4. Resolved in review r1 of #461: the events go to `WillowHUD.WPlayerOwner`, which `WillowHUD.PostBeginPlay` sets to
+   the owner cast to `WillowPlayerController`. **UNVERIFIED** in play, and the field's identity is a declared-order
+   fit (medium confidence); the live check below records it.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-- Read the HUD's definition and its `PickupRange`, and the globals definition's `HoverWidthPickup`,
-  `ItemHoverProjectionHeight` and `PartItemHover`.
-- Drop one gun. Sweep the aim slowly across it at a fixed distance and record when `SawPickupable` fires. The
-  horizontal edge should match a cosine of 0.9, and the near-miss edge the capture radius.
-- Aim at a gun just outside `PickupRange` and record that no `SawPickupable` fires, and that a pickup reported earlier
-  stays reported (no `ClearSeenPickupable`).
-- Put a wall between the view and a gun further than a quarter of `PickupRange`, and record that it is not reported.
-- Two guns in the cone at different distances, both hit by the ray: record that the nearer one is reported (the
-  ranking divides by distance).
+Each check records, every tick it covers, the HUD's `CachedHoverPickup` (`H`), `CachedBestPickup` (`S`) and
+`SavedLookAtInventory`, the controller's `CurrentSeenPickupable`, and each `SawPickupable` and `ClearSeenPickupable`
+call with its receiver and argument, in call order.
+
+- **The inputs.** Read the HUD's `HUDDef` and its `PickupRange`, and the globals definition's `HoverWidthPickup`,
+  `ItemHoverProjectionHeight` and `PartItemHover`; read `WPlayerOwner` and `PlayerOwner` and confirm they are the same
+  controller.
+- **The cone cutoff, apart from the capture radius.** Drop one gun, stand at a distance where the capture radius
+  covers a wide angle, and turn the yaw slowly with the pitch level so the ray stays on the segment. The event edge is
+  then the cone's (a cosine of 0.9 from the horizontal direction to the gun's location `L`).
+- **The capture-radius cutoff, apart from the cone.** With the yaw pointing straight at the gun (well inside the
+  cone), raise the pitch slowly so the ray leaves the segment above its top. The edge is then the capture radius:
+  `HoverWidthPickup × 0.1` (× 1.5 once the gun is the hover pickup) from the segment's top. Repeat in both directions
+  to see the hover pickup's wider radius hold the gun longer than it took to gain it.
+- **An equal-value tie, apart from the hover bonus.** Two identical guns at the same distance, both crossed by the
+  ray at the same offset, neither yet the hover pickup: the earlier entry of `WillowGlobals.PickupList` should win.
+  Then make the later one the hover pickup first (aim at it alone), bring the other in at an equal raw value: the
+  hover pickup should keep winning by its 0.25 bonus and wider radius.
+- **The trace exemption and allowed hits.** A wall between the view and a gun further than a quarter of `PickupRange`
+  horizontally: not reported. The same wall with a gun within a quarter of `PickupRange`: still reported (no trace).
+  A gun resting on a crate (its `Base`) whose top hides part of the line: still reported.
+- **The event order around a replacement.** With `S` set to gun A, aim at gun B in range: record that
+  `SawPickupable(B)` is called while `S` still reads A, then `S` and `CurrentSeenPickupable` read B.
+- **The event order around a clear.** With `S` set, turn away from every pickup: record that `ClearSeenPickupable`
+  is called while `S` still reads the old pickup, then `S` and `H` are empty.
+- **Winner branches that leave state unchanged.** Aim at a gun just outside `PickupRange` after another was reported:
+  no event, `S` unchanged, `H` the new gun. Aim at a pickup whose item has no definition, and at one that fails the
+  0.5 check (a gun inside the horizontal cone but far below the view, with no hover particle): no event, `H` and `S`
+  unchanged.
+- **Two guns at different distances,** both hit by the ray: the nearer one is reported (the ranking divides by
+  distance).

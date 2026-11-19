@@ -29,3 +29,18 @@ scripts, read-only, under the machine lock. Field names came from `tools/ghidra/
 accepts a second field-list head). Raw output stays under ignored `local/analysis/pickup-targeting/`. No bl-sdk
 session was granted. Nothing is implemented. Every rule is UNVERIFIED in the running game; the note lists the live
 checks and four open questions.
+
+**Review r1 of #461.** The note now:
+- gives the order a headless `look` answers in: the fixture's touched-slot check, then no HUD, a HUD with no owner or
+  definition (nothing seen), then no camera. It says that #452's driver answers the camera first, and makes link 7's
+  cone result conditional on a supplied view;
+- gives definite cutoffs: the cone's 1e-8 normalisation cutoff (zero horizontal separation fails), the closest-point
+  rule's near-zero (0.0001 per component), parallel (1e-8) and inside (0 to 1, ends included) cutoffs, and a capture
+  radius at most 0 (never chosen);
+- names the events' recipient: `WillowHUD.WPlayerOwner`, which `WillowHUD.PostBeginPlay` sets to the owner cast to
+  `WillowPlayerController` (read with `research/script_disasm.py`). Each event is raised before the HUD writes `S`;
+- adds bl-sdk probes that separate the cone from the capture radius and a tie from the hover bonus, and that record the
+  trace exemption, allowed hits, and the order of events and writes.
+
+`NATIVE_PICKUP.md` section 4, its Off contract, section 7 and open question 1 now point at the note. They keep the
+touched-slot prerequisite for the key. Still analyst only, and every rule is UNVERIFIED in the running game.
