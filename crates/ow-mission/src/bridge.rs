@@ -42,6 +42,17 @@
 //!   `GetBehaviorConsumerHandle`) are the kernel pack's (`ow_behavior::kernel::natives`): the bridge claims the
 //!   director's handle there and gives its bodies for it, and in Reference also for a handle nobody owns.
 //!
+//! **The map route** ([`MissionScript::adopt`], lane IMPL-SLICE-MAP-WORLD, SLICE_MAPLOAD.md section 3, steps 1 and
+//! 8; Off only). On a world the map load built, the bridge makes none of the graph's objects: it takes the map's
+//! `WorldInfo`, its `GRI` and the GRI's `MissionTracker`, the world's first local player controller and its PRI, and
+//! the world's globals object. Every one of them is read before the first write, and a missing one is a `NotYet`. It
+//! binds none of the four globals natives (`GetWillowGlobals`, `GetGearboxGlobals`, `GetGlobalsDefinition`,
+//! `GetBehaviorKernel`): on that route each has one owner (`ow_inventory::globals::register`,
+//! `ow_behavior::kernel::natives::register_kernel_getter`), which must have bound it first. It then does what the C++
+//! bridge did and the script does not: the playthrough record (a labelled harness input, Q6), the natives, the
+//! mission data validation reply and the tracker's hooks. The player's pawn is the controller's possessed `Pawn`,
+//! never made from class defaults, and a controller without one is a typed refusal.
+//!
 //! **Script runs** ([`MissionScript`] keeps the C++ `run`): the outermost run collects what the VM logged while it ran
 //! (`UNIMPLEMENTED ...` lines become the stub list, other new lines the notes), and a script that fails is recorded
 //! (`mission script: <error>`), never propagated, so the native state the caller already changed stays as it is. A
@@ -265,6 +276,9 @@ struct Bridge {
     mission: MissionSystem,
     package: PackageName,
     o: Objects,
+    /// Built by [`MissionScript::adopt`] on a map world: the objects are the world's, and the player's pawn is the
+    /// controller's possessed `Pawn`.
+    adopted: bool,
     state: RefCell<BState>,
     /// The director's AI-definition provider, out of its slot while it runs (`crate::tracker::lend`).
     marcus: RefCell<Option<Provider>>,
@@ -597,6 +611,44 @@ fn number(v: &Value) -> f64 {
     }
 }
 
+/// The design record of the map route ([`MissionScript::adopt`]).
+pub const RECORD_MAP_ROUTE: &str = "docs/rust-port/SLICE_MAPLOAD.md (section 3, steps 1, 2 and 8)";
+
+/// The four globals natives, which the bridge binds on its own route and leaves to their owners on the map route.
+pub const GLOBALS_NATIVES: [&str; 4] = [
+    "WillowGame.WillowGlobals.GetWillowGlobals",
+    "GearboxFramework.GearboxGlobals.GetGearboxGlobals",
+    "GearboxFramework.GearboxGlobals.GetBehaviorKernel",
+    "WillowGame.WillowGlobals.GetGlobalsDefinition",
+];
+
+/// The package the mission is read from.
+fn mission_package(vm: &Vm, mission: &MissionSystem) -> Result<PackageName, MissionError> {
+    match vm.space.heap.get(mission.definition())?.origin {
+        Origin::Export { package, .. } | Origin::Resource { package, .. } => {
+            let name = vm.defs.packages().get(package).name.clone();
+            PackageName::parse(&name).map_err(|e| data(format!("{name}: {e}")))
+        }
+        _ => Err(data("mission script bridge: the mission is not read from a package".to_string())),
+    }
+}
+
+/// One playthrough record from the struct's defaults, an empty mission list (read only: the caller writes it).
+fn playthrough_record(vm: &Vm, controller: ObjRef) -> Result<Value, MissionError> {
+    let p = required_prop(&vm.space, controller, "MissionPlaythroughs")?;
+    let element = match vm.space.classes.decl(p).map(|d| &d.kind) {
+        Some(PropKind::Array(inner)) => match inner.as_ref() {
+            PropKind::Struct(s) => *s,
+            _ => return Err(data("mission script bridge: MissionPlaythroughs is not an array of structs".to_string())),
+        },
+        _ => return Err(data("mission script bridge: MissionPlaythroughs is not an array".to_string())),
+    };
+    vm.space
+        .classes
+        .struct_defaults(element)
+        .map_err(|e| BehaviorError::Vm(VmError::from(ow_object::heap::HeapError::Layout(e))))
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------------------------------------------
@@ -625,13 +677,7 @@ impl MissionScript {
         }
         let world_query = world.query();
         let vm = &mut world.vm;
-        let package = match vm.space.heap.get(mission.definition())?.origin {
-            Origin::Export { package, .. } | Origin::Resource { package, .. } => {
-                let name = vm.defs.packages().get(package).name.clone();
-                PackageName::parse(&name).map_err(|e| data(format!("{name}: {e}")))?
-            }
-            _ => return Err(data("mission script bridge: the mission is not read from a package".to_string())),
-        };
+        let package = mission_package(vm, mission)?;
         let tracker = new_object(vm, "WillowGame.MissionTracker")?;
         // The tracker's list build, once at set-up, before any script runs (Off only; NATIVE_MISSION_LIST_BUILD.md and
         // the hub's rulings, lane IMPL-MISSIONLIST-BUILD). Reference builds nothing, as the C++.
@@ -700,19 +746,7 @@ impl MissionScript {
         // The world runs as the authority too (behavior scripts test the world's role).
         set(&mut vm.space, world_info, "Role", Value::Byte(authority))?;
         // One playthrough with an empty mission list (the script indexes MissionPlaythroughs[GetCurrentPlaythrough()]).
-        let p = required_prop(&vm.space, controller, "MissionPlaythroughs")?;
-        let element = match vm.space.classes.decl(p).map(|d| &d.kind) {
-            Some(PropKind::Array(inner)) => match inner.as_ref() {
-                PropKind::Struct(s) => *s,
-                _ => return Err(data("mission script bridge: MissionPlaythroughs is not an array of structs".to_string())),
-            },
-            _ => return Err(data("mission script bridge: MissionPlaythroughs is not an array".to_string())),
-        };
-        let playthrough = vm
-            .space
-            .classes
-            .struct_defaults(element)
-            .map_err(|e| BehaviorError::Vm(VmError::from(ow_object::heap::HeapError::Layout(e))))?;
+        let playthrough = playthrough_record(vm, controller)?;
         set(&mut vm.space, controller, "MissionPlaythroughs", Value::array(vec![playthrough]))?;
         let script = MissionScript {
             inner: Rc::new(Bridge {
@@ -727,7 +761,119 @@ impl MissionScript {
                     pri,
                     authority,
                 },
+                adopted: false,
                 state: RefCell::new(BState { list_built, list_ran, list_refusal, ..BState::default() }),
+                marcus: RefCell::new(None),
+                has_marcus: Cell::new(false),
+                marcus_pid: Cell::new(None),
+                marcus_lost: Cell::new(false),
+            }),
+        };
+        script.bind_natives(vm)?;
+        let c = controller;
+        script.run(vm, |vm| call_by_name(vm, c, "ClientValidateMissionData", Vec::new()).map(|_| ()))?;
+        script.install_hooks();
+        Ok(script)
+    }
+
+    /// The bridge on a world the map load built (module documentation, "The map route"). Off only; under
+    /// `ParityMode::Reference` it is `NotYet { NotPorted }` (the C++ has no map load).
+    ///
+    /// **Before any write**, each a `NotYet`: no `WorldInfo` placed; no `WorldInfo.GRI` (the game info's
+    /// `PreBeginPlay` spawns it); no `GRI.MissionTracker` (`WillowGameInfo`'s override spawns it); no local player
+    /// controller (the map load's local-player spawn); no `PlayerReplicationInfo` on it; no world globals object; any
+    /// of the four globals natives not bound yet by its owner. A class without a property the bridge reads is a data
+    /// error. Then, as [`MissionScript::new`] after its objects: the playthrough record, the natives, the validation
+    /// reply, the hooks. Like `new`, it is not transactional after its first write. A `NotYet` it returns is marked
+    /// "stopped after partial writes" exactly when one of #518's counters moved since its entry (a lazy load counts).
+    pub fn adopt(world: &mut World, mission: &MissionSystem) -> Result<MissionScript, MissionError> {
+        let mark = ow_world::world::mapload::game_info::WriteMark::now(&world.vm);
+        MissionScript::adopt_unmarked(world, mission).map_err(|e| match e {
+            BehaviorError::Vm(v) => BehaviorError::Vm(mark.mark(&world.vm, v)),
+            other => other,
+        })
+    }
+
+    fn adopt_unmarked(world: &mut World, mission: &MissionSystem) -> Result<MissionScript, MissionError> {
+        if world.vm.parity != ParityMode::Off {
+            return Err(VmError::NotYet(NotYet::not_ported(
+                "the mission bridge on a map world under ParityMode::Reference (the C++ has no map load)",
+                RECORD_MAP_ROUTE,
+            ))
+            .into());
+        }
+        let actors = world.actors();
+        let (world_info, controller) = {
+            let a = actors.try_borrow().map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?;
+            (a.world_info(), a.local_players().first().copied())
+        };
+        let globals = world
+            .query()
+            .try_borrow()
+            .map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("WorldQuery")))?
+            .globals();
+        let vm = &mut world.vm;
+        let not_read = |what: &str| -> MissionError { VmError::NotYet(NotYet::not_read(what.to_string(), RECORD_MAP_ROUTE)).into() };
+        let world_info = world_info.ok_or_else(|| not_read("the map world's WorldInfo (the map load places it first)"))?;
+        let object = |vm: &Vm, o: ObjRef, name: &str| -> Result<Option<ObjRef>, MissionError> {
+            match get(&vm.space, o, name)? {
+                Value::Object(x) => Ok(x),
+                other => Err(data(format!("mission script bridge: {name} holds {}, not an object", other.kind_name()))),
+            }
+        };
+        let replication = object(vm, world_info, "GRI")?.ok_or_else(|| {
+            not_read("WorldInfo.GRI on the map world (the game info's PreBeginPlay spawns it; it waits on GotoState('Auto'))")
+        })?;
+        let tracker = object(vm, replication, "MissionTracker")?.ok_or_else(|| {
+            not_read("GRI.MissionTracker on the map world (WillowGameInfo's PreBeginPlay override spawns it)")
+        })?;
+        let controller = controller
+            .ok_or_else(|| not_read("a local player controller on the map world (the map load's local-player spawn)"))?;
+        let pri = object(vm, controller, "PlayerReplicationInfo")?
+            .ok_or_else(|| not_read("the local player controller's PlayerReplicationInfo on the map world"))?;
+        let globals = globals.ok_or_else(|| -> MissionError {
+            VmError::NotYet(NotYet::layer_absent(
+                "the world's globals object",
+                "the map route's globals set-up (WorldQuery::set_globals)",
+                RECORD_MAP_ROUTE,
+            ))
+            .into()
+        })?;
+        for path in GLOBALS_NATIVES {
+            if let Ok(key) = native_key(vm, path)
+                && !vm.has_native(&key)
+            {
+                return Err(VmError::NotYet(NotYet::layer_absent(
+                    format!("{path} on the map route"),
+                    "its one owner's binding, before the bridge adopts (SLICE_MAPLOAD.md section 3, step 2)",
+                    RECORD_MAP_ROUTE,
+                ))
+                .into());
+            }
+        }
+        let roles = enum_names(vm, "Engine", "Actor.ENetRole")?;
+        let authority = roles
+            .iter()
+            .position(|r| r == "ROLE_Authority")
+            .ok_or_else(|| data("mission script bridge: ENetRole has no ROLE_Authority".to_string()))?;
+        let authority = u8::try_from(authority)
+            .map_err(|_| data("mission script bridge: ROLE_Authority is past the byte range".to_string()))?;
+        let playthrough = playthrough_record(vm, controller)?;
+        let package = mission_package(vm, mission)?;
+        // The first write.
+        vm.log.push(
+            "harness input: the mission bridge's playthrough record on the map world (one empty playthrough, no save \
+             loaded; SLICE_MAPLOAD.md Q6, UNVERIFIED)"
+                .to_string(),
+        );
+        set(&mut vm.space, controller, "MissionPlaythroughs", Value::array(vec![playthrough]))?;
+        let script = MissionScript {
+            inner: Rc::new(Bridge {
+                mission: mission.clone(),
+                package,
+                o: Objects { tracker, replication, world_info, controller, globals, pri, authority },
+                adopted: true,
+                state: RefCell::new(BState::default()),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
                 marcus_pid: Cell::new(None),
@@ -802,6 +948,10 @@ impl MissionScript {
             ("WillowGame.MissionTracker.UpdateObjective", MissionScript::n_update_objective),
         ];
         for (path, body) in BOUND {
+            // On the map route each globals native has its own owner (module documentation, "The map route").
+            if self.inner.adopted && GLOBALS_NATIVES.contains(&path) {
+                continue;
+            }
             bind(vm, path, self.native(path, body))?;
         }
         const OPTIONAL: [(&str, Body); 2] = [
@@ -1226,6 +1376,19 @@ impl MissionScript {
         };
         if let Some(p) = existing {
             return Ok(p);
+        }
+        // The map route: the controller's possessed pawn, read on every call; none is made.
+        if self.inner.adopted && who == Toucher::Player {
+            return match get(&vm.space, self.inner.o.controller, "Pawn")? {
+                Value::Object(Some(p)) => Ok(p),
+                Value::Object(None) => Err(VmError::NotYet(NotYet::not_read(
+                    "the local player controller's possessed Pawn on the map world (the game info's RestartPlayer \
+                     makes it)",
+                    RECORD_MAP_ROUTE,
+                ))
+                .into()),
+                other => Err(data(format!("mission script bridge: Pawn holds {}, not an object", other.kind_name()))),
+            };
         }
         let pawn = match who {
             Toucher::Player => {

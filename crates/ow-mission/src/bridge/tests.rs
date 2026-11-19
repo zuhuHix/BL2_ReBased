@@ -2141,3 +2141,6 @@ fn the_current_playthrough_is_the_world_s_on_any_controller_in_off() {
     assert_eq!(env.call(path, Some(other), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(0));
     assert!(env.vm().log[before].contains("outside the mission bridge binding"), "{}", env.vm().log[before]);
 }
+
+#[path = "adopt_tests.rs"]
+mod adopt;

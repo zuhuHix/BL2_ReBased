@@ -22,6 +22,11 @@
 //! the report's `stubs`, a zero result): the reference stand-in, so that a real-package run compares with the C++.
 //!
 //! `mode` is the run's parity mode, read once by `main`; it goes to the definition store and the VM.
+//!
+//! **The map route** (lane IMPL-SLICE-MAP-WORLD, Off only): `<package> --combat-run --cooked <dir> --map <name>
+//! <step>...` builds the world by loading the map and bringing it up for play, spawns the local player's play actor,
+//! and adopts the bridge from that world ([`map_route::build`], [`MissionBridge::adopt`]). Without `--map` nothing
+//! changes. Under Reference `--map` is refused (`NotYet`, exit 3).
 
 use std::io::Write as _;
 use std::path::Path;
@@ -175,6 +180,19 @@ impl MissionBridge {
                 ow_world::world::pawn_data::set_up(&mut world.vm, globals)?;
             }
         }
+        Ok(MissionBridge { script })
+    }
+
+    /// The bridge adopted from a map world over the same mission as [`MissionBridge::new`]
+    /// (`MissionScript::adopt`; the map route made the globals and ran their pawn data set-up before).
+    pub fn adopt(world: &mut World) -> Result<MissionBridge, VmError> {
+        let (package, path) = ow_combat::run::BRIDGE_MISSION;
+        let package = PackageName::parse(package).map_err(|e| VmError::Script {
+            function: "combat-run".into(),
+            message: e.to_string(),
+        })?;
+        let mission = MissionSystem::new(&mut world.vm, &package, path).map_err(mission_error)?;
+        let script = MissionScript::adopt(world, &mission).map_err(mission_error)?;
         Ok(MissionBridge { script })
     }
 }
@@ -403,6 +421,17 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
     if args.len() < 4 || args[2] != "--cooked" {
         return Err(Failure::Message(USAGE.to_string()));
     }
+    if args.get(4).map(String::as_str) == Some("--map") {
+        let map = args.get(5).ok_or_else(|| Failure::Message(USAGE.to_string()))?;
+        if mode != ParityMode::Off {
+            return Err(Failure::NotYet(
+                "--combat-run --map: the map route runs in Off only (the C++ has no map load)".to_string(),
+            ));
+        }
+        let (world, bridge) = map_route::build(Path::new(&args[3]), map, &mut Vec::new()).map_err(vm_failure)?;
+        let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
+        return ow_combat::run::combat_run_with(world, &args[6..], Some(bridge)).map_err(vm_failure);
+    }
     let steps = &args[4..];
     let mut world = world(Path::new(&args[3]), mode).map_err(vm_failure)?;
     let bridge: Option<Rc<dyn PlayerBridge>> = if ow_combat::run::wants_bridge(steps) {
@@ -412,6 +441,8 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
     };
     ow_combat::run::combat_run_with(world, steps, bridge).map_err(vm_failure)
 }
+
+pub mod map_route;
 
 #[cfg(test)]
 mod tests;

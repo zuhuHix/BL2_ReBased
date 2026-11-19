@@ -33,6 +33,14 @@
 //!   population is a later seam.
 //! - `none`: links 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
 //!
+//! **`--map <name>`** (lane IMPL-SLICE-MAP-WORLD, SLICE_MAPLOAD.md section 4, lane 4): the `combat-run` links run
+//! on the map route's world instead (`combat::map_route::build`: the map loaded and brought up for play, the local
+//! player's play actor spawned, the bridge adopted from that world). The other drivers are unchanged. The route's
+//! harness lines (the globals and the local player it supplies, the bring-up's failure count and the game info's own
+//! stops) go to the first combat link's `harness`; a refusal while building the route is that link's `setup` stop.
+//! The links' scope texts are the old route's until the maintainer changes link 1's scope (SLICE_MAPLOAD.md section
+//! 7). Without `--map` nothing changes.
+//!
 //! The two driver worlds are separate: the gate's one session is not modelled yet (the slice bridge refuses a world
 //! that already has actors, and the map world is not brought up for play, decision 2026-11-19-04).
 //!
@@ -632,21 +640,36 @@ fn bind(step: &str, bound: &[(String, usize)]) -> Result<String, String> {
 }
 
 /// The combat group (module documentation): what each of its links did, with the report rows each one added.
-fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
-    let setup = || -> Result<Run, ow_vm::error::VmError> {
-        let mut world = combat::world(cooked, ParityMode::Off)?;
-        let bridge: Rc<dyn PlayerBridge> = Rc::new(combat::MissionBridge::new(&mut world)?);
+fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>], map: Option<&str>) {
+    let mut route_notes: Vec<String> = Vec::new();
+    let mut setup = || -> Result<Run, ow_vm::error::VmError> {
+        let (world, bridge) = match map {
+            None => {
+                let mut world = combat::world(cooked, ParityMode::Off)?;
+                let bridge = combat::MissionBridge::new(&mut world)?;
+                (world, bridge)
+            }
+            Some(map) => combat::map_route::build(cooked, map, &mut route_notes)?,
+        };
+        let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
         Run::with_bridge(world, Some(bridge))
     };
-    let mut run = match setup() {
+    let built = setup();
+    let first_combat = LINKS.iter().position(|l| l.driver == Driver::Combat);
+    let mut run = match built {
         Ok(r) => r,
         Err(e) => {
-            let text = ow_combat::hit::access::error_text(&e);
             for i in 0..LINKS.len() {
                 if LINKS[i].driver == Driver::Combat && LINKS[i].needs.is_empty() {
                     ran[i] = Some(Ran {
                         steps: Vec::new(),
-                        stop: Some(classify("setup", &text)),
+                        // The map route's refusals are graded by their variant; the old route keeps its text grading.
+                        stop: Some(if map.is_some() {
+                            typed_stop("setup", &e)
+                        } else {
+                            classify("setup", &ow_combat::hit::access::error_text(&e))
+                        }),
+                        harness: if Some(i) == first_combat { route_notes.clone() } else { Vec::new() },
                         ..Ran::default()
                     });
                 }
@@ -706,6 +729,9 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             .filter(|l| l.starts_with("harness input:"))
             .cloned()
             .collect();
+        if Some(i) == first_combat {
+            r.harness.splice(0..0, route_notes.iter().cloned());
+        }
         r.new_rows = new_ids(&rows_before, run.row_ids());
         if LINKS[i].steps.is_empty()
             && let Some(need) = LINKS[i].needs.first().and_then(|n| LINKS.iter().position(|l| l.name == *n))
@@ -829,9 +855,9 @@ fn run_fire(cooked: &str, grading: Grading, ran: &mut [Option<Ran>], status: &mu
 }
 
 /// Runs both groups and grades the 14 links.
-fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
+fn gate(cooked: &str, grading: Grading, map: Option<&str>) -> Vec<Row> {
     let mut ran: Vec<Option<Ran>> = vec![None; LINKS.len()];
-    run_combat(Path::new(cooked), grading, &mut ran);
+    run_combat(Path::new(cooked), grading, &mut ran, map);
     let mut status = vec![0u8; LINKS.len()];
     run_fire(cooked, grading, &mut ran, &mut status);
     run_equip(Path::new(cooked), grading, &mut ran);
@@ -1318,6 +1344,11 @@ pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
         eprintln!("ow-package: --slice-gate runs in Off only (the slice gate counts only there)");
         return ExitCode::from(1);
     }
+    // `--map <name>` last (module documentation).
+    let (args, map) = match args {
+        [rest @ .., opt, name] if opt == "--map" => (rest, Some(name.clone())),
+        _ => (args, None),
+    };
     let (cooked, grading) = match args {
         [flag, opt, dir] if flag == "--slice-gate" && opt == "--cooked" => (dir.clone(), Grading::Strict),
         [flag, opt, dir, past] if flag == "--slice-gate" && opt == "--cooked" && past == "--past-errors" => {
@@ -1328,7 +1359,7 @@ pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let rows = match on_vm_stack(move || gate(&cooked, grading)) {
+    let rows = match on_vm_stack(move || gate(&cooked, grading, map.as_deref())) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("ow-package: the VM thread failed: {e}");

@@ -118,6 +118,17 @@ Off `--slice-gate` strict, same base with and without the call: 0 ok / 11 NotYet
 in `maya:8` (link 1 records 1 step, `maya:8`; the rest are blocked by link 1). The other 8 rows are byte-identical.
 ctest and verify_packages not run (no C++ change). No real-game session.
 
+**IMPL-SLICE-MAP-WORLD (2026-11-19, zuhu desktop, on #547 at 15d01ca):** AI-assisted (Claude Code, Opus 5.5). The
+bridge's adopt path (`MissionScript::adopt`) and the combat group on the map route behind `--map`
+(`cmd/combat/map_route.rs`), lane 4's first PR. `cargo test --workspace -j 2` 2,468 passed / 0 failed / 48 ignored;
+clippy flags nothing in the changed files. Installed Off `--slice-gate` strict, under the machine lock, base and branch
+each built: 1 ok / 4 NotYet / 9 errors both, the default output byte-identical. With `--map Sanctuary_P`: 1 ok / 4
+NotYet / 9 errors; link 1 runs 0 of its 2 steps and stops at `setup`, at the unbound `WillowGameInfo.IsEditor()` inside
+`Login` (the default route: 1 step run, stopped at `maya:8` on `GameEngine.GetOnlineSubsystem()`). On a throwaway local
+merge with #508 (13992c2f), both routes stop link 1 at the unbound `Engine.IsSplitScreen()` (the map route at `setup`,
+the default at `maya:8`). ctest and verify_packages not run (no C++ change). No real-game session; `UNVERIFIED` in
+game. Logs under ignored `local/p2/slice-map-world/`.
+
 **IMPL-MAPLOAD-PLAYER (2026-11-19, zuhu desktop, on #537 at 3d25b4a):** AI-assisted (Claude Code, Opus 5.5). The
 map load's local-player spawn in Off (`mapload::player`, NATIVE_MAP_LOAD.md sections 4 and 6): Login, the attachment,
 PostLogin, the local player. `cargo test --workspace -j 2` 2,462 passed / 0 failed / 48 ignored; clippy flags nothing in

@@ -819,6 +819,53 @@ fn borrow(k: &Rc<RefCell<Kernel>>) -> Result<std::cell::RefMut<'_, Kernel>, VmEr
         .map_err(|_| VmError::ServiceBorrowed("ow_behavior::kernel::natives::Kernel"))
 }
 
+/// `GearboxGlobals.GetBehaviorKernel` on the map route (lane IMPL-SLICE-MAP-WORLD, SLICE_MAPLOAD.md section 3, step 2).
+pub const GET_BEHAVIOR_KERNEL: &str = "GearboxFramework.GearboxGlobals.GetBehaviorKernel";
+/// The design that gives this native its owner.
+pub const RECORD_MAP_ROUTE: &str = "docs/rust-port/SLICE_MAPLOAD.md (section 3, step 2)";
+
+/// Binds `GearboxGlobals.GetBehaviorKernel` for the **map route**, Off only (SLICE_MAPLOAD.md section 3, step 2: this
+/// crate is its one owner there). It answers the world's globals object's `TheBehaviorKernel` as stored. The kernel
+/// object is not modelled, so that is None, as the mission bridge answers on its own route. With no world globals
+/// object it is `NotYet { LayerAbsent }` naming that object, never None. It is not part of [`Pack`]: the mission
+/// bridge's own route binds this key itself, and a second binding is refused (`duplicate native registration`), so
+/// only the map route's set-up calls this. A package set that does not declare the native gets no binding.
+pub fn register_kernel_getter(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let Ok(id) = vm.find_function(GET_BEHAVIOR_KERNEL) else {
+        return Ok(());
+    };
+    let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
+        return Ok(());
+    };
+    vm.register_native(&key, Rc::new(kernel_getter))
+}
+
+fn kernel_getter(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let found = ow_attr::api::EvalCx::new(c.vm).world.globals();
+    let globals = match found {
+        Ok(o) => o,
+        Err(e) => {
+            return Err(match VmError::from(e) {
+                VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_)) => NotYet::layer_absent(
+                    "the world's globals object",
+                    "the world set-up that makes it (WorldQuery::set_globals)",
+                    RECORD_MAP_ROUTE,
+                )
+                .into(),
+                other => other,
+            });
+        }
+    };
+    let class = c.vm.space.heap.get(globals)?.class;
+    match c.vm.space.prop(class, "TheBehaviorKernel") {
+        Some(p) => Ok(c.vm.space.read(globals, PropAddr::scalar(p))?.clone()),
+        None => Ok(Value::Object(None)),
+    }
+}
+
 /// Binds `f` to the native at `path` when the package set declares it native and this pack has not bound it yet.
 pub(crate) fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
