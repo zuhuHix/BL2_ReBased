@@ -247,6 +247,49 @@ fn accuracy_pool(vm: &mut Vm, controller: ObjRef) -> Result<(), String> {
 }
 
 fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
+    let weapon = prepare(vm, r)?;
+    let init = run_phase(vm, "init", weapon);
+    let bases = run_phase(vm, "bases", weapon);
+    let equip = run_phase(vm, "equip", weapon);
+    let after_equip = records(vm, weapon);
+    let unequip = run_phase(vm, "unequip", weapon);
+    let after_unequip = records(vm, weapon);
+    Ok(EquipRun {
+        errors: [init, bases, equip, unequip],
+        after_equip,
+        after_unequip,
+    })
+}
+
+/// One weapon of a weapons-file line, as the run makes it: the weapon, its owner and the owner's accuracy pool (module
+/// documentation). Shared with `--slice-gate`'s link 8 (lane SLICE-GATE-DRIVERS).
+pub(crate) fn prepare_line(vm: &mut Vm, line: &str) -> Result<ObjRef, String> {
+    let r = diff_request(line)?;
+    prepare(vm, &r)
+}
+
+/// Phase `name` of [`PHASES`] on `weapon`: its error text, if any; an unknown name is an error text.
+pub(crate) fn run_phase(vm: &mut Vm, name: &str, weapon: ObjRef) -> Option<String> {
+    match name {
+        "init" => phase(vm, INITIALIZE, weapon, vec![Value::Bool(false)]),
+        "bases" => phase(vm, ow_inventory::equip::CALCULATE_WEAPON_BASE_VALUES, weapon, Vec::new()),
+        "equip" => phase(vm, EQUIP, weapon, Vec::new()),
+        "unequip" => phase(vm, UNEQUIP, weapon, Vec::new()),
+        other => Some(format!("{other}: not a phase of the equip run")),
+    }
+}
+
+/// `ExternalAttributeModifiers`' length on `weapon` (0 when it holds no array).
+pub(crate) fn external_records(vm: &Vm, weapon: ObjRef) -> usize {
+    records(vm, weapon)
+}
+
+/// The run's world (module documentation), for `--slice-gate`.
+pub(crate) fn gate_world(cooked: &Path) -> Result<ow_world::world::World, String> {
+    run_world(cooked, ParityMode::Off)
+}
+
+fn prepare(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
     let weapon = make(vm, WEAPON)?;
     let weapon_type = find_object(vm, &r.weapon_type)?;
     let balance = find_object(vm, &r.balance)?;
@@ -271,22 +314,7 @@ fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
     write(vm, weapon, "Instigator", Value::Object(Some(pawn)))?;
     write(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
     accuracy_pool(vm, controller)?;
-    let init = phase(vm, INITIALIZE, weapon, vec![Value::Bool(false)]);
-    let bases = phase(
-        vm,
-        ow_inventory::equip::CALCULATE_WEAPON_BASE_VALUES,
-        weapon,
-        Vec::new(),
-    );
-    let equip = phase(vm, EQUIP, weapon, Vec::new());
-    let after_equip = records(vm, weapon);
-    let unequip = phase(vm, UNEQUIP, weapon, Vec::new());
-    let after_unequip = records(vm, weapon);
-    Ok(EquipRun {
-        errors: [init, bases, equip, unequip],
-        after_equip,
-        after_unequip,
-    })
+    Ok(weapon)
 }
 
 #[cfg(test)]

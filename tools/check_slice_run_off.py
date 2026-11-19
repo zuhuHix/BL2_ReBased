@@ -12,6 +12,9 @@ the counts, and grades the run:
 - **The gate** is 14 ok, 0 notyet, 0 error, under `strict` grading (exit 0). A `past-errors` run is informational: it
   never passes (exit 1), whatever its counts. Any other run exits 1.
 
+The drivers are `combat-run`, `slice-run`, `equip-run` (link 8) and `phaselock-cast` (link 9, lane
+SLICE-GATE-DRIVERS, decision 2026-11-19-39), or `none`.
+
 A pass says the Rust port's headless drivers did each link in Off; it says nothing about the real game (UNVERIFIED).
 
     ow-package --slice-gate --cooked <dir> > rows.jsonl
@@ -27,7 +30,7 @@ from check_slice_gate import NAMES  # noqa: E402  (the gate's 14 link names, in 
 
 RESULTS = ('ok', 'notyet', 'error')
 GRADINGS = ('strict', 'past-errors')
-DRIVERS = ('combat-run', 'slice-run', 'none')
+DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'none')
 STOP_FIELDS = ('step', 'native', 'record', 'text')
 
 

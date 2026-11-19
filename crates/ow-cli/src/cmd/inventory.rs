@@ -66,7 +66,7 @@ use crate::cmd::properties::error_text;
 use crate::cmd::tables::signed_number;
 use crate::json::quote;
 
-mod equip_run;
+pub(crate) mod equip_run;
 
 /// The script function the adapter runs.
 pub const MOVE_DELTA: &str = "WillowGame.InventoryListPanelGFxObject.MoveDelta";

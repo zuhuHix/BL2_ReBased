@@ -8,6 +8,7 @@ fn ran_ok(steps: &[&str]) -> Option<Ran> {
         stop: None,
         error_lines: Vec::new(),
         new_rows: Vec::new(),
+        evident: false,
     })
 }
 
@@ -67,13 +68,60 @@ fn an_error_text_names_its_unbound_native_when_it_has_one() {
 #[test]
 fn links_without_a_driver_are_not_yet_with_their_reason() {
     let rows = rows(&vec![None; LINKS.len()], Grading::Strict, |_| true);
-    for l in ["reach_fight_area", "pick_up_gun", "pick_up_aimed_not_nearest", "equip_gun", "phaselock_enemy"] {
+    for l in ["reach_fight_area", "pick_up_gun", "pick_up_aimed_not_nearest"] {
         let r = &rows[index(l)];
         assert_eq!((r.result, r.driver), (Outcome::NotYet, "none"), "{l}");
         assert!(r.stop.as_ref().unwrap().text.starts_with("no headless driver"), "{l}");
     }
     // A driven link that did not run is an error, never a silent ok.
     assert_eq!(rows[index("spawn_maya")].result, Outcome::Error);
+    for l in ["equip_gun", "phaselock_enemy"] {
+        assert_eq!(rows[index(l)].result, Outcome::Error, "{l}");
+    }
+}
+
+#[test]
+fn links_8_and_9_have_their_own_drivers_and_their_own_evidence() {
+    let (equip, cast) = (&LINKS[index("equip_gun")], &LINKS[index("phaselock_enemy")]);
+    assert_eq!((equip.driver.name(), cast.driver.name()), ("equip-run", "phaselock-cast"));
+    assert_eq!(equip.steps, ["make", "bases", "equip", "unequip"]);
+    assert_eq!(cast.steps, ["cast"]);
+    assert!(equip.needs.is_empty() && cast.needs.is_empty());
+    assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::Driver(_)));
+    // The weapon line parses as an --equip-run line.
+    assert!(EQUIP_WEAPON.split_whitespace().count() > 3 && !EQUIP_WEAPON.contains("  "));
+}
+
+#[test]
+fn a_driver_s_own_evidence_decides_and_a_stop_wins_over_it() {
+    let mut ran = vec![None; LINKS.len()];
+    let (e, c) = (index("equip_gun"), index("phaselock_enemy"));
+    // Steps that ran with no stop: ok only when the driver's own check found its evidence.
+    ran[e] = Some(Ran { evident: true, ..ran_ok(&["make", "bases", "equip", "unequip"]).unwrap() });
+    ran[c] = ran_ok(&["cast"]);
+    let graded = rows(&ran, Grading::Strict, |i| ran[i].as_ref().is_some_and(|r| r.evident));
+    assert_eq!(graded[e].result, Outcome::Ok);
+    let cast_row = &graded[c];
+    assert_eq!(cast_row.result, Outcome::Error, "a cast that returns is not evidence yet");
+    assert!(cast_row.stop.as_ref().unwrap().text.contains("the driver's own check"));
+    // A stop is the row's reason, whatever the evidence flag says.
+    let mut r = Ran { evident: true, ..ran_ok(&["make", "bases", "equip"]).unwrap() };
+    assert!(step_error(&mut r, "equip", "unbound native WillowWeapon.AllParts(x)", Grading::Strict));
+    ran[e] = Some(r);
+    let graded = rows(&ran, Grading::Strict, |i| ran[i].as_ref().is_some_and(|r| r.evident));
+    let stop = graded[e].stop.as_ref().unwrap();
+    assert_eq!((graded[e].result, stop.step.as_str()), (Outcome::Error, "equip"));
+    assert_eq!(stop.native, "WillowWeapon.AllParts(x)");
+}
+
+#[test]
+fn past_errors_grading_notes_an_error_line_and_goes_on_but_a_not_yet_stops() {
+    let mut r = Ran::default();
+    assert!(!step_error(&mut r, "equip", "unbound native A.B()", Grading::PastErrors));
+    assert_eq!((r.stop.is_none(), r.error_lines.len()), (true, 1));
+    let text = NotYet::not_read("A.C", "NATIVE_X.md").to_string();
+    assert!(step_error(&mut r, "unequip", &text, Grading::PastErrors));
+    assert_eq!(r.stop.as_ref().unwrap().0, Outcome::NotYet);
 }
 
 #[test]
@@ -86,6 +134,7 @@ fn a_stop_blocks_the_links_that_need_it_and_missing_evidence_is_an_error() {
         stop: Some((Outcome::NotYet, stop_of_not_yet("spawn:baby:6", &n))),
         error_lines: Vec::new(),
         new_rows: Vec::new(),
+        evident: false,
     });
     ran[index("enemy_attacks_maya")] = ran_ok(&["spawn:adult:7", "swing:1:melee"]);
     ran[index("go_down")] = ran_ok(&["cash:3000"]);
@@ -179,6 +228,7 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
         stop: None,
         error_lines: vec![("use".into(), "mission script: unbound native A.B(name)".into())],
         new_rows: Vec::new(),
+        evident: false,
     });
     let n = NotYet::not_read("Pawn routing", "NATIVE_AI_HOLDS.md");
     ran[index("mission_objective")] = Some(Ran {
@@ -186,6 +236,7 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
         stop: Some((Outcome::NotYet, stop_of_not_yet("hit:fire", &n))),
         error_lines: Vec::new(),
         new_rows: Vec::new(),
+        evident: false,
     });
     let past = rows(&ran, Grading::PastErrors, |_| true);
     let r = |name| &past[index(name)];
