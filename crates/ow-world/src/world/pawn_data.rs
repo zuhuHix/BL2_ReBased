@@ -147,8 +147,8 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     }
     // Only instances (run-time objects and loaded definitions) are live; the store's unloaded handles are not. Only
     // objects whose own name is the path's last part can match, and their full path is built only then. A name match
-    // whose full path the port cannot name (a run-time object with no outer) cannot be the object at a full path, so
-    // it is skipped.
+    // whose full path the port cannot name (a run-time object with no outer) is skipped, but remembered: the game may
+    // hold it at a path the port cannot build, so it turns a final None into `NotYet` (review r2 of #411).
     let leaf = path.rsplit(['.', ':']).next().unwrap_or_default();
     let candidates: Vec<ObjRef> = c
         .vm
@@ -158,10 +158,15 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             c.vm.space.heap.get(*o).is_ok_and(|x| c.vm.space.names.text(x.name).eq_ignore_ascii_case(leaf))
         })
         .collect();
+    let mut unnamed = false;
     for o in candidates {
         match path_name(c.vm, o) {
             Ok(full) if full.eq_ignore_ascii_case(&path) => return Ok(Value::Object(Some(o))),
-            Ok(_) | Err(VmError::NotYet(_)) => continue,
+            Ok(_) => continue,
+            Err(VmError::NotYet(_)) => {
+                unnamed = true;
+                continue;
+            }
             Err(e) => return Err(e),
         }
     }
@@ -180,6 +185,16 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             format!(
                 "FindAlreadyLoadedObject of {path}, which an installed package holds but nothing has loaded (whether \
                  the game holds it in memory: the LoadPlayerPawnData family, not read)"
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    if unnamed {
+        return Err(NotYet::not_read(
+            format!(
+                "FindAlreadyLoadedObject of {path}: a run-time object named {leaf} has no full path the port can \
+                 name, so whether it is the object at that path is not known"
             ),
             RECORD,
         )
