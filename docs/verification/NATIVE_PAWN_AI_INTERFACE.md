@@ -73,9 +73,13 @@ the pawn's player master, the `WillowPlayerController` that masters the pawn, wh
   The mind's own rule was not read beyond the plain answer (whether `GearboxMind` adds steps of its own).
 - `Behavior_AIHold` then asks that mind for its AI component, and the component receives a demigod hold named `Safe`
   whose tag is the pawn, the context object, not the mind.
-- **No controller and no driven vehicle:** step 3 asks the pawn's `Mesh`. A skeletal mesh component answers by
-  `ActorComponent`'s rule (section 6, read since lane ANALYST-LINK11-QUERY-INTERFACE): for `IAIInterface` it gives
-  none, so nothing is held. The port's dummy meets this case on slice link 11 (section 6.3).
+- **Steps 1 and 2 give none** (no controller, a declining one, or the vehicle branch): step 3 asks the pawn's `Mesh`.
+  A skeletal mesh component answers by `ActorComponent`'s rule (section 6, read since lane
+  ANALYST-LINK11-QUERY-INTERFACE).
+  - Asked from the pawn, the mesh's owner is the pawn, already answering, so the mesh gives none and nothing is
+    held.
+  - Asked directly, the mesh's owner can answer through its own controller (section 6.3).
+  - The port's dummy meets the pawn-first case on slice link 11. Which way its step 2 gave none is not observed.
 
 ## 5. The port's current assumption (`crates/ow-combat/src/hit.rs`, `ai_interface_for`)
 
@@ -130,23 +134,38 @@ same guard section 2 describes for pawns, read here for the component's body, UN
 
 ### 6.3 The inputs the slice reaches, and their answers
 
-The Fire dummy of link 11 is a `WillowAIPawn` with no `Controller` and no `DrivenVehicle` in the port. The stop's own
-text says so: it went to the `Mesh`. Its `Mesh` is a `SkeletalMeshComponent`.
-- **The plain step:** no installed component class lists `IAIInterface` (section 1's tables list it only for
-  `GearboxMind` and `WillowMind`), so none.
-- **The owner step:**
-  - **`Owner` is the dummy itself:** the dummy is still answering that same question (it asked its `Mesh` in section 2,
-    step 3), so the pawn's guard gives none. The mesh answers none.
-  - **`Owner` is None:** none.
-  - **`Owner` is another actor:** that actor's own answer, by its rule. The slice was not seen to reach this case.
-- So the dummy's answer is **none**, and `Behavior_AIHold` returns without a hold (section 1, NATIVE_AI_HOLDS.md): the
-  dummy is **not** made demigod at that hit.
+**What the port's stop proves.** The stop's text, "goes to its Mesh, a Engine.SkeletalMeshComponent", proves only
+that section 2's steps 1 and 2 gave no answer for the port's Fire dummy, and that its `Mesh` is a
+`SkeletalMeshComponent`. It does not prove which way step 2 gave none:
+- a `Controller` that is None;
+- a set `Controller` that declined;
+- no `Controller`, and a `DrivenVehicle` that is None, has no `Controller`, or whose controller declined.
 
-**This differs from the game's run.** COMBAT_GOLDEN_TRACE.md records the live dummy becoming demigod inside its
-`Behavior_AIHold_59` call. Section 4 expects that answer to come from the dummy's mind through its `Controller`, which
-the game's dummy has and the port's does not. So the "none" here is the game's rule applied to the port's input (a
-pawn with no controller). It is not the game's outcome for the Fire dummy. The missing controller is the port's
-spawn's gap, not this rule's, and is recorded as open (section 6.6).
+No field of the port's dummy was observed directly. **The game's dummy** has a mind and goes demigod at its first hit
+(COMBAT_GOLDEN_TRACE.md question 8). Its `Controller` value at that hit, and the route its answer takes, are not
+observed (section 4). Both stay UNVERIFIED here.
+
+**The answers, by call path and owner.** In every case the plain step gives none for `IAIInterface`: no installed
+component class lists it (section 1's tables list it only for `GearboxMind` and `WillowMind`). The owner step then
+depends on how the mesh was reached.
+
+1. **Pawn first** (the slice's path: `Behavior_AIHold` asks the pawn, and the pawn's step 3 asks its mesh). The pawn is
+   still answering this question.
+   - `Owner` is that pawn: the guard gives none, so the mesh answers none.
+   - `Owner` is None: none.
+   - `Owner` is another actor: that actor's own answer, by its rule (not seen on the slice).
+
+   So when the pawn's steps 1 and 2 gave none, the pawn's answer is **none**, and `Behavior_AIHold` returns without a
+   hold (section 1, NATIVE_AI_HOLDS.md): the dummy is not made demigod at that hit.
+2. **A direct mesh query** (the mesh asked first, with nothing answering yet). `Owner` gets the question with no cycle,
+   and answers by its own rule:
+   - a pawn owner runs section 2 from step 1. A possessed pawn can then answer through its `Controller`, the mind,
+     before any cycle, so the mesh would answer the mind;
+   - the cycle guard ends the question only if it comes back to the mesh, through the pawn's step 3.
+
+**This differs from the game's run, as far as the slice goes.** The game's dummy goes demigod; the port's gets no
+hold. The "none" of case 1 is the game's rule applied to the port's input, a pawn whose steps 1 and 2 give none. It
+is not the game's outcome for the Fire dummy. Why the port's step 2 gives none is open (section 6.6).
 
 ### 6.4 Off answers, step by step (for an implementer)
 
@@ -156,21 +175,59 @@ The hub's rulings apply:
 - grade by the `VmError` variant and the `NotYet` kind, never by text;
 - **Off only; Reference is unchanged** (Reference keeps `crate::hit::ai_interface_for`'s stand-in).
 
-1. **Register `ActorComponent`'s rule for exactly `Engine.ActorComponent` and `Engine.SkeletalMeshComponent`,** the
-   two classes read. It replaces today's open answer for `Engine.SkeletalMeshComponent`, "what a skeletal mesh
-   component answers to QueryInterface is not read" (`ow_combat::pawn_interface::OPEN_ANSWERS`, record this note).
-2. **The rule:** the plain answer, then the `Owner` through the VM's own interface dispatch (`Vm::query_interface`),
-   whose guard gives none for an object already answering. No step writes.
-3. **`Owner` must be declared:** a component class that does not declare `Owner` is a `VmError::Script` naming it, as
-   the pawn rule's fields are (`required`), never "not set".
-4. **A `NotYet` from the owner's rule** passes through unchanged. The pawn rule's step prefix still names its own step
-   ("goes to its Mesh, a Engine.SkeletalMeshComponent"). There is no `NotYet` of this rule's own. Nothing is written
-   before or during it, so nothing needs preflighting.
-5. **Any other component class between or beside them** (for example an object whose class is exactly
-   `PrimitiveComponent` or `MeshComponent`, or another component subclass): its answer was not read. If such an object
-   is asked, it is `NotYet { NotRead }`, "what a <class> answers to QueryInterface is not read (asked of <class> for
-   <interface>)", record this note. This is the existing open-answer text, so it should be registered per class as the
-   port reaches them, not inherited from `ActorComponent` by default.
+**Hub ruling (2026-11-19, review r1 of #512): the classes.** The rule applies to exactly `Engine.ActorComponent` and
+`Engine.SkeletalMeshComponent`. The native checks this by an exact-class test on the receiver, inside the native.
+- Every other component class keeps the open `NotRead` (step 5). That includes the classes between them and every
+  subclass of `SkeletalMeshComponent`.
+- A registration on `ActorComponent` through the VM's interface rules would be inherited by every subclass without a
+  nearer rule, so the rule must not rely on that inheritance alone.
+- There is no VM-wide dispatch change: the VM's other interface rules keep their inheritance.
+
+**Hub ruling (2026-11-19, review r1 of #512): the contract.**
+1. **Which class answers.**
+   - When the receiver's class is exactly one of the two, the rule below runs.
+   - When it is any other class that reaches this rule through inheritance, the answer is
+     `NotYet { NotRead }`, "what a <class path> answers to QueryInterface is not read (asked of <class path> for
+     <interface path>)", record `docs/verification/NATIVE_PAWN_AI_INTERFACE.md`. This is the existing open-answer
+     text of `ow_combat::pawn_interface`.
+   - The rule replaces today's open answer for `Engine.SkeletalMeshComponent`, which is that same text with "a
+     skeletal mesh component".
+2. **The plain answer first** (`Vm::plain_interface`):
+   - an object is the answer;
+   - a `NotYet` or any other error passes through unchanged;
+   - only a successful None goes on to step 3.
+3. **The `Owner` field.**
+   - **A class with no `Owner` declaration:** `VmError::Script`, "ActorComponent.QueryInterface: <class path>
+     declares no Owner".
+   - **`Owner` declared with another type** (not an object reference to `Engine.Actor` or a subclass):
+     `VmError::Script`, "ActorComponent.QueryInterface: <class path>.Owner is not an object reference to
+     Engine.Actor".
+   - **No lazy load.** In the port, loading a definition handle is a store write (the hub's rule for lazy loads), so
+     the rule loads nothing.
+     - If the receiver is an unloaded definition handle, the answer is `NotYet { NotRead }`,
+       "ActorComponent.QueryInterface: the component <object path> is an unloaded definition handle", record this
+       note.
+     - If `Owner` holds such a handle, the answer is `NotYet { NotRead }`, "ActorComponent.QueryInterface: the Owner
+       <object path> of <object path> is an unloaded definition handle", record this note.
+   - **`Owner` None:** the answer is None.
+4. **The owner's answer.**
+   - `Owner` set: the question goes to it through the VM's own dispatch (`Vm::query_interface`), with the VM's existing
+     cycle guard and depth limit unchanged. An object already answering gets None, and the depth limit keeps its
+     existing error.
+   - The owner's answer is the answer: an object, None, a `NotYet` or an error, each passed through unchanged.
+5. **What the rule adds.** It has no `NotYet` of its own beyond steps 1 and 3. The pawn rule's step prefix still names
+   the pawn's own step ("goes to its Mesh, a Engine.SkeletalMeshComponent"). No step writes, so nothing needs
+   preflighting, and nothing is marked.
+
+**Tests the implementer owes** (both paths of section 6.3):
+- **Pawn first, the cycle:** a pawn with no `Controller` and no `DrivenVehicle`, whose `Mesh` is a
+  `SkeletalMeshComponent` with `Owner` = that pawn. Ask the pawn for `IAIInterface`: expect None, with the mesh asked
+  once and the pawn's second question ended by the guard.
+- **A direct mesh query, owner forwarding:** a mesh whose `Owner` is a pawn whose `Controller` is an object that
+  answers `IAIInterface` (an invented class listing the interface). Ask the mesh: expect that controller.
+- **The exact-class test:** an invented subclass of `SkeletalMeshComponent` gets the open `NotRead`, not the rule.
+- **`Owner` None, `Owner` missing, `Owner` mistyped and an unloaded `Owner`:** None, the two `VmError::Script` texts,
+  and the `NotRead`, respectively.
 
 ### 6.5 Where link 11 stops next (local probes, never committed)
 
@@ -193,17 +250,21 @@ these answers.
 
 ### 6.6 Open (UNVERIFIED)
 
-1. The rule of `PrimitiveComponent`, `MeshComponent` and other component classes (only `ActorComponent` and
-   `SkeletalMeshComponent` were compared).
-2. Why the port's Fire dummy has no `Controller` at its first hit, while the game's has its mind (section 4): the
-   port's spawn of the dummy's mind. Until it does, link 11's hold is the port's, not the game's.
-3. The `Owner` the port's dummy mesh holds (the dummy or None; both give none).
+1. The rule of `PrimitiveComponent`, `MeshComponent`, subclasses of `SkeletalMeshComponent` and other component classes
+   (only `ActorComponent` and `SkeletalMeshComponent` were compared).
+2. Why the port's step 2 gives none for its Fire dummy: a None `Controller`, a declining one, or the vehicle branch
+   (section 6.3). No field was observed directly.
+3. The game's dummy's `Controller` at its first hit, and the route of its answer (section 4). Until both are known,
+   link 11's hold in the port is the port's, not the game's.
+4. The `Owner` the port's dummy mesh holds. On the pawn-first path, the dummy and None both give none.
 
 ### 6.7 Live checks (bl-sdk, the RTSE way)
 
-1. On the Fire dummy, call `QueryInterface(IAIInterface)` on its `Mesh` directly: expect None.
-2. On a component whose `Owner` answers an interface the component's class does not list (for example a `WillowMind`'s
-   pawn's mesh asked for `IAIInterface`, with the pawn's own answer hooked out of the way), expect the owner's answer.
+1. **Pawn first:** on the Fire dummy, hook its `Mesh`'s answer and ask the dummy for `IAIInterface`. Record the
+   dummy's `Controller`, whether the mesh is asked, and the dummy's answer.
+2. **A direct mesh query:** call `QueryInterface(IAIInterface)` on the dummy's `Mesh` directly, and record the mesh's
+   `Owner`. A possessed owner is expected to answer through its mind, so the mesh answers the mind (owner forwarding).
+3. **A component with no owner:** on a component whose `Owner` is None, expect None.
 
 ## Vehicles (not on the slice path)
 

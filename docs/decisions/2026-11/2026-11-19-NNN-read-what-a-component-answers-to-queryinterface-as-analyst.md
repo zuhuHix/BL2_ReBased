@@ -27,3 +27,18 @@ placeholder until the numbering question is settled.
   - with that answered, links 10 and 11 pass (8 / 8 each), and link 12 stops at `turnin` (1 / 6) on the unbound
     `WillowPlayerController.UnlockAchievementIfConditionsMet`.
 - Not implemented here: an implementer lane codes it from the note.
+
+**Review r1 of #512 (four findings and two hub rulings, fixed in section 6).**
+1. **The classes (hub ruling):** an exact-class test inside the native, for `ActorComponent` and
+   `SkeletalMeshComponent` only. Every other component class, `SkeletalMeshComponent`'s subclasses included, keeps the
+   open `NotRead`. The VM's dispatch is not changed.
+2. **What the stop proves:** that the pawn's steps 1 and 2 gave none, not that the dummy has no `Controller`. The game
+   dummy's first-hit `Controller` and route stay UNVERIFIED.
+3. **The contract (hub ruling):**
+   - only a successful None from the plain answer reaches `Owner`, and a `NotYet` or error passes through;
+   - `Owner` None answers None;
+   - a missing or mistyped `Owner` is a `VmError::Script`, with the exact texts given;
+   - nothing is lazy-loaded, and an unloaded receiver or `Owner` is a named `NotRead`;
+   - the VM's cycle and depth behaviour is kept.
+4. **The call paths:** pawn first (the cycle gives none) and a direct mesh query (owner forwarding), each with a test
+   the implementer owes.
