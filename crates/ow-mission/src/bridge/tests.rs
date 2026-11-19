@@ -244,6 +244,16 @@ fn willowgame() -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "GetObjectivesProgress");
     let ids = t.function(tracker, "GetObjectivesProgress", &progress, None, &[], &spec, |_| None);
     t.p.set_outer(inner, ids.get("Progress"));
+    // The record queries (decision 2026-11-19-10): the active set, the mission list (an out array<object>), the
+    // expansion check.
+    native(&mut t, tracker, "GetActivePrimaryObjectiveSet", &[param("Object", "Mission", 0, object)], Some(("Object", object)), NATIVE);
+    let missions_inner = t.prop("Object", 0, "ToyMissionsInner", 0, object);
+    let spec = FunctionSpec::new(NATIVE, "GetAllMissions");
+    let all = [param("Array", "Missions", CPF_OUT, missions_inner)];
+    let ids = t.function(tracker, "GetAllMissions", &all, None, &[], &spec, |_| None);
+    t.p.set_outer(missions_inner, ids.get("Missions"));
+    let expansion = [param("Object", "WPC", 0, object), param("Object", "Expansion", 0, object)];
+    native(&mut t, tracker, "AllExpansionSideMissionsComplete", &expansion, Some(("Bool", 0)), NATIVE);
     native(&mut t, tracker, "RegisterMissionObserver", &[param("Object", "Observer", 0, object), param("Object", "Mission", 0, object)], None, NATIVE);
     script(&mut t, tracker, "TriggerMissionStatusChangedDelegates", &[], None, |_, _| {});
     script(&mut t, tracker, "TriggerMissionObjectivesChangedDelegates", &[param("Object", "Mission", 0, object)], None, |_, _| {});
@@ -894,6 +904,68 @@ fn objectives_progress_is_unbound_in_reference_mode() {
     let env = Env::with_progress(ParityMode::Reference);
     assert!(!env.world.vm.has_native(PROGRESS_KEY));
     assert!(env.world.vm.has_native("MissionTracker.GetMissionStatus(object)"), "the bridge's other natives are bound");
+}
+
+const ACTIVE_SET: &str = "WillowGame.MissionTracker.GetActivePrimaryObjectiveSet";
+const RECORD_QUERIES: [&str; 3] = [
+    "MissionTracker.GetActivePrimaryObjectiveSet(object)",
+    "MissionTracker.GetAllMissions(array)",
+    "MissionTracker.AllExpansionSideMissionsComplete(object,object)",
+];
+
+/// A tracker native at `path` through the VM on the bridge's tracker, with `args`.
+fn tracker_call(env: &mut Env, path: &str, args: Vec<Value>) -> Result<ow_vm::api::CallResult, VmError> {
+    let tracker = env.script.inner.o.tracker;
+    let vm = env.vm();
+    let f = vm.find_function(path).unwrap();
+    vm.call(f, Some(tracker), args)
+}
+
+/// `GetActivePrimaryObjectiveSet` in Off mode (NATIVE_MISSION_OBJECTIVES.md, UNVERIFIED; decision 2026-11-19-10): the
+/// bridge's own mission answers its active set as the `ObjectiveSetDefs` object (None before acceptance), any other
+/// mission None (no record); nothing changes.
+#[test]
+fn the_active_primary_objective_set_in_off_mode() {
+    let mut env = Env::new(false);
+    for key in RECORD_QUERIES {
+        assert!(env.vm().has_native(key), "{key} bound in Off");
+    }
+    let (m, s) = (env.mission.clone(), env.script.clone());
+    let (def, other, set) = (m.definition(), env.object("Other"), env.object("ToyMission.SetA"));
+    let ask = |env: &mut Env, mission: ObjRef| tracker_call(env, ACTIVE_SET, vec![Value::Object(Some(mission))]).unwrap().ret;
+    assert_eq!(ask(&mut env, def), Value::Object(None), "no active set before acceptance");
+    assert!(s.accept(env.vm(), &DetSet::new()).unwrap());
+    assert!(!m.active_set().is_empty(), "the initial set is active");
+    assert_eq!(ask(&mut env, def), Value::Object(Some(set)), "the active set after acceptance");
+    assert_eq!(ask(&mut env, other), Value::Object(None), "another mission has no record");
+    let none = tracker_call(&mut env, ACTIVE_SET, vec![Value::Object(None)]).unwrap().ret;
+    assert_eq!(none, Value::Object(None), "a None mission");
+    assert_eq!(m.status(), crate::tracker::Status::Active, "no side effect on the record");
+}
+
+/// `GetAllMissions` and `AllExpansionSideMissionsComplete` in Off mode: both walk the tracker's whole mission list,
+/// which the bridge does not hold, so they are `NotYet` (the list a layer, the expansion check's playthrough virtual
+/// not read); a None controller is false, as the note settles.
+#[test]
+fn the_mission_list_queries_wait_for_the_full_list_in_off_mode() {
+    let mut env = Env::new(false);
+    let c = env.script.player_controller();
+    let list = tracker_call(&mut env, "WillowGame.MissionTracker.GetAllMissions", vec![Value::array(Vec::new())]).unwrap_err();
+    assert!(matches!(&list, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_)) && n.record == RECORD_OBJECTIVES), "{list}");
+    let check = "WillowGame.MissionTracker.AllExpansionSideMissionsComplete";
+    let none = tracker_call(&mut env, check, vec![Value::Object(None), Value::Object(None)]).unwrap().ret;
+    assert_eq!(none, Value::Bool(false), "a None controller");
+    let refused = tracker_call(&mut env, check, vec![Value::Object(Some(c)), Value::Object(None)]).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead && n.record == RECORD_OBJECTIVES), "{refused}");
+}
+
+/// Reference keeps the C++ stubs (R3): none of the three record queries is bound there.
+#[test]
+fn the_record_queries_are_unbound_in_reference_mode() {
+    let env = Env::with_mode(false, ParityMode::Reference);
+    for key in RECORD_QUERIES {
+        assert!(!env.world.vm.has_native(key), "{key} unbound in Reference");
+    }
 }
 
 /// One bridge per fresh world: `new` refuses a world that already has actors.

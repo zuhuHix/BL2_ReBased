@@ -11,6 +11,15 @@ opened the executable, and it does not implement anything in this note. In the R
 unbound in Off, so the gameplay stub policy refuses them. Under Reference they keep the C++ stub. They stay that way
 until a fresh implementer codes them from this note alone.
 
+**Implemented (2026-11-19, lane FIX-MISSION-OBJECTIVES, decision 2026-11-19-10),** by a fresh implementer from this
+note alone, in Off only (Reference keeps the C++ stubs):
+- `GetActivePrimaryObjectiveSet`, in the bridge's terms below: the bridge's mission answers its active set, any other
+  mission None.
+- `GetAllMissions`: `NotYet { LayerAbsent }`. The rule is settled, but it walks the tracker's whole `MissionList` and
+  the bridge holds one record; one entry would tell the turn-in's playthrough checks that it is the game's whole list.
+- `AllExpansionSideMissionsComplete`: false for a None controller; otherwise `NotYet { NotRead }` (the controller
+  virtual behind the playthrough index, and the same whole-list walk).
+
 ## Summary
 
 | Native | Script signature (from the package) | Reached on the Fire route | Confidence | Status |
