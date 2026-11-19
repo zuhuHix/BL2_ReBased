@@ -19,11 +19,12 @@
 //! at the path whose class is only derived from the requested one is `NotYet`, and so is one of an unrelated class.
 //! A name match in memory whose full path the port cannot name is `NotYet` too, before any load.
 //!
-//! **The class is checked before the load** (review of #431). The store's holder records name each export's class,
-//! so a load by name first asks which files hold the path and with which class. No holder: the retry's `NotYet`. A
-//! holder whose class is not exactly the requested one, or a file the store could not search: `NotYet` (the lookup's
-//! class filter is not read), and nothing is loaded. So a refused call leaves no definition live that a later
-//! `FindAlreadyLoadedObject` could find.
+//! **The class is checked before the load** (review of #431). A load by name first asks the store for the class of
+//! the export its identity policy would pick (`DefStore::holder_class`, which loads that class's code but not the
+//! export), and compares it with the requested class by class, not by path text. No holder: the retry's `NotYet`. A
+//! different class, or a requested class with no package class to compare: `NotYet` (the lookup's class filter is not
+//! read), and nothing is loaded. So a refused call leaves no definition live that a later `FindAlreadyLoadedObject`
+//! could find, and a duplicate holder the policy does not pick does not refuse the lookup.
 //!
 //! **`WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync(PawnDataPath, PlayerContext, Payload, Instigator, IntParam,
 //! FloatParam, CallbackCustomEventName)`** (section 3):
@@ -139,30 +140,33 @@ fn get_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     // Loaded by that name: the definition store's load of the path, once its holders' class settles the filter.
     let loaded = match ObjectPath::parse(&name) {
         Ok(path) => {
-            let holders = c.vm.defs.owners(&path).map_err(VmError::Def)?;
-            if !holders.failures.is_empty() {
-                return Err(not_read(format!(
-                    "GBXDefinition.GetDefinition of {name:?}: a file that may hold it could not be searched"
-                )));
-            }
-            let wanted = class_name(c.vm, class);
-            // A class the holder's own file exports is named without its package there: qualify it with the file's.
-            let qualified = |h: &ow_defs::identity::Owner| {
-                if h.class.contains('.') {
-                    h.class.clone()
-                } else {
-                    format!("{}.{}", h.package, h.class)
+            // The holder the store's identity policy picks, by its class's key, without loading the export (review
+            // of #431): another holder of a different class is not the one the load would take, and a class named
+            // under an outer compares as the class itself, not as a path string.
+            let held = c.vm.defs.holder_class(&mut c.vm.space, &path);
+            let log = c.vm.defs.take_log();
+            c.vm.log.extend(log);
+            let held = held.map_err(VmError::Def)?;
+            let wanted = c.vm.defs.code_mut().0.key_of(class);
+            match (held, wanted) {
+                (None, _) => {
+                    return Err(not_read(format!(
+                        "GBXDefinition.GetDefinition of {name:?}, which neither memory nor a load by name holds (the retry's fixed text; NATIVE_PLAYER_CLASS.md, Not read)"
+                    )));
                 }
-            };
-            if let Some(other) = holders
-                .holders
-                .iter()
-                .find(|h| !qualified(h).eq_ignore_ascii_case(&wanted))
-            {
-                return Err(not_read(format!(
-                    "GBXDefinition.GetDefinition of {name:?}: an installed package holds it as a {}, not the requested {wanted} (the lookup's class filter is not read; nothing was loaded)",
-                    other.class
-                )));
+                (Some(_), None) => {
+                    return Err(not_read(format!(
+                        "GBXDefinition.GetDefinition of {name:?}: the requested class {} has no package class to compare with, so the lookup's class filter cannot be settled",
+                        class_name(c.vm, class)
+                    )));
+                }
+                (Some(held), Some(wanted)) if held != wanted => {
+                    return Err(not_read(format!(
+                        "GBXDefinition.GetDefinition of {name:?}: the export the load would take is of another class than the requested {} (the lookup's class filter is not read; nothing was loaded)",
+                        class_name(c.vm, class)
+                    )));
+                }
+                _ => {}
             }
             let found = c.vm.defs.find(&mut c.vm.space, &path);
             let log = c.vm.defs.take_log();

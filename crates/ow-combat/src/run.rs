@@ -1219,7 +1219,9 @@ impl Run {
         for e in std::mem::take(&mut self.script_errors) {
             self.errors.push(format!("{step}: {e}"));
         }
+        // After a latched class-switch stop no snapshot is taken either: it calls script getters on the pawn.
         if parts.len() > 1
+            && self.class_switch_stop.is_none()
             && !NO_STATE.contains(&parts[0])
             && let Ok(index) = stoul(parts[1])
             && index < self.pawns.len()
