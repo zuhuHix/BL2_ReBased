@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
+AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
+in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace
+-j 2` 2,459 passed / 0 failed / 46 ignored. Installed Off `--slice-gate` strict, under the machine lock, base and branch
+each built: 0 ok / 5 NotYet / 9 errors before, 0 ok / 7 NotYet / 7 errors after. Links 6 and 7 stay at 0 of 1 step
+(`make`) and move from the unbound `PrimitiveComponent.SetLightEnvironment(object)` to "stopped after partial writes:
+WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up" (`NotYet { LayerAbsent }`). The other 12
+rows are byte-identical. ctest and verify_packages not run (no C++ change). No real-game session.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 1 (2026-11-19, zuhu desktop, on fix/rust-set-anim-tree-template c1c8a73, #495):**
 AI-assisted (Claude Code, Opus 5.5). `SetForceRefPose`, `SetHidden`, `SetOwnerNoSee`, `HideBoneByName` and
 `Actor.AttachComponent` in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md part 1, with an empty scene layer in the pickup

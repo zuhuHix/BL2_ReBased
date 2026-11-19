@@ -44,6 +44,9 @@ const HIDDEN: &str = "Engine.PrimitiveComponent.SetHidden";
 const NO_SEE: &str = "Engine.PrimitiveComponent.SetOwnerNoSee";
 const HIDE_BONE_FN: &str = "Engine.SkeletalMeshComponent.HideBoneByName";
 const ATTACH_FN: &str = "Engine.Actor.AttachComponent";
+const LIGHT_FN: &str = "Engine.PrimitiveComponent.SetLightEnvironment";
+const RB_FN: &str = "Engine.WillowPickup.InitializePickupForRBPhysics";
+const PARTICLES_FN: &str = "Engine.WillowPickup.SpawnPickupParticles";
 
 /// Every component field a native here may write, checked unchanged after a refusal.
 const WRITTEN: [&str; 8] = [
@@ -78,6 +81,16 @@ fn engine() -> Vec<u8> {
     let primitive = t.class("PrimitiveComponent", component);
     t.prop("Bool", primitive, "HiddenGame", 0, 0);
     t.prop("Bool", primitive, "bOwnerNoSee", 0, 0);
+    let light = t.class("LightEnvironmentComponent", component);
+    t.prop("Object", primitive, "LightEnvironment", 0, light);
+    t.prop("Object", primitive, "PreviousLightEnvironment", 0, light);
+    let env = Param { type_ref: light, ..Param::new("Object", "NewLightEnvironment") };
+    t.function(primitive, "SetLightEnvironment", &[env], None, &[], &FunctionSpec::new(NATIVE, "SetLightEnvironment"), |_| None);
+    let pickup = t.class("WillowPickup", actor);
+    t.prop("Bool", pickup, "bUseRBPhysics", 0, 0);
+    t.prop("Object", pickup, "PickupParticles", 0, object);
+    t.function(pickup, "InitializePickupForRBPhysics", &[], None, &[], &FunctionSpec::new(NATIVE, "InitializePickupForRBPhysics"), |_| None);
+    t.function(pickup, "SpawnPickupParticles", &[], None, &[], &FunctionSpec::new(NATIVE, "SpawnPickupParticles"), |_| None);
     t.function(primitive, "SetHidden", &[Param::new("Bool", "NewHidden")], None, &[], &FunctionSpec::new(NATIVE, "SetHidden"), |_| None);
     t.function(primitive, "SetOwnerNoSee", &[Param::new("Bool", "bNewOwnerNoSee")], None, &[], &FunctionSpec::new(NATIVE, "SetOwnerNoSee"), |_| None);
     let bad_actor = t.class("BadActor", object);
@@ -418,6 +431,9 @@ fn reference_binds_nothing() {
         (NO_SEE, mesh, vec![Value::Bool(true)]),
         (HIDE_BONE_FN, mesh, vec![Value::Name(NameId::NONE), Value::Byte(0)]),
         (ATTACH_FN, actor, vec![Value::Object(Some(mesh))]),
+        (LIGHT_FN, mesh, vec![Value::Object(None)]),
+        (RB_FN, actor, vec![]),
+        (PARTICLES_FN, actor, vec![]),
     ] {
         match x.call(path, me, args) {
             Err(VmError::NotYet(n)) => assert_ne!(n.record, RECORD, "{path}"),
@@ -436,4 +452,92 @@ fn an_error_after_the_first_write_is_marked_once() {
     assert_eq!(m.what.as_ref(), "stopped after partial writes: x");
     assert_eq!((m.missing, m.record), (Missing::LayerAbsent(SCENE_LAYER), RECORD));
     assert!(matches!(after_writes(VmError::ServiceBorrowed("x")), VmError::ServiceBorrowed("x")));
+}
+
+// ---- part 2 (the note's section 6) ---------------------------------------------------------------------------------
+
+/// The light environment fields of `o`: `LightEnvironment`, `PreviousLightEnvironment`, `bNeedsReattach`.
+fn light_fields(x: &Fx, o: ObjRef) -> Vec<Value> {
+    ["LightEnvironment", "PreviousLightEnvironment", "bNeedsReattach"].iter().map(|f| x.get(o, f)).collect()
+}
+
+/// `SetLightEnvironment` (6.2): the current value is nothing, even on an attached component with an `Owner`; a
+/// component not attached gets the one write `LightEnvironment`, even with an `Owner` (the slice's case after the
+/// attach); an attached one with no `Owner` and an empty `Scene` gets `PreviousLightEnvironment`, `LightEnvironment`
+/// and `bNeedsReattach`; an attached one with an `Owner` is the deferred reattach's `NotRead`, unmarked, nothing
+/// written.
+#[test]
+fn set_light_environment_follows_the_three_cases() {
+    let mut x = fx(ParityMode::Off, true);
+    let old = x.obj("Engine.LightEnvironmentComponent");
+    let new = x.obj("Engine.LightEnvironmentComponent");
+    let owner = x.obj("Engine.Actor");
+
+    let same = x.obj("Engine.SkeletalMeshComponent");
+    x.set(same, "LightEnvironment", Value::Object(Some(old)));
+    x.set(same, "bAttached", Value::Bool(true));
+    x.set(same, "Owner", Value::Object(Some(owner)));
+    let before = light_fields(&x, same);
+    assert_eq!(x.call(LIGHT_FN, same, vec![Value::Object(Some(old))]).unwrap(), Value::None);
+    assert_eq!(light_fields(&x, same), before, "the current value: nothing");
+
+    let loose = x.obj("Engine.SkeletalMeshComponent");
+    x.set(loose, "LightEnvironment", Value::Object(Some(old)));
+    x.set(loose, "Owner", Value::Object(Some(owner)));
+    x.call(LIGHT_FN, loose, vec![Value::Object(Some(new))]).unwrap();
+    assert_eq!(
+        light_fields(&x, loose),
+        vec![Value::Object(Some(new)), Value::Object(None), Value::Bool(false)],
+        "not attached: LightEnvironment only"
+    );
+
+    let attached = x.obj("Engine.SkeletalMeshComponent");
+    x.set(attached, "LightEnvironment", Value::Object(Some(old)));
+    x.set(attached, "bAttached", Value::Bool(true));
+    x.call(LIGHT_FN, attached, vec![Value::Object(Some(new))]).unwrap();
+    assert_eq!(
+        light_fields(&x, attached),
+        vec![Value::Object(Some(new)), Value::Object(Some(old)), Value::Bool(true)],
+        "attached: the previous value kept, the new one stored, the reattach flag"
+    );
+
+    let owned = x.obj("Engine.SkeletalMeshComponent");
+    x.set(owned, "LightEnvironment", Value::Object(Some(old)));
+    x.set(owned, "bAttached", Value::Bool(true));
+    x.set(owned, "Owner", Value::Object(Some(owner)));
+    let before = light_fields(&x, owned);
+    unmarked(&not_yet(x.call(LIGHT_FN, owned, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
+    assert_eq!(light_fields(&x, owned), before, "nothing written");
+}
+
+/// `InitializePickupForRBPhysics` (6.3, the hub's ruling on 6.6): `bUseRBPhysics` false is nothing; true is the
+/// rigid-body `LayerAbsent`, unmarked, with nothing written.
+#[test]
+fn the_rigid_body_set_up_is_layer_absent_unless_the_pickup_skips_it() {
+    let mut x = fx(ParityMode::Off, true);
+    let pickup = x.obj("Engine.WillowPickup");
+    assert_eq!(x.call(RB_FN, pickup, vec![]).unwrap(), Value::None, "bUseRBPhysics false");
+    x.set(pickup, "bUseRBPhysics", Value::Bool(true));
+    let before = (x.get(pickup, "bUseRBPhysics"), x.get(pickup, "PickupParticles"), x.get(pickup, "Components"));
+    let n = not_yet(x.call(RB_FN, pickup, vec![]));
+    assert_eq!(n.what.as_ref(), "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up");
+    unmarked(&n, Missing::LayerAbsent("a rigid-body physics layer (the port has none)"), RB_PHYSICS);
+    assert_eq!((x.get(pickup, "bUseRBPhysics"), x.get(pickup, "PickupParticles"), x.get(pickup, "Components")), before);
+}
+
+/// `SpawnPickupParticles` (6.4): no particle system is the removal's `NotRead`; one set is the particle-effects
+/// `LayerAbsent`. Both unmarked, nothing written.
+#[test]
+fn spawn_pickup_particles_is_not_read_or_layer_absent() {
+    let mut x = fx(ParityMode::Off, true);
+    let pickup = x.obj("Engine.WillowPickup");
+    let n = not_yet(x.call(PARTICLES_FN, pickup, vec![]));
+    assert_eq!(n.what.as_ref(), "WillowPickup.SpawnPickupParticles with no particle system: the particles' removal");
+    unmarked(&n, Missing::NotRead, PARTICLES_REMOVAL);
+    let system = x.obj("Engine.Actor");
+    x.set(pickup, "PickupParticles", Value::Object(Some(system)));
+    let n = not_yet(x.call(PARTICLES_FN, pickup, vec![]));
+    assert_eq!(n.what.as_ref(), "WillowPickup.SpawnPickupParticles: the pickup's particle effect");
+    unmarked(&n, Missing::LayerAbsent("a particle-effects layer (the port has none)"), PARTICLES);
+    assert_eq!(x.get(pickup, "Components"), Value::array(Vec::new()), "no component made or attached");
 }

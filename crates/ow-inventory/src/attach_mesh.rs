@@ -37,6 +37,19 @@
 //! write tracking adds "stopped after partial writes: " when earlier steps wrote (the `make` step). An error after a
 //! native's first write is marked once, its kind and record kept. None of them loads a definition.
 //!
+//! **Part 2** (the note's section 6, lane IMPL-ATTACH-MESH-TO-PICKUP part 2, the note at f32d69b, PR #507), the
+//! rest of the pickup's `make` step:
+//! - `PrimitiveComponent.SetLightEnvironment(object)` (6.2): the argument equal to `LightEnvironment` is nothing; a
+//!   component not `bAttached` gets the one write `LightEnvironment` (the native's own rule); an attached one runs
+//!   the deferred reattach's preflight, then `PreviousLightEnvironment`, `LightEnvironment` and `bNeedsReattach`. The
+//!   two fields are **UNVERIFIED (fitted)**.
+//! - `WillowPickup.InitializePickupForRBPhysics()` (6.3): `bUseRBPhysics` false is nothing (the native's own rule);
+//!   otherwise [`RB_PHYSICS`], `NotYet { LayerAbsent }` ([`RB_LAYER`]), before any write. The hub's ruling on 6.6:
+//!   its script-visible writes do not separate from the physics work, so no part of it is a port answer.
+//! - `WillowPickup.SpawnPickupParticles()` (6.4): `PickupParticles` None is [`PARTICLES_REMOVAL`],
+//!   `NotYet { NotRead }`; otherwise [`PARTICLES`], `NotYet { LayerAbsent }` ([`PARTICLES_LAYER`]), both before any
+//!   write of its own.
+//!
 //! **Only in `ParityMode::Off`.** The C++ reference binds none of them, so Reference keeps the VM's stub policy
 //! (`Actor.AttachComponent` is a Reference stub of the slice runs).
 
@@ -70,6 +83,18 @@ pub const ATTACH: &str = "Actor.AttachComponent: the component's attach to the w
 /// The absent layer [`ATTACH`] names, for a world without a [`SceneLayer`].
 pub const SCENE_LAYER: &str = "a scene that components attach to: render, collision and physics registration (the port has none)";
 pub const ATTACH_DETACH: &str = "Actor.AttachComponent on an attached component: the detach before the attach";
+
+/// Part 2's native keys.
+pub const SET_LIGHT_ENVIRONMENT: &str = "PrimitiveComponent.SetLightEnvironment(object)";
+pub const INIT_RB_PHYSICS: &str = "WillowPickup.InitializePickupForRBPhysics()";
+pub const SPAWN_PICKUP_PARTICLES: &str = "WillowPickup.SpawnPickupParticles()";
+
+/// Part 2's named `NotYet`s, the note's texts.
+pub const RB_PHYSICS: &str = "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up";
+pub const RB_LAYER: &str = "a rigid-body physics layer (the port has none)";
+pub const PARTICLES_REMOVAL: &str = "WillowPickup.SpawnPickupParticles with no particle system: the particles' removal";
+pub const PARTICLES: &str = "WillowPickup.SpawnPickupParticles: the pickup's particle effect";
+pub const PARTICLES_LAYER: &str = "a particle-effects layer (the port has none)";
 
 /// The fitted fields (UNVERIFIED (fitted), the note's open question 2).
 pub const FORCE_REF_POSE: &str = "bForceRefpose";
@@ -279,6 +304,73 @@ pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -
     Ok(())
 }
 
+/// `SetLightEnvironment(NewLightEnvironment)` on `component` in Off (module documentation, part 2).
+pub fn set_light_environment(vm: &mut Vm, component: ObjRef, new: Option<ObjRef>) -> Result<(), VmError> {
+    const WHAT: &str = "PrimitiveComponent.SetLightEnvironment";
+    schemas(vm, component, &[("LightEnvironment", Want::Object), ("bAttached", Want::Bool)], WHAT)?;
+    let current = object_of(&required(vm, component, "LightEnvironment", WHAT)?, WHAT)?;
+    if current == new {
+        return Ok(());
+    }
+    let value = Value::Object(new);
+    let kind = declared(vm, component, "LightEnvironment", WHAT)?;
+    vm.space
+        .heap
+        .check_value(&vm.space.classes, &kind, &value)
+        .map_err(|e| bad(WHAT, format!("LightEnvironment cannot take the argument: {e}")))?;
+    if !bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)? {
+        return write(vm, component, "LightEnvironment", value, WHAT);
+    }
+    schemas(vm, component, &REATTACH_FIELDS, WHAT)?;
+    schemas(vm, component, &[("PreviousLightEnvironment", Want::Object)], WHAT)?;
+    reattach_preflight(vm, component, WHAT)?;
+    write(vm, component, "PreviousLightEnvironment", Value::Object(current), WHAT)?;
+    let rest = (|| {
+        write(vm, component, "LightEnvironment", value, WHAT)?;
+        write(vm, component, "bNeedsReattach", Value::Bool(true), WHAT)
+    })();
+    rest.map_err(after_writes)
+}
+
+/// `InitializePickupForRBPhysics()` on `pickup` in Off (module documentation, part 2). Writes nothing.
+pub fn initialize_pickup_for_rb_physics(vm: &Vm, pickup: ObjRef) -> Result<(), VmError> {
+    const WHAT: &str = "WillowPickup.InitializePickupForRBPhysics";
+    schemas(vm, pickup, &[("bUseRBPhysics", Want::Bool)], WHAT)?;
+    if !bool_of(&required(vm, pickup, "bUseRBPhysics", WHAT)?, "bUseRBPhysics", WHAT)? {
+        return Ok(());
+    }
+    Err(NotYet::layer_absent(RB_PHYSICS, RB_LAYER, RECORD).into())
+}
+
+/// `SpawnPickupParticles()` on `pickup` in Off (module documentation, part 2). Writes nothing.
+pub fn spawn_pickup_particles(vm: &Vm, pickup: ObjRef) -> Result<(), VmError> {
+    const WHAT: &str = "WillowPickup.SpawnPickupParticles";
+    schemas(vm, pickup, &[("PickupParticles", Want::Object)], WHAT)?;
+    if object_of(&required(vm, pickup, "PickupParticles", WHAT)?, WHAT)?.is_none() {
+        return Err(NotYet::not_read(PARTICLES_REMOVAL, RECORD).into());
+    }
+    Err(NotYet::layer_absent(PARTICLES, PARTICLES_LAYER, RECORD).into())
+}
+
+fn light_environment_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let component = this(c, SET_LIGHT_ENVIRONMENT)?;
+    let new = object_of(c.arg(0)?, SET_LIGHT_ENVIRONMENT)?;
+    set_light_environment(c.vm, component, new)?;
+    Ok(Value::None)
+}
+
+fn rb_physics_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let pickup = this(c, INIT_RB_PHYSICS)?;
+    initialize_pickup_for_rb_physics(c.vm, pickup)?;
+    Ok(Value::None)
+}
+
+fn particles_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let pickup = this(c, SPAWN_PICKUP_PARTICLES)?;
+    spawn_pickup_particles(c.vm, pickup)?;
+    Ok(Value::None)
+}
+
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
     c.this.ok_or_else(|| bad(what, "called without an object"))
 }
@@ -322,7 +414,7 @@ fn attach_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
-/// Binds the five natives in `ParityMode::Off`; Reference binds nothing. The scene layer is the world set-up's to add
+/// Binds the natives of parts 1 and 2 in `ParityMode::Off`; Reference binds nothing. The scene layer is the world set-up's to add
 /// ([`add_empty_scene`]).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
@@ -332,7 +424,10 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(SET_HIDDEN, Rc::new(hidden_native))?;
     vm.register_native(SET_OWNER_NO_SEE, Rc::new(owner_no_see_native))?;
     vm.register_native(HIDE_BONE_BY_NAME, Rc::new(hide_bone_native))?;
-    vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))
+    vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))?;
+    vm.register_native(SET_LIGHT_ENVIRONMENT, Rc::new(light_environment_native))?;
+    vm.register_native(INIT_RB_PHYSICS, Rc::new(rb_physics_native))?;
+    vm.register_native(SPAWN_PICKUP_PARTICLES, Rc::new(particles_native))
 }
 
 #[cfg(test)]
