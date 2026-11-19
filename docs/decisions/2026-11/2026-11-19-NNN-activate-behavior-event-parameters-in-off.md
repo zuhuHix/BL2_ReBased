@@ -53,4 +53,11 @@ lane did not open it or that lane's analysis output. Synthetic fixtures only.
   - the Off script route firing with `Parameters`, and Reference unchanged.
 
   `ow-behavior` 97 passed.
+- **Checks:** `cargo test --workspace` 2,450 passed, 0 failed, 46 ignored; crate edges OK.
+- **Installed `--slice-gate`, Off, strict, under the machine lock,** on a throwaway local merge with #523 (d2227301),
+  #535 (7f8fc7d7) and #548 (22b29bfb), never pushed. The merge took #518's counter files and renamed #523's two
+  counter calls locally. Result: 1 ok / 3 not yet / 10 error.
+  - Link 9 passes `spawn` (1 of 2) and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`.
+  - That is the argument `OnSelectedTarget` evaluates just before this native, so the new rule is not reached on
+    link 9 yet. Another lane is analysing that native.
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's live checks would confirm it.

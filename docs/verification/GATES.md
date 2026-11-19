@@ -188,6 +188,18 @@ error 9 of 14, the same rows as #534 alone. Link 8 passes 1 of 5 steps and stops
 `WillowWeapon.RecomputeAttributeBaseValues()`, after the card. ctest and verify_packages not run (no C++ change). No
 real-game run; `UNVERIFIED` in game. Decision 2026-11-19-163.
 
+**IMPL-ACTIVATE-EVENT-PARAMETERS (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5).
+`ActivateBehaviorEventFromScript` with `Parameters` in Off from NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md (#549):
+a typed payload, object bindings by connection index on a type match, a write-free preflight over every sequence with
+the event. `cargo build --workspace -j 4` clean; `cargo test --workspace -j 4` 2,450 passed / 0 failed / 46 ignored
+(ow-behavior 97); clippy no new warnings; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build,
+under the machine lock) on a throwaway local merge with #523 (d2227301), #535 (7f8fc7d7) and #548 (22b29bfb), with
+#518's counter files and a local rename of #523's two counter calls, never pushed: 1 ok / 3 NotYet / 10 errors. Link
+9 passes `spawn` (1 of 2) and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`, the
+argument `OnSelectedTarget` evaluates just before this native, so the new rule is not reached yet. ctest and
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+ignored `local/analysis/aep-impl/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
