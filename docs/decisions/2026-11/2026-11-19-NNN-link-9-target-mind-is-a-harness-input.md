@@ -7,7 +7,8 @@ dependency or crate edge was added. The attribute, flag-expression, Phaselock an
 unchanged, and Reference is unchanged: these are harness steps of link 9's own Off world.
 
 - **The mind** (`ow-cli` `slice_gate.rs`, `target_mind`, run after the three spawns of `phaselock_actors`):
-  - a target whose class declares no `Controller` gets none, and one that already has a controller keeps it;
+  - a target whose class declares no `Controller` gets none. An already-possessed target keeps its mind: a set
+    `Controller`, else a set `MyWillowMind`, which `adopt` also treats as possessed;
   - the class is the target's own `ControllerClass` when that names an `Engine.Controller` subclass. Otherwise it is
     `WillowGame.WillowMind`. The installed `WillowAIPawn` takes the fallback, which is the same class its default
     names;
@@ -16,40 +17,60 @@ unchanged, and Reference is unchanged: these are harness steps of link 9's own O
   - it is linked the way the port already possesses an AI pawn (`ow_combat::hit::adopt`): the target's `Controller`,
     plus `MyWillowMind` when declared; the mind's `Pawn`, plus `MyWillowPawn` when declared. The script's `Possess` is
     not run, as in `adopt`;
+  - all four destinations are checked before anything is written: each declared slot must be an object property
+    that can hold the other side's class. A slot that cannot refuses the target with nothing spawned or linked, so a
+    target never points at a mind whose `Pawn` was never set. Then the mind is spawned and the links are written
+    together;
   - a harness line is logged before the class lookup. The driver copies the spawn's `harness input:` lines into the
-    row's `harness`, also when the spawn stopped. A NotYet from the mind is marked "stopped after partial writes",
-    because three actors are committed by then.
+    row's `harness`, also when the spawn stopped. A NotYet from the mind is marked "stopped after partial writes"
+    once, at the start, with its kind and record kept (`NotYet::after_partial_writes`), because three actors are
+    committed by then.
 - **Two more harness steps, found by measuring.** On the installed probe, the mind alone did not change the flag
   answer (`Flag_Skills_CanPhaseLock` still read false). A probe-only debug trace found two causes in the harness:
   - `GearboxFramework.IFlagProvider` was not in the loaded classes. The flag evaluator checks a store by the class
     tables, so it read the mind's class as "not a flag provider", and `Flag_Skills_DisablePhaseLock`'s store was "no
-    store". `target_mind` now loads the interface when the packages hold it and it is not loaded yet, and logs a
-    second `harness input:` line. A lazy load is a write, so this happens at set-up, before the cast;
+    store";
   - link 9's world never registered `ow_combat::pawn_interface` (decision 2026-11-19-62), so the pawn gave the plain
-    `QueryInterface` answer (None) instead of handing the question to its mind. `phaselock_world` now registers it,
-    as `ow-mission`'s slice world already does.
+    `QueryInterface` answer (None) instead of handing the question to its mind. `ow-mission`'s slice world already
+    registers it.
+- **Link 9's set-up** (`phaselock_setup`, run by `phaselock_world`; review r1 of #579). It resolves every class the
+  harness needs before the driver starts: `IFlagProvider`, the two interfaces the pawn rules compare against
+  (`IAIInterface`, `IPlayerMaster`), and each class whose answer `pawn_interface` registers. Then it registers the
+  pawn rules, which find those classes loaded, so the cast loads none of them lazily (a load is a write). Each class
+  gets one `harness input: set-up class` line with its outcome: already loaded (a defined layout; a class that is only
+  declared counts as not loaded), loaded at set-up, not in the packages, or the load failed. A failure is logged before
+  the set-up stops. The row's `harness` carries these lines, also when the set-up fails.
 - **For the hub, not changed here:** the evaluator's class check (`flag_expression.rs`, `implements`) answers false,
   not a NotYet, when the interface class is not loaded. A world that never loads the interface gets a false flag with
   no stop. That native belongs to another lane.
-- **Tests:** a test on invented classes covers four cases:
-  - with no `ControllerClass`, the fallback `WillowGame.WillowMind`;
-  - with a `ControllerClass` default naming a toy mind, that class, with `MyWillowMind` and `MyWillowPawn` linked;
-  - the mind possesses the pawn, is listed by the world, and its harness line (marked UNVERIFIED) is logged;
-    `IFlagProvider`, absent before, is preloaded and logged once;
-  - a target class with no `Controller` gets no mind, no preload and no harness line.
+- **Tests on invented classes:**
+  - the mind: with no `ControllerClass`, the fallback `WillowGame.WillowMind`; with a `ControllerClass` default naming
+    a toy mind, that class, with `MyWillowMind` and `MyWillowPawn` linked. The mind possesses the pawn, the world
+    lists it, its harness line (marked UNVERIFIED) is logged, and the spawn loads no set-up class. A target class
+    with no `Controller` gets no mind and no harness line;
+  - a `MyWillowMind` slot narrower than the mind's class: a typed error at the spawn, no mind spawned, `Controller`
+    still None;
+  - an already-possessed target, by `Controller` and by `MyWillowMind` alone: its mind is returned, nothing is
+    spawned, written or logged;
+  - set-up classes: absent from the packages, declared only (loaded, reported as a write), and already loaded; the
+    set-up reports one line per class, in order;
+  - the partial-writes mark is added once at the start, also when the text already mentions it.
 - **The slice** (installed, Off, strict, under the machine lock; a local merge never pushed: this branch, which
   holds #568 @ 350fb829, with #535, #564, #548, #555, #560, #523 and the link 9 spawn branches):
-  - **B, this branch:** 1 ok / 4 NotYet / 9 errors. Link 9 passes both of the driver's steps (`spawn`, `cast`) and is
-    now **NotYet** at the cast: "a pawn's QueryInterface(GearboxFramework.IAIInterface) goes to its Controller, a
-    WillowGame.WillowMind: GearboxMind's own QueryInterface answer … is not read" (NATIVE_PAWN_AI_INTERFACE.md).
+  - **B, this branch:** 1 ok / 4 NotYet / 9 errors. Link 9's `spawn` step completed; the driver records `cast` before
+    it runs it, and the cast reached the registered `GearboxMind` rule, which answers **NotYet**: "a pawn's
+    QueryInterface(GearboxFramework.IAIInterface) goes to its Controller, a WillowGame.WillowMind: GearboxMind's own
+    QueryInterface answer … is not read" (NATIVE_PAWN_AI_INTERFACE.md). A NotYet skips the evidence check, so the
+    cast is not shown to pass. Re-run after review r1 of #579: the same counts and the same stop, with the set-up
+    lines in the row's `harness`.
     `Flag_Skills_DisablePhaseLock` now reads through the mind's store (false, so its `IsFalse` is true). The next flag,
     `Flag_Skills_PhaseLockOnHold`, reaches the AI component resolver, which asks the pawn for `IAIInterface`, and the
     pawn hands that to the mind;
   - **A, the same merge with `target_mind` and the pawn-rule registration switched off:** 1 ok / 3 NotYet / 10 errors.
     Link 9 is an error: "no stop, but no evidence" (the blocked path, as #568 found);
   - the other 13 rows are the same in A and B.
-  - So the unbound native that stops the mind is **`GearboxMind`'s own `QueryInterface` answer**, an open item of
-    NATIVE_PAWN_AI_INTERFACE.md and NotYet in Off by design. This lane stops there.
+  - So what stops the mind is **`GearboxMind`'s own `QueryInterface` answer**. The port registers it as a rule that
+    answers NotYet, because it is an open item of NATIVE_PAWN_AI_INTERFACE.md. This lane stops there.
 - **Live check (bl-sdk, the RTSE way; not run):** on a spawned enemy, read `Controller` (expect a `WillowMind` whose
   `Pawn` is the enemy) and `ControllerClass` on its class default. Then evaluate `Flag_Skills_CanPhaseLock` with the
   enemy as context (expect true for an enemy Phaselock can lift).

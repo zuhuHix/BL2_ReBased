@@ -298,18 +298,20 @@ ctest and verify_packages were not run (no C++ change). No real-game run; `UNVER
 
 **IMPL-LINK9-TARGET-MIND (2026-11-19, pc-hummer, on #568 @ 350fb829 over origin/main d52bcc79):** AI-assisted (Claude
 Code, Opus 5.5). Link 9's target gets a mind (a harness input, UNVERIFIED): `WillowGame.WillowMind` or the target's
-`ControllerClass`, spawned by the world and linked as `adopt` links an AI pawn. `IFlagProvider` is preloaded at set-up,
-and link 9's world registers the pawn `QueryInterface` rules.
+`ControllerClass`, spawned by the world and linked as `adopt` links an AI pawn, after all four links are checked. Link
+9's set-up resolves and reports the classes the harness needs (`IFlagProvider` among them), then registers the pawn
+`QueryInterface` rules. Review r1 of #579 is applied.
 
 Results:
-- `cargo test -p ow-cli`: 117 + 2 passed / 0 failed / 1 ignored (1 new).
-- `cargo test --workspace -j 2`: 2,448 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK;
+- `cargo test -p ow-cli`: 122 + 2 passed / 0 failed / 1 ignored (6 new).
+- `cargo test --workspace -j 2`: 2,453 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK;
   `check_slice_run_off_test.py` OK; clippy has no hits in the touched files.
 - Installed Off `--slice-gate` strict (a local merge with #535, #564, #548, #555, #560, #523 and the link 9 spawn
   branches, never pushed; under the machine lock): 1 ok / 4 NotYet / 9 errors. Without the lane's harness steps, the
-  same merge gives 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and `cast` (2 of 2) and moves from error (no
-  evidence) to NotYet: `GearboxMind`'s own `QueryInterface` answer for `IAIInterface` is not read
-  (NATIVE_PAWN_AI_INTERFACE.md). The other rows are unchanged.
+  same merge gives 1 ok / 3 NotYet / 10 errors. Link 9's `spawn` completed, and its `cast` (recorded before it
+  runs) reached the registered `GearboxMind` rule, which answers NotYet: `GearboxMind`'s own `QueryInterface` answer
+  for `IAIInterface` is not read (NATIVE_PAWN_AI_INTERFACE.md). So link 9 moves from error (no evidence) to NotYet.
+  The other rows are unchanged. B was re-run after review r1, with the same result.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN (link 9 target mind).

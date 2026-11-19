@@ -1014,7 +1014,9 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         return;
     }
     let mut r = Ran::default();
-    let mut world = match phaselock_world(cooked) {
+    // The set-up's harness lines go into the row, also when the set-up fails (review r1 of #579).
+    let world = phaselock_world(cooked, &mut r.harness);
+    let mut world = match world {
         Ok(w) => w,
         Err(e) => {
             r.stop = Some(classify("setup", &ow_combat::hit::access::error_text(&e)));
@@ -1250,7 +1252,10 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
 pub const PHASELOCK_SKILL: &str = "GD_Siren_Skills.Phaselock.ActionSkill_Phaselock";
 pub const PHASELOCK_CAST: &str = "WillowGame.LiftActionSkill.OnActionSkillStarted";
 
-fn phaselock_world(cooked: &Path) -> Result<ow_world::world::World, ow_vm::error::VmError> {
+fn phaselock_world(
+    cooked: &Path,
+    harness: &mut Vec<String>,
+) -> Result<ow_world::world::World, ow_vm::error::VmError> {
     use ow_balance::types::{
         AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount, Playthrough,
     };
@@ -1275,9 +1280,8 @@ fn phaselock_world(cooked: &Path) -> Result<ow_world::world::World, ow_vm::error
     ];
     let mut world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs)
         .map_err(|e| script_error(format!("{e:?}")))?;
-    // How a pawn answers QueryInterface in Off (decision 2026-11-19-62): the target's flags reach its mind through it
-    // (lane IMPL-LINK9-TARGET-MIND); without it a pawn takes the plain answer.
-    ow_combat::pawn_interface::register(&mut world.vm)?;
+    // The classes the harness needs, resolved and reported, then the pawn rules (lane IMPL-LINK9-TARGET-MIND).
+    phaselock_setup(&mut world.vm, harness)?;
     let class = world.vm.find_class("Engine.WorldInfo")?;
     let info = ow_vm::interp::instantiate_from_defaults(&mut world.vm, class)?;
     world
@@ -1299,6 +1303,7 @@ fn script_error(message: String) -> ow_vm::error::VmError {
 }
 
 /// The mark of a failure after state was written (the behavior walk's, which the slice commands stop on).
+#[cfg(test)]
 pub use ow_behavior::kernel::run::PARTIAL_WRITES;
 
 /// The cast's three actors: Maya's pawn, her controller, the target.
@@ -1355,9 +1360,7 @@ pub fn phaselock_actors(vm: &mut ow_vm::api::Vm, classes: &[&str]) -> Result<Cas
                 committed += 1;
                 Ok(Some(actor))
             }
-            Err(ow_vm::error::VmError::NotYet(n)) if committed > 0 && !n.what.contains(PARTIAL_WRITES) => {
-                Err(ow_core::NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into())
-            }
+            Err(ow_vm::error::VmError::NotYet(n)) if committed > 0 => Err(n.after_partial_writes().into()),
             Err(e) => Err(e),
         }
     };
@@ -1367,9 +1370,7 @@ pub fn phaselock_actors(vm: &mut ow_vm::api::Vm, classes: &[&str]) -> Result<Cas
     if let Some(t) = target {
         // Three actors are committed by now: a NotYet of the mind is marked, as a spawn's after the first.
         target_mind(vm, spawner, t).map_err(|e| match e {
-            ow_vm::error::VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
-                ow_core::NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-            }
+            ow_vm::error::VmError::NotYet(n) => n.after_partial_writes().into(),
             other => other,
         })?;
     }
@@ -1382,28 +1383,30 @@ pub const TARGET_MIND_FALLBACK: &str = "WillowGame.WillowMind";
 /// The text that starts link 9's harness line for the target's mind.
 pub const TARGET_MIND_INPUT: &str = "harness input: the target's mind";
 
-/// The interface a mind's flag store answers, preloaded with the mind (a set-up load, logged): the flag evaluator
+/// The interface a mind's flag store answers, resolved at link 9's set-up ([`phaselock_setup`]): the flag evaluator
 /// checks a store by its class tables, which only hold a class once loaded.
 pub const TARGET_FLAG_PROVIDER: &str = "GearboxFramework.IFlagProvider";
 
-/// The text that starts link 9's harness line for that preload.
-pub const TARGET_FLAG_PROVIDER_INPUT: &str = "harness input: preloaded";
+/// The text that starts each of link 9's set-up class lines ([`preload_class`]).
+pub const TARGET_FLAG_PROVIDER_INPUT: &str = "harness input: set-up class";
 
 /// Link 9's target mind (lane IMPL-LINK9-TARGET-MIND, a **harness input, UNVERIFIED**): in the game the population
 /// system spawns an enemy with its AI controller; the harness stands in for that, so `CanLiftTargetIf` reads its flag
 /// conditions through a mind as for a real enemy (NATIVE_FLAG_EXPRESSION_EVALUATE.md section 5).
-/// - A target whose class declares no `Controller` gets none (not a pawn); one that already has a controller keeps it.
+/// - A target whose class declares no `Controller` gets none (not a pawn). A target that is already possessed keeps
+///   its mind: a set `Controller`, else a set `MyWillowMind`, which `adopt` reads as possessed (review r1 of #579).
 /// - The mind's class is the target's own `ControllerClass` when it names an `Engine.Controller` subclass (a
 ///   `WillowAIPawn`'s class default names `WillowGame.WillowMind`), else [`TARGET_MIND_FALLBACK`].
-/// - The mind is spawned by the world's own spawn (so its components are its own), then linked as the port already
-///   possesses an AI pawn (`ow_combat::hit::adopt`): the target's `Controller` and, when declared, `MyWillowMind`; the
-///   mind's `Pawn` and, when declared, `MyWillowPawn`. The script's `Possess` is not run (as in `adopt`).
-/// - [`TARGET_FLAG_PROVIDER`] is loaded here when the packages hold it and it is not loaded yet, then logged: the
-///   flag evaluator asks whether the mind's class implements it from the loaded class tables, and an interface not
-///   loaded yet reads as "not implemented" (the mind's flags then read false). A lazy load is a write, so the harness
-///   does it at set-up, before the cast.
+/// - **All four links are checked before anything is written** (review r1 of #579): the target's `Controller` and,
+///   when declared, `MyWillowMind` must hold the mind's class; the mind's `Pawn` and, when declared, `MyWillowPawn`
+///   must hold the target's class. A slot of another kind or a narrower class refuses the target with nothing spawned
+///   and nothing linked, so a target never points at a mind whose `Pawn` was not set.
+/// - Then the mind is spawned by the world's own spawn (so its components are its own) and the links are written
+///   together, as the port already possesses an AI pawn (`ow_combat::hit::adopt`). The script's `Possess` is not run
+///   (as in `adopt`).
 ///
-/// The line is logged before the class lookup, so a lookup that loads (a write) or fails still shows.
+/// The line is logged before the class lookup, so a lookup that loads (a write) or fails still shows. The classes the
+/// mind's flags need are resolved by link 9's set-up ([`phaselock_setup`]), not here.
 pub fn target_mind(
     vm: &mut ow_vm::api::Vm,
     spawner: ow_object::ids::ObjRef,
@@ -1412,11 +1415,15 @@ pub fn target_mind(
     use ow_object::ids::PropAddr;
     use ow_object::value::Value;
     let class = vm.space.heap.get(target)?.class;
-    let Some(slot) = vm.space.prop(class, "Controller") else {
+    if vm.space.prop(class, "Controller").is_none() {
         return Ok(None);
-    };
-    if let Value::Object(Some(existing)) = vm.space.read(target, PropAddr::scalar(slot))? {
-        return Ok(Some(*existing));
+    }
+    for existing in ["Controller", "MyWillowMind"] {
+        if let Some(p) = vm.space.prop(class, existing)
+            && let Value::Object(Some(mind)) = vm.space.read(target, PropAddr::scalar(p))?
+        {
+            return Ok(Some(*mind));
+        }
     }
     let named = match vm.space.prop(class, "ControllerClass").map(|p| vm.space.read(target, PropAddr::scalar(p))) {
         Some(Ok(Value::Class(Some(c)))) => Some(*c),
@@ -1436,30 +1443,93 @@ pub fn target_mind(
         Some(c) => c,
         None => vm.find_class(TARGET_MIND_FALLBACK)?,
     };
-    if vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none()
-        && vm.find_class_if_present(TARGET_FLAG_PROVIDER)?.is_some()
-    {
-        vm.log.push(format!(
-            "{TARGET_FLAG_PROVIDER_INPUT} {TARGET_FLAG_PROVIDER} (the mind's flag store interface, loaded at set-up as a \
-             write; UNVERIFIED stand-in for the game having it loaded)"
-        ));
+    // Every destination first: (holder class, field, required, the class the field must hold, on the target).
+    let plan = [
+        (class, "Controller", true, mind_class, true),
+        (class, "MyWillowMind", false, mind_class, true),
+        (mind_class, "Pawn", true, class, false),
+        (mind_class, "MyWillowPawn", false, class, false),
+    ];
+    let mut slots = Vec::with_capacity(plan.len());
+    for (holder, field, required, value_class, on_target) in plan {
+        let Some(p) = vm.space.prop(holder, field) else {
+            if required {
+                return Err(script_error(format!("the target's mind {path}: {field} is not declared")));
+            }
+            continue;
+        };
+        let fits = match vm.space.classes.decl(p).map(|d| &d.kind) {
+            Some(ow_object::layout::PropKind::Object { class: want }) => vm.space.classes.is_child_of(value_class, *want),
+            _ => false,
+        };
+        if !fits {
+            let held = vm.space.classes.get_layout(value_class).map(|l| l.path().to_string()).unwrap_or_default();
+            return Err(script_error(format!(
+                "the target's mind {path}: {field} cannot hold a {held} (nothing spawned or linked)"
+            )));
+        }
+        slots.push((on_target, p));
     }
     let Some(mind) = ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(mind_class)))? else {
         return Err(script_error(format!("the world's spawn refused the target's mind {path}")));
     };
-    let link = |vm: &mut ow_vm::api::Vm, o: ow_object::ids::ObjRef, name: &str, v: ow_object::ids::ObjRef, required: bool| {
-        let class = vm.space.heap.get(o)?.class;
-        match vm.space.prop(class, name) {
-            Some(p) => vm.space.write(o, PropAddr::scalar(p), Value::Object(Some(v))).map_err(ow_vm::error::VmError::from),
-            None if required => Err(script_error(format!("the target's mind {path} declares no {name}"))),
-            None => Ok(()),
-        }
-    };
-    link(vm, target, "Controller", mind, true)?;
-    link(vm, target, "MyWillowMind", mind, false)?;
-    link(vm, mind, "Pawn", target, true)?;
-    link(vm, mind, "MyWillowPawn", target, false)?;
+    for (on_target, p) in slots {
+        let (o, v) = if on_target { (target, mind) } else { (mind, target) };
+        vm.space.write(o, PropAddr::scalar(p), Value::Object(Some(v))).map_err(ow_vm::error::VmError::from)?;
+    }
     Ok(Some(mind))
+}
+
+/// The classes link 9's set-up resolves ([`phaselock_setup`], review r1 of #579): the mind's flag store interface,
+/// the two interfaces the pawn rules compare against, and every class whose answer `ow_combat::pawn_interface`
+/// registers. Resolving them at set-up keeps the cast from loading any of them lazily (a load is a write).
+pub fn phaselock_setup_classes() -> Vec<&'static str> {
+    use ow_combat::pawn_interface as pi;
+    let mut classes = vec![TARGET_FLAG_PROVIDER, pi::AI_INTERFACE, pi::PLAYER_MASTER_INTERFACE, pi::PAWN];
+    classes.extend([pi::WILLOW_AI_PAWN, pi::WILLOW_VEHICLE]);
+    classes.extend(pi::OPEN_ANSWERS.iter().map(|(path, _, _)| *path));
+    classes
+}
+
+/// One class resolved at link 9's set-up, with its harness line: already loaded (a defined layout; a class that is
+/// only declared is not loaded), loaded now (a write), absent from the packages, or a failed load. The line is made
+/// whatever the outcome, so a failure is reported too.
+pub fn preload_class(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<(), ow_vm::error::VmError>) {
+    let defined = vm
+        .space
+        .classes
+        .by_path(path)
+        .is_some_and(|id| vm.space.classes.get_layout(id).is_some_and(|l| l.is_defined()));
+    if defined {
+        return (format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: already loaded, nothing loaded"), Ok(()));
+    }
+    match vm.find_class_if_present(path) {
+        Ok(Some(_)) => (
+            format!(
+                "{TARGET_FLAG_PROVIDER_INPUT} {path}: loaded at set-up (a write; UNVERIFIED stand-in for the game \
+                 having it loaded)"
+            ),
+            Ok(()),
+        ),
+        Ok(None) => (format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: not in the packages, nothing loaded"), Ok(())),
+        Err(e) => (
+            format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: the load failed: {}", ow_combat::hit::access::error_text(&e)),
+            Err(e),
+        ),
+    }
+}
+
+/// Link 9's set-up (review r1 of #579): each of [`phaselock_setup_classes`] is resolved and its line pushed onto
+/// `harness`, a failure included (the first failure stops the set-up). Then `Pawn`'s `QueryInterface` rules are
+/// registered (decision 2026-11-19-62), which find those classes loaded already: the target's flags reach its mind
+/// through them; without them a pawn takes the plain answer.
+pub fn phaselock_setup(vm: &mut ow_vm::api::Vm, harness: &mut Vec<String>) -> Result<(), ow_vm::error::VmError> {
+    for path in phaselock_setup_classes() {
+        let (line, outcome) = preload_class(vm, path);
+        harness.push(line);
+        outcome?;
+    }
+    ow_combat::pawn_interface::register(vm)
 }
 
 /// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).

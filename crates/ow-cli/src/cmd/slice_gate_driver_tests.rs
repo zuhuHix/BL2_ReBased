@@ -109,6 +109,10 @@ fn engine() -> Vec<u8> {
     defaults.extend(t.p.tag("ControllerClass", "ClassProperty", &ow_package::testkit::ints(&[toy_mind])));
     defaults.extend_from_slice(&t.none);
     t.p.add_export(named, "Default__ToyNamedTarget", defaults);
+    // Review r1 of #579: a target whose MyWillowMind holds only a ToyMind, narrower than the fallback WillowMind.
+    let narrow = t.class("ToyNarrowTarget", actor);
+    t.prop("Object", narrow, "Controller", 0, controller);
+    t.prop("Object", narrow, "MyWillowMind", 0, toy_mind);
     t.p.build()
 }
 
@@ -554,24 +558,16 @@ fn link_9_s_evidence_finds_the_state_by_name_whatever_its_spelling() {
 /// Lane IMPL-LINK9-TARGET-MIND: the spawned target gets a mind that possesses it, through the world's own spawn. With
 /// no ControllerClass the mind is the fallback `WillowGame.WillowMind`; a target whose default names `ToyMind` gets a
 /// `ToyMind`, linked both ways (`Controller`, `MyWillowMind`; `Pawn`, `MyWillowPawn`). The mind is registered in the
-/// world and the harness line is logged. `GearboxFramework.IFlagProvider`, not loaded before, is preloaded with the mind
-/// and logged once. A target that cannot hold a controller gets neither.
+/// world and the harness line is logged. The spawn loads no set-up class (that is link 9's set-up, review r1 of #579).
+/// A target that cannot hold a controller gets none.
 #[test]
 fn the_cast_s_target_gets_a_mind_that_possesses_it() {
-    let read = |t: &Toy, o: ObjRef, n: &str| {
-        let space = &t.world.vm.space;
-        let p = space.prop(space.heap.get(o).unwrap().class, n).unwrap();
-        space.read(o, PropAddr::scalar(p)).unwrap().clone()
-    };
     for (target, mind_class) in [("Engine.ToyMindedTarget", "WillowGame.WillowMind"), ("Engine.ToyNamedTarget", "Engine.ToyMind")] {
         let mut t = toy();
         let before = t.listed().len();
-        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none());
         let (r, actors) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", target], Grading::Strict);
-        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_some(), "{target}: preloaded");
-        let preloads = r.harness.iter().filter(|h| h.starts_with(TARGET_FLAG_PROVIDER_INPUT) && h.contains(TARGET_FLAG_PROVIDER)).count();
-        assert_eq!(preloads, 1, "{target}: {:?}", r.harness);
         assert!(r.stop.is_none(), "{target}: {:?}", r.stop);
+        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none(), "{target}: the spawn loads no set-up class");
         let (_, _, Some(pawn)) = actors.expect("the cast ran") else { panic!() };
         let Value::Object(Some(mind)) = read(&t, pawn, "Controller") else { panic!("{target}: no controller") };
         let want = t.world.vm.find_class(mind_class).unwrap();
@@ -579,7 +575,8 @@ fn the_cast_s_target_gets_a_mind_that_possesses_it() {
         assert_eq!(read(&t, mind, "Pawn"), Value::Object(Some(pawn)), "{target}: the mind possesses the pawn");
         assert!(t.listed().contains(&mind), "{target}: spawned by the world");
         assert_eq!(t.listed().len(), before + 4, "{target}: three actors and the mind");
-        assert!(r.harness.iter().any(|h| h.starts_with(TARGET_MIND_INPUT) && h.contains(mind_class) && h.contains("UNVERIFIED")), "{target}: {:?}", r.harness);
+        assert_eq!(r.harness.len(), 1, "{target}: {:?}", r.harness);
+        assert!(r.harness[0].starts_with(TARGET_MIND_INPUT) && r.harness[0].contains(mind_class) && r.harness[0].contains("UNVERIFIED"));
         if target == "Engine.ToyNamedTarget" {
             assert_eq!(read(&t, pawn, "MyWillowMind"), Value::Object(Some(mind)));
             assert_eq!(read(&t, mind, "MyWillowPawn"), Value::Object(Some(pawn)));
@@ -592,5 +589,108 @@ fn the_cast_s_target_gets_a_mind_that_possesses_it() {
     assert!(r.stop.is_none());
     assert_eq!(t.listed().len(), before + 3);
     assert!(r.harness.is_empty(), "{:?}", r.harness);
-    assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none());
+}
+
+fn read(t: &Toy, o: ObjRef, n: &str) -> Value {
+    let space = &t.world.vm.space;
+    let p = space.prop(space.heap.get(o).unwrap().class, n).unwrap();
+    space.read(o, PropAddr::scalar(p)).unwrap().clone()
+}
+
+fn write(t: &mut Toy, o: ObjRef, n: &str, v: Value) {
+    let space = &mut t.world.vm.space;
+    let p = space.prop(space.heap.get(o).unwrap().class, n).unwrap();
+    space.write(o, PropAddr::scalar(p), v).unwrap();
+}
+
+fn spawner(t: &Toy) -> ObjRef {
+    t.world.actors().borrow().world_info().unwrap()
+}
+
+/// Review r1 of #579, item 1: a target whose `MyWillowMind` cannot hold the mind's class is refused before anything
+/// is written. No mind is spawned, `Controller` stays None, and the stop is a typed error at the spawn that names the
+/// slot.
+#[test]
+fn a_target_slot_that_cannot_hold_the_mind_leaves_nothing_half_linked() {
+    let mut t = toy();
+    let before = t.listed().len();
+    let (r, _) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", "Engine.ToyNarrowTarget"], Grading::Strict);
+    let Some((outcome, stop)) = &r.stop else { panic!("no stop") };
+    assert_eq!(*outcome, Outcome::Error);
+    assert_eq!(stop.step, "spawn");
+    assert!(stop.text.contains("MyWillowMind cannot hold a WillowGame.WillowMind"), "{}", stop.text);
+    assert_eq!(t.listed().len(), before + 3, "the mind was never spawned");
+    let target = *t.listed().last().unwrap();
+    let narrow = t.world.vm.find_class("Engine.ToyNarrowTarget").unwrap();
+    assert_eq!(t.world.vm.space.heap.get(target).unwrap().class, narrow);
+    assert_eq!(read(&t, target, "Controller"), Value::Object(None), "no half link");
+    assert_eq!(read(&t, target, "MyWillowMind"), Value::Object(None));
+}
+
+/// Review r1 of #579, item 1: an already-possessed target keeps its mind, read as `adopt` reads it: a set
+/// `Controller`, else a set `MyWillowMind`. Nothing is spawned or written, and no harness line is logged.
+#[test]
+fn an_already_possessed_target_keeps_its_mind() {
+    let mut t = toy();
+    let (_, actors) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", "Engine.ToyNamedTarget"], Grading::Strict);
+    let (_, _, Some(target)) = actors.unwrap() else { panic!() };
+    let Value::Object(Some(mind)) = read(&t, target, "Controller") else { panic!() };
+    let (listed, logged, at) = (t.listed().len(), t.world.vm.log.len(), spawner(&t));
+    assert_eq!(target_mind(&mut t.world.vm, at, target).unwrap(), Some(mind), "a set Controller");
+    // Controller cleared, MyWillowMind still set: possessed, as adopt treats it.
+    write(&mut t, target, "Controller", Value::Object(None));
+    assert_eq!(target_mind(&mut t.world.vm, at, target).unwrap(), Some(mind), "a set MyWillowMind");
+    assert_eq!(read(&t, target, "Controller"), Value::Object(None), "nothing written");
+    assert_eq!(t.listed().len(), listed, "nothing spawned");
+    assert_eq!(t.world.vm.log.len(), logged, "no harness line");
+}
+
+/// Review r1 of #579, items 2 and 3: a set-up class is reported whatever happens to it. An absent class is not in the
+/// packages, and nothing is loaded. A class that is only declared (`by_path` knows it, its layout is not defined) is
+/// loaded and reported as a write. Asked again, it is already loaded.
+#[test]
+fn a_set_up_class_is_resolved_and_reported_whatever_its_state() {
+    let mut t = toy();
+    let vm = &mut t.world.vm;
+    let (line, outcome) = preload_class(vm, "GearboxFramework.INoSuchInterface");
+    assert!(outcome.is_ok());
+    assert!(line.starts_with(TARGET_FLAG_PROVIDER_INPUT) && line.ends_with("not in the packages, nothing loaded"), "{line}");
+    let id = vm.space.classes.declare(TARGET_FLAG_PROVIDER).unwrap();
+    assert!(!vm.space.classes.get_layout(id).unwrap().is_defined(), "declared only");
+    let (line, outcome) = preload_class(vm, TARGET_FLAG_PROVIDER);
+    assert!(outcome.is_ok());
+    assert!(line.contains("loaded at set-up (a write") && line.contains("UNVERIFIED"), "{line}");
+    assert!(vm.space.classes.get_layout(vm.space.classes.by_path(TARGET_FLAG_PROVIDER).unwrap()).unwrap().is_defined());
+    let (line, outcome) = preload_class(vm, TARGET_FLAG_PROVIDER);
+    assert!(outcome.is_ok());
+    assert!(line.ends_with("already loaded, nothing loaded"), "{line}");
+}
+
+/// Review r1 of #579, item 3: link 9's set-up resolves each of its classes and reports one line per class, in
+/// order. The toy packages hold only `IFlagProvider` of them, so the rest are absent. The pawn rules then find
+/// nothing to load.
+#[test]
+fn link_9_s_set_up_reports_every_class_it_resolves() {
+    let mut t = toy();
+    let mut harness = Vec::new();
+    phaselock_setup(&mut t.world.vm, &mut harness).unwrap();
+    let classes = phaselock_setup_classes();
+    assert_eq!(harness.len(), classes.len(), "{harness:?}");
+    for (line, path) in harness.iter().zip(&classes) {
+        assert!(line.starts_with(&format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: ")), "{line}");
+    }
+    assert!(harness[0].contains("loaded at set-up"), "{}", harness[0]);
+    assert!(classes.contains(&ow_combat::pawn_interface::PLAYER_MASTER_INTERFACE));
+}
+
+/// Review r1 of #579, item 4: a NotYet from the mind is marked once, at the start, with its kind and record kept, even
+/// when its text already mentions the marker.
+#[test]
+fn a_mind_not_yet_is_marked_once_at_the_start() {
+    let inside = ow_core::NotYet::not_read(format!("a rule ({PARTIAL_WRITES} inside)"), "R.md");
+    let marked = inside.after_partial_writes();
+    assert!(marked.what.starts_with(PARTIAL_WRITES), "{}", marked.what);
+    assert_eq!(marked.what.matches(PARTIAL_WRITES).count(), 2, "the leading mark, and the text's own");
+    assert_eq!(marked.record, "R.md");
+    assert!(matches!(marked.missing, Missing::NotRead));
 }
