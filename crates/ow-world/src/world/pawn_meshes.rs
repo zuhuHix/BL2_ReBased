@@ -21,9 +21,10 @@
 //!    Empty: nothing, which also covers the root-motion writes inside the gate.
 //! 5. **A non-empty list:** since lane IMPL-BODY-COMPOSITION, the build itself
 //!    (`crate::world::body_composition`, NATIVE_INITIALIZE_BODY_COMPOSITION.md) on the pawn's `InstanceDataState` and
-//!    `ReplicatedInstanceDataState`, mode 0, after one more write-free check: a body class that sets `UseRootMotion`
-//!    or `UseRootRotation` is `NotYet { NotRead }`, [`ROOT_MOTION`] (the two mesh fields the native then writes are
-//!    named by fit only, NATIVE_INIT_PAWN_MESHES.md open question 1). The note's `LayerAbsent` ([`BUILD`], [`LAYER`])
+//!    `ReplicatedInstanceDataState`, mode 0, with one more write-free check after the build's preflight and before its
+//!    first write (review r1 of #542): a body class that sets `UseRootMotion` or `UseRootRotation` is
+//!    `NotYet { NotRead }`, [`ROOT_MOTION`] (the two mesh fields the native then writes are named by fit only,
+//!    NATIVE_INIT_PAWN_MESHES.md open question 1). The note's `LayerAbsent` ([`BUILD`], [`LAYER`])
 //!    is kept for reference but no longer answered.
 //!
 //! **Writes:** only the build's, in its order, under its write tracker; steps 1 to 4 and the root-motion check write
@@ -175,13 +176,6 @@ pub fn initialize_pawn_meshes(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
     if list.is_empty() {
         return Ok(Value::None);
     }
-    for flag in ["UseRootMotion", "UseRootRotation"] {
-        if let Some(p) = vm.space.prop(body_class, flag)
-            && matches!(vm.space.read(body, PropAddr::scalar(p))?, Value::Bool(true))
-        {
-            return Err(NotYet::not_read(ROOT_MOTION, RECORD).into());
-        }
-    }
     let read = |name: &str| -> Result<Value, VmError> {
         let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} has no {name}", class_path_of(vm, me).unwrap_or_default())))?;
         Ok(vm.space.read(me, PropAddr::scalar(p))?.clone())
@@ -193,7 +187,18 @@ pub fn initialize_pawn_meshes(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
         replicated: read(crate::world::body_composition::REPLICATED)?,
         mode: 0,
     };
-    crate::world::body_composition::build(c.vm, inputs)?;
+    // The root-motion check runs after the build's preflight succeeds, still before any write (review r1 of #542,
+    // item 7).
+    crate::world::body_composition::build_then(c.vm, inputs, |vm| {
+        for flag in ["UseRootMotion", "UseRootRotation"] {
+            if let Some(p) = vm.space.prop(body_class, flag)
+                && matches!(vm.space.read(body, PropAddr::scalar(p))?, Value::Bool(true))
+            {
+                return Err(NotYet::not_read(ROOT_MOTION, RECORD).into());
+            }
+        }
+        Ok(())
+    })?;
     Ok(Value::None)
 }
 

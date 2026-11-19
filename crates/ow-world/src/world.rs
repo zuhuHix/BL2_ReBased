@@ -498,9 +498,9 @@ impl NativePack for Pack {
             // WorldInfo.AllNavigationPoints (link 1's next stop in `FindPlayerStart`; lane IMPL-ALL-NAVIGATION-POINTS,
             // decision 2026-11-19-125): the stock iterator over the serialized list, UNVERIFIED in game.
             nav_points::register(vm)?;
-            // WillowPawn / WillowPlayerPawn.InitializePawnMeshes (link 1's next stop in `maya:8`; lane
+            // WillowPawn / WillowPlayerPawn.InitializePawnMeshes (link 1's stop in `maya:8`; lane
             // IMPL-INIT-PAWN-MESHES, NATIVE_INIT_PAWN_MESHES.md): the empty cases do nothing, a non-empty body
-            // composition is a named LayerAbsent; nothing is written. UNVERIFIED in game.
+            // composition runs the build below (lane IMPL-BODY-COMPOSITION). UNVERIFIED in game.
             pawn_meshes::register(vm)?;
             // InstanceDataHelper.InitializeBodyComposition (lane IMPL-BODY-COMPOSITION,
             // NATIVE_INITIALIZE_BODY_COMPOSITION.md), UNVERIFIED in game.

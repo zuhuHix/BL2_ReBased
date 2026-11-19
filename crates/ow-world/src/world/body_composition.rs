@@ -14,15 +14,19 @@
 //! 1. a component made from a template counts as valid (the validity check is not modelled);
 //! 2. a custom head or skin entry is appended and nothing is applied; the attachment counts as not made;
 //! 3. the `Parent` link stays `NotYet { NotRead }` ([`PARENT_LINK`]);
-//! 4. the render-side hooks of the pawn's `PostInitBodyComposition` answer nothing where they write no field the
-//!    script or a slice step reads: the gear-likeness step and the mode-0 rendering setting (both not read, named
-//!    render-side by the note) do nothing here. The light environment is a named field write, so it is written.
+//! 4. the render-side hooks of the pawn's `PostInitBodyComposition` (the gear-likeness step, the mode-0 rendering
+//!    setting, the light environment) answer nothing only where they write no field the script or a slice step reads.
+//!    None of the three was read far enough to list its fields (the note's r2 at 8b324f22), and their conditions are
+//!    unread, so the port takes them as allowing the hook (UNVERIFIED): **every** made component is
+//!    `NotYet { LayerAbsent }` ([`RENDER_HOOKS`]) until they are read (review r1 of #542 and the hub's precision). On
+//!    installed data this makes the component write path unreachable; switches and custom entries still write.
 //!
 //! **The preflight** ([`plan`]) reads and writes nothing, loads included: the call-wide checks (shapes, a rebuild, a
 //! client-side apply, a mode other than 0), then the walk (the note's section 3: bases, switches, records), and for
 //! each attachment the walk makes, in list order: object and template types, a hit region, both attach attempts, the
-//! `Parent` link, and the pawn's `PostInitBodyComposition` (the new `Mesh`'s animation nodes are `LayerAbsent`; the
-//! release of an old `Mesh` or `CylinderComponent` the pawn already holds is `NotRead`, [`releasing_old`]).
+//! `Parent` link, and the pawn's `PostInitBodyComposition` in section 4.5's order (the release of an old `Mesh` or
+//! `CylinderComponent` the pawn already holds, or one an earlier attachment assigned, is `NotRead`, [`releasing_old`];
+//! the new `Mesh`'s animation nodes are `LayerAbsent`; then the rendering hooks, `LayerAbsent`).
 //!
 //! **The writes** ([`build`]), in the note's order: per made attachment, in list order: a component is made from its
 //! template, its entry appended, its collision set, attached (the parent's attach, else the owner retry), then the
@@ -73,7 +77,11 @@ pub const PARENT_LINK: &str = "InitializeBodyComposition: the Parent link's pare
 pub const SCRIPT_CALL: &str = "InitializeBodyComposition called from script (its destinations)";
 pub const ANIM_NODES: &str = "InitializeBodyComposition: the new Mesh's animation nodes (ArmBoneBlend, AimOffset, \
                               LeftHandGrip, the head look-at, WillowFootIK and the slot nodes)";
+/// The rendering hooks (ruling 4).
+pub const RENDER_HOOKS: &str = "InitializeBodyComposition: the body's rendering hooks";
 /// The layers.
+pub const RENDER_LAYER: &str =
+    "a rendering layer (the gear-likeness step, the mode-0 rendering setting and the light environment)";
 pub const MESH_LAYER: &str = "a skeletal mesh data reader (sockets and the reference skeleton)";
 pub const ANIM_LAYER: &str = "an animation-tree instance for the skeletal mesh";
 
@@ -103,6 +111,11 @@ pub fn lazy_template(path: &str) -> String {
     format!("InitializeBodyComposition: the mesh of the unloaded component template {path}")
 }
 
+/// A component template whose load already failed (review r1 of #542): refused before any write.
+pub fn failed_template(path: &str) -> String {
+    format!("InitializeBodyComposition: the component template {path}, whose load failed")
+}
+
 /// An instance-data type outside the note's list.
 pub fn unknown_type(n: u8) -> String {
     format!("InitializeBodyComposition: instance data type {n}")
@@ -127,6 +140,21 @@ impl Counters {
 /// record kept; any other error, and a `NotYet` with no write since, is returned as it is.
 pub fn after_writes(vm: &Vm, before: Counters, e: VmError) -> VmError {
     if Counters::read(vm) != before { crate::pools::after_partial_writes(e) } else { e }
+}
+
+thread_local! {
+    static RENDER_HOOKS_ANSWERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// For the tests only: answer the rendering hooks with nothing on this thread, to keep the component write path
+/// covered while production refuses it (ruling 4).
+#[cfg(test)]
+pub(crate) fn answer_render_hooks_for_tests(on: bool) {
+    RENDER_HOOKS_ANSWERED.with(|c| c.set(on));
+}
+
+fn render_hooks_answered() -> bool {
+    RENDER_HOOKS_ANSWERED.with(std::cell::Cell::get)
 }
 
 fn script(message: String) -> VmError {
@@ -306,8 +334,6 @@ struct PostInit {
     cylinder: Option<bool>,
     /// `Data.Name` `CustomHead`: `HeadMesh` = the component as a `SkeletalMeshComponent`.
     head: bool,
-    /// The pawn's `LightEnvironment`, given to a mesh component.
-    light: Option<ObjRef>,
 }
 
 /// What the walk makes for one attachment (its record).
@@ -357,6 +383,14 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
         return Err(script("no Engine.IInstanceData.InstanceDataUnion struct".into()));
     };
     let removed_bits = int(&field(vm, &i.replicated, "RemovedBodyCompositionPartsBitField", "ReplicatedInstanceDataState")?);
+    // Every field the writes use, probed before any write (review r1 of #542, item 5).
+    for name in ["SwitchStateBitField", "ActiveSwitchValues"] {
+        field(vm, &i.replicated, name, "ReplicatedInstanceDataState")?;
+    }
+    let zero = vm.space.classes.zero_value(&PropKind::Struct(entry_struct));
+    for name in ["Name", "Type", "DeleteByOwner", "ComponentData", "Float", "Int", "BitsRequiredForMaxSwitchValue", "BodyCompositionIndex"] {
+        field(vm, &zero, name, "InstanceDataUnion")?;
+    }
     let need_apply = int(&field(vm, &i.replicated, "bNeedToApplyThisState", "ReplicatedInstanceDataState")?) != 0;
     // 2. A rebuild.
     if old != 0 {
@@ -386,7 +420,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
         Some(b) if !vm.defs.is_unloaded(&vm.space, b) => read_prop(vm, b, "bUseMeshForCollision")?.is_some_and(|v| int(&v) != 0),
         _ => false,
     };
-    let light = read_prop(vm, owner, "LightEnvironment")?.and_then(|v| object_of(&v));
+    // The pawn fields an earlier attachment's PostInitBodyComposition assigned in this walk (review r1 of #542, item 4).
+    // (A `Mesh` attachment always refuses below, so only the cylinder is tracked.)
+    let mut assigned_cylinder = false;
     let type_enum = vm
         .space
         .classes
@@ -449,6 +485,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     made.push(Made::No);
                     continue;
                 };
+                if vm.defs.is_failed(&vm.space, template) {
+                    return Err(not_read(failed_template(&crate::world::pawn_meshes::handle_path(vm, template))));
+                }
                 let class = vm.space.heap.get(template)?.class;
                 let collision = byte(&field(vm, &cd, "CollisionType", "ComponentData")?);
                 if is_a(vm, class, PRIMITIVE) {
@@ -506,20 +545,22 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 let old_set = |name: &str| -> Result<bool, VmError> {
                     Ok(read_prop(vm, owner, name)?.and_then(|v| object_of(&v)).is_some())
                 };
+                // Section 4.5.1: the old Pawn.Mesh is released before the new one is set (review r1 of #542, item 2).
                 if name_is(vm, &a.parent_id, MESH_ID) {
-                    if skeletal {
-                        return Err(NotYet::layer_absent(ANIM_NODES, ANIM_LAYER, RECORD).into());
-                    }
                     if old_set("Mesh")? {
                         return Err(not_read(releasing_old("Mesh")));
+                    }
+                    if skeletal {
+                        return Err(NotYet::layer_absent(ANIM_NODES, ANIM_LAYER, RECORD).into());
                     }
                     return Err(not_read(MESH_NOT_SKELETAL));
                 }
                 if name_is(vm, &a.parent_id, CYLINDER_ID) {
                     require_prop(vm, owner_class, "CylinderComponent")?;
-                    if old_set("CylinderComponent")? {
+                    if assigned_cylinder || old_set("CylinderComponent")? {
                         return Err(not_read(releasing_old("CylinderComponent")));
                     }
+                    assigned_cylinder = true;
                     if !mesh_for_collision {
                         require_prop(vm, owner_class, "CollisionComponent")?;
                     }
@@ -529,11 +570,10 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     require_prop(vm, owner_class, "HeadMesh")?;
                     post.head = true;
                 }
-                if let Some(l) = light
-                    && is_a(vm, class, MESH_COMPONENT)
-                {
-                    require_prop(vm, class, "LightEnvironment")?;
-                    post.light = Some(l);
+                // Ruling 4: the gear-likeness step, the mode-0 rendering setting and the light environment, for every
+                // made component (their conditions are unread, so they are taken as allowing the hook; UNVERIFIED).
+                if !render_hooks_answered() {
+                    return Err(NotYet::layer_absent(RENDER_HOOKS, RENDER_LAYER, RECORD).into());
                 }
                 made.push(Made::Component { template, class, collision, post });
             }
@@ -544,10 +584,17 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
 
 /// The build (module documentation): the preflight, then the writes in the note's order, under the write tracker.
 pub fn build(vm: &mut Vm, i: Inputs) -> Result<(), VmError> {
+    build_then(vm, i, |_| Ok(()))
+}
+
+/// [`build`], with the caller's own write-free check run after the preflight succeeds and before the first write
+/// (the pawn wrapper's root-motion check, review r1 of #542, item 7).
+pub fn build_then(vm: &mut Vm, i: Inputs, check: impl FnOnce(&Vm) -> Result<(), VmError>) -> Result<(), VmError> {
     let before = Counters::read(vm);
     let Some(plan) = plan(vm, &i)? else {
         return Ok(());
     };
+    check(vm)?;
     let owner = i.owner.expect("a plan has an owner");
     writes(vm, owner, i.set, i.replicated, &plan).map_err(|e| after_writes(vm, before, e))
 }
@@ -606,9 +653,6 @@ fn writes(vm: &mut Vm, owner: ObjRef, set: Value, replicated: Value, plan: &Plan
                 if post.head {
                     let as_skeletal = is_a(vm, *class, SKELETAL).then_some(made);
                     write_prop(vm, owner, "HeadMesh", Value::Object(as_skeletal))?;
-                }
-                if let Some(l) = post.light {
-                    write_prop(vm, made, "LightEnvironment", Value::Object(Some(l)))?;
                 }
             }
         }

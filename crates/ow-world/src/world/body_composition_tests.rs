@@ -78,7 +78,58 @@ fn env() -> Env {
         t.class("Object", 0);
         t.build()
     };
-    let files: Vec<(&str, &[u8])> = vec![("Core.upk", core.as_slice())];
+    let engine = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "BoolProperty", "FloatProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let component = t.class("ActorComponent", object);
+        t.prop("Object", component, "Owner", 0, object);
+        let primitive = t.class("PrimitiveComponent", component);
+        for flag in FLAGS {
+            t.prop("Bool", primitive, flag, 0, 0);
+        }
+        t.prop("Object", primitive, "LightEnvironment", 0, object);
+        let cylinder = t.class("CylinderComponent", primitive);
+        t.prop("Float", cylinder, "CollisionRadius", 0, 0);
+        let mesh = t.class("MeshComponent", primitive);
+        let skeletal = t.class("SkeletalMeshComponent", mesh);
+        t.prop("Object", skeletal, "SkeletalMesh", 0, object);
+        let holder = t.class("ToyTemplateHolder", object);
+        for name in ["Skel", "Cyl", "Cycle"] {
+            t.prop("Object", holder, name, 0, object);
+        }
+        t.build()
+    };
+    let templates = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let skeletal = t.p.add_import("Core", "Class", engine, "SkeletalMeshComponent");
+        let cylinder = t.p.add_import("Core", "Class", engine, "CylinderComponent");
+        let holder = t.p.add_import("Core", "Class", engine, "ToyTemplateHolder");
+        let component = |t: &mut ScriptToy, class: i32, name: &str| {
+            let mut payload = ow_package::testkit::ints(&[0, 0]);
+            payload.extend_from_slice(&t.none);
+            t.p.add_export(class, name, payload)
+        };
+        let skel = component(&mut t, skeletal, "SkelTemplate");
+        let cyl = component(&mut t, cylinder, "CylTemplate");
+        // An export whose archetype is itself: the Off store's load refuses it (archetype chain cycle).
+        let cycle_ref = t.p.next_export();
+        let mut cycle_payload = ow_package::testkit::ints(&[0, 0]);
+        cycle_payload.extend_from_slice(&t.none);
+        let mut cycle = ow_package::testkit::Export::new(cylinder, "CycleTemplate", cycle_payload);
+        cycle.archetype = cycle_ref;
+        t.p.add_export_with(cycle);
+        let mut payload = ow_package::testkit::ints(&[0]);
+        for (name, r) in [("Skel", skel), ("Cyl", cyl), ("Cycle", cycle_ref)] {
+            payload.extend(t.p.object_tag(name, r));
+        }
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(holder, "Holder", payload);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> =
+        vec![("Core.upk", core.as_slice()), ("Engine.upk", engine.as_slice()), ("GD_ToyBody.upk", templates.as_slice())];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     let object = vm.find_class("Core.Object").unwrap();
@@ -122,13 +173,10 @@ fn env() -> Env {
         ("bNeedToApplyThisState", PropKind::Bool),
     ]);
     class(&mut vm, crate::world::pawn_meshes::HELPER, object, &[]);
-    let component = class(&mut vm, "Engine.ActorComponent", object, &[("Owner", o.clone())]);
-    let mut prim_props: Vec<(&str, PropKind)> = FLAGS.iter().map(|f| (*f, PropKind::Bool)).collect();
-    prim_props.push(("LightEnvironment", o.clone()));
-    let primitive = class(&mut vm, PRIMITIVE, component, &prim_props);
-    let cylinder = class(&mut vm, CYLINDER, primitive, &[("CollisionRadius", PropKind::Float)]);
-    let mesh = class(&mut vm, MESH_COMPONENT, primitive, &[]);
-    let skeletal = class(&mut vm, SKELETAL, mesh, &[("SkeletalMesh", o.clone())]);
+    let cylinder = vm.find_class(CYLINDER).unwrap();
+    let skeletal = vm.find_class(SKELETAL).unwrap();
+    vm.find_class(PRIMITIVE).unwrap();
+    vm.find_class(MESH_COMPONENT).unwrap();
     let actor = class(&mut vm, "Engine.Actor", object, &[
         ("Role", PropKind::Byte { enum_: None }),
         ("bNetDirty", PropKind::Bool),
@@ -312,6 +360,7 @@ fn refused(e: &mut Env, p: ObjRef) -> (Missing, String) {
 #[test]
 fn a_cylinder_is_made_entered_collided_attached_and_posted() {
     let mut e = env();
+    answer_render_hooks_for_tests(true);
     let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
     put(&mut e.vm, template, "CollisionRadius", Value::Float(34.0));
     let a = attachment(&mut e, A { template: Some(template), parent: CYLINDER_ID, collision: 2, index: 14, ..A::default() });
@@ -348,6 +397,7 @@ fn a_cylinder_is_made_entered_collided_attached_and_posted() {
 #[test]
 fn a_mesh_for_collision_body_keeps_collision_component() {
     let mut e = env();
+    answer_render_hooks_for_tests(true);
     let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
     let a = attachment(&mut e, A { template: Some(template), parent: CYLINDER_ID, ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
@@ -368,6 +418,7 @@ fn the_collision_table_sets_and_clears_by_type() {
         (8, [false, true, true, true, true], [false, false, false]),
     ] {
         let mut e = env();
+        answer_render_hooks_for_tests(true);
         let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
         for flag in FLAGS {
             put(&mut e.vm, template, flag, Value::Bool(true));
@@ -391,6 +442,7 @@ fn the_collision_table_sets_and_clears_by_type() {
 #[test]
 fn a_switch_is_copied_and_gates_its_components() {
     let mut e = env();
+    answer_render_hooks_for_tests(true);
     let t1 = make(&mut e.vm, e.cylinder, "Cylinder_T1");
     let t2 = make(&mut e.vm, e.cylinder, "Cylinder_T2");
     let s = attachment(&mut e, A { ty: SWITCH, int: 1, index: 1, ..A::default() });
@@ -464,10 +516,11 @@ fn a_custom_head_entry_is_appended_and_counts_as_not_made() {
 }
 
 /// A skeletal parent with a socket but no mesh asset answers false: the owner retry attaches the child to the pawn.
-/// A child named `CustomHead` becomes `HeadMesh`; a mesh component gets the pawn's `LightEnvironment`.
+/// A child named `CustomHead` becomes `HeadMesh`. The light environment is not written (ruling 4, review r1 of #542).
 #[test]
-fn the_owner_retry_head_mesh_and_light_environment() {
+fn the_owner_retry_and_head_mesh() {
     let mut e = env();
+    answer_render_hooks_for_tests(true);
     let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
     let head = make(&mut e.vm, e.skeletal, "Head_Template");
     let base = attachment(&mut e, A { template: Some(skel), index: 1, ..A::default() });
@@ -481,8 +534,8 @@ fn the_owner_retry_head_mesh_and_light_environment() {
     let (m0, m1) = (made_of(&e, &list[0]), made_of(&e, &list[1]));
     assert_eq!(prop(&e.vm, p, "Components"), Value::array(vec![Value::Object(Some(m0)), Value::Object(Some(m1))]));
     assert_eq!(prop(&e.vm, p, "HeadMesh"), Value::Object(Some(m1)));
-    assert_eq!(prop(&e.vm, m0, "LightEnvironment"), Value::Object(Some(light)));
-    assert_eq!(prop(&e.vm, m1, "LightEnvironment"), Value::Object(Some(light)));
+    assert_eq!(prop(&e.vm, m0, "LightEnvironment"), Value::Object(None), "no light environment write");
+    assert_eq!(prop(&e.vm, m1, "LightEnvironment"), Value::Object(None));
 }
 
 /// A component attachment with no template makes nothing.
@@ -504,8 +557,7 @@ fn the_new_mesh_s_animation_nodes_are_layer_absent_and_write_free() {
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, index: 1, ..A::default() });
     let a1 = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, index: 2, ..A::default() });
-    let p = pawn_with(&mut e, vec![a1.clone(), a0]);
-    // The cylinder first in the list still waits for the whole preflight.
+    let p = pawn_with(&mut e, vec![a0, a1]);
     let (missing, what) = refused(&mut e, p);
     assert!(matches!(missing, Missing::LayerAbsent(l) if l == ANIM_LAYER), "{missing:?}");
     assert_eq!(what, ANIM_NODES);
@@ -513,10 +565,10 @@ fn the_new_mesh_s_animation_nodes_are_layer_absent_and_write_free() {
 }
 
 /// Hub, 20:03Z: a pawn that already holds a `CylinderComponent` (stock pawn defaults give one) meets the release of the
-/// old one, `NotRead`, before any write; with an old `Mesh` set, attachment 0's animation-node `LayerAbsent` still comes
-/// first (Maya's first stop is unchanged).
+/// old one, `NotRead`, before any write. With an old `Mesh` set, that release comes before attachment 0's
+/// animation-node `LayerAbsent` (section 4.5.1, review r1 of #542, item 2).
 #[test]
-fn releasing_the_old_cylinder_is_not_read_and_the_mesh_stop_is_unchanged() {
+fn releasing_the_old_cylinder_or_mesh_is_not_read() {
     let mut e = env();
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
@@ -535,8 +587,100 @@ fn releasing_the_old_cylinder_is_not_read_and_the_mesh_stop_is_unchanged() {
     let old = make(&mut e.vm, e.skeletal, "OldMesh");
     put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
     let (missing, what) = refused(&mut e, p);
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == ANIM_LAYER), "{missing:?}");
-    assert_eq!(what, ANIM_NODES);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, releasing_old("Mesh"));
+}
+
+/// Review r1 of #542, item 4: a second `CylinderComponent` attachment would release the first one's component, so it
+/// is the release `NotRead` too, before any write.
+#[test]
+fn a_second_cylinder_attachment_is_a_release() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let c1 = make(&mut e.vm, e.cylinder, "Cyl_1");
+    let c2 = make(&mut e.vm, e.cylinder, "Cyl_2");
+    let a0 = attachment(&mut e, A { template: Some(c1), parent: CYLINDER_ID, ..A::default() });
+    let a1 = attachment(&mut e, A { template: Some(c2), parent: CYLINDER_ID, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, releasing_old("CylinderComponent"));
+}
+
+/// Ruling 4 (review r1 of #542): in production every made component is the rendering hooks' `LayerAbsent`, before any
+/// write; a body with only switches and custom entries still writes.
+#[test]
+fn a_made_component_is_the_rendering_hooks_layer_absent() {
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let (missing, what) = refused(&mut e, p);
+    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
+    assert_eq!(what, RENDER_HOOKS);
+    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(None));
+
+    let mut e = env();
+    let s = attachment(&mut e, A { ty: SWITCH, index: 1, ..A::default() });
+    let h = attachment(&mut e, A { ty: HEAD, index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![s, h]);
+    run(&mut e, p).unwrap();
+    assert_eq!(entries(&e, p).len(), 2, "switches and custom entries still write");
+}
+
+/// Review r1 of #542, item 7: the wrapper's root-motion check runs after the build's preflight succeeds and before any
+/// write; with a component the build refuses first.
+#[test]
+fn the_root_motion_check_follows_the_preflight() {
+    let mut e = env();
+    let s = attachment(&mut e, A { ty: SWITCH, ..A::default() });
+    let p = pawn_with(&mut e, vec![s]);
+    let Value::Object(Some(body)) = prop(&e.vm, p, "BodyClass") else { panic!() };
+    put(&mut e.vm, body, "UseRootMotion", Value::Bool(true));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, crate::world::pawn_meshes::ROOT_MOTION);
+
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let Value::Object(Some(body)) = prop(&e.vm, p, "BodyClass") else { panic!() };
+    put(&mut e.vm, body, "UseRootMotion", Value::Bool(true));
+    let (_, what) = refused(&mut e, p);
+    assert_eq!(what, RENDER_HOOKS, "the preflight's refusal comes first");
+}
+
+/// Review r1 of #542, item 5: a replicated state without the packing's fields is the build's shape error before any
+/// write, even for a body whose walk makes only a switch.
+#[test]
+fn the_packing_fields_are_probed_before_any_write() {
+    let mut e = env();
+    let s = attachment(&mut e, A { ty: SWITCH, ..A::default() });
+    let p = pawn_with(&mut e, vec![s]);
+    // A replicated state with the fields the walk reads but not the packing's two.
+    let short = strukt(&mut e.vm, "Test.ShortReplicatedState", &[
+        ("RemovedBodyCompositionPartsBitField", PropKind::Int),
+        ("bNeedToApplyThisState", PropKind::Bool),
+    ]);
+    let composition = prop(&e.vm, prop_object(&e, p, "BodyClass"), "BodyComposition");
+    let inputs = Inputs {
+        owner: Some(p),
+        composition,
+        set: prop(&e.vm, p, "InstanceDataState"),
+        replicated: e.vm.space.classes.struct_defaults(short).unwrap(),
+        mode: 0,
+    };
+    let before = Counters::read(&e.vm);
+    let err = build(&mut e.vm, inputs).unwrap_err();
+    assert!(matches!(&err, VmError::Script { message, .. } if message.contains("SwitchStateBitField")), "{err:?}");
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert!(entries(&e, p).is_empty());
+}
+
+fn prop_object(e: &Env, o: ObjRef, name: &str) -> ObjRef {
+    let Value::Object(Some(x)) = prop(&e.vm, o, name) else { panic!("{name}") };
+    x
 }
 
 /// The preflight's other refusals, each its named kind and text, write-free.
@@ -544,6 +688,8 @@ fn releasing_the_old_cylinder_is_not_read_and_the_mesh_stop_is_unchanged() {
 fn the_named_refusals_are_write_free() {
     for case in ["rebuild", "client", "template", "hit", "actor socket", "socket tables", "parent link", "other target"] {
         let mut e = env();
+        // The later attachments' refusals need the earlier made component past the rendering hooks.
+        answer_render_hooks_for_tests(true);
         let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
         let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
         let object = e.object;
@@ -636,4 +782,64 @@ fn the_script_native_is_not_ported() {
     let VmError::NotYet(n) = &err else { panic!("{err:?}") };
     assert_eq!(n.missing, Missing::NotPorted);
     assert_eq!(n.what, SCRIPT_CALL);
+}
+
+/// The holder's three template handles, unloaded: `Skel`, `Cyl`, `Cycle`.
+fn store_templates(e: &mut Env) -> (ObjRef, ObjRef, ObjRef) {
+    let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let get = |e: &Env, n: &str| prop_object(e, holder, n);
+    let t = (get(e, "Skel"), get(e, "Cyl"), get(e, "Cycle"));
+    for h in [t.0, t.1, t.2] {
+        assert!(e.vm.defs.is_unloaded(&e.vm.space, h), "a store handle, not loaded");
+    }
+    t
+}
+
+/// Review r1 of #542, item 8: a skeletal parent whose template the store has not loaded cannot give its mesh asset
+/// without a load, so a child with a socket is the named `NotRead`, write-free, and nothing is loaded.
+#[test]
+fn an_unloaded_skeletal_parent_template_is_not_read() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (skel, _, _) = store_templates(&mut e);
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl");
+    let a0 = attachment(&mut e, A { template: Some(skel), ..A::default() });
+    let a1 = attachment(&mut e, A { base: 0, template: Some(cyl), socket: "Spine3", index: 2, ..A::default() });
+    let p = pawn_with(&mut e, vec![a0, a1]);
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, lazy_template("GD_ToyBody.SkelTemplate"));
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, skel), "nothing loaded");
+}
+
+/// Review r1 of #542, item 8: a template the store has not loaded is loaded by the writes, and that load moves
+/// `DefStore::load_transitions` (a counted write).
+#[test]
+fn a_template_loaded_by_the_writes_is_counted() {
+    let mut e = env();
+    answer_render_hooks_for_tests(true);
+    let (_, cyl, _) = store_templates(&mut e);
+    let a = attachment(&mut e, A { template: Some(cyl), ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let loads = e.vm.defs.load_transitions();
+    run(&mut e, p).unwrap();
+    assert!(!e.vm.defs.is_unloaded(&e.vm.space, cyl), "loaded by the writes");
+    assert!(e.vm.defs.load_transitions() > loads, "the load is counted");
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_ne!(made, cyl);
+}
+
+/// Review r1 of #542, item 6: a template whose load already failed is refused in the preflight, before any write.
+#[test]
+fn a_failed_template_is_refused_before_any_write() {
+    let mut e = env();
+    let (_, _, cycle) = store_templates(&mut e);
+    assert!(e.vm.defs.ensure_loaded(&mut e.vm.space, cycle).is_err(), "the cycle export's load fails");
+    assert!(e.vm.defs.is_failed(&e.vm.space, cycle));
+    let a = attachment(&mut e, A { template: Some(cycle), ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, failed_template("GD_ToyBody.CycleTemplate"));
 }

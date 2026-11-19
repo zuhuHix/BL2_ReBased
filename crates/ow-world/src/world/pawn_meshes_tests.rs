@@ -352,10 +352,11 @@ fn a_missing_helper_wins_over_a_none_body_class() {
     }
 }
 
-/// Step 5's root-motion check (lane IMPL-BODY-COMPOSITION): a body class that sets `UseRootMotion` is the named
-/// `NotRead`, before the build and before any write.
+/// Step 5's root-motion check (lane IMPL-BODY-COMPOSITION) runs after the build's preflight (review r1 of #542, item
+/// 7): in this fixture, which has no body-composition structs, the build's shape error comes first, write-free. The
+/// root-motion `NotRead` itself is tested in `body_composition_tests.rs`.
 #[test]
-fn a_root_motion_body_class_is_not_read() {
+fn a_root_motion_body_class_meets_the_build_s_preflight_first() {
     let mut e = env(true, None);
     let (a, _) = functions(&mut e);
     let p = make(&mut e.vm, e.player, "Maya_10");
@@ -364,8 +365,6 @@ fn a_root_motion_body_class_is_not_read() {
     set(&mut e.vm, p, "BodyClass", Value::Object(Some(bc)));
     let before = e.vm.space.heap.committed_writes();
     let err = e.vm.call(a, Some(p), vec![]).unwrap_err();
-    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
-    assert_eq!(n.missing, Missing::NotRead);
-    assert_eq!(n.what, ROOT_MOTION);
+    assert!(matches!(&err, VmError::Script { function, .. } if function == crate::world::body_composition::UNIT), "{err:?}");
     assert_eq!(e.vm.space.heap.committed_writes(), before, "write-free");
 }
