@@ -19,8 +19,10 @@
 //! - P3: the class `WillowGame.PlayerSkillTree`, the store's own error propagated unchanged;
 //! - P4 ([`pawn_data_manager`]): the world's globals (its own `NotYet` when it has none) and their
 //!   `ThePlayerPawnDataManager`, declared as an object property; None means no request;
-//! - P5 ([`skill_tree_path`]): the controller's `PlayerClass` (an object property) and its `SkillTreePath` (a string
-//!   property); a None class means no request;
+//! - P5a ([`player_class`]): the controller's `PlayerClass` (an object property), read whether or not P4 found a
+//!   manager; None means no player class;
+//! - P5b ([`skill_tree_path`]): its `SkillTreePath` (a string property), read only when P4 gave a manager and P5a a
+//!   player class;
 //! - P6 ([`request_row`]): a request exactly when P4 and P5 both gave one, its row by the path's shape.
 //!
 //! **Writes**, for a new tree: W1 the tree, outer the controller, a generated name (the native passes none); W2 the
@@ -129,7 +131,7 @@ fn object_value(v: &Value, name: &str) -> Result<Option<ObjRef>, VmError> {
     match v {
         Value::Object(o) => Ok(*o),
         Value::None => Ok(None),
-        other => Err(bad(format!("{name} holds {}, not an object", other.kind_name()))),
+        other => Err(bad(format!("{name} holds a {}, not an object", other.kind_name()))),
     }
 }
 
@@ -168,22 +170,24 @@ fn pawn_data_manager(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
     object_value(vm.space.read(globals, PropAddr::scalar(p))?, "ThePlayerPawnDataManager")
 }
 
-/// P5: the controller's `PlayerClass` and its `SkillTreePath`; a None class means no request.
-fn skill_tree_path(vm: &mut Vm, controller: ObjRef) -> Result<Option<String>, VmError> {
+/// P5a: the controller's `PlayerClass`, read whether or not P4 found a manager; None means no player class.
+fn player_class(vm: &mut Vm, controller: ObjRef) -> Result<Option<ObjRef>, VmError> {
     let p = declared(vm, controller, "PlayerClass", "an object property", is_object)?;
-    let Some(class) = object_value(vm.space.read(controller, PropAddr::scalar(p))?, "PlayerClass")? else {
-        return Ok(None);
-    };
+    object_value(vm.space.read(controller, PropAddr::scalar(p))?, "PlayerClass")
+}
+
+/// P5b: the player class's `SkillTreePath`, read only when P4 gave a manager and P5a a player class.
+fn skill_tree_path(vm: &mut Vm, class: ObjRef) -> Result<String, VmError> {
     loaded(vm, class)?;
     let p = declared(vm, class, "SkillTreePath", "a string property", is_str)?;
     match vm.space.read(class, PropAddr::scalar(p))? {
-        Value::Str(s) => Ok(Some(s.to_string())),
-        other => Err(bad(format!("SkillTreePath holds {}, not a string", other.kind_name()))),
+        Value::Str(s) => Ok(s.to_string()),
+        other => Err(bad(format!("SkillTreePath holds a {}, not a string", other.kind_name()))),
     }
 }
 
-/// P6, with A1 (never already loaded) and A2 (the immediate-load switch off): the Off row of the note's four request
-/// cases. A dotted path is one pending request; a dotless one (the empty string included) is nothing, as the game's
+/// P6, with A1 (never already loaded) and A2 (the immediate-load switch off): the note's "not loaded, switch off"
+/// column of its request cases. A dotted path is one pending request; a dotless one (the empty string included) is nothing, as the game's
 /// "not loaded" column drops it.
 fn request_row(manager: Option<ObjRef>, path: Option<String>, controller: ObjRef) -> Option<SkillTreeRequest> {
     let (manager, path) = (manager?, path?);
@@ -244,7 +248,11 @@ fn preflight(vm: &mut Vm, controller: ObjRef) -> Result<Plan, VmError> {
     }
     let tree_class = vm.find_class(TREE_CLASS)?;
     let manager = pawn_data_manager(vm)?;
-    let path = skill_tree_path(vm, controller)?;
+    let class = player_class(vm, controller)?;
+    let path = match (manager, class) {
+        (Some(_), Some(class)) => Some(skill_tree_path(vm, class)?),
+        _ => None,
+    };
     let request = request_row(manager, path, controller);
     Ok(Plan { tree_class, tree_prop, request })
 }

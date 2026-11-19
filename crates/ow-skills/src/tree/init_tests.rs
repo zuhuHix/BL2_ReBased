@@ -21,14 +21,16 @@ const NATIVE: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 /// `WillowGame.upk`: the controller (with `PlayerSkillTree`, `PlayerClass` and the native), the tree class, the player
-/// class definition (with `SkillTreePath`), the globals and the pawn data manager. `odd_tree` declares
-/// `PlayerSkillTree` as a string instead (P1's data error).
-fn package(odd_tree: bool) -> Vec<u8> {
+/// class definition (with `SkillTreePath`, unless `no_path`), the globals and the pawn data manager. `odd_tree`
+/// declares `PlayerSkillTree` as a string instead (P1's data error).
+fn package(odd_tree: bool, no_path: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty", "StrProperty"]);
     let object = t.class("Object", 0);
     let tree = t.class("PlayerSkillTree", object);
     let class_def = t.class("PlayerClassDefinition", object);
-    t.prop("Str", class_def, "SkillTreePath", 0, 0);
+    if !no_path {
+        t.prop("Str", class_def, "SkillTreePath", 0, 0);
+    }
     let controller = t.class("WillowPlayerController", object);
     if odd_tree {
         t.prop("Str", controller, "PlayerSkillTree", 0, 0);
@@ -74,13 +76,17 @@ impl Drop for Fx {
 }
 
 fn fx_with(mode: ParityMode, odd_tree: bool, with_globals: bool) -> Fx {
+    fx_full(mode, odd_tree, with_globals, false)
+}
+
+fn fx_full(mode: ParityMode, odd_tree: bool, with_globals: bool, no_path: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-init-tree-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let bytes = package(odd_tree);
+    let bytes = package(odd_tree, no_path);
     let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let class = vm.find_class("WillowGame.WillowGlobals").unwrap();
@@ -265,4 +271,28 @@ fn reference_binds_nothing() {
     assert!(!x.vm.has_native(&key));
     let o = fx();
     assert!(o.vm.has_native(&key));
+}
+
+/// P5b is read only for a request (the note at 094415f3): a player class whose class declares no `SkillTreePath` is
+/// not read without a manager (no request, the tree made), and is a data error before any write with one.
+#[test]
+fn the_skill_tree_path_is_read_only_for_a_request() {
+    let mut x = fx_full(ParityMode::Off, false, true, true);
+    let class = x.make("WillowGame.PlayerClassDefinition");
+    let c = x.controller;
+    x.set(c, "PlayerClass", Value::Object(Some(class)));
+    x.call().unwrap();
+    assert!(x.tree().is_some() && x.requests().is_empty(), "no manager: SkillTreePath is not read");
+    let mut x = fx_full(ParityMode::Off, false, true, true);
+    let manager = x.make("WillowGame.WillowPlayerPawnDataManager");
+    let g = x.globals;
+    x.set(g, "ThePlayerPawnDataManager", Value::Object(Some(manager)));
+    let class = x.make("WillowGame.PlayerClassDefinition");
+    let c = x.controller;
+    x.set(c, "PlayerClass", Value::Object(Some(class)));
+    let before = x.objects();
+    let e = x.call().unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+    assert_eq!(x.objects(), before, "refused before the tree is allocated");
+    assert_eq!(x.tree(), None);
 }
