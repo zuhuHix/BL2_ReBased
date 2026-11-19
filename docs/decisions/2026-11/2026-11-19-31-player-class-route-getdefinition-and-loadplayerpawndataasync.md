@@ -24,15 +24,16 @@ and `fix/rust-mind-adopt` (neither landed at the time), installed game, Off.
     - `SwitchPlayerClass` sets `PlayerClass` and `CharacterClass`. With the pawn archetype already loaded, it notifies,
       applies the starting values and restarts the player through the game info's script. Otherwise it asks the pawn
       data manager to load it.
-    - The report comes back through the controller's script `RunStreamingDataEvent` (`SetPendingClassSwitch`), and the
-      switch is retried.
+    - The report comes back through the controller's script `RunStreamingDataEvent`, which only stores the pending
+      class and archetype (`SetPendingClassSwitch`). What carries the switch on from there is not read (UNVERIFIED);
+      the not-found path arms no retry timer.
     - **Maya's class needs an input**: a save (D9) or a class-select call with her class. That choice is the hub's or
       the maintainer's, not a native rule.
   - **Section 2, `GBXDefinition.GetDefinition`.** No class or an empty name gives None. Otherwise it returns a loaded
     object of that class by name in any package, else one loaded by name, else it loads once more after loading
     something named by a fixed text (not separated).
   - **Section 3, `WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync`.**
-    - When the object is already loaded (the same manager routine as `FindAlreadyLoadedObject`), the report is sent at
+    - When the object is already loaded (the same lookup `FindAlreadyLoadedObject` does), the report is sent at
       once through the context's `IStreamingDataEvent.RunStreamingDataEvent` (name, payload, object, int, float).
     - When it is not loaded and the path has a package part, the request is kept and the object is loaded at once or
       queued, depending on an unidentified engine flag.
@@ -45,10 +46,10 @@ and `fix/rust-mind-adopt` (neither landed at the time), installed game, Off.
   same way. Without the bridge, every spawn still stops at `SetDefaultPhysics`, noted and with FIX-MIND-ROUTE.
 - **One more native question answered, behind `SetDefaultPhysics`** on links 3 and 13: the hit's `DemigodOnHold` on a
   `WillowAIComponent`, which Off refuses as an unread subclass override.
-  - `WillowAIComponent`'s own function table, read from its class registration's constructor, keeps `AIComponent`'s
-    routines for the target, movement, demigod, god and dialog kinds. Only the base kind is replaced.
+  - `WillowAIComponent` keeps `AIComponent`'s hold behaviour for the target, movement, demigod, god and dialog kinds;
+    only the base kind differs.
   - So NATIVE_AI_HOLDS.md's rule applies to that class for those kinds. The note and its index row say so.
-  - The earlier attempt (decision 2026-11-19-06) had stopped because the query tool could not find the class's table.
+  - The earlier attempt (decision 2026-11-19-06) had not settled it.
 
 **Tools.** `research/script_disasm.py` and `ow-package --disasm` for the script. Ghidra 12.1.4, read-only, one run at a
 time under the machine lock (waiting whenever the project was held): 7 query runs and 3 runs of the local read-only table
