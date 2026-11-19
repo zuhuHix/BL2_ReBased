@@ -965,6 +965,18 @@ impl ClassTable {
         Ok(())
     }
 
+    /// Struct `s`'s own default entries as stored (review r3 of #464), for [`ClassTable::restore_struct_default_entries`].
+    pub(crate) fn struct_default_entries(&self, s: StructId) -> Result<Vec<(u32, Value)>, LayoutError> {
+        Ok(self.struct_checked(s)?.defaults.clone())
+    }
+
+    /// Puts back entries [`ClassTable::struct_default_entries`] read (a discarded load's undo).
+    pub(crate) fn restore_struct_default_entries(&mut self, s: StructId, entries: Vec<(u32, Value)>) -> Result<(), LayoutError> {
+        self.struct_checked(s)?;
+        self.structs[s.index()].defaults = entries;
+        Ok(())
+    }
+
     /// Clears every reference for which `dead` is true out of every struct's own default entries, as
     /// `ObjectSpace::free` does for the objects it frees.
     pub(crate) fn clear_refs_in_defaults(&mut self, dead: &dyn Fn(ObjRef) -> bool) {

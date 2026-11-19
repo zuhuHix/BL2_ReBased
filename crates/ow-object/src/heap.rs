@@ -302,6 +302,18 @@ impl Heap {
     }
 
     /// Puts `object` in a free slot or a new one and records it in creation order.
+    /// Every object not freed, in slot order (review r3 of #464: the definition store's non-publishing read frees the
+    /// objects that are not in a snapshot taken before it).
+    pub fn handles(&self) -> Vec<ObjRef> {
+        let mut out = Vec::with_capacity(self.count);
+        for (i, e) in self.entries.iter().enumerate() {
+            if e.object.is_some() {
+                out.push(ObjRef::new(u32::try_from(i).expect("more than 2^32 heap slots"), e.generation));
+            }
+        }
+        out
+    }
+
     fn insert(&mut self, object: Object) -> ObjRef {
         let handle = match self.free.pop() {
             Some(index) => {

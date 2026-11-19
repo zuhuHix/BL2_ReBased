@@ -374,6 +374,15 @@ pub(crate) fn fixture(broken_defaults: bool) -> Vec<u8> {
     ];
     let payload = stream(&mut d, 4, &tags);
     d.p.add_export(leaf, "Twins", payload);
+    // A struct whose defaults hold a reference (review r3 of #464, item 1), and a class holding it.
+    let pointed_defaults = {
+        let target = d.p.object_tag("Target", thing);
+        body(&mut d, &[target])
+    };
+    let pointed = d.struct_in(object, "Pointed", 0, Some(&pointed_defaults));
+    d.prop("Object", pointed, "Target", object);
+    let pointer = d.cls("Pointer", object);
+    d.prop("Struct", pointer, "Ptr", pointed);
     d.build()
 }
 
@@ -1543,4 +1552,21 @@ fn a_second_store_id_for_the_same_file_finds_the_same_stand_in() {
         },
         "filed under the first id"
     );
+}
+
+/// A discarded load puts back the struct defaults it read (review r3 of #464, item 1): the reference its free cleared
+/// is not left cached, and the next ordinary read resolves it as a direct read does.
+#[test]
+fn a_discarded_load_puts_back_the_struct_defaults_it_read() {
+    let mut w = world("discard-struct", false);
+    let pointer = w.class("Pointer");
+    w.cx(ParityMode::Off).layout(pointer).unwrap();
+    let s = w.space.classes.struct_by_path("Core.Object.Pointed").unwrap();
+    let before = w.space.heap.len();
+    w.cx(ParityMode::Off).load_discarded(|cx| cx.ensure_struct_defaults(s)).unwrap();
+    assert_eq!(w.space.heap.len(), before, "the read's stand-in is freed");
+    assert!(w.space.classes.struct_layout(s).unwrap().own_defaults().is_empty(), "the entries are put back");
+    w.cx(ParityMode::Off).ensure_struct_defaults(s).unwrap();
+    let v = w.space.classes.struct_defaults(s).unwrap();
+    assert!(matches!(field(&w.space, &v, "Target"), Value::Object(Some(_))), "read again, the reference resolves");
 }

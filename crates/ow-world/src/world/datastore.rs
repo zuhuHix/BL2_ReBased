@@ -245,9 +245,7 @@ fn service(vm: &Vm) -> Result<Rc<std::cell::RefCell<DataStores>>, VmError> {
 /// with its kind kept; any other error is returned as it is.
 fn after_writes(e: VmError) -> VmError {
     match e {
-        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
-            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-        }
+        VmError::NotYet(n) => n.after_partial_writes().into(),
         other => other,
     }
 }
@@ -461,13 +459,15 @@ fn class_name(space: &ow_object::heap::ObjectSpace, class: ClassId) -> String {
     space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_default()
 }
 
-/// Whether a field of `kind` holds an object (`Object`) or a class (`Class`) whose class is `c`.
-fn holds(space: &ow_object::heap::ObjectSpace, kind: &PropKind, c: ClassId) -> bool {
-    match kind {
-        PropKind::Object { class } => space.classes.is_child_of(c, *class),
-        PropKind::Class { meta } => space.classes.is_child_of(c, *meta),
-        _ => false,
-    }
+/// Whether an object field (`Object` kind) can hold an object of class `c`. A class field cannot (review r3 of #464,
+/// item 4): the fill writes objects there.
+fn holds_object(space: &ow_object::heap::ObjectSpace, kind: &PropKind, c: ClassId) -> bool {
+    matches!(kind, PropKind::Object { class } if space.classes.is_child_of(c, *class))
+}
+
+/// Whether a class field (`Class` kind) can hold the class `c`.
+fn holds_class(space: &ow_object::heap::ObjectSpace, kind: &PropKind, c: ClassId) -> bool {
+    matches!(kind, PropKind::Class { meta } if space.classes.is_child_of(c, *meta))
 }
 
 /// The plan for a store of `class` (None for a store that is not an online game settings store). Nothing is made and
@@ -534,13 +534,24 @@ fn plan_fill(vm: &mut Vm, class: ClassId) -> Result<Option<FillPlan>, VmError> {
         Some(c) if space.classes.is_child_of(c, provider_base) => c,
         _ => provider_base,
     };
-    // 3. Every value the fill writes is assignable to its field.
-    if !holds(space, &provider_slot, provider) {
+    // 3. Every value the fill writes is assignable to the field the write resolves (review r3 of #464, item 4): the
+    // provider's fields on the selected provider class, which may shadow the base class's; objects into object
+    // fields, the settings class into a class field.
+    let (settings_field, data_class_field) = (prop_kind(space, provider, "Settings")?, prop_kind(space, provider, "DataClass")?);
+    if !matches!(prop_kind(space, provider, "SettingsArrayProviders")?, PropKind::Array(_)) {
+        return Err(bad_kind("the provider class's SettingsArrayProviders"));
+    }
+    if !holds_object(space, &provider_slot, provider) {
         return Err(fill_error(FILL_UNIT, format!("GameSettingsCfg.Provider cannot hold a {}", class_name(space, provider))));
     }
     for &c in entries.iter().flatten() {
-        for (kind, field) in [(&settings_slot, "GameSettingsCfg.GameSettings"), (&settings_field, "UIDataProvider_Settings.Settings"), (&data_class_field, "UIDataProvider_Settings.DataClass")] {
-            if !holds(space, kind, c) {
+        let fits = [
+            (holds_object(space, &settings_slot, c), "GameSettingsCfg.GameSettings"),
+            (holds_object(space, &settings_field, c), "the provider's Settings"),
+            (holds_class(space, &data_class_field, c), "the provider's DataClass"),
+        ];
+        for (ok, field) in fits {
+            if !ok {
                 return Err(fill_error(FILL_UNIT, format!("{field} cannot hold a {}", class_name(space, c))));
             }
         }

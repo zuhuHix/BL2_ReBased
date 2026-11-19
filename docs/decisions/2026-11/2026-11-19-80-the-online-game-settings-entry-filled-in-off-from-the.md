@@ -88,3 +88,21 @@ Verified (automated, invented packages): `ow-world` 17 data store tests (7 new),
 `cargo test --workspace` 2,186 passed, 0 failed. Installed Off `--slice-gate` strict: still 0 ok / 14 `NotYet` / 0
 errors, with links 10 to 12 stopping in `accept` at `GetActiveMissionNumber`, marked. Every rule stays UNVERIFIED in
 the running game.
+
+**Review r3 of #464 (five findings, all fixed).**
+1. **Struct defaults isolated.** A discarded load records each struct default it reads (its entries and cache entry
+   from before) and puts them back when it ends (`ow-object`, `ValueCx::load_discarded`).
+2. **The resolver's allocations.** `DefStore::with_class_default` frees every object not in a heap snapshot taken
+   before the read (the Off resolver's engine-native stand-ins included). It also prunes their identity entries and
+   puts back the resolver's no-holder log (`Heap::handles` is new). A synthetic fixture covers it: a store default
+   that references an engine-native import.
+3. **One exact mark check.** `ow_core::notyet::{PARTIAL_WRITES_PREFIX, is_partial_writes, mark_partial_writes}` and
+   `NotYet::after_partial_writes` are used by the behaviour kernel, the datastore, `ow-combat`'s attribute path and
+   the mission bridge.
+4. **Exact kinds, resolved on the written class.** Objects go only into object fields and the settings class only
+   into a class field. The provider's fields are resolved on the selected provider class, which may shadow the base.
+5. **The wrapped body is bound to its call:** it runs only on the originating VM, once, and only while no service is
+   borrowed.
+
+`cargo test --workspace`: 2,191 passed, 0 failed (5 new tests). The installed Off gate is unchanged (0/14/0; links 10
+to 12 stop in `accept` at `GetActiveMissionNumber`, marked).

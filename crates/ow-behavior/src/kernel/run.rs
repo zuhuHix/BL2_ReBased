@@ -247,12 +247,10 @@ fn prepare(vm: &mut Vm, behavior: ObjRef) -> Result<Prepared, VmError> {
 /// nest).
 fn partial(e: VmError) -> VmError {
     match e {
-        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
-            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-        }
-        VmError::Script { function, message } if !message.contains(PARTIAL_WRITES) => VmError::Script {
+        VmError::NotYet(n) => n.after_partial_writes().into(),
+        VmError::Script { function, message } => VmError::Script {
             function,
-            message: format!("{PARTIAL_WRITES}: {message}"),
+            message: ow_core::notyet::mark_partial_writes(&message),
         },
         other => other,
     }

@@ -485,10 +485,9 @@ fn call_by_name(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<
 /// of #464, item 5): a `NotYet` or a script error whose own text **starts** with the mark, as the behavior walk and the
 /// online game settings refresh make them. Any other error is not terminal, whatever its text quotes.
 pub fn is_partial_stop(e: &MissionError) -> bool {
-    let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
     match e {
-        BehaviorError::Vm(VmError::NotYet(n)) => n.what.starts_with(mark),
-        BehaviorError::Vm(VmError::Script { message, .. }) => message.starts_with(mark),
+        BehaviorError::Vm(VmError::NotYet(n)) => ow_core::notyet::is_partial_writes(&n.what),
+        BehaviorError::Vm(VmError::Script { message, .. }) => ow_core::notyet::is_partial_writes(message),
         _ => false,
     }
 }

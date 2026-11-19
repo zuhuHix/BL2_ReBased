@@ -279,7 +279,8 @@ pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
 /// parent with one) answers by [`Vm::plain_interface`].
 pub type InterfaceRuleFn = Rc<dyn Fn(&mut Vm, ObjRef, ClassId) -> Result<Option<ObjRef>, VmError>>;
 
-/// The body a [`ScriptWrapFn`] is given: it runs the wrapped function's own bytecode with the call's arguments, once.
+/// The body a [`ScriptWrapFn`] is given: it runs the wrapped function's own bytecode with the call's arguments, once,
+/// on the call's own VM, and only while no service is borrowed (another VM, or a second run, is a script error).
 pub type ScriptBody<'b> = dyn FnMut(&mut Vm) -> Result<CallResult, VmError> + 'b;
 
 /// A host wrapper around a script function's bytecode ([`Vm::wrap_script`], lane IMPL-SETTINGS-FILL, review r1 of
@@ -1112,13 +1113,24 @@ impl Vm {
             None => match (binding, wrap) {
                 (Some(imp), _) => self.run_native(&imp, f, this, args),
                 (None, Some(wrap)) => {
+                    // The body is bound to this call (review r3 of #464, item 5): its function, receiver and argument
+                    // aliases belong to this VM, so it runs only on this VM, once, and, like any call, only when no
+                    // service is borrowed.
+                    let origin: *const Vm = self;
                     let mut args = Some(args);
-                    let mut body = |vm: &mut Vm| match args.take() {
-                        Some(args) => vm.run_bytecode(f, this, args),
-                        None => Err(VmError::Script {
+                    let mut body = |vm: &mut Vm| {
+                        let refused = |vm: &Vm, message: &str| VmError::Script {
                             function: vm.function_path(f),
-                            message: "a wrapped script body runs once".to_string(),
-                        }),
+                            message: message.to_string(),
+                        };
+                        if !std::ptr::eq(vm as *const Vm, origin) {
+                            return Err(refused(vm, "a wrapped script body runs only on its own call's VM"));
+                        }
+                        vm.services.check_none_borrowed()?;
+                        match args.take() {
+                            Some(args) => vm.run_bytecode(f, this, args),
+                            None => Err(refused(vm, "a wrapped script body runs once")),
+                        }
                     };
                     wrap(self, this, &mut body)
                 }
