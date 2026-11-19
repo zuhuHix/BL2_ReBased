@@ -114,6 +114,7 @@ AI-assisted (Claude Code, Opus 5.5). The recorded resource pool idle-reset hooks
 unbound native `GameEngine.GetOnlineSubsystem()` (graded error; NATIVE_LOGIN_STATUS.md, #474). Without #458 they stop
 earlier, at `BlackMarketUpgradeAttributeValueResolver`. ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/link1/`.
+
 **FIX-483-FOLLOWUP (2026-11-19, pc-hummer, on main 7668d075):** AI-assisted (Claude Code, Opus 5.5). The hub's F1-F6
 follow-up of #483 (`ApplyInternalSlotEffectModifiers` in Off): a write-free preflight (the noun probe validates
 `DefaultValue` without evaluating it; a replicated slot refused only for an operation that rewrites the entry), P0 before

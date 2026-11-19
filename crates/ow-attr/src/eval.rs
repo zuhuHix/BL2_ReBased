@@ -854,7 +854,7 @@ fn definition_modes(cx: &mut EvalCx<'_>, definition: ObjRef) -> Result<(BaseValu
 /// value resolver's property). A definition load is not a write under NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md's
 /// ruling; a caller that counts loads as writes (the hub's ruling in review r1 of #518) tracks them itself.
 pub(crate) fn preflight_init(sys: &AttributeSystem, v: &Value, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-    let mut done = std::collections::HashSet::new();
+    let mut done = ow_core::DetSet::new();
     preflight_init_in(sys, v, cx, &mut done)
 }
 
@@ -862,7 +862,7 @@ fn preflight_init_in(
     sys: &AttributeSystem,
     v: &Value,
     cx: &mut EvalCx<'_>,
-    seen: &mut std::collections::HashSet<ObjRef>,
+    seen: &mut ow_core::DetSet<ObjRef>,
 ) -> Result<(), AttrError> {
     let data = init_data(cx.world.parts().space, v)?;
     if let Some(attr) = data.base_value_attribute {
@@ -886,7 +886,7 @@ fn preflight_init_in(
     let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
         flag(name, &field_of(cx, v, name)?)
     };
-    let term = |cx: &mut EvalCx<'_>, v: &Value, name: &str, seen: &mut std::collections::HashSet<ObjRef>| -> Result<(), AttrError> {
+    let term = |cx: &mut EvalCx<'_>, v: &Value, name: &str, seen: &mut ow_core::DetSet<ObjRef>| -> Result<(), AttrError> {
         let t = field_of(cx, v, name)?;
         preflight_init_in(sys, &t, cx, seen)
     };
@@ -921,14 +921,14 @@ fn preflight_init_in(
 }
 
 /// The check of one initialization-data term of [`preflight_init_in`].
-type Term<'a> = dyn Fn(&mut EvalCx<'_>, &Value, &str, &mut std::collections::HashSet<ObjRef>) -> Result<(), AttrError> + 'a;
+type Term<'a> = dyn Fn(&mut EvalCx<'_>, &Value, &str, &mut ow_core::DetSet<ObjRef>) -> Result<(), AttrError> + 'a;
 
 /// The variance bounds and range limits of [`preflight_init_in`], each when enabled.
 fn range_and_variance(
     cx: &mut EvalCx<'_>,
     variance: &Value,
     range: &Value,
-    seen: &mut std::collections::HashSet<ObjRef>,
+    seen: &mut ow_core::DetSet<ObjRef>,
     term: &Term<'_>,
 ) -> Result<(), AttrError> {
     let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
