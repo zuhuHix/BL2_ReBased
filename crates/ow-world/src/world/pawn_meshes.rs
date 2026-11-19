@@ -3,38 +3,39 @@
 //! AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from `docs/verification/NATIVE_INIT_PAWN_MESHES.md` alone (analyst lane
-//! ANALYST-INIT-PAWN-MESHES, PR #517); this lane did not read the executable. **Every rule is UNVERIFIED in the
-//! running game.** Off only: `World::new` binds both keys outside Reference, first-wins, and Reference keeps the VM's
-//! stub policy.
+//! ANALYST-INIT-PAWN-MESHES, PR #517, at its review-r1 head 3217b58b); this lane did not read the executable. **Every
+//! rule is UNVERIFIED in the running game.** Off only: `World::new` binds both keys outside Reference, first-wins, and
+//! Reference keeps the VM's stub policy.
 //!
-//! **One rule under both keys** (the note's section 1: the player pawn's override only forwards). In order, writing
-//! nothing at any step:
-//! 1. **The receiver** must be a `WillowGame.WillowPawn`, or a subclass; otherwise `VmError::Script`.
-//! 2. **The declarations** the gate reads: `BodyClass` on the receiver's class, an object reference; otherwise
-//!    `VmError::Script` (the [`no_field`] / [`wrong_field`] texts).
-//! 3. **No helper:** no `Engine.InstanceDataHelper` class in the class table: nothing (the native's own step 1).
-//! 4. **`BodyClass` None:** nothing.
-//! 5. **`BodyClass` unloaded** (a lazy definition handle): `NotYet { NotRead }`, [`LAZY_BODY_CLASS`]. The hub's ruling
-//!    on #517 r1: a load is a store write, so the native loads nothing. A handle whose load failed earlier
-//!    (`DefStore::is_failed`) has no list to read either, and is named the same way.
-//! 6. **The attachment list:** `BodyComposition` (a struct) on the body class's class, holding `Attachments` (an
-//!    array). Empty: nothing. That covers the root-motion writes, which sit inside the gate.
-//! 7. **A non-empty list:** the remaining fields the note names are checked (the receiver's `InstanceDataState`,
-//!    `ReplicatedInstanceDataState` and `Mesh`; the body class's `UseRootMotion` and `UseRootRotation`), then
-//!    `NotYet { LayerAbsent }` with the note's text ([`BUILD`], [`LAYER`]).
+//! **One rule under both keys** (the note's section 1: the player pawn's override only forwards). The note's
+//! section 6 preflight, in order, writing nothing and loading nothing (class lookups read the class table alone):
+//! 1. **The receiver:** no receiver, or a class that is not `WillowGame.WillowPawn` or a subclass, is a
+//!    `VmError::Script` ([`UNIT`], "called with no pawn" / "<class path> is not a WillowPawn"). A receiver no longer in
+//!    the heap is the heap's own error.
+//! 2. **The helper class** `Engine.InstanceDataHelper` not in the class table: `NotYet { NotRead }`, [`NO_HELPER`] (a
+//!    port state; the game always has the class).
+//! 3. **The body class:** the class must declare `BodyClass` ([`no_body_class`]), holding an object reference
+//!    ([`body_class_kind`]). None: nothing. An unloaded or failed definition handle: `NotYet { NotRead }`,
+//!    [`lazy_body_class`], and nothing is loaded (hub ruling, review r1 of #517: a load is a store write).
+//! 4. **The attachments:** `BodyComposition` must be a struct holding an `Attachments` array ([`no_attachments`]).
+//!    Empty: nothing, which also covers the root-motion writes inside the gate.
+//! 5. **A non-empty list:** `NotYet { LayerAbsent }`, [`BUILD`] / [`LAYER`].
 //!
-//! **Nothing is written before the `LayerAbsent`** (hub ruling): no switch entry, no network flag, no root-motion
-//! write (they come after the composition build in the note's order), so the native's refusal carries no
-//! "stopped after partial writes" prefix of its own. A caller that wrote before adds it.
+//! **Nothing is written in Off** (hub rulings 1 and 2 of the note's section 6): every step answers "nothing done" or
+//! refuses, so the native adds no "stopped after partial writes" prefix. A caller that wrote before adds it.
 
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::ids::{ClassId, PropAddr};
+use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
+
+use ow_object::heap::Origin;
+
+use crate::pools::object_path;
 
 /// The two native keys, as the installed declarations carry them.
 pub const KEYS: [&str; 2] = ["WillowPawn.InitializePawnMeshes()", "WillowPlayerPawn.InitializePawnMeshes()"];
@@ -42,86 +43,66 @@ pub const KEYS: [&str; 2] = ["WillowPawn.InitializePawnMeshes()", "WillowPlayerP
 pub const RECORD: &str = "docs/verification/NATIVE_INIT_PAWN_MESHES.md";
 /// The receiver's class.
 pub const WILLOW_PAWN: &str = "WillowGame.WillowPawn";
-/// The helper class whose presence the native checks first.
+/// The helper class the native checks first.
 pub const HELPER: &str = "Engine.InstanceDataHelper";
-/// The `NotYet { LayerAbsent }` of a non-empty attachment list (the note's section 6, step 4).
+/// The function named in the `VmError::Script` errors.
+pub const UNIT: &str = "WillowPawn.InitializePawnMeshes";
+/// Step 2's `NotYet { NotRead }`.
+pub const NO_HELPER: &str = "WillowPawn.InitializePawnMeshes: the Engine.InstanceDataHelper class is not loaded";
+/// Step 5's `NotYet { LayerAbsent }` text.
 pub const BUILD: &str = "WillowPawn.InitializePawnMeshes: the body composition build (InstanceDataHelper.InitializeBodyComposition: \
                          component instancing and attachment to the pawn's mesh)";
 /// Its layer.
 pub const LAYER: &str = "a component and mesh layer (instancing components from templates, socket attachment)";
-/// The unit named in the `VmError::Script` texts.
-pub const UNIT: &str = "WillowPawn.InitializePawnMeshes";
 
-/// The fields of a non-empty list's preflight: (owner, field, expected kind).
-const RECEIVER_FIELDS: [(&str, Kind); 3] =
-    [("InstanceDataState", Kind::Struct), ("ReplicatedInstanceDataState", Kind::Struct), ("Mesh", Kind::Object)];
-const BODY_CLASS_FIELDS: [(&str, Kind); 2] = [("UseRootMotion", Kind::Bool), ("UseRootRotation", Kind::Bool)];
-
-/// The kinds the preflight checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
-    Object,
-    Struct,
-    Array,
-    Bool,
+/// Step 1's message for a receiver of another class.
+pub fn not_a_pawn(class_path: &str) -> String {
+    format!("{class_path} is not a WillowPawn")
 }
 
-impl Kind {
-    fn matches(self, k: &PropKind) -> bool {
-        matches!(
-            (self, k),
-            (Kind::Object, PropKind::Object { .. })
-                | (Kind::Struct, PropKind::Struct(_))
-                | (Kind::Array, PropKind::Array(_))
-                | (Kind::Bool, PropKind::Bool)
-        )
-    }
-
-    fn words(self) -> &'static str {
-        match self {
-            Kind::Object => "an object reference",
-            Kind::Struct => "a struct",
-            Kind::Array => "a dynamic array",
-            Kind::Bool => "a bool",
-        }
-    }
+/// Step 3's message for a class with no `BodyClass`.
+pub fn no_body_class(class_path: &str) -> String {
+    format!("{class_path} declares no BodyClass")
 }
 
-/// `<unit>: <class path> has no <field>`.
-pub fn no_field(class_path: &str, field: &str) -> String {
-    format!("{UNIT}: {class_path} has no {field}")
+/// Step 3's message for a `BodyClass` that holds no object reference.
+pub fn body_class_kind(kind: &str) -> String {
+    format!("BodyClass holds {kind}, not an object")
 }
 
-/// `<unit>: <class path>.<field> is not <kind>`.
-pub fn wrong_field(class_path: &str, field: &str, kind: &str) -> String {
-    format!("{UNIT}: {class_path}.{field} is not {kind}")
+/// Step 3's `NotYet { NotRead }` text for an unloaded body class.
+pub fn lazy_body_class(object_path: &str) -> String {
+    format!("WillowPawn.InitializePawnMeshes: the attachment list of the unloaded body class {object_path}")
 }
 
-/// The lazy body class's `NotYet { NotRead }` text.
-pub fn lazy_body_class(path: &str) -> String {
-    format!(
-        "{UNIT}: the attachment list of the body class {path}, an unloaded definition handle (loading it would be a \
-         store write before the refusal; hub ruling, review r1 of #517)"
-    )
+/// Step 4's message.
+pub fn no_attachments(class_path: &str) -> String {
+    format!("{class_path} has no BodyComposition.Attachments array")
 }
 
 fn script(message: String) -> VmError {
     VmError::Script { function: UNIT.to_string(), message }
 }
 
-fn class_path(vm: &Vm, class: ClassId) -> String {
-    vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string())
+fn class_path_of(vm: &Vm, o: ObjRef) -> Result<String, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    Ok(vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string()))
 }
 
-/// The declared property `name` of `class`, checked against `kind`; its id.
-fn declared(vm: &Vm, class: ClassId, name: &str, kind: Kind) -> Result<ow_object::ids::PropId, VmError> {
-    let Some(p) = vm.space.prop(class, name) else {
-        return Err(script(no_field(&class_path(vm, class), name)));
-    };
-    match vm.space.classes.decl(p).map(|d| &d.kind) {
-        Some(k) if kind.matches(k) => Ok(p),
-        _ => Err(script(wrong_field(&class_path(vm, class), name, kind.words()))),
+/// The full object path of a definition handle, from its package's export table when it stands for an export (an
+/// unloaded handle has no outer in the heap yet), without loading anything: `<package>.<export path>`. Any other
+/// object: its heap outer chain.
+pub fn handle_path(vm: &Vm, o: ObjRef) -> String {
+    if let Ok(x) = vm.space.heap.get(o)
+        && let Origin::Export { package, index } | Origin::Resource { package, index } = x.origin
+        && index > 0
+    {
+        let pkg = vm.defs.packages().get(package);
+        if let Ok(inner) = pkg.path_of(index) {
+            return format!("{}.{inner}", pkg.name);
+        }
     }
+    object_path(&vm.space, o)
 }
 
 /// Binds both keys (Off only; the caller checks the mode). A key another pack bound first keeps its binding.
@@ -134,68 +115,56 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The rule (module documentation, steps 1 to 7). Writes nothing.
+/// The rule (module documentation, steps 1 to 5). Writes nothing and loads nothing.
 pub fn initialize_pawn_meshes(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| script("called with no pawn".to_string()))?;
-    let vm: &mut Vm = c.vm;
+    let vm: &Vm = c.vm;
     let class = vm.space.heap.get(me)?.class;
-    let pawn = vm.find_class(WILLOW_PAWN)?;
-    if !vm.space.classes.is_child_of(class, pawn) {
-        return Err(script(format!("{} is not a {WILLOW_PAWN}", class_path(vm, class))));
+    let is_pawn = vm.space.classes.by_path(WILLOW_PAWN).is_some_and(|p| vm.space.classes.is_child_of(class, p));
+    if !is_pawn {
+        return Err(script(not_a_pawn(&class_path_of(vm, me)?)));
     }
-    let body_prop = declared(vm, class, "BodyClass", Kind::Object)?;
-    if vm.find_class_if_present(HELPER)?.is_none() {
-        return Ok(Value::None);
+    if vm.space.classes.by_path(HELPER).is_none() {
+        return Err(NotYet::not_read(NO_HELPER, RECORD).into());
     }
-    let Value::Object(body) = vm.space.read(me, PropAddr::scalar(body_prop))?.clone() else {
-        return Err(script(wrong_field(&class_path(vm, class), "BodyClass", Kind::Object.words())));
+    let Some(prop) = vm.space.prop(class, "BodyClass") else {
+        return Err(script(no_body_class(&class_path_of(vm, me)?)));
+    };
+    let body = match vm.space.read(me, PropAddr::scalar(prop))? {
+        Value::Object(o) => *o,
+        other => return Err(script(body_class_kind(other.kind_name()))),
     };
     let Some(body) = body else {
         return Ok(Value::None);
     };
     if vm.defs.is_unloaded(&vm.space, body) || vm.defs.is_failed(&vm.space, body) {
-        let path = vm.space.heap.get(body)?.name;
-        let path = format!("{} ({})", vm.space.names.text(path), class_path(vm, vm.space.heap.get(body)?.class));
-        return Err(NotYet::not_read(lazy_body_class(&path), RECORD).into());
+        return Err(NotYet::not_read(lazy_body_class(&handle_path(vm, body)), RECORD).into());
     }
     let body_class = vm.space.heap.get(body)?.class;
-    let comp_prop = declared(vm, body_class, "BodyComposition", Kind::Struct)?;
-    let composition = vm.space.read(body, PropAddr::scalar(comp_prop))?.clone();
+    let bad = || -> Result<VmError, VmError> { Ok(script(no_attachments(&class_path_of(vm, body)?))) };
+    let Some(comp) = vm.space.prop(body_class, "BodyComposition") else {
+        return Err(bad()?);
+    };
+    let composition = vm.space.read(body, PropAddr::scalar(comp))?;
     let Some(s) = composition.as_struct() else {
-        return Err(script(wrong_field(&class_path(vm, body_class), "BodyComposition", Kind::Struct.words())));
+        return Err(bad()?);
     };
-    let layout = vm
+    let field = vm
         .space
-        .classes
-        .struct_layout(s.ty)
-        .ok_or_else(|| script(wrong_field(&class_path(vm, body_class), "BodyComposition", Kind::Struct.words())))?;
-    let attachments = vm.space.names.find("Attachments").and_then(|n| layout.field(n));
-    let Some((index, decl)) = attachments else {
-        return Err(script(no_field(&format!("{}.BodyComposition", class_path(vm, body_class)), "Attachments")));
+        .names
+        .find("Attachments")
+        .and_then(|n| vm.space.classes.struct_layout(s.ty).and_then(|l| l.field(n)));
+    let Some((index, decl)) = field else {
+        return Err(bad()?);
     };
-    if !Kind::Array.matches(&decl.kind) {
-        return Err(script(wrong_field(
-            &format!("{}.BodyComposition", class_path(vm, body_class)),
-            "Attachments",
-            Kind::Array.words(),
-        )));
+    if !matches!(decl.kind, PropKind::Array(_)) {
+        return Err(bad()?);
     }
-    let list = usize::try_from(index).ok().and_then(|i| s.fields.get(i)).and_then(Value::elements);
-    let Some(list) = list else {
-        return Err(script(wrong_field(
-            &format!("{}.BodyComposition", class_path(vm, body_class)),
-            "Attachments",
-            Kind::Array.words(),
-        )));
+    let Some(list) = usize::try_from(index).ok().and_then(|i| s.fields.get(i)).and_then(Value::elements) else {
+        return Err(bad()?);
     };
     if list.is_empty() {
         return Ok(Value::None);
-    }
-    for (name, kind) in RECEIVER_FIELDS {
-        declared(vm, class, name, kind)?;
-    }
-    for (name, kind) in BODY_CLASS_FIELDS {
-        declared(vm, body_class, name, kind)?;
     }
     Err(NotYet::layer_absent(BUILD, LAYER, RECORD).into())
 }

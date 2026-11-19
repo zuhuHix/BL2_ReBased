@@ -34,8 +34,9 @@ ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED
 
 **IMPL-INIT-PAWN-MESHES (2026-11-19, pc-hummer, on research/rust-init-pawn-meshes 5d284e27, #517 on #513):**
 AI-assisted (Claude Code, Opus 5.5). `WillowPawn` / `WillowPlayerPawn.InitializePawnMeshes()` in Off:
-- the three empty cases do nothing;
-- an unloaded `BodyClass` is a named `NotYet { NotRead }`, since it is not loaded (hub ruling, #517 r1);
+- `BodyClass` None and an empty attachment list do nothing;
+- a missing helper class and an unloaded `BodyClass` are named `NotYet { NotRead }`s, and nothing is loaded (hub
+  ruling, #517 r1);
 - a non-empty attachment list is `NotYet { LayerAbsent }`;
 - nothing is written.
 

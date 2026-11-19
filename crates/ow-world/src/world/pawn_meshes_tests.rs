@@ -48,9 +48,9 @@ fn class(vm: &mut Vm, path: &str, base: ClassId, props: &[(&str, PropKind)]) -> 
     vm.space.classes.define(path, Some(base), props).unwrap()
 }
 
-/// The invented classes. `with_helper` defines `Engine.InstanceDataHelper`; `mesh_kind` is `Pawn.Mesh`'s kind (the
-/// broken-declaration case passes a non-object).
-fn env(with_helper: bool, mesh_kind: Option<PropKind>) -> Env {
+/// The invented classes. `with_helper` defines `Engine.InstanceDataHelper`; `attachments_kind` is
+/// `BodyComposition.Attachments`' kind (the broken-declaration case passes a non-array).
+fn env(with_helper: bool, attachments_kind: Option<PropKind>) -> Env {
     let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let core = {
@@ -70,7 +70,7 @@ fn env(with_helper: bool, mesh_kind: Option<PropKind>) -> Env {
     let set = vm.space.classes.define_struct("Engine.IInstanceData.InstanceDataSet", None, vec![data]).unwrap();
     let bits = decl(&mut vm, "SwitchStateBitField", PropKind::Int);
     let rep = vm.space.classes.define_struct("Engine.IInstanceData.ReplicatedInstanceDataState", None, vec![bits]).unwrap();
-    let attachments = decl(&mut vm, "Attachments", PropKind::Array(Box::new(PropKind::Int)));
+    let attachments = decl(&mut vm, "Attachments", attachments_kind.unwrap_or(PropKind::Array(Box::new(PropKind::Int))));
     let max = decl(&mut vm, "MaxExpectedComponents", PropKind::Int);
     let composition =
         vm.space.classes.define_struct("WillowGame.BodyClassDefinition.BodyComposition", None, vec![attachments, max]).unwrap();
@@ -79,7 +79,7 @@ fn env(with_helper: bool, mesh_kind: Option<PropKind>) -> Env {
         ("UseRootMotion", PropKind::Bool),
         ("UseRootRotation", PropKind::Bool),
     ]);
-    let base = class(&mut vm, "Engine.Pawn", object, &[("Mesh", mesh_kind.unwrap_or(o.clone()))]);
+    let base = class(&mut vm, "Engine.Pawn", object, &[("Mesh", o.clone())]);
     let pawn = class(&mut vm, WILLOW_PAWN, base, &[
         ("BodyClass", PropKind::Object { class: body }),
         ("InstanceDataState", PropKind::Struct(set)),
@@ -122,19 +122,25 @@ fn functions(e: &mut Env) -> (FuncId, FuncId) {
     (a, b)
 }
 
-/// Steps 3, 4 and 6: the three empty cases answer nothing and write nothing, under both keys.
+/// Step 2: a class table without the helper class is the named `NotRead` (a port state), under both keys.
 #[test]
-fn the_three_empty_cases_do_nothing() {
-    // No helper class.
+fn no_helper_class_is_not_read() {
     let mut e = env(false, None);
     let (a, b) = functions(&mut e);
     let p = make(&mut e.vm, e.player, "Maya_1");
     let bc = body(&mut e, 3);
     set(&mut e.vm, p, "BodyClass", Value::Object(Some(bc)));
     for f in [a, b] {
-        assert_eq!(e.vm.call(f, Some(p), vec![]).unwrap().ret, Value::None, "no helper");
+        let err = e.vm.call(f, Some(p), vec![]).unwrap_err();
+        let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+        assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+        assert_eq!(n.what, NO_HELPER);
     }
-    // BodyClass None, then an empty attachment list.
+}
+
+/// Steps 3 and 4: BodyClass None and an empty attachment list answer nothing and write nothing, under both keys.
+#[test]
+fn the_empty_cases_do_nothing() {
     let mut e = env(true, None);
     let (a, b) = functions(&mut e);
     let p = make(&mut e.vm, e.player, "Maya_2");
@@ -148,7 +154,7 @@ fn the_three_empty_cases_do_nothing() {
     }
 }
 
-/// Step 7: a non-empty list is the note's `LayerAbsent`, unprefixed, and the heap is unchanged.
+/// Step 5: a non-empty list is the note's `LayerAbsent`, unprefixed, and the heap is unchanged.
 #[test]
 fn a_non_empty_list_is_layer_absent_and_writes_nothing() {
     let mut e = env(true, None);
@@ -169,17 +175,19 @@ fn a_non_empty_list_is_layer_absent_and_writes_nothing() {
     }
 }
 
-/// Step 7's field preflight: a mistyped `Mesh` is the exact `VmError::Script` text, before any write.
+/// Step 4: an `Attachments` that is not an array is the exact `VmError::Script` text, before any write.
 #[test]
 fn a_broken_field_declaration_is_its_exact_error() {
     let mut e = env(true, Some(PropKind::Int));
     let (a, _) = functions(&mut e);
     let p = make(&mut e.vm, e.pawn, "Pawn_4");
-    let bc = body(&mut e, 2);
+    let bc = make(&mut e.vm, e.body, "BodyClass_Broken");
+    set(&mut e.vm, bc, "BodyComposition", Value::structure(e.composition, vec![Value::Int(2), Value::Int(0)]));
     set(&mut e.vm, p, "BodyClass", Value::Object(Some(bc)));
     let err = e.vm.call(a, Some(p), vec![]).unwrap_err();
-    let VmError::Script { message, .. } = &err else { panic!("{err:?}") };
-    assert_eq!(message, &wrong_field(WILLOW_PAWN, "Mesh", "an object reference"));
+    let VmError::Script { function, message } = &err else { panic!("{err:?}") };
+    assert_eq!(function, UNIT);
+    assert_eq!(message, &no_attachments("WillowGame.BodyClassDefinition"));
 }
 
 /// Step 1: a receiver that is not a WillowPawn is a script error.
@@ -189,7 +197,8 @@ fn a_receiver_that_is_not_a_willow_pawn_is_refused() {
     let (a, _) = functions(&mut e);
     let o = make(&mut e.vm, e.object, "NotAPawn");
     let err = e.vm.call(a, Some(o), vec![]).unwrap_err();
-    assert!(matches!(err, VmError::Script { .. }), "{err:?}");
+    let VmError::Script { message, .. } = &err else { panic!("{err:?}") };
+    assert_eq!(message, &not_a_pawn("Core.Object"));
 }
 
 /// First-wins: a key bound before keeps its binding.
@@ -202,4 +211,79 @@ fn an_earlier_binding_keeps_its_key() {
     register(&mut e.vm).unwrap();
     let p = make(&mut e.vm, e.pawn, "Pawn_5");
     assert_eq!(e.vm.call(f, Some(p), vec![]).unwrap().ret, Value::Bool(true));
+}
+
+/// The lazy case's packages (invented): a toy WillowGame whose `BodyClassDefinition` declares an invented `NextBody`,
+/// and `GD_ToyBody.upk` with two body classes. `Holder`'s `NextBody` names `Target`, so reading it from the loaded holder
+/// gives `Target` as the store's unloaded handle (the slice's case: Maya's body class at link 1's stop).
+fn lazy_packages() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let definition = t.class("BodyClassDefinition", object);
+        t.prop("Object", definition, "NextBody", 0, object);
+        t.build()
+    };
+    let bodies = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let definition = t.p.add_import("Core", "Class", willow, "BodyClassDefinition");
+        let mut target = ow_package::testkit::ints(&[0]);
+        target.extend_from_slice(&t.none);
+        let target = t.p.add_export(definition, "Target", target);
+        let mut holder = ow_package::testkit::ints(&[0]);
+        holder.extend(t.p.tag("NextBody", "ObjectProperty", &ow_package::testkit::ints(&[target])));
+        holder.extend_from_slice(&t.none);
+        t.p.add_export(definition, "Holder", holder);
+        t.build()
+    };
+    (core, willow, bodies)
+}
+
+/// Step 3, the slice's stop: a `BodyClass` the store has not loaded is the named `NotRead`, with the record and the
+/// handle's full path, no prefix, and the handle still unloaded.
+#[test]
+fn an_unloaded_body_class_is_not_read_and_stays_unloaded() {
+    let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-lazy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (core, willow, bodies) = lazy_packages();
+    let files: Vec<(&str, &[u8])> =
+        vec![("Core.upk", core.as_slice()), ("WillowGame.upk", willow.as_slice()), ("GD_ToyBody.upk", bodies.as_slice())];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let object = vm.find_class("Core.Object").unwrap();
+    let body = vm.find_class("WillowGame.BodyClassDefinition").unwrap();
+    class(&mut vm, HELPER, object, &[]);
+    let pawn = class(&mut vm, WILLOW_PAWN, object, &[("BodyClass", PropKind::Object { class: body })]);
+    let player = class(&mut vm, "WillowGame.WillowPlayerPawn", pawn, &[]);
+    let a = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
+    let b = native(&mut vm, "WillowGame.WillowPlayerPawn.InitializePawnMeshes", player);
+    register(&mut vm).unwrap();
+    let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let class_id = vm.space.heap.get(holder).unwrap().class;
+    let p = vm.space.prop(class_id, "NextBody").unwrap();
+    let Value::Object(Some(target)) = vm.space.read(holder, PropAddr::scalar(p)).unwrap().clone() else {
+        panic!("the holder names its target")
+    };
+    assert!(vm.defs.is_unloaded(&vm.space, target), "a genuinely unloaded handle");
+    let maya = make(&mut vm, player, "Maya_6");
+    set(&mut vm, maya, "BodyClass", Value::Object(Some(target)));
+    for f in [a, b] {
+        let err = vm.call(f, Some(maya), vec![]).unwrap_err();
+        let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+        assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
+        assert_eq!(n.what, lazy_body_class("GD_ToyBody.Target"));
+        assert_eq!(n.record, RECORD);
+        assert!(!ow_core::notyet::is_partial_writes(&n.what));
+        assert!(vm.defs.is_unloaded(&vm.space, target), "nothing was loaded");
+    }
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
 }
