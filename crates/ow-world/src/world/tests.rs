@@ -560,6 +560,28 @@ fn package() -> Vec<u8> {
     let mut comp = ow_package::testkit::Export::new(toy_component, "ToyComponent0", comp_payload);
     comp.outer = arch_ref;
     t.p.add_export_with(comp);
+    // The inherited-component test (decision 2026-11-19-91): `ParentComp`, the export a parent class default's
+    // component stands for (the test makes that component by hand); `Toolbox_Inherit`, an archetype whose own
+    // `ToyComponent0` has `ParentComp` as its export archetype; `Toolbox_Bare`, an archetype with no sub-object.
+    let parent_ref = t.p.next_export();
+    let mut parent_payload = ow_package::testkit::ints(&[0, 0]);
+    parent_payload.extend(t.p.int_tag("Payload", 5));
+    parent_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toy_component, "ParentComp", parent_payload));
+    let inherit_ref = t.p.next_export();
+    let mut inherit_payload = ow_package::testkit::ints(&[0]);
+    inherit_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Inherit", inherit_payload));
+    let mut own_payload = ow_package::testkit::ints(&[0, 0]);
+    own_payload.extend(t.p.int_tag("Payload", 9));
+    own_payload.extend_from_slice(&t.none);
+    let mut own = ow_package::testkit::Export::new(toy_component, "ToyComponent0", own_payload);
+    own.outer = inherit_ref;
+    own.archetype = parent_ref;
+    t.p.add_export_with(own);
+    let mut bare_payload = ow_package::testkit::ints(&[0]);
+    bare_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Bare", bare_payload));
     t.p.build()
 }
 
@@ -1474,6 +1496,97 @@ fn templates_off_cannot_spawn_from_leave_nothing_behind() {
             assert_eq!(x.w.vm.space.heap.len(), heap, "{what}: nothing on the heap");
             assert_eq!(x.w.actors().borrow().list().len(), list, "{what}: nothing in the level list");
         }
+    });
+}
+
+/// A component a parent class's default object owns, held by a template's slot (decision 2026-11-19-91), hand-made:
+/// a `ToyComponent` named `ParentComp`, standing for that export of the fixture's package, outered to a hand-made
+/// `Default__ToyParent`.
+fn parent_default_component(x: &mut Fx, payload: i32) -> ObjRef {
+    let path = ow_core::ObjectPath::parse("Engine.Toolbox_Arch").unwrap();
+    let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+    let ow_object::heap::Origin::Export { package, .. } = x.w.vm.space.heap.get(arch).unwrap().origin else {
+        panic!("the fixture's archetype is an export");
+    };
+    let index = {
+        let (code, store) = x.w.vm.defs.code_mut();
+        code.find_export(store, package, "ParentComp")
+    };
+    assert!(index > 0, "the fixture exports ParentComp");
+    let toolbox = x.class("Toolbox");
+    let owner = x.w.vm.space.alloc(toolbox, "Default__ToyParent", None, ow_object::heap::Origin::Runtime).unwrap();
+    let component_class = x.class("ToyComponent");
+    let made = x
+        .w
+        .vm
+        .space
+        .alloc(component_class, "ParentComp", Some(owner), ow_object::heap::Origin::Export { package, index })
+        .unwrap();
+    set_field(&mut x.w.vm.space, made, "Payload", Value::Int(payload)).unwrap();
+    made
+}
+
+/// A template whose slot names a parent class default's component (decision 2026-11-19-91): the template's own
+/// sub-object whose export archetype is that component stands for it, and the spawned actor gets its own copy of that
+/// sub-object, with the sub-object's values; the parent default's component and the template are left as they were.
+#[test]
+fn an_inherited_component_is_instanced_from_the_templates_own_sub_object() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let parent = parent_default_component(&mut x, 5);
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Inherit").unwrap();
+        let template = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        set_field(&mut x.w.vm.space, template, "Comp", Value::Object(Some(parent))).unwrap();
+        let plan = crate::actors::plan_components(&mut x.w.vm, template).unwrap();
+        assert_eq!(plan.inherited.len(), 1, "{plan:?}");
+        let (reference, own) = plan.inherited[0];
+        assert_eq!(reference, parent);
+        assert_eq!(x.w.vm.space.heap.get(own).unwrap().outer, Some(template), "the stand-in is the template's own");
+        assert_eq!(plan.originals, vec![own]);
+        let toolbox = x.class("Toolbox");
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(template));
+        let actor = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+        let Value::Object(Some(copy)) = field(&x.w.vm.space, actor, "Comp").unwrap() else {
+            panic!("no component");
+        };
+        assert!(copy != parent && copy != own, "the actor's own copy");
+        assert_eq!(x.w.vm.space.heap.get(copy).unwrap().outer, Some(actor));
+        assert_eq!(field(&x.w.vm.space, copy, "Payload").unwrap(), Value::Int(9), "the template sub-object's values");
+        assert_eq!(field(&x.w.vm.space, template, "Comp").unwrap(), Value::Object(Some(parent)), "the template unchanged");
+        assert_eq!(field(&x.w.vm.space, parent, "Payload").unwrap(), Value::Int(5), "the parent default's unchanged");
+        // A second actor gets another copy.
+        let other = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+        let Value::Object(Some(second)) = field(&x.w.vm.space, other, "Comp").unwrap() else {
+            panic!("no component");
+        };
+        assert_ne!(second, copy);
+    });
+}
+
+/// A template with no sub-object made from the parent default's component keeps the refusal, with nothing made.
+#[test]
+fn an_inherited_component_without_a_stand_in_is_refused() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let parent = parent_default_component(&mut x, 5);
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Bare").unwrap();
+        let template = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        set_field(&mut x.w.vm.space, template, "Comp", Value::Object(Some(parent))).unwrap();
+        let (heap, list) = (x.w.vm.space.heap.len(), x.w.actors().borrow().list().len());
+        let toolbox = x.class("Toolbox");
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(template));
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.what.contains("with no sub-object of the template made from it"), "{n}");
+                assert!(n.record.contains("2026-11-19-91"), "{n}");
+            }
+            e => panic!("expected NotYet, got {e}"),
+        }
+        assert_eq!(x.w.vm.space.heap.len(), heap, "nothing on the heap");
+        assert_eq!(x.w.actors().borrow().list().len(), list, "nothing in the level list");
     });
 }
 

@@ -66,6 +66,16 @@ MissionTracker.GetAllMissions", the bridge's own `LayerAbsent`; the other links 
 not run (no C++ change). No real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under
 ignored `local/p2/mission-numbers/`.
 
+**INHERITED-COMPONENT-INSTANCING (2026-11-19, desktop, stacked on #470 6268e6d):** AI-assisted (Claude Code, Claude
+Opus 5.5). A spawn's template slot naming a parent class default's component stands for the template's own
+sub-object of that export archetype, which is copied per actor; link 2's driver spawns from the store's holder of the
+dummy archetype and checks that the dummy owns its components. `cargo build --workspace -j 2` clean; `cargo test
+--workspace -j 2` 2,190 passed / 0 failed / 46 ignored (2 new in `ow-world`); clippy flags nothing new in the changed
+files; `crate_edges_test.py` 19 OK; `check_slice_run_off_test.py` OK; decisions check OK (1 added). Installed Off
+`--slice-gate` strict, under the machine run lock: link 2 `notyet` 3/4 before, **`ok` 4/4** after; link 3 `notyet`, 0
+steps, stop `maya:8`, unchanged; the other rows byte-identical; 1 ok / 13 NotYet / 0 errors. ctest and verify_packages
+not run (no C++ change). `UNVERIFIED` in game. Decision 2026-11-19-91; logs under ignored `local/p2/inherited/`.
+
 **LINK-2-FIGHT-AREA r2 (2026-11-19, desktop, on main 0235937):** AI-assisted (Claude Code, Claude Opus 5.5). Review r2
 of #470: the cylinder read from the package before any write, a grounded reach walk, the partial-writes prefix after the
 first write, typed world setup. `cargo build -p ow-cli -j 2` clean; `cargo test -p ow-cli -j 2` 110 passed / 0 failed / 1
