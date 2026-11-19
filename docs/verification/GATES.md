@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-PLAYER-CLASS-B (2026-11-19, desktop, on main df99b25):** AI-assisted (Claude Code, Claude Opus 5.5). The pawn
+archetype preload (a harness input) and the player controller's starting values NotYet in Off; review r1 of #426 folded
+in. `cargo build --workspace` clean; `cargo test --workspace` 2,017 passed / 0 failed / 45 ignored; ctest at `-j 2`
+173/173, 0 failed, 535.32 s; verify_packages 9 packages, all class bodies exact. Installed, Off: `--combat-run maya:8`
+and slice-gate links 1, 3, 4, 5, 13 and 14 move from `FindAlreadyLoadedObject` of `GD_Siren_Streaming.Pawn_Siren` to
+`WillowPlayerController.ApplyCharacterClassStartingValues`'s NotYet (the unnamed script call of NATIVE_COMBAT_GROUNDWORK.md
+1.10 step 2); both harness inputs are in the run's log; links 10 to 12 unchanged.
+
 **FIX-ACTIVATE-EVENT (2026-11-19, pc-hummer, rebased onto main f64aeba9; installed runs on main cb01e96f):** AI-assisted (Claude Code, Opus 5.5).
 `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,021 passed / 0 failed / 45 ignored after the rebase
 (3 new in `ow-ai`, 76/76 there). Release CLI build clean. ctest `-j 4` 173/173 passed, 113.12 s (C++ unchanged; existing

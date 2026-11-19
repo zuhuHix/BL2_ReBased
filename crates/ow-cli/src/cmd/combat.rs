@@ -244,6 +244,26 @@ impl PlayerBridge for MissionBridge {
         if has_class {
             return Ok(());
         }
+        // The second harness input (decision 2026-11-19-46): the class's pawn archetype is loaded first, through the
+        // definition store, so the switch takes the note's found branch. It stands in for the streaming load the note
+        // does not settle (NATIVE_PLAYER_CLASS.md section 3 step 4), UNVERIFIED. The path is the class's own
+        // `PawnArchetypePath`.
+        if let Some(definition) = self.player_class(vm)? {
+            let dclass = vm.space.heap.get(definition)?.class;
+            let path = vm
+                .space
+                .prop(dclass, "PawnArchetypePath")
+                .map(|p| vm.space.read(definition, ow_object::ids::PropAddr::scalar(p)).cloned())
+                .transpose()?;
+            if let Some(Value::Str(text)) = path
+                && let Ok(path) = ObjectPath::parse(&text)
+            {
+                vm.log.push(format!("harness input: preload {text} (UNVERIFIED stand-in for the streaming load)"));
+                let loaded = vm.defs.find(&mut vm.space, &path);
+                vm.log.extend(vm.defs.take_log());
+                loaded.map_err(VmError::Def)?;
+            }
+        }
         let state = vm.space.heap.get(controller)?.state;
         let Some(f) = vm.find_method(class, "ServerPlayerSelectClass", state)? else {
             return Err(VmError::Script {
@@ -251,6 +271,7 @@ impl PlayerBridge for MissionBridge {
                 message: "the player's controller has no ServerPlayerSelectClass".into(),
             });
         };
+        vm.log.push(format!("harness input: ServerPlayerSelectClass({PLAYER_CLASS_PATH})"));
         vm.call(f, Some(controller), vec![Value::Str(PLAYER_CLASS_PATH.into())])?;
         Ok(())
     }

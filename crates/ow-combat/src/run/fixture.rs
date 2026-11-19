@@ -1202,6 +1202,8 @@ pub fn willow_game() -> Vec<u8> {
     w.prop("Object", cause, "DamageTypeDefinition", 0, 0);
     let player_controller = w.cls("WillowPlayerController", controller);
     w.prop("Object", player_controller, "PlayerReplicationInfo", 0, 0);
+    // The player controller's own native override of the starting values (decision 2026-11-19-46).
+    w.native(player_controller, "ApplyCharacterClassStartingValues", &[P("Object", "inCharacterClass", 0, 0)], None);
     // The game's route to the player's health pool, cut to its health step (NATIVE_COMBAT_GROUNDWORK.md section
     // 1.10): ApplyCharacterClassDefaults(CharClass, P) { P.SetHealthResourcePoolDefinition(ResourcePoolManager,
     // CharClass.HealthPoolDefinition); }

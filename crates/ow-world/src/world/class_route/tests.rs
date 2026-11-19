@@ -392,3 +392,41 @@ fn reference_leaves_both_unbound() {
     assert!(!x.vm.has_native(GET_DEFINITION));
     assert!(!x.vm.has_native(LOAD_ASYNC));
 }
+
+/// Review r1 of #426: a run-time object with no outer that shares the name may be the object at the path, so the
+/// lookup answers `NotYet` before any load; and an object argument of the wrong kind is an error, never None.
+#[test]
+fn an_unnamed_match_is_not_yet_and_a_wrong_kind_argument_is_an_error() {
+    let mut x = fx(ParityMode::Off);
+    let class = x.class("PlayerClassDefinition");
+    x.vm.space
+        .alloc(class, "ToyClassDef", None, ow_object::heap::Origin::Runtime)
+        .unwrap();
+    assert!(not_read(
+        &x.get_definition(Some(class), "GearboxFramework.ToyClassDef")
+    ));
+    assert_eq!(
+        x.vm.space.live(class).count(),
+        1,
+        "the store loaded nothing: only the run-time object is live"
+    );
+    let manager = x.make("WillowPlayerPawnDataManager");
+    let f =
+        x.vm.find_function("GearboxFramework.WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync")
+            .unwrap();
+    let event = Value::Name(x.vm.space.names.intern("SwitchPlayerClass"));
+    let args = vec![
+        Value::Str("GearboxFramework.ToyPawn".into()),
+        Value::Int(3),
+        Value::Object(None),
+        Value::Object(None),
+        Value::Int(0),
+        Value::Float(0.0),
+        event,
+    ];
+    let r = x.vm.call(f, Some(manager), args).map(|d| d.ret);
+    assert!(
+        matches!(&r, Err(VmError::Script { message, .. }) if message.contains("expected an object")),
+        "{r:?}"
+    );
+}

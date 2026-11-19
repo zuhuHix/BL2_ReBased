@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane FIX-PLAYER-CLASS (implementer; slice link 1). This lane implemented
 from `docs/verification/NATIVE_PLAYER_CLASS.md` (analyst lane LINK-1-NEXT, decision 2026-11-19-31) alone. It opened
-no raw analysis output, Ghidra or REA. That note lands with the analyst's branch, which has to land first.
+no raw analysis output, Ghidra or REA.
 
 - **The harness input (hub decision).** In Off, the `maya` step first calls the controller's installed
   `ServerPlayerSelectClass("GD_Siren.Character.CharClass_Siren")`, once. This is the class-select call the note

@@ -16,6 +16,11 @@ use super::{bind_fn, this};
 pub const RECORD: &str = "NATIVE_RESOURCE_POOL_IDLE.md";
 /// The record of the class starting values (lane FIX-MIND-ADOPT, decision 2026-11-19-26).
 pub const RECORD_STARTING: &str = "NATIVE_COMBAT_GROUNDWORK.md sections 1.10 and 1.11";
+/// The player controller's native override of the starting values (decision 2026-11-19-46).
+pub const PLAYER_STARTING_VALUES: &str = "WillowGame.WillowPlayerController.ApplyCharacterClassStartingValues";
+/// What that override leaves unread (section 1.10 step 2): the name of the parameterless script function it calls
+/// last. The override is native, so the installed script cannot name it; an analyst read of the override can.
+pub const PLAYER_STARTING_VALUES_OPEN: &str = "WillowPlayerController.ApplyCharacterClassStartingValues (native): the parameterless script function its last step calls is not named (NATIVE_COMBAT_GROUNDWORK.md section 1.10 step 2)";
 
 fn float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
     match required(vm, pool, name, "resource pool")? {
@@ -99,6 +104,13 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
         };
         apply_class_starting_values(c.vm, controller, class)?;
         Ok(Value::None)
+    })?;
+    // The player controller's own override is native too (its declaration carries no script; lane FIX-PLAYER-CLASS-B,
+    // decision 2026-11-19-46). It ends with a script call the record does not name (section 1.10 step 2), so it is
+    // refused before anything changes, naming that call, rather than running steps 1 and 2 and refusing halfway.
+    bind_fn(vm, PLAYER_STARTING_VALUES, |c| {
+        this(c, "WillowPlayerController.ApplyCharacterClassStartingValues")?;
+        Err(NotYet::not_read(PLAYER_STARTING_VALUES_OPEN, RECORD_STARTING).into())
     })?;
     // Two natives of the AI mind's class route (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).
     bind_fn(vm, "WillowGame.WillowPawn.SetDefaultPhysics", |c| {
