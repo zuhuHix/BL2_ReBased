@@ -11,9 +11,9 @@ policy refuses them, until a fresh implementer codes them from this note alone.
 
 **Why it matters.** Off `--combat-run maya:8` stops on `WillowGameInfo.GetSkillManager()` (installed, main 86c28d00).
 That is link 1 (`spawn_maya`) of the slice gate, and links 3, 4, 5, 13 and 14 wait on it. The `maya` step runs the
-controller's script `ApplyCharacterClassDefaults`. Its first statement is
-`WillowGameInfo(WorldInfo.Game).GetSkillManager().DeactivateAllSkillsForInstigator(Self)`, so the second native here is
-the next one that path reaches.
+controller's script `ApplyCharacterClassDefaults`. Its first statement asks the game info for its skill manager and
+calls `DeactivateAllSkillsForInstigator` on it with the controller, so the second native here is the next one that
+path reaches.
 
 ## Summary
 
