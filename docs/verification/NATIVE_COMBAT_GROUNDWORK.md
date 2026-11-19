@@ -454,8 +454,9 @@ Does nothing without a world and a game replication info. With them:
 
 ## Not read yet
 
-- The unnamed script function the player-controller override of `ApplyCharacterClassStartingValues` calls at its end. (The
-  `WillowMind` case was read on 2026-11-19: no override, section 1.11.)
+- ~~The unnamed script function the player-controller override of `ApplyCharacterClassStartingValues` calls at its
+  end.~~ Since read: it is `OnPlayerClassChange` (NATIVE_CLASS_STARTING_VALUES.md). (The `WillowMind` case was read on
+  2026-11-19: no override, section 1.11.)
 - The FName identities of the three pool script functions called from native (read as `InitializeAuthoritative`, `Reinitialize`, `ShutDown` from their arguments and effect).
 - The vehicle provider path of `Controller.GetResourcePoolForResourceDefinition`; `WillowVehicle` pool natives; the replicated mirrors of the manager.
 - The kill filter helper that derives the damage causer type; the multimap that keys objectives by stat name and its population; the mission-weapon comparison.

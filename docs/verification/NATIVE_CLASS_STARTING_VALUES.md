@@ -22,8 +22,8 @@ names it and states the whole rule in one place.
 | `WillowPlayerController.ApplyCharacterClassStartingValues(CharacterClassDefinition)` | native, an override of the one above | high | UNVERIFIED |
 | `WillowPlayerController.OnPlayerClassChange()` | script event, called by the override | high | UNVERIFIED |
 
-Both natives share one script entry. Each controller class answers with its own rule: `WillowPlayerController` with
-the override, and every other controller (an AI mind included, NATIVE_COMBAT_GROUNDWORK.md section 1.11) with the base.
+The script native is declared on `Controller`. A `WillowPlayerController` behaves as in section 2, and every other
+controller, AI minds included (NATIVE_COMBAT_GROUNDWORK.md section 1.11), as in section 1.
 
 ## 1. The base: Controller.ApplyCharacterClassStartingValues(Class)
 
@@ -38,6 +38,13 @@ In this order:
    sections 1.4 and 1.10).
 3. Nothing else: no attribute, inventory, pawn or health change, and no role check.
 
+**Stored references that are not recreated.** Neither native clears `AccuracyPool` or `OffHandAccuracyPool` (nor,
+in section 2, `ExpPool`, `SkillCooldownPool` or `MeleeSkillCooldownPool`). With no class, an unset definition, a
+controller that is not the authority, or no `PlayerClass`, the reference keeps what it held before step 1. Its pool
+was deleted in step 1, so the reference no longer names a live pool. By the manager's validity rule
+(NATIVE_COMBAT_GROUNDWORK.md section 1.2, the `PoolGUID` check) it then reads as not valid, unless a new pool in the
+same slot happens to carry the same GUID. That last outcome was not checked (UNVERIFIED; open question 2).
+
 ## 2. The player-controller override
 
 In this order:
@@ -51,22 +58,15 @@ In this order:
 
    This corrects one detail of NATIVE_COMBAT_GROUNDWORK.md section 1.10 step 2, which put the call inside the
    `PlayerClass` case: it needs only the authority.
-3. A controller that is not the authority gets only the base rule.
+3. A controller that is not the authority gets only the base rule. The three references above are then left as they
+were (section 1, "Stored references that are not recreated").
 
-## 3. OnPlayerClassChange (script, for reference)
+## 3. OnPlayerClassChange (script, orientation only)
 
-The event the override fires, in order:
-1. clears `InputContextSelector` and `PlayerSkillTree`, then rebuilds the skill tree (`InitPlayerSkillTree`, native,
-   already in NATIVE_INDEX.md);
-2. on the authority, with a `WillowPlayerReplicationInfo`:
-   - sets the replication info's `CharacterNameIdDef` to the player class's `CharacterNameId`;
-   - applies the controller's `PlayerMovementType` (`SetPlayerMovementType`);
-   - sets `PlayerPreferredCharacterName` to the class's default name (`GetCharacterClassDefaultName`);
-   - asks the replication info about the name (`IsInvalidName`);
-3. sets up the input devices (`SetupInputDevices`).
-
-Everything after the skill tree rebuild is script. A network client reaches the same event through
-`ClientNotifyClassChanged` instead.
+Its effects: the skill tree is rebuilt (through `InitPlayerSkillTree`, native, already in NATIVE_INDEX.md). On the
+authority, with a `WillowPlayerReplicationInfo`, the character name (from the class's `CharacterNameId`) and the
+movement type are set. Then the input devices are set up. The port runs the installed script; a network client
+reaches the same event through `ClientNotifyClassChanged`.
 
 ## 4. What the class definition supplies
 
@@ -81,7 +81,7 @@ accuracy, experience, action-skill cooldown and melee cooldown.
 
 ## 5. For an implementer, in the port's terms
 
-- One rule per controller class: the base for every controller, and the override for `WillowPlayerController`.
+- A `WillowPlayerController` behaves as in section 2, and every other controller as in section 1.
 - The override always runs the base first. The authority check gates the three extra pools and the event, and the
   `PlayerClass` check gates only the pools.
 - `OnPlayerClassChange` is installed script; the port runs it through the VM. Its one native, `InitPlayerSkillTree`,
@@ -91,9 +91,14 @@ accuracy, experience, action-skill cooldown and melee cooldown.
 
 1. Whether the class argument and the controller's `PlayerClass` can differ when the override runs (the base reads
    the argument, the override reads the field).
+2. After a class application that does not recreate a stored pool reference, whether the left reference can ever read
+   as valid again (a new pool in the same slot with the same `PoolGUID`). UNVERIFIED.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
 - After a class is applied to Maya's controller, read `ResourcePoolManager.ResourcePools[i].Definition` for every slot,
   and `ExpPool`, `SkillCooldownPool` and `MeleeSkillCooldownPool`.
 - Hook `OnPlayerClassChange` and confirm it runs once per class application on the host.
+- Before and after a class application, read `AccuracyPool`, `OffHandAccuracyPool`, `ExpPool`, `SkillCooldownPool`
+  and `MeleeSkillCooldownPool` (manager, slot, GUID) and `IsResourcePoolValid` on each, for a class that leaves one
+  of the definitions unset (open question 2).
