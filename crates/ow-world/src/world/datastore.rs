@@ -69,7 +69,11 @@
 //! - `GameEngine.GetDLCManager`: None (the hub's ruling: the port's engine has no DLC manager), so the refresh skips
 //!   the two DLC writes.
 //!
-//! [`UNREAD`] (the two mission numbers and the DLC manager's two queries) stay `NotYet { NotRead }`.
+//! - the two mission numbers, `GetActiveMissionNumber` and `GetActivePlotCriticalMissionNumber`, and the mission
+//!   screen's `UpdateMissionTextList` the accept reaches after the refresh: [`super::mission_numbers`] (lane
+//!   IMPL-MISSION-NUMBERS, decision 2026-11-19-93).
+//!
+//! [`UNREAD`] (the DLC manager's two queries) stay `NotYet { NotRead }`.
 //!
 //! **The refresh's write mark** (review r1 of #464, item 1): the refresh is the controller's script [`REFRESH`], run
 //! as script; the port wraps it (`Vm::wrap_script`) and keeps one mark per running refresh. A write inside it (the
@@ -111,10 +115,8 @@ pub const SETTINGS_DATASTORE: &str = "GetOnlineGameSettingsDatastore";
 pub const GLOBAL_DATA_STORES: [&str; 1] = ["WillowGame.WillowOnlineGameSettings_DataStore"];
 
 /// The natives after the settings are found that stay unread: `NotYet { NotRead }` in Off, marked after a write
-/// (module documentation).
-pub const UNREAD: [&str; 4] = [
-    "WillowGame.WillowPlayerController.GetActiveMissionNumber",
-    "WillowGame.WillowPlayerController.GetActivePlotCriticalMissionNumber",
+/// (module documentation). The two mission numbers left this list with decision 2026-11-19-93.
+pub const UNREAD: [&str; 2] = [
     "WillowGame.WillowDownloadableContentManager.HasCompatibilityData",
     "WillowGame.WillowDownloadableContentManager.StaticGetDlcContentIdForCurrentMap",
 ];
@@ -163,6 +165,12 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     bind(vm, SET_INT_PROPERTY, Rc::new(set_int_property))?;
     bind(vm, GET_CURR_PLAYTHROUGH, Rc::new(get_curr_playthrough))?;
     bind(vm, GET_DLC_MANAGER, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Object(None))))?;
+    {
+        use super::mission_numbers as m;
+        bind(vm, m::ACTIVE_MISSION_NUMBER, Rc::new(m::n_active_mission_number))?;
+        bind(vm, m::PLOT_CRITICAL_NUMBER, Rc::new(m::n_plot_critical_number))?;
+        bind(vm, m::UPDATE_MISSION_TEXT_LIST, Rc::new(m::n_update_mission_text_list))?;
+    }
     for path in PROVIDER_FUNCTIONS {
         let Ok(f) = vm.find_function(path) else { continue };
         if vm.function(f).is_some_and(|d| d.is_native()) {
