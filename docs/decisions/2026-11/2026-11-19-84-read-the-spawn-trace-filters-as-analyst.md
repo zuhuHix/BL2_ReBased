@@ -33,3 +33,17 @@ with the "filters are unread" term of section 3, open question 4, and step 5 of 
 
 **Open (in the note).** The primitive skip flag (bit 10; its name is unresolved by the layout tool), one further
 per-component test, and what the terrain bit does beyond entering the actor hash.
+
+**Review r1 of #465 (four findings, fixed in the note).**
+1. The query summaries apply the class rules per owner class, in a table for box tests and sweeps: a world-geometry
+   `Volume` without `bPawnsOnly` is tested, and movers follow their own row (no bit 128 shortcut), so sweeps test them
+   with or without `bWorldGeometry`. Section 2 says the sweeps also test movers.
+2. One Off policy: a candidate with the unread skip flag makes the query Unsupported (so a `NotYet` of kind
+   `NotRead`); the further per-component test is taken as passing; any terrain-specific effect of bit 8192 is
+   ignored. All UNVERIFIED.
+3. The box-test contract: `BlockZeroExtent` for a (0, 0, 0) extent, `BlockNonZeroExtent` otherwise (read); the
+   effective `complex` mode passed explicitly; a primitive without per-polygon collision tested simple (the game's
+   answer) versus collision the service lacks (Unsupported); "Hit" throughout.
+4. Sweep hit selection (read further): BSP first, then actors walked up to the BSP hit plus 5 units, the smallest
+   actor fraction kept, then the two sorted by an unread comparator (taken as the smaller fraction). Exact ties with
+   different locations or normals are Unsupported. After the actor is made, Off rolls nothing back.
