@@ -8,6 +8,8 @@ use ow_object::heap::Origin;
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
+use std::rc::Rc;
+
 use ow_vm::api::FunctionDecl;
 use ow_vm::error::VmError;
 
@@ -301,6 +303,7 @@ impl ow_attr::api::ValueResolver for WriteFails {
         _sys: &ow_attr::AttributeSystem,
         _resolver: ObjRef,
         _context: ObjRef,
+        _op: ow_attr::api::ProbeOp,
         _cx: &mut ow_attr::api::EvalCx<'_>,
     ) -> Result<(), ow_attr::api::AttrError> {
         Ok(())
@@ -446,6 +449,42 @@ fn the_shape_checks_refuse_before_any_write() {
     let _ = object;
 }
 
+/// The path of `AttributeInitializationData`.
+const AID: &str = "Engine.AttributeInitializationDefinition.AttributeInitializationData";
+
+/// The noun classes: a subclass of the item class `class` with a `NounState`, and the noun resolver class.
+fn noun_classes(w: &mut World, class: ClassId) -> (ClassId, ClassId) {
+    let object = w.class("Core.Object");
+    let aid = w.vm.space.classes.struct_by_path(AID).unwrap();
+    let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
+    let fields = vec![
+        d(w, "NounName", PropKind::Name),
+        d(w, "Value", PropKind::Float),
+        d(w, "BaseValue", PropKind::Float),
+        d(w, "ModifierStack", PropKind::Array(Box::new(PropKind::Object { class: object }))),
+        d(w, "ReplicationStrategy", PropKind::Byte { enum_: None }),
+        d(w, "IndexInReplicationArray", PropKind::Int),
+    ];
+    let state = w.vm.space.classes.define_struct("GearboxFramework.INounAttributeProvider.NounAttributeState", None, fields).unwrap();
+    let decls = vec![d(w, "NounState", PropKind::Array(Box::new(PropKind::Struct(state))))];
+    let noun_item = w.vm.space.classes.define("Test.NounSlotWeapon", Some(class), decls).unwrap();
+    let decls = vec![d(w, "DefaultValue", PropKind::Struct(aid)), d(w, "ReplicationStrategy", PropKind::Byte { enum_: None })];
+    let noun = w.vm.space.classes.define("GearboxFramework.NounAttributeValueResolver", Some(object), decls).unwrap();
+    (noun_item, noun)
+}
+
+/// A noun attribute named `name` on the weapon context, its noun resolver a subobject (the key is the attribute's
+/// name) with `DefaultValue` `default`.
+fn noun_attribute(w: &mut World, noun: ClassId, name: &str, default: Value) -> ObjRef {
+    let ctx = w.obj("Engine.WeaponAttributeContextResolver", &format!("{name}.Context"));
+    let attr = w.obj("Engine.AttributeDefinition", name);
+    let r = w.vm.space.alloc(noun, "NounAttributeValueResolver_0", Some(attr), Origin::Runtime).unwrap();
+    w.set(r, "DefaultValue", default);
+    w.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(ctx))]));
+    w.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(r))]));
+    attr
+}
+
 /// The noun case of review r1 of #483: slot 0's attribute goes through a noun resolver and the item holds no entry for
 /// it, and slot 1's value resolver is not read. The chain check of slot 0 must not create the entry, so the call is
 /// refused by slot 1's `NotYet`, unprefixed, with `NounState` unchanged.
@@ -453,30 +492,9 @@ fn the_shape_checks_refuse_before_any_write() {
 fn the_chain_check_creates_no_noun_entry() {
     let mut w = World::new();
     let (class, f) = setup(&mut w);
-    let object = w.class("Core.Object");
-    let aid = w.vm.space.classes.struct_by_path("Engine.AttributeInitializationDefinition.AttributeInitializationData").unwrap();
-    let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
-    let fields = vec![
-        d(&mut w, "NounName", PropKind::Name),
-        d(&mut w, "Value", PropKind::Float),
-        d(&mut w, "BaseValue", PropKind::Float),
-        d(&mut w, "ModifierStack", PropKind::Array(Box::new(PropKind::Object { class: object }))),
-        d(&mut w, "ReplicationStrategy", PropKind::Byte { enum_: None }),
-        d(&mut w, "IndexInReplicationArray", PropKind::Int),
-    ];
-    let state = w.vm.space.classes.define_struct("GearboxFramework.INounAttributeProvider.NounAttributeState", None, fields).unwrap();
-    let decls = vec![d(&mut w, "NounState", PropKind::Array(Box::new(PropKind::Struct(state))))];
-    let noun_item = w.vm.space.classes.define("Test.NounSlotWeapon", Some(class), decls).unwrap();
-    let decls = vec![d(&mut w, "DefaultValue", PropKind::Struct(aid)), d(&mut w, "ReplicationStrategy", PropKind::Byte { enum_: None })];
-    let noun = w.vm.space.classes.define("GearboxFramework.NounAttributeValueResolver", Some(object), decls).unwrap();
-    // The attribute, with the noun resolver as its subobject (the key is the attribute's name).
-    let ctx = w.obj("Engine.WeaponAttributeContextResolver", "Test.NounAttr.Context");
-    let attr = w.obj("Engine.AttributeDefinition", "Attribute_ToyNoun");
-    let r = w.vm.space.alloc(noun, "NounAttributeValueResolver_0", Some(attr), Origin::Runtime).unwrap();
+    let (noun_item, noun) = noun_classes(&mut w, class);
     let default = w.init(3.0);
-    w.set(r, "DefaultValue", default);
-    w.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(ctx))]));
-    w.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(r))]));
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyNoun", default);
     let unread = chained(&mut w, "Test.UnreadValue", &[Some("Test.UnreadValueResolver")]);
     let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
     let s1 = slot(&mut w, true, false, false, Some(unread), 1.0);
@@ -537,4 +555,277 @@ fn the_first_removal_s_notification_not_yet_is_marked() {
     assert_eq!(n.what, "stopped after partial writes: the loud test notification");
     assert_eq!((n.missing.clone(), n.record), (Missing::NotRead, "TOY_NOTIFY.md"));
     assert_eq!(w.get(item, "LoudModifierStack"), Value::array(vec![]), "the removal's stack change stays");
+}
+
+// ---- lane FIX-483-FOLLOWUP (the hub's review follow-up of landed #483) -------------------------------------------
+
+/// Slot 0 is a noun attribute with no entry on the item, whose `DefaultValue` `default` makes; slot 1's value resolver
+/// is not read. Returns the world, the item and the call's refusal; the caller checks what the probe must not have
+/// done.
+fn noun_probe_then_refusal(default: impl FnOnce(&mut World, ClassId) -> Value) -> (World, ObjRef, VmError) {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    let d = default(&mut w, noun);
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", d);
+    let unread = chained(&mut w, "Test.UnreadValue", &[Some("Test.UnreadValueResolver")]);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let s1 = slot(&mut w, true, false, false, Some(unread), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0, s1]);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    (w, item, e)
+}
+
+/// The refusal is slot 1's typed `NotYet`, unprefixed (the preflight wrote nothing).
+fn assert_slot_1_refusal(e: &VmError) {
+    let VmError::NotYet(n) = e else { panic!("{e:?}") };
+    assert!(!n.what.contains("partial writes"), "{n}");
+    assert!(n.what.contains("Test.UnreadValueResolver"), "slot 1's refusal: {n}");
+}
+
+/// F1: a missing entry's `DefaultValue` names another noun attribute on the same context (`BaseValueAttribute`). The
+/// probe validates the default without evaluating it, so the nested noun's entry is not created before slot 1's
+/// refusal.
+#[test]
+fn the_probe_evaluates_no_nested_noun_default() {
+    let (w, item, e) = noun_probe_then_refusal(|w, noun| {
+        let inner_default = w.init(2.0);
+        let inner = noun_attribute(w, noun, "Attribute_ToyInner", inner_default);
+        w.st(AID, vec![("BaseValueAttribute", Value::Object(Some(inner))), ("BaseValueScaleConstant", Value::Float(1.0))])
+    });
+    assert_slot_1_refusal(&e);
+    assert_eq!(w.get(item, "NounState"), Value::array(vec![]), "no entry for the nested noun or the outer one");
+}
+
+/// An `InitializationDefinition` subclass whose `RandomVariance` is enabled, from 1 to 5 (the other parts off).
+fn variance_definition(w: &mut World) -> ObjRef {
+    let aid = w.vm.space.classes.struct_by_path(AID).unwrap();
+    let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
+    let st = |w: &mut World, path: &str, fields: &[(&str, PropKind)]| {
+        let decls = fields.iter().map(|(n, k)| d(w, n, k.clone())).collect();
+        w.vm.space.classes.define_struct(path, None, decls).unwrap()
+    };
+    let formula = st(w, "Test.VarianceDefinition.Formula", &[("bEnabled", PropKind::Bool)]);
+    let conditional = st(w, "Test.VarianceDefinition.Conditional", &[("bEnabled", PropKind::Bool)]);
+    let variance = st(
+        w,
+        "Test.VarianceDefinition.Variance",
+        &[
+            ("bEnabled", PropKind::Bool),
+            ("LowerBound", PropKind::Struct(aid)),
+            ("UpperBound", PropKind::Struct(aid)),
+            ("bUseIntegerRandomization", PropKind::Bool),
+        ],
+    );
+    let range = st(
+        w,
+        "Test.VarianceDefinition.Range",
+        &[("bEnableMinValueRestriction", PropKind::Bool), ("bEnableMaxValueRestriction", PropKind::Bool)],
+    );
+    let byte = PropKind::Byte { enum_: None };
+    let decls = vec![
+        d(w, "ValueFormula", PropKind::Struct(formula)),
+        d(w, "ConditionalInitialization", PropKind::Struct(conditional)),
+        d(w, "RandomVariance", PropKind::Struct(variance)),
+        d(w, "RangeRestriction", PropKind::Struct(range)),
+        d(w, "BaseValueMode", byte.clone()),
+        d(w, "RoundingMode", byte),
+    ];
+    let parent = w.class("Engine.AttributeInitializationDefinition");
+    w.vm.space.classes.define("Test.VarianceDefinition", Some(parent), decls).unwrap();
+    let def = w.obj("Test.VarianceDefinition", "Test.Variance");
+    let (low, high) = (w.init(1.0), w.init(5.0));
+    let v = w.st("Test.VarianceDefinition.Variance", vec![("bEnabled", Value::Bool(true)), ("LowerBound", low), ("UpperBound", high)]);
+    w.set(def, "RandomVariance", v);
+    def
+}
+
+/// F1: a missing entry's `DefaultValue` has an enabled random variance. The probe draws nothing before slot 1's
+/// refusal; the control (no slot 1) shows the default is evaluated once, by the add that creates the entry.
+#[test]
+fn the_probe_draws_no_variance_and_the_add_evaluates_once() {
+    let mut rng = None;
+    let (w, item, e) = noun_probe_then_refusal(|w, _| {
+        let def = variance_definition(w);
+        rng = Some(w.vm.rng.clone());
+        w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))])
+    });
+    assert_slot_1_refusal(&e);
+    assert_eq!(w.get(item, "NounState"), Value::array(vec![]), "no entry created");
+    assert_eq!(Some(w.vm.rng.clone()), rng, "no variance drawn");
+    // The control: one slot, so the call goes through; the entry's creation draws once.
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    let def = variance_definition(&mut w);
+    let default = w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", default);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0]);
+    let mut once = w.vm.rng.clone();
+    ow_core::rand::Rand15::rand15(once.crt(ow_core::rand::CrtStream::AttributeVariance));
+    call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    assert_eq!(w.get(item, "NounState").elements().unwrap().len(), 1, "the add created the entry");
+    assert_eq!(w.vm.rng, once, "one draw: the default evaluated once");
+}
+
+/// F2: the out argument aliases the item's `Mods` (as a script passing an instance variable does). Slot 0's add
+/// succeeds; slot 1's add notifies, and the notification appends a sentinel to `Mods`. Each record goes to the live out
+/// argument at once, so a refusal at slot 1 keeps slot 0's record and the sentinel; without the refusal, no final
+/// assignment overwrites the sentinel.
+#[test]
+fn each_record_goes_to_the_live_out_argument_at_once() {
+    use std::cell::Cell;
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let modifier = w.class("Core.AttributeModifier");
+    let applied = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let d = |w: &mut World, n: &str, k: PropKind, flags: u64| PropertyDecl::new(w.vm.space.names.intern(n), k).with_flags(flags);
+    let decls = vec![
+        d(&mut w, "Loud", PropKind::FloatAttribute, PropertyDecl::STACK_ATTRIBUTE | PropertyDecl::NOTIFY),
+        d(&mut w, "LoudBaseValue", PropKind::FloatAttribute, PropertyDecl::PLAIN_ATTRIBUTE),
+        d(&mut w, "LoudModifierStack", PropKind::Array(Box::new(PropKind::Object { class: modifier })), 0),
+        d(&mut w, "Mods", PropKind::Array(Box::new(PropKind::Struct(applied))), 0),
+    ];
+    let alias_class = w.vm.space.classes.define("Test.AliasSlotWeapon", Some(class), decls).unwrap();
+    let (v, b, s) = (w.vm.space.names.intern("Loud"), w.vm.space.names.intern("LoudBaseValue"), w.vm.space.names.intern("LoudModifierStack"));
+    w.vm.space.classes.link_attribute(alias_class, v, b, s).unwrap();
+    let mods = w.vm.space.prop(alias_class, "Mods").unwrap();
+    let sentinel_mod = w.obj("Core.AttributeModifier", "Test.Sentinel");
+    let a = w.weapon_bonus;
+    let sentinel = ow_attr::api::AppliedEffect { context: sentinel_mod, attribute: a, modifier: sentinel_mod };
+    let refuse = Rc::new(Cell::new(true));
+    let r = refuse.clone();
+    w.vm
+        .register_attribute_notify(
+            "Test.AliasSlotWeapon",
+            Rc::new(move |vm, owner, _prop, _forms| {
+                let mut list = vm.space.read(owner, PropAddr::scalar(mods)).unwrap().elements().unwrap().to_vec();
+                list.extend(applied_values(vm, applied, &ow_attr::api::Applied(vec![sentinel])).unwrap());
+                vm.space.write(owner, PropAddr::scalar(mods), Value::array(list)).unwrap();
+                if r.get() {
+                    return Err(ow_core::NotYet::not_read("the alias test notification", "TOY_NOTIFY.md").into());
+                }
+                Ok(())
+            }),
+        )
+        .unwrap();
+    let loud = w.attribute("Test.Loud", "Engine.WeaponAttributeContextResolver", "Loud");
+    let run = |w: &mut World| {
+        let s0 = slot(w, true, false, false, Some(a), 2.5);
+        let s1 = slot(w, true, false, false, Some(loud), 1.0);
+        let item = item_with(w, alias_class, vec![s0, s1]);
+        let args = vec![
+            ow_vm::api::Arg::new(Value::Bool(true), false, true),
+            ow_vm::api::Arg::new(Value::Int(SLOTS), false, true),
+            ow_vm::api::Arg::aliasing_property(item, PropAddr::scalar(mods), Value::array(vec![])),
+        ];
+        let mut call = ow_vm::api::NativeCall::new(&mut w.vm, f, Some(item), args);
+        let r = native(&mut call);
+        (item, r)
+    };
+    let (item, r) = run(&mut w);
+    let e = r.unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "stopped after partial writes: the alias test notification");
+    let out = applied_from_values(&w.vm, &w.get(item, "Mods")).unwrap();
+    assert_eq!(out.0.len(), 2, "slot 0's record, then the sentinel: {out:?}");
+    assert_eq!((out.0[0].context, out.0[0].attribute), (item, a), "slot 0's record");
+    assert_eq!(out.0[1], sentinel);
+    let backup = applied_from_values(&w.vm, &w.get(item, "AppliedAttributeSlotEffects")).unwrap();
+    assert_eq!(backup.0, out.0[..1].to_vec(), "slot 0's record in the backup list too");
+    // Without the refusal: slot 0's record, the sentinel slot 1's notification added, then slot 1's record.
+    refuse.set(false);
+    let (item, r) = run(&mut w);
+    r.unwrap();
+    let out = applied_from_values(&w.vm, &w.get(item, "Mods")).unwrap();
+    assert_eq!(out.0.len(), 3, "{out:?}");
+    assert_eq!(out.0[1], sentinel, "not overwritten");
+    assert_eq!((out.0[2].attribute, out.0[2].context), (loud, item), "slot 1's record last");
+}
+
+/// F4: a W1 removal through a plain attribute writes nothing before its change notification, and the notification
+/// refuses at once: no write came first, so the `NotYet` is unprefixed, its kind and record kept, and the list is left.
+#[test]
+fn a_w1_refusal_before_any_write_is_not_marked() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let d = PropertyDecl::new(w.vm.space.names.intern("Quiet"), PropKind::FloatAttribute)
+        .with_flags(PropertyDecl::PLAIN_ATTRIBUTE | PropertyDecl::NOTIFY);
+    let plain_class = w.vm.space.classes.define("Test.PlainSlotWeapon", Some(class), vec![d]).unwrap();
+    w.vm
+        .register_attribute_notify(
+            "Test.PlainSlotWeapon",
+            Rc::new(|_vm, _owner, _prop, _forms| Err(ow_core::NotYet::not_read("the plain test notification", "TOY_NOTIFY.md").into())),
+        )
+        .unwrap();
+    let quiet = w.attribute("Test.Quiet", "Engine.WeaponAttributeContextResolver", "Quiet");
+    let item = item_with(&mut w, plain_class, vec![]);
+    let m = w.obj("Core.AttributeModifier", "Test.QuietModifier");
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let rec = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: quiet, modifier: m }])).unwrap();
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(rec.clone()));
+    let e = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "the plain test notification", "unprefixed");
+    assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY_NOTIFY.md"));
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(rec), "W2 not reached");
+}
+
+/// F5: P1 checks that the third parameter is `out`. With the flag cleared, the call is a data error before any write:
+/// the backup list, the attribute's value and the heap are unchanged.
+#[test]
+fn an_out_argument_that_is_not_out_is_refused_before_any_write() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let slots = five(&mut w);
+    let item = item_with(&mut w, class, slots);
+    call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    let applied = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let params = vec![
+        param(&mut w, "bBackupSlotEffectsApplied", PropKind::Bool, 0),
+        param(&mut w, "MaxSlotsActivated", PropKind::Int, 0),
+        param(&mut w, "AttributeModifiers", PropKind::Array(Box::new(PropKind::Struct(applied))), 0),
+    ];
+    let path = ow_core::ObjectPath::parse("Test.SlotWeapon.ApplyInternalSlotEffectModifiers").unwrap();
+    let g = w.vm.declare_function(FunctionDecl::native(path, INTERNAL_SLOTS).with_owner(class).with_params(params)).unwrap();
+    let before = (w.get(item, "AppliedAttributeSlotEffects"), w.float(item, "Bonus"), format!("{:?}", w.vm.space.heap));
+    let e = call(&mut w, g, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+    let after = (w.get(item, "AppliedAttributeSlotEffects"), w.float(item, "Bonus"), format!("{:?}", w.vm.space.heap));
+    assert!(after == before, "nothing written");
+}
+
+/// F6: a backup record on a noun entry with a replicated slot, whose stack does not hold the record's modifier. The
+/// removal would change nothing (not present), so the probe does not refuse it: the call goes through, the entry is
+/// untouched, and W2 empties the list.
+#[test]
+fn a_replicated_entry_without_the_modifier_is_not_refused() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    let default = w.init(3.0);
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyNoun", default);
+    let item = item_with(&mut w, noun_item, vec![]);
+    let key = Value::Name(w.vm.space.names.intern("Attribute_ToyNoun"));
+    let entry = w.st(
+        "GearboxFramework.INounAttributeProvider.NounAttributeState",
+        vec![
+            ("NounName", key),
+            ("Value", Value::Float(3.0)),
+            ("BaseValue", Value::Float(3.0)),
+            ("ModifierStack", Value::array(vec![])),
+            ("ReplicationStrategy", Value::Byte(0)),
+            ("IndexInReplicationArray", Value::Int(2)),
+        ],
+    );
+    w.set(item, "NounState", Value::array(vec![entry]));
+    let m = w.obj("Core.AttributeModifier", "Test.Absent");
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let rec = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: attr, modifier: m }])).unwrap();
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(rec));
+    let state = w.get(item, "NounState");
+    call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap();
+    assert_eq!(w.get(item, "NounState"), state, "the entry untouched");
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]), "W2 emptied the list");
 }

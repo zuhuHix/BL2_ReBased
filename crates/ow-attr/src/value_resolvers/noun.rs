@@ -53,6 +53,7 @@ use ow_object::layout::{LayoutError, PropKind};
 use ow_object::value::Value;
 
 use crate::api::{
+    ProbeOp,
     AddModifierOutcome, AttrError, EvalCx, RemoveModifierOutcome, Storage, ValueResolver,
 };
 use crate::eval::{
@@ -243,24 +244,24 @@ fn entry(
     context: ObjRef,
     cx: &mut EvalCx<'_>,
 ) -> Result<Option<Storage>, AttrError> {
-    entry_with(sys, resolver, context, cx, true)
+    entry_with(sys, resolver, context, cx, None)
 }
 
-/// [`entry`], with `create` false for the read-only probe (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of
-/// #483): the same strategy checks; an existing entry's replicated slot refused as a write to it would be (the
-/// refusal `rewrite` gives, decided here so a preflight sees it); a missing entry only has its `DefaultValue`
-/// evaluated, and nothing is appended. A missing entry would be created with no replicated slot, so it passes.
-///
-/// **Off assumption, UNVERIFIED (review r2 of #483):** that `DefaultValue`'s evaluation writes nothing. Data that
-/// names a `BaseValueAttribute` or an `InitializationDefinition` could lead to another noun attribute on the same
-/// context, whose read goes through [`entry`] with creation on, so the probe could append that other entry. No data
-/// known to the port does this.
+/// [`entry`], or the read-only probe when `probe` is given (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of #483;
+/// lane FIX-483-FOLLOWUP): the same strategy checks, then
+/// - an existing entry with a replicated slot is refused as the operation's write to it would be (the refusal
+///   `rewrite` gives, decided here so a preflight sees it): an add always rewrites the entry, a removal only when the
+///   entry's stack holds the modifier (F6; a removal of an absent modifier changes nothing, so it passes);
+/// - a missing entry has its `DefaultValue` validated without being evaluated ([`crate::eval::preflight_init`], F1):
+///   evaluating could create another noun's entry or draw a random variance, which a preflight must not do. Nothing
+///   is appended, and the entry would be created with no replicated slot, so it passes. Execution evaluates the
+///   default once, when its [`entry`] creates the entry.
 fn entry_with(
     sys: &AttributeSystem,
     resolver: ObjRef,
     context: ObjRef,
     cx: &mut EvalCx<'_>,
-    create: bool,
+    probe: Option<ProbeOp>,
 ) -> Result<Option<Storage>, AttrError> {
     ensure_loaded(cx, resolver)?;
     ensure_loaded(cx, context)?;
@@ -302,7 +303,12 @@ fn entry_with(
         let space = cx.world.parts().space;
         let items = entries(space, context, state)?;
         if let Some(index) = find(space, &items, key)? {
-            if !create {
+            let rewrites = match probe {
+                None => false,
+                Some(ProbeOp::Add) => true,
+                Some(ProbeOp::Remove(m)) => stack_of(space, context, state, index)?.contains(&Value::Object(Some(m))),
+            };
+            if rewrites {
                 replicated_slot_refused(space, element(&items, index)?)?;
             }
             return Ok(Some(Storage::Noun {
@@ -314,10 +320,11 @@ fn entry_with(
     }
     // Missing: `d` first, then the element goes on the end of the array as it stands after that evaluation.
     let default = required(cx, resolver, "DefaultValue")?;
-    let d = evaluate_value(sys, &default, Some(context), None, cx)?;
-    if !create {
+    if probe.is_some() {
+        crate::eval::preflight_init(sys, &default, cx)?;
         return Ok(None);
     }
+    let d = evaluate_value(sys, &default, Some(context), None, cx)?;
     let space = cx.world.parts().space;
     let mut items = entries(space, context, state)?;
     let mut e = space.classes.struct_defaults(entry_struct(space, state)?)?;
@@ -539,16 +546,18 @@ impl ValueResolver for Noun {
         }
     }
 
-    /// The read-only probe (review r1 of #483): [`entry_with`] without creating; a replicated slot is refused here.
+    /// The read-only probe (review r1 of #483, lane FIX-483-FOLLOWUP): [`entry_with`] without creating or evaluating;
+    /// a replicated slot the operation would rewrite is refused here.
     fn probe_storage(
         &self,
         sys: &AttributeSystem,
         resolver: ObjRef,
         context: ObjRef,
+        op: ProbeOp,
         cx: &mut EvalCx<'_>,
     ) -> Result<(), AttrError> {
         match mode(cx) {
-            ParityMode::Off => entry_with(sys, resolver, context, cx, false).map(|_| ()),
+            ParityMode::Off => entry_with(sys, resolver, context, cx, Some(op)).map(|_| ()),
             ParityMode::Reference => Err(reference_write()),
         }
     }

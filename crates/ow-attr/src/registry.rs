@@ -288,11 +288,18 @@ impl AttributeSystem {
         effects::remove_modifier(self, attr, context, modifier, suppress_notify, cx)
     }
 
-    /// The read-only chain check of an add or a remove of a modifier through `attr`'s value chain on `context`: every
-    /// entry's resolver class known and its storage lookup answering, no stack touched (lane
-    /// IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97). It predicts no outcome.
-    pub fn check_modifier_chain(&self, attr: ObjRef, context: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-        effects::check_modifier_chain(self, attr, context, cx)
+    /// The read-only chain check of the operation `op` (an add, or a remove of its modifier) through `attr`'s value
+    /// chain on `context`: every entry's resolver class known and its storage lookup answering, nothing written (no
+    /// stack, noun entry, generator state or heap object; lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision
+    /// 2026-11-19-97; lane FIX-483-FOLLOWUP). It predicts no outcome.
+    pub fn check_modifier_chain(
+        &self,
+        attr: ObjRef,
+        context: ObjRef,
+        op: crate::api::ProbeOp,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<(), AttrError> {
+        effects::check_modifier_chain(self, attr, context, op, cx)
     }
 
     /// A new `Core.AttributeModifier` of `kind` and `value`, outer `outer` (the object the apply natives make).

@@ -343,6 +343,14 @@ impl Arg {
         }
     }
 
+    /// An out argument aliasing element `at` of `owner`'s property: the alias a script call makes when it passes an
+    /// instance variable as an out argument (the interpreter's place for a property), so a native called through
+    /// [`NativeCall::new`] reads and writes that property as it would from script (lane FIX-483-FOLLOWUP). `value` is
+    /// what the host sees as the argument; [`NativeCall::arg`] reads the property itself.
+    pub fn aliasing_property(owner: ObjRef, at: ow_object::ids::PropAddr, value: Value) -> Self {
+        Arg::aliasing(value, crate::interp::Alias(crate::interp::Place::Prop(owner, at)))
+    }
+
     /// An out argument aliasing the caller's storage (W3-INTERP).
     pub(crate) fn aliasing(value: Value, alias: crate::interp::Alias) -> Self {
         Arg {

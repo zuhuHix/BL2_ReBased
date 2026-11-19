@@ -19,34 +19,47 @@
 //! resolved; one whose add answers false keeps its object where the chain left it (nothing rolled back, not recorded).
 //! The modifier's outer is None: the port has no transient package (the native's is that package).
 //!
-//! **Preflight**, P0 to P9 of the note's section 3, before any write: the out argument's record struct; the slot
-//! array's shape (five fields, not `bRunEffectsAsSkill`); `AppliedAttributeSlotEffects`'s shape; the modifier class
-//! with `Type` and `Value`; the count; each slot's five values (a `ModifierType` outside the enum is a data error);
-//! each record's three objects (with the flag false, a record is a removal only when its context, attribute and
-//! modifier are all set; one with a None modifier is a no-op); P0, every definition the call will touch loaded
-//! ([`load_attribute`]; the note's ruling: definition loads are not writes), after the reads that name them; each
-//! qualifying slot's context; and the chain check of every entry of every planned removal and add
-//! ([`ow_attr::AttributeSystem::check_modifier_chain`], through each resolver's write-free
-//! `ValueResolver::probe_storage`; no outcome predicted). The noun resolver's probe neither creates a missing entry
-//! nor misses a replicated slot's refusal (review r1 of #483); definition loads it may make are not writes under the
-//! note's ruling. The installed weapons' slot
-//! attributes hold their resolvers as store handles not yet loaded, so P0 is needed there.
+//! **Preflight**, P0 to P9 of the note's section 3, before any write, and writing nothing: no stack, noun entry,
+//! generator state or heap object (the hub's ruling, lane FIX-483-FOLLOWUP; definition loads are not writes, the
+//! note's ruling). In this order (F3: the loads first, so a load's refusal is the answer, not an independent check's):
+//! 1. the reads that name what P0 loads: the slot array's shape (five fields, not `bRunEffectsAsSkill`), the count and
+//!    each slot's five values (a qualifying slot's `ModifierType` outside the enum is a data error);
+//!    `AppliedAttributeSlotEffects`'s shape and each record's three objects (with the flag false, a record is a
+//!    removal only when its context, attribute and modifier are all set; one with a None modifier is a no-op);
+//! 2. P0 ([`load_attribute`]): each qualifying slot's attribute with its context and value chains (an add resolves
+//!    its context), and each removal's attribute with its value chain only (a removal uses the record's context, so
+//!    its attribute's context chain is not touched);
+//! 3. the independent checks: P1, the out argument is an `out` parameter, an array of `AppliedAttributeEffect`
+//!    records (F5); P4, the modifier class with `Type` and `Value`;
+//! 4. P8, each qualifying slot's context; P9, the chain check of every entry of every planned removal and add
+//!    ([`ow_attr::AttributeSystem::check_modifier_chain`], through each resolver's write-free
+//!    `ValueResolver::probe_storage` for that operation; no outcome predicted). The noun resolver's probe creates no
+//!    missing entry and evaluates no default (F1: it validates it), and refuses a replicated slot only where the
+//!    operation would rewrite the entry (F6: not for the removal of a modifier the entry does not hold).
 //!
-//! **Writes**, W1 to W3, in the note's order. A `NotYet` after the first write is terminal, matched by its typed
+//! The installed weapons' slot attributes hold their resolvers as store handles not yet loaded, so P0 is needed there.
+//!
+//! **Writes**, W1 to W3, in the note's order. A `NotYet` after an actual write is terminal, matched by its typed
 //! variant, keeps its kind and record and gets the "stopped after partial writes: " prefix
-//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. Every failure
-//! of W1, the first removal's included, is marked (review r2 of #483): a removal writes the stack and the value before
-//! its change notification runs, so its `NotYet` may follow a write. With P0, P8 and P9 passed, such a `NotYet` comes
-//! only from a stack write's own consequences (a change notification's script), as the note's section 3 says.
+//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. The prefix goes
+//! on **only after an actual write** (the hub's ruling, F4, superseding decision 2026-11-19-97's "every W1 failure is
+//! marked"): in W1 a removal may refuse in its change notification with nothing written (a plain attribute's removal
+//! writes nothing before it notifies), or after its stack write, and a notification's script may write before it
+//! refuses, so W1 compares the heap's change count and the generator state with their values at its start
+//! ([`Mark`]). From W2 on a write has been made, so every `NotYet` is marked. Each W3 record is appended at once to
+//! the live out argument and, with the flag true, to `AppliedAttributeSlotEffects` as they stand then (F2), so a later
+//! slot's refusal keeps the earlier records, and no final assignment overwrites what a notification's script wrote
+//! through the out argument's alias.
 //!
 //! **Reference** (architecture R3): unbound, the stub policy answers it, as before.
 
 use std::rc::Rc;
 
-use ow_attr::api::{Applied, AppliedEffect, EvalCx};
+use ow_attr::api::{Applied, AppliedEffect, EvalCx, ProbeOp};
 use ow_attr::stack::ModifierType;
 use ow_core::ParityMode;
-use ow_object::ids::{ObjRef, PropAddr, PropId, StructId};
+use ow_core::rand::GameRng;
+use ow_object::ids::{FuncId, ObjRef, PropAddr, PropId, StructId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
@@ -196,10 +209,11 @@ fn modifier_class(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-/// P0 (the note's ruling, review r1 of #471: definition loads are not writes): `attr` and every entry of its context and
-/// value resolver chains, loaded if they are store handles not loaded yet; a load's `NotYet` or error propagates as the
-/// store gives it (`VmError::from`), before any write.
-fn load_attribute(vm: &mut Vm, attr: ObjRef) -> Result<(), VmError> {
+/// P0 (the note's ruling, review r1 of #471: definition loads are not writes): `attr` and every entry of its value
+/// resolver chain, and of its context resolver chain when `with_context` (an add; a removal uses its record's context,
+/// F3), loaded if they are store handles not loaded yet; a load's `NotYet` or error propagates as the store gives it
+/// (`VmError::from`), before any write.
+fn load_attribute(vm: &mut Vm, attr: ObjRef, with_context: bool) -> Result<(), VmError> {
     let load = |vm: &mut Vm, o: ObjRef| -> Result<(), VmError> {
         if vm.defs.is_unloaded(&vm.space, o) {
             let r = vm.defs.ensure_loaded(&mut vm.space, o);
@@ -210,7 +224,8 @@ fn load_attribute(vm: &mut Vm, attr: ObjRef) -> Result<(), VmError> {
         Ok(())
     };
     load(vm, attr)?;
-    for chain in ["ContextResolverChain", "ValueResolverChain"] {
+    let chains: &[&str] = if with_context { &["ContextResolverChain", "ValueResolverChain"] } else { &["ValueResolverChain"] };
+    for &chain in chains {
         let Some(v) = super::read(vm, attr, chain)? else { continue };
         let entries: Vec<ObjRef> = ow_attr::eval::elements(chain, &v)?
             .iter()
@@ -223,6 +238,22 @@ fn load_attribute(vm: &mut Vm, attr: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
+/// P1 (F5): the third parameter is an `out` parameter, an array of `AppliedAttributeEffect` records whose `Context`,
+/// `Attribute` and `Modifier` are objects. Its record struct.
+fn out_record(vm: &Vm, f: FuncId) -> Result<StructId, VmError> {
+    if !vm.function(f).and_then(|d| d.params.get(2)).is_some_and(|p| p.is_out()) {
+        return Err(bad(INTERNAL_SLOTS, "parameter 2 (AttributeModifiers) is not an out parameter"));
+    }
+    let ty = param_struct(vm, f, 2, INTERNAL_SLOTS)?;
+    let path = vm.space.classes.struct_layout(ty).map(|l| l.path().clone());
+    if !path.as_ref().is_some_and(|p| p.name().eq_ignore_ascii_case("AppliedAttributeEffect")) {
+        let named = path.map_or_else(|| "a struct with no layout".to_string(), |p| p.as_str().to_string());
+        return Err(bad(INTERNAL_SLOTS, format!("the out argument's records are {named}, not AppliedAttributeEffect")));
+    }
+    record_shape(vm, ty, "the out argument")?;
+    Ok(ty)
+}
+
 /// What the plan decided.
 struct Plan {
     applied_prop: PropId,
@@ -232,17 +263,11 @@ struct Plan {
     adds: Vec<(Slot, ObjRef)>,
 }
 
-fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, max: i32) -> Result<Plan, VmError> {
-    // P1: the out argument's record struct.
-    let out_ty = param_struct(vm, call_fn, 2, INTERNAL_SLOTS)?;
-    record_shape(vm, out_ty, "the out argument")?;
-    // P2, P5, P6: the slots.
+/// The preflight, in the order of the module documentation. Writes nothing.
+fn plan(vm: &mut Vm, call_fn: FuncId, item: ObjRef, flag: bool, max: i32) -> Result<Plan, VmError> {
+    // The reads that name what P0 loads: P2, P5 and P6 (the slots), P3 and P7 (the applied list and its records).
     let slots = qualifying(vm, item, max)?;
-    // P3: the applied list.
     let (applied_prop, applied_ty) = applied_list(vm, item)?;
-    // P4: the modifier class.
-    modifier_class(vm)?;
-    // P7: the records.
     let recs = records(vm, item, applied_prop)?;
     let removals: Vec<(ObjRef, ObjRef, ObjRef)> = if flag {
         Vec::new()
@@ -254,11 +279,16 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
             })
             .collect()
     };
-    // P0: every definition the call will touch, loaded (the note's ruling: definition loads are not writes). The
-    // slots and records P2 to P7 read name them, so P0 runs after those reads and before P8.
-    for a in slots.iter().map(|s| s.attribute).chain(removals.iter().map(|r| r.1)) {
-        load_attribute(vm, a)?;
+    // P0, before the independent checks (F3): an add's attribute with both chains, a removal's with its value chain.
+    for slot in &slots {
+        load_attribute(vm, slot.attribute, true)?;
     }
+    for removal in &removals {
+        load_attribute(vm, removal.1, false)?;
+    }
+    // P1 (F5) and P4.
+    let out_ty = out_record(vm, call_fn)?;
+    modifier_class(vm)?;
     let attrs = vm.attrs.clone();
     // P8: each qualifying slot's context, from the item (B2); an unresolved slot is skipped and gets no modifier (B3).
     let mut adds = Vec::new();
@@ -267,53 +297,76 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
             adds.push((slot, context));
         }
     }
-    // P9: the chain check of every entry of every planned removal and add (write-free probes; no outcome predicted).
-    for &(context, attribute, _) in &removals {
-        attrs.check_modifier_chain(attribute, context, &mut EvalCx::new(vm))?;
+    // P9: the chain check of every entry of every planned removal and add (write-free probes of that operation; no
+    // outcome predicted).
+    for &(context, attribute, modifier) in &removals {
+        attrs.check_modifier_chain(attribute, context, ProbeOp::Remove(modifier), &mut EvalCx::new(vm))?;
     }
     for (slot, context) in &adds {
-        attrs.check_modifier_chain(slot.attribute, *context, &mut EvalCx::new(vm))?;
+        attrs.check_modifier_chain(slot.attribute, *context, ProbeOp::Add, &mut EvalCx::new(vm))?;
     }
     Ok(Plan { applied_prop, applied_ty, out_ty, removals, adds })
 }
 
-/// W1 to W3 (module documentation); `existing` is what the out argument held. Returns the out array's new value.
-fn writes(vm: &mut Vm, item: ObjRef, flag: bool, plan: Plan, existing: Vec<Value>) -> Result<Value, VmError> {
-    let attrs = vm.attrs.clone();
-    // W1: the removals, notifications on, results ignored. Every failure from here on is marked (review r2 of #483):
-    // a removal writes the stack and the value before its change notification runs, so even the first removal's
-    // `NotYet` can follow a write; the refusals that come before any write were decided by P9.
-    for &(context, attribute, modifier) in &plan.removals {
-        attrs
-            .remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(vm))
-            .map_err(|e| ow_world::pools::after_partial_writes(e.into()))?;
-    }
-    // W2: the list emptied. From here on every failure comes after a write.
-    vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(Vec::new()))?;
-    writes_after(vm, item, flag, plan, existing).map_err(ow_world::pools::after_partial_writes)
+/// What W1 compares against to tell whether it wrote anything (F4): the heap's change count and the generator state
+/// at its start. The count may say "changed" for a mutable borrow that changed nothing
+/// (`ow_object::heap::Heap::mutations`), so a refusal is then marked although nothing changed; it never misses a
+/// change. The generator is compared whole (a draw advances it).
+struct Mark {
+    heap: u64,
+    rng: GameRng,
 }
 
-/// W3, after W2's write (module documentation).
-fn writes_after(vm: &mut Vm, item: ObjRef, flag: bool, plan: Plan, existing: Vec<Value>) -> Result<Value, VmError> {
-    let attrs = vm.attrs.clone();
-    // W3: the adds.
-    let mut out = existing;
-    let mut backup = Applied::default();
-    for (slot, context) in plan.adds {
-        let modifier = attrs.new_modifier(None, slot.kind, slot.value, &mut EvalCx::new(vm))?;
-        let added = attrs.add_modifier(slot.attribute, Some(context), modifier, false, &mut EvalCx::new(vm))?;
+impl Mark {
+    fn new(vm: &Vm) -> Self {
+        Mark { heap: vm.space.heap.mutations(), rng: vm.rng.clone() }
+    }
+
+    fn wrote(&self, vm: &Vm) -> bool {
+        vm.space.heap.mutations() != self.heap || vm.rng != self.rng
+    }
+}
+
+/// W1 to W3 (module documentation).
+fn writes(call: &mut NativeCall<'_>, item: ObjRef, flag: bool, plan: &Plan) -> Result<(), VmError> {
+    let attrs = call.vm.attrs.clone();
+    // W1: the removals, notifications on, results ignored. A refusal is marked only after an actual write (F4).
+    let mark = Mark::new(call.vm);
+    for &(context, attribute, modifier) in &plan.removals {
+        if let Err(e) = attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(call.vm)) {
+            let e = VmError::from(e);
+            return Err(if mark.wrote(call.vm) { ow_world::pools::after_partial_writes(e) } else { e });
+        }
+    }
+    // W2: the list emptied. From here on every refusal comes after a write.
+    call.vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(Vec::new()))?;
+    writes_after(call, item, flag, plan).map_err(ow_world::pools::after_partial_writes)
+}
+
+/// W3, after W2's write (module documentation): each record appended at once to the live out argument and, with the
+/// flag true, to the live backup list (F2).
+fn writes_after(call: &mut NativeCall<'_>, item: ObjRef, flag: bool, plan: &Plan) -> Result<(), VmError> {
+    let attrs = call.vm.attrs.clone();
+    let list_at = PropAddr::scalar(plan.applied_prop);
+    for (slot, context) in &plan.adds {
+        let modifier = attrs.new_modifier(None, slot.kind, slot.value, &mut EvalCx::new(call.vm))?;
+        let added = attrs.add_modifier(slot.attribute, Some(*context), modifier, false, &mut EvalCx::new(call.vm))?;
         if !added.succeeded() {
             continue;
         }
-        let record = Applied(vec![AppliedEffect { context, attribute: slot.attribute, modifier }]);
-        out.extend(applied_values(vm, plan.out_ty, &record)?);
+        let record = Applied(vec![AppliedEffect { context: *context, attribute: slot.attribute, modifier }]);
+        // The out argument as it stands now: from script, the caller's storage, which the add's notification may have
+        // changed through another alias.
+        let mut out = ow_attr::eval::elements("AttributeModifiers", call.arg(2)?)?.to_vec();
+        out.extend(applied_values(call.vm, plan.out_ty, &record)?);
+        call.set_out(2, Value::array(out))?;
         if flag {
-            backup.0.extend(record.0);
-            let list = applied_values(vm, plan.applied_ty, &backup)?;
-            vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(list))?;
+            let mut list = ow_attr::eval::elements("AppliedAttributeSlotEffects", call.vm.space.read(item, list_at)?)?.to_vec();
+            list.extend(applied_values(call.vm, plan.applied_ty, &record)?);
+            call.vm.space.write(item, list_at, Value::array(list))?;
         }
     }
-    Ok(Value::array(out))
+    Ok(())
 }
 
 fn native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -323,11 +376,11 @@ fn native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Int(i) => *i,
         other => return Err(bad(INTERNAL_SLOTS, format!("MaxSlotsActivated holds a {}, not an int", other.kind_name()))),
     };
-    let existing = ow_attr::eval::elements("AttributeModifiers", call.arg(2)?)?.to_vec();
     let function = call.function;
     let plan = plan(call.vm, function, item, flag, max)?;
-    let out = writes(call.vm, item, flag, plan, existing)?;
-    call.set_out(2, out)?;
+    // P1's value half: the out argument holds an array (its records are read when W3 appends to it).
+    ow_attr::eval::elements("AttributeModifiers", call.arg(2)?)?;
+    writes(call, item, flag, &plan)?;
     Ok(Value::None)
 }
 

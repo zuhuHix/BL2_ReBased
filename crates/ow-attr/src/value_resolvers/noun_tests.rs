@@ -12,7 +12,7 @@ use ow_package::store::PackageStore;
 
 use super::testworld::{Fx, system};
 use crate::api::{
-    AddModifierOutcome, AttrError, EffectData, EvalCx, InitData, Refusal, RemoveModifierOutcome,
+    AddModifierOutcome, AttrError, EffectData, EvalCx, InitData, ProbeOp, Refusal, RemoveModifierOutcome,
 };
 use crate::stack::{CombineForm, Combined, Modifier, ModifierId, ModifierType, NumKind, combine};
 
@@ -979,8 +979,8 @@ fn reference_writes_are_not_ported() {
     ));
 }
 
-/// The read-only probe (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of #483): the chain check of an add on a
-/// context with no entry evaluates the default but appends nothing.
+/// The read-only probe (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review r1 of #483; lane FIX-483-FOLLOWUP): the chain
+/// check of an add on a context with no entry validates the default without evaluating it, and appends nothing.
 #[test]
 fn off_the_chain_check_does_not_create_a_missing_entry() {
     let mut n = off();
@@ -988,21 +988,30 @@ fn off_the_chain_check_does_not_create_a_missing_entry() {
     let attr = n.attr("Attribute_HealthMultiplier", default);
     let mind = n.mind(None, vec![]);
     let sys = system();
-    sys.check_modifier_chain(attr, mind, &mut EvalCx::new(&mut n.fx.w)).unwrap();
+    sys.check_modifier_chain(attr, mind, ProbeOp::Add, &mut EvalCx::new(&mut n.fx.w)).unwrap();
     assert!(n.entries(mind).is_empty(), "nothing appended");
 }
 
-/// The probe refuses an entry with a replicated slot, as a write to it would be refused, so a preflight sees it.
+/// The probe refuses an entry with a replicated slot when the operation would rewrite it, as the write would be
+/// refused, so a preflight sees it: an add always, a removal only of a modifier the entry's stack holds (lane
+/// FIX-483-FOLLOWUP, F6: removing an absent modifier changes nothing, so it is not refused).
 #[test]
-fn off_the_chain_check_refuses_a_replicated_slot() {
+fn off_the_chain_check_refuses_a_replicated_slot_it_would_rewrite() {
     let mut n = off();
     let default = n.fx.data(InitData::constant(3.0));
     let attr = n.attr("Attribute_HealthMultiplier", default);
-    let e = Entry { slot: 2, ..Noun::created("Attribute_HealthMultiplier", 1.0) };
+    let held = n.modifier(2, 1.0);
+    let absent = n.modifier(2, 1.0);
+    let e = Entry { slot: 2, stack: vec![Some(held)], ..Noun::created("Attribute_HealthMultiplier", 1.0) };
     let noun = n.full_noun(&e);
     let mind = n.mind(None, vec![noun]);
     let sys = system();
-    let r = sys.check_modifier_chain(attr, mind, &mut EvalCx::new(&mut n.fx.w));
-    assert!(matches!(r, Err(AttrError::NotYet(_))), "{r:?}");
-    assert_eq!(n.entries(mind), vec![e], "unchanged");
+    for (op, refused) in [(ProbeOp::Add, true), (ProbeOp::Remove(held), true), (ProbeOp::Remove(absent), false)] {
+        let r = sys.check_modifier_chain(attr, mind, op, &mut EvalCx::new(&mut n.fx.w));
+        assert_eq!(matches!(r, Err(AttrError::NotYet(_))), refused, "{op:?}: {r:?}");
+        if !refused {
+            r.unwrap();
+        }
+        assert_eq!(n.entries(mind), vec![e.clone()], "unchanged");
+    }
 }

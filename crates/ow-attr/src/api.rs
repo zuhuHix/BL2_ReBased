@@ -605,21 +605,33 @@ pub trait ValueResolver {
         Ok(None)
     }
 
-    /// The write-free form of [`ValueResolver::storage`] for a preflight (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, reviews
-    /// r1 and r2 of #483). The default is `storage` itself, which is right only for a resolver whose storage lookup
-    /// writes nothing and whose write refuses nothing the lookup does not show. **An implementor must override it**
-    /// when its storage lookup writes, or when its write can refuse in ways `storage` does not show:
-    /// `NounAttributeValueResolver` does both (a missing entry is created by the lookup; a replicated slot is refused
-    /// by the write) and overrides it.
+    /// The write-free form of [`ValueResolver::storage`] for a preflight of the operation `op` (lane
+    /// IMPL-APPLY-SLOT-EFFECT-MODIFIERS, reviews r1 and r2 of #483; lane FIX-483-FOLLOWUP). The default is `storage`
+    /// itself, which is right only for a resolver whose storage lookup writes nothing (noun entries, generator state
+    /// and the heap included) and whose write refuses nothing the lookup does not show. **An implementor must override
+    /// it** when its storage lookup writes, or when its write can refuse in ways `storage` does not show:
+    /// `NounAttributeValueResolver` does both (a missing entry is created by the lookup, after its default is
+    /// evaluated; a replicated slot is refused by a write that changes the entry) and overrides it.
     fn probe_storage(
         &self,
         sys: &AttributeSystem,
         resolver: ObjRef,
         context: ObjRef,
+        op: ProbeOp,
         cx: &mut EvalCx<'_>,
     ) -> Result<(), AttrError> {
+        let _ = op;
         self.storage(sys, resolver, context, cx).map(|_| ())
     }
+}
+
+/// The operation a [`ValueResolver::probe_storage`] checks, so a resolver whose write refuses only some changes can
+/// tell (lane FIX-483-FOLLOWUP, F6): an add of a new modifier, or the removal of `Remove`'s modifier, which changes
+/// nothing where the store does not hold it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeOp {
+    Add,
+    Remove(ObjRef),
 }
 
 /// Where a writable attribute's number lives (NATIVE_ATTRIBUTES.md section 3).

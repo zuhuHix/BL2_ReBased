@@ -57,24 +57,26 @@ fn storage_at(
     resolver.storage(sys, r, context, cx)
 }
 
-/// The chain check of an add or a remove of a modifier through `attr`'s value chain on `context`, writing nothing
-/// (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97; its note's P9). Every entry is checked, whether or
-/// not the operation will reach it: an entry's value resolver class must be known and its read-only storage probe
-/// ([`crate::api::ValueResolver::probe_storage`]) must answer, so an unknown class, a lookup `NotYet`, or a refusal the
-/// write itself would give (a noun entry's replicated slot) comes back here. A None entry ends the check (the
+/// The chain check of the operation `op` (an add, or a remove of its modifier) through `attr`'s value chain on
+/// `context`, writing nothing (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97; its note's P9; lane
+/// FIX-483-FOLLOWUP). Every entry is checked, whether or not the operation will reach it: an entry's value resolver
+/// class must be known and its read-only storage probe ([`crate::api::ValueResolver::probe_storage`]) must answer, so
+/// an unknown class, a lookup `NotYet`, or a refusal the operation's write itself would give (a noun entry's replicated
+/// slot, when the operation changes the entry) comes back here. A None entry ends the check (the
 /// operation stops there in any order); a "not writable" lookup does not. It predicts no outcome. A resolver handle
 /// that is not loaded is loaded by the probe (a definition load, which the note rules is not a write).
 pub(crate) fn check_modifier_chain(
     sys: &AttributeSystem,
     attr: ObjRef,
     context: ObjRef,
+    op: crate::api::ProbeOp,
     cx: &mut EvalCx<'_>,
 ) -> Result<(), AttrError> {
     for entry in value_chain(cx, attr)? {
         let Some(r) = entry else { break };
         eval::ensure_loaded(cx, r)?;
         let resolver = sys.value_resolver(cx.world.parts().space, r)?;
-        resolver.probe_storage(sys, r, context, cx)?;
+        resolver.probe_storage(sys, r, context, op, cx)?;
     }
     Ok(())
 }

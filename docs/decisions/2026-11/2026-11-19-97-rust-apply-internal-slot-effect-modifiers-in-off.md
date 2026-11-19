@@ -77,6 +77,7 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
 - **Off assumption, UNVERIFIED: a `ModifierType` outside the enum.** It is a data error only on a qualifying slot. The
   note does not say what the native makes of one, and `ow-attr`'s stack treats such a modifier as a no-op.
 - **The partial-writes mark** (r1, corrected in r2): every W1 failure is marked, the first removal's included.
+  **Superseded** by decision 2026-11-19-NNN (lane FIX-483-FOLLOWUP): the mark goes on only after an actual write.
 - **Tests:** eighteen, twelve of them new:
   - a post-write `NotYet`, prefixed with kind and record kept and the earlier writes left;
   - every entry of two removals naming one modifier checked;
@@ -89,10 +90,12 @@ executable and the analysis output were not opened. Synthetic fixtures only. Sta
   - two more in `ow-attr`, for the noun probe (no entry created; a replicated slot refused).
 
 **Review r2 of #483.**
-- **The partial-writes mark on W1.** Every W1 failure is marked again, the first removal's included. A removal writes
+- **The partial-writes mark on W1** (**superseded** by decision 2026-11-19-NNN, lane FIX-483-FOLLOWUP: the mark goes on
+  only after an actual write). Every W1 failure is marked again, the first removal's included. A removal writes
   the stack and the value before its change notification runs, so its `NotYet` can follow a write. The refusals that
   come before any write were already decided by P9. r1 had left the first removal's refusal unmarked, which was wrong.
-- **Off assumption, UNVERIFIED: `DefaultValue` writes nothing.** The noun probe assumes that evaluating
+- **Off assumption, UNVERIFIED: `DefaultValue` writes nothing** (**superseded** by decision 2026-11-19-NNN: the probe no
+  longer evaluates the default). The noun probe assumes that evaluating
   `DefaultValue` writes nothing. Data whose `DefaultValue` names a `BaseValueAttribute` or an `InitializationDefinition`
   could reach another noun attribute on the same context and create its entry. No data known to the port does this.
 - **The probe's default.** `ValueResolver::probe_storage`'s doc now says when an implementor must override it.

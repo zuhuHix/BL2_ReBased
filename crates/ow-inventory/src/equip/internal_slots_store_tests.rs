@@ -1,6 +1,8 @@
 //! P0 of `ApplyInternalSlotEffectModifiers` on an invented `WillowGame.upk` in a synthetic store (AGENTS.md rule 9;
 //! review r1 of #483). Loading `ToyHolder` leaves its references as store handles not yet loaded: `ToyAttr` (whose
-//! value chain names `ToyResolver`) and `ToyBroken` (a payload that cannot be read). AI-assisted (Claude Code).
+//! value chain names `ToyResolver`), `ToyBroken` (a payload that cannot be read) and `ToyRemoval` (an attribute with no
+//! value chain, whose context chain names `ToyBrokenResolver`, a payload that cannot be read either). `ToyItem` is an
+//! invented item class (two slots, the backup list) for the calls of lane FIX-483-FOLLOWUP. AI-assisted (Claude Code).
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -11,17 +13,30 @@ use ow_core::{ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr};
+use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
+use ow_package::testkit::reflect::{property_payload, toy_struct};
 use ow_package::testkit::script::ScriptToy;
-use ow_vm::api::Vm;
+use ow_package::testkit::{Export, ints};
+use ow_vm::api::{FunctionDecl, Vm};
+use ow_vm::error::VmError;
 
-use super::load_attribute;
+use super::{INTERNAL_SLOTS, MODIFIER_CLASS, load_attribute, register};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 fn package() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "ArrayProperty"]);
+    let mut t = ScriptToy::with_imports(&[
+        "Class",
+        "ObjectProperty",
+        "ArrayProperty",
+        "ScriptStruct",
+        "BoolProperty",
+        "ByteProperty",
+        "FloatProperty",
+        "StructProperty",
+    ]);
     let object = t.class("Object", 0);
     let attr = t.class("ToyAttribute", object);
     for chain in ["ContextResolverChain", "ValueResolverChain"] {
@@ -32,6 +47,7 @@ fn package() -> Vec<u8> {
     let holder = t.class("Holder", object);
     t.prop("Object", holder, "Attr", 0, object);
     t.prop("Object", holder, "Broken", 0, object);
+    t.prop("Object", holder, "Removal", 0, object);
     let mut empty = 0i32.to_le_bytes().to_vec();
     empty.extend_from_slice(&t.none);
     let resolver = t.p.add_export(object, "ToyResolver", empty);
@@ -41,9 +57,35 @@ fn package() -> Vec<u8> {
     let toy_attr = t.p.add_export(attr, "ToyAttr", a);
     // A payload that ends inside its first tag: the store cannot read it.
     let broken = t.p.add_export(attr, "ToyBroken", vec![0, 0, 0, 0, 7]);
+    let broken_resolver = t.p.add_export(object, "ToyBrokenResolver", vec![0, 0, 0, 0, 7]);
+    let mut a = 0i32.to_le_bytes().to_vec();
+    a.extend(t.p.array_tag("ContextResolverChain", 1, &broken_resolver.to_le_bytes()));
+    a.extend_from_slice(&t.none);
+    let removal = t.p.add_export(attr, "ToyRemoval", a);
+    // The item class: `AttributeSlots[2]` of the five fields the native reads, and `AppliedAttributeSlotEffects`.
+    let item = t.class("ToyItem", object);
+    let data = toy_struct(&mut t, item, "AttributeSlotData", None);
+    for flag in ["bActivated", "bExternalSlot"] {
+        t.prop("Bool", data, flag, 0, 0);
+    }
+    t.prop("Object", data, "AttributeToModify", 0, object);
+    t.prop("Byte", data, "ModifierType", 0, 0);
+    t.prop("Float", data, "ComputedModifierValue", 0, 0);
+    let payload = property_payload(&t.none, 2, 0, &ints(&[data]));
+    let mut slots = Export::new(t.import("StructProperty"), "AttributeSlots", payload);
+    slots.outer = item;
+    t.p.add_export_with(slots);
+    let applied = toy_struct(&mut t, item, "AppliedAttributeEffect", None);
+    for field in ["Context", "Attribute", "Modifier"] {
+        t.prop("Object", applied, field, 0, object);
+    }
+    let inner = t.p.next_export();
+    t.prop("Array", item, "AppliedAttributeSlotEffects", 0, inner + 1);
+    t.prop("Struct", inner, "AppliedAttributeSlotEffects", 0, applied);
     let mut h = 0i32.to_le_bytes().to_vec();
     h.extend(t.p.object_tag("Attr", toy_attr));
     h.extend(t.p.object_tag("Broken", broken));
+    h.extend(t.p.object_tag("Removal", removal));
     h.extend_from_slice(&t.none);
     t.p.add_export(holder, "ToyHolder", h);
     t.p.build()
@@ -54,6 +96,7 @@ struct Fx {
     dir: PathBuf,
     attr: ObjRef,
     broken: ObjRef,
+    removal: ObjRef,
 }
 
 impl Drop for Fx {
@@ -74,9 +117,10 @@ fn fx() -> Fx {
         Some(Value::Object(Some(o))) => o,
         other => panic!("{other:?}"),
     };
-    let (attr, broken) = (get(&vm, "Attr"), get(&vm, "Broken"));
+    let (attr, broken, removal) = (get(&vm, "Attr"), get(&vm, "Broken"), get(&vm, "Removal"));
     assert!(vm.defs.is_unloaded(&vm.space, attr) && vm.defs.is_unloaded(&vm.space, broken));
-    Fx { vm, dir, attr, broken }
+    assert!(vm.defs.is_unloaded(&vm.space, removal));
+    Fx { vm, dir, attr, broken, removal }
 }
 
 /// P0 loads an unloaded attribute and every entry of its resolver chains.
@@ -84,7 +128,7 @@ fn fx() -> Fx {
 fn p0_loads_the_attribute_and_its_chain_entries() {
     let mut x = fx();
     let attr = x.attr;
-    load_attribute(&mut x.vm, attr).unwrap();
+    load_attribute(&mut x.vm, attr, true).unwrap();
     assert!(!x.vm.defs.is_unloaded(&x.vm.space, attr), "the attribute is loaded");
     let chain = crate::equip::read_prop(&x.vm, attr, "ValueResolverChain").unwrap();
     let entry = ow_attr::eval::object("e", &chain.elements().unwrap()[0]).unwrap().unwrap();
@@ -97,9 +141,113 @@ fn p0_loads_the_attribute_and_its_chain_entries() {
 fn p0_returns_a_failed_load_unchanged() {
     let mut x = fx();
     let broken = x.broken;
-    let e = load_attribute(&mut x.vm, broken).unwrap_err();
+    let e = load_attribute(&mut x.vm, broken, true).unwrap_err();
     assert!(
         matches!(e, ow_vm::error::VmError::Def(ow_defs::store::DefError::Decode(_))),
         "the store's own decode error, typed: {e:?}"
     );
+}
+
+// ---- lane FIX-483-FOLLOWUP, F3: P0 first, and a removal's context chain not loaded --------------------------------
+
+impl Fx {
+    /// A `ToyItem` and the native declared on its class, bound in Off.
+    fn item_and_native(&mut self) -> (ObjRef, FuncId) {
+        let class = self.vm.find_class("WillowGame.ToyItem").unwrap();
+        let item = ow_vm::interp::instantiate_from_defaults(&mut self.vm, class).unwrap();
+        let applied = self.vm.space.classes.struct_by_path("WillowGame.ToyItem.AppliedAttributeEffect").unwrap();
+        let mut param = |name: &str, kind: PropKind, flags: u64| {
+            PropertyDecl::new(self.vm.space.names.intern(name), kind).with_flags(PropertyDecl::PARAM | flags)
+        };
+        let params = vec![
+            param("bBackupSlotEffectsApplied", PropKind::Bool, 0),
+            param("MaxSlotsActivated", PropKind::Int, 0),
+            param("AttributeModifiers", PropKind::Array(Box::new(PropKind::Struct(applied))), PropertyDecl::OUT),
+        ];
+        let path = ObjectPath::parse("WillowGame.ToyItem.ApplyInternalSlotEffectModifiers").unwrap();
+        let decl = FunctionDecl::native(path, INTERNAL_SLOTS).with_owner(class).with_params(params);
+        let f = self.vm.declare_function(decl).unwrap();
+        register(&mut self.vm).unwrap();
+        (item, f)
+    }
+
+    /// `owner`'s property `name`.
+    fn at(&self, owner: ObjRef, name: &str) -> PropAddr {
+        let class = self.vm.space.heap.get(owner).unwrap().class;
+        PropAddr::scalar(self.vm.space.prop(class, name).unwrap())
+    }
+
+    /// A struct value of `ty`'s path with `fields` set.
+    fn st(&self, path: &str, fields: Vec<(&str, Value)>) -> Value {
+        let ty = self.vm.space.classes.struct_by_path(path).unwrap();
+        let mut v = self.vm.space.classes.struct_defaults(ty).unwrap();
+        for (name, x) in fields {
+            let id = self.vm.space.names.find(name).unwrap();
+            let (k, _) = self.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+            v.struct_mut().unwrap().fields[usize::try_from(k).unwrap()] = x;
+        }
+        v
+    }
+
+    /// `Core.AttributeModifier`, declaring `Type` and `Value` (P4), under the toy package's `Object` (the class the
+    /// record fields declare).
+    fn modifier_class(&mut self) -> ClassId {
+        let object = self.vm.find_class("WillowGame.Object").unwrap();
+        let decls = vec![
+            PropertyDecl::new(self.vm.space.names.intern("Type"), PropKind::Byte { enum_: None }),
+            PropertyDecl::new(self.vm.space.names.intern("Value"), PropKind::Float),
+        ];
+        self.vm.space.classes.define(MODIFIER_CLASS, Some(object), decls).unwrap()
+    }
+}
+
+/// F3: slot 0's attribute cannot be loaded, and the world has no `Core.AttributeModifier` (P4 would refuse). P0 runs
+/// before the independent checks, so the answer is the store's own typed load error, not the class lookup's.
+#[test]
+fn a_load_refusal_comes_before_the_modifier_class_check() {
+    let mut x = fx();
+    let (item, f) = x.item_and_native();
+    let broken = x.broken;
+    let slot = x.st(
+        "WillowGame.ToyItem.AttributeSlotData",
+        vec![
+            ("bActivated", Value::Bool(true)),
+            ("AttributeToModify", Value::Object(Some(broken))),
+            ("ModifierType", Value::Byte(2)),
+            ("ComputedModifierValue", Value::Float(1.0)),
+        ],
+    );
+    let slots = x.at(item, "AttributeSlots");
+    x.vm.space.write(item, slots, slot).unwrap();
+    assert!(x.vm.space.classes.by_path(MODIFIER_CLASS).is_none(), "no modifier class in this world");
+    let e = x.vm.call(f, Some(item), vec![Value::Bool(true), Value::Int(2), Value::array(vec![])]).unwrap_err();
+    assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "the store's own decode error, typed: {e:?}");
+}
+
+/// F3: a removal-only call whose record's attribute names an unloadable context resolver it does not use. P0 loads a
+/// removal's attribute and its value chain only, so the call goes through: the removal answers false (no value chain),
+/// W2 empties the list, and the context resolver stays an unloaded handle.
+#[test]
+fn a_removal_does_not_load_its_attribute_s_context_chain() {
+    let mut x = fx();
+    let (item, f) = x.item_and_native();
+    let modifier_class = x.modifier_class();
+    let m = x.vm.space.alloc(modifier_class, "Test.Removed", None, ow_object::heap::Origin::Runtime).unwrap();
+    let removal = x.removal;
+    let rec = x.st(
+        "WillowGame.ToyItem.AppliedAttributeEffect",
+        vec![
+            ("Context", Value::Object(Some(item))),
+            ("Attribute", Value::Object(Some(removal))),
+            ("Modifier", Value::Object(Some(m))),
+        ],
+    );
+    let list = x.at(item, "AppliedAttributeSlotEffects");
+    x.vm.space.write(item, list, Value::array(vec![rec])).unwrap();
+    x.vm.call(f, Some(item), vec![Value::Bool(false), Value::Int(0), Value::array(vec![])]).unwrap();
+    assert_eq!(x.vm.space.read(item, list).unwrap(), &Value::array(vec![]), "W2 emptied the list");
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, removal), "the removal's attribute is loaded");
+    let chain = crate::equip::read_prop(&x.vm, removal, "ContextResolverChain").unwrap();
+    let entry = ow_attr::eval::object("e", &chain.elements().unwrap()[0]).unwrap().unwrap();
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, entry), "its context resolver is not loaded");
 }

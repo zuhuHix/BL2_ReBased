@@ -740,19 +740,8 @@ pub(crate) fn evaluate_init(
         override_source,
     })?;
 
-    let formula = required(cx, definition, "ValueFormula")?;
-    let conditional = required(cx, definition, "ConditionalInitialization")?;
-    let variance = required(cx, definition, "RandomVariance")?;
-    let range = required(cx, definition, "RangeRestriction")?;
-    let mode = byte("BaseValueMode", &required(cx, definition, "BaseValueMode")?)?;
-    let rounding = byte("RoundingMode", &required(cx, definition, "RoundingMode")?)?;
-    let bad = |what: &str, raw: u8| AttrError::BadData {
-        reason: format!("{what} {raw} is outside the enum").into(),
-    };
-    let mode =
-        BaseValueMode::from_raw(i64::from(mode)).ok_or_else(|| bad("BaseValueMode", mode))?;
-    let rounding =
-        RoundingMode::from_value(rounding).ok_or_else(|| bad("RoundingMode", rounding))?;
+    let [formula, conditional, variance, range] = definition_parts(cx, definition)?;
+    let (mode, rounding) = definition_modes(cx, definition)?;
 
     let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
         flag(name, &field_of(cx, v, name)?)
@@ -815,6 +804,56 @@ pub(crate) fn evaluate_init(
         None
     };
     Ok(round_mode(math::restrict(value, min, max), rounding))
+}
+
+/// The four struct parts of the initialization definition `definition`, in [`evaluate_init`]'s order: `ValueFormula`,
+/// `ConditionalInitialization`, `RandomVariance` and `RangeRestriction`. Reads only.
+fn definition_parts(cx: &mut EvalCx<'_>, definition: ObjRef) -> Result<[Value; 4], AttrError> {
+    Ok([
+        required(cx, definition, "ValueFormula")?,
+        required(cx, definition, "ConditionalInitialization")?,
+        required(cx, definition, "RandomVariance")?,
+        required(cx, definition, "RangeRestriction")?,
+    ])
+}
+
+/// The initialization definition's `BaseValueMode` and `RoundingMode`; one outside its enum is a data error. Reads
+/// only.
+fn definition_modes(cx: &mut EvalCx<'_>, definition: ObjRef) -> Result<(BaseValueMode, RoundingMode), AttrError> {
+    let mode = byte("BaseValueMode", &required(cx, definition, "BaseValueMode")?)?;
+    let rounding = byte("RoundingMode", &required(cx, definition, "RoundingMode")?)?;
+    let bad = |what: &str, raw: u8| AttrError::BadData {
+        reason: format!("{what} {raw} is outside the enum").into(),
+    };
+    let mode =
+        BaseValueMode::from_raw(i64::from(mode)).ok_or_else(|| bad("BaseValueMode", mode))?;
+    let rounding =
+        RoundingMode::from_value(rounding).ok_or_else(|| bad("RoundingMode", rounding))?;
+    Ok((mode, rounding))
+}
+
+/// What evaluating the `AttributeInitializationData` value `v` can refuse before it evaluates anything (lane
+/// FIX-483-FOLLOWUP, F1: a preflight writes nothing, noun entries and generator state included). Nothing is resolved
+/// or evaluated, so no resolver writes, no noun entry is made and no generator is drawn:
+/// - the struct's four fields, as [`init_data`] reads them;
+/// - a `BaseValueAttribute`: [`preflight_read`] (its definition loaded, its chains' classes known);
+/// - an `InitializationDefinition`: loaded, its four parts present, its two modes inside their enums.
+///
+/// It is shallow: the definition's formula terms, conditions, variance bounds and range limits are themselves
+/// initialization data that only evaluating reaches, and the nested attribute's own resolvers' data is read only by
+/// its read. A refusal from there is met when the value is evaluated. A definition load is not a write (the ruling of
+/// NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 3).
+pub(crate) fn preflight_init(sys: &AttributeSystem, v: &Value, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    let data = init_data(cx.world.parts().space, v)?;
+    if let Some(attr) = data.base_value_attribute {
+        preflight_read(sys, attr, cx)?;
+    }
+    if let Some(definition) = data.initialization_definition {
+        ensure_loaded(cx, definition)?;
+        definition_parts(cx, definition)?;
+        definition_modes(cx, definition)?;
+    }
+    Ok(())
 }
 
 /// A random amount from `low` to `high`, drawn from `AttrWorld::rng(CrtStream::AttributeVariance)`: one `rand15`
