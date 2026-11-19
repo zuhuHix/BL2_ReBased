@@ -92,12 +92,17 @@ and `UpdateActivePlotMission` each write the number plus one through `SetIntProp
 
 ## 3. What the accept reaches after the refresh
 
-**The script path** (read with `research/script_disasm.py`). The slice's `accept` step is the accept screen's
-`extAcceptConfirmed`:
-1. a UI sound;
-2. `bAcceptedMission` set;
-3. the controller's `AcceptMission` for the selected entry, whose path runs the settings refresh;
-4. then `DetermineQuestEntries`, `GotoCorrectPartOfMovie(false)` and `extPopulateQuestEntries`.
+**The script path** (read with `research/script_disasm.py`). The slice's `accept` step calls the controller's
+`AcceptMission` directly (`ow_mission::bridge`), not the screen's `extAcceptConfirmed`:
+1. `AcceptMission` asks the tracker's `ActivateMission`; the status routine then runs the controller's
+   `UpdateMissionStatus`. The settings refresh runs on the accept's path before the list update below (as the probe
+   showed; its exact caller was not traced here);
+2. `UpdateMissionStatus` calls `ClientUpdateUIMissionList`. That takes the playing movie (the UI manager's
+   `GetPlayingMovie`, which the bridge answers with its stand-in screen) and, when the movie has no reward object, calls
+   its `UpdateMissionList(mission)`;
+3. `UpdateMissionList` looks for the mission in the movie's `MissionList` and `InProgressMissionList`. When it is there,
+   it runs `DetermineQuestEntries`, `GotoCorrectPartOfMovie(false)` and `extPopulateQuestEntries`. The screen's own
+   `extAcceptConfirmed` (a Flash callback, not driven by the slice) ends the same way.
 
 `extPopulateQuestEntries` drops the entries without a mission. It then calls the movie's `MissionTextList`:
 `EmptyData`, then one `AddDataEntry` per mission. It inserts header rows when there are redeemable or eligible
@@ -111,33 +116,57 @@ shared with another class's unrelated native (the same body shape). The slot's b
 because no registration pattern was found for the class's table. NATIVE_GFX_BRIDGE.md's reading of the behaviour is
 taken as the rule. Its first step: when `MissionTextList` is None, nothing at all happens.
 
-**Off answers, step by step:**
+**Off answers, step by step.** Hub ruling of 2026-11-19: a UI-only side effect may be answered "nothing" in Off only
+when nothing on the slice path reads it back; otherwise it is a named `NotYet` of kind `LayerAbsent`.
 1. **The port's screen is a stand-in.** The mission bridge makes a VM object of `QuestAcceptGFxMovie` from its class
    defaults. The movie's `Start`, the only script seen to create `MissionTextList` (a new `GFxTextListContainer`), is
    not run. So `MissionTextList` is None, unless something sets it.
-2. **`UpdateMissionTextList` with `MissionTextList` None:** it returns and changes nothing (the record's first step).
-   This is the whole Off rule for the stand-in. It is read on the live object at the call, so nothing has to be
-   preflighted.
-3. **`MissionTextList` set** (not the port's case): the record's steps follow. They need localised category labels
-   (`Object.Localize`), the list's native rebuild and its Flash refresh, none of which the port has. Off answers a
-   `NotYet`: kind `LayerAbsent`, "the mission screen's Flash text list (not hosted)". It is checked before the first
-   write (emptying `MissionCategories`). It comes after the accept's own writes, so under the hub ruling it is
-   terminal ("stopped after partial writes", its kind kept), and nothing is rolled back.
+2. **`UpdateMissionTextList` with `MissionTextList` None: nothing.** It returns and changes nothing (the record's first
+   step).
+   - **Label:** this is a port Off answer for a headless world with no Flash movie hosted, UNVERIFIED.
+   - It is read on the live object at the call, so nothing has to be preflighted.
+   - **The read-back check** (below) found nothing on links 10 to 12 that reads what the native would change.
+3. **`MissionTextList` set** (not the port's case): the record's steps follow. They write `MissionCategories` and the
+   list's displayed rows, and they need localised category labels (`Object.Localize`), the list's native rebuild and
+   its Flash refresh. The port has none of those. Off answers a `NotYet`: kind `LayerAbsent`, "the mission screen's
+   Flash text list (not hosted)".
+   - It is checked before the first write (emptying `MissionCategories`).
+   - It comes after the accept's own writes, so under the hub ruling it is terminal ("stopped after partial writes",
+     its kind kept), and nothing is rolled back.
 4. **What follows:**
    - `MissionTextList.PositionHighlightBar()`: a call on a None object, which the VM skips, as it skipped `EmptyData`
      and `AddDataEntry` in the probe.
    - Then `SetFocus()` asks `GFxMoviePlayer.GetVariableObject("missions.selections.selection<N>")`. NATIVE_GFX_BRIDGE.md
      says `None` for a missing movie. Off answer: None, since the stand-in hosts no movie (UNVERIFIED that an unhosted
-     movie counts as missing).
+     movie counts as missing). The same ruling applies: the object is only passed on to `FocusOn`.
    - Then `WillowGFxMovie3D.FocusOn(None)`: NATIVE_GFX_BRIDGE.md says a no-op is safe with `None` tolerance. Off
-     answer: nothing.
+     answer: nothing. Its only state, the movie's `FocusObject`, has no script reader on the slice path (the same check
+     applied to `FocusObject` is left to the implementer lane).
    - Both are listed today as Reference-only presentation stubs (`ow-cli`'s `REFERENCE_STUBS`). In Off they are
      unbound, so each would be the next stop until bound.
 5. **Past `SetFocus`**, `extAcceptConfirmed` returns. What the slice's accept step checks after that was not read in
    this lane.
 
-**For the hub:** steps 2 and 4 treat "the port hosts no Flash movie" as the engine's fact, like the online subsystem and
-the DLC manager rulings. If the hub prefers a named refusal, steps 2 and 4 become the `NotYet` of step 3 instead.
+**The read-back check** (lane ANALYST-MISSION-NUMBERS, under the hub ruling). Every script function of the nine code
+packages was decoded with `research/script_disasm.py`'s decoder: 12,978 functions, 10 of them not decoded. They were
+searched for the movie's two fields the native touches.
+- **`MissionCategories`:** no script reads or writes it. Only the native itself uses it (NATIVE_GFX_BRIDGE.md).
+- **`MissionTextList`** is used only by the movie's own script: `Start` (which creates it, and is not run in the port),
+  `extPopulateQuestEntries` and `SetFocus` (the calls above), `GetSelectedIndex`, `extFillOutQuestAllScreenDetails`,
+  `extLogListRollOver`, `extNavigateUp` and `extNavigateDown`.
+- **On the slice path:**
+  - `GetSelectedIndex` is called by `extAcceptConfirmed`, `extCompleteConfirmed`, `extChoiceConfirmed` and
+    `ProtectedFillOutCommonScreenDetails`, all Flash callbacks the slice does not drive. It is also called by the
+    controller's `ClientSpawnMissionRewardUI`, which the turn-in of link 12 can reach.
+  - It reads `MissionTextList.HighlightedEntry`. With `MissionTextList` None, it reads None whether or not
+    `UpdateMissionTextList` ran, so the native's "nothing" changes no answer.
+  - The other readers are reached only from Flash callbacks (`UpdateMissionDetails`, `extLogListTrack`, `LogUp`,
+    `LogDown`), which the slice does not drive.
+- **Not covered:** the 10 functions the decoder cannot read, and native readers other than the record's. One of the
+  10 is `WillowGFxUIManager.PlayMovie`, which the bridge's stand-in manager does not reach on links 10 to 12 (it binds
+  `GetPlayingMovie` only).
+- So the read-back is none in the port's case (`MissionTextList` None). If a later lane hosts the screen and sets the
+  list, step 3's `NotYet` applies instead.
 
 ## Open questions
 
@@ -145,6 +174,7 @@ the DLC manager rulings. If the hub prefers a named refusal, steps 2 and 4 becom
 2. The controller's current-playthrough virtual in section 2, step 1.
 3. The movie's slot 536 body (NATIVE_GFX_BRIDGE.md's reading is used).
 4. Whether an unhosted movie's `GetVariableObject` answers None in the game (it has a Flash file loaded there).
+5. The 10 script functions the decoder cannot read, for the read-back check.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
