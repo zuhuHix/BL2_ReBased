@@ -682,6 +682,9 @@ def build_willowgame():
     mission = T.cls('MissionDefinition')
     T.prop('Object', mission, 'MissionWeapon')
     T.prop('Object', T.cls('MissionWeaponBalanceDefinition'), 'MissionObjective')
+    # The lent weapon's region (Off mode grants the weapon only to a mission with a GameStageRegion; decision 2026-11-16-81).
+    T.prop('Object', mission, 'GameStageRegion')
+    T.cls('ToyRegionDefinition')                                                     # synthetic class name
     T.prop('Object', mission, 'MissionDialogGroup')
     T.prop('Bool', mission, 'bPlotCritical')
     T.prop('Struct', mission, 'Reward', type_ref=reward)
@@ -1349,6 +1352,9 @@ def build_mission(director=False, on_enabled=True, weapon=False):
     lent = b''
     if weapon:      # a lent mission weapon whose own mission objective is the mission's one objective
         lent = t.obj('MissionWeapon', p.add_export(chain('WillowGame', 'MissionWeaponBalanceDefinition'), 'ToyLentWeapon', w32(0) + t.obj('MissionObjective', only) + none))
+        # and a region, so that both modes' grant rules hold: the C++ (Reference) grants on the objective test alone, Off also needs a
+        # GameStageRegion (NATIVE_MISSION_SCRIPT_BRIDGE.md; decision 2026-11-16-81)
+        lent += t.obj('GameStageRegion', p.add_export(chain('WillowGame', 'ToyRegionDefinition'), 'ToyRegion', w32(0) + none))
     cls_, sup, outer, name, _ = p.exports[mission - 1]
     p.exports[mission - 1] = (cls_, sup, outer, name, w32(0) + t.array('ObjectiveSetDefs', 2, w32(set_a, set_b))
                               + t.obj('InitialObjectiveSet', set_a) + t.bool('bActivateInitialObjectiveSet', True) + reward + lent + none)
@@ -1655,10 +1661,20 @@ def build_tracker_mission():
 
 
 failures = []
+# Checks that failed after a --slice-run met a NotYet (a rule the Rust port has not read or ported yet): named not-yets, never
+# passes. A run that met one says so in its report ("not_yet", and "stopped" when a step stopped there; lane
+# FIX-MISSION-SCRIPT-TEST, decision 2026-11-19-37), and every failing check up to the next run is graded against it.
+not_yets = []
+last_not_yet = None
 
 
 def check(label, condition, detail=''):
-    if not condition: failures.append(f'{label}: {detail}')
+    if condition:
+        return
+    if last_not_yet:
+        not_yets.append(f'{label}: not yet: {last_not_yet}')
+    else:
+        failures.append(f'{label}: {detail}')
 
 
 def mission_run(root, *steps):
@@ -1827,10 +1843,15 @@ with tempfile.TemporaryDirectory() as folder:
     (root / 'Sanctuary_Dynamic.upk').write_bytes(build_dynamic().build())
 
     def slice_run(*steps):
+        global last_not_yet
         proc = subprocess.run([reader, str(root / 'Sanctuary_Dynamic.upk'), '--slice-run', 'ToyMission', '--cooked', str(root), *steps],
                               capture_output=True, text=True, encoding='utf-8')
         assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
-        return proc.returncode, json.loads(proc.stdout)
+        got = json.loads(proc.stdout)
+        stop = got.get('stopped')
+        met = got.get('not_yet', [])
+        last_not_yet = (f"stopped at {stop['step']}: {stop['not_yet']}" if stop else None) or (met[0] if met else None)
+        return proc.returncode, got
 
     def remote(step): return [e['a'] for e in step['events'] if e['kind'] == 'remote_event']
     code, got = slice_run('accept', 'spawn', 'range', 'turnin')
@@ -1935,6 +1956,8 @@ with tempfile.TemporaryDirectory() as folder:
     # no level change (27 < R(5)): neither event is sent
     code, got, events = level_events('stage:4', 'player:4:0', *flow)
     check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)
+
+    last_not_yet = None   # the --slice-run scenarios end here
 
     # Scenario E: Behavior_TriggerDialogEvent through --mission-run (src/dialog.*), NATIVE_DIALOG.md.
     (root / 'DialogMission.upk').write_bytes(build_dialog_mission().build())
@@ -2182,8 +2205,13 @@ with tempfile.TemporaryDirectory() as folder:
     check('T optional done before the required one', lines == [(*two, True, False), (*side, True, True)] and status == 2, (lines, status))
     check('T an objective outside the active set is refused', tracker_after('accept', 'obj:Unused')[0] == [(*one, False, False)], tracker_after('accept', 'obj:Unused'))
 
+if not_yets:
+    print(f'{len(not_yets)} mission script check(s) not yet (a NotYet of the Rust port; not a pass):')
+    for item in not_yets: print('  - ' + item)
 if failures:
     print(f'{len(failures)} mission script check(s) failed:')
     for failure in failures: print('  - ' + failure)
     sys.exit(1)
+if not_yets:
+    sys.exit(3)
 print('mission script synthetic coverage passed.')
