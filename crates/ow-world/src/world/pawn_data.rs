@@ -19,13 +19,16 @@
 //! The port calls it where it makes its globals object (`--combat-run`'s bridge), before the player's script runs.
 //!
 //! **FindAlreadyLoadedObject(Path).** The object already in memory at the full path `Path`, any class, or None. It never
-//! loads. In the port, "in memory" is an object live in the heap whose full path name equals `Path` (any case, as names
-//! compare; a name match whose full path the port cannot name passes that `NotYet` on):
-//! - a loaded definition or a run-time object: it;
-//! - nothing at that path: None;
-//! - a definition handle the store has made but not loaded: `NotYet { NotRead }`. Whether the game has that object in
-//!   memory depends on the `LoadPlayerPawnData` family, which is not read. The note leaves this choice to the port and
-//!   warns that None would run `BodySelectClass(None)`, which the game is not expected to do;
+//! loads. In the port, "in memory" is an instance live in the heap (a run-time object or a loaded definition) whose
+//! full path name equals `Path`, in any case, as names compare. A name match whose full path the port cannot name (a
+//! run-time object with no outer) is skipped. Then:
+//! - a match: it;
+//! - no match, and an installed package holds the path (asked of the store's export tables, loading nothing): a store
+//!   handle not loaded, or a path nothing has named yet. That is `NotYet { NotRead }`, as is a candidate file the
+//!   store could not read. Whether the game has that object in memory depends on the `LoadPlayerPawnData` family,
+//!   which is not read; the note leaves this to the port and warns that None would run `BodySelectClass(None)`, which
+//!   the game is not expected to do;
+//! - no match and no holder anywhere (or a string that is no object path): None;
 //! - a path with no `.` (not a full path): `NotYet { NotRead }` (open question 3);
 //! - an empty string: `NotYet { NotRead }`. The note reads it as a lookup of an empty name, without saying what that
 //!   finds. On the maya path an empty path means the controller's `PlayerClass` is None, so the script read
@@ -142,8 +145,10 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     while let Some(up) = c.vm.space.classes.layout(base).super_class() {
         base = up;
     }
-    // Only objects whose own name is the path's last part can match; their full path is built only then (a name
-    // match whose full path the port cannot name, a run-time object with no outer, passes its `NotYet` on).
+    // Only instances (run-time objects and loaded definitions) are live; the store's unloaded handles are not. Only
+    // objects whose own name is the path's last part can match, and their full path is built only then. A name match
+    // whose full path the port cannot name (a run-time object with no outer) cannot be the object at a full path, so
+    // it is skipped.
     let leaf = path.rsplit(['.', ':']).next().unwrap_or_default();
     let candidates: Vec<ObjRef> = c
         .vm
@@ -154,20 +159,31 @@ fn find_loaded(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         })
         .collect();
     for o in candidates {
-        if !path_name(c.vm, o)?.eq_ignore_ascii_case(&path) {
-            continue;
+        match path_name(c.vm, o) {
+            Ok(full) if full.eq_ignore_ascii_case(&path) => return Ok(Value::Object(Some(o))),
+            Ok(_) | Err(VmError::NotYet(_)) => continue,
+            Err(e) => return Err(e),
         }
-        if c.vm.defs.is_unloaded(&c.vm.space, o) {
-            return Err(NotYet::not_read(
-                format!(
-                    "FindAlreadyLoadedObject of {path}, a definition the store has not loaded (whether the game holds \
-                     it in memory: the LoadPlayerPawnData family, not read)"
-                ),
-                RECORD,
-            )
-            .into());
-        }
-        return Ok(Value::Object(Some(o)));
+    }
+    // Nothing in memory at that path. Whether an installed package holds it is asked of the store's export tables,
+    // which loads no definition: a holder (a handle not loaded, or a path nothing has named yet) is not proof that the
+    // game lacks the object, so that answer is `NotYet`. So is a candidate file the store could not read.
+    let holders = match ow_core::ObjectPath::parse(&path) {
+        Ok(parsed) => Some(c.vm.defs.owners(&parsed).map_err(VmError::Def)?),
+        // A string that is no object path names nothing any package holds.
+        Err(_) => None,
+    };
+    if let Some(h) = holders
+        && (!h.holders.is_empty() || !h.failures.is_empty())
+    {
+        return Err(NotYet::not_read(
+            format!(
+                "FindAlreadyLoadedObject of {path}, which an installed package holds but nothing has loaded (whether \
+                 the game holds it in memory: the LoadPlayerPawnData family, not read)"
+            ),
+            RECORD,
+        )
+        .into());
     }
     Ok(Value::Object(None))
 }

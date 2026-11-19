@@ -19,11 +19,15 @@ neither native has a C++ stand-in, so both stay unbound there (R3).
     - `--combat-run` calls it in Off where its bridge has made the globals object, before the player's script runs.
       That timing is open question 1, UNVERIFIED.
   - **`WillowPlayerPawnDataManager.FindAlreadyLoadedObject(Path)`**: the object already in memory at that full path,
-    any class, never loading. The port reads "in memory" as an object live in the heap whose full path equals `Path`,
-    in any case.
-    - Nothing at that path: None.
-    - A definition the store has made but not loaded: `NotYet { NotRead }`. Whether the game holds it depends on the
-      unread `LoadPlayerPawnData` family; the note leaves this to the port.
+    any class, never loading. The port reads "in memory" as an instance live in the heap (a run-time object or a
+    loaded definition) whose full path equals `Path`, in any case. A run-time object with no outer that shares the
+    name is skipped (the port cannot name its full path).
+    - No instance at that path, but an installed package holds it, asked of the store's export tables
+      (`DefStore::owners`, which loads no definition): `NotYet { NotRead }`. That covers a store handle that is not
+      loaded (handles are not live instances) and a path nothing has named yet; a candidate file the store could not
+      read is `NotYet` too. Whether the game holds it depends on the unread `LoadPlayerPawnData` family; the note
+      leaves this to the port.
+    - No instance and no holder anywhere, or a string that is no object path: None.
     - A partial path: `NotYet { NotRead }` (open question 3).
     - An empty path: `NotYet { NotRead }`. The note reads it as a lookup of an empty name without saying what that
       finds, and None would run `BodySelectClass(None)`, which the note says the game is not expected to do here.
@@ -61,3 +65,8 @@ neither native has a C++ stand-in, so both stay unbound there (R3).
 - **Gates** (on 519660eb): workspace build clean; workspace tests 1,917 passed / 0 failed / 43 ignored; `ow-world`
   99 passed / 0 failed / 5 ignored; `crate_edges_test.py` OK; decisions check OK; Fire checker in Reference: 33 of 33
   rules.
+- **Review r1 of #411** (fix commit on this branch). The first version looked for an unloaded handle among the live
+  objects, which never holds one, so an archetype that was only a handle, or not named yet, answered None. Now the
+  store's export tables decide (above), and a run-time object with no outer no longer aborts the lookup. New
+  synthetic test: a held path nothing has named, a loaded definition, an unloaded handle (made by loading a definition
+  that names it) and a path no package holds.
