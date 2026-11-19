@@ -17,9 +17,11 @@
 //!   which the headless world does not have (no camera): `NotYet { LayerAbsent }`, never a fitted choice;
 //! - `key`: the controller's `PickupSomething` (section 5).
 //!
-//! **Writes and refusals** (the hub's rule, review r2 of #452): the run's first write is in `make` (after the
-//! preflight). From then on a `NotYet` is terminal and its text starts "stopped after partial writes", its kind and
-//! record kept; any other error passes through unchanged. Errors stay `VmError`s until the gate grades them.
+//! **Writes and refusals** (the hub's rule, reviews r2 and r3 of #452): the run's first write is the first mutation
+//! that succeeds in `make` (the gun's creation, tracked through the typed fixture preparation of `equip_run`). From
+//! then on a `NotYet` is terminal and its text starts "stopped after partial writes", its kind and record kept; any
+//! other error passes through unchanged. Errors stay `VmError`s, and the gate grades their variant, not their text
+//! (`slice_gate::classify_error`).
 //!
 //! Harness stand-ins, none a rule: the owner links of `--equip-run`; the pickup's spawn and state entry in place of
 //! `DropFrom` (no mission or can-drop check, no physics or toss velocity, and `bNoCollisionFail`, since the world has
@@ -184,10 +186,14 @@ pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
     if !vm.class_declares_state(class, state)? {
         return Err(error("the pickup class declares no Pickup state"));
     }
-    if let Ok(f) = vm.find_function(GET_INVENTORY_DEFINITION)
-        && let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
-        && !vm.has_native(&key)
-    {
+    // The fixed fixture's initialisation reaches it: it must resolve, be declared native and be bound (review r3 of
+    // #452). A failed lookup is that error; an unbound one is the VM's unbound-native error.
+    let f = vm.find_function(GET_INVENTORY_DEFINITION)?;
+    let key = vm
+        .function(f)
+        .and_then(|d| d.native_key.clone())
+        .ok_or_else(|| error(format!("{GET_INVENTORY_DEFINITION} is not declared native")))?;
+    if !vm.has_native(&key) {
         return Err(VmError::UnboundNative(key));
     }
     Ok(class)
@@ -216,26 +222,52 @@ fn drop_at(vm: &mut Vm, class: ClassId, weapon: ObjRef, spawner: ObjRef, at: [f3
     Ok(pickup)
 }
 
+/// How `make` prepares one gun: its weapons-file line, whether it gets an owner (Maya) or none (the decoy), and the
+/// flag its first successful mutation sets.
+pub type Prepare<'a> = dyn FnMut(&mut Vm, &str, bool, &mut bool) -> Result<ObjRef, VmError> + 'a;
+
 /// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line.
 pub fn make(vm: &mut Vm, line: &str, decoy: bool) -> Result<Pickup, VmError> {
     let class = preflight(vm)?;
-    // The first write: from here a NotYet is terminal (module documentation).
-    let made = (|| -> Result<Pickup, VmError> {
-        let weapon = equip_run::prepare_line(vm, line).map_err(error)?;
-        let pawn = object(&read(vm, weapon, "Owner")?).ok_or_else(|| error("the weapon has no owner"))?;
-        let controller = object(&read(vm, pawn, "Controller")?).ok_or_else(|| error("the pawn has no controller"))?;
-        let origin = place(vm, pawn, [0.0, 0.0, 0.0])?;
-        write(vm, pawn, "Location", origin)?;
-        let pickup = drop_at(vm, class, weapon, pawn, AIMED_AT)?;
-        let decoy = if decoy {
-            let w = equip_run::prepare_unowned(vm, line).map_err(error)?;
-            Some((w, drop_at(vm, class, w, pawn, DECOY_AT)?))
+    build(vm, class, line, decoy, &mut |vm, line, owned, wrote| {
+        if owned {
+            equip_run::prepare_line_typed(vm, line, wrote)
         } else {
-            None
-        };
-        Ok(Pickup { weapon, pawn, controller, pickup, decoy, wrote: true })
-    })();
-    made.map_err(after_writes)
+            equip_run::prepare_unowned_typed(vm, line, wrote)
+        }
+    })
+}
+
+/// The fixture after the preflight, each gun made by `prepare`: a refusal after the first successful mutation is
+/// marked (module documentation), one before it is answered as it is.
+pub fn build(vm: &mut Vm, class: ClassId, line: &str, decoy: bool, prepare: &mut Prepare<'_>) -> Result<Pickup, VmError> {
+    let mut wrote = false;
+    let made = build_with(vm, class, line, decoy, prepare, &mut wrote);
+    made.map_err(|e| if wrote { after_writes(e) } else { e })
+}
+
+fn build_with(
+    vm: &mut Vm,
+    class: ClassId,
+    line: &str,
+    decoy: bool,
+    prepare: &mut Prepare<'_>,
+    wrote: &mut bool,
+) -> Result<Pickup, VmError> {
+    let weapon = prepare(vm, line, true, wrote)?;
+    let pawn = object(&read(vm, weapon, "Owner")?).ok_or_else(|| error("the weapon has no owner"))?;
+    let controller = object(&read(vm, pawn, "Controller")?).ok_or_else(|| error("the pawn has no controller"))?;
+    let origin = place(vm, pawn, [0.0, 0.0, 0.0])?;
+    write(vm, pawn, "Location", origin)?;
+    *wrote = true;
+    let pickup = drop_at(vm, class, weapon, pawn, AIMED_AT)?;
+    let decoy = if decoy {
+        let w = prepare(vm, line, false, wrote)?;
+        Some((w, drop_at(vm, class, w, pawn, DECOY_AT)?))
+    } else {
+        None
+    };
+    Ok(Pickup { weapon, pawn, controller, pickup, decoy, wrote: true })
 }
 
 /// One step after `make` (module documentation); its error, if any.
@@ -267,7 +299,7 @@ fn look(vm: &mut Vm, p: &Pickup) -> Result<(), VmError> {
 }
 
 /// The links' evidence, from successful reads only: the gun is in Maya's inventory chain, its pickup is gone, and the
-/// decoy (link 7) is still a live pickup holding its own gun.
+/// decoy (link 7) is still a live pickup holding its own gun and still enabled for pickup (`bPickupable`).
 pub fn taken(vm: &Vm, p: &Pickup) -> bool {
     let held = || -> Result<bool, VmError> {
         let Some(manager) = object(&read(vm, p.pawn, "InvManager")?) else { return Ok(false) };
@@ -284,7 +316,8 @@ pub fn taken(vm: &Vm, p: &Pickup) -> bool {
     let consumed = || ow_world::actors::is_destroyed(&vm.space, p.pickup);
     let decoy_left = || -> Result<bool, VmError> {
         let Some((gun, pickup)) = p.decoy else { return Ok(true) };
-        Ok(!ow_world::actors::is_destroyed(&vm.space, pickup)? && object(&read(vm, pickup, "Inventory")?) == Some(gun))
+        let enabled = matches!(read(vm, pickup, "bPickupable")?, Value::Bool(true));
+        Ok(!ow_world::actors::is_destroyed(&vm.space, pickup)? && object(&read(vm, pickup, "Inventory")?) == Some(gun) && enabled)
     };
     matches!((held(), consumed(), decoy_left()), (Ok(true), Ok(true), Ok(true)))
 }
