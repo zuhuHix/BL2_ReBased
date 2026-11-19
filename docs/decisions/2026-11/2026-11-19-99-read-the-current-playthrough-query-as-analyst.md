@@ -28,3 +28,19 @@ every rule is UNVERIFIED. This lane implements nothing; another lane implements 
 
 Open (the note's questions): subclass overrides of the two virtuals; the global's writers in detail; how the
 tracker's `MissionList` is built; whether `MissionNumber` is assigned at run time.
+
+Edits (review r1 of #486):
+- **The existing record.** The note now relates itself to NATIVE_CONTROLLER_HELPERS.md's `GetCurrentPlaythrough`
+  rule, which it agrees with, and to the mission bridge's existing Off binding (`n_playthrough`). It says what changes
+  in that binding: the world's replication info, bad data instead of 0, the two subclass refusals, and the same answer
+  on every exactly-`WillowPlayerController` controller.
+- **The index.** The two parallel `NATIVE_INDEX.md` rows are removed. The existing rows for `GetCurrentPlaythrough`,
+  `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and `AllExpansionSideMissionsComplete` link the note
+  instead.
+- **The Off steps** are an ordered, typed sequence with exact-class tests; direct callers use the rule as a function.
+- **Lazy load:** none. The reads are of run-time objects.
+- **Stop order:** the settings refresh calls `GetActivePlotCriticalMissionNumber()` directly, and step 6's
+  `GetAllMissions` `NotYet` stays first.
+- **Neighbours:** NATIVE_MISSION_NUMBERS.md and NATIVE_MISSION_OBJECTIVES.md now carry one-line pointers "settled in
+  NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED)".
+
