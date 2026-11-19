@@ -4,6 +4,10 @@ AI-assisted (Claude Code), analyst lane ANALYST-LOGIN-STATUS (decision 2026-11-1
 next stop after `InitPlayerSkillTree`. NATIVE_INIT_PLAYER_SKILL_TREE.md (#466) section 4 has
 `ApplyCharacterClassStartingValues` reach `UIInteraction.GetLoginStatus` through `IsInvalidName`, for a local player.
 
+**This note supersedes #466 on one point.** #466 calls `UIInteraction.GetLoginStatus` "a native of the UI layer". It
+is script, and the VM runs it as installed. The first native on the path is `GameEngine.GetOnlineSubsystem`. #466 is
+left as it is (hub ruling); an implementer follows this note for the login path.
+
 **How it was read.**
 - No bl-sdk session was granted, and the recorded evidence has no capture of the login status.
 - The script was read from the installed packages with `research/script_disasm.py`.
@@ -133,30 +137,57 @@ The hub's rulings:
 Sections 2 to 5 write nothing, so every answer on the login path is decided before any write of its own. The first
 writes are in section 6, after the status is known.
 
+**The preflight of the gated absence.** `ApplyCharacterClassStartingValues` writes before `IsInvalidName` runs: the
+pools, the skill tree, and the name and movement type of #466's section 4. So when the absence is cheap and certain
+before the flow starts, the port decides it in the flow's preflight, before those writes. It is when all of these hold
+(plain reads, no script):
+- the stock path: the controller is the authority and its `PlayerReplicationInfo` is a
+  `WillowPlayerReplicationInfo` (#466's section 4 gate);
+- the info's `Owner` is a `WillowPlayerController` that is a local player controller (the slice's `spawn_maya` wires
+  the owner to the registered local controller);
+- the controller id the script will pass is not -1: the owner's `Player` as a `LocalPlayer` has a `ControllerId`
+  other than -1, or there is no local player, which gives 0;
+- the port has no engine object.
+
+In that case the flow's preflight answers the engine's `NotYet` (layer absent), and nothing is written. A path known only
+later keeps the runtime check, at `GameEngine.GetOnlineSubsystem`: an owner set during the flow, or a controller
+id changed by script before the call. Such a runtime answer comes after the flow's writes. It is terminal, its text
+starts "stopped after partial writes", its kind and record are kept, and the writes stay in place.
+
 | Step | Off answer |
 |---|---|
 | `WillowPlayerReplicationInfo.IsInvalidName`: owner cast, `IsLocalPlayerController` | the script, as installed (the VM runs it; `IsLocalPlayerController` is already Off, decision 2026-11-19-15) |
 | the id: `Player` cast to `LocalPlayer`, `ControllerId` | the script as installed: with no local player, the VM's accessed-None answer, 0 |
 | `UIInteraction.GetLoginStatus` | the script, as installed: it is not a native, so there is nothing to bind |
-| `GameEngine.GetOnlineSubsystem()` | the engine's `OnlineSubsystem` field, read when the port's engine object is a `GameEngine`; None when it is another engine. **While the port has no engine object or no online subsystem: a named `NotYet` (layer absent) naming the online subsystem**, never None. None would send the slice down the `LS_NotLoggedIn` branch, a choice the shipped game's Steam state does not make (open question 1) |
+| `GameEngine.GetOnlineSubsystem()`: **no engine object** in the port | a named `NotYet` (layer absent) naming the engine object and its online subsystem. Never None: None would make `GetLoginStatus` answer 0 and so assume `LS_NotLoggedIn`, while the shipped offline result stays open (open question 1) |
+| `GameEngine.GetOnlineSubsystem()`: an engine object that is **not a `GameEngine`** | None, the native's own answer (section 3). `GetLoginStatus` then answers 0 by its script |
+| `GameEngine.GetOnlineSubsystem()`: a `GameEngine` whose `OnlineSubsystem` slot is **empty** | None, the field as stored. A port world that makes a `GameEngine` and leaves the slot empty has chosen this, and `GetLoginStatus` answers 0 |
+| `GameEngine.GetOnlineSubsystem()`: a `GameEngine` whose slot **holds a subsystem** | that object, as stored |
 | the subsystem's `PlayerInterface` | a plain read; empty gives 0 (section 2) |
-| `OnlineSubsystemSteamworks.GetLoginStatus` | the rule of section 4: `LoggedInStatus` when the byte equals `LoggedInPlayerNum`, else 0. Both fields are plain reads. **Which values a headless world gives them is not read: a named `NotYet` (not read) naming the subsystem's login state** until a lane decides how the port's subsystem is logged in (open question 1) |
+| `OnlineSubsystemSteamworks.GetLoginStatus` | the rule of section 4: `LoggedInStatus` when the byte equals `LoggedInPlayerNum`, else 0. **The stored fields are used** when the world's set-up has filled the subsystem's login state, a set-up decision of a later lane (open question 1). **A Steamworks subsystem whose login state the world has not filled is a named `NotYet` (not read)** naming that login state. Its class defaults are not taken as the game's state |
 | another subsystem class behind `PlayerInterface` | a named `NotYet` (not read) naming the class (only the Steamworks rule was read) |
 | status 0: `ServerSetPlayerNameAsCharName`, `GetPlayerUIPreferences`, `GetCharacterClassDefaultName` | the script, as installed. Its first write is `PlayerPreferredCharacterName`; any `NotYet` it meets after that (in `SetName`) is "after a write" |
 | status at least 1: the base `IsInvalidName`, `GetPlayerNickname` | the script, as installed. `GetPlayerNickname` reads `LoggedInPlayerName`; no write before `SetName` |
 | `PlayerController.SetName`, `ServerChangeName`, the URL update, the config save | **not read here.** The URL update and the config save would write outside the world (the player's settings). A port lane decides them; until then, a named `NotYet` (not read) naming `SetName`'s URL and config writes, decided before `ServerChangeName` runs |
 | `SetupInputDevices` next | the script, as installed; its two natives are the next stops (section 6.3) |
 
-**The slice minimum.** On the headless world the first answer is the online subsystem's `NotYet` (layer absent), at
-`GameEngine.GetOnlineSubsystem`. That is before any write of `IsInvalidName`. Since `OnPlayerClassChange` has written
-before it (the skill tree, the name and movement type of #466's section 4), the link's stop text carries "stopped
-after partial writes", with its kind kept.
+**The slice minimum.** The slice's Maya meets every gate: the authority, a `WillowPlayerReplicationInfo` whose
+owner is her local controller, and a controller id that is not -1. On the headless world the answer is the engine's
+`NotYet` (layer absent).
+- **From the preflight above,** it comes before any write of the flow, with no prefix.
+- **Only if a port decides it at runtime,** it comes after `OnPlayerClassChange`'s writes, and its text carries
+  "stopped after partial writes", with its kind kept.
+
+Without those gates (no authority, another replication info class, a non-local owner, an id of -1),
+`IsInvalidName` answers false or `GetLoginStatus` answers 0 before reaching the online subsystem, so this stop does not
+arise.
 
 ## Open questions
 
 1. **UNVERIFIED:** the login status a local, offline, single-player Maya gets: `LoggedInStatus` and
-   `LoggedInPlayerNum` of the shipped game's Steamworks subsystem. It is likely `LS_LoggedIn` for player 0 with Steam
-   running, but that was not read, and it decides which `IsInvalidName` branch runs.
+   `LoggedInPlayerNum` of the shipped game's Steamworks subsystem. That decides which `IsInvalidName` branch runs. It
+   may depend on the Steam client's own mode (online, or Steam's offline mode) as well as on the game's single-player
+   setting; neither was read.
 2. **UNVERIFIED:** which object `OnlineSubsystem.PlayerInterface` holds for the Steamworks subsystem, and who sets
    it.
 3. **UNVERIFIED:** `PlayerController.SetName`'s URL update and config save, and the game info's `ChangeName`. Not read.
@@ -165,13 +196,18 @@ after partial writes", with its kind kept.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-- Read `GameEngine.OnlineSubsystem` (its class), its `PlayerInterface`, `LoggedInStatus`, `LoggedInPlayerNum` and
-  `LoggedInPlayerName`, in the main menu and in Sanctuary, offline and with Steam online. Record Maya's `LocalPlayer`
-  `ControllerId`.
-- Hook `UIInteraction.GetLoginStatus` and `OnlineSubsystemSteamworks.GetLoginStatus` during a class change (a new
-  character, or a save load). Record the argument and the answer each time. Expect the subsystem's `LoggedInStatus`
-  for an id equal to `LoggedInPlayerNum`, and 0 for any other id.
-- Hook `WillowPlayerReplicationInfo.IsInvalidName`, `ServerSetPlayerNameAsCharName` and `PlayerController.SetName`.
-  Record which branch runs, and `PlayerName` and `PlayerPreferredCharacterName` before and after.
-- Compare the info's `PlayerName` after the class change with `LoggedInPlayerName`. Equal values point at the base
-  branch (status at least 1) renaming the player to the Steam name.
+- **The mode, recorded apart.** Before each capture, record the Steam client's mode (online, or Steam's own offline
+  mode) and, separately, the game's online or single-player setting. The two are different switches.
+- **The state.** Read `GameEngine.OnlineSubsystem` (its class), its `PlayerInterface`, `LoggedInStatus`,
+  `LoggedInPlayerNum` and `LoggedInPlayerName`, in the main menu and in Sanctuary, under each recorded mode. Record
+  Maya's `LocalPlayer` `ControllerId`.
+- **The answers.** Hook `UIInteraction.GetLoginStatus` and `OnlineSubsystemSteamworks.GetLoginStatus` during a class
+  change (a new character, or a save load). Record the argument and the return value of each call. Expect the
+  subsystem's `LoggedInStatus` for an id equal to `LoggedInPlayerNum`, and 0 for any other id.
+- **The branch.** Hook `WillowPlayerReplicationInfo.IsInvalidName`, `ServerSetPlayerNameAsCharName`, the base
+  `PlayerReplicationInfo.IsInvalidName` and `PlayerController.SetName`. Record which of the two branch functions is
+  entered after `UIInteraction.GetLoginStatus` returns, with that return value. Record `PlayerName` and
+  `PlayerPreferredCharacterName` before and after.
+- **Not the final name alone.** A final `PlayerName` equal to `LoggedInPlayerName` does not show the branch: both
+  branches end in `SetName`, which itself can replace the name with the nickname (section 6.2). Only the hooks above
+  show which branch ran.
