@@ -39,8 +39,10 @@ hub (three digits); NNN is a placeholder.
     (status 0) with its `MissionDef`;
   - then the numbering: each expansion group from its `MissionNumberBase` (the base game from 0), the main chain, the
     side missions' anchors and buckets, the placement inside a bucket, the second pass, and the numbers.
-  - **Before the first write:** every read, every check and the whole numbering are computed first, so every
-    `NotYet` and every bad-data error leaves nothing changed. Bad data is a `VmError::Script`: a missing or mistyped
+  - **Before the first field write:** every read, every check and the whole numbering are computed first, so every
+    `NotYet` and every bad-data error leaves the definitions' fields and the list unchanged. The candidate loads come
+    before that and count as writes (the hub's ruling): a `NotYet` after them is marked "stopped after partial
+    writes", and the loads stay. Bad data is a `VmError::Script`: a missing or mistyped
     field, a `NextMissionInChain` loop, or a cycle among side missions' dependencies. The second pass's edge case (a
     dependency that stands after its mission) is `NotYet { NotRead }`. A dependency or chain target that is not a
     `MissionDefinition` is bad data.
@@ -89,3 +91,8 @@ to the set-up's load list is a later lane.
    is a `VmError::Script`, not a silent drop.
 4. The not-loaded refusal reads "a reference the set-up did not load".
 5. An edge test, and the test counts corrected.
+
+**Review r2 of #496, folded in.** The candidates are deduplicated by case-folded object path before the equal-key check,
+so one package listed twice is not a tie (tested); the object-level duplicate check, which could not fire, is gone. The
+decision's write-order bullet names the candidate loads. The test counts match the file (10 in `mission_list_tests.rs`),
+and GATES.md has this round's numbers.

@@ -435,7 +435,7 @@ pub fn build(vm: &mut Vm, tracker: ObjRef, ran: &mut bool) -> Result<(), VmError
     };
     // The set (hub ruling 2) and the order (hub ruling 3): the keys and paths are known before anything is loaded, so
     // the equal-key check comes first (review r1 of #496, the hub's ruling).
-    let mut found = candidates(vm)?;
+    let mut found = dedupe(candidates(vm)?);
     found.sort_by_key(|c| c.key);
     if found.windows(2).any(|w| w[0].key == w[1].key) {
         return Err(NotYet::not_read(TIE, RECORD).into());
@@ -447,6 +447,21 @@ pub fn build(vm: &mut Vm, tracker: ObjRef, ran: &mut bool) -> Result<(), VmError
     // after partial writes" (kind and record kept) through `ow_world::pools::after_partial_writes`; other errors pass
     // unchanged; nothing is rolled back.
     after_loads(vm, tracker, record_ty, &found).map_err(ow_world::pools::after_partial_writes)
+}
+
+/// The candidates with each object path once, compared with ASCII case folded (review r2 of #496): one package listed
+/// twice names the same objects, which is not a tie of two definitions. The first of each is kept, in load order.
+fn dedupe(found: Vec<Candidate>) -> Vec<Candidate> {
+    let mut seen: Vec<String> = Vec::with_capacity(found.len());
+    let mut out = Vec::with_capacity(found.len());
+    for c in found {
+        let folded = c.path.to_ascii_lowercase();
+        if !seen.contains(&folded) {
+            seen.push(folded);
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn record_zero(vm: &Vm, record_ty: ow_object::ids::StructId) -> Result<Value, VmError> {
@@ -466,9 +481,7 @@ fn after_loads(vm: &mut Vm, tracker: ObjRef, record_ty: ow_object::ids::StructId
         vm.log.extend(vm.defs.take_log());
         // An enumerated export the store cannot find is inconsistent data, not a silent drop (review r1 of #496).
         let o = o.map_err(VmError::from)?.ok_or_else(|| bad(format!("{}: listed in its package, not found by the store", c.path)))?;
-        if !set.contains(&o) {
-            set.push(o);
-        }
+        set.push(o);
     }
     // Every read and the numbering, before the field writes.
     let defs: Vec<Def> = set.iter().map(|o| read_def(vm, *o)).collect::<Result<_, _>>()?;

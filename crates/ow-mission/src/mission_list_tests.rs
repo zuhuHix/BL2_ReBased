@@ -380,3 +380,13 @@ fn a_dependency_that_is_not_a_mission_is_bad_data() {
     }
     assert_eq!(t.number("Story0"), 7, "nothing written");
 }
+
+/// Review r2 of #496, item 3: the same object path listed twice (one package listed twice), folded for case, is one
+/// candidate, so it is not a tie; two different paths with the same name stay two (and tie).
+#[test]
+fn a_path_listed_twice_is_one_candidate() {
+    let c = |path: &str, key: (u64, i32)| Candidate { path: path.to_string(), key };
+    let out = dedupe(vec![c("GD_Toy.Story0", (3, 0)), c("gd_toy.story0", (3, 0)), c("GD_Other.Story0", (3, 0))]);
+    let paths: Vec<&str> = out.iter().map(|c| c.path.as_str()).collect();
+    assert_eq!(paths, ["GD_Toy.Story0", "GD_Other.Story0"]);
+}
