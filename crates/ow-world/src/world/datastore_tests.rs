@@ -464,6 +464,10 @@ fn fill_willow() -> Vec<u8> {
     let pc = t.class("WillowPlayerController", object);
     let spec = FunctionSpec::new(NATIVE, "GetActiveMissionNumber");
     t.function(pc, "GetActiveMissionNumber", &[], Some(("Int", 0)), &[], &spec, |_| None);
+    // Its fallback, dispatched through the VM since review r1 of #480.
+    let spec = FunctionSpec::new(NATIVE, "GetActivePlotCriticalMissionNumber");
+    let index = [Param { flags: CPF_OPT, ..Param::new("Int", "PlaythroughIndex") }];
+    t.function(pc, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     let spec = FunctionSpec::new(NATIVE, "ToyRefreshStep");
     let step = t.function(pc, "ToyRefreshStep", &[], None, &[], &spec, |_| None).function;
     let spec = FunctionSpec::new(SCRIPT, "UpdateOnlineGameSettings");
@@ -757,7 +761,8 @@ fn expect_unmarked(r: Result<Value, VmError>, what: &str) {
 
 const MISSION: &str = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
 /// What `GetActiveMissionNumber` answers in Off since decision 2026-11-19-93: the toy world has no level, so the
-/// fallback answers, and its current playthrough is the unread virtual (`NotYet { NotRead }`).
+/// fallback (`GetActivePlotCriticalMissionNumber(-1)`, through the VM) answers, and its current playthrough is the
+/// unread virtual (`NotYet { NotRead }`).
 const MISSION_STOP: &str = super::super::mission_numbers::PLAYTHROUGH_QUERY;
 
 /// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then

@@ -98,6 +98,11 @@ fn willow() -> Vec<u8> {
     let index = [param("Int", "PlaythroughIndex", CPF_OPT, 0)];
     t.function(pc, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     t.class("ToyBareController", object);
+    // A controller class whose own GetActivePlotCriticalMissionNumber is a native nothing binds (review r1 of #480).
+    let unbound = t.class("ToyUnboundController", object);
+    let spec = FunctionSpec::new(NATIVE, "GetActivePlotCriticalMissionNumber");
+    let index = [param("Int", "PlaythroughIndex", CPF_OPT, 0)];
+    t.function(unbound, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     let movie3d = t.class("WillowGFxMovie3D", object);
     let spec = FunctionSpec::new(NATIVE, "FocusOn");
     t.function(movie3d, "FocusOn", &[param("Object", "Target", 0, object)], None, &[], &spec, |_| None);
@@ -150,8 +155,8 @@ fn bind_test(vm: &mut Vm, path: &str, f: impl Fn(&mut NativeCall<'_>) -> Result<
 fn toy(world: bool) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-world-mn-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, w) = (engine(), willow());
-    let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
+    let (e, w, g, d) = (engine(), willow(), gfxui(), definitions());
+    let files: [(&str, &[u8]); 4] = [("Engine.upk", &e), ("WillowGame.upk", &w), ("GFxUI.upk", &g), ("GD_ToyMissions.upk", &d)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     let state = Rc::new(RefCell::new(Tracker::default()));
@@ -180,6 +185,8 @@ fn toy(world: bool) -> Toy {
     let p = playthrough.clone();
     bind_test(&mut vm, "WillowGame.WillowPlayerController.GetCurrentPlaythrough", move |_c| Ok(Value::Int(*p.borrow())));
     crate::world::datastore::register(&mut vm).unwrap();
+    // The bound natives run the rules with both unresolved reads taken as read, unless a test switches them back.
+    vm.add_service(TestReads(Reads::ALL)).unwrap();
     let alloc = |vm: &mut Vm, class: &str, name: &str| {
         let c = vm.find_class(class).unwrap();
         vm.space.alloc(c, name, None, Origin::Runtime).unwrap()
@@ -197,6 +204,36 @@ fn toy(world: bool) -> Toy {
         vm.add_service(actors).unwrap();
     }
     Toy { vm, dir, tracker_state: state, playthrough, pc, tracker, gri, world_info }
+}
+
+/// `GFxUI.upk` (invented): `GFxMoviePlayer` and its native `GetVariableObject(string, class)`.
+fn gfxui() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "StrProperty", "ObjectProperty", "ClassProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let player = t.class("GFxMoviePlayer", object);
+    let spec = FunctionSpec::new(NATIVE, "GetVariableObject");
+    let params = [param("Str", "Path", 0, 0), param("Object", "Type", CPF_OPT, object)];
+    t.function(player, "GetVariableObject", &params, Some(("Object", object)), &[], &spec, |_| None);
+    t.p.build()
+}
+
+/// `GD_ToyMissions.upk` (invented): two mission definitions. `Holder`'s `DlcExpansion` names `Target`, so reading it
+/// from the loaded holder gives `Target` as an unloaded store handle. `Target` is plot-critical with number 27.
+fn definitions() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let willow = t.p.add_import("Core", "Package", 0, "WillowGame");
+    let definition = t.p.add_import("Core", "Class", willow, "MissionDefinition");
+    let mut target = ow_package::testkit::ints(&[0]);
+    target.extend(t.p.tag_detail("bPlotCritical", "BoolProperty", &[1], &[]));
+    target.extend(t.p.tag("MissionNumber", "IntProperty", &ow_package::testkit::ints(&[27])));
+    target.extend_from_slice(&t.none);
+    let target = t.p.add_export(definition, "Target", target);
+    let mut holder = ow_package::testkit::ints(&[0]);
+    holder.extend(t.p.tag("DlcExpansion", "ObjectProperty", &ow_package::testkit::ints(&[target])));
+    holder.extend_from_slice(&t.none);
+    t.p.add_export(definition, "Holder", holder);
+    t.p.build()
 }
 
 fn set(vm: &mut Vm, o: ObjRef, name: &str, v: Value) {
@@ -454,12 +491,33 @@ fn not_yet_in(r: Result<Value, VmError>, layer: bool, what: &str, record: &str) 
     }
 }
 
+impl Toy {
+    /// The bound natives take nothing as read again (the port's form).
+    fn reads_off(&mut self) {
+        self.vm.service::<TestReads>().unwrap().borrow_mut().0 = Reads::OFF;
+    }
+
+    /// `GD_ToyMissions.Target` as the store's unloaded handle, read from the loaded holder.
+    fn unloaded_target(&mut self) -> ObjRef {
+        let path = ow_core::ObjectPath::parse("GD_ToyMissions.Holder").unwrap();
+        let holder = self.vm.defs.find(&mut self.vm.space, &path).unwrap().unwrap();
+        let class = self.vm.space.heap.get(holder).unwrap().class;
+        let p = self.vm.space.prop(class, "DlcExpansion").unwrap();
+        let Value::Object(Some(target)) = self.vm.space.read(holder, PropAddr::scalar(p)).unwrap().clone() else {
+            panic!("the holder names its target")
+        };
+        assert!(self.vm.defs.is_unloaded(&self.vm.space, target), "a genuinely unloaded handle");
+        target
+    }
+}
+
 /// The bound natives (nothing taken as read): the fallback's current playthrough is the unread virtual, so a negative
 /// or omitted index is `NotRead`, and `GetActiveMissionNumber` meets it through its fallback branch; an explicit,
 /// non-negative index needs no virtual and is answered.
 #[test]
 fn the_natives_answer_the_unread_playthrough_virtual_as_not_read() {
     let mut t = toy(true);
+    t.reads_off();
     let plot = t.mission(true, false, 12);
     t.track(true, &[(plot, 1)]);
     t.records(&[&[(Some(plot), 1)]]);
@@ -468,6 +526,45 @@ fn the_natives_answer_the_unread_playthrough_virtual_as_not_read() {
     not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
     not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(-1)]), false, PLAYTHROUGH_QUERY);
     assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(12));
+}
+
+/// Review r1 of #480, item 3: the fallback is dispatched through the VM on the controller's class, so with no tracker
+/// and a plot-critical native nothing binds, the answer is the callee's own `UnboundNative`, not a `NotRead`.
+#[test]
+fn the_fallback_is_dispatched_and_an_unbound_callee_is_unbound_native() {
+    let mut t = toy(false);
+    let c = t.vm.find_class("WillowGame.ToyUnboundController").unwrap();
+    let bare = t.vm.space.alloc(c, "ToyUnbound", None, Origin::Runtime).unwrap();
+    match active_mission_number(&mut t.vm, bare, Reads::ALL) {
+        Err(VmError::UnboundNative(key)) => assert!(key.contains("GetActivePlotCriticalMissionNumber"), "{key}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review r1 of #480, item 1: a record whose `MissionDef` is a genuinely unloaded store handle is loaded and answered
+/// (explicit index). The load is a write: a later `NotYet` from the same native is marked once, kind and record kept;
+/// the same `NotYet` with nothing loaded is not marked.
+#[test]
+fn an_unloaded_definition_is_loaded_and_a_later_not_yet_is_marked() {
+    let mut t = toy(true);
+    let target = t.unloaded_target();
+    t.records(&[&[(Some(target), 1)]]);
+    let pc = t.pc;
+    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(27));
+    assert!(t.vm.defs.is_loaded(&t.vm.space, target));
+    // The tracked mission is unloaded: the tracker branch loads it, then the fallback's NotYet comes after the load.
+    let mut t = toy(true);
+    t.reads_off();
+    let target = t.unloaded_target();
+    t.track(true, &[]);
+    let tracker = t.tracker;
+    set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(target)));
+    let pc = t.pc;
+    let marked = format!("{}: {PLAYTHROUGH_QUERY}", crate::world::datastore::PARTIAL_WRITES);
+    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, &marked);
+    let loaded = t.mission(true, false, 27);
+    set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(loaded)));
+    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
 }
 
 /// Section 1, Off step 2: the engine-wide condition is not guessed. With a tracker, both branches are computed; equal
@@ -504,23 +601,24 @@ fn both_branches_answer_when_they_agree_and_not_read_when_they_differ() {
 }
 
 /// Section 3 in the conservative form: the text list update is the named `LayerAbsent` with the list None or set, and
-/// the focus pair is too; on the mission screen both are marked after the accept's writes, on another movie the focus
-/// pair is not marked. Nothing on the screen changes.
+/// so are `GetVariableObject` and `FocusOn`. The natives write nothing, so a direct call on a fresh movie is not marked
+/// (review r1 of #480, item 2); the mark comes from the accept's write boundary in the mission bridge. Nothing on the
+/// screen changes.
 #[test]
-fn the_screen_calls_are_layer_absent_and_marked_on_the_mission_screen() {
+fn the_screen_calls_are_layer_absent_and_not_marked_by_themselves() {
     let mut t = toy(true);
-    let marked = |what: &str| format!("{}: {what}", crate::world::datastore::PARTIAL_WRITES);
     let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
     let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
-    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST), RECORD_GFX);
+    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, TEXT_LIST, RECORD_GFX);
     let wi = t.world_info;
     set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
-    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST), RECORD_GFX);
+    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, TEXT_LIST, RECORD_GFX);
     let focus = "WillowGame.WillowGFxMovie3D.FocusOn";
-    not_yet_in(t.call(focus, movie, vec![Value::Object(None)]), true, &marked(FOCUS), RECORD_GFX);
-    let other = t.vm.find_class("WillowGame.ToyOtherMovie").unwrap();
-    let other = t.vm.space.alloc(other, "ToyOther", None, Origin::Runtime).unwrap();
-    not_yet_in(t.call(focus, other, vec![Value::Object(None)]), true, FOCUS, RECORD_GFX);
+    not_yet_in(t.call(focus, movie, vec![Value::Object(None)]), true, FOCUS, RECORD_GFX);
+    let player = t.vm.find_class("GFxUI.GFxMoviePlayer").unwrap();
+    let player = t.vm.space.alloc(player, "ToyPlayer", None, Origin::Runtime).unwrap();
+    let path = Value::Str("missions.selections.selection0".into());
+    not_yet_in(t.call(GET_VARIABLE_OBJECT, player, vec![path]), true, MOVIE_QUERY, RECORD_GFX);
     let class = t.vm.space.heap.get(movie).unwrap().class;
     let p = t.vm.space.prop(class, "MissionTextList").unwrap();
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
