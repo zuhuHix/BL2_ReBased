@@ -360,6 +360,8 @@ fn package() -> Vec<u8> {
     let player_controller = t.class("PlayerController", controller);
     t.prop("Object", player_controller, "Player", 0, object);
     native(&mut t, player_controller, "IsLocalPlayerController", &[], Some(("Bool", 0)), NATIVE);
+    let ui = t.class("UIInteraction", object);
+    native(&mut t, ui, "GetDataStoreClient", &[], Some(("Object", object)), NATIVE | STATIC);
     t.class("Thing", object);
 
     let definition = t.class("AttributeInitializationDefinition", object);
@@ -1541,6 +1543,19 @@ fn is_local_player_controller_without_a_world_is_not_yet() {
         let refused = super::is_local_player_controller(&mut NativeCall::new(&mut vm, f, None, Vec::new())).unwrap_err();
         assert!(matches!(&refused, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_))), "{refused}");
         let _ = std::fs::remove_dir_all(&dir);
+    });
+}
+
+/// `UIInteraction.GetDataStoreClient` (decision 2026-11-19-19): `NotYet { LayerAbsent }` outside Reference (no world
+/// models the engine's data store client); unbound under Reference.
+#[test]
+fn get_data_store_client_is_not_yet_outside_reference() {
+    run(|| {
+        let mut x = fx();
+        let r = x.call("UIInteraction.GetDataStoreClient", None, Vec::new());
+        assert!(matches!(&r, Err(VmError::NotYet(n)) if matches!(n.missing, ow_core::Missing::LayerAbsent(_))), "{r:?}");
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native("UIInteraction.GetDataStoreClient()"), "unbound under Reference");
     });
 }
 

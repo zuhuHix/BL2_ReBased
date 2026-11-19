@@ -492,6 +492,7 @@ impl NativePack for Pack {
         if vm.parity != ParityMode::Reference {
             vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
+            vm.register_native(GET_DATA_STORE_CLIENT, Rc::new(get_data_store_client))?;
         }
         Ok(())
     }
@@ -545,6 +546,24 @@ fn is_local_player_controller(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
         .into());
     }
     Ok(Value::Bool(false))
+}
+
+const GET_DATA_STORE_CLIENT: &str = "UIInteraction.GetDataStoreClient()";
+
+/// `UIInteraction.GetDataStoreClient()`, a stock UE3 static native (public UE3 semantics: the engine's one global
+/// `DataStoreClient`, made when the engine starts, so the shipped game always has one; decision 2026-11-19-19). Outside
+/// Reference only; Reference keeps the VM's stub policy (the C++ binds nothing).
+///
+/// No world here models the engine's data store client or its data stores, and the script that asks for it goes on
+/// to `FindDataStore` on it. None would read "no client", which the shipped game never answers, so this is
+/// `NotYet { LayerAbsent }`, naming the UI layer, in every world.
+fn get_data_store_client(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    Err(NotYet::layer_absent(
+        "UIInteraction.GetDataStoreClient: the engine's global data store client and its data stores",
+        "the UI layer (lane W7-UI)",
+        "docs/decisions/2026-11/2026-11-19-19-rust-behavior-provider-natives-and-getdatastoreclient-in-off.md",
+    )
+    .into())
 }
 
 /// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).

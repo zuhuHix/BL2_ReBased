@@ -44,11 +44,13 @@
 //! | `RegisterBehaviorConsumer` | None: handle -1; else a new process at the lowest free non-negative `PID` | Off | UNVERIFIED; the allocator is not read |
 //! | `IntializeBehaviorProviderForConsumer` | routed; kernel: decode, pass 1, refuse pass 2 | Off | UNVERIFIED (NATIVE_BEHAVIOR_POPULATION.md section C) |
 //! | `ChangeBehaviorSequenceActivationStatus` | routed; kernel: Enable / Disable / Toggle through the provider | Off | UNVERIFIED (section C) |
+//! | `BeginNondeterministicProviderRegistration` | nothing a script sees; the handle is not written | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 2, 4) |
+//! | `ForceUnregisterBehaviorConsumer` | kernel: the process goes (its providers, so their threads and pending work, with it) and its `PID` is kept out of the allocator; a crate's handle `NotYet`; the handle always comes back -1 | Off | UNVERIFIED (NATIVE_BEHAVIOR_PROVIDERS.md 3, 4) |
 //!
-//! **Reference mode** binds only what the C++ reference binds (the first five rows); the last three stay unbound
-//! there, as in the C++, so the VM's stub policy answers them. The other kernel natives (`ForceUnregister...`,
-//! `BeginNondeterministicProviderRegistration`, `Publish*OutputVariable`, `ProcessReplicated*`, ...) are bound in
-//! neither mode: their rules are not read, so the stub policy answers them (decision 2026-11-16-50 lists them).
+//! **Reference mode** binds only what the C++ reference binds (the first five rows); the last five stay unbound
+//! there, as in the C++, so the VM's stub policy answers them. The other kernel natives (`Publish*OutputVariable`,
+//! `ProcessReplicated*`, ...) are bound in neither mode: their rules are not read, so the stub policy answers them
+//! (decision 2026-11-16-50 lists them).
 //!
 //! **What is fitted, not read.** The `PID` the kernel gives out: the record reads "a non-negative slot index of the
 //! process table" and "probably 0" for the first; the lowest free index from 0 is this pack's choice, UNVERIFIED (an
@@ -97,6 +99,10 @@ pub const INITIALIZE_PROVIDER: &str =
     "GearboxFramework.BehaviorKernel.IntializeBehaviorProviderForConsumer";
 pub const CHANGE_SEQUENCE: &str =
     "GearboxFramework.BehaviorKernel.ChangeBehaviorSequenceActivationStatus";
+pub const BEGIN_NONDETERMINISTIC: &str =
+    "GearboxFramework.BehaviorKernel.BeginNondeterministicProviderRegistration";
+pub const FORCE_UNREGISTER: &str = "GearboxFramework.BehaviorKernel.ForceUnregisterBehaviorConsumer";
+pub const RECORD_PROVIDERS: &str = "docs/verification/NATIVE_BEHAVIOR_PROVIDERS.md";
 
 /// The natives that take a consumer handle first and go to its owner (module documentation).
 pub const ROUTED: [&str; 5] = [
@@ -128,6 +134,10 @@ pub enum Owner {
     Kernel,
     /// A crate that hands out its own handles (`"ow-mission"`, `"ow-combat"`).
     Crate(&'static str),
+    /// A kernel process that `ForceUnregisterBehaviorConsumer` released. No consumer answers for it (a handle nobody
+    /// owns), and its `PID` stays out of the allocator: when the game hands a released `PID` out again is not read
+    /// (NATIVE_BEHAVIOR_PROVIDERS.md, open question 2).
+    Released,
 }
 
 /// A consumer the kernel registered: its object and its providers in registration order (path, provider; the
@@ -195,6 +205,8 @@ impl NativePack for Pack {
             for path in [INITIALIZE_PROVIDER, CHANGE_SEQUENCE] {
                 bind(vm, path, routed(path))?;
             }
+            bind(vm, BEGIN_NONDETERMINISTIC, Rc::new(begin_nondeterministic))?;
+            bind(vm, FORCE_UNREGISTER, Rc::new(force_unregister))?;
         }
         Ok(())
     }
@@ -401,6 +413,44 @@ fn register_consumer(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         }
     };
     handle_value(c, pid)
+}
+
+// BeginNondeterministicProviderRegistration(out ConsumerHandle), Off only (NATIVE_BEHAVIOR_PROVIDERS.md sections 2
+// and 4): the game caps the consumer's replication slot counter, which nothing in this port reads (no slot numbers, no
+// replication), so nothing changes and the handle is not written, for any PID.
+fn begin_nondeterministic(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    Ok(Value::None)
+}
+
+// ForceUnregisterBehaviorConsumer(out ConsumerHandle), Off only (NATIVE_BEHAVIOR_PROVIDERS.md sections 3 and 4).
+// A kernel process is unregistered: it leaves the process table with its providers, so their running threads and
+// pending work never run again, and its PID is marked released (kept out of the allocator, no consumer answers for
+// it). A crate's handle is `NotYet` (that crate's teardown is not ported here). Then the caller's handle reads -1, in
+// every case that does not refuse: unknown, -1 and released PIDs only get the write.
+fn force_unregister(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let handle = c.arg(0)?.clone();
+    let pid = handle_pid(c.vm, &handle);
+    let k = kernel(c.vm)?;
+    {
+        let mut k = borrow(&k)?;
+        match pid.and_then(|p| k.owners.get(&p).copied().map(|o| (p, o))) {
+            Some((p, Owner::Kernel)) => {
+                k.processes.remove(&p);
+                k.owners.insert(p, Owner::Released);
+            }
+            Some((p, Owner::Crate(name))) => {
+                return Err(NotYet::not_ported(
+                    format!("ForceUnregisterBehaviorConsumer on consumer PID {p}, which {name} owns (its teardown)"),
+                    RECORD_PROVIDERS,
+                )
+                .into());
+            }
+            _ => {}
+        }
+    }
+    let invalid = with_pid(c.vm, handle, INVALID_PID)?;
+    c.set_out(0, invalid)?;
+    Ok(Value::None)
 }
 
 /// A routed native's body (module documentation).
@@ -733,6 +783,22 @@ fn handle_pid(vm: &Vm, handle: &Value) -> Option<i32> {
         Value::Byte(b) => Some(i32::from(*b)),
         _ => None,
     }
+}
+
+/// `handle`, a consumer handle struct, with its `PID` field set to `pid`.
+fn with_pid(vm: &Vm, mut handle: Value, pid: i32) -> Result<Value, VmError> {
+    let index = vm.space.names.find("PID").and_then(|id| {
+        let ty = handle.as_struct()?.ty;
+        vm.space.classes.struct_layout(ty)?.field(id).map(|(i, _)| i)
+    });
+    let slot = index
+        .and_then(|i| usize::try_from(i).ok())
+        .and_then(|i| handle.struct_mut()?.fields.get_mut(i));
+    match slot {
+        Some(slot) => *slot = Value::Int(pid),
+        None => return Err(error("a consumer handle that is no struct with a PID".to_string())),
+    }
+    Ok(handle)
 }
 
 /// The handle the native returns: its declared result type's default, with `PID` set.
