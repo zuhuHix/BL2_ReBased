@@ -36,6 +36,14 @@ No dependency and no crate edge was added. No bounds check was loosened. Referen
     - true with `bNoCollisionFail` is the relocation step, `NotYet { NotRead }`.
 
     Each is terminal, prefixed "stopped after partial writes", its kind kept: the actor was made.
+- **Review r1 of #463:**
+  - Every Off error after the actor joins the level list goes through the partial-write rule: a `NotYet` is terminal
+    and prefixed, its kind kept, the actor stays; other errors propagate unchanged. That covers the owner change,
+    each begin-play event and the final base check.
+  - The Off placement check runs before the base precheck, both before anything is made.
+  - A borrowed collision service is `VmError::ServiceBorrowed`, not an absent service.
+  - The Reference test installs a service and a cylinder, so it tells Reference's legacy refusal from Off's filter
+    `NotYet`.
 - **The collision service in the tree:** none is installed. H4's `CollisionWorld` (`ow-host`, which already depends on
   `ow-world`) could implement the trait with no new crate edge. It would answer box queries Unsupported (it has no box
   shape), and template-mode tests for a `bCollideComplex` template too. Link 9 runs on its own world with no level

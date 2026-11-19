@@ -652,9 +652,6 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
             "the post-spawn encroachment check (or relocation) of an actor that collides with actors",
         ));
     }
-    if begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
-        return Err(collision("the base search after PostBeginPlay"));
-    }
     let time = float(space, world_info, "TimeSeconds")?;
     let requested = match &req.location {
         Some(v) => v.clone(),
@@ -675,6 +672,12 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     } else {
         requested
     };
+    // The base precheck comes after the Off placement check (review r1 of #463, item 2), both before anything is made,
+    // so a template that needs both meets the placement refusal first.
+    let space = &vm.space;
+    if begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
+        return Err(collision("the base search after PostBeginPlay"));
+    }
 
     // The fields written below exist before anything is made (review r2 of #435): a class without one fails here,
     // with nothing left behind.
@@ -704,6 +707,31 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     };
     level.list.push(actor);
     drop(level);
+    // The actor is registered: in Off, every error from here on goes through the partial-write rule (review r1 of
+    // #463, item 1): a `NotYet` is terminal and prefixed, its kind kept; any other error propagates unchanged; the actor
+    // stays (no rollback). Reference keeps its errors as they were.
+    let rest = after_insertion(vm, actor, begun, off, req, time, world_info, location, rotation, instigator);
+    if off {
+        rest.map_err(crate::pools::after_partial_writes)
+    } else {
+        rest
+    }
+}
+
+/// The spawn's steps after the actor joined the level list (module documentation, steps 3 and 4).
+#[allow(clippy::too_many_arguments)]
+fn after_insertion(
+    vm: &mut Vm,
+    actor: ObjRef,
+    begun: bool,
+    off: bool,
+    req: &SpawnRequest,
+    time: f32,
+    world_info: ObjRef,
+    location: Value,
+    rotation: Value,
+    instigator: Option<ObjRef>,
+) -> Result<Option<ObjRef>, VmError> {
     set_field(&mut vm.space, actor, "CreationTime", Value::Float(time))?;
     set_field(
         &mut vm.space,

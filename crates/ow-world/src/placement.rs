@@ -118,11 +118,14 @@ pub fn install_collision(vm: &mut Vm, model: Rc<dyn SpawnCollision>) -> Result<(
     Ok(())
 }
 
-/// The world's collision service, if it has one.
-pub fn collision_model(vm: &Vm) -> Option<Rc<dyn SpawnCollision>> {
-    let s = vm.service::<CollisionService>()?;
-    let model = s.try_borrow().ok()?.0.clone();
-    Some(model)
+/// The world's collision service: `Ok(None)` when none is registered; a registered one that is borrowed is
+/// `VmError::ServiceBorrowed`, not an absent service (review r1 of #463, item 3).
+pub fn collision_model(vm: &Vm) -> Result<Option<Rc<dyn SpawnCollision>>, VmError> {
+    let Some(s) = vm.service::<CollisionService>() else {
+        return Ok(None);
+    };
+    let model = s.try_borrow().map_err(|_| VmError::ServiceBorrowed("CollisionService"))?.0.clone();
+    Ok(Some(model))
 }
 
 /// Whether the spot search runs (module documentation, step 1), on the template's flags alone.
@@ -360,7 +363,7 @@ fn search(q: &Queries<'_>, e: [f32; 3], l0: [f32; 3], complex: bool) -> Result<O
 /// make the actor at, or `None` when the search fails. Reads only; it runs before anything is made.
 pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option<Value>, VmError> {
     let space = &vm.space;
-    let Some(model) = collision_model(vm) else {
+    let Some(model) = collision_model(vm)? else {
         return Err(NotYet::layer_absent(SPOT_SEARCH, LAYER, RECORD).into());
     };
     let e = extent(space, template)?;
@@ -381,8 +384,9 @@ pub fn after_pre_begin_play(vm: &Vm, no_collision_fail: bool) -> VmError {
         NotYet::not_read(RELOCATION, RECORD)
     } else {
         match collision_model(vm) {
-            None => NotYet::layer_absent(ENCROACHMENT, LAYER, RECORD),
-            Some(_) => NotYet::not_read(ENCROACHMENT_RULE, RECORD),
+            Ok(None) => NotYet::layer_absent(ENCROACHMENT, LAYER, RECORD),
+            Ok(Some(_)) => NotYet::not_read(ENCROACHMENT_RULE, RECORD),
+            Err(e) => return e,
         }
     };
     NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
