@@ -17,8 +17,9 @@ structure. **Every rule here is UNVERIFIED** in the running game.
 
 ## 1. The callers
 
-`RecordMissionObjectiveChangedEventForPlayer(Player, ObjectiveIndex, OldValue, NewValue, MissionName)` is a static
-native of `WillowGame.WillowLeviathanService`, the game's statistics (telemetry) service. Its key is
+`RecordMissionObjectiveChangedEventForPlayer(ForPlayer, ObjectiveIndex, ObjectiveProgress, PreviousObjectiveProgress,
+MissionDefinition)`, as the installed package declares it (an object, three integers and a name, no return value), is a
+static native of `WillowGame.WillowLeviathanService`, the game's statistics (telemetry) service. Its key is
 `WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(object,int,int,int,name)`.
 
 The script calls it as a static function of the service class, from two controller functions:
@@ -28,8 +29,18 @@ The script calls it as a static function of the service class, from two controll
 
 In every call the player is `Self`, the controller, and the name is the mission object's `Name`.
 
-**The two middle integers** are read as the objective's previous and new progress, by fit from the three call sites;
-their names are not declared in what was read. UNVERIFIED.
+**The two middle integers: the declared order and the callers' order disagree.**
+- **Declared:** the third parameter is `ObjectiveProgress`, then the fourth is `PreviousObjectiveProgress`.
+- **Passed:** all three script calls pass the objective's old progress third and its new progress fourth:
+  - the changed-progress call passes the previous value, then the current one;
+  - the newly-counted call passes 0, then the count;
+  - `ClearMissionObjective` passes the current value, then 0.
+
+  So against the declared names, the callers hand the previous progress as `ObjectiveProgress` and the new progress as
+  `PreviousObjectiveProgress`.
+- **The binding key is unchanged:** `(object,int,int,int,name)`.
+- **The values' meaning in the running game** (which one the service records as which) is **UNVERIFIED**. The Off
+  answer (section 3) reads neither.
 
 ## 2. What it does
 
@@ -56,8 +67,11 @@ covers it:
   beside the three siblings R3 already names. Reference keeps the stub policy.
 - **The answer:** nothing. No return value, no write, no load. The record step makes and frees only temporaries, so
   "nothing" is the whole answer.
-- **No preflight is needed.** It refuses nothing, and a None player does nothing in the game too (the routine returns
-  at once for one).
+- **No preflight is needed.**
+  - R3 adds no telemetry-specific refusal or preflight for a valid call, including an object-valued None player (the
+    game's routine returns at once for one).
+  - Ordinary VM argument errors still apply, as for the R3 status sibling: a call whose arguments do not match the
+    declaration is the VM's own error.
 - **A port answer, UNVERIFIED.**
 
 The rest of `RecordMissionObjectiveSetActivatedEventForPlayer` and of the other `Record*` events was not compared.
@@ -65,12 +79,14 @@ Each needs its own check that it ends in the same routine before R3 covers it.
 
 ## Open questions
 
-1. **UNVERIFIED:** that the two middle integers are the objective's previous and new progress (by fit).
+1. **UNVERIFIED:** which of the two middle integers the service records as the previous and which as the new progress.
+   The declared names and the callers' order disagree (section 1).
 2. **UNVERIFIED:** the shared submit routine's two paths, and the engine lookup that packs the name (as for the
    siblings).
 
 ## Live check that would confirm the rule (bl-sdk, the RTSE way)
 
-Hook the native while advancing the Fire mission's objective, and log its arguments: expect the controller, the
-objective's index, its old and new progress, and the mission's name. Then compare a save-free session's script-visible
+Hook the native while advancing the Fire mission's objective, and log its arguments. Expect the controller, the
+objective's index, the old progress in the third position and the new progress in the fourth (the callers' order), and
+the mission's name. Then compare a save-free session's script-visible
 state before and after the call (expect no difference).
