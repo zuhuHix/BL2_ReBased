@@ -89,6 +89,14 @@ Off `--slice-gate` strict, same base with and without the call: 0 ok / 11 NotYet
 in `maya:8` (link 1 records 1 step, `maya:8`; the rest are blocked by link 1). The other 8 rows are byte-identical.
 ctest and verify_packages not run (no C++ change). No real-game session.
 
+**IMPL-MAPLOAD-GAMEINFO (2026-11-19, zuhu desktop, on main d52bcc7):** AI-assisted (Claude Code, Opus 5.5). The map
+load's game info routine in Off (`mapload::game_info`, NATIVE_MAP_LOAD.md section 3) and the map route
+`bring_up_map_for_play`. `cargo test --workspace -j 2` 2,453 passed / 0 failed / 47 ignored. Installed Off
+`--slice-gate` strict, under the machine lock, base and branch each built: 1 ok / 4 NotYet / 9 errors both, every row
+byte-identical. Installed ignored test (Sanctuary through the map route): `WillowGame.WillowCoopGameInfo` spawned into
+`WorldInfo.Game`; its `InitGame` and `PreBeginPlay` stop, marked, at `GotoState('Auto')`. ctest and verify_packages not
+run (no C++ change). No real-game session; `UNVERIFIED` in game. Logs under ignored `local/p2/mapload-gameinfo/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

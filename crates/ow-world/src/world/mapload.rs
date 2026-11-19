@@ -546,6 +546,7 @@ fn refuse(map: &mut DetMap<String, Refusal>, class: String, reason: String, not_
 }
 
 pub mod bringup;
+pub mod game_info;
 
 #[cfg(test)]
 mod tests;

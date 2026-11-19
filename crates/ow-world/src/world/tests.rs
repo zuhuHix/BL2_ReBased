@@ -139,6 +139,7 @@ fn package() -> Vec<u8> {
         "ArrayProperty",
         "StructProperty",
         "StrProperty",
+        "ClassProperty",
     ]);
     let object = t.class("Object", 0);
     let vector = toy_struct(&mut t, object, "Vector", None);
@@ -331,6 +332,9 @@ fn package() -> Vec<u8> {
     t.prop("Object", world_info, "PawnList", 0, actor);
     // The game info the world's hooks fall back to (decision 2026-11-16-49).
     t.prop("Object", world_info, "Game", 0, actor);
+    // The map's own game class (lane IMPL-MAPLOAD-GAMEINFO): a class reference, its meta class the actor class.
+    let class_ref = t.import("Class");
+    t.prop_tail("Class", world_info, "DefaultGameType", 0, &ow_package::testkit::ints(&[class_ref, actor]));
     native(
         &mut t,
         world_info,

@@ -63,6 +63,14 @@
 //! network setting and test support, not behaviour a single-player run depends on.
 //!
 //! Both parity modes run the same rules: the C++ has no map load, so there is no Reference stand-in (R3).
+//!
+//! **The map route** ([`bring_up_map_for_play`], lane IMPL-MAPLOAD-GAMEINFO, SLICE_MAPLOAD.md section 3, steps 4 and
+//! 5): the game info routine ([`super::game_info::spawn_game_info`], Off only) puts the game info in `WorldInfo.Game`,
+//! then [`bring_up_for_play`] runs, so the game info's own script (`InitGame`, its `PreBeginPlay`) makes what it makes.
+//! The route mode is checked before the spawn, so that refusal stays unmarked; any `NotYet` the bring-up returns after
+//! the routine wrote is marked "stopped after partial writes". The navigation list the design places before the game
+//! info (its step 3) is not built: where `WorldInfo.NavigationPointList` and each point's `nextNavigationPoint` come
+//! from at load is open (SLICE_MAPLOAD.md section 5, Q1), so it is a `NotYet { NotRead }` in [`MapBringUp::pending`].
 
 use ow_core::NotYet;
 use ow_object::ids::ObjRef;
@@ -143,8 +151,8 @@ pub fn game_info(world: &World) -> Result<ObjRef, VmError> {
     match actors::field(&world.vm.space, info, "Game")? {
         Value::Object(Some(game)) => Ok(game),
         Value::Object(None) => Err(NotYet::not_read(
-            "the game info's class choice (NATIVE_MAP_LOAD.md section 3: the receiver of SetGameType in each branch, \
-             and the configured DefaultGame, which no reader here reads)",
+            "the game info's class choice outside the map route (NATIVE_MAP_LOAD.md section 3: the receiver of \
+             SetGameType in each branch; bring_up_map_for_play runs the configured DefaultGame branch)",
             RECORD,
         )
         .into()),
@@ -293,12 +301,7 @@ pub fn bring_up_for_play(world: &mut World, options: BringUpOptions) -> Result<B
     let reach = begin_play_reach(world)?;
     let game = game_info(world)?;
     if options.mode == RouteMode::SkipStatic {
-        return Err(NotYet::not_read(
-            "the begin-play routing with its mode argument set (static actors skipped): which value the bring-up \
-             passes (NATIVE_MAP_LOAD.md, Open)",
-            RECORD,
-        )
-        .into());
+        return Err(skip_static());
     }
     let info = world_info_of(world)?.ok_or_else(|| VmError::Script {
         function: "bring_up_for_play".into(),
@@ -361,6 +364,50 @@ pub fn bring_up_for_play(world: &mut World, options: BringUpOptions) -> Result<B
     actors::set_field(&mut vm.space, info, "bStartup", Value::Bool(false))?;
     routed?;
     Ok(out)
+}
+
+/// What [`bring_up_map_for_play`] did.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapBringUp {
+    /// The game info routine's result (the actor in `WorldInfo.Game`).
+    pub game_info: super::game_info::GameInfoSpawned,
+    pub bring_up: BringUp,
+    /// The map route's own steps not run (module documentation, "The map route").
+    pub pending: Vec<NotYet>,
+}
+
+/// The map route's steps not run.
+pub fn map_route_pending() -> Vec<NotYet> {
+    vec![NotYet::not_read(
+        "WorldInfo.NavigationPointList and each point's nextNavigationPoint at load (SLICE_MAPLOAD.md section 5, Q1: \
+         built at load or read from untagged data, and how the streamed levels' points join)",
+        RECORD,
+    )]
+}
+
+/// The map route (module documentation): the game info routine, then the bring-up.
+pub fn bring_up_map_for_play(
+    world: &mut World,
+    input: &super::game_info::GameInfoInput<'_>,
+    options: BringUpOptions,
+) -> Result<MapBringUp, VmError> {
+    if options.mode == RouteMode::SkipStatic {
+        return Err(skip_static());
+    }
+    let mark = super::game_info::WriteMark::now(&world.vm);
+    let game_info = super::game_info::spawn_game_info(world, input)?;
+    let bring_up = bring_up_for_play(world, options).map_err(|e| mark.mark(&world.vm, e))?;
+    Ok(MapBringUp { game_info, bring_up, pending: map_route_pending() })
+}
+
+fn skip_static() -> VmError {
+    NotYet::not_read(
+        "the begin-play routing with its mode argument set (static actors skipped): which value the bring-up \
+         passes (NATIVE_MAP_LOAD.md, Open)",
+        RECORD,
+    )
+    .into()
 }
 
 /// The world info's three time fields (step 2).
