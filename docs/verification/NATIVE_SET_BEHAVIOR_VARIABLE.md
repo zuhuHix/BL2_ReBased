@@ -21,21 +21,27 @@ structure. **Every rule here is UNVERIFIED** in the running game.
 
 ## 1. The callers on link 9's path
 
-- **`LiftActionSkill.SelectTarget(NewTarget)`:** when `CanPhaseLockTarget` and `CanLiftTargetIf` pass, it calls
-  `PhaseLockTarget(NewTarget)`, which raises the skill's `OnSelectedTarget` script event.
-- **`LiftActionSkill.OnSelectedTarget(SkillInstigator, SkillTarget)`** (an event with a local array `Parameters` of
-  `BehaviorVariableValue`):
+- **`LiftActionSkill.SelectTarget(NewTarget)`:** when `CanPhaseLockTarget` passes, the target's `DrivenVehicle` is
+  None, and `CanLiftTargetIf` passes (a None `CanLiftTargetIf` counts as a pass), it calls `PhaseLockTarget(NewTarget)`.
+- **`LiftActionSkill.PhaseLockTarget(NewTarget)`** calls `OnSelectedTarget` directly, as a final function, with the
+  skill's instance `ConsumerHandle`, its `MyWillowPawn` and `NewTarget`.
+- **`LiftActionSkill.OnSelectedTarget(TheConsumeHandle, SkillInstigator, SkillTarget)`** (a final function, not an
+  event; it has a local array `Parameters` of `BehaviorVariableValue`, and its body uses the instance `ConsumerHandle`,
+  not its first parameter):
   1. sets `Parameters` to length 2;
   2. calls the static `BehaviorProviderDefinition.SetObjectBehaviorVariable(Parameters[0], SkillInstigator)`;
   3. then `SetObjectBehaviorVariable(Parameters[1], SkillTarget)`;
   4. then `BehaviorKernel.ActivateBehaviorEventFromScript(ConsumerHandle, GetBehaviorProviderDefinition(),
      GetFuncName(), <filter omitted>, Parameters)`: the event named after the function (`OnSelectedTarget`), fired on
      the skill's behavior provider with the two values.
-- **Other callers** (not on link 9's path): eleven other `LiftActionSkill` events (`OnBeginLiftingTarget`,
+- **Other callers** (not on link 9's path): ten other `LiftActionSkill` functions (`OnBeginLiftingTarget`,
   `OnTargetBlocked`, `OnTargetBecomesLocked`, `OnTargetIsAboutToBecomeUnlocked`, `OnReleasedTarget`,
   `OnKilledTarget`, `OnHealedTarget`, `OnLiftFailed`, `OnRuinImpact`, `OnCharmTarget`), the `ExecuteActionSkill`
   events and two `ShieldDefinition` events. All of them follow the same shape: fill a local `Parameters` array, then
   fire an event with it.
+- **Only `SetObjectBehaviorVariable` has script callers.** In Core, Engine, GameFramework, GearboxFramework and
+  WillowGame, all 34 call sites of the five setters (in 21 functions) are `SetObjectBehaviorVariable`. The Bool, Int,
+  Float and Vector setters have none, so their rows in section 3 rest on the executable alone.
 
 ## 2. The shapes (from the packages)
 
@@ -60,10 +66,10 @@ Each one writes exactly two fields of that struct, in this order, and leaves eve
 
 | Setter | Value field written | `VariableType` written |
 |---|---|---|
-| `SetBoolBehaviorVariable` | `IntValue` = the bool (as the engine's 0 or 1) | `BVAR_Bool` (1) |
-| `SetIntBehaviorVariable` | `IntValue` = the int | `BVAR_Int` (2) |
-| `SetFloatBehaviorVariable` | `FloatValue` = the float | `BVAR_Float` (3) |
-| `SetVectorBehaviorVariable` | `VectorValue` = the vector (X, Y, Z) | `BVAR_Vector` (4) |
+| `SetBoolBehaviorVariable` (no script caller) | `IntValue` = the bool (as the engine's 0 or 1) | `BVAR_Bool` (1) |
+| `SetIntBehaviorVariable` (no script caller) | `IntValue` = the int | `BVAR_Int` (2) |
+| `SetFloatBehaviorVariable` (no script caller) | `FloatValue` = the float | `BVAR_Float` (3) |
+| `SetVectorBehaviorVariable` (no script caller) | `VectorValue` = the vector (X, Y, Z) | `BVAR_Vector` (4) |
 | `SetObjectBehaviorVariable` | `ObjectValue` = the object | `BVAR_Object` (5) |
 
 Answers to the hub's questions:
@@ -88,9 +94,14 @@ once the setters are bound, that is link 9's expected next stop (open question 1
 (`GearboxFramework.BehaviorProviderDefinition.Set<Kind>BehaviorVariable`). Reference keeps its stub policy.
 
 **Write-free preflight** (no loads; nothing is a definition handle here):
-1. Argument 0 must be an out argument holding a `BehaviorProviderDefinition.BehaviorVariableValue` struct; anything
-   else is `VmError::Script`, "BehaviorProviderDefinition.Set<Kind>BehaviorVariable: <what it holds>, not a
-   BehaviorVariableValue".
+1. Argument 0 must be an out argument. **Holding None, it is taken as the zero `BehaviorVariableValue`**, and the two
+   fields are then set on that zero struct (the VM's struct-zero helper, as `natives_core`'s `make_struct` or
+   `classes.zero_value` give it). This is link 9's own case: `Parameters` is a function-local array, and the port's
+   VM grows a local array untyped (`Fill::Untyped` in `ow-vm` `interp::aggregate`, whose fill is None for an empty
+   array), so after `Parameters.Length = 2` both elements are None. The C++ reference fills a local array the same
+   way. A value that is neither None nor that struct is `VmError::Script`,
+   "BehaviorProviderDefinition.Set<Kind>BehaviorVariable: <what it holds>, not a BehaviorVariableValue". **That
+   refusal is the port's own:** the native checks nothing, since in the game the argument is always the typed struct.
 2. Argument 1 must be the setter's kind: a bool, an int, a float, an `Object.Vector` struct, or an object reference
    (None included). Anything else is `VmError::Script`, naming the argument.
 3. The enum value is found **by name** (`BVAR_Bool` ... `BVAR_Object`) in the loaded
