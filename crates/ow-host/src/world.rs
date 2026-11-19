@@ -491,7 +491,8 @@ pub const MATINEE_OP_CLASS: &str = "Engine.SeqAct_Interp";
 /// `SeqAct_Interp` (or subclass) export of those files is loaded, and each linked variable is read
 /// ([`read_op_variables`]). Any link counts, not only the one whose description is a group name, so the bound set errs
 /// towards "may be driven". Whatever the scan cannot read is counted ([`MatineeBindings::complete`] is then false and
-/// every interpolating actor is `Unknown`): an export whose class does not resolve (it might be a Matinee op), an op
+/// every interpolating actor is `Unknown`): an export whose class does not resolve or whose class reference cannot be
+/// read (it might be a Matinee op), an op
 /// whose `VariableLinks` is not an array of links, and a linked variable that may hold an actor the scan cannot see.
 /// Loads the ops and their variables into the world's object space.
 pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
@@ -509,8 +510,15 @@ pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
                 if entry.class == 0 {
                     continue;
                 }
-                let class = pkg.path_of(entry.class).map_err(|e| e.to_string())?;
-                exports.push((i32::try_from(i + 1).map_err(|e| e.to_string())?, class));
+                // A class reference whose path cannot be read is counted as unresolved (review r2 of #420), not an
+                // error that fails the map load.
+                let index = i32::try_from(i + 1).map_err(|e| e.to_string())?;
+                match pkg.path_of(entry.class) {
+                    Ok(class) => exports.push((index, class)),
+                    Err(e) => {
+                        *out.unresolved_classes.entry(format!("class reference {} ({e})", entry.class)).or_insert(0) += 1;
+                    }
+                }
             }
         }
         for (index, class) in exports {

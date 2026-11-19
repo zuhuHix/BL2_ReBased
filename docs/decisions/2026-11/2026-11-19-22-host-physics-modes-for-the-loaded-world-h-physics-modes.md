@@ -33,7 +33,8 @@ base condition, the `RemoteRole` variant) are untouched. No package parsing beha
       variable, say) unless it is on an explicit list of classes that hold no actor: `InterpData`, the scalar
       `SeqVar_*` and the two Willow day/night variables (`NO_ACTOR_VARIABLES`).
     - **Ops.** An op whose `VariableLinks`, or one of its links' `LinkedVariables`, is not an array is counted.
-    - **Classes.** An export class the VM cannot resolve is counted, because it might be a Matinee op. The exceptions
+    - **Classes.** An export class the VM cannot resolve, or an export class reference whose path cannot be read, is
+      counted, because it might be a Matinee op (review r2: the second no longer fails the map load). The exceptions
       are five classes named on a list of engine data with no UnrealScript class (`NOT_OP_CLASSES`): `Core.Package`
       2,066, `Engine.ShadowMap1D` 151, `Engine.LightMapTexture2D` 136, `Engine.Polys` 53 and
       `GearboxFramework.WiringMesh` 1 on Sanctuary. Every Kismet op derives from the script class
@@ -79,6 +80,8 @@ base condition, the `RemoteRole` variant) are untouched. No package parsing beha
     - the scan over invented Kismet classes (review r1): a plain object variable binds its actor, an empty one counts
       as empty, and a subclass of it, a named variable, an op with no link array and an unresolved class each make
       the scan incomplete, so the driver is `Unknown`;
+    - the export walk over an invented map (review r2): the op export is read, a `Core.Package` export is skipped,
+      and two exports of a class that does not resolve are counted, so the driver is `Unknown`;
     - the no-op answers `NotYet` in Reference.
   - **Installed, headless** (`--map Sanctuary --play-script` with H4-PLAY's 60 s script, desktop, release, under the
     machine lock).
