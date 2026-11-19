@@ -20,8 +20,11 @@
 //! - **The rest of the bring-up** (section 2, steps 1, 2, 3 and 5): the time reset's flag and fields, the URL options
 //!   and the setup and per-level engine calls are not read (low in the note).
 //! - **The local player's play actor** (section 4): the engine routine `LocalPlayer.SpawnPlayActor` calls was not
-//!   read. The engine's local player list is filled by the caller that makes the player's controller
-//!   (`Actors::add_local_player`, decision 2026-11-16-81).
+//!   read, and neither was where the engine fills `GamePlayers` (open, note section 4). This project's hook for that
+//!   list is `Actors::add_local_player` (decision 2026-11-16-81), which the caller that makes the player's controller
+//!   calls.
+//! - **Step 6** (the `BandwidthLimit=` URL option passed to the game info, and the memory-check option) is left out on
+//!   purpose: a network setting and debug support, not behaviour a single-player run depends on.
 //!
 //! Both parity modes run the same rules: the C++ has no map load, so there is no Reference stand-in (R3).
 
@@ -41,11 +44,12 @@ use crate::world::World;
 pub struct BeginPlayReach {
     /// Actors in the world's list, the `WorldInfo` included.
     pub actors: usize,
-    /// Pending deletion: both passes skip them.
+    /// Pending deletion (read as `actors::is_destroyed`, UNVERIFIED): both passes skip them.
     pub pending_deletion: usize,
     /// Not static: pass 1's first event reaches them.
     pub not_static: usize,
-    /// Static: routed only when they carry the note's unnamed second flag (open).
+    /// Static: pass 1's event and pass 2's component calls reach them only with the note's unnamed second flag (open);
+    /// pass 2's first call reaches them regardless.
     pub static_open: usize,
     /// The persistent `WorldInfo`'s `bBegunPlay` (the routine's once test), `None` when its class declares no such
     /// field.
@@ -146,7 +150,9 @@ pub fn bring_up_for_play(world: &World) -> Result<BringUp, VmError> {
         Err(e) => return Err(e),
     };
     pending.push(NotYet::not_read(
-        "the begin-play pass (NATIVE_MAP_LOAD.md section 2 step 4 and 2.1: the per-actor virtuals' identities, the \
+        "the begin-play pass (NATIVE_MAP_LOAD.md section 2 step 4 and 2.1: the engine call after the begun-play flag \
+         (the game info call with two outputs), the engine call on a second object when it exists, the per-actor \
+         virtuals' identities, whether pass 2's second event is under the static condition, the \
          second flag that routes a static actor, the initialisation pass's field resets and engine calls)",
         RECORD,
     ));
@@ -155,7 +161,8 @@ pub fn bring_up_for_play(world: &World) -> Result<BringUp, VmError> {
         RECORD,
     ));
     pending.push(NotYet::not_read(
-        "the local player's play actor (NATIVE_MAP_LOAD.md section 4: the engine routine SpawnPlayActor calls)",
+        "the local player's play actor (NATIVE_MAP_LOAD.md section 4: the engine routine SpawnPlayActor calls, and \
+         where the engine fills GamePlayers)",
         RECORD,
     ));
     Ok(BringUp {
