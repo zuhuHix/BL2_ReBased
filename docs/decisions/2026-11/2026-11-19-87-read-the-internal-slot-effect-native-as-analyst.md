@@ -23,10 +23,15 @@ Lane ANALYST-APPLY-SLOT-EFFECT-MODIFIERS, analyst only. With `InitializeAttribut
 - **An Off answer list** with three labelled Off assumptions, all UNVERIFIED:
   - a count above the slot array's dimension stops at the dimension, as decision 2026-11-19-49 does;
   - contexts are resolved before any write;
-  - a modifier object is made only for a slot that will be added.
-  The preflight covers the shape checks, the kinds of the stored values, the context resolution, and the attribute
-  layer's own write-free test of every planned remove and add. A `NotYet` after a write is terminal, with the "stopped
-  after partial writes" prefix.
+  - skip allocation for unresolved contexts. After a false add the object stays where the chain left it: an earlier
+    resolver may hold it.
+  The preflight covers:
+  - the definitions the call touches, loaded first (loads are not writes, an Off ruling);
+  - the shape checks and the kinds of the stored values;
+  - the context resolution;
+  - a chain check of every value-resolver entry of every planned remove and add, which predicts no outcome.
+  A backup record with no modifier is a no-op. A `NotYet` after a write is terminal: matched by its type, kind and
+  record kept, with the "stopped after partial writes" prefix.
 - **What link 8's `init` reaches next.**
   - On the name-part branch: `ChooseRandomNameParts`, unbound.
   - Otherwise: `CacheWeaponCard`, unbound.
@@ -40,3 +45,13 @@ installed layouts with `tools/ghidra/class_layout.py`. Raw output stays under ig
 **Status.** Nothing is implemented: the native stays unbound in Off until a fresh lane codes it from the note. Every
 rule is UNVERIFIED in the running game. No bl-sdk evidence on this native was on record. The note lists the checks;
 no session was run.
+
+**Edits: review r1 of #471.**
+- Definition loads are ruled outside the write rule and done first (P0).
+- P9 checks every chain entry of every planned operation with the read-only storage lookup, without predicting
+  outcomes; it also checks an add before its modifier exists.
+- A None-`Modifier` backup record is a no-op.
+- The post-write rule matches the typed `NotYet` and keeps its kind and record.
+- B3 is renamed "skip allocation for unresolved contexts" and says where a false add's object stays.
+- The live checks use a trace of notification events on notify-enabled properties, and a fixture that would tell
+  entry-time from per-slot context resolution. Where no hook can tell them apart, B2 stays UNVERIFIED.
