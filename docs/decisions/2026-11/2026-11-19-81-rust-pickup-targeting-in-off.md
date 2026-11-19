@@ -84,10 +84,11 @@ of 14, as on #452. Links 6 and 7 are errors at `make` (1 of 3 and 1 of 4 driver 
   - `GetInventoryDefinition` is answered by field reads: the exact-class rule of NATIVE_INVENTORY_DEFINITION.md,
     the same allowlist and fields as #462's native. #462 is not on this stack, so the list is repeated here until it
     lands.
-  - `GetGlobalsDefinition` is answered with the Off world's stock `GD_Globals.General.Globals`, the object
-    `ow_combat::hit::globals` and the mission bridge already use. `WillowGlobals` declares no script field that holds
-    its definition (only the string `DefaultGlobalsDefinitionName`), so the hub's "read the globals object's field" has
-    no field to read. This is the substitute, UNVERIFIED as the native's answer.
+  - `GetGlobalsDefinition` is the globals' `TheGlobalsDefinition` field, declared on `GearboxGlobals`, when it holds
+    a `GlobalsDefinition`. Otherwise it is a named `NotYet { NotRead }`: the native's first load numbers the
+    challenge list, which was not read (NATIVE_WILLOW_GLOBALS.md, #469, section 6 step 4).
+    - Correction: the r1 commit used the stock `GD_Globals.General.Globals`. It said `WillowGlobals` declares no
+      field for its definition, but `class_layout.py` lists only a class's own fields, and the field is inherited.
   - Each getter must resolve to its native declaration. A script override, or any other function, is a named
     `NotYet { NotRead }` in the plan.
   - `Host` takes a shared `&Vm`.

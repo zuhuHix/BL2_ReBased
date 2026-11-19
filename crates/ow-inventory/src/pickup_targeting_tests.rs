@@ -132,6 +132,7 @@ fn willow_game() -> Vec<u8> {
     t.prop("Object", willow_hud, "SavedLookAtInventory", 0, actor);
     let globals = t.class("WillowGlobals", object);
     toy_array_of(&mut t, globals, "PickupList", "Object", pickup);
+    t.prop("Object", globals, "TheGlobalsDefinition", 0, object);
     t.prop("Object", globals, "ToyDefinition", 0, object);
     native(&mut t, globals, "GetGlobalsDefinition", &[], Some(("Object", object)));
     let gd = t.class("GlobalsDefinition", object);
@@ -779,4 +780,20 @@ fn an_out_of_range_winner_ends_with_the_seen_slot_empty() {
     assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: far, reported: false });
     assert_eq!(x.slot("CachedHoverPickup"), Some(far));
     assert_eq!(x.slot("SavedLookAtInventory"), None);
+}
+
+/// The Off world's globals: the world's `WillowGlobals` and its `TheGlobalsDefinition` when that holds a
+/// `GlobalsDefinition`; none held is a named `NotYet { NotRead }` (the getter's first load was not read).
+#[test]
+fn the_world_globals_read_the_definition_field() {
+    let mut x = fx();
+    let q = ow_world::query::install(&mut x.vm).unwrap();
+    q.borrow_mut().set_globals(x.globals);
+    let n = match WorldGlobals.resolve(&mut x.vm).unwrap_err() {
+        VmError::NotYet(n) => n,
+        e => panic!("{e}"),
+    };
+    assert!(n.missing == Missing::NotRead && n.what.contains("TheGlobalsDefinition"), "{n}");
+    x.set(x.globals, "TheGlobalsDefinition", Value::Object(Some(x.gd)));
+    assert_eq!(WorldGlobals.resolve(&mut x.vm).unwrap(), (x.globals, x.gd));
 }
