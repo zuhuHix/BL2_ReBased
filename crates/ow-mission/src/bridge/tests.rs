@@ -191,6 +191,7 @@ fn willowgame() -> Vec<u8> {
     // The mission data.
     let mission = t.class("MissionDefinition", object);
     toy_array_of(&mut t, mission, "ObjectiveSetDefs", "Object", object);
+    toy_array_of(&mut t, mission, "ObjectiveDefs", "Object", object);
     t.prop("Object", mission, "InitialObjectiveSet", 0, object);
     t.prop("Bool", mission, "bActivateInitialObjectiveSet", 0, 0);
     let aid = toy_struct(&mut t, 0, "AttributeInitializationData", None);
@@ -219,6 +220,7 @@ fn willowgame() -> Vec<u8> {
     let objective = t.class("MissionObjectiveDefinition", object);
     t.prop("Int", objective, "ObjectiveCount", 0, 0);
     t.prop("Bool", objective, "bObjectiveIsOptional", 0, 0);
+    t.prop("Bool", objective, "bAllOrNothing", 0, 0);
 
     // The tracker and the replication info.
     let tracker = t.class("MissionTracker", object);
@@ -236,6 +238,12 @@ fn willowgame() -> Vec<u8> {
         native(&mut t, tracker, name, &[param("Object", "Objective", 0, object)], Some(("Bool", 0)), NATIVE);
     }
     native(&mut t, tracker, "UpdateObjective", &[param("Object", "Objective", 0, object), param("Int", "ObjectiveBit", CPF_OPT, 0)], None, NATIVE);
+    // An out array<int> (its inner property is adopted by the parameter).
+    let inner = t.prop("Int", 0, "ToyProgressInner", 0, 0);
+    let progress = [param("Object", "Mission", 0, object), param("Array", "Progress", CPF_OUT, inner), param("Bool", "bToyFlag", 0, 0)];
+    let spec = FunctionSpec::new(NATIVE, "GetObjectivesProgress");
+    let ids = t.function(tracker, "GetObjectivesProgress", &progress, None, &[], &spec, |_| None);
+    t.p.set_outer(inner, ids.get("Progress"));
     native(&mut t, tracker, "RegisterMissionObserver", &[param("Object", "Observer", 0, object), param("Object", "Mission", 0, object)], None, NATIVE);
     script(&mut t, tracker, "TriggerMissionStatusChangedDelegates", &[], None, |_, _| {});
     script(&mut t, tracker, "TriggerMissionObjectivesChangedDelegates", &[param("Object", "Mission", 0, object)], None, |_, _| {});
@@ -448,7 +456,10 @@ fn director_package() -> Vec<u8> {
 /// `ToyMission`: one set `SetA` {`Only` (count 1)} that completes the mission, no provider, a reward whose credit
 /// multiplier is `multiplier` and which lists `Other` as a reward item when `items`; `Other`, a second mission of the
 /// package; `GD_Globals.General.Globals` with an invented interaction distance.
-fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
+///
+/// With `progress` (the `GetObjectivesProgress` tests): `SetA` also holds `Pair` (count 2, `bAllOrNothing`), and the
+/// mission's `ObjectiveDefs` are [`Pair`, `Only`, `Spare`], `Spare` (count 1) being in no set.
+fn mission_package(optional: bool, multiplier: f32, items: bool, progress: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let willow = p.add_import("Core", "Package", 0, "WillowGame");
@@ -465,9 +476,27 @@ fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
     payload.extend_from_slice(&none);
     let only = p.add_export(c, "Only", payload);
     p.set_outer(only, mission);
+    let mut extra = Vec::new();
+    if progress {
+        for (name, count, all) in [("Pair", 2, true), ("Spare", 1, false)] {
+            let mut payload = 0i32.to_le_bytes().to_vec();
+            payload.extend(p.int_tag("ObjectiveCount", count));
+            if all {
+                payload.extend(p.bool_tag("bAllOrNothing", true));
+            }
+            payload.extend_from_slice(&none);
+            let o = p.add_export(c, name, payload);
+            p.set_outer(o, mission);
+            extra.push(o);
+        }
+    }
+    let mut members = vec![only];
+    members.extend(extra.first());
+    let count = members.len() as i32;
+    let members: Vec<u8> = members.iter().flat_map(|o| o.to_le_bytes()).collect();
     let c = class(&mut p, "MissionObjectiveSetDefinition");
     let mut payload = 0i32.to_le_bytes().to_vec();
-    payload.extend(p.array_tag("ObjectiveDefinitions", 1, &only.to_le_bytes()));
+    payload.extend(p.array_tag("ObjectiveDefinitions", count, &members));
     payload.extend(p.bool_tag("bCanCompleteMission", true));
     payload.extend_from_slice(&none);
     let set = p.add_export(c, "SetA", payload);
@@ -476,6 +505,10 @@ fn mission_package(optional: bool, multiplier: f32, items: bool) -> Vec<u8> {
     tags.extend(p.array_tag("ObjectiveSetDefs", 1, &set.to_le_bytes()));
     tags.extend(p.object_tag("InitialObjectiveSet", set));
     tags.extend(p.bool_tag("bActivateInitialObjectiveSet", true));
+    if progress {
+        let defs: Vec<u8> = [extra[0], only, extra[1]].iter().flat_map(|o| o.to_le_bytes()).collect();
+        tags.extend(p.array_tag("ObjectiveDefs", 3, &defs));
+    }
     let c = class(&mut p, "MissionDefinition");
     let mut other = 0i32.to_le_bytes().to_vec();
     other.extend_from_slice(&none);
@@ -533,6 +566,15 @@ impl Env {
 
     /// A reward with credit multiplier `multiplier` and, with `items`, one reward item.
     fn with_reward(optional: bool, multiplier: f32, items: bool, mode: ParityMode) -> Env {
+        Env::build(mission_package(optional, multiplier, items, false), mode)
+    }
+
+    /// The `GetObjectivesProgress` mission ([`mission_package`] with `progress`).
+    fn with_progress(mode: ParityMode) -> Env {
+        Env::build(mission_package(false, 0.0, false, true), mode)
+    }
+
+    fn build(mission: Vec<u8>, mode: ParityMode) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-mission-bridge-{}-{}",
             std::process::id(),
@@ -544,7 +586,7 @@ impl Env {
             ("Engine.upk".into(), engine()),
             ("GearboxFramework.upk".into(), gearbox()),
             ("WillowGame.upk".into(), willowgame()),
-            ("TestMission.upk".into(), mission_package(optional, multiplier, items)),
+            ("TestMission.upk".into(), mission),
             ("TestDirector.upk".into(), director_package()),
         ];
         let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
@@ -805,6 +847,53 @@ fn optional_objective_experience_by_mode() {
     let xp = env.call("WillowGame.MissionDefinition.GetExperienceReward", def, vec![Value::Object(None), Value::Bool(false)], MissionScript::n_xp_reward);
     assert_eq!(xp.unwrap_err().to_string(), "mission script bridge: the reward has no ExperienceRewardPercentage");
     assert!(env.vm().log.iter().any(|l| l == "UNIMPLEMENTED MissionDefinition.GetExperienceReward: optional objective experience (not implemented)"));
+}
+
+const PROGRESS: &str = "WillowGame.MissionTracker.GetObjectivesProgress";
+const PROGRESS_KEY: &str = "MissionTracker.GetObjectivesProgress(object,array,bool)";
+
+/// `GetObjectivesProgress` through the VM on the bridge's tracker: the out array as the caller sees it afterwards.
+fn objectives_progress(env: &mut Env, mission: ObjRef, passed: &[i32], flag: bool) -> Result<Vec<Value>, VmError> {
+    let tracker = env.script.inner.o.tracker;
+    let vm = env.vm();
+    let f = vm.find_function(PROGRESS).unwrap();
+    let passed = Value::Array(Rc::new(passed.iter().map(|&v| Value::Int(v)).collect()));
+    let done = vm.call(f, Some(tracker), vec![Value::Object(Some(mission)), passed, Value::Bool(flag)])?;
+    Ok(done.outs[1].elements().unwrap().to_vec())
+}
+
+fn ints_of(values: &[i32]) -> Vec<Value> {
+    values.iter().map(|&v| Value::Int(v)).collect()
+}
+
+/// `GetObjectivesProgress` in Off mode (NATIVE_SLICE_OFF_STOPS.md, UNVERIFIED; decision 2026-11-19-05): another
+/// mission has no record and the array stays as passed; this mission's record gives one value per `ObjectiveDefs`
+/// entry ([`Pair`, `Only`, `Spare`]), `Spare` (in no set) 0. With the flag, an all-or-nothing objective at 0 stays 0;
+/// one with progress needs the unread "is complete" test: `NotYet { NotRead }`.
+#[test]
+fn objectives_progress_in_off_mode() {
+    let mut env = Env::with_progress(ParityMode::Off);
+    assert!(env.vm().has_native(PROGRESS_KEY));
+    let (m, s) = (env.mission.clone(), env.script.clone());
+    let (def, other) = (m.definition(), env.object("Other"));
+    assert_eq!(objectives_progress(&mut env, other, &[7], false).unwrap(), ints_of(&[7]), "no record: left as passed");
+    assert_eq!(objectives_progress(&mut env, def, &[7], false).unwrap(), ints_of(&[0, 0, 0]), "a record, before accept");
+    assert!(s.accept(env.vm(), &DetSet::new()).unwrap());
+    m.update_objective(env.vm(), "Only", 0).unwrap();
+    assert_eq!(objectives_progress(&mut env, def, &[], false).unwrap(), ints_of(&[0, 1, 0]));
+    assert_eq!(objectives_progress(&mut env, def, &[], true).unwrap(), ints_of(&[0, 1, 0]), "Pair is 0 either way");
+    m.update_objective(env.vm(), "Pair", 0).unwrap();
+    assert_eq!(objectives_progress(&mut env, def, &[], false).unwrap(), ints_of(&[1, 1, 0]));
+    let refused = objectives_progress(&mut env, def, &[], true).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+}
+
+/// Reference keeps the C++ stub (R3): the bridge does not bind `GetObjectivesProgress` there.
+#[test]
+fn objectives_progress_is_unbound_in_reference_mode() {
+    let env = Env::with_progress(ParityMode::Reference);
+    assert!(!env.world.vm.has_native(PROGRESS_KEY));
+    assert!(env.world.vm.has_native("MissionTracker.GetMissionStatus(object)"), "the bridge's other natives are bound");
 }
 
 /// One bridge per fresh world: `new` refuses a world that already has actors.

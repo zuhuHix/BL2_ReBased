@@ -75,7 +75,10 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Actor.CollidingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 6 sites | UNVERIFIED | medium | |
 | Actor.OverlappingActors | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | medium | |
 | Actor.LocalPlayerControllers | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 69 sites; HUD/menu code iterates it | UNVERIFIED | high | `crates/ow-vm/src/natives_core.rs` (Off only: the world's local players from `ow_world::actors::Actors::add_local_player`, the bridge's controller; decision 2026-11-16-81) |
-| MissionTracker.GetObjectivesProgress | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: the mission screen's script at accept and turn-in | UNVERIFIED | medium | |
+| MissionTracker.GetObjectivesProgress | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: the controller's `AddMission` (flag omitted) and `SetPlayersMissionObjectiveProgressToWorldsMissionObjectiveProgress` (flag true) | UNVERIFIED | medium | `crates/ow-mission/src/bridge.rs` `n_objectives_progress` (Off only; the flag's all-or-nothing case with progress `NotYet { NotRead }`; decision 2026-11-19-05) |
+| MissionTracker.GetActivePrimaryObjectiveSet | [NATIVE_MISSION_OBJECTIVES.md](NATIVE_MISSION_OBJECTIVES.md) | Fire: `SetPlayersMissionProgressToWorldsMissionProgress`, `IsEligibleForMission` | UNVERIFIED | high | |
+| MissionTracker.GetAllMissions | [NATIVE_MISSION_OBJECTIVES.md](NATIVE_MISSION_OBJECTIVES.md) | Fire: the turn-in's playthrough-complete checks | UNVERIFIED | medium-high | |
+| MissionTracker.AllExpansionSideMissionsComplete | [NATIVE_MISSION_OBJECTIVES.md](NATIVE_MISSION_OBJECTIVES.md) | Fire: the turn-in's side-mission achievement check | UNVERIFIED | medium | |
 | AIComponent.ActivateEvent | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: an AI component's script event | UNVERIFIED | medium | |
 | Trigger.TriggerDetachSprites | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) (not resolved) | Fire: a trigger's script | UNVERIFIED | low | |
 | Actor.AllOwnedComponents | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
