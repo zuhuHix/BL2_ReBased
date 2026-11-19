@@ -3,7 +3,9 @@
 //! makes the objects and calls the script's entry points, in the note's order:
 //! - `make`: a preflight first, before any write (review r2 of #452): the weapon class's `DroppedPickupClass` (read
 //!   from its class default object), its `Owner` and `Instigator` fields, the pickup class's `InitializeFromInventory`
-//!   signature (an object, an object, a bool) and its `Pickup` state, and the binding of
+//!   signature (an object, an object, a bool) and its `Pickup` state, the globals the spawn and the initialisation
+//!   reach (lane IMPL-WILLOW-GLOBALS: the world's globals object, its definition, the declared schemas of
+//!   `PickupList` and `RarityLevelColors`, and the four globals natives bound), and the binding of
 //!   `WillowInventory.GetInventoryDefinition`, which the pickup's initialisation reaches on the fixed fixture. An
 //!   unbound one is answered as the VM answers it (an unbound native), before anything is made. Then Maya (the
 //!   `--equip-run` weapon's owner, at the world origin facing +X) and her gun: the gun leaves its owner, and its
@@ -189,17 +191,46 @@ pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
     if !vm.class_declares_state(class, state)? {
         return Err(error("the pickup class declares no Pickup state"));
     }
+    globals_preflight(vm)?;
     // The fixed fixture's initialisation reaches it: it must resolve, be declared native and be bound (review r3 of
     // #452). A failed lookup is that error; an unbound one is the VM's unbound-native error.
-    let f = vm.find_function(GET_INVENTORY_DEFINITION)?;
-    let key = vm
-        .function(f)
-        .and_then(|d| d.native_key.clone())
-        .ok_or_else(|| error(format!("{GET_INVENTORY_DEFINITION} is not declared native")))?;
+    bound_native(vm, GET_INVENTORY_DEFINITION)?;
+    Ok(class)
+}
+
+/// `path` resolves, is declared native and is bound; else that lookup's error, an ordinary error, or the VM's
+/// unbound-native error.
+fn bound_native(vm: &mut Vm, path: &str) -> Result<(), VmError> {
+    let f = vm.find_function(path)?;
+    let key = vm.function(f).and_then(|d| d.native_key.clone()).ok_or_else(|| error(format!("{path} is not declared native")))?;
     if !vm.has_native(&key) {
         return Err(VmError::UnboundNative(key));
     }
-    Ok(class)
+    Ok(())
+}
+
+/// The globals the pickup's spawn and initialisation reach (NATIVE_WILLOW_GLOBALS.md section 1, lane
+/// IMPL-WILLOW-GLOBALS, decision 2026-11-19-94), checked before any write:
+/// - the world's one globals object (none is the world's `NotYet { LayerAbsent }`), a `WillowGlobals`;
+/// - its `TheGlobalsDefinition`, a `GlobalsDefinition` (else the getter's named `NotYet { NotRead }`);
+/// - the declared schemas of `PickupList` and the definition's `RarityLevelColors` (else a data error);
+/// - the four natives on the route (`GetWillowGlobals`, `AddPickup`, `GetGlobalsDefinition`, `GetDropLifeSpanType`)
+///   declared native and bound.
+fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
+    use ow_inventory::globals as g;
+    const WHAT: &str = "the pickup's globals";
+    let globals = g::world_globals(vm)?;
+    let willow = vm.find_class("WillowGame.WillowGlobals")?;
+    if !vm.space.classes.is_child_of(vm.space.heap.get(globals)?.class, willow) {
+        return Err(error(format!("the world's globals are a {}, not a WillowGlobals", ow_attr::eval::class_path(&vm.space, globals))));
+    }
+    let definition = g::globals_definition(vm, globals, WHAT)?;
+    g::pickup_list(vm, globals, WHAT)?;
+    g::rarity_bands(vm, definition, WHAT)?;
+    for path in [g::GET_WILLOW_GLOBALS, g::ADD_PICKUP, g::GET_GLOBALS_DEFINITION, g::GET_DROP_LIFE_SPAN_TYPE] {
+        bound_native(vm, path)?;
+    }
+    Ok(())
 }
 
 /// A location value of `pawn`'s `Location` type at `at`.
