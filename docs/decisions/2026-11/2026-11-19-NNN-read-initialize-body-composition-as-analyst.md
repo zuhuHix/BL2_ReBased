@@ -49,7 +49,9 @@ All three are port answers, UNVERIFIED.
   - calls `ReattachWeapons`.
 
   Under the rulings, Maya's build now stops first at attachment 0's animation-node lookups (`NotYet { LayerAbsent }`,
-  in preflight), then at attachment 1's `Parent` link.
+  in preflight), then at attachment 1's socket attach to its skeletal parent with socket `Root` (`LayerAbsent`, the
+  mesh-data reader), and only then at its `Parent` link. Releasing the old `Mesh`/`CylinderComponent` is refused
+  `NotYet { NotRead }` in preflight (its global list is not read).
 - **The entry contract** per type: what is copied, replaced and defaulted.
   - A component's and a customization's `Replication` is not copied.
   - A switch copies its whole `Data`, including `Object`, and only `Float` is cleared.
