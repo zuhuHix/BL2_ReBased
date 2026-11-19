@@ -1,7 +1,8 @@
 //! Owner: lane IMPL-LINK1-AFTER-LOGIN (decision 2026-11-19-NNN, number pending). The three natives the login path
 //! reaches after `SetName` and `SetupInputDevices`. AI-assisted (Claude Code).
 //!
-//! Coded from NATIVE_LOGIN_URL_CONFIG_INPUT.md alone (#494; analyst lane ANALYST-LINK1-AFTER-LOGIN, not this thread). No
+//! Coded from NATIVE_LOGIN_URL_CONFIG_INPUT.md alone (#494; analyst lane ANALYST-LINK1-AFTER-LOGIN, not this thread).
+//! No
 //! native code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: the caller
 //! (`online::register`) binds these in Off, and Reference keeps the VM's stub policy.
 //!
@@ -14,12 +15,14 @@
 //!    `WorldInfo.GetLocalURL`, `WorldInfo.GetAddressURL`, `Actor.GetURLMap`, `Engine.BrowseToURL`) are reached only
 //!    by travel and restart, off the slice path;
 //! 3. none of those natives is bound in the slice drivers' Off worlds, and no crate reads a config file or the player's
-//!    config folder. The test keeps this part: a binding for one of them, or a config reader, fails it, and the answer must then become the note's
+//!    config folder. The test keeps this part: a binding for one of them, or a config reader, fails it, and the answer
+//!    must then become the note's
 //!    `NotYet { LayerAbsent }`, [`URL_LAYER_ABSENT`].
 //!
 //! **`Object.SaveConfig()`** (section 2): **nothing**, under the note's read-back check (section 2.3), kept by the same
 //! test: saved config is read back only by a config load, the port reads no config file, and no crate binds
-//! `Object.GetPerObjectConfigSections` or any config load. If that stops holding, the answer becomes [`CONFIG_LAYER_ABSENT`].
+//! `Object.GetPerObjectConfigSections` or any config load. If that stops holding, the answer becomes
+//! [`CONFIG_LAYER_ABSENT`].
 //!
 //! **`WillowPlayerController.UpdateInputContext()`** (section 3.2), the native's own rule:
 //! 1. the controller's `PlayerInput`;
