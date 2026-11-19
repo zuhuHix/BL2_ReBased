@@ -82,8 +82,13 @@ fn willow() -> Vec<u8> {
     t.function(tracker, "GetMissionStatus", &[param("Object", "Mission", 0, definition)], Some(("Byte", 0)), &[], &spec, |_| None);
     let gri = t.class("WillowGameReplicationInfo", object);
     t.prop("Object", gri, "MissionTracker", 0, tracker);
+    t.prop("Int", gri, "CurrentPlaythrough", 0, 0);
+    // A strict subclass of the replication info (lane IMPL-PLAYTHROUGH-VIRTUAL: its answer is not read).
+    t.class("ToySubReplicationInfo", gri);
     t.class("ToyOtherReplicationInfo", object);
     let pc = t.class("WillowPlayerController", object);
+    // A strict subclass of the controller (its current-playthrough virtual is not read).
+    t.class("ToySubController", pc);
     let status = strukt(&mut t, pc, "MissionStatusData");
     t.prop("Object", status, "MissionDef", 0, definition);
     t.prop("Byte", status, "Status", 0, 0);
@@ -131,7 +136,6 @@ struct Toy {
     vm: Vm,
     dir: PathBuf,
     tracker_state: Rc<RefCell<Tracker>>,
-    playthrough: Rc<RefCell<i32>>,
     pc: ObjRef,
     tracker: ObjRef,
     gri: ObjRef,
@@ -181,12 +185,7 @@ fn toy(world: bool) -> Toy {
         s.asked += 1;
         Ok(Value::Byte(s.status.iter().find(|(d, _)| *d == def).map_or(0, |(_, st)| *st)))
     });
-    let playthrough = Rc::new(RefCell::new(0));
-    let p = playthrough.clone();
-    bind_test(&mut vm, "WillowGame.WillowPlayerController.GetCurrentPlaythrough", move |_c| Ok(Value::Int(*p.borrow())));
     crate::world::datastore::register(&mut vm).unwrap();
-    // The bound natives run the rules with both unresolved reads taken as read, unless a test switches them back.
-    vm.add_service(TestReads(Reads::ALL)).unwrap();
     let alloc = |vm: &mut Vm, class: &str, name: &str| {
         let c = vm.find_class(class).unwrap();
         vm.space.alloc(c, name, None, Origin::Runtime).unwrap()
@@ -203,7 +202,7 @@ fn toy(world: bool) -> Toy {
         actors.place_world_info(world_info).unwrap();
         vm.add_service(actors).unwrap();
     }
-    Toy { vm, dir, tracker_state: state, playthrough, pc, tracker, gri, world_info }
+    Toy { vm, dir, tracker_state: state, pc, tracker, gri, world_info }
 }
 
 /// `GFxUI.upk` (invented): `GFxMoviePlayer` and its native `GetVariableObject(string, class)`.
@@ -297,16 +296,22 @@ impl Toy {
         Ok(self.vm.call(f, Some(this), args)?.ret)
     }
 
-    /// The rule of section 1 with the note's two unresolved reads taken as read.
+    /// The rule of section 1.
     fn active(&mut self) -> Result<Value, VmError> {
         let pc = self.pc;
-        active_mission_number(&mut self.vm, pc, Reads::ALL).map(Value::Int)
+        active_mission_number(&mut self.vm, pc).map(Value::Int)
     }
 
-    /// The rule of section 2 with the current-playthrough virtual taken as read (an omitted index is -1).
+    /// The rule of section 2 (an omitted index is -1).
     fn plot(&mut self, index: Option<i32>) -> Result<Value, VmError> {
         let pc = self.pc;
-        plot_critical_mission_number(&mut self.vm, pc, index.unwrap_or(-1), Reads::ALL).map(Value::Int)
+        plot_critical_mission_number(&mut self.vm, pc, index.unwrap_or(-1)).map(Value::Int)
+    }
+
+    /// The world's current playthrough: the replication info's `CurrentPlaythrough`.
+    fn set_playthrough(&mut self, n: i32) {
+        let gri = self.gri;
+        set(&mut self.vm, gri, "CurrentPlaythrough", Value::Int(n));
     }
 }
 
@@ -422,22 +427,27 @@ fn the_plot_critical_number_reads_the_controllers_records() {
     assert_eq!(t.plot(Some(0)).unwrap(), Value::Int(3));
     assert_eq!(t.plot(Some(2)).unwrap(), Value::Int(0), "out of range");
     assert_eq!(t.plot(Some(5)).unwrap(), Value::Int(0), "out of range");
-    *t.playthrough.borrow_mut() = 1;
+    t.set_playthrough(1);
     assert_eq!(t.plot(None).unwrap(), Value::Int(4), "omitted: the current playthrough");
     assert_eq!(t.plot(Some(-1)).unwrap(), Value::Int(4), "negative: the current playthrough");
-    *t.playthrough.borrow_mut() = 7;
+    t.set_playthrough(7);
     assert_eq!(t.plot(None).unwrap(), Value::Int(0), "a current playthrough out of range");
 }
 
-/// Section 2, Off step 1: a controller whose class declares no current-playthrough query is a named `NotYet`.
+/// Section 2, step 1: a controller that is not exactly a `WillowPlayerController` asks a current-playthrough virtual
+/// that was not read (NATIVE_PLAYTHROUGH_QUERY.md section 4, step 1), whether it is another class or a subclass.
 #[test]
-fn a_controller_without_the_playthrough_query_is_not_read() {
-    let mut t = toy(true);
-    let bare = t.vm.find_class("WillowGame.ToyBareController").unwrap();
-    let bare = t.vm.space.alloc(bare, "ToyBare", None, Origin::Runtime).unwrap();
-    match plot_critical_mission_number(&mut t.vm, bare, -1, Reads::ALL) {
-        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == PLAYTHROUGH_QUERY, "{n}"),
-        other => panic!("{other:?}"),
+fn a_controller_of_another_class_asks_an_unread_virtual() {
+    for class in ["WillowGame.ToyBareController", "WillowGame.ToySubController"] {
+        let mut t = toy(true);
+        let c = t.vm.find_class(class).unwrap();
+        let other = t.vm.space.alloc(c, "ToyOther", None, Origin::Runtime).unwrap();
+        not_yet_in(
+            plot_critical_mission_number(&mut t.vm, other, -1).map(Value::Int),
+            false,
+            CONTROLLER_OVERRIDE,
+            RECORD_PLAYTHROUGH,
+        );
     }
 }
 
@@ -492,11 +502,6 @@ fn not_yet_in(r: Result<Value, VmError>, layer: bool, what: &str, record: &str) 
 }
 
 impl Toy {
-    /// The bound natives take nothing as read again (the port's form).
-    fn reads_off(&mut self) {
-        self.vm.service::<TestReads>().unwrap().borrow_mut().0 = Reads::OFF;
-    }
-
     /// `GD_ToyMissions.Target` as the store's unloaded handle, read from the loaded holder.
     fn unloaded_target(&mut self) -> ObjRef {
         let path = ow_core::ObjectPath::parse("GD_ToyMissions.Holder").unwrap();
@@ -511,21 +516,56 @@ impl Toy {
     }
 }
 
-/// The bound natives (nothing taken as read): the fallback's current playthrough is the unread virtual, so a negative
-/// or omitted index is `NotRead`, and `GetActiveMissionNumber` meets it through its fallback branch; an explicit,
-/// non-negative index needs no virtual and is answered.
+/// The bound natives (lane IMPL-PLAYTHROUGH-VIRTUAL): a negative or omitted index reads the world's current
+/// playthrough through the rule, as a function; `GetActiveMissionNumber` answers its tracker branch alone; an explicit
+/// index needs no virtual.
 #[test]
-fn the_natives_answer_the_unread_playthrough_virtual_as_not_read() {
+fn the_natives_read_the_world_s_current_playthrough() {
     let mut t = toy(true);
-    t.reads_off();
     let plot = t.mission(true, false, 12);
+    let second = t.mission(true, false, 21);
     t.track(true, &[(plot, 1)]);
-    t.records(&[&[(Some(plot), 1)]]);
+    t.records(&[&[(Some(plot), 1)], &[(Some(second), 1)]]);
     let pc = t.pc;
-    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
-    not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
-    not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(-1)]), false, PLAYTHROUGH_QUERY);
-    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(12));
+    assert_eq!(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]).unwrap(), Value::Int(12));
+    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![]).unwrap(), Value::Int(12), "playthrough 0");
+    t.set_playthrough(1);
+    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(-1)]).unwrap(), Value::Int(21), "playthrough 1");
+    assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(12), "explicit index");
+}
+
+/// The current-playthrough rule's steps (NATIVE_PLAYTHROUGH_QUERY.md section 4): no world, no `GRI` and a `GRI` of
+/// another class answer 0; a strict subclass of the replication info is `NotRead`; a `CurrentPlaythrough` of the wrong
+/// kind is bad data; every exactly-`WillowPlayerController` controller gets the world's answer.
+#[test]
+fn the_current_playthrough_rule_follows_the_note_s_steps() {
+    let t = toy(false);
+    let pc = t.pc;
+    assert_eq!(current_playthrough(&t.vm, pc).unwrap(), 0, "no world");
+    let mut t = toy(true);
+    t.set_playthrough(2);
+    let pc = t.pc;
+    assert_eq!(current_playthrough(&t.vm, pc).unwrap(), 2);
+    let c = t.vm.find_class("WillowGame.WillowPlayerController").unwrap();
+    let another = t.vm.space.alloc(c, "ToyPC2", None, Origin::Runtime).unwrap();
+    assert_eq!(current_playthrough(&t.vm, another).unwrap(), 2, "any such controller: the world's answer");
+    let wi = t.world_info;
+    set(&mut t.vm, wi, "GRI", Value::Object(None));
+    assert_eq!(current_playthrough(&t.vm, pc).unwrap(), 0, "no GRI");
+    let other = t.vm.find_class("WillowGame.ToyOtherReplicationInfo").unwrap();
+    let other = t.vm.space.alloc(other, "ToyOtherGRI", None, Origin::Runtime).unwrap();
+    set(&mut t.vm, wi, "GRI", Value::Object(Some(other)));
+    assert_eq!(current_playthrough(&t.vm, pc).unwrap(), 0, "a GRI of another class");
+    let sub = t.vm.find_class("WillowGame.ToySubReplicationInfo").unwrap();
+    let sub = t.vm.space.alloc(sub, "ToySubGRI", None, Origin::Runtime).unwrap();
+    set(&mut t.vm, wi, "GRI", Value::Object(Some(sub)));
+    not_yet_in(current_playthrough(&t.vm, pc).map(Value::Int), false, GRI_OVERRIDE, RECORD_PLAYTHROUGH);
+    let gri = t.gri;
+    set(&mut t.vm, wi, "GRI", Value::Object(Some(gri)));
+    let class = t.vm.space.heap.get(gri).unwrap().class;
+    let p = t.vm.space.prop(class, "CurrentPlaythrough").unwrap();
+    *t.vm.space.slot_mut(gri, PropAddr::scalar(p)).unwrap() = Value::Float(1.0);
+    script_error(current_playthrough(&t.vm, pc).map(Value::Int), "CurrentPlaythrough");
 }
 
 /// Review r1 of #480, item 3: the fallback is dispatched through the VM on the controller's class, so with no tracker
@@ -535,7 +575,7 @@ fn the_fallback_is_dispatched_and_an_unbound_callee_is_unbound_native() {
     let mut t = toy(false);
     let c = t.vm.find_class("WillowGame.ToyUnboundController").unwrap();
     let bare = t.vm.space.alloc(c, "ToyUnbound", None, Origin::Runtime).unwrap();
-    match active_mission_number(&mut t.vm, bare, Reads::ALL) {
+    match active_mission_number(&mut t.vm, bare) {
         Err(VmError::UnboundNative(key)) => assert!(key.contains("GetActivePlotCriticalMissionNumber"), "{key}"),
         other => panic!("{other:?}"),
     }
@@ -552,52 +592,46 @@ fn an_unloaded_definition_is_loaded_and_a_later_not_yet_is_marked() {
     let pc = t.pc;
     assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(27));
     assert!(t.vm.defs.is_loaded(&t.vm.space, target));
-    // The tracked mission is unloaded: the tracker branch loads it, then the fallback's NotYet comes after the load.
+    // The tracker's list holds the unloaded definition, then a None entry: the scan loads the definition, then the
+    // None entry's NotYet comes after the load and is marked once.
     let mut t = toy(true);
-    t.reads_off();
     let target = t.unloaded_target();
     t.track(true, &[]);
-    let tracker = t.tracker;
-    set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(target)));
+    t.tracker_state.borrow_mut().missions = vec![Value::Object(Some(target)), Value::Object(None)];
     let pc = t.pc;
-    let marked = format!("{}: {PLAYTHROUGH_QUERY}", crate::world::datastore::PARTIAL_WRITES);
+    let marked = format!("{}: {NONE_ENTRY}", crate::world::datastore::PARTIAL_WRITES);
     not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, &marked);
+    // The same NotYet with nothing loaded is not marked.
     let loaded = t.mission(true, false, 27);
-    set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(loaded)));
-    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
+    t.tracker_state.borrow_mut().missions = vec![Value::Object(Some(loaded)), Value::Object(None)];
+    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, NONE_ENTRY);
 }
 
-/// Section 1, Off step 2: the engine-wide condition is not guessed. With a tracker, both branches are computed; equal
-/// answers give the number, different ones are `NotRead`, and a failing branch is the answer (the tracker's first).
-/// With no tracker, or data not valid, the fallback alone answers.
+/// Section 1, step 1 (NATIVE_PLAYTHROUGH_QUERY.md section 1): the engine-wide condition holds when the world exists, so
+/// the tracker branch alone answers, even when the fallback would differ; data not valid, and no level, take the
+/// fallback. (#480's both-branch comparison is retired.)
 #[test]
-fn both_branches_answer_when_they_agree_and_not_read_when_they_differ() {
-    let off = Reads { engine_gate: false, playthrough: true };
+fn the_tracker_branch_alone_answers_when_the_world_exists() {
     let mut t = toy(true);
     let plot = t.mission(true, false, 12);
     let other = t.mission(true, false, 30);
     let pc = t.pc;
     t.track(true, &[(plot, 1)]);
-    t.records(&[&[(Some(plot), 1)]]);
-    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 12, "equal");
     t.records(&[&[(Some(other), 1)]]);
-    match active_mission_number(&mut t.vm, pc, off) {
-        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == ENGINE_GATE, "{n}"),
-        other => panic!("{other:?}"),
-    }
+    assert_eq!(active_mission_number(&mut t.vm, pc).unwrap(), 12, "the tracker branch, not the fallback's 30");
     t.track(false, &[(plot, 1)]);
-    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 30, "data not valid: the fallback");
+    assert_eq!(active_mission_number(&mut t.vm, pc).unwrap(), 30, "data not valid: the fallback");
     t.track(true, &[]);
     t.tracker_state.borrow_mut().list_error = Some(NotYet::layer_absent("an invented list", "an invented layer", "an invented record"));
-    match active_mission_number(&mut t.vm, pc, off) {
-        Err(VmError::NotYet(n)) => assert_eq!(n.what, "an invented list", "the tracker branch's failure first"),
+    match active_mission_number(&mut t.vm, pc) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.what, "an invented list", "the tracker branch's failure"),
         other => panic!("{other:?}"),
     }
     let mut t = toy(false);
     let lone = t.mission(true, false, 8);
     t.records(&[&[(Some(lone), 2)]]);
     let pc = t.pc;
-    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 8, "no level: the fallback");
+    assert_eq!(active_mission_number(&mut t.vm, pc).unwrap(), 8, "no level: the fallback");
 }
 
 /// Section 3 in the conservative form: the text list update is the named `LayerAbsent` with the list None or set, and
@@ -624,26 +658,25 @@ fn the_screen_calls_are_layer_absent_and_not_marked_by_themselves() {
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
 }
 
-/// Review r2 of #480, L1: a load inside the VM-dispatched fallback counts for the outer call. The tracker branch answers
-/// 5 and the fallback, loading an unloaded definition numbered 27, answers 27: the outer `NotRead` for the differing
-/// branches comes after that load, so it is marked. The same case with the definition already loaded is not.
+/// Review r2 of #480, L1, after the engine gate's retirement (lane IMPL-PLAYTHROUGH-VIRTUAL): the outer call no longer
+/// refuses after the fallback, so no outer mark is left to give. With the world's `WorldInfo`, the tracker branch alone
+/// answers (5) and the fallback, with its load of the unloaded definition numbered 27, never runs: the definition stays
+/// unloaded. Without it, the VM-dispatched fallback loads the definition and answers 27.
 #[test]
-fn a_load_inside_the_dispatched_fallback_marks_the_outer_not_yet() {
-    let gate_unread = Reads { engine_gate: false, playthrough: true };
-    let marked = format!("{}: {ENGINE_GATE}", crate::world::datastore::PARTIAL_WRITES);
-    for loaded_first in [false, true] {
-        let mut t = toy(true);
+fn a_load_inside_the_dispatched_fallback_runs_only_without_the_world() {
+    for world in [true, false] {
+        let mut t = toy(world);
         let target = t.unloaded_target();
-        if loaded_first {
-            t.vm.defs.ensure_loaded(&mut t.vm.space, target).unwrap();
-        }
         t.records(&[&[(Some(target), 1)]]);
-        let tracked = t.mission(true, false, 5);
-        t.track(true, &[]);
-        let tracker = t.tracker;
-        set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(tracked)));
+        if world {
+            let tracked = t.mission(true, false, 5);
+            t.track(true, &[]);
+            let tracker = t.tracker;
+            set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(tracked)));
+        }
         let pc = t.pc;
-        let want = if loaded_first { ENGINE_GATE.to_string() } else { marked.clone() };
-        not_yet(active_mission_number(&mut t.vm, pc, gate_unread).map(Value::Int), false, &want);
+        let got = active_mission_number(&mut t.vm, pc).unwrap();
+        assert_eq!(got, if world { 5 } else { 27 }, "world {world}");
+        assert_eq!(t.vm.defs.is_unloaded(&t.vm.space, target), world, "world {world}: the fallback's load");
     }
 }

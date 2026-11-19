@@ -6,21 +6,19 @@
 //! native code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: the caller
 //! (`datastore::register`) binds nothing here under `ParityMode::Reference`, so the VM's stub policy answers there.
 //!
-//! **The conservative form** (the hub's heads-up of 2026-11-19, while #473's last review round runs): the parts of the
-//! note that rest on an unresolved read, or on a "no read-back" argument, answer a named `NotYet` in Off. [`Reads`]
-//! switches the two unresolved reads; the natives pass [`Reads::OFF`] (nothing taken as read), and the tests also run
-//! the rules with them taken as read.
+//! **The two reads NATIVE_MISSION_NUMBERS.md left open** are settled by NATIVE_PLAYTHROUGH_QUERY.md (#486 at 3bb3f6de,
+//! analyst lane LINK-10-MISSIONLIST, decision 2026-11-19-99; implemented by lane IMPL-PLAYTHROUGH-VIRTUAL): the
+//! engine-wide condition is the port's world existing, and the current-playthrough virtual is
+//! [`current_playthrough`]. #480's conservative both-branch form and its `NotYet` are retired.
 //!
 //! **`WillowPlayerController.GetActiveMissionNumber()`** (section 1). It writes nothing, so nothing is preflighted and
 //! nothing rolled back.
 //! 1. The world's `WorldInfo` (the level's, as `GetWorldInfo` answers), its `GRI` as a `WillowGameReplicationInfo`,
 //!    and that object's `MissionTracker`. With no world, a replication info of another class, or no tracker, the
 //!    answer is the fallback (step 4).
-//!    - **The engine-wide condition** is a global the note did not resolve (open question 1), so Off does not guess
-//!      it: with a tracker, both branches are computed, the tracker branch (below) first, then the fallback. Equal
-//!      answers give that number; different answers are [`ENGINE_GATE`], `NotYet { NotRead }`. A branch that fails is
-//!      the answer, its error unchanged. ([`Reads::engine_gate`] takes the condition as holding: the tracker branch
-//!      alone.)
+//!    - **The engine-wide condition** (NATIVE_PLAYTHROUGH_QUERY.md section 1) is the engine's current world being set,
+//!      which in the port is the world's `WorldInfo` existing: with it, the tracker branch alone runs; without it, the
+//!      fallback.
 //!    - The tracker branch: the tracker's `IsDataValid()` through the VM; false is the fallback. In the installed
 //!      slice its data is valid, so the branch reaches the bridge's `GetAllMissions` `LayerAbsent` first.
 //! 2. The tracker's `ActiveMission` set: that definition's `MissionNumber`, with no status or plot-critical check.
@@ -31,10 +29,9 @@
 //!    steps 2 and 3 answer -1.
 //!
 //! **`WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`** (section 2):
-//! 1. A negative or omitted index needs the controller's current-playthrough virtual, which was not read and whose
-//!    identity is not guessed (open question 2): [`PLAYTHROUGH_QUERY`], `NotYet { NotRead }`. An explicit index of 0
-//!    or more does not ask it. (Only the tests take it as read, as `GetCurrentPlaythrough()` through the VM, to run
-//!    the rest of the rule.)
+//! 1. A negative or omitted index asks the controller's current-playthrough virtual: [`current_playthrough`] as a
+//!    function on the controller, not a VM dispatch of `GetCurrentPlaythrough` (NATIVE_PLAYTHROUGH_QUERY.md section 4,
+//!    "Direct callers"). An explicit index of 0 or more does not ask it.
 //! 2. Out of range (negative, or not below the length of `MissionPlaythroughs`): 0.
 //! 3. That playthrough's `MissionList`, in order. A record with a `MissionDef` that has `bPlotCritical` and no
 //!    `DlcExpansion` is graded by its own `Status` field. In progress answers its `MissionNumber` at once, Complete
@@ -93,13 +90,17 @@ pub const GRI_CLASS: &str = "WillowGame.WillowGameReplicationInfo";
 /// `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`, the focus pair of the screen's `SetFocus`.
 pub const GET_VARIABLE_OBJECT: &str = "GFxUI.GFxMoviePlayer.GetVariableObject";
 pub const FOCUS_ON: &str = "WillowGame.WillowGFxMovie3D.FocusOn";
-/// The `NotYet` of the unresolved engine-wide condition of `GetActiveMissionNumber`, when its two branches differ
-/// (section 1, open question 1).
-pub const ENGINE_GATE: &str = "the engine-wide condition of GetActiveMissionNumber";
 /// The `NotYet` of a `None` entry in the tracker's mission list (section 1, Off step 5).
 pub const NONE_ENTRY: &str = "a None entry in the tracker's mission list";
-/// The `NotYet` of the controller's unresolved current-playthrough virtual (section 2, open question 2).
-pub const PLAYTHROUGH_QUERY: &str = "the controller's current-playthrough virtual";
+/// The record of the current-playthrough query.
+pub const RECORD_PLAYTHROUGH: &str = "docs/verification/NATIVE_PLAYTHROUGH_QUERY.md";
+/// The controller class whose current-playthrough virtual was read.
+pub const CONTROLLER_CLASS: &str = "WillowGame.WillowPlayerController";
+/// The `NotYet` of a controller whose class is not exactly [`CONTROLLER_CLASS`] (NATIVE_PLAYTHROUGH_QUERY.md section
+/// 4, step 1).
+pub const CONTROLLER_OVERRIDE: &str = "a subclass override of the controller's current-playthrough query";
+/// The `NotYet` of a replication info of a strict subclass of [`GRI_CLASS`] (section 4, step 5).
+pub const GRI_OVERRIDE: &str = "a subclass override of the replication info's current-playthrough answer";
 /// The record of the screen's calls (the note's section 3 names it for the text list).
 pub const RECORD_GFX: &str = "docs/verification/NATIVE_GFX_BRIDGE.md";
 /// The `NotYet` of the mission screen's text list update (section 3, step 1).
@@ -111,20 +112,51 @@ pub const FOCUS: &str = "the 3D movie's Flash focus (not hosted)";
 /// The layer the port lacks for [`TEXT_LIST`] and [`FOCUS`].
 pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
 
-/// Which of the note's unresolved reads are taken as read. The natives pass [`Reads::OFF`]; the tests also run the
-/// rules behind them with [`Reads::ALL`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Reads {
-    /// The engine-wide condition of `GetActiveMissionNumber` taken as holding (section 1, step 1): the tracker branch
-    /// alone. Off computes both branches instead.
-    pub engine_gate: bool,
-    /// The controller's current-playthrough virtual, read as `GetCurrentPlaythrough` (section 2, step 1).
-    pub playthrough: bool,
+/// `WillowPlayerController.GetCurrentPlaythrough()`, the controller's current-playthrough virtual
+/// (NATIVE_PLAYTHROUGH_QUERY.md section 4), in its order; the class tests are exact:
+/// 1. a controller whose class is not exactly `WillowPlayerController`: [`CONTROLLER_OVERRIDE`], `NotYet { NotRead }`;
+/// 2. and 3. no world, or no `WorldInfo` (the world's actor list holds none): 0;
+/// 4. the `WorldInfo`'s `GRI` None, or not a `WillowGameReplicationInfo` (that class or a subclass): 0;
+/// 5. a `GRI` of a strict subclass of it: [`GRI_OVERRIDE`], `NotYet { NotRead }`;
+/// 6. the `GRI`'s `CurrentPlaythrough`, an int or a byte; any other kind is bad data, a `VmError::Script`.
+///
+/// It reads nothing of the controller but its class, so every exactly-`WillowPlayerController` controller gets the
+/// same answer, and it writes nothing. The objects it reads are run-time objects, never store handles, so it loads
+/// nothing. **UNVERIFIED** in the running game.
+pub fn current_playthrough(vm: &Vm, controller: ObjRef) -> Result<i32, VmError> {
+    const UNIT: &str = "WillowPlayerController.GetCurrentPlaythrough";
+    let class = vm.space.heap.get(controller)?.class;
+    if vm.space.classes.by_path(CONTROLLER_CLASS) != Some(class) {
+        return Err(NotYet::not_read(CONTROLLER_OVERRIDE, RECORD_PLAYTHROUGH).into());
+    }
+    let world_info = match vm.service::<Actors>() {
+        Some(a) => a.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.world_info(),
+        None => None,
+    };
+    let Some(world_info) = world_info else { return Ok(0) };
+    let Some(gri) = object_of(plain_field(vm, world_info, "GRI", UNIT)?, "WorldInfo.GRI", UNIT)? else {
+        return Ok(0);
+    };
+    let Some(gri_class) = vm.space.classes.by_path(GRI_CLASS) else { return Ok(0) };
+    let own = vm.space.heap.get(gri)?.class;
+    if !vm.space.classes.is_child_of(own, gri_class) {
+        return Ok(0);
+    }
+    if own != gri_class {
+        return Err(NotYet::not_read(GRI_OVERRIDE, RECORD_PLAYTHROUGH).into());
+    }
+    int_of(&plain_field(vm, gri, "CurrentPlaythrough", UNIT)?, "CurrentPlaythrough", UNIT)
 }
 
-impl Reads {
-    pub const OFF: Reads = Reads { engine_gate: false, playthrough: false };
-    pub const ALL: Reads = Reads { engine_gate: true, playthrough: true };
+/// The value of a run-time object's `name` (no store load: these objects are never handles); a class that does not
+/// declare it is bad data.
+fn plain_field(vm: &Vm, o: ObjRef, name: &str, unit: &str) -> Result<Value, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| bad(unit, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
+    Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
 }
 
 /// The mission status numbers the scans grade (the note's status values).
@@ -315,26 +347,24 @@ fn from_tracker(vm: &mut Vm, cx: &mut Cx, tracker: ObjRef, unit: &str) -> Result
     Ok(scan.end())
 }
 
-/// `GetActiveMissionNumber` on `controller` (module documentation), with `reads` taken as read.
-pub fn active_mission_number(vm: &mut Vm, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
+/// `GetActiveMissionNumber` on `controller` (module documentation).
+pub fn active_mission_number(vm: &mut Vm, controller: ObjRef) -> Result<i32, VmError> {
     let mut cx = Cx::new(vm);
-    let r = active_with(vm, &mut cx, controller, reads);
+    let r = active_with(vm, &mut cx, controller);
     cx.finish(vm, r)
 }
 
-fn active_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
+fn active_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActiveMissionNumber";
     let Some(tracker) = tracker(vm, cx, UNIT)? else {
         return fallback(vm, controller, UNIT);
     };
-    let Some(n) = tracker_branch(vm, cx, tracker, UNIT)? else {
-        return fallback(vm, controller, UNIT);
-    };
-    if reads.engine_gate {
-        return Ok(n);
+    // The engine-wide condition holds (a world exists, or `tracker` would have answered None): the tracker branch
+    // alone (NATIVE_PLAYTHROUGH_QUERY.md section 1).
+    match tracker_branch(vm, cx, tracker, UNIT)? {
+        Some(n) => Ok(n),
+        None => fallback(vm, controller, UNIT),
     }
-    let other = fallback(vm, controller, UNIT)?;
-    if n == other { Ok(n) } else { Err(NotYet::not_read(ENGINE_GATE, RECORD).into()) }
 }
 
 /// The fallback (section 1, step 4): the controller's `GetActivePlotCriticalMissionNumber(-1)`, dispatched through
@@ -344,26 +374,17 @@ fn fallback(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<i32, VmError>
     int_of(&r.ret, "GetActivePlotCriticalMissionNumber", unit)
 }
 
-/// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation), with `reads` taken as read.
-pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
+/// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation).
+pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32) -> Result<i32, VmError> {
     let mut cx = Cx::new(vm);
-    let r = plot_with(vm, &mut cx, controller, index, reads);
+    let r = plot_with(vm, &mut cx, controller, index);
     cx.finish(vm, r)
 }
 
-fn plot_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
+fn plot_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, index: i32) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActivePlotCriticalMissionNumber";
-    let index = if index < 0 {
-        if !reads.playthrough {
-            return Err(NotYet::not_read(PLAYTHROUGH_QUERY, RECORD).into());
-        }
-        let Some(answer) = call_method(vm, controller, "GetCurrentPlaythrough", vec![])? else {
-            return Err(NotYet::not_read(PLAYTHROUGH_QUERY, RECORD).into());
-        };
-        int_of(&answer.ret, "GetCurrentPlaythrough", UNIT)?
-    } else {
-        index
-    };
+    // A negative or omitted index: the controller's current-playthrough virtual, as a function (not a VM dispatch).
+    let index = if index < 0 { current_playthrough(vm, controller)? } else { index };
     let all = field(vm, cx, controller, "MissionPlaythroughs", UNIT)?;
     let all = all.elements().ok_or_else(|| bad(UNIT, "MissionPlaythroughs is not an array".to_string()))?;
     let Some(playthrough) = usize::try_from(index).ok().and_then(|i| all.get(i)).cloned() else {
@@ -395,32 +416,15 @@ fn struct_field(vm: &Vm, v: &Value, name: &str, unit: &str) -> Result<Value, VmE
     s.fields.get(index).cloned().ok_or_else(missing)
 }
 
-/// The reads the bound natives take: nothing in the port ([`Reads::OFF`]). A test may switch them with a
-/// [`TestReads`] service, so the rules behind them run through the VM's dispatch too.
-fn reads_for(vm: &Vm) -> Reads {
-    #[cfg(test)]
-    if let Some(r) = vm.service::<TestReads>() {
-        return r.borrow().0;
-    }
-    let _ = vm;
-    Reads::OFF
-}
-
-/// Tests only: the reads the bound natives take.
-#[cfg(test)]
-pub(crate) struct TestReads(pub Reads);
-
 pub(crate) fn n_active_mission_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(ACTIVE_MISSION_NUMBER, "called with no controller".to_string()))?;
-    let reads = reads_for(c.vm);
-    Ok(Value::Int(active_mission_number(c.vm, me, reads)?))
+    Ok(Value::Int(active_mission_number(c.vm, me)?))
 }
 
 pub(crate) fn n_plot_critical_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(PLOT_CRITICAL_NUMBER, "called with no controller".to_string()))?;
     let index = if c.has(0) { int_of(c.arg(0)?, "PlaythroughIndex", PLOT_CRITICAL_NUMBER)? } else { -1 };
-    let reads = reads_for(c.vm);
-    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index, reads)?))
+    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index)?))
 }
 
 /// The screen's named `NotYet` of `what`. The native writes nothing, so it is not marked here (module documentation).

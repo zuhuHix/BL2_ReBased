@@ -1535,8 +1535,15 @@ impl MissionScript {
         Ok(Value::Int(-1))
     }
 
-    // GetCurrentPlaythrough: CurrentPlaythrough of the world's replication info (0 when absent); no side effects.
+    // GetCurrentPlaythrough. Off (lane IMPL-PLAYTHROUGH-VIRTUAL, NATIVE_PLAYTHROUGH_QUERY.md section 4): the world rule,
+    // `ow_world::world::mission_numbers::current_playthrough`, on any controller (it reads the world's WorldInfo.GRI,
+    // not the bridge's own object, and nothing of the controller but its exact class). Reference: unchanged, the
+    // bridge's replication object (0 when absent), on the bridge's controller only.
     fn n_playthrough(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        if c.vm.parity == ParityMode::Off {
+            let me = c.this.ok_or_else(|| data("GetCurrentPlaythrough called with no controller".to_string()))?;
+            return Ok(Value::Int(ow_world::world::mission_numbers::current_playthrough(c.vm, me)?));
+        }
         if !self.on(c, self.inner.o.controller) {
             return outside_binding(c);
         }

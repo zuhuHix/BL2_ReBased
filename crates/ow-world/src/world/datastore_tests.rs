@@ -462,6 +462,9 @@ fn fill_willow() -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "GetCurrPlaythrough");
     t.function(gri, "GetCurrPlaythrough", &[], Some(("Int", 0)), &[], &spec, |_| None);
     let pc = t.class("WillowPlayerController", object);
+    // A strict subclass: its current-playthrough virtual is not read (lane IMPL-PLAYTHROUGH-VIRTUAL), which these tests
+    // use as a NotYet after the refresh's writes.
+    t.class("ToySubPlayerController", pc);
     let spec = FunctionSpec::new(NATIVE, "GetActiveMissionNumber");
     t.function(pc, "GetActiveMissionNumber", &[], Some(("Int", 0)), &[], &spec, |_| None);
     // Its fallback, dispatched through the VM since review r1 of #480.
@@ -760,10 +763,16 @@ fn expect_unmarked(r: Result<Value, VmError>, what: &str) {
 }
 
 const MISSION: &str = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
-/// What `GetActiveMissionNumber` answers in Off since decision 2026-11-19-93: the toy world has no level, so the
-/// fallback (`GetActivePlotCriticalMissionNumber(-1)`, through the VM) answers, and its current playthrough is the
-/// unread virtual (`NotYet { NotRead }`).
-const MISSION_STOP: &str = super::super::mission_numbers::PLAYTHROUGH_QUERY;
+/// What `GetActiveMissionNumber` answers in Off on a strict subclass of `WillowPlayerController`: the toy world has no
+/// level, so the fallback (`GetActivePlotCriticalMissionNumber(-1)`, through the VM) answers, and its current
+/// playthrough is a subclass override that was not read (`NotYet { NotRead }`; lane IMPL-PLAYTHROUGH-VIRTUAL).
+const MISSION_STOP: &str = super::super::mission_numbers::CONTROLLER_OVERRIDE;
+
+/// A controller of the strict subclass, for [`MISSION_STOP`].
+fn sub_controller(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
+    let c = vm.find_class("WillowGame.ToySubPlayerController")?;
+    Ok(Some(ow_vm::interp::instantiate_from_defaults(vm, c)?))
+}
 
 /// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then
 /// `GetActiveMissionNumber`, whose `NotYet` (the unread playthrough virtual) leaves the refresh marked, kind kept.
@@ -774,7 +783,7 @@ fn a_not_yet_after_the_refreshs_fill_is_marked_past_a_second_lookup() {
     t.on_step(|c| {
         data_store_client(c.vm)?;
         data_store_client(c.vm)?;
-        let pc = c.this;
+        let pc = sub_controller(c.vm)?;
         let f = c.vm.find_function(MISSION)?;
         Ok(c.vm.call(f, pc, vec![])?.ret)
     });
@@ -816,11 +825,11 @@ fn writes_outside_a_refresh_leave_no_mark() {
     let settings = settings.unwrap();
     t.set_properties(settings, &[(1, 1, 0)]);
     t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(1), Value::Int(31)]).unwrap();
-    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    let pc = t.make("WillowGame.ToySubPlayerController", "ToySubPC");
     expect_unmarked(t.call(MISSION, Some(pc), vec![]), MISSION_STOP);
     t.on_step(|c| {
         data_store_client(c.vm)?;
-        let pc = c.this;
+        let pc = sub_controller(c.vm)?;
         let f = c.vm.find_function(MISSION)?;
         Ok(c.vm.call(f, pc, vec![])?.ret)
     });

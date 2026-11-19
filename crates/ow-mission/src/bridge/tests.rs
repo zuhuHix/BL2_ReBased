@@ -2064,3 +2064,26 @@ fn a_set_up_list_refusal_is_answered_by_the_first_list_read() {
     let second = script.build_mission_list(env.vm()).unwrap_err();
     assert!(matches!(&second, BehaviorError::Vm(VmError::NotYet(n)) if n.what == crate::mission_list::SECOND_BUILD), "{second}");
 }
+
+/// `GetCurrentPlaythrough` in Off (lane IMPL-PLAYTHROUGH-VIRTUAL, NATIVE_PLAYTHROUGH_QUERY.md section 4): the world's
+/// `WorldInfo.GRI.CurrentPlaythrough`, the same for every exactly-`WillowPlayerController` controller, not only the
+/// bridge's; in Reference the bridge's controller only, unchanged.
+#[test]
+fn the_current_playthrough_is_the_world_s_on_any_controller_in_off() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let mine = s.player_controller();
+    set(&mut env.vm().space, s.inner.o.replication, "CurrentPlaythrough", Value::Int(1)).unwrap();
+    let class = env.vm().find_class("WillowGame.WillowPlayerController").unwrap();
+    let other = ow_vm::interp::instantiate_from_defaults(env.vm(), class).unwrap();
+    let path = "WillowGame.WillowPlayerController.GetCurrentPlaythrough";
+    assert_eq!(env.call(path, Some(mine), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(1));
+    assert_eq!(env.call(path, Some(other), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(1), "another controller");
+    // Reference: another controller is outside the binding (the C++ stub line and zero).
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    let class = env.vm().find_class("WillowGame.WillowPlayerController").unwrap();
+    let other = ow_vm::interp::instantiate_from_defaults(env.vm(), class).unwrap();
+    let before = env.vm().log.len();
+    assert_eq!(env.call(path, Some(other), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(0));
+    assert!(env.vm().log[before].contains("outside the mission bridge binding"), "{}", env.vm().log[before]);
+}
