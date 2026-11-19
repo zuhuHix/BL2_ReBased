@@ -631,6 +631,9 @@ fn part_lift(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     let mut t = 0.0f32;
     let mut lift_stop = None;
     while t <= lift {
+        // The script's first part reads its LiftTime argument, the second part the world's TimeSeconds (lane
+        // FIX-PHASELOCK-CAST part A): both advance together here, as they do from a lift started at time 0.
+        set(vm, wi, "TimeSeconds", Value::Float(t))?;
         match call(
             vm,
             "WillowGame.LiftActionSkill.GetLiftLocation",
