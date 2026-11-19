@@ -582,6 +582,20 @@ fn package() -> Vec<u8> {
     let mut bare_payload = ow_package::testkit::ints(&[0]);
     bare_payload.extend_from_slice(&t.none);
     t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Bare", bare_payload));
+    // `Toolbox_Twin`: two sub-objects made from `ParentComp` (review r1 of #478, item 1).
+    let twin_ref = t.p.next_export();
+    let mut twin_payload = ow_package::testkit::ints(&[0]);
+    twin_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Twin", twin_payload));
+    for name in ["ToyComponent0", "ToyComponent1"] {
+        let mut payload = ow_package::testkit::ints(&[0, 0]);
+        payload.extend(t.p.int_tag("Payload", 3));
+        payload.extend_from_slice(&t.none);
+        let mut sub = ow_package::testkit::Export::new(toy_component, name, payload);
+        sub.outer = twin_ref;
+        sub.archetype = parent_ref;
+        t.p.add_export_with(sub);
+    }
     t.p.build()
 }
 
@@ -642,6 +656,11 @@ pub(super) fn fx_in(begin: bool, mode: ParityMode) -> Fx {
 }
 
 /// [`fx_in`], with `Core.upk` (its `Core.Component`) beside the engine package when `core` is set.
+thread_local! {
+    /// A `Note` number the test native refuses with an invented `NotYet` (review r1 of #478, item 4).
+    static REFUSE_NOTE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
 fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
@@ -677,6 +696,9 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
                 Value::Int(k) => *k,
                 other => panic!("Note got {other:?}"),
             };
+            if REFUSE_NOTE.with(|r| r.get() == Some(k)) {
+                return Err(ow_core::NotYet::not_ported("an invented refusal in an event", "docs/invented.md").into());
+            }
             sink.borrow_mut()
                 .push((c.this.expect("Note on an actor"), k));
             Ok(Value::None)
@@ -3090,6 +3112,80 @@ fn a_refusal_after_a_lazy_archetype_load_is_marked() {
                 assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}");
             }
             other => panic!("{other:?}"),
+        }
+    });
+}
+
+/// Review r1 of #478, item 1: a template with two sub-objects made from the inherited component's export is ambiguous,
+/// a `NotYet { NotRead }` with nothing made.
+#[test]
+fn an_inherited_component_with_two_stand_ins_is_refused() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let parent = parent_default_component(&mut x, 5);
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Twin").unwrap();
+        let template = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        set_field(&mut x.w.vm.space, template, "Comp", Value::Object(Some(parent))).unwrap();
+        let (heap, list) = (x.w.vm.space.heap.len(), x.w.actors().borrow().list().len());
+        let toolbox = x.class("Toolbox");
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(template));
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.what.contains("more than one sub-object"), "{n}");
+            }
+            e => panic!("expected NotYet, got {e}"),
+        }
+        assert_eq!(x.w.vm.space.heap.len(), heap, "nothing on the heap");
+        assert_eq!(x.w.actors().borrow().list().len(), list, "nothing in the level list");
+    });
+}
+
+/// Review r1 of #478, item 3: a slot naming an object inside a parent class default's component is refused, not
+/// shared into the parent default's graph.
+#[test]
+fn an_object_inside_an_inherited_component_is_refused() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let parent = parent_default_component(&mut x, 5);
+        let thing = x.class("Object");
+        let inner = x.w.vm.space.alloc(thing, "Inner", Some(parent), ow_object::heap::Origin::Runtime).unwrap();
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Inherit").unwrap();
+        let template = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        set_field(&mut x.w.vm.space, template, "Thing", Value::Object(Some(inner))).unwrap();
+        let toolbox = x.class("Toolbox");
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(template));
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => assert!(n.what.contains("nested inside an inherited component"), "{n}"),
+            e => panic!("expected NotYet, got {e}"),
+        }
+    });
+}
+
+/// Review r1 of #478, item 4: in Off a `NotYet` after the actor joined the level list (here an event's) is terminal,
+/// prefixed, its kind and record kept, the actor left in the list; Reference keeps the text as it was.
+#[test]
+fn a_not_yet_after_registration_is_prefixed_in_off() {
+    run(|| {
+        for mode in [ParityMode::Off, ParityMode::Reference] {
+            let mut x = fx_files(true, mode, false);
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            let list = x.w.actors().borrow().list().len();
+            REFUSE_NOTE.with(|r| r.set(Some(11)));
+            let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+            REFUSE_NOTE.with(|r| r.set(None));
+            match got.unwrap_err() {
+                VmError::NotYet(n) => {
+                    assert_eq!((n.missing, n.record), (Missing::NotPorted, "docs/invented.md"), "{mode:?}");
+                    let prefixed = n.what.starts_with("stopped after partial writes: an invented refusal");
+                    assert_eq!(prefixed, mode == ParityMode::Off, "{mode:?}: {n}");
+                }
+                e => panic!("{mode:?}: expected NotYet, got {e}"),
+            }
+            assert_eq!(x.w.actors().borrow().list().len(), list + 1, "{mode:?}: the actor stays registered");
         }
     });
 }

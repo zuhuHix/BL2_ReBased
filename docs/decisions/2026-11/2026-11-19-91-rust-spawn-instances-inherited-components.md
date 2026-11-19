@@ -35,9 +35,12 @@ changes and needs for its installed proof.
     archetype's.
   - After the spawn, the step checks that the dummy's `SMComponent` and `CylinderComponent` are its own: outered to
     it, and neither the template's nor the class default's. Otherwise it is an `error`.
-- **The bl-sdk check that would confirm it** (no session was run): on a spawned `WillowAIPawn`, its
-  `SpecialMoveComponent` (`SMComponent`) is a distinct object from the class default's, outered to the pawn, with the
-  default's values.
+- **The bl-sdk check that would confirm it** (no session was run): on a spawned target dummy, its
+  `SpecialMoveComponent` (`SMComponent`) is a distinct object from the archetype's and the class default's, outered
+  to the pawn. Compare a field that the archetype's own `SpecialMoveComponent0` sets differently from
+  `Default__WillowAIPawn.SpecialMoveComponent0` (picked from that export's own tags): the spawned copy is expected to
+  hold the archetype's value, not the default's. Matching the default's values would not tell the two readings apart
+  (review r1 of #478, item 5).
 - **Verified (automated, local, desktop).**
   - **Synthetic tests** (ow-world, invented classes and exports, rule 9):
     - `an_inherited_component_is_instanced_from_the_templates_own_sub_object`: the plan pairs the inherited reference
@@ -62,3 +65,19 @@ changes and needs for its installed proof.
   - Other drivers that spawn from a copy of a cooked archetype, rather than the store's holder, share the holder's
     components (decision 44's "another archetype's component" rule). This lane changes only link 2's driver.
   - A real-game reading (the bl-sdk check above) would confirm the rule.
+- **Review r1 of #478** (on 07792e4, rebased onto #470 r2 at 22cc2b9):
+  - **A unique stand-in.** A template with two sub-objects made from the inherited component's export is ambiguous,
+    and the plan refuses it with `NotYet { NotRead }` instead of taking the first.
+  - **The stand-in's identity.** The object the store resolves for the selected child must be that child by
+    canonical export identity (its file and export index). Another file holding the same path is refused. This is a
+    code check; no synthetic test covers it, because the fixture would need a second file of the same package name.
+  - **Nested in an inherited component.** A slot naming an object inside a class default's sub-object (for example
+    an object outered to an inherited component) is refused, instead of shared into the parent default's graph.
+  - **Typed and ordered in the driver.** The definition store's errors convert with `VmError::from`, so a `NotYet`
+    stays one. The template's and class default's components are read before the spawn, and the new actor's own
+    components after it. The dummy's cylinder is read from the policy's holder file (the first in scan order).
+  - **The commit boundary.** In Off, once the actor is in the level list, a `NotYet` from the writes and events after
+    it is terminal, with "stopped after partial writes: " at the start and its kind and record kept. Reference is
+    unchanged.
+  - Synthetic tests: `an_inherited_component_with_two_stand_ins_is_refused`,
+    `an_object_inside_an_inherited_component_is_refused` and `a_not_yet_after_registration_is_prefixed_in_off`.

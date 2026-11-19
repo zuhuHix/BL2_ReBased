@@ -694,6 +694,11 @@ fn collision(what: &'static str) -> VmError {
 /// instancing's refusals and the fields written run before the actor is made, and a failure while making it frees
 /// it and its copies. A `NotYet` of the begin-play steps after that leaves the actor made, as step 4 says.
 ///
+/// **The commit boundary** (review r1 of #463, item 1, also review r1 of #478, item 4): in Off the actor's
+/// registration in the level list is the spawn's first committed write. Any `NotYet` after it is terminal: its text
+/// starts "stopped after partial writes", its kind and record kept ([`crate::pools::after_partial_writes`]).
+/// Reference is unchanged.
+///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
 pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
