@@ -110,7 +110,12 @@ mod tests {
         // Review r1 of #569, item 5: the socket objects arrive unloaded, so the first ask is the layer's refusal.
         match ow_world::world::skeletal::sockets(&vm, o) {
             Err(ow_vm::error::VmError::NotYet(n)) => {
-                assert!(matches!(n.missing, ow_core::Missing::LayerAbsent(_)), "{n}");
+                // Review r2 of #569: the definition store's load layer, and the unloaded-socket diagnostic.
+                assert!(
+                    matches!(&n.missing, ow_core::Missing::LayerAbsent(l) if l.contains("the definition store's load")),
+                    "{n}"
+                );
+                assert!(n.what.contains("the unloaded socket"), "{n}");
             }
             other => panic!("expected the unloaded-socket refusal, got {other:?}"),
         }
@@ -173,10 +178,8 @@ mod tests {
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("Mesh.psk"), b"x").unwrap();
         let link = root.join("Toy");
-        if !make_dir_link(&outside, &link) {
-            eprintln!("no directory link could be made here; the containment check is not exercised");
-            return;
-        }
+        // Review r2 of #569: a fixture that cannot be set up fails the test rather than skipping the check.
+        assert!(make_dir_link(&outside, &link), "no directory link could be made: the containment check would not run");
         let exports = PskExports::new(vec![root.clone()]);
         let err = exports.file("Toy", "Mesh").unwrap_err();
         assert!(err.contains("outside the export root"), "{err}");

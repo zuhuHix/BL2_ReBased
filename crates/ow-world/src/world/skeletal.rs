@@ -117,7 +117,10 @@ fn script(message: String) -> VmError {
 /// The store's file package, object path and object name of `o`, from its export table entry (the entry's own
 /// spelling, not the name table's first one: review r1 of #569); nothing is loaded. A mesh whose package holds another
 /// mesh export of the same name (in another group) is refused: a flat export layout keyed by package and name cannot
-/// tell the two apart (review r1 of #569).
+/// tell the two apart (review r1 of #569). "A mesh" is decided by class identity and ancestry (review r2): the other
+/// export's class, by its package-qualified path, is looked up in the loaded class table (read only) and must be
+/// `SkeletalMesh` or a subclass. A class the table does not hold cannot be settled without a load, so it is refused
+/// too, naming the class.
 fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
     let x = vm.space.heap.get(o)?;
     let interned = vm.space.names.text(x.name).into_owned();
@@ -125,20 +128,35 @@ fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
         let pkg = vm.defs.packages().get(package);
         if let (Ok(path), Ok(entry)) = (ow_defs::identity::full_path(pkg, index), pkg.object(index)) {
             let leaf = entry.name.clone();
-            let class_name = |e: &ow_package::tables::ObjectEntry| pkg.object(e.class).map(|c| c.name.clone()).ok();
-            let own_class = class_name(entry);
-            let twin = pkg.exports.iter().enumerate().any(|(i, e)| {
-                i64::try_from(i + 1).ok() != Some(i64::from(index))
-                    && e.name.eq_ignore_ascii_case(&leaf)
-                    && class_name(e) == own_class
-            });
-            if twin {
-                return Err(NotYet::layer_absent(
-                    format!("{UNIT}: {path}, whose package holds another mesh named {leaf} (the flat export layout is ambiguous)"),
-                    LAYER,
-                    RECORD,
-                )
-                .into());
+            let base = vm.space.classes.by_path(MESH_CLASS);
+            for (i, e) in pkg.exports.iter().enumerate() {
+                if i64::try_from(i + 1).ok() == Some(i64::from(index)) || !e.name.eq_ignore_ascii_case(&leaf) || e.class == 0 {
+                    continue;
+                }
+                let class_path = ow_defs::identity::full_path(pkg, e.class).unwrap_or_default();
+                match vm.space.classes.by_path(&class_path) {
+                    Some(c) if base.is_some_and(|b| vm.space.classes.is_child_of(c, b)) => {
+                        return Err(NotYet::layer_absent(
+                            format!(
+                                "{UNIT}: {path}, whose package holds another mesh named {leaf} (the flat export layout is                                  ambiguous)"
+                            ),
+                            LAYER,
+                            RECORD,
+                        )
+                        .into());
+                    }
+                    Some(_) => {}
+                    None => {
+                        return Err(NotYet::layer_absent(
+                            format!(
+                                "{UNIT}: {path}, whose package holds another export named {leaf} of the class                                  {class_path}, not in the loaded classes (whether it is a mesh cannot be settled)"
+                            ),
+                            LAYER,
+                            RECORD,
+                        )
+                        .into());
+                    }
+                }
             }
             return Ok((pkg.name.clone(), path, leaf));
         }

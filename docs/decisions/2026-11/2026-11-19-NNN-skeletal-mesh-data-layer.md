@@ -79,5 +79,14 @@ No native code was read. Synthetic fixtures only.
       ActorX file, the two same-named meshes, the spelling, and duplicate names;
   - checks: `cargo test --workspace -j 2` 2,454 passed, 0 failed, 47 ignored. The probe is unchanged: 27 bones; 13
     sockets refused while unloaded, all 13 on a skeleton bone after the harness load.
+- **Review r2 of #569:**
+  - **twins by class identity and ancestry:** the other export's class is looked up by its package-qualified path in
+    the loaded class table (read only, no load). It is a twin when that class is `SkeletalMesh` or a subclass. A class
+    the table does not hold cannot be settled without a load, so it is refused `LayerAbsent` too, naming the class. An
+    unrelated class that shares the leaf name `SkeletalMesh` no longer causes a false refusal once it is known;
+  - **tests:** a mesh and a mesh-subclass export of one name are both refused with zero source calls; an unrelated
+    same-leaf class refuses while it is unloaded and answers once it is loaded; the link-escape test fails when its
+    link cannot be made; the installed probe asserts the store-load layer and the unloaded-socket text;
+  - checks: `cargo test --workspace -j 2` 2,455 passed, 0 failed, 47 ignored; the probe is unchanged.
 - **UNVERIFIED.** The layer reports what the data holds. That the engine's bone order and parents match UModel's
   export rests on decision 2026-11-16-53's cross-tool bind-pose check, not on the running game.

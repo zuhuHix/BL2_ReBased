@@ -65,11 +65,20 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         let object = t.p.add_import("Core", "Class", core, "Object");
         let mesh = t.class("SkeletalMesh", object);
         toy_array_of(&mut t, mesh, "Sockets", "Object", object);
+        t.class("SkeletalMeshSub", mesh);
         let socket = t.class("SkeletalMeshSocket", object);
         t.prop("Name", socket, "SocketName", 0, 0);
         t.prop("Name", socket, "BoneName", 0, 0);
         let _ = toy_struct(&mut t, socket, "ToyUnused", None);
         t.class("ToyOther", object);
+        t.build()
+    };
+    // An unrelated class whose leaf name is also `SkeletalMesh` (review r2 of #569).
+    let other = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        t.class("SkeletalMesh", object);
         t.build()
     };
     let gd = {
@@ -99,10 +108,24 @@ fn packages() -> Vec<(&'static str, Vec<u8>)> {
         t.p.set_outer(l, left);
         let r = t.p.add_export(mesh, "Twin", empty.clone());
         t.p.set_outer(r, right);
-        t.p.add_export(mesh, "Mesh_C", empty);
+        t.p.add_export(mesh, "Mesh_C", empty.clone());
+        // Review r2 of #569: a mesh and a mesh-subclass export of one name in two groups; a mesh and an export of the
+        // unrelated `ToyOther.SkeletalMesh` sharing a name.
+        let sub = t.p.add_import("Core", "Class", engine, "SkeletalMeshSub");
+        let toy_other = t.p.add_import("Core", "Package", 0, "ToyOther");
+        let unrelated = t.p.add_import("Core", "Class", toy_other, "SkeletalMesh");
+        let (mix1, mix2) = (t.p.add_export(package_class, "Mix1", empty.clone()), t.p.add_export(package_class, "Mix2", empty.clone()));
+        let m1 = t.p.add_export(mesh, "Twin2", empty.clone());
+        t.p.set_outer(m1, mix1);
+        let m2 = t.p.add_export(sub, "Twin2", empty.clone());
+        t.p.set_outer(m2, mix2);
+        t.p.add_export(mesh, "Solo", empty.clone());
+        let group = t.p.add_export(package_class, "OtherGroup", empty.clone());
+        let o = t.p.add_export(unrelated, "Solo", empty);
+        t.p.set_outer(o, group);
         t.build()
     };
-    vec![("Core.upk", core), ("Engine.upk", engine), ("GD_ToyMesh.upk", gd)]
+    vec![("Core.upk", core), ("Engine.upk", engine), ("ToyOther.upk", other), ("GD_ToyMesh.upk", gd)]
 }
 
 struct Env {
@@ -319,4 +342,28 @@ fn the_leaf_is_the_exports_own_spelling() {
     let reads = Rc::new(Cell::new(0));
     SkeletalMeshes::install(&mut e.vm, Box::new(Fixed { leaf: "Mesh_C", answer: Ok(bones(&[None])), reads })).unwrap();
     assert_eq!(reference_skeleton(&e.vm, c).unwrap().len(), 1, "the source saw Mesh_C, not MESH_C");
+}
+
+/// Review r2 of #569: twins are decided by class identity and ancestry. A mesh and a mesh-subclass export of one name
+/// are both refused with no source call; an export of an unrelated class that shares the class's leaf name does not
+/// refuse once its class is known, and refuses (cannot be settled) while it is not in the loaded classes.
+#[test]
+fn twins_are_decided_by_class_ancestry() {
+    let mut e = env();
+    let (m1, m2) = (find(&mut e, "GD_ToyMesh.Mix1.Twin2"), find(&mut e, "GD_ToyMesh.Mix2.Twin2"));
+    let reads = Rc::new(Cell::new(0));
+    SkeletalMeshes::install(&mut e.vm, Box::new(Fixed { leaf: "Solo", answer: Ok(bones(&[None])), reads: reads.clone() })).unwrap();
+    for mesh in [m1, m2] {
+        let n = not_yet(reference_skeleton(&e.vm, mesh));
+        assert!(matches!(&n.missing, Missing::LayerAbsent(l) if *l == LAYER), "{n}");
+        assert!(n.what.contains("ambiguous"), "{n}");
+    }
+    assert_eq!(reads.get(), 0, "the source is not asked");
+    let solo = find(&mut e, "GD_ToyMesh.Solo");
+    assert!(e.vm.space.classes.by_path("ToyOther.SkeletalMesh").is_none(), "the unrelated class is not loaded yet");
+    let n = not_yet(reference_skeleton(&e.vm, solo));
+    assert!(n.what.contains("cannot be settled"), "{n}");
+    e.vm.find_class("ToyOther.SkeletalMesh").unwrap();
+    assert_eq!(reference_skeleton(&e.vm, solo).unwrap().len(), 1, "an unrelated class is no twin");
+    assert_eq!(reads.get(), 1);
 }
