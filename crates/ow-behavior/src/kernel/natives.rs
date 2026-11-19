@@ -207,6 +207,8 @@ impl NativePack for Pack {
             }
             bind(vm, BEGIN_NONDETERMINISTIC, Rc::new(begin_nondeterministic))?;
             bind(vm, FORCE_UNREGISTER, Rc::new(force_unregister))?;
+            // Running behavior lists outside the kernel (NATIVE_RUN_BEHAVIORS.md; decision 2026-11-19-54).
+            super::run::register(vm)?;
         }
         Ok(())
     }
@@ -745,7 +747,7 @@ fn borrow(k: &Rc<RefCell<Kernel>>) -> Result<std::cell::RefMut<'_, Kernel>, VmEr
 }
 
 /// Binds `f` to the native at `path` when the package set declares it native and this pack has not bound it yet.
-fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
+pub(crate) fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
