@@ -90,7 +90,7 @@ fn engine() -> Vec<u8> {
 /// A map: `TheWorld` (1), `PersistentLevel` (2), `WorldInfo_0` (3, time dilation 1), `Actor_0` (4), `Pawn_0` (5);
 /// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`, and its `Physics` is `physics` when
 /// given. With `streaming`, the `WorldInfo` names that level through a `LevelStreaming` (6).
-fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>) -> Vec<u8> {
+fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
@@ -135,6 +135,18 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>) -> Vec<u
         let tags = vec![p.name_tag("PackageName", name)];
         assert_eq!(add(&mut p, level_streaming, "LevelStreaming_0", 3, 4, tags, Vec::new()), 6);
     }
+    if kismet {
+        // The Matinee scan's export walk (review r2 of #420): one Matinee op, two exports of a class that does not
+        // resolve (the second from the walk's cache), and one export of a class on NOT_OP_CLASSES (a package object).
+        let core = p.add_import("Core", "Package", 0, "Core");
+        let package_class = p.add_import("Core", "Class", core, "Package");
+        let interp = class(&mut p, "SeqAct_Interp");
+        let unknown = class(&mut p, "NoSuchOp");
+        add(&mut p, interp, "SeqAct_Interp_0", 0, 4, Vec::new(), Vec::new());
+        add(&mut p, unknown, "NoSuchOp_0", 0, 4, Vec::new(), Vec::new());
+        add(&mut p, unknown, "NoSuchOp_1", 0, 4, Vec::new(), Vec::new());
+        add(&mut p, package_class, "SomeGroup", 0, 4, Vec::new(), Vec::new());
+    }
     p.build()
 }
 
@@ -147,13 +159,18 @@ fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
 /// [`builder`] over a map whose `WorldInfo` streams a second level, `Test_Sub`, that places its own `Pawn_0`; the last
 /// pawn (the streamed level's) is the one moved to `at`.
 fn streaming_builder(at: [f32; 3]) -> Builder {
-    builder_files(0, None, false, true, at, 0)
+    builder_files(0, None, false, true, false, at, 0)
+}
+
+/// [`builder`] over a map that also holds the Kismet exports of [`map`]'s `kismet`.
+fn kismet_builder() -> Builder {
+    builder_files(0, None, false, false, true, [0.0; 3], 0)
 }
 
 /// [`builder`] with the pawn's `Physics` set to `physics` when given, and the host's physics step installed after
 /// the load with Matinee bindings that name the pawn when `bound` (the invented packages hold no Matinee op).
 fn builder_with(remote_role: u8, physics: Option<&'static str>, bound: bool, at: [f32; 3], yaw: i32) -> Builder {
-    builder_files(remote_role, physics, bound, false, at, yaw)
+    builder_files(remote_role, physics, bound, false, false, at, yaw)
 }
 
 /// [`builder_with`], with the streamed level `Test_Sub` when `streamed`.
@@ -162,6 +179,7 @@ fn builder_files(
     physics: Option<&'static str>,
     bound: bool,
     streamed: bool,
+    kismet: bool,
     at: [f32; 3],
     yaw: i32,
 ) -> Builder {
@@ -173,8 +191,8 @@ fn builder_files(
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let engine = engine();
-        let map_p = map(remote_role, physics, streamed.then_some("Test_Sub"));
-        let map_sub = map(remote_role, physics, None);
+        let map_p = map(remote_role, physics, streamed.then_some("Test_Sub"), kismet);
+        let map_sub = map(remote_role, physics, None, false);
         let mut files: Vec<(&str, &[u8])> = vec![("Engine.upk", &engine), ("Test_P.upk", &map_p)];
         if streamed {
             files.push(("Test_Sub.upk", &map_sub));
@@ -188,7 +206,9 @@ fn builder_files(
         let list = world.actors().borrow().list().to_vec();
         let pawn = *list.last().unwrap();
         let mut bindings = matinee_bound(&mut world.vm)?;
-        assert_eq!(bindings.ops, 0, "the invented packages hold no Matinee op");
+        if !kismet {
+            assert_eq!(bindings.ops, 0, "the invented packages hold no Matinee op");
+        }
         if bound {
             bindings.bound.insert(pawn);
         }
@@ -420,6 +440,24 @@ fn the_scan_reads_each_variable_kind_and_flags_what_it_cannot_see() {
     let mut out = MatineeBindings::default();
     out.unresolved_classes.insert("Nowhere.Unknown".into(), 1);
     assert_eq!(Driver::of(&out, pawn), Driver::Unknown);
+}
+
+/// The export walk of [`matinee_bound`] over an invented map (review r2 of #420): the Matinee op export is read, the
+/// class on `NOT_OP_CLASSES` is skipped, and the class that does not resolve is counted once per export, so the scan
+/// is incomplete and the placed pawn's driver is Unknown.
+#[test]
+fn the_export_walk_reads_ops_skips_listed_classes_and_counts_unresolved_ones() {
+    let (mut world, _) = kismet_builder()().unwrap();
+    let pawn = *world.actors().borrow().list().last().unwrap();
+    let bindings = matinee_bound(&mut world.vm).unwrap();
+    assert_eq!(bindings.ops, 1, "{bindings:?}");
+    assert_eq!(
+        bindings.unresolved_classes.iter().map(|(c, n)| (c.as_str(), *n)).collect::<Vec<_>>(),
+        [("Engine.NoSuchOp", 2)],
+        "Core.Package is on NOT_OP_CLASSES; the unresolved class is counted for each export"
+    );
+    assert!(!bindings.complete());
+    assert_eq!(Driver::of(&bindings, pawn), Driver::Unknown);
 }
 
 #[test]
