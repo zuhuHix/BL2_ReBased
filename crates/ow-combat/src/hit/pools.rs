@@ -87,9 +87,15 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
     })?;
     bind_fn(vm, "Engine.Controller.ApplyCharacterClassStartingValues", |c| {
         let controller = this(c, "Controller.ApplyCharacterClassStartingValues")?;
+        // A class argument that is not an object reference is refused: reading it as None would delete every pool.
         let class = match c.arg(0)? {
             Value::Object(o) => *o,
-            _ => None,
+            other => {
+                return Err(super::access::error(format!(
+                    "Controller.ApplyCharacterClassStartingValues: the class argument is not an object reference ({})",
+                    other.kind_name()
+                )));
+            }
         };
         apply_class_starting_values(c.vm, controller, class)?;
         Ok(Value::None)
@@ -126,9 +132,11 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
 /// Refused, `NotYet`:
 /// - a `WillowPlayerController` (or a subclass): its override ends with a script function whose name is not read
 ///   (section 1.10 step 2);
-/// - a class listing one resource twice. The note does not give `CreatePool`'s reinitialise flag. After the delete no
-///   pool exists, so the flag can matter only for a second pool of the same resource; that case is refused before
-///   anything changes.
+/// - a class whose pools (its `ResourcePools` and the two accuracy pool definitions together) name one resource twice.
+///   The note does not give `CreatePool`'s reinitialise flag. After the delete no pool exists, so the flag can matter
+///   only for a second pool of the same resource; that case is refused before anything changes.
+///
+/// A class argument that is not an object reference is a script error, not "no class" (review r1 of #412).
 ///
 /// UNVERIFIED in the running game.
 pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
@@ -152,8 +160,13 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
                 defs.push(object_of(v));
             }
         }
+        accuracy = (
+            object(vm, class, "AccuracyPoolDefinition")?,
+            object(vm, class, "OffHandAccuracyPoolDefinition")?,
+        );
+        // Every pool the call will make, the two accuracy pools included, before anything is deleted.
         let mut resources = Vec::new();
-        for def in defs.iter().flatten() {
+        for def in defs.iter().flatten().chain([accuracy.0, accuracy.1].iter().flatten()) {
             let def = super::access::loaded(vm, *def)?;
             let resource = object(vm, def, "Resource")?;
             if resource.is_some() && resources.contains(&resource) {
@@ -165,10 +178,6 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
             }
             resources.push(resource);
         }
-        accuracy = (
-            object(vm, class, "AccuracyPoolDefinition")?,
-            object(vm, class, "OffHandAccuracyPoolDefinition")?,
-        );
     }
     let mut manager = object(vm, controller, "ResourcePoolManager")?;
     ow_world::pools::delete_all_pools(vm, manager)?;

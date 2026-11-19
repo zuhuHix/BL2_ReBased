@@ -25,8 +25,11 @@ was no real-game session; every rule is **UNVERIFIED** in the running game. Refe
   - With no class, it only deletes.
   - Refused with `NotYet { NotRead }`:
     - a `WillowPlayerController`: its override ends with a script call whose name is not read (section 1.10 step 2);
-    - a class listing one resource twice. The note does not give `CreatePool`'s reinitialise flag, and after the delete
-      that flag can matter only for a second pool of the same resource.
+    - a class whose pools, its `ResourcePools` and the two accuracy pool definitions together, name one resource twice.
+      The note does not give `CreatePool`'s reinitialise flag, and after the delete that flag can matter only for a
+      second pool of the same resource.
+  - A class argument that is not an object reference is a script error. Reading it as "no class" would delete every
+    pool.
 - **The natives on the route that have no note** answer `NotYet { NotRead }` by name in Off:
   - `WillowPawn.SetDefaultPhysics` and `WillowAIPawn.GetExpLevel` are bound to that refusal (`hit::pools`);
   - `WillowMind.RecalculateAttributeInitializedState` was already `NotYet` (`ow-world` `levelup`).
@@ -74,3 +77,6 @@ was no real-game session; every rule is **UNVERIFIED** in the running game. Refe
   - The analyst notes for `SetDefaultPhysics`, `GetExpLevel` and the mind's `RecalculateAttributeInitializedState`.
     Then the Off spawn health can be compared with Reference and the live dummy.
   - A re-run of the C++ binary on the changed fixture bytes, to refresh the digests' provenance.
+- **Review r1 of #412** (fix commit on this branch): the duplicate-resource guard now covers the two accuracy pools,
+  before the delete, and a non-object class argument is a script error instead of a silent delete of every pool. The
+  synthetic starting-values test gained both cases (`toy_starting()` gained `Class_Accuracy`).
