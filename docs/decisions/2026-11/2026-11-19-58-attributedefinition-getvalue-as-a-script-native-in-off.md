@@ -38,6 +38,9 @@ in the running game. No dependency was added, no bounds check was loosened and n
   resolver's data, or script a context resolver runs. The port does not track whether an effect came first, so the
   refusal is labelled by position, as in #437. Nothing is put back, the text starts "stopped after partial writes",
   and the kind is kept.
+- **Review r2 of #442:** only a `NotYet` gets that prefix, at the very start of its text. Any other error after the
+  write (a resolver's bad data, say) already stops the run and is returned unchanged, kind and text. A regression
+  covers a post-write `BadData`; with the old wrapping it fails (checked).
 
 **Verified (automated, invented classes).** `ow-combat`: 2 tests on an invented `Engine` package (a `Pawn` with a
 plain float attribute, the two attribute classes with the game's `GetValue` parameter shape, the pawn context resolver

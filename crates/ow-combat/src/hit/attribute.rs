@@ -45,8 +45,8 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
 /// Those refuse with nothing changed: no generator drawn, no saved random value written, no out argument written.
 /// Once step 1 starts, a refusal can come from what the steps reach (a nested attribute, a resolver's own data, script
 /// a context resolver runs). It may follow effects (a random draw, the out write), and the port does not track
-/// whether one happened. So it is **terminal**: nothing is put back, its text starts "stopped after partial writes",
-/// and its kind is kept.
+/// whether one happened. So a `NotYet` there is **terminal**: nothing is put back, its text starts "stopped after
+/// partial writes", and its kind is kept. Any other error is returned unchanged (review r2 of #442).
 fn get_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let attr = this(c, UNIT)?;
     let source = object_arg(c, 0, "ContextSource")?;
@@ -71,11 +71,13 @@ fn get_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     committed.map(Value::Float).map_err(after_partial_writes)
 }
 
-/// A refusal after evaluation started: terminal, its text prefixed, its kind kept.
+/// A refusal after evaluation started (the hub's ruling in review r2 of #442): a `NotYet` is terminal, its text
+/// prefixed "stopped after partial writes" at the very start, its kind kept. Any other error already stops the run and
+/// is returned unchanged, kind and text.
 fn after_partial_writes(e: VmError) -> VmError {
     match e {
         VmError::NotYet(n) => NotYet::new(format!("stopped after partial writes: {}", n.what), n.missing, n.record).into(),
-        other => super::access::error(format!("{UNIT}: stopped after partial writes: {other}")),
+        other => other,
     }
 }
 
