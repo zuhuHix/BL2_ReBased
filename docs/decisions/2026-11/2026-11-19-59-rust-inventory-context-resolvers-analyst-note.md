@@ -21,6 +21,15 @@ running game.
     `IBodyPawn` pawn's `EquippedItems` slot. The earlier note said the inventory manager's.
 - **Records changed:** NATIVE_ATTRIBUTES.md section 5 (both rows), NATIVE_INVENTORY_EQUIP.md (`ItemActors`),
   NATIVE_INDEX.md (the `ItemActors` row, and a new row for the equipped resolver).
+- **Review r1 of #445** (documentation only):
+  - the note records what the Rust path establishes for link 8: the monetary value starts the chain from the
+    weapon, and each resolver gets the previous one's answer. The resolver's final input stays link 8's acceptance
+    check;
+  - Off answers a named `NotYet` for a source that implements `IBodyPawn`, until the accessor is settled, and for a
+    source whose interface list cannot be read. None is kept for an established absence;
+  - the live checks are called outcome checks, with a case that tells the possibilities apart for each open
+    question;
+  - the `ItemActors` summary in NATIVE_INVENTORY_EQUIP.md is replaced.
 - **UNVERIFIED** in the running game: every rule. Also open: the order in which items join the item chain, which
   `IBodyPawn` accessor the equipped resolver calls, and which classes implement `IBodyPawn`. The note's section 6
   lists a bl-sdk live read for each rule.

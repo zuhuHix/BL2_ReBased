@@ -100,17 +100,24 @@ This replaces "body not read in detail" in NATIVE_INVENTORY_EQUIP.md.
 - **Which accessor.** `IBodyPawn` declares three: `GetAWillowPawn`, `GetAWillowPlayerPawn` and `GetAWillowAIPawn`. The
   native calls one of them by its place in the interface's C++ table, and how that table lines up with the script
   declaration order is not proven. `GetAWillowPawn` is the likely one, since the result is only used as a
-  `WillowPawn`. **UNVERIFIED**: a player pawn source has to give its own `EquippedItems` slot (section 6).
+  `WillowPawn`, but that is a guess. **UNVERIFIED** (section 6 gives the case that tells them apart).
 - **Which sources implement `IBodyPawn`.** That decides which sources work: the pawn classes, and whether a
   controller does. It was not listed in this lane. **UNVERIFIED.**
+- **What Off answers until those two are settled.** None is kept for an absence that is established: a None source,
+  a source whose class implements no `IBodyPawn` by its package declaration, an accessor that gives None, or an
+  empty slot. A source that does implement `IBodyPawn` needs the accessor, which is not settled, so Off answers a
+  named `NotYet` (not read: "which `IBodyPawn` accessor the equipped resolver calls") rather than pick one. A source
+  whose interface list cannot be read from its class also answers a `NotYet`, never None. An equipable item source
+  needs neither and is answered (itself).
 - **The location is not range-checked.** The body indexes the four-entry array by the byte as given. The enum values
   above 3, if `EEquipmentLoc` has any, would read past it. An implementation should refuse a location of 4 or more
   as a data error rather than guess (AGENTS.md rule 5), as `ow-inventory`'s manager already does for its own slots
   (`EQUIPMENT_SLOTS`).
 - **It reads the pawn, not the inventory manager.** NATIVE_ATTRIBUTES.md section 5 said "the item the source's
   inventory manager holds"; the slot array is on the pawn.
-- **A weapon source** is not a `WillowEquipAbleItem`. It therefore goes through `IBodyPawn`, which a weapon is not
-  expected to implement (UNVERIFIED), and so gives None.
+- **A weapon source** is not a `WillowEquipAbleItem`. It therefore goes through `IBodyPawn`. If the weapon's class
+  declares no `IBodyPawn`, the answer is None. That a weapon declares none is expected, not checked in this lane, and
+  is UNVERIFIED.
 
 ## 5. For the implementer (Off)
 
@@ -123,15 +130,26 @@ These points follow from sections 2 to 4. They are not code.
   definition identity and, when the flag is set, `bReadied`.
 - `EngineQuery::EquippedInventory` (a location byte) should answer from the source's pawn (`EquippedItems`), not from the
   inventory manager. An equipable item source returns itself before any query.
-- Link 8 (`equip_gun`) stops in `init` on this resolver for a non-None source. What source it gets there was not
-  traced in this lane. If it is the weapon, rule 2 answers the weapon itself. If it is the controller, a gun is
-  never found and the answer is None, unless an item with that definition sits on the item chain.
+- Link 8 (`equip_gun`) stops in `init` on this resolver for a non-None source. What the Rust path establishes:
+  - **Where the chain starts.** The inventory's monetary value (`ComputeMonetaryValue`,
+    `ow_inventory::definition::monetary_value_of`) evaluates the definition's `MonetaryValue` with the inventory
+    itself as the context source, so on that path the chain starts from the weapon.
+  - **How it passes along.** `ow_attr::eval::resolve_context` hands each resolver of an attribute's
+    `ContextResolverChain` the previous resolver's answer, and stops at the first None.
+  - **What was not traced.** Which attribute of the weapon's `init` reaches this resolver, and which resolvers sit
+    ahead of it in that chain, were not traced in this lane. So the source this resolver finally gets is not known.
+    If it is still the weapon, rule 2 answers the weapon itself. If an earlier resolver turned it into the
+    controller, a gun is never found and the answer is None, unless an item with that definition sits on the item
+    chain.
+  - **The acceptance check.** It is that link 8's `init` gets past this resolver. The implementer should log the
+    attribute, the chain and the source this resolver receives on that run.
 
-## 6. bl-sdk live checks that would confirm each rule
+## 6. bl-sdk outcome checks for each rule
 
-Each check is a live read in a maintainer-approved session (docs/verification/REALGAME_GROUND_TRUTH.md). The checks
-make a resolver object with `unrealsdk.construct_object`, set its properties and call its `GetAttributeContext` with a
-None attribute. Saves stay byte-identical.
+Each check is a live outcome check in a maintainer-approved session (docs/verification/REALGAME_GROUND_TRUTH.md): it
+sets up a case, calls the resolver and compares the answer with what the rule predicts. It is not a read of the
+native. The checks make a resolver object with `unrealsdk.construct_object`, set its properties and call its
+`GetAttributeContext` with a None attribute. Saves stay byte-identical.
 
 | Rule | Check |
 |---|---|
@@ -143,9 +161,16 @@ None attribute. Saves stay byte-identical.
 | Pawn source gives None | the player pawn as source: None |
 | Inventory source returns itself | an equipped weapon as source, `InventoryDefinition` set to something else: the answer is the weapon |
 | Equipped resolver, item source | a `WillowEquipAbleItem` as source: itself, at any `EquipmentLocation` |
-| Equipped resolver, pawn source | the player pawn as source, each location 0 to 3: `EquippedItems[loc]` (settles which accessor) |
-| Equipped resolver, controller source | the player controller as source: a slot or None (settles whether a controller has `IBodyPawn`) |
+| Equipped resolver, pawn source | the player pawn as source, each location 0 to 3: `EquippedItems[loc]`. This confirms the slot read only: every accessor gives a player pawn back as itself, so it cannot tell them apart |
 | Equipped resolver, weapon source | an equipped weapon as source: None |
+
+**The open questions.** Each needs a case whose outcome differs between the possibilities, or a direct observation.
+
+| Open question | Case that tells the possibilities apart |
+|---|---|
+| Which `IBodyPawn` accessor | an AI pawn with a filled `EquippedItems` slot as source (set one for the check if no AI pawn has one). `GetAWillowPawn` and `GetAWillowAIPawn` give its slot, and `GetAWillowPlayerPawn` gives None. Then the player pawn as source: `GetAWillowAIPawn` gives None there, the other two its slot. The two outcomes together leave one accessor. A direct observation also settles it: a bl-sdk hook on the three accessors' script entry points, if the native's call reaches them, shows which one fires |
+| Which classes implement `IBodyPawn` | a direct observation: each candidate class's interface list, read live (the player controller, the player and AI pawn classes, a weapon, a vehicle). The resolver's answer for a controller source (a slot or None) then has to agree with that list |
+| The order items join `ItemChain` | a direct observation: give the player two items of one definition, one after the other, and read the chain from `ItemChain` through each entry's `Inventory` link; the resolver's answer for a controller source must be the chain's first |
 
 ## 7. Corrections to NATIVE_ATTRIBUTES.md section 5
 
