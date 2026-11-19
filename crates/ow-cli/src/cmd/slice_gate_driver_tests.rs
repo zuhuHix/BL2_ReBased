@@ -31,8 +31,8 @@ fn core() -> Vec<u8> {
     t.p.build()
 }
 
-/// `Engine.upk`: `Actor` with the fields the spawn reads, `WorldInfo`, a toy component class, `ToyPawn` and
-/// `ToyTarget` (each with a component field), `ToyController`, `ToyBlocked` (its defaults collide with the world, so
+/// `Engine.upk`: `Actor` with the fields the spawn reads, `WorldInfo`, a toy component class, `ToyPawn`,
+/// `ToyController` and `ToyTarget` (each with a component field), `ToyBlocked` (its defaults collide with the world, so
 /// its spawn needs the placement search, a `NotYet`) and `Thing` (not an actor: the world refuses to spawn it).
 fn engine() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
@@ -81,11 +81,10 @@ fn engine() -> Vec<u8> {
     let component = t.p.add_import("Core", "Class", core_pkg, "Component");
     let toy_component = t.class("ToyComponent", component);
     t.prop("Int", toy_component, "Payload", 0, 0);
-    for name in ["ToyPawn", "ToyTarget"] {
+    for name in ["ToyPawn", "ToyController", "ToyTarget"] {
         let c = t.class(name, actor);
         t.prop("Object", c, "Comp", 0, toy_component);
     }
-    t.class("ToyController", actor);
     let blocked = t.class("ToyBlocked", actor);
     let mut defaults = ow_package::testkit::ints(&[0]);
     defaults.extend(t.p.bool_tag("bCollideWorld", true));
@@ -98,7 +97,7 @@ fn engine() -> Vec<u8> {
 struct Toy {
     world: World,
     dir: PathBuf,
-    /// The component each spawnable class's defaults hold, outered to that class default.
+    /// The component each spawnable class's defaults hold, outered to that class default: pawn, controller, target.
     templates: Vec<(ObjRef, ObjRef)>,
 }
 
@@ -133,7 +132,7 @@ fn toy() -> Toy {
     let info = ow_vm::interp::instantiate_from_defaults(&mut world.vm, class).unwrap();
     world.actors().try_borrow_mut().unwrap().place_world_info(info).unwrap();
     let mut templates = Vec::new();
-    for name in ["ToyPawn", "ToyTarget"] {
+    for name in ["ToyPawn", "ToyController", "ToyTarget"] {
         let vm = &mut world.vm;
         let cdo = vm.defs.class_default(&mut vm.space, &format!("Engine.{name}")).unwrap();
         let component_class = vm.find_class("Engine.ToyComponent").unwrap();
@@ -174,8 +173,9 @@ impl Toy {
 
 const ACTORS: [&str; 3] = ["Engine.ToyPawn", "Engine.ToyController", "Engine.ToyTarget"];
 
-/// All three actors are spawned and registered, each with its own component (not the class default's), and the cast
-/// runs on them.
+/// All three actors are spawned and registered, and each cast slot holds the expected class's actor, a distinct one,
+/// with its own component (not the class default's, outered to that actor); the cast runs on them (review r3 of #454:
+/// a swap of any two slots fails).
 #[test]
 fn the_world_spawns_the_cast_s_actors_with_their_own_components() {
     let mut t = toy();
@@ -188,11 +188,18 @@ fn the_world_spawns_the_cast_s_actors_with_their_own_components() {
     };
     let listed = t.listed();
     assert_eq!(listed.len(), before + 3);
-    assert!(listed.contains(&pawn) && listed.contains(&controller) && listed.contains(&target));
-    for (actor, (_, template)) in [pawn, target].into_iter().zip(t.templates.clone()) {
+    let slots = [pawn, controller, target];
+    let mut components = Vec::new();
+    for (i, ((actor, class), (_, template))) in slots.into_iter().zip(ACTORS).zip(t.templates.clone()).enumerate() {
+        let want = t.world.vm.find_class(class).unwrap();
+        assert_eq!(t.world.vm.space.heap.get(actor).unwrap().class, want, "slot {i} holds a {class}");
+        assert!(listed.contains(&actor), "slot {i}: registered in the world");
+        assert!(!slots[..i].contains(&actor), "slot {i}: a distinct actor");
         let own = t.comp(actor);
-        assert_ne!(own, template, "not the class default's component");
-        assert_eq!(t.world.vm.space.heap.get(own).unwrap().outer, Some(actor));
+        assert_ne!(own, template, "slot {i}: not the class default's component");
+        assert_eq!(t.world.vm.space.heap.get(own).unwrap().outer, Some(actor), "slot {i}: its own component");
+        assert!(!components.contains(&own), "slot {i}: a component no other slot shares");
+        components.push(own);
     }
 }
 
@@ -211,10 +218,16 @@ fn a_refusal_before_the_first_spawn_stops_the_link_unmarked() {
     assert_eq!(t.listed().len(), before, "nothing registered");
 }
 
-/// A `NotYet` after one spawn succeeded is marked as after partial writes, its kind kept; the earlier actor stays
-/// registered, and the cast does not run.
+/// A `NotYet` after one spawn succeeded is marked as after partial writes, once, its kind and record kept; the earlier
+/// actor stays registered, and the cast does not run.
 #[test]
 fn a_not_yet_after_a_committed_spawn_is_marked() {
+    // The unmarked NotYet of the blocked spawn, from a fresh world: its record is the one the marked stop must keep.
+    let original = match phaselock_actors(&mut toy().world.vm, &["Engine.ToyBlocked", "Engine.ToyController", "Engine.ToyTarget"]) {
+        Err(VmError::NotYet(n)) => n,
+        other => panic!("{other:?}"),
+    };
+    assert!(!original.record.is_empty());
     let mut t = toy();
     let before = t.listed().len();
     let mut r = Ran::default();
@@ -224,12 +237,16 @@ fn a_not_yet_after_a_committed_spawn_is_marked() {
     let (outcome, stop) = r.stop.expect("a stop");
     assert_eq!(outcome, Outcome::NotYet);
     assert!(stop.text.starts_with(PARTIAL_WRITES), "{}", stop.text);
+    assert_eq!(stop.text.matches(PARTIAL_WRITES).count(), 1, "exactly one prefix: {}", stop.text);
+    assert_eq!(stop.native, format!("{PARTIAL_WRITES}: {}", original.what), "the subject, prefixed once");
+    assert_eq!(stop.record, original.record, "the original record");
     assert_eq!(t.listed().len(), before + 1, "the pawn stays registered");
     // The helper alone keeps the NotYet's kind.
     match phaselock_actors(&mut t.world.vm, &["Engine.ToyPawn", "Engine.ToyBlocked", "Engine.ToyTarget"]) {
         Err(VmError::NotYet(n)) => {
             assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
-            assert!(n.what.starts_with(PARTIAL_WRITES), "{n}");
+            assert_eq!(n.what, format!("{PARTIAL_WRITES}: {}", original.what), "{n}");
+            assert_eq!(n.record, original.record);
         }
         other => panic!("{other:?}"),
     }
@@ -245,7 +262,39 @@ fn an_ordinary_spawn_error_is_a_hard_stop_in_both_gradings() {
         let (outcome, stop) = r.stop.expect("a hard stop");
         assert_eq!(outcome, Outcome::Error, "{grading:?}");
         assert_eq!(stop.step, "spawn");
+        assert!(stop.text.contains(REFUSED_THING), "{grading:?}: the world's refusal, not another error: {}", stop.text);
         assert!(r.error_lines.is_empty(), "{grading:?}: not an error line gone past");
         assert!(actors.is_none(), "{grading:?}: the cast did not run");
     }
+}
+
+/// The refusal `phaselock_actors` reports when the world's spawn answers no actor for `Engine.Thing`.
+const REFUSED_THING: &str = "the world's spawn refused a Engine.Thing";
+
+/// The grading is typed (review r3 of #454): an error that is not a `VmError::NotYet` is an error even when its text
+/// reads like a `NotYet`'s display, from the cast under strict grading and from `typed_stop` itself; a real `NotYet` is
+/// not yet, its subject and record read from the value even when the record's text holds another phrase.
+#[test]
+fn the_grading_follows_the_error_s_variant_not_its_text() {
+    let looks = ow_core::NotYet::not_ported("Toy.Native", "TOY_RECORD.md").to_string();
+    let fake = VmError::Script { function: "toy".into(), message: looks.clone() };
+    let (outcome, stop) = typed_stop("cast", &fake);
+    assert_eq!(outcome, Outcome::Error, "{}", stop.text);
+    assert!(stop.text.contains(&looks));
+    let mut t = toy();
+    let mut r = Ran::default();
+    let message = looks.clone();
+    drive_phaselock(&mut r, &mut t.world.vm, Grading::Strict, &ACTORS, move |_, _| {
+        Err(VmError::Script { function: "toy".into(), message })
+    });
+    let (outcome, stop) = r.stop.expect("a stop");
+    assert_eq!((outcome, stop.step.as_str()), (Outcome::Error, "cast"), "{}", stop.text);
+    // A real NotYet whose record names a higher-priority phrase keeps its own subject and record.
+    const TRICKY: &str = "TOY_RECORD.md, not read from native code or script yet";
+    assert!(TRICKY.contains(&Missing::NotRead.to_string()), "the record holds the higher-priority phrase");
+    let real = VmError::NotYet(ow_core::NotYet::not_ported("Toy.Native", TRICKY));
+    let (outcome, stop) = typed_stop("cast", &real);
+    assert_eq!(outcome, Outcome::NotYet);
+    assert_eq!(stop.native, "Toy.Native");
+    assert_eq!(stop.record, TRICKY);
 }
