@@ -9,15 +9,18 @@ implements the note. Sources:
 
 Raw output stays under ignored `local/analysis/mesh-rest/`. No live session was run.
 
-- **Read (native):** for identifier `Mesh`, `WillowPawn`'s `PostInitBodyComposition` does the following, in order:
+- **Read (native):** for identifier `Mesh`, in modes 0 and 3, `WillowPawn`'s `PostInitBodyComposition` does the
+  following, in order:
   1. releases the old `Pawn.Mesh`;
   2. sets `Pawn.Mesh` to the made object as a skeletal mesh component;
   3. when that is set: `MeshBodyCompositionIndex` = the attachment index as a byte, the mesh's flag set, #543's five
      fields, `SlotNodes` emptied and rebuilt, and on authority `RepMeshScale` = the mesh's `Scale`;
   4. sets `CollisionComponent` to the mesh when the body class uses the mesh for collision;
   5. raises the `ReattachWeapons` script event by name, whether or not step 3 ran.
-- **The flag** #529 left unnamed is `SkeletalMeshComponent.bSkipAllUpdateWhenPhysicsAsleep`, set to true. The name is a
-  layout fit, labelled UNVERIFIED. No script reads it, and Maya's template already holds it true.
+- **The flag** #529 left unnamed is `SkeletalMeshComponent.bSkipAllUpdateWhenPhysicsAsleep`, set to true. The name
+  and its bit within the word are layout fits, labelled UNVERIFIED. No script reads it or its neighbours, so a
+  one-bit misfit is harmless in Off. Maya's template already holds it true.
+- **`RepMeshScale`**'s name is a fit too (one field slot after its computed place), UNVERIFIED. Its stored default is 0.
 - **Read (script):** `WillowPawn.ReattachWeapons` is the only definition, and only the native raises it. With
   `Weapon` and `OffHandWeapon` both None it writes nothing. With a held weapon it runs
   `AttachThirdPersonMeshToComponent`, whose many natives the port lacks.
@@ -26,6 +29,6 @@ Raw output stays under ignored `local/analysis/mesh-rest/`. No live session was 
   the event, is `NotYet { NotRead }`.
 - **Maya:** her links still stop at #529's animation-node `LayerAbsent` (her tree has found nodes and slot nodes), so
   this note clears the stop after that one.
-- **Open:** whether Maya holds a weapon when the body composition runs, the flag's native readers, and the modes 1 and
-  2 foot-IK step.
+- **Open:** the flag's and `RepMeshScale`'s names (fits), whether Maya holds a weapon when the body composition runs,
+  the flag's native readers, and the modes 1 and 2 foot-IK step.
 - **UNVERIFIED.** Every rule is unconfirmed in the running game; the note lists the live checks.
