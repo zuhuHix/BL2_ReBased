@@ -138,7 +138,8 @@ fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
                     Some(c) if base.is_some_and(|b| vm.space.classes.is_child_of(c, b)) => {
                         return Err(NotYet::layer_absent(
                             format!(
-                                "{UNIT}: {path}, whose package holds another mesh named {leaf} (the flat export layout is                                  ambiguous)"
+                                "{UNIT}: {path}, whose package holds another mesh named {leaf} (the flat export layout is \
+                                ambiguous)"
                             ),
                             LAYER,
                             RECORD,
@@ -149,7 +150,8 @@ fn identity(vm: &Vm, o: ObjRef) -> Result<(String, String, String), VmError> {
                     None => {
                         return Err(NotYet::layer_absent(
                             format!(
-                                "{UNIT}: {path}, whose package holds another export named {leaf} of the class                                  {class_path}, not in the loaded classes (whether it is a mesh cannot be settled)"
+                                "{UNIT}: {path}, whose package holds another export named {leaf} of the class \
+                                {class_path}, not in the loaded classes (whether it is a mesh cannot be settled)"
                             ),
                             LAYER,
                             RECORD,
