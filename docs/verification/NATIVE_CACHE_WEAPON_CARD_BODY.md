@@ -110,6 +110,9 @@ Section 3, step 7 of the outline (replication) then runs on these entries.
 
 ## 4. For an implementer: the Off answers, step by step
 
+This narrows NATIVE_CACHE_WEAPON_CARD.md section 5.3, which refuses at entry because steps 4 to 6 were unread: with
+this note those steps are read, and the native refuses only in the cases of step 2 below.
+
 The hub's rulings apply:
 - preflight what is cheap and certain before any write;
 - a `NotYet` after a write is terminal, its text prefixed "stopped after partial writes: ", its kind and record kept,
@@ -120,9 +123,9 @@ The hub's rulings apply:
 The native runs inside the spawn's `InitializeInternal`, after writes, so every `NotYet` below carries the prefix.
 
 1. **Before any write of the native's own,** compute the whole card into a list, writing nothing:
-   - the definition read (the outline's step 1). With a world whose globals definition is already loaded
-     (NATIVE_WILLOW_GLOBALS.md section 6.1), no first load runs. If the definition is not loaded yet, its load is the
-     native's first write, and every refusal after it is marked;
+   - the definition read (the outline's step 1). In Off the globals getter never loads; it answers `NotRead` when the
+     field is unset (NATIVE_CACHE_WEAPON_CARD.md section 5.3). The equip driver runs the globals preflight of
+     NATIVE_WILLOW_GLOBALS.md section 6.2 before the weapon is made, so the getter answers the preloaded object;
    - the slot entries (the outline's step 3);
    - sections 3.1 to 3.3. Each effect value and base value goes through the port's attribute evaluation. Its `NotYet`
      returns as it is (prefixed, since the run wrote before).
