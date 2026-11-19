@@ -21,6 +21,10 @@
 //!   reads (NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3; in stock UE3 `GameInfo` spawns it into `WorldInfo.GRI`). No
 //!   `WorldInfo` placed, or a None `GRI`, stays `NotYet { LayerAbsent }`: a world that has not made its replication
 //!   info does not say, and is not read as "no replication info" (the note's 1.0 row). UNVERIFIED in the running game.
+//!   **Whose GRI it finds** (review r1 of #393): no map load makes one yet, so in `ow-package --combat-run` it is the
+//!   stand-in `ow_combat::death::enable_deaths` builds from class defaults (in both parity modes). The playthrough
+//!   native then reads its default `CurrentPlaythrough` 0, i.e. it **assumes Normal mode**; that is a harness
+//!   object's answer, UNVERIFIED, not the game's (the precedent is decision 2026-11-16-49's game info).
 //!   The world itself answers none: how the game finds the player controller from a source, or redirects a pawn's
 //!   attribute context, is not read here (NATIVE_ATTRIBUTES.md sections 5 and 10).
 //!

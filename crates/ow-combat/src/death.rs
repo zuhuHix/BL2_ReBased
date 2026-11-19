@@ -82,6 +82,12 @@ pub const LOGGED_NO_OPS: [&str; 3] = [
 /// world that has none gets a `WillowGameReplicationInfo` with a `MissionTracker`. Both are plain instances of the
 /// installed classes at their defaults. A package set without these classes has no deaths to run (nothing is
 /// enabled, as the C++ returns). A pawn adopted from now on is prepared for death ([`prepare_for_death`]).
+///
+/// **The replication info is a harness stand-in** (review r1 of #393; the same kind of label as decision 2026-11-16-49's
+/// game info). The running game spawns its own; this one is a class-default `WillowGameReplicationInfo`. Since
+/// decision 2026-11-19-06 the world's `GameReplicationInfo` query answers it (`ow_world::query`), in both parity modes,
+/// so Off's playthrough native reads its default `CurrentPlaythrough` 0: **the run is assumed to be Normal mode**
+/// (playthrough count 1). UNVERIFIED as the game's state for any run.
 pub fn enable_deaths(vm: &mut Vm) -> Result<(), VmError> {
     let (deaths, world, authority) = with_state(vm, |s| (s.deaths, s.world, s.authority))?;
     if deaths {

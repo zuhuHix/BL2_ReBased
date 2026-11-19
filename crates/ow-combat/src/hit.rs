@@ -992,6 +992,20 @@ impl ShotParts {
     }
 }
 
+/// The `DamageCauser` argument for `causer`: the declared parameter's kind (`IDamageCauser` in the installed class, an
+/// object in some fixtures); any other kind gets its zero value, as a plain hit leaves it (review r1 of #393).
+pub(crate) fn causer_arg(
+    vm: &Vm,
+    kind: &ow_object::layout::PropKind,
+    causer: Option<ObjRef>,
+) -> Value {
+    match kind {
+        ow_object::layout::PropKind::Interface { .. } => Value::Interface(causer),
+        ow_object::layout::PropKind::Object { .. } => Value::Object(causer),
+        other => vm.space.classes.zero_value(other),
+    }
+}
+
 /// [`hit_with_type`] with a shot's parts: the pipeline carries `parts.impact`, and a declared `DamageCauser` gets
 /// `parts.causer` (the zero value without one). With [`ShotParts::default`] this is exactly [`hit_with_type`].
 pub fn hit_with(
@@ -1038,7 +1052,7 @@ pub fn hit_with(
             "instigatedby" => Value::Object(instigator),
             "damagetype" => Value::Class(source),
             "pipeline" => Value::Object(Some(pipeline)),
-            "damagecauser" if parts.causer.is_some() => Value::Interface(parts.causer),
+            "damagecauser" if parts.causer.is_some() => causer_arg(vm, &p.kind, parts.causer),
             _ => vm.space.classes.zero_value(&p.kind),
         });
     }
