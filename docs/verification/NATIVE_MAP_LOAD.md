@@ -169,9 +169,152 @@ routine and returns its result (high). That routine (medium for the event names'
   player).
 
 `Login` and `PostLogin` are UnrealScript (`GameInfo` and its subclasses), so the play actor is the installed script's
-work once the engine calls them. The engine's local-player list (`GamePlayers`) is filled before this; where was not
-read, nor where the map load calls `SpawnPlayActor` (its loop over the local players after the bring-up does not call
-it directly).
+work once the engine calls them. The engine's local-player list (`GamePlayers`) is filled before this, at engine
+start-up (section 6.1). The map load calls the local-player spawn directly for each local player after the bring-up
+(section 6.2, which corrects this section's earlier reading).
+
+## 5. The navigation list at load (lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR, 2026-11-19)
+
+AI-assisted (Claude Code, Opus 5.5), analyst only (decision 2026-11-19-NNN). Read from the packages (the level's
+untagged tail and the points' tags, through `ow-package` and the definition store), then from the executable
+(read-only Ghidra queries under the machine lock) for what the data does not settle. Raw output stays under ignored
+`local/analysis/navlist/`. **UNVERIFIED** in the running game.
+
+**The answer to Q1: the third candidate.** Each level carries its own list. When the level is added to the world, that
+list is joined onto the world's. `WorldInfo.NavigationPointList` is not saved data: it is None in `Sanctuary_P`'s tags
+and is built at run time. There is no rebuild over the placed points.
+
+### 5.1 Each level's own list (data; high)
+
+- A level holds six native references in its untagged tail, after the actor list and the URL and other native data:
+  1. `NavListStart` and `NavListEnd` (navigation points);
+  2. `CoverListStart` and `CoverListEnd` (cover links);
+  3. `PylonListStart` and `PylonListEnd` (pylons).
+
+  They are serialized as three adjacent pairs, in that order, with a null reference for an empty list. Stock UE3
+  names them this way; the order is read from the data and the join (5.2).
+- **The chain inside a level** is the points' own tagged `nextNavigationPoint`, from `NavListStart` to `NavListEnd`,
+  whose `nextNavigationPoint` is None. For covers the link is `CoverLink.NextCoverLink`; for pylons, `Pylon.NextPylon`
+  (named by the join's field use and the layout tool; medium for the two names).
+- **Oracles** (two Sanctuary files, read with the store):
+  - `Sanctuary_P`: `NavListStart` = `NavListEnd` = `WillowCoopPlayerStart_0`, whose `nextNavigationPoint` is None (a
+    one-point list); the cover and pylon pairs are null.
+  - `Sanctuary_Dynamic`: `NavListStart` = `Pylon_2` and `NavListEnd` = `Pylon_1`. Walking from the start along
+    `nextNavigationPoint` meets 7 points, all `Pylon`, and ends exactly at `Pylon_1` with None after it. The cover
+    pair is null, and the pylon pair names the same two pylons.
+- **Which classes are in the list:** the points the editor's path build linked, which are `NavigationPoint`
+  subclasses (player starts, pylons, and so on). Not every placed point need be in it: `Sanctuary_Dynamic`'s
+  `WillowAIMoveNode`s are not in its chain. The rule is "the saved chain", not "every placed point".
+
+### 5.2 The join (executable; high for the steps, medium for the routine identities)
+
+**The level's join onto the world** (stock UE3 `AddLevelNavList`), for a level whose `NavListStart` and `NavListEnd`
+are both set:
+1. Each point from `NavListStart` along `nextNavigationPoint` gets one engine virtual (by stock UE3 convention its
+   navigation set-up; not read; low).
+2. **The level's chain is put at the front of the world's list:** `NavListEnd.nextNavigationPoint` = the world's
+   current `NavigationPointList`, then `WorldInfo.NavigationPointList` = `NavListStart`.
+3. The same is done for covers (both cover ends set: the end's `NextCoverLink` = `WorldInfo.CoverList`, then
+   `CoverList` = the start) and pylons (`NextPylon`, `WorldInfo.PylonList`).
+
+The `WorldInfo` written is the persistent level's (the world's one world info). A matching routine takes a level's
+chains out again: the head is moved on, or the predecessor in another level's chain is relinked, and the level's end is
+unlinked (when a level is removed; not on the load path).
+
+**Where it runs.**
+- **The persistent level:** once, in the bring-up's begin-play-once block (section 2, step 4), right before the
+  actor initialisation pass. The bring-up calls a per-level routine with mode 0 for the persistent level, and mode 0
+  joins (high for the call and its mode; medium for the receiver being the persistent level).
+- **Each streamed level:** when it is added to the world. The streaming add runs in time-sliced steps, and one step
+  calls the same per-level routine once per level (guarded by a per-level done flag). That routine and the single-point
+  add below are the join's only callers, so a streamed level's chain is joined there (medium: the mode the streaming
+  add passes was not pinned).
+- **A point added at run time** (a navigation point spawned in play) is appended at its level's `NavListEnd`. When it
+  is the level's first point during play, the level is joined then (low relevance to the load).
+
+**Order across levels** (high for the rule, medium for the result). Every join puts that level's chain in front, so:
+- the world's list is the levels' chains in the reverse of the order they were joined;
+- each chain keeps its own order inside.
+
+Whether the streamed levels visible at load are added before or after the bring-up's persistent join was not read
+(open question 1). That decides whether `Sanctuary_P`'s start is the last chain in the list or the first.
+
+### 5.3 For the implementer (proposed rule)
+
+1. Read each level's six tail references (5.1): the three pairs after the URL, at the place the data puts them.
+   Before relying on the place, check the oracles: both ends set or both null; the walk from the start along
+   `nextNavigationPoint` stays inside the level and ends at the end with None.
+2. Join the persistent level's list at the bring-up's begin-play step, before the initialisation pass. Join each
+   streamed level's list when the port adds that level.
+   - **Each join:** `end.nextNavigationPoint` = the current head, then head = `start`, and the same for covers and
+     pylons. This writes the points' `nextNavigationPoint` fields and `WorldInfo`'s three heads.
+3. The per-point engine virtual of step 1 of the join stays `NotYet { NotRead }` if a later stop needs it.
+4. A level whose oracles fail is a data error, not a guess.
+5. The relative order of the persistent join and the streamed joins at load is open: an implementer picks one order
+   and labels it UNVERIFIED, or refuses with `NotYet { NotRead }`.
+
+## 6. The local player and the play actor (lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR, 2026-11-19)
+
+Read from the installed script (`research/script_disasm.py`) and the executable (read-only). **UNVERIFIED** in the
+running game.
+
+**The answer to Q3.**
+
+### 6.1 Where `GamePlayers` is filled (script; high)
+
+- **At engine start-up, before any map:** `GameViewportClient.Init` (which `WillowGameViewportClient.Init` calls first,
+  then sets up its login state) ends with `CreateInitialPlayer`. That calls `CreatePlayer(ControllerId, out Error,
+  bSpawnActor = false)` once, for the first controller id in 0 to 3 that is logged in. With none, it uses the first
+  with a gamepad connected, and with none of those, id 0.
+- **`CreatePlayer`:**
+  1. makes a new local player of the engine's `LocalPlayerClass`;
+  2. sets its `ViewportClient` and `ControllerId`;
+  3. `AddLocalPlayer` appends it to `Engine.GamePlayers`;
+  4. **only when `bSpawnActor` is set** and the net mode is not the client mode: `SpawnPlayActor('', out Error)`. A
+     false answer removes the player again; a success sends the split-screen join.
+
+  Then `NotifyPlayerAdded` runs. `WillowGameViewportClient.CreatePlayer` wraps it (it saves the login state first, and
+  records a statistics event for a second player).
+- **So the slice's one local player is in `GamePlayers` before the map loads, with no play actor.** Who calls
+  `GameViewportClient.Init` (the engine's start-up) was not read; it is engine start-up, not map load.
+
+### 6.2 Where the map load calls `SpawnPlayActor` (executable; high)
+
+**Correction to section 4:** the map load does call it directly.
+1. The map-load routine runs the game info routine (section 3) and the bring-up (section 2).
+2. After two more engine calls (not read), it walks `Engine.GamePlayers` in order.
+3. For each local player it builds the URL's text (the map URL as a string) and calls the engine's local-player spawn,
+   the same C++ routine the script's `LocalPlayer.SpawnPlayActor` reaches (section 4).
+4. When that gives no actor and the error text is not empty, it takes an error path. That path was not read
+   (by stock UE3 convention, the load fails with the error).
+
+So on a load, every local player gets its play actor through `Login` and `PostLogin` (section 4) after the world was
+brought up for play. That is after `InitGame` and the begin-play routing.
+
+### 6.3 For the implementer (proposed rule)
+
+1. **Before the map:** one local player in `GamePlayers`, as `CreateInitialPlayer` makes it (controller id 0 for the
+   slice, which has no login or gamepad layer: a port answer, UNVERIFIED), with no actor.
+2. **After the bring-up:** for each local player, the local-player spawn of section 4 with the map URL's text.
+3. A None answer with an error text is `NotYet { NotRead }`, "the map load's error path after a failed play-actor
+   spawn".
+4. The two engine calls between the bring-up and the loop stay unread.
+
+### 6.4 Open (UNVERIFIED)
+
+1. Whether streamed levels visible at load are joined before or after the persistent level's join (5.2).
+2. The mode the streaming add passes to the per-level routine (taken as joining by elimination).
+3. The per-point virtual the join calls.
+4. The map load's two calls between the bring-up and the player loop, and its error path.
+5. Who calls `GameViewportClient.Init` at start-up, and whether a PIE viewport differs.
+
+### 6.5 Live checks (bl-sdk, the RTSE way)
+
+1. Right after Sanctuary loads, walk `WorldInfo.NavigationPointList` along `nextNavigationPoint`. Record each point's
+   level and the order. Expect each level's chain contiguous, and `WillowCoopPlayerStart_0` at one end (which end
+   answers open question 1).
+2. Read `Engine.GamePlayers` before and after the load. Expect one entry both times, with its `Actor` None before
+   and the player controller after.
 
 ## Open (for the implementer, or a follow-up analyst pass)
 
@@ -181,7 +324,8 @@ it directly).
 - The unread engine calls: the setup calls of step 3, the flagged object and the second object of step 4, step 5, the
   "pre" routine's extra virtual, the static hidden actor's second call, the object flag of section 2.2, the client
   controller class of section 4.
-- Where the map load calls `SpawnPlayActor`, and where `GamePlayers` is filled.
+- Where the map load calls `SpawnPlayActor`, and where `GamePlayers` is filled: answered in section 6.
+- Where `WorldInfo.NavigationPointList` comes from: answered in section 5.
 - What the running game shows (bl-sdk reads): the order of `PreBeginPlay`, `PostBeginPlay` and `SetInitialState` across
   Sanctuary's actors; which static actors route; the game info's class and whether `SetGameType` ran; `Login` /
   `PostLogin` with their arguments for the local player; `TimeSeconds` right after load.
