@@ -28,6 +28,9 @@ before the ammo maxima, so the resolver is not reached on main. No real-game run
 Installed Off, main and this branch each built: `--slice-gate` strict 0/14/0 before, 0/13/1 after (link 8 moves from the
 resolver's `NotYet` at `init` to the unbound native `WillowInventory.InitializeAttributeSlots(bool)`; the other 13 rows identical).
 No host or real-game run; the rules stay `UNVERIFIED` in game. Decision 2026-11-19-67.
+Review r1 of #455 (same day, desktop): `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,130 passed / 0 failed /
+45 ignored (2 new `ItemActors` script tests in `ow-inventory`). `crate_edges_test.py` OK. ctest `-j 2` 173/173, 444.60 s. verify_packages
+9 packages, all class bodies exact. Installed Off `--slice-gate` strict 0/13/1, unchanged (link 8 still stops at `InitializeAttributeSlots`).
 
 **IMPL-SETTINGS-FILL (2026-11-19, pc-hummer, rebased onto main 7556c254, which has #448 and #450):** AI-assisted (Claude Code, Opus
 5.5). The online game settings entry filled at store creation, `SetIntProperty`, `GetCurrPlaythrough` and `GetDLCManager`

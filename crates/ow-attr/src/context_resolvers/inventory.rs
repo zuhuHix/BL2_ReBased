@@ -14,7 +14,11 @@ use ow_core::{NotYet, ParityMode};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 
-use super::{RECORD, ensure_loaded, implements_interface, is_a, not_declared};
+use ow_defs::store::DefError;
+use ow_object::reflect::ReflectError;
+use ow_package::store::StoreError;
+
+use super::{RECORD, ensure_loaded, is_a, native_stand_in, not_declared};
 use crate::api::{AttrError, ContextResolver, EngineQuery, EvalCx};
 use crate::registry::AttributeSystem;
 
@@ -53,10 +57,13 @@ fn equipment_location(cx: &mut EvalCx<'_>, resolver: ObjRef) -> Result<u8, AttrE
     }
 }
 
-/// Whether the class of `source` implements [`BODY_PAWN_INTERFACE`] by its package declaration. Anything that keeps
-/// the answer from being established (no definition store, a class with no package export behind it, a missing
-/// package, an ancestry through an engine-native stand-in) is the note's named `NotYet { NotRead }`: "whether the
-/// source class implements `IBodyPawn`", with the reason after it, never a "no".
+/// Whether the class of `source` implements [`BODY_PAWN_INTERFACE`] by its package declaration, by the strict lookup
+/// (`CodeIndex::implements_declared`, review r1 of #455): confirmed present, confirmed absent, or unreadable. It has no
+/// structural fallback and drops no unresolved table entry. Unreadable, and anything else that keeps the answer from
+/// being established, is the note's named `NotYet { NotRead }`: "whether the source class implements `IBodyPawn`",
+/// with the reason after it, never a "no". Those cases are: no definition store, a class with no package export
+/// behind it, the interface's package missing from a store that holds packages, a table that cannot be read, and an
+/// ancestry through an engine-native stand-in. A store with packages but no `IBodyPawn` class has no implementer.
 fn declares_body_pawn(cx: &mut EvalCx<'_>, source: ObjRef) -> Result<bool, AttrError> {
     let unknown = |why: String| -> AttrError {
         NotYet::not_read(
@@ -65,18 +72,35 @@ fn declares_body_pawn(cx: &mut EvalCx<'_>, source: ObjRef) -> Result<bool, AttrE
         )
         .into()
     };
-    let mut parts = cx.world.parts();
-    let class = parts.space.heap.get(source)?.class;
-    let class_path = crate::eval::class_path(parts.space, source);
-    if let Some(defs) = parts.defs.as_deref_mut()
-        && defs.code_mut().0.key_of(class).is_none()
-    {
+    let parts = cx.world.parts();
+    let space = &*parts.space;
+    let class = space.heap.get(source)?.class;
+    let class_path = crate::eval::class_path(space, source);
+    let Some(defs) = parts.defs else {
+        return Err(unknown("this world has no definition store".into()));
+    };
+    let (code, store) = defs.code_mut();
+    let Some(key) = code.key_of(class) else {
         return Err(unknown(format!("the class {class_path} has no package export behind it")));
-    }
-    match implements_interface(cx.world.parts(), source, BODY_PAWN_INTERFACE, WHO) {
-        Ok(b) => Ok(b),
-        Err(AttrError::NotYet(n)) => Err(unknown(n.what.into_owned())),
-        Err(e) => Err(e),
+    };
+    let iface = match code.find_class(store, BODY_PAWN_INTERFACE) {
+        Ok(iface) => iface,
+        Err(ReflectError::ClassNotFound(_)) => return Ok(false),
+        Err(ReflectError::Store(StoreError::PackageNotFound(_))) if store.indexed_package_count() == 0 => {
+            return Ok(false);
+        }
+        Err(ReflectError::Store(StoreError::PackageNotFound(name))) => {
+            return Err(unknown(format!("the package {name} is not in the store")));
+        }
+        Err(e) => return Err(DefError::from(e).into()),
+    };
+    match code.implements_declared(store, key, iface) {
+        Some(true) => Ok(true),
+        None => Err(unknown(format!("the interface tables on the ancestry of {class_path} cannot be read"))),
+        Some(false) => match native_stand_in(space, class) {
+            Some(path) => Err(unknown(format!("the ancestry runs through the engine-native stand-in {path}"))),
+            None => Ok(false),
+        },
     }
 }
 

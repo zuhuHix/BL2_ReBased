@@ -20,7 +20,7 @@
 //!   manager's `ItemChain` from its head through each entry's `Inventory` link, in chain order. An entry is given when
 //!   its class is `BaseClass` or below it and, with `bOnlyReadied` set, its `bReadied` is set. The walk counts the
 //!   entries it skips over the whole iteration and ends after more than [`ITEM_ACTORS_SKIP_CAP`] (100) of them. A None
-//!   `BaseClass` is `NotYet { NotRead }`: the engine falls back to a class it looks up, which the note does not
+//!   `BaseClass`, in any of the VM's null forms, is `NotYet { NotRead }`: the engine falls back to a class it looks up, which the note does not
 //!   identify. A chain that comes back to an entry it already passed is a data error (a Rust-only refusal: the note
 //!   does not say what the walk does there). The VM's iterator takes the whole list when the loop starts, so a body
 //!   that changes the chain during the loop does not change what is visited (as `AllParts`; UNVERIFIED). Reference
@@ -307,8 +307,11 @@ pub fn item_actors(
 fn item_actors_iterator() -> IteratorFn {
     Rc::new(|call: &mut NativeCall<'_>| {
         let m = manager_of(call.vm, call.this, "ItemActors")?;
+        // The VM's null forms are all a None class (review r1 of #455): a literal None reaches a class parameter as
+        // a None object reference, and an omitted value as a bare None.
         let base = match call.arg(0)? {
             Value::Class(c) => *c,
+            Value::Object(None) | Value::Interface(None) | Value::None => None,
             other => return Err(bad("ItemActors", format!("BaseClass holds {}, not a class", other.kind_name()))),
         };
         let only_readied = bool_arg(call, 2)?;
@@ -420,3 +423,6 @@ impl NativePack for Pack {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod script_tests;

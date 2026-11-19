@@ -957,6 +957,59 @@ impl CodeIndex {
         false
     }
 
+    /// The strict form of [`CodeIndex::implements`], for a rule that must not guess (review r1 of #455): `Some(true)`
+    /// when the interface table of `class` or of a super class names `iface` or a class derived from it, `Some(false)`
+    /// when every table on the chain was read and none does, and `None` when that cannot be established. Unreadable
+    /// is: the interface's body or a body on the chain did not decode, a class on the chain did not load its super
+    /// class, or a table entry does not resolve to a class. There is no structural fallback and no unresolved entry
+    /// is dropped. An `iface` whose body decoded but is not an interface class is implemented by nothing.
+    pub fn implements_declared(
+        &mut self,
+        store: &mut PackageStore,
+        class: ClassKey,
+        iface: ClassKey,
+    ) -> Option<bool> {
+        if !self.classes[iface.index()].body_decoded() {
+            return None;
+        }
+        if !self.classes[iface.index()].is_interface() {
+            return Some(false);
+        }
+        let chain: Vec<ClassKey> = self.super_chain(class).collect();
+        for &cursor in &chain {
+            let info = &self.classes[cursor.index()];
+            if !info.body_decoded() || info.load_error.is_some() {
+                return None;
+            }
+        }
+        for cursor in chain {
+            let entries = self.classes[cursor.index()].interface_targets.len();
+            for entry in 0..entries {
+                let target = match self.classes[cursor.index()].interface_targets[entry] {
+                    Some(target) => target,
+                    None => {
+                        let info = &self.classes[cursor.index()];
+                        let (package, class_ref) = (
+                            info.package,
+                            info.body.as_ref().map_or(0, |b| b.interfaces[entry].class_ref),
+                        );
+                        let target = self.class_at(store, package, class_ref).ok().flatten();
+                        self.classes[cursor.index()].interface_targets[entry] = Some(target);
+                        target
+                    }
+                };
+                let target = target?;
+                if self.is_child_of(target, iface) {
+                    return Some(true);
+                }
+                if self.classes[target.index()].load_error.is_some() {
+                    return None;
+                }
+            }
+        }
+        Some(false)
+    }
+
     /// C++ `implementsStructurally`, the earlier stand-in kept as the fallback and the comparison baseline: the
     /// interface is named `I<Upper>...`, declares at least one function, and the class chain defines every one.
     pub fn implements_structurally(&self, class: ClassKey, iface: ClassKey) -> bool {

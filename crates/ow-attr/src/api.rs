@@ -55,6 +55,10 @@ pub enum AttrError {
     /// An error raised by the world implementation (for example script run by the VM's change notification),
     /// carried as text because `ow-attr` cannot name the world's error type.
     World(String),
+    /// An error of the world's own type, carried unchanged through `ow-attr` (review r1 of #455): the world converts it
+    /// back with [`WorldError::downcast_ref`], so a VM error raised inside a resolver's script reaches the caller as
+    /// the error it was, not as text. Compared by its text.
+    WorldTyped(WorldError),
     /// The definition store failed (lookup, load, overlay). Its `NotYet` and heap errors are not here: they convert
     /// to [`AttrError::NotYet`] and [`AttrError::Heap`] (`From<DefError>`).
     Def(DefError),
@@ -71,12 +75,52 @@ impl fmt::Display for AttrError {
                 write!(f, "resolver class {class} registered twice")
             }
             AttrError::World(message) => write!(f, "world: {message}"),
+            AttrError::WorldTyped(e) => write!(f, "world: {}", e.text()),
             AttrError::Def(e) => write!(f, "definitions: {e}"),
         }
     }
 }
 
 impl std::error::Error for AttrError {}
+
+/// A world error of a type `ow-attr` cannot name ([`AttrError::WorldTyped`]): the error itself, type-erased, and its
+/// text. Two are equal when their texts are.
+#[derive(Clone)]
+pub struct WorldError {
+    text: String,
+    error: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl WorldError {
+    pub fn new<E: std::any::Any + Send + Sync + fmt::Display>(error: E) -> Self {
+        WorldError {
+            text: error.to_string(),
+            error: std::sync::Arc::new(error),
+        }
+    }
+
+    /// The error's text.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The error as `E`, when it is one.
+    pub fn downcast_ref<E: std::any::Any>(&self) -> Option<&E> {
+        self.error.downcast_ref::<E>()
+    }
+}
+
+impl fmt::Debug for WorldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("WorldError").field(&self.text).finish()
+    }
+}
+
+impl PartialEq for WorldError {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
 
 impl From<NotYet> for AttrError {
     fn from(n: NotYet) -> Self {
