@@ -738,7 +738,15 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
         )
         .into());
     };
-    let defaults = class_default(vm, class)?;
+    // A class default built here is published in the store's cache: in Off a cold build is a write, so every later
+    // `NotYet` of the spawn is marked (review r1 of #514, item 3). Building allocates the default object, so a heap
+    // that grew across the call shows it; a cached default allocates nothing.
+    let allocated = vm.space.heap.len();
+    let defaults = class_default(vm, class);
+    if vm.parity == ParityMode::Off && vm.space.heap.len() != allocated {
+        *loaded = true;
+    }
+    let defaults = defaults?;
     let space = &vm.space;
     if begun && (flag(space, defaults, "bStatic")? || flag(space, defaults, "bNoDelete")?) {
         return Ok(None);

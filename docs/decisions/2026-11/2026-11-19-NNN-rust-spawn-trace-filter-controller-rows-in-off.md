@@ -9,7 +9,8 @@ with #502.
 - **What changes (`ow-world` `trace_filter::tested`, used by the spot search's actor walk).** Each read test only
   rejects, so a primitive any one of them rejects is not tested (note sections 3 and 7):
   1. **Terrain** stays Unsupported ahead of every other test, blocking or not (note section 7, step 3: what the terrain
-     bit does beyond the hash was not read).
+     bit does beyond the hash was not read). The walked actor is checked before any owner is resolved, then the
+     resolved owner: a terrain on either side refuses (review r1 of #514).
   2. **The owner:** the component's own `Owner` field when its class declares it and it is set, otherwise the walked
      actor whose `CollisionComponent` or `Components` holds it (`trace_filter::owner_of`). The port's spawn never sets
      the component field, so in practice the walked actor stands for it (UNVERIFIED).
@@ -18,7 +19,7 @@ with #502.
   4. **The blocking flag** for the query's kind, as before.
   5. **The per-component test:** the live primitive's `CollideActors` and the live owner's `bCollideActors`, both set.
      Otherwise not tested. It replaces the per-component `NotYet`.
-  6. **The owner's row**, by exact class. `Engine.Controller`, `Engine.PlayerController`, `Engine.GamePlayerController`
+  6. **The owner's row**, by exact class. `Engine.Controller`, `Engine.PlayerController`, `GameFramework.GamePlayerController` (the installed path, decision 2026-11-15-23; review r1 of #514)
      and `WillowGame.WillowPlayerController` now run the `Actor` row. No row is inherited. A row that rejects means not
      tested; this replaces the skip-flag `NotYet` that a blocking primitive used to give.
   - **`bAttached` is not read.** A clear `bAttached` is no answer on its own (note section 7, step 5).
@@ -27,6 +28,9 @@ with #502.
   - a primitive every read test accepts: "the collision hash's admission beyond the per-component test", under
     NATIVE_SPAWN_TRACE_FILTER.md (`Unread::record`).
   - The walk's refusal now carries the unread rule's own record.
+- **A cold class default is a write** (review r1 of #514): the Off spawn counts building and publishing a class default
+  that was not cached (the heap grew across the call) as a write, so every later `NotYet` of that spawn is marked, as
+  the archetype and extent loads are.
 - **Marking.** The filter writes nothing and returns its refusals unmarked. In link 9 they come after the extent's
   loads and the driver's committed spawns, which mark them. Reference is unchanged: the spot search is Off only.
 - **Not on link 9's path, left for a later lane:** NATIVE_SPAWN_EXTENT.md's Off step 6 now reads `BulletListener`, per
@@ -40,7 +44,10 @@ with #502.
     - link 9's controller cylinder with the class defaults' flags, not tested in all four spawn queries;
     - the owner field against the walked actor;
     - an unread owner class past the read tests, with terrain ahead of them.
-  - `world/tests.rs`: the blocking-live-primitive walk now expects not tested for each rejecting test, and the hash
+    - review r1 of #514: the `GameFramework` controller path takes the `Actor` row and the `Engine` path none; a
+      terrain on either side of the owner refuses.
+  - `world/tests.rs`: a cold class default's refusal marked once, and unmarked once cached (review r1 of #514); the
+    blocking-live-primitive walk now expects not tested for each rejecting test, and the hash
     admission or the owner class otherwise.
 - **Checks.** `cargo test -p ow-world` 232 passed, 0 failed, 5 ignored; `-p ow-cli` 101 + 2 passed, 0 failed.
 - **Installed `--slice-gate`, Off, strict, under the machine lock:**

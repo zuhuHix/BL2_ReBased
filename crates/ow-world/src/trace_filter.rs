@@ -24,7 +24,8 @@
 //! 5. **the per-component test** (note section 2): the live primitive's `CollideActors`, and the live owner's
 //!    `bCollideActors`, both set; otherwise not tested;
 //! 6. **the owner's filter** by its exact class's row ([`Row`]; [`row_of`]): a row that rejects, not tested. The four
-//!    controller classes (`Controller`, `PlayerController`, `GamePlayerController`, `WillowPlayerController`) run the
+//!    controller classes (`Engine.Controller`, `Engine.PlayerController`, `GameFramework.GamePlayerController`,
+//!    `WillowGame.WillowPlayerController`) run the
 //!    `Actor` row (note section 1). No row is inherited.
 //!
 //! **What stays unread**, naming the rule ([`Unread`]):
@@ -158,7 +159,8 @@ const ROWS: [(&str, Row); 12] = [
     ("Engine.Pawn", Row::Pawn),
     ("Engine.Controller", Row::Actor),
     ("Engine.PlayerController", Row::Actor),
-    ("Engine.GamePlayerController", Row::Actor),
+    // The installed packages hold it in GameFramework (decision 2026-11-15-23 census; review r1 of #514).
+    ("GameFramework.GamePlayerController", Row::Actor),
     ("WillowGame.WillowPlayerController", Row::Actor),
 ];
 
@@ -270,15 +272,22 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Que
     if !query.walks_actors() {
         return Ok(Candidate::NotTested);
     }
-    let owner = owner_of(space, primitive, walked)?;
     // The terrain bit's handling is unread and comes ahead of every other test (NATIVE_SPAWN_PLACEMENT.md, kept by
-    // the hub for IMPL-LINK9-TRACE-FILTER): a `Terrain` actor's primitive is Unsupported, blocking or not.
-    let class = space.heap.get(owner)?.class;
-    if let Some(terrain) = space.classes.by_path("Engine.Terrain")
-        && space.classes.is_child_of(class, terrain)
-    {
+    // the hub for IMPL-LINK9-TRACE-FILTER): a `Terrain` actor's primitive is Unsupported, blocking or not. The walked
+    // actor is checked first, before any owner is resolved, then the resolved owner (review r1 of #514, item 2): a
+    // terrain on either side refuses, so a component owner can never discard a walked terrain's primitive.
+    let is_terrain = |o: ObjRef| -> Result<bool, VmError> {
+        let class = space.heap.get(o)?.class;
+        Ok(space.classes.by_path("Engine.Terrain").is_some_and(|t| space.classes.is_child_of(class, t)))
+    };
+    if is_terrain(walked)? {
         return Ok(Candidate::Unsupported(Unread::TerrainHandling));
     }
+    let owner = owner_of(space, primitive, walked)?;
+    if is_terrain(owner)? {
+        return Ok(Candidate::Unsupported(Unread::TerrainHandling));
+    }
+    let class = space.heap.get(owner)?.class;
     // The skip flag (note section 4); a sweep with bit 30 ignores it.
     let ignores_skip = matches!(query, Query::BoxSweep | Query::PointSweep) && query.flags() & SKIP_IGNORED != 0;
     if !ignores_skip && flag(space, primitive, SKIP_FLAG_FIELD)? {

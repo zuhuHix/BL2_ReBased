@@ -90,7 +90,9 @@ fn world() -> World {
     // The controller chain (NATIVE_SPAWN_TRACE_FILTER.md section 1) and an unread subclass of it.
     let controller = space.classes.define("Engine.Controller", Some(actor), vec![]).unwrap();
     let player = space.classes.define("Engine.PlayerController", Some(controller), vec![]).unwrap();
-    let game = space.classes.define("Engine.GamePlayerController", Some(player), vec![]).unwrap();
+    let game = space.classes.define("GameFramework.GamePlayerController", Some(player), vec![]).unwrap();
+    // A class at the wrong package path takes no row (review r1 of #514, item 1).
+    space.classes.define("Engine.GamePlayerController", Some(player), vec![]).unwrap();
     let willow = space.classes.define("WillowGame.WillowPlayerController", Some(game), vec![]).unwrap();
     space.classes.define("Test.SubPlayerController", Some(willow), vec![]).unwrap();
     let d = bools(&mut space, &["bIgnoreAllTraces", "bStationary"]);
@@ -147,9 +149,10 @@ fn only_the_read_classes_have_a_row() {
 fn the_controller_classes_run_the_actor_row_and_no_subclass_inherits_it() {
     let w = world();
     let row = |p: &str| row_of(&w.space, w.space.classes.by_path(p).unwrap());
-    for p in ["Engine.Controller", "Engine.PlayerController", "Engine.GamePlayerController", "WillowGame.WillowPlayerController"] {
+    for p in ["Engine.Controller", "Engine.PlayerController", "GameFramework.GamePlayerController", "WillowGame.WillowPlayerController"] {
         assert_eq!(row(p), Some(Row::Actor), "{p}");
     }
+    assert_eq!(row("Engine.GamePlayerController"), None, "the installed path is GameFramework's");
     assert_eq!(row("Test.SubPlayerController"), None);
 }
 
@@ -315,4 +318,38 @@ fn every_tied_actor_hit_at_the_minimum_is_kept() {
     // A tie above a smaller hit does not matter.
     let actors = [a, hit(21.0, 1.0, 0.2), hit(10.0, 1.0, 0.1)];
     assert_eq!(choose_sweep_hit(None, &actors, 100.0), Ok(Some(hit(10.0, 1.0, 0.1))));
+}
+
+/// Review r1 of #514, item 1: a primitive whose owner is exactly `GameFramework.GamePlayerController` takes the
+/// `Actor` row (rejected without `bWorldGeometry`, the hash admission with it), never the unread-class refusal.
+#[test]
+fn the_game_framework_controller_path_takes_the_actor_row() {
+    let mut w = world();
+    let prim = w.primitive;
+    let live = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    let plain = w.actor("GameFramework.GamePlayerController", &["bCollideActors"]);
+    assert_eq!(tested(&w.space, live, plain, box_test).unwrap(), Candidate::NotTested);
+    let geometry = w.actor("GameFramework.GamePlayerController", &["bCollideActors", "bWorldGeometry"]);
+    assert_eq!(tested(&w.space, live, geometry, box_test).unwrap(), Candidate::Unsupported(Unread::HashAdmission));
+}
+
+/// Review r1 of #514, item 2: the walked terrain refuses before any owner is resolved, so a controller set as the
+/// component's owner cannot discard it; and a terrain set as the owner of a controller's primitive refuses too.
+#[test]
+fn a_terrain_on_either_side_of_the_owner_refuses() {
+    let mut w = world();
+    let prim = w.primitive;
+    let terrain = w.actor("Engine.Terrain", &["bCollideActors"]);
+    let controller = w.actor("WillowGame.WillowPlayerController", &[]);
+    let field = w.space.prop(prim, "Owner").unwrap();
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    // The walked actor is the terrain; the component names the controller as its owner.
+    let p = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    w.space.write(p, PropAddr::scalar(field), Value::Object(Some(controller))).unwrap();
+    assert_eq!(tested(&w.space, p, terrain, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
+    // The walked actor is the controller; the component names the terrain as its owner.
+    let q = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    w.space.write(q, PropAddr::scalar(field), Value::Object(Some(terrain))).unwrap();
+    assert_eq!(tested(&w.space, q, controller, box_test).unwrap(), Candidate::Unsupported(Unread::TerrainHandling));
 }

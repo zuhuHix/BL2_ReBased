@@ -433,6 +433,13 @@ fn package() -> Vec<u8> {
     void(&mut t, halter, "PreBeginPlay", &[], |_, a| {
         a.stmt().final_function(halt_fn, |_| {});
     });
+    // A class whose default object no test builds before its spawn, its default export setting bCollideWorld (review
+    // r1 of #514, item 3): the spawn builds and publishes it cold.
+    let cold = t.class("ColdCollider", actor);
+    let mut cold_default = ow_package::testkit::ints(&[0]);
+    cold_default.extend(t.p.bool_tag("bCollideWorld", true));
+    cold_default.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(cold, "Default__ColdCollider", cold_default));
     let collider = t.class("Collider", actor);
     void(&mut t, collider, "PreBeginPlay", &[], |_, a| {
         a.stmt().raw(&[0x14, 0x2D]).instance(collide_actors).raw(&[0x27]);
@@ -3479,6 +3486,36 @@ fn a_spawn_refused_after_pre_begin_play_is_not_linked_and_is_marked() {
             other => panic!("{other:?}"),
         }
         assert!(members(&x, Pawns).is_empty(), "not reachable through the pawn list");
+    });
+}
+
+/// Review r1 of #514, item 3: a first spawn whose class default is cold builds and publishes it, a write, so its later
+/// `NotYet` is marked even with no archetype or extent load. `ColdCollider`'s default asks for the spot search, and its
+/// class is not one of the extent rule's five, so the search refuses on the extent; the same spawn after a warm default
+/// is unmarked.
+#[test]
+fn a_refusal_after_a_cold_class_default_build_is_marked() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        let installed = std::rc::Rc::new(crate::placement::NoLevel);
+        crate::placement::install_collision(&mut x.w.vm, installed).unwrap();
+        let class = x.class("ColdCollider");
+        let req = SpawnRequest::new(Some(class));
+        let heap = x.w.vm.space.heap.len();
+        let (missing, text) = match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => (n.missing, n.what.into_owned()),
+            other => panic!("{other:?}"),
+        };
+        assert!(x.w.vm.space.heap.len() > heap, "the default was built");
+        assert_eq!(missing, Missing::NotRead);
+        let want = "the bounding-cylinder rule of Engine.ColdCollider";
+        assert_eq!(text, format!("{}: {want}", "stopped after partial writes"), "marked once");
+        // The default is now cached: the same refusal is unmarked.
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => assert_eq!(n.what, want),
+            other => panic!("{other:?}"),
+        }
     });
 }
 

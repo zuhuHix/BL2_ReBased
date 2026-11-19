@@ -141,6 +141,10 @@ fn toy() -> Toy {
         vm.space.write(cdo, PropAddr::scalar(p), Value::Object(Some(component))).unwrap();
         templates.push((cdo, component));
     }
+    // The blocked class's default is built here too, as the others are: a spawn that builds a cold class default
+    // marks its later refusals (review r1 of #514, item 3), and these tests are about the driver's own marking.
+    let vm = &mut world.vm;
+    vm.defs.class_default(&mut vm.space, "Engine.ToyBlocked").unwrap();
     Toy { world, dir, templates }
 }
 
