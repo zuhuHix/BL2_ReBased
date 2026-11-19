@@ -1573,3 +1573,60 @@ fn the_health_pool_build_swallows_a_data_error_and_clears_as_the_cxx_catch() {
     assert_eq!(object(vm, fake.controller, "ResourcePoolManager").unwrap(), None);
     assert!(run.health.pool_is_none());
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The AI mind's class route in Off (NATIVE_COMBAT_GROUNDWORK.md 1.10, 1.11; decision 2026-11-19-26)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The definitions of the manager's pools in slot order.
+fn pool_definitions(vm: &mut Vm, controller: ow_object::ids::ObjRef) -> Vec<(u8, String)> {
+    let manager = crate::hit::access::object(vm, controller, "ResourcePoolManager").unwrap();
+    let Some(manager) = manager else { return Vec::new() };
+    let pools = ow_world::pools::pools_of(&vm.space, manager).unwrap();
+    pools
+        .into_iter()
+        .map(|(i, pool)| {
+            let def = crate::hit::access::object(vm, pool, "Definition").unwrap().unwrap();
+            let name = vm.space.heap.get(def).unwrap().name;
+            (i, vm.space.names.text(name).into_owned())
+        })
+        .collect()
+}
+
+/// Off: the adopt runs the mind's `InitializeCharacterClass`, whose toy route makes the health pool through
+/// `ApplyCharacterClassStartingValues` (no pools listed: only the delete) then `ApplyCharacterClassDefaults`.
+#[test]
+fn an_off_spawn_goes_through_the_minds_class_route() {
+    let (mut run, _dir) = fresh(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    assert_eq!(crate::hit::access::object(vm, enemy.mind, "MyWillowPawn").unwrap(), Some(enemy.pawn));
+    assert_eq!(pool_definitions(vm, enemy.mind), [(0, "Pool_Health".to_string())]);
+    assert_eq!(ow_world::pools::get_health(&vm.space, enemy.pawn).unwrap(), 40.5, "the pool's invented start");
+}
+
+/// The `Controller` base of `ApplyCharacterClassStartingValues`, Off: every pool deleted, then the class's
+/// `ResourcePools` in array order from the lowest slot; no class deletes only; one resource twice and a player
+/// controller are `NotYet` before anything changes. Reference leaves it unbound.
+#[test]
+fn the_class_starting_values_delete_then_create_in_class_order() {
+    use crate::hit::pools::apply_class_starting_values;
+    let (w, _dir) = world_with(ParityMode::Off, vec![("ToyStarting.upk", fixture::toy_starting())]);
+    let mut run = Run::new(w).unwrap();
+    let vm = &mut run.world().vm;
+    let enemy = crate::hit::spawn_enemy(vm, "ToyPawns", "Pawn_Toy", 4, 4).unwrap();
+    let two = crate::hit::stock_object(vm, "ToyStarting.Class_Two").unwrap();
+    let twice = crate::hit::stock_object(vm, "ToyStarting.Class_Twice").unwrap();
+    apply_class_starting_values(vm, enemy.mind, Some(two)).unwrap();
+    assert_eq!(pool_definitions(vm, enemy.mind), [(0, "Pool_Health".to_string()), (1, "Pool_Ammo".to_string())]);
+    let refused = apply_class_starting_values(vm, enemy.mind, Some(twice)).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    assert_eq!(pool_definitions(vm, enemy.mind).len(), 2, "nothing changed");
+    apply_class_starting_values(vm, enemy.mind, None).unwrap();
+    assert!(pool_definitions(vm, enemy.mind).is_empty(), "no class: only the delete");
+    let player = make(vm, "WillowGame.WillowPlayerController");
+    let refused = apply_class_starting_values(vm, player, Some(two)).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    let (w, _dir) = world(ParityMode::Reference);
+    assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
+}

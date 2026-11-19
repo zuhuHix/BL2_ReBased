@@ -293,6 +293,8 @@ pub fn engine() -> Vec<u8> {
     let controller = e.cls("Controller", actor);
     e.prop("Object", controller, "Pawn", 0, 0);
     e.prop("Object", controller, "ResourcePoolManager", 0, 0);
+    // The class starting values (NATIVE_COMBAT_GROUNDWORK.md 1.10, 1.11; decision 2026-11-19-26): the AI mind's route.
+    e.native(controller, "ApplyCharacterClassStartingValues", &[P("Object", "inCharacterClass", 0, 0)], None);
     let pawn = e.cls("Pawn", actor);
     e.prop("Object", pawn, "Controller", 0, 0);
     e.prop("Struct", pawn, "HealthPool", 0, reference);
@@ -630,7 +632,57 @@ pub fn willow_game() -> Vec<u8> {
     let starting = w.strukt(ai_class, "AttributeStartingValue");
     w.prop("Object", starting, "Attribute", 0, 0);
     let mind = w.cls("WillowMind", controller);
-    w.prop("Object", mind, "AIClass", 0, 0);
+    let mind_ai_class = w.prop("Object", mind, "AIClass", 0, 0);
+    // The AI mind's class route (NATIVE_COMBAT_GROUNDWORK.md section 1.11; decision 2026-11-19-26), cut to what the toy
+    // pawns need: InitializeCharacterClass() { ApplyCharacterClassStartingValues(AIClass);
+    // ApplyCharacterClassDefaults(MyWillowPawn, AIClass); } (the installed guard flag left out) and
+    // ApplyCharacterClassDefaults(P, CharClass) cut to its health step, as the player controller's below.
+    let my_pawn = w.prop("Object", mind, "MyWillowPawn", 0, 0);
+    let class_starting_values = w.import_full("Function", controller, "ApplyCharacterClassStartingValues");
+    let (mind_defaults, _) = w.function(
+        mind,
+        "ApplyCharacterClassDefaults",
+        &[P("Object", "P", 0, 0), P("Object", "CharClass", 0, 0)],
+        None,
+        SCRIPT,
+        |ids| {
+            let mut a = Asm::new();
+            a.stmt().context(
+                |a| {
+                    a.local(ids("P"));
+                },
+                |a| {
+                    a.final_function(set_health_definition, |a| {
+                        a.instance(manager_property);
+                        a.context(
+                            |a| {
+                                a.local(ids("CharClass"));
+                            },
+                            |a| {
+                                a.instance(health_definition_property);
+                            },
+                        );
+                    });
+                },
+            );
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        },
+    );
+    w.function(mind, "InitializeCharacterClass", &[], None, SCRIPT, |_| {
+        let mut a = Asm::new();
+        a.stmt().final_function(class_starting_values, |a| {
+            a.instance(mind_ai_class);
+        });
+        a.stmt().final_function(mind_defaults, |a| {
+            a.instance(my_pawn);
+            a.instance(mind_ai_class);
+        });
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     let component_property = w.prop("Object", mind, "AIComponent", 0, 0);
     let gearbox_component = w.import_full("Class", gearbox, "AIComponent");
     w.cls("WillowAIComponent", gearbox_component);
@@ -1595,6 +1647,33 @@ pub fn toy_injured() -> Vec<u8> {
         ("ShowRespawnDialog", vec![]),
     ] {
         w.function(pawn, name, &params, None, SCRIPT, empty);
+    }
+    w.build()
+}
+
+/// `ToyStarting` (decision 2026-11-19-26), an extra package the starting-values tests add: a toy character class with
+/// the three fields `Controller.ApplyCharacterClassStartingValues` reads, and two of it: `Class_Two` lists `ToyPawns`'
+/// `Pool_Health` then `Pool_Ammo`, and `Class_Twice` lists `Pool_Health` and `Pool_Health_Copy` (one resource twice).
+pub fn toy_starting() -> Vec<u8> {
+    let mut w = Toy::new(&["Object", "Array"]);
+    w.import_root();
+    let class = w.cls("ToyCharClass", 0);
+    w.array_of(class, "ResourcePools", "Object", 0);
+    w.prop("Object", class, "AccuracyPoolDefinition", 0, 0);
+    w.prop("Object", class, "OffHandAccuracyPoolDefinition", 0, 0);
+    let p = &mut w.t.p;
+    let engine = p.add_import("Core", "Package", 0, "Engine");
+    let pawns = p.add_import("Core", "Package", 0, "ToyPawns");
+    let definition = |p: &mut PackageBuilder, name: &str| p.add_import("Engine", "ResourcePoolDefinition", pawns, name);
+    let _ = engine;
+    let health = definition(p, "Pool_Health");
+    let ammo = definition(p, "Pool_Ammo");
+    let copy = definition(p, "Pool_Health_Copy");
+    for (name, list) in [("Class_Two", [health, ammo]), ("Class_Twice", [health, copy])] {
+        let refs: Vec<u8> = list.iter().flat_map(|r| r.to_le_bytes()).collect();
+        let tag = p.array_tag("ResourcePools", 2, &refs);
+        let payload = object_payload(p, vec![tag]);
+        p.add_export(class, name, payload);
     }
     w.build()
 }

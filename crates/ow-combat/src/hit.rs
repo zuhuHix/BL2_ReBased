@@ -1396,6 +1396,21 @@ pub fn adopt(vm: &mut Vm, pawn: ObjRef, level: i32, game_stage: i32) -> Result<E
     if deaths {
         crate::death::prepare_for_death(vm, pawn)?;
     }
+    if vm.parity == ParityMode::Off {
+        // Off: the stock route's class step, the mind's installed script `InitializeCharacterClass` (reached from
+        // `WillowMind.Possess`): `ApplyCharacterClassStartingValues`, then `ApplyCharacterClassDefaults(pawn, class)`,
+        // which makes the health pool (its `Controller` super call), applies the pawn's attribute starting values
+        // (`WillowPawn.ApplyAttributeStartingValues`, NATIVE_NOUN_ATTRIBUTES.md sections 1 and 8, so the mind's nouns
+        // such as `Attribute_HealthMultiplier` hold the class values) and recalculates. Read from the script; the rest
+        // of `Possess` is not run (decision 2026-11-19-15). A native it reaches that nothing binds stops here.
+        set_required(vm, mind, "MyWillowPawn", Value::Object(Some(pawn)), unit)?;
+        let mind_class = vm.space.heap.get(mind)?.class;
+        let Some(initialize) = vm.find_method(mind_class, "InitializeCharacterClass", None)? else {
+            return Err(error("combat: the mind class has no InitializeCharacterClass"));
+        };
+        vm.call(initialize, Some(mind), Vec::new())?;
+        return Ok(Enemy { pawn, mind });
+    }
     let manager = required(vm, mind, "ResourcePoolManager", unit)?;
     let class_id = vm.space.heap.get(pawn)?.class;
     let Some(set_pool) = vm.find_method(class_id, "SetHealthResourcePoolDefinition", None)? else {
