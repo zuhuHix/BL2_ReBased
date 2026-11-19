@@ -185,7 +185,8 @@ fn a_driver_s_own_evidence_decides_and_a_stop_wins_over_it() {
     assert!(cast_row.stop.as_ref().unwrap().text.contains("no evidence check is chosen yet"));
     // A stop is the row's reason, whatever the evidence flag says.
     let mut r = Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip"]).unwrap() };
-    assert!(step_error(&mut r, "equip", "unbound native WillowWeapon.AllParts(x)", Grading::Strict));
+    let unbound = ow_vm::error::VmError::UnboundNative("WillowWeapon.AllParts(x)".into());
+    assert!(step_error_typed(&mut r, "equip", &unbound, Grading::Strict));
     ran[e] = Some(r);
     let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
     let stop = graded[e].stop.as_ref().unwrap();
@@ -208,11 +209,25 @@ fn the_equip_evidence_needs_new_records_none_left_and_no_error_line() {
 #[test]
 fn past_errors_grading_notes_an_error_line_and_goes_on_but_a_not_yet_stops() {
     let mut r = Ran::default();
-    assert!(!step_error(&mut r, "equip", "unbound native A.B()", Grading::PastErrors));
+    let unbound = ow_vm::error::VmError::UnboundNative("A.B()".into());
+    assert!(!step_error_typed(&mut r, "equip", &unbound, Grading::PastErrors));
     assert_eq!((r.stop.is_none(), r.error_lines.len()), (true, 1));
-    let text = NotYet::not_read("A.C", "NATIVE_X.md").to_string();
-    assert!(step_error(&mut r, "unequip", &text, Grading::PastErrors));
-    assert_eq!(r.stop.as_ref().unwrap().0, Outcome::NotYet);
+    let n = NotYet::not_read("A.C", "NATIVE_X.md");
+    assert!(step_error_typed(&mut r, "unequip", &ow_vm::error::VmError::NotYet(n), Grading::PastErrors));
+    let (outcome, stop) = r.stop.clone().unwrap();
+    assert_eq!((outcome, stop.native.as_str(), stop.record.as_str()), (Outcome::NotYet, "A.C", "NATIVE_X.md"));
+}
+
+/// The equip driver grades by variant (review r3 of #468): in past-errors grading, a script error whose message reads
+/// like a `NotYet`'s display is an error line, not a terminal not-yet stop.
+#[test]
+fn a_script_error_with_not_yet_text_is_an_error_line_in_past_errors() {
+    let mut r = Ran::default();
+    let looks = NotYet::not_read("A.C", "NATIVE_X.md").to_string();
+    let fake = ow_vm::error::VmError::Script { function: "toy".into(), message: looks.clone() };
+    assert!(!step_error_typed(&mut r, "equip", &fake, Grading::PastErrors), "goes on");
+    assert!(r.stop.is_none());
+    assert_eq!(r.error_lines, [("equip".to_string(), looks)]);
 }
 
 #[test]

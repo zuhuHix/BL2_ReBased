@@ -71,3 +71,22 @@ export table (names and property classes only).
   converts definition errors through `VmError::from`, so a store `NotYet` stays a `VmError::NotYet`.
 - **Tests:** six added. They cover the replication boundary (an inactive slot below the limit, slots past it), the
   int `bNetDirty`, the refusal order, the in-place order, the wrapping step, and the existing cases.
+
+**Review r3 of #468.**
+- **The plan loads nothing.** Hub ruling, as on #464, #467 and #471: a lazy definition load is a write, so a plan
+  may read only definitions that are already loaded, or that world setup or an explicit pre-plan step loaded.
+  - The planner now takes `&Vm`. The class rule reads the item's loaded class ancestry.
+  - A context-free init value is computed as its constant times its scale, without the evaluator.
+  - A definition the plan needs that is still an unloaded store handle is a named `NotYet` (`NotPorted`), decided
+    before any write, with the store and the handle's heap object unchanged.
+  - On the installed spawn path, `ComputeValueOfParts` runs first and already loads the definition and every part,
+    so nothing changes there.
+- **Order.** The base pass visits its upgrade holders in order, each checked when it is reached. The regular parts
+  are consulted for an effect only after the definition misses. A later part can no longer mask
+  IAS-BASE-GRADE-CONTEXT, or block a name-part upgrade the definition covers.
+- **Link 8's equip driver keeps the typed error.** `--slice-gate` grades each phase by its `VmError` variant
+  (`typed_stop`), takes a `NotYet`'s subject and record from the value, and formats text only at the report. In
+  past-errors grading, a script error whose message reads like a `NotYet` is now an error line, not a not-yet stop.
+- **Tests:** three on a synthetic store, each checking the store and heap state as well as the item: an unloaded
+  definition, the base-pass order, and the name-part lookup. Two slice-gate tests now use typed errors, and one new
+  test covers `NotYet`-looking text.

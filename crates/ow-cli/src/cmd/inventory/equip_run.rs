@@ -248,13 +248,13 @@ fn records(vm: &Vm, weapon: ObjRef) -> usize {
     }
 }
 
-/// Runs one script function on the weapon; the phase's error text, if any.
-fn phase(vm: &mut Vm, path: &str, weapon: ObjRef, args: Vec<Value>) -> Option<String> {
+/// Runs one script function on the weapon; the phase's typed error, if any.
+fn phase(vm: &mut Vm, path: &str, weapon: ObjRef, args: Vec<Value>) -> Option<ow_vm::error::VmError> {
     let f = match vm.find_function(path) {
         Ok(f) => f,
-        Err(e) => return Some(vm_text(&e)),
+        Err(e) => return Some(e),
     };
-    vm.call(f, Some(weapon), args).err().map(|e| vm_text(&e))
+    vm.call(f, Some(weapon), args).err()
 }
 
 /// The controller's accuracy pool (module documentation): `CreatePool(Mgr, controller, ACCURACY_POOL, true)`, the
@@ -335,12 +335,21 @@ pub(crate) fn prepare_line_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> R
 
 /// Phase `name` of [`PHASES`] on `weapon`: its error text, if any; an unknown name is an error text.
 pub(crate) fn run_phase(vm: &mut Vm, name: &str, weapon: ObjRef) -> Option<String> {
+    run_phase_typed(vm, name, weapon).map(|e| vm_text(&e))
+}
+
+/// [`run_phase`] with the error kept as the VM gave it, so a caller grades it by its variant and formats its text only
+/// when it reports (review r3 of #468); an unknown name is a script error.
+pub(crate) fn run_phase_typed(vm: &mut Vm, name: &str, weapon: ObjRef) -> Option<ow_vm::error::VmError> {
     match name {
         "init" => phase(vm, INITIALIZE, weapon, vec![Value::Bool(false)]),
         "bases" => phase(vm, ow_inventory::equip::CALCULATE_WEAPON_BASE_VALUES, weapon, Vec::new()),
         "equip" => phase(vm, EQUIP, weapon, Vec::new()),
         "unequip" => phase(vm, UNEQUIP, weapon, Vec::new()),
-        other => Some(format!("{other}: not a phase of the equip run")),
+        other => Some(ow_vm::error::VmError::Script {
+            function: "equip-run".into(),
+            message: format!("{other}: not a phase of the equip run"),
+        }),
     }
 }
 

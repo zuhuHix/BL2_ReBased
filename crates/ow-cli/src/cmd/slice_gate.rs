@@ -870,9 +870,9 @@ pub const EQUIP_WEAPON: &str = "GD_Weap_AssaultRifle.A_Weapons.WT_Bandit_Assault
     Prefix=GD_Weap_Shared_Names.Name.Prefix_Bandit.Prefix_Grip_Jakobs \
     Title=GD_Weap_AssaultRifle.Name.Title_Bandit.Title__MashineGun";
 
-/// Records one step's error text on `r` as the other drivers do: strict grading or a `NotYet` stops the link (true),
-/// past-errors grading notes the line and goes on (false).
-/// [`step_error`] for a typed error, graded by [`classify_error`].
+/// Records one step's typed error on `r` as the other drivers do: strict grading or a `NotYet` stops the link (true),
+/// past-errors grading notes the line and goes on (false). It is graded by its variant ([`classify_error`]), so only a
+/// `VmError::NotYet` is a not-yet stop (review r3 of #468: the equip driver uses it too).
 fn step_error_typed(r: &mut Ran, step: &str, e: &ow_vm::error::VmError, grading: Grading) -> bool {
     let (outcome, stop) = classify_error(step, e);
     if grading == Grading::Strict || outcome == Outcome::NotYet {
@@ -880,16 +880,6 @@ fn step_error_typed(r: &mut Ran, step: &str, e: &ow_vm::error::VmError, grading:
         return true;
     }
     r.error_lines.push((step.to_string(), ow_combat::hit::access::error_text(e)));
-    false
-}
-
-fn step_error(r: &mut Ran, step: &str, text: &str, grading: Grading) -> bool {
-    let (outcome, stop) = classify(step, text);
-    if grading == Grading::Strict || outcome == Outcome::NotYet {
-        r.stop = Some((outcome, stop));
-        return true;
-    }
-    r.error_lines.push((step.to_string(), text.to_string()));
     false
 }
 
@@ -930,15 +920,15 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         if *step == "equip" {
             before = Some(crate::cmd::inventory::equip_run::external_records(vm, weapon));
         }
-        let error = crate::cmd::inventory::equip_run::run_phase(vm, step, weapon);
+        let error = crate::cmd::inventory::equip_run::run_phase_typed(vm, step, weapon);
         let records = crate::cmd::inventory::equip_run::external_records(vm, weapon);
         match *step {
             "equip" => after_equip = Some(records),
             "unequip" => after_unequip = Some(records),
             _ => {}
         }
-        if let Some(text) = error
-            && step_error(&mut r, step, &text, grading)
+        if let Some(e) = error
+            && step_error_typed(&mut r, step, &e, grading)
         {
             break;
         }
