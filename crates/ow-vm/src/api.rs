@@ -484,6 +484,10 @@ pub struct Vm {
     pub clock: SimClock,
     /// The mode the binary read once and passed in; never read from the environment here.
     pub parity: ParityMode,
+    /// The unbound natives each stubbed call reached, in call order, as (the function's package as spelled, its
+    /// key): the qualified identity the `UNIMPLEMENTED <key>` log line leaves out (review r1 of #519, item 4). The
+    /// sweep counts by it; the log line keeps the legacy text.
+    pub(crate) stubbed_natives: Vec<(String, String)>,
     /// `Log()` output and every `UNIMPLEMENTED ...` stub line (C++ `Runtime::log`).
     pub log: Vec<String>,
     pub limits: Limits,
@@ -564,6 +568,7 @@ impl Vm {
             clock: SimClock::new_empty(),
             parity: mode,
             log: Vec::new(),
+            stubbed_natives: Vec::new(),
             limits: Limits::default(),
             stub_policy: StubPolicy::refuse_all(),
             census: None,
@@ -758,6 +763,14 @@ impl Vm {
     /// Whether a native implementation is registered for `key`, VM-wide or for some package.
     pub fn has_native(&self, key: &str) -> bool {
         self.natives.contains_key(key) || self.natives_at_count.get(key).is_some_and(|&n| n > 0)
+    }
+
+    /// The package-qualified dispatch identity of native `f`, `<package>.<key>` with the package lowercased: the
+    /// identity [`Vm::register_native_for`] binds under (paths compare case-insensitively, so `PackA` and `PACKA`
+    /// are one package). `None` for a script function.
+    pub fn dispatch_key(&self, f: FuncId) -> Option<String> {
+        let d = self.function(f)?;
+        d.native_key.as_ref().map(|key| format!("{}.{key}", package_key(d)))
     }
 
     /// Whether the native function `f` has an implementation: its package's binding of its key, or the VM-wide
@@ -1285,6 +1298,8 @@ impl Vm {
     /// arguments as they were (C++ `interp.cpp:692-695`).
     fn stub(&mut self, f: FuncId, key: &str, args: Vec<Arg>) -> Result<CallResult, VmError> {
         self.stub_site(key, format!("UNIMPLEMENTED {key}"))?;
+        let package = self.functions[f.index()].decl.path.package().to_string();
+        self.stubbed_natives.push((package, key.to_string()));
         let ret = match &self.functions[f.index()].decl.result {
             Some(r) => self
                 .space

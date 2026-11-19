@@ -42,4 +42,18 @@ AI-assisted (Claude Code, Opus 5.5). Lane VM-DISPATCH-KEY. The number NNN is a p
 
   The existing `bind_skips_a_missing_function_and_leaves_a_lower_packs_key_to_it` (ow-combat) still holds first-wins
   against a key-form binding.
+- **Review r1 of #519, folded in:**
+  1. **The PlayLocal allow-list** (`ow-behavior` `kernel::run`) matches the resolved function's path
+     (`Engine.Controller.IsLocalController`, case-insensitive), not the bare key that any package's `Controller`
+     shares. Test: `another_package_s_query_with_the_stock_key_is_refused`, a second package whose `Controller` binds a
+     body that would write; it is never called.
+  2. **The inventory navigation's entry getter** (`ow-cli` `inventory`) keeps its signature check and binds with
+     `register_native_for(getter, ..)`, so a same-key getter of another package does not get the adapter's closure.
+  3. **One identity.** `Vm::dispatch_key(f)` gives `<package>.<key>` with the package lowercased, the identity
+     `register_native_for` binds under. The behavior kernel's one-owner check uses it, so `PackA` and `PACKA` are one
+     owner: first-wins, not a refusal. Test: `a_package_spelled_in_another_case_is_one_owner`.
+  4. **The sweep** counts an unbound native by its package and key. The VM records the package with each native
+     stub, and `UnimplementedNative` gains a `package` field, empty for the other stub kinds. The log line keeps the
+     legacy text, `UNIMPLEMENTED <key>`, and the census JSON is unchanged. Test:
+     `two_unbound_natives_with_one_key_count_apart`.
 - **Not verified:** nothing here is about the running game. This is the port's own dispatch rule.

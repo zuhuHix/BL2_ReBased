@@ -192,11 +192,30 @@ fn package() -> Vec<u8> {
     t.build()
 }
 
+/// A second invented package with its own `Controller` class, so its native query shares the bare key
+/// `Controller.IsLocalController()` with the stock one (review r1 of #519, item 1).
+fn other_package() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "BoolProperty"]);
+    // A subclass of the stock controller, so it fits the pawn's Controller field, under the same class name.
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let stock = t.p.add_import("Core", "Class", engine, "Controller");
+    let controller = t.class("Controller", stock);
+    let spec = FunctionSpec::new(NATIVE, "IsLocalController");
+    t.function(controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| None);
+    t.build()
+}
+
 fn toy(mode: ParityMode) -> Toy {
+    toy_with(mode, &[])
+}
+
+fn toy_with(mode: ParityMode, extra: &[(&str, &[u8])]) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-behavior-run-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
-    let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, mode).unwrap();
+    let mut packages: Vec<(&str, &[u8])> = vec![("Engine.upk", &bytes)];
+    packages.extend_from_slice(extra);
+    let defs = DefStore::from_synthetic(&dir, &packages, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let object = vm.find_class("Engine.Object").unwrap();
     let base = vm.find_class("Engine.BehaviorBase").unwrap();
@@ -309,9 +328,8 @@ fn toy(mode: ParityMode) -> Toy {
     .unwrap();
     let local = Rc::new(Cell::new(false));
     let answer = local.clone();
-    let key = vm.function(is_local).unwrap().native_key.clone().unwrap();
-    vm.register_native(
-        &key,
+    vm.register_native_for(
+        is_local,
         Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> { Ok(Value::Bool(answer.get())) }),
     )
     .unwrap();
@@ -742,5 +760,44 @@ fn a_subclass_s_own_bound_query_is_refused() {
         e => panic!("expected NotYet, got {e}"),
     }
     assert!(!called.get(), "the subclass's query was not invoked");
+    assert!(t.log.borrow().is_empty(), "no behavior ran");
+}
+
+/// The allow-list matches the resolved stock path, not the bare key (review r1 of #519, item 1): another package's
+/// `Controller.IsLocalController` shares the key `Controller.IsLocalController()`, and its own binding (which here
+/// writes) is never called by a side test.
+#[test]
+fn another_package_s_query_with_the_stock_key_is_refused() {
+    let other = other_package();
+    let mut t = toy_with(ParityMode::Off, &[("OtherGame.upk", &other)]);
+    let other_class = t.vm.find_class("OtherGame.Controller").unwrap();
+    let f = t.vm.find_method(other_class, "IsLocalController", None).unwrap().unwrap();
+    assert_eq!(t.vm.function(f).unwrap().native_key.as_deref(), Some("Controller.IsLocalController()"));
+    let called = Rc::new(Cell::new(false));
+    let seen = called.clone();
+    t.vm.register_native_for(
+        f,
+        Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| -> Result<Value, VmError> {
+            seen.set(true);
+            Ok(Value::Bool(true))
+        }),
+    )
+    .unwrap();
+    let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
+    let pawn = t.make("Engine.ToyPawn", "Maya");
+    let world = t.make("Engine.ToyWorldInfo", "World");
+    let foreign = t.vm.space.alloc(other_class, "OtherPC", None, Origin::Runtime).unwrap();
+    t.set(pawn, "WorldInfo", Value::Object(Some(world)));
+    t.set(pawn, "Controller", Value::Object(Some(foreign)));
+    t.set(component, "SMI", Value::Object(Some(pawn)));
+    let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.sm_entry));
+    let list = t.behaviors(&[Some("L")]);
+    let e = with(&t.vm, &zero, "Behaviors", list);
+    let local = with(&t.vm, &e, "PlayLocal", Value::Bool(true));
+    match t.call(SM_RUN_BEHAVIORS, Some(component), vec![Value::Array(Rc::new(vec![local]))]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("allow-list"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert!(!called.get(), "the other package's query was not invoked");
     assert!(t.log.borrow().is_empty(), "no behavior ran");
 }

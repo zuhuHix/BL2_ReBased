@@ -751,10 +751,9 @@ pub(crate) fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> 
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
-    let Some(key) = vm
-        .function(id)
-        .and_then(|d| d.native_key.as_ref().map(|key| format!("{}.{key}", d.path.package())))
-    else {
+    // The VM's own package-qualified identity (case folded), so first-wins here and the VM agree (review r1 of #519,
+    // item 3).
+    let Some(key) = vm.dispatch_key(id) else {
         return Ok(());
     };
     let k = kernel(vm)?;

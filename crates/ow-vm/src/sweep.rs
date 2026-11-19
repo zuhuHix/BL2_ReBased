@@ -84,6 +84,9 @@ pub struct UnimplementedNative {
     pub functions_reaching: usize,
     /// The stub line without its `UNIMPLEMENTED ` prefix (a native key, `function <Class>.<Name>`, ...).
     pub native: String,
+    /// The package of the unbound native function, for a native key (review r1 of #519, item 4): two packages'
+    /// natives with one bare key are two rows. Empty for the other stub lines.
+    pub package: String,
 }
 
 /// The sweep of one package (the fields of the C++ JSON, in its order).
@@ -147,8 +150,32 @@ pub(crate) fn category(message: &str) -> String {
 
 /// `(count, key)` pairs ranked as the C++ `std::sort(ranked.rbegin(), ranked.rend())`: descending by count, then by
 /// key; the first `top` kept.
-fn ranked(counts: &BTreeMap<String, usize>, top: usize) -> Vec<(usize, String)> {
-    let mut list: Vec<(usize, String)> = counts.iter().map(|(k, &n)| (n, k.clone())).collect();
+/// The stubs one attempt reached, each identity once, as (stub text, package): a native's stub from its qualified
+/// record (review r1 of #519, item 4: two packages' natives with one bare key stay two), with the package as first
+/// spelled (compared case-insensitively); every other stub line from the log, with an empty package (their texts
+/// never equal a native key).
+fn stub_identities(vm: &Vm) -> Vec<(String, String)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for (package, key) in &vm.stubbed_natives {
+        if seen.insert((key.clone(), package.to_ascii_lowercase())) {
+            out.push((key.clone(), package.clone()));
+        }
+    }
+    let keys: std::collections::BTreeSet<&str> = vm.stubbed_natives.iter().map(|(_, key)| key.as_str()).collect();
+    for line in &vm.log {
+        if let Some(native) = line.strip_prefix("UNIMPLEMENTED ")
+            && !keys.contains(native)
+            && seen.insert((native.to_string(), String::new()))
+        {
+            out.push((native.to_string(), String::new()));
+        }
+    }
+    out
+}
+
+fn ranked<K: Ord + Clone>(counts: &BTreeMap<K, usize>, top: usize) -> Vec<(usize, K)> {
+    let mut list: Vec<(usize, K)> = counts.iter().map(|(k, &n)| (n, k.clone())).collect();
     list.sort_by(|a, b| b.cmp(a));
     list.truncate(top);
     list
@@ -194,7 +221,8 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
     };
     let mut failures: BTreeMap<String, usize> = BTreeMap::new();
     let mut samples: BTreeMap<String, String> = BTreeMap::new();
-    let mut unimplemented: BTreeMap<String, usize> = BTreeMap::new();
+    // (stub text, package): a native key with its function's package, another stub line with an empty package.
+    let mut unimplemented: BTreeMap<(String, String), usize> = BTreeMap::new();
     vm.limits.step_limit = options.step_limit;
     vm.census = Some(CallCensus::default());
     // The root class, for the objects the attempts make (`release_unreferenced`).
@@ -250,6 +278,7 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
         }
         report.attempted += 1;
         vm.log.clear();
+        vm.stubbed_natives.clear();
         let state = state_of(&pkg, index);
         let outcome = attempt(vm, function, &decl, state.as_deref());
         let steps = vm.steps();
@@ -274,13 +303,8 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
             release_unreferenced(vm, root);
             allocated = vm.space.heap.len();
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for line in &vm.log {
-            if let Some(native) = line.strip_prefix("UNIMPLEMENTED ")
-                && seen.insert(line.clone())
-            {
-                *unimplemented.entry(native.to_string()).or_insert(0) += 1;
-            }
+        for id in stub_identities(vm) {
+            *unimplemented.entry(id).or_insert(0) += 1;
         }
     }
     report.seconds = started.elapsed().as_secs_f64();
@@ -293,9 +317,10 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
         .collect();
     report.unimplemented_natives = ranked(&unimplemented, options.top)
         .into_iter()
-        .map(|(functions_reaching, native)| UnimplementedNative {
+        .map(|(functions_reaching, (native, package))| UnimplementedNative {
             functions_reaching,
             native,
+            package,
         })
         .collect();
     report
@@ -519,6 +544,33 @@ mod tests {
         );
         // SumTo(0) runs its loop test once: the slowest is still one of the short functions, decided by steps.
         assert!(r.slowest.1 > 0 && r.total_steps >= r.slowest.1);
+    }
+
+    /// Two packages' unbound natives with one bare key are two identities, while the log keeps the two identical
+    /// legacy lines (review r1 of #519, item 4); one native stubbed twice is one.
+    #[test]
+    fn two_unbound_natives_with_one_key_count_apart() {
+        let mut t = toy::vm(ParityMode::Off);
+        let vm = &mut t.vm;
+        vm.stub_policy = crate::api::StubPolicy::LogAndZero;
+        let mut ids = Vec::new();
+        for path in ["PackA.Widget.Ping", "PackB.Widget.Ping"] {
+            let p = ow_core::ObjectPath::parse(path).unwrap();
+            ids.push(vm.declare_function(crate::api::FunctionDecl::native(p, "Widget.Ping()")).unwrap());
+        }
+        vm.log.clear();
+        vm.stubbed_natives.clear();
+        for &f in &[ids[0], ids[1], ids[0]] {
+            vm.call(f, None, vec![]).unwrap();
+        }
+        assert_eq!(vm.log.iter().filter(|l| *l == "UNIMPLEMENTED Widget.Ping()").count(), 3);
+        assert_eq!(
+            stub_identities(vm),
+            vec![
+                ("Widget.Ping()".to_string(), "PackA".to_string()),
+                ("Widget.Ping()".to_string(), "PackB".to_string()),
+            ]
+        );
     }
 
     #[test]

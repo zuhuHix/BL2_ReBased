@@ -114,12 +114,14 @@ pub const ANIM_EVENTS: [&str; 4] = [
     "Engine.GearboxAnimDefinition.OnStart",
     "Engine.GearboxAnimDefinition.OnServerStart",
 ];
-/// The side tests' read-only queries: the only bindings a preflight may call (review r3 of #439, item 1). The stock
-/// `Controller.IsLocalController`, a query. In Off it is bound (`ow_combat::go_down`, lane IMPL-GO-DOWN-NATIVES) to a
-/// `NotYet { NotRead }` that writes nothing, so `PlayLocal` gets that `NotRead` in the preflight. The separate
-/// `PlayerController.IsLocalController` key is not listed: a preflight that resolves it refuses `NotYet` before invoking
-/// it, the same kind its binding would answer.
-pub const READ_ONLY_QUERIES: [&str; 1] = ["Controller.IsLocalController()"];
+/// The side tests' read-only queries: the only functions a preflight may call (review r3 of #439, item 1), by their
+/// resolved path, compared case-insensitively (review r1 of #519, item 1: the bare key `Controller.IsLocalController()`
+/// is shared by any package that declares a `Controller` class, whose binding could write). The stock
+/// `Engine.Controller.IsLocalController`, a query. In Off it is bound (`ow_combat::go_down`, lane
+/// IMPL-GO-DOWN-NATIVES) to a `NotYet { NotRead }` that writes nothing, so `PlayLocal` gets that `NotRead` in the
+/// preflight. The separate `PlayerController.IsLocalController` key is not listed: a preflight that resolves it refuses
+/// `NotYet` before invoking it, the same kind its binding would answer.
+pub const READ_ONLY_QUERIES: [&str; 1] = ["Engine.Controller.IsLocalController"];
 /// The instance-data interface (NATIVE_BEHAVIOR_CONTEXT.md: the Engine `IInstanceData` interface).
 pub const INSTANCE_DATA_INTERFACE: &str = "Engine.IInstanceData";
 
@@ -621,8 +623,8 @@ fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<
         let bound = vm
             .function(f)
             .filter(|d| d.is_native())
-            .and_then(|d| d.native_key.clone())
-            .is_some_and(|key| READ_ONLY_QUERIES.contains(&key.as_str()) && vm.is_bound(f));
+            .is_some_and(|d| READ_ONLY_QUERIES.iter().any(|q| d.path.as_str().eq_ignore_ascii_case(q)))
+            && vm.is_bound(f);
         if !bound {
             return Err(NotYet::not_read(
                 format!(

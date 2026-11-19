@@ -350,6 +350,23 @@ fn registering_twice_is_a_no_op_and_another_binder_is_refused() {
     assert!(matches!(Pack.register(&mut t.vm), Err(VmError::Registration { .. })));
 }
 
+/// The kernel's one-owner check uses the VM's package-qualified identity, case folded (review r1 of #519, item 3): a
+/// second function of the same package under another spelling (`PACKA`) with the same key is first-wins, not a
+/// refusal, and runs the first binding.
+#[test]
+fn a_package_spelled_in_another_case_is_one_owner() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    for path in ["PackA.ToyCase.Ping", "PACKA.ToyCase.Busy.Ping"] {
+        let p = ow_core::ObjectPath::parse(path).unwrap();
+        t.vm.declare_function(FunctionDecl::native(p, "ToyCase.Ping()")).unwrap();
+    }
+    bind(&mut t.vm, "PackA.ToyCase.Ping", Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Int(1)))).unwrap();
+    bind(&mut t.vm, "PACKA.ToyCase.Busy.Ping", Rc::new(|_: &mut NativeCall<'_>| Ok(Value::Int(2)))).unwrap();
+    let second = t.vm.find_function("PACKA.ToyCase.Busy.Ping").unwrap();
+    assert_eq!(t.vm.call(second, None, vec![]).unwrap().ret, Value::Int(1));
+}
+
 #[test]
 fn a_native_declared_after_the_first_registration_is_bound_by_the_next() {
     let mut t = toy_with(ParityMode::Off, false);

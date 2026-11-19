@@ -206,16 +206,15 @@ impl Navigation {
         let getter = vm.find_function(ENTRY_GETTER).map_err(|e| vm_text(&e))?;
         // The enum first (module documentation, "Where it differs").
         let source = source_entry_kind(&mut vm, getter)?;
-        let key = {
+        {
             let decl = vm
                 .function(getter)
                 .ok_or_else(|| "unsupported inventory entry getter signature".to_string())?;
             let one_int = decl.params.len() == 1 && kind_is_int(&decl.params[0]);
-            match (&decl.native_key, one_int) {
-                (Some(key), true) => key.clone(),
-                _ => return Err("unsupported inventory entry getter signature".into()),
+            if !(decl.is_native() && one_int) {
+                return Err("unsupported inventory entry getter signature".into());
             }
-        };
+        }
         let panel_class = vm.find_class(PANEL_CLASS).map_err(|e| vm_text(&e))?;
         let panel = instantiate_from_defaults(&mut vm, panel_class).map_err(|e| vm_text(&e))?;
         let provider_class = vm.find_class(PROVIDER_CLASS).map_err(|e| vm_text(&e))?;
@@ -261,7 +260,9 @@ impl Navigation {
             }
             Ok(Value::Byte(source))
         });
-        vm.register_native(&key, entry)
+        // For the getter's own package only (review r1 of #519, item 2): a same-key getter of another package does not
+        // get this adapter's closure.
+        vm.register_native_for(getter, entry)
             .map_err(|e| vm_text(&e))?;
         Ok(Navigation {
             vm,
