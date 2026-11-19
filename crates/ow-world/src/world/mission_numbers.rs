@@ -80,6 +80,11 @@
 //!     native through one key map, and its per-declaration binding (`Vm::override_script`) takes script functions
 //!     only. So a class of the same name with the same native in another package would get this no-op too. Scoping
 //!     a native to its resolved declaration is a VM design change, queued by the hub as its own item.
+//! - **`WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(Player, ObjectiveIndex, OldValue, NewValue,
+//!   MissionName)`** (lane IMPL-R3-MISSION-OBJECTIVE, slice link 11; NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md
+//!   section 3): it ends in the same shared statistics submit routine, so ruling R3 covers it. Nothing, with no write
+//!   and no load, for every player, a None one included. A port answer, UNVERIFIED. The player argument must be an
+//!   object. The same known limit as the status event's: it is bound by its dispatch key.
 //! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
 //!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
 //!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
@@ -137,6 +142,11 @@ pub const TEXT_LIST: &str = "the mission screen's Flash text list (not hosted)";
 pub const FOCUS: &str = "the 3D movie's Flash focus (not hosted)";
 /// `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`.
 pub const RECORD_STATUS_CHANGED: &str = "WillowGame.WillowLeviathanService.RecordMissionStatusChangedEventForPlayer";
+/// `WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer`.
+pub const RECORD_OBJECTIVE_CHANGED: &str =
+    "WillowGame.WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer";
+/// The record of the objective telemetry (ruling R3 applied to it).
+pub const RECORD_OBJECTIVE_TELEMETRY: &str = "docs/verification/NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md";
 /// The record of the text list body, `GetVariableObject`'s no-player answer and the status telemetry.
 pub const RECORD_TEXT_LIST: &str = "docs/verification/NATIVE_MISSION_TEXT_LIST.md";
 /// The `NotYet` of a focus clamp whose Y bound is negative or NaN (the hub's ruling R2 on #504, its text).
@@ -490,6 +500,13 @@ pub(crate) fn n_movie_query(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// The status telemetry (module documentation): nothing, with no write, for every player (ruling R3).
 pub(crate) fn n_status_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     object_of(c.arg(0)?.clone(), "ForPlayer", RECORD_STATUS_CHANGED)?;
+    Ok(Value::None)
+}
+
+/// The objective telemetry (module documentation): nothing, with no write, for every player (ruling R3, per
+/// NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3).
+pub(crate) fn n_objective_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    object_of(c.arg(0)?.clone(), "Player", RECORD_OBJECTIVE_CHANGED)?;
     Ok(Value::None)
 }
 

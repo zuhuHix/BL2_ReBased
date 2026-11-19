@@ -174,6 +174,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(vm, m::FOCUS_ON, Rc::new(m::n_focus))?;
         // Bound by dispatch key, which names no package: see the known limit in `mission_numbers`' documentation.
         bind(vm, m::RECORD_STATUS_CHANGED, Rc::new(m::n_status_changed_telemetry))?;
+        bind(vm, m::RECORD_OBJECTIVE_CHANGED, Rc::new(m::n_objective_changed_telemetry))?;
     }
     for path in PROVIDER_FUNCTIONS {
         let Ok(f) = vm.find_function(path) else { continue };

@@ -134,6 +134,15 @@ fn willow() -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "RecordMissionStatusChangedEventForPlayer");
     let params = [param("Object", "ForPlayer", 0, pc), param("Byte", "Status", 0, 0), param("Name", "MissionDefinition", 0, 0)];
     t.function(service, "RecordMissionStatusChangedEventForPlayer", &params, None, &[], &spec, |_| None);
+    let spec = FunctionSpec::new(NATIVE, "RecordMissionObjectiveChangedEventForPlayer");
+    let params = [
+        param("Object", "Player", 0, pc),
+        param("Int", "ObjectiveIndex", 0, 0),
+        param("Int", "OldValue", 0, 0),
+        param("Int", "NewValue", 0, 0),
+        param("Name", "MissionName", 0, 0),
+    ];
+    t.function(service, "RecordMissionObjectiveChangedEventForPlayer", &params, None, &[], &spec, |_| None);
     t.p.build()
 }
 
@@ -816,6 +825,34 @@ fn the_status_telemetry_answers_nothing_for_every_player() {
     assert_eq!(t.call(RECORD_STATUS_CHANGED, service, args(None)).unwrap(), Value::None);
     let pc = t.pc;
     assert_eq!(t.call(RECORD_STATUS_CHANGED, service, args(Some(pc))).unwrap(), Value::None);
+}
+
+/// The objective telemetry (ruling R3, NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3): nothing, for a None
+/// player and for a player, with the heap unchanged (no write, no new object) and nothing logged; a player argument
+/// that is not an object is a script error. Its dispatch key is the one the note names.
+#[test]
+fn the_objective_telemetry_answers_nothing_for_every_player() {
+    let mut t = toy(true);
+    let f = t.vm.find_function(RECORD_OBJECTIVE_CHANGED).unwrap();
+    assert_eq!(
+        t.vm.function(f).unwrap().native_key.as_deref(),
+        Some("WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(object,int,int,int,name)")
+    );
+    let service = t.vm.find_class("WillowGame.WillowLeviathanService").unwrap();
+    let service = t.vm.space.alloc(service, "ToyService", None, Origin::Runtime).unwrap();
+    let name = t.vm.space.names.intern("M_Toy");
+    let args = |p: Value| vec![p, Value::Int(2), Value::Int(1), Value::Int(3), Value::Name(name)];
+    let pc = t.pc;
+    let before_pc = t.vm.space.heap.get(pc).unwrap().slots.clone();
+    let before_objects = t.vm.space.heap.len();
+    let before_log = t.vm.log.len();
+    assert_eq!(t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Object(None))).unwrap(), Value::None);
+    assert_eq!(t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Object(Some(pc)))).unwrap(), Value::None);
+    assert_eq!(t.vm.space.heap.get(pc).unwrap().slots, before_pc, "the player is not written");
+    assert_eq!(t.vm.space.heap.len(), before_objects, "nothing is made or loaded");
+    assert_eq!(t.vm.log.len(), before_log, "nothing is logged");
+    let e = t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Int(7))).unwrap_err();
+    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
 }
 
 /// Review r2 of #480, L1, after the engine gate's retirement (lane IMPL-PLAYTHROUGH-VIRTUAL): the outer call no longer
