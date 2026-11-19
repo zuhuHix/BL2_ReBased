@@ -35,8 +35,11 @@ GRADINGS = ('strict', 'past-errors')
 DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'sanctuary-walk', 'none')
 # The drivers that run one link only, and the link each runs (decisions 2026-11-19-39 and 2026-11-19-66).
 DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy', 'sanctuary-walk': 'reach_fight_area'}
-# Drivers with no evidence check chosen yet: a row they drive is never ok.
-NO_EVIDENCE_YET = ('phaselock-cast',)
+# Drivers with no evidence check chosen yet: a row they drive is never ok. `sanctuary-walk` walks H4's script but
+# cannot yet check that the walk arrives at the fight area, which no map world places (SLICE_RUN_PLAN.md section 3.2),
+# so its `reach_fight_area` row may not be ok. Lane 19d5's fight-area port fixture (decision 2026-11-19-76) lifts this
+# once the driver checks arrival: remove `sanctuary-walk` here in that change, not before.
+NO_EVIDENCE_YET = ('phaselock-cast', 'sanctuary-walk')
 STOP_FIELDS = ('step', 'native', 'record', 'text')
 
 

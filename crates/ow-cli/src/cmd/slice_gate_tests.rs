@@ -89,9 +89,28 @@ fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
     assert_eq!(l.steps, ["load", "spawn", "walk", "fight_area"]);
     assert!(l.needs.is_empty() && matches!(l.evidence, Evidence::Driver(_)));
     let status = vec![0u8; LINKS.len()];
+    // The walk runs through the driver's own invocation on invented collision (AGENTS.md rule 9): a flat floor
+    // 40,000 uu across, and Maya standing at its middle.
+    use ow_assets::movement::collide::{Brush, CollisionWorld};
+    use ow_assets::movement::mover::{MovementParams, Mover};
+    use ow_assets::movement::sanctuary::scripted_walk;
+    let (lo, hi) = ([-20_000.0, -20_000.0, -100.0], [20_000.0, 20_000.0, 0.0]);
+    let points: Vec<[f64; 3]> = (0..8)
+        .map(|k| {
+            [
+                if k & 4 == 0 { lo[0] } else { hi[0] },
+                if k & 2 == 0 { lo[1] } else { hi[1] },
+                if k & 1 == 0 { lo[2] } else { hi[2] },
+            ]
+        })
+        .collect();
+    let floor = CollisionWorld::new(vec![Brush::from_hull(&points, &[], 0).expect("a box")]);
+    let maya = || Mover::spawn(MovementParams::maya(), [0.0, 0.0, 200.0], Default::default());
     // A passing walk is the link's evidence and goes on to the fight area, which is a named NotYet, never ok.
+    let report = scripted_walk(&floor, &mut maya());
+    assert!(report.passed(), "the walk on a flat floor passes its own checks");
     let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
-    walk_graded(&mut r, true, false, false, 2400);
+    walk_graded(&mut r, &report);
     assert!(r.evident);
     assert_eq!(r.steps.last().map(String::as_str), Some("fight_area"));
     let mut ran = vec![None; LINKS.len()];
@@ -109,9 +128,11 @@ fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
         classify("fight_area", &fight_area_not_yet().to_string()).0,
         Outcome::NotYet
     );
-    // A walk that fails its own checks is an error at `walk`, with no evidence.
+    // A walk that fails its own checks is an error at `walk`, with no evidence: with no floor, Maya falls through.
+    let report = scripted_walk(&CollisionWorld::new(vec![]), &mut maya());
+    assert!(!report.passed() && report.fell_through);
     let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
-    walk_graded(&mut r, false, true, false, 90);
+    walk_graded(&mut r, &report);
     assert!(!r.evident);
     ran[i] = Some(r);
     let graded = rows(&ran, Grading::Strict, |j| evident(j, &ran, &status));

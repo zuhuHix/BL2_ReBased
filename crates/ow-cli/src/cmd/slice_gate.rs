@@ -945,7 +945,7 @@ fn run_walk(cooked: &Path, ran: &mut [Option<Ran>]) {
 }
 
 fn walk_link(cooked: &Path) -> Ran {
-    use ow_assets::movement::{sanctuary, walk};
+    use ow_assets::movement::sanctuary;
     let mut r = Ran::default();
     r.steps.push("load".into());
     let loaded = match sanctuary::load(cooked, sanctuary::MAP) {
@@ -968,25 +968,19 @@ fn walk_link(cooked: &Path) -> Ran {
     // What the run was given: the map, the player start and the lift out of solid (the spawn's own lines).
     r.harness = spawn_text.lines().map(str::to_string).collect();
     r.steps.push("walk".into());
-    let dt = f64::from(ow_core::sim::DEFAULT_STEP_SECONDS);
-    let every = sanctuary::SAMPLE_EVERY;
-    let report = walk::run(world, &mut mover, &walk::SANCTUARY_SCRIPT, dt, every);
-    walk_graded(
-        &mut r,
-        report.passed(),
-        report.fell_through,
-        report.stuck,
-        report.ticks,
-    );
+    // The same invocation as `ow-host --walk` (script and time step).
+    let report = sanctuary::scripted_walk(world, &mut mover);
+    walk_graded(&mut r, &report);
     r
 }
 
-/// Grades link 2 after the walk (pure, so the tests share it with `walk_link`): a walk that failed its own checks
+/// Grades link 2 after the walk `report` (pure, so the tests share it with `walk_link`): a walk that failed its own checks
 /// stops the link with an `error`; one that passed is the link's evidence and goes on to `fight_area`, which stops
 /// it with [`fight_area_not_yet`].
-pub fn walk_graded(r: &mut Ran, passed: bool, fell_through: bool, stuck: bool, ticks: u64) {
-    r.evident = passed;
-    if !passed {
+pub fn walk_graded(r: &mut Ran, report: &ow_assets::movement::walk::WalkReport) {
+    let (fell_through, stuck, ticks) = (report.fell_through, report.stuck, report.ticks);
+    r.evident = report.passed();
+    if !r.evident {
         r.stop = Some((
             Outcome::Error,
             Stop {
