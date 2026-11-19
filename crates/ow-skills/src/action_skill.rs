@@ -689,6 +689,7 @@ impl NativePack for Pack {
         register_sm_component(vm)?;
         special_move::register(vm)?;
         flag_expression::register(vm)?;
+        provider_definition::register(vm)?;
         register_cast_opinion(vm)?;
         register_cast_get_value(vm)
     }
@@ -1153,6 +1154,9 @@ pub mod special_move;
 
 /// `FlagExpressionEvaluator.Evaluate` in Off (lane IMPL-FLAG-EXPRESSION-EVALUATE).
 pub mod flag_expression;
+
+/// `ActionSkill.GetBehaviorProviderDefinition` in Off (lane IMPL-GET-BEHAVIOR-PROVIDER-DEFINITION).
+pub mod provider_definition;
 
 #[cfg(test)]
 mod tests;
