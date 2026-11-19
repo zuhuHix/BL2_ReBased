@@ -370,6 +370,22 @@ throwaway stand-ins for `GetParticleEffect` and `GetExpLevelFromManufacturerData
 NotRead }`, marked after the script's earlier writes). With that handle loaded by the probe, the next stop is the
 unbound `WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)`. ctest and verify_packages not run (no C++
 change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+**IMPL-SET-BASE-VALUE (2026-11-19, pc-hummer, on main d52bcc79, after review r1 of #572):** AI-assisted (Claude Code,
+Opus 5.5). `AttributeInitializationDefinition.SetBaseValue` in Off from NATIVE_ATTRIBUTES.md section 1, with the
+write-free, load-free preflight of review r1 and the hub's harness preload of the destination attribute.
+- `cargo build --workspace` clean.
+- `cargo test --workspace -j 2`: 2,455 passed / 0 failed / 46 ignored (9 new in `ow-world`).
+- clippy flags nothing in the changed lines; `crate_edges_test.py` OK.
+- `ctest --test-dir build -C Release --output-on-failure`: 164 of 166 passed (fresh configure and Release build in
+  this worktree). The 2 failures are local-environment blockers, not this change:
+  - `py-real_game_capture_safety`: C: had 1.2 GB free, 2.3 GB needed;
+  - `py-real_game_pending`: its path check, with the worktree under the user's Temp folder.
+- `python tools/verify_packages.py --reader build/Release/ow-package.exe`: 9 packages, all class bodies exact.
+- Installed Off `--slice-gate` strict, on a local, unpushed merge with #558, #534 and #552, plus throwaway stand-ins
+  for `GetParticleEffect` and `GetExpLevelFromManufacturerData`: 1 ok / 4 notyet / 9 error. The harness preloads 3
+  definitions (the threshold attribute and its two resolvers), logged as UNVERIFIED harness inputs. Link 8 is 1 of 5
+  at `init`: past `SetBaseValue`, stopped at the unbound `WillowWeapon.StaticGetWeaponDamageType(weapondefinitiondata)`.
+- No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
