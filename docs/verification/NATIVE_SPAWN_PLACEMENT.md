@@ -239,6 +239,8 @@ world's box and sweep routines, the collision hash's walkers, and the per-actor 
    - The primitive must block the query's kind, by its extent ("Which blocking flag a primitive needs", above):
      `BlockZeroExtent` for a box test of extent (0, 0, 0) and a point sweep, `BlockNonZeroExtent` otherwise.
    - One more per-component test runs; it was not read (open question 4).
+   - **Superseded** by NATIVE_SPAWN_TRACE_FILTER.md sections 2 and 4: the skip flag reads as `BulletListener`
+     (inferred), and the per-component test is the collide-actors test.
 3. **The owner actor's filter, by class:**
    - **`Actor`**, and the classes that keep its rule (`StaticMeshActor`, `Brush`, `Terrain`): with `bWorldGeometry`,
      accepted when bit 128 is set. Otherwise it needs bit 16, then the narrowing below.
@@ -295,6 +297,7 @@ Section 6 turns that into a `NotYet` of kind `NotRead` that names the filter. No
   trace filter's per-component test". Only the BSP, and an empty candidate set, can be answered.
 - **The skip flag** (bit 10, unresolved): it decides whether a primitive is a candidate at all, so a query with a
   blocking primitive that has it set is Unsupported too.
+- **Superseded:** the two entries above give way to NATIVE_SPAWN_TRACE_FILTER.md section 7, steps 2 and 4.
 - **An owner class whose filter was not read** (the table's note): Unsupported.
 - **The terrain bit** (8192): it may act on terrain beyond entering the actor hash, which was not read. A query whose
   region holds a `Terrain` actor's primitive is Unsupported, "the trace filter's terrain handling".
@@ -345,6 +348,7 @@ world of convex brushes with a swept cylinder or capsule trace that reports a st
 4. The trace filters are read (section 7), except three points: the primitive skip flag (bit 10 of its collision flag
    word; its name is unresolved), one further per-component test, and what the terrain bit (8192) does beyond entering
    the actor hash.
+   - **Superseded** except the terrain bit: NATIVE_SPAWN_TRACE_FILTER.md sections 2 and 4.
 5. Whether the net-mode test compares with the client mode only (as read), so a listen server counts as not a client.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)

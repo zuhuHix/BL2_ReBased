@@ -37,6 +37,8 @@ classes share one body, `Pawn`'s. Other classes were not read; they may keep `Ac
    - its skip flag is clear. That is the same collision-flag bit the trace filters skip on (NATIVE_SPAWN_PLACEMENT.md
      section 7); its name is still unresolved. The layout tool calls that bit `BulletListener`, which does not fit its
      use, so the name is not used here. The port cannot read it (section 5, step 5).
+     **Superseded** by NATIVE_SPAWN_TRACE_FILTER.md section 4: the bit reads as `BulletListener` (inferred), and its
+     section 7, step 6 answers the objection.
 2. **No qualifying component:** the box stays all zeros.
 3. **The cylinder:**
    - the half height is half the box's height;
@@ -88,6 +90,8 @@ before the spawn's first write, so a refusal here is clean (no prefix).
    6. **The skip flag:** the port cannot read it (`ow_world::trace_filter::SKIP_FLAG`). An entry that passed steps 2
       to 5 is `NotYet { NotRead }` with that text, marked as in step 3. This is decided only after the primitive,
       `bAttached` and `CollideActors` tests pass, in that order.
+      **Superseded** by NATIVE_SPAWN_TRACE_FILTER.md section 7, steps 4 and 6: read `BulletListener`; set is skipped,
+      clear passes (UNVERIFIED).
    7. **`Bounds`** (origin and box extent) of each entry left, joined into the box.
 
    A field the classes do not declare is bad data: `VmError::Script` naming the field, as the port's actor field reads

@@ -31,3 +31,12 @@ behaviour only:
 **Clean room.** Nothing is implemented here. The raw analysis stays under ignored `local/analysis/`. No real-game
 session took place, so every rule is **UNVERIFIED**; the note lists four bl-sdk checks. No code, test, dependency or
 parsing change.
+
+**Review r1 of #502:**
+- The filter writes nothing, but link 9's refusal is marked: the extent loads and two committed spawns come first.
+- In the port the owner is the walked actor, because the spawn never sets a component's owner field.
+- The spawn is named (the third, a `WillowAIPawn`), with the three live actors its walk visits. The encroachment stop
+  needs the live pawn's `bCollideActors` after `PreBeginPlay`.
+- Supersede pointers are added in NATIVE_SPAWN_PLACEMENT.md, NATIVE_SPAWN_EXTENT.md and the index row, and the
+  `BulletListener` objection is answered with the bit-30 exception.
+- Terrain stays Unsupported first. `bAttached` clear alone is not an answer, because detach was not read.
