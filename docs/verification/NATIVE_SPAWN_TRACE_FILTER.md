@@ -154,7 +154,7 @@ row marked depends on what ran before it:
 
 Link 9 meets both: its third spawn comes after two committed spawns, and the extent loads run first. So link 9's
 refusal is marked. A refusal is unmarked only in a first spawn that loads nothing.
-1. **The controller rows.** Add `Engine.Controller`, `Engine.PlayerController`, `Engine.GamePlayerController` and
+1. **The controller rows.** Add `Engine.Controller`, `Engine.PlayerController`, `GameFramework.GamePlayerController` (the installed packages' path) and
    `WillowGame.WillowPlayerController`, exact classes only, to the read rows as the `Actor` row. Any other class still
    needs its own reading.
 2. **The per-component test** (section 2) replaces the per-component `NotYet` (not read).
