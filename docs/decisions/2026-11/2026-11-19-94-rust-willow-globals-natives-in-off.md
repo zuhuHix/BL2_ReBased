@@ -100,8 +100,9 @@ here answers it. The installed gate at 71f80ca1 gave the same rows as above.
     concrete class.
   - Then it reads values: `DroppedPickupClass` from the loaded default, `TheGlobalsDefinition`, and a check that the
     held definition is of the set-up's class.
-  - So the order is: the world's globals object and its class (the slot and the instance's class), then every
-    declaration, then the values.
+  - So, for the globals fields, the order is: the world's globals object and its class (the slot and the instance's
+    class), then their declarations, then their values. This is not a claim about the whole preflight:
+    `DroppedPickupClass` is read from the loaded weapon default before the globals checks run.
 - **A lazy definition handle** is a named `NotYet { NotRead }` in `GetGlobalsDefinition` and `GetDropLifeSpanType`,
   checked with `DefStore::is_unloaded`, with no load (a lazy load is a write). No synthetic fixture makes a store
   handle unloaded cheaply here, so that guard has no test of its own.
@@ -111,4 +112,14 @@ here answers it. The installed gate at 71f80ca1 gave the same rows as above.
   `GlobalsDefinition` class is resolved only for a non-empty holder.
 - **Tests:** globals 11 (new: `AddPickup` on a list of another element class, and a same-named struct that is not
   `RarityLevelColor`).
+
+**Review r2 of #476** (rebased onto main after #467 landed, then one fix commit):
+- **The rebase.** Main's `look` test is kept beside the globals-preflight test. Main's typed `find_object_t` is reused
+  for the globals preload; the second copy is gone. Main's pickup-targeting behaviour is unchanged.
+- **The set-up validates the holder before writing.** `pickup_world` runs the preflight's own `globals_schemas` on
+  the new `WillowGlobals` before it writes `TheGlobalsDefinition`. A holder declared with the wrong type is then the
+  note's `VmError::Script`, not a failed write.
+- **The shared runner keeps its diagnostics.** `--equip-run`'s `run_world` and `place_world_info` are main's string
+  forms again. The typed copies (`run_world_t`, `place_world_info_t`) serve only the Off pickup gate's set-up.
+- **The ordering claim** above is scoped to the globals fields.
 

@@ -144,10 +144,48 @@ fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>]) 
 
 /// The run's world (module documentation).
 fn run_world(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, String> {
-    run_world_t(cooked, mode).map_err(|e| vm_text(&e))
+    use ow_balance::types::{
+        AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
+        Playthrough,
+    };
+    let defs = DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, mode)
+        .map_err(|e| error_text(&e))?;
+    let attrs = AttributeSystem::standard().map_err(|e| error_text(&e))?;
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode);
+    ow_vm::natives_core::register(&mut vm).map_err(|e| vm_text(&e))?;
+    let snapshot = BalanceSnapshot::new(
+        Playthrough::NORMAL,
+        OpLevel::new(0).map_err(|e| error_text(&e))?,
+        PlayerCount::SINGLE,
+        ExpLevel::new(1),
+        GameStage(1),
+        AwesomeLevel::new(0),
+        LevelCapUpgrades::ALL,
+    )
+    .map_err(|e| error_text(&e))?;
+    let combat = ow_combat::hit::Pack;
+    let inventory = ow_inventory::manager::Pack;
+    let packs: [&dyn ow_vm::api::NativePack; 2] = [&combat, &inventory];
+    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs)
+        .map_err(|e| error_text(&e))?;
+    place_world_info(world)
 }
 
-/// [`run_world`] with its errors typed (the pickup world's set-up, review r1 of #476).
+/// The level's `WorldInfo`, from its class defaults (as `--combat-run` places one without its bridge): the pool
+/// native spawns its manager only in a world that has one.
+fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world::World, String> {
+    let info = make(&mut world.vm, "Engine.WorldInfo")?;
+    world
+        .actors()
+        .try_borrow_mut()
+        .map_err(|_| "the actor list is borrowed".to_string())?
+        .place_world_info(info)
+        .map_err(|e| vm_text(&e))?;
+    Ok(world)
+}
+
+/// [`run_world`] with its errors typed, for the Off pickup gate's set-up only (reviews r1 and r2 of #476): the shared
+/// runner keeps its own diagnostics.
 fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, VmError> {
     use ow_balance::types::{
         AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
@@ -175,12 +213,11 @@ fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World
         ow_world::world::WorldError::Vm(v) => v,
         other => script(error_text(&other)),
     })?;
-    place_world_info(world)
+    place_world_info_t(world)
 }
 
-/// The level's `WorldInfo`, from its class defaults (as `--combat-run` places one without its bridge): the pool
-/// native spawns its manager only in a world that has one.
-fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world::World, VmError> {
+/// [`place_world_info`] with its errors typed (the pickup gate's set-up).
+fn place_world_info_t(mut world: ow_world::world::World) -> Result<ow_world::world::World, VmError> {
     let info = make_t(&mut world.vm, "Engine.WorldInfo")?;
     world
         .actors()
@@ -197,6 +234,11 @@ struct EquipRun {
     /// `ExternalAttributeModifiers`' length after equip and after unequip.
     after_equip: usize,
     after_unequip: usize,
+}
+
+fn make(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
+    let c = vm.find_class(class).map_err(|e| vm_text(&e))?;
+    instantiate_from_defaults(vm, c).map_err(|e| vm_text(&e))
 }
 
 fn records(vm: &Vm, weapon: ObjRef) -> usize {
@@ -338,18 +380,12 @@ pub(crate) fn pickup_world(
     vm.log.extend(vm.defs.take_log());
     loaded.map_err(VmError::from)?;
     let definition_class = vm.space.heap.get(definition)?.class;
+    // The holder's declaration first, with the preflight's own validator, so a malformed schema is the note's
+    // VmError::Script, not a failed write (review r2 of #476).
+    ow_inventory::globals::globals_schemas(vm, globals, "the pickup world's set-up")?;
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
-}
-
-/// The installed object at `path`, its lookup's error kept typed: a definition store `NotYet` stays a `NotYet`
-/// (`VmError::from`); an object no package holds is a script error of the run.
-fn find_object_t(vm: &mut Vm, path: &str) -> Result<ObjRef, VmError> {
-    let p = ow_core::ObjectPath::parse(path).map_err(|e| script(format!("{path}: {e}")))?;
-    let found = vm.defs.find(&mut vm.space, &p);
-    vm.log.extend(vm.defs.take_log());
-    found.map_err(VmError::from)?.ok_or_else(|| script(format!("{path}: no package holds it")))
 }
 
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as
