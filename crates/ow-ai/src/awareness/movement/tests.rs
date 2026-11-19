@@ -557,3 +557,24 @@ fn register_binds_the_stock_paths_in_off_only() {
     register(&mut r.vm, record).unwrap();
     assert!(BOUND.with(|b| b.borrow().is_empty()), "nothing under Reference");
 }
+
+/// Review r1 of #397: `bParent` on a component with a parent is `NotYet` (the den's records are not modelled); without
+/// `bParent`, or on a lone component, the component's own list answers. The natives ask the awareness state, which
+/// knows no parent for a component it does not hold.
+#[test]
+fn b_parent_on_a_component_with_a_parent_is_not_yet() {
+    let mut r = start();
+    let c = r.make("ToyComponent");
+    let a = r.make("ToyHandle");
+    let ra = r.make("ToyRecord");
+    r.set(ra, "Target", Value::Object(Some(a)));
+    r.set(c, "Targets", Value::array(vec![Value::Object(Some(ra))]));
+    let parent = record_for_parent(&mut r.vm, c, Some(a), true, true).unwrap_err();
+    assert_eq!(missing(parent), Missing::NotPorted);
+    assert_eq!(record_for_parent(&mut r.vm, c, Some(a), false, true).unwrap(), Value::Object(Some(ra)), "no bParent");
+    assert_eq!(record_for_parent(&mut r.vm, c, Some(a), true, false).unwrap(), Value::Object(Some(ra)), "a lone component");
+    assert_eq!(record_for_parent(&mut r.vm, c, None, true, true).unwrap(), Value::Object(None), "no actor");
+    assert!(!crate::awareness::vm::component_has_parent(&mut r.vm, c).unwrap(), "no awareness state: lone");
+    let got = r.call(c, "Core.ToyComponent.GetTargetRecordFor", vec![Value::Object(Some(a)), Value::Bool(true)]).unwrap();
+    assert_eq!(got, Value::Object(Some(ra)), "through the native, lone");
+}

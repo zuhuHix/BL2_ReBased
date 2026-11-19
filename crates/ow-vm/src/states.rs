@@ -1336,7 +1336,9 @@ pub fn process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmEr
 /// lane W7-AI part 3, decision 2026-11-19-16): as [`process_state`], with two differences the note reads: the fifth
 /// state change in one step ends it ([`MAX_ACTION_SEQUENCE_RESTARTS`] restarts), and code runs only while the
 /// action's `bInitialized` stays set (checked before each run and after each statement; the pending latent poll
-/// still runs first). The note's guard of a million statements is the VM's own step budget here. The parent notice
+/// still runs first). The note's guard (more than a million statements in one step clears the code and ends the step)
+/// is not that rule here: the VM's per-run step budget stands in for it, stricter, and ends the run with a step-limit
+/// error instead. The parent notice
 /// when the code runs out is the caller's. UNVERIFIED in the running game.
 pub fn process_action_sequence(vm: &mut Vm, action: ObjRef, delta: f32) -> Result<(), VmError> {
     let class = vm.space.heap.get(action)?.class;
@@ -1495,6 +1497,14 @@ pub(crate) fn yields(vm: &mut Vm, o: ObjRef, no_loop: bool) -> Result<bool, VmEr
     let stop = if destroyed || moved {
         Stop::Moved
     } else if !gate_open(vm, o, gate)? {
+        if !no_loop {
+            return Err(NotYet::not_read(
+                "an action's bInitialized cleared inside a foreach of its state code: how the loop survives the \
+                 stop",
+                RECORD,
+            )
+            .into());
+        }
         Stop::Gated
     } else if latent {
         if !no_loop {
@@ -1819,6 +1829,8 @@ mod tests {
         let items = t.prop("Array", mach, "Items", 0, inner);
         t.p.set_outer(inner, items);
         let item = t.prop("Int", mach, "Item", 0, 0);
+        // The action-sequence step's gate (review r1 of #397).
+        let initialized = t.prop("Bool", mach, "bInitialized", 0, 0);
         let ids = Ids { trace, arg };
         for (name, text) in [
             ("PausedState", "Pa;"),
@@ -1980,6 +1992,24 @@ mod tests {
             finish(&mut t, a, &[("Begin", begin)])
         };
         state(&mut t, mach, "F", 0, Some(&code_f));
+
+        // G: Begin: foreach Items(Item) { bInitialized = false; } Stop.
+        let code_g = {
+            let mut a = Asm::new();
+            let begin = a.here();
+            a.stmt().raw(&[0x58]).instance(items).instance(item).raw(&[0]);
+            a.instance(item);
+            let at = a.bytes.len();
+            a.w(0);
+            a.stmt().raw(&[0x14]).instance(initialized).raw(&[0x28]);
+            a.stmt().raw(&[0x31]);
+            let end = u16::try_from(a.here()).unwrap();
+            a.stmt().raw(&[0x30]);
+            a.bytes[at..at + 2].copy_from_slice(&end.to_le_bytes());
+            a.stmt().raw(&[0x08]);
+            finish(&mut t, a, &[("Begin", begin)])
+        };
+        state(&mut t, mach, "G", 0, Some(&code_g));
 
         // X / Y: each one's BeginState goes to the other (no end).
         let (name_x, name_y) = (t.p.name("X"), t.p.name("Y"));
@@ -2500,6 +2530,25 @@ mod tests {
             .unwrap();
         r.goto(m, &["F"]);
         assert_eq!(not_yet(process_state(&mut r.vm, m, DT)).missing, Missing::NotRead);
+    }
+
+    /// Review r1 of #397: an action step whose `bInitialized` is cleared inside a `foreach` cannot leave the loop's
+    /// position behind without its iterator: `NotYet`, as a latent call or a `PushState` there is.
+    #[test]
+    fn a_gate_cleared_inside_a_foreach_of_an_action_step_is_not_read_yet() {
+        let mut r = start(ParityMode::Off);
+        let m = r.mach();
+        let class = r.vm.space.heap.get(m).unwrap().class;
+        let items = r.vm.space.prop(class, "Items").unwrap();
+        r.vm.space
+            .write(m, PropAddr::scalar(items), Value::array(vec![Value::Int(1), Value::Int(2)]))
+            .unwrap();
+        let gate = r.vm.space.prop(class, "bInitialized").unwrap();
+        r.vm.space.write(m, PropAddr::scalar(gate), Value::Bool(true)).unwrap();
+        r.goto(m, &["G"]);
+        let n = not_yet(process_action_sequence(&mut r.vm, m, DT));
+        assert_eq!(n.missing, Missing::NotRead);
+        assert!(n.what.contains("bInitialized cleared inside a foreach"), "{n}");
     }
 
     #[test]
