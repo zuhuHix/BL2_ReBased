@@ -25,10 +25,10 @@ runs inside the pickup's spawn, after the run's first write.
 | `WillowGlobals.GetWillowGlobals()` (static) | the engine's one globals object; None when the engine holds none | none | high | UNVERIFIED |
 | `GearboxGlobals.GetGearboxGlobals()` (static) | the same object, by the same read | none | high | UNVERIFIED |
 | `WillowGlobals.AddPickup(Pickup)` | appends the pickup to the globals' `PickupList` | `PickupList` | high | UNVERIFIED |
-| `WillowGlobals.GetGlobalsDefinition()` | the globals' `TheGlobalsDefinition` when it is a `GlobalsDefinition`; otherwise loads the configured one first (section 4) | `TheGlobalsDefinition`, once | high | UNVERIFIED |
+| `WillowGlobals.GetGlobalsDefinition()` | the globals' `TheGlobalsDefinition` when it is a `GlobalsDefinition`; otherwise loads the configured one first (section 4) | on the first load only: `TheGlobalsDefinition`, and a running index written into each numbered challenge of the definition's `ChallengeList` (section 4, step 3) | high | UNVERIFIED |
 | `GlobalsDefinition.GetDropLifeSpanType(int)` | the drop life-span kind of the first rarity band that holds the given rarity level; 3 when none does | none | high | UNVERIFIED |
 | `GearboxGlobals.GetPopulationMaster()` | the globals' `ThePopulationMaster`, as it is | none | high | UNVERIFIED |
-| `WillowGlobals.RemovePickup(Pickup)` | removes every entry of the pickup from `PickupList`, after the two global events (NATIVE_PICKUP.md section 6) | `PickupList` | medium for the events, high for the removal | UNVERIFIED |
+| `WillowGlobals.RemovePickup(Pickup)` | dispatches `OnPickupDetached`, and `OnAllPickupsDetached` when the pickup was the last on its `Base`, then removes every entry of the pickup from `PickupList` (section 6.3, step 7) | `PickupList` | medium for the events, high for the removal | UNVERIFIED |
 
 ## 1. Where the globals are reached on the pickup path
 
@@ -63,7 +63,7 @@ The script calls the globals in these places on the way links 6 and 7 take. Each
 When a getter answers None, script does not stop. The context call is skipped with the engine's "accessed none"
 warning, and a skipped call that would return a value gives that type's zero. The game never shows this on the
 pickup path, because the globals object exists from start-up (section 2). A port that answers None would therefore
-skip `AddPickup` silently. That is why section 6 does not answer None.
+skip `AddPickup` silently. That is why section 6 does not answer None for either getter.
 
 ## 2. GetWillowGlobals and GetGearboxGlobals: how the object is found
 
@@ -119,52 +119,130 @@ skip `AddPickup` silently. That is why section 6 does not answer None.
 
 These follow the hub's rulings for the pickup drivers:
 - preflight the cheap and certain before any write;
-- a `NotYet` after the run's first write is terminal, with the "stopped after partial writes" prefix and its kind kept;
-- there is no Off rollback;
-- other errors pass through unchanged.
+- after the run's first write, a refusal keeps its typed outcome. A `NotYet` stays `VmError::NotYet` with its kind and
+  record, its text gains the "stopped after partial writes" prefix, and every write already made stays in place (no
+  Off rollback). Any other error passes through unchanged;
+- the gate grades by the `VmError` variant, never by text.
 
-The pickup's spawn is after the run's first write (the gun's creation), so every `NotYet` below that the run reaches
-is terminal. That is why the globals object belongs in the preflight.
+The pickup's spawn comes after the run's first write (the gun's creation). So everything the route needs that can be
+known before that write belongs in the preflight, and the call-time guards below are only for what cannot.
 
-1. **The world's globals object, before any write.** The world the driver runs in must hold one `WillowGlobals`
-   instance, made at world set-up and kept for the run. Check that it exists in the drivers' preflight. Without one,
-   `GetWillowGlobals` is a `NotYet` of kind `LayerAbsent` ("the world's globals object", the world set-up that makes
-   it). It is not None: None would let `PostBeginPlay` skip `AddPickup` silently. The port already makes such an
-   object in the mission bridge's world and records it through `WorldQuery::set_globals`. Whether the equip run's
-   world gets the same one is the implementer's choice.
-2. **`GetWillowGlobals` and `GetGearboxGlobals`:** answer that object, the same on every call. They write nothing.
-3. **`AddPickup(P)`:** append `P` as given, None included, at the end of the object's `PickupList`, with no duplicate
-   check and no event. If the class declares no `PickupList`, or declares it as something other than a dynamic array
-   of object references, that is a data error, raised before the append.
-4. **`GetGlobalsDefinition`:** answer `TheGlobalsDefinition` when it holds a `GlobalsDefinition`. The lazy branch
-   (section 4, steps 1 to 3) writes the challenge list in a way not read here, so Off does not run it at call time.
-   - Fill `TheGlobalsDefinition` at world set-up with the installed `GD_Globals.General.Globals`, so the call is a
-     read.
-   - If it is still not a `GlobalsDefinition` at call time, answer a `NotYet` of kind `NotRead` ("the globals
-     definition's first load, which numbers the challenge list").
-   - The port's mission bridge already answers this native with the installed object, so its loading can be reused.
-5. **`GetDropLifeSpanType(L)`:** section 5's rule, a pure read. A `RarityLevelColors` that is not declared as a
-   dynamic array of that struct is a data error.
-6. **The HUD loops** (`AddPostRenderedActor`, `RemovePostRenderedActor`): they run only for a local player
-   controller whose `myHUD` is a `WillowHUD`. The headless world has none, so the loops call nothing. No new answer
-   is needed.
-7. **`GetPopulationMaster`:** answer the globals' `ThePopulationMaster` as it is. A None answer makes `Destroyed`
-   skip `RemoveSpawnedActor`, as in the game. Whether the headless world should hold a population master is not
-   settled here (open question 3).
-8. **`RemovePickup(P)`:** remove every entry equal to `P` from `PickupList`, keeping the others in order. The two
-   global events of NATIVE_PICKUP.md section 6 come first. Their dispatch was read only at medium confidence, so until
-   it is ported, the events are a `NotYet` of kind `NotRead` raised before the removal, so the native makes no write
-   before it. That `NotYet` is terminal by the run's rule, because the destroy comes after the first write.
+**The typed outcomes used below.**
+- *Layer absent:* `VmError::NotYet`, kind `LayerAbsent`, record this note.
+- *Not read:* `VmError::NotYet`, kind `NotRead`, record this note.
+- *Data error:* `VmError::Script`, naming the native, for a declared layout of the wrong shape. This is the same
+  variant the inventory definition natives use for a malformed declaration.
 
-**Which native the run reaches next**, by the script order of section 1 once the two getters answer:
+### 6.0 What `TheGlobalsDefinition` is
+
+It is an ordinary script field, not a native-only member. It is not declared on `WillowGlobals` itself, which is why a
+look at `WillowGlobals`' own fields finds only `DefaultGlobalsDefinitionName`.
+- **Where it is declared:** on `GearboxFramework.GearboxGlobals`, the parent class of `WillowGame.WillowGlobals`.
+  `WillowGlobals` inherits it. Read from the installed `GearboxFramework.upk` export table: an `ObjectProperty` named
+  `TheGlobalsDefinition` whose outer is the `GearboxGlobals` class. Beside it, `ThePopulationMaster` is another
+  `ObjectProperty` on the same class.
+- **Its declared type:** an object reference to `GearboxFramework.GearboxGlobalsDefinition`. The installed
+  `WillowGame.GlobalsDefinition` class has `GearboxGlobalsDefinition` as its parent, so a `GlobalsDefinition` fits the
+  field. The getter's own test is stricter than the type: section 4's class check asks for `GlobalsDefinition`.
+- **`DefaultGlobalsDefinitionName`** (a string, declared on `WillowGlobals`) is not the holder. It is the configured
+  object name that section 4's first load reads, and Off never runs that load.
+- **The native getter reads and writes this field.** That is section 4's reading, and the live checks below confirm
+  it: the field read through the SDK must be the object the getter returns. Until then it is UNVERIFIED.
+
+**How Off fills it:** look the field up on the instance's class through its parent chain, not on `WillowGlobals`' own
+declarations. Then write the object reference of the installed `GD_Globals.General.Globals` into it at world set-up
+(6.1, step 2), as a normal property write on the instance. A port whose class lookup stops at the most-derived class
+will miss the field. That is a lookup bug, not a missing field, and must not be answered by storing the definition
+anywhere else (a side table, bridge state, or `DefaultGlobalsDefinitionName`).
+
+### 6.1 World set-up (before the run)
+
+The world the pickup driver runs in must, at set-up:
+1. make one `WillowGame.WillowGlobals` instance and record it as the world's globals object (the port's
+   `WorldQuery::set_globals` holds such a slot);
+2. **write** the installed `GD_Globals.General.Globals` into that object's `TheGlobalsDefinition` field, the field
+   inherited from `GearboxGlobals` (section 6.0).
+   - The mission bridge's loader (`ow-mission`'s `globals_definition`) finds the same object but caches it in bridge
+     state only. Reusing it alone leaves `TheGlobalsDefinition` unset, so `GetGlobalsDefinition` would meet the first
+     load of section 4.
+   - The loader may be reused to find the object, but the field must be written.
+   - **Preloading serves the pickup route's reads only.** The challenge numbering of the first load (section 4,
+     step 3) stays unimplemented. In the game it runs at that first load; in the port it does not run at all, and no
+     answer here may stand in for it.
+3. leave `ThePopulationMaster` (declared on `GearboxGlobals`) at None. This is the supported headless fixture's
+   value (section 6.3, step 6).
+
+### 6.2 The drivers' preflight (before the run's first write)
+
+Each item is checked before the gun is made. Each failure is returned as it is, with no prefix, because nothing has
+been written yet.
+1. **The globals instance:** the world records a globals object. None recorded: *layer absent*, "the world's globals
+   object".
+2. **Its class:** the object is a `WillowGame.WillowGlobals`, or a subclass. Otherwise: *data error*.
+3. **The definition:** `TheGlobalsDefinition` holds an object whose class is `GlobalsDefinition` or a subclass. None:
+   *not read*, "the globals definition's first load, which numbers the challenge list". The world set-up of 6.1 did
+   not fill it, and Off does not run that load. Another class: the same *not read*, because the game would reload in
+   that case too.
+4. **The schemas the route reads,** on the declared classes:
+   - `PickupList` on the globals' class: declared, and a dynamic array of object references. Otherwise: *data error*;
+   - `RarityLevelColors` on the definition's class: declared, and a dynamic array of the `RarityLevelColor` struct.
+     That struct must declare `MinLevel` and `MaxLevel` as ints and `DropLifeSpanType` as a byte. Otherwise: *data
+     error*;
+   - `ThePopulationMaster` on the globals' class: declared, and an object reference. Otherwise: *data error*.
+   - `TheGlobalsDefinition` on the globals' class: declared, through the parent chain (section 6.0), and an object
+     reference. Otherwise: *data error*. Check this schema before step 3 reads the field.
+
+### 6.3 The natives, at call time
+
+Only what cannot be known before the run's first write is checked here.
+1. **`GetWillowGlobals` and `GetGearboxGlobals`:** each answers the world's globals object, the same on every call,
+   and writes nothing. **With no world globals object** (a world the preflight did not check), each answers *layer
+   absent*, "the world's globals object". Neither answers None, because None would let `PostBeginPlay` skip
+   `AddPickup` silently. On the pickup route this comes after the first write, so it carries the prefix.
+2. **`AddPickup(P)`:** appends `P` as given, None included, at the end of `PickupList`. It does no duplicate check
+   and fires no event. The schema was checked in the preflight. A world that skipped the preflight and fails the
+   schema gets the same *data error*, raised before the append.
+3. **`GetGlobalsDefinition`:** answers `TheGlobalsDefinition` when it holds a `GlobalsDefinition`. Otherwise it
+   answers 6.2 step 3's *not read*, with the prefix after the first write. Off never runs the first load.
+4. **`GetDropLifeSpanType(L)`:** section 5's rule, a pure read of the entries as they stand. The schema was checked
+   in the preflight.
+5. **The HUD loops** (`AddPostRenderedActor`, `RemovePostRenderedActor`): they run only for a local player
+   controller whose `myHUD` is a `WillowHUD`. The headless world has none, so they call nothing.
+6. **`GetPopulationMaster`:** answers `ThePopulationMaster` as it stands.
+   - **The supported fixture's value is None.** `Destroyed` then skips `RemoveSpawnedActor`, as the game does with
+     None.
+   - **A non-None master** (a world that set one) makes `Destroyed` call `RemoveSpawnedActor(Self, false)` on it.
+     That is a native of `PopulationMaster` (and of `WillowPopulationMaster`) not read here, so it answers *not read*,
+     "PopulationMaster.RemoveSpawnedActor". On the destroy path that comes after the first write, so it carries the
+     prefix.
+7. **`RemovePickup(P)`.** In the game, the native:
+   1. dispatches `OnPickupDetached`;
+   2. checks the pickup's `Base` (the actor it is based on). When there is a `Base`, it walks a list held by that
+      actor, each entry mapped to its pickup by an engine helper that was not read. It dispatches
+      `OnAllPickupsDetached` unless one of those entries is a pickup other than this one. So that event fires when
+      this was the last pickup on that holder. With no `Base`, it does not fire. Medium confidence: the list's name
+      and the helper were not read;
+   3. removes every entry equal to `P` from `PickupList`, keeping the others in order.
+
+   **Off answer:** the event dispatch is not ported, so the native answers *not read*, "the pickup events of
+   RemovePickup". It does so **before any dispatch and before any change to `PickupList`**, so the list still holds the
+   pickup. On the destroy path that comes after the first write, so it carries the prefix. A dropped pickup in the
+   slice has no `Base`, so once dispatch is ported it fires `OnPickupDetached` only.
+
+**The sequence of `make`, once the two getters answer** (section 1's script order):
 1. `AddPickup`;
-2. `Actor.LocalPlayerControllers` (bound in the port);
-3. the pickup's `InitializeFromInventory`, with `GetManufacturer` and `GetInventoryDefinition` (both bound);
-4. `MissionTracker` reads only for a mission item;
-5. `GetGlobalsDefinition` and `GetDropLifeSpanType`;
-6. `SetTimer` with the drop's life span;
-7. `InventoryAssociated` (the mesh and physics set-up, not read here);
-8. `SetPickupability`.
+2. `Actor.LocalPlayerControllers`, bound in the port; no HUD, so nothing is called;
+3. the pickup's `InitializeFromInventory`, with `GetManufacturer` and `GetInventoryDefinition` (both bound). The
+   `MissionTracker` reads happen only for a mission item;
+4. `InitializeDropLifespan`:
+   - `GetGlobalsDefinition` and `GetDropLifeSpanType` give the kind;
+   - the span is the definition's `PickupLifeSpan` when that is above 0, otherwise the kind's (section 5);
+   - the actor's `LifeSpan` is set to the span;
+   - **only when the span is above 0**, a one-shot timer `ShrinkPickupBeforeDestruction` is set to fire
+     `PickupShrinkDuration` before the span ends, so after the span minus `PickupShrinkDuration`. With a span of 0
+     there is no timer;
+5. `InventoryAssociated` (the mesh and physics set-up, not read here);
+6. `SetPickupability`, with `TryToSetInteractParticles` reading `GlobalsDefinition.PartPickup`.
 
 What follows in `touch` and `key` is NATIVE_PICKUP.md's.
 
@@ -172,24 +250,49 @@ What follows in `touch` and `key` is NATIVE_PICKUP.md's.
 
 1. Where and when the engine creates the globals instance and stores its pointer (not found, as before).
 2. What the first load of the globals definition writes into the challenge list (which fields, and what the two kinds
-   mean), and whether script reads it.
-3. Whether a headless slice world should hold a population master, so that `Destroyed`'s `RemoveSpawnedActor` runs.
-4. The event dispatch inside `RemovePickup` (medium in NATIVE_PICKUP.md): what listens to `OnPickupDetached` and
-   `OnAllPickupsDetached`.
+   mean), and whether script reads it. The port does not implement it (section 6.1).
+3. Whether a later slice world should hold a population master. For now the supported fixture holds none
+   (section 6.3, step 6).
+4. The event dispatch inside `RemovePickup`: what listens to `OnPickupDetached` and `OnAllPickupsDetached`, and the
+   list and helper behind the same-holder test (section 6.3, step 7).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
+- **The definition's field.** On the globals object, read the property `TheGlobalsDefinition` by name through the
+  SDK. Expect it found on `GearboxGlobals` (not on `WillowGlobals`), and expect its value to be the same object
+  (identity) that `GetGlobalsDefinition()` returns (section 6.0).
 - **One object.** Call `GetWillowGlobals()` and `GetGearboxGlobals()` from two different classes, on the title screen
   and in a map. Expect the same `WillowGlobals` object every time.
-- **The pickup list.** Read `PickupList` before and after dropping a gun. Expect one more entry, at the end, that is
-  the new pickup. Call `AddPickup` twice on one scratch pickup and expect two entries. Take the pickup and expect
-  every entry of it gone, with the others in order.
-- **The definition.** Read `TheGlobalsDefinition` at the title screen and in a map. Expect `GD_Globals.General.Globals`,
-  and compare it with `GetGlobalsDefinition()`.
-- **The life-span kind.** Read `RarityLevelColors`, then call `GetDropLifeSpanType` for a level inside each band,
-  for one between bands if any, and for one above the last. Expect the band's kind, and 3 outside every band. On a
-  dropped gun, compare `LifeSpanType` and `LifeSpan` with section 5.
-- **The population master.** On a dropped pickup, read `GetGearboxGlobals().GetPopulationMaster()`, and hook
-  `RemoveSpawnedActor` while the pickup is taken.
+- **The definition's load, cold, then before, after and repeated.**
+  - From a cold start (the game just launched, before the title screen's first globals-definition read, if a hook can
+    run that early), read `TheGlobalsDefinition`. Expect None, or the definition if an earlier engine step loaded it.
+  - Hook `GetGlobalsDefinition`. On its first call, read `TheGlobalsDefinition` and the challenge list's indices
+    before and after.
+  - Call it again, and expect the same object and no further change to the indices.
+  - If the hook cannot run before the first load, the cold capture is an open verification gap.
+- **The pickup list on add.** Read `PickupList` before and after dropping a gun: expect one more entry, at the end,
+  that is the new pickup. Call `AddPickup` twice on one scratch pickup: expect two entries. Call `AddPickup(None)`:
+  expect one more entry, holding None.
+- **The pickup list on removal, with the events sampled.** Hook `OnPickupDetached` and `OnAllPickupsDetached` where
+  the SDK exposes them (they are global events; otherwise hook the callers it can see). In each hook, read
+  `PickupList`.
+  - **A pickup with no `Base`** (a dropped gun): expect `OnPickupDetached` only, with the pickup still in the list
+    when it fires, and gone after `RemovePickup` returns.
+  - **Two pickups on one holder** (two items in one opened container, if they share a `Base`): take one, and expect
+    `OnPickupDetached` only. Take the other, and expect both events.
+  - Expect every entry of the removed pickup gone, and the others in order. Where no shared-holder case can be set up,
+    that case is an open verification gap.
+- **The rarity bands.** Read `RarityLevelColors`. Then call `GetDropLifeSpanType` for:
+  - a level inside each band;
+  - each band's `MinLevel` and `MaxLevel` (both ends are included);
+  - a level between bands, if any, and one above the last band;
+  - a level held by two overlapping bands, if any exist (expect the earlier band's kind).
+
+  Expect the band's kind, and 3 outside every band. On a dropped gun, compare `LifeSpanType`, `LifeSpan` and the timer
+  with section 6.3's sequence. If no bands overlap in the installed data, the overlap case is open.
+- **The population master.** Read the `ThePopulationMaster` field and `GetPopulationMaster()`, and expect the same
+  object (identity). Do it in a map with a population (non-None expected), and on the title screen (None, if the game
+  holds none there). Hook `RemoveSpawnedActor` while a pickup is taken in the map. The None case on the destroy path
+  may not be reachable live; it then stays open.
 - **Accessed none.** Not checkable live without breaking the globals, which the game never lacks; it stays a script
   rule.

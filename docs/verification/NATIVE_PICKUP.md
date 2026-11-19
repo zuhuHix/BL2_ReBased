@@ -200,6 +200,9 @@ An observed empty touched slot is not one of these: the key takes nothing.
   `OnAllPickupsDetached` when no other pickup of the same holder is left (read with medium confidence);
 - runs the base `DroppedPickup.Destroyed`;
 - removes it from each local player's HUD post-render list and from the population master.
+- The headless answers for this path (the population master's fixture value, a non-None master, and when
+  `OnAllPickupsDetached` fires: only when the pickup was the last one on its `Base`) are in NATIVE_WILLOW_GLOBALS.md,
+  section 6.3 (decision 2026-11-19-85).
 
 ## 7. For an implementer, in the port's terms
 
