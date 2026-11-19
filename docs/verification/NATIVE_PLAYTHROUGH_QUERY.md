@@ -106,6 +106,9 @@ mission bridge's `MissionTracker.GetAllMissions`: `NotYet` (layer absent), becau
   the installed package is -1. A world fixture that tracked it would answer -1, which takes the fallback, and so
   section 2's query, without the list. Whether the running game assigns that number at run time was not read (open
   question 4). This lane does not propose that fixture.
+  - **Correction (NATIVE_MISSION_LIST_BUILD.md):** the tracker's build sets every definition's `MissionNumber` to -1
+    and then numbers the main chain at run time, so the stored -1 says nothing about a main-chain mission's number in
+    the running game. This argument no longer holds for a main-chain mission (UNVERIFIED).
 - **What moves the slice:** the tracker's whole `MissionList` in the bridge's world (open question 3), then section
   2's query and section 1's condition as Off answers.
 
@@ -162,12 +165,12 @@ question 3).
    is used: the next step reads the world's `WorldInfo` from it. This agrees with NATIVE_CONTROLLER_HELPERS.md (point 4
    of its conventions, and its `GetCurrentPlaythrough` section). The code that writes it was not read in detail. No Off
    refusal follows from this.
-3. **Not found:** how the tracker's `MissionList` is built. Known from the existing notes: one record per mission
-   definition, kept sorted by the definition's full name, found by a binary search (NATIVE_MISSION_OBJECTIVES.md,
-   NATIVE_SAVE_LOAD.md). The tracker's functions that use the list were surveyed in this pass. None of them adds
-   records, so the builder is elsewhere (the tracker's set-up path, not reached here).
-4. **UNVERIFIED:** whether a mission's `MissionNumber` is assigned at run time. The plot mission tracked in the golden
-   trace stores -1 in the installed package.
+3. **Read, UNVERIFIED (NATIVE_MISSION_LIST_BUILD.md):** how the tracker's `MissionList` is built. One record per
+   mission definition, found by a binary search, as the existing notes say.
+   - **Correction:** the order is not "the definition's full name". It is the object name as the engine's name handle
+     compares it: name-table entry, then instance number.
+4. **Read, UNVERIFIED (NATIVE_MISSION_LIST_BUILD.md, section 3):** a mission's `MissionNumber` is assigned at run
+   time. The build resets every number to -1, then numbers the main chain and the side missions.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 

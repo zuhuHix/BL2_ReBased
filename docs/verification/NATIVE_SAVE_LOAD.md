@@ -185,7 +185,8 @@ player restarts at `LastVisitedTeleporter`; see `SetInitialTeleportDestination` 
   `SetTimer(0.01, false, 'InitializeWorldMissionState')`. Other script callers: `WillowGameReplicationInfo.SetCurrentPlaythrough`
   and `SetPlaythroughOverride` (on the primary controller) and `ResetInfiniteVaultHunterPlaythrough`.
 - **Reads:** the tracker's `MissionList` (one record per mission definition, kept sorted by the definition's full name, which
-  is how a record is found: a binary search), `DependentMissions`, the world's list of levels, the world's name, each mission
+  is how a record is found: a binary search; **correction:** the key is the object name as the engine's name handle
+  compares it, by name-table entry and then instance number, not the full name: NATIVE_MISSION_LIST_BUILD.md), `DependentMissions`, the world's list of levels, the world's name, each mission
   definition's `Dependencies`, `ObjectiveDependency`, `MissionWeapon`, `GameStageRegion`, `bCanBeFailed`, `SecondsToComplete`,
   `DefendMissionSetting`, `ObjectiveDefs`.
 - **Does (outcomes, in order):**

@@ -37,8 +37,8 @@ codes it from this note alone.
 ## 1. When it runs
 
 - The build is a native virtual method of `MissionTracker`. It overrides an engine `Actor` virtual whose base version
-  sets the actor's `CollisionType` from its collision flags, and the tracker's version builds the list, numbers the
-  missions, then calls that base version.
+  sets the actor's `CollisionType` from its collision flags. The tracker's version builds the list and numbers the
+  missions.
 - It is not an UnrealScript event: no script function of the tracker or its parents has this role.
 - **Not found:** which engine step calls that virtual (the actor's spawn, its load, or both), and whether it can run
   more than once in a session. A scan of the engine's calls through that method found only callers on other classes.
@@ -71,6 +71,9 @@ missions all get a record.
 first by the name's entry number in the engine's global name table, then by the name's instance number. It is
 **not** an alphabetical order of the text. The entry number is a run-time quantity: it depends on the order in which
 names entered the name table since the engine started (load order).
+- **Equal keys.** A new definition whose key equals an existing record's goes **before** the existing ones (read).
+  So among definitions with the same object name (in two packages), the one visited last comes first. The visit
+  order is the engine's global object order.
 - **Correction:** NATIVE_MISSION_OBJECTIVES.md ("The record lookup the first one shares") reads the lookup's
   comparison as "the engine's ordinary name ordering" without opening the comparison. The lookup and the build use the
   same key, so the lookup's order is this name-table order too. That note is fixed in place with a pointer here.
@@ -121,57 +124,70 @@ story number, grouped by the story mission they come after.
 - Every consumer that walks `GetAllMissions` "in list order" (NATIVE_MISSION_NUMBERS.md, section 1 step 3 and the
   first live check) inherits the name-table order.
 
-## 4. What a headless Off world must answer, step by step
+## 4. What a headless Off world answers, step by step
 
-For an implementer; the hub rulings of 2026-11-19 apply (preflight before writes, a lazy definition load counts as a
-write, no Off rollback, grade by typed `VmError` variant). Reference is unchanged. Each answer below is a
-recommendation of this note; the hub rules on it.
+For an implementer. The hub rulings of 2026-11-19 apply: preflight before writes, a lazy definition load counts as a
+write, no Off rollback, and grading by typed `VmError` variant. Reference is unchanged. The hub ruled on this note's
+round-1 review (#493 r1); the rules below follow that ruling.
 
-1. **The moment of the build** is not read (section 1). The port makes its tracker at world set-up, so the honest
-   place is the same set-up step, before any query reads the list, and once. That placement is a port choice, labelled
-   UNVERIFIED, and needs the hub's OK. A second build in one world is `NotYet` (not read), "a second run of the
-   tracker's list build".
-2. **The set of definitions** is "every `MissionDefinition` in memory". The port has no such set: its definition store
-   loads lazily, and which mission packages the game holds in memory at that moment is not recorded.
-   - Without a declared set: `NotYet` (layer absent), "the in-memory mission definition set".
-   - With one, the set-up loads it as the allowed preload and records which packages it came from. The build then
-     reads only definitions already loaded: a definition handle that would load on read is a lazy load, so a write, and
-     the build refuses with `NotYet` (not read) before its first write.
-   - Whether any declared set equals the game's in-memory set is UNVERIFIED until the bl-sdk count in check 1 below.
-3. **Preflight, before the first write:**
-   - the tracker's `MissionList` is declared as a dynamic array of `IMission.MissionData`;
-   - each definition is a `MissionDefinition` with readable `bPlotCritical`, `bGameStageLocked`, `MissionNumber`,
-     `GameStage`, `Dependencies`, `NextMissionInChain` and `DlcExpansion`, and each expansion has a readable
-     `MissionNumberBase`. Bad data is a script error naming the field;
-   - a dependency cycle among side missions, or a `NextMissionInChain` loop, is bad data found before any write: the
-     game's walk has no guard against either, and what it does then (endless recursion) is not behaviour to copy.
-4. **The writes, in the game's order:** for each definition, the three resets, then its record; then the numbering.
-   A `NotYet` after the first write is terminal with the "stopped after partial writes: " prefix, its kind and record
-   kept (decision 2026-11-19-80's rule).
-5. **The order key.** The engine's name-table entry order is a run-time quantity the port does not model.
-   - The port may hold the list in any order it can state, but must not present it as the game's order.
-   - An answer that does not depend on the order (the main chain's numbers with one root per group; a membership or
-     status lookup by identity; a maximum over completed plot-critical missions) can be given.
-   - An answer that does depend on it (side-mission numbers; `GetAllMissions`'s order; "the first in-progress
-     plot-critical mission in list order") is `NotYet` (layer absent), "the engine's name-table order of mission
-     names", unless the live read in check 2 below records the order for the installed game and a hub ruling adopts
-     it as data.
-6. **The second-pass edge** (section 3, step 6): a bucket where a dependency stands after its mission is
-   `NotYet` (not read), "a dependency that stands after its mission in the tracker's reorder pass".
+1. **The moment.** The list is built **once, at world set-up**, before any query reads it. The port makes its tracker
+   there. This placement is a port rule, labelled UNVERIFIED, because the engine step that runs the build was not found
+   (section 1).
+   - A second build in one world is `NotYet` (not read), "a second run of the tracker's list build".
+2. **The set.** It is every `MissionDefinition` export of the packages the set-up loaded.
+   - No declared set is needed.
+   - Whether this equals the game's in-memory set is UNVERIFIED until live check 1.
+3. **The world's own definitions.** The resets and numbers are written to the world's own definition objects (the
+   store is per world), so nothing leaks from one world to another.
+4. **Preflight, before the first write:**
+   - The tracker's `MissionList` must be declared as a dynamic array of `IMission.MissionData`.
+   - Each definition must be a `MissionDefinition` with readable `bPlotCritical`, `bGameStageLocked`, `MissionNumber`,
+     `GameStage`, `Dependencies`, `NextMissionInChain` and `DlcExpansion`. Each expansion must have a readable
+     `MissionNumberBase`. Bad data is a script error naming the field.
+   - **Reference targets.** Every `Dependencies` entry, `NextMissionInChain` and `DlcExpansion` must already be
+     loaded, else `NotYet` (not read), "a mission reference into a package the set-up did not load".
+     - Such a target sits in a package the set-up did not load. In the game, a loaded object's references load with
+       it, so the target would be in memory and in the list (UNVERIFIED).
+     - The port does not load it lazily (that would be a write). Adding its package to the set-up's load list cures
+       the stop.
+   - **Cycles.** A dependency cycle among side missions, or a `NextMissionInChain` loop, is bad data found before any
+     write. The game's walk has no guard against either, and what it does then (endless recursion) is not behaviour to
+     copy.
+   - **Equal keys** (section 2, "Equal keys"): two definitions with the same object name and instance number are
+     `NotYet` (not read), "the visit order of equal mission names". The insert side was read, but the visit order it
+     depends on is the engine's object order, which the port does not model.
+   - **A dry run of the numbering**, on the planned list and without writing, finds the second-pass edge (section 3,
+     step 6) before any write: `NotYet` (not read), "a dependency that stands after its mission in the tracker's
+     reorder pass".
+5. **The writes, in the game's order:** for each definition, the three resets, then its record; then the numbering.
+   - Anything that still stops after the first write is terminal: the "stopped after partial writes: " prefix, its
+     kind and record kept (decision 2026-11-19-80's rule).
+6. **The order key** (section 2) is approximated, UNVERIFIED, by the order in which names first enter the port's name
+   table:
+   1. the engine's own names;
+   2. then the packages in set-up load order;
+   3. within each package, its name-table order, counted only where a name enters for the first time;
+   4. then the instance number.
+   - Every loaded package counts, including packages with no missions, because they also add names.
+   - The key is the object **name**, not its path.
+   - This approximation is a ruling, not a `NotYet`: every order-dependent answer (`GetAllMissions`'s order,
+     side-mission numbers, "the first in-progress plot-critical mission in list order") uses it. Live check 2 would
+     confirm or correct it.
+7. **A `NotYet` at world set-up** (any of the above) is recorded with its kind and record, and surfaces at the first
+   read of the list. `GetAllMissions` then answers with that `NotYet`. Its kind is never changed.
 
-**What this changes for links 10 to 12 (reading at `origin/fix/rust-link10-mission-list` 3bb3f6de).** Link 10 drives
-3 of its 8 steps and stops at the accept, on the bridge's `GetAllMissions` `NotYet` (layer absent); links 11 and 12
-are blocked behind it. With this note, the list can be built in Off only once the hub rules on the build's moment
-(step 1) and a declared definition set (step 2). Even then, the Fire turn-in's playthrough checks walk the whole list,
-and `GetActiveMissionNumber`'s walk is order-dependent only when two plot-critical missions are in progress at once,
-which the slice's start state does not have (UNVERIFIED). The next implementer stop is therefore the hub's ruling on
-steps 1 and 2, not another native.
+**What this changes for links 10 to 12 (reading at `origin/fix/rust-link10-mission-list` 3bb3f6de).**
+- Today, link 10 drives 3 of its 8 steps and stops at the accept, on the bridge's `GetAllMissions` `NotYet` (layer
+  absent). Links 11 and 12 are blocked behind it.
+- The next stop is implementing this build. After that, links 10 to 12 stop at whatever the turn-in's playthrough walk
+  over the list reaches next.
 
 ## Open questions
 
 1. Which engine step calls the tracker's build (spawn, load, or both), and whether it runs more than once.
 2. Which `MissionDefinition` objects are in memory when it runs in Sanctuary (and so how many records the list has).
-3. The game's name-table order of the mission names, which fixes the list order and side-mission numbers.
+3. The game's name-table order of the mission names, which fixes the list order and side-mission numbers (the port's
+   approximation is section 4, step 6).
 4. The second pass's edge with a dependency after its mission (section 3, step 6).
 5. What the tracker is spawned by (no script or placed actor makes it).
 
