@@ -178,6 +178,23 @@ under the machine lock): 0 ok / 5 NotYet / 9 errors; link 8 1 of 2 driver steps,
 in `init`. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-130; logs under ignored `local/p2/483-followup/`.
 
+**SPAWN-COMPLETE part B (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). An Off
+spawn loads the unloaded definitions its new actor's own object properties point to, one level deep, before the actor
+joins the level list.
+
+Results:
+- `cargo test -p ow-world`: 222 passed / 0 failed / 5 ignored, with 2 new tests.
+- `cargo build --workspace`: clean.
+- `cargo test --workspace`: 2,446 passed / 0 failed / 46 ignored.
+- Installed Off `--slice-gate` strict (release build; #522 merged and `Engine.IsSplitScreen()` bound false, both
+  locally only, uncommitted; under the machine lock): 1 ok / 10 NotYet / 3 errors.
+  - The JSONL is byte-identical to the same build without this change.
+  - Link 1 is 0 of 1 driver step, still at `InitializePawnMeshes`' lazy-`BodyClass` `NotRead`: the body class arrives
+    through `BodySelectClass`'s script assignment, after the spawn.
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
 Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission screen's three calls in Off,
 from NATIVE_MISSION_NUMBERS.md (#473 at 0a32108b), in the hub's conservative form: the engine-wide condition is not
