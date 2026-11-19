@@ -14,10 +14,10 @@
 //!
 //! **The settled part, as functions** ([`base_toss`], [`forward_of`]), for the lane that answers question 3: the
 //! arithmetic once `F` is known, with the random direction's draws (three per try on the caller's generator, the
-//! loot path's one stream in Off; their axis order is UNVERIFIED, see [`random_direction`]). Single precision per
-//! operation. Draw order on that stream (review of #408): per pool, the pool's roll with each new inventory's two
-//! `GenerateUniqueID` draws and its parts roll inside it, then that pool's toss draws for its dropped items, then the
-//! next pool.
+//! loot path's one stream in Off; the first for x, the second for y, the third for z). Single precision per
+//! operation. Draw order on that stream (the note's "Draw order"): per pool the death roll considers, its firing
+//! `FRand`; for a firing pool, its roll with each new inventory's two `GenerateUniqueID` draws and its parts roll
+//! inside it; then the toss draws of each item dropped from that pool; then the next pool.
 
 use ow_core::num::{cos_f64, sin_f64, sqrt_f64};
 use ow_core::rand::Rand15;
@@ -33,7 +33,7 @@ use crate::hit::{bind_fn, this};
 pub const PAWN_TOSS: &str = "WillowGame.WillowPawn.GetItemTossVelocity";
 pub const AI_PAWN_TOSS: &str = "WillowGame.WillowAIPawn.GetItemTossVelocity";
 
-const ROTATION_OPEN: &str = "WillowPawn.GetItemTossVelocity: which rotation gives the forward direction (facing, view      or controller; NATIVE_LOOT_SPAWN.md open question 3)";
+const ROTATION_OPEN: &str = "WillowPawn.GetItemTossVelocity: which rotation gives the forward direction (facing, view or controller; NATIVE_LOOT_SPAWN.md open question 3)";
 
 /// Binds both natives in Off (module documentation); Reference binds nothing.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -52,7 +52,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
             .is_some_and(|e| e.iter().any(|v| matches!(v, Value::Object(Some(_)))));
         if any {
             return Err(NotYet::not_read(
-                "WillowAIPawn.GetItemTossVelocity toward an ItemTossTargetActors entry (ItemTossSpeed is                  identified by meaning only, and the vector for a flight time under 0.0001 is open question 3)",
+                "WillowAIPawn.GetItemTossVelocity toward an ItemTossTargetActors entry (ItemTossSpeed is identified by meaning only, and the vector for a flight time under 0.0001 is open question 3)",
                 RECORD,
             )
             .into());
@@ -96,11 +96,10 @@ fn length(v: [f32; 3]) -> f32 {
     sqrt_f64(f64::from(dot(v, v))) as f32
 }
 
-/// The random direction: three draws per try, each `rand x (1 / 32767) x 2 - 1`, retried until the point lies inside
-/// the unit ball, then normalised. The draws fill X, Y, Z in that order: which draw goes to which axis is not stated
-/// in the note yet (review of #408), so the order is UNVERIFIED. A point exactly on the sphere (squared length 1) is `Err`: whether it is inside
-/// is not read.
-pub fn random_direction(r: &mut dyn Rand15) -> Result<[f32; 3], &'static str> {
+/// The random direction: three draws per try, the first for x, the second for y and the third for z, each
+/// `rand x (1 / 32767) x 2 - 1`. A try is kept when its squared length is at most 1 (a point on the sphere's surface
+/// is kept), otherwise all three are drawn again; the kept point is normalised.
+pub fn random_direction(r: &mut dyn Rand15) -> [f32; 3] {
     let scale = 1.0f32 / 32767.0;
     loop {
         let mut v = [0.0f32; 3];
@@ -108,14 +107,9 @@ pub fn random_direction(r: &mut dyn Rand15) -> Result<[f32; 3], &'static str> {
             *c = f32::from(r.rand15()) * scale * 2.0 - 1.0;
         }
         let sq = dot(v, v);
-        if sq == 1.0 {
-            return Err(
-                "a random toss direction exactly on the unit sphere (inside or not is not read)",
-            );
-        }
-        if sq < 1.0 {
+        if sq <= 1.0 {
             let len = sqrt_f64(f64::from(sq)) as f32;
-            return Ok([v[0] / len, v[1] / len, v[2] / len]);
+            return [v[0] / len, v[1] / len, v[2] / len];
         }
     }
 }
@@ -128,15 +122,15 @@ pub fn base_toss(
     velocity: [f32; 3],
     fixed: bool,
     r: &mut dyn Rand15,
-) -> Result<[f32; 3], &'static str> {
+) -> [f32; 3] {
     if fixed {
-        return Ok([
+        return [
             forward[0] * FORWARD_SPEED,
             forward[1] * FORWARD_SPEED,
             forward[2] * FORWARD_SPEED + UP_SPEED,
-        ]);
+        ];
     }
-    let rd = random_direction(r)?;
+    let rd = random_direction(r);
     let along = dot(velocity, forward) + FORWARD_SPEED;
     let mut v = [
         forward[0] * along + rd[0] * RANDOM_SPEED,
@@ -148,7 +142,7 @@ pub fn base_toss(
         let k = MAX_SPEED / len;
         v = [v[0] * k, v[1] * k, v[2] * k];
     }
-    Ok(v)
+    v
 }
 
 #[cfg(test)]
@@ -181,7 +175,7 @@ mod tests {
     #[test]
     fn the_fixed_toss_draws_nothing() {
         let mut r = Seq(vec![], 0);
-        let v = base_toss([1.0, 0.0, 0.0], [999.0, 0.0, 0.0], true, &mut r).unwrap();
+        let v = base_toss([1.0, 0.0, 0.0], [999.0, 0.0, 0.0], true, &mut r);
         assert_eq!(v, [200.0, 0.0, 150.0]);
         assert_eq!(r.1, 0, "no draw");
     }
@@ -190,7 +184,7 @@ mod tests {
     fn the_random_direction_retries_outside_the_ball_three_draws_a_try() {
         // Try 1: (1, 1, 1), outside. Try 2: (0.5, 0, 0) roughly: 24575 -> 0.5000, 16383 -> -0.00003, twice.
         let mut r = Seq(vec![32767, 32767, 32767, 24575, 16383, 16383], 0);
-        let d = random_direction(&mut r).unwrap();
+        let d = random_direction(&mut r);
         assert_eq!(r.1, 6, "two tries, three draws each");
         assert!(
             (d[0] - 1.0).abs() < 1e-3 && d[1].abs() < 1e-3 && d[2].abs() < 1e-3,
@@ -204,7 +198,7 @@ mod tests {
     fn the_random_toss_adds_the_pawns_speed_and_caps_at_400() {
         // R straight up: (16383.5 is not a value; 16384 -> +0.00003, 32767 -> 1): close to (0, 0, 1).
         let mut r = Seq(vec![16384, 16384, 32766], 0);
-        let v = base_toss([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], false, &mut r).unwrap();
+        let v = base_toss([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], false, &mut r);
         // forward x 200 + R x 50 + (0, 0, 150): about (200, 0, 200), length about 283, not capped.
         assert!(
             (v[0] - 200.0).abs() < 0.01 && v[1].abs() < 0.01 && (v[2] - 200.0).abs() < 0.01,
@@ -212,7 +206,7 @@ mod tests {
         );
         // Running forward at 600: forward x 800, capped to length 400.
         let mut r = Seq(vec![16384, 16384, 32766], 0);
-        let v = base_toss([1.0, 0.0, 0.0], [600.0, 0.0, 0.0], false, &mut r).unwrap();
+        let v = base_toss([1.0, 0.0, 0.0], [600.0, 0.0, 0.0], false, &mut r);
         assert!((length(v) - 400.0).abs() < 1e-3, "{v:?}");
         assert!(v[0] > 380.0 && v[2] > 0.0);
     }
@@ -318,7 +312,7 @@ mod tests {
     fn a_real_generator_gives_a_unit_direction() {
         let mut r = CrtRand::new(7);
         for _ in 0..200 {
-            let d = random_direction(&mut r).unwrap();
+            let d = random_direction(&mut r);
             assert!((length(d) - 1.0).abs() < 1e-5);
         }
     }
