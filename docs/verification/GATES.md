@@ -4,9 +4,11 @@ Update this file in the commit that changes a number. Paste real output in repor
 
 **FIX-PHASELOCK-CAST part B (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5).
 `ActionSkill.OnActionSkillActivated` and `OnActionSkillDeactivated` bound in Off (Reference unbound). `cargo build
---workspace` clean; `cargo test --workspace` 1,880 passed / 0 failed / 42 ignored (four new `ow-skills` tests).
-C++ Release build clean; ctest at `-j 2` 173/173, 0 failed, 606.01 s; verify_packages 9 packages, all class bodies
-exact. Installed Phaselock test passes in both modes: in Off `OnActionSkillStarted` now stops at the unbound
+--workspace` clean; `cargo test --workspace` 1,880 passed / 0 failed / 42 ignored before the rebase (four new
+`ow-skills` tests), 1,889 / 0 / 42 after it (base f35ae69). C++ Release build clean; ctest at `-j 2` 173/173, 0 failed,
+606.01 s before the rebase; after it 170/173 on a loaded machine, the 3 misses leak-gate Python suites timing out at
+120 s (two passed on rerun; `py-leak_gate_policy` passes 19/19 run directly). verify_packages 9 packages, all class
+bodies exact. Installed Phaselock test passes in both modes: in Off `OnActionSkillStarted` now stops at the unbound
 `GearboxPawn.GetSMComponent()`; Reference still stops at `ActionSkill.OnActionSkillActivated`.
 
 **FIX-PHASELOCK-CAST part A (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5). `Object.VLerp` in
