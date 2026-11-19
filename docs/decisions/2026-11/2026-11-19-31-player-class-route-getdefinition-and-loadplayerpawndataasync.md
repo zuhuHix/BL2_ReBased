@@ -39,6 +39,17 @@ and `fix/rust-mind-adopt` (neither landed at the time), installed game, Off.
     - With no package part, nothing happens.
 - `docs/verification/NATIVE_INDEX.md`: two rows.
 
+**Second pass, after #410 and #412 landed** (main 388a55ee plus the unlanded `fix/rust-pawn-data-manager` 56737e3c).
+
+- **The stops are unchanged.** `--slice-gate` strict is still 0 / 11 / 3, with the same link 1 stop. `maya:8` stops the
+  same way. Without the bridge, every spawn still stops at `SetDefaultPhysics`, noted and with FIX-MIND-ROUTE.
+- **One more native question answered, behind `SetDefaultPhysics`** on links 3 and 13: the hit's `DemigodOnHold` on a
+  `WillowAIComponent`, which Off refuses as an unread subclass override.
+  - `WillowAIComponent`'s own function table, read from its class registration's constructor, keeps `AIComponent`'s
+    routines for the target, movement, demigod, god and dialog kinds. Only the base kind is replaced.
+  - So NATIVE_AI_HOLDS.md's rule applies to that class for those kinds. The note and its index row say so.
+  - The earlier attempt (decision 2026-11-19-06) had stopped because the query tool could not find the class's table.
+
 **Tools.** `research/script_disasm.py` and `ow-package --disasm` for the script. Ghidra 12.1.4, read-only, one run at a
 time under the machine lock (waiting whenever the project was held): 7 query runs and 3 runs of the local read-only table
 reader. `class_layout.py` was used for the controller's interface field; its fitted total equals the class's registered

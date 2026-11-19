@@ -60,6 +60,14 @@ in the packages, covered in NATIVE_AI_AWARENESS.md). It declares none of the fou
 serve it, but whether it replaces their virtual functions was not read: the tooling did not resolve that class's C++
 function table.
 
+*Read 2026-11-19 (lane LINK-1-NEXT, decision 2026-11-19-31; analyst only, the rules stay `NotYet` until implemented):*
+**`WillowAIComponent` keeps the base routines for the target, movement, demigod, god and dialog kinds** (high). Its own
+function table, read from its class registration's constructor, was compared kind by kind with `AIComponent`'s: each kind's
+three script natives (`Hold<Kind>`, `Release<Kind>`, `<Kind>OnHold`) reach the same routines in both classes. Only the base
+kind (`Hold`, `Release`, `OnHold`, which `WillowAIComponent` declares itself) is replaced; that replacement was not read. So
+on a bullymong's or the dummy's component the demigod, god, movement and dialog lists follow the rule above unchanged, and
+the hit's `DemigodOnHold` is the base answer (any entry in `DemigodHolds`).
+
 - **Live confirmation:** with bl-sdk, hook `Behavior_AIHold.ApplyBehaviorToContext` on the Fire dummy and read the
   dummy's component `DemigodHolds` before and after `Behavior_AIHold_59` (one entry, `Safe` and the context, expected);
   call `HoldMovement` on a moving AI and read its pawn's `Velocity` and `Acceleration` on the next frame; call each
@@ -83,5 +91,6 @@ unproven.
   the tables do not show. Neither was read. **Live confirmation:** in the same hook, log the class of `ContextObject` and
   whether `QueryInterface(IAIInterface)` on it is None.
 - The reader of `DemigodHolds` and `GodHolds` on the damage path.
-- `WillowAIComponent`'s replacements, if any, of the four kinds' virtual functions.
+- `WillowAIComponent`'s replacement of the base kind (`Hold`, `Release`, `OnHold`); it keeps the other kinds' routines
+  (read 2026-11-19, above).
 - The removal's effect on the order of the remaining entries.
