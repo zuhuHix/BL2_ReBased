@@ -87,16 +87,39 @@ The hub rules apply:
    2. `AnimTickArray` not empty: `NotYet { NotRead }`, "the tree teardown's per-node call". The node class and the
       call were not read.
    3. `Animations` set: `NotYet { NotRead }`, "the tree teardown's calls on the current tree".
-   4. **The registry walk** (section 3, step 2): the port holds no such registry. Default Off answer:
-      `NotYet { LayerAbsent }`, "the engine's registry of entries that name a skeletal mesh component". Each is
-      certain from the arguments and the component's fields alone, so all four are checked before the first write.
-      For the hub: see section 5.
-2. **The writes, in section 3's order:** `bAnimTreeInitialised` false; `Animations` None (already None after the
-   preflight); the six lists and the map emptied; then `AnimTreeTemplate` None.
-   - None of them needs a definition load: the component is a live object, and the argument is None.
+   4. **The registry walk** (section 3, step 2): the walk runs on every call, with no condition, and the port holds no
+      such registry. Default Off answer: `NotYet::layer_absent(what, layer, record)` with
+      - `what`: "the engine's registry of entries that name a skeletal mesh component";
+      - `layer`: "an engine-wide registry of component entries (the port holds none)";
+      - `record`: `docs/verification/NATIVE_SET_ANIM_TREE_TEMPLATE.md`.
+
+   Items 1 to 3 use the same record. Each of them is certain from the argument and the component's fields alone, so
+   they are checked before the first write, in this order. Item 4 has no condition: it is always the answer once
+   items 1 to 3 pass.
+   - **So in default Off this native always ends at item 4**, `LayerAbsent`, before any write.
+   - Steps 2 and 3 below are therefore not reached until the hub rules on section 5. They are written so that an
+     implementer can code them when that ruling allows the walk; until then only the preflight is coded.
+   - The native returns its preflight `NotYet` unmarked. It has written nothing itself. The caller's write tracking
+     (here the `make` step, which has already written) adds the "stopped after partial writes: " prefix.
+2. **The writes, in section 3's order** (after a section 5 ruling for "nothing"):
+   - `bAnimTreeInitialised` false;
+   - `Animations` None (already None after the preflight);
+   - the five lists emptied: `AnimTickArray`, `AnimAlwaysTickArray`, `SkelControlTickArray`, `ActiveMorphs` and
+     `ActiveCurveMorphs`;
+   - `MorphTargetIndexMap` emptied. Where the port's layout gives this map no script-visible value, emptying it is a
+     no-op, or a write of its zero value;
+   - then `AnimTreeTemplate` None.
+
+   None of them needs a definition load: the component is a live object, and the argument is None.
 3. **The owner's event:** when `Owner` is set, `AnimTreeUpdated(component)` is called on it as a script event through
    the VM (the installed empty body, or an override, run as script). A `NotYet` from it comes after the writes:
    terminal, prefixed. `Owner` None: no call.
+
+**The slice's component in the port.** The port's `new` (`crates/ow-vm/src/interp/eval.rs`, `new_object`) ignores
+the template argument: it makes the object from its class defaults and sets its outer. So at the slice's call the
+component holds the class defaults: `Owner` None, `Animations` None and the lists empty. The preflight's items 1 to
+3 pass, item 4 answers, and no event would be sent. In the game the component is made from the weapon's
+`ThirdPersonMesh` (open question 5).
 4. **Reference:** unchanged (the C++ binds nothing here, so the VM's stub policy answers).
 
 ## 5. For the hub: the registry walk
@@ -119,8 +142,9 @@ The hub rules apply:
    tree.
 3. **UNVERIFIED:** which flag the template path clears, and the tree copy and initialisation.
 4. **UNVERIFIED:** whether any undecoded function overrides `AnimTreeUpdated`.
-5. **UNVERIFIED:** what a component made from a template holds in `Animations` and the tick lists in the game (the
-   port's `new` decides it at the call).
+5. **UNVERIFIED:** what a component made from a template holds in the game: does the game's template copy carry
+   `Owner`, `Animations` and the tick lists over from the weapon's `ThirdPersonMesh`? The port's `new` ignores the
+   template, so the port sees class defaults (section 4).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
