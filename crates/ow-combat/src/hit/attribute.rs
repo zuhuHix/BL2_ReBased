@@ -76,6 +76,8 @@ fn get_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// is returned unchanged, kind and text.
 fn after_partial_writes(e: VmError) -> VmError {
     match e {
+        // The attribute library may have marked it already (its fold, review r1 of #458): the prefix is added once.
+        VmError::NotYet(n) if n.what.starts_with("stopped after partial writes") => VmError::NotYet(n),
         VmError::NotYet(n) => NotYet::new(format!("stopped after partial writes: {}", n.what), n.missing, n.record).into(),
         other => other,
     }

@@ -43,11 +43,13 @@
 //! nothing changes.
 
 use ow_core::{NotYet, ParityMode};
-use ow_object::heap::ObjectSpace;
+use ow_object::decode::MAX_ARRAY_LENGTH;
+use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr, PropId};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 
-use crate::api::{AttrError, EvalCx, Storage, ValueResolver};
+use crate::api::{AttrError, EvalCx, Storage, ValueResolver, WorldParts};
 use crate::context_resolvers::is_a;
 use crate::eval::{ensure_loaded, object, parity, required};
 use crate::registry::AttributeSystem;
@@ -75,6 +77,61 @@ fn stand_in(space: &ObjectSpace, o: ObjRef) -> Result<bool, AttrError> {
 }
 
 pub(crate) struct BlackMarketUpgrade;
+
+/// The element kind an array property is declared with (review r1 of #458, item 1).
+#[derive(Clone, Copy)]
+enum Element {
+    Int,
+    Object,
+}
+
+/// Checks that property `p` of `obj` is declared as an array of `element`, so an empty array of another kind is
+/// refused before any write too, not only a filled one.
+fn declared_array(space: &ObjectSpace, p: PropId, element: Element, what: &str) -> Result<(), AttrError> {
+    let ok = match space.classes.decl(p).map(|d| &d.kind) {
+        Some(PropKind::Array(inner)) => match (element, inner.as_ref()) {
+            (Element::Int, PropKind::Int) => true,
+            (Element::Object, PropKind::Object { .. }) => true,
+            _ => false,
+        },
+        _ => false,
+    };
+    if ok {
+        return Ok(());
+    }
+    let want = match element {
+        Element::Int => "ints",
+        Element::Object => "objects",
+    };
+    Err(bad(format!("{what} is not declared as an array of {want}")))
+}
+
+/// A listed upgrade made ready to be written (review r1 of #458, item 3): an unloaded handle is loaded and a real
+/// load failure keeps its error; a load that succeeds but leaves a stand-in holding no properties, or a stand-in that
+/// is not a handle, is the note's named cache-write `NotPorted`.
+fn load_for_write(cx: &mut EvalCx<'_>, upgrade: ObjRef) -> Result<(), AttrError> {
+    let WorldParts { space, defs } = cx.world.parts();
+    let o = space.heap.get(upgrade)?;
+    let (resource, slotless) = (matches!(o.origin, Origin::Resource { .. }), o.slots.is_empty());
+    if resource {
+        match defs {
+            Some(defs) => defs.ensure_loaded(space, upgrade)?,
+            None if slotless => {
+                return Err(NotYet::layer_absent(
+                    format!("loading the unloaded definition {upgrade:?}"),
+                    "ow-defs",
+                    NOTE,
+                )
+                .into());
+            }
+            None => {}
+        }
+    }
+    if stand_in(space, upgrade)? {
+        return Err(NotYet::not_ported(CACHE_WRITE, NOTE).into());
+    }
+    Ok(())
+}
 
 /// What the registry answers for a class it does not implement: Reference keeps it.
 fn reference_refusal() -> AttrError {
@@ -120,6 +177,9 @@ fn plan_cache(cx: &mut EvalCx<'_>) -> Result<Option<Vec<(ObjRef, PropId, i32)>>,
         return Ok(None);
     };
     ensure_loaded(cx, definition)?;
+    let space = cx.world.parts().space;
+    let p = prop_of(space, definition, "BlackMarketUpgrades", "the globals definition")?;
+    declared_array(space, p, Element::Object, "the globals definition's BlackMarketUpgrades")?;
     let list = match required(cx, definition, "BlackMarketUpgrades")? {
         Value::Array(items) => items,
         other => {
@@ -141,10 +201,7 @@ fn plan_cache(cx: &mut EvalCx<'_>) -> Result<Option<Vec<(ObjRef, PropId, i32)>>,
             }
         };
         let Some(upgrade) = upgrade else { continue };
-        ensure_loaded(cx, upgrade)?;
-        if stand_in(cx.world.parts().space, upgrade)? {
-            return Err(NotYet::not_ported(CACHE_WRITE, NOTE).into());
-        }
+        load_for_write(cx, upgrade)?;
         let (p, _) = cache_field(cx, upgrade)?;
         let position = i32::try_from(position)
             .map_err(|_| bad("the globals definition's BlackMarketUpgrades is longer than an int".to_string()))?;
@@ -156,6 +213,7 @@ fn plan_cache(cx: &mut EvalCx<'_>) -> Result<Option<Vec<(ObjRef, PropId, i32)>>,
 /// The controller's `BlackMarketUpgrades` (an int array) and its property.
 fn levels(space: &ObjectSpace, controller: ObjRef) -> Result<(PropId, Vec<i32>), AttrError> {
     let p = prop_of(space, controller, "BlackMarketUpgrades", "the player controller")?;
+    declared_array(space, p, Element::Int, "the controller's BlackMarketUpgrades")?;
     let items = match space.read(controller, PropAddr::scalar(p))? {
         Value::Array(items) => items.clone(),
         other => {
@@ -228,16 +286,31 @@ fn native(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32,
             // The controller holds no properties: its array cannot be grown (nor read). Refused before any write.
             return Err(NotYet::not_ported(ARRAY_WRITE, NOTE).into());
         }
-        let (p, mut items) = levels(space, context)?;
-        let grow = items.len() <= at;
-        if grow {
-            items.resize(at + 1, 0);
+        let (p, items) = levels(space, context)?;
+        if items.len() > at {
+            Some((p, None, items[at]))
+        } else {
+            // The grown array, bounded and reserved before any write (review r1 of #458, item 2): a length past the
+            // object model's array bound is bad data, and a reservation that fails refuses here, the cache untouched.
+            let len = at + 1;
+            if len > MAX_ARRAY_LENGTH as usize {
+                return Err(bad(format!(
+                    "growing the controller's BlackMarketUpgrades to {len} entries passes the array bound \
+                     {MAX_ARRAY_LENGTH}"
+                )));
+            }
+            let mut values: Vec<Value> = Vec::new();
+            values
+                .try_reserve_exact(len)
+                .map_err(|e| bad(format!("reserving {len} entries for the controller's BlackMarketUpgrades: {e}")))?;
+            values.extend(items.iter().map(|i| Value::Int(*i)));
+            values.resize(len, Value::Int(0));
+            Some((p, Some(values), 0))
         }
-        Some((p, items, at, grow))
     } else {
         None
     };
-    // The writes: the cache, then the zero-fill.
+    // The writes: the cache, then the zero-fill. A later refusal of the same evaluation is terminal (the fold).
     let space = cx.world.parts().space;
     for (u, p, position) in &plan {
         space.write(*u, PropAddr::scalar(*p), Value::Int(*position))?;
@@ -245,15 +318,21 @@ fn native(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32,
     debug_assert!(plan.is_empty() || {
         matches!(space.read(upgrade, PropAddr::scalar(field)), Ok(Value::Int(i)) if *i == index)
     });
-    let Some((p, items, at, grow)) = growth else {
+    let wrote_cache = !plan.is_empty();
+    let Some((p, grown, level)) = growth else {
+        if wrote_cache {
+            cx.note_writes();
+        }
         return Ok(0.0);
     };
-    if grow {
-        let values = items.iter().map(|i| Value::Int(*i)).collect();
+    if let Some(values) = grown {
         space.write(context, PropAddr::scalar(p), Value::array(values))?;
+        cx.note_writes();
+    } else if wrote_cache {
+        cx.note_writes();
     }
-    // The entry, an int as a float.
-    Ok(items[at] as f32)
+    // The entry, an int as a float (a grown entry is a new zero).
+    Ok(level as f32)
 }
 
 fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
@@ -264,6 +343,14 @@ fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, A
 }
 
 impl ValueResolver for BlackMarketUpgrade {
+    /// Reference refuses at the preflight as an unregistered class did (review r1 of #458, item 5).
+    fn available(&self, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        match parity(cx) {
+            ParityMode::Reference => Err(reference_refusal()),
+            _ => Ok(()),
+        }
+    }
+
     fn value(
         &self,
         _sys: &AttributeSystem,

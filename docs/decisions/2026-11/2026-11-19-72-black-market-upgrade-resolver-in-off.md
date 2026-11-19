@@ -31,6 +31,20 @@ and no existing `NotYet` guard was relaxed.
   globals object's `DefaultGlobalsDefinitionName` (the installed class default holds `GD_Globals.General.Globals`) and
   loads it through the world's store. An empty name is "none found"; a missing store is its `NotYet`. The VM world uses
   the default. The mission bridge finds the same object by path.
+- **Review r1 of #458:**
+  - Both arrays' declarations are checked by element kind before either write, so an empty array of the wrong kind
+    is refused too.
+  - A grown length past the object model's array bound (`ow_object::decode::MAX_ARRAY_LENGTH`) is bad data, and the
+    grown array is reserved fallibly, both before the cache commits.
+  - A listed upgrade is loaded for writing: a real load failure keeps its error, and a stand-in left by a load (or
+    one that is not a handle) is the named cache-write `NotPorted`.
+  - `EvalCx` counts committed resolver writes, and the shared fold makes a later `NotYet` terminal, prefixed once
+    ("stopped after partial writes"), its kind kept. `ow-combat`'s `GetValue` wrapper no longer adds the prefix twice.
+  - `ValueResolver::available` (a default) lets Reference refuse this class at the preflight, as an unregistered
+    class did.
+  - `AttrWorld::globals_object` (and `WorldHooks::globals_object`) tell "no globals object" (`Ok(None)`, 0.0) from
+    "no globals support" (`NotYet { LayerAbsent }`). The world query service answers `Ok(None)` until the map load
+    sets the object.
 - **Reference:** unchanged. Get, get-base and the writes answer the same `NotYet { NotRead }` an unregistered class
   gave; the C++ has no rule for this class.
 - **Verified (automated, local, pc-hummer):**
