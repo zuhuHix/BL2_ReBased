@@ -107,6 +107,11 @@ fn declare(vm: &mut Vm, path: &str, params: Vec<(&str, PropKind)>, result: Optio
 /// A VM in `mode` over the two invented providers, with the kernel natives it needs and the two event natives
 /// declared, and the action skill pack registered.
 fn toy(mode: ParityMode) -> Toy {
+    toy_with(mode, &[], &[])
+}
+
+/// [`toy`] with `before` registered before the action skill pack and `after` after it (review follow-up of #407).
+fn toy_with(mode: ParityMode, before: &[&dyn NativePack], after: &[&dyn NativePack]) -> Toy {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-events-{}-{}",
         std::process::id(),
@@ -188,7 +193,13 @@ fn toy(mode: ParityMode) -> Toy {
         }),
     )
     .unwrap();
+    for p in before {
+        p.register(&mut vm).unwrap();
+    }
     super::Pack.register(&mut vm).unwrap();
+    for p in after {
+        p.register(&mut vm).unwrap();
+    }
     Toy {
         vm,
         dir,
@@ -361,5 +372,57 @@ fn reference_leaves_both_unbound() {
             }
             other => panic!("{path}: expected UnboundNative, got {other:?}"),
         }
+    }
+}
+
+/// Review follow-up of #407: ow-combat's pack registered before or after the action skill pack, and the kernel pack
+/// both before and after it (the action skill pack registers the kernel pack itself, so that is three times), change
+/// nothing: the events still reach the provider with their payload. ow-combat's pack is registered once per world:
+/// a second registration is refused (its pools service is added unguarded), which no caller does.
+#[test]
+fn registering_the_kernel_or_combat_pack_before_and_after_keeps_delivery_in_off() {
+    let combat = ow_combat::hit::Pack;
+    let kernel_pack = kernel::Pack;
+    let (c, k): (&dyn NativePack, &dyn NativePack) = (&combat, &kernel_pack);
+    for (name, before, after) in [
+        ("ow-combat before", vec![c], vec![]),
+        ("ow-combat after", vec![], vec![c]),
+        ("kernel before and after", vec![k], vec![k]),
+        (
+            "kernel and ow-combat before, kernel after",
+            vec![k, c],
+            vec![k],
+        ),
+        (
+            "kernel before, ow-combat and kernel after",
+            vec![k],
+            vec![c, k],
+        ),
+    ] {
+        let mut t = toy_with(ParityMode::Off, &before, &after);
+        let (h, _) = t.consumer("Skill_0", &[("TestSkillBpd", PROVIDER)]);
+        let (pawn, target) = (t.object("Maya"), t.object("Target"));
+        t.call(
+            ACTIVATED,
+            vec![
+                h.clone(),
+                Value::Object(Some(pawn)),
+                Value::Object(Some(target)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            t.seen(),
+            ["OnActionSkillActivated consumer=Skill_0"],
+            "{name}"
+        );
+        assert_eq!(t.live(&h), [Some(pawn), Some(target), None], "{name}");
+        t.call(DEACTIVATED, vec![h.clone(), Value::Object(Some(pawn))])
+            .unwrap();
+        assert_eq!(
+            t.seen(),
+            ["OnActionSkillDeactivated consumer=Skill_0"],
+            "{name}"
+        );
     }
 }
