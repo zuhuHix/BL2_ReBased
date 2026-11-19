@@ -413,7 +413,8 @@ fn tech_death_kinds_and_the_missing_component() {
     set(&mut e.vm, me, "StatusEffectComp", Value::Object(Some(comp))).unwrap();
     for k in 0..=8u8 {
         set(&mut e.vm, dt, "DamageType", Value::Byte(k)).unwrap();
-        let tested = super::TECH_DEATH_KINDS.contains(&i64::from(k));
+        // The expected kinds are written out here, not read from the constant the code uses (review r2 of #500).
+        let tested = [1i64, 2, 4, 7].contains(&i64::from(k));
         match call(&mut e) {
             Ok(r) => assert!(!tested && r.ret == Value::Int(-1), "kind {k}: {:?}", r.ret),
             Err(err) => assert!(tested && not_read(&err), "kind {k}: {err:?}"),
@@ -490,7 +491,12 @@ fn the_shared_telemetry_answers_nothing_for_every_player() {
     let service = class(&mut e.vm, "WillowGame.WillowLeviathanService", e.object, &[]);
     let o = PropKind::Object { class: e.object };
     let params = [("Player", o, 0), ("Reason", PropKind::Byte { enum_: None }, 0)];
-    let fs: Vec<FuncId> = super::TELEMETRY.iter().map(|p| native(&mut e.vm, p, service, &params, None)).collect();
+    // Both events are named here, so dropping one from `TELEMETRY` fails this test (review r2 of #500).
+    let paths = [
+        "WillowGame.WillowLeviathanService.RecordCharacterRevivedEventForPlayer",
+        "WillowGame.WillowLeviathanService.RecordCharacterKilledEventForPlayer",
+    ];
+    let fs: Vec<FuncId> = paths.iter().map(|p| native(&mut e.vm, p, service, &params, None)).collect();
     super::register(&mut e.vm).unwrap();
     let s = make(&mut e.vm, service, "Leviathan_0");
     let player = make(&mut e.vm, e.controller, "WPC_7");

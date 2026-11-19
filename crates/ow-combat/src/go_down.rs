@@ -4,7 +4,7 @@
 //!
 //! **Why Off only.** Reference keeps its stub policy (a zero for an unbound native), so Reference is unchanged.
 //!
-//! **Placeholders lose to nothing registered earlier, and win over everything registered later.** Binding is
+//! **The first binding wins.** Binding is
 //! first-wins ([`bind_fn`] skips a key already bound), and this module registers last in `ow_combat::hit::Pack`. So a
 //! real binding of one of these keys from a pack registered after the combat pack (the skill manager, pawn data or
 //! skill tree packs `cmd/combat.rs` adds) would silently lose to the placeholder here. A lane that gives one of them a
