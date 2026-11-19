@@ -442,19 +442,28 @@ pub(crate) fn pickup_world(
     vm.log.extend(vm.defs.take_log());
     let weapon_defaults = defaults.map_err(VmError::from)?;
     let globals = make_t(vm, "WillowGame.WillowGlobals")?;
-    let definition = find_object_t(vm, GLOBALS_DEFINITION)?;
-    let loaded = vm.defs.ensure_loaded(&mut vm.space, definition);
-    vm.log.extend(vm.defs.take_log());
-    loaded.map_err(VmError::from)?;
+    let definition = preload_globals_definition(vm, globals, "the pickup world's set-up")?;
     let definition_class = vm.space.heap.get(definition)?.class;
-    // The holder's declaration first, with the preflight's own validator, so a malformed schema is the note's
-    // VmError::Script, not a failed write (review r2 of #476).
-    ow_inventory::globals::globals_schemas(vm, globals, "the pickup world's set-up")?;
-    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
     ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
+}
+
+/// The allowed preload of NATIVE_WILLOW_GLOBALS.md section 6.1, step 2, for a world's set-up, before the run writes
+/// anything: the installed [`GLOBALS_DEFINITION`] found and loaded, then written into `globals`'
+/// `TheGlobalsDefinition`. The holder's declaration is checked first, with the preflight's own validator, so a
+/// malformed schema is the note's `VmError::Script`, not a failed write (review r2 of #476). The first load's
+/// challenge numbering is not run here or anywhere (section 6.1). Used by [`pickup_world`] (links 6 and 7) and by the
+/// Fire driver for link 12 (`cmd/slice.rs`, lane IMPL-LINK12-UNLOCK-ACHIEVEMENT).
+pub(crate) fn preload_globals_definition(vm: &mut Vm, globals: ObjRef, what: &str) -> Result<ObjRef, VmError> {
+    let definition = find_object_t(vm, GLOBALS_DEFINITION)?;
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, definition);
+    vm.log.extend(vm.defs.take_log());
+    loaded.map_err(VmError::from)?;
+    ow_inventory::globals::globals_schemas(vm, globals, what)?;
+    write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
+    Ok(definition)
 }
 
 /// The run's world in Off, typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).

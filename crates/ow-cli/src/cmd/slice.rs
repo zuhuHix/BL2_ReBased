@@ -128,6 +128,31 @@ pub(crate) struct Failure {
     pub(crate) not_yet: bool,
 }
 
+/// Off only (lane IMPL-LINK12-UNLOCK-ACHIEVEMENT; the hub's ruling on #541's r1 review): link 12's turn-in reaches
+/// `WillowPlayerController.UnlockAchievementIfConditionsMet`, which reads the globals definition through
+/// `ow_inventory::globals::globals_definition` as it is. The bridge's world makes its `WillowGlobals` from class
+/// defaults, so `TheGlobalsDefinition` is None there and that helper refuses (the first load). So at set-up, before
+/// any step runs:
+/// - the native is bound (`ow_inventory::globals::achievement::register`, Off, first-wins);
+/// - the installed globals definition is preloaded into the bridge's globals object, the way the pickup world does
+///   for links 6 and 7 (`inventory::equip_run::preload_globals_definition`). It is logged as a harness input, and its
+///   load goes through the definition store, so #518's load-transition counter counts it. The first load's challenge
+///   numbering is not run (NATIVE_WILLOW_GLOBALS.md section 6.1). UNVERIFIED stand-in for the game's own first load.
+///
+/// A world with no globals object recorded is left as it is (the native then answers false).
+fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_vm::error::VmError> {
+    ow_inventory::globals::achievement::register(&mut world.vm)?;
+    let globals = world.query().try_borrow().map_err(|_| ow_vm::error::VmError::ServiceBorrowed("WorldQuery"))?.globals();
+    if let Some(globals) = globals {
+        crate::cmd::inventory::equip_run::preload_globals_definition(&mut world.vm, globals, "the Fire driver's set-up")?;
+        world.vm.log.push(format!(
+            "harness input: preload {} into the globals' TheGlobalsDefinition (UNVERIFIED stand-in for its first load;              no challenge numbering)",
+            crate::cmd::inventory::equip_run::GLOBALS_DEFINITION
+        ));
+    }
+    Ok(())
+}
+
 impl From<String> for Failure {
     fn from(message: String) -> Self {
         Failure {
@@ -276,6 +301,9 @@ fn execute_with(
     let vm = open(&args[4], mode, policy)?;
     let mut world = bridge::world(vm)?;
     let slice = FireMissionSlice::new(&mut world, &args[2], &name, DUMMY_PROVIDER)?;
+    if mode == ParityMode::Off {
+        unlock_setup(&mut world).map_err(BehaviorError::Vm)?;
+    }
     let vm = &mut world.vm;
     let completed: DetSet<String> = slice.mission().dependencies().iter().cloned().collect();
     out.push_str("{\"steps\":[");
