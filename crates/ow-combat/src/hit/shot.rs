@@ -138,7 +138,9 @@ pub fn firing_mode(vm: &mut Vm, parts: &WeaponParts) -> Result<Option<ObjRef>, V
         let part = loaded(vm, part)?;
         if object(vm, part, "CustomFiringModeDefinition")?.is_some() {
             return Err(not_read(
-                "the firing mode of a weapon whose elemental part has its own and whose barrel has none                  (NATIVE_WEAPON_TRIGGER_AMMO.md section 3 takes the elemental part's, NATIVE_WEAPON_FIRING.md                  section 1.1 the type's)",
+                "the firing mode of a weapon whose elemental part has its own and whose barrel has none \
+                 (NATIVE_WEAPON_TRIGGER_AMMO.md section 3 takes the elemental part's, NATIVE_WEAPON_FIRING.md \
+                 section 1.1 the type's)",
             ));
         }
     }
@@ -223,7 +225,8 @@ pub fn shot(vm: &mut Vm, weapon: ObjRef, mode: Option<ObjRef>) -> Result<Shot, V
     }
     let Some(mode) = mode else {
         return Err(not_read(
-            "a shot from a weapon with no firing mode (NATIVE_WEAPON_TRIGGER_AMMO.md section 3: InstantFire does              nothing, the ammunition is still spent; NATIVE_WEAPON_FIRING.md section 1.2 step 4: the HitScan path)",
+            "a shot from a weapon with no firing mode (NATIVE_WEAPON_TRIGGER_AMMO.md section 3: InstantFire does \
+             nothing, the ammunition is still spent; NATIVE_WEAPON_FIRING.md section 1.2 step 4: the HitScan path)",
         ));
     };
     let fire_type;
