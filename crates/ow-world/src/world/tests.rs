@@ -2338,6 +2338,26 @@ mod placement {
     }
 
     #[test]
+    fn reference_keeps_the_base_precheck_before_the_spawner_reads() {
+        // Review r2 of #463: after play began, a bNoCollisionFail spawn of a template that needs a base search, by a
+        // spawner that is gone: Reference answers the base-search NotYet before it reads the spawner.
+        run(|| {
+            let mut x = fx_in(true, ParityMode::Reference);
+            let probe = x.class("Probe");
+            let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Probe").unwrap();
+            set_field(&mut x.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
+            set_field(&mut x.w.vm.space, cdo, "bShouldBaseAtStartup", Value::Bool(true)).unwrap();
+            let c = x.class("Dud");
+            let gone = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
+            x.w.vm.space.free(gone).unwrap();
+            let req = SpawnRequest::new(Some(probe)).with_no_collision_fail(true);
+            let (missing, text) = what(spawn(&mut x.w.vm, gone, &req).unwrap_err());
+            assert!(matches!(missing, Missing::LayerAbsent(_)), "{missing:?}");
+            assert_eq!(text, "the base search after PostBeginPlay");
+        });
+    }
+
+    #[test]
     fn the_placement_refusal_comes_before_the_base_precheck() {
         // Review r1 of #463, item 2: a template after play began that needs both, with no service.
         run(|| {
