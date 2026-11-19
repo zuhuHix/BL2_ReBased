@@ -139,7 +139,8 @@ bound, and the equip run's weapons list is not on this machine.
 
 1. Whether `ComputeValueOfParts` is called on items outside the spawn (the shop and the save-load paths), and with
    what part data.
-2. `ChooseRandomNameParts` and `CacheWeaponCard`, the next unread natives of the weapon's `InitializeInternal`.
+2. `ChooseRandomNameParts` and `CacheWeaponCard`, the next unread natives of the weapon's `InitializeInternal`. Read since in NATIVE_CACHE_WEAPON_CARD.md, which also corrects the branch's extent in section 5 (the
+   second `RecomputeNormalizedDamageValues` is inside the name-part branch; the third `ComputeValueOfParts` is not).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
