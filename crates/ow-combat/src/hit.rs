@@ -31,6 +31,7 @@
 //!   rule and the hold behavior's own run ([`crate::holds`], decision 2026-11-16-83).
 
 pub mod access;
+pub mod attribute;
 pub mod shot;
 pub mod pools;
 
@@ -306,6 +307,7 @@ impl NativePack for Pack {
         ow_behavior::kernel::natives::Pack.register(vm)?;
         register_hit(vm)?;
         pools::register(vm)?;
+        attribute::register(vm)?;
         crate::damage::register(vm)?;
         crate::death::register(vm)?;
         crate::down::register(vm)?;
