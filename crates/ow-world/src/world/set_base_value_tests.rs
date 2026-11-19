@@ -71,8 +71,28 @@ impl Toy {
             decl(&mut s, "ValueResolverChain", objs.clone(), 0),
         ];
         let base = s.classes.define("Engine.AttributeDefinitionBase", Some(object), chains).unwrap();
-        s.classes.define("Engine.AttributeDefinition", Some(base), vec![]).unwrap();
-        s.classes.define("Engine.AttributeInitializationDefinition", Some(object), vec![]).unwrap();
+        let attribute = s.classes.define("Engine.AttributeDefinition", Some(base), vec![]).unwrap();
+        s.classes.define("Engine.AttributeDefinitionMultiContext", Some(attribute), vec![]).unwrap();
+        // The definition's structs, with the fields the evaluator reads (invented layout; review r1 of #572).
+        let toggle = |s: &mut ObjectSpace, path: &str, flags: &[&str], datas: &[&str]| {
+            let mut fields: Vec<PropertyDecl> = flags.iter().map(|f| decl(s, f, PropKind::Bool, 0)).collect();
+            fields.extend(datas.iter().map(|f| decl(s, f, PropKind::Struct(aid), 0)));
+            s.classes.define_struct(path, None, fields).unwrap()
+        };
+        let formula = toggle(&mut s, "Test.ValueFormula", &["bEnabled"], &[]);
+        let conditional = toggle(&mut s, "Test.Conditional", &["bEnabled"], &[]);
+        let variance =
+            toggle(&mut s, "Test.Variance", &["bEnabled", "bUseIntegerRandomization"], &["LowerBound", "UpperBound"]);
+        let range = toggle(&mut s, "Test.Range", &["bEnableMinValueRestriction", "bEnableMaxValueRestriction"], &[]);
+        let definition_props = vec![
+            decl(&mut s, "ValueFormula", PropKind::Struct(formula), 0),
+            decl(&mut s, "ConditionalInitialization", PropKind::Struct(conditional), 0),
+            decl(&mut s, "RandomVariance", PropKind::Struct(variance), 0),
+            decl(&mut s, "RangeRestriction", PropKind::Struct(range), 0),
+            decl(&mut s, "BaseValueMode", PropKind::Byte { enum_: None }, 0),
+            decl(&mut s, "RoundingMode", PropKind::Byte { enum_: None }, 0),
+        ];
+        s.classes.define("Engine.AttributeInitializationDefinition", Some(object), definition_props).unwrap();
         let named = vec![decl(&mut s, "PropertyName", PropKind::Name, 0)];
         s.classes.define("Engine.ObjectPropertyAttributeValueResolver", Some(object), named).unwrap();
         s.classes.define("Test.Same", Some(object), vec![]).unwrap();
@@ -147,6 +167,38 @@ impl Toy {
             v.struct_mut().unwrap().fields[at as usize] = x;
         }
         v
+    }
+
+    /// An initialisation definition with only random variance enabled, between 0 and 10.
+    fn variance_definition(&mut self) -> ObjRef {
+        let d = self.obj("Engine.AttributeInitializationDefinition", "Test.Variance");
+        let low = self.data(0.0, None, 1.0);
+        let high = self.data(10.0, None, 1.0);
+        let class = self.vm.space.heap.get(d).unwrap().class;
+        let p = self.vm.space.prop(class, "RandomVariance").unwrap();
+        let mut v = self.vm.space.read(d, PropAddr::scalar(p)).unwrap().clone();
+        let ty = match &v {
+            Value::Struct(st) => st.ty,
+            other => panic!("{other:?}"),
+        };
+        for (name, x) in [("bEnabled", Value::Bool(true)), ("LowerBound", low), ("UpperBound", high)] {
+            let id = self.vm.space.names.find(name).unwrap();
+            let at = self.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0;
+            v.struct_mut().unwrap().fields[at as usize] = x;
+        }
+        self.set(d, "RandomVariance", v);
+        d
+    }
+
+    fn with_definition(&mut self, mut data: Value, definition: ObjRef) -> Value {
+        let id = self.vm.space.names.find("InitializationDefinition").unwrap();
+        let at = self.vm.space.classes.struct_layout(self.aid).unwrap().field(id).unwrap().0;
+        data.struct_mut().unwrap().fields[at as usize] = Value::Object(Some(definition));
+        data
+    }
+
+    fn counters(&self) -> (u64, u64, u64) {
+        (self.vm.space.heap.committed_writes(), self.vm.rng.draws(), self.vm.defs.load_transitions())
     }
 
     fn call(&mut self, args: Vec<Value>) -> Result<Value, VmError> {
@@ -288,5 +340,74 @@ fn an_unloaded_destination_refuses_without_loading() {
         }
         assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, arch), "nothing was loaded");
         assert_eq!(x.w.vm.defs.load_transitions(), loads);
+    });
+}
+
+/// Review r1 of #572, case 1: a loaded multi-context destination with variance on refuses in the preflight, before
+/// the evaluation draws. The refusal is unmarked, and the heap, RNG and load counters are unchanged. The control
+/// (the same data on a plain destination) does draw, so the test would catch a draw before the refusal.
+#[test]
+fn a_multi_context_destination_refuses_before_the_variance_draw() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.variance_definition();
+    let multi = t.obj("Engine.AttributeDefinitionMultiContext", "Test.Multi");
+    let target = t.obj("Test.Target", "Test.Gun");
+    let base = t.data(4.0, None, 1.0);
+    let data = t.with_definition(base, definition);
+    let before = t.counters();
+    let e = t
+        .call(vec![Value::Object(Some(multi)), data.clone(), Value::Object(None), Value::Object(Some(target))])
+        .unwrap_err();
+    match &e {
+        VmError::NotYet(n) => {
+            assert!(!ow_core::notyet::is_partial_writes(&n.what), "{}", n.what);
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.counters(), before, "nothing written, drawn or loaded");
+    // The control: a plain destination draws the variance.
+    let damage = t.attribute("Test.DamageAttr", "Damage");
+    let draws = t.vm.rng.draws();
+    t.call(vec![Value::Object(Some(damage)), data, Value::Object(None), Value::Object(Some(target))]).unwrap();
+    assert!(t.vm.rng.draws() > draws, "the control draws");
+}
+
+/// Review r1 of #572, case 2: a loaded destination whose value resolver is still an unloaded handle refuses in the
+/// preflight, without loading it. The refusal is unmarked, the counters are unchanged, and the handle stays unloaded.
+#[test]
+fn a_lazy_value_resolver_refuses_without_loading() {
+    crate::world::tests::run(|| {
+        let mut x = crate::world::tests::fx_in(true, ParityMode::Off);
+        x.class("AttributeInitializationDefinition");
+        let path = ObjectPath::parse("Engine.Toy_LazyAttr").unwrap();
+        let vm = &mut x.w.vm;
+        let attr = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let class = x.w.vm.space.heap.get(attr).unwrap().class;
+        let p = x.w.vm.space.prop(class, "ValueResolverChain").unwrap();
+        let reader = match x.w.vm.space.read(attr, PropAddr::scalar(p)).unwrap() {
+            Value::Array(a) => match a.first() {
+                Some(Value::Object(Some(r))) => *r,
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        };
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, reader), "the fixture's resolver is lazy");
+        let ty = x.w.vm.space.classes.struct_by_path("Engine.Object.AttributeInitializationData").unwrap();
+        let data = Value::structure(ty, vec![Value::Float(3.0), Value::Object(None), Value::Object(None), Value::Float(1.0)]);
+        let before = (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions());
+        let e = x
+            .call("AttributeInitializationDefinition.SetBaseValue", None, vec![Value::Object(Some(attr)), data, Value::Object(None), Value::Object(None)])
+            .unwrap_err();
+        match &e {
+            VmError::NotYet(n) => {
+                assert!(n.what.starts_with(ow_attr::eval::PREFLIGHT_UNLOADED), "{}", n.what);
+                assert_eq!(n.missing, ow_core::Missing::NotRead);
+            }
+            other => panic!("{other:?}"),
+        }
+        let after = (x.w.vm.space.heap.committed_writes(), x.w.vm.rng.draws(), x.w.vm.defs.load_transitions());
+        assert_eq!(after, before, "nothing written, drawn or loaded");
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, reader), "the resolver is still unloaded");
     });
 }

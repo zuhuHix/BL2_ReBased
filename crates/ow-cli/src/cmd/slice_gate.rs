@@ -969,6 +969,14 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
+    // The SetBaseValue harness preload (the hub's ruling on #572), logged as harness inputs.
+    let log_before = vm.log.len();
+    if let Err(e) = crate::cmd::inventory::equip_run::preload_threshold_attributes(vm, weapon) {
+        r.stop = Some(classify("make", &ow_combat::hit::access::error_text(&e)));
+        ran[i] = Some(r);
+        return;
+    }
+    r.harness = vm.log[log_before..].iter().filter(|l| l.starts_with("harness input:")).cloned().collect();
     let (mut before, mut after_equip, mut after_unequip) = (None, None, None);
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());

@@ -1020,3 +1020,138 @@ pub(crate) fn random_between(
     }
     Ok((first + (draw * span).floor()) as f32)
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The SetBaseValue preflight (lane IMPL-SET-BASE-VALUE, review r1 of #572)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The refusal for a definition handle the preflight would have to load (a load is a write; #518).
+pub const PREFLIGHT_UNLOADED: &str = "a definition the SetBaseValue preflight reaches is not loaded (a load is a write)";
+
+/// Whether `obj` is one of the store's unloaded handles (never loads it).
+fn is_unloaded_handle(cx: &mut EvalCx<'_>, obj: ObjRef) -> bool {
+    let WorldParts { space, defs, .. } = cx.world.parts();
+    defs.is_some_and(|d| d.is_unloaded(space, obj))
+}
+
+fn refuse_unloaded(cx: &mut EvalCx<'_>, obj: ObjRef) -> Result<(), AttrError> {
+    if is_unloaded_handle(cx, obj) {
+        let path = class_path(cx.world.parts().space, obj);
+        return Err(NotYet::not_read(format!("{PREFLIGHT_UNLOADED}: an object of class {path}"), CHAINS).into());
+    }
+    Ok(())
+}
+
+/// How deep the preflight follows nested initialisation data before it refuses (a port bound, not read).
+const PREFLIGHT_DEPTH: usize = 32;
+
+/// [`AttributeSystem::preflight_set_base_value`]: what `SetBaseValue(dest, data, ...)` can refuse before anything is
+/// evaluated or written, loading nothing:
+/// - every definition the call reaches must already be loaded: the destination, its resolvers, and the definitions
+///   and attributes the initialisation data names, followed into nested data, conditional expressions included;
+/// - the destination must not be multi-context (the refusal `set_base` would give), and its context and value
+///   resolver classes must be implemented (the value chain is checked up to its first None entry, where the set
+///   stops);
+/// - every attribute the evaluation reads must pass the read preflight's class checks (no multi-context, implemented
+///   resolver classes, no None value-chain entry).
+///
+/// Nothing is resolved, evaluated or drawn. A refusal from a resolver's own data can only be found by running it.
+pub(crate) fn preflight_set_base_value(
+    sys: &AttributeSystem,
+    dest: ObjRef,
+    data: &InitData,
+    cx: &mut EvalCx<'_>,
+) -> Result<(), AttrError> {
+    check_definition(sys, dest, true, cx)?;
+    check_init(sys, data, 0, cx)
+}
+
+/// One attribute definition: loaded, not multi-context, its resolvers loaded and implemented. `set` is the set-base
+/// form (the value chain stops at its first None entry); otherwise the read form (a None entry refuses).
+fn check_definition(sys: &AttributeSystem, attr: ObjRef, set: bool, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    refuse_unloaded(cx, attr)?;
+    if is_multi_context(cx.world.parts().space, attr)? {
+        return Err(multi_context_not_read(if set { "ResolveContexts" } else { "GetValue" }));
+    }
+    let chain = required(cx, attr, "ContextResolverChain")?;
+    for entry in elements("ContextResolverChain", &chain)? {
+        if let Some(resolver) = object("ContextResolverChain entry", entry)? {
+            refuse_unloaded(cx, resolver)?;
+            sys.context_resolver(cx.world.parts().space, resolver)?;
+        }
+    }
+    let chain = required(cx, attr, "ValueResolverChain")?;
+    for entry in elements("ValueResolverChain", &chain)? {
+        let Some(resolver) = object("ValueResolverChain entry", entry)? else {
+            if set {
+                break;
+            }
+            return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
+        };
+        refuse_unloaded(cx, resolver)?;
+        sys.value_resolver(cx.world.parts().space, resolver)?;
+    }
+    Ok(())
+}
+
+/// An initialisation data value: its attribute, and its definition followed into the nested data it evaluates.
+fn check_init(sys: &AttributeSystem, data: &InitData, depth: usize, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    if depth > PREFLIGHT_DEPTH {
+        return Err(AttrError::BadData {
+            reason: format!("initialisation data nested deeper than {PREFLIGHT_DEPTH} (the SetBaseValue preflight)").into(),
+        });
+    }
+    if let Some(attr) = data.base_value_attribute {
+        check_definition(sys, attr, false, cx)?;
+    }
+    let Some(definition) = data.initialization_definition else {
+        return Ok(());
+    };
+    refuse_unloaded(cx, definition)?;
+    let nested = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<InitData, AttrError> {
+        let space = cx.world.parts().space;
+        init_data(space, field(space, v, name)?)
+    };
+    let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
+        flag(name, &field_of(cx, v, name)?)
+    };
+    let mut parts: Vec<InitData> = Vec::new();
+    let formula = required(cx, definition, "ValueFormula")?;
+    let conditional = required(cx, definition, "ConditionalInitialization")?;
+    if enabled(cx, &formula, "bEnabled")? {
+        for name in ["Multiplier", "Level", "Power", "Offset"] {
+            parts.push(nested(cx, &formula, name)?);
+        }
+    } else if enabled(cx, &conditional, "bEnabled")? {
+        let list = field_of(cx, &conditional, "ConditionalExpressionList")?;
+        for entry in elements("ConditionalExpressionList", &list)? {
+            let exprs = {
+                let space = cx.world.parts().space;
+                crate::expr::read_expressions(space, field(space, entry, "Expressions")?)?
+            };
+            for e in &exprs {
+                for attr in [e.attribute_operand1, e.attribute_operand2].into_iter().flatten() {
+                    check_definition(sys, attr, false, cx)?;
+                }
+            }
+            parts.push(nested(cx, entry, "BaseValueIfTrue")?);
+        }
+        parts.push(nested(cx, &conditional, "DefaultBaseValue")?);
+    }
+    let variance = required(cx, definition, "RandomVariance")?;
+    if enabled(cx, &variance, "bEnabled")? {
+        parts.push(nested(cx, &variance, "LowerBound")?);
+        parts.push(nested(cx, &variance, "UpperBound")?);
+    }
+    let range = required(cx, definition, "RangeRestriction")?;
+    if enabled(cx, &range, "bEnableMinValueRestriction")? {
+        parts.push(nested(cx, &range, "MinValue")?);
+    }
+    if enabled(cx, &range, "bEnableMaxValueRestriction")? {
+        parts.push(nested(cx, &range, "MaxValue")?);
+    }
+    for p in &parts {
+        check_init(sys, p, depth + 1, cx)?;
+    }
+    Ok(())
+}

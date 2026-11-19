@@ -201,6 +201,13 @@ impl AttributeSystem {
         eval::preflight_read(self, attr, cx)
     }
 
+    /// What `AttributeInitializationDefinition.SetBaseValue(dest, data, ...)` can refuse before it evaluates or writes
+    /// anything, loading nothing (lane IMPL-SET-BASE-VALUE, review r1 of #572): an unloaded definition it reaches, a
+    /// multi-context destination, a resolver class this library does not implement.
+    pub fn preflight_set_base_value(&self, dest: ObjRef, data: &InitData, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        eval::preflight_set_base_value(self, dest, data, cx)
+    }
+
     /// `AttributeDefinition.GetBaseValue`: as [`AttributeSystem::value_of`] with each resolver's base-value method.
     pub fn base_value_of(
         &self,

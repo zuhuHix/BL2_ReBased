@@ -416,6 +416,83 @@ pub(crate) fn external_records(vm: &Vm, weapon: ObjRef) -> usize {
     records(vm, weapon)
 }
 
+/// The `SetBaseValue` harness preload of `--slice-gate`'s link 8 (the hub's ruling on #572; lane IMPL-SET-BASE-VALUE):
+/// the definitions the weapon type's `AnimThresholdValues` hand to `AttributeInitializationDefinition.SetBaseValue`,
+/// which the game keeps resident. These are each entry's destination `Attribute` and that attribute's context and value
+/// resolvers, and the `BaseValue`'s `BaseValueAttribute` and `InitializationDefinition`. Each unloaded one is loaded
+/// here, before the run writes anything, and logged as an UNVERIFIED harness input with its outcome. A failed load is
+/// logged and left: the native then refuses typed. A weapon with no type, or a type with no thresholds, preloads
+/// nothing.
+pub(crate) fn preload_threshold_attributes(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    let Some(data) = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData") else { return Ok(()) };
+    let Value::Object(Some(weapon_type)) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition")?.clone() else {
+        return Ok(());
+    };
+    let Some(Value::Array(entries)) = ow_inventory::equip::read_prop(vm, weapon_type, "AnimThresholdValues") else {
+        return Ok(());
+    };
+    let mut wanted: Vec<ObjRef> = Vec::new();
+    for entry in entries.iter() {
+        if let Value::Object(Some(attr)) = ow_attr::eval::field(&vm.space, entry, "Attribute")?.clone() {
+            wanted.push(attr);
+        }
+        let base = ow_attr::eval::field(&vm.space, entry, "BaseValue")?.clone();
+        for name in ["BaseValueAttribute", "InitializationDefinition"] {
+            if let Value::Object(Some(o)) = ow_attr::eval::field(&vm.space, &base, name)?.clone() {
+                wanted.push(o);
+            }
+        }
+    }
+    let mut done: Vec<ObjRef> = Vec::new();
+    let mut i = 0;
+    while i < wanted.len() {
+        let o = wanted[i];
+        i += 1;
+        if done.contains(&o) {
+            continue;
+        }
+        done.push(o);
+        if vm.defs.is_unloaded(&vm.space, o) {
+            let path = object_path(vm, o);
+            vm.log.push(format!(
+                "harness input: preload {path} (a SetBaseValue definition the game keeps resident; UNVERIFIED)"
+            ));
+            let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+            vm.log.extend(vm.defs.take_log());
+            match loaded {
+                Ok(()) => vm.log.push(format!("harness input: preload {path}: loaded")),
+                Err(e) => {
+                    vm.log.push(format!("harness input: preload {path}: failed ({e})"));
+                    continue;
+                }
+            }
+        }
+        // An attribute definition's resolvers are resident with it.
+        for chain in ["ContextResolverChain", "ValueResolverChain"] {
+            if let Some(Value::Array(rs)) = ow_inventory::equip::read_prop(vm, o, chain) {
+                wanted.extend(rs.iter().filter_map(|r| match r {
+                    Value::Object(Some(r)) => Some(*r),
+                    _ => None,
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `o`'s dotted path from its outer chain (names only), for a harness log line.
+fn object_path(vm: &Vm, o: ObjRef) -> String {
+    let mut parts = Vec::new();
+    let mut cursor = Some(o);
+    while let Some(x) = cursor {
+        let Ok(obj) = vm.space.heap.get(x) else { break };
+        parts.push(vm.space.names.text(obj.name).to_string());
+        cursor = obj.outer;
+    }
+    parts.reverse();
+    parts.join(".")
+}
+
 /// The installed globals definition the pickup world's globals hold (NATIVE_WILLOW_GLOBALS.md section 2: the
 /// configured `DefaultGlobalsDefinitionName`).
 pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";

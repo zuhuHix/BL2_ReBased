@@ -590,6 +590,29 @@ fn package() -> Vec<u8> {
     let base_value = Param { type_ref: init, flags: ow_package::testkit::script::CPF_OUT, ..Param::new("Struct", "BaseValue") };
     let set_base_params = [object_param("DestAttribute"), base_value, object_param("ValueContextSource"), object_param("AttributeContextSource")];
     native(&mut t, definition, "SetBaseValue", &set_base_params, Some(("Bool", 0)), NATIVE | STATIC);
+    // An attribute whose value resolver the store loads lazily (review r1 of #572): `Toy_LazyAttr`'s
+    // `ValueResolverChain` names the export `Toy_LazyReader`, an unloaded handle once `Toy_LazyAttr` is loaded.
+    let attr_base = t.class("AttributeDefinitionBase", object);
+    for chain in ["ContextResolverChain", "ValueResolverChain"] {
+        let array = t.p.next_export();
+        t.prop("Array", attr_base, chain, 0, array + 1);
+        t.prop("Object", array, chain, 0, object);
+    }
+    let attr_class = t.class("AttributeDefinition", attr_base);
+    let reader_class = t.class("ObjectPropertyAttributeValueResolver", object);
+    t.prop("Name", reader_class, "PropertyName", 0, 0);
+    let lazy_attr_ref = t.p.next_export();
+    let reader_ref = lazy_attr_ref + 1;
+    let mut chain = ow_package::testkit::ints(&[1]);
+    chain.extend_from_slice(&reader_ref.to_le_bytes());
+    let mut lazy_attr = 0i32.to_le_bytes().to_vec();
+    lazy_attr.extend(t.p.tag("ValueResolverChain", "ArrayProperty", &chain));
+    lazy_attr.extend_from_slice(&t.none);
+    t.p.add_export(attr_class, "Toy_LazyAttr", lazy_attr);
+    let mut reader = 0i32.to_le_bytes().to_vec();
+    reader.extend(t.p.name_tag("PropertyName", "Payload"));
+    reader.extend_from_slice(&t.none);
+    t.p.add_export(reader_class, "Toy_LazyReader", reader);
     // An actor class with a component field, and its component class (a Core.Component), for the instancing test.
     // Core.Component, which `core_package` defines for the instancing test (review r1 of #435).
     let core = t.p.add_import("Core", "Package", 0, "Core");

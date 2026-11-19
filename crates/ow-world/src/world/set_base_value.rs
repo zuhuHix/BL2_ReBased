@@ -71,8 +71,12 @@ fn set_base_value(c: &mut NativeCall<'_>) -> Result<bool, VmError> {
             return Err(NotYet::not_read(UNLOADED, RECORD).into());
         }
     }
-    let start = counters(c.vm);
     let attrs = c.vm.attrs.clone();
+    // The rest of the preflight (review r1 of #572): every definition the call reaches, loading nothing, so a refusal
+    // known before any write (a multi-context destination, a lazy or unimplemented resolver) comes before the
+    // evaluation can draw or load.
+    attrs.preflight_set_base_value(dest, &data, &mut EvalCx::new(c.vm))?;
+    let start = counters(c.vm);
     let result = (|| -> Result<bool, VmError> {
         let mut cx = EvalCx::new(c.vm);
         let x = attrs.evaluate_init(&data, value_source, None, &mut cx)?;
