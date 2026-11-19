@@ -551,7 +551,8 @@ fn collision(what: &'static str) -> VmError {
 ///    began, the encroachment check or relocation of an actor that collides with actors (`bCollideActors`), and the
 ///    base search of step 4. Under `ParityMode::Reference` a template other than the class default object is
 ///    `NotYet` too (the C++ stand-in does not copy a template's sub-objects). In Off, since decision 2026-11-19-44,
-///    the actor is made from it; the collision pre-checks still read the class defaults (UNVERIFIED for an
+///    the actor is made from it, as public UE3's spawn copies its template's properties (UNVERIFIED in this game);
+///    the collision pre-checks still read the class defaults (UNVERIFIED for an
 ///    archetype whose flags differ). An actor that does not collide with actors is taken to pass the
 ///    encroachment check (UNVERIFIED: the check's internals are not read). The pre-checks are conservative: they
 ///    refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
