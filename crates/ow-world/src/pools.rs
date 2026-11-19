@@ -23,10 +23,12 @@
 //!
 //! **Creation refusal in Off mode:** an unsupported idle hook can refuse inside `InitializeAuthoritative`.
 //! The refusal comes from inside the pool's
-//! script, so it is not decided before anything changes. What the natives changed is undone: [`create_pool_at_index`]
-//! empties the slot again, [`create_pool`] restores `NextPoolGUID` and destroys a manager it spawned, and
-//! [`controller_pool`] restores the controller's `ResourcePoolManager`; no map entry is made. The new pool object is
-//! left unreferenced, and what the script itself wrote before the refusal is **not** undone.
+//! script, so it is not decided before anything changes. Such a refusal is **terminal** (the hub's ruling in review r1
+//! of #444, the same rule as #437, #439 and #442): the slot keeps the new pool and `NextPoolGUID` keeps the spent GUID,
+//! no map entry is made, nothing the script wrote is undone, and the refusal's text starts "stopped after partial
+//! writes" with its kind kept ([`after_partial_writes`]). A manager the call itself spawned is still destroyed
+//! ([`create_pool`], [`controller_pool`]), and [`controller_pool`] leaves the controller's `ResourcePoolManager` as it
+//! was.
 //!
 //! Always `NotYet`: a `CreatePoolAtIndex` without a manager, a vehicle's pool provider in the controller lookup, a
 //! `DeletePool` whose manager is not the reference's, and every resource owner resolver but the controller one in the
@@ -677,6 +679,57 @@ pub fn clear_modifier_stacks(space: &mut ObjectSpace, pool: ObjRef) -> Result<()
 // The manager (section 1.3 to 1.6)
 // ---------------------------------------------------------------------------------------------------------------
 
+/// A refusal after something was written (review r1 of #444, the same rule as #437, #439 and #442): a `NotYet` is
+/// terminal, its text prefixed "stopped after partial writes" at the very start, its kind kept (one already prefixed is
+/// returned as it is). Any other error already stops the run and is returned unchanged, kind and text (the hub's ruling
+/// in review r2 of #442).
+pub fn after_partial_writes(e: VmError) -> VmError {
+    const PREFIX: &str = "stopped after partial writes: ";
+    match e {
+        VmError::NotYet(n) if !n.what.starts_with(PREFIX) => {
+            NotYet::new(format!("{PREFIX}{}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
+}
+
+/// Whether `actor`'s `Role` is `ROLE_Authority` (a byte `Role` required), as the pool natives test it.
+pub fn is_authoritative(space: &ObjectSpace, actor: ObjRef) -> Result<bool, VmError> {
+    is_authority(space, actor)
+}
+
+/// Whether [`ensure_manager`] would spawn a manager for `owner` (no manager yet): `owner` has authority and a world
+/// exists.
+pub fn can_spawn_manager(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
+    Ok(is_authority(&vm.space, owner)? && world_exists(vm)?)
+}
+
+/// Checks that `ty` is a pool reference struct: `PoolManager` an object, `PoolIndexInManager` and `PoolGUID` bytes,
+/// `Data` an object. Anything else is a rule error, so an unrelated struct is never written as a reference.
+pub fn check_reference_type(space: &ObjectSpace, ty: StructId) -> Result<(), VmError> {
+    let layout = space.classes.struct_layout(ty).ok_or_else(|| {
+        rule_error("ResourcePoolReference", format!("the pool reference struct is not defined ({RECORD})"))
+    })?;
+    for (name, want) in REF_FIELDS.iter().zip(["object", "byte", "byte", "object"]) {
+        let bad = || {
+            rule_error(
+                "ResourcePoolReference",
+                format!("the pool reference struct has no {want} field {name} ({RECORD})"),
+            )
+        };
+        let n = space.names.find(name).ok_or_else(bad)?;
+        let (_, decl) = layout.field(n).ok_or_else(bad)?;
+        let ok = match want {
+            "byte" => matches!(decl.kind, PropKind::Byte { .. }),
+            _ => matches!(decl.kind, PropKind::Object { .. }),
+        };
+        if !ok {
+            return Err(bad());
+        }
+    }
+    Ok(())
+}
+
 /// Whether the world exists for a manager spawn: the actor list with a `WorldInfo`.
 fn world_exists(vm: &Vm) -> Result<bool, VmError> {
     Ok(match vm.service::<Actors>() {
@@ -771,15 +824,9 @@ pub fn create_pool_at_index(
     let resource = data_object(vm, def, "Resource")?;
     maps_of(vm)?;
     set_slot(&mut vm.space, manager, index, Some(pool))?;
-    let tail = fill_new_pool(vm, manager, pool, def, index, guid, init, resource);
-    if let Err(e) = tail {
-        // A refusal after the slot was written (in Off mode, `ResetIdleTimer` inside the installed
-        // `InitializeAuthoritative`): the slot is emptied again, so the manager is as it was (the caller restores
-        // `NextPoolGUID`) and no map entry is made. The new pool object is left unreferenced, and what the script
-        // itself wrote before the refusal is not undone.
-        set_slot(&mut vm.space, manager, index, None)?;
-        return Err(e);
-    }
+    // A refusal after the slot was written (in Off mode, `ResetIdleTimer` inside the installed
+    // `InitializeAuthoritative`) is terminal: nothing is put back (module documentation).
+    fill_new_pool(vm, manager, pool, def, index, guid, init, resource).map_err(after_partial_writes)?;
     Ok(Some(pool))
 }
 
@@ -931,13 +978,8 @@ fn create_in(vm: &mut Vm, m: ObjRef, def: ObjRef, reinitialize: bool) -> Result<
         return Ok(invalid(manager));
     };
     let guid = next_guid(&mut vm.space, m)?;
-    let made = match create_pool_at_index(vm, m, Some(def), i32::from(i), guid) {
-        Ok(made) => made,
-        Err(e) => {
-            set_field(&mut vm.space, m, "NextPoolGUID", Value::Byte(guid))?;
-            return Err(e);
-        }
-    };
+    // A refusal inside the new pool's setup is terminal; the spent GUID stays spent (module documentation).
+    let made = create_pool_at_index(vm, m, Some(def), i32::from(i), guid)?;
     let reference = match made {
         Some(pool) => PoolRef::new(manager, i, guid, Some(pool)),
         None => PoolRef::INVALID,

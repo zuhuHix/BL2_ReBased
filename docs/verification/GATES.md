@@ -20,7 +20,10 @@ AI-assisted (Claude Code, Opus 5.5). `ApplyCharacterClassStartingValues` (the `C
 clean; `cargo test --workspace --locked -j 4` 2,053 passed / 0 failed / 45 ignored (3 new, 1 updated in `ow-combat`);
 `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict: links 1, 3, 4, 5, 13 and 14 move from the override's
 NotYet to an error at `maya:8`, the unbound script native `AttributeDefinition.GetValue(object,object,object)`; rows 10
-to 12 stop at `UIInteraction.GetDataStoreClient` (`accept`); 0 ok / 8 NotYet / 6 errors. ctest
+to 12 stop at `UIInteraction.GetDataStoreClient` (`accept`); 0 ok / 8 NotYet / 6 errors. **Review r1:** `cargo test -p
+ow-combat -p ow-world` 273 passed / 0 failed / 7 ignored, ow-cli 89 passed (combat digests unchanged); clippy flags
+nothing in the changed files; installed Off `--slice-gate` 0/14/0, the six links now at the `InitPlayerSkillTree`
+`NotYet { NotPorted }` before any delete. ctest
 and verify_packages not run (no C++ change). No host or real-game run; every rule stays `UNVERIFIED` in game. Decision
 2026-11-19-57; logs under ignored `local/p2/fix-class-starting-values/`.
 

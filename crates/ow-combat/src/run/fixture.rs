@@ -630,6 +630,11 @@ pub fn willow_game() -> Vec<u8> {
     let notify = w.import_full("Function", pawn, "NotifyTakeHit");
     let ai_class = w.cls("AIClassDefinition", 0);
     let health_definition_property = w.prop("Object", ai_class, "HealthPoolDefinition", 0, 0);
+    // The three fields `ApplyCharacterClassStartingValues`' base reads, declared as the game's class declares them
+    // (review r1 of #444: undeclared is bad data); unset in every toy AI class, so the route makes no pool.
+    w.array_of(ai_class, "ResourcePools", "Object", 0);
+    w.prop("Object", ai_class, "AccuracyPoolDefinition", 0, 0);
+    w.prop("Object", ai_class, "OffHandAccuracyPoolDefinition", 0, 0);
     w.prop("Object", ai_class, "AIDef", 0, 0);
     let starting = w.strukt(ai_class, "AttributeStartingValue");
     w.prop("Object", starting, "Attribute", 0, 0);
@@ -1689,22 +1694,31 @@ pub fn toy_starting() -> Vec<u8> {
     w.build()
 }
 
-/// `ToyPlayerStarting` (decision 2026-11-19-57), an extra package the player-controller starting-values tests add.
-/// Invented throughout:
+/// `ToyPlayerStarting` (decision 2026-11-19-57; extended in review r1 of #444), an extra package the starting-values
+/// tests add. Invented throughout:
 /// - `ToyPlayerClass` with the six definition fields the two natives read (the base's three, the override's three);
 /// - `ToyPlayerController`, a `WillowPlayerController` with `PlayerClass`, the five pool reference fields and a native
-///   `OnPlayerClassChange()` the test binds to count its calls;
-/// - four resources (`Accuracy`, `Exp`, `Cooldown`, `Melee`) and one pool definition of each, plus `Pool_Exp_Health`,
-///   an experience definition of `ToyPawns`' `Health` resource;
-/// - `Class_Player` (`ToyPawns`' `Pool_Health` and `Pool_Ammo`, the accuracy pool, and the three player pools),
-///   `Class_ExpOnly` (`Pool_Health`, and only the experience pool) and `Class_DupExp` (`Pool_Health`, and
-///   `Pool_Exp_Health`: one resource twice across the base and the override).
+///   `OnPlayerClassChange()` the tests bind;
+/// - `ToySkillController`, the same with a native `InitPlayerSkillTree()` nothing binds and a script
+///   `OnPlayerClassChange()` that calls it (the installed event's dependency);
+/// - `ToyRefController`, the same as `ToyPlayerController` but with `AccuracyPool` declared as an unrelated struct;
+/// - three malformed classes: `ToyIntListClass` (`ResourcePools` an array of ints), `ToyIntAccClass`
+///   (`AccuracyPoolDefinition` an int) and `ToyNoOffHandClass` (no `OffHandAccuracyPoolDefinition`);
+/// - `ToyHookPool`, an `Engine.ResourcePool` whose `InitializeAuthoritative` is a native the tests bind (to refuse, or to
+///   change the controller's `PlayerClass` while the base runs);
+/// - five resources (`Accuracy`, `OffHand`, `Exp`, `Cooldown`, `Melee`) and one pool definition of each, `Pool_Hook` (a
+///   `ToyHookPool` resource) and `Pool_Exp_Health`, an experience definition of `ToyPawns`' `Health` resource;
+/// - the classes `Class_Player` (`ToyPawns`' `Pool_Health` and `Pool_Ammo`, the accuracy pool, the three player pools),
+///   `Class_ExpOnly` (`Pool_Health`, the experience pool), `Class_DupExp` (`Pool_Health` and `Pool_Exp_Health`: one
+///   resource twice across the base and the override), `Class_Hook` (`Pool_Health` then `Pool_Hook`) and
+///   `Class_OffHand` (`Pool_Health`, the accuracy and off-hand pools, the experience pool).
 pub fn toy_player_starting() -> Vec<u8> {
-    let mut w = Toy::new(&["Object", "Array", "Struct"]);
+    let mut w = Toy::new(&["Object", "Array", "Struct", "Int"]);
     w.import_root();
     let engine = w.import_full("Package", 0, "Engine");
     let actor = w.import_full("Class", engine, "Actor");
     let reference = w.import_full("ScriptStruct", actor, "ResourcePoolReference");
+    let resource_pool = w.import_full("Class", engine, "ResourcePool");
     let willow = w.import_full("Package", 0, "WillowGame");
     let player_controller = w.import_full("Class", willow, "WillowPlayerController");
     let class = w.cls("ToyPlayerClass", 0);
@@ -1718,12 +1732,53 @@ pub fn toy_player_starting() -> Vec<u8> {
     ] {
         w.prop("Object", class, f, 0, 0);
     }
+    let refs = ["AccuracyPool", "OffHandAccuracyPool", "ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"];
     let controller = w.cls("ToyPlayerController", player_controller);
     w.prop("Object", controller, "PlayerClass", 0, 0);
-    for f in ["AccuracyPool", "OffHandAccuracyPool", "ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"] {
+    for f in refs {
         w.prop("Struct", controller, f, 0, reference);
     }
     w.native(controller, "OnPlayerClassChange", &[], None);
+    let skill = w.cls("ToySkillController", player_controller);
+    w.prop("Object", skill, "PlayerClass", 0, 0);
+    for f in refs {
+        w.prop("Struct", skill, f, 0, reference);
+    }
+    let init_tree = w.native(skill, "InitPlayerSkillTree", &[], None);
+    w.function(skill, "OnPlayerClassChange", &[], None, SCRIPT, |_| {
+        let mut a = Asm::new();
+        a.stmt().final_function(init_tree, |_| {});
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
+    let bad_ref = w.cls("ToyRefController", player_controller);
+    w.prop("Object", bad_ref, "PlayerClass", 0, 0);
+    let not_a_ref = w.strukt(bad_ref, "ToyNotARef");
+    w.prop("Int", not_a_ref, "X", 0, 0);
+    w.prop("Struct", bad_ref, "AccuracyPool", 0, not_a_ref);
+    for f in &refs[1..] {
+        w.prop("Struct", bad_ref, f, 0, reference);
+    }
+    w.native(bad_ref, "OnPlayerClassChange", &[], None);
+    let int_list = w.cls("ToyIntListClass", 0);
+    w.array_of(int_list, "ResourcePools", "Int", 0);
+    w.prop("Object", int_list, "AccuracyPoolDefinition", 0, 0);
+    w.prop("Object", int_list, "OffHandAccuracyPoolDefinition", 0, 0);
+    let int_acc = w.cls("ToyIntAccClass", 0);
+    w.array_of(int_acc, "ResourcePools", "Object", 0);
+    w.prop("Int", int_acc, "AccuracyPoolDefinition", 0, 0);
+    w.prop("Object", int_acc, "OffHandAccuracyPoolDefinition", 0, 0);
+    let no_off_hand = w.cls("ToyNoOffHandClass", 0);
+    w.array_of(no_off_hand, "ResourcePools", "Object", 0);
+    w.prop("Object", no_off_hand, "AccuracyPoolDefinition", 0, 0);
+    let hook_pool = w.cls("ToyHookPool", resource_pool);
+    w.native(
+        hook_pool,
+        "InitializeAuthoritative",
+        &[P("Object", "InDefinition", 0, 0), P("Object", "ProviderToAssociatePoolWith", 0, 0)],
+        None,
+    );
     let p = &mut w.t.p;
     let resource_class = p.add_import("Core", "Class", engine, "ResourceDefinition");
     let definition_class = p.add_import("Core", "Class", engine, "ResourcePoolDefinition");
@@ -1732,25 +1787,29 @@ pub fn toy_player_starting() -> Vec<u8> {
     let pool_health = p.add_import("Engine", "ResourcePoolDefinition", pawns, "Pool_Health");
     let pool_ammo = p.add_import("Engine", "ResourcePoolDefinition", pawns, "Pool_Ammo");
     let health = p.add_import("Engine", "ResourceDefinition", pawns, "Health");
-    let resource = |p: &mut PackageBuilder, name: &str| {
-        let tag = p.tag("DefaultResourcePoolClass", "ClassProperty", &ints(&[pool_class]));
+    let resource = |p: &mut PackageBuilder, name: &str, pool: i32| {
+        let tag = p.tag("DefaultResourcePoolClass", "ClassProperty", &ints(&[pool]));
         let payload = object_payload(p, vec![tag]);
         p.add_export(resource_class, name, payload)
     };
-    let accuracy = resource(p, "Accuracy");
-    let exp = resource(p, "Exp");
-    let cooldown = resource(p, "Cooldown");
-    let melee = resource(p, "Melee");
+    let accuracy = resource(p, "Accuracy", pool_class);
+    let off_hand = resource(p, "OffHand", pool_class);
+    let exp = resource(p, "Exp", pool_class);
+    let cooldown = resource(p, "Cooldown", pool_class);
+    let melee = resource(p, "Melee", pool_class);
+    let hook = resource(p, "Hook", hook_pool);
     let definition = |p: &mut PackageBuilder, name: &str, r: i32, start: f32| {
         let tags = vec![p.object_tag("Resource", r), p.float_tag("StartingValue", start)];
         let payload = object_payload(p, tags);
         p.add_export(definition_class, name, payload)
     };
     let pool_accuracy = definition(p, "Pool_Accuracy", accuracy, 1.0);
+    let pool_off_hand = definition(p, "Pool_OffHand", off_hand, 1.5);
     let pool_exp = definition(p, "Pool_Exp", exp, 2.0);
     let pool_cooldown = definition(p, "Pool_Cooldown", cooldown, 3.0);
     let pool_melee = definition(p, "Pool_Melee", melee, 4.0);
     let pool_exp_health = definition(p, "Pool_Exp_Health", health, 5.0);
+    let pool_hook = definition(p, "Pool_Hook", hook, 6.0);
     let list = |p: &mut PackageBuilder, pools: &[i32]| {
         let refs: Vec<u8> = pools.iter().flat_map(|r| r.to_le_bytes()).collect();
         p.array_tag("ResourcePools", i32::try_from(pools.len()).expect("fits"), &refs)
@@ -1770,6 +1829,17 @@ pub fn toy_player_starting() -> Vec<u8> {
     let tags = vec![list(p, &[pool_health]), p.object_tag("ExperiencePoolDefinition", pool_exp_health)];
     let payload = object_payload(p, tags);
     p.add_export(class, "Class_DupExp", payload);
+    let tags = vec![list(p, &[pool_health, pool_hook])];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_Hook", payload);
+    let tags = vec![
+        list(p, &[pool_health]),
+        p.object_tag("AccuracyPoolDefinition", pool_accuracy),
+        p.object_tag("OffHandAccuracyPoolDefinition", pool_off_hand),
+        p.object_tag("ExperiencePoolDefinition", pool_exp),
+    ];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_OffHand", payload);
     w.build()
 }
 

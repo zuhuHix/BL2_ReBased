@@ -1598,7 +1598,10 @@ fn pool_definitions(vm: &mut Vm, controller: ow_object::ids::ObjRef) -> Vec<(u8,
     pools
         .into_iter()
         .map(|(i, pool)| {
-            let def = crate::hit::access::object(vm, pool, "Definition").unwrap().unwrap();
+            // A pool a terminal refusal left in its slot may have no definition yet (review r1 of #444).
+            let Some(def) = crate::hit::access::object(vm, pool, "Definition").unwrap() else {
+                return (i, "-".to_string());
+            };
             let name = vm.space.heap.get(def).unwrap().name;
             (i, vm.space.names.text(name).into_owned())
         })
@@ -1648,9 +1651,10 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     apply_class_starting_values(vm, enemy.mind, None).unwrap();
     assert!(pool_definitions(vm, enemy.mind).is_empty(), "no class: only the delete");
     let player = make(vm, "WillowGame.WillowPlayerController");
-    // Not the authority and with no manager: the base runs, and `CreatePool` makes no manager off the authority, so
-    // no pool is made (the pool creation rule, not this native's).
-    apply_class_starting_values(vm, player, Some(two)).unwrap();
+    // Not the authority and with no manager: no manager would be made for the pools to make, which is the note's open
+    // question 3 (review r1 of #444): `NotYet { NotRead }` before anything changes.
+    let refused = apply_class_starting_values(vm, player, Some(two)).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
     assert!(pool_definitions(vm, player).is_empty());
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
@@ -1694,27 +1698,7 @@ fn a_class_switch_that_stops_stops_every_later_step_in_off() {
 /// A `ToyPlayerStarting` world (decision 2026-11-19-57): its player controller, with `OnPlayerClassChange` bound to a
 /// native that keeps, per call, how many pools the manager held then.
 fn player_starting(mode: ParityMode) -> (Run, Dir, ow_object::ids::ObjRef, Rc<std::cell::RefCell<Vec<usize>>>) {
-    let (w, dir) = world_with(
-        mode,
-        vec![("ToyStarting.upk", fixture::toy_starting()), ("ToyPlayerStarting.upk", fixture::toy_player_starting())],
-    );
-    let mut run = Run::new(w).unwrap();
-    let vm = &mut run.world().vm;
-    let player = make(vm, "ToyPlayerStarting.ToyPlayerController");
-    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
-    let seen = calls.clone();
-    let f = vm.find_function("ToyPlayerStarting.ToyPlayerController.OnPlayerClassChange").unwrap();
-    let key = vm.function(f).unwrap().native_key.clone().unwrap();
-    vm.register_native(
-        &key,
-        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
-            let me = c.this.unwrap();
-            let n = pool_definitions(c.vm, me).len();
-            seen.borrow_mut().push(n);
-            Ok(Value::None)
-        }),
-    )
-    .unwrap();
+    let (run, dir, player, calls, _switches) = player_starting_hooked(mode);
     (run, dir, player, calls)
 }
 
@@ -1859,6 +1843,232 @@ fn the_player_override_refuses_before_anything_changes() {
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("WillowPlayerController.ApplyCharacterClassStartingValues(object)"));
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
+}
+
+/// What the bound `ToyHookPool.InitializeAuthoritative` does (review r1 of #444).
+#[derive(Clone, Copy)]
+enum Hook {
+    /// Sets the pool's `Definition`, as the stock script does.
+    Plain,
+    /// Refuses with an invented `NotYet { NotRead }`.
+    Refuse,
+    /// Sets `Definition`, then sets the owner's `PlayerClass` to this class (a callback during the base).
+    SetPlayerClass(ow_object::ids::ObjRef),
+}
+
+/// The switches [`player_starting_hooked`] binds: whether `OnPlayerClassChange` refuses, and what the hook pool does.
+struct Switches {
+    event_refuses: Rc<std::cell::Cell<bool>>,
+    hook: Rc<std::cell::Cell<Hook>>,
+}
+
+/// [`player_starting`] with the switches.
+fn player_starting_hooked(
+    mode: ParityMode,
+) -> (Run, Dir, ow_object::ids::ObjRef, Rc<std::cell::RefCell<Vec<usize>>>, Switches) {
+    let (w, dir) = world_with(
+        mode,
+        vec![("ToyStarting.upk", fixture::toy_starting()), ("ToyPlayerStarting.upk", fixture::toy_player_starting())],
+    );
+    let mut run = Run::new(w).unwrap();
+    let vm = &mut run.world().vm;
+    let player = make(vm, "ToyPlayerStarting.ToyPlayerController");
+    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let switches = Switches { event_refuses: Rc::default(), hook: Rc::new(std::cell::Cell::new(Hook::Plain)) };
+    let (seen, refuses) = (calls.clone(), switches.event_refuses.clone());
+    let f = vm.find_function("ToyPlayerStarting.ToyPlayerController.OnPlayerClassChange").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+            let me = c.this.unwrap();
+            let n = pool_definitions(c.vm, me).len();
+            seen.borrow_mut().push(n);
+            if refuses.get() {
+                return Err(ow_core::NotYet::not_read("an invented event refusal", "a record").into());
+            }
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    let hook = switches.hook.clone();
+    let f = vm.find_function("ToyPlayerStarting.ToyHookPool.InitializeAuthoritative").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+            let pool = c.this.unwrap();
+            let def = c.arg(0)?.clone();
+            let owner = match c.arg(1)? {
+                Value::Object(o) => *o,
+                _ => None,
+            };
+            match hook.get() {
+                Hook::Refuse => return Err(ow_core::NotYet::not_read("an invented pool refusal", "a record").into()),
+                Hook::Plain => {}
+                Hook::SetPlayerClass(class) => {
+                    let owner = owner.expect("the controller");
+                    crate::hit::access::set_required(c.vm, owner, "PlayerClass", Value::Object(Some(class)), "test")?;
+                }
+            }
+            crate::hit::access::set_required(c.vm, pool, "Definition", def, "test")?;
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    (run, dir, player, calls, switches)
+}
+
+fn is_not_yet(e: &VmError, missing: ow_core::Missing) -> bool {
+    matches!(e, VmError::NotYet(n) if n.missing == missing)
+}
+
+/// Review r1 of #444, item 1: when the event will run, an `InitPlayerSkillTree` that its script calls and nothing binds
+/// is `NotYet { NotPorted }` before anything is deleted. The controller is `ToySkillController`, whose script event calls
+/// the unbound native; its populated manager keeps its pool.
+#[test]
+fn an_unbound_skill_tree_native_the_event_calls_is_not_yet_before_any_delete() {
+    let (mut run, _dir, _player, _calls, _s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let skill = make(vm, "ToyPlayerStarting.ToySkillController");
+    set_role(vm, skill, true);
+    let health = crate::hit::stock_object(vm, "ToyPawns.Pool_Health").unwrap();
+    let made = ow_world::pools::create_pool(vm, None, Some(skill), Some(health), false).unwrap();
+    crate::hit::access::set_required(vm, skill, "ResourcePoolManager", Value::Object(made.manager), "test").unwrap();
+    let before = pool_definitions(vm, skill);
+    assert_eq!(before.len(), 1);
+    set_player_class(vm, skill, Some("ToyPlayerStarting.Class_ExpOnly"));
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_ExpOnly").unwrap();
+    let e = crate::hit::pools::apply_class_starting_values(vm, skill, Some(class)).unwrap_err();
+    assert!(is_not_yet(&e, ow_core::Missing::NotPorted), "{e}");
+    assert!(e.to_string().contains("InitPlayerSkillTree") && !e.to_string().contains("partial writes"), "{e}");
+    assert_eq!(pool_definitions(vm, skill), before, "nothing deleted");
+}
+
+/// Item 2: a refusal in a later pool's `InitializeAuthoritative`, after the old pools are deleted and the first new
+/// pool is made, is terminal: "stopped after partial writes", its kind kept, nothing put back, no event. A refusal in the
+/// event after every pool is made is terminal in the same way.
+#[test]
+fn a_refusal_after_the_first_delete_is_terminal() {
+    let (mut run, _dir, player, calls, s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, None);
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap();
+    assert_eq!(pool_definitions(vm, player).len(), 3);
+    s.hook.set(Hook::Refuse);
+    let hooked = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Hook").unwrap();
+    let e = crate::hit::pools::apply_class_starting_values(vm, player, Some(hooked)).unwrap_err();
+    assert!(is_not_yet(&e, ow_core::Missing::NotRead), "{e}");
+    assert!(e.to_string().starts_with("stopped after partial writes: ") && e.to_string().contains("invented pool"), "{e}");
+    let left = pool_definitions(vm, player);
+    assert_eq!(left.first(), Some(&(0, "Pool_Health".to_string())), "the old pools are gone, the first new one stays");
+    assert!(!left.iter().any(|(_, n)| n == "Pool_Ammo" || n == "Pool_Accuracy"), "{left:?}");
+    assert_eq!(*calls.borrow(), [3], "no event after the refusal");
+    // The event refuses after every pool is made.
+    s.hook.set(Hook::Plain);
+    s.event_refuses.set(true);
+    let e = crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap_err();
+    assert!(is_not_yet(&e, ow_core::Missing::NotRead), "{e}");
+    assert!(e.to_string().starts_with("stopped after partial writes: ") && e.to_string().contains("invented event"), "{e}");
+    assert_eq!(pool_definitions(vm, player).len(), 3, "the pools stay made");
+}
+
+/// Item 3: making pools on a manager that is not the authority is the note's open question 3: `NotYet { NotRead }`
+/// before any write. The controller holds a live pool and an accuracy reference; both stay as they were.
+#[test]
+fn pools_to_make_on_a_manager_that_is_not_the_authority_are_not_yet_before_any_write() {
+    let (mut run, _dir, player, calls, _s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, None);
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap();
+    let (pools, held) = (pool_definitions(vm, player), reference(vm, player, "AccuracyPool").1);
+    let manager = crate::hit::access::object(vm, player, "ResourcePoolManager").unwrap().unwrap();
+    set_role(vm, manager, false);
+    let e = crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap_err();
+    assert!(is_not_yet(&e, ow_core::Missing::NotRead), "{e}");
+    assert!(e.to_string().contains("open question 3") && !e.to_string().contains("partial writes"), "{e}");
+    assert_eq!(pool_definitions(vm, player), pools);
+    assert_eq!(reference(vm, player, "AccuracyPool").1, held, "the held reference is not overwritten");
+    assert_eq!(*calls.borrow(), [3], "no event");
+}
+
+/// Item 4: the override is decided from the controller after the base. A callback in the base's second pool sets
+/// `PlayerClass` from `Class_Player` to `Class_ExpOnly`: the override makes only the experience pool.
+#[test]
+fn the_override_reads_player_class_after_the_base() {
+    let (mut run, _dir, player, calls, s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_Player"));
+    let only = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_ExpOnly").unwrap();
+    s.hook.set(Hook::SetPlayerClass(only));
+    let hooked = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Hook").unwrap();
+    crate::hit::pools::apply_class_starting_values(vm, player, Some(hooked)).unwrap();
+    assert_eq!(pool_definitions(vm, player), names(&[(0, "Pool_Health"), (1, "Pool_Hook"), (2, "Pool_Exp")]));
+    assert_eq!(reference(vm, player, "ExpPool").0, 2);
+    assert_eq!(*calls.borrow(), [3]);
+}
+
+/// Item 5: malformed inputs refuse before anything is deleted, against a populated manager. A reference field that
+/// is not a pool reference struct; a class whose `ResourcePools` holds ints; an accuracy definition field that is an
+/// int; a class that does not declare `OffHandAccuracyPoolDefinition`.
+#[test]
+fn malformed_inputs_refuse_before_any_delete() {
+    let (mut run, _dir, player, _calls, _s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, None);
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap();
+    let pools = pool_definitions(vm, player);
+    let int_list = make(vm, "ToyPlayerStarting.ToyIntListClass");
+    crate::hit::access::set_required(vm, int_list, "ResourcePools", Value::Array(Rc::new(vec![Value::Int(1)])), "test")
+        .unwrap();
+    let int_acc = make(vm, "ToyPlayerStarting.ToyIntAccClass");
+    let no_off_hand = make(vm, "ToyPlayerStarting.ToyNoOffHandClass");
+    for (bad, text) in [(int_list, "not an object"), (int_acc, "not an object"), (no_off_hand, "OffHandAccuracyPoolDefinition")] {
+        let e = crate::hit::pools::apply_class_starting_values(vm, player, Some(bad)).unwrap_err();
+        assert!(e.to_string().contains(text) && !e.to_string().contains("partial writes"), "{e}");
+        assert_eq!(pool_definitions(vm, player), pools, "nothing deleted");
+    }
+    // A controller whose AccuracyPool is not a pool reference struct.
+    let bad_ref = make(vm, "ToyPlayerStarting.ToyRefController");
+    set_role(vm, bad_ref, true);
+    let health = crate::hit::stock_object(vm, "ToyPawns.Pool_Health").unwrap();
+    let made = ow_world::pools::create_pool(vm, None, Some(bad_ref), Some(health), false).unwrap();
+    crate::hit::access::set_required(vm, bad_ref, "ResourcePoolManager", Value::Object(made.manager), "test").unwrap();
+    let before = pool_definitions(vm, bad_ref);
+    let e = crate::hit::pools::apply_class_starting_values(vm, bad_ref, Some(class)).unwrap_err();
+    assert!(e.to_string().contains("pool reference struct"), "{e}");
+    assert_eq!(pool_definitions(vm, bad_ref), before, "nothing deleted");
+}
+
+/// Item 6: a distinct off-hand definition comes after accuracy and before experience, and its reference is stored in
+/// `OffHandAccuracyPool`. A later no-class call deletes every pool and keeps both accuracy references as they were.
+#[test]
+fn the_off_hand_pool_comes_after_accuracy_and_a_no_class_call_keeps_both_references() {
+    let (mut run, _dir, player, _calls, _s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_OffHand"));
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_OffHand").unwrap();
+    crate::hit::pools::apply_class_starting_values(vm, player, Some(class)).unwrap();
+    assert_eq!(
+        pool_definitions(vm, player),
+        names(&[(0, "Pool_Health"), (1, "Pool_Accuracy"), (2, "Pool_OffHand"), (3, "Pool_Exp")])
+    );
+    assert_eq!(reference(vm, player, "AccuracyPool").0, 1);
+    assert_eq!(reference(vm, player, "OffHandAccuracyPool").0, 2);
+    assert_eq!(reference(vm, player, "ExpPool").0, 3);
+    let held = (reference(vm, player, "AccuracyPool").1, reference(vm, player, "OffHandAccuracyPool").1);
+    set_player_class(vm, player, None);
+    crate::hit::pools::apply_class_starting_values(vm, player, None).unwrap();
+    assert!(pool_definitions(vm, player).is_empty());
+    assert_eq!((reference(vm, player, "AccuracyPool").1, reference(vm, player, "OffHandAccuracyPool").1), held);
 }
 
 /// `SetDefaultPhysics` and `GetExpLevel` in Off (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).

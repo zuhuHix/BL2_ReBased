@@ -3,7 +3,7 @@
 //! Reference retains its existing bindings and stubs. No regeneration is implemented here.
 
 use ow_core::{NotYet, ParityMode};
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ObjRef, StructId};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
@@ -154,22 +154,32 @@ fn class_argument(v: &Value, unit: &str) -> Result<Option<ObjRef>, VmError> {
 /// `CreatePool` with the controller as owner (the lowest free slot); a manager that call spawns is written back to
 /// `ResourcePoolManager`. No role check, and nothing else changes.
 ///
-/// **The override (section 2):** the base first, with the same class. Then only on the authority (`Role` is
-/// `ROLE_Authority`): with the controller's own `PlayerClass` (not the argument), pools for its
-/// `ExperiencePoolDefinition`, `SkillCooldownPoolDefinition` and `MeleeSkillCooldownPoolDefinition`, in that order and
-/// each only when set, stored as `ExpPool`, `SkillCooldownPool` and `MeleeSkillCooldownPool`; then, with or without a
-/// `PlayerClass`, the controller's script event `OnPlayerClassChange()`, run through the VM.
+/// **The override (section 2):** the base first, with the same class. Then, decided from the controller as it stands
+/// after the base, only on the authority (`Role` is `ROLE_Authority`): with the controller's own `PlayerClass` (not the
+/// argument), pools for its `ExperiencePoolDefinition`, `SkillCooldownPoolDefinition` and
+/// `MeleeSkillCooldownPoolDefinition`, in that order and each only when set, stored as `ExpPool`, `SkillCooldownPool`
+/// and `MeleeSkillCooldownPool`; then, with or without a `PlayerClass`, the controller's script event
+/// `OnPlayerClassChange()`, run through the VM.
 ///
 /// **References left as they were:** no stored pool reference is cleared. With no class, an unset definition, a
 /// controller that is not the authority or no `PlayerClass`, the field keeps what it held. Its pool was deleted, so it
-/// reads as not valid by the manager's GUID rule (whether a new pool in the same slot can carry the same GUID is the
-/// note's open question 2, not decided here).
+/// reads as not valid by the manager's GUID rule (open question 2 is not decided here).
 ///
-/// Everything is read and checked before the delete: the class fields, `Role`, `PlayerClass`, the struct types of the
-/// reference fields to be written, and that the controller has `OnPlayerClassChange` when it will be called. Refused,
-/// `NotYet { NotRead }`, before anything changes: pools that name one resource twice (the base's and the override's
-/// together). The note does not give `CreatePool`'s reinitialise flag; after the delete no pool exists, so the flag can
-/// matter only for a second pool of the same resource.
+/// **Refusals (the hub's ruling in review r1 of #444, the same rule as #437, #439 and #442).** Every refusal that can
+/// be decided is decided before the first delete, on the controller as it is when the call starts:
+/// - bad data: a class whose `ResourcePools` is not an array of objects, or whose accuracy definition fields are not
+///   objects (all three must be declared); a `Role` that is not a byte; a `PlayerClass` or a player definition field
+///   that is not an object; a reference field that is not a pool reference struct (all four fields, their kinds);
+/// - `NotYet { NotRead }`: pools that name one resource twice (the base's and the override's together; `CreatePool`'s
+///   reinitialise flag is not given), and any pool to make when the controller's manager is not the authority, or when
+///   there is no manager and none would be spawned (the note's open question 3: what creation does on such a manager);
+/// - `NotYet { NotPorted }`: when the event will run, a controller whose `InitPlayerSkillTree` is a native nothing binds
+///   (`OnPlayerClassChange`'s script calls it; NATIVE_SKILLS.md); a controller without `OnPlayerClassChange` is bad
+///   data.
+///
+/// After the first delete, a refusal (a pool's `ShutDown` or `InitializeAuthoritative`, the event's script, or a check
+/// on the override decided again because the base changed `Role` or `PlayerClass`) is **terminal**: nothing is put
+/// back, its text starts "stopped after partial writes", and its kind is kept.
 ///
 /// Open question 1 (whether the argument and `PlayerClass` can differ) does not change the rule: each step reads what
 /// the note says it reads. UNVERIFIED in the running game.
@@ -186,65 +196,132 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
     } else {
         "Controller.ApplyCharacterClassStartingValues"
     };
-    // The pools to make, in order, each with the controller field that stores its reference (none for `ResourcePools`).
-    let mut plan: Vec<(ObjRef, Option<&'static str>)> = Vec::new();
-    if let Some(class) = class {
-        let class = super::access::loaded(vm, class)?;
-        if let Some(list) = get(vm, class, "ResourcePools")? {
-            let Some(list) = list.elements() else {
-                return Err(super::access::error(format!("{unit}: the class's ResourcePools is not an array")));
-            };
-            plan.extend(list.iter().filter_map(object_of).map(|d| (d, None)));
-        }
-        for (def, field) in
-            [("AccuracyPoolDefinition", "AccuracyPool"), ("OffHandAccuracyPoolDefinition", "OffHandAccuracyPool")]
-        {
-            if let Some(d) = object(vm, class, def)? {
-                plan.push((d, Some(field)));
-            }
-        }
+    let base = base_plan(vm, class, unit)?;
+    let (authority, extra) = if player { override_plan(vm, controller, unit)? } else { (false, Vec::new()) };
+    let all: Vec<Step> = base.iter().chain(&extra).copied().collect();
+    let types = check_plan(vm, controller, &all, unit)?;
+    if player && authority {
+        check_event(vm, controller, unit)?;
     }
-    let mut event = false;
-    if player && is_authority_strict(vm, controller, unit)? {
-        let player_class = match required(vm, controller, "PlayerClass", unit)? {
-            Value::Object(o) => o,
-            other => {
-                return Err(super::access::error(format!(
-                    "{unit}: PlayerClass holds {}, not an object",
-                    other.kind_name()
-                )));
+    // The first delete: from here on a refusal is terminal.
+    let committed = (|| -> Result<(), VmError> {
+        let mut manager = object(vm, controller, "ResourcePoolManager")?;
+        ow_world::pools::delete_all_pools(vm, manager)?;
+        for (&(def, field), ty) in base.iter().zip(&types) {
+            create(vm, controller, &mut manager, def, field, *ty, unit)?;
+        }
+        if !player {
+            return Ok(());
+        }
+        // The override is decided from the controller after the base (the note's order), checked again when the base
+        // changed what the plan was made from.
+        let (authority_now, extra_now) = override_plan(vm, controller, unit)?;
+        let extra_types = if (authority_now, &extra_now) == (authority, &extra) {
+            types[base.len()..].to_vec()
+        } else {
+            let all: Vec<Step> = base.iter().chain(&extra_now).copied().collect();
+            let types = check_plan(vm, controller, &all, unit)?;
+            if authority_now {
+                check_event(vm, controller, unit)?;
             }
+            types[base.len()..].to_vec()
         };
-        if let Some(pc) = player_class {
-            let pc = super::access::loaded(vm, pc)?;
-            for (def, field) in [
-                ("ExperiencePoolDefinition", "ExpPool"),
-                ("SkillCooldownPoolDefinition", "SkillCooldownPool"),
-                ("MeleeSkillCooldownPoolDefinition", "MeleeSkillCooldownPool"),
-            ] {
-                match required(vm, pc, def, unit)? {
-                    Value::Object(Some(d)) => plan.push((d, Some(field))),
+        for (&(def, field), ty) in extra_now.iter().zip(&extra_types) {
+            create(vm, controller, &mut manager, def, field, *ty, unit)?;
+        }
+        if authority_now {
+            super::call_method(vm, controller, "OnPlayerClassChange", vec![])?;
+        }
+        Ok(())
+    })();
+    committed.map_err(ow_world::pools::after_partial_writes)
+}
+
+/// One pool to make: its definition and the controller field that stores its reference (none for `ResourcePools`).
+type Step = (ObjRef, Option<&'static str>);
+
+/// The base's pools from the class argument: its `ResourcePools` in order (None entries skipped: `CreatePool` makes
+/// nothing for one), then the two accuracy definitions when set. The three fields must be declared with their kinds.
+fn base_plan(vm: &mut Vm, class: Option<ObjRef>, unit: &str) -> Result<Vec<Step>, VmError> {
+    let Some(class) = class else { return Ok(Vec::new()) };
+    let class = super::access::loaded(vm, class)?;
+    let mut plan = Vec::new();
+    match required(vm, class, "ResourcePools", unit)? {
+        Value::Array(list) => {
+            for v in list.iter() {
+                match v {
+                    Value::Object(Some(d)) => plan.push((*d, None)),
                     Value::Object(None) => {}
                     other => {
                         return Err(super::access::error(format!(
-                            "{unit}: the PlayerClass's {def} holds {}, not an object",
+                            "{unit}: an entry of the class's ResourcePools holds {}, not an object",
                             other.kind_name()
                         )));
                     }
                 }
             }
         }
-        let own = vm.space.heap.get(controller)?.class;
-        let state = vm.space.heap.get(controller)?.state;
-        if vm.find_method(own, "OnPlayerClassChange", state)?.is_none() {
-            return Err(super::access::error(format!("{unit}: the controller has no OnPlayerClassChange")));
+        other => {
+            return Err(super::access::error(format!(
+                "{unit}: the class's ResourcePools holds {}, not an array",
+                other.kind_name()
+            )));
         }
-        event = true;
     }
-    // Every pool the call will make, before anything is deleted: one resource twice is not read.
+    for (def, field) in [("AccuracyPoolDefinition", "AccuracyPool"), ("OffHandAccuracyPoolDefinition", "OffHandAccuracyPool")] {
+        if let Some(d) = object_field(vm, class, def, unit)? {
+            plan.push((d, Some(field)));
+        }
+    }
+    Ok(plan)
+}
+
+/// The override's part, from the controller as it is now: whether it is the authority, and the `PlayerClass` pools
+/// it will make (none off the authority or without a `PlayerClass`).
+fn override_plan(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<(bool, Vec<Step>), VmError> {
+    let authority = super::with_state(vm, |s| s.authority)?;
+    let authority = match required(vm, controller, "Role", unit)? {
+        Value::Byte(r) => i64::from(r) == i64::from(authority),
+        other => return Err(super::access::error(format!("{unit}: Role holds {}, not a byte", other.kind_name()))),
+    };
+    if !authority {
+        return Ok((false, Vec::new()));
+    }
+    let mut plan = Vec::new();
+    if let Some(pc) = object_field(vm, controller, "PlayerClass", unit)? {
+        let pc = super::access::loaded(vm, pc)?;
+        for (def, field) in [
+            ("ExperiencePoolDefinition", "ExpPool"),
+            ("SkillCooldownPoolDefinition", "SkillCooldownPool"),
+            ("MeleeSkillCooldownPoolDefinition", "MeleeSkillCooldownPool"),
+        ] {
+            if let Some(d) = object_field(vm, pc, def, unit)? {
+                plan.push((d, Some(field)));
+            }
+        }
+    }
+    Ok((true, plan))
+}
+
+/// A declared object field of `o`: its object, or None when unset; undeclared or of another kind is bad data.
+fn object_field(vm: &mut Vm, o: ObjRef, name: &str, unit: &str) -> Result<Option<ObjRef>, VmError> {
+    match required(vm, o, name, unit)? {
+        Value::Object(v) => Ok(v),
+        other => Err(super::access::error(format!(
+            "{unit}: {} {name} holds {}, not an object",
+            super::access::class_name(vm, o),
+            other.kind_name()
+        ))),
+    }
+}
+
+/// The checks on a plan that change nothing: one resource twice is `NotYet { NotRead }`; every reference field to be
+/// written must be a pool reference struct (its type is returned); any pool to make needs an authoritative manager,
+/// or one that would be spawned (else `NotYet { NotRead }`, the note's open question 3).
+fn check_plan(vm: &mut Vm, controller: ObjRef, plan: &[Step], unit: &str) -> Result<Vec<Option<StructId>>, VmError> {
     let mut resources = Vec::new();
     let mut types = Vec::new();
-    for &(def, field) in &plan {
+    for &(def, field) in plan {
         let def = super::access::loaded(vm, def)?;
         let resource = object(vm, def, "Resource")?;
         if resource.is_some() && resources.contains(&resource) {
@@ -260,43 +337,81 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
             None => None,
         });
     }
-    let mut manager = object(vm, controller, "ResourcePoolManager")?;
-    ow_world::pools::delete_all_pools(vm, manager)?;
-    for ((def, field), ty) in plan.into_iter().zip(types) {
-        let made = ow_world::pools::create_pool(vm, manager, Some(controller), Some(def), false)?;
-        manager = made.manager;
-        set_required(vm, controller, "ResourcePoolManager", Value::Object(manager), unit)?;
-        if let (Some(field), Some(ty)) = (field, ty) {
-            let v = ow_world::pools::ref_value(&vm.space, ty, made.reference)?;
-            set_required(vm, controller, field, v, unit)?;
+    if !plan.is_empty() {
+        let creates = match object(vm, controller, "ResourcePoolManager")? {
+            Some(m) => ow_world::pools::is_authoritative(&vm.space, m)?,
+            None => ow_world::pools::can_spawn_manager(vm, controller)?,
+        };
+        if !creates {
+            return Err(NotYet::not_read(
+                "ApplyCharacterClassStartingValues making pools on a manager that is not the authority, or with no \
+                 manager and none spawned (NATIVE_CLASS_STARTING_VALUES.md open question 3)",
+                RECORD_CLASS_STARTING,
+            )
+            .into());
         }
     }
-    if event {
-        super::call_method(vm, controller, "OnPlayerClassChange", vec![])?;
+    Ok(types)
+}
+
+/// The event's dependency, checked before it runs: the controller has `OnPlayerClassChange` (bad data otherwise), and
+/// its `InitPlayerSkillTree`, which the event's script calls, is not a native nothing binds (`NotYet { NotPorted }`).
+fn check_event(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<(), VmError> {
+    let own = vm.space.heap.get(controller)?.class;
+    let state = vm.space.heap.get(controller)?.state;
+    if vm.find_method(own, "OnPlayerClassChange", state)?.is_none() {
+        return Err(super::access::error(format!("{unit}: the controller has no OnPlayerClassChange")));
+    }
+    if let Some(f) = vm.find_method(own, "InitPlayerSkillTree", state)?
+        && let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
+        && !vm.has_native(&key)
+    {
+        return Err(NotYet::not_ported(
+            format!(
+                "ApplyCharacterClassStartingValues: OnPlayerClassChange's script calls {key}, which nothing binds \
+                 (NATIVE_SKILLS.md)"
+            ),
+            RECORD_CLASS_STARTING,
+        )
+        .into());
     }
     Ok(())
 }
 
-/// Whether `controller`'s `Role` is `ROLE_Authority`; a controller without a byte `Role` is bad data.
-fn is_authority_strict(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<bool, VmError> {
-    let authority = super::with_state(vm, |s| s.authority)?;
-    match required(vm, controller, "Role", unit)? {
-        Value::Byte(r) => Ok(i64::from(r) == i64::from(authority)),
-        other => Err(super::access::error(format!("{unit}: Role holds {}, not a byte", other.kind_name()))),
+/// Makes one pool through `CreatePool`, writes the manager back, and stores the reference in `field` when there is one.
+fn create(
+    vm: &mut Vm,
+    controller: ObjRef,
+    manager: &mut Option<ObjRef>,
+    def: ObjRef,
+    field: Option<&'static str>,
+    ty: Option<StructId>,
+    unit: &str,
+) -> Result<(), VmError> {
+    let made = ow_world::pools::create_pool(vm, *manager, Some(controller), Some(def), false)?;
+    *manager = made.manager;
+    set_required(vm, controller, "ResourcePoolManager", Value::Object(*manager), unit)?;
+    if let (Some(field), Some(ty)) = (field, ty) {
+        let v = ow_world::pools::ref_value(&vm.space, ty, made.reference)?;
+        set_required(vm, controller, field, v, unit)?;
     }
+    Ok(())
 }
 
-/// The struct type of the controller's pool reference field `field`.
-fn reference_type(vm: &Vm, controller: ObjRef, field: &str, unit: &str) -> Result<ow_object::ids::StructId, VmError> {
+/// The struct type of the controller's pool reference field `field`, checked to be a pool reference struct.
+fn reference_type(vm: &Vm, controller: ObjRef, field: &str, unit: &str) -> Result<StructId, VmError> {
     let class_id = vm.space.heap.get(controller)?.class;
-    vm.space
+    let ty = vm
+        .space
         .prop(class_id, field)
         .and_then(|p| vm.space.classes.decl(p))
         .and_then(|d| match d.kind {
             PropKind::Struct(t) => Some(t),
             _ => None,
         })
-        .ok_or_else(|| super::access::error(format!("{unit}: the controller has no struct property {field}")))
+        .ok_or_else(|| super::access::error(format!("{unit}: the controller has no struct property {field}")))?;
+    ow_world::pools::check_reference_type(&vm.space, ty)?;
+    Ok(ty)
 }
 
 /// The record of the route natives (decision 2026-11-19-32).

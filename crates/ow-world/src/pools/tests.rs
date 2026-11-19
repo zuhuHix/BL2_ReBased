@@ -2208,8 +2208,11 @@ fn object_path_of(space: &ObjectSpace, o: ObjRef) -> String {
 // Review r1 of PR #329
 // ---------------------------------------------------------------------------------------------------------------
 
+/// Review r1 of #444 (the hub's ruling, which replaced the rollback of review r1 of #329): an Off refusal inside
+/// `InitializeAuthoritative` is terminal. Its kind is kept and its text starts "stopped after partial writes"; the slot
+/// keeps the new pool, the GUID stays spent, and no map entry is made.
 #[test]
-fn an_off_mode_refusal_inside_initialize_authoritative_leaves_the_manager_as_it_was() {
+fn an_off_mode_refusal_inside_initialize_authoritative_is_terminal() {
     run(|| {
         let mut x = fx();
         let (controller, m) = x.controller_with_manager("Controller");
@@ -2226,20 +2229,13 @@ fn an_off_mode_refusal_inside_initialize_authoritative_leaves_the_manager_as_it_
                 ],
             )
             .unwrap_err();
+        assert!(e.to_string().contains("stopped after partial writes: "), "{e}");
         assert!(
             matches!(vm_missing(e), Missing::NotRead),
             "ResetIdleTimer is not read"
         );
-        assert_eq!(
-            pools_of(&x.w.vm.space, m).unwrap(),
-            vec![],
-            "the slot is emptied again"
-        );
-        assert_eq!(
-            x.get(m, "NextPoolGUID"),
-            Value::Byte(0),
-            "the GUID counter is restored"
-        );
+        assert_eq!(pools_of(&x.w.vm.space, m).unwrap().len(), 1, "the slot keeps the new pool");
+        assert_eq!(x.get(m, "NextPoolGUID"), Value::Byte(1), "the GUID stays spent");
         assert_eq!(
             x.w.vm
                 .service::<PoolMaps>()

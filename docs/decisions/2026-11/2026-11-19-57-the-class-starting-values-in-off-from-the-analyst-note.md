@@ -39,6 +39,34 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
   definition with the six fields, a `WillowPlayerController` subclass with `PlayerClass`, the five references and a
   native `OnPlayerClassChange` the tests count, four invented resources and their pools.
 
+**Review r1 of #444 (the hub's ruling, the same rule as #437, #439 and #442).**
+
+- **Decided before the first delete**, on the controller as it is when the call starts:
+  - **Bad data:**
+    - the base's three class fields must be declared, with `ResourcePools` an array of objects and the accuracy
+      fields objects;
+    - `Role` must be a byte, and `PlayerClass` and the player definition fields objects;
+    - every reference field to be written must be a pool reference struct, with all four fields and their kinds
+      (`ow_world::pools::check_reference_type`);
+    - the controller must have `OnPlayerClassChange` when the event will run.
+  - **`NotYet { NotRead }`:**
+    - one resource twice;
+    - any pool to make when the manager is not the authority, or when there is no manager and none would be spawned.
+      What creation does there is the note's open question 3. Before, the code wrote an invalid reference over the
+      held one.
+  - **`NotYet { NotPorted }`:** when the event will run, an `InitPlayerSkillTree` that the event's script calls and
+    nothing binds (NATIVE_SKILLS.md).
+- **The override is decided from the controller after the base**, in the note's order. If the base changed `Role` or
+  `PlayerClass`, the override's checks run again.
+- **After the first delete, a `NotYet` is terminal.** It may come from a pool's `ShutDown` or `InitializeAuthoritative`,
+  the event, or the override's re-check. Nothing is put back; the text starts "stopped after partial writes" and the
+  kind is kept. Any other error is returned unchanged (the hub's ruling in review r2 of #442).
+- **`ow-world`:** the per-pool rollback of review r1 of #329 is dropped in favour of that terminal stop. A refusal inside
+  `InitializeAuthoritative` now leaves the slot filled and the GUID spent. A manager the call itself spawned is still
+  destroyed. Its test is rewritten to match.
+- **The combat fixture's toy `AIClassDefinition`** now declares the three base fields, unset. The ow-cli combat digests
+  are unchanged (89 passed).
+
 **Verified (automated, invented classes).** `ow-combat`: 3 new tests and 1 updated.
 
 - On the authority with a `PlayerClass`: six pools in the note's order (two listed, accuracy, experience, skill
@@ -52,6 +80,14 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
   changes. Under Reference neither native is bound.
 - The base test now runs a player controller off the authority through the base. Without a manager, `CreatePool`
   makes no pool off the authority (the pool creation rule).
+- After review r1, 6 more tests on the extended `ToyPlayerStarting` package:
+  - an unbound skill-tree native the event's script calls is NotYet before any delete;
+  - a refusal in a later pool, and one in the event, are terminal;
+  - creation on a non-authoritative manager is NotYet, with a live pool and a held reference kept;
+  - a callback in the base changes `PlayerClass`, and the override follows it;
+  - four malformed inputs refuse against a populated manager;
+  - the off-hand pool comes after accuracy, and a no-class call keeps both references.
+  Removing the skill-tree preflight or the after-base re-read fails these tests (checked).
 - Gate numbers are in `docs/verification/GATES.md`.
 
 **Installed (Off; this branch rebased onto main 7de9171a, which has #429, #431 and #434; outputs under ignored
@@ -64,6 +100,9 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
   stop, so it is reached after the override at least. Whether `OnPlayerClassChange` itself reaches it is not traced.
 - Rows 10 to 12 stop at `accept` on `UIInteraction.GetDataStoreClient` (decision 2026-11-19-19's open item).
 - Row totals: 6 errors, 8 `NotYet`, 0 ok.
+- **After review r1:** links 1, 3, 4, 5, 13 and 14 stop at `maya:8` on the new preflight's `NotYet { NotPorted }`:
+  `OnPlayerClassChange`'s script calls `WillowPlayerController.InitPlayerSkillTree()`, which nothing binds. That is
+  before the `GetValue` error they reached before. Totals: 0 ok / 14 `NotYet` / 0 errors.
 
 **Open.** The script binding of `AttributeDefinition.GetValue`, now the six links' stop; the note's open questions 1
 and 2 (bl-sdk reads, as the note's live checks say).
