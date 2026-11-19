@@ -88,6 +88,17 @@ fn willow_game() -> Vec<u8> {
     t.prop("Object", wrong, "ThePopulationMaster", 0, object);
     let bad_definition = t.class("ToyBadDefinition", object);
     toy_array_of(&mut t, bad_definition, "RarityLevelColors", "Int", 0);
+    // The same three field names in a struct that is not the declared RarityLevelColor.
+    let other_definition = t.class("ToyOtherBandDefinition", object);
+    let other_band = toy_struct(&mut t, other_definition, "ToyBand", None);
+    t.prop("Int", other_band, "MinLevel", 0, 0);
+    t.prop("Int", other_band, "MaxLevel", 0, 0);
+    t.prop("Byte", other_band, "DropLifeSpanType", 0, 0);
+    toy_array_of(&mut t, other_definition, "RarityLevelColors", "Struct", other_band);
+    // An AddPickup receiver whose PickupList is declared with another element class.
+    let wrong_list = t.class("ToyWrongListGlobals", object);
+    toy_array_of(&mut t, wrong_list, "PickupList", "Object", object);
+    native(&mut t, wrong_list, "AddPickup", NATIVE, &[Param { type_ref: object, ..Param::new("Object", "Pickup") }], None);
     t.build()
 }
 
@@ -301,6 +312,39 @@ fn a_world_without_globals_names_them() {
     let mut x = fx(ParityMode::Off);
     match x.call(GET_GEARBOX_GLOBALS, None, vec![]).unwrap_err() {
         VmError::NotYet(n) => assert!(n.what == "the world's globals object" && n.record == RECORD, "{n}"),
+        e => panic!("{e}"),
+    }
+}
+
+/// `AddPickup` checks the declared element class itself (review r1 of #476): a receiver whose `PickupList` holds
+/// `Object` references, not `WillowPickup`, is a data error, and nothing is appended.
+#[test]
+fn add_pickup_refuses_a_list_of_another_element_class() {
+    let mut x = fx(ParityMode::Off);
+    let wrong = make(&mut x.vm, "WillowGame.ToyWrongListGlobals");
+    let f = x.vm.find_function("WillowGame.ToyWrongListGlobals.AddPickup").unwrap();
+    let key = x.vm.function(f).unwrap().native_key.clone().unwrap();
+    // The toy's own AddPickup gets the same implementation, so the call reaches the check.
+    let body: NativeFn = Rc::new(add_pickup);
+    if !x.vm.has_native(&key) {
+        x.vm.register_native(&key, body).unwrap();
+    }
+    match x.vm.call(f, Some(wrong), vec![Value::Object(None)]).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("WillowPickup"), "{message}"),
+        e => panic!("{e}"),
+    }
+    assert_eq!(pickup_list(&x.vm, wrong, "test").unwrap(), Vec::<Value>::new());
+}
+
+/// The rarity schema checks the declared struct, not just its field names (review r1 of #476).
+#[test]
+fn the_rarity_schema_wants_the_declared_struct() {
+    let mut x = fx(ParityMode::Off);
+    let gd_class = x.vm.find_class(GLOBALS_DEFINITION_CLASS).unwrap();
+    rarity_schema(&x.vm, gd_class, "test").unwrap();
+    let other = x.vm.find_class("WillowGame.ToyOtherBandDefinition").unwrap();
+    match rarity_schema(&x.vm, other, "test").unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("RarityLevelColor"), "{message}"),
         e => panic!("{e}"),
     }
 }
