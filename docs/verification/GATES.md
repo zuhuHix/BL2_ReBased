@@ -12,6 +12,15 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-ENGINE-OBJECT-OFFLINE (2026-11-19, zuhu desktop, on fix/rust-login-status afb32d8, #479 on main d72b96d):**
+AI-assisted (Claude Code, Opus 5.5). The combat-run world registers, in Off only, a `GameEngine` with an empty
+`OnlineSubsystem` slot (port Off answer: the port has no online subsystem; UNVERIFIED against a logged-in game).
+`cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,418 passed / 0 failed / 46 ignored. Installed
+Off `--slice-gate` strict, same base with and without the call: 0 ok / 11 NotYet / 3 errors both times. Links 1, 3, 4, 5,
+13 and 14 move from `GameEngine.GetOnlineSubsystem` to "stopped after partial writes: `PlayerController.UpdateURL`"
+in `maya:8` (link 1 records 1 step, `maya:8`; the rest are blocked by link 1). The other 8 rows are byte-identical.
+ctest and verify_packages not run (no C++ change). No real-game session.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

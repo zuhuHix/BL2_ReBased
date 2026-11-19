@@ -233,6 +233,39 @@ fn unread(what: &'static str) -> VmError {
 #[derive(Debug, Clone, Copy)]
 pub struct EngineObject(pub ObjRef);
 
+/// Registers the slice worlds' engine object (decision 2026-11-19-NNN, the hub's ruling of 2026-11-19, reversible): a
+/// `GameEngine` made from its class defaults, with its `OnlineSubsystem` slot written empty.
+///
+/// **Port Off answer: the port has no online subsystem; UNVERIFIED against a logged-in game.** It is a fact of the
+/// port, not an invented game value, and it matches a real game state (playing offline). No Steamworks object is made
+/// and no login status is set, so `GetOnlineSubsystem` answers None by the note's empty-slot rule, and
+/// `UIInteraction.GetLoginStatus` answers 0 by its script.
+///
+/// Off only: in Reference it refuses, so a Reference world is never given one. A world that has an engine object
+/// already is refused too. Loading `Engine.GameEngine` here is world set-up, before any flow runs. A package set
+/// that holds no `Engine.GameEngine` (a synthetic world) registers nothing and answers `Ok(None)`: its
+/// `GetOnlineSubsystem` keeps the no-engine `NotYet { LayerAbsent }`.
+pub fn register_offline_engine(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
+    let refused = |reason: &'static str| VmError::Registration {
+        key: "EngineObject".to_string(),
+        reason,
+    };
+    if vm.parity == ow_core::ParityMode::Reference {
+        return Err(refused("the offline engine object is an Off answer; Reference keeps no engine object"));
+    }
+    if vm.service::<EngineObject>().is_some() {
+        return Err(refused("the world has an engine object already"));
+    }
+    let Some(class) = vm.find_class_if_present(GAME_ENGINE)? else {
+        return Ok(None);
+    };
+    let engine = ow_vm::interp::instantiate_from_defaults(vm, class)?;
+    let prop = vm.space.prop(class, "OnlineSubsystem").ok_or_else(|| bad("GameEngine declares no OnlineSubsystem"))?;
+    vm.space.write(engine, ow_object::ids::PropAddr::scalar(prop), Value::Object(None))?;
+    vm.add_service(EngineObject(engine))?;
+    Ok(Some(engine))
+}
+
 /// The world's set-up record of its online subsystems (a VM service). No world registers it yet.
 /// - `interfaces`: the subsystems whose interfaces (`PlayerInterface` among them) a set-up step initialised. Only for
 ///   those is an empty `PlayerInterface` a modelled "empty", which the script answers with status 0.

@@ -401,3 +401,38 @@ fn server_change_name_guards_the_resolved_change_name() {
     t.set(world, "Game", Value::Object(Some(over)));
     not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "PlayerController.ServerChangeName: the game info Engine.ToyGameInfo");
 }
+
+/// The slice worlds' offline engine object (decision 2026-11-19-NNN; port Off answer: the port has no online
+/// subsystem, UNVERIFIED against a logged-in game). In Off it is a `GameEngine` whose `OnlineSubsystem` slot is empty,
+/// so `GetOnlineSubsystem` answers None (no subsystem is made). A second registration is refused. In Reference it is
+/// refused and no engine object is registered.
+#[test]
+fn the_offline_engine_object_has_an_empty_online_subsystem_slot() {
+    let mut t = toy(ParityMode::Off, true);
+    let engine = register_offline_engine(&mut t.vm).unwrap().expect("the toy declares Engine.GameEngine");
+    assert_eq!(t.vm.service::<EngineObject>().unwrap().borrow().0, engine);
+    let class = t.vm.space.heap.get(engine).unwrap().class;
+    assert_eq!(t.vm.find_class(GAME_ENGINE).unwrap(), class, "a GameEngine");
+    assert_eq!(t.call(GET_ONLINE_SUBSYSTEM, None, vec![]).unwrap(), Value::Object(None), "the empty-slot rule");
+    assert!(matches!(register_offline_engine(&mut t.vm), Err(VmError::Registration { .. })), "only once");
+
+    let mut t = toy(ParityMode::Reference, false);
+    assert!(matches!(register_offline_engine(&mut t.vm), Err(VmError::Registration { .. })));
+    assert!(t.vm.service::<EngineObject>().is_none(), "Reference keeps no engine object");
+}
+
+/// A package set with no `Engine.GameEngine` registers no engine object, and its `GetOnlineSubsystem` keeps the
+/// no-engine `NotYet { LayerAbsent }`.
+#[test]
+fn a_package_set_without_game_engine_registers_no_engine_object() {
+    let dir = std::env::temp_dir().join(format!("ow-world-online-noengine-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let n = engines();
+    let files: [(&str, &[u8]); 1] = [("ToyEngines.upk", &n)];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    assert_eq!(register_offline_engine(&mut vm).unwrap(), None);
+    assert!(vm.service::<EngineObject>().is_none());
+    absent(subsystem(&mut vm).map(Value::Object), "the world has no engine object");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -125,13 +125,19 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     // InitPlayerSkillTree (IMPL-INIT-PLAYER-SKILL-TREE, decision 2026-11-19-88): bound in Off only, too.
     let skill_tree = ow_skills::tree::init::Pack;
     let packs: [&dyn NativePack; 4] = [&pack, &manager, &pawn_data, &skill_tree];
-    World::new(vm, BalanceState::new(snapshot), &packs).map_err(|e| match e {
+    let mut world = World::new(vm, BalanceState::new(snapshot), &packs).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => VmError::Script {
             function: "combat-run".into(),
             message: other.to_string(),
         },
-    })
+    })?;
+    // The engine object with an empty online subsystem slot (decision 2026-11-19-NNN). Port Off answer: the port has
+    // no online subsystem; UNVERIFIED against a logged-in game. Off only, so a Reference run is unchanged.
+    if mode == ParityMode::Off {
+        ow_world::world::online::register_offline_engine(&mut world.vm)?;
+    }
+    Ok(world)
 }
 
 /// The mission bridge's player for the run (module documentation).
