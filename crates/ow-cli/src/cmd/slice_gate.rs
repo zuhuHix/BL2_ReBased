@@ -87,7 +87,13 @@ pub enum Driver {
     Phaselock,
     /// H4's scripted Sanctuary walk through the shared mover (link 2).
     Walk,
-    /// No headless driver yet; the text says why.
+    /// The headless pickup of `slice_pickup` (link 6).
+    Pickup,
+    /// The same with a decoy and the look (link 7).
+    AimedPickup,
+    /// No headless driver yet; the text says why. Since links 2, 6 and 7 got theirs, no link uses it; it stays for a
+    /// link added before its driver.
+    #[allow(dead_code)]
     None(&'static str),
 }
 
@@ -99,6 +105,8 @@ impl Driver {
             Driver::Equip => "equip-run",
             Driver::Phaselock => "phaselock-cast",
             Driver::Walk => "sanctuary-walk",
+            Driver::Pickup => "pickup",
+            Driver::AimedPickup => "pickup-aimed",
             Driver::None(_) => "none",
         }
     }
@@ -195,26 +203,22 @@ pub const LINKS: [Link; 14] = [
     ),
     link(
         "pick_up_gun",
-        Driver::None(
-            "no headless driver: no pickup path exists in code; the death roll makes records only, no pickup actor \
-             is spawned, and the pickup's natives are not ported (ow_combat::loot; decision 2026-11-16-41)",
-        ),
+        Driver::Pickup,
+        &["make", "touch", "key"],
         &[],
-        &[],
-        Evidence::Steps,
-        "",
+        Evidence::Driver("the weapon is the pawn's own afterwards (its Owner), taken from the pickup"),
+        "the installed pickup script on EQUIP_WEAPON's pickup (spawned and initialised from the gun, a harness \
+         stand-in for DropFrom) on the equip run's world, touched and taken by the key (NATIVE_PICKUP.md; decision \
+         2026-11-19-68), not link 5's drop",
     ),
     link(
         "pick_up_aimed_not_nearest",
-        Driver::None(
-            "no headless driver: the use-target choice along the view ray exists (ow_mission::interactive::\
-             choose_usable, decision 2026-11-16-60), but no pickup actor is spawned to choose between, and the hits \
-             it takes need a view trace that no headless world makes",
-        ),
+        Driver::AimedPickup,
+        &["make", "touch", "look", "key"],
         &[],
-        &[],
-        Evidence::Steps,
-        "",
+        Evidence::Driver("the aimed gun is the pawn's own afterwards and the touched decoy is not"),
+        "link 6's run with a second gun as the decoy the pawn touches, then the per-tick look and the key \
+         (NATIVE_PICKUP.md section 4's fixture; decision 2026-11-19-68)",
     ),
     link(
         "equip_gun",
@@ -799,6 +803,8 @@ fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
     run_equip(Path::new(cooked), grading, &mut ran);
     run_phaselock(Path::new(cooked), grading, &mut ran);
     run_walk(Path::new(cooked), &mut ran);
+    run_pickup(Path::new(cooked), Driver::Pickup, grading, &mut ran);
+    run_pickup(Path::new(cooked), Driver::AimedPickup, grading, &mut ran);
     rows(&ran, grading, |i| evident(i, &ran, &status))
 }
 
@@ -1009,6 +1015,44 @@ pub fn fight_area_not_yet() -> NotYet {
         "a fight area placed in the map world",
         "SLICE_RUN_PLAN.md section 3.2",
     )
+}
+
+/// Links 6 and 7 (`crate::cmd::slice_pickup`): `make` on the equip run's world (link 7 with a decoy), then the link's
+/// steps. The evidence is the run's own ([`crate::cmd::slice_pickup::taken`]).
+fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option<Ran>]) {
+    let Some(i) = link_of(driver) else { return };
+    if !should_run(i, driver, ran) {
+        return;
+    }
+    let mut r = Ran::default();
+    let mut world = match crate::cmd::inventory::equip_run::gate_world(cooked) {
+        Ok(w) => w,
+        Err(text) => {
+            r.stop = Some(classify("setup", &text));
+            ran[i] = Some(r);
+            return;
+        }
+    };
+    let vm = &mut world.vm;
+    r.steps.push("make".into());
+    let p = match crate::cmd::slice_pickup::make(vm, EQUIP_WEAPON, driver == Driver::AimedPickup) {
+        Ok(p) => p,
+        Err(text) => {
+            r.stop = Some(classify("make", &text));
+            ran[i] = Some(r);
+            return;
+        }
+    };
+    for step in LINKS[i].steps.iter().skip(1) {
+        r.steps.push((*step).to_string());
+        if let Some(text) = crate::cmd::slice_pickup::step(vm, step, &p)
+            && step_error(&mut r, step, &text, grading)
+        {
+            break;
+        }
+    }
+    r.evident = r.stop.is_none() && r.error_lines.is_empty() && crate::cmd::slice_pickup::taken(vm, &p);
+    ran[i] = Some(r);
 }
 
 /// Maya's Phaselock skill, its script entry and the classes the cast is given.

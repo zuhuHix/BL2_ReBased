@@ -14,8 +14,9 @@ the counts, and grades the run:
 
 The drivers are `combat-run`, `slice-run`, `equip-run` (link 8) and `phaselock-cast` (link 9, lane
 SLICE-GATE-DRIVERS, decision 2026-11-19-39), `sanctuary-walk` (link 2, lane LINK-2-HEADLESS-MOVER, decision
-2026-11-19-66), or `none`. `equip-run`, `phaselock-cast` and `sanctuary-walk` drive their own link only, and a
-`phaselock-cast` row is never ok until an evidence check is chosen for it.
+2026-11-19-66), `pickup` (link 6) and `pickup-aimed` (link 7; lane IMPL-PICKUP, decision 2026-11-19-68), or `none`.
+Each of the last five drives its own link only, and a `phaselock-cast` row is never ok until an evidence check is
+chosen for it.
 
 A pass says the Rust port's headless drivers did each link in Off; it says nothing about the real game (UNVERIFIED).
 
@@ -32,9 +33,11 @@ from check_slice_gate import NAMES  # noqa: E402  (the gate's 14 link names, in 
 
 RESULTS = ('ok', 'notyet', 'error')
 GRADINGS = ('strict', 'past-errors')
-DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'sanctuary-walk', 'none')
-# The drivers that run one link only, and the link each runs (decisions 2026-11-19-39 and 2026-11-19-66).
-DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy', 'sanctuary-walk': 'reach_fight_area'}
+DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'sanctuary-walk', 'pickup', 'pickup-aimed',
+           'none')
+# The drivers that run one link only, and the link each runs (decisions 2026-11-19-39, 2026-11-19-66 and 2026-11-19-68).
+DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy', 'sanctuary-walk': 'reach_fight_area',
+               'pickup': 'pick_up_gun', 'pickup-aimed': 'pick_up_aimed_not_nearest'}
 # Drivers with no evidence check chosen yet: a row they drive is never ok. `sanctuary-walk` walks H4's script but
 # cannot yet check that the walk arrives at the fight area, which no map world places (SLICE_RUN_PLAN.md section 3.2),
 # so its `reach_fight_area` row may not be ok. Lane 19d5's fight-area port fixture (decision 2026-11-19-76) lifts this

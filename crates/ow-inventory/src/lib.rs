@@ -12,5 +12,6 @@ pub mod definition;
 pub mod equip;
 pub mod manager;
 pub mod navigation;
+pub mod pickup;
 pub mod sort;
 pub mod spawn;

@@ -67,16 +67,15 @@ fn an_error_text_names_its_unbound_native_when_it_has_one() {
 }
 
 #[test]
-fn links_without_a_driver_are_not_yet_with_their_reason() {
+fn every_link_has_a_driver_and_one_that_did_not_run_is_an_error() {
     let rows = rows(&vec![None; LINKS.len()], Grading::Strict, |_| true);
-    for l in ["pick_up_gun", "pick_up_aimed_not_nearest"] {
-        let r = &rows[index(l)];
-        assert_eq!((r.result, r.driver), (Outcome::NotYet, "none"), "{l}");
-        assert!(r.stop.as_ref().unwrap().text.starts_with("no headless driver"), "{l}");
+    // Since links 2 (#453) and 6-7 (#452) every link has a headless driver; none is `none`.
+    for (l, r) in LINKS.iter().zip(&rows) {
+        assert_ne!(r.driver, "none", "{}", l.name);
     }
     // A driven link that did not run is an error, never a silent ok.
     assert_eq!(rows[index("spawn_maya")].result, Outcome::Error);
-    for l in ["reach_fight_area", "equip_gun", "phaselock_enemy"] {
+    for l in ["reach_fight_area", "equip_gun", "phaselock_enemy", "pick_up_gun", "pick_up_aimed_not_nearest"] {
         assert_eq!(rows[index(l)].result, Outcome::Error, "{l}");
     }
 }
@@ -142,6 +141,19 @@ fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
         (Outcome::Error, "walk")
     );
     assert!(stop.text.contains("fell through true"), "{}", stop.text);
+}
+
+#[test]
+fn links_6_and_7_have_the_pickup_drivers_and_their_own_evidence() {
+    let pickup = &LINKS[index("pick_up_gun")];
+    assert_eq!(pickup.driver.name(), "pickup");
+    assert_eq!(pickup.steps, ["make", "touch", "key"]);
+    assert!(pickup.needs.is_empty());
+    assert!(matches!(pickup.evidence, Evidence::Driver(_)));
+    let aimed = &LINKS[index("pick_up_aimed_not_nearest")];
+    assert_eq!(aimed.driver.name(), "pickup-aimed");
+    assert_eq!(aimed.steps, ["make", "touch", "look", "key"]);
+    assert!(aimed.needs.is_empty() && matches!(aimed.evidence, Evidence::Driver(_)));
 }
 
 #[test]

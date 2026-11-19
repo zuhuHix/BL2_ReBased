@@ -45,10 +45,12 @@ use crate::equip::{bad, field, object_of};
 pub const RECORD: &str =
     "docs/verification/NATIVE_LOOT_SPAWN.md (InitializeInventory, the natives inside it)";
 
-/// The function paths this module binds (Off only).
-pub const GENERATE_UNIQUE_ID: &str = "WillowGame.WillowInventory.GenerateUniqueID";
-pub const COMPUTE_MONETARY_VALUE: &str = "WillowGame.WillowInventory.ComputeMonetaryValue";
-pub const GET_MANUFACTURER: &str = "WillowGame.WillowInventory.GetManufacturer";
+/// The function paths this module binds (Off only). `WillowInventory` is an `Engine` class in the packages (its
+/// `Weapon` and `Item` subclasses are `WillowGame`'s); these were `WillowGame.` paths before lane IMPL-PICKUP, which bound
+/// nothing on the installed data (decision 2026-11-19-68).
+pub const GENERATE_UNIQUE_ID: &str = "Engine.WillowInventory.GenerateUniqueID";
+pub const COMPUTE_MONETARY_VALUE: &str = "Engine.WillowInventory.ComputeMonetaryValue";
+pub const GET_MANUFACTURER: &str = "Engine.WillowInventory.GetManufacturer";
 
 /// The `FormOfCurrency` caps (the note's constants).
 pub const CREDITS_CAP: i32 = 99_999_999;
