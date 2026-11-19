@@ -65,7 +65,7 @@ and `GearboxFramework` classes; counts are of float / int / byte attribute prope
 | AttributeEffect.ApplyAttributeEffects / RemoveAttributeEffects (script) | `static final function ApplyAttributeEffects(Object ContextSource, out array<AttributeEffectData> InAttributeEffects, out array<AppliedAttributeEffect> OutModifiers, optional Object OptionalOverrideContextSource)` | the loop every item and weapon effect list goes through | high | UNVERIFIED |
 | ResourcePool.ClearAttributeModifierStacks | `native function ClearAttributeModifierStacks()` (virtual on the pool) | pool reset | medium | UNVERIFIED |
 | ResourcePoolManager.RecalculateBaseValues | `native final function RecalculateBaseValues(ResourcePoolManager Mgr)` | pool rebase after level / upgrades | low | UNVERIFIED |
-| WillowWeapon.RecomputeAttributeBaseValues | `native function RecomputeAttributeBaseValues()` | weapon (re)build resets | medium | UNVERIFIED |
+| WillowWeapon.RecomputeAttributeBaseValues | `native function RecomputeAttributeBaseValues()` | weapon (re)build bakes each stack attribute's value into its base (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md) | medium | UNVERIFIED |
 | WillowInventory.GetAttributeSlotGrade / GetAttributeSlotModifierValue / GetAttributeSlotIndex / GetAttributeSlotIndexByAttributeDef | `native function int GetAttributeSlotGrade(name SlotName)`, `float GetAttributeSlotModifierValue(name SlotName)` ... | the lent Maliwan pistol's stat slots, card text | medium | UNVERIFIED |
 | WillowInventory.InitializeAttributeSlots / InitializeAttributeSlotsForNameParts | `native function InitializeAttributeSlots(bool bIncludeNameParts)` | slot grade bookkeeping at weapon build | medium | UNVERIFIED |
 | WillowInventory.ApplyInternalSlotEffectModifiers / ApplyExternalSlotEffectModifiers | `native function ApplyInternalSlotEffectModifiers(bool bBackupSlotEffectsApplied, int MaxSlotsActivated, out array<AppliedAttributeEffect> AttributeModifiers)` | slot modifiers land on weapon / owner | high | UNVERIFIED |
@@ -295,12 +295,13 @@ only when a playthrough number read from the game state is above 1, so they shou
   rebuilt; after it the caller must re-add its modifiers (confidence medium).
 - **WillowWeapon.RecomputeAttributeBaseValues**: for every stack attribute declared on the weapon class, the modifier stack
   is emptied and the value is reset to its base; afterwards the weapon's `WeaponAttributeModifiers` bookkeeping array is
-  emptied. A weapon rebuild therefore starts from the bases and reapplies all effects (NATIVE_WEAPON_RULES section 1 order).
+  emptied. *(Superseded: see the correction below; the base takes the value, so nothing is reapplied.)*
   The reset covers the properties of the weapon class as declared (inherited ones were not confirmed).
   *Correction 2026-11-19 (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md, lane ANALYST-RECOMPUTE-ATTRIBUTE-BASE-VALUES):
-  the direction is the other way. Each own-class stack attribute's base is overwritten with a copy of its value, and
-  then its stack is emptied. So the value is kept and the effects are baked in; it is not reset. Reading the walk
-  as own declared fields only leaves `Engine.Weapon`'s triples untouched. UNVERIFIED in game.*
+  the direction is the other way. Each stack attribute's base is overwritten with a copy of its value, and
+  then its stack is emptied. So the value is kept and the effects are baked in; it is not reset. The walk covers
+  inherited triples too: the live damage base of AI_MELEE_TARGETING_LIVE.md section 6 shows `Engine.Weapon`'s
+  `InstantHitDamage` baked. UNVERIFIED in game beyond that record.*
 - **WillowItem.RecomputeAttributeBaseValues, Controller / WillowPlayerController / WillowMind / WillowVehicle
   RecalculateAttributeInitializedState**: thin native thunks that call a virtual method; the bodies were not reached
   (the class vtables could not be resolved by name). Script calls them after level or class changes.
@@ -393,8 +394,9 @@ context to the object that carries the attributes. Confidence low (the helper's 
 - Accelerate (`WeaponDamage` Scale, `WeaponProjectileSpeedMultiplier`): the context is the **currently held weapon**
   (controller -> pawn -> `Weapon`), resolved when the effect is applied or refreshed; the skill refresh re-resolves, so a weapon swap
   moves the effect at the next refresh (the auto-update interval), not at the swap.
-- The lent Maliwan pistol: weapon stats are stack attributes on the weapon (`InstantHitDamage`, `ClipSize`, ...), reset by
-  `RecomputeAttributeBaseValues`, rebuilt by the order in NATIVE_WEAPON_RULES, with item-slot effects applied by section 9.
+- The lent Maliwan pistol: weapon stats are stack attributes on the weapon (`InstantHitDamage`, `ClipSize`, ...), built by the order in
+  NATIVE_WEAPON_RULES, with item-slot effects applied by section 9; at the end of the build
+  `RecomputeAttributeBaseValues` bakes each value into its base (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md).
 - XP and level: `PlayerExperienceLevel` and `ExperienceCurrentValue` are simple (plain) attributes; adding an
   experience modifier through an effect would apply once, in place.
 
