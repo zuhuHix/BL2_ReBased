@@ -112,6 +112,8 @@ fn engine() -> Vec<u8> {
     t.prop("Object", pawn, "Controller", 0, object);
     t.prop("Object", pawn, "DrivenVehicle", 0, object);
     t.prop("Object", pawn, "Mesh", 0, object);
+    // The dummy's body class, which the dialog setup loads (review r1 of #526, item 3).
+    t.prop("Object", pawn, "BodyClass", 0, object);
     // A skeletal mesh component class declaring `Owner`, for the dummy's per-actor mesh (lane DUMMY-COMPONENTS).
     let core_package = t.p.add_import("Core", "Package", 0, "Core");
     let component = t.p.add_import("Core", "Class", core_package, "Component");
@@ -706,6 +708,9 @@ struct Map {
     /// With [`Map::pawn`]: the archetype's `Mesh` names `Pawn_Mesh`, its own `SkeletalMeshComponent` export (outered
     /// to the archetype), as the installed dummy's template mesh is (lane DUMMY-COMPONENTS).
     pawn_mesh: bool,
+    /// With [`Map::pawn`]: the archetype's `BodyClass` names `Pawn_Body`, an export whose archetype is an object of an
+    /// unrelated class, so loading it fails with the store's `NotYet` (review r1 of #526, item 3).
+    pawn_body: bool,
     /// An OnTakeDamage `Behavior_AIHold` on the dummy, after `Hit` and the status effect.
     hold: bool,
     /// With [`Map::hold`]: the hold is OnTakeDamage's first behavior instead, ahead of `Hit`.
@@ -762,11 +767,17 @@ fn dynamic(map: Map) -> Vec<u8> {
             payload.extend(p.object_tag("Controller", mind));
             payload.extend_from_slice(&none);
         }
-        if map.pawn_mesh {
-            // The mesh export comes right after the pawn's, so its reference is known before the pawn is added.
-            let mesh_ref = p.next_export() + 1;
+        if map.pawn_mesh || map.pawn_body {
+            // The mesh export comes right after the pawn's and the body after it, so their references are known
+            // before the pawn is added.
+            let (mesh_ref, body_ref) = (p.next_export() + 1, p.next_export() + 2);
             payload = 0i32.to_le_bytes().to_vec();
-            payload.extend(p.object_tag("Mesh", mesh_ref));
+            if map.pawn_mesh {
+                payload.extend(p.object_tag("Mesh", mesh_ref));
+            }
+            if map.pawn_body {
+                payload.extend(p.object_tag("BodyClass", body_ref));
+            }
             payload.extend_from_slice(&none);
         }
         let pawn = p.add_export(c, "Pawn_TargetDummy", payload);
@@ -777,6 +788,17 @@ fn dynamic(map: Map) -> Vec<u8> {
             mesh_payload.extend_from_slice(&none);
             let mesh = p.add_export(mesh_class, "Pawn_Mesh", mesh_payload);
             p.set_outer(mesh, pawn);
+        }
+        if map.pawn_body {
+            if !map.pawn_mesh {
+                // Keep the body at the reference the pawn names: a placeholder takes the mesh's place.
+                p.add_export(package_class, "Pawn_NoMesh", empty.clone());
+            }
+            let body_class = class_import(&mut p, "Engine", "Pawn");
+            let mut e = ow_package::testkit::Export::new(body_class, "Pawn_Body", empty.clone());
+            e.archetype = provider;
+            let body = p.add_export_with(e);
+            p.set_outer(body, character);
         }
     }
     // The mission package's objects, by import.
@@ -1600,5 +1622,53 @@ fn the_dummy_gets_its_own_mesh_in_off() {
         } else {
             assert_eq!(mesh, template, "Reference keeps the template");
         }
+    }
+}
+
+/// Review r1 of #526, item 1: the plan is built from the slots the pawn receives (the export decoded with no overlay),
+/// not from the cached definition. An overlay that clears the archetype's `Mesh` does not stop the dummy getting its own
+/// copy of the mesh the export names.
+#[test]
+fn the_dummy_s_plan_reads_the_pawn_s_own_slots_not_an_overlaid_definition() {
+    let mut env = Env::new(Map { pawn: true, pawn_mesh: true, ..Map::default() }, ParityMode::Off);
+    let vm = env.vm();
+    let path = ow_core::ObjectPath::parse(DUMMY_PAWN).unwrap();
+    let overlay = ow_defs::overlay::Overlay::new(
+        "clears the archetype's Mesh",
+        ow_defs::overlay::OverlayKind::Test,
+        vec![ow_defs::overlay::Patch::new(path.clone(), "Mesh", ow_defs::overlay::PatchValue::Null)],
+    );
+    vm.defs.push_overlay(&mut vm.space, overlay).unwrap();
+    let archetype = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    assert_eq!(prop(&vm.space, archetype, "Mesh").unwrap(), Some(Value::Object(None)), "the overlay applied");
+    env.spawn();
+    let pawn = env.slice.dummy_pawn().expect("the archetype gives a pawn");
+    let vm = env.vm();
+    let template = vm
+        .defs
+        .find(&mut vm.space, &ow_core::ObjectPath::parse("GD_TargetDummy.Character.Pawn_TargetDummy.Pawn_Mesh").unwrap())
+        .unwrap()
+        .unwrap();
+    let Some(Value::Object(Some(mesh))) = prop(&vm.space, pawn, "Mesh").unwrap() else {
+        panic!("the export names a mesh");
+    };
+    assert_ne!(mesh, template, "a per-actor copy, not the shared template");
+    assert_eq!(vm.space.heap.get(mesh).unwrap().outer, Some(pawn));
+}
+
+/// Review r1 of #526, items 2 and 3: a dialog setup that fails after the pawn and its components were written is
+/// marked "stopped after partial writes: " (the canonical counters moved), its kind kept, and the dummy is not
+/// published, so a retry places it again rather than skipping the setup.
+#[test]
+fn a_failed_dialog_setup_is_marked_and_the_dummy_is_not_published() {
+    let mut env = Env::new(Map { pawn: true, pawn_mesh: true, pawn_body: true, ..Map::default() }, ParityMode::Off);
+    let s = env.slice.clone();
+    for attempt in 0..2 {
+        let e = s.spawn_dummy(env.vm()).unwrap_err();
+        let n = e.not_yet().unwrap_or_else(|| panic!("attempt {attempt}: expected a NotYet, got {e:?}"));
+        assert!(n.what.starts_with("stopped after partial writes: "), "attempt {attempt}: {n}");
+        assert_eq!(n.what.matches("stopped after partial writes: ").count(), 1, "attempt {attempt}: {n}");
+        assert!(n.what.contains("Pawn_Body"), "attempt {attempt}: the body class's load: {n}");
+        assert!(env.slice.dummy_pawn().is_none(), "attempt {attempt}: not published");
     }
 }

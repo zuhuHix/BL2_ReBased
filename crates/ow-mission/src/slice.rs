@@ -337,6 +337,25 @@ fn number(v: &Value) -> f64 {
 /// The hold behavior's class, which the slice handles and preflights.
 const HOLD_BEHAVIOR: &str = "GearboxFramework.Behavior_AIHold";
 
+/// The canonical write counters (#518's tracker): heap writes, generator draws and definition-store load
+/// transitions. Each only grows, so a refusal is after a write exactly when one moved since a recorded start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WriteCounters {
+    heap: u64,
+    draws: u64,
+    loads: u64,
+}
+
+impl WriteCounters {
+    fn of(vm: &Vm) -> Self {
+        WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+    }
+
+    fn moved(&self, vm: &Vm) -> bool {
+        WriteCounters::of(vm) != *self
+    }
+}
+
 impl FireMissionSlice {
     /// Builds the slice on `world` (a fresh one: [`MissionScript::new`]'s rule): mission `mission_path` of
     /// [`MISSION_PACKAGE`], the bridge with the waypoint and the director of `dummy_package`, the shared dialog, and the
@@ -1157,42 +1176,47 @@ impl FireMissionSlice {
         let Some(index) = store.get(id).find_export(DUMMY_PAWN)?.filter(|&i| i > 0) else {
             return Ok(());
         };
-        // Off (lane DUMMY-COMPONENTS, the hub's spawn ruling): the dummy gets its own copy of each component its
-        // archetype owns, the per-actor plan the world's spawn uses (`ow_world::actors::plan_components_tracked`), so
-        // its `Mesh` is never the archetype's template. The plan is worked out on the archetype's definition before
-        // the pawn is made; a lazy load during it is a write, which marks a later refusal.
-        let plan = if vm.parity == ParityMode::Off {
-            let mut loaded = false;
-            let planned = (|| -> Result<ow_world::actors::Plan, VmError> {
-                let heap = vm.space.heap.len();
-                let template = vm.defs.load_export(&mut vm.space, id, index, PropertyPrefix::Ordinary);
-                vm.log.extend(vm.defs.take_log());
-                loaded |= vm.space.heap.len() != heap;
-                let template = template?;
-                ow_world::actors::plan_components_tracked(vm, template, &mut loaded)
-            })();
-            Some(planned.map_err(|e| if loaded { ow_world::pools::after_partial_writes(e) } else { e })?)
-        } else {
-            None
+        if vm.parity != ParityMode::Off {
+            // slice.cpp:366, `instantiateExport(dummyPackage_, index, 4)`: a new object, its references the definition
+            // store's objects (the body class among them, which the dialog loads). Reference is unchanged.
+            let pawn = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
+            self.inner.state.borrow_mut().dummy_pawn = Some(pawn);
+            return self.dummy_dialog(vm, pawn);
+        }
+        // Off (lane DUMMY-COMPONENTS, the hub's spawn ruling; review r1 of #526): the dummy gets its own copy of each
+        // component its archetype owns, the per-actor plan the world's spawn uses. Every write is tracked by the
+        // canonical counters (heap writes, generator draws, load transitions, #518): a refusal is marked "stopped
+        // after partial writes: " exactly when one of them moved since the placement began. The dummy is published
+        // only once the whole placement, its dialog included, has succeeded, so a retry does the setup again.
+        let start = WriteCounters::of(vm);
+        let mark = |vm: &Vm, e: MissionError| match e {
+            BehaviorError::Vm(v) if start.moved(vm) => BehaviorError::Vm(ow_world::pools::after_partial_writes(v)),
+            other => other,
         };
-        // slice.cpp:366, `instantiateExport(dummyPackage_, index, 4)`: a new object, its references the definition
-        // store's objects (the body class among them, which the dialog loads).
-        let pawn = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
-        self.inner.state.borrow_mut().dummy_pawn = Some(pawn);
-        if let Some(plan) = plan {
-            // After the pawn was made, so a refusal here is terminal and marked. Each copy is outered to the pawn and
-            // re-pointed in its slots. A copy whose class declares `Owner` gets the pawn there, as the game's attach
-            // step sets it (UNVERIFIED in this game; the port does not model that step elsewhere).
-            let pairs = ow_world::actors::apply_plan(vm, &plan, pawn).map_err(ow_world::pools::after_partial_writes)?;
-            for (_, copy) in pairs {
+        let placed = (|| -> Result<ObjRef, MissionError> {
+            // The pawn first, as the C++ makes it: the plan is then worked out on the very slots the pawn received
+            // (the export decoded with no overlay), its identity the archetype's export.
+            let pawn = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
+            let plan = ow_world::actors::plan_components_tracked(vm, pawn, &mut false)?;
+            // Each copy is outered to the pawn and re-pointed in its slots. A copy whose class declares `Owner` gets
+            // the pawn there, as the game's attach step sets it (UNVERIFIED in this game; the port does not model that
+            // step elsewhere).
+            for (_, copy) in ow_world::actors::apply_plan(vm, &plan, pawn)? {
                 let class = vm.space.heap.get(copy)?.class;
                 if let Some(p) = vm.space.prop(class, "Owner") {
-                    vm.space
-                        .write(copy, PropAddr::scalar(p), Value::Object(Some(pawn)))
-                        .map_err(|e| ow_world::pools::after_partial_writes(VmError::from(e)))?;
+                    vm.space.write(copy, PropAddr::scalar(p), Value::Object(Some(pawn))).map_err(VmError::from)?;
                 }
             }
-        }
+            self.dummy_dialog(vm, pawn)?;
+            Ok(pawn)
+        })();
+        let pawn = placed.map_err(|e| mark(vm, e))?;
+        self.inner.state.borrow_mut().dummy_pawn = Some(pawn);
+        Ok(())
+    }
+
+    /// The dummy's dialog: its body class's talker registered under its name tag.
+    fn dummy_dialog(&self, vm: &mut Vm, pawn: ObjRef) -> Result<(), MissionError> {
         let body = prop(&vm.space, pawn, "BodyClass")?.unwrap_or(Value::None);
         self.inner.mission.with_dialog(|d| -> Result<(), MissionError> {
             let dialog = d.pawn_dialog(vm, &body)?;

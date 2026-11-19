@@ -19,13 +19,25 @@ Off every actor gets its own copy of each component its template owns, at spawn,
     - a copy whose class declares `Owner` gets the pawn there, as the game's attach step sets it. UNVERIFIED in this
       game: the port models that step nowhere else.
   - Reference is unchanged: the dummy keeps the archetype's references, as the C++ does.
+- **Review r1 of #526:**
+  1. The plan is built from the slots the pawn receives: the pawn is instantiated first, as the C++ makes it, and the
+     plan is worked out on it, its identity the archetype's export. A cached definition carrying an overlay no longer
+     decides which components are copied.
+  2. Writes are tracked by #518's canonical counters, copied as they are so the rebase folds: `Heap::committed_writes`,
+     `GameRng::draws` and `DefStore::load_transitions`, with the VM's in-place array changes reported. They are recorded
+     when the placement begins, and a refusal is marked exactly when one of them moved.
+  3. The dialog setup runs inside the tracked placement, so its `NotYet` after the pawn's writes is marked. The dummy
+     is published only once the whole placement has succeeded, so a retry places it again.
 - **Tests.** `ow-mission` `slice/tests.rs` `the_dummy_gets_its_own_mesh_in_off`, on an invented archetype owning a
   `SkeletalMeshComponent` export:
   - Off: the dummy's `Mesh` is a per-actor copy, outered to the dummy, with the dummy as its `Owner`, and the
     template is untouched;
   - Reference: the template.
   - The fixture's `Core.upk` gains `Core.Component`, and `Engine.upk` a `SkeletalMeshComponent` declaring `Owner`.
-- **Checks.** `cargo test -p ow-mission` 205 passed; `cargo test --workspace` 2,445 passed, 0 failed, 46 ignored;
+  - Review r1 of #526: an overlay that clears the archetype's `Mesh` still leaves the dummy its own copy of the mesh
+    the export names. A body class whose load fails gives a marked `NotYet`, the dummy unpublished, and a retry places
+    it again.
+- **Checks.** `cargo test -p ow-mission` 207 passed; `cargo test --workspace` 2,449 passed, 0 failed, 46 ignored;
   crate edges OK.
 - **Installed `--slice-gate`, Off, strict, under the machine lock,** on a throwaway local merge of this commit with
   #496 (32bfcd76), #497 (7af3ab76) and #524 (a0c5c13d). Test-file conflicts were taken from one side, and the release
@@ -37,4 +49,6 @@ Off every actor gets its own copy of each component its template owns, at spawn,
     VM error, as NATIVE_PAWN_AI_INTERFACE.md section 6.5 predicted. The hub's ruling R3 covers it, but R3 is not on
     these branches.
   - Link 12 is blocked behind link 11, at the same native.
+  - After review r1 of #526 (rerun with #496 32bfcd76, #497 7af3ab76, #524 d691534a): the same rows, 2 / 1 / 11; link 11
+    4 of 8 at the same native.
 - **UNVERIFIED.** Nothing here was checked in the running game. The `Owner` write stands for the game's attach step.
