@@ -51,7 +51,8 @@ What the two fields mean in play (who is whose child or parent when Maya's skill
 ## 3. Pawn.GetOpinion(Other): the generic rule
 
 As in NATIVE_COMBAT_GROUNDWORK.md section 6, confirmed here:
-1. **No `Allegiance` on this pawn:** Neutral.
+1. **No `Allegiance` on this pawn:** Neutral. For a `WillowPawn` this applies only once section 2 has reached its
+   step 4: a charm match in steps 1 to 3 answers first, with or without an allegiance.
 2. **The other side's allegiance B:**
    - when `Other` implements the targetable interface (every pawn does), B is what it reports as its allegiance. For
      every pawn class on link 9 that is its `Allegiance` field;
@@ -68,7 +69,13 @@ Allegiances are compared as objects: the same object, not an equal one.
 ## 4. What it answers for a pawn, a controller and None
 
 - **Another pawn:** sections 2 and 3, with that pawn's `Allegiance`.
-- **This pawn itself:** its allegiance's `SelfOpinion` (no charm field points at itself).
+- **This pawn itself:** with an `Allegiance`, that allegiance's `SelfOpinion`; without one, Neutral (section 3 step
+  1). The charm steps do not match, as long as no charm field points at the pawn itself (UNVERIFIED that none ever
+  does).
+- **A dead or dying pawn, on either side:** the rules above read no health, death or liveness state, so a dead pawn
+  is answered like a live one from its current `Allegiance`, `CharmedChild` and `CharmedParent`. Whether death
+  changes those fields first (NATIVE_DAMAGE_DEATH.md lists allegiance bookkeeping at death) is UNVERIFIED.
+  `CanPhaseLockTarget` tests liveness separately (`IsAliveAndWell`).
 - **A controller:** `Controller` does not implement the targetable interface and is not a `PawnAllegiance`, so there
   is no B: **Neutral**, so `IsFriendly` is false. The controller is **not** read through its pawn.
 - **None:** no B: Neutral, so false.
@@ -89,14 +96,25 @@ Allegiances are compared as objects: the same object, not an equal one.
 
 ## Open questions
 
-1. Which `Allegiance` Maya's pawn and link 9's target carry in the installed data (a data question, already open in
-   NATIVE_COMBAT_GROUNDWORK.md section 6). With none on Maya's pawn, every answer is Neutral and the target is never
-   friendly.
-2. What sets `CharmedChild` and `CharmedParent`, and on which pawn, when a target is charmed.
+1. **UNVERIFIED:** which `Allegiance` Maya's pawn and link 9's target carry in the installed data (a data question,
+   already open in NATIVE_COMBAT_GROUNDWORK.md section 6). With none on Maya's pawn, every answer that reaches the
+   generic rule is Neutral. The charm steps of section 2 still answer first when one matches.
+2. **UNVERIFIED:** what sets `CharmedChild` and `CharmedParent`, and on which pawn, when a target is charmed.
+3. **UNVERIFIED:** whether death changes a pawn's `Allegiance` or charm fields before a later `IsFriendly` reads
+   them (section 4).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
 - Cast Phaselock at a bullymong and hook `Pawn.IsFriendly`: record the caller (Maya's pawn), the argument (the
   target) and the result. Read both pawns' `Allegiance`, `CharmedChild` and `CharmedParent`.
+- Self target: call `IsFriendly` and `GetOpinion` on a pawn with itself as the argument, once with its `Allegiance`
+  set and once with it cleared. The expected answers are `SelfOpinion` with one, and Neutral without (section 4).
+- Death: call `GetOpinion` of Maya's pawn on a bullymong just before and just after it dies, and record both pawns'
+  `Allegiance`, `CharmedChild` and `CharmedParent` each time (open question 3).
+- Charm transitions: hook the writes of `CharmedChild` and `CharmedParent` (and whatever script or native sets them
+  during a charm), and record both fields on every pawn involved before and after each change (open question 2).
+- Three pawns for step 3 of section 2: a querying pawn Q, a target T and T's `CharmedParent` P. Vary P's opinion of
+  Q (Friendly, then not Friendly) and whether Q has a `CharmedParent`. Record `Q.GetOpinion(T)` each time. The
+  expected answer is Enemy only when P is friendly to Q and Q has no `CharmedParent`; otherwise the next rule.
 - Call `IsFriendly` on Maya's pawn with her own controller as the argument, and with None. Both should be false.
 - After a charm, read both pawns' `CharmedChild` and `CharmedParent`, and their `GetOpinion` of each other.

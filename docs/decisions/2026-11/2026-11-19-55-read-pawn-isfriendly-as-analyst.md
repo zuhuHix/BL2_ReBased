@@ -15,8 +15,10 @@ caster's pawn about the target. The new own-words note `docs/verification/NATIVE
 - A controller and None have no allegiance on the other side and answer Neutral. A controller is not read through its
   pawn, unlike today's Reference binding in `ow-combat`.
 
-NATIVE_COMBAT_GROUNDWORK.md section 6 gets a pointer that names the two charm fields. Raw output stays under ignored
-`local/analysis/isfriendly/`; the Ghidra runs were read-only and took the machine lock. Nothing is implemented:
-`Pawn.IsFriendly` stays unbound in Off until a fresh lane codes it from the note. Every rule is UNVERIFIED in the
-running game; the note lists the bl-sdk checks and two open questions (the allegiance data, what sets the charm
-fields).
+NATIVE_COMBAT_GROUNDWORK.md section 6 gets a pointer that names the two charm fields, and its older low-confidence
+account of the override, with the matching `NATIVE_INDEX.md` row, is marked superseded by the new note (live behaviour
+stays UNVERIFIED). The note also states that the missing-allegiance answer applies only once the generic rule is
+reached, and that the natives read no liveness state. Raw output stays under ignored `local/analysis/isfriendly/`; the
+Ghidra runs were read-only and took the machine lock. Nothing is implemented: `Pawn.IsFriendly` stays unbound in Off
+until a fresh lane codes it from the note. Every rule is UNVERIFIED in the running game; the note lists the bl-sdk
+checks and two open questions (the allegiance data, what sets the charm fields).
