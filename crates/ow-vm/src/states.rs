@@ -954,6 +954,14 @@ fn goto_state(
     force: bool,
     keep_stack: bool,
 ) -> Result<(), VmError> {
+    // Off: `Auto`'s refusals come before any write, so it is resolved before the frame is made (lane IMPL-AUTO-STATE).
+    if vm.parity == ParityMode::Off
+        && let Some(t) = requested
+        && is_auto(vm, t)
+    {
+        let class = vm.space.heap.get(o)?.class;
+        auto_state(vm, class)?;
+    }
     ensure_frame(vm, o)?;
     let current = vm.space.heap.get(o)?.state.unwrap_or(NameId::NONE);
     let target = requested.unwrap_or(current);
@@ -983,12 +991,23 @@ fn goto_state(
     }
 }
 
-/// What `Auto` resolves to for an object of `class` (the record: the class itself if it is flagged auto, else the
-/// first state flagged auto, else no state). Which state flag bit means auto is not read, but auto is a bit of the
-/// state flags (this port's reading, UNVERIFIED), so when the class's own state flags and those of every state its
-/// chain declares are all 0 the answer is no state, whatever the bit is (129 of the 166 installed states have flags
-/// 0, decision 2026-11-15-27). Otherwise, or when the class body does not read, `NotYet { NotRead }`.
+/// The auto bit of the state flags (NATIVE_AUTO_STATE.md section 1: bit 1, value 2; the public UE3 `STATE_Auto`, a
+/// fit read from the packages and the executable, UNVERIFIED in the running game).
+pub const STATE_AUTO: u16 = 2;
+/// The record of the Off rule of [`auto_state`].
+const AUTO_RECORD: &str = "NATIVE_AUTO_STATE.md";
+
+/// What `Auto` resolves to for an object of `class`. In Off, the rule of NATIVE_AUTO_STATE.md section 5 ([`auto_state_off`],
+/// lane IMPL-AUTO-STATE). This module's `GotoState` is bound outside Reference only, so the branch below is the earlier
+/// approximation kept as it was, for a caller in another mode: which state flag bit means auto is not
+/// read, but auto is a bit of the state flags (this port's reading, UNVERIFIED), so when the class's own state flags
+/// and those of every state its chain declares are all 0 the answer is no state, whatever the bit is (129 of the 166
+/// installed states have flags 0, decision 2026-11-15-27). Otherwise, or when the class body does not read,
+/// `NotYet { NotRead }`.
 fn auto_state(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmError> {
+    if vm.parity == ParityMode::Off {
+        return auto_state_off(vm, class);
+    }
     let not_read = |why: &str| -> VmError {
         NotYet::not_read(
             format!("GotoState('Auto'): which state flag bit marks an auto state ({why})"),
@@ -1039,6 +1058,92 @@ fn auto_state(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmError> 
     }
     Ok(None)
 }
+
+/// The Off rule of `Auto` (NATIVE_AUTO_STATE.md section 5, lane IMPL-AUTO-STATE; UNVERIFIED in the running game):
+/// - the class's own state flags have [`STATE_AUTO`] set: no state (`GotoState` then behaves as for `None`, silent);
+/// - otherwise the chain is walked from the class to the root, and in each class its own declared states are looked
+///   at: the first class holding a state with the bit set gives that state. None found: no state.
+///
+/// The typed refusals (section 5 item 2), both `NotYet { NotRead }` with record NATIVE_AUTO_STATE.md, raised before any
+/// write (`goto_state` resolves `Auto` before it touches the object):
+/// - more than one auto state declared in one class of the chain: the engine takes the first in field-list order, and
+///   the port's state list does not keep that order ([`AUTO_TWO_IN_ONE_CLASS`]);
+/// - the census oracle broken: the class bit set with an auto state in the chain, or the class bit clear with none
+///   ([`AUTO_FLAGS_DISAGREE`]).
+///
+/// A class body or a state body that does not read keeps the existing errors. Every state of the chain is read, so the
+/// oracle is checked whatever the answer.
+fn auto_state_off(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmError> {
+    let refuse = |what: &'static str| -> VmError { NotYet::not_read(what, AUTO_RECORD).into() };
+    // Loads the chain's code, so its states are listed.
+    let auto = vm.space.names.intern("Auto");
+    vm.class_declares_state(class, auto)?;
+    let Some((package, export)) = vm.defs.code().key_of(class).map(|k| {
+        let info = vm.defs.code().class(k);
+        (info.package, info.export)
+    }) else {
+        return Err(NotYet::not_read(
+            "GotoState('Auto'): which state flag bit marks an auto state (the class has no package export)",
+            RECORD,
+        )
+        .into());
+    };
+    let pkg = vm.defs.packages().shared(package);
+    let class_auto = match read_class_state_part(&pkg, export) {
+        Ok(body) => body.flags & STATE_AUTO != 0,
+        Err(_) => {
+            return Err(NotYet::not_read(
+                "GotoState('Auto'): which state flag bit marks an auto state (the class body's state flags do not read)",
+                RECORD,
+            )
+            .into());
+        }
+    };
+    // The first class of the chain (most derived first) that declares an auto state, with its owner.
+    let mut found: Option<(StateKey, ClassId)> = None;
+    for c in chain(vm, class) {
+        let states: Vec<(PackageId, i32)> = vm
+            .defs
+            .code()
+            .key_of(c)
+            .map(|k| {
+                let info = vm.defs.code().class(k);
+                info.states().values().map(|s| (info.package, s.export)).collect()
+            })
+            .unwrap_or_default();
+        let mut autos = Vec::new();
+        for (package, export) in states {
+            let pkg = vm.defs.packages().shared(package);
+            match read_state_body(&pkg, export) {
+                Ok(body) if body.flags & STATE_AUTO != 0 => autos.push(StateKey { package, export }),
+                Ok(_) => {}
+                Err(e) => return Err(decode_error(&format!("{}:{export}", pkg.name), &e)),
+            }
+        }
+        if autos.len() > 1 {
+            return Err(refuse(AUTO_TWO_IN_ONE_CLASS));
+        }
+        if found.is_none()
+            && let Some(key) = autos.pop()
+        {
+            found = Some((key, c));
+        }
+    }
+    match (class_auto, found) {
+        (true, None) => Ok(None),
+        (false, Some((key, owner))) => {
+            load_state(vm, key, owner, 0)?;
+            Ok(Some(key))
+        }
+        _ => Err(refuse(AUTO_FLAGS_DISAGREE)),
+    }
+}
+
+/// The refusal of a class of the chain declaring two auto states (NATIVE_AUTO_STATE.md section 5 item 2).
+pub const AUTO_TWO_IN_ONE_CLASS: &str =
+    "GotoState('Auto'): more than one auto state declared in one class (the engine takes the first in field-list order, which the port's state list does not keep)";
+/// The refusal of the census oracle broken (NATIVE_AUTO_STATE.md section 5 item 2).
+pub const AUTO_FLAGS_DISAGREE: &str = "GotoState('Auto'): class flags and state flags disagree";
 
 /// The state change routine (the record's steps 1 to 7; every object has a frame here, so step 1 never fails).
 fn change_state(
@@ -2034,19 +2139,59 @@ mod tests {
             );
         }
 
-        // Plain and Flagged extend Mach with real class bodies whose own state flags are 0; Flagged also declares
-        // a state Z with flags 2.
-        for name in ["Plain", "Flagged"] {
-            let mut body = class_body(&mut t.p, &ClassBodySpec::new(mach, 0, 0));
+        // The auto-state classes (lane IMPL-AUTO-STATE, NATIVE_AUTO_STATE.md section 5): real class bodies with their
+        // own state flags (bit 1, value 2, is the auto bit), each declaring the states listed.
+        let auto_class = |t: &mut ScriptToy, name: &str, parent: i32, flags: u16| -> i32 {
+            let mut body = class_body(&mut t.p, &ClassBodySpec::new(parent, 0, 0));
             // The state flags follow ten words, the (empty) script, the probe mask and the label table offset.
-            body[46..48].copy_from_slice(&0u16.to_le_bytes());
+            body[46..48].copy_from_slice(&flags.to_le_bytes());
             let mut export = Export::new(t.import("Class"), name, body);
-            export.super_ = mach;
-            let class = t.p.add_export_with(export);
-            if name == "Flagged" {
-                state_flags(&mut t, class, "Z", 2);
-            }
-        }
+            export.super_ = parent;
+            t.p.add_export_with(export)
+        };
+        // Plain: bit clear and no auto state anywhere in its chain (the census oracle broken).
+        auto_class(&mut t, "Plain", mach, 0);
+        // AutoFlagged: the class flagged auto, no auto state (no state).
+        auto_class(&mut t, "AutoFlagged", mach, 2);
+        // Flagged: bit clear, its own auto state Z (BeginState "bZ;", code Begin: "z"; Stop), and the two events the
+        // spawn raises: PostBeginPlay "p;", SetInitialState "s;" GotoState('Auto') "S;".
+        let flagged = auto_class(&mut t, "Flagged", mach, 0);
+        let code_z = {
+            let mut a = Asm::new();
+            let begin = a.here();
+            append(&mut a, trace, "z");
+            a.stmt().raw(&[0x08]);
+            finish(&mut t, a, &[("Begin", begin)])
+        };
+        let state_z = state_full(&mut t, flagged, "Z", 0, Some(&code_z), 2);
+        event(&mut t, ids, state_z, "BeginState", "bZ;", Some("PreviousStateName"), false);
+        event(&mut t, ids, flagged, "PostBeginPlay", "p;", None, false);
+        let name_auto = t.p.name("Auto");
+        t.function(flagged, "SetInitialState", &[], None, &[], &FunctionSpec::new(VIRTUAL, "SetInitialState"), |_| {
+            let mut a = Asm::new();
+            append(&mut a, trace, "s;");
+            call_with_name(&mut a, goto, name_auto);
+            append(&mut a, trace, "S;");
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        });
+        // AutoChild: bit clear, no state of its own: the parent's Z.
+        auto_class(&mut t, "AutoChild", flagged, 0);
+        // AutoOverride: its own auto state Y wins over the parent's Z.
+        let over = auto_class(&mut t, "AutoOverride", flagged, 0);
+        state_flags(&mut t, over, "Y", 2);
+        // ShadowZ: a non-auto state of the same name Z; the walk goes on to the parent's auto Z.
+        let shadow = auto_class(&mut t, "ShadowZ", flagged, 0);
+        let shadow_z = state_flags(&mut t, shadow, "Z", 0);
+        event(&mut t, ids, shadow_z, "BeginState", "bShadow;", Some("PreviousStateName"), false);
+        // TwoAutos: two auto states in one class.
+        let two = auto_class(&mut t, "TwoAutos", mach, 0);
+        state_flags(&mut t, two, "V", 2);
+        state_flags(&mut t, two, "W", 2);
+        // AutoClassWithAuto: the class flagged auto and an auto state declared (the oracle broken).
+        let both = auto_class(&mut t, "AutoClassWithAuto", mach, 2);
+        state_flags(&mut t, both, "X", 2);
 
         let remote = t.class("Remote", mach);
         t.prop("Byte", remote, "Role", 0, 0);
@@ -2340,10 +2485,34 @@ mod tests {
         assert_eq!(r.arg(d), "D");
     }
 
+    /// `GotoState('Auto')` in Off, the result and the trace, through the VM (lane IMPL-AUTO-STATE).
+    fn goto_auto(r: &mut Run, class: &str) -> (Result<(), VmError>, String, String) {
+        let o = r.object(class);
+        let auto = r.name("Auto");
+        let f = r.vm.find_function("Core.Object.GotoState").unwrap();
+        let result = r.vm.call(f, Some(o), vec![auto]).map(|_| ());
+        let state = r.state(o);
+        let trace = r.trace(o);
+        (result, state, trace)
+    }
+
+    fn refused(result: Result<(), VmError>) -> String {
+        match result {
+            Err(VmError::NotYet(n)) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert_eq!(n.record, AUTO_RECORD);
+                n.what.to_string()
+            }
+            other => panic!("expected NotYet, got {other:?}"),
+        }
+    }
+
+    /// NATIVE_AUTO_STATE.md section 5 item 1: a class flagged auto gets no state, silently, and leaves a state it was
+    /// in with EndState(None) and no BeginState.
     #[test]
-    fn goto_state_auto_is_no_state_when_every_candidate_state_flag_is_0() {
+    fn goto_state_auto_is_no_state_for_a_class_flagged_auto() {
         let mut r = start(ParityMode::Off);
-        let o = r.object("Core.Plain");
+        let o = r.object("Core.AutoFlagged");
         r.goto(o, &["A"]);
         r.goto(o, &["Auto"]);
         assert_eq!(r.trace(o), "bA;eA;", "EndState(None) on A, no BeginState");
@@ -2352,13 +2521,61 @@ mod tests {
         assert!(r.vm.log.is_empty(), "Auto is silent: {:?}", r.vm.log);
     }
 
+    /// Item 1: the class's own auto state, a parent's for a child without one, the child's own over the parent's, and
+    /// the walk past a child's non-auto state of the same name to the parent's auto one.
     #[test]
-    fn goto_state_auto_is_not_read_yet_when_a_candidate_state_flag_is_set() {
+    fn goto_state_auto_takes_the_first_auto_state_of_the_chain() {
         let mut r = start(ParityMode::Off);
-        let o = r.object("Core.Flagged");
+        let (result, state, trace) = goto_auto(&mut r, "Core.Flagged");
+        result.unwrap();
+        assert_eq!((state.as_str(), trace.as_str()), ("Z", "bZ;"));
+        let (result, state, trace) = goto_auto(&mut r, "Core.AutoChild");
+        result.unwrap();
+        assert_eq!((state.as_str(), trace.as_str()), ("Z", "bZ;"), "the parent's auto state");
+        let (result, state, _) = goto_auto(&mut r, "Core.AutoOverride");
+        result.unwrap();
+        assert_eq!(state, "Y", "the child's own auto state wins");
+        let (result, state, trace) = goto_auto(&mut r, "Core.ShadowZ");
+        result.unwrap();
+        assert_eq!(state, "Z");
+        assert_eq!(trace, "bZ;", "the parent's auto Z, not the child's non-auto Z");
+    }
+
+    /// Item 2: the two typed refusals, raised before any write (the object keeps no state and no trace).
+    #[test]
+    fn goto_state_auto_refuses_two_auto_states_and_a_broken_oracle() {
+        let mut r = start(ParityMode::Off);
+        let (result, state, trace) = goto_auto(&mut r, "Core.TwoAutos");
+        assert_eq!(refused(result), AUTO_TWO_IN_ONE_CLASS);
+        assert_eq!((state.as_str(), trace.as_str()), ("None", ""));
+        for class in ["Core.Plain", "Core.AutoClassWithAuto"] {
+            let (result, state, trace) = goto_auto(&mut r, class);
+            assert_eq!(refused(result), AUTO_FLAGS_DISAGREE, "{class}");
+            assert_eq!((state.as_str(), trace.as_str()), ("None", ""), "{class}");
+        }
+        // The object was not touched: no frame made, no state name written.
+        let o = r.object("Core.Plain");
         let auto = r.name("Auto");
         let f = r.vm.find_function("Core.Object.GotoState").unwrap();
-        assert_eq!(not_yet(r.vm.call(f, Some(o), vec![auto])).missing, Missing::NotRead);
+        let before = format!("{:?}", r.vm.space.heap);
+        assert!(r.vm.call(f, Some(o), vec![auto]).is_err());
+        assert_eq!(format!("{:?}", r.vm.space.heap), before, "nothing written");
+    }
+
+    /// Item 4: the auto state's BeginState is raised inside SetInitialState (after PostBeginPlay, the spawn's order),
+    /// and its code runs only at the next state-code step, from the Begin label.
+    #[test]
+    fn the_auto_state_begins_inside_set_initial_state_and_its_code_waits_for_the_step() {
+        let mut r = start(ParityMode::Off);
+        let o = r.object("Core.Flagged");
+        for name in ["PostBeginPlay", "SetInitialState"] {
+            let f = r.vm.find_function(&format!("Core.Flagged.{name}")).unwrap();
+            r.vm.call(f, Some(o), vec![]).unwrap();
+        }
+        assert_eq!(r.trace(o), "p;s;bZ;S;", "BeginState inside SetInitialState, after PostBeginPlay");
+        assert_eq!(r.state(o), "Z");
+        r.step(o);
+        assert_eq!(r.trace(o), "p;s;bZ;S;z", "the Begin label's code at the next state-code step");
     }
 
     #[test]

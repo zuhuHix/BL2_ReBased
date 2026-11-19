@@ -126,6 +126,13 @@ main's: `maya:8` `GetOnlineSubsystem`, `SetAnimTreeTemplate`, `CacheWeaponCard`,
 `GetAllMissions`). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-155; logs under ignored `local/analysis/navjoin/`.
 
+**IMPL-AUTO-STATE (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). `GotoState('Auto')`
+in Off from NATIVE_AUTO_STATE.md section 5 (#540). `cargo build --workspace --locked -j 4` clean; `cargo test -p ow-vm`
+207 passed / 0 failed / 1 ignored; `cargo test --workspace --locked -j 4` 2,446 passed / 0 failed / 46 ignored;
+`cargo clippy -p ow-vm --all-targets` adds no warning in `states.rs`; `crate_edges_test.py` OK. The installed Off
+`--slice-gate` was not run in this lane. ctest and verify_packages not run (no C++ change). No real-game run;
+`UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
