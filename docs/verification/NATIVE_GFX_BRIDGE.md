@@ -338,8 +338,9 @@ host moves the panel, use the formula above and keep `None` tolerance.
 
 ## QuestAcceptGFxMovie.UpdateMissionTextList
 
-* **Signature:** `native function UpdateMissionTextList()`; a virtual of the movie class. No script caller appears in
-  `QuestAcceptGFxMovie`; it is raised from elsewhere (open item).
+* **Signature:** `native function UpdateMissionTextList()`; a virtual of the movie class. **Corrected** in
+  [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (decision 2026-11-19-86): `extPopulateQuestEntries` calls it
+  (after the accept, through `extAcceptConfirmed`), and `UpdateMissionList` reaches it through that function.
 * **Reads:** the movie's `MissionTextList` (a `GFxTextListContainer`), its `MissionList` (array of
   `StatusMenuMissionEligibilityData`: `MissionDef`, `MissionStatus`), its own `MissionCategories` (array of strings), and the
   localisation section `WillowGame` / `CategoryLabels`.

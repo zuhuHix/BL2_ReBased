@@ -262,6 +262,9 @@ members), so the AI pawn cost fields below are named, not numbered. Fields used 
 - **GetActiveMissionNumber():** uses the world tracker when its data is valid: the tracker's `ActiveMission`'s
   `MissionNumber` if one is tracked; otherwise the first plot-critical, non-DLC mission with status 1/2/3 in tracker
   order (highest completed number if none); falls back to the local function above with the current playthrough.
+  **Corrected** in [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (decision 2026-11-19-86): the fallback is
+  `GetActivePlotCriticalMissionNumber` for the current playthrough, not the local function; the tracked mission
+  answers with no status check.
 - **Open:** exact tie-breaking; low priority.
 
 ## PlayerController.IsPrimaryPlayer
