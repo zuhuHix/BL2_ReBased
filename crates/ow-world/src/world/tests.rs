@@ -161,6 +161,8 @@ fn package() -> Vec<u8> {
         "bLoadIfPhysXLevel2",
         // The spawn's spot search (lane IMPL-SPAWN-PLACEMENT, NATIVE_SPAWN_PLACEMENT.md section 2).
         "bCollideComplex",
+        // Its trace filters (lane IMPL-SPAWN-TRACE-FILTERS, NATIVE_SPAWN_PLACEMENT.md section 7).
+        "bWorldGeometry",
     ] {
         let r = t.prop("Bool", actor, b, 0, 0);
         if b == "bCollideActors" {
@@ -169,7 +171,12 @@ fn package() -> Vec<u8> {
     }
     // The template's collision cylinder (lane IMPL-SPAWN-PLACEMENT): an invented component class with the game's
     // class and field names.
-    let cylinder = t.class("CylinderComponent", object);
+    // Its primitive parent carries the trace filters' blocking flags (lane IMPL-SPAWN-TRACE-FILTERS).
+    let primitive = t.class("PrimitiveComponent", object);
+    for b in ["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors"] {
+        t.prop("Bool", primitive, b, 0, 0);
+    }
+    let cylinder = t.class("CylinderComponent", primitive);
     t.prop("Float", cylinder, "CollisionRadius", 0, 0);
     t.prop("Float", cylinder, "CollisionHeight", 0, 0);
     t.prop("Object", actor, "CollisionComponent", 0, object);
@@ -2116,7 +2123,7 @@ mod placement {
     use super::*;
     use crate::placement::{
         BOUNDING_CYLINDER, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision, Sweep,
-        TRACE_FILTER, Test, install_collision,
+        Test, install_collision,
     };
 
     /// One query the service was asked.
@@ -2219,19 +2226,52 @@ mod placement {
     }
 
     #[test]
-    fn past_the_service_and_extent_checks_the_first_test_is_the_filter_not_yet() {
-        // NATIVE_SPAWN_PLACEMENT.md section 7: the trace filter is unread, so a service whose box tests would be clear
-        // is not asked, and nothing is made.
+    fn a_clear_service_and_no_tested_live_actor_keep_the_location() {
+        // NATIVE_SPAWN_PLACEMENT.md section 7 (lane IMPL-SPAWN-TRACE-FILTERS): the filters are read, the service's
+        // first box test is clear and no live actor primitive is tested, so the spawn is made where it was asked.
         run(|| {
             let mut x = fx();
             let wi = x.wi;
             let s = script(&mut x, vec![], vec![], Test::Clear);
             let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
             let before = count(&x);
-            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
-            assert_eq!((missing, text.as_str()), (Missing::NotRead, TRACE_FILTER));
-            assert!(s.asked.borrow().is_empty(), "the service is not asked");
-            assert_eq!(count(&x), before);
+            assert!(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap().is_some());
+            let asked = s.asked.borrow();
+            assert_eq!(asked.len(), 1, "one box test: {asked:?}");
+            assert!(matches!(asked[0], Asked::Test(..)), "{asked:?}");
+            assert_eq!(count(&x), before + 1);
+        });
+    }
+
+    /// A live actor whose collision cylinder blocks non-zero extents: with `bWorldGeometry` the spawn's box test
+    /// tests it, so the search stops on its NotYet, nothing made; without it, it is not tested.
+    #[test]
+    fn a_tested_live_actor_primitive_makes_the_box_test_unsupported() {
+        run(|| {
+            for world_geometry in [true, false] {
+                let mut x = fx();
+                let wi = x.wi;
+                script(&mut x, vec![], vec![], Test::Clear);
+                let blocker = x.spawn("Probe");
+                let c = x.class("CylinderComponent");
+                let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
+                set_field(&mut x.w.vm.space, comp, "BlockNonZeroExtent", Value::Bool(true)).unwrap();
+                set_field(&mut x.w.vm.space, blocker, "CollisionComponent", Value::Object(Some(comp))).unwrap();
+                set_field(&mut x.w.vm.space, blocker, "bWorldGeometry", Value::Bool(world_geometry)).unwrap();
+                let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+                let before = count(&x);
+                let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+                if world_geometry {
+                    let (missing, text) = what(got.unwrap_err());
+                    assert_eq!(missing, Missing::NotRead);
+                    assert!(text.starts_with(SPOT_SEARCH), "{text}");
+                    assert!(text.contains("tests the live actor primitive"), "{text}");
+                    assert_eq!(count(&x), before);
+                } else {
+                    assert!(got.unwrap().is_some());
+                    assert_eq!(count(&x), before + 1);
+                }
+            }
         });
     }
 
@@ -2293,7 +2333,7 @@ mod placement {
     #[test]
     fn reference_keeps_its_collision_refusals() {
         // A service and a cylinder are installed (review r1 of #463, item 4): Reference still answers its legacy
-        // refusal, while Off reaches the trace filter.
+        // refusal, while Off, with the trace filters read (lane IMPL-SPAWN-TRACE-FILTERS), makes the spawn.
         run(|| {
             for mode in [ParityMode::Reference, ParityMode::Off] {
                 let mut x = fx_in(true, mode);
@@ -2301,15 +2341,19 @@ mod placement {
                 script(&mut x, vec![], vec![], Test::Clear);
                 let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
                 let before = count(&x);
-                let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+                let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
                 match mode {
                     ParityMode::Reference => {
+                        let (missing, text) = what(got.unwrap_err());
                         assert!(matches!(missing, Missing::LayerAbsent(_)));
                         assert_eq!(text, "the spawn placement spot search");
+                        assert_eq!(count(&x), before);
                     }
-                    _ => assert_eq!((missing, text.as_str()), (Missing::NotRead, TRACE_FILTER)),
+                    _ => {
+                        assert!(got.unwrap().is_some());
+                        assert_eq!(count(&x), before + 1);
+                    }
                 }
-                assert_eq!(count(&x), before);
             }
         });
     }
