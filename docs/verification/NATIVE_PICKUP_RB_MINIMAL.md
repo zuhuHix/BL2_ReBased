@@ -135,25 +135,54 @@ writes the drivers read. The second is what the game's simulation would change t
 drop to the floor is not available, because the headless pickup world has no collision (`slice_pickup.rs` spawns with
 `bNoCollisionFail` for that reason).
 
-**But on the slice it does not pass this native.** Every case with a component reaches step 4.5. There the asset
-branch is a missing layer, and the branch without an asset is unread. Both refuse (section 4). The slice's
-`CollisionComponent` is the dropped mesh, so links 6 and 7 meet one of those two refusals. Which one depends on the
-slice gun's data, which this lane did not read. Only a pickup with no `PrimitiveComponent` passes the whole native.
+**But on the slice, the note's answer alone does not pass this native.** Every case with a component reaches step
+4.5. There the asset branch is a missing layer, and the branch without an asset is unread. Both refuse (section 4).
+
+**What the slice fixture's lookup returns** (a second local probe of the installed slice gate, section 5, using
+loaded-only reads and the write-free `inventory_definition_of`). On both links:
+- `CollisionComponent` is an `Engine.SkeletalMeshComponent`;
+- `Inventory` is a `WillowGame.WillowWeapon`;
+- its definition is a `WillowGame.WeaponTypeDefinition` already on the heap, so not refusal 5, and the lookup raised
+  none of its own refusals;
+- that definition's `PhysicsAsset` holds an `Engine.PhysicsAsset`.
+
+So the slice takes **the asset branch**. Before it, the reattach check (refusals 3 and 4) applies only when the mesh's
+`CollideActors` is clear. This was not probed. By section 4 it gives the flag only on the slice: the owner is the
+pickup, which is neither static nor tick-disabled. **The slice's first refusal under this note's answer is therefore
+refusal 1.** Refusal 6 would come after it. Under the hub's ruling below, both are answered and the native passes.
+Only a pickup with no `PrimitiveComponent` passes the whole native without that ruling.
 
 **The Off answer, for the implementer** (it replaces #520's `RB_PHYSICS` refusal):
 
-**Preflight, write-free, before the first write.** It uses only loaded objects and reads nothing that would load.
-1. The declarations of every field below, on the pickup, C and G.
-2. G as the pickup world's set-up prepared it (`slice_pickup.rs` `globals_preflight`: the world's one `WillowGlobals`
-   and its definition). Without it, that preflight's own refusal stands. This answer depends on that preload.
-3. With C and `CollideActors` clear, the deferred reattach check: refusal 3 or 4 when it applies.
-4. With C, the step 4.5 test:
-   - C is not a `SkeletalMeshComponent`, or `Inventory` is None: refusal 2;
-   - otherwise `GetInventoryDefinition()` as NATIVE_INVENTORY_DEFINITION.md section 3 answers it. That is write-free,
-     and its refusals pass through;
-   - a None definition: refusal 2;
-   - a definition object that is not loaded: refusal 5;
-   - `PhysicsAsset` read as a handle, not followed and not loaded: not None is refusal 1, None is refusal 2.
+**Preflight, write-free, before the first write.** It uses only loaded objects and reads nothing that would load. It
+runs in this order and checks only what the chosen path needs:
+1. `bUseRBPhysics` (its declaration, then its value). Clear: return at once, with no further check and no write
+   (#520's answer, unchanged).
+2. C: `CollisionComponent`'s declaration and value, and whether that object is a `PrimitiveComponent`.
+3. The declarations of the pickup's fields that steps 1, 2, 5, 6 and 7 write or read (`bForceRBToSleep`,
+   `MaxRBAwakeTime`, `RotationRate`, `Physics`, `bTorque`, `bTorqueTemporary`, `Torque`). Without C, the preflight
+   ends here and the path is steps 1, 2, 5 and 7.
+4. With C only:
+   1. G as the pickup world's set-up prepared it (`slice_pickup.rs` `globals_preflight`: the world's one
+      `WillowGlobals` and its definition). Without it, that preflight's own refusal stands. This answer depends on
+      that preload;
+   2. the declarations of C's fields in step 4, and of the pickup's and G's fields in steps 4.6, 4.7 and 6;
+   3. with `CollideActors` clear, the deferred reattach check: refusal 3 or 4 when it applies;
+   4. the step 4.5 test:
+      - C is not a `SkeletalMeshComponent`, or `Inventory` is None: refusal 2;
+      - otherwise `GetInventoryDefinition()` as NATIVE_INVENTORY_DEFINITION.md section 3 answers it
+        (`ow_inventory::definition::inventory_definition_of`, which writes nothing). Its refusals pass through;
+      - a None definition: refusal 2;
+      - a definition object that is not loaded: refusal 5;
+      - `PhysicsAsset`, read as a handle that is not followed and not loaded: not None is refusal 1, None is
+        refusal 2;
+   5. last, once the asset test lets the run go on: with G, and `bTorque` clear, and no seeded stream in the port,
+      refusal 6.
+
+**The hub's ruling on top of this (for IMPL-PICKUP-RB, recorded in its brief and decision file).** On the slice in
+Off, the asset branch is answered at rest: its non-physics writes run, no rigid body is made, and it is logged
+UNVERIFIED. That replaces refusal 1. The spin draws on a dedicated `GameRng` stream for the engine's seeded generator,
+labelled UNVERIFIED, which removes refusal 6. Refusals 2 to 5 stay.
 
 **Writes, in section 2's order, when the preflight passes** (only a pickup with no `PrimitiveComponent` gets here
 today):
@@ -196,7 +225,7 @@ All are UNVERIFIED.
 | 3 | `CollideActors` clear, C has an owner, the owner is `bStatic` or `bTickIsDisabled`, and the owner is not `bDeleteMe` | `NotRead` | "the deferred reattach: the owner's component update" (#520's `REATTACH_OWNER`) | `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md` |
 | 4 | `CollideActors` clear, C has no owner, and C's `Scene` is not zero | `NotRead` | "the deferred reattach: the component's detach and reattach" (#520's `REATTACH_SCENE`) | `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md` |
 | 5 | the inventory's definition is not a loaded object | `NotRead` | "InitializePickupForRBPhysics: the physics asset of an inventory definition that is not loaded" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
-| 6 | step 6's spin, until the port has the seeded stream | `NotPorted` | "GlobalsDefinition.ApplySpinToPickup: the engine's seeded random stream" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
+| 6 | last in the preflight: C and G present, `bTorque` clear, and the port has no seeded stream | `NotPorted` | "GlobalsDefinition.ApplySpinToPickup: the engine's seeded random stream" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
 
 **This native has its own reattach check**, and it is narrower than #520's. #520's shared preflight refuses any C
 with an owner. Here, an owner that is neither `bStatic` nor `bTickIsDisabled`, or that is `bDeleteMe`, gets
@@ -222,15 +251,18 @@ particle effect: needs a particle-effects layer (the port has none)"). That is #
 because the pickup's `PickupParticles` is set. The other twelve links read the same as on origin/main: 1, 3-5, 13 and
 14 `error` at `GameEngine.GetOnlineSubsystem`; 8 `error` at `CacheWeaponCard`; 9-12 `notyet`; 2 `ok`.
 
-**The proposed implementation does not get that far.** The stand-in skipped step 4.5. The section 3 answer stops at
-`make` on refusal 1 or 2, by the slice gun's data. Only once that branch is answered does the run reach
-`SpawnPickupParticles`. Two reads then move links 6 and 7: `InitializeRBPhysics` (if the slice gun's definition has no
-physics asset), and `SpawnPickupParticles`.
+**A second probe** on the same merge replaced the stand-in with one that writes nothing and reports the asset test's
+inputs (section 3). Its result: the slice takes the asset branch, and the gate's link results were unchanged.
+
+**The note's answer alone does not get that far.** It stops at `make` on refusal 1. With the hub's ruling (the asset
+branch at rest, and the seeded stream), the native passes on the slice. The run then reaches
+`SpawnPickupParticles`, the next read for links 6 and 7. `InitializeRBPhysics` is not on the slice's path.
 
 ## Open questions
 
 1. **Not read:** `WillowPickup.InitializeRBPhysics`; the deferred reattach's owner update and its two object-flag
-   tests; whether the slice gun's inventory definition holds a `PhysicsAsset` (it decides between refusals 1 and 2).
+   tests; whether the slice mesh's `CollideActors` is clear before the native (it decides whether the reattach runs).
+   The slice gun's definition holds a `PhysicsAsset` (probe, section 3).
 2. **UNVERIFIED:** that the matched entries do nothing script-visible beyond their fields (section 1); that
    `RotationRate`'s constant is zero.
 3. **A hub choice:** the seeded random stream (section 3).
