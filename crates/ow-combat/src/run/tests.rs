@@ -1641,6 +1641,30 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
 }
 
+/// The player controller's native override of the starting values (decision 2026-11-19-46), Off: `NotYet { NotRead }`
+/// naming the unread script call of section 1.10 step 2, before any pool changes. Reference leaves it unbound.
+#[test]
+fn the_player_controllers_starting_values_are_not_yet_before_anything_changes() {
+    let (w, _dir) = world_with(ParityMode::Off, vec![("ToyStarting.upk", fixture::toy_starting())]);
+    let mut run = Run::new(w).unwrap();
+    let vm = &mut run.world().vm;
+    let two = crate::hit::stock_object(vm, "ToyStarting.Class_Two").unwrap();
+    let player = make(vm, "WillowGame.WillowPlayerController");
+    let before = pool_definitions(vm, player);
+    let f = vm.find_function(crate::hit::pools::PLAYER_STARTING_VALUES).unwrap();
+    let refused = vm.call(f, Some(player), vec![Value::Object(Some(two))]).map(|d| d.ret);
+    match &refused {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert!(n.to_string().contains("section 1.10 step 2"), "{n}");
+        }
+        other => panic!("expected NotYet, got {other:?}"),
+    }
+    assert_eq!(pool_definitions(vm, player), before, "nothing changed");
+    let (w, _dir) = world(ParityMode::Reference);
+    assert!(!w.vm.has_native("WillowPlayerController.ApplyCharacterClassStartingValues(object)"));
+}
+
 /// `SetDefaultPhysics` and `GetExpLevel` in Off (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).
 /// `SetDefaultPhysics` changes nothing for a pawn with no `SMComponent` or a dead one; past its gates it is `NotYet`
 /// (the collision queries are not named). `GetExpLevel` is an AI pawn's own `ExpLevel` and `NotYet` on any other pawn.

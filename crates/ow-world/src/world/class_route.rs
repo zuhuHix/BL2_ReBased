@@ -17,6 +17,12 @@
 //!
 //! What "an object of that class" means for a subclass (the lookup's class filter) is not read, so an object found
 //! at the path whose class is only derived from the requested one is `NotYet`, and so is one of an unrelated class.
+//! A name match in memory whose full path the port cannot name is `NotYet` too, before any load.
+//!
+//! **A load before the class check.** The store's load runs before the class is checked, because the store's holder
+//! query does not give an export's class without loading it. So a call that ends `NotYet` for a wrong class leaves
+//! that definition loaded, and live in that VM from then on (a later `FindAlreadyLoadedObject` finds it in memory).
+//! The game's own lookup with a class filter may not load it; that difference is UNVERIFIED (review r1 of #426).
 //!
 //! **`WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync(PawnDataPath, PlayerContext, Payload, Instigator, IntParam,
 //! FloatParam, CallbackCustomEventName)`** (section 3):
@@ -88,10 +94,16 @@ fn object_arg(c: &NativeCall<'_>, i: usize) -> Result<Option<ObjRef>, VmError> {
     if !c.has(i) {
         return Ok(None);
     }
-    Ok(match c.arg(i)? {
-        Value::Object(o) | Value::Interface(o) => *o,
-        _ => None,
-    })
+    match c.arg(i)? {
+        Value::Object(o) | Value::Interface(o) => Ok(*o),
+        other => Err(bad(
+            LOAD_ASYNC,
+            format!(
+                "argument {i}: expected an object, got {}",
+                other.kind_name()
+            ),
+        )),
+    }
 }
 
 // GBXDefinition.GetDefinition(DefinitionClass, DefinitionName) (module documentation).
@@ -179,12 +191,22 @@ fn in_memory(vm: &mut Vm, path: &str, class: ClassId) -> Result<Option<ObjRef>, 
                 .is_ok_and(|x| vm.space.names.text(x.name).eq_ignore_ascii_case(leaf))
         })
         .collect();
+    // A name match whose full path the port cannot name (a run-time object with no outer) may be the object at that
+    // path, so it answers `NotYet` before any store load (as `pawn_data::lookup` does; review r1 of #426).
+    let mut unnamed = false;
     for o in candidates {
         match path_name(vm, o) {
             Ok(full) if full.eq_ignore_ascii_case(path) => return Ok(Some(o)),
-            Ok(_) | Err(VmError::NotYet(_)) => continue,
+            Ok(_) => continue,
+            Err(VmError::NotYet(_)) => unnamed = true,
             Err(e) => return Err(e),
         }
+    }
+    if unnamed {
+        let leaf = path.rsplit(['.', ':']).next().unwrap_or_default();
+        return Err(not_read(format!(
+            "GBXDefinition.GetDefinition of {path}: a run-time object named {leaf} has no full path the port can name, so whether it is the object at that path is not known"
+        )));
     }
     Ok(None)
 }
