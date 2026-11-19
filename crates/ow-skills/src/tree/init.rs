@@ -16,13 +16,13 @@
 //! - P1: the controller's class declares `PlayerSkillTree` as an object property (else a data error);
 //! - P2 ([`existing_tree`]): a set `PlayerSkillTree` is the named `NotYet` (`NotRead`) for the reset of an existing
 //!   tree; None goes on; another kind is a data error;
-//! - P3 ([`tree_class`]): the class `WillowGame.PlayerSkillTree`, resolved when the native is bound (class metadata
-//!   in setup); a class the binding could not resolve is looked up at the call, so its typed error is the answer. The
-//!   tree field's declared class must accept it, else the heap's typed `WrongClass` error, before W1;
-//! - P5a ([`player_class`]): the controller's `PlayerClass` (an object property), read whether or not P4 finds a
-//!   manager, and read before P4, so a bad value is refused before the world is asked for its globals;
+//! - P3 ([`tree_class`]): the class `WillowGame.PlayerSkillTree`, looked up once at setup ([`setup`], the
+//!   [`TreeClassSetup`] service); P3 answers that result, its original error included, and never looks the class up
+//!   again. The tree field's declared class must accept it, else the heap's typed `WrongClass` error, before W1;
 //! - P4 ([`pawn_data_manager`]): the world's globals (its own `NotYet` when it has none) and their
 //!   `ThePlayerPawnDataManager`, declared as an object property; None means no request;
+//! - P5a ([`player_class`]): the controller's `PlayerClass` (an object property), read whether or not P4 finds a
+//!   manager; None means no player class;
 //! - P5b ([`skill_tree_path`]): its `SkillTreePath` (a string property), read only when P4 gave a manager and P5a a
 //!   player class;
 //! - the preflight reads only resident definitions (hub ruling, review r1 of #475: a lazy load is a write): globals
@@ -241,14 +241,46 @@ struct Plan {
     request: Option<SkillTreeRequest>,
 }
 
-/// P3: the tree class, resolved when the native was bound ([`Pack`]); a class the binding could not resolve is looked
-/// up now, so its typed lookup error is the answer. The tree field's declared class must accept it (review r1 of
-/// #475), else the heap's own typed `WrongClass` error, before W1.
-fn tree_class(vm: &mut Vm, resolved: Option<ClassId>, tree_prop: PropId) -> Result<ClassId, VmError> {
-    let class = match resolved {
-        Some(c) => c,
-        None => vm.find_class(TREE_CLASS)?,
-    };
+/// The tree class as setup resolved it (a VM service): the whole lookup result, kept so that P3 answers the original
+/// error and never looks the class up again (review r2 of #475).
+#[derive(Debug, Clone)]
+pub struct TreeClassSetup(pub Result<ClassId, VmError>);
+
+/// Setup: looks the tree class up once and keeps the result in the VM ([`TreeClassSetup`]). [`Pack`] runs it; a caller
+/// of [`init_player_skill_tree`] without the pack runs it first.
+pub fn setup(vm: &mut Vm) -> Result<(), VmError> {
+    let resolved = vm.find_class(TREE_CLASS);
+    match vm.service::<TreeClassSetup>() {
+        Some(s) => {
+            s.try_borrow_mut()
+                .map_err(|_| VmError::ServiceBorrowed("ow_skills::tree::init::TreeClassSetup"))?
+                .0 = resolved;
+        }
+        None => {
+            vm.add_service(TreeClassSetup(resolved))?;
+        }
+    }
+    Ok(())
+}
+
+/// The setup result; a VM whose setup never ran is a data error.
+fn setup_result(vm: &Vm) -> Result<Result<ClassId, VmError>, VmError> {
+    let s = vm
+        .service::<TreeClassSetup>()
+        .ok_or_else(|| bad("the tree class setup did not run (ow_skills::tree::init::setup)"))?;
+    let r = s
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("ow_skills::tree::init::TreeClassSetup"))?
+        .0
+        .clone();
+    Ok(r)
+}
+
+/// P3: the tree class as setup resolved it; a lookup setup could not make answers its original error, unchanged. The
+/// tree field's declared class must accept it (review r1 of #475), else the heap's own typed `WrongClass` error,
+/// before W1.
+fn tree_class(vm: &mut Vm, resolved: Result<ClassId, VmError>, tree_prop: PropId) -> Result<ClassId, VmError> {
+    let class = resolved?;
     if let Some(PropKind::Object { class: wanted }) = vm.space.classes.decl(tree_prop).map(|d| d.kind.clone())
         && !vm.space.classes.is_child_of(class, wanted)
     {
@@ -257,16 +289,15 @@ fn tree_class(vm: &mut Vm, resolved: Option<ClassId>, tree_prop: PropId) -> Resu
     Ok(class)
 }
 
-/// P1 to P6 (module documentation). Nothing is written and nothing is loaded. P5a (a read of the controller only)
-/// comes before P4, so a bad `PlayerClass` is refused before the world is asked for its globals.
-fn preflight(vm: &mut Vm, controller: ObjRef, resolved: Option<ClassId>) -> Result<Plan, VmError> {
+/// P1 to P6 in the note's order (module documentation). Nothing is written and nothing is loaded.
+fn preflight(vm: &mut Vm, controller: ObjRef, resolved: Result<ClassId, VmError>) -> Result<Plan, VmError> {
     let tree_prop = declared(vm, controller, "PlayerSkillTree", "an object property", is_object)?;
     if object_value(vm.space.read(controller, PropAddr::scalar(tree_prop))?, "PlayerSkillTree")?.is_some() {
         return Err(existing_tree());
     }
     let tree_class = tree_class(vm, resolved, tree_prop)?;
-    let class = player_class(vm, controller)?;
     let manager = pawn_data_manager(vm)?;
+    let class = player_class(vm, controller)?;
     let path = match (manager, class) {
         (Some(_), Some(class)) => Some(skill_tree_path(vm, class)?),
         _ => None,
@@ -276,12 +307,9 @@ fn preflight(vm: &mut Vm, controller: ObjRef, resolved: Option<ClassId>) -> Resu
 }
 
 /// `InitPlayerSkillTree()` on `controller` (module documentation).
+/// The setup result ([`setup`]) is read from the VM, as the bound native reads it.
 pub fn init_player_skill_tree(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
-    let resolved = vm.space.classes.by_path(TREE_CLASS);
-    init_with(vm, controller, resolved)
-}
-
-fn init_with(vm: &mut Vm, controller: ObjRef, resolved: Option<ClassId>) -> Result<(), VmError> {
+    let resolved = setup_result(vm)?;
     let plan = preflight(vm, controller, resolved)?;
     // The queue's borrow, taken before W1 when there is a request (review r1 of #475).
     let queue = pending(vm)?;
@@ -316,14 +344,14 @@ impl NativePack for Pack {
             return Ok(());
         }
         pending(vm)?;
-        // P3's class metadata, resolved at setup (review r1 of #475); a failure here is answered by P3 at call time.
-        let resolved = vm.find_class(TREE_CLASS).ok();
+        // P3's class metadata, resolved at setup (reviews r1 and r2 of #475); its result, error included, is kept.
+        setup(vm)?;
         ow_combat::hit::bind(
             vm,
             PATH,
             Rc::new(move |c: &mut NativeCall<'_>| {
                 let controller = c.this.ok_or_else(|| bad("called without a controller"))?;
-                init_with(c.vm, controller, resolved)?;
+                init_player_skill_tree(c.vm, controller)?;
                 Ok(Value::None)
             }),
         )

@@ -8,14 +8,13 @@ not opened. Synthetic fixtures only.
 - **What is bound (`ow-skills` `tree/init.rs`, Off only).** `WillowPlayerController.InitPlayerSkillTree()`, by its
   declaration's native key, in `--combat-run`'s world (and so the slice gate's links that use it). The note's
   section 5 is followed case by case.
-- **Preflight, before any write, in the note's order except that P5a, a read of the controller alone, comes before
-  P4. The preflight reads only resident definitions** (hub ruling: a lazy load is a write). A globals object or a
+- **Preflight, before any write, in the note's order. The preflight reads only resident definitions** (hub ruling: a lazy load is a write). A globals object or a
   player class that is still an unloaded store handle is a named `NotYet` (`NotPorted`), and nothing is loaded.
   - P1: `PlayerSkillTree` must be declared as an object property (otherwise a data error).
   - P2: a set tree is the named `NotYet` (`NotRead`) for the reset of an existing tree. The only installed caller
     clears the field first.
-  - P3: the `WillowGame.PlayerSkillTree` class. Its metadata is resolved when the native is bound; a class the
-    binding could not resolve is looked up at the call, so its typed error is the answer. The tree field's declared
+  - P3: the `WillowGame.PlayerSkillTree` class, looked up once at setup. The whole result is kept in a VM service,
+    and P3 answers it, its original error included, without a second lookup. The tree field's declared
     class must accept it, else the heap's typed `WrongClass` error, before the tree is made.
   - P4: the world's globals (its own `NotYet` when there are none) and their `ThePlayerPawnDataManager`.
   - P5a: the controller's `PlayerClass`, read whether or not there is a manager.
@@ -41,7 +40,7 @@ not opened. Synthetic fixtures only.
 - **After a write.** With A1 to A5, no `NotYet` can follow W1. Should one surface, it stops the call with the "stopped
   after partial writes: " prefix, once, keeping its kind and record. Nothing is rolled back, and other errors
   propagate unchanged.
-- **Tests.** `tree/init_tests.rs` has eight tests (eleven after review r1 of #475) on an invented `WillowGame.upk`:
+- **Tests.** `tree/init_tests.rs` has eight tests (eleven after review r1 of #475, thirteen after r2) on an invented `WillowGame.upk`:
   - the slice minimum (the tree, its outer, the seven-argument record);
   - the dotless, empty, no-manager and no-class cases;
   - an existing tree refused with nothing made;
@@ -75,3 +74,9 @@ not opened. Synthetic fixtures only.
 - P2's `NotYet` carries the note's exact text.
 - Tests: eleven. Three are new: an unloaded player class, an incompatible tree field, a borrowed queue. The P2 test
   asserts the full message.
+
+**Review r2 of #475.**
+- Setup keeps the tree class lookup's whole result, and P3 returns its original error. No lookup runs in the
+  preflight, and the direct entry point reads the same setup result.
+- P4 is back before P5a, in the note's order: with no globals and a bad `PlayerClass`, the world's `NotYet` comes out
+  first, unchanged. The note's "PlayerClass first" is about the native's request test only.

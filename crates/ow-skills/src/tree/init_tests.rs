@@ -368,3 +368,30 @@ fn a_borrowed_queue_is_refused_before_the_tree_is_made() {
     assert!(x.tree().is_some());
     assert_eq!(x.requests().len(), 1, "the retry queues the request");
 }
+
+/// P3 answers setup's own result (review r2 of #475): a lookup that failed at setup is returned as it was, and no
+/// second lookup runs in the preflight.
+#[test]
+fn p3_answers_the_setup_lookup_error_unchanged() {
+    let mut x = fx();
+    x.ready("A.B");
+    let original = VmError::Script { function: "toy-setup".into(), message: "the toy lookup failed".into() };
+    let s = x.vm.service::<TreeClassSetup>().unwrap();
+    s.borrow_mut().0 = Err(original.clone());
+    let before = x.objects();
+    assert_eq!(x.call().unwrap_err(), original);
+    assert_eq!((x.objects(), x.tree()), (before, None), "nothing made");
+}
+
+/// P4 comes before P5a (review r2 of #475): with no globals, the world's own `NotYet` comes out first, whatever the
+/// player class holds.
+#[test]
+fn no_globals_comes_out_before_the_player_class_is_read() {
+    let mut x = fx_with(ParityMode::Off, false, false);
+    let class = x.make("WillowGame.PlayerClassDefinition");
+    let c = x.controller;
+    x.set(c, "PlayerClass", Value::Object(Some(class)));
+    let VmError::NotYet(n) = x.call().unwrap_err() else { panic!("a NotYet") };
+    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+    assert_eq!(n.what, "the toy world's globals", "the world's NotYet, unchanged");
+}
