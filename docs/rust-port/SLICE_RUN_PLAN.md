@@ -176,8 +176,10 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
 - **Phaselock, runs:** skills, the four branches and 31 skills, the lock duration and the lift's data, in an ignored
   installed test (D42, #342); the duration in Reference (D62, #360). **First stops:** in Off the duration got past
   `Object.PathName` in #368, which now stops at the designer class default object's value resolver, not loaded by the
-  store; the lift needs `Object.VLerp` (D42); the cast stops after `RegisterBehaviorConsumer` at
-  `BeginNondeterministicProviderRegistration`, unbound, rule not read (D50); `EngineQuery::PlayerSkill` needs a
+  store; the lift runs on `ow-vm`'s `Object.VLerp` in both modes and `OnActionSkillStarted` stops at the unbound
+  `ActionSkill.OnActionSkillActivated` (2026-11-19-02); the cast stops after `RegisterBehaviorConsumer` at
+  `BeginNondeterministicProviderRegistration`, unbound, rule now read in NATIVE_BEHAVIOR_PROVIDERS.md with
+  `ForceUnregisterBehaviorConsumer`, not implemented (D50, 2026-11-19-02); `EngineQuery::PlayerSkill` needs a
   grade-valued query (D42). The cooldown maximum resolves to 13 in Off once #368 lands.
 - **Phaselock, lanes:** #368 first; then **FIX-PHASELOCK-CAST** *(proposed)*, `ow-skills` with `ow-behavior`, `ow-vm`
   and `ow-world`: the designer default object's resolver (`ow-defs`), `VLerp` (clean room, a stock Core native),

@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-PHASELOCK-CAST part A (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5). `Object.VLerp` in
+`ow-vm` (both modes), the two provider natives read into NATIVE_BEHAVIOR_PROVIDERS.md (not bound). `cargo build
+--workspace` clean; `cargo test --workspace` 1,876 passed / 0 failed / 42 ignored (one new `ow-vm` test). Fresh C++
+Release build (VS 18, `-T version=14.50`, `--parallel 2`) clean; ctest at `-j 2` 173/173, 0 failed, 466.46 s;
+verify_packages 9 packages, decoded bytes, counts and export fields match, all class bodies exact. Installed
+Phaselock test (ignored, `OW_BL2_ROOT`) passes in Off and Reference: the lift runs 43 frames, Z 0 to 200, never down;
+`OnActionSkillStarted` stops at the unbound `ActionSkill.OnActionSkillActivated`.
+
 **Object.Localize path correction (2026-11-18, desktop):** AI-assisted (Codex/GPT-6.1 Sol).
 The CLI now derives localization roots from the package store's absolute, lexically normalized root.
 A child test process covers `--cooked .`, relative parent components and an absolute parent-component path

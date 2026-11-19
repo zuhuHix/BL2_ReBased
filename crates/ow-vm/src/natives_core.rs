@@ -841,6 +841,21 @@ fn floats(vm: &mut Vm) -> Result<(), VmError> {
             ],
         )
     })?;
+    // VLerp (lane FIX-PHASELOCK-CAST, decision 2026-11-19-02): the stock UE3 Core vector lerp, `A + Alpha x (B - A)`
+    // per axis, from the public UnrealScript declaration and the float `Lerp` above; no record of the executable and
+    // no C++ counterpart. Alpha is not clamped (as `Lerp`). Each axis in double and rounded once, as `Lerp` here; the
+    // native's own single-precision order is UNVERIFIED. Bound in both modes with one rule.
+    reg(vm, "Object.VLerp(vector,vector,float)", |c| {
+        let (a, b, alpha) = (vec3(c, 0)?, vec3(c, 1)?, float(c, 2)?);
+        make_vector(
+            c.vm,
+            [
+                a[0] + alpha * (b[0] - a[0]),
+                a[1] + alpha * (b[1] - a[1]),
+                a[2] + alpha * (b[2] - a[2]),
+            ],
+        )
+    })?;
     reg(
         vm,
         "Object.FInterpConstantTo(float,float,float,float)",
@@ -2299,6 +2314,60 @@ mod tests {
             h.call(constant, vec![f(0.0), f(10.0), f(0.5), f(-4.0)]),
             f(-2.0)
         );
+    }
+
+    #[test]
+    fn vlerp_is_one_rule_in_both_modes() {
+        let key = "Object.VLerp(vector,vector,float)";
+        for mode in [ParityMode::Off, ParityMode::Reference] {
+            let mut h = build(mode, true, None);
+            let (a, b) = (h.vector(0.0, 10.0, -4.0), h.vector(8.0, 30.0, 4.0));
+            assert_eq!(
+                h.call(key, vec![a.clone(), b.clone(), f(0.0)]),
+                a,
+                "{mode:?}: alpha 0 is A"
+            );
+            assert_eq!(
+                h.call(key, vec![a.clone(), b.clone(), f(1.0)]),
+                b,
+                "{mode:?}: alpha 1 is B"
+            );
+            assert_eq!(
+                h.call(key, vec![a.clone(), b.clone(), f(0.25)]),
+                h.vector(2.0, 15.0, -2.0),
+                "{mode:?}: per axis"
+            );
+            // Not clamped, as the float Lerp: 1.5 and -0.5 extrapolate past B and before A.
+            assert_eq!(
+                h.call(key, vec![a.clone(), b.clone(), f(1.5)]),
+                h.vector(12.0, 40.0, 8.0),
+                "{mode:?}: alpha above 1"
+            );
+            assert_eq!(
+                h.call(key, vec![a.clone(), b.clone(), f(-0.5)]),
+                h.vector(-4.0, 0.0, -8.0),
+                "{mode:?}: alpha below 0"
+            );
+            // Each axis agrees with the float Lerp bit for bit (double, rounded once).
+            let (p, q) = (h.vector(0.1, -3.3, 1.0e6), h.vector(0.7, 2.9, -7.5));
+            let lerp = |h: &mut H, x: f32, y: f32| {
+                h.call("Object.Lerp(float,float,float)", vec![f(x), f(y), f(0.3)])
+            };
+            let want = [
+                lerp(&mut h, 0.1, 0.7),
+                lerp(&mut h, -3.3, 2.9),
+                lerp(&mut h, 1.0e6, -7.5),
+            ];
+            let want = match want {
+                [Value::Float(x), Value::Float(y), Value::Float(z)] => h.vector(x, y, z),
+                other => panic!("Lerp gave {other:?}"),
+            };
+            assert_eq!(
+                h.call(key, vec![p, q, f(0.3)]),
+                want,
+                "{mode:?}: as Lerp per axis"
+            );
+        }
     }
 
     // ---- random numbers --------------------------------------------------------------------------------------
