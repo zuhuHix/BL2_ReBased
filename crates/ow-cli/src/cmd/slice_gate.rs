@@ -960,13 +960,17 @@ pub fn drive_phaselock(
     }
 }
 
-/// A step's stop from its typed error: the stop's fields as `classify` reads them from the text, the outcome from the
-/// variant (`VmError::NotYet` is not yet; anything else an error).
+/// A step's stop from its typed error, graded by the variant and never by the text (review r3 of #454): a
+/// `VmError::NotYet` is not yet, its subject and record taken from the value itself (`stop_of_not_yet`), so a record
+/// whose text holds another `NotYet` phrase cannot blank them; anything else is an error, whatever its text says, with
+/// the fields `classify` reads from the text (the key of an unbound native, when it names one).
 fn typed_stop(step: &str, e: &ow_vm::error::VmError) -> (Outcome, Stop) {
+    if let ow_vm::error::VmError::NotYet(n) = e {
+        return (Outcome::NotYet, stop_of_not_yet(step, n));
+    }
     let text = ow_combat::hit::access::error_text(e);
     let (_, stop) = classify(step, &text);
-    let outcome = if matches!(e, ow_vm::error::VmError::NotYet(_)) { Outcome::NotYet } else { Outcome::Error };
-    (outcome, stop)
+    (Outcome::Error, stop)
 }
 
 /// Link 2 (module documentation): Sanctuary loaded and its collision built (`load`), Maya at its first player start
