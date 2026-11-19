@@ -10,18 +10,22 @@ AI-assisted (Claude Code, Claude Opus 5.5). Lane FIX-VALUE-C, the LOW follow-ups
   (`D_Attributes.Inventory.InventoryPartMonetaryValueModifierTotal`) reaches the property is still not read
   (UNVERIFIED), so the test pins the order of the two steps, not a resolver rule.
 - **(b) A negative scale in single precision.** A new test feeds `RecomputeNormalizedDamageValues` the base 0.1 and a
-  stack with PreAdd 0.2 and Scale -0.3. The negative scale goes to the divisor, and each step rounds to single
-  precision, giving 0.23076925 (bits `0x3e6c4ec6`). Double precision rounded once would give 0.23076923, and the test
-  checks that the two differ, so it pins the form. Which form the game uses is still architecture 5.3's open question
-  (UNVERIFIED).
-- **(c) Every output looked up first.** `RecomputeNormalizedDamageValues` checks all six output properties (the two
-  copied stacks, the two bases, the two values) before its first write. A class missing one is a data error that
-  changes none of the others. A new test covers it with a toy weapon class that lacks `NormalizedMeleeDamage`.
-- **(d) One implementation each.**
-  - The normalized value is now `ow-attr`'s own stack formula: `ow_attr::storage::stack_value`, made public for this,
-    with `NumKind::Float` and the VM's let form. It replaces the module's local stack reader. The rules are unchanged:
-    a None element and a modifier type outside the three are skipped, and a non-object element is an error.
-  - The weapon's type definition comes from a new shared `equip::weapon_type_definition`, which `weapon_type_of` now
-    uses too. Each caller keeps its own `NotYet` text, so `RecomputeNormalizedDamageValues` still names its own
-    question.
+  stack with PreAdd 0.1 and Scale -0.1. The negative scale goes to the divisor; the combine takes the divisor's
+  reciprocal and multiplies, each step rounded to single precision, giving bits `0x3e3a2e8b`. A direct
+  single-precision division gives `0x3e3a2e8c`, and so does double precision rounded once, and the test asserts all
+  three, so it pins both the precision and the order of the operations. (The first fixture, PreAdd 0.2 and Scale
+  -0.3, did not pin the order: a direct division gives the same bits there; review of #446.) Which form the game uses
+  is still architecture 5.3's open question (UNVERIFIED).
+- **(c) Every output checked first.** `RecomputeNormalizedDamageValues` settles everything that can refuse before its
+  first write: each stack's modifiers, each base, and then all six outputs (the two copied stacks, the two bases, the
+  two values) against their declarations, with the value each will hold. A class missing one, or declaring one with
+  the wrong kind (an int `NormalizedMeleeDamage`, review of #446), is a data error that changes none of the others.
+  Two tests cover it with toy weapon classes.
+- **(d) One implementation each: withdrawn (review of #446).** The first version of this lane replaced the module's
+  stack reader with `ow_attr::storage::stack_value` and its type lookup with a shared helper. The review found that
+  this was not behaviour-neutral: the modifiers were then read after the base was evaluated, and the shared
+  conversions accepted less (an interface value, a bare None, a None interface element). Both are back as they were
+  in decision 2026-11-19-45, and `stack_value` is crate-private again. Two new tests pin the order: a base resolver
+  that changes a modifier does not change the recompute (the modifiers are read first), and a malformed stack is
+  reported before an unread base.
 - **UNVERIFIED.** As decision 2026-11-19-45: nothing here was checked in the running game.
