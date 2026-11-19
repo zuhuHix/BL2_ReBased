@@ -449,6 +449,7 @@ Does nothing without a world and a game replication info. With them:
   4. else if B has `bForceAllOtherOpinions`: B's `ForcedOtherOpinion`; else A's `DefaultOpinion`.
 - **WillowPawn override** (a minion or commanded-target layer on top, low confidence): the pawn answers Enemy for one remembered target actor (a pawn field, read as the actor it was told to attack), Friendly for another remembered actor (read as its master), and in one further case where the other
   pawn has a master and that master's friendliness check on this pawn is true it also answers Enemy (read from the code, direction not understood, **low**); otherwise the generic rule. None of this applies to the Fire dummy or to Maya without a minion.
+  Since read (NATIVE_IS_FRIENDLY.md section 2): the two remembered actors are the pawn's `CharmedChild` (Enemy) and `CharmedParent` (Friendly), and the third case applies only when this pawn has no `CharmedParent`.
 - **Implementer checklist (slice):** with allegiances as data objects, opinion = the four-step rule above; `WillowGameInfo.Killed` (script) uses `Killer.Pawn.IsEnemy(KilledPawn)`, then `IsFriendly`, then `IsNeutral`, to pick the killer and killed skill events (11/14, 12/15, 13/16).
 - **Open:** the data of the player and dummy allegiance objects (which `GD_AI_Allegiance` entry the dummy uses and the player's); the master-related layer.
 
