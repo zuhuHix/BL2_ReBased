@@ -734,6 +734,8 @@ fn run_fire_once(
         let vm = slice::open(cooked, ParityMode::Off, policy)?;
         let mut world = bridge::world(vm)?;
         let fire = FireMissionSlice::new(&mut world, FIRE_MISSION, &name, DUMMY_PROVIDER)?;
+        // Link 12's native and its globals preload (lane IMPL-LINK12-UNLOCK-ACHIEVEMENT), as `--slice-run` does.
+        slice::unlock_setup(&mut world).map_err(|e| slice::Failure::from(ow_behavior::provider::BehaviorError::Vm(e)))?;
         Ok((world, fire))
     };
     let (mut world, fire) = match setup() {

@@ -139,8 +139,9 @@ pub(crate) struct Failure {
 ///   load goes through the definition store, so #518's load-transition counter counts it. The first load's challenge
 ///   numbering is not run (NATIVE_WILLOW_GLOBALS.md section 6.1). UNVERIFIED stand-in for the game's own first load.
 ///
-/// A world with no globals object recorded is left as it is (the native then answers false).
-fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_vm::error::VmError> {
+/// A world with no globals object recorded is left as it is (the native then answers false). `--slice-run` and
+/// `--slice-gate`'s Fire group both call it after `FireMissionSlice::new`.
+pub(crate) fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_vm::error::VmError> {
     ow_inventory::globals::achievement::register(&mut world.vm)?;
     let globals = world.query().try_borrow().map_err(|_| ow_vm::error::VmError::ServiceBorrowed("WorldQuery"))?.globals();
     if let Some(globals) = globals {
