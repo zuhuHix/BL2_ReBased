@@ -71,3 +71,25 @@ loosened. The `NotYet` guards changed are listed under "Guards" below.
   no headless driver.
 - **The note:** `NATIVE_SPECIAL_MOVE_COMPONENT.md` open questions 1 and 3 get status lines (port decision by stock UE3;
   the seen next stop).
+- **Review r1 of #435.**
+  - **Spawning from an archetype in Off:**
+    - Before anything is made, the archetype is loaded and checked. A live actor (one in the level list) as the
+      template, or a template whose slot count is not the class layout's (a stand-in with no properties loaded), is
+      `NotYet { NotRead }`.
+    - The collision pre-checks (spot search, encroachment, base search) refuse when either the class defaults or the
+      archetype asks for them. Which of the two the game reads is not read: UNVERIFIED.
+  - **Instancing:**
+    - Components are found transitively: the actor's component fields first, then each found component's own, with
+      the same outer test, until nothing new turns up. So no copy is left pointing at a template component.
+    - Each field's slots come from its recorded first slot, and a field outside the object's slots is an error.
+  - **Labelled UNVERIFIED** (in the code documentation):
+    - a component inherited from a parent class's default stays shared;
+    - references to the template itself, or to its `Default__` handle, are not re-pointed;
+    - the actor-component reference loop is not freed by `release_unreferenced`;
+    - a failure part-way through a spawn leaves the actor on the heap and in the level list.
+  - **Tests added:**
+    - an archetype that sets `bCollideWorld` or `bCollideActors`;
+    - an archetype with no slots, and a live actor as the template;
+    - a component reached only through another component;
+    - an Off spawn from an archetype that has a component. This one uses a world fixture with a synthetic `Core.upk`
+      for `Core.Component`.

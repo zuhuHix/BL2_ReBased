@@ -579,6 +579,9 @@ fn collision(what: &'static str) -> VmError {
 /// physics-body and state-frame set-up of step 6, the zone and tick-group changes after `PreBeginPlay`, the
 /// per-component call of step 8.
 ///
+/// A failure part-way through (a `NotYet` after the actor is made) leaves the actor on the heap and in the level list,
+/// as before; nothing frees it (UNVERIFIED as the game's behaviour, which this port does not model).
+///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
 pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
@@ -611,30 +614,34 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         if space.heap.get(t)?.class != class {
             return Ok(None);
         }
-        if t != defaults && vm.parity == ParityMode::Off {
-            source = t;
-        } else if t != defaults {
-            return Err(NotYet::not_read(
-                "Spawn with an ActorTemplate other than the class default object (how the template's instanced \
-                 subobjects are copied)",
-                RECORD,
-            )
-            .into());
+        if t != defaults {
+            if vm.parity != ParityMode::Off {
+                return Err(NotYet::not_read(
+                    "Spawn with an ActorTemplate other than the class default object (how the template's instanced \
+                     subobjects are copied)",
+                    RECORD,
+                )
+                .into());
+            }
+            source = archetype(vm, &actors, class, t)?;
         }
     }
+    let space = &vm.space;
+    // The pre-checks read the class defaults and, for an archetype, the archetype too: either one asking for the
+    // check refuses (review r1 of #435; which of the two the game reads is not read, UNVERIFIED).
+    let either = |name: &str| -> Result<bool, VmError> {
+        Ok(flag(space, defaults, name)? || (source != defaults && flag(space, source, name)?))
+    };
     let client = byte(space, world_info, "NetMode")? == NET_MODE_CLIENT;
-    if !req.no_collision_fail
-        && (flag(space, defaults, "bCollideWorld")?
-            || (flag(space, defaults, "bCollideWhenPlacing")? && !client))
-    {
+    if !req.no_collision_fail && (either("bCollideWorld")? || (either("bCollideWhenPlacing")? && !client)) {
         return Err(collision("the spawn placement spot search"));
     }
-    if begun && flag(space, defaults, "bCollideActors")? {
+    if begun && either("bCollideActors")? {
         return Err(collision(
             "the post-spawn encroachment check (or relocation) of an actor that collides with actors",
         ));
     }
-    if begun && needs_base_search(space, defaults)? {
+    if begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
         return Err(collision("the base search after PostBeginPlay"));
     }
     let time = float(space, world_info, "TimeSeconds")?;
@@ -652,11 +659,6 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
             let actor = vm.instantiate(class, "")?;
-            if vm.defs.is_unloaded(&vm.space, source) {
-                let loaded = vm.defs.ensure_loaded(&mut vm.space, source);
-                vm.log.extend(vm.defs.take_log());
-                loaded?;
-            }
             let slots = vm.space.heap.get(source)?.slots.clone();
             vm.space.heap.get_mut(actor)?.slots = slots;
             instance_components(vm, source, actor)?;
@@ -713,6 +715,39 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         ));
     }
     Ok(Some(actor))
+}
+
+/// The archetype `t` of `class` an Off spawn is made from (decision 2026-11-19-44, review r1 of #435), loaded, or
+/// `NotYet { NotRead }` before anything is made:
+/// - a live actor (one in the level list) as the template: whether its run-time state is copied is not read;
+/// - a template whose properties are not loaded (a resource stand-in, its slots not the class layout's).
+fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef) -> Result<ObjRef, VmError> {
+    if actors.try_borrow().map_err(borrow_err)?.list.contains(&t) {
+        return Err(NotYet::not_read(
+            "Spawn with a live actor as its ActorTemplate (whether its run-time state is copied)",
+            RECORD,
+        )
+        .into());
+    }
+    if vm.defs.is_unloaded(&vm.space, t) {
+        let loaded = vm.defs.ensure_loaded(&mut vm.space, t);
+        vm.log.extend(vm.defs.take_log());
+        loaded?;
+    }
+    let want = vm
+        .space
+        .classes
+        .get_layout(class)
+        .map(|l| l.slot_count())
+        .ok_or_else(|| rule_error("Spawn", format!("unknown class {class:?}")))?;
+    if u32::try_from(vm.space.heap.get(t)?.slots.len()).ok() != Some(want) {
+        return Err(NotYet::not_read(
+            "Spawn with an ActorTemplate whose properties are not loaded (a stand-in with no slots)",
+            RECORD,
+        )
+        .into());
+    }
+    Ok(t)
 }
 
 /// Step 10's base search condition: no `Base`, collides with the world, `bShouldBaseAtStartup`, and `Physics`
