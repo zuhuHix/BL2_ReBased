@@ -495,6 +495,9 @@ impl NativePack for Pack {
             // The engine's data store client, its global stores and the online game settings route
             // (NATIVE_ONLINE_GAME_SETTINGS.md; lane IMPL-ONLINE-GAME-SETTINGS, decision 2026-11-19-65).
             datastore::register(vm)?;
+            // GameEngine.GetOnlineSubsystem and OnlineSubsystemSteamworks.GetLoginStatus (NATIVE_LOGIN_STATUS.md; lane
+            // IMPL-LOGIN-STATUS, decision 2026-11-19-95): named NotYets, the port's world having no online subsystem.
+            online::register(vm)?;
             // WillowGameInfo.TravelPostCountdownInProcess (NATIVE_TRAVEL.md, UNVERIFIED; lane MAP-LOAD-C, decision
             // 2026-11-19-20): whether the game info's TravelPostCountdownTime is above 0; nothing else is read or written.
             // The C++ does not bind it, so Reference keeps the stub (R3).
@@ -583,6 +586,8 @@ pub mod datastore;
 
 /// The two mission numbers of the settings refresh and the mission screen's text list (lane IMPL-MISSION-NUMBERS).
 pub mod mission_numbers;
+/// The login status path's natives (lane IMPL-LOGIN-STATUS).
+pub mod online;
 
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;

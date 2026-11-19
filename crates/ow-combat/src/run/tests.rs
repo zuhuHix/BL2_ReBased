@@ -2140,6 +2140,36 @@ fn the_event_preflight_follows_the_declaration_that_will_run() {
     assert_eq!(pool_definitions(vm, over), names(&[(0, "Pool_Health"), (1, "Pool_Exp")]), "the pools were made first");
 }
 
+/// Decision 2026-11-19-95 (NATIVE_LOGIN_STATUS.md section 7 at a2d70e4): the online subsystem's refusal is the runtime
+/// check, not a preflight. The stand-in here is a bound `InitPlayerSkillTree` (-88 binds the real one) that asks the
+/// login path's `GameEngine.GetOnlineSubsystem` answer, as the stock event's later `IsInvalidName` would. On a world
+/// with no engine object it refuses after the pools are made: terminal, "stopped after partial writes", its
+/// `LayerAbsent` kind and record kept, and the pools left in place.
+#[test]
+fn the_login_path_refusal_is_terminal_after_the_writes() {
+    let (mut run, _dir, _player, _calls, _s) = player_starting_hooked(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let f = vm.find_function("WillowGame.WillowPlayerController.InitPlayerSkillTree").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(|c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(ow_world::world::online::subsystem(c.vm)?))),
+    )
+    .unwrap();
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_ExpOnly").unwrap();
+    let skill = populated(vm, "ToyPlayerStarting.ToySkillController");
+    set_player_class(vm, skill, Some("ToyPlayerStarting.Class_ExpOnly"));
+    match crate::hit::pools::apply_class_starting_values(vm, skill, Some(class)).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(matches!(n.missing, ow_core::Missing::LayerAbsent { .. }), "{n:?}");
+            assert_eq!(n.record, ow_world::world::online::RECORD);
+            assert!(n.what.starts_with("stopped after partial writes: GameEngine.GetOnlineSubsystem"), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(pool_definitions(vm, skill), names(&[(0, "Pool_Health"), (1, "Pool_Exp")]), "the writes stay");
+}
+
 /// Item 4: a callback in the base takes the manager's authority away; the override's pending pools stop with the named
 /// terminal refusal (the note's open question 3) before `CreatePool` or the event.
 #[test]
