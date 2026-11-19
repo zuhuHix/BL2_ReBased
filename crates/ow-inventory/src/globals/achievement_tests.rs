@@ -319,6 +319,22 @@ fn no_match_is_false_and_writes_nothing() {
     assert_eq!(x.counters(), counters, "no write, no draw, no load");
 }
 
+/// The turn-in's call shape: `StringData` arriving as None and the last two flags omitted read as the empty string
+/// and false, so the type-16 entry wanting 20 is selected at 20 and not below.
+#[test]
+fn omitted_arguments_are_their_zero() {
+    let mut x = fx();
+    x.set_rows(&[(16, 7, "", 20)]);
+    let f = x.vm.find_function(UNLOCK_IF_CONDITIONS_MET).unwrap();
+    let pc = x.pc;
+    let call = |vm: &mut Vm, int: i32| {
+        vm.call(f, Some(pc), vec![Value::Byte(16), Value::None, Value::Int(int), Value::Bool(true)]).map(|r| r.ret)
+    };
+    assert_eq!(call(&mut x.vm, 1).unwrap(), Value::Bool(false));
+    assert_eq!(call(&mut x.vm, 20).unwrap(), Value::Bool(true));
+    assert_eq!(x.calls(), vec![7]);
+}
+
 /// The string match compares without case, and an empty entry string never matches.
 #[test]
 fn the_string_match_ignores_case_and_wants_a_string() {

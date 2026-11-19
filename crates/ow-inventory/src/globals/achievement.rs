@@ -167,23 +167,41 @@ pub fn achievement_data(vm: &Vm, definition: ow_object::ids::ObjRef) -> Result<V
         .collect()
 }
 
+/// The call's six inputs. An omitted argument, or one that arrives as `Value::None` (how the VM passes an omitted
+/// optional parameter, as the turn-in's call omits `StringData` and the last two flags), is its type's zero: 0, the
+/// empty string, false (the convention of `ow-world`'s `arg_bool`).
 fn conditions(c: &NativeCall<'_>) -> Result<Conditions, VmError> {
-    let flag = |i: usize, name: &str| match c.arg(i)? {
-        Value::Bool(b) => Ok(*b),
-        other => Err(bad(WHAT, format!("{name} is {}, not a bool", other.kind_name()))),
+    let given = |i: usize| -> Result<Option<&Value>, VmError> {
+        if !c.has(i) {
+            return Ok(None);
+        }
+        Ok(match c.arg(i)? {
+            Value::None => None,
+            v => Some(v),
+        })
+    };
+    let flag = |i: usize, name: &str| match given(i)? {
+        None => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(other) => Err(bad(WHAT, format!("{name} is {}, not a bool", other.kind_name()))),
     };
     Ok(Conditions {
-        unlock_type: match c.arg(0)? {
-            Value::Byte(b) => *b,
-            other => return Err(bad(WHAT, format!("AchievementUnlockType is {}, not a byte", other.kind_name()))),
+        unlock_type: match given(0)? {
+            None => 0,
+            Some(Value::Byte(b)) => *b,
+            Some(other) => {
+                return Err(bad(WHAT, format!("AchievementUnlockType is {}, not a byte", other.kind_name())));
+            }
         },
-        string: match c.arg(1)? {
-            Value::Str(s) => s.to_string(),
-            other => return Err(bad(WHAT, format!("StringData is {}, not a string", other.kind_name()))),
+        string: match given(1)? {
+            None => String::new(),
+            Some(Value::Str(s)) => s.to_string(),
+            Some(other) => return Err(bad(WHAT, format!("StringData is {}, not a string", other.kind_name()))),
         },
-        int: match c.arg(2)? {
-            Value::Int(i) => *i,
-            other => return Err(bad(WHAT, format!("IntData is {}, not an int", other.kind_name()))),
+        int: match given(2)? {
+            None => 0,
+            Some(Value::Int(i)) => *i,
+            Some(other) => return Err(bad(WHAT, format!("IntData is {}, not an int", other.kind_name()))),
         },
         can_be_greater: flag(3, "bCanBeGreater")?,
         check_string_and_int: flag(4, "bCheckStringAndIntData")?,
