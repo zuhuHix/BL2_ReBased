@@ -52,5 +52,13 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SPAWN-PLACEMENT, analyst only 
   geometry. H4 cannot answer box queries yet.
 - The live checks now tell the requested cases apart.
 
+**Review r2 of #459.**
+- **Coverage:** an answer needs coverage of the whole query region (the full box, or the full swept volume) in the
+  requested collision mode. Otherwise the answer is Unsupported, the named `NotRead`.
+- **The filter:** the unread trace filters (flag sets 8902, plus 131072 for complex collision, and 8326) make every
+  box test and sweep a named `NotYet` of kind `NotRead` until they are read. No Off filter is defined in their place.
+- **Live checks** for both CDO and archetype directions, a `PreBeginPlay` that clears the flag, an actor destroyed
+  before the check, the half-fraction split, and a final sweep after a slice correction.
+
 **Open (in the note).** The encroachment check's internals, the relocation step, the bounding-cylinder rule, the trace
 flag sets, and the net-mode comparison.
