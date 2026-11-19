@@ -38,13 +38,16 @@ on link 8, and gives the Off binding.
 
 The reading in NATIVE_LOOT.md holds. In our words, with `word` the second argument (the grade index, or the level in
 the base game):
-1. **The cycle guard:** a balance already being asked further up the same chain answers **1**.
+1. **The cycle guard:** a balance already being asked further up the same chain answers **1**. This check runs
+   before the interpolation test. In the game the guard is an engine-wide list of the balances being asked; its
+   mechanism was not modelled further (section 4).
 2. **Interpolating balance** (`bInterpolateExpLevel`, class default true): the answer is `word` unchanged. The
    manufacturer argument is not looked at, and no base is asked.
 3. **Otherwise:** find the manufacturer argument in this balance's `Manufacturers`, the first entry whose
-   `Manufacturer` equals it. If found and `word`'s low 16 bits are a valid index into that entry's `Grades`:
-   - when `word`'s high 16 bits are zero: that grade's `GradeModifiers.ExpLevel`;
-   - otherwise: the high 16 bits, capped at 63.
+   `Manufacturer` equals it (the same object). If found, and the index `word & 0xFFFF` (unsigned) is a valid index
+   into that entry's `Grades`:
+   - when the high value `(word >> 16) & 0xFFFF` (unsigned 16-bit) is zero: that grade's `GradeModifiers.ExpLevel`;
+   - otherwise: that unsigned 16-bit value, capped at 63.
 4. **Not resolved by step 3,** and the balance has a `BaseDefinition`: the base's answer, by the same rule.
 5. **Nothing resolved:** 1.
 
@@ -72,18 +75,35 @@ expansion does. Otherwise link 8 runs on with `ExpLevel` 0 (UNVERIFIED whether a
 
 **Every rule below is UNVERIFIED.** Bind `InventoryBalanceDefinition.GetExpLevelFromManufacturerData(object,int)` in
 Off; Reference keeps the stub policy. Reuse one rule with the loot helpers rather than a third copy. Where the rule
-lives is the implementer's call; `ow-combat`'s loot helper loads lazily, so it cannot be used as is.
+lives is the implementer's call. The intended shared core is `ow-combat`'s loot helper `exp_level_for`, with its
+loading taken out: as it stands it loads lazily, so it cannot be used as is. The native must not special-case an
+answer of 0 to 1: 0 is a valid answer (section 3).
 
 **Preflight (write-free, loads nothing):**
 1. `this` (the balance), and each `BaseDefinition` the walk would reach, is an unloaded handle: `NotYet { NotRead }`,
    "GetExpLevelFromManufacturerData: the balance is not loaded (a load is a write)". The walk stops at step 2 for an
    interpolating balance, so only the balances it actually visits are checked. The probe saw the slice balance
    loaded, so this does not fire on link 8.
-2. `Manufacturers` is an array of a struct with `Manufacturer` and `Grades`, each grade with `GradeModifiers.ExpLevel`
-   as an int; `bInterpolateExpLevel` is a bool; `BaseDefinition` is an object. Otherwise a `VmError::Script` naming
-   the field.
-3. A chain deeper than the port's existing balance-chain limit is a `VmError::Script`, as the loot helper does. The
-   game's guard is only the cycle rule of section 2, step 1.
+2. **Shapes**, on each balance the walk visits; for the visited **non-interpolating** balances only, `Manufacturers`
+   and its grades too:
+   - `bInterpolateExpLevel` is a bool, and `BaseDefinition` an object;
+   - `Manufacturers` is an array of a struct with `Manufacturer` and `Grades`;
+   - a grade's `GradeModifiers.ExpLevel`, when present, is an int.
+
+   Otherwise a `VmError::Script` naming the field. An **absent** `GradeModifiers.ExpLevel` is not an error: it answers
+   1, as both existing helpers do (UNVERIFIED).
+3. **Manufacturer matching** (hub ruling, review r1 of #567; UNVERIFIED): compare the argument with each listed
+   `Manufacturer` by `ObjRef` identity. The definition store gives one handle per export, so identity settles it
+   without a load. `ow-combat`'s `manufacturer_entry` loads each listed manufacturer before comparing; the port's
+   native must not. A listed `Manufacturer` that is a stand-in identity cannot settle refuses `NotYet { NotRead }`,
+   "GetExpLevelFromManufacturerData: a manufacturer identity the store cannot settle". This applies only on the
+   visited non-interpolating balances.
+4. **The cycle guard in Off:** a call-local visited list, in the walk's order. The guard check runs before the
+   interpolation test, and only non-interpolating balances enter the list, since an interpolating balance answers at
+   once. Nothing is written to any object. The game's own guard mechanism (an engine-wide list) was not modelled.
+5. **Depth limit:** a chain deeper than 64 balances, the port's existing `MAX_BALANCE_CHAIN` in the loot helper, is a
+   `VmError::Script`. This is a **port rule**, not observed in the game (UNVERIFIED); the game's only guard is the
+   cycle rule.
 
 **The answer:** section 2's rule, as an int. Manufacturer `None` matches no entry, so it falls through to the base,
 then to 1. The native writes nothing; the script writes `ExpLevel`.
