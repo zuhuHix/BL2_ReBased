@@ -177,7 +177,7 @@ fn add_to_navigation_is_a_no_op_and_remove_pickup_is_not_yet() {
     match x.call("WillowGame.WillowGlobals.RemovePickup", globals, vec![Value::Object(Some(pickup))]).unwrap_err() {
         VmError::NotYet(n) => {
             assert_eq!(n.missing, Missing::NotRead);
-            assert_eq!(n.record, RECORD);
+            assert_eq!(n.record, crate::globals::RECORD);
         }
         e => panic!("expected NotYet, got {e}"),
     }

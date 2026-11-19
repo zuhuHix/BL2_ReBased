@@ -60,3 +60,22 @@ NATIVE_INVENTORY_EQUIP.md).
 - The globals definition's first load.
 - Whether the headless world holds a population master.
 - The `IPickupable` accessors, the next stop.
+
+**To the revised note** (#469 r1 at c5d21b49, plus the hub's notice of its last round):
+- **The preflight's schemas** come first, before any value is read, and each mismatch is a data error
+  (`VmError::Script`):
+  - `TheGlobalsDefinition` is found through the parent chain and must be declared as a `GearboxGlobalsDefinition`;
+  - `ThePopulationMaster` must be an object reference;
+  - `PickupList` must be a dynamic array of `WillowPickup` references;
+  - the definition's `RarityLevelColors` as before.
+- **The note's texts and record:**
+  - no world globals object is *layer absent* "the world's globals object";
+  - the definition is *not read* "the globals definition's first load, which numbers the challenge list";
+  - `RemovePickup` is *not read* "the pickup events of RemovePickup", before any dispatch or change to `PickupList`.
+- **`PopulationMaster.RemoveSpawnedActor`** and the `WillowPopulationMaster` declaration are bound to *not read*,
+  for a world that holds a master. The supported fixture holds none (section 6.3, step 6).
+- **The `SetTimer` delay** for a span of zero or less is the script's and the timer service's; nothing here answers
+  it.
+- **Tests:** 9 globals tests (new: the declared reference types, and the getters' text without globals) and the
+  `RemovePickup` record.
+

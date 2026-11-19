@@ -48,9 +48,12 @@ fn gearbox() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
+    let definition = t.class("GearboxGlobalsDefinition", object);
+    let master = t.class("PopulationMaster", object);
+    native(&mut t, master, "RemoveSpawnedActor", NATIVE, &[Param { type_ref: object, ..Param::new("Object", "Actor") }], None);
     let globals = t.class("GearboxGlobals", object);
-    t.prop("Object", globals, "TheGlobalsDefinition", 0, object);
-    t.prop("Object", globals, "ThePopulationMaster", 0, object);
+    t.prop("Object", globals, "TheGlobalsDefinition", 0, definition);
+    t.prop("Object", globals, "ThePopulationMaster", 0, master);
     native(&mut t, globals, "GetGearboxGlobals", STATIC_NATIVE, &[], Some(("Object", globals)));
     native(&mut t, globals, "GetPopulationMaster", NATIVE, &[], Some(("Object", object)));
     t.build()
@@ -62,13 +65,14 @@ fn willow_game() -> Vec<u8> {
     let object = t.p.add_import("Core", "Class", engine, "Object");
     let gbx = t.p.add_import("Core", "Package", 0, "GearboxFramework");
     let gearbox_globals = t.p.add_import("Core", "Class", gbx, "GearboxGlobals");
+    let gearbox_definition = t.p.add_import("Core", "Class", gbx, "GearboxGlobalsDefinition");
     let pickup = t.class("WillowPickup", object);
     let globals = t.class("WillowGlobals", gearbox_globals);
     toy_array_of(&mut t, globals, "PickupList", "Object", pickup);
     native(&mut t, globals, "GetWillowGlobals", STATIC_NATIVE, &[], Some(("Object", globals)));
     native(&mut t, globals, "AddPickup", NATIVE, &[Param { type_ref: pickup, ..Param::new("Object", "Pickup") }], None);
     native(&mut t, globals, "GetGlobalsDefinition", NATIVE, &[], Some(("Object", object)));
-    let gd = t.class("GlobalsDefinition", object);
+    let gd = t.class("GlobalsDefinition", gearbox_definition);
     let band = toy_struct(&mut t, gd, "RarityLevelColor", None);
     t.prop("Int", band, "MinLevel", 0, 0);
     t.prop("Int", band, "MaxLevel", 0, 0);
@@ -77,6 +81,11 @@ fn willow_game() -> Vec<u8> {
     native(&mut t, gd, "GetDropLifeSpanType", NATIVE, &[Param::new("Int", "RarityLevel")], Some(("Byte", 0)));
     let bad = t.class("ToyBadGlobals", object);
     toy_array_of(&mut t, bad, "PickupList", "Int", 0);
+    // The right shapes with the wrong reference types: elements of Object, a definition field of Object.
+    let wrong = t.class("ToyWrongGlobals", object);
+    toy_array_of(&mut t, wrong, "PickupList", "Object", object);
+    t.prop("Object", wrong, "TheGlobalsDefinition", 0, object);
+    t.prop("Object", wrong, "ThePopulationMaster", 0, object);
     let bad_definition = t.class("ToyBadDefinition", object);
     toy_array_of(&mut t, bad_definition, "RarityLevelColors", "Int", 0);
     t.build()
@@ -218,7 +227,7 @@ fn the_globals_definition_is_a_read_or_not_yet() {
     let mut x = fx(ParityMode::Off);
     let g = Some(x.globals);
     assert_eq!(missing(x.call(GET_GLOBALS_DEFINITION, g, vec![])), Missing::NotRead);
-    let other = make(&mut x.vm, "WillowGame.WillowPickup");
+    let other = make(&mut x.vm, "GearboxFramework.GearboxGlobalsDefinition");
     x.set(x.globals, "TheGlobalsDefinition", Value::Object(Some(other)));
     assert_eq!(missing(x.call(GET_GLOBALS_DEFINITION, g, vec![])), Missing::NotRead, "not a GlobalsDefinition");
     x.set(x.globals, "TheGlobalsDefinition", Value::Object(Some(x.gd)));
@@ -243,8 +252,13 @@ fn the_population_master_is_the_field_as_it_is() {
     let mut x = fx(ParityMode::Off);
     let g = Some(x.globals);
     assert_eq!(x.call(GET_POPULATION_MASTER, g, vec![]).unwrap(), Value::Object(None));
-    let master = make(&mut x.vm, "WillowGame.WillowPickup");
+    let master = make(&mut x.vm, "GearboxFramework.PopulationMaster");
     x.set(x.globals, "ThePopulationMaster", Value::Object(Some(master)));
+    let f = x.vm.find_function(REMOVE_SPAWNED_ACTOR[0]).unwrap();
+    match x.vm.call(f, Some(master), vec![Value::Object(None)]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.missing == Missing::NotRead && n.what.contains("RemoveSpawnedActor"), "{n}"),
+        e => panic!("{e}"),
+    }
     assert_eq!(x.call(GET_POPULATION_MASTER, g, vec![]).unwrap(), Value::Object(Some(master)));
 }
 
@@ -260,4 +274,33 @@ fn reference_binds_nothing_and_a_bound_key_is_kept() {
     let mut y = fx(ParityMode::Off);
     assert!(register(&mut y.vm).is_ok(), "registering again keeps the bound keys");
     drop(x);
+}
+
+/// The preflight's schemas (section 6.2 step 4, and the note's last round): the declared reference types, each mismatch
+/// a data error raised before any value is read. The toy globals pass; the wrong reference types fail.
+#[test]
+fn the_declared_reference_types_are_checked() {
+    let mut x = fx(ParityMode::Off);
+    let g = x.globals;
+    globals_schemas(&mut x.vm, g, "test").unwrap();
+    let wrong = make(&mut x.vm, "WillowGame.ToyWrongGlobals");
+    match globals_schemas(&mut x.vm, wrong, "test").unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("TheGlobalsDefinition"), "{message}"),
+        e => panic!("{e}"),
+    }
+    declared_reference(&mut x.vm, wrong, "ThePopulationMaster", None, "test").unwrap();
+    match pickup_list_declared(&mut x.vm, wrong, "test").unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("WillowPickup"), "{message}"),
+        e => panic!("{e}"),
+    }
+}
+
+/// With no globals object the getters answer the note's own *layer absent*, "the world's globals object".
+#[test]
+fn a_world_without_globals_names_them() {
+    let mut x = fx(ParityMode::Off);
+    match x.call(GET_GEARBOX_GLOBALS, None, vec![]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what == "the world's globals object" && n.record == RECORD, "{n}"),
+        e => panic!("{e}"),
+    }
 }

@@ -69,12 +69,7 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (
             REMOVE_PICKUP,
             Rc::new(|_: &mut NativeCall<'_>| {
-                Err(NotYet::not_read(
-                    "WillowGlobals.RemovePickup (the note names neither the globals' pickup list, nor the holder whose \
-                     last pickup fires OnAllPickupsDetached, nor how OnPickupDetached is delivered)",
-                    RECORD,
-                )
-                .into())
+                Err(NotYet::not_read("the pickup events of RemovePickup", crate::globals::RECORD).into())
             }),
         ),
         (

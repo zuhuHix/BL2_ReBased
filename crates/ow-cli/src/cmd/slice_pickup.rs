@@ -213,7 +213,9 @@ fn bound_native(vm: &mut Vm, path: &str) -> Result<(), VmError> {
 /// IMPL-WILLOW-GLOBALS, decision 2026-11-19-94), checked before any write:
 /// - the world's one globals object (none is the world's `NotYet { LayerAbsent }`), a `WillowGlobals`;
 /// - its `TheGlobalsDefinition`, a `GlobalsDefinition` (else the getter's named `NotYet { NotRead }`);
-/// - the declared schemas of `PickupList` and the definition's `RarityLevelColors` (else a data error);
+/// - the declared schemas, before any value is read: `TheGlobalsDefinition` (a `GearboxGlobalsDefinition`, through the
+///   parent chain), `ThePopulationMaster` (an object), `PickupList` (of `WillowPickup`), and the definition's
+///   `RarityLevelColors` (else a data error);
 /// - the four natives on the route (`GetWillowGlobals`, `AddPickup`, `GetGlobalsDefinition`, `GetDropLifeSpanType`)
 ///   declared native and bound.
 fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
@@ -224,6 +226,8 @@ fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
     if !vm.space.classes.is_child_of(vm.space.heap.get(globals)?.class, willow) {
         return Err(error(format!("the world's globals are a {}, not a WillowGlobals", ow_attr::eval::class_path(&vm.space, globals))));
     }
+    // The declared schemas first, before any value is read (section 6.2, step 4).
+    g::globals_schemas(vm, globals, WHAT)?;
     let definition = g::globals_definition(vm, globals, WHAT)?;
     g::pickup_list(vm, globals, WHAT)?;
     g::rarity_bands(vm, definition, WHAT)?;
