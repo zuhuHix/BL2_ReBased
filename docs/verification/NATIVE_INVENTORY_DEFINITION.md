@@ -83,6 +83,9 @@ inventory:
    - the class declares no `DefinitionData`: "GetInventoryDefinition on a class without DefinitionData";
    - its `DefinitionData` struct declares no selected field (`WeaponTypeDefinition` for step 1, `ItemDefinition` for
      step 2): "GetInventoryDefinition on a DefinitionData without <field>".
+   A layout that is declared but malformed (`DefinitionData` declared as something other than a struct, or the
+   selected field declared as something other than an object reference) stays a data error, not a `NotYet`, as the
+   existing definition natives treat it.
 6. **A declared field that holds None** is not a refusal: the answer is None (section 2: "as stored").
 
 The engine rule underneath (section 2) is the evidence. Steps 3 to 5 are the port's Off answers for what the read does
@@ -108,8 +111,9 @@ Reference: the C++ has no stand-in, so the key stays unbound there.
 
 ## Open questions
 
-1. A plain `Engine.Weapon`, or any `WillowInventory` subclass outside the two read trees: whether it has its own rule.
-   No such object is expected in the slice. UNVERIFIED.
+1. A plain `Engine.Weapon`, any `WillowInventory` subclass outside the two read trees, and any `WillowWeapon` or
+   `WillowItem` descendant beyond the thirteen read classes (step 4): whether each follows the rule of its tree or has
+   its own. No such object is expected in the slice. UNVERIFIED.
 2. Whether any installed weapon or item can reach `GetInventoryDefinition` with `DefinitionData` still unset (the
    answer would be None; what the caller then does is the caller's rule).
 
@@ -127,5 +131,6 @@ Reference: the C++ has no stand-in, so the key stays unbound there.
 - **Other receivers.** A plain `Engine.Weapon`, and any `WillowWeapon` or `WillowItem` descendant beyond the thirteen
   read classes (from a DLC package), where one can be obtained. Each is an open verification gap until obtained.
 - **The reference during the drop.** Hook `WillowInventory.DropFrom` while dropping a gun. At the hook's entry read
-  `DefinitionData.WeaponTypeDefinition`, then read the value the call inside `DropFrom` returns. This shows whether
+  `DefinitionData.WeaponTypeDefinition`, then post-hook `GetInventoryDefinition` while that `DropFrom` is running and
+  read its return value. This shows whether
   the reference is already set when the drop proceeds (open question 2).

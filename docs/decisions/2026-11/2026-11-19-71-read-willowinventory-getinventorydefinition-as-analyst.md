@@ -35,5 +35,5 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-INVENTORY-DEFINITION, analyst 
   fixed. The module's reading of the definition field agrees with this one, but the native chooses the field by class,
   not by which field is set.
 
-**Open (in the note).** A plain `Engine.Weapon` or another `WillowInventory` subclass (not read); whether
+**Open (in the note).** A plain `Engine.Weapon`, another `WillowInventory` subclass, or a `WillowWeapon` / `WillowItem` descendant beyond the thirteen read classes (not read); whether
 `DefinitionData` can still be unset when the drop calls it.
