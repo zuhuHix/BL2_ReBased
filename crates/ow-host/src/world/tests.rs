@@ -317,15 +317,27 @@ fn each_physics_mode_s_rule() {
     use ow_core::notyet::Missing;
     let c = "Engine.InterpActor";
     let off = ParityMode::Off;
-    assert_eq!(physics_rule("PHYS_None", c, Driver::Bound, off), Ok(()));
-    assert_eq!(physics_rule("PHYS_Interpolating", c, Driver::Unbound, off), Ok(()));
+    assert_eq!(physics_rule("PHYS_None", c, &Driver::Bound, off), Ok(()));
+    assert_eq!(physics_rule("PHYS_Interpolating", c, &Driver::Unbound, off), Ok(()));
+    assert_eq!(physics_rule("PHYS_Interpolating", c, &Driver::NotStarted, off), Ok(()));
     // R3: the no-op is Off's; the C++ reference has no host physics to stand in.
-    let reference = physics_rule("PHYS_Interpolating", c, Driver::Unbound, ParityMode::Reference).unwrap_err();
-    assert!(matches!(reference.missing, Missing::NotPorted), "{reference}");
-    let missing = |mode: &str, driver| physics_rule(mode, c, driver, off).unwrap_err();
+    for driver in [Driver::Unbound, Driver::NotStarted] {
+        let reference = physics_rule("PHYS_Interpolating", c, &driver, ParityMode::Reference).unwrap_err();
+        assert!(matches!(reference.missing, Missing::NotPorted), "{reference}");
+    }
+    let missing = |mode: &str, driver: Driver| physics_rule(mode, c, &driver, off).unwrap_err();
+    let at_load = missing("PHYS_Interpolating", Driver::AtLoad("Engine.SeqEvent_LevelLoaded".into()));
+    assert!(matches!(at_load.missing, Missing::LayerAbsent(_)), "{at_load}");
+    assert!(at_load.to_string().contains("the level-load event (Engine.SeqEvent_LevelLoaded)"), "{at_load}");
     assert!(matches!(missing("PHYS_Interpolating", Driver::Bound).missing, Missing::LayerAbsent(_)));
     for (mode, driver, record, words) in [
         ("PHYS_Interpolating", Driver::Unknown, KISMET_RECORD, "whether a Matinee op names an interpolating"),
+        (
+            "PHYS_Interpolating",
+            Driver::Outside("WillowGame.WillowSeqEvent_MissionRemoteEvent".into()),
+            KISMET_RECORD,
+            "whether WillowGame.WillowSeqEvent_MissionRemoteEvent, fired from outside the Kismet graph",
+        ),
         ("PHYS_Walking", Driver::Unbound, PHYSICS_RECORD, "the PHYS_Walking physics of a placed"),
         ("PHYS_Falling", Driver::Unbound, PHYSICS_RECORD, "the PHYS_Falling physics of a placed"),
         ("PHYS_NavMeshWalking", Driver::Unbound, ENGINE_RECORD, "nav-mesh walking physics (a Gearbox mode)"),
@@ -460,6 +472,105 @@ fn the_export_walk_reads_ops_skips_listed_classes_and_counts_unresolved_ones() {
     assert_eq!(Driver::of(&bindings, pawn), Driver::Unknown);
 }
 
+/// `n` distinct objects to stand for Kismet ops in a hand-made graph (the invented packages hold no Kismet).
+fn op_refs(n: usize) -> Vec<ObjRef> {
+    let (mut world, _) = builder(0, [0.0; 3], 0)().unwrap();
+    let class = world.vm.find_class("Engine.Actor").unwrap();
+    (0..n)
+        .map(|i| world.vm.space.alloc(class, &format!("Op_{i}"), None, ow_object::heap::Origin::Runtime).unwrap())
+        .collect()
+}
+
+/// A graph over `ops` with `classes` (index, class path), `sources` (op, its sources), and the event sets.
+fn graph(
+    ops: &[ObjRef],
+    classes: &[(usize, &str)],
+    sources: &[(usize, &[usize])],
+    load: &[usize],
+    events: &[usize],
+    gameplay: &[usize],
+) -> matinee::KismetGraph {
+    let mut g = matinee::KismetGraph::default();
+    for &(i, c) in classes {
+        g.ops.insert(ops[i], c.to_string());
+    }
+    for &(i, from) in sources {
+        g.sources.insert(ops[i], from.iter().map(|&f| ops[f]).collect());
+    }
+    g.load_events = load.iter().map(|&i| ops[i]).collect();
+    g.events = events.iter().map(|&i| ops[i]).collect();
+    g.gameplay_events = gameplay.iter().map(|&i| ops[i]).collect();
+    g
+}
+
+#[test]
+fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
+    use matinee::{Start, start_of};
+    let o = op_refs(8);
+    let (load, mission, touch, dead, action, op) = (0, 1, 2, 3, 4, 5);
+    let classes = [
+        (load, "Engine.SeqEvent_LevelLoaded"),
+        (mission, "WillowGame.WillowSeqEvent_MissionRemoteEvent"),
+        (touch, "Engine.SeqEvent_Touch"),
+        (dead, "Engine.SeqAct_Toggle"),
+        (action, "Engine.SeqAct_Delay"),
+        (op, "Engine.SeqAct_Interp"),
+    ];
+    let events = [load, mission, touch];
+    // Nothing links to the op: it never starts.
+    let g = graph(&o, &classes, &[], &[load], &events, &[touch]);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+    // A load event two links up (through an action): it starts at load, and the load event wins over the others.
+    let g = graph(&o, &classes, &[(op, &[action, touch]), (action, &[load, mission])], &[load], &events, &[touch]);
+    assert_eq!(start_of(&g, o[op]), Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
+    // A mission remote event (fired from outside the graph): named, not assumed quiet.
+    let g = graph(&o, &classes, &[(op, &[action]), (action, &[mission])], &[load], &events, &[touch]);
+    assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["WillowGame.WillowSeqEvent_MissionRemoteEvent".into()]));
+    // Only a touch and an action no link reaches: not at load.
+    let g = graph(&o, &classes, &[(op, &[touch, dead])], &[load], &events, &[touch]);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+    // A remote event whose action a load event fires (the name edge read_graph adds): at load.
+    let (remote, activate) = (6, 7);
+    let classes2 = [
+        (load, "Engine.SeqEvent_LevelLoaded"),
+        (remote, "Engine.SeqEvent_RemoteEvent"),
+        (activate, "Engine.SeqAct_ActivateRemoteEvent"),
+        (op, "Engine.SeqAct_Interp"),
+    ];
+    let g = graph(&o, &classes2, &[(op, &[remote]), (remote, &[activate]), (activate, &[load])], &[load], &[load, remote], &[]);
+    assert_eq!(start_of(&g, o[op]), Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
+    // The same remote event with no action in the graph: fired from outside.
+    let g = graph(&o, &classes2, &[(op, &[remote])], &[load], &[load, remote], &[]);
+    assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
+    // A cycle with no event in it: nothing starts it.
+    let g = graph(&o, &classes, &[(op, &[action]), (action, &[dead]), (dead, &[action])], &[load], &events, &[touch]);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+}
+
+#[test]
+fn an_actor_s_driver_combines_the_ops_that_bind_it() {
+    use matinee::Start;
+    let o = op_refs(4);
+    let (actor, a, b, c) = (o[0], o[1], o[2], o[3]);
+    let mut bindings = MatineeBindings::default();
+    bindings.bound.insert(actor);
+    bindings.by_actor.insert(actor, [a, b].into_iter().collect());
+    // A start not worked out: the playback NotYet, as before this lane.
+    assert_eq!(Driver::of(&bindings, actor), Driver::Bound);
+    bindings.starts.insert(a, Start::NotAtLoad);
+    bindings.starts.insert(b, Start::NotAtLoad);
+    assert_eq!(Driver::of(&bindings, actor), Driver::NotStarted);
+    bindings.starts.insert(b, Start::Outside(vec!["X.Mission".into()]));
+    assert_eq!(Driver::of(&bindings, actor), Driver::Outside("X.Mission".into()));
+    bindings.by_actor.insert(actor, [a, b, c].into_iter().collect());
+    bindings.starts.insert(c, Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
+    assert_eq!(Driver::of(&bindings, actor), Driver::AtLoad("Engine.SeqEvent_LevelLoaded".into()));
+    // An actor no op binds, and an unreadable scan.
+    assert_eq!(Driver::of(&bindings, a), Driver::Unbound);
+    bindings.unreadable = 1;
+    assert_eq!(Driver::of(&bindings, actor), Driver::Unknown);
+}
+
 #[test]
 fn a_builder_error_comes_back_from_spawn() {
     let err = WorldLink::spawn(Box::new(|| Err("no store".to_string()))).unwrap_err();
@@ -502,7 +613,7 @@ fn sanctuary_physics_census() {
     let text = ow_vm::interp::on_vm_stack(move || {
         let (mut world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
         let list = world.actors().borrow().list().to_vec();
-        let bindings = matinee_bound(&mut world.vm).unwrap();
+        let bindings = scan_matinee(&mut world.vm).unwrap();
         let bound = bindings.bound.clone();
         let space = &world.vm.space;
         let mut census: std::collections::BTreeMap<String, usize> = Default::default();
@@ -537,7 +648,7 @@ fn sanctuary_physics_census() {
             let outcome = if base {
                 "the world's Base NotYet".to_string()
             } else {
-                match physics_rule(&mode, &class, driver, ParityMode::Off) {
+                match physics_rule(&mode, &class, &driver, ParityMode::Off) {
                     Ok(()) => "passes (no-op)".to_string(),
                     Err(n) => format!("NotYet: {}", n.what),
                 }
@@ -576,6 +687,134 @@ fn sanctuary_physics_census() {
     })
     .unwrap();
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/h-physics-modes");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("census.txt"), &text).unwrap();
+    print!("{text}");
+}
+
+/// H-MATINEE's census of Sanctuary's Matinee ops: how each can start, the op's flags, its tracks by class, and the
+/// physics of the actors it binds. Counts only; writes `local/p2/h-matinee/census.txt`.
+#[test]
+#[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/h-matinee/"]
+fn sanctuary_matinee_census() {
+    use matinee::{Start, read_graph, start_of};
+    let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
+    let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
+    let text = ow_vm::interp::on_vm_stack(move || {
+        let (mut world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let graph = read_graph(&mut world.vm).unwrap();
+        let mut out = format!("ops {}, matinee {}, load events {}\n", graph.ops.len(), graph.matinee.len(), graph.load_events.len());
+        let mut classes: std::collections::BTreeMap<String, usize> = Default::default();
+        for c in graph.ops.values() {
+            *classes.entry(c.clone()).or_default() += 1;
+        }
+        for (c, n) in &classes {
+            if c.contains("Event") {
+                out.push_str(&format!("event class {c}: {n}\n"));
+            }
+        }
+        // The op class's boolean flags by name.
+        if let Some(&op) = graph.matinee.first() {
+            let class = world.vm.space.heap.get(op).unwrap().class;
+            let mut flags = Vec::new();
+            for name in ["bLooping", "bRewindOnPlay", "bForceStartPos", "bIsPlaying", "bClientSideOnly", "bAutoPlay", "bPlayOnLoad"] {
+                flags.push(format!("{name}={}", world.vm.space.prop(class, name).is_some()));
+            }
+            out.push_str(&format!("op class props: {}\n", flags.join(" ")));
+        }
+        let mut starts: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut tracks: std::collections::BTreeMap<String, usize> = Default::default();
+        for &op in &graph.matinee.clone() {
+            let start = start_of(&graph, op);
+            let key = match &start {
+                Start::NotAtLoad => "not at load".to_string(),
+                Start::AtLoad(e) => format!("at load via {e:?}"),
+                Start::Outside(e) => format!("from outside the graph via {e:?}"),
+            };
+            let playing = read(&world.vm.space, op, "bIsPlaying");
+            let looping = read(&world.vm.space, op, "bLooping");
+            *starts.entry(format!("{key}; bIsPlaying {playing:?} bLooping {looping:?}")).or_default() += 1;
+            if matches!(start, Start::NotAtLoad) {
+                let up = matinee::upstream(&graph, op);
+                let mut roots: Vec<String> = up
+                    .iter()
+                    .filter(|o| graph.sources.get(o).is_none_or(|s| s.is_empty()))
+                    .map(|o| graph.ops[o].clone())
+                    .collect();
+                roots.sort();
+                roots.dedup();
+                *starts.entry(format!("  roots of a not-at-load op: {roots:?}")).or_default() += 1;
+            }
+            let kind = match &start {
+                Start::NotAtLoad => "not-at-load",
+                Start::AtLoad(_) => "load-started",
+                Start::Outside(_) => "outside-started",
+            };
+            {
+                // Its InterpData: a linked variable of class InterpData; its groups' tracks.
+                let Some(Value::Array(links)) = read(&world.vm.space, op, "VariableLinks") else { continue };
+                let mut vars = Vec::new();
+                for l in links.iter() {
+                    if let Some(Value::Array(v)) = field(&world.vm.space, l, "LinkedVariables") {
+                        vars.extend(v.iter().filter_map(|x| if let Value::Object(Some(r)) = x { Some(*r) } else { None }));
+                    }
+                }
+                let mut op_tracks: Vec<String> = Vec::new();
+                for var in vars {
+                    world.vm.defs.ensure_loaded(&mut world.vm.space, var).unwrap();
+                    if !ow_attr::eval::class_path(&world.vm.space, var).ends_with("InterpData") {
+                        continue;
+                    }
+                    let length = match read(&world.vm.space, var, "InterpLength") {
+                        Some(Value::Float(f)) => f,
+                        _ => f32::NAN,
+                    };
+                    let Some(Value::Array(groups)) = read(&world.vm.space, var, "InterpGroups") else { continue };
+                    for g in groups.iter() {
+                        let Value::Object(Some(g)) = g else { continue };
+                        world.vm.defs.ensure_loaded(&mut world.vm.space, *g).unwrap();
+                        let Some(Value::Array(ts)) = read(&world.vm.space, *g, "InterpTracks") else { continue };
+                        for t in ts.iter() {
+                            let Value::Object(Some(t)) = t else { continue };
+                            world.vm.defs.ensure_loaded(&mut world.vm.space, *t).unwrap();
+                            let class = ow_attr::eval::class_path(&world.vm.space, *t);
+                            *tracks.entry(format!("{kind} {class}")).or_default() += 1;
+                            op_tracks.push(class.rsplit('.').next().unwrap_or("").to_string());
+                            if class.ends_with(".InterpTrackMove") {
+                                // The reader, and the oracle that the keys end within the op's InterpLength.
+                                let outcome = match matinee::track::read_move(&world.vm.space, *t) {
+                                    Ok(m) => format!(
+                                        "read: {:?} {:?}, keys {} + {}, ends within InterpLength {}",
+                                        m.frame,
+                                        m.rot_mode,
+                                        m.position.keys.len(),
+                                        m.euler.keys.len(),
+                                        m.length() <= length + 1.0e-4
+                                    ),
+                                    Err(n) => format!("NotYet: {}", n.what),
+                                };
+                                *tracks.entry(format!("{kind} move track {outcome}")).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+                op_tracks.sort();
+                op_tracks.dedup();
+                if kind == "load-started" {
+                    *starts.entry(format!("  tracks of a load-started op: {op_tracks:?}")).or_default() += 1;
+                }
+            }
+        }
+        for (k, n) in &starts {
+            out.push_str(&format!("start x{n}: {k}\n"));
+        }
+        for (k, n) in &tracks {
+            out.push_str(&format!("track {k}: {n}\n"));
+        }
+        out
+    })
+    .unwrap();
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/h-matinee");
     std::fs::create_dir_all(&out).unwrap();
     std::fs::write(out.join("census.txt"), &text).unwrap();
     print!("{text}");
