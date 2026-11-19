@@ -46,6 +46,7 @@ fn package() -> Vec<u8> {
     let object = t.class("Object", 0);
     let actor = t.class("Actor", object);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
+    t.prop("Bool", actor, "bPendingDelete", 0, 0);
     let nav = t.class("NavigationPoint", actor);
     t.prop("Object", nav, "nextNavigationPoint", 0, nav);
     t.class("PlayerStart", nav);
@@ -181,6 +182,12 @@ impl Fx {
         self.vm.space.write(o, PropAddr::scalar(p), v).unwrap();
     }
 
+    fn get(&self, o: ObjRef, name: &str) -> Value {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, name).unwrap();
+        self.vm.space.read(o, PropAddr::scalar(p)).unwrap().clone()
+    }
+
     /// `NavigationPointList` = the first of `chain`, each linked to the next.
     fn link(&mut self, chain: &[ObjRef]) {
         let wi = self.wi;
@@ -246,6 +253,12 @@ fn an_empty_list_in_a_level_without_points_yields_nothing() {
     let before = format!("{:?}", x.vm.space.heap);
     assert_eq!(x.walk(Some("PlayerStart")).unwrap(), Vec::<ObjRef>::new());
     assert_eq!(format!("{:?}", x.vm.space.heap), before, "nothing written");
+    // Review r1 of #513, item 4: a successful empty walk clears the cursor.
+    let sentinel = x.unplaced("Teleporter", "Sentinel");
+    let wi = x.wi;
+    x.set(wi, "Cursor", Value::Object(Some(sentinel)));
+    assert_eq!(x.walk(Some("PlayerStart")).unwrap(), Vec::<ObjRef>::new());
+    assert_eq!(x.get(wi, "Cursor"), Value::Object(None), "an empty walk clears the cursor");
 }
 
 /// An empty list in a level that places a point, and a list that misses a placed point: `UNREACHED`, before the
@@ -257,8 +270,14 @@ fn placed_points_the_list_does_not_reach_are_not_yet() {
     expect_not_read(x.walk(Some("PlayerStart")), super::UNREACHED);
     let b = x.point("PlayerStart", "StartB");
     x.link(&[a]);
-    expect_not_read(x.walk(Some("Teleporter")), super::UNREACHED);
+    // Review r1 of #513, item 4: ask for the reachable point's own class, with the cursor seeded with a sentinel; the
+    // refusal comes before any yield, so the cursor keeps the sentinel and the body never runs.
+    let sentinel = x.unplaced("Teleporter", "Sentinel");
+    let wi = x.wi;
+    x.set(wi, "Cursor", Value::Object(Some(sentinel)));
+    expect_not_read(x.walk(Some("PlayerStart")), super::UNREACHED);
     assert!(x.seen.borrow().is_empty(), "the body never ran");
+    assert_eq!(x.get(wi, "Cursor"), Value::Object(Some(sentinel)), "the cursor keeps the sentinel");
     x.link(&[a, b]);
     assert_eq!(x.walk(Some("PlayerStart")).unwrap(), vec![a, b]);
     // A destroyed placed point the list does not reach is not counted.
@@ -291,6 +310,24 @@ fn a_deleted_entry_is_not_yet() {
     x.link(&[a, b]);
     x.set(b, "bDeleteMe", Value::Bool(true));
     expect_not_read(x.walk(Some("PlayerStart")), super::DELETED);
+    assert!(x.seen.borrow().is_empty(), "the body never ran");
+}
+
+/// Review r1 of #513, item 1: an entry with only `bPendingDelete` set (as `Actor.Destroy` leaves it while `Destroyed()`
+/// runs, still placed) is `DELETED` too, before the cursor is written or the body runs.
+#[test]
+fn a_pending_delete_entry_is_not_yet() {
+    let mut x = fixture();
+    let a = x.point("PlayerStart", "StartA");
+    let b = x.point("PlayerStart", "StartB");
+    x.link(&[a, b]);
+    x.set(b, "bPendingDelete", Value::Bool(true));
+    let sentinel = x.unplaced("Teleporter", "Sentinel");
+    let wi = x.wi;
+    x.set(wi, "Cursor", Value::Object(Some(sentinel)));
+    expect_not_read(x.walk(Some("PlayerStart")), super::DELETED);
+    assert!(x.seen.borrow().is_empty(), "the body never ran");
+    assert_eq!(x.get(wi, "Cursor"), Value::Object(Some(sentinel)), "the cursor keeps the sentinel");
 }
 
 /// Broken references: an entry the level never placed is `UNPLACED`; an entry that is not a navigation point (planted

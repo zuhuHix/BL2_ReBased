@@ -18,7 +18,8 @@
 //! loop runs (the iterator writes nothing, so nothing needs a preflight or a rollback; a caller that wrote first adds
 //! the "stopped after partial writes: " prefix, as `SetupInputDevices` does):
 //! - [`NONE_BASE`]: a None `BaseClass` (both callers pass a class constant);
-//! - [`DELETED`]: a list entry that is destroyed or has `bDeleteMe` set (whether the walk skips it);
+//! - [`DELETED`]: a list entry that is destroyed, or has `bDeleteMe` or `bPendingDelete` set (whether the walk skips
+//!   it; `Actor.Destroy` sets `bPendingDelete` before `Destroyed()` runs, while the actor is still placed);
 //! - [`LOOP`]: a list that comes back to a point already visited (a broken, cyclic list);
 //! - [`NOT_A_POINT`]: an entry that is not a `NavigationPoint` (a dangling or wrong-class reference);
 //! - [`UNPLACED`]: an entry the level's actor list does not hold (a reference to an object the level never placed);
@@ -31,7 +32,7 @@
 
 use std::rc::Rc;
 
-use ow_core::NotYet;
+use ow_core::{DetSet, NotYet};
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, ObjRef, PropAddr};
 use ow_object::value::Value;
@@ -49,7 +50,8 @@ pub const NAVIGATION_POINT: &str = "Engine.NavigationPoint";
 
 /// The open questions, as the `NotYet` texts name them (module documentation).
 pub const NONE_BASE: &str = "WorldInfo.AllNavigationPoints with a None BaseClass";
-pub const DELETED: &str = "WorldInfo.AllNavigationPoints: whether a destroyed or bDeleteMe navigation point is visited";
+pub const DELETED: &str =
+    "WorldInfo.AllNavigationPoints: whether a destroyed, bDeleteMe or bPendingDelete navigation point is visited";
 pub const LOOP: &str = "WorldInfo.AllNavigationPoints: a navigation list that loops back to a visited point";
 pub const NOT_A_POINT: &str = "WorldInfo.AllNavigationPoints: a navigation list entry that is not a NavigationPoint";
 pub const UNPLACED: &str = "WorldInfo.AllNavigationPoints: a navigation list entry the level's actor list does not hold";
@@ -99,9 +101,12 @@ pub fn navigation_points(
     let nav = space.classes.by_path(NAVIGATION_POINT);
     let is_point = |class: ClassId| nav.is_some_and(|n| space.classes.is_child_of(class, n));
     let mut cur = object_field(space, world_info, "NavigationPointList")?;
+    // Review r1 of #513: sets for the membership tests; the vector keeps the yield order.
+    let placed_set: DetSet<ObjRef> = placed.iter().copied().collect();
+    let mut visited: DetSet<ObjRef> = DetSet::new();
     let mut out: Vec<(ObjRef, ClassId)> = Vec::new();
     while let Some(o) = cur {
-        if out.iter().any(|&(seen, _)| seen == o) {
+        if !visited.insert(o) {
             return Err(not_read(LOOP));
         }
         if !space.heap.contains(o) {
@@ -111,24 +116,41 @@ pub fn navigation_points(
         if !is_point(class) {
             return Err(not_read(NOT_A_POINT));
         }
-        if !placed.contains(&o) {
+        if !placed_set.contains(&o) {
             return Err(not_read(UNPLACED));
         }
-        if is_destroyed(space, o)? {
+        if going(space, o)? {
             return Err(not_read(DELETED));
         }
         out.push((o, class));
         cur = object_field(space, o, "nextNavigationPoint")?;
     }
     for &o in placed {
-        if !space.heap.contains(o) || is_destroyed(space, o)? {
+        if going(space, o)? {
             continue;
         }
-        if is_point(space.heap.get(o)?.class) && !out.iter().any(|&(seen, _)| seen == o) {
+        if is_point(space.heap.get(o)?.class) && !visited.contains(&o) {
             return Err(not_read(UNREACHED));
         }
     }
     Ok(out)
+}
+
+/// Whether `o` is destroyed (freed, the heap's destroyed bit, `bDeleteMe`) or being destroyed: `Actor.Destroy` sets
+/// `bPendingDelete` before it calls `Destroyed()`, while the actor is still placed (review r1 of #513). A class that
+/// does not declare `bPendingDelete` has no such state.
+fn going(space: &ObjectSpace, o: ObjRef) -> Result<bool, VmError> {
+    if is_destroyed(space, o)? {
+        return Ok(true);
+    }
+    let class = space.heap.get(o)?.class;
+    match space.prop(class, "bPendingDelete") {
+        Some(p) => match space.read(o, PropAddr::scalar(p))? {
+            Value::Bool(b) => Ok(*b),
+            other => Err(bad(format!("bPendingDelete holds {}, not a bool", other.kind_name()))),
+        },
+        None => Ok(false),
+    }
 }
 
 /// An object field of `o`; a class without it, or a value that is not an object, is a data error.

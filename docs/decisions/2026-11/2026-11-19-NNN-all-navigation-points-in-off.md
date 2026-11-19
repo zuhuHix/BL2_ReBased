@@ -29,8 +29,8 @@ the VM's stub policy):
 - **What the data and script do not settle** is each a `NotYet { NotRead }`, raised before the loop runs. The exact
   texts are the module's constants.
   1. `NONE_BASE`, a None `BaseClass`: "WorldInfo.AllNavigationPoints with a None BaseClass".
-  2. `DELETED`, a destroyed or `bDeleteMe` list entry: "WorldInfo.AllNavigationPoints: whether a destroyed or bDeleteMe
-     navigation point is visited".
+  2. `DELETED`, a destroyed, `bDeleteMe` or `bPendingDelete` list entry: "WorldInfo.AllNavigationPoints: whether a
+     destroyed, bDeleteMe or bPendingDelete navigation point is visited".
   3. `LOOP`, a cyclic list (the cycle guard): "WorldInfo.AllNavigationPoints: a navigation list that loops back to a
      visited point".
   4. `NOT_A_POINT`, an entry that is not a `NavigationPoint`: "WorldInfo.AllNavigationPoints: a navigation list entry
@@ -45,7 +45,7 @@ the VM's stub policy):
   adds the "stopped after partial writes: " prefix, as `SetupInputDevices` does.
 
 **Open questions for an analyst** (each is one of the `NotYet`s above):
-1. Does the walk skip a point that is pending deletion (`bDeleteMe`), or visit it?
+1. Does the walk skip a point that is destroyed or being destroyed (`bDeleteMe`, `bPendingDelete`), or visit it?
 2. When a map loads, does the engine fill or rebuild `WorldInfo.NavigationPointList` (for example from each level's own
    navigation list), or does it use the serialized list as it is? In particular: what happens with an empty serialized
    list in a level that places points, and are the streamed levels' points joined onto the persistent list, and in what
@@ -71,3 +71,14 @@ under the machine lock):
 - link 1 gets past `FindPlayerStart`'s walks (no list, no points: nothing yielded) and stops in `maya:8` at the unbound
   native `WillowPlayerPawn.InitializePawnMeshes()` (0 of 1 driver step);
 - links 3, 4, 5, 13 and 14 stop at the same native, blocked behind link 1.
+
+**Review r1 of #513, folded in.**
+1. **`bPendingDelete`.** `Actor.Destroy` sets `bPendingDelete` before it calls `Destroyed()`, while the actor is still
+   placed, so a walk started from that callback could have yielded the point. A list entry with `bPendingDelete` set is
+   now `DELETED` too, before the cursor is written. A placed point that is pending deletion is not counted as
+   unreached. Tested with only that flag set.
+2. **Linear validation.** The placed and visited handles are sets; the vector keeps the yield order.
+3. **The decision number** stays NNN, waiting on the maintainer.
+4. **Tests.** The partial-list case now asks for the reachable point's own class (`PlayerStart`), with the cursor seeded
+   with a sentinel: the refusal keeps the sentinel and the body log stays empty. A successful empty walk clears the
+   cursor.
