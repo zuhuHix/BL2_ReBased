@@ -2,7 +2,7 @@
 //! `WillowInventory.ApplyInternalSlotEffectModifiers(bBackupSlotEffectsApplied, MaxSlotsActivated, out
 //! AttributeModifiers)` in `ParityMode::Off`, implemented from NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md alone (decision
 //! 2026-11-19-97; the analyst was lane ANALYST-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-87, PR #471 at
-//! 4301807). Every rule is the note's reading of the executable, **UNVERIFIED** in the running game.
+//! the final text on main, a3c8e22). Every rule is the note's reading of the executable, **UNVERIFIED** in the running game.
 //!
 //! **What it does** (the note's section 1):
 //! 1. with the flag false, each record of `AppliedAttributeSlotEffects` whose context and attribute are set: the
@@ -16,17 +16,18 @@
 //!
 //! **The note's Off assumptions:** B1, a count above the declared dimension stops at it; B2, every qualifying slot's
 //! context is resolved in the preflight, before the removals; B3, a modifier is made only for a slot whose context
-//! resolved. The modifier's outer is None: the port has no transient package (the native's is that package).
+//! resolved; one whose add answers false keeps its object where the chain left it (nothing rolled back, not recorded).
+//! The modifier's outer is None: the port has no transient package (the native's is that package).
 //!
-//! **Preflight**, P1 to P9 of the note's section 3, before any write: the out argument's record struct; the slot
+//! **Preflight**, P0 to P9 of the note's section 3, before any write: the out argument's record struct; the slot
 //! array's shape (five fields, not `bRunEffectsAsSkill`); `AppliedAttributeSlotEffects`'s shape; the modifier class
 //! with `Type` and `Value`; the count; each slot's five values (a `ModifierType` outside the enum is a data error);
-//! each record's three objects; each qualifying slot's context; and for each removal and each add,
-//! `ow-attr`'s read-only chain test ([`ow_attr::AttributeSystem::modifier_storages`]). Under the hub's ruling that
-//! a lazy definition load is a write, P8 and P9 read only loaded definitions: after the cheap checks P1 to P7, an
-//! explicit pre-plan load step loads the attributes the plan will use and the entries of their two resolver chains
-//! ([`load_attribute`]); one still unloaded after it is a named `NotYet`, before any write. The installed weapons'
-//! slot attributes hold their resolvers as store handles not yet loaded, so the step is needed there.
+//! each record's three objects (with the flag false, a record is a removal only when its context, attribute and
+//! modifier are all set; one with a None modifier is a no-op); P0, every definition the call will touch loaded
+//! ([`load_attribute`]; the note's ruling: definition loads are not writes), after the reads that name them; each
+//! qualifying slot's context; and the chain check of every entry of every planned removal and add
+//! ([`ow_attr::AttributeSystem::check_modifier_chain`], read-only, no outcome predicted). The installed weapons' slot
+//! attributes hold their resolvers as store handles not yet loaded, so P0 is needed there.
 //!
 //! **Writes**, W1 to W3, in the note's order. A `NotYet` after the first write is terminal, keeps its kind and record
 //! and gets the "stopped after partial writes: " prefix (`ow_world::pools::after_partial_writes`); nothing is rolled
@@ -38,7 +39,7 @@ use std::rc::Rc;
 
 use ow_attr::api::{Applied, AppliedEffect, EvalCx};
 use ow_attr::stack::ModifierType;
-use ow_core::{NotYet, ParityMode};
+use ow_core::ParityMode;
 use ow_object::ids::{ObjRef, PropAddr, PropId, StructId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -185,38 +186,9 @@ fn modifier_class(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-/// An attribute the plan uses, and every entry of its context and value resolver chains, must be loaded (hub ruling:
-/// a lazy definition load is a write). An unloaded store handle is a named `NotYet`.
-fn resident_attribute(vm: &Vm, attr: ObjRef) -> Result<(), VmError> {
-    let unloaded = |o: ObjRef| -> VmError {
-        NotYet::not_ported(
-            format!(
-                "{INTERNAL_SLOTS}: {} ({o:?}) is not loaded; loading it in the plan would be a write before the plan's refusals (hub ruling: a lazy definition load is a write)",
-                ow_attr::eval::class_path(&vm.space, o)
-            ),
-            RECORD,
-        )
-        .into()
-    };
-    if vm.defs.is_unloaded(&vm.space, attr) {
-        return Err(unloaded(attr));
-    }
-    for chain in ["ContextResolverChain", "ValueResolverChain"] {
-        let Some(v) = super::read(vm, attr, chain)? else { continue };
-        for e in ow_attr::eval::elements(chain, &v)? {
-            if let Some(o) = object_of(e, INTERNAL_SLOTS)?
-                && vm.defs.is_unloaded(&vm.space, o)
-            {
-                return Err(unloaded(o));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The explicit pre-plan load step (the hub's ruling allows one): `attr` and every entry of its context and value
-/// resolver chains, loaded if they are store handles not loaded yet. It runs after the cheap checks P1 to P7 and before
-/// P8, for the attributes the plan will use only; a load error propagates as the store gives it (`VmError::from`).
+/// P0 (the note's ruling, review r1 of #471: definition loads are not writes): `attr` and every entry of its context and
+/// value resolver chains, loaded if they are store handles not loaded yet; a load's `NotYet` or error propagates as the
+/// store gives it (`VmError::from`), before any write.
 fn load_attribute(vm: &mut Vm, attr: ObjRef) -> Result<(), VmError> {
     let load = |vm: &mut Vm, o: ObjRef| -> Result<(), VmError> {
         if vm.defs.is_unloaded(&vm.space, o) {
@@ -272,26 +244,25 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
             })
             .collect()
     };
-    // The explicit pre-plan load step, after the cheap checks: the attributes P8 and P9 will use.
+    // P0: every definition the call will touch, loaded (the note's ruling: definition loads are not writes). The
+    // slots and records P2 to P7 read name them, so P0 runs after those reads and before P8.
     for a in slots.iter().map(|s| s.attribute).chain(removals.iter().map(|r| r.1)) {
         load_attribute(vm, a)?;
     }
     let attrs = vm.attrs.clone();
-    // P8: each qualifying slot's context, from the item (B2).
+    // P8: each qualifying slot's context, from the item (B2); an unresolved slot is skipped and gets no modifier (B3).
     let mut adds = Vec::new();
     for slot in slots {
-        resident_attribute(vm, slot.attribute)?;
         if let Some(context) = attrs.resolve_context(slot.attribute, Some(item), &mut EvalCx::new(vm))? {
             adds.push((slot, context));
         }
     }
-    // P9: the read-only chain test for each removal and each add.
+    // P9: the chain check of every entry of every planned removal and add (no stack touched; no outcome predicted).
     for &(context, attribute, _) in &removals {
-        resident_attribute(vm, attribute)?;
-        attrs.modifier_storages(attribute, context, &mut EvalCx::new(vm))?;
+        attrs.check_modifier_chain(attribute, context, &mut EvalCx::new(vm))?;
     }
     for (slot, context) in &adds {
-        attrs.modifier_storages(slot.attribute, *context, &mut EvalCx::new(vm))?;
+        attrs.check_modifier_chain(slot.attribute, *context, &mut EvalCx::new(vm))?;
     }
     Ok(Plan { applied_prop, applied_ty, out_ty, removals, adds })
 }
