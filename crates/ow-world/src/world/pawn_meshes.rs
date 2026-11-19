@@ -19,10 +19,15 @@
 //!    [`lazy_body_class`], and nothing is loaded (hub ruling, review r1 of #517: a load is a store write).
 //! 4. **The attachments:** `BodyComposition` must be a struct holding an `Attachments` array ([`no_attachments`]).
 //!    Empty: nothing, which also covers the root-motion writes inside the gate.
-//! 5. **A non-empty list:** `NotYet { LayerAbsent }`, [`BUILD`] / [`LAYER`].
+//! 5. **A non-empty list:** since lane IMPL-BODY-COMPOSITION, the build itself
+//!    (`crate::world::body_composition`, NATIVE_INITIALIZE_BODY_COMPOSITION.md) on the pawn's `InstanceDataState` and
+//!    `ReplicatedInstanceDataState`, mode 0, after one more write-free check: a body class that sets `UseRootMotion`
+//!    or `UseRootRotation` is `NotYet { NotRead }`, [`ROOT_MOTION`] (the two mesh fields the native then writes are
+//!    named by fit only, NATIVE_INIT_PAWN_MESHES.md open question 1). The note's `LayerAbsent` ([`BUILD`], [`LAYER`])
+//!    is kept for reference but no longer answered.
 //!
-//! **Nothing is written in Off** (hub rulings 1 and 2 of the note's section 6): every step answers "nothing done" or
-//! refuses, so the native adds no "stopped after partial writes" prefix. A caller that wrote before adds it.
+//! **Writes:** only the build's, in its order, under its write tracker; steps 1 to 4 and the root-motion check write
+//! and load nothing, so a refusal there carries no "stopped after partial writes" prefix.
 
 use std::rc::Rc;
 
@@ -52,6 +57,9 @@ pub const NO_HELPER: &str = "WillowPawn.InitializePawnMeshes: the Engine.Instanc
 /// Step 5's `NotYet { LayerAbsent }` text.
 pub const BUILD: &str = "WillowPawn.InitializePawnMeshes: the body composition build (InstanceDataHelper.InitializeBodyComposition: \
                          component instancing and attachment to the pawn's mesh)";
+/// A body class that asks for root motion (the module documentation, step 5).
+pub const ROOT_MOTION: &str =
+    "WillowPawn.InitializePawnMeshes: the root-motion fields of the pawn's Mesh (named by fit only)";
 /// Its layer.
 pub const LAYER: &str = "a component and mesh layer (instancing components from templates, socket attachment)";
 
@@ -167,7 +175,31 @@ pub fn initialize_pawn_meshes(c: &mut NativeCall<'_>) -> Result<Value, VmError> 
     if list.is_empty() {
         return Ok(Value::None);
     }
-    Err(NotYet::layer_absent(BUILD, LAYER, RECORD).into())
+    for flag in ["UseRootMotion", "UseRootRotation"] {
+        if let Some(p) = vm.space.prop(body_class, flag)
+            && matches!(vm.space.read(body, PropAddr::scalar(p))?, Value::Bool(true))
+        {
+            return Err(NotYet::not_read(ROOT_MOTION, RECORD).into());
+        }
+    }
+    let read = |name: &str| -> Result<Value, VmError> {
+        let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} has no {name}", class_path_of(vm, me).unwrap_or_default())))?;
+        Ok(vm.space.read(me, PropAddr::scalar(p))?.clone())
+    };
+    let inputs = crate::world::body_composition::Inputs {
+        owner: Some(me),
+        composition: composition.clone(),
+        set: read("InstanceDataState")?,
+        replicated: read("ReplicatedInstanceDataState")?,
+        mode: 0,
+    };
+    let sink = crate::world::body_composition::Sink::Properties {
+        owner: me,
+        set: "InstanceDataState",
+        replicated: "ReplicatedInstanceDataState",
+    };
+    crate::world::body_composition::build(c, inputs, &sink)?;
+    Ok(Value::None)
 }
 
 #[cfg(test)]

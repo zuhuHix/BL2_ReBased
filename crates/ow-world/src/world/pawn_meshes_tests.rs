@@ -154,9 +154,11 @@ fn the_empty_cases_do_nothing() {
     }
 }
 
-/// Step 5: a non-empty list is the note's `LayerAbsent`, unprefixed, and the heap is unchanged.
+/// Step 5 (since lane IMPL-BODY-COMPOSITION): a non-empty list goes to the build, whose write-free preflight refuses
+/// a malformed attachment (here invented `Int` entries, not `BodyInstanceDataUnion`s) with a `VmError::Script`; the heap
+/// is unchanged.
 #[test]
-fn a_non_empty_list_is_layer_absent_and_writes_nothing() {
+fn a_non_empty_list_goes_to_the_build_write_free() {
     let mut e = env(true, None);
     let (a, b) = functions(&mut e);
     let p = make(&mut e.vm, e.player, "Maya_3");
@@ -165,11 +167,7 @@ fn a_non_empty_list_is_layer_absent_and_writes_nothing() {
     for f in [a, b] {
         let before = (e.vm.space.heap.len(), e.vm.space.heap.get(p).unwrap().slots.clone(), e.vm.space.heap.get(bc).unwrap().slots.clone());
         let err = e.vm.call(f, Some(p), vec![]).unwrap_err();
-        let VmError::NotYet(n) = &err else { panic!("{err:?}") };
-        assert!(matches!(n.missing, Missing::LayerAbsent(l) if l == LAYER), "{n:?}");
-        assert_eq!(n.what, BUILD);
-        assert_eq!(n.record, RECORD);
-        assert!(!ow_core::notyet::is_partial_writes(&n.what), "no prefix of its own");
+        assert!(matches!(&err, VmError::Script { function, .. } if function == crate::world::body_composition::UNIT), "{err:?}");
         let after = (e.vm.space.heap.len(), e.vm.space.heap.get(p).unwrap().slots.clone(), e.vm.space.heap.get(bc).unwrap().slots.clone());
         assert_eq!(before, after, "nothing written");
     }
@@ -354,37 +352,20 @@ fn a_missing_helper_wins_over_a_none_body_class() {
     }
 }
 
-/// Step 5 needs only the attachment list (review r2 of #522): with the fields the note does not name left out of the
-/// classes (no `Mesh`, `InstanceDataState`, `ReplicatedInstanceDataState`, `UseRootMotion` or `UseRootRotation`), a
-/// non-empty list is still the `LayerAbsent`.
+/// Step 5's root-motion check (lane IMPL-BODY-COMPOSITION): a body class that sets `UseRootMotion` is the named
+/// `NotRead`, before the build and before any write.
 #[test]
-fn the_layer_absent_does_not_need_the_unrelated_fields() {
-    let dir = std::env::temp_dir().join(format!("ow-world-pawnmesh-bare-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    let _ = std::fs::remove_dir_all(&dir);
-    let core = {
-        let mut t = ScriptToy::new(&[]);
-        t.class("Object", 0);
-        t.build()
-    };
-    let files: Vec<(&str, &[u8])> = vec![("Core.upk", core.as_slice())];
-    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
-    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
-    let object = vm.find_class("Core.Object").unwrap();
-    class(&mut vm, HELPER, object, &[]);
-    let attachments = decl(&mut vm, "Attachments", PropKind::Array(Box::new(PropKind::Int)));
-    let composition = vm.space.classes.define_struct("WillowGame.BodyClassDefinition.BodyComposition", None, vec![attachments]).unwrap();
-    let body = class(&mut vm, "WillowGame.BodyClassDefinition", object, &[("BodyComposition", PropKind::Struct(composition))]);
-    let pawn = class(&mut vm, WILLOW_PAWN, object, &[("BodyClass", PropKind::Object { class: body })]);
-    let f = native(&mut vm, "WillowGame.WillowPawn.InitializePawnMeshes", pawn);
-    register(&mut vm).unwrap();
-    let bc = make(&mut vm, body, "BodyClass_Bare");
-    set(&mut vm, bc, "BodyComposition", Value::structure(composition, vec![Value::array(vec![Value::Int(1)])]));
-    let p = make(&mut vm, pawn, "Pawn_9");
-    set(&mut vm, p, "BodyClass", Value::Object(Some(bc)));
-    let err = vm.call(f, Some(p), vec![]).unwrap_err();
+fn a_root_motion_body_class_is_not_read() {
+    let mut e = env(true, None);
+    let (a, _) = functions(&mut e);
+    let p = make(&mut e.vm, e.player, "Maya_10");
+    let bc = body(&mut e, 2);
+    set(&mut e.vm, bc, "UseRootMotion", Value::Bool(true));
+    set(&mut e.vm, p, "BodyClass", Value::Object(Some(bc)));
+    let before = e.vm.space.heap.committed_writes();
+    let err = e.vm.call(a, Some(p), vec![]).unwrap_err();
     let VmError::NotYet(n) = &err else { panic!("{err:?}") };
-    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n:?}");
-    assert_eq!(n.what, BUILD);
-    drop(vm);
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(n.what, ROOT_MOTION);
+    assert_eq!(e.vm.space.heap.committed_writes(), before, "write-free");
 }
