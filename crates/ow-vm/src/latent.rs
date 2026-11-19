@@ -63,7 +63,8 @@ pub enum LatentAction {
     Host(HostLatent),
 }
 
-/// A kind of host latent action, as [`register_host_latent`] returned it.
+/// A kind of host latent action, as [`register_host_latent`] returned it. A kind belongs to the VM that registered it:
+/// it is an index into that VM's registry, and another VM may hold a different kind (or none) at the same index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HostLatentKind(u32);
 
@@ -113,7 +114,10 @@ pub enum LatentStatus {
 }
 
 /// A host latent kind's poll: `(vm, object, ticket, delta)`, called once per state-code step while the call is
-/// pending and not finished. It may call into the VM; a state change it makes wins over its answer.
+/// pending and not finished. It may call into the VM (the registry is not borrowed while it runs, so it may look kinds
+/// up or register new ones); a state change it makes wins over its answer. An `Err` ends the step with that error and
+/// leaves the call pending: the next step polls it again. A poll must not step its own object (`process_state` on the
+/// object it is polling): that is a re-entrant state-code step, which the VM does not define.
 pub type HostLatentPoll =
     Rc<dyn Fn(&mut Vm, ObjRef, LatentTicket, f32) -> Result<LatentStatus, VmError>>;
 
@@ -136,12 +140,20 @@ fn with_hosts<R>(vm: &mut Vm, f: impl FnOnce(&mut HostLatents) -> R) -> Result<R
     Ok(f(&mut guard))
 }
 
-/// Registers a host latent kind `name` with its poll function. A second kind of one name is refused.
+/// Registers a host latent kind `name` with its poll function. A second kind of one name is refused, and so is any kind
+/// under `ParityMode::Reference`: state code does not run there (the C++ runs none), so no host call could start, as
+/// `Actor.Sleep` stays unbound there.
 pub fn register_host_latent(
     vm: &mut Vm,
     name: &str,
     poll: HostLatentPoll,
 ) -> Result<HostLatentKind, VmError> {
+    if vm.parity == ParityMode::Reference {
+        return Err(VmError::Registration {
+            key: name.to_string(),
+            reason: "host latent kinds are not registered under ParityMode::Reference (no state code runs there)",
+        });
+    }
     with_hosts(vm, |h| {
         if h.kinds.iter().any(|(n, _)| n == name) {
             return Err(VmError::Registration {
@@ -158,15 +170,20 @@ pub fn register_host_latent(
     })?
 }
 
-/// The kind registered as `name`, if any.
+/// The kind registered as `name`, if any. A lookup does not add the registry service to the VM.
 pub fn host_latent_kind(vm: &mut Vm, name: &str) -> Result<Option<HostLatentKind>, VmError> {
-    with_hosts(vm, |h| {
-        h.kinds
-            .iter()
-            .position(|(n, _)| n == name)
-            .and_then(|i| u32::try_from(i).ok())
-            .map(HostLatentKind)
-    })
+    let Some(cell) = vm.service::<HostLatents>() else {
+        return Ok(None);
+    };
+    let hosts = cell
+        .try_borrow()
+        .map_err(|_| VmError::ServiceBorrowed("ow_vm::latent::HostLatents"))?;
+    Ok(hosts
+        .kinds
+        .iter()
+        .position(|(n, _)| n == name)
+        .and_then(|i| u32::try_from(i).ok())
+        .map(HostLatentKind))
 }
 
 /// Starts a host latent call of `kind` from inside the latent native `c`: only from the object's own running state
@@ -206,8 +223,12 @@ pub fn start_host_latent(
     Ok(ticket)
 }
 
-/// The host latent call `o` waits on, if any.
+/// The host latent call `o` waits on, if any. None for an object that is destroyed (or freed), even before its state
+/// frame is forgotten: `states::process_state` never steps a destroyed object, so its call can never complete.
 pub fn host_latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<HostLatent>, VmError> {
+    if vm.space.heap.get(o).map_or(true, |x| x.destroyed) {
+        return Ok(None);
+    }
     Ok(match states::latent_of(vm, o)? {
         Some(LatentAction::Host(h)) => Some(h),
         _ => None,
@@ -215,8 +236,8 @@ pub fn host_latent_of(vm: &mut Vm, o: ObjRef) -> Result<Option<HostLatent>, VmEr
 }
 
 /// Marks `o`'s host latent call `ticket` finished: `o`'s next state-code step continues after the call without
-/// polling it. `false` (and nothing changes) when `ticket` is not `o`'s current call (a state change cleared it, or
-/// another call replaced it).
+/// polling it. `false` (and nothing changes) when `ticket` is not `o`'s current call (a state change cleared it,
+/// another call replaced it, the ticket is another object's, or `o` is destroyed).
 pub fn finish_host_latent(vm: &mut Vm, o: ObjRef, ticket: LatentTicket) -> Result<bool, VmError> {
     match host_latent_of(vm, o)? {
         Some(h) if h.ticket == ticket => {
