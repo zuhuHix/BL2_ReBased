@@ -437,6 +437,34 @@ fn server_change_name_guards_the_resolved_change_name() {
     not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "PlayerController.ServerChangeName: the game info Engine.ToyGameInfo");
 }
 
+/// Review r1 of #499, item 2: `SetupInputDevices`' own marking. With `UpdateInputContext` answering a `NotYet` (an
+/// invented stand-in, bound in its place), the refusal after the clear is terminal at this boundary: the exact prefix
+/// once, its kind and record kept, and the clear kept.
+#[test]
+fn setup_input_devices_marks_a_refusal_after_its_clear() {
+    let mut t = toy(ParityMode::Off, false);
+    crate::world::online::register_core(&mut t.vm).unwrap();
+    t.vm.register_native(
+        crate::world::after_login::UPDATE_INPUT_CONTEXT_KEY,
+        Rc::new(|_: &mut ow_vm::api::NativeCall<'_>| -> Result<Value, VmError> {
+            Err(ow_core::NotYet::not_read("an invented UpdateInputContext refusal", "an invented record").into())
+        }),
+    )
+    .unwrap();
+    let pc = t.make("WillowGame.WillowPlayerController");
+    let marker = t.make("WillowGame.WillowPlayerInput");
+    t.set(pc, "InputContextSelector", Value::Object(Some(marker)));
+    match t.call(SETUP_INPUT_DEVICES, Some(pc), vec![]) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert_eq!(n.record, "an invented record");
+            assert_eq!(n.what, "stopped after partial writes: an invented UpdateInputContext refusal", "the prefix once");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(selector(&mut t, pc), Value::Object(None), "the clear came first and stays");
+}
+
 /// The slice worlds' offline engine object (decision 2026-11-19-112; port Off answer: the port has no online
 /// subsystem, UNVERIFIED against a logged-in game). In Off it is a `GameEngine` whose `OnlineSubsystem` slot is empty,
 /// so `GetOnlineSubsystem` answers None (no subsystem is made). A second registration is refused. In Reference it is

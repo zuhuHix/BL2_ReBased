@@ -31,6 +31,9 @@
 //! 3. a `WillowPlayerInput`: `bUpdateInputContext` = true on it, nothing else. A `WillowPlayerInput` class without a
 //!    bool `bUpdateInputContext` is a data error (`VmError::Script`) at the write.
 //!
+//! The cast class `WillowPlayerInput` and the flag `bUpdateInputContext` are **UNVERIFIED (fitted)**: the note matched
+//! them by fit (the flag is the matching declared bool; the layout tool cannot lay out `PlayerInput`), not by layout.
+//!
 //! None of the three refuses, so none needs a preflight; none loads anything. A `NotYet` these answers would become is
 //! plain at the native's entry: the caller that wrote before the call adds the "stopped after partial writes: " prefix
 //! (`crate::pools::after_partial_writes`), as `SetupInputDevices` does.
@@ -54,7 +57,8 @@ pub const RECORD: &str = "docs/verification/NATIVE_LOGIN_URL_CONFIG_INPUT.md";
 pub const UPDATE_URL_KEY: &str = "PlayerController.UpdateURL(string,string,bool)";
 pub const SAVE_CONFIG_KEY: &str = "Object.SaveConfig()";
 pub const UPDATE_INPUT_CONTEXT_KEY: &str = "WillowPlayerController.UpdateInputContext()";
-/// The player input class whose flag `UpdateInputContext` raises.
+/// The player input class whose flag `UpdateInputContext` raises: UNVERIFIED (fitted), as is the flag
+/// `bUpdateInputContext` (module documentation).
 pub const WILLOW_PLAYER_INPUT: &str = "WillowGame.WillowPlayerInput";
 /// The `NotYet` texts the two "nothing" answers become if their read-back checks stop holding (not used while they
 /// hold; named here for the next lane).

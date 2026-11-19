@@ -71,12 +71,17 @@ pub const STEAMWORKS_LOGIN_STATUS_KEY: &str = "OnlineSubsystemSteamworks.GetLogi
 /// Binds the two natives by native key (Off only; the caller checks the mode). By key, not by function lookup, so the
 /// binding holds whether or not the package that declares the function is loaded yet.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
+    register_core(vm)?;
+    super::after_login::register(vm)
+}
+
+/// Everything [`register`] binds but `super::after_login`'s three natives (a test binds its own stand-in for one).
+pub(crate) fn register_core(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(GET_ONLINE_SUBSYSTEM_KEY, Rc::new(get_online_subsystem))?;
     vm.register_native(STEAMWORKS_LOGIN_STATUS_KEY, Rc::new(steamworks_login_status))?;
     for &(key, what) in UNREAD {
         vm.register_native(key, Rc::new(move |_: &mut NativeCall<'_>| Err(unread(what))))?;
     }
-    super::after_login::register(vm)?;
     override_if_script(vm, SETUP_INPUT_DEVICES, Rc::new(setup_input_devices))?;
     override_if_script(vm, SERVER_CHANGE_NAME, Rc::new(server_change_name))
 }
@@ -198,18 +203,10 @@ fn server_change_name(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     }
 }
 
-/// The natives after the login status that the note names but did not read (section 7), each bound in Off as its own
-/// named `NotYet { NotRead }`, with the key the installed declaration carries. Each refuses only when the script
-/// reaches it, in the script's order:
-/// - `SetupInputDevices` (script) calls `WillowPlayerInput.SetupInputDevices` only with a `WillowPlayerInput`, so that
-///   refusal comes **before** the script's clear of `InputContextSelector`;
-/// - `WillowPlayerController.UpdateInputContext` is reached with or without a player input, **after** the clear, which
-///   stays (no rollback);
-/// - `PlayerController.UpdateURL` and `Object.SaveConfig` are reached only by `SetName` with a non-empty name, after
-///   `ServerChangeName`. They write outside the world (the URL options and the player's settings). An empty name returns
-///   from `SetName` with no effects, by its installed script, so nothing refuses then.
-///
-/// A refusal after an earlier write of the caller is terminal, marked by the caller (`crate::pools::after_partial_writes`).
+/// The native after the login status that is still unread (section 7): `WillowPlayerInput.SetupInputDevices`, bound in
+/// Off as a named `NotYet { NotRead }` with the key the installed declaration carries. The script calls it only with a
+/// `WillowPlayerInput`, so its refusal comes **before** the script's clear of `InputContextSelector`.
+/// `UpdateInputContext`, `UpdateURL` and `SaveConfig` follow NATIVE_LOGIN_URL_CONFIG_INPUT.md in `super::after_login`.
 pub const UNREAD: &[(&str, &str)] = &[
     (
         "WillowPlayerInput.SetupInputDevices()",

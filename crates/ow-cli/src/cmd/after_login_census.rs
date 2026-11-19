@@ -48,9 +48,12 @@ mod tests {
         world.vm.native_keys().map(str::to_string).collect()
     }
 
-    /// (c): the crate sources name no config file and no player config folder.
+    /// (c): the crate sources name no config file and no player config folder. A heuristic over the source text: the
+    /// text is folded to lower case and every run of backslashes to one `/`, then searched for the config extension, the
+    /// documents folder of the player's settings and the game's config folder, each as a whole word at its end. This
+    /// file, which names them, is skipped.
     fn config_readers(dir: &Path, hits: &mut Vec<String>) {
-        let needles = [format!("{}{}", ".i", "ni\""), format!("{} {}", "My", "Games"), format!("{}{}", "WillowGame/", "Config")];
+        let needles = [format!("{}{}", ".i", "ni"), format!("{} {}", "my", "games"), format!("{}{}", "willowgame/", "config")];
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
             if path.is_dir() {
@@ -59,9 +62,24 @@ mod tests {
                 }
                 config_readers(&path, hits);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).unwrap().replace('\\', "/");
+                let raw = std::fs::read_to_string(&path).unwrap().to_ascii_lowercase();
+                let mut text = String::with_capacity(raw.len());
+                for ch in raw.chars() {
+                    let ch = if ch == '\\' { '/' } else { ch };
+                    if !(ch == '/' && text.ends_with('/')) {
+                        text.push(ch);
+                    }
+                }
+                // This file names the needles; it reads nothing.
+                if path.file_name().is_some_and(|n| n == "after_login_census.rs") {
+                    continue;
+                }
                 for n in &needles {
-                    if text.contains(n.as_str()) {
+                    // A needle counts only as a whole word at its end (`.ini`, not `.init`).
+                    let whole = text.match_indices(n.as_str()).any(|(at, _)| {
+                        text[at + n.len()..].chars().next().is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'))
+                    });
+                    if whole {
                         hits.push(format!("{}: {n}", path.display()));
                     }
                 }
@@ -97,9 +115,7 @@ mod tests {
         let mut bad = Vec::new();
         for set in sets {
             for k in keys(set) {
-                let url = k.to_ascii_lowercase().contains("url") && k != UPDATE_URL_KEY;
-                let config = k.to_ascii_lowercase().contains("config") && k != SAVE_CONFIG_KEY;
-                if url || config {
+                if reader(&k) {
                     bad.push(k);
                 }
             }
@@ -109,6 +125,29 @@ mod tests {
         assert!(bad.is_empty(), "bound readers {bad:?}: {MUST_BECOME}");
         let combat_keys = keys(&[&combat, &manager, &pawn_data, &tree_init]);
         assert!(combat_keys.iter().any(|k| k == UPDATE_URL_KEY), "the census sees the world's own bindings");
+        // Review r1 of #499, item 1: the natives the link-1 driver binds later (the mission bridge's, the mover's)
+        // count too, so the keys are also taken from the fully built world after `maya:8`.
+        let late = built_link1_keys();
+        let late_bad: Vec<String> = late.iter().filter(|k| reader(k)).cloned().collect();
+        assert!(late_bad.is_empty(), "bound readers after the link-1 set-up {late_bad:?}: {MUST_BECOME}");
+        assert!(late.len() > combat_keys.len(), "the built world binds more than the bare one");
+    }
+
+    /// Whether a bound key names a URL or a config reader (anything but the two "nothing" natives).
+    fn reader(k: &str) -> bool {
+        let lower = k.to_ascii_lowercase();
+        (lower.contains("url") && k != UPDATE_URL_KEY) || (lower.contains("config") && k != SAVE_CONFIG_KEY)
+    }
+
+    /// The link-1 world as the combat driver builds it (`combat::world`, the mission bridge, `Run::with_bridge`),
+    /// after `maya:8` (the world's offline engine object, #501, lets the step reach past the login check).
+    fn built_link1_keys() -> Vec<String> {
+        use ow_combat::run::{PlayerBridge, Run};
+        let mut world = crate::cmd::combat::world(&cooked(), ParityMode::Off).unwrap();
+        let bridge: Rc<dyn PlayerBridge> = Rc::new(crate::cmd::combat::MissionBridge::new(&mut world).unwrap());
+        let mut run = Run::with_bridge(world, Some(bridge)).unwrap();
+        run.apply("maya:8");
+        run.world().vm.native_keys().map(str::to_string).collect()
     }
 
     /// The hub's steer: on link 1's path (the combat driver's `maya:8`), every `UpdateInputContext` call meets a
@@ -121,11 +160,6 @@ mod tests {
         use ow_world::world::after_login::InputContextCalls;
         let mut world = crate::cmd::combat::world(&cooked(), ParityMode::Off).unwrap();
         world.vm.add_service(InputContextCalls::default()).unwrap();
-        // A stand-in for H6's engine object (not published yet): a game engine from its class defaults, so its
-        // OnlineSubsystem slot is empty and the player is "not logged in", which the note's path needs.
-        let engine = world.vm.find_class("Engine.GameEngine").unwrap();
-        let engine = ow_vm::interp::instantiate_from_defaults(&mut world.vm, engine).unwrap();
-        world.vm.add_service(ow_world::world::online::EngineObject(engine)).unwrap();
         let bridge: Rc<dyn PlayerBridge> = Rc::new(crate::cmd::combat::MissionBridge::new(&mut world).unwrap());
         let mut run = Run::with_bridge(world, Some(bridge)).unwrap();
         run.apply("maya:8");

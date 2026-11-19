@@ -7,10 +7,11 @@ hub (three digits); NNN is a placeholder.
   ANALYST-LINK1-AFTER-LOGIN, not this thread) and the hub's steer for its review. No native code or analysis output was
   opened.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
-- **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
-  relaxed.
-- **The base:** `fix/rust-login-status` (#479, b6d59ee4). H6's engine object, which gives the empty `OnlineSubsystem`
-  slot, comes later; this branch is rebased onto it when it is published.
+- **Changed guards:** #479's three named `NotYet { NotRead }` placeholders (`UpdateInputContext`, `UpdateURL`,
+  `SaveConfig`) are replaced under the note: `UpdateInputContext` by its rule, and the other two by "nothing" with a
+  read-back check each. No dependency was added and no bounds check was loosened.
+- **The base:** `fix/rust-engine-object-offline` (#501, ea1ffe96), H6's engine object with the empty `OnlineSubsystem`
+  slot, on #479 (afb32d86). First written on #479 at b6d59ee4.
 
 **What changed** (`crates/ow-world/src/world/after_login.rs`, bound by key from `online::register`, Off only;
 Reference keeps the stub policy):
@@ -30,7 +31,7 @@ Reference keeps the stub policy):
   - with none, or another class: nothing.
   - A `WillowPlayerInput` without a bool flag is a data error.
   - The slice test `the_slice_calls_update_input_context_without_a_player_input` checks that link 1's `maya:8` calls it
-    with no `PlayerInput`. It runs on installed data, with a stand-in for H6's engine object.
+    with no `PlayerInput`. It runs on installed data, on #501's engine object.
   - **Accepted divergence:** a world that sets a `PlayerInput` (links 13 and 14 with one) gets the flag raised, and it
     stays raised, since the port runs no input frame to clear it.
 - **No preflight:** none of the three refuses. A `NotYet` they would become is plain at entry; the caller that wrote
@@ -39,6 +40,16 @@ Reference keeps the stub policy):
   answers.
 - **`ow-vm`:** a read-only `Vm::native_keys()` accessor, used only by the census.
 
-**Installed Off `--slice-gate`** (this branch): links 1, 3, 4, 5, 13 and 14 still stop in `maya:8` at
-`GameEngine.GetOnlineSubsystem`'s no-engine `NotYet` (#479), before these natives. With the test's stand-in engine
-object, `maya:8` gets past all three and next stops at the unbound `WillowGameInfo.IsEditor()`.
+**Installed Off `--slice-gate`** (this branch, on #501): links 1, 3, 4, 5, 13 and 14 get past `GetOnlineSubsystem`,
+`UpdateURL`, `SaveConfig` and `UpdateInputContext` (one call, no `PlayerInput`) and stop in `maya:8` at the unbound
+native `WillowGameInfo.IsEditor()`, graded an error (link 1: 0 of 1 driver step). 0 ok / 5 NotYet / 9 errors overall.
+
+**Review r1 of #499, folded in.**
+1. The census also takes the keys of the fully built link-1 world (the mission bridge, `Run::with_bridge`, after
+   `maya:8`, on #501's engine object), so natives the driver binds later count.
+2. `SetupInputDevices`' marking is tested again, with a stand-in `NotYet` for `UpdateInputContext`: the exact prefix
+   once, kind and record kept, and the clear kept. `online::register` is split into `register_core` and
+   `after_login::register` for it, with no change in what it binds.
+3. The cast class `WillowPlayerInput` and the flag `bUpdateInputContext` are labelled UNVERIFIED (fitted).
+4. The source scan is a heuristic, case-folded with backslash runs collapsed to one `/`.
+5. The stale `UNREAD` comment is cut to `SetupInputDevices`.
