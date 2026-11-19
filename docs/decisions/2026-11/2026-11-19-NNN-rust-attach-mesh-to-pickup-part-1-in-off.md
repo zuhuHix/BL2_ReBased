@@ -45,3 +45,17 @@ was added and no bounds check was loosened. **Every rule is UNVERIFIED in the ru
   byte-identical. Numbers in `docs/verification/GATES.md`. This is what the host did, not parity.
 - **Open:** part 2 of the note (`SetLightEnvironment`, `InitializePickupForRBPhysics`, `SpawnPickupParticles`); the
   note's open questions 1 to 5, and its three live checks.
+
+## Edits: review r1 of #511
+
+AI-assisted (Claude Code). The revised note (d15f302, review r1 of #505) and Sol's review r1 of #511.
+- **The order of `Actor.AttachComponent`**, now `attach_plan` then its writes: the guards first (no component; the
+  actor destroyed on the heap; `bDeleteMe`), then the scene layer, then the `bAttached` preflight. Each step checks
+  only the declaration it reads, and the declarations of the written fields are checked after the preflight, before
+  the first write. So a broken `Components` or `Owner` declaration no longer masks a guard, the `LayerAbsent` or the
+  detach refusal.
+- **The detach refusal's text** is the note's: "Actor.AttachComponent on an attached component: the detach before the
+  attach".
+- **Tests:** the guards and an attached component without the layer (plain returns, then `LayerAbsent` before
+  `NotRead`); the attached fixture seeded with both flags true and checked unchanged; the write order asserted from the
+  plan; a toy actor and component with one broken declaration each (9 tests in all).

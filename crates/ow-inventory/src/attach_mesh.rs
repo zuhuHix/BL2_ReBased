@@ -20,8 +20,8 @@
 //! - `SkeletalMeshComponent.HideBoneByName(name,byte)`: a None name, or a component whose `SkeletalMesh` is None
 //!   (**UNVERIFIED (fitted)**), is "no bone": nothing. Otherwise [`HIDE_BONE`], `NotYet { NotRead }`, before any write.
 //! - `Actor.AttachComponent(object)`:
-//!   - the guards' "nothing": the component None, the actor's `bDeleteMe` set, or the actor destroyed (the port's
-//!     stand-in for the pending-kill object flag, **UNVERIFIED (fitted)**);
+//!   - the guards' "nothing": the component None, the actor destroyed on the heap (`Heap::destroy`, the port's
+//!     stand-in for the pending-kill object flag, **UNVERIFIED (fitted)**), or the actor's `bDeleteMe` set;
 //!   - a world without a [`SceneLayer`]: [`ATTACH`], `NotYet { LayerAbsent }` ([`SCENE_LAYER`]);
 //!   - an attached component (`bAttached`): [`ATTACH_DETACH`], `NotYet { NotRead }` (the detach is not read);
 //!   - otherwise **the hub's ruling on section 5, a port Off answer, UNVERIFIED**: the world's scene layer is empty,
@@ -31,7 +31,8 @@
 //!     The transform and the orthonormalized-lighting value are only handed to the registration, so they are not
 //!     built.
 //!
-//! Every declaration a native reads or writes is checked before its first write (a data error, `VmError::Script`,
+//! `Actor.AttachComponent` checks a declaration only on the path that reaches it ([`attach_plan`], review r1 of #511).
+//! The other natives check every declaration they read or write before their first write (a data error, `VmError::Script`,
 //! names the field). A preflight `NotYet` is returned **unmarked**: the native has written nothing, and the caller's
 //! write tracking adds "stopped after partial writes: " when earlier steps wrote (the `make` step). An error after a
 //! native's first write is marked once, its kind and record kept. None of them loads a definition.
@@ -68,7 +69,7 @@ pub const HIDE_BONE: &str =
 pub const ATTACH: &str = "Actor.AttachComponent: the component's attach to the world's scene";
 /// The absent layer [`ATTACH`] names, for a world without a [`SceneLayer`].
 pub const SCENE_LAYER: &str = "a scene that components attach to: render, collision and physics registration (the port has none)";
-pub const ATTACH_DETACH: &str = "Actor.AttachComponent on an attached component: its detach first";
+pub const ATTACH_DETACH: &str = "Actor.AttachComponent on an attached component: the detach before the attach";
 
 /// The fitted fields (UNVERIFIED (fitted), the note's open question 2).
 pub const FORCE_REF_POSE: &str = "bForceRefpose";
@@ -205,41 +206,67 @@ pub fn hide_bone_by_name(vm: &Vm, component: ObjRef, bone: NameId) -> Result<(),
     Err(NotYet::not_read(HIDE_BONE, RECORD).into())
 }
 
-/// `AttachComponent(NewComponent)` on `actor` in Off (module documentation).
-pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -> Result<(), VmError> {
+/// One write of the attach: the object, the field, the value.
+pub type AttachWrite = (ObjRef, &'static str, Value);
+
+/// What `AttachComponent(NewComponent)` on `actor` will do in Off, decided before any write (module documentation),
+/// in the order of the revised note's section 3.4 (review r1 of #511):
+/// 1. the guards, plain returns (`Ok(None)`): no component; the actor destroyed on the heap; the actor's `bDeleteMe`;
+/// 2. no [`SceneLayer`]: [`ATTACH`], `NotYet { LayerAbsent }`;
+/// 3. the component's `bAttached` set: [`ATTACH_DETACH`], `NotYet { NotRead }`;
+/// 4. then, and only then, the declarations of the fields it writes, and the writes in the native's order: the two
+///    flag clears, `Owner`, then the `Components` append (no duplicate check).
+///
+/// Only the fields a step reads are checked before it (`bDeleteMe` for the guard, `bAttached` for the preflight), so
+/// an unrelated declaration error cannot mask a guard, the layer refusal or the preflight.
+pub fn attach_plan(vm: &Vm, actor: ObjRef, component: Option<ObjRef>) -> Result<Option<Vec<AttachWrite>>, VmError> {
     const WHAT: &str = "Actor.AttachComponent";
     let Some(component) = component else {
-        return Ok(());
+        return Ok(None);
     };
-    schemas(vm, actor, &[("Components", Want::Array), ("bDeleteMe", Want::Bool)], WHAT)?;
-    if bool_of(&required(vm, actor, "bDeleteMe", WHAT)?, "bDeleteMe", WHAT)? || vm.space.heap.get(actor)?.destroyed {
-        return Ok(());
+    // The pending-kill guard (UNVERIFIED (fitted)): the heap's destroyed state, read with no declaration.
+    if vm.space.heap.get(actor)?.destroyed {
+        return Ok(None);
+    }
+    schemas(vm, actor, &[("bDeleteMe", Want::Bool)], WHAT)?;
+    if bool_of(&required(vm, actor, "bDeleteMe", WHAT)?, "bDeleteMe", WHAT)? {
+        return Ok(None);
     }
     if vm.service::<SceneLayer>().is_none() {
         return Err(NotYet::layer_absent(ATTACH, SCENE_LAYER, RECORD).into());
     }
-    let fields = [
-        ("Owner", Want::Object),
-        ("bAttached", Want::Bool),
-        ("bNeedsReattach", Want::Bool),
-        ("bNeedsUpdateTransform", Want::Bool),
-    ];
-    schemas(vm, component, &fields, WHAT)?;
+    schemas(vm, component, &[("bAttached", Want::Bool)], WHAT)?;
     if bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)? {
         return Err(NotYet::not_read(ATTACH_DETACH, RECORD).into());
     }
+    let fields = [("bNeedsReattach", Want::Bool), ("bNeedsUpdateTransform", Want::Bool), ("Owner", Want::Object)];
+    schemas(vm, component, &fields, WHAT)?;
+    schemas(vm, actor, &[("Components", Want::Array)], WHAT)?;
     let mut list = match required(vm, actor, "Components", WHAT)? {
         Value::Array(a) => a.as_ref().clone(),
         other => return Err(bad(WHAT, format!("Components holds {}, not an array", other.kind_name()))),
     };
     list.push(Value::Object(Some(component)));
-    write(vm, component, "bNeedsReattach", Value::Bool(false), WHAT)?;
-    let rest = (|| {
-        write(vm, component, "bNeedsUpdateTransform", Value::Bool(false), WHAT)?;
-        write(vm, component, "Owner", Value::Object(Some(actor)), WHAT)?;
-        write(vm, actor, "Components", Value::array(list), WHAT)
-    })();
-    rest.map_err(after_writes)
+    Ok(Some(vec![
+        (component, "bNeedsReattach", Value::Bool(false)),
+        (component, "bNeedsUpdateTransform", Value::Bool(false)),
+        (component, "Owner", Value::Object(Some(actor))),
+        (actor, "Components", Value::array(list)),
+    ]))
+}
+
+/// `AttachComponent(NewComponent)` on `actor` in Off: [`attach_plan`], then its writes in order. An error after the
+/// first write is marked once, its kind and record kept.
+pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -> Result<(), VmError> {
+    const WHAT: &str = "Actor.AttachComponent";
+    let Some(plan) = attach_plan(vm, actor, component)? else {
+        return Ok(());
+    };
+    for (i, (o, field, v)) in plan.into_iter().enumerate() {
+        let r = write(vm, o, field, v, WHAT);
+        if i == 0 { r? } else { r.map_err(after_writes)? }
+    }
+    Ok(())
 }
 
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {

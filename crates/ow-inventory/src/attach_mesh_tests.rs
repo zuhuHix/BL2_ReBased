@@ -80,6 +80,15 @@ fn engine() -> Vec<u8> {
     t.prop("Bool", primitive, "bOwnerNoSee", 0, 0);
     t.function(primitive, "SetHidden", &[Param::new("Bool", "NewHidden")], None, &[], &FunctionSpec::new(NATIVE, "SetHidden"), |_| None);
     t.function(primitive, "SetOwnerNoSee", &[Param::new("Bool", "bNewOwnerNoSee")], None, &[], &FunctionSpec::new(NATIVE, "SetOwnerNoSee"), |_| None);
+    let bad_actor = t.class("BadActor", object);
+    t.prop("Int", bad_actor, "Components", 0, 0);
+    t.prop("Bool", bad_actor, "bDeleteMe", 0, 0);
+    let bad_component = t.class("BadComponent", object);
+    t.prop("Struct", bad_component, "Scene", 0, pointer);
+    t.prop("Int", bad_component, "Owner", 0, 0);
+    for flag in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform"] {
+        t.prop("Bool", bad_component, flag, 0, 0);
+    }
     let mesh = t.class("SkeletalMeshComponent", primitive);
     t.prop("Int", mesh, "bForceRefpose", 0, 0);
     t.prop("Int", mesh, "bOldForceRefPose", 0, 0);
@@ -252,23 +261,38 @@ fn hide_bone_by_name_does_nothing_without_a_mesh_and_is_not_read_with_one() {
     assert_eq!(x.written(mesh), before);
 }
 
-/// A world without the scene layer: `AttachComponent` is `NotYet { LayerAbsent }`, unmarked, nothing written. The
-/// guards' "nothing" cases come first.
+/// A world without the scene layer (review r1 of #511): the guards still answer a plain return (no component, a
+/// `bDeleteMe` actor, a destroyed actor), and only after them is the attach `NotYet { LayerAbsent }`, unmarked,
+/// nothing written. An attached component gets the layer refusal, not the detach one.
 #[test]
-fn without_the_scene_layer_the_attach_is_layer_absent_after_the_guards() {
+fn without_the_scene_layer_the_guards_come_first_then_layer_absent() {
     let mut x = fx(ParityMode::Off, false);
-    let actor = x.obj("Engine.Actor");
     let mesh = x.obj("Engine.SkeletalMeshComponent");
+    let before = x.written(mesh);
+    let actor = x.obj("Engine.Actor");
     assert_eq!(x.call(ATTACH_FN, actor, vec![Value::Object(None)]).unwrap(), Value::None);
-    let before = (x.written(mesh), x.get(actor, "Components"));
+    let gone = x.obj("Engine.Actor");
+    x.set(gone, "bDeleteMe", Value::Bool(true));
+    let dead = x.obj("Engine.Actor");
+    x.vm.space.heap.destroy(dead).unwrap();
+    for guarded in [gone, dead] {
+        assert_eq!(x.call(ATTACH_FN, guarded, vec![Value::Object(Some(mesh))]).unwrap(), Value::None, "a plain return");
+        assert_eq!(x.get(guarded, "Components"), Value::array(Vec::new()));
+    }
     let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(mesh))]));
     unmarked(&n, Missing::LayerAbsent(SCENE_LAYER), ATTACH);
-    assert_eq!((x.written(mesh), x.get(actor, "Components")), before);
+    x.set(mesh, "bAttached", Value::Bool(true));
+    let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(mesh))]));
+    unmarked(&n, Missing::LayerAbsent(SCENE_LAYER), ATTACH);
+    x.set(mesh, "bAttached", Value::Bool(false));
+    assert_eq!(x.written(mesh), before);
+    assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 }
 
-/// With the empty scene layer (the hub's ruling): the guards (no component, `bDeleteMe`, a destroyed actor) do
-/// nothing; an attached component is `NotRead`; otherwise the flag clears, `Owner`, then the `Components` append,
-/// with no duplicate check, and `Scene` and `bAttached` left as they are.
+/// With the empty scene layer (the hub's ruling): the guards do nothing; an attached component is `NotRead` before
+/// any write (both flags seeded true, so a clear moved ahead of the preflight shows); otherwise the plan is the two
+/// flag clears, `Owner`, then the `Components` append, in that order, with no duplicate check, and `Scene` and
+/// `bAttached` are left as they are.
 #[test]
 fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     let mut x = fx(ParityMode::Off, true);
@@ -291,11 +315,21 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     let actor = x.obj("Engine.Actor");
     let attached = x.obj("Engine.SkeletalMeshComponent");
     x.set(attached, "bAttached", Value::Bool(true));
+    x.set(attached, "bNeedsReattach", Value::Bool(true));
+    x.set(attached, "bNeedsUpdateTransform", Value::Bool(true));
     let held = x.written(attached);
-    unmarked(&not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(attached))])), Missing::NotRead, ATTACH_DETACH);
-    assert_eq!(x.written(attached), held);
+    let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(attached))]));
+    unmarked(&n, Missing::NotRead, "Actor.AttachComponent on an attached component: the detach before the attach");
+    assert_eq!(x.written(attached), held, "no clear ahead of the preflight");
     assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 
+    let plan = attach_plan(&x.vm, actor, Some(mesh)).unwrap().expect("the attach writes");
+    let order: Vec<(ObjRef, &str)> = plan.iter().map(|w| (w.0, w.1)).collect();
+    assert_eq!(
+        order,
+        vec![(mesh, "bNeedsReattach"), (mesh, "bNeedsUpdateTransform"), (mesh, "Owner"), (actor, "Components")],
+        "the note's order: the flag clears, Owner, then the append"
+    );
     assert_eq!(x.call(ATTACH_FN, actor, vec![Value::Object(Some(mesh))]).unwrap(), Value::None);
     assert_eq!(x.get(mesh, "bNeedsReattach"), Value::Bool(false));
     assert_eq!(x.get(mesh, "bNeedsUpdateTransform"), Value::Bool(false));
@@ -305,6 +339,35 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     assert_eq!(x.get(actor, "Components"), Value::array(vec![Value::Object(Some(mesh))]));
     x.call(ATTACH_FN, actor, vec![Value::Object(Some(mesh))]).unwrap();
     assert_eq!(x.get(actor, "Components"), Value::array(vec![Value::Object(Some(mesh)); 2]), "no duplicate check");
+}
+
+/// A broken declaration on a field a step does not read (review r1 of #511): the guards, the layer refusal and the
+/// detach preflight still answer as they would. `Test.BadActor` declares `Components` as an int, and
+/// `Test.BadComponent` declares `Owner` as an int.
+#[test]
+fn an_unrelated_declaration_error_masks_no_guard_or_refusal() {
+    let mut x = fx(ParityMode::Off, false);
+    let bad_actor = x.obj("Engine.BadActor");
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(bad_actor, "bDeleteMe", Value::Bool(true));
+    assert_eq!(x.call(ATTACH_FN, bad_actor, vec![Value::Object(Some(mesh))]).unwrap(), Value::None, "bDeleteMe");
+    let dead = x.obj("Engine.BadActor");
+    x.vm.space.heap.destroy(dead).unwrap();
+    assert_eq!(x.call(ATTACH_FN, dead, vec![Value::Object(Some(mesh))]).unwrap(), Value::None, "destroyed");
+    let live = x.obj("Engine.BadActor");
+    let n = not_yet(x.call(ATTACH_FN, live, vec![Value::Object(Some(mesh))]));
+    unmarked(&n, Missing::LayerAbsent(SCENE_LAYER), ATTACH);
+
+    let mut x = fx(ParityMode::Off, true);
+    let actor = x.obj("Engine.Actor");
+    let odd = x.obj("Engine.BadComponent");
+    x.set(odd, "bAttached", Value::Bool(true));
+    let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(odd))]));
+    unmarked(&n, Missing::NotRead, ATTACH_DETACH);
+    x.set(odd, "bAttached", Value::Bool(false));
+    assert!(matches!(x.call(ATTACH_FN, actor, vec![Value::Object(Some(odd))]), Err(VmError::Script { .. })), "then a data error");
+    assert_eq!(x.get(odd, "bNeedsReattach"), Value::Bool(false));
+    assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()), "nothing written");
 }
 
 /// Reference binds none of the five: the stub policy refuses them.
