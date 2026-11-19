@@ -1048,6 +1048,9 @@ struct FakeBridge {
     level: std::cell::Cell<i32>,
     pool: Rc<std::cell::Cell<f32>>,
     set: std::cell::RefCell<Vec<(i32, i64)>>,
+    /// What the class select answers (None: it succeeds), and how often it ran.
+    select_stop: std::cell::RefCell<Option<VmError>>,
+    selects: std::cell::Cell<u32>,
 }
 
 impl PlayerBridge for FakeBridge {
@@ -1083,6 +1086,13 @@ impl PlayerBridge for FakeBridge {
     }
     fn player_class(&self, _vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
         Ok(self.class)
+    }
+    fn select_player_class(&self, _vm: &mut Vm) -> Result<(), VmError> {
+        self.selects.set(self.selects.get() + 1);
+        match self.select_stop.borrow().clone() {
+            Some(stop) => Err(stop),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1139,6 +1149,8 @@ fn bridged_with(mode: ParityMode, class: bool, pawn_class: &str) -> (Run, Rc<Fak
         level: std::cell::Cell::new(0),
         pool,
         set: std::cell::RefCell::new(Vec::new()),
+        select_stop: std::cell::RefCell::new(None),
+        selects: std::cell::Cell::new(0),
     });
     let bridge: Rc<dyn PlayerBridge> = fake.clone();
     (Run::with_bridge(w, Some(bridge)).unwrap(), fake, dir)
@@ -1639,6 +1651,30 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
+}
+
+/// Review of #431 (decision 2026-11-19-46): in Off, a class switch that stops part-way is sticky. `maya:8 maya:8`
+/// gives the same stop on both steps; the second step does not select again, and neither step reaches the experience
+/// or the health setup, so nothing builds on a half-switched player. Steps of other kinds stop the same way.
+#[test]
+fn a_class_switch_that_stops_stops_every_later_step_in_off() {
+    let (mut run, fake, _dir) = bridged(ParityMode::Off, true);
+    *fake.select_stop.borrow_mut() = Some(VmError::NotYet(ow_core::NotYet::not_read("an invented stop", "a record")));
+    for step in ["maya:8", "maya:8", "players:1"] {
+        run.apply(step);
+    }
+    let errors = run.errors().to_vec();
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    for (e, step) in errors.iter().zip(["maya:8", "maya:8", "players:1"]) {
+        assert!(e.starts_with(&format!("{step}: ")) && e.contains("an invented stop"), "{e}");
+    }
+    assert_eq!(fake.selects.get(), 1, "the second maya step does not select again");
+    assert!(fake.set.borrow().is_empty(), "no experience was set");
+    // Reference never selects, so nothing is sticky there.
+    let (mut run, fake, _dir) = bridged(ParityMode::Reference, true);
+    *fake.select_stop.borrow_mut() = Some(VmError::NotYet(ow_core::NotYet::not_read("an invented stop", "a record")));
+    run.apply("maya:8");
+    assert_eq!(fake.selects.get(), 0);
 }
 
 /// The player controller's native override of the starting values (decision 2026-11-19-46), Off: `NotYet { NotRead }`

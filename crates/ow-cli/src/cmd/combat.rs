@@ -239,8 +239,16 @@ impl PlayerBridge for MissionBridge {
         }
         // Reading the class's PawnArchetypePath loads the class through the store, before the class select: so the
         // installed GetDefinition then finds it in memory (review r1 of #431; decision 2026-11-19-46).
-        vm.log.push(format!("harness input: load {PLAYER_CLASS_PATH} (to read its PawnArchetypePath)"));
-        let class = self.player_class(vm)?;
+        vm.log.push(format!(
+            "harness input: load {PLAYER_CLASS_PATH} (to read its PawnArchetypePath; an UNVERIFIED harness load)"
+        ));
+        let class = match self.player_class(vm) {
+            Ok(class) => class,
+            Err(e) => {
+                vm.log.push(format!("harness input: load {PLAYER_CLASS_PATH}: failed ({e})"));
+                return Err(e);
+            }
+        };
         apply_class_inputs(vm, controller, class)
     }
 }
@@ -280,15 +288,22 @@ pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<
                 Some(Value::Str(text)) => match ObjectPath::parse(&text) {
                     Err(_) => vm.log.push(format!("harness input: preload skipped ({text:?} is no object path)")),
                     Ok(path) => {
+                        // The attempt is labelled before it runs, so a load that fails still shows (rule 7).
+                        vm.log.push(format!(
+                            "harness input: preload {text} (UNVERIFIED stand-in for the streaming load)"
+                        ));
                         let loaded = vm.defs.find(&mut vm.space, &path);
                         vm.log.extend(vm.defs.take_log());
-                        let outcome = match loaded.map_err(VmError::Def)? {
-                            Some(_) => "loaded",
-                            None => "found nothing",
-                        };
-                        vm.log.push(format!(
-                            "harness input: preload {text}: {outcome} (UNVERIFIED stand-in for the streaming load)"
-                        ));
+                        match loaded {
+                            Ok(found) => vm.log.push(format!(
+                                "harness input: preload {text}: {}",
+                                if found.is_some() { "loaded" } else { "found nothing" }
+                            )),
+                            Err(e) => {
+                                vm.log.push(format!("harness input: preload {text}: failed ({e})"));
+                                return Err(VmError::Def(e));
+                            }
+                        }
                     }
                 },
                 Some(other) => vm.log.push(format!(

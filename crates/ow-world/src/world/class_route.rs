@@ -19,14 +19,17 @@
 //! at the path whose class is only derived from the requested one is `NotYet`, and so is one of an unrelated class.
 //! A name match in memory whose full path the port cannot name is `NotYet` too, before any load.
 //!
-//! **A load before the class check.** The store's load runs before the class is checked, because the store's holder
-//! query does not give an export's class without loading it. So a call that ends `NotYet` for a wrong class leaves
-//! that definition loaded, and live in that VM from then on (a later `FindAlreadyLoadedObject` finds it in memory).
-//! The game's own lookup with a class filter may not load it; that difference is UNVERIFIED (review r1 of #426).
+//! **The class is checked before the load** (review of #431). The store's holder records name each export's class,
+//! so a load by name first asks which files hold the path and with which class. No holder: the retry's `NotYet`. A
+//! holder whose class is not exactly the requested one, or a file the store could not search: `NotYet` (the lookup's
+//! class filter is not read), and nothing is loaded. So a refused call leaves no definition live that a later
+//! `FindAlreadyLoadedObject` could find.
 //!
 //! **`WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync(PawnDataPath, PlayerContext, Payload, Instigator, IntParam,
 //! FloatParam, CallbackCustomEventName)`** (section 3):
-//! 1. a path with no `.` has no package part: nothing happens and no report is sent;
+//! 1. a path with no `.` has no package part. The note makes that a no-op only after the lookup misses, and the
+//!    lookup's rule for a partial path is not read (NATIVE_PAWN_DATA.md open question 3), so a miss cannot be
+//!    established: `NotYet { NotRead }` (review of #431);
 //! 2. the object already in memory at the path is looked up with `FindAlreadyLoadedObject`'s routine
 //!    ([`super::pawn_data::lookup`]);
 //! 3. found: the report is sent at once. When `PlayerContext` implements `IStreamingDataEvent`, its script
@@ -133,9 +136,34 @@ fn get_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if let Some(o) = in_memory(c.vm, &name, class)? {
         return checked(c.vm, o, class, &name);
     }
-    // Loaded by that name: the definition store's load of the path.
+    // Loaded by that name: the definition store's load of the path, once its holders' class settles the filter.
     let loaded = match ObjectPath::parse(&name) {
         Ok(path) => {
+            let holders = c.vm.defs.owners(&path).map_err(VmError::Def)?;
+            if !holders.failures.is_empty() {
+                return Err(not_read(format!(
+                    "GBXDefinition.GetDefinition of {name:?}: a file that may hold it could not be searched"
+                )));
+            }
+            let wanted = class_name(c.vm, class);
+            // A class the holder's own file exports is named without its package there: qualify it with the file's.
+            let qualified = |h: &ow_defs::identity::Owner| {
+                if h.class.contains('.') {
+                    h.class.clone()
+                } else {
+                    format!("{}.{}", h.package, h.class)
+                }
+            };
+            if let Some(other) = holders
+                .holders
+                .iter()
+                .find(|h| !qualified(h).eq_ignore_ascii_case(&wanted))
+            {
+                return Err(not_read(format!(
+                    "GBXDefinition.GetDefinition of {name:?}: an installed package holds it as a {}, not the requested {wanted} (the lookup's class filter is not read; nothing was loaded)",
+                    other.class
+                )));
+            }
             let found = c.vm.defs.find(&mut c.vm.space, &path);
             let log = c.vm.defs.take_log();
             c.vm.log.extend(log);
@@ -216,6 +244,8 @@ fn load_async(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let path = text_arg(c, 0, LOAD_ASYNC)?;
     let context = object_arg(c, 1)?;
     let payload = object_arg(c, 2)?;
+    // Instigator is checked for its kind like the others, and not passed to the report (section 3 step 3).
+    object_arg(c, 3)?;
     let int_param = match c.arg(4)? {
         Value::Int(i) => *i,
         other => {
@@ -243,9 +273,11 @@ fn load_async(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             ));
         }
     };
-    // 1. No package part: nothing happens, no report.
+    // 1. No package part: the lookup cannot establish a miss for a partial path (module documentation).
     if !path.contains('.') {
-        return Ok(Value::None);
+        return Err(not_read(format!(
+            "LoadPlayerPawnDataAsync of the bare name {path:?} (the lookup's partial-path rule; NATIVE_PAWN_DATA.md open question 3), so whether it misses is not known"
+        )));
     }
     let Some(me) = c.this else {
         return Err(bad(LOAD_ASYNC, "called without a manager"));

@@ -52,6 +52,25 @@ decision 2026-11-19-41. It opened no raw analysis output, Ghidra or REA. The scr
   - `GetDefinition`'s lookup documentation no longer says an unnamed name match is skipped: it answers `NotYet`.
   - The override test calls `ApplyCharacterClassStartingValues` through the controller's method lookup, as the class
     switch does, and checks that the lookup reaches the player controller's override.
+- **Review of #431 by a second model family, folded in here.**
+  - **A class switch that stops is sticky (HIGH).** The installed switch writes the controller's `PlayerClass` and
+    `CharacterClass` before the override answers `NotYet`. So a second `maya` step used to see a class and go on to
+    the experience and health setup on a half-switched player. Now, in Off, the run keeps that stop, and every later
+    step of the run answers with it. A rollback would need to know every write the switch makes before it stops
+    (`ClientNotifyClassChanged`'s included), which is not read. A synthetic two-step test covers it: `maya:8 maya:8
+    players:1` all stop the same way, the second `maya` does not select again, and no experience is set.
+  - `LoadPlayerPawnDataAsync` of a bare name is now `NotYet`, even with an object of that name live. The note makes
+    the no-package case a no-op only after a lookup miss, and the lookup's partial-path rule is not read.
+  - `GetDefinition` checks the class from the store's holder records before it loads anything. The records name each
+    export's class; a class the holder's own file exports is qualified with that file's package. A holder of another
+    class, or a file that could not be searched, is `NotYet`, and nothing is loaded, so a refused call leaves no
+    definition live for a later `FindAlreadyLoadedObject` to find. This corrects the earlier note above that checking
+    first is not cheap.
+  - Every harness attempt is labelled before it runs, `UNVERIFIED` included (the class load is a harness load too),
+    and its outcome follows: `loaded`, `found nothing`, or `failed (<error>)` before the error is returned. The slice
+    gate's rows gain a `harness` list with the `harness input:` lines their own steps logged, also when a step stops.
+  - `LoadPlayerPawnDataAsync` checks the `Instigator` argument's kind like the others, and still does not pass it to
+    the report.
 - **Next.** An analyst read of the override's last call (its name, and whether it is plain script), then an
   implementer.
 - **UNVERIFIED.** Every rule above. Nothing was checked in the running game.

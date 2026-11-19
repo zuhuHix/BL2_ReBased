@@ -9,6 +9,7 @@ fn ran_ok(steps: &[&str]) -> Option<Ran> {
         error_lines: Vec::new(),
         new_rows: Vec::new(),
         evident: false,
+        harness: Vec::new(),
     })
 }
 
@@ -150,6 +151,7 @@ fn a_stop_blocks_the_links_that_need_it_and_missing_evidence_is_an_error() {
         error_lines: Vec::new(),
         new_rows: Vec::new(),
         evident: false,
+        harness: Vec::new(),
     });
     ran[index("enemy_attacks_maya")] = ran_ok(&["spawn:adult:7", "swing:1:melee"]);
     ran[index("go_down")] = ran_ok(&["cash:3000"]);
@@ -208,13 +210,14 @@ fn a_row_is_one_line_of_json_with_every_field() {
         error_lines: vec![("use".into(), "e".into())],
         stopped: true,
         scope: "s",
+        harness: vec!["harness input: x \"y\"".into()],
     };
     assert_eq!(
         row.json(),
         "{\"n\":3,\"link\":\"kill_enemy\",\"grading\":\"strict\",\"result\":\"notyet\",\"driver\":\"combat-run\",\
          \"steps\":[\"spawn:baby:6\"],\"stop\":{\"step\":\"spawn:baby:6\",\"native\":\"A.B\",\"record\":\"R.md\",\
          \"text\":\"t \\\"q\\\"\"},\"blocked_by\":null,\"after_errors_in\":null,\
-         \"error_lines\":[{\"step\":\"use\",\"text\":\"e\"}],\"scope\":\"s\"}"
+         \"error_lines\":[{\"step\":\"use\",\"text\":\"e\"}],\"scope\":\"s\",\"harness\":[\"harness input: x \\\"y\\\"\"]}"
     );
     let ok = Row {
         stop: None,
@@ -244,6 +247,7 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
         error_lines: vec![("use".into(), "mission script: unbound native A.B(name)".into())],
         new_rows: Vec::new(),
         evident: false,
+        harness: Vec::new(),
     });
     let n = NotYet::not_read("Pawn routing", "NATIVE_AI_HOLDS.md");
     ran[index("mission_objective")] = Some(Ran {
@@ -252,6 +256,7 @@ fn past_errors_grading_lets_a_link_run_after_error_lines_but_not_after_a_hard_st
         error_lines: Vec::new(),
         new_rows: Vec::new(),
         evident: false,
+        harness: Vec::new(),
     });
     let past = rows(&ran, Grading::PastErrors, |_| true);
     let r = |name| &past[index(name)];
@@ -301,11 +306,13 @@ fn a_link_is_not_graded_on_a_later_link_s_rows() {
     ran[index("enemy_attacks_maya")] = Some(Ran {
         steps: vec!["spawn:adult:7".into(), "swing:0:melee".into()],
         new_rows: vec!["health.PrimalBeastAdult.L7".into(), "arrival.PrimalBeastAdult.L7".into()],
+        harness: Vec::new(),
         ..Ran::default()
     });
     ran[index("go_down")] = Some(Ran {
         steps: vec!["swing:0:melee".into()],
         new_rows: vec!["arrival.PrimalBeastAdult.L7#2".into(), "ratio.PrimalBeastAdult.L7".into(), "down.total.1".into()],
+        harness: Vec::new(),
         ..Ran::default()
     });
     let graded = rows(&ran, Grading::Strict, |i| match LINKS[i].evidence {

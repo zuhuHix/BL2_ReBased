@@ -6,7 +6,9 @@
 //!
 //! `{"n":<1..14>,"link":<name>,"grading":"strict"|"past-errors","result":"ok"|"notyet"|"error",
 //! "driver":"combat-run"|"slice-run"|"none","steps":[..],"stop":null|{"step","native","record","text"},
-//! "blocked_by":null|<link>,"after_errors_in":null|<link>,"error_lines":[{"step","text"}..],"scope":<text>}`
+//! "blocked_by":null|<link>,"after_errors_in":null|<link>,"error_lines":[{"step","text"}..],"scope":<text>,
+//! "harness":[<text>..]}`, where `harness` lists the harness inputs the link's own steps logged (`harness input: ...`
+//! lines of the VM log, with their outcomes), so a row shows what the run supplied (rule 7; review of #431).
 //!
 //! `tools/check_slice_run_off.py` grades the rows; the gate is 14 ok, 0 notyet, 0 error.
 //!
@@ -361,6 +363,8 @@ pub struct Row {
     /// The link stopped (a hard stop, or under strict grading any stop) or was blocked: it blocks what needs it.
     pub stopped: bool,
     pub scope: &'static str,
+    /// The harness inputs the link's steps logged ([`Ran::harness`]).
+    pub harness: Vec<String>,
 }
 
 impl Row {
@@ -386,7 +390,7 @@ impl Row {
             .join(",");
         format!(
             "{{\"n\":{},\"link\":{},\"grading\":{},\"result\":{},\"driver\":{},\"steps\":[{}],\"stop\":{},\
-             \"blocked_by\":{},\"after_errors_in\":{},\"error_lines\":[{}],\"scope\":{}}}",
+             \"blocked_by\":{},\"after_errors_in\":{},\"error_lines\":[{}],\"scope\":{},\"harness\":[{}]}}",
             self.n,
             quote(self.link),
             quote(self.grading.name()),
@@ -397,7 +401,8 @@ impl Row {
             blocked,
             after,
             lines,
-            quote(self.scope)
+            quote(self.scope),
+            self.harness.iter().map(|h| quote(h)).collect::<Vec<_>>().join(",")
         )
     }
 }
@@ -469,6 +474,8 @@ pub struct Ran {
     pub new_rows: Vec<String>,
     /// What a driver with its own evidence check found of the link's own run (`Evidence::Driver`).
     pub evident: bool,
+    /// The harness input lines the link's steps logged, in order, also when a step stopped.
+    pub harness: Vec<String>,
 }
 
 /// The rows of the 14 links, from what the drivers did (`ran[i]` for link `i`, `None` for a link not run) and the
@@ -489,6 +496,7 @@ pub fn rows(ran: &[Option<Ran>], grading: Grading, evident: impl Fn(usize) -> bo
             error_lines: Vec::new(),
             stopped: false,
             scope: l.scope,
+            harness: Vec::new(),
         };
         if let Driver::None(why) = l.driver {
             row.result = Outcome::NotYet;
@@ -532,6 +540,7 @@ pub fn rows(ran: &[Option<Ran>], grading: Grading, evident: impl Fn(usize) -> bo
             Some(r) => {
                 row.steps = r.steps;
                 row.error_lines = r.error_lines;
+                row.harness = r.harness;
                 if let Some((result, stop)) = r.stop {
                     row.result = result;
                     row.stop = Some(stop);
@@ -622,6 +631,7 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         }
         let mut r = Ran::default();
         let rows_before: Vec<String> = run.row_ids().map(str::to_string).collect();
+        let log_before = run.world().vm.log.len();
         for step in LINKS[i].steps {
             let step = match bind(step, &bound) {
                 Ok(s) => s,
@@ -653,6 +663,12 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
                 bound.push((kind.to_string(), after_pawns - 1));
             }
         }
+        let log = &run.world().vm.log;
+        r.harness = log[log_before.min(log.len())..]
+            .iter()
+            .filter(|l| l.starts_with("harness input:"))
+            .cloned()
+            .collect();
         r.new_rows = new_ids(&rows_before, run.row_ids());
         if LINKS[i].steps.is_empty()
             && let Some(need) = LINKS[i].needs.first().and_then(|n| LINKS.iter().position(|l| l.name == *n))
