@@ -179,6 +179,15 @@ the argument of `OnSelectedTarget`'s event fire, after the two setter calls. No 
 verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-159; logs under
 ignored `local/p2/sbv/`.
 
+**IMPL-CARD-BODY-REST (2026-11-19, pc-hummer, on #521 at 83d4e909):** AI-assisted (Claude Code, Opus 5.5).
+`CacheWeaponCard`'s card order and displayed value in Off from NATIVE_CARD_BODY_REST.md (#532). `cargo test -p
+ow-inventory` card tests 38 passed / 0 failed; `cargo test --workspace --locked -j 4` 2,494 passed / 0 failed / 46
+ignored; `cargo clippy -p ow-inventory --all-targets` adds no warning in `equip/card`; `crate_edges_test.py` OK.
+Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #534 at 8fc0420b: ok 0 / NotYet 5 /
+error 9 of 14, the same rows as #534 alone. Link 8 passes 1 of 5 steps and stops at `init` on the unbound
+`WillowWeapon.RecomputeAttributeBaseValues()`, after the card. ctest and verify_packages not run (no C++ change). No
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
