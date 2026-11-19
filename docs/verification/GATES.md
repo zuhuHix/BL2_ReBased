@@ -157,15 +157,17 @@ for a world with no collision service, since the slice world installs none. The 
 and after. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-79; logs under ignored
 `local/p2/spawn-placement/`.
 **IMPL-LOGIN-STATUS (2026-11-19, zuhu, on main ebccbca):** AI-assisted (Claude Code, Opus 5.5).
+
+**IMPL-LOGIN-STATUS (2026-11-19, zuhu, rebased onto main 0235937):** AI-assisted (Claude Code, Opus 5.5).
 `GameEngine.GetOnlineSubsystem` (exclusive answers; a missing engine object is `NotYet { LayerAbsent }`, a subsystem
 no set-up initialised `NotYet { NotRead }`), `OnlineSubsystemSteamworks.GetLoginStatus` (section 4's rule with a
 set-up record, otherwise `NotYet { NotRead }`) and the four natives after it (each a named `NotYet { NotRead }`) bound
 by key in Off, from `NATIVE_LOGIN_STATUS.md` at a2d70e4; no preflight (open question 5). `cargo build --workspace`
 clean; `cargo test --workspace` 2,187 passed / 0 failed / 46 ignored (7 `world::online` tests, 1 new `ow-combat` run
 test). Installed Off `--slice-gate` strict 0/14/0, rows byte-identical before and after the four new bindings; link 1
-still stops at `maya:8` on the unbound
-`InitPlayerSkillTree` (0 of 2 steps), so the login path is proved by tests until decision 2026-11-19-88 lands.
-Decision 2026-11-19-95; logs under ignored `local/p2/login-status/`.
+still stops at `maya:8` on the unbound `InitPlayerSkillTree` (0 of 2 steps), so the login path is proved by tests until decision 2026-11-19-88 lands. **Review r1 of #479:** `cargo test --workspace`
+2,191 passed / 0 failed / 46 ignored (11 `world::online` tests); installed Off `--slice-gate` strict 0/14/0, rows
+byte-identical. Decision 2026-11-19-95; logs under ignored `local/p2/login-status/`.
 
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps

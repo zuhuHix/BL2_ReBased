@@ -72,3 +72,36 @@ check was loosened.
     record kept, and the pools stay.
 - **Not changed:** the note and its index rows, which sit on #474's branch and are left to their lane, and d2b6's
   skill-tree files.
+
+## Edits: review r1 of #479
+
+AI-assisted (Claude Code). Sol's r1 review (high) asked for five changes. All are in one fix commit:
+
+1. **`SetupInputDevices` marks its own refusal.** The controller's script `SetupInputDevices` is overridden in Off
+   (`override_script`), coded from section 6.3's steps:
+   - with a `WillowPlayerInput`, its native first; that refusal passes unchanged, since this function has written
+     nothing yet;
+   - then the clear of `InputContextSelector`;
+   - then `UpdateInputContext`, whose refusal is now terminal at this boundary: "stopped after partial writes: ",
+     kind and record kept, the clear left in place. The test asserts the exact prefix.
+2. **No class lookup for a non-game engine.** `GetOnlineSubsystem` walks the engine object's own class chain in the
+   layout table instead of `find_class`. So it loads nothing to answer None, and a class id the table did not make is
+   a data error. The test gives an engine object of a class from another package while `Engine.GameEngine` is not
+   loaded; it stays unloaded.
+3. **A non-Steamworks `PlayerInterface`.** For an initialised subsystem, `GetOnlineSubsystem` checks the receiver
+   held in `PlayerInterface`: a class not below `OnlineSubsystemSteamworks` gets `NotYet { NotRead }` naming that
+   class, before any dispatch. An empty interface or a Steamworks one gives the subsystem.
+   - **Why the check sits here and not at the dispatch:** the VM has no per-dispatch hook. Every `PlayerInterface`
+     dispatch on the login path asks this native for the subsystem first (sections 2, 5 and 6.2), and nothing on the
+     path writes that field in between.
+4. **`ServerChangeName` guards the resolved `ChangeName`.** The script is overridden in Off, coded from section 6.2:
+   - an empty name returns with no effects;
+   - no `WorldInfo` or no game info skips the call (the accessed-None answer);
+   - the base `GameInfo.ChangeName` runs as installed with `(Self, S, true)`;
+   - any other resolved declaration (an override, not read) is `NotYet { NotRead }` naming the game info's class,
+     before its body runs.
+5. **GATES.md** keeps both records after the rebase onto main.
+
+Of `SetupInputDevices`, `ServerChangeName` and `GameInfo.ChangeName`, only that each is
+script was checked in the installed packages (`--disasm` exit codes); no body was read, and the steps come from
+the note.

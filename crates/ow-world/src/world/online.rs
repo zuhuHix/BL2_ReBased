@@ -75,7 +75,109 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for &(key, what) in UNREAD {
         vm.register_native(key, Rc::new(move |_: &mut NativeCall<'_>| Err(unread(what))))?;
     }
+    override_if_script(vm, SETUP_INPUT_DEVICES, Rc::new(setup_input_devices))?;
+    override_if_script(vm, SERVER_CHANGE_NAME, Rc::new(server_change_name))
+}
+
+/// The controller's script `SetupInputDevices` (section 6.3), the boundary that owns the clear.
+pub const SETUP_INPUT_DEVICES: &str = "WillowGame.WillowPlayerController.SetupInputDevices";
+/// The controller's script `ServerChangeName` (section 6.2), the boundary of the game info's `ChangeName` dispatch.
+pub const SERVER_CHANGE_NAME: &str = "Engine.PlayerController.ServerChangeName";
+/// The base `GameInfo.ChangeName` (script, read by the note); an override was not read.
+pub const BASE_CHANGE_NAME: &str = "Engine.GameInfo.ChangeName";
+
+/// Overrides the script function at `path` in Off when the package set declares it as script; otherwise nothing.
+fn override_if_script(vm: &mut Vm, path: &str, f: ow_vm::api::NativeFn) -> Result<(), VmError> {
+    if let Ok(id) = vm.find_function(path)
+        && vm.function(id).is_some_and(|d| !d.is_native())
+    {
+        vm.override_script(path, f)?;
+    }
     Ok(())
+}
+
+/// The object property `name` of `o`; None when `o`'s class declares no such property or it holds None.
+fn object_prop(vm: &Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let Some(prop) = vm.space.prop(class, name) else {
+        return Ok(None);
+    };
+    Ok(match vm.space.read(o, prop.into())? {
+        Value::Object(v) | Value::Interface(v) => *v,
+        _ => None,
+    })
+}
+
+/// Calls the method `name` on `o`, resolved on its class and state; a class without one is a data error.
+fn call_method(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<Value, VmError> {
+    let (class, state) = {
+        let obj = vm.space.heap.get(o)?;
+        (obj.class, obj.state)
+    };
+    let f = vm.find_method(class, name, state)?.ok_or_else(|| bad(&format!("no {name} to call")))?;
+    Ok(vm.call(f, Some(o), args)?.ret)
+}
+
+/// `WillowPlayerController.SetupInputDevices` in Off, the note's section 6.3 in order (review r1 of #479, item 1):
+/// 1. with a `WillowPlayerInput` in `PlayerInput`, its native `SetupInputDevices`. Nothing was written yet by this
+///    function, so its refusal passes unchanged;
+/// 2. the clear of `InputContextSelector`, in either case;
+/// 3. `UpdateInputContext`, in either case. Its refusal comes after the clear, so it is terminal here: "stopped after
+///    partial writes: ", its kind and record kept, the clear left in place.
+fn setup_input_devices(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let this = c.this.ok_or_else(|| bad("SetupInputDevices without a controller"))?;
+    if let Some(input) = object_prop(c.vm, this, "PlayerInput")? {
+        let class = c.vm.space.heap.get(input)?.class;
+        if descends_from(c.vm, class, "WillowGame.WillowPlayerInput")? {
+            call_method(c.vm, input, "SetupInputDevices", vec![])?;
+        }
+    }
+    let class = c.vm.space.heap.get(this)?.class;
+    let prop = c.vm.space.prop(class, "InputContextSelector").ok_or_else(|| bad("no InputContextSelector"))?;
+    c.vm.space.write(this, ow_object::ids::PropAddr::scalar(prop), Value::Object(None))?;
+    call_method(c.vm, this, "UpdateInputContext", vec![]).map_err(crate::pools::after_partial_writes)?;
+    Ok(Value::None)
+}
+
+/// `PlayerController.ServerChangeName(S)` in Off, the note's section 6.2 (review r1 of #479, item 4): an empty name
+/// returns with no effects; with no `WorldInfo` or no game info, the call is skipped (the accessed-None answer).
+/// Otherwise the game info's `ChangeName` is resolved first: the base `GameInfo.ChangeName` runs as installed with
+/// `(Self, S, true)`, and an override (not read) is a named `NotYet { NotRead }` before its body runs.
+fn server_change_name(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let this = c.this.ok_or_else(|| bad("ServerChangeName without a controller"))?;
+    let name = match c.arg(0)? {
+        Value::Str(s) => s.clone(),
+        other => return Err(bad(&format!("ServerChangeName: S holds a {}, not a string", other.kind_name()))),
+    };
+    if name.is_empty() {
+        return Ok(Value::None);
+    }
+    let Some(world) = object_prop(c.vm, this, "WorldInfo")? else {
+        return Ok(Value::None);
+    };
+    let Some(game) = object_prop(c.vm, world, "Game")? else {
+        return Ok(Value::None);
+    };
+    let (class, state) = {
+        let g = c.vm.space.heap.get(game)?;
+        (g.class, g.state)
+    };
+    let resolved = c.vm.find_method(class, "ChangeName", state)?;
+    let base = c.vm.find_function(BASE_CHANGE_NAME).ok();
+    match resolved {
+        Some(f) if Some(f) == base => {
+            c.vm.call(f, Some(game), vec![Value::Object(Some(this)), Value::Str(name), Value::Bool(true)])?;
+            Ok(Value::None)
+        }
+        _ => {
+            let path = c.vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_default();
+            Err(NotYet::not_read(
+                format!("PlayerController.ServerChangeName: the game info {path}'s ChangeName, an override not read (section 6.2, open question 3)"),
+                RECORD,
+            )
+            .into())
+        }
+    }
 }
 
 /// The natives after the login status that the note names but did not read (section 7), each bound in Off as its own
@@ -152,11 +254,9 @@ pub fn subsystem(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
     };
     let engine = engine.try_borrow().map_err(|_| VmError::ServiceBorrowed("EngineObject"))?.0;
     let class = vm.space.heap.get(engine)?.class;
-    let is_game_engine = match vm.find_class(GAME_ENGINE) {
-        Ok(game) => vm.space.classes.is_child_of(class, game),
-        Err(_) => false,
-    };
-    if !is_game_engine {
+    // The engine object's own class chain, read from the layout table: no class is looked up or loaded to answer
+    // None (review r1 of #479, item 2).
+    if !descends_from(vm, class, GAME_ENGINE)? {
         return Ok(None);
     }
     let Some(prop) = vm.space.prop(class, "OnlineSubsystem") else {
@@ -166,13 +266,55 @@ pub fn subsystem(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
         Value::Object(slot) => *slot,
         other => return Err(bad(&format!("GameEngine.OnlineSubsystem holds a {}, not an object", other.kind_name()))),
     };
-    match sub {
-        Some(s) if !set_up(vm, s, |r| &r.interfaces)? => Err(unread(
+    let Some(s) = sub else {
+        return Ok(None);
+    };
+    if !set_up(vm, s, |r| &r.interfaces)? {
+        return Err(unread(
             "GameEngine.GetOnlineSubsystem: the online subsystem's player interface initialisation, which no set-up \
              step recorded (section 7, open question 2); an empty PlayerInterface is not taken as status 0",
-        )),
-        other => Ok(other),
+        ));
     }
+    // The receiver every `PlayerInterface` dispatch on the login path will reach (review r1 of #479, item 3). Each
+    // such dispatch first asks this native for the subsystem, and nothing on the path writes the field in between
+    // (sections 2, 5 and 6.2), so the receiver is checked here: only the Steamworks rule was read.
+    let receiver = match field(vm, s, "PlayerInterface")? {
+        Value::Object(o) | Value::Interface(o) => o,
+        other => return Err(bad(&format!("OnlineSubsystem.PlayerInterface holds a {}", other.kind_name()))),
+    };
+    if let Some(r) = receiver {
+        let class = vm.space.heap.get(r)?.class;
+        if !descends_from(vm, class, STEAMWORKS)? {
+            let name = vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_default();
+            return Err(NotYet::not_read(
+                format!(
+                    "GameEngine.GetOnlineSubsystem: a PlayerInterface of class {name}, whose GetLoginStatus was not \
+                     read (section 7; only the Steamworks rule was read)"
+                ),
+                RECORD,
+            )
+            .into());
+        }
+    }
+    Ok(Some(s))
+}
+
+/// The Steamworks subsystem class, the one receiver whose `GetLoginStatus` the note read.
+pub const STEAMWORKS: &str = "OnlineSubsystemSteamworks.OnlineSubsystemSteamworks";
+
+/// Whether `class`, or a class above it, has the path `path`, walking the chain already in the layout table. No class
+/// is looked up or loaded. A class id the table did not make is a data error.
+fn descends_from(vm: &Vm, class: ow_object::ids::ClassId, path: &str) -> Result<bool, VmError> {
+    let target = ow_core::ObjectPath::parse(path).map_err(|_| bad(&format!("{path} is not an object path")))?;
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        let layout = vm.space.classes.get_layout(c).ok_or_else(|| bad("a class id the layout table did not make"))?;
+        if *layout.path() == target {
+            return Ok(true);
+        }
+        cursor = layout.super_class();
+    }
+    Ok(false)
 }
 
 fn bad(reason: &str) -> VmError {

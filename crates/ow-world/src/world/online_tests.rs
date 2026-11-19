@@ -12,7 +12,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_package::testkit::script::{Asm, FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::script::{Asm, FunctionIds, FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{NativePack, Vm};
 use ow_vm::error::VmError;
 
@@ -28,14 +28,42 @@ const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 fn engine() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty", "StrProperty", "BoolProperty"]);
     let object = t.class("Object", 0);
-    t.function(object, "SaveConfig", &[], None, &[], &FunctionSpec::new(NATIVE, "SaveConfig"), |_| None);
+    let save = t.function(object, "SaveConfig", &[], None, &[], &FunctionSpec::new(NATIVE, "SaveConfig"), |_| None).function;
     let pc = t.class("PlayerController", object);
     let params = [Param::new("Str", "NewOption"), Param::new("Str", "NewValue"), Param::new("Bool", "bSaveDefault")];
     t.function(pc, "UpdateURL", &params, None, &[], &FunctionSpec::new(NATIVE, "UpdateURL"), |_| None);
+    // The name change (section 6.2): the controller's WorldInfo, the WorldInfo's Game, a script ServerChangeName (its
+    // body is replaced in Off), the base GameInfo.ChangeName whose invented body calls SaveConfig (so a test sees it
+    // ran), and ToyGameInfo's override, whose body would call SaveConfig too.
+    let world = t.class("WorldInfo", object);
+    let info = t.class("GameInfo", object);
+    t.prop("Object", world, "Game", 0, info);
+    t.prop("Object", pc, "WorldInfo", 0, world);
+    let spec = FunctionSpec::new(SCRIPT, "ServerChangeName");
+    t.function(pc, "ServerChangeName", &[Param::new("Str", "S")], None, &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
+    let other = Param { kind: "Object".into(), name: "Other".into(), flags: 0, type_ref: object };
+    let change = [other, Param::new("Str", "S"), Param::new("Bool", "bNameChange")];
+    let saves = |_: &FunctionIds| {
+        let mut a = Asm::new();
+        a.stmt().final_function(save, |_| {});
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    };
+    t.function(info, "ChangeName", &change, None, &[], &FunctionSpec::new(SCRIPT, "ChangeName"), saves);
+    let toy_info = t.class("ToyGameInfo", info);
+    t.function(toy_info, "ChangeName", &change, None, &[], &FunctionSpec::new(SCRIPT, "ChangeName"), saves);
+    t.class("ToyInterface", object);
     let base = t.class("Engine", object);
     let game = t.class("GameEngine", base);
     t.prop("Object", game, "OnlineSubsystem", 0, object);
-    t.class("ToySubsystem", object);
+    let toy_sub = t.class("ToySubsystem", object);
+    t.prop("Object", toy_sub, "PlayerInterface", 0, object);
     let spec = FunctionSpec::new(NATIVE | STATIC, "GetOnlineSubsystem");
     let get = t.function(game, "GetOnlineSubsystem", &[], Some(("Object", object)), &[], &spec, |_| None).function;
     t.function(game, "Probe", &[], Some(("Object", object)), &[], &FunctionSpec::new(SCRIPT, "Probe"), |_| {
@@ -50,9 +78,11 @@ fn engine() -> Vec<u8> {
 /// `OnlineSubsystemSteamworks.upk`: the subsystem class, its two login state fields and its native
 /// `GetLoginStatus(LocalUserNum)`.
 fn steamworks() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "Function", "ByteProperty", "IntProperty"]);
-    let object = t.class("Object", 0);
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ByteProperty", "IntProperty", "ObjectProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
     let sub = t.class("OnlineSubsystemSteamworks", object);
+    t.prop("Object", sub, "PlayerInterface", 0, object);
     t.prop("Byte", sub, "LoggedInStatus", 0, 0);
     t.prop("Int", sub, "LoggedInPlayerNum", 0, 0);
     let spec = FunctionSpec::new(NATIVE, "GetLoginStatus");
@@ -62,8 +92,7 @@ fn steamworks() -> Vec<u8> {
 }
 
 /// `WillowGame.upk`: `WillowPlayerInput` with its native `SetupInputDevices`, and `WillowPlayerController` with its
-/// `InputContextSelector`, its native `UpdateInputContext` and a script `ToyInputTail` cut to the installed
-/// `SetupInputDevices` tail: clear `InputContextSelector`, then call `UpdateInputContext`.
+/// `InputContextSelector`, `PlayerInput`, native `UpdateInputContext` and script `SetupInputDevices`.
 fn willow() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty"]);
     let object = t.class("Object", 0);
@@ -71,17 +100,25 @@ fn willow() -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "SetupInputDevices");
     t.function(input, "SetupInputDevices", &[], None, &[], &spec, |_| None);
     let pc = t.class("WillowPlayerController", object);
-    let selector = t.prop("Object", pc, "InputContextSelector", 0, object);
+    t.prop("Object", pc, "InputContextSelector", 0, object);
+    t.prop("Object", pc, "PlayerInput", 0, object);
     let spec = FunctionSpec::new(NATIVE, "UpdateInputContext");
-    let update = t.function(pc, "UpdateInputContext", &[], None, &[], &spec, |_| None).function;
-    t.function(pc, "ToyInputTail", &[], None, &[], &FunctionSpec::new(SCRIPT, "ToyInputTail"), |_| {
+    t.function(pc, "UpdateInputContext", &[], None, &[], &spec, |_| None);
+    // The script the Off override replaces (its invented body is never run in Off).
+    t.function(pc, "SetupInputDevices", &[], None, &[], &FunctionSpec::new(SCRIPT, "SetupInputDevices"), |_| {
         let mut a = Asm::new();
-        a.stmt().raw(&[0x0F]).instance(selector).raw(&[0x2A]);
-        a.stmt().final_function(update, |_| {});
         a.stmt().return_nothing();
         a.end();
         Some(a)
     });
+    t.p.build()
+}
+
+/// `ToyEngines.upk`: an engine class of its own, not below `Engine.GameEngine`.
+fn engines() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let object = t.class("Object", 0);
+    t.class("ToyEngine", object);
     t.p.build()
 }
 
@@ -99,8 +136,9 @@ impl Drop for Toy {
 fn toy(mode: ParityMode, bind: bool) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-world-online-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, s, w) = (engine(), steamworks(), willow());
-    let files: [(&str, &[u8]); 3] = [("Engine.upk", &e), ("OnlineSubsystemSteamworks.upk", &s), ("WillowGame.upk", &w)];
+    let (e, s, w, n) = (engine(), steamworks(), willow(), engines());
+    let files: [(&str, &[u8]); 4] =
+        [("Engine.upk", &e), ("OnlineSubsystemSteamworks.upk", &s), ("WillowGame.upk", &w), ("ToyEngines.upk", &n)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, mode).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     if bind {
@@ -258,30 +296,108 @@ fn the_pack_binds_both_in_off_and_neither_in_reference() {
     }
 }
 
-/// The natives after the login status: each its own named `NotYet { NotRead }` when reached, in the script's order.
-/// The toy tail clears `InputContextSelector` before `UpdateInputContext` refuses, and the clear stays (no rollback;
-/// the caller marks the stop terminal). `SetupInputDevices`, `UpdateURL` and `SaveConfig` refuse by themselves.
-#[test]
-fn the_natives_after_the_login_status_are_each_named_not_read() {
-    let mut t = toy(ParityMode::Off, true);
-    let not_read = |r: Result<Value, VmError>, name: &str| match r {
+fn not_read(r: Result<Value, VmError>, starts: &str) {
+    match r {
         Err(VmError::NotYet(n)) => {
-            assert_eq!(n.missing, Missing::NotRead, "{name}");
+            assert_eq!(n.missing, Missing::NotRead, "{n:?}");
             assert_eq!(n.record, RECORD);
-            assert!(n.what.starts_with(name), "{}", n.what);
+            assert!(n.what.starts_with(starts), "expected {starts:?}: {}", n.what);
         }
-        other => panic!("{name}: {other:?}"),
-    };
+        other => panic!("expected NotYet(NotRead) starting {starts:?}, got {other:?}"),
+    }
+}
+
+/// `UpdateURL` and `SaveConfig` are each a named `NotYet { NotRead }` when reached.
+#[test]
+fn the_url_and_config_natives_are_each_named_not_read() {
+    let mut t = toy(ParityMode::Off, true);
+    let pc = t.make("Engine.PlayerController");
+    let args = vec![Value::Str("Name".into()), Value::Str("Maya".into()), Value::Bool(true)];
+    not_read(t.call("Engine.PlayerController.UpdateURL", Some(pc), args), "PlayerController.UpdateURL");
+    not_read(t.call("Engine.Object.SaveConfig", Some(pc), vec![]), "Object.SaveConfig");
+}
+
+fn selector(t: &mut Toy, pc: ObjRef) -> Value {
+    let c = t.vm.space.heap.get(pc).unwrap().class;
+    let p = t.vm.space.prop(c, "InputContextSelector").unwrap();
+    t.vm.space.read(pc, p.into()).unwrap().clone()
+}
+
+/// Review r1 of #479, item 1: `SetupInputDevices` in Off. Without a player input it clears `InputContextSelector`,
+/// then `UpdateInputContext` refuses: terminal at this boundary, with the exact prefix, its kind and record kept, and
+/// the clear in place. With a `WillowPlayerInput`, its native refuses first, before the clear, unmarked.
+#[test]
+fn setup_input_devices_marks_the_refusal_after_its_clear() {
+    let mut t = toy(ParityMode::Off, true);
     let pc = t.make("WillowGame.WillowPlayerController");
     let marker = t.make("WillowGame.WillowPlayerInput");
     t.set(pc, "InputContextSelector", Value::Object(Some(marker)));
-    not_read(t.call("WillowGame.WillowPlayerController.ToyInputTail", Some(pc), vec![]), "WillowPlayerController.UpdateInputContext");
-    let c = t.vm.space.heap.get(pc).unwrap().class;
-    let p = t.vm.space.prop(c, "InputContextSelector").unwrap();
-    assert_eq!(*t.vm.space.read(pc, p.into()).unwrap(), Value::Object(None), "the clear came first and stays");
-    not_read(t.call("WillowGame.WillowPlayerInput.SetupInputDevices", Some(marker), vec![]), "WillowPlayerInput.SetupInputDevices");
-    let epc = t.make("Engine.PlayerController");
-    let args = vec![Value::Str("Name".into()), Value::Str("Maya".into()), Value::Bool(true)];
-    not_read(t.call("Engine.PlayerController.UpdateURL", Some(epc), args), "PlayerController.UpdateURL");
-    not_read(t.call("Engine.Object.SaveConfig", Some(epc), vec![]), "Object.SaveConfig");
+    not_read(
+        t.call(SETUP_INPUT_DEVICES, Some(pc), vec![]),
+        "stopped after partial writes: WillowPlayerController.UpdateInputContext",
+    );
+    assert_eq!(selector(&mut t, pc), Value::Object(None), "the clear came first and stays");
+
+    t.set(pc, "InputContextSelector", Value::Object(Some(marker)));
+    t.set(pc, "PlayerInput", Value::Object(Some(marker)));
+    not_read(t.call(SETUP_INPUT_DEVICES, Some(pc), vec![]), "WillowPlayerInput.SetupInputDevices");
+    assert_eq!(selector(&mut t, pc), Value::Object(Some(marker)), "refused before the clear");
+}
+
+/// Review r1 of #479, item 2: an engine object of a class that is not below `GameEngine` answers None while
+/// `Engine.GameEngine` is not loaded, and the answer loads nothing.
+#[test]
+fn a_non_game_engine_answers_none_without_loading_game_engine() {
+    let mut t = toy(ParityMode::Off, false);
+    let e = t.make("ToyEngines.ToyEngine");
+    t.vm.add_service(EngineObject(e)).unwrap();
+    assert!(t.vm.space.classes.by_path(GAME_ENGINE).is_none(), "GameEngine is not loaded");
+    let classes = t.vm.space.classes.len();
+    assert_eq!(subsystem(&mut t.vm).unwrap(), None);
+    assert!(t.vm.space.classes.by_path(GAME_ENGINE).is_none(), "still not loaded");
+    assert_eq!(t.vm.space.classes.len(), classes, "no class loaded");
+}
+
+/// Review r1 of #479, item 3: an initialised subsystem's `PlayerInterface` receiver. Steamworks, or an empty
+/// interface, gives the subsystem; another class is a named `NotYet { NotRead }` naming it, before any dispatch.
+#[test]
+fn a_non_steamworks_player_interface_is_named_not_read() {
+    let mut t = toy(ParityMode::Off, true);
+    let sub = t.make("Engine.ToySubsystem");
+    t.engine("Engine.GameEngine", Some(Value::Object(Some(sub))));
+    t.vm.add_service(OnlineSetUp { interfaces: vec![sub], login_state: vec![] }).unwrap();
+    assert_eq!(subsystem(&mut t.vm).unwrap(), Some(sub), "an empty interface, modelled as empty");
+    let steam = t.make("OnlineSubsystemSteamworks.OnlineSubsystemSteamworks");
+    t.set(sub, "PlayerInterface", Value::Object(Some(steam)));
+    assert_eq!(subsystem(&mut t.vm).unwrap(), Some(sub), "the Steamworks receiver");
+    let other = t.make("Engine.ToyInterface");
+    t.set(sub, "PlayerInterface", Value::Object(Some(other)));
+    match subsystem(&mut t.vm) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.contains("Engine.ToyInterface"), "{}", n.what);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review r1 of #479, item 4: `ServerChangeName` in Off. An empty name, no `WorldInfo` and no game info return with
+/// no effects; the base `GameInfo.ChangeName` runs as installed (its invented body reaches `SaveConfig`); an override
+/// is a named `NotYet { NotRead }` before its body runs.
+#[test]
+fn server_change_name_guards_the_resolved_change_name() {
+    let mut t = toy(ParityMode::Off, true);
+    let pc = t.make("Engine.PlayerController");
+    let name = |s: &str| vec![Value::Str(s.into())];
+    assert_eq!(t.call(SERVER_CHANGE_NAME, Some(pc), name("")).unwrap(), Value::None, "empty name");
+    assert_eq!(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")).unwrap(), Value::None, "no WorldInfo");
+    let world = t.make("Engine.WorldInfo");
+    t.set(pc, "WorldInfo", Value::Object(Some(world)));
+    assert_eq!(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")).unwrap(), Value::None, "no game info");
+    let base = t.make("Engine.GameInfo");
+    t.set(world, "Game", Value::Object(Some(base)));
+    not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "Object.SaveConfig");
+    let over = t.make("Engine.ToyGameInfo");
+    t.set(world, "Game", Value::Object(Some(over)));
+    not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "PlayerController.ServerChangeName: the game info Engine.ToyGameInfo");
 }
