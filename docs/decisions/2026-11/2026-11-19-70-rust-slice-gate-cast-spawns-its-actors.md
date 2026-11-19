@@ -32,3 +32,15 @@ relaxed.
     from the class defaults gives each actor its own copy of the class default's component, outered to it, and the
     class default keeps its own.
   - `ow-cli`'s slice-gate tests pin link 9's two steps.
+- **Review r2 of #454.**
+  - **Committed spawns** (item 1). `phaselock_actors` counts the spawns it has committed. A `NotYet` after one has
+    succeeded is marked "stopped after partial writes", its kind and record kept. The earlier actor stays registered,
+    nothing is rolled back, and other errors pass unchanged.
+  - **Typed grading** (item 2). Link 9's driver (`drive_phaselock`) grades a step from its typed error: a
+    `VmError::NotYet` is the not-yet stop, whatever its text. Any other spawn error is a hard stop under both gradings,
+    because the cast cannot run without its actors. A cast error follows the grading as any step's does.
+  - **Tests** (item 3). `slice_gate_driver_tests.rs`, on invented packages, 4 tests:
+    - all three actors spawned and registered, each with its own component;
+    - a refusal before the first spawn: an unmarked `NotYet`, no cast;
+    - a `NotYet` after a committed spawn: marked, its kind kept, the pawn still registered, no cast;
+    - an ordinary spawn error is a hard stop in both gradings.

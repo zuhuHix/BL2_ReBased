@@ -922,23 +922,51 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
-    // The cast's actors are spawned by the world first (decision 2026-11-19-70), then the cast runs on them.
+    drive_phaselock(&mut r, &mut world.vm, grading, &PHASELOCK_ACTORS, phaselock_cast);
+    ran[i] = Some(r);
+}
+
+/// The classes of the cast's actors, in spawn order: Maya's pawn, her controller, the target.
+pub const PHASELOCK_ACTORS: [&str; 3] = ["WillowGame.WillowPlayerPawn", "WillowGame.WillowPlayerController", "WillowGame.WillowAIPawn"];
+
+/// Link 9's two steps (decision 2026-11-19-70; review r2 of #454): the world spawns the cast's actors, then `cast`
+/// runs on them. Each step's failure is graded from its typed error: a `NotYet` (the `VmError::NotYet` variant, not
+/// its text) is the link's not-yet stop. Any other error is a hard stop, under both gradings, when it comes from the
+/// spawn, because the cast cannot run without its actors; from the cast, an error follows the grading as any step's
+/// does.
+pub fn drive_phaselock(
+    r: &mut Ran,
+    vm: &mut ow_vm::api::Vm,
+    grading: Grading,
+    classes: &[&str],
+    cast: impl FnOnce(&mut ow_vm::api::Vm, CastActors) -> Result<(), ow_vm::error::VmError>,
+) {
     r.steps.push("spawn".into());
-    let actors = match phaselock_actors(&mut world.vm) {
+    let actors = match phaselock_actors(vm, classes) {
         Ok(a) => a,
         Err(e) => {
-            let text = ow_combat::hit::access::error_text(&e);
-            step_error(&mut r, "spawn", &text, grading);
-            ran[i] = Some(r);
+            r.stop = Some(typed_stop("spawn", &e));
             return;
         }
     };
     r.steps.push("cast".into());
-    if let Err(e) = phaselock_cast(&mut world.vm, actors) {
-        let text = ow_combat::hit::access::error_text(&e);
-        step_error(&mut r, "cast", &text, grading);
+    if let Err(e) = cast(vm, actors) {
+        let (outcome, stop) = typed_stop("cast", &e);
+        if grading == Grading::Strict || outcome == Outcome::NotYet {
+            r.stop = Some((outcome, stop));
+        } else {
+            r.error_lines.push(("cast".to_string(), stop.text));
+        }
     }
-    ran[i] = Some(r);
+}
+
+/// A step's stop from its typed error: the stop's fields as `classify` reads them from the text, the outcome from the
+/// variant (`VmError::NotYet` is not yet; anything else an error).
+fn typed_stop(step: &str, e: &ow_vm::error::VmError) -> (Outcome, Stop) {
+    let text = ow_combat::hit::access::error_text(e);
+    let (_, stop) = classify(step, &text);
+    let outcome = if matches!(e, ow_vm::error::VmError::NotYet(_)) { Outcome::NotYet } else { Outcome::Error };
+    (outcome, stop)
 }
 
 /// Link 2 (module documentation): Sanctuary loaded and its collision built (`load`), Maya at its first player start
@@ -1068,6 +1096,9 @@ fn script_error(message: String) -> ow_vm::error::VmError {
     }
 }
 
+/// The mark of a failure after state was written (the behavior walk's, which the slice commands stop on).
+pub use ow_behavior::kernel::run::PARTIAL_WRITES;
+
 /// The cast's three actors: Maya's pawn, her controller, the target.
 type CastActors = (Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>);
 
@@ -1092,25 +1123,44 @@ fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<(), ow_
     Ok(())
 }
 
-/// The cast's actors (lane LINK-9-CAST-SPAWN, decision 2026-11-19-70): Maya's pawn, her controller and the target, each
-/// spawned through the world's own spawn (`ow_world::actors::spawn`, the level's `WorldInfo` as the spawner, a plain
-/// request: no template, no owner, the spawner's place), so each actor gets its own copy of its components (decision
-/// 2026-11-19-44) as a spawned actor does. Nothing is made by hand. A spawn the world refuses (`None`) is a typed error;
-/// a rule the spawn has not read is its own `NotYet`, which is the cast's stop.
-pub fn phaselock_actors(vm: &mut ow_vm::api::Vm) -> Result<CastActors, ow_vm::error::VmError> {
+/// The cast's actors (lane LINK-9-CAST-SPAWN, decision 2026-11-19-70): one actor of each of `classes` (three: Maya's
+/// pawn, her controller and the target), each spawned through the world's own spawn (`ow_world::actors::spawn`, the
+/// level's `WorldInfo` as the spawner, a plain request: no template, no owner, the spawner's place), so each actor gets
+/// its own copy of its components (decision 2026-11-19-44) as a spawned actor does. Nothing is made by hand. A spawn
+/// the world refuses (`None`) is a typed error; a rule the spawn has not read is its own `NotYet`.
+///
+/// **After a committed spawn** (review r2 of #454): an actor spawned before a later failure stays registered in the
+/// world, so a later `NotYet` is marked "stopped after partial writes", its kind and record kept. Other errors pass
+/// unchanged; nothing is rolled back.
+pub fn phaselock_actors(vm: &mut ow_vm::api::Vm, classes: &[&str]) -> Result<CastActors, ow_vm::error::VmError> {
     let spawner = ow_world::actors::actors_of(vm)?
         .try_borrow()
         .map_err(|_| ow_vm::error::VmError::ServiceBorrowed("Actors"))?
         .world_info()
         .ok_or_else(|| script_error("the cast's world has no WorldInfo to spawn from".into()))?;
-    let mut spawn = |class: &str| -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
-        let c = vm.find_class(class)?;
-        let made = ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(c)))?;
-        made.map(Some).ok_or_else(|| script_error(format!("the world's spawn refused a {class}")))
+    let [pawn_class, controller_class, target_class] = classes else {
+        return Err(script_error(format!("the cast needs three actor classes, not {}", classes.len())));
     };
-    let pawn = spawn("WillowGame.WillowPlayerPawn")?;
-    let controller = spawn("WillowGame.WillowPlayerController")?;
-    let target = spawn("WillowGame.WillowAIPawn")?;
+    let mut committed = 0usize;
+    let mut spawn = |class: &str| -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
+        let made = vm
+            .find_class(class)
+            .and_then(|c| ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(c))))
+            .and_then(|made| made.ok_or_else(|| script_error(format!("the world's spawn refused a {class}"))));
+        match made {
+            Ok(actor) => {
+                committed += 1;
+                Ok(Some(actor))
+            }
+            Err(ow_vm::error::VmError::NotYet(n)) if committed > 0 && !n.what.contains(PARTIAL_WRITES) => {
+                Err(ow_core::NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into())
+            }
+            Err(e) => Err(e),
+        }
+    };
+    let pawn = spawn(pawn_class)?;
+    let controller = spawn(controller_class)?;
+    let target = spawn(target_class)?;
     Ok((pawn, controller, target))
 }
 
@@ -1178,3 +1228,7 @@ pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
 #[cfg(test)]
 #[path = "slice_gate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "slice_gate_driver_tests.rs"]
+mod driver_tests;
