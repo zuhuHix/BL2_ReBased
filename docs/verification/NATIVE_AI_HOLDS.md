@@ -61,12 +61,12 @@ serve it, but whether it replaces their virtual functions was not read: the tool
 function table.
 
 *Read 2026-11-19 (lane LINK-1-NEXT, decision 2026-11-19-31; analyst only, the rules stay `NotYet` until implemented):*
-**`WillowAIComponent` keeps the base routines for the target, movement, demigod, god and dialog kinds** (high). Its own
-function table, read from its class registration's constructor, was compared kind by kind with `AIComponent`'s: each kind's
-three script natives (`Hold<Kind>`, `Release<Kind>`, `<Kind>OnHold`) reach the same routines in both classes. Only the base
-kind (`Hold`, `Release`, `OnHold`, which `WillowAIComponent` declares itself) is replaced; that replacement was not read. So
-on a bullymong's or the dummy's component the demigod, god, movement and dialog lists follow the rule above unchanged, and
-the hit's `DemigodOnHold` is the base answer (any entry in `DemigodHolds`).
+**`WillowAIComponent` uses the same hold behaviour as `AIComponent` for the target, movement, demigod, god and dialog
+kinds (all three natives of each)** (high); only the base kind (`Hold`, `Release`, `OnHold`), which it declares itself,
+behaves differently, and that behaviour was not read. So on a bullymong's or the dummy's component the demigod, god, movement
+and dialog lists follow the rule above unchanged, and the hit's `DemigodOnHold` is the base answer (any entry in
+`DemigodHolds`). The target kind (Type 1) follows NATIVE_AI_AWARENESS.md's rule; only Type 0 (base) stays `NotYet` on a
+`WillowAIComponent`.
 
 - **Live confirmation:** with bl-sdk, hook `Behavior_AIHold.ApplyBehaviorToContext` on the Fire dummy and read the
   dummy's component `DemigodHolds` before and after `Behavior_AIHold_59` (one entry, `Safe` and the context, expected);

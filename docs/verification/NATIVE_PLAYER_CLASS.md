@@ -46,13 +46,16 @@ reads where that comes from, and the two natives on the way that had no note.
      `RestartPlayer(Self)` (script) runs with its `bRestartLevel` set around the call; when the controller then has a pawn,
      the replication info's save flag is handled, `ClientSetHUD` gets the game info's `HUDType` and
      `PendingClassSwitchPawnArchetype` is cleared; with no pawn after the restart, `RetryClassSwitch` is timed for 0.1 s;
-  4. **not found**, and no load already pending: `bLoadingCharacterPackageForClassSwitch` is set and
-     `LoadPlayerPawnDataAsync(PawnArchetypePath, Self, PlayerClass, Self, 0, 0.0, 'SwitchPlayerClass')` (section 3) is asked
-     for it.
+  4. **not found**, and no load already pending: `bLoadingCharacterPackageForClassSwitch` is set and the function asks the
+     pawn data manager (section 3) to load the class's pawn archetype, with the controller as context and instigator, the
+     class as payload, zero for the int and float, and `SwitchPlayerClass` as the event name. **This path arms no retry
+     timer**: the only timer in `SwitchPlayerClass` is step 3's (an archetype found but no pawn after the restart).
 - **The load's report** reaches the controller's script `RunStreamingDataEvent` (`IStreamingDataEvent`): for the event
   `SwitchPlayerClass` (and for `RestartPlayerAfterLogin` and `ClientApplySaveGame`) it calls `SetPendingClassSwitch(class,
   loaded pawn archetype)`, which only stores both into `PendingClassSwitchDefinition` and `PendingClassSwitchPawnArchetype`.
-  The retry timer then calls `SwitchPlayerClass(PlayerClass)` again, which now finds the archetype loaded.
+  **What carries the switch on from there is not read** (UNVERIFIED, under "Not read"): no `WillowGame` script reads those
+  two fields. Each `SwitchPlayerClass` call looks the archetype up again (step 2); it does not read
+  `PendingClassSwitchPawnArchetype`, only clears it after a switch that gave the controller a pawn.
 
 ## 2. `GBXDefinition.GetDefinition(DefinitionClass, DefinitionName)` (native, static)
 
@@ -72,15 +75,12 @@ For the implementer: in Off, "loaded" can be the definition store's objects; whe
 ## 3. `WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync(...)` (native)
 
 Parameters from the package, in order: `PawnDataPath` (string), `PlayerContext`, `Payload`, `Instigator` (objects),
-`IntParam` (int), `FloatParam` (float), `CallbackCustomEventName` (name); no result. The script native passes all seven to one
-virtual of the manager, read in the manager's own function table (from its class registration's constructor). In own words
-(medium):
+`IntParam` (int), `FloatParam` (float), `CallbackCustomEventName` (name); no result. The script native hands all seven values to the
+manager. In own words (medium):
 
 1. The package part of `PawnDataPath` is the text before the first `.` (none when the path has no `.`).
-2. The manager looks for the object already loaded at the path: the same routine `FindAlreadyLoadedObject` uses (high: the
-   two reach one slot of the manager).
-3. **Found**: the report is sent at once. When `PlayerContext` implements `IStreamingDataEvent` (high: the interface class is
-   named by its registration), its `RunStreamingDataEvent` gets `CallbackCustomEventName`, `Payload` (as the event's
+2. The manager looks for the object already loaded at the path: the same lookup `FindAlreadyLoadedObject` does (high).
+3. **Found**: the report is sent at once. When `PlayerContext` implements `IStreamingDataEvent` (high), its `RunStreamingDataEvent` gets `CallbackCustomEventName`, `Payload` (as the event's
    instigator), the found object (as the other participant), `IntParam` and `FloatParam`. `Instigator` is not passed. A
    context without the interface gets no report.
 4. **Not found, with a package part**: a request holding all seven values is kept. Under one engine flag (not identified)
@@ -95,6 +95,9 @@ For the slice, when Maya's pawn archetype is already loaded, step 3 applies and 
 - The fixed text of `GetDefinition`'s retry, and whether the engine's "load by name" there can fail silently.
 - The engine flag of section 3 step 4 and the queue's processing (the asynchronous report).
 - Where the controller's `ClientApplySaveGame` runs on a fresh start (the login path; NATIVE_MAP_LOAD.md section 4).
+- What continues a class switch after the asynchronous report stores `PendingClassSwitchDefinition` and
+  `PendingClassSwitchPawnArchetype` (no `WillowGame` script reads them; the reader is presumably native or in another
+  package): UNVERIFIED.
 
 ## Live confirmation (bl-sdk)
 
