@@ -1298,3 +1298,18 @@ fn the_binding_rule_table() {
     assert_eq!(payload_binding("BVAR_Vector", "BVAR_DirectionVector").unwrap_err().missing, Missing::NotRead);
     assert_eq!(payload_binding("BVAR_Object", "BVAR_NamedKismetVariable").unwrap_err().missing, Missing::NotRead);
 }
+
+/// Review r1 of #555, item 1 (the hub's ruling): the existing object-payload route (`fire_event`) keeps its rule in both
+/// modes. An element binds into the object variables its link targets, and an Int or named Kismet target is skipped
+/// silently, with no refusal.
+#[test]
+fn the_object_payload_route_still_skips_other_targets() {
+    let mut env = Env::of(&parameters_spec());
+    let mut p = env.provider("P");
+    let (maya, other) = (toy_object(&mut env, "Maya"), toy_object(&mut env, "Other"));
+    p.fire_event(&mut env.vm, "OnSelectedTarget", &DetMap::new(), -1, &[Some(maya), None, Some(other), Some(other)])
+        .unwrap();
+    assert_eq!(p.variables("S")[0].live, Some(maya));
+    assert_eq!(p.variables("S")[1].live, None);
+    assert_eq!(p.event_trigger_count("OnSelectedTarget"), 1);
+}

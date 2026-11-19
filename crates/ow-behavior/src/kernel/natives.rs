@@ -565,8 +565,10 @@ fn kernel_rule(c: &mut NativeCall<'_>, native: &'static str, pid: i32) -> Result
                     )
                     .into());
                 }
-                let elements = parameters(c.vm, c.arg(4)?.clone())?;
+                // The provider's slot first: the array is decoded (which reads the enum through the store) only when
+                // something would fire (review r1 of #555), so a call that fires nothing loads nothing.
                 if let Some(slot) = registered(c, pid)? {
+                    let elements = parameters(c.vm, c.arg(4)?.clone())?;
                     lend(c.vm, pid, slot, |vm, p| {
                         // The preflight reads only; the firing follows, with no new refusal of its own.
                         p.check_payload(&name, &elements).map_err(to_vm)?;

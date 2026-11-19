@@ -23,7 +23,7 @@ use ow_vm::api::{FunctionDecl, NativePack, StubPolicy, Vm};
 use ow_vm::error::VmError;
 
 use super::*;
-use crate::kernel::fixtures::{Seq, Spec, beh, ev, install, provider_package};
+use crate::kernel::fixtures::{Ev, Seq, Spec, VLink, Word, beh, ev, install, provider_package};
 use crate::registry::{self, Handler};
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -32,6 +32,73 @@ const PROVIDER: &str = "ToyKernelProvider";
 const CONDITIONAL: &str = "ToyConditionalProvider";
 const FAILING: &str = "ToyFailingProvider";
 const DELAYED: &str = "ToyDelayedProvider";
+const PARAMS: &str = "ToyParamsProvider";
+const REFUSING: &str = "ToyRefusingProvider";
+
+/// Two enabled sequences with `OnSelectedTarget` (review r1 of #555, item 2). `S` has two open entries of it: the
+/// first binds connections 0 and 1 into the object variables `Siren` and `Target`, then runs `A`; the second binds
+/// connection 0 into `Siren2`, then runs `A2`. `T` binds connection 0 into its own `Siren`, then runs `C`.
+fn params() -> Spec {
+    Spec::new(
+        PARAMS,
+        vec![
+            Seq {
+                name: "S",
+                enabled_on_spawn: Some(true),
+                events: vec![
+                    Ev { vars: (0, 2), ..ev("OnSelectedTarget", (0, 1)) },
+                    Ev { vars: (2, 1), ..ev("OnSelectedTarget", (1, 1)) },
+                ],
+                behaviors: vec![beh("A", "Behavior_ToySame", (0, 0)), beh("A2", "Behavior_ToySame", (0, 0))],
+                links: vec![(0, -1, 0.0), (1, -1, 0.0)],
+                variables: vec![("Siren", "BVAR_Object"), ("Target", "BVAR_Object"), ("Siren2", "BVAR_Object")],
+                vlinks: vec![
+                    VLink("SkillInstigator", "BVARLINK_Output", 0, (0, 1)),
+                    VLink("SkillTarget", "BVARLINK_Output", 1, (1, 1)),
+                    VLink("Again", "BVARLINK_Output", 0, (2, 1)),
+                ],
+                linked: vec![0, 1, 2],
+                ..Seq::default()
+            },
+            Seq {
+                name: "T",
+                enabled_on_spawn: Some(true),
+                events: vec![Ev { vars: (0, 1), ..ev("OnSelectedTarget", (0, 1)) }],
+                behaviors: vec![beh("C", "Behavior_ToySame", (0, 0))],
+                links: vec![(0, -1, 0.0)],
+                variables: vec![("Siren", "BVAR_Object")],
+                vlinks: vec![VLink("SkillInstigator", "BVARLINK_Output", 0, (0, 1))],
+                linked: vec![0],
+                ..Seq::default()
+            },
+        ],
+        vec![Word::I(0), Word::I(0), Word::I(0), Word::I(0)],
+    )
+}
+
+/// One enabled sequence `R` whose `OnSelectedTarget` binds connection 0 into the object variable `Siren`, 1 into the
+/// Int variable `N` and 2 into the named Kismet variable `Dummy`, then runs `R0`.
+fn refusing() -> Spec {
+    Spec::new(
+        REFUSING,
+        vec![Seq {
+            name: "R",
+            enabled_on_spawn: Some(true),
+            events: vec![Ev { vars: (0, 3), ..ev("OnSelectedTarget", (0, 1)) }],
+            behaviors: vec![beh("R0", "Behavior_ToySame", (0, 0))],
+            links: vec![(0, -1, 0.0)],
+            variables: vec![("Siren", "BVAR_Object"), ("N", "BVAR_Int"), ("Dummy", "BVAR_NamedKismetVariable")],
+            vlinks: vec![
+                VLink("SkillInstigator", "BVARLINK_Output", 0, (0, 1)),
+                VLink("Count", "BVARLINK_Output", 1, (1, 1)),
+                VLink("Kis", "BVARLINK_Output", 2, (2, 1)),
+            ],
+            linked: vec![0, 1, 2],
+            ..Seq::default()
+        }],
+        vec![Word::I(0), Word::I(0)],
+    )
+}
 
 /// The toy action enum, in an order unlike the game's.
 const ACTIONS: [&str; 3] = ["CHANGE_Disable", "CHANGE_Toggle", "CHANGE_Enable"];
@@ -156,6 +223,8 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ("TestCond", provider_package(&conditional())),
         ("TestFail", provider_package(&failing())),
         ("TestDelay", provider_package(&delayed())),
+        ("TestParams", provider_package(&params())),
+        ("TestRefuse", provider_package(&refusing())),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -227,7 +296,13 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
                 Some(c) => vm.space.heap.get(c).map(|o| vm.space.names.text(o.name).into_owned()).unwrap_or_default(),
                 None => "none".to_string(),
             };
-            log.borrow_mut().push(format!("{event} {} consumer={consumer}", p.behavior(id).name));
+            // A sequence with a `Siren` variable also logs its object (review r1 of #555: binding before links).
+            let siren = p.data.sequences[id.sequence].variables.iter().find(|v| v.name == "Siren").map(|v| match v.live {
+                Some(o) => vm.space.heap.get(o).map(|o| vm.space.names.text(o.name).into_owned()).unwrap_or_default(),
+                None => "none".to_string(),
+            });
+            let siren = siren.map_or_else(String::new, |n| format!(" siren={n}"));
+            log.borrow_mut().push(format!("{event} {} consumer={consumer}{siren}", p.behavior(id).name));
             Ok(Vec::new())
         }),
     )
@@ -893,4 +968,78 @@ fn the_script_route_fires_with_parameters_in_off_only() {
             }
         }
     }
+}
+
+/// A consumer with `file`'s provider registered: (handle, provider value, consumer).
+fn registered_provider(t: &mut Toy, file: &str, path: &str) -> (Value, Value, ObjRef) {
+    let skill = t.object(t.bare, "Skill_0");
+    let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
+    let p = Value::Object(Some(t.definition(file, path)));
+    t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
+    (h, p, skill)
+}
+
+fn type_index(name: &str) -> u8 {
+    crate::kernel::fixtures::VARIABLE_TYPES.iter().position(|n| *n == name).unwrap() as u8
+}
+
+/// Review r1 of #555, item 2: the binding comes before the entry's links (each behavior sees the new `Siren`); two open
+/// entries of one sequence each bind and run; two enabled sequences each bind into their own variables.
+#[test]
+fn parameters_bind_before_the_links_in_every_open_entry_and_sequence() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let ty = variable_value_struct(&mut t);
+    let (h, p, _) = registered_provider(&mut t, "TestParams", PARAMS);
+    let (maya, target) = (t.object(t.bare, "Maya"), t.object(t.bare, "Target"));
+    let parameters = Value::array(vec![
+        element(ty, type_index("BVAR_Object"), Some(maya)),
+        element(ty, type_index("BVAR_Object"), Some(target)),
+    ]);
+    let event = t.name("OnSelectedTarget");
+    t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), p, event, Value::Int(-1), parameters]).unwrap();
+    assert_eq!(
+        t.seen(),
+        [
+            "OnSelectedTarget A consumer=Skill_0 siren=Maya",
+            "OnSelectedTarget A2 consumer=Skill_0 siren=Maya",
+            "OnSelectedTarget C consumer=Skill_0 siren=Maya",
+        ]
+    );
+    let pid = t.pid_of(&h);
+    let (target_var, siren2) = lend(&mut t.vm, pid, 0, |_, p| {
+        Ok((p.variables("S")[1].live, p.variables("S")[2].live))
+    })
+    .unwrap();
+    assert_eq!((target_var, siren2), (Some(target), Some(maya)), "the second entry bound connection 0 too");
+}
+
+/// Review r1 of #555, item 2: a refused Parameters (a same-typed Int, then a Kismet target) sent through the script
+/// route fires nothing: no behavior ran, the trigger count is 0 and the variables are untouched.
+#[test]
+fn refused_parameters_fire_nothing() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let ty = variable_value_struct(&mut t);
+    let (h, p, _) = registered_provider(&mut t, "TestRefuse", REFUSING);
+    let maya = t.object(t.bare, "Maya");
+    let event = t.name("OnSelectedTarget");
+    let int = Value::array(vec![
+        element(ty, type_index("BVAR_Object"), Some(maya)),
+        element(ty, type_index("BVAR_Int"), None),
+    ]);
+    assert_eq!(not_yet(t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), p.clone(), event.clone(), Value::Int(-1), int])), Missing::NotPorted);
+    let kismet = Value::array(vec![
+        element(ty, type_index("BVAR_Object"), Some(maya)),
+        Value::None,
+        element(ty, type_index("BVAR_Object"), None),
+    ]);
+    assert_eq!(not_yet(t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), p, event, Value::Int(-1), kismet])), Missing::NotRead);
+    assert!(t.seen().is_empty(), "no behavior ran");
+    let pid = t.pid_of(&h);
+    let (count, siren) = lend(&mut t.vm, pid, 0, |_, p| {
+        Ok((p.event_trigger_count("OnSelectedTarget"), p.variables("R")[0].live))
+    })
+    .unwrap();
+    assert_eq!((count, siren), (0, None), "the trigger count and the variables are untouched");
 }

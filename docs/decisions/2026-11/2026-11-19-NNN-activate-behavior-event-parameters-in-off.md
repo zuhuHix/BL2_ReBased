@@ -60,4 +60,19 @@ lane did not open it or that lane's analysis output. Synthetic fixtures only.
   - Link 9 passes `spawn` (1 of 2) and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`.
   - That is the argument `OnSelectedTarget` evaluates just before this native, so the new rule is not reached on
     link 9 yet. Another lane is analysing that native.
+- **Review r1 of #555:**
+  - **the existing object-payload route is unchanged** (the hub's ruling). `fire_event` (used by the
+    `Behavior_RemoteCustomEvent`-style routes and Marcus's use chain) still binds an object element into the object
+    variables its link targets and skips any other target silently, in both modes. Only the new script `Parameters`
+    route applies the typed rule, and it refuses in its preflight. A private `Payload` route marker keeps the two
+    apart;
+  - the script route finds the provider's slot first and decodes `Parameters` only when something would fire, so a
+    call that fires nothing reads no enum through the store;
+  - the refusal inside the firing is labelled defensive, unreachable after `check_payload`;
+  - **a further recorded divergence:** when the mission crate owns the consumer handle, `ow-mission`'s
+    `n_event_from_script` (the bridge) still ignores `Parameters`;
+  - tests: the old route still skips an Int and a Kismet target; through the script route, a refused `Parameters`
+    (a same-typed Int, a Kismet target) runs no behavior, leaves the trigger count at 0 and the variables untouched;
+    the binding comes before the links (each linked behavior sees the new `Siren`); two open entries of one sequence
+    and two enabled sequences each bind. `ow-behavior` 100 passed.
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's live checks would confirm it.
