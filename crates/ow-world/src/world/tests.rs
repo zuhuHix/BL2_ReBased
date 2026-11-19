@@ -198,7 +198,8 @@ fn package() -> Vec<u8> {
     // class and field names.
     // Its primitive parent carries the trace filters' blocking flags (lane IMPL-SPAWN-TRACE-FILTERS).
     let primitive = t.class("PrimitiveComponent", object);
-    for b in ["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors"] {
+    // `bAttached` and `CollideActors`: the extent's `Actor` rule (lane IMPL-LINK9-EXTENT, NATIVE_SPAWN_EXTENT.md).
+    for b in ["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors", "bAttached", "CollideActors"] {
         t.prop("Bool", primitive, b, 0, 0);
     }
     let cylinder = t.class("CylinderComponent", primitive);
@@ -217,7 +218,7 @@ fn package() -> Vec<u8> {
     }
     t.prop("Struct", actor, "Location", 0, vector);
     t.prop("Struct", actor, "Rotation", 0, rotator);
-    for a in ["Attached", "Touching", "GeneratedEvents"] {
+    for a in ["Attached", "Touching", "GeneratedEvents", "Components"] {
         ow_package::testkit::reflect::toy_array_of(&mut t, actor, a, "Object", object);
     }
     let note_fn = native(
@@ -602,6 +603,36 @@ fn package() -> Vec<u8> {
     pointer_payload.extend(t.p.tag("Thing", "ObjectProperty", &arch_ref.to_le_bytes()));
     pointer_payload.extend_from_slice(&t.none);
     t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Pointer", pointer_payload));
+    // Two `Actor` archetypes for the extent's loads (lane IMPL-LINK9-EXTENT, NATIVE_SPAWN_EXTENT.md section 5): each
+    // lists its own primitive component (lazy until loaded), a None entry and its own non-primitive component.
+    // `Actor_ExtentQuiet`'s primitive is unattached; `Actor_ExtentLive`'s is attached and collides.
+    let thing = t.class("ExtentThing", object);
+    t.prop("Int", thing, "Payload", 0, 0);
+    for (name, live) in [("Actor_ExtentQuiet", false), ("Actor_ExtentLive", true)] {
+        let arch = t.p.next_export();
+        let (prim, other) = (arch + 1, arch + 2);
+        let mut body = Vec::new();
+        for r in [prim, 0, other] {
+            body.extend_from_slice(&r.to_le_bytes());
+        }
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.array_tag("Components", 3, &body));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export_with(ow_package::testkit::Export::new(actor, name, payload));
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.bool_tag("bAttached", live));
+        payload.extend(t.p.bool_tag("CollideActors", live));
+        payload.extend_from_slice(&t.none);
+        let mut e = ow_package::testkit::Export::new(primitive, "ExtentPrimitive", payload);
+        e.outer = arch;
+        t.p.add_export_with(e);
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.int_tag("Payload", 1));
+        payload.extend_from_slice(&t.none);
+        let mut e = ow_package::testkit::Export::new(thing, "ExtentOther", payload);
+        e.outer = arch;
+        t.p.add_export_with(e);
+    }
     t.p.build()
 }
 
@@ -2373,7 +2404,7 @@ fn the_world_natives_without_a_world_are_not_yet() {
 mod placement {
     use super::*;
     use crate::placement::{
-        BOUNDING_CYLINDER, Bounds, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision,
+        BOUNDING_CYLINDER_OF, Bounds, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision,
         Sweep, Test, install_collision,
     };
 
@@ -2502,8 +2533,79 @@ mod placement {
             let probe = colliding_probe(&mut x, None);
             let before = count(&x);
             let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
-            assert_eq!((missing, text.as_str()), (Missing::NotRead, BOUNDING_CYLINDER));
+            // The probe's class is not one of the five whose rule was read (lane IMPL-LINK9-EXTENT).
+            assert_eq!((missing, text), (Missing::NotRead, format!("{BOUNDING_CYLINDER_OF} Engine.Probe")));
             assert_eq!(count(&x), before);
+        });
+    }
+
+    /// The `Actor` archetype `name` of the package (its components still lazy), set to collide with the world.
+    fn extent_archetype(x: &mut Fx, name: &str) -> (ObjRef, Vec<Option<ObjRef>>) {
+        let path = ow_core::ObjectPath::parse(&format!("Engine.{name}")).unwrap();
+        let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        x.w.vm.log.extend(x.w.vm.defs.take_log());
+        set_field(&mut x.w.vm.space, arch, "bCollideWorld", Value::Bool(true)).unwrap();
+        let entries = crate::actors::objects(&x.w.vm.space, arch, "Components").unwrap();
+        assert_eq!(entries.len(), 3, "{entries:?}");
+        for e in entries.iter().flatten() {
+            assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, *e), "the fixture's components are lazy");
+        }
+        (arch, entries)
+    }
+
+    /// NATIVE_SPAWN_EXTENT.md section 5, step 5 (lane IMPL-LINK9-EXTENT), through the spawn: the primitive entry is
+    /// loaded before the spot search, the None and non-primitive entries load nothing, and every `NotYet` after the
+    /// load is marked "stopped after partial writes: ", its kind kept, nothing made.
+    /// - Attached and colliding: the skip flag the port cannot read, marked.
+    /// - Unattached: the extent is (0, 0, 0), the spot search's first test is a zero-extent box test, and the next
+    ///   `NotYet` (the instancing's, on this fixture's primitive class, which is no `Core.Component`) is marked too.
+    #[test]
+    fn the_extent_loads_the_primitive_entries_and_marks_what_follows() {
+        run(|| {
+            for (name, want) in [
+                ("Actor_ExtentLive", crate::trace_filter::SKIP_FLAG),
+                ("Actor_ExtentQuiet", "a sub-object of the template that is not a component"),
+            ] {
+                let mut x = fx_files(true, ParityMode::Off, true);
+                let wi = x.wi;
+                let s = script(&mut x, vec![], vec![], Test::Clear);
+                let (arch, entries) = extent_archetype(&mut x, name);
+                let (prim, other) = (entries[0].unwrap(), entries[2].unwrap());
+                let before = count(&x);
+                let actor = x.class("Actor");
+                let req = SpawnRequest::new(Some(actor)).with_template(Some(arch));
+                let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+                assert_eq!(missing, Missing::NotRead, "{name}: {text}");
+                assert!(text.starts_with("stopped after partial writes: "), "{name}: {text}");
+                assert!(text.contains(want), "{name}: {text}");
+                assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, prim), "{name}: the primitive entry was loaded");
+                assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, other), "{name}: the other entry was not");
+                let asked = s.asked.borrow();
+                if name == "Actor_ExtentQuiet" {
+                    assert_eq!(asked.len(), 1, "{asked:?}");
+                    assert!(matches!(asked[0], Asked::Test([0.0, 0.0, 0.0], ..)), "{asked:?}");
+                } else {
+                    assert!(asked.is_empty(), "the extent refuses before the search: {asked:?}");
+                }
+                assert_eq!(count(&x), before, "{name}: nothing made");
+            }
+        });
+    }
+
+    /// Without a collision service the spot search's refusal comes first and loads nothing (NATIVE_SPAWN_EXTENT.md
+    /// section 5's next stop, step 1): clean, no prefix.
+    #[test]
+    fn no_service_refuses_before_the_extent_loads() {
+        run(|| {
+            let mut x = fx_files(true, ParityMode::Off, true);
+            let wi = x.wi;
+            let (arch, entries) = extent_archetype(&mut x, "Actor_ExtentLive");
+            let actor = x.class("Actor");
+            let req = SpawnRequest::new(Some(actor)).with_template(Some(arch));
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+            assert!(matches!(missing, Missing::LayerAbsent(_)), "{missing:?}");
+            assert_eq!(text, SPOT_SEARCH);
+            assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, entries[0].unwrap()), "nothing loaded");
         });
     }
 

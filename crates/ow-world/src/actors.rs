@@ -661,8 +661,11 @@ fn collision(what: &'static str) -> VmError {
 ///
 ///    **In `ParityMode::Off`** (lane IMPL-SPAWN-PLACEMENT, decision 2026-11-19-79, NATIVE_SPAWN_PLACEMENT.md,
 ///    UNVERIFIED): the spot search reads the template's flags (`crate::placement::search_runs`) and runs through the
-///    world's collision service (`crate::placement::spot_search`): without one, `NotYet { LayerAbsent }`; without a
-///    cylinder extent, and for a query the service does not support, `NotYet { NotRead }`; a failed search returns
+///    world's collision service (`crate::placement::spot_search`): without one, `NotYet { LayerAbsent }`; for an
+///    extent whose rule is not read (`crate::placement::extent`), and for a query the service does not support,
+///    `NotYet { NotRead }`. The extent's component loads run just before the search
+///    (`crate::placement::load_extent_components`, NATIVE_SPAWN_EXTENT.md section 5, step 5.3): once one ran, every
+///    `NotYet` up to the actor's insertion is marked "stopped after partial writes: ". A failed search returns
 ///    `None` with nothing made, a successful one gives the location the actor is made at. There is no eager
 ///    `bCollideActors` refusal in Off: the encroachment check (or the relocation step for a `bNoCollisionFail` spawn)
 ///    is decided on the live actor after `PreBeginPlay` (`crate::placement::after_pre_begin_play`), terminal and
@@ -786,27 +789,37 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
         None => field(space, spawner, "Rotation")?,
     };
     let instigator = object(space, spawner, "Instigator")?;
-    // Off: the spot search on the template alone (NATIVE_SPAWN_PLACEMENT.md, crate::placement), before anything is
-    // made; a failed search makes nothing.
+    // Off: the spot search on the template alone (NATIVE_SPAWN_PLACEMENT.md, crate::placement), before the actor is
+    // made; a failed search makes nothing. The extent's loads run first (NATIVE_SPAWN_EXTENT.md section 5, step 5.3):
+    // a load is a store write, so once one ran, every `NotYet` up to the actor's insertion is marked "stopped after
+    // partial writes: ", its kind kept, nothing rolled back (after the insertion the rule below marks them all).
+    let mut loaded = false;
     let location = if off && crate::placement::search_runs(space, source, req.no_collision_fail, client)? {
-        match crate::placement::spot_search(vm, source, &requested)? {
+        loaded = crate::placement::load_extent_components(vm, source)?;
+        let mark = move |e: VmError| if loaded { crate::pools::after_partial_writes(e) } else { e };
+        match crate::placement::spot_search(vm, source, &requested).map_err(mark)? {
             Some(l) => l,
             None => return Ok(None),
         }
     } else {
         requested
     };
+    let mark = move |e: VmError| if loaded { crate::pools::after_partial_writes(e) } else { e };
     // In Off the base precheck comes after the placement check (review r1 of #463, item 2), both before anything is
     // made, so a template that needs both meets the placement refusal first.
     let space = &vm.space;
-    if off && begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
-        return Err(collision("the base search after PostBeginPlay"));
+    if off
+        && begun
+        && (needs_base_search(space, defaults).map_err(mark)?
+            || (source != defaults && needs_base_search(space, source).map_err(mark)?))
+    {
+        return Err(mark(collision("the base search after PostBeginPlay")));
     }
 
     // The fields written below exist before anything is made (review r2 of #435): a class without one fails here,
     // with nothing left behind.
     for name in ["CreationTime", "WorldInfo", "Location", "Rotation", "Instigator", "Owner"] {
-        prop_of(&vm.space, source, name)?;
+        prop_of(&vm.space, source, name).map_err(mark)?;
     }
     // The world list the actor will join, checked before anything is made (review r1 of #481, item 4): its link field
     // declared and the list walkable. A world that does not hold the list keeps none (no refusal at spawn).
@@ -827,20 +840,20 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
     // The level list is borrowed for the registration before anything is made (review r3 of #435, item 2): a list
     // another caller holds is refused here, with nothing allocated; the borrow ends right after the insertion, before
     // any event runs.
-    let mut level = actors.try_borrow_mut().map_err(borrow_mut_err)?;
+    let mut level = actors.try_borrow_mut().map_err(borrow_mut_err).map_err(mark)?;
     let actor = match vm.parity {
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
             // Every refusal of the instancing runs before the actor is made; a failure while making it frees it.
-            let plan = instancing::plan_components_tracked(vm, source, loaded)?;
-            let actor = vm.instantiate(class, "")?;
+            let plan = instancing::plan_components_tracked(vm, source, &mut loaded).map_err(mark)?;
+            let actor = vm.instantiate(class, "").map_err(mark)?;
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
                 apply_plan(vm, &plan, actor)
             });
             if let Err(e) = made {
                 let _ = vm.space.free(actor);
-                return Err(e);
+                return Err(mark(e));
             }
             actor
         }

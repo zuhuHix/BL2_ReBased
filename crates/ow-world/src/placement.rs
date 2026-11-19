@@ -17,8 +17,11 @@
 //! 1. `bNoCollisionFail`: no search. Neither the template's `bCollideWorld` nor its `bCollideWhenPlacing` outside a
 //!    client: no search. The template is the object the actor is made from (the archetype, else the class default),
 //!    read alone.
-//! 2. No service: `NotYet { LayerAbsent }`. Then no cylinder extent (the template's `CollisionComponent` is not a
-//!    `CylinderComponent`, or none): `NotYet { NotRead }`, "the actor's bounding-cylinder rule".
+//! 2. No service: `NotYet { LayerAbsent }`. Then the extent ([`extent`]; lane IMPL-LINK9-EXTENT, from
+//!    NATIVE_SPAWN_EXTENT.md): a cylinder `CollisionComponent`, else the template's exact class's bounding-cylinder
+//!    rule (the four pawn classes' and `Actor`'s; any other class `NotYet { NotRead }`). `Actor`'s rule reads the
+//!    template's primitive `Components` entries, which the spawn loads first ([`load_extent_components`], a store
+//!    write: every later `NotYet` up to the actor's insertion is marked "stopped after partial writes: ").
 //! 3. **The trace filters** (lane IMPL-SPAWN-TRACE-FILTERS, decision 2026-11-19-90; [`crate::trace_filter`]). Each
 //!    query has two parts, kept apart:
 //!    - **the level part**, asked of the service first: its answers cover the level's BSP only (bit 4). Every other
@@ -64,7 +67,6 @@ pub const RECORD: &str = "NATIVE_SPAWN_PLACEMENT.md";
 
 /// The note's names.
 pub const SPOT_SEARCH: &str = "the spawn placement spot search";
-pub const BOUNDING_CYLINDER: &str = "the actor's bounding-cylinder rule";
 pub const ENCROACHMENT: &str = "the post-spawn encroachment check";
 pub const ENCROACHMENT_RULE: &str = "the post-spawn encroachment check's rule";
 pub const RELOCATION: &str = "the post-spawn relocation step";
@@ -183,21 +185,212 @@ pub fn search_runs(space: &ObjectSpace, template: ObjRef, no_collision_fail: boo
     Ok(flag(space, template, "bCollideWorld")? || (flag(space, template, "bCollideWhenPlacing")? && !client))
 }
 
-/// The template's extent (note section 2): (radius, radius, half height) of its cylinder component.
-pub fn extent(space: &ObjectSpace, template: ObjRef) -> Result<[f32; 3], VmError> {
-    let not_read = || -> VmError { NotYet::not_read(BOUNDING_CYLINDER, RECORD).into() };
-    let Some(component) = object(space, template, "CollisionComponent")? else {
-        return Err(not_read());
-    };
+/// The classes whose bounding-cylinder rule is `Pawn`'s (NATIVE_SPAWN_EXTENT.md section 3).
+pub const PAWN_RULE_CLASSES: [&str; 4] = ["Engine.Pawn", "WillowGame.WillowPawn", "WillowGame.WillowAIPawn", "WillowGame.WillowPlayerPawn"];
+/// The class whose bounding-cylinder rule is `Actor`'s own (NATIVE_SPAWN_EXTENT.md section 2).
+pub const ACTOR_RULE_CLASS: &str = "Engine.Actor";
+/// The record of the bounding-cylinder rule (lane IMPL-LINK9-EXTENT).
+pub const EXTENT_RECORD: &str = "NATIVE_SPAWN_EXTENT.md";
+/// The prefix of the bounding-cylinder rule's `NotYet`s.
+pub const BOUNDING_CYLINDER_OF: &str = "the bounding-cylinder rule of";
+
+/// Whether `component` is a `CylinderComponent` (or a subclass), from its class alone (a lazy handle carries it).
+fn is_cylinder(space: &ObjectSpace, component: ObjRef) -> Result<bool, VmError> {
     let Some(cylinder) = space.classes.by_path("Engine.CylinderComponent") else {
-        return Err(not_read());
+        return Ok(false);
     };
-    if !space.classes.is_child_of(space.heap.get(component)?.class, cylinder) {
-        return Err(not_read());
+    Ok(space.classes.is_child_of(space.heap.get(component)?.class, cylinder))
+}
+
+/// Whether `component` is a primitive component, from its class alone (NATIVE_SPAWN_EXTENT.md section 5, step 5.2).
+fn is_primitive(space: &ObjectSpace, component: ObjRef) -> Result<bool, VmError> {
+    let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
+        return Ok(false);
+    };
+    Ok(space.classes.is_child_of(space.heap.get(component)?.class, primitive))
+}
+
+/// The class path of `o`, for the rule's texts.
+fn class_path(space: &ObjectSpace, o: ObjRef) -> Result<String, VmError> {
+    let class = space.heap.get(o)?.class;
+    Ok(space.classes.get_layout(class).map(|l| l.path().as_str().to_string()).unwrap_or_else(|| format!("{class:?}")))
+}
+
+/// Which rule answers the template's extent (NATIVE_SPAWN_EXTENT.md section 5, steps 1 to 4), decided from object
+/// handles and classes alone: nothing is loaded for it.
+enum Rule {
+    /// A cylinder component whose radius and height are the extent (section 5 steps 1 and 2).
+    Cylinder(ObjRef),
+    /// `Actor`'s rule (section 2), for a template of the class named.
+    Actor(String),
+    /// A class whose rule was not read.
+    NotRead(String),
+}
+
+fn rule(space: &ObjectSpace, template: ObjRef) -> Result<Rule, VmError> {
+    let collision = object(space, template, "CollisionComponent")?;
+    if let Some(c) = collision
+        && is_cylinder(space, c)?
+    {
+        return Ok(Rule::Cylinder(c));
+    }
+    let class = space.heap.get(template)?.class;
+    let path = class_path(space, template)?;
+    let exactly = |p: &str| space.classes.by_path(p) == Some(class);
+    if PAWN_RULE_CLASSES.iter().any(|p| exactly(p)) {
+        if let Some(c) = object(space, template, "CylinderComponent")?
+            && Some(c) != collision
+            && is_cylinder(space, c)?
+        {
+            return Ok(Rule::Cylinder(c));
+        }
+        return Ok(Rule::Actor(path));
+    }
+    if exactly(ACTOR_RULE_CLASS) {
+        return Ok(Rule::Actor(path));
+    }
+    Ok(Rule::NotRead(path))
+}
+
+/// The extent's loads (NATIVE_SPAWN_EXTENT.md section 5, step 5.3), which the spawn runs before the spot search: when
+/// the template's extent is `Actor`'s rule, each primitive entry of its `Components` that the store has not loaded is
+/// loaded, as the template's own definition (the same reading as the instancing's second pass). None entries and
+/// non-primitive entries are skipped and load nothing. A load is a store write, so the answer says whether one ran:
+/// the spawn then marks every `NotYet` after it "stopped after partial writes: " (step 5.3). A `NotYet` of a later load
+/// is marked here. A world without a collision service loads nothing: the spot search refuses it first.
+pub fn load_extent_components(vm: &mut Vm, template: ObjRef) -> Result<bool, VmError> {
+    if collision_model(vm)?.is_none() {
+        return Ok(false);
+    }
+    if !matches!(rule(&vm.space, template)?, Rule::Actor(_)) {
+        return Ok(false);
+    }
+    let mut loaded = false;
+    for c in objects(&vm.space, template, "Components")?.into_iter().flatten() {
+        if !is_primitive(&vm.space, c)? || !vm.defs.is_unloaded(&vm.space, c) {
+            continue;
+        }
+        let result = vm.defs.ensure_loaded(&mut vm.space, c);
+        vm.log.extend(vm.defs.take_log());
+        if let Err(e) = result {
+            let e = VmError::from(e);
+            return Err(if loaded { crate::pools::after_partial_writes(e) } else { e });
+        }
+        loaded = true;
+    }
+    Ok(loaded)
+}
+
+/// (radius, radius, half height) of a cylinder component.
+fn cylinder_extent(vm: &Vm, component: ObjRef, class: &str) -> Result<[f32; 3], VmError> {
+    let space = &vm.space;
+    if vm.defs.is_unloaded(space, component) {
+        // The note loads the `Components` entries of `Actor`'s rule only (section 5, step 5.3).
+        return Err(NotYet::not_read(
+            format!("{BOUNDING_CYLINDER_OF} {class}: a cylinder component the store has not loaded"),
+            EXTENT_RECORD,
+        )
+        .into());
     }
     let radius = float(space, component, "CollisionRadius")?;
     let height = float(space, component, "CollisionHeight")?;
     Ok([radius, radius, height])
+}
+
+/// The template's extent (NATIVE_SPAWN_PLACEMENT.md section 2 and NATIVE_SPAWN_EXTENT.md section 5, lane
+/// IMPL-LINK9-EXTENT): (radius, radius, half height). It reads only: the loads it needs ran before it
+/// ([`load_extent_components`]).
+/// 1. A `CylinderComponent` as the template's `CollisionComponent`: its radius and height.
+/// 2. Otherwise the template's class's bounding-cylinder rule, chosen by its **exact** class:
+///    - `Pawn`, `WillowPawn`, `WillowAIPawn` and `WillowPlayerPawn` ([`PAWN_RULE_CLASSES`]): a `CylinderComponent` that
+///      is set, is not the `CollisionComponent` and is a cylinder component gives its radius and height; otherwise
+///      `Actor`'s rule;
+///    - `Actor` ([`ACTOR_RULE_CLASS`]): [`actor_rule`];
+///    - any other class: `NotYet { NotRead }`, "the bounding-cylinder rule of <class>" (the body was read for these five
+///      classes only, and no other class may be assumed to keep its parent's).
+///
+/// A field the classes do not declare is a `VmError::Script` naming it (the actor field reads of [`crate::actors`]).
+pub fn extent(vm: &Vm, template: ObjRef) -> Result<[f32; 3], VmError> {
+    let class = class_path(&vm.space, template)?;
+    match rule(&vm.space, template)? {
+        Rule::Cylinder(c) => cylinder_extent(vm, c, &class),
+        Rule::Actor(path) => actor_rule(vm, template, &path),
+        Rule::NotRead(path) => Err(NotYet::not_read(format!("{BOUNDING_CYLINDER_OF} {path}"), EXTENT_RECORD).into()),
+    }
+}
+
+/// `Actor`'s rule (NATIVE_SPAWN_EXTENT.md section 2, in section 5's step 5 order), for each entry of the template's
+/// `Components`:
+/// 1. None: skipped;
+/// 2. not a primitive component (from its class): skipped;
+/// 3. loaded before the spot search ([`load_extent_components`]); one still unloaded here is a `VmError::Script`
+///    (the caller skipped the loads), and a loaded stand-in with no slots is `NotYet { NotRead }`;
+/// 4. `bAttached` clear: skipped;
+/// 5. `CollideActors` clear: skipped;
+/// 6. the skip flag, the trace filters' unresolved bit ([`crate::trace_filter::SKIP_FLAG`]): the port cannot read it,
+///    so an entry that passed steps 2 to 5 is `NotYet { NotRead }` naming it, and no box is built from an unread flag
+///    (UNVERIFIED);
+/// 7. `Bounds`: not reached while step 6 refuses; [`box_cylinder`] is the box's cylinder for when it is read.
+///
+/// No qualifying entry gives (0, 0, 0). For the installed class defaults every loaded entry is expected unattached,
+/// so none reaches step 6 (UNVERIFIED, note section 4).
+fn actor_rule(vm: &Vm, template: ObjRef, class: &str) -> Result<[f32; 3], VmError> {
+    let space = &vm.space;
+    for c in objects(space, template, "Components")?.into_iter().flatten() {
+        if !is_primitive(space, c)? {
+            continue;
+        }
+        if vm.defs.is_unloaded(space, c) {
+            return Err(VmError::Script {
+                message: format!(
+                    "{BOUNDING_CYLINDER_OF} {class}: the Components entry {} was not loaded before the spot search \
+                     (placement::load_extent_components)",
+                    class_path(space, c)?
+                ),
+                function: "Actor.Spawn".to_string(),
+            });
+        }
+        let o = space.heap.get(c)?;
+        if u32::try_from(o.slots.len()).ok() != space.classes.get_layout(o.class).map(|l| l.slot_count()) {
+            return Err(NotYet::not_read(
+                format!(
+                    "{BOUNDING_CYLINDER_OF} {class}: a Components entry whose properties are not loaded (a stand-in \
+                     with no slots): {}",
+                    class_path(space, c)?
+                ),
+                EXTENT_RECORD,
+            )
+            .into());
+        }
+        if !flag(space, c, "bAttached")? || !flag(space, c, "CollideActors")? {
+            continue;
+        }
+        return Err(NotYet::not_read(
+            format!("{BOUNDING_CYLINDER_OF} {class}: {} on an attached colliding component", trace_filter::SKIP_FLAG),
+            EXTENT_RECORD,
+        )
+        .into());
+    }
+    Ok(box_cylinder(&[]))
+}
+
+/// The cylinder of the union of `boxes`, each (origin, box extent): radius √((width/2)² + (depth/2)²), half height
+/// half the height; no box gives (0, 0, 0) (NATIVE_SPAWN_EXTENT.md section 2, step 3).
+pub fn box_cylinder(boxes: &[([f32; 3], [f32; 3])]) -> [f32; 3] {
+    let Some(&(o, e)) = boxes.first() else {
+        return [0.0; 3];
+    };
+    let (mut lo, mut hi) = ([o[0] - e[0], o[1] - e[1], o[2] - e[2]], [o[0] + e[0], o[1] + e[1], o[2] + e[2]]);
+    for &(o, e) in &boxes[1..] {
+        for k in 0..3 {
+            lo[k] = lo[k].min(o[k] - e[k]);
+            hi[k] = hi[k].max(o[k] + e[k]);
+        }
+    }
+    let (w, d, h) = ((hi[0] - lo[0]) / 2.0, (hi[1] - lo[1]) / 2.0, (hi[2] - lo[2]) / 2.0);
+    // Square root through ow_core::num (rule N3); the sum is formed in single precision, the root taken in double.
+    let r = ow_core::num::sqrt_f64(f64::from(w * w + d * d)) as f32;
+    [r, r, h]
 }
 
 fn location_error(why: String) -> VmError {
@@ -531,7 +724,7 @@ pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option
     let Some(model) = collision_model(vm)? else {
         return Err(NotYet::layer_absent(SPOT_SEARCH, LAYER, RECORD).into());
     };
-    let e = extent(space, template)?;
+    let e = extent(vm, template)?;
     let complex = flag(space, template, "bCollideComplex")?;
     let l0 = vector(space, location)?;
     let q = Queries { model: model.as_ref(), vm: Some(vm) };
@@ -559,6 +752,10 @@ pub fn after_pre_begin_play(vm: &Vm, no_collision_fail: bool) -> VmError {
 
 /// The search's steps against a scripted service with the filter taken as read: these steps are not reached in Off
 /// (module documentation), so they are tested here directly. Invented geometry only.
+#[cfg(test)]
+#[path = "placement_extent_tests.rs"]
+mod extent_tests;
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
