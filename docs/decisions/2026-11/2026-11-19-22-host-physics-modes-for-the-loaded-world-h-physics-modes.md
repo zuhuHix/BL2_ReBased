@@ -23,21 +23,37 @@ base condition, the `RemoteRole` variant) are untouched. No package parsing beha
   - It collects the actors their linked `SeqVar_Object`s hold: 199 actors. Any link counts, not only a group's, so the
     set errs towards "may be driven" (NATIVE_KISMET_MATINEE.md: the op binds its group actors through object-variable
     links).
-  - 5 object variables are empty at load.
-  - The other linked variables are 81 `InterpData`, one `SeqVar_Float` and two Willow day/night variables. None of
-    them can hold an actor, so the scan is complete over the variable kinds present.
-  - A linked object variable without a value, or one with an `ObjList`, would make every interpolating actor
-    `Unknown`. None occurs.
+  - 5 plain object variables are empty at load.
+  - The other linked variables are 81 `InterpData`, one `SeqVar_Float` and two Willow day/night variables.
+  - **The completeness rule** (review r1 of #420; `MatineeBindings::complete`). The scan is complete only if it read
+    everything that could bind an actor. Otherwise every interpolating actor is `Unknown` (`NotYet`).
+    - **Variables.** Only a variable of exactly `Engine.SeqVar_Object` is read by its `ObjValue`, and only such a
+      variable can be empty. Any subclass (an object list, a group or player variable) is unreadable even when it has
+      a value, because it can name actors another way. A class with no `ObjValue` is unreadable (a named or external
+      variable, say) unless it is on an explicit list of classes that hold no actor: `InterpData`, the scalar
+      `SeqVar_*` and the two Willow day/night variables (`NO_ACTOR_VARIABLES`).
+    - **Ops.** An op whose `VariableLinks`, or one of its links' `LinkedVariables`, is not an array is counted.
+    - **Classes.** An export class the VM cannot resolve is counted, because it might be a Matinee op. The exceptions
+      are five classes named on a list of engine data with no UnrealScript class (`NOT_OP_CLASSES`): `Core.Package`
+      2,066, `Engine.ShadowMap1D` 151, `Engine.LightMapTexture2D` 136, `Engine.Polys` 53 and
+      `GearboxFramework.WiringMesh` 1 on Sanctuary. Every Kismet op derives from the script class
+      `Engine.SequenceOp`, so it resolves. Without the list, the five classes alone would make every interpolating
+      actor `Unknown`.
+    - On Sanctuary the scan is complete. Its variables are only plain object variables and the listed kinds, so the
+      counts below did not change with the stricter rule.
 - **The rule per mode** (`world::physics_rule`, installed by `world::install_physics`).
   - `PHYS_None`: nothing.
-  - **`PHYS_Interpolating`, an actor no loaded Matinee op names:** a step that moves nothing.
+  - **`PHYS_Interpolating`, an actor no loaded Matinee op names (complete scan, `ParityMode::Off`):** a step that
+    moves nothing.
+    - In `ParityMode::Reference` it answers `NotYet` (not ported): the C++ reference has no host physics to stand in
+      (rule R3).
     - Stock UE3's interpolating mode is the one Matinee drives.
     - The world runs no other driver. It runs no Kismet, so the variables empty at load stay empty.
     - UNVERIFIED in the running game: that the game's interpolating step does nothing else for such an actor
       (velocity, touches, based actors).
   - **`PHYS_Interpolating`, a named actor:** `NotYet`, layer absent: "the Matinee playback that moves a bound
     interpolating <class>". Kismet and Matinee playback are not in the world.
-  - **`PHYS_Interpolating`, the scan could not judge:** `NotYet`, not read.
+  - **`PHYS_Interpolating`, the scan not complete:** `NotYet`, not read.
   - **`PHYS_Walking` and `PHYS_Falling`:** `NotYet`, not read. The H4 mover does not fit other pawns yet:
     - the walking step itself is not read (NATIVE_PLAYER_MOVEMENT.md, "Not read yet"; the H4 mover's ground step is
       that lane's own);
@@ -59,7 +75,11 @@ base condition, the `RemoteRole` variant) are untouched. No package parsing beha
     - each mode's rule, with the record and kind of each `NotYet`;
     - an interpolating actor no op names ticks three times and stays put;
     - a bound one halts the tick with the playback `NotYet`;
-    - a walking pawn halts it with the walking-step `NotYet`.
+    - a walking pawn halts it with the walking-step `NotYet`;
+    - the scan over invented Kismet classes (review r1): a plain object variable binds its actor, an empty one counts
+      as empty, and a subclass of it, a named variable, an op with no link array and an unresolved class each make
+      the scan incomplete, so the driver is `Unknown`;
+    - the no-op answers `NotYet` in Reference.
   - **Installed, headless** (`--map Sanctuary --play-script` with H4-PLAY's 60 s script, desktop, release, under the
     machine lock).
     - **Before** (H-WORLD, main f2d1da1's code): 0 ticks completed, halted at tick 1 on "the host's

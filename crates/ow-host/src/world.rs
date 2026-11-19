@@ -488,21 +488,142 @@ fn pawns(vm: &mut Vm) -> Result<(Vec<PawnActor>, Vec<String>), VmError> {
 pub const MATINEE_OP_CLASS: &str = "Engine.SeqAct_Interp";
 
 /// The actors a Matinee op in the placed actors' map files names through an object-variable link: every
-/// `SeqAct_Interp` (or subclass) export of those files is loaded, and each `SeqVar_Object.ObjValue` its
-/// `VariableLinks` name is collected. Any link counts, not only the one whose description is a group name, so the set
-/// errs towards "may be driven". A linked variable that holds no `ObjValue` (a named or list variable, say) is
-/// counted by class in [`MatineeBindings::unresolved`]: while any is, the set may miss an actor. Loads the ops and their
-/// variables into the world's object space.
+/// `SeqAct_Interp` (or subclass) export of those files is loaded, and each linked variable is read
+/// ([`read_op_variables`]). Any link counts, not only the one whose description is a group name, so the bound set errs
+/// towards "may be driven". Whatever the scan cannot read is counted ([`MatineeBindings::complete`] is then false and
+/// every interpolating actor is `Unknown`): an export whose class does not resolve (it might be a Matinee op), an op
+/// whose `VariableLinks` is not an array of links, and a linked variable that may hold an actor the scan cannot see.
+/// Loads the ops and their variables into the world's object space.
 pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
     let mut out = MatineeBindings::default();
     let Ok(op_class) = vm.find_class(MATINEE_OP_CLASS) else {
         return Ok(out);
     };
-    let list = {
-        let actors = ow_world::actors::actors_of(vm).map_err(|e| e.to_string())?;
-        let list = actors.try_borrow().map_err(|_| "the actor list is borrowed")?.list().to_vec();
-        list
+    let packages = map_packages(vm)?;
+    let mut is_op: ow_core::DetMap<String, Option<bool>> = ow_core::DetMap::new();
+    for package in packages {
+        let mut exports = Vec::new();
+        {
+            let pkg = vm.defs.packages().get(package);
+            for (i, entry) in pkg.exports.iter().enumerate() {
+                if entry.class == 0 {
+                    continue;
+                }
+                let class = pkg.path_of(entry.class).map_err(|e| e.to_string())?;
+                exports.push((i32::try_from(i + 1).map_err(|e| e.to_string())?, class));
+            }
+        }
+        for (index, class) in exports {
+            let op = match is_op.get(&class) {
+                Some(&known) => known,
+                None => {
+                    let known = vm.find_class(&class).ok().map(|c| vm.space.classes.is_child_of(c, op_class));
+                    is_op.insert(class.clone(), known);
+                    known
+                }
+            };
+            match op {
+                Some(true) => {}
+                Some(false) => continue,
+                None if NOT_OP_CLASSES.contains(&class.as_str()) => continue,
+                None => {
+                    *out.unresolved_classes.entry(class).or_insert(0) += 1;
+                    continue;
+                }
+            }
+            let Some(o) = vm.defs.resolve_ref(&mut vm.space, package, index).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            out.ops += 1;
+            read_op_variables(vm, o, &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+/// Export classes the VM's class table does not resolve that are known not to be Kismet ops: the package objects
+/// (groups) of a map file, its BSP polygons, its baked shadow and light maps, and Gearbox's wiring mesh (seen in
+/// Sanctuary's level files; each is engine data with no UnrealScript class, while every Kismet op derives from the
+/// script class `Engine.SequenceOp`). Any other unresolved class makes the scan incomplete.
+pub const NOT_OP_CLASSES: [&str; 5] = [
+    "Core.Package",
+    "Engine.Polys",
+    "Engine.LightMapTexture2D",
+    "Engine.ShadowMap1D",
+    "GearboxFramework.WiringMesh",
+];
+
+/// The variable classes known to hold no actor: the Matinee data, the scalar variables, and BL2's two day/night
+/// variables (seen linked to Sanctuary's ops; by name, they hold a rate and a time of day).
+pub const NO_ACTOR_VARIABLES: [&str; 11] = [
+    "Engine.InterpData",
+    "Engine.SeqVar_Bool",
+    "Engine.SeqVar_Float",
+    "Engine.SeqVar_Int",
+    "Engine.SeqVar_String",
+    "Engine.SeqVar_Vector",
+    "Engine.SeqVar_Name",
+    "Engine.SeqVar_RandomFloat",
+    "Engine.SeqVar_RandomInt",
+    "WillowGame.WillowSeqVar_DayNightCycleRate",
+    "WillowGame.WillowSeqVar_TimeOfDay",
+];
+
+/// Reads Matinee op `op`'s linked variables into `out` (module notes of [`matinee_bound`]):
+/// - exactly `Engine.SeqVar_Object`: its `ObjValue` is bound, or it counts as empty;
+/// - any other class with an `ObjValue` (a subclass: object lists, groups, players): its value is bound if it has one,
+///   and it counts as unreadable, since a subclass can name actors another way;
+/// - no `ObjValue`: a class in [`NO_ACTOR_VARIABLES`] is counted in `unresolved` only; any other (a named variable, an
+///   external one) also counts as unreadable.
+pub fn read_op_variables(vm: &mut Vm, op: ObjRef, out: &mut MatineeBindings) -> Result<(), String> {
+    let Some(Value::Array(links)) = read(&vm.space, op, "VariableLinks") else {
+        out.unreadable_ops += 1;
+        return Ok(());
     };
+    let mut variables = Vec::new();
+    for link in links.iter() {
+        match field(&vm.space, link, "LinkedVariables") {
+            Some(Value::Array(vars)) => variables.extend(vars.iter().filter_map(|v| match v {
+                Value::Object(Some(r)) => Some(*r),
+                _ => None,
+            })),
+            _ => {
+                out.unreadable_ops += 1;
+                return Ok(());
+            }
+        }
+    }
+    for var in variables {
+        vm.defs.ensure_loaded(&mut vm.space, var).map_err(|e| e.to_string())?;
+        let class = ow_attr::eval::class_path(&vm.space, var);
+        let plain = class == OBJECT_VARIABLE_CLASS;
+        match read(&vm.space, var, "ObjValue") {
+            Some(Value::Object(value)) => {
+                if let Some(actor) = value {
+                    out.bound.insert(actor);
+                } else if plain {
+                    out.empty += 1;
+                }
+                if !plain {
+                    out.unreadable += 1;
+                    *out.unresolved.entry(class).or_insert(0) += 1;
+                }
+            }
+            _ => {
+                if !NO_ACTOR_VARIABLES.contains(&class.as_str()) {
+                    out.unreadable += 1;
+                }
+                *out.unresolved.entry(class).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The packages (map files) that hold the world's placed actors.
+fn map_packages(vm: &Vm) -> Result<ow_core::DetSet<ow_package::PackageId>, String> {
+    let actors = ow_world::actors::actors_of(vm).map_err(|e| e.to_string())?;
+    let list = actors.try_borrow().map_err(|_| "the actor list is borrowed")?.list().to_vec();
     let mut packages = ow_core::DetSet::new();
     for o in list {
         if let Ok(object) = vm.space.heap.get(o)
@@ -511,67 +632,7 @@ pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
             packages.insert(package);
         }
     }
-    let mut is_op: ow_core::DetMap<String, bool> = ow_core::DetMap::new();
-    for package in packages {
-        let mut ops = Vec::new();
-        {
-            let pkg = vm.defs.packages().get(package);
-            for (i, entry) in pkg.exports.iter().enumerate() {
-                if entry.class == 0 {
-                    continue;
-                }
-                let Ok(class) = pkg.path_of(entry.class) else { continue };
-                ops.push((i32::try_from(i + 1).map_err(|e| e.to_string())?, class));
-            }
-        }
-        for (index, class) in ops {
-            let op = match is_op.get(&class) {
-                Some(&known) => known,
-                None => {
-                    let known = vm.find_class(&class).is_ok_and(|c| vm.space.classes.is_child_of(c, op_class));
-                    is_op.insert(class, known);
-                    known
-                }
-            };
-            if !op {
-                continue;
-            }
-            let Some(o) = vm.defs.resolve_ref(&mut vm.space, package, index).map_err(|e| e.to_string())? else {
-                continue;
-            };
-            let Some(Value::Array(links)) = read(&vm.space, o, "VariableLinks") else { continue };
-            let mut variables = Vec::new();
-            for link in links.iter() {
-                if let Some(Value::Array(vars)) = field(&vm.space, link, "LinkedVariables") {
-                    variables.extend(vars.iter().filter_map(|v| match v {
-                        Value::Object(Some(r)) => Some(*r),
-                        _ => None,
-                    }));
-                }
-            }
-            out.ops += 1;
-            for var in variables {
-                vm.defs.ensure_loaded(&mut vm.space, var).map_err(|e| e.to_string())?;
-                match read(&vm.space, var, "ObjValue") {
-                    Some(Value::Object(Some(actor))) => {
-                        out.bound.insert(actor);
-                    }
-                    Some(Value::Object(None)) => out.empty += 1,
-                    _ => {
-                        let class = vm.space.heap.get(var).map_err(|e| e.to_string())?.class;
-                        let object_var = vm
-                            .find_class(OBJECT_VARIABLE_CLASS)
-                            .is_ok_and(|c| vm.space.classes.is_child_of(class, c));
-                        if object_var || vm.space.prop(class, "ObjList").is_some() {
-                            out.unreadable += 1;
-                        }
-                        *out.unresolved.entry(ow_attr::eval::class_path(&vm.space, var)).or_insert(0) += 1;
-                    }
-                }
-            }
-        }
-    }
-    Ok(out)
+    Ok(packages)
 }
 
 /// What [`matinee_bound`] found.
@@ -580,15 +641,26 @@ pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
 pub struct MatineeBindings {
     /// Matinee ops read.
     pub ops: usize,
-    /// The actors their object variables hold.
+    /// The actors their variables hold.
     pub bound: ow_core::DetSet<ObjRef>,
-    /// Object variables holding nothing.
+    /// Plain object variables holding nothing.
     pub empty: usize,
-    /// Linked variables with no `ObjValue`, by class.
+    /// Linked variables that are not plain object variables, by class.
     pub unresolved: ow_core::DetMap<String, usize>,
-    /// Of those, the ones that could still hold an actor: an object variable (or subclass) without the value, or a
-    /// variable with an `ObjList`.
+    /// Linked variables that may hold an actor the scan cannot see: a subclass of the object variable, or a class with
+    /// no `ObjValue` that is not in [`NO_ACTOR_VARIABLES`].
     pub unreadable: usize,
+    /// Ops whose `VariableLinks` (or a link's `LinkedVariables`) is not an array.
+    pub unreadable_ops: usize,
+    /// Export classes in the map files that do not resolve, so whether they are Matinee ops is not known.
+    pub unresolved_classes: ow_core::DetMap<String, usize>,
+}
+
+impl MatineeBindings {
+    /// The scan read everything that could bind an actor: no unreadable variable or op, no unresolved export class.
+    pub fn complete(&self) -> bool {
+        self.unreadable == 0 && self.unreadable_ops == 0 && self.unresolved_classes.is_empty()
+    }
 }
 
 /// The object variable class whose `ObjValue` the scan reads.
@@ -621,10 +693,23 @@ fn physics_name(space: &ObjectSpace, o: ObjRef) -> String {
 pub enum Driver {
     /// A loaded Matinee op names it: the op's playback would move it.
     Bound,
-    /// No loaded Matinee op names it, and every linked variable was read.
+    /// No loaded Matinee op names it, and the scan was complete ([`MatineeBindings::complete`]).
     Unbound,
-    /// Some op links a variable the scan could not read, so whether one names it is not known.
+    /// The scan was not complete, so whether an op names it is not known.
     Unknown,
+}
+
+impl Driver {
+    /// The driver of `actor` from the scan.
+    pub fn of(bindings: &MatineeBindings, actor: ObjRef) -> Driver {
+        if !bindings.complete() {
+            Driver::Unknown
+        } else if bindings.bound.contains(&actor) {
+            Driver::Bound
+        } else {
+            Driver::Unbound
+        }
+    }
 }
 
 /// The record of the Matinee playback.
@@ -635,22 +720,27 @@ pub const ENGINE_RECORD: &str = "NATIVE_ENGINE_CORE.md";
 /// The host's physics for one placed actor of class `class` in physics mode `mode` (lane H-PHYSICS-MODES, decision
 /// 2026-11-19-22). `Ok` is a step that moves nothing; every other answer is a `NotYet` naming its question.
 /// - `PHYS_None`: nothing (the world does not call physics for it; answered for completeness).
-/// - `PHYS_Interpolating`: an actor no loaded Matinee op names moves nothing. Stock UE3's interpolating mode is the
-///   one Matinee drives, and the world runs no other driver: it runs no Kismet, so the object variables empty at load
-///   stay empty. UNVERIFIED in the running game, and so is that the game's interpolating step does nothing else for
-///   such an actor. A bound actor answers `NotYet` for the playback (layer absent); an actor the scan cannot judge,
-///   `NotYet` (not read).
+/// - `PHYS_Interpolating`: in `ParityMode::Off`, an actor no loaded Matinee op names moves nothing. Stock UE3's
+///   interpolating mode is the one Matinee drives, and the world runs no other driver: it runs no Kismet, so the
+///   object variables empty at load stay empty. UNVERIFIED in the running game, and so is that the game's
+///   interpolating step does nothing else for such an actor. In `ParityMode::Reference` it answers `NotYet`: the C++
+///   reference has no host physics to stand in (rule R3). A bound actor answers `NotYet` for the playback (layer
+///   absent); an actor the scan cannot judge, `NotYet` (not read).
 /// - `PHYS_Walking` and `PHYS_Falling`: `NotYet`. The H4 mover is the player pawn's and is not applied to other pawns:
 ///   the walking step itself is not read (NATIVE_PLAYER_MOVEMENT.md, "Not read yet"), a placed pawn's movement values
 ///   are not read, its acceleration comes from a controller that does not exist before begin play, and the collision
 ///   the mover uses lives on the host side, not with the world.
 /// - `PHYS_NavMeshWalking` (Gearbox's), `PHYS_Rotating` and every other mode: `NotYet` (not read).
-pub fn physics_rule(mode: &str, class: &str, driver: Driver) -> Result<(), ow_core::NotYet> {
+pub fn physics_rule(mode: &str, class: &str, driver: Driver, parity: ParityMode) -> Result<(), ow_core::NotYet> {
     use ow_core::NotYet;
     match mode {
         "PHYS_None" => Ok(()),
         "PHYS_Interpolating" => match driver {
-            Driver::Unbound => Ok(()),
+            Driver::Unbound if parity == ParityMode::Off => Ok(()),
+            Driver::Unbound => Err(NotYet::not_ported(
+                format!("the host's interpolating physics for an unbound {class} in Reference (the C++ has no host)"),
+                KISMET_RECORD,
+            )),
             Driver::Bound => Err(NotYet::layer_absent(
                 format!("the Matinee playback that moves a bound interpolating {class}"),
                 "Kismet and Matinee playback in the world",
@@ -686,22 +776,16 @@ pub fn physics_rule(mode: &str, class: &str, driver: Driver) -> Result<(), ow_co
 }
 
 /// Installs the host's physics step on `world` (`World::set_physics_step`): [`physics_rule`] for each actor, with
-/// `bindings` from [`matinee_bound`] over the loaded map. While any linked variable is one that could hold an actor
-/// and was not read ([`MatineeBindings::unreadable`]), every interpolating actor is [`Driver::Unknown`].
+/// `bindings` from [`matinee_bound`] over the loaded map, in the world VM's parity mode. While the scan is not
+/// complete ([`MatineeBindings::complete`]), every interpolating actor is [`Driver::Unknown`].
 pub fn install_physics(world: &mut World, bindings: MatineeBindings) -> Result<(), String> {
     let bindings = Rc::new(bindings);
     world
         .set_physics_step(Rc::new(move |vm: &mut Vm, actor: ObjRef, _dt: f32| {
             let mode = physics_name(&vm.space, actor);
-            let driver = if bindings.unreadable > 0 {
-                Driver::Unknown
-            } else if bindings.bound.contains(&actor) {
-                Driver::Bound
-            } else {
-                Driver::Unbound
-            };
+            let driver = Driver::of(&bindings, actor);
             let class = ow_attr::eval::class_path(&vm.space, actor);
-            physics_rule(&mode, &class, driver).map_err(VmError::NotYet)
+            physics_rule(&mode, &class, driver, vm.parity).map_err(VmError::NotYet)
         }))
         .map_err(|e| e.to_string())
 }
