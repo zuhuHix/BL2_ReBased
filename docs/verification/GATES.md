@@ -12,8 +12,6 @@ review r1, on main b985dcbf: `cargo test --workspace` 2,044 / 0 / 45 and `crate_
 `fix/rust-class-starting-values` before review r1, the six links moved to the library's `NotYet` on
 `WillowGame.BlackMarketUpgradeAttributeValueResolver`, still inside `maya:8`. No real-game run; `UNVERIFIED` in game.
 Decision 2026-11-19-58; logs under ignored `local/p2/fix-attr-getvalue/`.
-**FIX-CLASS-STARTING-VALUES (2026-11-19, pc-hummer, on origin/fix/rust-player-class-b 95afcebd plus the #434 note):**
-**FIX-CLASS-STARTING-VALUES (2026-11-19, pc-hummer, on origin/fix/rust-player-class-b 85c9aa29 plus the #434 note):**
 **FIX-CLASS-STARTING-VALUES (2026-11-19, pc-hummer, rebased onto main 7de9171a, which has #429, #431 and #434):**
 AI-assisted (Claude Code, Opus 5.5). `ApplyCharacterClassStartingValues` (the `Controller` base and the
 `WillowPlayerController` override) in Off from NATIVE_CLASS_STARTING_VALUES.md. `cargo build --workspace --locked -j 4`
@@ -23,7 +21,8 @@ NotYet to an error at `maya:8`, the unbound script native `AttributeDefinition.G
 to 12 stop at `UIInteraction.GetDataStoreClient` (`accept`); 0 ok / 8 NotYet / 6 errors. **Review r1:** `cargo test -p
 ow-combat -p ow-world` 273 passed / 0 failed / 7 ignored, ow-cli 89 passed (combat digests unchanged); clippy flags
 nothing in the changed files; installed Off `--slice-gate` 0/14/0, the six links now at the `InitPlayerSkillTree`
-`NotYet { NotPorted }` before any delete. **Review r2:** ow-combat + ow-world 295 / 0 / 7, ow-cli 89 passed. ctest
+`NotYet { NotPorted }` before any delete. **Review r2:** ow-combat + ow-world 295 / 0 / 7, ow-cli 89 passed; after rebasing onto main c7f08814 (#442
+landed), ow-combat + ow-world 301 / 0 / 7. ctest
 and verify_packages not run (no C++ change). No host or real-game run; every rule stays `UNVERIFIED` in game. Decision
 2026-11-19-57; logs under ignored `local/p2/fix-class-starting-values/`.
 
