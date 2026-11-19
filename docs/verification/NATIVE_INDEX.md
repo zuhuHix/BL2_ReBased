@@ -146,7 +146,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.LocalMissionDependenciesMet | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
 | WillowPlayerController.IsMissionObjectiveCompleteLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
 | WillowPlayerController.IsMissionObjectiveActiveLocal | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | none in WillowGame script | UNVERIFIED | medium-high | |
-| WillowPlayerController.GetActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | online status only | UNVERIFIED | medium | |
+| WillowPlayerController.GetActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md), [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (fallback corrected; Off answers) | online status; slice links 10-12 (settings refresh in accept) | UNVERIFIED | medium | |
 | WillowPlayerController.GetLocalActiveMissionNumber | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | save/online status only | UNVERIFIED | medium | |
 | PlayerController.IsPrimaryPlayer | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates (true standalone) | UNVERIFIED | medium-high | src/mission_script.cpp (true for the sole local controller) |
 | MissionTracker.IsDataValid | [NATIVE_CONTROLLER_HELPERS.md](NATIVE_CONTROLLER_HELPERS.md) | Fire: gates AddMission etc. | UNVERIFIED | high | src/mission_script.cpp (bDataValidated; set by ValidateData through the script ClientValidateMissionData run once at graph build: a shortcut for the trigger) |
@@ -167,7 +167,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | GFxObject.Invoke | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | rare | UNVERIFIED | medium | |
 | GFxMoviePlayer.SetVariable / SetVariableBool / Number / String / Object | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: InitForPC (missions.pcCloseButton._visible) | UNVERIFIED | high | |
 | GFxMoviePlayer.GetVariable / GetVariableBool / Number / String | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | menus | UNVERIFIED | high | |
-| GFxMoviePlayer.GetVariableObject | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: SetFocus | UNVERIFIED | high | |
+| GFxMoviePlayer.GetVariableObject | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md), [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (Off answer: None, unhosted movie) | Fire: SetFocus | UNVERIFIED | high | |
 | GFxMoviePlayer.Get/SetVariableArray (Int, Float, String variants) | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | not read | UNVERIFIED | low | |
 | GFxMoviePlayer.CreateObject / CreateArray | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | list data | UNVERIFIED | high | |
 | GFxMoviePlayer.Start / Advance / SetPause / Close | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: open/close of the accept screen | UNVERIFIED | medium-high | |
@@ -181,8 +181,8 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | GearboxGFxMovie.PlayUISound | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: MenuOpen, accept_mission, MenuClose | UNVERIFIED | medium-high | |
 | GearboxGFxMovie.SingleArgInvokeS / F / B | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | HUD (54 / 8 / 2 sites) | UNVERIFIED | medium | |
 | GearboxGFxMovie.GetInstanceContextObject / GetLocalPlayer / InitFromDefinition | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: QuestAccept Start | UNVERIFIED | medium | |
-| WillowGFxMovie3D.FocusOn | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: accept screen SetFocus (no-op safe) | UNVERIFIED | low-medium | |
-| QuestAcceptGFxMovie.UpdateMissionTextList | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md) | Fire: list category headers (available / turn-in) | UNVERIFIED | medium | |
+| WillowGFxMovie3D.FocusOn | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md), [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (Off answer: nothing for None) | Fire: accept screen SetFocus (no-op safe) | UNVERIFIED | low-medium | |
+| QuestAcceptGFxMovie.UpdateMissionTextList | [NATIVE_GFX_BRIDGE.md](NATIVE_GFX_BRIDGE.md), [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (caller; Off answer for the stand-in screen) | Fire: list category headers (available / turn-in) | UNVERIFIED | medium | |
 | Behavior_TriggerDialogEvent.ApplyBehaviorToContext (script) | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: Out at first run, Finished at line end (poll 0.1 s) | UNVERIFIED | high | src/dialog.cpp DialogSystem::behavior (first run Out + latent 0.001 s, trigger on the wake, 0.1 s poll, Finished, bForcePlayImmediate) |
 | Behavior_TriggerDialogEvent.TriggerDialogEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: group event trigger, instigator = context object | UNVERIFIED | medium-high | src/dialog.cpp trigger (group path only; talker-owned events not implemented) |
 | GearboxDialogManager.TriggerGroupEvent | [NATIVE_DIALOG.md](NATIVE_DIALOG.md) | Fire: event node lookup (last enabled match), chain runs synchronously, pooled event data | UNVERIFIED | high | src/dialog.cpp trigger/findAct (last enabled entry, link table, event data pool) |
@@ -356,7 +356,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPlayerController.ConditionalFixWeaponReadyMax | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | load: weapon slot floor (first playthrough only; plot missions 5 and 10) | UNVERIFIED | high | |
 | WillowPlayerController.GetExpLevelLoadedFromSavedGame / GetExpPointsLoadedFromSavedGame | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | resume: loaded level and experience (floor for the save) | UNVERIFIED | high | |
 | WillowPlayerController.GetExpPoints | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: experience written (never below loaded value, capped otherwise) | UNVERIFIED | medium-high | |
-| WillowPlayerController.GetActivePlotCriticalMissionNumber | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: PlotMissionNumber label | UNVERIFIED | high | |
+| WillowPlayerController.GetActivePlotCriticalMissionNumber | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md), [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (Off answers) | save: PlotMissionNumber label; slice links 10-12 (settings refresh in accept) | UNVERIFIED | high | |
 | WillowPlayerController.GetLocalActiveMissionNumber | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save: ActiveMissionNumber label | UNVERIFIED | medium | |
 | WillowPlayerController.SaveStatsSaveGameData / ApplyStatsSaveGameData | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | stats blob round trip | UNVERIFIED | medium | |
 | WillowPlayerController.GenerateSaveGameGuid / AreSaveGuidsEqual | [NATIVE_SAVE_LOAD.md](NATIVE_SAVE_LOAD.md) | save identity (guid once per character) | UNVERIFIED | high | |
