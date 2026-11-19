@@ -195,7 +195,8 @@ Rule: **lowest free slot, first come first served; one pool per resource.** The 
 1. `WillowPlayerController.SwitchPlayerClass` calls `ApplyCharacterClassStartingValues(CharacterClass)` (virtual). The base (Controller) part first deletes **every** pool of the controller's manager (`DeleteAllPools`),
    then creates, in order: each entry of the class's `ResourcePools` array (array order), then `AccuracyPoolDefinition`, then `OffHandAccuracyPoolDefinition`, each only if set; the accuracy references are stored into the controller's `AccuracyPool` and `OffHandAccuracyPool`.
 2. The player-controller override then, **only with Role 3** and a `PlayerClass`, creates and stores `ExperiencePoolDefinition` into `ExpPool`, `SkillCooldownPoolDefinition` into `SkillCooldownPool` and
-   `MeleeSkillCooldownPoolDefinition` into `MeleeSkillCooldownPool`, then calls one parameterless script function on the controller (name not resolved).
+   `MeleeSkillCooldownPoolDefinition` into `MeleeSkillCooldownPool`, then calls one parameterless script function on the controller. Since read
+   (NATIVE_CLASS_STARTING_VALUES.md): the function is the event `OnPlayerClassChange`, and it runs on the authority with or without a `PlayerClass`.
 3. When the pawn gets its defaults (`WillowGameInfo.SetPlayerDefaults` calls `ApplyCharacterClassDefaults`): `Controller.ApplyCharacterClassDefaults` creates the **health** pool (section 1.8) and reinitialises the two accuracy pools if valid; the
    `WillowPlayerController` version then creates the **shield** pool and ends with `RecalculateAttributeInitializedState` (G23).
 4. Pools not in the class lists (other ammo, grenade resources) appear on first use through `Controller.GetResourcePoolForResourceDefinition(.., true)`.
