@@ -73,8 +73,9 @@ the pawn's player master, the `WillowPlayerController` that masters the pawn, wh
   The mind's own rule was not read beyond the plain answer (whether `GearboxMind` adds steps of its own).
 - `Behavior_AIHold` then asks that mind for its AI component, and the component receives a demigod hold named `Safe`
   whose tag is the pawn, the context object, not the mind.
-- **No controller and no driven vehicle:** step 3 asks the pawn's `Mesh`. What a skeletal mesh component answers is
-  not read (UNVERIFIED); if it answers none, nothing is held.
+- **No controller and no driven vehicle:** step 3 asks the pawn's `Mesh`. A skeletal mesh component answers by
+  `ActorComponent`'s rule (section 6, read since lane ANALYST-LINK11-QUERY-INTERFACE): for `IAIInterface` it gives
+  none, so nothing is held. The port's dummy meets this case on slice link 11 (section 6.3).
 
 ## 5. The port's current assumption (`crates/ow-combat/src/hit.rs`, `ai_interface_for`)
 
@@ -93,6 +94,117 @@ implementer follows section 2:
 
 COMBAT_HIT_CHAIN.md's note ("the hold is applied to the pawn's mind") matches step 2 for a possessed AI pawn.
 
+## 6. A component's answer (`ActorComponent`'s rule; lane ANALYST-LINK11-QUERY-INTERFACE, 2026-11-19)
+
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK11-QUERY-INTERFACE (decision 2026-11-19-NNN).
+- **Sources:**
+  - the game executable, read with Ghidra (`tools/ghidra/run.ps1` read-only queries and the local table reader, one
+    headless run at a time under the machine lock);
+  - field names from `tools/ghidra/class_layout.py`;
+  - two local, uncommitted slice-gate probes (section 6.5).
+- Raw output stays under ignored `local/analysis/link11qi/`. No live session was run: **every rule here is
+  UNVERIFIED**. This lane implements nothing.
+
+### 6.1 Which body answers
+
+`Object.QueryInterface`'s entry calls one virtual of the asked object (section 1). The class tables were found through
+each class's registration and constructor, and their entries for that virtual compared:
+- **`Object`** holds the plain answer of section 2, step 1.
+- **`ActorComponent`** holds its own body.
+- **`SkeletalMeshComponent`** holds the same body as `ActorComponent`.
+- The classes between them (`PrimitiveComponent`, `MeshComponent`) and every other component class were not looked at.
+
+### 6.2 The rule
+
+Asked for an interface class `I`, a component gives the first answer that is not none:
+1. **The plain answer:** the component itself, when its own class or a parent lists `I` (section 2, step 1).
+2. **Its owner:** when the component's `Owner` (the actor field of `ActorComponent`, by the layout tool) is set, the
+   question goes to that actor, which answers by its own rule, the same dispatch as a direct question.
+3. Otherwise: none.
+
+**A question asked twice.** The body keeps its own list of the components that are answering. A question that comes
+back to a component already in that list gets none at once, and the plain answer keeps such a list too. This is the
+same guard section 2 describes for pawns, read here for the component's body, UNVERIFIED in the game.
+
+**Writes:** none. The answering lists are internal bookkeeping, not script-visible state.
+
+### 6.3 The inputs the slice reaches, and their answers
+
+The Fire dummy of link 11 is a `WillowAIPawn` with no `Controller` and no `DrivenVehicle` in the port. The stop's own
+text says so: it went to the `Mesh`. Its `Mesh` is a `SkeletalMeshComponent`.
+- **The plain step:** no installed component class lists `IAIInterface` (section 1's tables list it only for
+  `GearboxMind` and `WillowMind`), so none.
+- **The owner step:**
+  - **`Owner` is the dummy itself:** the dummy is still answering that same question (it asked its `Mesh` in section 2,
+    step 3), so the pawn's guard gives none. The mesh answers none.
+  - **`Owner` is None:** none.
+  - **`Owner` is another actor:** that actor's own answer, by its rule. The slice was not seen to reach this case.
+- So the dummy's answer is **none**, and `Behavior_AIHold` returns without a hold (section 1, NATIVE_AI_HOLDS.md): the
+  dummy is **not** made demigod at that hit.
+
+**This differs from the game's run.** COMBAT_GOLDEN_TRACE.md records the live dummy becoming demigod inside its
+`Behavior_AIHold_59` call. Section 4 expects that answer to come from the dummy's mind through its `Controller`, which
+the game's dummy has and the port's does not. So the "none" here is the game's rule applied to the port's input (a
+pawn with no controller). It is not the game's outcome for the Fire dummy. The missing controller is the port's
+spawn's gap, not this rule's, and is recorded as open (section 6.6).
+
+### 6.4 Off answers, step by step (for an implementer)
+
+The hub's rulings apply:
+- preflight what is cheap and certain;
+- a `NotYet` after a write is terminal and keeps its kind and record;
+- grade by the `VmError` variant and the `NotYet` kind, never by text;
+- **Off only; Reference is unchanged** (Reference keeps `crate::hit::ai_interface_for`'s stand-in).
+
+1. **Register `ActorComponent`'s rule for exactly `Engine.ActorComponent` and `Engine.SkeletalMeshComponent`,** the
+   two classes read. It replaces today's open answer for `Engine.SkeletalMeshComponent`, "what a skeletal mesh
+   component answers to QueryInterface is not read" (`ow_combat::pawn_interface::OPEN_ANSWERS`, record this note).
+2. **The rule:** the plain answer, then the `Owner` through the VM's own interface dispatch (`Vm::query_interface`),
+   whose guard gives none for an object already answering. No step writes.
+3. **`Owner` must be declared:** a component class that does not declare `Owner` is a `VmError::Script` naming it, as
+   the pawn rule's fields are (`required`), never "not set".
+4. **A `NotYet` from the owner's rule** passes through unchanged. The pawn rule's step prefix still names its own step
+   ("goes to its Mesh, a Engine.SkeletalMeshComponent"). There is no `NotYet` of this rule's own. Nothing is written
+   before or during it, so nothing needs preflighting.
+5. **Any other component class between or beside them** (for example an object whose class is exactly
+   `PrimitiveComponent` or `MeshComponent`, or another component subclass): its answer was not read. If such an object
+   is asked, it is `NotYet { NotRead }`, "what a <class> answers to QueryInterface is not read (asked of <class> for
+   <interface>)", record this note. This is the existing open-answer text, so it should be registered per class as the
+   port reaches them, not inherited from `ActorComponent` by default.
+
+### 6.5 Where link 11 stops next (local probes, never committed)
+
+**The base.** A throwaway merge of #496 at 9b591ad and #497 at 7af3ab7 on main 7668d07. The probes applied
+NATIVE_MISSION_TEXT_LIST.md's rulings R1 to R3, and this section's rule.
+- **First probe:** link 11 reaches `hit:fire`, passes the hold (none, as above), and stops on the unbound
+  `WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(object,int,int,int,name)` (an `error` row).
+  That native's record step ends in the same statistics submit routine as the events of NATIVE_MISSION_TEXT_LIST.md
+  section 5. So hub ruling R3 covers it: nothing, with no write, for every player (a port answer, UNVERIFIED).
+- **Second probe**, with that event answered by R3:
+
+| # | Link | Result | Steps passed / driver steps | First stop |
+|---|---|---|---|---|
+| 10 | mission_accept | ok | 8 / 8 | none |
+| 11 | mission_objective | ok | 8 / 8 | none |
+| 12 | mission_turn_in | error | 1 / 6 | `turnin`: unbound native `WillowPlayerController.UnlockAchievementIfConditionsMet(byte,string,int,bool,bool,bool)` |
+
+The whole gate under the second probe gave ok 2, notyet 2, error 10 of 14. The other links' stops were unchanged by
+these answers.
+
+### 6.6 Open (UNVERIFIED)
+
+1. The rule of `PrimitiveComponent`, `MeshComponent` and other component classes (only `ActorComponent` and
+   `SkeletalMeshComponent` were compared).
+2. Why the port's Fire dummy has no `Controller` at its first hit, while the game's has its mind (section 4): the
+   port's spawn of the dummy's mind. Until it does, link 11's hold is the port's, not the game's.
+3. The `Owner` the port's dummy mesh holds (the dummy or None; both give none).
+
+### 6.7 Live checks (bl-sdk, the RTSE way)
+
+1. On the Fire dummy, call `QueryInterface(IAIInterface)` on its `Mesh` directly: expect None.
+2. On a component whose `Owner` answers an interface the component's class does not list (for example a `WillowMind`'s
+   pawn's mesh asked for `IAIInterface`, with the pawn's own answer hooked out of the way), expect the owner's answer.
+
 ## Vehicles (not on the slice path)
 
 The `WillowVehicle` line answers `IAIInterface` and `IAnimBehavior` its own way. `IAnimBehavior` goes to the
@@ -104,7 +216,8 @@ is not a human player's. Otherwise it falls back to section 2. This is recorded 
 - The rule for a question asked twice (section 2): that the inner question gets none and the asker goes on.
 - `GearboxMind`'s own answer: whether it adds steps before or after its class's declared interfaces.
 - `WillowPlayerController`'s answer for `IAIInterface`.
-- What a skeletal mesh component answers.
+- What a skeletal mesh component answers: read in section 6 (`ActorComponent`'s rule). Still open there: the rule of
+  the component classes between `ActorComponent` and `SkeletalMeshComponent`, and of every other component class.
 - Whether `Controller` and `MyWillowMind` can name different objects on a possessed AI pawn.
 - What `Controller` holds on a dead pawn, and on one not possessed yet (the rule reads only the field).
 - `WillowAIPawn`'s `PlayerMaster` field identification.
