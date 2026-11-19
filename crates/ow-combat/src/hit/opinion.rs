@@ -111,6 +111,13 @@ fn call_virtual(vm: &mut Vm, me: ObjRef, name: &str, other: Option<ObjRef>) -> R
     let Some(f) = vm.find_method(class, name, state)? else {
         return Err(not_read(format!("{name} on a {} (its class declares none)", class_name(vm, me))));
     };
+    // An override that resolves but cannot run (an unbound native, under any stub policy, or a script that does not
+    // prepare) is refused before the call, naming the method (review r3 of #449). Errors of a script that runs pass
+    // through unchanged.
+    if let Err(e) = vm.prepare_call(f) {
+        let path = vm.function(f).map(|d| d.path.as_str().to_string()).unwrap_or_default();
+        return Err(not_read(format!("{name} on a {} resolves to {path}, which cannot run here: {e}", class_name(vm, me))));
+    }
     Ok(vm.call(f, Some(me), vec![Value::Object(other)])?.ret)
 }
 
@@ -209,18 +216,26 @@ pub fn generic_opinion(vm: &mut Vm, me: ObjRef, other: Option<ObjRef>) -> Result
 /// `WillowPawn.GetOpinion(Other)`, the charm layer (module documentation).
 fn willow_opinion(vm: &mut Vm, me: ObjRef, other: Option<ObjRef>) -> Result<u8, VmError> {
     const WHAT: &str = "WillowPawn.GetOpinion";
+    let self_link = |field: &str| {
+        not_read(format!(
+            "a WillowPawn asking about itself while its {field} is itself (whether the charm step then matches is \
+             UNVERIFIED in the note, section 4)"
+        ))
+    };
+    // Each field is read just before its step (review r3 of #449): a matching child answers even when the parent field
+    // is missing or invalid.
     let child = object_field(vm, me, "CharmedChild", WHAT)?;
+    if other == Some(me) && child == Some(me) {
+        return Err(self_link("CharmedChild"));
+    }
+    if other.is_some() && child == other {
+        return Ok(ENEMY);
+    }
     let parent = object_field(vm, me, "CharmedParent", WHAT)?;
-    if other == Some(me) && (child == Some(me) || parent == Some(me)) {
-        return Err(not_read(
-            "a WillowPawn asking about itself while its CharmedChild or CharmedParent is itself (whether the charm \
-             steps then match is UNVERIFIED in the note, section 4)",
-        ));
+    if other == Some(me) && parent == Some(me) {
+        return Err(self_link("CharmedParent"));
     }
     if let Some(other) = other {
-        if child == Some(other) {
-            return Ok(ENEMY);
-        }
         if parent == Some(other) {
             return Ok(FRIENDLY);
         }

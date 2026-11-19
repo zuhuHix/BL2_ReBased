@@ -86,6 +86,29 @@ fn willow_game() -> Vec<u8> {
     t.prop("Object", willow, "CharmedParent", 0, willow);
     native(&mut t, willow, "GetOpinion", object, "Byte");
     t.class("WillowAIPawn", willow);
+    // Overrides that resolve but cannot run (review r3 of #449): natives nobody binds, and a script that does not
+    // prepare (an invented token the decoder refuses).
+    let unbound = t.class("ToyUnboundPawn", willow);
+    native(&mut t, unbound, "GetOpinion", object, "Byte");
+    native(&mut t, unbound, "IsFriendly", object, "Bool");
+    let broken = t.class("ToyBrokenPawn", willow);
+    t.function(
+        broken,
+        "GetOpinion",
+        &[Param { type_ref: object, ..Param::new("Object", "Other") }],
+        Some(("Byte", 0)),
+        &[],
+        &FunctionSpec::new(SCRIPT, "GetOpinion"),
+        |_| {
+            let mut a = Asm::new();
+            a.stmt().raw(&[0x5E]);
+            a.end();
+            Some(a)
+        },
+    );
+    // A pawn class with a CharmedChild and no CharmedParent (invented), for the read order of the charm steps.
+    let child_only = t.class("ToyChildOnly", pawn);
+    t.prop("Object", child_only, "CharmedChild", 0, pawn);
     // A pawn whose GetOpinion is a script override: it answers Friendly of everyone (invented).
     let fond = t.class("ToyFondPawn", willow);
     t.function(
@@ -400,4 +423,40 @@ fn is_friendly_dispatches_get_opinion_through_the_vm() {
     let (q, t) = (x.willow_pawn(None), x.willow_pawn(None));
     x.set(t, "CharmedParent", Value::Object(Some(fond)));
     assert_eq!(x.willow(q, Some(t)).unwrap(), E);
+}
+
+/// An override that resolves but cannot run is a named `NotYet` naming the resolved method, decided before any call
+/// (review r3 of #449): an unbound native (whatever the stub policy) and a script that does not prepare, for the
+/// `GetOpinion` dispatch and for the charm parent's `IsFriendly` dispatch.
+#[test]
+fn an_override_that_cannot_run_is_a_named_not_yet() {
+    let mut x = fx(ParityMode::Off, false);
+    let other = x.willow_pawn(None);
+    for (class, method) in [
+        ("WillowGame.ToyUnboundPawn", "WillowGame.ToyUnboundPawn.GetOpinion"),
+        ("WillowGame.ToyBrokenPawn", "WillowGame.ToyBrokenPawn.GetOpinion"),
+    ] {
+        let me = x.obj(class);
+        let text = not_read(x.friendly(me, Some(other)));
+        assert!(text.contains(method) && text.contains("cannot run"), "{text}");
+    }
+    // Step 3 asks the charmed parent's own IsFriendly, which resolves to the unbound override.
+    let (q, t) = (x.willow_pawn(None), x.willow_pawn(None));
+    let parent = x.obj("WillowGame.ToyUnboundPawn");
+    x.set(t, "CharmedParent", Value::Object(Some(parent)));
+    let text = not_read(x.willow(q, Some(t)));
+    assert!(text.contains("WillowGame.ToyUnboundPawn.IsFriendly"), "{text}");
+}
+
+/// Each charm field is read just before its step (review r3 of #449): a matching child answers Enemy even when the
+/// pawn's class has no CharmedParent; anything past that step needs the field.
+#[test]
+fn a_matching_child_answers_before_the_parent_field_is_read() {
+    let mut x = fx(ParityMode::Off, false);
+    let me = x.obj("WillowGame.ToyChildOnly");
+    let child = x.willow_pawn(None);
+    x.set(me, "CharmedChild", Value::Object(Some(child)));
+    assert_eq!(x.willow(me, Some(child)).unwrap(), E);
+    let stranger = x.willow_pawn(None);
+    assert!(x.willow(me, Some(stranger)).is_err(), "no CharmedParent: a data error past step 1");
 }

@@ -65,6 +65,16 @@ mod load;
 #[cfg(test)]
 mod tests;
 
+/// Whether script function `f` can run here: its loader record has no failure and its script decodes (the call's own
+/// preparation, `eval::prepare`). `Ok(false)`: no package export is behind it (declared by hand), so no bytecode.
+pub(crate) fn prepare_script(vm: &mut crate::api::Vm, f: ow_object::ids::FuncId) -> Result<bool, crate::error::VmError> {
+    if load::code_of(vm, f).is_none() {
+        return Ok(false);
+    }
+    eval::prepare(vm, f)?;
+    Ok(true)
+}
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
