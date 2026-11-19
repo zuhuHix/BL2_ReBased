@@ -36,6 +36,9 @@ use ow_vm::error::VmError;
 
 use crate::skills::{DEPTH_BUDGET, SkillError, SkillType, int, read_skill};
 
+/// `WillowPlayerController.InitPlayerSkillTree` in Off (lane IMPL-INIT-PLAYER-SKILL-TREE, decision 2026-11-19-88).
+pub mod init;
+
 /// The record of the tree rules.
 pub const RECORD: &str = "NATIVE_SKILLS.md sections 2-3";
 
