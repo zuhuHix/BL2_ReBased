@@ -66,6 +66,18 @@ MissionTracker.GetAllMissions", the bridge's own `LayerAbsent`; the other links 
 not run (no C++ change). No real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under
 ignored `local/p2/mission-numbers/`.
 
+**LINK-2-FIGHT-AREA (2026-11-19, desktop, on main 203c1aa):** AI-assisted (Claude Code, Claude Opus 5.5). Link 2's
+`fight_area` step checks Maya's walked end against a labelled port fixture area, then places the target dummy there
+through `ow_world`'s spawn path. `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,179 passed / 0
+failed / 46 ignored (5 new in `fight_area::tests`, 1 reworked link 2 test); clippy flags nothing in the changed files;
+`crate_edges_test.py` 19 OK; `check_slice_run_off_test.py` OK (1 new test); `check_slice_gate_test.py` OK; decisions
+check OK (1 added). Installed Off `--slice-gate` strict, under the machine run lock: link 2 `notyet`, 3 of 4 steps
+passed, stop `fight_area`, before and after. Before, the stop was "needs a fight area placed in the map world"; after,
+Maya's walk ends 9.5 uu from the area's centre (inside its 200 uu radius), and the dummy's spawn stops at decision
+2026-11-19-44's inherited-component `NotYet` (`SpecialMoveComponent0` of `Default__WillowAIPawn`). The other 13 rows
+are byte-identical; 0 ok / 14 NotYet / 0 errors before and after. ctest and verify_packages not run (no C++ change). A
+fixture, not parity: `UNVERIFIED` in game. Decision 2026-11-19-76; logs under ignored `local/p2/fight-area/`.
+
 **IMPL-PAWN-AI-INTERFACE (2026-11-19, desktop, on main bb46e11):** AI-assisted (Claude Code, Claude Opus 5.5).
 `Pawn`'s `QueryInterface` rule for `IAIInterface` in Off (a per-class rule registry in `ow-vm`, `ow-combat`
 `pawn_interface`); the open answers are named `NotYet`s; Reference unchanged. `cargo build --workspace` clean; `cargo

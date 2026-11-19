@@ -81,7 +81,7 @@ fn every_link_has_a_driver_and_one_that_did_not_run_is_an_error() {
 }
 
 #[test]
-fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
+fn link_2_walks_with_the_shared_mover_and_passes_in_the_fight_area() {
     let i = index("reach_fight_area");
     let l = &LINKS[i];
     assert_eq!(l.driver.name(), "sanctuary-walk");
@@ -105,28 +105,31 @@ fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
         .collect();
     let floor = CollisionWorld::new(vec![Brush::from_hull(&points, &[], 0).expect("a box")]);
     let maya = || Mover::spawn(MovementParams::maya(), [0.0, 0.0, 200.0], Default::default());
-    // A passing walk is the link's evidence and goes on to the fight area, which is a named NotYet, never ok.
+    // A passing walk leaves no stop and no evidence yet: the fight area (decision 2026-11-19-76) decides.
     let report = scripted_walk(&floor, &mut maya());
     assert!(report.passed(), "the walk on a flat floor passes its own checks");
     let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
     walk_graded(&mut r, &report);
-    assert!(r.evident);
+    assert!(r.stop.is_none() && !r.evident);
+    // The fixture's area around an invented centre at Maya's end, the dummy placed there: the link is ok.
+    let area = fight_area::FIGHT_AREA;
+    let near = [report.end[0] + 10.0, report.end[1], report.end[2]];
+    fight_area::graded(&mut r, &area, near, report.end, || Ok(near));
+    assert!(r.evident, "{:?}", r.stop);
     assert_eq!(r.steps.last().map(String::as_str), Some("fight_area"));
     let mut ran = vec![None; LINKS.len()];
     ran[i] = Some(r);
     let graded = rows(&ran, Grading::Strict, |j| evident(j, &ran, &status));
+    assert_eq!(graded[i].result, Outcome::Ok, "{:?}", graded[i].stop);
+    // The same walk with the area's centre far from Maya's end: an error at `fight_area`, not ok.
+    let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
+    walk_graded(&mut r, &report);
+    let far = [report.end[0] + area.radius + 1.0, report.end[1], report.end[2]];
+    fight_area::graded(&mut r, &area, far, report.end, || Ok(far));
+    ran[i] = Some(r);
+    let graded = rows(&ran, Grading::Strict, |j| evident(j, &ran, &status));
     let stop = graded[i].stop.as_ref().unwrap();
-    assert_eq!(
-        (graded[i].result, stop.step.as_str()),
-        (Outcome::NotYet, "fight_area")
-    );
-    assert_eq!(stop.native, "the fight area of link 2");
-    assert_eq!(stop.record, "SLICE_RUN_PLAN.md section 3.2");
-    // The stop text grades as a NotYet when read back from text too.
-    assert_eq!(
-        classify("fight_area", &fight_area_not_yet().to_string()).0,
-        Outcome::NotYet
-    );
+    assert_eq!((graded[i].result, stop.step.as_str()), (Outcome::Error, "fight_area"));
     // A walk that fails its own checks is an error at `walk`, with no evidence: with no floor, Maya falls through.
     let report = scripted_walk(&CollisionWorld::new(vec![]), &mut maya());
     assert!(!report.passed() && report.fell_through);

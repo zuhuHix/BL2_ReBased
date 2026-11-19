@@ -26,8 +26,11 @@
 //!   yet, so it is never ok.
 //! - `sanctuary-walk` (lane LINK-2-HEADLESS-MOVER, decision 2026-11-19-66): link 2, H4's scripted walk on the
 //!   installed Sanctuary (`ow_assets::movement`, the mover and collision `ow-host --walk` and `--play` use), on its own
-//!   load. The walk's own checks (no fall through the world, no stuck segment) are its evidence; it then stops at
-//!   `fight_area` with a named `NotYet`, because no fight area is placed in the map world yet ([`fight_area_not_yet`]).
+//!   load. The walk's own checks (no fall through the world, no stuck segment) come first; then `fight_area`
+//!   (lane LINK-2-FIGHT-AREA, decision 2026-11-19-76) places the target dummy at a labelled PORT FIXTURE spot
+//!   ([`fight_area::FIGHT_AREA`]) through `ow_world`'s spawn path and passes when Maya's walked end and the dummy are
+//!   both inside that area. That is the link's evidence, as a port fixture and not parity: Sanctuary's own
+//!   population is a later seam.
 //! - `none`: links 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
 //!
 //! The two driver worlds are separate: the gate's one session is not modelled yet (the slice bridge refuses a world
@@ -173,9 +176,13 @@ pub const LINKS: [Link; 14] = [
         Driver::Walk,
         &["load", "spawn", "walk", "fight_area"],
         &[],
-        Evidence::Driver("the walk's own checks: no fall through the world and no stuck segment"),
+        Evidence::Driver(
+            "the walk's own checks (no fall through the world, no stuck segment), then Maya's walked end and the placed \
+             dummy inside the fight area (a PORT FIXTURE, decision 2026-11-19-76)",
+        ),
         "H4's scripted Sanctuary walk (SANCTUARY_SCRIPT, 1/60 s steps) through the host's mover and collision, on its \
-         own load; no fight area is placed in the map world, so the link stops at fight_area",
+         own load; the fight area is a port fixture spot with the target dummy placed by the driver through \
+         ow_world's spawn path, not Sanctuary's own population",
     ),
     link(
         "kill_enemy",
@@ -1006,9 +1013,9 @@ fn typed_stop(step: &str, e: &ow_vm::error::VmError) -> (Outcome, Stop) {
 }
 
 /// Link 2 (module documentation): Sanctuary loaded and its collision built (`load`), Maya at its first player start
-/// (`spawn`), H4's scripted walk (`walk`), then the fight area (`fight_area`). The mover and the collision are the
-/// host's own (`ow_assets::movement`); nothing here adds a movement rule. A walk that fails its own checks is an
-/// `error`; one that passes reaches `fight_area`, which answers [`fight_area_not_yet`].
+/// (`spawn`), H4's scripted walk (`walk`), then the fight area (`fight_area`, [`fight_area`]). The mover and the
+/// collision are the host's own (`ow_assets::movement`); nothing here adds a movement rule. A walk that fails its own
+/// checks is an `error`; one that passes goes on to `fight_area`.
 fn run_walk(cooked: &Path, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Walk) else {
         return;
@@ -1031,6 +1038,11 @@ fn walk_link(cooked: &Path) -> Ran {
         }
     };
     r.steps.push("spawn".into());
+    // The player start the walk begins at (the one `spawn` takes): the fight area is placed from it.
+    let start = loaded.scene.player_starts.values().next().map(|s| {
+        let l = s.pose.location;
+        [f64::from(l[0]), f64::from(l[1]), f64::from(l[2])]
+    });
     let mut spawn_text = String::new();
     let world = &loaded.collision.world;
     let mut mover = match sanctuary::spawn(&loaded.scene, world, &mut spawn_text) {
@@ -1046,16 +1058,25 @@ fn walk_link(cooked: &Path) -> Ran {
     // The same invocation as `ow-host --walk` (script and time step).
     let report = sanctuary::scripted_walk(world, &mut mover);
     walk_graded(&mut r, &report);
+    if r.stop.is_some() {
+        return r;
+    }
+    let Some(start) = start else {
+        r.stop = Some(classify("fight_area", "the scene has no player start"));
+        return r;
+    };
+    let area = fight_area::FIGHT_AREA;
+    let centre = fight_area::centre(&area, start);
+    fight_area::graded(&mut r, &area, centre, report.end, || fight_area::place_dummy(cooked, centre));
     r
 }
 
-/// Grades link 2 after the walk `report` (pure, so the tests share it with `walk_link`): a walk that failed its own checks
-/// stops the link with an `error`; one that passed is the link's evidence and goes on to `fight_area`, which stops
-/// it with [`fight_area_not_yet`].
+/// Grades link 2's walk `report` (pure, so the tests share it with `walk_link`): a walk that failed its own checks
+/// stops the link with an `error`; one that passed leaves no stop, and the link goes on to `fight_area`
+/// ([`fight_area::graded`]), which alone can make it evident.
 pub fn walk_graded(r: &mut Ran, report: &ow_assets::movement::walk::WalkReport) {
     let (fell_through, stuck, ticks) = (report.fell_through, report.stuck, report.ticks);
-    r.evident = report.passed();
-    if !r.evident {
+    if !report.passed() {
         r.stop = Some((
             Outcome::Error,
             Stop {
@@ -1066,24 +1087,7 @@ pub fn walk_graded(r: &mut Ran, report: &ow_assets::movement::walk::WalkReport) 
                 ..Stop::default()
             },
         ));
-        return;
     }
-    r.steps.push("fight_area".into());
-    r.stop = Some((
-        Outcome::NotYet,
-        stop_of_not_yet("fight_area", &fight_area_not_yet()),
-    ));
-}
-
-/// Why link 2 stops after a passing walk: the gate needs enemies placed where Maya can reach them, and whether that
-/// is Sanctuary's own population or a test fixture is not chosen (SLICE_RUN_PLAN.md section 3.2). The walk does not
-/// stand in for it.
-pub fn fight_area_not_yet() -> NotYet {
-    NotYet::layer_absent(
-        "the fight area of link 2",
-        "a fight area placed in the map world",
-        "SLICE_RUN_PLAN.md section 3.2",
-    )
 }
 
 /// Links 6 and 7 (`crate::cmd::slice_pickup`): `make` on the equip run's world (link 7 with a decoy), then the link's
@@ -1303,6 +1307,8 @@ pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     let _ = std::io::stdout().lock().write_all(out.as_bytes());
     ExitCode::from(exit_code(&rows))
 }
+
+pub mod fight_area;
 
 #[cfg(test)]
 #[path = "slice_gate_tests.rs"]

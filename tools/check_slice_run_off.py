@@ -17,6 +17,8 @@ SLICE-GATE-DRIVERS, decision 2026-11-19-39), `sanctuary-walk` (link 2, lane LINK
 2026-11-19-66), `pickup` (link 6) and `pickup-aimed` (link 7; lane IMPL-PICKUP, decision 2026-11-19-68), or `none`.
 Each of the last five drives its own link only, and a `phaselock-cast` row is never ok until an evidence check is
 chosen for it.
+A `sanctuary-walk` row may be ok only with its fight-area check (a port fixture, decision
+2026-11-19-76) as its last step.
 
 A pass says the Rust port's headless drivers did each link in Off; it says nothing about the real game (UNVERIFIED).
 
@@ -38,11 +40,14 @@ DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'sanctuary-
 # The drivers that run one link only, and the link each runs (decisions 2026-11-19-39, 2026-11-19-66 and 2026-11-19-68).
 DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy', 'sanctuary-walk': 'reach_fight_area',
                'pickup': 'pick_up_gun', 'pickup-aimed': 'pick_up_aimed_not_nearest'}
-# Drivers with no evidence check chosen yet: a row they drive is never ok. `sanctuary-walk` walks H4's script but
-# cannot yet check that the walk arrives at the fight area, which no map world places (SLICE_RUN_PLAN.md section 3.2),
-# so its `reach_fight_area` row may not be ok. Lane 19d5's fight-area port fixture (decision 2026-11-19-76) lifts this
-# once the driver checks arrival: remove `sanctuary-walk` here in that change, not before.
-NO_EVIDENCE_YET = ('phaselock-cast', 'sanctuary-walk')
+# Drivers with no evidence check chosen yet: a row they drive is never ok. `sanctuary-walk` left this list with
+# lane LINK-2-FIGHT-AREA (decision 2026-11-19-76): its driver now checks that Maya's walk ends in the fight area (a
+# labelled port fixture) with the target dummy placed there, so its row may be ok, but only with that check as its
+# last step (ARRIVAL_STEP).
+NO_EVIDENCE_YET = ('phaselock-cast',)
+# The step an ok `sanctuary-walk` row must end with: the fight-area check (decision 2026-11-19-76).
+ARRIVAL_STEP = 'fight_area'
+
 STOP_FIELDS = ('step', 'native', 'record', 'text')
 
 
@@ -116,6 +121,10 @@ def parse(lines):
             raise Malformed(f'{where}: a link without a driver cannot be ok')
         if row['driver'] in NO_EVIDENCE_YET and row['result'] == 'ok':
             raise Malformed(f'{where}: {row["driver"]} has no evidence check yet, so it cannot be ok')
+        steps = row.get('steps')
+        last = steps[-1] if isinstance(steps, list) and steps else None
+        if row['driver'] == 'sanctuary-walk' and row['result'] == 'ok' and last != ARRIVAL_STEP:
+            raise Malformed(f'{where}: an ok sanctuary-walk row must end with its {ARRIVAL_STEP} check, not {last!r}')
         seen[row['link']] = row
     return rows
 
