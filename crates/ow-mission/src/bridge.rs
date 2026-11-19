@@ -25,7 +25,9 @@
 //!   `CanEndMission`, `GetCompletedBranch`, `IsDataValid`, `ValidateData`, `IsMissionObjectiveActive`,
 //!   `IsMissionObjectiveComplete`, `IsObjectiveSetActive`, `UpdateObjective`, `RegisterMissionObserver`, and outside
 //!   `ParityMode::Reference` `GetObjectivesProgress` (NATIVE_SLICE_OFF_STOPS.md; the C++ stubs it, decision
-//!   2026-11-19-05);
+//!   2026-11-19-05) and the record queries `GetActivePrimaryObjectiveSet`, `GetAllMissions` and
+//!   `AllExpansionSideMissionsComplete` (NATIVE_MISSION_OBJECTIVES.md, decision 2026-11-19-10: the first in the
+//!   bridge's one-record terms; the other two `NotYet` past a None controller, as they walk the whole mission list);
 //! - the controller: `NativeGetMissionIndex`, `GetCurrentPlaythrough`, `ExpEarn`, `GetMaxExpLevel`,
 //!   `GetExpPointsRequiredForLevel`, `GetHUDMovie` (None), `UpdateLcdMissionStatus` and `PlayUIAkEvent`
 //!   (presentation: no-ops), `PlayerController.IsPrimaryPlayer`;
@@ -115,6 +117,9 @@ use crate::tracker::{
 
 /// The record of the bridge.
 pub const RECORD: &str = "NATIVE_MISSION_SCRIPT_BRIDGE.md";
+
+/// The record of the tracker's record queries (decision 2026-11-19-10).
+pub const RECORD_OBJECTIVES: &str = "NATIVE_MISSION_OBJECTIVES.md";
 
 /// The director's stock pawn archetype and his AI-definition provider.
 pub const MARCUS_PAWN: &str = "GD_Marcus.Character.Pawn_Marcus";
@@ -746,9 +751,17 @@ impl MissionScript {
             bind_optional(vm, path, self.native(path, body))?;
         }
         // Off only: the C++ stubs it, and Reference keeps that stub (R3; decision 2026-11-19-05).
+        // The same for the record queries of NATIVE_MISSION_OBJECTIVES.md (decision 2026-11-19-10).
         if vm.parity != ParityMode::Reference {
-            let path = "WillowGame.MissionTracker.GetObjectivesProgress";
-            bind_optional(vm, path, self.native(path, MissionScript::n_objectives_progress))?;
+            const OFF_ONLY: [(&str, Body); 4] = [
+                ("WillowGame.MissionTracker.GetObjectivesProgress", MissionScript::n_objectives_progress),
+                ("WillowGame.MissionTracker.GetActivePrimaryObjectiveSet", MissionScript::n_active_primary_set),
+                ("WillowGame.MissionTracker.GetAllMissions", MissionScript::n_all_missions),
+                ("WillowGame.MissionTracker.AllExpansionSideMissionsComplete", MissionScript::n_expansion_side_complete),
+            ];
+            for (path, body) in OFF_ONLY {
+                bind_optional(vm, path, self.native(path, body))?;
+            }
         }
         bind(
             vm,
@@ -1742,6 +1755,68 @@ impl MissionScript {
         }
         c.set_out(1, Value::Array(Rc::new(progress)))?;
         Ok(Value::None)
+    }
+
+    // GetActivePrimaryObjectiveSet(Mission), Off mode only (NATIVE_MISSION_OBJECTIVES.md, UNVERIFIED; the C++ stubs it).
+    // The record's ActiveObjectiveSet, SubObjectiveSets not consulted. The bridge holds one record, its own mission's
+    // (the note's "in the bridge's terms"): any other mission has no record and answers None, and so does this one
+    // while no set is active. The active set is the tracker's path; the object is the mission's `ObjectiveSetDefs`
+    // entry of that path (the tracker read its sets from that list).
+    fn n_active_primary_set(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        if !self.on(c, self.inner.o.tracker) {
+            return outside_binding(c);
+        }
+        if !self.is_mission(c.vm, &c.arg(0)?.clone())? {
+            return Ok(Value::Object(None));
+        }
+        let active = self.inner.mission.active_set();
+        if active.is_empty() {
+            return Ok(Value::Object(None));
+        }
+        let defs = prop(&c.vm.space, self.inner.mission.definition(), "ObjectiveSetDefs")?;
+        let defs: Vec<Value> = defs.as_ref().and_then(|d| d.elements()).map(<[Value]>::to_vec).unwrap_or_default();
+        for d in &defs {
+            if path_of(c.vm, d)? == active {
+                return Ok(Value::Object(Some(self.load_ref(c.vm, d)?)));
+            }
+        }
+        Err(data(format!("mission script bridge: the active objective set {active} is not in ObjectiveSetDefs")))
+    }
+
+    // GetAllMissions(out Missions), Off mode only (NATIVE_MISSION_OBJECTIVES.md). The rule is read (every record's
+    // MissionDef, in the list's name order, appended to the caller's array), but it walks the tracker's whole
+    // MissionList and the bridge holds one record: answering with that one would tell the turn-in's playthrough checks
+    // that every mission of the game is in the list. NotYet until the tracker holds the game's list.
+    fn n_all_missions(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        if !self.on(c, self.inner.o.tracker) {
+            return outside_binding(c);
+        }
+        Err(NotYet::layer_absent(
+            "MissionTracker.GetAllMissions (every record of the tracker's MissionList)",
+            "the tracker's full mission list (the bridge holds one record)",
+            RECORD_OBJECTIVES,
+        )
+        .into())
+    }
+
+    // AllExpansionSideMissionsComplete(Controller, Expansion), Off mode only (NATIVE_MISSION_OBJECTIVES.md). A None
+    // controller is false. Otherwise the playthrough index comes from a controller virtual the note does not resolve
+    // by name, and the test walks the tracker's whole MissionList, which the bridge does not hold: NotYet { NotRead }
+    // naming both.
+    fn n_expansion_side_complete(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        if !self.on(c, self.inner.o.tracker) {
+            return outside_binding(c);
+        }
+        if matches!(c.arg(0)?, Value::Object(None) | Value::None) {
+            return Ok(Value::Bool(false));
+        }
+        Err(NotYet::not_read(
+            "MissionTracker.AllExpansionSideMissionsComplete with a controller (the controller virtual that gives the \
+             playthrough index is not resolved by name; the test walks the tracker's full MissionList, which the \
+             bridge does not hold)",
+            RECORD_OBJECTIVES,
+        )
+        .into())
     }
 
     // RegisterMissionObserver: the observer is told "level load" at once and then every notification the tracker
