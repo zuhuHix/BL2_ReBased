@@ -67,6 +67,18 @@ fn engine() -> Vec<u8> {
         t.prop("Float", world_info, f, 0, 0);
     }
     toy_array_of(&mut t, world_info, "StreamingLevels", "Object", object);
+    // The Kismet classes the Matinee scan reads (lane H-PHYSICS-MODES review r1): an op, its link struct, the plain
+    // object variable, a subclass of it, a named variable and a scalar one.
+    let link = toy_struct(&mut t, object, "SeqVarLink", None);
+    toy_array_of(&mut t, link, "LinkedVariables", "Object", object);
+    let interp = t.class("SeqAct_Interp", object);
+    toy_array_of(&mut t, interp, "VariableLinks", "Struct", link);
+    let var = t.class("SeqVar_Object", object);
+    t.prop("Object", var, "ObjValue", 0, object);
+    t.class("SeqVar_ObjectList", var);
+    let named = t.class("SeqVar_Named", object);
+    t.prop("Name", named, "FindVarName", 0, 0);
+    t.class("SeqVar_Float", object);
     let streaming = t.class("LevelStreaming", object);
     t.prop("Name", streaming, "PackageName", 0, 0);
     t.class("Pawn", actor);
@@ -284,9 +296,13 @@ fn an_interpolating_actor_a_matinee_names_waits_for_the_playback() {
 fn each_physics_mode_s_rule() {
     use ow_core::notyet::Missing;
     let c = "Engine.InterpActor";
-    assert_eq!(physics_rule("PHYS_None", c, Driver::Bound), Ok(()));
-    assert_eq!(physics_rule("PHYS_Interpolating", c, Driver::Unbound), Ok(()));
-    let missing = |mode: &str, driver| physics_rule(mode, c, driver).unwrap_err();
+    let off = ParityMode::Off;
+    assert_eq!(physics_rule("PHYS_None", c, Driver::Bound, off), Ok(()));
+    assert_eq!(physics_rule("PHYS_Interpolating", c, Driver::Unbound, off), Ok(()));
+    // R3: the no-op is Off's; the C++ reference has no host physics to stand in.
+    let reference = physics_rule("PHYS_Interpolating", c, Driver::Unbound, ParityMode::Reference).unwrap_err();
+    assert!(matches!(reference.missing, Missing::NotPorted), "{reference}");
+    let missing = |mode: &str, driver| physics_rule(mode, c, driver, off).unwrap_err();
     assert!(matches!(missing("PHYS_Interpolating", Driver::Bound).missing, Missing::LayerAbsent(_)));
     for (mode, driver, record, words) in [
         ("PHYS_Interpolating", Driver::Unknown, KISMET_RECORD, "whether a Matinee op names an interpolating"),
@@ -338,6 +354,72 @@ fn a_transform_that_cannot_be_read_is_refused_not_zeroed() {
 fn a_world_thread_panic_is_reported_with_its_message() {
     let err = WorldLink::spawn(Box::new(|| panic!("an invented failure"))).unwrap_err();
     assert_eq!(err, "the world thread panicked before loading the map: an invented failure");
+}
+
+/// The Matinee scan's reading of one op's variables, on objects of the invented Kismet classes (review r1 of #420):
+/// a plain object variable binds its actor, an empty one is counted as empty, and a subclass of it or a named
+/// variable makes the scan incomplete, so every actor's driver is Unknown.
+#[test]
+fn the_scan_reads_each_variable_kind_and_flags_what_it_cannot_see() {
+    let (mut world, _) = builder(0, [0.0; 3], 0)().unwrap();
+    let pawn = *world.actors().borrow().list().last().unwrap();
+    let vm = &mut world.vm;
+    let link_ty = vm.space.classes.struct_by_path("Engine.Object.SeqVarLink").expect("the invented link struct");
+    let object = |vm: &mut Vm, class: &str, name: &str| {
+        let c = vm.find_class(class).unwrap();
+        vm.space.alloc(c, name, None, ow_object::heap::Origin::Runtime).unwrap()
+    };
+    let set = |vm: &mut Vm, o: ObjRef, name: &str, v: Value| {
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, name).unwrap();
+        vm.space.write(o, PropAddr::scalar(p), v).unwrap();
+    };
+    // One op linking `vars` through one link.
+    let op_over = |vm: &mut Vm, vars: Vec<ObjRef>| {
+        let op = object(vm, "Engine.SeqAct_Interp", "Interp");
+        let layout = vm.space.classes.struct_layout(link_ty).unwrap();
+        let (entry, _) = layout.field(vm.space.names.find("LinkedVariables").unwrap()).unwrap();
+        let Value::Struct(zero) = layout.zero().clone() else { panic!("the link is a struct") };
+        let mut fields = zero.fields.clone();
+        fields[usize::try_from(entry).unwrap()] = Value::array(vars.into_iter().map(|v| Value::Object(Some(v))).collect());
+        set(vm, op, "VariableLinks", Value::array(vec![Value::structure(link_ty, fields)]));
+        op
+    };
+    let plain = object(vm, "Engine.SeqVar_Object", "Plain");
+    set(vm, plain, "ObjValue", Value::Object(Some(pawn)));
+    let empty = object(vm, "Engine.SeqVar_Object", "Empty");
+    let scalar = object(vm, "Engine.SeqVar_Float", "Scalar");
+    let op = op_over(vm, vec![plain, empty, scalar]);
+    let mut out = MatineeBindings::default();
+    read_op_variables(vm, op, &mut out).unwrap();
+    assert_eq!((out.bound.iter().copied().collect::<Vec<_>>(), out.empty), (vec![pawn], 1));
+    assert!(out.complete(), "{out:?}");
+    assert_eq!(Driver::of(&out, pawn), Driver::Bound);
+    assert_eq!(Driver::of(&out, plain), Driver::Unbound);
+    // A subclass of the object variable with no value (an object list, say): incomplete, every driver Unknown.
+    let list = object(vm, "Engine.SeqVar_ObjectList", "List");
+    let op = op_over(vm, vec![list]);
+    let mut out = MatineeBindings::default();
+    read_op_variables(vm, op, &mut out).unwrap();
+    assert_eq!((out.empty, out.unreadable), (0, 1));
+    assert_eq!(Driver::of(&out, pawn), Driver::Unknown);
+    // A named variable (no ObjValue, not a class known to hold no actor): incomplete too.
+    let named = object(vm, "Engine.SeqVar_Named", "Named");
+    let op = op_over(vm, vec![named]);
+    let mut out = MatineeBindings::default();
+    read_op_variables(vm, op, &mut out).unwrap();
+    assert_eq!(out.unreadable, 1);
+    assert_eq!(Driver::of(&out, pawn), Driver::Unknown);
+    // An op whose VariableLinks is not an array of links is counted, and makes the scan incomplete.
+    let bare = object(vm, "Engine.SeqVar_Float", "NotAnOp");
+    let mut out = MatineeBindings::default();
+    read_op_variables(vm, bare, &mut out).unwrap();
+    assert_eq!(out.unreadable_ops, 1);
+    assert!(!out.complete());
+    // An export class that does not resolve makes it incomplete as well.
+    let mut out = MatineeBindings::default();
+    out.unresolved_classes.insert("Nowhere.Unknown".into(), 1);
+    assert_eq!(Driver::of(&out, pawn), Driver::Unknown);
 }
 
 #[test]
@@ -413,17 +495,11 @@ fn sanctuary_physics_census() {
                 extra = format!(" RotationRate {rate:?} bRotateToDesired {:?}", read(space, o, "bRotateToDesired"));
             }
             *census.entry(format!("{mode} {class} base {base}{extra}")).or_default() += 1;
-            let driver = if bindings.unreadable > 0 {
-                Driver::Unknown
-            } else if bound.contains(&o) {
-                Driver::Bound
-            } else {
-                Driver::Unbound
-            };
+            let driver = Driver::of(&bindings, o);
             let outcome = if base {
                 "the world's Base NotYet".to_string()
             } else {
-                match physics_rule(&mode, &class, driver) {
+                match physics_rule(&mode, &class, driver, ParityMode::Off) {
                     Ok(()) => "passes (no-op)".to_string(),
                     Err(n) => format!("NotYet: {}", n.what),
                 }
@@ -434,12 +510,17 @@ fn sanctuary_physics_census() {
             *outcomes.entry(outcome).or_default() += 1;
         }
         let mut out = format!(
-            "actors {}; {} matinee ops bind {} actors; {} empty object variables; other linked variables {:?}\n",
+            "actors {}; {} matinee ops bind {} actors; {} empty object variables; other linked variables {:?}; \
+             unreadable variables {}, unreadable ops {}, unresolved export classes {:?}; complete {}\n",
             list.len(),
             bindings.ops,
             bound.len(),
             bindings.empty,
-            bindings.unresolved
+            bindings.unresolved,
+            bindings.unreadable,
+            bindings.unreadable_ops,
+            bindings.unresolved_classes,
+            bindings.complete()
         );
         out.push_str(&format!("first stop in list order: {first_stop:?}
 "));
