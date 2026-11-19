@@ -331,6 +331,16 @@ Results:
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-182.
 
+**IMPL-SKELETAL-MESH-LAYER (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). The
+read-only skeletal mesh data layer (`ow-world` `world::skeletal`: reference skeleton from a harness-installed source,
+`ow-cli`'s over ow-assets' ActorX reader; sockets from the store's objects). `cargo build --workspace -j 2` clean;
+`cargo test --workspace -j 2` 2,449 passed / 0 failed / 47 ignored (ow-world skeletal 5; one new ignored installed
+probe); clippy no new warnings; `crate_edges_test.py` OK. Installed probe (UModel 1590 export of Maya's body mesh,
+counts only): 27 bones, parse pass; 13 socket objects unloaded after the mesh's load (refused, nothing loaded), all 13
+read after a harness load. No slice-gate change (nothing installs the source). ctest and verify_packages not run (no C++
+change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; probe output under ignored
+`local/analysis/skel/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

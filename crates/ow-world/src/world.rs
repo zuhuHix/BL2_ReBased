@@ -599,6 +599,9 @@ pub mod mapload;
 /// section 5); the bring-up calls it.
 pub mod nav_join;
 
+/// The skeletal mesh data layer, read only (lane IMPL-SKELETAL-MESH-LAYER).
+pub mod skeletal;
+
 pub mod localize;
 
 /// The engine's data store client and the online game settings route (lane IMPL-ONLINE-GAME-SETTINGS).

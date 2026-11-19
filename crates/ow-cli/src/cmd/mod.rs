@@ -21,6 +21,7 @@ pub mod resolve;
 pub mod script;
 pub mod slice;
 pub mod slice_gate;
+pub mod skeletal_source;
 pub mod slice_pickup;
 pub mod tables;
 pub mod vm;
