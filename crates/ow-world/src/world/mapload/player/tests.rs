@@ -195,9 +195,12 @@ fn a_none_login_attaches_nothing_and_keeps_the_error() {
 #[test]
 fn the_preflight_refuses_before_login() {
     type Case = (&'static str, Missing, fn(&mut Toy, ObjRef) -> (Vec<ObjRef>, PlayActorInput<'static>));
-    let cases: [Case; 6] = [
+    let cases: [Case; 7] = [
         ("unknown id", Missing::NotRead, |_, p| (vec![p], PlayActorInput { net_id: NetIdAnswer::Unknown, ..input(&[]) })),
         ("no remote role", Missing::NotRead, |_, p| (vec![p], PlayActorInput { remote_role: None, ..input(&[]) })),
+        ("authority as the remote role", Missing::NotRead, |_, p| {
+            (vec![p], PlayActorInput { remote_role: Some(ROLE_AUTHORITY), ..input(&[]) })
+        }),
         ("a client", Missing::NotRead, |x, p| {
             let wi = x.f.wi;
             actors::set_field(&mut x.f.w.vm.space, wi, "NetMode", Value::Byte(NET_MODE_CLIENT)).unwrap();
@@ -235,6 +238,26 @@ fn the_preflight_refuses_before_login() {
             assert!(x.f.w.actors().borrow().local_players().is_empty(), "{name}");
         });
     }
+}
+
+/// A game info whose class defines no `Login`: a plain data error (not a `NotYet`), unmarked, nothing written.
+#[test]
+fn a_game_info_without_login_is_a_data_error() {
+    run(|| {
+        let mut x = toy(ParityMode::Off, Answer::Spawn);
+        let player = make_local_player(&mut x.f.w, "Engine.LocalPlayer").unwrap();
+        let (wi, other) = (x.f.wi, x.start);
+        actors::set_field(&mut x.f.w.vm.space, wi, "Game", Value::Object(Some(other))).unwrap();
+        let mark = WriteMark::now(&x.f.w.vm);
+        let e = spawn_play_actor(&mut x.f.w, player, &input(&[player])).unwrap_err();
+        assert!(
+            matches!(&e, VmError::Script { message, .. } if message.contains("defines no Login") && !is_partial_writes(message)),
+            "{e:?}"
+        );
+        assert!(!mark.moved(&x.f.w.vm), "nothing written");
+        assert!(x.seen.borrow().login.is_empty());
+        assert!(x.f.w.actors().borrow().local_players().is_empty());
+    });
 }
 
 /// Reference is unchanged: the C++ has no map load, so the routine is not ported there.

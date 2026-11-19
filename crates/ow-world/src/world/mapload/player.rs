@@ -14,8 +14,9 @@
 //! **The routine** (section 4, server side, in the hub's binding order):
 //! 1. **Before any write**, every refusal: not Off (`NotYet { NotPorted }`); no game info in `WorldInfo.Game` (the
 //!    bring-up's own `NotYet`); a network client (the client branch is not read); a `GetUniqueNetId` answer the port
-//!    does not model ([`NetIdAnswer::Unknown`]: anything but the empty id); no single-player remote role stated (the
-//!    caller states it; its value as the engine passes it is not read, UNVERIFIED); a
+//!    does not model ([`NetIdAnswer::Unknown`]: anything but the empty id); a remote role that is not stated or is
+//!    not [`ROLE_SIMULATED_PROXY`] (the port's answer for a single-player local player, NATIVE_MAP_LOAD.md section
+//!    6.3: the value the engine passes is not read, UNVERIFIED); a
 //!    local player that already has a play actor; a player not in the list given. Each is unmarked. The local
 //!    player's index in the list is found here. The game info's `Login` is looked up after the counters' mark, since
 //!    the lookup can load the function; a class without one is a data error.
@@ -46,7 +47,7 @@ use ow_vm::error::VmError;
 use super::RECORD;
 use super::bringup::game_info;
 use super::game_info::WriteMark;
-use crate::actors::{self, NET_MODE_CLIENT, ROLE_AUTHORITY, call_with_zeros, send_event};
+use crate::actors::{self, NET_MODE_CLIENT, ROLE_AUTHORITY, ROLE_SIMULATED_PROXY, call_with_zeros, send_event};
 use crate::world::World;
 
 /// What `GetUniqueNetId` answers for the local player.
@@ -66,7 +67,8 @@ pub struct PlayActorInput<'a> {
     /// The engine's local-player list (`GamePlayers`), in order.
     pub game_players: &'a [ObjRef],
     pub net_id: NetIdAnswer,
-    /// The remote role the routine passes for a local player; `None` when not stated (refused).
+    /// The remote role the routine passes for a local player. Only [`ROLE_SIMULATED_PROXY`] is accepted; `None` or
+    /// any other value is refused before any write (module documentation, step 1).
     pub remote_role: Option<u8>,
 }
 
@@ -140,8 +142,15 @@ fn preflight(world: &World, player: ObjRef, input: &PlayActorInput<'_>) -> Resul
     if input.net_id == NetIdAnswer::Unknown {
         return Err(not_read("GetUniqueNetId's answer for the local player (no online subsystem answer is modelled)"));
     }
-    let Some(remote_role) = input.remote_role else {
-        return Err(not_read("the remote role the local-player spawn passes for a local player"));
+    let remote_role = match input.remote_role {
+        Some(ROLE_SIMULATED_PROXY) => ROLE_SIMULATED_PROXY,
+        Some(other) => {
+            return Err(not_read(format!(
+                "the local-player spawn with remote role {other} (only ROLE_SimulatedProxy, the port's single-player \
+                 answer, is modelled)"
+            )));
+        }
+        None => return Err(not_read("the remote role the local-player spawn passes for a local player")),
     };
     if actors::object(space, player, "Actor")?.is_some() {
         return Err(not_read("the local-player spawn for a local player that already has a play actor"));

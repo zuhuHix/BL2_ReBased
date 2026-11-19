@@ -16,7 +16,9 @@ No dependency was added, no bounds check was loosened and no existing `NotYet` g
     - no game info in `WorldInfo.Game`;
     - a network client;
     - a `GetUniqueNetId` answer the port does not model (anything but the empty id);
-    - no single-player remote role stated (the caller states it; the engine's value is not read);
+    - a remote role not stated, or other than `ROLE_SimulatedProxy` (1, `actors::ROLE_SIMULATED_PROXY`): the port's
+      answer for a single-player local player (NATIVE_MAP_LOAD.md section 6.3), UNVERIFIED, as the engine's value is
+      not read;
     - a local player that already has a play actor.
 
     A player missing from the `GamePlayers` list given is a data error.
@@ -51,7 +53,9 @@ No dependency was added, no bounds check was loosened and no existing `NotYet` g
     world's local player;
   - `Login` None with an error (the outcome, the text unchanged) and with an empty one (the `NotYet`, marked only when
     `Login` wrote), with no attachment, no `PostLogin` and no local player;
-  - the six preflight refusals, unmarked, with nothing written and `Login` not called;
+  - the seven preflight refusals (a remote role of authority among them), unmarked, with nothing written and `Login`
+    not called;
+  - a game info whose class defines no `Login`: a plain data error;
   - Reference.
 - **Installed (ignored test, local only, under the machine lock).** The test makes one local player of the configured
   class (`Engine.LocalPlayer`, from the installed `BaseEngine.ini`) before the map. It then runs the map route on

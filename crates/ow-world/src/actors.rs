@@ -46,6 +46,9 @@ pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
 /// `ROLE_Authority` (NATIVE_ENGINE_CORE.md, "Conventions": the value is 3).
 pub const ROLE_AUTHORITY: u8 = 3;
+/// `ROLE_SimulatedProxy`: 1, the stock UE3 `ENetRole` value. The map load's local-player spawn takes it as the remote
+/// role a single-player local player gets: a port answer (NATIVE_MAP_LOAD.md section 6.3), UNVERIFIED.
+pub const ROLE_SIMULATED_PROXY: u8 = 1;
 /// `WorldInfo.NetMode` of a network client (NATIVE_ENGINE_CORE.md, "World time fields": the value is 3).
 pub const NET_MODE_CLIENT: u8 = 3;
 
