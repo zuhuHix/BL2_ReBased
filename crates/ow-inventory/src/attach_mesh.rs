@@ -247,12 +247,22 @@ pub fn attach_plan(vm: &Vm, actor: ObjRef, component: Option<ObjRef>) -> Result<
         other => return Err(bad(WHAT, format!("Components holds {}, not an array", other.kind_name()))),
     };
     list.push(Value::Object(Some(component)));
-    Ok(Some(vec![
+    let plan = vec![
         (component, "bNeedsReattach", Value::Bool(false)),
         (component, "bNeedsUpdateTransform", Value::Bool(false)),
         (component, "Owner", Value::Object(Some(actor))),
         (actor, "Components", Value::array(list)),
-    ]))
+    ];
+    // Each planned write against the heap's own write rules (review r2 of #511): an array's element kind, and an
+    // object's class, so no write is refused after an earlier one.
+    for (o, name, v) in &plan {
+        let kind = declared(vm, *o, name, WHAT)?;
+        vm.space
+            .heap
+            .check_value(&vm.space.classes, &kind, v)
+            .map_err(|e| bad(WHAT, format!("{name} cannot take the attach's value: {e}")))?;
+    }
+    Ok(Some(plan))
 }
 
 /// `AttachComponent(NewComponent)` on `actor` in Off: [`attach_plan`], then its writes in order. An error after the

@@ -83,6 +83,17 @@ fn engine() -> Vec<u8> {
     let bad_actor = t.class("BadActor", object);
     t.prop("Int", bad_actor, "Components", 0, 0);
     t.prop("Bool", bad_actor, "bDeleteMe", 0, 0);
+    let ints_actor = t.class("IntsActor", object);
+    let ints = t.p.next_export();
+    t.prop("Array", ints_actor, "Components", 0, ints + 1);
+    t.prop("Int", ints, "Components", 0, 0);
+    t.prop("Bool", ints_actor, "bDeleteMe", 0, 0);
+    let loose = t.class("LooseComponent", object);
+    t.prop("Struct", loose, "Scene", 0, pointer);
+    t.prop("Object", loose, "Owner", 0, object);
+    for flag in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform"] {
+        t.prop("Bool", loose, flag, 0, 0);
+    }
     let bad_component = t.class("BadComponent", object);
     t.prop("Struct", bad_component, "Scene", 0, pointer);
     t.prop("Int", bad_component, "Owner", 0, 0);
@@ -365,9 +376,33 @@ fn an_unrelated_declaration_error_masks_no_guard_or_refusal() {
     let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(odd))]));
     unmarked(&n, Missing::NotRead, ATTACH_DETACH);
     x.set(odd, "bAttached", Value::Bool(false));
-    assert!(matches!(x.call(ATTACH_FN, actor, vec![Value::Object(Some(odd))]), Err(VmError::Script { .. })), "then a data error");
-    assert_eq!(x.get(odd, "bNeedsReattach"), Value::Bool(false));
+    x.set(odd, "bNeedsReattach", Value::Bool(true));
+    x.set(odd, "bNeedsUpdateTransform", Value::Bool(true));
+    let e = x.call(ATTACH_FN, actor, vec![Value::Object(Some(odd))]).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("Owner")), "a data error naming Owner: {e:?}");
+    assert_eq!(x.get(odd, "bNeedsReattach"), Value::Bool(true), "no early clear");
+    assert_eq!(x.get(odd, "bNeedsUpdateTransform"), Value::Bool(true), "no early clear");
     assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()), "nothing written");
+}
+
+/// A destination whose declaration passes the outer kind check but cannot take the value (review r2 of #511):
+/// `Components` declared as an array of ints. The write rules are checked for every planned write before the first,
+/// so the call is a data error naming `Components`, with both flags, `Owner` and `Components` unchanged.
+#[test]
+fn a_components_array_of_ints_refuses_before_any_write() {
+    let mut x = fx(ParityMode::Off, true);
+    let actor = x.obj("Engine.IntsActor");
+    // A component whose `Owner` takes any object, so only `Components` cannot take its value.
+    let loose = x.obj("Engine.LooseComponent");
+    x.set(loose, "bNeedsReattach", Value::Bool(true));
+    x.set(loose, "bNeedsUpdateTransform", Value::Bool(true));
+    let fields = ["bNeedsReattach", "bNeedsUpdateTransform", "Owner"];
+    let before: Vec<Value> = fields.iter().map(|f| x.get(loose, f)).collect();
+    let e = x.call(ATTACH_FN, actor, vec![Value::Object(Some(loose))]).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("Components")), "{e:?}");
+    let after: Vec<Value> = fields.iter().map(|f| x.get(loose, f)).collect();
+    assert_eq!(after, before, "both flags and Owner unchanged");
+    assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 }
 
 /// Reference binds none of the five: the stub policy refuses them.

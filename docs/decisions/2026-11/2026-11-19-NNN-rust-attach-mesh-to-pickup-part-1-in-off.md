@@ -59,3 +59,12 @@ AI-assisted (Claude Code). The revised note (d15f302, review r1 of #505) and Sol
 - **Tests:** the guards and an attached component without the layer (plain returns, then `LayerAbsent` before
   `NotRead`); the attached fixture seeded with both flags true and checked unchanged; the write order asserted from the
   plan; a toy actor and component with one broken declaration each (9 tests in all).
+
+## Edits: review r2 of #511
+
+AI-assisted (Claude Code). Each of the attach's four planned writes is checked against the heap's own write rules
+before the first one (`Heap::check_value`: an array's element kind, an object's class), so a destination that passes
+the outer kind check but cannot take the value (`Components` declared as an array of ints, or an `Owner` class the
+actor does not fit) is a data error naming the field, with nothing written. Tests: `Components` as an array of ints,
+both flags seeded true and `Owner` unchanged; the broken-`Owner` test seeds both flags true and asserts the error
+names `Owner`.
