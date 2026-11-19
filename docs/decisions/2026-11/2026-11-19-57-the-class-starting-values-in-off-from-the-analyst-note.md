@@ -54,7 +54,7 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
   makes no pool off the authority (the pool creation rule).
 - Gate numbers are in `docs/verification/GATES.md`.
 
-**Installed (Off; this branch on `origin/fix/rust-player-class-b` 95afcebd with the note merged; outputs under
+**Installed (Off; this branch on `origin/fix/rust-player-class-b` 85c9aa29 with the note merged; the rows are byte-identical on 95afcebd; outputs under
 ignored `local/p2/fix-class-starting-values/`).**
 
 - `--slice-gate` strict: links 1, 3, 4, 5, 13 and 14 stopped at the override's `NotYet` (decision 2026-11-19-46's
