@@ -79,3 +79,11 @@ NATIVE_INVENTORY_EQUIP.md).
 - **Tests:** 9 globals tests (new: the declared reference types, and the getters' text without globals) and the
   `RemovePickup` record.
 
+**To #469 r2** (f7291a3b): every schema is now checked before any field value is read. `RarityLevelColors` is checked on
+the declared `GlobalsDefinition` class before `TheGlobalsDefinition` is read, not on the object read from it. The
+exact reference targets (`WillowPickup` elements, a `GearboxGlobalsDefinition` field) were already checked. The
+`SetTimer` delay of zero or below is the script's and the timer native's: UNVERIFIED there, and nothing here answers
+it.
+
+**Rebased** onto main (#452 landed): `git rebase --onto origin/main 21e1a2b8`.
+
