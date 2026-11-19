@@ -29,6 +29,8 @@ fixtures only. Based on main d72b96d4 (#477 and #488 landed).
     extent runs is a `VmError::Script`: the caller skipped the loads.
   - A cylinder component the store has not loaded is a named `NotYet` (`NotRead`): the note loads `Components`
     entries only.
+  - Hub-ruled port additions, not in the note (review r1 of #498, item 3): the unloaded cylinder component and the
+    loaded stand-in entry above are both cautious port answers, kept as `NotYet` (`NotRead`) and UNVERIFIED.
 - **The loads are writes, and they run in the spawn.**
   - `placement::load_extent_components` runs just before the spot search, which stays read-only. It runs only when
     the world has a collision service, so the no-service refusal comes first and stays clean, and only when the extent
@@ -36,6 +38,11 @@ fixtures only. Based on main d72b96d4 (#477 and #488 landed).
   - Once a load ran, every `NotYet` up to the actor's insertion is marked "stopped after partial writes: ", its kind
     and record kept, nothing rolled back. That covers the spot search's, the base precheck's, the instancing's and a
     later load's. Other errors propagate unchanged. After the insertion, the spawn's existing rule marks them all.
+  - A fresh load attempt counts as a write even when it fails (the store may read dependencies or mark the handle
+    Failed first), so its `NotYet` is marked; a retry of a Failed handle writes nothing and comes back unmarked
+    (review r1 of #498, item 1, as the spawn counts its archetype load).
+  - The spawn keeps one write flag: the loads set it, and the spawn's wrapper marks every later error, the world-list
+    checks included (review r1 of #498, item 2).
   - With no load, nothing is marked: the refusals before it are clean.
   - Reference is unchanged, because the spot search is Off only.
 - **Tests.**
@@ -55,6 +62,11 @@ fixtures only. Based on main d72b96d4 (#477 and #488 landed).
     - Unattached: the search's first query is a zero-extent box test, and the next `NotYet` (the instancing's, on the
       fixture's non-component primitive class) is marked.
     - Without a service: the clean `LayerAbsent`, nothing loaded.
+    - Each mark appears exactly once.
+  - Two more invented archetypes whose primitive load fails with the store's `NotYet` (review r1 of #498): the first
+    load failing is marked once, and its retry on the Failed handle comes back unmarked; a later load failing after a
+    good one is marked once.
+  - NATIVE_SPAWN_PLACEMENT.md section 4, step 4 now points at NATIVE_SPAWN_EXTENT.md section 5.
   - The world test that pinned "the actor's bounding-cylinder rule" now expects "the bounding-cylinder rule of
     Engine.Probe".
 - **Installed `--slice-gate`, Off, strict: 0 ok / 5 not yet / 9 error, the same as main d72b96d4.**

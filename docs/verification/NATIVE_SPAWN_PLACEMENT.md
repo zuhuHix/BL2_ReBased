@@ -137,9 +137,10 @@ default object.
    L = requested.
 3. **No collision service** in the world: a `NotYet` of kind `LayerAbsent`, "the spawn placement spot search". This
    answer comes before the extent question.
-4. **No cylinder extent** (the template's `CollisionComponent` is not a cylinder component, or there is none): a
-   `NotYet` of kind `NotRead`, "the actor's bounding-cylinder rule". So a template without a cylinder in an empty
-   collision model answers this, never "unchanged".
+4. **The extent.** A cylinder `CollisionComponent` gives its radius and height. A template without one gets its
+   class's bounding-cylinder rule, as NATIVE_SPAWN_EXTENT.md section 5 gives it: the four pawn classes' and `Actor`'s,
+   any other class a `NotYet` of kind `NotRead`, "the bounding-cylinder rule of <class>". Its component loads run in
+   the spawn before the search and mark every later `NotYet` (lane IMPL-LINK9-EXTENT, review r1 of #498).
 5. **The first test (section 3, step 1).** It must be a query the service supports for its whole region, with the
    filter of section 7.
    Unsupported: a `NotYet` of kind `NotRead`, naming the query ("an axis-aligned box test in template mode", for

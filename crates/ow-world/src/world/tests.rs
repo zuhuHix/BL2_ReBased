@@ -633,6 +633,37 @@ fn package() -> Vec<u8> {
         e.outer = arch;
         t.p.add_export_with(e);
     }
+    // Failing component loads (review r1 of #498, items 1 and 5): a primitive export whose archetype is an object of
+    // an unrelated class fails its load with the store's `NotYet`. `Actor_ExtentFailsFirst` lists that primitive
+    // alone; `Actor_ExtentFailsLater` lists a loadable primitive first, then it.
+    let base = t.p.next_export();
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(thing, "ExtentBadBase", payload));
+    for (name, good) in [("Actor_ExtentFailsFirst", false), ("Actor_ExtentFailsLater", true)] {
+        let arch = t.p.next_export();
+        let entries: Vec<i32> = if good { vec![arch + 1, arch + 2] } else { vec![arch + 1] };
+        let mut body = Vec::new();
+        for r in &entries {
+            body.extend_from_slice(&r.to_le_bytes());
+        }
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.array_tag("Components", entries.len() as i32, &body));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export_with(ow_package::testkit::Export::new(actor, name, payload));
+        for (k, _) in entries.iter().enumerate() {
+            let bad = !good || k == 1;
+            let mut payload = ow_package::testkit::ints(&[0]);
+            payload.extend(t.p.bool_tag("bAttached", false));
+            payload.extend_from_slice(&t.none);
+            let mut e = ow_package::testkit::Export::new(primitive, if bad { "ExtentBadPrimitive" } else { "ExtentGoodPrimitive" }, payload);
+            e.outer = arch;
+            if bad {
+                e.archetype = base;
+            }
+            t.p.add_export_with(e);
+        }
+    }
     t.p.build()
 }
 
@@ -2577,6 +2608,7 @@ mod placement {
                 let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
                 assert_eq!(missing, Missing::NotRead, "{name}: {text}");
                 assert!(text.starts_with("stopped after partial writes: "), "{name}: {text}");
+                assert_eq!(text.matches("stopped after partial writes: ").count(), 1, "{name}: marked once: {text}");
                 assert!(text.contains(want), "{name}: {text}");
                 assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, prim), "{name}: the primitive entry was loaded");
                 assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, other), "{name}: the other entry was not");
@@ -2588,6 +2620,39 @@ mod placement {
                     assert!(asked.is_empty(), "the extent refuses before the search: {asked:?}");
                 }
                 assert_eq!(count(&x), before, "{name}: nothing made");
+            }
+        });
+    }
+
+    /// A failing component load (review r1 of #498, items 1 and 5): a fresh attempt is a write even when it fails, so
+    /// its `NotYet` is marked, once; a later load's failure after a good load is marked, once; a retry of the Failed
+    /// handle writes nothing, so the same `NotYet` comes back unmarked. Nothing is made.
+    #[test]
+    fn a_failing_component_load_marks_its_not_yet_once() {
+        run(|| {
+            let mark = "stopped after partial writes: ";
+            for name in ["Actor_ExtentFailsFirst", "Actor_ExtentFailsLater"] {
+                let mut x = fx_files(true, ParityMode::Off, true);
+                let wi = x.wi;
+                script(&mut x, vec![], vec![], Test::Clear);
+                let path = ow_core::ObjectPath::parse(&format!("Engine.{name}")).unwrap();
+                let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+                x.w.vm.log.extend(x.w.vm.defs.take_log());
+                set_field(&mut x.w.vm.space, arch, "bCollideWorld", Value::Bool(true)).unwrap();
+                let actor = x.class("Actor");
+                let req = SpawnRequest::new(Some(actor)).with_template(Some(arch));
+                let before = count(&x);
+                let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+                assert_eq!(missing, Missing::NotRead, "{name}: {text}");
+                assert!(text.starts_with(mark), "{name}: {text}");
+                assert_eq!(text.matches(mark).count(), 1, "{name}: marked once: {text}");
+                assert!(text.contains("ExtentBadBase"), "{name}: the store's archetype NotYet: {text}");
+                assert_eq!(count(&x), before, "{name}: nothing made");
+                if name == "Actor_ExtentFailsFirst" {
+                    let (missing, again) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+                    assert_eq!(missing, Missing::NotRead);
+                    assert_eq!(format!("{mark}{again}"), text, "the retry of the Failed handle is unmarked");
+                }
             }
         });
     }

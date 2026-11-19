@@ -256,8 +256,9 @@ fn rule(space: &ObjectSpace, template: ObjRef) -> Result<Rule, VmError> {
 /// the template's extent is `Actor`'s rule, each primitive entry of its `Components` that the store has not loaded is
 /// loaded, as the template's own definition (the same reading as the instancing's second pass). None entries and
 /// non-primitive entries are skipped and load nothing. A load is a store write, so the answer says whether one ran:
-/// the spawn then marks every `NotYet` after it "stopped after partial writes: " (step 5.3). A `NotYet` of a later load
-/// is marked here. A world without a collision service loads nothing: the spot search refuses it first.
+/// the spawn then marks every `NotYet` after it "stopped after partial writes: " (step 5.3). A fresh load attempt
+/// counts as a write even when it fails; a retry of a handle whose load already failed does not. A failing load's
+/// `NotYet` is marked here when this call wrote (that attempt or an earlier one). A world without a collision service loads nothing: the spot search refuses it first.
 pub fn load_extent_components(vm: &mut Vm, template: ObjRef) -> Result<bool, VmError> {
     if collision_model(vm)?.is_none() {
         return Ok(false);
@@ -265,20 +266,23 @@ pub fn load_extent_components(vm: &mut Vm, template: ObjRef) -> Result<bool, VmE
     if !matches!(rule(&vm.space, template)?, Rule::Actor(_)) {
         return Ok(false);
     }
-    let mut loaded = false;
+    let mut wrote = false;
     for c in objects(&vm.space, template, "Components")?.into_iter().flatten() {
         if !is_primitive(&vm.space, c)? || !vm.defs.is_unloaded(&vm.space, c) {
             continue;
         }
+        // A fresh attempt is a write even when it fails: the store may read dependencies or mark the handle Failed
+        // before it answers (review r1 of #498, item 1, as the spawn counts its archetype load). A retry of a Failed
+        // handle returns the same error and writes nothing.
+        wrote |= !vm.defs.is_failed(&vm.space, c);
         let result = vm.defs.ensure_loaded(&mut vm.space, c);
         vm.log.extend(vm.defs.take_log());
         if let Err(e) = result {
             let e = VmError::from(e);
-            return Err(if loaded { crate::pools::after_partial_writes(e) } else { e });
+            return Err(if wrote { crate::actors::after_writes(e) } else { e });
         }
-        loaded = true;
     }
-    Ok(loaded)
+    Ok(wrote)
 }
 
 /// (radius, radius, half height) of a cylinder component.
