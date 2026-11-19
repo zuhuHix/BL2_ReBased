@@ -199,7 +199,8 @@ fn package() -> Vec<u8> {
     // Its primitive parent carries the trace filters' blocking flags (lane IMPL-SPAWN-TRACE-FILTERS).
     let primitive = t.class("PrimitiveComponent", object);
     // `bAttached` and `CollideActors`: the extent's `Actor` rule (lane IMPL-LINK9-EXTENT, NATIVE_SPAWN_EXTENT.md).
-    for b in ["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors", "bAttached", "CollideActors"] {
+    // `BulletListener`: the skip flag as NATIVE_SPAWN_TRACE_FILTER.md infers it (lane IMPL-LINK9-TRACE-FILTER).
+    for b in ["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors", "bAttached", "CollideActors", "BulletListener"] {
         t.prop("Bool", primitive, b, 0, 0);
     }
     let cylinder = t.class("CylinderComponent", primitive);
@@ -2723,25 +2724,33 @@ mod placement {
         });
     }
 
-    /// Live actors in the box test's walk (NATIVE_SPAWN_PLACEMENT.md section 7, reviews r3 of #465 and r1 of #477).
-    /// A primitive that blocks the query's kind refuses, naming its most specific unread rule; with no bounds from the
-    /// service it is taken to meet the box. A primitive that does not block it is no candidate. Nothing is made when
-    /// the search stops.
+    /// Live actors in the box test's walk (NATIVE_SPAWN_PLACEMENT.md section 7, reviews r3 of #465 and r1 of #477;
+    /// NATIVE_SPAWN_TRACE_FILTER.md, lane IMPL-LINK9-TRACE-FILTER). A primitive any read test rejects (the skip flag,
+    /// the blocking flag, the per-component test, the owner's row) is not tested and the spawn is made; one every read
+    /// test accepts refuses, naming the unread rule, with no bounds from the service taken to meet the box. Nothing is
+    /// made when the search stops.
     #[test]
     fn a_blocking_live_primitive_with_no_bounds_makes_the_box_test_unsupported() {
         run(|| {
             let none: &[&str] = &[];
+            let admission = "the collision hash's admission beyond the per-component test (the live actor primitive";
             for (class, world_geometry, blocks, want) in [
-                ("Actor", true, &["BlockNonZeroExtent"][..], Some("the trace filter's per-component test (the live actor primitive")),
-                ("Actor", false, &["BlockNonZeroExtent"][..], Some("the trace filter's skip flag")),
-                ("Probe", false, &["BlockNonZeroExtent"][..], Some("the trace filter of Engine.Probe (the live actor primitive")),
+                ("Actor", true, &["BlockNonZeroExtent", "CollideActors"][..], Some(admission)),
+                ("Probe", false, &["BlockNonZeroExtent", "CollideActors"][..], Some("the trace filter of Engine.Probe (the live actor primitive")),
+                // The owner's Actor row rejects it without bWorldGeometry.
+                ("Actor", false, &["BlockNonZeroExtent", "CollideActors"][..], None),
+                // The per-component test: the primitive's CollideActors clear.
+                ("Actor", true, &["BlockNonZeroExtent"][..], None),
+                // The skip flag set.
+                ("Actor", true, &["BlockNonZeroExtent", "CollideActors", "BulletListener"][..], None),
                 ("Actor", true, none, None),
-                ("Actor", true, &["BlockZeroExtent"][..], None),
+                ("Actor", true, &["BlockZeroExtent", "CollideActors"][..], None),
             ] {
                 let mut x = fx();
                 let wi = x.wi;
                 script(&mut x, vec![], vec![], Test::Clear);
-                blocker(&mut x, class, world_geometry, blocks);
+                let b = blocker(&mut x, class, world_geometry, blocks);
+                set_field(&mut x.w.vm.space, b, "bCollideActors", Value::Bool(true)).unwrap();
                 let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
                 let before = count(&x);
                 let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
@@ -2775,13 +2784,14 @@ mod placement {
                 let mut x = fx();
                 let wi = x.wi;
                 script_with_bounds(&mut x, bounds);
-                blocker(&mut x, "Actor", true, &["BlockNonZeroExtent"]);
+                let b = blocker(&mut x, "Actor", true, &["BlockNonZeroExtent", "CollideActors"]);
+                set_field(&mut x.w.vm.space, b, "bCollideActors", Value::Bool(true)).unwrap();
                 let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
                 let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
                 if refused {
                     let (missing, text) = what(got.unwrap_err());
                     assert_eq!(missing, Missing::NotRead);
-                    assert!(text.contains("the trace filter's per-component test (the live actor primitive"), "{text}");
+                    assert!(text.contains("the collision hash's admission beyond the per-component test (the live actor primitive"), "{text}");
                     assert!(!text.contains("does not hold"), "{text}");
                 } else {
                     assert!(got.unwrap().is_some());

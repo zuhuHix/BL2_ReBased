@@ -554,7 +554,11 @@ impl Queries<'_> {
                     continue;
                 };
                 let held = if bounds.is_some() { "" } else { ", whose bounds the collision service does not hold" };
-                return Err(refusal(query, &format!("{} (the live actor primitive {what}{held})", rule.rule())));
+                return Err(NotYet::not_read(
+                    format!("{SPOT_SEARCH}: {query}: {} (the live actor primitive {what}{held})", rule.rule()),
+                    rule.record(),
+                )
+                .into());
             }
         }
         Ok(Vec::new())

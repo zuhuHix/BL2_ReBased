@@ -85,8 +85,14 @@ fn bools(space: &mut ObjectSpace, names: &[&str]) -> Vec<PropertyDecl> {
 fn world() -> World {
     let mut space = ObjectSpace::new();
     let object = space.classes.define("Core.Object", None, vec![]).unwrap();
-    let d = bools(&mut space, &["bWorldGeometry", "bProjTarget", "bBlockActors"]);
+    let d = bools(&mut space, &["bWorldGeometry", "bProjTarget", "bBlockActors", "bCollideActors"]);
     let actor = space.classes.define("Engine.Actor", Some(object), d).unwrap();
+    // The controller chain (NATIVE_SPAWN_TRACE_FILTER.md section 1) and an unread subclass of it.
+    let controller = space.classes.define("Engine.Controller", Some(actor), vec![]).unwrap();
+    let player = space.classes.define("Engine.PlayerController", Some(controller), vec![]).unwrap();
+    let game = space.classes.define("Engine.GamePlayerController", Some(player), vec![]).unwrap();
+    let willow = space.classes.define("WillowGame.WillowPlayerController", Some(game), vec![]).unwrap();
+    space.classes.define("Test.SubPlayerController", Some(willow), vec![]).unwrap();
     let d = bools(&mut space, &["bIgnoreAllTraces", "bStationary"]);
     let pawn = space.classes.define("Engine.Pawn", Some(actor), d).unwrap();
     space.classes.define("Test.UnreadPawn", Some(pawn), vec![]).unwrap();
@@ -97,7 +103,9 @@ fn world() -> World {
     space.classes.define("Engine.KActor", Some(dynamic), vec![]).unwrap();
     space.classes.define("Engine.StaticMeshActor", Some(actor), vec![]).unwrap();
     space.classes.define("Engine.Terrain", Some(actor), vec![]).unwrap();
-    let d = bools(&mut space, &["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors"]);
+    let mut d = bools(&mut space, &["BlockNonZeroExtent", "BlockZeroExtent", "BlockActors", "CollideActors", "BulletListener"]);
+    // The component's own owner field (NATIVE_SPAWN_TRACE_FILTER.md section 2).
+    d.push(PropertyDecl::new(space.names.intern("Owner"), PropKind::Object { class: actor }));
     let primitive = space.classes.define("Engine.PrimitiveComponent", Some(object), d).unwrap();
     World { space, primitive, next: 0 }
 }
@@ -136,45 +144,125 @@ fn only_the_read_classes_have_a_row() {
 }
 
 #[test]
-fn a_blocking_primitive_is_always_unsupported_and_names_its_most_specific_rule() {
+fn the_controller_classes_run_the_actor_row_and_no_subclass_inherits_it() {
+    let w = world();
+    let row = |p: &str| row_of(&w.space, w.space.classes.by_path(p).unwrap());
+    for p in ["Engine.Controller", "Engine.PlayerController", "Engine.GamePlayerController", "WillowGame.WillowPlayerController"] {
+        assert_eq!(row(p), Some(Row::Actor), "{p}");
+    }
+    assert_eq!(row("Test.SubPlayerController"), None);
+}
+
+/// NATIVE_SPAWN_TRACE_FILTER.md sections 2, 3 and 7: every read test only rejects. A primitive that passes them all
+/// is Unsupported on the hash admission, under that note's record; a primitive any one of them rejects is not tested.
+#[test]
+fn a_candidate_is_not_tested_when_any_read_test_rejects_it() {
     let mut w = world();
     let prim = w.primitive;
-    let non_zero = w.obj(prim, &["BlockNonZeroExtent"]);
-    let zero = w.obj(prim, &["BlockZeroExtent"]);
-    let geometry = w.actor("Engine.StaticMeshActor", &["bWorldGeometry"]);
-    let plain = w.actor("Engine.StaticMeshActor", &[]);
-    let mover = w.actor("Engine.InterpActor", &[]);
-    let pawn = w.actor("Engine.Pawn", &["bStationary"]);
+    let candidate = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    let skipped = w.obj(prim, &["BlockNonZeroExtent", "CollideActors", "BulletListener"]);
+    let quiet = w.obj(prim, &["BlockNonZeroExtent"]);
+    let zero = w.obj(prim, &["BlockZeroExtent", "CollideActors"]);
+    let geometry = w.actor("Engine.StaticMeshActor", &["bWorldGeometry", "bCollideActors"]);
+    let inert = w.actor("Engine.StaticMeshActor", &["bWorldGeometry"]);
+    let plain = w.actor("Engine.StaticMeshActor", &["bCollideActors"]);
+    let mover = w.actor("Engine.InterpActor", &["bCollideActors"]);
+    let pawn = w.actor("Engine.Pawn", &["bStationary", "bCollideActors"]);
     let box_test = Query::BoxTest { zero_extent: false, complex: false };
     let zero_test = Query::BoxTest { zero_extent: true, complex: false };
     let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
-    let per = Candidate::Unsupported(Unread::PerComponentTest);
-    let skip = Candidate::Unsupported(Unread::SkipFlag);
-    assert_eq!(t(&w, non_zero, geometry, box_test), per);
-    assert_eq!(t(&w, non_zero, geometry, Query::BoxSweep), per);
-    // A blocking primitive the row would drop still meets the unresolved skip flag (review r1 of #477).
-    assert_eq!(t(&w, non_zero, plain, box_test), skip);
-    // The wrong blocking flag for the query's kind: no candidate, whatever the owner.
-    assert_eq!(t(&w, non_zero, geometry, zero_test), Candidate::NotTested);
-    assert_eq!(t(&w, non_zero, geometry, Query::PointSweep), Candidate::NotTested);
-    assert_eq!(t(&w, zero, geometry, Query::PointSweep), per);
-    assert_eq!(t(&w, zero, geometry, zero_test), per);
-    // Movers: tested by sweeps only; a box test meets the skip flag. Pawns: never tested, so always the skip flag.
-    assert_eq!(t(&w, non_zero, mover, box_test), skip);
-    assert_eq!(t(&w, non_zero, mover, Query::BoxSweep), per);
-    assert_eq!(t(&w, non_zero, pawn, box_test), skip);
-    assert_eq!(t(&w, non_zero, pawn, Query::BoxSweep), skip);
-    assert_eq!(Unread::SkipFlag.rule(), SKIP_FLAG);
+    let admission = Candidate::Unsupported(Unread::HashAdmission);
+    // Every read test passes: the unread hash admission.
+    assert_eq!(t(&w, candidate, geometry, box_test), admission);
+    assert_eq!(t(&w, candidate, geometry, Query::BoxSweep), admission);
+    assert_eq!(t(&w, zero, geometry, zero_test), admission);
+    assert_eq!(t(&w, zero, geometry, Query::PointSweep), admission);
+    assert_eq!(Unread::HashAdmission.rule(), HASH_ADMISSION);
+    assert_eq!(Unread::HashAdmission.record(), RECORD_TRACE_FILTER);
+    // The skip flag (the spawn's sweeps do not set bit 30, so they keep it).
+    assert_eq!(t(&w, skipped, geometry, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, skipped, geometry, Query::BoxSweep), Candidate::NotTested);
+    assert_eq!(Query::BoxSweep.flags() & SKIP_IGNORED, 0);
+    // The blocking flag for the query's kind.
+    assert_eq!(t(&w, candidate, geometry, zero_test), Candidate::NotTested);
+    assert_eq!(t(&w, candidate, geometry, Query::PointSweep), Candidate::NotTested);
+    // The per-component test: the primitive's CollideActors, then the owner's bCollideActors.
+    assert_eq!(t(&w, quiet, geometry, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, candidate, inert, box_test), Candidate::NotTested);
+    // The owner's row: an Actor-row owner without bWorldGeometry, a mover in a box test, a pawn.
+    assert_eq!(t(&w, candidate, plain, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, candidate, mover, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, candidate, mover, Query::BoxSweep), admission);
+    assert_eq!(t(&w, candidate, pawn, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, candidate, pawn, Query::BoxSweep), Candidate::NotTested);
+}
+
+/// Link 9's case (NATIVE_SPAWN_TRACE_FILTER.md section 6): a `WillowPlayerController` and its cylinder with the class
+/// defaults' flags (the actor's `bCollideActors` and `bWorldGeometry` clear; the cylinder's `CollideActors` clear and
+/// both blocking flags set) is not tested. A controller every read test accepts would still be Unsupported, and an
+/// unread subclass names its class.
+#[test]
+fn a_controller_s_cylinder_is_not_tested() {
+    let mut w = world();
+    let prim = w.primitive;
+    let cylinder = w.obj(prim, &["BlockZeroExtent", "BlockNonZeroExtent"]);
+    let controller = w.actor("WillowGame.WillowPlayerController", &[]);
+    let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
+    for q in [
+        Query::BoxTest { zero_extent: false, complex: false },
+        Query::BoxTest { zero_extent: true, complex: false },
+        Query::BoxSweep,
+        Query::PointSweep,
+    ] {
+        assert_eq!(t(&w, cylinder, controller, q), Candidate::NotTested, "{q:?}");
+    }
+    let live = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    let colliding = w.actor("WillowGame.WillowPlayerController", &["bCollideActors"]);
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    // The Actor row rejects a controller without bWorldGeometry in every spawn query.
+    assert_eq!(t(&w, live, colliding, box_test), Candidate::NotTested);
+    assert_eq!(t(&w, live, colliding, Query::BoxSweep), Candidate::NotTested);
+    let geometry = w.actor("WillowGame.WillowPlayerController", &["bCollideActors", "bWorldGeometry"]);
+    assert_eq!(t(&w, live, geometry, box_test), Candidate::Unsupported(Unread::HashAdmission));
+    let sub = w.actor("Test.SubPlayerController", &["bCollideActors"]);
+    assert_eq!(
+        t(&w, live, sub, box_test),
+        Candidate::Unsupported(Unread::OwnerClass("Test.SubPlayerController".to_string()))
+    );
+}
+
+/// The owner (review r1 of #502, note section 7 step 2): the component's own `Owner` field when set, otherwise the
+/// walked actor.
+#[test]
+fn the_owner_is_the_component_s_field_when_set_else_the_walked_actor() {
+    let mut w = world();
+    let prim = w.primitive;
+    let p = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
+    let colliding = w.actor("Engine.StaticMeshActor", &["bWorldGeometry", "bCollideActors"]);
+    let inert = w.actor("Engine.StaticMeshActor", &["bWorldGeometry"]);
+    let box_test = Query::BoxTest { zero_extent: false, complex: false };
+    let t = |w: &World, o| tested(&w.space, p, o, box_test).unwrap();
+    // No owner field set: the walked actor decides.
+    assert_eq!(owner_of(&w.space, p, inert).unwrap(), inert);
+    assert_eq!(t(&w, inert), Candidate::NotTested);
+    assert_eq!(t(&w, colliding), Candidate::Unsupported(Unread::HashAdmission));
+    // The field set: it decides, whatever the walked actor.
+    let field = w.space.prop(prim, "Owner").unwrap();
+    w.space.write(p, PropAddr::scalar(field), Value::Object(Some(colliding))).unwrap();
+    assert_eq!(owner_of(&w.space, p, inert).unwrap(), colliding);
+    assert_eq!(t(&w, inert), Candidate::Unsupported(Unread::HashAdmission));
+    w.space.write(p, PropAddr::scalar(field), Value::Object(Some(inert))).unwrap();
+    assert_eq!(t(&w, colliding), Candidate::NotTested);
 }
 
 #[test]
-fn an_unread_owner_class_and_terrain_are_unsupported() {
+fn an_unread_owner_class_is_unsupported_past_the_read_tests_and_terrain_ahead_of_them() {
     let mut w = world();
     let prim = w.primitive;
-    let blocking = w.obj(prim, &["BlockNonZeroExtent"]);
+    let blocking = w.obj(prim, &["BlockNonZeroExtent", "CollideActors"]);
     let idle = w.obj(prim, &[]);
-    let unread = w.actor("Test.UnreadPawn", &[]);
-    let terrain = w.actor("Engine.Terrain", &[]);
+    let unread = w.actor("Test.UnreadPawn", &["bCollideActors"]);
+    let terrain = w.actor("Engine.Terrain", &["bCollideActors"]);
     let box_test = Query::BoxTest { zero_extent: false, complex: false };
     let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
     assert_eq!(
@@ -182,9 +270,9 @@ fn an_unread_owner_class_and_terrain_are_unsupported() {
         Candidate::Unsupported(Unread::OwnerClass("Test.UnreadPawn".to_string()))
     );
     assert_eq!(Unread::OwnerClass("Test.UnreadPawn".into()).rule(), "the trace filter of Test.UnreadPawn");
-    // A primitive that does not block the query's kind is no candidate, whatever its owner's class.
+    assert_eq!(Unread::OwnerClass("Test.UnreadPawn".into()).record(), "NATIVE_SPAWN_PLACEMENT.md");
+    // A primitive a read test rejects is not tested, whatever its owner's class; terrain comes ahead of the tests.
     assert_eq!(t(&w, idle, unread, box_test), Candidate::NotTested);
-    // A terrain primitive in the region is Unsupported, blocking or not.
     assert_eq!(t(&w, idle, terrain, box_test), Candidate::Unsupported(Unread::TerrainHandling));
     assert_eq!(t(&w, blocking, terrain, Query::BoxSweep), Candidate::Unsupported(Unread::TerrainHandling));
 }

@@ -8,22 +8,34 @@
 //! added in template mode for a `bCollideComplex` template; every sweep passes [`SWEEP`] (8326), and the sweep routine
 //! adds [`ONE_RESULT`]. The spawn's queries pass no source actor.
 //!
-//! **Who is a candidate** ([`tested`]): a primitive component that blocks the query's kind (`BlockZeroExtent` for a
-//! box test of extent (0, 0, 0) and for a point sweep, `BlockNonZeroExtent` otherwise), on an owner whose class row
-//! ([`Row`]) accepts the flag set. A box test always walks the actor collision hash; a sweep walks it only under the
-//! mask [`SWEEP_HASH_MASK`]. Only the classes the note read have a row ([`row_of`]); no row is inherited.
+//! **Who is a candidate** ([`tested`]; lane IMPL-LINK9-TRACE-FILTER, from NATIVE_SPAWN_TRACE_FILTER.md section 7,
+//! PR #502). Each read test only rejects, so a primitive any one of them rejects is [`Candidate::NotTested`], in any
+//! order (note section 3). In the walkers' order:
+//! 1. **the skip flag**, read as `BulletListener` on the live primitive (the note's inferred name, UNVERIFIED): set,
+//!    not tested, except in a sweep that sets bit 30 ([`SKIP_IGNORED`]), which the spawn's sweeps never do;
+//! 2. **the owner** ([`owner_of`]): the component's own `Owner` field when its class declares it and it is set,
+//!    otherwise the walked actor, the one whose `CollisionComponent` or `Components` holds the primitive (note
+//!    section 7, step 2, review r1 of #502). The game's attach step sets that field; the port's spawn never does, so
+//!    the walked actor stands for it and a walked primitive always has an owner (UNVERIFIED). A `bAttached` that reads
+//!    clear is no answer on its own (note section 7, step 5): it is not read;
+//! 3. the bounds against the query's region: the caller's walk (`crate::placement`), before any flag is read;
+//! 4. **the blocking flag** for the query's kind (`BlockZeroExtent` for a box test of extent (0, 0, 0) and for a point
+//!    sweep, `BlockNonZeroExtent` otherwise): clear, not tested;
+//! 5. **the per-component test** (note section 2): the live primitive's `CollideActors`, and the live owner's
+//!    `bCollideActors`, both set; otherwise not tested;
+//! 6. **the owner's filter** by its exact class's row ([`Row`]; [`row_of`]): a row that rejects, not tested. The four
+//!    controller classes (`Controller`, `PlayerController`, `GamePlayerController`, `WillowPlayerController`) run the
+//!    `Actor` row (note section 1). No row is inherited.
 //!
-//! **The note's Off policy for what is unread:** wherever an unread rule decides the answer, the query is
-//! Unsupported, naming the rule ([`Unread`]). So:
-//! - every candidate is Unsupported, because the further per-component test runs for it and was not read;
-//! - a blocking primitive whose owner's class has no read row is Unsupported;
-//! - **every other blocking primitive is Unsupported too**, on the unresolved skip flag: the note makes a query with
-//!   a blocking primitive that has it set Unsupported, and the flag cannot be read, so the owner row is not allowed
-//!   to drop a blocking primitive first (review r1 of #477);
-//! - a `Terrain` actor's primitive is Unsupported (the terrain bit's handling was not read).
+//! **What stays unread**, naming the rule ([`Unread`]):
+//! - a `Terrain` actor's primitive (the terrain bit's handling), ahead of every test above, blocking or not;
 //!
-//! So a primitive that blocks the query's kind is never answered here. Only a primitive that does not block it (and
-//! is not terrain) is [`Candidate::NotTested`]. The rows still pick the most specific rule to name.
+//! and, only when every read test above passes (note section 7, step 3):
+//! - an owner whose exact class has no read row;
+//! - a primitive every read test accepts: the collision hash's admission beyond the per-component test (the scene
+//!   condition and the removal rules, note section 5), [`HASH_ADMISSION`] under the note's record.
+//!
+//! So a primitive is never answered "tested": the most the port can say is "not tested" or Unsupported.
 //!
 //! **Which hit a sweep returns** ([`choose_sweep_hit`]): the BSP hit, or the actors' hit when there is no BSP hit.
 //! Actors are walked to the BSP hit plus 5 units along the sweep, capped at the end point (the whole sweep without a
@@ -34,7 +46,7 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, ObjRef};
 use ow_vm::error::VmError;
 
-use crate::actors::flag;
+use crate::actors::{flag, object};
 
 /// Bit 1: pawns.
 pub const PAWNS: u32 = 1;
@@ -71,11 +83,20 @@ pub const SWEEP_HASH_MASK: u32 = 8347;
 pub const PAST_BSP: f32 = 5.0;
 
 /// The note's names for its unread rules.
-pub const PER_COMPONENT_TEST: &str = "the trace filter's per-component test";
 pub const TERRAIN_HANDLING: &str = "the trace filter's terrain handling";
 pub const BSP_ACTOR_COMPARATOR: &str = "the trace filter's comparator between a BSP hit and an actor hit";
 pub const TIE_ORDER: &str = "the trace filter's order among tied actor hits";
 pub const SKIP_FLAG: &str = "the trace filter's skip flag (bit 10 of a primitive's collision flag word, unresolved)";
+/// The skip flag's field as NATIVE_SPAWN_TRACE_FILTER.md section 4 infers it (UNVERIFIED), read by [`tested`]. The
+/// spawn extent's rule (`crate::placement`) still answers its own `NotYet` with [`SKIP_FLAG`]: NATIVE_SPAWN_EXTENT.md
+/// leaves the flag unread there.
+pub const SKIP_FLAG_FIELD: &str = "BulletListener";
+/// Bit 30: a sweep that sets it ignores the skip flag. The spawn's queries never set it.
+pub const SKIP_IGNORED: u32 = 1 << 30;
+/// The record of the per-component test, the controller rows, the skip flag's reading and the hash admission.
+pub const RECORD_TRACE_FILTER: &str = "NATIVE_SPAWN_TRACE_FILTER.md";
+/// The rule left unread for a primitive every read test accepts (NATIVE_SPAWN_TRACE_FILTER.md section 7, step 5).
+pub const HASH_ADMISSION: &str = "the collision hash's admission beyond the per-component test";
 
 /// One of the spawn's queries, as the filter sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +145,9 @@ pub enum Row {
     Pawn,
 }
 
-/// The classes whose filter was read. Only these have a row.
-const ROWS: [(&str, Row); 8] = [
+/// The classes whose filter was read. Only these have a row. The four controller classes run `Actor`'s body
+/// (NATIVE_SPAWN_TRACE_FILTER.md section 1).
+const ROWS: [(&str, Row); 12] = [
     ("Engine.Actor", Row::Actor),
     ("Engine.StaticMeshActor", Row::Actor),
     ("Engine.Brush", Row::Actor),
@@ -134,6 +156,10 @@ const ROWS: [(&str, Row); 8] = [
     ("Engine.InterpActor", Row::Mover),
     ("Engine.KActor", Row::Mover),
     ("Engine.Pawn", Row::Pawn),
+    ("Engine.Controller", Row::Actor),
+    ("Engine.PlayerController", Row::Actor),
+    ("Engine.GamePlayerController", Row::Actor),
+    ("WillowGame.WillowPlayerController", Row::Actor),
 ];
 
 /// The row of `class` when its filter was read; `None` for any other class (a subclass of a read class included,
@@ -188,24 +214,29 @@ pub fn owner_tested(row: Row, o: &Owner, primitive_blocks_actors: bool, flags: u
 /// An unread rule that decides a query's answer (module documentation): the query is Unsupported, naming it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unread {
-    /// A candidate primitive: the further per-component test (and the skip flag) decide it.
-    PerComponentTest,
-    /// A blocking primitive whose owner's class has no read row; the class's path.
+    /// A primitive whose owner's exact class has no read row; the class's path.
     OwnerClass(String),
     /// A primitive of a `Terrain` actor.
     TerrainHandling,
-    /// A blocking primitive the owner's row would not test: the unresolved skip flag still decides the query.
-    SkipFlag,
+    /// A primitive every read test accepts: whether the game's collision hash holds it.
+    HashAdmission,
 }
 
 impl Unread {
     /// The note's name for the rule.
     pub fn rule(&self) -> String {
         match self {
-            Unread::PerComponentTest => PER_COMPONENT_TEST.to_string(),
             Unread::OwnerClass(class) => format!("the trace filter of {class}"),
             Unread::TerrainHandling => TERRAIN_HANDLING.to_string(),
-            Unread::SkipFlag => SKIP_FLAG.to_string(),
+            Unread::HashAdmission => HASH_ADMISSION.to_string(),
+        }
+    }
+
+    /// The record that leaves the rule unread.
+    pub fn record(&self) -> &'static str {
+        match self {
+            Unread::OwnerClass(_) | Unread::TerrainHandling => "NATIVE_SPAWN_PLACEMENT.md",
+            Unread::HashAdmission => RECORD_TRACE_FILTER,
         }
     }
 }
@@ -213,25 +244,51 @@ impl Unread {
 /// A primitive's standing in one query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Candidate {
-    /// The query does not test it: it does not block the query's kind (and is not terrain), or the query does not
-    /// walk the actors.
+    /// The query does not test it: a read test rejects it (module documentation), or the query does not walk the
+    /// actors.
     NotTested,
     /// The query's answer depends on an unread rule for it: Unsupported.
     Unsupported(Unread),
 }
 
-/// The standing of `primitive`, owned by the actor `owner`, in `query` (module documentation).
-pub fn tested(space: &ObjectSpace, primitive: ObjRef, owner: ObjRef, query: Query) -> Result<Candidate, VmError> {
+/// The owner the filter reads for `primitive`, met in the walk of the actor `walked` (module documentation, step 2):
+/// the component's `Owner` field when its class declares it and it is set, otherwise `walked`.
+pub fn owner_of(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef) -> Result<ObjRef, VmError> {
+    let class = space.heap.get(primitive)?.class;
+    if space.prop(class, "Owner").is_some()
+        && let Some(owner) = object(space, primitive, "Owner")?
+    {
+        return Ok(owner);
+    }
+    Ok(walked)
+}
+
+/// The standing of `primitive`, met in the walk of the actor `walked`, in `query` (module documentation): its owner
+/// ([`owner_of`]), then the read tests in the walkers' order, each only rejecting, then the unread rules. Reads the
+/// live objects only.
+pub fn tested(space: &ObjectSpace, primitive: ObjRef, walked: ObjRef, query: Query) -> Result<Candidate, VmError> {
     if !query.walks_actors() {
         return Ok(Candidate::NotTested);
     }
+    let owner = owner_of(space, primitive, walked)?;
+    // The terrain bit's handling is unread and comes ahead of every other test (NATIVE_SPAWN_PLACEMENT.md, kept by
+    // the hub for IMPL-LINK9-TRACE-FILTER): a `Terrain` actor's primitive is Unsupported, blocking or not.
     let class = space.heap.get(owner)?.class;
-    if let Some(terrain) = space.classes.by_path("Engine.Terrain") {
-        if space.classes.is_child_of(class, terrain) {
-            return Ok(Candidate::Unsupported(Unread::TerrainHandling));
-        }
+    if let Some(terrain) = space.classes.by_path("Engine.Terrain")
+        && space.classes.is_child_of(class, terrain)
+    {
+        return Ok(Candidate::Unsupported(Unread::TerrainHandling));
+    }
+    // The skip flag (note section 4); a sweep with bit 30 ignores it.
+    let ignores_skip = matches!(query, Query::BoxSweep | Query::PointSweep) && query.flags() & SKIP_IGNORED != 0;
+    if !ignores_skip && flag(space, primitive, SKIP_FLAG_FIELD)? {
+        return Ok(Candidate::NotTested);
     }
     if !flag(space, primitive, query.blocking_flag())? {
+        return Ok(Candidate::NotTested);
+    }
+    // The per-component test (note section 2), on the live primitive and its live owner.
+    if !flag(space, primitive, "CollideActors")? || !flag(space, owner, "bCollideActors")? {
         return Ok(Candidate::NotTested);
     }
     let Some(row) = row_of(space, class) else {
@@ -260,11 +317,10 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, owner: ObjRef, query: Quer
     } else {
         false
     };
-    Ok(Candidate::Unsupported(if owner_tested(row, &o, primitive_blocks, flags) {
-        Unread::PerComponentTest
-    } else {
-        Unread::SkipFlag
-    }))
+    if !owner_tested(row, &o, primitive_blocks, flags) {
+        return Ok(Candidate::NotTested);
+    }
+    Ok(Candidate::Unsupported(Unread::HashAdmission))
 }
 
 /// One sweep hit: where, the surface normal, and the fraction of the whole sweep.
