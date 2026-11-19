@@ -44,6 +44,7 @@ fn engine() -> Vec<u8> {
         "ByteProperty",
         "ObjectProperty",
         "StructProperty",
+        "ClassProperty",
     ]);
     let object = t.class("Object", 0);
     let vector = toy_struct(&mut t, object, "Vector", None);
@@ -91,6 +92,32 @@ fn engine() -> Vec<u8> {
     defaults.extend_from_slice(&t.none);
     t.p.add_export(blocked, "Default__ToyBlocked", defaults);
     t.class("Thing", object);
+    // Lane IMPL-LINK9-TARGET-MIND: a controller class with the mind's link field, a toy mind, a target that can hold a
+    // controller (no ControllerClass: the fallback WillowGame.WillowMind) and one whose default names ToyMind.
+    let controller = t.class("Controller", actor);
+    t.prop("Object", controller, "Pawn", 0, actor);
+    let toy_mind = t.class("ToyMind", controller);
+    t.prop("Object", toy_mind, "MyWillowPawn", 0, actor);
+    let minded = t.class("ToyMindedTarget", actor);
+    t.prop("Object", minded, "Controller", 0, controller);
+    let named = t.class("ToyNamedTarget", actor);
+    t.prop("Object", named, "Controller", 0, controller);
+    t.prop("Object", named, "MyWillowMind", 0, controller);
+    let class_class = t.import("Class");
+    t.prop_tail("Class", named, "ControllerClass", 0, &ow_package::testkit::ints(&[class_class, controller]));
+    let mut defaults = ow_package::testkit::ints(&[0]);
+    defaults.extend(t.p.tag("ControllerClass", "ClassProperty", &ow_package::testkit::ints(&[toy_mind])));
+    defaults.extend_from_slice(&t.none);
+    t.p.add_export(named, "Default__ToyNamedTarget", defaults);
+    t.p.build()
+}
+
+/// `WillowGame.upk`: `WillowMind`, a `Controller` (the target mind's fallback class).
+fn willow() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let controller = t.p.add_import("Core", "Class", engine, "Controller");
+    t.class("WillowMind", controller);
     t.p.build()
 }
 
@@ -113,8 +140,8 @@ fn toy() -> Toy {
     };
     let dir = std::env::temp_dir().join(format!("ow-cli-l9-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (c, e) = (core(), engine());
-    let files: [(&str, &[u8]); 2] = [("Core.upk", &c), ("Engine.upk", &e)];
+    let (c, e, w) = (core(), engine(), willow());
+    let files: [(&str, &[u8]); 3] = [("Core.upk", &c), ("Engine.upk", &e), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(ow_attr::AttributeSystem::new_empty()), ParityMode::Off);
     let snapshot = BalanceSnapshot::new(
@@ -512,4 +539,42 @@ fn link_9_s_evidence_finds_the_state_by_name_whatever_its_spelling() {
     let target = vm.space.alloc(class, "Target", None, Origin::Runtime).unwrap();
     lift(&mut vm, skill, Some(target), intro);
     assert!(phaselock_evident(&vm, skill, Some(target)));
+}
+
+/// Lane IMPL-LINK9-TARGET-MIND: the spawned target gets a mind that possesses it, through the world's own spawn. With
+/// no ControllerClass the mind is the fallback `WillowGame.WillowMind`; a target whose default names `ToyMind` gets a
+/// `ToyMind`, linked both ways (`Controller`, `MyWillowMind`; `Pawn`, `MyWillowPawn`). The mind is registered in the
+/// world and the harness line is logged. A target that cannot hold a controller gets none.
+#[test]
+fn the_cast_s_target_gets_a_mind_that_possesses_it() {
+    let read = |t: &Toy, o: ObjRef, n: &str| {
+        let space = &t.world.vm.space;
+        let p = space.prop(space.heap.get(o).unwrap().class, n).unwrap();
+        space.read(o, PropAddr::scalar(p)).unwrap().clone()
+    };
+    for (target, mind_class) in [("Engine.ToyMindedTarget", "WillowGame.WillowMind"), ("Engine.ToyNamedTarget", "Engine.ToyMind")] {
+        let mut t = toy();
+        let before = t.listed().len();
+        let (r, actors) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", target], Grading::Strict);
+        assert!(r.stop.is_none(), "{target}: {:?}", r.stop);
+        let (_, _, Some(pawn)) = actors.expect("the cast ran") else { panic!() };
+        let Value::Object(Some(mind)) = read(&t, pawn, "Controller") else { panic!("{target}: no controller") };
+        let want = t.world.vm.find_class(mind_class).unwrap();
+        assert_eq!(t.world.vm.space.heap.get(mind).unwrap().class, want, "{target}");
+        assert_eq!(read(&t, mind, "Pawn"), Value::Object(Some(pawn)), "{target}: the mind possesses the pawn");
+        assert!(t.listed().contains(&mind), "{target}: spawned by the world");
+        assert_eq!(t.listed().len(), before + 4, "{target}: three actors and the mind");
+        assert!(r.harness.iter().any(|h| h.starts_with(TARGET_MIND_INPUT) && h.contains(mind_class) && h.contains("UNVERIFIED")), "{target}: {:?}", r.harness);
+        if target == "Engine.ToyNamedTarget" {
+            assert_eq!(read(&t, pawn, "MyWillowMind"), Value::Object(Some(mind)));
+            assert_eq!(read(&t, mind, "MyWillowPawn"), Value::Object(Some(pawn)));
+        }
+    }
+    // A target class with no Controller field: no mind, no harness line.
+    let mut t = toy();
+    let before = t.listed().len();
+    let (r, _) = t.drive(&ACTORS, Grading::Strict);
+    assert!(r.stop.is_none());
+    assert_eq!(t.listed().len(), before + 3);
+    assert!(r.harness.is_empty(), "{:?}", r.harness);
 }

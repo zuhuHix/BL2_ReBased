@@ -1089,7 +1089,11 @@ pub fn drive_phaselock(
     evidence: impl FnOnce(&ow_vm::api::Vm, ow_object::ids::ObjRef, CastActors) -> bool,
 ) {
     r.steps.push("spawn".into());
-    let actors = match phaselock_actors(vm, classes) {
+    let logged = vm.log.len();
+    let spawned = phaselock_actors(vm, classes);
+    // The spawn's harness inputs (the target's mind), also when it stopped.
+    r.harness.extend(vm.log[logged.min(vm.log.len())..].iter().filter(|l| l.starts_with("harness input:")).cloned());
+    let actors = match spawned {
         Ok(a) => a,
         Err(e) => {
             r.stop = Some(typed_stop("spawn", &e));
@@ -1357,7 +1361,83 @@ pub fn phaselock_actors(vm: &mut ow_vm::api::Vm, classes: &[&str]) -> Result<Cas
     let pawn = spawn(pawn_class)?;
     let controller = spawn(controller_class)?;
     let target = spawn(target_class)?;
+    if let Some(t) = target {
+        // Three actors are committed by now: a NotYet of the mind is marked, as a spawn's after the first.
+        target_mind(vm, spawner, t).map_err(|e| match e {
+            ow_vm::error::VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+                ow_core::NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+            }
+            other => other,
+        })?;
+    }
     Ok((pawn, controller, target))
+}
+
+/// The mind class the target gets when its own `ControllerClass` names none (lane IMPL-LINK9-TARGET-MIND).
+pub const TARGET_MIND_FALLBACK: &str = "WillowGame.WillowMind";
+
+/// The text that starts link 9's harness line for the target's mind.
+pub const TARGET_MIND_INPUT: &str = "harness input: the target's mind";
+
+/// Link 9's target mind (lane IMPL-LINK9-TARGET-MIND, a **harness input, UNVERIFIED**): in the game the population
+/// system spawns an enemy with its AI controller; the harness stands in for that, so `CanLiftTargetIf` reads its flag
+/// conditions through a mind as for a real enemy (NATIVE_FLAG_EXPRESSION_EVALUATE.md section 5).
+/// - A target whose class declares no `Controller` gets none (not a pawn); one that already has a controller keeps it.
+/// - The mind's class is the target's own `ControllerClass` when it names an `Engine.Controller` subclass (a
+///   `WillowAIPawn`'s class default names `WillowGame.WillowMind`), else [`TARGET_MIND_FALLBACK`].
+/// - The mind is spawned by the world's own spawn (so its components are its own), then linked as the port already
+///   possesses an AI pawn (`ow_combat::hit::adopt`): the target's `Controller` and, when declared, `MyWillowMind`; the
+///   mind's `Pawn` and, when declared, `MyWillowPawn`. The script's `Possess` is not run (as in `adopt`).
+///
+/// The line is logged before the class lookup, so a lookup that loads (a write) or fails still shows.
+pub fn target_mind(
+    vm: &mut ow_vm::api::Vm,
+    spawner: ow_object::ids::ObjRef,
+    target: ow_object::ids::ObjRef,
+) -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
+    use ow_object::ids::PropAddr;
+    use ow_object::value::Value;
+    let class = vm.space.heap.get(target)?.class;
+    let Some(slot) = vm.space.prop(class, "Controller") else {
+        return Ok(None);
+    };
+    if let Value::Object(Some(existing)) = vm.space.read(target, PropAddr::scalar(slot))? {
+        return Ok(Some(*existing));
+    }
+    let named = match vm.space.prop(class, "ControllerClass").map(|p| vm.space.read(target, PropAddr::scalar(p))) {
+        Some(Ok(Value::Class(Some(c)))) => Some(*c),
+        _ => None,
+    };
+    let controller = vm.space.classes.by_path("Engine.Controller");
+    let chosen = named.filter(|c| controller.is_some_and(|b| vm.space.classes.is_child_of(*c, b)));
+    let path = match chosen {
+        Some(c) => vm.space.classes.get_layout(c).map(|l| l.path().as_str().to_string()).unwrap_or_default(),
+        None => TARGET_MIND_FALLBACK.to_string(),
+    };
+    vm.log.push(format!(
+        "{TARGET_MIND_INPUT} {path} (spawned and linked as the port's adopt links an AI pawn; UNVERIFIED stand-in for \
+         the population spawn's AI controller)"
+    ));
+    let mind_class = match chosen {
+        Some(c) => c,
+        None => vm.find_class(TARGET_MIND_FALLBACK)?,
+    };
+    let Some(mind) = ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(mind_class)))? else {
+        return Err(script_error(format!("the world's spawn refused the target's mind {path}")));
+    };
+    let link = |vm: &mut ow_vm::api::Vm, o: ow_object::ids::ObjRef, name: &str, v: ow_object::ids::ObjRef, required: bool| {
+        let class = vm.space.heap.get(o)?.class;
+        match vm.space.prop(class, name) {
+            Some(p) => vm.space.write(o, PropAddr::scalar(p), Value::Object(Some(v))).map_err(ow_vm::error::VmError::from),
+            None if required => Err(script_error(format!("the target's mind {path} declares no {name}"))),
+            None => Ok(()),
+        }
+    };
+    link(vm, target, "Controller", mind, true)?;
+    link(vm, target, "MyWillowMind", mind, false)?;
+    link(vm, mind, "Pawn", target, true)?;
+    link(vm, mind, "MyWillowPawn", target, false)?;
+    Ok(Some(mind))
 }
 
 /// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).
