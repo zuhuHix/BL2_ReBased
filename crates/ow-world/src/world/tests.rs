@@ -3008,6 +3008,33 @@ mod placement {
         });
     }
 
+    /// Through the spawn, a passing check (review r1 of #503, low 3): a probe that collides with actors and with the
+    /// world, whose cylinder does not have `CollideActors`, passes the check (no colliding primitive, not moved, a
+    /// Clear level part, an empty overlap set) and goes on to PostBeginPlay and SetInitialState; it is made at the
+    /// location the spot search returned (the requested one, the first test being Clear).
+    #[test]
+    fn a_colliding_actor_with_no_colliding_primitive_passes_the_check_to_post_begin_play() {
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            let s = script(&mut x, vec![], vec![], Test::Clear);
+            let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+            let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Probe").unwrap();
+            set_field(&mut x.w.vm.space, cdo, "bCollideActors", Value::Bool(true)).unwrap();
+            let asked_for = field(&x.w.vm.space, wi, "Location").unwrap();
+            let before = count(&x);
+            let p = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap().expect("made");
+            assert_eq!(count(&x), before + 1);
+            let begun: Vec<i32> = x.all_notes().into_iter().filter(|(o, _)| *o == p).map(|(_, k)| k).collect();
+            assert_eq!(begun, vec![11, 12, 13], "PreBeginPlay, PostBeginPlay, SetInitialState");
+            assert_eq!(field(&x.w.vm.space, p, "Location").unwrap(), asked_for, "the spot search's location");
+            // The spot search's first test, then the check's level part: both box tests of the cylinder's extent.
+            let asked = s.asked.borrow();
+            assert_eq!(asked.len(), 2, "{asked:?}");
+            assert!(asked.iter().all(|a| matches!(a, Asked::Test([10.0, 10.0, 20.0], ..))), "{asked:?}");
+        });
+    }
+
     /// Through the spawn: a live actor whose primitive has `CollideActors` stops at the attach step, marked by the
     /// spawn's boundary, its kind kept; the actor stays made.
     #[test]

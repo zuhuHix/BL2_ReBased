@@ -112,8 +112,9 @@ The spawn returns None before the object is made: no actor, no events, no owner 
 
 - **When `bNoCollisionFail` is false:** after `PreBeginPlay` and the per-component engine call, the world runs an
   encroachment check of the new actor at its final location and rotation, with touch notification on. This happens
-  for every such spawn: the spawn routine does not test `bCollideActors` first. Whether the check itself returns at once
-  for an actor that does not collide is inside the check, which was not read. If the check reports encroachment, the
+  for every such spawn: the spawn routine does not test `bCollideActors` first. The check itself returns at once for an
+  actor that does not collide: its gate on the live actor's `bCollideActors` is read in NATIVE_ENCROACHMENT_CHECK.md
+  section 2, step 1 (UNVERIFIED in the running game). If the check reports encroachment, the
   actor is destroyed through the ordinary destroy sequence and the spawn returns None.
 - **When `bNoCollisionFail` is true and the actor has `bCollideActors`:** a separate engine step runs instead of the
   check (inferred as a relocation or touch update; not read). If it destroys the actor and the actor is not a "no-fail"

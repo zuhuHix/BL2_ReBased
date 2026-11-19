@@ -36,7 +36,8 @@ lands with #490.
   - "the post-spawn encroachment check's rule" (`ENCROACHMENT_RULE`) is retired.
   - Grading goes by the `Missing` kind.
   - Reference is unchanged: its collision refusal stays.
-- **Docs.** NATIVE_SPAWN_PLACEMENT.md's encroachment answers and its open question 1 now point at the new note. The
+- **Docs.** NATIVE_SPAWN_PLACEMENT.md's encroachment answers, section 5's first bullet (review r1 of #503) and its
+  open question 1 now point at the new note. The
   "taken to pass" comments in `placement.rs` and `actors.rs` now describe the gate as read.
 - **Tests** (`world/tests.rs`, placement module):
   - the check's order, called directly on a live actor:
@@ -52,6 +53,9 @@ lands with #490.
     - bounds that miss leave the walk;
     - bounds that meet are the per-class test's `NotRead`;
   - through the spawn: the attach step's refusal is marked, kind `NotRead`, and the actor stays made;
+  - through the spawn, a passing check (review r1 of #503): a probe colliding with actors and the world, whose cylinder
+    lacks `CollideActors`, passes on to `PostBeginPlay` and `SetInitialState` and is made at the spot search's
+    location, with two box tests asked (the search's first test and the check's level part);
   - the existing encroachment-and-relocation test: with a service, `Collider` now stops at its shape ("the
     bounding-cylinder rule of Engine.Collider"), marked.
 - **Installed `--slice-gate`, Off, strict: 0 ok / 5 not yet / 9 error, every row byte-identical to
