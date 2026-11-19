@@ -19,7 +19,9 @@ Based on main d72b96d4 (#480 and #486 landed).
   world's answer. It writes nothing and loads nothing, since these are run-time objects.
 - **The mission bridge's Off binding** (`n_playthrough`) now answers that rule on any controller, reading the world's
   `WorldInfo.GRI`, not the bridge's own replication object. Reference is unchanged: the bridge's controller only, and
-  "outside the binding" on any other.
+  "outside the binding" on any other. The bridge's internal reads (its playthrough record and its reward experience) still use
+  the bridge's own current playthrough, its replication object: the same object as the world's `GRI` today. Only the
+  binding follows the note (review r1 of #497).
 - **Direct callers.** `GetActivePlotCriticalMissionNumber` with a negative or omitted index uses the rule as a function
   on the controller, not a VM dispatch of `GetCurrentPlaythrough`. `MissionTracker.AllExpansionSideMissionsComplete`
   has no Off body in the tree yet; when it gets one, it calls the same function.
@@ -39,7 +41,11 @@ Based on main d72b96d4 (#480 and #486 landed).
       load never runs; without it, the fallback loads and answers.
   - `datastore_tests.rs`: the refresh-mark tests use a strict-subclass controller, whose `NotYet` is now their
     post-write refusal.
-  - The bridge: the Off answer on another controller, and Reference unchanged.
+  - The bridge: in Off the world's `WorldInfo.GRI` points at a second replication object with another playthrough,
+    and both the bridge's and another controller get the world's value. A strict-subclass controller gets the
+    controller-override `NotYet` (`NotRead`). Reference is unchanged.
+  - NATIVE_INDEX.md's three rows and NATIVE_MISSION_NUMBERS.md's both-branch bullets (now retired history) follow
+    this decision (review r1 of #497).
 - **Installed `--slice-gate`, Off, strict: 0 ok / 12 not yet / 2 error, every row byte-identical to the base.**
   - Link 10 passes 3 of its 16 driver steps (`stage:8`, `player:8:21000`, `use`) and stops at `accept`. The stop is
     "stopped after partial writes: MissionTracker.GetAllMissions": needs the tracker's full mission list (the bridge

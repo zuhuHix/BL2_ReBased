@@ -53,11 +53,12 @@ nothing is preflighted for it and nothing is rolled back. Every call below goes 
 2. **The engine-wide condition** (step 1's unresolved global): Off does not guess it. Settled in
    NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED): it holds when the world exists, and the both-branch comparison below is
    retired there.
-   - When the world, the replication info and the tracker are all there, both branches are computed: the tracker
-     branch (steps 2 and 3) and the fallback (section 2).
-   - Equal answers: that number.
-   - Different answers: `NotYet { NotRead }`, "the engine-wide condition of GetActiveMissionNumber". If either branch
-     fails, that failure is the answer (below).
+   - Retired history (decision 2026-11-19-NNN, IMPL-PLAYTHROUGH-VIRTUAL; Off now answers the tracker branch alone
+     when the world exists): when the world, the replication info and the tracker were all there, both branches were
+     computed, the tracker branch (steps 2 and 3) and the fallback (section 2).
+   - Retired history: equal answers gave that number.
+   - Retired history: different answers were `NotYet { NotRead }`, "the engine-wide condition of
+     GetActiveMissionNumber". If either branch failed, that failure was the answer (below).
    - With no world, no replication info of that class, or no tracker, the condition does not matter: the fallback is
      the answer.
 3. **The tracker branch:**

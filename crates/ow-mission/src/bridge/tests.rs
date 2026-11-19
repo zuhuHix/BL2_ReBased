@@ -425,6 +425,9 @@ fn willowgame() -> Vec<u8> {
     let actor_component = t.p.add_import("Core", "Class", engine, "ActorComponent");
     let component = t.class("ToyDialogComponent", actor_component);
     t.prop("Float", component, "ToyVolume", 0, 0);
+    // A strict subclass of the controller (lane IMPL-PLAYTHROUGH-VIRTUAL, review r1 of #497): its current-playthrough
+    // query is an unread override.
+    t.class("ToySubPlayerController", controller);
     t.build()
 }
 
@@ -2073,12 +2076,28 @@ fn the_current_playthrough_is_the_world_s_on_any_controller_in_off() {
     let mut env = Env::new(false);
     let s = env.script.clone();
     let mine = s.player_controller();
+    // The bridge's own replication object says 1; the world's WorldInfo.GRI is pointed at a second, exactly
+    // WillowGameReplicationInfo object that says 2 (review r1 of #497, item 2): the binding answers the world's.
     set(&mut env.vm().space, s.inner.o.replication, "CurrentPlaythrough", Value::Int(1)).unwrap();
+    let gri = env.vm().find_class("WillowGame.WillowGameReplicationInfo").unwrap();
+    let world_gri = ow_vm::interp::instantiate_from_defaults(env.vm(), gri).unwrap();
+    set(&mut env.vm().space, world_gri, "CurrentPlaythrough", Value::Int(2)).unwrap();
+    set(&mut env.vm().space, s.inner.o.world_info, "GRI", Value::Object(Some(world_gri))).unwrap();
     let class = env.vm().find_class("WillowGame.WillowPlayerController").unwrap();
     let other = ow_vm::interp::instantiate_from_defaults(env.vm(), class).unwrap();
     let path = "WillowGame.WillowPlayerController.GetCurrentPlaythrough";
-    assert_eq!(env.call(path, Some(mine), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(1));
-    assert_eq!(env.call(path, Some(other), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(1), "another controller");
+    assert_eq!(env.call(path, Some(mine), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(2));
+    assert_eq!(env.call(path, Some(other), vec![], MissionScript::n_playthrough).unwrap(), Value::Int(2), "another controller");
+    // A strict subclass of the controller: the unread override, NotYet NotRead.
+    let sub = env.vm().find_class("WillowGame.ToySubPlayerController").unwrap();
+    let sub = ow_vm::interp::instantiate_from_defaults(env.vm(), sub).unwrap();
+    match env.call(path, Some(sub), vec![], MissionScript::n_playthrough).unwrap_err() {
+        BehaviorError::Vm(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead, "{n}");
+            assert_eq!(n.what, ow_world::world::mission_numbers::CONTROLLER_OVERRIDE);
+        }
+        other => panic!("{other:?}"),
+    }
     // Reference: another controller is outside the binding (the C++ stub line and zero).
     let mut env = Env::with_mode(false, ParityMode::Reference);
     let class = env.vm().find_class("WillowGame.WillowPlayerController").unwrap();
