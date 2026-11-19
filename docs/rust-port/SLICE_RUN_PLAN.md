@@ -150,7 +150,10 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
   #340); installed, 33 rows, 29 equal to the C++ (D62). Outside combat, Reference: `--item-roll --weapons` 29,880 of
   29,880 (D21), `--item-pool` 7,680 of 7,680 (D25); Off `--item-pool` 6,360 complete and 1,320 `NotYet` (D25).
 - **First stops:** Reference loot is the C++ stand-in inventories, not real guns (D41). Off,
-  `ItemPool.SpawnBalancedInventoryFromPool` is `NotYet { NotPorted }`, checked before any draw (D41). An Off rolled
+  `ItemPool.SpawnBalancedInventoryFromPool` is `NotYet { NotPorted }`, checked before any draw (D41). The three
+  `WillowInventory` natives `InitializeInventory` calls are bound in Off, and `GetItemTossVelocity` is `NotYet` on
+  the toss rotation (2026-11-19-29); no installed Off run reaches the death roll yet (link 1 stops at
+  `GetPlayerPawnDataManager`). An Off rolled
   weapon on the installed game stops at the weapon's change notification (D24). Pickup is host side, with no lane
   named (D41).
 - **Lanes:**

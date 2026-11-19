@@ -445,8 +445,11 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
             ))
         },
     )?;
-    Ok(())
+    // GetItemTossVelocity, Off: NotYet before any draw (toss module documentation).
+    toss::register(vm)
 }
+
+pub mod toss;
 
 #[cfg(test)]
 mod tests;
