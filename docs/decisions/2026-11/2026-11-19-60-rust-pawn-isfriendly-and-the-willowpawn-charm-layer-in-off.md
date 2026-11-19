@@ -64,3 +64,22 @@ hub.
         the `IsPhaselockedAttribute` read.
 - **Open:** the note's three questions (the installed allegiances; what sets the charm fields; death and the fields);
   `WillowAIPawn`'s `IsEnemy` / `IsNeutral`; `AttributeDefinition.GetValue`, the cast's next stop.
+- **Review r2 of #449** (fix commits on top). Where this section and the text above differ, this section holds.
+  - **Dispatch.** `IsFriendly` resolves the receiver's `GetOpinion` virtually through the VM, the ruling of #444's
+    `OnPlayerClassChange`. The stock natives give the note's rules, and a script override runs as script. A class
+    that declares no `GetOpinion` is a named `NotYet`. The charm layer's step 3 calls the charmed parent's own
+    `IsFriendly` the same way. The Rust helper that chose a rule by ancestry is gone.
+  - **Self queries.** A pawn asking about itself answers its allegiance's `SelfOpinion` before the other side is
+    classified, so a plain `Engine.Pawn` asking about itself is answered too. A distinct plain pawn is still refused.
+  - **Charm order.** The charm steps run in the note's order. The self-link refusal applies only to a pawn asking
+    about itself while a charm field points at itself, the case section 4 leaves UNVERIFIED. A `CharmedChild` match
+    now wins even when `CharmedParent` is the pawn itself.
+  - **Class objects.** A class object as `Other` is a named `NotYet`; before, it was read as None.
+  - **Loading.** Allegiances are compared as references, and a definition is loaded only when its fields are read.
+  - **The cast pack.** In Off the action skill pack registers only the three opinion natives. The groundwork
+    `IsEnemy` and `IsNeutral` come with the full allegiance registration in Reference only.
+  - **New tests:** a plain pawn's self query; a class object refused by all three natives; a script `GetOpinion`
+    override answering through `IsFriendly` and through step 3; the `CharmedChild` match over a self parent link;
+    the cast pack binding no groundwork test in Off.
+  - **Gates after r2:** `ow-combat` 158 / 0 / 2; `ow-skills` 97 / 0 / 1; `crate_edges_test.py` OK.
+

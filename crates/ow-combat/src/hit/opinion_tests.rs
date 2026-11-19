@@ -15,13 +15,14 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
-use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::script::{Asm, FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{NativePack, StubPolicy, Vm};
 use ow_vm::error::VmError;
 
 use super::*;
 
 const NATIVE: u32 = 0x400 | 0x20000;
+const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 const IMPORTS: [&str; 8] = [
@@ -85,6 +86,22 @@ fn willow_game() -> Vec<u8> {
     t.prop("Object", willow, "CharmedParent", 0, willow);
     native(&mut t, willow, "GetOpinion", object, "Byte");
     t.class("WillowAIPawn", willow);
+    // A pawn whose GetOpinion is a script override: it answers Friendly of everyone (invented).
+    let fond = t.class("ToyFondPawn", willow);
+    t.function(
+        fond,
+        "GetOpinion",
+        &[Param { type_ref: object, ..Param::new("Object", "Other") }],
+        Some(("Byte", 0)),
+        &[],
+        &FunctionSpec::new(SCRIPT, "GetOpinion"),
+        |_| {
+            let mut a = Asm::new();
+            a.stmt().raw(&[0x04]).byte_const(2);
+            a.end();
+            Some(a)
+        },
+    );
     t.build()
 }
 
@@ -284,8 +301,14 @@ fn the_charm_layer() {
     let own_parent = x.willow_pawn(Some(a));
     x.set(q, "CharmedParent", Value::Object(Some(own_parent)));
     assert_eq!(x.willow(q, Some(t)).unwrap(), F, "this pawn has a parent: step 3 does not apply");
+    // A self link counts only where the answer depends on it (review r2 of #449): asking about another pawn, the
+    // steps run in order; asking about itself while a charm field points at itself is the unread case.
     x.set(q, "CharmedParent", Value::Object(Some(q)));
-    assert!(not_read(x.willow(q, Some(t))).contains("itself"));
+    assert_eq!(x.willow(q, Some(t)).unwrap(), F, "a parent set (to itself): step 3 does not apply, the generic rule");
+    let charmed = x.willow_pawn(None);
+    x.set(q, "CharmedChild", Value::Object(Some(charmed)));
+    assert_eq!(x.willow(q, Some(charmed)).unwrap(), E, "the CharmedChild match wins although CharmedParent is itself");
+    assert!(not_read(x.willow(q, Some(q))).contains("itself"));
 }
 
 /// `IsFriendly` is "opinion is Friendly" by the pawn's class: the charm layer for a `WillowPawn`, the generic rule for
@@ -333,4 +356,48 @@ fn the_combat_pack_binds_the_stand_ins_in_reference_only() {
         let key = x.vm.function(f).unwrap().native_key.clone().unwrap();
         assert!(!x.vm.has_native(&key), "{path}");
     }
+}
+
+/// A plain pawn asking about itself answers its allegiance's `SelfOpinion` before the other side is classified
+/// (review r2 of #449); a distinct plain pawn is still refused.
+#[test]
+fn a_plain_pawn_asking_about_itself_answers_its_self_opinion() {
+    let mut x = fx(ParityMode::Off, false);
+    let a = x.allegiance(FRIENDLY, NEUTRAL);
+    let plain = x.obj("Engine.Pawn");
+    x.set(plain, "Allegiance", Value::Object(Some(a)));
+    assert_eq!(x.generic(plain, Some(plain)).unwrap(), F);
+    assert_eq!(x.friendly(plain, Some(plain)).unwrap(), Value::Bool(true));
+    let other = x.obj("Engine.Pawn");
+    let me = x.willow_pawn(Some(a));
+    assert!(not_read(x.generic(me, Some(other))).contains("not a WillowPawn"));
+}
+
+/// A class object as `Other` is a named `NotYet`, not the None rule (review r2 of #449).
+#[test]
+fn a_class_object_is_not_yet() {
+    let mut x = fx(ParityMode::Off, false);
+    let a = x.allegiance(FRIENDLY, NEUTRAL);
+    let me = x.willow_pawn(Some(a));
+    let class = x.vm.find_class("Engine.Pawn").unwrap();
+    for path in PATHS {
+        let f = x.vm.find_function(path).unwrap();
+        let r = x.vm.call(f, Some(me), vec![Value::Class(Some(class))]).map(|r| r.ret);
+        assert!(not_read(r).contains("class object"), "{path}");
+    }
+}
+
+/// `IsFriendly` resolves `GetOpinion` virtually (review r2 of #449): a script override runs, and the charm layer's
+/// step 3 asks the charmed parent's own `IsFriendly`, which dispatches the same way.
+#[test]
+fn is_friendly_dispatches_get_opinion_through_the_vm() {
+    let mut x = fx(ParityMode::Off, false);
+    let fond = x.obj("WillowGame.ToyFondPawn");
+    let stranger = x.willow_pawn(None);
+    assert_eq!(x.friendly(fond, Some(stranger)).unwrap(), Value::Bool(true), "the script override answers Friendly");
+    assert_eq!(x.willow(fond, Some(stranger)).unwrap(), N, "the stock native alone: no allegiance, Neutral");
+    // Step 3: T's charmed parent is the fond pawn, whose own (overridden) opinion is Friendly of everyone.
+    let (q, t) = (x.willow_pawn(None), x.willow_pawn(None));
+    x.set(t, "CharmedParent", Value::Object(Some(fond)));
+    assert_eq!(x.willow(q, Some(t)).unwrap(), E);
 }
