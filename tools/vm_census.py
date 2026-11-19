@@ -25,6 +25,19 @@ PACKAGES = ["Core", "Engine", "GameFramework", "GearboxFramework", "WillowGame",
             "OnlineSubsystemSteamworks"]
 
 
+def demand_key(item):
+    """The row's name: the native key, with its package when the sweep gave one (an Off sweep names it, so two
+    packages' natives with one key stay apart; review r2 of #519). The package compares case-insensitively."""
+    package = item.get("package", "")
+    return f"{item['native']} [{package.lower()}]" if package else item["native"]
+
+
+def add_demand(demand, items):
+    """Adds one package's `unimplemented_natives` rows to `demand`, keyed by `demand_key`."""
+    for item in items:
+        demand[demand_key(item)] += item["functions_reaching"]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reader", required=True)
@@ -53,8 +66,7 @@ def main():
         totals["undecodable"] += data["undecodable_skipped"]
         print(f"{name:<28}{data['attempted']:>10}{data['succeeded']:>9}{data['failed']:>8}"
               f"{data['undecodable_skipped']:>13}{data['seconds']:>9.2f}")
-        for item in data["unimplemented_natives"]:
-            demand[item["native"]] += item["functions_reaching"]
+        add_demand(demand, data["unimplemented_natives"])
         for item in data["failures"]:
             key = item["example"].split(":", 1)[1].strip()[:70] if ":" in item["example"] else item["example"]
             failures[key] += item["count"]

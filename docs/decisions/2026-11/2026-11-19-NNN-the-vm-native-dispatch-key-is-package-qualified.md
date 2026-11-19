@@ -56,4 +56,17 @@ AI-assisted (Claude Code, Opus 5.5). Lane VM-DISPATCH-KEY. The number NNN is a p
      stub, and `UnimplementedNative` gains a `package` field, empty for the other stub kinds. The log line keeps the
      legacy text, `UNIMPLEMENTED <key>`, and the census JSON is unchanged. Test:
      `two_unbound_natives_with_one_key_count_apart`.
+- **Review r2 of #519, folded in:**
+  1. **The sweep output names the package.** In Off each `unimplemented_natives` row of `--vm-sweep` carries a
+     `package` field. In Reference the rows keep the C++ shape: one per bare key, each attempt counted once. The tally
+     deduplicates per attempt before ranking. `tools/vm_census.py` keys its merge by native and package (folded).
+     Tests: `sweep_json_names_the_package_in_off_and_keeps_the_cxx_rows_in_reference` (ow-cli, through the JSON) and
+     `tests/vm_census_test.py`.
+  2. **Totals group by the folded package** (`sweep::StubTally`), so `PackA` and `PACKA` are one row; the first
+     spelling is kept for display. Test: `the_tally_groups_by_folded_package_and_reference_keeps_the_bare_key`.
+  3. **The stub record is collected only during a sweep attempt.** It is `None` otherwise, so commands such as
+     `--native-census` grow nothing. Test: the stub test checks a call outside an attempt records nothing.
+  4. **The inventory adapter's binding** is its own function, `bind_entry_getter`. Test:
+     `the_entry_getter_binding_reaches_only_its_own_package`, where the intended getter runs the adapter's closure and
+     a same-key getter of another package stays unbound.
 - **Not verified:** nothing here is about the running game. This is the port's own dispatch rule.

@@ -213,8 +213,14 @@ fn sweep_json(r: &SweepReport) -> String {
         .unimplemented_natives
         .iter()
         .map(|n| {
+            // The package only on a qualified row (Off); Reference rows keep the C++ shape (review r2 of #519, item 1).
+            let package = if n.package.is_empty() {
+                String::new()
+            } else {
+                format!(",\"package\":{}", json_string(&n.package))
+            };
             format!(
-                "{{\"functions_reaching\":{},\"native\":{}}}",
+                "{{\"functions_reaching\":{},\"native\":{}{package}}}",
                 n.functions_reaching,
                 json_string(&n.native)
             )
@@ -413,6 +419,38 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Through the JSON (review r2 of #519, item 1): an Off sweep's rows carry the package, so two packages' natives
+    /// with one key are two distinguishable rows (`PackA` and `PACKA` one row); a Reference sweep's rows keep the C++
+    /// shape, one per bare key, each attempt counted once.
+    #[test]
+    fn sweep_json_names_the_package_in_off_and_keeps_the_cxx_rows_in_reference() {
+        use ow_vm::sweep::StubTally;
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        let attempts = [
+            vec![s("Widget.Ping()", "PackA"), s("Widget.Ping()", "PackB")],
+            vec![s("Widget.Ping()", "PACKA")],
+        ];
+        let json = |qualified: bool| {
+            let mut tally = StubTally::new(qualified);
+            for a in &attempts {
+                tally.add_attempt(a);
+            }
+            let mut r = SweepReport::default();
+            r.package = "Toy".into();
+            r.unimplemented_natives = tally.rows(10);
+            sweep_json(&r)
+        };
+        let off = json(true);
+        let a = r#"{"functions_reaching":2,"native":"Widget.Ping()","package":"PackA"}"#;
+        let b = r#"{"functions_reaching":1,"native":"Widget.Ping()","package":"PackB"}"#;
+        assert!(off.contains(&format!(r#""unimplemented_natives":[{a},{b}]"#)), "{off}");
+        let reference = json(false);
+        assert!(
+            reference.contains("\"unimplemented_natives\":[{\"functions_reaching\":2,\"native\":\"Widget.Ping()\"}]"),
+            "{reference}"
+        );
     }
 
     #[test]

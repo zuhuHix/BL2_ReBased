@@ -170,6 +170,25 @@ fn kind_is_int(d: &PropertyDecl) -> bool {
     matches!(d.kind, PropKind::Int)
 }
 
+/// The entry getter's signature: a native with one int parameter.
+fn check_entry_getter(vm: &Vm, getter: FuncId) -> Result<(), String> {
+    let decl = vm
+        .function(getter)
+        .ok_or_else(|| "unsupported inventory entry getter signature".to_string())?;
+    let one_int = decl.params.len() == 1 && kind_is_int(&decl.params[0]);
+    if !(decl.is_native() && one_int) {
+        return Err("unsupported inventory entry getter signature".into());
+    }
+    Ok(())
+}
+
+/// Binds the adapter's `entry` to the getter, for the getter's own package only (review r1 of #519, item 2): a
+/// same-key getter of another package does not get this adapter's closure.
+fn bind_entry_getter(vm: &mut Vm, getter: FuncId, entry: NativeFn) -> Result<(), String> {
+    check_entry_getter(vm, getter)?;
+    vm.register_native_for(getter, entry).map_err(|e| vm_text(&e))
+}
+
 impl Navigation {
     /// Opens the adapter on the cooked folder `cooked`: every check of the module documentation that does not need a
     /// request.
@@ -206,15 +225,7 @@ impl Navigation {
         let getter = vm.find_function(ENTRY_GETTER).map_err(|e| vm_text(&e))?;
         // The enum first (module documentation, "Where it differs").
         let source = source_entry_kind(&mut vm, getter)?;
-        {
-            let decl = vm
-                .function(getter)
-                .ok_or_else(|| "unsupported inventory entry getter signature".to_string())?;
-            let one_int = decl.params.len() == 1 && kind_is_int(&decl.params[0]);
-            if !(decl.is_native() && one_int) {
-                return Err("unsupported inventory entry getter signature".into());
-            }
-        }
+        check_entry_getter(&vm, getter)?;
         let panel_class = vm.find_class(PANEL_CLASS).map_err(|e| vm_text(&e))?;
         let panel = instantiate_from_defaults(&mut vm, panel_class).map_err(|e| vm_text(&e))?;
         let provider_class = vm.find_class(PROVIDER_CLASS).map_err(|e| vm_text(&e))?;
@@ -260,10 +271,7 @@ impl Navigation {
             }
             Ok(Value::Byte(source))
         });
-        // For the getter's own package only (review r1 of #519, item 2): a same-key getter of another package does not
-        // get this adapter's closure.
-        vm.register_native_for(getter, entry)
-            .map_err(|e| vm_text(&e))?;
+        bind_entry_getter(&mut vm, getter, entry)?;
         Ok(Navigation {
             vm,
             movement,
@@ -921,6 +929,31 @@ mod tests {
         let e = run(&[], Some("boom"));
         assert!(!compare_runs(&e, &e).0, "an error on both sides is not a pass");
         assert!(!compare_runs(&a, &e).0);
+    }
+
+    /// The adapter's getter binding (review r2 of #519, item 4): the intended getter runs the adapter's closure, and a
+    /// same-key getter in another package stays unbound.
+    #[test]
+    fn the_entry_getter_binding_reaches_only_its_own_package() {
+        use ow_core::ObjectPath;
+        use ow_vm::api::FunctionDecl;
+        let dir = std::env::temp_dir().join(format!("ow-cli-entry-getter-{}", std::process::id()));
+        let defs = DefStore::from_synthetic(&dir, &[], IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let index = vm.space.names.intern("Index");
+        let key = "InventoryDataProviderGFxObject.GetEntryKindAtIndex(int)";
+        let declare = |vm: &mut Vm, path: &str| {
+            let param = PropertyDecl::new(index, PropKind::Int).with_flags(PropertyDecl::PARAM);
+            let decl = FunctionDecl::native(ObjectPath::parse(path).unwrap(), key).with_params(vec![param]);
+            vm.declare_function(decl).unwrap()
+        };
+        let getter = declare(&mut vm, ENTRY_GETTER);
+        let other = declare(&mut vm, "OtherGame.InventoryDataProviderGFxObject.GetEntryKindAtIndex");
+        bind_entry_getter(&mut vm, getter, Rc::new(|_| Ok(Value::Byte(7)))).unwrap();
+        assert_eq!(vm.call(getter, None, vec![Value::Int(0)]).unwrap().ret, Value::Byte(7));
+        assert!(!vm.is_bound(other));
+        assert_eq!(vm.prepare_call(other), Err(VmError::UnboundNative(key.to_string())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

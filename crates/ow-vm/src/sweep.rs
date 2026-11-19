@@ -84,14 +84,62 @@ pub struct UnimplementedNative {
     pub functions_reaching: usize,
     /// The stub line without its `UNIMPLEMENTED ` prefix (a native key, `function <Class>.<Name>`, ...).
     pub native: String,
-    /// The package of the unbound native function, for a native key (review r1 of #519, item 4): two packages'
-    /// natives with one bare key are two rows. Empty for the other stub lines.
+    /// The package of the unbound native function, for a native key in `ParityMode::Off` (review r1 of #519, item 4):
+    /// two packages' natives with one bare key are two rows, grouped by the package compared case-insensitively and
+    /// shown as first spelled (review r2, item 2). Empty for the other stub lines, and for every row in Reference,
+    /// which keeps the C++ projection: one row per bare key, each function counted once.
     pub package: String,
+}
+
+/// The unimplemented-native totals of a sweep (review r2 of #519, items 1 and 2), fed one attempt at a time.
+/// - **Qualified** (`ParityMode::Off`): a row per (stub text, package folded to lower case), the package shown as first
+///   spelled; an attempt counts once per row.
+/// - **Legacy** (Reference, the C++ projection): a row per stub text with no package; an attempt that reached the same
+///   key in two packages counts once.
+#[derive(Debug, Clone, Default)]
+pub struct StubTally {
+    qualified: bool,
+    counts: BTreeMap<(String, String), usize>,
+    shown: BTreeMap<(String, String), String>,
+}
+
+impl StubTally {
+    pub fn new(qualified: bool) -> Self {
+        StubTally {
+            qualified,
+            ..StubTally::default()
+        }
+    }
+
+    /// One attempt's stubs, as (stub text, package as spelled; empty for a stub line that is not a native key).
+    pub fn add_attempt(&mut self, stubs: &[(String, String)]) {
+        let mut seen = std::collections::BTreeSet::new();
+        for (native, package) in stubs {
+            let package = if self.qualified { package.as_str() } else { "" };
+            let id = (native.clone(), package.to_ascii_lowercase());
+            if seen.insert(id.clone()) {
+                *self.counts.entry(id.clone()).or_insert(0) += 1;
+                self.shown.entry(id).or_insert_with(|| package.to_string());
+            }
+        }
+    }
+
+    /// The rows, most reached first (equal counts: the larger text first), at most `top`.
+    pub fn rows(&self, top: usize) -> Vec<UnimplementedNative> {
+        ranked(&self.counts, top)
+            .into_iter()
+            .map(|(functions_reaching, id)| UnimplementedNative {
+                functions_reaching,
+                package: self.shown.get(&id).cloned().unwrap_or_default(),
+                native: id.0,
+            })
+            .collect()
+    }
 }
 
 /// The sweep of one package (the fields of the C++ JSON, in its order).
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SweepReport {
     pub package: String,
     pub attempted: usize,
@@ -157,12 +205,13 @@ pub(crate) fn category(message: &str) -> String {
 fn stub_identities(vm: &Vm) -> Vec<(String, String)> {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
-    for (package, key) in &vm.stubbed_natives {
+    let stubbed = vm.stubbed_natives.as_deref().unwrap_or_default();
+    for (package, key) in stubbed {
         if seen.insert((key.clone(), package.to_ascii_lowercase())) {
             out.push((key.clone(), package.clone()));
         }
     }
-    let keys: std::collections::BTreeSet<&str> = vm.stubbed_natives.iter().map(|(_, key)| key.as_str()).collect();
+    let keys: std::collections::BTreeSet<&str> = stubbed.iter().map(|(_, key)| key.as_str()).collect();
     for line in &vm.log {
         if let Some(native) = line.strip_prefix("UNIMPLEMENTED ")
             && !keys.contains(native)
@@ -221,8 +270,8 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
     };
     let mut failures: BTreeMap<String, usize> = BTreeMap::new();
     let mut samples: BTreeMap<String, String> = BTreeMap::new();
-    // (stub text, package): a native key with its function's package, another stub line with an empty package.
-    let mut unimplemented: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut unimplemented = StubTally::new(vm.parity == ow_core::ParityMode::Off);
+    let collecting = vm.stubbed_natives.take();
     vm.limits.step_limit = options.step_limit;
     vm.census = Some(CallCensus::default());
     // The root class, for the objects the attempts make (`release_unreferenced`).
@@ -278,7 +327,7 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
         }
         report.attempted += 1;
         vm.log.clear();
-        vm.stubbed_natives.clear();
+        vm.stubbed_natives = Some(Vec::new());
         let state = state_of(&pkg, index);
         let outcome = attempt(vm, function, &decl, state.as_deref());
         let steps = vm.steps();
@@ -303,10 +352,10 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
             release_unreferenced(vm, root);
             allocated = vm.space.heap.len();
         }
-        for id in stub_identities(vm) {
-            *unimplemented.entry(id).or_insert(0) += 1;
-        }
+        unimplemented.add_attempt(&stub_identities(vm));
+        vm.stubbed_natives = None;
     }
+    vm.stubbed_natives = collecting;
     report.seconds = started.elapsed().as_secs_f64();
     report.failures = ranked(&failures, options.top)
         .into_iter()
@@ -315,14 +364,7 @@ pub fn sweep_package(vm: &mut Vm, package: PackageId, options: &SweepOptions) ->
             example: samples.get(&key).cloned().unwrap_or_default(),
         })
         .collect();
-    report.unimplemented_natives = ranked(&unimplemented, options.top)
-        .into_iter()
-        .map(|(functions_reaching, (native, package))| UnimplementedNative {
-            functions_reaching,
-            native,
-            package,
-        })
-        .collect();
+    report.unimplemented_natives = unimplemented.rows(options.top);
     report
 }
 
@@ -559,7 +601,11 @@ mod tests {
             ids.push(vm.declare_function(crate::api::FunctionDecl::native(p, "Widget.Ping()")).unwrap());
         }
         vm.log.clear();
-        vm.stubbed_natives.clear();
+        // Outside a sweep attempt nothing is collected (review r2 of #519, item 3).
+        vm.call(ids[0], None, vec![]).unwrap();
+        assert_eq!(vm.stubbed_natives, None);
+        vm.log.clear();
+        vm.stubbed_natives = Some(Vec::new());
         for &f in &[ids[0], ids[1], ids[0]] {
             vm.call(f, None, vec![]).unwrap();
         }
@@ -570,6 +616,40 @@ mod tests {
                 ("Widget.Ping()".to_string(), "PackA".to_string()),
                 ("Widget.Ping()".to_string(), "PackB".to_string()),
             ]
+        );
+    }
+
+    /// The totals group by the folded package and show the first spelling (review r2 of #519, item 2); Reference keeps
+    /// one row per bare key, each attempt counted once (item 1).
+    #[test]
+    fn the_tally_groups_by_folded_package_and_reference_keeps_the_bare_key() {
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        let attempts = [
+            vec![s("Widget.Ping()", "PackA"), s("Widget.Ping()", "PackB")],
+            vec![s("Widget.Ping()", "PACKA")],
+            vec![s("function Foo.Bar", "")],
+        ];
+        let mut off = StubTally::new(true);
+        let mut reference = StubTally::new(false);
+        for a in &attempts {
+            off.add_attempt(a);
+            reference.add_attempt(a);
+        }
+        let rows = |t: &StubTally| {
+            t.rows(10).into_iter().map(|r| (r.functions_reaching, r.native, r.package)).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(&off),
+            vec![
+                (2, "Widget.Ping()".to_string(), "PackA".to_string()),
+                // Equal counts: the larger text first (`function` sorts after `Widget`), then the larger package.
+                (1, "function Foo.Bar".to_string(), String::new()),
+                (1, "Widget.Ping()".to_string(), "PackB".to_string()),
+            ]
+        );
+        assert_eq!(
+            rows(&reference),
+            vec![(2, "Widget.Ping()".to_string(), String::new()), (1, "function Foo.Bar".to_string(), String::new())]
         );
     }
 

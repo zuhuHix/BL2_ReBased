@@ -486,8 +486,9 @@ pub struct Vm {
     pub parity: ParityMode,
     /// The unbound natives each stubbed call reached, in call order, as (the function's package as spelled, its
     /// key): the qualified identity the `UNIMPLEMENTED <key>` log line leaves out (review r1 of #519, item 4). The
-    /// sweep counts by it; the log line keeps the legacy text.
-    pub(crate) stubbed_natives: Vec<(String, String)>,
+    /// sweep counts by it; the log line keeps the legacy text. Collected only while a sweep attempt runs (`Some`,
+    /// set and cleared by `sweep::sweep_package`; review r2 of #519, item 3); `None` otherwise, so nothing grows.
+    pub(crate) stubbed_natives: Option<Vec<(String, String)>>,
     /// `Log()` output and every `UNIMPLEMENTED ...` stub line (C++ `Runtime::log`).
     pub log: Vec<String>,
     pub limits: Limits,
@@ -568,7 +569,7 @@ impl Vm {
             clock: SimClock::new_empty(),
             parity: mode,
             log: Vec::new(),
-            stubbed_natives: Vec::new(),
+            stubbed_natives: None,
             limits: Limits::default(),
             stub_policy: StubPolicy::refuse_all(),
             census: None,
@@ -1298,8 +1299,12 @@ impl Vm {
     /// arguments as they were (C++ `interp.cpp:692-695`).
     fn stub(&mut self, f: FuncId, key: &str, args: Vec<Arg>) -> Result<CallResult, VmError> {
         self.stub_site(key, format!("UNIMPLEMENTED {key}"))?;
-        let package = self.functions[f.index()].decl.path.package().to_string();
-        self.stubbed_natives.push((package, key.to_string()));
+        if self.stubbed_natives.is_some() {
+            let package = self.functions[f.index()].decl.path.package().to_string();
+            if let Some(stubs) = &mut self.stubbed_natives {
+                stubs.push((package, key.to_string()));
+            }
+        }
         let ret = match &self.functions[f.index()].decl.result {
             Some(r) => self
                 .space
