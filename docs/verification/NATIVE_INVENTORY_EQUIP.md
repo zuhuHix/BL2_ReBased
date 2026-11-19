@@ -251,12 +251,11 @@ Returns false for no owner pawn, a non-WillowInventory, or an item the pawn cann
 - **Implementer checklist:** strict less-than on `MonetaryValue`; None when nothing qualifies.
 
 ## WillowInventoryManager.ItemActors
-- **Does:** iterator like `InventoryActors` over the manager's inventory restricted to `WillowItem` classes (optionally readied
-  only); body not read in detail. Script treats it as "all gear the pawn holds equipped".
-- **Read since (2026-11-19):** it walks the manager's `ItemChain` in chain order, filtering by class and, when asked,
-  by `bReadied`, and ends after more than 100 skipped entries. See
-  [NATIVE_INVENTORY_CONTEXT.md](NATIVE_INVENTORY_CONTEXT.md) section 3. The order in which items join the chain is
-  still UNVERIFIED.
+- **Does (read 2026-11-19, [NATIVE_INVENTORY_CONTEXT.md](NATIVE_INVENTORY_CONTEXT.md) section 3):** an iterator
+  over the manager's `ItemChain`, in chain order. The caller gives the class filter (`BaseClass`; an entry must be
+  that class or a subclass). Readied-only filtering is optional: with `bOnlyReadied` true, an entry also needs
+  `bReadied`. The walk ends after more than 100 skipped entries. The order in which items join the chain is still
+  UNVERIFIED.
 
 ## WillowInventoryManager.FindBestHolsteredWeapon / ReplaceHolsteredWeapon / SetHolsteredWeapon
 - **Does:** presentation. The manager forwards to its pawn only if the pawn's holster flag is set. `FindBestHolsteredWeapon(size)`
