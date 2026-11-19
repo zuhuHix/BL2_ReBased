@@ -50,3 +50,27 @@ Two older tests changed with the rule: Off no longer refuses every controller. `
 
 **UNVERIFIED** in the running game: every rule above. Open: the rule engine's call, the begin-play step that adds to
 the lists, and whether `AllControllers` must follow the list order (the note's open questions).
+
+**Revised to the note's review r1 of #472 (20c516c4).**
+- **The controller's refusals, in the note's table order** (section 5.2):
+  1. the actor step's engine notification, `NotYet { NotRead }`;
+  2. a `GearboxMind`'s two engine lookups, `NotYet { NotRead }`;
+  3. a world without `ControllerList`, `NotYet { LayerAbsent }`;
+  4. a set `MyRuleEngine`, `NotYet { NotRead }`.
+
+  The first found is the answer, before any write. Since the notification runs on every controller's destroy, every
+  Off controller destroy, the kill's mind included, answers it until it is read. The later rows and the world-drop
+  step (section 5.4) are kept and tested directly, so their order holds once the first rows are read.
+- **Pawns:**
+  - a world without `PawnList` is `NotYet { LayerAbsent }`;
+  - a modelled list without the pawn is not a refusal: the list is left as it is;
+  - the generic path still omits the actor step's notification for non-controllers. That is the note's open
+    question 6, a hub decision, kept as a documented UNVERIFIED gap.
+- **Not done here** (section 5.1):
+  - **The earliest certain check**, at the entry of the pawn's `Dying.BeginState`. `main` has no hook that runs before
+    a script function's body; that is `Vm::wrap_script` from #464. Until it lands, the kill refuses at the mind's
+    nested `Destroy()`, after the kill's own writes.
+  - **The kill-boundary prefix.** The kill's driver would add it to that refusal. The destroy marks only the refusals
+    that come after its own first write.
+- Tests: `ow-world` has 149, 9 of them this lane's, with the toy's `DoomedPawn` for the terminal mark. `cargo test
+  --workspace`: 2,202 passed, 0 failed. The installed gate is unchanged: 0/14/0, links 3 and 4 blocked by link 1.

@@ -423,6 +423,11 @@ fn package() -> Vec<u8> {
     });
     let pawn = t.class("Pawn", actor);
     t.prop("Object", pawn, "NextPawn", 0, actor);
+    let refuse = native(&mut t, actor, "Refuse", &[], None, NATIVE);
+    let doomed = t.class("DoomedPawn", pawn);
+    void(&mut t, doomed, "Destroyed", &[], |_, a| {
+        a.stmt().final_function(refuse, |_| {});
+    });
     t.class("LocalPlayer", object);
     let player_controller = t.class("PlayerController", controller);
     t.prop("Object", player_controller, "Player", 0, object);
@@ -596,9 +601,14 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
         }),
     )
     .unwrap();
+    vm.register_native(
+        "Actor.Refuse()",
+        Rc::new(|_c: &mut NativeCall<'_>| Err(ow_core::NotYet::not_read("an invented refusal", "an invented record").into())),
+    )
+    .unwrap();
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
     for class in [
-        "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind",
+        "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
     ] {
         let cdo =
             w.vm.defs
@@ -1707,12 +1717,19 @@ fn destroy_is_not_yet_where_this_world_cannot_run_the_routine() {
 #[test]
 fn a_controller_is_the_cxx_stand_in_in_reference_and_generic_in_off() {
     run(|| {
-        // Off (decision 2026-11-19-92): an AI controller takes the generic routine.
+        // Off (decision 2026-11-19-92, review r1 of #472): an AI controller takes the generic routine, whose first
+        // refusal is the actor step's unread notification, before any write.
         let mut x = fx();
         let ctrl = x.spawn("Controller");
-        assert!(destroy(&mut x.w.vm, ctrl).unwrap());
-        assert_eq!(field(&x.w.vm.space, ctrl, "bDeleteMe").unwrap(), Value::Bool(true));
-        assert!(!x.w.actors().borrow().list().contains(&ctrl), "out of the level list");
+        match destroy(&mut x.w.vm, ctrl).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert_eq!(n.what, crate::actors::NOTIFICATION_NOT_READ);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, ctrl, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert!(x.w.actors().borrow().list().contains(&ctrl), "still listed");
 
         // Reference: the C++ stand-in, marked and true; no event, still listed; a second destroy is true.
         let mut x = fx_in(true, ParityMode::Reference);
@@ -2605,36 +2622,69 @@ fn a_spawn_links_controllers_and_pawns_newest_first() {
     });
 }
 
-/// The mind's destroy, in order (section 5): `Destroyed()` first, then its pool manager destroyed and cleared, its
-/// unlink with `NextController` None, then its interaction proxy destroyed (the field kept). A middle member's
-/// predecessor takes its link.
+/// The mind's destroy refuses with the note's first row, the actor step's notification, before any write (section 5.2,
+/// review r1 of #472), whatever its fields hold.
 #[test]
-fn a_minds_destroy_unlinks_it_and_destroys_what_it_owns() {
+fn a_minds_destroy_answers_the_notifications_not_yet_before_any_write() {
     use crate::actors::WorldList::Controllers;
+    run(|| {
+        let mut x = fx();
+        let mind = x.spawn("WillowMind");
+        let proxy = x.spawn("Probe");
+        set_field(&mut x.w.vm.space, mind, "InteractionProxy", Value::Object(Some(proxy))).unwrap();
+        match destroy(&mut x.w.vm, mind).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert_eq!(n.what, crate::actors::NOTIFICATION_NOT_READ, "no prefix: nothing written");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert_eq!(field(&x.w.vm.space, proxy, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert_eq!(members(&x, Controllers), [mind]);
+    });
+}
+
+/// The rows after the notification, in order (section 5.2): the controller list, then the rule engine. And the
+/// world-drop step they lead to (section 5.4): the pool manager destroyed and cleared, the unlink with
+/// `NextController` None, then the interaction proxy destroyed (the field kept); a middle member's predecessor takes
+/// its link.
+#[test]
+fn the_minds_later_rows_and_its_world_drop_step() {
+    use crate::actors::WorldList::Controllers;
+    use crate::actors::{plan_controller_rows, world_drop};
     run(|| {
         let mut x = fx();
         let first = x.spawn("Controller");
         let mind = x.spawn("WillowMind");
         let last = x.spawn("Controller");
-        let (pool, proxy) = (x.spawn("Probe"), x.spawn("Probe"));
+        let (pool, proxy, engine) = (x.spawn("Probe"), x.spawn("Probe"), x.spawn("Probe"));
+        set_field(&mut x.w.vm.space, mind, "MyRuleEngine", Value::Object(Some(engine))).unwrap();
+        let actors = x.w.actors();
+        match plan_controller_rows(&x.w.vm, &actors, mind).unwrap_err() {
+            VmError::NotYet(n) => assert_eq!(n.what, crate::actors::RULE_ENGINE_NOT_READ),
+            other => panic!("{other:?}"),
+        }
+        set_field(&mut x.w.vm.space, mind, "MyRuleEngine", Value::Object(None)).unwrap();
         set_field(&mut x.w.vm.space, mind, "ResourcePoolManager", Value::Object(Some(pool))).unwrap();
         set_field(&mut x.w.vm.space, mind, "InteractionProxy", Value::Object(Some(proxy))).unwrap();
-        assert_eq!(members(&x, Controllers), [last, mind, first]);
-        assert!(destroy(&mut x.w.vm, mind).unwrap());
+        let drop = plan_controller_rows(&x.w.vm, &actors, mind).unwrap();
+        world_drop(&mut x.w.vm, mind, &drop).unwrap();
         assert_eq!(members(&x, Controllers), [last, first], "the predecessor takes its link");
         assert_eq!(obj(&x, mind, "NextController"), None);
         assert_eq!(obj(&x, mind, "ResourcePoolManager"), None);
         assert_eq!(obj(&x, mind, "InteractionProxy"), Some(proxy), "the proxy field is not cleared");
-        for o in [mind, pool, proxy] {
+        for o in [pool, proxy] {
             assert_eq!(field(&x.w.vm.space, o, "bDeleteMe").unwrap(), Value::Bool(true));
         }
-        // The head is unlinked through the list's head field.
-        assert!(destroy(&mut x.w.vm, last).unwrap());
-        assert_eq!(members(&x, Controllers), [first]);
+        let drop = plan_controller_rows(&x.w.vm, &actors, last).unwrap();
+        world_drop(&mut x.w.vm, last, &drop).unwrap();
+        assert_eq!(members(&x, Controllers), [first], "the head unlinked through the list's head field");
     });
 }
 
-/// A pawn's destroy unlinks it from `PawnList`; its own `NextPawn` is left as it was (section 3).
+/// A pawn's destroy unlinks it from `PawnList`; its own `NextPawn` is left as it was (section 3). A modelled list
+/// without the pawn is not a refusal (section 5.5): the list is left unchanged.
 #[test]
 fn a_pawns_destroy_unlinks_it_and_leaves_its_link() {
     use crate::actors::WorldList::Pawns;
@@ -2644,35 +2694,24 @@ fn a_pawns_destroy_unlinks_it_and_leaves_its_link() {
         assert!(destroy(&mut x.w.vm, p2).unwrap());
         assert_eq!(members(&x, Pawns), [p1]);
         assert_eq!(obj(&x, p2, "NextPawn"), Some(p1), "NextPawn left");
+        let stray = x.spawn("Pawn");
+        set_field(&mut x.w.vm.space, x.wi, "PawnList", Value::Object(Some(p1))).unwrap();
+        assert!(destroy(&mut x.w.vm, stray).unwrap());
+        assert_eq!(members(&x, Pawns), [p1], "not in the list: left unchanged");
     });
 }
 
-/// Preflight (section 5, step 2): a mind whose rule engine is set is `NotYet { NotRead }`, and a world whose
-/// `WorldInfo` does not hold the list is `NotYet { LayerAbsent }`; both before any write.
+/// A world whose `WorldInfo` does not declare the lists holds neither (section 5.2).
 #[test]
-fn a_minds_destroy_refuses_before_any_write() {
-    use crate::actors::WorldList::Controllers;
+fn a_world_info_without_the_lists_holds_neither() {
+    use crate::actors::WorldList::{Controllers, Pawns};
     run(|| {
-        let mut x = fx();
-        let mind = x.spawn("WillowMind");
-        let engine = x.spawn("Probe");
-        set_field(&mut x.w.vm.space, mind, "MyRuleEngine", Value::Object(Some(engine))).unwrap();
-        match destroy(&mut x.w.vm, mind).unwrap_err() {
-            VmError::NotYet(n) => {
-                assert_eq!(n.missing, Missing::NotRead);
-                assert!(n.what.contains("rule engine") && !n.what.contains(crate::actors::PARTIAL_WRITES), "{n}");
-            }
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(false));
-        assert_eq!(members(&x, Controllers), [mind], "still listed");
-
-        // A level whose WorldInfo stand-in does not declare the lists.
         let mut x = fx_with(false);
         let probe = x.spawn("Probe");
         let mut actors = crate::actors::Actors::new(x.class("Actor"));
         actors.place_world_info(probe).unwrap();
         assert_eq!(crate::actors::list_holder(&x.w.vm.space, &actors, Controllers).unwrap(), None);
+        assert_eq!(crate::actors::list_holder(&x.w.vm.space, &actors, Pawns).unwrap(), None);
     });
 }
 
@@ -2700,27 +2739,23 @@ fn a_pawns_destroy_without_the_list_is_layer_absent() {
     });
 }
 
-/// A `NotYet` after the first write is terminal: the nested destroy of a proxy in a state refuses, and the mind's
-/// destroy answers it marked "stopped after partial writes", kind kept, with its writes so far left (no rollback).
+/// A `NotYet` after the first write is terminal (section 5): the pawn's `Destroyed()` refuses after `bPendingDelete`,
+/// and the destroy answers it marked "stopped after partial writes", kind and record kept, with its write left (no
+/// rollback).
 #[test]
-fn a_nested_refusal_after_the_first_write_is_marked() {
-    use crate::actors::WorldList::Controllers;
+fn a_refusal_after_the_first_write_is_marked() {
     run(|| {
         let mut x = fx();
-        let mind = x.spawn("WillowMind");
-        let proxy = x.spawn("Probe");
-        set_field(&mut x.w.vm.space, mind, "InteractionProxy", Value::Object(Some(proxy))).unwrap();
-        let state = x.name("ToyState");
-        x.w.vm.space.heap.get_mut(proxy).unwrap().state = Some(state);
-        match destroy(&mut x.w.vm, mind).unwrap_err() {
+        let pawn = x.spawn("DoomedPawn");
+        match destroy(&mut x.w.vm, pawn).unwrap_err() {
             VmError::NotYet(n) => {
-                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                assert_eq!(n.missing, Missing::NotRead);
+                assert_eq!(n.record, "an invented record");
                 assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}");
             }
             other => panic!("{other:?}"),
         }
-        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(true));
-        assert!(members(&x, Controllers).is_empty(), "the unlink before the proxy stays");
+        assert_eq!(field(&x.w.vm.space, pawn, "bPendingDelete").unwrap(), Value::Bool(true));
     });
 }
 
@@ -2749,16 +2784,20 @@ fn a_player_controllers_destroy_follows_the_player_case() {
 }
 
 /// The kill's script path ends in the mind's own `Destroy()` (section 1, step 3): run as script from a toy
-/// `PawnDied`, the mind is destroyed and unlinked through the native.
+/// `PawnDied`, the destroy's refusal (the notification, before any write) reaches the caller typed, and the mind is
+/// left as it was.
 #[test]
-fn a_minds_pawn_died_destroys_it_through_script() {
+fn a_minds_pawn_died_reaches_its_destroy_through_script() {
     use crate::actors::WorldList::Controllers;
     run(|| {
         let mut x = fx();
         let mind = x.spawn("WillowMind");
         let f = x.w.vm.find_function("Engine.WillowMind.PawnDied").unwrap();
-        x.w.vm.call(f, Some(mind), vec![]).unwrap();
-        assert_eq!(field(&x.w.vm.space, mind, "bDeleteMe").unwrap(), Value::Bool(true));
-        assert!(members(&x, Controllers).is_empty());
+        match x.w.vm.call(f, Some(mind), vec![]).unwrap_err() {
+            VmError::NotYet(n) => assert_eq!(n.what, crate::actors::NOTIFICATION_NOT_READ),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, mind, "bDeleteMe").unwrap(), Value::Bool(false));
+        assert_eq!(members(&x, Controllers), [mind]);
     });
 }
