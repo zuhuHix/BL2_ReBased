@@ -256,13 +256,15 @@ fn a_stop_blocks_the_links_that_need_it_and_missing_evidence_is_an_error() {
 fn the_exit_code_is_zero_only_for_fourteen_ok() {
     let all_ok: Vec<Option<Ran>> = LINKS.iter().map(|_| ran_ok(&["x"])).collect();
     let rows_ok = rows(&all_ok, Grading::Strict, |_| true);
-    // The five links without a driver keep it from passing.
-    assert_eq!(exit_code(&rows_ok), NOT_PORTED);
-    let mut fourteen = rows_ok.clone();
-    for r in &mut fourteen {
-        r.result = Outcome::Ok;
-    }
-    assert_eq!(exit_code(&fourteen), 0);
+    // Every link has a driver since links 2 (#453) and 6-7 (#452): fourteen driven, evident runs pass.
+    assert!(rows_ok.iter().all(|r| r.result == Outcome::Ok));
+    assert_eq!(exit_code(&rows_ok), 0);
+    // One not-yet row keeps it from passing, and one error makes it fail.
+    let mut one_not_yet = rows_ok.clone();
+    one_not_yet[0].result = Outcome::NotYet;
+    assert_eq!(exit_code(&one_not_yet), NOT_PORTED);
+    one_not_yet[1].result = Outcome::Error;
+    assert_eq!(exit_code(&one_not_yet), 1);
 }
 
 #[test]
