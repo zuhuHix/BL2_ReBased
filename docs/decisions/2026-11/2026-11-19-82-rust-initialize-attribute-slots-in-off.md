@@ -54,3 +54,20 @@ export table (names and property classes only).
   computed slots is a question for the equip path's owner.
 - **UNVERIFIED.** Nothing here was checked in the running game. Still open, from the note: the evaluation context
   (open question 1), the runtime skill (2), the first-found order (3), and the unclamped in-place growth (4).
+
+**Review r2 of #468.**
+- **Every write is checked before the first.** The planned writes are resolved to property addresses and checked
+  with the heap's own checks (the declaration, the address, the value's kind) before any is made. A `bNetDirty`
+  declared as an int now refuses the call with the item unchanged.
+- **Inputs are read as each pass needs them.** The definition and the slot limit come first, then the slot shape.
+  The parts load at the base pass, the name parts at the name-part pass, and the `Role`, the replicated values and
+  the value pass's write destinations at the value pass. A prefix's load can no longer block
+  `InitializeAttributeSlots(false)` or mask IAS-SLOT-SHAPE.
+- **In-place grades.** The name-part pass queues one write per applied upgrade, in upgrade order, and no longer
+  rewrites a kept slot that has no upgrade.
+- **Hub ruling: `EffectGrade - 1` that would wrap** is the note's IAS-ROUNDING-RANGE port restriction ("a grade sum
+  that would wrap"). The plan refuses it with that `NotYet`, before any write; the value pass never fails on it.
+- **Typed errors.** The class rule asks `find_class_if_present`, so a lookup error passes as itself, and the loader
+  converts definition errors through `VmError::from`, so a store `NotYet` stays a `VmError::NotYet`.
+- **Tests:** six added. They cover the replication boundary (an inactive slot below the limit, slots past it), the
+  int `bNetDirty`, the refusal order, the in-place order, the wrapping step, and the existing cases.

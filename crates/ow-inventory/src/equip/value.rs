@@ -163,7 +163,7 @@ pub(super) fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
         let r = vm.defs.ensure_loaded(&mut vm.space, o);
         let log = vm.defs.take_log();
         vm.log.extend(log);
-        r.map_err(VmError::Def)?;
+        r.map_err(VmError::from)?;
     }
     Ok(())
 }
