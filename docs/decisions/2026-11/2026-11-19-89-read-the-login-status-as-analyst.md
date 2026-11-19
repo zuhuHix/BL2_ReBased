@@ -19,10 +19,19 @@ Lane ANALYST-LOGIN-STATUS, analyst only. Number 89 was given by the hub. For sli
   - otherwise the base one renames to the Steam nickname (`LoggedInPlayerName`) when the status is at least 1 and
     the name differs.
 - **The next stops,** read cheaply: `SetName`, then `SetupInputDevices` and its two natives.
-- **The Off answers** are given step by step. The headless world's first answer is a named `NotYet` (layer absent) at
-  `GetOnlineSubsystem`, naming the online subsystem, never None. None would pick the `LS_NotLoggedIn` branch, which the
-  shipped game's Steam state does not make. The subsystem's login state and `SetName`'s URL and config writes are
-  named `NotYet`s (not read).
+- **The Off answers** are given step by step, with mutually exclusive answers for:
+  - an absent engine: a named `NotYet` (layer absent);
+  - an engine that is not a `GameEngine`: None;
+  - a `GameEngine` with an empty subsystem slot: None, as stored;
+  - a populated slot: the object.
+
+  None for an absent engine would assume status 0 (`LS_NotLoggedIn`), while the shipped offline result stays open.
+  When the stock gates (authority, a Willow replication info with a local owner, an id other than -1) and the absent
+  engine are known before the flow, the flow's preflight answers the `NotYet` before its writes. A path known only
+  later keeps the runtime check, terminal with the partial-writes prefix. A Steamworks subsystem whose login state
+  the world has not filled, and `SetName`'s URL and config writes, are named `NotYet`s (not read).
+- **It supersedes #466 on one point:** `UIInteraction.GetLoginStatus` is script, and `GameEngine.GetOnlineSubsystem`
+  is the first native. #466 stays as it is (hub ruling).
 
 Method:
 - the script was read with `research/script_disasm.py`;
@@ -35,5 +44,9 @@ Raw output stays under ignored `local/analysis/login-status/`. The note was scan
 session was granted and none of the recorded evidence covers the login status, so every rule is UNVERIFIED. This lane
 implements nothing.
 
-Open (the note's questions): the shipped login state for an offline Maya; which object the subsystem's
-`PlayerInterface` holds; `SetName`'s URL and config writes and `ChangeName`; the two input natives.
+Open (the note's questions): the shipped login state for an offline Maya, under the Steam client's mode and the
+game's setting recorded apart; which object the subsystem's `PlayerInterface` holds; `SetName`'s URL and config writes
+and `ChangeName`; the two input natives.
+
+Edits (review r1 of #474): the preflight of the gated absence, the four engine cases, the supersede of #466's
+wording, and the live checks by return value and branch hooks.
