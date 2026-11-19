@@ -14,8 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import check_slice_run_off as chk  # noqa: E402
 
-NO_DRIVER = {'reach_fight_area', 'pick_up_gun', 'pick_up_aimed_not_nearest'}
-OWN_DRIVER = {'equip_gun': 'equip-run', 'phaselock_enemy': 'phaselock-cast'}
+NO_DRIVER = {'pick_up_gun', 'pick_up_aimed_not_nearest'}
+OWN_DRIVER = {'equip_gun': 'equip-run', 'phaselock_enemy': 'phaselock-cast', 'reach_fight_area': 'sanctuary-walk'}
 
 
 def stop(text='synthetic stop', native='', record=''):
@@ -149,6 +149,17 @@ class Parse(unittest.TestCase):
         rows = all_ok()
         rows[7] = dict(rows[7], driver='phaselock-cast', result='error', stop=stop())
         with self.assertRaises(chk.Malformed, msg='phaselock-cast on link 8'):
+            chk.parse(lines(rows))
+
+    def test_the_walk_driver_drives_link_2_only(self):
+        rows = all_ok()
+        self.assertEqual(rows[1]['driver'], 'sanctuary-walk')
+        rows[1] = row(2, result='notyet', steps=['load', 'spawn', 'walk', 'fight_area'],
+                      stop=stop(native='the fight area of link 2', record='SLICE_RUN_PLAN.md section 3.2'))
+        chk.parse(lines(rows))
+        rows = all_ok()
+        rows[0] = dict(rows[0], driver='sanctuary-walk')
+        with self.assertRaises(chk.Malformed, msg='sanctuary-walk on link 1'):
             chk.parse(lines(rows))
 
     def test_a_phaselock_cast_row_is_never_ok_until_its_evidence_check_exists(self):

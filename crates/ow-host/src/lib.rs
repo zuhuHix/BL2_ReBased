@@ -17,7 +17,6 @@ pub mod stats;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-pub mod scene;
 pub mod draw;
 pub mod render;
 pub mod camera;
@@ -85,6 +84,13 @@ pub mod overlay;
 pub mod play;
 pub mod weapon;
 pub mod world;
+
+/// The scene loader moved to `ow_assets::scene` (lane LINK-2-HEADLESS-MOVER, decision 2026-11-19-66), so the
+/// headless mover in `ow-cli` loads maps the same way; re-exported so `crate::scene` paths are unchanged.
+pub use ow_assets::scene;
+
+#[cfg(test)]
+mod scene_install_tests;
 
 #[cfg(test)]
 mod tests {

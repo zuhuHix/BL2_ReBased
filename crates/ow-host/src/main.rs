@@ -116,7 +116,7 @@ fn walk(game: &std::path::Path) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match ow_host::movement::sanctuary::run(&install) {
+    match ow_host::movement::sanctuary::run(&install.cooked) {
         Ok(run) => {
             print!("{}", run.text);
             if run.passed { ExitCode::SUCCESS } else { ExitCode::from(1) }
@@ -155,7 +155,7 @@ fn scene_window(
     let Ok(install) = ow_host::find_install(game) else {
         return ExitCode::from(1);
     };
-    let map = &ow_host::movement::sanctuary::resolve_map(&install, map);
+    let map = &ow_host::movement::sanctuary::resolve_map(&install.cooked, map);
     let Ok(name) = PackageName::parse(map) else {
         eprintln!("ow-host: {map:?} is not a package name");
         return ExitCode::from(2);
@@ -435,8 +435,8 @@ fn play(
         },
         None => None,
     };
-    let map = sanctuary::resolve_map(&install, map);
-    let loaded = match sanctuary::load(&install, &map) {
+    let map = sanctuary::resolve_map(&install.cooked, map);
+    let loaded = match sanctuary::load(&install.cooked, &map) {
         Ok(loaded) => loaded,
         Err(e) => {
             eprintln!("ow-host: loading {map}: {e}");

@@ -21,7 +21,7 @@ use ow_assets::animation::BoundClip;
 use ow_assets::skeletal::{BoneTransform, SkeletalMesh};
 
 use super::math::{Quat, affine, nlerp, quat_of, rigid_inverse};
-use crate::frame::Affine;
+use crate::frame::{Affine, ToEngine};
 
 /// What happens past a clip's ends.
 #[non_exhaustive]

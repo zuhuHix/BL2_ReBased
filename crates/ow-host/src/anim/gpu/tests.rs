@@ -10,7 +10,7 @@ use super::*;
 use crate::anim::pose::{Skeleton, Wrap};
 use crate::anim::skin::{skin, skin_matrices};
 use crate::executor::block_on;
-use crate::frame::{Affine, Placement};
+use crate::frame::{Affine, Placement, ToEngine};
 
 /// Largest difference allowed between a GPU-skinned position and the CPU reference, uu. The CPU path is `f64`
 /// rounded once; the GPU's is `f32` throughout, so the two differ by a few `f32` steps at the mesh's size.

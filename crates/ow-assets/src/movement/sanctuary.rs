@@ -1,7 +1,7 @@
 //! Owner: lane H4-MOVEMENT. `ow-host --game <install> --walk`: Sanctuary's scene, its collision, and the scripted
 //! walk from its player start, run headless at the fixed simulation step, printed as text (counts, sampled
 //! positions, the segments with their path digests, and the result). Nothing is written to a file and nothing is
-//! drawn. [`load`] and [`spawn`] are shared with the play mode (`crate::play`, lane H4-PLAY), so both start from the
+//! drawn. [`load`] and [`spawn`] are shared with the play mode (`ow-host`'s `play`, lane H4-PLAY), so both start from the
 //! same collision and the same pawn.
 //!
 //! AI-assisted (Claude Code). Decision: `docs/decisions/2026-11/2026-11-16-52-*`.
@@ -20,7 +20,8 @@ use super::collide::CollisionWorld;
 use super::level::{self, CollisionCensus, LevelCollision};
 use super::mover::{MovementParams, Mover, Physics};
 use super::walk::{self, SANCTUARY_SCRIPT, WalkReport};
-use crate::Install;
+use std::path::Path;
+
 use crate::scene::{Scene, SceneAssets};
 
 /// The map the walk loads.
@@ -56,20 +57,22 @@ pub struct Loaded {
     pub text: String,
 }
 
-/// The package a map name means in `install`: the name itself when the install has `<name>.upk`, else `<name>_P`
-/// when it has that (so `Sanctuary` is `Sanctuary_P`), else the name as given (the load then reports it missing).
-pub fn resolve_map(install: &Install, name: &str) -> String {
-    let has = |n: &str| install.cooked.join(format!("{n}.upk")).is_file();
+/// The package a map name means in the install's cooked folder `cooked`: the name itself when it has `<name>.upk`,
+/// else `<name>_P` when it has that (so `Sanctuary` is `Sanctuary_P`), else the name as given (the load then reports
+/// it missing).
+pub fn resolve_map(cooked: &Path, name: &str) -> String {
+    let has = |n: &str| cooked.join(format!("{n}.upk")).is_file();
     if !has(name) && has(&format!("{name}_P")) { format!("{name}_P") } else { name.to_string() }
 }
 
-/// Loads map `map` from `install` (ParityMode::Off, as every host run) and builds its collision.
-pub fn load(install: &Install, map: &str) -> Result<Loaded, String> {
+/// Loads map `map` from the install's cooked folder `cooked` (ParityMode::Off, as every host run) and builds its
+/// collision.
+pub fn load(cooked: &Path, map: &str) -> Result<Loaded, String> {
     let started = Instant::now();
-    let mut defs = DefStore::open(install.cooked.clone(), IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+    let mut defs = DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .map_err(|e| format!("definition store: {e}"))?;
     let mut space = ObjectSpace::new();
-    let assets = SceneAssets::new(install.cooked.clone());
+    let assets = SceneAssets::new(cooked.to_path_buf());
     let name = PackageName::parse(map).map_err(|e| format!("{map}: {e:?}"))?;
     let scene = Scene::load(&mut defs, &mut space, &assets, &name).map_err(|e| format!("scene: {e}"))?;
     let scene_time = started.elapsed();
@@ -121,9 +124,9 @@ pub fn spawn(scene: &Scene, world: &CollisionWorld, out: &mut String) -> Result<
     Ok(mover)
 }
 
-/// Loads Sanctuary from `install`, builds its collision and runs the walk.
-pub fn run(install: &Install) -> Result<WalkRun, String> {
-    let loaded = load(install, MAP)?;
+/// Loads Sanctuary from the install's cooked folder `cooked`, builds its collision and runs the walk.
+pub fn run(cooked: &Path) -> Result<WalkRun, String> {
+    let loaded = load(cooked, MAP)?;
     let mut out = loaded.text.clone();
     let mut mover = spawn(&loaded.scene, &loaded.collision.world, &mut out)?;
     let dt = f64::from(DEFAULT_STEP_SECONDS);

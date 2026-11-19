@@ -506,7 +506,8 @@ fn locomotion_keeps_and_clears_paths_and_refuses_reference() {
 fn sanctuary_paths_on_the_installed_game() {
     let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT");
     let install = crate::find_install(std::path::Path::new(&root)).expect("an install");
-    let loaded = crate::movement::sanctuary::load(&install, "Sanctuary_P").expect("Sanctuary");
+    let loaded =
+        crate::movement::sanctuary::load(&install.cooked, "Sanctuary_P").expect("Sanctuary");
     println!("{}", loaded.text);
     let (map, problems) = NavMap::from_scene(&loaded.scene, &loaded.defs);
     assert!(problems.is_empty(), "{problems:?}");
