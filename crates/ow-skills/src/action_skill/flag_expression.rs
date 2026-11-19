@@ -7,20 +7,27 @@
 //! in order, combined by `FlagChainOperator` (`CEOP_Or` 0, `CEOP_And` 1, any other value makes the result false), with
 //! the early exits (`Or` on true, `And` on false); an empty chain is true. A None `FlagDefinition` is false. A
 //! conditional takes the definition path (note section 4): its context through `ContextResolverChain` (each resolver
-//! in turn, one that gives None ends it with None; an empty chain keeps the context), then a computed flag
+//! in turn), then a computed flag
 //! (`EvaluationExpression`, evaluated on the resolved context through the VM) or the value resolver's answer through
 //! the mind's flag store (note sections 4.1 and 4.2).
 //!
-//! **What stays `NotYet { NotRead }`** (never a guess), all decided before the native's first write:
+//! **Checks** (the hub's interim ruling on #527's review, until the revised note): up front only the receiver and
+//! the `FlagChain` array's shape; each conditional is checked when the chain reaches it, so a short-circuited branch
+//! never refuses. A refusal after an earlier write is marked.
+//!
+//! **What stays `NotYet { NotRead }`** (never a guess):
 //! - an unloaded receiver, flag definition, resolver or expression (nothing is loaded: a load is a store write);
-//! - the timed tests (`FlagEvalType` 2 and 3);
+//! - a reached timed test (`FlagEvalType` 2 and 3);
 //! - a rule engine's own flag store: the store path (`R` set, the definition lacking a context or a value resolver), a
 //!   `RuleEngine` context, and a pawn's controller's rule engine for `RuleEngineFlagValueResolver`;
 //! - a rule engine owner other than a `GearboxMind`;
 //! - a value resolver class other than `RuleEngineFlagValueResolver` and `ObjectFunctionFlagValueResolver`;
 //! - a computed flag that also has a value resolver (handing the answer to it is a write the note does not read);
+//! - the paths the note leaves unanswered: a definition with neither an expression nor a value resolver, an empty
+//!   `ContextResolverChain`, no context object, and a context the chain does not resolve;
 //! - a flag store that is not a `GearboxMind`'s;
-//! - a function call whose result is not a number or a bool, and a store whose two arrays are out of step.
+//! - a function call whose result is fractional or not a number or a bool, and a store whose two arrays are out of
+//!   step.
 //!
 //! **Writes** (note section 4.1): a lookup that adds a definition to the mind's store, a computed flag's
 //! re-evaluation, a function call's flag update, and a timed flag's expiry. A `NotYet` after one of them is marked
@@ -288,76 +295,69 @@ fn takes_store_path(vm: &Vm, definition: ObjRef, engine: Option<ObjRef>) -> Resu
     Ok(!has_context || object_field(vm, definition, "ValueResolver")?.is_none())
 }
 
-/// The write-free checks of one evaluator before its first write (note section 6, preflight steps 2 to 4), nested
-/// flag evaluators included.
-fn preflight(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>, depth: usize) -> Result<(), VmError> {
-    if depth > 16 {
-        return Err(script("flag evaluators nested more than 16 deep".to_string()));
+/// The checks of one conditional, made when the chain reaches it (the hub's interim ruling on #527's review: the
+/// eager checks cover only the receiver and the chain's shape, so a short-circuited branch never refuses). Reads only.
+fn check_conditional(vm: &mut Vm, c: &Conditional, engine: Option<ObjRef>) -> Result<(), VmError> {
+    if c.kind == 2 || c.kind == 3 {
+        return Err(not_read("the timed flag tests (HasBeenTrueForXSeconds, HasBeenFalseForXSeconds)".to_string()));
     }
-    let (_, chain, _) = chain_of(vm, me)?;
-    for c in &chain {
-        if c.kind == 2 || c.kind == 3 {
-            return Err(not_read("the timed flag tests (HasBeenTrueForXSeconds, HasBeenFalseForXSeconds)".to_string()));
-        }
-        if c.kind > 3 {
-            return Err(script(format!("FlagEvalType {} is not a flag test", c.kind)));
-        }
+    if c.kind > 3 {
+        return Err(script(format!("FlagEvalType {} is not a flag test", c.kind)));
     }
-    let engine = rule_engine(vm, context)?;
-    for c in &chain {
-        let Some(definition) = c.definition else {
-            continue;
-        };
-        loaded(vm, definition, "flag definition")?;
-        if takes_store_path(vm, definition, engine)? {
-            return Err(not_read("a rule engine's own flag store".to_string()));
-        }
-        let chain = field(vm, definition, "ContextResolverChain")?;
-        for entry in chain.elements().unwrap_or(&[]) {
-            if let Some(resolver) = object_of(entry, "ContextResolverChain entry")? {
-                loaded(vm, resolver, "context resolver")?;
-                vm.attrs.clone().context_resolver(&vm.space, resolver).map_err(VmError::from)?;
-            }
-        }
-        let resolver = object_field(vm, definition, "ValueResolver")?;
-        if let Some(r) = resolver {
-            loaded(vm, r, "value resolver")?;
-            if !is_a(vm, r, RULE_ENGINE_RESOLVER)? && !is_a(vm, r, FUNCTION_RESOLVER)? {
-                return Err(NotYet::not_read(
-                    format!("FlagDefinition: the value resolver class {} is not read", path_of(vm, r)),
-                    RECORD,
-                )
-                .into());
-            }
-        }
-        if let Some(expression) = object_field(vm, definition, "EvaluationExpression")? {
-            if resolver.is_some() {
-                return Err(not_read(
-                    "a computed flag that also has a value resolver (handing the answer to it)".to_string(),
-                ));
-            }
-            loaded(vm, expression, "flag expression")?;
-            if is_a(vm, expression, EVALUATOR)? {
-                // The nested evaluator's context is the resolved one, not known before resolving: its chain-only
-                // checks run here; its own rule-engine check runs when it is called.
-                preflight_chain(vm, expression, depth + 1)?;
-            }
+    let Some(definition) = c.definition else {
+        return Ok(());
+    };
+    loaded(vm, definition, "flag definition")?;
+    if takes_store_path(vm, definition, engine)? {
+        return Err(not_read("a rule engine's own flag store".to_string()));
+    }
+    let chain = field(vm, definition, "ContextResolverChain")?;
+    let entries = chain.elements().ok_or_else(|| script("ContextResolverChain is not an array".to_string()))?.to_vec();
+    if entries.is_empty() {
+        // The interim ruling: an empty resolver chain is a path the note leaves unanswered.
+        return Err(not_read("a flag definition with an empty ContextResolverChain".to_string()));
+    }
+    for entry in &entries {
+        if let Some(resolver) = object_of(entry, "ContextResolverChain entry")? {
+            loaded(vm, resolver, "context resolver")?;
+            vm.attrs.clone().context_resolver(&vm.space, resolver).map_err(VmError::from)?;
         }
     }
-    Ok(())
+    let resolver = object_field(vm, definition, "ValueResolver")?;
+    let expression = object_field(vm, definition, "EvaluationExpression")?;
+    if let Some(r) = resolver {
+        loaded(vm, r, "value resolver")?;
+        if !is_a(vm, r, RULE_ENGINE_RESOLVER)? && !is_a(vm, r, FUNCTION_RESOLVER)? {
+            return Err(NotYet::not_read(
+                format!("FlagDefinition: the value resolver class {} is not read", path_of(vm, r)),
+                RECORD,
+            )
+            .into());
+        }
+    }
+    match (expression, resolver) {
+        (Some(_), Some(_)) => {
+            Err(not_read("a computed flag that also has a value resolver (handing the answer to it)".to_string()))
+        }
+        (Some(e), None) => loaded(vm, e, "flag expression"),
+        (None, Some(_)) => Ok(()),
+        (None, None) => Err(not_read(
+            "a flag definition with neither an EvaluationExpression nor a ValueResolver".to_string(),
+        )),
+    }
 }
 
-/// The context-free part of [`preflight`] for a nested flag evaluator.
-fn preflight_chain(vm: &mut Vm, me: ObjRef, depth: usize) -> Result<(), VmError> {
-    preflight(vm, Some(me), None, depth)
-}
-
-/// `FlagExpressionEvaluator.Evaluate(context)` on `me` (module documentation). `run` records a write.
+/// `FlagExpressionEvaluator.Evaluate(context)` on `me` (module documentation). `run` records a write. Only the
+/// receiver and the chain's shape are checked up front; each conditional is checked when it is reached.
 pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>, run: &mut Run) -> Result<bool, VmError> {
-    preflight(vm, me, context, 0)?;
     let (_, chain, operator) = chain_of(vm, me)?;
+    let mut engine: Option<Option<ObjRef>> = None;
     let mut result = true;
     for (i, c) in chain.iter().enumerate() {
+        if c.definition.is_some() && engine.is_none() {
+            engine = Some(rule_engine(vm, context)?);
+        }
+        check_conditional(vm, c, engine.flatten())?;
         let answer = match c.definition {
             None => false,
             Some(definition) => definition_answer(vm, definition, context, c.kind == 0, run)?,
@@ -387,15 +387,15 @@ fn definition_answer(
     run: &mut Run,
 ) -> Result<bool, VmError> {
     let Some(resolved) = resolve(vm, definition, context)? else {
-        return Ok(false);
+        // The interim ruling: an absent (unresolved) context is a path the note leaves unanswered.
+        return Err(not_read("a flag definition whose context does not resolve".to_string()));
     };
     if let Some(expression) = object_field(vm, definition, "EvaluationExpression")? {
         let answer = call_evaluate(vm, expression, Some(resolved), run)?;
         return Ok(answer == is_true);
     }
     let Some(resolver) = object_field(vm, definition, "ValueResolver")? else {
-        // No computed flag and no value resolver: nothing answers on this path.
-        return Ok(false);
+        return Err(not_read("a flag definition with neither an EvaluationExpression nor a ValueResolver".to_string()));
     };
     let value = if is_a(vm, resolver, RULE_ENGINE_RESOLVER)? {
         let Some(store) = rule_engine_store(vm, resolved)? else {
@@ -422,6 +422,9 @@ fn interface(vm: &Vm, path: &str) -> Result<ClassId, VmError> {
 /// The context through the definition's `ContextResolverChain`: each resolver in turn; one that answers None ends it
 /// with None; an empty chain keeps the context (note section 4, step 1).
 fn resolve(vm: &mut Vm, definition: ObjRef, context: Option<ObjRef>) -> Result<Option<ObjRef>, VmError> {
+    if context.is_none() {
+        return Err(not_read("Evaluate with no context object".to_string()));
+    }
     let chain = field(vm, definition, "ContextResolverChain")?;
     let mut current = context;
     let attrs = vm.attrs.clone();

@@ -23,9 +23,16 @@ Synthetic fixtures only.
     once `CheckRate` has passed it calls `FunctionCall` on the context and sets the flag, refreshing its time;
   - **the flag set, read and expiry rules** of section 4.2;
   - the time is the level's `WorldInfo.TimeSeconds`. With no `WorldInfo` it is `LayerAbsent`.
-- **Refused with `NotYet { NotRead }`, before the native's first write:**
+- **The hub's interim ruling on #527's review** (until the revised note):
+  - only the receiver and the `FlagChain` shape are checked up front;
+  - each conditional is checked when the chain reaches it, so a short-circuited branch never refuses, and a
+    refusal after an earlier write is marked;
+  - a reached timed test is `NotRead`;
+  - the unanswered paths refuse `NotRead`: no context object, an empty `ContextResolverChain`, a context the chain
+    does not resolve, and a definition with neither an expression nor a value resolver.
+- **Refused with `NotYet { NotRead }` when reached:**
   - an unloaded receiver, flag definition, resolver or expression (nothing is loaded);
-  - the timed tests (types 2 and 3);
+  - the timed tests (types 2 and 3), when reached;
   - a rule engine's own flag store (the store path, a `RuleEngine` context, a pawn's controller's rule engine);
   - a rule engine owner other than a `GearboxMind`;
   - a value resolver class other than the two read;
@@ -44,7 +51,7 @@ Synthetic fixtures only.
   - an unloaded definition: `NotRead`, unmarked, nothing loaded;
   - an unread value resolver class;
   - the marked refusal after a write.
-- **Checks.** `cargo test -p ow-skills` flag-expression tests 5 passed; `cargo test --workspace` 2,449 passed, 0
+- **Checks.** `cargo test -p ow-skills` flag-expression tests 6 passed (a skipped timed branch and the unanswered paths added); `cargo test --workspace` 2,450 passed, 0
   failed, 46 ignored; crate edges OK.
 - **Installed `--slice-gate`, Off, strict, under the machine lock,** on a throwaway local merge of this commit with
   #523 (d2227301, which carries #514 and #515). The `ow-skills` pack registration conflict was joined, and the merge

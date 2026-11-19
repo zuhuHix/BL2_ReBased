@@ -25,6 +25,22 @@ use super::*;
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
+/// A context resolver that hands its source on unchanged, registered for the invented class `Toy.PassContextResolver`.
+struct Pass;
+
+impl ow_attr::api::ContextResolver for Pass {
+    fn resolve(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _attr: ObjRef,
+        source: Option<ObjRef>,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+        Ok(source)
+    }
+}
+
 struct Fx {
     vm: Vm,
     conditional: StructId,
@@ -107,6 +123,7 @@ fn fx() -> Fx {
     let decls = vec![d(&mut s, "CheckRate", PropKind::Float), d(&mut s, "FunctionCall", PropKind::Str)];
     s.classes.define("GearboxFramework.ObjectFunctionFlagValueResolver", Some(value_resolver), decls).unwrap();
     s.classes.define("Toy.OtherFlagValueResolver", Some(value_resolver), vec![]).unwrap();
+    s.classes.define("Toy.PassContextResolver", Some(object), vec![]).unwrap();
     let expression = s.classes.define("Engine.ExpressionEvaluator", Some(object), vec![]).unwrap();
     let decls = vec![
         d(&mut s, "FlagChain", PropKind::Array(Box::new(PropKind::Struct(conditional)))),
@@ -118,7 +135,8 @@ fn fx() -> Fx {
     let package = toy_package();
     let defs = DefStore::from_synthetic(&dir, &[("ToyFlag.upk", package.as_slice())], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .unwrap();
-    let mut vm = Vm::new(s, defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let attrs = AttributeSystem::new_empty().with_context_resolver("Toy.PassContextResolver", Pass).unwrap();
+    let mut vm = Vm::new(s, defs, Rc::new(attrs), ParityMode::Off);
     let actors = vm.add_service(ow_world::actors::Actors::new(actor)).unwrap();
     let wi_class = vm.space.classes.by_path("Engine.WorldInfo").unwrap();
     let time = vm.space.alloc(wi_class, "WorldInfo_0", None, Origin::Runtime).unwrap();
@@ -173,9 +191,17 @@ impl Fx {
         e
     }
 
-    /// A computed flag: its `EvaluationExpression` is `expression`, no resolvers.
+    /// A flag definition whose context chain is one pass-through resolver.
+    fn definition(&mut self, name: &str) -> ObjRef {
+        let f = self.obj("GearboxFramework.FlagDefinition", name);
+        let pass = self.obj("Toy.PassContextResolver", "Pass");
+        self.set(f, "ContextResolverChain", Value::array(vec![Value::Object(Some(pass))]));
+        f
+    }
+
+    /// A computed flag: its `EvaluationExpression` is `expression`, no value resolver.
     fn computed(&mut self, expression: ObjRef) -> ObjRef {
-        let f = self.obj("GearboxFramework.FlagDefinition", "Computed");
+        let f = self.definition("Computed");
         self.set(f, "EvaluationExpression", Value::Object(Some(expression)));
         f
     }
@@ -185,7 +211,7 @@ impl Fx {
         let r = self.obj("GearboxFramework.ObjectFunctionFlagValueResolver", "Resolver");
         self.set(r, "CheckRate", Value::Float(rate));
         self.set(r, "FunctionCall", Value::Str(function.into()));
-        let f = self.obj("GearboxFramework.FlagDefinition", "FunctionFlag");
+        let f = self.definition("FunctionFlag");
         self.set(f, "ValueResolver", Value::Object(Some(r)));
         f
     }
@@ -267,6 +293,9 @@ fn or_and_and_exit_early() {
     let and = x.evaluator(&[(1, Some(truthy)), (0, Some(held))], 1);
     assert!(!x.eval(and, Some(pawn)).unwrap());
     assert_eq!(calls.get(), 0, "And: the second conditional is never reached");
+    // A skipped branch is never checked: a timed test after the short circuit does not refuse.
+    let skipped = x.evaluator(&[(1, Some(truthy)), (2, Some(held))], 1);
+    assert!(!x.eval(skipped, Some(pawn)).unwrap(), "the timed test is never reached");
     let none = x.evaluator(&[(0, None)], 1);
     assert!(!x.eval(none, Some(pawn)).unwrap(), "a None definition is false");
     // Or with a false first conditional goes on: the function runs, and sets the flag in the mind's store.
@@ -316,14 +345,15 @@ fn the_refusals_come_before_any_write() {
     let Value::Object(Some(lazy)) = x.get(holder, "Held") else { panic!("a held object") };
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy));
     let e = x.evaluator(&[(0, Some(lazy))], 1);
-    let text = not_read(x.eval(e, None), "the unloaded flag definition");
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let text = not_read(x.eval(e, Some(pawn)), "the unloaded flag definition");
     assert!(!text.starts_with("stopped after partial writes"), "{text}");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "nothing loaded");
     let other = x.obj("Toy.OtherFlagValueResolver", "Other");
-    let f = x.obj("GearboxFramework.FlagDefinition", "OtherFlag");
+    let f = x.definition("OtherFlag");
     x.set(f, "ValueResolver", Value::Object(Some(other)));
     let e = x.evaluator(&[(0, Some(f))], 1);
-    match x.eval(e, None).unwrap_err() {
+    match x.eval(e, Some(pawn)).unwrap_err() {
         VmError::NotYet(n) => assert!(n.what.contains("the value resolver class Toy.OtherFlagValueResolver is not read"), "{n}"),
         other => panic!("{other:?}"),
     }
@@ -357,4 +387,23 @@ fn a_refusal_after_a_write_is_marked() {
     let text = not_read(x.eval(e, Some(pawn)), "the rounding of a fractional function-call flag result");
     assert!(text.starts_with("stopped after partial writes: "), "{text}");
     let _ = x.flag_entry;
+}
+
+/// The paths the note leaves unanswered refuse `NotRead` when reached (the hub's interim ruling): no context object, an
+/// empty `ContextResolverChain`, and a definition with neither an expression nor a value resolver.
+#[test]
+fn the_unanswered_paths_are_not_read() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let empty = x.evaluator(&[], 1);
+    let computed = x.computed(empty);
+    let e = x.evaluator(&[(0, Some(computed))], 1);
+    not_read(x.eval(e, None), "Evaluate with no context object");
+    let bare = x.obj("GearboxFramework.FlagDefinition", "NoChain");
+    x.set(bare, "EvaluationExpression", Value::Object(Some(empty)));
+    let e = x.evaluator(&[(0, Some(bare))], 1);
+    not_read(x.eval(e, Some(pawn)), "an empty ContextResolverChain");
+    let nothing = x.definition("Nothing");
+    let e = x.evaluator(&[(0, Some(nothing))], 1);
+    not_read(x.eval(e, Some(pawn)), "neither an EvaluationExpression nor a ValueResolver");
 }
