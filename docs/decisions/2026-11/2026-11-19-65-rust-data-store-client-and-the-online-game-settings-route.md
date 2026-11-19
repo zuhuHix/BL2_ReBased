@@ -48,3 +48,29 @@ and no bounds check was loosened. The `NotYet` this lane replaces is decision 20
   - An earlier draft that took the entry as empty went past it and stopped at `BehaviorBase.RunBehaviors` outside
     the level-up (the bridge's Off refusal on this main). The hub's ruling removed that guess.
 - **Not changed:** the note and its index row (on `research/rust-next-stop`) are left to their lane.
+- **Review r2 of #448.**
+  - **Item 1, `FindDataStore` follows the note.** A player's own stores are searched first. The port's players hold
+    none, so the global stores follow on that miss. A tag no store has answers None. The NotYet stays only for a call
+    on another client.
+  - **Item 2, the settings entry.** The open-question-2 `NotYet` moved off the lookup to the settings-entry read.
+    - In Off, the controller's script `GetOnlineGameSettingsViaDatastore` is overridden. Of the note's two route
+      functions it is the one that answers the settings, by the installed declarations; its sibling
+      `GetOnlineGameSettingsDatastore` has a `gameSettingsName` local and answers the store.
+    - The override runs the store lookup as script. With no store it answers None (the note's "refresh does
+      nothing"). Otherwise it is the named `NotYet`, whatever the entry holds.
+    - A caller that only wants the store gets it.
+  - **Item 3, preflight.** The getter takes the service's mutable borrow and finds every class it makes before it
+    allocates anything. A held borrow or a missing class leaves nothing behind.
+  - **Item 4, terminal failures.** A failure after the first object is made is terminal. A `NotYet` gets the
+    "stopped after partial writes" mark, with its kind kept; other errors pass unchanged; nothing is rolled back.
+    Reference is as it was.
+  - **Item 5, tests (6).**
+    - All seven downstream bindings are `NotYet`, and branch 1's `GetGameSettings` binds nothing.
+    - A refresh run as script on invented packages answers None with no store, and stops at the named settings-entry
+      read with one.
+    - The player-then-global search; the held borrow and the missing class; the partial-writes mark.
+  - **Installed `--slice-gate`:** strict 0/14/0 and past-errors 0/14/0. Links 10 to 12 stop at the accept step on
+    `WillowPlayerController.GetOnlineGameSettingsViaDatastore`'s settings-entry `NotYet` (open question 2). Before this
+    branch they stopped on `UIInteraction.GetDataStoreClient`. Only those three rows differ.
+  - **Follow-up, outside this PR's files:** whether the slice accept path keeps going to the event pump after a
+    script failure (`ow-mission`'s slice and bridge) is left as it is.

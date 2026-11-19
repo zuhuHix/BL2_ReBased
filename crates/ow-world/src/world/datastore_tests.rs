@@ -1,6 +1,7 @@
 //! Tests of the engine's data store client and the online game settings route (decision 2026-11-19-65) on invented
 //! packages (AGENTS.md rule 9). AI-assisted (Claude Code).
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -11,10 +12,9 @@ use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ObjRef, PropAddr};
-use ow_object::layout::PropKind;
 use ow_object::value::Value;
-use ow_package::testkit::script::{CPF_OPT, FunctionSpec, Param, ScriptToy};
-use ow_vm::api::Vm;
+use ow_package::testkit::script::{Asm, CPF_OPT, FunctionSpec, Param, ScriptToy};
+use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
 use super::*;
@@ -22,9 +22,12 @@ use super::*;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const NATIVE: u32 = 0x400 | 0x20000;
 const STATIC: u32 = 0x2000;
+const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 
-/// `Engine.upk`: `UIInteraction.GetDataStoreClient`, `DataStoreClient.FindDataStore`, `UIDataStore` (its `Tag`) and
-/// `Settings.SetIntProperty`. `with_client` false leaves `DataStoreClient` out.
+/// `Engine.upk`: `UIInteraction.GetDataStoreClient`, `DataStoreClient.FindDataStore`, `UIDataStore` (its `Tag`),
+/// `Settings.SetIntProperty`, `GameEngine.GetDLCManager` and the online subsystem's
+/// `OnlineGameInterface.GetGameSettings` (branch 1, which nothing binds). `with_client` false leaves `DataStoreClient`
+/// out.
 fn engine(with_client: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "Function", "NameProperty", "ObjectProperty", "IntProperty"]);
     let object = t.class("Object", 0);
@@ -46,30 +49,27 @@ fn engine(with_client: bool) -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "SetIntProperty");
     let params = [Param::new("Int", "SettingId"), Param::new("Int", "Value")];
     t.function(settings, "SetIntProperty", &params, None, &[], &spec, |_| None);
+    let engine_class = t.class("GameEngine", object);
+    let spec = FunctionSpec::new(NATIVE | STATIC, "GetDLCManager");
+    t.function(engine_class, "GetDLCManager", &[], Some(("Object", object)), &[], &spec, |_| None);
+    let online = t.class("OnlineGameInterface", object);
+    let spec = FunctionSpec::new(NATIVE, "GetGameSettings");
+    t.function(online, "GetGameSettings", &[Param::new("Name", "SessionName")], Some(("Object", object)), &[], &spec, |_| None);
     t.p.build()
 }
 
-/// `WillowGame.upk`: the online game settings store, its class defaults' `Tag` `WillowOnlineGameSettings`, and
-/// `WillowGameReplicationInfo.GetCurrPlaythrough`.
+/// `WillowGame.upk`: the online game settings store (its class defaults' `Tag` `WillowOnlineGameSettings`), the
+/// replication info's `GetCurrPlaythrough`, the DLC manager's two queries, and a toy `WillowPlayerController`:
+/// - its natives `GetActiveMissionNumber` and `GetActivePlotCriticalMissionNumber`;
+/// - `GetOnlineGameSettingsDatastore`, a native here (the test answers it), standing for the store lookup;
+/// - the script `GetOnlineGameSettingsViaDatastore` (empty body: Off overrides it);
+/// - the script `UpdateOnlineGameSettings`, the refresh: it calls `GetOnlineGameSettingsViaDatastore` and returns.
 fn willow() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&[
-        "Class",
-        "Function",
-        "IntProperty",
-        "ScriptStruct",
-        "ObjectProperty",
-        "ArrayProperty",
-        "StructProperty",
-    ]);
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "IntProperty", "ObjectProperty"]);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let base = t.p.add_import("Core", "Class", engine, "UIDataStore");
     let object = t.p.add_import("Core", "Class", engine, "Object");
     let store = t.class("WillowOnlineGameSettings_DataStore", base);
-    // The store's settings list (the installed defaults hold one entry whose GameSettings is empty; this fixture's
-    // defaults hold none, and a test writes the entry).
-    let cfg = ow_package::testkit::reflect::toy_struct(&mut t, store, "GameSettingsCfg", None);
-    t.prop("Object", cfg, "GameSettings", 0, object);
-    ow_package::testkit::reflect::toy_array_of(&mut t, store, "GameSettingsCfgList", "Struct", cfg);
     let mut defaults = ow_package::testkit::ints(&[0]);
     let tag = t.p.fname("WillowOnlineGameSettings", 0);
     defaults.extend(t.p.tag("Tag", "NameProperty", &tag));
@@ -78,12 +78,42 @@ fn willow() -> Vec<u8> {
     let gri = t.class("WillowGameReplicationInfo", object);
     let spec = FunctionSpec::new(NATIVE, "GetCurrPlaythrough");
     t.function(gri, "GetCurrPlaythrough", &[], Some(("Int", 0)), &[], &spec, |_| None);
+    let dlc = t.class("WillowDownloadableContentManager", object);
+    for name in ["HasCompatibilityData", "StaticGetDlcContentIdForCurrentMap"] {
+        let spec = FunctionSpec::new(NATIVE, name);
+        t.function(dlc, name, &[], Some(("Int", 0)), &[], &spec, |_| None);
+    }
+    let pc = t.class("WillowPlayerController", object);
+    for name in ["GetActiveMissionNumber", "GetActivePlotCriticalMissionNumber"] {
+        let spec = FunctionSpec::new(NATIVE, name);
+        t.function(pc, name, &[], Some(("Int", 0)), &[], &spec, |_| None);
+    }
+    let spec = FunctionSpec::new(NATIVE, "GetOnlineGameSettingsDatastore");
+    t.function(pc, "GetOnlineGameSettingsDatastore", &[], Some(("Object", object)), &[], &spec, |_| None);
+    let empty = |_: &ow_package::testkit::script::FunctionIds| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    };
+    let spec = FunctionSpec::new(SCRIPT, "GetOnlineGameSettingsViaDatastore");
+    let via = t.function(pc, "GetOnlineGameSettingsViaDatastore", &[], Some(("Object", object)), &[], &spec, empty).function;
+    let spec = FunctionSpec::new(SCRIPT, "UpdateOnlineGameSettings");
+    t.function(pc, "UpdateOnlineGameSettings", &[], None, &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().final_function(via, |_| {});
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.p.build()
 }
 
 struct Toy {
     vm: Vm,
     dir: PathBuf,
+    /// What the toy store lookup answers.
+    store_answer: Rc<Cell<Option<ObjRef>>>,
 }
 
 impl Drop for Toy {
@@ -99,8 +129,17 @@ fn toy(with_client: bool) -> Toy {
     let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let store_answer = Rc::new(Cell::new(None));
+    let answer = store_answer.clone();
+    let f = vm.find_function("WillowGame.WillowPlayerController.GetOnlineGameSettingsDatastore").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> { Ok(Value::Object(answer.get())) }),
+    )
+    .unwrap();
     register(&mut vm).unwrap();
-    Toy { vm, dir }
+    Toy { vm, dir, store_answer }
 }
 
 impl Toy {
@@ -113,11 +152,23 @@ impl Toy {
         Value::Name(self.vm.space.names.intern(s))
     }
 
+    fn make(&mut self, class: &str, name: &str) -> ObjRef {
+        let c = self.vm.find_class(class).unwrap();
+        self.vm.space.alloc(c, name, None, Origin::Runtime).unwrap()
+    }
+
     fn tag_of(&self, o: ObjRef) -> String {
         let class = self.vm.space.heap.get(o).unwrap().class;
         let p = self.vm.space.prop(class, "Tag").unwrap();
         match self.vm.space.read(o, PropAddr::scalar(p)).unwrap() {
             Value::Name(n) => self.vm.space.names.text(*n).to_string(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn client(&mut self) -> ObjRef {
+        match self.call(GET_DATA_STORE_CLIENT, None, vec![]).unwrap() {
+            Value::Object(Some(c)) => c,
             other => panic!("{other:?}"),
         }
     }
@@ -138,10 +189,8 @@ fn not_yet(r: Result<Value, VmError>, missing: fn(&Missing) -> bool, what: &str)
 #[test]
 fn the_client_is_the_worlds_with_the_online_game_settings_store() {
     let mut t = toy(true);
-    let Value::Object(Some(client)) = t.call(GET_DATA_STORE_CLIENT, None, vec![]).unwrap() else {
-        panic!("no client");
-    };
-    assert_eq!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).unwrap(), Value::Object(Some(client)), "the same client");
+    let client = t.client();
+    assert_eq!(t.client(), client, "the same client");
     let s = t.vm.service::<DataStores>().unwrap();
     let globals = s.borrow().globals().to_vec();
     assert_eq!(globals.len(), 1);
@@ -149,81 +198,101 @@ fn the_client_is_the_worlds_with_the_online_game_settings_store() {
     assert_eq!(s.borrow().client(), Some(client));
 }
 
-/// `FindDataStore`: None for a None tag; the global store by its tag (any case); `NotYet` for a tag no registered
-/// store has, for a call with a player, and on another client. Nothing is made by any of them.
+/// `FindDataStore` (review r2 of #448, item 1): None for a None tag; the global store by its tag (any case), with or
+/// without a player (the player's own stores come first and the port's players hold none); None for a tag no store
+/// has; `NotYet` only on another client. Nothing is made by any of them.
 #[test]
-fn find_data_store_searches_the_global_stores_by_tag() {
+fn find_data_store_searches_the_player_then_the_global_stores() {
     let mut t = toy(true);
-    let Value::Object(Some(client)) = t.call(GET_DATA_STORE_CLIENT, None, vec![]).unwrap() else {
-        panic!("no client");
-    };
+    let client = t.client();
     let store = t.vm.service::<DataStores>().unwrap().borrow().globals()[0];
+    let player = t.make("Engine.Object", "ToyPlayer");
+    let heap = t.vm.space.heap.len();
     let none = t.name("None");
     assert_eq!(t.call(FIND_DATA_STORE, Some(client), vec![none]).unwrap(), Value::Object(None));
-    // The settings entry is not assumed empty (section 5): with no entry, or an entry with no GameSettings, the
-    // lookup is NotYet naming open question 2.
-    let tag = t.name("WillowOnlineGameSettings");
-    not_yet(t.call(FIND_DATA_STORE, Some(client), vec![tag.clone()]), |m| *m == Missing::NotRead, "open question 2");
-    let class = t.vm.space.heap.get(store).unwrap().class;
-    let list = t.vm.space.prop(class, "GameSettingsCfgList").unwrap();
-    let PropKind::Array(inner) = t.vm.space.classes.decl(list).unwrap().kind.clone() else { panic!() };
-    let empty_entry = t.vm.space.classes.zero_value(&inner);
-    t.vm.space.write(store, PropAddr::scalar(list), Value::Array(Rc::new(vec![empty_entry.clone()]))).unwrap();
-    not_yet(t.call(FIND_DATA_STORE, Some(client), vec![tag]), |m| *m == Missing::NotRead, "open question 2");
-    // An entry whose GameSettings is set: the store is answered, by its tag in any case.
-    let settings_class = t.vm.find_class("Engine.Settings").unwrap();
-    let settings = t.vm.space.alloc(settings_class, "ToySettings", None, Origin::Runtime).unwrap();
-    let s = empty_entry.as_struct().unwrap();
-    let layout = t.vm.space.classes.struct_layout(s.ty).unwrap();
-    let (at, _) = layout.field(t.vm.space.names.find("GameSettings").unwrap()).unwrap();
-    let mut filled = ow_object::value::StructValue::clone(s);
-    filled.fields[at as usize] = Value::Object(Some(settings));
-    t.vm.space
-        .write(store, PropAddr::scalar(list), Value::Array(Rc::new(vec![Value::Struct(Rc::new(filled))])))
-        .unwrap();
-    let heap = t.vm.space.heap.len();
     for tag in ["WillowOnlineGameSettings", "willowonlinegamesettings"] {
         let v = t.name(tag);
-        assert_eq!(t.call(FIND_DATA_STORE, Some(client), vec![v]).unwrap(), Value::Object(Some(store)), "{tag}");
+        assert_eq!(t.call(FIND_DATA_STORE, Some(client), vec![v.clone()]).unwrap(), Value::Object(Some(store)), "{tag}");
+        let with_player = t.call(FIND_DATA_STORE, Some(client), vec![v, Value::Object(Some(player))]);
+        assert_eq!(with_player.unwrap(), Value::Object(Some(store)), "{tag} with a player");
     }
     let unknown = t.name("ToyUnknownStore");
-    not_yet(t.call(FIND_DATA_STORE, Some(client), vec![unknown]), |m| *m == Missing::NotRead, "no global data store");
-    let player_class = t.vm.find_class("Engine.Object").unwrap();
-    let player = t.vm.space.alloc(player_class, "ToyPlayer", None, Origin::Runtime).unwrap();
+    assert_eq!(t.call(FIND_DATA_STORE, Some(client), vec![unknown]).unwrap(), Value::Object(None));
     let tag = t.name("WillowOnlineGameSettings");
-    not_yet(
-        t.call(FIND_DATA_STORE, Some(client), vec![tag.clone(), Value::Object(Some(player))]),
-        |m| *m == Missing::NotPorted,
-        "with a player",
-    );
     not_yet(t.call(FIND_DATA_STORE, Some(player), vec![tag]), |m| *m == Missing::NotPorted, "other than the world's");
-    assert_eq!(t.vm.space.heap.len(), heap + 1, "only the test's own player object");
-    let _ = settings;
+    assert_eq!(t.vm.space.heap.len(), heap, "nothing made");
 }
 
-/// The natives behind the route are `NotYet { NotRead }` naming the note.
+/// All seven natives after the settings are `NotYet { NotRead }` naming the note (review r2 of #448, item 5); the
+/// online subsystem's `GetGameSettings` (branch 1) is bound by nothing: it is bypassed, not refused.
 #[test]
-fn the_natives_behind_the_route_are_not_yet() {
+fn the_natives_after_the_settings_are_not_yet_and_branch_1_is_unbound() {
     let mut t = toy(true);
-    let class = t.vm.find_class("WillowGame.WillowGameReplicationInfo").unwrap();
-    let gri = t.vm.space.alloc(class, "ToyGRI", None, Origin::Runtime).unwrap();
-    not_yet(t.call(UNREAD[2], Some(gri), vec![]), |m| *m == Missing::NotRead, "GetCurrPlaythrough");
-    let class = t.vm.find_class("Engine.Settings").unwrap();
-    let settings = t.vm.space.alloc(class, "ToySettings", None, Origin::Runtime).unwrap();
-    not_yet(t.call(UNREAD[6], Some(settings), vec![Value::Int(1), Value::Int(2)]), |m| *m == Missing::NotRead, "SetIntProperty");
+    for path in UNREAD {
+        let class_path = path.rsplit_once('.').unwrap().0;
+        let me = t.make(class_path, "ToyThis");
+        let f = t.vm.find_function(path).unwrap();
+        let n = t.vm.function(f).unwrap().params.len();
+        let args = vec![Value::Int(1); n];
+        not_yet(t.call(path, Some(me), args), |m| *m == Missing::NotRead, "behind the online game settings refresh");
+    }
+    let f = t.vm.find_function("Engine.OnlineGameInterface.GetGameSettings").unwrap();
+    let key = t.vm.function(f).unwrap().native_key.clone().unwrap();
+    assert!(!t.vm.has_native(&key), "branch 1 binds nothing");
 }
 
-/// A client that cannot be made (no `DataStoreClient` class) is a typed error that leaves nothing behind: the store
-/// made before it is freed (only its class default stays, the definition store's cache), and the world keeps no
-/// client.
+/// The refresh, run as script (review r2 of #448, items 2 and 5): with no store, the settings route answers None and
+/// the refresh returns; with a store, it stops at the named settings-entry read (open question 2), whatever the entry
+/// holds, and only there.
+#[test]
+fn the_refresh_stops_at_the_settings_entry_read() {
+    let mut t = toy(true);
+    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    let refresh = "WillowGame.WillowPlayerController.UpdateOnlineGameSettings";
+    t.store_answer.set(None);
+    t.call(refresh, Some(pc), vec![]).unwrap();
+    let store = t.make("WillowGame.WillowOnlineGameSettings_DataStore", "ToyStore");
+    t.store_answer.set(Some(store));
+    not_yet(t.call(refresh, Some(pc), vec![]), |m| *m == Missing::NotRead, "open question 2");
+    // The lookup alone is not refused: a caller that only wants the store gets it.
+    let client = t.client();
+    let tag = t.name("WillowOnlineGameSettings");
+    assert!(matches!(t.call(FIND_DATA_STORE, Some(client), vec![tag]).unwrap(), Value::Object(Some(_))));
+}
+
+/// The service's borrow and every class are taken before anything is made (review r2 of #448, item 3): a held borrow,
+/// or a missing class, refuses with no instance left behind and no client kept.
 #[test]
 fn a_client_that_cannot_be_made_leaves_nothing() {
     let mut t = toy(false);
     let object = t.vm.find_class("Engine.Object").unwrap();
     let live = |t: &Toy| t.vm.space.heap.live(&t.vm.space.classes, object).count();
     let before = live(&t);
-    assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err());
+    assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err(), "no DataStoreClient class");
     assert_eq!(live(&t), before, "no instance left on the heap");
     let s = t.vm.service::<DataStores>().unwrap();
     assert!(s.borrow().client().is_none() && s.borrow().globals().is_empty());
+    let mut t = toy(true);
+    let before = live(&t);
+    let s = t.vm.service::<DataStores>().unwrap();
+    let held = s.borrow();
+    assert!(matches!(data_store_client(&mut t.vm), Err(VmError::ServiceBorrowed(_))));
+    drop(held);
+    assert_eq!(live(&t), before, "nothing made behind the held borrow");
+}
+
+/// A `NotYet` after the getter began making objects is marked as after partial writes, its kind kept; any other
+/// error passes unchanged (review r2 of #448, item 4).
+#[test]
+fn a_failure_after_the_first_write_is_marked() {
+    let marked = after_writes(VmError::NotYet(ow_core::NotYet::not_read("an invented NotYet", "an invented record")));
+    match marked {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.starts_with(PARTIAL_WRITES), "{n}");
+        }
+        e => panic!("{e}"),
+    }
+    let other = after_writes(VmError::ServiceBorrowed("an invented service"));
+    assert!(matches!(other, VmError::ServiceBorrowed("an invented service")));
 }
