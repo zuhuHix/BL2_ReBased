@@ -54,6 +54,7 @@ not the client one), then sets one flag of the new game info, then calls this ro
    per-entry fields cleared.
 4. **Begin play, once** (high). The routine tests `WorldInfo.bBegunPlay`. When it is clear:
    - one engine object gets one flag set (not identified; low);
+   - the persistent level's navigation, cover and pylon join (section 5.2), right before the initialisation pass;
    - the actor initialisation pass (section 2.2);
    - `bBegunPlay` and `bStartup` are set together;
    - when `WorldInfo.Game` is set and its `bScriptInitialized` is clear: the script event **`InitGame(Options, Error)`**
@@ -256,14 +257,16 @@ chains out again when a level is removed (not on the load path).
 2. **A write-free preflight of all three chain kinds before any splice.** For each of navigation, cover and pylon:
    - **a null pair** (start and end both null) is an independent no-op for that kind;
    - **a half-null pair** (one end null) is rejected;
-   - **a set pair:** walk from the start along that kind's link. The walk must reach the end and find None after it.
+   - **already joined, checked first for a set pair:** when the level's start is already in that kind's world list,
+     that kind is a no-op (item 4), and the checks below are not run for it;
+   - **a set pair not yet joined:** walk from the start along that kind's link. The walk must reach the end and find None after it.
      It must not revisit a node (no cycle), and it must not pass through a node already in the world's list of the
      same kind;
    - a failed check is a data error, and nothing is spliced, for any kind.
 3. **The same actor in different kinds is allowed:** one actor may be in the navigation list and the pylon list, as
    `Sanctuary_Dynamic`'s pylons are. The "already in the world's list" test is per kind.
-4. **A level joined twice:** the second join is a no-op. It is detected because the level's start is already in the
-   world's list of that kind. A port answer: the game guards this with a per-level done flag on the streaming path.
+4. **A level joined twice:** the second join is a no-op, kind by kind. It is detected by item 2's first test, the
+   level's start already in the world's list of that kind, before the shared-node, cycle and end checks. A port answer: the game guards this with a per-level done flag on the streaming path.
 5. **The splices**, in the order navigation, cover, pylon, each `end.link = head`, then `head = start`. These write the
    end points' link fields and `WorldInfo`'s three heads.
 6. **The schedule** of 5.2, labelled UNVERIFIED. The relative order of the persistent join and the streamed joins at
@@ -316,7 +319,9 @@ is a port answer for the slice, which has no login or gamepad layer (UNVERIFIED)
 failure contract:
 1. **Preflight, before any write.** Refuse the unsupported inputs first:
    - a `GetUniqueNetId` answer the port does not model (anything but the empty id): a not-read refusal;
-   - a remote role other than the single-player one: a not-read refusal;
+   - a remote role other than `ROLE_SimulatedProxy`: a not-read refusal. The value the engine's local-player routine
+     passes was not read; `ROLE_SimulatedProxy` is the stock UE3 value for a local player's play actor, taken as the
+     port's answer, UNVERIFIED;
    - a missing game info: a not-read refusal.
 
    Nothing is written before these checks.
