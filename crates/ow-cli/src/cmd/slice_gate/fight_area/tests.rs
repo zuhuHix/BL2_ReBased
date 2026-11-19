@@ -141,7 +141,7 @@ fn maya_must_reach_the_dummy_on_the_same_floor() {
     // A wall between them.
     let walled = floor_and(vec![cuboid([60.0, -500.0, 0.0], [80.0, 500.0, 1000.0])]);
     let wall = reachable(&walled, &maya, [0.0, 0.0, half + 1.0], DUMMY, at).unwrap_err();
-    assert!(check_text(wall).contains("no straight way"));
+    assert!(check_text(wall).contains("no grounded way"));
     // Maya on a deck 300 uu up, the dummy on the floor below.
     let deck = floor_and(vec![cuboid([-500.0, -500.0, 280.0], [500.0, 500.0, 300.0])]);
     let below = reachable(&deck, &maya, [0.0, 0.0, 300.0 + half + 1.0], DUMMY, at).unwrap_err();
@@ -164,4 +164,89 @@ fn the_dummy_is_placed_only_after_maya_arrives() {
     });
     assert!(!asked, "no placement for a walk that missed the area");
     assert_eq!(r.stop.as_ref().map(|(o, s)| (*o, s.step.as_str())), Some((Outcome::Error, "fight_area")));
+}
+
+/// Review r2 of #470, item 2: two platforms at the same height with a gap between pass a raised straight sweep, but
+/// Maya cannot walk across; the grounded walk drops into the gap and is an error. A bridge over the gap passes.
+#[test]
+fn a_gap_between_two_platforms_at_the_same_height_is_not_reachable() {
+    let maya = MovementParams::maya();
+    let half = maya.shape.half_height();
+    // Two invented decks, top at Z 300, 200 uu apart, over a floor at Z 0.
+    let left = cuboid([-500.0, -500.0, 280.0], [100.0, 500.0, 300.0]);
+    let right = cuboid([300.0, -500.0, 280.0], [900.0, 500.0, 300.0]);
+    let gap = floor_and(vec![left.clone(), right.clone()]);
+    let from = [0.0, 0.0, 300.0 + half + 1.0];
+    let to = [500.0, 0.0, 300.0 + DUMMY.half_height() + 1.0];
+    let err = reachable(&gap, &maya, from, DUMMY, to).unwrap_err();
+    assert!(check_text(err).contains("drops below her start"));
+    // The same decks joined by a bridge: reachable.
+    let bridge = cuboid([90.0, -100.0, 280.0], [310.0, 100.0, 300.0]);
+    let bridged = floor_and(vec![left, right, bridge]);
+    reachable(&bridged, &maya, from, DUMMY, to).expect("a walk across the bridge");
+}
+
+/// Review r2 of #470, item 3: a `NotYet` after the first write gets the prefix once, its kind and record kept; a check
+/// is unchanged.
+#[test]
+fn a_not_yet_after_the_first_write_is_prefixed_once() {
+    let n = NotYet::not_ported("an invented native", "docs/invented.md");
+    let once = after_writes(Failed::Vm(VmError::NotYet(n.clone())));
+    let Failed::Vm(VmError::NotYet(m)) = &once else { panic!("{once:?}") };
+    assert_eq!(m.what, format!("{PARTIAL_WRITES}: an invented native"));
+    assert_eq!((m.missing.clone(), m.record), (n.missing.clone(), n.record));
+    let first = m.what.to_string();
+    let twice = after_writes(once);
+    let Failed::Vm(VmError::NotYet(t)) = &twice else { panic!("{twice:?}") };
+    assert_eq!(t.what, first);
+    assert_eq!(stop_of(&twice).0, Outcome::NotYet);
+    assert!(matches!(after_writes(Failed::Check("x".into())), Failed::Check(t) if t == "x"));
+}
+
+/// Review r2 of #470, item 4: a setup `NotYet` stays a `NotYet`, any other setup failure is a check.
+#[test]
+fn a_setup_not_yet_stays_a_not_yet() {
+    use crate::cmd::inventory::equip_run::SetupError;
+    let n = NotYet::not_read("an invented setup layer", "docs/invented.md");
+    let f = Failed::from(SetupError::Vm(VmError::NotYet(n)));
+    assert_eq!(stop_of(&f).0, Outcome::NotYet);
+    assert_eq!(stop_of(&Failed::from(SetupError::Other("invented".into()))).0, Outcome::Error);
+}
+
+/// Review r2 of #470, item 1: the cylinder is read from the package's tags, no object made. An invented archetype
+/// export (4-byte prefix) whose `CylinderComponent` names an invented component export (8-byte prefix).
+#[test]
+fn the_cylinder_is_read_from_the_package() {
+    use ow_package::testkit::{PackageBuilder, ints};
+    let build = |radius: Option<f32>, own_component: bool| {
+        let mut b = PackageBuilder::new_empty();
+        b.names(["None", "Core", "Class", "Thing", "Archetype", "Cyl", "CylinderComponent", "CollisionRadius",
+            "CollisionHeight", "ObjectProperty", "FloatProperty"]);
+        let class = b.add_import("Core", "Class", 0, "Thing");
+        let mut cyl = ints(&[0, 0]);
+        if let Some(r) = radius {
+            cyl.extend(b.float_tag("CollisionRadius", r));
+        }
+        cyl.extend(b.float_tag("CollisionHeight", 44.0));
+        cyl.extend(b.none());
+        let component = b.add_export(class, "Cyl", cyl);
+        let mut arch = ints(&[0]);
+        if own_component {
+            arch.extend(b.object_tag("CylinderComponent", component));
+        }
+        arch.extend(b.none());
+        let archetype = b.add_export(class, "Archetype", arch);
+        let pkg = ow_package::package::Package::from_bytes("invented.upk".into(), "invented".into(), &b.build())
+            .expect("an invented package");
+        (pkg, archetype)
+    };
+    let (pkg, at) = build(Some(21.0), true);
+    let Shape::Cylinder { radius, half_height } = cylinder_of(&pkg, at).expect("a cylinder") else {
+        panic!("not a cylinder")
+    };
+    assert_eq!((radius, half_height), (21.0, 44.0));
+    for (pkg, at) in [build(None, true), build(Some(21.0), false)] {
+        let f = cylinder_of(&pkg, at).unwrap_err();
+        assert_eq!(stop_of(&f).0, Outcome::NotYet, "{f:?}");
+    }
 }

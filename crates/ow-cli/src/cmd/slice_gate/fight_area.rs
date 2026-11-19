@@ -16,16 +16,21 @@
 //!
 //! **The step** (`fight_area`, after a passing walk), in order:
 //! 1. Maya's walked end must be within the area (horizontally). A miss is an `error`, and nothing is placed.
-//! 2. The placement is checked against the loaded Sanctuary collision before anything is spawned (review r1 of #470):
-//!    - the dummy's collision cylinder is read from its archetype (`CylinderComponent`: `CollisionRadius` and
-//!      `CollisionHeight`); where it cannot be read, the placement checks are not available and the step is a
-//!      `NotYet`;
+//! 2. The placement is checked against the loaded Sanctuary collision before anything is made or spawned (reviews r1
+//!    and r2 of #470), so a refused placement writes nothing:
+//!    - the dummy's collision cylinder is read from the package, not from a made object: the archetype export's own
+//!      `CylinderComponent` reference and that component export's own `CollisionRadius` and `CollisionHeight` tags
+//!      ([`dummy_shape`]); where they cannot be read (no such export, a reference out of the file, an untagged
+//!      value), the placement checks are not available and the step is a `NotYet`;
 //!    - the floor: the dummy's cylinder is swept down from [`FightArea::floor_above`] uu above the centre to
 //!      [`FightArea::floor_below`] uu below it, and must land on a floor Maya could walk on (its normal's Z at least
 //!      her `WalkableFloorZ`), from a start that is not in solid, and must not stand in solid where it lands;
 //!    - Maya's reach: her feet and the dummy's must be within her `MaxStepHeight` of each other (the same floor, not
-//!      one below or above), and her own cylinder, raised by that step height, must sweep from her walked end to the
-//!      dummy's spot without a hit. That straight sweep is a conservative check of the port's own, not a path search;
+//!      one below or above), and she must walk there on the ground: the port's own mover ([`Mover`]) walks her from her
+//!      walked end straight at the dummy's spot, steering each tick, and she must arrive within [`ARRIVE`] uu without
+//!      ever dropping more than her step height below where she started (a gap or a ledge on the way) and within a
+//!      tick budget (a wall or a corner she cannot pass). A straight walk is a conservative check of the port's own,
+//!      not a path search (review r2 of #470: a raised straight sweep passed two platforms across a gap);
 //!    - each miss is an `error` at `fight_area`.
 //! 3. The dummy is then placed through `ow_world`'s spawn path ([`ow_world::actors::spawn`]): the stock target dummy
 //!    archetype, made from its export in `Sanctuary_Dynamic`, as the template, at the floor spot found in step 2,
@@ -35,12 +40,15 @@
 //! 4. the link passes when the spawn made an actor that is in the world's actor list and stands where it was put,
 //!    inside the area.
 //!
-//! A refusal of the spawn keeps its kind by its typed error (a `VmError::NotYet` stays a `notyet`; any other error is
-//! an `error`, whatever its text says).
+//! A refusal keeps its kind by its typed error (a `VmError::NotYet` stays a `notyet`; any other error is an `error`,
+//! whatever its text says), the world's setup included. The first write is making the template (step 3; a lazy
+//! definition load counts): a `NotYet` from there on is terminal and its text starts with [`PARTIAL_WRITES`], its
+//! kind and record kept ([`after_writes`]).
 
 use std::path::Path;
 
-use ow_assets::movement::{CollisionWorld, MovementParams, Shape};
+use ow_assets::movement::{CollisionWorld, MoveInput, MovementParams, Mover, Physics, Shape};
+use ow_package::props::{self, NoArrayTypes, PropValue};
 use ow_core::NotYet;
 use ow_core::fmt::fmt_f;
 use ow_object::ids::ObjRef;
@@ -89,6 +97,29 @@ pub enum Failed {
 impl From<VmError> for Failed {
     fn from(e: VmError) -> Failed {
         Failed::Vm(e)
+    }
+}
+
+impl From<crate::cmd::inventory::equip_run::SetupError> for Failed {
+    fn from(e: crate::cmd::inventory::equip_run::SetupError) -> Failed {
+        match e {
+            crate::cmd::inventory::equip_run::SetupError::Vm(v) => Failed::Vm(v),
+            crate::cmd::inventory::equip_run::SetupError::Other(t) => Failed::Check(t),
+        }
+    }
+}
+
+/// The mark of a refusal after committed writes (the hub's ruling, the text the other Off paths use).
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
+/// `f` met after the step's first write: a `NotYet` gets [`PARTIAL_WRITES`] at the very start of its text (once), its
+/// kind and record kept; anything else is unchanged (review r2 of #470, item 3).
+pub fn after_writes(f: Failed) -> Failed {
+    match f {
+        Failed::Vm(VmError::NotYet(n)) if !n.what.starts_with(PARTIAL_WRITES) => {
+            Failed::Vm(VmError::NotYet(NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record)))
+        }
+        other => other,
     }
 }
 
@@ -179,7 +210,7 @@ pub fn place_dummy(
     centre: [f64; 3],
     maya: [f64; 3],
 ) -> Result<[f64; 3], Failed> {
-    let mut world = crate::cmd::inventory::equip_run::gate_world(cooked).map_err(Failed::Check)?;
+    let mut world = crate::cmd::inventory::equip_run::gate_world_typed(cooked)?;
     let actors = world.actors();
     let info = actors
         .try_borrow()
@@ -187,17 +218,29 @@ pub fn place_dummy(
         .world_info()
         .ok_or_else(|| Failed::Check("the gate's world has no WorldInfo".into()))?;
     let vm = &mut world.vm;
-    // The location vector is built, and its fields checked, before the template is made (review r1 of #470).
-    vector_at(vm, info, centre)?;
+    // Every placement check comes before the first write (review r2 of #470, item 1): the cylinder is read from the
+    // package, then the floor, Maya's reach and the final location vector, and only then is the template made.
+    let shape = dummy_shape(vm)?;
+    let spot = floor_spot(collision, area, &MovementParams::maya(), shape, centre)?;
+    reachable(collision, &MovementParams::maya(), maya, shape, spot)?;
+    let location = vector_at(vm, info, spot)?;
+    spawn_at(vm, &actors, info, location, spot).map_err(after_writes)
+}
+
+/// Makes the template and spawns the dummy at `location` (`spot`): the step's writes, from the first on (module
+/// documentation).
+fn spawn_at(
+    vm: &mut Vm,
+    actors: &std::rc::Rc<std::cell::RefCell<ow_world::actors::Actors>>,
+    info: ObjRef,
+    location: Value,
+    spot: [f64; 3],
+) -> Result<[f64; 3], Failed> {
     // The archetype export of the dummy's own package, made as an object (as the mission slice and `--combat-run`
     // take it): the path alone names another file's object under the store's identity policy.
     let archetype = ow_combat::hit::instantiate_copy(vm, DUMMY_PACKAGE, DUMMY_PAWN)?
         .ok_or_else(|| Failed::Check(format!("{DUMMY_PACKAGE} has no {DUMMY_PAWN}")))?;
     let class = vm.space.heap.get(archetype).map_err(VmError::from)?.class;
-    let shape = dummy_shape(vm, archetype)?;
-    let spot = floor_spot(collision, area, &MovementParams::maya(), shape, centre)?;
-    reachable(collision, &MovementParams::maya(), maya, shape, spot)?;
-    let location = vector_at(vm, info, spot)?;
     // `Spawn`'s bNoCollisionFail: the fixture is placed exactly at the spot checked above, so no free-spot search is
     // asked (that search needs a collision hash the VM world does not model).
     let req = SpawnRequest::new(Some(class))
@@ -226,9 +269,22 @@ pub fn place_dummy(
     Ok(at)
 }
 
-/// The dummy's collision cylinder, from its archetype's `CylinderComponent` (`CollisionRadius`, `CollisionHeight`, a
-/// half height). Where it cannot be read, the placement checks are not available: a `NotYet`.
-pub fn dummy_shape(vm: &mut Vm, archetype: ObjRef) -> Result<Shape, Failed> {
+/// The dummy's collision cylinder (`CollisionRadius`, `CollisionHeight`, a half height), read from the package
+/// without making any object (review r2 of #470, item 1): the archetype export's own `CylinderComponent` tag, a
+/// reference to an export of the same file, and that export's own two tags. Where any of it cannot be read, the
+/// placement checks are not available: a `NotYet`.
+pub fn dummy_shape(vm: &mut Vm) -> Result<Shape, Failed> {
+    let name = ow_core::PackageName::parse(DUMMY_PACKAGE).map_err(|e| Failed::Check(format!("{DUMMY_PACKAGE}: {e}")))?;
+    let (_, store) = vm.defs.code_mut();
+    let found = store.resolve_path(&name, DUMMY_PAWN).map_err(|e| Failed::Check(format!("{DUMMY_PACKAGE}: {e}")))?;
+    let Some((id, archetype)) = found else {
+        return Err(Failed::Check(format!("{DUMMY_PACKAGE} has no {DUMMY_PAWN}")));
+    };
+    cylinder_of(&store.shared(id), archetype)
+}
+
+/// The cylinder of archetype export `archetype` of `pkg` ([`dummy_shape`]): pure, so the tests share it.
+pub fn cylinder_of(pkg: &ow_package::package::Package, archetype: i32) -> Result<Shape, Failed> {
     let unreadable = |what: &str| -> Failed {
         Failed::Vm(
             NotYet::not_read(
@@ -238,13 +294,21 @@ pub fn dummy_shape(vm: &mut Vm, archetype: ObjRef) -> Result<Shape, Failed> {
             .into(),
         )
     };
-    let component = match ow_combat::hit::access::get(vm, archetype, "CylinderComponent")? {
-        Some(Value::Object(Some(c))) => c,
-        _ => return Err(unreadable("no CylinderComponent")),
+    let tags = |export: i32, prefix: ow_object::prefix::PropertyPrefix, what: &str| {
+        props::read_tagged(pkg, export, prefix.bytes(), &NoArrayTypes)
+            .map(|t| t.entries)
+            .map_err(|e| unreadable(&format!("{what}'s tags: {e}")))
     };
-    let mut read = |name: &str| -> Result<f64, Failed> {
-        match ow_combat::hit::access::get(vm, component, name)? {
-            Some(Value::Float(x)) if x.is_finite() && x > 0.0 => Ok(f64::from(x)),
+    let own = tags(archetype, ow_object::prefix::PropertyPrefix::Ordinary, "the archetype")?;
+    let component = match own.iter().find(|e| e.name == "CylinderComponent").map(|e| &e.value) {
+        Some(PropValue::Object(r)) if *r > 0 => *r,
+        Some(PropValue::Object(r)) if *r < 0 => return Err(unreadable("a CylinderComponent in another file")),
+        _ => return Err(unreadable("no CylinderComponent of its own")),
+    };
+    let cylinder = tags(component, ow_object::prefix::PropertyPrefix::Component, "the CylinderComponent")?;
+    let read = |name: &str| -> Result<f64, Failed> {
+        match cylinder.iter().find(|e| e.name == name).map(|e| &e.value) {
+            Some(PropValue::Float(x)) if x.is_finite() && *x > 0.0 => Ok(f64::from(*x)),
             _ => Err(unreadable(name)),
         }
     };
@@ -294,9 +358,18 @@ pub fn floor_spot(
     Ok(hit.end)
 }
 
+/// How close, horizontally, Maya's grounded walk must come to the dummy's spot, uu (a port choice, not the game's).
+pub const ARRIVE: f64 = 16.0;
+
+/// The reach walk's time step, s: the scripted walk's own.
+fn reach_dt() -> f64 {
+    ow_assets::movement::sanctuary::walk_dt()
+}
+
 /// Whether `walker`, ending its walk at `from` (its shape's centre), can reach a pawn of `shape` standing at `to`
-/// (module documentation, step 2): the feet within the walker's step height of each other, and the walker's shape,
-/// raised by that step height, sweeping from `from` to above `to` without a hit.
+/// (module documentation, step 2): the feet within the walker's step height of each other, and a grounded walk by
+/// the port's mover from `from` straight at `to`, steered each tick, arriving within [`ARRIVE`] uu, never more than
+/// the step height below its start, inside a tick budget (twice the straight time at full speed, plus two seconds).
 pub fn reachable(
     world: &CollisionWorld,
     walker: &MovementParams,
@@ -316,16 +389,31 @@ pub fn reachable(
             fmt_f(step, 1)
         )));
     }
-    let a = [from[0], from[1], from[2] + step];
-    let b = [to[0], to[1], from[2] + step];
-    let hit = world.trace(&walker.shape, a, b);
-    if hit.start_solid || hit.blocked() {
-        return Err(Failed::Check(format!(
-            "no straight way from Maya's walked end to the dummy: her sweep stops at {} of the way",
-            fmt_f(hit.fraction, 3)
-        )));
+    let dt = reach_dt();
+    let straight = horizontal(from, to) / (walker.ground_speed * dt);
+    let budget = ow_assets::movement::geom::floor_index(2.0 * straight + 2.0 / dt, 1_000_000);
+    let mut mover = Mover::spawn(*walker, from, ow_core::units::Rotator::new(0, 0, 0));
+    mover.physics = Physics::Walking;
+    let lowest = from[2] - step;
+    for _ in 0..budget {
+        let (dx, dy) = (to[0] - mover.location[0], to[1] - mover.location[1]);
+        if horizontal(mover.location, to) <= ARRIVE {
+            return Ok(());
+        }
+        // Yaw 0 faces +X with +Y to the right, so the direction is the input itself (the mover normalizes it).
+        mover.tick(world, &MoveInput::new(dx, dy, false, 0, 0), dt);
+        if mover.location[2].is_nan() || mover.location[2] < lowest {
+            return Err(Failed::Check(format!(
+                "no grounded way from Maya's walked end to the dummy: she drops below her start {} uu from it (a gap \
+                 or a ledge)",
+                fmt_f(horizontal(mover.location, to), 1)
+            )));
+        }
     }
-    Ok(())
+    Err(Failed::Check(format!(
+        "no grounded way from Maya's walked end to the dummy: her walk stops {} uu short of it",
+        fmt_f(horizontal(mover.location, to), 1)
+    )))
 }
 
 /// Distance between `a` and `b`, uu.

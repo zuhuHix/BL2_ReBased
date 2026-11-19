@@ -12,6 +12,15 @@ unbound native `GameEngine.GetOnlineSubsystem()` (graded error; NATIVE_LOGIN_STA
 earlier, at `BlackMarketUpgradeAttributeValueResolver`. ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/link1/`.
 
+**LINK-2-FIGHT-AREA r2 (2026-11-19, desktop, on main 0235937):** AI-assisted (Claude Code, Claude Opus 5.5). Review r2
+of #470: the cylinder read from the package before any write, a grounded reach walk, the partial-writes prefix after the
+first write, typed world setup. `cargo build -p ow-cli -j 2` clean; `cargo test -p ow-cli -j 2` 110 passed / 0 failed / 1
+ignored (4 new in `fight_area::tests`, 1 reworded); clippy on ow-cli clean; `check_slice_run_off_test.py` OK. Installed
+Off `--slice-gate` strict, under the machine run lock, rebased onto main 0235937: 0 ok / 12 notyet / 2 errors;
+link 2 3 of 4 steps, stop `fight_area` at the inherited-component `NotYet`, now prefixed "stopped after partial
+writes". Rows 6 and 7 are errors at `make` (the unbound `WillowGlobals.GetWillowGlobals`), from main's pickup work,
+not this branch; the other rows come from main. Decision 2026-11-19-76; logs under ignored `local/p2/fa-r2/`.
+
 **LINK-2-FIGHT-AREA (2026-11-19, desktop, on main 203c1aa):** AI-assisted (Claude Code, Claude Opus 5.5). Link 2's
 `fight_area` step checks Maya's walked end against a labelled port fixture area, then places the target dummy there
 through `ow_world`'s spawn path. `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,179 passed / 0
