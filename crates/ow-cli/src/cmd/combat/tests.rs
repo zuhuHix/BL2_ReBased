@@ -247,12 +247,14 @@ fn every_list_replays_to_the_same_report_in_the_same_process() {
     }
 }
 
+/// Off stops before the attributes at the Willow component's demigod list: since decision 2026-11-19-43 Off reads it
+/// (`WillowAIComponent` keeps the base routine), and the pinned toy `AIComponent` declares no `DemigodHolds`.
 #[test]
 fn off_mode_stops_before_undeclared_attributes_at_the_willow_hold() {
     let install = Install::new();
     let (off, failed) = report(&install, CASES[13].1, ParityMode::Off);
     assert!(failed);
-    assert!(off.contains("AI hold virtual overrides"), "{off}");
+    assert!(off.contains("AIComponent has no DemigodHolds array"), "{off}");
     let (reference, failed) = report(&install, CASES[13].1, ParityMode::Reference);
     assert!(!failed, "{reference}");
     assert!(
@@ -261,13 +263,14 @@ fn off_mode_stops_before_undeclared_attributes_at_the_willow_hold() {
     );
 }
 
-/// Off refuses the unread Willow virtual override; Reference retains the C++ stand-in.
+/// Off reads the Willow component's demigod list (decision 2026-11-19-43; the pinned toy `AIComponent` declares no
+/// `DemigodHolds`, a typed error); Reference retains the C++ stand-in.
 #[test]
-fn off_mode_refuses_unread_willow_hold_virtuals() {
+fn off_mode_reads_the_willow_demigod_list() {
     let install = Install::new();
     let (off, failed) = report(&install, CASES[1].1, ParityMode::Off);
     assert!(failed, "{off}");
-    assert!(off.contains("AI hold virtual overrides"), "{off}");
+    assert!(off.contains("AIComponent has no DemigodHolds array"), "{off}");
     let (reference, failed) = report(&install, CASES[1].1, ParityMode::Reference);
     assert!(!failed, "{reference}");
     assert!(reference.contains("\"hit.Toy.L4.4.health_after\":0"), "{reference}");

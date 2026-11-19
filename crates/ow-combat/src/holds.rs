@@ -22,8 +22,12 @@
 //! lookup and the vector constant remain unresolved, so the call then returns NotYet without changing motion.
 //! With no owner there is no motion side effect. A duplicate returns before this lookup.
 //!
-//! **Unsupported paths.** Only exact base AIComponent instances use these rules. Subclass virtual overrides,
-//! GearboxMind.GetAIComponent and pawn IAIInterface routing remain NotYet. Damage-reader behavior is not proven.
+//! **Which components.** An exact `AIComponent`, and an exact `WillowAIComponent`: the note's second reading
+//! (NATIVE_AI_HOLDS.md, read 2026-11-19 by lane LINK-1-NEXT; implemented by lane FIX-AI-HOLDS-SUBCLASS, decision
+//! 2026-11-19-43) found that `WillowAIComponent` keeps `AIComponent`'s routines for the movement, demigod, god and
+//! dialog kinds (and the target kind, `ow-ai`'s), replacing only the base kind. Any other subclass's table was not
+//! read: `NotYet { NotRead }`, as before. `GearboxMind.GetAIComponent` and the pawn IAIInterface routing remain NotYet.
+//! Damage-reader behavior is not proven.
 //!
 //! **Reference** (R3) binds none of this: `crate::hit` keeps the C++ stand-ins there (the demigod hold as a list of
 //! reasons, `GetAIComponent` as the mind's property, the pawn-to-mind context).
@@ -52,6 +56,9 @@ pub const KINDS: [(&str, &str); 4] = [
 
 /// The class whose script natives these are.
 pub const COMPONENT: &str = "GearboxFramework.AIComponent";
+
+/// The subclass that keeps these four kinds' routines (NATIVE_AI_HOLDS.md, read 2026-11-19).
+pub const WILLOW_COMPONENT: &str = "WillowGame.WillowAIComponent";
 
 /// The script native the note does not resolve (`NotYet` in Off).
 pub const GET_AI_COMPONENT: &str = "GearboxFramework.GearboxMind.GetAIComponent";
@@ -137,10 +144,13 @@ fn this(c: &mut NativeCall<'_>) -> Result<ObjRef, VmError> {
     let me = c.this.ok_or_else(|| error("a hold native called without an object".to_string()))?;
     crate::hit::access::loaded(c.vm, me)?;
     let class = c.vm.space.heap.get(me)?.class;
-    if class != c.vm.find_class(COMPONENT)? {
+    let willow = c.vm.find_class(WILLOW_COMPONENT).ok();
+    if class != c.vm.find_class(COMPONENT)? && Some(class) != willow {
         return Err(NotYet::not_read(
-            "AI hold virtual overrides outside the exact base AIComponent are unread", RECORD_HOLDS,
-        ).into());
+            "AI hold virtual overrides of a component class other than AIComponent and WillowAIComponent are unread",
+            RECORD_HOLDS,
+        )
+        .into());
     }
     Ok(me)
 }

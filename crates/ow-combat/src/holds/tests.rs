@@ -297,13 +297,39 @@ fn movement_appends_before_refusing_unresolved_side_effect() {
     assert!(e.pairs(component, "MovementHolds").is_empty());
 }
 
+/// `WillowAIComponent` keeps the base routines of the four kinds (NATIVE_AI_HOLDS.md, read 2026-11-19; decision
+/// 2026-11-19-43): its holds follow the rule, as an `AIComponent`'s do.
+#[test]
+fn willow_components_keep_the_four_kinds_routines() {
+    let mut e = Env::new(ParityMode::Off);
+    register(&mut e.vm).unwrap();
+    let base = e.component;
+    let willow = class(&mut e.vm, WILLOW_COMPONENT, base, &[]);
+    let component = e.make(willow, "ToyWillowComponent");
+    let tag = e.make(e.thing, "ToyTag");
+    for (kind, list) in KINDS {
+        if kind == "Movement" {
+            continue; // its side effect on an owned component is the NotYet of movement_appends_before_refusing...
+        }
+        e.hold(&format!("Hold{kind}"), component, "Safe", Some(tag)).unwrap();
+        assert_eq!(e.pairs(component, list), vec![("Safe".to_string(), Some(tag))], "{kind}");
+        assert_eq!(e.call(&format!("{kind}OnHold"), component, vec![]).unwrap(), Value::Bool(true), "{kind}");
+        e.hold(&format!("Release{kind}"), component, "Safe", Some(tag)).unwrap();
+        assert!(e.pairs(component, list).is_empty(), "{kind}");
+    }
+    // Movement with no owner: no side effect, the pair kept.
+    e.hold("HoldMovement", component, "Safe", Some(tag)).unwrap();
+    assert_eq!(e.call("MovementOnHold", component, vec![]).unwrap(), Value::Bool(true));
+}
+
+/// Any other subclass's table was not read: refused for every kind before anything changes.
 #[test]
 fn subclass_virtuals_are_refused_for_all_kinds_before_mutation() {
     let mut e = Env::new(ParityMode::Off);
     register(&mut e.vm).unwrap();
     let base = e.component;
-    let subclass = class(&mut e.vm, "WillowGame.WillowAIComponent", base, &[]);
-    let component = e.make(subclass, "ToyWillowComponent");
+    let subclass = class(&mut e.vm, "WillowGame.ToyOtherAIComponent", base, &[]);
+    let component = e.make(subclass, "ToyOtherComponent");
     let tag = e.make(e.thing, "ToyTag");
     for (kind, list) in KINDS {
         for verb in [format!("Hold{kind}"), format!("Release{kind}")] {

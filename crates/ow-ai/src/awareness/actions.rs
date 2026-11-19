@@ -43,9 +43,11 @@
 //!   handle, decision 2026-11-16-50);
 //! - the AI component's holds (G26: `Hold` / `Release` / `OnHold` on `Holds`, and the same on `TargetHolds`).
 //!   `WillowAIComponent` declares its own native `Hold`, `Release` and `OnHold` (other native keys, checked in the
-//!   installed packages), so those are bound too, to the same rule. Willow's `Hold` and `Release` also send the pawn a
-//!   head-look change (`SetLookAtTarget`), presentation that is not sent. Willow's `OnHold` is also true in one case
-//!   reached through the pawn that is not decoded (G26); it answers the base rule here, **UNVERIFIED**;
+//!   installed packages). In Off they are `NotYet { NotRead }`: the note's second reading (decision 2026-11-19-43)
+//!   found they replace the base kind, and the replacement is not read. Under Reference they keep the base rule, as
+//!   before (Willow's `Hold` and `Release` also send the pawn a head-look change, `SetLookAtTarget`, presentation that
+//!   is not sent; Willow's `OnHold` is also true in one case reached through the pawn that is not decoded, G26:
+//!   **UNVERIFIED**). Its other kinds are `AIComponent`'s own (`ow_combat::holds`);
 //! - movement, through the host ([`Locomotion`]): path creation on the navigation handle, path validity, arrival,
 //!   `CanMoveTo`, the movement speed and the nearest nav-mesh point. The latent ones (`FollowPath`, `WaitForPath`,
 //!   `FinishPath`, `WaitForPawnToTurn`, `WaitForPawnToStop`) answer `NotYet`: the VM's latent actions are `Sleep`
@@ -713,6 +715,26 @@ pub const LATENT_MOVES: [&str; 5] = [
     "WillowGame.WillowActionSequencePawn.WaitForPawnToStop",
 ];
 
+/// `WillowAIComponent`'s replacements of the base hold kind (`NotYet { NotRead }` in Off; decision 2026-11-19-43).
+pub const WILLOW_BASE_KIND: [&str; 3] = [
+    "WillowGame.WillowAIComponent.Hold",
+    "WillowGame.WillowAIComponent.Release",
+    "WillowGame.WillowAIComponent.OnHold",
+];
+
+fn willow_base_kind(path: &'static str) -> NativeFn {
+    Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+        Err(NotYet::not_read(
+            format!(
+                "{path}: WillowAIComponent replaces the base hold kind, and the replacement is not read \
+                 (NATIVE_AI_HOLDS.md)"
+            ),
+            "docs/verification/NATIVE_AI_HOLDS.md",
+        )
+        .into())
+    })
+}
+
 /// Binds the actions' natives the VM declares (module documentation, "What the actions reach").
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pack;
@@ -735,26 +757,33 @@ impl NativePack for Pack {
         brains(vm)?;
         bind(vm, FINISH, Rc::new(n_finish))?;
         bind(vm, TRIGGER_BEHAVIOR, Rc::new(n_trigger_behavior))?;
-        // The Willow component's own Hold, Release and OnHold (other native keys) get the same rule (module
-        // documentation; Willow's OnHold extra case is not decoded: UNVERIFIED).
+        // The Willow component's own Hold, Release and OnHold (other native keys): in Off `NotYet { NotRead }`, because
+        // the note's second reading (NATIVE_AI_HOLDS.md, read 2026-11-19; decision 2026-11-19-43) found that
+        // `WillowAIComponent` replaces the base kind and the replacement was not read. Reference keeps the base rule
+        // these had before (module documentation; Willow's OnHold extra case is not decoded: UNVERIFIED).
+        if vm.parity == ParityMode::Off {
+            for path in WILLOW_BASE_KIND {
+                bind(vm, path, willow_base_kind(path))?;
+            }
+        }
         for (list, path) in [
             ("Holds", "GearboxFramework.AIComponent.Hold"),
             ("TargetHolds", "GearboxFramework.AIComponent.HoldTarget"),
-            ("Holds", "WillowGame.WillowAIComponent.Hold"),
+            ("Holds", WILLOW_BASE_KIND[0]),
         ] {
             bind(vm, path, hold_body(list, true))?;
         }
         for (list, path) in [
             ("Holds", "GearboxFramework.AIComponent.Release"),
             ("TargetHolds", "GearboxFramework.AIComponent.ReleaseTarget"),
-            ("Holds", "WillowGame.WillowAIComponent.Release"),
+            ("Holds", WILLOW_BASE_KIND[1]),
         ] {
             bind(vm, path, hold_body(list, false))?;
         }
         for (list, path) in [
             ("Holds", "GearboxFramework.AIComponent.OnHold"),
             ("TargetHolds", "GearboxFramework.AIComponent.TargetOnHold"),
-            ("Holds", "WillowGame.WillowAIComponent.OnHold"),
+            ("Holds", WILLOW_BASE_KIND[2]),
         ] {
             bind(
                 vm,
