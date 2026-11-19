@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-POOL-SPAWN-B (2026-11-19, desktop, on main 79036dd):** AI-assisted (Claude Code, Claude Opus 5.5). The three
+`WillowInventory` natives bound in Off; `GetItemTossVelocity` NotYet in Off; Reference unbound. `cargo build
+--workspace` clean; `cargo test --workspace` 1,972 passed / 0 failed / 43 ignored (7 new `ow-inventory`, 7 new
+`ow-combat` tests). C++ Release build clean; ctest at `-j 2` 173/173, 0 failed, 472.69 s; verify_packages 9 packages,
+all class bodies exact. Installed, Off: `--slice-gate` 14 rows identical before and after (links 1, 3, 4, 5, 13 and 14
+stop at the unbound `WillowGlobals.GetPlayerPawnDataManager()`); `--combat-run` `player:8 spawn:baby:6` stops the
+spawn at `TargetableAttributeValueResolver`, before and after. No installed Off run reaches the death roll.
+
 **FIX-PHASELOCK-CAST part B (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5).
 `ActionSkill.OnActionSkillActivated` and `OnActionSkillDeactivated` bound in Off (Reference unbound). `cargo build
 --workspace` clean; `cargo test --workspace` 1,880 passed / 0 failed / 42 ignored before the rebase (four new
