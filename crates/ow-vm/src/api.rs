@@ -861,6 +861,15 @@ impl Vm {
         self.steps
     }
 
+    /// Whether [`Vm::call`] of `f` with `args` would be refused at the call's entry, without making the call or
+    /// changing anything: the same argument binding, and for a script function the same entry checks
+    /// (`interp::check_entry`, shared with the call). Lane FIX-RUN-BEHAVIORS, review r2 of #439: a walk checks
+    /// every call before it makes the first.
+    pub fn check_call(&mut self, f: FuncId, args: Vec<Value>) -> Result<(), VmError> {
+        let bound = self.bind_args(f, args)?;
+        crate::interp::check_entry(self, f, &bound)
+    }
+
     fn bind_args(&self, f: FuncId, mut args: Vec<Value>) -> Result<Vec<Arg>, VmError> {
         let decl = self.function(f).ok_or_else(|| VmError::Script {
             function: format!("{f:?}"),

@@ -648,7 +648,10 @@ fn the_tick_plays_the_pending_kickoff_once() {
     let m = env.mission();
     let calls = Rc::new(RefCell::new(0));
     let c = calls.clone();
-    m.set_kickoff_hook(Some(Rc::new(move |_: &mut Vm| *c.borrow_mut() += 1)));
+    m.set_kickoff_hook(Some(Rc::new(move |_: &mut Vm| {
+        *c.borrow_mut() += 1;
+        Ok(())
+    })));
     let vm = &mut env.vm;
     m.accept(vm, &DetSet::new()).unwrap();
     assert!(m.kickoff_pending());
@@ -956,9 +959,16 @@ fn hooks_run_in_the_routine_order() {
     m.set_status_hook(Some(Rc::new(move |_: &mut Vm, n: u8| {
         // The new status is already the tracker's, and no effect of it is raised yet.
         l1.borrow_mut().push(format!("status {n} {:?} {}", me.status(), me.drain().len()));
+        Ok(())
     })));
-    m.set_notify_hook(Some(Rc::new(move |_: &mut Vm, n: Notification| l2.borrow_mut().push(format!("{n:?}")))));
-    m.set_objective_hook(Some(Rc::new(move |_: &mut Vm, path: &str, bit: i32| l3.borrow_mut().push(format!("objective {path} {bit}")))));
+    m.set_notify_hook(Some(Rc::new(move |_: &mut Vm, n: Notification| {
+        l2.borrow_mut().push(format!("{n:?}"));
+        Ok(())
+    })));
+    m.set_objective_hook(Some(Rc::new(move |_: &mut Vm, path: &str, bit: i32| {
+        l3.borrow_mut().push(format!("objective {path} {bit}"));
+        Ok(())
+    })));
     let vm = &mut env.vm;
     m.accept(vm, &DetSet::new()).unwrap();
     m.update_objective(vm, "Count3", 0).unwrap();
@@ -989,6 +999,7 @@ fn a_hook_can_read_and_change_the_tracker() {
         s.borrow_mut().push(me.objective_progress("Count3"));
         // An update from inside the hook is queued behind the running one (B1).
         assert!(me.update_objective(vm, "Count3", 0).unwrap());
+        Ok(())
     })));
     let vm = &mut env.vm;
     m.accept(vm, &DetSet::new()).unwrap();
@@ -1165,4 +1176,31 @@ fn a_plot_critical_overwrite_is_not_yet() {
     let mut env = Env::new(&toy);
     let m = env.mission();
     assert!(m.accept(&mut env.vm, &DetSet::new()).unwrap());
+}
+
+/// A failing hook unwinds the status routine at once (review r2 of #439, item 1: the bridge's "stopped after partial
+/// writes"): the accept fails with the hook's error, and nothing after the hook runs: no status-changed effect, no
+/// observer, no kickoff record.
+#[test]
+fn a_failing_status_hook_unwinds_the_status_routine() {
+    let mut env = Env::new(&toy_mission());
+    let m = env.mission();
+    let noted = Rc::new(RefCell::new(Vec::<String>::new()));
+    let n2 = noted.clone();
+    m.set_notify_hook(Some(Rc::new(move |_: &mut Vm, n: Notification| {
+        n2.borrow_mut().push(format!("{n:?}"));
+        Ok(())
+    })));
+    m.set_status_hook(Some(Rc::new(|_: &mut Vm, _: u8| {
+        Err(ow_vm::error::VmError::NotYet(ow_core::NotYet::not_read(
+            "stopped after partial writes: an invented NotYet",
+            "an invented record",
+        ))
+        .into())
+    })));
+    let e = m.accept(&mut env.vm, &DetSet::new()).unwrap_err();
+    assert!(e.to_string().contains("stopped after partial writes"), "{e}");
+    assert!(m.drain().iter().all(|x| x.kind != EffectKind::StatusChanged), "no status-changed effect");
+    assert!(noted.borrow().is_empty(), "no observer ran");
+    assert!(!m.kickoff_pending(), "no kickoff record");
 }

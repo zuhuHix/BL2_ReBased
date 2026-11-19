@@ -371,11 +371,13 @@ impl FireMissionSlice {
         mission.set_notify_hook(Some(Rc::new(move |vm: &mut Vm, kind: Notification| {
             if let Some(inner) = w.upgrade() {
                 let s = FireMissionSlice { inner };
-                s.inner.script.notify(vm, kind);
+                // A script stop after partial writes unwinds the tracker at once (review r2 of #439).
+                s.inner.script.notify(vm, kind)?;
                 if let Err(e) = s.apply_conditions(vm) {
                     s.keep(e);
                 }
             }
+            Ok(())
         })));
         // The stock GoToRange waypoint and the director, when the map package has them.
         script.place_waypoint(vm, dummy_package, WAYPOINT)?;
@@ -416,8 +418,7 @@ impl FireMissionSlice {
                 let s = Self::upgrade(&w)?;
                 let o = p.behavior(id).object;
                 tracker::lend(&s.inner.dummy, &s.inner.dummy_lost, p, || {
-                    s.inner.script.apply_behavior(vm, o, None);
-                    Ok(())
+                    s.inner.script.apply_behavior(vm, o, None)
                 })?;
                 Ok(Vec::new())
             }),

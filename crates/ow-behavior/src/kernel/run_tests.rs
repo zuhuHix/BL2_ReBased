@@ -12,7 +12,7 @@ use ow_core::{Missing, ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
-use ow_package::testkit::script::{CPF_OUT, FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::script::{Asm, CPF_OUT, FunctionSpec, Param, ScriptToy};
 use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
@@ -140,6 +140,32 @@ fn package() -> Vec<u8> {
     let controller = t.class("ToyController", object);
     let spec = FunctionSpec::new(NATIVE, "IsLocalController");
     t.function(controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| None);
+    // A behavior whose script ApplyBehavior takes its instigator as a static array of 2 (the call-entry check, review r2
+    // of #439, item 3), and a controller whose IsLocalController is script (item 2).
+    let array_behavior = t.class("ToyArrayBehavior", base);
+    let script_spec = FunctionSpec::new(0x1 | 0x2 | 0x20000, "ApplyBehavior");
+    let ids = t.function(array_behavior, "ApplyBehavior", &apply, None, &[], &script_spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
+    let instigator = ids.get("MyInstigatorObject");
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    payload.extend_from_slice(&ow_package::testkit::ints(&[0, 2]));
+    payload.extend_from_slice(&0x80u64.to_le_bytes());
+    payload.extend_from_slice(&t.none);
+    payload.extend_from_slice(&ow_package::testkit::ints(&[0, object]));
+    t.p.set_payload(instigator, payload);
+    let script_controller = t.class("ToyScriptController", controller);
+    let spec = FunctionSpec::new(0x1 | 0x2 | 0x20000, "IsLocalController");
+    t.function(script_controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| {
+        let mut a = Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     let pawn_base = t.class("Pawn", object);
     let pawn = t.class("ToyPawn", pawn_base);
     t.prop("Object", pawn, "WorldInfo", 0, world);
@@ -595,4 +621,60 @@ fn the_anim_definition_events_are_not_yet() {
             e => panic!("{path}: expected NotYet, got {e}"),
         }
     }
+}
+
+/// The preflight runs the VM's own call-entry check with the dispatch's arguments (review r2 of #439, item 3): a
+/// script `ApplyBehavior` whose static-array parameter would be given a scalar is refused before any behavior ran,
+/// unmarked.
+#[test]
+fn a_call_the_entry_would_refuse_is_refused_before_any_runs() {
+    let mut t = toy(ParityMode::Off);
+    let class = t.vm.find_class("Engine.ToyArrayBehavior").unwrap();
+    let odd = t.vm.space.alloc(class, "OddBehavior", None, Origin::Runtime).unwrap();
+    let mut list = t.behaviors(&[Some("A")]);
+    if let Value::Array(items) = &mut list {
+        Rc::make_mut(items).push(Value::Object(Some(odd)));
+    }
+    let me = t.make("Engine.Object", "Me");
+    let e = t.call(RUN_BEHAVIORS, None, vec![list, Value::Object(Some(me)), Value::Object(Some(me))]).unwrap_err();
+    assert!(e.to_string().contains("static-array parameter"), "{e}");
+    assert!(!e.to_string().contains(PARTIAL_WRITES), "{e}");
+    assert!(t.log.borrow().is_empty(), "A did not run");
+}
+
+/// The side tests call only a bound native `IsLocalController` (review r2 of #439, item 2). An early `PlayLocal` entry
+/// whose controller's query is that native passes without running anything, and a later entry's refusal still comes
+/// before any behavior; a controller whose `IsLocalController` is script is refused before it is invoked.
+#[test]
+fn the_side_tests_call_only_a_bound_native_query() {
+    let mut t = toy(ParityMode::Off);
+    let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
+    let pawn = t.make("Engine.ToyPawn", "Maya");
+    let world = t.make("Engine.ToyWorldInfo", "World");
+    let controller = t.make("Engine.ToyController", "PC");
+    t.set(pawn, "WorldInfo", Value::Object(Some(world)));
+    t.set(pawn, "Controller", Value::Object(Some(controller)));
+    t.set(component, "SMI", Value::Object(Some(pawn)));
+    t.local.set(true);
+    let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.sm_entry));
+    let local = {
+        let list = t.behaviors(&[Some("L")]);
+        let e = with(&t.vm, &zero, "Behaviors", list);
+        with(&t.vm, &e, "PlayLocal", Value::Bool(true))
+    };
+    let not_a_behavior = t.make("Engine.Object", "NotABehavior");
+    let bad = {
+        let e = with(&t.vm, &zero, "Behaviors", Value::Array(Rc::new(vec![Value::Object(Some(not_a_behavior))])));
+        with(&t.vm, &e, "PlayServer", Value::Bool(true))
+    };
+    let e = t.call(SM_RUN_BEHAVIORS, Some(component), vec![Value::Array(Rc::new(vec![local.clone(), bad]))]).unwrap_err();
+    assert!(e.to_string().contains("has no ApplyBehavior") && !e.to_string().contains(PARTIAL_WRITES), "{e}");
+    assert!(t.log.borrow().is_empty(), "no behavior ran");
+    let scripted = t.make("Engine.ToyScriptController", "ScriptPC");
+    t.set(pawn, "Controller", Value::Object(Some(scripted)));
+    match t.call(SM_RUN_BEHAVIORS, Some(component), vec![Value::Array(Rc::new(vec![local]))]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("not a bound native"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert!(t.log.borrow().is_empty(), "no behavior ran");
 }

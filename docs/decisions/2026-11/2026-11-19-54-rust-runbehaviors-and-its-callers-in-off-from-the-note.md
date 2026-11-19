@@ -108,3 +108,29 @@ loosened and no `NotYet` guard was relaxed.
     - `ow-mission`, 2 new: `RunBehaviors` bound without the director in both modes; a partial-write failure stops
       later script runs.
   - `ow-vm` gained the two public helpers above (no sensitive file).
+- **Review r2 of #439** (the final round):
+  - **Item 1, terminal means terminal.** A nested stop (for example `UpdateMissionStatus` → `RunBehaviors`) now unwinds
+    everything at once.
+    - `MissionScript::run` returns the "stopped after partial writes" failure and records it once.
+    - The tracker's hooks (status, objective, kickoff, notify) return it, and the tracker routine that called them
+      stops there: no status-changed effect, no observer, no kickoff record.
+    - The native that ran the tracker fails, and the outer script unwinds. A later run on that VM fails the same way
+      without running.
+  - **Item 2, the preflight's queries.** `PlayLocal` calls `IsLocalController` only when it is a bound native, the
+    stock read-only query. A script override, or a native nothing binds, is `NotYet` before it is invoked and before
+    any behavior runs.
+  - **Item 3, the call-entry check.** The preflight runs the VM's own call-entry check with the dispatch's arguments:
+    `Vm::check_call`, new. It shares `interp::check_entry` / `parameter_items` with the call, with no copy of the
+    logic. So a static-array parameter given a scalar is refused before the first behavior.
+  - **Item 4, `--mission-run`.** The step result is matched, not `?`-propagated. A stop after partial writes, whether
+    the step failed with it or recorded it, gives the step its row (`ok` false, `"stopped"` with the text), and no
+    later step runs (`step_outcome`).
+  - **Item 5, registration timing.** The kernel pack is registered early in Off only. Reference keeps the C++ timing,
+    with the director's provider.
+  - **Tests:**
+    - `ow-behavior`: the call-entry refusal before any run; the side tests with a native query, a later refusal and
+      a script override.
+    - `ow-mission`: a failing status hook unwinds the routine; a nested stop unwinds the outer run, is recorded once
+      and stops later runs; each mode's `RunBehaviors` body runs without the director, with the output-link binding
+      timing checked.
+    - `ow-cli`: `step_outcome`.

@@ -199,7 +199,12 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
         quote(mission.name())
     );
     for (i, step) in steps.iter().enumerate() {
-        let (ok, screen) = run_step(vm, &mission, script.as_ref(), &completed, &name, step)?;
+        // A script run that failed after a behavior walk wrote state ends the run at this step, whichever way it
+        // surfaced (the step's error, or a script failure the step recorded): the row says so with `ok` false, and no
+        // later step runs on that VM (review r2 of #439, item 4; Rust-only: the C++ never meets a NotYet).
+        let stepped = run_step(vm, &mission, script.as_ref(), &completed, &name, step);
+        let partial = script.as_ref().and_then(MissionScript::partial_stop);
+        let (ok, screen, stopped) = step_outcome(stepped, partial)?;
         let _ = write!(
             out,
             "{}{{\"step\":{},\"ok\":{},\"set\":{},\"status\":{}",
@@ -227,14 +232,11 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
             );
         }
         out.push(']');
-        // A script run that failed after a behavior walk wrote state ends the run at this step, and the VM is not
-        // used again (review r1 of #439, item 2b; Rust-only: the C++ never meets a NotYet).
-        let partial = script.as_ref().and_then(MissionScript::partial_stop);
-        if let Some(text) = &partial {
-            let _ = write!(out, ",\"stopped\":{}", quote(&format!("stopped after partial writes: {text}")));
+        if let Some(text) = &stopped {
+            let _ = write!(out, ",\"stopped\":{}", quote(text));
         }
         out.push('}');
-        if partial.is_some() {
+        if stopped.is_some() {
             break;
         }
     }
@@ -274,6 +276,22 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
 
 /// A step's success and, for the bridge's list and use steps, the extra key and its JSON.
 type StepResult = (bool, Option<(&'static str, String)>);
+
+/// A step's row after its run (review r2 of #439, item 4): when the bridge stopped after partial writes (`partial`),
+/// whether the step failed with that stop or recorded it and returned, the row is `ok` false with the stop's text, and
+/// the run ends there; any other step failure is the command's failure, as before.
+fn step_outcome(
+    stepped: Result<StepResult, Failure>,
+    partial: Option<String>,
+) -> Result<(bool, Option<(&'static str, String)>, Option<String>), Failure> {
+    let stopped = partial.map(|text| format!("stopped after partial writes: {text}"));
+    match (stepped, stopped) {
+        (Ok((ok, screen)), None) => Ok((ok, screen, None)),
+        (Ok((_, screen)), Some(text)) => Ok((false, screen, Some(text))),
+        (Err(_), Some(text)) => Ok((false, None, Some(text))),
+        (Err(f), None) => Err(f),
+    }
+}
 
 /// One step: whether it succeeded and, for the bridge's list and use steps, the extra key and its JSON.
 fn run_step(
@@ -463,6 +481,22 @@ fn stod(text: &str) -> Result<f64, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stop after partial writes gives the step its row, `ok` false with the stop's text, whether the step failed
+    /// with it or recorded it and returned; another failure stays the command's (review r2 of #439, item 4).
+    #[test]
+    fn a_partial_write_stop_gives_the_step_its_row() {
+        let stop = Some("an invented NotYet".to_string());
+        let failed: Result<StepResult, Failure> = Err(Failure::from("an invented failure".to_string()));
+        let (ok, screen, stopped) = step_outcome(failed, stop.clone()).unwrap();
+        assert!(!ok && screen.is_none());
+        assert_eq!(stopped.as_deref(), Some("stopped after partial writes: an invented NotYet"));
+        let (ok, _, stopped) = step_outcome(Ok((true, None)), stop).unwrap();
+        assert!(!ok && stopped.is_some(), "a recorded stop fails the step that met it");
+        assert_eq!(step_outcome(Ok((true, None)), None).unwrap().0, true);
+        let other: Result<StepResult, Failure> = Err(Failure::from("an invented failure".to_string()));
+        assert_eq!(step_outcome(other, None).unwrap_err().message, "an invented failure");
+    }
 
     #[test]
     fn stoi_stoll_and_stod_follow_the_msvc_runtime() {

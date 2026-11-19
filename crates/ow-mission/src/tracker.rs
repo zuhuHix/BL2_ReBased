@@ -264,14 +264,17 @@ pub enum Notification {
 
 /// Called with the new `EMissionStatus` number inside the status routine (after the state changed, before the
 /// observers and the `Default` event). The script bridge runs `UpdateMissionStatus` here.
-pub type StatusHook = Rc<dyn Fn(&mut Vm, u8)>;
+///
+/// A hook's error unwinds the status routine at once: nothing after the hook runs (the script bridge's "stopped after
+/// partial writes", review r2 of #439).
+pub type StatusHook = Rc<dyn Fn(&mut Vm, u8) -> Result<(), MissionError>>;
 /// Called when the tracker tick consumes the pending kickoff record, before the kickoff event.
-pub type KickoffHook = Rc<dyn Fn(&mut Vm)>;
+pub type KickoffHook = Rc<dyn Fn(&mut Vm) -> Result<(), MissionError>>;
 /// Called with each observer notification, after the tracker changed its own state.
-pub type NotifyHook = Rc<dyn Fn(&mut Vm, Notification)>;
+pub type NotifyHook = Rc<dyn Fn(&mut Vm, Notification) -> Result<(), MissionError>>;
 /// Called after an applied objective update (after the observers, before the objective's id-3 event) with the
 /// objective's path and the bit.
-pub type ObjectiveHook = Rc<dyn Fn(&mut Vm, &str, i32)>;
+pub type ObjectiveHook = Rc<dyn Fn(&mut Vm, &str, i32) -> Result<(), MissionError>>;
 
 #[derive(Default, Clone)]
 struct Hooks {
@@ -1158,10 +1161,11 @@ impl MissionSystem {
         self.inner.hooks.borrow().clone()
     }
 
-    fn notify(&self, vm: &mut Vm, n: Notification) {
+    fn notify(&self, vm: &mut Vm, n: Notification) -> Result<(), MissionError> {
         if let Some(f) = self.hooks().notify {
-            f(vm, n);
+            f(vm, n)?;
         }
+        Ok(())
     }
 
     /// Fires `event` with `link_id` on the provider, wherever it is (module documentation, "Re-entrancy").
@@ -1296,7 +1300,7 @@ impl MissionSystem {
         }
         self.update_tracked_mission()?;
         if let Some(f) = self.hooks().status {
-            f(vm, status.number());
+            f(vm, status.number())?;
         }
         {
             // SetActiveMission(mission, fromActivation): a record only when the kickoff was not heard and none is
@@ -1326,7 +1330,7 @@ impl MissionSystem {
             }
             _ => {}
         }
-        self.notify(vm, Notification::StatusChanged);
+        self.notify(vm, Notification::StatusChanged)?;
         self.fire(vm, "Default", link::STATUS_BASE + i32::from(status.number()))?;
         Ok(true)
     }
@@ -1372,7 +1376,7 @@ impl MissionSystem {
         }
         self.inner.state.borrow_mut().active_set = path.to_string();
         self.emit(EffectKind::ObjectiveSetActive, set.name.clone(), String::new(), String::new());
-        self.notify(vm, Notification::ObjectiveSetChanged);
+        self.notify(vm, Notification::ObjectiveSetChanged)?;
         self.fire(vm, &set.name, link::SET_ACTIVATED)?;
         if set.can_complete && self.active_set() == path {
             self.evaluate_set(vm)?;
@@ -1566,9 +1570,9 @@ impl MissionSystem {
             progress_of(d, &s, name)
         };
         self.emit(EffectKind::ObjectiveUpdated, name.to_string(), count.to_string(), String::new());
-        self.notify(vm, Notification::ObjectiveUpdated);
+        self.notify(vm, Notification::ObjectiveUpdated)?;
         if let Some(f) = self.hooks().objective {
-            f(vm, &objective.path, bit);
+            f(vm, &objective.path, bit)?;
         }
         self.fire(vm, name, link::OBJECTIVE_PROGRESS)?;
         if count != objective.count {
@@ -1576,7 +1580,7 @@ impl MissionSystem {
         }
         self.inner.state.borrow_mut().completed_objectives.insert(name.to_string());
         self.emit(EffectKind::ObjectiveComplete, name.to_string(), String::new(), String::new());
-        self.notify(vm, Notification::ObjectiveComplete);
+        self.notify(vm, Notification::ObjectiveComplete)?;
         self.evaluate_set(vm)?;
         self.fire(vm, name, link::OBJECTIVE_COMPLETED)?;
         Ok(true)
@@ -1618,7 +1622,7 @@ impl MissionSystem {
         };
         if let Some(from_activation) = pending {
             if let Some(f) = self.hooks().kickoff {
-                f(vm);
+                f(vm)?;
             }
             let id = if from_activation { link::KICKOFF } else { link::KICKOFF_DIALOG_ONLY };
             self.fire(vm, "Default", id)?;
