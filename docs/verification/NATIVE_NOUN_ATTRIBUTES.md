@@ -26,6 +26,8 @@ lists everything to build.
 - Four classes implement the interface, and they are exactly the four whose class declares a `NounState` array of
   `NounAttributeState`: `GearboxMind`, `WillowPawn`, `WillowPlayerReplicationInfo`, `WillowWeapon`. The last three also
   declare a fixed-size `ReplicatedNouns` array of `ReplicatedNounAttributeState` and an int `NumReplicatedNouns`.
+  **Corrected (section 10.2):** only `WillowPawn` and `WillowPlayerReplicationInfo` declare those two; `WillowWeapon`
+  does not.
 - The installed data has 15 Noun resolvers. Each is the only value resolver of its attribute and a subobject of that
   attribute definition. The attributes resolve their context through the WillowMind (12, among them the
   `GD_Balance_HealthAndDamage.AIParameters` multipliers such as `Attribute_HealthMultiplier`), the weapon (2,
@@ -69,17 +71,22 @@ uses) with the context as the source and no override source, in single precision
 | provider without a replicated array | 1 or 2 | any | none | no | 0.0 / 0.0 | false |
 | provider with a replicated array | 1 or 2 | client | `ReplicatedNouns` only (its first `NumReplicatedNouns` slots, by `NounName`) | no | slot `Value`, or 0.0 when no slot matches / 0.0 | false |
 
-A provider that hands over no `NounState` array behaves as "not a provider" for strategy 0. Which arrays each of the
-four providers hands over was not read; expected: all four hand over `NounState`, and the three that declare
-`ReplicatedNouns` hand that over too (so `GearboxMind` would be "without a replicated array"). Every installed mind
-noun has strategy 0, so the data never meets the row "provider without a replicated array".
+A provider that hands over no `NounState` array behaves as "not a provider" for strategy 0. **Which arrays each
+provider hands over is read in section 10.2:**
+- pawns and the replication info hand over `NounState` on authority only, and their `ReplicatedNouns` always;
+- `GearboxMind` hands over `NounState` on authority only, and no replicated array;
+- `WillowWeapon` hands over `NounState` always, and no replicated array.
+
+Every installed mind and weapon noun has strategy 0, so the data never meets the row "provider without a replicated
+array".
 
 **A created entry** holds: `NounName` = the key, `Value` = `BaseValue` = `d`, an empty `ModifierStack`,
 `ReplicationStrategy` = the resolver's, and `IndexInReplicationArray` = the replicated slot it got, or -1 when it got
 none (strategy 0, no replicated array, or the array was full, which logs an error). A slot it gets is the next free
 one (index `NumReplicatedNouns`, which then grows by one), filled with the key, `d`, and `bOnlyRelevantToOwner` true
-exactly for strategy 1 (`NOUNREP_RepToOwnerOnly`); the provider is then told its replicated copy changed (an
-interface call whose body was not read).
+exactly for strategy 1 (`NOUNREP_RepToOwnerOnly`); the provider is then told its replicated copy changed. That call
+sets the actor's `bNetDirty` (section 10.3, which also gives the order: the slot comes before the `NounState`
+append).
 
 Two orderings change behaviour:
 
@@ -160,3 +167,150 @@ says "none", reads return 0.0 and writes return false, and nothing changes.
   `NumReplicatedNouns` (strategy 2).
 - On a context that is not a provider (the player controller), any noun attribute whose context resolves there
   reads 0.
+
+## 10. The providers' arrays and the replicated copy (lane ANALYST-NOUN-REPLICATION, 2026-11-19)
+
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-NOUN-REPLICATION (decision 2026-11-19-NNN).
+- **Sources:**
+  - the game executable, read with Ghidra (`tools/ghidra/run.ps1` read-only queries and the local table reader, one
+    headless run at a time under the machine lock);
+  - field names from `tools/ghidra/class_layout.py` and the export tables.
+- Raw output stays under ignored `local/analysis/nounrep/`. There is no bl-sdk session and no recorded live evidence
+  for these rules, so **every rule here is UNVERIFIED in the running game**. This lane implements nothing.
+
+This section answers section 4's two "not read" points: which arrays each provider hands over, and what "the
+provider is told its replicated copy changed" does.
+
+### 10.1 What the resolver asks a provider
+
+The noun resolver asks the provider interface two things, both answered by each provider class's own implementation:
+1. **Its arrays.** It hands back four things:
+   - its `NounState` array, or none;
+   - its `ReplicatedNouns` array, or none;
+   - where its replicated count lives;
+   - the replicated array's capacity.
+2. **"The replicated copy changed."** A call with no arguments and no answer.
+
+### 10.2 Each provider's answer
+
+The provider implementations were found through each class's registration and constructor, by the interface's table
+in each class. `WillowAIPawn` and `WillowPlayerPawn` hold the same two functions as `WillowPawn`.
+
+| Provider class | `NounState` handed over | `ReplicatedNouns` handed over | Count / capacity | "Replicated copy changed" |
+|---|---|---|---|---|
+| `WillowPawn`, `WillowAIPawn`, `WillowPlayerPawn` | only when the pawn's `Role` is 3 (`ROLE_Authority`) | always | `NumReplicatedNouns` / 20 | sets the pawn's `bNetDirty` |
+| `WillowPlayerReplicationInfo` | only when its `Role` is 3 | always | `NumReplicatedNouns` / 20 | sets its `bNetDirty` |
+| `GearboxMind` | only when its `Role` is 3 | none | none / 0 | does nothing |
+| `WillowWeapon` | always | none | none / 0 | sets the weapon's `bNetDirty` (never reached: there is no replicated array) |
+
+**Corrections to sections 1 and 4.**
+- `WillowWeapon` declares no `ReplicatedNouns` and no `NumReplicatedNouns` (the export table). Only `WillowPawn` and
+  `WillowPlayerReplicationInfo` do, so the weapon is "without a replicated array".
+- Three providers hand over `NounState` only on authority. Off the authority role, a pawn, a mind or a replication
+  info is a provider with no `NounState` (section 10.4).
+
+**The names.** `Role` and `bNetDirty` are the `Actor` fields the layout tool places exactly. The pawn's three noun
+fields sit four bytes from where the tool places `WillowPawn`'s fields, the known shift of that class, and fit
+`NumReplicatedNouns`, `NounState` and `ReplicatedNouns` in that order. By fit, high confidence, UNVERIFIED by name.
+The capacity 20 is the declared size of `ReplicatedNouns[20]`.
+
+**The slice's pawn.** `GD_Siren_Skills.Attributes.IsPhaselocked` (strategy 2) resolves its context to a pawn. In the
+slice that is a `WillowAIPawn` (the cast's target) or Maya's `WillowPlayerPawn`; both take the first row. So the row
+"provider with a replicated array" of section 4 applies to strategy 2 there, **when the pawn's `Role` is 3**.
+
+### 10.3 Creating an entry with a replicated slot, in order
+
+On a provider that hands over both arrays (a pawn or a replication info on authority), with strategy 1 or 2, and no
+entry for the key:
+1. **`d` is evaluated** (section 4: before anything is appended; it may itself create other entries).
+2. **The replicated slot**, when `NumReplicatedNouns` is less than 20:
+   1. `NumReplicatedNouns` grows by one; the slot is the old count;
+   2. that slot of `ReplicatedNouns` gets `NounName` = the key, `Value` = `d`, and `bOnlyRelevantToOwner` = true
+      exactly for strategy 1;
+   3. the provider is told its replicated copy changed: the actor's `bNetDirty` is set true.
+
+   When the count is already 20, there is no slot: an error naming the provider and the key is logged ("too many
+   replicated nouns"), and nothing above is written.
+3. **The `NounState` entry** is appended: `NounName` = the key, `Value` = `BaseValue` = `d`, an empty
+   `ModifierStack`, `ReplicationStrategy` = the resolver's, and `IndexInReplicationArray` = the slot, or -1 when there
+   was none.
+
+So the slot and `bNetDirty` are written **before** the `NounState` entry.
+
+**The mirror** (section 5, after an add, a remove or a set-base on an entry with a slot): the slot's `Value` becomes
+the entry's new `Value`, then `bNetDirty` is set true. No other notification is sent, and nothing else is written by
+the replicated-copy call.
+
+### 10.4 A provider whose `NounState` is not handed over
+
+A pawn, a mind or a replication info whose `Role` is not 3:
+- **Strategy 0:** no store. Reads give 0.0, writes give false, nothing is created.
+- **Strategy 1 or 2** (a pawn or a replication info): the replicated array alone is read. Reads give the first slot,
+  among the first `NumReplicatedNouns`, whose `NounName` is the key, or 0.0 when none matches; get-base gives 0.0.
+  Writes give false, and nothing is created. This is section 4's client row; it also applies off authority in any net
+  mode.
+
+### 10.5 Proposed `ParityMode::Off` answer (for an implementer)
+
+The hub's rulings apply:
+- preflight what is cheap and certain;
+- the preflight writes nothing;
+- the "stopped after partial writes: " prefix is the caller's, after a real write;
+- grade by the `VmError` variant and the `NotYet` kind, never by text;
+- **Off only; Reference is unchanged.**
+
+**Inputs:** the context, the resolver's outer's name (the key), `ReplicationStrategy`, `DefaultValue`. On the
+context: its class, `Role`, `NounState`, and for the first row also `ReplicatedNouns`, `NumReplicatedNouns` and
+`bNetDirty`.
+
+**Preflight** (before `d` is evaluated, in this order, writing nothing). Each failure is returned as it is:
+1. **The provider's class**, by its class chain:
+   - `WillowPawn` (with `WillowAIPawn` and `WillowPlayerPawn`), `WillowPlayerReplicationInfo`, `GearboxMind` and
+     `WillowWeapon` are the classes read;
+   - a subclass of one of them that is not listed here takes `NotYet { NotRead }`, "NounAttributeValueResolver: the
+     noun arrays a <class path> hands over are not read", record `NATIVE_NOUN_ATTRIBUTES.md`;
+   - this covers `WillowMind`, whose table was not compared with `GearboxMind`'s. It is open, but every installed mind
+     noun is strategy 0, and the port's minds are made on authority.
+2. **The fields:**
+   - `Role` must be a byte;
+   - `NounState` an array of `NounAttributeState`;
+   - for the first two rows, `ReplicatedNouns` a fixed array of 20 `ReplicatedNounAttributeState`,
+     `NumReplicatedNouns` an int, and `bNetDirty` a bool.
+
+   A missing or mistyped field is `VmError::Script`, "NounAttributeValueResolver: <class path> has no <field>" or
+   "...: <class path>.<field> is not <the type above>".
+3. **`NumReplicatedNouns`** outside 0 to 20 is `VmError::Script`, "NounAttributeValueResolver: <object path> holds
+   NumReplicatedNouns <n>, outside 0..=20".
+4. **The strategy:** outside 0 to 2 stays the existing `NotYet { NotRead }`.
+
+**Then the table:**
+- **`Role` 3 (or a weapon), strategy 0:** as today's port.
+- **`Role` 3 on a pawn or a replication info, strategy 1 or 2:**
+  - an existing entry is read and written as today;
+  - a missing one is created as section 10.3 says, in that order;
+  - the writes then mirror into the slot and set `bNetDirty`.
+- **A mind or a weapon, strategy 1 or 2:** no store (section 4's "provider without a replicated array"). Reads give
+  0.0, writes give false, nothing is created, nothing is refused. No installed noun meets this.
+- **`Role` not 3:** section 10.4.
+
+**Writes, in order** (creation only): the evaluation's own writes, then `NumReplicatedNouns`, the slot's three fields
+and `bNetDirty` (when there is room), then the `NounState` append. The resolver reports the entry as made.
+- If an error comes after the first of these writes, the caller marks it.
+- The "too many" case writes no slot. Its log line is the port's to choose; it is not graded.
+
+**What the existing refusal becomes.** Today's `NotYet { NotPorted }`, "with ReplicationStrategy <n> on a provider:
+whether the provider hands over a replicated array, and what the replicated-copy-changed call does, are not read",
+goes for the classes above. It stays only through preflight step 1, for classes not read.
+
+### 10.6 Open (UNVERIFIED)
+
+1. `WillowMind`'s noun provider, and that of any other subclass of the four classes, not compared.
+2. The error log's exact text and channel in the "too many" case. It is not needed.
+3. What `bNetDirty` causes beyond marking the actor for replication. The script and the natives were not searched for
+   its readers in this lane.
+
+### 10.7 Live checks (bl-sdk, the RTSE way)
+
+1. Phaselock an enemy, then read its `NumReplicatedNouns`, `ReplicatedNouns[0]` and `NounState`. Expect one slot named
+   `IsPhaselocked` with `bOnlyRelevantToOwner` false, and an entry whose `IndexInReplicationArray` is that slot.
+2. Read a weapon's `NounState` after reading `WeaponMaxReloadAnimTime`. Expect an entry with slot -1.
