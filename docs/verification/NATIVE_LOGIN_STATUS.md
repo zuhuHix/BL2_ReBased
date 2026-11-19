@@ -114,17 +114,23 @@ section 4, step 3).
    - unless `bOverrideOnlineProfileName` is set, and when the controller has a `LocalPlayer`, both of its
      `OnlineSub`'s game and player interfaces are set, the login status is at least 1 and the game interface has
      game settings named `Game`: `S` is replaced by the player interface's nickname;
-   - then it calls `ServerChangeName(S)` (script, a server function: with a non-empty name it asks the game info's
-     `ChangeName(Self, S, true)`, not read here);
-   - then it updates the URL option `Name` with `S` and saves the config (a native of `Object`). Those are not read
-     here.
+   - then it calls `ServerChangeName(S)` (script, a server function). With a non-empty name, it asks the game info
+     (`WorldInfo.Game`) for `ChangeName(Self, S, true)`. `GameInfo.ChangeName` is script: with an empty name it returns,
+     otherwise it calls the controller's replication info's `SetPlayerName(S)` (script, section 5's base class: it
+     stores `PlayerName`, and in a standalone or listen-server world raises `ReplicatedEvent('PlayerName')`, then
+     stores `OldName` and sets `bForceNetUpdate`). Game info subclasses' overrides of `ChangeName`, and the
+     `ReplicatedEvent` handler, were not read. With no game info, the call is skipped (accessed none);
+   - then it calls the native `PlayerController.UpdateURL('Name', S, true)` and the native `Object.SaveConfig()`.
+     Neither native is read here.
 3. **After `IsInvalidName`**, `OnPlayerClassChange` runs `SetupInputDevices` (NATIVE_INIT_PLAYER_SKILL_TREE.md
    section 4, step 4):
-   - it calls the native `WillowPlayerInput.SetupInputDevices` when the controller's `PlayerInput` is a
-     `WillowPlayerInput`;
-   - then it clears `InputContextSelector` and calls the native `WillowPlayerController.UpdateInputContext`.
+   1. when the controller's `PlayerInput` is a `WillowPlayerInput`, it calls the native
+      `WillowPlayerInput.SetupInputDevices` on it; otherwise it skips that call;
+   2. then, **in either case**, it clears the controller's `InputContextSelector` (a script write);
+   3. then, **in either case**, it calls the native `WillowPlayerController.UpdateInputContext`.
 
-   Neither native is read here. They are the stops after this one when a player input object exists.
+   Neither native is read here. Only the first is gated on a player input object: a headless controller with no
+   `PlayerInput` still makes the clear and reaches `UpdateInputContext`.
 
 ## 7. The Off answers, step by step (for an implementer, under the hub's rulings)
 
@@ -137,22 +143,22 @@ The hub's rulings:
 Sections 2 to 5 write nothing, so every answer on the login path is decided before any write of its own. The first
 writes are in section 6, after the status is known.
 
-**The preflight of the gated absence.** `ApplyCharacterClassStartingValues` writes before `IsInvalidName` runs: the
-pools, the skill tree, and the name and movement type of #466's section 4. So when the absence is cheap and certain
-before the flow starts, the port decides it in the flow's preflight, before those writes. It is when all of these hold
-(plain reads, no script):
-- the stock path: the controller is the authority and its `PlayerReplicationInfo` is a
-  `WillowPlayerReplicationInfo` (#466's section 4 gate);
-- the info's `Owner` is a `WillowPlayerController` that is a local player controller (the slice's `spawn_maya` wires
-  the owner to the registered local controller);
-- the controller id the script will pass is not -1: the owner's `Player` as a `LocalPlayer` has a `ControllerId`
-  other than -1, or there is no local player, which gives 0;
-- the port has no engine object.
+**When the gated absence may be preflighted.** `ApplyCharacterClassStartingValues` writes before `IsInvalidName`
+runs: the pools, the skill tree, and the name and movement type of #466's section 4. A refusal in the flow's preflight,
+before those writes, is allowed only for a condition that **provably stays the same from the preflight through the
+call**. Otherwise the preflight could refuse a missing engine that the script, at the call, would skip.
+- **Stable: the absence of an engine object.** No script on this path creates or replaces the engine object, so an
+  absent engine at the preflight is absent at the call.
+- **Not proven stable: the gates that decide whether the call is made.** These are the authority, the replication
+  info's class, its `Owner`, whether that owner is local, the owner's `Player` and its `ControllerId`. This note did
+  not read the steps between the flow's start and the call (the pools, `InitPlayerSkillTree`, the name and movement
+  type) for writes to those fields. For example, an id of 0 at the preflight that a step sets to -1 makes the script
+  skip the subsystem.
 
-In that case the flow's preflight answers the engine's `NotYet` (layer absent), and nothing is written. A path known only
-later keeps the runtime check, at `GameEngine.GetOnlineSubsystem`: an owner set during the flow, or a controller
-id changed by script before the call. Such a runtime answer comes after the flow's writes. It is terminal, its text
-starts "stopped after partial writes", its kind and record are kept, and the writes stay in place.
+So the Off answer is the **runtime check**, at `GameEngine.GetOnlineSubsystem` when the script reaches it. It comes
+after the flow's writes. It is terminal, its text starts "stopped after partial writes: ", its kind and record are kept,
+and the writes stay in place. A port may move it into the preflight only after a lane shows that no step between the
+flow's start and the call writes those gate fields; the note names that check, it does not make it.
 
 | Step | Off answer |
 |---|---|
@@ -163,20 +169,23 @@ starts "stopped after partial writes", its kind and record are kept, and the wri
 | `GameEngine.GetOnlineSubsystem()`: an engine object that is **not a `GameEngine`** | None, the native's own answer (section 3). `GetLoginStatus` then answers 0 by its script |
 | `GameEngine.GetOnlineSubsystem()`: a `GameEngine` whose `OnlineSubsystem` slot is **empty** | None, the field as stored. A port world that makes a `GameEngine` and leaves the slot empty has chosen this, and `GetLoginStatus` answers 0 |
 | `GameEngine.GetOnlineSubsystem()`: a `GameEngine` whose slot **holds a subsystem** | that object, as stored |
-| the subsystem's `PlayerInterface` | a plain read; empty gives 0 (section 2) |
+| the subsystem's `PlayerInterface`: **initialised by the world** | a plain read. An interface the world's set-up initialised as empty gives 0 by the script (section 2); a set one is used. Whether the set-up initialised the subsystem's interfaces is a set-up record, not the field's value |
+| the subsystem's `PlayerInterface`: **never initialised** (a subsystem whose interfaces no set-up step filled) | a named `NotYet` (not read), "the online subsystem's player interface initialisation" (open question 2). An empty field is not taken as status 0 here |
 | `OnlineSubsystemSteamworks.GetLoginStatus` | the rule of section 4: `LoggedInStatus` when the byte equals `LoggedInPlayerNum`, else 0. **The stored fields are used** when the world's set-up has filled the subsystem's login state, a set-up decision of a later lane (open question 1). **A Steamworks subsystem whose login state the world has not filled is a named `NotYet` (not read)** naming that login state. Its class defaults are not taken as the game's state |
 | another subsystem class behind `PlayerInterface` | a named `NotYet` (not read) naming the class (only the Steamworks rule was read) |
 | status 0: `ServerSetPlayerNameAsCharName`, `GetPlayerUIPreferences`, `GetCharacterClassDefaultName` | the script, as installed. Its first write is `PlayerPreferredCharacterName`; any `NotYet` it meets after that (in `SetName`) is "after a write" |
 | status at least 1: the base `IsInvalidName`, `GetPlayerNickname` | the script, as installed. `GetPlayerNickname` reads `LoggedInPlayerName`; no write before `SetName` |
-| `PlayerController.SetName`, `ServerChangeName`, the URL update, the config save | **not read here.** The URL update and the config save would write outside the world (the player's settings). A port lane decides them; until then, a named `NotYet` (not read) naming `SetName`'s URL and config writes, decided before `ServerChangeName` runs |
-| `SetupInputDevices` next | the script, as installed; its two natives are the next stops (section 6.3) |
+| `PlayerController.SetName` with an **empty** name | the script, as installed: it returns with no effects, so nothing is refused |
+| `PlayerController.SetName` with a non-empty name: the nickname step, `ServerChangeName`, `GameInfo.ChangeName`, `SetPlayerName` | the script, as installed. With no game info, `ServerChangeName`'s call is skipped. A game info subclass that overrides `ChangeName` is a named `NotYet` (not read) naming that override, since only `GameInfo.ChangeName` was read. A `ServerChangeName` caller elsewhere reaches the same `ChangeName` on its own |
+| `PlayerController.UpdateURL` and `Object.SaveConfig`, **when reached** (a non-empty name, after `ServerChangeName`) | a named `NotYet` (not read) for each, "PlayerController.UpdateURL" and "Object.SaveConfig". They write outside the world (the URL options and the player's config), and neither was read. They are not refused before they are reached. On this path they come after writes, so they are terminal with the prefix |
+| `SetupInputDevices` (script) | the script, as installed (section 6.3) |
+| `WillowPlayerInput.SetupInputDevices`, reached only with a `WillowPlayerInput` | a named `NotYet` (not read), "WillowPlayerInput.SetupInputDevices". It refuses **before the clear** of `InputContextSelector`, but after the flow's earlier writes, so it is terminal with the prefix |
+| `WillowPlayerController.UpdateInputContext`, reached with or without a player input | a named `NotYet` (not read), "WillowPlayerController.UpdateInputContext". It refuses **after the clear** of `InputContextSelector`, which stays cleared (no rollback), and is terminal with the prefix. A "nothing" answer for it is not allowed until a named read-back check exists: the controller's input context and `InputContextSelector` read after the call in the running game. Without that check, a port that would rather not refuse it as unread answers `NotYet` (layer absent), "the input context layer" |
 
-**The slice minimum.** The slice's Maya meets every gate: the authority, a `WillowPlayerReplicationInfo` whose
-owner is her local controller, and a controller id that is not -1. On the headless world the answer is the engine's
-`NotYet` (layer absent).
-- **From the preflight above,** it comes before any write of the flow, with no prefix.
-- **Only if a port decides it at runtime,** it comes after `OnPlayerClassChange`'s writes, and its text carries
-  "stopped after partial writes", with its kind kept.
+**The slice minimum.** The slice's Maya is expected to meet every gate: the authority, a `WillowPlayerReplicationInfo`
+whose owner is her local controller, and a controller id that is not -1. On the headless world the answer is the
+engine's `NotYet` (layer absent), from the runtime check. It comes after `OnPlayerClassChange`'s writes, so its text
+starts "stopped after partial writes: ", with its kind and record kept.
 
 Without those gates (no authority, another replication info class, a non-local owner, an id of -1),
 `IsInvalidName` answers false or `GetLoginStatus` answers 0 before reaching the online subsystem, so this stop does not
@@ -190,9 +199,13 @@ arise.
    setting; neither was read.
 2. **UNVERIFIED:** which object `OnlineSubsystem.PlayerInterface` holds for the Steamworks subsystem, and who sets
    it.
-3. **UNVERIFIED:** `PlayerController.SetName`'s URL update and config save, and the game info's `ChangeName`. Not read.
+3. **UNVERIFIED:** `PlayerController.UpdateURL` and `Object.SaveConfig` (natives, not read), game info subclasses'
+   `ChangeName` overrides, and the `ReplicatedEvent` handler.
 4. **UNVERIFIED:** `WillowPlayerInput.SetupInputDevices` and `WillowPlayerController.UpdateInputContext`, the next
    natives on the path. Not read.
+5. **UNVERIFIED:** whether any step between the flow's start and `IsInvalidName` writes the gate fields (authority,
+   the replication info, its owner, the owner's `Player` and `ControllerId`). Until that is read, the absence is
+   checked at runtime.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
