@@ -30,6 +30,10 @@
 //!   player's equipped one, which is `NotYet`, and a shot still traces its ray but has no damage number.
 //! - `ow-host --game <install> --map NAME --play-script FILE` (no `--play`): the same script through the same
 //!   simulation with no window, at uneven frame times (`play::HEADLESS_FRAMES`), printing the path digests.
+//! - The play mode (window or headless) runs on the map loaded as a world (lane H-WORLD, `crate::world`): its placed
+//!   actors in an `ow_world` world, ticked once per step. `--no-world` runs on the scene alone, as before H-WORLD.
+//!   `--world-pawns DIR` (with `--play`, repeatable) draws the world's placed pawns from the UModel exports under
+//!   `DIR`; a pawn whose mesh has no export there is reported and not drawn.
 //! - `ow-host --headless-probe`: creates a wgpu instance and adapter with no window and prints the adapter. It reads
 //!   nothing from any install, so it takes no `--game`.
 //!
@@ -42,8 +46,8 @@ use std::path::PathBuf;
 pub const USAGE: &str = "usage: ow-host --game <Borderlands 2 install folder> [--window | --frames N [--time-limit S]] [--no-vsync]\n       \
                          [--map NAME [--size WxH] [--screenshot PATH]]\n       \
                          ow-host --game <Borderlands 2 install folder> --walk\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--arms DIR] [--pawn NAME DIR X Y Z YAW]... [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
-                         ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE [--weapon FILE]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play [--play-script FILE] [--weapon FILE] [--arms DIR] [--pawn NAME DIR X Y Z YAW]... [--world-pawns DIR]... [--no-world] [--size WxH] [--screenshot PATH] [--no-vsync]\n       \
+                         ow-host --game <Borderlands 2 install folder> --map NAME --play-script FILE [--weapon FILE] [--no-world]\n       \
                          ow-host --headless-probe";
 
 /// One `--pawn NAME DIR X Y Z YAW` (lane H-PAWNS): a pawn kind (`anim::pawns::KINDS`), the UModel export folder of
@@ -93,9 +97,13 @@ pub enum Command {
         arms: Option<PathBuf>,
         /// Third-person pawns to draw (lane H-PAWNS), in the order given.
         pawns: Vec<PawnArg>,
+        /// Run on the map loaded as a world (lane H-WORLD); `--no-world` clears it.
+        world: bool,
+        /// UModel export folders to draw the world's placed pawns from (lane H-WORLD).
+        world_pawns: Vec<PathBuf>,
     },
     /// The script through the play simulation with no window.
-    PlayHeadless { game: PathBuf, map: String, script: PathBuf, weapon: Option<PathBuf> },
+    PlayHeadless { game: PathBuf, map: String, script: PathBuf, weapon: Option<PathBuf>, world: bool },
 }
 
 /// `WxH` with both parts positive whole numbers.
@@ -122,6 +130,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     let mut weapon: Option<PathBuf> = None;
     let mut arms: Option<PathBuf> = None;
     let mut pawns: Vec<PawnArg> = Vec::new();
+    let mut no_world = false;
+    let mut world_pawns: Vec<PathBuf> = Vec::new();
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let Some(flag) = arg.to_str() else {
@@ -207,6 +217,8 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
                     return Err("--arms given twice".into());
                 }
             }
+            "--world-pawns" => world_pawns.push(PathBuf::from(it.next().ok_or("--world-pawns needs a folder")?)),
+            "--no-world" => no_world = set_once(no_world, "--no-world")?,
             "--play" => play = set_once(play, "--play")?,
             "--window" => window = set_once(window, "--window")?,
             "--no-vsync" => no_vsync = set_once(no_vsync, "--no-vsync")?,
@@ -220,6 +232,12 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
     }
     if (arms.is_some() || !pawns.is_empty()) && !play {
         return Err("--arms and --pawn need --play".into());
+    }
+    if no_world && !(play || play_script.is_some()) {
+        return Err("--no-world needs --play or --play-script".into());
+    }
+    if !world_pawns.is_empty() && (!play || no_world) {
+        return Err("--world-pawns needs --play on the world (not with --no-world)".into());
     }
     if map.is_none() && (size.is_some() || screenshot.is_some()) {
         return Err("--size and --screenshot need --map".into());
@@ -252,13 +270,25 @@ pub fn parse(args: &[OsString]) -> Result<Command, String> {
             return Err("--play runs until it is closed or its script ends: no --window, --frames or --time-limit".into());
         }
         if play {
-            return Ok(Command::Play { game, map, script: play_script, vsync: !no_vsync, size, screenshot, weapon, arms, pawns });
+            return Ok(Command::Play {
+                game,
+                map,
+                script: play_script,
+                vsync: !no_vsync,
+                size,
+                screenshot,
+                weapon,
+                arms,
+                pawns,
+                world: !no_world,
+                world_pawns,
+            });
         }
         if no_vsync || size.is_some() || screenshot.is_some() {
             return Err("--play-script without --play opens no window: no --no-vsync, --size or --screenshot".into());
         }
         let script = play_script.ok_or("--play-script needs a file")?;
-        return Ok(Command::PlayHeadless { game, map, script, weapon });
+        return Ok(Command::PlayHeadless { game, map, script, weapon, world: !no_world });
     }
     if window && frames.is_some() {
         return Err("--window and --frames exclude each other".into());
@@ -388,6 +418,8 @@ mod tests {
                 weapon: None,
                 arms: None,
                 pawns: Vec::new(),
+                world: true,
+                world_pawns: Vec::new(),
             })
         );
         assert_eq!(
@@ -402,6 +434,8 @@ mod tests {
                 weapon: None,
                 arms: None,
                 pawns: Vec::new(),
+                world: true,
+                world_pawns: Vec::new(),
             })
         );
         assert_eq!(
@@ -416,11 +450,13 @@ mod tests {
                 weapon: None,
                 arms: Some("exports".into()),
                 pawns: Vec::new(),
+                world: true,
+                world_pawns: Vec::new(),
             })
         );
         assert_eq!(
             p(&["--game", "X", "--map", "S", "--play-script", "w.txt"]),
-            Ok(Command::PlayHeadless { game: "X".into(), map: "S".into(), script: "w.txt".into(), weapon: None })
+            Ok(Command::PlayHeadless { game: "X".into(), map: "S".into(), script: "w.txt".into(), weapon: None, world: true })
         );
         assert_eq!(
             p(&["--game", "X", "--map", "S", "--play-script", "w.txt", "--weapon", "gun.txt"]),
@@ -429,6 +465,7 @@ mod tests {
                 map: "S".into(),
                 script: "w.txt".into(),
                 weapon: Some("gun.txt".into()),
+                world: true,
             })
         );
         assert!(matches!(
@@ -459,8 +496,28 @@ mod tests {
                     PawnArg { kind: "bullymong".into(), dir: "d".into(), location: [1.0, -2.0, 3.5], yaw_degrees: 225.0 },
                     PawnArg { kind: "maya".into(), dir: "e".into(), location: [0.0; 3], yaw_degrees: 0.0 },
                 ],
+                world: true,
+                world_pawns: Vec::new(),
             })
         );
+        // Lane H-WORLD: the world is on unless --no-world; --world-pawns needs --play on the world.
+        assert!(matches!(
+            p(&["--game", "X", "--map", "S", "--play-script", "w.txt", "--no-world"]),
+            Ok(Command::PlayHeadless { world: false, .. })
+        ));
+        assert!(matches!(
+            p(&["--game", "X", "--map", "S", "--play", "--world-pawns", "a", "--world-pawns", "b"]),
+            Ok(Command::Play { world: true, ref world_pawns, .. }) if world_pawns.len() == 2
+        ));
+        for bad in [
+            &["--game", "X", "--map", "S", "--play", "--no-world", "--world-pawns", "a"][..],
+            &["--game", "X", "--map", "S", "--play-script", "w.txt", "--world-pawns", "a"],
+            &["--game", "X", "--map", "S", "--play", "--world-pawns"],
+            &["--game", "X", "--map", "S", "--play", "--no-world", "--no-world"],
+            &["--game", "X", "--map", "S", "--window", "--no-world"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?} was accepted");
+        }
         for bad in [
             &["--game", "X", "--play"][..],
             &["--game", "X", "--play-script", "w.txt"],

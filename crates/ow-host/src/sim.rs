@@ -84,6 +84,9 @@ pub struct Snapshot {
     pub finished: bool,
     /// The last shot of the play mode's weapon, for the overlay (lane H4-WEAPON).
     pub shot: Option<ShotView>,
+    /// The loaded world's placed pawns as its last tick left them, when the play mode runs on a world (lane
+    /// H-WORLD); the drawer places their meshes from these and never writes back.
+    pub pawns: Option<Vec<crate::world::PawnActor>>,
 }
 
 /// The last shot, as the overlay draws it: where it hit and how long ago.
@@ -155,6 +158,7 @@ impl Simulation for StubWorld {
             view: None,
             finished: false,
             shot: None,
+            pawns: None,
         })
     }
 }

@@ -9,8 +9,10 @@
 //! it `SkeletalMesh`, `AnimSets`, `AnimTreeTemplate`, and its `Translation`, `Rotation`, `Scale` and `Scale3D`, which
 //! place the mesh relative to the pawn ([`PawnDef`]).
 //!
-//! **Placement.** The caller gives the pawn's location and yaw (H-WORLD will give the spawned actor's). The mesh's
-//! world transform is the component's, then the actor's (`crate::frame::component_to_world`, H3's composition, the
+//! **Placement.** The caller gives the pawn's location and yaw (`--pawn`), or the loaded world gives a placed pawn's
+//! `Location` and `Rotation` after each tick (lane H-WORLD, [`PawnLayer::place_world`]; the look is then read from the
+//! placed actor's archetype, [`load_archetype`]: that the placed actor does not override its archetype's mesh
+//! component is UNVERIFIED). The mesh's world transform is the component's, then the actor's (`crate::frame::component_to_world`, H3's composition, the
 //! one confirmed against the running engine for static components). Applying it to a pawn's skeletal component is
 //! UNVERIFIED.
 //!
@@ -51,6 +53,9 @@ pub struct PawnKind {
     /// Linear RGB (a host choice).
     pub color: [f32; 3],
 }
+
+/// The kind of a pawn the loaded world placed (lane H-WORLD): its look is its archetype's, its colour a host choice.
+pub const WORLD_KIND: PawnKind = PawnKind { name: "world", archetype: "", color: [0.46, 0.44, 0.38] };
 
 /// The pawns `--pawn` names: the stock adult bullymong (the archetype the Phaselock work read: its balance names it)
 /// and Maya's third-person body.
@@ -245,6 +250,8 @@ pub struct Pawn {
     pub census: PawnCensus,
     /// Where the caller put it: location (uu) and rotation.
     pub actor: Placement,
+    /// The world actor it stands for (its object path), when the loaded world placed it (lane H-WORLD).
+    pub world_path: Option<String>,
     state: Option<DriverState>,
     /// `NotYet` nodes passed through, summed over the evaluations so far.
     pub passed_through: u64,
@@ -271,6 +278,33 @@ pub fn load(
     actor: Placement,
 ) -> Result<Pawn, String> {
     let def = read_pawn(defs, space, kind.archetype)?;
+    load_def(defs, space, kind, def, roots, actor)
+}
+
+/// Loads the pawn the loaded world placed at `path` with archetype `archetype`, at `actor` (lane H-WORLD).
+pub fn load_archetype(
+    defs: &mut DefStore,
+    space: &mut ObjectSpace,
+    path: &str,
+    archetype: &str,
+    roots: &[PathBuf],
+    actor: Placement,
+) -> Result<Pawn, String> {
+    let def = read_pawn(defs, space, archetype)?;
+    let mut pawn = load_def(defs, space, WORLD_KIND, def, roots, actor)?;
+    pawn.world_path = Some(path.to_string());
+    Ok(pawn)
+}
+
+/// [`load`] from a look already read.
+fn load_def(
+    defs: &mut DefStore,
+    space: &mut ObjectSpace,
+    kind: PawnKind,
+    def: PawnDef,
+    roots: &[PathBuf],
+    actor: Placement,
+) -> Result<Pawn, String> {
     let mesh_file = locate(roots, &format!("SkeletalMesh3/{}.psk", short(&def.mesh)))
         .map_err(|e| e.to_string())?;
     let mesh = read_psk_file(&mesh_file).map_err(|e| bad(&def.mesh, e))?;
@@ -290,6 +324,7 @@ pub fn load(
         normals,
         census,
         actor,
+        world_path: None,
         state: None,
         passed_through: 0,
     };
@@ -334,6 +369,11 @@ impl Pawn {
                 .map(Affine::to_engine),
         );
     }
+}
+
+/// An actor placement from a world actor's `Location` (uu) and `Rotation`; `None` for a non-finite location.
+pub fn world_placement(location: [f32; 3], rotation: Rotator) -> Option<Placement> {
+    location.iter().all(|c| c.is_finite()).then(|| Placement::new(location, rotation, 1.0, [1.0; 3]))
 }
 
 /// An actor placement from a location (uu) and a yaw in degrees (the `--pawn` form). The yaw is rounded to the
@@ -397,6 +437,21 @@ impl PawnLayer {
         self.sim_time = sim_time;
     }
 
+    /// Places each pawn the loaded world placed at its actor's transform in `actors` (matched by object path; a pawn
+    /// whose actor is gone, or whose location is not finite, keeps its last placement). Lane H-WORLD.
+    pub fn place_world(&mut self, actors: &[crate::world::PawnActor]) {
+        for (pawn, _) in &mut self.pawns {
+            let Some(path) = &pawn.world_path else { continue };
+            if let Some(placement) = actors
+                .iter()
+                .find(|a| &a.path == path)
+                .and_then(|a| world_placement(a.location, a.rotation))
+            {
+                pawn.actor = placement;
+            }
+        }
+    }
+
     /// Advances every pose, skins each pawn and writes its view; call before the scene pass begins, then
     /// [`PawnLayer::draw`] inside it.
     pub fn prepare(
@@ -439,7 +494,7 @@ impl PawnLayer {
                 format!(
                     "pawn {}: {} ({} bones, {} vertices), tree {} ({} nodes, {} evaluated, NotYet passed to the first \
                      child: {})",
-                    p.kind.name,
+                    p.world_path.as_ref().map_or_else(|| p.kind.name.to_string(), |w| format!("{w} ({})", p.def.archetype)),
                     p.def.mesh,
                     p.skeleton.bone_count(),
                     p.mesh.vertices.len(),

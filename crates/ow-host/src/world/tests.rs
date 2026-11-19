@@ -1,0 +1,274 @@
+//! Owner: lane H-WORLD. The world thread on invented packages (AGENTS.md rule 9): an `Engine.upk` with `Actor`,
+//! `WorldInfo` and `Pawn`, and a map whose level lists a `WorldInfo`, an actor and a pawn.
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use ow_object::value::StructValue;
+use ow_package::testkit::script::ScriptToy;
+use ow_package::testkit::reflect::toy_struct;
+use ow_package::testkit::{Export, PackageBuilder, ints};
+
+use super::*;
+
+static NEXT: AtomicU32 = AtomicU32::new(0);
+
+/// `Engine.upk`: `Object`, `Vector`, `Rotator`, `Actor` with what the world's tick reads, `WorldInfo` with the time
+/// fields, `Pawn`, `World` and `Level`.
+fn engine() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&[
+        "Class",
+        "Function",
+        "State",
+        "ScriptStruct",
+        "Enum",
+        "IntProperty",
+        "FloatProperty",
+        "BoolProperty",
+        "NameProperty",
+        "ByteProperty",
+        "ObjectProperty",
+        "ArrayProperty",
+        "StructProperty",
+    ]);
+    let object = t.class("Object", 0);
+    let vector = toy_struct(&mut t, object, "Vector", None);
+    for f in ["X", "Y", "Z"] {
+        t.prop("Float", vector, f, 0, 0);
+    }
+    let rotator = toy_struct(&mut t, object, "Rotator", None);
+    for f in ["Pitch", "Yaw", "Roll"] {
+        t.prop("Int", rotator, f, 0, 0);
+    }
+    let actor = t.class("Actor", object);
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    let values = ["PHYS_None", "PHYS_Walking"];
+    payload.extend(ints(&[0, values.len() as i32]));
+    for v in values {
+        let bytes = t.p.fname(v, 0);
+        payload.extend_from_slice(&bytes);
+    }
+    let mut e = Export::new(t.import("Enum"), "EPhysics", payload);
+    e.outer = actor;
+    let physics = t.p.add_export_with(e);
+    for b in ["bDeleteMe", "bPendingDelete"] {
+        t.prop("Bool", actor, b, 0, 0);
+    }
+    for b in ["Role", "RemoteRole", "TickGroup"] {
+        t.prop("Byte", actor, b, 0, 0);
+    }
+    t.prop("Byte", actor, "Physics", 0, physics);
+    t.prop("Float", actor, "LifeSpan", 0, 0);
+    t.prop("Object", actor, "Base", 0, actor);
+    t.prop("Struct", actor, "Location", 0, vector);
+    t.prop("Struct", actor, "Rotation", 0, rotator);
+    let world_info = t.class("WorldInfo", actor);
+    for f in ["TimeSeconds", "RealTimeSeconds", "TimeDilation", "DeltaSeconds"] {
+        t.prop("Float", world_info, f, 0, 0);
+    }
+    t.class("Pawn", actor);
+    t.class("World", object);
+    t.class("Level", object);
+    t.p.build()
+}
+
+/// A map: `TheWorld` (1), `PersistentLevel` (2), `WorldInfo_0` (3, time dilation 1), `Actor_0` (4), `Pawn_0` (5);
+/// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`; with `walking` its `Physics` is
+/// `PHYS_Walking`.
+fn map(remote_role: u8, walking: bool) -> Vec<u8> {
+    let mut p = PackageBuilder::new_empty();
+    p.names(["None"]);
+    let engine = p.add_import("Core", "Package", 0, "Engine");
+    let class = |p: &mut PackageBuilder, name: &str| p.add_import("Core", "Class", engine, name);
+    let (world, level, world_info, actor, pawn) = (
+        class(&mut p, "World"),
+        class(&mut p, "Level"),
+        class(&mut p, "WorldInfo"),
+        class(&mut p, "Actor"),
+        class(&mut p, "Pawn"),
+    );
+    let add = |p: &mut PackageBuilder, class: i32, name: &str, outer: i32, prefix: usize, tags: Vec<Vec<u8>>, tail: Vec<u8>| {
+        let mut body = vec![0u8; prefix];
+        for t in tags {
+            body.extend_from_slice(&t);
+        }
+        body.extend_from_slice(&p.none());
+        body.extend(tail);
+        let mut export = Export::new(class, name, body);
+        export.outer = outer;
+        p.add_export_with(export)
+    };
+    assert_eq!(add(&mut p, world, "TheWorld", 0, 4, Vec::new(), Vec::new()), 1);
+    let mut tail = ints(&[2, 4, 3, 0, 4, 5]);
+    tail.extend(ints(&[7]));
+    tail.extend_from_slice(b"unreal\0");
+    assert_eq!(add(&mut p, level, "PersistentLevel", 1, 4, Vec::new(), tail), 2);
+    let role = p.byte_tag("Role", 3);
+    let dilation = p.float_tag("TimeDilation", 1.0);
+    assert_eq!(add(&mut p, world_info, "WorldInfo_0", 2, 26, vec![role.clone(), dilation], Vec::new()), 3);
+    assert_eq!(add(&mut p, actor, "Actor_0", 2, 26, vec![role.clone()], Vec::new()), 4);
+    let mut tags = vec![role, p.byte_tag("RemoteRole", remote_role)];
+    if walking {
+        tags.push(p.enum_tag("Physics", "EPhysics", "PHYS_Walking"));
+    }
+    assert_eq!(add(&mut p, pawn, "Pawn_0", 2, 26, tags, Vec::new()), 5);
+    p.build()
+}
+
+/// A builder over a fresh store holding the invented packages, that also moves the pawn to `at` after the load (the
+/// invented `Vector` has no tagged form here, so the placement is written, not read).
+fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
+    builder_with(remote_role, false, at, yaw)
+}
+
+/// [`builder`] with the pawn in `PHYS_Walking` when `walking`, and the host's physics step installed.
+fn builder_with(remote_role: u8, walking: bool, at: [f32; 3], yaw: i32) -> Builder {
+    Box::new(move || {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-host-world-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (engine, map) = (engine(), map(remote_role, walking));
+        let files: [(&str, &[u8]); 2] = [("Engine.upk", &engine), ("Test_P.upk", &map)];
+        let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+            .map_err(|e| e.to_string())?;
+        let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let mut world = World::new(vm, play_balance()?, &[]).map_err(|e| e.to_string())?;
+        install_physics(&mut world)?;
+        let report = load_map(&mut world, &PackageName::parse("Test_P").unwrap()).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&dir);
+        let list = world.actors().borrow().list().to_vec();
+        let pawn = *list.last().unwrap();
+        let space = &mut world.vm.space;
+        let names = [("Location", ["X", "Y", "Z"]), ("Rotation", ["Pitch", "Yaw", "Roll"])];
+        let values = [at.map(Value::Float), [Value::Int(0), Value::Int(yaw), Value::Int(0)]];
+        for ((name, axes), values) in names.into_iter().zip(values) {
+            let class = space.heap.get(pawn).unwrap().class;
+            let p = space.prop(class, name).unwrap();
+            let old = read(space, pawn, name).unwrap();
+            let s = old.as_struct().unwrap();
+            let layout = space.classes.struct_layout(s.ty).unwrap();
+            let mut fields = s.fields.clone();
+            for (axis, v) in axes.into_iter().zip(values) {
+                let (entry, _) = layout.field(space.names.find(axis).unwrap()).unwrap();
+                fields[usize::try_from(entry).unwrap()] = v;
+            }
+            let ty = s.ty;
+            space.write(pawn, PropAddr::scalar(p), Value::Struct(Rc::new(StructValue { ty, fields }))).unwrap();
+        }
+        let actors = list.len();
+        Ok((world, LoadSummary::from_report("Test_P", ParityMode::Off, &report, actors)))
+    })
+}
+
+#[test]
+fn the_loaded_world_ticks_on_its_thread_and_reports_its_pawns() {
+    let (mut link, summary) = WorldLink::spawn(builder(0, [10.0, -20.0, 30.5], 16384)).unwrap();
+    assert_eq!(summary.actors, 3, "{}", summary.text());
+    assert_eq!(summary.levels, vec![("Test_P".to_string(), 4, 3, 0)]);
+    assert_eq!(summary.pending.len(), 3, "the map load's three NotYets are carried");
+    assert_eq!(summary.pawns.len(), 1);
+    let pawn = &summary.pawns[0];
+    assert_eq!((pawn.path.as_str(), pawn.class.as_str()), ("TheWorld.PersistentLevel.Pawn_0", "Engine.Pawn"));
+    assert_eq!(pawn.location, [10.0, -20.0, 30.5]);
+    assert_eq!(pawn.rotation.yaw, 16384);
+    assert_eq!(pawn.archetype, None);
+
+    let dt = 1.0 / 60.0;
+    let mut last = WorldFrame::default();
+    for _ in 0..6 {
+        last = link.tick(dt);
+    }
+    assert_eq!(last.halted, None);
+    assert_eq!(last.ticks, 6);
+    // The WorldInfo's time is the clock's f32 sum of six steps, its delta the last step's.
+    let mut sum = 0.0f32;
+    for _ in 0..6 {
+        sum += dt;
+    }
+    assert_eq!(last.time_seconds, Some(sum));
+    assert_eq!(last.delta_seconds, Some(dt));
+    assert_eq!(last.pawns, summary.pawns, "nothing moves the placed pawn");
+}
+
+#[test]
+fn a_tick_that_fails_halts_the_world_and_names_the_not_yet() {
+    // RemoteRole 2 takes a tick variant the record did not read: the world's tick answers NotYet.
+    let (mut link, _) = WorldLink::spawn(builder(2, [0.0; 3], 0)).unwrap();
+    let first = link.tick(1.0 / 60.0);
+    let halt = first.halted.clone().expect("the first tick halts");
+    assert_eq!(halt.tick, 1);
+    assert!(halt.not_yet, "{}", halt.message);
+    assert!(halt.message.contains("RemoteRole"), "{}", halt.message);
+    assert_eq!((first.ticks, first.time_seconds), (0, Some(1.0 / 60.0)));
+    // A halted world runs no further tick and keeps its answer.
+    assert_eq!(link.tick(1.0 / 60.0), first);
+}
+
+#[test]
+fn the_host_s_physics_step_answers_not_yet_naming_the_actor_and_its_mode() {
+    let (mut link, _) = WorldLink::spawn(builder_with(0, true, [0.0; 3], 0)).unwrap();
+    let frame = link.tick(0.5);
+    let halt = frame.halted.clone().expect("the walking pawn halts the tick");
+    assert!(halt.not_yet, "{}", halt.message);
+    assert!(halt.message.contains("the host's PHYS_Walking physics for a placed Engine.Pawn"), "{}", halt.message);
+    assert!(halt.message.contains(PHYSICS_RECORD), "{}", halt.message);
+    // The clock advanced before the actor pass, and the read-back shows it.
+    assert_eq!((frame.ticks, frame.time_seconds, frame.delta_seconds), (0, Some(0.5), Some(0.5)));
+}
+
+#[test]
+fn a_builder_error_comes_back_from_spawn() {
+    let err = WorldLink::spawn(Box::new(|| Err("no store".to_string()))).unwrap_err();
+    assert_eq!(err, "no store");
+}
+
+/// Sanctuary on the installed game (`OW_BL2_ROOT`): the map loads into a world on the world thread and is ticked for
+/// a second of play steps. Writes `local/p2/h-world/installed.txt`.
+#[test]
+#[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/h-world/"]
+fn sanctuary_world_ticks_on_the_installed_game() {
+    let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
+    let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
+    let (mut link, summary) =
+        WorldLink::spawn(Box::new(move || build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off))).unwrap();
+    let mut text = summary.text();
+    let mut frame = WorldFrame::default();
+    for _ in 0..60 {
+        frame = link.tick(1.0 / 60.0);
+    }
+    text.push_str(&format!(
+        "after 60 requests: {} ticks, TimeSeconds {:?}, DeltaSeconds {:?}, halted {:?}\n",
+        frame.ticks, frame.time_seconds, frame.delta_seconds, frame.halted
+    ));
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/h-world");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("installed.txt"), &text).unwrap();
+    print!("{text}");
+}
+
+/// Diagnostic: the installed Sanctuary world's actors by (class, Physics, Role, RemoteRole, in a state, has Base).
+#[test]
+#[ignore = "reads the installed game (OW_BL2_ROOT); diagnostic"]
+fn sanctuary_tick_census() {
+    let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
+    let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
+    let text = ow_vm::interp::on_vm_stack(move || {
+        let (world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let space = &world.vm.space;
+        let byte = |o, n: &str| match read(space, o, n) { Some(Value::Byte(b)) => i32::from(b), _ => -1 };
+        let mut census: std::collections::BTreeMap<String, usize> = Default::default();
+        for &o in world.actors().borrow().list() {
+            let class = ow_attr::eval::class_path(space, o);
+            let state = space.heap.get(o).unwrap().state.is_some();
+            let base = matches!(read(space, o, "Base"), Some(Value::Object(Some(_))));
+            let key = format!("phys {} role {} remote {} tg {} state {state} base {base} {class}", byte(o, "Physics"), byte(o, "Role"), byte(o, "RemoteRole"), byte(o, "TickGroup"));
+            *census.entry(key).or_default() += 1;
+        }
+        census.iter().map(|(k, n)| format!("{n:5} {k}\n")).collect::<String>()
+    })
+    .unwrap();
+    print!("{text}");
+}

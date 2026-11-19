@@ -84,6 +84,7 @@ pub mod nav;
 pub mod overlay;
 pub mod play;
 pub mod weapon;
+pub mod world;
 
 #[cfg(test)]
 mod tests {
