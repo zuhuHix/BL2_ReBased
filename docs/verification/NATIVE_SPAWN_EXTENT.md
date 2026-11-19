@@ -1,6 +1,6 @@
 # The spawn's extent: the bounding-cylinder rule for a template without a cylinder
 
-AI-assisted (Claude Code, Opus 5.5). Lane LINK-9-NEXT, decision 2026-11-19-101 (file 2026-11-19-91). Analyst note only (clean room): written
+AI-assisted (Claude Code, Opus 5.5). Lane LINK-9-NEXT, decision 2026-11-19-09 (the hub's lane id was -101). Analyst note only (clean room): written
 in own words from local, read-only analysis of `Borderlands2.exe` (`tools/ghidra/run.ps1` queries and the local
 table reader, one headless run at a time under the machine lock), with field names from `tools/ghidra/class_layout.py`.
 Raw output stays under ignored `local/analysis/link9/` and `local/analysis/spawnspot/`. There is no bl-sdk session

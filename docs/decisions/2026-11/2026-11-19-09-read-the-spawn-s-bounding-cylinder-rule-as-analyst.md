@@ -1,8 +1,7 @@
 ## 2026-11-19: Read the spawn's bounding-cylinder rule as analyst
 
 AI-assisted (Claude Code, Opus 5.5). Lane LINK-9-NEXT, which turned into an analyst lane (clean room). New note
-`docs/verification/NATIVE_SPAWN_EXTENT.md`, with NATIVE_INDEX rows. No code changes. The hub's id for this lane is 2026-11-19-101; decision file numbers have two digits, so the file
-takes the next free one the decisions tool names.
+`docs/verification/NATIVE_SPAWN_EXTENT.md`, with NATIVE_INDEX rows. No code changes. The hub's lane id was 2026-11-19-101; decision file numbers have two digits, so the hub assigned 2026-11-19-09.
 
 - **The question.** On #477 (ab5288d), slice link 9 (`phaselock_enemy`) stops at `spawn` on "the actor's
   bounding-cylinder rule". The cast spawns `WillowPlayerPawn` from its class default, whose `CollisionComponent` is
