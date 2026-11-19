@@ -58,11 +58,10 @@ MissionTracker.AllExpansionSideMissionsComplete with a controller …" (`NotYet 
 NATIVE_MISSION_OBJECTIVES.md), the stop the note's section 5 predicted. The run got past the native; its answer on that run was not
 printed, so that it answered false is the note's expectation, not observed.
 
-**Verified:** synthetic tests only (`globals/achievement_tests.rs`, 12 tests on invented packages): the turn-in's
-omitted arguments, no match, the
-string match, the int match with both flags, both matches together, `Achievement` 0 and another type skipped, the call
+**Verified:** synthetic tests only (`globals/achievement_tests.rs`, 13 tests on invented packages): the turn-in's
+omitted arguments, no match, the string match, the int match with both flags, both matches together, `Achievement` 0 and another type skipped, the call
 order, no globals, the two definition refusals (unmarked, nothing loaded), a refusal marked only after a write, a wrong
-`AchievementData`, Reference, and first-wins.
+`AchievementData`, a mistyped `AchievementUnlockData` field, Reference, and first-wins.
 
 **UNVERIFIED:**
 - every rule, in the running game;
