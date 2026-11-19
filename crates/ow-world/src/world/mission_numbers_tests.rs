@@ -623,3 +623,27 @@ fn the_screen_calls_are_layer_absent_and_not_marked_by_themselves() {
     let p = t.vm.space.prop(class, "MissionTextList").unwrap();
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
 }
+
+/// Review r2 of #480, L1: a load inside the VM-dispatched fallback counts for the outer call. The tracker branch answers
+/// 5 and the fallback, loading an unloaded definition numbered 27, answers 27: the outer `NotRead` for the differing
+/// branches comes after that load, so it is marked. The same case with the definition already loaded is not.
+#[test]
+fn a_load_inside_the_dispatched_fallback_marks_the_outer_not_yet() {
+    let gate_unread = Reads { engine_gate: false, playthrough: true };
+    let marked = format!("{}: {ENGINE_GATE}", crate::world::datastore::PARTIAL_WRITES);
+    for loaded_first in [false, true] {
+        let mut t = toy(true);
+        let target = t.unloaded_target();
+        if loaded_first {
+            t.vm.defs.ensure_loaded(&mut t.vm.space, target).unwrap();
+        }
+        t.records(&[&[(Some(target), 1)]]);
+        let tracked = t.mission(true, false, 5);
+        t.track(true, &[]);
+        let tracker = t.tracker;
+        set(&mut t.vm, tracker, "ActiveMission", Value::Object(Some(tracked)));
+        let pc = t.pc;
+        let want = if loaded_first { ENGINE_GATE.to_string() } else { marked.clone() };
+        not_yet(active_mission_number(&mut t.vm, pc, gate_unread).map(Value::Int), false, &want);
+    }
+}

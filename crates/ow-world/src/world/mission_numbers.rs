@@ -56,10 +56,12 @@
 //! - **The calls `SetFocus` makes next** are not reached while the text list refuses. If they are: `GetVariableObject`
 //!   is [`MOVIE_QUERY`] and `WillowGFxMovie3D.FocusOn` is [`FOCUS`], each `NotYet { LayerAbsent }`, never None or
 //!   nothing.
-//! - **The partial-writes mark** (review r1 of #480, item 2): these natives write nothing, so they do not mark their
-//!   own `NotYet`. The mark is applied where a write is known: the mission bridge's accept and turn-in mark a `NotYet`
-//!   that leaves the controller's script after the mission's status changed (`ow_mission::bridge`). A direct call on
-//!   a fresh movie is not marked.
+//! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
+//!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
+//!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
+//!   only script route: the accept, the turn-in and the reward page all reach it) marks a `NotYet` before its own run
+//!   records it; the accept's and the turn-in's own frames mark one that leaves after the status changed. A direct
+//!   call on a fresh movie is not marked.
 //! - **What the accept checks after the screen returns** is the bridge's own code. Nothing here answers for it.
 //!
 //! **Dispatch and lazy loads** (review r1 of #480, items 1 and 3):
@@ -133,25 +135,47 @@ fn bad(unit: &str, message: String) -> VmError {
     VmError::Script { function: unit.to_string(), message }
 }
 
-/// What one native call did: whether it loaded a store definition (a write; module documentation).
+/// The VM's count of the definition loads these natives made (review r2 of #480, L1): kept on the VM, so a load inside
+/// a VM-dispatched callee (the fallback's own native) counts for the outer call too.
 #[derive(Debug, Default)]
+pub struct Loads(u64);
+
+fn loads(vm: &Vm) -> u64 {
+    vm.service::<Loads>().map_or(0, |l| l.borrow().0)
+}
+
+/// One native call: the VM's load count when it began (module documentation).
+#[derive(Debug)]
 struct Cx {
-    wrote: bool,
+    start: u64,
 }
 
 impl Cx {
-    /// The native's result: a `NotYet` after a load is marked once, kind and record kept; other errors unchanged.
-    fn finish<T>(&self, r: Result<T, VmError>) -> Result<T, VmError> {
-        r.map_err(|e| if self.wrote { super::datastore::after_writes(e) } else { e })
+    fn new(vm: &Vm) -> Self {
+        Cx { start: loads(vm) }
+    }
+
+    /// The native's result: a `NotYet` after a load made during the call, its own or a callee's, is marked once, kind
+    /// and record kept; other errors unchanged.
+    fn finish<T>(&self, vm: &Vm, r: Result<T, VmError>) -> Result<T, VmError> {
+        let wrote = loads(vm) > self.start;
+        r.map_err(|e| if wrote { super::datastore::after_writes(e) } else { e })
     }
 }
 
-/// The value of `o.name`, loading an unloaded store definition first (a write, noted on `cx` and on a running settings
-/// refresh); a class that does not declare it is bad data.
-fn field(vm: &mut Vm, cx: &mut Cx, o: ObjRef, name: &str, unit: &str) -> Result<Value, VmError> {
+/// The value of `o.name`, loading an unloaded store definition first (a write, counted on the VM and marked on a running
+/// settings refresh); a class that does not declare it is bad data. A handle whose load already failed is not a new
+/// write: its error comes back unchanged (review r2 of #480, L2).
+fn field(vm: &mut Vm, _cx: &mut Cx, o: ObjRef, name: &str, unit: &str) -> Result<Value, VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
-        cx.wrote = true;
-        super::datastore::mark_written(vm)?;
+        if !vm.defs.is_failed(&vm.space, o) {
+            super::datastore::mark_written(vm)?;
+            let counter = match vm.service::<Loads>() {
+                Some(c) => c,
+                None => vm.add_service(Loads::default())?,
+            };
+            counter.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("Loads"))?.0 += 1;
+        }
         let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
         vm.log.extend(vm.defs.take_log());
         loaded?;
@@ -293,9 +317,9 @@ fn from_tracker(vm: &mut Vm, cx: &mut Cx, tracker: ObjRef, unit: &str) -> Result
 
 /// `GetActiveMissionNumber` on `controller` (module documentation), with `reads` taken as read.
 pub fn active_mission_number(vm: &mut Vm, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
-    let mut cx = Cx::default();
+    let mut cx = Cx::new(vm);
     let r = active_with(vm, &mut cx, controller, reads);
-    cx.finish(r)
+    cx.finish(vm, r)
 }
 
 fn active_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
@@ -322,9 +346,9 @@ fn fallback(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<i32, VmError>
 
 /// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation), with `reads` taken as read.
 pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
-    let mut cx = Cx::default();
+    let mut cx = Cx::new(vm);
     let r = plot_with(vm, &mut cx, controller, index, reads);
-    cx.finish(r)
+    cx.finish(vm, r)
 }
 
 fn plot_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {

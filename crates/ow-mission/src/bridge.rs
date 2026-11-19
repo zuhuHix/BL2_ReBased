@@ -481,6 +481,19 @@ fn call_by_name(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<
     Ok(vm.call(f, Some(o), args)?)
 }
 
+/// A result known to come after a write (review r1 and r2 of #480), Off only: a `NotYet` is marked "stopped after
+/// partial writes" once, kind and record kept; any other result, and every result under Reference, is unchanged.
+fn mark_after_write(vm: &Vm, r: Result<(), MissionError>) -> Result<(), MissionError> {
+    match r {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) if vm.parity == ParityMode::Off => {
+            let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
+            let what = if n.what.starts_with(mark) { n.what.to_string() } else { format!("{mark}: {}", n.what) };
+            Err(VmError::NotYet(NotYet::new(what, n.missing, n.record)).into())
+        }
+        other => other,
+    }
+}
+
 /// Whether `e` is a stop after partial writes (`ow_behavior::kernel::run::PARTIAL_WRITES`), by its variant (review r1
 /// of #464, item 5): a `NotYet` or a script error whose own text **starts** with the mark, as the behavior walk and the
 /// online game settings refresh make them. Any other error is not terminal, whatever its text quotes.
@@ -919,9 +932,12 @@ impl MissionScript {
         }
         let (c, t, def) = (self.inner.o.controller, self.inner.o.tracker, self.inner.mission.definition());
         self.run(vm, |vm| {
-            call_by_name(vm, c, "UpdateMissionStatus", vec![Value::Object(Some(def)), Value::Byte(status)])?;
-            call_by_name(vm, t, "TriggerMissionStatusChangedDelegates", Vec::new())?;
-            Ok(())
+            let r = call_by_name(vm, c, "UpdateMissionStatus", vec![Value::Object(Some(def)), Value::Byte(status)])
+                .and_then(|_| call_by_name(vm, t, "TriggerMissionStatusChangedDelegates", Vec::new()))
+                .map(|_| ());
+            // The hook runs only after the status routine wrote the status (review r2 of #480, H1): a `NotYet` from it
+            // is after a write, so it is marked here, before this run records it, and the run stops on it.
+            mark_after_write(vm, r)
         })
     }
 
@@ -972,16 +988,7 @@ impl MissionScript {
     /// "stopped after partial writes" (once; kind and record kept) and the run stops on it. Any other result, and every
     /// result under Reference, is unchanged.
     fn after_status_write(&self, vm: &Vm, before: tracker::Status, r: Result<(), MissionError>) -> Result<(), MissionError> {
-        match r {
-            Err(BehaviorError::Vm(VmError::NotYet(n)))
-                if vm.parity == ParityMode::Off && self.inner.mission.status() != before =>
-            {
-                let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
-                let what = if n.what.starts_with(mark) { n.what.to_string() } else { format!("{mark}: {}", n.what) };
-                Err(VmError::NotYet(NotYet::new(what, n.missing, n.record)).into())
-            }
-            other => other,
-        }
+        if self.inner.mission.status() != before { mark_after_write(vm, r) } else { r }
     }
 
     /// After `MissionSystem::load_state`: the controller's own record follows the restored status, as the level-load

@@ -335,10 +335,15 @@ fn willowgame() -> Vec<u8> {
             a.final_function(validate, |_| {});
         });
     });
-    // ExpEarn(0, NewMissionStatus): the hook's marker.
+    // ExpEarn(0, NewMissionStatus): the hook's marker. Before it, an invented native standing for the screen the real
+    // UpdateMissionStatus reaches (`ClientUpdateUIMissionList` and on, review r2 of #480): the test sets what it answers
+    // (`Env::status_tail`).
+    let status_tail = native(&mut t, controller, "ToyStatusTail", &[], None, NATIVE);
     script(&mut t, controller, "UpdateMissionStatus", &[param("Object", "Mission", 0, object), param("Byte", "NewMissionStatus", 0, 0)], None, |a, ids| {
         let status = ids.get("NewMissionStatus");
-        a.final_function(exp_earn, |a| {
+        // The tail first: the toy's ExpEarn fails on the missing curve, which ends the body.
+        a.final_function(status_tail, |_| {});
+        a.stmt().final_function(exp_earn, |a| {
             a.int_const(0);
             a.local(status);
         });
@@ -565,6 +570,8 @@ struct Env {
     dir: PathBuf,
     /// What `ToyAcceptTail` answers: nothing, or this `NotYet`.
     tail: Rc<std::cell::RefCell<Option<NotYet>>>,
+    /// What `ToyStatusTail` (in the status hook's `UpdateMissionStatus`) answers: nothing, or this `NotYet`.
+    status_tail: Rc<std::cell::RefCell<Option<NotYet>>>,
 }
 
 impl Drop for Env {
@@ -616,28 +623,35 @@ impl Env {
         let name = PackageName::parse("TestMission").unwrap();
         let mission = MissionSystem::new(&mut world.vm, &name, "ToyMission").expect("mission");
         let script = MissionScript::new(&mut world, &mission).expect("bridge");
-        let tail: Rc<std::cell::RefCell<Option<NotYet>>> = Rc::new(std::cell::RefCell::new(None));
-        let answer = tail.clone();
-        let f = world.vm.find_function("WillowGame.WillowPlayerController.ToyAcceptTail").expect("the toy tail");
-        let key = world.vm.function(f).and_then(|d| d.native_key.clone()).expect("a native");
-        world
-            .vm
-            .register_native(
-                &key,
-                Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
-                    match answer.borrow().clone() {
-                        Some(n) => Err(n.into()),
-                        None => Ok(Value::None),
-                    }
-                }),
-            )
-            .expect("the toy tail binds");
+        let mut tails = Vec::new();
+        for name in ["ToyAcceptTail", "ToyStatusTail"] {
+            let tail: Rc<std::cell::RefCell<Option<NotYet>>> = Rc::new(std::cell::RefCell::new(None));
+            let answer = tail.clone();
+            let f = world.vm.find_function(&format!("WillowGame.WillowPlayerController.{name}")).expect("the toy tail");
+            let key = world.vm.function(f).and_then(|d| d.native_key.clone()).expect("a native");
+            world
+                .vm
+                .register_native(
+                    &key,
+                    Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                        match answer.borrow().clone() {
+                            Some(n) => Err(n.into()),
+                            None => Ok(Value::None),
+                        }
+                    }),
+                )
+                .expect("the toy tail binds");
+            tails.push(tail);
+        }
+        let status_tail = tails.pop().expect("two tails");
+        let tail = tails.pop().expect("two tails");
         Env {
             world,
             mission,
             script,
             dir,
             tail,
+            status_tail,
         }
     }
 
@@ -1939,6 +1953,50 @@ fn a_not_yet_after_the_accepts_status_write_is_marked_and_terminal() {
     // Reference is unchanged: recorded, not marked.
     let mut env = Env::with_mode(false, ParityMode::Reference);
     *env.tail.borrow_mut() = Some(invented());
+    let s = env.script.clone();
+    assert!(s.accept(env.vm(), &DetSet::new()).unwrap());
+    assert_eq!(s.partial_stop(), None);
+}
+
+fn expect_marked(r: Result<bool, MissionError>, what: &str) {
+    let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
+    match r {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+            assert_eq!(n.what, format!("{mark}: {what}"));
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert_eq!(n.record, "an invented record");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review r2 of #480, H1: the screen is reached from the status routine's hook (`UpdateMissionStatus`, a nested run
+/// after the status write). A `NotYet` there is marked before that run records it, so the accept stops on it: the
+/// accept returns the marked `NotYet`, the stop is terminal and the status stays Active. The same for the turn-in
+/// (Complete). Under Reference the hook's `NotYet` is recorded as before.
+#[test]
+fn a_not_yet_from_the_status_hook_is_marked_and_terminal() {
+    let what = "an invented screen call in UpdateMissionStatus";
+    let invented = || NotYet::not_read(what, "an invented record");
+    let mut env = Env::new(false);
+    *env.status_tail.borrow_mut() = Some(invented());
+    let s = env.script.clone();
+    expect_marked(s.accept(env.vm(), &DetSet::new()), what);
+    assert_eq!(env.mission.status(), Status::Active, "nothing rolled back");
+    assert!(s.partial_stop().is_some_and(|p| p.contains(what)), "terminal");
+    // The turn-in: the hook of the Complete status.
+    let mut env = Env::new(false);
+    let (m, s) = (env.mission.clone(), env.script.clone());
+    s.accept(env.vm(), &DetSet::new()).unwrap();
+    m.update_objective(env.vm(), "Only", 0).unwrap();
+    assert_eq!(m.status(), Status::ReadyToTurnIn);
+    *env.status_tail.borrow_mut() = Some(invented());
+    expect_marked(s.turn_in(env.vm()), what);
+    assert_eq!(m.status(), Status::Complete, "nothing rolled back");
+    assert!(s.partial_stop().is_some());
+    // Reference: recorded, not marked, not terminal.
+    let mut env = Env::with_mode(false, ParityMode::Reference);
+    *env.status_tail.borrow_mut() = Some(invented());
     let s = env.script.clone();
     assert!(s.accept(env.vm(), &DetSet::new()).unwrap());
     assert_eq!(s.partial_stop(), None);
