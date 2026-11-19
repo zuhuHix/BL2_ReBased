@@ -26,7 +26,9 @@ check was loosened and no existing `NotYet` guard was relaxed. Reference is unch
      - The per-actor virtuals of pass 1, and pass 2's first call and second event, are "by convention `PreBeginPlay`
        and `PostBeginPlay`, not confirmed". The note's open items ask for them to be confirmed before implementing.
      - Pass 1 routes an actor that "is not static or carries a second flag". That flag is not named, so the case of a
-       static actor is open.
+       static actor is open. Whether pass 2's second event is under the same static condition is open too.
+     - Step 4's engine call after the begun-play flag (the game info call with two outputs) and its engine call on a
+       second object when it exists are not read.
      - The initialisation pass resets "a few per-actor fields", which are not named, and makes per-actor engine calls
        that are not identified.
      - Setting `bBegunPlay` and `bStartup` without the routing would mark every placed actor as having had events it
@@ -43,9 +45,11 @@ check was loosened and no existing `NotYet` guard was relaxed. Reference is unch
      - the URL options (the four world fields taken when `load` is absent);
      - the setup calls;
      - the per-level call after begin play.
-  4. **The local player's play actor (section 4).** The routine `SpawnPlayActor` calls was not read. The local player
-     list is already filled by the caller that makes the controller (`Actors::add_local_player`, decision
-     2026-11-16-81).
+  4. **The local player's play actor (section 4).** The routine `SpawnPlayActor` calls was not read, nor where the
+     engine fills `GamePlayers` (open, note section 4). This project's hook for that list is
+     `Actors::add_local_player` (decision 2026-11-16-81), which the caller that makes the controller calls.
+  5. **Step 6** (the `BandwidthLimit=` option passed to the game info, and the memory-check option) is left out on
+     purpose: a network setting and debug support, not behaviour a single-player run depends on.
 
 - **Proof.**
   - **Synthetic tests**, three new ones, each run in Off and in Reference:
@@ -57,8 +61,9 @@ check was loosened and no existing `NotYet` guard was relaxed. Reference is unch
   - **Installed** (`bringup::tests::sanctuary_brought_up_on_the_installed_game`, ignored by default; pc-hummer, Off;
     output under ignored `local/p2/map-load-natives/`):
     - Sanctuary_P loads in about 7 s: 10 levels, 2,363 placed, 0 refused.
-    - Routing reach: 1,198 actors not static, 1,165 static (open), 0 pending deletion. The 1,165 static actors are
-      the part that hangs on the unnamed second flag.
+    - Routing reach: 1,198 actors not static, 1,165 static (open), 0 pending deletion. For the 1,165 static actors,
+      pass 1's event and pass 2's component calls hang on the unnamed second flag; pass 2's first call reaches them
+      regardless.
     - **Begin-play events raised: 0** (`NotYet`).
     - **Game info chosen: none.** `WorldInfo.Game` is None after the load, so the class choice is `NotYet`.
     - The `WorldInfo` after the load: `bBegunPlay` and `bStartup` false; `TimeSeconds`, `RealTimeSeconds` and
@@ -70,4 +75,7 @@ check was loosened and no existing `NotYet` guard was relaxed. Reference is unch
   a world that already has actors (`ow-mission` bridge, "one bridge per fresh world"). Even joined, the map world has
   not begun play and has no game info. This lane does not change the bridge.
 
-- **UNVERIFIED:** everything in the note, and the reach counts' reading of "static" as `bStatic`.
+- **UNVERIFIED:** everything in the note, the reach counts' reading of "static" as `bStatic`, and of "pending
+  deletion" as `actors::is_destroyed`. The note's second pass (MAP-LOAD-B, decision 2026-11-19-13) corrects the
+  pending-deletion test to `bScriptInitialized`; this lane leaves that correction to MAP-LOAD-C (decision
+  2026-11-19-20), which implements the second pass.
