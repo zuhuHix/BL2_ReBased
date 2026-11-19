@@ -40,6 +40,7 @@ use ow_vm::error::VmError;
 pub mod actions;
 pub mod holds;
 pub mod iterators;
+pub mod movement;
 pub mod record;
 pub mod targets;
 pub mod threat;

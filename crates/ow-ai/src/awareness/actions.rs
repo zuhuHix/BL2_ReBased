@@ -766,6 +766,9 @@ impl NativePack for Pack {
             )?;
         }
         bind_locomotion(vm)?;
+        // W7-AI part 3 (decision 2026-11-19-16): the waits, target records and mind queries of NATIVE_AI_MOVEMENT.md,
+        // Off only; the latent moves it does not bind keep the NotYet below.
+        super::movement::register(vm, bind)?;
         for path in LATENT_MOVES {
             bind(
                 vm,
@@ -1021,6 +1024,13 @@ fn hold_body(list: &'static str, add: bool) -> NativeFn {
         set(c.vm, me, list, Value::Array(Rc::new(items)))?;
         Ok(Value::None)
     })
+}
+
+/// The installed movement host, if any.
+pub(super) fn locomotion_host(vm: &mut Vm) -> Result<Option<Rc<RefCell<dyn Locomotion>>>, VmError> {
+    let b = brains(vm)?;
+    let b = borrow(&b)?;
+    Ok(b.locomotion.clone())
 }
 
 fn locomotion(vm: &mut Vm) -> Result<Rc<RefCell<dyn Locomotion>>, VmError> {

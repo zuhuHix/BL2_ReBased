@@ -41,7 +41,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use ow_core::{FixedHashMap, NotYet, ParityMode};
-use ow_object::ids::{ClassId, FuncId, NameId, ObjRef, PropAddr};
+use ow_object::ids::{ClassId, FuncId, NameId, ObjRef, PropAddr, PropId};
 use ow_object::value::Value;
 use ow_package::PackageId;
 use ow_package::package::Package;
@@ -343,6 +343,10 @@ fn unread_probe(name: &str) -> VmError {
 /// How many restarts on a state change one state-code step makes (the record: "at most five").
 pub const MAX_STATE_RESTARTS: u32 = 5;
 
+/// How many restarts on a state change one action-sequence step makes: the fifth change ends the step
+/// (NATIVE_AI_MOVEMENT.md, "The action-sequence state step"; lane W7-AI part 3, decision 2026-11-19-16).
+pub const MAX_ACTION_SEQUENCE_RESTARTS: u32 = 4;
+
 /// How many runs of state code one step makes in all (a Rust-only bound): a label in a parent state's code also
 /// ends a run, so two states jumping to each other's labels with no latent call between would never stop.
 pub const MAX_RUNS_PER_STEP: u32 = 64;
@@ -413,6 +417,16 @@ struct StateFrame {
 enum Stop {
     Moved,
     Latent,
+    /// The step's gate flag was cleared (an action-sequence step's `bInitialized`).
+    Gated,
+}
+
+/// The bounds of one state-code step: the restarts a state change gets, and the flag that must stay set for code to
+/// run (checked before each run and after each statement).
+#[derive(Debug, Clone, Copy)]
+struct StepRule {
+    restarts: u32,
+    gate: Option<PropId>,
 }
 
 #[derive(Debug)]
@@ -422,6 +436,8 @@ struct Running {
     stop: Option<Stop>,
     /// A `PushState` ran on the object during this run (the position it saved may sit inside a loop).
     pushed: bool,
+    /// The step's gate flag ([`StepRule`]).
+    gate: Option<PropId>,
 }
 
 /// The state frames, the states read so far and the state code running (a VM service, added on first use).
@@ -1313,6 +1329,38 @@ fn name_arg(c: &mut NativeCall<'_>, i: usize) -> Result<NameId, VmError> {
 /// Each run is a call through `Vm::call`: from the top level it gets a fresh step budget, and it shows in a call
 /// trace and the census as `<state path>.<state code>`.
 pub fn process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmError> {
+    step(vm, object, delta, StepRule { restarts: MAX_STATE_RESTARTS, gate: None })
+}
+
+/// One action-sequence state step of `action` with `delta` (NATIVE_AI_MOVEMENT.md, "The action-sequence state step";
+/// lane W7-AI part 3, decision 2026-11-19-16): as [`process_state`], with two differences the note reads: the fifth
+/// state change in one step ends it ([`MAX_ACTION_SEQUENCE_RESTARTS`] restarts), and code runs only while the
+/// action's `bInitialized` stays set (checked before each run and after each statement; the pending latent poll
+/// still runs first). The note's guard of a million statements is the VM's own step budget here. The parent notice
+/// when the code runs out is the caller's. UNVERIFIED in the running game.
+pub fn process_action_sequence(vm: &mut Vm, action: ObjRef, delta: f32) -> Result<(), VmError> {
+    let class = vm.space.heap.get(action)?.class;
+    let gate = vm.space.prop(class, "bInitialized").ok_or_else(|| VmError::Script {
+        function: "action-sequence state step".to_string(),
+        message: "the object declares no bInitialized (not an action sequence)".to_string(),
+    })?;
+    step(vm, action, delta, StepRule { restarts: MAX_ACTION_SEQUENCE_RESTARTS, gate: Some(gate) })
+}
+
+/// Whether `o`'s gate flag is set (no gate: always).
+fn gate_open(vm: &Vm, o: ObjRef, gate: Option<PropId>) -> Result<bool, VmError> {
+    let Some(p) = gate else {
+        return Ok(true);
+    };
+    Ok(matches!(vm.space.read(o, PropAddr::scalar(p))?, Value::Bool(true)))
+}
+
+/// Whether `o` still has state code to run (a code position).
+pub fn has_state_code(vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
+    with(vm, |m| m.frames.get(&o).is_some_and(|fr| fr.code.is_some()))
+}
+
+fn step(vm: &mut Vm, object: ObjRef, delta: f32, rule: StepRule) -> Result<(), VmError> {
     if vm.parity == ParityMode::Reference || vm.space.heap.get(object)?.destroyed {
         return Ok(());
     }
@@ -1328,7 +1376,7 @@ pub fn process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmEr
     }
     let mut restarts = 0;
     for _ in 0..MAX_RUNS_PER_STEP {
-        if vm.space.heap.get(object)?.destroyed {
+        if vm.space.heap.get(object)?.destroyed || !gate_open(vm, object, rule.gate)? {
             return Ok(());
         }
         let next = with(vm, |m| {
@@ -1350,16 +1398,17 @@ pub fn process_state(vm: &mut Vm, object: ObjRef, delta: f32) -> Result<(), VmEr
                 state: pos.state,
                 stop: None,
                 pushed: false,
+                gate: rule.gate,
             })
         })?;
         let ran = vm.call(function, Some(object), Vec::new());
         let stop = with(vm, |m| m.running.pop().and_then(|r| r.stop))?;
         ran?;
         match stop {
-            Some(Stop::Latent) => return Ok(()),
+            Some(Stop::Latent | Stop::Gated) => return Ok(()),
             Some(Stop::Moved) => {
                 if changes(vm, object)? != before {
-                    if restarts == MAX_STATE_RESTARTS {
+                    if restarts == rule.restarts {
                         return Ok(());
                     }
                     restarts += 1;
@@ -1436,6 +1485,7 @@ pub(crate) fn yields(vm: &mut Vm, o: ObjRef, no_loop: bool) -> Result<bool, VmEr
         )
         .into());
     }
+    let gate = with(vm, |m| m.running.last().filter(|r| r.object == o).and_then(|r| r.gate))?;
     let destroyed = vm.space.heap.get(o).map_or(true, |x| x.destroyed);
     let (moved, latent) = with(vm, |m| {
         m.frames
@@ -1444,6 +1494,8 @@ pub(crate) fn yields(vm: &mut Vm, o: ObjRef, no_loop: bool) -> Result<bool, VmEr
     })?;
     let stop = if destroyed || moved {
         Stop::Moved
+    } else if !gate_open(vm, o, gate)? {
+        Stop::Gated
     } else if latent {
         if !no_loop {
             return Err(NotYet::not_read(
