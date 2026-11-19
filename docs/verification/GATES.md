@@ -134,6 +134,18 @@ in Off from NATIVE_AUTO_STATE.md section 5 (#540). `cargo build --workspace --lo
 merge with #537 at 3d25b4a; no row reaches `GotoState('Auto')`. ctest and verify_packages not run (no C++ change). No real-game run;
 `UNVERIFIED` in game. Decision 2026-11-19-156.
 
+**IMPL-LINK12-UNLOCK-ACHIEVEMENT (2026-11-19, zuhu desktop, on origin/main d52bcc7):** AI-assisted (Claude Code, Opus
+5.5). `WillowPlayerController.UnlockAchievementIfConditionsMet` in Off, from
+NATIVE_UNLOCK_ACHIEVEMENT_IF_CONDITIONS_MET.md (#541); the Fire driver preloads the installed globals definition (a
+harness input); #518's counter files copied from 1f1a2bc. `cargo build --workspace --locked` clean; `cargo test
+--workspace --locked` 2,457 passed / 0 failed / 46 ignored (run before the last two commits; `ow-inventory` 192 and
+`ow-cli` re-run after them, all passing); `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict, on a
+local merge of this branch with #533, #496, #497, #509, #512, #524 and #526 (never pushed): 3 ok / 2 NotYet / 9
+errors. Links 10 and 11 ok; link 12 passes 1 of 6 driver steps (`use`) and gets past the native to the port's own
+"stopped after partial writes: MissionTracker.AllExpansionSideMissionsComplete with a controller …" (`NotYet
+{ NotRead }`, NATIVE_MISSION_OBJECTIVES.md). ctest and verify_packages not run (no C++ change). No real-game run;
+`UNVERIFIED` in game. Decision 2026-11-19-NNN (unlock achievement); logs under ignored `local/p2/link12-unlock/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

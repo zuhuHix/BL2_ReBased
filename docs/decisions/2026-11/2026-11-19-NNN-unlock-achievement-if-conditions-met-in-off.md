@@ -29,6 +29,11 @@ a key already bound is kept. Reference is unchanged, so the VM's stub policy ans
    refusals propagate. A `NotYet` is marked "stopped after partial writes: " if and only if #518's counters moved since
    the native's entry (committed writes, draws, load transitions).
 
+**Omitted arguments.** An argument that is omitted, or arrives as `Value::None` (how the VM passes an omitted
+optional parameter; the turn-in omits `StringData` and the last two flags), reads as its type's zero: 0, the empty
+string, false. This is `ow-world`'s `arg_bool` convention. The first installed gate run showed it: without it, link 12
+stopped at "StringData is None, not a string".
+
 **#518's counters.** They are not on main. The counter files were checked out byte-identical from
 `fix/rust-483-followup` 1f1a2bc: `ow-core` `rand.rs`, `ow-object` `heap.rs`, `ow-defs` `store.rs`, and `ow-vm`
 `api.rs`, `interp/aggregate.rs`, `interp/eval.rs`, `interp/mod.rs`, `natives_core.rs` and `states.rs`. Main had not
@@ -44,7 +49,16 @@ world now calls it too, with the same steps in the same order, except that a rea
 - The first load's challenge numbering is not run (NATIVE_WILLOW_GLOBALS.md section 6.1).
 - An UNVERIFIED stand-in for the game's own first load.
 
-**Verified:** synthetic tests only (`globals/achievement_tests.rs`, 11 tests on invented packages): no match, the
+**The slice gate.** `--slice-gate` builds its Fire world itself, so it calls the same set-up after
+`FireMissionSlice::new`. Installed, in Off and strict, on a throwaway local merge with #533, #496, #497, #509, #512,
+#524 and #526: 3 ok / 2 NotYet / 9 errors. Links 10 and 11 are ok. Link 12 passes 1 of 6 steps (`use`) and now stops
+in `turnin` at the port's own existing refusal, "stopped after partial writes:
+MissionTracker.AllExpansionSideMissionsComplete with a controller …" (`NotYet { NotRead }`,
+NATIVE_MISSION_OBJECTIVES.md), the stop the note's section 5 predicted. The run got past the native; its answer on that run was not
+printed, so that it answered false is the note's expectation, not observed.
+
+**Verified:** synthetic tests only (`globals/achievement_tests.rs`, 12 tests on invented packages): the turn-in's
+omitted arguments, no match, the
 string match, the int match with both flags, both matches together, `Achievement` 0 and another type skipped, the call
 order, no globals, the two definition refusals (unmarked, nothing loaded), a refusal marked only after a write, a wrong
 `AchievementData`, Reference, and first-wins.
