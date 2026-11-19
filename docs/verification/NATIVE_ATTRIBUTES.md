@@ -297,6 +297,10 @@ only when a playthrough number read from the game state is above 1, so they shou
   is emptied and the value is reset to its base; afterwards the weapon's `WeaponAttributeModifiers` bookkeeping array is
   emptied. A weapon rebuild therefore starts from the bases and reapplies all effects (NATIVE_WEAPON_RULES section 1 order).
   The reset covers the properties of the weapon class as declared (inherited ones were not confirmed).
+  *Correction 2026-11-19 (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md, lane ANALYST-RECOMPUTE-ATTRIBUTE-BASE-VALUES):
+  the direction is the other way. Each own-class stack attribute's base is overwritten with a copy of its value, and
+  then its stack is emptied. So the value is kept and the effects are baked in; it is not reset. Reading the walk
+  as own declared fields only leaves `Engine.Weapon`'s triples untouched. UNVERIFIED in game.*
 - **WillowItem.RecomputeAttributeBaseValues, Controller / WillowPlayerController / WillowMind / WillowVehicle
   RecalculateAttributeInitializedState**: thin native thunks that call a virtual method; the bodies were not reached
   (the class vtables could not be resolved by name). Script calls them after level or class changes.
