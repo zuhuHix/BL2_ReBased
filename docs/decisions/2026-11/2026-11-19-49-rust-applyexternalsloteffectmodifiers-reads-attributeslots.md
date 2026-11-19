@@ -15,7 +15,21 @@ game.
   structs (a dynamic array included), or with a negative dimension. Nothing else changes: the filter (activated,
   external, not a skill, an attribute), the count of `MaxSlotsActivated`, the stored value and the context order are
   as in decision 03.
-- **Verified on invented data** (`ow-inventory` natives tests, 14 of 14):
+- **Review r1 of #438.** Two changes:
+  - The read is limited by the count. Only the first `MaxSlotsActivated` slots are read from the heap, and at most
+    the dimension. A count of 0 or below reads none, so a slot past the count can no longer fail the call.
+  - The declaration is checked first, whatever the count. The declared struct must hold the six fields the native
+    reads, each as its kind: `bActivated`, `bExternalSlot` and `bRunEffectsAsSkill` as bools, `AttributeToModify` as
+    an object, `ModifierType` as a byte and `ComputedModifierValue` as a float. A struct that lacks one is refused as
+    a data error. Before, a struct holding only a false `bActivated` passed, because every slot was skipped before
+    its other fields were read.
+- **Verified on invented data** (`ow-inventory` natives tests, 16 of 16 since review r1). Two of the tests are new in
+  review r1:
+  - an item whose heap ends just after slot 0 gives that slot's effect with a count of 1, and nothing with a count of
+    0 or -3; a count of 2 reaches the missing slot and is an error;
+  - a struct with only `bActivated`, and one that declares `ModifierType` as an int, are refused, with a count of 0
+    too.
+  The tests from before review r1:
   - New, `slot_package_tests.rs`: an invented `WillowGame.upk` declares `AttributeSlots` with a dimension of 3,
     through the package test kit (`ScriptToy`, `property_payload`). The loaded declaration carries 3. Every declared
     slot is read in index order, and the first and last are applied. A count above the dimension stops at it, and a

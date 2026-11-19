@@ -26,9 +26,10 @@
 //!   modifiers, the context order and "a failed add leaves nothing recorded" are that function's. The value is read
 //!   as stored; how `InitializeAttributeSlots` computes it is not read (NATIVE_ATTRIBUTES.md section 9, "Open").
 //!   The slots are read as the item's class declares them, a static array of slot structs (`AttributeSlots[19]` in the
-//!   installed `WillowInventory`), as many as the declaration's dimension ([`attribute_slots`], lane
-//!   FIX-ATTRIBUTE-SLOTS, decision 2026-11-19-49). The first version read them as a dynamic array, which the
-//!   installed class is not.
+//!   installed `WillowInventory`), the first `MaxSlotsActivated` of them and at most the declaration's dimension
+//!   ([`attribute_slots`], lane FIX-ATTRIBUTE-SLOTS, decision 2026-11-19-49). The first version read them as a dynamic
+//!   array, which the installed class is not. The declaration, including the six slot fields and their kinds, is
+//!   checked before any slot is read, and no slot past the count is read (review r1 of #438).
 //!
 //! **Reference** (architecture rule R3): the C++ VM binds none of these, so [`register`] binds nothing there and the
 //! stub policy answers, as before.
@@ -212,11 +213,34 @@ fn flag(vm: &Vm, slot: &Value, name: &str) -> Result<bool, VmError> {
     }
 }
 
-/// `item`'s `AttributeSlots`, as its class declares the property: a static array of `AttributeSlotData` structs (the
-/// installed `WillowInventory` declares `AttributeSlots[19]`), read element by element in index order, as many as the
-/// declaration's `array_dim` (lane FIX-ATTRIBUTE-SLOTS). A class that declares no `AttributeSlots`, or declares it as
-/// anything but structs, is a data error.
-pub fn attribute_slots(vm: &Vm, item: ObjRef) -> Result<Vec<Value>, VmError> {
+/// The slot fields the native reads, each with the kind it must be declared as (`AttributeSlotData`).
+const SLOT_FIELDS: [(&str, &str); 6] = [
+    ("bActivated", "a bool"),
+    ("bExternalSlot", "a bool"),
+    ("bRunEffectsAsSkill", "a bool"),
+    ("AttributeToModify", "an object"),
+    ("ModifierType", "a byte"),
+    ("ComputedModifierValue", "a float"),
+];
+
+/// Whether `kind` is the one `SLOT_FIELDS` names as `want`.
+fn slot_field_kind(kind: &PropKind, want: &str) -> bool {
+    match want {
+        "a bool" => matches!(kind, PropKind::Bool),
+        "an object" => matches!(kind, PropKind::Object { .. }),
+        "a byte" => matches!(kind, PropKind::Byte { .. }),
+        "a float" => matches!(kind, PropKind::Float),
+        _ => false,
+    }
+}
+
+/// `item`'s first `max` `AttributeSlots` (none for a count of 0 or below), as its class declares the property: a
+/// static array of `AttributeSlotData` structs (the installed `WillowInventory` declares `AttributeSlots[19]`), read
+/// element by element in index order, at most the declaration's `array_dim` (lane FIX-ATTRIBUTE-SLOTS). The
+/// declaration is checked first, whatever the count: a class that declares no `AttributeSlots`, declares it as
+/// anything but structs, with a negative dimension, or of a struct without one of the six slot fields as its kind
+/// (review r1 of #438), is a data error. No element past the count is read.
+pub fn attribute_slots(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Value>, VmError> {
     let class = vm.space.heap.get(item)?.class;
     let declared = |what: &str| {
         bad(
@@ -233,21 +257,38 @@ pub fn attribute_slots(vm: &Vm, item: ObjRef) -> Result<Vec<Value>, VmError> {
         .classes
         .decl(p)
         .ok_or_else(|| declared("has no declaration for AttributeSlots"))?;
-    if !matches!(decl.kind, PropKind::Struct(_)) {
+    let PropKind::Struct(ty) = decl.kind else {
         return Err(declared("declares AttributeSlots as something other than slot structs"));
-    }
+    };
     let dim = u32::try_from(decl.array_dim).map_err(|_| declared("declares AttributeSlots with a negative dimension"))?;
-    (0..dim)
+    let layout = vm
+        .space
+        .classes
+        .struct_layout(ty)
+        .ok_or_else(|| declared("declares AttributeSlots of a struct with no layout"))?;
+    for (name, want) in SLOT_FIELDS {
+        let ok = vm
+            .space
+            .names
+            .find(name)
+            .and_then(|id| layout.field(id))
+            .is_some_and(|(_, d)| d.array_dim == 1 && slot_field_kind(&d.kind, want));
+        if !ok {
+            return Err(declared(&format!(
+                "declares AttributeSlots of a struct without {name} as {want}"
+            )));
+        }
+    }
+    let count = u32::try_from(max).unwrap_or(0).min(dim);
+    (0..count)
         .map(|i| Ok(vm.space.read(item, PropAddr::element(p, i))?.clone()))
         .collect()
 }
 
 /// The effects `ApplyExternalSlotEffectModifiers` applies for `item`'s first `max` slots (module documentation).
 pub fn external_slot_effects(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<EffectData>, VmError> {
-    let slots = attribute_slots(vm, item)?;
-    let count = usize::try_from(max.max(0)).unwrap_or(0).min(slots.len());
     let mut out = Vec::new();
-    for slot in &slots[..count] {
+    for slot in &attribute_slots(vm, item, max)? {
         if !flag(vm, slot, "bActivated")?
             || !flag(vm, slot, "bExternalSlot")?
             || flag(vm, slot, "bRunEffectsAsSkill")?

@@ -120,7 +120,7 @@ fn the_slots_are_read_as_the_package_declares_them_a_static_array() {
     // The first and the last declared slots hold an effect; the middle one keeps its zeroed default (not activated).
     x.set_slot(0, attribute, 2.0);
     x.set_slot(DIM - 1, attribute, 0.25);
-    assert_eq!(attribute_slots(&x.vm, x.item).unwrap().len(), 3);
+    assert_eq!(attribute_slots(&x.vm, x.item, 19).unwrap().len(), 3, "a count above the dimension reads all three");
     let all = external_slot_effects(&x.vm, x.item, 19).unwrap();
     let values: Vec<f32> = all.iter().map(|e| e.base_modifier_value.base_value_constant).collect();
     assert_eq!(values, [2.0, 0.25], "every declared slot, in index order; a count above the dimension stops at it");
