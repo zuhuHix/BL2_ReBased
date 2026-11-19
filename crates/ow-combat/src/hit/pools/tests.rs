@@ -104,16 +104,11 @@ fn package() -> Vec<u8> {
             Some(a)
         },
     );
-    for name in [
-        "HealthResourcePool",
-        "AmmoResourcePool",
-        "ExperienceResourcePool",
-        "UnrecordedPool",
-    ] {
+    // `HealthResourcePool` is an Engine class in the installed packages; the other three recorded pools are
+    // WillowGame's (`willow_package`). `AmmoResourcePool` here is an invented decoy: the same name in the wrong package.
+    for name in ["HealthResourcePool", "UnrecordedPool", "AmmoResourcePool"] {
         t.class(name, pool);
     }
-    let shield = t.class("ShieldResourcePool", pool);
-    t.class("FurtherPool", shield);
     let manager = t.class("ResourcePoolManager", actor);
     t.prop("Object", manager, "Owner", 0, object);
     let payload = property_payload(&t.none, 16, 0, &ints(&[pool]));
@@ -121,6 +116,19 @@ fn package() -> Vec<u8> {
     slots.outer = manager;
     t.p.add_export_with(slots);
     native(&mut t, manager, "ShutDown", &[], None);
+    t.p.build()
+}
+
+/// `WillowGame.upk` (invented): the three recorded pool classes the installed game declares there, and a further
+/// shield subclass, each over the Engine package's `ResourcePool`.
+fn willow_package() -> Vec<u8> {
+    let mut t = ScriptToy::new(&["Int"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let pool = t.p.add_import("Core", "Class", engine, "ResourcePool");
+    t.class("AmmoResourcePool", pool);
+    t.class("ExperienceResourcePool", pool);
+    let shield = t.class("ShieldResourcePool", pool);
+    t.class("FurtherPool", shield);
     t.p.build()
 }
 
@@ -135,10 +143,10 @@ impl Fx {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
-        let bytes = package();
+        let (bytes, willow) = (package(), willow_package());
         let defs = DefStore::from_synthetic(
             &dir,
-            &[("Engine.upk", &bytes)],
+            &[("Engine.upk", &bytes), ("WillowGame.upk", &willow)],
             IdentityPolicy::FirstInScanOrder,
             mode,
         )
@@ -170,7 +178,9 @@ impl Fx {
         &mut self.world.vm
     }
     fn make(&mut self, class: &str) -> ObjRef {
-        let class = self.vm().find_class(&format!("Engine.{class}")).unwrap();
+        // A bare name is an Engine class; a qualified one is taken as it is.
+        let path = if class.contains('.') { class.to_string() } else { format!("Engine.{class}") };
+        let class = self.vm().find_class(&path).unwrap();
         ow_vm::interp::instantiate_from_defaults(self.vm(), class).unwrap()
     }
     fn set(&mut self, o: ObjRef, name: &str, value: Value) {
@@ -241,8 +251,8 @@ fn reset_stamps_only_the_timer_for_every_recorded_empty_hook() {
         for class in [
             "ResourcePool",
             "HealthResourcePool",
-            "AmmoResourcePool",
-            "ExperienceResourcePool",
+            "WillowGame.AmmoResourcePool",
+            "WillowGame.ExperienceResourcePool",
         ] {
             let pool = x.make(class);
             for (i, name) in [
@@ -277,7 +287,13 @@ fn shield_and_unknown_hooks_refuse_after_the_stamp_without_other_pool_mutations(
     run(|| {
         let mut x = Fx::new(ParityMode::Off);
         x.time(21.5);
-        for class in ["ShieldResourcePool", "UnrecordedPool", "FurtherPool"] {
+        // The Engine decoy `AmmoResourcePool` refuses: only the installed package's identity is recorded.
+        for class in [
+            "WillowGame.ShieldResourcePool",
+            "UnrecordedPool",
+            "WillowGame.FurtherPool",
+            "AmmoResourcePool",
+        ] {
             let pool = x.make(class);
             let definition = x.make("Object");
             let provider = x.make("Object");
@@ -492,7 +508,7 @@ fn reference_keeps_its_stamp_and_existing_unbound_natives() {
     run(|| {
         let mut x = Fx::new(ParityMode::Reference);
         x.time(12.5);
-        let pool = x.make("ShieldResourcePool");
+        let pool = x.make("WillowGame.ShieldResourcePool");
         x.call("ResourcePool.ResetIdleTimer", pool, vec![]).unwrap();
         assert_eq!(x.value(pool, "PoolIdleDelayStartTime"), Value::Float(12.5));
         for key in [
