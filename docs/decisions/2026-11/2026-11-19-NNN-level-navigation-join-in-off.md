@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-MAPLOAD-NAVLIST, the navigation lane of
 docs/rust-port/SLICE_MAPLOAD.md. Coded from docs/verification/NATIVE_MAP_LOAD.md sections 5 and 6 alone (#536 at
-43a75d9c). Clean room: lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR read the executable; this lane did not open it or the
+d89963fe). Clean room: lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR read the executable; this lane did not open it or the
 analysis output. Synthetic fixtures only. No live session was run.
 
 - **What changes (`ow-world` `world::nav_join`, new; wired in `world.rs`).** A level's navigation, cover and pylon
@@ -13,7 +13,8 @@ analysis output. Synthetic fixtures only. No live session was run.
       in the world's list of the same kind; an entry not of the kind's class (`NavigationPoint`, `CoverLink`, `Pylon`);
       a world list that loops;
     - a level whose start is already in the world's list is a second join, a no-op for that kind (a port answer). A
-      level some of whose set kinds are joined and others not is refused;
+      level some of whose set kinds are joined and others not is refused. **That refusal is a port addition:** the
+      note's per-kind no-op (5.3, item 4) would join the rest;
     - then the splices run in the order navigation, cover, pylon: `end.<link> = head`, then `head = start`, on
       `nextNavigationPoint` / `NavigationPointList`, `NextCoverLink` / `CoverList`, and `NextPylon` / `PylonList`;
     - membership is per kind, so one actor may be in two kinds;
@@ -23,9 +24,13 @@ analysis output. Synthetic fixtures only. No live session was run.
     pairs (their position after the URL is not decoded)". No structural locator is known, and no offset is guessed
     (rule 4).
   - `join_level(vm, world_info, level)` is the pairs read, then the join. So today it stops at that refusal.
-- **A port choice against the note's game reading.** The note reads the game's join as skipping a kind unless both
-  ends are set. The port refuses a half-null pair instead, as the note's proposed rule and the hub's brief say,
-  because it is damaged data.
+- **Two port choices against the note's game reading** (both UNVERIFIED):
+  - **a half-null pair.** The note reads the game's join as skipping a kind unless both ends are set. The port
+    refuses the pair instead, as the note's proposed rule and the hub's brief say. That rests on an assumption, that
+    such a pair is damaged data. The cost: a real level with one would stop the bring-up where the game carries on;
+  - **cover and pylon without navigation.** Note 5.2 reads the join as running only for a level whose navigation
+    start and end are both set. The port joins a level's cover and pylon pairs even when its navigation pair is null,
+    each kind on its own, as the note's proposed rule 5.3 has it.
 - **Left out** (note 5.2; 5.3, items 6 and 7):
   - the per-point engine call the game's join makes first. It is not read, so a later stop that needs it raises it;
   - the streamed levels' joins and their order relative to the persistent level's (open question 1);
@@ -48,3 +53,14 @@ analysis output. Synthetic fixtures only. No live session was run.
   - a receiver that is not a `WorldInfo`.
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's live check 1 (walking
   `NavigationPointList` right after Sanctuary loads) would confirm the join order.
+- **Review r1 of #544:**
+  - the preflight now also checks the two writes against their fields' declared classes: the level's start against
+    `WorldInfo.<head>`, and the world's head (when set) against the end's `<link>`. Before, a narrower-declared field
+    (a `CoverList` of a `CoverLink` subclass, say) failed the typed write after the navigation list was already
+    spliced, leaving the world half joined with no mark. The refusal is `NotRead`, "a list entry that is not of the
+    class its list field declares". The field ids are resolved in the preflight and carried to the splices;
+  - `join_level` checks the mode first, so under Reference it is `NotPorted`, not the pairs read's `NotRead`;
+  - the half-null refusal, the partly-joined refusal and the cover/pylon divergence are labelled as port choices above;
+  - the source is #536 at d89963fe;
+  - tests: 9 (added a narrower-declared `CoverList`, which leaves the navigation list unspliced, and pylon-kind
+    refusals); `cargo test -p ow-world` 229 passed, 0 failed, 5 ignored; clippy shows nothing in these files.

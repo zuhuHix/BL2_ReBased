@@ -22,6 +22,11 @@ struct Fx {
 }
 
 fn fx_mode(parity: ParityMode) -> Fx {
+    fx_with(parity, false)
+}
+
+/// The fixture; `narrow_cover`: `WorldInfo.CoverList` declares `Engine.NarrowCoverLink`, a subclass of `CoverLink`.
+fn fx_with(parity: ParityMode, narrow_cover: bool) -> Fx {
     let mut s = ObjectSpace::new();
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let obj = PropKind::Object { class: object };
@@ -30,12 +35,18 @@ fn fx_mode(parity: ParityMode) -> Fx {
     let decls = vec![d(&mut s, "nextNavigationPoint")];
     let nav = s.classes.define("Engine.NavigationPoint", Some(actor), decls).unwrap();
     let decls = vec![d(&mut s, "NextCoverLink")];
-    s.classes.define("Engine.CoverLink", Some(nav), decls).unwrap();
+    let cover = s.classes.define("Engine.CoverLink", Some(nav), decls).unwrap();
+    let narrow = s.classes.define("Engine.NarrowCoverLink", Some(cover), vec![]).unwrap();
     let decls = vec![d(&mut s, "NextPylon")];
     s.classes.define("Engine.Pylon", Some(nav), decls).unwrap();
     s.classes.define("Engine.PlayerStart", Some(nav), vec![]).unwrap();
     s.classes.define("Engine.Prop", Some(actor), vec![]).unwrap();
-    let decls = vec![d(&mut s, "NavigationPointList"), d(&mut s, "CoverList"), d(&mut s, "PylonList")];
+    let cover_list = if narrow_cover {
+        PropertyDecl::new(s.names.intern("CoverList"), PropKind::Object { class: narrow })
+    } else {
+        d(&mut s, "CoverList")
+    };
+    let decls = vec![d(&mut s, "NavigationPointList"), cover_list, d(&mut s, "PylonList")];
     let wi_class = s.classes.define("Engine.WorldInfo", Some(actor), decls).unwrap();
     let wi = s.alloc(wi_class, "WorldInfo_0", None, Origin::Runtime).unwrap();
     let vm = Vm::new(s, DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), parity);
@@ -259,6 +270,45 @@ fn reference_has_no_join() {
         other => panic!("{other:?}"),
     }
     assert_eq!(x.world(ListKind::Navigation), vec![]);
+    // `join_level` checks the mode before the pairs read (review r1 of #544, item 6).
+    let level = x.obj("Engine.Prop", "PersistentLevel");
+    let wi = x.wi;
+    match join_level(&mut x.vm, wi, level) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.missing, Missing::NotPorted, "{n}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Review r1 of #544, item 1: a start the world's head field cannot hold (its declared class is narrower than the
+/// kind's) is refused in the preflight, so the navigation list is not spliced before the cover write would fail.
+#[test]
+fn a_start_the_head_field_cannot_hold_is_refused_before_any_splice() {
+    let mut x = fx_with(ParityMode::Off, true);
+    let s = x.obj("Engine.PlayerStart", "Start");
+    let c = x.obj("Engine.CoverLink", "Cover");
+    let before = x.snapshot(&[s, c]);
+    refused(x.join(&LevelLists { navigation: pair(s, s), cover: pair(c, c), ..LevelLists::default() }), DECLARED);
+    assert_eq!(x.snapshot(&[s, c]), before, "nothing spliced");
+    assert_eq!(x.world(ListKind::Navigation), vec![]);
+    // A start of the declared class joins.
+    let n = x.obj("Engine.NarrowCoverLink", "Narrow");
+    let out = x.join(&LevelLists { navigation: pair(s, s), cover: pair(n, n), ..LevelLists::default() }).unwrap();
+    assert_eq!((out.navigation, out.cover), (KindOutcome::Joined, KindOutcome::Joined));
+}
+
+/// A pylon-kind refusal stops the navigation splice too.
+#[test]
+fn a_pylon_refusal_stops_the_whole_join() {
+    let mut x = fx();
+    let s = x.obj("Engine.PlayerStart", "Start");
+    let (p1, p2) = (x.obj("Engine.Pylon", "Pylon_1"), x.obj("Engine.Pylon", "Pylon_2"));
+    let before = x.snapshot(&[s, p1, p2]);
+    refused(x.join(&LevelLists { navigation: pair(s, s), pylon: pair(p1, p2), ..LevelLists::default() }), MISSES_END);
+    refused(
+        x.join(&LevelLists { navigation: pair(s, s), pylon: ListPair { start: None, end: Some(p2) }, ..LevelLists::default() }),
+        HALF,
+    );
+    assert_eq!(x.snapshot(&[s, p1, p2]), before);
 }
 
 /// Malformed shapes are script errors: a receiver that is not a `WorldInfo`.

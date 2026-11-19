@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-MAPLOAD-NAVLIST (decision 2026-11-19-NNN, number pending). A level's navigation, cover and pylon
 //! lists joined onto the world's, in `ParityMode::Off`, coded from docs/verification/NATIVE_MAP_LOAD.md sections 5 and 6
-//! alone (#536 at 43a75d9c; clean room: lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR read the executable, this lane did not).
+//! alone (#536 at d89963fe; clean room: lane ANALYST-MAPLOAD-NAVLIST-PLAYACTOR read the executable, this lane did not).
 //! AI-assisted (Claude Code). **Every rule here is UNVERIFIED in the running game.**
 //!
 //! **Nothing calls it yet.** The persistent level's join belongs in the bring-up's begin-play-once step, after the game
@@ -16,20 +16,29 @@
 //! 1. **A write-free preflight of all three kinds** before any splice. Per kind:
 //!    - a null pair (both ends None) is a no-op for that kind ([`KindOutcome::Empty`]);
 //!    - a half-null pair is refused ([`HALF`]). The note reads the game's join as skipping such a kind; the port
-//!      refuses it as damaged data (the note's proposed rule);
+//!      refuses it, following the note's proposed rule, on the assumption (UNVERIFIED) that such a pair is damaged
+//!      data. The cost: a real level with one would stop the bring-up where the game carries on;
 //!    - the world's list of the kind is walked from its head; one that loops, or holds an entry not of the kind's
 //!      class, is refused ([`WORLD_LOOP`], [`NOT_OF_KIND`]);
 //!    - a level whose start is already in the world's list of that kind was joined before: a no-op for that kind
 //!      ([`KindOutcome::AlreadyJoined`]; a port answer, the game guards it with a per-level flag on the streaming
-//!      path). A level some of whose set kinds are joined and others not is refused ([`PARTLY_JOINED`]);
+//!      path). A level some of whose set kinds are joined and others not is refused ([`PARTLY_JOINED`]): a port
+//!      addition, where the note's per-kind no-op would join the rest;
 //!    - otherwise the level's chain is walked from its start along the kind's link. It must reach the end and find None
 //!      after it ([`MISSES_END`], [`PAST_END`]), never revisit an entry ([`LOOP`]), never pass through an entry of the
-//!      world's list of the same kind ([`SHARED`]), and hold only entries of the kind's class ([`NOT_OF_KIND`]).
+//!      world's list of the same kind ([`SHARED`]), and hold only entries of the kind's class ([`NOT_OF_KIND`]);
+//!    - the two writes are checked too (review r1 of #544): the level's start against the class `WorldInfo`'s head
+//!      field declares, and the world's head (when set) against the class the end's link field declares, so no
+//!      typed write can fail after an earlier kind was spliced ([`DECLARED`]).
 //!
 //!    The membership tests are per kind: one actor may be in two kinds (a pylon is in the navigation list and the
 //!    pylon list).
 //! 2. **The splices**, only once every kind has passed, in the order navigation, cover, pylon: the level's end's link
 //!    becomes the world's head, then the world's head becomes the level's start ([`ListKind`] names the fields).
+//!
+//! **A divergence from the note's game reading:** note 5.2 reads the game's join as running only for a level whose
+//! navigation start and end are both set. The port joins a level's cover and pylon pairs even when its navigation
+//! pair is null (each kind on its own, as the note's proposed rule 5.3 has it). UNVERIFIED either way.
 //!
 //! Every refusal is `NotYet { NotRead }` with the texts below, raised before anything is written, so none is ever
 //! marked "stopped after partial writes: ". Malformed shapes (a field a class does not declare, a field that does not
@@ -42,7 +51,8 @@
 
 use ow_core::{DetSet, NotYet, ParityMode};
 use ow_object::heap::ObjectSpace;
-use ow_object::ids::{ClassId, ObjRef, PropAddr};
+use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
@@ -63,6 +73,7 @@ pub const NOT_OF_KIND: &str = "a list entry that is not of the list kind's class
 pub const WORLD_LOOP: &str = "a world list that loops back to an entry already walked";
 pub const PARTLY_JOINED: &str = "a level some of whose lists are already in the world's and others not";
 pub const KIND_CLASS: &str = "a list kind's class that is not in the loaded classes";
+pub const DECLARED: &str = "a list entry that is not of the class its list field declares";
 
 /// The three list kinds a level carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,10 +191,11 @@ fn object_field(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<Obj
     }
 }
 
-fn write_field(space: &mut ObjectSpace, o: ObjRef, name: &str, v: Option<ObjRef>) -> Result<(), VmError> {
-    let class = space.heap.get(o)?.class;
-    let p = space.prop(class, name).ok_or_else(|| script(format!("{name} is not declared")))?;
-    space.write(o, PropAddr::scalar(p), Value::Object(v))?;
+/// The join is Off only: under Reference it is `NotYet { NotPorted }` (the C++ reference has none).
+fn off_only(vm: &Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Err(NotYet::not_ported(format!("{UNIT} under Reference (the C++ reference has none)"), RECORD).into());
+    }
     Ok(())
 }
 
@@ -197,6 +209,7 @@ pub fn level_list_pairs(vm: &Vm, level: ObjRef) -> Result<LevelLists, VmError> {
 /// The join of `level` onto the world whose `WorldInfo` is `world_info`: the level's pairs ([`level_list_pairs`],
 /// refused today), then [`join_level_lists`]. The entry point the bring-up calls (module documentation).
 pub fn join_level(vm: &mut Vm, world_info: ObjRef, level: ObjRef) -> Result<JoinOutcome, VmError> {
+    off_only(vm)?;
     let lists = level_list_pairs(vm, level)?;
     join_level_lists(vm, world_info, &lists)
 }
@@ -205,15 +218,13 @@ pub fn join_level(vm: &mut Vm, world_info: ObjRef, level: ObjRef) -> Result<Join
 enum Plan {
     Empty,
     AlreadyJoined,
-    Join { start: ObjRef, end: ObjRef, head: Option<ObjRef> },
+    Join { start: ObjRef, end: ObjRef, head: Option<ObjRef>, head_field: PropId, link_field: PropId },
 }
 
 /// Joins `lists` onto the world's lists on `world_info` (module documentation): every kind checked first, then the
 /// splices. Off only.
 pub fn join_level_lists(vm: &mut Vm, world_info: ObjRef, lists: &LevelLists) -> Result<JoinOutcome, VmError> {
-    if vm.parity != ParityMode::Off {
-        return Err(NotYet::not_ported(format!("{UNIT} under Reference (the C++ reference has none)"), RECORD).into());
-    }
+    off_only(vm)?;
     let space = &vm.space;
     let world_info_class = space.classes.by_path("Engine.WorldInfo");
     let class = space.heap.get(world_info)?.class;
@@ -232,13 +243,13 @@ pub fn join_level_lists(vm: &mut Vm, world_info: ObjRef, lists: &LevelLists) -> 
     }
     // 2. The splices, in kind order.
     let mut outcome = [KindOutcome::Empty; 3];
-    for (i, (kind, plan)) in ListKind::ALL.into_iter().zip(plans).enumerate() {
+    for (i, plan) in plans.into_iter().enumerate() {
         outcome[i] = match plan {
             Plan::Empty => KindOutcome::Empty,
             Plan::AlreadyJoined => KindOutcome::AlreadyJoined,
-            Plan::Join { start, end, head } => {
-                write_field(&mut vm.space, end, kind.link(), head)?;
-                write_field(&mut vm.space, world_info, kind.head(), Some(start))?;
+            Plan::Join { start, end, head, head_field, link_field } => {
+                vm.space.write(end, PropAddr::scalar(link_field), Value::Object(head))?;
+                vm.space.write(world_info, PropAddr::scalar(head_field), Value::Object(Some(start)))?;
                 KindOutcome::Joined
             }
         };
@@ -292,7 +303,26 @@ fn check(space: &ObjectSpace, world_info: ObjRef, kind: ListKind, pair: ListPair
         }
         cur = next.ok_or_else(|| refuse(Some(kind), MISSES_END))?;
     }
-    Ok(Plan::Join { start, end, head })
+    // The two writes, checked against their fields' declared classes (review r1 of #544).
+    let head_field = object_prop(space, world_info, kind.head())?;
+    let link_field = object_prop(space, end, kind.link())?;
+    let fits = |o: ObjRef, field: PropId| -> Result<(), VmError> {
+        let Some(PropKind::Object { class: declared }) = space.classes.decl(field).map(|d| &d.kind) else {
+            return Err(script("a list field that is not an object property".to_string()));
+        };
+        if space.classes.is_child_of(space.heap.get(o)?.class, *declared) { Ok(()) } else { Err(refuse(Some(kind), DECLARED)) }
+    };
+    fits(start, head_field)?;
+    if let Some(h) = head {
+        fits(h, link_field)?;
+    }
+    Ok(Plan::Join { start, end, head, head_field, link_field })
+}
+
+/// The id of `o`'s field `name`.
+fn object_prop(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<PropId, VmError> {
+    let class = space.heap.get(o)?.class;
+    space.prop(class, name).ok_or_else(|| script(format!("{} declares no {name}", space.classes.layout(class).path())))
 }
 
 #[cfg(test)]
