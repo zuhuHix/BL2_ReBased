@@ -148,9 +148,14 @@ default object.
    of kind `NotRead` naming it. None of these steps writes before the actor is made: the search only computes L.
 7. The search fails: the spawn returns None, nothing made.
 
-**The encroachment check (after `PreBeginPlay`)**, one answer per case. These steps run after the actor is made, so
-any `NotYet` here is terminal ("stopped after partial writes", its kind kept). **Off rolls nothing back:** the made
-actor, its `PreBeginPlay` effects and every other live-actor write stay as they are when the `NotYet` is returned:
+**After the actor is made, every `NotYet` is terminal.** The spawn's first live write is the new actor itself (made,
+registered in the level list, its fields set). From then on, any `NotYet` that escapes the spawn is terminal: one
+from `PreBeginPlay` itself (its script, or a native it calls) before either check below, one from the checks, or one
+from a later begin-play event. Its text starts "stopped after partial writes: ", its kind and record are kept, and
+the writes are left in place. **Off rolls nothing back:** the made actor, its `PreBeginPlay` effects and every other
+live-actor write stay as they are.
+
+**The encroachment check (after `PreBeginPlay`)**, one answer per case:
 1. Before play began: not run (the record's step 6 onwards is skipped).
 2. **`PreBeginPlay` destroyed the actor:** the spawn returns None. This early return comes first, before any check.
 3. `req.no_collision_fail` false, play begun, the actor alive:
@@ -230,8 +235,8 @@ world's box and sweep routines, the collision hash's walkers, and the per-actor 
    - A sweep walks it only when one of the bits 1, 2, 8, 16, 128 or 8192 is set (the mask 8347).
    - Each candidate is a primitive component whose bounds meet the query. A primitive with a further flag set is
      skipped; that is bit 10 of its collision flag word, and its name is unresolved (open question 4).
-   - The primitive must block the query's kind: `BlockNonZeroExtent` for a box test or a box sweep, `BlockZeroExtent`
-     for a point sweep.
+   - The primitive must block the query's kind, by its extent ("Which blocking flag a primitive needs", above):
+     `BlockZeroExtent` for a box test of extent (0, 0, 0) and a point sweep, `BlockNonZeroExtent` otherwise.
    - One more per-component test runs; it was not read (open question 4).
 3. **The owner actor's filter, by class:**
    - **`Actor`**, and the classes that keep its rule (`StaticMeshActor`, `Brush`, `Terrain`): with `bWorldGeometry`,
@@ -264,35 +269,47 @@ that blocks the query's kind:
 
 - The mover filters have no bit 128 shortcut, so a mover with `bWorldGeometry` follows the mover row.
 - **Classes whose filter was not read** (`DynamicSMActor`, `Projectile`, `Vehicle`, `WorldInfo` and the game's own
-  classes, among others): the Off rule takes the nearest read ancestor's row (`Pawn`, `Volume`, `InterpActor` or
-  `KActor`, else `Actor`). UNVERIFIED: a class of these may override the filter.
+  classes, among others): no row is inherited, since such a class may override the filter. A candidate whose owner's
+  class is not one of the classes read (`Actor`, `StaticMeshActor`, `Brush`, `Terrain`, `Volume`, `InterpActor`,
+  `KActor`, `Pawn`) makes the query **Unsupported**, naming "the trace filter of <class>".
 - **Box tests:** the BSP first (bit 4), then the actors; with bit 512 the first Hit decides, and the test answers Hit
   or Clear only (no hit is chosen).
 - **Sweeps:** simple collision always (no bit 131072). The winning hit is chosen as below.
 
-**Which hit a sweep returns** (read in the multi-hit routine and the actor hash's single-result step):
+**Which hit a sweep returns: the reading** (the multi-hit routine and the actor hash's single-result step):
 1. **The BSP** is swept first (bit 4). Bit 512 is not set, so a BSP hit does not end the query.
-2. **The actors** are walked only up to the BSP hit plus 5 units along the sweep (the whole sweep with no BSP hit).
-   Their fractions are then scaled back to the whole sweep.
-3. **Among the actors**, bit 1024 keeps the hit with the smallest fraction; on an exact tie, the first one met in the
-   hash's walk (that order is not read).
-4. **The BSP hit and the actor hit** are sorted by a comparator that was not read, and the first is the result. The
-   Off rule takes it as the smaller fraction (UNVERIFIED).
-5. **Exact ties** (two or more hits at the same smallest fraction, from the BSP and an actor, or from two actors): the
-   order is not read.
-   - **Off answer:** when the tied hits have the same location and normal, that hit.
-   - Otherwise **Unsupported**, because the downward sweep's normal (section 3, step 3.3) would depend on the unread
-     order.
+2. **The actors** are walked only up to the BSP hit plus 5 units along the sweep, as a fraction of the whole sweep,
+   capped at 1. So when the BSP hit plus 5 units reaches past the requested end point, the actors are walked to the end
+   point and no further. With no BSP hit, they are walked over the whole sweep. Their fractions are then scaled back to
+   the whole sweep.
+3. **Among the actors**, bit 1024 keeps one hit: the smallest fraction, and on an exact tie the first met in the hash's
+   walk. That walk order was not read.
+4. **The BSP hit and that actor hit** are sorted by a comparator that was not read, and the first is the result.
 
-**The Off policy for the unread points, one answer each (UNVERIFIED):**
-- **The skip flag** (bit 10 of a primitive's collision flag word, unresolved): a query with a candidate primitive
-  that has it set is **Unsupported**. A candidate is one that blocks the query's kind and whose owner is tested by
-  the table above. Section 6 turns that into a `NotYet` of kind `NotRead`.
-- **The further per-component test** (not read): taken as passing for every candidate.
-- **The terrain bit** (8192): it selects no actor by itself in the filters read. Off ignores any terrain-specific
-  effect it may have beyond entering the actor hash: terrain is tested by its actor's row (the `Actor` rule with
-  `bWorldGeometry`). A service that does not hold a level's terrain geometry over the region answers Unsupported
-  under the coverage rule.
+**The Off policy for what is unread** (one answer each, all UNVERIFIED). Every point below is a rule the game applies
+and this note did not read. Where a query's answer depends on one, the service answers **Unsupported**, naming it.
+Section 6 turns that into a `NotYet` of kind `NotRead` that names the filter. No rule is assumed in its place.
+- **The further per-component test** (not read) runs for every candidate primitive (one that blocks the query's kind
+  and whose owner the table tests). So a query with **any candidate primitive** in its region is Unsupported, "the
+  trace filter's per-component test". Only the BSP, and an empty candidate set, can be answered.
+- **The skip flag** (bit 10, unresolved): it decides whether a primitive is a candidate at all, so a query with a
+  blocking primitive that has it set is Unsupported too.
+- **An owner class whose filter was not read** (the table's note): Unsupported.
+- **The terrain bit** (8192): it may act on terrain beyond entering the actor hash, which was not read. A query whose
+  region holds a `Terrain` actor's primitive is Unsupported, "the trace filter's terrain handling".
+- **The BSP and actor comparator** (step 4): when a sweep has both a BSP hit and an actor hit, the result depends on
+  it, so the sweep is Unsupported. (With the rules above this already holds, since any actor candidate is
+  Unsupported.)
+- **Ties among the actors** (step 3): the hash keeps one of the tied hits by its unread walk order. Off keeps every
+  hit at the minimum fraction through the final choice. A tie at the overall minimum whose hits differ in location or
+  normal is Unsupported, because the downward sweep's normal (section 3, step 3.3) would depend on the order. Tied
+  hits with the same location and normal give that hit.
+
+**What Off can answer today, then:**
+- **A box test:** Hit when the BSP blocks it (bit 512: the BSP's hit ends the test before any actor). Clear when
+  neither the BSP nor any candidate primitive is in the box. Anything else is Unsupported.
+- **A sweep:** the BSP's first hit, or no hit, when the swept region (up to the BSP hit plus 5 units, capped at the
+  end point) holds no candidate primitive. Anything else is Unsupported.
 
 **What a headless collision service must answer for each query** (the boundary above):
 - **A box test:** Hit or Clear against the BSP and the primitives the table tests, over the whole box, with the
@@ -304,8 +321,10 @@ that blocks the query's kind:
   - BSP it does not hold;
   - a mover it does not track;
   - per-polygon collision it lacks for a primitive that has it, in a `complex` test;
-  - a candidate with the skip flag;
-  - an exact tie with different locations or normals.
+  - any candidate primitive (the unread per-component test), including one with the skip flag;
+  - an owner class whose filter was not read, or a `Terrain` primitive in the region;
+  - a sweep with both a BSP hit and an actor hit (the unread comparator);
+  - an exact tie at the minimum with different locations or normals.
 
 **The host's movement collision** (lane H4, `crates/ow-host/src/movement/collide.rs`, decision 2026-11-16-52) is a
 world of convex brushes with a swept cylinder or capsule trace that reports a start inside solid.
