@@ -72,7 +72,10 @@
 //! **Before any write** (the hub's ruling; the note's section 8): every step runs on copies in memory, the slot array,
 //! the replicated values and the stat, in the note's planning order (the definition, the slot shape, the base pass,
 //! its projected write, the name-part pass, then the value passes), and every `NotYet` and data error above is decided
-//! there. Each pass reads its own inputs as it runs (the parts at the base pass, the name parts at the name-part
+//! there. The plan takes `&Vm` and loads nothing (hub ruling, review r3 of #468: a lazy definition load is a write):
+//! a definition it needs that is still an unloaded store handle is a named `NotYet`, decided before any write, with
+//! the store left as it was. Holders are visited in order, each checked when it is reached, and the regular parts are
+//! consulted for an effect only after the definition misses. Each pass reads its own inputs as it runs (the parts at the base pass, the name parts at the name-part
 //! pass, the `Role`, the replicated values and the write destinations at the value pass), so a later input cannot
 //! block or mask an earlier refusal. Every planned write is then checked with the heap's own checks before the
 //! first is made (review r2 of #468). The plan records its writes in the native's order and only then replays them: the base pass's copies, with
@@ -86,7 +89,7 @@
 
 use std::rc::Rc;
 
-use ow_attr::api::{EvalCx, InitData};
+use ow_attr::api::InitData;
 use ow_core::ParityMode;
 use ow_core::notyet::NotYet;
 use ow_object::ids::{ObjRef, PropAddr, PropId, StructId};
@@ -130,13 +133,14 @@ struct Lists {
 }
 
 /// The class rule for `item`: a weapon's or an item's lists; another class's are not read.
-fn lists_of(vm: &mut Vm, item: ObjRef, what: &str) -> Result<Lists, VmError> {
+fn lists_of(vm: &Vm, item: ObjRef, what: &str) -> Result<Lists, VmError> {
     let class = vm.space.heap.get(item)?.class;
     for (path, definition, slots) in [
         ("WillowGame.WillowWeapon", "WeaponTypeDefinition", &WEAPON_ALL_PARTS),
         ("WillowGame.WillowItem", "ItemDefinition", &ITEM_ALL_PARTS),
     ] {
-        if let Some(c) = vm.find_class_if_present(path)?
+        // The item's own loaded ancestry (review r3 of #468): a class not in the table is not an ancestor.
+        if let Some(c) = vm.space.classes.by_path(path)
             && vm.space.classes.is_child_of(class, c)
         {
             return Ok(Lists { definition, slots });
@@ -209,7 +213,7 @@ fn context_free(data: &InitData) -> bool {
 
 /// Init data `v` evaluated when context-free (the item as the context, no second context), else the named `NotYet`
 /// `id` of open question 1 (`IAS-BASE-GRADE-CONTEXT` or `IAS-VALUE-CONTEXT`).
-fn evaluate(vm: &mut Vm, v: &Value, item: ObjRef, id: &str, subject: &str, what: &str) -> Result<f32, VmError> {
+fn evaluate(vm: &Vm, v: &Value, _item: ObjRef, id: &str, subject: &str, what: &str) -> Result<f32, VmError> {
     let data = ow_attr::eval::init_data(&vm.space, v)?;
     if !context_free(&data) {
         return Err(not_yet(
@@ -218,8 +222,27 @@ fn evaluate(vm: &mut Vm, v: &Value, item: ObjRef, id: &str, subject: &str, what:
             &format!("{subject} reads an attribute or an initialization definition (lifting this on the note's reading of the context is the hub's call, open question 1)"),
         ));
     }
-    let attrs = vm.attrs.clone();
-    Ok(attrs.evaluate_init(&data, Some(item), None, &mut EvalCx::new(vm))?)
+    // Context-free data is its constant times its scale, whatever the context (the evaluator's own rule for data with
+    // no attribute and no initialization definition), so the plan computes it without the evaluator and so without
+    // `&mut Vm` (review r3 of #468).
+    Ok(data.base_value_constant * data.base_value_scale_constant)
+}
+
+/// The plan's definitions must already be loaded (hub ruling, review r3 of #468: a lazy definition load is a write, so
+/// a plan may only read definitions that are loaded). An unloaded store handle is a named `NotYet`, decided before any
+/// write, and the store is left as it was.
+fn require_loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
+    if vm.defs.is_unloaded(&vm.space, o) {
+        return Err(NotYet::not_ported(
+            format!(
+                "{what}: the definition {o:?} of class {} is not loaded; loading it in the plan would be a write before the plan's refusals (hub ruling: a lazy definition load is a write)",
+                ow_attr::eval::class_path(&vm.space, o)
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    Ok(())
 }
 
 /// A named `NotYet` of the note's section 7: its text starts with its identifier.
@@ -319,7 +342,7 @@ fn is_authority(vm: &Vm, item: ObjRef, what: &str) -> Result<bool, VmError> {
 }
 
 impl State {
-    fn read(vm: &mut Vm, item: ObjRef, what: &'static str) -> Result<State, VmError> {
+    fn read(vm: &Vm, item: ObjRef, what: &'static str) -> Result<State, VmError> {
         let lists = lists_of(vm, item, what)?;
         let data = required(vm, item, "DefinitionData", what)?;
         let Some(definition) = object_of(&field(vm, &data, lists.definition)?, what)? else {
@@ -329,7 +352,7 @@ impl State {
                 &format!("an item without a {} (the native reads the slot limit from it unguarded)", lists.definition),
             ));
         };
-        super::value::loaded(vm, definition)?;
+        require_loaded(vm, definition, what)?;
         let stored = match required(vm, definition, "AttributeSlotMaxActivated", what)? {
             Value::Int(i) => i,
             other => return Err(bad(what, format!("AttributeSlotMaxActivated holds {}, not an int", other.kind_name()))),
@@ -357,28 +380,28 @@ impl State {
         })
     }
 
-    /// The set slots of the list `range` of the class's lists, each loaded (read when a pass first needs them).
-    fn holders(&self, vm: &mut Vm, range: std::ops::Range<usize>) -> Result<Vec<ObjRef>, VmError> {
+    /// The set slots of the list `range` of the class's lists: the references only. Each is checked loaded when it is
+    /// visited ([`require_loaded`]), in list order (review r3 of #468).
+    fn holders(&self, vm: &Vm, range: std::ops::Range<usize>) -> Result<Vec<ObjRef>, VmError> {
         let mut out = Vec::new();
         for slot in &self.lists.slots[range] {
             if let Some(p) = object_of(&field(vm, &self.data, slot)?, self.what)? {
-                super::value::loaded(vm, p)?;
                 out.push(p);
             }
         }
         Ok(out)
     }
 
-    /// The part list (section 2), read and loaded on first use.
-    fn parts(&mut self, vm: &mut Vm) -> Result<Vec<ObjRef>, VmError> {
+    /// The part list (section 2), read on first use.
+    fn parts(&mut self, vm: &Vm) -> Result<Vec<ObjRef>, VmError> {
         if self.parts.is_none() {
             self.parts = Some(self.holders(vm, 0..9)?);
         }
         Ok(self.parts.clone().unwrap_or_default())
     }
 
-    /// The name-part list (section 2), read and loaded on first use.
-    fn names(&mut self, vm: &mut Vm) -> Result<Vec<ObjRef>, VmError> {
+    /// The name-part list (section 2), read on first use.
+    fn names(&mut self, vm: &Vm) -> Result<Vec<ObjRef>, VmError> {
         if self.names.is_none() {
             self.names = Some(self.holders(vm, 9..11)?);
         }
@@ -415,10 +438,15 @@ impl State {
 
     /// A new record from the first `AttributeSlotEffects` entry named `name`, in the definition, then the parts in
     /// list order (section 3 step 3); `None` when none names it.
-    fn new_record(&mut self, vm: &mut Vm, name: &Value) -> Result<Option<Value>, VmError> {
+    /// The parts are consulted only after the definition misses, each checked loaded as it is reached (review r3 of
+    /// #468).
+    fn new_record(&mut self, vm: &Vm, name: &Value) -> Result<Option<Value>, VmError> {
         let what = self.what;
         let parts = self.parts(vm)?;
-        for holder in std::iter::once(self.definition).chain(parts) {
+        for (k, holder) in std::iter::once(self.definition).chain(parts).enumerate() {
+            if k > 0 {
+                require_loaded(vm, holder, what)?;
+            }
             for entry in list(vm, holder, "AttributeSlotEffects")? {
                 if name_field(vm, &entry, what)? != *name {
                     continue;
@@ -468,9 +496,12 @@ impl State {
     }
 
     /// Applies `holders`' `AttributeSlotUpgrades` to `working`, in order (section 3 step 2).
-    fn upgrade(&mut self, vm: &mut Vm, holders: &[ObjRef], working: &mut Vec<Rec>) -> Result<(), VmError> {
+    /// Each holder is checked loaded when it is reached, in order (review r3 of #468), so a later holder cannot mask an
+    /// earlier refusal.
+    fn upgrade(&mut self, vm: &Vm, holders: &[ObjRef], working: &mut Vec<Rec>) -> Result<(), VmError> {
         let what = self.what;
         for &holder in holders {
+            require_loaded(vm, holder, what)?;
             for entry in list(vm, holder, "AttributeSlotUpgrades")? {
                 let name = name_field(vm, &entry, what)?;
                 let mut at = None;
@@ -508,7 +539,7 @@ impl State {
         Ok(())
     }
 
-    fn base_grade(&mut self, vm: &mut Vm) -> Result<i32, VmError> {
+    fn base_grade(&mut self, vm: &Vm) -> Result<i32, VmError> {
         if let Some(g) = self.base_grade {
             return Ok(g);
         }
@@ -563,7 +594,7 @@ impl State {
     }
 
     /// The value pass on the copies (section 5).
-    fn value_pass(&mut self, vm: &mut Vm) -> Result<(), VmError> {
+    fn value_pass(&mut self, vm: &Vm) -> Result<(), VmError> {
         let what = self.what;
         let authority = self.value_inputs(vm)?.authority;
         for i in 0..self.limit {
@@ -614,7 +645,7 @@ impl State {
     }
 
     /// The name-part pass (section 4).
-    fn name_part_pass(&mut self, vm: &mut Vm) -> Result<(), VmError> {
+    fn name_part_pass(&mut self, vm: &Vm) -> Result<(), VmError> {
         let mut working = Vec::new();
         for (i, _) in self.kept(vm)? {
             working.push(Rec { value: self.slots[i].clone(), in_place: Some(i) });
@@ -719,13 +750,14 @@ fn stat_companions(vm: &Vm, item: ObjRef, what: &str) -> Result<ow_object::layou
 /// One call (module documentation): `name_parts` is the bool of `InitializeAttributeSlots`; `only_name_parts` makes
 /// it `InitializeAttributeSlotsForNameParts`.
 pub fn initialize(vm: &mut Vm, item: ObjRef, name_parts: bool, only_name_parts: bool) -> Result<(), VmError> {
-    let s = plan(vm, item, name_parts, only_name_parts)?;
+    let s = plan(&*vm, item, name_parts, only_name_parts)?;
     s.commit(vm)
 }
 
 /// The read-only plan of one call (the note's section 8): the definition and the limit, the slot shape, then each
-/// pass's own inputs as it runs. Nothing is written.
-fn plan(vm: &mut Vm, item: ObjRef, name_parts: bool, only_name_parts: bool) -> Result<State, VmError> {
+/// pass's own inputs as it runs. It takes `&Vm`, so nothing is written and no definition is loaded (review r3 of
+/// #468).
+fn plan(vm: &Vm, item: ObjRef, name_parts: bool, only_name_parts: bool) -> Result<State, VmError> {
     let what = if only_name_parts { INIT_NAME_PART_SLOTS } else { INIT_SLOTS };
     let mut s = State::read(vm, item, what)?;
     s.check_shape(vm)?;
@@ -782,3 +814,6 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 #[cfg(test)]
 #[path = "slots_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "slots_store_tests.rs"]
+mod store_tests;
