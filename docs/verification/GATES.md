@@ -2,9 +2,9 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**LINKS-6-8-NEXT (2026-11-19, pc-hummer, on fix/rust-willow-globals a0653806, #476):** AI-assisted (Claude Code, Opus
+**LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
-NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,282
+NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
 passed / 0 failed / 46 ignored; `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` on a local integration of main
 a629f56f, #455, #462, #468, -97 and #476 with this change: links 6 and 7 stay in `make` (0 of 3 and 0 of 4 driver steps)
 but get past the accessor to the unbound `SkeletalMeshComponent.SetAnimTreeTemplate(object)`; link 8 is 1 of 5 at
