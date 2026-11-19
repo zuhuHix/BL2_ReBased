@@ -25,7 +25,10 @@ The decision number is pending from the maintainer (three digits); NNN is a plac
     is named by its class's default, not by the template's own tags. `ArmBoneBlend` does not exist, and `HeadLookAt`
     is None (her body class names none). She has 3 slot nodes. The template's saved tick indices form a full order,
     and the runtime order is taken to equal it by fit.
-  - **The proposed Off answer:** a write-free preflight on the template's names with class defaults applied. Fields
-    that find nothing are None, and `bUsingFootIK` comes from existence. Anything that needs an instanced node, which
-    includes any slot node, refuses typed `NotYet { LayerAbsent }` before writing. That is Maya's stop. The next
-    reading is `CopyAnimTree` and the rest of the tree initialisation.
+  - **The proposed Off answer** replaces #529 section 7's preflight bullet for a made `Mesh`, and runs after its
+    old-Mesh release check. It reads the attachment's template component and its `AnimTreeTemplate`, and **loads
+    nothing** (hub ruling, review r1). An unloaded handle refuses `LayerAbsent` with #529's text. A loaded template
+    settles the fields that find nothing (None) and `bUsingFootIK`, by the template's names (by fit, the copy keeps
+    classes and names). Anything that needs an instanced node, including any slot node, refuses with #529's
+    `LayerAbsent` text before writing. That is Maya's stop after the release check. The next reading is
+    `CopyAnimTree` and the rest of the tree initialisation.

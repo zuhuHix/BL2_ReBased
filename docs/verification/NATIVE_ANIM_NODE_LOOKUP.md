@@ -13,6 +13,14 @@ There is no bl-sdk session and no recorded live evidence on these steps. Raw out
 `local/analysis/animlookup/`. This note is in our own words: no decompiler output, pseudo-code, addresses, offsets or
 listing structure. **Every rule here is UNVERIFIED** in the running game.
 
+**Prerequisites, in landing order** (all open):
+1. #517, then #522 (NATIVE_INIT_PAWN_MESHES.md and its implementation), as NATIVE_INITIALIZE_BODY_COMPOSITION.md
+   section 0 lists them;
+2. #529, NATIVE_INITIALIZE_BODY_COMPOSITION.md, at `research/rust-body-composition` aa2fcb92 (its last round);
+3. #495, the `SetAnimTreeTemplate` implementation, at its hub head 8dbc419, from NATIVE_SET_ANIM_TREE_TEMPLATE.md at
+   `research/rust-set-anim-tree-template` 466350b6;
+4. this note.
+
 **Why it matters.** NATIVE_INITIALIZE_BODY_COMPOSITION.md section 4.5 (PR #529) has the pawn's
 `PostInitBodyComposition` set five fields from the new `Mesh` and rebuild `Pawn.SlotNodes`. Maya's attachment 0 is
 that `Mesh`, and the step is on the path of links 1, 3, 4, 5, 13 and 14. That note left the lookups and the slot
@@ -25,7 +33,7 @@ From section 4.5, with the names made exact:
 | Field written | Lookup | Name | Kept only as |
 |---|---|---|---|
 | `ArmBoneBlend` | animation node | `ArmBoneBlend` | `AnimNodeBlendPerBone` |
-| `AimOffset` | animation node | `BodyClass.AimOffsetNodeName` | `WillowAnimNodeAimOffset` |
+| `AimOffset` | animation node | `BodyClass.AimOffsetNodeName` (with no `BodyClass`: not read; unreachable, since the wrapper's gate needs a loaded `BodyClass`) | `WillowAnimNodeAimOffset` |
 | `LeftHandIK` | skeletal control | `LeftHandGrip` | `SkelControlLeftHandGripWeapon` |
 | `HeadLookAt` | skeletal control | `BodyClass.HeadLookAtName` (None with no `BodyClass`) | `WillowSkelControl_LookAtActor` |
 | `bUsingFootIK` | skeletal control | `WillowFootIK` | true when any object is found |
@@ -70,11 +78,12 @@ descendants (by fit, in the tick order; not read in full). So the lookups see th
 hold references to them.
 
 **In the port:**
-- the VM heap has no instanced animation tree. NATIVE_SET_ANIM_TREE_TEMPLATE.md's implementation (#495) refuses a
-  template with a typed `NotRead`, and no other code makes the tree objects;
+- the VM heap has no instanced animation tree. NATIVE_SET_ANIM_TREE_TEMPLATE.md's implementation (#495, open, at
+  8dbc419) refuses a template with a typed `NotRead`, and no other code makes the tree objects;
 - the host (`crates/ow-host/src/anim/`) reads the template through the definition store to pose a mesh. It is
   render-side, not in the VM heap, and its objects are not the game's instance;
-- the template's nodes are readable through the definition store, **with class defaults applied**. That matters here:
+- the template's nodes are readable through the definition store, **with class defaults applied**. In Off the store
+  applies archetype values, and a template node's archetype is its class default object. That matters here:
   three of the four names found on Maya's tree (section 4) are not in the template's tagged properties at all. They
   come from the node classes' defaults, so a reader of the raw tags alone would find nothing.
 
@@ -85,11 +94,15 @@ Attachment 0 is Maya's `Mesh` component. Its `AnimTreeTemplate` is `GD_PlayerSha
 `AimOffset` and `HeadLookAtName` None.
 
 - **The tree:** 71 objects reached from the root: 66 animation nodes (the root included) and 5 skeletal controls.
+  The nodes are the closure of the root's `Children` (each child's `Anim`, then its own `Children`). The controls are
+  those of `SkelControlLists`, each list's `ControlHead`, then the `NextControl` chain.
 - **The saved tick indices:** 65 nodes store a `TickArrayIndex`, 1 to 65, all distinct. The root stores none, so it
   has the default, 0. The 66 nodes are a full order from 0 to 65. The game's runtime tick order is taken to equal it
   **by fit** (open question 1).
 - **Names**, with class defaults applied: 27 nodes and controls are named in the template, 5 take a name from their
-  class default, and 39 have none. Repeated names: `ScaleRateBySpeed` ×5, `WeaponAdd` ×5, `UBMoveBlend` ×4,
+  class default, and 39 have none. For each of the 39, every class default up the parent chain to `AnimNode` was read
+  (across packages), and none sets `NodeName`, so their name is None. None of them is named `ArmBoneBlend` or
+  `AimOffset`; a None-name lookup is not on Maya's path, because her `AimOffsetNodeName` is `AimOffset`. Repeated names: `ScaleRateBySpeed` ×5, `WeaponAdd` ×5, `UBMoveBlend` ×4,
   `CrouchAnim` ×2, `WillowFootIK` ×2. The first match is the one with the lowest saved tick index.
 
 **The five lookups on Maya's tree:**
@@ -107,34 +120,55 @@ Attachment 0 is Maya's `Mesh` component. Its `AnimTreeTemplate` is `GD_PlayerSha
 
 ## 5. Proposed Off answer (question c; for a separate implementer)
 
-**Every rule below is UNVERIFIED.** It replaces section 4.5's "lookups and slot rebuild not read" for the pawn's
-`PostInitBodyComposition`. The rest of #529's Off contract is unchanged.
+**Every rule below is UNVERIFIED.** It replaces one bullet of NATIVE_INITIALIZE_BODY_COMPOSITION.md section 7's
+preflight, step 4 ("the pawn's `PostInitBodyComposition`"): the bullet for identifier `Mesh` with a made
+`SkeletalMeshComponent`. In #529 that bullet refuses every such attachment. The rest of #529's Off contract is
+unchanged, and this check runs **after** that step's release check for the old `Pawn.Mesh`.
 
-**The smallest answer that does not invent an instance:**
-1. **Preflight, write-free**, before the hook's first write (the pawn's `Mesh` and the fields of section 4.5 come
-   after it). Read the new mesh component's `AnimTreeTemplate` through the definition store, with class defaults
-   applied, and do the five lookups and the slot scan against the **template's names** only:
-   - node lookups in the template's saved tick order (section 4), first match;
-   - control lookups in `SkelControlLists` order, each list's `NextControl` chain, first match; a None name answers
-     None;
-   - a node with a None name is matched as in section 1 (the root first).
-2. **Fields the template can settle without an instance:**
+**The smallest answer that does not invent an instance.** It is part of #529's write-free preflight, so it **loads
+nothing** (hub ruling, review r1 of #543). A lazy load counts as a write under #518 (decision 2026-11-19-93), and it
+would mark this refusal and every later one of the walk. The pattern is `ow-inventory/src/globals.rs`: check
+`is_unloaded` and refuse without loading.
+1. **What is read.** The attachment's **template component**, `Data.ComponentData.Component`, not the new component:
+   the new component does not exist until write step 1.1. From it, its `AnimTreeTemplate`, read through the
+   definition store with class defaults applied.
+2. **An unloaded handle refuses.** If the template component, its `AnimTreeTemplate`, or any node or control the
+   lookups visit is an unloaded handle: the refusal of rule 4, raised with nothing loaded. The instanced tree is
+   missing anyway, so nothing is lost.
+3. **Template-settled answers**, only for a template that is **already loaded** in full. By fit, the copy keeps each
+   node's class and name, so the template's names stand for the instance's; this is **UNVERIFIED** (open question 3).
+   The five lookups and the slot scan run against the template's names only:
+   - node lookups visit the closure of the root's `Children` in the saved `TickArrayIndex` order, first match. If the
+     saved values are not a full, distinct order 0 to n − 1 over those nodes, refuse with `NotYet { NotRead }`,
+     "InitializeBodyComposition: the template's saved tick order", record this note;
+   - control lookups visit `SkelControlLists` in order, each list's `ControlHead`, then the `NextControl` chain, and
+     take the first match. A None name answers None;
+   - a node lookup with a None name is matched as in section 1 (the root first).
+
+   From those, these fields need no instance:
    - a lookup that finds nothing, or finds an object whose class is not the "kept only as" class: the field is None;
    - `bUsingFootIK`: true when a `WillowFootIK` control exists, else false;
    - `SlotNodes`: empty when the template has no `AnimNodeSlot` node.
-3. **Everything else refuses**, typed `VmError::NotYet` of kind `LayerAbsent`, with the record this note, the text
-   "PostInitBodyComposition: the mesh's instanced AnimTree", and before any write. That covers a lookup that finds a
-   kept object (the field must hold the instance's node, and the port has none), and a template with at least one
-   slot node. Under the hub's render-side ruling a field stays `NotYet` when script reads it, and these are read:
-   `SetAimOffsetProfile` reads `AimOffset`, `UpdateAnimSets` reads `ArmBoneBlend`, and `Pawn.ClearAnimNodes` empties
-   `SlotNodes`. Native readers of `SlotNodes` were not searched.
-4. **No tree:** a component with no `AnimTreeTemplate` answers None for all four, false, and an empty `SlotNodes`.
-   That is the game's answer for a component without a tree.
-5. **Writes:** none new beyond section 4.5's. Reading the template may load its package. Under #518's write tracker a
-   load counts as a write, so a refusal after a load is prefixed "stopped after partial writes: ".
+4. **Everything else refuses** with #529's text, kept unchanged. A lookup that finds a kept object needs the field to
+   hold the instance's node, and the port has none; a template with at least one slot node refuses too. The refusal
+   is typed `VmError::NotYet` with `Missing::LayerAbsent("an animation-tree instance for the skeletal mesh")`, what
+   "InitializeBodyComposition: the new Mesh's animation nodes (ArmBoneBlend, AimOffset, LeftHandGrip, the head
+   look-at, WillowFootIK and the slot nodes)", and record NATIVE_INITIALIZE_BODY_COMPOSITION.md section 7 with this
+   note. It is raised in the preflight, before any write.
 
-**On Maya** this refuses: `AimOffset` and `LeftHandIK` are found, and the tree has 3 slot nodes. Rule 3 is her stop,
-so the links named above move only once the tree is instanced. The next reading for that is `CopyAnimTree` and the rest
+   Under the hub's render-side ruling a field stays `NotYet` when script reads it: `SetAimOffsetProfile` reads
+   `AimOffset`, and `UpdateAnimSets` reads `ArmBoneBlend`. For `SlotNodes`, no script reader was found:
+   `Pawn.ClearAnimNodes` only sets its length to 0. Native readers were not searched.
+5. **No tree:** a loaded template component with `AnimTreeTemplate` None answers None for all four lookups, false for
+   `bUsingFootIK`, and an empty `SlotNodes`. That is the game's answer for a component without a tree.
+6. **Writes:** none new beyond section 4.5's. Nothing here loads, so a refusal from this check never takes the
+   "stopped after partial writes: " prefix on its own account.
+
+**On Maya**, once the release check for the old `Pawn.Mesh` has passed (#529's "Where Maya stops", item 1):
+- if her template is unloaded at that point, rule 2 refuses;
+- if it is loaded, rule 4 refuses: `AimOffset` and `LeftHandIK` are found, and the tree has 3 slot nodes.
+
+Either way the links named above move only once the tree is instanced. The next reading for that is `CopyAnimTree` and the rest
 of the tree initialisation: what the copy duplicates, which outer the copies get, what each copy keeps of its
 template, and the order in which the root adds its descendants. That reading would also settle open question 1. It
 was not done in this lane.
@@ -147,10 +181,9 @@ was not done in this lane.
    was not read in full. This decides which of a repeated name is found, and the `SlotNodes` order.
 2. **UNVERIFIED:** the gather step used when the tick list is empty or belongs to another tree. Not on the body
    composition's path, by fit: the attach fills the tick list first.
-3. **Not read:** `CopyAnimTree`, the tree's instancing (section 5).
-4. **UNVERIFIED:** the class-default names. They were read from each class's default object. A node class's default
-   that has no name and whose parent class is in another package was taken as None, without following the parent
-   (39 nodes; none of them is on Maya's lookup path).
+3. **Not read:** `CopyAnimTree`, the tree's instancing (section 5), including that each copy keeps its template's
+   class and name (by fit).
+4. **UNVERIFIED:** the class-default names, read from each class's default object and its parents' (section 4).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
