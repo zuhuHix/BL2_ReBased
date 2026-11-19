@@ -55,8 +55,8 @@ them:
     the range's first entry;
   - **the partition:** a left cursor looks for entries strictly lower than the pivot. A right cursor, starting from
     the end, looks for entries that are not lower than the pivot. Each pair found is exchanged, as long as the left
-    cursor has not passed the right one. The left cursor stops at the range's end at the latest, and the right cursor
-    at the pivot's place;
+    cursor has not passed the right one. The left cursor stops one past the range's last entry at the latest, and
+    the right cursor at the pivot's place;
   - the pivot is then exchanged with the entry where the right cursor stopped. The entries before that place form one
     part, and the entries from the left cursor's stop onward form the other. Each part is sorted by the same rules.
 
@@ -128,8 +128,12 @@ and with no context object.
      - 2, `IntFloor`: `n = floor(W)`;
      - 3, `IntCeil`: `n = ceil(W)`;
      - any other value: W unchanged, and the size test is on W itself.
-   - **The integer:** n goes through a signed 32-bit integer. The engine converts twice the value, plus or minus a
-     half, so the range limit applies to that doubled value (open question 3).
+   - **The integer:** the engine gets n by converting a doubled sum to the nearest integer (ties to even) and
+     halving that with the remainder dropped toward minus infinity. The sum is `2X + 0.5` for modes 0 and 1, and
+     `2X − 0.5` for mode 2. Mode 3 converts `−0.5 − 2X` and negates the halved result. X is W, or `10^P × W` in mode
+     0. The rule: compute the sum in double. Apart from the tiny values in the precision notes below, that gives the floor and ceil
+     forms above. The conversion is a signed 32-bit integer, so the range limit applies to the sum (open question
+     3).
 6. **No minimum of 1:** the card sets this option, so an n of 0 stays 0.
 
 **Why the sign matters.** It runs before rounding, and rounding is not symmetric. A W of 0.2 shows under `IntCeil`
@@ -139,15 +143,21 @@ up: 0.5 gives 1, and −0.5 gives 0. So steps 3 and 5 must run in this order, on
 **Precision, all the way to the cutoff:**
 - V and the four remap values are single precision. The remap's arithmetic runs in the engine's wider float, and its
   result is stored back to single precision. The rule: compute in double, then round to single.
-- In modes 1 to 3, n is exact for any single-precision W inside the integer range; no intermediate rounding can move
-  it.
-- In mode 0, `10^P` is exact in single precision for P from 0 to 10, and the product `10^P × W` is exact in double and
-  in the engine's wider float. If that float ran at single precision, a product within half a single-precision step
-  of ±0.5 could round onto ±0.5 and change n. Whether it does is **UNVERIFIED** (open question 2), and section 4
-  refuses that case.
+- **In modes 0 to 3**, n comes from the doubled sum (step 5). In double, the sum and the mode-0 product
+  `10^P × W` are exact, since `10^P` is exact in single precision for P from 0 to 10. So n is the floor or ceil form.
+  **But if the engine's wider float ran at single precision** (open question 2), the product in mode 0 and the sum in
+  every mode would round first, and that can move n across 0:
+  - `IntRound`, W = 0.5 − 2^-25: n is 0 exactly, but 1.5 − 2^-24 rounds to 1.5 in single, ties to even give 2, and the
+    halved n is 1;
+  - `IntFloor`, W = −1.2e-8: n is −1 exactly, but the sum rounds to −0.5 in single, which converts to 0, so n = 0.
+
+  Section 4 refuses whenever the single-precision steps change whether n is 0.
+- **Even in double** the floor and ceil forms fail when |W| is below about 1e-16, where the 0.5 swamps 2X. A V that
+  small is snapped to 0 in step 1, and the percent scale only enlarges, so only a remap output can reach it.
 - **The cutoff.** In modes 1 to 3 the size is |n|, which is 0 or at least 1, so the test is `n ≠ 0`. In mode 0 the
-  size is |n| / 10^P: for P up to 7, any n ≠ 0 passes (at least 0.0000001). For P of 8 or more, a small |n| sits at or
-  below the cutoff, where the division's precision decides. Section 4 refuses n ≠ 0 there; n = 0 hides.
+  size is |n| / 10^P: for P up to 7, any n ≠ 0 passes (at least 0.0000001). For P of 8 or more, the boundary is
+  |n| = 10^(P−8): |n| of at least twice that shows, and |n| of at most half of it hides, whatever the division's
+  precision. Between those, the division's precision decides, and section 4 refuses that case.
 - With an unknown mode, the size test is on W itself, in single precision, against 0.00000001.
 
 **The remap** (step 2, without `bDisplayAsPercentage`):
@@ -200,9 +210,11 @@ up: 0.5 gives 1, and −0.5 gives 0. So steps 3 and 5 must run in this order, on
    - In modes 0 to 3, the doubled value the engine converts is NaN, infinite or outside the signed 32-bit range:
      "CacheWeaponCard: a displayed value outside the integer range". That value is `2 × X ± 0.5`, computed in double,
      where X is W, or `10^P × W` in mode 0.
-   - In mode 0, `10^P × W`, rounded to single, lands on the other side of ±0.5 than the exact product (giving a
-     different n): "CacheWeaponCard: the display rounding's intermediate precision".
-   - In mode 0, with P of 8 or more and n ≠ 0: "CacheWeaponCard: a displayed value at the display cutoff".
+   - In modes 0 to 3: compute n twice, once in double (the rule) and once with every step rounded to single (in mode
+     0 the product, then the doubled sum in every mode). Refuse when the two disagree on whether n is 0:
+     "CacheWeaponCard: the display rounding's intermediate precision".
+   - In mode 0, with P of 8 or more and 10^(P−8) / 2 < |n| < 2 × 10^(P−8): "CacheWeaponCard: a displayed value at the
+     display cutoff".
    - The remap's four evaluations refuse as the attribute layer refuses (typed, passed through unchanged).
 4. **Unchanged:** "the card's slot count" (another lane), and "the card visit of a definition that is neither a weapon
    type nor a weapon part" (not on link 8's path).
@@ -215,10 +227,10 @@ up: 0.5 gives 1, and −0.5 gives 0. So steps 3 and 5 must run in this order, on
 1. **UNVERIFIED:** the remap's default source, that is, which field of the engine's first local player it takes (by
    fit, the controller). The card reaches it only through a presentation with remapping enabled and no context
    override.
-2. **UNVERIFIED:** the precision of the engine's wider float in the rounding's product and in the remap. Section 3
-   gives the double-precision rule. Section 4 refuses the one rounding case where running at single precision would
-   change n. The remap is not refused: a last-bit difference there matters only at a rounding boundary, and no
-   refusal is proposed for it.
+2. **UNVERIFIED:** the precision of the engine's wider float in the rounding (the mode-0 product and the doubled
+   sum) and in the remap. Section 3 gives the double-precision rule. Section 4 refuses every case where running at
+   single precision would change whether n is 0. The remap is not refused: a last-bit difference there matters only
+   at a rounding boundary, and no refusal is proposed for it.
 3. **UNVERIFIED:** what the integer conversion gives for a doubled value that is NaN, infinite or out of range.
    Refused in section 4.
 4. **UNVERIFIED:** how the sort's compare handles unordered results (section 2.3). Refused in section 4.

@@ -31,6 +31,6 @@ pending from the maintainer (three digits); NNN is a placeholder.
     refusals happen after init, before any card-field write. The partial-write prefix applies only when #518's
     counters moved.
   - **Left open, with typed refusals:** the remap's default source (by fit, the first local player's controller), a
-    NaN priority, an out-of-range or non-finite integer conversion, the mode-0 product's intermediate precision, and
-    a value at the display cutoff (precision 8 or more).
+    NaN priority, an out-of-range or non-finite integer conversion, the rounding's intermediate precision when it
+    changes whether n is 0 (modes 0 to 3, review r2), and a value near the display cutoff (precision 8 or more).
   - **Left open, with no refusal:** a possible last-bit difference in the remap's wider-float arithmetic (UNVERIFIED).
