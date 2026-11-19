@@ -22,14 +22,17 @@ with the "filters are unread" term of section 3, open question 4, and step 5 of 
   - 512 stop at the first hit; 1024 one result (added by the sweep); 8192 terrain (entry mask only);
   - 131072 complex collision.
 - **How a query runs:** the BSP first; then the actor hash (for a sweep only under the mask 8347); then each primitive's
-  blocking kind (`BlockNonZeroExtent` for a box, `BlockZeroExtent` for a point); then the owner's filter by class; then
-  the primitive's own test.
+  blocking kind (`BlockZeroExtent` for a zero-extent box test and a point sweep, `BlockNonZeroExtent` otherwise); then
+  the owner's filter by class; then the primitive's own test.
 - **The spawn's queries pass no source actor,** so the blocking narrowing rejects every actor that needs it.
-  - **Box tests (8902):** the BSP and world-geometry actors only. Movers are rejected, and pawns, volumes and other
-    actors are not selected. Complex collision applies in template mode.
-  - **Sweeps (8326):** the BSP, world-geometry actors and movers. Simple collision.
+  - **Box tests (8902):** the BSP and world-geometry actors, a world-geometry `Volume` without `bPawnsOnly` included.
+    Movers are rejected; pawns, other actors and the other volumes are not selected. Complex collision applies in
+    template mode.
+  - **Sweeps (8326):** the same, plus movers. Simple collision.
 - **What a headless collision service must answer** for each query, and when it answers Unsupported.
-- **Port's Off choice, UNVERIFIED:** two unread component conditions are taken as not excluding.
+- **Off policy (since review r3 of #465):** nothing unread is assumed. Any query whose answer depends on an unread
+  point is Unsupported: the per-component test, the skip flag, an unread class filter, terrain, or the BSP and actor
+  comparator.
 
 **Open (in the note).** The primitive skip flag (bit 10; its name is unresolved by the layout tool), one further
 per-component test, and what the terrain bit does beyond entering the actor hash.
@@ -47,3 +50,15 @@ per-component test, and what the terrain bit does beyond entering the actor hash
 4. Sweep hit selection (read further): BSP first, then actors walked up to the BSP hit plus 5 units, the smallest
    actor fraction kept, then the two sorted by an unread comparator (taken as the smaller fraction). Exact ties with
    different locations or normals are Unsupported. After the actor is made, Off rolls nothing back.
+
+**Review r3 of #465 (four findings, fixed in the note).**
+1. **No guessed filters.** Any candidate primitive (the unread per-component test, the skip flag), an owner class
+   whose filter was not read, a `Terrain` primitive, or a sweep with both a BSP hit and an actor hit makes the query
+   Unsupported, which section 6 turns into a `NotYet` of kind `NotRead` naming the filter. Off can answer a box test
+   the BSP blocks, a query with no candidate primitive, and a BSP-only sweep.
+2. **Ties kept to the end.** Every hit at the minimum fraction is kept through the final choice, and a tie with
+   different locations or normals is Unsupported. When the BSP hit plus 5 units reaches past the end point, the actors
+   are walked only to the end point (the scale is capped at 1).
+3. **Every `NotYet` after the actor is made is terminal,** `PreBeginPlay`'s own included: prefixed "stopped after
+   partial writes: ", kind and record kept, writes left in place.
+4. **This summary** now matches the addenda, and the walker points at the extent-specific blocking rule.
