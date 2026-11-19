@@ -605,10 +605,12 @@ pub trait ValueResolver {
         Ok(None)
     }
 
-    /// The read-only form of [`ValueResolver::storage`] for a preflight (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, review
-    /// r1 of #483): it answers the same refusals an add or a remove through `storage` and its write would give, and
-    /// writes nothing. The default is `storage` itself, which writes nothing for every resolver class except
-    /// `NounAttributeValueResolver`, whose lookup creates a missing entry; that class overrides it.
+    /// The write-free form of [`ValueResolver::storage`] for a preflight (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, reviews
+    /// r1 and r2 of #483). The default is `storage` itself, which is right only for a resolver whose storage lookup
+    /// writes nothing and whose write refuses nothing the lookup does not show. **An implementor must override it**
+    /// when its storage lookup writes, or when its write can refuse in ways `storage` does not show:
+    /// `NounAttributeValueResolver` does both (a missing entry is created by the lookup; a replicated slot is refused
+    /// by the write) and overrides it.
     fn probe_storage(
         &self,
         sys: &AttributeSystem,

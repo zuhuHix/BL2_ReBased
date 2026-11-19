@@ -250,6 +250,11 @@ fn entry(
 /// #483): the same strategy checks; an existing entry's replicated slot refused as a write to it would be (the
 /// refusal `rewrite` gives, decided here so a preflight sees it); a missing entry only has its `DefaultValue`
 /// evaluated, and nothing is appended. A missing entry would be created with no replicated slot, so it passes.
+///
+/// **Off assumption, UNVERIFIED (review r2 of #483):** that `DefaultValue`'s evaluation writes nothing. Data that
+/// names a `BaseValueAttribute` or an `InitializationDefinition` could lead to another noun attribute on the same
+/// context, whose read goes through [`entry`] with creation on, so the probe could append that other entry. No data
+/// known to the port does this.
 fn entry_with(
     sys: &AttributeSystem,
     resolver: ObjRef,

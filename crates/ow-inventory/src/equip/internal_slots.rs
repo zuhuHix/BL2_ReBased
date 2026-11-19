@@ -34,10 +34,10 @@
 //!
 //! **Writes**, W1 to W3, in the note's order. A `NotYet` after the first write is terminal, matched by its typed
 //! variant, keeps its kind and record and gets the "stopped after partial writes: " prefix
-//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. The mark starts
-//! once the first removal returned (it may have written) or, with no removal, at W2: a refusal of the first removal is
-//! returned unmarked. With P0, P8 and P9 passed, such a `NotYet` comes only from a stack write's own consequences (a
-//! change notification's script), as the note's section 3 says.
+//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. Every failure
+//! of W1, the first removal's included, is marked (review r2 of #483): a removal writes the stack and the value before
+//! its change notification runs, so its `NotYet` may follow a write. With P0, P8 and P9 passed, such a `NotYet` comes
+//! only from a stack write's own consequences (a change notification's script), as the note's section 3 says.
 //!
 //! **Reference** (architecture R3): unbound, the stub policy answers it, as before.
 
@@ -280,17 +280,13 @@ fn plan(vm: &mut Vm, call_fn: ow_object::ids::FuncId, item: ObjRef, flag: bool, 
 /// W1 to W3 (module documentation); `existing` is what the out argument held. Returns the out array's new value.
 fn writes(vm: &mut Vm, item: ObjRef, flag: bool, plan: Plan, existing: Vec<Value>) -> Result<Value, VmError> {
     let attrs = vm.attrs.clone();
-    // W1: the removals, notifications on, results ignored. The partial-writes mark starts once the first operation
-    // may have written (review r1 of #483): a refusal of the very first removal, before it touched anything, is
-    // returned unmarked.
-    let mut first = true;
+    // W1: the removals, notifications on, results ignored. Every failure from here on is marked (review r2 of #483):
+    // a removal writes the stack and the value before its change notification runs, so even the first removal's
+    // `NotYet` can follow a write; the refusals that come before any write were decided by P9.
     for &(context, attribute, modifier) in &plan.removals {
-        let r = attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(vm));
-        match r {
-            Ok(_) => first = false,
-            Err(e) if first => return Err(e.into()),
-            Err(e) => return Err(ow_world::pools::after_partial_writes(e.into())),
-        }
+        attrs
+            .remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(vm))
+            .map_err(|e| ow_world::pools::after_partial_writes(e.into()))?;
     }
     // W2: the list emptied. From here on every failure comes after a write.
     vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(Vec::new()))?;

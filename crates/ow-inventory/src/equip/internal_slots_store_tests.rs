@@ -98,5 +98,8 @@ fn p0_returns_a_failed_load_unchanged() {
     let mut x = fx();
     let broken = x.broken;
     let e = load_attribute(&mut x.vm, broken).unwrap_err();
-    assert!(!format!("{e:?}").contains("partial writes"), "{e:?}");
+    assert!(
+        matches!(e, ow_vm::error::VmError::Def(ow_defs::store::DefError::Decode(_))),
+        "the store's own decode error, typed: {e:?}"
+    );
 }
