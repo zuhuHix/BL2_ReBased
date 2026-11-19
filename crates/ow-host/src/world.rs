@@ -21,9 +21,9 @@
 //! value here (rule R3).
 //!
 //! **The physics step.** The world asks its host for the physics of every actor whose `Physics` is not `PHYS_None`.
-//! [`install_physics`] gives it one that answers `NotYet` for every mode, naming the actor's class and mode: the H4
-//! mover is the player pawn's, and nothing else in the host moves world actors yet. On Sanctuary that halts the first
-//! tick (decision 2026-11-19-01 has the census of what blocks it).
+//! [`install_physics`] answers with [`physics_rule`] per mode (lane H-PHYSICS-MODES, decision 2026-11-19-22): an
+//! interpolating actor no loaded Matinee op names moves nothing; every other mode answers `NotYet` naming its
+//! question. The Matinee scan ([`matinee_bound`]) runs once, after the map load.
 //!
 //! **What stays `NotYet`** before any tick: W5-MAPLOAD's three pending steps (the begin-play pass, the game info,
 //! the local player), listed in [`LoadSummary::pending`]. Their implementer is a separate lane (NATIVE_MAP_LOAD.md);
@@ -484,6 +484,116 @@ fn pawns(vm: &mut Vm) -> Result<(Vec<PawnActor>, Vec<String>), VmError> {
     Ok((out, unplaced))
 }
 
+/// The Matinee op class (NATIVE_KISMET_MATINEE.md: the op binds its group actors through object-variable links).
+pub const MATINEE_OP_CLASS: &str = "Engine.SeqAct_Interp";
+
+/// The actors a Matinee op in the placed actors' map files names through an object-variable link: every
+/// `SeqAct_Interp` (or subclass) export of those files is loaded, and each `SeqVar_Object.ObjValue` its
+/// `VariableLinks` name is collected. Any link counts, not only the one whose description is a group name, so the set
+/// errs towards "may be driven". A linked variable that holds no `ObjValue` (a named or list variable, say) is
+/// counted by class in [`MatineeBindings::unresolved`]: while any is, the set may miss an actor. Loads the ops and their
+/// variables into the world's object space.
+pub fn matinee_bound(vm: &mut Vm) -> Result<MatineeBindings, String> {
+    let mut out = MatineeBindings::default();
+    let Ok(op_class) = vm.find_class(MATINEE_OP_CLASS) else {
+        return Ok(out);
+    };
+    let list = {
+        let actors = ow_world::actors::actors_of(vm).map_err(|e| e.to_string())?;
+        let list = actors.try_borrow().map_err(|_| "the actor list is borrowed")?.list().to_vec();
+        list
+    };
+    let mut packages = ow_core::DetSet::new();
+    for o in list {
+        if let Ok(object) = vm.space.heap.get(o)
+            && let Origin::Export { package, .. } = object.origin
+        {
+            packages.insert(package);
+        }
+    }
+    let mut is_op: ow_core::DetMap<String, bool> = ow_core::DetMap::new();
+    for package in packages {
+        let mut ops = Vec::new();
+        {
+            let pkg = vm.defs.packages().get(package);
+            for (i, entry) in pkg.exports.iter().enumerate() {
+                if entry.class == 0 {
+                    continue;
+                }
+                let Ok(class) = pkg.path_of(entry.class) else { continue };
+                ops.push((i32::try_from(i + 1).map_err(|e| e.to_string())?, class));
+            }
+        }
+        for (index, class) in ops {
+            let op = match is_op.get(&class) {
+                Some(&known) => known,
+                None => {
+                    let known = vm.find_class(&class).is_ok_and(|c| vm.space.classes.is_child_of(c, op_class));
+                    is_op.insert(class, known);
+                    known
+                }
+            };
+            if !op {
+                continue;
+            }
+            let Some(o) = vm.defs.resolve_ref(&mut vm.space, package, index).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let Some(Value::Array(links)) = read(&vm.space, o, "VariableLinks") else { continue };
+            let mut variables = Vec::new();
+            for link in links.iter() {
+                if let Some(Value::Array(vars)) = field(&vm.space, link, "LinkedVariables") {
+                    variables.extend(vars.iter().filter_map(|v| match v {
+                        Value::Object(Some(r)) => Some(*r),
+                        _ => None,
+                    }));
+                }
+            }
+            out.ops += 1;
+            for var in variables {
+                vm.defs.ensure_loaded(&mut vm.space, var).map_err(|e| e.to_string())?;
+                match read(&vm.space, var, "ObjValue") {
+                    Some(Value::Object(Some(actor))) => {
+                        out.bound.insert(actor);
+                    }
+                    Some(Value::Object(None)) => out.empty += 1,
+                    _ => {
+                        let class = vm.space.heap.get(var).map_err(|e| e.to_string())?.class;
+                        let object_var = vm
+                            .find_class(OBJECT_VARIABLE_CLASS)
+                            .is_ok_and(|c| vm.space.classes.is_child_of(class, c));
+                        if object_var || vm.space.prop(class, "ObjList").is_some() {
+                            out.unreadable += 1;
+                        }
+                        *out.unresolved.entry(ow_attr::eval::class_path(&vm.space, var)).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// What [`matinee_bound`] found.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MatineeBindings {
+    /// Matinee ops read.
+    pub ops: usize,
+    /// The actors their object variables hold.
+    pub bound: ow_core::DetSet<ObjRef>,
+    /// Object variables holding nothing.
+    pub empty: usize,
+    /// Linked variables with no `ObjValue`, by class.
+    pub unresolved: ow_core::DetMap<String, usize>,
+    /// Of those, the ones that could still hold an actor: an object variable (or subclass) without the value, or a
+    /// variable with an `ObjList`.
+    pub unreadable: usize,
+}
+
+/// The object variable class whose `ObjValue` the scan reads.
+pub const OBJECT_VARIABLE_CLASS: &str = "Engine.SeqVar_Object";
+
 /// The record the host's physics step names.
 pub const PHYSICS_RECORD: &str = "NATIVE_PLAYER_MOVEMENT.md";
 
@@ -506,20 +616,92 @@ fn physics_name(space: &ObjectSpace, o: ObjRef) -> String {
     name.unwrap_or_else(|| format!("Physics {value}"))
 }
 
-/// Installs the host's physics step on `world` (`World::set_physics_step`). Every mode answers `NotYet`, naming the
-/// actor's class and its physics mode: the H4 mover (`crate::movement`) is the player pawn's walking and falling, and
-/// it is not applied to other actors. A placed pawn's movement parameters and its controller's acceleration are not
-/// read, the interpolating and rotating modes are not ported, and the world has no player pawn before the local
-/// player step W5-MAPLOAD leaves pending.
-pub fn install_physics(world: &mut World) -> Result<(), String> {
+/// What the Matinee scan says about one interpolating actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Driver {
+    /// A loaded Matinee op names it: the op's playback would move it.
+    Bound,
+    /// No loaded Matinee op names it, and every linked variable was read.
+    Unbound,
+    /// Some op links a variable the scan could not read, so whether one names it is not known.
+    Unknown,
+}
+
+/// The record of the Matinee playback.
+pub const KISMET_RECORD: &str = "NATIVE_KISMET_MATINEE.md";
+/// The record of the actor tick and the modes it hands to physics.
+pub const ENGINE_RECORD: &str = "NATIVE_ENGINE_CORE.md";
+
+/// The host's physics for one placed actor of class `class` in physics mode `mode` (lane H-PHYSICS-MODES, decision
+/// 2026-11-19-22). `Ok` is a step that moves nothing; every other answer is a `NotYet` naming its question.
+/// - `PHYS_None`: nothing (the world does not call physics for it; answered for completeness).
+/// - `PHYS_Interpolating`: an actor no loaded Matinee op names moves nothing. Stock UE3's interpolating mode is the
+///   one Matinee drives, and the world runs no other driver: it runs no Kismet, so the object variables empty at load
+///   stay empty. UNVERIFIED in the running game, and so is that the game's interpolating step does nothing else for
+///   such an actor. A bound actor answers `NotYet` for the playback (layer absent); an actor the scan cannot judge,
+///   `NotYet` (not read).
+/// - `PHYS_Walking` and `PHYS_Falling`: `NotYet`. The H4 mover is the player pawn's and is not applied to other pawns:
+///   the walking step itself is not read (NATIVE_PLAYER_MOVEMENT.md, "Not read yet"), a placed pawn's movement values
+///   are not read, its acceleration comes from a controller that does not exist before begin play, and the collision
+///   the mover uses lives on the host side, not with the world.
+/// - `PHYS_NavMeshWalking` (Gearbox's), `PHYS_Rotating` and every other mode: `NotYet` (not read).
+pub fn physics_rule(mode: &str, class: &str, driver: Driver) -> Result<(), ow_core::NotYet> {
+    use ow_core::NotYet;
+    match mode {
+        "PHYS_None" => Ok(()),
+        "PHYS_Interpolating" => match driver {
+            Driver::Unbound => Ok(()),
+            Driver::Bound => Err(NotYet::layer_absent(
+                format!("the Matinee playback that moves a bound interpolating {class}"),
+                "Kismet and Matinee playback in the world",
+                KISMET_RECORD,
+            )),
+            Driver::Unknown => Err(NotYet::not_read(
+                format!(
+                    "whether a Matinee op names an interpolating {class} (an op links a variable the scan cannot read)"
+                ),
+                KISMET_RECORD,
+            )),
+        },
+        "PHYS_Walking" | "PHYS_Falling" => Err(NotYet::not_read(
+            format!(
+                "the {mode} physics of a placed {class}: the walking and falling step of a pawn that is not the \
+                 player's, its movement values and its controller's acceleration"
+            ),
+            PHYSICS_RECORD,
+        )),
+        "PHYS_NavMeshWalking" => Err(NotYet::not_read(
+            format!("the nav-mesh walking physics (a Gearbox mode) of a placed {class}"),
+            ENGINE_RECORD,
+        )),
+        "PHYS_Rotating" => Err(NotYet::not_read(
+            format!(
+                "the rotating physics of a placed {class}: how RotationRate x DeltaTime becomes rotator units, \
+                 DesiredRotation, and a turn that collision blocks"
+            ),
+            ENGINE_RECORD,
+        )),
+        other => Err(NotYet::not_read(format!("the {other} physics of a placed {class}"), ENGINE_RECORD)),
+    }
+}
+
+/// Installs the host's physics step on `world` (`World::set_physics_step`): [`physics_rule`] for each actor, with
+/// `bindings` from [`matinee_bound`] over the loaded map. While any linked variable is one that could hold an actor
+/// and was not read ([`MatineeBindings::unreadable`]), every interpolating actor is [`Driver::Unknown`].
+pub fn install_physics(world: &mut World, bindings: MatineeBindings) -> Result<(), String> {
+    let bindings = Rc::new(bindings);
     world
-        .set_physics_step(Rc::new(|vm: &mut Vm, actor: ObjRef, _dt: f32| {
-            let class = ow_attr::eval::class_path(&vm.space, actor);
+        .set_physics_step(Rc::new(move |vm: &mut Vm, actor: ObjRef, _dt: f32| {
             let mode = physics_name(&vm.space, actor);
-            Err(VmError::NotYet(ow_core::NotYet::not_ported(
-                format!("the host's {mode} physics for a placed {class}"),
-                PHYSICS_RECORD,
-            )))
+            let driver = if bindings.unreadable > 0 {
+                Driver::Unknown
+            } else if bindings.bound.contains(&actor) {
+                Driver::Bound
+            } else {
+                Driver::Unbound
+            };
+            let class = ow_attr::eval::class_path(&vm.space, actor);
+            physics_rule(&mode, &class, driver).map_err(VmError::NotYet)
         }))
         .map_err(|e| e.to_string())
 }
@@ -556,9 +738,10 @@ pub fn build_installed(cooked: PathBuf, map: String, mode: ParityMode) -> Result
         vm.add_service(backend).map_err(|e| e.to_string())?;
     }
     let mut world = World::new(vm, play_balance()?, &[]).map_err(|e| e.to_string())?;
-    install_physics(&mut world)?;
     let name = PackageName::parse(&map).map_err(|e| format!("{map}: {e}"))?;
     let report = load_map(&mut world, &name).map_err(|e| format!("loading {map} into the world: {e}"))?;
+    let bindings = matinee_bound(&mut world.vm).map_err(|e| format!("reading {map}'s Matinee bindings: {e}"))?;
+    install_physics(&mut world, bindings)?;
     let actors = world.actors().borrow().list().len();
     let mut summary = LoadSummary::from_report(&map, mode, &report, actors);
     summary.load_time = started.elapsed();

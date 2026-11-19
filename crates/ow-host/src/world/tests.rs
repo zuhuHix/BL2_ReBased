@@ -42,7 +42,7 @@ fn engine() -> Vec<u8> {
     let actor = t.class("Actor", object);
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
-    let values = ["PHYS_None", "PHYS_Walking"];
+    let values = ["PHYS_None", "PHYS_Walking", "PHYS_Falling", "PHYS_Rotating", "PHYS_Interpolating"];
     payload.extend(ints(&[0, values.len() as i32]));
     for v in values {
         let bytes = t.p.fname(v, 0);
@@ -76,9 +76,9 @@ fn engine() -> Vec<u8> {
 }
 
 /// A map: `TheWorld` (1), `PersistentLevel` (2), `WorldInfo_0` (3, time dilation 1), `Actor_0` (4), `Pawn_0` (5);
-/// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`; with `walking` its `Physics` is
-/// `PHYS_Walking`. With `streaming`, the `WorldInfo` names that level through a `LevelStreaming` (6).
-fn map(remote_role: u8, walking: bool, streaming: Option<&str>) -> Vec<u8> {
+/// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`, and its `Physics` is `physics` when
+/// given. With `streaming`, the `WorldInfo` names that level through a `LevelStreaming` (6).
+fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
@@ -115,8 +115,8 @@ fn map(remote_role: u8, walking: bool, streaming: Option<&str>) -> Vec<u8> {
     assert_eq!(add(&mut p, world_info, "WorldInfo_0", 2, 26, wi_tags, Vec::new()), 3);
     assert_eq!(add(&mut p, actor, "Actor_0", 2, 26, vec![role.clone()], Vec::new()), 4);
     let mut tags = vec![role, p.byte_tag("RemoteRole", remote_role)];
-    if walking {
-        tags.push(p.enum_tag("Physics", "EPhysics", "PHYS_Walking"));
+    if let Some(mode) = physics {
+        tags.push(p.enum_tag("Physics", "EPhysics", mode));
     }
     assert_eq!(add(&mut p, pawn, "Pawn_0", 2, 26, tags, Vec::new()), 5);
     if let Some(name) = streaming {
@@ -129,22 +129,30 @@ fn map(remote_role: u8, walking: bool, streaming: Option<&str>) -> Vec<u8> {
 /// A builder over a fresh store holding the invented packages, that also moves the pawn to `at` after the load (the
 /// invented `Vector` has no tagged form here, so the placement is written, not read).
 fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
-    builder_with(remote_role, false, at, yaw)
+    builder_with(remote_role, None, false, at, yaw)
 }
 
 /// [`builder`] over a map whose `WorldInfo` streams a second level, `Test_Sub`, that places its own `Pawn_0`; the last
 /// pawn (the streamed level's) is the one moved to `at`.
 fn streaming_builder(at: [f32; 3]) -> Builder {
-    builder_files(0, false, true, at, 0)
+    builder_files(0, None, false, true, at, 0)
 }
 
-/// [`builder`] with the pawn in `PHYS_Walking` when `walking`, and the host's physics step installed.
-fn builder_with(remote_role: u8, walking: bool, at: [f32; 3], yaw: i32) -> Builder {
-    builder_files(remote_role, walking, false, at, yaw)
+/// [`builder`] with the pawn's `Physics` set to `physics` when given, and the host's physics step installed after
+/// the load with Matinee bindings that name the pawn when `bound` (the invented packages hold no Matinee op).
+fn builder_with(remote_role: u8, physics: Option<&'static str>, bound: bool, at: [f32; 3], yaw: i32) -> Builder {
+    builder_files(remote_role, physics, bound, false, at, yaw)
 }
 
 /// [`builder_with`], with the streamed level `Test_Sub` when `streamed`.
-fn builder_files(remote_role: u8, walking: bool, streamed: bool, at: [f32; 3], yaw: i32) -> Builder {
+fn builder_files(
+    remote_role: u8,
+    physics: Option<&'static str>,
+    bound: bool,
+    streamed: bool,
+    at: [f32; 3],
+    yaw: i32,
+) -> Builder {
     Box::new(move || {
         let dir = std::env::temp_dir().join(format!(
             "ow-host-world-{}-{}",
@@ -153,8 +161,8 @@ fn builder_files(remote_role: u8, walking: bool, streamed: bool, at: [f32; 3], y
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let engine = engine();
-        let map_p = map(remote_role, walking, streamed.then_some("Test_Sub"));
-        let map_sub = map(remote_role, walking, None);
+        let map_p = map(remote_role, physics, streamed.then_some("Test_Sub"));
+        let map_sub = map(remote_role, physics, None);
         let mut files: Vec<(&str, &[u8])> = vec![("Engine.upk", &engine), ("Test_P.upk", &map_p)];
         if streamed {
             files.push(("Test_Sub.upk", &map_sub));
@@ -163,11 +171,16 @@ fn builder_files(remote_role: u8, walking: bool, streamed: bool, at: [f32; 3], y
             .map_err(|e| e.to_string())?;
         let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
         let mut world = World::new(vm, play_balance()?, &[]).map_err(|e| e.to_string())?;
-        install_physics(&mut world)?;
         let report = load_map(&mut world, &PackageName::parse("Test_P").unwrap()).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_dir_all(&dir);
         let list = world.actors().borrow().list().to_vec();
         let pawn = *list.last().unwrap();
+        let mut bindings = matinee_bound(&mut world.vm)?;
+        assert_eq!(bindings.ops, 0, "the invented packages hold no Matinee op");
+        if bound {
+            bindings.bound.insert(pawn);
+        }
+        install_physics(&mut world, bindings)?;
         let space = &mut world.vm.space;
         let names = [("Location", ["X", "Y", "Z"]), ("Rotation", ["Pitch", "Yaw", "Roll"])];
         let values = [at.map(Value::Float), [Value::Int(0), Value::Int(yaw), Value::Int(0)]];
@@ -235,15 +248,59 @@ fn a_tick_that_fails_halts_the_world_and_names_the_not_yet() {
 }
 
 #[test]
-fn the_host_s_physics_step_answers_not_yet_naming_the_actor_and_its_mode() {
-    let (mut link, _) = WorldLink::spawn(builder_with(0, true, [0.0; 3], 0)).unwrap();
+fn a_walking_pawn_halts_the_tick_with_the_walking_step_s_not_yet() {
+    let (mut link, _) = WorldLink::spawn(builder_with(0, Some("PHYS_Walking"), false, [0.0; 3], 0)).unwrap();
     let frame = link.tick(0.5);
     let halt = frame.halted.clone().expect("the walking pawn halts the tick");
     assert!(halt.not_yet, "{}", halt.message);
-    assert!(halt.message.contains("the host's PHYS_Walking physics for a placed Engine.Pawn"), "{}", halt.message);
+    assert!(halt.message.contains("the PHYS_Walking physics of a placed Engine.Pawn"), "{}", halt.message);
     assert!(halt.message.contains(PHYSICS_RECORD), "{}", halt.message);
     // The clock advanced before the actor pass, and the read-back shows it.
     assert_eq!((frame.ticks, frame.time_seconds, frame.delta_seconds), (0, Some(0.5), Some(0.5)));
+}
+
+#[test]
+fn an_interpolating_actor_no_matinee_names_ticks_and_stays_put() {
+    let at = [5.0, 6.0, 7.0];
+    let (mut link, summary) = WorldLink::spawn(builder_with(0, Some("PHYS_Interpolating"), false, at, 0)).unwrap();
+    let mut frame = WorldFrame::default();
+    for _ in 0..3 {
+        frame = link.tick(0.25);
+    }
+    assert_eq!((frame.halted.clone(), frame.ticks, frame.time_seconds), (None, 3, Some(0.75)));
+    assert_eq!(frame.pawns, summary.pawns);
+}
+
+#[test]
+fn an_interpolating_actor_a_matinee_names_waits_for_the_playback() {
+    let (mut link, _) = WorldLink::spawn(builder_with(0, Some("PHYS_Interpolating"), true, [0.0; 3], 0)).unwrap();
+    let halt = link.tick(0.25).halted.expect("the bound actor halts the tick");
+    assert!(halt.not_yet, "{}", halt.message);
+    assert!(halt.message.contains("the Matinee playback that moves a bound interpolating Engine.Pawn"), "{}", halt.message);
+    assert!(halt.message.contains(KISMET_RECORD), "{}", halt.message);
+}
+
+#[test]
+fn each_physics_mode_s_rule() {
+    use ow_core::notyet::Missing;
+    let c = "Engine.InterpActor";
+    assert_eq!(physics_rule("PHYS_None", c, Driver::Bound), Ok(()));
+    assert_eq!(physics_rule("PHYS_Interpolating", c, Driver::Unbound), Ok(()));
+    let missing = |mode: &str, driver| physics_rule(mode, c, driver).unwrap_err();
+    assert!(matches!(missing("PHYS_Interpolating", Driver::Bound).missing, Missing::LayerAbsent(_)));
+    for (mode, driver, record, words) in [
+        ("PHYS_Interpolating", Driver::Unknown, KISMET_RECORD, "whether a Matinee op names an interpolating"),
+        ("PHYS_Walking", Driver::Unbound, PHYSICS_RECORD, "the PHYS_Walking physics of a placed"),
+        ("PHYS_Falling", Driver::Unbound, PHYSICS_RECORD, "the PHYS_Falling physics of a placed"),
+        ("PHYS_NavMeshWalking", Driver::Unbound, ENGINE_RECORD, "nav-mesh walking physics (a Gearbox mode)"),
+        ("PHYS_Rotating", Driver::Unbound, ENGINE_RECORD, "how RotationRate x DeltaTime becomes rotator units"),
+        ("PHYS_Spider", Driver::Unbound, ENGINE_RECORD, "the PHYS_Spider physics of a placed"),
+    ] {
+        let n = missing(mode, driver);
+        assert!(matches!(n.missing, Missing::NotRead), "{mode}: {n}");
+        assert_eq!(n.record, record, "{mode}");
+        assert!(n.to_string().contains(words), "{mode}: {n}");
+    }
 }
 
 #[test]
@@ -313,26 +370,94 @@ fn sanctuary_world_ticks_on_the_installed_game() {
     print!("{text}");
 }
 
-/// Diagnostic: the installed Sanctuary world's actors by (class, Physics, Role, RemoteRole, in a state, has Base).
+/// The physics-mode census of the installed Sanctuary world (lane H-PHYSICS-MODES): for every placed actor whose
+/// `Physics` is not `PHYS_None`, its mode by name, class, whether it has a `Base`, and for `PHYS_Interpolating` whether
+/// a loaded Matinee op (`SeqAct_Interp`) binds it through an object-variable link; for `PHYS_Rotating`, its
+/// `RotationRate` and `bRotateToDesired`. Counts only; writes `local/p2/h-physics-modes/census.txt`.
 #[test]
-#[ignore = "reads the installed game (OW_BL2_ROOT); diagnostic"]
-fn sanctuary_tick_census() {
+#[ignore = "reads the installed game (OW_BL2_ROOT); writes local/p2/h-physics-modes/"]
+fn sanctuary_physics_census() {
     let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
     let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
     let text = ow_vm::interp::on_vm_stack(move || {
-        let (world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let (mut world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let list = world.actors().borrow().list().to_vec();
+        let bindings = matinee_bound(&mut world.vm).unwrap();
+        let bound = bindings.bound.clone();
         let space = &world.vm.space;
-        let byte = |o, n: &str| match read(space, o, n) { Some(Value::Byte(b)) => i32::from(b), _ => -1 };
         let mut census: std::collections::BTreeMap<String, usize> = Default::default();
-        for &o in world.actors().borrow().list() {
+        let mut modes: std::collections::BTreeMap<String, usize> = Default::default();
+        // What the tick meets per physics actor, in list order: the world's Base NotYet before physics, else the
+        // host's rule. The first entry is where tick 1 stops.
+        let mut outcomes: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut first_stop: Option<String> = None;
+        for &o in &list {
+            let mode = physics_name(space, o);
+            *modes.entry(mode.clone()).or_default() += 1;
+            if mode == "PHYS_None" {
+                continue;
+            }
             let class = ow_attr::eval::class_path(space, o);
-            let state = space.heap.get(o).unwrap().state.is_some();
             let base = matches!(read(space, o, "Base"), Some(Value::Object(Some(_))));
-            let key = format!("phys {} role {} remote {} tg {} state {state} base {base} {class}", byte(o, "Physics"), byte(o, "Role"), byte(o, "RemoteRole"), byte(o, "TickGroup"));
-            *census.entry(key).or_default() += 1;
+            let mut extra = String::new();
+            if mode == "PHYS_Interpolating" {
+                extra = format!(" matinee-bound {}", bound.contains(&o));
+            }
+            if mode == "PHYS_Rotating" {
+                let rate = read(space, o, "RotationRate").map(|v| {
+                    ["Pitch", "Yaw", "Roll"].map(|a| match field(space, &v, a) {
+                        Some(Value::Int(n)) => *n,
+                        _ => i32::MIN,
+                    })
+                });
+                extra = format!(" RotationRate {rate:?} bRotateToDesired {:?}", read(space, o, "bRotateToDesired"));
+            }
+            *census.entry(format!("{mode} {class} base {base}{extra}")).or_default() += 1;
+            let driver = if bindings.unreadable > 0 {
+                Driver::Unknown
+            } else if bound.contains(&o) {
+                Driver::Bound
+            } else {
+                Driver::Unbound
+            };
+            let outcome = if base {
+                "the world's Base NotYet".to_string()
+            } else {
+                match physics_rule(&mode, &class, driver) {
+                    Ok(()) => "passes (no-op)".to_string(),
+                    Err(n) => format!("NotYet: {}", n.what),
+                }
+            };
+            if first_stop.is_none() && outcome != "passes (no-op)" {
+                first_stop = Some(format!("{class}: {outcome}"));
+            }
+            *outcomes.entry(outcome).or_default() += 1;
         }
-        census.iter().map(|(k, n)| format!("{n:5} {k}\n")).collect::<String>()
+        let mut out = format!(
+            "actors {}; {} matinee ops bind {} actors; {} empty object variables; other linked variables {:?}\n",
+            list.len(),
+            bindings.ops,
+            bound.len(),
+            bindings.empty,
+            bindings.unresolved
+        );
+        out.push_str(&format!("first stop in list order: {first_stop:?}
+"));
+        for (k, n) in &outcomes {
+            out.push_str(&format!("outcome x{n}: {k}
+"));
+        }
+        for (m, n) in &modes {
+            out.push_str(&format!("mode {m}: {n}\n"));
+        }
+        for (k, n) in &census {
+            out.push_str(&format!("{n:5} {k}\n"));
+        }
+        out
     })
     .unwrap();
+    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/p2/h-physics-modes");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("census.txt"), &text).unwrap();
     print!("{text}");
 }

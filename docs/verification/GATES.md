@@ -297,6 +297,12 @@ actors, 0 refused, 11 pawns; halted at tick 1 (`NotYet`: the host's `PHYS_Interp
 `Engine.InterpActor`), `TimeSeconds` 0.016667; path digest `d7b95ebfe14df774`, world digest `c233c6faac880f05`; the
 window drew 1 of 11 pawns (median frame 1.724 ms).
 
+**After H-PHYSICS-MODES (2026-11-19, same machine; decision `2026-11-19-22`):** the same path and world digests; still
+halted at tick 1, now on the Matinee playback of a bound interpolating `WillowGame.WillowSpectatorPoint`. A change to
+the physics step reruns the census (`world::tests::sanctuary_physics_census`, ignored, `OW_BL2_ROOT`) and reports its
+first stop and outcome counts (today 57 pass, 23 at the world's `Base` guard, 66 at Matinee playback, 13 at the
+walking, nav-mesh walking and rotating modes).
+
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records
