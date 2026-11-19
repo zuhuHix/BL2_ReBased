@@ -24,10 +24,9 @@ lists everything to build.
     (array of `AttributeModifier`), `ReplicationStrategy` (the enum), `IndexInReplicationArray` (int).
   - `ReplicatedNounAttributeState`: `NounName`, `Value` (float), `bOnlyRelevantToOwner` (bool).
 - Four classes implement the interface, and they are exactly the four whose class declares a `NounState` array of
-  `NounAttributeState`: `GearboxMind`, `WillowPawn`, `WillowPlayerReplicationInfo`, `WillowWeapon`. The last three also
-  declare a fixed-size `ReplicatedNouns` array of `ReplicatedNounAttributeState` and an int `NumReplicatedNouns`.
-  **Corrected (section 10.2):** only `WillowPawn` and `WillowPlayerReplicationInfo` declare those two; `WillowWeapon`
-  does not.
+  `NounAttributeState`: `GearboxMind`, `WillowPawn`, `WillowPlayerReplicationInfo`, `WillowWeapon`. Only `WillowPawn`
+  and `WillowPlayerReplicationInfo` also declare a fixed-size `ReplicatedNouns` array of
+  `ReplicatedNounAttributeState` (20 entries) and an int `NumReplicatedNouns` (the export tables; section 10.2).
 - The installed data has 15 Noun resolvers. Each is the only value resolver of its attribute and a subobject of that
   attribute definition. The attributes resolve their context through the WillowMind (12, among them the
   `GD_Balance_HealthAndDamage.AIParameters` multipliers such as `Attribute_HealthMultiplier`), the weapon (2,
@@ -63,13 +62,13 @@ every other mode (the slice is single player, so always this one). `d` is the re
 ordinary initialization data (the evaluator the script's `AttributeInitializationDefinition.EvaluateInitializationData`
 uses) with the context as the source and no override source, in single precision.
 
-| Context | Strategy | Net mode | Store used | Missing entry created? | Get / get-base | Writes (add, remove, set-base) |
-|---|---|---|---|---|---|---|
-| not a provider, or the resolver has no outer | any | any | none | no | 0.0 / 0.0 | false |
-| provider | 0 | any | `NounState` | yes, by reads and writes alike | entry `Value` / entry `BaseValue` | applied to the entry (section 5) |
-| provider with a replicated array | 1 or 2 | standalone or server | `NounState`, mirrored into `ReplicatedNouns` | yes, by reads and writes alike, with a replicated slot | entry `Value` / entry `BaseValue` | applied to the entry, then mirrored |
-| provider without a replicated array | 1 or 2 | any | none | no | 0.0 / 0.0 | false |
-| provider with a replicated array | 1 or 2 | client | `ReplicatedNouns` only (its first `NumReplicatedNouns` slots, by `NounName`) | no | slot `Value`, or 0.0 when no slot matches / 0.0 | false |
+**Which store** each case uses is settled in **section 10.5's storage-selection table**, which puts the net mode
+together with the arrays each provider hands over (section 10.2). The rows that used to stand here are replaced by it.
+In short:
+- no outer, or not a provider: no store;
+- strategy 0: `NounState` when the provider hands it over;
+- strategies 1 and 2: `NounState` mirrored into `ReplicatedNouns`, or `ReplicatedNouns` read alone, or no store,
+  depending on the arrays and the net mode.
 
 A provider that hands over no `NounState` array behaves as "not a provider" for strategy 0. **Which arrays each
 provider hands over is read in section 10.2:**
@@ -130,12 +129,22 @@ says "none", reads return 0.0 and writes return false, and nothing changes.
 
 ## 7. What the port does now (`ow-attr`, UNVERIFIED)
 
-- `ParityMode::Off`: get, get-base and the writes answer `NotYet` (`NotPorted`), "native rule in
-  NATIVE_NOUN_ATTRIBUTES.md, awaiting clean-room implementation".
-- `ParityMode::Reference`: the C++ reading (`src/progression.cpp` `nounValue`): the `BaseValue` of the context's
-  `AIClass.AttributeStartingValues` entry for the attribute, else `DefaultValue`, both evaluated on the context; no
-  noun is written, and the writes answer `NotYet` (`NotPorted`) (the C++ has none). The attribute is taken as the
-  resolver's outer. This stands in for the starting values having been applied through set-base.
+- `ParityMode::Off` (lane FIX-NOUN-OFF, decision 2026-11-16-43, `ow-attr`'s `value_resolvers/noun.rs`):
+  - strategy 0 is implemented as sections 3 to 5 say, on any context whose class declares `NounState`;
+  - strategies 1 and 2 on a provider answer `NotYet { NotPorted }`, "NounAttributeValueResolver with
+    ReplicationStrategy <n> on a provider: whether the provider hands over a replicated array, and what the
+    replicated-copy-changed call does, are not read";
+  - a write to an entry that holds a replicated slot answers `NotYet { NotPorted }`, "NounAttributeValueResolver write
+    to an entry with replicated slot <i>: the mirror needs the provider's replicated array and its change call, which
+    are not read".
+
+  Section 10.5 says what replaces those two refusals.
+- `ParityMode::Reference`: the C++ reading (`src/progression.cpp` `nounValue`). It returns the `BaseValue` of the
+  context's `AIClass.AttributeStartingValues` entry for the attribute, else `DefaultValue`, both evaluated on the
+  context.
+  - No noun is written, and the writes answer `NotYet` (`NotPorted`), because the C++ has none.
+  - The attribute is taken as the resolver's outer. This stands in for the starting values having been applied
+    through set-base.
 
 ## 8. Implementer checklist (Off mode)
 
@@ -146,9 +155,10 @@ says "none", reads return 0.0 and writes return false, and nothing changes.
    orderings).
 4. Get = `Value`, get-base = `BaseValue`, ignoring the previous chain value.
 5. Add (dedupe), remove (all copies), set-base, each followed by the recompute and the mirror; true on success.
-6. Single player: the client row of the table is not needed; the replicated copy only matters for `IsPhaselocked`
-   on a pawn and is read only by clients.
-7. `ow-attr`'s `Storage` has no form for a noun entry (its own base and modifier stack): the writes need one.
+6. **The net mode and the replicated copy:** section 10.5's table. The replicated copy matters on the slice too:
+   `IsPhaselocked` (strategy 2) on a pawn creates a replicated slot and sets `bNetDirty` (section 10.3).
+7. `ow-attr` has a noun form of `Storage` (`Storage::Noun`, FIX-NOUN-OFF); the mirror of section 10.3 writes the slot
+   and `bNetDirty` beside it.
 8. **How the class values arrive.** In the game the AI class's starting values reach a noun only through the script's
    `SetBaseValue` (section 1, `WillowPawn.ApplyAttributeStartingValues`). Until that has run on a context, the first
    get returns `d`, not the class value: 1.0 for `Attribute_HealthMultiplier`, whatever the AI class lists. So the
@@ -210,8 +220,8 @@ in each class. `WillowAIPawn` and `WillowPlayerPawn` hold the same two functions
   info is a provider with no `NounState` (section 10.4).
 
 **The names.** `Role` and `bNetDirty` are the `Actor` fields the layout tool places exactly. The pawn's three noun
-fields sit four bytes from where the tool places `WillowPawn`'s fields, the known shift of that class, and fit
-`NumReplicatedNouns`, `NounState` and `ReplicatedNouns` in that order. By fit, high confidence, UNVERIFIED by name.
+fields are named by fit with `NumReplicatedNouns`, `NounState` and `ReplicatedNouns`, in that order: high confidence,
+UNVERIFIED by name.
 The capacity 20 is the declared size of `ReplicatedNouns[20]`.
 
 **The slice's pawn.** `GD_Siren_Skills.Attributes.IsPhaselocked` (strategy 2) resolves its context to a pawn. In the
@@ -245,62 +255,110 @@ the replicated-copy call.
 
 A pawn, a mind or a replication info whose `Role` is not 3:
 - **Strategy 0:** no store. Reads give 0.0, writes give false, nothing is created.
-- **Strategy 1 or 2** (a pawn or a replication info): the replicated array alone is read. Reads give the first slot,
-  among the first `NumReplicatedNouns`, whose `NounName` is the key, or 0.0 when none matches; get-base gives 0.0.
-  Writes give false, and nothing is created. This is section 4's client row; it also applies off authority in any net
-  mode.
+- **Strategy 1 or 2** (a pawn or a replication info): `ReplicatedNouns` is read alone. Reads give the `Value` of the
+  first slot, among the first `NumReplicatedNouns`, whose `NounName` is the key, or 0.0 when none matches; get-base
+  gives 0.0. Writes give false, and nothing is created. This holds in any net mode.
+
+On a **client** (the world's net mode is the network-client mode), a strategy 1 or 2 noun on a pawn or a replication
+info also reads `ReplicatedNouns` alone, as above, whatever its `Role`. Writes give false.
 
 ### 10.5 Proposed `ParityMode::Off` answer (for an implementer)
 
 The hub's rulings apply:
 - preflight what is cheap and certain;
 - the preflight writes nothing;
-- the "stopped after partial writes: " prefix is the caller's, after a real write;
 - grade by the `VmError` variant and the `NotYet` kind, never by text;
 - **Off only; Reference is unchanged.**
 
-**Inputs:** the context, the resolver's outer's name (the key), `ReplicationStrategy`, `DefaultValue`. On the
-context: its class, `Role`, `NounState`, and for the first row also `ReplicatedNouns`, `NumReplicatedNouns` and
-`bNetDirty`.
+**The write signal and the prefix** (hub ruling, review r1 of #516):
+- The resolver signals its first committed write through `EvalCx::note_writes()`. That includes a creation during get
+  or get-base (an appended entry, a slot, `NumReplicatedNouns` or `bNetDirty`).
+- The resolver returns its own errors unprefixed. The caller prefixes only a `NotYet`, with "stopped after partial
+  writes: ", keeping its kind and record.
+- A preflight failure is raised before any write, so the write flag is left untouched.
 
-**Preflight** (before `d` is evaluated, in this order, writing nothing). Each failure is returned as it is:
-1. **The provider's class**, by its class chain:
-   - `WillowPawn` (with `WillowAIPawn` and `WillowPlayerPawn`), `WillowPlayerReplicationInfo`, `GearboxMind` and
-     `WillowWeapon` are the classes read;
-   - a subclass of one of them that is not listed here takes `NotYet { NotRead }`, "NounAttributeValueResolver: the
-     noun arrays a <class path> hands over are not read", record `NATIVE_NOUN_ATTRIBUTES.md`;
-   - this covers `WillowMind`, whose table was not compared with `GearboxMind`'s. It is open, but every installed mind
-     noun is strategy 0, and the port's minds are made on authority.
-2. **The fields:**
-   - `Role` must be a byte;
-   - `NounState` an array of `NounAttributeState`;
-   - for the first two rows, `ReplicatedNouns` a fixed array of 20 `ReplicatedNounAttributeState`,
+**The error boundary** (hub ruling, review r1 of #516): the existing one is kept. A resolver method returns
+`AttrError`. Malformed data is `AttrError::BadData { reason }`, which reaches the VM as `VmError::Attr`; it is never
+promised as `VmError::Script`.
+
+**The classes read:**
+- `WillowPawn` and its read subclasses `WillowAIPawn` and `WillowPlayerPawn`;
+- `WillowPlayerReplicationInfo`, `GearboxMind` and `WillowWeapon`;
+- each by its exact class.
+
+Any other class whose class declares `NounState` (for example `WillowMind`, which the combat port instantiates and
+the noun context resolver uses) is an **unread class**.
+
+**The storage-selection table.** `NS` is "the provider hands over `NounState`" and `RN` is "it hands over
+`ReplicatedNouns`" (section 10.2). For a read class, `NS` holds unless the class's row needs `Role` 3 and `Role` is
+not 3. For an unread class, `NS` is "the class declares `NounState`", today's rule, and `RN` is not known.
+
+| Case | Strategy | `NS` | `RN` | Net mode | Store | Reads (get / get-base) | Writes (add, remove, set-base) |
+|---|---|---|---|---|---|---|---|
+| no resolver outer, or a context that is not a provider | any | | | any | none (today's) | 0.0 / 0.0 | false |
+| read or unread class | 0 | yes | any | any | `NounState`, created on a miss (today's path) | entry `Value` / `BaseValue` | applied to the entry |
+| read class | 0 | no | any | any | none | 0.0 / 0.0 | false |
+| pawn or replication info | 1 or 2 | yes | yes | not client | `NounState` mirrored into `ReplicatedNouns`, created on a miss with a slot (section 10.3) | entry `Value` / `BaseValue` | applied to the entry, then mirrored |
+| pawn or replication info | 1 or 2 | no, or any on a client | yes | any | `ReplicatedNouns` alone, never created | slot `Value` or 0.0 / 0.0 | false |
+| mind or weapon | 1 or 2 | any | no | any | none | 0.0 / 0.0 | false |
+| unread class | 1 or 2 | yes | unknown | any | refused | `NotYet { NotRead }` (below) | `NotYet { NotRead }` |
+
+Notes on the table:
+- An unread class keeps today's strategy-0 path in full: no `Role` test. Its refusal is scoped to the operations that
+  need unread replication behaviour, strategies 1 and 2.
+- A write to an existing entry with a slot, on an unread class, is refused the same way.
+
+**Preflight**, before `d` is evaluated or anything is written, in this order. Each failure is returned as it is:
+1. **The key and the provider:** no outer, or a context whose class does not declare `NounState`, gives today's
+   0.0 / false. Nothing is refused.
+2. **The strategy:** outside 0 to 2 stays the existing `NotYet { NotRead }`, "NounAttributeValueResolver with
+   ReplicationStrategy <n>, outside the note's table".
+3. **An unread class with strategy 1 or 2,** or a write on an unread class to an entry whose `IndexInReplicationArray`
+   is not -1: `NotYet { NotRead }`, "NounAttributeValueResolver: the noun arrays a <class path> hands over, and its
+   replicated-copy-changed call, are not read (ReplicationStrategy <n>)", record `NATIVE_NOUN_ATTRIBUTES.md`.
+4. **The fields of a read class.** The `Role` byte is read (`Role` 3 is the authority role). Then:
+   - `Role` must be a byte, and `NounState` an array of `NounAttributeState`;
+   - for a pawn or a replication info, `ReplicatedNouns` must be a fixed array of 20 `ReplicatedNounAttributeState`,
      `NumReplicatedNouns` an int, and `bNetDirty` a bool.
+5. **The count:** `NumReplicatedNouns` must lie between 0 and 20.
+6. **An existing entry's slot** (writes, and reads of an entry), before any mutation:
+   - `IndexInReplicationArray` must be an int;
+   - it must be -1, or within the occupied slots `0 .. NumReplicatedNouns - 1`;
+   - the strategy 1 and 2 rows of a read class with `RN` need it there for the mirror;
+   - for the mind and weapon rows, any value other than -1 is malformed, since they hand over no replicated array.
 
-   A missing or mistyped field is `VmError::Script`, "NounAttributeValueResolver: <class path> has no <field>" or
-   "...: <class path>.<field> is not <the type above>".
-3. **`NumReplicatedNouns`** outside 0 to 20 is `VmError::Script`, "NounAttributeValueResolver: <object path> holds
-   NumReplicatedNouns <n>, outside 0..=20".
-4. **The strategy:** outside 0 to 2 stays the existing `NotYet { NotRead }`.
+**The diagnostics**, each an `AttrError::BadData` with this `reason`:
+- "NounAttributeValueResolver: <class path> has no <field>" (a missing declaration);
+- "NounAttributeValueResolver: <class path>.<field> is not <the declaration of step 4>" (a mistyped one);
+- "NounAttributeValueResolver: <object path> holds NumReplicatedNouns <n>, outside 0..=20";
+- "NounAttributeValueResolver: the entry <key> on <object path> holds IndexInReplicationArray <i>, outside -1 and the
+  occupied slots 0..<n>" (with `n` = `NumReplicatedNouns`, or 0 for the mind and weapon rows);
+- the existing "IndexInReplicationArray holds a <kind>, not an int" stays.
 
-**Then the table:**
-- **`Role` 3 (or a weapon), strategy 0:** as today's port.
-- **`Role` 3 on a pawn or a replication info, strategy 1 or 2:**
-  - an existing entry is read and written as today;
-  - a missing one is created as section 10.3 says, in that order;
-  - the writes then mirror into the slot and set `bNetDirty`.
-- **A mind or a weapon, strategy 1 or 2:** no store (section 4's "provider without a replicated array"). Reads give
-  0.0, writes give false, nothing is created, nothing is refused. No installed noun meets this.
-- **`Role` not 3:** section 10.4.
+**Creation with a slot,** in order, as section 10.3 says:
+1. `d` is evaluated. It may create other entries, take slots and set `bNetDirty`.
+2. **`NumReplicatedNouns` is read again**, after `d`. A nested creation may have taken the next slot or filled the
+   array, so the slot is the count as it stands now.
+   - If the count is below 20: the count grows by one, the slot gets `NounName`, `Value` = `d` and
+     `bOnlyRelevantToOwner`, and `bNetDirty` is set true.
+   - If it is 20: no slot, nothing written for it, and slot -1.
+3. The `NounState` entry is appended.
+4. `EvalCx::note_writes()` is called at the first of these writes.
 
-**Writes, in order** (creation only): the evaluation's own writes, then `NumReplicatedNouns`, the slot's three fields
-and `bNetDirty` (when there is room), then the `NounState` append. The resolver reports the entry as made.
-- If an error comes after the first of these writes, the caller marks it.
-- The "too many" case writes no slot. Its log line is the port's to choose; it is not graded.
+**A successful mirror,** in order:
+1. the entry's stack or base is changed;
+2. its `Value` is recomputed (section 5);
+3. `ReplicatedNouns[slot].Value` = that `Value`;
+4. `bNetDirty` is set true.
 
-**What the existing refusal becomes.** Today's `NotYet { NotPorted }`, "with ReplicationStrategy <n> on a provider:
-whether the provider hands over a replicated array, and what the replicated-copy-changed call does, are not read",
-goes for the classes above. It stays only through preflight step 1, for classes not read.
+`note_writes()` is called at the first of these.
+
+**Which refusals each rule replaces:**
+- The strategy 1 and 2 `NotYet { NotPorted }` (section 7) goes for every read class. For an unread class, it is
+  replaced by preflight step 3's `NotYet { NotRead }`.
+- The mirror's `NotYet { NotPorted }` (section 7) goes for every read class, which mirrors as above. For an unread
+  class, it is replaced by step 3's `NotYet { NotRead }`.
+- The existing "outside the note's table" `NotRead` and the existing `BadData`s stay.
 
 ### 10.6 Open (UNVERIFIED)
 
