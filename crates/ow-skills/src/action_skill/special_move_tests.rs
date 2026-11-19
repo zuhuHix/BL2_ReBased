@@ -131,6 +131,8 @@ fn engine() -> Vec<u8> {
     t.prop("Object", pawn, "Allegiance", 0, allegiance);
     native(&mut t, pawn, "IsAliveAndWell", &[], Some(("Bool", vec![0])));
     native(&mut t, pawn, "IsFriendly", &[D("Object", "Other", 0, vec![pawn])], Some(("Bool", vec![0])));
+    native(&mut t, pawn, "GetOpinion", &[D("Object", "Other", 0, vec![pawn])], Some(("Byte", vec![0])));
+    native(&mut t, pawn, "IsEnemy", &[D("Object", "Other", 0, vec![pawn])], Some(("Bool", vec![0])));
     native(&mut t, pawn, "ToyDone", &[D("Bool", "bInterrupted", 0, vec![0])], None);
     let controller = t.class("Controller", actor);
     t.prop("Object", controller, "Pawn", 0, pawn);
@@ -911,5 +913,17 @@ fn reference_binds_nothing() {
         let f = vm.find_function(path).unwrap();
         let key = vm.function(f).unwrap().native_key.clone().unwrap();
         assert!(!vm.has_native(&key), "{path}");
+    }
+}
+
+/// The action skill pack alone binds no groundwork stand-in in Off (review r2 of #449): `IsEnemy` stays unbound
+/// there, and Reference binds it with the combat pack's allegiance natives.
+#[test]
+fn the_cast_pack_binds_no_groundwork_test_in_off() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut x = fx(mode);
+        let f = x.vm().find_function("Engine.Pawn.IsEnemy").unwrap();
+        let key = x.vm().function(f).unwrap().native_key.clone().unwrap();
+        assert_eq!(x.vm().has_native(&key), mode == ParityMode::Reference, "{mode:?}");
     }
 }

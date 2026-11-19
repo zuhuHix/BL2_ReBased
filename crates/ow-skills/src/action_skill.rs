@@ -700,14 +700,17 @@ impl NativePack for Pack {
 pub const RECORD_IS_FRIENDLY: &str = ow_combat::hit::opinion::RECORD;
 
 /// The one path by which the cast's worlds get `Pawn.IsFriendly`, which `LiftActionSkill.GetPlayerAnimation` asks on
-/// its target path (this pack serves both the W6-SKILLS installed run and the slice gate's cast). It is the combat
-/// pack's own allegiance registration (`ow_combat::hit::register_allegiance`), so every world gets the same binding
-/// whatever order its packs register in:
-/// - Off: NATIVE_IS_FRIENDLY.md's rules, `IsFriendly` with `WillowPawn`'s charm layer (lane IMPL-IS-FRIENDLY,
-///   decision 2026-11-19-60); the groundwork boolean is never bound for it in Off;
-/// - Reference: the combat pack's allegiance natives, the C++ stand-in.
+/// its target path (this pack serves both the W6-SKILLS installed run and the slice gate's cast):
+/// - Off: the three natives of NATIVE_IS_FRIENDLY.md (`ow_combat::hit::opinion::register`, lane IMPL-IS-FRIENDLY,
+///   decision 2026-11-19-60), the same Off registration the combat pack's `register_allegiance` makes first. The
+///   groundwork `IsEnemy` and `IsNeutral` are not bound here (review r2 of #449): this pack binds no stand-in;
+/// - Reference: the combat pack's allegiance natives (`ow_combat::hit::register_allegiance`), the C++ stand-in.
 fn register_cast_opinion(vm: &mut Vm) -> Result<(), VmError> {
-    ow_combat::hit::register_allegiance(vm)
+    if vm.parity == ow_core::ParityMode::Off {
+        ow_combat::hit::opinion::register(vm)
+    } else {
+        ow_combat::hit::register_allegiance(vm)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
