@@ -598,3 +598,5 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | InstanceDataHelper.GetFirstInstanceDataObject | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | the level-up: the collection lookup | UNVERIFIED | medium-high | |
 | SpecialMoveComponent.RunBehaviors / CanPlayBehaviorData | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | link 9: StartBehaviors and StopBehaviors | UNVERIFIED | high | |
 | GearboxAnimDefinition.OnStart / OnServerStart | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | link 9: the special move's behavior events | UNVERIFIED | medium | |
+| Controller.ApplyCharacterClassStartingValues | [NATIVE_CLASS_STARTING_VALUES.md](NATIVE_CLASS_STARTING_VALUES.md) | link 1: the class's pools (every controller, AI minds included) | UNVERIFIED | high | |
+| WillowPlayerController.ApplyCharacterClassStartingValues (then OnPlayerClassChange) | [NATIVE_CLASS_STARTING_VALUES.md](NATIVE_CLASS_STARTING_VALUES.md) | link 1: Maya's experience and cooldown pools, then the class-change event | UNVERIFIED | high | |
