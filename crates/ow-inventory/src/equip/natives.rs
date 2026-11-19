@@ -25,6 +25,10 @@
 //!   `apply_effects` on one effect per slot whose value is that constant (a constant evaluates to itself), so the
 //!   modifiers, the context order and "a failed add leaves nothing recorded" are that function's. The value is read
 //!   as stored; how `InitializeAttributeSlots` computes it is not read (NATIVE_ATTRIBUTES.md section 9, "Open").
+//!   The slots are read as the item's class declares them, a static array of slot structs (`AttributeSlots[19]` in the
+//!   installed `WillowInventory`), as many as the declaration's dimension ([`attribute_slots`], lane
+//!   FIX-ATTRIBUTE-SLOTS, decision 2026-11-19-49). The first version read them as a dynamic array, which the
+//!   installed class is not.
 //!
 //! **Reference** (architecture rule R3): the C++ VM binds none of these, so [`register`] binds nothing there and the
 //! stub policy answers, as before.
@@ -49,7 +53,8 @@ use std::rc::Rc;
 use ow_attr::api::{EffectData, EvalCx, InitData};
 use ow_attr::stack::ModifierType;
 use ow_core::ParityMode;
-use ow_object::ids::ObjRef;
+use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
@@ -207,10 +212,39 @@ fn flag(vm: &Vm, slot: &Value, name: &str) -> Result<bool, VmError> {
     }
 }
 
+/// `item`'s `AttributeSlots`, as its class declares the property: a static array of `AttributeSlotData` structs (the
+/// installed `WillowInventory` declares `AttributeSlots[19]`), read element by element in index order, as many as the
+/// declaration's `array_dim` (lane FIX-ATTRIBUTE-SLOTS). A class that declares no `AttributeSlots`, or declares it as
+/// anything but structs, is a data error.
+pub fn attribute_slots(vm: &Vm, item: ObjRef) -> Result<Vec<Value>, VmError> {
+    let class = vm.space.heap.get(item)?.class;
+    let declared = |what: &str| {
+        bad(
+            EXTERNAL_SLOTS,
+            format!("{} {what}", ow_attr::eval::class_path(&vm.space, item)),
+        )
+    };
+    let p = vm
+        .space
+        .prop(class, "AttributeSlots")
+        .ok_or_else(|| declared("declares no AttributeSlots"))?;
+    let decl = vm
+        .space
+        .classes
+        .decl(p)
+        .ok_or_else(|| declared("has no declaration for AttributeSlots"))?;
+    if !matches!(decl.kind, PropKind::Struct(_)) {
+        return Err(declared("declares AttributeSlots as something other than slot structs"));
+    }
+    let dim = u32::try_from(decl.array_dim).map_err(|_| declared("declares AttributeSlots with a negative dimension"))?;
+    (0..dim)
+        .map(|i| Ok(vm.space.read(item, PropAddr::element(p, i))?.clone()))
+        .collect()
+}
+
 /// The effects `ApplyExternalSlotEffectModifiers` applies for `item`'s first `max` slots (module documentation).
 pub fn external_slot_effects(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<EffectData>, VmError> {
-    let slots = required(vm, item, "AttributeSlots", EXTERNAL_SLOTS)?;
-    let slots = ow_attr::eval::elements("AttributeSlots", &slots)?;
+    let slots = attribute_slots(vm, item)?;
     let count = usize::try_from(max.max(0)).unwrap_or(0).min(slots.len());
     let mut out = Vec::new();
     for slot in &slots[..count] {
@@ -303,6 +337,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod slot_package_tests;
 
 #[cfg(test)]
 mod script_tests;
