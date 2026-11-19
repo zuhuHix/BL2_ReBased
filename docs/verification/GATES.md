@@ -333,6 +333,12 @@ the physics step reruns the census (`world::tests::sanctuary_physics_census`, ig
 first stop and outcome counts (today 57 pass, 23 at the world's `Base` guard, 66 at Matinee playback, 13 at the
 walking, nav-mesh walking and rotating modes).
 
+**After H-MATINEE (2026-11-19, same machine; decision `2026-11-19-53`):** the same path and world digests; still halted
+at tick 1, now on the level-load event that starts the Matinee op binding a `WillowSpectatorPoint`. A change to the
+Matinee scan or tracks reruns `world::tests::sanctuary_matinee_census` (ignored, `OW_BL2_ROOT`) and reports the ops by
+start (today 20 at load, 44 from outside the graph, 17 not at load) and the movement tracks read (today 168 of 169,
+every one ending within its op's `InterpLength`), with the physics census (today 59 pass).
+
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records

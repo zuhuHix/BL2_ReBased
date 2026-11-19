@@ -609,6 +609,7 @@ pub fn read_op_variables(vm: &mut Vm, op: ObjRef, out: &mut MatineeBindings) -> 
             Some(Value::Object(value)) => {
                 if let Some(actor) = value {
                     out.bound.insert(actor);
+                    out.by_actor.entry(actor).or_default().insert(op);
                 } else if plain {
                     out.empty += 1;
                 }
@@ -626,6 +627,16 @@ pub fn read_op_variables(vm: &mut Vm, op: ObjRef, out: &mut MatineeBindings) -> 
         }
     }
     Ok(())
+}
+
+/// [`matinee_bound`], then each op's start from the Kismet graph ([`matinee::start_of`]; lane H-MATINEE).
+pub fn scan_matinee(vm: &mut Vm) -> Result<MatineeBindings, String> {
+    let mut bindings = matinee_bound(vm).map_err(|e| format!("reading the Matinee bindings: {e}"))?;
+    let graph = matinee::read_graph(vm).map_err(|e| format!("reading the Kismet graph: {e}"))?;
+    for &op in &graph.matinee {
+        bindings.starts.insert(op, matinee::start_of(&graph, op));
+    }
+    Ok(bindings)
 }
 
 /// The packages (map files) that hold the world's placed actors.
@@ -662,6 +673,10 @@ pub struct MatineeBindings {
     pub unreadable_ops: usize,
     /// Export classes in the map files that do not resolve, so whether they are Matinee ops is not known.
     pub unresolved_classes: ow_core::DetMap<String, usize>,
+    /// For each bound actor, the ops that hold it (lane H-MATINEE).
+    pub by_actor: ow_core::DetMap<ObjRef, ow_core::DetSet<ObjRef>>,
+    /// How each op can start ([`matinee::start_of`]); filled after the scan from the Kismet graph ([`scan_matinee`]).
+    pub starts: ow_core::DetMap<ObjRef, matinee::Start>,
 }
 
 impl MatineeBindings {
@@ -697,25 +712,58 @@ fn physics_name(space: &ObjectSpace, o: ObjRef) -> String {
 }
 
 /// What the Matinee scan says about one interpolating actor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Driver {
-    /// A loaded Matinee op names it: the op's playback would move it.
+    /// A loaded Matinee op names it, and how that op starts was not worked out.
     Bound,
     /// No loaded Matinee op names it, and the scan was complete ([`MatineeBindings::complete`]).
     Unbound,
     /// The scan was not complete, so whether an op names it is not known.
     Unknown,
+    /// Ops name it, and nothing starts any of them while the map loads ([`matinee::Start::NotAtLoad`]; lane H-MATINEE).
+    NotStarted,
+    /// An op that names it starts from these level-load events ([`matinee::Start::AtLoad`]).
+    AtLoad(String),
+    /// An op that names it starts from these events, fired from outside the graph ([`matinee::Start::Outside`]).
+    Outside(String),
 }
 
 impl Driver {
-    /// The driver of `actor` from the scan.
+    /// The driver of `actor` from the scan. Over the ops that name it: one that starts at load wins, then one started
+    /// from outside the graph, then one whose start was not worked out; ops that all start after the load leave it
+    /// still.
     pub fn of(bindings: &MatineeBindings, actor: ObjRef) -> Driver {
         if !bindings.complete() {
-            Driver::Unknown
-        } else if bindings.bound.contains(&actor) {
+            return Driver::Unknown;
+        }
+        if !bindings.bound.contains(&actor) {
+            return Driver::Unbound;
+        }
+        let Some(ops) = bindings.by_actor.get(&actor).filter(|ops| !ops.is_empty()) else {
+            return Driver::Bound;
+        };
+        let (mut load, mut outside, mut unknown) = (Vec::new(), Vec::new(), false);
+        for op in ops {
+            match bindings.starts.get(op) {
+                Some(matinee::Start::AtLoad(e)) => load.extend(e.iter().cloned()),
+                Some(matinee::Start::Outside(e)) => outside.extend(e.iter().cloned()),
+                Some(matinee::Start::NotAtLoad) => {}
+                None => unknown = true,
+            }
+        }
+        let joined = |mut v: Vec<String>| {
+            v.sort();
+            v.dedup();
+            v.join(", ")
+        };
+        if !load.is_empty() {
+            Driver::AtLoad(joined(load))
+        } else if !outside.is_empty() {
+            Driver::Outside(joined(outside))
+        } else if unknown {
             Driver::Bound
         } else {
-            Driver::Unbound
+            Driver::NotStarted
         }
     }
 }
@@ -732,21 +780,43 @@ pub const ENGINE_RECORD: &str = "NATIVE_ENGINE_CORE.md";
 ///   interpolating mode is the one Matinee drives, and the world runs no other driver: it runs no Kismet, so the
 ///   object variables empty at load stay empty. UNVERIFIED in the running game, and so is that the game's
 ///   interpolating step does nothing else for such an actor. In `ParityMode::Reference` it answers `NotYet`: the C++
-///   reference has no host physics to stand in (rule R3). A bound actor answers `NotYet` for the playback (layer
-///   absent); an actor the scan cannot judge, `NotYet` (not read).
+///   reference has no host physics to stand in (rule R3). An actor named only by ops that nothing starts while the
+///   map loads moves nothing in Off too (lane H-MATINEE, `matinee`): an op that has not started has built no group
+///   instance and moves no actor. An op started by a level-load event answers `NotYet` for that event and the
+///   playback (layer absent: the world runs no Kismet); one started from outside the graph, `NotYet` naming the
+///   trigger (not read); a bound actor whose op's start was not worked out, `NotYet` for the playback; an actor the
+///   scan cannot judge, `NotYet` (not read).
 /// - `PHYS_Walking` and `PHYS_Falling`: `NotYet`. The H4 mover is the player pawn's and is not applied to other pawns:
 ///   the walking step itself is not read (NATIVE_PLAYER_MOVEMENT.md, "Not read yet"), a placed pawn's movement values
 ///   are not read, its acceleration comes from a controller that does not exist before begin play, and the collision
 ///   the mover uses lives on the host side, not with the world.
 /// - `PHYS_NavMeshWalking` (Gearbox's), `PHYS_Rotating` and every other mode: `NotYet` (not read).
-pub fn physics_rule(mode: &str, class: &str, driver: Driver, parity: ParityMode) -> Result<(), ow_core::NotYet> {
+pub fn physics_rule(mode: &str, class: &str, driver: &Driver, parity: ParityMode) -> Result<(), ow_core::NotYet> {
     use ow_core::NotYet;
     match mode {
         "PHYS_None" => Ok(()),
         "PHYS_Interpolating" => match driver {
-            Driver::Unbound if parity == ParityMode::Off => Ok(()),
-            Driver::Unbound => Err(NotYet::not_ported(
-                format!("the host's interpolating physics for an unbound {class} in Reference (the C++ has no host)"),
+            Driver::Unbound | Driver::NotStarted if parity == ParityMode::Off => Ok(()),
+            Driver::Unbound | Driver::NotStarted => Err(NotYet::not_ported(
+                format!(
+                    "the host's interpolating physics for a {class} no started op moves, in Reference (the C++ has no \
+                     host)"
+                ),
+                KISMET_RECORD,
+            )),
+            Driver::AtLoad(events) => Err(NotYet::layer_absent(
+                format!(
+                    "the level-load event ({events}) that starts a Matinee op binding an interpolating {class}, and that \
+                     op's playback"
+                ),
+                "Kismet in the world (its level-load events and Matinee playback)",
+                KISMET_RECORD,
+            )),
+            Driver::Outside(events) => Err(NotYet::not_read(
+                format!(
+                    "whether {events}, fired from outside the Kismet graph, fires while the map loads and starts a \
+                     Matinee op binding an interpolating {class}"
+                ),
                 KISMET_RECORD,
             )),
             Driver::Bound => Err(NotYet::layer_absent(
@@ -793,7 +863,7 @@ pub fn install_physics(world: &mut World, bindings: MatineeBindings) -> Result<(
             let mode = physics_name(&vm.space, actor);
             let driver = Driver::of(&bindings, actor);
             let class = ow_attr::eval::class_path(&vm.space, actor);
-            physics_rule(&mode, &class, driver, vm.parity).map_err(VmError::NotYet)
+            physics_rule(&mode, &class, &driver, vm.parity).map_err(VmError::NotYet)
         }))
         .map_err(|e| e.to_string())
 }
@@ -832,13 +902,15 @@ pub fn build_installed(cooked: PathBuf, map: String, mode: ParityMode) -> Result
     let mut world = World::new(vm, play_balance()?, &[]).map_err(|e| e.to_string())?;
     let name = PackageName::parse(&map).map_err(|e| format!("{map}: {e}"))?;
     let report = load_map(&mut world, &name).map_err(|e| format!("loading {map} into the world: {e}"))?;
-    let bindings = matinee_bound(&mut world.vm).map_err(|e| format!("reading {map}'s Matinee bindings: {e}"))?;
+    let bindings = scan_matinee(&mut world.vm).map_err(|e| format!("{map}: {e}"))?;
     install_physics(&mut world, bindings)?;
     let actors = world.actors().borrow().list().len();
     let mut summary = LoadSummary::from_report(&map, mode, &report, actors);
     summary.load_time = started.elapsed();
     Ok((world, summary))
 }
+
+pub mod matinee;
 
 #[cfg(test)]
 mod tests;
