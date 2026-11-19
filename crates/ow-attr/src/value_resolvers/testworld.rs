@@ -497,6 +497,10 @@ impl Fx {
                 ],
             ),
             (
+                "WillowGame.BlackMarketUpgradeAttributeValueResolver",
+                vec![("AssociatedBlackMarketUpgrade", obj_kind(object))],
+            ),
+            (
                 "WillowGame.PlayerSkillAttributeValueResolver",
                 vec![("AssociatedSkill", obj_kind(object))],
             ),

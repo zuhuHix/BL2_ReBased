@@ -293,6 +293,50 @@ pub trait AttrWorld {
         .into())
     }
 
+    /// The globals definition reached through the engine globals object (`BlackMarketUpgradeAttributeValueResolver`'s
+    /// cold-cache walk, NATIVE_BLACKMARKET_UPGRADES.md section 3). `Ok(None)`: the lookup is supported and finds no
+    /// definition, which that resolver answers with 0.0. The default is the port's reading of "through it" (lane
+    /// IMPL-BLACKMARKET-RESOLVER, decision 2026-11-19-72, UNVERIFIED): the globals object's
+    /// `DefaultGlobalsDefinitionName` (the configured name, `GD_Globals.General.Globals` in the installed class
+    /// default), loaded through the world's store. An empty name is `Ok(None)`. Errors propagate unchanged:
+    /// [`AttrWorld::globals`]'s `NotYet { LayerAbsent }` for a world without engine globals, the store's
+    /// `NotYet { LayerAbsent("ow-defs") }` for a world without one. A globals object whose class lacks the name, or
+    /// holds something else there, is bad data. Added by IMPL-BLACKMARKET-RESOLVER (an additive change).
+    fn globals_definition(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        let globals = self.globals()?;
+        let WorldParts { space, defs } = self.parts();
+        let class = space.heap.get(globals)?.class;
+        let bad = |what: String| AttrError::BadData {
+            reason: format!("the engine globals object: {what}").into(),
+        };
+        let p = space
+            .prop(class, "DefaultGlobalsDefinitionName")
+            .ok_or_else(|| bad("its class has no DefaultGlobalsDefinitionName".to_string()))?;
+        let text = match space.read(globals, ow_object::ids::PropAddr::scalar(p))? {
+            ow_object::value::Value::Str(s) => s.clone(),
+            other => {
+                return Err(bad(format!(
+                    "DefaultGlobalsDefinitionName is a {}, not a string",
+                    other.kind_name()
+                )));
+            }
+        };
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let path = ow_core::ObjectPath::parse(&text)
+            .map_err(|e| bad(format!("DefaultGlobalsDefinitionName {text:?} is not an object path: {e}")))?;
+        match defs {
+            Some(store) => Ok(store.find(space, &path)?),
+            None => Err(NotYet::layer_absent(
+                "the definition store of this world",
+                "ow-defs",
+                "architecture.md section 3.5 (W2-ATTRAPI)",
+            )
+            .into()),
+        }
+    }
+
     /// `GlobalAttributeValueResolver`'s slots. The world owns them because the game keeps one process-wide pair
     /// (`SetGlobalAttributeValue` stores into it; the XP curve sets slot 0 before it evaluates).
     fn global_slots(&mut self) -> &mut GlobalSlots;

@@ -3,7 +3,9 @@
 //! FIX-PLAYTHROUGH: the C++ reading, its native rule noted in NATIVE_PLAYTHROUGH_ATTRIBUTES.md; the Targetable
 //! resolver, lane W6-COMBAT-RUN2: the C++ stand-in in Reference only, its native not read; the Currency, Random,
 //! AmmoDropWeight and Constraint resolvers, lane FIX-ATTR-RESOLVERS: the same, their natives read for a fresh
-//! implementer in NATIVE_ATTR_RESOLVERS.md, decision 2026-11-16-73), one module file each.
+//! implementer in NATIVE_ATTR_RESOLVERS.md, decision 2026-11-16-73; the BlackMarketUpgrade resolver, lane
+//! IMPL-BLACKMARKET-RESOLVER: Off only, from NATIVE_BLACKMARKET_UPGRADES.md, decision 2026-11-19-72), one module
+//! file each.
 //! [`register`] is what [`AttributeSystem::standard`] calls (placed by W2-ATTRAPI); a class not registered here stays
 //! `NotYet { NotRead }` (the registry's answer).
 //!
@@ -20,6 +22,7 @@ use crate::api::AttrError;
 use crate::registry::AttributeSystem;
 
 mod ammo_drop_weight;
+mod blackmarket_upgrade;
 mod attribute_slot_effect;
 mod badass;
 mod conditional;
@@ -41,6 +44,8 @@ mod weapon_type;
 #[cfg(test)]
 mod attr_resolver_tests;
 #[cfg(test)]
+mod blackmarket_upgrade_tests;
+#[cfg(test)]
 mod designer_tests;
 #[cfg(test)]
 mod noun_tests;
@@ -57,7 +62,7 @@ pub(crate) mod testworld;
 pub(crate) const RECORD: &str = "NATIVE_ATTRIBUTES.md section 6";
 
 /// Every value resolver class this module implements, by its class path in the packages.
-pub(crate) const CLASSES: [&str; 18] = [
+pub(crate) const CLASSES: [&str; 19] = [
     "Engine.ObjectPropertyAttributeValueResolver",
     "GearboxFramework.ConstantAttributeValueResolver",
     "GearboxFramework.SimpleMathValueResolver",
@@ -76,6 +81,7 @@ pub(crate) const CLASSES: [&str; 18] = [
     "GearboxFramework.RandomAttributeValueResolver",
     "WillowGame.AmmoDropWeightAttributeValueResolver",
     "GearboxFramework.ConstraintAttributeValueResolver",
+    blackmarket_upgrade::CLASS,
 ];
 
 /// Registers every value resolver class this module implements ([`CLASSES`], in that order).
@@ -97,5 +103,6 @@ pub(crate) fn register(sys: AttributeSystem) -> Result<AttributeSystem, AttrErro
         .with_value_resolver(CLASSES[14], currency::Currency)?
         .with_value_resolver(CLASSES[15], random::Random)?
         .with_value_resolver(CLASSES[16], ammo_drop_weight::AmmoDropWeight)?
-        .with_value_resolver(CLASSES[17], constraint::Constraint)
+        .with_value_resolver(CLASSES[17], constraint::Constraint)?
+        .with_value_resolver(CLASSES[18], blackmarket_upgrade::BlackMarketUpgrade)
 }
