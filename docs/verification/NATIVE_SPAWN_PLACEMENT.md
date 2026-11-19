@@ -56,9 +56,9 @@ Otherwise the requested location is used as it is. The flags are read from the t
   `bCollideComplex`; *simple mode* always uses simple collision.
 - "A sweep" traces a box (or a point) from a start to an end and reports the first hit, its location, its normal and
   its fraction of the way.
-- **The filters are unread.** Every box test passes one engine flag set (8902 in decimal; with 131072 added in template
-  mode for a `bCollideComplex` template), and every sweep passes another (8326). These numbers choose which geometry and
-  which actors the query sees. What their bits mean was not read (open question 4).
+- **The filters** (read in lane ANALYST-SPAWN-TRACE-FILTERS, decision 2026-11-19-84; section 7). Every box test
+  passes the flag set 8902; in template mode for a `bCollideComplex` template, 131072 is added. Every sweep passes 8326,
+  and the sweep routine itself adds 1024. Section 7 says what each set selects.
 
 **The steps.** E = (Ex, Ey, Ez) is the extent; L is the location, changed in place; L0 is the requested location.
 
@@ -139,8 +139,8 @@ default object.
 4. **No cylinder extent** (the template's `CollisionComponent` is not a cylinder component, or there is none): a
    `NotYet` of kind `NotRead`, "the actor's bounding-cylinder rule". So a template without a cylinder in an empty
    collision model answers this, never "unchanged".
-5. **The first test (section 3, step 1).** Today it answers the filter `NotYet` of section 7 ("the spawn spot search's
-   trace filter"). Once the filter is read, it must be a query the service supports for its whole region (section 7).
+5. **The first test (section 3, step 1).** It must be a query the service supports for its whole region, with the
+   filter of section 7.
    Unsupported: a `NotYet` of kind `NotRead`, naming the query ("an axis-aligned box test in template mode", for
    example). Supported and free: L = requested.
 6. Steps 2 to 4 of section 3 run while every query they make is supported. The first unsupported query is a `NotYet`
@@ -190,14 +190,82 @@ two end points. If any part of the region lies outside the geometry the implemen
 the requested mode there, the answer is Unsupported. An empty candidate set is Clear only when the whole region is
 covered. The location stays unchanged (section 6, step 5) only after a **supported** first test reports Clear.
 
-**The filter (the choice of this note).** Every query depends on its unread flag set (section 3, "Terms"): the box
-tests and the box sweeps, the point sweep of the corner step, and the final sweep. So until the filter is read, every
-one of these queries answers a `NotYet` of kind `NotRead`, "the spawn spot search's trace filter (flag sets 8902 and
-8326)", even when the shape and the coverage would allow it. No Off filter is defined in its place.
+**The filters: what each flag set selects** (lane ANALYST-SPAWN-TRACE-FILTERS, decision 2026-11-19-84; read from the
+world's box and sweep routines, the collision hash's walkers, and the per-actor filter of `Actor`, `Pawn`, `Volume`,
+`InterpActor` and `KActor`). Values are decimal.
 
-The consequence for section 6: past the service and extent checks, the first test, and so every search that reaches
-it, answers that `NotYet` until the filter is read. A later lane that reads the filter replaces this paragraph with
-its rule.
+| Bit | Read as | Where it acts |
+|---|---|---|
+| 1 | pawns | the `Pawn` filter |
+| 2 | movers | the `InterpActor` and `KActor` filters |
+| 4 | the level's own BSP geometry | tested first, by both routines, before any actor |
+| 8 | volumes | the `Volume` filter |
+| 16 | other actors | the `Actor` filter (non-world-geometry actors), and stationary pawns |
+| 32 | projectile targets only | narrows the actor filters |
+| 64 | blocking only | narrows the actor filters, through a test on the query's source actor |
+| 128 | world-geometry actors | the `Actor` and `Volume` filters accept an actor with `bWorldGeometry` at once |
+| 512 | stop at the first hit | both routines |
+| 1024 | one result | added by the sweep routine |
+| 8192 | terrain | part of the sweep routine's entry mask for the actor hash; no per-actor test of it was found |
+| 131072 | complex collision | passed down to each primitive's own test |
+
+**Who is tested, step by step, for one query:**
+1. **The level's BSP** when bit 4 is set. A hit there ends the query when bit 512 is also set.
+2. **The world's actor collision hash.**
+   - A box test always walks it.
+   - A sweep walks it only when one of the bits 1, 2, 8, 16, 128 or 8192 is set (the mask 8347).
+   - Each candidate is a primitive component whose bounds meet the query. A primitive with a further flag set is
+     skipped; that is bit 10 of its collision flag word, and its name is unresolved (open question 4).
+   - The primitive must block the query's kind: `BlockNonZeroExtent` for a box test or a box sweep, `BlockZeroExtent`
+     for a point sweep.
+   - One more per-component test runs; it was not read (open question 4).
+3. **The owner actor's filter, by class:**
+   - **`Actor`**, and the classes that keep its rule (`StaticMeshActor`, `Brush`, `Terrain`): with `bWorldGeometry`,
+     accepted when bit 128 is set. Otherwise it needs bit 16, then the narrowing below.
+   - **`Volume`**: as `Actor`, but bit 8 in place of 16. A `bPawnsOnly` volume first needs a test on the source actor
+     (not read), and with no source actor it is rejected.
+   - **`InterpActor`**, **`KActor`**: they need bit 2, then the narrowing.
+   - **`Pawn`**: rejected when `bIgnoreAllTraces`. It needs bit 1, or `bStationary` together with bit 16. Then, if
+     bit 64 is set, it needs the source actor's blocked-by test; otherwise it is accepted.
+   - **The narrowing**, in this order:
+     - with bit 32: accepted when the actor is `bProjTarget`, or `bBlockActors` with the primitive's `BlockActors`;
+     - else with bit 64: accepted only when the query's source actor answers its blocked-by test (inferred meaning:
+       a call on the source actor, not read). **With no source actor it is rejected;**
+     - else: accepted.
+4. **The primitive's own test** of the query (box or line) runs, with bit 131072 asking for complex (per-polygon)
+   collision where the primitive has it.
+
+**The spawn's queries pass no source actor.** So:
+- **The box tests (8902, bits 2, 4, 64, 128, 512 and 8192):**
+  - they test the level's BSP and world-geometry actors (`bWorldGeometry`) through their primitives with
+    `BlockNonZeroExtent`;
+  - movers are rejected (bit 64 with no source actor);
+  - pawns, volumes and other actors are not selected;
+  - the first hit decides.
+  - In template mode for a `bCollideComplex` template, those primitives use their complex collision.
+- **The sweeps (8326, bits 2, 4, 128 and 8192, with 1024 added):**
+  - they test the level's BSP, world-geometry actors, and movers (`InterpActor`, `KActor`) with no blocking
+    narrowing;
+  - the primitives must have `BlockNonZeroExtent` for a box sweep, or `BlockZeroExtent` for a point sweep;
+  - pawns, volumes and other actors are not selected.
+  - Simple collision always: no sweep carries bit 131072.
+
+**What a headless collision service must answer for each query** (the boundary above):
+- **A box test**, simple or template mode: Blocked or Clear against **the level's BSP and the world-geometry actors'
+  blocking-box primitives**, over the whole box. In template mode for a `bCollideComplex` template, against their
+  per-polygon collision.
+- **A box sweep:** the first hit against the BSP, the world-geometry actors' and the movers' blocking-box primitives,
+  over the whole swept volume. A hit carries its location, normal and fraction.
+- **A point sweep:** the same, against blocking-zero-extent primitives.
+- **Unsupported** for any part of a query it cannot cover:
+  - BSP it does not hold;
+  - a mover it does not track;
+  - per-polygon collision it lacks for a template-mode test.
+- **Port's Off choice, UNVERIFIED:** the two unread component conditions (the skip flag, and the further
+  per-component test) are taken as not excluding anything. This holds until they are read; a stricter implementer
+  may answer a `NotYet` of kind `NotRead` for any primitive that has the skip flag set.
+- **The terrain bit** (8192) selects no actor by itself in the filters read. Terrain is tested as world geometry when
+  its actor has `bWorldGeometry`.
 
 **The host's movement collision** (lane H4, `crates/ow-host/src/movement/collide.rs`, decision 2026-11-16-52) is a
 world of convex brushes with a swept cylinder or capsule trace that reports a start inside solid.
@@ -214,8 +282,9 @@ world of convex brushes with a swept cylinder or capsule trace that reports a st
    passes at once, and what touch notification sends.
 2. The relocation step for a `bNoCollisionFail` spawn of an actor that collides with actors.
 3. The bounding-cylinder rule for a template without a cylinder collision component.
-4. The trace filters: what the flag sets 8902 (box tests; 131072 added for complex collision) and 8326 (sweeps) select,
-   that is which geometry and which actors. Until this is read, every query of the search is a `NotYet` (section 7).
+4. The trace filters are read (section 7), except three points: the primitive skip flag (bit 10 of its collision flag
+   word; its name is unresolved), one further per-component test, and what the terrain bit (8192) does beyond entering
+   the actor hash.
 5. Whether the net-mode test compares with the client mode only (as read), so a listen server counts as not a client.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
