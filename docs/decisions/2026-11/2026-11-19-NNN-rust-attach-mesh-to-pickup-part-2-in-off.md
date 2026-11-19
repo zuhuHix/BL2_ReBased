@@ -35,3 +35,16 @@ loosened. **Every rule is UNVERIFIED in the running game.** Stacked on #511 (par
   `docs/verification/GATES.md`. This is what the host did, not parity.
 - **Open:** the note's open questions 6 and 7: the rigid-body entries, the physics mode's argument, the channels and
   the timers; the particle effect's removal, offset, template and start.
+
+## Edits: review r1 of #520
+
+AI-assisted (Claude Code). Sol's review r1 of #520.
+- **First wins for part 2's keys.** `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
+  are each bound only when no earlier pack bound that key, so a prebound key keeps its handler and the others are
+  still registered (the `has_native` pattern of `definition.rs` and `globals.rs`).
+- **`SetLightEnvironment`'s checks on their own paths:** the equal-value no-op comes before `bAttached` is read; on the
+  attached path the deferred reattach's refusals run in owner-then-scene order, and only then are the write targets
+  (`PreviousLightEnvironment`, `bNeedsReattach`, `LightEnvironment`) checked against the heap's write rules, before
+  the first write.
+- **Tests:** a prebound key; the no-op with a broken `bAttached`; the owner refusal ahead of broken `Scene` and
+  `PreviousLightEnvironment` declarations; the Reference test asserts all eight keys unbound (14 tests in all).

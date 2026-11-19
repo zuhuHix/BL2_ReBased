@@ -307,29 +307,46 @@ pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -
 /// `SetLightEnvironment(NewLightEnvironment)` on `component` in Off (module documentation, part 2).
 pub fn set_light_environment(vm: &mut Vm, component: ObjRef, new: Option<ObjRef>) -> Result<(), VmError> {
     const WHAT: &str = "PrimitiveComponent.SetLightEnvironment";
-    schemas(vm, component, &[("LightEnvironment", Want::Object), ("bAttached", Want::Bool)], WHAT)?;
+    // Each check only on the path that reaches it (review r1 of #520): the equal value first, then `bAttached`; on
+    // the attached path the deferred reattach's refusals (owner, then scene), and only then the write targets.
+    schemas(vm, component, &[("LightEnvironment", Want::Object)], WHAT)?;
     let current = object_of(&required(vm, component, "LightEnvironment", WHAT)?, WHAT)?;
     if current == new {
         return Ok(());
     }
+    schemas(vm, component, &[("bAttached", Want::Bool)], WHAT)?;
+    let attached = bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)?;
     let value = Value::Object(new);
-    let kind = declared(vm, component, "LightEnvironment", WHAT)?;
-    vm.space
-        .heap
-        .check_value(&vm.space.classes, &kind, &value)
-        .map_err(|e| bad(WHAT, format!("LightEnvironment cannot take the argument: {e}")))?;
-    if !bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)? {
+    if !attached {
+        fits(vm, component, "LightEnvironment", &value, WHAT)?;
         return write(vm, component, "LightEnvironment", value, WHAT);
     }
-    schemas(vm, component, &REATTACH_FIELDS, WHAT)?;
-    schemas(vm, component, &[("PreviousLightEnvironment", Want::Object)], WHAT)?;
-    reattach_preflight(vm, component, WHAT)?;
+    schemas(vm, component, &[("Owner", Want::Object)], WHAT)?;
+    if object_of(&required(vm, component, "Owner", WHAT)?, WHAT)?.is_some() {
+        return Err(NotYet::not_read(REATTACH_OWNER, RECORD).into());
+    }
+    schemas(vm, component, &[("Scene", Want::Struct)], WHAT)?;
+    if !is_zero(&required(vm, component, "Scene", WHAT)?, WHAT)? {
+        return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
+    }
+    schemas(vm, component, &[("PreviousLightEnvironment", Want::Object), ("bNeedsReattach", Want::Bool)], WHAT)?;
+    fits(vm, component, "PreviousLightEnvironment", &Value::Object(current), WHAT)?;
+    fits(vm, component, "LightEnvironment", &value, WHAT)?;
     write(vm, component, "PreviousLightEnvironment", Value::Object(current), WHAT)?;
     let rest = (|| {
         write(vm, component, "LightEnvironment", value, WHAT)?;
         write(vm, component, "bNeedsReattach", Value::Bool(true), WHAT)
     })();
     rest.map_err(after_writes)
+}
+
+/// `v` against `name`'s declaration on `o` by the heap's own write rules, else a data error naming the field.
+fn fits(vm: &Vm, o: ObjRef, name: &str, v: &Value, what: &str) -> Result<(), VmError> {
+    let kind = declared(vm, o, name, what)?;
+    vm.space
+        .heap
+        .check_value(&vm.space.classes, &kind, v)
+        .map_err(|e| bad(what, format!("{name} cannot take the value: {e}")))
 }
 
 /// `InitializePickupForRBPhysics()` on `pickup` in Off (module documentation, part 2). Writes nothing.
@@ -425,10 +442,22 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     vm.register_native(SET_OWNER_NO_SEE, Rc::new(owner_no_see_native))?;
     vm.register_native(HIDE_BONE_BY_NAME, Rc::new(hide_bone_native))?;
     vm.register_native(ATTACH_COMPONENT, Rc::new(attach_native))?;
-    vm.register_native(SET_LIGHT_ENVIRONMENT, Rc::new(light_environment_native))?;
-    vm.register_native(INIT_RB_PHYSICS, Rc::new(rb_physics_native))?;
-    vm.register_native(SPAWN_PICKUP_PARTICLES, Rc::new(particles_native))
+    // Part 2's keys, first wins (review r1 of #520): a key an earlier pack bound keeps its handler, and the others are
+    // still registered.
+    let part2: [(&str, NativeFn); 3] = [
+        (SET_LIGHT_ENVIRONMENT, light_environment_native),
+        (INIT_RB_PHYSICS, rb_physics_native),
+        (SPAWN_PICKUP_PARTICLES, particles_native),
+    ];
+    for (key, f) in part2 {
+        if !vm.has_native(key) {
+            vm.register_native(key, Rc::new(f))?;
+        }
+    }
+    Ok(())
 }
+
+type NativeFn = fn(&mut NativeCall<'_>) -> Result<Value, VmError>;
 
 #[cfg(test)]
 #[path = "attach_mesh_tests.rs"]

@@ -86,6 +86,17 @@ fn engine() -> Vec<u8> {
     t.prop("Object", primitive, "PreviousLightEnvironment", 0, light);
     let env = Param { type_ref: light, ..Param::new("Object", "NewLightEnvironment") };
     t.function(primitive, "SetLightEnvironment", &[env], None, &[], &FunctionSpec::new(NATIVE, "SetLightEnvironment"), |_| None);
+    // Two components with broken declarations past the light environment's checks (review r1 of #520).
+    let odd_flag = t.class("OddFlagLight", object);
+    t.prop("Object", odd_flag, "LightEnvironment", 0, light);
+    t.prop("Int", odd_flag, "bAttached", 0, 0);
+    let odd_tail = t.class("OddTailLight", object);
+    t.prop("Object", odd_tail, "LightEnvironment", 0, light);
+    t.prop("Bool", odd_tail, "bAttached", 0, 0);
+    t.prop("Object", odd_tail, "Owner", 0, object);
+    t.prop("Int", odd_tail, "Scene", 0, 0);
+    t.prop("Int", odd_tail, "PreviousLightEnvironment", 0, 0);
+    t.prop("Bool", odd_tail, "bNeedsReattach", 0, 0);
     let pickup = t.class("WillowPickup", actor);
     t.prop("Bool", pickup, "bUseRBPhysics", 0, 0);
     t.prop("Object", pickup, "PickupParticles", 0, object);
@@ -136,6 +147,11 @@ impl Drop for Fx {
 
 /// A VM in `mode`, with the empty scene layer when `scene` is set.
 fn fx(mode: ParityMode, scene: bool) -> Fx {
+    fx_with(mode, scene, |_| {})
+}
+
+/// [`fx`], with `before` run on the VM before [`register`] (to prebind a key).
+fn fx_with(mode: ParityMode, scene: bool, before: impl FnOnce(&mut Vm)) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-inventory-attach-mesh-{}-{}",
         std::process::id(),
@@ -150,6 +166,7 @@ fn fx(mode: ParityMode, scene: bool) -> Fx {
     for c in ["Engine.SkeletalMeshComponent", "Engine.Actor"] {
         vm.find_class(c).unwrap();
     }
+    before(&mut vm);
     register(&mut vm).unwrap();
     if scene {
         add_empty_scene(&mut vm).unwrap();
@@ -422,6 +439,18 @@ fn a_components_array_of_ints_refuses_before_any_write() {
 #[test]
 fn reference_binds_nothing() {
     let mut x = fx(ParityMode::Reference, false);
+    for key in [
+        SET_FORCE_REF_POSE,
+        SET_HIDDEN,
+        SET_OWNER_NO_SEE,
+        HIDE_BONE_BY_NAME,
+        ATTACH_COMPONENT,
+        SET_LIGHT_ENVIRONMENT,
+        INIT_RB_PHYSICS,
+        SPAWN_PICKUP_PARTICLES,
+    ] {
+        assert!(!x.vm.has_native(key), "{key} is bound in Reference");
+    }
     let mesh = x.obj("Engine.SkeletalMeshComponent");
     let actor = x.obj("Engine.Actor");
     let before = x.written(mesh);
@@ -540,4 +569,39 @@ fn spawn_pickup_particles_is_not_read_or_layer_absent() {
     assert_eq!(n.what.as_ref(), "WillowPickup.SpawnPickupParticles: the pickup's particle effect");
     unmarked(&n, Missing::LayerAbsent("a particle-effects layer (the port has none)"), PARTICLES);
     assert_eq!(x.get(pickup, "Components"), Value::array(Vec::new()), "no component made or attached");
+}
+
+/// First wins for part 2's keys (review r1 of #520): a key bound before the pack keeps its handler, and the other two
+/// are still registered.
+#[test]
+fn a_prebound_part_2_key_keeps_its_handler_and_the_others_register() {
+    let mut x = fx_with(ParityMode::Off, true, |vm| {
+        vm.register_native(SET_LIGHT_ENVIRONMENT, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Int(7)))).unwrap();
+    });
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    assert_eq!(x.call(LIGHT_FN, mesh, vec![Value::Object(None)]).unwrap(), Value::Int(7), "the earlier handler kept");
+    assert!(x.vm.has_native(INIT_RB_PHYSICS) && x.vm.has_native(SPAWN_PICKUP_PARTICLES));
+    let pickup = x.obj("Engine.WillowPickup");
+    assert_eq!(x.call(RB_FN, pickup, vec![]).unwrap(), Value::None, "this pack's handler");
+}
+
+/// The light environment's checks on their own paths (review r1 of #520): an equal value is nothing even with a broken
+/// `bAttached`; on an attached component with an `Owner`, the deferred reattach's `NotRead` comes before the broken
+/// `Scene` and `PreviousLightEnvironment` declarations, and nothing is written.
+#[test]
+fn the_light_environment_checks_mask_neither_the_no_op_nor_the_refusal() {
+    let mut x = fx(ParityMode::Off, true);
+    let old = x.obj("Engine.LightEnvironmentComponent");
+    let new = x.obj("Engine.LightEnvironmentComponent");
+    let flag = x.obj("Engine.OddFlagLight");
+    x.set(flag, "LightEnvironment", Value::Object(Some(old)));
+    assert_eq!(x.call(LIGHT_FN, flag, vec![Value::Object(Some(old))]).unwrap(), Value::None, "the equal value");
+    let tail = x.obj("Engine.OddTailLight");
+    let owner = x.obj("Engine.Actor");
+    x.set(tail, "LightEnvironment", Value::Object(Some(old)));
+    x.set(tail, "bAttached", Value::Bool(true));
+    x.set(tail, "Owner", Value::Object(Some(owner)));
+    unmarked(&not_yet(x.call(LIGHT_FN, tail, vec![Value::Object(Some(new))])), Missing::NotRead, REATTACH_OWNER);
+    assert_eq!(x.get(tail, "LightEnvironment"), Value::Object(Some(old)));
+    assert_eq!(x.get(tail, "bNeedsReattach"), Value::Bool(false));
 }
