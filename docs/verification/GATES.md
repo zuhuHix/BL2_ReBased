@@ -9,7 +9,8 @@ build). `crate_edges_test.py` 19 OK; Fire checker self-test passes and, under Re
 rules hold. Installed Off: `--slice-gate` strict 0/11/3 before, 0/14/0 after (link 10 moves from the `ActivateEvent` error
 at `use` to the `GetDataStoreClient` `NotYet` at `accept`); `--slice-run` and `--mission-run` Fire unchanged. No host or
 real-game run; the rule stays `UNVERIFIED` in game. Decision 2026-11-19-42; logs under ignored
-`local/p2/fix-activate-event/`.
+`local/p2/fix-activate-event/`. **Review r1:** ow-ai 79/79 (5 ActivateEvent tests); installed Off `--slice-gate` strict
+still 0/14/0, rows 10 to 12 unchanged at `GetDataStoreClient` (`accept`). `cargo test --workspace` 2,023 passed / 0 failed / 45 ignored.
 
 **FIX-PLAYER-CLASS (2026-11-19, desktop, on main e59bff0):** AI-assisted (Claude Code, Claude Opus 5.5).
 `GBXDefinition.GetDefinition` and `LoadPlayerPawnDataAsync` in Off; the `maya` step's class select in Off.

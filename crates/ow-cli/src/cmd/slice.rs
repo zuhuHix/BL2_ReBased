@@ -83,7 +83,7 @@ use crate::json::quote;
 /// differs from `--mission-run`, whose VM refuses every one of them in both modes (decision 2026-11-15-34).
 /// `Actor.SetTimer` and `Actor.ClearTimer`, which the C++ also stubs there, are not listed: the Rust world binds them.
 pub const REFERENCE_STUBS: &[(&str, &str)] = &[
-    ("AIComponent.ActivateEvent(name)", "the AI component's event dispatch; read as analyst, not implemented (decision 81)"),
+    ("AIComponent.ActivateEvent(name)", "the AI component's event dispatch; the C++ has none (Off binds it, decision 2026-11-19-42)"),
     ("Actor.AttachComponent(object)", "component attachment; the VM has no scene or component model"),
     ("Actor.LocalPlayerControllers(class,object)", "the local-controller iterator; the C++ has none (Off binds it, decision 81)"),
     ("GFxMoviePlayer.GetVariableObject(string,class)", "a Flash movie query; the mission screen is not hosted"),
@@ -644,6 +644,10 @@ mod tests {
         let spawn = "GFxMovieDefinition.SpawnPlayerMovie(object,interface,object)";
         assert!(stub_policy(ParityMode::Reference).allows_stub(spawn));
         assert!(!stub_policy(ParityMode::Off).allows_stub(spawn));
+        // AIComponent.ActivateEvent: Off binds it (decision 2026-11-19-42); Reference still lets the C++ stub through.
+        let activate = "AIComponent.ActivateEvent(name)";
+        assert!(stub_policy(ParityMode::Reference).allows_stub(activate));
+        assert!(!stub_policy(ParityMode::Off).allows_stub(activate));
         let keys: BTreeSet<&str> = REFERENCE_STUBS.iter().map(|(k, _)| *k).collect();
         assert_eq!(keys.len(), REFERENCE_STUBS.len(), "no key twice");
     }
