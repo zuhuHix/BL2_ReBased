@@ -356,3 +356,56 @@ fn a_make_failure_before_any_write_is_not_marked() {
     assert_eq!(what(&e), "Toy.Lookup");
     assert_eq!(classify_error("make", &e).0, Outcome::NotYet);
 }
+
+/// Link 9's evidence (lane LINK9-EVIDENCE-CHECK) on invented classes: the skill's `LiftedPawn` must be the cast's
+/// target and its `CurrentState` the value named `EPLS_Intro`, read by name (the toy enum puts it at 2, not the
+/// installed 1). Unset fields, another target, another state, no target and an enum-less `CurrentState` are no
+/// evidence. Reads only.
+#[test]
+fn link_9_s_evidence_is_the_skill_s_lift_writes() {
+    use ow_object::layout::{PropKind, PropertyDecl};
+    let mut vm = Vm::new(
+        ObjectSpace::new(),
+        DefStore::new_empty(),
+        Rc::new(ow_attr::AttributeSystem::new_empty()),
+        ParityMode::Off,
+    );
+    let object = vm.space.classes.define("Core.Object", None, vec![]).unwrap();
+    let names = ["EPLS_None", "EPLS_Locked", "EPLS_Intro"].iter().map(|n| vm.space.names.intern(n)).collect();
+    let states = vm.space.classes.define_enum("WillowGame.LiftActionSkill.EPhaselockState", names).unwrap();
+    let decl = |vm: &mut Vm, n: &str, k: PropKind| PropertyDecl::new(vm.space.names.intern(n), k);
+    let props = vec![
+        decl(&mut vm, "CurrentState", PropKind::Byte { enum_: Some(states) }),
+        decl(&mut vm, "LiftedPawn", PropKind::Object { class: object }),
+    ];
+    let skill_class = vm.space.classes.define("WillowGame.LiftActionSkill", Some(object), props).unwrap();
+    let props = vec![
+        decl(&mut vm, "CurrentState", PropKind::Byte { enum_: None }),
+        decl(&mut vm, "LiftedPawn", PropKind::Object { class: object }),
+    ];
+    let plain_class = vm.space.classes.define("Test.EnumlessSkill", Some(object), props).unwrap();
+    let skill = vm.space.alloc(skill_class, "Skill", None, Origin::Runtime).unwrap();
+    let target = vm.space.alloc(object, "Target", None, Origin::Runtime).unwrap();
+    let other = vm.space.alloc(object, "Other", None, Origin::Runtime).unwrap();
+    let put = |vm: &mut Vm, o: ObjRef, n: &str, v: Value| {
+        let class = vm.space.heap.get(o).unwrap().class;
+        let p = vm.space.prop(class, n).unwrap();
+        vm.space.write(o, PropAddr::scalar(p), v).unwrap();
+    };
+    assert!(!phaselock_evident(&vm, skill, Some(target)), "unset");
+    put(&mut vm, skill, "LiftedPawn", Value::Object(Some(target)));
+    assert!(!phaselock_evident(&vm, skill, Some(target)), "the state still EPLS_None");
+    put(&mut vm, skill, "CurrentState", Value::Byte(1));
+    assert!(!phaselock_evident(&vm, skill, Some(target)), "value 1 is EPLS_Locked here: read by name");
+    put(&mut vm, skill, "CurrentState", Value::Byte(2));
+    assert!(phaselock_evident(&vm, skill, Some(target)), "both writes");
+    assert!(!phaselock_evident(&vm, skill, Some(other)), "another target");
+    assert!(!phaselock_evident(&vm, skill, None), "no target");
+    let heap = format!("{:?}", vm.space.heap);
+    let _ = phaselock_evident(&vm, skill, Some(target));
+    assert_eq!(format!("{:?}", vm.space.heap), heap, "reads only");
+    let plain = vm.space.alloc(plain_class, "Plain", None, Origin::Runtime).unwrap();
+    put(&mut vm, plain, "LiftedPawn", Value::Object(Some(target)));
+    put(&mut vm, plain, "CurrentState", Value::Byte(2));
+    assert!(!phaselock_evident(&vm, plain, Some(target)), "a CurrentState with no enum");
+}

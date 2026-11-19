@@ -22,8 +22,10 @@
 //! - `equip-run` (lane SLICE-GATE-DRIVERS, decision 2026-11-19-39): link 8, the phases of `--inventory-move
 //!   --equip-run` (the spawn's `init` included) on one fixed weapon ([`EQUIP_WEAPON`]) on that command's own world;
 //!   ok on its own evidence only ([`equip_evident`]).
-//! - `phaselock-cast` (same lane): link 9, the installed Phaselock cast on its own world; no evidence check is chosen
-//!   yet, so it is never ok.
+//! - `phaselock-cast` (same lane): link 9, the installed Phaselock cast on its own world; ok on its own evidence only
+//!   ([`phaselock_evident`], lane LINK9-EVIDENCE-CHECK): after the cast, the Phaselock skill holds the cast's target
+//!   as its `LiftedPawn` and its `CurrentState` is `EPLS_Intro`, the two writes `LiftActionSkill.PhaseLockTarget`
+//!   makes before `OnSelectedTarget` fires its event (the harness's evidence choice, UNVERIFIED in game).
 //! - `sanctuary-walk` (lane LINK-2-HEADLESS-MOVER, decision 2026-11-19-66): link 2, H4's scripted walk on the
 //!   installed Sanctuary (`ow_assets::movement`, the mover and collision `ow-host --walk` and `--play` use), on its own
 //!   load. The walk's own checks (no fall through the world, no stuck segment) come first; then `fight_area`
@@ -134,8 +136,6 @@ pub enum Evidence {
     Steps,
     /// What the link's own driver reports of its own run (`Ran::evident`); the text says what it checks.
     Driver(&'static str),
-    /// No evidence check is chosen yet, so the link is never `ok`; the text says why.
-    NotChosen(&'static str),
 }
 
 /// One link of the gate.
@@ -252,8 +252,9 @@ pub const LINKS: [Link; 14] = [
         Driver::Phaselock,
         &["spawn", "cast"],
         &[],
-        Evidence::NotChosen(
-            "what a lock leaves on its target is not settled, so a cast that returns is not yet evidence",
+        Evidence::Driver(
+            "after the cast, the Phaselock skill's LiftedPawn is the cast's target and its CurrentState is EPLS_Intro \
+             (LiftActionSkill.PhaseLockTarget's writes)",
         ),
         "the installed LiftActionSkill.OnActionSkillStarted on Maya's Phaselock skill, with a player pawn, its \
          controller and an AI pawn each spawned by the world's own spawn (their components their own; decision \
@@ -610,7 +611,6 @@ fn evidence_text(e: Evidence) -> String {
         Evidence::Status(s) => format!("the Fire mission's status is not {s}"),
         Evidence::Steps => "none needed".into(),
         Evidence::Driver(what) => format!("the driver's own check: {what}"),
-        Evidence::NotChosen(why) => format!("no evidence check is chosen yet: {why}"),
     }
 }
 
@@ -878,7 +878,6 @@ pub fn evident(i: usize, ran: &[Option<Ran>], status: &[u8]) -> bool {
         Evidence::Status(s) => status.get(i) == Some(&s),
         Evidence::Steps => true,
         Evidence::Driver(_) => ran[i].as_ref().is_some_and(|r| r.evident),
-        Evidence::NotChosen(_) => false,
     }
 }
 
@@ -1007,8 +1006,8 @@ pub(crate) fn make_marked<T>(
 }
 
 /// Link 9 (module documentation): the installed cast on a world with the Core natives and `ow-skills`' tree and
-/// action-skill packs and a `WorldInfo`, as `ow-skills`' installed run builds it. No evidence check is chosen yet
-/// (`Evidence::NotChosen`), so a cast that returns is not `ok`.
+/// action-skill packs and a `WorldInfo`, as `ow-skills`' installed run builds it. The evidence is the run's own
+/// ([`phaselock_evident`], read after a cast that returned with no stop).
 fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Phaselock) else { return };
     if !should_run(i, Driver::Phaselock, ran) {
@@ -1023,8 +1022,65 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
-    drive_phaselock(&mut r, &mut world.vm, grading, &PHASELOCK_ACTORS, phaselock_cast);
+    let seen = std::cell::Cell::new(None);
+    drive_phaselock(&mut r, &mut world.vm, grading, &PHASELOCK_ACTORS, |vm, actors| {
+        seen.set(Some(actors));
+        phaselock_cast(vm, actors)
+    });
+    if r.stop.is_none()
+        && let Some((_, _, target)) = seen.get()
+    {
+        r.evident = phaselock_skill(&mut world.vm).is_ok_and(|skill| phaselock_evident(&world.vm, skill, target));
+    }
     ran[i] = Some(r);
+}
+
+/// The Phaselock skill the cast ran on ([`PHASELOCK_SKILL`]): loaded by the cast already, so the lookup finds it.
+fn phaselock_skill(vm: &mut ow_vm::api::Vm) -> Result<ow_object::ids::ObjRef, ow_vm::error::VmError> {
+    let path = ow_core::ObjectPath::parse(PHASELOCK_SKILL).map_err(|e| script_error(e.to_string()))?;
+    let found = vm.defs.find(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    found
+        .map_err(ow_vm::error::VmError::Def)?
+        .ok_or_else(|| script_error(format!("{PHASELOCK_SKILL}: no package holds it")))
+}
+
+/// The value name link 9's evidence expects in `CurrentState` (`LiftActionSkill.EPhaselockState`).
+pub const PHASELOCK_LIFTED_STATE: &str = "EPLS_Intro";
+
+/// Link 9's evidence (lane LINK9-EVIDENCE-CHECK; the harness's choice, UNVERIFIED in game): the skill's `LiftedPawn`
+/// is `target` (a set target) and its `CurrentState` holds the value named [`PHASELOCK_LIFTED_STATE`] in the enum the
+/// property declares. These are the writes `LiftActionSkill.PhaseLockTarget` makes, in script, before it calls
+/// `OnSelectedTarget`; a cast that fizzles, is blocked or picks no target leaves them unset. Reads only. A missing
+/// property, an undeclared enum or another value kind is no evidence.
+pub fn phaselock_evident(vm: &ow_vm::api::Vm, skill: ow_object::ids::ObjRef, target: Option<ow_object::ids::ObjRef>) -> bool {
+    use ow_object::ids::PropAddr;
+    use ow_object::layout::PropKind;
+    use ow_object::value::Value;
+    let Some(target) = target else {
+        return false;
+    };
+    let Ok(class) = vm.space.heap.get(skill).map(|o| o.class) else {
+        return false;
+    };
+    let (Some(lifted), Some(state)) = (vm.space.prop(class, "LiftedPawn"), vm.space.prop(class, "CurrentState")) else {
+        return false;
+    };
+    if !matches!(vm.space.read(skill, PropAddr::scalar(lifted)), Ok(Value::Object(Some(o))) if *o == target) {
+        return false;
+    }
+    let Some(PropKind::Byte { enum_: Some(e) }) = vm.space.classes.decl(state).map(|d| d.kind.clone()) else {
+        return false;
+    };
+    let Some(want) = vm
+        .space
+        .classes
+        .enum_layout(e)
+        .and_then(|l| l.values().iter().position(|v| vm.space.names.text(*v) == PHASELOCK_LIFTED_STATE))
+    else {
+        return false;
+    };
+    matches!(vm.space.read(skill, PropAddr::scalar(state)), Ok(Value::Byte(b)) if usize::from(*b) == want)
 }
 
 /// The classes of the cast's actors, in spawn order: Maya's pawn, her controller, the target.

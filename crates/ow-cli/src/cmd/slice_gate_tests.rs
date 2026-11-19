@@ -166,7 +166,7 @@ fn links_8_and_9_have_their_own_drivers_and_their_own_evidence() {
     assert_eq!(equip.steps, ["make", "init", "bases", "equip", "unequip"], "the spawn's init runs first");
     assert_eq!(cast.steps, ["spawn", "cast"], "the world spawns the cast's actors first (decision 2026-11-19-70)");
     assert!(equip.needs.is_empty() && cast.needs.is_empty());
-    assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::NotChosen(_)));
+    assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::Driver(_)));
     // The weapon line parses as an --equip-run line.
     assert!(EQUIP_WEAPON.split_whitespace().count() > 3 && !EQUIP_WEAPON.contains("  "));
 }
@@ -178,14 +178,17 @@ fn a_driver_s_own_evidence_decides_and_a_stop_wins_over_it() {
     let status = vec![0u8; LINKS.len()];
     // Steps that ran with no stop: ok only when the driver's own check found its evidence (the shared `evident`).
     ran[e] = Some(Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip", "unequip"]).unwrap() });
-    // Link 9 is never ok, even with its driver's flag set: no evidence check is chosen.
-    ran[c] = Some(Ran { evident: true, ..ran_ok(&["spawn", "cast"]).unwrap() });
+    // Link 9 (lane LINK9-EVIDENCE-CHECK): its driver's own check decides, as link 8's does.
+    ran[c] = Some(Ran { evident: false, ..ran_ok(&["spawn", "cast"]).unwrap() });
     assert!(evident(e, &ran, &status) && !evident(c, &ran, &status));
     let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
     assert_eq!(graded[e].result, Outcome::Ok);
     let cast_row = &graded[c];
-    assert_eq!(cast_row.result, Outcome::Error, "a cast that returns is not evidence yet");
-    assert!(cast_row.stop.as_ref().unwrap().text.contains("no evidence check is chosen yet"));
+    assert_eq!(cast_row.result, Outcome::Error, "a cast that returns without the skill's lift writes is not evidence");
+    assert!(cast_row.stop.as_ref().unwrap().text.contains("LiftedPawn"), "{:?}", cast_row.stop);
+    ran[c] = Some(Ran { evident: true, ..ran_ok(&["spawn", "cast"]).unwrap() });
+    let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
+    assert_eq!(graded[c].result, Outcome::Ok, "with its own evidence");
     // A stop is the row's reason, whatever the evidence flag says.
     let mut r = Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip"]).unwrap() };
     let unbound = ow_vm::error::VmError::UnboundNative("WillowWeapon.AllParts(x)".into());
