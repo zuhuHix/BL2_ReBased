@@ -41,7 +41,10 @@ covers, `AllParts`. It made no change to parsing. Nothing here was checked in th
     pool query now uses it on any source. That query sits outside the lane's two crates, so the edit is flagged for the hub.
     Before, only a controller source was read, so a weapon source (the accuracy effects the equip passes with the
     weapon as the override) was `NotYet`. A source with no controller now has no pool (`Ok(None)`), as the resolver
-    answers. Other owner resolver classes stay `NotYet`.
+    answers. Other owner resolver classes stay `NotYet`. The query is not gated on parity, so Reference changed too: a
+    pawn source, or an actor with an `Instigator` (a held weapon), now gets its controller's pool or `Ok(None)` where it
+    stopped with `NotYet`. That is closer to the C++ harness, whose pool lookup uses the controller's manager whatever
+    the source, but no Reference test pins it yet (UNVERIFIED).
 - **Natives bound in Off** (`ow_inventory::equip::natives`, registered by the inventory pack in Off only. The C++
   binds none of them, so Reference keeps the stub policy under R3):
   - `AttributeDefinitionBase.ResolveContext`, `AddAttributeModifier` and `RemoveAttributeModifier` call `ow-attr`
@@ -58,7 +61,10 @@ covers, `AllParts`. It made no change to parsing. Nothing here was checked in th
   The note says it walks eleven part slots in declared order, takes the name parts only with the flag, and skips
   empty slots. Off leaves it unbound: a fresh implementer builds it from the note. The lane's one Ghidra query also
   asked for `GetAttributeSlotMaxActivated` by mistake. That output (the native and its own callee) was deleted
-  unread, and the native was implemented from the records only.
+  unread, and the native was implemented from the records only. This is a clean-room process exception the
+  maintainer should know about: the lane both analysed `AllParts` and implemented the slot-max native whose Ghidra
+  output it received. The code matches NATIVE_WEAPON_RULES "Attribute slots" and NATIVE_ATTRIBUTES section 9 word for
+  word, and adds nothing beyond them.
 - **Verified on invented data:**
   - `ow-inventory`: 46 tests, 6 of them new. They cover each native through a declared native function; Off binds
     all five keys and Reference binds none; the slot filter, the count, the override-first context and the
