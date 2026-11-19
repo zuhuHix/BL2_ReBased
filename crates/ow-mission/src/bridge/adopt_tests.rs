@@ -193,3 +193,87 @@ fn reference_has_no_adopt() {
     let n = not_yet(MissionScript::adopt(&mut m.world, &m.mission).unwrap_err());
     assert_eq!(n.missing, ow_core::Missing::NotPorted);
 }
+
+// ---- Review r1 of #556 (lane MAP-ROUTE-FOLLOWUP) ----------------------------------------------------------------
+
+/// Item 1: on the map route the globals definition is the adopted globals' own `TheGlobalsDefinition`, not the
+/// package's `GD_Globals` export; unset, it is a typed refusal.
+#[test]
+fn the_adopted_globals_give_their_own_definition() {
+    let mut m = map_world(ParityMode::Off, Without::Nothing);
+    let script = MissionScript::adopt(&mut m.world, &m.mission).expect("adopt");
+    let n = not_yet(script.player_interaction_distance(&mut m.world.vm).unwrap_err());
+    assert_eq!((&*n.what, n.missing), (GLOBALS_UNSET, ow_core::Missing::NotRead));
+    let vm = &mut m.world.vm;
+    let definition = new_object(vm, "WillowGame.GlobalsDefinition").unwrap();
+    set(&mut vm.space, definition, "PlayerInteractionDistance", Value::Float(9.0)).unwrap();
+    set(&mut vm.space, m.globals, "TheGlobalsDefinition", Value::Object(Some(definition))).unwrap();
+    assert_eq!(script.player_interaction_distance(&mut m.world.vm).unwrap(), 9.0, "the globals' own, not the package's 420");
+}
+
+/// Item 2: a `NotYet` after adopt's first write carries the mark, once, its kind kept.
+#[test]
+fn a_refusal_after_adopt_s_first_write_is_marked() {
+    let mut m = map_world(ParityMode::Off, Without::Nothing);
+    adopt_fault::set(true);
+    let result = MissionScript::adopt(&mut m.world, &m.mission);
+    adopt_fault::set(false);
+    let Err(e) = result else { panic!("expected the injected refusal") };
+    let n = not_yet(e);
+    assert!(ow_core::notyet::is_partial_writes(&n.what), "{}", n.what);
+    assert_eq!(n.what.matches("partial writes").count(), 1);
+    assert_eq!(n.missing, ow_core::Missing::NotRead);
+}
+
+/// Item 3: `SetGameStage` on the map route records the stage for the controller's possessed pawn, read at the call.
+#[test]
+fn set_game_stage_compares_against_the_possessed_pawn() {
+    let mut m = map_world(ParityMode::Off, Without::Nothing);
+    let pawn = possess(&mut m);
+    let script = MissionScript::adopt(&mut m.world, &m.mission).expect("adopt");
+    let other = new_object(&mut m.world.vm, "WillowGame.WillowPlayerPawn").unwrap();
+    let path = "WillowGame.WillowPawn.SetGameStage";
+    let vm = &mut m.world.vm;
+    let f = match vm.find_function(path) {
+        Ok(f) => f,
+        Err(_) => vm.declare_function(FunctionDecl::native(ObjectPath::parse(path).unwrap(), path)).unwrap(),
+    };
+    let call = |vm: &mut Vm, this: ObjRef, stage: i32| {
+        let mut c = NativeCall::new(vm, f, Some(this), vec![Arg::new(Value::Int(stage), false, true)]);
+        script.n_set_game_stage(&mut c).unwrap();
+    };
+    call(vm, other, 4);
+    assert_eq!(script.inner.state.borrow().pawn_game_stage, 0, "another pawn's stage is not the player's");
+    call(vm, pawn, 7);
+    assert_eq!(script.inner.state.borrow().pawn_game_stage, 7, "the possessed pawn's stage");
+}
+
+/// Item 4: on the map route the bridge makes no director (a typed refusal, write-free), and takes the map's own placed
+/// waypoint when the map load placed it (else a typed refusal); it makes no object either way.
+#[test]
+fn the_map_route_makes_no_director_and_takes_the_placed_waypoint() {
+    let mut m = map_world(ParityMode::Off, Without::Nothing);
+    let script = MissionScript::adopt(&mut m.world, &m.mission).expect("adopt");
+    let director = PackageName::parse("TestDirector").unwrap();
+    let mark = WriteMark::now(&m.world.vm);
+    let n = not_yet(script.place_marcus(&mut m.world.vm, &director, MARCUS_PAWN).unwrap_err());
+    assert_eq!(&*n.what, director_on_map(MARCUS_PAWN));
+    assert!(!mark.moved(&m.world.vm), "write-free");
+    // A placed actor of the map package stands for the waypoint (any export: the map route does not make it).
+    const PLACED: &str = "GD_Marcus.Character.Directives_Toy";
+    let objects = m.world.vm.space.heap.len();
+    let n = not_yet(script.place_waypoint(&mut m.world.vm, &director, PLACED).unwrap_err());
+    assert_eq!(&*n.what, waypoint_on_map(PLACED));
+    assert_eq!(m.world.vm.space.heap.len(), objects, "nothing made");
+    let vm = &mut m.world.vm;
+    let (_, store) = vm.defs.code_mut();
+    let id = store.load(&director).unwrap();
+    let index = store.get(id).find_export(PLACED).unwrap().unwrap();
+    let placed = vm.defs.load_export(&mut vm.space, id, index, PropertyPrefix::Ordinary).unwrap();
+    m.world.actors().borrow_mut().place(placed).unwrap();
+    let objects = m.world.vm.space.heap.len();
+    assert!(script.place_waypoint(&mut m.world.vm, &director, PLACED).unwrap());
+    assert!(script.has_waypoint());
+    assert_eq!(script.inner.state.borrow().waypoint, Some(placed), "the map's own actor");
+    assert_eq!(m.world.vm.space.heap.len(), objects, "nothing made");
+}

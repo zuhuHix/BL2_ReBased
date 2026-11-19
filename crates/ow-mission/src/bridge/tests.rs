@@ -138,6 +138,8 @@ fn gearbox() -> Vec<u8> {
     let object = object_import(&mut t.p);
     let globals = t.class("GearboxGlobals", object);
     native(&mut t, globals, "GetGearboxGlobals", &[], Some(("Object", object)), NATIVE | STATIC);
+    // The globals definition the map route's globals hold (review r1 of #556, item 1).
+    t.prop("Object", globals, "TheGlobalsDefinition", 0, object);
     native(&mut t, globals, "GetBehaviorKernel", &[], Some(("Object", object)), NATIVE);
     provider_vocabulary(&mut t, object);
     dialog_vocabulary(&mut t, object);

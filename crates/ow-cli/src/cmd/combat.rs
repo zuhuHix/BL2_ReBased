@@ -476,6 +476,21 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
     Ok(())
 }
 
+/// The `--map <name>` option right after `--cooked <dir>` (module documentation): the map's name and the steps after
+/// it; `None` without the option. A missing name is the usage message; any mode but Off is `NotYet`.
+fn map_option(args: &[String], mode: ParityMode) -> Result<Option<(&str, &[String])>, Failure> {
+    if args.get(4).map(String::as_str) != Some("--map") {
+        return Ok(None);
+    }
+    let map = args.get(5).ok_or_else(|| Failure::Message(USAGE.to_string()))?;
+    if mode != ParityMode::Off {
+        return Err(Failure::NotYet(
+            "--combat-run --map: the map route runs in Off only (the C++ has no map load)".to_string(),
+        ));
+    }
+    Ok(Some((map.as_str(), &args[6..])))
+}
+
 fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure> {
     let source = args
         .first()
@@ -484,16 +499,10 @@ fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure>
     if args.len() < 4 || args[2] != "--cooked" {
         return Err(Failure::Message(USAGE.to_string()));
     }
-    if args.get(4).map(String::as_str) == Some("--map") {
-        let map = args.get(5).ok_or_else(|| Failure::Message(USAGE.to_string()))?;
-        if mode != ParityMode::Off {
-            return Err(Failure::NotYet(
-                "--combat-run --map: the map route runs in Off only (the C++ has no map load)".to_string(),
-            ));
-        }
+    if let Some((map, steps)) = map_option(args, mode)? {
         let (world, bridge) = map_route::build(Path::new(&args[3]), map, &mut Vec::new()).map_err(vm_failure)?;
         let bridge: Rc<dyn PlayerBridge> = Rc::new(bridge);
-        return ow_combat::run::combat_run_with(world, &args[6..], Some(bridge)).map_err(vm_failure);
+        return ow_combat::run::combat_run_with(world, steps, Some(bridge)).map_err(vm_failure);
     }
     let steps = &args[4..];
     let mut world = world(Path::new(&args[3]), mode).map_err(vm_failure)?;

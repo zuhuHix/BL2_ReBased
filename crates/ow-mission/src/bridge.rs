@@ -279,6 +279,8 @@ struct Bridge {
     /// Built by [`MissionScript::adopt`] on a map world: the objects are the world's, and the player's pawn is the
     /// controller's possessed `Pawn`.
     adopted: bool,
+    /// The map world's actors (the map route only): where a placed actor of the map is found.
+    actors: Option<Weak<RefCell<ow_world::actors::Actors>>>,
     state: RefCell<BState>,
     /// The director's AI-definition provider, out of its slot while it runs (`crate::tracker::lend`).
     marcus: RefCell<Option<Provider>>,
@@ -611,8 +613,38 @@ fn number(v: &Value) -> f64 {
     }
 }
 
+/// For the tests only: a refusal injected right after adopt's first write (review r1 of #556, item 2), to show that a
+/// `NotYet` raised there carries the mark.
+#[cfg(test)]
+pub(crate) mod adopt_fault {
+    thread_local! {
+        static ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    pub(crate) fn set(on: bool) {
+        ON.with(|c| c.set(on));
+    }
+    pub(crate) fn after_first_write() -> bool {
+        ON.with(std::cell::Cell::get)
+    }
+}
+
 /// The design record of the map route ([`MissionScript::adopt`]).
 pub const RECORD_MAP_ROUTE: &str = "docs/rust-port/SLICE_MAPLOAD.md (section 3, steps 1, 2 and 8)";
+
+/// The map route's refusals of the globals definition (review r1 of #556, item 1).
+pub const GLOBALS_UNSET: &str = "the adopted globals' TheGlobalsDefinition on the map world (unset)";
+pub const GLOBALS_UNLOADED: &str =
+    "the adopted globals' TheGlobalsDefinition on the map world (a definition handle the store has not loaded)";
+
+/// `"the director <path> on the map world ..."` (review r1 of #556, item 4).
+pub fn director_on_map(path: &str) -> String {
+    format!("the director {path} on the map world (the map's own Marcus is not identified; the bridge makes none)")
+}
+
+/// `"the waypoint <path> on the map world ..."` (review r1 of #556, item 4).
+pub fn waypoint_on_map(path: &str) -> String {
+    format!("the waypoint {path} on the map world (the map load did not place it)")
+}
 
 /// The four globals natives, which the bridge binds on its own route and leaves to their owners on the map route.
 pub const GLOBALS_NATIVES: [&str; 4] = [
@@ -762,6 +794,7 @@ impl MissionScript {
                     authority,
                 },
                 adopted: false,
+                actors: None,
                 state: RefCell::new(BState { list_built, list_ran, list_refusal, ..BState::default() }),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
@@ -867,12 +900,17 @@ impl MissionScript {
                 .to_string(),
         );
         set(&mut vm.space, controller, "MissionPlaythroughs", Value::array(vec![playthrough]))?;
+        #[cfg(test)]
+        if adopt_fault::after_first_write() {
+            return Err(VmError::NotYet(NotYet::not_read("a test refusal after adopt's first write", RECORD_MAP_ROUTE)).into());
+        }
         let script = MissionScript {
             inner: Rc::new(Bridge {
                 mission: mission.clone(),
                 package,
                 o: Objects { tracker, replication, world_info, controller, globals, pri, authority },
                 adopted: true,
+                actors: Some(Rc::downgrade(&actors)),
                 state: RefCell::new(BState::default()),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
@@ -1419,6 +1457,27 @@ impl MissionScript {
     fn globals_definition(&self, vm: &mut Vm) -> Result<Option<ObjRef>, MissionError> {
         if let Some(cached) = self.inner.state.borrow().globals_definition {
             return Ok(cached);
+        }
+        // The map route: the adopted globals' own TheGlobalsDefinition, not a fresh store lookup (review r1 of #556,
+        // item 1). Unset, or a handle the store has not loaded, is a typed refusal; nothing is loaded here.
+        if self.inner.adopted {
+            let found = match get(&vm.space, self.inner.o.globals, "TheGlobalsDefinition")? {
+                Value::Object(Some(d)) => d,
+                Value::Object(None) => {
+                    return Err(VmError::NotYet(NotYet::not_read(GLOBALS_UNSET, RECORD_MAP_ROUTE)).into());
+                }
+                other => {
+                    return Err(data(format!(
+                        "mission script bridge: TheGlobalsDefinition holds {}, not an object",
+                        other.kind_name()
+                    )));
+                }
+            };
+            if vm.defs.is_unloaded(&vm.space, found) || vm.defs.is_failed(&vm.space, found) {
+                return Err(VmError::NotYet(NotYet::not_read(GLOBALS_UNLOADED, RECORD_MAP_ROUTE)).into());
+            }
+            self.inner.state.borrow_mut().globals_definition = Some(Some(found));
+            return Ok(Some(found));
         }
         let found = self.mission_object(vm, GLOBALS_PATH)?;
         self.inner.state.borrow_mut().globals_definition = Some(found);
@@ -2242,8 +2301,18 @@ impl MissionScript {
 
     fn n_set_game_stage(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         let stage = integer(c.arg(0)?);
+        // The map route: the player's pawn is the controller's possessed Pawn, read now (review r1 of #556, item 3).
+        let adopted_pawn = if self.inner.adopted {
+            match get(&c.vm.space, self.inner.o.controller, "Pawn")? {
+                Value::Object(p) => p,
+                other => return Err(data(format!("mission script bridge: Pawn holds {}, not an object", other.kind_name()))),
+            }
+        } else {
+            None
+        };
         let mut s = self.inner.state.borrow_mut();
-        if c.this.is_some() && c.this == s.player_pawn {
+        let player = if self.inner.adopted { adopted_pawn } else { s.player_pawn };
+        if c.this.is_some() && c.this == player {
             s.pawn_game_stage = stage;
         }
         Ok(Value::None)
@@ -2307,6 +2376,11 @@ impl MissionScript {
     /// [`MARCUS_PROVIDER`], his use chain is bound and the provider registered on his consumer. False when the package
     /// has no such pawn.
     pub fn place_marcus(&self, vm: &mut Vm, package: &PackageName, path: &str) -> Result<bool, MissionError> {
+        // The map route makes no director (review r1 of #556, item 4): the map's own Marcus is placed or spawned by its
+        // population, which the port does not identify yet. A typed refusal, before any write.
+        if self.inner.adopted {
+            return Err(VmError::NotYet(NotYet::not_read(director_on_map(path), RECORD_MAP_ROUTE)).into());
+        }
         let (_, store) = vm.defs.code_mut();
         let id = store.load(package).map_err(ow_defs::store::DefError::from)?;
         let Some(index) = store.get(id).find_export(path)?.filter(|&i| i > 0) else {
@@ -3113,6 +3187,16 @@ impl MissionScript {
         let Some(index) = store.get(id).find_export(path)?.filter(|&i| i > 0) else {
             return Ok(false);
         };
+        // The map route (review r1 of #556, item 4): the map's own placed waypoint, the actor the map load placed from
+        // that export, which the bring-up already routed through begin play; none is made. Not placed: typed refusal.
+        if self.inner.adopted {
+            let placed = self.placed_actor(vm, id, index)?;
+            let Some(waypoint) = placed else {
+                return Err(VmError::NotYet(NotYet::not_read(waypoint_on_map(path), RECORD_MAP_ROUTE)).into());
+            };
+            self.inner.state.borrow_mut().waypoint = Some(waypoint);
+            return Ok(true);
+        }
         let waypoint = vm
             .defs
             .load_export(&mut vm.space, id, index, PropertyPrefix::PlacedActor)?;
@@ -3121,6 +3205,17 @@ impl MissionScript {
         set(&mut vm.space, waypoint, "WorldInfo", Value::Object(Some(self.inner.o.world_info)))?;
         self.run(vm, |vm| call_by_name(vm, waypoint, "PostBeginPlay", Vec::new()).map(|_| ()))?;
         Ok(true)
+    }
+
+    /// The actor of the world's list made from export `index` of package `package` (the map route), if any.
+    fn placed_actor(&self, vm: &Vm, package: ow_package::package::PackageId, index: i32) -> Result<Option<ObjRef>, MissionError> {
+        let Some(actors) = self.inner.actors.as_ref().and_then(Weak::upgrade) else {
+            return Err(data("mission script bridge: the map world's actors are gone".to_string()));
+        };
+        let list = actors.try_borrow().map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?.list().to_vec();
+        Ok(list.into_iter().find(|&a| {
+            matches!(vm.space.heap.get(a).map(|o| o.origin), Ok(Origin::Export { package: p, index: i }) if p == package && i == index)
+        }))
     }
 
     pub fn has_waypoint(&self) -> bool {

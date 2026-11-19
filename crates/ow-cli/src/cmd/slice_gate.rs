@@ -1596,25 +1596,30 @@ pub fn exit_code(rows: &[Row]) -> u8 {
     }
 }
 
+/// The command's arguments: the cooked directory, the grading and the `--map <name>` option, which comes last (module
+/// documentation); `None` for any other shape.
+pub(crate) fn parse_args(args: &[String]) -> Option<(String, Grading, Option<String>)> {
+    let (args, map) = match args {
+        [rest @ .., opt, name] if opt == "--map" => (rest, Some(name.clone())),
+        _ => (args, None),
+    };
+    match args {
+        [flag, opt, dir] if flag == "--slice-gate" && opt == "--cooked" => Some((dir.clone(), Grading::Strict, map)),
+        [flag, opt, dir, past] if flag == "--slice-gate" && opt == "--cooked" && past == "--past-errors" => {
+            Some((dir.clone(), Grading::PastErrors, map))
+        }
+        _ => None,
+    }
+}
+
 pub fn run(_command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
     if mode != ParityMode::Off {
         eprintln!("ow-package: --slice-gate runs in Off only (the slice gate counts only there)");
         return ExitCode::from(1);
     }
-    // `--map <name>` last (module documentation).
-    let (args, map) = match args {
-        [rest @ .., opt, name] if opt == "--map" => (rest, Some(name.clone())),
-        _ => (args, None),
-    };
-    let (cooked, grading) = match args {
-        [flag, opt, dir] if flag == "--slice-gate" && opt == "--cooked" => (dir.clone(), Grading::Strict),
-        [flag, opt, dir, past] if flag == "--slice-gate" && opt == "--cooked" && past == "--past-errors" => {
-            (dir.clone(), Grading::PastErrors)
-        }
-        _ => {
-            eprintln!("ow-package: {USAGE}");
-            return ExitCode::from(1);
-        }
+    let Some((cooked, grading, map)) = parse_args(args) else {
+        eprintln!("ow-package: {USAGE}");
+        return ExitCode::from(1);
     };
     let rows = match on_vm_stack(move || gate(&cooked, grading, map.as_deref())) {
         Ok(rows) => rows,

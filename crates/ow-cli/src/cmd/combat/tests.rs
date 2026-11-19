@@ -378,3 +378,26 @@ fn the_stand_in_loads_only_the_archetype_s_same_package_references() {
     drop(vm);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `--map` parsing (review r1 of #556, item 5; lane MAP-ROUTE-FOLLOWUP): the name and the steps after it, none
+/// without the option, the usage message without a name, `NotYet` outside Off.
+#[test]
+fn the_map_option_is_parsed_after_cooked() {
+    use super::{Failure, map_option};
+    let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let with = args(&["P.upk", "--combat-run", "--cooked", "dir", "--map", "Sanctuary_P", "maya:8", "spawn:dummy:1"]);
+    match map_option(&with, ParityMode::Off) {
+        Ok(Some((map, steps))) => {
+            assert_eq!(map, "Sanctuary_P");
+            assert_eq!(steps, &with[6..]);
+        }
+        _ => panic!("expected the map and its steps"),
+    }
+    let without = args(&["P.upk", "--combat-run", "--cooked", "dir", "maya:8"]);
+    assert!(matches!(map_option(&without, ParityMode::Off), Ok(None)));
+    let nameless = args(&["P.upk", "--combat-run", "--cooked", "dir", "--map"]);
+    assert!(matches!(map_option(&nameless, ParityMode::Off), Err(Failure::Message(_))));
+    assert!(matches!(map_option(&with, ParityMode::Reference), Err(Failure::NotYet(_))));
+    let bare = args(&["P.upk", "--combat-run", "--cooked", "dir", "--map", "Sanctuary_P"]);
+    assert!(matches!(map_option(&bare, ParityMode::Off), Ok(Some(("Sanctuary_P", [])))));
+}

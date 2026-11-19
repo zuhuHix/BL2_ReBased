@@ -431,3 +431,23 @@ fn new_ids_is_a_multiset_difference() {
     assert_eq!(new_ids(&before, after.into_iter()), vec!["kill.A.L1.p8".to_string(), "loot.A.L1.2.items_dropped".into()]);
     assert!(new_ids(&before, before.iter().map(String::as_str)).is_empty());
 }
+
+/// `--map` parsing (review r1 of #556, item 5; lane MAP-ROUTE-FOLLOWUP): last on the line, with either grading; any
+/// other place or a missing name is the usage message.
+#[test]
+fn the_map_option_is_parsed_last() {
+    let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let parse = |a: &[&str]| parse_args(&args(a));
+    assert_eq!(parse(&["--slice-gate", "--cooked", "d"]), Some(("d".into(), Grading::Strict, None)));
+    assert_eq!(
+        parse(&["--slice-gate", "--cooked", "d", "--map", "Sanctuary_P"]),
+        Some(("d".into(), Grading::Strict, Some("Sanctuary_P".into())))
+    );
+    assert_eq!(
+        parse(&["--slice-gate", "--cooked", "d", "--past-errors", "--map", "Sanctuary_P"]),
+        Some(("d".into(), Grading::PastErrors, Some("Sanctuary_P".into())))
+    );
+    assert_eq!(parse(&["--slice-gate", "--cooked", "d", "--map", "Sanctuary_P", "--past-errors"]), None, "--map is last");
+    assert_eq!(parse(&["--slice-gate", "--cooked", "d", "--map"]), None, "no name");
+    assert_eq!(parse(&["--slice-gate", "--map", "Sanctuary_P", "--cooked", "d"]), None);
+}
