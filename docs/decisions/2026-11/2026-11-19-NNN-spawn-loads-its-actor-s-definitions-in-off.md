@@ -7,13 +7,14 @@ The decision number is a placeholder until the hub assigns one.
 
 - **The hub's ruling:** natives stay load-free; the spawn completes the actor before any script runs on it.
 - **`ow-world` `actors.rs`, `load_own_definitions`, Off only.**
-  - After the component plan has been applied, every unloaded definition handle that one of the new actor's own
-    object-valued slots holds is loaded through the store. This happens before the actor joins the level list.
+  - Every unloaded definition handle that one of the new actor's own object-valued slots will hold is loaded
+    through the store. Since review r1 of #528 this runs on the source (class default or archetype) after the
+    component plan and before the actor is made; the plan's components and inherited references are left out, since
+    the actor holds their copies.
   - It is one level deep: the loaded definitions' own references are not followed. Arrays and structs are not walked.
-  - Each load sets `loaded`, so a later refusal of the spawn is marked "stopped after partial writes", its kind kept
-    (a lazy load is a write).
-  - A handle whose load already failed is left alone, so a spawn that succeeded before does not fail on an old error.
-  - A fresh load failure is the spawn's error, and the actor is freed, as a failure while making it already is.
+  - A load is a write, so a later refusal of the spawn is marked "stopped after partial writes", its kind kept.
+  - Every reference is required (review r1 of #528). A fresh load failure is the spawn's error, and a handle whose
+    load already failed returns the same error again.
   - `DefStore::is_unloaded` covers only the store's own definition handles; resource stand-ins never count.
 - **Tests:** two in `world/tests.rs`, with an invented `BodyProbe` actor whose archetypes name the fixture's
   `ToyTarget`:
@@ -53,3 +54,31 @@ class resident because the whole streaming package is: `BodyClass_Siren` shares 
     body composition build (InstanceDataHelper.InitializeBodyComposition: component instancing and attachment to the
     pawn's mesh)": past the lazy-`BodyClass` `NotRead`, at the component layer the note names.
   - Links 3, 4, 5, 13 and 14 stop at the same place.
+
+**Review r1 of #528 (Sol high).** All Off only; Reference unchanged; UNVERIFIED in game.
+1. **A failed load keeps its kind.** The spawn's and the harness's definition loads convert a `DefError` with
+   `VmError::from`, so a store `NotYet` stays `VmError::NotYet` (it was wrapped as `VmError::Def`, and the spawn's
+   marker only matches `NotYet`). The harness (`apply_class_inputs`) reads the write tracker's counters when it
+   starts and marks a `NotYet` from the preload, the same-package loads or the class select iff a counter moved.
+2. **No copies left behind.** The actor's own definition loads now run before the actor is made, so a failed load
+   leaves neither the actor nor its component copies. The spawn keeps the copies `apply_plan` returns and frees them
+   with the actor if making the actor fails, and `apply_plan` frees its copies if re-pointing fails.
+3. **A cached failure refuses every time.** A handle whose load already failed is no longer skipped: the spawn
+   returns the store's cached error, its kind kept. The reference is treated as required (the conservative choice;
+   nothing shows it is optional).
+4. **The marker follows the counters.** The spawn reads #518's counters (`Heap::committed_writes`, `GameRng::draws`,
+   `DefStore::load_transitions`, copied from `origin/fix/rust-483-followup` @ 211484a5 in their own commit) when it
+   starts. In Off a `NotYet` is marked iff one moved, replacing the `loaded` flag.
+   - A cold class default object the spawn builds is a write, so a refusal after it is now marked.
+   - The retry of a cached failure moves no counter, so it is not marked.
+   - A fresh failed load is a transition, so it is marked.
+   - `crate::pools::Counters` and `after_counted_writes` hold the rule.
+- **Tests:** three in `world/tests.rs` and two in `cmd/combat/harness_tests.rs`, all invented. The fixtures are an
+  export whose archetype is itself (the store's `NotYet { NotRead }`, "its archetype chain is a cycle") and the
+  archetypes that name it.
+  - The failing spawn is marked and keeps its kind; nothing is left behind; the next spawn returns the same typed
+    error, unmarked.
+  - A cold class default marks a destroyed-template refusal; with the default warm, the same refusal is unmarked.
+  - A template whose load fails is marked; its cached failure is not.
+  - The harness: a failed same-package load keeps its kind and is marked; a class-select refusal is marked after a
+    preload and unmarked without one.

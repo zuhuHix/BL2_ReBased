@@ -424,9 +424,18 @@ pub fn apply_plan(vm: &mut Vm, plan: &Plan, actor: ObjRef) -> Result<Vec<(ObjRef
             swaps.push((reference, copy));
         }
     }
-    for o in std::iter::once(actor).chain(pairs.iter().map(|p| p.1)) {
-        let slots: Vec<Value> = vm.space.heap.get(o)?.slots.iter().map(|v| repoint(v, &swaps)).collect();
-        vm.space.heap.get_mut(o)?.slots = slots;
+    // A failure while re-pointing frees the copies too (review r1 of #528, item 2); the caller frees the actor.
+    let repointed = (|| -> Result<(), VmError> {
+        for o in std::iter::once(actor).chain(pairs.iter().map(|p| p.1)) {
+            let slots: Vec<Value> = vm.space.heap.get(o)?.slots.iter().map(|v| repoint(v, &swaps)).collect();
+            vm.space.heap.get_mut(o)?.slots = slots;
+        }
+        Ok(())
+    })();
+    if let Err(e) = repointed {
+        let copies: Vec<ObjRef> = pairs.iter().map(|p| p.1).collect();
+        let _ = vm.space.free_many(&copies);
+        return Err(e);
     }
     Ok(pairs)
 }

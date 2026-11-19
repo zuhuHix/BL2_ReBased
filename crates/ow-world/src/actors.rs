@@ -703,22 +703,23 @@ fn collision(what: &'static str) -> VmError {
 /// starts "stopped after partial writes", its kind and record kept ([`crate::pools::after_partial_writes`]).
 /// Reference is unchanged.
 ///
-/// **Lazy loads are writes** (review r2 of #478): before the actor is made, an Off spawn can load definitions, the
-/// archetype in [`archetype`] and the template's components and stand-ins in the plan
-/// ([`instancing::plan_components_tracked`]; the archetype flag came with review r2 of #481). Once one of those loads
-/// has run, every `NotYet` the spawn returns is terminal and prefixed the same way, its kind and record kept.
+/// **Writes before the actor is made** (review r2 of #478, review r1 of #528, item 4): before the actor is made, an Off
+/// spawn can build the class default object, and load definitions (the archetype in [`archetype`], the template's
+/// components and stand-ins in the plan, the actor's own definitions in [`load_own_definitions`]). Whether any of that
+/// happened is read from the write tracker's counters ([`crate::pools::Counters`]: heap writes, random draws, load
+/// transitions), taken when the spawn starts: if one moved, every `NotYet` the spawn returns is terminal and prefixed
+/// the same way, its kind and record kept; if none moved (a warm class default, loaded or cached-failed handles), a
+/// refusal is unmarked. A load that fails afresh is a transition, so it counts; a cached failure returned again does not.
 ///
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
 pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
-    // A lazy archetype load is a write (review r2 of #481, M1): once it happened, every later refusal of the spawn is
-    // marked in Off, its kind and record kept.
-    let mut loaded = false;
-    let made = spawn_from(vm, spawner, req, &mut loaded);
-    if loaded && vm.parity == ParityMode::Off { made.map_err(after_writes) } else { made }
+    let before = crate::pools::Counters::read(vm);
+    let made = spawn_from(vm, spawner, req);
+    if vm.parity == ParityMode::Off { made.map_err(|e| crate::pools::after_counted_writes(vm, before, e)) } else { made }
 }
 
-fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut bool) -> Result<Option<ObjRef>, VmError> {
+fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
     let Some(class) = req.class else {
         return Ok(None);
     };
@@ -765,7 +766,7 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
                 )
                 .into());
             }
-            source = archetype(vm, &actors, class, t, loaded)?;
+            source = archetype(vm, &actors, class, t)?;
         }
     }
     let space = &vm.space;
@@ -847,16 +848,20 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
     let actor = match vm.parity {
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
-            // Every refusal of the instancing runs before the actor is made; a failure while making it frees it.
-            let plan = instancing::plan_components_tracked(vm, source, loaded)?;
+            // Every refusal of the instancing, and the actor's own definition loads, run before the actor is made
+            // (review r1 of #528, items 2 and 3); a failure while making it frees it and the copies made for it.
+            let plan = instancing::plan_components(vm, source)?;
+            load_own_definitions(vm, source, &plan)?;
             let actor = vm.instantiate(class, "")?;
+            let mut copies: Vec<ObjRef> = Vec::new();
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
-                apply_plan(vm, &plan, actor)?;
-                load_own_definitions(vm, actor, loaded)
+                copies = apply_plan(vm, &plan, actor)?.into_iter().map(|p| p.1).collect();
+                Ok(())
             });
             if let Err(e) = made {
-                let _ = vm.space.free(actor);
+                copies.push(actor);
+                let _ = vm.space.free_many(&copies);
                 return Err(e);
             }
             actor
@@ -877,30 +882,36 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
 
 /// Off: the spawn completes the actor before any script runs on it (hub ruling, lane SPAWN-COMPLETE): every definition
 /// the new actor's own object properties point to that the store has not loaded is loaded now, one level deep (the
-/// loaded definitions' own references are not followed), through the store, setting `loaded` so a later refusal of
-/// the spawn is marked "stopped after partial writes" (a lazy load is a write). Natives stay load-free: Maya's
+/// loaded definitions' own references are not followed), through the store; a load is a write, so a later refusal of
+/// the spawn is marked "stopped after partial writes" through the spawn's counters. Natives stay load-free: Maya's
 /// `BodyClass` is loaded here, before `InitializePawnMeshes` reads it. UNVERIFIED in game (when the game loads a
 /// pawn's definitions is not read; the game's packages are loaded with the map).
 ///
-/// Only object-valued slots are read (a property holding one reference; arrays and structs are not walked). A handle
-/// whose load already failed is left as it is (its error is the store's, raised again only by a reader that asks for
-/// it), so a spawn that succeeded before does not fail on an old error; a fresh load failure is the spawn's error, and
-/// the caller frees the actor.
-fn load_own_definitions(vm: &mut Vm, actor: ObjRef, loaded: &mut bool) -> Result<(), VmError> {
+/// Run on the source (the class default or the archetype) after the plan and **before the actor is made** (review r1
+/// of #528, items 2 and 3): the actor's slots are the source's with the plan's components re-pointed to their copies,
+/// so its definitions are the source's object slots less the plan's originals and inherited references. A failure
+/// leaves no actor and no copies behind.
+///
+/// Only object-valued slots are read (a property holding one reference; arrays and structs are not walked). Every
+/// reference is required (review r1 of #528, item 3, the conservative choice): a fresh load failure is the spawn's
+/// error, and a handle whose load already failed returns that same error again, its kind kept (a definition `NotYet`
+/// stays `VmError::NotYet`). The retry of a cached failure moves no counter, so it alone does not mark the refusal.
+fn load_own_definitions(vm: &mut Vm, source: ObjRef, plan: &instancing::Plan) -> Result<(), VmError> {
     let mut refs: Vec<ObjRef> = Vec::new();
-    for v in &vm.space.heap.get(actor)?.slots {
+    for v in &vm.space.heap.get(source)?.slots {
         if let Value::Object(Some(r)) = v
             && !refs.contains(r)
+            && !plan.originals.contains(r)
+            && !plan.inherited.iter().any(|p| p.0 == *r)
         {
             refs.push(*r);
         }
     }
     for r in refs {
-        if vm.defs.is_unloaded(&vm.space, r) && !vm.defs.is_failed(&vm.space, r) {
-            *loaded = true;
+        if vm.defs.is_unloaded(&vm.space, r) {
             let done = vm.defs.ensure_loaded(&mut vm.space, r);
             vm.log.extend(vm.defs.take_log());
-            done.map_err(VmError::Def)?;
+            done.map_err(VmError::from)?;
         }
     }
     Ok(())
@@ -990,7 +1001,7 @@ fn after_insertion(
 /// - a live actor (one in the level list) as the template: whether its run-time state is copied is not read;
 /// - a template whose properties are not loaded (a resource stand-in, its slots not the class layout's);
 /// - a destroyed or pending-delete template (`bDeleteMe`, `bPendingDelete`), and one whose `Owner` is set.
-fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef, loaded: &mut bool) -> Result<ObjRef, VmError> {
+fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef) -> Result<ObjRef, VmError> {
     if actors.try_borrow().map_err(borrow_err)?.list.contains(&t) {
         return Err(NotYet::not_read(
             "Spawn with a live actor as its ActorTemplate (whether its run-time state is copied)",
@@ -1002,15 +1013,13 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
     if vm.space.heap.get(t)?.destroyed {
         return Err(NotYet::not_read("Spawn with a destroyed actor as its ActorTemplate", RECORD).into());
     }
-    // A lazy load is a committed write (review r1 of #481, item 4): a refusal after it is marked.
-    let lazily_loaded = vm.defs.is_unloaded(&vm.space, t);
-    if lazily_loaded {
-        *loaded = true;
+    // A lazy load is a committed write (review r1 of #481, item 4): a refusal after it is marked by the spawn's counters
+    // (a fresh load moves them, the retry of a cached failure does not; review r1 of #528, item 4).
+    if vm.defs.is_unloaded(&vm.space, t) {
         let loaded = vm.defs.ensure_loaded(&mut vm.space, t);
         vm.log.extend(vm.defs.take_log());
         loaded?;
     }
-    let checked = (|| -> Result<(), VmError> {
     let want = vm
         .space
         .classes
@@ -1035,12 +1044,6 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
             RECORD,
         )
         .into());
-    }
-        Ok(())
-    })();
-    match checked {
-        Err(e) if lazily_loaded => return Err(after_writes(e)),
-        other => other?,
     }
     Ok(t)
 }

@@ -31,9 +31,22 @@ fn package() -> Vec<u8> {
     let definition = t.class("PlayerClassDefinition", object);
     t.prop("Str", definition, "PawnArchetypePath", 0, 0);
     let thing = t.class("Thing", object);
+    t.prop("Object", thing, "Ref", 0, object);
     let mut payload = 0i32.to_le_bytes().to_vec();
     payload.extend_from_slice(&t.none);
     t.p.add_export(thing, "ToyPawnArchetype", payload);
+    // Review r1 of #528: `ToyCycle`, whose export archetype is itself (the Off store's load refuses it, `NotYet {
+    // NotRead }`), and `ToyLinkedArchetype`, whose same-package `Ref` names it.
+    let cycle_ref = t.p.next_export();
+    let mut cycle_payload = 0i32.to_le_bytes().to_vec();
+    cycle_payload.extend_from_slice(&t.none);
+    let mut cycle = ow_package::testkit::Export::new(thing, "ToyCycle", cycle_payload);
+    cycle.archetype = cycle_ref;
+    t.p.add_export_with(cycle);
+    let mut linked = 0i32.to_le_bytes().to_vec();
+    linked.extend(t.p.tag("Ref", "ObjectProperty", &cycle_ref.to_le_bytes()));
+    linked.extend_from_slice(&t.none);
+    t.p.add_export(thing, "ToyLinkedArchetype", linked);
     t.p.build()
 }
 
@@ -43,6 +56,8 @@ struct Fx {
     definition: ObjRef,
     /// What the class select saw: the log at that moment, and whether the archetype was in memory.
     seen: Rc<RefCell<Vec<(Vec<String>, bool)>>>,
+    /// When set, the class select refuses with `NotYet { NotRead }` (review r1 of #528).
+    refuse: Rc<std::cell::Cell<bool>>,
     dir: std::path::PathBuf,
 }
 
@@ -65,12 +80,17 @@ fn fx(mode: ParityMode, archetype_path: &str) -> Fx {
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), mode);
     let seen = Rc::new(RefCell::new(Vec::new()));
     let record = seen.clone();
+    let refuse = Rc::new(std::cell::Cell::new(false));
+    let refusing = refuse.clone();
     vm.register_native(
         "WillowPlayerController.ServerPlayerSelectClass(string)",
         Rc::new(move |c: &mut NativeCall<'_>| {
             let thing = c.vm.find_class("WillowGame.Thing")?;
             let loaded = c.vm.space.live(thing).next().is_some();
             record.borrow_mut().push((c.vm.log.clone(), loaded));
+            if refusing.get() {
+                return Err(ow_core::NotYet::not_read("a toy class select refusal", "toy record").into());
+            }
             Ok(Value::None)
         }),
     )
@@ -81,7 +101,7 @@ fn fx(mode: ParityMode, archetype_path: &str) -> Fx {
     let definition = vm.space.alloc(dclass, "ToyClass", None, Origin::Runtime).unwrap();
     let p = vm.space.prop(dclass, "PawnArchetypePath").unwrap();
     vm.space.write(definition, PropAddr::scalar(p), Value::Str(archetype_path.into())).unwrap();
-    Fx { vm, controller, definition, seen, dir }
+    Fx { vm, controller, definition, seen, refuse, dir }
 }
 
 fn harness_lines(vm: &Vm) -> Vec<String> {
@@ -130,4 +150,38 @@ fn reference_does_neither_input() {
     assert!(x.seen.borrow().is_empty(), "no class select");
     let thing = x.vm.find_class("WillowGame.Thing").unwrap();
     assert!(x.vm.space.live(thing).next().is_none(), "no preload");
+}
+
+/// Review r1 of #528, item 1: a same-package reference whose load itself fails stops the step with the store's
+/// `NotYet`, its kind kept, and marked (the preload and the failed load are writes); the class select does not run.
+#[test]
+fn a_failed_same_package_load_keeps_its_kind_and_is_marked() {
+    let mut x = fx(ParityMode::Off, "WillowGame.ToyLinkedArchetype");
+    match apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)) {
+        Err(ow_vm::error::VmError::NotYet(n)) => {
+            assert_eq!(n.missing, ow_core::notyet::Missing::NotRead);
+            assert!(n.what.starts_with("stopped after partial writes: "), "{n}");
+            assert!(n.what.contains("archetype chain is a cycle"), "{n}");
+        }
+        other => panic!("expected the load's NotYet, got {other:?}"),
+    }
+    assert!(x.seen.borrow().is_empty(), "no class select");
+}
+
+/// Review r1 of #528, item 1: the write state is carried through the class select, so its refusal after a preload
+/// that loaded is marked; with no preload (and so no write), the same refusal is returned as it is.
+#[test]
+fn a_class_select_refusal_is_marked_only_after_a_write() {
+    for (path, marked) in [("WillowGame.ToyPawnArchetype", true), ("", false)] {
+        let mut x = fx(ParityMode::Off, path);
+        x.refuse.set(true);
+        match apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)) {
+            Err(ow_vm::error::VmError::NotYet(n)) => {
+                assert!(n.what.ends_with("a toy class select refusal"), "{n}");
+                assert_eq!(n.what.starts_with("stopped after partial writes: "), marked, "{path:?}: {n}");
+            }
+            other => panic!("expected the select's NotYet, got {other:?}"),
+        }
+        assert_eq!(x.seen.borrow().len(), 1, "the class select ran");
+    }
 }

@@ -694,6 +694,32 @@ pub fn after_partial_writes(e: VmError) -> VmError {
     }
 }
 
+/// The write tracker's three counters (#518's design, review r2 of #518): heap writes committed, random draws made,
+/// and definition-store load transitions. Each only grows, so a step that read them at its start knows whether it
+/// wrote anything since, without keeping its own flags (review r1 of #528, item 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Counters {
+    writes: u64,
+    draws: u64,
+    loads: u64,
+}
+
+impl Counters {
+    pub fn read(vm: &Vm) -> Self {
+        Counters { writes: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+    }
+
+    /// Whether any counter moved since `self` was read.
+    pub fn moved(self, vm: &Vm) -> bool {
+        Counters::read(vm) != self
+    }
+}
+
+/// [`after_partial_writes`] iff a counter moved since `before`; otherwise `e` as it is.
+pub fn after_counted_writes(vm: &Vm, before: Counters, e: VmError) -> VmError {
+    if before.moved(vm) { after_partial_writes(e) } else { e }
+}
+
 /// Whether `actor`'s `Role` is `ROLE_Authority` (a byte `Role` required), as the pool natives test it.
 pub fn is_authoritative(space: &ObjectSpace, actor: ObjRef) -> Result<bool, VmError> {
     is_authority(space, actor)

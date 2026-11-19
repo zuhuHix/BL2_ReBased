@@ -313,7 +313,7 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
         vm.log.push(format!("harness input: preload {path} (same package as the archetype; UNVERIFIED stand-in)"));
         let loaded = vm.defs.ensure_loaded(&mut vm.space, r);
         vm.log.extend(vm.defs.take_log());
-        loaded.map_err(VmError::Def)?;
+        loaded.map_err(VmError::from)?;
         done.push(path);
     }
     Ok(done)
@@ -329,6 +329,14 @@ pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
         return Ok(());
     }
+    // The write state is carried through both inputs (review r1 of #528, item 1): a refusal after a preload or any
+    // other write of the step, the class select's included, is marked "stopped after partial writes", its kind kept;
+    // one with no write since the step began is returned as it is.
+    let before = ow_world::pools::Counters::read(vm);
+    class_inputs(vm, controller, class).map_err(|e| ow_world::pools::after_counted_writes(vm, before, e))
+}
+
+fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     match class {
         None => vm.log.push(format!("harness input: preload skipped (no class at {PLAYER_CLASS_PATH})")),
         Some(definition) => {
@@ -361,7 +369,7 @@ pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<
                             }
                             Err(e) => {
                                 vm.log.push(format!("harness input: preload {text}: failed ({e})"));
-                                return Err(VmError::Def(e));
+                                return Err(VmError::from(e));
                             }
                         }
                     }

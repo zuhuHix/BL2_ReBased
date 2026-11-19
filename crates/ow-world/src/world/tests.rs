@@ -688,6 +688,27 @@ fn package() -> Vec<u8> {
             t.p.add_export_with(e);
         }
     }
+    // Review r1 of #528: a definition whose load itself fails, `Toolbox_Cycle` (its export archetype is itself, so the
+    // Off store refuses it with `NotYet { NotRead }`, "its archetype chain is a cycle"), and `Toolbox_Broken`, an
+    // archetype whose `Comp` names its own component and whose `Thing` names `Toolbox_Cycle`.
+    let cycle_ref = t.p.next_export();
+    let mut cycle_payload = ow_package::testkit::ints(&[0]);
+    cycle_payload.extend_from_slice(&t.none);
+    let mut cycle = ow_package::testkit::Export::new(toolbox, "Toolbox_Cycle", cycle_payload);
+    cycle.archetype = cycle_ref;
+    t.p.add_export_with(cycle);
+    let broken_ref = t.p.next_export();
+    let mut broken_payload = ow_package::testkit::ints(&[0]);
+    broken_payload.extend(t.p.tag("Comp", "ObjectProperty", &(broken_ref + 1).to_le_bytes()));
+    broken_payload.extend(t.p.tag("Thing", "ObjectProperty", &cycle_ref.to_le_bytes()));
+    broken_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Broken", broken_payload));
+    let mut broken_comp_payload = ow_package::testkit::ints(&[0, 0]);
+    broken_comp_payload.extend(t.p.int_tag("Payload", 4));
+    broken_comp_payload.extend_from_slice(&t.none);
+    let mut broken_comp = ow_package::testkit::Export::new(toy_component, "ToyComponent0", broken_comp_payload);
+    broken_comp.outer = broken_ref;
+    t.p.add_export_with(broken_comp);
     t.p.build()
 }
 
@@ -3706,5 +3727,110 @@ fn a_refusal_after_the_spawn_s_definition_load_is_marked() {
             other => panic!("expected a marked NotYet, got {other:?}"),
         }
         assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, target), "the load happened before the refusal");
+    });
+}
+
+/// The run-time objects of `classes` (an actor and its component copies are made `Origin::Runtime`).
+fn runtime_of(x: &Fx, classes: &[ow_object::ids::ClassId]) -> usize {
+    let space = &x.w.vm.space;
+    space
+        .heap
+        .handles()
+        .into_iter()
+        .filter(|&o| {
+            space.heap.get(o).is_ok_and(|v| v.origin == ow_object::heap::Origin::Runtime && classes.contains(&v.class))
+        })
+        .count()
+}
+
+/// Review r1 of #528, items 1 to 3: a definition the actor points to whose load itself fails (`Toolbox_Cycle`, the
+/// store's `NotYet { NotRead }`) refuses the spawn with that `NotYet`, its kind kept, and marked, since the load (and
+/// the plan's component load) moved the counters; the actor and the component copy are not left behind. The next
+/// spawn from the same archetype meets the cached failure: the same typed refusal, unmarked (nothing was written).
+#[test]
+fn a_definition_load_that_fails_refuses_every_spawn_with_its_kind_and_leaves_nothing() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        let component = x.class("ToyComponent");
+        x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Toolbox").unwrap();
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Broken").unwrap();
+        let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        let Value::Object(Some(cycle)) = field(&x.w.vm.space, arch, "Thing").unwrap() else {
+            panic!("no Thing handle");
+        };
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, cycle) && !x.w.vm.defs.is_failed(&x.w.vm.space, cycle));
+        let (made, list) = (runtime_of(&x, &[toolbox, component]), x.w.actors().borrow().list().len());
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(arch)).with_no_collision_fail(true);
+        let first = match spawn(&mut x.w.vm, wi, &req) {
+            Err(VmError::NotYet(n)) => n,
+            other => panic!("expected the load's NotYet, got {other:?}"),
+        };
+        assert_eq!(first.missing, Missing::NotRead);
+        assert!(first.what.starts_with("stopped after partial writes: "), "{first}");
+        assert!(first.what.contains("archetype chain is a cycle"), "{first}");
+        assert!(x.w.vm.defs.is_failed(&x.w.vm.space, cycle), "the load ran and failed");
+        assert_eq!(runtime_of(&x, &[toolbox, component]), made, "no actor and no component copy left");
+        assert_eq!(x.w.actors().borrow().list().len(), list, "nothing in the level list");
+        let second = match spawn(&mut x.w.vm, wi, &req) {
+            Err(VmError::NotYet(n)) => n,
+            other => panic!("expected the cached NotYet, got {other:?}"),
+        };
+        assert_eq!(second.missing, Missing::NotRead);
+        assert_eq!(format!("stopped after partial writes: {}", second.what), first.what, "the same error, unmarked");
+        assert_eq!(runtime_of(&x, &[toolbox, component]), made);
+        assert_eq!(x.w.actors().borrow().list().len(), list);
+    });
+}
+
+/// Review r1 of #528, item 4: building a cold class default object is a write, so a refusal after it is marked; with
+/// the class default warm, the same refusal (here a destroyed template) writes nothing and is not.
+#[test]
+fn a_cold_class_default_marks_the_refusal_after_it() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        let dead = x.w.vm.space.alloc(toolbox, "Toolbox_Dead", None, ow_object::heap::Origin::Runtime).unwrap();
+        x.w.vm.space.heap.destroy(dead).unwrap();
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(dead)).with_no_collision_fail(true);
+        for marked in [true, false] {
+            match spawn(&mut x.w.vm, wi, &req) {
+                Err(VmError::NotYet(n)) => {
+                    assert!(n.what.contains("destroyed actor as its ActorTemplate"), "{n}");
+                    assert_eq!(n.what.starts_with(crate::actors::PARTIAL_WRITES), marked, "{n}");
+                }
+                other => panic!("expected NotYet, got {other:?}"),
+            }
+        }
+    });
+}
+
+/// Review r1 of #528, item 4: a template whose load fails afresh is marked (the failed load is a transition); the
+/// cached failure on the next spawn returns the same typed error unmarked.
+#[test]
+fn a_cached_template_failure_is_not_marked() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Toolbox").unwrap();
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Broken").unwrap();
+        let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        let Value::Object(Some(cycle)) = field(&x.w.vm.space, arch, "Thing").unwrap() else {
+            panic!("no Thing handle");
+        };
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(cycle)).with_no_collision_fail(true);
+        for marked in [true, false] {
+            match spawn(&mut x.w.vm, wi, &req) {
+                Err(VmError::NotYet(n)) => {
+                    assert_eq!(n.missing, Missing::NotRead);
+                    assert!(n.what.contains("archetype chain is a cycle"), "{n}");
+                    assert_eq!(n.what.starts_with(crate::actors::PARTIAL_WRITES), marked, "{n}");
+                }
+                other => panic!("expected NotYet, got {other:?}"),
+            }
+        }
     });
 }

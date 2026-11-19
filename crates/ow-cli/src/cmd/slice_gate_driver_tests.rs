@@ -207,11 +207,18 @@ fn the_world_spawns_the_cast_s_actors_with_their_own_components() {
     }
 }
 
-/// A refusal before the first spawn: the spawn's `NotYet` (graded from its variant) is the link's stop, without the
-/// partial-writes mark, and the cast does not run.
+/// Builds `Engine.ToyBlocked`'s class default object, so its spawn's refusal writes nothing first (review r1 of #528,
+/// item 4: building a cold class default is a write, and a refusal after it is marked).
+fn warm_blocked(vm: &mut ow_vm::api::Vm) {
+    vm.defs.class_default(&mut vm.space, "Engine.ToyBlocked").unwrap();
+}
+
+/// A refusal before the first spawn, with nothing written (the class default already built): the spawn's `NotYet`
+/// (graded from its variant) is the link's stop, without the partial-writes mark, and the cast does not run.
 #[test]
 fn a_refusal_before_the_first_spawn_stops_the_link_unmarked() {
     let mut t = toy();
+    warm_blocked(&mut t.world.vm);
     let before = t.listed().len();
     let (r, actors) = t.drive(&["Engine.ToyBlocked", "Engine.ToyController", "Engine.ToyTarget"], Grading::Strict);
     let (outcome, stop) = r.stop.expect("a stop");
@@ -227,7 +234,9 @@ fn a_refusal_before_the_first_spawn_stops_the_link_unmarked() {
 #[test]
 fn a_not_yet_after_a_committed_spawn_is_marked() {
     // The unmarked NotYet of the blocked spawn, from a fresh world: its record is the one the marked stop must keep.
-    let original = match phaselock_actors(&mut toy().world.vm, &["Engine.ToyBlocked", "Engine.ToyController", "Engine.ToyTarget"]) {
+    let mut fresh = toy();
+    warm_blocked(&mut fresh.world.vm);
+    let original = match phaselock_actors(&mut fresh.world.vm, &["Engine.ToyBlocked", "Engine.ToyController", "Engine.ToyTarget"]) {
         Err(VmError::NotYet(n)) => n,
         other => panic!("{other:?}"),
     };
