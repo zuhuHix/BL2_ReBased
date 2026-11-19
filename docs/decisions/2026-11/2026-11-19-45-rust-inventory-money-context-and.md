@@ -1,8 +1,8 @@
 ## 2026-11-19: Rust inventory money context and RecomputeNormalizedDamageValues in Off
 
 AI-assisted (Claude Code). Lane FIX-VALUE-B, implementer (slice link 8, equip). Number 45 was given by the hub. The
-branch is stacked on `fix/rust-compute-value` 3c25d81c (decision 2026-11-19-36, not yet on main), because it extends
-that lane's module. The source is NATIVE_INVENTORY_VALUE.md as on main (#419, decision 2026-11-19-34), sections 3 and
+branch is `origin/main` df99b25e. It was written stacked on `fix/rust-compute-value` 3c25d81c (decision 2026-11-19-36),
+whose module it extends, and rebased once that landed (#425, 174d92bb). The source is NATIVE_INVENTORY_VALUE.md as on main (#419, decision 2026-11-19-34), sections 3 and
 5. This lane did not analyse it and opened no `local/analysis/`, Ghidra or REA output. No dependency, no CLI flag, no
 parsing change. There was no real-game session; every rule is **UNVERIFIED** in the running game. Both changes are Off
 only. Reference has no C++ stand-in for either and is unchanged (R3).
@@ -55,6 +55,21 @@ only. Reference has no C++ stand-in for either and is unchanged (R3).
 - **Gates** (this branch on 3c25d81c): workspace build clean; workspace tests 2,010 passed / 0 failed / 45 ignored
   (`ow-inventory` 65 / 0 / 0); `crate_edges_test.py` OK; decisions check OK against the merge base 2981b801 (2 added:
   this one and decision 36); leak gate 0 errors, 0 warnings. ctest and verify_packages were not rerun (no C++ change).
+- **Follow-ups from the review of #425** (FIX-COMPUTE-VALUE, decision 36), in its module:
+  - `ComputeValueOfParts`'s rarity takes the layout's `mission_rule` flag: an item checks for a
+    `MissionItemDefinition`, and a weapon skips the check entirely, as the note reads (before, a weapon's definition
+    was class-checked too, which changed nothing for a real weapon type);
+  - new passing tests: a mission item with an item part and a title name part (rarity 9 each) takes the globals
+    definition's `MissionItemRarityLevel` (3), then 0 when the toy globals give no definition, its modifier total and
+    money still by the rule; a weapon whose toy definition is a mission item definition sums its rarity (2 + 3 = 5)
+    and asks for no globals. The globals come from toy `WorldHooks` and a toy native in place of the installed
+    `GetGlobalsDefinition`.
+  - Afterwards: `ow-inventory` 67 / 0 / 0; workspace 2,012 / 0 / 45; `crate_edges_test.py` OK; the installed equip
+    run's rows byte-identical to the run above.
+- **After the rebase onto df99b25e:** workspace tests 2,020 passed / 0 failed / 45 ignored; `crate_edges_test.py` OK;
+  decisions check OK against origin/main (1 added); the installed equip run's rows byte-identical; `--slice-gate`
+  strict 0 / 11 / 3, where only the `maya:8` stop text of links 1, 3, 4, 5, 13 and 14 changed, which comes from main's
+  FIX-PLAYER-CLASS (now at `FindAlreadyLoadedObject` of the Siren pawn data), not from this lane.
 - **Open.**
   - `InventoryAttributeContextResolver`'s flag property (an analyst's question, NATIVE_ATTRIBUTES.md section 5): the
     stop of the money step and so of the spawn.

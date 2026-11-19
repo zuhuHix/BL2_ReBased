@@ -3,10 +3,11 @@
 //! constant whatever the evaluator's formula. The normalized damage tests (decision 2026-11-19-45) add two toy resolvers,
 //! `Test.Same` (the context is the source) and `Test.IsWeapon` (40 on a weapon, an error on anything else).
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
-use ow_attr::api::{AttrError, ContextResolver, ValueResolver};
+use ow_attr::api::{AttrError, ContextResolver, EngineQuery, ValueResolver, WorldParts};
 use ow_core::notyet::Missing;
 use ow_core::{ObjectPath, ParityMode};
 use ow_defs::DefStore;
@@ -14,7 +15,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, ObjRef, PropAddr, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
-use ow_vm::api::{FunctionDecl, Vm};
+use ow_vm::api::{FunctionDecl, Vm, WorldHooks};
 use ow_vm::error::VmError;
 
 use super::*;
@@ -53,6 +54,20 @@ impl ValueResolver for IsWeapon {
         } else {
             Err(AttrError::BadData { reason: "IsWeapon: the context is not a weapon".into() })
         }
+    }
+}
+
+/// Toy world hooks: only the globals object, made once (the mission-item rarity tests).
+struct GlobalsOnly(ObjRef);
+impl WorldHooks for GlobalsOnly {
+    fn globals(&mut self, _: WorldParts<'_>) -> Result<ObjRef, AttrError> {
+        Ok(self.0)
+    }
+    fn game_info(&mut self, _: WorldParts<'_>) -> Result<ObjRef, AttrError> {
+        Err(AttrError::BadData { reason: "GlobalsOnly has no game info".into() })
+    }
+    fn engine_query(&mut self, _: EngineQuery, _: ObjRef, _: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError> {
+        Err(AttrError::BadData { reason: "GlobalsOnly answers no engine query".into() })
     }
 }
 
@@ -141,6 +156,9 @@ impl Toy {
         s.classes.define("Engine.AttributeModifier", Some(object), modifier).unwrap();
         s.classes.define("Test.Same", Some(object), vec![]).unwrap();
         s.classes.define("Test.IsWeapon", Some(object), vec![]).unwrap();
+        let globals = vec![decl(&mut s, "MissionItemRarityLevel", PropKind::Int)];
+        s.classes.define("Test.GlobalsDefinition", Some(object), globals).unwrap();
+        s.classes.define("WillowGame.WillowGlobals", Some(object), vec![]).unwrap();
         let itf = fields(&mut s, idata);
         s.classes.define("WillowGame.WillowItem", Some(inventory), itf).unwrap();
         let attrs = AttributeSystem::standard()
@@ -252,11 +270,31 @@ impl Toy {
     }
 
     fn item(&mut self, definition: ObjRef) -> ObjRef {
+        self.item_with(definition, &[])
+    }
+
+    fn item_with(&mut self, definition: ObjRef, parts: &[(&str, ObjRef)]) -> ObjRef {
         let i = self.obj("WillowGame.WillowItem", "Item_0");
         let ty = self.idata;
-        let data = self.st(ty, vec![("ItemDefinition", Value::Object(Some(definition)))]);
+        let mut fields = vec![("ItemDefinition", Value::Object(Some(definition)))];
+        fields.extend(parts.iter().map(|(slot, p)| (*slot, Value::Object(Some(*p)))));
+        let data = self.st(ty, fields);
         self.set(i, "DefinitionData", data);
         i
+    }
+
+    /// A world whose globals object answers `GetGlobalsDefinition` with whatever `answer` holds when called (a toy
+    /// native in place of the installed function).
+    fn with_globals(&mut self, answer: Rc<Cell<Option<ObjRef>>>) {
+        let g = self.obj("WillowGame.WillowGlobals", "Globals");
+        self.vm.set_world_hooks(Rc::new(RefCell::new(GlobalsOnly(g)))).unwrap();
+        let path = ObjectPath::parse("WillowGame.WillowGlobals.GetGlobalsDefinition").unwrap();
+        let key = "WillowGlobals.GetGlobalsDefinition()";
+        let mut f = FunctionDecl::native(path, key);
+        let object = self.class("Core.Object");
+        f.result = Some(decl(&mut self.vm.space, "ReturnValue", PropKind::Object { class: object }).with_flags(PropertyDecl::RETURN));
+        self.vm.declare_function(f).unwrap();
+        self.vm.register_native(key, Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(answer.get())))).unwrap();
     }
 
     fn call(&mut self, path: &str, this: ObjRef) -> Result<Value, VmError> {
@@ -318,6 +356,44 @@ fn an_item_uses_the_rule_and_a_mission_item_needs_the_globals() {
     let mission = t.definition("WillowGame.MissionItemDefinition", 4.2, 1.0, 50.0, 0);
     let m = t.item(mission);
     assert!(t.call("WillowGame.WillowItem.ComputeValueOfParts", m).is_err());
+}
+
+/// A mission item's rarity is the globals definition's `MissionItemRarityLevel`, whatever its own parts (an item part
+/// and a title name part of rarity 9 here), and 0 when the globals give no definition. Its money and modifier total
+/// still follow the rule (review of #425).
+#[test]
+fn a_mission_items_rarity_comes_from_the_globals_definition() {
+    let mut t = Toy::new(ParityMode::Off);
+    let answer = Rc::new(Cell::new(None));
+    t.with_globals(answer.clone());
+    let gd = t.obj("Test.GlobalsDefinition", "GlobalsDefinition");
+    t.set(gd, "MissionItemRarityLevel", Value::Int(3));
+    answer.set(Some(gd));
+    let mission = t.definition("WillowGame.MissionItemDefinition", 4.2, 2.0, 50.0, 0);
+    let alpha = t.part("Alpha", 9.0, Some(1.5));
+    let title = t.part("Title", 9.0, None);
+    let parts = [("AlphaItemPartDefinition", alpha), ("TitleItemNamePartDefinition", title)];
+    let m = t.item_with(mission, &parts);
+    t.call("WillowGame.WillowItem.ComputeValueOfParts", m).unwrap();
+    assert_eq!(t.get(m, "RarityLevel"), Value::Int(3), "the globals definition's level, not 4 + 9 + 9");
+    assert_eq!(t.get(m, "MonetaryValueModifierTotal"), Value::Float(3.0));
+    assert_eq!(t.get(m, "MonetaryValue"), Value::Int(50));
+    answer.set(None);
+    let m = t.item_with(mission, &parts);
+    t.call("WillowGame.WillowItem.ComputeValueOfParts", m).unwrap();
+    assert_eq!(t.get(m, "RarityLevel"), Value::Int(0), "no globals definition: 0");
+}
+
+/// A weapon skips the mission rule: a weapon whose definition is (oddly) a mission item definition sums its rarity,
+/// and asks for no globals (this toy has none, which would be an error).
+#[test]
+fn a_weapon_never_takes_the_mission_rule() {
+    let mut t = Toy::new(ParityMode::Off);
+    let mission = t.definition("WillowGame.MissionItemDefinition", 2.0, 1.0, 10.0, 0);
+    let title = t.part("Title", 3.0, None);
+    let w = t.weapon(Some(mission), &[("TitlePartDefinition", title)]);
+    t.call("WillowGame.WillowWeapon.ComputeValueOfParts", w).unwrap();
+    assert_eq!(t.get(w, "RarityLevel"), Value::Int(5));
 }
 
 /// Reference binds nothing (no C++ stand-in).
