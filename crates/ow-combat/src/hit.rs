@@ -628,21 +628,18 @@ pub const PRESENTATION_NO_OPS: [&str; 7] = [
     "WillowGame.WillowPlayerController.NotifyShotStatus",
 ];
 
-/// The special-move queries the chain asks: the VM plays no special move, so none is playing (true of this world,
-/// not a game rule).
-pub const NOTHING_PLAYING: [&str; 2] = [
-    "WillowGame.SpecialMoveComponent.IsPlayingAny",
-    "GearboxFramework.SpecialMoveComponent.IsPlayingAny",
-];
-
-/// The C++ stand-ins for `SpecialMoveComponent.Play` (a no-op) and `IsPlayingClass` (false), bound in
-/// `ParityMode::Reference` only (R3; review of #437). In Off, `ow-skills`' `action_skill::special_move` binds both from
-/// NATIVE_SPECIAL_MOVE_PLAY.md, and a world without that pack leaves them unbound, so the stub policy answers.
-pub const SPECIAL_MOVE_STAND_INS: [(&str, bool); 4] = [
+/// The C++ stand-ins for `SpecialMoveComponent.Play` (a no-op), `IsPlayingClass` and `IsPlayingAny` (false: the VM
+/// plays no special move, true of this world, not a game rule), bound in `ParityMode::Reference` only (R3; reviews r1
+/// and r2 of #437). In Off, `ow-skills`' `action_skill::special_move` binds `Play` and `IsPlayingClass` from
+/// NATIVE_SPECIAL_MOVE_PLAY.md; `IsPlayingAny` is not read there, and a world without that pack leaves all three
+/// unbound, so the stub policy answers.
+pub const SPECIAL_MOVE_STAND_INS: [(&str, bool); 6] = [
     ("WillowGame.SpecialMoveComponent.Play", false),
     ("GearboxFramework.SpecialMoveComponent.Play", false),
     ("WillowGame.SpecialMoveComponent.IsPlayingClass", true),
     ("GearboxFramework.SpecialMoveComponent.IsPlayingClass", true),
+    ("WillowGame.SpecialMoveComponent.IsPlayingAny", true),
+    ("GearboxFramework.SpecialMoveComponent.IsPlayingAny", true),
 ];
 
 /// The allegiance natives (NATIVE_COMBAT_GROUNDWORK.md section 6), in both modes: `GetOpinion` is the four-step rule
@@ -833,9 +830,6 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
     )?;
     for path in PRESENTATION_NO_OPS {
         bind_fn(vm, path, |_| Ok(Value::None))?;
-    }
-    for path in NOTHING_PLAYING {
-        bind_fn(vm, path, |_| Ok(Value::Bool(false)))?;
     }
     if vm.parity == ParityMode::Reference {
         for (path, query) in SPECIAL_MOVE_STAND_INS {

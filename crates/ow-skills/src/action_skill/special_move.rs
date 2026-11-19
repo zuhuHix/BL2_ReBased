@@ -34,31 +34,38 @@
 //!   1. 0 with no definition or no owner interface (`SMI`); then the definition to play (`GetSMDToPlay`), 0 with none;
 //!   2. the gates, in this order: `IsLocalAuthority`, then the script event `AuthorityCanPlay` (not asked when the
 //!      first fails; UNVERIFIED). Failed: 0, nothing changed;
-//!   3. every refusal is decided before anything changes (review of #437), each `NotYet`:
+//!   3. every refusal that can be decided is decided before the first event and before any write (reviews r1 and r2
+//!      of #437), each `NotYet`:
 //!      - an owner below `ROLE_Authority` in a world whose `WorldInfo.NetMode` is `NM_Client`: the forward to the
 //!        server (`ServerSpecialMove_Play`, step 6) is network play, not ported;
-//!      - with the gates passed, an owner at `ROLE_Authority`: the record the owner keeps of the current move for
-//!        replication (step 4.4) is not named in the note, so it is `NotYet { NotRead }`. In the single-player slice
-//!        this is every `Play` past the gates;
+//!      - an owner at `ROLE_Authority` that passes `IsLocalAuthority`: the record the owner keeps of the current move
+//!        for replication (step 4.4) is not named in the note, so it is `NotYet { NotRead }`. It is refused before
+//!        `AuthorityCanPlay` is asked, so a move whose second gate would fail (where the game answers 0) is refused
+//!        too. In the single-player slice this is every `Play` that passes `IsLocalAuthority`;
 //!      - a definition with a `NextSpecialMove`: what the queued follow-ups carry is not read;
 //!      - a stop this start may run (the current move's, or the new move's own when its duration is 0 or less) whose
 //!        definition declares no `ClientFinished`, whose callback the target does not declare, or whose callback has
 //!        a parameter other than one `bool bInterrupted`: the note names no other argument, and a zero or a default
 //!        would be a guess;
-//!   4. the start: the queue (`SMDQueue`) emptied; a current move stopped as interrupted; the request (its definition
-//!      the one to play) made the current move (`CurrentSMData`) and `StartTime` the world time; the definition's
-//!      `ClientStarted(SMI, SMData)` answers the duration, and a duration of 0 or less stops the move again, not
-//!      interrupted. The answer is the duration.
+//!   4. the gate event `AuthorityCanPlay`. A node `GetSMNode` finds while it runs is cached in `SMBlendNode` only once
+//!      `Play` is committed (the hub's ruling in review r2 of #437; the game caches it at once, UNVERIFIED whether
+//!      that is observable). A refusal raised inside it (`GetSMNode`'s missing anim tree, say) is answered as it is:
+//!      nothing this port binds writes during it;
+//!   5. committed, the start: the node cache written; the queue (`SMDQueue`) emptied; a current move stopped as
+//!      interrupted; the request (its definition the one to play) made the current move (`CurrentSMData`) and
+//!      `StartTime` the world time; the definition's `ClientStarted(SMI, SMData)` answers the duration, and a
+//!      duration of 0 or less stops the move again, not interrupted, if it is still the current move. The answer is
+//!      the duration.
 //!
-//!   A script event that fails during the start (`ClientFinished` or `ClientStarted` reaching an unbound native, for
-//!   example) cannot be decided in advance. Then the component's `CurrentSMData`, `SMDQueue` and `StartTime` are put
-//!   back as they were before the call and the error is answered. What the events themselves changed before failing
-//!   is not undone. The game has no such failure; this keeps a refused `Play` from leaving the component half-started.
+//!   A refusal after the commit (a script event reaching an unbound native, say) cannot be decided in advance and is
+//!   **terminal**: nothing is put back, and its text starts "stopped after partial writes" (the hub's ruling in review
+//!   r2 of #437, the same rule as #439), its kind kept.
 //!
 //!   Stopping a move (section 4), as `Play` uses it (queue cleared, owner below authority): the queue emptied, the
 //!   current move cleared, the old definition's `ClientFinished(SMI, bInterrupted)`, then the callback when the old
 //!   definition passes `IsLocalAuthority` and the request named one: the function `CallbackName` on `CallbackObject`
-//!   (or on the owner), with `bInterrupted` when it declares that one parameter. On the authority the stop would also
+//!   (or on the owner), with `bInterrupted` when it declares that one parameter, and only if the old definition still
+//!   passes `IsLocalAuthority` when the callback is dispatched. On the authority the stop would also
 //!   run `ServerFinished` and update the replicated record; `Play` refuses before that case is reached.
 //! - **`SpecialMoveComponent.PlayLocal(...)`** (section 1): 0 with no definition or owner interface; otherwise the
 //!   definition to play (0 with none), its `ServerStarted(SMI)` and then its `ClientStarted(SMI, SMData)`, whose answer
@@ -281,10 +288,63 @@ fn get_sm_node(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let blend = c.vm.find_class("GearboxFramework.AnimNodeSpecialMoveBlend")?;
     match find_node(c.vm, tree, "SpecialMoveBlend", WHAT)? {
         Some(node) if c.vm.space.classes.is_child_of(c.vm.space.heap.get(node)?.class, blend) => {
-            write(c.vm, component, "SMBlendNode", Value::Object(Some(node)), WHAT)?;
+            if !defer_cache(c.vm, component, node)? {
+                write(c.vm, component, "SMBlendNode", Value::Object(Some(node)), WHAT)?;
+            }
             Ok(Value::Object(Some(node)))
         }
         _ => Ok(Value::Object(None)),
+    }
+}
+
+/// The components whose `Play` is asking its gates, and the node caches their `GetSMNode` found meanwhile, written
+/// only once that `Play` is committed (review r2 of #437, the hub's ruling).
+#[derive(Debug, Default)]
+struct Deferred {
+    components: Vec<ObjRef>,
+    pending: Vec<(ObjRef, ObjRef)>,
+}
+
+fn deferred(vm: &Vm) -> Result<Rc<std::cell::RefCell<Deferred>>, VmError> {
+    vm.service::<Deferred>()
+        .ok_or_else(|| script_error("SpecialMoveComponent.Play", "the special-move natives were not registered"))
+}
+
+fn borrow_err<E>(_: E) -> VmError {
+    VmError::ServiceBorrowed("special_move::Deferred")
+}
+
+/// Records `node` as `component`'s pending cache when its `Play` is asking its gates; false otherwise.
+fn defer_cache(vm: &mut Vm, component: ObjRef, node: ObjRef) -> Result<bool, VmError> {
+    let Some(d) = vm.service::<Deferred>() else { return Ok(false) };
+    let mut d = d.try_borrow_mut().map_err(borrow_err)?;
+    if !d.components.contains(&component) {
+        return Ok(false);
+    }
+    d.pending.retain(|(c, _)| *c != component);
+    d.pending.push((component, node));
+    Ok(true)
+}
+
+/// `AuthorityCanPlay` with `component`'s cache writes deferred; answers the gate and the node to cache, if any.
+fn authority_can_play(vm: &mut Vm, component: ObjRef, smd: ObjRef, smi: Value) -> Result<(bool, Option<ObjRef>), VmError> {
+    let d = deferred(vm)?;
+    d.try_borrow_mut().map_err(borrow_err)?.components.push(component);
+    let r = call_bool(vm, smd, "AuthorityCanPlay", vec![smi]);
+    let mut d = d.try_borrow_mut().map_err(borrow_err)?;
+    if let Some(i) = d.components.iter().rposition(|c| *c == component) {
+        d.components.remove(i);
+    }
+    let node = d.pending.iter().position(|(c, _)| *c == component).map(|i| d.pending.remove(i).1);
+    Ok((r?, node))
+}
+
+/// A refusal that comes after `Play` dispatched its first committed event: terminal, its text saying so (review r2
+/// of #437, the same rule as #439). The kind of the refusal is kept.
+fn after_partial_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) => NotYet::new(format!("stopped after partial writes: {}", n.what), n.missing, n.record).into(),
+        other => script_error("SpecialMoveComponent.Play", format!("stopped after partial writes: {other}")),
     }
 }
 
@@ -457,7 +517,10 @@ fn stop(
     write(vm, component, "SMDQueue", Value::array(Vec::new()), what)?;
     write(vm, component, "CurrentSMData", zero.clone(), what)?;
     call(vm, smd, "ClientFinished", vec![interface(owner), Value::Bool(interrupted)])?;
-    if let Callback::Call { target, f, interrupted_param } = *callback {
+    // The authority is asked again at dispatch: `ClientFinished` may have changed it since the callback was resolved.
+    if let Callback::Call { target, f, interrupted_param } = *callback
+        && is_local_authority_of(vm, smd, &interface(owner))?
+    {
         let args = if interrupted_param { vec![Value::Bool(interrupted)] } else { Vec::new() };
         vm.call(f, Some(target), args)?;
     }
@@ -488,7 +551,10 @@ fn start(vm: &mut Vm, s: &Start, what: &str) -> Result<Value, VmError> {
         Value::Float(d) => d,
         other => return Err(script_error(what, format!("ClientStarted answered {}", other.kind_name()))),
     };
-    if duration <= 0.0 {
+    // The current move is read again first: if `ClientStarted` already ended it, it is not stopped (and its
+    // `ClientFinished` not run) a second time.
+    let current = need(vm, s.component, "CurrentSMData")?;
+    if duration <= 0.0 && object(&field(vm, &current, "SMD", what)?, what)? == Some(s.smd) {
         stop(vm, s.component, s.owner, s.smd, &s.own, false, &s.zero, what)?;
     }
     Ok(Value::Float(duration))
@@ -501,6 +567,8 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         return Ok(Value::Float(0.0));
     };
     let smi = interface(owner);
+    // Every refusal that can be decided is decided before the first event and before any write (module
+    // documentation, step 3; review r2 of #437).
     let authority = role_at_least(c.vm, owner, "ROLE_Authority", WHAT)?;
     if !authority && is_network_client(c.vm, WHAT)? {
         return Err(NotYet::not_ported(
@@ -509,14 +577,13 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     }
-    let passes = is_local_authority_of(c.vm, smd, &smi)? && call_bool(c.vm, smd, "AuthorityCanPlay", vec![smi])?;
-    if !passes {
+    if !is_local_authority_of(c.vm, smd, &smi)? {
         return Ok(Value::Float(0.0));
     }
     if authority {
         return Err(NotYet::not_read(
             "Play on the authority: the record the owner keeps of the current move for replication (section 1 step \
-             4.4 does not name it)",
+             4.4 does not name it); refused before AuthorityCanPlay is asked",
             RECORD,
         )
         .into());
@@ -524,7 +591,6 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if object(&need(c.vm, smd, "NextSpecialMove")?, WHAT)?.is_some() {
         return Err(NotYet::not_read("Play of a definition with a NextSpecialMove (what the queued follow-ups carry)", RECORD).into());
     }
-    // Every other refusal, before anything changes (module documentation, step 3).
     let data = request(c, component, smd, WHAT)?;
     let vm = &mut *c.vm;
     let now = world_time(vm)?;
@@ -541,21 +607,20 @@ fn play(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     require_method(vm, smd, "ClientStarted")?;
     require_method(vm, smd, "ClientFinished")?;
     let own = callback_of(vm, &data, smd, owner, &zero, WHAT)?;
-    let saved = [
-        ("CurrentSMData", current),
-        ("SMDQueue", need(vm, component, "SMDQueue")?),
-        ("StartTime", need(vm, component, "StartTime")?),
-    ];
-    let s = Start { component, owner, smd, data, now, zero, old, own };
-    match start(vm, &s, WHAT) {
-        Ok(v) => Ok(v),
-        Err(e) => {
-            for (name, v) in saved {
-                write(vm, component, name, v, WHAT)?;
-            }
-            Err(e)
-        }
+    // The gate event. The node GetSMNode finds meanwhile is cached only once Play is committed.
+    let (passes, node) = authority_can_play(vm, component, smd, smi)?;
+    if !passes {
+        return Ok(Value::Float(0.0));
     }
+    // Committed: from here a refusal is terminal (module documentation).
+    let s = Start { component, owner, smd, data, now, zero, old, own };
+    let committed = |vm: &mut Vm| -> Result<Value, VmError> {
+        if let Some(node) = node {
+            write(vm, component, "SMBlendNode", Value::Object(Some(node)), WHAT)?;
+        }
+        start(vm, &s, WHAT)
+    };
+    committed(vm).map_err(after_partial_writes)
 }
 
 fn play_local(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -576,6 +641,9 @@ fn play_local(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ow_core::ParityMode::Off {
         return Ok(());
+    }
+    if vm.service::<Deferred>().is_none() {
+        vm.add_service(Deferred::default())?;
     }
     let [alive, to_play_path, local, playing, node, play_path, local_play] = PATHS;
     let natives: [(&str, NativeFn); 7] = [

@@ -215,6 +215,7 @@ fn gearbox() -> Vec<u8> {
         native(&mut t, component, name, &declared, Some(("Float", vec![0])));
     }
     native(&mut t, component, "GetSMNode", &[], Some(("Object", vec![object])));
+    native(&mut t, component, "IsPlayingAny", &[], Some(("Bool", vec![0])));
     native(&mut t, component, "IsPlayingClass", &[D("Class", "SMClass", 0, vec![object, object])], Some(("Bool", vec![0])));
     let definition = t.class("SpecialMoveDefinition", object);
     t.prop("Object", definition, "NextSpecialMove", 0, definition);
@@ -239,6 +240,12 @@ struct Script {
     duration: f32,
     /// `ClientStarted` fails (an unbound native it reaches, say).
     fail_start: bool,
+    /// `AuthorityCanPlay` asks this component's `GetSMNode` first (as the installed script does).
+    probe: Option<ObjRef>,
+    /// `ClientFinished` demotes this pawn to a simulated proxy.
+    demote: Option<ObjRef>,
+    /// `ClientStarted` ends this component's current move itself.
+    end_on_start: Option<ObjRef>,
 }
 
 /// The recorded events and callbacks: function path and what each answers.
@@ -269,8 +276,7 @@ fn fx(mode: ParityMode) -> Fx {
     fx_with(mode, &[&crate::action_skill::Pack])
 }
 
-/// A world over the two packages in `mode` with `packs`, the toy events bound, the allegiance natives, and a placed
-/// `WorldInfo` at time 12.
+/// A world over the two packages in `mode` with `packs`, the toy events bound, and a placed `WorldInfo` at time 12.
 fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-sm-play-{}-{}",
@@ -299,7 +305,6 @@ fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
     )
     .unwrap();
     let mut world = World::new(vm, BalanceState::new(snapshot), packs).unwrap();
-    ow_combat::hit::register_allegiance(&mut world.vm).unwrap();
     let script = Rc::new(RefCell::new(Script { can_play: true, duration: 2.5, ..Default::default() }));
     for path in EVENTS {
         let f = world.vm.find_function(path).unwrap();
@@ -320,6 +325,32 @@ fn fx_with(mode: ParityMode, packs: &[&dyn NativePack]) -> Fx {
                             _ => "_".into(),
                         })
                         .collect();
+                    let (probe, demote, end) = {
+                        let s = s.borrow();
+                        (s.probe, s.demote, s.end_on_start)
+                    };
+                    if name == "AuthorityCanPlay"
+                        && let Some(component) = probe
+                    {
+                        let f = c.vm.find_function(PATHS[4])?;
+                        c.vm.call(f, Some(component), vec![])?;
+                    }
+                    if name == "ClientFinished"
+                        && let Some(pawn) = demote
+                    {
+                        let class = c.vm.space.heap.get(pawn)?.class;
+                        let p = c.vm.space.prop(class, "Role").unwrap();
+                        c.vm.space.write(pawn, PropAddr::scalar(p), Value::Byte(SIMULATED))?;
+                    }
+                    if name == "ClientStarted"
+                        && let Some(component) = end
+                    {
+                        let class = c.vm.space.heap.get(component)?.class;
+                        let p = c.vm.space.prop(class, "CurrentSMData").unwrap();
+                        let current = c.vm.space.read(component, PropAddr::scalar(p))?.clone();
+                        let ended = with_field(c.vm, current, "SMD", Value::Object(None), "test")?;
+                        c.vm.space.write(component, PropAddr::scalar(p), ended)?;
+                    }
                     let mut s = s.borrow_mut();
                     s.calls.push(format!("{name} on {me}({})", args.join(",")));
                     match name {
@@ -531,16 +562,16 @@ fn get_sm_node_finds_the_blend_node_and_needs_a_tree() {
     let wrong = x.obj("Engine.AnimNode");
     let n = x.name("SpecialMoveBlend");
     x.set(wrong, "NodeName", n.clone());
+    let n = n.clone();
     let c = child(&mut x, wrong);
     x.set(upper, "Children", Value::array(vec![c]));
     assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(None), "a node of another class");
     let node = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
-    let lower = x.name("specialmoveblend");
-    x.set(node, "NodeName", lower);
+    x.set(node, "NodeName", n);
     x.set(node, "SkelComponent", Value::Object(Some(mesh)));
     let c = child(&mut x, node);
     x.set(upper, "Children", Value::array(vec![c]));
-    assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)), "found, names without case");
+    assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)), "found");
     assert_eq!(x.get(component, "SMBlendNode"), Value::Object(Some(node)), "cached");
     x.set(mesh, "Animations", Value::Object(None));
     assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)), "the cache on this mesh");
@@ -618,9 +649,10 @@ fn a_zero_duration_stops_the_move_again() {
     assert_eq!(x.current(component, "SMD"), Value::Object(None));
 }
 
-/// Every refusal leaves a seeded component (a current move, a one-entry queue, `StartTime` 5) as it was (review of
-/// #437): the authority's replication record, a network client's forward, follow-ups, an old callback the owner does
-/// not declare, a callback with another parameter, and a `ClientStarted` that fails after the start began.
+/// Every refusal decided before the first event leaves a seeded component (a current move, a one-entry queue,
+/// `StartTime` 5) as it was, and asks no gate event (reviews r1 and r2 of #437): the authority's replication record, a
+/// network client's forward, follow-ups, an old callback the owner does not declare, and a callback with another
+/// parameter (the old move's and the new move's own).
 #[test]
 fn play_refusals_change_nothing() {
     let mut x = fx(ParityMode::Off);
@@ -634,6 +666,7 @@ fn play_refusals_change_nothing() {
         let r = x.play(component, args);
         let after = x.state(component);
         assert_eq!(before, after, "nothing changed");
+        assert_eq!(x.calls(), Vec::<String>::new(), "no event ran");
         not_yet(r)
     };
     let (missing, text) = run(&mut x, AUTHORITY, None, vec![Value::Object(Some(d))]);
@@ -646,17 +679,11 @@ fn play_refusals_change_nothing() {
     x.set(wi, "NetMode", Value::Byte(0));
     let (_, text) = run(&mut x, AUTONOMOUS, Some("NoSuchCallback"), vec![Value::Object(Some(d))]);
     assert!(text.contains("does not declare"), "{text}");
-    assert!(x.calls().iter().all(|c| !c.starts_with("ClientFinished")), "no stop ran: {:?}", x.calls());
     let (_, text) = run(&mut x, AUTONOMOUS, Some("ToyDoneWithCount"), vec![Value::Object(Some(d))]);
     assert!(text.contains("bInterrupted"), "{text}");
     let counted = x.name("ToyDoneWithCount");
     let (_, text) = run(&mut x, AUTONOMOUS, None, vec![Value::Object(Some(d)), Value::Float(1.0), Value::Float(0.0), counted]);
     assert!(text.contains("ToyDoneWithCount"), "the new move's own callback: {text}");
-    x.script.borrow_mut().fail_start = true;
-    let (_, text) = run(&mut x, AUTONOMOUS, Some("ToyDone"), vec![Value::Object(Some(d))]);
-    assert!(text.contains("toy unbound native"), "{text}");
-    assert!(x.calls().iter().any(|c| c.starts_with("ClientStarted")), "the start ran and was put back");
-    x.script.borrow_mut().fail_start = false;
     let next = x.definition("GearboxFramework.ToyOtherMove", true);
     x.set(d, "NextSpecialMove", Value::Object(Some(next)));
     let (_, text) = run(&mut x, AUTONOMOUS, None, vec![Value::Object(Some(d))]);
@@ -676,36 +703,149 @@ fn play_local_runs_both_starts_and_keeps_no_current_move() {
     assert_eq!(x.call(PATHS[6], component, vec![Value::Object(None)]).unwrap(), Value::Float(0.0));
 }
 
-/// The toy `GetPlayerAnimation` script (the cast's choice): an enemy that is alive and well gets the hit move; a
-/// friend, and a dead target, get the fizzle move. It reaches `Pawn.IsFriendly` (the allegiance native) and
-/// `Pawn.IsAliveAndWell` through the VM.
+/// The toy `GetPlayerAnimation` script (the cast's choice) through the action skill pack's one cast path (review r2 of
+/// #437): in Off `Pawn.IsFriendly` is the named `NotYet` of NATIVE_IS_FRIENDLY.md, never the combat allegiance
+/// boolean; in Reference the stand-in answers, so a friend gets the fizzle move, and an enemy reaches
+/// `IsAliveAndWell`, which Reference leaves unbound.
 #[test]
-fn the_cast_script_chooses_hit_or_fizzle() {
-    let mut x = fx(ParityMode::Off);
-    let skill = x.obj("Engine.ToyLiftSkill");
-    let (hit, miss) = (x.definition("GearboxFramework.ToyMove", true), x.definition("GearboxFramework.ToyOtherMove", true));
-    let (caster, _) = x.owner(AUTHORITY);
-    x.set(skill, "Caster", Value::Object(Some(caster)));
-    x.set(skill, "Hit", Value::Object(Some(hit)));
-    x.set(skill, "Miss", Value::Object(Some(miss)));
-    let side = x.obj("Engine.PawnAllegiance");
-    x.set(side, "SelfOpinion", Value::Byte(2));
-    x.set(caster, "Allegiance", Value::Object(Some(side)));
-    let choose = |x: &mut Fx, target: ObjRef| {
-        x.call("Engine.ToyLiftSkill.GetPlayerAnimation", skill, vec![Value::Object(Some(target))]).unwrap()
-    };
-    let (enemy, _) = x.owner(AUTHORITY);
-    assert_eq!(choose(&mut x, enemy), Value::Object(Some(hit)), "an enemy alive and well: hit");
-    x.set(enemy, "bIsDead", Value::Bool(true));
-    assert_eq!(choose(&mut x, enemy), Value::Object(Some(miss)), "a dead target: fizzle");
-    let (friend, _) = x.owner(AUTHORITY);
-    x.set(friend, "Allegiance", Value::Object(Some(side)));
-    assert_eq!(choose(&mut x, friend), Value::Object(Some(miss)), "a friend: fizzle");
+fn the_cast_script_asks_is_friendly_through_the_pack() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut x = fx(mode);
+        let skill = x.obj("Engine.ToyLiftSkill");
+        let (hit, miss) =
+            (x.definition("GearboxFramework.ToyMove", true), x.definition("GearboxFramework.ToyOtherMove", true));
+        let (caster, _) = x.owner(AUTHORITY);
+        x.set(skill, "Caster", Value::Object(Some(caster)));
+        x.set(skill, "Hit", Value::Object(Some(hit)));
+        x.set(skill, "Miss", Value::Object(Some(miss)));
+        let side = x.obj("Engine.PawnAllegiance");
+        x.set(side, "SelfOpinion", Value::Byte(2));
+        x.set(caster, "Allegiance", Value::Object(Some(side)));
+        let (friend, _) = x.owner(AUTHORITY);
+        x.set(friend, "Allegiance", Value::Object(Some(side)));
+        let (enemy, _) = x.owner(AUTHORITY);
+        let choose = |x: &mut Fx, target: ObjRef| {
+            x.call("Engine.ToyLiftSkill.GetPlayerAnimation", skill, vec![Value::Object(Some(target))])
+        };
+        if mode == ParityMode::Off {
+            for target in [friend, enemy] {
+                match choose(&mut x, target).unwrap_err() {
+                    VmError::NotYet(n) => {
+                        assert_eq!(n.missing, Missing::NotRead);
+                        assert_eq!(n.record, crate::action_skill::RECORD_IS_FRIENDLY);
+                    }
+                    e => panic!("expected the IsFriendly NotYet, got {e}"),
+                }
+            }
+        } else {
+            assert_eq!(choose(&mut x, friend).unwrap(), Value::Object(Some(miss)), "a friend: fizzle");
+            assert!(choose(&mut x, enemy).is_err(), "an enemy: IsAliveAndWell is unbound in Reference");
+        }
+    }
 }
 
-/// Review of #437: `ow-combat`'s hit pack binds its `Play` no-op and `IsPlayingClass` false in Reference only, so in
-/// Off this module's natives answer whichever pack registers first; in Reference the stand-ins answer and this module
-/// binds nothing.
+/// The node `GetSMNode` finds while `AuthorityCanPlay` runs is cached only once `Play` is committed (review r2 of
+/// #437): not when the gate fails, and not when `Play` refuses on the authority, which it does before asking the gate.
+#[test]
+fn the_node_cache_is_written_only_by_a_committed_play() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let tree_owner = |x: &mut Fx, role: u8| {
+        let (pawn, component) = x.owner(role);
+        let mesh = x.obj("Engine.SkeletalMeshComponent");
+        x.set(pawn, "Mesh", Value::Object(Some(mesh)));
+        let node = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+        let n = x.name("SpecialMoveBlend");
+        x.set(node, "NodeName", n);
+        x.set(mesh, "Animations", Value::Object(Some(node)));
+        x.script.borrow_mut().probe = Some(component);
+        (component, node)
+    };
+    let (component, _) = tree_owner(&mut x, AUTONOMOUS);
+    x.script.borrow_mut().can_play = false;
+    assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(0.0));
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(None), "the gate failed: no cache");
+    x.script.borrow_mut().can_play = true;
+    let (component, _) = tree_owner(&mut x, AUTHORITY);
+    x.clear_calls();
+    not_yet(x.play(component, vec![Value::Object(Some(d))]));
+    assert_eq!(x.calls(), Vec::<String>::new(), "the authority is refused before the gate");
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(None));
+    let (component, node) = tree_owner(&mut x, AUTONOMOUS);
+    assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(2.5));
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(Some(node)), "committed: cached");
+    // Outside Play, GetSMNode caches at once (section 3).
+    let (component, node) = tree_owner(&mut x, AUTONOMOUS);
+    assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)));
+    assert_eq!(x.get(component, "SMBlendNode"), Value::Object(Some(node)));
+}
+
+/// A refusal after the commit is terminal (review r2 of #437, the rule of #439): nothing is put back, and its text
+/// starts "stopped after partial writes", the refusal's kind kept.
+#[test]
+fn a_refusal_after_the_commit_is_terminal() {
+    let mut x = fx(ParityMode::Off);
+    let old = x.definition("GearboxFramework.ToyOtherMove", true);
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let (_, component) = x.owner(AUTONOMOUS);
+    x.seed(component, old, Some("ToyDone"));
+    x.script.borrow_mut().fail_start = true;
+    let (missing, text) = not_yet(x.play(component, vec![Value::Object(Some(d))]));
+    assert_eq!(missing, Missing::NotRead);
+    assert!(text.starts_with("stopped after partial writes: a toy unbound native"), "{text}");
+    assert_eq!(x.current(component, "SMD"), Value::Object(Some(d)), "the new move stays: nothing is put back");
+    assert_eq!(x.get(component, "StartTime"), Value::Float(12.0));
+    assert_eq!(x.get(component, "SMDQueue"), Value::array(vec![]));
+    assert!(x.calls().contains(&"ToyDone on Pawn(true)".to_string()), "the old move's stop ran: {:?}", x.calls());
+}
+
+/// The callback's authority is asked again when it is dispatched: a `ClientFinished` that demotes the owner below
+/// the move's authority leaves the callback uncalled (review r2 of #437).
+#[test]
+fn the_callback_rechecks_authority_at_dispatch() {
+    let mut x = fx(ParityMode::Off);
+    let old = x.definition("GearboxFramework.ToyOtherMove", true);
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let (pawn, component) = x.owner(AUTONOMOUS);
+    x.seed(component, old, Some("ToyDone"));
+    x.script.borrow_mut().demote = Some(pawn);
+    assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(2.5));
+    assert!(x.calls().iter().all(|c| !c.starts_with("ToyDone")), "{:?}", x.calls());
+}
+
+/// A zero duration stops the move only while it is still the current one: when `ClientStarted` already ended it,
+/// `ClientFinished` does not run a second time (review r2 of #437).
+#[test]
+fn a_zero_duration_does_not_stop_a_move_that_already_ended() {
+    let mut x = fx(ParityMode::Off);
+    let d = x.definition("GearboxFramework.ToyMove", true);
+    let (_, component) = x.owner(AUTONOMOUS);
+    x.script.borrow_mut().duration = 0.0;
+    x.script.borrow_mut().end_on_start = Some(component);
+    assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(0.0));
+    assert_eq!(x.calls(), vec!["AuthorityCanPlay on ToyMove(_)", "ClientStarted on ToyMove(_,data)"]);
+}
+
+/// Names are compared without case: on a fresh fixture the lower-case spelling is interned first, so the node's
+/// name text really is lower case (review r2 of #437).
+#[test]
+fn get_sm_node_compares_names_without_case() {
+    let mut x = fx(ParityMode::Off);
+    let lower = x.name("specialmoveblend");
+    let Value::Name(id) = lower else { unreachable!() };
+    assert_eq!(x.vm().space.names.text(id), "specialmoveblend", "the first spelling is kept");
+    let (pawn, component) = x.owner(AUTONOMOUS);
+    let mesh = x.obj("Engine.SkeletalMeshComponent");
+    x.set(pawn, "Mesh", Value::Object(Some(mesh)));
+    let node = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    x.set(node, "NodeName", lower);
+    x.set(mesh, "Animations", Value::Object(Some(node)));
+    assert_eq!(x.call(PATHS[4], component, vec![]).unwrap(), Value::Object(Some(node)));
+}
+
+/// Reviews r1 and r2 of #437: `ow-combat`'s hit pack binds its `Play` no-op and its `IsPlayingClass` and
+/// `IsPlayingAny` false in Reference only, so in Off this module's natives answer whichever pack registers first and
+/// `IsPlayingAny` stays unbound; in Reference the stand-ins answer and this module binds nothing.
 #[test]
 fn the_combat_stand_ins_never_shadow_off_in_either_order() {
     let combat = ow_combat::hit::Pack;
@@ -719,6 +859,9 @@ fn the_combat_stand_ins_never_shadow_off_in_either_order() {
         let toy = Value::Class(Some(x.vm().find_class("GearboxFramework.ToyMove").unwrap()));
         assert_eq!(x.call(PATHS[3], component, vec![toy]).unwrap(), Value::Bool(true), "order {i}: IsPlayingClass");
         assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::Float(2.5), "order {i}: Play");
+        let f = x.vm().find_function("GearboxFramework.SpecialMoveComponent.IsPlayingAny").unwrap();
+        let key = x.vm().function(f).unwrap().native_key.clone().unwrap();
+        assert!(!x.vm().has_native(&key), "order {i}: IsPlayingAny is unbound in Off");
         let mut x = fx_with(ParityMode::Reference, packs);
         let (_, component) = x.owner(AUTONOMOUS);
         let d = x.definition("GearboxFramework.ToyMove", true);
@@ -726,6 +869,8 @@ fn the_combat_stand_ins_never_shadow_off_in_either_order() {
         let toy = Value::Class(Some(x.vm().find_class("GearboxFramework.ToyMove").unwrap()));
         assert_eq!(x.call(PATHS[3], component, vec![toy]).unwrap(), Value::Bool(false), "order {i}: the stand-in");
         assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::None, "order {i}: the no-op");
+        let any = x.call("GearboxFramework.SpecialMoveComponent.IsPlayingAny", component, vec![]).unwrap();
+        assert_eq!(any, Value::Bool(false), "order {i}: the IsPlayingAny stand-in");
     }
 }
 

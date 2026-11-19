@@ -687,8 +687,40 @@ impl NativePack for Pack {
         )?;
         register_events(vm)?;
         register_sm_component(vm)?;
-        special_move::register(vm)
+        special_move::register(vm)?;
+        register_cast_opinion(vm)
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// `Pawn.IsFriendly` for the cast (review r2 of #437)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The record of `Pawn.IsFriendly` in Off.
+pub const RECORD_IS_FRIENDLY: &str = "NATIVE_IS_FRIENDLY.md";
+
+/// The one path by which the cast's worlds get `Pawn.IsFriendly`, which `LiftActionSkill.GetPlayerAnimation` asks on
+/// its target path (this pack serves both the W6-SKILLS installed run and the slice gate's cast):
+/// - Off: `NotYet { NotRead }` naming NATIVE_IS_FRIENDLY.md, until lane IMPL-IS-FRIENDLY binds the note's rule. The
+///   combat pack's allegiance boolean is a stand-in here and is not used in Off;
+/// - Reference: the combat pack's allegiance natives (`ow_combat::hit::register_allegiance`), the C++ stand-in.
+///
+/// By path, the first binding of a key winning.
+fn register_cast_opinion(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return ow_combat::hit::register_allegiance(vm);
+    }
+    bind(
+        vm,
+        "Engine.Pawn.IsFriendly",
+        Rc::new(|_: &mut NativeCall<'_>| {
+            Err(NotYet::not_read(
+                "Pawn.IsFriendly in Off (its rule and WillowPawn's charm layer; lane IMPL-IS-FRIENDLY)",
+                RECORD_IS_FRIENDLY,
+            )
+            .into())
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------------------------------------------

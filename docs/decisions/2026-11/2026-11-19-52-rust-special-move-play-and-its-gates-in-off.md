@@ -132,3 +132,45 @@ game. Every binding is Off only. Reference has no C++ stand-in and binds nothing
   - **Gates after r1:** `ow-skills` 90 / 0 / 1; `ow-combat` 148 / 0 / 2; workspace 2,040 / 0 / 45. `--slice-gate`
     strict is byte-identical to the #437 head, 0 / 11 / 3, and link 9 is still `notyet` (no headless driver). The
     installed cast is unchanged: it still stops at `GetSMComponent`.
+- **Review r2 of #437** (delta review of r1; one fix commit). Where this section and the text above differ, this
+  section holds. The hub ruled that events are not rolled back: r1's restore of three fields is gone.
+  - **Before the first event.** `Play` now decides every refusal before it asks `AuthorityCanPlay`:
+    - the network client's forward;
+    - `IsLocalAuthority` (a native; failed, the answer is 0);
+    - the authority's replication record. A move whose second gate would fail is therefore refused too, where the
+      game answers 0;
+    - follow-ups;
+    - the world time;
+    - both stops' `ClientFinished` and callback signatures.
+
+    During `AuthorityCanPlay`, a node `GetSMNode` finds is held back and cached in `SMBlendNode` only once `Play` is
+    committed. The game caches at once; whether that is observable is UNVERIFIED. Outside `Play`, `GetSMNode` caches
+    at once. A refusal raised inside `AuthorityCanPlay` (the missing anim tree, say) is answered as it is, because
+    nothing this port binds writes during it.
+  - **Terminal after the commit.** A refusal after the commit (a script event reaching an unbound native) is
+    terminal, the same rule as #439. Nothing is put back, the text starts "stopped after partial writes", and the
+    refusal's kind is kept.
+  - **Callbacks and the zero-duration stop.** The callback's authority is asked again when it is dispatched. A zero
+    duration stops the move only while it is still the current one, so `ClientFinished` cannot run twice.
+  - **`IsPlayingAny`.** Its false stand-in joins `SPECIAL_MOVE_STAND_INS` and is bound in Reference only. Off leaves it
+    unbound; the note does not read it.
+  - **`Pawn.IsFriendly` for the cast, through one path.** The action skill pack, which both the W6-SKILLS installed
+    run and the slice gate's cast use, binds it:
+    - in Off, `NotYet { NotRead }` naming NATIVE_IS_FRIENDLY.md, until lane IMPL-IS-FRIENDLY binds the note's rule;
+    - in Reference, the combat allegiance natives (the stand-in).
+
+    r1's separate `register_allegiance` call in the installed run is gone, and the fixture no longer adds it.
+  - **Tests** (`ow-skills` special move, 17):
+    - the node cache only on a committed `Play`: not when the gate fails, and not when the authority is refused,
+      which happens before the gate;
+    - the terminal refusal, state left as written;
+    - the callback's authority rechecked;
+    - no double `ClientFinished`;
+    - `IsPlayingAny` in both pack orders and both modes;
+    - the cast script through the pack: the Off `NotYet`, and the Reference stand-in (a friend fizzles; an enemy
+      reaches the unbound `IsAliveAndWell`);
+    - names without case on a fresh fixture whose first spelling is lower case. The r1 test passed even with a
+      case-sensitive compare.
+  - **Gates after r2:** `ow-skills` 95 / 0 / 1; `ow-combat` 148 / 0 / 2; workspace 2,045 / 0 / 45. `--slice-gate` strict
+    is byte-identical, 0 / 11 / 3, and link 9 still has no headless driver. The installed cast still stops at
+    `GetSMComponent`.
