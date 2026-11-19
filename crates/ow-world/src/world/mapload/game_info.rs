@@ -21,13 +21,20 @@
 //!    looked up (which may load a package), checked against `WorldInfo.Game`'s declared class, spawned through the
 //!    world spawn ([`crate::actors::spawn`]) with the `WorldInfo` as the spawner (UNVERIFIED: the engine's spawn has
 //!    no spawning actor; the `WorldInfo` gives the location, rotation and an empty instigator), and stored in
-//!    `WorldInfo.Game`. A class that is not found, and a spawn that returns nothing, are the note's not-found text
-//!    with the field left empty. The "loaded once and cached" of the note is the class table's own caching.
+//!    `WorldInfo.Game`. A class that is not found, and a spawn that returns nothing, give the note's not-found text
+//!    with the field left empty. The note has the engine log it and carry on; **this port stops the route there**
+//!    (a data error, the port's choice: a map without its game info is not a world the slice can grade). The "loaded
+//!    once and cached" of the note is the class table's own caching.
 //!
 //! **Writes and marking** (the hub's rules): steps 1 and 2 read only. From step 3 on, a lazy load counts as a write.
-//! The heap's committed-write count and the definition store's load transitions (#518's counters) are read before the
-//! first step; any `NotYet` returned after either moved is marked "stopped after partial writes", its kind and record
-//! kept ([`crate::actors::after_writes`]). Other errors are returned as they are.
+//! #518's three counters (the heap's committed writes, the definition store's load transitions and the game RNG's
+//! draws, [`WriteMark`]) are read before step 3; any `NotYet` returned after one moved is marked "stopped after partial
+//! writes", its kind and record kept ([`crate::actors::after_writes`]). The not-found stop is marked the same way when
+//! a lazy load already ran (review r1 of #537). Other errors are returned as they are.
+//!
+//! **The ini reader refuses instead of guessing** (review r1 of #537): a quoted value, a prefixed key (`+`, `-`, `.`,
+//! `!`, the ini's array and removal operators) and a second `DefaultGame` in the section are `NotYet { NotRead }`. A
+//! UTF-8 byte-order mark is skipped, and the installed file is read only up to [`MAX_INI_BYTES`].
 //!
 //! `ParityMode::Reference` is unchanged: the C++ has no map load, so the routine is `NotYet { NotPorted }` there.
 
@@ -46,6 +53,9 @@ use crate::world::World;
 
 /// The game ini the configured default game is read from, relative to the install folder.
 pub const DEFAULT_GAME_INI: &str = "WillowGame/Config/DefaultGame.ini";
+
+/// The most bytes [`installed_default_game`] reads; a larger file is refused (review r1 of #537).
+pub const MAX_INI_BYTES: u64 = 1 << 20;
 
 /// The `NetMode` of a standalone world (no network driver).
 pub const NET_MODE_STANDALONE: u8 = 0;
@@ -84,10 +94,14 @@ pub struct GameInfoSpawned {
 }
 
 /// The configured default game in a game ini's text: the value of `DefaultGame` in section `[Engine.GameInfo]`
-/// (section and key compared without case, as ini keys are; blank lines and `;` comments skipped; the first value
-/// wins). `None` when the section or the key is absent or the value is empty.
-pub fn default_game_from_ini(text: &str) -> Option<String> {
+/// (section and key compared without case, as ini keys are; blank lines and `;` comments skipped; a leading UTF-8
+/// byte-order mark skipped). `Ok(None)` when the section or the key is absent or the value is empty. Refused, as
+/// `NotYet { NotRead }` (module documentation): a quoted value, a prefixed `DefaultGame` key, a second `DefaultGame`.
+pub fn default_game_from_ini(text: &str) -> Result<Option<String>, NotYet> {
+    let refuse = |what: &'static str| NotYet::not_read(what, RECORD);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut in_section = false;
+    let mut found: Option<String> = None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with(';') {
@@ -100,20 +114,41 @@ pub fn default_game_from_ini(text: &str) -> Option<String> {
         if !in_section {
             continue;
         }
-        if let Some((key, value)) = line.split_once('=') {
-            if key.trim().eq_ignore_ascii_case("DefaultGame") {
-                let value = value.trim();
-                return (!value.is_empty()).then(|| value.to_string());
-            }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let bare = key.trim_start_matches(['+', '-', '.', '!']);
+        if !bare.eq_ignore_ascii_case("DefaultGame") {
+            continue;
         }
+        if bare.len() != key.len() {
+            return Err(refuse("a prefixed DefaultGame key in the game ini (the ini's array and removal operators)"));
+        }
+        if found.is_some() {
+            return Err(refuse("a second DefaultGame in the game ini's [Engine.GameInfo] (which one the engine takes)"));
+        }
+        let value = value.trim();
+        if value.starts_with('"') || value.ends_with('"') {
+            return Err(refuse("a quoted DefaultGame value in the game ini (how the engine reads the quotes)"));
+        }
+        found = Some(value.to_string());
     }
-    None
+    Ok(found.filter(|v| !v.is_empty()))
 }
 
-/// [`default_game_from_ini`] over the installed `DefaultGame.ini` under `root` (the install folder).
-pub fn installed_default_game(root: &Path) -> std::io::Result<Option<String>> {
-    let bytes = std::fs::read(root.join(DEFAULT_GAME_INI))?;
-    Ok(default_game_from_ini(&String::from_utf8_lossy(&bytes)))
+/// [`default_game_from_ini`] over the installed `DefaultGame.ini` under `root` (the install folder). A file larger
+/// than [`MAX_INI_BYTES`], and a read error, are data errors; the reader's refusals are its `NotYet`.
+pub fn installed_default_game(root: &Path) -> Result<Option<String>, VmError> {
+    use std::io::Read as _;
+    let path = root.join(DEFAULT_GAME_INI);
+    let io = |e: std::io::Error| data_error(format!("reading {}: {e}", path.display()));
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path).map_err(io)?.take(MAX_INI_BYTES + 1).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > MAX_INI_BYTES {
+        return Err(data_error(format!("{} is larger than {MAX_INI_BYTES} bytes", path.display())));
+    }
+    Ok(default_game_from_ini(&String::from_utf8_lossy(&bytes))?)
 }
 
 /// The value of the first `GAME=` option in `options` (key compared without case), if any.
@@ -124,17 +159,23 @@ pub fn game_option(options: &str) -> Option<&str> {
     })
 }
 
-/// The two counters a write moves (#518): the heap's committed writes and the store's load transitions.
+/// The three counters a write moves (#518): the heap's committed writes, the store's load transitions and the game
+/// RNG's draws (a draw is a write, review r1 of #537).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteMark {
     heap: u64,
     loads: u64,
+    draws: u64,
 }
 
 impl WriteMark {
     /// The counters now.
     pub fn now(vm: &Vm) -> Self {
-        WriteMark { heap: vm.space.heap.committed_writes(), loads: vm.defs.load_transitions() }
+        WriteMark {
+            heap: vm.space.heap.committed_writes(),
+            loads: vm.defs.load_transitions(),
+            draws: vm.rng.draws(),
+        }
     }
 
     /// Whether anything was written or loaded since this mark.
@@ -242,19 +283,31 @@ pub fn spawn_game_info(world: &mut World, input: &GameInfoInput<'_>) -> Result<G
     };
     let vm = &mut world.vm;
     let mark = WriteMark::now(vm);
-    configured(vm, info, &path, game_class).map_err(|e| mark.mark(vm, e))
+    configured(vm, &mark, info, &path, game_class).map_err(|e| mark.mark(vm, e))
+}
+
+/// The not-found stop (module documentation, step 3), marked when something was written or loaded since `mark`.
+fn not_found(vm: &Vm, mark: &WriteMark, path: &str) -> VmError {
+    let text = not_found_text(path);
+    data_error(if mark.moved(vm) { format!("stopped after partial writes: {text}") } else { text })
 }
 
 /// Step 3: the lookup, the spawn and the store.
-fn configured(vm: &mut Vm, info: ObjRef, path: &str, game_class: ClassId) -> Result<GameInfoSpawned, VmError> {
+fn configured(
+    vm: &mut Vm,
+    mark: &WriteMark,
+    info: ObjRef,
+    path: &str,
+    game_class: ClassId,
+) -> Result<GameInfoSpawned, VmError> {
     let Some(class) = vm.find_class_if_present(path)? else {
-        return Err(data_error(not_found_text(path)));
+        return Err(not_found(vm, mark, path));
     };
     if !vm.space.classes.is_child_of(class, game_class) {
         return Err(data_error(format!("{path} is not a class WorldInfo.Game can hold")));
     }
     let Some(game) = actors::spawn(vm, info, &SpawnRequest::new(Some(class)))? else {
-        return Err(data_error(not_found_text(path)));
+        return Err(not_found(vm, mark, path));
     };
     actors::set_field(&mut vm.space, info, "Game", Value::Object(Some(game)))?;
     Ok(GameInfoSpawned { game, class: path.to_string(), branch: GameInfoBranch::ConfiguredDefault })

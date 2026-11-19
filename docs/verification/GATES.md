@@ -96,6 +96,9 @@ load's game info routine in Off (`mapload::game_info`, NATIVE_MAP_LOAD.md sectio
 byte-identical. Installed ignored test (Sanctuary through the map route): `WillowGame.WillowCoopGameInfo` spawned into
 `WorldInfo.Game`; its `InitGame` and `PreBeginPlay` stop, marked, at `GotoState('Auto')`. ctest and verify_packages not
 run (no C++ change). No real-game session; `UNVERIFIED` in game. Logs under ignored `local/p2/mapload-gameinfo/`.
+Review r1 of #537: `cargo test -p ow-world` 231 passed / 0 failed / 6 ignored, `-p ow-core -p ow-vm` 269 passed / 0
+failed; clippy flags nothing in the changed files; the installed map-route test passes under the lock, the game info's two
+stops now asserted marked.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

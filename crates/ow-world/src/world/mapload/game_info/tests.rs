@@ -49,13 +49,62 @@ fn load_everywhere(f: &mut Fx) {
 
 #[test]
 fn the_ini_reader_takes_default_game_from_its_section_only() {
+    let read = |t: &str| default_game_from_ini(t).unwrap();
     let ini = "; a comment\n[Engine.GameReplicationInfo]\nDefaultGame=Wrong.Section\n\n[engine.gameinfo]\n\
-               ; DefaultGame=Commented.Out\n  defaultgame = Toy.ToyGame \nDefaultGame=Second.Value\n";
-    assert_eq!(default_game_from_ini(ini).as_deref(), Some("Toy.ToyGame"), "first value, any case, trimmed");
-    assert_eq!(default_game_from_ini("[Engine.GameInfo]\nDefaultServerGame=Toy.Server\n"), None, "no key");
-    assert_eq!(default_game_from_ini("[Engine.GameInfo]\nDefaultGame=\n"), None, "an empty value");
-    assert_eq!(default_game_from_ini("DefaultGame=Toy.NoSection\n"), None, "outside any section");
-    assert_eq!(default_game_from_ini("[Engine.GameInfo]\r\nDefaultGame=Toy.Crlf\r\n").as_deref(), Some("Toy.Crlf"));
+               ; DefaultGame=Commented.Out\n  defaultgame = Toy.ToyGame \nDefaultServerGame=Toy.Server\n";
+    assert_eq!(read(ini).as_deref(), Some("Toy.ToyGame"), "any case, trimmed, its section only");
+    assert_eq!(read("[Engine.GameInfo]\nDefaultServerGame=Toy.Server\n"), None, "no key");
+    assert_eq!(read("[Engine.GameInfo]\nDefaultGame=\n"), None, "an empty value");
+    assert_eq!(read("DefaultGame=Toy.NoSection\n"), None, "outside any section");
+    assert_eq!(read("[Engine.GameInfo]\r\nDefaultGame=Toy.Crlf\r\n").as_deref(), Some("Toy.Crlf"));
+    assert_eq!(read("\u{feff}[Engine.GameInfo]\nDefaultGame=Toy.Bom\n").as_deref(), Some("Toy.Bom"), "a BOM skipped");
+}
+
+/// The reader refuses instead of guessing (review r1 of #537): a second `DefaultGame` in the section (also in a second
+/// copy of the section), a prefixed key, a quoted value. Each `NotYet { NotRead }`.
+#[test]
+fn the_ini_reader_refuses_what_it_would_have_to_guess() {
+    for ini in [
+        "[Engine.GameInfo]\nDefaultGame=Toy.First\nDefaultGame=Toy.Second\n",
+        "[Engine.GameInfo]\nDefaultGame=Toy.First\n[Engine.Other]\n[Engine.GameInfo]\ndefaultgame=Toy.Second\n",
+        "[Engine.GameInfo]\n+DefaultGame=Toy.Added\n",
+        "[Engine.GameInfo]\n-DefaultGame=Toy.Removed\n",
+        "[Engine.GameInfo]\n.DefaultGame=Toy.Dotted\n",
+        "[Engine.GameInfo]\n!DefaultGame=Toy.Cleared\n",
+        "[Engine.GameInfo]\nDefaultGame=\"Toy.Quoted\"\n",
+    ] {
+        let n = default_game_from_ini(ini).unwrap_err();
+        assert_eq!(n.missing, Missing::NotRead, "{ini:?}");
+    }
+}
+
+/// The installed reader caps the file (review r1 of #537): a file over the cap is refused, one at the cap is read.
+#[test]
+fn the_installed_ini_read_is_capped() {
+    let root = std::env::temp_dir().join(format!("ow-world-ini-cap-{}", std::process::id()));
+    let config = root.join("WillowGame/Config");
+    std::fs::create_dir_all(&config).unwrap();
+    let head = b"[Engine.GameInfo]\nDefaultGame=Toy.Capped\n;";
+    let mut at_cap = head.to_vec();
+    at_cap.resize(usize::try_from(MAX_INI_BYTES).unwrap(), b' ');
+    std::fs::write(config.join("DefaultGame.ini"), &at_cap).unwrap();
+    assert_eq!(installed_default_game(&root).unwrap().as_deref(), Some("Toy.Capped"));
+    at_cap.push(b' ');
+    std::fs::write(config.join("DefaultGame.ini"), &at_cap).unwrap();
+    let e = installed_default_game(&root).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("larger than")), "{e:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The mark follows the game RNG's draws too (review r1 of #537): a draw alone moves it.
+#[test]
+fn a_rng_draw_moves_the_write_mark() {
+    run(|| {
+        let mut f = fx_in(false, ParityMode::Off);
+        let mark = WriteMark::now(&f.w.vm);
+        f.w.vm.rng.script(ow_core::rand::ScriptStream::ALL[0]).frand();
+        assert!(mark.moved(&f.w.vm));
+    });
 }
 
 #[test]
@@ -277,17 +326,17 @@ fn sanctuary_through_the_map_route_on_the_installed_game() {
         assert_eq!(ow_attr::eval::class_path(space, g), "WillowGame.WillowCoopGameInfo", "the spawned actor");
         assert_eq!(actors::field(space, info, "Game").map_err(|e| e.to_string())?, Value::Object(Some(g)));
         assert!(w.actors().borrow().list().contains(&g), "the game info is in the actor list");
-        let on_game: Vec<(&str, bool, bool)> = up
+        let on_game: Vec<(&str, bool, bool, bool)> = up
             .bring_up
             .failures
             .iter()
             .filter(|x| x.actor == g)
-            .map(|x| (x.step, x.not_yet, x.text.contains("GotoState('Auto')")))
+            .map(|x| (x.step, x.not_yet, x.text.contains("GotoState('Auto')"), is_partial_writes(&x.text)))
             .collect();
         assert_eq!(
             on_game,
-            vec![("InitGame", true, true), ("PreBeginPlay", true, true)],
-            "the typed auto-state stop on the game info's own path"
+            vec![("InitGame", true, true, true), ("PreBeginPlay", true, true, true)],
+            "the typed auto-state stop on the game info's own path, marked (review r1 of #537)"
         );
         let gri = actors::field(space, info, "GRI").map_err(|e| e.to_string())?;
         let _ = writeln!(r, "WorldInfo.GRI: {}", describe(space, &gri));
@@ -306,7 +355,7 @@ fn sanctuary_through_the_map_route_on_the_installed_game() {
             e.0 += 1;
         }
         let mut sorted: Vec<_> = by.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.0.cmp(&a.1.0));
+        sorted.sort_by_key(|x| std::cmp::Reverse(x.1.0));
         for ((step, text), (n, class)) in sorted.iter().take(12) {
             let _ = writeln!(r, "  {n} x {step} (first {class}): {}", text.chars().take(200).collect::<String>());
         }

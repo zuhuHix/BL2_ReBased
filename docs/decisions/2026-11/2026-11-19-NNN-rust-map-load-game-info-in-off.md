@@ -48,3 +48,23 @@ loosened and no existing `NotYet` guard was relaxed. Reference is unchanged.
   on `WillowGame.WillowInteractiveObject`. No handler is bound without a globals object behind it.
 - **Gates.** The installed Off `--slice-gate`, strict, under the machine lock, on origin/main d52bcc7 and on this
   branch: 1 ok / 4 NotYet / 9 errors both times, every row byte-identical (no slice driver uses the map world yet).
+
+## Edits: review r1 of #537
+
+AI-assisted (Claude Code). The hub's review r1 of #537 (Opus 5.5 high).
+- **The bring-up's recorded failures are marked.** `bring_up_for_play` reads #518's counters when its routing begins
+  (with `InitGame`). A `NotYet` recorded after one moved has its text marked "stopped after partial writes". The
+  init pass's failures are not marked. On Sanctuary the game info's `InitGame` and `PreBeginPlay` stops at
+  `GotoState('Auto')` are marked once each. The installed test now asserts that. The earlier run's texts already
+  carried the prefix, from the VM's own state-change path, but the route did not ensure it.
+- **The ini reader refuses instead of guessing.** It answers `NotYet { NotRead }` for a quoted value, a prefixed
+  `DefaultGame` key (`+`, `-`, `.`, `!`) and a second `DefaultGame` in the section. It skips a UTF-8 byte-order mark.
+  The installed read is capped at 1 MiB, and a larger file is refused.
+- **A third counter.** The write mark also follows the game RNG's draws. #518's `ow-core` `rand.rs` and `ow-vm`
+  `api.rs` (with the `interp/mod.rs` re-export it needs) are copied unchanged from `origin/fix/rust-483-followup` at
+  1f1a2bc. The six files copied before are identical at that commit.
+- **The not-found stop.** A class that is not found, or a spawn that returns nothing, stops the route with the note's
+  not-found text. That is the port's choice: the note has the engine log the text and carry on. The text is marked
+  when a lazy load already ran.
+- **Tests:** the reader's refusals and the BOM, the capped read, an RNG draw moving the mark, and the routing's marked
+  base-search failure next to the unmarked init-pass one.

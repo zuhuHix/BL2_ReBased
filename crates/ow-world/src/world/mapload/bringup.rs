@@ -46,6 +46,10 @@
 //!      each pass.
 //! 8. `bStartup` is cleared, on the error path too.
 //!
+//! **Marking a recorded failure** (review r1 of #537): #518's counters are read when the routing (step 7, with
+//! `InitGame`) begins; a `NotYet` recorded after one of them moved has its text marked "stopped after partial writes".
+//! The init pass's failures (step 4) are not marked.
+//!
 //! **Failures are counted, not hidden** (a project choice for measuring a map, not the game's rule: UNVERIFIED). An
 //! event or a check that fails (a `NotYet`, an unbound native, a script error) is recorded with its step and the
 //! actor's class in [`BringUp::failures`], and the pass goes on to the next actor. An actor whose init-pass check or
@@ -79,6 +83,7 @@ use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
 use super::RECORD;
+use super::game_info::WriteMark;
 use crate::actors::{self, NET_MODE_CLIENT, is_destroyed, send_event};
 use crate::world::World;
 
@@ -416,10 +421,14 @@ const TIME_FIELDS: [&str; 3] = ["TimeSeconds", "RealTimeSeconds", "AudioTimeSeco
 /// `InitGame` and the two routing passes (module documentation, steps 6 and 7). Pass 2 reads `bScriptInitialized` and
 /// whether the actor routes again, per actor, as the note tests them in each pass.
 fn route(vm: &mut Vm, game: ObjRef, list: &[ObjRef], stopped: &mut Vec<ObjRef>, out: &mut BringUp) -> Result<(), VmError> {
+    // A failure recorded after any of #518's counters moved since the routing began is marked "stopped after partial
+    // writes" (the hub's ruling in review r1 of #537): the events before it, the failing one included, may have
+    // written (InitGame's own script spawns the replication info before its stop).
+    let mark = WriteMark::now(vm);
     if !actors::flag(&vm.space, game, "bScriptInitialized")? {
         match send_event(vm, game, "InitGame", vec![Value::Str("".into())]) {
             Ok(raised) => out.routed.init_game = raised,
-            Err(e) => out.failures.push(failure(vm, "InitGame", game, &e)),
+            Err(e) => out.failures.push(failure(vm, "InitGame", game, &mark.mark(vm, e))),
         }
     }
     // Pass 1.
@@ -434,7 +443,7 @@ fn route(vm: &mut Vm, game: ObjRef, list: &[ObjRef], stopped: &mut Vec<ObjRef>, 
         match send_event(vm, o, "PreBeginPlay", Vec::new()) {
             Ok(raised) => out.routed.pre_begin_play += usize::from(raised),
             Err(e) => {
-                out.failures.push(failure(vm, "PreBeginPlay", o, &e));
+                out.failures.push(failure(vm, "PreBeginPlay", o, &mark.mark(vm, e)));
                 stopped.push(o);
             }
         }
@@ -459,7 +468,7 @@ fn route(vm: &mut Vm, game: ObjRef, list: &[ObjRef], stopped: &mut Vec<ObjRef>, 
         match send_event(vm, o, "PostBeginPlay", Vec::new()) {
             Ok(raised) => out.routed.post_begin_play += usize::from(raised),
             Err(e) => {
-                out.failures.push(failure(vm, "PostBeginPlay", o, &e));
+                out.failures.push(failure(vm, "PostBeginPlay", o, &mark.mark(vm, e)));
                 continue;
             }
         }
@@ -471,13 +480,13 @@ fn route(vm: &mut Vm, game: ObjRef, list: &[ObjRef], stopped: &mut Vec<ObjRef>, 
             match send_event(vm, o, "SetInitialState", Vec::new()) {
                 Ok(raised) => out.routed.set_initial_state += usize::from(raised),
                 Err(e) => {
-                    out.failures.push(failure(vm, "SetInitialState", o, &e));
+                    out.failures.push(failure(vm, "SetInitialState", o, &mark.mark(vm, e)));
                     continue;
                 }
             }
         }
         if !is_destroyed(&vm.space, o)? && actors::needs_base_search(&vm.space, o)? {
-            out.failures.push(failure(vm, "base search", o, &base_search()));
+            out.failures.push(failure(vm, "base search", o, &mark.mark(vm, base_search())));
         }
     }
     Ok(())

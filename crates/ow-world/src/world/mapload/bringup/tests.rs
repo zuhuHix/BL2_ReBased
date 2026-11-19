@@ -235,6 +235,10 @@ fn failures_are_counted_and_the_pass_goes_on() {
         assert!(!f.all_notes().iter().any(|(o, _)| *o == dud));
         let fine_notes: Vec<i32> = f.all_notes().iter().filter(|(o, _)| *o == fine).map(|(_, k)| *k).collect();
         assert_eq!(fine_notes, vec![11, 12, 13]);
+        // Review r1 of #537: the base search's failure comes after the routing wrote (the dud's destroy, the events),
+        // so it is marked; the init pass's failure, before the routing, is not.
+        let marked: Vec<bool> = up.failures.iter().map(|x| ow_core::notyet::is_partial_writes(&x.text)).collect();
+        assert_eq!(marked, vec![false, true]);
     });
 }
 
