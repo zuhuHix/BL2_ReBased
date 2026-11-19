@@ -15,8 +15,18 @@
 //!   "a chain that loops back to itself yields -1"; which revisit the native tests is not recorded, and any revisit is
 //!   taken here).
 //! - `GetWeaponReadyMax(optional bWantBaseValue)` answers the stored `WeaponReadyMax` value, the flag ignored.
+//! - `ItemActors(BaseClass, out Inv, optional bOnlyReadied)`, an iterator, in `ParityMode::Off` only (lane
+//!   IMPL-INVENTORY-CONTEXT, decision 2026-11-19-67, coded from NATIVE_INVENTORY_CONTEXT.md section 3 alone): the
+//!   manager's `ItemChain` from its head through each entry's `Inventory` link, in chain order. An entry is given when
+//!   its class is `BaseClass` or below it and, with `bOnlyReadied` set, its `bReadied` is set. The walk counts the
+//!   entries it skips over the whole iteration and ends after more than [`ITEM_ACTORS_SKIP_CAP`] (100) of them. A None
+//!   `BaseClass` is `NotYet { NotRead }`: the engine falls back to a class it looks up, which the note does not
+//!   identify. A chain that comes back to an entry it already passed is a data error (a Rust-only refusal: the note
+//!   does not say what the walk does there). The VM's iterator takes the whole list when the loop starts, so a body
+//!   that changes the chain during the loop does not change what is visited (as `AllParts`; UNVERIFIED). Reference
+//!   leaves it unbound (rule R3: the C++ has no reading).
 //! - Not registered, so a gameplay run stops at them (`UnboundNative`): `FindLeastValuableWeapon` / `Item` (the
-//!   per-class eligibility virtual is not read), `ItemActors` (body not read), the holster natives (presentation).
+//!   per-class eligibility virtual is not read), the holster natives (presentation).
 //!
 //! **Engine queries** ([`register_queries`], the kinds W5-WORLD keys by [`QueryKind`]):
 //! - `EquippedInventory { location }`: the source's pawn (a controller's `Pawn`, or the pawn itself) must hold a
@@ -36,11 +46,11 @@
 use std::rc::Rc;
 
 use ow_attr::api::{AttrError, EngineQuery, WorldParts};
-use ow_core::{DetSet, NotYet};
+use ow_core::{DetSet, NotYet, ParityMode};
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
-use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
+use ow_vm::api::{IteratorFn, IteratorResult, NativeCall, NativeFn, NativePack, Vm};
 use ow_vm::error::VmError;
 use ow_world::query::{QueryFn, QueryKind, WorldQuery};
 
@@ -237,6 +247,91 @@ fn attr_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjR
     }
 }
 
+/// The script function of the item iterator (NATIVE_INVENTORY_CONTEXT.md section 3).
+pub const ITEM_ACTORS: &str = "WillowGame.WillowInventoryManager.ItemActors";
+/// The walk ends after more than this many skipped entries, counted over the whole iteration (section 3).
+pub const ITEM_ACTORS_SKIP_CAP: usize = 100;
+
+/// The entries `ItemActors` gives for `manager`, `base` (the `BaseClass` argument) and `only_readied` (module
+/// documentation).
+pub fn item_actors(
+    space: &ObjectSpace,
+    manager: ObjRef,
+    base: Option<ow_object::ids::ClassId>,
+    only_readied: bool,
+) -> Result<Vec<ObjRef>, VmError> {
+    const WHAT: &str = "ItemActors";
+    let Some(base) = base else {
+        return Err(NotYet::not_read(
+            "ItemActors with a None BaseClass (the class the engine falls back to is not identified)",
+            "NATIVE_INVENTORY_CONTEXT.md section 3",
+        )
+        .into());
+    };
+    let mut seen: DetSet<ObjRef> = DetSet::new();
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    let mut cursor = object_field(space, manager, "ItemChain", WHAT)?;
+    while let Some(entry) = cursor {
+        if !seen.insert(entry) {
+            return Err(bad(WHAT, "the item chain comes back to an entry it already passed"));
+        }
+        if seen.len() > MAX_CHAIN {
+            return Err(bad(WHAT, format!("an item chain longer than {MAX_CHAIN} entries")));
+        }
+        let class = space.heap.get(entry)?.class;
+        let mut given = space.classes.is_child_of(class, base);
+        if given && only_readied {
+            let p = space.prop(class, "bReadied").ok_or_else(|| {
+                bad(WHAT, format!("{} declares no bReadied", ow_attr::eval::class_path(space, entry)))
+            })?;
+            given = match space.read(entry, PropAddr::scalar(p))? {
+                Value::Bool(b) => *b,
+                other => return Err(bad(WHAT, format!("bReadied holds {}, not a bool", other.kind_name()))),
+            };
+        }
+        if given {
+            out.push(entry);
+        } else {
+            skipped += 1;
+            if skipped > ITEM_ACTORS_SKIP_CAP {
+                break;
+            }
+        }
+        cursor = object_field(space, entry, "Inventory", WHAT)?;
+    }
+    Ok(out)
+}
+
+/// The `ItemActors` iterator body (the out argument is parameter 1).
+fn item_actors_iterator() -> IteratorFn {
+    Rc::new(|call: &mut NativeCall<'_>| {
+        let m = manager_of(call.vm, call.this, "ItemActors")?;
+        let base = match call.arg(0)? {
+            Value::Class(c) => *c,
+            other => return Err(bad("ItemActors", format!("BaseClass holds {}, not a class", other.kind_name()))),
+        };
+        let only_readied = bool_arg(call, 2)?;
+        let items = item_actors(&call.vm.space, m, base, only_readied)?;
+        Ok(IteratorResult::new(1, items.into_iter().map(|o| Value::Object(Some(o))).collect()))
+    })
+}
+
+/// Binds `ItemActors` in `ParityMode::Off` under its declaration's own native key (a VM without the declaration binds
+/// nothing); Reference binds nothing (module documentation).
+pub fn register_iterators(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let Ok(id) = vm.find_function(ITEM_ACTORS) else {
+        return Ok(());
+    };
+    if let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) {
+        vm.register_iterator(&key, item_actors_iterator())?;
+    }
+    Ok(())
+}
+
 /// The `EquippedInventory` query (module documentation).
 pub fn equipped_inventory(space: &ObjectSpace, source: ObjRef, location: u8) -> Result<Option<ObjRef>, AttrError> {
     let pawn = if is_a(space, source, "Engine.Controller")? {
@@ -312,6 +407,7 @@ pub struct Pack;
 impl NativePack for Pack {
     fn register(&self, vm: &mut Vm) -> Result<(), VmError> {
         register_natives(vm)?;
+        register_iterators(vm)?;
         register_queries(vm)?;
         crate::equip::bind_overrides(vm)?;
         crate::equip::natives::register(vm)?;

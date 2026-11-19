@@ -164,3 +164,130 @@ fn the_query_handlers_need_the_world_query_service() {
     }
     assert!(register_queries(&mut w.vm).is_err(), "registered twice");
 }
+
+// ------------------------------------------------------------------------------- ItemActors (IMPL-INVENTORY-CONTEXT)
+
+/// `ItemActors(BaseClass, out Inv, optional bOnlyReadied)` declared on the manager, as the loader declares it.
+fn item_actors_fn(w: &mut World) -> ow_object::ids::FuncId {
+    use ow_object::layout::{PropKind, PropertyDecl};
+    let object = w.class("Core.Object");
+    let base = PropertyDecl::new(w.vm.space.names.intern("BaseClass"), PropKind::Class { meta: object })
+        .with_flags(PropertyDecl::PARAM);
+    let inv = PropertyDecl::new(w.vm.space.names.intern("Inv"), PropKind::Object { class: object })
+        .with_flags(PropertyDecl::PARAM | PropertyDecl::OUT);
+    let readied = param(w, "bOnlyReadied", PropKind::Bool, true);
+    native_fn(w, "ItemActors", "WillowInventoryManager.ItemActors(class,object,bool)", vec![base, inv, readied])
+}
+
+/// The entries the bound `ItemActors` gives on the fixture's manager.
+fn iterate(w: &mut World, f: ow_object::ids::FuncId, base: Value, readied: Option<bool>) -> Result<Vec<ObjRef>, VmError> {
+    use ow_vm::api::{Arg, NativeCall};
+    let it = w.vm.iterator_for(f).expect("ItemActors is bound");
+    let mut args = vec![Arg::new(base, false, true), Arg::new(Value::None, true, true)];
+    if let Some(b) = readied {
+        args.push(Arg::new(Value::Bool(b), false, true));
+    }
+    let m = w.manager;
+    let mut call = NativeCall::new(&mut w.vm, f, Some(m), args);
+    let out = it(&mut call)?;
+    assert_eq!(out.out_param, 1, "the out argument is Inv");
+    Ok(out
+        .items
+        .into_iter()
+        .map(|v| match v {
+            Value::Object(Some(o)) => o,
+            other => panic!("{other:?}"),
+        })
+        .collect())
+}
+
+fn item_chain(w: &mut World, entries: &[ObjRef]) {
+    let m = w.manager;
+    w.set(m, "ItemChain", Value::Object(entries.first().copied()));
+    for pair in entries.windows(2) {
+        w.set(pair[0], "Inventory", Value::Object(Some(pair[1])));
+    }
+}
+
+fn item_class(w: &World) -> Value {
+    Value::Class(Some(w.class("WillowGame.WillowItem")))
+}
+
+/// NATIVE_INVENTORY_CONTEXT.md section 3: the item chain in chain order (not the weapon chain), the entries of the
+/// base class or below only, and with `bOnlyReadied` the readied ones only; the flag omitted is false.
+#[test]
+fn item_actors_walks_the_item_chain_in_order_with_its_filters() {
+    let mut w = World::new();
+    let f = item_actors_fn(&mut w);
+    register_iterators(&mut w.vm).unwrap();
+    let gun = w.obj("WillowGame.WillowWeapon", "Gun");
+    let [a, b, c] = ["A", "B", "C"].map(|n| w.obj("WillowGame.WillowItem", n));
+    for o in [a, c] {
+        w.set(o, "bReadied", Value::Bool(true));
+    }
+    item_chain(&mut w, &[a, gun, b, c]);
+    // A weapon on the weapon chain is not walked.
+    let other = w.obj("WillowGame.WillowItem", "OnTheWeaponChain");
+    chain(&mut w, &[other]);
+    let base = item_class(&w);
+    assert_eq!(iterate(&mut w, f, base.clone(), None).unwrap(), vec![a, b, c]);
+    assert_eq!(iterate(&mut w, f, base.clone(), Some(false)).unwrap(), vec![a, b, c]);
+    assert_eq!(iterate(&mut w, f, base, Some(true)).unwrap(), vec![a, c]);
+    // A wider base class gives the weapon too.
+    let inventory = Value::Class(Some(w.class("Engine.Inventory")));
+    assert_eq!(iterate(&mut w, f, inventory, None).unwrap(), vec![a, gun, b, c]);
+    // An empty chain gives nothing.
+    let m = w.manager;
+    w.set(m, "ItemChain", Value::Object(None));
+    let base = item_class(&w);
+    assert!(iterate(&mut w, f, base, None).unwrap().is_empty());
+}
+
+/// Section 3: the skipped entries are counted over the whole walk, and it ends after more than 100 of them.
+#[test]
+fn item_actors_ends_after_more_than_one_hundred_skipped_entries() {
+    for (skips, reached) in [(100usize, true), (101, false)] {
+        let mut w = World::new();
+        let f = item_actors_fn(&mut w);
+        register_iterators(&mut w.vm).unwrap();
+        let first = w.obj("WillowGame.WillowItem", "First");
+        let mut entries = vec![first];
+        // The skips are split around a given entry, so the count runs over the whole walk, not per step.
+        let middle = w.obj("WillowGame.WillowItem", "Middle");
+        for i in 0..skips {
+            if i == skips / 2 {
+                entries.push(middle);
+            }
+            entries.push(w.obj("WillowGame.WillowWeapon", &format!("Skip{i}")));
+        }
+        let last = w.obj("WillowGame.WillowItem", "Last");
+        entries.push(last);
+        item_chain(&mut w, &entries);
+        let base = item_class(&w);
+        let got = iterate(&mut w, f, base, None).unwrap();
+        let expected = if reached { vec![first, middle, last] } else { vec![first, middle] };
+        assert_eq!(got, expected, "{skips} skipped");
+    }
+}
+
+/// Section 3: a None `BaseClass` falls back to a class the note does not identify (`NotYet`); a chain that comes back
+/// to an entry is refused (a Rust-only data error); Reference binds nothing.
+#[test]
+fn item_actors_refuses_a_none_base_class_and_a_looped_chain_and_is_off_only() {
+    let mut w = World::new();
+    let f = item_actors_fn(&mut w);
+    register_iterators(&mut w.vm).unwrap();
+    let [a, b] = ["A", "B"].map(|n| w.obj("WillowGame.WillowItem", n));
+    item_chain(&mut w, &[a, b]);
+    let e = iterate(&mut w, f, Value::Class(None), None).unwrap_err();
+    assert_eq!(missing(e), Missing::NotRead);
+    w.set(b, "Inventory", Value::Object(Some(a)));
+    let base = item_class(&w);
+    let e = iterate(&mut w, f, base, None).unwrap_err();
+    assert!(e.to_string().contains("comes back to an entry"), "{e}");
+    let mut w = World::new();
+    let f = item_actors_fn(&mut w);
+    w.vm.parity = ow_core::ParityMode::Reference;
+    register_iterators(&mut w.vm).unwrap();
+    assert!(w.vm.iterator_for(f).is_none(), "Reference leaves ItemActors unbound");
+}
