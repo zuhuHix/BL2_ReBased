@@ -652,6 +652,10 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
             "the post-spawn encroachment check (or relocation) of an actor that collides with actors",
         ));
     }
+    // Reference keeps the base precheck at its original place, before the reads below (review r2 of #463).
+    if !off && begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
+        return Err(collision("the base search after PostBeginPlay"));
+    }
     let time = float(space, world_info, "TimeSeconds")?;
     let requested = match &req.location {
         Some(v) => v.clone(),
@@ -672,10 +676,10 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     } else {
         requested
     };
-    // The base precheck comes after the Off placement check (review r1 of #463, item 2), both before anything is made,
-    // so a template that needs both meets the placement refusal first.
+    // In Off the base precheck comes after the placement check (review r1 of #463, item 2), both before anything is
+    // made, so a template that needs both meets the placement refusal first.
     let space = &vm.space;
-    if begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
+    if off && begun && (needs_base_search(space, defaults)? || (source != defaults && needs_base_search(space, source)?)) {
         return Err(collision("the base search after PostBeginPlay"));
     }
 

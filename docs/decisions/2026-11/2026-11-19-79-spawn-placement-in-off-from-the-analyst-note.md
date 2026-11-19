@@ -41,6 +41,7 @@ No dependency and no crate edge was added. No bounds check was loosened. Referen
     and prefixed, its kind kept, the actor stays; other errors propagate unchanged. That covers the owner change,
     each begin-play event and the final base check.
   - The Off placement check runs before the base precheck, both before anything is made.
+    Reference keeps the base precheck at its original place, before the spawner's fields are read (review r2).
   - A borrowed collision service is `VmError::ServiceBorrowed`, not an absent service.
   - The Reference test installs a service and a cylinder, so it tells Reference's legacy refusal from Off's filter
     `NotYet`.
