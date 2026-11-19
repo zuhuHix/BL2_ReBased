@@ -293,15 +293,13 @@ only when a playthrough number read from the game state is above 1, so they shou
   `ConsumptionRate`, `ActiveRegenerationRate`, `OnIdleRegenerationRate`, `OnIdleRegenerationDelay` and
   `PassiveRegenerationRate`. It does **not** recompute the values and does not touch `RegenerationDisabled`. Used when a pool is
   rebuilt; after it the caller must re-add its modifiers (confidence medium).
-- **WillowWeapon.RecomputeAttributeBaseValues**: for every stack attribute declared on the weapon class, the modifier stack
-  is emptied and the value is reset to its base; afterwards the weapon's `WeaponAttributeModifiers` bookkeeping array is
-  emptied. *(Superseded: see the correction below; the base takes the value, so nothing is reapplied.)*
-  The reset covers the properties of the weapon class as declared (inherited ones were not confirmed).
-  *Correction 2026-11-19 (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md, lane ANALYST-RECOMPUTE-ATTRIBUTE-BASE-VALUES):
-  the direction is the other way. Each stack attribute's base is overwritten with a copy of its value, and
-  then its stack is emptied. So the value is kept and the effects are baked in; it is not reset. The walk covers
-  inherited triples too: the live damage base of AI_MELEE_TARGETING_LIVE.md section 6 shows `Engine.Weapon`'s
-  `InstantHitDamage` baked. UNVERIFIED in game beyond that record.*
+- **WillowWeapon.RecomputeAttributeBaseValues** (NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md, lane
+  ANALYST-RECOMPUTE-ATTRIBUTE-BASE-VALUES): for every stack attribute of the weapon's class, inherited ones included,
+  the base is overwritten with a copy of the value and then the modifier stack is emptied. The value is kept and the
+  effects are baked in; nothing is reset or reapplied. Afterwards the weapon's `WeaponAttributeModifiers` bookkeeping
+  array is emptied. The inherited reach rests on the live damage base of AI_MELEE_TARGETING_LIVE.md section 6
+  (`Engine.Weapon`'s `InstantHitDamage` baked). *This entry first said the value was reset to its base, over the
+  class's own fields only; both were corrected on 2026-11-19.* UNVERIFIED in game beyond that record.
 - **WillowItem.RecomputeAttributeBaseValues, Controller / WillowPlayerController / WillowMind / WillowVehicle
   RecalculateAttributeInitializedState**: thin native thunks that call a virtual method; the bodies were not reached
   (the class vtables could not be resolved by name). Script calls them after level or class changes.
