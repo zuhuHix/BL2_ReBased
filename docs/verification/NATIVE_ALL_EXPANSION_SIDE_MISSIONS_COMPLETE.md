@@ -22,7 +22,9 @@ mission's own flags, the enum value by name, and a proposed Off answer.
 
 **Why it matters.** On link 12, the turn-in reaches the port's existing refusal of this native (the bridge's
 `n_expansion_side_complete`: false for a None controller, otherwise `NotYet { NotRead }`). It is the turn-in's
-"all side missions complete" achievement check.
+"all side missions complete" achievement check. That stop was seen on a local stack, not on main: the throwaway merge
+of NATIVE_UNLOCK_ACHIEVEMENT_IF_CONDITIONS_MET.md section 5, with `UnlockAchievementIfConditionsMet` bound to false
+locally. On main, links 10 to 12 stop earlier, at accept (section 4).
 
 ## 1. The script path on link 12
 
@@ -49,6 +51,7 @@ mission's own flags, the enum value by name, and a proposed Off answer.
 
 ## 2. The shapes (from the packages)
 
+The sizes are from the project's package layout tool (`tools/ghidra/class_layout.py`).
 - `MissionTracker.MissionList`: an array of `IMission.MissionData` (40 bytes each), whose first field is `MissionDef`.
 - `WillowPlayerController.MissionPlaythroughs`: an array of `MissionPlaythroughData` (56 bytes each), whose first field
   is `MissionList`, an array of `IMission.MissionStatusPlayerData` (44 bytes each: `MissionDef`, then `Status`, ...).
@@ -93,9 +96,12 @@ expansion (only the definition's identity), and the controller's other playthrou
   refuses `NotYet` for that reason today ("MissionTracker.GetAllMissions (every record of the tracker's MissionList)").
   On main's installed gate, links 10 to 12 stop there first, at accept.
 - **Why the one-record list cannot answer here:** with only the Fire mission in the list, the walk would count one
-  mission, find it complete (the turn-in wrote it first) and answer **true**. In the game the list holds every base-game
-  side mission, so on a save where any other is not complete the answer is false and no achievement is unlocked. A
-  one-record answer would unlock it wrongly.
+  mission, find it complete (the turn-in wrote it first) and answer **true**. In the game the list is one record per
+  `MissionDefinition` in memory, with no configured list (NATIVE_MISSION_LIST_BUILD.md, #496). Which side missions that
+  is at the turn-in is UNVERIFIED; the port's stand-in is the exports of the loaded packages, and whether they match
+  the game's set is UNVERIFIED too. Only when the list holds other base-game side missions that are not complete is
+  the answer false. A one-record answer would unlock the achievement on a state where the game, with more missions in
+  memory, would not.
 
 ## 5. Proposed ParityMode Off answer (for a separate implementer)
 
@@ -116,10 +122,16 @@ entry's status) marks them.
    - otherwise the index is that note's rule, computed with the port's one shared function for it (not a VM dispatch
      of `GetCurrentPlaythrough`, as NATIVE_PLAYTHROUGH_QUERY.md says for direct callers).
 4. **The index range:** outside `MissionPlaythroughs`, false.
-5. **The tracker's list:** while the port's tracker does not hold the game's whole `MissionList` (the bridge's one
-   record), refuse with **the same refusal `GetAllMissions` raises** for that reason, its kind and text style. So the
-   two natives that walk the list never disagree about whether it is there. Once the list is the whole list (the
-   MissionList build lane), walk it.
+5. **The tracker's list,** as #496 (`fix/rust-mission-list-build`, the MissionList build) has `GetAllMissions` do it,
+   so that the two natives that walk the list never disagree about whether it is there:
+   - first, replay the bridge's stored `list_refusal` when the set-up build refused;
+   - then, while `list_built` is false, refuse `NotYet { LayerAbsent }`, as #496's `n_all_missions` does ("... the
+     tracker's full mission list (not built in this world)"), with this native's name in the text;
+   - otherwise walk the records `crate::mission_list` built, in the stand-in's order (first insertion, the hub's
+     stand-in for the name-table order, UNVERIFIED).
+
+   **The refusal kind changes** from today's `NotRead` to `LayerAbsent`. The implementer updates #496's test
+   `the_mission_list_queries_in_off_mode`, which pins this native's present answer.
 6. **Each record, in order, only when reached** (the game returns at the first failure, so a later record is never
    looked at):
    - a None mission: skipped;
@@ -131,10 +143,14 @@ entry's status) marks them.
      `VmError::Script`.
 7. **All passed:** true.
 
-**Expected on link 12 once bound,** when the list is whole: the call is (Maya's controller, None). The answer is the
-base-game side-mission rule over the slice's save state. On a fresh state it is false, so
-`ClientUnlockAchievement` is not called and the turn-in goes on. Link 12 reaches this only after links 10 and 11 get past
-`GetAllMissions`, which needs the same whole-list layer.
+**Expected on link 12 once bound.** The call is (Maya's controller, None).
+- **While the slice's world has no built list** (its bridge world today), link 12's turn-in stops at this native's
+  new refusal: "stopped after partial writes: MissionTracker.AllExpansionSideMissionsComplete ... (not built in this
+  world)", `NotYet { LayerAbsent }`. The prefix is the caller's, since `UpdateMissionStatus` wrote first.
+- **With a built list,** the answer is the base-game side-mission rule over the slice's state. It is false only if the
+  built list holds other base-game side missions that are not complete (UNVERIFIED, section 4); then
+  `ClientUnlockAchievement` is not called and the turn-in goes on.
+- Link 12 reaches this only after links 10 and 11 get past `GetAllMissions`, which needs the same list.
 
 ## Open questions
 

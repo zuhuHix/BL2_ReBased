@@ -21,4 +21,12 @@ lock. Raw output stays under ignored `local/analysis/aesmc/`. No live session wa
     one-record walk would answer true wrongly;
   - an unloaded mission handle reached in the walk is `LayerAbsent`;
   - the status is compared by enum name.
+- **Review r1 of #550:**
+  - the game's list is every `MissionDefinition` in memory (NATIVE_MISSION_LIST_BUILD.md, #496). Whether it, or the
+    port's stand-in, holds the other base-game side missions is UNVERIFIED, so "false on a fresh state" is conditional;
+  - the Off proposal follows #496: replay `list_refusal`, `LayerAbsent` while the list is not built (today's
+    `NotRead` becomes `LayerAbsent`), walk `crate::mission_list` in stand-in order, and update
+    `the_mission_list_queries_in_off_mode`;
+  - the expected link 12 stop is stated, and the link 12 stop the note starts from is named as a local stack's;
+  - the struct sizes are said to come from the layout tool.
 - **UNVERIFIED.** Every rule is unconfirmed in the running game; the note lists the live checks.
