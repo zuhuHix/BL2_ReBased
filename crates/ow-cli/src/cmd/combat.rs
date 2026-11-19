@@ -12,8 +12,8 @@
 //! played), and [`MissionBridge`] hands the run the bridge's player (`ow_combat::run::PlayerBridge`).
 //!
 //! **The world.** A definition store over the cooked folder (first holder in scan order), the standard attribute
-//! system, the Core natives, and `World::new` with the combat pack (`ow_combat::hit::Pack`) after the world's own
-//! packs. Its balance state is the first playthrough, no OP level, one player, level and stage 1 (the C++ run has no
+//! system, the Core natives, and `World::new` with the combat pack (`ow_combat::hit::Pack`) and the skill manager
+//! pack (`ow_skills::action_skill::manager::Pack`, Off only) after the world's own packs. Its balance state is the first playthrough, no OP level, one player, level and stage 1 (the C++ run has no
 //! playthrough input and reads the first playthrough's rules).
 //!
 //! **The stub policy** (architecture section 3.8). `ParityMode::Off`: `Refuse` with nothing allowed, so a native the
@@ -117,7 +117,9 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
         message: e.to_string(),
     })?;
     let pack = ow_combat::hit::Pack;
-    let packs: [&dyn NativePack; 1] = [&pack];
+    // The skill manager natives (FIX-SKILLMGR-B): bound in Off only, so a Reference run is unchanged.
+    let manager = ow_skills::action_skill::manager::Pack;
+    let packs: [&dyn NativePack; 2] = [&pack, &manager];
     World::new(vm, BalanceState::new(snapshot), &packs).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => VmError::Script {
