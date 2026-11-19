@@ -54,8 +54,8 @@ pub const NO_DEFINITION_QUERY: &str =
 /// The `NotYet` of an inventory whose query resolves to anything but the native (the note is silent on overrides).
 pub const NO_NATIVE_DEFINITION_QUERY: &str = "DroppedPickup.GetPickupableInventoryDefinition on an inventory whose \
      GetInventoryDefinition is not the native Engine.WillowInventory.GetInventoryDefinition (an override)";
-/// The native declaration the definition query must resolve to.
-pub const NATIVE_DEFINITION_QUERY: &str = "Engine.WillowInventory.GetInventoryDefinition";
+/// The native declaration the definition query must resolve to (the one path, from `crate::definition`).
+pub const NATIVE_DEFINITION_QUERY: &str = crate::definition::GET_INVENTORY_DEFINITION;
 
 /// The native keys [`register`] binds in Off.
 pub const GET_INVENTORY_PAWN: &str = "WillowPlayerController.GetInventoryPawn()";
