@@ -47,6 +47,23 @@ and no existing `NotYet` guard was relaxed.
   - the per-level call;
   - the routing's engine calls;
   - `SpawnPlayActor`'s call site and where `GamePlayers` is filled.
+- **Review r1 of #409:**
+  - Every `WorldInfo` field the bring-up uses (`bBegunPlay`, `bStartup`, `NetMode`, the three time fields) is read
+    before anything changes. A network client's world is now one `NotYet` before any change, instead of one failure
+    per actor in the init pass.
+  - `bStartup` is cleared on the error path too.
+  - Pass 2 reads `bScriptInitialized` and whether the actor routes again, per actor, as the note tests them in each
+    pass.
+  - The counting rule (a failure is recorded and the pass goes on; an actor whose init-pass check or `PreBeginPlay`
+    failed gets no later step) is labelled a project choice for measuring a map, UNVERIFIED. An incomplete bring-up
+    cannot be redone: `bBegunPlay` is set, so the once test makes a second call a no-op. An actor the physics level
+    filter could not decide ends neither script-initialised nor hidden nor destroyed, which the note does not describe.
+  - An actor whose `PreBeginPlay` sent it into a state still gets `PostBeginPlay` and `SetInitialState`: the probe mask
+    is not checked (UNVERIFIED for such an actor).
+  - `pending` now also names the steps not run that it had left out: the flag the map load sets on the new game info,
+    the time reset's two engine calls, the init pass's `PhysicsVolume`, unnamed object flag and script-execution set-up
+    virtual, and `WillowGameInfo`'s `Hardcore` call (9 entries).
+  - The installed counts are unchanged by these fixes (rerun on the rebased head).
 - **Other changes:** `actors::needs_base_search` became crate-visible. The world test fixture gained the bring-up fields,
   `Probe.InitGame` (note 17) and a `WillowGameInfo` toy class. The map-load fixture gained the two routing flags.
 - **Proof.**

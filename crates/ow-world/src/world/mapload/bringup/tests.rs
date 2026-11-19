@@ -164,7 +164,7 @@ fn the_routing_runs_the_events_in_the_note_s_order() {
             assert!(f.w.actors().borrow().begun_play(), "{mode:?}");
             assert_eq!(actors::field(&f.w.vm.space, wi, "TimeSeconds").unwrap(), Value::Float(0.0));
             assert_eq!(actors::field(&f.w.vm.space, moving, "LastRenderTime").unwrap(), Value::Float(f32::MIN));
-            assert_eq!(up.pending.len(), 5);
+            assert_eq!(up.pending.len(), 9);
             // Once: a second bring-up raises nothing.
             f.notes.borrow_mut().clear();
             let again = bring_up_for_play(&mut f.w, EVERY).unwrap();
@@ -185,6 +185,22 @@ fn no_time_reset_and_no_init_game_for_an_initialised_game() {
         assert_eq!(actors::field(&f.w.vm.space, wi, "TimeSeconds").unwrap(), Value::Float(5.0));
         assert!(!up.routed.init_game);
         assert!(f.all_notes().is_empty(), "the script-initialised game info gets no event either");
+    });
+}
+
+/// A network client's world refuses as a whole before anything changes, the time reset included (review r1 of #409).
+#[test]
+fn a_client_world_refuses_before_any_change() {
+    crate::world::tests::run(|| {
+        let (mut f, _, _) = routed_world(ParityMode::Off, &["Probe"]);
+        let wi = f.wi;
+        set(&mut f, wi, "NetMode", Value::Byte(actors::NET_MODE_CLIENT));
+        set(&mut f, wi, "TimeSeconds", Value::Float(5.0));
+        let e = bring_up_for_play(&mut f.w, EVERY).unwrap_err();
+        assert_eq!(not_yet(e).missing, Missing::NotRead);
+        assert_eq!(actors::field(&f.w.vm.space, wi, "TimeSeconds").unwrap(), Value::Float(5.0));
+        assert!(f.all_notes().is_empty() && !f.w.actors().borrow().begun_play());
+        assert!(!flag_of(&f, wi, "bBegunPlay") && !flag_of(&f, wi, "bStartup"));
     });
 }
 
