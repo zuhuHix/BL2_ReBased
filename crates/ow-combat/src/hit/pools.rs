@@ -35,6 +35,11 @@ fn float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
 /// the stamp, even if that subclass inherits ResourcePool's script functions. Script method inheritance cannot
 /// prove native virtual-hook inheritance. Exact qualified identities prevent an unrelated same-named class
 /// from being treated as one of the implementations the note read.
+///
+/// The identities are the installed packages' (lane LINK-1-NEXT-STOP, decision 2026-11-19-98): `ResourcePool` and
+/// `HealthResourcePool` are declared in `Engine`; `AmmoResourcePool`, `ExperienceResourcePool` and `ShieldResourcePool`
+/// in `WillowGame`. The note names the classes without their package. Before this, all five were matched under
+/// `Engine`, so the installed `WillowGame.AmmoResourcePool` met the unrecorded-override refusal.
 pub fn reset_idle_timer(vm: &mut Vm, pool: ObjRef) -> Result<(), VmError> {
     let time = vm.world_time_seconds()?;
     set_required(
@@ -52,9 +57,9 @@ pub fn reset_idle_timer(vm: &mut Vm, pool: ObjRef) -> Result<(), VmError> {
         .map(|l| l.path().to_string())
         .unwrap_or_default();
     match path.to_ascii_lowercase().as_str() {
-        "engine.resourcepool" | "engine.healthresourcepool" | "engine.ammoresourcepool"
-        | "engine.experienceresourcepool" => Ok(()),
-        "engine.shieldresourcepool" => Err(NotYet::not_read(
+        "engine.resourcepool" | "engine.healthresourcepool" | "willowgame.ammoresourcepool"
+        | "willowgame.experienceresourcepool" => Ok(()),
+        "willowgame.shieldresourcepool" => Err(NotYet::not_read(
             "ShieldResourcePool idle-reset hook: provider chain and final function (stamp already written)", RECORD,
         ).into()),
         _ => Err(NotYet::not_read(
