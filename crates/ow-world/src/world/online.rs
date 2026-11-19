@@ -88,7 +88,16 @@ pub const BASE_CHANGE_NAME: &str = "Engine.GameInfo.ChangeName";
 
 /// Overrides the script function at `path` in Off when the package set declares it as script; otherwise nothing.
 fn override_if_script(vm: &mut Vm, path: &str, f: ow_vm::api::NativeFn) -> Result<(), VmError> {
-    if let Ok(id) = vm.find_function(path)
+    // A package set that does not declare the function skips it: the package is not indexed at all, or it has no such
+    // export (`Ok(None)`). Any other lookup or load error propagates (review r2 of #479, item 1).
+    let package = path.split_once('.').map_or(path, |(p, _)| p);
+    let found = match vm.find_function_if_any(path) {
+        Ok(found) => found,
+        // The only refusal taken as absence: the package set has no package of that name at all.
+        Err(_) if vm.defs.packages().paths_named(package).is_empty() => None,
+        Err(e) => return Err(e),
+    };
+    if let Some(id) = found
         && vm.function(id).is_some_and(|d| !d.is_native())
     {
         vm.override_script(path, f)?;
@@ -126,16 +135,23 @@ fn call_method(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<V
 ///    partial writes: ", its kind and record kept, the clear left in place.
 fn setup_input_devices(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let this = c.this.ok_or_else(|| bad("SetupInputDevices without a controller"))?;
+    // What the clear and step 3 need is looked up first, before any call or write, so a controller class without
+    // them is refused unmarked (review r2 of #479, item 2).
+    let (class, state) = {
+        let o = c.vm.space.heap.get(this)?;
+        (o.class, o.state)
+    };
+    let prop = c.vm.space.prop(class, "InputContextSelector").ok_or_else(|| bad("no InputContextSelector"))?;
+    let update =
+        c.vm.find_method(class, "UpdateInputContext", state)?.ok_or_else(|| bad("no UpdateInputContext to call"))?;
     if let Some(input) = object_prop(c.vm, this, "PlayerInput")? {
-        let class = c.vm.space.heap.get(input)?.class;
-        if descends_from(c.vm, class, "WillowGame.WillowPlayerInput")? {
+        let input_class = c.vm.space.heap.get(input)?.class;
+        if descends_from(c.vm, input_class, "WillowGame.WillowPlayerInput")? {
             call_method(c.vm, input, "SetupInputDevices", vec![])?;
         }
     }
-    let class = c.vm.space.heap.get(this)?.class;
-    let prop = c.vm.space.prop(class, "InputContextSelector").ok_or_else(|| bad("no InputContextSelector"))?;
     c.vm.space.write(this, ow_object::ids::PropAddr::scalar(prop), Value::Object(None))?;
-    call_method(c.vm, this, "UpdateInputContext", vec![]).map_err(crate::pools::after_partial_writes)?;
+    c.vm.call(update, Some(this), vec![]).map_err(crate::pools::after_partial_writes)?;
     Ok(Value::None)
 }
 

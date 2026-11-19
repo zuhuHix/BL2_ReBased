@@ -105,3 +105,23 @@ AI-assisted (Claude Code). Sol's r1 review (high) asked for five changes. All ar
 Of `SetupInputDevices`, `ServerChangeName` and `GameInfo.ChangeName`, only that each is
 script was checked in the installed packages (`--disasm` exit codes); no body was read, and the steps come from
 the note.
+
+## Edits: review r2 of #479
+
+AI-assisted (Claude Code). Sol's r2 review accepted the lane, with three low findings; two are code, folded in one
+commit, and the third is the open items below.
+
+1. The two Off script overrides are bound only when the package set declares the function. A package with no such
+   export, or no package of that name in the set at all, skips it; any other lookup or load error now propagates
+   instead of being swallowed.
+2. `SetupInputDevices` looks up `InputContextSelector` and the resolved `UpdateInputContext` before its first call or
+   write. A controller class without them is refused unmarked, not with a data error after the clear.
+
+**Open items for a later lane:**
+- **A `SetName` caller outside `ApplyCharacterClassStartingValues`.** That caller gets the `UpdateURL` or `SaveConfig`
+  refusal without the "stopped after partial writes: " prefix, although `ServerSetPlayerNameAsCharName` and
+  `ChangeName` have written before it. The prefix is added only by the boundaries this lane owns, and `SetName` is
+  installed script.
+- **A script override of `ServerChangeName`.** Residual risk, UNVERIFIED: `WillowPlayerController` may override it in
+  script. The Off boundary is bound on `PlayerController.ServerChangeName` only, so a controller class with its own
+  override would run that script instead.
