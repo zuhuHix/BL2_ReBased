@@ -1275,6 +1275,9 @@ fn phaselock_world(cooked: &Path) -> Result<ow_world::world::World, ow_vm::error
     ];
     let mut world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs)
         .map_err(|e| script_error(format!("{e:?}")))?;
+    // How a pawn answers QueryInterface in Off (decision 2026-11-19-62): the target's flags reach its mind through it
+    // (lane IMPL-LINK9-TARGET-MIND); without it a pawn takes the plain answer.
+    ow_combat::pawn_interface::register(&mut world.vm)?;
     let class = world.vm.find_class("Engine.WorldInfo")?;
     let info = ow_vm::interp::instantiate_from_defaults(&mut world.vm, class)?;
     world
@@ -1379,6 +1382,13 @@ pub const TARGET_MIND_FALLBACK: &str = "WillowGame.WillowMind";
 /// The text that starts link 9's harness line for the target's mind.
 pub const TARGET_MIND_INPUT: &str = "harness input: the target's mind";
 
+/// The interface a mind's flag store answers, preloaded with the mind (a set-up load, logged): the flag evaluator
+/// checks a store by its class tables, which only hold a class once loaded.
+pub const TARGET_FLAG_PROVIDER: &str = "GearboxFramework.IFlagProvider";
+
+/// The text that starts link 9's harness line for that preload.
+pub const TARGET_FLAG_PROVIDER_INPUT: &str = "harness input: preloaded";
+
 /// Link 9's target mind (lane IMPL-LINK9-TARGET-MIND, a **harness input, UNVERIFIED**): in the game the population
 /// system spawns an enemy with its AI controller; the harness stands in for that, so `CanLiftTargetIf` reads its flag
 /// conditions through a mind as for a real enemy (NATIVE_FLAG_EXPRESSION_EVALUATE.md section 5).
@@ -1388,6 +1398,10 @@ pub const TARGET_MIND_INPUT: &str = "harness input: the target's mind";
 /// - The mind is spawned by the world's own spawn (so its components are its own), then linked as the port already
 ///   possesses an AI pawn (`ow_combat::hit::adopt`): the target's `Controller` and, when declared, `MyWillowMind`; the
 ///   mind's `Pawn` and, when declared, `MyWillowPawn`. The script's `Possess` is not run (as in `adopt`).
+/// - [`TARGET_FLAG_PROVIDER`] is loaded here when the packages hold it and it is not loaded yet, then logged: the
+///   flag evaluator asks whether the mind's class implements it from the loaded class tables, and an interface not
+///   loaded yet reads as "not implemented" (the mind's flags then read false). A lazy load is a write, so the harness
+///   does it at set-up, before the cast.
 ///
 /// The line is logged before the class lookup, so a lookup that loads (a write) or fails still shows.
 pub fn target_mind(
@@ -1422,6 +1436,14 @@ pub fn target_mind(
         Some(c) => c,
         None => vm.find_class(TARGET_MIND_FALLBACK)?,
     };
+    if vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none()
+        && vm.find_class_if_present(TARGET_FLAG_PROVIDER)?.is_some()
+    {
+        vm.log.push(format!(
+            "{TARGET_FLAG_PROVIDER_INPUT} {TARGET_FLAG_PROVIDER} (the mind's flag store interface, loaded at set-up as a \
+             write; UNVERIFIED stand-in for the game having it loaded)"
+        ));
+    }
     let Some(mind) = ow_world::actors::spawn(vm, spawner, &ow_world::actors::SpawnRequest::new(Some(mind_class)))? else {
         return Err(script_error(format!("the world's spawn refused the target's mind {path}")));
     };

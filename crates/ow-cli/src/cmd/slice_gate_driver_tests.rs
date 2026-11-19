@@ -121,6 +121,15 @@ fn willow() -> Vec<u8> {
     t.p.build()
 }
 
+/// `GearboxFramework.upk`: `IFlagProvider`, the interface the harness preloads with the mind.
+fn gearbox() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let object = t.p.add_import("Core", "Class", core, "Object");
+    t.class("IFlagProvider", object);
+    t.p.build()
+}
+
 struct Toy {
     world: World,
     dir: PathBuf,
@@ -140,8 +149,9 @@ fn toy() -> Toy {
     };
     let dir = std::env::temp_dir().join(format!("ow-cli-l9-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let (c, e, w) = (core(), engine(), willow());
-    let files: [(&str, &[u8]); 3] = [("Core.upk", &c), ("Engine.upk", &e), ("WillowGame.upk", &w)];
+    let (c, e, w, g) = (core(), engine(), willow(), gearbox());
+    let files: [(&str, &[u8]); 4] =
+        [("Core.upk", &c), ("Engine.upk", &e), ("WillowGame.upk", &w), ("GearboxFramework.upk", &g)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(ow_attr::AttributeSystem::new_empty()), ParityMode::Off);
     let snapshot = BalanceSnapshot::new(
@@ -544,7 +554,8 @@ fn link_9_s_evidence_finds_the_state_by_name_whatever_its_spelling() {
 /// Lane IMPL-LINK9-TARGET-MIND: the spawned target gets a mind that possesses it, through the world's own spawn. With
 /// no ControllerClass the mind is the fallback `WillowGame.WillowMind`; a target whose default names `ToyMind` gets a
 /// `ToyMind`, linked both ways (`Controller`, `MyWillowMind`; `Pawn`, `MyWillowPawn`). The mind is registered in the
-/// world and the harness line is logged. A target that cannot hold a controller gets none.
+/// world and the harness line is logged. `GearboxFramework.IFlagProvider`, not loaded before, is preloaded with the mind
+/// and logged once. A target that cannot hold a controller gets neither.
 #[test]
 fn the_cast_s_target_gets_a_mind_that_possesses_it() {
     let read = |t: &Toy, o: ObjRef, n: &str| {
@@ -555,7 +566,11 @@ fn the_cast_s_target_gets_a_mind_that_possesses_it() {
     for (target, mind_class) in [("Engine.ToyMindedTarget", "WillowGame.WillowMind"), ("Engine.ToyNamedTarget", "Engine.ToyMind")] {
         let mut t = toy();
         let before = t.listed().len();
+        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none());
         let (r, actors) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", target], Grading::Strict);
+        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_some(), "{target}: preloaded");
+        let preloads = r.harness.iter().filter(|h| h.starts_with(TARGET_FLAG_PROVIDER_INPUT) && h.contains(TARGET_FLAG_PROVIDER)).count();
+        assert_eq!(preloads, 1, "{target}: {:?}", r.harness);
         assert!(r.stop.is_none(), "{target}: {:?}", r.stop);
         let (_, _, Some(pawn)) = actors.expect("the cast ran") else { panic!() };
         let Value::Object(Some(mind)) = read(&t, pawn, "Controller") else { panic!("{target}: no controller") };
@@ -577,4 +592,5 @@ fn the_cast_s_target_gets_a_mind_that_possesses_it() {
     assert!(r.stop.is_none());
     assert_eq!(t.listed().len(), before + 3);
     assert!(r.harness.is_empty(), "{:?}", r.harness);
+    assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none());
 }
