@@ -228,6 +228,8 @@ fn globals_preflight(vm: &mut Vm) -> Result<(), VmError> {
     }
     // The declared schemas first, before any value is read (section 6.2, step 4).
     g::globals_schemas(vm, globals, WHAT)?;
+    let definition_class = vm.find_class(g::GLOBALS_DEFINITION_CLASS)?;
+    g::rarity_schema(vm, definition_class, WHAT)?;
     let definition = g::globals_definition(vm, globals, WHAT)?;
     g::pickup_list(vm, globals, WHAT)?;
     g::rarity_bands(vm, definition, WHAT)?;

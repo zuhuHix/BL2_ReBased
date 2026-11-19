@@ -149,6 +149,31 @@ pub fn pickup_list(vm: &Vm, globals: ObjRef, what: &str) -> Result<Vec<Value>, V
 /// `DropLifeSpanType` (a byte), else a data error.
 pub fn rarity_bands(vm: &Vm, definition: ObjRef, what: &str) -> Result<Vec<(i32, i32, u8)>, VmError> {
     let class = vm.space.heap.get(definition)?.class;
+    let p = rarity_schema(vm, class, what)?;
+    let entries = match vm.space.read(definition, PropAddr::scalar(p))? {
+        Value::Array(a) => a.as_ref().clone(),
+        other => return Err(bad(what, format!("RarityLevelColors holds {}, not an array", other.kind_name()))),
+    };
+    entries
+        .iter()
+        .map(|e| {
+            let int = |name: &str| match field(vm, e, name)? {
+                Value::Int(i) => Ok(i),
+                other => Err(bad(what, format!("RarityLevelColor.{name} holds {}", other.kind_name()))),
+            };
+            let kind = match field(vm, e, "DropLifeSpanType")? {
+                Value::Byte(b) => b,
+                other => return Err(bad(what, format!("DropLifeSpanType holds {}", other.kind_name()))),
+            };
+            Ok((int("MinLevel")?, int("MaxLevel")?, kind))
+        })
+        .collect()
+}
+
+/// `RarityLevelColors`' declaration on `class`, checked without reading any value (the preflight runs it on the
+/// declared `GlobalsDefinition` class before `TheGlobalsDefinition` is read; #469 r2, section 6.2 step 4): a dynamic
+/// array of `RarityLevelColor`, whose `MinLevel` and `MaxLevel` are ints and `DropLifeSpanType` a byte.
+pub fn rarity_schema(vm: &Vm, class: ClassId, what: &str) -> Result<ow_object::ids::PropId, VmError> {
     let p = vm
         .space
         .prop(class, "RarityLevelColors")
@@ -173,24 +198,7 @@ pub fn rarity_bands(vm: &Vm, definition: ObjRef, what: &str) -> Result<Vec<(i32,
             return Err(bad(what, format!("RarityLevelColor.{name} is {kind:?}, not {want}")));
         }
     }
-    let entries = match vm.space.read(definition, PropAddr::scalar(p))? {
-        Value::Array(a) => a.as_ref().clone(),
-        other => return Err(bad(what, format!("RarityLevelColors holds {}, not an array", other.kind_name()))),
-    };
-    entries
-        .iter()
-        .map(|e| {
-            let int = |name: &str| match field(vm, e, name)? {
-                Value::Int(i) => Ok(i),
-                other => Err(bad(what, format!("RarityLevelColor.{name} holds {}", other.kind_name()))),
-            };
-            let kind = match field(vm, e, "DropLifeSpanType")? {
-                Value::Byte(b) => b,
-                other => return Err(bad(what, format!("DropLifeSpanType holds {}", other.kind_name()))),
-            };
-            Ok((int("MinLevel")?, int("MaxLevel")?, kind))
-        })
-        .collect()
+    Ok(p)
 }
 
 /// `GetDropLifeSpanType`'s rule (module documentation).
