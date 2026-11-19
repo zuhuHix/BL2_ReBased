@@ -25,6 +25,8 @@
 //! - the local player's controller and pawn, and the engine's local player list (NATIVE_MAP_LOAD.md, section 4).
 //!
 //! The analyst note left those `NotYet` on purpose (clean room): a fresh implementer codes them from the note.
+//! [`bringup`] is that implementer's module (lane MAP-LOAD-NATIVES, decision 2026-11-19-04): the note settles only the
+//! game info routine's "already has one" branch, so the three steps stay `NotYet` with their open questions named.
 //!
 //! **UNVERIFIED.** That every level `StreamingLevels` names is loaded at map load (the game streams levels by their
 //! class and Kismet; Sanctuary's are all loaded while it is played, which is not checked here); that the levels'
@@ -542,6 +544,8 @@ fn refuse(map: &mut DetMap<String, Refusal>, class: String, reason: String, not_
             not_yet,
         });
 }
+
+pub mod bringup;
 
 #[cfg(test)]
 mod tests;
