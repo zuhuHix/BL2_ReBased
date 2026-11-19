@@ -18,7 +18,8 @@ game.
     - link 1: `maya:8` and `players:1`;
     - link 3: a baby bullymong at level 6 and one lethal scripted hit;
     - link 4: an adult at level 7 and one melee swing;
-    - link 5: the death roll of link 3's kill;
+    - link 5: the death roll of link 3's kill. An ok row means the roll ran, not that an item dropped: a stock roll
+      often drops nothing (`items_dropped` 0), so the row name `loot_drop_on_kill` says more than the grade does;
     - link 13: `cash:3000` and three more swings;
     - link 14: `bleed:50`.
 
