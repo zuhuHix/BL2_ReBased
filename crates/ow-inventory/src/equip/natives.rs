@@ -46,7 +46,8 @@
 //!   definition data during the loop changes what is visited (here it does not: the list was taken first). No
 //!   installed caller does either (the note); both are UNVERIFIED.
 //!
-//! Not bound (a run stops at it): `ApplyInternalSlotEffectModifiers`. `InitializeAttributeSlots` and
+//! `ApplyInternalSlotEffectModifiers` is [`super::internal_slots`]' (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision
+//! 2026-11-19-97). `InitializeAttributeSlots` and
 //! `InitializeAttributeSlotsForNameParts` are [`super::slots`]' (lane IMPL-INIT-ATTRIBUTE-SLOTS, decision
 //! 2026-11-19-82), which also computes the `ComputedModifierValue` the external slots read.
 
@@ -242,10 +243,23 @@ fn slot_field_kind(kind: &PropKind, want: &str) -> bool {
 /// anything but structs, with a negative dimension, or of a struct without one of the six slot fields as its kind
 /// (review r1 of #438), is a data error. No element past the count is read.
 pub fn attribute_slots(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Value>, VmError> {
+    declared_slots(vm, item, max, &SLOT_FIELDS, EXTERNAL_SLOTS)
+}
+
+/// [`attribute_slots`] with the slot fields `fields` checked instead (each with the kind it must be declared as),
+/// errors naming `native` (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS: the internal slots' native does not read
+/// `bRunEffectsAsSkill`).
+pub(crate) fn declared_slots(
+    vm: &Vm,
+    item: ObjRef,
+    max: i32,
+    fields: &[(&str, &str)],
+    native: &str,
+) -> Result<Vec<Value>, VmError> {
     let class = vm.space.heap.get(item)?.class;
     let declared = |what: &str| {
         bad(
-            EXTERNAL_SLOTS,
+            native,
             format!("{} {what}", ow_attr::eval::class_path(&vm.space, item)),
         )
     };
@@ -267,7 +281,7 @@ pub fn attribute_slots(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Value>, Vm
         .classes
         .struct_layout(ty)
         .ok_or_else(|| declared("declares AttributeSlots of a struct with no layout"))?;
-    for (name, want) in SLOT_FIELDS {
+    for &(name, want) in fields {
         let ok = vm
             .space
             .names
