@@ -12,6 +12,7 @@ pub mod damage;
 pub mod death;
 pub mod down;
 pub mod firing;
+pub mod go_down;
 pub mod hit;
 pub mod holds;
 pub mod loot;

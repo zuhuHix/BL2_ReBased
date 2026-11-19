@@ -425,7 +425,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     // Pawn.InitRagdoll: the host builds the ragdoll; the death clip is the host's, so it is taken as having worked
     // (the C++ reading: a presentation answer, not a game rule).
-    bind_fn(vm, "Engine.Pawn.InitRagdoll", |_| Ok(Value::Bool(true)))?;
+    bind_fn(vm, "Engine.Pawn.InitRagdoll", init_ragdoll)?;
     // The spawned-inventory levels are plain fields of the pawn (NATIVE_LOOT.md).
     bind_fn(vm, "WillowGame.WillowAIPawn.GetAwesomeLevel", |c| {
         let me = this(c, "GetAwesomeLevel")?;
@@ -453,3 +453,9 @@ pub mod toss;
 
 #[cfg(test)]
 mod tests;
+
+/// `Pawn.InitRagdoll`'s presentation answer (COMBAT_DEATH.md: the host builds the ragdoll, so the call is taken as
+/// having worked; a stand-in, not a reading). `crate::go_down` gives the `WillowPlayerPawn` key the same answer in Off.
+pub(crate) fn init_ragdoll(_: &mut ow_vm::api::NativeCall<'_>) -> Result<Value, VmError> {
+    Ok(Value::Bool(true))
+}
