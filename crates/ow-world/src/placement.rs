@@ -19,16 +19,16 @@
 //!    read alone.
 //! 2. No service: `NotYet { LayerAbsent }`. Then no cylinder extent (the template's `CollisionComponent` is not a
 //!    `CylinderComponent`, or none): `NotYet { NotRead }`, "the actor's bounding-cylinder rule".
-//! 3. **The trace filter.** Every box test and every sweep depends on an engine flag set the note leaves unread (8902
-//!    for the box tests, 131072 added in template mode for a `bCollideComplex` template; 8326 for the sweeps). Until
-//!    the filter is read, every query answers `NotYet { NotRead }`, [`TRACE_FILTER`], before the service is asked, and
-//!    no Off filter is defined in its place (note section 7). So past the service and extent checks the first test,
-//!    and every search, stops there.
-//! 4. Once a lane reads the filter (it sets [`FILTER_READ`]): the steps of section 3 (the first box test, the
-//!    zero-extent failure, the slice step, the corner nudges, the point sweep, the final sweep), each query asked of
-//!    the service. The first Unsupported query is `NotYet { NotRead }` naming it. A failed search makes the spawn
-//!    return None, nothing made; a successful one gives the location. Those steps are coded and tested here against a
-//!    scripted service, but not reached in Off.
+//! 3. **The trace filters** (lane IMPL-SPAWN-TRACE-FILTERS, decision 2026-11-19-90; [`crate::trace_filter`]). Each
+//!    query has two parts. The service answers for the geometry it holds: the level's BSP and whatever else it loaded,
+//!    under the note's filters. This crate answers for the VM's live actors: for each kind of query, the first live
+//!    actor primitive the filter tests ([`crate::trace_filter::tested`]). The world holds no geometry for an actor's
+//!    primitives, and their skip flag is unresolved, so a tested one makes that kind of query Unsupported. A box test
+//!    the service reports blocked is blocked whatever the actors (bit 512, the BSP first).
+//! 4. The steps of section 3 (the first box test, the zero-extent failure, the slice step, the corner nudges, the
+//!    point sweep, the final sweep), each query asked of both parts. The first Unsupported query is
+//!    `NotYet { NotRead }` naming it (and, for an actor part, the actor). A failed search makes the spawn return None,
+//!    nothing made; a successful one gives the location.
 //!
 //! **After `PreBeginPlay`** (note section 6), only after play began and when the actor was not destroyed, decided on
 //! the live actor's `bCollideActors`. These run after the actor is made, so a `NotYet` is terminal and prefixed
@@ -47,7 +47,8 @@ use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
 
-use crate::actors::{flag, float, object};
+use crate::actors::{actors_of, flag, float, is_destroyed, object, objects};
+use crate::trace_filter::{self, Candidate, Query};
 
 /// Where these rules are written down.
 pub const RECORD: &str = "NATIVE_SPAWN_PLACEMENT.md";
@@ -58,11 +59,6 @@ pub const BOUNDING_CYLINDER: &str = "the actor's bounding-cylinder rule";
 pub const ENCROACHMENT: &str = "the post-spawn encroachment check";
 pub const ENCROACHMENT_RULE: &str = "the post-spawn encroachment check's rule";
 pub const RELOCATION: &str = "the post-spawn relocation step";
-pub const TRACE_FILTER: &str = "the spawn spot search's trace filter (flag sets 8902 and 8326)";
-
-/// Whether the spot search's trace filter is read (module documentation, step 3). It is not: every query answers
-/// [`TRACE_FILTER`]'s `NotYet`. The lane that reads the filter replaces this with its rule.
-pub const FILTER_READ: bool = false;
 /// The mark of a refusal after the actor was made.
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
@@ -101,6 +97,25 @@ pub trait SpawnCollision {
     fn box_sweep(&self, extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError>;
     /// A point swept from `start` to `end`: the first hit.
     fn point_sweep(&self, start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError>;
+}
+
+/// The collision service of a world that loaded no level (a harness stand-in, as slice link 9's own world is,
+/// decision 2026-11-16-42): it holds no BSP and no other geometry, so every query is clear. The live VM actors are
+/// still the crate's part of each query (module documentation, step 3), so a tested actor primitive still makes the
+/// query Unsupported. Not a stand-in for a loaded map: a world with a level must install a service that holds it.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoLevel;
+
+impl SpawnCollision for NoLevel {
+    fn box_test(&self, _extent: [f32; 3], _at: [f32; 3], _mode: Mode) -> Result<Test, VmError> {
+        Ok(Test::Clear)
+    }
+    fn box_sweep(&self, _extent: [f32; 3], _start: [f32; 3], _end: [f32; 3]) -> Result<Sweep, VmError> {
+        Ok(Sweep::Clear)
+    }
+    fn point_sweep(&self, _start: [f32; 3], _end: [f32; 3]) -> Result<Sweep, VmError> {
+        Ok(Sweep::Clear)
+    }
 }
 
 /// The VM service holding the world's collision service.
@@ -209,46 +224,132 @@ fn test_name(mode: Mode) -> &'static str {
     }
 }
 
-/// The search's queries: each answers the filter's `NotYet` while the filter is unread, and an Unsupported answer
-/// becomes its named `NotYet`.
+/// The first live actor primitive each kind of query tests (module documentation, step 3), as "actor's component";
+/// `None` when the kind tests none.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct ActorScan {
+    box_test: Option<String>,
+    zero_box_test: Option<String>,
+    box_sweep: Option<String>,
+    point_sweep: Option<String>,
+}
+
+impl ActorScan {
+    fn of(&self, q: Query) -> Option<&String> {
+        match q {
+            Query::BoxTest { zero_extent: false, .. } => self.box_test.as_ref(),
+            Query::BoxTest { zero_extent: true, .. } => self.zero_box_test.as_ref(),
+            Query::BoxSweep => self.box_sweep.as_ref(),
+            Query::PointSweep => self.point_sweep.as_ref(),
+        }
+    }
+}
+
+fn name(space: &ObjectSpace, o: ObjRef) -> Result<String, VmError> {
+    Ok(space.names.text(space.heap.get(o)?.name).into_owned())
+}
+
+/// The live actors' primitives, scanned once per search (nothing changes the actors while it runs). An actor's
+/// primitives are its `CollisionComponent` and the primitive components in its `Components`, each once; a class
+/// that declares neither field has none.
+fn scan_actors(vm: &Vm) -> Result<ActorScan, VmError> {
+    let space = &vm.space;
+    let mut scan = ActorScan::default();
+    let Some(primitive) = space.classes.by_path("Engine.PrimitiveComponent") else {
+        return Ok(scan);
+    };
+    let list = actors_of(vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.list().to_vec();
+    for actor in list {
+        if is_destroyed(space, actor)? {
+            continue;
+        }
+        let class = space.heap.get(actor)?.class;
+        let mut parts: Vec<ObjRef> = Vec::new();
+        if space.prop(class, "CollisionComponent").is_some() {
+            parts.extend(object(space, actor, "CollisionComponent")?);
+        }
+        if space.prop(class, "Components").is_some() {
+            for c in objects(space, actor, "Components")?.into_iter().flatten() {
+                if !parts.contains(&c) {
+                    parts.push(c);
+                }
+            }
+        }
+        for part in parts {
+            if !space.classes.is_child_of(space.heap.get(part)?.class, primitive) {
+                continue;
+            }
+            for (kind, slot) in [
+                (Query::BoxTest { zero_extent: false, complex: false }, &mut scan.box_test),
+                (Query::BoxTest { zero_extent: true, complex: false }, &mut scan.zero_box_test),
+                (Query::BoxSweep, &mut scan.box_sweep),
+                (Query::PointSweep, &mut scan.point_sweep),
+            ] {
+                if slot.is_none() && trace_filter::tested(space, part, actor, kind)? == Candidate::Tested {
+                    *slot = Some(format!("{}'s {}", name(space, actor)?, name(space, part)?));
+                }
+            }
+        }
+    }
+    Ok(scan)
+}
+
+fn actor_unsupported(query: &str, actor: &str) -> VmError {
+    NotYet::not_read(
+        format!(
+            "{SPOT_SEARCH}: {query} that tests the live actor primitive {actor}, whose geometry and skip flag the \
+             world does not hold"
+        ),
+        RECORD,
+    )
+    .into()
+}
+
+/// The search's queries: the service's part, then the live actors' (module documentation, step 3). An Unsupported
+/// part becomes its named `NotYet`.
 struct Queries<'a> {
     model: &'a dyn SpawnCollision,
-    filter_read: bool,
+    actors: ActorScan,
 }
 
 impl Queries<'_> {
-    fn filter(&self) -> Result<(), VmError> {
-        if self.filter_read {
-            Ok(())
-        } else {
-            Err(NotYet::not_read(TRACE_FILTER, RECORD).into())
+    fn actors(&self, q: Query, name: &str) -> Result<(), VmError> {
+        match self.actors.of(q) {
+            Some(actor) => Err(actor_unsupported(name, actor)),
+            None => Ok(()),
         }
     }
 
     fn free(&self, extent: [f32; 3], at: [f32; 3], mode: Mode) -> Result<bool, VmError> {
-        self.filter()?;
+        let complex = matches!(mode, Mode::Template { complex: true });
+        let q = Query::BoxTest { zero_extent: extent == [0.0; 3], complex };
         match self.model.box_test(extent, at, mode)? {
-            Test::Clear => Ok(true),
             Test::Blocked => Ok(false),
             Test::Unsupported => Err(unsupported(test_name(mode))),
+            Test::Clear => self.actors(q, test_name(mode)).map(|()| true),
         }
     }
 
     fn box_sweep(&self, extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Result<Option<([f32; 3], [f32; 3], f32)>, VmError> {
-        self.filter()?;
         match self.model.box_sweep(extent, start, end)? {
-            Sweep::Clear => Ok(None),
-            Sweep::Hit { location, normal, fraction } => Ok(Some((location, normal, fraction))),
             Sweep::Unsupported => Err(unsupported("a box sweep")),
+            hit => {
+                self.actors(Query::BoxSweep, "a box sweep")?;
+                Ok(match hit {
+                    Sweep::Hit { location, normal, fraction } => Some((location, normal, fraction)),
+                    _ => None,
+                })
+            }
         }
     }
 
     fn point_hits(&self, start: [f32; 3], end: [f32; 3]) -> Result<bool, VmError> {
-        self.filter()?;
         match self.model.point_sweep(start, end)? {
-            Sweep::Clear => Ok(false),
-            Sweep::Hit { .. } => Ok(true),
             Sweep::Unsupported => Err(unsupported("a point sweep")),
+            hit => {
+                self.actors(Query::PointSweep, "a point sweep")?;
+                Ok(matches!(hit, Sweep::Hit { .. }))
+            }
         }
     }
 }
@@ -369,7 +470,7 @@ pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option
     let e = extent(space, template)?;
     let complex = flag(space, template, "bCollideComplex")?;
     let l0 = vector(space, location)?;
-    let q = Queries { model: model.as_ref(), filter_read: FILTER_READ };
+    let q = Queries { model: model.as_ref(), actors: scan_actors(vm)? };
     match search(&q, e, l0, complex)? {
         None => Ok(None),
         Some(l) if l == l0 => Ok(Some(location.clone())),
@@ -442,17 +543,9 @@ mod tests {
     }
 
     #[test]
-    fn while_the_filter_is_unread_the_first_query_is_its_not_yet_and_the_service_is_not_asked() {
-        let s = script(vec![], vec![], Test::Clear);
-        let q = Queries { model: &s, filter_read: FILTER_READ };
-        assert_eq!(not_read(search(&q, E, L0, false).unwrap_err()), TRACE_FILTER);
-        assert!(s.asked.borrow().is_empty());
-    }
-
-    #[test]
     fn a_clear_first_test_keeps_the_location() {
         let s = script(vec![], vec![], Test::Clear);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         assert_eq!(search(&q, E, L0, true).unwrap(), Some(L0));
         assert_eq!(s.asked.borrow()[0], format!("test {E:?} {L0:?} {:?}", Mode::Template { complex: true }));
     }
@@ -460,14 +553,14 @@ mod tests {
     #[test]
     fn an_unsupported_query_is_named() {
         let s = script(vec![], vec![], Test::Unsupported);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         assert!(not_read(search(&q, E, L0, false).unwrap_err()).contains("an axis-aligned box test in template mode"));
     }
 
     #[test]
     fn a_blocked_zero_extent_fails() {
         let s = script(vec![], vec![], Test::Blocked);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         assert_eq!(search(&q, [0.0; 3], L0, false).unwrap(), None);
     }
 
@@ -476,13 +569,13 @@ mod tests {
         // t = 0.25: raised by Ez (1 - 2t) + 1, a clear simple test succeeds with no upward sweep.
         let floor = Sweep::Hit { location: [0.0; 3], normal: [0.0, 0.0, 1.0], fraction: 0.25 };
         let s = script(vec![Test::Blocked, Test::Clear, Test::Clear], vec![floor], Test::Blocked);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         assert_eq!(search(&q, E, L0, false).unwrap(), Some([L0[0], L0[1], L0[2] + 20.0 * 0.5 + 1.0]));
         assert_eq!(s.asked.borrow().len(), 4);
         // t = 0.75: lowered by Ez (2t - 1), raised by 1, then the common tail's test and its upward sweep.
         let floor = Sweep::Hit { location: [0.0; 3], normal: [0.0, 0.0, 1.0], fraction: 0.75 };
         let s = script(vec![Test::Blocked, Test::Clear, Test::Clear], vec![floor], Test::Blocked);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         let l = [L0[0], L0[1], L0[2] - 20.0 * 0.5 + 1.0];
         assert_eq!(search(&q, E, L0, false).unwrap(), Some(l));
         assert_eq!(*s.asked.borrow().last().unwrap(), format!("sweep {E:?} {l:?} {:?}", [l[0], l[1], l[2] + 20.0]));
@@ -491,7 +584,7 @@ mod tests {
     #[test]
     fn a_failed_slice_that_was_not_blocked_fails_the_search() {
         let s = script(vec![Test::Blocked, Test::Clear], vec![], Test::Blocked);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         assert_eq!(search(&q, E, L0, false).unwrap(), None);
     }
 
@@ -499,7 +592,7 @@ mod tests {
     fn one_free_corner_doubles_the_move() {
         let tests = vec![Test::Blocked, Test::Blocked, Test::Clear, Test::Blocked, Test::Blocked, Test::Blocked, Test::Clear];
         let s = script(tests, vec![], Test::Blocked);
-        let q = Queries { model: &s, filter_read: true };
+        let q = Queries { model: &s, actors: ActorScan::default() };
         // In the code's own order, in single precision: one move of 1.1 x the displacement, then doubled.
         let one = |c: f32| c + 1.1 * (-1.0 * 0.55 * 10.0);
         let twice = |c: f32| 2.0 * one(c) - c;

@@ -1165,6 +1165,9 @@ fn phaselock_world(cooked: &Path) -> Result<ow_world::world::World, ow_vm::error
         .try_borrow_mut()
         .map_err(|_| ow_vm::error::VmError::ServiceBorrowed("Actors"))?
         .place_world_info(info)?;
+    // This world loads no level, so its collision service holds no geometry (lane IMPL-SPAWN-TRACE-FILTERS, decision
+    // 2026-11-19-90): a harness stand-in. The spot search still filters the live actors itself.
+    ow_world::placement::install_collision(&mut world.vm, Rc::new(ow_world::placement::NoLevel))?;
     Ok(world)
 }
 

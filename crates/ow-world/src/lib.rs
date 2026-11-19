@@ -14,4 +14,5 @@ pub mod placement;
 pub mod pools;
 pub mod query;
 pub mod timers;
+pub mod trace_filter;
 pub mod world;
