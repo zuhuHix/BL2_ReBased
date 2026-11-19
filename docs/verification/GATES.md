@@ -20,11 +20,6 @@ get past `IsEditor` and stop in `maya:8` at the unbound `Engine.IsSplitScreen()`
 verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
 ignored `local/p2/is-editor/`.
 
-**IMPL-LINK1-AFTER-LOGIN (2026-11-19, pc-hummer, on fix/rust-engine-object-offline ea1ffe96, #501 on #479):** AI-assisted
-(Claude Code, Opus 5.5). `UpdateURL` and `SaveConfig` (nothing, under the read-back census) and `UpdateInputContext` in Off
-from NATIVE_LOGIN_URL_CONFIG_INPUT.md, review r1 of #499 folded in. `cargo test -p ow-world -p ow-cli --locked` 332 passed /
-0 failed / 8 ignored; the installed `off_url_and_config_have_no_readers` and
-
 **IMPL-LINK1-AFTER-LOGIN (2026-11-19, pc-hummer, on fix/rust-engine-object-offline aca14fa0, #501 on #479):**
 AI-assisted (Claude Code, Opus 5.5). `UpdateURL` and `SaveConfig` (nothing, under the read-back census) and
 `UpdateInputContext` in Off from NATIVE_LOGIN_URL_CONFIG_INPUT.md, review r1 of #499 folded in. `cargo build --workspace
