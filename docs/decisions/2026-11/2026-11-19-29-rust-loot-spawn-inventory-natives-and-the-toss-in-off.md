@@ -2,8 +2,7 @@
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane FIX-POOL-SPAWN-B (implementer; slice link 5, SLICE_RUN_PLAN.md
 section 3.4). It implements from `docs/verification/NATIVE_LOOT_SPAWN.md` (analyst lane FIX-POOL-SPAWN-A, decision
-2026-11-19-23) alone: no raw analysis output, Ghidra or REA was opened. That note lands with the analyst's branch,
-which has to land first.
+2026-11-19-23) alone: no raw analysis output, Ghidra or REA was opened. The note landed on main with #408 (review r1 included).
 
 - **`WillowInventory.GenerateUniqueID`, `ComputeMonetaryValue`, `GetManufacturer`: bound in Off**
   (`crates/ow-inventory/src/definition.rs`, registered by the inventory pack). The rules are the note's, "The natives
@@ -14,8 +13,9 @@ which has to land first.
   - `GetManufacturer`: `DefinitionData.ManufacturerDefinition`.
 - **The generator.** The two ID draws come from `CrtStream::LootPool`, the stream the Off loot path already shares
   (ow-inventory's pool pick and ow-combat's `OFF_STREAM`), so the note's order stays on one stream. That order is per
-  pool (as the review of #408 settled it): the pool's roll, with each new inventory's two ID draws and its parts roll
-  inside the pick loop; then that pool's toss draws for its dropped items; then the next pool. The game's own
+  pool (the note's "Draw order", settled in the review of #408): the pool's firing `FRand`; for a firing pool, its
+  roll, with each new inventory's two ID draws and its parts roll inside the pick loop; then that pool's toss draws
+  for its dropped items; then the next pool. The game's own
   sequence is not reproduced (decision D5), UNVERIFIED.
 - **A choice where the note is silent (UNVERIFIED).** "The inventory definition" is read as the one definition the
   inventory's `DefinitionData` holds: `WeaponTypeDefinition` or `ItemDefinition`.
@@ -33,9 +33,9 @@ which has to land first.
   - with no target, the AI pawn takes the `WillowPawn` rule.
 
   The settled arithmetic (the random direction, three draws a try; the 200 / 50 / 150 terms; the cap at 400) is a
-  tested function, `base_toss`, ready for the lane that answers question 3. It is not wired to the native. Which draw
-  goes to which axis is not stated in the note yet (review of #408); the function's X, Y, Z order is UNVERIFIED.
-  Its sines, cosines and square roots go through `ow_core::num` (rule N3).
+  tested function, `base_toss`, ready for the lane that answers question 3. It is not wired to the native. It follows the
+  landed note: the draws go to x, y and z in order, and a try whose squared length is at most 1 (the sphere's surface
+  included) is kept. Its sines, cosines and square roots go through `ow_core::num` (rule N3).
 - **`GetGameStageForSpawnedInventory` is unchanged.** It stays the existing plain field read in both modes
   (NATIVE_LOOT.md). The new note reads the same rule ("a plain read of the pawn's `GameStageForSpawnedInventory`")
   and lists no open question for it; its field identification is UNVERIFIED, as before. The hub brief named it
