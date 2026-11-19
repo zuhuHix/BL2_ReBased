@@ -316,6 +316,7 @@ impl NativePack for Pack {
         crate::equip::bind_overrides(vm)?;
         crate::equip::natives::register(vm)?;
         crate::definition::register(vm)?;
+        crate::equip::value::register(vm)?;
         crate::spawn::register(vm)
     }
 }
