@@ -757,7 +757,8 @@ pub fn world_text(w: &WorldStats) -> String {
     match &w.last.halted {
         Some(h) => {
             let kind = if h.not_yet { "NotYet" } else { "error" };
-            let _ = writeln!(out, "play world halted at tick {} ({kind}): {}", h.tick, h.message);
+            let partial = if h.partial_writes { ", stopped after partial writes" } else { "" };
+            let _ = writeln!(out, "play world halted at tick {} ({kind}{partial}): {}", h.tick, h.message);
         }
         None => {
             let _ = writeln!(out, "play world halted: no");

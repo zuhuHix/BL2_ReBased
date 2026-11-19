@@ -15,6 +15,12 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 /// `Engine.upk`: `Object`, `Vector`, `Rotator`, `Actor` with what the world's tick reads, `WorldInfo` with the time
 /// fields, `Pawn`, `World` and `Level`.
 fn engine() -> Vec<u8> {
+    engine_with(true)
+}
+
+/// [`engine`], whose `SeqEvent_RemoteEvent` declares no `EventName` unless `remote_named` (delta review of #436,
+/// finding 4: a remote event whose name does not read).
+fn engine_with(remote_named: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
         "Function",
@@ -87,7 +93,9 @@ fn engine() -> Vec<u8> {
         t.class(e, event);
     }
     let remote = t.class("SeqEvent_RemoteEvent", event);
-    t.prop("Name", remote, "EventName", 0, 0);
+    if remote_named {
+        t.prop("Name", remote, "EventName", 0, 0);
+    }
     let activate = t.class("SeqAct_ActivateRemoteEvent", action);
     t.prop("Name", activate, "EventName", 0, 0);
     let finish = t.class("SeqAct_FinishSequence", action);
@@ -154,10 +162,36 @@ fn engine() -> Vec<u8> {
     t.p.build()
 }
 
+/// What [`map`] holds of Kismet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kismet {
+    None,
+    /// The Matinee scan's export walk (review r2 of #420).
+    Walk,
+    /// A remote event `Go` starting a Matinee op whose object variable holds `Pawn_0` (delta review of #436,
+    /// finding 5). In [`builder_files`], the streamed level is then [`Kismet::RemoteSource`].
+    RemoteTarget,
+    /// A level that places no actor (it lists only its `WorldInfo`), with a level-loaded event firing `Go`.
+    RemoteSource,
+}
+
+/// One output (`desc`) linking to `targets`, as an `OutputLinks` tag.
+fn output_links(p: &mut PackageBuilder, desc: &str, targets: &[i32]) -> Vec<u8> {
+    let mut links = Vec::new();
+    for &t in targets {
+        links.extend(p.object_tag("LinkedOp", t));
+        links.extend_from_slice(&p.none());
+    }
+    let mut element = p.array_tag("Links", i32::try_from(targets.len()).unwrap(), &links);
+    element.extend(p.str_tag("LinkDesc", desc));
+    element.extend_from_slice(&p.none());
+    p.array_tag("OutputLinks", 1, &element)
+}
+
 /// A map: `TheWorld` (1), `PersistentLevel` (2), `WorldInfo_0` (3, time dilation 1), `Actor_0` (4), `Pawn_0` (5);
-/// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`, and its `Physics` is `physics` when
+/// the level lists 3, a null, 4 and 5 (only 3 for [`Kismet::RemoteSource`]). The pawn's `RemoteRole` is `remote_role`, and its `Physics` is `physics` when
 /// given. With `streaming`, the `WorldInfo` names that level through a `LevelStreaming` (6).
-fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: bool) -> Vec<u8> {
+fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: Kismet) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
@@ -182,7 +216,7 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: 
         p.add_export_with(export)
     };
     assert_eq!(add(&mut p, world, "TheWorld", 0, 4, Vec::new(), Vec::new()), 1);
-    let mut tail = ints(&[2, 4, 3, 0, 4, 5]);
+    let mut tail = if kismet == Kismet::RemoteSource { ints(&[2, 1, 3]) } else { ints(&[2, 4, 3, 0, 4, 5]) };
     tail.extend(ints(&[7]));
     tail.extend_from_slice(b"unreal\0");
     assert_eq!(add(&mut p, level, "PersistentLevel", 1, 4, Vec::new(), tail), 2);
@@ -202,7 +236,7 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: 
         let tags = vec![p.name_tag("PackageName", name)];
         assert_eq!(add(&mut p, level_streaming, "LevelStreaming_0", 3, 4, tags, Vec::new()), 6);
     }
-    if kismet {
+    if kismet == Kismet::Walk {
         // The Matinee scan's export walk (review r2 of #420): one Matinee op, two exports of a class that does not
         // resolve (the second from the walk's cache), and one export of a class on NOT_OP_CLASSES (a package object).
         let core = p.add_import("Core", "Package", 0, "Core");
@@ -213,6 +247,26 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: 
         add(&mut p, unknown, "NoSuchOp_0", 0, 4, Vec::new(), Vec::new());
         add(&mut p, unknown, "NoSuchOp_1", 0, 4, Vec::new(), Vec::new());
         add(&mut p, package_class, "SomeGroup", 0, 4, Vec::new(), Vec::new());
+    }
+    if kismet == Kismet::RemoteTarget {
+        let (var_class, interp, remote) =
+            (class(&mut p, "SeqVar_Object"), class(&mut p, "SeqAct_Interp"), class(&mut p, "SeqEvent_RemoteEvent"));
+        let value = p.object_tag("ObjValue", 5);
+        let var = add(&mut p, var_class, "SeqVar_Object_0", 0, 4, vec![value], Vec::new());
+        let mut link = p.array_tag("LinkedVariables", 1, &ints(&[var]));
+        link.extend_from_slice(&p.none());
+        let links = p.array_tag("VariableLinks", 1, &link);
+        let op = add(&mut p, interp, "SeqAct_Interp_0", 0, 4, vec![links], Vec::new());
+        let name = p.name_tag("EventName", "Go");
+        let out = output_links(&mut p, "Out", &[op]);
+        add(&mut p, remote, "RemoteEvent_Go", 0, 4, vec![name, out], Vec::new());
+    }
+    if kismet == Kismet::RemoteSource {
+        let (loaded, activate) = (class(&mut p, "SeqEvent_LevelLoaded"), class(&mut p, "SeqAct_ActivateRemoteEvent"));
+        let name = p.name_tag("EventName", "Go");
+        let action = add(&mut p, activate, "Activate_Go", 0, 4, vec![name], Vec::new());
+        let out = output_links(&mut p, "Out", &[action]);
+        add(&mut p, loaded, "LevelLoaded_0", 0, 4, vec![out], Vec::new());
     }
     p.build()
 }
@@ -232,6 +286,11 @@ mod k {
     pub const LONE_OP: i32 = 11;
     pub const TRACK: i32 = 12;
     pub const NAN_TRACK: i32 = 13;
+    pub const LOAD_ENTRY: i32 = 14;
+    pub const GATED: i32 = 15;
+    pub const GATE_TOUCH: i32 = 16;
+    pub const GATE_FINISH: i32 = 17;
+    pub const GATED_OP: i32 = 18;
 }
 
 /// A Vector's native body: three floats.
@@ -246,8 +305,16 @@ fn vector_bytes(v: [f32; 3]) -> Vec<u8> {
 ///   event also linked to a Matinee op (8);
 /// - a touch event (9) linked to a Matinee op (10), and a Matinee op nothing links to (11);
 /// - a movement track (12): position keys at 0 and 2 s with a broken-tangent curve segment, and Euler yaw from 0 to
-///   720 degrees (two turns); and a track (13) whose middle key time is NaN.
+///   720 degrees (two turns); and a track (13) whose middle key time is NaN;
+/// - (delta review of #436, finding 3) a level-loaded event (14) entering a second child sequence (15), in which only a
+///   touch (16) reaches the finish op (17) labelled `Done`; the child's output `Done` links to a Matinee op (18).
 fn kismet_package() -> Vec<u8> {
+    kismet_package_with(true)
+}
+
+/// [`kismet_package`], whose remote event `Ping` (6) has no `EventName` tag unless `remote_named` (for
+/// [`engine_with`]`(false)`).
+fn kismet_package_with(remote_named: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
@@ -267,18 +334,7 @@ fn kismet_package() -> Vec<u8> {
     .collect();
     let (sequence, loaded, finish, interp, remote, activate, touch, track) =
         (classes[0], classes[1], classes[2], classes[3], classes[4], classes[5], classes[6], classes[7]);
-    // One output (`desc`) linking to `targets`.
-    let outputs = |p: &mut PackageBuilder, desc: &str, targets: &[i32]| {
-        let mut links = Vec::new();
-        for &t in targets {
-            links.extend(p.object_tag("LinkedOp", t));
-            links.extend_from_slice(&p.none());
-        }
-        let mut element = p.array_tag("Links", i32::try_from(targets.len()).unwrap(), &links);
-        element.extend(p.str_tag("LinkDesc", desc));
-        element.extend_from_slice(&p.none());
-        p.array_tag("OutputLinks", 1, &element)
-    };
+    let outputs = output_links;
     let add = |p: &mut PackageBuilder, class: i32, name: &str, outer: i32, tags: Vec<Vec<u8>>| {
         let mut body = vec![0u8; 4];
         for t in tags {
@@ -297,7 +353,7 @@ fn kismet_package() -> Vec<u8> {
     let label = p.str_tag("OutputLabel", "Out");
     assert_eq!(add(&mut p, finish, "Finish_0", k::CHILD, vec![label]), k::FINISH);
     assert_eq!(add(&mut p, interp, "Interp_Exit", k::PARENT, Vec::new()), k::EXIT_OP);
-    let mut ping = vec![p.name_tag("EventName", "Ping")];
+    let mut ping = if remote_named { vec![p.name_tag("EventName", "Ping")] } else { Vec::new() };
     ping.push(outputs(&mut p, "Out", &[k::PING_ACTION, k::REMOTE_OP]));
     assert_eq!(add(&mut p, remote, "RemoteEvent_0", k::PARENT, ping), k::PING);
     let fire = p.name_tag("EventName", "Ping");
@@ -348,6 +404,15 @@ fn kismet_package() -> Vec<u8> {
     let frame = p.enum_tag("MoveFrame", "EInterpTrackMoveFrame", "IMF_World");
     let rot = p.enum_tag("RotMode", "EInterpTrackMoveRotMode", "IMR_Keyframed");
     assert_eq!(add(&mut p, track, "InterpTrackMove_NaN", k::PARENT, vec![nan_pos, empty, frame, rot]), k::NAN_TRACK);
+    let enter = outputs(&mut p, "Out", &[k::GATED]);
+    assert_eq!(add(&mut p, loaded, "LevelLoaded_Entry", k::PARENT, vec![enter]), k::LOAD_ENTRY);
+    let done = outputs(&mut p, "Done", &[k::GATED_OP]);
+    assert_eq!(add(&mut p, sequence, "Gated", k::PARENT, vec![done]), k::GATED);
+    let touched = outputs(&mut p, "Touched", &[k::GATE_FINISH]);
+    assert_eq!(add(&mut p, touch, "Touch_Gate", k::GATED, vec![touched]), k::GATE_TOUCH);
+    let label = p.str_tag("OutputLabel", "Done");
+    assert_eq!(add(&mut p, finish, "Finish_Gate", k::GATED, vec![label]), k::GATE_FINISH);
+    assert_eq!(add(&mut p, interp, "Interp_Gated", k::PARENT, Vec::new()), k::GATED_OP);
     p.build()
 }
 
@@ -366,13 +431,18 @@ impl Drop for KismetStore {
 }
 
 fn kismet_store() -> KismetStore {
+    kismet_store_with(true)
+}
+
+/// [`kismet_store`] over [`engine_with`] and [`kismet_package_with`] of `remote_named`.
+fn kismet_store_with(remote_named: bool) -> KismetStore {
     let dir = std::env::temp_dir().join(format!(
         "ow-host-kismet-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let (engine, kismet) = (engine(), kismet_package());
+    let (engine, kismet) = (engine_with(remote_named), kismet_package_with(remote_named));
     let files: [(&str, &[u8]); 2] = [("Engine.upk", &engine), ("Test_K.upk", &kismet)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
@@ -389,27 +459,28 @@ fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
 /// [`builder`] over a map whose `WorldInfo` streams a second level, `Test_Sub`, that places its own `Pawn_0`; the last
 /// pawn (the streamed level's) is the one moved to `at`.
 fn streaming_builder(at: [f32; 3]) -> Builder {
-    builder_files(0, None, false, true, false, at, 0)
+    builder_files(0, None, false, true, Kismet::None, at, 0)
 }
 
 /// [`builder`] over a map that also holds the Kismet exports of [`map`]'s `kismet`.
 fn kismet_builder() -> Builder {
-    builder_files(0, None, false, false, true, [0.0; 3], 0)
+    builder_files(0, None, false, false, Kismet::Walk, [0.0; 3], 0)
 }
 
 /// [`builder`] with the pawn's `Physics` set to `physics` when given, and the host's physics step installed after
 /// the load with Matinee bindings that name the pawn when `bound` (the invented packages hold no Matinee op).
 fn builder_with(remote_role: u8, physics: Option<&'static str>, bound: bool, at: [f32; 3], yaw: i32) -> Builder {
-    builder_files(remote_role, physics, bound, false, false, at, yaw)
+    builder_files(remote_role, physics, bound, false, Kismet::None, at, yaw)
 }
 
-/// [`builder_with`], with the streamed level `Test_Sub` when `streamed`.
+/// [`builder_with`], with the streamed level `Test_Sub` when `streamed`, and `kismet` in the persistent map (the
+/// streamed level holds [`Kismet::RemoteSource`] when it is [`Kismet::RemoteTarget`], else none).
 fn builder_files(
     remote_role: u8,
     physics: Option<&'static str>,
     bound: bool,
     streamed: bool,
-    kismet: bool,
+    kismet: Kismet,
     at: [f32; 3],
     yaw: i32,
 ) -> Builder {
@@ -422,7 +493,8 @@ fn builder_files(
         let _ = std::fs::remove_dir_all(&dir);
         let engine = engine();
         let map_p = map(remote_role, physics, streamed.then_some("Test_Sub"), kismet);
-        let map_sub = map(remote_role, physics, None, false);
+        let sub_kismet = if kismet == Kismet::RemoteTarget { Kismet::RemoteSource } else { Kismet::None };
+        let map_sub = map(remote_role, physics, None, sub_kismet);
         let mut files: Vec<(&str, &[u8])> = vec![("Engine.upk", &engine), ("Test_P.upk", &map_p)];
         if streamed {
             files.push(("Test_Sub.upk", &map_sub));
@@ -438,7 +510,7 @@ fn builder_files(
         let summary = LoadSummary::from_report("Test_P", ParityMode::Off, &report, list.len());
         let packages = level_packages(&mut world.vm, &summary)?;
         let mut bindings = matinee_bound(&mut world.vm, &packages)?;
-        if !kismet {
+        if kismet == Kismet::None {
             assert_eq!(bindings.ops, 0, "the invented packages hold no Matinee op");
         }
         if bound {
@@ -557,7 +629,7 @@ fn each_physics_mode_s_rule() {
     // An op the graph does not start at load still answers NotYet (review r1 of #436): the startup paths outside the
     // graph, SetPosition from a script and a touch from a spawn overlap, are not ruled out.
     for touch in [false, true] {
-        let n = physics_rule("PHYS_Interpolating", c, &Driver::NotStarted { touch }, off).unwrap_err();
+        let n = physics_rule("PHYS_Interpolating", c, &Driver::StartupUnknown { touch }, off).unwrap_err();
         assert!(matches!(n.missing, Missing::NotRead), "{n}");
         assert!(n.to_string().contains("a script calling its SetPosition"), "{n}");
         assert_eq!(n.to_string().contains("a touch from an actor spawned overlapping"), touch, "{n}");
@@ -759,18 +831,18 @@ fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
         (op, "Engine.SeqAct_Interp"),
     ];
     let events = [load, mission, touch];
-    // Nothing links to the op: it never starts.
+    // Nothing links to the op: the graph does not start it, but a script's SetPosition might (delta review of #436).
     let g = graph(&o, &classes, &[], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: false });
+    assert_eq!(start_of(&g, o[op]), Start::StartupUnknown { touch: false });
     // A load event two links up (through an action): it starts at load, and the load event wins over the others.
     let g = graph(&o, &classes, &[(op, &[action, touch]), (action, &[load, mission])], &[load], &events, &[touch]);
     assert_eq!(start_of(&g, o[op]), Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
     // A mission remote event (fired from outside the graph): named, not assumed quiet.
     let g = graph(&o, &classes, &[(op, &[action]), (action, &[mission])], &[load], &events, &[touch]);
     assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["WillowGame.WillowSeqEvent_MissionRemoteEvent".into()]));
-    // Only a touch and an action no link reaches: not at load.
+    // Only a touch and an action no link reaches: not at load through the graph, and the start unknown.
     let g = graph(&o, &classes, &[(op, &[touch, dead])], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: true });
+    assert_eq!(start_of(&g, o[op]), Start::StartupUnknown { touch: true });
     // A remote event whose action a load event fires (the name edge read_graph adds): at load.
     let (remote, activate) = (6, 7);
     let classes2 = [
@@ -786,7 +858,7 @@ fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
     assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
     // A cycle with no event in it: nothing starts it.
     let g = graph(&o, &classes, &[(op, &[action]), (action, &[dead]), (dead, &[action])], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: false });
+    assert_eq!(start_of(&g, o[op]), Start::StartupUnknown { touch: false });
     // A remote event whose only action has no source (a dead sender): still firable from outside (review r1).
     let g = graph(&o, &classes2, &[(op, &[remote]), (remote, &[activate])], &[load], &[load, remote], &[]);
     assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
@@ -809,9 +881,9 @@ fn an_actor_s_driver_combines_the_ops_that_bind_it() {
     bindings.by_actor.insert(actor, [a, b].into_iter().collect());
     // A start not worked out: the playback NotYet, as before this lane.
     assert_eq!(Driver::of(&bindings, actor), Driver::Bound);
-    bindings.starts.insert(a, Start::NotAtLoad { touch: false });
-    bindings.starts.insert(b, Start::NotAtLoad { touch: true });
-    assert_eq!(Driver::of(&bindings, actor), Driver::NotStarted { touch: true });
+    bindings.starts.insert(a, Start::StartupUnknown { touch: false });
+    bindings.starts.insert(b, Start::StartupUnknown { touch: true });
+    assert_eq!(Driver::of(&bindings, actor), Driver::StartupUnknown { touch: true });
     bindings.starts.insert(b, Start::Outside(vec!["X.Mission".into()]));
     assert_eq!(Driver::of(&bindings, actor), Driver::Outside("X.Mission".into()));
     bindings.by_actor.insert(actor, [a, b, c].into_iter().collect());
@@ -835,7 +907,7 @@ fn read_graph_follows_exits_and_keeps_remote_events_external() {
     let packages: ow_core::DetSet<_> = [package].into_iter().collect();
     let graph = read_graph(vm, &packages).unwrap();
     assert!(graph.incomplete.is_empty(), "{:?}", graph.incomplete);
-    assert_eq!(graph.matinee.len(), 4);
+    assert_eq!(graph.matinee.len(), 5);
     let op = |vm: &mut Vm, index: i32| vm.defs.resolve_ref(&mut vm.space, package, index).unwrap().unwrap();
     let (exit, remote, touch, lone) = (op(vm, k::EXIT_OP), op(vm, k::REMOTE_OP), op(vm, k::TOUCH_OP), op(vm, k::LONE_OP));
     // The level-loaded event inside the child reaches the parent's op through the finish op and the child's output.
@@ -844,8 +916,16 @@ fn read_graph_follows_exits_and_keeps_remote_events_external() {
     // The remote event has a source in the graph (its own action, a cycle), and stays firable from outside.
     assert!(graph.sources[&op(vm, k::PING)].contains(&op(vm, k::PING_ACTION)));
     assert_eq!(start_of(&graph, remote), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
-    assert_eq!(start_of(&graph, touch), Start::NotAtLoad { touch: true });
-    assert_eq!(start_of(&graph, lone), Start::NotAtLoad { touch: false });
+    assert_eq!(start_of(&graph, touch), Start::StartupUnknown { touch: true });
+    assert_eq!(start_of(&graph, lone), Start::StartupUnknown { touch: false });
+    // Delta review of #436, finding 3: a load event enters the gated child, but only a touch inside it reaches the
+    // finish op, so the op behind the child's output is not started at load. An impulse into a sequence is not one
+    // out of it: the sequence is no source of its output's targets, only the finish op is.
+    let (gated, gated_op) = (op(vm, k::GATED), op(vm, k::GATED_OP));
+    assert_eq!(start_of(&graph, gated_op), Start::StartupUnknown { touch: true });
+    assert!(!graph.sources[&gated_op].contains(&gated));
+    assert!(graph.sources[&gated_op].contains(&op(vm, k::GATE_FINISH)));
+    assert!(graph.sources[&gated].contains(&op(vm, k::LOAD_ENTRY)));
     // Over the map that holds exports of a class that does not resolve, the graph is incomplete.
     let (mut world, summary) = kismet_builder()().unwrap();
     let levels = level_packages(&mut world.vm, &summary).unwrap();
@@ -853,6 +933,75 @@ fn read_graph_follows_exits_and_keeps_remote_events_external() {
     assert_eq!(graph.incomplete.get("the export class Engine.NoSuchOp does not resolve"), Some(&2));
     let any = graph.matinee[0];
     assert!(matches!(start_of(&graph, any), Start::Incomplete(_)));
+}
+
+/// Delta review of #436, finding 4: a remote event whose `EventName` does not read makes the graph incomplete, by name,
+/// as an action's does.
+#[test]
+fn a_remote_event_whose_name_does_not_read_makes_the_graph_incomplete() {
+    use matinee::{Start, read_graph, start_of};
+    let mut store = kismet_store_with(false);
+    let package = store.package;
+    let vm = &mut store.vm;
+    let graph = read_graph(vm, &[package].into_iter().collect()).unwrap();
+    assert_eq!(graph.incomplete.len(), 1, "{:?}", graph.incomplete);
+    assert_eq!(graph.incomplete.get("a remote event with no EventName"), Some(&1));
+    let remote = vm.defs.resolve_ref(&mut vm.space, package, k::REMOTE_OP).unwrap().unwrap();
+    assert_eq!(start_of(&graph, remote), Start::Incomplete("a remote event with no EventName (x1)".into()));
+}
+
+/// Delta review of #436, finding 5: a streamed level that places no actor holds the load event that starts the
+/// persistent level's Matinee op (through the remote event `Go`), so the scans must read the loader's levels, not the
+/// placed actors' packages.
+#[test]
+fn a_streamed_level_with_no_placed_actor_changes_the_persistent_level_s_matinee_start() {
+    let build = builder_files(0, Some("PHYS_Interpolating"), false, true, Kismet::RemoteTarget, [0.0; 3], 0);
+    let (mut world, summary) = build().unwrap();
+    assert_eq!(summary.levels.len(), 2, "{}", summary.text());
+    assert_eq!((summary.levels[1].0.as_str(), summary.levels[1].2), ("Test_Sub", 0), "the streamed level places nothing");
+    let pawn = *world.actors().borrow().list().last().unwrap();
+    let levels = level_packages(&mut world.vm, &summary).unwrap();
+    assert_eq!(levels.len(), 2);
+    let bindings = scan_matinee(&mut world.vm, &levels).unwrap();
+    assert!(bindings.complete(), "{bindings:?}");
+    assert_eq!(Driver::of(&bindings, pawn), Driver::AtLoad("Engine.SeqEvent_LevelLoaded".into()));
+    // Over the persistent level alone (the placed actors' package), the same op reads as fired from outside.
+    let persistent = world.vm.defs.code_mut().1.load(&PackageName::parse("Test_P").unwrap()).unwrap();
+    let alone = scan_matinee(&mut world.vm, &[persistent].into_iter().collect()).unwrap();
+    assert_eq!(Driver::of(&alone, pawn), Driver::Outside("Engine.SeqEvent_RemoteEvent".into()));
+}
+
+/// Delta review of #436, finding 2 (the hub's ruling: no rollback): a Matinee refusal mid-tick is terminal. The failed
+/// tick's writes stay as they were made (the clock and the `WorldInfo` time fields; the actors' state untouched), the
+/// halt says it stopped after partial writes, and the world itself runs no later tick.
+#[test]
+fn a_matinee_refusal_mid_tick_stops_the_world_after_its_partial_writes() {
+    let at = [5.0, 6.0, 7.0];
+    let (mut world, _) = builder_with(0, Some("PHYS_Interpolating"), true, at, 0)().unwrap();
+    let pawn = *world.actors().borrow().list().last().unwrap();
+    let wi = world.actors().borrow().world_info().unwrap();
+    let state = |world: &World| {
+        let space = &world.vm.space;
+        let times = ["TimeSeconds", "RealTimeSeconds", "DeltaSeconds"].map(|f| float(space, wi, f));
+        (times, transform(space, pawn).unwrap())
+    };
+    let mut frame = WorldFrame::default();
+    step(&mut world, &mut frame, 0.25);
+    let halt = frame.halted.clone().expect("the bound actor's Matinee refusal halts the tick");
+    assert!(halt.not_yet && halt.partial_writes, "{halt:?}");
+    assert_eq!(halt.tick, 1);
+    assert!(halt.message.contains("the Matinee playback that moves a bound interpolating Engine.Pawn"), "{halt:?}");
+    // The clock ran and the time fields were written before the actor pass reached the refusal.
+    assert_eq!((frame.ticks, frame.time_seconds, frame.delta_seconds), (0, Some(0.25), Some(0.25)));
+    let at_stop = state(&world);
+    assert_eq!((at_stop.0[0], at_stop.0[2]), (Some(0.25), Some(0.25)));
+    assert!(at_stop.0[1].is_some());
+    assert_eq!(at_stop.1.0, at, "the refused actor did not move");
+    // A later step does nothing: the frame and the world stay as the stop left them.
+    let stopped = frame.clone();
+    step(&mut world, &mut frame, 0.25);
+    assert_eq!(frame, stopped);
+    assert_eq!(state(&world), at_stop, "no later tick ran");
 }
 
 /// The invented movement tracks through `read_move` (review r1 of #436): a broken-tangent segment and yaw wound past
@@ -1041,7 +1190,7 @@ fn sanctuary_matinee_census() {
         for &op in &graph.matinee.clone() {
             let start = start_of(&graph, op);
             let key = match &start {
-                Start::NotAtLoad { touch } => format!("not at load (touch {touch})"),
+                Start::StartupUnknown { touch } => format!("startup unknown, not at load through the graph (touch {touch})"),
                 Start::Incomplete(why) => format!("incomplete: {why}"),
                 Start::AtLoad(e) => format!("at load via {e:?}"),
                 Start::Outside(e) => format!("from outside the graph via {e:?}"),
@@ -1049,7 +1198,7 @@ fn sanctuary_matinee_census() {
             let playing = read(&world.vm.space, op, "bIsPlaying");
             let looping = read(&world.vm.space, op, "bLooping");
             *starts.entry(format!("{key}; bIsPlaying {playing:?} bLooping {looping:?}")).or_default() += 1;
-            if matches!(start, Start::NotAtLoad { .. }) {
+            if matches!(start, Start::StartupUnknown { .. }) {
                 let up = matinee::upstream(&graph, op);
                 let mut roots: Vec<String> = up
                     .iter()
@@ -1058,10 +1207,10 @@ fn sanctuary_matinee_census() {
                     .collect();
                 roots.sort();
                 roots.dedup();
-                *starts.entry(format!("  roots of a not-at-load op: {roots:?}")).or_default() += 1;
+                *starts.entry(format!("  roots of a startup-unknown op: {roots:?}")).or_default() += 1;
             }
             let kind = match &start {
-                Start::NotAtLoad { .. } => "not-at-load",
+                Start::StartupUnknown { .. } => "startup-unknown",
                 Start::Incomplete(_) => "incomplete",
                 Start::AtLoad(_) => "load-started",
                 Start::Outside(_) => "outside-started",

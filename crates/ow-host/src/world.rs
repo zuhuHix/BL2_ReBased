@@ -16,7 +16,10 @@
 //!
 //! **When a tick fails** (an unread native's `NotYet`, a script error), the world is *halted*: the error is kept with
 //! the tick it happened on, and no later tick runs, because a world stopped partway through its actor pass is not a
-//! state the next tick should build on. The play mode goes on (the pawn's movement is the host's, not the world's);
+//! state the next tick should build on. Nothing is rolled back (the hub's ruling on the delta review of #436): by the
+//! failure the tick has advanced the clock, written the `WorldInfo` time fields and may have run earlier actors'
+//! script, so the halt says it stopped after partial writes ([`Halt::partial_writes`]), and the world refuses every
+//! later tick itself ([`step`] on a halted frame does nothing), not only its link. The play mode goes on (the pawn's movement is the host's, not the world's);
 //! [`WorldFrame::halted`] says why the world stopped, and the play report prints it. No `NotYet` is turned into a
 //! value here (rule R3).
 //!
@@ -100,6 +103,10 @@ pub struct Halt {
     pub message: String,
     /// The failure is a `NotYet` (an unread rule or an absent layer), not a script or data error.
     pub not_yet: bool,
+    /// The failed tick may have written part of its step before it stopped: the clock, the `WorldInfo` time fields
+    /// and earlier actors' state (a failure inside the tick, or a panic). False only when the tick finished and
+    /// reading the world back failed. Either way the halt is terminal (module notes).
+    pub partial_writes: bool,
 }
 
 /// What loading the map did, as plain data.
@@ -279,7 +286,8 @@ impl WorldTick for WorldLink {
                     Some(Err(payload)) => format!("the world thread panicked: {}", panic_text(payload.as_ref())),
                     _ => "the world thread stopped".to_string(),
                 };
-                self.last.halted = Some(Halt { tick: self.last.ticks + 1, message: why, not_yet: false });
+                self.last.halted =
+                    Some(Halt { tick: self.last.ticks + 1, message: why, not_yet: false, partial_writes: true });
             }
         }
         self.last.clone()
@@ -336,24 +344,26 @@ fn serve(
         return;
     }
     while let Ok(Request::Tick(dt)) = requests.recv() {
-        if frame.halted.is_none() {
-            step(&mut world, &mut frame, dt);
-        }
+        step(&mut world, &mut frame, dt);
         if replies.send(frame.clone()).is_err() {
             return;
         }
     }
 }
 
-/// One tick and the read-back (module notes). The read-back runs after a failed tick too: the world advances its
-/// clock and writes the `WorldInfo` time fields before its actor pass, so they show how far the failed tick got.
+/// One tick and the read-back (module notes); on a halted frame, nothing: a halt is terminal. The read-back runs after
+/// a failed tick too: the world advances its clock and writes the `WorldInfo` time fields before its actor pass, so
+/// they show how far the failed tick got (its partial writes, kept as they are).
 fn step(world: &mut World, frame: &mut WorldFrame, dt: f32) {
+    if frame.halted.is_some() {
+        return;
+    }
     let tick = frame.ticks + 1;
     match world.tick(dt) {
         Ok(_) => frame.ticks = tick,
         Err(e) => {
             let not_yet = matches!(e, WorldError::Vm(VmError::NotYet(_)));
-            frame.halted = Some(Halt { tick, message: e.to_string(), not_yet });
+            frame.halted = Some(Halt { tick, message: e.to_string(), not_yet, partial_writes: true });
         }
     }
     type ReadBack = (Option<f32>, Option<f32>, (Vec<PawnActor>, Vec<String>));
@@ -373,7 +383,12 @@ fn step(world: &mut World, frame: &mut WorldFrame, dt: f32) {
             frame.unplaced = unplaced;
         }
         Err(e) if frame.halted.is_none() => {
-            frame.halted = Some(Halt { tick, message: format!("reading the world back: {e}"), not_yet: false });
+            frame.halted = Some(Halt {
+                tick,
+                message: format!("reading the world back: {e}"),
+                not_yet: false,
+                partial_writes: false,
+            });
         }
         Err(_) => {}
     }
@@ -717,9 +732,9 @@ pub enum Driver {
     /// The scan was not complete, so whether an op names it is not known.
     Unknown,
     /// Ops name it, and through the graph only a touch, a console command or nothing reaches any of them
-    /// ([`matinee::Start::NotAtLoad`]; lane H-MATINEE); `touch` when a touch reaches one. The startup paths outside the
-    /// graph are not ruled out, so this still answers `NotYet` ([`physics_rule`]).
-    NotStarted { touch: bool },
+    /// ([`matinee::Start::StartupUnknown`]; lane H-MATINEE); `touch` when a touch reaches one. The startup paths
+    /// outside the graph are not ruled out, so its start is not known and it answers `NotYet` ([`physics_rule`]).
+    StartupUnknown { touch: bool },
     /// The Kismet graph is incomplete (its reasons), so how the ops that name it start is not known.
     Incomplete(String),
     /// An op that names it starts from these level-load events ([`matinee::Start::AtLoad`]).
@@ -730,8 +745,7 @@ pub enum Driver {
 
 impl Driver {
     /// The driver of `actor` from the scan. Over the ops that name it: one that starts at load wins, then one started
-    /// from outside the graph, then one whose start was not worked out; ops that all start after the load leave it
-    /// still.
+    /// from outside the graph, then one whose start was not worked out, then ops whose start is unknown.
     pub fn of(bindings: &MatineeBindings, actor: ObjRef) -> Driver {
         if !bindings.complete() {
             return Driver::Unknown;
@@ -748,7 +762,7 @@ impl Driver {
                 Some(matinee::Start::Incomplete(why)) => return Driver::Incomplete(why.clone()),
                 Some(matinee::Start::AtLoad(e)) => load.extend(e.iter().cloned()),
                 Some(matinee::Start::Outside(e)) => outside.extend(e.iter().cloned()),
-                Some(matinee::Start::NotAtLoad { touch: t }) => touch |= *t,
+                Some(matinee::Start::StartupUnknown { touch: t }) => touch |= *t,
                 None => unknown = true,
             }
         }
@@ -764,7 +778,7 @@ impl Driver {
         } else if unknown {
             Driver::Bound
         } else {
-            Driver::NotStarted { touch }
+            Driver::StartupUnknown { touch }
         }
     }
 }
@@ -803,10 +817,11 @@ pub fn physics_rule(mode: &str, class: &str, driver: &Driver, parity: ParityMode
                 format!("the host's interpolating physics for an unbound {class} in Reference (the C++ has no host)"),
                 KISMET_RECORD,
             )),
-            Driver::NotStarted { touch } => Err(NotYet::not_read(
+            Driver::StartupUnknown { touch } => Err(NotYet::not_read(
                 format!(
-                    "whether a startup path outside the Kismet graph starts the Matinee op binding an interpolating \
-                     {class}: a script calling its SetPosition{}",
+                    "the startup of the Matinee op binding an interpolating {class}, which the Kismet graph does not \
+                     start at load: whether a startup path outside the graph starts it, a script calling its \
+                     SetPosition{}",
                     if *touch { ", or a touch from an actor spawned overlapping its trigger" } else { "" }
                 ),
                 KISMET_RECORD,
