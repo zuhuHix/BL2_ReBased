@@ -178,3 +178,24 @@ fn off_binds_the_native() {
     let key = x.vm.function(f).and_then(|d| d.native_key.clone()).unwrap();
     assert!(x.vm.has_native(&key));
 }
+
+/// Review r1 of #560, item 1: a stand-in with no slots, whose class has some, is the same unmarked refusal, not a heap
+/// error; nothing is written. The subclass's call finds the declaration on `ActionSkill`.
+#[test]
+fn a_slotless_stand_in_is_an_unloaded_receiver() {
+    let mut x = fx(ParityMode::Off);
+    let skill = x.skill;
+    let stand_in = x.vm.space.alloc_stand_in(skill, "ActionSkill_StandIn", Origin::Default { class: skill }).unwrap();
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, stand_in), "the store does not report it");
+    let before = format!("{:?}", x.vm.space.heap);
+    match provider_definition(&x.vm, stand_in) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead, "{n}");
+            assert_eq!(n.what, "GetBehaviorProviderDefinition: an unloaded receiver", "unmarked");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(format!("{:?}", x.vm.space.heap), before, "nothing written");
+    let lift = x.obj("WillowGame.LiftActionSkill", "Lift");
+    assert!(crate::action_skill::method_of(&mut x.vm, lift, "GetBehaviorProviderDefinition").unwrap().is_some());
+}

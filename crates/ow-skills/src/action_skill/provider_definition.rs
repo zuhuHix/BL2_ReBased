@@ -7,14 +7,15 @@
 //! **The rule** (note section 4): the answer is the receiver's own `BehaviorProviderDefinition` field, as stored, None
 //! included. No archetype lookup, no class default, no load: a reference read is not a load, and the event that
 //! receives the definition loads or refuses it when it reads it.
-//! - **UNVERIFIED (medium, fitted; the note's open question 1):** that the C++ interface method `ActionSkill`'s native
+//! - **UNVERIFIED (low: a fitted step; the note's open question 1):** that the C++ interface method `ActionSkill`'s native
 //!   reaches is the one that reads this field. The note ties it by a structural fit, not by name. The hub ruled to take
 //!   it, labelled, rather than refuse. It agrees with the consumer registration (the skill registering with the
 //!   archetype's definition) only if a spawned skill's field still names the archetype's subobject (open question 2).
 //! - A receiver whose class does not declare `BehaviorProviderDefinition` as an object reference is the port's data
 //!   error (`VmError::Script`, naming the field).
 //! - A receiver the definition store has not loaded is `NotYet { NotRead }`, "GetBehaviorProviderDefinition: an
-//!   unloaded receiver", unmarked: reading its field would need a load, and the rule loads nothing. The field is read
+//!   unloaded receiver", unmarked: reading its field would need a load, and the rule loads nothing. So is a stand-in
+//!   with no slots whose class has some (an import or resource stand-in the store does not report as unloaded). The field is read
 //!   straight from the heap, never through a loading read.
 //!
 //! The native writes nothing, draws nothing and loads nothing, so there is no preflight and no partial-write mark.
@@ -67,7 +68,13 @@ pub fn provider_definition(vm: &Vm, me: ObjRef) -> Result<Option<ObjRef>, VmErro
     if !matches!(vm.space.classes.decl(p).map(|d| &d.kind), Some(PropKind::Object { .. })) {
         return Err(script(format!("{path}.{FIELD} is not an object reference")));
     }
-    if vm.defs.is_unloaded(&vm.space, me) {
+    // An unloaded handle, or a stand-in with no slots although its class has some (an import or resource stand-in;
+    // the test `loaded_for_read` makes, review r1 of #560): reading the field would need a load.
+    let stand_in = {
+        let o = vm.space.heap.get(me)?;
+        o.slots.is_empty() && vm.space.classes.get_layout(o.class).is_some_and(|l| l.slot_count() > 0)
+    };
+    if vm.defs.is_unloaded(&vm.space, me) || stand_in {
         return Err(NotYet::not_read("GetBehaviorProviderDefinition: an unloaded receiver", RECORD).into());
     }
     match vm.space.read(me, PropAddr::scalar(p))? {
