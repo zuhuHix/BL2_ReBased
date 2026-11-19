@@ -259,8 +259,9 @@ pub fn register_offline_engine(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
     let Some(class) = vm.find_class_if_present(GAME_ENGINE)? else {
         return Ok(None);
     };
-    let engine = ow_vm::interp::instantiate_from_defaults(vm, class)?;
+    // The declaration is checked before the object is made, so a refusal leaves nothing on the heap (review r1 of #501).
     let prop = vm.space.prop(class, "OnlineSubsystem").ok_or_else(|| bad("GameEngine declares no OnlineSubsystem"))?;
+    let engine = ow_vm::interp::instantiate_from_defaults(vm, class)?;
     vm.space.write(engine, ow_object::ids::PropAddr::scalar(prop), Value::Object(None))?;
     vm.add_service(EngineObject(engine))?;
     Ok(Some(engine))

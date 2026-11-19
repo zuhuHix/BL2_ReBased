@@ -409,7 +409,14 @@ fn server_change_name_guards_the_resolved_change_name() {
 #[test]
 fn the_offline_engine_object_has_an_empty_online_subsystem_slot() {
     let mut t = toy(ParityMode::Off, true);
+    // A non-empty class default, so the test fails if the empty-slot write is dropped (review r1 of #501).
+    let defaults = t.vm.defs.class_default(&mut t.vm.space, GAME_ENGINE).unwrap();
+    let sub = t.make("OnlineSubsystemSteamworks.OnlineSubsystemSteamworks");
+    t.set(defaults, "OnlineSubsystem", Value::Object(Some(sub)));
     let engine = register_offline_engine(&mut t.vm).unwrap().expect("the toy declares Engine.GameEngine");
+    let class = t.vm.space.heap.get(engine).unwrap().class;
+    let slot = PropAddr::scalar(t.vm.space.prop(class, "OnlineSubsystem").unwrap());
+    assert_eq!(t.vm.space.read(engine, slot).unwrap(), &Value::Object(None), "the slot is written empty");
     assert_eq!(t.vm.service::<EngineObject>().unwrap().borrow().0, engine);
     let class = t.vm.space.heap.get(engine).unwrap().class;
     assert_eq!(t.vm.find_class(GAME_ENGINE).unwrap(), class, "a GameEngine");
