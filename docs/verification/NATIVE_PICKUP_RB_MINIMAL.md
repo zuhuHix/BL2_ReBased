@@ -5,9 +5,8 @@ pending). Analyst only: a different lane implements it (clean room).
 
 **Sources:**
 - the installed script, read with `research/script_disasm.py`;
-- the installed packages through `ow-package --def-dump` (`WillowPickup`'s class defaults) and
-  `tools/ghidra/class_layout.py` (field names and order), plus the value names of two engine enums read from
-  `Engine.upk`;
+- the installed packages: `WillowPickup`'s class defaults, `tools/ghidra/class_layout.py` for field names, types and
+  order, and the value names of two engine enums read from `Engine.upk`;
 - `Borderlands2.exe`, read locally with the project's Ghidra tooling (read-only queries, under the machine lock), plus
   a local read of the native's call arguments from the image.
 
@@ -17,188 +16,239 @@ listing structure. **Every rule here is UNVERIFIED** in the running game.
 
 **Builds on** NATIVE_ATTACH_MESH_TO_PICKUP.md part 2 (`research/rust-attach-mesh-to-pickup-2` f32d69b), sections 6.3
 and 6.6, and its implementation #520 (`fix/rust-attach-mesh-to-pickup-2`, `crates/ow-inventory/src/attach_mesh.rs`).
-"6.6 row n" points at that note's table.
+"6.6 row n" points at that note's table. Where this note and 6.6 differ, this note was read later and wins: the order
+of the guards (section 2) and the physics-asset test (section 2, step 4.4) are corrected here.
 
 **Why it matters.** Links 6 and 7 stop at `make`. With the pickup's class default `bUseRBPhysics` true, #520 refuses
-`NotYet { LayerAbsent }`, "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up" ("a rigid-body
-physics layer (the port has none)"). Their 7 driver steps (link 6: `make`, `touch`, `key`; link 7: `make`, `touch`,
-`look`, `key`) pass none. 6.6 ruled that the native's script-visible writes do not separate from the physics. This
-note re-opens that with what was unread there.
+with a `NotYet` of kind `LayerAbsent`: "WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body set-up"
+("a rigid-body physics layer (the port has none)"). Their 7 driver steps (link 6: `make`, `touch`, `key`; link 7:
+`make`, `touch`, `look`, `key`) pass none. 6.6 ruled that the native's script-visible writes do not separate from the
+physics. This note re-opens that with what was unread there.
 
-## 1. What changed since 6.6: the unread entries are the engine's own script-callable natives
+## 1. The entries 6.6 left unread are the engine's own script-callable natives
 
-6.6 left rows 4, 7, 8, 10, 12, 13, 14 and 15 partly unread, as "entries" of the component or the pickup. Each entry the
-native calls on the component was matched to the entry a **script-callable engine native** calls: that native's exec
-step reads its arguments and calls the same entry, nothing else. So each is the C++ side of a script native the game
-also exposes. With the arguments read from the image:
+6.6 left rows 1, 4, 7, 8, 10, 12, 13, 14, 15 and 16 partly unread, as "entries" of the component, the pickup, the
+inventory or the globals definition. Each was matched to the **script-callable native** whose exec step reads its
+arguments and calls the same entry, and nothing else. With the arguments read from the image:
 
 | 6.6 row | What the native does | The script native with the same entry | Argument |
 |---|---|---|---|
+| 1 | the sleep set-up | `WillowPickup.StartRigidBodyTimers` | none |
 | 4 | the component's block-rigid-body set | `PrimitiveComponent.SetBlockRigidBody` | true |
-| 7 | with a physics asset from the inventory: `PhysicsWeight` := 1.0, then the physics asset set, then the asset-instance flag set (section 2) | `SkeletalMeshComponent.SetPhysicsAsset`, `SetHasPhysicsAssetInstance` (by their fields, see below) | the inventory's asset, false; true, false |
+| 7 | the inventory's definition, for its physics asset | `WillowInventory.GetInventoryDefinition` | none |
+| 7 | with a physics asset: `PhysicsWeight` := 1.0, the asset set, the asset-instance flag set | `SkeletalMeshComponent.SetPhysicsAsset`, `SetHasPhysicsAssetInstance` (by the fields they write) | the asset, false; true, false |
+| 8 | without one: the pickup's own rigid-body set-up | `WillowPickup.InitializeRBPhysics` | none |
 | 10 | the component's rigid-body-collision notify set | `PrimitiveComponent.SetNotifyRigidBodyCollision` | true |
 | 12 | `RBChannel` := the channel, then the component's collision-filter update | `PrimitiveComponent.SetRBChannel` (the same two steps) | `RBCC_WillowPickup` |
-| 13 | nine channel bits, each followed by the same filter update | `PrimitiveComponent.SetRBCollidesWithChannel` (the same two steps) | see section 2 |
+| 13 | nine channel bits, each followed by the same filter update | `PrimitiveComponent.SetRBCollidesWithChannel` (the same two steps) | section 2, step 4.8 |
 | 14 | the body woken, then its position set | `PrimitiveComponent.WakeRigidBody`, `PrimitiveComponent.SetRBPosition` | no bone; the pickup's `Location`, no bone |
 | 15 | the actor's physics mode set | `Actor.SetPhysics` (the same entry, with the script's default extra arguments) | `PHYS_RigidBody` (10) |
+| 16 | the spin | `GlobalsDefinition.ApplySpinToPickup` (the same routine, on the globals definition) | the component |
 
-Row 7's two calls set fields that fit by name: `PhysicsAsset`, and the `bHasPhysicsAssetInstance` bit of the component's
-bool word, under the component shift #563 measured. Their bodies were read only far enough to see those fields and
-that the rest builds or tears down the physics instance. Row 8, the branch with no physics asset, is a pickup entry
-that was **not read**.
-
-**What the matching shows, and what it does not.** It does not read the entries' bodies. It shows that each one is the
-engine work behind a native the script can call itself, run with the arguments above. So the native's body is:
-field writes (6.6's rows 1, 2, 3, 5, 6, 9, 11, 17, 18 and the field halves of rows 7 and 12-13), a fixed sequence of
-script-level physics calls, three random draws, and a body impulse.
+**What the matching shows, and what it does not.** The bodies of the component and actor entries were not read. The
+matching shows that each is the engine work behind a native the script can call itself, run with the arguments above.
+`StartRigidBodyTimers`'s effect is 6.6 row 1. `GetInventoryDefinition` has its own note
+(NATIVE_INVENTORY_DEFINITION.md). `InitializeRBPhysics` was **not read**. `ApplySpinToPickup` was read (step 6).
 
 **The channel and mode names** come from the engine's own enums (`ERBCollisionChannel`, `EPhysics` in `Engine.upk`).
 Channel 24 is `RBCC_WillowPickup`, which supports the reading.
 
-## 2. Every script-visible write and read, in the native's order (question a)
+## 2. The native's sequence, in order (question a)
 
-All of it runs only when `bUseRBPhysics` is set (the class default is true; 6.3).
+The guards are: `bUseRBPhysics`, then whether there is a component, then the per-step conditions given below.
 
-1. **Sleep set-up** (6.6 row 1): `bForceRBToSleep` := false; timers `MaxRBAwakeTimer` (once, after `MaxRBAwakeTime`,
-   15 s by class default) and `CheckForRigidBodySleepState` (1.0 s, looping), both on the pickup.
+0. `bUseRBPhysics` clear: nothing at all (#520, unchanged). Otherwise, in order:
+1. **Sleep set-up** (`StartRigidBodyTimers`, 6.6 row 1): `bForceRBToSleep` := false. Timer `MaxRBAwakeTimer`, once,
+   after `MaxRBAwakeTime` (15 s by class default). Timer `CheckForRigidBodySleepState`, 1.0 s, looping. Both are on
+   the pickup.
 2. `RotationRate` := a global constant that sits in zero-initialised data. By fit it is zero (UNVERIFIED).
-3. **The component**, `CollisionComponent` (set to the dropped mesh by `WillowWeapon.AttachMeshToPickup`), when it is
-   a `PrimitiveComponent`. When it is not, steps 4 to 12 and 15 are skipped:
-   4. `Scale3D` := (1, 1, 1) (fitted, 6.6);
-   5. `BlockRigidBody` := true (row 4, through the script native's entry; the field name by that native, UNVERIFIED);
-   6. `CollideActors` raised. When it was clear, the deferred reattach runs (part 1, section 2): `bNeedsReattach` :=
-      true, and with an `Owner` a further owner update only when the owner is `bStatic` or `bTickIsDisabled` and not
-      `bDeleteMe` (this lane read the condition; the owner update itself is not read). `BlockActors` := false;
-   7. **with a physics asset** (row 7): the inventory names one through an entry of the inventory (not read), and it
-      must hold bodies. Then `PhysicsWeight` := 1.0, `PhysicsAsset` := it, and `bHasPhysicsAssetInstance` := true with
-      its physics instance. **Without one** (row 8): a pickup entry, not read;
-   8. from the globals definition: `MaxImpactEffectPlayCount` := `DropImpactEffectMax` (truncated),
-      `ImpactEffectDelay` := `DropImpactEffectDelay`, `ImpactVelocityAkRtpc` := `DropImpactEffectVelocityAkRtpc`.
-      Each pair fits exactly at the globals definition's computed layout;
-   9. `bNotifyRigidBodyCollision` := true (row 10, as step 5);
-   10. `ScriptRigidBodyCollisionThresholdCompiled` := `DropImpactEffectThreshold` × 0.25, truncated to a byte;
-   11. `RBChannel` := `RBCC_WillowPickup`. Then in `RBCollideWithChannels`: `RBCC_WillowPickup` and `RBCC_DeadPawn`
-       cleared; `RBCC_Default`, `RBCC_GameplayPhysics`, `RBCC_EffectPhysics`, `RBCC_TossedItems`,
-       `RBCC_TossedItemsPlayerVehicle`, `RBCC_TossedItemsEnemyVehicle` and `RBCC_TossedItemsPlayerVehicleEnemyVehicle`
-       set. Each bit is one shift-and-mask, as the script native's;
-   12. the body woken, and its position set to the pickup's `Location`. No script-visible field.
-13. **`Physics` := `PHYS_RigidBody`** (row 15). The port already binds `Actor.SetPhysics` as "write the `Physics` byte"
-    (`ow-combat` `hit.rs`). The engine's mode change does more physics work (6.6 row 15), not read.
-14. With the component:
-    - `bTorque` clear (the class default): **three draws from the engine's float random stream**. The first is in
-      `PickupSpinVMin`..`PickupSpinVMax`, the second in `PickupSpinHMin`..`PickupSpinHMax`, and the third picks a sign
-      (at most 0.5 is −1). They build a spin applied to the body as an impulse. The impulse acts only on a body that
-      exists and is awake (a body-instance step), so it writes nothing script-visible;
-    - `bTorque` set: `Torque` applied the same way, then `bTorque` := false when `bTorqueTemporary` is set.
-15. Timer `EnableRagdollCollision`, 0.3 s, once, on the pickup (6.6 row 18).
+3. **The component** C is `CollisionComponent` when that is a `PrimitiveComponent`, else none. `CollisionComponent` is
+   the dropped mesh `WillowWeapon.AttachMeshToPickup` set, or the class default `CollisionCylinder`.
+4. **Only with C:**
+   1. G := the globals definition (`WillowGlobals`' `GetGlobalsDefinition`), possibly none;
+   2. `Scale3D` := (1, 1, 1) (fitted, 6.6);
+   3. `BlockRigidBody` := true (`SetBlockRigidBody`; the field named by that native, UNVERIFIED);
+   4. `CollideActors`: when it is clear, it is set and **the deferred reattach** runs (part 1, section 2); when it is
+      already set, nothing. Then `BlockActors` := false. The deferred reattach:
+      - `bNeedsReattach` := true;
+      - when C has an owner, and that owner is `bStatic` or `bTickIsDisabled`, and the owner is not `bDeleteMe`: the
+        owner's component update (not read; two further object-flag tests on that path were not read either);
+      - when C has an owner and that does not hold: nothing more;
+      - when C has no owner: part 1's detach and reattach (not read), which part 1 found does nothing script-visible
+        when C's `Scene` is zero.
+   5. **The physics-asset test** (corrects 6.6, which said the asset must hold bodies). The asset branch is taken
+      when all three hold:
+      - C is a `SkeletalMeshComponent`;
+      - the pickup's `Inventory` is set, and its `GetInventoryDefinition()` answers a definition;
+      - that definition's `PhysicsAsset` (`WillowInventoryDefinition.PhysicsAsset`, fits exactly) is not None.
 
-**What links 6 and 7 read afterwards** (script, and the port's own steps):
-- `touch`, `DroppedPickup.Pickup.Touch`, then `ValidTouch`:
-  - the toucher's `bCanPickupInventory`, `DrivenVehicle` and `Controller`;
-  - **`Physics` only together with `Instigator` and `Velocity.Z`:** the touch is refused when `Physics` is
-    `PHYS_Falling`, the toucher is the `Instigator` and `Velocity.Z` > 0. The harness pickup has no toss velocity
-    (zero), so `Physics` cannot change this answer. In the game it is `PHYS_RigidBody` after the native, not
-    `PHYS_Falling`, so the condition is false there too;
-  - `TouchPickupTrace` from the toucher's `Location` to `GetTouchTraceLocation()`, which is the pickup's `Location`
-    raised by half its bounding cylinder's height;
-  - `GameInfo.PickupQuery`.
-- `look` (`ow_inventory::pickup_targeting`): the pickup's `Location` and `bPickupable`.
-- `key` (`PickupSomething`): the controller's current pickup choice.
+      There is no body count and no other test of the asset. **The asset branch:** `PhysicsWeight` := 1.0, then
+      `PhysicsAsset` := that asset, then `bHasPhysicsAssetInstance` := true, with the physics instance built.
+      **Otherwise:** `WillowPickup.InitializeRBPhysics()` (not read).
+   6. With G: `MaxImpactEffectPlayCount` (an int) := `DropImpactEffectMax` (a float), truncated toward zero;
+      `ImpactEffectDelay` := `DropImpactEffectDelay`; `ImpactVelocityAkRtpc` := `DropImpactEffectVelocityAkRtpc`.
+      Each pair fits at the computed layouts;
+   7. `bNotifyRigidBodyCollision` := true (`SetNotifyRigidBodyCollision`, as step 4.3). Then, with G:
+      `ScriptRigidBodyCollisionThresholdCompiled` (a byte) := `DropImpactEffectThreshold` × 0.25, truncated;
+   8. `RBChannel` := `RBCC_WillowPickup`. Then nine bit updates of `RBCollideWithChannels`, in this order:
+      `RBCC_WillowPickup` clear, `RBCC_DeadPawn` clear, then `RBCC_Default`, `RBCC_GameplayPhysics`,
+      `RBCC_EffectPhysics`, `RBCC_TossedItems`, `RBCC_TossedItemsPlayerVehicle`, `RBCC_TossedItemsEnemyVehicle` and
+      `RBCC_TossedItemsPlayerVehicleEnemyVehicle` set. Each one is a single shift-and-mask of its own bit, followed
+      by the filter update;
+   9. the body woken, and its position set to the pickup's `Location`. Nothing script-visible.
+5. **Always** (with or without C): `Physics` := `PHYS_RigidBody` (`SetPhysics`). The port already binds
+   `Actor.SetPhysics` as "write the `Physics` byte" (`ow-combat` `hit.rs`). The engine's mode change does more
+   physics work (6.6 row 15), which was not read.
+6. **Only with C:**
+   - `bTorque` clear (the class default): **only with G**, `ApplySpinToPickup(C)`. That is three draws from the
+     engine's **seeded** random generator (the linear-congruential one with the public UE3 seeded-random constants).
+     It is not the generator script `FRand` uses. The first draw is scaled into `PickupSpinVMin`..`PickupSpinVMax`
+     and the second into `PickupSpinHMin`..`PickupSpinHMax` (all `GlobalsDefinition` fields). The third picks a sign:
+     at most 0.5 is −1. The spin is then applied to C's body as an impulse, which writes nothing script-visible.
+     Without G: no draw;
+   - `bTorque` set: `Torque` is applied to C's body the same way, with no draw. Then `bTorque` := false when
+     `bTorqueTemporary` is set.
+7. **Always:** timer `EnableRagdollCollision`, 0.3 s, once, on the pickup.
 
-**None of those steps reads a field steps 1 to 15 write, except `Location`.** The native does not write `Location`:
-in the game the simulation moves the pickup afterwards, frame by frame. On the headless harness no frame runs between
-`make` and `touch`.
+**What links 6 and 7 observe of these writes.** Two lists are kept apart here. The first is which of the native's
+writes the drivers read. The second is what the game's simulation would change that the drivers read.
+
+- **Writes the drivers read:**
+  - **`Physics`** (step 5), read by `ValidTouch` in `touch`. It matters only together with the toucher being the
+    `Instigator` and a positive `Velocity.Z`, and only for `PHYS_Falling`. `PHYS_RigidBody` takes the same branch
+    as the class default `PHYS_None`, so this write does not change the touch's answer.
+  - **The timers** (steps 1 and 7) would be read only if time advanced. The harness advances no time between
+    `make` and `key`, so none of them fires.
+  - **None of step 4's component writes** is read by `touch` (the trace uses actor locations and the bounding
+    cylinder), by `look` or by `key`.
+- **What the drivers read that a simulation would change:** the pickup's `Location` (touch trace, look, key) and,
+  through `RotationRate` and the body, its `Rotation`. Link 7's targeting reads `Rotation` when the definition's
+  `PickupFlagOffset` is not zero. The native writes neither; in the game the simulation moves them on later frames,
+  and the harness runs none.
+- **What the drivers read that this native does not touch:** `bPickupable`, `LifeSpan`, `Inventory` (the
+  targeting's reads), and the decoy's `Inventory`, `bPickupable` and destroyed state, plus the gun's place in Maya's
+  inventory chain (the `taken` check).
 
 ## 3. Is a minimal own-code answer enough for the slice? (question b)
 
-**Yes, as an UNVERIFIED port answer: the pickup at rest at its spawn location, with no simulation.** Dropping it to the
-floor is not available: the headless pickup world has no collision (`slice_pickup.rs`: the spawn passes
-`bNoCollisionFail` because the world has none), so `ow-world`'s trace has nothing to hit there. At rest is also what
-the touch and the look already assume (the fixture places).
+**As a rule, yes** (hub ruling on #574, UNVERIFIED): the pickup at rest at its spawn location, with no simulation. A
+drop to the floor is not available, because the headless pickup world has no collision (`slice_pickup.rs` spawns with
+`bNoCollisionFail` for that reason).
 
-**The proposed Off answer, in the native's order** (replaces #520's `RB_PHYSICS` refusal). Before any write, a
-preflight checks every declaration below, the component's class, the globals definition, and the branch conditions:
-- `bUseRBPhysics` false: nothing (#520, unchanged).
-- Otherwise:
-  1. `bForceRBToSleep` := false. Set the two timers of step 1 on the port's timer service (`ow_world::timers`).
-  2. `RotationRate` := zero (UNVERIFIED, fitted).
-  3. With a `PrimitiveComponent` in `CollisionComponent`:
-     - `Scale3D` := (1, 1, 1); `BlockRigidBody` := true;
-     - `CollideActors` raised with the deferred reattach of part 1 (`bNeedsReattach` := true, the owner branch as read
-       in step 6 above). `BlockActors` := false;
-     - step 7 refuses (below);
-     - the three globals copies; `bNotifyRigidBodyCollision` := true; the threshold byte;
-     - `RBChannel` and the nine `RBCollideWithChannels` bits.
-  4. `Physics` := `PHYS_RigidBody` (10), the port's existing `SetPhysics` write.
-  5. `bTorque` clear: three draws on the port's game random stream (#518's `GameRng`, counted as draws). Their values
-     are discarded, since the impulse goes to a body the port does not have. `bTorque` set: `bTorque` := false when
-     `bTorqueTemporary` is set.
-  6. The `EnableRagdollCollision` timer, 0.3 s, once.
+**But on the slice it does not pass this native.** Every case with a component reaches step 4.5. There the asset
+branch is a missing layer, and the branch without an asset is unread. Both refuse (section 4). The slice's
+`CollisionComponent` is the dropped mesh, so links 6 and 7 meet one of those two refusals. Which one depends on the
+slice gun's data, which this lane did not read. Only a pickup with no `PrimitiveComponent` passes the whole native.
 
-**What the port leaves out, and why that is the "empty physics layer":** the collision-filter updates, the body wake
-and position, the mode change's physics work and the impulse. Each acts on a physics body or scene, and the port has
-neither. That is the same shape as the empty scene layer the hub ruled for `Actor.AttachComponent` (part 1, section
-5). **It is a hub ruling to make, not a read result:** the entries' bodies were matched, not read.
+**The Off answer, for the implementer** (it replaces #520's `RB_PHYSICS` refusal):
 
-**Labels:** `Scale3D`, `CollideActors`, `BlockActors`, `MaxImpactEffectPlayCount`, `ImpactEffectDelay`,
-`ImpactVelocityAkRtpc`, `ScriptRigidBodyCollisionThresholdCompiled` and `RBChannel` are fitted (6.6). `BlockRigidBody`
-and `bNotifyRigidBodyCollision` are named by the script natives that share their entries. `PhysicsWeight`,
-`PhysicsAsset` and `bHasPhysicsAssetInstance` are fitted with #563's component shift. All UNVERIFIED.
+**Preflight, write-free, before the first write.** It uses only loaded objects and reads nothing that would load.
+1. The declarations of every field below, on the pickup, C and G.
+2. G as the pickup world's set-up prepared it (`slice_pickup.rs` `globals_preflight`: the world's one `WillowGlobals`
+   and its definition). Without it, that preflight's own refusal stands. This answer depends on that preload.
+3. With C and `CollideActors` clear, the deferred reattach check: refusal 3 or 4 when it applies.
+4. With C, the step 4.5 test:
+   - C is not a `SkeletalMeshComponent`, or `Inventory` is None: refusal 2;
+   - otherwise `GetInventoryDefinition()` as NATIVE_INVENTORY_DEFINITION.md section 3 answers it. That is write-free,
+     and its refusals pass through;
+   - a None definition: refusal 2;
+   - a definition object that is not loaded: refusal 5;
+   - `PhysicsAsset` read as a handle, not followed and not loaded: not None is refusal 1, None is refusal 2.
 
-## 4. What still needs more than the minimal answer (question c)
+**Writes, in section 2's order, when the preflight passes** (only a pickup with no `PrimitiveComponent` gets here
+today):
+- steps 1, 2, 5 and 7: `bForceRBToSleep`, the two timers on the port's timer service (`ow_world::timers`),
+  `RotationRate`, `Physics`, and the `EnableRagdollCollision` timer;
+- with C, once refusals 1 and 2 are answered by later lanes: step 4's field writes. The channel bits may be one write
+  of `RBCollideWithChannels` that changes only the nine named bits and keeps all the others; the filter updates
+  between them have no script-visible effect;
+- step 6.
 
-Typed refusals, all raised in the preflight before any write:
-1. **Row 7, with a physics asset:** `NotYet { LayerAbsent("a rigid-body physics layer (the port has none)") }`, #520's
-   `RB_LAYER`, with the what "InitializePickupForRBPhysics: the pickup's physics asset instance". The writes `PhysicsAsset` and `bHasPhysicsAssetInstance`
-   stand for a built physics instance, and the inventory entry that names the asset was not read. A minimal answer
-   should not claim an instance it does not build.
-2. **Row 8, with no physics asset:** `NotYet { NotRead }`, "InitializePickupForRBPhysics: the pickup's set-up without a
-   physics asset".
-3. **The deferred reattach's owner update** (owner `bStatic` or `bTickIsDisabled`, not `bDeleteMe`): part 1's
-   `REATTACH_OWNER`, unchanged. The slice's pickup has both clear (class defaults), so its branch writes only the
-   flag.
-4. **The slice's own case decides which of 1 and 2 applies,** and it was not settled here: which object the inventory
-   entry returns for a weapon, and whether it holds bodies. So the next stop after #520's is refusal 1 or 2, by the
-   slice's data (section 5).
+**The random stream (a port choice for the hub, UNVERIFIED).** The three draws are on the engine's seeded generator.
+`GameRng` has no stream for it: its `ScriptStream::FRand` is script `FRand`, and the game's `FRand` is not advanced by
+this native. A draw on `FRand` or on any `CrtStream` would shift another rule's draws. #518's aggregate draw count
+would not catch that.
 
-**What would need real physics:** the pickup falling, tumbling and coming to rest; the sleep timers' effects;
-`EnableRagdollCollision`'s channel changes on a live body. None of them is read by links 6 and 7. **No physics crate
-is needed for the slice**, so no ATTENTION.
+The proposal: a new named stream for the engine's seeded generator, added after the existing ids so that no existing
+stream's seed moves. Until it exists, the implementer refuses step 6's spin as refusal 6 rather than draw on another
+stream. The draws come after the preflight, in step 6's order, and the `bTorque`-set path makes none.
+
+**What the port leaves out, and why it counts as the empty physics layer:** the filter updates, the body wake and
+position, the mode change's physics work and the impulses. Each acts on a physics body or scene, and the port has
+neither. This is the same shape as the empty scene layer the hub ruled for `Actor.AttachComponent` (part 1, section
+5). The entries were matched, not read, so this is the hub's ruling, not a read result.
+
+**Labels:**
+- Fitted (6.6): `Scale3D`, `CollideActors`, `BlockActors`, `MaxImpactEffectPlayCount`, `ImpactEffectDelay`,
+  `ImpactVelocityAkRtpc`, `ScriptRigidBodyCollisionThresholdCompiled` and `RBChannel`.
+- Named by the script natives that share their entries: `BlockRigidBody` and `bNotifyRigidBodyCollision`.
+- Fitted with #563's component shift: `PhysicsWeight`, `PhysicsAsset` and `bHasPhysicsAssetInstance`.
+- Fits exactly: `WillowInventoryDefinition.PhysicsAsset`.
+
+All are UNVERIFIED.
+
+## 4. Typed refusals, all raised in the preflight (question c)
+
+| # | When | Kind | Text | Record |
+|---|---|---|---|---|
+| 1 | the asset branch (step 4.5) | `LayerAbsent` | "InitializePickupForRBPhysics: the pickup's physics asset instance", layer "a rigid-body physics layer (the port has none)" (#520's `RB_LAYER`) | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
+| 2 | the branch without an asset (step 4.5) | `NotRead` | "WillowPickup.InitializeRBPhysics: the pickup's rigid-body set-up without a physics asset" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
+| 3 | `CollideActors` clear, C has an owner, the owner is `bStatic` or `bTickIsDisabled`, and the owner is not `bDeleteMe` | `NotRead` | "the deferred reattach: the owner's component update" (#520's `REATTACH_OWNER`) | `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md` |
+| 4 | `CollideActors` clear, C has no owner, and C's `Scene` is not zero | `NotRead` | "the deferred reattach: the component's detach and reattach" (#520's `REATTACH_SCENE`) | `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md` |
+| 5 | the inventory's definition is not a loaded object | `NotRead` | "InitializePickupForRBPhysics: the physics asset of an inventory definition that is not loaded" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
+| 6 | step 6's spin, until the port has the seeded stream | `NotPorted` | "GlobalsDefinition.ApplySpinToPickup: the engine's seeded random stream" | `docs/verification/NATIVE_PICKUP_RB_MINIMAL.md` |
+
+**This native has its own reattach check**, and it is narrower than #520's. #520's shared preflight refuses any C
+with an owner. Here, an owner that is neither `bStatic` nor `bTickIsDisabled`, or that is `bDeleteMe`, gets
+`bNeedsReattach` only, which this lane read. When the three conditions hold, refusal 3 is raised even though two
+object-flag tests on that path were not read. That is the conservative side. The ownerless case keeps part 1's rule:
+`Scene` zero is the flag only, and `Scene` not zero is refusal 4. On the slice C's owner is the pickup, which
+`AttachComponent` set. The pickup's class defaults clear `bStatic`, `bTickIsDisabled` and `bDeleteMe`, so the slice
+gets the flag only.
+
+**What would need real physics:** the pickup falling, tumbling and coming to rest, and the sleep timers' and
+`EnableRagdollCollision`'s effects on a live body. Links 6 and 7 read none of them. **No physics crate is needed for
+the slice**, so there is no ATTENTION.
 
 ## 5. The next stop (question d)
 
-**The probe** (local merge of origin/main d52bcc7 with #520 `fix/rust-attach-mesh-to-pickup-2` 4d0539b, never pushed):
-the native's refusal was replaced by a stand-in that writes nothing and returns, then `--slice-gate` ran under the
-machine lock.
+**The probe** was a local merge of origin/main d52bcc7 with #520 (`fix/rust-attach-mesh-to-pickup-2` 4d0539b), never
+pushed. The native's refusal was replaced by a stand-in that writes nothing and returns, then `--slice-gate` ran under
+the machine lock.
 
-**Result:** links 6 and 7 both stay `notyet` at `make`, with 0 of their 7 steps passing. The stop moves to #520's
-next native, `WillowPickup.SpawnPickupParticles` ("stopped after partial writes: ... the pickup's particle effect:
-needs a particle-effects layer (the port has none)"). That is #520's `PARTICLES_LAYER`, raised because the pickup's
-`PickupParticles` is set. The other twelve links read the same as on origin/main: 1, 3-5, 13 and 14 `error` at
-`GameEngine.GetOnlineSubsystem`; 8 `error` at `CacheWeaponCard`; 9-12 `notyet`; 2 `ok`.
+**Result of that stand-in:** links 6 and 7 both stay `notyet` at `make`, with 0 of their 7 steps passing. The stop
+moves to #520's next native, `WillowPickup.SpawnPickupParticles` ("stopped after partial writes: ... the pickup's
+particle effect: needs a particle-effects layer (the port has none)"). That is #520's `PARTICLES_LAYER`, raised
+because the pickup's `PickupParticles` is set. The other twelve links read the same as on origin/main: 1, 3-5, 13 and
+14 `error` at `GameEngine.GetOnlineSubsystem`; 8 `error` at `CacheWeaponCard`; 9-12 `notyet`; 2 `ok`.
 
-**So the next stop after this note's answer is `SpawnPickupParticles`, not this native's refusals 1 or 2.** The stand-in
-wrote nothing, so it did not reach section 4's asset branch. With the section 3 answer, the run reaches refusal 1 or 2
-first, by the slice's data. Only once one of those is answered does it reach `SpawnPickupParticles`. That native is
-the next analyst question for links 6 and 7: is its effect separable from a particle layer, as this native's writes
-are from physics?
+**The proposed implementation does not get that far.** The stand-in skipped step 4.5. The section 3 answer stops at
+`make` on refusal 1 or 2, by the slice gun's data. Only once that branch is answered does the run reach
+`SpawnPickupParticles`. Two reads then move links 6 and 7: `InitializeRBPhysics` (if the slice gun's definition has no
+physics asset), and `SpawnPickupParticles`.
 
 ## Open questions
 
-1. **Not read:** row 8 (the set-up without a physics asset), the inventory entry that names the physics asset, and
-   the deferred reattach's owner update.
+1. **Not read:** `WillowPickup.InitializeRBPhysics`; the deferred reattach's owner update and its two object-flag
+   tests; whether the slice gun's inventory definition holds a `PhysicsAsset` (it decides between refusals 1 and 2).
 2. **UNVERIFIED:** that the matched entries do nothing script-visible beyond their fields (section 1); that
    `RotationRate`'s constant is zero.
-3. **UNVERIFIED:** that the slice's steps read nothing the simulation would change before the touch, beyond
-   `Location`.
+3. **A hub choice:** the seeded random stream (section 3).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
-1. Hook `WillowPickup.InitializePickupForRBPhysics` on a weapon drop. Record, before and after: `Physics`,
-   `RotationRate`, `bForceRBToSleep`, `bTorque`, `MaxImpactEffectPlayCount`, `ImpactEffectDelay`,
-   `ImpactVelocityAkRtpc`, and the pickup's timers. On the mesh: `Scale3D`, `CollideActors`, `BlockActors`,
-   `BlockRigidBody`, `bNotifyRigidBodyCollision`, `ScriptRigidBodyCollisionThresholdCompiled`, `RBChannel`,
-   `RBCollideWithChannels`, `PhysicsAsset`, `PhysicsWeight`, `bHasPhysicsAssetInstance`. Expect section 2's values.
-2. Call `FRand` before and after the native on a drop with `bTorque` clear, against a seeded expectation: it should be
-   three draws on.
-3. Read the inventory's physics asset for a dropped weapon (the entry in step 7), to settle section 4 point 4.
+1. Hook `WillowPickup.InitializePickupForRBPhysics` on a weapon drop. Record, before and after, on the pickup:
+   `Physics`, `RotationRate`, `bForceRBToSleep`, `bTorque`, `MaxImpactEffectPlayCount`, `ImpactEffectDelay`,
+   `ImpactVelocityAkRtpc` and its timers. On the mesh: `Scale3D`, `CollideActors`, `BlockActors`, `BlockRigidBody`,
+   `bNotifyRigidBodyCollision`, `ScriptRigidBodyCollisionThresholdCompiled`, `RBChannel`, `RBCollideWithChannels`,
+   `PhysicsAsset`, `PhysicsWeight`, `bHasPhysicsAssetInstance` and `bNeedsReattach`. Expect section 2's values.
+2. The component guard: call the native on a pickup whose `CollisionComponent` is not a `PrimitiveComponent`, or is
+   None. Expect only steps 1, 2, 5 and 7 (`Physics`, `RotationRate`, `bForceRBToSleep`, the timers).
+3. The asset test: read the dropped gun's `Inventory.GetInventoryDefinition().PhysicsAsset`, and whether
+   `InitializeRBPhysics` runs (hook it) when that is None.
+4. The reattach: on a mesh with `CollideActors` clear, the four owner cases (none; set with `bStatic`; set with
+   `bTickIsDisabled`; set with neither), and `bDeleteMe` set on the owner. Record `bNeedsReattach` and the
+   component's attachment.
+5. The random stream: call `FRand` before and after the native, against a seeded expectation. Expect it not advanced
+   by the native. Then repeat with `bTorque` and `bTorqueTemporary` set on the pickup before the call. Expect no spin
+   draw, `bTorque` cleared after, and the applied spin equal to `Torque`.
