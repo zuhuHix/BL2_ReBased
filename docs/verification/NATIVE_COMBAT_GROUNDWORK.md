@@ -252,8 +252,9 @@ ignored `local/analysis/`). Fields are named by `tools/ghidra/class_layout.py`. 
      no definition nothing is spawned.
    - **Passive skills**: the grade is the pawn's `GetExpLevel()` for a `WillowAIPawn` (native), else 1. For each entry of
      the class's `PassiveSkills` whose `SkillType` is `Passive` (0), `GetSkillManager()` on the world's `WillowGameInfo`
-     (native; its own analyst note is lane FIX-SKILLMGR-A's, decision 2026-11-19-11) runs `ActivateSkill(Self, skill, ,
-     grade, )` (script `SkillEffectManager.ActivateSkill`). A class with no passive skills never calls `GetSkillManager`.
+     (native; its own analyst note is lane FIX-SKILLMGR-A's, decision 2026-11-19-11) calls the script
+     `SkillEffectManager.ActivateSkill` with the mind as instigator, the skill and the grade; the other arguments are
+     left at their defaults. A class with no passive skills never calls `GetSkillManager`.
    - For a `WillowPawn`: the pawn's **`ApplyAttributeStartingValues`** (script, `WillowPawn`; where the AI class's starting
      values, such as the health multiplier, reach the pawn and its mind), then the mind's
      `RecalculateAttributeInitializedState` (native, not read here).
