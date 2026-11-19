@@ -103,4 +103,19 @@ AI-assisted (Claude Code). Lane IMPL-PICKUP, implementer (slice links 6 and 7). 
     - installed `--slice-gate`, strict, under the machine lock: 0 / 12 / 2. Links 6 and 7 are `error` at `make` with
       the unbound `WillowInventory.GetInventoryDefinition()`, now from the preflight, before any write. Only row 6's
       scope text changed from r1.
+- **Review r3 of #452** (the last round; commits on top).
+  - **Typed fixture preparation.** `equip_run`'s preparation chain keeps `VmError`s (`prepare_line_typed`,
+    `prepare_unowned_typed`); the String forms are wrappers for `--equip-run`. The first successful mutation (the
+    gun's creation) sets a flag, and from there `make` marks a `NotYet` as "stopped after partial writes", kind and
+    record kept. That covers one from the accuracy pool's setup, after the gun and its owner exist. Before r3,
+    `prepare_line` flattened it to text and it lost both the mark and its kind.
+  - **Typed grading.** The gate grades the driver's errors by variant (`slice_gate::classify_error`), not by their
+    text. A new test drives a real `NotYet` through `make`'s fixture building (`build`, with a preparation that
+    really writes) and that grading, once after a mutation and once before one.
+  - **Preflight.** It now propagates a failed lookup of `WillowInventory.GetInventoryDefinition` and requires it to
+    be declared native and bound.
+  - **Decoy evidence.** The decoy must also read as still enabled for pickup (`bPickupable`).
+  - **Gates after r3:** `ow-cli` 92 / 0 / 1 and 2 / 0 / 0; `check_slice_run_off_test.py` OK. Installed `--slice-gate`,
+    strict, under the machine lock: 0 / 12 / 2, links 6 and 7 unchanged (`error` at `make`, the unbound
+    `WillowInventory.GetInventoryDefinition()`).
 

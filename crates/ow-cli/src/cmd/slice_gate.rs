@@ -460,6 +460,21 @@ pub fn classify(step: &str, text: &str) -> (Outcome, Stop) {
     (Outcome::Error, stop)
 }
 
+/// A driver's typed error as a graded stop (lane IMPL-PICKUP, review r3 of #452): a `NotYet` by its variant, with its
+/// own text and record; an unbound native naming its key; anything else an error with its text.
+pub fn classify_error(step: &str, e: &ow_vm::error::VmError) -> (Outcome, Stop) {
+    use ow_vm::error::VmError;
+    let text = ow_combat::hit::access::error_text(e);
+    match e {
+        VmError::NotYet(n) => (Outcome::NotYet, stop_of_not_yet(step, n)),
+        VmError::UnboundNative(key) => (
+            Outcome::Error,
+            Stop { step: step.to_string(), native: key.clone(), text, ..Stop::default() },
+        ),
+        _ => (Outcome::Error, Stop { step: step.to_string(), text, ..Stop::default() }),
+    }
+}
+
 /// A typed `NotYet` as a stop.
 fn stop_of_not_yet(step: &str, n: &NotYet) -> Stop {
     Stop {
@@ -847,6 +862,17 @@ pub const EQUIP_WEAPON: &str = "GD_Weap_AssaultRifle.A_Weapons.WT_Bandit_Assault
 
 /// Records one step's error text on `r` as the other drivers do: strict grading or a `NotYet` stops the link (true),
 /// past-errors grading notes the line and goes on (false).
+/// [`step_error`] for a typed error, graded by [`classify_error`].
+fn step_error_typed(r: &mut Ran, step: &str, e: &ow_vm::error::VmError, grading: Grading) -> bool {
+    let (outcome, stop) = classify_error(step, e);
+    if grading == Grading::Strict || outcome == Outcome::NotYet {
+        r.stop = Some((outcome, stop));
+        return true;
+    }
+    r.error_lines.push((step.to_string(), ow_combat::hit::access::error_text(e)));
+    false
+}
+
 fn step_error(r: &mut Ran, step: &str, text: &str, grading: Grading) -> bool {
     let (outcome, stop) = classify(step, text);
     if grading == Grading::Strict || outcome == Outcome::NotYet {
@@ -1039,7 +1065,7 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     let p = match crate::cmd::slice_pickup::make(vm, EQUIP_WEAPON, driver == Driver::AimedPickup) {
         Ok(p) => p,
         Err(e) => {
-            r.stop = Some(classify("make", &ow_combat::hit::access::error_text(&e)));
+            r.stop = Some(classify_error("make", &e));
             ran[i] = Some(r);
             return;
         }
@@ -1047,7 +1073,7 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());
         if let Some(e) = crate::cmd::slice_pickup::step(vm, step, &p)
-            && step_error(&mut r, step, &ow_combat::hit::access::error_text(&e), grading)
+            && step_error_typed(&mut r, step, &e, grading)
         {
             break;
         }

@@ -163,13 +163,41 @@ fn only_a_not_yet_after_a_write_is_marked() {
     }
     let ordinary = after_writes(VmError::Script { function: "f".into(), message: "an ordinary error".into() });
     assert!(matches!(&ordinary, VmError::Script { message, .. } if message == "an ordinary error"), "{ordinary}");
-    // Through a step: a written run's late NotYet (the look of a run whose decoy is touched) and an ordinary error.
+    // Through a step: an ordinary error of a written run passes unchanged.
     let mut x = fx();
     let (a, b) = (x.pickup(), x.pickup());
     let written = Pickup { weapon: a, pawn: a, controller: a, pickup: a, decoy: Some((b, b)), wrote: true };
     let e = step(&mut x.vm, "no-such-step", &written).unwrap();
     assert!(matches!(&e, VmError::Script { message, .. } if !message.contains(PARTIAL_WRITES)), "{e}");
-    let unwritten = Pickup { wrote: false, ..written };
-    let e = step(&mut x.vm, "look", &unwritten).unwrap();
-    assert!(!e.to_string().contains(PARTIAL_WRITES), "{e}");
+}
+
+/// A real `NotYet` driven through `make`'s fixture building and the gate's typed grading (review r3 of #452): once the
+/// fixture preparation's first mutation succeeded (here a real write to a toy object), its `NotYet` is graded as a
+/// not-yet whose text starts "stopped after partial writes", kind and record kept; one raised before any mutation is
+/// graded as it is.
+#[test]
+fn a_not_yet_after_the_first_mutation_is_graded_as_partial_writes() {
+    let mut x = fx();
+    let class = x.vm.find_class("Engine.ToyPickup").unwrap();
+    let target = x.pickup();
+    for mutate in [true, false] {
+        let mut prepare = |vm: &mut Vm, _: &str, _: bool, wrote: &mut bool| -> Result<ObjRef, VmError> {
+            if mutate {
+                let c = vm.space.heap.get(target)?.class;
+                let p = vm.space.prop(c, "bTouchedGlobal").unwrap();
+                vm.space.write(target, PropAddr::scalar(p), Value::Bool(true))?;
+                *wrote = true;
+            }
+            Err(NotYet::not_read("the accuracy pool's setup", "NOTE.md").into())
+        };
+        let e = build(&mut x.vm, class, "a line", false, &mut prepare).unwrap_err();
+        let (outcome, stop) = crate::cmd::slice_gate::classify_error("make", &e);
+        assert_eq!(outcome, crate::cmd::slice_gate::Outcome::NotYet, "graded by variant");
+        assert_eq!(stop.record, "NOTE.md");
+        assert_eq!(stop.text.contains(PARTIAL_WRITES), mutate, "{}", stop.text);
+        match e {
+            VmError::NotYet(n) => assert_eq!(n.missing, Missing::NotRead),
+            e => panic!("{e}"),
+        }
+    }
 }

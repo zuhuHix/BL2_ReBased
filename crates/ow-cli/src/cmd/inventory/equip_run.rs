@@ -43,6 +43,7 @@ use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_vm::api::Vm;
+use ow_vm::error::VmError;
 use ow_vm::interp::instantiate_from_defaults;
 
 use super::{DiffRequest, diff_request, find_object, set_field, vm_text};
@@ -192,17 +193,6 @@ struct EquipRun {
     after_unequip: usize,
 }
 
-fn write(vm: &mut Vm, object: ObjRef, name: &str, v: Value) -> Result<(), String> {
-    let class = vm.space.heap.get(object).map_err(|e| error_text(&e))?.class;
-    let p = vm
-        .space
-        .prop(class, name)
-        .ok_or_else(|| format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, object)))?;
-    vm.space
-        .write(object, PropAddr::scalar(p), v)
-        .map_err(|e| error_text(&e))
-}
-
 fn make(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
     let c = vm.find_class(class).map_err(|e| vm_text(&e))?;
     instantiate_from_defaults(vm, c).map_err(|e| vm_text(&e))
@@ -226,28 +216,45 @@ fn phase(vm: &mut Vm, path: &str, weapon: ObjRef, args: Vec<Value>) -> Option<St
 
 /// The controller's accuracy pool (module documentation): `CreatePool(Mgr, controller, ACCURACY_POOL, true)`, the
 /// manager written to `ResourcePoolManager` and the reference to `AccuracyPool`.
-fn accuracy_pool(vm: &mut Vm, controller: ObjRef) -> Result<(), String> {
-    let def = find_object(vm, ACCURACY_POOL)?;
-    let f = vm.find_function(CREATE_POOL).map_err(|e| vm_text(&e))?;
-    let made = vm
-        .call(
-            f,
-            None,
-            vec![
-                Value::Object(None),
-                Value::Object(Some(controller)),
-                Value::Object(Some(def)),
-                Value::Bool(true),
-            ],
-        )
-        .map_err(|e| format!("the accuracy pool: {}", vm_text(&e)))?;
-    let manager = made.outs.first().cloned().ok_or("the accuracy pool: CreatePool gave no manager")?;
-    write(vm, controller, "ResourcePoolManager", manager)?;
-    write(vm, controller, "AccuracyPool", made.ret)
+fn accuracy_pool(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
+    let def = find_object(vm, ACCURACY_POOL).map_err(script)?;
+    let f = vm.find_function(CREATE_POOL)?;
+    let made = vm.call(
+        f,
+        None,
+        vec![
+            Value::Object(None),
+            Value::Object(Some(controller)),
+            Value::Object(Some(def)),
+            Value::Bool(true),
+        ],
+    )?;
+    let manager = made.outs.first().cloned().ok_or_else(|| script("the accuracy pool: CreatePool gave no manager".into()))?;
+    write_t(vm, controller, "ResourcePoolManager", manager)?;
+    write_t(vm, controller, "AccuracyPool", made.ret)
+}
+
+/// A preparation error that is not the VM's own, as a script error of the run.
+fn script(message: String) -> VmError {
+    VmError::Script { function: "equip-run".into(), message }
+}
+
+fn write_t(vm: &mut Vm, object: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
+    let class = vm.space.heap.get(object)?.class;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| script(format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, object))))?;
+    Ok(vm.space.write(object, PropAddr::scalar(p), v)?)
+}
+
+fn make_t(vm: &mut Vm, class: &str) -> Result<ObjRef, VmError> {
+    let c = vm.find_class(class)?;
+    instantiate_from_defaults(vm, c)
 }
 
 fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
-    let weapon = prepare(vm, r)?;
+    let weapon = prepare(vm, r, &mut false).map_err(|e| vm_text(&e))?;
     let init = run_phase(vm, "init", weapon);
     let bases = run_phase(vm, "bases", weapon);
     let equip = run_phase(vm, "equip", weapon);
@@ -264,8 +271,14 @@ fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
 /// One weapon of a weapons-file line, as the run makes it: the weapon, its owner and the owner's accuracy pool (module
 /// documentation). Shared with `--slice-gate`'s link 8 (lane SLICE-GATE-DRIVERS).
 pub(crate) fn prepare_line(vm: &mut Vm, line: &str) -> Result<ObjRef, String> {
-    let r = diff_request(line)?;
-    prepare(vm, &r)
+    prepare_line_typed(vm, line, &mut false).map_err(|e| vm_text(&e))
+}
+
+/// [`prepare_line`] with its `VmError` kept, and `wrote` set once its first mutation succeeded (the weapon's creation;
+/// lane IMPL-PICKUP, review r3 of #452).
+pub(crate) fn prepare_line_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
+    let r = diff_request(line).map_err(script)?;
+    prepare(vm, &r, wrote)
 }
 
 /// Phase `name` of [`PHASES`] on `weapon`: its error text, if any; an unknown name is an error text.
@@ -289,43 +302,45 @@ pub(crate) fn gate_world(cooked: &Path) -> Result<ow_world::world::World, String
     run_world(cooked, ParityMode::Off)
 }
 
-/// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP).
-pub(crate) fn prepare_unowned(vm: &mut Vm, line: &str) -> Result<ObjRef, String> {
-    let r = diff_request(line)?;
-    weapon_of(vm, &r)
+/// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as
+/// [`prepare_line_typed`].
+pub(crate) fn prepare_unowned_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
+    let r = diff_request(line).map_err(script)?;
+    weapon_of(vm, &r, wrote)
 }
 
-fn prepare(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
-    let weapon = weapon_of(vm, r)?;
-    let pawn = make(vm, PAWN)?;
-    let controller = make(vm, CONTROLLER)?;
-    let manager = make(vm, MANAGER)?;
-    write(vm, pawn, "Controller", Value::Object(Some(controller)))?;
-    write(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
-    write(vm, pawn, "InvManager", Value::Object(Some(manager)))?;
-    write(vm, manager, "Owner", Value::Object(Some(pawn)))?;
-    write(vm, weapon, "Instigator", Value::Object(Some(pawn)))?;
-    write(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
+fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmError> {
+    let weapon = weapon_of(vm, r, wrote)?;
+    let pawn = make_t(vm, PAWN)?;
+    let controller = make_t(vm, CONTROLLER)?;
+    let manager = make_t(vm, MANAGER)?;
+    write_t(vm, pawn, "Controller", Value::Object(Some(controller)))?;
+    write_t(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+    write_t(vm, pawn, "InvManager", Value::Object(Some(manager)))?;
+    write_t(vm, manager, "Owner", Value::Object(Some(pawn)))?;
+    write_t(vm, weapon, "Instigator", Value::Object(Some(pawn)))?;
+    write_t(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
     accuracy_pool(vm, controller)?;
     Ok(weapon)
 }
 
-/// The weapon of a request, its definition data and level set, with no owner.
-fn weapon_of(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
-    let weapon = make(vm, WEAPON)?;
-    let weapon_type = find_object(vm, &r.weapon_type)?;
-    let balance = find_object(vm, &r.balance)?;
+/// The weapon of a request, its definition data and level set, with no owner. `wrote` is set once the weapon exists.
+fn weapon_of(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmError> {
+    let weapon = make_t(vm, WEAPON)?;
+    *wrote = true;
+    let weapon_type = find_object(vm, &r.weapon_type).map_err(script)?;
+    let balance = find_object(vm, &r.balance).map_err(script)?;
     let mut data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
-        .ok_or("the weapon has no DefinitionData")?;
-    set_field(vm, &mut data, "WeaponTypeDefinition", Value::Object(Some(weapon_type)))?;
-    set_field(vm, &mut data, "BalanceDefinition", Value::Object(Some(balance)))?;
-    set_field(vm, &mut data, "GameStage", Value::Int(r.level))?;
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    set_field(vm, &mut data, "WeaponTypeDefinition", Value::Object(Some(weapon_type))).map_err(script)?;
+    set_field(vm, &mut data, "BalanceDefinition", Value::Object(Some(balance))).map_err(script)?;
+    set_field(vm, &mut data, "GameStage", Value::Int(r.level)).map_err(script)?;
     for (field, part) in &r.parts {
-        let o = find_object(vm, part)?;
-        set_field(vm, &mut data, field, Value::Object(Some(o)))?;
+        let o = find_object(vm, part).map_err(script)?;
+        set_field(vm, &mut data, field, Value::Object(Some(o))).map_err(script)?;
     }
-    write(vm, weapon, "DefinitionData", data)?;
-    write(vm, weapon, "ExpLevel", Value::Int(r.level))?;
+    write_t(vm, weapon, "DefinitionData", data)?;
+    write_t(vm, weapon, "ExpLevel", Value::Int(r.level))?;
     Ok(weapon)
 }
 
