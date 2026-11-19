@@ -185,12 +185,12 @@ fn willow_opinion(vm: &mut Vm, me: ObjRef, other: Option<ObjRef>) -> Result<u8, 
         if parent == Some(other) {
             return Ok(FRIENDLY);
         }
-        if parent.is_none() && is_a(vm, other, WILLOW_PAWN)? {
-            if let Some(their_parent) = object_field(vm, other, "CharmedParent", WHAT)?
-                && opinion_of(vm, their_parent, Some(me))? == FRIENDLY
-            {
-                return Ok(ENEMY);
-            }
+        if parent.is_none()
+            && is_a(vm, other, WILLOW_PAWN)?
+            && let Some(their_parent) = object_field(vm, other, "CharmedParent", WHAT)?
+            && opinion_of(vm, their_parent, Some(me))? == FRIENDLY
+        {
+            return Ok(ENEMY);
         }
     }
     generic_opinion(vm, me, other)
