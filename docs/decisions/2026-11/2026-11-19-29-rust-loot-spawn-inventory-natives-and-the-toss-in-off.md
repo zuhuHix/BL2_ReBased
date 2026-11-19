@@ -13,9 +13,10 @@ which has to land first.
     in-range values 999, past the last entry 0.
   - `GetManufacturer`: `DefinitionData.ManufacturerDefinition`.
 - **The generator.** The two ID draws come from `CrtStream::LootPool`, the stream the Off loot path already shares
-  (ow-inventory's pool pick and ow-combat's `OFF_STREAM`). The note's order (the pool's picks, then per inventory the
-  two ID draws inside the pick loop, then the toss) therefore stays on one stream. The game's own sequence is not
-  reproduced (decision D5), UNVERIFIED.
+  (ow-inventory's pool pick and ow-combat's `OFF_STREAM`), so the note's order stays on one stream. That order is per
+  pool (as the review of #408 settled it): the pool's roll, with each new inventory's two ID draws and its parts roll
+  inside the pick loop; then that pool's toss draws for its dropped items; then the next pool. The game's own
+  sequence is not reproduced (decision D5), UNVERIFIED.
 - **A choice where the note is silent (UNVERIFIED).** "The inventory definition" is read as the one definition the
   inventory's `DefinitionData` holds: `WeaponTypeDefinition` or `ItemDefinition`.
 - **`NotYet { NotRead }`, each naming its question.**
@@ -32,7 +33,9 @@ which has to land first.
   - with no target, the AI pawn takes the `WillowPawn` rule.
 
   The settled arithmetic (the random direction, three draws a try; the 200 / 50 / 150 terms; the cap at 400) is a
-  tested function, `base_toss`, ready for the lane that answers question 3. It is not wired to the native.
+  tested function, `base_toss`, ready for the lane that answers question 3. It is not wired to the native. Which draw
+  goes to which axis is not stated in the note yet (review of #408); the function's X, Y, Z order is UNVERIFIED.
+  Its sines, cosines and square roots go through `ow_core::num` (rule N3).
 - **`GetGameStageForSpawnedInventory` is unchanged.** It stays the existing plain field read in both modes
   (NATIVE_LOOT.md). The new note reads the same rule ("a plain read of the pawn's `GameStageForSpawnedInventory`")
   and lists no open question for it; its field identification is UNVERIFIED, as before. The hub brief named it
