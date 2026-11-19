@@ -6,20 +6,29 @@ because the maintainer is away, so this closes NATIVE_AI_HOLDS.md's open row "Ho
 Ghidra read-only under the machine lock. Raw output stays under ignored `local/analysis/`. The outcome is the own-words
 note `docs/verification/NATIVE_PAWN_AI_INTERFACE.md`. No code changes; a fresh implementer codes it from the note.
 
-- **The rule.** `Behavior_AIHold` asks its context with `Object.QueryInterface(IAIInterface)`. A pawn answers by
-  `Pawn`'s rule, which no pawn class below it changes for this interface:
+- **The rule** (the note's section 2, which the other records point at). `Behavior_AIHold` asks its context with
+  `Object.QueryInterface`, naming `IAIInterface`. A pawn answers by `Pawn`'s rule, which no pawn class below it
+  changes for this interface:
   1. its own class's declared interfaces;
-  2. else its `Controller`, or, with none, the controller of the vehicle it drives;
+  2. else its `Controller`. Only when it has no `Controller`, the controller of a vehicle it drives. A controller that
+     declines does not lead to the vehicle;
   3. else its `Mesh`;
   4. else none.
 
-  `WillowAIPawn` adds one extra answer, for `IPlayerMaster` only, after that rule.
-- **For the Fire dummy** (link 11): the pawn's class lists no `IAIInterface`, so its controller, the mind, answers,
-  and the hold goes to that mind's `GetAIComponent()` with the pawn as the tag. With no controller (and no driven
-  vehicle), the hold does nothing.
-- **The port's assumption** (`ow-combat`'s `ai_interface_for`, Reference only): confirmed that the mind answers for a
-  possessed AI pawn. It differs in three ways: the rule goes through `Controller`, not `MyWillowMind`; with no
-  controller it answers none, not the pawn; and the pawn's own class comes first.
-- **Not read:** `GearboxMind`'s own answer, `WillowPlayerController`'s answer for `IAIInterface`, a skeletal mesh
-  component's answer, and whether `Controller` and `MyWillowMind` can differ on a possessed AI pawn.
+  A question that comes back to an object already answering gets none at once, and the asker goes on to its next
+  step (so a pawn whose controller asks back goes on to its `Mesh`). `WillowAIPawn` adds one extra answer, for
+  `IPlayerMaster` only, after that rule.
+- **For the Fire dummy** (link 11), expectations, UNVERIFIED. The pawn's class lists no `IAIInterface`. Its
+  controller, expected to be the mind, is expected to answer, and the mind's AI component then receives a demigod
+  hold named `Safe` with the pawn as its tag. COMBAT_GOLDEN_TRACE.md records the demigod flip inside that behavior's
+  call, but not its context object. With no controller and no driven vehicle, the `Mesh` is asked; its answer is not
+  read, and if it declines, nothing is held.
+- **The port's assumption** (`ow-combat`'s `ai_interface_for`, Reference only): it agrees that the mind answers for a
+  possessed AI pawn. It differs in four ways: the rule goes through `Controller`, not `MyWillowMind`; the pawn's own
+  class comes first; a declining controller leads to the `Mesh`; and with no controller the order is a driven
+  vehicle's controller, then the `Mesh`, then none, where the stand-in returns the pawn.
+- **Open, each UNVERIFIED** (the note's "Open"): `GearboxMind`'s own answer, `WillowPlayerController`'s answer, a
+  skeletal mesh component's answer, whether `Controller` and `MyWillowMind` can differ, what `Controller` holds on a
+  dead or unpossessed pawn, and the `PlayerMaster` field identification. The note's bl-sdk section has a check for
+  each branch.
 - **UNVERIFIED.** Everything above. The note's last section lists the bl-sdk reads that would confirm it.
