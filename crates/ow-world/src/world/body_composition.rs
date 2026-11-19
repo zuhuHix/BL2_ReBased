@@ -78,6 +78,33 @@ pub fn other_target(class: &str) -> String {
 /// A component under a switch base that would be made: its parent is not read. This lane's addition.
 pub const SWITCHED_PARENT: &str = "InitializeBodyComposition: the parent of a component made under a switch";
 
+/// The parts the hub holds for the revised note (heads-up of 2026-11-19, #529's review): typed refusals in the
+/// preflight until it lands. Production refuses them; the tests can let them through on their own thread to cover the
+/// walk and the writes ([`allow_pending_for_tests`]).
+pub const ENTRY_COPY: &str = "InitializeBodyComposition: the entry's field copy rules (pending the revised note)";
+pub const ATTACH_RETRY: &str = "InitializeBodyComposition: the attach's retry on the owner (pending the revised note)";
+pub const DESTINATION: &str =
+    "InitializeBodyComposition: a state destination other than the pawn wrapper's (pending the revised note)";
+
+/// `"InitializeBodyComposition: the switch packing edge case (<which>) (pending the revised note)"`.
+pub fn packing_edge(which: &str) -> String {
+    format!("InitializeBodyComposition: the switch packing edge case ({which}) (pending the revised note)")
+}
+
+thread_local! {
+    static PENDING_ALLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn pending_allowed() -> bool {
+    PENDING_ALLOWED.with(std::cell::Cell::get)
+}
+
+/// For the tests only: let the pending parts through on this thread, to cover the walk and the writes.
+#[cfg(test)]
+pub(crate) fn allow_pending_for_tests(on: bool) {
+    PENDING_ALLOWED.with(|c| c.set(on));
+}
+
 /// An instance-data type outside the note's list. This lane's addition.
 pub fn unknown_type(n: u8) -> String {
     format!("InitializeBodyComposition: instance data type {n}")
@@ -345,6 +372,7 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
             Kind::Plain => made.push(Made::No),
             Kind::ObjectOrTemplate => return Err(not_read(OBJECT_TEMPLATES)),
             Kind::Unknown(t) => return Err(not_read(unknown_type(t))),
+            Kind::Switch | Kind::Custom if !pending_allowed() => return Err(not_read(ENTRY_COPY)),
             Kind::Switch => made.push(Made::Switch),
             Kind::Custom => made.push(Made::Custom),
             Kind::Component => {
@@ -368,7 +396,11 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                                 .unwrap_or_else(|| "None".to_string());
                             return Err(NotYet::layer_absent(socket_tables(&mesh), MESH_LAYER, RECORD).into());
                         }
-                        // No socket: the skeletal parent answers false and the owner takes it (an actor attach).
+                        // No socket: the skeletal parent answers false and the owner takes it (an actor attach), a retry
+                        // the hub holds for the revised note.
+                        if !pending_allowed() {
+                            return Err(not_read(ATTACH_RETRY));
+                        }
                     } else {
                         return Err(not_read(other_target(&class_path(vm, pc))));
                     }
@@ -378,8 +410,37 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                 if name_text(vm, &a.parent_id).eq_ignore_ascii_case(SPECIAL_PARENT) {
                     return Err(not_read(SPECIAL_REFRESH));
                 }
+                if !pending_allowed() {
+                    return Err(not_read(ENTRY_COPY));
+                }
                 made.push(Made::Component { template });
             }
+        }
+    }
+    // The switch packing's edge cases (held for the revised note): a width of 0 (the width would come from the
+    // entry's Float), more than 32 switches, and values that do not fit in the 32 bits.
+    if authority {
+        let mut count = 0usize;
+        let mut offset: i64 = 0;
+        for (a, m) in attachments.iter().zip(&made) {
+            if a.kind != Kind::Switch {
+                continue;
+            }
+            count += 1;
+            if count > 32 {
+                return Err(not_read(packing_edge("more than 32 switches")));
+            }
+            if *m != Made::Switch {
+                continue;
+            }
+            let width = i64::from(byte(&field(vm, &a.data, "BitsRequiredForMaxSwitchValue", "InstanceDataUnion")?));
+            if width == 0 {
+                return Err(not_read(packing_edge("a width of 0")));
+            }
+            if offset + width > 32 {
+                return Err(not_read(packing_edge("values past 32 bits")));
+            }
+            offset += width;
         }
     }
     Ok(Some(Plan { attachments, made, authority, entry_struct }))
@@ -565,6 +626,9 @@ fn attach_to_actor(vm: &mut Vm, owner: ObjRef, component: ObjRef) -> Result<(), 
 /// The script native (`InstanceDataHelper.InitializeBodyComposition(Owner, BodyComposition, InstanceDataSet,
 /// ReplicatedInstanceDataState, optional Mode)`), static; the two structs are out arguments.
 fn native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    if !pending_allowed() {
+        return Err(not_read(DESTINATION));
+    }
     let owner = match c.arg(0)? {
         Value::Object(o) => *o,
         _ => None,

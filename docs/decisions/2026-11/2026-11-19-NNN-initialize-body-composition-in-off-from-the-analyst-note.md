@@ -57,3 +57,19 @@ Reference is unchanged. The lane is stacked on #522. The decision number is a pl
     written.
   - The note's data puts the next stop after it at attachment 1's socket on the new skeletal mesh: the socket-table
     `LayerAbsent`.
+
+**The hub's heads-up (2026-11-19, #529's review is tightening the note).** Until the revised note lands, the parts it
+will change are typed refusals in the preflight, before any write. Each is `NotYet { NotRead }`, record the note, and
+its text ends "(pending the revised note)":
+- a made attachment's entry (component, switch or custom): "the entry's field copy rules";
+- a component with no socket under a skeletal parent: "the attach's retry on the owner";
+- on authority, the switch packing's edge cases: a width of 0, more than 32 switches, values past 32 bits;
+- the script native's out arguments: "a state destination other than the pawn wrapper's".
+
+Collision values other than 0 and the special parent refresh were already refusals.
+
+So in production the build writes nothing yet. The walk, the write tracker and the writes stay in the code, covered by
+the tests through a test-only switch that lets the pending parts through on the test's own thread.
+
+Maya's first stop is unchanged, because attachment 0's special-parent check comes before its entry copy. The gate
+was not re-run for this change.

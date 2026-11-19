@@ -141,6 +141,8 @@ fn env() -> Env {
     let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), "WillowPawn.InitializePawnMeshes()").with_owner(pawn);
     let wrapper = vm.declare_function(d).unwrap();
     crate::world::pawn_meshes::register(&mut vm).unwrap();
+    // The write-path tests let the parts held for the revised note through; the production-mode tests turn it off.
+    allow_pending_for_tests(true);
     Env { vm, dir, object, pawn, body, plain_component, skeletal, union, body_union, component_data, composition, wrapper }
 }
 
@@ -412,4 +414,61 @@ fn the_script_native_writes_its_out_arguments() {
     let out_set = &r.outs[2];
     assert_eq!(f(&e, out_set, "Data").elements().unwrap().len(), 1, "the entry, through the out argument");
     assert!(entries(&e, p).is_empty(), "the pawn's own field is not the out argument");
+}
+
+/// The hub's heads-up (2026-11-19): in production the entry copy of a made attachment is a typed `NotRead` in the
+/// preflight, write-free. (The attach's retry on the owner comes after an earlier attachment's entry copy in walk
+/// order, so in production that earlier refusal answers first.)
+#[test]
+fn a_made_attachment_s_entry_copy_is_held() {
+    let mut e = env();
+    allow_pending_for_tests(false);
+    let t = make(&mut e.vm, e.plain_component, "T");
+    let a = attachment(&mut e, A { template: Some(t), ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let before = Counters::read(&e.vm);
+    let w = e.wrapper;
+    let err = e.vm.call(w, Some(p), vec![]).unwrap_err();
+    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(n.what, ENTRY_COPY);
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    allow_pending_for_tests(true);
+}
+
+/// The heads-up: a switch whose BitsRequiredForMaxSwitchValue is 0 is a packing edge case, refused before any write.
+#[test]
+fn a_switch_of_width_zero_is_a_held_packing_case() {
+    let mut e = env();
+    let s0 = attachment(&mut e, A { ty: SWITCH, ..A::default() });
+    let mut s0 = s0;
+    let mut data = field(&e.vm, &s0, "Data", "t").unwrap();
+    set_field(&e.vm, &mut data, "BitsRequiredForMaxSwitchValue", Value::Byte(0), "t").unwrap();
+    set_field(&e.vm, &mut s0, "Data", data, "t").unwrap();
+    let p = pawn_with(&mut e, vec![s0]);
+    let w = e.wrapper;
+    let err = e.vm.call(w, Some(p), vec![]).unwrap_err();
+    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+    assert_eq!(n.what, packing_edge("a width of 0"));
+    assert!(entries(&e, p).is_empty(), "refused before any write");
+}
+
+/// The heads-up: in production the script native's out-argument destination is a typed `NotRead`.
+#[test]
+fn the_script_native_destination_is_held() {
+    let mut e = env();
+    allow_pending_for_tests(false);
+    let helper = e.vm.space.classes.by_path(crate::world::pawn_meshes::HELPER).unwrap();
+    let d = FunctionDecl::native(
+        ObjectPath::parse(FUNCTION).unwrap(),
+        "InstanceDataHelper.InitializeBodyComposition(object,struct,struct,struct,byte)",
+    )
+    .with_owner(helper)
+    .with_static(true);
+    let fun = e.vm.declare_function(d).unwrap();
+    register(&mut e.vm).unwrap();
+    let err = e.vm.call(fun, None, vec![]).unwrap_err();
+    let VmError::NotYet(n) = &err else { panic!("{err:?}") };
+    assert_eq!(n.what, DESTINATION);
+    allow_pending_for_tests(true);
 }
