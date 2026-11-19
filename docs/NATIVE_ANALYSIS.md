@@ -74,6 +74,18 @@ for known native names and following the data references to them. Virtual native
 vtable is found from its registration (the class name as a UTF-16 string next to an in-place constructor that stores
 the vtable).
 
+**When `virtual:` refuses a class.** For some actor classes, `WillowPlayerController` among them, the query finds no
+such constructor next to the name and refuses. The executable carries no run-time type information to fall back on
+either. What worked (2026-11-19, NATIVE_LOGIN_URL_CONFIG_INPUT.md):
+1. find the class's registration routine;
+2. take the default constructor that the routine hands over;
+3. follow that constructor, and the constructors it calls in turn, to the store that installs the class table;
+4. read the slot from that table.
+
+This was done with a throwaway helper, kept under `local/analysis/link1login/scripts/` (not tracked). It is not a
+query form of `OwNativeQuery.java`; making it one would be a tooling change. The table found this way is identified
+by fit until a second entry of it is checked against a behaviour another record already gives.
+
 ```powershell
 # once (and after re-importing): name -> address tables, iNative join, label every native in the database
 powershell -File tools/ghidra/run.ps1 -Tables -Apply

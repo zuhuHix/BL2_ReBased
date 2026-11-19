@@ -108,7 +108,8 @@ This is the same limit NATIVE_CACHE_WEAPON_CARD.md (#484) met for `WillowWeapon`
   the ragdoll). **Off answer for the `WillowPlayerPawn` key:** the same presentation answer, true, with no write, under
   that record's terms (a stand-in, UNVERIFIED). Its result is the script's only use of the call on this path. It is
   not a reading of the implementation;
-- `WillowPlayerController.PlayCameraAnim(...)`, `StopCameraAnim(bool)` and `UpdateInputContext()`;
+- `WillowPlayerController.PlayCameraAnim(...)` and `StopCameraAnim(bool)`. `UpdateInputContext()` is no longer in
+  this list: it was resolved later, and its Off answer is NATIVE_LOGIN_URL_CONFIG_INPUT.md section 3;
 - `WillowPlayerPawn.MarkDLEsForUpdate()`;
 - `WillowPawn.RefreshPawnGearLikenessComponents()`, which calls three such implementations in turn.
 
@@ -192,7 +193,8 @@ is `WorldInfo.Game` is an **Off assumption** (UNVERIFIED).
 | `WillowLeviathanService.RecordCharacterKilledEventForPlayer(Player, Byte)` | no | this note, 4.3 | `NotRead` |
 | `WillowLeviathanService.RecordCharacterRevivedEventForPlayer` | no | NATIVE_RESPAWN_STATIONS.md 3.5 | that note's |
 | `WillowPawn.RefreshPawnGearLikenessComponents` | no | 3.2 | `NotRead` |
-| `WillowPlayerController.PlayCameraAnim`, `StopCameraAnim`, `UpdateInputContext` | no | 3.2 | `NotRead` |
+| `WillowPlayerController.PlayCameraAnim`, `StopCameraAnim` | no | 3.2 | `NotRead` |
+| `WillowPlayerController.UpdateInputContext` | no | NATIVE_LOGIN_URL_CONFIG_INPUT.md section 3 | that note's (nothing with no `WillowPlayerInput`) |
 | `WillowPlayerPawn.MarkDLEsForUpdate` | no | 3.2 | `NotRead` |
 | `WillowPlayerPawn.SetDefaultStance` | no | 3.2 | `NotRead` |
 | `WillowPlayerPawn.SetShadowCasting(bool)` | no | this note, 4.4 | the rule of 4.4 |

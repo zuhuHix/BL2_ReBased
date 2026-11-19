@@ -21,5 +21,25 @@ note alone.
     `WillowPlayerInput`, and nothing else. The input's per-frame `PlayerInput` event consumes the flag. **Off:** that
     rule. The headless controller has no `PlayerInput`, so nothing is written on the slice path. This supersedes
     NATIVE_GO_DOWN_PATH.md 3.2's "not resolved" for this native.
+- **Review r1 of #494.**
+  - The PR is stacked on #489. NATIVE_GO_DOWN_PATH.md 3.2, its table row and its index row point to this note's
+    section 3, so this native has one Off answer.
+  - Each fitted identity is labelled "UNVERIFIED (fitted)": the `GameEngine` check, the cast's class, the flag and the
+    class table. `UpdateInputContext` drops to medium confidence, because no independent oracle for the table was
+    checked.
+  - The read-back check becomes the named test `off_url_and_config_have_no_readers`, which the implementer writes
+    (note 1.4):
+    - the URL readers and `GetPerObjectConfigSections` stay unbound;
+    - both bindings leave the heap unchanged;
+    - no crate opens an `.ini` file or the config folder.
+  - The note now says how the reader list was built, and labels its completeness UNVERIFIED. `StaticSaveConfig` and
+    `ConsoleCommand` are not covered.
+  - The note adds:
+    - "Off only; Reference keeps the stub policy", with the three keys;
+    - the slice test's assertion that `PlayerInput` is None, with the accepted divergence on links 13-14;
+    - the fallback `NotYet` as a plain one at entry, with the caller adding the prefix;
+    - the table method, in `docs/NATIVE_ANALYSIS.md`;
+    - an open question for `PlayCameraAnim` and `StopCameraAnim`.
 - **Not verified:** everything above in the running game; `UpdateURL`'s add-or-replace rule and the save's file;
-  `SaveConfig`'s details; the flag's identity (by fit, the layout tool cannot lay out `PlayerInput`).
+  `SaveConfig`'s details; the fitted identities (the flag, the cast's class, the class table, the `GameEngine`
+  check); the reader list's completeness.
