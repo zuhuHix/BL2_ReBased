@@ -390,7 +390,17 @@ fn package() -> Vec<u8> {
     let globals = t.class("WillowGlobals", object);
     t.prop("Object", globals, "ThePlayerPawnDataManager", 0, manager);
     native(&mut t, globals, "GetPlayerPawnDataManager", &[], Some(("Object", manager)), NATIVE);
-    t.class("Thing", object);
+    let thing = t.class("Thing", object);
+    // Two invented data exports for FindAlreadyLoadedObject (decision 2026-11-19-24, review r1 of #411): loading
+    // ToyArchetype makes its Target, ToyTarget, a store handle that is not loaded.
+    t.prop("Object", thing, "Target", 0, thing);
+    let mut target = 0i32.to_le_bytes().to_vec();
+    target.extend_from_slice(&t.none);
+    let toy_target = t.p.add_export(thing, "ToyTarget", target);
+    let mut archetype = 0i32.to_le_bytes().to_vec();
+    archetype.extend(t.p.object_tag("Target", toy_target));
+    archetype.extend_from_slice(&t.none);
+    t.p.add_export(thing, "ToyArchetype", archetype);
     // The travel countdown (lane MAP-LOAD-C, NATIVE_TRAVEL.md).
     let willow_game = t.class("WillowGameInfo", actor);
     t.prop("Int", willow_game, "TravelPostCountdownTime", 0, 0);
@@ -1640,6 +1650,39 @@ fn find_already_loaded_object_looks_up_full_paths_in_memory() {
             let r = find(&mut x, partial);
             assert!(matches!(&r, Err(VmError::NotYet(n)) if n.missing == Missing::NotRead), "{partial:?}: {r:?}");
         }
+    });
+}
+
+/// `FindAlreadyLoadedObject` and the store (review r1 of #411): a loaded definition is in memory; a store handle that
+/// is not loaded, and a path an installed package holds that nothing has named yet, are `NotYet { NotRead }`; a path no
+/// package holds is None. A run-time object with no outer that shares the name is skipped, not an error.
+#[test]
+fn find_already_loaded_object_asks_the_store_for_paths_not_in_memory() {
+    run(|| {
+        let mut x = fx();
+        pawn_data::Pack.register(x.vm()).unwrap();
+        let globals_class = x.class("WillowGlobals");
+        let globals = ow_vm::interp::instantiate_from_defaults(x.vm(), globals_class).unwrap();
+        let manager = pawn_data::set_up(x.vm(), globals).unwrap();
+        let find = |x: &mut Fx, p: &str| {
+            x.call("WillowPlayerPawnDataManager.FindAlreadyLoadedObject", Some(manager), vec![Value::Str(p.into())])
+        };
+        let not_read = |r: &Result<Value, VmError>| matches!(r, Err(VmError::NotYet(n)) if n.missing == Missing::NotRead);
+        // Named by nothing yet: the store's export tables hold it.
+        assert!(not_read(&find(&mut x, "Engine.ToyArchetype")), "a held path nothing has named");
+        // Loaded: in memory. Its reference ToyTarget is now a handle the store has not loaded.
+        let path = ow_core::ObjectPath::parse("Engine.ToyArchetype").unwrap();
+        let vm = &mut x.w.vm;
+        let loaded = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let target = ow_core::ObjectPath::parse("Engine.ToyTarget").unwrap();
+        let handle = crate::actors::object(&x.w.vm.space, loaded, "Target").unwrap();
+        assert!(handle.is_some_and(|h| x.w.vm.defs.is_unloaded(&x.w.vm.space, h)), "ToyTarget is an unloaded handle");
+        assert_eq!(find(&mut x, "Engine.ToyArchetype").unwrap(), Value::Object(Some(loaded)));
+        assert!(not_read(&find(&mut x, "engine.toytarget")), "an unloaded handle: {target:?}");
+        // A run-time object with no outer of the same name is skipped, and no package holds Engine.Nothing.
+        let thing = x.class("Thing");
+        x.vm().space.alloc(thing, "Nothing", None, ow_object::heap::Origin::Runtime).unwrap();
+        assert_eq!(find(&mut x, "Engine.Nothing").unwrap(), Value::Object(None));
     });
 }
 
