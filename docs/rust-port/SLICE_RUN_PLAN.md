@@ -68,11 +68,10 @@ writes an own-words `NATIVE_*.md` note and leaves the rule `NotYet`; a fresh imp
 
 ### 3.1 Shared causes (they stop several steps at once)
 
-- **No map load.** No run loads Sanctuary as a VM world: `--slice-run` and `--mission-run` build a bridge world with
-  its own `WorldInfo` (D34), and the world's queries for globals, game info and replication info answer `NotYet`
-  naming the map load (`crates/ow-world/src/query.rs`; D47, D49). The spawn rules D26 left unread
-  (`RemoteRole`, templates other than the class default object, collision during spawn) and
-  `Actor.SetInitialState`'s auto state in Off (D27) sit on the same path. No lane is named for it in the sources.
+- **No map load in the slice's worlds.** Superseded on 2026-11-19 by
+  [SLICE_MAPLOAD.md](SLICE_MAPLOAD.md) (DESIGN-SLICE-MAPLOAD, #530). It holds what exists, what is new, the order
+  relative to the mission bridge, and four lanes plus the auto-state dependency. The spawn rules D26 left unread
+  (`RemoteRole`, templates other than the class default object, collision during spawn) stay on that path.
 - **Template archetypes in Off.** Every Off spawn stops at the archetype reference
   `Default__WillowAIPawn.SpecialMoveComponent0` (D54). D55 left template archetypes unapplied: their prefix is not
   recorded and `PropertyPrefix` has no 16-byte case. Rule 4 applies: recover it from the packages and check it with
@@ -85,9 +84,9 @@ writes an own-words `NATIVE_*.md` note and leaves the rule `NotYet`; a fresh imp
 Lanes, in order:
 1. **FIX-TEMPLATE-PREFIX** *(proposed)*, `ow-defs`: the template archetypes and the 16-byte prefix case, from the
    packages. No native reading.
-2. **W5-MAPLOAD** *(proposed)*, `ow-world`: Sanctuary's level actors in a `World`, the world info, game info and
-   replication info from the map, the local player's controller and Maya's pawn at the player start, the local-player
-   list `Actor.LocalPlayerControllers` needs. The unread spawn rules go through an analyst note first.
+2. **The map-load lanes of [SLICE_MAPLOAD.md](SLICE_MAPLOAD.md)** section 4, which replace the proposed W5-MAPLOAD.
+   W5-MAPLOAD's own part, the level actors in a `World`, landed as decision 2026-11-16-76, and the bring-up as
+   decisions 2026-11-19-04 and 2026-11-19-20.
 3. **FIX-POOLS-OFF** *(proposed)*, `ow-world`: `ResetIdleTimer` and the health pool's class-defaults routine. Analyst,
    then implementer.
 4. **FIX-ACTOR-DESTROY** *(proposed)*, `ow-world`: the controller and player case. Analyst, then implementer.
@@ -101,7 +100,7 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
   window at a fixed step (D52, D57). The fight area is the UE5 gate's range, which the port has no counterpart of.
 - **First stop:** Off, Maya's health pool (`NotYet` at `health:` and at a level-up, D38; `NotYet { NotPorted }` at
   `maya` in `--combat-run`, D54). The dummy's `Behavior_AIHold` is `NotYet { NotPorted }` in Off (D38).
-- **Lanes:** 2 and 3 of section 3.1; then **FIX-AIHOLD** *(proposed)*, `ow-behavior` with `ow-ai`'s holds (#364
+- **Lanes:** SLICE_MAPLOAD.md's lanes (item 2 of section 3.1) and lane 3 of section 3.1; then **FIX-AIHOLD** *(proposed)*, `ow-behavior` with `ow-ai`'s holds (#364
   binds the component's `Hold` natives). COMBAT_GOLDEN_TRACE.md question 8 saw the dummy's first-hit `AIHold` make it
   demigod; which part of the hold does it is UNVERIFIED, so a short analyst note may be needed first.
 - **Fight area:** the gate needs enemies placed where Maya can reach them. Whether that is Sanctuary's own population
@@ -141,7 +140,7 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
      questions first; D59 lists nine); then the melee rules of G25 so the bullymong's swing comes from its tree rather
      than a scripted step.
   5. **VM-LATENT-HOST** *(proposed)*, `ow-vm`: a host-driven latent action, so `FollowPath` and the waits can run.
-  6. The world's call into `tick_brain` (`ow-world`), with lane 2 of section 3.1.
+  6. The world's call into `tick_brain` (`ow-world`), with SLICE_MAPLOAD.md's lane 4 (the slice on the map world).
 - **Real game:** question 8 (Maya's crit source); question 17 (the lone bullymong, the cone edge); the six bl-sdk reads
   D59 lists for the AI.
 
@@ -206,7 +205,8 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
   the dummy and `BehaviorBase.RunBehaviors` during the level-up are `NotYet { NotPorted }` (D38). Off `--mission-run`
   on the Fire mission stops at the lent weapon's region-stage condition, `NotYet { NotRead }` (D34).
 - **Lanes:**
-  1. W5-MAPLOAD (section 3.1) for the local-player list.
+  1. SLICE_MAPLOAD.md's lanes 3 and 4 for the local-player list on the map world (the hook,
+     `Actors::add_local_player`, exists since decision 2026-11-16-81).
   2. **FIX-MISSION-OFF** *(proposed)*, `ow-mission` with `ow-world`: `LocalPlayerControllers` from its note;
      `GetObjectivesProgress` and the lent weapon's region-stage condition (analyst first); `pawnhit:` and the slice's
      health pool shared with `--combat-run`'s (the follow-up D54 left open); the level-up skill behaviors (W6-SKILLS's
@@ -250,7 +250,7 @@ the host (the sky's aurora needs the day-night Kismet, D58). The UI (H5 and W7-U
 its `THIRD_PARTY.md` entry first.
 
 Lanes, in order (after the in-flight PRs):
-- **H-WORLD** *(proposed)*, `ow-host` with `ow-world`: a world-backed `Simulation`: W5-MAPLOAD's world ticked from the
+- **H-WORLD** *(proposed)*, `ow-host` with `ow-world`: a world-backed `Simulation`: SLICE_MAPLOAD.md's map world ticked from the
   host frame, the H4 mover driving the world's player pawn, `set_physics_step`.
 - **H-AI-HOST** *(proposed)*, `ow-host`: `Host` / `Senses` (exposure through H4's collision, the targetable registry)
   and `Locomotion`. Path queries need the nav mesh: a research lane on its format comes first (package oracles, rule
@@ -275,8 +275,8 @@ and a fresh implementer.
 0. **Land what is in flight:** #364 W7-AI part 2, #368 FIX-PHASELOCK-CHAIN, #361 W7-WORLDLOGIC, #362 FIX-PKG-LOOKUP,
    #366 H4-WEAPON, #363 H6-SKIN, #365 H9-LIGHTMAPS.
 1. **FIX-TEMPLATE-PREFIX** [`ow-defs`; package oracles] — unblocks every Off spawn.
-2. **W5-MAPLOAD** [`ow-world`; clean room for the unread spawn rules] — Sanctuary as a world, Maya's controller and
-   pawn, the local-player list.
+2. **The map-load lanes** [SLICE_MAPLOAD.md section 4: `ow-world`, `ow-mission`, `ow-cli`; clean room] — the game
+   info, the local player and the slice on the map world, after the auto-state work for the GRI and tracker.
 3. Together, after 1 (and 2 where noted):
    - **FIX-POOLS-OFF** [`ow-world`; clean room] — Maya's health in Off; links 1, 13, 14.
    - **FIX-ACTOR-DESTROY** [`ow-world`; clean room] — the kill's cleanup; link 3.

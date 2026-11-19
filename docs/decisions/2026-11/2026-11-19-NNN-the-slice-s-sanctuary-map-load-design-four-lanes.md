@@ -48,6 +48,24 @@ Docs only: no code changed, no dependency added, and there was no real-game sess
   - streaming;
   - the bridge's remaining writes;
   - the director's placement.
+- **Review r1 of #530 (Sol), folded in:**
+  1. Lane 2 proves the class selection, the spawn and the typed bring-up stop only. Its installed test no longer
+     expects a script-made GRI and tracker. The auto-state work (ANALYST-AUTO-STATE, then an implementer) is a named
+     dependency of those assertions and of lane 4.
+  2. The globals: on the map route the driver makes the world's one `WillowGlobals` before bring-up. This is a labelled
+     harness input, with the installed globals definition. `ow-inventory`'s world getters answer for it; the bridge
+     binds no getters of its own there. A call before the set-up is the getter's typed `NotYet { LayerAbsent }`.
+  3. Lane 4 names its constructors and fixtures: `MissionScript::new` from `MissionBridge::new` and
+     `FireMissionSlice::new`, the pawn accessor, and the old-route worlds. Its first PR is the adopt path plus
+     `--combat-run`, with a test that it uses the possessed pawn.
+  4. Lane 3 can be coded in parallel against a toy game info, and merges after lane 2, which owns `mapload.rs`'s
+     wiring. The navigation work is scoped after lane 1 (9554).
+  5. The play-actor steps follow NATIVE_MAP_LOAD.md section 4 in full: the player index and unique id before `Login`,
+     the attachment before `PostLogin`, and the store on the local player. `add_local_player` is the iterator only.
+     The call site and any fallback id stay UNVERIFIED.
+  6. SLICE_RUN_PLAN.md section 3.1 and the lanes that cited W5-MAPLOAD now link to the design.
+  7. The pickup row lists its globals, definition load and weapon-default preload. Q2 asks for three separate reads:
+     the URL, the effective config and the resulting class.
 - **Expected first new stop** on the map route: `GotoState('Auto')`, in the game info's `InitGame` and
   `PreBeginPlay`. This is taken from decision 2026-11-19-20's installed run with a harness `WillowGameInfo`, not
   re-run here.
