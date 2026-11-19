@@ -27,7 +27,7 @@ C1 (mission tracker, [NATIVE_MISSION_DISPATCH.md](NATIVE_MISSION_DISPATCH.md)), 
 | ResourcePoolManager.DeletePoolByReference / DeletePool / DeletePoolAtIndex / DeleteAllPools | `DeletePoolByReference(out ResourcePoolReference PoolReference)`, `DeletePool(ResourcePoolManager Mgr, ResourcePoolReference PoolReference)`, `DeletePoolAtIndex(int Index)`, `DeleteAllPools(ResourcePoolManager Mgr)` | pawn death (health pool), class switch | high (DeleteAllPools, DeletePoolAtIndex), medium (the two by-reference forms) | UNVERIFIED |
 | ResourcePoolManager.HasResourcePoolForResourceDefinition / GetResourcePoolForResourceDefinition / CreateResourcePoolManagerIfNecessary | `HasResourcePoolForResourceDefinition(ResourceDefinition Resource)`, `GetResourcePoolForResourceDefinition(out ResourcePoolManager Mgr, Actor ActorOwner, ResourceDefinition Resource)`, `CreateResourcePoolManagerIfNecessary(out ResourcePoolManager Mgr, Actor ActorOwner)` | lookups by resource | high | UNVERIFIED |
 | Controller.GetResourcePoolForResourceDefinition | `native function ResourcePoolReference GetResourcePoolForResourceDefinition(ResourceDefinition Resource, optional bool bCreatePoolIfOneDoesntExist)` | ammo, accuracy pools (lazy creation) | medium-high | UNVERIFIED |
-| Controller.ApplyCharacterClassStartingValues (virtual; WillowPlayerController override) | `native function ApplyCharacterClassStartingValues(CharacterClassDefinition inCharacterClass)` | creates the player's pool set; fixes slot order | high for the pool part | UNVERIFIED |
+| Controller.ApplyCharacterClassStartingValues (virtual; WillowPlayerController override; WillowMind: no override, section 1.11) | `native function ApplyCharacterClassStartingValues(CharacterClassDefinition inCharacterClass)` | creates the player's pool set; fixes slot order; the AI mind's starting pools | high for the pool part | UNVERIFIED |
 | Actor.IsResourcePoolValid | `native function bool IsResourcePoolValid(out ResourcePoolReference PoolReference)` | health, shield, exp, cooldown checks | high | UNVERIFIED |
 | Actor.GetResourcePoolCurrentValueOrDefault | `native function float GetResourcePoolCurrentValueOrDefault(out ResourcePoolReference PoolReference, float DefaultValue)` | pipeline reads of health and shield | high | UNVERIFIED |
 | Pawn.SetHealthResourcePoolDefinition | `native function SetHealthResourcePoolDefinition(out ResourcePoolManager ResourcePoolManager, ResourcePoolDefinition Definition)` (virtual, not overridden by WillowPawn) | creates Maya's and the dummy's health pool | high | UNVERIFIED |
@@ -205,7 +205,73 @@ Rocket_Launcher, Sniper_Rifle), slot 7 accuracy, slot 8 experience, 9 action-ski
 A dead player pawn's health pool is deleted by `Pawn.Died` (DD section 9), so the respawned pawn's health pool takes the freed slot again (11 in this layout) unless a lazily created pool took it.
 This order is a **reading of the code and the data, not an observation**. A cheap live check exists (read `ResourcePoolManager.ResourcePools[i].Definition` on Maya's controller); G23's statement that the order does not
 change any rule it read stays true: no pool reads another, and only iteration order (`AllResourcePools`, used by the save code) is visible.
-The AI mind's `ApplyCharacterClassStartingValues` (WillowMind override) was **not read**; for an AI pawn the base list creation is presumably the same.
+The AI mind's `ApplyCharacterClassStartingValues` was read on 2026-11-19 (section 1.11): **`WillowMind` has no override**; the
+base list creation of step 1 is what an AI mind runs.
+
+### 1.11 The AI mind's class route: `WillowMind.Possess` to the starting values (lane MIND-STARTING-VALUES, 2026-11-19)
+
+AI-assisted (Claude Code), analyst only (decision 2026-11-19-17; clean room: the lane that wrote this does not implement it,
+and the rules stay `NotYet` in Off until a fresh implementer codes them from this section). Script read with
+`research/script_disasm.py`; the one native part read with Ghidra (read-only, under the machine lock; raw output only under
+ignored `local/analysis/`). Fields are named by `tools/ghidra/class_layout.py`. **UNVERIFIED** in the running game.
+
+**The native: `ApplyCharacterClassStartingValues` on a `WillowMind` is the `Controller` base, unchanged** (high).
+- `WillowMind` declares no script function of that name; `Controller`'s script native calls one C++ virtual. In
+  `WillowMind`'s function table (read from its class registration's constructor) that virtual is the same routine that 8 other
+  function tables hold: the inherited base, not an override. (The `WillowPlayerController` override of step 2 above is a
+  different routine.)
+- That routine is step 1 above, with every field named by the layout: it deletes all pools of the controller's
+  `ResourcePoolManager` (the routine behind the script native `ResourcePoolManager.DeleteAllPools`), then creates one pool for
+  each entry of the class's `ResourcePools` in array order, then `AccuracyPoolDefinition` stored into `AccuracyPool`, then
+  `OffHandAccuracyPoolDefinition` into `OffHandAccuracyPool`, each only when set (the creation is the routine behind
+  `ResourcePoolManager.CreatePool`). With no class it only deletes the pools.
+- So "does it call the `Controller` base": it *is* the base. There is no experience or cooldown pool for an AI mind.
+
+**The script route** (high: installed script, read as bytecode).
+1. `WillowMind.Possess(inPawn, bVehicleTransition)`: `MyWillowPawn` is the pawn as a `WillowAIPawn` (or a vehicle's driver).
+   Unless it is a vehicle transition: `AIClass` from the pawn's `AIClass`, and the pawn's `UpdatePlayerMaster` (a
+   `WillowAIPawn` function). Then `GearboxMind.Possess` (script: the `Controller` base, then a rule engine from the AI factory
+   when the mind has none, one pawn native with the value 2 when the pawn uses walking physics (not read), the default
+   awareness zones). The pawn's `MyWillowMind`
+   is set to the mind. Unless it is a vehicle transition: `Controller.CharacterClass` from the pawn's `AIClass`,
+   `HomeLocation` from the pawn's location, then **`InitializeCharacterClass`**, then the pawn's
+   `InitializeBehaviorProviders` (native, NATIVE_BEHAVIOR_POPULATION.md) and `PostSpawn` (script).
+2. `WillowMind.InitializeCharacterClass`: once only (guarded by `bCharacterClassInitialized`, set first):
+   **`ApplyCharacterClassStartingValues(AIClass)`** (the native above), then **`ApplyCharacterClassDefaults(MyWillowPawn,
+   AIClass)`**.
+3. `WillowMind.ApplyCharacterClassDefaults(P, CharClass)`, in order:
+   - `Controller.ApplyCharacterClassDefaults` (script): the class's speeds and jump onto the pawn; then, with a
+     `HealthPoolDefinition`, the pawn's `SetHealthResourcePoolDefinition` (native, section 1.8: **the health pool**, the
+     first pool after the starting values); then the two accuracy pools are reinitialised if valid.
+   - For a `WillowPawn`: `bCrawler`, `RotationRate` and `AccelRate` from the AI class; `SetDefaultPhysics` (native, not read
+     here); `WalkingPhysics` set to the enum's value 12; the nav size overrides when the class asks; then the pawn's
+     `SetShieldResourcePoolDefinition` (script, section 1.9: **the shield pool**, from the class's `ShieldPoolDefinition`,
+     only when it is set).
+   - **The interaction proxy**: only when the AI class's `InteractionDefinition` is set, a `PawnInteractionProxy` is spawned
+     (owner the pawn) and stored into `InteractionProxy`, and its script `Initialize(InteractionDefinition, pawn)` runs. With
+     no definition nothing is spawned.
+   - **Passive skills**: the grade is the pawn's `GetExpLevel()` for a `WillowAIPawn` (native), else 1. For each entry of
+     the class's `PassiveSkills` whose `SkillType` is `Passive` (0), `GetSkillManager()` on the world's `WillowGameInfo`
+     (native; its own analyst note is lane FIX-SKILLMGR-A's, decision 2026-11-19-11) runs `ActivateSkill(Self, skill, ,
+     grade, )` (script `SkillEffectManager.ActivateSkill`). A class with no passive skills never calls `GetSkillManager`.
+   - For a `WillowPawn`: the pawn's **`ApplyAttributeStartingValues`** (script, `WillowPawn`; where the AI class's starting
+     values, such as the health multiplier, reach the pawn and its mind), then the mind's
+     `RecalculateAttributeInitializedState` (native, not read here).
+   - `SightViewCone` and `SightFireCone` from the class's degrees (half-angle cosines), and the pawn's two `bUsable` entries
+     from the class.
+
+**Order of the pools an AI mind gets**: delete all; the class's `ResourcePools` (array order); accuracy; off-hand accuracy
+(the starting values); then health; then shield (the defaults). Lowest free slot each (section 1.10).
+
+**What the rest of the route needs, natives only** (each `NotYet` in Off until bound from its own note):
+`WillowAIPawn.InitializeBehaviorProviders` (note exists), `Pawn.SetHealthResourcePoolDefinition` (section 1.8),
+`WillowPawn.SetDefaultPhysics` (not read), `WillowGameInfo.GetSkillManager` (only with passive skills),
+`WillowAIPawn.GetExpLevel` (only with passive skills; not read), `WillowMind.RecalculateAttributeInitializedState` (not read;
+the player controller's is a thunk, NATIVE_ATTRIBUTES.md section 8), `Actor.Spawn` of the proxy (only with an interaction
+definition, NATIVE_ENGINE_CORE.md), and the natives `GearboxMind.Possess` and the rule engine reach (not read here).
+
+**Live confirmation:** with bl-sdk on a fresh bullymong: read its mind's `ResourcePoolManager.ResourcePools[i].Definition`
+in slot order, `InteractionProxy`, and the health multiplier attribute value right after the spawn.
 
 ## 2. Pawn health natives (extends DD section 4; read it first)
 
@@ -386,7 +452,8 @@ Does nothing without a world and a game replication info. With them:
 
 ## Not read yet
 
-- The `WillowMind` override of `ApplyCharacterClassStartingValues` (AI pool creation order) and the unnamed script function the player-controller override calls at its end.
+- The unnamed script function the player-controller override of `ApplyCharacterClassStartingValues` calls at its end. (The
+  `WillowMind` case was read on 2026-11-19: no override, section 1.11.)
 - The FName identities of the three pool script functions called from native (read as `InitializeAuthoritative`, `Reinitialize`, `ShutDown` from their arguments and effect).
 - The vehicle provider path of `Controller.GetResourcePoolForResourceDefinition`; `WillowVehicle` pool natives; the replicated mirrors of the manager.
 - The kill filter helper that derives the damage causer type; the multimap that keys objectives by stat name and its population; the mission-weapon comparison.
