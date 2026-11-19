@@ -19,6 +19,7 @@ pub mod properties;
 pub mod resolve;
 pub mod script;
 pub mod slice;
+pub mod slice_gate;
 pub mod tables;
 pub mod vm;
 
@@ -57,5 +58,6 @@ pub fn run(command: &'static Command, args: &[String], mode: ParityMode) -> Exit
         Family::Mission => mission::run(command, args, mode),
         Family::Slice => slice::run(command, args, mode),
         Family::Combat => combat::run(command, args, mode),
+        Family::SliceGate => slice_gate::run(command, args, mode),
     }
 }

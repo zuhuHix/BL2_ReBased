@@ -41,6 +41,7 @@ pub enum Family {
     Mission,
     Slice,
     Combat,
+    SliceGate,
 }
 
 /// One dispatch entry.
@@ -197,6 +198,8 @@ pub const COMMANDS: &[Command] = &[
     cmd("--item-stats", E, F::ItemsStats, ITEM_STATS),
     cmd("--item-card", E, F::ItemsStats, ITEM_STATS),
     cmd("--item-pool", E, F::ItemsPools, ITEM_ROLL),
+    // `--slice-gate --cooked <dir>`: the 14 slice-gate links in Off (lane SLICE-RUN-OFF, decision 2026-11-19-08).
+    cmd("--slice-gate", First, F::SliceGate, &["--cooked"]),
 ];
 
 /// `ow-package <package>` with no command flag (the header summary), or with one the table does not know: the C++

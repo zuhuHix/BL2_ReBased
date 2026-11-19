@@ -111,13 +111,13 @@ pub const REFERENCE_STUBS: &[(&str, &str)] = &[
 
 /// The end of the definition store's refusal to load a file's copy of a path another file holds (module
 /// documentation, "Cooked copies").
-const COPY_REFUSAL: &str = "another file holds this path under the identity policy";
+pub(crate) const COPY_REFUSAL: &str = "another file holds this path under the identity policy";
 
 /// Why the command failed: its message, and whether it is a `NotYet` (exit code 3).
 #[derive(Debug)]
-struct Failure {
-    message: String,
-    not_yet: bool,
+pub(crate) struct Failure {
+    pub(crate) message: String,
+    pub(crate) not_yet: bool,
 }
 
 impl From<String> for Failure {
@@ -182,7 +182,7 @@ pub fn run(command: &Command, args: &[String], mode: ParityMode) -> ExitCode {
 
 /// The explicit slice sources, then the existing VM code-package dependency set, each once. This is caller
 /// setup only; the real game's load order remains UNVERIFIED (decision 2026-11-17-03).
-fn load_set(args: &[String]) -> Option<LoadSet> {
+pub(crate) fn load_set(args: &[String]) -> Option<LoadSet> {
     let source = Package::load(Path::new(args.first()?)).ok()?;
     let source = PackageName::parse(&source.name).ok()?;
     let startup = PackageName::parse(MISSION_PACKAGE).ok()?;
@@ -212,7 +212,7 @@ fn stub_policy(mode: ParityMode) -> StubPolicy {
 
 /// The VM of the command: the store over the cooked root, the standard attribute system, the Core natives and the
 /// world-only behavior handlers, as `--mission-run` builds it.
-fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Failure> {
+pub(crate) fn open(cooked: &str, mode: ParityMode, policy: IdentityPolicy) -> Result<Vm, Failure> {
     let defs = DefStore::open(PathBuf::from(cooked), policy, mode).map_err(BehaviorError::from)?;
     let cooked_root = defs.packages().root().to_path_buf();
     let attrs = AttributeSystem::standard().map_err(|e| error_text(&e))?;
@@ -341,7 +341,7 @@ fn execute_with(
 }
 
 /// A step's success and, for `screen`, `use` and `pawnhit:`, the extra key and its JSON.
-type StepResult = (bool, Option<(&'static str, String)>);
+pub(crate) type StepResult = (bool, Option<(&'static str, String)>);
 
 /// The JSON of the director's lists (the C++ `missionListsJson`).
 fn lists_json(lists: &bridge::MissionLists) -> String {
@@ -379,7 +379,7 @@ const EMPTY_HIT: &str = "{\"health_before\":0,\"health_after\":0,\"arriving\":0,
                          \"demigod_before\":false,\"demigod_after\":false,\"events\":[]}";
 
 /// One step (module documentation).
-fn run_step(
+pub(crate) fn run_step(
     vm: &mut Vm,
     slice: &FireMissionSlice,
     completed: &DetSet<String>,
