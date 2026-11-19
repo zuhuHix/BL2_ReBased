@@ -39,7 +39,7 @@ other players (level, current mission, playthrough, DLC). It is not mission logi
    - otherwise `FindDataStore` (section 3) looks up the tag `WillowOnlineGameSettings` for the controller's local
      player, and the answer is cast to `WillowOnlineGameSettings_DataStore`;
    - the settings are the `GameSettings` of that store's first `GameSettingsCfgList` entry, cast to
-     `WillowOnlineGameSettings`. With no store or no settings, the refresh does nothing.
+     `WillowOnlineGameSettings`. With no store or no settings, the script does nothing more (the Off contract for this case is section 5).
 
 No gameplay state is read back from these settings on the accept path.
 
@@ -47,7 +47,8 @@ No gameplay state is read back from these settings on the accept path.
 
 A static native. It answers the data store client held by the engine's UI interaction object: the one the game
 viewport's UI controller holds. When the engine, its viewport or that UI object is missing, it answers the client of
-the `UIInteraction` class default object instead, and None only when that is missing too. It changes nothing.
+the `UIInteraction` class default object instead, and None only when that is missing too. A UI object that is present
+but holds no client gives None: the fallback is taken only when the object itself is missing. It changes nothing.
 
 In the shipped game the engine always has a client (public UE3: it is made when the engine starts), so None is not
 an answer the game gives once it is running (decision 2026-11-19-19, UNVERIFIED here).
@@ -66,35 +67,51 @@ It changes nothing and creates nothing.
 ## 4. The data store the route needs
 
 - **Registered globally.** The installed engine configuration lists `WillowGame.WillowOnlineGameSettings_DataStore`
-  among the client's global data store classes (next to the online game search store). It is not a player data store,
-  so `FindDataStore` finds it in step 3.
+  among the client's global data store classes (next to the online game search store). It is not a player data store
+  class.
 - **Its defaults** (installed package): `Tag` is `WillowOnlineGameSettings`; `GameSettingsCfgList` has one entry,
   whose `GameSettingsClass` is `WillowGame.WillowOnlineGameSettings` and whose `GameSettings` and `Provider` are empty;
   `SelectedIndex` is 0.
-- **Who fills `GameSettings`:** not in the defaults, so the store's own initialisation must create a settings object
-  of `GameSettingsClass` for each entry (public UE3 behaviour of the online game settings store). Not read in this
-  executable (UNVERIFIED; open question 2).
+- **Inference (a), not read:** that `FindDataStore` returns an object of that class. The configuration only lists the
+  class. Which object answers depends on what the client registered at run time and on the player-store search
+  coming first (section 3), neither of which was read.
+- **Inference (b), not read:** who fills `GameSettings`. Public UE3 has the online game settings store create a
+  settings object of `GameSettingsClass` for each entry when it is initialised. This executable's version was not
+  read, so it may differ (open question 2).
 
-## 5. For an implementer, in the port's terms
+## 5. For an implementer: the contract for Off (hub ruling, 2026-11-19)
 
-- `GetDataStoreClient` should answer one client per world (the engine's), not None.
-- The client holds the global data stores of the engine configuration. For this path only the store tagged
-  `WillowOnlineGameSettings` matters. `FindDataStore` is section 3's two searches over the player's stores and
-  then the global ones.
-- That store needs its first entry's `GameSettings` to be a `WillowOnlineGameSettings` object for the refresh to
-  write anything (section 4). With it empty, the refresh does nothing, which only matches the game if the game's
-  store is also empty (open question 2).
-- The next natives the refresh then meets, in order (only some already indexed):
-  - `PlayerController.IsPrimaryPlayer` (NATIVE_CONTROLLER_HELPERS.md);
-  - the online subsystem's game interface (`OnlineSub`, `GetGameSettings`);
-  - `WillowPlayerController.GetActiveMissionNumber` (NATIVE_CONTROLLER_HELPERS.md) and
-    `GetActivePlotCriticalMissionNumber` (NATIVE_SAVE_LOAD.md);
-  - `WillowGameReplicationInfo.GetCurrPlaythrough`;
-  - `GameEngine.GetDLCManager`, `WillowDownloadableContentManager.HasCompatibilityData` and
-    `StaticGetDlcContentIdForCurrentMap`;
-  - the settings' integer property write (`SetIntProperty`).
+The hub ruled that the path is modelled faithfully: our host has no online subsystem, which is a fact about our
+engine, not a game rule.
 
-  None of them is read here.
+**The gate, before any lookup** (`SetNeedsUpdateOnlineGameSettings` and `UpdateOnlineGameSettings`): the controller's
+role, `PlayerController.IsPrimaryPlayer` (already bound by the mission bridge) and `IsLocalPlayerController` (Off
+since decision 2026-11-19-15).
+
+**Branch 1, the online subsystem** (first in section 1, step 2). With no online subsystem in the world, there are no
+`Game` settings from it, and the refresh takes branch 2. This is not a `NotYet`.
+
+**Branch 2, the data store:**
+- `GetDataStoreClient`: Off answers the world's one modelled client. While no lane models a client, it stays the
+  named `NotYet` it is today (layer absent, decision 2026-11-19-19), never None. The class-default fallback of
+  section 2 is out of scope for Off: the port has no engine without a viewport, so the world's client is the answer.
+- `FindDataStore`: section 3, over the modelled client's player and global stores.
+- **The settings entry** (`GameSettingsCfgList[0].GameSettings`): Off does not assume it is empty. Unless a later read
+  names what fills it in a world with no online subsystem (open question 2), reading it is a named `NotYet` that
+  names open question 2. It is never "empty, so return with no writes".
+
+**After the settings are found**, the writes of section 1 step 2, in order. Each is a named `NotYet` in Off until
+it is read, unless the index already has an Off rule for it:
+1. the level: the player replication info's `ExpLevel` plus the game replication info's `OverpowerLevelModifier`, then
+   `UpdateExpLevel`;
+2. `GetActiveMissionNumber` (NATIVE_CONTROLLER_HELPERS.md), then `UpdateActiveMission`;
+3. `GetActivePlotCriticalMissionNumber` (NATIVE_SAVE_LOAD.md), then `UpdateActivePlotMission`;
+4. `WillowGameReplicationInfo.GetCurrPlaythrough`, then `UpdatePlaythrough`;
+5. `GameEngine.GetDLCManager`; only with a manager, `HasCompatibilityData` and `StaticGetDlcContentIdForCurrentMap`,
+   then `UpdateMapDlcContentId` and `UpdateDlcFlag`.
+
+Each `Update...` is script that writes one integer property through `Settings.SetIntProperty` (a native, not read:
+a named `NotYet`). The push to the online subsystem is not reached on this path (section 1, step 2).
 
 ## Open questions
 
@@ -102,9 +119,7 @@ It changes nothing and creates nothing.
    named `Game` (a session exists), so that the data store route is never taken.
 2. **UNVERIFIED:** whether the online game settings store's `GameSettings` is filled when the engine starts (section 4),
    and by what.
-3. **UNVERIFIED:** whether the port needs these settings at all for the slice: nothing on the accept path reads them
-   back. Faithful behaviour (a client, the store, the settings) or a recorded decision to answer "no settings" is the
-   hub's choice, not this note's.
+3. Settled by the hub (2026-11-19): the path is modelled faithfully (section 5).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
