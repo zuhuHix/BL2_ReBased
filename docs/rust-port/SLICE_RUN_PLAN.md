@@ -44,7 +44,7 @@ data or against the C++, UNVERIFIED in the running game.
 | Link | Headless, Reference | Headless, Off | Host |
 |---|---|---|---|
 | 1 spawn | The mission bridge's own controller and pawn, from class defaults; no map is loaded (D34, D54) | Maya's health pool `NotYet` (D38, D54) | `--walk` and `--play` start at `WillowCoopPlayerStart_0` (D52, D57); no world pawn |
-| 2 reach the fight area | not modelled (no map) | `--slice-gate` link 2 (`sanctuary-walk`, decision 2026-11-19-66): H4's walk passes on the installed Sanctuary through the shared mover, then a named `NotYet` at `fight_area` (no fight area is placed) | walking in the window (D57); no fight area actors |
+| 2 reach the fight area | not modelled (no map) | `--slice-gate` link 2 (`sanctuary-walk`, decisions 2026-11-19-66 and 2026-11-19-76): H4's walk passes on the installed Sanctuary through the shared mover and ends inside the fight area, a labelled port fixture; placing the target dummy there through `ow_world`'s spawn stops at `Default__WillowAIPawn.SpecialMoveComponent0` (D44's open item, as link 3) | walking in the window (D57); no fight area actors |
 | 3 kill an enemy | `--combat-run` scripted `hit` steps; the adult's kill stops at `AmmoDropWeightAttributeValueResolver` (D54) | every spawn stops at `Default__WillowAIPawn.SpecialMoveComponent0` (D54, D55) | #366: one hit-scan ray against collision; no pawns to hit (D61) |
 | 4 the enemy fights back | scripted `swing` rows equal to the C++ (D54); the AI picks the player and starts Patrol, then stops (D59, #364) | as link 3 | none |
 | 5 loot drop | C++ stand-in inventories, stops at the same resolver (D41, D54) | `ItemPool.SpawnBalancedInventoryFromPool` `NotYet` (D41) | none |
@@ -106,7 +106,8 @@ Real game: whether actors spawned during a tick tick in that frame, and where `R
   demigod; which part of the hold does it is UNVERIFIED, so a short analyst note may be needed first.
 - **Fight area:** the gate needs enemies placed where Maya can reach them. Whether that is Sanctuary's own population
   or a test fixture like the UE5 range is a scheduling choice; the population lane (dens) is named only as a seam
-  (D59).
+  (D59). The hub chose a port fixture for now (decision 2026-11-19-76): a fixed spot H4's walk reaches, with the
+  target dummy placed there by the slice driver, labelled a fixture and not parity.
 - **Real game:** none beyond section 3.1.
 
 ### 3.3 Fight (links 3 and 4)

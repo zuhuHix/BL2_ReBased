@@ -35,10 +35,13 @@ def row(n, result='ok', grading='strict', **fields):
 def all_ok(grading='strict'):
     rows = [row(n, grading=grading) for n in range(1, 15)]
     for r in rows:
-        if r['driver'] in ('none', 'phaselock-cast', 'sanctuary-walk'):
-            # A link without a driver, or link 9's cast or link 2's walk with no evidence check yet, is never ok: a
-            # passing run has an evidence-checked driver for every link (a synthetic one here).
+        if r['driver'] in ('none', 'phaselock-cast'):
+            # A link without a driver, or link 9's cast with no evidence check yet, is never ok: a passing run has
+            # an evidence-checked driver for every link (a synthetic one here).
             r['driver'] = 'combat-run'
+        if r['driver'] == 'sanctuary-walk':
+            # Link 2's walk is ok only after its fight-area check (decision 2026-11-19-76).
+            r['steps'] = ['load', 'spawn', 'walk', 'fight_area']
     return rows
 
 
@@ -161,14 +164,17 @@ class Parse(unittest.TestCase):
         with self.assertRaises(chk.Malformed, msg='sanctuary-walk on link 1'):
             chk.parse(lines(rows))
 
-    def test_a_sanctuary_walk_row_is_never_ok_until_it_checks_arrival(self):
-        # Decision 2026-11-19-76 lifts this once the walk driver checks arrival at the fight area.
+    def test_a_sanctuary_walk_row_is_ok_only_after_its_fight_area_check(self):
+        # Decision 2026-11-19-76: the walk driver checks arrival at the fight area (a port fixture), so its row may
+        # be ok, with that check as its last step; ending at the walk, or with no steps, it may not.
         rows = all_ok()
-        rows[1] = row(2)
         self.assertEqual((rows[1]['driver'], rows[1]['result']), ('sanctuary-walk', 'ok'))
-        with self.assertRaises(chk.Malformed, msg='an ok reach_fight_area from sanctuary-walk'):
-            chk.parse(lines(rows))
-        rows[1] = dict(rows[1], result='notyet', stop=stop())
+        self.assertEqual(chk.counts(chk.parse(lines(rows))), {'ok': 14, 'notyet': 0, 'error': 0})
+        for steps in (['load', 'spawn', 'walk'], [], 'fight_area'):
+            rows[1] = dict(rows[1], steps=steps)
+            with self.assertRaises(chk.Malformed, msg=f'an ok sanctuary-walk row with steps {steps!r}'):
+                chk.parse(lines(rows))
+        rows[1] = dict(rows[1], steps=['load', 'spawn', 'walk'], result='notyet', stop=stop())
         chk.parse(lines(rows))
 
     def test_a_phaselock_cast_row_is_never_ok_until_its_evidence_check_exists(self):
