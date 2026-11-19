@@ -76,7 +76,10 @@ nothing is preflighted for it and nothing is rolled back. Every call below goes 
 6. **A definition without a readable `bPlotCritical`, `DlcExpansion` or `MissionNumber`** is bad data: a script error
    naming the field, propagated unchanged.
 
-**The port's case today, and the stop it would give.** The mission bridge binds `IsDataValid` (the tracker's
+**Retired history (decision 2026-11-19-NNN, IMPL-PLAYTHROUGH-VIRTUAL): the port's case before that lane, and the
+stop it gave.** Off now answers the current playthrough by NATIVE_PLAYTHROUGH_QUERY.md's rule and the tracker branch
+alone when the world exists; the only Off `NotYet`s left there are the controller and replication-info subclass
+overrides. The text below is kept as the record. The mission bridge binds `IsDataValid` (the tracker's
 `bDataValidated`) and `GetMissionStatus` (its one mission's status, NotStarted for any other). It sets no
 `ActiveMission`. Its `GetAllMissions` answers `NotYet { LayerAbsent }` today, because the bridge holds one record and
 not the game's list (`ow_mission::bridge`, decision 2026-11-19-10).
@@ -105,8 +108,11 @@ Read again in this lane; it agrees with NATIVE_SAVE_LOAD.md.
 4. The answer is the largest kept, else 0.
 
 **Off answers, step by step:**
-1. **The current playthrough** (a negative index, the default): the controller's virtual that gives it was not read,
-   and its identity is not guessed. `NotYet { NotRead }`, "the controller's current-playthrough virtual". An explicit
+1. **The current playthrough** (a negative index, the default). Retired history (decision 2026-11-19-NNN,
+   IMPL-PLAYTHROUGH-VIRTUAL): the controller's virtual that gives it was not read, and its identity was not guessed,
+   so it was `NotYet { NotRead }`, "the controller's current-playthrough virtual". Off now calls
+   `mission_numbers::current_playthrough` as a function; only the controller and replication-info subclass
+   overrides remain `NotYet { NotRead }`. An explicit
    index of 0 or more does not ask it. Settled in NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED), section 4.
 2. **The list:** the controller's `MissionPlaythroughs[p].MissionList` as the VM holds it. The mission bridge keeps one
    playthrough with the bridge's mission in it.
