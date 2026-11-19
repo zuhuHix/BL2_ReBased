@@ -1167,3 +1167,134 @@ fn the_certain_first_behavior_is_the_one_the_firing_runs_first() {
     let p = env.provider("P");
     assert_eq!(p.certain_first_behavior("Go", -1), None);
 }
+
+// ------------------------------------------------------------------------- script Parameters (IMPL-ACTIVATE-EVENT-PARAMETERS)
+
+/// Event `OnSelectedTarget` of the enabled sequence `S` with four Output links: connection 0 to the object variable
+/// `Siren`, 1 to the object variable `Target`, 2 to the Int variable `N`, 3 to the named Kismet variable `Dummy`.
+/// Sequence `Later` (disabled) has the same event with an Output link of connection 0 to the Int variable `N2`.
+fn parameters_spec() -> Spec {
+    Spec::new(
+        "P",
+        vec![
+            Seq {
+                name: "S",
+                enabled_on_spawn: Some(true),
+                events: vec![Ev { vars: (0, 4), ..ev("OnSelectedTarget", (0, 0)) }],
+                variables: vec![
+                    ("Siren", "BVAR_Object"),
+                    ("Target", "BVAR_Object"),
+                    ("N", "BVAR_Int"),
+                    ("Dummy", "BVAR_NamedKismetVariable"),
+                ],
+                vlinks: vec![
+                    VLink("SkillInstigator", "BVARLINK_Output", 0, (0, 1)),
+                    VLink("SkillTarget", "BVARLINK_Output", 1, (1, 1)),
+                    VLink("Count", "BVARLINK_Output", 2, (2, 1)),
+                    VLink("Kis", "BVARLINK_Output", 3, (3, 1)),
+                ],
+                linked: vec![0, 1, 2, 3],
+                ..Seq::default()
+            },
+            Seq {
+                name: "Later",
+                enabled_on_spawn: Some(false),
+                events: vec![Ev { vars: (0, 1), ..ev("OnSelectedTarget", (0, 0)) }],
+                variables: vec![("N2", "BVAR_Int")],
+                vlinks: vec![VLink("Count", "BVARLINK_Output", 0, (0, 1))],
+                linked: vec![0],
+                ..Seq::default()
+            },
+        ],
+        vec![Word::I(0), Word::I(0), Word::I(0), Word::I(0)],
+    )
+}
+
+fn typed(var_type: &str) -> PayloadElement {
+    PayloadElement { var_type: var_type.to_string(), object: None }
+}
+
+fn fire_with(p: &mut Provider, env: &mut Env, payload: Option<&[PayloadElement]>) {
+    if let Some(payload) = payload {
+        p.check_payload("OnSelectedTarget", payload).unwrap();
+    }
+    p.fire_event_with(&mut env.vm, "OnSelectedTarget", &DetMap::new(), -1, payload).unwrap();
+}
+
+/// Link 9's shape: two `BVAR_Object` elements bind by connection index into the two object variables, after the
+/// trigger count update.
+#[test]
+fn object_parameters_bind_by_connection_index() {
+    let mut env = Env::of(&parameters_spec());
+    let mut p = env.provider("P");
+    let (maya, target) = (toy_object(&mut env, "Maya"), toy_object(&mut env, "Target"));
+    fire_with(&mut p, &mut env, Some(&[PayloadElement::object(Some(maya)), PayloadElement::object(Some(target))]));
+    assert_eq!(p.variables("S")[0].live, Some(maya));
+    assert_eq!(p.variables("S")[1].live, Some(target));
+    assert_eq!(p.event_trigger_count("OnSelectedTarget"), 1);
+}
+
+/// Section 3: a `BVAR_None` element, a short payload and an empty payload bind nothing (the variables keep their
+/// values); an object element holding None binds None; an element of another type than the variable's binds nothing.
+/// Without Parameters the port keeps its existing behavior (the object outputs are cleared): the recorded divergence.
+#[test]
+fn parameters_that_bind_nothing_keep_the_variables() {
+    let mut env = Env::of(&parameters_spec());
+    let mut p = env.provider("P");
+    let (maya, target) = (toy_object(&mut env, "Maya"), toy_object(&mut env, "Target"));
+    fire_with(&mut p, &mut env, Some(&[PayloadElement::object(Some(maya)), PayloadElement::object(Some(target))]));
+    fire_with(&mut p, &mut env, Some(&[PayloadElement::object(Some(maya)), typed("BVAR_None")]));
+    assert_eq!(p.variables("S")[1].live, Some(target), "a BVAR_None element binds nothing");
+    fire_with(&mut p, &mut env, Some(&[PayloadElement::object(Some(maya))]));
+    assert_eq!(p.variables("S")[1].live, Some(target), "a link past the payload is skipped");
+    fire_with(&mut p, &mut env, Some(&[typed("BVAR_Float")]));
+    assert_eq!(p.variables("S")[0].live, Some(maya), "a Float element does not bind an object variable");
+    fire_with(&mut p, &mut env, Some(&[]));
+    assert_eq!(p.variables("S")[0].live, Some(maya), "an empty payload binds nothing");
+    fire_with(&mut p, &mut env, Some(&[PayloadElement::object(Some(maya)), PayloadElement::object(None)]));
+    assert_eq!(p.variables("S")[1].live, None, "an object element holding None binds None");
+    assert_eq!(p.event_trigger_count("OnSelectedTarget"), 6);
+    // No Parameters: the port's existing route clears the object outputs (out of scope, the hub's ruling).
+    fire_with(&mut p, &mut env, None);
+    assert_eq!(p.variables("S")[0].live, None);
+}
+
+/// The preflight refuses the bindings the port does not do, before anything fires: a same-typed Int (`NotPorted`),
+/// also in a sequence that is disabled now (the hub's ruling on #549: a behavior could enable it during the firing),
+/// and a named Kismet variable target (`NotRead`).
+#[test]
+fn the_preflight_refuses_before_any_firing() {
+    let mut env = Env::of(&parameters_spec());
+    let p = env.provider("P");
+    let maya = toy_object(&mut env, "Maya");
+    let o = PayloadElement::object(Some(maya));
+    let missing = |r: Result<(), BehaviorError>| r.unwrap_err().not_yet().map(|n| (n.missing, n.what.to_string())).unwrap();
+    let (m, what) = missing(p.check_payload("OnSelectedTarget", &[o.clone(), o.clone(), typed("BVAR_Int")]));
+    assert_eq!(m, Missing::NotPorted, "{what}");
+    assert!(what.contains("binding a BVAR_Int Parameters entry"), "{what}");
+    let (m, what) = missing(p.check_payload("OnSelectedTarget", &[typed("BVAR_Int")]));
+    assert_eq!(m, Missing::NotPorted, "the disabled sequence's Int variable: {what}");
+    let (m, what) = missing(p.check_payload("OnSelectedTarget", &[o.clone(), o.clone(), typed("BVAR_None"), typed("BVAR_None")]));
+    assert_eq!(m, Missing::NotRead, "{what}");
+    assert!(what.contains("into a Kismet variable"), "{what}");
+    assert!(!what.starts_with("stopped after partial writes: "), "{what}");
+    assert_eq!(p.event_trigger_count("OnSelectedTarget"), 0, "nothing fired");
+    // Another event's links are not looked at.
+    p.check_payload("Elsewhere", &[typed("BVAR_Int")]).unwrap();
+}
+
+/// The binding rule's table (section 2, item 3, and section 4): attribute and direction targets are `NotRead`,
+/// same-typed bool, int, float and vector `NotPorted`, a mismatch nothing.
+#[test]
+fn the_binding_rule_table() {
+    assert_eq!(payload_binding("BVAR_Object", "BVAR_Object"), Ok(true));
+    assert_eq!(payload_binding("BVAR_Object", "BVAR_Int"), Ok(false));
+    assert_eq!(payload_binding("BVAR_None", "BVAR_Object"), Ok(false));
+    assert_eq!(payload_binding("BVAR_Int", "BVAR_Attribute"), Ok(false));
+    for t in ["BVAR_Bool", "BVAR_Int", "BVAR_Float", "BVAR_Vector"] {
+        assert_eq!(payload_binding(t, t).unwrap_err().missing, Missing::NotPorted, "{t}");
+    }
+    assert_eq!(payload_binding("BVAR_Float", "BVAR_Attribute").unwrap_err().missing, Missing::NotRead);
+    assert_eq!(payload_binding("BVAR_Vector", "BVAR_DirectionVector").unwrap_err().missing, Missing::NotRead);
+    assert_eq!(payload_binding("BVAR_Object", "BVAR_NamedKismetVariable").unwrap_err().missing, Missing::NotRead);
+}

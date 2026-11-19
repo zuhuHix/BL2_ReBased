@@ -99,6 +99,52 @@ pub mod variables;
 /// The records of the kernel rules.
 pub const RECORD_DISPATCH: &str = "docs/verification/NATIVE_MISSION_DISPATCH.md (A1, A2)";
 pub const RECORD_KERNEL: &str = "docs/verification/NATIVE_BEHAVIOR_POPULATION.md (sections C, G)";
+/// The record of a script event's `Parameters` (lane IMPL-ACTIVATE-EVENT-PARAMETERS, #549).
+pub const RECORD_PARAMETERS: &str = "docs/verification/NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md";
+
+/// One element of an event's payload (NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md section 2): the element's
+/// `VariableType` name (`BVAR_None` for an element no setter wrote) and, for a `BVAR_Object` element, its object.
+/// UNVERIFIED in the running game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PayloadElement {
+    pub var_type: String,
+    pub object: Option<ObjRef>,
+}
+
+impl PayloadElement {
+    /// A `BVAR_Object` element holding `object` (None included).
+    pub fn object(object: Option<ObjRef>) -> Self {
+        PayloadElement { var_type: "BVAR_Object".to_string(), object }
+    }
+}
+
+/// What a payload element does to one target variable (section 2, item 3): `Ok(true)` binds the object, `Ok(false)`
+/// writes nothing (a type that does not match). The bindings the port does not do are refused: a same-typed bool,
+/// int, float or vector is `NotPorted` (the port's variables keep only object values), an attribute or
+/// direction-vector variable taking its float or vector is `NotRead`, and a named Kismet variable target is
+/// `NotRead`.
+fn payload_binding(element: &str, variable: &str) -> Result<bool, NotYet> {
+    if variable == "BVAR_NamedKismetVariable" {
+        return Err(NotYet::not_read(
+            "ActivateBehaviorEventFromScript: a Parameters entry into a Kismet variable",
+            RECORD_PARAMETERS,
+        ));
+    }
+    match (element, variable) {
+        ("BVAR_Object", "BVAR_Object") => Ok(true),
+        (a, b) if a == b && matches!(a, "BVAR_Bool" | "BVAR_Int" | "BVAR_Float" | "BVAR_Vector") => {
+            Err(NotYet::not_ported(
+                format!("ActivateBehaviorEventFromScript: binding a {a} Parameters entry"),
+                RECORD_PARAMETERS,
+            ))
+        }
+        ("BVAR_Float", "BVAR_Attribute") | ("BVAR_Vector", "BVAR_DirectionVector") => Err(NotYet::not_read(
+            "ActivateBehaviorEventFromScript: a Parameters entry into an attribute or direction variable",
+            RECORD_PARAMETERS,
+        )),
+        _ => Ok(false),
+    }
+}
 
 /// Behaviors one thread runs per call before it waits for the next tick (A2).
 pub const THREAD_BEHAVIOR_CAP: usize = 60;
@@ -574,11 +620,11 @@ impl Provider {
                     }
                     // The enabled event is delivered after the bit is set ...
                     p.enabled[s] = true;
-                    p.fire_in(vm, s, SEQUENCE_ENABLED_EVENT, &DetMap::new(), -1, &[])
+                    p.fire_in(vm, s, SEQUENCE_ENABLED_EVENT, &DetMap::new(), -1, None)
                 } else {
                     // ... the disabled event before it is cleared.
                     // A failed event leaves the bit set, as the C++ exception skips the clear.
-                    p.fire_in(vm, s, SEQUENCE_DISABLED_EVENT, &DetMap::new(), -1, &[])?;
+                    p.fire_in(vm, s, SEQUENCE_DISABLED_EVENT, &DetMap::new(), -1, None)?;
                     p.enabled[s] = false;
                     Ok(())
                 }
@@ -998,6 +1044,23 @@ impl Provider {
         link_id: i32,
         payload: &[Option<ObjRef>],
     ) -> Result<(), BehaviorError> {
+        let elements: Vec<PayloadElement> = payload.iter().map(|&o| PayloadElement::object(o)).collect();
+        let payload = (!elements.is_empty()).then_some(elements.as_slice());
+        self.fire_event_with(vm, event, outputs, link_id, payload)
+    }
+
+    /// [`Provider::fire_event`] with a typed payload: `None` is no payload (the named `outputs` are written, the port's
+    /// existing behavior), `Some` a payload, which binds by connection index and type and may be empty (it then binds
+    /// nothing). Call [`Provider::check_payload`] first: a binding the port does not do that is reached anyway (in a
+    /// sequence the firing itself enabled) is refused here, marked as after partial writes.
+    pub fn fire_event_with(
+        &mut self,
+        vm: &mut Vm,
+        event: &str,
+        outputs: &DetMap<String, String>,
+        link_id: i32,
+        payload: Option<&[PayloadElement]>,
+    ) -> Result<(), BehaviorError> {
         self.call(vm, |p, vm| {
             for s in 0..p.data.sequences.len() {
                 if p.enabled[s] {
@@ -1006,6 +1069,31 @@ impl Provider {
             }
             Ok(())
         })
+    }
+
+    /// The write-free preflight of a payload (NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md section 4; the hub's ruling
+    /// on #549's review): every sequence with an entry named `event`, **enabled or not, open or not**, since the firing
+    /// checks each sequence's state only when it reaches it and an earlier behavior may enable a later sequence or
+    /// reopen an entry. Every Output link whose connection index is below the payload's length, every target variable,
+    /// through the binding rule ([`payload_binding`]). Reads only.
+    pub fn check_payload(&self, event: &str, payload: &[PayloadElement]) -> Result<(), BehaviorError> {
+        for sequence in &self.data.sequences {
+            for entry in &sequence.events {
+                if !entry.name.eq_ignore_ascii_case(event) {
+                    continue;
+                }
+                for link in entry.variables.iter().filter(|l| l.link_type == "BVARLINK_Output") {
+                    let Some(element) = usize::try_from(link.connection).ok().and_then(|c| payload.get(c)) else {
+                        continue;
+                    };
+                    for &v in &link.variables {
+                        payload_binding(&element.var_type, &sequence.variables[v].var_type)
+                            .map_err(|n| BehaviorError::Vm(n.into()))?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Whether event entry `e` of sequence `s` is `event` and would trigger now: enabled, under its trigger count,
@@ -1074,7 +1162,7 @@ impl Provider {
         event: &str,
         outputs: &DetMap<String, String>,
         link_id: i32,
-        payload: &[Option<ObjRef>],
+        payload: Option<&[PayloadElement]>,
     ) -> Result<(), BehaviorError> {
         for e in 0..self.data.sequences[s].events.len() {
             if !self.event_open(s, e, event) {
@@ -1090,22 +1178,26 @@ impl Provider {
             let links: Vec<VariableLink> = entry.variables.clone();
             let (start, length) = (entry.start, entry.length);
             for link in links.iter().filter(|l| l.link_type == "BVARLINK_Output") {
-                if !payload.is_empty() {
+                if let Some(payload) = payload {
+                    // By connection index, then by type (section 2, item 3); a link past the payload is skipped.
                     let Some(element) = usize::try_from(link.connection)
                         .ok()
                         .and_then(|c| payload.get(c))
-                        .copied()
+                        .cloned()
                     else {
                         continue;
                     };
-                    let path = match element {
-                        Some(o) => stock_path(vm, o)?,
-                        None => String::new(),
+                    let path = match element.object {
+                        Some(o) if element.var_type == "BVAR_Object" => stock_path(vm, o)?,
+                        _ => String::new(),
                     };
                     for &v in &link.variables {
-                        let variable = &mut self.data.sequences[s].variables[v];
-                        if variable.var_type == "BVAR_Object" {
-                            variable.live = element;
+                        let var_type = self.data.sequences[s].variables[v].var_type.clone();
+                        let binds = payload_binding(&element.var_type, &var_type)
+                            .map_err(|n| BehaviorError::Vm(n.after_partial_writes().into()))?;
+                        if binds {
+                            let variable = &mut self.data.sequences[s].variables[v];
+                            variable.live = element.object;
                             variable.object = path.clone();
                         }
                     }

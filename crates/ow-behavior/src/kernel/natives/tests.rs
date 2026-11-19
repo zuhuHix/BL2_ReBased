@@ -586,8 +586,13 @@ fn what_section_c_does_not_read_is_not_yet() {
     let none_provider = vec![h.clone(), Value::Object(None), side.clone(), Value::Byte(2)];
     assert_eq!(not_yet(t.call(CHANGE_SEQUENCE, None, none_provider)), Missing::NotRead);
     let go = t.name("Go");
+    // Off reads Parameters (lane IMPL-ACTIVATE-EVENT-PARAMETERS): a value that is not an array is the port's own
+    // Script refusal.
     let with_parameters = vec![h.clone(), p.clone(), go, Value::Int(-1), Value::Int(0)];
-    assert_eq!(not_yet(t.call(EVENT_FROM_SCRIPT, None, with_parameters)), Missing::NotRead);
+    match t.call(EVENT_FROM_SCRIPT, None, with_parameters) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Parameters holds Int, not an array"), "{message}"),
+        other => panic!("{other:?}"),
+    }
     // A handle no process holds: nothing happens.
     let stranger = t.handle(42);
     t.call(INITIALIZE_PROVIDER, None, vec![stranger, p.clone()]).unwrap();
@@ -810,4 +815,82 @@ fn force_unregister_drops_a_parked_thread_so_a_later_tick_runs_nothing() {
     let ticked = with_provider(&mut t.vm, kept_pid, DELAYED, |vm, p| p.tick(vm, 5.0)).unwrap();
     ticked.expect("the kept provider").unwrap();
     assert!(t.seen().is_empty());
+}
+
+// ------------------------------------------------------------------------- script Parameters (IMPL-ACTIVATE-EVENT-PARAMETERS)
+
+/// Defines the invented `BehaviorVariableValue` struct (the note's field names) and returns it.
+fn variable_value_struct(t: &mut Toy) -> StructId {
+    let bare = t.bare;
+    let d = |t: &mut Toy, n: &str, k: PropKind| PropertyDecl::new(t.vm.space.names.intern(n), k);
+    let decls = vec![
+        d(t, "IntValue", PropKind::Int),
+        d(t, "FloatValue", PropKind::Float),
+        d(t, "ObjectValue", PropKind::Object { class: bare }),
+        d(t, "VariableType", PropKind::Byte { enum_: None }),
+    ];
+    t.vm.space
+        .classes
+        .define_struct("GearboxFramework.BehaviorProviderDefinition.BehaviorVariableValue", None, decls)
+        .unwrap()
+}
+
+fn element(ty: StructId, type_index: u8, object: Option<ObjRef>) -> Value {
+    Value::structure(ty, vec![Value::Int(0), Value::Float(0.0), Value::Object(object), Value::Byte(type_index)])
+}
+
+/// The array is read by name from the loaded enum (the toy enum orders `BVAR_Object` second, on purpose); a None
+/// element is `BVAR_None`; a struct of another type and a type byte past the enum are the port's own Script refusals.
+#[test]
+fn parameters_are_read_by_enum_name() {
+    let mut t = toy(ParityMode::Off);
+    let ty = variable_value_struct(&mut t);
+    let maya = t.object(t.bare, "Maya");
+    let object = crate::kernel::fixtures::VARIABLE_TYPES.iter().position(|n| *n == "BVAR_Object").unwrap() as u8;
+    let int = crate::kernel::fixtures::VARIABLE_TYPES.iter().position(|n| *n == "BVAR_Int").unwrap() as u8;
+    let arg = Value::array(vec![element(ty, object, Some(maya)), Value::None, element(ty, int, None)]);
+    let out = parameters(&mut t.vm, arg).unwrap();
+    assert_eq!(out[0], PayloadElement::object(Some(maya)));
+    assert_eq!(out[1].var_type, "BVAR_None");
+    assert_eq!(out[2].var_type, "BVAR_Int");
+    match parameters(&mut t.vm, Value::array(vec![element(ty, 200, None)])) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("outside EBehaviorVariableType"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let handle = t.handle;
+    match parameters(&mut t.vm, Value::array(vec![Value::structure(handle, vec![Value::Int(1)])])) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("is not a BehaviorVariableValue"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(parameters(&mut t.vm, Value::array(vec![])).unwrap(), vec![]);
+}
+
+/// Off: the event fires with its Parameters (the toy provider's `Go` runs its behavior); Reference is unchanged.
+#[test]
+fn the_script_route_fires_with_parameters_in_off_only() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut t = toy(mode);
+        Pack.register(&mut t.vm).unwrap();
+        let ty = variable_value_struct(&mut t);
+        let skill = t.object(t.bare, "Skill_0");
+        let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
+        let definition = t.definition("TestBpd", PROVIDER);
+        let p = Value::Object(Some(definition));
+        t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
+        let object = crate::kernel::fixtures::VARIABLE_TYPES.iter().position(|n| *n == "BVAR_Object").unwrap() as u8;
+        let parameters = Value::array(vec![element(ty, object, Some(skill))]);
+        let go = t.name("Go");
+        let r = t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), p.clone(), go, Value::Int(-1), parameters]);
+        match mode {
+            ParityMode::Off => {
+                r.unwrap();
+                assert_eq!(t.seen(), ["Go B consumer=Skill_0"]);
+            }
+            // Reference does not route the call to the kernel rule (as on main): nothing fires.
+            ParityMode::Reference => {
+                r.unwrap();
+                assert!(t.seen().is_empty());
+            }
+        }
+    }
 }

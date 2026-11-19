@@ -39,7 +39,7 @@
 //! | `ActivateBehaviorOutputLink` | the collector | both | UNVERIFIED (NATIVE_MISSION_DISPATCH.md A2) |
 //! | `WillowPawn.GetBehaviorConsumerHandle` | Off: a plain read of the object's `ConsumerHandle`; Reference: routed | both | UNVERIFIED (NATIVE_BEHAVIOR_CONTEXT.md) |
 //! | `IsBehaviorSequenceEnabled` | routed; kernel: the registered provider's enabled bit, else false | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
-//! | `ActivateBehaviorEventFromScript` | Off: a None provider fires nothing; routed; kernel: fired on the registered provider, an omitted filter -1 | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
+//! | `ActivateBehaviorEventFromScript` | Off: a None provider fires nothing; routed; kernel: fired on the registered provider, an omitted filter -1; Off: `Parameters` is the event's typed payload, object bindings only, after a write-free preflight (NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md) | both | UNVERIFIED (NATIVE_MARCUS_USE_CHAIN.md) |
 //! | `BroadcastBehaviorEventFromScript` | routed; kernel: fired on every provider of the consumer, in registration order | both | UNVERIFIED (COMBAT_DEATH.md) |
 //! | `RegisterBehaviorConsumer` | None: handle -1; else a new process at the lowest free non-negative `PID` | Off | UNVERIFIED; the allocator is not read |
 //! | `IntializeBehaviorProviderForConsumer` | routed; kernel: decode, pass 1, refuse pass 2 | Off | UNVERIFIED (NATIVE_BEHAVIOR_POPULATION.md section C) |
@@ -73,7 +73,7 @@ use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
 use ow_vm::error::VmError;
 
-use crate::kernel::Provider;
+use crate::kernel::{PayloadElement, Provider};
 use crate::provider::{self, BehaviorError, stock_path};
 
 #[cfg(test)]
@@ -556,11 +556,25 @@ fn kernel_rule(c: &mut NativeCall<'_>, native: &'static str, pid: i32) -> Result
                 -1
             };
             if c.has(4) {
-                return Err(NotYet::not_read(
-                    "ActivateBehaviorEventFromScript with Parameters (how they reach the event is not read)",
-                    RECORD_USE_CHAIN,
-                )
-                .into());
+                // Off (lane IMPL-ACTIVATE-EVENT-PARAMETERS): the array is the event's payload. Reference keeps its
+                // refusal.
+                if c.vm.parity != ParityMode::Off {
+                    return Err(NotYet::not_read(
+                        "ActivateBehaviorEventFromScript with Parameters (how they reach the event is not read)",
+                        RECORD_USE_CHAIN,
+                    )
+                    .into());
+                }
+                let elements = parameters(c.vm, c.arg(4)?.clone())?;
+                if let Some(slot) = registered(c, pid)? {
+                    lend(c.vm, pid, slot, |vm, p| {
+                        // The preflight reads only; the firing follows, with no new refusal of its own.
+                        p.check_payload(&name, &elements).map_err(to_vm)?;
+                        p.fire_event_with(vm, &name, &DetMap::new(), filter, Some(&elements))
+                            .map_err(to_vm)
+                    })?;
+                }
+                return Ok(Value::None);
             }
             if let Some(slot) = registered(c, pid)? {
                 lend(c.vm, pid, slot, |vm, p| {
@@ -589,6 +603,61 @@ fn kernel_rule(c: &mut NativeCall<'_>, native: &'static str, pid: i32) -> Result
         CHANGE_SEQUENCE => change_sequence(c, pid),
         _ => Err(error(format!("{native} is not a routed kernel native"))),
     }
+}
+
+/// `ActivateBehaviorEventFromScript`'s `Parameters` as a payload (NATIVE_ACTIVATE_BEHAVIOR_EVENT_PARAMETERS.md section
+/// 4, items 1 and 2), read only: an array whose elements are `BehaviorProviderDefinition.BehaviorVariableValue` structs
+/// or None (an element no setter wrote: `BVAR_None`). `VariableType` is read by name from the loaded
+/// `EBehaviorVariableType`. Anything else is `VmError::Script`, the port's own check (the game's array is always
+/// typed). UNVERIFIED in the running game.
+fn parameters(vm: &mut Vm, arg: Value) -> Result<Vec<PayloadElement>, VmError> {
+    const STRUCT: &str = "GearboxFramework.BehaviorProviderDefinition.BehaviorVariableValue";
+    let Some(items) = arg.elements() else {
+        return Err(error(format!(
+            "ActivateBehaviorEventFromScript: Parameters holds {}, not an array",
+            arg.kind_name()
+        )));
+    };
+    let wanted = vm.space.classes.struct_by_path(STRUCT);
+    let mut out = Vec::with_capacity(items.len());
+    let mut names: Option<Vec<String>> = None;
+    for (i, item) in items.iter().enumerate() {
+        let bad = |what: String| error(format!("ActivateBehaviorEventFromScript: Parameters[{i}] {what}"));
+        let Some(st) = item.as_struct() else {
+            if matches!(item, Value::None) {
+                out.push(PayloadElement { var_type: "BVAR_None".to_string(), object: None });
+                continue;
+            }
+            return Err(bad(format!("holds {}, not a BehaviorVariableValue", item.kind_name())));
+        };
+        if wanted != Some(st.ty) {
+            return Err(bad("is not a BehaviorVariableValue".to_string()));
+        }
+        let field = |name: &str| -> Result<Value, VmError> {
+            let id = vm.space.names.find(name).ok_or_else(|| bad(format!("has no {name}")))?;
+            let layout = vm.space.classes.struct_layout(st.ty).ok_or_else(|| bad("has no layout".to_string()))?;
+            let (entry, _) = layout.field(id).ok_or_else(|| bad(format!("has no {name}")))?;
+            st.fields.get(entry as usize).cloned().ok_or_else(|| bad(format!("has no {name}")))
+        };
+        let index = match field("VariableType")? {
+            Value::Byte(b) => usize::from(b),
+            other => return Err(bad(format!("VariableType holds {}, not a byte", other.kind_name()))),
+        };
+        let object = match field("ObjectValue")? {
+            Value::Object(o) => o,
+            other => return Err(bad(format!("ObjectValue holds {}, not an object", other.kind_name()))),
+        };
+        if names.is_none() {
+            names = Some(provider::enum_names(vm, provider::ENUM_PACKAGE, provider::VARIABLE_TYPE_ENUM).map_err(to_vm)?);
+        }
+        let var_type = names
+            .as_ref()
+            .and_then(|n| n.get(index))
+            .cloned()
+            .ok_or_else(|| bad(format!("VariableType {index} is outside EBehaviorVariableType")))?;
+        out.push(PayloadElement { var_type, object });
+    }
+    Ok(out)
 }
 
 // IntializeBehaviorProviderForConsumer(ConsumerHandle, ProviderDefinition), on a kernel process (section C).
