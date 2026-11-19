@@ -19,8 +19,8 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
 **Why it matters.**
 - On the map-load path, the bring-up's 597 `SetInitialState` stops all end in `GotoState('Auto')` (decision
   2026-11-19-20). The same stop ends the game info's `InitGame` and `PreBeginPlay`. By inference, not traced
-  here, that is through the actors those events spawn after play began, whose `SetInitialState` reaches it. That blocks the script-made GRI and mission tracker (SLICE_MAPLOAD.md, lane 2 and the auto-state
-  row).
+  here, that is through the actors those events spawn after play began, whose `SetInitialState` reaches it. That
+  blocks the script-made GRI and mission tracker (SLICE_MAPLOAD.md (#530), lane 2 and the auto-state row).
 - The port's `ow-vm` refuses `Auto` unless the class's own state flags and every state in its chain have flags 0. Most
   classes have their own auto flag set, so it refuses almost every actor.
 
@@ -62,11 +62,15 @@ So an inherited auto state is found. For example, `WillowCoopGameInfo` declares 
 ## 2. When an actor enters its auto state
 
 - **`Actor.SetInitialState`** (script) sets `bScriptInitialized`, then calls `GotoState('Auto')`. It does nothing else.
-  Seven classes override it:
-  - `Volume`, `PickupFactory` and its `Disabled` state;
-  - `WillowBoundaryTurret`, `WillowInteractiveSwitch`, `WillowProjectile` and `WillowVehicleFactory`.
-
-  `WillowProjectile`'s override still calls `GotoState('Auto')`. The others were not read here.
+  Six classes and one state override it (script, read for review r1 of #540):
+  - **`Volume` and `WillowInteractiveSwitch`:** with associated actors, `GotoState` to `AssociatedTouch` (the
+    switch's own associated volumes, for `WillowInteractiveSwitch`); otherwise `Actor.SetInitialState`, so `Auto`.
+  - **`PickupFactory`:** `Disabled` when `InventoryType` is None, `WaitingForMatch` when `bIsSuperItem` is set,
+    otherwise `Actor.SetInitialState`, so `Auto`.
+  - **`PickupFactory`'s `Disabled` state:** only sets `bScriptInitialized`, so a disabled factory stays put.
+  - **`WillowBoundaryTurret`:** `Actor.SetInitialState` first (so `Auto`), then its own set-up.
+  - **`WillowVehicleFactory`:** only sets `bScriptInitialized`; it never reaches `Auto`.
+  - **`WillowProjectile`:** `WaitingForVelocity` or `Auto`, chosen on its `Role` and `AccelRate`.
 - **Who raises `SetInitialState`:**
   - **The bring-up's routing**, pass 2: right after `PostBeginPlay`, unless the actor is being deleted
     (NATIVE_MAP_LOAD.md section 2.1).
@@ -99,10 +103,16 @@ So an inherited auto state is found. For example, `WillowCoopGameInfo` declares 
 | `DebugCameraController` | `PlayerWaiting` | empty | `PlayerMove` |
 | `Weapon` | `Inactive` | empty | `BeginState` and fire functions |
 | `WillowWeapon` | `Inactive` (bits 1 and 2) | empty | `BeginState`, `EndState`, three more |
-| `PickupFactory`, `DroppedPickup` | `Pickup` | `Begin:` label; it calls `CheckTouching`, then `Stop` | `BeginState`, touch functions |
+| `PickupFactory`, `DroppedPickup` | `Pickup` (a `PickupFactory` only when its `SetInitialState` takes the default branch: section 2) | `Begin:` label; it calls `CheckTouching`, then `Stop` | `BeginState`, touch functions |
 | `WillowPickup` | `Pickup` | empty | `BeginState`, `EndState`, `PostRenderFor` |
 | `WillowHUD` | `Startup` | empty | `DoStartupDrawHUD` |
 | `KActorFromStatic` | `Initializing` | empty | `Tick` |
+
+**Who reaches the table's state.** `Auto` is resolved only where `Actor.SetInitialState` runs: a `Volume` or
+`WillowInteractiveSwitch` with associated actors goes to `AssociatedTouch` instead, a `PickupFactory` with no
+`InventoryType` to `Disabled` and a super item's to `WaitingForMatch`, a `WillowVehicleFactory` to no state change at
+all, and a `WillowProjectile` may go to `WaitingForVelocity` (section 2). `WillowBoundaryTurret` resolves `Auto` as
+usual.
 
 **What every other class gets: no state.** That covers `WillowGameReplicationInfo`, `MissionTracker`,
 `WillowPlayerPawn`, `WillowAIPawn`, and every static mesh, light, trigger and population actor of Sanctuary.
@@ -134,7 +144,8 @@ port's state machine already runs all of these (`ow-vm` `states`, decision 2026-
 - When the class's own state flags have bit 1 (value 2) set: no state. `GotoState` then behaves as for `None` and stays
   silent, as `is_auto` already makes it.
 - Otherwise: walk the chain from the class itself to the root. In each class, look at its own declared states, and
-  pick the first with bit 1 set. None found: no state.
+  pick the first with bit 1 set. None found: the oracle refusal in item 2 (the census shows it never happens on
+  installed data).
 - Reference is unchanged (the C++ approximation).
 
 **2. Typed refusals:**
@@ -147,16 +158,19 @@ port's state machine already runs all of these (`ow-vm` `states`, decision 2026-
   Proposed as a refusal rather than an answer. UNVERIFIED either way.
 - **A class or state body that does not read:** the existing decode error, unchanged.
 
-**3. The state-code step on the map route.** The world that runs the bring-up sets `World::set_state_step` to
-`ow_vm::states::process_state` in Off. Today's `LayerAbsent` stays for a world that does not. This belongs to the
-map-load lanes (SLICE_MAPLOAD.md); the implementer of item 1 may add it, or leave it to lane 4. `process_state` already
-runs state code only on the authority.
+**3. The state-code step on the map route.** The caller that builds the world installs the hook, Off only:
+`World::set_state_step` set to `ow_vm::states::process_state`, next to where the host installs its physics step.
+`set_state_step` can be set once, and `bring_up_for_play` is handed an existing world (`ow-world`
+`world/mapload/bringup.rs`), so the bring-up cannot install it itself. Today's `LayerAbsent` stays for a world that
+does not install it. This belongs to the map-load lanes (SLICE_MAPLOAD.md (#530)); the implementer of item 1 may add
+it, or leave it to lane 4. `process_state` already runs state code only on the authority.
 
 **4. Tests the implementer can build** (synthetic packages, `package()` / `tag()` helpers):
 - a class flagged auto (no state);
 - a parent with an auto state and a child class without one (the child resolves to the parent's state);
 - a child overriding the parent's auto state with its own auto state (the child's wins);
-- a child that declares a non-auto state of the same name (the walk continues to the parent's auto state);
+- a child that declares a non-auto state of the same name: the walk continues, and the target is the parent's state
+  export (the parent's auto state, not the child's same-named state). UNVERIFIED, and absent from installed data;
 - the two oracle refusals;
 - `BeginState` of the auto state raised inside `SetInitialState`, after `PostBeginPlay`;
 - the `Begin` label set and the code run only at the next state-code step, not at `GotoState`.
@@ -168,7 +182,7 @@ runs state code only on the authority.
 - **Link 12's next stop, `WillowPlayerController.UnlockAchievementIfConditionsMet`, is an unbound native** on the
   turn-in path. It is not this question.
 - **Where it may come in:**
-  - On the map route (SLICE_MAPLOAD.md), every actor of the bring-up, and every spawn after it.
+  - On the map route (SLICE_MAPLOAD.md (#530)), every actor of the bring-up, and every spawn after it.
   - In combat, `WillowAIPawn`'s `Staggered` state calls `GotoState('Auto')` when a stagger ends. `WillowAIPawn` has no
     auto state, so on this rule it returns to no state. Links 3 and 4 may reach it once their hits stagger an enemy.
   - `WillowProjectile` calls it from its own `SetInitialState` and its velocity wait. This matters for any shot that
@@ -179,7 +193,7 @@ runs state code only on the authority.
 1. **UNVERIFIED in the running game:** the classes' resolved states. A bl-sdk read of `GetStateName()` right after
    load, on the game info, the local player controller, a held weapon and a dropped pickup, would confirm section 3's
    table. This port expects `PendingMatch`, `PlayerWaiting`, `Inactive` and `Pickup`.
-2. The six other `SetInitialState` overrides (section 2) were not read for whether they reach `GotoState('Auto')`.
+2. **Closed** (review r1 of #540): the other overrides were read; section 2 says where each goes.
 3. The game info's `StartGameState` range for `StartMatch`. The state code compares it against two small values. What
    sets `StartGameState` before the first tick (the game info's `PreBeginPlay` copies it from an older GRI when there is
    one) is the map-load lanes' to trace.
