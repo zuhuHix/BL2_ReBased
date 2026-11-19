@@ -424,7 +424,9 @@ pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 /// anything, and it keeps its errors typed (review r1 of #476):
 /// - a `WillowGlobals` from its class defaults, whose `TheGlobalsDefinition` is the installed [`GLOBALS_DEFINITION`],
 ///   loaded here (the allowed preload), recorded as the world's globals (`WorldQuery::set_globals`);
-/// - the weapon class's default object, loaded here, so the preflight reads it without a load.
+/// - the weapon class's default object, loaded here, so the preflight reads it without a load;
+/// - an empty component registry layer (`ow_inventory::anim_tree::ComponentRegistry`), so `SetAnimTreeTemplate`'s
+///   registry walk finds nothing (the hub's ruling on NATIVE_SET_ANIM_TREE_TEMPLATE.md section 5, UNVERIFIED).
 ///
 /// The other links' worlds are unchanged.
 pub(crate) fn pickup_world(
@@ -446,6 +448,7 @@ pub(crate) fn pickup_world(
     ow_inventory::globals::globals_schemas(vm, globals, "the pickup world's set-up")?;
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
+    ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
 }
 

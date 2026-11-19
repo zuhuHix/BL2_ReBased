@@ -2,15 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**IMPL-SETANIMTREETEMPLATE (2026-11-19, pc-hummer, stacked on #487 c2b5a258; review r1 of #492 applied, note df863aff):**
-AI-assisted (Claude Code, Opus 5.5). `SkeletalMeshComponent.SetAnimTreeTemplate` in Off: items 1-3 `NotRead`, then
-the registry walk `NotYet` (layer absent), unmarked; the writes and the owner event are not coded. `cargo build
---workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,326 passed / 0 failed / 46 ignored (4 new).
-Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors before, 0 / 7 / 7 after; only links 6 and 7 change,
-still in `make` (0 of 3 and 0 of 4 steps), now at the registry `NotYet` (layer absent), prefixed by the step's own
-write tracking. A local probe in the first revision answering the registry "nothing" moved them to the unbound
-`SkeletalMeshComponent.SetForceRefPose(bool)`. ctest and verify_packages not run (no C++ change). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder); logs under ignored `local/p2/anim-tree/`.
+**IMPL-SETANIMTREETEMPLATE (2026-11-19, pc-hummer, on main d72b96d4 after #487 landed; the hub's section 5 ruling):**
+AI-assisted (Claude Code, Opus 5.5). `SkeletalMeshComponent.SetAnimTreeTemplate` in Off from
+NATIVE_SET_ANIM_TREE_TEMPLATE.md (df863aff): the preflight, an empty `ComponentRegistry` layer on the pickup world
+(walk answers "nothing"), the teardown writes, and `AnimTreeUpdated` only with an `Owner`. `cargo build --workspace
+--locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,413 passed / 0 failed / 46 ignored (8 new);
+`crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors; links 6 and 7 get past the
+native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMeshComponent.SetForceRefPose(bool)`.
+ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN
+(placeholder); logs under ignored `local/p2/anim-tree/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
