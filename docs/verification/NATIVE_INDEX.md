@@ -605,3 +605,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowPawn.GetOpinion (the charm layer: CharmedChild, CharmedParent) | [NATIVE_IS_FRIENDLY.md](NATIVE_IS_FRIENDLY.md) | link 9: Maya's opinion of the target | UNVERIFIED | high | |
 | UIInteraction.GetDataStoreClient | [NATIVE_ONLINE_GAME_SETTINGS.md](NATIVE_ONLINE_GAME_SETTINGS.md) | links 10-12: the accept step's online game settings refresh (AddMission) | UNVERIFIED | high | `ow-world`: a `NotYet` (layer absent) in Off (decision 2026-11-19-19) |
 | DataStoreClient.FindDataStore (the player's stores, then the global ones, by tag) | [NATIVE_ONLINE_GAME_SETTINGS.md](NATIVE_ONLINE_GAME_SETTINGS.md) | links 10-12: the WillowOnlineGameSettings store | UNVERIFIED | high | |
+| WillowPlayerController.GetInventoryPawn | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | links 6-7: the key's pawn (a vehicle answers its Driver) | UNVERIFIED | medium | |
+| WillowGlobals.RemovePickup | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | links 6-7: the pickup's destroy (the globals' pickup list, two global events) | UNVERIFIED | medium | |
+| DroppedPickup.AddToNavigation | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | link 6: the pickup's landing (does nothing in this build) | UNVERIFIED | high | |
+| the per-tick pickup targeting (raises SawPickupable / ClearSeenPickupable) | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | link 7: the aimed pickup (view cone, score over distance, line check) | UNVERIFIED | medium | |
