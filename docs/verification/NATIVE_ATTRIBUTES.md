@@ -397,7 +397,8 @@ Currency, Random, AmmoDropWeight and Constraint are now read in
   `NounAttributeValueResolver`, `TimeValueResolver`, `LevelNameAttributeValueResolver`,
   `ShopTimerRateValueResolver`, `AmmoResourceUpgradeAttributeValueResolver`,
   `BlackMarketUpgradeAttributeValueResolver`, `ClassDropWeightValueResolver`, `DamageTypeAttributeValueResolver`, `PlayerStat...`,
-  `AIResourceAttributeValueResolver`.
+  `AIResourceAttributeValueResolver`. (`BlackMarketUpgradeAttributeValueResolver` has since been read in
+  NATIVE_BLACKMARKET_UPGRADES.md, decision 2026-11-19-63.)
 - `AWillowInventory` interface bodies (slot computed value), `PopulationFactoryBalancedAIPawn.ApplyAttributeStartingValues`,
   `BalanceModifierDefinition.*` body detail (other lanes), `AttributePresentationDefinition.*` natives (display rules, see
   NATIVE_WEAPON_RULES section 2), `WillowGameInfo` startup-teleporter attribute natives.
