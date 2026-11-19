@@ -36,7 +36,7 @@ inside `WillowWeapon.AttachMeshToPickup`.
 | `SkeletalMeshComponent.HideBoneByName(name,byte)` | looks the bone up in the component's skeletal mesh; on a match, hides it | none when there is no mesh or no match | medium | nothing with no mesh or a None name; otherwise `NotRead` (3.3) |
 | `Actor.AttachComponent(object)` | attaches the component to the world's scene with this actor as its owner, then lists it in `Components` | the component's owner and flags, `Components`, the scene | medium (outline) | with the slice world's empty scene layer: the flag clears, `Owner`, the `Components` append (hub ruling, 3.4); without it `NotYet`, kind `LayerAbsent` |
 | `PrimitiveComponent.SetLightEnvironment(object)` | when the environment changes: stores it, keeping the old one and reattaching only while attached | `LightEnvironment`, while attached `PreviousLightEnvironment` and `bNeedsReattach` | medium | the rule of 6.2 |
-| `WillowPickup.InitializePickupForRBPhysics()` | with `bUseRBPhysics`, sets the pickup up as a rigid body (outline) | the pickup's rotation rate, torque flags and physics; its mesh's physics | medium (outline) | nothing without `bUseRBPhysics`; otherwise `NotYet`, kind `LayerAbsent` (6.3) |
+| `WillowPickup.InitializePickupForRBPhysics()` | with `bUseRBPhysics`, sets the pickup up as a rigid body (outline) | the pickup's physics fields, timers and `Physics`; its mesh's collision and rigid-body fields (table in 6.6) | medium (outline) | nothing without `bUseRBPhysics`; otherwise `NotYet`, kind `LayerAbsent` (6.3) |
 | `WillowPickup.SpawnPickupParticles()` | makes, attaches and starts the pickup's particle component (outline) | `PickupParticleComponent`, the new component | medium (outline) | `NotYet`, kind `NotRead` or `LayerAbsent` (6.4) |
 
 Each answer is **Off only; Reference keeps the stub policy** (the C++ binds none of them, and `Actor.AttachComponent`
@@ -293,8 +293,11 @@ with the scene layer"). The question as it was put to the hub is kept below as t
 
 `WillowPickup.InventoryAssociated` goes on:
 1. it takes the pickup's `CollisionComponent` as a `MeshComponent`: the new skeletal mesh, which
-   `AttachMeshToPickup` set. It calls `SetLightEnvironment(DynamicLightEnvironment)` on it, with the pickup's own
-   light environment. In `WillowPickup`'s class defaults this is the default subobject `MyLightEnvironment`;
+   `AttachMeshToPickup` set. It calls `SetLightEnvironment(DynamicLightEnvironment)` on it. In `WillowPickup`'s
+   class defaults `DynamicLightEnvironment` is the default subobject `MyLightEnvironment`; in Off the value passed is
+   the pickup's own spawned copy of it, since the spawn gives each actor its own copy of each template component
+   (`ow_world::actors::spawn`, `crates/ow-world/src/actors.rs:568-571`, decision 2026-11-19-44). The mesh's
+   `LightEnvironment` is its class default, None, so the two differ;
 2. `InitializePickupForRBPhysics()`, native;
 3. the inventory's `PickupAssociated(Self)`, script with an empty body (`WillowWeapon` does not override
    `WillowInventory`'s).
@@ -334,32 +337,39 @@ though both stay **UNVERIFIED (fitted)**.
    `LightEnvironment`, then `bNeedsReattach` = true.
 
 On the slice, under the hub's scene layer, `AttachComponent` leaves `bAttached` as it was (false). So the answer is
-case 2: one write, `LightEnvironment` = the pickup's `MyLightEnvironment`. Had a scene layer set `bAttached`, case 3
-would refuse, because `AttachComponent` set the component's `Owner` to the pickup.
+case 2: one write, `LightEnvironment` = the pickup's spawned copy of `MyLightEnvironment` (6.1), replacing the
+class-default None. Had a scene layer set `bAttached`, case 3 would refuse, because `AttachComponent` set the
+component's `Owner` to the pickup.
 
 ### 6.3 `WillowPickup.InitializePickupForRBPhysics()` (outline)
 
 The whole body runs only when the pickup's `bUseRBPhysics` (declared by `DroppedPickup`) is set. Without it the native
 does nothing. In `WillowPickup`'s class defaults, `bUseRBPhysics` is **true**, so the slice's pickup takes the body.
-With it, in outline:
-1. one of the pickup's class-table entries is called (not read), and its `RotationRate` is set to an engine constant
-   (by fit, zero);
+With it, in outline (each effect has a row in 6.6's table):
+1. the pickup's rigid-body sleep set-up (a class-table entry of the pickup), then its `RotationRate`;
 2. the pickup's primitive component (by fit, its `CollisionComponent`) is taken. With one, the native:
    - reads the globals definition;
    - sets three floats of the component to 1.0;
-   - raises a flag of the component, with a deferred reattach when it was not raised yet, and clears another;
+   - raises `CollideActors`, with a deferred reattach when it was not raised yet, and clears `BlockActors`;
    - sets up the rigid body from the inventory's definition, or calls another of the pickup's entries when the
      inventory has none;
-   - copies three pickup fields from the globals definition (not identified);
-   - sets the component's collision channels (about ten calls) and two more of its entries;
-3. another of the pickup's entries is called, by its place in the sequence the physics mode change (not read);
+   - copies three pickup fields from the globals definition;
+   - sets the component's collision threshold and collision channels, with entries of the component between them;
+3. the pickup's physics mode is changed (an entry of the pickup; its argument was not recovered);
 4. with a component:
-   - when `bTorque` is clear, a spin from the globals definition is applied;
+   - when `bTorque` is clear, a spin drawn from the globals definition is applied;
    - otherwise the pickup's `Torque` is applied, and `bTorque` is cleared when `bTorqueTemporary` is set;
-5. a timer of 0.3 s is set on the pickup, under a name that was not identified.
+5. a timer of 0.3 s, `EnableRagdollCollision`, is set on the pickup.
 
 The layout tool places `bUseRBPhysics`, `Inventory`, `RotationRate`, `Torque`, `bTorque` and `bTorqueTemporary`
 exactly where the native reads them.
+
+**Nothing earlier on the route writes `bUseRBPhysics`.** Its script writers are `WillowInventory.DropFrom` (false,
+only with its `bForceNoRBPhysics` argument), `WillowInventory.GetPickup` (false; called only by
+`WillowGrenadeMod.GetPickup`) and `WillowPickup.AdjustPickupPhysicsAndCollisionForBeingDropped` (true; called only by
+`WillowPawn.Died`). The harness replaces `DropFrom` with the spawn and `InitializeFromInventory`, and neither the
+spawn's begin-play events, `InitializeFromInventory` nor `InventoryAssociated` writes it. So the class default holds
+when the native runs.
 
 **Off answer:**
 1. `bUseRBPhysics` false: return, no write. This is the native's own rule.
@@ -368,11 +378,11 @@ exactly where the native reads them.
    - `layer`: "a rigid-body physics layer (the port has none)";
    - `record`: `docs/verification/NATIVE_ATTACH_MESH_TO_PICKUP.md`.
 
-The body is almost entirely rigid-body physics: the body set-up, the collision channels, the spin and the torque.
-The few script-visible writes in it (`RotationRate`, `bTorque`, the timer) are interleaved with that work. So no
-part of it is offered as a port answer. The `make` step adds the "stopped after partial writes: " prefix.
+The body is mostly rigid-body physics: the body set-up, the collision channels, the spin and the torque. Its
+script-visible writes are interleaved with that work, and 6.6 shows they do not separate from it. So no part of it is
+offered as a port answer. The `make` step adds the "stopped after partial writes: " prefix.
 
-### 6.4 `WillowPickup.SpawnPickupParticles()` (outline; not reached on the slice in default Off)
+### 6.4 `WillowPickup.SpawnPickupParticles()` (outline; not reached on the slice in default Off while 6.3's stop stands)
 
 It hands to a class-table entry of `WillowPickup`, resolved with the constructor-to-table method. The entry:
 1. **No particle system:** when `PickupParticles` is None, it calls another of the pickup's entries (by its purpose,
@@ -398,17 +408,19 @@ It hands to a class-table entry of `WillowPickup`, resolved with the constructor
 
 The layout tool places `PickupParticleComponent` and `PickupParticles` exactly where the native reads them.
 
-**Off answer:**
+**Off answer** (both cases come after `SetInteractParticles` has written `PickupParticles` and `bNetDirty`, so the
+`make` step prefixes either with "stopped after partial writes: "):
 1. `PickupParticles` None: `NotYet { NotRead }`, "WillowPickup.SpawnPickupParticles with no particle system: the
-   particles' removal", record this note, before any write.
-2. Otherwise, before any write, `NotYet::layer_absent(what, layer, record)` with:
+   particles' removal", record this note, before any write of the native's own.
+2. Otherwise, before any write of the native's own, `NotYet::layer_absent(what, layer, record)` with:
    - `what`: "WillowPickup.SpawnPickupParticles: the pickup's particle effect";
    - `layer`: "a particle-effects layer (the port has none)";
    - `record`: this note.
 
    The native makes a component, attaches it, and hands it a template, a colour and a start. None of that is
    script-visible state the slice reads, apart from `PickupParticleComponent`. A port answer like 3.4's would be for
-   the hub. Section 6.5 shows the slice does not reach this native in default Off.
+   the hub. Section 6.5 shows the slice does not reach this native in default Off while 6.3's rigid-body stop
+   stands, and where the stop moves if the hub rules a port answer for it.
 
 ### 6.5 Where links 6 and 7 stop
 
@@ -418,8 +430,81 @@ With #492's "nothing" and the hub's scene layer for `AttachComponent` (section 5
 3. **`WillowPickup.InitializePickupForRBPhysics` answers `NotYet { LayerAbsent }`** (6.3), because the pickup's
    class default `bUseRBPhysics` is true. The `make` step prefixes it with "stopped after partial writes: ".
 
-So links 6 and 7 stop at `InitializePickupForRBPhysics`. `SetPickupability` and `SpawnPickupParticles` are not reached.
-Link 7 stops on its first gun, before the decoy is made.
+So links 6 and 7 stop at `InitializePickupForRBPhysics`. While that stop stands, `SetPickupability` and
+`SpawnPickupParticles` are not reached. Link 7 stops on its first gun, before the decoy is made.
+
+**If the hub rules a port answer for the rigid-body set-up** (6.6 says why this note offers none), the stop moves on:
+1. `PickupAssociated`: an empty script body;
+2. `SetPickupability(true)`, script (6.1): `bPickupable` = true; `RegisterMissionDirector` reaches only the bound
+   `GetInventoryDefinition`; `SetMissionMaterialParameter` does nothing;
+3. `TryToSetInteractParticles(true)` calls `SetInteractParticles` with the globals definition's `PartPickup`, which
+   writes `PickupParticles` and `bNetDirty`;
+4. **`SpawnPickupParticles`** (6.4): `NotYet { LayerAbsent }`, prefixed, when `PartPickup` is set;
+   `NotYet { NotRead }`, prefixed, when it is None.
+
+6.4 needs a ruling of its own before the stop moves past it.
+
+### 6.6 For the hub: an empty physics layer for `InitializePickupForRBPhysics` (the writes do not separate)
+
+The hub asked whether the native's script-visible writes, apart from the physics work, can be listed as a candidate
+answer for an explicit, empty physics layer, in the same shape as the scene layer. **They cannot be separated from
+the physics.** So the answer stays `NotYet { LayerAbsent }` (6.3), and links 6 and 7 leave the queue for now.
+
+**Every effect, in the native's order** (all under `bUseRBPhysics`; "later" means the rest of links 6 and 7: the
+`make` step's script, the `touch` step's `Pickup` state handlers and the `look` step's pickup targeting):
+
+| # | Effect | Field | Script sees it | Read later on links 6-7 | Read or fitted |
+|---|---|---|---|---|---|
+| 1 | the pickup's rigid-body sleep set-up (a class-table entry) | `bForceRBToSleep` cleared; timers `MaxRBAwakeTimer` (rate `MaxRBAwakeTime`, once) and `CheckForRigidBodySleepState` (1.0 s, looping) | yes | no | body read; field names by a constant shift of `WillowPickup`'s own fields, the name-to-rate pairing by fit |
+| 2 | the pickup's rotation rate | `RotationRate` = an engine constant (by fit, zero) | yes | no | field read; value fitted |
+| 3 | the component's three floats set to 1.0 | `Scale3D` | yes | no | fitted (the doubled shift below) |
+| 4 | an entry of the component | not identified | not known | not known | not read |
+| 5 | a flag raised, with the deferred reattach (2) when newly raised | `CollideActors` | yes | no | write read; name fitted |
+| 6 | a flag cleared | `BlockActors` | yes | no | write read; name fitted |
+| 7 | with the inventory's definition: the rigid-body set-up (one float of a physics object set to 1.0, two calls) | not identified | not known | not known | partly read |
+| 8 | without one: an entry of the pickup, which hands on to another of its entries | not identified | not known | not known | not read |
+| 9 | three pickup fields from the globals definition | `MaxImpactEffectPlayCount` (a float, truncated), `ImpactEffectDelay`, `ImpactVelocityAkRtpc` | yes | no | fitted (row 1's shift) |
+| 10 | an entry of the component | not identified | not known | not known | not read |
+| 11 | the collision threshold: a globals value times 0.25, truncated to a byte | `ScriptRigidBodyCollisionThresholdCompiled` | yes | no | fitted |
+| 12 | the collision channel, then an entry of the component | `RBChannel` | yes | no | write read, name fitted; the entry not read |
+| 13 | the per-channel calls: each sets or clears one bit by channel number, through the helper the script's `SetRBCollidesWithChannel` also uses, then an entry of the component | `RBCollideWithChannels` | yes | no | helper read; which channels and values were not recovered; the entry not read |
+| 14 | two more entries of the component | not identified | not known | not known | not read |
+| 15 | the physics mode entry. By its shape the actor's physics setter: when the mode changes it writes `Physics`, notifies through another field, and in the rigid-body mode calls entries of the collision component | `Physics` | yes | **yes**: `DroppedPickup.Pickup.ValidTouch` compares `Physics` with `PHYS_Falling` | body read; its argument was not recovered (by fit, the rigid-body mode); its calls not read |
+| 16 | with `bTorque` clear: a spin, three draws from the engine's float random stream over ranges from the globals definition, then an impulse on the body | the random stream | yes (a later `FRand` sees the stream move) | no | draws read; the impulse not read |
+| 17 | with `bTorque` set: the pickup's `Torque` applied, then `bTorque` cleared when `bTorqueTemporary` is set | `bTorque` | yes | no | read (exact placement); the torque call not read |
+| 18 | a timer: `EnableRagdollCollision`, 0.3 s, once, on the pickup itself. Its target is the script function `WillowPickup.EnableRagdollCollision`, which raises two of the mesh's rigid-body channels | the pickup's timers | yes (`IsTimerActive` and the like) | no; the harness does not advance the world between `make` and `touch`, so it would not fire | read (the name from the string the native references) |
+
+**Row 5 under the scene layer.** The flag is `CollideActors`. `SkeletalMeshComponent`'s class defaults do not list it,
+so it is false, and the raise is new. The deferred reattach then runs on the mesh, whose `Owner` is the pickup after
+`AttachComponent` (3.4). So part 1's rule (2) answers `NotYet { NotRead }`, "the deferred reattach: the owner's
+component update", record this note, inside the native. It comes after rows 1 to 3 have written, so it is terminal,
+and the `make` step adds the prefix.
+
+**Row 18 and the port.** The timer is a script-visible write. The port's timer service (`ow_world::timers`) could hold
+it, but no port answer makes it yet, nor row 1's two timers.
+
+**Where the field names come from.**
+- `WillowPickup`'s own fields sit one fixed amount past the layout tool's placement. Rows 1 and 9 agree on it (the
+  bool word and `MaxRBAwakeTime` in row 1; three consecutive fields of fitting kinds in row 9). `DroppedPickup`'s
+  fields (`bUseRBPhysics`, `RotationRate`, `bTorque`, `bTorqueTemporary`, `Torque`) sit exactly where the tool places
+  them.
+- `PrimitiveComponent`'s fields sit shifted by the amount seen in 3.2 and 6.2 up to
+  `ScriptRigidBodyCollisionThresholdCompiled`, `RBChannel` and the bool word; and by twice that amount from the
+  transform fields on, which fits a 16-byte-aligned matrix field ahead of them. `SpawnPickupParticles`' writes to
+  `Translation` and `Rotation` (6.4) fit the same doubled shift.
+
+All these names are **UNVERIFIED (fitted)**.
+
+**Why the writes do not separate:**
+- Row 5 stops inside the native, at the owner-branch `NotRead`, unless that branch also gets a port answer.
+- Row 15 writes `Physics`, which the `touch` step reads, and its argument was not recovered. A port answer that left
+  `Physics` alone would change what `ValidTouch` decides, and that would look like a rule.
+- Rows 4, 7, 8, 10, 12, 13 and 14 hold component and pickup entries that were not read, and row 13's channels were not
+  recovered.
+- Row 16 moves the engine's random stream, which no port answer can match without the draws' ranges and the stream.
+
+**What it would take:** the entries marked "not read", row 15's argument and calls, row 13's channels, and a ruling
+on the deferred reattach's owner branch. Until then the answer stays `NotYet { LayerAbsent }`.
 
 ## Open questions
 
@@ -435,8 +520,11 @@ Link 7 stops on its first gun, before the decoy is made.
 4. `HideBoneByName`'s rebuild, transform mask and physics body options.
 5. `Actor.AttachComponent`: the component's own attach entry (render, collision, physics), whether it sets
    `bAttached`, the extra value for orthonormalized lighting, and the engine-wide notifier.
-6. `InitializePickupForRBPhysics`: the entries it calls, the three fields copied from the globals definition, and
-   the timer's name.
+6. `InitializePickupForRBPhysics` (6.6): the entries marked "not read", the physics mode entry's argument, and the
+   channels set. The timer is `EnableRagdollCollision`, 0.3 s, once, on the pickup, with the script function
+   `WillowPickup.EnableRagdollCollision` as its target. The harness world does not advance between `make` and
+   `touch`, so the timer would not fire before the touch. It is a script-visible write that no port answer can make
+   yet.
 7. `SpawnPickupParticles`: the removal entry, the particle offset, the template hand-over and activation, the three
    flags, and which currency kind selects the item set's particle system.
 
@@ -451,7 +539,8 @@ Link 7 stops on its first gun, before the decoy is made.
 2. **A hidden bone.** Drop a weapon whose type definition names a `BoneToHideOnMesh`, and read that bone's
    `BoneVisibilityStates` entry afterwards (expect `BVS_ExplicitlyHidden`).
 3. **The physics set-up.** Hook `WillowPickup.InitializePickupForRBPhysics` on a drop, and record before and
-   after: `bUseRBPhysics`, `Physics`, `RotationRate`, `bTorque` and the pickup's timers.
+   after: `bUseRBPhysics`, `Physics`, `RotationRate`, `bTorque`, `bForceRBToSleep`, the mesh's `CollideActors`,
+   `BlockActors`, `RBChannel` and `RBCollideWithChannels`, and the pickup's timers.
 4. **The particles.** After a drop, read `PickupParticles`, `PickupParticleComponent` and its `Template`, and whether
    the component is in the pickup's `Components`.
 5. **No duplicate check.** Call `AttachComponent` twice with the same component on a test actor in a scratch session,
