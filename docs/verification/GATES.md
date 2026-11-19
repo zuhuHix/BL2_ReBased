@@ -23,6 +23,15 @@ alone. `cargo build --workspace` clean; `cargo test --workspace` 2,169 passed / 
 before the ammo maxima, so the resolver is not reached on main. No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-72; logs under ignored `local/p2/bm-resolver/`.
 
+**IMPL-SETTINGS-FILL (2026-11-19, pc-hummer, rebased onto main 7556c254, which has #448 and #450):** AI-assisted (Claude Code, Opus
+5.5). The online game settings entry filled at store creation, `SetIntProperty`, `GetCurrPlaythrough` and `GetDLCManager`
+(None) in Off, from NATIVE_SETTINGS_FILL.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
+--locked -j 4` 2,178 passed / 0 failed / 46 ignored after the rebase (5 new data store tests in `ow-world`); `crate_edges_test.py` 19 OK.
+Installed Off `--slice-gate` strict (release build and run under the machine lock): 0 ok / 14 NotYet / 0 errors; links
+10 to 12 pass 3 of 4 driver steps and stop in `accept` at `GetActiveMissionNumber` ("stopped after partial writes"),
+past the settings entry. ctest and verify_packages not run (no C++ change). No real-game run; every rule stays
+`UNVERIFIED` in game. Decision 2026-11-19-80; logs under ignored `local/p2/settings-fill/`.
+
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps
 (preflight, context, out write, value chain). After the rebase: `cargo test -p ow-combat -p ow-attr -p ow-inventory

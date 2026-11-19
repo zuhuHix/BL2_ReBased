@@ -255,12 +255,12 @@ fn the_natives_after_the_settings_are_not_yet_and_branch_1_is_unbound() {
     assert!(!t.vm.has_native(&key), "branch 1 binds nothing");
 }
 
-/// The refresh, run as script through the real getter and lookup (review r2 of #448, items 2 and 5; r3, item 2):
-/// with no store, the route answers None and the refresh returns; the first refresh with the route on makes and
-/// publishes the client and store, and its settings-entry refusal (open question 2) is marked as after partial
-/// writes, its kind kept; the client and store stay published; a later refresh's refusal is not marked.
+/// The refresh, run as script through the real getter and lookup: with the route off it does nothing and makes
+/// nothing. With the route on, the installed entry read is no longer overridden (decision 2026-11-19-80): the toy's
+/// read (an empty script here) answers, the refresh returns, and the client and store stay published. The fill itself
+/// is tested on the `ToyFill` packages below.
 #[test]
-fn the_refresh_stops_at_the_settings_entry_read() {
+fn the_refresh_reads_the_entry_without_an_override() {
     let mut t = toy(true);
     let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
     let refresh = "WillowGame.WillowPlayerController.UpdateOnlineGameSettings";
@@ -268,24 +268,11 @@ fn the_refresh_stops_at_the_settings_entry_read() {
     t.call(refresh, Some(pc), vec![]).unwrap();
     assert!(t.vm.service::<DataStores>().unwrap().borrow().client().is_none(), "nothing made with the route off");
     t.route.set(true);
-    match t.call(refresh, Some(pc), vec![]).unwrap_err() {
-        VmError::NotYet(n) => {
-            assert_eq!(n.missing, Missing::NotRead);
-            assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains("open question 2"), "{n}");
-            assert_eq!(n.record, RECORD);
-        }
-        e => panic!("expected NotYet, got {e}"),
-    }
-    let s = t.vm.service::<DataStores>().unwrap();
-    let (client, globals) = (s.borrow().client(), s.borrow().globals().to_vec());
-    assert!(client.is_some() && globals.len() == 1, "the client and store stay published");
-    match t.call(refresh, Some(pc), vec![]).unwrap_err() {
-        VmError::NotYet(n) => assert!(!n.what.contains(PARTIAL_WRITES) && n.what.contains("open question 2"), "{n}"),
-        e => panic!("expected NotYet, got {e}"),
-    }
-    // The lookup alone is not refused: a caller that only wants the store gets it.
-    let tag = t.name("WillowOnlineGameSettings");
-    assert_eq!(t.call(FIND_DATA_STORE, client, vec![tag]).unwrap(), Value::Object(Some(globals[0])));
+    t.call(refresh, Some(pc), vec![]).unwrap();
+    let via = t.call(SETTINGS_VIA_DATASTORE, Some(pc), vec![]).unwrap();
+    assert_eq!(via, Value::Object(None), "the toy's own (empty) script answers: nothing overrides it");
+    // The empty toy script makes no lookup, so nothing is made: no override ran the route.
+    assert!(t.vm.service::<DataStores>().unwrap().borrow().client().is_none(), "the route was not run for it");
 }
 
 /// The service's borrow and every class are taken before anything is made (review r2 of #448, item 3): a held borrow,
@@ -323,4 +310,313 @@ fn a_failure_after_the_first_write_is_marked() {
     }
     let other = after_writes(VmError::ServiceBorrowed("an invented service"));
     assert!(matches!(other, VmError::ServiceBorrowed("an invented service")));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The settings fill (lane IMPL-SETTINGS-FILL, decision 2026-11-19-80), on the invented `ToyFill` packages.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// `Engine.upk` for the fill (invented):
+/// - the getter and the lookup, as in [`engine`];
+/// - `UIDataStore` and `UIDataStore_OnlineGameSettings`, with its `GameSettingsCfgList` of `GameSettingsCfg`
+///   (`GameSettingsClass`, `GameSettings`, `Provider`) and its `SettingsProviderClass`;
+/// - `UIDataProvider` (native `AddPropertyNotificationChangeRequest`), `UIDynamicDataProvider` (`DataClass`) and
+///   `UIDataProvider_Settings` (`Settings`, `SettingsArrayProviders` of ints, and a script `OnSettingValueUpdated`);
+/// - `Settings`, with `Properties` of `SettingsProperty` (`PropertyId`, `Data` of `SettingsData`: `Type`, `Value1`), the
+///   enum `ESettingsDataType` (`SDT_Empty`, `SDT_Int32`, `SDT_Float`) and the native `SetIntProperty`;
+/// - `GameEngine.GetDLCManager`, static native.
+fn fill_engine(with_settings_provider: bool) -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&[
+        "Class",
+        "Function",
+        "NameProperty",
+        "ObjectProperty",
+        "IntProperty",
+        "ByteProperty",
+        "ClassProperty",
+        "StructProperty",
+        "ArrayProperty",
+        "ScriptStruct",
+        "Enum",
+    ]);
+    let object = t.class("Object", 0);
+    let class_tail = |o: i32| ow_package::testkit::ints(&[object, o]);
+    let ui = t.class("UIInteraction", object);
+    let spec = FunctionSpec::new(NATIVE | STATIC, "GetDataStoreClient");
+    t.function(ui, "GetDataStoreClient", &[], Some(("Object", object)), &[], &spec, |_| None);
+    let client = t.class("DataStoreClient", object);
+    let params = [
+        Param { type_ref: 0, ..Param::new("Name", "Tag") },
+        Param { flags: CPF_OPT, type_ref: object, ..Param::new("Object", "Player") },
+    ];
+    let spec = FunctionSpec::new(NATIVE, "FindDataStore");
+    t.function(client, "FindDataStore", &params, Some(("Object", object)), &[], &spec, |_| None);
+    let strukt = |t: &mut ScriptToy, outer: i32, name: &str| {
+        let mut e = ow_package::testkit::Export::new(t.import("ScriptStruct"), name, vec![0u8; 16]);
+        e.outer = outer;
+        t.p.add_export_with(e)
+    };
+    let array_of = |t: &mut ScriptToy, owner: i32, name: &str, kind: &str, type_ref: i32| {
+        let array = t.p.next_export();
+        t.prop("Array", owner, name, 0, array + 1);
+        t.prop(kind, array, name, 0, type_ref);
+    };
+    let store = t.class("UIDataStore", object);
+    t.prop("Name", store, "Tag", 0, 0);
+    let settings_store = t.class("UIDataStore_OnlineGameSettings", store);
+    let cfg = strukt(&mut t, settings_store, "GameSettingsCfg");
+    t.prop_tail("Class", cfg, "GameSettingsClass", 0, &class_tail(object));
+    t.prop("Object", cfg, "GameSettings", 0, object);
+    t.prop("Object", cfg, "Provider", 0, object);
+    array_of(&mut t, settings_store, "GameSettingsCfgList", "Struct", cfg);
+    t.prop_tail("Class", settings_store, "SettingsProviderClass", 0, &class_tail(object));
+    let provider = t.class("UIDataProvider", object);
+    let spec = FunctionSpec::new(NATIVE, "AddPropertyNotificationChangeRequest");
+    t.function(provider, "AddPropertyNotificationChangeRequest", &[], None, &[], &spec, |_| None);
+    let dynamic = t.class("UIDynamicDataProvider", provider);
+    t.prop_tail("Class", dynamic, "DataClass", 0, &class_tail(object));
+    if with_settings_provider {
+        let settings_provider = t.class("UIDataProvider_Settings", dynamic);
+        t.prop("Object", settings_provider, "Settings", 0, object);
+        array_of(&mut t, settings_provider, "SettingsArrayProviders", "Int", 0);
+        let spec = FunctionSpec::new(SCRIPT, "OnSettingValueUpdated");
+        t.function(settings_provider, "OnSettingValueUpdated", &[], None, &[], &spec, |_| {
+            let mut a = Asm::new();
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        });
+    }
+    let settings = t.class("Settings", object);
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    let entries = ["SDT_Empty", "SDT_Int32", "SDT_Float"];
+    payload.extend(ow_package::testkit::ints(&[0, i32::try_from(entries.len()).unwrap()]));
+    for e in entries {
+        let n = t.p.fname(e, 0);
+        payload.extend_from_slice(&n);
+    }
+    let mut x = ow_package::testkit::Export::new(t.import("Enum"), "ESettingsDataType", payload);
+    x.outer = settings;
+    let data_type = t.p.add_export_with(x);
+    let data = strukt(&mut t, settings, "SettingsData");
+    t.prop("Byte", data, "Type", 0, data_type);
+    t.prop("Int", data, "Value1", 0, 0);
+    let property = strukt(&mut t, settings, "SettingsProperty");
+    t.prop("Int", property, "PropertyId", 0, 0);
+    t.prop("Struct", property, "Data", 0, data);
+    array_of(&mut t, settings, "Properties", "Struct", property);
+    let spec = FunctionSpec::new(NATIVE, "SetIntProperty");
+    let params = [Param::new("Int", "SettingId"), Param::new("Int", "Value")];
+    t.function(settings, "SetIntProperty", &params, None, &[], &spec, |_| None);
+    let engine_class = t.class("GameEngine", object);
+    let spec = FunctionSpec::new(NATIVE | STATIC, "GetDLCManager");
+    t.function(engine_class, "GetDLCManager", &[], Some(("Object", object)), &[], &spec, |_| None);
+    t.p.build()
+}
+
+/// `WillowGame.upk` for the fill (invented): the store (an online game settings store, its `Tag` default), the
+/// settings class `WillowOnlineGameSettings` (a `Settings`), the replication info with `CurrentPlaythrough` and
+/// `GetCurrPlaythrough`, and a toy controller whose `GetActiveMissionNumber` is native.
+fn fill_willow() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "IntProperty", "ObjectProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let base = t.p.add_import("Core", "Class", engine, "UIDataStore_OnlineGameSettings");
+    let settings = t.p.add_import("Core", "Class", engine, "Settings");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let store = t.class("WillowOnlineGameSettings_DataStore", base);
+    let mut defaults = ow_package::testkit::ints(&[0]);
+    let tag = t.p.fname("WillowOnlineGameSettings", 0);
+    defaults.extend(t.p.tag("Tag", "NameProperty", &tag));
+    defaults.extend_from_slice(&t.none);
+    t.p.add_export(store, "Default__WillowOnlineGameSettings_DataStore", defaults);
+    t.class("WillowOnlineGameSettings", settings);
+    let gri = t.class("WillowGameReplicationInfo", object);
+    t.prop("Int", gri, "CurrentPlaythrough", 0, 0);
+    let spec = FunctionSpec::new(NATIVE, "GetCurrPlaythrough");
+    t.function(gri, "GetCurrPlaythrough", &[], Some(("Int", 0)), &[], &spec, |_| None);
+    let pc = t.class("WillowPlayerController", object);
+    let spec = FunctionSpec::new(NATIVE, "GetActiveMissionNumber");
+    t.function(pc, "GetActiveMissionNumber", &[], Some(("Int", 0)), &[], &spec, |_| None);
+    t.p.build()
+}
+
+/// The fill world: the store class default's `GameSettingsCfgList` set to one entry of `settings_class` (None: an
+/// entry without a class), and its `SettingsProviderClass` to `provider_class`.
+fn fill_toy(settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
+    fill_toy_with(true, settings_class, provider_class)
+}
+
+fn fill_toy_with(with_settings_provider: bool, settings_class: Option<&str>, provider_class: Option<&str>) -> Toy {
+    let dir = std::env::temp_dir().join(format!("ow-world-fill-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (e, w) = (fill_engine(with_settings_provider), fill_willow());
+    let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    register(&mut vm).unwrap();
+    let cdo = vm.defs.class_default(&mut vm.space, GLOBAL_DATA_STORES[0]).unwrap();
+    let cfg = vm.space.classes.struct_by_path("Engine.UIDataStore_OnlineGameSettings.GameSettingsCfg").unwrap();
+    let mut entry = vm.space.classes.struct_defaults(cfg).unwrap();
+    let class = settings_class.map(|c| vm.find_class(c).unwrap());
+    struct_set(&vm.space, &mut entry, "GameSettingsClass", Value::Class(class), "test").unwrap();
+    write_field(&mut vm.space, cdo, "GameSettingsCfgList", Value::array(vec![entry]), "test").unwrap();
+    let provider = provider_class.map(|c| vm.find_class(c).unwrap());
+    write_field(&mut vm.space, cdo, "SettingsProviderClass", Value::Class(provider), "test").unwrap();
+    Toy { vm, dir, route: Rc::new(Cell::new(true)) }
+}
+
+impl Toy {
+    /// The world's one settings entry after the client is made: (GameSettings, Provider).
+    fn entry(&mut self) -> (Option<ObjRef>, Option<ObjRef>) {
+        self.client();
+        let store = self.vm.service::<DataStores>().unwrap().borrow().globals()[0];
+        let list = read_field(&self.vm.space, store, "GameSettingsCfgList", "test").unwrap();
+        let e = list.elements().unwrap()[0].clone();
+        let obj = |v: Value| match v {
+            Value::Object(o) => o,
+            other => panic!("{other:?}"),
+        };
+        (
+            obj(struct_get(&self.vm.space, &e, "GameSettings", "test").unwrap()),
+            obj(struct_get(&self.vm.space, &e, "Provider", "test").unwrap()),
+        )
+    }
+
+    /// Sets the settings' `Properties` to `(PropertyId, Type, Value1)` entries.
+    fn set_properties(&mut self, settings: ObjRef, props: &[(i32, u8, i32)]) {
+        let pty = self.vm.space.classes.struct_by_path("Engine.Settings.SettingsProperty").unwrap();
+        let dty = self.vm.space.classes.struct_by_path("Engine.Settings.SettingsData").unwrap();
+        let mut out = Vec::new();
+        for &(id, ty, v) in props {
+            let mut data = self.vm.space.classes.struct_defaults(dty).unwrap();
+            struct_set(&self.vm.space, &mut data, "Type", Value::Byte(ty), "test").unwrap();
+            struct_set(&self.vm.space, &mut data, "Value1", Value::Int(v), "test").unwrap();
+            let mut p = self.vm.space.classes.struct_defaults(pty).unwrap();
+            struct_set(&self.vm.space, &mut p, "PropertyId", Value::Int(id), "test").unwrap();
+            struct_set(&self.vm.space, &mut p, "Data", data, "test").unwrap();
+            out.push(p);
+        }
+        write_field(&mut self.vm.space, settings, "Properties", Value::array(out), "test").unwrap();
+    }
+
+    /// The settings' `Properties` as `(PropertyId, Type, Value1)`.
+    fn properties(&self, settings: ObjRef) -> Vec<(i32, u8, i32)> {
+        let list = read_field(&self.vm.space, settings, "Properties", "test").unwrap();
+        list.elements()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                let data = struct_get(&self.vm.space, p, "Data", "test").unwrap();
+                let id = struct_get(&self.vm.space, p, "PropertyId", "test").unwrap();
+                let ty = struct_get(&self.vm.space, &data, "Type", "test").unwrap();
+                let v = struct_get(&self.vm.space, &data, "Value1", "test").unwrap();
+                match (id, ty, v) {
+                    (Value::Int(i), Value::Byte(t), Value::Int(v)) => (i, t, v),
+                    other => panic!("{other:?}"),
+                }
+            })
+            .collect()
+    }
+}
+
+/// At store creation and binding (NATIVE_SETTINGS_FILL.md section 4): the entry gets a new `WillowOnlineGameSettings`
+/// and a `UIDataProvider_Settings` bound to it (`Settings`, `DataClass`), with `SettingsArrayProviders` empty. A
+/// `SettingsProviderClass` that is not a settings provider falls back to `UIDataProvider_Settings`. An entry without a
+/// settings class gets neither object.
+#[test]
+fn the_store_fills_its_entry_at_creation() {
+    for provider_class in [Some("Engine.UIDataProvider_Settings"), Some("Engine.UIDataProvider"), None] {
+        let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), provider_class);
+        let (settings, provider) = t.entry();
+        let (settings, provider) = (settings.expect("a settings object"), provider.expect("a provider"));
+        let class_path = |t: &Toy, o: ObjRef| ow_attr::eval::class_path(&t.vm.space, o);
+        assert_eq!(class_path(&t, settings), "WillowGame.WillowOnlineGameSettings", "{provider_class:?}");
+        assert_eq!(class_path(&t, provider), "Engine.UIDataProvider_Settings", "{provider_class:?}");
+        assert_eq!(read_field(&t.vm.space, provider, "Settings", "test").unwrap(), Value::Object(Some(settings)));
+        let settings_class = t.vm.space.heap.get(settings).unwrap().class;
+        assert_eq!(read_field(&t.vm.space, provider, "DataClass", "test").unwrap(), Value::Class(Some(settings_class)));
+        let arrays = read_field(&t.vm.space, provider, "SettingsArrayProviders", "test").unwrap();
+        assert_eq!(arrays.elements().map(<[Value]>::len), Some(0), "not built");
+    }
+    let mut t = fill_toy(None, None);
+    assert_eq!(t.entry(), (None, None), "an entry without a class gets neither object");
+}
+
+/// The fill is planned before anything is made: with no `UIDataProvider_Settings` class to make the provider from, the
+/// getter refuses with no instance left on the heap and no client or store kept.
+#[test]
+fn a_fill_that_cannot_be_planned_leaves_nothing() {
+    let mut t = fill_toy_with(false, Some("WillowGame.WillowOnlineGameSettings"), None);
+    let object = t.vm.find_class("Engine.Object").unwrap();
+    let before = t.vm.space.heap.live(&t.vm.space.classes, object).count();
+    assert!(t.call(GET_DATA_STORE_CLIENT, None, vec![]).is_err(), "no UIDataProvider_Settings class");
+    assert_eq!(t.vm.space.heap.live(&t.vm.space.classes, object).count(), before, "nothing made");
+    let s = t.vm.service::<DataStores>().unwrap();
+    assert!(s.borrow().client().is_none() && s.borrow().globals().is_empty());
+}
+
+/// `SetIntProperty` (section 3): the first entry with the id gets the value when its type is `SDT_Int32`; a float
+/// entry, and an id the settings do not list, change nothing.
+#[test]
+fn set_int_property_writes_the_first_integer_match_only() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let (settings, _) = t.entry();
+    let settings = settings.unwrap();
+    t.set_properties(settings, &[(7, 1, 0), (7, 1, 0), (8, 2, 5)]);
+    t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(7), Value::Int(42)]).unwrap();
+    assert_eq!(t.properties(settings), [(7, 1, 42), (7, 1, 0), (8, 2, 5)], "the first match only");
+    t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(8), Value::Int(9)]).unwrap();
+    assert_eq!(t.properties(settings)[2], (8, 2, 5), "a float entry is left alone");
+    t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(99), Value::Int(1)]).unwrap();
+    assert_eq!(t.properties(settings).len(), 3, "no entry added");
+}
+
+/// `GetCurrPlaythrough` reads `CurrentPlaythrough`; `GetDLCManager` answers None (the hub's ruling); a call on the
+/// settings provider is the named `NotYet`, for a native and for the provider's own script.
+#[test]
+fn the_engine_reads_and_the_provider_refusal() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let gri = t.make("WillowGame.WillowGameReplicationInfo", "ToyGRI");
+    write_field(&mut t.vm.space, gri, "CurrentPlaythrough", Value::Int(2), "test").unwrap();
+    assert_eq!(t.call(GET_CURR_PLAYTHROUGH, Some(gri), vec![]).unwrap(), Value::Int(2));
+    assert_eq!(t.call(GET_DLC_MANAGER, None, vec![]).unwrap(), Value::Object(None));
+    let (_, provider) = t.entry();
+    let provider = provider.unwrap();
+    // The client lookup began a refresh; the fill wrote, so a refusal here is marked.
+    for path in ["Engine.UIDataProvider.AddPropertyNotificationChangeRequest", "Engine.UIDataProvider_Settings.OnSettingValueUpdated"] {
+        not_yet(t.call(path, Some(provider), vec![]), |m| *m == Missing::NotRead, PROVIDER_NOT_YET);
+    }
+    let other = t.make("Engine.UIDataProvider", "ToyOtherProvider");
+    not_yet(
+        t.call("Engine.UIDataProvider.AddPropertyNotificationChangeRequest", Some(other), vec![]),
+        |m| *m == Missing::NotRead,
+        "not a settings provider",
+    );
+}
+
+/// The refresh's order on the filled entry: a setting written, then the unread `GetActiveMissionNumber`, whose
+/// `NotYet` is marked as after partial writes (kind kept); a later refresh that writes nothing before it is not marked.
+#[test]
+fn a_not_yet_after_a_settings_write_is_marked() {
+    let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
+    let (settings, _) = t.entry();
+    let settings = settings.unwrap();
+    t.set_properties(settings, &[(1, 1, 0)]);
+    let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
+    let mission = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
+    t.client();
+    t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(1), Value::Int(31)]).unwrap();
+    match t.call(mission, Some(pc), vec![]).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains("GetActiveMissionNumber"), "{n}");
+        }
+        e => panic!("{e}"),
+    }
+    t.client();
+    match t.call(mission, Some(pc), vec![]).unwrap_err() {
+        VmError::NotYet(n) => assert!(!n.what.contains(PARTIAL_WRITES), "a refresh that wrote nothing: {n}"),
+        e => panic!("{e}"),
+    }
 }
