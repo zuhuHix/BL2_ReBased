@@ -301,7 +301,28 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     bind_fn(vm, "Engine.Pawn.IsInjured", |c| {
         let me = this(c, "IsInjured")?;
         Ok(Value::Bool(is_injured(c.vm, me)?))
-    })
+    })?;
+    // Pawn.IsDead(), Off only (the C++ binds none, so Reference keeps the stub policy's answer): [`is_dead`].
+    if vm.parity == ParityMode::Off {
+        bind_fn(vm, "Engine.Pawn.IsDead", |c| {
+            let me = this(c, "IsDead")?;
+            Ok(Value::Bool(is_dead(c.vm, me)?))
+        })?;
+    }
+    Ok(())
+}
+
+/// `Pawn.IsDead()` in Off (NATIVE_DOWN_TIMERS.md, "Pawn.IsInjured, Pawn.IsDead, WillowPawn.IsInjuredDead"; lane
+/// FIX-STATION-NATIVES): the base pawn's answer, the actor's `bDeleteMe` or the pawn's `bIsDead`. So a downed player,
+/// injured-dead included, is not dead. The native calls a virtual; the binding covers every class without its own
+/// script declaration of `IsDead` (such a class has its own native key, left unbound). That no player or AI class
+/// overrides the virtual in native code alone is not read: UNVERIFIED. A class that declares neither flag answers
+/// false for the missing one.
+pub fn is_dead(vm: &mut Vm, pawn: ObjRef) -> Result<bool, VmError> {
+    let flag = |vm: &mut Vm, name: &str| -> Result<bool, VmError> {
+        Ok(get(vm, pawn, name)?.is_some_and(|v| truth(vm, &v)))
+    };
+    Ok(flag(vm, "bDeleteMe")? || flag(vm, "bIsDead")?)
 }
 
 #[cfg(test)]
