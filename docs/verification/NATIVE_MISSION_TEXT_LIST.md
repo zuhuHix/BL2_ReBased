@@ -103,26 +103,35 @@ port's, never observed in the game.
 
 **Which body runs.** The entry unpacks one object and calls one virtual of the movie, found in the accept screen's
 table. It runs, in order:
-1. **The chain step.** With `Thing` None it returns at once. Otherwise it registers `Thing` and its `_parent` chain in
-   `ChainedObjectMap`, through Flash lookups.
+1. **The chain step.**
+   - With `Thing` None this step is skipped, and steps 2 and 3 still run.
+   - Otherwise it registers `Thing` and its `_parent` chain in `ChainedObjectMap`, through Flash lookups.
 2. **`FocusObject` = `Thing`** (a script-visible write).
 3. **The offset step:**
-   - `FocusOffset` is zeroed;
+   - `FocusOffset` is zeroed. It is a `Core.Object.Vector` (the property's struct import), so X, Y and Z are all set
+     to 0, and `InterpFocusOffset` is not written;
    - with a `FocusObject` set, it is centred on the object's bounds (Flash queries);
    - a final clamp limits its Y to plus or minus half the margin between the stage height and the stage height times a
      scale.
    - The stage size comes from the native player's view. **With no native player, the size is never written**, so the
-     clamp's bound is undefined.
+     clamp's bound is undefined in the game.
    - The scale is (1, 1) when a flag of the movie is set, else two values of an engine object. Neither the flag's nor
      the object's identity was read.
 
 **So for `FocusOn(None)` on a movie with no native player, the game's result is undefined.** That case reads an
-unwritten stage size, and only a scale of exactly 1 makes the clamp's bound 0. Field names: `FocusObject`, then
-`FocusOffset`, by the class's declaration order (`ChainedObjectMap`, `RedundantClipArray`, `FocusObject`,
-`FocusOffset`, `InterpFocusOffset`), by fit, UNVERIFIED.
+unwritten stage size, and only a scale of exactly 1 makes the clamp's bound 0. The hub ruled on the port's answer for
+that state (section 6, R2).
+
+Field names: `FocusObject`, then `FocusOffset`, by the class's declaration order (`ChainedObjectMap`,
+`RedundantClipArray`, `FocusObject`, `FocusOffset`, `InterpFocusOffset`), by fit, UNVERIFIED.
 
 ## 5. `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer(Player, Status, Name)`
 
+**The call at the accept.** `WillowPlayerController.UpdateMissionStatus` calls it as a static function of the service
+class. The player it passes is `Self`, the controller whose mission status changed (in the slice, the bridge's player
+controller). The status is the new status, and the name is the mission's object `Name`.
+
+**What it does:**
 1. It unpacks an object, a byte and a name.
 2. It builds a temporary event record that holds the byte and the name, the name packed with a number from an engine
    lookup that was not read.
@@ -132,9 +141,11 @@ unwritten stage size, and only a scale of exactly 1 makes the clamp's bound 0. F
 **The submit routine** returns at once for a None player. Otherwise it asks the player one virtual and takes one of two
 submit paths, neither of which was read.
 
-The same submit routine ends `RecordCharacterRevivedEventForPlayer`, which NATIVE_RESPAWN_STATIONS.md section 3.5 read
-as "telemetry only, changes no game object" in what it read. No write to a script-visible field was seen in this
-native or in its record step.
+**Which events share it.** The same submit routine ends `RecordCharacterRevivedEventForPlayer` and
+`RecordCharacterKilledEventForPlayer` (this lane read both natives' bodies up to that call).
+- NATIVE_RESPAWN_STATIONS.md section 3.5 reads the revived event as "telemetry only" in one sentence, "in what was
+  read". It does not say that the submit paths were read, so that reading does not establish them.
+- No write to a script-visible field was seen in this native or in its record step.
 
 ## 6. Off answers, step by step (for an implementer)
 
@@ -145,40 +156,75 @@ The hub's rulings apply:
 - grade by the `VmError` variant and the `NotYet` kind, never by text;
 - **Off only; Reference is unchanged.**
 
-1. **`UpdateMissionTextList`:**
-   - with `MissionTextList` None: return, no write. This is the read None branch (section 2), not a UI skip. **Hub
-     call:** the port's list is None only because the stand-in movie never runs `Start`, while the game's is always
-     set. The hub decides whether the read branch may answer for a state the game does not produce;
-   - with it set: keep `NotYet { LayerAbsent }`, "the mission screen's Flash text list (not hosted)". Its steps
-     rebuild a container that only a hosted movie fills;
-   - a `MissionTextList` or `MissionCategories` the movie's class does not declare is a `VmError::Script` naming it.
-2. **`GetVariableObject`:** keep `NotYet { LayerAbsent }`, "a Flash movie query (not hosted)". The no-player answer
-   (None) is the game's rule for a state the game does not reach, and its return is read by fit. The same hub call as
-   step 1 applies: if the hub allows answering for the port's no-player state, the answer is None, with no write.
-3. **`FocusOn`:**
-   - keep `NotYet { LayerAbsent }`, "the 3D movie's Flash focus (not hosted)" (the existing text), in every case. With `Thing` None and no native
-     player, the game's clamp reads a stage size that was never written (section 4), so there is no defined answer to
-     port;
-   - **not** "nothing": `FocusObject` and `FocusOffset` are written in every case.
-4. **`RecordMissionStatusChangedEventForPlayer`:** bind it, so it is no longer an unbound `error`:
-   - a None player: nothing (the submit routine returns at once, and only temporaries are made and freed);
-   - any other player: `NotYet { NotRead }`, "WillowLeviathanService.RecordMissionStatusChangedEventForPlayer: the
-     statistics submit paths";
-   - if the hub accepts NATIVE_RESPAWN_STATIONS.md 3.5's "telemetry only" for the shared submit routine (lane
-     IMPL-GO-DOWN-NATIVES binds the revived sibling that way, #500), the same answer applies here: nothing, no write.
+**Records and layers.**
+- The screen natives' existing `NotYet`s keep their record, NATIVE_GFX_BRIDGE.md, and their layer, "a hosted Flash
+  movie (the port hosts none)", as `ow_world::world::mission_numbers` has them today.
+- The screen natives do not move to this note. The new answers below (the no-player answers of R1 and R2, and R2's
+  `NotRead`) cite this note as their record.
 
-**The expected stops.**
-- Today: step 1's `LayerAbsent`.
-- If the hub lets steps 1 and 2 answer for the port's state, the stop is `FocusOn`'s `LayerAbsent` (step 3), which stays
-  until a movie is hosted.
-- The probe of section 1, which also let `FocusOn` pass, met step 4 next; what follows it was not probed.
+**Hub ruling (2026-11-19, review of #504), R1.** The question was: may the read None branch of
+`UpdateMissionTextList` (step 1), and `GetVariableObject`'s no-player answer (step 2), answer for the port's stand-in
+state, which the game does not produce? (The game always runs `Start`, so its list and its player are always set.)
+Ruling: **yes, for both. This is one ruling for steps 1 and 2 together**; neither is allowed without the other. The
+answers below are the note's proposals, now allowed.
+
+1. **`UpdateMissionTextList`:**
+   - with `MissionTextList` None: return, no write. This is the read None branch (section 2), allowed by R1;
+   - with it set: keep `NotYet { LayerAbsent }`, "the mission screen's Flash text list (not hosted)". Its record is
+     NATIVE_GFX_BRIDGE.md and its layer "a hosted Flash movie (the port hosts none)". Its steps rebuild a container
+     that only a hosted movie fills;
+   - a `MissionTextList` or `MissionCategories` the movie's class does not declare is a `VmError::Script` naming it.
+2. **`GetVariableObject`:**
+   - for the port's no-player state (a stand-in movie with no native player): None. No wrapper is made, the class
+     cache is untouched, and nothing is written. Allowed by R1; the return is read by fit (open question 2);
+   - for a world that models a native player: keep `NotYet { LayerAbsent }`, "a Flash movie query (not hosted)", with
+     record NATIVE_GFX_BRIDGE.md and layer "a hosted Flash movie (the port hosts none)".
+3. **`FocusOn`.** **Hub ruling (2026-11-19, review of #504), R2.** The question was: what does the port answer for
+   `FocusOn(None)` in its no-player state, where the game's clamp reads a stage size that was never written?
+   - **Default:** for a world that models a native player or a hosted movie, keep `NotYet { LayerAbsent }`, "the 3D
+     movie's Flash focus (not hosted)", with record NATIVE_GFX_BRIDGE.md and layer "a hosted Flash movie (the port
+     hosts none)".
+   - **The port's no-player state, with `Thing` None:**
+     - write `FocusObject` = None, then `FocusOffset` = zero, in that order, and make no other write. The ruling's
+       "(0, 0)" is read as every component zero: `FocusOffset` is a `Vector`, so X, Y and Z are all 0 (section 4,
+       step 3). `InterpFocusOffset` and `ChainedObjectMap` are not written;
+     - a Y bound that would be negative or NaN is `NotYet { NotRead }`, "WillowGFxMovie3D.FocusOn: the focus offset's
+       clamp bound", record this note. A garbage stage height, or a scale above 1, gives such a bound. The port models
+       no stage size, so this applies only to a world that supplies a size and a scale;
+     - UNVERIFIED, bounded by open question 3.
+   - **The port's no-player state, with `Thing` set:** that cannot arise there, because R1's `GetVariableObject`
+     answers None. If it did, keep the default `LayerAbsent`.
+4. **The telemetry.** **Hub ruling (2026-11-19, review of #504), R3.** The question was: should the shared submit
+   routine be answered as NATIVE_RESPAWN_STATIONS.md 3.5's "telemetry only"? Otherwise a None player does nothing and
+   any other player is `NotRead`.
+   - Ruling: the port has no telemetry service, as it has no online subsystem. So in Off, the shared submit routine
+     answers nothing, with no write, for every player. This is a port answer, UNVERIFIED.
+   - It is one ruling for every event that ends in that routine:
+     - `RecordMissionStatusChangedEventForPlayer` (this note);
+     - `RecordCharacterRevivedEventForPlayer`, which #500 already answers that way;
+     - `RecordCharacterKilledEventForPlayer`, which shares the routine (section 5) and which #500 answers `NotRead`
+       today. R3 covers it too; the hub sends #500 a follow-up.
+   - The record step makes and frees only temporaries, so "nothing" is the whole answer for each of them.
+
+**The expected stops** under R1 to R3. A local, uncommitted probe applied all four answers on the same throwaway merge
+(#496 at 9b591ad, #497 at 7af3ab7, on main d72b96d):
+- link 10 `mission_accept`: **ok, 8 / 8**;
+- link 11 `mission_objective`: notyet, 4 / 8. It stops at `hit:fire`, stopped after partial writes, on "a pawn's
+  QueryInterface(GearboxFramework.IAIInterface) goes to its Mesh, a Engine.SkeletalMeshComponent: what a skeletal
+  mesh component answers to QueryInterface is not read" (record NATIVE_PAWN_AI_INTERFACE.md, an existing named
+  `NotRead`);
+- link 12 `mission_turn_in`: blocked by link 11 (the same stop).
+
+Without R1, the stop stays at step 1's `LayerAbsent`.
 
 ## Open questions
 
 1. The process-wide flag `UpdateMissionTextList` clears on its set branch (section 2, step 2.4).
 2. `GetVariableObject`'s return on the failure branch (read by fit).
-3. `FocusOn`'s scale source: the movie flag and the engine object's two values (section 4, step 3).
-4. The statistics submit paths of section 5, and the engine lookup that packs the name.
+3. `FocusOn`'s scale source: the movie flag and the engine object's two values (section 4, step 3). It bounds R2's
+   port answer (section 6, step 3).
+4. The statistics submit paths of section 5, and the engine lookup that packs the name. R3 answers them as a port
+   answer (no telemetry service); they stay unread.
 5. Whether a subclass of `QuestAcceptGFxMovie` replaces the text-list body.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)

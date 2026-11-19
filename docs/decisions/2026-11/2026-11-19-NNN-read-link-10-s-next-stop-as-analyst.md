@@ -32,3 +32,22 @@ the hub assigns one.
   - the telemetry native is bound: a None player does nothing, any other player is `NotRead`, unless the hub extends
     NATIVE_RESPAWN_STATIONS.md 3.5's "telemetry only".
 - Not implemented here: an implementer lane codes it from the note.
+
+**Review r1 of #504: hub rulings and six findings, recorded in the note's section 6.**
+- **R1, one ruling for both:** the None-list branch of `UpdateMissionTextList` and the no-player None of
+  `GetVariableObject` answer for the port's stand-in state. No wrapper is made, and the class cache is untouched.
+- **R2:** `FocusOn(None)` in the no-player state writes `FocusObject` = None, then a zero `FocusOffset`.
+  - `FocusOffset` is a `Vector`, so all three components are zero, and `InterpFocusOffset` is untouched.
+  - A negative or NaN Y bound is `NotRead`.
+  - For a world that models a player or a movie, `LayerAbsent` stays the default.
+- **R3:** the port has no telemetry service, so the shared submit routine answers nothing for every player. This is
+  a port answer, UNVERIFIED.
+  - It is one ruling for the mission-status, revived and killed events. This lane read all three bodies up to the
+    shared routine.
+  - NATIVE_RESPAWN_STATIONS.md 3.5 does not say that the submit paths were read.
+- **The accept's call:** `UpdateMissionStatus` passes `Self` (the controller), the new status and the mission's
+  `Name`.
+- **Records and layers:** the screen natives' existing `NotYet`s keep NATIVE_GFX_BRIDGE.md and the hosted-movie layer.
+  The new answers cite this note.
+- **Expected stops:** a local probe with R1 to R3 applied gives link 10 ok (8 / 8). Link 11 stops at 4 / 8 on the
+  skeletal mesh `QueryInterface` `NotRead`.
