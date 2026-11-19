@@ -85,6 +85,9 @@ on #522. The decision number is a placeholder.
 - **The slice** (installed, Off, strict, with #528 @ 9cd49c14 merged and `Engine.IsSplitScreen()` bound false, both
   locally only): 1 ok / 10 NotYet / 3 errors. Links 1, 3, 4, 5, 13 and 14 now stop in `maya:8` at the
   animation-node `LayerAbsent` on Maya's attachment 0, found in the preflight (no prefix, nothing written).
+  After review r1 of #542 (with #528 @ 0e8e2312): the same, 1 ok / 10 NotYet / 3 errors, link 1 0 of 1 at the same
+  stop. Maya's pawn holds no old `Mesh` there, so the release does not come first; her attachment 0's rendering
+  hooks, and attachment 13's old-cylinder release, come after it.
 
 **Superseded:** the first version of this lane implemented the note at cdf199be (the special refresh on `Mesh`, every
 collision type but 0 refused, entry index written as `i` + 1) and then held the parts the revision would change as

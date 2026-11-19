@@ -32,20 +32,18 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
-**IMPL-BODY-COMPOSITION (2026-11-19, pc-hummer, on fix/rust-init-pawn-meshes 1551f039, #522):** AI-assisted (Claude
-Code, Opus 5.5). `InstanceDataHelper.InitializeBodyComposition` in Off: a write-free plan, then the writes in the
-note's order under #518's counters. `InitializePawnMeshes` now runs the build.
 **IMPL-BODY-COMPOSITION (2026-11-19, pc-hummer, on fix/rust-init-pawn-meshes 1551f039, #522; note #529 at 87c8b9cd):**
 AI-assisted (Claude Code, Opus 5.5). `InstanceDataHelper.InitializeBodyComposition` in Off for the pawn wrapper: a
 write-free preflight, then the writes in the note's order under #518's counters. `InitializePawnMeshes` runs the build.
 
 Results:
-- `cargo test -p ow-world`: 264 passed / 0 failed / 5 ignored (with the hub's 20:03Z release refusal).
-- `cargo test --workspace`: 2,459 passed / 0 failed / 48 ignored (one existing ow-defs test warning).
+- `cargo test -p ow-world`: 271 passed / 0 failed / 5 ignored (after review r1 of #542; 264 before it).
+- `cargo test --workspace`: 2,466 passed / 0 failed / 48 ignored after review r1 of #542 (2,459 before); one existing ow-defs test warning.
 - Installed Off `--slice-gate` strict (release build; #528 @ 9cd49c14 merged and `Engine.IsSplitScreen()` bound false,
   both locally only; under the machine lock): 1 ok / 10 NotYet / 3 errors.
   - Links 1, 3, 4, 5, 13 and 14: 0 of their driver steps, stopping in `maya:8` at the preflight's `LayerAbsent` "the
     new Mesh's animation nodes" (Maya's attachment 0), unmarked.
+  - After review r1 of #542 (#528 @ 0e8e2312 merged instead): the same, link 1 0 of 1 at the same stop.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN.
