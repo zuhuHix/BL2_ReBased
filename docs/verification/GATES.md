@@ -118,8 +118,8 @@ run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/
 follow-up of #483 (`ApplyInternalSlotEffectModifiers` in Off): a write-free preflight (the noun probe validates
 `DefaultValue` without evaluating it; a replicated slot refused only for an operation that rewrites the entry), P0 before
 the independent checks, P1's out check, records appended to the live out argument, and the W1 mark only after an
-actual write (`Heap::mutations`). `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4`
-2,447 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build,
+actual write (one tracking path after review r1 of #518: a load, a committed heap change or a draw). `cargo build
+--workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,452 passed / 0 failed / 46 ignored (r1); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build,
 under the machine lock): 0 ok / 5 NotYet / 9 errors; link 8 1 of 2 driver steps, stop `WillowWeapon.CacheWeaponCard()`
 in `init`. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN; logs under ignored `local/p2/483-followup/`.

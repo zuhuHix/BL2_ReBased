@@ -833,25 +833,83 @@ fn definition_modes(cx: &mut EvalCx<'_>, definition: ObjRef) -> Result<(BaseValu
 }
 
 /// What evaluating the `AttributeInitializationData` value `v` can refuse before it evaluates anything (lane
-/// FIX-483-FOLLOWUP, F1: a preflight writes nothing, noun entries and generator state included). Nothing is resolved
-/// or evaluated, so no resolver writes, no noun entry is made and no generator is drawn:
+/// FIX-483-FOLLOWUP, F1; deepened in review r1 of #518): every field the evaluation can reach, checked without
+/// evaluating it, so no resolver writes, no noun entry is made and no generator is drawn:
 /// - the struct's four fields, as [`init_data`] reads them;
 /// - a `BaseValueAttribute`: [`preflight_read`] (its definition loaded, its chains' classes known);
-/// - an `InitializationDefinition`: loaded, its four parts present, its two modes inside their enums.
+/// - an `InitializationDefinition`: loaded, its four parts present, its two modes inside their enums, and then, as
+///   [`evaluate_init`] would reach them, the enabled formula's four terms, or else the enabled conditional's every
+///   entry (each expression's two attribute operands through [`preflight_read`], its `BaseValueIfTrue`) and its
+///   `DefaultBaseValue`; the enabled variance's two bounds and its integer flag; the enabled range limits. Each term
+///   is itself initialization data, checked the same way.
 ///
-/// It is shallow: the definition's formula terms, conditions, variance bounds and range limits are themselves
-/// initialization data that only evaluating reaches, and the nested attribute's own resolvers' data is read only by
-/// its read. A refusal from there is met when the value is evaluated. A definition load is not a write (the ruling of
-/// NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md section 3).
+/// A conditional entry is checked whether or not an earlier one would hold, since which one holds is only known by
+/// evaluating. A definition already being checked is not checked again (evaluation's own guard refuses the cycle).
+/// What stays out of reach of a check: a resolver's own data read only when it runs (a context resolver's answer, a
+/// value resolver's property). A definition load is not a write under NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md's
+/// ruling; a caller that counts loads as writes (the hub's ruling in review r1 of #518) tracks them itself.
 pub(crate) fn preflight_init(sys: &AttributeSystem, v: &Value, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    let mut seen = Vec::new();
+    preflight_init_in(sys, v, cx, &mut seen)
+}
+
+fn preflight_init_in(
+    sys: &AttributeSystem,
+    v: &Value,
+    cx: &mut EvalCx<'_>,
+    seen: &mut Vec<ObjRef>,
+) -> Result<(), AttrError> {
     let data = init_data(cx.world.parts().space, v)?;
     if let Some(attr) = data.base_value_attribute {
         preflight_read(sys, attr, cx)?;
     }
-    if let Some(definition) = data.initialization_definition {
-        ensure_loaded(cx, definition)?;
-        definition_parts(cx, definition)?;
-        definition_modes(cx, definition)?;
+    let Some(definition) = data.initialization_definition else {
+        return Ok(());
+    };
+    if seen.contains(&definition) {
+        return Ok(());
+    }
+    seen.push(definition);
+    ensure_loaded(cx, definition)?;
+    let [formula, conditional, variance, range] = definition_parts(cx, definition)?;
+    definition_modes(cx, definition)?;
+    let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
+        flag(name, &field_of(cx, v, name)?)
+    };
+    let term = |cx: &mut EvalCx<'_>, v: &Value, name: &str, seen: &mut Vec<ObjRef>| -> Result<(), AttrError> {
+        let t = field_of(cx, v, name)?;
+        preflight_init_in(sys, &t, cx, seen)
+    };
+    if enabled(cx, &formula, "bEnabled")? {
+        for name in ["Multiplier", "Level", "Power", "Offset"] {
+            term(cx, &formula, name, seen)?;
+        }
+    } else if enabled(cx, &conditional, "bEnabled")? {
+        let list = field_of(cx, &conditional, "ConditionalExpressionList")?;
+        for entry in elements("ConditionalExpressionList", &list)? {
+            let exprs = {
+                let space = cx.world.parts().space;
+                crate::expr::read_expressions(space, field(space, entry, "Expressions")?)?
+            };
+            for e in &exprs {
+                for attr in [e.attribute_operand1, e.attribute_operand2].into_iter().flatten() {
+                    preflight_read(sys, attr, cx)?;
+                }
+            }
+            term(cx, entry, "BaseValueIfTrue", seen)?;
+        }
+        term(cx, &conditional, "DefaultBaseValue", seen)?;
+    }
+    if enabled(cx, &variance, "bEnabled")? {
+        term(cx, &variance, "LowerBound", seen)?;
+        term(cx, &variance, "UpperBound", seen)?;
+        enabled(cx, &variance, "bUseIntegerRandomization")?;
+    }
+    if enabled(cx, &range, "bEnableMinValueRestriction")? {
+        term(cx, &range, "MinValue", seen)?;
+    }
+    if enabled(cx, &range, "bEnableMaxValueRestriction")? {
+        term(cx, &range, "MaxValue", seen)?;
     }
     Ok(())
 }

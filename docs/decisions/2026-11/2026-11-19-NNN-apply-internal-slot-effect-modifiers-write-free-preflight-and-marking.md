@@ -43,7 +43,8 @@ AI-assisted (Claude Code, Opus 5.5). Lane FIX-483-FOLLOWUP, implementer: the hub
   - The write-time guard in `rewrite` is kept.
 
 **Two small additions outside the native:**
-- **`ow_object::heap::Heap::mutations()`**, a change count, for F4. It exists because a W1 refusal can follow a
+- **`ow_object::heap::Heap::mutations()`**, a change count, for F4 (**replaced in review r1 of #518** by the change
+  watch below). It exists because a W1 refusal can follow a
   write made anywhere, notification script included, and the heap is the one place every such write passes.
   - Every creation, every free and every mutable borrow counts: `get_mut`, and with it every write and
     `slot_mut`.
@@ -72,3 +73,46 @@ the two F3 tests were re-run with the old order restored:
 - `cargo test --workspace`: 2,447 passed, 0 failed, 46 ignored.
 - Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors. Link 8 (`equip_gun`) passes 1 of 2 driver steps
   and stops in `init` at the unbound `WillowWeapon.CacheWeaponCard()`, past this native, as #483 recorded.
+
+**Review r1 of #518 (Sol high on 7c8218d0), fixed in one commit on top.**
+- **The hub's ruling, recorded here:** there is no isolated or read-only store view. P0 may load, **a load counts as a
+  write** (the spawn's `loaded` pattern), and a refusal after any load is marked through
+  `ow_world::pools::after_partial_writes`. There is **one write-tracking path** for the whole call: a refusal is marked
+  when P0 loaded anything, when the heap changed since the call began, or when the generator was drawn. It replaces
+  both F4's W1-only mark and the unconditional mark after W2. For this native it supersedes the note's "definition
+  loads are not writes".
+- **1 (high), the lazy load:** `load_attribute` sets `loaded` before each load. A load that succeeds, followed by a
+  later refusal, is now marked. P9's nested loads change the heap, so the heap check catches them.
+- **2 (medium), the change count:** `Heap::mutations()` counted mutable borrows. It is replaced by a change watch:
+  `Heap::watch_changes`, `Heap::changed_since` and `Heap::end_watch`.
+  - While a watch is open, the first mutable borrow of each object keeps a copy of it, and `changed_since` compares
+    each touched object with its copy. Creations and frees are counted too.
+  - So a borrow that changes nothing, or writes back the same value, is no change. A NaN slot compares unequal, so the
+    answer can only err toward "changed".
+  - Outside a watch, nothing extra happens. `Object` gained `PartialEq` for the comparison.
+- **3 (medium), the shallow default check:** `preflight_init` now walks every field the evaluation can reach, without
+  evaluating it: the enabled formula's terms; the enabled conditional's entries (their expressions' attribute operands
+  through `preflight_read`), its true values and its default; the enabled variance bounds; the enabled range limits.
+  It recurses into each one as initialization data, and a definition is checked only once.
+- **4 (medium), the record struct:** P1 now compares the record struct with `APPLIED_STRUCT` by identity.
+- **5 (medium), the modifier byte:** each qualifying slot's `ModifierType` byte is kept raw while reading and checked
+  after P0.
+- **6 (low), the tests:**
+  - the F2 notification also appends a sentinel to the backup list, and it survives slot 1's append;
+  - the F3 removal-only fixture holds a real stack entry (a toy resolver over a runtime stack attribute), which the
+    removal takes off, while the unused context resolver stays unloaded.
+
+**New tests in r1:**
+- a lazy load that succeeds, then a refusal: marked;
+- an unloadable attribute with a bad type byte: the store's own load error;
+- a no-op callback, then a `NotYet`: unprefixed; a callback that writes, then a `NotYet`: marked;
+- an unsupported resolver in a variance bound: refused before W2 (no modifier made, no draw);
+- a same-named record struct: refused in preflight;
+- the heap's change watch, in `ow-object`.
+
+The resident-only preflight refusals stay unprefixed, with noun state and RNG unchanged (the two F1 noun tests).
+Mutations run locally:
+- with the watch counting any borrow, the no-op test fails;
+- with the variance bounds left unchecked, the refusal comes after W2, marked.
+
+**Verified (r1):** `cargo test --workspace`: 2,452 passed, 0 failed, 46 ignored.

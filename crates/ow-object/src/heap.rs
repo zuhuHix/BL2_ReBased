@@ -91,7 +91,7 @@ impl Origin {
 /// One object: its class, name, outer, property slots (in the class layout's order), current state and origin.
 /// The heap makes objects; [`Object::new`] is for code that builds one to compare with (the struct may gain fields).
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Object {
     pub class: ClassId,
     pub name: NameId,
@@ -223,22 +223,38 @@ struct Entry {
     object: Option<Object>,
 }
 
-/// How often a heap was changed ([`Heap::mutations`]). Its `Debug` form is constant, so a heap's `Debug` text, which
-/// tests compare before and after a call, shows only the objects.
-#[derive(Clone, Copy, Default)]
-struct Mutations(u64);
+/// What a heap notes for [`Heap::changed_since`] (lane FIX-483-FOLLOWUP, review r1 of #518): how many objects were
+/// made or freed, and, while a watch is open, each object's state before its first mutable borrow in the watch. Its
+/// `Debug` form is constant, so a heap's `Debug` text, which tests compare before and after a call, shows only the
+/// objects.
+#[derive(Clone, Default)]
+struct Journal {
+    made_or_freed: u64,
+    /// Open watches; the copies are kept only while one is open.
+    depth: u32,
+    /// (slot index, generation, the object before its first mutable borrow since the oldest open watch).
+    touched: Vec<(u32, u32, Object)>,
+}
 
-impl std::fmt::Debug for Mutations {
+impl std::fmt::Debug for Journal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("_")
     }
+}
+
+/// An open change watch ([`Heap::watch_changes`]).
+#[derive(Debug)]
+#[must_use = "end the watch with Heap::end_watch"]
+pub struct ChangeWatch {
+    start: usize,
+    made_or_freed: u64,
 }
 
 /// The arena. See the module documentation.
 #[derive(Debug, Clone, Default)]
 pub struct Heap {
     entries: Vec<Entry>,
-    mutations: Mutations,
+    journal: Journal,
     /// Freed slots to reuse, last freed first.
     free: Vec<u32>,
     /// Every allocation in creation order; freed handles are skipped and compacted away now and then.
@@ -327,7 +343,7 @@ impl Heap {
     }
 
     fn insert(&mut self, object: Object) -> ObjRef {
-        self.mutations.0 += 1;
+        self.journal.made_or_freed += 1;
         let handle = match self.free.pop() {
             Some(index) => {
                 let entry = &mut self.entries[index as usize];
@@ -368,18 +384,46 @@ impl Heap {
             .ok_or(HeapError::Stale(o))
     }
 
-    /// How many changes this heap has seen: a count that only grows, so a caller can tell whether anything was
-    /// changed between two readings (lane FIX-483-FOLLOWUP: a refusal is marked as after partial writes only after an
-    /// actual write). Every creation, every free and every mutable borrow of an object ([`Heap::get_mut`], and so
-    /// every write and [`Heap::slot_mut`]) counts once, whether or not it changes a value: the count may say "changed"
-    /// for a borrow that changed nothing, never "unchanged" for a change.
-    pub fn mutations(&self) -> u64 {
-        self.mutations.0
+    /// Opens a change watch (lane FIX-483-FOLLOWUP, review r1 of #518: a refusal is marked as after partial writes
+    /// only after an actual change). Until [`Heap::end_watch`], the first mutable borrow of each object
+    /// ([`Heap::get_mut`], and so every write and [`Heap::slot_mut`]) keeps a copy of the object as it was, so
+    /// [`Heap::changed_since`] can tell a committed change from a borrow that changed nothing. Watches nest.
+    pub fn watch_changes(&mut self) -> ChangeWatch {
+        self.journal.depth += 1;
+        ChangeWatch {
+            start: self.journal.touched.len(),
+            made_or_freed: self.journal.made_or_freed,
+        }
+    }
+
+    /// Whether the heap changed since `w` opened: an object made or freed, or an object borrowed mutably in the watch
+    /// that now differs from its copy (structural equality, so a float slot holding NaN reads as changed: the answer
+    /// can say "changed" for nothing, never "unchanged" for a change).
+    pub fn changed_since(&self, w: &ChangeWatch) -> bool {
+        self.journal.made_or_freed != w.made_or_freed
+            || self.journal.touched[w.start.min(self.journal.touched.len())..].iter().any(|(index, generation, before)| {
+                match self.entries.get(*index as usize) {
+                    Some(e) if e.generation == *generation => e.object.as_ref() != Some(before),
+                    _ => true,
+                }
+            })
+    }
+
+    /// Closes `w`; the copies taken in it are dropped.
+    pub fn end_watch(&mut self, w: ChangeWatch) {
+        self.journal.touched.truncate(w.start);
+        self.journal.depth = self.journal.depth.saturating_sub(1);
     }
 
     /// The object `o` names, for changing.
     pub fn get_mut(&mut self, o: ObjRef) -> Result<&mut Object, HeapError> {
-        self.mutations.0 += 1;
+        if self.journal.depth > 0
+            && let Some(e) = self.entries.get(o.index() as usize).filter(|e| e.generation == o.generation())
+            && let Some(object) = e.object.as_ref()
+            && !self.journal.touched.iter().any(|(i, g, _)| *i == o.index() && *g == o.generation())
+        {
+            self.journal.touched.push((o.index(), o.generation(), object.clone()));
+        }
         self.entries
             .get_mut(o.index() as usize)
             .filter(|e| e.generation == o.generation())
@@ -672,7 +716,7 @@ impl Heap {
     /// Takes `o`'s object out of its slot and retires the handle: the slot is reused with the next generation, or
     /// retired if the generation would wrap. `o` must be current.
     fn take(&mut self, o: ObjRef) -> Object {
-        self.mutations.0 += 1;
+        self.journal.made_or_freed += 1;
         let entry = &mut self.entries[o.index() as usize];
         let object = entry.object.take().expect("checked by the caller");
         if let Some(next) = entry.generation.checked_add(1) {
@@ -946,32 +990,36 @@ mod tests {
         }
     }
 
-    /// The change count (lane FIX-483-FOLLOWUP): reads leave it, a creation, a write and a free each move it, a refused
-    /// write moves nothing; the `Debug` text of a heap does not show it.
+    /// The change watch (lane FIX-483-FOLLOWUP, review r1 of #518): reads, a refused write, a mutable borrow that
+    /// changes nothing and a write of the same value are no change; a write of another value, a creation and a free
+    /// are; closing the watch drops its copies; the `Debug` text does not show the journal.
     #[test]
-    fn the_change_count_moves_on_changes_only() {
+    fn the_change_watch_sees_committed_changes_only() {
         let mut w = world();
         let health = w.p(w.pawn, "health");
-        let start = w.space.heap.mutations();
         let pawn = w.new_obj(w.pawn, "Pawn_0");
-        let made = w.space.heap.mutations();
-        assert!(made > start, "a creation counts");
-        let text = format!("{:?}", w.space.heap);
-        w.space.read(pawn, health.into()).unwrap();
-        w.space.heap.get(pawn).unwrap();
-        assert_eq!(w.space.heap.mutations(), made, "reads do not count");
-        assert!(w.space.write(pawn, health.into(), Value::Float(1.0)).is_err());
-        assert_eq!(w.space.heap.mutations(), made, "a write refused by its check changes nothing and does not count");
         w.space.write(pawn, health.into(), Value::Int(3)).unwrap();
-        let written = w.space.heap.mutations();
-        assert!(written > made, "a write counts");
-        w.space.free(pawn).unwrap();
-        assert!(w.space.heap.mutations() > written, "a free counts");
-        let mut copy = w.space.heap.clone();
-        let other = copy.alloc(&w.space.classes, w.pawn, w.space.names.intern("Pawn_1"), None, Origin::Runtime).unwrap();
-        copy.free(other).unwrap();
-        assert_ne!(copy.mutations(), w.space.heap.mutations());
-        assert_eq!(format!("{copy:?}").contains("mutations: _"), text.contains("mutations: _"), "the count is not shown");
+        let text = format!("{:?}", w.space.heap);
+        let watch = w.space.heap.watch_changes();
+        w.space.read(pawn, health.into()).unwrap();
+        assert!(w.space.write(pawn, health.into(), Value::Float(1.0)).is_err());
+        w.space.heap.get_mut(pawn).unwrap();
+        w.space.write(pawn, health.into(), Value::Int(3)).unwrap();
+        assert!(!w.space.heap.changed_since(&watch), "no committed change");
+        assert_eq!(format!("{:?}", w.space.heap), text, "the journal is not shown");
+        w.space.write(pawn, health.into(), Value::Int(4)).unwrap();
+        assert!(w.space.heap.changed_since(&watch), "a write of another value");
+        w.space.write(pawn, health.into(), Value::Int(3)).unwrap();
+        assert!(!w.space.heap.changed_since(&watch), "written back: the object is as it was");
+        w.space.heap.end_watch(watch);
+        let watch = w.space.heap.watch_changes();
+        let other = w.new_obj(w.pawn, "Pawn_1");
+        assert!(w.space.heap.changed_since(&watch), "a creation");
+        w.space.heap.end_watch(watch);
+        let watch = w.space.heap.watch_changes();
+        w.space.free(other).unwrap();
+        assert!(w.space.heap.changed_since(&watch), "a free");
+        w.space.heap.end_watch(watch);
     }
 
     #[test]

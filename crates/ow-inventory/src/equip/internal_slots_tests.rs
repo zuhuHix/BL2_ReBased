@@ -597,8 +597,8 @@ fn the_probe_evaluates_no_nested_noun_default() {
     assert_eq!(w.get(item, "NounState"), Value::array(vec![]), "no entry for the nested noun or the outer one");
 }
 
-/// An `InitializationDefinition` subclass whose `RandomVariance` is enabled, from 1 to 5 (the other parts off).
-fn variance_definition(w: &mut World) -> ObjRef {
+/// An `InitializationDefinition` subclass whose `RandomVariance` is enabled, from `low` to 5 (the other parts off).
+fn variance_definition(w: &mut World, low: Value) -> ObjRef {
     let aid = w.vm.space.classes.struct_by_path(AID).unwrap();
     let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
     let st = |w: &mut World, path: &str, fields: &[(&str, PropKind)]| {
@@ -634,7 +634,7 @@ fn variance_definition(w: &mut World) -> ObjRef {
     let parent = w.class("Engine.AttributeInitializationDefinition");
     w.vm.space.classes.define("Test.VarianceDefinition", Some(parent), decls).unwrap();
     let def = w.obj("Test.VarianceDefinition", "Test.Variance");
-    let (low, high) = (w.init(1.0), w.init(5.0));
+    let high = w.init(5.0);
     let v = w.st("Test.VarianceDefinition.Variance", vec![("bEnabled", Value::Bool(true)), ("LowerBound", low), ("UpperBound", high)]);
     w.set(def, "RandomVariance", v);
     def
@@ -646,7 +646,8 @@ fn variance_definition(w: &mut World) -> ObjRef {
 fn the_probe_draws_no_variance_and_the_add_evaluates_once() {
     let mut rng = None;
     let (w, item, e) = noun_probe_then_refusal(|w, _| {
-        let def = variance_definition(w);
+        let low = w.init(1.0);
+        let def = variance_definition(w, low);
         rng = Some(w.vm.rng.clone());
         w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))])
     });
@@ -657,7 +658,8 @@ fn the_probe_draws_no_variance_and_the_add_evaluates_once() {
     let mut w = World::new();
     let (class, f) = setup(&mut w);
     let (noun_item, noun) = noun_classes(&mut w, class);
-    let def = variance_definition(&mut w);
+    let low = w.init(1.0);
+    let def = variance_definition(&mut w, low);
     let default = w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))]);
     let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", default);
     let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
@@ -700,9 +702,14 @@ fn each_record_goes_to_the_live_out_argument_at_once() {
         .register_attribute_notify(
             "Test.AliasSlotWeapon",
             Rc::new(move |vm, owner, _prop, _forms| {
-                let mut list = vm.space.read(owner, PropAddr::scalar(mods)).unwrap().elements().unwrap().to_vec();
-                list.extend(applied_values(vm, applied, &ow_attr::api::Applied(vec![sentinel])).unwrap());
-                vm.space.write(owner, PropAddr::scalar(mods), Value::array(list)).unwrap();
+                // The sentinel goes to the aliased out argument and to the backup list (review r1 of #518, item 6).
+                let class = vm.space.heap.get(owner).unwrap().class;
+                let backup = vm.space.prop(class, "AppliedAttributeSlotEffects").unwrap();
+                for p in [mods, backup] {
+                    let mut list = vm.space.read(owner, PropAddr::scalar(p)).unwrap().elements().unwrap().to_vec();
+                    list.extend(applied_values(vm, applied, &ow_attr::api::Applied(vec![sentinel])).unwrap());
+                    vm.space.write(owner, PropAddr::scalar(p), Value::array(list)).unwrap();
+                }
                 if r.get() {
                     return Err(ow_core::NotYet::not_read("the alias test notification", "TOY_NOTIFY.md").into());
                 }
@@ -733,7 +740,7 @@ fn each_record_goes_to_the_live_out_argument_at_once() {
     assert_eq!((out.0[0].context, out.0[0].attribute), (item, a), "slot 0's record");
     assert_eq!(out.0[1], sentinel);
     let backup = applied_from_values(&w.vm, &w.get(item, "AppliedAttributeSlotEffects")).unwrap();
-    assert_eq!(backup.0, out.0[..1].to_vec(), "slot 0's record in the backup list too");
+    assert_eq!(backup.0, out.0[..2].to_vec(), "slot 0's record, then the sentinel, in the backup list too");
     // Without the refusal: slot 0's record, the sentinel slot 1's notification added, then slot 1's record.
     refuse.set(false);
     let (item, r) = run(&mut w);
@@ -742,6 +749,8 @@ fn each_record_goes_to_the_live_out_argument_at_once() {
     assert_eq!(out.0.len(), 3, "{out:?}");
     assert_eq!(out.0[1], sentinel, "not overwritten");
     assert_eq!((out.0[2].attribute, out.0[2].context), (loud, item), "slot 1's record last");
+    let backup = applied_from_values(&w.vm, &w.get(item, "AppliedAttributeSlotEffects")).unwrap();
+    assert_eq!(backup.0, out.0, "the backup list's sentinel survives slot 1's append");
 }
 
 /// F4: a W1 removal through a plain attribute writes nothing before its change notification, and the notification
@@ -828,4 +837,120 @@ fn a_replicated_entry_without_the_modifier_is_not_refused() {
     call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap();
     assert_eq!(w.get(item, "NounState"), state, "the entry untouched");
     assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), Value::array(vec![]), "W2 emptied the list");
+}
+
+// ---- review r1 of #518 ---------------------------------------------------------------------------------------------
+
+/// A plain notifying attribute `Quiet` on a subclass of the item class, whose notification runs `callback` (it gets
+/// the owner and the subclass's `Items` array), then refuses with a `NotYet`. Returns the item, its backup record and
+/// the call's refusal.
+fn plain_removal_refusing_after(callback: impl Fn(&mut ow_vm::api::Vm, ObjRef, ow_object::ids::PropId) + 'static) -> (World, ObjRef, Value, VmError) {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let object = w.class("Core.Object");
+    let decls = vec![
+        PropertyDecl::new(w.vm.space.names.intern("Quiet"), PropKind::FloatAttribute)
+            .with_flags(PropertyDecl::PLAIN_ATTRIBUTE | PropertyDecl::NOTIFY),
+        PropertyDecl::new(w.vm.space.names.intern("Items"), PropKind::Array(Box::new(PropKind::Object { class: object }))),
+    ];
+    let plain_class = w.vm.space.classes.define("Test.CallbackSlotWeapon", Some(class), decls).unwrap();
+    let items = w.vm.space.prop(plain_class, "Items").unwrap();
+    w.vm
+        .register_attribute_notify(
+            "Test.CallbackSlotWeapon",
+            Rc::new(move |vm, owner, _prop, _forms| {
+                callback(vm, owner, items);
+                Err(ow_core::NotYet::not_read("the callback test notification", "TOY_NOTIFY.md").into())
+            }),
+        )
+        .unwrap();
+    let quiet = w.attribute("Test.Quiet", "Engine.WeaponAttributeContextResolver", "Quiet");
+    let item = item_with(&mut w, plain_class, vec![]);
+    let kept = w.obj("Core.Object", "Test.Kept");
+    w.set(item, "Items", Value::array(vec![Value::Object(Some(kept))]));
+    let m = w.obj("Core.AttributeModifier", "Test.QuietModifier");
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let rec = Value::array(applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: quiet, modifier: m }])).unwrap());
+    w.set(item, "AppliedAttributeSlotEffects", rec.clone());
+    let e = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    (w, item, rec, e)
+}
+
+/// Item 2 of review r1 of #518: a notification that "removes" an item its array does not hold (it reads the array,
+/// drops nothing and writes it back) changed nothing, so its `NotYet` is unprefixed; one that writes a changed array is
+/// marked. Kind and record are kept either way.
+#[test]
+fn only_a_committed_change_marks_a_w1_refusal() {
+    let absent = |vm: &mut ow_vm::api::Vm, owner: ObjRef, items: ow_object::ids::PropId| {
+        let gone = Value::Object(None);
+        let list: Vec<Value> = vm.space.read(owner, PropAddr::scalar(items)).unwrap().elements().unwrap().iter().filter(|v| **v != gone).cloned().collect();
+        vm.space.write(owner, PropAddr::scalar(items), Value::array(list)).unwrap();
+    };
+    let (w, item, rec, e) = plain_removal_refusing_after(absent);
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "the callback test notification", "a no-op: unprefixed");
+    assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY_NOTIFY.md"));
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), rec, "W2 not reached");
+    let writes = |vm: &mut ow_vm::api::Vm, owner: ObjRef, items: ow_object::ids::PropId| {
+        vm.space.write(owner, PropAddr::scalar(items), Value::array(vec![])).unwrap();
+    };
+    let (_, _, _, e) = plain_removal_refusing_after(writes);
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert_eq!(n.what, "stopped after partial writes: the callback test notification", "a write: marked");
+    assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY_NOTIFY.md"));
+}
+
+/// Item 3 of review r1 of #518: slot 0's noun default has a random variance whose lower bound names an attribute with
+/// a value resolver the attribute system does not know. The deepened default check refuses it in the preflight: the
+/// typed `NotYet`, unprefixed, before W2 empties the backup list and before W3 makes a modifier.
+#[test]
+fn an_unsupported_resolver_in_a_variance_bound_is_refused_before_w2() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    // Its context resolves from the item (the weapon context), so evaluating the bound would reach the resolver.
+    let unread = chained(&mut w, "Test.UnreadBound", &[Some("Test.UnreadValueResolver")]);
+    let low = w.st(AID, vec![("BaseValueAttribute", Value::Object(Some(unread))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let def = variance_definition(&mut w, low);
+    let default = w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", default);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0]);
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let a = w.weapon_bonus;
+    let m = w.obj("Core.AttributeModifier", "Test.Backed");
+    let rec = Value::array(applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: a, modifier: m }])).unwrap());
+    w.set(item, "AppliedAttributeSlotEffects", rec.clone());
+    let before = (format!("{:?}", w.vm.space.heap), w.vm.rng.clone());
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert!(!n.what.contains("partial writes"), "{n}");
+    assert_eq!(w.get(item, "AppliedAttributeSlotEffects"), rec, "W2 not reached");
+    assert_eq!((format!("{:?}", w.vm.space.heap), w.vm.rng.clone()), before, "no modifier made, no entry, no draw");
+}
+
+/// Item 4 of review r1 of #518: an out parameter whose records are a struct named `AppliedAttributeEffect` but not the
+/// canonical one (`APPLIED_STRUCT`), with OUT set, is a preflight data error.
+#[test]
+fn a_same_named_record_struct_is_not_the_canonical_one() {
+    let mut w = World::new();
+    let (class, _) = setup(&mut w);
+    let slots = five(&mut w);
+    let item = item_with(&mut w, class, slots);
+    let object = w.class("Core.Object");
+    let decls = ["Context", "Attribute", "Modifier"]
+        .map(|n| PropertyDecl::new(w.vm.space.names.intern(n), PropKind::Object { class: object }))
+        .to_vec();
+    let other = w.vm.space.classes.define_struct("Test.Elsewhere.AppliedAttributeEffect", None, decls).unwrap();
+    let params = vec![
+        param(&mut w, "bBackupSlotEffectsApplied", PropKind::Bool, 0),
+        param(&mut w, "MaxSlotsActivated", PropKind::Int, 0),
+        param(&mut w, "AttributeModifiers", PropKind::Array(Box::new(PropKind::Struct(other))), PropertyDecl::OUT),
+    ];
+    let path = ow_core::ObjectPath::parse("Test.SlotWeapon.ApplyInternalSlotEffectModifiers").unwrap();
+    let g = w.vm.declare_function(FunctionDecl::native(path, INTERNAL_SLOTS).with_owner(class).with_params(params)).unwrap();
+    let before = format!("{:?}", w.vm.space.heap);
+    let e = call(&mut w, g, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains(APPLIED_STRUCT)), "{e:?}");
+    assert_eq!(format!("{:?}", w.vm.space.heap), before, "nothing written");
 }

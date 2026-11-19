@@ -19,37 +19,42 @@
 //! resolved; one whose add answers false keeps its object where the chain left it (nothing rolled back, not recorded).
 //! The modifier's outer is None: the port has no transient package (the native's is that package).
 //!
-//! **Preflight**, P0 to P9 of the note's section 3, before any write, and writing nothing: no stack, noun entry,
-//! generator state or heap object (the hub's ruling, lane FIX-483-FOLLOWUP; definition loads are not writes, the
-//! note's ruling). In this order (F3: the loads first, so a load's refusal is the answer, not an independent check's):
+//! **Preflight**, P0 to P9 of the note's section 3, before any write. It writes no stack, noun entry, generator
+//! state or heap object. Its only write is P0's definition loads, and **a load counts as a write** (the hub's ruling in
+//! review r1 of #518, the spawn's `loaded` pattern; it replaces the note's "definition loads are not writes" for this
+//! native). In this order (F3: the loads first, so a load's refusal is the answer, not an independent check's):
 //! 1. the reads that name what P0 loads: the slot array's shape (five fields, not `bRunEffectsAsSkill`), the count and
-//!    each slot's five values (a qualifying slot's `ModifierType` outside the enum is a data error);
-//!    `AppliedAttributeSlotEffects`'s shape and each record's three objects (with the flag false, a record is a
-//!    removal only when its context, attribute and modifier are all set; one with a None modifier is a no-op);
+//!    each slot's five values (a qualifying slot's `ModifierType` byte is kept raw); `AppliedAttributeSlotEffects`'s
+//!    shape and each record's three objects (with the flag false, a record is a removal only when its context,
+//!    attribute and modifier are all set; one with a None modifier is a no-op);
 //! 2. P0 ([`load_attribute`]): each qualifying slot's attribute with its context and value chains (an add resolves
 //!    its context), and each removal's attribute with its value chain only (a removal uses the record's context, so
 //!    its attribute's context chain is not touched);
-//! 3. the independent checks: P1, the out argument is an `out` parameter, an array of `AppliedAttributeEffect`
-//!    records (F5); P4, the modifier class with `Type` and `Value`;
-//! 4. P8, each qualifying slot's context; P9, the chain check of every entry of every planned removal and add
+//! 3. each qualifying slot's `ModifierType`, inside the enum (after P0, review r1 of #518);
+//! 4. the independent checks: P1, the out argument is an `out` parameter, an array of the canonical
+//!    `AppliedAttributeEffect` (`APPLIED_STRUCT`, by identity: F5, review r1 of #518); P4, the modifier class with
+//!    `Type` and `Value`;
+//! 5. P8, each qualifying slot's context; P9, the chain check of every entry of every planned removal and add
 //!    ([`ow_attr::AttributeSystem::check_modifier_chain`], through each resolver's write-free
 //!    `ValueResolver::probe_storage` for that operation; no outcome predicted). The noun resolver's probe creates no
-//!    missing entry and evaluates no default (F1: it validates it), and refuses a replicated slot only where the
-//!    operation would rewrite the entry (F6: not for the removal of a modifier the entry does not hold).
+//!    missing entry and evaluates no default: it checks every field of the default the evaluation can reach (F1,
+//!    deepened in review r1 of #518), and refuses a replicated slot only where the operation would rewrite the entry
+//!    (F6: not for the removal of a modifier the entry does not hold).
 //!
 //! The installed weapons' slot attributes hold their resolvers as store handles not yet loaded, so P0 is needed there.
 //!
 //! **Writes**, W1 to W3, in the note's order. A `NotYet` after an actual write is terminal, matched by its typed
 //! variant, keeps its kind and record and gets the "stopped after partial writes: " prefix
-//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. The prefix goes
-//! on **only after an actual write** (the hub's ruling, F4, superseding decision 2026-11-19-97's "every W1 failure is
-//! marked"): in W1 a removal may refuse in its change notification with nothing written (a plain attribute's removal
-//! writes nothing before it notifies), or after its stack write, and a notification's script may write before it
-//! refuses, so W1 compares the heap's change count and the generator state with their values at its start
-//! ([`Mark`]). From W2 on a write has been made, so every `NotYet` is marked. Each W3 record is appended at once to
-//! the live out argument and, with the flag true, to `AppliedAttributeSlotEffects` as they stand then (F2), so a later
-//! slot's refusal keeps the earlier records, and no final assignment overwrites what a notification's script wrote
-//! through the out argument's alias.
+//! (`ow_world::pools::after_partial_writes`); nothing is rolled back; other errors propagate unchanged. **One
+//! write-tracking path** covers the whole call ([`native`]; the hub's rulings, F4 and review r1 of #518, superseding
+//! decision 2026-11-19-97's "every W1 failure is marked"): a refusal is marked when P0 loaded anything, when the heap
+//! changed since the call began (`Heap::changed_since`: a committed change only, so a callback that borrows without
+//! changing does not count), or when the generator was drawn. So in W1 a removal that refuses in its change
+//! notification with nothing changed (a plain attribute's removal writes nothing before it notifies) is unmarked, and
+//! one whose notification's script changed something is marked. Each W3 record is appended at once to the live out
+//! argument and, with the flag true, to `AppliedAttributeSlotEffects` as they stand then (F2), so a later slot's
+//! refusal keeps the earlier records, and no final assignment overwrites what a notification's script wrote through
+//! the out argument's alias.
 //!
 //! **Reference** (architecture R3): unbound, the stub policy answers it, as before.
 
@@ -58,7 +63,6 @@ use std::rc::Rc;
 use ow_attr::api::{Applied, AppliedEffect, EvalCx, ProbeOp};
 use ow_attr::stack::ModifierType;
 use ow_core::ParityMode;
-use ow_core::rand::GameRng;
 use ow_object::ids::{FuncId, ObjRef, PropAddr, PropId, StructId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -91,8 +95,17 @@ fn bool_field(vm: &Vm, v: &Value, name: &str, i: usize) -> Result<bool, VmError>
     }
 }
 
-/// One qualifying slot: its attribute, its modifier's type and value.
+/// One qualifying slot: its attribute, its modifier's type (the raw byte until it is checked after P0, item 5 of
+/// review r1 of #518) and value.
 struct Slot {
+    index: usize,
+    attribute: ObjRef,
+    raw: u8,
+    value: f32,
+}
+
+/// A checked slot: its attribute, its modifier's type and value.
+struct Checked {
     attribute: ObjRef,
     kind: ModifierType,
     value: f32,
@@ -122,15 +135,21 @@ fn qualifying(vm: &Vm, item: ObjRef, max: i32) -> Result<Vec<Slot>, VmError> {
             }
         };
         if let (true, false, Some(attribute)) = (activated, external, attribute) {
-            // Off assumption (review r1 of #483), UNVERIFIED: a qualifying slot's type outside the enum is a data
-            // error. The note does not say what the native makes of one; `ow-attr`'s stack treats such a modifier as a
-            // no-op. A slot that does not qualify is not checked.
-            let kind = ModifierType::from_raw(i64::from(raw))
-                .ok_or_else(|| bad(INTERNAL_SLOTS, format!("slot {i}: ModifierType {raw} is outside the enum")))?;
-            out.push(Slot { attribute, kind, value });
+            out.push(Slot { index: i, attribute, raw, value });
         }
     }
     Ok(out)
+}
+
+/// A qualifying slot's type, checked after P0 (item 5 of review r1 of #518, so a load's refusal comes first). Off
+/// assumption (review r1 of #483), UNVERIFIED: a qualifying slot's type outside the enum is a data error. The note does
+/// not say what the native makes of one; `ow-attr`'s stack treats such a modifier as a no-op. A slot that does not
+/// qualify is not checked.
+fn checked(slot: Slot) -> Result<Checked, VmError> {
+    let (i, raw) = (slot.index, slot.raw);
+    let kind = ModifierType::from_raw(i64::from(raw))
+        .ok_or_else(|| bad(INTERNAL_SLOTS, format!("slot {i}: ModifierType {raw} is outside the enum")))?;
+    Ok(Checked { attribute: slot.attribute, kind, value: slot.value })
 }
 
 /// P3: `AppliedAttributeSlotEffects`, a dynamic array of a struct whose `Context`, `Attribute` and `Modifier` are
@@ -209,13 +228,14 @@ fn modifier_class(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-/// P0 (the note's ruling, review r1 of #471: definition loads are not writes): `attr` and every entry of its value
-/// resolver chain, and of its context resolver chain when `with_context` (an add; a removal uses its record's context,
-/// F3), loaded if they are store handles not loaded yet; a load's `NotYet` or error propagates as the store gives it
-/// (`VmError::from`), before any write.
-fn load_attribute(vm: &mut Vm, attr: ObjRef, with_context: bool) -> Result<(), VmError> {
-    let load = |vm: &mut Vm, o: ObjRef| -> Result<(), VmError> {
+/// P0: `attr` and every entry of its value resolver chain, and of its context resolver chain when `with_context` (an
+/// add; a removal uses its record's context, F3), loaded if they are store handles not loaded yet. A load's `NotYet`
+/// or error propagates as the store gives it (`VmError::from`). **A load is a write** (the hub's ruling in review r1 of
+/// #518, the spawn's pattern): `loaded` is set before each load, so every later refusal of the call is marked.
+fn load_attribute(vm: &mut Vm, attr: ObjRef, with_context: bool, loaded: &mut bool) -> Result<(), VmError> {
+    let mut load = |vm: &mut Vm, o: ObjRef| -> Result<(), VmError> {
         if vm.defs.is_unloaded(&vm.space, o) {
+            *loaded = true;
             let r = vm.defs.ensure_loaded(&mut vm.space, o);
             let log = vm.defs.take_log();
             vm.log.extend(log);
@@ -238,17 +258,21 @@ fn load_attribute(vm: &mut Vm, attr: ObjRef, with_context: bool) -> Result<(), V
     Ok(())
 }
 
-/// P1 (F5): the third parameter is an `out` parameter, an array of `AppliedAttributeEffect` records whose `Context`,
-/// `Attribute` and `Modifier` are objects. Its record struct.
+/// P1 (F5): the third parameter is an `out` parameter, an array of the canonical `AppliedAttributeEffect` struct
+/// ([`super::APPLIED_STRUCT`], by identity: a struct of the same name elsewhere is refused, review r1 of #518) whose
+/// `Context`, `Attribute` and `Modifier` are objects. Its record struct.
 fn out_record(vm: &Vm, f: FuncId) -> Result<StructId, VmError> {
     if !vm.function(f).and_then(|d| d.params.get(2)).is_some_and(|p| p.is_out()) {
         return Err(bad(INTERNAL_SLOTS, "parameter 2 (AttributeModifiers) is not an out parameter"));
     }
     let ty = param_struct(vm, f, 2, INTERNAL_SLOTS)?;
-    let path = vm.space.classes.struct_layout(ty).map(|l| l.path().clone());
-    if !path.as_ref().is_some_and(|p| p.name().eq_ignore_ascii_case("AppliedAttributeEffect")) {
-        let named = path.map_or_else(|| "a struct with no layout".to_string(), |p| p.as_str().to_string());
-        return Err(bad(INTERNAL_SLOTS, format!("the out argument's records are {named}, not AppliedAttributeEffect")));
+    if vm.space.classes.struct_by_path(super::APPLIED_STRUCT) != Some(ty) {
+        let named = vm
+            .space
+            .classes
+            .struct_layout(ty)
+            .map_or_else(|| "a struct with no layout".to_string(), |l| l.path().as_str().to_string());
+        return Err(bad(INTERNAL_SLOTS, format!("the out argument's records are {named}, not {}", super::APPLIED_STRUCT)));
     }
     record_shape(vm, ty, "the out argument")?;
     Ok(ty)
@@ -260,11 +284,11 @@ struct Plan {
     applied_ty: StructId,
     out_ty: StructId,
     removals: Vec<(ObjRef, ObjRef, ObjRef)>,
-    adds: Vec<(Slot, ObjRef)>,
+    adds: Vec<(Checked, ObjRef)>,
 }
 
-/// The preflight, in the order of the module documentation. Writes nothing.
-fn plan(vm: &mut Vm, call_fn: FuncId, item: ObjRef, flag: bool, max: i32) -> Result<Plan, VmError> {
+/// The preflight, in the order of the module documentation. It writes nothing but P0's loads, which set `loaded`.
+fn plan(vm: &mut Vm, call_fn: FuncId, item: ObjRef, flag: bool, max: i32, loaded: &mut bool) -> Result<Plan, VmError> {
     // The reads that name what P0 loads: P2, P5 and P6 (the slots), P3 and P7 (the applied list and its records).
     let slots = qualifying(vm, item, max)?;
     let (applied_prop, applied_ty) = applied_list(vm, item)?;
@@ -281,11 +305,13 @@ fn plan(vm: &mut Vm, call_fn: FuncId, item: ObjRef, flag: bool, max: i32) -> Res
     };
     // P0, before the independent checks (F3): an add's attribute with both chains, a removal's with its value chain.
     for slot in &slots {
-        load_attribute(vm, slot.attribute, true)?;
+        load_attribute(vm, slot.attribute, true, loaded)?;
     }
     for removal in &removals {
-        load_attribute(vm, removal.1, false)?;
+        load_attribute(vm, removal.1, false, loaded)?;
     }
+    // The slots' types, after P0 (item 5 of review r1 of #518).
+    let slots = slots.into_iter().map(checked).collect::<Result<Vec<_>, _>>()?;
     // P1 (F5) and P4.
     let out_ty = out_record(vm, call_fn)?;
     modifier_class(vm)?;
@@ -308,39 +334,16 @@ fn plan(vm: &mut Vm, call_fn: FuncId, item: ObjRef, flag: bool, max: i32) -> Res
     Ok(Plan { applied_prop, applied_ty, out_ty, removals, adds })
 }
 
-/// What W1 compares against to tell whether it wrote anything (F4): the heap's change count and the generator state
-/// at its start. The count may say "changed" for a mutable borrow that changed nothing
-/// (`ow_object::heap::Heap::mutations`), so a refusal is then marked although nothing changed; it never misses a
-/// change. The generator is compared whole (a draw advances it).
-struct Mark {
-    heap: u64,
-    rng: GameRng,
-}
-
-impl Mark {
-    fn new(vm: &Vm) -> Self {
-        Mark { heap: vm.space.heap.mutations(), rng: vm.rng.clone() }
-    }
-
-    fn wrote(&self, vm: &Vm) -> bool {
-        vm.space.heap.mutations() != self.heap || vm.rng != self.rng
-    }
-}
-
-/// W1 to W3 (module documentation).
+/// W1 to W3 (module documentation). Marking is the caller's ([`native`]).
 fn writes(call: &mut NativeCall<'_>, item: ObjRef, flag: bool, plan: &Plan) -> Result<(), VmError> {
     let attrs = call.vm.attrs.clone();
-    // W1: the removals, notifications on, results ignored. A refusal is marked only after an actual write (F4).
-    let mark = Mark::new(call.vm);
+    // W1: the removals, notifications on, results ignored.
     for &(context, attribute, modifier) in &plan.removals {
-        if let Err(e) = attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(call.vm)) {
-            let e = VmError::from(e);
-            return Err(if mark.wrote(call.vm) { ow_world::pools::after_partial_writes(e) } else { e });
-        }
+        attrs.remove_modifier(attribute, Some(context), modifier, false, &mut EvalCx::new(call.vm))?;
     }
-    // W2: the list emptied. From here on every refusal comes after a write.
+    // W2: the list emptied.
     call.vm.space.write(item, PropAddr::scalar(plan.applied_prop), Value::array(Vec::new()))?;
-    writes_after(call, item, flag, plan).map_err(ow_world::pools::after_partial_writes)
+    writes_after(call, item, flag, plan)
 }
 
 /// W3, after W2's write (module documentation): each record appended at once to the live out argument and, with the
@@ -376,8 +379,25 @@ fn native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Int(i) => *i,
         other => return Err(bad(INTERNAL_SLOTS, format!("MaxSlotsActivated holds a {}, not an int", other.kind_name()))),
     };
+    // The one write-tracking path (the hub's ruling in review r1 of #518): a refusal is marked when a load was made
+    // (P0's `loaded`), the heap changed (a committed change, `Heap::changed_since`: P9's nested loads, W1's stack
+    // writes and their notifications' script, W2, W3) or the generator was drawn since the call began.
+    let watch = call.vm.space.heap.watch_changes();
+    let rng = call.vm.rng.clone();
+    let mut loaded = false;
+    let result = run(call, item, flag, max, &mut loaded);
+    let wrote = loaded || call.vm.space.heap.changed_since(&watch) || call.vm.rng != rng;
+    call.vm.space.heap.end_watch(watch);
+    match result {
+        Err(e) if wrote => Err(ow_world::pools::after_partial_writes(e)),
+        other => other,
+    }
+}
+
+/// The preflight, then the writes.
+fn run(call: &mut NativeCall<'_>, item: ObjRef, flag: bool, max: i32, loaded: &mut bool) -> Result<Value, VmError> {
     let function = call.function;
-    let plan = plan(call.vm, function, item, flag, max)?;
+    let plan = plan(call.vm, function, item, flag, max, loaded)?;
     // P1's value half: the out argument holds an array (its records are read when W3 appends to it).
     ow_attr::eval::elements("AttributeModifiers", call.arg(2)?)?;
     writes(call, item, flag, &plan)?;
