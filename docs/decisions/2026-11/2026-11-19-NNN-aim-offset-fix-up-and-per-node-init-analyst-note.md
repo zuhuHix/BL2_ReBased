@@ -12,14 +12,15 @@ call was unread. After it comes the per-node initialisation, which was refused a
 - **The fix-up is the engine `AnimNodeAimOffset`'s,** inherited unchanged by `WillowAnimNodeAimOffset`. This corrects
   #551's wording. It sets `TemplateNode` to the source node and then **empties the copy's own `Profiles`**: that is
   the unread "refresh". Maya's template and the class default hold no profiles, so no value changes.
-- **The per-node initialisation:** Maya's 17 node classes and the root share eight implementations. Each one's
+- **The per-node initialisation:** Maya's 16 node classes and the root (17 classes) share eight implementations. Each one's
   writes and reads are listed and checked against her saved data. Only the per-bone and feather blends read the
   mesh (its reference skeleton). The special-move blends also set `SMI` to the owner pawn and size `AnimParameters`.
 - **Proposed Off rules:** an exact-class table, a write-free preflight and typed refusals. These replace #551 rule 3's
   blanket refusal and its aim-offset refusal.
-- **Maya's next stop:** the root's unidentified component flag, unless the hub rules it out. Then `NotYet {
-  LayerAbsent("a skeletal mesh data reader (sockets and the reference skeleton)") }` for the per-bone weights, the
-  layer #529 already names.
+- **The root's flag** is `bUpdateComposeSkeletonPasses` by a layout fit; no script reads it, so the implementer
+  writes it, UNVERIFIED (hub ruling on #566). The VM path may use `ow-assets`' skeletal reader (hub ruling).
+- **Maya's next stop:** #529's `MESH_LAYER` refusal for the per-bone weights. Once the layer lands, the two weight
+  builders are `NotYet { NotRead }` until an analyst reads them.
 
 **Sources:** the installed packages (`ow-package --def-dump`, `tools/ghidra/class_layout.py`) and local read-only
 Ghidra queries under the machine lock. Raw output is under ignored `local/analysis/aimoff/`.
