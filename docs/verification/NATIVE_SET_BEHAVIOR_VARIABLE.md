@@ -95,13 +95,13 @@ once the setters are bound, that is link 9's expected next stop (open question 1
 
 **Write-free preflight** (no loads; nothing is a definition handle here):
 1. Argument 0 must be an out argument. **Holding None, it is taken as the zero `BehaviorVariableValue`**, and the two
-   fields are then set on that zero struct (the VM's struct-zero helper, as `natives_core`'s `make_struct` or
-   `classes.zero_value` give it). This is link 9's own case: `Parameters` is a function-local array, and the port's
+   fields are then set on that zero struct (`classes.zero_value(&PropKind::Struct(..))`; `natives_core`'s
+   `make_struct` is private and takes exactly three fields). This is link 9's own case: `Parameters` is a function-local array, and the port's
    VM grows a local array untyped (`Fill::Untyped` in `ow-vm` `interp::aggregate`, whose fill is None for an empty
    array), so after `Parameters.Length = 2` both elements are None. The C++ reference fills a local array the same
    way. A value that is neither None nor that struct is `VmError::Script`,
    "BehaviorProviderDefinition.Set<Kind>BehaviorVariable: <what it holds>, not a BehaviorVariableValue". **That
-   refusal is the port's own:** the native checks nothing, since in the game the argument is always the typed struct.
+   check is the port's own data error, not a refusal:** the native checks nothing, since in the game the argument is always the typed struct.
 2. Argument 1 must be the setter's kind: a bool, an int, a float, an `Object.Vector` struct, or an object reference
    (None included). Anything else is `VmError::Script`, naming the argument.
 3. The enum value is found **by name** (`BVAR_Bool` ... `BVAR_Object`) in the loaded
