@@ -31,3 +31,24 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-WILLOW-GLOBALS, analyst only (
 
 **Open (in the note).** Where the globals instance is created; what the definition's first load writes into the
 challenge list; whether the headless world needs a population master; who listens to the two pickup events.
+
+**Review r1 of #469 (five findings, fixed in the note).**
+1. The preflight covers everything the route needs that can be known before the first write: the globals instance
+   and its class, a `TheGlobalsDefinition` that world set-up wrote (the mission bridge's cached loader alone leaves
+   the field unset), and the declared schemas of `PickupList`, `RarityLevelColors` and `ThePopulationMaster`.
+   Preloading serves the pickup reads only; the challenge numbering stays unimplemented.
+2. Typed outcomes: a missing layer and an unread rule are `VmError::NotYet` (kinds `LayerAbsent` and `NotRead`), a
+   malformed declaration is `VmError::Script`. After the first write a `NotYet` keeps its variant, kind and record,
+   gains the prefix and leaves the writes in place. Both getters answer `LayerAbsent` with no world globals object.
+3. The destroy path: the headless fixture's population master is None, a non-None master reaches an unread native
+   (`NotRead`), `RemovePickup` refuses before any dispatch or list change, and `OnAllPickupsDetached` fires only for
+   the last pickup on its `Base` (NATIVE_PICKUP.md now points there).
+4. The live checks tell the rules apart: a cold, before, after and repeated capture of the definition's load; event
+   hooks that sample the list in both same-holder cases; `AddPickup(None)`; band boundaries and overlaps; the
+   population master's field and result identity, None and non-None. What cannot be exercised live stays open.
+5. The `make` sequence carries the timer's condition (a span above 0) and timing (`PickupShrinkDuration` before the
+   end).
+6. Where `TheGlobalsDefinition` lives (asked by the -94 implementer): an ordinary script field, an object reference
+   typed `GearboxGlobalsDefinition`, declared on `GearboxFramework.GearboxGlobals` and inherited by `WillowGlobals`,
+   read from the installed export table. `DefaultGlobalsDefinitionName` is only the first load's configured name. Off
+   writes the definition into the inherited field at world set-up, and the preflight checks its schema (note 6.0).
