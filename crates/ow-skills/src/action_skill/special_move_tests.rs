@@ -132,6 +132,8 @@ fn engine() -> Vec<u8> {
     native(&mut t, pawn, "IsAliveAndWell", &[], Some(("Bool", vec![0])));
     native(&mut t, pawn, "IsFriendly", &[D("Object", "Other", 0, vec![pawn])], Some(("Bool", vec![0])));
     native(&mut t, pawn, "ToyDone", &[D("Bool", "bInterrupted", 0, vec![0])], None);
+    let controller = t.class("Controller", actor);
+    t.prop("Object", controller, "Pawn", 0, pawn);
     native(&mut t, pawn, "ToyDoneWithCount", &[D("Int", "Count", 0, vec![0]), D("Bool", "bInterrupted", 0, vec![0])], None);
     let world = t.class("WorldInfo", actor);
     let modes = enumeration(&mut t, world, "ENetMode", &NET_MODES);
@@ -704,9 +706,10 @@ fn play_local_runs_both_starts_and_keeps_no_current_move() {
 }
 
 /// The toy `GetPlayerAnimation` script (the cast's choice) through the action skill pack's one cast path (review r2 of
-/// #437): in Off `Pawn.IsFriendly` is the named `NotYet` of NATIVE_IS_FRIENDLY.md, never the combat allegiance
-/// boolean; in Reference the stand-in answers, so a friend gets the fizzle move, and an enemy reaches
-/// `IsAliveAndWell`, which Reference leaves unbound.
+/// #437): in Off `Pawn.IsFriendly` is NATIVE_IS_FRIENDLY.md's rule (lane IMPL-IS-FRIENDLY), never the combat
+/// allegiance boolean, and this fixture's targets are plain pawns, not `WillowPawn`s, whose allegiance the note does
+/// not read: its `NotYet`. In Reference the stand-in answers, so a friend gets the fizzle move, and an enemy reaches
+/// `IsAliveAndWell`, which Reference leaves unbound. (The rule on `WillowPawn`s is `ow-combat`'s `hit::opinion` tests.)
 #[test]
 fn the_cast_script_asks_is_friendly_through_the_pack() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -871,6 +874,31 @@ fn the_combat_stand_ins_never_shadow_off_in_either_order() {
         assert_eq!(x.play(component, vec![Value::Object(Some(d))]).unwrap(), Value::None, "order {i}: the no-op");
         let any = x.call("GearboxFramework.SpecialMoveComponent.IsPlayingAny", component, vec![]).unwrap();
         assert_eq!(any, Value::Bool(false), "order {i}: the IsPlayingAny stand-in");
+    }
+}
+
+/// Whatever order a world registers the combat and action skill packs in, `Pawn.IsFriendly` is one binding (lane
+/// IMPL-IS-FRIENDLY): in Off the note's rule, which does not read a controller through its pawn (Neutral, so false);
+/// in Reference the groundwork stand-in, which does (the controller's pawn shares the caster's allegiance: true).
+#[test]
+fn is_friendly_is_one_binding_in_either_pack_order() {
+    let combat = ow_combat::hit::Pack;
+    let skills = crate::action_skill::Pack;
+    let orders: [[&dyn NativePack; 2]; 2] = [[&combat, &skills], [&skills, &combat]];
+    for (i, packs) in orders.iter().enumerate() {
+        for mode in [ParityMode::Off, ParityMode::Reference] {
+            let mut x = fx_with(mode, packs);
+            let side = x.obj("Engine.PawnAllegiance");
+            x.set(side, "SelfOpinion", Value::Byte(2));
+            let (caster, _) = x.owner(AUTHORITY);
+            let (ally, _) = x.owner(AUTHORITY);
+            x.set(caster, "Allegiance", Value::Object(Some(side)));
+            x.set(ally, "Allegiance", Value::Object(Some(side)));
+            let controller = x.obj("Engine.Controller");
+            x.set(controller, "Pawn", Value::Object(Some(ally)));
+            let r = x.call("Engine.Pawn.IsFriendly", caster, vec![Value::Object(Some(controller))]).unwrap();
+            assert_eq!(r, Value::Bool(mode == ParityMode::Reference), "order {i}, {mode:?}");
+        }
     }
 }
 

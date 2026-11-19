@@ -697,30 +697,17 @@ impl NativePack for Pack {
 // ---------------------------------------------------------------------------------------------------------------
 
 /// The record of `Pawn.IsFriendly` in Off.
-pub const RECORD_IS_FRIENDLY: &str = "NATIVE_IS_FRIENDLY.md";
+pub const RECORD_IS_FRIENDLY: &str = ow_combat::hit::opinion::RECORD;
 
 /// The one path by which the cast's worlds get `Pawn.IsFriendly`, which `LiftActionSkill.GetPlayerAnimation` asks on
-/// its target path (this pack serves both the W6-SKILLS installed run and the slice gate's cast):
-/// - Off: `NotYet { NotRead }` naming NATIVE_IS_FRIENDLY.md, until lane IMPL-IS-FRIENDLY binds the note's rule. The
-///   combat pack's allegiance boolean is a stand-in here and is not used in Off;
-/// - Reference: the combat pack's allegiance natives (`ow_combat::hit::register_allegiance`), the C++ stand-in.
-///
-/// By path, the first binding of a key winning.
+/// its target path (this pack serves both the W6-SKILLS installed run and the slice gate's cast). It is the combat
+/// pack's own allegiance registration (`ow_combat::hit::register_allegiance`), so every world gets the same binding
+/// whatever order its packs register in:
+/// - Off: NATIVE_IS_FRIENDLY.md's rules, `IsFriendly` with `WillowPawn`'s charm layer (lane IMPL-IS-FRIENDLY,
+///   decision 2026-11-19-60); the groundwork boolean is never bound for it in Off;
+/// - Reference: the combat pack's allegiance natives, the C++ stand-in.
 fn register_cast_opinion(vm: &mut Vm) -> Result<(), VmError> {
-    if vm.parity != ow_core::ParityMode::Off {
-        return ow_combat::hit::register_allegiance(vm);
-    }
-    bind(
-        vm,
-        "Engine.Pawn.IsFriendly",
-        Rc::new(|_: &mut NativeCall<'_>| {
-            Err(NotYet::not_read(
-                "Pawn.IsFriendly in Off (its rule and WillowPawn's charm layer; lane IMPL-IS-FRIENDLY)",
-                RECORD_IS_FRIENDLY,
-            )
-            .into())
-        }),
-    )
+    ow_combat::hit::register_allegiance(vm)
 }
 
 // ---------------------------------------------------------------------------------------------------------------

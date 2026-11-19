@@ -203,9 +203,12 @@ fn take_damage_inner_stores_the_damage_and_the_tracker_adds_to_its_parts() {
     assert_eq!(field(vm, written, "ShieldDamage"), Some(Value::Float(7.0)));
 }
 
+/// The combat pack's own opinion rule, which answers `GetOpinion` and `IsFriendly` in Reference only since lane
+/// IMPL-IS-FRIENDLY (decision 2026-11-19-60; Off has NATIVE_IS_FRIENDLY.md's rules, tested in `hit::opinion`). So this
+/// runs in Reference.
 #[test]
 fn the_opinion_follows_the_four_steps() {
-    let (mut run, _dir) = fresh(ParityMode::Off);
+    let (mut run, _dir) = fresh(ParityMode::Reference);
     let vm = &mut run.world().vm;
     let pawn_with = |vm: &mut Vm, allegiance: Option<&str>| {
         let p = make(vm, "WillowGame.WillowAIPawn");
