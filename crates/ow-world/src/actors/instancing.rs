@@ -127,9 +127,18 @@ pub fn instance_components(
 
 /// Finds the components `template` owns, through its slots and then each found component's own, at any depth
 /// (scalars, arrays, structs, delegates), by each object's run-time class and owner, not the declared field type.
-/// Loads a candidate component the store has not loaded. Changes nothing else, so a spawn can run it before it makes
+/// Loads a candidate component the store has not loaded, and resolves an inherited component's stand-in (which can
+/// load it). Those lazy loads are writes; the plan makes and changes nothing else, so a spawn runs it before it makes
 /// the actor. `NotYet { NotRead }` for what Off cannot copy or re-point correctly (module documentation).
 pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
+    plan_components_tracked(vm, template, &mut false)
+}
+
+/// [`plan_components`], setting `loaded` once a lazy load may have run (review r2 of #478): a pass-2 load of a handle
+/// that was not loaded, and every stand-in resolution, since `DefStore::resolve_ref` loads the handle it returns and
+/// does not say whether it was loaded before (so it counts as a load, conservatively). The caller prefixes the
+/// refusals after it.
+pub fn plan_components_tracked(vm: &mut Vm, template: ObjRef, loaded: &mut bool) -> Result<Plan, VmError> {
     let identity = template_export(vm, template);
     let archetypes = own_archetypes(vm, identity);
     let mut originals: Vec<ObjRef> = Vec::new();
@@ -141,6 +150,7 @@ pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
     let mut found = Vec::new();
     let mut judge = Judge { template, identity, archetypes: &archetypes };
     judge.slots(vm, template, &mut seen, &mut found, &mut pending)?;
+    *loaded |= !pending.is_empty();
     stand_ins(vm, &judge, &mut pending, &mut seen, &mut found, &mut inherited)?;
     // Pass 2: each template component is loaded (it is the template's definition, read as the archetype itself is),
     // checked whole, and its own slots judged the same way, until nothing new turns up.
@@ -148,9 +158,10 @@ pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
     while let Some(&component) = found.get(next) {
         next += 1;
         if vm.defs.is_unloaded(&vm.space, component) {
-            let loaded = vm.defs.ensure_loaded(&mut vm.space, component);
+            *loaded = true;
+            let done = vm.defs.ensure_loaded(&mut vm.space, component);
             vm.log.extend(vm.defs.take_log());
-            loaded?;
+            done?;
         }
         let o = vm.space.heap.get(component)?;
         let want = vm.space.classes.get_layout(o.class).map(|l| l.slot_count());
@@ -163,6 +174,7 @@ pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
         originals.push(component);
         judge = Judge { template, identity, archetypes: &archetypes };
         judge.slots(vm, component, &mut seen, &mut found, &mut pending)?;
+        *loaded |= !pending.is_empty();
         stand_ins(vm, &judge, &mut pending, &mut seen, &mut found, &mut inherited)?;
     }
     Ok(Plan { template, originals, inherited })
