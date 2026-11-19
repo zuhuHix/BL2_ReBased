@@ -522,7 +522,7 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
-        sys.value_resolver(cx.world.parts().space, resolver)?.available(cx)?;
+        sys.value_resolver(cx.world.parts().space, resolver)?.available(resolver, cx)?;
     }
     Ok(())
 }
@@ -615,7 +615,26 @@ const DESIGNER_DEFINITION: &str = "WillowGame.DesignerAttributeDefinition";
 /// The value chain on a resolved context: one fold, each resolver receiving the previous result (0.0 first); the
 /// last result is the value; an empty chain is 0.0. A None entry in a value chain is not read (the record says what
 /// a None entry does only for add and remove), so it is `NotYet { NotRead }`.
+///
+/// Every exit goes through the partial-write rule (review r3 of #458, item 1): once a resolver of the current outer
+/// evaluation committed writes, any `NotYet` leaving the fold is terminal and prefixed, its kind kept.
 fn fold(
+    sys: &AttributeSystem,
+    attr: ObjRef,
+    context: ObjRef,
+    base: bool,
+    cx: &mut EvalCx<'_>,
+) -> Result<f32, AttrError> {
+    cx.enter_fold();
+    let result = fold_chain(sys, attr, context, base, cx);
+    cx.leave_fold();
+    match result {
+        Err(e) if cx.wrote() => Err(after_partial_writes(e)),
+        other => other,
+    }
+}
+
+fn fold_chain(
     sys: &AttributeSystem,
     attr: ObjRef,
     context: ObjRef,
@@ -645,18 +664,12 @@ fn fold(
             );
         };
         // A refusal after a resolver of this evaluation committed writes is terminal and prefixed (review r1 of #458,
-        // item 4): the shared fold marks it, whichever API the read came through.
-        let step = sys.value_resolver(cx.world.parts().space, resolver).and_then(|r| {
-            if base {
-                r.base_value(sys, resolver, context, previous, cx)
-            } else {
-                r.value(sys, resolver, context, previous, cx)
-            }
-        });
-        previous = match step {
-            Ok(v) => v,
-            Err(e) if cx.wrote() => return Err(after_partial_writes(e)),
-            Err(e) => return Err(e),
+        // item 4): `fold` marks it on the way out, whichever API the read came through.
+        let r = sys.value_resolver(cx.world.parts().space, resolver)?;
+        previous = if base {
+            r.base_value(sys, resolver, context, previous, cx)?
+        } else {
+            r.value(sys, resolver, context, previous, cx)?
         };
     }
     Ok(previous)

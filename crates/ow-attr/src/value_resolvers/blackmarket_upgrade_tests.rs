@@ -329,7 +329,18 @@ fn reference_answers_the_unregistered_refusal() {
     let e = read(&mut fx, at, Ok(None), false).0.unwrap_err();
     let n = not_yet(&e).expect("a NotYet");
     assert!(matches!(n.missing, Missing::NotRead), "{n:?}");
-    assert!(n.what.contains(CLASS), "{n:?}");
+    // The class as the object space spells it, as the registry printed it (review r3 of #458, item 4).
+    let spelled = crate::eval::class_path(&fx.w.space, fx.w.space.heap.get(at).map(|_| ()).map(|()| {
+        let p = fx.w.space.prop(fx.w.space.heap.get(at).unwrap().class, "ValueResolverChain").unwrap();
+        match fx.w.space.read(at, PropAddr::scalar(p)).unwrap() {
+            Value::Array(items) => match items[0] {
+                Value::Object(Some(r)) => r,
+                _ => panic!(),
+            },
+            _ => panic!(),
+        }
+    }).unwrap());
+    assert_eq!(n.what.as_ref(), format!("value resolver class {spelled}"));
     assert!(array(&fx, pc).is_empty());
 }
 
@@ -536,4 +547,132 @@ fn no_globals_object_is_none_found_and_no_support_is_its_not_yet() {
     }
     let e = NoSupport(&mut fx.w).globals_definition().unwrap_err();
     assert!(matches!(not_yet(&e).map(|n| &n.missing), Some(Missing::LayerAbsent(_))), "{e:?}");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r3 of #458
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Item 1: a chain [BlackMarket, None] commits the writes, then the None entry's `NotYet` leaves the fold prefixed.
+#[test]
+fn a_none_entry_after_the_writes_is_prefixed() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let ([_, b, _], _, def) = setup(&mut fx, &c);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let bm = fx.by_path(CLASS);
+    let r = fx.obj(bm, "BM", vec![("AssociatedBlackMarketUpgrade", Value::Object(Some(b)))]);
+    let ctx = fx.target(Some(pc));
+    let at = fx.attr("Att_BM_Then_None", vec![ctx], vec![r]);
+    // Append a None entry to the value chain.
+    let p = fx.w.space.prop(fx.w.space.heap.get(at).unwrap().class, "ValueResolverChain").unwrap();
+    fx.w.space
+        .write(at, PropAddr::scalar(p), Value::array(vec![Value::Object(Some(r)), Value::Object(None)]))
+        .unwrap();
+    let e = read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert_eq!(n.missing, Missing::NotRead);
+    assert!(n.what.starts_with("stopped after partial writes: a None entry"), "{n:?}");
+    assert_eq!((cache(&fx, b), array(&fx, pc)), (2, vec![0, 0, 0]), "the writes stay");
+}
+
+/// Item 2: two independent reads on one context: the first commits writes and succeeds; the second refuses plainly.
+#[test]
+fn a_reused_context_does_not_carry_one_reads_writes_into_another() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let ([_, b, _], _, def) = setup(&mut fx, &c);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let writes = attr(&mut fx, pc, Some(b));
+    let unread_class = fx.by_path("Test.UnreadValueResolver");
+    let unread = fx.obj(unread_class, "Unread", vec![]);
+    let ctx = fx.target(Some(pc));
+    let refuses = fx.attr("Att_Unread", vec![ctx], vec![unread]);
+    let sys = system();
+    let mut w = GlobalsWorld { inner: &mut fx.w, definition: Ok(Some(def)), asked: 0 };
+    let mut cx = EvalCx::new(&mut w);
+    assert_eq!(sys.value_of(writes, None, None, &mut cx).unwrap().unwrap().value, 0.0);
+    let e = sys.value_of(refuses, None, None, &mut cx).unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert!(!n.what.starts_with("stopped"), "{n:?}");
+    assert_eq!(n.missing, Missing::NotRead);
+}
+
+/// Item 3: with a store, after a writable list entry: a load that succeeds but leaves a stand-in is the named
+/// cache-write `NotPorted`, and a real load error (a store handle whose export does not decode) comes back unchanged;
+/// the earlier cache stays cold in both.
+#[test]
+fn store_backed_stand_ins_and_load_errors_after_a_writable_entry() {
+    use ow_package::testkit::script::ScriptToy;
+    // An invented package: a Thing class with an object property Target; ToyTarget's payload does not decode, and
+    // loading ToyArchetype makes its Target a store handle that is not loaded.
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty"]);
+    let object = t.class("Object", 0);
+    let thing = t.class("Thing", object);
+    t.prop("Object", thing, "Target", 0, thing);
+    t.prop("Int", thing, "CachedUpgradeIndex", 0, 0);
+    let mut broken = 0i32.to_le_bytes().to_vec();
+    broken.extend_from_slice(&[0xff; 16]);
+    let toy_target = t.p.add_export(thing, "ToyTarget", broken);
+    let mut archetype = 0i32.to_le_bytes().to_vec();
+    archetype.extend(t.p.object_tag("Target", toy_target));
+    archetype.extend_from_slice(&t.none);
+    t.p.add_export(thing, "ToyArchetype", archetype);
+    let bytes = t.build();
+    for case in ["stand-in", "load error"] {
+        let dir = std::env::temp_dir().join(format!("ow-attr-bm-store-{}-{}", std::process::id(), case.replace(' ', "-")));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut fx = Fx::new();
+        let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", bytes.as_slice())], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+            .unwrap();
+        fx.w.defs = Some(defs);
+        let c = classes(&mut fx);
+        let thing_class = fx.w.defs.as_mut().unwrap().class_id(&mut fx.w.space, "Engine.Thing").unwrap();
+        let a = fx.obj(thing_class, "Writable", vec![("CachedUpgradeIndex", Value::Int(-1))]);
+        let second = match case {
+            // A slotless object the store does not hold as a handle: its load succeeds and leaves it a stand-in.
+            "stand-in" => fx.w.space.alloc_stand_in(thing_class, "StandIn", Origin::Resource { package: 0, index: 1 }).unwrap(),
+            // The store's own handle for ToyTarget: its load fails.
+            _ => {
+                let path = ow_core::ObjectPath::parse("Engine.ToyArchetype").unwrap();
+                let arch = fx.w.defs.as_mut().unwrap().find(&mut fx.w.space, &path).unwrap().unwrap();
+                let p = fx.w.space.prop(thing_class, "Target").unwrap();
+                match fx.w.space.read(arch, PropAddr::scalar(p)).unwrap() {
+                    Value::Object(Some(h)) => *h,
+                    other => panic!("{other:?}"),
+                }
+            }
+        };
+        // A globals list of Things (a test-local class; the shape the resolver reads).
+        let decls = vec![PropertyDecl::new(
+            fx.w.space.names.intern("BlackMarketUpgrades"),
+            PropKind::Array(Box::new(PropKind::Object { class: thing_class })),
+        )];
+        let list_class = fx.w.space.classes.define("Test.ThingGlobals", Some(fx.c.object), decls).unwrap();
+        let def = fx.obj(list_class, "Globals", vec![("BlackMarketUpgrades", Value::array(vec![Value::Object(Some(a)), Value::Object(Some(second))]))]);
+        let pc = holder(&mut fx, c.controller, "PC", &[]);
+        // The resolver's field is typed for the test world's Object; the store's Thing is set through the slot.
+        let at = attr(&mut fx, pc, None);
+        let chain = fx.w.space.prop(fx.w.space.heap.get(at).unwrap().class, "ValueResolverChain").unwrap();
+        let resolver = match fx.w.space.read(at, PropAddr::scalar(chain)).unwrap() {
+            Value::Array(items) => match items[0] {
+                Value::Object(Some(r)) => r,
+                _ => panic!(),
+            },
+            _ => panic!(),
+        };
+        let field = fx.w.space.prop(fx.w.space.heap.get(resolver).unwrap().class, "AssociatedBlackMarketUpgrade").unwrap();
+        *fx.w.space.slot_mut(resolver, PropAddr::scalar(field)).unwrap() = Value::Object(Some(a));
+        let e = read(&mut fx, at, Ok(Some(def)), false).0.expect_err(case);
+        match case {
+            "stand-in" => {
+                let n = not_yet(&e).expect("a NotYet");
+                assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotPorted, CACHE_WRITE));
+            }
+            _ => assert!(matches!(e, AttrError::Def(_)), "the store's own decode error, unchanged: {e:?}"),
+        }
+        assert_eq!(cache(&fx, a), -1, "{case}: the earlier cache stays cold");
+        assert!(array(&fx, pc).is_empty(), "{case}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

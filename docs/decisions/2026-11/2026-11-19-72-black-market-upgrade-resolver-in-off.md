@@ -45,6 +45,14 @@ and no existing `NotYet` guard was relaxed.
   - `AttrWorld::globals_object` (and `WorldHooks::globals_object`) tell "no globals object" (`Ok(None)`, 0.0) from
     "no globals support" (`NotYet { LayerAbsent }`). The world query service answers `Ok(None)` until the map load
     sets the object.
+- **Review r3 of #458:**
+  - Every exit of the shared fold goes through the partial-write rule, a None value-chain entry included.
+  - The write scope belongs to each outer evaluation: the outermost fold resets it and nested folds share it, so a
+    reused `EvalCx` does not carry one read's writes into another.
+  - With a store, every listed upgrade is loaded through the store first. A load that succeeds but leaves a stand-in
+    is the named cache-write `NotPorted`; a real load error comes back unchanged. Both are pinned with a synthetic
+    package.
+  - Reference's refusal names the resolver's class as the object space spells it, as the registry did.
 - **Reference:** unchanged. Get, get-base and the writes answer the same `NotYet { NotRead }` an unregistered class
   gave; the C++ has no rule for this class.
 - **Verified (automated, local, pc-hummer):**

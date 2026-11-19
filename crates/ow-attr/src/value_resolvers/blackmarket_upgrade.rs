@@ -111,21 +111,24 @@ fn declared_array(space: &ObjectSpace, p: PropId, element: Element, what: &str) 
 /// is not a handle, is the note's named cache-write `NotPorted`.
 fn load_for_write(cx: &mut EvalCx<'_>, upgrade: ObjRef) -> Result<(), AttrError> {
     let WorldParts { space, defs } = cx.world.parts();
-    let o = space.heap.get(upgrade)?;
-    let (resource, slotless) = (matches!(o.origin, Origin::Resource { .. }), o.slots.is_empty());
-    if resource {
-        match defs {
-            Some(defs) => defs.ensure_loaded(space, upgrade)?,
-            None if slotless => {
-                return Err(NotYet::layer_absent(
-                    format!("loading the unloaded definition {upgrade:?}"),
-                    "ow-defs",
-                    NOTE,
-                )
-                .into());
-            }
-            None => {}
+    // With a store, the store is asked first, whatever the object (it leaves a non-handle as it is), so its own load
+    // error comes back unchanged (review r3 of #458, item 3).
+    if let Some(defs) = defs {
+        defs.ensure_loaded(space, upgrade)?;
+        if stand_in(space, upgrade)? {
+            return Err(NotYet::not_ported(CACHE_WRITE, NOTE).into());
         }
+        return Ok(());
+    }
+    // Without a store an unloaded handle cannot be loaded: the layer is absent.
+    let o = space.heap.get(upgrade)?;
+    if matches!(o.origin, Origin::Resource { .. }) && o.slots.is_empty() {
+        return Err(NotYet::layer_absent(
+            format!("loading the unloaded definition {upgrade:?}"),
+            "ow-defs",
+            NOTE,
+        )
+        .into());
     }
     if stand_in(space, upgrade)? {
         return Err(NotYet::not_ported(CACHE_WRITE, NOTE).into());
@@ -133,10 +136,11 @@ fn load_for_write(cx: &mut EvalCx<'_>, upgrade: ObjRef) -> Result<(), AttrError>
     Ok(())
 }
 
-/// What the registry answers for a class it does not implement: Reference keeps it.
-fn reference_refusal() -> AttrError {
+/// What the registry answers for a class it does not implement, with the resolver's class as the object space spells
+/// it (the registry matches without case and printed that spelling; review r3 of #458, item 4): Reference keeps it.
+fn reference_refusal(space: &ObjectSpace, resolver: ObjRef) -> AttrError {
     NotYet::not_read(
-        format!("value resolver class {CLASS}"),
+        format!("value resolver class {}", crate::eval::class_path(space, resolver)),
         "NATIVE_ATTRIBUTES.md section 6",
     )
     .into()
@@ -337,16 +341,16 @@ fn native(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32,
 
 fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, AttrError> {
     match parity(cx) {
-        ParityMode::Reference => Err(reference_refusal()),
+        ParityMode::Reference => Err(reference_refusal(cx.world.parts().space, resolver)),
         _ => native(cx, resolver, context),
     }
 }
 
 impl ValueResolver for BlackMarketUpgrade {
     /// Reference refuses at the preflight as an unregistered class did (review r1 of #458, item 5).
-    fn available(&self, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    fn available(&self, resolver: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
         match parity(cx) {
-            ParityMode::Reference => Err(reference_refusal()),
+            ParityMode::Reference => Err(reference_refusal(cx.world.parts().space, resolver)),
             _ => Ok(()),
         }
     }
@@ -365,12 +369,12 @@ impl ValueResolver for BlackMarketUpgrade {
     fn storage(
         &self,
         _sys: &AttributeSystem,
-        _resolver: ObjRef,
+        resolver: ObjRef,
         _context: ObjRef,
         cx: &mut EvalCx<'_>,
     ) -> Result<Option<Storage>, AttrError> {
         match parity(cx) {
-            ParityMode::Reference => Err(reference_refusal()),
+            ParityMode::Reference => Err(reference_refusal(cx.world.parts().space, resolver)),
             _ => Ok(None),
         }
     }
