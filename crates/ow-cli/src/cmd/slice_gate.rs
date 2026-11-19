@@ -905,7 +905,9 @@ fn link_of(driver: Driver) -> Option<usize> {
 ///
 /// **The partial-writes mark is this layer's** (review r1 of #506; the hub's rule that the caller layer that wrote adds
 /// it): `make` writes the weapon and its owner, so every phase's `NotYet` after it is terminal and gets "stopped after
-/// partial writes: " through `ow_world::pools::after_partial_writes`, its kind and record kept. The init's natives
+/// partial writes: " through `ow_world::pools::after_partial_writes`, its kind and record kept. `make` itself is
+/// marked only when its failure came after the weapon was allocated ([`make_marked`], review r2 of #506), so the
+/// preflight's refusal and a failure before any write stay unprefixed. The init's natives
 /// (`ChooseRandomNameParts`, `CacheWeaponCard`, `ApplyInternalSlotEffectModifiers`) return their pre-write `NotYet`s
 /// unprefixed. When the card is read, the globals preflight of NATIVE_WILLOW_GLOBALS.md section
 /// 6.2, steps 1 to 3, on a world set up per its section 6.1, replaces the refusal (review of #491); this lane adds no
@@ -931,10 +933,11 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         ran[i] = Some(r);
         return;
     }
-    let weapon = match crate::cmd::inventory::equip_run::prepare_line(vm, EQUIP_WEAPON) {
+    let made = make_marked(vm, |vm, wrote| crate::cmd::inventory::equip_run::prepare_line_typed(vm, EQUIP_WEAPON, wrote));
+    let weapon = match made {
         Ok(w) => w,
-        Err(text) => {
-            r.stop = Some(classify("make", &text));
+        Err(e) => {
+            r.stop = Some(classify_error("make", &e));
             ran[i] = Some(r);
             return;
         }
@@ -962,6 +965,17 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     }
     r.evident = equip_evident(r.error_lines.len(), before, after_equip, after_unequip);
     ran[i] = Some(r);
+}
+
+/// Link 8's `make` (review r2 of #506): `prepare` with its typed error kept, marked "stopped after partial writes"
+/// only when `prepare` set its `wrote` flag (the weapon was allocated before it failed); a failure before any write is
+/// returned unprefixed.
+pub(crate) fn make_marked<T>(
+    vm: &mut ow_vm::api::Vm,
+    prepare: impl FnOnce(&mut ow_vm::api::Vm, &mut bool) -> Result<T, ow_vm::error::VmError>,
+) -> Result<T, ow_vm::error::VmError> {
+    let mut wrote = false;
+    prepare(vm, &mut wrote).map_err(|e| if wrote { ow_world::pools::after_partial_writes(e) } else { e })
 }
 
 /// Link 9 (module documentation): the installed cast on a world with the Core natives and `ow-skills`' tree and

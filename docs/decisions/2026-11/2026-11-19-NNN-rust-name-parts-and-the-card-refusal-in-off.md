@@ -41,14 +41,15 @@ decisions check refuses it until then.
   as the note intends: the run cannot finish on either path, and the stop is now certain before any write.
 - **Not done:** the card's presentation lookup, its card entries and its ordering (the note's open questions 2 and 3),
   the globals preflight, and any live check.
-- Synthetic tests (`equip::name_parts::tests`, 15 `#[test]`s, invented classes and values only; the first report's 16
+- Synthetic tests (`equip::name_parts::tests`, 16 `#[test]`s after review r2, invented classes and values only; the first report's 16
   counted two tests of other modules that the name filter also matched):
   - picks, ties, level edges, priority 0 and below, And over the expressions;
   - a part replacing at equal priority, never clearing a pick, filling a None pick, and the last slot being walked;
   - both fields written None included, and nothing written with no type;
   - an expression `NotYet` returned unprefixed with nothing written;
   - the card's call-time `NotRead` and the preflight's, both unprefixed; the schema holding and five schema failures
-    (the last a struct whose own name only ends with `WeaponDefinitionData`); binding by key in Off, and nothing bound
+    (the last a struct whose own name only ends with `WeaponDefinitionData`); a struct named after a `:` holding it
+    (review r2); binding by key in Off, and nothing bound
     in Reference;
   - one store-backed fixture: an untagged name part takes its class defaults (Min 1, Max 100, Priority 1) and
     qualifies.
@@ -59,3 +60,12 @@ decisions check refuses it until then.
   2. **The test count** is 15, as above.
   3. **The class defaults** have a store-backed fixture.
   4. **The schema** compares the struct's own name exactly (`WeaponDefinitionData`, `AttributeExpressionData`).
+- **Review r2 of #506** (two items):
+  1. **`make` is typed and marked by its own write.** Link 8's `make` calls `prepare_line_typed` through
+     `make_marked` (`ow-cli` `slice_gate.rs`): the error stays a `VmError`, is graded by its variant, and gets
+     "stopped after partial writes" only when the `wrote` flag says the weapon was allocated before the failure. The
+     preflight's refusal, and any failure before a write, stay unprefixed. The string-returning `prepare_line` is
+     gone. Two synthetic tests in `slice_gate_driver_tests.rs`: a failure after the allocation is marked once (also
+     when the inner error was already marked), and one before any write is not.
+  2. **Own names by `ObjectPath::name()`**, which splits at `.` and `:`, so `Test.Owner:WeaponDefinitionData` holds
+     the schema.

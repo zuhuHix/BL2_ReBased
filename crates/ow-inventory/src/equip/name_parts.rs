@@ -106,7 +106,7 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
         .classes
         .struct_layout(ty)
         .ok_or_else(|| schema(format!("{WEAPON_CLASS}.DefinitionData's struct has no layout")))?;
-    if !own_name_is(layout.path().as_str(), "WeaponDefinitionData") {
+    if !own_name_is(layout.path(), "WeaponDefinitionData") {
         return Err(schema(format!("{WEAPON_CLASS}.DefinitionData is a {}, not a WeaponDefinitionData", layout.path().as_str())));
     }
     let fields = std::iter::once("WeaponTypeDefinition")
@@ -150,7 +150,7 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
             "an int" => matches!(kind, PropKind::Int),
             "a float" => matches!(kind, PropKind::Float),
             _ => matches!(&kind, PropKind::Array(inner) if matches!(**inner, PropKind::Struct(s)
-                if vm.space.classes.struct_layout(s).is_some_and(|l| own_name_is(l.path().as_str(), "AttributeExpressionData")))),
+                if vm.space.classes.struct_layout(s).is_some_and(|l| own_name_is(l.path(), "AttributeExpressionData")))),
         };
         if !ok {
             return Err(schema(format!("{NAME_PART_CLASS}.{name} is {kind:?}, not {want}")));
@@ -162,10 +162,10 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
     Ok(())
 }
 
-/// Whether the last segment of `path` (a struct's own name) is exactly `name` (review r1 of #506, item 4: a suffix
-/// match would let `FooWeaponDefinitionData` pass).
-fn own_name_is(path: &str, name: &str) -> bool {
-    path.rsplit('.').next() == Some(name)
+/// Whether the last component of `path` (a struct's own name, after the last `.` or `:`) is exactly `name` (review r1
+/// of #506, item 4: a suffix match would let `FooWeaponDefinitionData` pass; review r2: an outer `:` counts too).
+fn own_name_is(path: &ow_core::ObjectPath, name: &str) -> bool {
+    path.name() == name
 }
 
 fn schema(message: String) -> VmError {

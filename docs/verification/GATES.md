@@ -50,7 +50,12 @@ bridge). Installed Off `--slice-gate` strict (release build, under the machine l
 current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and verify_packages not run (no C++ change).
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
-**IMPL-CACHE-WEAPON-CARD (2026-11-19, desktop, on main d72b96d):** AI-assisted (Claude Code, Claude Opus 5.5).
+**IMPL-CACHE-WEAPON-CARD r2 (2026-11-19, desktop, on main 7668d07):** AI-assisted (Claude Code, Claude Opus 5.5).
+Link 8's `make` keeps its typed error and is marked only after the weapon's allocation; struct own names by
+`ObjectPath::name()`. `cargo test -j 2 -p ow-inventory -p ow-cli`: ow-inventory 196 passed / 0 failed, ow-cli 115
+passed / 1 ignored and 2 passed (3 new tests); log `local/p2/cwc-r2/test.log`. No installed gate re-run: the preflight
+still stops `make` before any write, so link 8's row is the r1 row's.
+
 **IMPL-CACHE-WEAPON-CARD r1 (2026-11-19, desktop, on main 7668d07):** AI-assisted (Claude Code, Claude Opus 5.5).
 `WillowWeapon.ChooseRandomNameParts` in full and `CacheWeaponCard`'s `NotRead` in Off (`ow-inventory`
 `equip::name_parts`), and link 8's preflight before the weapon is made. `cargo build --workspace -j 2` clean; `cargo

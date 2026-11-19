@@ -298,3 +298,48 @@ fn the_grading_follows_the_error_s_variant_not_its_text() {
     assert_eq!(stop.native, "Toy.Native");
     assert_eq!(stop.record, TRICKY);
 }
+
+// ---- Link 8's make (review r2 of #506) ---------------------------------------------------------------------------
+
+fn toy_vm() -> Vm {
+    Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(ow_attr::AttributeSystem::new_empty()), ParityMode::Off)
+}
+
+fn toy_not_yet() -> VmError {
+    VmError::NotYet(ow_core::NotYet::not_read("Toy.Lookup", "TOY_RECORD.md"))
+}
+
+fn what(e: &VmError) -> String {
+    match e {
+        VmError::NotYet(n) => n.what.to_string(),
+        other => panic!("expected NotYet, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_make_failure_after_the_weapon_is_allocated_is_marked_once() {
+    let mut vm = toy_vm();
+    let e = make_marked(&mut vm, |_, wrote| -> Result<(), VmError> {
+        *wrote = true;
+        Err(ow_world::pools::after_partial_writes(toy_not_yet()))
+    })
+    .unwrap_err();
+    let text = what(&e);
+    assert!(text.starts_with("stopped after partial writes: "), "{text}");
+    assert_eq!(text.matches("partial writes").count(), 1, "marked once: {text}");
+    assert_eq!(classify_error("make", &e).0, Outcome::NotYet, "graded by its variant");
+    let e = make_marked(&mut vm, |_, wrote| -> Result<(), VmError> {
+        *wrote = true;
+        Err(toy_not_yet())
+    })
+    .unwrap_err();
+    assert_eq!(what(&e).matches("partial writes").count(), 1);
+}
+
+#[test]
+fn a_make_failure_before_any_write_is_not_marked() {
+    let mut vm = toy_vm();
+    let e = make_marked(&mut vm, |_, _| -> Result<(), VmError> { Err(toy_not_yet()) }).unwrap_err();
+    assert_eq!(what(&e), "Toy.Lookup");
+    assert_eq!(classify_error("make", &e).0, Outcome::NotYet);
+}

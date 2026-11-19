@@ -373,13 +373,9 @@ fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
 }
 
 /// One weapon of a weapons-file line, as the run makes it: the weapon, its owner and the owner's accuracy pool (module
-/// documentation). Shared with `--slice-gate`'s link 8 (lane SLICE-GATE-DRIVERS).
-pub(crate) fn prepare_line(vm: &mut Vm, line: &str) -> Result<ObjRef, String> {
-    prepare_line_typed(vm, line, &mut false).map_err(|e| vm_text(&e))
-}
-
-/// [`prepare_line`] with its `VmError` kept, and `wrote` set once its first mutation succeeded (the weapon's creation;
-/// lane IMPL-PICKUP, review r3 of #452).
+/// documentation), with its `VmError` kept, and `wrote` set once its first mutation succeeded (the weapon's creation;
+/// lane IMPL-PICKUP, review r3 of #452). Shared with `--slice-gate`'s link 8 (lane SLICE-GATE-DRIVERS), which marks a
+/// failure after that write (review r2 of #506).
 pub(crate) fn prepare_line_typed(vm: &mut Vm, line: &str, wrote: &mut bool) -> Result<ObjRef, VmError> {
     let r = diff_request(line).map_err(script)?;
     prepare(vm, &r, wrote)

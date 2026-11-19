@@ -34,6 +34,9 @@ enum Schema {
     NoExpLevel,
     /// The definition data struct's own name only ends with `WeaponDefinitionData` (review r1 of #506, item 4).
     SuffixStruct,
+    /// The definition data struct's path has an outer object after a `:` (review r2 of #506, item 2): its own name
+    /// is still `WeaponDefinitionData`, so the schema holds.
+    ColonStruct,
 }
 
 struct Fx {
@@ -99,7 +102,11 @@ impl Fx {
         let prefix = if schema == Schema::PlainPrefixField { obj.clone() } else { np.clone() };
         fields.push(decl(&mut space, "PrefixPartDefinition", prefix));
         fields.push(decl(&mut space, "TitlePartDefinition", np));
-        let data_path = if schema == Schema::SuffixStruct { "Test.FooWeaponDefinitionData" } else { "Test.WeaponDefinitionData" };
+        let data_path = match schema {
+            Schema::SuffixStruct => "Test.FooWeaponDefinitionData",
+            Schema::ColonStruct => "Test.Owner:WeaponDefinitionData",
+            _ => "Test.WeaponDefinitionData",
+        };
         let data = space.classes.define_struct(data_path, None, fields).unwrap();
         let actor = class(&mut space, "Engine.Actor", object, vec![]);
         let engine_weapon = class(&mut space, "Engine.Weapon", actor, vec![]);
@@ -374,6 +381,12 @@ fn the_preflight_refuses_the_card_first_unprefixed_whatever_the_schema() {
 #[test]
 fn the_name_part_schema_holds_on_the_declared_classes() {
     let mut x = Fx::new(Schema::Good);
+    name_part_schema(&mut x.vm).unwrap();
+}
+
+#[test]
+fn a_struct_named_after_a_colon_holds_the_schema() {
+    let mut x = Fx::new(Schema::ColonStruct);
     name_part_schema(&mut x.vm).unwrap();
 }
 
