@@ -209,6 +209,8 @@ impl NativePack for Pack {
             bind(vm, FORCE_UNREGISTER, Rc::new(force_unregister))?;
             // Running behavior lists outside the kernel (NATIVE_RUN_BEHAVIORS.md; decision 2026-11-19-54).
             super::run::register(vm)?;
+            // The behavior-variable setters (NATIVE_SET_BEHAVIOR_VARIABLE.md; decision 2026-11-19-NNN).
+            super::variables::register(vm)?;
         }
         Ok(())
     }

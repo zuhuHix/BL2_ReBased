@@ -168,6 +168,17 @@ errors. Links 10 and 11 ok; link 12 passes 1 of 6 driver steps (`use`) and gets 
 { NotRead }`, NATIVE_MISSION_OBJECTIVES.md). ctest and verify_packages not run (no C++ change). No real-game run;
 `UNVERIFIED` in game. Decision 2026-11-19-157 (unlock achievement); logs under ignored `local/p2/link12-unlock/`.
 
+**IMPL-SET-OBJECT-BEHAVIOR-VARIABLE (2026-11-19, desktop, on main d52bcc7):** AI-assisted (Claude Code, Opus 5.5). The
+five `BehaviorProviderDefinition.Set<Kind>BehaviorVariable` setters in Off, from NATIVE_SET_BEHAVIOR_VARIABLE.md (#538,
+94aa293), with #518's counters carried from 1f1a2bc. `cargo build --workspace -j 2` clean; `cargo test -p ow-behavior
+-j 2` 100 passed / 0 failed (9 new in `kernel::variables`); `cargo test --workspace -j 2` 2,455 passed / 0 failed / 46
+ignored; clippy flags nothing in the changed files. Installed Off `--slice-gate` strict on a local merge of this branch
+with #523 and #535 (never pushed; #523's two counter call sites renamed to #518's names for the merge): 1 ok / 3
+NotYet / 10 errors. Link 9 passes `spawn` and stops in `cast` at the unbound `ActionSkill.GetBehaviorProviderDefinition()`,
+the argument of `OnSelectedTarget`'s event fire, after the two setter calls. No baseline run without this change. ctest and
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under
+ignored `local/p2/sbv/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
