@@ -76,3 +76,31 @@ AI-assisted (Claude Code). Lane IMPL-PICKUP, implementer (slice links 6 and 7). 
   - For an analyst: `WillowInventory.GetInventoryDefinition` (the next stop of both links); `TouchPickupTrace`'s
     blocking rule; `RemovePickup`'s list and events; the targeting's open question 1.
   - For the hub: the view point for `look` in a headless world.
+- **Review r2 of #452** (a commit on top). Where this section and the text above differ, this section holds.
+  - **The `Pickup` state.** The driver enters it explicitly through the pickup's own `GotoState`. Spawn skips the
+    initial state in a world that has only a placed `WorldInfo`. The driver checks the state before `Touch`, so the
+    state's handler is the one that runs. A new package test has a toy pickup with a global and a state `Touch`.
+  - **Writes and errors.** The driver keeps `VmError`s until the gate grades them. Its first write is in `make` (the
+    gun and its owner, Maya's place, the detach, the spawns, the decoy). From there on only a `NotYet` gets the
+    "stopped after partial writes" prefix, with its kind and record kept, and any other error passes through
+    unchanged. New tests cover a late `NotYet`, an ordinary error, a mark applied once, and nothing marked before a
+    write.
+  - **Preflight.** Before any write, `make` checks:
+    - the weapon class's `DroppedPickupClass`, read from its class default object;
+    - its `Owner` and `Instigator` fields;
+    - the pickup class's `InitializeFromInventory` signature (object, object, bool) and its `Pickup` state;
+    - the binding of `WillowInventory.GetInventoryDefinition`, which the fixed fixture reaches. An unbound one is
+      the VM's own unbound-native error.
+  - **Link 7's fixture.** One player: link 7's decoy gun has no owner of its own (`equip_run::prepare_unowned`).
+    Maya is at the world origin facing +X, her gun's pickup 150 uu ahead and the decoy 45 uu to her side. `look`
+    first checks that her `CurrentTouchedPickupable` is the decoy, then stays the camera `NotYet`.
+  - **`GetInventoryPawn`.** It supports only the concrete `WillowPlayerPawn` class; a subclass is the named `NotYet`
+    (new test). A failed class lookup is that error, not the refusal.
+  - **Evidence.** The evidence comes from successful reads only: the gun in Maya's inventory chain, its pickup
+    destroyed, and the decoy still a live pickup holding its own gun.
+  - **Gates after r2:**
+    - `ow-inventory` 78 / 0 / 0; `ow-cli` 90 / 0 / 1 and 2 / 0 / 0; `check_slice_run_off_test.py` OK;
+    - installed `--slice-gate`, strict, under the machine lock: 0 / 12 / 2. Links 6 and 7 are `error` at `make` with
+      the unbound `WillowInventory.GetInventoryDefinition()`, now from the preflight, before any write. Only row 6's
+      scope text changed from r1.
+

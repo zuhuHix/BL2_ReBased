@@ -1,29 +1,49 @@
 //! Owner: lane IMPL-PICKUP. AI-assisted (Claude Code). The headless pickup of `--slice-gate`'s links 6 and 7
 //! (NATIVE_PICKUP.md; decision 2026-11-19-68). The pickup is installed script and the VM runs it; this module only
 //! makes the objects and calls the script's entry points, in the note's order:
-//! - `make`: `--equip-run`'s weapon and owner (`equip_run::prepare_line`); the weapon leaves its owner, and the
-//!   weapon's `DroppedPickupClass` is spawned and initialised from it with pickup enabled (its script
-//!   `InitializeFromInventory`). That is what section 1 says the drop does. The drop's own script, `DropFrom`, stops at
-//!   the unbound `WillowInventory.GetInventoryDefinition()`, which no note reads, so the run does not call it;
-//! - `touch`: the pickup's `Touch` by the pawn, in the pickup's `Pickup` state (section 3). Link 6 touches its one gun;
-//!   link 7 touches the decoy, the second gun `make` drops (the slice fixtures of section 4);
-//! - `look` (link 7): the per-tick pickup targeting (section 4), a native with no script name. It needs the player's
-//!   view point and direction, which the headless world does not have (no camera): `NotYet { LayerAbsent }`, never a
-//!   fitted choice;
+//! - `make`: a preflight first, before any write (review r2 of #452): the weapon class's `DroppedPickupClass` (read
+//!   from its class default object), its `Owner` and `Instigator` fields, the pickup class's `InitializeFromInventory`
+//!   signature (an object, an object, a bool) and its `Pickup` state, and the binding of
+//!   `WillowInventory.GetInventoryDefinition`, which the pickup's initialisation reaches on the fixed fixture. An
+//!   unbound one is answered as the VM answers it (an unbound native), before anything is made. Then Maya (the
+//!   `--equip-run` weapon's owner, at the world origin facing +X) and her gun: the gun leaves its owner, and its
+//!   `DroppedPickupClass` is spawned 150 uu ahead of her, initialised from it with pickup enabled (its script
+//!   `InitializeFromInventory`) and put in its `Pickup` state. That is what section 1 says the drop does. Link 7 also
+//!   drops a decoy gun of the same line, with no owner, 45 uu to her side (section 4's fixture);
+//! - `touch`: the pickup's `Touch` by Maya's pawn, the `Pickup` state's handler (checked before the dispatch). Link 6
+//!   touches its one gun; link 7 touches the decoy;
+//! - `look` (link 7): first, Maya's controller must hold the decoy as `CurrentTouchedPickupable`; then the per-tick
+//!   pickup targeting (section 4), a native with no script name. It needs the player's view point and direction,
+//!   which the headless world does not have (no camera): `NotYet { LayerAbsent }`, never a fitted choice;
 //! - `key`: the controller's `PickupSomething` (section 5).
 //!
-//! The two guns' places (150 uu ahead, and 45 uu to the side) are not set: every step that would read them refuses
-//! first in Off (the touch trace, the look).
+//! **Writes and refusals** (the hub's rule, review r2 of #452): the run's first write is in `make` (after the
+//! preflight). From then on a `NotYet` is terminal and its text starts "stopped after partial writes", its kind and
+//! record kept; any other error passes through unchanged. Errors stay `VmError`s until the gate grades them.
 //!
-//! Three harness stand-ins, none a rule: the owner links of `--equip-run`; the pickup's spawn in place of `DropFrom`
-//! (no mission or can-drop check, no physics or toss velocity, and `bNoCollisionFail`, since the world has no
-//! collision: what the drop's own spawn passes is not read); and the spawn's location (the spawner's).
+//! Harness stand-ins, none a rule: the owner links of `--equip-run`; the pickup's spawn and state entry in place of
+//! `DropFrom` (no mission or can-drop check, no physics or toss velocity, and `bNoCollisionFail`, since the world has
+//! no collision: what the drop's own spawn passes is not read); the places (the world origin and the note's
+//! offsets).
 
-use ow_object::ids::{ObjRef, PropAddr};
+use ow_core::NotYet;
+use ow_object::ids::{ClassId, ObjRef, PropAddr};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
+use ow_vm::error::VmError;
 
 use crate::cmd::inventory::equip_run;
+
+/// The text that marks a refusal after the run's first write.
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
+const RECORD: &str = "NATIVE_PICKUP.md";
+const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
+const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
+/// The note's fixture places (section 4), Maya at the origin facing +X.
+const AIMED_AT: [f32; 3] = [150.0, 0.0, 0.0];
+const DECOY_AT: [f32; 3] = [0.0, 45.0, 0.0];
 
 /// The objects of one pickup run.
 #[derive(Debug, Clone, Copy)]
@@ -33,25 +53,44 @@ pub struct Pickup {
     pub pawn: ObjRef,
     pub controller: ObjRef,
     /// The gun's pickup actor.
-    pub pickup: Option<ObjRef>,
-    /// Link 7's decoy: its gun and its pickup actor, the one the pawn touches.
+    pub pickup: ObjRef,
+    /// Link 7's decoy: its gun and its pickup actor, the one Maya touches.
     pub decoy: Option<(ObjRef, ObjRef)>,
+    /// Whether the run has written anything yet (module documentation).
+    pub wrote: bool,
 }
 
-fn text(e: &ow_vm::error::VmError) -> String {
-    ow_combat::hit::access::error_text(e)
+fn error(message: impl Into<String>) -> VmError {
+    VmError::Script { function: "slice-pickup".into(), message: message.into() }
 }
 
-fn read(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, String> {
-    let class = vm.space.heap.get(o).map_err(|e| e.to_string())?.class;
-    let p = vm.space.prop(class, name).ok_or_else(|| format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o)))?;
-    Ok(vm.space.read(o, PropAddr::scalar(p)).map_err(|e| e.to_string())?.clone())
+/// `e` as a refusal after a write (module documentation): a `NotYet` marked once, its kind and record kept; any other
+/// error unchanged.
+pub fn after_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
 }
 
-fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), String> {
-    let class = vm.space.heap.get(o).map_err(|e| e.to_string())?.class;
-    let p = vm.space.prop(class, name).ok_or_else(|| format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o)))?;
-    vm.space.write(o, PropAddr::scalar(p), v).map_err(|e| e.to_string())
+fn read(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| error(format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
+    Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
+}
+
+fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let p = vm
+        .space
+        .prop(class, name)
+        .ok_or_else(|| error(format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, o))))?;
+    Ok(vm.space.write(o, PropAddr::scalar(p), v)?)
 }
 
 fn object(v: &Value) -> Option<ObjRef> {
@@ -61,98 +100,195 @@ fn object(v: &Value) -> Option<ObjRef> {
     }
 }
 
-/// The zero value of each parameter of `f`, with `first` in place of the first.
-fn args(vm: &Vm, f: ow_object::ids::FuncId, given: &[Value]) -> Result<Vec<Value>, String> {
+/// The zero value of each parameter of `f`, with `given` in place of the first ones.
+fn args(vm: &Vm, f: ow_object::ids::FuncId, given: &[Value]) -> Result<Vec<Value>, VmError> {
     let params = vm.function(f).map(|d| d.params.clone()).unwrap_or_default();
     params
         .iter()
         .enumerate()
         .map(|(i, p)| match given.get(i) {
             Some(v) => Ok(v.clone()),
-            None => vm.space.classes.default_value(&p.kind).map_err(|e| e.to_string()),
+            None => vm.space.classes.default_value(&p.kind).map_err(|e| error(e.to_string())),
         })
         .collect()
 }
 
-/// Calls `name` on `o` as its class and current state see it.
-fn call(vm: &mut Vm, o: ObjRef, name: &str, given: &[Value]) -> Result<Value, String> {
+/// `name` on `o` as its class and current state see it.
+fn method(vm: &mut Vm, o: ObjRef, name: &str) -> Result<ow_object::ids::FuncId, VmError> {
     let (class, state) = {
-        let h = vm.space.heap.get(o).map_err(|e| e.to_string())?;
+        let h = vm.space.heap.get(o)?;
         (h.class, h.state)
     };
-    let f = vm
-        .find_method(class, name, state)
-        .map_err(|e| text(&e))?
-        .ok_or_else(|| format!("{} has no {name}", ow_attr::eval::class_path(&vm.space, o)))?;
+    vm.find_method(class, name, state)?
+        .ok_or_else(|| error(format!("{} has no {name}", ow_attr::eval::class_path(&vm.space, o))))
+}
+
+fn call(vm: &mut Vm, o: ObjRef, name: &str, given: &[Value]) -> Result<Value, VmError> {
+    let f = method(vm, o, name)?;
     let a = args(vm, f, given)?;
-    vm.call(f, Some(o), a).map(|r| r.ret).map_err(|e| text(&e))
+    Ok(vm.call(f, Some(o), a)?.ret)
 }
 
-/// `make` (module documentation): one gun, and with `decoy` a second one of the same line.
-pub fn make(vm: &mut Vm, line: &str, decoy: bool) -> Result<Pickup, String> {
-    let (weapon, pickup, pawn, controller) = drop_one(vm, line)?;
-    let decoy = if decoy {
-        let (w, p, _, _) = drop_one(vm, line)?;
-        Some((w, p))
-    } else {
-        None
+fn state_name(vm: &mut Vm) -> ow_object::ids::NameId {
+    vm.space.names.intern("Pickup")
+}
+
+/// Whether `o` is in its `Pickup` state.
+pub fn in_pickup_state(vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
+    let wanted = state_name(vm);
+    Ok(vm.space.heap.get(o)?.state == Some(wanted))
+}
+
+/// Puts `o` in its `Pickup` state through its own `GotoState`, and checks that it is there.
+pub fn enter_pickup_state(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
+    let name = state_name(vm);
+    call(vm, o, "GotoState", &[Value::Name(name)])?;
+    if !in_pickup_state(vm, o)? {
+        return Err(error(format!("{} did not enter its Pickup state", ow_attr::eval::class_path(&vm.space, o))));
+    }
+    Ok(())
+}
+
+/// The pickup's `Touch` by `pawn`, the `Pickup` state's handler: refused unless the pickup is in that state.
+pub fn touch(vm: &mut Vm, pickup: ObjRef, pawn: ObjRef) -> Result<(), VmError> {
+    if !in_pickup_state(vm, pickup)? {
+        return Err(error("the pickup is not in its Pickup state, so its Touch is not the Pickup state's handler"));
+    }
+    call(vm, pickup, "Touch", &[Value::Object(Some(pawn))]).map(|_| ())
+}
+
+/// The pickup class the weapon class drops (from its class default object), with every check of the preflight
+/// (module documentation).
+pub fn preflight(vm: &mut Vm) -> Result<ClassId, VmError> {
+    let weapon = vm.find_class(WEAPON_CLASS)?;
+    for field in ["Owner", "Instigator"] {
+        if vm.space.prop(weapon, field).is_none() {
+            return Err(error(format!("{WEAPON_CLASS} declares no {field}")));
+        }
+    }
+    let defaults = vm.defs.class_default(&mut vm.space, WEAPON_CLASS);
+    vm.log.extend(vm.defs.take_log());
+    let defaults = defaults.map_err(VmError::Def)?;
+    let class = match read(vm, defaults, "DroppedPickupClass")? {
+        Value::Class(Some(c)) => c,
+        other => return Err(error(format!("{WEAPON_CLASS}'s DroppedPickupClass is {other:?}"))),
     };
-    Ok(Pickup { weapon, pawn, controller, pickup: Some(pickup), decoy })
+    let init = vm
+        .find_method(class, "InitializeFromInventory", None)?
+        .ok_or_else(|| error("the pickup class has no InitializeFromInventory"))?;
+    let kinds: Vec<PropKind> = vm.function(init).map(|d| d.params.iter().map(|p| p.kind.clone()).collect()).unwrap_or_default();
+    if !matches!(kinds.as_slice(), [PropKind::Object { .. }, PropKind::Object { .. }, PropKind::Bool]) {
+        return Err(error(format!("InitializeFromInventory's parameters are {kinds:?}, not (object, object, bool)")));
+    }
+    let state = state_name(vm);
+    if !vm.class_declares_state(class, state)? {
+        return Err(error("the pickup class declares no Pickup state"));
+    }
+    if let Ok(f) = vm.find_function(GET_INVENTORY_DEFINITION)
+        && let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
+        && !vm.has_native(&key)
+    {
+        return Err(VmError::UnboundNative(key));
+    }
+    Ok(class)
 }
 
-/// One gun of `line` with its own owner (whose pawn and controller are answered), dropped as a pickup.
-fn drop_one(vm: &mut Vm, line: &str) -> Result<(ObjRef, ObjRef, ObjRef, ObjRef), String> {
-    let weapon = equip_run::prepare_line(vm, line)?;
-    let pawn = object(&read(vm, weapon, "Owner")?).ok_or("the weapon has no owner")?;
-    let controller = object(&read(vm, pawn, "Controller")?).ok_or("the pawn has no controller")?;
+/// A location value of `pawn`'s `Location` type at `at`.
+fn place(vm: &Vm, pawn: ObjRef, at: [f32; 3]) -> Result<Value, VmError> {
+    let mut v = read(vm, pawn, "Location")?;
+    for (axis, x) in ["X", "Y", "Z"].into_iter().zip(at) {
+        if !ow_combat::hit::access::set_field(vm, &mut v, axis, Value::Float(x)) {
+            return Err(error(format!("Location has no {axis}")));
+        }
+    }
+    Ok(v)
+}
+
+/// The gun leaves any owner, and its pickup is spawned at `at`, initialised from it and put in its `Pickup` state.
+fn drop_at(vm: &mut Vm, class: ClassId, weapon: ObjRef, spawner: ObjRef, at: [f32; 3]) -> Result<ObjRef, VmError> {
     write(vm, weapon, "Owner", Value::Object(None))?;
     write(vm, weapon, "Instigator", Value::Object(None))?;
-    let class = match read(vm, weapon, "DroppedPickupClass")? {
-        Value::Class(Some(c)) => c,
-        other => return Err(format!("the weapon's DroppedPickupClass is {other:?}")),
-    };
-    let request = ow_world::actors::SpawnRequest::new(Some(class)).with_no_collision_fail(true);
-    let pickup = ow_world::actors::spawn(vm, pawn, &request)
-        .map_err(|e| text(&e))?
-        .ok_or("the pickup class did not spawn")?;
+    let location = place(vm, spawner, at)?;
+    let request = ow_world::actors::SpawnRequest::new(Some(class)).with_no_collision_fail(true).with_location(location);
+    let pickup = ow_world::actors::spawn(vm, spawner, &request)?.ok_or_else(|| error("the pickup class did not spawn"))?;
     call(vm, pickup, "InitializeFromInventory", &[Value::Object(Some(weapon)), Value::Object(None), Value::Bool(true)])?;
-    Ok((weapon, pickup, pawn, controller))
+    enter_pickup_state(vm, pickup)?;
+    Ok(pickup)
 }
 
-/// What the take writes that the run can see: the weapon's `Owner` and the pickup's `Inventory`.
-fn take_state(vm: &Vm, p: &Pickup) -> (Option<Value>, Option<Value>) {
-    (
-        read(vm, p.weapon, "Owner").ok(),
-        p.pickup.and_then(|o| read(vm, o, "Inventory").ok()),
-    )
+/// `make` (module documentation): Maya and her gun, and with `decoy` an unowned second gun of the same line.
+pub fn make(vm: &mut Vm, line: &str, decoy: bool) -> Result<Pickup, VmError> {
+    let class = preflight(vm)?;
+    // The first write: from here a NotYet is terminal (module documentation).
+    let made = (|| -> Result<Pickup, VmError> {
+        let weapon = equip_run::prepare_line(vm, line).map_err(error)?;
+        let pawn = object(&read(vm, weapon, "Owner")?).ok_or_else(|| error("the weapon has no owner"))?;
+        let controller = object(&read(vm, pawn, "Controller")?).ok_or_else(|| error("the pawn has no controller"))?;
+        let origin = place(vm, pawn, [0.0, 0.0, 0.0])?;
+        write(vm, pawn, "Location", origin)?;
+        let pickup = drop_at(vm, class, weapon, pawn, AIMED_AT)?;
+        let decoy = if decoy {
+            let w = equip_run::prepare_unowned(vm, line).map_err(error)?;
+            Some((w, drop_at(vm, class, w, pawn, DECOY_AT)?))
+        } else {
+            None
+        };
+        Ok(Pickup { weapon, pawn, controller, pickup, decoy, wrote: true })
+    })();
+    made.map_err(after_writes)
 }
 
-/// One step after `make` (module documentation); its error text, if any. A refusal after the step already changed
-/// what the take writes is terminal and says so ("stopped after partial writes", the hub's rule; the run has no undo).
-pub fn step(vm: &mut Vm, name: &str, p: &Pickup) -> Option<String> {
-    let before = take_state(vm, p);
+/// One step after `make` (module documentation); its error, if any.
+pub fn step(vm: &mut Vm, name: &str, p: &Pickup) -> Option<VmError> {
     let r = match name {
-        "touch" => p.decoy.map(|d| d.1).or(p.pickup).ok_or_else(|| "no pickup".to_string()).and_then(|pickup| {
-            call(vm, pickup, "Touch", &[Value::Object(Some(p.pawn))]).map(|_| ())
-        }),
-        "look" => Err(ow_core::NotYet::layer_absent(
-            "the per-tick pickup targeting (NATIVE_PICKUP.md section 4) needs the player's view point and direction",
-            "a camera (the headless world has none)",
-            "NATIVE_PICKUP.md",
-        )
-        .to_string()),
+        "touch" => touch(vm, p.decoy.map_or(p.pickup, |d| d.1), p.pawn),
+        "look" => look(vm, p),
         "key" => call(vm, p.controller, "PickupSomething", &[Value::Bool(false)]).map(|_| ()),
-        other => Err(format!("{other}: not a step of the pickup run")),
+        other => Err(error(format!("{other}: not a step of the pickup run"))),
     };
     let e = r.err()?;
-    if take_state(vm, p) != before {
-        return Some(format!("stopped after partial writes: {e}"));
-    }
-    Some(e)
+    Some(if p.wrote { after_writes(e) } else { e })
 }
 
-/// Whether the gun is the pawn's own afterwards (its `Owner`), and the decoy is not: the links' evidence.
-pub fn taken(vm: &Vm, p: &Pickup) -> bool {
-    let owner = |w: ObjRef| read(vm, w, "Owner").ok().and_then(|v| object(&v));
-    owner(p.weapon) == Some(p.pawn) && p.decoy.is_none_or(|(w, _)| owner(w) != Some(p.pawn))
+fn look(vm: &mut Vm, p: &Pickup) -> Result<(), VmError> {
+    let Some((_, decoy)) = p.decoy else {
+        return Err(error("look: this run has no decoy"));
+    };
+    let touched = object(&read(vm, p.controller, "CurrentTouchedPickupable")?);
+    if touched != Some(decoy) {
+        return Err(error(format!("look: Maya's CurrentTouchedPickupable is {touched:?}, not the decoy")));
+    }
+    Err(NotYet::layer_absent(
+        "the per-tick pickup targeting (NATIVE_PICKUP.md section 4) needs the player's view point and direction",
+        "a camera (the headless world has none)",
+        RECORD,
+    )
+    .into())
 }
+
+/// The links' evidence, from successful reads only: the gun is in Maya's inventory chain, its pickup is gone, and the
+/// decoy (link 7) is still a live pickup holding its own gun.
+pub fn taken(vm: &Vm, p: &Pickup) -> bool {
+    let held = || -> Result<bool, VmError> {
+        let Some(manager) = object(&read(vm, p.pawn, "InvManager")?) else { return Ok(false) };
+        let mut cursor = object(&read(vm, manager, "InventoryChain")?);
+        for _ in 0..256 {
+            let Some(item) = cursor else { return Ok(false) };
+            if item == p.weapon {
+                return Ok(true);
+            }
+            cursor = object(&read(vm, item, "Inventory")?);
+        }
+        Ok(false)
+    };
+    let consumed = || ow_world::actors::is_destroyed(&vm.space, p.pickup);
+    let decoy_left = || -> Result<bool, VmError> {
+        let Some((gun, pickup)) = p.decoy else { return Ok(true) };
+        Ok(!ow_world::actors::is_destroyed(&vm.space, pickup)? && object(&read(vm, pickup, "Inventory")?) == Some(gun))
+    };
+    matches!((held(), consumed(), decoy_left()), (Ok(true), Ok(true), Ok(true)))
+}
+
+#[cfg(test)]
+#[path = "slice_pickup_tests.rs"]
+mod tests;

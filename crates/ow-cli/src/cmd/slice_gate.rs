@@ -1078,18 +1078,19 @@ fn run_pickup(cooked: &Path, driver: Driver, grading: Grading, ran: &mut [Option
     };
     let vm = &mut world.vm;
     r.steps.push("make".into());
+    // The driver keeps `VmError`s; they become text only here, for the grading (review r2 of #452).
     let p = match crate::cmd::slice_pickup::make(vm, EQUIP_WEAPON, driver == Driver::AimedPickup) {
         Ok(p) => p,
-        Err(text) => {
-            r.stop = Some(classify("make", &text));
+        Err(e) => {
+            r.stop = Some(classify("make", &ow_combat::hit::access::error_text(&e)));
             ran[i] = Some(r);
             return;
         }
     };
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());
-        if let Some(text) = crate::cmd::slice_pickup::step(vm, step, &p)
-            && step_error(&mut r, step, &text, grading)
+        if let Some(e) = crate::cmd::slice_pickup::step(vm, step, &p)
+            && step_error(&mut r, step, &ow_combat::hit::access::error_text(&e), grading)
         {
             break;
         }

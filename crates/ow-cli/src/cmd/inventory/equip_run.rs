@@ -289,7 +289,29 @@ pub(crate) fn gate_world(cooked: &Path) -> Result<ow_world::world::World, String
     run_world(cooked, ParityMode::Off)
 }
 
+/// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP).
+pub(crate) fn prepare_unowned(vm: &mut Vm, line: &str) -> Result<ObjRef, String> {
+    let r = diff_request(line)?;
+    weapon_of(vm, &r)
+}
+
 fn prepare(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
+    let weapon = weapon_of(vm, r)?;
+    let pawn = make(vm, PAWN)?;
+    let controller = make(vm, CONTROLLER)?;
+    let manager = make(vm, MANAGER)?;
+    write(vm, pawn, "Controller", Value::Object(Some(controller)))?;
+    write(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
+    write(vm, pawn, "InvManager", Value::Object(Some(manager)))?;
+    write(vm, manager, "Owner", Value::Object(Some(pawn)))?;
+    write(vm, weapon, "Instigator", Value::Object(Some(pawn)))?;
+    write(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
+    accuracy_pool(vm, controller)?;
+    Ok(weapon)
+}
+
+/// The weapon of a request, its definition data and level set, with no owner.
+fn weapon_of(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
     let weapon = make(vm, WEAPON)?;
     let weapon_type = find_object(vm, &r.weapon_type)?;
     let balance = find_object(vm, &r.balance)?;
@@ -304,16 +326,6 @@ fn prepare(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, String> {
     }
     write(vm, weapon, "DefinitionData", data)?;
     write(vm, weapon, "ExpLevel", Value::Int(r.level))?;
-    let pawn = make(vm, PAWN)?;
-    let controller = make(vm, CONTROLLER)?;
-    let manager = make(vm, MANAGER)?;
-    write(vm, pawn, "Controller", Value::Object(Some(controller)))?;
-    write(vm, controller, "Pawn", Value::Object(Some(pawn)))?;
-    write(vm, pawn, "InvManager", Value::Object(Some(manager)))?;
-    write(vm, manager, "Owner", Value::Object(Some(pawn)))?;
-    write(vm, weapon, "Instigator", Value::Object(Some(pawn)))?;
-    write(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
-    accuracy_pool(vm, controller)?;
     Ok(weapon)
 }
 
