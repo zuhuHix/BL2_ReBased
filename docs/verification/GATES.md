@@ -22,6 +22,17 @@ to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after partial wr
 the bridge's own `LayerAbsent`; the other links are unchanged. ctest and verify_packages not run (no C++ change). No
 real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under ignored
 `local/p2/mission-numbers/`.
+**IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, rebased onto fix/rust-settings-fill 8ea5f6d5, #464 accepted):**
+AI-assisted (Claude Code, Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission
+screen's three calls in Off, from NATIVE_MISSION_NUMBERS.md (#473 at f586ab9c), in the hub's conservative form: the
+engine-wide condition is not guessed (both branches, `NotRead` when they differ), the playthrough virtual is `NotRead`,
+and the screen calls are a marked `LayerAbsent`. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
+--locked -j 4` 2,254 passed / 0 failed / 46 ignored after the rebase (12 new tests in `ow-world`); `crate_edges_test.py`
+19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 12 NotYet / 2 errors (links 6 and 7 at the unbound
+`GetInventoryDefinition`, as on main). Links 10 to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after
+partial writes: MissionTracker.GetAllMissions", the bridge's own `LayerAbsent`; the other links are unchanged. ctest and
+verify_packages not run (no C++ change). No real-game run; every rule stays `UNVERIFIED` in game. Decision
+2026-11-19-93; logs under ignored `local/p2/mission-numbers/`.
 
 **IMPL-PAWN-AI-INTERFACE (2026-11-19, desktop, on main bb46e11):** AI-assisted (Claude Code, Claude Opus 5.5).
 `Pawn`'s `QueryInterface` rule for `IAIInterface` in Off (a per-class rule registry in `ow-vm`, `ow-combat`
