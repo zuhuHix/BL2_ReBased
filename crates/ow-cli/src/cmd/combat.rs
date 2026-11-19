@@ -234,47 +234,81 @@ impl PlayerBridge for MissionBridge {
     /// A controller that already has a `PlayerClass` is left as it is.
     fn select_player_class(&self, vm: &mut Vm) -> Result<(), VmError> {
         let controller = self.player_controller();
-        let class = vm.space.heap.get(controller)?.class;
-        let has_class = vm
-            .space
-            .prop(class, "PlayerClass")
-            .map(|p| vm.space.read(controller, ow_object::ids::PropAddr::scalar(p)).map(|v| !matches!(v, Value::Object(None))))
-            .transpose()?
-            .unwrap_or(false);
-        if has_class {
+        if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
             return Ok(());
         }
-        // The second harness input (decision 2026-11-19-46): the class's pawn archetype is loaded first, through the
-        // definition store, so the switch takes the note's found branch. It stands in for the streaming load the note
-        // does not settle (NATIVE_PLAYER_CLASS.md section 3 step 4), UNVERIFIED. The path is the class's own
-        // `PawnArchetypePath`.
-        if let Some(definition) = self.player_class(vm)? {
+        // Reading the class's PawnArchetypePath loads the class through the store, before the class select: so the
+        // installed GetDefinition then finds it in memory (review r1 of #431; decision 2026-11-19-46).
+        vm.log.push(format!("harness input: load {PLAYER_CLASS_PATH} (to read its PawnArchetypePath)"));
+        let class = self.player_class(vm)?;
+        apply_class_inputs(vm, controller, class)
+    }
+}
+
+/// Whether `controller`'s `PlayerClass` is set.
+fn has_player_class(vm: &Vm, controller: ObjRef) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(controller)?.class;
+    Ok(vm
+        .space
+        .prop(class, "PlayerClass")
+        .map(|p| vm.space.read(controller, ow_object::ids::PropAddr::scalar(p)).map(|v| !matches!(v, Value::Object(None))))
+        .transpose()?
+        .unwrap_or(false))
+}
+
+/// The two Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
+/// 2026-11-19-41 and 2026-11-19-46). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
+/// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
+///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
+///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
+/// 2. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
+pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
+        return Ok(());
+    }
+    match class {
+        None => vm.log.push(format!("harness input: preload skipped (no class at {PLAYER_CLASS_PATH})")),
+        Some(definition) => {
             let dclass = vm.space.heap.get(definition)?.class;
             let path = vm
                 .space
                 .prop(dclass, "PawnArchetypePath")
                 .map(|p| vm.space.read(definition, ow_object::ids::PropAddr::scalar(p)).cloned())
                 .transpose()?;
-            if let Some(Value::Str(text)) = path
-                && let Ok(path) = ObjectPath::parse(&text)
-            {
-                vm.log.push(format!("harness input: preload {text} (UNVERIFIED stand-in for the streaming load)"));
-                let loaded = vm.defs.find(&mut vm.space, &path);
-                vm.log.extend(vm.defs.take_log());
-                loaded.map_err(VmError::Def)?;
+            match path {
+                None => vm.log.push("harness input: preload skipped (the class has no PawnArchetypePath)".to_string()),
+                Some(Value::Str(text)) => match ObjectPath::parse(&text) {
+                    Err(_) => vm.log.push(format!("harness input: preload skipped ({text:?} is no object path)")),
+                    Ok(path) => {
+                        let loaded = vm.defs.find(&mut vm.space, &path);
+                        vm.log.extend(vm.defs.take_log());
+                        let outcome = match loaded.map_err(VmError::Def)? {
+                            Some(_) => "loaded",
+                            None => "found nothing",
+                        };
+                        vm.log.push(format!(
+                            "harness input: preload {text}: {outcome} (UNVERIFIED stand-in for the streaming load)"
+                        ));
+                    }
+                },
+                Some(other) => vm.log.push(format!(
+                    "harness input: preload skipped (PawnArchetypePath holds {}, not a string)",
+                    other.kind_name()
+                )),
             }
         }
-        let state = vm.space.heap.get(controller)?.state;
-        let Some(f) = vm.find_method(class, "ServerPlayerSelectClass", state)? else {
-            return Err(VmError::Script {
-                function: "combat-run".into(),
-                message: "the player's controller has no ServerPlayerSelectClass".into(),
-            });
-        };
-        vm.log.push(format!("harness input: ServerPlayerSelectClass({PLAYER_CLASS_PATH})"));
-        vm.call(f, Some(controller), vec![Value::Str(PLAYER_CLASS_PATH.into())])?;
-        Ok(())
     }
+    let own = vm.space.heap.get(controller)?.class;
+    let state = vm.space.heap.get(controller)?.state;
+    let Some(f) = vm.find_method(own, "ServerPlayerSelectClass", state)? else {
+        return Err(VmError::Script {
+            function: "combat-run".into(),
+            message: "the player's controller has no ServerPlayerSelectClass".into(),
+        });
+    };
+    vm.log.push(format!("harness input: ServerPlayerSelectClass({PLAYER_CLASS_PATH})"));
+    vm.call(f, Some(controller), vec![Value::Str(PLAYER_CLASS_PATH.into())])?;
+    Ok(())
 }
 
 fn execute(args: &[String], mode: ParityMode) -> Result<(String, bool), Failure> {

@@ -174,7 +174,7 @@ fn class_name(vm: &Vm, class: ClassId) -> String {
 }
 
 /// A live object whose full path is `path`, any case, among the instances of the root of `class`'s chain (every
-/// class: the class check comes after). A name match the port cannot give a full path is skipped.
+/// class: the class check comes after). A name match the port cannot give a full path answers `NotYet`, before any load.
 fn in_memory(vm: &mut Vm, path: &str, class: ClassId) -> Result<Option<ObjRef>, VmError> {
     let leaf = path.rsplit(['.', ':']).next().unwrap_or_default();
     let mut root = class;

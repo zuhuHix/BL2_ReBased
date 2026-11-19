@@ -24,6 +24,9 @@ use super::world;
 #[path = "../../../../ow-combat/src/run/fixture.rs"]
 mod fixture;
 
+#[path = "harness_tests.rs"]
+mod harness_tests;
+
 /// The scenarios: name, steps, the C++ digest, and whether Off mode equals it (else only Reference does).
 const CASES: [(&str, &str, u64, bool); 16] = [
     (

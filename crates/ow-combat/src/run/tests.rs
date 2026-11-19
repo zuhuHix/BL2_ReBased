@@ -1651,7 +1651,12 @@ fn the_player_controllers_starting_values_are_not_yet_before_anything_changes() 
     let two = crate::hit::stock_object(vm, "ToyStarting.Class_Two").unwrap();
     let player = make(vm, "WillowGame.WillowPlayerController");
     let before = pool_definitions(vm, player);
-    let f = vm.find_function(crate::hit::pools::PLAYER_STARTING_VALUES).unwrap();
+    // Through the controller's own method lookup, as the class switch's call reaches it (review r1 of #431): the
+    // override, not the `Controller` base, answers for a WillowPlayerController.
+    let class = vm.space.heap.get(player).unwrap().class;
+    let state = vm.space.heap.get(player).unwrap().state;
+    let f = vm.find_method(class, "ApplyCharacterClassStartingValues", state).unwrap().unwrap();
+    assert_eq!(f, vm.find_function(crate::hit::pools::PLAYER_STARTING_VALUES).unwrap(), "the override");
     let refused = vm.call(f, Some(player), vec![Value::Object(Some(two))]).map(|d| d.ret);
     match &refused {
         Err(VmError::NotYet(n)) => {

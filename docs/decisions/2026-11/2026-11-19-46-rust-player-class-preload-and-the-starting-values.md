@@ -37,6 +37,21 @@ decision 2026-11-19-41. It opened no raw analysis output, Ghidra or REA. The scr
   - The module documentation says that the store's load runs before the class check, so a wrong-class `NotYet` leaves
     that definition live in the VM. Checking first is not cheap: the holder query gives no export's class.
   - `LoadPlayerPawnDataAsync` raises an error for an object argument of the wrong kind, instead of reading it as None.
+- **Review r1 of #431, folded in here.**
+  - **The class is loaded too, and `GetDefinition` now finds it in memory.** To read the class's `PawnArchetypePath`,
+    the harness loads `GD_Siren.Character.CharClass_Siren` through the definition store before the class select. So
+    the installed `GBXDefinition.GetDefinition` takes its in-memory branch, not decision 2026-11-19-41's load-by-name
+    branch; both return the same object. That load is a third harness effect, and it is now logged as
+    `harness input: load <class path> (to read its PawnArchetypePath)`.
+  - The preload's line now says how it came out: `loaded`, or `found nothing`. A path that is missing, not a string or
+    not an object path is logged as skipped. The class select runs in every case.
+  - The two inputs sit in one helper (`apply_class_inputs` in `ow-cli`'s `combat` command), which checks Off itself.
+    Three synthetic tests cover it: in Off the preload runs first, the class select second, with both lines written
+    before the select's call and the archetype in memory by then; a preload that finds nothing, or a path that will
+    not parse, is logged and the select still runs; Reference does neither.
+  - `GetDefinition`'s lookup documentation no longer says an unnamed name match is skipped: it answers `NotYet`.
+  - The override test calls `ApplyCharacterClassStartingValues` through the controller's method lookup, as the class
+    switch does, and checks that the lookup reaches the player controller's override.
 - **Next.** An analyst read of the override's last call (its name, and whether it is plain script), then an
   implementer.
 - **UNVERIFIED.** Every rule above. Nothing was checked in the running game.
