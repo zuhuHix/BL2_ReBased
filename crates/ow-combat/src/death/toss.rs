@@ -14,8 +14,12 @@
 //!
 //! **The settled part, as functions** ([`base_toss`], [`forward_of`]), for the lane that answers question 3: the
 //! arithmetic once `F` is known, with the random direction's draws (three per try on the caller's generator, the
-//! loot path's one stream in Off). Single precision per operation.
+//! loot path's one stream in Off; their axis order is UNVERIFIED, see [`random_direction`]). Single precision per
+//! operation. Draw order on that stream (review of #408): per pool, the pool's roll with each new inventory's two
+//! `GenerateUniqueID` draws and its parts roll inside it, then that pool's toss draws for its dropped items, then the
+//! next pool.
 
+use ow_core::num::{cos_f64, sin_f64, sqrt_f64};
 use ow_core::rand::Rand15;
 use ow_core::{NotYet, ParityMode};
 use ow_object::value::Value;
@@ -72,15 +76,29 @@ pub const MAX_SPEED: f32 = 400.0;
 pub fn forward_of(pitch: i32, yaw: i32) -> [f32; 3] {
     let unit = std::f32::consts::PI * 2.0 / 65536.0;
     let (p, y) = (pitch as f32 * unit, yaw as f32 * unit);
-    [p.cos() * y.cos(), p.cos() * y.sin(), p.sin()]
+    let (p, y) = (f64::from(p), f64::from(y));
+    // Each function in double and rounded once (ow_core::num); the native's own precision is UNVERIFIED.
+    let (cp, sp, cy, sy) = (
+        cos_f64(p) as f32,
+        sin_f64(p) as f32,
+        cos_f64(y) as f32,
+        sin_f64(y) as f32,
+    );
+    [cp * cy, cp * sy, sp]
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+/// The length of `v`: the single-precision square root (through double, rounded once, which is exact).
+fn length(v: [f32; 3]) -> f32 {
+    sqrt_f64(f64::from(dot(v, v))) as f32
+}
+
 /// The random direction: three draws per try, each `rand x (1 / 32767) x 2 - 1`, retried until the point lies inside
-/// the unit ball, then normalised. A point exactly on the sphere (squared length 1) is `Err`: whether it is inside
+/// the unit ball, then normalised. The draws fill X, Y, Z in that order: which draw goes to which axis is not stated
+/// in the note yet (review of #408), so the order is UNVERIFIED. A point exactly on the sphere (squared length 1) is `Err`: whether it is inside
 /// is not read.
 pub fn random_direction(r: &mut dyn Rand15) -> Result<[f32; 3], &'static str> {
     let scale = 1.0f32 / 32767.0;
@@ -96,7 +114,7 @@ pub fn random_direction(r: &mut dyn Rand15) -> Result<[f32; 3], &'static str> {
             );
         }
         if sq < 1.0 {
-            let len = sq.sqrt();
+            let len = sqrt_f64(f64::from(sq)) as f32;
             return Ok([v[0] / len, v[1] / len, v[2] / len]);
         }
     }
@@ -125,7 +143,7 @@ pub fn base_toss(
         forward[1] * along + rd[1] * RANDOM_SPEED,
         forward[2] * along + rd[2] * RANDOM_SPEED + UP_SPEED,
     ];
-    let len = dot(v, v).sqrt();
+    let len = length(v);
     if len > MAX_SPEED {
         let k = MAX_SPEED / len;
         v = [v[0] * k, v[1] * k, v[2] * k];
@@ -178,7 +196,7 @@ mod tests {
             (d[0] - 1.0).abs() < 1e-3 && d[1].abs() < 1e-3 && d[2].abs() < 1e-3,
             "{d:?}"
         );
-        let len = dot(d, d).sqrt();
+        let len = length(d);
         assert!((len - 1.0).abs() < 1e-6);
     }
 
@@ -195,7 +213,7 @@ mod tests {
         // Running forward at 600: forward x 800, capped to length 400.
         let mut r = Seq(vec![16384, 16384, 32766], 0);
         let v = base_toss([1.0, 0.0, 0.0], [600.0, 0.0, 0.0], false, &mut r).unwrap();
-        assert!((dot(v, v).sqrt() - 400.0).abs() < 1e-3, "{v:?}");
+        assert!((length(v) - 400.0).abs() < 1e-3, "{v:?}");
         assert!(v[0] > 380.0 && v[2] > 0.0);
     }
 
@@ -301,7 +319,7 @@ mod tests {
         let mut r = CrtRand::new(7);
         for _ in 0..200 {
             let d = random_direction(&mut r).unwrap();
-            assert!((dot(d, d).sqrt() - 1.0).abs() < 1e-5);
+            assert!((length(d) - 1.0).abs() < 1e-5);
         }
     }
 }
