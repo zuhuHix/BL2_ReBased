@@ -2,8 +2,8 @@
 
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-MISSION-NUMBERS, implementer.
 
-- **Sources:** `docs/verification/NATIVE_MISSION_NUMBERS.md` (#473, its head eb24ea43 with the hub's ruling on the
-  screen; analyst lane ANALYST-MISSION-NUMBERS, decision 2026-11-19-86, not this thread). No native code or analysis
+- **Sources:** `docs/verification/NATIVE_MISSION_NUMBERS.md` (#473 at 0a32108b, its review r1; analyst lane
+  ANALYST-MISSION-NUMBERS, decision 2026-11-19-86, not this thread). No native code or analysis
   output was opened.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
 - **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
@@ -12,18 +12,21 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-MISSION-NUMBERS, implementer.
 
 **What changed** (`crates/ow-world/src/world/mission_numbers.rs`, bound by `datastore::register`, Off only; Reference
 unchanged). **Conservative form** (the hub's heads-up of 2026-11-19, while #473's last review round runs): what rests
-on an unresolved read, or on a "no read-back" argument, is a named `NotYet`. The rules behind the two unresolved reads
-are coded and unit-tested behind a `Reads` switch, which the natives pass as nothing read.
+on an unresolved read, or on a "no read-back" argument, is a named `NotYet`. A `Reads` switch lets the tests run the
+rules with the two unresolved reads taken as read; the natives pass it as nothing read.
 
 - **`GetActiveMissionNumber`** (section 1):
-  - In Off: `NotYet { NotRead }`, "GetActiveMissionNumber's engine-wide condition (an unresolved global)", before
-    anything is read (open question 1).
-  - Behind the switch, taken as read: the level's `WorldInfo.GRI` as a `WillowGameReplicationInfo`, its
-    `MissionTracker` and the tracker's `IsDataValid()`, through the VM.
+  - The inputs: the level's `WorldInfo.GRI` as a `WillowGameReplicationInfo`, and its `MissionTracker`. Without
+    them, the fallback answers.
+  - The engine-wide condition is not guessed (open question 1; the note's r1). With a tracker, both branches are
+    computed, the tracker branch first. Equal answers give the number; different ones are `NotYet { NotRead }`, "the
+    engine-wide condition of GetActiveMissionNumber". A failing branch is the answer, unchanged.
+  - The tracker branch, through the VM: `IsDataValid()` false is the fallback.
     - The tracked `ActiveMission` answers its `MissionNumber`, with no status check.
     - Otherwise the tracker's `GetAllMissions` list is scanned. Only plot-critical, non-DLC missions count, graded
       through `GetMissionStatus`: the first in progress answers; else the largest Complete; else 0.
-    - A failure of the first step, or a -1 answer, takes the fallback.
+    - A -1 answer takes the fallback.
+    - A `None` entry in the list is `NotYet { NotRead }`, "a None entry in the tracker's mission list".
 - **`GetActivePlotCriticalMissionNumber`** (section 2):
   - An explicit, non-negative index is answered: out of range is 0; otherwise that playthrough's `MissionList` is
     scanned the same way, graded by each record's own `Status`.
@@ -31,10 +34,12 @@ are coded and unit-tested behind a `Reads` switch, which the natives pass as not
     `NotYet { NotRead }`, "the controller's current playthrough query" (open question 2). Behind the switch, it is
     `GetCurrentPlaythrough()` through the VM.
 - **Both:** they write nothing, so nothing is preflighted or rolled back. A tracker or controller function's own
-  answer propagates unchanged. Inside the settings refresh, its write mark (decision 2026-11-19-80) makes these
-  `NotYet`s terminal, prefixed, with kind and record kept. Missing or mistyped fields, and a `None` in the tracker's
-  list, are a `VmError::Script` naming the field.
-- **The mission screen** (section 3), whose stand-in is reached in the port only after the accept's writes:
+  answer, an unbound native's `UnboundNative` included, propagates unchanged. Inside the settings refresh, its write
+  mark (decision 2026-11-19-80) makes these `NotYet`s terminal, prefixed, with kind and record kept. Missing or
+  mistyped fields are a `VmError::Script` naming the field.
+- **The mission screen** (section 3), whose stand-in is reached in the port only after the accept's writes. The note's
+  r1 labels its "nothing" and None answers as port Off answers, with a wider read-back check. Under the hub's heads-up
+  they stay named `NotYet`s until its last review round settles them:
   - `QuestAcceptGFxMovie.UpdateMissionTextList`: `NotYet { LayerAbsent }`, "the mission screen's Flash text list
     (not hosted)", with the list None or set. The note's "nothing" with no list rests on a read-back check that is
     under review, so it is not taken. It is marked "stopped after partial writes", kind and record kept.
@@ -47,13 +52,14 @@ are coded and unit-tested behind a `Reads` switch, which the natives pass as not
   before.
 - **`ow-cli`'s `REFERENCE_STUBS`:** the three screen entries say Off answers a named `NotYet`.
 
-**Installed Off `--slice-gate`:** links 10 to 12 stop in `accept` at "stopped after partial writes:
-GetActiveMissionNumber's engine-wide condition (an unresolved global)" (`NotRead`). With the condition taken as read
-(the earlier form of this branch), they stopped at the bridge's `MissionTracker.GetAllMissions` `LayerAbsent`, since
-the bridge never sets the tracker's `ActiveMission`.
+**Installed Off `--slice-gate`:** links 10 to 12 get past the two numbers' entry and stop in `accept` at "stopped after
+partial writes: MissionTracker.GetAllMissions", the bridge's own `LayerAbsent` (the bridge holds one record and sets no
+`ActiveMission`). That is the tracker branch's failure, the stop the note's r1 expects. The mission screen is not
+reached yet.
 
-**Tests:** 11 new tests on invented packages in `mission_numbers_tests.rs`, covering:
+**Tests:** 12 new tests on invented packages in `mission_numbers_tests.rs`, covering:
 - the tracked mission, the scan's first in-progress and largest-complete answers, and the empty scan;
 - the five fallback causes, the playthrough index rules and the missing query;
 - a tracker `NotYet` passed through, and bad data;
-- the natives' two `NotRead`s, and the screen's marked and unmarked `LayerAbsent`s.
+- the two branches agreeing, differing and failing, the natives' unread playthrough virtual, and the screen's marked
+  and unmarked `LayerAbsent`s.

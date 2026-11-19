@@ -420,8 +420,8 @@ fn a_tracker_not_yet_is_propagated_unchanged() {
     }
 }
 
-/// Bad data is a script error naming what is wrong: an entry of the tracker's list of a class without the fields, and a
-/// `None` there.
+/// Bad data is a script error naming what is wrong (an entry of the tracker's list of a class without the fields); a
+/// `None` entry is the note's `NotRead`.
 #[test]
 fn bad_data_is_a_script_error() {
     let mut t = toy(true);
@@ -432,7 +432,7 @@ fn bad_data_is_a_script_error() {
     let mut t = toy(true);
     t.track(true, &[]);
     t.tracker_state.borrow_mut().missions = vec![Value::Object(None)];
-    script_error(t.active(), "holds None");
+    not_yet(t.active(), false, NONE_ENTRY);
 }
 
 fn not_yet(r: Result<Value, VmError>, layer: bool, what: &str) {
@@ -450,26 +450,53 @@ fn not_yet(r: Result<Value, VmError>, layer: bool, what: &str) {
     }
 }
 
-/// The conservative form: the bound natives answer the unresolved reads as named `NotRead`s before reading anything,
-/// whatever the world holds. An explicit, non-negative playthrough index needs no virtual and is answered.
+/// The bound natives (nothing taken as read): the fallback's current playthrough is the unread virtual, so a negative
+/// or omitted index is `NotRead`, and `GetActiveMissionNumber` meets it through its fallback branch; an explicit,
+/// non-negative index needs no virtual and is answered.
 #[test]
-fn the_natives_answer_the_unresolved_reads_as_not_read() {
+fn the_natives_answer_the_unread_playthrough_virtual_as_not_read() {
     let mut t = toy(true);
     let plot = t.mission(true, false, 12);
     t.track(true, &[(plot, 1)]);
     t.records(&[&[(Some(plot), 1)]]);
     let pc = t.pc;
-    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, ENGINE_GATE);
-    assert_eq!(t.tracker_state.borrow().asked, 0, "nothing asked before the gate");
+    not_yet(t.call(ACTIVE_MISSION_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
     not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![]), false, PLAYTHROUGH_QUERY);
     not_yet(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(-1)]), false, PLAYTHROUGH_QUERY);
     assert_eq!(t.call(PLOT_CRITICAL_NUMBER, pc, vec![Value::Int(0)]).unwrap(), Value::Int(12));
-    // With the gate read, the fallback meets the unread virtual as well.
-    t.track(false, &[]);
-    match active_mission_number(&mut t.vm, pc, Reads { engine_gate: true, playthrough: false }) {
-        Err(VmError::NotYet(n)) => assert_eq!(n.what, PLAYTHROUGH_QUERY),
+}
+
+/// Section 1, Off step 2: the engine-wide condition is not guessed. With a tracker, both branches are computed; equal
+/// answers give the number, different ones are `NotRead`, and a failing branch is the answer (the tracker's first).
+/// With no tracker, or data not valid, the fallback alone answers.
+#[test]
+fn both_branches_answer_when_they_agree_and_not_read_when_they_differ() {
+    let off = Reads { engine_gate: false, playthrough: true };
+    let mut t = toy(true);
+    let plot = t.mission(true, false, 12);
+    let other = t.mission(true, false, 30);
+    let pc = t.pc;
+    t.track(true, &[(plot, 1)]);
+    t.records(&[&[(Some(plot), 1)]]);
+    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 12, "equal");
+    t.records(&[&[(Some(other), 1)]]);
+    match active_mission_number(&mut t.vm, pc, off) {
+        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == ENGINE_GATE, "{n}"),
         other => panic!("{other:?}"),
     }
+    t.track(false, &[(plot, 1)]);
+    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 30, "data not valid: the fallback");
+    t.track(true, &[]);
+    t.tracker_state.borrow_mut().list_error = Some(NotYet::layer_absent("an invented list", "an invented layer", "an invented record"));
+    match active_mission_number(&mut t.vm, pc, off) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.what, "an invented list", "the tracker branch's failure first"),
+        other => panic!("{other:?}"),
+    }
+    let mut t = toy(false);
+    let lone = t.mission(true, false, 8);
+    t.records(&[&[(Some(lone), 2)]]);
+    let pc = t.pc;
+    assert_eq!(active_mission_number(&mut t.vm, pc, off).unwrap(), 8, "no level: the fallback");
 }
 
 /// Section 3 in the conservative form: the text list update is the named `LayerAbsent` with the list None or set, and
