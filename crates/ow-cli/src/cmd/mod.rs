@@ -1,5 +1,6 @@
 //! Owner: lane W0-SCAFFOLD. One module per command family; each owner lane edits only its own file.
 
+pub mod after_login_census;
 pub mod assets;
 pub mod behavior;
 pub mod census;

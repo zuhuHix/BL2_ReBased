@@ -94,9 +94,14 @@ fn steamworks() -> Vec<u8> {
 /// `WillowGame.upk`: `WillowPlayerInput` with its native `SetupInputDevices`, and `WillowPlayerController` with its
 /// `InputContextSelector`, `PlayerInput`, native `UpdateInputContext` and script `SetupInputDevices`.
 fn willow() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty"]);
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty", "BoolProperty"]);
     let object = t.class("Object", 0);
     let input = t.class("WillowPlayerInput", object);
+    t.prop("Bool", input, "bUpdateInputContext", 0, 0);
+    // Invented: a subclass of the player input, and an input class that is not one (lane IMPL-LINK1-AFTER-LOGIN).
+    t.class("ToyWillowPlayerInputChild", input);
+    let other = t.class("ToyOtherInput", object);
+    t.prop("Bool", other, "bUpdateInputContext", 0, 0);
     let spec = FunctionSpec::new(NATIVE, "SetupInputDevices");
     t.function(input, "SetupInputDevices", &[], None, &[], &spec, |_| None);
     let pc = t.class("WillowPlayerController", object);
@@ -278,14 +283,18 @@ fn the_pack_binds_both_in_off_and_neither_in_reference() {
         for key in [GET_ONLINE_SUBSYSTEM_KEY, STEAMWORKS_LOGIN_STATUS_KEY].into_iter().chain(unread) {
             assert_eq!(t.vm.has_native(key), bound, "{mode:?} {key}");
         }
-        let unread = [
-            "WillowGame.WillowPlayerInput.SetupInputDevices",
-            "WillowGame.WillowPlayerController.UpdateInputContext",
-            "Engine.PlayerController.UpdateURL",
-            "Engine.Object.SaveConfig",
-        ]
-        .into_iter()
-        .zip(UNREAD.iter().map(|&(k, _)| k));
+        use crate::world::after_login::{SAVE_CONFIG_KEY, UPDATE_INPUT_CONTEXT_KEY, UPDATE_URL_KEY};
+        for key in [UPDATE_INPUT_CONTEXT_KEY, UPDATE_URL_KEY, SAVE_CONFIG_KEY] {
+            assert_eq!(t.vm.has_native(key), bound, "{mode:?} {key}");
+        }
+        let unread = ["WillowGame.WillowPlayerInput.SetupInputDevices"]
+            .into_iter()
+            .zip(UNREAD.iter().map(|&(k, _)| k))
+            .chain([
+                ("WillowGame.WillowPlayerController.UpdateInputContext", UPDATE_INPUT_CONTEXT_KEY),
+                ("Engine.PlayerController.UpdateURL", UPDATE_URL_KEY),
+                ("Engine.Object.SaveConfig", SAVE_CONFIG_KEY),
+            ]);
         let known = [(GET_ONLINE_SUBSYSTEM, GET_ONLINE_SUBSYSTEM_KEY), (STEAMWORKS_LOGIN_STATUS, STEAMWORKS_LOGIN_STATUS_KEY)];
         for (path, key) in known.into_iter().chain(unread) {
             let class = path.rsplit_once('.').unwrap().0;
@@ -307,14 +316,43 @@ fn not_read(r: Result<Value, VmError>, starts: &str) {
     }
 }
 
-/// `UpdateURL` and `SaveConfig` are each a named `NotYet { NotRead }` when reached.
+/// `UpdateURL` and `SaveConfig` answer nothing in Off (NATIVE_LOGIN_URL_CONFIG_INPUT.md sections 1.3 and 2.3, under
+/// their read-back checks, which `after_login`'s census test keeps): `None`, and the controller unchanged.
 #[test]
-fn the_url_and_config_natives_are_each_named_not_read() {
+fn the_url_and_config_natives_answer_nothing() {
     let mut t = toy(ParityMode::Off, true);
     let pc = t.make("Engine.PlayerController");
+    let before = format!("{:?}", t.vm.space.heap);
     let args = vec![Value::Str("Name".into()), Value::Str("Maya".into()), Value::Bool(true)];
-    not_read(t.call("Engine.PlayerController.UpdateURL", Some(pc), args), "PlayerController.UpdateURL");
-    not_read(t.call("Engine.Object.SaveConfig", Some(pc), vec![]), "Object.SaveConfig");
+    assert_eq!(t.call("Engine.PlayerController.UpdateURL", Some(pc), args).unwrap(), Value::None);
+    assert_eq!(t.call("Engine.Object.SaveConfig", Some(pc), vec![]).unwrap(), Value::None);
+    assert_eq!(format!("{:?}", t.vm.space.heap), before, "the whole heap unchanged: nothing written");
+}
+
+fn flag(t: &Toy, input: ObjRef) -> Value {
+    let c = t.vm.space.heap.get(input).unwrap().class;
+    let p = t.vm.space.prop(c, "bUpdateInputContext").unwrap();
+    t.vm.space.read(input, p.into()).unwrap().clone()
+}
+
+/// `UpdateInputContext` (section 3.2): no player input, or one that is not a `WillowPlayerInput`, writes nothing; a
+/// `WillowPlayerInput`, or a subclass, gets `bUpdateInputContext` true.
+#[test]
+fn update_input_context_raises_the_flag_on_a_willow_player_input_only() {
+    let mut t = toy(ParityMode::Off, true);
+    let pc = t.make("WillowGame.WillowPlayerController");
+    let update = "WillowGame.WillowPlayerController.UpdateInputContext";
+    assert_eq!(t.call(update, Some(pc), vec![]).unwrap(), Value::None, "no player input");
+    let other = t.make("WillowGame.ToyOtherInput");
+    t.set(pc, "PlayerInput", Value::Object(Some(other)));
+    t.call(update, Some(pc), vec![]).unwrap();
+    assert_eq!(flag(&t, other), Value::Bool(false), "not a WillowPlayerInput: no write");
+    for class in ["WillowGame.WillowPlayerInput", "WillowGame.ToyWillowPlayerInputChild"] {
+        let input = t.make(class);
+        t.set(pc, "PlayerInput", Value::Object(Some(input)));
+        t.call(update, Some(pc), vec![]).unwrap();
+        assert_eq!(flag(&t, input), Value::Bool(true), "{class}");
+    }
 }
 
 fn selector(t: &mut Toy, pc: ObjRef) -> Value {
@@ -324,18 +362,15 @@ fn selector(t: &mut Toy, pc: ObjRef) -> Value {
 }
 
 /// Review r1 of #479, item 1: `SetupInputDevices` in Off. Without a player input it clears `InputContextSelector`,
-/// then `UpdateInputContext` refuses: terminal at this boundary, with the exact prefix, its kind and record kept, and
-/// the clear in place. With a `WillowPlayerInput`, its native refuses first, before the clear, unmarked.
+/// then `UpdateInputContext` (lane IMPL-LINK1-AFTER-LOGIN) writes nothing: the call completes, the clear in place.
+/// With a `WillowPlayerInput`, its native refuses first, before the clear, unmarked.
 #[test]
 fn setup_input_devices_marks_the_refusal_after_its_clear() {
     let mut t = toy(ParityMode::Off, true);
     let pc = t.make("WillowGame.WillowPlayerController");
     let marker = t.make("WillowGame.WillowPlayerInput");
     t.set(pc, "InputContextSelector", Value::Object(Some(marker)));
-    not_read(
-        t.call(SETUP_INPUT_DEVICES, Some(pc), vec![]),
-        "stopped after partial writes: WillowPlayerController.UpdateInputContext",
-    );
+    assert_eq!(t.call(SETUP_INPUT_DEVICES, Some(pc), vec![]).unwrap(), Value::None);
     assert_eq!(selector(&mut t, pc), Value::Object(None), "the clear came first and stays");
 
     t.set(pc, "InputContextSelector", Value::Object(Some(marker)));
@@ -382,8 +417,8 @@ fn a_non_steamworks_player_interface_is_named_not_read() {
 }
 
 /// Review r1 of #479, item 4: `ServerChangeName` in Off. An empty name, no `WorldInfo` and no game info return with
-/// no effects; the base `GameInfo.ChangeName` runs as installed (its invented body reaches `SaveConfig`); an override
-/// is a named `NotYet { NotRead }` before its body runs.
+/// no effects; the base `GameInfo.ChangeName` runs as installed (its invented body reaches `SaveConfig`, which answers
+/// nothing since lane IMPL-LINK1-AFTER-LOGIN); an override is a named `NotYet { NotRead }` before its body runs.
 #[test]
 fn server_change_name_guards_the_resolved_change_name() {
     let mut t = toy(ParityMode::Off, true);
@@ -396,7 +431,7 @@ fn server_change_name_guards_the_resolved_change_name() {
     assert_eq!(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")).unwrap(), Value::None, "no game info");
     let base = t.make("Engine.GameInfo");
     t.set(world, "Game", Value::Object(Some(base)));
-    not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "Object.SaveConfig");
+    assert_eq!(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")).unwrap(), Value::None, "the base ChangeName ran");
     let over = t.make("Engine.ToyGameInfo");
     t.set(world, "Game", Value::Object(Some(over)));
     not_read(t.call(SERVER_CHANGE_NAME, Some(pc), name("Maya")), "PlayerController.ServerChangeName: the game info Engine.ToyGameInfo");

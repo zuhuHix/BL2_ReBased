@@ -706,6 +706,11 @@ impl Vm {
         self.natives.contains_key(key)
     }
 
+    /// Every registered native key, in key order (read only; lane IMPL-LINK1-AFTER-LOGIN's read-back census).
+    pub fn native_keys(&self) -> impl Iterator<Item = &str> {
+        self.natives.keys().map(String::as_str)
+    }
+
     /// Whether `f` could be called here, checked without running it (lane IMPL-IS-FRIENDLY, review r3 of #449): a
     /// native needs a registered implementation, whatever the stub policy; a script function needs a package export
     /// whose script prepares. The error says why it cannot.

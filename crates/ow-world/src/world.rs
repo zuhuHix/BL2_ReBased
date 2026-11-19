@@ -589,6 +589,9 @@ pub mod mission_numbers;
 /// The login status path's natives (lane IMPL-LOGIN-STATUS).
 pub mod online;
 
+/// `UpdateURL`, `SaveConfig` and `UpdateInputContext` after the login check (lane IMPL-LINK1-AFTER-LOGIN).
+pub mod after_login;
+
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;
 pub mod pawn_data;

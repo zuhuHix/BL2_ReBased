@@ -33,8 +33,9 @@
 //! question 1). Any other Steamworks subsystem is the note's named `NotYet { NotRead }` naming its login state: its
 //! class defaults are not the game's state. It writes nothing.
 //!
-//! **The natives after the login status** (`SetupInputDevices`, `UpdateInputContext`, `UpdateURL`, `SaveConfig`) are
-//! each a named `NotYet { NotRead }` when reached ([`UNREAD`]). `SetName` and `ServerChangeName` are script and run as
+//! **The natives after the login status:** `WillowPlayerInput.SetupInputDevices` is a named `NotYet { NotRead }` when
+//! reached ([`UNREAD`]). `UpdateInputContext`, `UpdateURL` and `SaveConfig` follow NATIVE_LOGIN_URL_CONFIG_INPUT.md
+//! (`super::after_login`, lane IMPL-LINK1-AFTER-LOGIN). `SetName` and `ServerChangeName` are script and run as
 //! installed; with an empty name they return with no effects.
 //!
 //! **Writes and the preflight.** Neither native writes. The note rules that the refusal is the **runtime check**, at
@@ -75,6 +76,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for &(key, what) in UNREAD {
         vm.register_native(key, Rc::new(move |_: &mut NativeCall<'_>| Err(unread(what))))?;
     }
+    super::after_login::register(vm)?;
     override_if_script(vm, SETUP_INPUT_DEVICES, Rc::new(setup_input_devices))?;
     override_if_script(vm, SERVER_CHANGE_NAME, Rc::new(server_change_name))
 }
@@ -213,15 +215,6 @@ pub const UNREAD: &[(&str, &str)] = &[
         "WillowPlayerInput.SetupInputDevices()",
         "WillowPlayerInput.SetupInputDevices: the player input's device set-up (section 6.3, open question 4)",
     ),
-    (
-        "WillowPlayerController.UpdateInputContext()",
-        "WillowPlayerController.UpdateInputContext: the controller's input context update (section 6.3, open question 4)",
-    ),
-    (
-        "PlayerController.UpdateURL(string,string,bool)",
-        "PlayerController.UpdateURL: the URL option write of SetName, outside the world (section 6.2, open question 3)",
-    ),
-    ("Object.SaveConfig()", "Object.SaveConfig: a configuration save, outside the world (section 6.2, open question 3)"),
 ];
 
 fn unread(what: &'static str) -> VmError {
