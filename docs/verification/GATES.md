@@ -66,6 +66,14 @@ MissionTracker.GetAllMissions", the bridge's own `LayerAbsent`; the other links 
 not run (no C++ change). No real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under
 ignored `local/p2/mission-numbers/`.
 
+**INHERITED-COMPONENT-INSTANCING r1 (2026-11-19, desktop, stacked on #470 r2, main 0235937):** AI-assisted (Claude
+Code, Claude Opus 5.5). Review r1 of #478: a unique stand-in, its export identity checked, an object inside an
+inherited component refused, the Off commit boundary after registration, and the driver's reads typed and ordered.
+`cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,310 passed / 0 failed / 46 ignored (3 new in
+`ow-world`); clippy flags nothing new in the changed files. Installed Off `--slice-gate` strict, under the machine run
+lock: link 2 **`ok`** 4/4. Every other row is byte-identical to #470 r2's run on the same main: 1 ok / 11 notyet / 2
+errors. Rows 6 and 7 come from main's pickup work. Decision 2026-11-19-91; logs under ignored `local/p2/inh-r1/`.
+
 **INHERITED-COMPONENT-INSTANCING (2026-11-19, desktop, stacked on #470 6268e6d):** AI-assisted (Claude Code, Claude
 Opus 5.5). A spawn's template slot naming a parent class default's component stands for the template's own
 sub-object of that export archetype, which is copied per actor; link 2's driver spawns from the store's holder of the

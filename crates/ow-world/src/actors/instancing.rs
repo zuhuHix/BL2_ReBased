@@ -208,6 +208,18 @@ fn stand_ins(
         let resolved = vm.defs.resolve_ref(&mut vm.space, package, index);
         vm.log.extend(vm.defs.take_log());
         let own = resolved?;
+        // The path the reference resolves by can be held by another file: the object the store returns must be the
+        // selected child itself, by canonical export identity (review r1 of #478, item 2; decision 2026-11-19-91).
+        let canonical = |o: ObjRef| export_of(vm, o).map(|(p, i)| (vm.defs.code().filed_id(p), i));
+        if let Some(o) = own
+            && canonical(o) != Some((package, index))
+        {
+            return Err(not_yet_inherited(&format!(
+                "an inherited component whose stand-in resolves to another export than the template's own \
+                 sub-object (another file holds that path): {}",
+                describe(vm, o)
+            )));
+        }
         let owned = own.is_some_and(|o| ancestors(vm, o).first().is_some_and(|a| judge.is_template(a)));
         let Some(own) = own.filter(|_| owned) else {
             return Err(not_yet_inherited(&format!(
@@ -296,12 +308,30 @@ impl Judge<'_> {
                     "a sub-object of one of the template's components (nested instancing): {}",
                     describe(vm, r)
                 )));
+            } else if chain.len() > 1 && !is_default(vm, first) && chain[1..].iter().any(|a| is_default(vm, a)) {
+                // An object inside a class default's sub-object (an inherited component's own sub-object): sharing it
+                // would point the copy into the parent default's graph (review r1 of #478, item 3).
+                return Err(not_yet_inherited(&format!(
+                    "a sub-object of another class default object's sub-object (nested inside an inherited \
+                     component): {}",
+                    describe(vm, r)
+                )));
             } else if component && let Some(owner) = default_outer(vm, r) {
                 // Decision 2026-11-19-91: the template's own sub-object of that archetype stands for it.
                 let key = export_of(vm, r).map(|(p, i)| (vm.defs.code().filed_id(p), i));
-                match key.and_then(|k| self.archetypes.iter().find(|(a, _)| *a == k)) {
-                    Some(&(_, own)) => pending.push((r, own)),
-                    None => {
+                let mut matches = self.archetypes.iter().filter(|(a, _)| key == Some(*a));
+                match (matches.next(), matches.next()) {
+                    (Some(&(_, own)), None) => pending.push((r, own)),
+                    // Two of the template's sub-objects made from that archetype: which stands for it is not read
+                    // (review r1 of #478, item 1).
+                    (Some(_), Some(_)) => {
+                        return Err(not_yet_inherited(&format!(
+                            "a component of another class default object with more than one sub-object of the \
+                             template made from it: {} of {owner}",
+                            describe(vm, r)
+                        )));
+                    }
+                    (None, _) => {
                         return Err(not_yet_inherited(&format!(
                             "a component of another class default object (inherited from a parent class's default), \
                              with no sub-object of the template made from it: {} of {owner}",
@@ -464,6 +494,16 @@ fn default_outer(vm: &Vm, o: ObjRef) -> Option<String> {
         })?,
     };
     name.starts_with("Default__").then_some(name)
+}
+
+/// Whether outer link `a` is a class default object (`Default__<Class>`), by its handle's name or its export's.
+fn is_default(vm: &Vm, a: &(Option<ObjRef>, Option<(u32, i32)>)) -> bool {
+    let name = match a {
+        (Some(h), _) => vm.space.heap.get(*h).ok().map(|o| vm.space.names.text(o.name).to_string()),
+        (None, Some((p, i))) => vm.defs.packages().get(*p).object(*i).ok().map(|e| e.name.clone()),
+        (None, None) => None,
+    };
+    name.is_some_and(|n| n.starts_with("Default__"))
 }
 
 /// Every object `v` refers to, at any depth (objects, interfaces, delegate targets, arrays, structs).
