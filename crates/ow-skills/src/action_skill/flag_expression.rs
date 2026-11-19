@@ -8,7 +8,8 @@
 //! is never checked:
 //! 1. a None `FlagDefinition` answers false, before the type check;
 //! 2. the timed tests (types 2 and 3) are `NotYet { NotRead }`;
-//! 3. the context's rule engine `R` (reads only); with `R`, the store path (the definition lacking a context or a value
+//! 3. the context's rule engine `R` (reads only, worked out once, before the first definition is loaded: the note's
+//!    order, so a refusal there is never marked); with `R`, the store path (the definition lacking a context or a value
 //!    resolver) is `NotYet { NotRead }`, "a rule engine's own flag store";
 //! 4. the definition path (section 4.0): a None context answers false; the context passes through
 //!    `ContextResolverChain` (None entries skipped, a resolver answering None ends it and the context so far stays);
@@ -17,17 +18,22 @@
 //!
 //! The chain combines by `FlagChainOperator` (`CEOP_Or` 0, `CEOP_And` 1, any other value false), with the early exits.
 //!
-//! **Loads are writes** (section 6): a reached handle (the receiver, a definition, its expression, its resolvers) is
-//! loaded when first used, through ow-attr's `ensure_loaded` (`LayerAbsent` with no definition store, `NotRead` for a
-//! stand-in), and the load counts for the mark.
+//! **Loads are writes** (section 6): a reached handle (the receiver, a definition, its expression, its resolvers, the
+//! context resolvers' answers) is loaded when first used, through ow-attr's `ensure_loaded` (`LayerAbsent` with no
+//! definition store, `NotRead` for a stand-in). The rule engine search alone reads without loading (an unloaded
+//! object there is `NotRead`).
 //!
-//! **Also `NotYet { NotRead }`:** a rule engine owner other than a `GearboxMind`; a value resolver class other than the
-//! two read; a computed flag that also has a value resolver (the hand-off); a flag store that is not a `GearboxMind`'s;
-//! a fractional function-call result (its rounding is not read); a store whose two arrays are out of step.
+//! **Also `NotYet { NotRead }`:** a value resolver class other than the two read; a computed flag that also has a value
+//! resolver (the hand-off); a flag store that is not a `GearboxMind`'s; a store whose two arrays are out of step. Two
+//! are the port's own choices, not questions of the note: a rule engine owner other than a `GearboxMind` (only the
+//! mind's `MyRuleEngine` is read), and a fractional function-call result (truncating and rounding disagree between 0.5
+//! and 1, so only an integral result is taken).
 //!
-//! **Writes** (note section 4.1): a lookup that adds a definition to the mind's store, a computed flag's
-//! re-evaluation, a function call's flag update, and a timed flag's expiry. A `NotYet` after one of them is marked
-//! "stopped after partial writes: ", its kind and record kept; other errors are returned as they are.
+//! **Writes** (note section 4.1): a lookup that adds a definition to the mind's store, a function call's flag update,
+//! a timed flag's expiry, and the loads. They are counted by #518's canonical counters (heap writes, generator draws,
+//! definition-store load transitions), snapshot when the native is entered, so writes by callees (a context resolver,
+//! a script `Evaluate` through `vm.call`) count too. A `NotYet` is marked "stopped after partial writes: " exactly when
+//! a counter moved, its kind and record kept; other errors are returned as they are.
 
 use std::rc::Rc;
 
@@ -72,9 +78,9 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
                     other => return Err(script(format!("ContextObject holds {}, not an object reference", other.kind_name()))),
                 },
             };
-            let mut run = Run::default();
-            let answer = evaluate(c.vm, me, context, &mut run);
-            answer.map(Value::Bool).map_err(|e| run.mark(e))
+            let start = WriteCounters::of(c.vm);
+            let answer = evaluate(c.vm, me, context);
+            answer.map(Value::Bool).map_err(|e| start.mark(c.vm, e))
         }),
     )
 }
@@ -87,16 +93,30 @@ fn not_read(what: String) -> VmError {
     NotYet::not_read(format!("{UNIT}: {what}"), RECORD).into()
 }
 
-/// Whether the native has written (its partial-writes mark).
-#[derive(Debug, Default)]
-pub struct Run {
-    pub wrote: bool,
+/// The canonical write counters (#518's tracker): heap writes, generator draws and definition-store load
+/// transitions. Each only grows, so a refusal is after a write exactly when one moved since the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteCounters {
+    heap: u64,
+    draws: u64,
+    loads: u64,
 }
 
-impl Run {
-    fn mark(&self, e: VmError) -> VmError {
+impl WriteCounters {
+    /// The counters now.
+    pub fn of(vm: &Vm) -> Self {
+        WriteCounters { heap: vm.space.heap.committed_writes(), draws: vm.rng.draws(), loads: vm.defs.load_transitions() }
+    }
+
+    /// Whether a counter moved since `self`.
+    pub fn moved(&self, vm: &Vm) -> bool {
+        WriteCounters::of(vm) != *self
+    }
+
+    /// `e`, marked "stopped after partial writes: " when it is a `NotYet` and a counter moved since `self`.
+    pub fn mark(&self, vm: &Vm, e: VmError) -> VmError {
         match e {
-            VmError::NotYet(n) if self.wrote => n.after_partial_writes().into(),
+            VmError::NotYet(n) if self.moved(vm) => n.after_partial_writes().into(),
             other => other,
         }
     }
@@ -141,11 +161,9 @@ fn loaded(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
 
 /// Loads a reached handle when it is first used (note section 6, "Loads are writes"): through ow-attr's
 /// `ensure_loaded`, so a world with no definition store is `LayerAbsent` and a handle the store leaves a stand-in is
-/// `NotRead`. A load counts as a write for the mark.
-fn load(vm: &mut Vm, o: ObjRef, run: &mut Run) -> Result<(), VmError> {
-    if vm.defs.is_unloaded(&vm.space, o) {
-        run.wrote = true;
-    }
+/// `NotRead`. The store's load-transition counter records the load for the mark (a retry of a failed handle changes
+/// nothing, so it is not counted).
+fn load(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
     ow_attr::eval::ensure_loaded(&mut EvalCx::new(vm), o).map_err(VmError::from)
 }
 
@@ -224,12 +242,12 @@ struct Conditional {
 }
 
 /// The receiver's chain and operator: the note's eager checks (section 6), the receiver loaded when it is a handle.
-fn chain_of(vm: &mut Vm, me: Option<ObjRef>, run: &mut Run) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
+fn chain_of(vm: &mut Vm, me: Option<ObjRef>) -> Result<(ObjRef, Vec<Conditional>, u8), VmError> {
     let me = me.ok_or_else(|| script("called with no evaluator".to_string()))?;
     if !is_a(vm, me, EVALUATOR)? {
         return Err(script(format!("{} is not a FlagExpressionEvaluator", path_of(vm, me))));
     }
-    load(vm, me, run)?;
+    load(vm, me)?;
     let chain = field(vm, me, "FlagChain")?;
     let items = chain.elements().ok_or_else(|| script("FlagChain is not an array".to_string()))?;
     let mut out = Vec::with_capacity(items.len());
@@ -254,6 +272,7 @@ fn rule_engine(vm: &mut Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, V
         }
         loaded(vm, o, "rule engine owner")?;
         if !is_a(vm, o, MIND)? {
+            // The port's own choice: only a mind's `MyRuleEngine` is read.
             return Err(not_read(format!("the rule engine of a {} (only GearboxMind's is read)", path_of(vm, o))));
         }
         Ok(Some(object_field(vm, o, "MyRuleEngine")?))
@@ -291,11 +310,12 @@ fn rule_engine(vm: &mut Vm, context: Option<ObjRef>) -> Result<Option<ObjRef>, V
     Ok(None)
 }
 
-/// `FlagExpressionEvaluator.Evaluate(context)` on `me` (module documentation). `run` records a write. Only the
+/// `FlagExpressionEvaluator.Evaluate(context)` on `me` (module documentation); the caller marks a `NotYet` after a
+/// write ([`WriteCounters::mark`]). Only the
 /// receiver and the chain's shape are checked up front; each conditional is checked when it is reached (note section
 /// 6, "Per conditional").
-pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>, run: &mut Run) -> Result<bool, VmError> {
-    let (_, chain, operator) = chain_of(vm, me, run)?;
+pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Result<bool, VmError> {
+    let (_, chain, operator) = chain_of(vm, me)?;
     let mut engine: Option<Option<ObjRef>> = None;
     let mut result = true;
     for (i, c) in chain.iter().enumerate() {
@@ -312,15 +332,16 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>, run: &
                 if c.kind > 3 {
                     return Err(script(format!("FlagEvalType {} is not a flag test", c.kind)));
                 }
-                load(vm, definition, run)?;
-                // Step 3: the path.
+                // Step 3: the context's rule engine, by reads only, before the definition is loaded (the note's
+                // order), so a refusal there is never marked.
                 if engine.is_none() {
                     engine = Some(rule_engine(vm, context)?);
                 }
+                load(vm, definition)?;
                 if takes_store_path(vm, definition, engine.flatten())? {
                     return Err(not_read("a rule engine's own flag store".to_string()));
                 }
-                definition_answer(vm, definition, context, c.kind == 0, run)?
+                definition_answer(vm, definition, context, c.kind == 0)?
             }
         };
         result = if i == 0 {
@@ -355,16 +376,15 @@ fn definition_answer(
     definition: ObjRef,
     context: Option<ObjRef>,
     is_true: bool,
-    run: &mut Run,
 ) -> Result<bool, VmError> {
     // Step 1: a None context answers false, and nothing else runs.
     let Some(context) = context else {
         return Ok(false);
     };
-    let resolved = resolve(vm, definition, context, run)?;
+    let resolved = resolve(vm, definition, context)?;
     let resolver = object_field(vm, definition, "ValueResolver")?;
     if let Some(r) = resolver {
-        load(vm, r, run)?;
+        load(vm, r)?;
         if !is_a(vm, r, RULE_ENGINE_RESOLVER)? && !is_a(vm, r, FUNCTION_RESOLVER)? {
             return Err(NotYet::not_read(
                 format!("FlagDefinition: the value resolver class {} is not read", path_of(vm, r)),
@@ -374,8 +394,8 @@ fn definition_answer(
         }
     }
     if let Some(expression) = object_field(vm, definition, "EvaluationExpression")? {
-        load(vm, expression, run)?;
-        let answer = call_evaluate(vm, expression, Some(resolved), run)?;
+        load(vm, expression)?;
+        let answer = call_evaluate(vm, expression, Some(resolved))?;
         if resolver.is_some() {
             return Err(NotYet::not_read("FlagDefinition: handing a computed answer to its value resolver", RECORD).into());
         }
@@ -396,16 +416,16 @@ fn definition_answer(
         let Some(store) = rule_engine_store(vm, resolved)? else {
             return Ok(false);
         };
-        let entry = lookup(vm, store, definition, run)?;
-        read_flag(vm, store, entry, run)?
+        let entry = lookup(vm, store, definition)?;
+        read_flag(vm, store, entry)?
     } else {
         let Some(store) = vm.query_interface(resolved, interface(vm, FLAG_PROVIDER)?)? else {
             return Ok(false);
         };
         check_store(vm, store)?;
-        let entry = lookup(vm, store, definition, run)?;
-        function_update(vm, store, entry, resolver, resolved, run)?;
-        read_flag(vm, store, entry, run)?
+        let entry = lookup(vm, store, definition)?;
+        function_update(vm, store, entry, resolver, resolved)?;
+        read_flag(vm, store, entry)?
     };
     Ok(value == is_true)
 }
@@ -416,9 +436,9 @@ fn interface(vm: &Vm, path: &str) -> Result<ClassId, VmError> {
 
 /// The context through the definition's `ContextResolverChain` (note section 4.0, step 2): a None entry is skipped; a
 /// resolver that answers None ends the chain and the context so far stays; an empty chain leaves the context as it
-/// is. Each resolver handle is loaded when reached (a write); a resolver class the attribute system does not bind is
-/// that system's own refusal.
-fn resolve(vm: &mut Vm, definition: ObjRef, context: ObjRef, run: &mut Run) -> Result<ObjRef, VmError> {
+/// is. Each resolver handle, and each answer, is loaded when reached (note section 6); a resolver class the attribute
+/// system does not bind is that system's own refusal.
+fn resolve(vm: &mut Vm, definition: ObjRef, context: ObjRef) -> Result<ObjRef, VmError> {
     let chain = field(vm, definition, "ContextResolverChain")?;
     let entries = chain.elements().ok_or_else(|| script("ContextResolverChain is not an array".to_string()))?.to_vec();
     let mut current = context;
@@ -427,10 +447,13 @@ fn resolve(vm: &mut Vm, definition: ObjRef, context: ObjRef, run: &mut Run) -> R
         let Some(resolver) = object_of(&entry, "ContextResolverChain entry")? else {
             continue;
         };
-        load(vm, resolver, run)?;
+        load(vm, resolver)?;
         let r = attrs.context_resolver(&vm.space, resolver).map_err(VmError::from)?;
         match r.resolve(&attrs, resolver, definition, Some(current), &mut EvalCx::new(vm)).map_err(VmError::from)? {
-            Some(next) => current = next,
+            Some(next) => {
+                load(vm, next)?;
+                current = next;
+            }
             None => break,
         }
     }
@@ -458,9 +481,10 @@ fn rule_engine_store(vm: &mut Vm, context: ObjRef) -> Result<Option<ObjRef>, VmE
     Ok(None)
 }
 
-/// Only a `GearboxMind`'s flag store is read (note section 4.1).
-fn check_store(vm: &Vm, store: ObjRef) -> Result<(), VmError> {
-    loaded(vm, store, "flag store")?;
+/// Only a `GearboxMind`'s flag store is read (note section 4.1). The store is loaded when reached (an
+/// `IFlagProvider` answer, or the resolved context).
+fn check_store(vm: &mut Vm, store: ObjRef) -> Result<(), VmError> {
+    load(vm, store)?;
     if !is_a(vm, store, MIND)? {
         return Err(NotYet::not_read(
             format!("FlagDefinition: the flag store of a {} is not read", path_of(vm, store)),
@@ -488,16 +512,15 @@ fn flags_struct(vm: &Vm, store: ObjRef) -> Result<StructId, VmError> {
     }
 }
 
-fn write_field(vm: &mut Vm, o: ObjRef, name: &str, v: Value, run: &mut Run) -> Result<(), VmError> {
+fn write_field(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
     let class = vm.space.heap.get(o)?.class;
     let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} declares no {name}", path_of(vm, o))))?;
-    run.wrote = true;
     vm.space.write(o, PropAddr::scalar(p), v)?;
     Ok(())
 }
 
 /// The index of `definition`'s entry in `store`, adding it (definition and zeroed entry) when absent: a write.
-fn lookup(vm: &mut Vm, store: ObjRef, definition: ObjRef, run: &mut Run) -> Result<usize, VmError> {
+fn lookup(vm: &mut Vm, store: ObjRef, definition: ObjRef) -> Result<usize, VmError> {
     let definitions = field(vm, store, "DynamicFlagDefinitions")?;
     let flags = field(vm, store, "DynamicFlags")?;
     let (Some(defs), Some(entries)) = (definitions.elements(), flags.elements()) else {
@@ -516,25 +539,11 @@ fn lookup(vm: &mut Vm, store: ObjRef, definition: ObjRef, run: &mut Run) -> Resu
             defs.push(Value::Object(Some(definition)));
             entries.push(zero);
             let i = defs.len() - 1;
-            write_field(vm, store, "DynamicFlagDefinitions", Value::array(defs), run)?;
-            write_field(vm, store, "DynamicFlags", Value::array(entries), run)?;
+            write_field(vm, store, "DynamicFlagDefinitions", Value::array(defs))?;
+            write_field(vm, store, "DynamicFlags", Value::array(entries))?;
             i
         }
     };
-    // A computed flag is re-evaluated, with the mind as context, once per world time.
-    if let Some(expression) = object_field(vm, definition, "EvaluationExpression")? {
-        let time = now(vm)?;
-        let entry = entry_value(vm, store, index)?;
-        let last = float_of(struct_field(vm, &entry, "LastEvaluatedExpressionTime")?, "LastEvaluatedExpressionTime")?;
-        if last != time {
-            let answer = call_evaluate(vm, expression, Some(store), run)?;
-            set_flag(vm, store, index, answer, false, run)?;
-            update_entry(vm, store, index, run, |vm, e| {
-                *struct_field_mut(vm, e, "LastEvaluatedExpressionTime")? = Value::Float(time);
-                Ok(())
-            })?;
-        }
-    }
     Ok(index)
 }
 
@@ -547,14 +556,13 @@ fn update_entry(
     vm: &mut Vm,
     store: ObjRef,
     index: usize,
-    run: &mut Run,
     f: impl FnOnce(&Vm, &mut Value) -> Result<(), VmError>,
 ) -> Result<(), VmError> {
     let flags = field(vm, store, "DynamicFlags")?;
     let mut entries = flags.elements().map(<[Value]>::to_vec).unwrap_or_default();
     let entry = entries.get_mut(index).ok_or_else(|| script("a flag entry past DynamicFlags".to_string()))?;
     f(vm, entry)?;
-    write_field(vm, store, "DynamicFlags", Value::array(entries), run)
+    write_field(vm, store, "DynamicFlags", Value::array(entries))
 }
 
 fn flag_get(vm: &Vm, entry: &Value, name: &str) -> Result<Value, VmError> {
@@ -567,9 +575,9 @@ fn flag_set(vm: &Vm, entry: &mut Value, name: &str, v: Value) -> Result<(), VmEr
 }
 
 /// Sets the flag (note section 4.2); `refresh` stamps the time again when the value does not change.
-fn set_flag(vm: &mut Vm, store: ObjRef, index: usize, value: bool, refresh: bool, run: &mut Run) -> Result<(), VmError> {
+fn set_flag(vm: &mut Vm, store: ObjRef, index: usize, value: bool, refresh: bool) -> Result<(), VmError> {
     let time = now(vm)?;
-    update_entry(vm, store, index, run, |vm, e| {
+    update_entry(vm, store, index, |vm, e| {
         let was = byte_of(&flag_get(vm, e, "Value")?, "Flag.Value")? != 0;
         if value != was {
             flag_set(vm, e, "Value", Value::Byte(u8::from(value)))?;
@@ -584,7 +592,7 @@ fn set_flag(vm: &mut Vm, store: ObjRef, index: usize, value: bool, refresh: bool
 }
 
 /// Reads the flag, after a timed flag's expiry (a write).
-fn read_flag(vm: &mut Vm, store: ObjRef, index: usize, run: &mut Run) -> Result<bool, VmError> {
+fn read_flag(vm: &mut Vm, store: ObjRef, index: usize) -> Result<bool, VmError> {
     let entry = entry_value(vm, store, index)?;
     let value = byte_of(&flag_get(vm, &entry, "Value")?, "Flag.Value")? != 0;
     let duration = float_of(&flag_get(vm, &entry, "Duration")?, "Flag.Duration")?;
@@ -592,7 +600,7 @@ fn read_flag(vm: &mut Vm, store: ObjRef, index: usize, run: &mut Run) -> Result<
         let time = now(vm)?;
         let raised = float_of(&flag_get(vm, &entry, "RaisedTime")?, "Flag.RaisedTime")?;
         if time < raised || time - raised > duration {
-            set_flag(vm, store, index, false, false, run)?;
+            set_flag(vm, store, index, false, false)?;
             return Ok(false);
         }
     }
@@ -607,7 +615,6 @@ fn function_update(
     index: usize,
     resolver: ObjRef,
     context: ObjRef,
-    run: &mut Run,
 ) -> Result<(), VmError> {
     let rate = float_of(&field(vm, resolver, "CheckRate")?, "CheckRate")?;
     let name = match field(vm, resolver, "FunctionCall")? {
@@ -627,21 +634,28 @@ fn function_update(
         Value::Bool(b) => i64::from(b),
         Value::Byte(b) => i64::from(b),
         Value::Int(i) => i64::from(i),
-        // How a fractional result is rounded is not read (open question 5): only an integral value is taken.
+        // The port's own choice: only an integral value is taken, since truncating and rounding disagree between 0.5
+        // and 1.
         Value::Float(x) if x.fract() == 0.0 => x as i64,
-        Value::Float(_) => return Err(not_read("the rounding of a fractional function-call flag result".to_string())),
+        Value::Float(_) => {
+            return Err(not_read(
+                "a fractional function-call flag result (the port takes only an integral one: truncating and rounding \
+                 disagree between 0.5 and 1)"
+                    .to_string(),
+            ));
+        }
         other => return Err(not_read(format!("a function-call flag result of kind {}", other.kind_name()))),
     };
-    set_flag(vm, store, index, number != 0, true, run)
+    set_flag(vm, store, index, number != 0, true)
 }
 
-/// An expression's `Evaluate(context)` through the VM; a nested flag evaluator goes through this rule directly, so its
-/// writes count for the caller's mark.
-fn call_evaluate(vm: &mut Vm, expression: ObjRef, context: Option<ObjRef>, run: &mut Run) -> Result<bool, VmError> {
+/// An expression's `Evaluate(context)` through the VM; a nested flag evaluator goes through this rule directly. The
+/// counters see the writes of either.
+fn call_evaluate(vm: &mut Vm, expression: ObjRef, context: Option<ObjRef>) -> Result<bool, VmError> {
     if is_a(vm, expression, EVALUATOR)? {
-        return evaluate(vm, Some(expression), context, run);
+        return evaluate(vm, Some(expression), context);
     }
-    load(vm, expression, run)?;
+    load(vm, expression)?;
     let Some(f) = crate::action_skill::method_of(vm, expression, "Evaluate")? else {
         return Err(not_read(format!("Evaluate on {} (its class declares no such function)", path_of(vm, expression))));
     };

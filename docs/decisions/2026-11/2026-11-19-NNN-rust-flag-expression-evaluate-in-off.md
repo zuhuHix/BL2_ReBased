@@ -68,7 +68,7 @@ Synthetic fixtures only.
   - **step 1:** a None `FlagDefinition` answers false, before the type check;
   - **loads are writes:** a reached handle (the receiver, a definition, its expression, its resolvers) is loaded when
     first used, through ow-attr's `ensure_loaded` (`LayerAbsent` with no definition store, `NotRead` for a stand-in),
-    and counts for the mark. No unloaded handle is refused any more;
+    and counts for the mark. Only the rule engine search still refuses an unloaded handle (review r1 of #535 below);
   - **section 4.0:**
     - a None context answers false;
     - a None chain entry is skipped;
@@ -82,4 +82,36 @@ Synthetic fixtures only.
   - **Installed gate, rerun** on a throwaway merge with #523 (d2227301): 1 ok / 3 not yet / 10 error. Link 9 still
     passes `spawn` (1 of 2), and its `cast` now gets past `Evaluate`. It stops at the unbound native
     `BehaviorProviderDefinition.SetObjectBehaviorVariable(behaviorvariablevalue,object)`, a VM error.
+- **Review r1 of #535 (the hub's ruling on the mark included).** This supersedes the rules above where they differ:
+  - **the mark comes from #518's canonical counters:** heap writes, generator draws and definition-store load
+    transitions are snapshot when the native is entered, and a `NotYet` is marked "stopped after partial writes: "
+    exactly when one moved. The ad-hoc write flag is gone. Writes by callees now count: a context resolver's own
+    `EvalCx`, and a script `Evaluate` reached through `vm.call`. A retry of a handle whose load failed moves no
+    counter, so it is not marked. The seven counter files are taken byte-identical from `fix/rust-483-followup`
+    (1f1a2bcc);
+  - **the context resolvers' answers are loaded** when reached, and so is the flag store (`check_store`), instead of
+    being refused `NotRead`. The non-loading check is kept for the rule engine search alone;
+  - **`R` is worked out before the first definition is loaded**, the note's order, so a refusal there is never marked;
+  - **two refusals are the port's own choices,** not questions of the note: a rule engine owner other than a
+    `GearboxMind` (only the mind's `MyRuleEngine` is read), and a fractional function-call result (truncating and
+    rounding disagree between 0.5 and 1, so only an integral result is taken). The message says so;
+  - **the computed-flag branch of the store lookup is removed:** a computed flag returns before the store is reached,
+    so it was unreachable;
+  - **tests** (13 flag-expression tests, all pass): the fixture gains `IRuleEngineOwner`, `GearboxPawn` and
+    `RuleEngine` classes and a context resolver with a set answer. New cases:
+    - the store path refused through an owner, a pawn's controller, a driven vehicle's controller and a `RuleEngine`
+      context, unmarked;
+    - an owner other than a mind refused before the definition is loaded;
+    - the hand-off refused;
+    - a None chain entry skipped;
+    - a resolver answering None ending the chain;
+    - `RuleEngineFlagValueResolver` reading the mind's store;
+    - a resolver's answer loaded;
+    - a timed flag's expiry;
+    - `LayerAbsent` with no `WorldInfo` (a `Vm` always has a definition store, so that `LayerAbsent` cannot arise
+      through one);
+    - a mark after a load-only write;
+    - an unmarked retry of a failed load.
+  - **checks:** `cargo test --workspace` 2,459 passed, 0 failed, 46 ignored; crate edges OK. The installed gate was not
+    rerun for this round (no change to what link 9 reaches).
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's open questions 1 to 6 stand.

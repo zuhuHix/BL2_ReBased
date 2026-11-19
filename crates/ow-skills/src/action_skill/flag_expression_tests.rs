@@ -41,6 +41,27 @@ impl ow_attr::api::ContextResolver for Pass {
     }
 }
 
+thread_local! {
+    /// What `Toy.FixedContextResolver` answers on this test's thread.
+    static FIXED: Cell<Option<ObjRef>> = const { Cell::new(None) };
+}
+
+/// A context resolver answering [`FIXED`], registered for `Toy.FixedContextResolver`.
+struct Fixed;
+
+impl ow_attr::api::ContextResolver for Fixed {
+    fn resolve(
+        &self,
+        _sys: &AttributeSystem,
+        _resolver: ObjRef,
+        _attr: ObjRef,
+        _source: Option<ObjRef>,
+        _cx: &mut ow_attr::api::EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, ow_attr::api::AttrError> {
+        Ok(FIXED.with(Cell::get))
+    }
+}
+
 struct Fx {
     vm: Vm,
     conditional: StructId,
@@ -55,25 +76,40 @@ impl Drop for Fx {
     }
 }
 
-/// `ToyFlag.upk`: a holder whose `Held` names `Thing_0`, an export the store keeps unloaded until it is loaded.
+/// `ToyFlag.upk`: a holder whose `Held` names `Thing_0`, an export the store keeps unloaded until it is loaded, and
+/// whose `Broken` names `Broken_0`, an export whose archetype is `Other_0` (an object of an unrelated class), so its
+/// load fails with the store's `NotYet`.
 fn toy_package() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
     let object = t.class("Object", 0);
     let thing = t.class("Thing", object);
     let holder = t.class("Holder", object);
+    let other = t.class("Other", object);
     t.prop("Object", holder, "Held", 0, object);
-    let held = t.p.next_export() + 1;
+    t.prop("Object", holder, "Broken", 0, object);
+    let holder_ref = t.p.next_export();
+    let (held, unrelated, broken) = (holder_ref + 1, holder_ref + 2, holder_ref + 3);
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Held", held));
+    payload.extend(t.p.object_tag("Broken", broken));
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(holder, "Holder_0", payload));
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
-    t.p.add_export_with(Export::new(thing, "Thing_0", payload));
+    t.p.add_export_with(Export::new(thing, "Thing_0", payload.clone()));
+    t.p.add_export_with(Export::new(other, "Other_0", payload.clone()));
+    let mut e = Export::new(thing, "Broken_0", payload);
+    e.archetype = unrelated;
+    t.p.add_export_with(e);
     t.build()
 }
 
 fn fx() -> Fx {
+    fx_with(true)
+}
+
+/// The fixture; `world_info`: whether a `WorldInfo` is placed (the world's time).
+fn fx_with(world_info: bool) -> Fx {
     let mut s = ObjectSpace::new();
     let object = s.classes.define("Core.Object", None, vec![]).unwrap();
     let d = |s: &mut ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(s.names.intern(n), k);
@@ -103,9 +139,15 @@ fn fx() -> Fx {
     let decls = vec![d(&mut s, "TimeSeconds", PropKind::Float)];
     s.classes.define("Engine.WorldInfo", Some(actor), decls).unwrap();
     let decls = vec![d(&mut s, "Controller", obj.clone()), d(&mut s, "DrivenVehicle", obj.clone())];
-    s.classes.define("Engine.Pawn", Some(actor), decls).unwrap();
-    // The fixture makes the mind derive from the flag-provider interface so the class tables answer it.
-    let provider = s.classes.define("GearboxFramework.IFlagProvider", Some(object), vec![]).unwrap();
+    let pawn = s.classes.define("Engine.Pawn", Some(actor), decls).unwrap();
+    s.classes.define("GearboxFramework.GearboxPawn", Some(pawn), vec![]).unwrap();
+    // The fixture makes the mind derive from both interfaces (rule engine owner, flag provider) so the class tables
+    // answer them.
+    let owner = s.classes.define("GearboxFramework.IRuleEngineOwner", Some(object), vec![]).unwrap();
+    let decls = vec![d(&mut s, "MyRuleEngine", obj.clone())];
+    s.classes.define("Toy.OtherRuleEngineOwner", Some(owner), decls).unwrap();
+    s.classes.define("GearboxFramework.RuleEngine", Some(object), vec![]).unwrap();
+    let provider = s.classes.define("GearboxFramework.IFlagProvider", Some(owner), vec![]).unwrap();
     let decls = vec![
         d(&mut s, "DynamicFlagDefinitions", objs.clone()),
         d(&mut s, "DynamicFlags", PropKind::Array(Box::new(PropKind::Struct(flag_entry)))),
@@ -124,6 +166,7 @@ fn fx() -> Fx {
     s.classes.define("GearboxFramework.ObjectFunctionFlagValueResolver", Some(value_resolver), decls).unwrap();
     s.classes.define("Toy.OtherFlagValueResolver", Some(value_resolver), vec![]).unwrap();
     s.classes.define("Toy.PassContextResolver", Some(object), vec![]).unwrap();
+    s.classes.define("Toy.FixedContextResolver", Some(object), vec![]).unwrap();
     let expression = s.classes.define("Engine.ExpressionEvaluator", Some(object), vec![]).unwrap();
     let decls = vec![
         d(&mut s, "FlagChain", PropKind::Array(Box::new(PropKind::Struct(conditional)))),
@@ -135,12 +178,18 @@ fn fx() -> Fx {
     let package = toy_package();
     let defs = DefStore::from_synthetic(&dir, &[("ToyFlag.upk", package.as_slice())], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
         .unwrap();
-    let attrs = AttributeSystem::new_empty().with_context_resolver("Toy.PassContextResolver", Pass).unwrap();
+    let attrs = AttributeSystem::new_empty()
+        .with_context_resolver("Toy.PassContextResolver", Pass)
+        .unwrap()
+        .with_context_resolver("Toy.FixedContextResolver", Fixed)
+        .unwrap();
     let mut vm = Vm::new(s, defs, Rc::new(attrs), ParityMode::Off);
     let actors = vm.add_service(ow_world::actors::Actors::new(actor)).unwrap();
     let wi_class = vm.space.classes.by_path("Engine.WorldInfo").unwrap();
     let time = vm.space.alloc(wi_class, "WorldInfo_0", None, Origin::Runtime).unwrap();
-    actors.borrow_mut().place_world_info(time).unwrap();
+    if world_info {
+        actors.borrow_mut().place_world_info(time).unwrap();
+    }
     Fx { vm, conditional, flag_entry, time, dir }
 }
 
@@ -253,8 +302,49 @@ impl Fx {
     }
 
     fn eval(&mut self, e: ObjRef, context: Option<ObjRef>) -> Result<bool, VmError> {
-        let mut run = Run::default();
-        evaluate(&mut self.vm, Some(e), context, &mut run).map_err(|err| run.mark(err))
+        let start = WriteCounters::of(&self.vm);
+        evaluate(&mut self.vm, Some(e), context).map_err(|err| start.mark(&self.vm, err))
+    }
+
+    /// The toy package's holder's handle in field `name` (still unloaded, or failed, as the test left it).
+    fn held(&mut self, name: &str) -> ObjRef {
+        let path = ObjectPath::parse("ToyFlag.Holder_0").unwrap();
+        let holder = self.vm.defs.find(&mut self.vm.space, &path).unwrap().unwrap();
+        let v = self.get(holder, name);
+        let Value::Object(Some(o)) = v else { panic!("a held object, got {v:?}") };
+        o
+    }
+
+    /// Writes `v` into `o`'s field `name` through the slot (a toy-package object the typed write would refuse).
+    fn set_slot(&mut self, o: ObjRef, name: &str, v: Value) {
+        let class = self.vm.space.heap.get(o).unwrap().class;
+        let p = self.vm.space.prop(class, name).unwrap();
+        *self.vm.space.slot_mut(o, PropAddr::scalar(p)).unwrap() = v;
+    }
+
+    /// A flag definition answered by `RuleEngineFlagValueResolver`, its context chain `chain`.
+    fn store_flag(&mut self, chain: Vec<Value>) -> ObjRef {
+        let r = self.obj("GearboxFramework.RuleEngineFlagValueResolver", "StoreResolver");
+        let f = self.obj("GearboxFramework.FlagDefinition", "StoreFlag");
+        self.set(f, "ContextResolverChain", Value::array(chain));
+        self.set(f, "ValueResolver", Value::Object(Some(r)));
+        f
+    }
+
+    /// Sets entry `index` of `mind`'s store: the flag's `Value`, `RaisedTime` and `Duration`.
+    fn set_entry(&mut self, mind: ObjRef, index: usize, value: bool, raised: f32, duration: f32) {
+        let mut entries = self.get(mind, "DynamicFlags").elements().unwrap().to_vec();
+        let flag = entries[index].struct_mut().unwrap().fields[0].struct_mut().unwrap();
+        flag.fields[0] = Value::Byte(u8::from(value));
+        flag.fields[3] = Value::Float(raised);
+        flag.fields[5] = Value::Float(duration);
+        self.set(mind, "DynamicFlags", Value::array(entries));
+    }
+
+    /// The flag `Value` of entry `index` of `mind`'s store.
+    fn entry_value(&self, mind: ObjRef, index: usize) -> Value {
+        let entries = self.get(mind, "DynamicFlags");
+        entries.elements().unwrap()[index].as_struct().unwrap().fields[0].as_struct().unwrap().fields[0].clone()
     }
 }
 
@@ -338,14 +428,12 @@ fn the_flag_tests_through_the_minds_store() {
     }
 }
 
-/// The refusals before any write: an unloaded flag definition (nothing loaded), an unread value resolver class, and a
-/// store path when the context has a rule engine.
+/// A reached unloaded flag definition is loaded (a write), and a refusal before any write is not marked: an unread
+/// value resolver class on runtime objects.
 #[test]
 fn the_refusals_come_before_any_write() {
     let mut x = fx();
-    let path = ObjectPath::parse("ToyFlag.Holder_0").unwrap();
-    let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
-    let Value::Object(Some(lazy)) = x.get(holder, "Held") else { panic!("a held object") };
+    let lazy = x.held("Held");
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy));
     // A reached handle is loaded when first used (the accepted note, section 6): here the toy package's object, which
     // declares no ContextResolverChain, so the read after the load is a Script error, not a NotYet.
@@ -360,22 +448,12 @@ fn the_refusals_come_before_any_write() {
     let f = x.definition("OtherFlag");
     x.set(f, "ValueResolver", Value::Object(Some(other)));
     let e = x.evaluator(&[(0, Some(f))], 1);
-    match x.eval(e, Some(pawn)).unwrap_err() {
-        VmError::NotYet(n) => assert!(n.what.contains("the value resolver class Toy.OtherFlagValueResolver is not read"), "{n}"),
-        other => panic!("{other:?}"),
-    }
-    let engine = x.obj("GearboxFramework.GearboxMind", "Engine");
-    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
-    x.set(mind, "MyRuleEngine", Value::Object(Some(engine)));
-    let empty = x.evaluator(&[], 1);
-    let computed = x.computed(empty);
-    let e = x.evaluator(&[(0, Some(computed))], 1);
-    // A GearboxMind context is not a rule engine owner in this fixture (no IRuleEngineOwner class): no store path.
-    assert!(x.eval(e, Some(mind)).unwrap());
+    let text = not_read(x.eval(e, Some(pawn)), "the value resolver class Toy.OtherFlagValueResolver is not read");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
 }
 
 /// After a write, a refusal is marked: the first lookup adds the entry, then the function's result is a fraction,
-/// whose rounding is not read.
+/// which the port does not take (its own choice).
 #[test]
 fn a_refusal_after_a_write_is_marked() {
     let mut x = fx();
@@ -391,7 +469,7 @@ fn a_refusal_after_a_write_is_marked() {
     let f = x.function_flag("ToyFraction", 0.2);
     x.set_time(1.0);
     let e = x.evaluator(&[(0, Some(f))], 1);
-    let text = not_read(x.eval(e, Some(pawn)), "the rounding of a fractional function-call flag result");
+    let text = not_read(x.eval(e, Some(pawn)), "a fractional function-call flag result (the port takes only an integral");
     assert!(text.starts_with("stopped after partial writes: "), "{text}");
     let _ = x.flag_entry;
 }
@@ -416,4 +494,169 @@ fn the_definition_path_cases() {
     assert!(!x.eval(e, Some(pawn)).unwrap(), "IsTrue with neither: false");
     let e = x.evaluator(&[(1, Some(nothing))], 1);
     not_read(x.eval(e, Some(pawn)), "IsFalse with neither an EvaluationExpression nor a ValueResolver");
+}
+
+/// Branch S (the note's store path): with a rule engine `R` found for the context, a definition lacking a context
+/// resolver or a value resolver is "a rule engine's own flag store", `NotRead`, before any write. `R` is found on a
+/// rule engine owner (its `MyRuleEngine`), on a pawn's controller, on the controller of the vehicle a pawn drives, on
+/// a `RuleEngine` context and on a `Rule`'s engine; an owner other than a mind is `NotRead` (the port's choice).
+#[test]
+fn the_store_path_with_a_rule_engine() {
+    let mut x = fx();
+    let engine = x.obj("GearboxFramework.RuleEngine", "Engine");
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    x.set(mind, "MyRuleEngine", Value::Object(Some(engine)));
+    let empty = x.evaluator(&[], 1);
+    // A computed flag with a context chain but no value resolver.
+    let computed = x.computed(empty);
+    let e = x.evaluator(&[(0, Some(computed))], 1);
+    let text = not_read(x.eval(e, Some(mind)), "a rule engine's own flag store");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    // The owner lookup through a pawn's controller.
+    let pawn = x.obj("GearboxFramework.GearboxPawn", "Pawn");
+    x.set(pawn, "Controller", Value::Object(Some(mind)));
+    not_read(x.eval(e, Some(pawn)), "a rule engine's own flag store");
+    // With no controller, the controller of the vehicle the pawn drives.
+    let driver = x.obj("GearboxFramework.GearboxPawn", "Driver");
+    let vehicle = x.obj("GearboxFramework.GearboxPawn", "Vehicle");
+    x.set(vehicle, "Controller", Value::Object(Some(mind)));
+    x.set(driver, "DrivenVehicle", Value::Object(Some(vehicle)));
+    not_read(x.eval(e, Some(driver)), "a rule engine's own flag store");
+    // A RuleEngine context is its own R.
+    not_read(x.eval(e, Some(engine)), "a rule engine's own flag store");
+    // A mind with no rule engine gives no R: the definition path runs.
+    let free = x.obj("GearboxFramework.GearboxMind", "FreeMind");
+    assert!(x.eval(e, Some(free)).unwrap());
+    // An owner other than a mind is the port's own refusal, before the definition is loaded: never marked.
+    let other = x.obj("Toy.OtherRuleEngineOwner", "Other");
+    let lazy = x.held("Held");
+    let e = x.evaluator(&[(0, Some(lazy))], 1);
+    let text = not_read(x.eval(e, Some(other)), "only GearboxMind's is read");
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "R comes before the definition's load");
+}
+
+/// The hand-off: a computed flag that also has a value resolver is `NotRead` once its expression has answered.
+#[test]
+fn a_computed_flag_with_a_value_resolver_is_not_read() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let empty = x.evaluator(&[], 1);
+    let f = x.computed(empty);
+    let r = x.obj("GearboxFramework.RuleEngineFlagValueResolver", "StoreResolver");
+    x.set(f, "ValueResolver", Value::Object(Some(r)));
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    not_read(x.eval(e, Some(pawn)), "handing a computed answer to its value resolver");
+}
+
+/// The context chain: a None entry is skipped; a resolver's answer is the new context, and `RuleEngineFlagValueResolver`
+/// reads the mind's store there (adding the definition, then reading the flag); a resolver answering None ends the
+/// chain and the context so far stays (here a pawn with no controller: no store, false, the mind untouched).
+#[test]
+fn the_context_chain_and_the_minds_store() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    let fixed = x.obj("Toy.FixedContextResolver", "Fixed");
+    FIXED.with(|c| c.set(Some(mind)));
+    let f = x.store_flag(vec![Value::Object(None), Value::Object(Some(fixed))]);
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "a zeroed entry is false");
+    assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap(), &[Value::Object(Some(f))]);
+    x.set_entry(mind, 0, true, 0.0, 0.0);
+    assert!(x.eval(e, Some(pawn)).unwrap(), "the mind's flag, read through the chain");
+    // A resolver answering None ends the chain: the later resolver would have answered the mind.
+    let none = x.obj("Toy.FixedContextResolver", "None");
+    let other = x.obj("GearboxFramework.GearboxMind", "Other");
+    let g = x.store_flag(vec![Value::Object(Some(none)), Value::Object(Some(fixed))]);
+    let e = x.evaluator(&[(0, Some(g))], 1);
+    FIXED.with(|c| c.set(None));
+    // Both entries are the same resolver class, so `FIXED` is None for both: the first ends the chain.
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "the pawn stays the context: no store");
+    assert_eq!(x.get(other, "DynamicFlagDefinitions").elements().unwrap().len(), 0);
+    assert_eq!(x.get(mind, "DynamicFlagDefinitions").elements().unwrap().len(), 1, "the mind is untouched");
+}
+
+/// A resolver's answer is loaded when reached (note section 6), not refused: the answer here is the toy package's
+/// unloaded object, which then is no flag store of a mind (`NotRead`, marked: the load moved the counters).
+#[test]
+fn a_resolvers_answer_is_loaded() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let lazy = x.held("Held");
+    let fixed = x.obj("Toy.FixedContextResolver", "Fixed");
+    FIXED.with(|c| c.set(Some(lazy)));
+    let f = x.function_flag("IsToyHeld", 0.2);
+    x.set(f, "ContextResolverChain", Value::array(vec![Value::Object(Some(fixed))]));
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    // ObjectFunctionFlagValueResolver asks the answer for IFlagProvider; the toy object answers with itself only if
+    // it is one, so the plain answer is None and the flag is false, with the answer loaded.
+    assert!(!x.eval(e, Some(pawn)).unwrap());
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, lazy), "the answer was loaded");
+}
+
+/// A timed flag expires when read: a raised flag with a `Duration` is true within it and false after it, the store's
+/// entry lowered (a write).
+#[test]
+fn a_timed_flag_expires_when_read() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let mind = x.obj("GearboxFramework.GearboxMind", "Mind");
+    let fixed = x.obj("Toy.FixedContextResolver", "Fixed");
+    FIXED.with(|c| c.set(Some(mind)));
+    let f = x.store_flag(vec![Value::Object(Some(fixed))]);
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    assert!(!x.eval(e, Some(pawn)).unwrap());
+    x.set_entry(mind, 0, true, 1.0, 2.0);
+    x.set_time(2.5);
+    assert!(x.eval(e, Some(pawn)).unwrap(), "within the duration");
+    assert_eq!(x.entry_value(mind, 0), Value::Byte(1));
+    x.set_time(5.0);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "past the duration");
+    assert_eq!(x.entry_value(mind, 0), Value::Byte(0), "the entry was lowered");
+}
+
+/// The world's time is `LayerAbsent` with no `WorldInfo` (the map load), marked here since the lookup wrote first.
+/// (The definition store's own `LayerAbsent` cannot arise through a `Vm`, which always has a store.)
+#[test]
+fn no_world_time_is_layer_absent() {
+    let mut x = fx_with(false);
+    let (answer, calls) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(0)));
+    let (pawn, _) = x.pawn_with_mind(answer, calls);
+    let f = x.function_flag("IsToyHeld", 0.2);
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    match x.eval(e, Some(pawn)).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+            assert!(n.what.starts_with("stopped after partial writes: "), "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A load alone is a write for the mark: an unloaded value resolver is loaded, then its class is not read (marked).
+/// A handle whose load failed is not loaded again, so a retry moves no counter and its refusal is not marked.
+#[test]
+fn a_load_is_a_write_and_a_failed_retry_is_not() {
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let lazy = x.held("Held");
+    let f = x.definition("LazyResolver");
+    x.set_slot(f, "ValueResolver", Value::Object(Some(lazy)));
+    let e = x.evaluator(&[(0, Some(f))], 1);
+    let text = not_read(x.eval(e, Some(pawn)), "the value resolver class");
+    assert!(text.starts_with("stopped after partial writes: "), "{text}");
+    let broken = x.held("Broken");
+    let e = x.evaluator(&[(0, Some(broken))], 1);
+    let first = match x.eval(e, Some(pawn)).unwrap_err() {
+        VmError::NotYet(n) => n,
+        other => panic!("{other:?}"),
+    };
+    assert!(first.what.starts_with("stopped after partial writes: "), "the failed load is a transition: {first}");
+    let again = match x.eval(e, Some(pawn)).unwrap_err() {
+        VmError::NotYet(n) => n,
+        other => panic!("{other:?}"),
+    };
+    assert!(!again.what.starts_with("stopped after partial writes: "), "a retry of a failed handle: {again}");
+    assert_eq!(again.missing, first.missing);
 }
