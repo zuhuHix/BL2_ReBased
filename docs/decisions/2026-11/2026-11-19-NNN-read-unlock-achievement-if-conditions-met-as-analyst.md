@@ -25,4 +25,13 @@ not implement it). The decision number is pending; NNN is a placeholder.
   "false, no call" is offered as the hub's call.
 - **Probe** (throwaway merge, local binding to false, uncommitted): 3 ok / 2 NotYet / 9 errors. Link 12 still passes 1
   of 6 and stops in `turnin` at the port's existing `AllExpansionSideMissionsComplete` `NotYet { NotRead }`.
-- Every rule is UNVERIFIED in the running game; the note lists two open questions and one bl-sdk check.
+- Every rule is UNVERIFIED in the running game; the note lists three open questions and one bl-sdk check.
+- **Review r1 of #541, folded in.**
+  - the slice's bridge world leaves `TheGlobalsDefinition` empty, so the main proposal stops at the existing globals
+    refusal unless the driver preloads the definition (the hub's ruling: the main proposal plus a driver preload);
+  - "no definition: false" is limited to a failed load, and the section 5 probe is labelled as testing the smaller
+    alternative;
+  - the game's first use and the store's handle load are named, with the existing `globals_definition` helper;
+  - `ShouldUnlockAchievementFromUnlockType` is noted as an open question;
+  - the declared field types are listed;
+  - the count wording, the script coverage and the string folding are made exact.

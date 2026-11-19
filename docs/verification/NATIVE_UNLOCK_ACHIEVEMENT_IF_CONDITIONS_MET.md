@@ -25,7 +25,8 @@ bCanBeLess)` is a native final function of `WillowGame.WillowPlayerController`.
 - **Return value:** a bool.
 - **Key:** `WillowPlayerController.UnlockAchievementIfConditionsMet(byte,string,int,bool,bool,bool)`.
 
-The script calls it at six sites, **all as statements: no caller reads the returned bool.**
+The script calls it at six sites, **all as statements: no caller reads the returned bool.** This covers 12,968 of the
+12,978 decoded script functions; the 10 that fail to decode are not achievement code.
 - **`WillowPlayerController.UpdateMissionStatus`, on the turn-in path:** in the branch for a side mission's
   completion, right after the side-missions-completed stat is incremented.
   - The unlock type is 16 (`AUT_SideMissionsCompleted`).
@@ -42,16 +43,23 @@ The script calls it at six sites, **all as statements: no caller reads the retur
 ## 2. What it does
 
 1. **The matching achievements.** The game's globals definition (`GearboxGlobals.TheGlobalsDefinition`, a
-   `GlobalsDefinition`) is read. It is loaded from its configured path on first use and cached in that field, which
-   is a write the first time. Each entry of its `AchievementData` (`AchievementUtility.AchievementUnlockData`:
-   `UnlockType`, `Achievement`, `StringData`, `IntData`) is checked, in order.
+   `GlobalsDefinition`) is read.
+   - **The game's first use:** when the field is empty, the definition is loaded from its configured path and written
+     into the field, and its challenge list is numbered (NATIVE_WILLOW_GLOBALS.md section 4). That is a write the first
+     time.
+   - Each entry of the definition's `AchievementData` (`AchievementUtility.AchievementUnlockData`: `UnlockType`,
+     `Achievement`, `StringData`, `IntData`) is then checked, in order.
    - **Selected** when the entry's `Achievement` is not 0, its `UnlockType` equals `AchievementUnlockType`, and:
      - **with `bCheckStringAndIntData` clear:** the string match or the int match holds;
      - **with it set:** both hold.
-   - **The string match:** the entry's `StringData` is not empty and equals the call's `StringData`, case-insensitive.
+   - **The string match:** the entry's `StringData` is not empty and equals the call's `StringData`, case-insensitive
+     (the exact folding is UNVERIFIED).
    - **The int match:** the entry's `IntData` is at least 1, and the call's `IntData` equals it, or is above it with
      `bCanBeGreater` set, or is below it with `bCanBeLess` set.
-   - With no globals or no globals definition, nothing is selected.
+   - With no globals object, or a definition that could not be loaded, nothing is selected.
+   - **`AchievementUtility.ShouldUnlockAchievementFromUnlockType`** takes the same six inputs and returns the selected
+     ids. Whether this native shares that function's selection, or keeps its own copy of the rule, was not read
+     (UNVERIFIED, open question 3).
 2. **The unlock.** For each selected entry, in order, the controller's script function
    **`ClientUnlockAchievement(AchievementId)`** is called with the entry's `Achievement` (the engine calls it by name,
    as a script event on the controller).
@@ -75,20 +83,32 @@ Its only effect is the online subsystem's achievement call.
 - **The installed data** (`GD_Globals.General.Globals`) holds 9 `AchievementData` entries. Exactly one has unlock type
   16: `WA_BountyHunter`, with `IntData` 20 and no string.
 - **The slice's turn-in** is its first side-mission completion, so `IntData` is 1.
-  - With `bCanBeGreater` set, the entry needs the count at 20 or above, so it is not selected.
+  - With `bCanBeGreater` set, the entry needs the count at 20 or above. Any count below 20 (1 on the port's fresh
+    stats) leaves it unselected.
   - **Nothing is selected, `ClientUnlockAchievement` is not called, and the answer is false.**
-  - The only possible write is the globals definition's first-use load, if the port's globals do not already hold it.
+  - **The port's slice world leaves the definition empty.** The bridge world builds `WillowGlobals` from its class
+    defaults, so `TheGlobalsDefinition` is None there. The main proposal (section 4) therefore stops at the globals
+    refusal unless the driver preloads the definition, as the pickup route's world set-up does for links 6 and 7.
 
 ## 4. Proposed ParityMode Off answer (for a separate implementer)
 
 **The rule, Off only** (Reference keeps the stub policy):
-1. **Read the globals definition** (`TheGlobalsDefinition`).
-   - Follow the port's existing globals rule (IMPL-WILLOW-GLOBALS): a definition handle not loaded yet is the existing
-     lazy-handle `NotYet`, unless the hub rules the load a tracked write (then load it and count it).
-   - No globals or no definition: false, nothing done.
-2. **Select the entries** by section 2, step 1 (reads only).
-3. **None selected** (the slice's case): return false. Nothing is written, so no preflight is needed.
-4. **Some selected:** call `ClientUnlockAchievement(id)` on the controller through the VM, once per selected entry, in
+1. **Read the globals definition** through the existing helper, `ow_inventory::globals::globals_definition`
+   (IMPL-WILLOW-GLOBALS). Its refusals stay as they are, both not-read refusals:
+   - **an empty field** is the game's first use (section 2), "the globals definition's first load, which numbers the
+     challenge list". A load from an empty field stays not read;
+   - **a definition handle the store has not loaded** is the helper's lazy-handle refusal. If the hub rules that load a
+     tracked write, it is the store's handle load, `DefStore::ensure_loaded`, with one counted load transition (the
+     store's counter of #518).
+
+   **The hub's ruling for the implementer:** the main proposal, with the driver preloading the installed definition
+   (as `equip_run.rs`'s pickup world does), so the slice's turn-in reaches the selection.
+2. **The declared field types are checked** after the definition refusal and before any value is read:
+   `AchievementData` an array of `AchievementUnlockData`, with `UnlockType` a byte, `Achievement` a byte, `StringData`
+   a string and `IntData` an int. Otherwise it is a data error, `VmError::Script`, naming the field.
+3. **Select the entries** by section 2, step 1 (reads only).
+4. **None selected** (the slice's case): return false. Nothing is written, so no preflight is needed.
+5. **Some selected:** call `ClientUnlockAchievement(id)` on the controller through the VM, once per selected entry, in
    order, then return true. Its own refusals propagate; a refusal after an earlier call's writes is the caller's to
    mark.
 
@@ -97,12 +117,12 @@ so `ClientUnlockAchievement` would do nothing in the port. Answering false with 
 exactly. It differs only when an entry matches, by skipping that script function's early checks (a console-build query,
 a state test), which write nothing. That is a port answer, UNVERIFIED, and the hub's call.
 
-**Argument errors:** ordinary VM argument errors apply. A data error (an `AchievementData` that is not an array of
-that struct) is `VmError::Script`, naming the field.
+**Argument errors:** ordinary VM argument errors apply.
 
 ## 5. Link 12's next stop (local probe)
 
-On the same throwaway merge, with this native bound locally to false (uncommitted), the installed Off `--slice-gate`
+This probe tested **the smaller alternative**, not the main proposal: the native bound locally to a plain false
+(uncommitted), with no globals read. On the same throwaway merge, the installed Off `--slice-gate`
 gives 3 ok / 2 NotYet / 9 errors. Links 10 and 11 stay ok. Link 12 still passes 1 of 6 (`use`) and now stops in
 `turnin` at:
 - "stopped after partial writes: MissionTracker.AllExpansionSideMissionsComplete with a controller (the controller
@@ -118,6 +138,8 @@ That is the port's own existing refusal, not a new unbound native.
    path).
 2. **UNVERIFIED:** whether the globals definition is already loaded when the turn-in runs in game (by the time of a
    turn-in, other natives have read it).
+3. **UNVERIFIED:** whether this native shares `AchievementUtility.ShouldUnlockAchievementFromUnlockType`'s selection
+   (the same six inputs, returning the ids) or keeps its own copy of the rule.
 
 ## Live check that would confirm the rule (bl-sdk, the RTSE way)
 
