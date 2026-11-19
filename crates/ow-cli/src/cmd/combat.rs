@@ -119,7 +119,9 @@ pub fn world(cooked: &Path, mode: ParityMode) -> Result<World, VmError> {
     let pack = ow_combat::hit::Pack;
     // The skill manager natives (FIX-SKILLMGR-B): bound in Off only, so a Reference run is unchanged.
     let manager = ow_skills::action_skill::manager::Pack;
-    let packs: [&dyn NativePack; 2] = [&pack, &manager];
+    // The player pawn data manager natives (FIX-PAWN-DATA-B): bound in Off only, too.
+    let pawn_data = ow_world::world::pawn_data::Pack;
+    let packs: [&dyn NativePack; 3] = [&pack, &manager, &pawn_data];
     World::new(vm, BalanceState::new(snapshot), &packs).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => VmError::Script {
@@ -156,6 +158,14 @@ impl MissionBridge {
         })?;
         let mission = MissionSystem::new(&mut world.vm, &package, path).map_err(mission_error)?;
         let script = MissionScript::new(world, &mission).map_err(mission_error)?;
+        // Off: the globals set-up step for the pawn data manager, where the bridge made the globals and before the
+        // player's script runs (NATIVE_PAWN_DATA.md; its timing is the note's open question 1, UNVERIFIED).
+        if world.vm.parity == ParityMode::Off {
+            let globals = world.query().borrow().globals();
+            if let Some(globals) = globals {
+                ow_world::world::pawn_data::set_up(&mut world.vm, globals)?;
+            }
+        }
         Ok(MissionBridge { script })
     }
 }
