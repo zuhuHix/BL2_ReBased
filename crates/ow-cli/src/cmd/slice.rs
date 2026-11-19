@@ -426,7 +426,6 @@ fn use_json(u: &bridge::MarcusUse) -> String {
 const EMPTY_HIT: &str = "{\"health_before\":0,\"health_after\":0,\"arriving\":0,\"applied\":0,\
                          \"demigod_before\":false,\"demigod_after\":false,\"events\":[]}";
 
-/// One step (module documentation).
 /// A part of the report's tail: after a stop (`halted`) one that cannot be read is `empty`, its text added to
 /// `unread`; otherwise its failure ends the run as before.
 fn tail_part<T, E: Into<Failure>>(
@@ -445,6 +444,7 @@ fn tail_part<T, E: Into<Failure>>(
     }
 }
 
+/// One step (module documentation).
 pub(crate) fn run_step(
     vm: &mut Vm,
     slice: &FireMissionSlice,
