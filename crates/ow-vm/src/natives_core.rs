@@ -482,6 +482,8 @@ fn register_with(vm: &mut Vm, states: Rc<dyn StateLookup>) -> Result<(), VmError
     rotators(vm)?;
     // Object.PathName (lane FIX-PHASELOCK-CHAIN, decision 2026-11-16-69).
     crate::path_name::register(vm)?;
+    // Object.GetFuncName, Off only (lane IMPL-GET-FUNC-NAME): the calling script function's name, UNVERIFIED.
+    crate::func_name::register(vm)?;
     objects(vm, states)
 }
 
