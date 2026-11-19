@@ -769,3 +769,98 @@ fn init_queries_require_setup_for_self_and_other_created_actions() {
         not_read(answer, "setup is not represented");
     }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// AIComponent.ActivateEvent (lane FIX-ACTIVATE-EVENT, decision 2026-11-19-42), from NATIVE_SLICE_OFF_STOPS.md.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// An invented component class with the fields the note reads (`AI`, `AIDef`, `CurrentState` as a pointer struct)
+/// and the native declared at the game's path; returns the component, the declared function and its key.
+fn event_component(w: &mut World, ai: Option<ObjRef>, aidef: Option<ObjRef>) -> (ObjRef, ow_object::ids::FuncId) {
+    let vm = &mut w.e.vm;
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let dummy = decl(vm, "Dummy", PropKind::Int);
+    let pointer = vm.space.classes.define_struct("Toy.ToyObject.ToyPointer", None, vec![dummy]).unwrap();
+    let o = PropKind::Object { class: core_object };
+    let c = class(vm, "Toy.ToyEventComponent", core_object, &[
+        ("AI", PropKind::Interface { class: core_object }),
+        ("AIDef", o),
+        ("CurrentState", PropKind::Struct(pointer)),
+    ]);
+    let name = decl(vm, "EventName", PropKind::Name);
+    let f = declare(vm, c, ACTIVATE_EVENT, vec![name], Some(PropKind::Bool));
+    register_activate_event(vm).unwrap();
+    let me = make(vm, c, "Component");
+    set(vm, me, "AI", Value::Interface(ai)).unwrap();
+    set(vm, me, "AIDef", Value::Object(aidef)).unwrap();
+    (me, f)
+}
+
+fn activate(w: &mut World, me: ObjRef, f: ow_object::ids::FuncId) -> Result<Value, VmError> {
+    let name = Value::Name(w.e.vm.space.names.intern("Invented"));
+    w.e.vm.call(f, Some(me), vec![name]).map(|r| r.ret)
+}
+
+fn invented_log(w: &World) -> Vec<String> {
+    w.script.borrow().log.iter().filter(|l| l.starts_with("Invented")).cloned().collect()
+}
+
+/// Off: with `AI` and `AIDef` set and no running node, every node's action gets the script event in list order (the
+/// root has no action), and the answer is false. Reference leaves the key unbound (the slice's C++ stub serves it).
+#[test]
+fn activate_event_broadcasts_to_the_node_actions_in_list_order() {
+    let mut w = world(ParityMode::Off);
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
+    assert_eq!(invented_log(&w), ["Invented Attack", "Invented Patrol"]);
+
+    let mut w = world(ParityMode::Reference);
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (_me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    let key = w.e.vm.function(f).unwrap().native_key.clone().unwrap();
+    assert!(!w.e.vm.has_native(&key), "Reference binds nothing");
+}
+
+/// Off: an unset `AI` or `AIDef` does nothing and answers false.
+#[test]
+fn activate_event_does_nothing_without_ai_or_definition() {
+    for (with_ai, with_def) in [(false, true), (true, false), (false, false)] {
+        let mut w = world(ParityMode::Off);
+        let (mind, aidef) = (w.e.mind, w.e.aidef);
+        let (me, f) = event_component(&mut w, with_ai.then_some(mind), with_def.then_some(aidef));
+        assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
+        assert!(invented_log(&w).is_empty(), "{with_ai} {with_def}");
+    }
+}
+
+/// Off: a running node (the component's pointer set, or the mind's brain running a node) is `NotYet { NotRead }`,
+/// with nothing delivered: the running action's first delivery is the note's open question.
+#[test]
+fn activate_event_with_a_running_node_is_not_yet() {
+    let not_read = |r: Result<Value, VmError>| match r {
+        Err(VmError::NotYet(n)) => {
+            assert!(matches!(n.missing, Missing::NotRead), "{n}");
+            assert!(n.to_string().contains("first delivery"), "{n}");
+        }
+        other => panic!("expected a NotYet, got {other:?}"),
+    };
+    // The component's own pointer.
+    let mut w = world(ParityMode::Off);
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    let mut state = get(&mut w.e.vm, me, "CurrentState").unwrap().unwrap();
+    ow_combat::hit::access::set_field(&w.e.vm, &mut state, "Dummy", Value::Int(1));
+    set(&mut w.e.vm, me, "CurrentState", state).unwrap();
+    not_read(activate(&mut w, me, f));
+    assert!(invented_log(&w).is_empty());
+    // The brain part 2 keeps for the mind, running the patrol.
+    let mut w = world(ParityMode::Off);
+    let mut h = host(&w.e, 1.0);
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    assert!(brain(&w.e.vm, w.e.mind).unwrap().tree.current.is_some());
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    not_read(activate(&mut w, me, f));
+    assert!(invented_log(&w).is_empty());
+}

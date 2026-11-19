@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-ACTIVATE-EVENT (2026-11-19, pc-hummer, rebased onto main f64aeba9; installed runs on main cb01e96f):** AI-assisted (Claude Code, Opus 5.5).
+`cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,021 passed / 0 failed / 45 ignored after the rebase
+(3 new in `ow-ai`, 76/76 there). Release CLI build clean. ctest `-j 4` 173/173 passed, 113.12 s (C++ unchanged; existing
+build). `crate_edges_test.py` 19 OK; Fire checker self-test passes and, under Reference with this branch's binary, 33 of 33
+rules hold. Installed Off: `--slice-gate` strict 0/11/3 before, 0/14/0 after (link 10 moves from the `ActivateEvent` error
+at `use` to the `GetDataStoreClient` `NotYet` at `accept`); `--slice-run` and `--mission-run` Fire unchanged. No host or
+real-game run; the rule stays `UNVERIFIED` in game. Decision 2026-11-19-42; logs under ignored
+`local/p2/fix-activate-event/`.
+
 **FIX-PLAYER-CLASS (2026-11-19, desktop, on main e59bff0):** AI-assisted (Claude Code, Claude Opus 5.5).
 `GBXDefinition.GetDefinition` and `LoadPlayerPawnDataAsync` in Off; the `maya` step's class select in Off.
 `cargo build --workspace` clean; `cargo test --workspace` 2,010 passed / 0 failed / 45 ignored; ctest at `-j 2`
