@@ -1070,7 +1070,8 @@ fn walk_link(cooked: &Path) -> Ran {
     };
     let area = fight_area::FIGHT_AREA;
     let centre = fight_area::centre(&area, start);
-    fight_area::graded(&mut r, &area, centre, report.end, || fight_area::place_dummy(cooked, centre));
+    let end = report.end;
+    fight_area::graded(&mut r, &area, centre, end, || fight_area::place_dummy(cooked, world, &area, centre, end));
     r
 }
 

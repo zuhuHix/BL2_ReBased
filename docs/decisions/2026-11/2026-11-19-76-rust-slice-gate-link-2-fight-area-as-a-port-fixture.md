@@ -60,3 +60,27 @@ It adds no dependency, CLI flag or parsing change. Reference is unchanged, since
     (decision 2026-11-19-44). That clears both this fixture's dummy and the enemy spawns.
   - The fight area stays a port fixture until Sanctuary's own population is ported (the dens seam, decision
     2026-11-16-59). A real-game reading of where the slice's fight takes place would replace the offset.
+- **Review r1 of #470** (on the hub's rebase, aaa83b7):
+  - **Typed grading.** The placement no longer turns a `VmError` into text. A `VmError::NotYet` is `notyet` through
+    the slice gate's `typed_stop`; every other VM error, and every failed check of the step's own, is an `error`,
+    whatever its text says. A synthetic regression gives a `Decode` error the exact text of a `NotYet`: it stays an
+    `error`.
+  - **The placement is checked against the loaded Sanctuary collision** before anything is spawned (port checks,
+    UNVERIFIED as game rules):
+    - the dummy's cylinder is read from its archetype's `CylinderComponent`; where it cannot be read, the checks are
+      not available and the step is a `NotYet`;
+    - the floor: the cylinder is swept down from 160 uu above the centre (the mover's `SPAWN_LIFT`) to 2000 uu below
+      it (the walk's `MAX_DROP`), both in `FIGHT_AREA`. It must land on a floor Maya could walk on (normal Z at least
+      her `WalkableFloorZ`), from a start not in solid, and not stand in solid there. The dummy is spawned at that
+      spot, no longer at the player start's height;
+    - Maya's reach: her feet and the dummy's within her `MaxStepHeight` (the same floor), and her cylinder, raised by
+      that step, sweeping straight from her walked end to the dummy's spot without a hit. That is a conservative
+      check of the port's own, not a path search;
+    - after the spawn, the dummy must stand where it was put (within 1 uu, the script float's rounding).
+  - **The location vector** is built, with its fields checked, before the template is made.
+  - **The checker:** an `ok` `reach_fight_area` row must be driven by `sanctuary-walk`, with exactly the steps load,
+    spawn, walk and fight_area in that order.
+  - **Installed, Off, under the machine run lock** (desktop, this branch on aaa83b7): link 2 `notyet`, 3 of 4 steps
+    passed, stop at `fight_area`. The floor and reach checks pass on the installed Sanctuary, and the spawn then stops
+    at decision 2026-11-19-44's inherited-component `NotYet`, as before. 0 ok, 14 notyet, 0 error. Row 9 differs from
+    the 203c1aa run above only through main's own LINK-9-CAST-SPAWN changes.

@@ -22,7 +22,12 @@ passed, stop `fight_area`, before and after. Before, the stop was "needs a fight
 Maya's walk ends 9.5 uu from the area's centre (inside its 200 uu radius), and the dummy's spawn stops at decision
 2026-11-19-44's inherited-component `NotYet` (`SpecialMoveComponent0` of `Default__WillowAIPawn`). The other 13 rows
 are byte-identical; 0 ok / 14 NotYet / 0 errors before and after. ctest and verify_packages not run (no C++ change). A
-fixture, not parity: `UNVERIFIED` in game. Decision 2026-11-19-76; logs under ignored `local/p2/fight-area/`.
+fixture, not parity: `UNVERIFIED` in game. Decision 2026-11-19-76; logs under ignored `local/p2/fight-area/`. **Review r1 of #470** (on aaa83b7): typed grading, the placement checked against the loaded Sanctuary collision
+(floor, solid, same floor, straight reach), the vector built before the template, and the checker's exact steps and
+driver. `cargo test --workspace -j 2` 2,188 passed / 0 failed / 46 ignored; clippy flags nothing in slice_gate;
+`crate_edges_test.py` 19 OK; `check_slice_run_off_test.py` 16 OK. Installed Off `--slice-gate`: link 2 `notyet`, 3 of 4
+steps, stop `fight_area` at decision 44's inherited-component `NotYet`, reached after the floor and reach checks
+pass; 0 / 14 / 0.
 
 **IMPL-PAWN-AI-INTERFACE (2026-11-19, desktop, on main bb46e11):** AI-assisted (Claude Code, Claude Opus 5.5).
 `Pawn`'s `QueryInterface` rule for `IAIInterface` in Off (a per-class rule registry in `ow-vm`, `ow-combat`
