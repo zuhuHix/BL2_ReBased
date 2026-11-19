@@ -685,7 +685,67 @@ impl NativePack for Pack {
                 )?))
             }),
         )?;
-        register_events(vm)
+        register_events(vm)?;
+        register_sm_component(vm)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// `GearboxPawn.GetSMComponent` (NATIVE_SPECIAL_MOVE_COMPONENT.md), Off only
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The native key of `GearboxPawn.GetSMComponent()` (lane FIX-GETSMCOMPONENT, decision 2026-11-19-33).
+pub const GET_SM_COMPONENT: &str = "GearboxPawn.GetSMComponent()";
+
+/// The record of the special-move component native.
+pub const RECORD_SM_COMPONENT: &str = "NATIVE_SPECIAL_MOVE_COMPONENT.md";
+
+/// `GearboxPawn.GetSMComponent()`, coded from NATIVE_SPECIAL_MOVE_COMPONENT.md alone (UNVERIFIED in the running game):
+/// the pawn's `SMComponent` as it is, nothing created, checked or registered; None when the field is None.
+///
+/// The game's pawn is expected to hold its own instance of the component (a default sub-object, copied per actor at
+/// spawn: stock UE3, UNVERIFIED in this game, the note's bl-sdk check settles it). A pawn
+/// whose `SMComponent` is not its own, that is whose component's outer is not the pawn (the class default's or an
+/// archetype's shared sub-object, which is what a pawn made from class defaults may hold), is
+/// `NotYet { NotRead }`: whether the port should answer that shared object is the note's open question 1, and
+/// answering it would let a `Play` on one pawn write the template. A class that declares no `SMComponent`, or one
+/// holding a non-object, is a typed error.
+///
+/// Reference: unbound. The C++ has no stand-in, so the VM's stub policy answers, as before (R3).
+fn register_sm_component(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    vm.register_native(GET_SM_COMPONENT, Rc::new(get_sm_component))
+}
+
+fn get_sm_component(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let pawn = this(c, GET_SM_COMPONENT)?;
+    let class = c.vm.space.heap.get(pawn)?.class;
+    let prop = c
+        .vm
+        .space
+        .prop(class, "SMComponent")
+        .ok_or_else(|| script_error(GET_SM_COMPONENT, "the pawn's class declares no SMComponent"))?;
+    let value = c.vm.space.read(pawn, ow_object::ids::PropAddr::scalar(prop))?.clone();
+    match value {
+        Value::Object(None) => Ok(Value::Object(None)),
+        Value::Object(Some(component)) => {
+            if c.vm.space.heap.get(component)?.outer != Some(pawn) {
+                return Err(NotYet::not_read(
+                    "GearboxPawn.GetSMComponent on a pawn whose SMComponent is not its own instance (a shared class \
+                     default or archetype sub-object): whether the port's pawn should hold its own instance \
+                     (NATIVE_SPECIAL_MOVE_COMPONENT.md open question 1)",
+                    RECORD_SM_COMPONENT,
+                )
+                .into());
+            }
+            Ok(Value::Object(Some(component)))
+        }
+        other => Err(script_error(
+            GET_SM_COMPONENT,
+            format!("SMComponent holds {}, not an object", other.kind_name()),
+        )),
     }
 }
 
@@ -1057,3 +1117,6 @@ mod tests;
 
 #[cfg(test)]
 mod events_tests;
+
+#[cfg(test)]
+mod sm_component_tests;
