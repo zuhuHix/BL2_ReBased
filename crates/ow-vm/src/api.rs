@@ -555,6 +555,12 @@ impl Vm {
         crate::interp::find_class(self, path)
     }
 
+    /// [`Vm::find_class`], with a class no installed package holds (or a VM with no code layer) as `None`; any other
+    /// lookup failure is kept as the error (lane FIX-RUN-BEHAVIORS, review r1 of #439).
+    pub fn find_class_if_present(&mut self, path: &str) -> Result<Option<ClassId>, VmError> {
+        crate::interp::find_class_if_present(self, path)
+    }
+
     /// Adds a function to the table and returns its id. A path declared twice is refused.
     pub fn declare_function(&mut self, decl: FunctionDecl) -> Result<FuncId, VmError> {
         if self.function_by_path.contains_key(&decl.path) {
@@ -695,6 +701,17 @@ impl Vm {
             (Some(c), Some(i)) => code.implements(store, c, i),
             _ => false,
         }
+    }
+
+    /// [`Vm::implements`] with the stand-in check applied, for callers outside `ow-vm` (the public checked form
+    /// decision 2026-11-15-20 left open; lane FIX-RUN-BEHAVIORS, review r1 of #439): a "no" is asked again through
+    /// the class chain, which is `NotYet` when that chain runs through an engine-native stand-in class, as the casts
+    /// answer. So `Ok(false)` is a proven "no".
+    pub fn implements_checked(&mut self, class: ClassId, iface: ClassId) -> Result<bool, VmError> {
+        if self.implements(class, iface) {
+            return Ok(true);
+        }
+        crate::interp::is_child(self, class, iface)
     }
 
     /// Replaces a **script** function with a host binding that runs instead of its bytecode (C++ `overrideScript`,

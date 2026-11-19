@@ -223,6 +223,9 @@ struct BState {
     notes: Vec<String>,
     errors: Vec<String>,
     not_yet: Vec<NotYet>,
+    /// A script run that failed after a behavior walk had written state (`ow_behavior::kernel::run::PARTIAL_WRITES`):
+    /// the run stops there and this VM runs no more script (review r1 of #439, item 2b).
+    partial: Option<String>,
     exp_earned: Vec<ExpEarn>,
     gains: Vec<Gain>,
     pool: f32,
@@ -705,6 +708,9 @@ impl MissionScript {
     }
 
     fn bind_natives(&self, vm: &mut Vm) -> Result<(), MissionError> {
+        // The behavior kernel pack first, before any script runs (review r1 of #439, item 1): its Off natives
+        // (`RunBehaviors` among them) are bound whether or not the director's provider is ever placed.
+        ow_vm::api::NativePack::register(&natives::Pack, vm)?;
         const BOUND: [(&str, Body); 33] = [
             ("WillowGame.MissionTracker.ActivateMission", MissionScript::n_activate),
             ("WillowGame.MissionTracker.CompleteMission", MissionScript::n_complete),
@@ -816,6 +822,10 @@ impl MissionScript {
     /// The outermost script run collects what the VM logged while it ran; a script that fails is recorded, never
     /// propagated (module documentation).
     fn run(&self, vm: &mut Vm, script: impl FnOnce(&mut Vm) -> Result<(), MissionError>) {
+        // A VM a walk left half-written runs no more script.
+        if self.inner.state.borrow().partial.is_some() {
+            return;
+        }
         let before = vm.log.len();
         self.inner.state.borrow_mut().depth += 1;
         let result = script(vm);
@@ -825,7 +835,11 @@ impl MissionScript {
             if let Some(n) = e.not_yet() {
                 s.not_yet.push(n.clone());
             }
-            s.errors.push(format!("mission script: {}", error_text(&e)));
+            let text = error_text(&e);
+            if text.contains(ow_behavior::kernel::run::PARTIAL_WRITES) && s.partial.is_none() {
+                s.partial = Some(text.clone());
+            }
+            s.errors.push(format!("mission script: {text}"));
         }
         if s.depth != 0 {
             return;
@@ -1076,6 +1090,12 @@ impl MissionScript {
     /// The `NotYet` of each script run that stopped on one, in order.
     pub fn not_yet(&self) -> Vec<NotYet> {
         self.inner.state.borrow().not_yet.clone()
+    }
+
+    /// The failure that stopped a script run after a behavior walk had written state, if one did (review r1 of #439,
+    /// item 2b). The caller stops its run at that step and does not reuse the VM.
+    pub fn partial_stop(&self) -> Option<String> {
+        self.inner.state.borrow().partial.clone()
     }
 
     /// Natives without an implementation that the script reached, `Class.Name(types) xN`, in key order.

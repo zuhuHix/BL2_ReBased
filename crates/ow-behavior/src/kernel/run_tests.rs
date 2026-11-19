@@ -93,6 +93,7 @@ fn package() -> Vec<u8> {
         "ObjectProperty",
         "ArrayProperty",
         "StructProperty",
+        "Enum",
     ]);
     let object = t.class("Object", 0);
     let info = toy_struct(&mut t, object, "BehaviorKernelInfo", None);
@@ -123,14 +124,32 @@ fn package() -> Vec<u8> {
     let spec = FunctionSpec::new(NATIVE, "ApplyBehavior");
     t.function(behavior, "ApplyBehavior", &apply, None, &[], &spec, |_| None);
     let world = t.class("ToyWorldInfo", object);
-    t.prop("Byte", world, "NetMode", 0, 0);
+    // The net-mode enum in an order unlike the game's, so a rule that used a constant would fail: NM_Client is 2 here.
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    let modes = ["NM_Standalone", "NM_ListenServer", "NM_Client"];
+    payload.extend(ow_package::testkit::ints(&[0, modes.len() as i32]));
+    for m in modes {
+        let bytes = t.p.fname(m, 0);
+        payload.extend_from_slice(&bytes);
+    }
+    let mut e = ow_package::testkit::Export::new(t.import("Enum"), "ENetMode", payload);
+    e.outer = world;
+    let net_mode = t.p.add_export_with(e);
+    t.prop("Byte", world, "NetMode", 0, net_mode);
     let controller = t.class("ToyController", object);
     let spec = FunctionSpec::new(NATIVE, "IsLocalController");
     t.function(controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| None);
-    let pawn = t.class("ToyPawn", object);
+    let pawn_base = t.class("Pawn", object);
+    let pawn = t.class("ToyPawn", pawn_base);
     t.prop("Object", pawn, "WorldInfo", 0, world);
     t.prop("Object", pawn, "Controller", 0, controller);
     t.class("InstanceDataHelper", object);
+    // The instance-data interface and a class that implements it (by the structural rule synthetic packages use).
+    for owner in [t.class("IInstanceData", object), t.class("ToyInstanced", object)] {
+        let spec = FunctionSpec::new(NATIVE, "GetToyInstanceData");
+        t.function(owner, "GetToyInstanceData", &[], None, &[], &spec, |_| None);
+    }
     // Holds the structs no function names, so their layouts load with it.
     let holder = t.class("ToyHolder", object);
     t.prop("Struct", holder, "Context", 0, context);
@@ -173,6 +192,10 @@ fn toy(mode: ParityMode) -> Toy {
         )
         .unwrap();
     let kernel = vm.space.classes.define("GearboxFramework.BehaviorKernel", Some(object), vec![]).unwrap();
+    let anim = vm.space.classes.define("GearboxFramework.GearboxAnimDefinition", Some(object), vec![]).unwrap();
+    for path in &ANIM_EVENTS[..2] {
+        declare(&mut vm, path, anim, vec![], None);
+    }
     let o = PropKind::Object { class: object };
     let ps = vec![
         param(&mut vm, "Behaviors", PropKind::Array(Box::new(PropKind::Object { class: base })), PropertyDecl::OUT),
@@ -364,6 +387,7 @@ fn a_wait_request_outside_a_thread_is_not_yet() {
         VmError::NotYet(n) => {
             assert_eq!(n.missing, Missing::NotRead);
             assert!(n.what.contains("open question 1"), "{n}");
+            assert!(n.what.contains(PARTIAL_WRITES), "a refusal after a dispatch says so: {n}");
         }
         e => panic!("expected NotYet, got {e}"),
     }
@@ -375,7 +399,16 @@ fn a_wait_request_outside_a_thread_is_not_yet() {
 fn reference_binds_nothing() {
     let off = toy(ParityMode::Off);
     let reference = toy(ParityMode::Reference);
-    for path in [RUN_BEHAVIORS, STATIC_CONTEXT, STATIC_ALL_CONTEXTS, FIRST_INSTANCE_DATA[0], SM_RUN_BEHAVIORS, SM_CAN_PLAY] {
+    for path in [
+        RUN_BEHAVIORS,
+        STATIC_CONTEXT,
+        STATIC_ALL_CONTEXTS,
+        FIRST_INSTANCE_DATA[0],
+        SM_RUN_BEHAVIORS,
+        SM_CAN_PLAY,
+        ANIM_EVENTS[0],
+        ANIM_EVENTS[1],
+    ] {
         let key = format!("{path}()");
         assert!(off.vm.has_native(&key), "{path} in Off");
         assert!(!reference.vm.has_native(&key), "{path} in Reference");
@@ -470,7 +503,7 @@ fn the_special_move_runs_the_entries_its_side_allows() {
     assert_eq!(can(&mut t, &local), Value::Bool(false), "not a local controller");
     t.local.set(true);
     assert_eq!(can(&mut t, &local), Value::Bool(true));
-    t.set(world, "NetMode", Value::Byte(NM_CLIENT));
+    t.set(world, "NetMode", Value::Byte(2));
     assert_eq!(can(&mut t, &server), Value::Bool(false));
     assert_eq!(can(&mut t, &client), Value::Bool(true));
     t.set(world, "NetMode", Value::Byte(0));
@@ -480,4 +513,86 @@ fn the_special_move_runs_the_entries_its_side_allows() {
         *t.log.borrow(),
         vec!["S self=Maya inst=- other=- init=Bool(true) counter=Int(0) tag=Int(0)".to_string()]
     );
+}
+
+/// The preflight (review r1 of #439, item 2a): an entry that cannot be dispatched is refused before any entry runs, and
+/// that refusal is not marked as after partial writes.
+#[test]
+fn an_entry_that_cannot_run_is_refused_before_any_runs() {
+    let mut t = toy(ParityMode::Off);
+    let not_a_behavior = t.make("Engine.Object", "NotABehavior");
+    let mut list = t.behaviors(&[Some("A")]);
+    if let Value::Array(items) = &mut list {
+        Rc::make_mut(items).push(Value::Object(Some(not_a_behavior)));
+    }
+    let e = t.call(RUN_BEHAVIORS, None, vec![list, Value::Object(None)]).unwrap_err();
+    assert!(e.to_string().contains("has no ApplyBehavior"), "{e}");
+    assert!(!e.to_string().contains(PARTIAL_WRITES), "{e}");
+    assert!(t.log.borrow().is_empty(), "A did not run");
+}
+
+/// The record starts from the plain zero value, not the struct's defaults (review r1 of #439, item 5): the toy
+/// struct's ToyCounter default is 5, and the first behavior sees 0.
+#[test]
+fn the_record_starts_from_zero_not_the_struct_defaults() {
+    let mut t = toy(ParityMode::Off);
+    let layout = t.vm.space.classes.struct_layout(t.info).unwrap();
+    let (entry, _) = layout.field(t.vm.space.names.find("ToyCounter").unwrap()).unwrap();
+    t.vm.space.set_struct_default(t.info, entry, Value::Int(5)).unwrap();
+    let defaults = t.vm.space.classes.struct_defaults(t.info).unwrap();
+    assert_eq!(read(&t.vm, &defaults, "ToyCounter"), Value::Int(5), "the fixture's default");
+    let list = t.behaviors(&[Some("A")]);
+    t.call(RUN_BEHAVIORS, None, vec![list, Value::Object(None)]).unwrap();
+    assert!(t.log.borrow()[0].contains("counter=Int(0)"), "{:?}", t.log.borrow());
+}
+
+/// An object that implements the instance-data interface reaches the open question's `NotYet` (review r1 of #439,
+/// item 3), in the named context resolver and in `GetFirstInstanceDataObject`; the default is kept for a proven "no".
+#[test]
+fn an_object_with_instance_data_is_not_yet() {
+    let mut t = toy(ParityMode::Off);
+    let instanced = t.make("Engine.ToyInstanced", "Instanced");
+    let plain = t.make("Engine.Object", "Plain");
+    let fallback = t.make("Engine.Object", "Fallback");
+    let name = t.vm.space.names.intern("ToyData");
+    let first = |t: &mut Toy, c: ObjRef| {
+        t.call(FIRST_INSTANCE_DATA[0], None, vec![Value::Object(Some(c)), Value::Name(name), Value::Object(Some(fallback))])
+    };
+    match first(&mut t, instanced).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("open question 2"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert_eq!(first(&mut t, plain).unwrap().ret, Value::Object(Some(fallback)));
+    let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.context));
+    let data = with(&t.vm, &zero, "InstancedDataContextName", Value::Name(name));
+    let args = vec![Value::Object(None), data, Value::Object(Some(instanced)), Value::Object(None), Value::Object(None)];
+    assert!(matches!(t.call(STATIC_CONTEXT, None, args).unwrap_err(), VmError::NotYet(_)));
+}
+
+/// `PlayLocal` asks the owner's pawn (review r1 of #439, item 4): an owner that is not a pawn is `NotYet`.
+#[test]
+fn play_local_on_an_owner_that_is_not_a_pawn_is_not_yet() {
+    let mut t = toy(ParityMode::Off);
+    let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
+    let owner = t.make("Engine.ToyController", "NotAPawn");
+    t.set(component, "SMI", Value::Object(Some(owner)));
+    let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.sm_entry));
+    let local = with(&t.vm, &zero, "PlayLocal", Value::Bool(true));
+    match t.call(SM_CAN_PLAY, Some(component), vec![local]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("not a pawn"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
+}
+
+/// `OnStart` / `OnServerStart` answer the open question's `NotYet` in Off (review r1 of #439, item 6).
+#[test]
+fn the_anim_definition_events_are_not_yet() {
+    let mut t = toy(ParityMode::Off);
+    let me = t.make("Engine.Object", "Me");
+    for path in &ANIM_EVENTS[..2] {
+        match t.call(path, Some(me), vec![]).unwrap_err() {
+            VmError::NotYet(n) => assert!(n.what.contains("open question 3"), "{path}: {n}"),
+            e => panic!("{path}: expected NotYet, got {e}"),
+        }
+    }
 }

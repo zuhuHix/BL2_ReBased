@@ -226,7 +226,17 @@ fn execute(args: &[String], mode: ParityMode, policy: IdentityPolicy, out: &mut 
                 quote(&e.detail)
             );
         }
-        out.push_str("]}");
+        out.push(']');
+        // A script run that failed after a behavior walk wrote state ends the run at this step, and the VM is not
+        // used again (review r1 of #439, item 2b; Rust-only: the C++ never meets a NotYet).
+        let partial = script.as_ref().and_then(MissionScript::partial_stop);
+        if let Some(text) = &partial {
+            let _ = write!(out, ",\"stopped\":{}", quote(&format!("stopped after partial writes: {text}")));
+        }
+        out.push('}');
+        if partial.is_some() {
+            break;
+        }
     }
     let mut errors = mission.errors();
     if let Some(s) = &script {

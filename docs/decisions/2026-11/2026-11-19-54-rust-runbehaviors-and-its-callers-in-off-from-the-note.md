@@ -76,3 +76,35 @@ loosened and no `NotYet` guard was relaxed.
   are byte-identical, strict 0/11/3 and past-errors 0/14/0. No slice link reaches `RunBehaviors` yet. Link 9 (the
   Phaselock cast, whose special-move start runs `SpecialMoveComponent.RunBehaviors`) has no headless driver, and the
   installed cast stops earlier, at `Pawn.IsFriendly`.
+- **Review r1 of #439.**
+  - **Item 1, registration.** The mission bridge registers the behavior kernel pack before any script runs. In Off,
+    `RunBehaviors` is therefore bound on a `--mission-run` without the director; before this it was bound only once
+    Marcus's provider was placed.
+  - **Item 2, writes before a refusal** (the hub's ruling: no rollback):
+    - (a) Before any entry is dispatched, every entry the list holds is resolved and checked, and the record is made;
+      a record without `NextExecutionDelayTime` is refused there. A wait request itself is seen only after the
+      behavior that made it ran.
+    - (b) A failure after a dispatch is marked "stopped after partial writes"
+      (`ow_behavior::kernel::run::PARTIAL_WRITES`). The bridge keeps it as `partial_stop` and runs no more script on
+      that VM. `--mission-run` and `--slice-run` end the run at that step, and the step's row says "stopped after
+      partial writes".
+    - The special-move run makes its entries' side tests and checks before its first dispatch.
+  - **Item 3, the instance-data interface.**
+    - "No interface" now has to be proven: the class absent from the package set (`Vm::find_class_if_present`,
+      new), or `Vm::implements_checked` (new) answering no. That is the public checked form decision 2026-11-15-20
+      left open: an unproven "no" through an engine-native stand-in class is `NotYet`.
+    - Any other lookup failure is kept.
+  - **Item 4, the side test.**
+    - `NM_Client`'s value is its position in `NetMode`'s declared enum, no longer the constant 3.
+    - `PlayLocal` asks the owner's pawn, which is the owner when it is an `Engine.Pawn`; any other owner is
+      `NotYet`.
+  - **Item 5, the record** starts from `zero_value`, with no struct defaults.
+  - **Item 6, the anim events.** `OnStart` / `OnServerStart` are bound in Off as `NotYet { NotRead }` naming open
+    question 3.
+  - **Tests:**
+    - `ow-behavior`, 5 new: the preflight, the record from zero with a nonzero struct default, the interface
+      `NotYet`, `PlayLocal` on a non-pawn owner, the anim events. The wait test now also checks the partial-writes
+      mark.
+    - `ow-mission`, 2 new: `RunBehaviors` bound without the director in both modes; a partial-write failure stops
+      later script runs.
+  - `ow-vm` gained the two public helpers above (no sensitive file).

@@ -128,6 +128,8 @@ fn engine() -> Vec<u8> {
         param("Object", "OtherEventParticipantObject", 0, object),
     ];
     native(&mut t, base, "GetBehaviorContext", &resolve, Some(("Object", object)), NATIVE);
+    // RunBehaviors, so a test can see who binds it (review r1 of #439, item 1).
+    native(&mut t, base, "RunBehaviors", &[param("Object", "SelfObject", 0, object)], None, NATIVE | STATIC);
     t.build()
 }
 
@@ -1786,4 +1788,43 @@ fn the_director_is_a_new_object_with_the_store_s_references_in_reference_mode() 
 #[test]
 fn the_director_is_a_new_object_with_the_store_s_references_in_off_mode() {
     the_director_is_a_new_object_with_the_store_s_references(ParityMode::Off);
+}
+
+/// The behavior kernel pack is registered with the bridge, before any script runs (review r1 of #439, item 1): in Off
+/// `RunBehaviors` is the kernel's, bound without the director; in Reference it is the bridge's C++ stand-in.
+#[test]
+fn run_behaviors_is_bound_without_the_director() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut env = Env::with_mode(false, mode);
+        let vm = env.vm();
+        let f = vm.find_function("Engine.BehaviorBase.RunBehaviors").unwrap();
+        let key = vm.function(f).unwrap().native_key.clone().unwrap();
+        assert!(vm.has_native(&key), "{mode:?}: bound");
+        assert!(env.script.inner.state.borrow().marcus_pawn.is_none(), "no director placed");
+    }
+}
+
+/// A script run that failed after a behavior walk wrote state stops the bridge (review r1 of #439, item 2b): the
+/// failure is kept as the partial stop, and the VM runs no later script.
+#[test]
+fn a_partial_write_failure_stops_later_script_runs() {
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    assert_eq!(s.partial_stop(), None);
+    let text = format!("{}: an invented NotYet", ow_behavior::kernel::run::PARTIAL_WRITES);
+    s.run(env.vm(), move |_| Err(VmError::NotYet(NotYet::not_read(text, "an invented record")).into()));
+    let stop = s.partial_stop().expect("the partial stop");
+    assert!(stop.contains("an invented NotYet"), "{stop}");
+    let ran = Rc::new(std::cell::Cell::new(false));
+    let seen = ran.clone();
+    s.run(env.vm(), move |_| {
+        seen.set(true);
+        Ok(())
+    });
+    assert!(!ran.get(), "no script runs on that VM again");
+    // A failure that is not after partial writes does not stop the bridge.
+    let mut fresh = Env::new(false);
+    let f = fresh.script.clone();
+    f.run(fresh.vm(), |_| Err(VmError::NotYet(NotYet::not_read("an invented NotYet", "an invented record")).into()));
+    assert_eq!(f.partial_stop(), None);
 }
