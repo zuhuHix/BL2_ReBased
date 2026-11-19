@@ -16,13 +16,18 @@
 //! - P1: the controller's class declares `PlayerSkillTree` as an object property (else a data error);
 //! - P2 ([`existing_tree`]): a set `PlayerSkillTree` is the named `NotYet` (`NotRead`) for the reset of an existing
 //!   tree; None goes on; another kind is a data error;
-//! - P3: the class `WillowGame.PlayerSkillTree`, the store's own error propagated unchanged;
+//! - P3 ([`tree_class`]): the class `WillowGame.PlayerSkillTree`, resolved when the native is bound (class metadata
+//!   in setup); a class the binding could not resolve is looked up at the call, so its typed error is the answer. The
+//!   tree field's declared class must accept it, else the heap's typed `WrongClass` error, before W1;
+//! - P5a ([`player_class`]): the controller's `PlayerClass` (an object property), read whether or not P4 finds a
+//!   manager, and read before P4, so a bad value is refused before the world is asked for its globals;
 //! - P4 ([`pawn_data_manager`]): the world's globals (its own `NotYet` when it has none) and their
 //!   `ThePlayerPawnDataManager`, declared as an object property; None means no request;
-//! - P5a ([`player_class`]): the controller's `PlayerClass` (an object property), read whether or not P4 found a
-//!   manager; None means no player class;
 //! - P5b ([`skill_tree_path`]): its `SkillTreePath` (a string property), read only when P4 gave a manager and P5a a
 //!   player class;
+//! - the preflight reads only resident definitions (hub ruling, review r1 of #475: a lazy load is a write): globals
+//!   or a player class that is still an unloaded store handle is a named `NotYet` ([`resident`]), and nothing is
+//!   loaded;
 //! - P6 ([`request_row`]): a request exactly when P4 and P5 both gave one, its row by the path's shape.
 //!
 //! **Writes**, for a new tree: W1 the tree, outer the controller, a generated name (the native passes none); W2 the
@@ -39,7 +44,8 @@ use std::rc::Rc;
 
 use ow_attr::api::EvalCx;
 use ow_core::{NotYet, ParityMode};
-use ow_object::ids::{ObjRef, PropAddr, PropId};
+use ow_object::heap::HeapError;
+use ow_object::ids::{ClassId, ObjRef, PropAddr, PropId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativePack, Vm};
@@ -135,28 +141,31 @@ fn object_value(v: &Value, name: &str) -> Result<Option<ObjRef>, VmError> {
     }
 }
 
-/// Loads `o` when it is a store handle not yet loaded; a store error converts through `VmError::from`.
-fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
+/// The plan reads only resident definitions (hub ruling, review r1 of #475: a lazy load is a write). A store handle
+/// that is not loaded yet is a named `NotYet`, raised before any write, and nothing is loaded.
+fn resident(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
-        let r = vm.defs.ensure_loaded(&mut vm.space, o);
-        let log = vm.defs.take_log();
-        vm.log.extend(log);
-        r.map_err(VmError::from)?;
+        return Err(NotYet::not_ported(
+            format!(
+                "InitPlayerSkillTree: {what} ({}) is not loaded; loading it in the preflight would be a write before the plan's refusals (hub ruling: a lazy load is a write)",
+                class_path(vm, o)
+            ),
+            RECORD,
+        )
+        .into());
     }
     Ok(())
 }
 
 /// P2: an existing tree is the named `NotYet`; its reset is the full NATIVE_SKILLS.md section 3.1 reset, not ported.
 /// The only installed caller clears `PlayerSkillTree` first, so the slice does not meet it.
-fn existing_tree(tree: ObjRef) -> VmError {
-    NotYet::not_read(
-        format!(
-            "InitPlayerSkillTree: the reset of an existing skill tree (NATIVE_SKILLS.md section 3.1 is not ported; tree {tree:?})"
-        ),
-        RECORD,
-    )
-    .into()
+fn existing_tree() -> VmError {
+    NotYet::not_read(EXISTING_TREE, RECORD).into()
 }
+
+/// P2's diagnostic, the note's exact text.
+pub const EXISTING_TREE: &str =
+    "InitPlayerSkillTree: the reset of an existing skill tree (NATIVE_SKILLS.md section 3.1 is not ported)";
 
 /// P4: the globals' `ThePlayerPawnDataManager`, None meaning no request. A world without globals answers its own
 /// `NotYet`, unchanged.
@@ -165,20 +174,20 @@ fn pawn_data_manager(vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
         let cx = EvalCx::new(vm);
         cx.world.globals()?
     };
-    loaded(vm, globals)?;
+    resident(vm, globals, "the engine globals")?;
     let p = declared(vm, globals, "ThePlayerPawnDataManager", "an object property", is_object)?;
     object_value(vm.space.read(globals, PropAddr::scalar(p))?, "ThePlayerPawnDataManager")
 }
 
 /// P5a: the controller's `PlayerClass`, read whether or not P4 found a manager; None means no player class.
-fn player_class(vm: &mut Vm, controller: ObjRef) -> Result<Option<ObjRef>, VmError> {
+fn player_class(vm: &Vm, controller: ObjRef) -> Result<Option<ObjRef>, VmError> {
     let p = declared(vm, controller, "PlayerClass", "an object property", is_object)?;
     object_value(vm.space.read(controller, PropAddr::scalar(p))?, "PlayerClass")
 }
 
 /// P5b: the player class's `SkillTreePath`, read only when P4 gave a manager and P5a a player class.
-fn skill_tree_path(vm: &mut Vm, class: ObjRef) -> Result<String, VmError> {
-    loaded(vm, class)?;
+fn skill_tree_path(vm: &Vm, class: ObjRef) -> Result<String, VmError> {
+    resident(vm, class, "the player class")?;
     let p = declared(vm, class, "SkillTreePath", "a string property", is_str)?;
     match vm.space.read(class, PropAddr::scalar(p))? {
         Value::Str(s) => Ok(s.to_string()),
@@ -206,14 +215,10 @@ fn request_row(manager: Option<ObjRef>, path: Option<String>, controller: ObjRef
     })
 }
 
-/// W3 with A3: the request is recorded as pending, and nothing is delivered.
-fn record_request(vm: &mut Vm, request: SkillTreeRequest) -> Result<(), VmError> {
-    pending(vm)?
-        .try_borrow_mut()
-        .map_err(|_| VmError::ServiceBorrowed("ow_skills::tree::init::PendingSkillTreeLoads"))?
-        .requests
-        .push(request);
-    Ok(())
+/// W3 with A3: the request is recorded as pending, and nothing is delivered. The queue's borrow was taken before W1
+/// (review r1 of #475), so this cannot fail.
+fn record_request(queue: &mut PendingSkillTreeLoads, request: SkillTreeRequest) {
+    queue.requests.push(request);
 }
 
 /// W4 with A4 and A5: the reset of the tree this call has just made (no definition, no listener) changes nothing,
@@ -222,15 +227,11 @@ fn reset_new_tree(_vm: &mut Vm, _controller: ObjRef, _tree: ObjRef) -> Result<()
     Ok(())
 }
 
-/// A failure after the first write (the hub's rule): a `NotYet` is terminal and gets the partial-writes prefix once,
-/// its kind and record kept; any other error passes unchanged. Nothing is rolled back.
+/// A failure after the first write (the hub's rule): `ow_world::pools::after_partial_writes`, which adds the
+/// "stopped after partial writes: " prefix unless the message already starts with it, keeping kind and record; any
+/// other error passes unchanged. Nothing is rolled back.
 fn after_write(e: VmError) -> VmError {
-    match e {
-        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
-            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-        }
-        other => other,
-    }
+    ow_world::pools::after_partial_writes(e)
 }
 
 /// What the preflight decided.
@@ -240,15 +241,32 @@ struct Plan {
     request: Option<SkillTreeRequest>,
 }
 
-/// P1 to P6 (module documentation). Nothing is written.
-fn preflight(vm: &mut Vm, controller: ObjRef) -> Result<Plan, VmError> {
-    let tree_prop = declared(vm, controller, "PlayerSkillTree", "an object property", is_object)?;
-    if let Some(tree) = object_value(vm.space.read(controller, PropAddr::scalar(tree_prop))?, "PlayerSkillTree")? {
-        return Err(existing_tree(tree));
+/// P3: the tree class, resolved when the native was bound ([`Pack`]); a class the binding could not resolve is looked
+/// up now, so its typed lookup error is the answer. The tree field's declared class must accept it (review r1 of
+/// #475), else the heap's own typed `WrongClass` error, before W1.
+fn tree_class(vm: &mut Vm, resolved: Option<ClassId>, tree_prop: PropId) -> Result<ClassId, VmError> {
+    let class = match resolved {
+        Some(c) => c,
+        None => vm.find_class(TREE_CLASS)?,
+    };
+    if let Some(PropKind::Object { class: wanted }) = vm.space.classes.decl(tree_prop).map(|d| d.kind.clone())
+        && !vm.space.classes.is_child_of(class, wanted)
+    {
+        return Err(HeapError::WrongClass { expected: wanted, found: class }.into());
     }
-    let tree_class = vm.find_class(TREE_CLASS)?;
-    let manager = pawn_data_manager(vm)?;
+    Ok(class)
+}
+
+/// P1 to P6 (module documentation). Nothing is written and nothing is loaded. P5a (a read of the controller only)
+/// comes before P4, so a bad `PlayerClass` is refused before the world is asked for its globals.
+fn preflight(vm: &mut Vm, controller: ObjRef, resolved: Option<ClassId>) -> Result<Plan, VmError> {
+    let tree_prop = declared(vm, controller, "PlayerSkillTree", "an object property", is_object)?;
+    if object_value(vm.space.read(controller, PropAddr::scalar(tree_prop))?, "PlayerSkillTree")?.is_some() {
+        return Err(existing_tree());
+    }
+    let tree_class = tree_class(vm, resolved, tree_prop)?;
     let class = player_class(vm, controller)?;
+    let manager = pawn_data_manager(vm)?;
     let path = match (manager, class) {
         (Some(_), Some(class)) => Some(skill_tree_path(vm, class)?),
         _ => None,
@@ -259,14 +277,29 @@ fn preflight(vm: &mut Vm, controller: ObjRef) -> Result<Plan, VmError> {
 
 /// `InitPlayerSkillTree()` on `controller` (module documentation).
 pub fn init_player_skill_tree(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
-    let plan = preflight(vm, controller)?;
+    let resolved = vm.space.classes.by_path(TREE_CLASS);
+    init_with(vm, controller, resolved)
+}
+
+fn init_with(vm: &mut Vm, controller: ObjRef, resolved: Option<ClassId>) -> Result<(), VmError> {
+    let plan = preflight(vm, controller, resolved)?;
+    // The queue's borrow, taken before W1 when there is a request (review r1 of #475).
+    let queue = pending(vm)?;
+    let mut held = match plan.request {
+        Some(_) => Some(
+            queue
+                .try_borrow_mut()
+                .map_err(|_| VmError::ServiceBorrowed("ow_skills::tree::init::PendingSkillTreeLoads"))?,
+        ),
+        None => None,
+    };
     // W1: the first write.
     let tree = ow_vm::interp::instantiate_from_defaults(vm, plan.tree_class)?;
-    let rest = |vm: &mut Vm| -> Result<(), VmError> {
+    let mut rest = |vm: &mut Vm| -> Result<(), VmError> {
         vm.space.heap.get_mut(tree)?.outer = Some(controller);
         vm.space.write(controller, PropAddr::scalar(plan.tree_prop), Value::Object(Some(tree)))?;
-        if let Some(request) = plan.request.clone() {
-            record_request(vm, request)?;
+        if let (Some(request), Some(q)) = (plan.request.clone(), held.as_mut()) {
+            record_request(q, request);
         }
         reset_new_tree(vm, controller, tree)
     };
@@ -283,12 +316,14 @@ impl NativePack for Pack {
             return Ok(());
         }
         pending(vm)?;
+        // P3's class metadata, resolved at setup (review r1 of #475); a failure here is answered by P3 at call time.
+        let resolved = vm.find_class(TREE_CLASS).ok();
         ow_combat::hit::bind(
             vm,
             PATH,
-            Rc::new(|c: &mut NativeCall<'_>| {
+            Rc::new(move |c: &mut NativeCall<'_>| {
                 let controller = c.this.ok_or_else(|| bad("called without a controller"))?;
-                init_player_skill_tree(c.vm, controller)?;
+                init_with(c.vm, controller, resolved)?;
                 Ok(Value::None)
             }),
         )
