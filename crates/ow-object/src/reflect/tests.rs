@@ -1479,3 +1479,55 @@ fn a_class_lists_its_states_and_their_functions() {
     // The state's function is not a class-level function.
     assert!(!info.functions.contains_key("tick"));
 }
+
+/// `implements_declared` (reviews r1 and r2 of #455) over [`interface_fixture`] plus invented classes: `Gone` is a
+/// class import from a package no store holds (an entry that resolves to nothing); `Forward` names `[IThing, Gone]`
+/// and `Backward` `[Gone, IThing]`; `BadEntry` names an export that is not a class; `Orphan` derives from `Gone`, and
+/// `ViaOrphan` names `Orphan`; `LostParent` derives from `Gone` and names nothing.
+#[test]
+fn implements_declared_is_strict_order_free_and_keeps_its_errors() {
+    let (mut d, _) = interface_fixture();
+    let obj = 1; // `Object`, the fixture's first export
+    let missing = d.p.add_import("Core", "Package", 0, "MissingPkg");
+    let gone = d.p.add_import("Core", "Class", missing, "Gone");
+    let not_a_class = d.p.add_export(obj, "NotAClassThing", ints(&[0, 0, 0, 0]));
+    let tree = Tree::new("implements-declared");
+    // The interface's export reference, read back from the fixture by name.
+    let bytes_probe = d.build();
+    tree.write("Core.upk", &bytes_probe);
+    let iface_ref = {
+        let mut store = tree.store();
+        let id = store.load_path(&tree.0.join("Core.upk")).unwrap();
+        CodeIndex::new().find_export(&store, id, "IThing")
+    };
+    d.real_class("Forward", obj, obj, 2, &[iface_ref, gone], None);
+    d.real_class("Backward", obj, obj, 2, &[gone, iface_ref], None);
+    d.real_class("BadEntry", obj, obj, 2, &[not_a_class], None);
+    let orphan = d.real_class("Orphan", gone, obj, 2, &[], None);
+    d.real_class("ViaOrphan", obj, obj, 2, &[orphan], None);
+    d.real_class("LostParent", gone, obj, 2, &[], None);
+    tree.write("Core.upk", &d.build());
+    let mut store = tree.store();
+    let mut index = CodeIndex::new();
+    let mut key = |path: &str| index.find_class(&mut store, path).unwrap();
+    let thing = key("Core.IThing");
+    let names = ["Impl", "Derived", "Plain", "Forward", "Backward", "BadEntry", "ViaOrphan", "LostParent"];
+    let keys: Vec<ClassKey> = names.iter().map(|n| key(&format!("Core.{n}"))).collect();
+    let mut ask = |k: ClassKey| index.implements_declared(&mut store, k, thing);
+    assert_eq!(ask(keys[0]), Ok(Some(true)), "own table");
+    assert_eq!(ask(keys[1]), Ok(Some(true)), "a super class's table");
+    assert_eq!(ask(keys[2]), Ok(Some(false)), "names nothing");
+    // Item 2: an entry that resolves to nothing makes the answer unreadable in either order.
+    assert_eq!(ask(keys[3]), Ok(None), "[IThing, Gone]");
+    assert_eq!(ask(keys[4]), Ok(None), "[Gone, IThing]");
+    // Item 1: a non-class entry is its typed error, on the first call and from the cache on the next.
+    for call in 0..2 {
+        match ask(keys[5]) {
+            Err(ReflectError::NotAClass(path)) => assert!(path.contains("NotAClassThing"), "{path}"),
+            other => panic!("call {call}: expected NotAClass, got {other:?}"),
+        }
+    }
+    // Item 3: a target, or the source, whose super class reference resolves to nothing is unreadable, not absent.
+    assert_eq!(ask(keys[6]), Ok(None), "the target's chain is incomplete");
+    assert_eq!(ask(keys[7]), Ok(None), "the source's chain is incomplete");
+}

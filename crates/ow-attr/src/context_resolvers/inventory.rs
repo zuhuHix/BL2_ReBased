@@ -62,8 +62,10 @@ fn equipment_location(cx: &mut EvalCx<'_>, resolver: ObjRef) -> Result<u8, AttrE
 /// structural fallback and drops no unresolved table entry. Unreadable, and anything else that keeps the answer from
 /// being established, is the note's named `NotYet { NotRead }`: "whether the source class implements `IBodyPawn`",
 /// with the reason after it, never a "no". Those cases are: no definition store, a class with no package export
-/// behind it, the interface's package missing from a store that holds packages, a table that cannot be read, and an
-/// ancestry through an engine-native stand-in. A store with packages but no `IBodyPawn` class has no implementer.
+/// behind it, the interface's package missing from a store that holds packages, a table that cannot be read (an
+/// entry or a chain that does not resolve, review r2 of #455), and an ancestry through an engine-native stand-in. A
+/// store with packages but no `IBodyPawn` class has no implementer. Any other lookup failure (a table entry naming a
+/// non-class export, a package that fails to load) is its typed error, not this `NotYet`.
 fn declares_body_pawn(cx: &mut EvalCx<'_>, source: ObjRef) -> Result<bool, AttrError> {
     let unknown = |why: String| -> AttrError {
         NotYet::not_read(
@@ -94,7 +96,7 @@ fn declares_body_pawn(cx: &mut EvalCx<'_>, source: ObjRef) -> Result<bool, AttrE
         }
         Err(e) => return Err(DefError::from(e).into()),
     };
-    match code.implements_declared(store, key, iface) {
+    match code.implements_declared(store, key, iface).map_err(DefError::from)? {
         Some(true) => Ok(true),
         None => Err(unknown(format!("the interface tables on the ancestry of {class_path} cannot be read"))),
         Some(false) => match native_stand_in(space, class) {

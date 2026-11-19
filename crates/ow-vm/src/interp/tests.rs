@@ -2483,6 +2483,55 @@ fn a_panic_on_the_vm_thread_is_handed_back() {
     assert_eq!(super::on_vm_stack(|| 7).unwrap(), 7);
 }
 
+/// A resolver script that runs past the step limit (review r2 of #455): in Off the VM's `StepLimit` crosses the
+/// attribute boundary typed and comes back as itself; Reference keeps the text conversion, `VmError::Attr(World)`.
+#[test]
+fn a_resolver_script_past_the_step_limit_is_typed_in_off_and_text_in_reference() {
+    use ow_attr::api::{AttrError, AttrWorld};
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "ObjectProperty"]);
+    let object = t.class("Object", 0);
+    let typed = |name: &str| Param {
+        type_ref: object,
+        ..param("Object", name, 0)
+    };
+    let params = [typed("Attribute"), typed("AttributeContextSource")];
+    let looper = t.class("Looper", object);
+    script(&mut t, looper, "GetAttributeContext", &params, Some(("Object", object)), &[], |_, a| {
+        // `while (true) {}`: a jump to the start of the body.
+        a.stmt().raw(&[0x06]).w(0);
+        a.end();
+    });
+    t.class("Plain", object);
+    let bytes = t.build();
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut r = run_on(&bytes, mode);
+        let vm = &mut r.vm;
+        vm.limits.step_limit = 10_000;
+        let attr = {
+            let c = vm.find_class("Core.Plain").unwrap();
+            vm.instantiate(c, "").unwrap()
+        };
+        let resolver = {
+            let c = vm.find_class("Core.Looper").unwrap();
+            vm.instantiate(c, "").unwrap()
+        };
+        let e = vm.script_context(resolver, attr, None).unwrap_err();
+        match mode {
+            ParityMode::Off => {
+                assert!(matches!(&e, AttrError::WorldTyped(_)), "{e:?}");
+                assert_eq!(VmError::from(e), VmError::StepLimit);
+            }
+            _ => {
+                assert_eq!(e, AttrError::World("step limit exceeded (runaway script?)".into()));
+                assert_eq!(
+                    VmError::from(e),
+                    VmError::Attr(AttrError::World("step limit exceeded (runaway script?)".into()))
+                );
+            }
+        }
+    }
+}
+
 /// `AttrWorld::script_context` on the VM (lane FIX-DESIGNER-RESOLVER, decision 2026-11-16-62): the resolver class's
 /// script `GetAttributeContext(Attribute, AttributeContextSource)` runs with the two by parameter name and its object
 /// is the answer (invented classes: `Echo` returns the source, `Mute` returns None, `Count` an int, `Native` declares
