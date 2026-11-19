@@ -15,7 +15,7 @@ reaches these three natives in this order.
 |---|---|---|---|---|
 | `WillowPawn.SetDefaultPhysics` | none, no result | `WillowMind.ApplyCharacterClassDefaults` | high for the gates and the collision copy; medium for the AI pawn's default physics; low for two unnamed queries | UNVERIFIED |
 | `WillowPawn.GetExpLevel` / `WillowAIPawn.GetExpLevel` | none; returns an int (one native serves both declarations) | the passive-skill grade | high for the routing, medium-high for the field | UNVERIFIED |
-| `WillowMind.RecalculateAttributeInitializedState` | none, no result | after the pawn's `ApplyAttributeStartingValues` | high for the structure, high for the field names | UNVERIFIED |
+| `WillowMind.RecalculateAttributeInitializedState` | none, no result | after the pawn's `ApplyAttributeStartingValues` | high for the structure; medium for `AIClass` / `MyWillowPawn` (fitted layout) | UNVERIFIED |
 
 ## A layout correction that applies to all three
 
@@ -27,52 +27,51 @@ are named the same way (a fit). Correcting the tool is a separate lane; the evid
 
 ## 1. `WillowPawn.SetDefaultPhysics()`
 
-The script native calls one routine on the pawn; no arguments, no result. In order:
+No arguments, no result. In order:
 
-1. **Gates.** It does nothing when the pawn is gone (a pawn query that answers `bDeleteMe` or `bIsDead`), when the pawn's
+1. **Gates.** It does nothing when the pawn's `bDeleteMe` or `bIsDead` is set, when the pawn's
    `ObjectArchetype` is not a `Pawn`, when the pawn has no `SMComponent`, or when that component's current special move
    (`CurrentSMData.SMD`) is a `SpecialMove_Spawned` (a pawn still in its spawn move keeps its physics).
 2. **Physics.** The pawn's physics becomes its **default physics** (an AI pawn's rule below), through the pawn's physics
    setter (on `WillowAIPawn` an override with an extra step when changing into `PHYS_NavMeshWalking`: the mind's navigation
    handle is re-anchored; not read further).
 3. **`bCollideWorld`** is copied from the archetype.
-4. **Collision.** Unless two pawn queries both answer true (not named: they read `WillowPawn` fields inside the unplaced range
-   above, one of them through the pawn's damageable interface; low), the pawn's collision is set from the archetype's
-   `bCollideActors`, `bBlockActors` and `bIgnoreEncroachers`.
+4. **Collision.** Unless two pawn queries both answer true (not named: they read `WillowPawn` fields the layout tool does
+   not place, one of them through the pawn's damageable interface; low), the pawn's collision is set from the archetype's
+   `bCollideActors`, `bBlockActors` and `bIgnoreEncroachers`. **Open:** until the two queries are named, an
+   implementation returns `NotYet` for this branch rather than picking one.
 
-**An AI pawn's default physics** (`WillowAIPawn`'s own virtual; values named by the package's `EPhysics`):
+**An AI pawn's default physics** (`WillowAIPawn` overrides the default-physics rule; values named by the package's `EPhysics`):
 - no `AIClass`: `PHYS_Falling`;
 - the class's `bIsTurret`: `PHYS_None`;
 - the pawn has no `MyWillowMind`, or the mind has no `WillowNav` (its navigation handle): the class's `Physics`;
 - otherwise, when one query of the navigation handle answers false (not named) and the class's `Physics` is not
-  `PHYS_Flying`: `PHYS_NavMeshWalking`; else `PHYS_Flying`.
+  `PHYS_Flying`: `PHYS_NavMeshWalking`; else `PHYS_Flying`. **Open:** until that query is named, an implementation returns
+  `NotYet` for this branch rather than picking one.
 
 What script sees: the pawn's `Physics`, `bCollideWorld`, `bCollideActors`, `bBlockActors` and `bIgnoreEncroachers`. The
 stock-UE3 meaning of the physics setter (contacts, floor) is not part of this reading.
 
 ## 2. `GetExpLevel()` on a pawn
 
-- The script native (declared on `WillowPawn` and again on `WillowAIPawn`; one native routine serves both) returns what the
-  pawn's own `IBalancedActor` implementation answers: it calls that interface's `GetExpLevel` slot through the interface
-  table embedded in the pawn.
-- **On a `WillowAIPawn` the answer is the pawn's own `ExpLevel` int** (medium-high). The interface table's slots follow the
-  interface's declared order (`GetGameStage`, `GetAwesomeLevel`, `GetExpLevel`, `GetExpLevelForEquip`, `SetGameStage`,
-  `SetAwesomeLevel`, `SetExpLevel`, `GetBalancedActorTypeIdentifier`); each getter and its setter touch the same field, and
-  the three fields are `GameStage`, `ExpLevel` and `AwesomeLevel` after the layout correction above. It reads no other
-  object: not the mind, the AI class or the world.
+- The script native (declared on `WillowPawn` and again on `WillowAIPawn`; one native serves both) returns the pawn's own
+  `IBalancedActor.GetExpLevel` answer.
+- **On a `WillowAIPawn` that is its own `ExpLevel` int** (medium-high). Each `Get*` / `Set*` pair of the interface reads and
+  writes one field (`GameStage`, `AwesomeLevel`, `ExpLevel`). It reads no other object: not the mind, the AI class or the
+  world.
 - Nothing is computed: the value is whatever was stored (by the spawn's balance code or `SetExpLevel`).
 
 ## 3. `WillowMind.RecalculateAttributeInitializedState()`
 
-The shared script native (NATIVE_LEVEL_UP_ATTRIBUTES.md section 1: one thunk for `Controller`, `WillowPlayerController` and
-`WillowMind`) reaches `WillowMind`'s own override. In order:
+The script native is shared by `Controller`, `WillowPlayerController` and `WillowMind` (NATIVE_LEVEL_UP_ATTRIBUTES.md
+section 1); `WillowMind` overrides the behaviour as follows. In order:
 
 1. **Skill refresh.** When the world's game info is a `WillowGameInfo`: its skill manager is fetched with the routine behind
    `WillowGameInfo.GetSkillManager` (lane FIX-SKILLMGR-A's note: made lazily on the authority when absent). Unless the
    manager's `bUpdatingSkills` is set, that flag is set; every `ActiveSkills` entry whose `SkillInstigator` is this mind gets
    `bForceRefreshModifiersNextTick` set and one call on the skill (not read further); then `bUpdatingSkills` is cleared.
 2. **The controller-class part** (the same routine as the `Controller` behaviour of NATIVE_LEVEL_UP_ATTRIBUTES.md section 1
-   step 1 and 2): with a pawn that is not excluded and a `CharacterClass`, the pawn's `EncumbranceResistance` value from the
+   step 1 and 2): with a pawn that is not a vehicle (that note's step 1; the test was not re-read here) and a `CharacterClass`, the pawn's `EncumbranceResistance` value from the
    class and the damage-modifier attributes re-initialised (base from the class's init data, value recomputed from the
    stack); then, always, every pool of the controller's `ResourcePoolManager` is rebased. This pass counted 13
    base-and-recompute writes where that note lists 12: not reconciled here.
