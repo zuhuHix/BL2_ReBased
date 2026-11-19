@@ -62,7 +62,7 @@ So an inherited auto state is found. For example, `WillowCoopGameInfo` declares 
 ## 2. When an actor enters its auto state
 
 - **`Actor.SetInitialState`** (script) sets `bScriptInitialized`, then calls `GotoState('Auto')`. It does nothing else.
-  Six classes and one state override it (script, read for review r1 of #540):
+  Six classes and one state override it (script, as read by the r1 reviewer of #540 and relayed; not re-read by this lane):
   - **`Volume` and `WillowInteractiveSwitch`:** with associated actors, `GotoState` to `AssociatedTouch` (the
     switch's own associated volumes, for `WillowInteractiveSwitch`); otherwise `Actor.SetInitialState`, so `Auto`.
   - **`PickupFactory`:** `Disabled` when `InventoryType` is None, `WaitingForMatch` when `bIsSuperItem` is set,
@@ -121,7 +121,7 @@ usual.
 and `Stop`. There is no latent call (no `Sleep`, no `FinishAnim`), no `PushState`, and no label other than `Begin`. The
 port's state machine already runs all of these (`ow-vm` `states`, decision 2026-11-15-27).
 
-## 4. What the port does today (crates/ow-vm/src/states.rs and the world tick)
+## 4. What the port does today, before #545 (crates/ow-vm/src/states.rs and the world tick)
 
 - **`GotoState`, the state change routine, the push stack, labels, probes and the state-code step** are implemented
   in Off, from NATIVE_ENGINE_CORE.md.
@@ -149,7 +149,7 @@ port's state machine already runs all of these (`ow-vm` `states`, decision 2026-
 - Reference is unchanged (the C++ approximation).
 
 **2. Typed refusals:**
-- **A class with bit 1 clear whose chain has more than one auto state in one class:** `NotYet { NotRead }`. The
+- **Any class in the chain with more than one auto state of its own** (checked first, whatever the class bit): `NotYet { NotRead }`. The
   engine takes the first in field-list order, and the port's state list does not keep that order. The packages hold no
   such class (section 1), so this guard is never reached on installed data.
 - **The oracle broken:** a class with bit 1 set and an auto state in its chain, or bit 1 clear and none found. This
@@ -162,8 +162,8 @@ port's state machine already runs all of these (`ow-vm` `states`, decision 2026-
 `World::set_state_step` set to `ow_vm::states::process_state`, next to where the host installs its physics step.
 `set_state_step` can be set once, and `bring_up_for_play` is handed an existing world (`ow-world`
 `world/mapload/bringup.rs`), so the bring-up cannot install it itself. Today's `LayerAbsent` stays for a world that
-does not install it. This belongs to the map-load lanes (SLICE_MAPLOAD.md (#530)); the implementer of item 1 may add
-it, or leave it to lane 4. `process_state` already runs state code only on the authority.
+does not install it. This is left to the map-load lanes (lane 4 of SLICE_MAPLOAD.md (#530)); #545 does not install
+it. `process_state` already runs state code only on the authority.
 
 **4. Tests the implementer can build** (synthetic packages, `package()` / `tag()` helpers):
 - a class flagged auto (no state);
@@ -193,7 +193,7 @@ it, or leave it to lane 4. `process_state` already runs state code only on the a
 1. **UNVERIFIED in the running game:** the classes' resolved states. A bl-sdk read of `GetStateName()` right after
    load, on the game info, the local player controller, a held weapon and a dropped pickup, would confirm section 3's
    table. This port expects `PendingMatch`, `PlayerWaiting`, `Inactive` and `Pickup`.
-2. **Closed** (review r1 of #540): the other overrides were read; section 2 says where each goes.
+2. **Closed on relayed evidence** (review r1 of #540): the r1 reviewer read the other overrides; section 2 says where each goes. Not re-read by this lane; a re-read with `research/script_disasm.py` would confirm it.
 3. The game info's `StartGameState` range for `StartMatch`. The state code compares it against two small values. What
    sets `StartGameState` before the first tick (the game info's `PreBeginPlay` copies it from an older GRI when there is
    one) is the map-load lanes' to trace.
