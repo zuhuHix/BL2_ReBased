@@ -40,8 +40,13 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-BLACKMARKET-RESOLVER, analyst 
 
 The live checks now name their starting states and before/after fields, and mark the open verification gaps.
 
+**Review r2 of #451.** On a cold lookup the Off preflight takes the effective index from the pending cache
+assignments (last occurrence, or -1 when unlisted); it does not reread the field. When the growth that index needs is
+unsupported, the answer is the array-growth `NotYet` with nothing written. The warm-cache check now stages a different
+listed upgrade at -1 and expects it to stay -1, and the unlisted check says how the transient definition is bound to the
+resolver.
+
 **Open (in the note).**
 
 - Which `WillowGame` class the context must be. `WillowPlayerController` is inferred.
 - `IncBlackMarketUpgrade`'s body.
-- What a dry evaluation should do with the two writes a read makes.
