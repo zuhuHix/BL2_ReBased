@@ -8,8 +8,8 @@ decision tool allows two digits only.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
 - **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
   relaxed.
-- **The base:** `fix/rust-willow-globals` (#476, a0653806, after its rebase onto main), the topmost PR links 6 and
-  7's stop needs. The stop is reached only once #476's globals natives and #462's `GetInventoryDefinition` are both
+- **The base:** first `fix/rust-willow-globals` (#476, a0653806), the topmost PR links 6 and 7's stop needed; #476
+  has since landed, and this PR is now based on main. The stop is reached only once #476's globals natives and #462's `GetInventoryDefinition` are both
   there.
 
 **How the stop was found.** On a local, unpushed integration of main a629f56f with #455 (801e956b), #462 (be10d201)
