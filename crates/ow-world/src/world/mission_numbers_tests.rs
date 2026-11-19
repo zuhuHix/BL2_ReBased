@@ -184,10 +184,17 @@ fn bind_test(vm: &mut Vm, path: &str, f: impl Fn(&mut NativeCall<'_>) -> Result<
 /// The toy world: a level whose `WorldInfo.GRI` is a `WillowGameReplicationInfo` with a tracker (`world` false: no
 /// level at all), the controller, and this module's natives bound as the world binds them in Off.
 fn toy(world: bool) -> Toy {
+    toy_with(world, &[])
+}
+
+/// [`toy`] with more invented packages after the four (review r1 of #533: a second package with the same native).
+fn toy_with(world: bool, extra: &[(&str, &[u8])]) -> Toy {
     let dir = std::env::temp_dir().join(format!("ow-world-mn-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let (e, w, g, d) = (engine(), willow(), gfxui(), definitions());
-    let files: [(&str, &[u8]); 4] = [("Engine.upk", &e), ("WillowGame.upk", &w), ("GFxUI.upk", &g), ("GD_ToyMissions.upk", &d)];
+    let mut files: Vec<(&str, &[u8])> =
+        vec![("Engine.upk", &e), ("WillowGame.upk", &w), ("GFxUI.upk", &g), ("GD_ToyMissions.upk", &d)];
+    files.extend_from_slice(extra);
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     let state = Rc::new(RefCell::new(Tracker::default()));
@@ -845,16 +852,73 @@ fn the_objective_telemetry_answers_nothing_for_every_player() {
     let name = t.vm.space.names.intern("M_Toy");
     let args = |p: Value| vec![p, Value::Int(2), Value::Int(1), Value::Int(3), Value::Name(name)];
     let pc = t.pc;
-    let before_pc = t.vm.space.heap.get(pc).unwrap().slots.clone();
-    let before_objects = t.vm.space.heap.len();
-    let before_log = t.vm.log.len();
+    // Review r1 of #533, item 2: the whole heap (every object's slots, its load state, every allocation), the RNG
+    // streams and the logs are unchanged. TODO(#518): switch to its committed-write, draw and load-transition
+    // counters once they are on this base; until then the whole-heap snapshot stands in for them.
+    let heap = |t: &Toy| format!("{:?}", t.vm.space.heap);
+    let (before_heap, before_rng, before_log) = (heap(&t), t.vm.rng.clone(), t.vm.log.len());
     assert_eq!(t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Object(None))).unwrap(), Value::None);
     assert_eq!(t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Object(Some(pc)))).unwrap(), Value::None);
-    assert_eq!(t.vm.space.heap.get(pc).unwrap().slots, before_pc, "the player is not written");
-    assert_eq!(t.vm.space.heap.len(), before_objects, "nothing is made or loaded");
+    assert_eq!(heap(&t), before_heap, "no write, no allocation and no load, on any object");
+    assert!(t.vm.rng == before_rng, "no draw");
     assert_eq!(t.vm.log.len(), before_log, "nothing is logged");
+    assert!(t.vm.defs.take_log().is_empty(), "the store logged nothing");
     let e = t.call(RECORD_OBJECTIVE_CHANGED, service, args(Value::Int(7))).unwrap_err();
     assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+    // An omitted player argument (no arguments at all) is the VM's ordinary argument error, and writes nothing.
+    let before_heap = heap(&t);
+    let f = t.vm.find_function(RECORD_OBJECTIVE_CHANGED).unwrap();
+    assert!(t.vm.call(f, Some(service), vec![]).is_err(), "an omitted player is refused");
+    assert_eq!(heap(&t), before_heap, "the refusal writes nothing");
+}
+
+/// `OtherGame.upk` (invented): a `WillowLeviathanService` of another package with the same native and signature, so
+/// it shares the dispatch key `WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(object,int,int,int,
+/// name)` (review r1 of #533, item 1).
+fn other_service() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "Function", "IntProperty", "ObjectProperty", "NameProperty"]);
+    let engine = t.p.add_import("Core", "Package", 0, "Engine");
+    let object = t.p.add_import("Core", "Class", engine, "Object");
+    let service = t.class("WillowLeviathanService", object);
+    let spec = FunctionSpec::new(NATIVE, "RecordMissionObjectiveChangedEventForPlayer");
+    let params = [
+        param("Object", "ForPlayer", 0, object),
+        param("Int", "ObjectiveIndex", 0, 0),
+        param("Int", "ObjectiveProgress", 0, 0),
+        param("Int", "PreviousObjectiveProgress", 0, 0),
+        param("Name", "MissionDefinition", 0, 0),
+    ];
+    t.function(service, "RecordMissionObjectiveChangedEventForPlayer", &params, None, &[], &spec, |_| None);
+    t.p.build()
+}
+
+/// The cross-package collision (review r1 of #533, item 1): another package's same-key native does not get the
+/// objective telemetry's no-op. It is unbound under the VM's stub policy, and nothing is written; the stock
+/// declaration still answers nothing. This holds on this base by the body's declaration check, and with #519 by its
+/// package-qualified dispatch.
+#[test]
+fn another_package_s_objective_telemetry_is_not_the_no_op() {
+    let other = other_service();
+    let mut t = toy_with(true, &[("OtherGame.upk", &other)]);
+    let stock = t.vm.find_function(RECORD_OBJECTIVE_CHANGED).unwrap();
+    let foreign = t.vm.find_function("OtherGame.WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer").unwrap();
+    assert_ne!(stock, foreign);
+    let key = t.vm.function(stock).unwrap().native_key.clone().unwrap();
+    assert_eq!(t.vm.function(foreign).unwrap().native_key.as_deref(), Some(key.as_str()), "one dispatch key");
+    let name = t.vm.space.names.intern("M_Toy");
+    let args = |p: Option<ObjRef>| vec![Value::Object(p), Value::Int(2), Value::Int(1), Value::Int(3), Value::Name(name)];
+    let class = t.vm.find_class("OtherGame.WillowLeviathanService").unwrap();
+    let service = t.vm.space.alloc(class, "OtherService", None, Origin::Runtime).unwrap();
+    let heap = format!("{:?}", t.vm.space.heap);
+    let pc = t.pc;
+    match t.vm.call(foreign, Some(service), args(Some(pc))) {
+        Err(VmError::UnboundNative(k)) => assert_eq!(k, key),
+        other => panic!("expected UnboundNative, got {other:?}"),
+    }
+    assert_eq!(format!("{:?}", t.vm.space.heap), heap, "nothing is written");
+    let stock_class = t.vm.find_class("WillowGame.WillowLeviathanService").unwrap();
+    let mine = t.vm.space.alloc(stock_class, "ToyService", None, Origin::Runtime).unwrap();
+    assert_eq!(t.call(RECORD_OBJECTIVE_CHANGED, mine, args(Some(pc))).unwrap(), Value::None, "the stock one answers");
 }
 
 /// Review r2 of #480, L1, after the engine gate's retirement (lane IMPL-PLAYTHROUGH-VIRTUAL): the outer call no longer

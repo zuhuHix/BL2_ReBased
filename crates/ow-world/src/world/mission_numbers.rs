@@ -88,7 +88,13 @@
 //!   from the three integers or the name: the script's calls pass the old value third and the new value fourth, and
 //!   what each means stays UNVERIFIED. A port answer, UNVERIFIED. No telemetry-specific refusal or preflight; the
 //!   ordinary argument errors apply, as for the status event (a player argument that is not an object is refused).
-//!   The same known limit as the status event's: it is bound by its dispatch key.
+//!   **Scoped to its own declaration** (review r1 of #533, item 1): the VM on this base binds by the dispatch key,
+//!   which names no package, so a same-named class of another package with the same native reaches this body too.
+//!   The body checks the called function's resolved path and answers only for
+//!   `WillowGame.WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer` (case-insensitive). Any other
+//!   declaration gets the unbound behaviour: `VmError::UnboundNative` under the VM's stub policy, or, where the policy
+//!   allows the key, the legacy `UNIMPLEMENTED <key>` line and no value. #519's package-qualified dispatch makes the
+//!   check redundant once it lands; it stays harmless then. The status event above keeps the known limit until #519.
 //! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
 //!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
 //!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
@@ -510,7 +516,26 @@ pub(crate) fn n_status_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value
 /// The objective telemetry (module documentation): nothing, with no write, for every player (ruling R3, per
 /// NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3).
 pub(crate) fn n_objective_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    if !declared_at(c, RECORD_OBJECTIVE_CHANGED) {
+        return outside_declaration(c);
+    }
     object_of(c.arg(0)?.clone(), "ForPlayer", RECORD_OBJECTIVE_CHANGED)?;
+    Ok(Value::None)
+}
+
+/// Whether the native being called is the declaration at `path` (compared case-insensitively), not a same-key native
+/// of another package (review r1 of #533, item 1).
+fn declared_at(c: &NativeCall<'_>, path: &str) -> bool {
+    c.vm.function(c.function).is_some_and(|d| d.path.as_str().eq_ignore_ascii_case(path))
+}
+
+/// A same-key native of another declaration: the unbound behaviour (module documentation). Nothing is written.
+fn outside_declaration(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let key = c.vm.function(c.function).and_then(|d| d.native_key.clone()).unwrap_or_default();
+    if !c.vm.stub_policy.allows_stub(&key) {
+        return Err(VmError::UnboundNative(key));
+    }
+    c.vm.log.push(format!("UNIMPLEMENTED {key}"));
     Ok(Value::None)
 }
 

@@ -21,8 +21,17 @@ placeholder; the hub gives it.
     telemetry-specific refusal or preflight.
   - The ordinary argument errors still apply, as for the status event: a player argument that is not an object is a
     `VmError::Script`.
-  - It is bound by its dispatch key, the same known limit as the status event's (#509). Package-qualified dispatch
-    comes with #519.
+  - **Review r1 of #533, item 1 (high), settled by #519.** The VM on this base binds by the dispatch key, which
+    names no package, so a same-named class of another package with the same signature would also get the no-op (the
+    status sibling of #509 has the same pattern). #519's package-qualified dispatch settles it across the VM; #533 is
+    rebased onto main after #519 lands. Until then the body checks the called function's resolved path and gives any
+    other declaration the unbound behaviour: `UnboundNative` under the stub policy, or the legacy stub line where the
+    policy allows the key. Test: `another_package_s_objective_telemetry_is_not_the_no_op`, which holds on this base
+    and with #519. The status sibling is left to #519.
+  - **Review r1 of #533, item 2.** The no-effect test now compares the whole heap (every object's slots, its load
+    state and every allocation), the RNG streams, the VM log and the store's log before and after, and adds an omitted
+    player (the ordinary argument error, with nothing written). #518's counters are not on this base: a TODO in the
+    test names them.
 - **Test** (synthetic, `mission_numbers_tests.rs`): `the_objective_telemetry_answers_nothing_for_every_player`. It
   checks:
   - the dispatch key the note names;
