@@ -157,6 +157,16 @@ Off `--slice-gate` strict, same base with and without the call: 0 ok / 11 NotYet
 in `maya:8` (link 1 records 1 step, `maya:8`; the rest are blocked by link 1). The other 8 rows are byte-identical.
 ctest and verify_packages not run (no C++ change). No real-game session.
 
+**MAP-ROUTE-FOLLOWUP (2026-11-19, pc-hummer, on #556 at 07b1ffda):** AI-assisted (Claude Code, Opus 5.5). Review r1 of
+#556's five parked findings: the adopted globals' own definition, adopt's mark test, `SetGameStage` on the possessed
+pawn, no director or waypoint made on the map route, `--map` parse tests. `cargo test -p ow-mission` 213 passed / 0
+failed / 1 ignored; `cargo test --workspace --locked -j 2` 2,474 passed / 0 failed / 48 ignored; `cargo clippy -p
+ow-mission -p ow-cli --all-targets` adds no warning in the touched files; `crate_edges_test.py` OK. Installed Off
+`--slice-gate` (strict, under the lock), head against base: default route ok 1 / NotYet 4 / error 9 of 14 and
+`--map Sanctuary_P` ok 1 / NotYet 4 / error 9 of 14, every row identical; on the map route link 1 stops at setup,
+before adopt. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **IMPL-SLICE-MAP-WORLD (2026-11-19, zuhu desktop, on #547 at 15d01ca):** AI-assisted (Claude Code, Opus 5.5). The
 bridge's adopt path (`MissionScript::adopt`) and the combat group on the map route behind `--map`
 (`cmd/combat/map_route.rs`), lane 4's first PR. `cargo test --workspace -j 2` 2,468 passed / 0 failed / 48 ignored;
