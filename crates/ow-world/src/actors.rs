@@ -661,6 +661,10 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     for name in ["CreationTime", "WorldInfo", "Location", "Rotation", "Instigator", "Owner"] {
         prop_of(&vm.space, source, name)?;
     }
+    // The level list is borrowed for the registration before anything is made (review r3 of #435, item 2): a list
+    // another caller holds is refused here, with nothing allocated; the borrow ends right after the insertion, before
+    // any event runs.
+    let mut level = actors.try_borrow_mut().map_err(borrow_mut_err)?;
     let actor = match vm.parity {
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
@@ -678,11 +682,8 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
             actor
         }
     };
-    actors
-        .try_borrow_mut()
-        .map_err(borrow_mut_err)?
-        .list
-        .push(actor);
+    level.list.push(actor);
+    drop(level);
     set_field(&mut vm.space, actor, "CreationTime", Value::Float(time))?;
     set_field(
         &mut vm.space,

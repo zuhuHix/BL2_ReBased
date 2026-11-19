@@ -287,3 +287,35 @@ fn ownership_is_by_handle_not_by_name() {
     assert!(pairs.iter().all(|p| p.0 != twins), "the twin's component is not the template's");
     assert_eq!(get(&x.vm, actor, "Other"), obj(twins));
 }
+
+/// Nested sub-objects are refused whatever order they are met in (review r3 of #435, item 1): a template slot that
+/// names a component's sub-object before the component itself, and a deeper descendant, are refused on their whole
+/// outer chain.
+#[test]
+fn a_nested_sub_object_met_first_or_deeper_is_refused() {
+    for depth in [1, 2] {
+        let mut x = fx(true);
+        let mut nested = make(&mut x.vm, "Test.ToyComponent", "NestedComp", Some(x.a));
+        if depth == 2 {
+            nested = make(&mut x.vm, "Test.ToyComponent", "DeeperComp", Some(nested));
+        }
+        // `Comp` (the first slot) names the nested object; CompA is reached only later, through `Components`.
+        set(&mut x.vm, x.template, "Comp", obj(nested));
+        let count = x.vm.space.heap.len();
+        refused(plan_components(&mut x.vm, x.template).unwrap_err(), "nested instancing");
+        assert_eq!(x.vm.space.heap.len(), count, "depth {depth}: nothing made");
+    }
+}
+
+/// A template component whose properties are not loaded (a stand-in with no slots) is refused, never copied as an
+/// object with no slots (review r3 of #435, item 5).
+#[test]
+fn a_component_stand_in_is_refused() {
+    let mut x = fx(true);
+    let class = x.vm.find_class("Test.ToyComponent").unwrap();
+    let stand_in = x.vm.space.alloc_stand_in(class, "CompStandIn", Origin::Resource { package: 0, index: 1 }).unwrap();
+    x.vm.space.heap.get_mut(stand_in).unwrap().outer = Some(x.template);
+    let components = Value::Array(Rc::new(vec![obj(x.a), obj(x.b), obj(stand_in)]));
+    set(&mut x.vm, x.template, "Components", components);
+    refused(plan_components(&mut x.vm, x.template).unwrap_err(), "not loaded");
+}

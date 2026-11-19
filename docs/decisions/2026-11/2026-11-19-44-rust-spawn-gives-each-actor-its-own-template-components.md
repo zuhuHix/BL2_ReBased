@@ -130,3 +130,26 @@ loosened. The `NotYet` guards changed are listed under "Guards" below.
       at the controller's `CollisionCylinder`, wrongly refused as another default's.
     - Reference: byte-identical.
     - `--slice-gate`: byte-identical, 0/11/3 and 0/14/0; link 9 is `notyet`, with no headless driver.
+- **Review r3 of #435** (the delta review of round 2):
+  - **Nested sub-objects** are judged on each object's whole outer chain, through the heap's outers and then the
+    export table's. A sub-object of a template component, at any depth, is refused even when a template slot names it
+    before the component is found.
+  - **The level list** is borrowed for the registration before anything is allocated, and released right after the
+    insertion, before any event. A list another caller holds refuses the spawn with nothing made.
+  - **Loading.** The plan judges every reference in the template's own slots before it loads anything. Template
+    components are loaded afterwards: they are the template's definition, read as the archetype itself is.
+    - Residual: a refusal found inside a component's own fields comes after that component's load. The store's loads
+      cannot be staged.
+    - The reviewer's other option, refusing every component not yet loaded, would refuse every installed
+      class-default spawn: their components are all lazy.
+  - **The class-default export** is chosen by the decoder's own rule, now shared as `ow_object::cdo::default_export_in`
+    and `is_default_export`: the exact name and the class reference, first in table order. Before this round the
+    instancing took the first top-level, case-insensitive name match.
+  - **A template component whose slot count is not its class layout's** (a stand-in) is `NotYet { NotRead }`, never
+    copied as an object with no slots.
+  - **Tests:**
+    - a nested reference met first, and a deeper descendant;
+    - a component stand-in;
+    - a level list held during a spawn that would allocate an actor and a copy;
+    - a lazy archetype export, whose self-reference is refused with its component still unloaded and nothing logged;
+    - `default_export_in` passing over a same-name export of another class (ow-object).

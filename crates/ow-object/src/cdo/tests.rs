@@ -165,3 +165,24 @@ fn a_default_object_whose_stream_breaks_keeps_what_it_applied_and_logs_the_error
         ["defaults: Default__Thing: negative property size or index"]
     );
 }
+
+/// The class-default export selection shared with `ow-world`'s instancing (decision 2026-11-19-44, review r3 of #435):
+/// the exact name and the class reference, first in table order. An export of the same name but another class, or of
+/// another spelling, before it is passed over.
+#[test]
+fn the_default_export_is_the_exact_name_of_the_class() {
+    let entry = |name: &str, class: i32| ow_package::tables::ObjectEntry {
+        name: name.to_string(),
+        class,
+        ..Default::default()
+    };
+    let exports = [
+        entry("Default__Toy", 9),
+        entry("default__toy", 3),
+        entry("Default__Toy", 3),
+        entry("Default__Toy", 3),
+    ];
+    assert_eq!(default_export_in(&exports, 3, "Default__Toy"), Some(3));
+    assert_eq!(default_export_in(&exports, 7, "Default__Toy"), None);
+    assert!(!is_default_export(&exports[0], 3, "Default__Toy"));
+}

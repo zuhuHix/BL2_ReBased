@@ -101,10 +101,24 @@ fn default_export(
 ) -> Option<i32> {
     let candidates = cx.exports_named(package, wanted);
     let pkg = cx.store.get(package);
-    candidates.into_iter().find(|&index| {
-        let e = &pkg.exports[index as usize - 1];
-        e.name == wanted && e.class == class_export
-    })
+    candidates
+        .into_iter()
+        .find(|&index| is_default_export(&pkg.exports[index as usize - 1], class_export, wanted))
+}
+
+/// Whether export `e` is the class default object `wanted` (`Default__<Class>`) of the class whose export is
+/// `class_export`: the exact name and that class reference. The decoder's selection ([`default_export`]), shared so a
+/// caller that needs the same export (`ow-world`'s instancing, decision 2026-11-19-44) names the same one.
+pub fn is_default_export(e: &ow_package::tables::ObjectEntry, class_export: i32, wanted: &str) -> bool {
+    e.name == wanted && e.class == class_export
+}
+
+/// The export reference of the class default object `wanted` of the class whose export is `class_export`, among
+/// `exports` (a package's export table): the first, in table order, that [`is_default_export`] accepts, which is the
+/// one the decoder applies.
+pub fn default_export_in(exports: &[ow_package::tables::ObjectEntry], class_export: i32, wanted: &str) -> Option<i32> {
+    let at = exports.iter().position(|e| is_default_export(e, class_export, wanted))?;
+    i32::try_from(at).ok()?.checked_add(1)
 }
 
 /// An instantiated export: the new object, and where its tag stream ended (just past the `None` tag, from the

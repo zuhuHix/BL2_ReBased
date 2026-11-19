@@ -434,6 +434,21 @@ fn package() -> Vec<u8> {
     let toolbox = t.class("Toolbox", actor);
     t.prop("Object", toolbox, "Comp", 0, toy_component);
     t.prop("Object", toolbox, "Thing", 0, object);
+    // An archetype export of Toolbox (the lazy-load test, review r3 of #435): its `Comp` names its own component
+    // export, which the store loads lazily, and its `Thing` names the archetype itself.
+    let arch_ref = t.p.next_export();
+    let comp_ref = arch_ref + 1;
+    let mut arch_payload = ow_package::testkit::ints(&[0]);
+    arch_payload.extend(t.p.tag("Comp", "ObjectProperty", &comp_ref.to_le_bytes()));
+    arch_payload.extend(t.p.tag("Thing", "ObjectProperty", &arch_ref.to_le_bytes()));
+    arch_payload.extend_from_slice(&t.none);
+    t.p.add_export_with(ow_package::testkit::Export::new(toolbox, "Toolbox_Arch", arch_payload));
+    let mut comp_payload = ow_package::testkit::ints(&[0, 0]);
+    comp_payload.extend(t.p.int_tag("Payload", 7));
+    comp_payload.extend_from_slice(&t.none);
+    let mut comp = ow_package::testkit::Export::new(toy_component, "ToyComponent0", comp_payload);
+    comp.outer = arch_ref;
+    t.p.add_export_with(comp);
     t.p.build()
 }
 
@@ -1307,6 +1322,57 @@ fn templates_off_cannot_spawn_from_leave_nothing_behind() {
             assert_eq!(x.w.vm.space.heap.len(), heap, "{what}: nothing on the heap");
             assert_eq!(x.w.actors().borrow().list().len(), list, "{what}: nothing in the level list");
         }
+    });
+}
+
+/// A refusal decided from the template's own slots comes before any load (review r3 of #435, item 3): the archetype
+/// export's lazy component is still not loaded, and nothing was logged, when its reference back to itself is refused.
+#[test]
+fn a_refusal_from_the_templates_slots_loads_nothing() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let path = ow_core::ObjectPath::parse("Engine.Toolbox_Arch").unwrap();
+        let arch = x.w.vm.defs.find(&mut x.w.vm.space, &path).unwrap().unwrap();
+        x.w.vm.log.extend(x.w.vm.defs.take_log());
+        let Value::Object(Some(comp)) = field(&x.w.vm.space, arch, "Comp").unwrap() else {
+            panic!("no component");
+        };
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, comp), "the fixture's component is lazy");
+        let log = x.w.vm.log.len();
+        match crate::actors::plan_components(&mut x.w.vm, arch).unwrap_err() {
+            VmError::NotYet(n) => assert!(n.what.contains("back to the template"), "{n}"),
+            e => panic!("expected NotYet, got {e}"),
+        }
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, comp), "still not loaded");
+        assert_eq!(x.w.vm.log.len(), log, "nothing logged");
+    });
+}
+
+/// A level list another caller holds refuses the spawn before anything is made (review r3 of #435, item 2), also on
+/// the path that would allocate the actor and its copies.
+#[test]
+fn a_held_level_list_refuses_before_anything_is_made() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        let archetype = toy_archetype(&mut x, toolbox, "Toolbox_Held");
+        let component_class = x.class("ToyComponent");
+        let component = x
+            .w
+            .vm
+            .space
+            .alloc(component_class, "ToyComponent0", Some(archetype), ow_object::heap::Origin::Runtime)
+            .unwrap();
+        set_field(&mut x.w.vm.space, archetype, "Comp", Value::Object(Some(component))).unwrap();
+        let actors = x.w.actors();
+        let held = actors.borrow();
+        let heap = x.w.vm.space.heap.len();
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(archetype));
+        assert!(spawn(&mut x.w.vm, wi, &req).is_err());
+        assert_eq!(x.w.vm.space.heap.len(), heap, "nothing on the heap");
+        drop(held);
+        assert!(spawn(&mut x.w.vm, wi, &req).unwrap().is_some(), "the same spawn once the list is free");
     });
 }
 
