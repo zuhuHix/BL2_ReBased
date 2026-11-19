@@ -2341,6 +2341,43 @@ mod placement {
         });
     }
 
+    /// Review r2 of #477, item 1: a sweep's walk checks a primitive's service bounds before its filter data. A
+    /// 100-unit sweep with the BSP at 0.5 walks to 0.55: an unloaded primitive whose bounds lie beyond it is not
+    /// read (the BSP hit is the answer); the same primitive inside it is a named refusal for its unloaded data.
+    #[test]
+    fn a_sweep_skips_an_unloaded_primitive_beyond_the_capped_segment_before_reading_it() {
+        run(|| {
+            for (bounds, refused) in [
+                (Bounds { min: [60.0, -1.0, -1.0], max: [62.0, 1.0, 1.0] }, false),
+                (Bounds { min: [50.0, -1.0, -1.0], max: [52.0, 1.0, 1.0] }, true),
+            ] {
+                let mut x = fx();
+                let bsp = Sweep::Hit { location: [50.0, 0.0, 0.0], normal: [-1.0, 0.0, 0.0], fraction: 0.5 };
+                let s = Rc::new(Script {
+                    tests: RefCell::new(vec![]),
+                    sweeps: RefCell::new(vec![bsp]),
+                    rest: Test::Clear,
+                    asked: RefCell::new(Vec::new()),
+                    bounds: Some(bounds),
+                });
+                install_collision(&mut x.w.vm, s).unwrap();
+                let actor = x.spawn("Actor");
+                let c = x.class("CylinderComponent");
+                let origin = ow_object::heap::Origin::Resource { package: 0, index: -1 };
+                let lazy = x.w.vm.space.alloc_stand_in(c, "LazyCylinder", origin).unwrap();
+                set_field(&mut x.w.vm.space, actor, "CollisionComponent", Value::Object(Some(lazy))).unwrap();
+                let got = crate::placement::box_sweep_in(&x.w.vm, [1.0; 3], [0.0; 3], [100.0, 0.0, 0.0]);
+                if refused {
+                    let (missing, text) = what(got.unwrap_err());
+                    assert_eq!(missing, Missing::NotRead);
+                    assert!(text.contains("LazyCylinder, which is not loaded"), "{text}");
+                } else {
+                    assert_eq!(got.unwrap(), Some(([50.0, 0.0, 0.0], [-1.0, 0.0, 0.0], 0.5)));
+                }
+            }
+        });
+    }
+
     /// Review r1 of #477, item 3: a box the level blocks reads no actor, and a primitive whose properties are not
     /// loaded is a named refusal once a query reaches the walk.
     #[test]

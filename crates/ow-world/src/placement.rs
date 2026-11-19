@@ -21,8 +21,9 @@
 //!    `CylinderComponent`, or none): `NotYet { NotRead }`, "the actor's bounding-cylinder rule".
 //! 3. **The trace filters** (lane IMPL-SPAWN-TRACE-FILTERS, decision 2026-11-19-90; [`crate::trace_filter`]). Each
 //!    query has two parts, kept apart:
-//!    - **the level part**, asked of the service first: its answers cover the level's own geometry only (the BSP and
-//!      the static geometry it loaded), never a live VM actor;
+//!    - **the level part**, asked of the service first: its answers cover the level's BSP only (bit 4). Every other
+//!      piece of geometry, a map-authored static mesh included, belongs to an actor and goes through the actor
+//!      filters (review r2 of #477);
 //!    - **the actor walk**, done by this crate over the live VM actors, and only when the query reaches it: a box
 //!      test the level blocks is blocked (bit 512, the BSP first), so no actor is read for it. The walk covers the
 //!      query's region: the box, or for a sweep the swept box from the start to the BSP hit plus 5 units, capped at
@@ -112,15 +113,16 @@ impl Bounds {
 }
 
 /// The world's collision service (module documentation). Extents are half sizes. The three queries answer for the
-/// **level's own geometry only** (the BSP and the static geometry the service loaded): `Blocked` means that geometry
-/// blocks the box, and a sweep's `Hit` is that geometry's first hit. A service must not fold a live VM actor into
-/// these answers; live actors are this crate's walk.
+/// **level's BSP only** (bit 4, the first pass): `Blocked` means the BSP blocks the box, and a sweep's `Hit` is the
+/// BSP's first hit. Geometry owned by an actor, a map-authored static mesh's hull included, must not enter these
+/// answers: it goes through this crate's actor walk and the trace filters, and the service may only report its
+/// bounds ([`SpawnCollision::actor_bounds`]).
 pub trait SpawnCollision {
-    /// Whether an axis-aligned box of `extent` at `at` overlaps the level's geometry.
+    /// Whether an axis-aligned box of `extent` at `at` overlaps the level's BSP.
     fn box_test(&self, extent: [f32; 3], at: [f32; 3], mode: Mode) -> Result<Test, VmError>;
-    /// A box of `extent` swept from `start` to `end`: the level geometry's first hit.
+    /// A box of `extent` swept from `start` to `end`: the BSP's first hit.
     fn box_sweep(&self, extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError>;
-    /// A point swept from `start` to `end`: the level geometry's first hit.
+    /// A point swept from `start` to `end`: the BSP's first hit.
     fn point_sweep(&self, start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError>;
     /// The world-space bounds of a live VM actor's primitive component, when the service holds them; `None` when it
     /// does not (the default). Used only to take a primitive out of a query's actor walk.
@@ -343,27 +345,19 @@ impl Queries<'_> {
                     continue;
                 }
                 let what = format!("{who}'s {}", name(space, part)?);
+                // Bounds first (review r2 of #477): a primitive whose service bounds miss the region leaves the walk
+                // before any of its filter data is read, so its unloaded flags cannot refuse the query.
+                let bounds = self.model.actor_bounds(space, part)?;
+                if bounds.is_some_and(|b| !b.meets(&region)) {
+                    continue;
+                }
                 let Candidate::Unsupported(rule) =
                     data_or_refusal(trace_filter::tested(space, part, actor, kind), query, &what)?
                 else {
                     continue;
                 };
-                match self.model.actor_bounds(space, part)? {
-                    Some(b) if !b.meets(&region) => continue,
-                    Some(_) => {
-                        return Err(refusal(query, &format!("{} (the live actor primitive {what})", rule.rule())));
-                    }
-                    None => {
-                        return Err(refusal(
-                            query,
-                            &format!(
-                                "{} (the live actor primitive {what}, whose bounds the collision service does not \
-                                 hold)",
-                                rule.rule()
-                            ),
-                        ));
-                    }
-                }
+                let held = if bounds.is_some() { "" } else { ", whose bounds the collision service does not hold" };
+                return Err(refusal(query, &format!("{} (the live actor primitive {what}{held})", rule.rule())));
             }
         }
         Ok(Vec::new())
@@ -519,6 +513,19 @@ fn search(q: &Queries<'_>, e: [f32; 3], l0: [f32; 3], complex: bool) -> Result<O
 
 /// The spot search for a spawn of `template` at `location` (module documentation, steps 2 and 3): the location to
 /// make the actor at, or `None` when the search fails. Reads only; it runs before anything is made.
+/// One box sweep of the search (the level part, then the actor walk over the capped segment), for the crate's
+/// tests: the search reaches a sweep only behind a scripted first test.
+#[cfg(test)]
+pub(crate) fn box_sweep_in(
+    vm: &Vm,
+    extent: [f32; 3],
+    start: [f32; 3],
+    end: [f32; 3],
+) -> Result<Option<([f32; 3], [f32; 3], f32)>, VmError> {
+    let model = collision_model(vm)?.expect("a test installs a service");
+    Queries { model: model.as_ref(), vm: Some(vm) }.box_sweep(extent, start, end)
+}
+
 pub fn spot_search(vm: &Vm, template: ObjRef, location: &Value) -> Result<Option<Value>, VmError> {
     let space = &vm.space;
     let Some(model) = collision_model(vm)? else {

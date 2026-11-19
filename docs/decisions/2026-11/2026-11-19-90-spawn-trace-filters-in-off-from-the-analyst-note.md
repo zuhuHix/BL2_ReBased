@@ -31,13 +31,15 @@ loosened, and Reference is unchanged. It stacks on #463 (decision 2026-11-19-79)
 - **`placement.rs`:** the filter gate of decision -79 (`TRACE_FILTER`, `FILTER_READ`) is gone. Each query has two
   parts, kept apart (review r1 of #477):
   - **the level part**, from the service first. The `SpawnCollision` contract now says its three answers cover the
-    level's own geometry only, never a live VM actor;
+    level's BSP only (review r2 of #477). Actor-owned geometry, a map-authored static mesh included, goes through the
+    actor walk and its filters; the service may only report its bounds;
   - **the actor walk**, by this crate, only when the query reaches it. A box test the level blocks is blocked, and no
     actor is read for it (bit 512, the BSP first). The walk covers the query's region: the box, or for a sweep the
     swept box from the start to the BSP hit plus 5 units, capped at the end point (the whole sweep without a BSP hit).
     It visits the live actors' `CollisionComponent` and the primitives in `Components`;
-  - a primitive under an unread rule leaves the walk only when the service reports its bounds (the new
-    `actor_bounds`, default none) and they miss the region. Otherwise the query is `NotYet { NotRead }`, naming the
+  - a primitive leaves the walk when the service reports its bounds (the new `actor_bounds`, default none) and they
+    miss the region. Bounds are checked before any of its filter data is read (review r2 of #477), so an unloaded
+    primitive outside the region cannot refuse the query. Otherwise the query is `NotYet { NotRead }`, naming the
     rule, the actor and the component (and, with no bounds, that the service does not hold them);
   - missing data on a live primitive (a property not loaded) is a named `NotRead` too, not a heap error;
   - a sweep's result goes through `choose_sweep_hit`, with walk hits rescaled to the whole sweep. The walk refuses
