@@ -69,7 +69,7 @@ use std::rc::Rc;
 use ow_combat::hit::access::{array, field, get, number, object, set, set_field, truth};
 use ow_combat::hit::call_method;
 use ow_core::rand::{CrtStream, Rand15};
-use ow_core::{DetMap, NotYet, ParityMode};
+use ow_core::{DetMap, DetSet, NotYet, ParityMode};
 use ow_object::ids::{NameId, ObjRef};
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, NativePack, Vm};
@@ -175,6 +175,9 @@ pub struct Brains {
     owners: DetMap<ObjRef, ObjRef>,
     /// Mind -> what its tree runs (absent: nothing).
     running: DetMap<ObjRef, Running>,
+    /// Minds whose brain [`tick_brain`] is building or has taken out of `brains` while it runs script, so a callback
+    /// still sees that the mind has a brain (review r3 of #429).
+    in_flight: DetSet<ObjRef>,
 }
 
 impl std::fmt::Debug for Brains {
@@ -186,6 +189,7 @@ impl std::fmt::Debug for Brains {
             .field("locomotion", &self.locomotion.is_some())
             .field("owners", &self.owners)
             .field("running", &self.running)
+            .field("in_flight", &self.in_flight)
             .finish()
     }
 }
@@ -208,9 +212,20 @@ pub fn install_locomotion(vm: &mut Vm, host: Rc<RefCell<dyn Locomotion>>) -> Res
     Ok(())
 }
 
-/// `mind`'s brain, if built (a copy).
+/// `mind`'s brain, if built (a copy). `None` also while [`tick_brain`] holds it; [`has_brain`] counts that one too.
 pub fn brain(vm: &Vm, mind: ObjRef) -> Option<Brain> {
     vm.service::<Brains>()?.try_borrow().ok()?.brains.get(&mind).cloned()
+}
+
+/// The minds with a brain: built and kept, or being built or ticked by [`tick_brain`] (in flight).
+fn minds_with_brains(vm: &Vm) -> Result<Vec<ObjRef>, VmError> {
+    let Some(service) = vm.service::<Brains>() else {
+        return Ok(Vec::new());
+    };
+    let s = service.try_borrow().map_err(|_| VmError::ServiceBorrowed("ow_ai::awareness::actions::Brains"))?;
+    let mut minds: Vec<ObjRef> = s.brains.keys().copied().collect();
+    minds.extend(s.in_flight.iter().copied().filter(|m| !s.brains.contains_key(m)));
+    Ok(minds)
 }
 
 fn error(message: String) -> VmError {
@@ -558,6 +573,14 @@ fn apply_finishes(vm: &mut Vm, brain: &mut Brain, now: f32, changes: &mut Vec<Ch
 
 /// One AI tick of `mind` at the VM's world time (module documentation).
 pub fn tick_brain(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRef) -> Result<BrainReport, VmError> {
+    // In flight while built or ticked: script callbacks see that the mind has a brain (review r3 of #429).
+    borrow(&brains(vm)?)?.in_flight.insert(mind);
+    let result = tick_brain_held(vm, host, mind, globals);
+    borrow(&brains(vm)?)?.in_flight.remove(&mind);
+    result
+}
+
+fn tick_brain_held(vm: &mut Vm, host: &mut dyn Host, mind: ObjRef, globals: ObjRef) -> Result<BrainReport, VmError> {
     let mut report = BrainReport::default();
     let now = vm.clock.time_seconds();
     let mut brain = match take(vm, mind)? {
@@ -992,7 +1015,7 @@ pub const RECORD_SLICE_STOPS: &str = "docs/verification/NATIVE_SLICE_OFF_STOPS.m
 /// component, or a list with no `Action` set, answers false. Every other case is `NotYet { NotRead }`:
 /// - a running node: the running action's first delivery (the note's "Not read" item);
 /// - a brain part 2 built for this component (found through `AI`, or through its mind's `AIComponent` while `AI` is
-///   still unset), running or not, or any set `Action` (reviews r1 and r2 of #429): the note leaves open which objects
+///   still unset; kept, or in flight while `tick_brain` builds or ticks it), running or not, or any set `Action` (reviews r1 and r2 of #429): the note leaves open which objects
 ///   the game's list holds, per-AI copies or the archetypes. The Rust `AIDef` is the shared package definition, part
 ///   2's brain keeps its own copies, and who owns a copy does not say which AI the game delivers to, so no receiver is
 ///   picked until that is read.
@@ -1018,23 +1041,22 @@ fn n_activate_event(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         Value::Object(o) => o,
         other => return Err(error(format!("{unit}: AIDef holds {}, not an object", other.kind_name()))),
     };
-    // A brain part 2 built for this component, even while the component's `AI` is not filled in (review r2).
-    let mut has_brain = ai.is_some_and(|ai| brain(vm, ai).is_some());
-    if !has_brain {
-        let minds: Vec<ObjRef> = vm
-            .service::<Brains>()
-            .and_then(|s| s.try_borrow().ok().map(|s| s.brains.keys().copied().collect()))
-            .unwrap_or_default();
-        for mind in minds {
-            if object(vm, mind, "AIComponent")? == Some(me) {
-                has_brain = true;
-                break;
-            }
+    // A brain part 2 built for this component, even while the component's `AI` is not filled in (review r2), and
+    // also while `tick_brain` is building or ticking it (review r3). This is the port's own gap: the game's rule for a
+    // truly unset `AI` is the next step's false.
+    let mut has_brain = false;
+    for mind in minds_with_brains(vm)? {
+        if Some(mind) == ai || object(vm, mind, "AIComponent")? == Some(me) {
+            has_brain = true;
+            break;
         }
     }
     if has_brain {
         return Err(NotYet::not_read(PER_AI_COPIES, RECORD_SLICE_STOPS).into());
     }
+    // The note: the native "does nothing unless the component's `AI` interface and its `AIDef` are both set". So with
+    // either unset (and no brain of the port's for this component, above) the answer is false without reading the
+    // definition, its `NodeList` or `CurrentState`: that is the game's rule, not a skipped check (review r3 ruling).
     let (Some(_), Some(definition)) = (ai, definition) else {
         return Ok(Value::Bool(false));
     };

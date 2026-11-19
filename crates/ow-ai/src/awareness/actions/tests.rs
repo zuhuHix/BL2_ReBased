@@ -40,6 +40,11 @@ struct Script {
     start_answer: Option<Result<Value, VmError>>,
     /// Whether the patrol finishes when it hears `Target_Acquired`.
     finish_on_acquired: bool,
+    /// On these events, the `Note` native points the mind's `AIComponent` at the event component for the call, calls
+    /// `ActivateEvent` on it with the declared function (a reentrant callback, review r3 of #429), restores the
+    /// mind's own component, and keeps each answer. `(events, mind, its component, event component, function)`.
+    reenter: Option<(Vec<String>, ObjRef, ObjRef, ObjRef, ow_object::ids::FuncId)>,
+    reentered: Vec<(String, Result<Value, VmError>)>,
 }
 
 fn name_of(vm: &Vm, o: ObjRef) -> String {
@@ -164,6 +169,14 @@ fn world(mode: ParityMode) -> World {
                 s.borrow_mut().has_target = true;
             }
             s.borrow_mut().log.push(format!("{what} {name}"));
+            let hook = s.borrow().reenter.clone().filter(|(events, ..)| events.contains(&what));
+            if let Some((_, mind, own, component, f)) = hook {
+                set(c.vm, mind, "AIComponent", Value::Object(Some(component)))?;
+                let event_name = Value::Name(c.vm.space.names.intern("Invented"));
+                let answer = c.vm.call(f, Some(component), vec![event_name]).map(|r| r.ret);
+                set(c.vm, mind, "AIComponent", Value::Object(Some(own)))?;
+                s.borrow_mut().reentered.push((what.clone(), answer));
+            }
             if what == "Init" && s.borrow().query_init {
                 let others = {
                     let service = brains(c.vm)?;
@@ -899,6 +912,34 @@ fn activate_event_finds_the_brain_while_ai_is_unset() {
     let before = invented_log(&w).len();
     per_ai_not_yet(activate(&mut w, me, f));
     assert_eq!(invented_log(&w).len(), before);
+}
+
+/// Off (review r3): a script callback that runs while `tick_brain` builds the brain (`Init`) or ticks it (`Start`)
+/// and calls `ActivateEvent` with the component's `AI` unset gets the per-AI copies `NotYet`, not false: the brain is
+/// out of the map but in flight. Nothing is delivered.
+#[test]
+fn activate_event_from_a_callback_during_a_tick_is_not_yet() {
+    let mut w = world(ParityMode::Off);
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    let (me, f) = event_component(&mut w, None, Some(aidef));
+    let own = w.e.component;
+    w.script.borrow_mut().reenter = Some((vec!["Init".to_string(), "Start".to_string()], mind, own, me, f));
+    let mut h = host(&w.e, 1.0);
+    brain_at(&mut w, &mut h, 0.25).unwrap();
+    let answers = std::mem::take(&mut w.script.borrow_mut().reentered);
+    let events: Vec<&str> = answers.iter().map(|(e, _)| e.as_str()).collect();
+    assert!(events.contains(&"Init") && events.contains(&"Start"), "{events:?}");
+    for (event, answer) in answers {
+        match answer {
+            Err(VmError::NotYet(n)) => assert!(n.to_string().contains("per-AI copies"), "{event}: {n}"),
+            other => panic!("{event}: expected the per-AI copies NotYet, got {other:?}"),
+        }
+    }
+    assert!(invented_log(&w).is_empty());
+    // After the tick the mind is no longer in flight; its kept brain, found the same way, still answers NotYet.
+    w.script.borrow_mut().reenter = None;
+    set(&mut w.e.vm, mind, "AIComponent", Value::Object(Some(me))).unwrap();
+    per_ai_not_yet(activate(&mut w, me, f));
 }
 
 /// Off (review r2): a valid list with no `Action` set answers false.
