@@ -25,7 +25,8 @@
 //! The part walk is the `AllParts` order (NATIVE_EQUIP_PARTS.md section 2) **with the name parts**: the nine part
 //! slots, then the two name-part slots; empty slots are skipped.
 //!
-//! The mission rule of step 2 does not apply to weapons: the weapon rule has no mission-item case.
+//! The mission rule of step 2 does not apply to weapons: the weapon rule has no mission-item case, so a weapon skips
+//! the class check entirely (review of #425).
 //!
 //! **RecomputeNormalizedDamageValues()** (weapon only; section 5; lane FIX-VALUE-B, decision 2026-11-19-45) rebuilds
 //! two normalized damage values, instant-hit then melee. For each:
@@ -101,6 +102,8 @@ const NORMALIZED: [Normalized; 2] = [
 struct Layout {
     definition: &'static str,
     slots: [&'static str; 11],
+    /// Whether the mission-item rarity rule applies: items only (the weapon rule has no mission-item case).
+    mission_rule: bool,
 }
 
 const WEAPON: Layout = Layout {
@@ -118,6 +121,7 @@ const WEAPON: Layout = Layout {
         "PrefixPartDefinition",
         "TitlePartDefinition",
     ],
+    mission_rule: false,
 };
 
 const ITEM: Layout = Layout {
@@ -135,6 +139,7 @@ const ITEM: Layout = Layout {
         "PrefixItemNamePartDefinition",
         "TitleItemNamePartDefinition",
     ],
+    mission_rule: true,
 };
 
 /// The inventory's first definition and its set parts in walk order (name parts included).
@@ -187,9 +192,9 @@ fn int(v: i64, what: &str) -> Result<Value, VmError> {
     i32::try_from(v).map(Value::Int).map_err(|_| bad(what, format!("{v} does not fit an int")))
 }
 
-/// `RarityLevel` (module documentation, step 2).
-fn rarity(vm: &mut Vm, definition: ObjRef, parts: &[ObjRef], what: &str) -> Result<i64, VmError> {
-    if let Ok(mission) = vm.find_class("WillowGame.MissionItemDefinition") {
+/// `RarityLevel` (module documentation, step 2). `mission_rule` is the layout's: a weapon never takes the mission rule.
+fn rarity(vm: &mut Vm, definition: ObjRef, parts: &[ObjRef], mission_rule: bool, what: &str) -> Result<i64, VmError> {
+    if mission_rule && let Ok(mission) = vm.find_class("WillowGame.MissionItemDefinition") {
         let own = vm.space.heap.get(definition)?.class;
         if vm.space.classes.is_child_of(own, mission) {
             let globals = {
@@ -221,7 +226,7 @@ fn rarity(vm: &mut Vm, definition: ObjRef, parts: &[ObjRef], what: &str) -> Resu
 fn compute_value_of_parts(vm: &mut Vm, inv: ObjRef, layout: &Layout, what: &str) -> Result<(), VmError> {
     let (definition, parts) = definition_and_parts(vm, inv, layout, what)?;
     let Some(definition) = definition else { return Ok(()) };
-    let level = rarity(vm, definition, &parts, what)?;
+    let level = rarity(vm, definition, &parts, layout.mission_rule, what)?;
     write(vm, inv, "RarityLevel", int(level, what)?, what)?;
     let mut total = match read(vm, definition, "BaseMonetaryValueModifier")? {
         Some(Value::Float(f)) => f,
