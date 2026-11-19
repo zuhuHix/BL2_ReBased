@@ -374,6 +374,28 @@ fn package() -> Vec<u8> {
     t.class("OddResourcePool", pool);
     // A pool whose InitializeAuthoritative calls ResetIdleTimer, as every installed one does: Definition = D;
     // ResetIdleTimer(); Note(11).
+    // A pool whose InitializeAuthoritative sets Definition, then calls a native nothing binds: it refuses in both
+    // modes (review r2 of #444).
+    let refusing = t.class("RefusingPool", pool);
+    let unbound = t
+        .function(refusing, "Unbound", &[], None, &[], &FunctionSpec::new(NATIVE, "Unbound"), |_| None)
+        .function;
+    t.function(
+        refusing,
+        "InitializeAuthoritative",
+        &[p("Object", "D", pool_def), p("Object", "P", object)],
+        None,
+        &[],
+        &FunctionSpec::new(SCRIPT, "InitializeAuthoritative"),
+        |ids| {
+            let mut a = Asm::new();
+            a.stmt().raw(&[EX_LET]).instance(definition).local(ids.get("D"));
+            a.stmt().final_function(unbound, |_| {});
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        },
+    );
     let timed = t.class("TimedPool", pool);
     let spec = FunctionSpec::new(SCRIPT, "InitializeAuthoritative");
     t.function(
@@ -2207,6 +2229,40 @@ fn object_path_of(space: &ObjectSpace, o: ObjRef) -> String {
 // ---------------------------------------------------------------------------------------------------------------
 // Review r1 of PR #329
 // ---------------------------------------------------------------------------------------------------------------
+
+/// Review r2 of #444: a refusal inside `InitializeAuthoritative` keeps the rollback under Reference (the slot emptied
+/// again, the GUID counter restored, the error unchanged) and is terminal in Off (the slot kept, the GUID spent).
+#[test]
+fn a_creation_refusal_rolls_back_under_reference_and_is_terminal_in_off() {
+    run(|| {
+        for mode in [ParityMode::Reference, ParityMode::Off] {
+            let mut x = fx_mode(mode);
+            let (controller, m) = x.controller_with_manager("Controller");
+            let (_, def) = x.resource_with("RefusingPool");
+            let e = x
+                .call(
+                    "ResourcePoolManager.CreatePool",
+                    None,
+                    vec![
+                        Value::Object(Some(m)),
+                        Value::Object(Some(controller)),
+                        Value::Object(Some(def)),
+                        Value::Bool(false),
+                    ],
+                )
+                .unwrap_err();
+            let slots = pools_of(&x.w.vm.space, m).unwrap().len();
+            if mode == ParityMode::Reference {
+                assert!(!e.to_string().contains("partial writes"), "{e}");
+                assert_eq!(slots, 0, "Reference: the slot is emptied again");
+                assert_eq!(x.get(m, "NextPoolGUID"), Value::Byte(0), "Reference: the GUID counter is restored");
+            } else {
+                assert_eq!(slots, 1, "Off: the slot keeps the new pool");
+                assert_eq!(x.get(m, "NextPoolGUID"), Value::Byte(1), "Off: the GUID stays spent");
+            }
+        }
+    });
+}
 
 /// Review r1 of #444 (the hub's ruling, which replaced the rollback of review r1 of #329): an Off refusal inside
 /// `InitializeAuthoritative` is terminal. Its kind is kept and its text starts "stopped after partial writes"; the slot

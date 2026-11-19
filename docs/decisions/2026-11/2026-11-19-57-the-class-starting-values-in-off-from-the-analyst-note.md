@@ -67,6 +67,24 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
 - **The combat fixture's toy `AIClassDefinition`** now declares the three base fields, unset. The ow-cli combat digests
   are unchanged (89 passed).
 
+**Review r2 of #444 (the hub's ruling, as #439 r3).** The preflight checks only what is cheap and certain before
+deleting: method lookups, binding checks and declared types. A refusal that can only come from running a callback
+after a delete is terminal; that is the rule, not a gap.
+
+- **Pool callbacks:** each planned pool class's `InitializeAuthoritative` must exist (else `NotYet { NotRead }`) and
+  must not be an unbound native (`NotYet { NotPorted }`). Each existing pool's `ShutDown` must not be an unbound native.
+  A pool without `ShutDown` is skipped, by the pool record's rule.
+- **The event** is resolved on the controller's own class. Only the stock declaration's known final call to an unbound
+  `InitPlayerSkillTree` is refused up front. An override is taken as it is, and a refusal inside it is terminal.
+- **After the base,** the manager's authority is checked again before the override's pools. If it is lost, the call
+  stops with the named terminal refusal before `CreatePool` and the event.
+- **Declared types:** `ResourcePools`' element kind is checked even when the array is empty. A reference struct's
+  `PoolManager` and `Data` must be able to hold the manager and the pool class.
+- **`ow-world`:** the slot and GUID rollback is kept under Reference; only Off uses the terminal stop. A test covers
+  each mode.
+- The combat fixture's toy `WillowPlayerController` gains the stock event: a script `OnPlayerClassChange` that makes a
+  final call to a native `InitPlayerSkillTree` nothing binds. The ow-cli combat digests are unchanged.
+
 **Verified (automated, invented classes).** `ow-combat`: 3 new tests and 1 updated.
 
 - On the authority with a `PlayerClass`: six pools in the note's order (two listed, accuracy, experience, skill
@@ -88,6 +106,9 @@ loosened and no existing `NotYet` guard was relaxed. It replaces the player over
   - four malformed inputs refuse against a populated manager;
   - the off-hand pool comes after accuracy, and a no-class call keeps both references.
   Removing the skill-tree preflight or the after-base re-read fails these tests (checked).
+- After review r2, 4 more tests: unbound pool callbacks; the event preflight following the declaration that runs; a
+  manager that loses authority during the base; declared kinds and reference classes. Removing the after-base
+  authority check fails the third (checked). The `ow-world` test covers both modes.
 - Gate numbers are in `docs/verification/GATES.md`.
 
 **Installed (Off; this branch rebased onto main 7de9171a, which has #429, #431 and #434; outputs under ignored

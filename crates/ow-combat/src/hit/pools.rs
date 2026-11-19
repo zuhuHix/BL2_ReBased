@@ -173,9 +173,17 @@ fn class_argument(v: &Value, unit: &str) -> Result<Option<ObjRef>, VmError> {
 /// - `NotYet { NotRead }`: pools that name one resource twice (the base's and the override's together; `CreatePool`'s
 ///   reinitialise flag is not given), and any pool to make when the controller's manager is not the authority, or when
 ///   there is no manager and none would be spawned (the note's open question 3: what creation does on such a manager);
-/// - `NotYet { NotPorted }`: when the event will run, a controller whose `InitPlayerSkillTree` is a native nothing binds
-///   (`OnPlayerClassChange`'s script calls it; NATIVE_SKILLS.md); a controller without `OnPlayerClassChange` is bad
-///   data.
+/// - `NotYet { NotPorted }`: when the event will run and resolves to the stock declaration, its final call's
+///   `InitPlayerSkillTree` being a native nothing binds (NATIVE_SKILLS.md; an override is taken as it is); a planned
+///   pool class's `InitializeAuthoritative`, or an existing pool's `ShutDown`, being a native nothing binds (a planned
+///   pool class without `InitializeAuthoritative` is `NotYet { NotRead }`; a pool without `ShutDown` is skipped by the
+///   pool record's rule); a controller without `OnPlayerClassChange` is bad data;
+/// - bad data also: a `ResourcePools` declared with another element kind (even when empty), and a reference struct whose
+///   `PoolManager` or `Data` cannot hold the manager or the pool class.
+///
+/// The preflight checks only what is cheap and certain before deleting: method lookups, binding checks, declared types
+/// (the hub's ruling in review r2 of #444, as #439 r3). Before the override's pools, the manager's authority is checked
+/// again.
 ///
 /// After the first delete, a refusal (a pool's `ShutDown` or `InitializeAuthoritative`, the event's script, or a check
 /// on the override decided again because the base changed `Role` or `PlayerClass`) is **terminal**: nothing is put
@@ -203,6 +211,7 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
     if player && authority {
         check_event(vm, controller, unit)?;
     }
+    check_deletes(vm, controller)?;
     // The first delete: from here on a refusal is terminal.
     let committed = (|| -> Result<(), VmError> {
         let mut manager = object(vm, controller, "ResourcePoolManager")?;
@@ -226,6 +235,10 @@ pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Optio
             }
             types[base.len()..].to_vec()
         };
+        // The manager the override's pools go into, checked again after the base (review r2 of #444, item 4).
+        if !extra_now.is_empty() {
+            check_creation(vm, controller)?;
+        }
         for (&(def, field), ty) in extra_now.iter().zip(&extra_types) {
             create(vm, controller, &mut manager, def, field, *ty, unit)?;
         }
@@ -246,6 +259,15 @@ fn base_plan(vm: &mut Vm, class: Option<ObjRef>, unit: &str) -> Result<Vec<Step>
     let Some(class) = class else { return Ok(Vec::new()) };
     let class = super::access::loaded(vm, class)?;
     let mut plan = Vec::new();
+    // The declared element kind, checked even for an empty array (review r2 of #444, item 5).
+    let own = vm.space.heap.get(class)?.class;
+    let declared = vm.space.prop(own, "ResourcePools").and_then(|p| vm.space.classes.decl(p)).map(|d| d.kind.clone());
+    if !matches!(&declared, Some(PropKind::Array(inner)) if matches!(**inner, PropKind::Object { .. })) {
+        return Err(super::access::error(format!(
+            "{unit}: {} does not declare ResourcePools as an array of objects",
+            super::access::class_name(vm, class)
+        )));
+    }
     match required(vm, class, "ResourcePools", unit)? {
         Value::Array(list) => {
             for v in list.iter() {
@@ -315,9 +337,13 @@ fn object_field(vm: &mut Vm, o: ObjRef, name: &str, unit: &str) -> Result<Option
     }
 }
 
-/// The checks on a plan that change nothing: one resource twice is `NotYet { NotRead }`; every reference field to be
-/// written must be a pool reference struct (its type is returned); any pool to make needs an authoritative manager,
-/// or one that would be spawned (else `NotYet { NotRead }`, the note's open question 3).
+/// The checks on a plan that change nothing (reviews r1 and r2 of #444):
+/// - one resource twice is `NotYet { NotRead }`;
+/// - every pool to make: its pool class's `InitializeAuthoritative` must exist (else `NotYet { NotRead }` naming it) and
+///   must not be a native nothing binds (`NotYet { NotPorted }`);
+/// - every reference field to be written must be a pool reference struct (its type is returned) whose `PoolManager`
+///   can hold the manager the pools go into and whose `Data` can hold the pool class (else bad data);
+/// - any pool to make needs an authoritative manager, or one that would be spawned ([`check_creation`]).
 fn check_plan(vm: &mut Vm, controller: ObjRef, plan: &[Step], unit: &str) -> Result<Vec<Option<StructId>>, VmError> {
     let mut resources = Vec::new();
     let mut types = Vec::new();
@@ -332,43 +358,148 @@ fn check_plan(vm: &mut Vm, controller: ObjRef, plan: &[Step], unit: &str) -> Res
             .into());
         }
         resources.push(resource);
+        let pool_class = ow_world::pools::pool_class_of(vm, def)?;
+        if let Some(class) = pool_class {
+            let Some(f) = vm.find_method(class, "InitializeAuthoritative", None)? else {
+                return Err(NotYet::not_read(
+                    format!(
+                        "ApplyCharacterClassStartingValues: the pool class {} has no InitializeAuthoritative",
+                        class_path(vm, class)
+                    ),
+                    RECORD_CLASS_STARTING,
+                )
+                .into());
+            };
+            unbound_native(vm, f, "a pool's InitializeAuthoritative")?;
+        }
         types.push(match field {
-            Some(field) => Some(reference_type(vm, controller, field, unit)?),
+            Some(field) => {
+                let ty = reference_type(vm, controller, field, unit)?;
+                check_reference_holds(vm, controller, ty, pool_class, field, unit)?;
+                Some(ty)
+            }
             None => None,
         });
     }
     if !plan.is_empty() {
-        let creates = match object(vm, controller, "ResourcePoolManager")? {
-            Some(m) => ow_world::pools::is_authoritative(&vm.space, m)?,
-            None => ow_world::pools::can_spawn_manager(vm, controller)?,
-        };
-        if !creates {
-            return Err(NotYet::not_read(
-                "ApplyCharacterClassStartingValues making pools on a manager that is not the authority, or with no \
-                 manager and none spawned (NATIVE_CLASS_STARTING_VALUES.md open question 3)",
-                RECORD_CLASS_STARTING,
-            )
-            .into());
-        }
+        check_creation(vm, controller)?;
     }
     Ok(types)
 }
 
-/// The event's dependency, checked before it runs: the controller has `OnPlayerClassChange` (bad data otherwise), and
-/// its `InitPlayerSkillTree`, which the event's script calls, is not a native nothing binds (`NotYet { NotPorted }`).
+/// Pools are made only on an authoritative manager, or one that would be spawned: else `NotYet { NotRead }`, what
+/// creation does there being the note's open question 3. Checked before the first delete and again before the
+/// override's pools (review r2 of #444, item 4).
+fn check_creation(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
+    let creates = match object(vm, controller, "ResourcePoolManager")? {
+        Some(m) => ow_world::pools::is_authoritative(&vm.space, m)?,
+        None => ow_world::pools::can_spawn_manager(vm, controller)?,
+    };
+    if creates {
+        return Ok(());
+    }
+    Err(NotYet::not_read(
+        "ApplyCharacterClassStartingValues making pools on a manager that is not the authority, or with no manager and \
+         none spawned (NATIVE_CLASS_STARTING_VALUES.md open question 3)",
+        RECORD_CLASS_STARTING,
+    )
+    .into())
+}
+
+/// The existing pools' `ShutDown`, which the delete runs (review r2 of #444, item 1): a class without one is skipped
+/// by the pool record's rule; one that is a native nothing binds is `NotYet { NotPorted }`. Only an authoritative
+/// manager's pools are deleted.
+fn check_deletes(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
+    let Some(m) = object(vm, controller, "ResourcePoolManager")? else { return Ok(()) };
+    if !ow_world::pools::is_authoritative(&vm.space, m)? {
+        return Ok(());
+    }
+    for (_, pool) in ow_world::pools::pools_of(&vm.space, m)? {
+        let (class, state) = {
+            let x = vm.space.heap.get(pool)?;
+            (x.class, x.state)
+        };
+        if let Some(f) = vm.find_method(class, "ShutDown", state)? {
+            unbound_native(vm, f, "an existing pool's ShutDown")?;
+        }
+    }
+    Ok(())
+}
+
+/// `NotYet { NotPorted }` when `f` is a native nothing binds.
+fn unbound_native(vm: &Vm, f: ow_object::ids::FuncId, what: &str) -> Result<(), VmError> {
+    if let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
+        && !vm.has_native(&key)
+    {
+        return Err(NotYet::not_ported(
+            format!("ApplyCharacterClassStartingValues: {what} is the native {key}, which nothing binds"),
+            RECORD_CLASS_STARTING,
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn class_path(vm: &Vm, class: ow_object::ids::ClassId) -> String {
+    vm.space.classes.get_layout(class).map(|l| l.path().to_string()).unwrap_or_default()
+}
+
+/// The reference struct `ty` of `field` must be able to hold what the call writes (review r2 of #444, item 5): its
+/// `PoolManager` the manager the pool goes into (the controller's, or the class a spawn makes), its `Data` the pool
+/// class `pool_class` (when the definition makes one).
+fn check_reference_holds(
+    vm: &mut Vm,
+    controller: ObjRef,
+    ty: StructId,
+    pool_class: Option<ow_object::ids::ClassId>,
+    field: &str,
+    unit: &str,
+) -> Result<(), VmError> {
+    let manager_class = match object(vm, controller, "ResourcePoolManager")? {
+        Some(m) => vm.space.heap.get(m)?.class,
+        None => vm.find_class(ow_world::pools::MANAGER_CLASS)?,
+    };
+    for (name, held) in [("PoolManager", Some(manager_class)), ("Data", pool_class)] {
+        let Some(held) = held else { continue };
+        let target = vm
+            .space
+            .names
+            .find(name)
+            .and_then(|n| vm.space.classes.struct_layout(ty)?.field(n).map(|(_, d)| d.kind.clone()));
+        let fits = match target {
+            Some(PropKind::Object { class }) => vm.space.classes.is_child_of(held, class),
+            _ => false,
+        };
+        if !fits {
+            return Err(super::access::error(format!(
+                "{unit}: {field}.{name} cannot hold a {}",
+                class_path(vm, held)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The event, checked before it runs (review r2 of #444, item 3). `OnPlayerClassChange` is resolved virtually on the
+/// controller's own class; none is bad data. When it resolves to the stock declaration on `WillowPlayerController`
+/// (the event the note describes), its final call to `WillowPlayerController.InitPlayerSkillTree` is known: a native
+/// nothing binds there is `NotYet { NotPorted }` (NATIVE_SKILLS.md). An override is taken as it is: no assumption is
+/// made about what it calls, and a refusal inside it is terminal.
 fn check_event(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<(), VmError> {
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
-    if vm.find_method(own, "OnPlayerClassChange", state)?.is_none() {
+    let Some(event) = vm.find_method(own, "OnPlayerClassChange", state)? else {
         return Err(super::access::error(format!("{unit}: the controller has no OnPlayerClassChange")));
-    }
-    if let Some(f) = vm.find_method(own, "InitPlayerSkillTree", state)?
-        && let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
+    };
+    let stock = vm.find_function("WillowGame.WillowPlayerController.OnPlayerClassChange").ok();
+    if stock == Some(event)
+        && let Ok(tree) = vm.find_function("WillowGame.WillowPlayerController.InitPlayerSkillTree")
+        && let Some(key) = vm.function(tree).and_then(|d| d.native_key.clone())
         && !vm.has_native(&key)
     {
         return Err(NotYet::not_ported(
             format!(
-                "ApplyCharacterClassStartingValues: OnPlayerClassChange's script calls {key}, which nothing binds \
+                "ApplyCharacterClassStartingValues: the stock OnPlayerClassChange calls {key}, which nothing binds \
                  (NATIVE_SKILLS.md)"
             ),
             RECORD_CLASS_STARTING,
