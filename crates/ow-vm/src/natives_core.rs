@@ -3242,6 +3242,19 @@ mod tests {
         let err = h.vm.query_interface(first, actor).unwrap_err();
         assert!(matches!(&err, VmError::Script { message, .. } if message.contains("answering objects")), "{err}");
         assert!(!h.vm.interface_asked(first, actor), "the chain is unwound");
+
+        // A plain-table leaf (review r2 of #456, item 3): after one answering object fewer than the cap it answers;
+        // after a full chain it is refused like any other object. An actor lists the asked class, so its plain
+        // answer is itself.
+        let leaf = h.vm.instantiate(actor, "PlainLeaf").unwrap();
+        chain.borrow_mut().truncate(crate::api::MAX_INTERFACE_DEPTH - 1);
+        chain.borrow_mut().push(leaf);
+        assert_eq!(h.vm.query_interface(first, actor).unwrap(), Some(leaf), "the leaf answers under the cap");
+        let last = h.vm.instantiate(pawn, "Link63").unwrap();
+        let at = crate::api::MAX_INTERFACE_DEPTH - 1;
+        chain.borrow_mut().insert(at, last);
+        let err = h.vm.query_interface(first, actor).unwrap_err();
+        assert!(matches!(&err, VmError::Script { message, .. } if message.contains("answering objects")), "{err}");
     }
 
     #[test]

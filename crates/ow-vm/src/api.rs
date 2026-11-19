@@ -780,23 +780,25 @@ impl Vm {
     /// `this`'s answer to `QueryInterface(iface)`, as the `Object.QueryInterface` native gives it: its class's
     /// registered answer ([`Vm::interface_rule_for`]), else [`Vm::plain_interface`]. A question already being answered
     /// further up the same chain gets none at once, which ends a cycle (NATIVE_PAWN_AI_INTERFACE.md, section 2, "A
-    /// question asked twice", UNVERIFIED); the asker takes the none as its step's answer. A chain of more than
-    /// [`MAX_INTERFACE_DEPTH`] distinct objects answering in turn is an error (review r1 of #456, item 6): no rule
-    /// read so far hands a question on that far.
+    /// question asked twice", UNVERIFIED); the asker takes the none as its step's answer. A question reaching an object
+    /// while [`MAX_INTERFACE_DEPTH`] distinct objects are already answering it is an error, whichever answer that
+    /// object would give (review r1 of #456, item 6; r2, item 3): no rule read so far hands a question on that far.
     pub fn query_interface(&mut self, this: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
         if self.interface_asked(this, iface) {
             return Ok(None);
         }
-        let class = self.space.heap.get(this)?.class;
-        let Some(rule) = self.interface_rule_for(class) else {
-            return self.plain_interface(this, iface);
-        };
+        // The cap comes before either answer (review r2 of #456, item 3): a plain-table object at the end of a full
+        // chain is refused too.
         if self.interface_asking.len() >= MAX_INTERFACE_DEPTH {
             return Err(VmError::Script {
                 function: "Object.QueryInterface".to_string(),
                 message: format!("the question went through more than {MAX_INTERFACE_DEPTH} answering objects"),
             });
         }
+        let class = self.space.heap.get(this)?.class;
+        let Some(rule) = self.interface_rule_for(class) else {
+            return self.plain_interface(this, iface);
+        };
         self.interface_asking.push((this, iface));
         let answer = rule(self, this, iface);
         self.interface_asking.pop();

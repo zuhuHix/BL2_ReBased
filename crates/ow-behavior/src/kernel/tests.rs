@@ -1127,3 +1127,43 @@ fn runner_context_refuses_unchecked_stale_explicit_object() {
         Err(VmError::Heap(HeapError::Stale(gone)))
     );
 }
+
+// ------------------------------------------------------------------------------------------ certain first behavior
+
+/// The behavior a firing runs before any other (review r2 of #456): the first link without a delay in firing order,
+/// and only when it has no variable links; a closed event gives none. A NaN delay starts at once in the firing and in
+/// the scan alike ([`starts_now`]), and a parked link is skipped by both.
+#[test]
+fn the_certain_first_behavior_is_the_one_the_firing_runs_first() {
+    let id = |index| BehaviorId { sequence: 0, index };
+    let mut env = Env::of(&rules());
+    let p = env.provider("ToyRules");
+    assert_eq!(p.certain_first_behavior("Order", -1), Some(id(0)), "A, ahead of B");
+    assert_eq!(p.certain_first_behavior("Filter", 5), Some(id(10)), "the link id filter: C5");
+    assert_eq!(p.certain_first_behavior("Off", -1), None, "a disabled event runs nothing");
+
+    let spec = Spec::new(
+        "Delays",
+        vec![Seq {
+            name: "S",
+            enabled_on_spawn: Some(true),
+            events: vec![ev("Go", (0, 3))],
+            behaviors: vec![beh("A", "Behavior_ToySame", (0, 0)), beh("B", "Behavior_ToySame", (0, 0)),
+                beh("C", "Behavior_ToySame", (0, 0))],
+            links: vec![(0, -1, 5.0), (1, -1, f32::NAN), (2, -1, 0.0)],
+            ..Seq::default()
+        }],
+        vec![],
+    );
+    let mut env = Env::of(&spec);
+    let mut p = env.provider("Delays");
+    assert_eq!(p.certain_first_behavior("Go", -1), Some(id(1)), "A is parked; B's NaN delay starts at once");
+    event(&mut env, &mut p, "Go");
+    assert_eq!(p.trace, ["Go -> B", "Go -> C"], "the firing agrees");
+    assert!(starts_now(f64::NAN) && starts_now(0.0) && starts_now(-1.0) && !starts_now(0.5));
+
+    // T has a Context link and input links: its context is bound by the firing, so it is not certain.
+    let mut env = Env::of(&variables_spec("BVAR_Int"));
+    let p = env.provider("P");
+    assert_eq!(p.certain_first_behavior("Go", -1), None);
+}

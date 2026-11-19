@@ -696,8 +696,10 @@ struct Map {
     pawn_reference: bool,
     /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Mind`, an invented `GearboxMind` export.
     pawn_mind: bool,
-    /// An OnTakeDamage `Behavior_AIHold` on the dummy.
+    /// An OnTakeDamage `Behavior_AIHold` on the dummy, after `Hit` and the status effect.
     hold: bool,
+    /// With [`Map::hold`]: the hold is OnTakeDamage's first behavior instead, ahead of `Hit`.
+    hold_first: bool,
     /// An OnSpawned condition of another class on sequence `Odd`.
     odd_condition: bool,
     /// The player's class and its health pool data in `Startup` ([`startup`]).
@@ -846,7 +848,12 @@ fn dynamic(map: Map) -> Vec<u8> {
     let mut on_hit = vec![hit, status];
     if map.hold {
         let hold_class = class_import(&mut p, "GearboxFramework", "Behavior_AIHold");
-        on_hit.push(behavior(&mut p, hold_class, "Idle_Hold", Vec::new()));
+        let hold = behavior(&mut p, hold_class, "Idle_Hold", Vec::new());
+        if map.hold_first {
+            on_hit.insert(0, hold);
+        } else {
+            on_hit.push(hold);
+        }
     }
     idle.events.push(("OnTakeDamage", on_hit));
     sequences.push(idle);
@@ -933,13 +940,7 @@ fn build(map: Map, mode: ParityMode) -> (World, PathBuf) {
 
 impl Env {
     fn new(map: Map, mode: ParityMode) -> Env {
-        Env::with_world(map, mode, |_| {})
-    }
-
-    /// [`Env::new`], with `before` run on the world before the slice is built (and registers its rules).
-    fn with_world(map: Map, mode: ParityMode, before: impl FnOnce(&mut World)) -> Env {
         let (mut world, dir) = build(map, mode);
-        before(&mut world);
         let map_name = PackageName::parse("Sanctuary_Dynamic").unwrap();
         let slice = FireMissionSlice::new(&mut world, "ToyMission", &map_name, DUMMY_PROVIDER).expect("slice");
         Env { world, slice, dir }
@@ -1222,15 +1223,16 @@ fn the_ai_hold_by_mode() {
     }
 }
 
-/// A dummy whose pawn's controller is a mind (review r1 of #456, item 1): in Off the hold is checked before
-/// `OnTakeDamage` fires, so its `NotYet { NotRead }` names `GearboxMind`'s open answer, is not a partial-writes stop,
-/// and leaves the event untriggered, the remote event `Hit` (queued ahead of the hold) unraised and the script not
-/// run. Reference keeps the no-op. A controller of a class with no open answer answers by its plain table, none here,
-/// so the script runs.
+/// A dummy whose pawn's controller is a mind, with the hold OnTakeDamage's first behavior and no variable links
+/// (reviews r1 and r2 of #456): in Off the hold is checked before the event fires, so its `NotYet { NotRead }` names
+/// `GearboxMind`'s open answer, is not a partial-writes stop, and leaves the event untriggered, `Hit` unraised and
+/// the script not run. Reference keeps the no-op. A controller of a class with no open answer answers by its plain
+/// table, none here, so the script runs.
 #[test]
-fn the_ai_hold_of_a_pawn_with_a_mind_is_refused_before_the_event_fires() {
+fn the_first_hold_of_a_pawn_with_a_mind_is_refused_before_the_event_fires() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
-        let mut env = Env::new(Map { hold: true, pawn: true, pawn_mind: true, ..Map::default() }, mode);
+        let map = Map { hold: true, hold_first: true, pawn: true, pawn_mind: true, ..Map::default() };
+        let mut env = Env::new(map, mode);
         let seen = hold_seen(env.vm());
         env.spawn();
         env.remotes();
@@ -1261,29 +1263,13 @@ fn the_ai_hold_of_a_pawn_with_a_mind_is_refused_before_the_event_fires() {
     assert_eq!(*seen.borrow(), vec![env.slice.dummy_pawn().unwrap()], "a plain controller: the script ran");
 }
 
-/// A hold refusal the check before the firing could not see (review r1 of #456, item 1): the event has triggered and
-/// `Hit` was raised, so the `NotYet` is terminal, prefixed "stopped after partial writes", its kind kept. The invented
-/// pawn rule declines the first question (the check) and refuses the second (the hold's own run).
+/// The same pawn with the hold after `Hit` (review r2 of #456): what runs before the hold can change whether it is
+/// reached, so it is not checked ahead. The firing finds the refusal after the event triggered and `Hit` was raised,
+/// so the `NotYet` is terminal, prefixed "stopped after partial writes", its kind kept.
 #[test]
-fn a_hold_refusal_inside_the_firing_is_terminal() {
-    let mut env = Env::with_world(Map { hold: true, pawn: true, ..Map::default() }, ParityMode::Off, |world| {
-        let vm = &mut world.vm;
-        let pawn = vm.find_class("Engine.Pawn").unwrap();
-        let asked = Rc::new(std::cell::Cell::new(0));
-        vm.register_interface_rule(
-            pawn,
-            Rc::new(move |_vm: &mut Vm, _this, _iface| {
-                asked.set(asked.get() + 1);
-                if asked.get() == 1 {
-                    Ok(None)
-                } else {
-                    Err(ow_core::NotYet::not_read("an invented answer read only on the second question", "invented")
-                        .into())
-                }
-            }),
-        )
-        .unwrap();
-    });
+fn a_later_hold_is_refused_by_the_firing_as_a_terminal_stop() {
+    let map = Map { hold: true, pawn: true, pawn_mind: true, ..Map::default() };
+    let mut env = Env::new(map, ParityMode::Off);
     let seen = hold_seen(env.vm());
     env.spawn();
     env.remotes();
@@ -1292,7 +1278,7 @@ fn a_hold_refusal_inside_the_firing_is_terminal() {
     let n = e.not_yet().expect("a NotYet");
     assert_eq!(n.missing, Missing::NotRead, "the kind is kept: {e:?}");
     assert!(n.what.starts_with("stopped after partial writes: "), "{e:?}");
-    assert!(n.what.contains("an invented answer read only on the second question"), "{e:?}");
+    assert!(n.what.contains("GearboxMind's own QueryInterface answer"), "{e:?}");
     assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 1, "the event had triggered");
     assert_eq!(env.remotes(), vec!["Hit".to_string()], "Hit, ahead of the hold, was raised");
     assert!(seen.borrow().is_empty());

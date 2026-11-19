@@ -108,6 +108,13 @@ pub const CALL_BUDGET: usize = 10_000;
 /// The selector `BehaviorContextData.BehaviorContext` is set to for a bound input (`UseContextObject`).
 pub const USE_CONTEXT_OBJECT: u8 = 4;
 
+/// Whether a link with `delay` runs its behavior at once rather than parking it: any delay that is not above zero,
+/// a NaN included, as the firing has always run it. The firing and [`Provider::certain_first_behavior`] share it
+/// (review r2 of #456, item 4).
+pub fn starts_now(delay: f64) -> bool {
+    delay <= 0.0 || delay.is_nan()
+}
+
 /// The event fired on a sequence that was just enabled / is being disabled.
 pub const SEQUENCE_ENABLED_EVENT: &str = "OnBehaviorSequenceEnabled";
 pub const SEQUENCE_DISABLED_EVENT: &str = "OnBehaviorSequenceDisabled";
@@ -1014,13 +1021,17 @@ impl Provider {
         !(state.trigger_count >= 1 && self.now - state.last_trigger_time < entry.re_trigger_delay)
     }
 
-    /// The behaviors that [`Provider::fire_event`] with `event` and `link_id` would start at once, in firing order:
-    /// the links without a delay of each event entry that would trigger now, on each sequence enabled now. Reads
-    /// only, so a caller can check them before the firing writes the event state (review r1 of #456, item 1). A
-    /// behavior that an earlier one enables, or that is reached through another behavior's outputs, is not listed:
-    /// what it does is known only once the firing runs.
-    pub fn immediate_behaviors(&self, event: &str, link_id: i32) -> Vec<BehaviorId> {
-        let mut out = Vec::new();
+    /// The behavior that [`Provider::fire_event`] with `event` and `link_id` runs before any other, when what it runs
+    /// on is fixed before the firing; else `None`. Reads only, so a caller can check that behavior before the firing
+    /// writes the event state (review r2 of #456: preflight only what is cheap and certain).
+    ///
+    /// It is the first link without a delay ([`starts_now`]) in firing order: the sequences enabled now, each open
+    /// event entry, its links. Nothing runs before it, so its sequence is still enabled and its event still open when
+    /// the firing reaches it; a later behavior may be skipped or changed by an earlier one and is never certain. It is
+    /// given only when it has no variable links at all: the firing writes the event's outputs into the sequence's
+    /// variables and binds a linked behavior's context and inputs from them, so a linked behavior's context is known
+    /// only once the firing runs. A behavior this leaves out is checked by the firing itself.
+    pub fn certain_first_behavior(&self, event: &str, link_id: i32) -> Option<BehaviorId> {
         for s in 0..self.data.sequences.len() {
             if !self.enabled[s] {
                 continue;
@@ -1032,13 +1043,14 @@ impl Provider {
                 let entry = &self.data.sequences[s].events[e];
                 for i in entry.start..entry.start + entry.length {
                     let link = self.data.sequences[s].links[i];
-                    if (link_id == -1 || link.id == link_id) && link.delay <= 0.0 {
-                        out.push(BehaviorId { sequence: s, index: link.behavior });
+                    if (link_id == -1 || link.id == link_id) && starts_now(link.delay) {
+                        let id = BehaviorId { sequence: s, index: link.behavior };
+                        return self.behavior(id).variables.is_empty().then_some(id);
                     }
                 }
             }
         }
-        out
+        None
     }
 
     /// How many times `event` has triggered on this provider, over every sequence.
@@ -1230,7 +1242,7 @@ impl Provider {
     fn step(&mut self, vm: &mut Vm, item: Work) -> Result<(), BehaviorError> {
         match item {
             Work::Start { s, b, delay, event } => {
-                if delay > 0.0 {
+                if !starts_now(delay) {
                     self.park(self.now + delay, s, b, &event, false, None);
                 } else {
                     self.work.push(Work::Run {
