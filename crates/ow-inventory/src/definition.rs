@@ -6,10 +6,10 @@
 //!
 //! - `GenerateUniqueID()`: two C-runtime `rand()` draws, `first | (second << 16)`, and 0 becomes 1. The draws come
 //!   from the world's [`CrtStream::LootPool`], the stream the Off loot path already shares: the pool pick of
-//!   `ow_inventory::spawn` and `ow-combat`'s `OFF_STREAM`. So one stream keeps the note's order, which is per pool
-//!   (its "Draw order"): the pool's firing `FRand`; for a firing pool, its roll, with each new inventory's two draws
-//!   here and its parts roll inside the pick loop; then that pool's toss draws for its dropped items; then the next
-//!   pool.
+//!   `ow_inventory::spawn` and `ow-combat`'s `OFF_STREAM`. Only the pool pick and these ID draws (and, once wired,
+//!   the toss) share that stream: the parts roll draws from `CrtStream::ItemRoll` (D5), so the note's per-pool
+//!   interleaving ("Draw order": the firing `FRand`; the pool's roll with each new inventory's two draws and its
+//!   parts roll; then the toss draws; then the next pool) is not reproduced on one generator (UNVERIFIED).
 //! - `ComputeMonetaryValue()`: 0 without an inventory definition; otherwise the definition's `MonetaryValue`
 //!   (attribute initialization data) evaluated and truncated toward zero, then capped by the definition's
 //!   `FormOfCurrency`: credits 99,999,999, Eridium 500, the other in-range values 999, and a value past the enum's last

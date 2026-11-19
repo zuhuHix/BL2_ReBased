@@ -12,7 +12,9 @@ section 3.4). It implements from `docs/verification/NATIVE_LOOT_SPAWN.md` (analy
     in-range values 999, past the last entry 0.
   - `GetManufacturer`: `DefinitionData.ManufacturerDefinition`.
 - **The generator.** The two ID draws come from `CrtStream::LootPool`, the stream the Off loot path already shares
-  (ow-inventory's pool pick and ow-combat's `OFF_STREAM`), so the note's order stays on one stream. That order is per
+  (ow-inventory's pool pick and ow-combat's `OFF_STREAM`). Only the pool pick and the ID draws share it; the parts
+  roll draws from `CrtStream::ItemRoll` (D5), so the note's interleaving is not reproduced on one generator
+  (UNVERIFIED). The note's order is per
   pool (the note's "Draw order", settled in the review of #408): the pool's firing `FRand`; for a firing pool, its
   roll, with each new inventory's two ID draws and its parts roll inside the pick loop; then that pool's toss draws
   for its dropped items; then the next pool. The game's own
