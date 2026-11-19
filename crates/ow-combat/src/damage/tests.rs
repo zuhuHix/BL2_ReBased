@@ -311,3 +311,24 @@ fn an_ai_bullet_refuses_unread_willow_hold_before_weapon_scales() {
         }
     }
 }
+
+/// The kill boundary (review r1 of #481, item 2): a `NotYet` after the victim's state changed is marked once, kind and
+/// record kept; with the state unchanged, or for another error, nothing changes.
+#[test]
+fn a_not_yet_past_the_death_is_marked_at_the_kill_boundary() {
+    use ow_vm::error::VmError;
+    let refusal = || VmError::NotYet(ow_core::NotYet::not_read("an invented refusal", "an invented record"));
+    match crate::hit::kill_boundary(refusal(), Some(None::<u32>), Some(Some(7))) {
+        VmError::NotYet(n) => {
+            assert!(ow_core::notyet::is_partial_writes(&n.what), "{n}");
+            assert_eq!((n.missing, n.record), (ow_core::Missing::NotRead, "an invented record"));
+        }
+        other => panic!("{other:?}"),
+    }
+    match crate::hit::kill_boundary(refusal(), Some(Some(7u32)), Some(Some(7))) {
+        VmError::NotYet(n) => assert!(!ow_core::notyet::is_partial_writes(&n.what), "{n}"),
+        other => panic!("{other:?}"),
+    }
+    let other = crate::hit::kill_boundary(VmError::ServiceBorrowed("an invented service"), Some(None::<u32>), Some(Some(7)));
+    assert!(matches!(other, VmError::ServiceBorrowed(_)));
+}

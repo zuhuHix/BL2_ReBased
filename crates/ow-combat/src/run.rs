@@ -1114,6 +1114,12 @@ impl Run {
         &self.errors
     }
 
+    /// The run's sticky stop, typed: the class switch's, or a step's `NotYet` after partial writes (review r1 of #481,
+    /// item 2). Every later step answers it.
+    pub fn sticky_stop(&self) -> Option<&VmError> {
+        self.class_switch_stop.as_ref()
+    }
+
     /// The ids of the report's rows so far, read only: the value rows, then one id per kill row (a repeated kill id
     /// repeats; the report letters them). Lane SLICE-RUN-OFF: the slice gate grades each link on the rows its own steps
     /// added.
@@ -1205,6 +1211,15 @@ impl Run {
             Err(e) => {
                 let text = error_text(&e);
                 self.errors.push(format!("{step}: {text}"));
+                // A NotYet after partial writes (a kill that stopped past its first write; review r1 of #481, item 2)
+                // is sticky and typed, as the class switch's stop: no snapshot runs script getters after it, and no
+                // later step runs.
+                if self.class_switch_stop.is_none()
+                    && let VmError::NotYet(n) = &e
+                    && ow_core::notyet::is_partial_writes(&n.what)
+                {
+                    self.class_switch_stop = Some(e.clone());
+                }
                 format!("{{\"error\":{}}}", json_quote(&text))
             }
         };

@@ -1036,6 +1036,16 @@ pub(crate) fn causer_arg(
 
 /// [`hit_with_type`] with a shot's parts: the pipeline carries `parts.impact`, and a declared `DamageCauser` gets
 /// `parts.causer` (the zero value without one). With [`ShotParts::default`] this is exactly [`hit_with_type`].
+/// The kill boundary (review r1 of #481, item 2): an error that leaves the hit after the victim's script state changed
+/// (the death began) is past the hit's and the death script's writes. A `NotYet` is then marked once, its kind and
+/// record kept; any other error, and any error with the state unchanged, is returned as it is.
+pub fn kill_boundary<S: PartialEq>(e: VmError, before: Option<S>, after: Option<S>) -> VmError {
+    match e {
+        VmError::NotYet(n) if before != after => VmError::NotYet(n.after_partial_writes()),
+        other => other,
+    }
+}
+
 pub fn hit_with(
     vm: &mut Vm,
     victim: ObjRef,
@@ -1107,9 +1117,15 @@ pub fn hit_with(
 
     let outer_census = vm.census.replace(CallCensus::default());
     let outer_trace = vm.trace.replace(Vec::new());
+    let state_before = vm.space.heap.get(victim)?.state;
     let ran = vm.call(take, Some(victim), args);
     let census = std::mem::replace(&mut vm.census, outer_census).unwrap_or_default();
     report.order = std::mem::replace(&mut vm.trace, outer_trace).unwrap_or_default();
+    // The kill boundary (review r1 of #481, item 2): a NotYet that leaves the hit after the victim's death began (its
+    // script state changed, as `Pawn.Died` moves it to `Dying`) comes after the hit's and the death script's writes.
+    // It is terminal: marked once, its kind and record kept, carried typed to the caller. Other errors are unchanged.
+    let state_after = vm.space.heap.get(victim).map(|o| o.state).ok();
+    let ran = ran.map_err(|e| kill_boundary(e, Some(state_before), state_after));
     ran?;
     note(
         vm,

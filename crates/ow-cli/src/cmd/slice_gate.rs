@@ -665,8 +665,15 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             };
             let before_errors = run.errors().len();
             let before_pawns = (0..).take_while(|&n| run.enemy(n).is_some()).count();
+            let sticky_before = run.sticky_stop().is_some();
             run.apply(&step);
             r.steps.push(step.clone());
+            // A typed sticky stop this step set (a NotYet after partial writes, review r1 of #481, item 2) is graded by
+            // its variant, before any text.
+            if !sticky_before && let Some(e) = run.sticky_stop() {
+                r.stop = Some(typed_stop(&step, e));
+                break;
+            }
             let lines: Vec<String> = run.errors()[before_errors..]
                 .iter()
                 .map(|t| t.strip_prefix(&format!("{step}: ")).unwrap_or(t).to_string())
