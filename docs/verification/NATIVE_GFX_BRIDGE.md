@@ -362,7 +362,8 @@ host moves the panel, use the formula above and keep `None` tolerance.
   mission offered by Marcus (status 0) the list shows one header "available" (the `mlistavailable` string) then the mission
   title (`MissionDefinition.MissionName`); after it is accepted the mission is in progress and has no header, and when ready
   it sits under the turn-in header.
-* **Open:** the exact English strings of the two keys (from `WillowGame.int`, not read); the origin of the call.
+* **Open:** the exact English strings of the two keys (from `WillowGame.int`, not read). The origin of the call is
+  answered in [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) section 3.
 
 ## Not read yet
 

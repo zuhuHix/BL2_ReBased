@@ -40,7 +40,7 @@ G1, timers/spawn/iterators/states to G3. Ranking of these natives: [NATIVE_SLICE
 | WillowPlayerController.GetLevelForMission | `native function name GetLevelForMission(MissionDefinition InMission)` | none (no script caller in WillowGame) | low-medium | UNVERIFIED |
 | WillowPlayerController.LocalMissionDependenciesMet | `native function bool LocalMissionDependenciesMet(MissionDefinition InMission, optional int ForPlaythrough)` | none in WillowGame script | medium-high | UNVERIFIED |
 | WillowPlayerController.IsMissionObjectiveCompleteLocal / ActiveLocal | `native function bool ...(MissionObjectiveDefinition MissionObjective, optional int ForPlaythrough)` | none in WillowGame script | medium-high | UNVERIFIED |
-| WillowPlayerController.GetActiveMissionNumber / GetLocalActiveMissionNumber | `native function int GetActiveMissionNumber()` / `(optional int ForPlaythrough)` | online status only | medium | UNVERIFIED |
+| WillowPlayerController.GetActiveMissionNumber / GetLocalActiveMissionNumber | `native function int GetActiveMissionNumber()` / `(optional int ForPlaythrough)` | online status; the settings refresh in a mission accept (slice links 10-12) | medium | UNVERIFIED |
 | PlayerController.IsPrimaryPlayer | `native final function bool IsPrimaryPlayer()` | Fire: gates (8 dyn., 90 sites) | medium-high | UNVERIFIED |
 | MissionTracker.IsDataValid | `native function bool IsDataValid()` | Fire: gates AddMission etc. (6 dyn.) | high (read), medium (who sets it) | UNVERIFIED |
 | WorldInfo.IsMenuLevel | `native static function bool IsMenuLevel(optional string MapName)` | Fire: HUD fanfare gate (10 dyn.) | high (no-argument form) | UNVERIFIED |
@@ -259,12 +259,14 @@ members), so the AI pawn cost fields below are named, not numbered. Fields used 
   expansion and with status 1/2/3, the lowest `MissionNumber`; among non-plot missions with status 1/2/3/5 that are not
   filtered (asks the script event `IsMissionFiltered`), the lowest number; plot result wins, then side result; none found:
   the helper returning the highest `MissionNumber` of Complete plot missions, else 0.
-- **GetActiveMissionNumber():** uses the world tracker when its data is valid: the tracker's `ActiveMission`'s
-  `MissionNumber` if one is tracked; otherwise the first plot-critical, non-DLC mission with status 1/2/3 in tracker
-  order (highest completed number if none); falls back to the local function above with the current playthrough.
-  **Corrected** in [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) (decision 2026-11-19-86): the fallback is
-  `GetActivePlotCriticalMissionNumber` for the current playthrough, not the local function; the tracked mission
-  answers with no status check.
+- **GetActiveMissionNumber():** read again in [NATIVE_MISSION_NUMBERS.md](NATIVE_MISSION_NUMBERS.md) section 1
+  (decision 2026-11-19-86), which has the rule. In short: with the world's tracker and its data valid, the tracked
+  mission's `MissionNumber` (no status check); otherwise the first plot-critical, non-DLC mission in progress in the
+  tracker's list order (the largest Complete one's number if none). Without the tracker, or with its data not valid, it
+  falls back to `GetActivePlotCriticalMissionNumber` for the current playthrough (NATIVE_SAVE_LOAD.md), not to the
+  local function above.
+- **Online status and the slice:** besides the online status sites, the settings refresh calls it during a mission
+  accept (NATIVE_SETTINGS_FILL.md), which slice links 10 to 12 reach.
 - **Open:** exact tie-breaking; low priority.
 
 ## PlayerController.IsPrimaryPlayer

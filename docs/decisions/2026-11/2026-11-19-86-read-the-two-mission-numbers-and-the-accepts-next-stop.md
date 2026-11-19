@@ -36,3 +36,20 @@ for a headless world with no Flash movie hosted (UNVERIFIED) and records the rea
 
 The script path is also corrected: the slice's accept reaches the movie through `ClientUpdateUIMissionList` and
 `UpdateMissionList`, not `extAcceptConfirmed`.
+
+**Review r1 of #473 (five findings, fixed in the note).**
+1. **The read-back check** now covers `FocusOn`'s state. No script reads `FocusObject`, `InterpFocusOffset` or the clip
+   tables, and `FocusOffset` is read only by movie input handlers the slice does not drive. `GetVariableObject`'s result
+   only feeds `FocusOn`. The three Off answers are labelled port Off answers for a headless world with no Flash movie
+   hosted, UNVERIFIED.
+2. **The chain** to `UpdateMissionTextList` at the accept is
+   `UpdateMissionStatus` -> `ClientUpdateUIMissionList` -> `UpdateMissionList` -> `extPopulateQuestEntries`. It was
+   shown from the full caller scan and matches FIRE_MISSION_GOLDEN_TRACE.md's observed route. The native's checks come
+   before its own write, and a `NotYet` from it is terminal with the prefix.
+3. **`GetActiveMissionNumber` in the port:**
+   - failures from bound and unbound calls propagate unchanged;
+   - a `None` list entry is `NotYet { NotRead }`;
+   - the engine-wide gate is not guessed: both branches are computed, and a difference is `NotYet { NotRead }`;
+   - the expected next stop is the bridge's `GetAllMissions` `LayerAbsent`, while the tracker's data is valid.
+4. **The bl-sdk checks** now tell the rules apart. The rest stay open.
+5. **NATIVE_CONTROLLER_HELPERS.md and NATIVE_GFX_BRIDGE.md** are fixed in place.
