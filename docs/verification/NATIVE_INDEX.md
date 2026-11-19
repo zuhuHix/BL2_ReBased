@@ -593,3 +593,8 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | SpecialMoveDefinition.GetSMDToPlay / IsLocalAuthority | [NATIVE_SPECIAL_MOVE_PLAY.md](NATIVE_SPECIAL_MOVE_PLAY.md) | link 9: the two gates of Play | UNVERIFIED | high | |
 | SpecialMoveComponent.GetSMNode / IsPlayingClass | [NATIVE_SPECIAL_MOVE_PLAY.md](NATIVE_SPECIAL_MOVE_PLAY.md) | link 9: inside AuthorityCanPlay (no SpecialMoveBlend node in a headless world) | UNVERIFIED | high | |
 | Pawn.IsAliveAndWell | [NATIVE_SPECIAL_MOVE_PLAY.md](NATIVE_SPECIAL_MOVE_PLAY.md) | link 9: the Phaselock target test (GetPlayerAnimation) | UNVERIFIED | high | |
+| BehaviorBase.RunBehaviors (the shared kernel-info record, order, no thread) | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | the level-up (mission_script_test S7b, S9, S10); link 9: special-move behaviors | UNVERIFIED | high | |
+| BehaviorBase.ApplyBehavior / ApplyBehaviorToContext (script defaults), Behavior_RunBehaviorCollection | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | the level-up's OnLevelUp collection | UNVERIFIED | high | |
+| InstanceDataHelper.GetFirstInstanceDataObject | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | the level-up: the collection lookup | UNVERIFIED | medium-high | |
+| SpecialMoveComponent.RunBehaviors / CanPlayBehaviorData | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | link 9: StartBehaviors and StopBehaviors | UNVERIFIED | high | |
+| GearboxAnimDefinition.OnStart / OnServerStart | [NATIVE_RUN_BEHAVIORS.md](NATIVE_RUN_BEHAVIORS.md) | link 9: the special move's behavior events | UNVERIFIED | medium | |
