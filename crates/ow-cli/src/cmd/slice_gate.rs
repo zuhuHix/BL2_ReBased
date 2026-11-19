@@ -17,7 +17,11 @@
 //! - `slice-run` (`ow_mission::slice::FireMissionSlice`, as `--slice-run` builds it, with the step list of
 //!   `tools/verify_fire_event_order.py`): links 10 to 12, on a second world. On the definition store's copy refusal
 //!   the group runs again on the explicit load set, as `--slice-run` does.
-//! - `none`: links 2, 6, 7, 8 and 9 have no headless driver yet; each row is `notyet` with the reason.
+//! - `equip-run` (lane SLICE-GATE-DRIVERS, decision 2026-11-19-39): link 8, the phases of `--inventory-move
+//!   --equip-run` on one fixed weapon ([`EQUIP_WEAPON`]) on that command's own world; ok on its own evidence only.
+//! - `phaselock-cast` (same lane): link 9, the installed Phaselock cast on its own world; no evidence check is chosen
+//!   yet, so it is never ok.
+//! - `none`: links 2, 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
 //!
 //! The two driver worlds are separate: the gate's one session is not modelled yet (the slice bridge refuses a world
 //! that already has actors, and the map world is not brought up for play, decision 2026-11-19-04).
@@ -70,6 +74,10 @@ const USAGE: &str = "usage: ow-package --slice-gate --cooked <directory> [--past
 pub enum Driver {
     Combat,
     Fire,
+    /// `--inventory-move --equip-run`'s phases on one weapon (link 8).
+    Equip,
+    /// The installed Phaselock cast (link 9).
+    Phaselock,
     /// No headless driver yet; the text says why.
     None(&'static str),
 }
@@ -79,6 +87,8 @@ impl Driver {
         match self {
             Driver::Combat => "combat-run",
             Driver::Fire => "slice-run",
+            Driver::Equip => "equip-run",
+            Driver::Phaselock => "phaselock-cast",
             Driver::None(_) => "none",
         }
     }
@@ -93,6 +103,8 @@ pub enum Evidence {
     Status(u8),
     /// The steps alone.
     Steps,
+    /// What the link's own driver reports of its own run (`Ran::evident`); the text says what it checks.
+    Driver(&'static str),
 }
 
 /// One link of the gate.
@@ -139,8 +151,9 @@ pub const LINKS: [Link; 14] = [
     link(
         "reach_fight_area",
         Driver::None(
-            "no headless driver: movement and the fight area are host-side (decision 2026-11-16-57), and the map \
-             world is not brought up for play (decision 2026-11-19-04)",
+            "no headless driver: the only mover is H4's in ow-host (decision 2026-11-16-52), which ow-cli does not \
+             depend on; no fight area is placed in a map world, and the map world is not brought up for play \
+             (decision 2026-11-19-04)",
         ),
         &[],
         &[],
@@ -173,7 +186,10 @@ pub const LINKS: [Link; 14] = [
     ),
     link(
         "pick_up_gun",
-        Driver::None("no headless driver: pickup is host-side (decision 2026-11-16-41)"),
+        Driver::None(
+            "no headless driver: no pickup path exists in code; the death roll makes records only, no pickup actor \
+             is spawned, and the pickup's natives are not ported (ow_combat::loot; decision 2026-11-16-41)",
+        ),
         &[],
         &[],
         Evidence::Steps,
@@ -181,7 +197,11 @@ pub const LINKS: [Link; 14] = [
     ),
     link(
         "pick_up_aimed_not_nearest",
-        Driver::None("no headless driver: pickup is host-side (decision 2026-11-16-41)"),
+        Driver::None(
+            "no headless driver: the use-target choice along the view ray exists (ow_mission::interactive::\
+             choose_usable, decision 2026-11-16-60), but no pickup actor is spawned to choose between, and the hits \
+             it takes need a view trace that no headless world makes",
+        ),
         &[],
         &[],
         Evidence::Steps,
@@ -189,25 +209,25 @@ pub const LINKS: [Link; 14] = [
     ),
     link(
         "equip_gun",
-        Driver::None(
-            "no headless driver: equip is library code with unit tests, and no run step joins a looted gun to a \
-             fire (decisions 2026-11-15-33 and 2026-11-16-61)",
-        ),
+        Driver::Equip,
+        &["make", "bases", "equip", "unequip"],
         &[],
-        &[],
-        Evidence::Steps,
-        "",
+        Evidence::Driver("the equip left external records on the weapon and the unequip took every one back"),
+        "--equip-run's phases on one fixed weapon (EQUIP_WEAPON), not link 5's drop, on its own world; the spawn's \
+         InitializeInternal is not run, and no shot is fired (decision 2026-11-19-03)",
     ),
     link(
         "phaselock_enemy",
-        Driver::None(
-            "no headless driver: the Phaselock cast has no run step (SLICE_RUN_PLAN.md section 3.5; decision \
-             2026-11-16-42)",
+        Driver::Phaselock,
+        &["cast"],
+        &[],
+        Evidence::Driver(
+            "none chosen yet: what a lock leaves on its target is not settled, so a cast that returns is not yet \
+             evidence",
         ),
-        &[],
-        &[],
-        Evidence::Steps,
-        "",
+        "the installed LiftActionSkill.OnActionSkillStarted on Maya's Phaselock skill, with a player pawn, its \
+         controller and an AI pawn from class defaults, on its own world (as ow-skills' installed run; decision \
+         2026-11-16-42)",
     ),
     link(
         "mission_accept",
@@ -442,6 +462,8 @@ pub struct Ran {
     pub error_lines: Vec<(String, String)>,
     /// The ids of the combat report's rows the link's steps added (a link with no steps: its prerequisite's).
     pub new_rows: Vec<String>,
+    /// What a driver with its own evidence check found of the link's own run (`Evidence::Driver`).
+    pub evident: bool,
 }
 
 /// The rows of the 14 links, from what the drivers did (`ran[i]` for link `i`, `None` for a link not run) and the
@@ -535,6 +557,7 @@ fn evidence_text(e: Evidence) -> String {
         Evidence::Row(prefix) => format!("the combat report has no {prefix}* row"),
         Evidence::Status(s) => format!("the Fire mission's status is not {s}"),
         Evidence::Steps => "none needed".into(),
+        Evidence::Driver(what) => format!("the driver's own check: {what}"),
     }
 }
 
@@ -747,11 +770,188 @@ fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
     run_combat(Path::new(cooked), grading, &mut ran);
     let mut status = vec![0u8; LINKS.len()];
     run_fire(cooked, grading, &mut ran, &mut status);
+    run_equip(Path::new(cooked), grading, &mut ran);
+    run_phaselock(Path::new(cooked), grading, &mut ran);
     rows(&ran, grading, |i| match LINKS[i].evidence {
         Evidence::Row(prefix) => evidence_in(ran[i].as_ref(), prefix),
         Evidence::Status(s) => status[i] == s,
         Evidence::Steps => true,
+        Evidence::Driver(_) => ran[i].as_ref().is_some_and(|r| r.evident),
     })
+}
+
+/// The weapon link 8 equips: a weapons-file line of `--equip-run` (`<weapon type> <level> <balance>
+/// [<Slot>=<part>]...`). A Bandit assault rifle at level 1, the parts of a seed-1 Reference roll of its balance
+/// (`--item-card --weapons`). Fixed, not link 5's drop, because no headless run spawns that drop as an inventory yet.
+pub const EQUIP_WEAPON: &str = "GD_Weap_AssaultRifle.A_Weapons.WT_Bandit_AssaultRifle 1 \
+    GD_Weap_AssaultRifle.A_Weapons.AR_Bandit Barrel=GD_Weap_AssaultRifle.Barrel.AR_Barrel_Bandit \
+    Body=GD_Weap_AssaultRifle.Body.AR_Body_Bandit Grip=GD_Weap_AssaultRifle.Grip.AR_Grip_Jakobs \
+    Material=GD_Weap_AssaultRifle.ManufacturerMaterials.Mat_BanditMade_1 \
+    Sight=GD_Weap_AssaultRifle.Sight.AR_Sight_None Stock=GD_Weap_AssaultRifle.Stock.AR_Stock_Jakobs \
+    Prefix=GD_Weap_Shared_Names.Name.Prefix_Bandit.Prefix_Grip_Jakobs \
+    Title=GD_Weap_AssaultRifle.Name.Title_Bandit.Title__MashineGun";
+
+/// Records one step's error text on `r` as the other drivers do: strict grading or a `NotYet` stops the link (true),
+/// past-errors grading notes the line and goes on (false).
+fn step_error(r: &mut Ran, step: &str, text: &str, grading: Grading) -> bool {
+    let (outcome, stop) = classify(step, text);
+    if grading == Grading::Strict || outcome == Outcome::NotYet {
+        r.stop = Some((outcome, stop));
+        return true;
+    }
+    r.error_lines.push((step.to_string(), text.to_string()));
+    false
+}
+
+/// The index of the one link a driver runs.
+fn link_of(driver: Driver) -> Option<usize> {
+    LINKS.iter().position(|l| l.driver == driver)
+}
+
+/// Link 8 (module documentation): `make` prepares the weapon and its owner as `--equip-run` does, then each of its
+/// phases runs in turn. The evidence is the run's own: external records after the equip, none after the unequip.
+fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
+    let Some(i) = link_of(Driver::Equip) else { return };
+    if !should_run(i, Driver::Equip, ran) {
+        return;
+    }
+    let mut r = Ran::default();
+    let mut world = match crate::cmd::inventory::equip_run::gate_world(cooked) {
+        Ok(w) => w,
+        Err(text) => {
+            r.stop = Some(classify("setup", &text));
+            ran[i] = Some(r);
+            return;
+        }
+    };
+    let vm = &mut world.vm;
+    r.steps.push("make".into());
+    let weapon = match crate::cmd::inventory::equip_run::prepare_line(vm, EQUIP_WEAPON) {
+        Ok(w) => w,
+        Err(text) => {
+            r.stop = Some(classify("make", &text));
+            ran[i] = Some(r);
+            return;
+        }
+    };
+    let (mut after_equip, mut after_unequip) = (None, None);
+    for step in LINKS[i].steps.iter().skip(1) {
+        r.steps.push((*step).to_string());
+        let error = crate::cmd::inventory::equip_run::run_phase(vm, step, weapon);
+        let records = crate::cmd::inventory::equip_run::external_records(vm, weapon);
+        match *step {
+            "equip" => after_equip = Some(records),
+            "unequip" => after_unequip = Some(records),
+            _ => {}
+        }
+        if let Some(text) = error
+            && step_error(&mut r, step, &text, grading)
+        {
+            break;
+        }
+    }
+    r.evident = r.error_lines.is_empty()
+        && after_equip.is_some_and(|n| n > 0)
+        && after_unequip == Some(0);
+    ran[i] = Some(r);
+}
+
+/// Link 9 (module documentation): the installed cast on a world with the Core natives and `ow-skills`' tree and
+/// action-skill packs and a `WorldInfo`, as `ow-skills`' installed run builds it. No evidence check is chosen yet
+/// (`Evidence::Driver`), so a cast that returns is not `ok`.
+fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
+    let Some(i) = link_of(Driver::Phaselock) else { return };
+    if !should_run(i, Driver::Phaselock, ran) {
+        return;
+    }
+    let mut r = Ran::default();
+    let mut world = match phaselock_world(cooked) {
+        Ok(w) => w,
+        Err(e) => {
+            r.stop = Some(classify("setup", &ow_combat::hit::access::error_text(&e)));
+            ran[i] = Some(r);
+            return;
+        }
+    };
+    r.steps.push("cast".into());
+    if let Err(e) = phaselock_cast(&mut world.vm) {
+        let text = ow_combat::hit::access::error_text(&e);
+        step_error(&mut r, "cast", &text, grading);
+    }
+    ran[i] = Some(r);
+}
+
+/// Maya's Phaselock skill, its script entry and the classes the cast is given.
+pub const PHASELOCK_SKILL: &str = "GD_Siren_Skills.Phaselock.ActionSkill_Phaselock";
+pub const PHASELOCK_CAST: &str = "WillowGame.LiftActionSkill.OnActionSkillStarted";
+
+fn phaselock_world(cooked: &Path) -> Result<ow_world::world::World, ow_vm::error::VmError> {
+    use ow_balance::types::{
+        AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount, Playthrough,
+    };
+    let defs = ow_defs::DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .map_err(ow_vm::error::VmError::Def)?;
+    let attrs = ow_attr::AttributeSystem::standard().map_err(ow_vm::error::VmError::Attr)?;
+    let vm = ow_vm::api::Vm::new(ow_object::heap::ObjectSpace::new(), defs, Rc::new(attrs), ParityMode::Off);
+    let snapshot = BalanceSnapshot::new(
+        Playthrough::NORMAL,
+        OpLevel::NONE,
+        PlayerCount::SINGLE,
+        ExpLevel::new(8),
+        GameStage(8),
+        AwesomeLevel::new(0),
+        LevelCapUpgrades::NONE,
+    )
+    .map_err(|e| script_error(e.to_string()))?;
+    let packs: [&dyn ow_vm::api::NativePack; 3] = [
+        &ow_vm::natives_core::Pack,
+        &ow_skills::tree::Pack,
+        &ow_skills::action_skill::Pack,
+    ];
+    let mut world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs)
+        .map_err(|e| script_error(format!("{e:?}")))?;
+    let class = world.vm.find_class("Engine.WorldInfo")?;
+    let info = ow_vm::interp::instantiate_from_defaults(&mut world.vm, class)?;
+    world
+        .actors()
+        .try_borrow_mut()
+        .map_err(|_| ow_vm::error::VmError::ServiceBorrowed("Actors"))?
+        .place_world_info(info)?;
+    Ok(world)
+}
+
+fn script_error(message: String) -> ow_vm::error::VmError {
+    ow_vm::error::VmError::Script {
+        function: "slice-gate".into(),
+        message,
+    }
+}
+
+fn phaselock_cast(vm: &mut ow_vm::api::Vm) -> Result<(), ow_vm::error::VmError> {
+    let path = ow_core::ObjectPath::parse(PHASELOCK_SKILL).map_err(|e| script_error(e.to_string()))?;
+    let found = vm.defs.find(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    let skill = found
+        .map_err(ow_vm::error::VmError::Def)?
+        .ok_or_else(|| script_error(format!("{PHASELOCK_SKILL}: no package holds it")))?;
+    let make = |vm: &mut ow_vm::api::Vm, class: &str| -> Result<Option<ow_object::ids::ObjRef>, ow_vm::error::VmError> {
+        let c = vm.find_class(class)?;
+        Ok(Some(ow_vm::interp::instantiate_from_defaults(vm, c)?))
+    };
+    let pawn = make(vm, "WillowGame.WillowPlayerPawn")?;
+    let controller = make(vm, "WillowGame.WillowPlayerController")?;
+    let target = make(vm, "WillowGame.WillowAIPawn")?;
+    let f = vm.find_function(PHASELOCK_CAST)?;
+    vm.call(
+        f,
+        Some(skill),
+        vec![
+            ow_object::value::Value::Object(pawn),
+            ow_object::value::Value::Object(controller),
+            ow_object::value::Value::Object(target),
+        ],
+    )?;
+    Ok(())
 }
 
 /// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).

@@ -14,7 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import check_slice_run_off as chk  # noqa: E402
 
-NO_DRIVER = {'reach_fight_area', 'pick_up_gun', 'pick_up_aimed_not_nearest', 'equip_gun', 'phaselock_enemy'}
+NO_DRIVER = {'reach_fight_area', 'pick_up_gun', 'pick_up_aimed_not_nearest'}
+OWN_DRIVER = {'equip_gun': 'equip-run', 'phaselock_enemy': 'phaselock-cast'}
 
 
 def stop(text='synthetic stop', native='', record=''):
@@ -24,7 +25,7 @@ def stop(text='synthetic stop', native='', record=''):
 def row(n, result='ok', grading='strict', **fields):
     name = chk.NAMES[n - 1]
     out = {'n': n, 'link': name, 'grading': grading, 'result': result,
-           'driver': 'none' if name in NO_DRIVER else 'combat-run', 'steps': [] if name in NO_DRIVER else ['step:1'],
+           'driver': 'none' if name in NO_DRIVER else OWN_DRIVER.get(name, 'combat-run'), 'steps': [] if name in NO_DRIVER else ['step:1'],
            'stop': None if result == 'ok' else stop(), 'blocked_by': None, 'after_errors_in': None, 'error_lines': [],
            'scope': 'synthetic scope'}
     out.update(fields)
@@ -128,6 +129,14 @@ class Parse(unittest.TestCase):
         rows = all_ok()
         rows[9] = row(10, 'error', error_lines=line)
         with self.assertRaises(chk.Malformed, msg='a strict row with error lines'):
+            chk.parse(lines(rows))
+
+    def test_the_equip_and_cast_drivers_are_known_and_an_unknown_one_is_malformed(self):
+        rows = all_ok()
+        self.assertEqual((rows[7]['driver'], rows[8]['driver']), ('equip-run', 'phaselock-cast'))
+        chk.parse(lines(rows))
+        rows[7] = dict(rows[7], driver='equip')
+        with self.assertRaises(chk.Malformed):
             chk.parse(lines(rows))
 
     def test_a_link_without_a_driver_is_never_ok(self):
