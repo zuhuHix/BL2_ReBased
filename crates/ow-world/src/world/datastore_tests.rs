@@ -61,7 +61,8 @@ fn engine(with_client: bool) -> Vec<u8> {
 /// `WillowGame.upk`: the online game settings store (its class defaults' `Tag` `WillowOnlineGameSettings`), the
 /// replication info's `GetCurrPlaythrough`, the DLC manager's two queries, and a toy `WillowPlayerController`:
 /// - its natives `GetActiveMissionNumber` and `GetActivePlotCriticalMissionNumber`;
-/// - `GetOnlineGameSettingsDatastore`, a native here (the test answers it), standing for the store lookup;
+/// - `GetOnlineGameSettingsDatastore`, a native here standing for the store lookup script: it asks the real
+///   `GetDataStoreClient` and `FindDataStore` (or answers None while the test turns the route off);
 /// - the script `GetOnlineGameSettingsViaDatastore` (empty body: Off overrides it);
 /// - the script `UpdateOnlineGameSettings`, the refresh: it calls `GetOnlineGameSettingsViaDatastore` and returns.
 fn willow() -> Vec<u8> {
@@ -112,8 +113,8 @@ fn willow() -> Vec<u8> {
 struct Toy {
     vm: Vm,
     dir: PathBuf,
-    /// What the toy store lookup answers.
-    store_answer: Rc<Cell<Option<ObjRef>>>,
+    /// Whether the toy store lookup asks the real getter and lookup (else it answers None).
+    route: Rc<Cell<bool>>,
 }
 
 impl Drop for Toy {
@@ -129,17 +130,30 @@ fn toy(with_client: bool) -> Toy {
     let files: [(&str, &[u8]); 2] = [("Engine.upk", &e), ("WillowGame.upk", &w)];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
-    let store_answer = Rc::new(Cell::new(None));
-    let answer = store_answer.clone();
+    let route = Rc::new(Cell::new(true));
+    let on = route.clone();
     let f = vm.find_function("WillowGame.WillowPlayerController.GetOnlineGameSettingsDatastore").unwrap();
     let key = vm.function(f).unwrap().native_key.clone().unwrap();
     vm.register_native(
         &key,
-        Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> { Ok(Value::Object(answer.get())) }),
+        Rc::new(move |c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+            if !on.get() {
+                return Ok(Value::Object(None));
+            }
+            // As the script does: the engine's client, then the store by its tag.
+            let get = c.vm.find_function(GET_DATA_STORE_CLIENT)?;
+            let client = c.vm.call(get, None, vec![])?.ret;
+            let Value::Object(Some(client)) = client else {
+                return Ok(Value::Object(None));
+            };
+            let find = c.vm.find_function(FIND_DATA_STORE)?;
+            let tag = Value::Name(c.vm.space.names.intern("WillowOnlineGameSettings"));
+            Ok(c.vm.call(find, Some(client), vec![tag])?.ret)
+        }),
     )
     .unwrap();
     register(&mut vm).unwrap();
-    Toy { vm, dir, store_answer }
+    Toy { vm, dir, route }
 }
 
 impl Toy {
@@ -241,23 +255,37 @@ fn the_natives_after_the_settings_are_not_yet_and_branch_1_is_unbound() {
     assert!(!t.vm.has_native(&key), "branch 1 binds nothing");
 }
 
-/// The refresh, run as script (review r2 of #448, items 2 and 5): with no store, the settings route answers None and
-/// the refresh returns; with a store, it stops at the named settings-entry read (open question 2), whatever the entry
-/// holds, and only there.
+/// The refresh, run as script through the real getter and lookup (review r2 of #448, items 2 and 5; r3, item 2):
+/// with no store, the route answers None and the refresh returns; the first refresh with the route on makes and
+/// publishes the client and store, and its settings-entry refusal (open question 2) is marked as after partial
+/// writes, its kind kept; the client and store stay published; a later refresh's refusal is not marked.
 #[test]
 fn the_refresh_stops_at_the_settings_entry_read() {
     let mut t = toy(true);
     let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
     let refresh = "WillowGame.WillowPlayerController.UpdateOnlineGameSettings";
-    t.store_answer.set(None);
+    t.route.set(false);
     t.call(refresh, Some(pc), vec![]).unwrap();
-    let store = t.make("WillowGame.WillowOnlineGameSettings_DataStore", "ToyStore");
-    t.store_answer.set(Some(store));
-    not_yet(t.call(refresh, Some(pc), vec![]), |m| *m == Missing::NotRead, "open question 2");
+    assert!(t.vm.service::<DataStores>().unwrap().borrow().client().is_none(), "nothing made with the route off");
+    t.route.set(true);
+    match t.call(refresh, Some(pc), vec![]).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, Missing::NotRead);
+            assert!(n.what.starts_with(PARTIAL_WRITES) && n.what.contains("open question 2"), "{n}");
+            assert_eq!(n.record, RECORD);
+        }
+        e => panic!("expected NotYet, got {e}"),
+    }
+    let s = t.vm.service::<DataStores>().unwrap();
+    let (client, globals) = (s.borrow().client(), s.borrow().globals().to_vec());
+    assert!(client.is_some() && globals.len() == 1, "the client and store stay published");
+    match t.call(refresh, Some(pc), vec![]).unwrap_err() {
+        VmError::NotYet(n) => assert!(!n.what.contains(PARTIAL_WRITES) && n.what.contains("open question 2"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
     // The lookup alone is not refused: a caller that only wants the store gets it.
-    let client = t.client();
     let tag = t.name("WillowOnlineGameSettings");
-    assert!(matches!(t.call(FIND_DATA_STORE, Some(client), vec![tag]).unwrap(), Value::Object(Some(_))));
+    assert_eq!(t.call(FIND_DATA_STORE, client, vec![tag]).unwrap(), Value::Object(Some(globals[0])));
 }
 
 /// The service's borrow and every class are taken before anything is made (review r2 of #448, item 3): a held borrow,

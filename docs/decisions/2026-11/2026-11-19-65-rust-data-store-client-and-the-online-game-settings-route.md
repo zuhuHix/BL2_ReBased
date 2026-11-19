@@ -74,3 +74,13 @@ and no bounds check was loosened. The `NotYet` this lane replaces is decision 20
     branch they stopped on `UIInteraction.GetDataStoreClient`. Only those three rows differ.
   - **Follow-up, outside this PR's files:** whether the slice accept path keeps going to the event pump after a
     script failure (`ow-mission`'s slice and bridge) is left as it is.
+- **Review r3 of #448** (final round):
+  - **Item 1.** The settings-entry override tracks whether this refresh's own lookup made and published the world's
+    client and store, as the first refresh's does. If it did, the refusal comes after those writes: it is marked
+    "stopped after partial writes", its kind and record kept. Initialisation stays lazy, and the published objects
+    stay.
+  - **The bridge: not edited.** This branch's base predates #439. On main, #439's `MissionScript::run` already treats
+    the marked text as terminal and propagates it, so the hub's permission to edit the bridge was not needed.
+  - **Item 2.** The scripted refresh test drives the real `GetDataStoreClient` and `FindDataStore`, through a toy
+    native standing for the store lookup script. The first refusal is marked, and the client and store stay
+    published; a later refusal is not marked.

@@ -40,7 +40,9 @@
 //! that answers the settings. (Its sibling `GetOnlineGameSettingsDatastore`, with its `gameSettingsName` local, answers
 //! the store; both by their installed declarations.) In Off that function is overridden: it runs the store lookup as
 //! script; with no store it answers None, as the note's route does ("with no store ... the refresh does nothing");
-//! otherwise it is the named `NotYet`, whatever the entry holds.
+//! otherwise it is the named `NotYet`, whatever the entry holds. When this refresh's lookup is the one that made and
+//! published the world's client and stores (the first refresh), the refusal comes after those writes: it is marked
+//! [`PARTIAL_WRITES`], its kind and record kept, and the published objects stay (review r3 of #448).
 //!
 //! **After the settings are found** (section 5, steps 1 to 5): field reads are plain reads and the `Update...` steps
 //! are script, run as script. The natives among them are not read: [`UNREAD`] are bound in Off as
@@ -253,6 +255,9 @@ fn settings_via_datastore(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         function: SETTINGS_VIA_DATASTORE.to_string(),
         message: format!("the controller has no {SETTINGS_DATASTORE}"),
     })?;
+    // Whether this refresh's lookup is the one that makes and publishes the world's client (review r3 of #448): if it
+    // is, the refusal below comes after those writes and is marked so.
+    let had_client = service(c.vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.client.is_some();
     let store = match c.vm.call(f, Some(me), Vec::new())?.ret {
         Value::Object(o) | Value::Interface(o) => o,
         _ => None,
@@ -260,7 +265,9 @@ fn settings_via_datastore(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(store) = store else {
         return Ok(Value::Object(None));
     };
-    Err(NotYet::not_read(
+    let published = !had_client
+        && service(c.vm)?.try_borrow().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.client.is_some();
+    let refusal: VmError = NotYet::not_read(
         format!(
             "WillowPlayerController.GetOnlineGameSettingsViaDatastore: the settings entry of {} \
              (GameSettingsCfgList[0].GameSettings): what fills it in a world with no online subsystem is not read \
@@ -269,7 +276,8 @@ fn settings_via_datastore(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         ),
         RECORD,
     )
-    .into())
+    .into();
+    Err(if published { after_writes(refusal) } else { refusal })
 }
 
 #[cfg(test)]
