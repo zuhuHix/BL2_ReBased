@@ -10,6 +10,7 @@
 
 pub mod actors;
 pub mod levelup;
+pub mod placement;
 pub mod pools;
 pub mod query;
 pub mod timers;
