@@ -686,7 +686,8 @@ impl NativePack for Pack {
             }),
         )?;
         register_events(vm)?;
-        register_sm_component(vm)
+        register_sm_component(vm)?;
+        special_move::register(vm)
     }
 }
 
@@ -1114,6 +1115,9 @@ pub fn skill_behavior_handlers(consumer: ObjRef) -> Vec<(&'static str, Handler)>
 }
 
 pub mod manager;
+
+/// `SpecialMoveComponent.Play` and the natives it reaches (lane FIX-SM-PLAY, decision 2026-11-19-52), Off only.
+pub mod special_move;
 
 #[cfg(test)]
 mod tests;
