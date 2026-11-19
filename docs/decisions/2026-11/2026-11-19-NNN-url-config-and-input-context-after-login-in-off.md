@@ -10,7 +10,7 @@ hub (three digits); NNN is a placeholder.
 - **Changed guards:** #479's three named `NotYet { NotRead }` placeholders (`UpdateInputContext`, `UpdateURL`,
   `SaveConfig`) are replaced under the note: `UpdateInputContext` by its rule, and the other two by "nothing" with a
   read-back check each. No dependency was added and no bounds check was loosened.
-- **The base:** `fix/rust-engine-object-offline` (#501, ea1ffe96), H6's engine object with the empty `OnlineSubsystem`
+- **The base:** `fix/rust-engine-object-offline` (#501, aca14fa0), H6's engine object with the empty `OnlineSubsystem`
   slot, on #479 (afb32d86). First written on #479 at b6d59ee4.
 
 **What changed** (`crates/ow-world/src/world/after_login.rs`, bound by key from `online::register`, Off only;
@@ -53,3 +53,7 @@ native `WillowGameInfo.IsEditor()`, graded an error (link 1: 0 of 1 driver step)
 3. The cast class `WillowPlayerInput` and the flag `bUpdateInputContext` are labelled UNVERIFIED (fitted).
 4. The source scan is a heuristic, case-folded with backslash runs collapsed to one `/`.
 5. The stale `UNREAD` comment is cut to `SetupInputDevices`.
+
+**Last tidy round (after review r2 of #499):** rebased onto #501 aca14fa0. NATIVE_LOGIN_STATUS.md's two rows for these
+natives point here as superseded. `EngineObject`'s doc comment says the slice worlds register it, and the SetupInputDevices
+test is renamed `setup_input_devices_clears_then_completes`. `cargo test --workspace` is recorded in GATES.md.

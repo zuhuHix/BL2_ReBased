@@ -365,7 +365,7 @@ fn selector(t: &mut Toy, pc: ObjRef) -> Value {
 /// then `UpdateInputContext` (lane IMPL-LINK1-AFTER-LOGIN) writes nothing: the call completes, the clear in place.
 /// With a `WillowPlayerInput`, its native refuses first, before the clear, unmarked.
 #[test]
-fn setup_input_devices_marks_the_refusal_after_its_clear() {
+fn setup_input_devices_clears_then_completes() {
     let mut t = toy(ParityMode::Off, true);
     let pc = t.make("WillowGame.WillowPlayerController");
     let marker = t.make("WillowGame.WillowPlayerInput");

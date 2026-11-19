@@ -218,8 +218,9 @@ fn unread(what: &'static str) -> VmError {
     NotYet::not_read(what, RECORD).into()
 }
 
-/// The engine object, when a world has one (a VM service). No world registers it yet: the port's engine is the world
-/// itself, so `GetOnlineSubsystem` answers the no-engine `NotYet` (module documentation).
+/// The engine object, when a world has one (a VM service). The slice worlds register it in Off (`combat::world`, the
+/// offline engine of #501: a `GameEngine` with an empty `OnlineSubsystem` slot); a world without it answers
+/// `GetOnlineSubsystem` with the no-engine `NotYet` (module documentation).
 #[derive(Debug, Clone, Copy)]
 pub struct EngineObject(pub ObjRef);
 
