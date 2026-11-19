@@ -64,12 +64,15 @@ enum Owners {
     /// `SkeletalMeshComponent` declares `Owner` to `ToyOwnerActor`, a subclass of `Engine.Actor` never instantiated, so
     /// the class table holds it only as a reserved name until something defines it (review r1 of #524, item 3).
     Reserved,
+    /// As [`Owners::Reserved`], with `ToyOwnerActor` also declaring a property of a kind the port cannot lay out: its
+    /// ancestry is readable from the class records, its layout is not (review r2 of #524, item 1).
+    Unsupported,
 }
 
 /// [`engine`] with the `Owner` declarations of `owners`.
 fn engine_with(owners: Owners) -> Vec<u8> {
     let mistyped = owners == Owners::Mistyped;
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty"]);
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty", "ToyUnsupportedProperty"]);
     let object = real_class(&mut t, "Object", 0, 1, 2, &[]);
     let thing = real_class(&mut t, "IToyThing", object, object, INTERFACE, &[]);
     // `Engine.Actor`, the class a component's `Owner` must reference (lane IMPL-LINK11-QUERY-INTERFACE).
@@ -91,8 +94,12 @@ fn engine_with(owners: Owners) -> Vec<u8> {
         t.prop("Int", actor_component, "Owner", 0, 0);
     }
     let component = real_class(&mut t, "SkeletalMeshComponent", actor_component, object, 2, &[]);
-    let owner_target = if owners == Owners::Reserved {
-        real_class(&mut t, "ToyOwnerActor", actor, object, 2, &[])
+    let owner_target = if matches!(owners, Owners::Reserved | Owners::Unsupported) {
+        let target = real_class(&mut t, "ToyOwnerActor", actor, object, 2, &[]);
+        if owners == Owners::Unsupported {
+            t.prop("ToyUnsupported", target, "Odd", 0, 0);
+        }
+        target
     } else {
         actor
     };
@@ -563,4 +570,41 @@ fn an_owner_declared_to_an_uninstantiated_actor_subclass_is_valid() {
     let mut e = Env::with(ParityMode::Off, Owners::Reserved);
     let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
     assert_eq!(e.ask(mesh).unwrap(), None);
+}
+
+/// Review r2 of #524, item 1: the `Owner` target's ancestry is read from the class records alone, so a target whose
+/// layout the port cannot build does not fail the registration, and `Owner` None still answers None.
+#[test]
+fn an_owner_target_with_an_unsupported_layout_is_judged_from_its_class_records() {
+    let mut e = Env::with(ParityMode::Off, Owners::Unsupported);
+    let target = e.vm.space.classes.by_path("Engine.ToyOwnerActor");
+    assert!(
+        target.is_none_or(|t| !e.vm.space.classes.get_layout(t).is_some_and(|l| l.is_defined())),
+        "the target's layout was never built"
+    );
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    assert_eq!(e.ask(mesh).unwrap(), None);
+    // The fixture is what it claims: building the target's layout fails.
+    assert!(e.vm.find_class("Engine.ToyOwnerActor").is_err(), "the target's layout is unsupported");
+}
+
+/// Review r2 of #524, item 2: a refusal names its object best effort. A component whose outer chain is longer than
+/// `PathName`'s limit, with an unloaded `Owner`, still gives the typed `NotRead`, naming the component by its own name.
+#[test]
+fn a_refusal_names_a_deep_component_by_its_leaf_name() {
+    let mut e = Env::new(ParityMode::Off);
+    let (lazy, _) = lazy_handles(&mut e);
+    let class = e.vm.find_class("Engine.Object").unwrap();
+    let mut outer = e.vm.space.alloc(class, "Link_0", None, ow_object::heap::Origin::Runtime).unwrap();
+    for i in 1..80 {
+        outer = e.vm.space.alloc(class, &format!("Link_{i}"), Some(outer), ow_object::heap::Origin::Runtime).unwrap();
+    }
+    let mesh_class = e.vm.find_class("Engine.SkeletalMeshComponent").unwrap();
+    let mesh = e.vm.space.alloc(mesh_class, "DeepMesh_0", Some(outer), ow_object::heap::Origin::Runtime).unwrap();
+    let defaults = e.vm.defs.class_default(&mut e.vm.space, "Engine.SkeletalMeshComponent").unwrap();
+    let slots = e.vm.space.heap.get(defaults).unwrap().slots.clone();
+    e.vm.space.heap.get_mut(mesh).unwrap().slots = slots;
+    e.link(mesh, "Owner", lazy);
+    assert!(ow_vm::path_name::path_name(&e.vm, mesh).is_err(), "the chain is past PathName's limit");
+    not_read(e.ask(mesh), "of DeepMesh_0 is an unloaded definition handle");
 }

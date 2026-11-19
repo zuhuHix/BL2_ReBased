@@ -245,8 +245,10 @@ pub enum OwnerDeclaration {
     Mistyped,
 }
 
-/// `class`'s `Owner` declaration. The declared target's ancestry is read from the class metadata: a target the class
-/// table holds only as a reserved name is defined from its package first ([`Vm::find_class_if_present`]).
+/// `class`'s `Owner` declaration. The declared target's ancestry is read from the class metadata only (review r2 of
+/// #524): the packages' class records and their super chain, with no layout defined and nothing else loaded, so a
+/// target the class table holds only as a reserved name, or whose layout the port cannot build, is still judged. A
+/// target no package holds (a class defined in the port alone) is judged on the class table.
 pub fn owner_declaration(vm: &mut Vm, class: ClassId) -> Result<OwnerDeclaration, VmError> {
     let Some(prop) = vm.space.prop(class, "Owner") else {
         return Ok(OwnerDeclaration::Missing);
@@ -256,9 +258,18 @@ pub fn owner_declaration(vm: &mut Vm, class: ClassId) -> Result<OwnerDeclaration
         _ => return Ok(OwnerDeclaration::Mistyped),
     };
     let path = class_path(vm, target);
-    let target = vm.find_class_if_present(&path)?.unwrap_or(target);
-    let actor = vm.find_class_if_present("Engine.Actor")?;
-    Ok(if actor.is_some_and(|a| vm.space.classes.is_child_of(target, a)) {
+    let derives = {
+        let (code, store) = vm.defs.code_mut();
+        match (code.find_class(store, &path), code.find_class(store, "Engine.Actor")) {
+            (Ok(t), Ok(a)) => Some(code.super_chain(t).any(|k| k == a)),
+            _ => None,
+        }
+    };
+    let derives = match derives {
+        Some(d) => d,
+        None => vm.space.classes.by_path("Engine.Actor").is_some_and(|a| vm.space.classes.is_child_of(target, a)),
+    };
+    Ok(if derives {
         OwnerDeclaration::Actor(prop)
     } else {
         OwnerDeclaration::Mistyped

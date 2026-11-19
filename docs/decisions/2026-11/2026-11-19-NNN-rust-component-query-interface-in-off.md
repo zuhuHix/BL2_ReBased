@@ -32,6 +32,10 @@ executable and the analysis output were not opened. Synthetic fixtures only.
      as a reserved class is defined from its package first, so a valid declaration to an uninstantiated `Actor`
      subclass is never a Script error.
   4. Refusal texts name an object best effort: its own name when its path cannot be made.
+- **Review r2 of #524:** the `Owner` target's ancestry is read from the class records alone (the packages' class
+  metadata and super chain, no layout built), so a target whose layout the port cannot build does not fail the
+  registration. The best-effort name has a regression test: a component past `PathName`'s depth limit is named by its
+  leaf name.
 - **Retired:** the open answer for `Engine.SkeletalMeshComponent` ("what a skeletal mesh component answers to
   QueryInterface"), now the rule. Reference is unchanged and registers none of it.
 - **Tests** (`ow-combat` `pawn_interface/tests.rs`, on an invented `Engine.upk`; `Pawn` and `Controller` now derive
