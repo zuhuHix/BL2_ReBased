@@ -161,7 +161,7 @@ from `Data`**: the packages hold `i` + 1 there, so the entry carries `i` + 1.
    | 8 and above 9 | `CollideActors` cleared | unchanged |
 
    The component's flags are `PrimitiveComponent`'s, named by matching their bit pattern against the layout tool's
-   declaration (shifted in the engine). The pattern fits exactly, by fit. The owner's flags are `Actor`'s, at the
+   declaration (shifted in the engine); the pattern fits exactly. The owner's flags are `Actor`'s, at the
    tool's places. **UNVERIFIED.**
 6. **The attach** (only after the entry is appended):
    1. **First attempt:** the parent's `IWorldBody.WorldBodyAttachComponent`, with the component, a zero location, a
@@ -228,8 +228,8 @@ no entry.
 modes 0 and 3:
 1. **Identifier `Mesh`:**
    - the old `Pawn.Mesh` is released: if it was attached, it is detached and removed from a global list. **That list
-     was not read:** neither what it holds nor what the removal changes. Stock `Pawn` defaults give the pawn a
-     cylinder (and a pawn may have a mesh), so the release does run on a first build;
+     was not read:** neither what it holds nor what the removal changes. Maya's pawn archetype
+     (`GD_Siren_Streaming.Pawn_Siren`) sets `Mesh`, so the release does run on her first build;
    - `Pawn.Mesh` = the made object, as a `SkeletalMeshComponent` (None when it is not one).
    - **When the new mesh is set:**
      - `MeshBodyCompositionIndex` = `i`;
@@ -246,16 +246,22 @@ modes 0 and 3:
    - `CollisionComponent` = the new `Mesh`, when `BodyClass.bUseMeshForCollision` is set.
    - The pawn's script event **`ReattachWeapons`** is called.
 2. **Identifier `CylinderComponent`:**
-   - the old `Pawn.CylinderComponent` is released as above;
+   - the old `Pawn.CylinderComponent` is released as above. Stock `Pawn` defaults give the pawn a cylinder, and
+     Maya's archetype sets `CylinderComponent`, so this release runs on a first build too;
    - `Pawn.CylinderComponent` = the made object, as a `CylinderComponent`;
    - `CollisionComponent` = it, when `BodyClass.bUseMeshForCollision` is clear.
-3. With either identifier or none, when two engine flags allow it: a gear-likeness step on the made object (a
-   `WillowGame` interface; render-side, by fit; not read).
+3. With either identifier or none, when two flags allow it (not read, including whose flags they are): a
+   gear-likeness step on the made object (a `WillowGame` interface; render-side, by fit; not read).
 
 Then, in every mode:
 4. When the attachment's **`Data.Name`** is `CustomHead`: `HeadMesh` = the made object, as a `SkeletalMeshComponent`.
-5. A primitive made object in mode 0, when the pawn and the engine allow it: one rendering setting on it (not read).
-6. With `LightEnvironment` set: the made object, when it is a mesh component, gets it as its light environment.
+5. A primitive made object in mode 0, when a pawn flag and an engine flag allow it (neither read): one rendering
+   setting on it (not read).
+6. With the **pawn's `LightEnvironment`** set: the made object, when it is a mesh component, gets it as its light
+   environment. Maya's archetype sets it (`MyLightEnvironment`, a `DynamicLightEnvironmentComponent`).
+
+**Hub ruling (last hub read of #529), the port's answer, UNVERIFIED:** the unread flags of steps 3 and 5 are taken as
+allowing the hook.
 
 ## 5. The switch packing (authority, after the walk)
 
@@ -339,8 +345,8 @@ inside the gate, it keeps the root-motion writes: `Mesh.RootMotionMode` = 3 when
        "InitializeBodyComposition: an actor's own named socket components";
      - a first attempt that answers false: the owner retry with no socket name, as an actor attach;
    - **the `Parent` link** (identifier `Parent`, both skeletal) → `NotYet { NotRead }`, "InitializeBodyComposition:
-     the Parent link's parent-bone map" (hub ruling 3). **Maya's attachment 1 meets this, so under ruling 3 Maya stops
-     here.** The reading in section 4.1, step 7 is whole except for one flag of the component. A port answer is
+     the Parent link's parent-bone map" (hub ruling 3). Maya's attachment 1 meets this, but only after attachment 0
+     and attachment 1's socket attach have passed ("Where Maya stops", below). The reading in section 4.1, step 7 is whole except for one flag of the component. A port answer is
      possible if the hub revisits ruling 3: set the link, and fill the map from the two meshes' bone tables, with the
      same mesh-data layer as the socket attach;
    - **the pawn's `PostInitBodyComposition`** (section 4.5):
@@ -359,7 +365,10 @@ inside the gate, it keeps the root-motion writes: `Mesh.RootMotionMode` = 3 when
        (19:58Z):** a hook answers "nothing" in Off only when it writes no field that the script or a slice step reads;
        a hook that writes such a field stays `NotYet { LayerAbsent }`, "InitializeBodyComposition: the body's
        rendering hooks". None of the three was read far enough to list its fields, so each is `LayerAbsent` until it
-       is. **UNVERIFIED**, with a live check;
+       is. **With the unread flags taken as allowing** (hub ruling, section 4.5), the gear-likeness step refuses for
+       **every made component**, the rendering setting for **every primitive made in mode 0**, and the light
+       environment for every made mesh component when the pawn's `LightEnvironment` is set (Maya's is).
+       **UNVERIFIED**, with a live check;
      - `Data.Name` `CustomHead`: `HeadMesh`, a plain write, answered;
    - **custom head or skin:** answered (hub ruling 2).
 5. **The global "attaching later" state** is never set in the port, so neither its queued attach nor its extra
@@ -379,13 +388,20 @@ inside the gate, it keeps the root-motion writes: `Mesh.RootMotionMode` = 3 when
 A refusal after the first write is terminal, typed, kind and record kept, marked "stopped after partial writes: " by
 the tracker.
 
-**Where Maya stops under these rulings**, all found in the preflight, before any write, in the walk's order:
-1. attachment 0's `PostInitBodyComposition`: first the release of the old `Pawn.Mesh` (`NotRead`), when the pawn
-   already holds an attached mesh (not checked for Maya's pawn here); otherwise the animation nodes (`LayerAbsent`);
-2. with an animation-tree layer: attachment 1's socket attach to its skeletal parent with socket `Root` (`LayerAbsent`,
-   the skeletal mesh data reader), and only then its `Parent` link (`NotRead`, ruling 3);
-3. later, attachment 13's `PostInitBodyComposition`: the release of the old `Pawn.CylinderComponent` (`NotRead`), which
-   stock `Pawn` defaults set.
+**Where Maya stops under these rulings**, all found in the preflight, before any write, in the walk's order. Each
+item is reached only once everything before it has an answer:
+1. attachment 0's `PostInitBodyComposition`: the release of the old `Pawn.Mesh` (`NotRead`). Her archetype
+   `Pawn_Siren` sets `Mesh`, so the old field is set. Unless the port can tell that it is not attached, **this is her
+   single first stop**;
+2. then attachment 0's animation nodes (`LayerAbsent`, the animation-tree instance);
+3. then attachment 0's rendering hooks (`LayerAbsent`): the gear-likeness step, the mode-0 rendering setting (it is a
+   primitive), and the light environment (`Pawn_Siren` sets `LightEnvironment`);
+4. attachment 1's socket attach to its skeletal parent with socket `Root` (`LayerAbsent`, the skeletal mesh data
+   reader), then its `Parent` link (`NotRead`, ruling 3), then its rendering hooks;
+5. attachments 2 to 6, 9 and 12 (gear-likeness components on socket attaches): each socket attach (`LayerAbsent`), and
+   each one's rendering hooks;
+6. attachment 13's `PostInitBodyComposition`: the release of the old `Pawn.CylinderComponent` (`NotRead`; `Pawn_Siren`
+   sets it), then its rendering hooks.
 
 **Reference** keeps the stub policy.
 

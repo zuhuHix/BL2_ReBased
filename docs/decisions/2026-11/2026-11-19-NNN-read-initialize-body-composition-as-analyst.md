@@ -38,8 +38,7 @@ the maintainer (three digits); NNN is a placeholder.
 All three are port answers, UNVERIFIED.
 
 **Settled in this round:**
-- **The special identifier.** It is `Parent`, not `Mesh`, read from the engine's fixed name table (676 `Parent`, 1402
-  `CylinderComponent`, 1450 `Mesh`). The step sets the new skeletal component's parent-animation link and rebuilds its
+- **The special identifier.** It is `Parent`, not `Mesh`, read from the engine's fixed name table. The step sets the new skeletal component's parent-animation link and rebuilds its
   parent-bone map, read whole. Maya's attachment 1 meets it.
 - **The pawn's own hook.** `WillowPawn` implements `IBodyCompositionInstance`, so the build calls the pawn's
   `PostInitBodyComposition` for every made component. That hook:
@@ -48,10 +47,15 @@ All three are port answers, UNVERIFIED.
   - looks up the animation nodes;
   - calls `ReattachWeapons`.
 
-  Under the rulings, Maya's build now stops first at attachment 0's animation-node lookups (`NotYet { LayerAbsent }`,
-  in preflight), then at attachment 1's socket attach to its skeletal parent with socket `Root` (`LayerAbsent`, the
-  mesh-data reader), and only then at its `Parent` link. Releasing the old `Mesh`/`CylinderComponent` is refused
-  `NotYet { NotRead }` in preflight (its global list is not read).
+  Under the rulings, Maya's build stops at these points, all found in preflight and in the walk's order:
+  1. attachment 0's release of the old `Pawn.Mesh` (`NotYet { NotRead }`: its global list is not read, and her
+     archetype sets `Mesh`). This is her single first stop;
+  2. attachment 0's animation-node lookups (`LayerAbsent`);
+  3. attachment 0's rendering hooks (`LayerAbsent`; under the hub ruling, the unread flags are taken as allowing);
+  4. attachment 1's socket attach to socket `Root` (`LayerAbsent`, the mesh-data reader), then its `Parent` link
+     (`NotRead`) and its hooks;
+  5. attachments 2 to 6, 9 and 12: their socket attaches and hooks;
+  6. last, attachment 13's release of the old `Pawn.CylinderComponent` (`NotRead`).
 - **The entry contract** per type: what is copied, replaced and defaulted.
   - A component's and a customization's `Replication` is not copied.
   - A switch copies its whole `Data`, including `Object`, and only `Float` is cleared.
