@@ -498,6 +498,10 @@ impl NativePack for Pack {
             // WorldInfo.AllNavigationPoints (link 1's next stop in `FindPlayerStart`; lane IMPL-ALL-NAVIGATION-POINTS,
             // decision 2026-11-19-125): the stock iterator over the serialized list, UNVERIFIED in game.
             nav_points::register(vm)?;
+            // WillowPawn / WillowPlayerPawn.InitializePawnMeshes (link 1's next stop in `maya:8`; lane
+            // IMPL-INIT-PAWN-MESHES, NATIVE_INIT_PAWN_MESHES.md): the empty cases do nothing, a non-empty body
+            // composition is a named LayerAbsent; nothing is written. UNVERIFIED in game.
+            pawn_meshes::register(vm)?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
             // The engine's data store client, its global stores and the online game settings route
             // (NATIVE_ONLINE_GAME_SETTINGS.md; lane IMPL-ONLINE-GAME-SETTINGS, decision 2026-11-19-65).
@@ -607,6 +611,7 @@ pub mod pawn_data;
 
 /// `WorldInfo.AllNavigationPoints` (lane IMPL-ALL-NAVIGATION-POINTS).
 pub mod nav_points;
+pub mod pawn_meshes;
 
 #[cfg(test)]
 mod tests;

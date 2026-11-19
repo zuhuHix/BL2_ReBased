@@ -32,6 +32,25 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-INIT-PAWN-MESHES (2026-11-19, pc-hummer, on research/rust-init-pawn-meshes 5d284e27, #517 on #513):**
+AI-assisted (Claude Code, Opus 5.5). `WillowPawn` / `WillowPlayerPawn.InitializePawnMeshes()` in Off:
+- the three empty cases do nothing;
+- an unloaded `BodyClass` is a named `NotYet { NotRead }`, since it is not loaded (hub ruling, #517 r1);
+- a non-empty attachment list is `NotYet { LayerAbsent }`;
+- nothing is written.
+
+Results:
+- `cargo test -p ow-world`: 245 passed / 0 failed / 5 ignored.
+- `cargo test --workspace`: 2,684 passed / 0 failed / 54 ignored.
+- Installed Off `--slice-gate` strict (release build; `Engine.IsSplitScreen()` bound false locally only, uncommitted;
+  under the machine lock): 0 ok / 11 NotYet / 3 errors.
+  - Links 1, 3, 4, 13 and 14 stop in `maya:8` at the native's lazy-`BodyClass` `NotRead` (`BodyClass_Siren` is an
+    unloaded handle).
+  - Link 1: 0 of 1 driver step.
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN; logs under ignored `local/analysis/`.
+
 **IMPL-ALL-NAVIGATION-POINTS (2026-11-19, pc-hummer, on research/rust-is-split-screen 368f3f0f, #510 on #508):**
 AI-assisted (Claude Code, Opus 5.5). `WorldInfo.AllNavigationPoints` in Off: the serialized list walked with a class
 filter, six open cases `NotYet { NotRead }`. `cargo test -p ow-world -p ow-cli --locked -j 4` 343 passed / 0 failed / 8
