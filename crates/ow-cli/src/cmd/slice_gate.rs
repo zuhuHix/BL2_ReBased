@@ -24,8 +24,9 @@
 //!
 //! **Grading.** A link runs its steps in order and stops at the first step that meets a `NotYet` (`notyet`), records
 //! an error line, fails a step, or returns an error (`error`). With no stop, the link is `ok` only when its evidence is
-//! there: a row of the combat report (`kill.`, `ratio.`, `loot.roll.`, `down.total.`, `down.respawn_health.`), or the
-//! Fire mission's status after the link (1 Active, 2 ReadyToTurnIn, 3 Complete); else `error`, naming the missing
+//! there: a row of the combat report that the link's own steps added (`kill.`, `ratio.`, `loot.`, `down.total.`,
+//! `down.respawn_health.`; link 5, which has no steps, is graded on the rows link 3's kill added), or the Fire mission's
+//! status after the link (1 Active, 2 ReadyToTurnIn, 3 Complete); else `error`, naming the missing
 //! evidence. A link whose prerequisite link is not `ok` does not run: it takes that link's result and stop, with
 //! `blocked_by`. A driver that cannot be set up stops each of its links at step `setup`.
 //!
@@ -167,8 +168,8 @@ pub const LINKS: [Link; 14] = [
         Driver::Combat,
         &[],
         &["kill_enemy"],
-        Evidence::Row("loot.roll."),
-        "the death roll of link 3's kill",
+        Evidence::Row("loot."),
+        "the death roll of link 3's kill (the loot rows its hit added)",
     ),
     link(
         "pick_up_gun",
@@ -439,6 +440,8 @@ pub struct Ran {
     pub stop: Option<(Outcome, Stop)>,
     /// Error lines the steps went on past (past-errors grading only), `(step, text)`.
     pub error_lines: Vec<(String, String)>,
+    /// The ids of the combat report's rows the link's steps added (a link with no steps: its prerequisite's).
+    pub new_rows: Vec<String>,
 }
 
 /// The rows of the 14 links, from what the drivers did (`ran[i]` for link `i`, `None` for a link not run) and the
@@ -560,8 +563,8 @@ fn bind(step: &str, bound: &[(String, usize)]) -> Result<String, String> {
     Ok(out)
 }
 
-/// The combat group (module documentation): what each of its links did, and the report's row keys.
-fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) -> String {
+/// The combat group (module documentation): what each of its links did, with the report rows each one added.
+fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let setup = || -> Result<Run, ow_vm::error::VmError> {
         let mut world = combat::world(cooked, ParityMode::Off)?;
         let bridge: Rc<dyn PlayerBridge> = Rc::new(combat::MissionBridge::new(&mut world)?);
@@ -576,11 +579,11 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) -> Strin
                     ran[i] = Some(Ran {
                         steps: Vec::new(),
                         stop: Some(classify("setup", &text)),
-                        error_lines: Vec::new(),
+                        ..Ran::default()
                     });
                 }
             }
-            return String::new();
+            return;
         }
     };
     let mut bound: Vec<(String, usize)> = Vec::new();
@@ -589,6 +592,7 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) -> Strin
             continue;
         }
         let mut r = Ran::default();
+        let rows_before: Vec<String> = run.row_ids().map(str::to_string).collect();
         for step in LINKS[i].steps {
             let step = match bind(step, &bound) {
                 Ok(s) => s,
@@ -620,9 +624,15 @@ fn run_combat(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) -> Strin
                 bound.push((kind.to_string(), after_pawns - 1));
             }
         }
+        r.new_rows = new_ids(&rows_before, run.row_ids());
+        if LINKS[i].steps.is_empty()
+            && let Some(need) = LINKS[i].needs.first().and_then(|n| LINKS.iter().position(|l| l.name == *n))
+            && let Some(prior) = &ran[need]
+        {
+            r.new_rows = prior.new_rows.clone();
+        }
         ran[i] = Some(r);
     }
-    run.report(0.0)
 }
 
 /// The Fire group (module documentation) on one store policy: what each of its links did, the mission's status after
@@ -655,7 +665,7 @@ fn run_fire_once(
                     ran[i] = Some(Ran {
                         steps: Vec::new(),
                         stop: Some((outcome, stop.clone())),
-                        error_lines: Vec::new(),
+                        ..Ran::default()
                     });
                 }
             }
@@ -734,14 +744,34 @@ fn run_fire(cooked: &str, grading: Grading, ran: &mut [Option<Ran>], status: &mu
 /// Runs both groups and grades the 14 links.
 fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
     let mut ran: Vec<Option<Ran>> = vec![None; LINKS.len()];
-    let report = run_combat(Path::new(cooked), grading, &mut ran);
+    run_combat(Path::new(cooked), grading, &mut ran);
     let mut status = vec![0u8; LINKS.len()];
     run_fire(cooked, grading, &mut ran, &mut status);
     rows(&ran, grading, |i| match LINKS[i].evidence {
-        Evidence::Row(prefix) => report.contains(&format!("\"{prefix}")),
+        Evidence::Row(prefix) => evidence_in(ran[i].as_ref(), prefix),
         Evidence::Status(s) => status[i] == s,
         Evidence::Steps => true,
     })
+}
+
+/// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).
+pub fn new_ids<'a>(before: &[String], after: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut left: Vec<&str> = before.iter().map(String::as_str).collect();
+    let mut out = Vec::new();
+    for id in after {
+        match left.iter().position(|b| *b == id) {
+            Some(i) => {
+                left.swap_remove(i);
+            }
+            None => out.push(id.to_string()),
+        }
+    }
+    out
+}
+
+/// Whether the rows link `ran` added hold one whose id starts with `prefix`.
+pub fn evidence_in(ran: Option<&Ran>, prefix: &str) -> bool {
+    ran.is_some_and(|r| r.new_rows.iter().any(|k| k.starts_with(prefix)))
 }
 
 /// The exit code of a set of rows (module documentation).

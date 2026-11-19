@@ -117,6 +117,19 @@ class Parse(unittest.TestCase):
         with self.assertRaises(chk.Malformed):
             chk.parse(lines(broken))
 
+    def test_error_lines_only_on_a_past_errors_row_that_is_not_ok(self):
+        line = [{'step': 'use', 'text': 'synthetic error line'}]
+        rows = all_ok('past-errors')
+        rows[9] = row(10, 'error', grading='past-errors', error_lines=line)
+        chk.parse(lines(rows))
+        rows[9] = row(10, 'ok', grading='past-errors', error_lines=line)
+        with self.assertRaises(chk.Malformed, msg='an ok row with error lines'):
+            chk.parse(lines(rows))
+        rows = all_ok()
+        rows[9] = row(10, 'error', error_lines=line)
+        with self.assertRaises(chk.Malformed, msg='a strict row with error lines'):
+            chk.parse(lines(rows))
+
     def test_a_link_without_a_driver_is_never_ok(self):
         rows = all_ok()
         rows[1] = dict(rows[1], driver='none')

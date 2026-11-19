@@ -7,8 +7,8 @@ the counts, and grades the run:
 
 - **Structure.** Exactly 14 rows, `n` 1 to 14 in order, the names of tools/check_slice_gate.py's LINKS in that order; every
   row has every field with the right type; `result` is ok, notyet or error; one `grading` for all rows; a `stop` is null
-  exactly when the result is ok; a `blocked_by` names an earlier link that is not ok, and the row carries that link's
-  result. A row off this structure is a malformed run (exit 2).
+  exactly when the result is ok; an ok row, and every row under strict grading, has no `error_lines`; a `blocked_by`
+  names an earlier link that is not ok, and the row carries that link's result. A row off this structure is a malformed run (exit 2).
 - **The gate** is 14 ok, 0 notyet, 0 error, under `strict` grading (exit 0). A `past-errors` run is informational: it
   never passes (exit 1), whatever its counts. Any other run exits 1.
 
@@ -73,6 +73,10 @@ def parse(lines):
         if not isinstance(lines_, list) or not all(
                 isinstance(e, dict) and _string(e.get('step')) and _string(e.get('text')) for e in lines_):
             raise Malformed(f'{where}: error_lines is not a list of {{step, text}}')
+        if lines_ and row['result'] == 'ok':
+            raise Malformed(f'{where}: an ok row has error lines')
+        if lines_ and row['grading'] == 'strict':
+            raise Malformed(f'{where}: a strict row has error lines (strict grading stops at the first one)')
         stop = row.get('stop', 'missing')
         if row['result'] == 'ok':
             if stop is not None:
