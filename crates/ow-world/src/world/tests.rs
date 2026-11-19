@@ -131,6 +131,7 @@ fn package() -> Vec<u8> {
     t.prop("Float", init, "BaseValueScaleConstant", 0, 0);
 
     let actor = t.class("Actor", object);
+    let mut collide_actors = 0;
     let mut payload = ow_package::testkit::ints(&[0]);
     payload.extend_from_slice(&t.none);
     let values = ["PHYS_None", "PHYS_Walking", "PHYS_Falling", "PHYS_Rotating"];
@@ -158,9 +159,20 @@ fn package() -> Vec<u8> {
         "bLoadIfPhysXLevel0",
         "bLoadIfPhysXLevel1",
         "bLoadIfPhysXLevel2",
+        // The spawn's spot search (lane IMPL-SPAWN-PLACEMENT, NATIVE_SPAWN_PLACEMENT.md section 2).
+        "bCollideComplex",
     ] {
-        t.prop("Bool", actor, b, 0, 0);
+        let r = t.prop("Bool", actor, b, 0, 0);
+        if b == "bCollideActors" {
+            collide_actors = r;
+        }
     }
+    // The template's collision cylinder (lane IMPL-SPAWN-PLACEMENT): an invented component class with the game's
+    // class and field names.
+    let cylinder = t.class("CylinderComponent", object);
+    t.prop("Float", cylinder, "CollisionRadius", 0, 0);
+    t.prop("Float", cylinder, "CollisionHeight", 0, 0);
+    t.prop("Object", actor, "CollisionComponent", 0, object);
     for b in ["Role", "RemoteRole", "TickGroup"] {
         t.prop("Byte", actor, b, 0, 0);
     }
@@ -376,6 +388,12 @@ fn package() -> Vec<u8> {
     void(&mut t, dud, "PreBeginPlay", &[], |_, a| {
         a.stmt().final_function(ids.destroy, |_| {});
     });
+    // An invented actor whose PreBeginPlay turns on bCollideActors (lane IMPL-SPAWN-PLACEMENT): LetBool,
+    // BoolVariable(instance bCollideActors), True.
+    let collider = t.class("Collider", actor);
+    void(&mut t, collider, "PreBeginPlay", &[], |_, a| {
+        a.stmt().raw(&[0x14, 0x2D]).instance(collide_actors).raw(&[0x27]);
+    });
     let controller = t.class("Controller", actor);
     let player_controller = t.class("PlayerController", controller);
     t.prop("Object", player_controller, "Player", 0, object);
@@ -549,7 +567,7 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     )
     .unwrap();
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
-    for class in ["Probe", "Dud", "Controller", "PlayerController", "WorldInfo"] {
+    for class in ["Probe", "Dud", "Collider", "Controller", "PlayerController", "WorldInfo"] {
         let cdo =
             w.vm.defs
                 .class_default(&mut w.vm.space, &format!("Engine.{class}"))
@@ -1155,9 +1173,13 @@ fn spawn_refusals_return_none_and_collision_is_not_yet() {
                 .unwrap();
         set_field(&mut x.w.vm.space, cdo, "bCollideActors", Value::Bool(true)).unwrap();
         let before = x.w.actors().borrow().list().len();
+        // Off decides the encroachment check on the live actor after PreBeginPlay (NATIVE_SPAWN_PLACEMENT.md section 6,
+        // decision 2026-11-19-79): the actor is made, then the NotYet is terminal and prefixed.
         let e = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err();
-        assert!(matches!(vm_missing(e), Missing::LayerAbsent(_)));
-        assert_eq!(x.w.actors().borrow().list().len(), before, "nothing made");
+        let VmError::NotYet(n) = e else { panic!("expected NotYet") };
+        assert!(matches!(n.missing, Missing::LayerAbsent(_)));
+        assert!(n.what.starts_with("stopped after partial writes: the post-spawn encroachment check"), "{n:?}");
+        assert_eq!(x.w.actors().borrow().list().len(), before + 1, "made, past PreBeginPlay");
         set_field(&mut x.w.vm.space, cdo, "bCollideActors", Value::Bool(false)).unwrap();
         set_field(&mut x.w.vm.space, cdo, "bNoDelete", Value::Bool(true)).unwrap();
         assert_eq!(
@@ -1221,7 +1243,10 @@ fn an_archetype_that_sets_collision_flags_is_refused() {
             let req = SpawnRequest::new(Some(probe)).with_template(Some(archetype));
             let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
             assert!(matches!(vm_missing(e), Missing::LayerAbsent(_)), "{flag_name}");
-            assert_eq!(x.w.actors().borrow().list().len(), before, "{flag_name}: nothing made");
+            // The spot search refuses before anything is made; in Off the encroachment check is decided on the live
+            // actor after PreBeginPlay (decision 2026-11-19-79), so that actor is made.
+            let made = usize::from(flag_name == "bCollideActors");
+            assert_eq!(x.w.actors().borrow().list().len(), before + made, "{flag_name}");
         }
     });
 }
@@ -2073,4 +2098,203 @@ fn the_world_natives_without_a_world_are_not_yet() {
         ));
         let _ = p;
     });
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------
+// The spawn's placement (lane IMPL-SPAWN-PLACEMENT, NATIVE_SPAWN_PLACEMENT.md at its review-r1 head, decision
+// 2026-11-19-79). Invented geometry: a scripted service answering each query in turn.
+// ---------------------------------------------------------------------------------------------------------------
+
+mod placement {
+    use super::*;
+    use crate::placement::{
+        BOUNDING_CYLINDER, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision, Sweep,
+        TRACE_FILTER, Test, install_collision,
+    };
+
+    /// One query the service was asked.
+    #[derive(Debug, Clone, PartialEq)]
+    enum Asked {
+        Test([f32; 3], [f32; 3], Mode),
+        BoxSweep([f32; 3], [f32; 3], [f32; 3]),
+        PointSweep([f32; 3], [f32; 3]),
+    }
+
+    /// A scripted service: box tests and sweeps answer from their queues in order, then `rest` / Clear.
+    struct Script {
+        tests: RefCell<Vec<Test>>,
+        sweeps: RefCell<Vec<Sweep>>,
+        rest: Test,
+        asked: RefCell<Vec<Asked>>,
+    }
+
+    impl SpawnCollision for Script {
+        fn box_test(&self, extent: [f32; 3], at: [f32; 3], mode: Mode) -> Result<Test, VmError> {
+            self.asked.borrow_mut().push(Asked::Test(extent, at, mode));
+            let mut q = self.tests.borrow_mut();
+            Ok(if q.is_empty() { self.rest } else { q.remove(0) })
+        }
+        fn box_sweep(&self, extent: [f32; 3], start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError> {
+            self.asked.borrow_mut().push(Asked::BoxSweep(extent, start, end));
+            let mut q = self.sweeps.borrow_mut();
+            Ok(if q.is_empty() { Sweep::Clear } else { q.remove(0) })
+        }
+        fn point_sweep(&self, start: [f32; 3], end: [f32; 3]) -> Result<Sweep, VmError> {
+            self.asked.borrow_mut().push(Asked::PointSweep(start, end));
+            Ok(Sweep::Clear)
+        }
+    }
+
+    fn script(x: &mut Fx, tests: Vec<Test>, sweeps: Vec<Sweep>, rest: Test) -> Rc<Script> {
+        let s = Rc::new(Script {
+            tests: RefCell::new(tests),
+            sweeps: RefCell::new(sweeps),
+            rest,
+            asked: RefCell::new(Vec::new()),
+        });
+        install_collision(&mut x.w.vm, s.clone()).unwrap();
+        s
+    }
+
+    /// The Probe class default collides with the world, with a cylinder of radius and half height (None: none).
+    fn colliding_probe(x: &mut Fx, cylinder: Option<(f32, f32)>) -> ow_object::ids::ClassId {
+        let probe = x.class("Probe");
+        let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Probe").unwrap();
+        set_field(&mut x.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
+        let comp = cylinder.map(|(r, h)| {
+            let c = x.class("CylinderComponent");
+            let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
+            set_field(&mut x.w.vm.space, comp, "CollisionRadius", Value::Float(r)).unwrap();
+            set_field(&mut x.w.vm.space, comp, "CollisionHeight", Value::Float(h)).unwrap();
+            comp
+        });
+        set_field(&mut x.w.vm.space, cdo, "CollisionComponent", Value::Object(comp)).unwrap();
+        probe
+    }
+
+    fn what(e: VmError) -> (Missing, String) {
+        match e {
+            VmError::NotYet(n) => (n.missing, n.what.into_owned()),
+            other => panic!("expected NotYet, got {other:?}"),
+        }
+    }
+
+    fn count(x: &Fx) -> usize {
+        x.w.actors().borrow().list().len()
+    }
+
+    #[test]
+    fn no_service_is_layer_absent_before_the_extent_question() {
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            let probe = colliding_probe(&mut x, None);
+            let before = count(&x);
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+            assert!(matches!(missing, Missing::LayerAbsent(_)), "{missing:?}");
+            assert_eq!(text, SPOT_SEARCH);
+            assert_eq!(count(&x), before);
+        });
+    }
+
+    #[test]
+    fn no_cylinder_is_not_read_even_in_a_clear_service() {
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            script(&mut x, vec![], vec![], Test::Clear);
+            let probe = colliding_probe(&mut x, None);
+            let before = count(&x);
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+            assert_eq!((missing, text.as_str()), (Missing::NotRead, BOUNDING_CYLINDER));
+            assert_eq!(count(&x), before);
+        });
+    }
+
+    #[test]
+    fn past_the_service_and_extent_checks_the_first_test_is_the_filter_not_yet() {
+        // NATIVE_SPAWN_PLACEMENT.md section 7: the trace filter is unread, so a service whose box tests would be clear
+        // is not asked, and nothing is made.
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            let s = script(&mut x, vec![], vec![], Test::Clear);
+            let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+            let before = count(&x);
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+            assert_eq!((missing, text.as_str()), (Missing::NotRead, TRACE_FILTER));
+            assert!(s.asked.borrow().is_empty(), "the service is not asked");
+            assert_eq!(count(&x), before);
+        });
+    }
+
+    #[test]
+    fn the_flags_are_the_templates_alone() {
+        run(|| {
+            // An archetype asking for the search over a class default without it: the search runs (no service).
+            let mut x = fx();
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            let archetype = toy_archetype(&mut x, probe, "Probe_SearchArchetype");
+            set_field(&mut x.w.vm.space, archetype, "bCollideWorld", Value::Bool(true)).unwrap();
+            let req = SpawnRequest::new(Some(probe)).with_template(Some(archetype));
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+            assert!(matches!(missing, Missing::LayerAbsent(_)));
+            assert_eq!(text, SPOT_SEARCH);
+            // A class default asking for it under an archetype without it: no search.
+            let mut x = fx();
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            let archetype = toy_archetype(&mut x, probe, "Probe_PlainArchetype");
+            let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Probe").unwrap();
+            set_field(&mut x.w.vm.space, cdo, "bCollideWorld", Value::Bool(true)).unwrap();
+            set_field(&mut x.w.vm.space, archetype, "bCollideWorld", Value::Bool(false)).unwrap();
+            let req = SpawnRequest::new(Some(probe)).with_template(Some(archetype));
+            assert!(spawn(&mut x.w.vm, wi, &req).unwrap().is_some());
+        });
+    }
+
+    #[test]
+    fn the_encroachment_and_relocation_not_yets_follow_the_live_actor() {
+        run(|| {
+            for (with_service, no_fail, want, layer) in [
+                (false, false, ENCROACHMENT, true),
+                (true, false, ENCROACHMENT_RULE, false),
+                (false, true, RELOCATION, false),
+            ] {
+                let mut x = fx();
+                let wi = x.wi;
+                if with_service {
+                    script(&mut x, vec![], vec![], Test::Clear);
+                }
+                let before = count(&x);
+                let c = x.class("Collider");
+                let req = SpawnRequest::new(Some(c)).with_no_collision_fail(no_fail);
+                let (missing, text) = what(spawn(&mut x.w.vm, wi, &req).unwrap_err());
+                assert_eq!(text, format!("stopped after partial writes: {want}"));
+                assert_eq!(matches!(missing, Missing::LayerAbsent(_)), layer, "{missing:?}");
+                assert_eq!(count(&x), before + 1, "{want}: made, past PreBeginPlay");
+            }
+            // An actor that does not collide with actors passes, as before.
+            let mut x = fx();
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            assert!(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap().is_some());
+        });
+    }
+
+    #[test]
+    fn reference_keeps_its_collision_refusals() {
+        run(|| {
+            let mut x = fx_in(true, ParityMode::Reference);
+            let wi = x.wi;
+            let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+            let before = count(&x);
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+            assert!(matches!(missing, Missing::LayerAbsent(_)));
+            assert_eq!(text, "the spawn placement spot search");
+            assert_eq!(count(&x), before);
+        });
+    }
 }

@@ -40,6 +40,14 @@ Installed Off `--slice-gate` strict (release build and run under the machine loc
 10 to 12 pass 3 of 4 driver steps and stop in `accept` at `GetActiveMissionNumber` ("stopped after partial writes"),
 past the settings entry. ctest and verify_packages not run (no C++ change). No real-game run; every rule stays
 `UNVERIFIED` in game. Decision 2026-11-19-80; logs under ignored `local/p2/settings-fill/`.
+**IMPL-SPAWN-PLACEMENT (2026-11-19, pc-hummer, stacked on #454 5fb71e2b, the note at its final head 1a83fcbd):** AI-assisted (Claude Code, Opus 5.5). The
+spawn's spot search and encroachment rules in Off from NATIVE_SPAWN_PLACEMENT.md alone (`ow-world` `placement.rs`,
+a `SpawnCollision` seam). `cargo build --workspace` clean; `cargo test --workspace` 2,153 passed / 0 failed / 46
+ignored (6 spawn and 7 search unit tests; every search query answers the trace-filter `NotYet` until it is read); `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict 0/14/0. Link 9 is 0 of
+the driver's 1 step: it still stops at `spawn` on "the spawn placement spot search", now this crate's `LayerAbsent`
+for a world with no collision service, since the slice world installs none. The other 13 rows are byte-identical before
+and after. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-79; logs under ignored
+`local/p2/spawn-placement/`.
 
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps

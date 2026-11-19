@@ -556,6 +556,15 @@ fn collision(what: &'static str) -> VmError {
 ///    archetype whose flags differ). An actor that does not collide with actors is taken to pass the
 ///    encroachment check (UNVERIFIED: the check's internals are not read). The pre-checks are conservative: they
 ///    refuse with `NotYet` even when the begin-play events would have made the check unnecessary.
+///
+///    **In `ParityMode::Off`** (lane IMPL-SPAWN-PLACEMENT, decision 2026-11-19-79, NATIVE_SPAWN_PLACEMENT.md,
+///    UNVERIFIED): the spot search reads the template's flags (`crate::placement::search_runs`) and runs through the
+///    world's collision service (`crate::placement::spot_search`): without one, `NotYet { LayerAbsent }`; without a
+///    cylinder extent, and for a query the service does not support, `NotYet { NotRead }`; a failed search returns
+///    `None` with nothing made, a successful one gives the location the actor is made at. There is no eager
+///    `bCollideActors` refusal in Off: the encroachment check (or the relocation step for a `bNoCollisionFail` spawn)
+///    is decided on the live actor after `PreBeginPlay` (`crate::placement::after_pre_begin_play`), terminal and
+///    prefixed "stopped after partial writes" (the actor stays made).
 /// 3. The actor is made from the class defaults (in `ParityMode::Off`, from the template: the class defaults or an
 ///    archetype of the class) and appended to the level list. In Off it gets its own copy of each component the
 ///    template owns ([`instance_components`]: public UE3 component instancing, UNVERIFIED in this game; decision
@@ -634,10 +643,11 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         Ok(flag(space, defaults, name)? || (source != defaults && flag(space, source, name)?))
     };
     let client = byte(space, world_info, "NetMode")? == NET_MODE_CLIENT;
-    if !req.no_collision_fail && (either("bCollideWorld")? || (either("bCollideWhenPlacing")? && !client)) {
+    let off = vm.parity == ParityMode::Off;
+    if !off && !req.no_collision_fail && (either("bCollideWorld")? || (either("bCollideWhenPlacing")? && !client)) {
         return Err(collision("the spawn placement spot search"));
     }
-    if begun && either("bCollideActors")? {
+    if !off && begun && either("bCollideActors")? {
         return Err(collision(
             "the post-spawn encroachment check (or relocation) of an actor that collides with actors",
         ));
@@ -646,7 +656,7 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         return Err(collision("the base search after PostBeginPlay"));
     }
     let time = float(space, world_info, "TimeSeconds")?;
-    let location = match &req.location {
+    let requested = match &req.location {
         Some(v) => v.clone(),
         None => field(space, spawner, "Location")?,
     };
@@ -655,6 +665,16 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         None => field(space, spawner, "Rotation")?,
     };
     let instigator = object(space, spawner, "Instigator")?;
+    // Off: the spot search on the template alone (NATIVE_SPAWN_PLACEMENT.md, crate::placement), before anything is
+    // made; a failed search makes nothing.
+    let location = if off && crate::placement::search_runs(space, source, req.no_collision_fail, client)? {
+        match crate::placement::spot_search(vm, source, &requested)? {
+            Some(l) => l,
+            None => return Ok(None),
+        }
+    } else {
+        requested
+    };
 
     // The fields written below exist before anything is made (review r2 of #435): a class without one fails here,
     // with nothing left behind.
@@ -711,6 +731,10 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
         return Ok(None);
     }
     if flag(&vm.space, actor, "bCollideActors")? {
+        if off {
+            // On the live actor, after the destroyed check: terminal and prefixed (crate::placement).
+            return Err(crate::placement::after_pre_begin_play(vm, req.no_collision_fail));
+        }
         return Err(collision(
             "the post-spawn encroachment check of an actor that PreBeginPlay made collide with actors",
         ));
