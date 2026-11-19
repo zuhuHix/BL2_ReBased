@@ -6,9 +6,9 @@
 //! **The graph** ([`read_graph`]). Every export of the loaded levels' map files (the loader's level packages, streaming
 //! levels with no placed actor included) whose class derives from `Engine.SequenceOp` is loaded: events, actions,
 //! Matinee ops and the sequences themselves. An edge runs from an op to each op its `OutputLinks` name
-//! (`Links[].LinkedOp`, read by property name), except from a sequence (`Engine.Sequence` or a subclass): a sequence's
-//! outputs fire only when a finish op inside it does, so its exits are added from those finish ops alone (delta review
-//! of #436, finding 3). Three kinds of edge that no link holds are added:
+//! (`Links[].LinkedOp`, read by property name), except, in `ParityMode::Off`, from a sequence (`Engine.Sequence` or a
+//! subclass): a sequence's outputs fire only when a finish op inside it does, so its exits are added from those finish
+//! ops alone (delta review of #436, finding 3). Three kinds of edge that no link holds are added:
 //! - a remote event: every `SeqAct_ActivateRemoteEvent` (or subclass) to every `SeqEvent_RemoteEvent` (or subclass)
 //!   whose `EventName` is the action's;
 //! - into a subsequence: a `SeqEvent_SequenceActivated` runs when its sequence (its outer) is activated, and that is
@@ -19,7 +19,8 @@
 //! **What makes the graph incomplete** ([`KismetGraph::incomplete`], by reason): an export class that does not resolve
 //! (outside `super::NOT_OP_CLASSES`) or whose reference cannot be read, an op whose `OutputLinks`, a link's `Links` or a
 //! link's `LinkedOp` is missing or of another shape (a decoded null `LinkedOp` is a link to nothing, not a fault), a
-//! remote-event action or a remote event whose `EventName` does not read (delta review of #436, finding 4), and a
+//! remote-event action whose `EventName` does not read, in Off a remote event whose `EventName` does not read (delta
+//! review of #436, finding 4), and a
 //! finish op whose output cannot be resolved. While the graph is incomplete, every op's start is
 //! [`Start::Incomplete`].
 //!
@@ -40,8 +41,12 @@
 //! Proving neither happens needs the scripts' and the spawn's side, which this module does not read, so the start is
 //! unknown and an actor that only such ops bind answers `NotYet`, naming both (`super::physics_rule`). A proven
 //! exclusion would be a new variant with its proof.
+//!
+//! **Reference keeps the graph as it was before the delta review of #436** (its review r3, finding 1): there a
+//! sequence's outputs are edges from the sequence itself, and a remote event whose name does not read is skipped. The
+//! two delta rules are Off's, so an op Reference answers `AtLoad` (layer absent) through a sequence it enters stays so.
 
-use ow_core::{DetMap, DetSet};
+use ow_core::{DetMap, DetSet, ParityMode};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
@@ -124,6 +129,8 @@ fn text_of(vm: &Vm, v: &Value) -> Option<String> {
 /// Reads the Kismet graph of the map files `packages` (module notes). Loads every op.
 pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Result<KismetGraph, String> {
     let mut graph = KismetGraph::default();
+    // The delta review's two graph rules are Off's (module notes).
+    let off = vm.parity == ParityMode::Off;
     let Ok(op_class) = vm.find_class(SEQUENCE_OP_CLASS) else {
         return Ok(graph);
     };
@@ -216,7 +223,7 @@ pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Resu
         let class = graph.ops[&o].clone();
         let targets = output_targets(vm, o, &mut |why| note(&mut graph, format!("{class}: {why}")))?;
         // A sequence's outputs fire through its finish ops only (below): an impulse into it is not one out of it.
-        if !sequences.contains(&o) {
+        if !(off && sequences.contains(&o)) {
             for (target, _) in targets {
                 graph.sources.entry(target).or_default().insert(o);
             }
@@ -234,7 +241,8 @@ pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Resu
     for &event in &remote_events {
         match named(vm, event) {
             Some(name) => events_named.push((event, name)),
-            None => note(&mut graph, "a remote event with no EventName".into()),
+            None if off => note(&mut graph, "a remote event with no EventName".into()),
+            None => {}
         }
     }
     for &action in &remote_actions {

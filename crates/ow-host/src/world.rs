@@ -17,9 +17,10 @@
 //! **When a tick fails** (an unread native's `NotYet`, a script error), the world is *halted*: the error is kept with
 //! the tick it happened on, and no later tick runs, because a world stopped partway through its actor pass is not a
 //! state the next tick should build on. Nothing is rolled back (the hub's ruling on the delta review of #436): by the
-//! failure the tick has advanced the clock, written the `WorldInfo` time fields and may have run earlier actors'
-//! script, so the halt says it stopped after partial writes ([`Halt::partial_writes`]), and the world refuses every
-//! later tick itself ([`step`] on a halted frame does nothing), not only its link. The play mode goes on (the pawn's movement is the host's, not the world's);
+//! failure inside the actor pass the tick has advanced the clock, written the `WorldInfo` time fields and may have
+//! run earlier actors' script, so the halt says it stopped after partial writes ([`Halt::partial_writes`]). A tick
+//! refused before the clock advanced (a NaN delta) wrote nothing and says so (review r3 of #436). Either way the world
+//! refuses every later tick itself ([`step`] on a halted frame does nothing), not only its link. The play mode goes on (the pawn's movement is the host's, not the world's);
 //! [`WorldFrame::halted`] says why the world stopped, and the play report prints it. No `NotYet` is turned into a
 //! value here (rule R3).
 //!
@@ -104,8 +105,10 @@ pub struct Halt {
     /// The failure is a `NotYet` (an unread rule or an absent layer), not a script or data error.
     pub not_yet: bool,
     /// The failed tick may have written part of its step before it stopped: the clock, the `WorldInfo` time fields
-    /// and earlier actors' state (a failure inside the tick, or a panic). False only when the tick finished and
-    /// reading the world back failed. Either way the halt is terminal (module notes).
+    /// and earlier actors' state. Set from the phase the tick reached (review r3 of #436): true once the world clock
+    /// advanced, the tick's first write, and for a panic (its phase is not known); false for a tick refused before it
+    /// (a bad delta, a refused time dilation, a bad tick group) and when the tick finished and reading the world back
+    /// failed. Either way the halt is terminal (module notes).
     pub partial_writes: bool,
 }
 
@@ -359,11 +362,15 @@ fn step(world: &mut World, frame: &mut WorldFrame, dt: f32) {
         return;
     }
     let tick = frame.ticks + 1;
+    // The clock's advance is the tick's first write (`ow_world::World::tick`): what fails before it wrote nothing. The
+    // time dilation it sets first is the WorldInfo's own value, not a world write.
+    let clock_before = world.vm.clock.tick();
     match world.tick(dt) {
         Ok(_) => frame.ticks = tick,
         Err(e) => {
             let not_yet = matches!(e, WorldError::Vm(VmError::NotYet(_)));
-            frame.halted = Some(Halt { tick, message: e.to_string(), not_yet, partial_writes: true });
+            let partial_writes = world.vm.clock.tick() != clock_before;
+            frame.halted = Some(Halt { tick, message: e.to_string(), not_yet, partial_writes });
         }
     }
     type ReadBack = (Option<f32>, Option<f32>, (Vec<PawnActor>, Vec<String>));
