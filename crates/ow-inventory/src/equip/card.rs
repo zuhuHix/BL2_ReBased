@@ -52,7 +52,7 @@
 //! Classes the note names without a package are matched by their short name through the parent chain (the declared
 //! reference types); the port invents no package path. **Reference** binds nothing (architecture rule R3).
 
-use std::collections::HashMap;
+use ow_core::DetMap;
 use std::rc::Rc;
 
 use ow_attr::stack::ModifierType;
@@ -598,8 +598,8 @@ fn accumulate(
     vm: &mut Vm,
     weapon: ObjRef,
     holders: &[ObjRef],
-) -> Result<[HashMap<ObjRef, Record>; 2], VmError> {
-    let mut maps: [HashMap<ObjRef, Record>; 2] = [HashMap::new(), HashMap::new()];
+) -> Result<[DetMap<ObjRef, Record>; 2], VmError> {
+    let mut maps: [DetMap<ObjRef, Record>; 2] = [DetMap::new(), DetMap::new()];
     for &h in holders {
         for (list, map) in ["WeaponAttributeEffects", "ExternalAttributeEffects"].into_iter().zip(maps.iter_mut()) {
             let v = required(vm, h, list, NATIVE)?;
@@ -626,7 +626,7 @@ fn accumulate(
 fn add(
     vm: &mut Vm,
     entries: &mut Vec<Entry>,
-    maps: &[HashMap<ObjRef, Record>; 2],
+    maps: &[DetMap<ObjRef, Record>; 2],
     p: Option<ObjRef>,
     inc: f32,
     record_required: bool,
