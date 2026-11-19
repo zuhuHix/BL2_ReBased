@@ -85,5 +85,5 @@ not counted here.
 ## 5. Not read
 
 - `ComputeValueOfParts` (the spawn's `InitializeInternal` reaches it first; NATIVE_WEAPON_RULES.md section 6 records
-  that its body was not resolved).
+  that its body was not resolved). Since read: NATIVE_INVENTORY_VALUE.md.
 - `InitializeAttributeSlots`' computed slot value (`ComputedModifierValue`; NATIVE_ATTRIBUTES.md section 9, "Open").

@@ -165,7 +165,7 @@ manufacturer, the grade-or-level word and the context source (NATIVE_LOOT.md ste
 - **`ComputeMonetaryValue()`** (one body for weapons and items):
   1. 0 without an inventory definition;
   2. otherwise the definition's `MonetaryValue` (an attribute initialization value, evaluated by the engine's
-     initialization evaluator; the context it is given was not separated: UNVERIFIED), truncated toward zero to an
+     initialization evaluator with the inventory itself as context: NATIVE_INVENTORY_VALUE.md section 3), truncated toward zero to an
      integer;
   3. then capped by the definition's `FormOfCurrency`: `CURRENCY_Credits` at 99,999,999, `CURRENCY_Eridium` at 500,
      `CURRENCY_SeraphCrystals` and the ten reserved values at 999, and a value above the enum's last entry gives 0. A
@@ -225,7 +225,8 @@ their branch. Nothing in them is a native rule to port, beyond the pool native, 
 ## Open questions
 
 1. The `ItemLocation` value 2's name (the property declares no enum in the package).
-2. The context the `MonetaryValue` evaluation is given.
+2. The context the `MonetaryValue` evaluation is given. Answered by NATIVE_INVENTORY_VALUE.md section 3: the inventory
+   itself.
 3. Which rotation the `WillowPawn` toss uses (facing, view or controller), and the vector returned for a toss time
    under 0.0001.
 4. `WillowPickup.InitializeDropLifespan`, `SetPickupability` and `InitializePickupForRBPhysics`: lifespans and
