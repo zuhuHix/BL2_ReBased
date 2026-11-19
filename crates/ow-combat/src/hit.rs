@@ -34,6 +34,7 @@ pub mod access;
 pub mod attribute;
 pub mod shot;
 pub mod pools;
+pub mod opinion;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -644,23 +645,31 @@ pub const SPECIAL_MOVE_STAND_INS: [(&str, bool); 6] = [
     ("GearboxFramework.SpecialMoveComponent.IsPlayingAny", true),
 ];
 
-/// The allegiance natives (NATIVE_COMBAT_GROUNDWORK.md section 6), in both modes: `GetOpinion` is the four-step rule
-/// of [`opinion`]; `IsEnemy` / `IsNeutral` / `IsFriendly` compare it with the opinion enum (Enemy 0, Neutral 1,
-/// Friendly 2). The WillowPawn minion layer is not modelled. Bound by the hit pack, and on their own by worlds that
-/// need only these (the Phaselock cast's `GetPlayerAnimation`; review of #437), by path with the first binding of a
-/// key winning. UNVERIFIED.
+/// The allegiance natives, the one registration every world uses (the hit pack, and the cast's worlds through
+/// `ow-skills`' action skill pack), by path with the first binding of a key winning. UNVERIFIED.
+/// - Off: `Pawn.GetOpinion`, `WillowPawn.GetOpinion` and `Pawn.IsFriendly` are NATIVE_IS_FRIENDLY.md's rules
+///   ([`opinion::register`], lane IMPL-IS-FRIENDLY, decision 2026-11-19-60), bound first;
+/// - Reference: `GetOpinion` and `IsFriendly` are the C++ stand-in, [`opinion`]'s four-step rule of
+///   NATIVE_COMBAT_GROUNDWORK.md section 6 (a controller read through its pawn, no charm layer);
+/// - both modes: `IsEnemy` and `IsNeutral` compare [`opinion`] with the opinion enum (Enemy 0, Neutral 1, Friendly 2).
 pub fn register_allegiance(vm: &mut Vm) -> Result<(), VmError> {
-    bind_fn(vm, "Engine.Pawn.GetOpinion", |c| {
-        let me = this(c, "GetOpinion")?;
-        let o = opinion(c.vm, me, arg_object(c, 0)?)?;
-        // The opinion enum holds 0..=2 here; a byte keeps the low 8 bits as the C++ makeByte does.
-        Ok(Value::Byte(access::low_u8(o)))
-    })?;
-    for (path, wanted) in [
-        ("Engine.Pawn.IsEnemy", 0),
-        ("Engine.Pawn.IsNeutral", 1),
-        ("Engine.Pawn.IsFriendly", 2),
-    ] {
+    // Off: `GetOpinion`, `WillowPawn.GetOpinion` and `IsFriendly` are NATIVE_IS_FRIENDLY.md's (`opinion`, lane
+    // IMPL-IS-FRIENDLY), bound first, so no world gets the groundwork boolean for them in Off.
+    opinion::register(vm)?;
+    let mut tests = vec![("Engine.Pawn.IsEnemy", 0), ("Engine.Pawn.IsNeutral", 1)];
+    if vm.parity == ParityMode::Reference {
+        // The C++ stand-in (Reference only): reads a controller through its pawn and has no charm layer.
+        bind_fn(vm, "Engine.Pawn.GetOpinion", |c| {
+            let me = this(c, "GetOpinion")?;
+            let o = opinion(c.vm, me, arg_object(c, 0)?)?;
+            // The opinion enum holds 0..=2 here; a byte keeps the low 8 bits as the C++ makeByte does.
+            Ok(Value::Byte(access::low_u8(o)))
+        })?;
+        tests.push(("Engine.Pawn.IsFriendly", 2));
+    }
+    // `IsEnemy` and `IsNeutral` keep the groundwork rule in both modes: NATIVE_IS_FRIENDLY.md does not read
+    // `WillowAIPawn`'s replacements of them.
+    for (path, wanted) in tests {
         bind_fn(vm, path, move |c| {
             let me = this(c, "the opinion tests")?;
             Ok(Value::Bool(opinion(c.vm, me, arg_object(c, 0)?)? == wanted))
