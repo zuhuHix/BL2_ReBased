@@ -422,7 +422,10 @@ pub(crate) const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
 ///   loaded here (the allowed preload), recorded as the world's globals (`WorldQuery::set_globals`);
 /// - the weapon class's default object, loaded here, so the preflight reads it without a load;
 /// - an empty component registry layer (`ow_inventory::anim_tree::ComponentRegistry`), so `SetAnimTreeTemplate`'s
-///   registry walk finds nothing (the hub's ruling on NATIVE_SET_ANIM_TREE_TEMPLATE.md section 5, UNVERIFIED).
+///   registry walk finds nothing (the hub's ruling on NATIVE_SET_ANIM_TREE_TEMPLATE.md section 5, UNVERIFIED);
+/// - an empty scene layer (`ow_inventory::attach_mesh::SceneLayer`), so `Actor.AttachComponent` makes only its
+///   script-visible writes and registers nothing (the hub's ruling on NATIVE_ATTACH_MESH_TO_PICKUP.md section 5, a port
+///   Off answer, UNVERIFIED).
 ///
 /// The other links' worlds are unchanged.
 pub(crate) fn pickup_world(
@@ -445,6 +448,7 @@ pub(crate) fn pickup_world(
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     ow_inventory::anim_tree::add_empty_registry(&mut world.vm)?;
+    ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
 }
 

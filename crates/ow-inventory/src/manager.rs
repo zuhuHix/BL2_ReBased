@@ -422,6 +422,7 @@ impl NativePack for Pack {
         crate::equip::slots::register(vm)?;
         crate::equip::internal_slots::register(vm)?;
         crate::anim_tree::register(vm)?;
+        crate::attach_mesh::register(vm)?;
         crate::spawn::register(vm)
     }
 }

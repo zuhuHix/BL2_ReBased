@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-ATTACH-MESH-TO-PICKUP part 1 (2026-11-19, zuhu desktop, on fix/rust-set-anim-tree-template c1c8a73, #495):**
+AI-assisted (Claude Code, Opus 5.5). `SetForceRefPose`, `SetHidden`, `SetOwnerNoSee`, `HideBoneByName` and
+`Actor.AttachComponent` in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md part 1, with an empty scene layer in the pickup
+world (the hub's ruling, a port answer, UNVERIFIED). `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2`
+2,454 passed / 0 failed / 46 ignored. Installed Off `--slice-gate` strict, under the machine lock, base and branch each
+built: 0 ok / 5 NotYet / 9 errors both times. Links 6 and 7 stay at 0 of 1 step (`make`) and move from the unbound
+`SkeletalMeshComponent.SetForceRefPose(bool)` to the unbound `PrimitiveComponent.SetLightEnvironment(object)`. The other
+12 rows are byte-identical. ctest and verify_packages not run (no C++ change). No real-game session.
+
 **IMPL-SETANIMTREETEMPLATE (2026-11-19, pc-hummer, on main d72b96d4 after #487 landed; the hub's section 5 ruling):**
 AI-assisted (Claude Code, Opus 5.5). `SkeletalMeshComponent.SetAnimTreeTemplate` in Off from
 NATIVE_SET_ANIM_TREE_TEMPLATE.md (df863aff; the section 5 ruling at 466350b): the preflight, an empty `ComponentRegistry` layer on the pickup world

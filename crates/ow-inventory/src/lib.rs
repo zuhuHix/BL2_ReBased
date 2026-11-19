@@ -9,6 +9,7 @@
 //! own files and never edit this `lib.rs` (architecture section 2.3).
 
 pub mod anim_tree;
+pub mod attach_mesh;
 pub mod definition;
 pub mod equip;
 pub mod globals;
