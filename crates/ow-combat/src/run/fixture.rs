@@ -1685,6 +1685,23 @@ pub fn toy_starting() -> Vec<u8> {
     w.build()
 }
 
+/// `ToyRoute` (decision 2026-11-19-32), an extra package the route-native tests add: `ToyRoutePawn` (a `WillowAIPawn`
+/// with `bIsDead` and an `SMComponent`) and `ToySMComponent`, whose `CurrentSMData` struct holds `SMD`.
+pub fn toy_route() -> Vec<u8> {
+    let mut w = Toy::new(&["Object", "Bool", "Struct"]);
+    w.import_root();
+    let willow = w.import_full("Package", 0, "WillowGame");
+    let ai_pawn = w.import_full("Class", willow, "WillowAIPawn");
+    let component = w.cls("ToySMComponent", 0);
+    let data = w.strukt(component, "ToySMData");
+    w.prop("Object", data, "SMD", 0, 0);
+    w.prop("Struct", component, "CurrentSMData", 0, data);
+    let pawn = w.cls("ToyRoutePawn", ai_pawn);
+    w.prop("Bool", pawn, "bIsDead", 0, 0);
+    w.prop("Object", pawn, "SMComponent", 0, component);
+    w.build()
+}
+
 /// Every file of the fixture, by file name.
 pub fn files() -> Vec<(&'static str, Vec<u8>)> {
     vec![

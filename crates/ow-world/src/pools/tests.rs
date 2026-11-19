@@ -592,7 +592,10 @@ fn package() -> Vec<u8> {
         None,
         NATIVE,
     );
-    t.class("WillowMind", controller);
+    // The mind's two fields its RecalculateAttributeInitializedState override reads (NATIVE_MIND_ROUTE.md section 3).
+    let mind = t.class("WillowMind", controller);
+    t.prop("Object", mind, "AIClass", 0, class_def);
+    t.prop("Object", mind, "MyWillowPawn", 0, pawn);
     // A controller-like class without CharacterClass, Pawn or MyWillowPawn, as the C++ fixtures declare it.
     let bare = t.class("BareController", actor);
     t.prop("Object", bare, "ResourcePoolManager", 0, manager);
@@ -1944,26 +1947,30 @@ fn the_class_level_parts_are_not_yet_in_off_and_skipped_in_reference() {
     });
 }
 
+/// The `WillowMind` override (NATIVE_MIND_ROUTE.md section 3; decision 2026-11-19-32), Off: with an `AIClass` and a
+/// `MyWillowPawn` its own part needs an evaluation context the note does not name, so `NotYet` before the rebase;
+/// without them, and with no game info (no skill refresh), the shared controller part rebases the pools. Reference has
+/// no stand-in and stays `NotYet`.
 #[test]
-fn a_willow_minds_recalculation_is_not_read() {
+fn a_willow_minds_recalculation_runs_the_settled_parts() {
     run(|| {
         let mut x = fx();
         let (mind, m) = x.controller_with_manager("WillowMind");
         let (_, def) = x.resource();
-        let pool = x
-            .create(Some(m), Some(mind), Some(def), false)
-            .0
-            .data
-            .unwrap();
-        let e = x
-            .call(
-                "Controller.RecalculateAttributeInitializedState",
-                Some(mind),
-                vec![],
-            )
-            .unwrap_err();
+        let pool = x.create(Some(m), Some(mind), Some(def), false).0.data.unwrap();
+        let recalc = |x: &mut Fx, mind| x.call("Controller.RecalculateAttributeInitializedState", Some(mind), vec![]);
+        recalc(&mut x, mind).unwrap();
+        assert_eq!(x.noted(pool), vec![10, 20, 21], "no class, no pawn: the controller part rebased the pool");
+        let (class, pawn) = (x.new_obj("CharacterClassDefinition"), x.new_obj("Pawn"));
+        x.set(mind, "AIClass", Value::Object(Some(class)));
+        x.set(mind, "MyWillowPawn", Value::Object(Some(pawn)));
+        let e = recalc(&mut x, mind).unwrap_err();
         assert!(matches!(vm_missing(e), Missing::NotRead));
-        assert_eq!(x.noted(pool), vec![10]);
+        assert_eq!(x.noted(pool), vec![10, 20, 21], "refused before the rebase");
+        let mut r = fx_mode(ParityMode::Reference);
+        let (mind, _) = r.controller_with_manager("WillowMind");
+        let e = r.call("Controller.RecalculateAttributeInitializedState", Some(mind), vec![]).unwrap_err();
+        assert!(matches!(vm_missing(e), Missing::NotRead), "Reference has no stand-in");
     });
 }
 
