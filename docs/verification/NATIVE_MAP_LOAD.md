@@ -1,14 +1,24 @@
-# Native map load: the level actor list, bringing a world up for play, the game info (2026-11-16)
+# Native map load: the level actor list, bringing a world up for play, the game info (2026-11-16; second pass 2026-11-19)
 
-AI-assisted (Claude Code). Lane W5-MAPLOAD, analyst part (clean room, docs/LANE_BRIEF.md). This note records in own
-words what the engine does when a loaded map is brought up for play, read locally from `Borderlands2.exe` with the
-project's Ghidra tooling (`tools/ghidra/run.ps1`, read-only queries; the output stays under ignored `local/analysis/`).
-Nothing here was observed in the running game: every rule is **UNVERIFIED** until it is. The lane that wrote this note
-implements none of the native rules below (the rules that are not read stay `NotYet` in Off); a fresh implementer
-works from this note alone.
+AI-assisted (Claude Code). Lane W5-MAPLOAD, analyst part (clean room, docs/LANE_BRIEF.md), with a second analyst pass by
+lane MAP-LOAD-B (2026-11-19, decision 2026-11-19-13). This note records in own words what the engine does when a loaded
+map is brought up for play, read locally from `Borderlands2.exe` with the project's Ghidra tooling
+(`tools/ghidra/run.ps1`, read-only queries, plus a small local read-only table reader; the output stays under ignored
+`local/analysis/`). Nothing here was observed in the running game: every rule is **UNVERIFIED** until it is. Neither
+analyst lane implements the native rules below (they stay `NotYet` in Off); a fresh implementer works from this note
+alone.
 
-Confidence: **high** where the behaviour is a direct test or store the routine makes; **medium** where a field's
-public UE3 name is matched by its position and use, not by the class layout; **low** where a call is only inferred.
+Confidence: **high** where the behaviour is a direct test or store the routine makes and the field is named by the
+class layout (`tools/ghidra/class_layout.py`) or an event by the engine's own name table; **medium** where a name is
+matched by position, use or public UE3 convention only; **low** where a call is only inferred.
+
+**How the second pass named things.** Fields: the byte position a routine reads or writes, checked against the class
+layout computed from the packages. `WorldInfo` cannot be laid out whole (it declares map properties the tool does not
+size), but both of its map properties come after every field used here, and `WorldInfo.Game` falls where the bring-up
+stores the game info whatever size a map property is given: an oracle for that part of the layout. The
+`WillowGameInfo` layout's total size equals the size its class registration passes. Script events: the engine fills a
+table of global names from literal strings at start-up; an event a routine raises was named by matching the global it
+passes to the event call with that table.
 
 ## 1. The level's actor list (read from the packages, not from the executable)
 
@@ -27,78 +37,151 @@ map load implements (decision 2026-11-16-76).
 
 ## 2. Bringing the world up for play
 
-One routine (it logs "Bringing %s up for play" and "Bringing up level for play took") takes the map URL and a
-reset-time flag. In order:
+One routine (it logs "Bringing %s up for play (%i) at %s" and "Bringing up level for play took: %f") takes the map URL
+and a reset-time flag. The map load calls the game info routine of section 3 first (only when the world's net mode is
+not the client one), then sets one flag of the new game info, then calls this routine. In order:
 
-1. **Time reset** (high for the stores, medium for the names). With the flag set, three consecutive float fields of
-   the persistent level's world info are set to 0. By position and use they are, in public UE3 terms, `TimeSeconds`,
-   `RealTimeSeconds` and `AudioTimeSeconds`; the mapping was not checked against the class layout. Two engine calls
-   follow (not read).
-2. **URL options** (low). The URL's options are walked; a `load` option is looked up, and when it is absent four fields
-   of the world are taken from the URL (not read further).
-3. **Setup calls** (low): several engine calls, one of them the game info routine of section 3.
-4. **Begin play, once** (high for the test, medium for the names). The world tests a flag of the world info (the
-   public name is `bBegunPlay`; the test is a single bit). When the flag is clear:
-   - for every level of the world, an actor initialisation pass over its actor list, in list order, skipping null
-     entries: an engine call per actor that refreshes its components; the role pair (`Role`, `RemoteRole`) swapped for
-     an actor marked as owned remotely on a client; a few per-actor fields reset; one per-actor engine call (not
-     identified);
-   - the begun-play flag is set together with a second world info flag that stays set only while begin play is being
-     routed and is cleared after (public name `bStartup`; medium);
-   - when the world info has a game info and a flag of the game info is clear, one engine call with two outputs (not
-     read; low);
+1. **Time reset** (high). With the flag set, `WorldInfo.TimeSeconds`, `RealTimeSeconds` and `AudioTimeSeconds` are
+   set to 0 (named by the layout: the three fields the first pass matched by position). Two engine calls follow (not
+   read). Which value the map load passes for the flag was not separated (low); on a fresh load the three are 0 anyway
+   (decision 2026-11-19-04's installed read).
+2. **URL options** (medium). The URL's options are walked. When the URL has no `load` option, the world keeps its own
+   copy of the URL's parts (protocol, host, port, map, options, portal and the valid flag); with `load` it keeps the
+   copy it has. The world's URL is engine state, not a script field.
+3. **Setup calls** (low): two of the world's strings are cleared, then several engine calls (rendering, physics and
+   navigation set-up by their use; not read). None of the bring-up's direct callees uses one of the engine's script
+   event names except the two named below (deeper callees were not scanned). Each streaming level entry gets two
+   per-entry fields cleared.
+4. **Begin play, once** (high). The routine tests `WorldInfo.bBegunPlay`. When it is clear:
+   - one engine object gets one flag set (not identified; low);
+   - the actor initialisation pass (section 2.2);
+   - `bBegunPlay` and `bStartup` are set together;
+   - when `WorldInfo.Game` is set and its `bScriptInitialized` is clear: the script event **`InitGame(Options, Error)`**
+     on the game info, with the URL's options joined as text and an error string (named by the name table; the
+     options text is the `?`-joined option list of section 3);
    - the level's begin-play routing (section 2.1);
-   - an engine call on a second object when it exists (not read).
+   - one call on a second engine object when it exists (not read; low);
+   - `bStartup` is cleared again.
 5. Each level of the world then gets one more engine call (not read; low).
-6. The elapsed time is logged; then, when the world info has a game info, a `BandwidthLimit=` URL option is passed to
-   it and a memory-check option is handled (debug, not behaviour).
+6. The elapsed time is logged. Then, when the world info has a game info: a `BandwidthLimit=` option is passed to it
+   (a network setting); and when the game info has an `AutoTestManager` (`MyAutoTestManager`) with
+   `bUsingAutomatedTestingMapList` set, the manager gets the script event `StartMenuTimer`, or with
+   `bCheckingForMemLeaks` set, a memory-leak console command runs. Both are automated-testing support; neither applies
+   to normal play.
 
 ### 2.1 The level's begin-play routing
 
-Two passes over the level's actor list, in list order, skipping null entries.
+Two passes over the level's actor list, in list order, skipping null entries. **Correction to the first pass:** the
+per-actor flag tested first is `bScriptInitialized` (an actor already script-initialised gets none of the events), not
+"pending deletion". The routing takes a mode argument; when it is set, static actors (`bStatic`) are skipped entirely.
+Which value the bring-up passes was not separated (low).
 
-- **Pass 1.** For each actor that is not pending deletion and that is either not static or carries a second flag, one
-  per-actor event (a virtual of the actor class; by public UE3 convention `PreBeginPlay`, **not confirmed**: the
-  virtual's identity is the open item below). Then, for every actor, a query of its physics volume; the volumes found
-  (excluding one flagged kind) are collected into a list.
-- **Pass 2.** For each actor that is not pending deletion: a per-actor call with the collected list (by convention the
-  zone or volume assignment; not confirmed); for an actor that is not static or carries the same second flag, each
-  attached component flagged as attached gets one engine call (component begin play; low); then a second per-actor
-  event (by convention `PostBeginPlay`; not confirmed) and class tests against two engine classes (not read).
+An actor **routes** when it is not `bStatic`, or when it is `bStatic` and has **`bRouteBeginPlayEvenIfStatic`** set
+(high: both bits named by the `Actor` layout; this is the "second flag" of the first pass). The installed class
+default of `WillowWeapon` has it set, for example.
 
-Whether `SetInitialState` runs here, as it does in `Actor.Spawn` (NATIVE_ENGINE_CORE.md), was not read.
+- **Pass 1.** For each actor not yet script-initialised that routes: the actor's "pre" virtual (below). Then, for every
+  actor: a query of its physics volume; each volume found that does not have `bBlockActors` set is added to a list.
+- **Pass 2.** For each actor:
+  - not yet script-initialised: the volume assignment, with the list (an engine virtual that works through collision
+    overlap and touch lists; no script event; not read further);
+  - that routes: each of its `Components` with `bAttached` set gets one engine call (component begin play; low);
+  - not yet script-initialised and routes: the actor's "post" virtual (below); then, when the actor is a `Pawn` or a
+    `SkeletalMeshActor` (or a subclass; the two classes named by their registrations), one engine registration call
+    (hands it to an engine subsystem when that exists; no script event);
+  - not yet script-initialised and does not route (a static actor without the flag): `bScriptInitialized` is set, and
+    nothing else happens to it.
+
+**The "pre" and "post" virtuals** (high for the events, medium for the slot identity in general). In the
+`WillowGameInfo` function table (read from its constructor), the slot the routing calls first holds a `WillowGameInfo`
+override, and the slot it calls second holds the shared `Actor` routine; across the executable 262 function tables hold
+the shared "pre" routine directly followed by the shared "post" routine, as the two adjacent slots the routing uses.
+The shared routines, in own words:
+
+- **"Pre"**: raises the script event **`PreBeginPlay`** (subject to the state probe below). Then, unless `bDeleteMe`,
+  one more virtual with a world-derived flag (not identified), and for an actor with `Physics` `PHYS_RigidBody` whose
+  `TickGroup` is not the ticking group's third value, one engine call with that value (by convention moving it to that
+  tick group; low).
+- **"Post"**: raises **`PostBeginPlay`** (subject to the state probe), then, unless `bDeleteMe`, raises
+  **`SetInitialState`**, then, when `Base` is None, `bCollideWorld` and `bShouldBaseAtStartup` are set and `Physics`
+  is `PHYS_None` or `PHYS_Rotating`, one more virtual (by stock UE3 convention `FindBase`; medium). This answers the
+  first pass's question: **`SetInitialState` runs here, right after `PostBeginPlay`.**
+- **The state probe** (medium). Each of the two events is raised when the actor has no state frame, or when a bit of its
+  state frame's probe word is set (a different bit for each event): by public UE3 convention, an event a state
+  ignores is not raised. On a freshly loaded actor outside any state, the events are raised.
+- **`WillowGameInfo`'s "pre" override**: the shared "pre" routine, then one engine call with the text `Hardcore`
+  (not read further).
+
+### 2.2 The actor initialisation pass
+
+For every level, over its actor list in order, skipping null entries (and static actors when the same mode argument is
+set):
+
+- **On a client only** (not the server), for an actor not yet script-initialised: one that is neither `bStatic` nor
+  `bNoDelete` is destroyed; any other has `Role` and `RemoteRole` swapped once, guarded by `bExchangedRoles`, which is
+  then set. On the server (the single-player case) nothing here happens.
+- **The physics level filter** (high for the fields): `bLoadIfPhysXLevel0`, `1` and `2` are compared with the engine's
+  physics level (0, 1 or 2). An actor whose flag for the current level is clear is removed: destroyed when it is not
+  `bStatic`; when static, hidden (`bHidden` set through the actor's hide virtual, which notifies on a change) plus one
+  more engine call (not read). Which level the engine runs at was not read; class defaults set all three flags.
+- For an actor that is not `bDeleteMe` and does not carry one object flag (not named): `LastRenderTime` is set to the
+  most negative float, `Touching` is emptied, `PhysicsVolume` is set to the world's default physics volume; and when
+  the actor is not script-initialised or has no state frame, one more virtual (by stock UE3 convention the script
+  execution set-up; low).
 
 ## 3. The game info
 
 One routine (it holds the text "GameInfo class '%s' not found (or could not be loaded)"):
 
-- It does nothing when the persistent level's world info already holds a game info (public name `WorldInfo.Game`;
-  high, the same field the begin-play routine reads), or when a network or demo driver exists (medium).
-- Otherwise it collects the URL options, then picks a class (medium):
-  - when a world info field is zero and an engine check passes: the configured default game class, the game ini
-    setting `Engine.GameInfo.DefaultGame`, loaded once and cached;
-  - otherwise a class named through the URL options (the parse was not read), with the warning "GameInfo class '%s'
-    not found (or could not be loaded). Default will be used." where it fails.
+- It does nothing when the persistent level's world info already holds a game info (`WorldInfo.Game`; high), or when a
+  network or demo driver exists (medium).
+- Otherwise it joins the URL options into one text (`?` before each) and reads the value of a **`GAME=`** option from
+  them (high for the key: the routine's own string; medium for the parse).
+- **The class choice** (high for the field and the event, medium for the branch order):
+  - When `WorldInfo.DefaultGameType` (the map's own class reference; named by the layout) is None: the class named by
+    the `GAME=` option is loaded; if that fails, the class is the configured default, the game ini setting
+    `Engine.GameInfo.DefaultGame`, loaded once and cached, and the choice ends there.
+  - When `DefaultGameType` is set, or the `GAME=` class loaded: the script event **`SetGameType(MapName, Options,
+    Portal)`** is raised on a class default object, and the class it returns is the choice (named by the name table:
+    the event's three strings are the URL's map, the joined options and the portal). Which class's default object is
+    the receiver in each branch was not separated (by stock UE3 convention, the class chosen so far).
+  - `SetGameType` is UnrealScript: `GameInfo` and its subclasses define it in the installed script.
 - It spawns the chosen class through the world spawn (NATIVE_ENGINE_CORE.md, "Actor.Spawn") and stores the new actor
-  in the world info's game field. A failed spawn logs an error and leaves the field empty.
+  in `WorldInfo.Game`. A failed spawn logs the not-found text and leaves the field empty.
 
-Which class Sanctuary gets in the running game, and what the class's script `InitGame` and login do, are script and
-data, not part of this note.
+Which class Sanctuary gets in the running game depends on `Sanctuary_P`'s `DefaultGameType`, the URL and the script's
+`SetGameType`: data and script, not native code.
 
 ## 4. The local player's play actor
 
-`LocalPlayer.SpawnPlayActor(URL, out Error)` reads the URL text and the error output and calls the engine's routine
-that makes the local player's play actor (not read); it returns that routine's result. The engine's list of local
-players (`GamePlayers`, which `Actor.LocalPlayerControllers` and `GetALocalPlayerController` walk) is filled by the
-engine before this call; where was not read.
+`LocalPlayer.SpawnPlayActor(URL, out Error)` passes the URL text and the error string to the engine's local-player
+routine and returns its result (high). That routine (medium for the event names' roles, high for the names):
+
+- **On the server** (single player): it parses the URL text; when the local player's name is known, a `Name=<name>`
+  option is added; it finds the player's index in the engine's local-player list; it asks the local player's script
+  event **`GetUniqueNetId`** for the player's id; then it calls the world's play-actor spawn with the local player, the
+  remote role, the URL, the id, the error string and the index, and stores the result as the local player's actor.
+- **The world's play-actor spawn**: joins the URL options; asks the game info's script event **`Login(Portal,
+  Options, UniqueId, out ErrorMessage)`** for a controller; when one comes back, sets its net player index, attaches the
+  local player to it, sets its `Role` to the authority value and its `RemoteRole` to the role passed in, and raises the
+  game info's script event **`PostLogin(NewPlayer)`**; it returns the controller (or None).
+- **On a client**: a controller of a configured class is spawned directly (not read further; not used by single
+  player).
+
+`Login` and `PostLogin` are UnrealScript (`GameInfo` and its subclasses), so the play actor is the installed script's
+work once the engine calls them. The engine's local-player list (`GamePlayers`) is filled before this; where was not
+read, nor where the map load calls `SpawnPlayActor` (its loop over the local players after the bring-up does not call
+it directly).
 
 ## Open (for the implementer, or a follow-up analyst pass)
 
-- The identities of the per-actor virtuals in section 2.1 (pass 1, pass 2's first call and second event). The query
-  tool's `virtual:` form names a vtable slot of a script class; confirm them before implementing.
-- The time-field mapping of section 2 step 1 against the `WorldInfo` class layout (`class_layout.py`).
-- The game info's class choice (the world info field it tests, the URL parse) and the engine call after the begun-play
-  flag.
-- The local player routine of section 4, and where `GamePlayers` is filled.
-- What the running game shows: the order of `PreBeginPlay` and `PostBeginPlay` across Sanctuary's actors, the game
-  info's class, and `TimeSeconds` right after load (bl-sdk reads).
+- The value of the routing's and the initialisation pass's mode argument as the bring-up passes it, and the time-reset
+  flag the map load passes (stock UE3 routes every actor and resets the time on a load; not confirmed).
+- The receiver of `SetGameType` in each branch of section 3.
+- The unread engine calls: the setup calls of step 3, the flagged object and the second object of step 4, step 5, the
+  "pre" routine's extra virtual, the static hidden actor's second call, the object flag of section 2.2, the client
+  controller class of section 4.
+- Where the map load calls `SpawnPlayActor`, and where `GamePlayers` is filled.
+- What the running game shows (bl-sdk reads): the order of `PreBeginPlay`, `PostBeginPlay` and `SetInitialState` across
+  Sanctuary's actors; which static actors route; the game info's class and whether `SetGameType` ran; `Login` /
+  `PostLogin` with their arguments for the local player; `TimeSeconds` right after load.

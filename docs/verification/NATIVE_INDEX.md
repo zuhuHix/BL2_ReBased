@@ -81,6 +81,9 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | MissionTracker.AllExpansionSideMissionsComplete | [NATIVE_MISSION_OBJECTIVES.md](NATIVE_MISSION_OBJECTIVES.md) | Fire: the turn-in's side-mission achievement check | UNVERIFIED | medium | |
 | AIComponent.ActivateEvent | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) | Fire: an AI component's script event | UNVERIFIED | medium | |
 | Trigger.TriggerDetachSprites | [NATIVE_SLICE_OFF_STOPS.md](NATIVE_SLICE_OFF_STOPS.md) (not resolved) | Fire: a trigger's script | UNVERIFIED | low | |
+| WillowGameInfo.TravelPostCountdownInProcess | [NATIVE_TRAVEL.md](NATIVE_TRAVEL.md) | link 4: the damage scripts every AI swing on the player runs | UNVERIFIED | high | |
+| LocalPlayer.SpawnPlayActor | [NATIVE_MAP_LOAD.md](NATIVE_MAP_LOAD.md) section 4 | link 1: the local player's controller, through the game info's script `Login` / `PostLogin` | UNVERIFIED | high (events), medium (roles) | |
+| (engine) the map's bring-up for play: begin play, `InitGame`, the game info's class | [NATIVE_MAP_LOAD.md](NATIVE_MAP_LOAD.md) sections 2 and 3 | link 1: Sanctuary as a world (W5-MAPLOAD) | UNVERIFIED | high / medium per item | |
 | Actor.AllOwnedComponents | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
 | Actor.GetALocalPlayerController | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | 7 sites | UNVERIFIED | high | |
 | WorldInfo.GetWorldInfo | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | persistent level WorldInfo; Kismet/behavior lookups | UNVERIFIED | high | |
