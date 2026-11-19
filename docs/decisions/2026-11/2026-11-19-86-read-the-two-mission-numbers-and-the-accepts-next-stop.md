@@ -18,12 +18,15 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-MISSION-NUMBERS, analyst only 
   - `GetActivePlotCriticalMissionNumber`: as NATIVE_SAVE_LOAD.md says.
   - After the refresh, the accept reaches `QuestAcceptGFxMovie.UpdateMissionTextList`, called from
     `extPopulateQuestEntries`. This corrects NATIVE_GFX_BRIDGE.md's "no script caller".
-- **Off answers given:**
+- **Off answers given** (final, after review r2 of #473):
   - both numbers through the VM's tracker and controller records, writing nothing;
-  - `UpdateMissionTextList` on the stand-in screen (its `MissionTextList` is None): nothing;
-  - `GetVariableObject`: None; `FocusOn(None)`: nothing.
-  - These treat "no Flash movie hosted" as the engine's fact. That is a hub call, with a named `LayerAbsent` refusal
-    as the alternative.
+  - each unresolved decision that changes their result is a named `NotYet { NotRead }`: the engine-wide condition
+    when the two branches differ, and the controller's current-playthrough virtual;
+  - `UpdateMissionTextList`: `NotYet { LayerAbsent }`, "the mission screen's Flash text list (not hosted)", terminal
+    after the accept's writes. The focus pair is not reached; if it were, `GetVariableObject` would be the same kind of
+    named `NotYet`;
+  - the hub's ruling (a UI-only effect may be "nothing" only without read-back) is applied. The read-back evidence
+    covers the 12,968 decoded script functions only, so no call is answered "nothing".
 - Not implemented: an implementer lane binds these from the note.
 
 **Hub ruling on the screen (2026-11-19), folded in.** A UI-only side effect may be answered "nothing" in Off only when
@@ -53,3 +56,12 @@ The script path is also corrected: the slice's accept reaches the movie through 
    - the expected next stop is the bridge's `GetAllMissions` `LayerAbsent`, while the tracker's data is valid.
 4. **The bl-sdk checks** now tell the rules apart. The rest stay open.
 5. **NATIVE_CONTROLLER_HELPERS.md and NATIVE_GFX_BRIDGE.md** are fixed in place.
+
+**Review r2 of #473 (five findings, fixed in the note).**
+1. **The focus pair:** no "nothing" answer. It is not reached, and `GetVariableObject` would be a named
+   `NotYet { LayerAbsent }`.
+2. **The text list:** a named `NotYet { LayerAbsent }`, since the undecoded functions and native readers are not
+   accounted for.
+3. **The engine-wide condition and the playthrough virtual:** each a named `NotYet { NotRead }`; no guessed identity.
+4. **The return** is traced through the bridge's `accept`, the slice's real caller.
+5. **These bullets** give the final conditions, and the census claims are limited to the decoded functions.
