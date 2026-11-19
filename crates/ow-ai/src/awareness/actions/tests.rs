@@ -805,13 +805,50 @@ fn invented_log(w: &World) -> Vec<String> {
     w.script.borrow().log.iter().filter(|l| l.starts_with("Invented")).cloned().collect()
 }
 
-/// Off: with `AI` and `AIDef` set and no running node, every node's action gets the script event in list order (the
-/// root has no action), and the answer is false. Reference leaves the key unbound (the slice's C++ stub serves it).
+/// The definition's node actions, in list order.
+fn definition_actions(w: &mut World) -> Vec<ObjRef> {
+    let vm = &mut w.e.vm;
+    let nodes = array(vm, w.e.aidef, "NodeList").unwrap();
+    nodes.iter().filter_map(|n| object_of(field(vm, n, "Action"))).collect()
+}
+
+/// Marks `actions` as per-AI copies a brain owns (an invented stand-in: part 2's own copies never sit in `AIDef`).
+fn own(w: &mut World, actions: &[ObjRef]) {
+    let mind = w.e.mind;
+    let b = brains(&mut w.e.vm).unwrap();
+    let mut s = borrow(&b).unwrap();
+    for &a in actions {
+        s.owners.insert(a, mind);
+    }
+}
+
+fn per_ai_not_yet(r: Result<Value, VmError>) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert!(matches!(n.missing, Missing::NotRead), "{n}");
+            assert!(n.to_string().contains("per-AI copies"), "{n}");
+        }
+        other => panic!("expected the per-AI copies NotYet, got {other:?}"),
+    }
+}
+
+/// Off (review r1 M1): the definition's own actions, which no brain owns as per-AI copies, are `NotYet { NotRead }`
+/// naming the note's per-AI copies item, with nothing delivered; also when only some are unowned (review r1 L2: all
+/// nodes are checked before any delivery). Owned actions get the script event in list order (the root has no action)
+/// and the answer is false. Reference leaves the key unbound (the slice's C++ stub serves it).
 #[test]
-fn activate_event_broadcasts_to_the_node_actions_in_list_order() {
+fn activate_event_reaches_only_per_ai_copies_in_list_order() {
     let mut w = world(ParityMode::Off);
     let (mind, aidef) = (w.e.mind, w.e.aidef);
     let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert!(invented_log(&w).is_empty());
+    let actions = definition_actions(&mut w);
+    assert_eq!(actions.len(), 2);
+    own(&mut w, &actions[..1]);
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert!(invented_log(&w).is_empty(), "the owned first action got nothing either");
+    own(&mut w, &actions);
     assert_eq!(activate(&mut w, me, f).unwrap(), Value::Bool(false));
     assert_eq!(invented_log(&w), ["Invented Attack", "Invented Patrol"]);
 
@@ -820,6 +857,56 @@ fn activate_event_broadcasts_to_the_node_actions_in_list_order() {
     let (_me, f) = event_component(&mut w, Some(mind), Some(aidef));
     let key = w.e.vm.function(f).unwrap().native_key.clone().unwrap();
     assert!(!w.e.vm.has_native(&key), "Reference binds nothing");
+}
+
+/// Off (review r1 L2, L5): a node `Action` of the wrong kind is an error with nothing delivered. The heap keeps a
+/// declared kind, so the invented definition declares its nodes' `Action` as an int.
+#[test]
+fn activate_event_with_a_wrong_kind_action_is_an_error_with_nothing_delivered() {
+    let mut w = world(ParityMode::Off);
+    let vm = &mut w.e.vm;
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let action = decl(vm, "Action", PropKind::Int);
+    let node = vm.space.classes.define_struct("Toy.ToyObject.ToyIntNode", None, vec![action]).unwrap();
+    let c = class(vm, "Toy.ToyIntDef", core_object, &[("NodeList", PropKind::Array(Box::new(PropKind::Struct(node))))]);
+    let def = make(vm, c, "IntDef");
+    let mut nodes = Vec::new();
+    for i in 0..2 {
+        let mut n = vm.space.classes.struct_defaults(node).unwrap();
+        set_field(vm, &mut n, "Action", Value::Int(i + 1));
+        nodes.push(n);
+    }
+    set(vm, def, "NodeList", Value::Array(Rc::new(nodes))).unwrap();
+    let mind = w.e.mind;
+    let (me, f) = event_component(&mut w, Some(mind), Some(def));
+    let e = activate(&mut w, me, f).unwrap_err();
+    assert!(e.to_string().contains("a node's Action holds"), "{e}");
+    assert!(invented_log(&w).is_empty());
+}
+
+/// Off (review r1 L3): a `CurrentState` without a `Dummy` is an error, not "not running".
+#[test]
+fn activate_event_without_the_state_pointer_is_an_error() {
+    let mut w = world(ParityMode::Off);
+    let vm = &mut w.e.vm;
+    let core_object = vm.find_class("Core.Object").unwrap();
+    let other = decl(vm, "Other", PropKind::Int);
+    let pointer = vm.space.classes.define_struct("Toy.ToyObject.ToyNoDummy", None, vec![other]).unwrap();
+    let c = class(vm, "Toy.ToyBareComponent", core_object, &[
+        ("AI", PropKind::Interface { class: core_object }),
+        ("AIDef", PropKind::Object { class: core_object }),
+        ("CurrentState", PropKind::Struct(pointer)),
+    ]);
+    let name = decl(vm, "EventName", PropKind::Name);
+    let f = declare(vm, c, ACTIVATE_EVENT, vec![name], Some(PropKind::Bool));
+    register_activate_event(vm).unwrap();
+    let me = make(vm, c, "Component");
+    let (mind, aidef) = (w.e.mind, w.e.aidef);
+    set(&mut w.e.vm, me, "AI", Value::Interface(Some(mind))).unwrap();
+    set(&mut w.e.vm, me, "AIDef", Value::Object(Some(aidef))).unwrap();
+    let e = activate(&mut w, me, f).unwrap_err();
+    assert!(e.to_string().contains("declares no Dummy"), "{e}");
+    assert!(invented_log(&w).is_empty());
 }
 
 /// Off: an unset `AI` or `AIDef` does nothing and answers false.
@@ -834,10 +921,11 @@ fn activate_event_does_nothing_without_ai_or_definition() {
     }
 }
 
-/// Off: a running node (the component's pointer set, or the mind's brain running a node) is `NotYet { NotRead }`,
-/// with nothing delivered: the running action's first delivery is the note's open question.
+/// Off: a running node (the component's pointer set) is `NotYet { NotRead }` naming the running action's first
+/// delivery; a mind with a built brain, running a node or not (review r1 M1, L5), is `NotYet { NotRead }` naming the
+/// per-AI copies item. Nothing is delivered in any case.
 #[test]
-fn activate_event_with_a_running_node_is_not_yet() {
+fn activate_event_with_a_running_node_or_a_brain_is_not_yet() {
     let not_read = |r: Result<Value, VmError>| match r {
         Err(VmError::NotYet(n)) => {
             assert!(matches!(n.missing, Missing::NotRead), "{n}");
@@ -861,6 +949,15 @@ fn activate_event_with_a_running_node_is_not_yet() {
     assert!(brain(&w.e.vm, w.e.mind).unwrap().tree.current.is_some());
     let (mind, aidef) = (w.e.mind, w.e.aidef);
     let (me, f) = event_component(&mut w, Some(mind), Some(aidef));
-    not_read(activate(&mut w, me, f));
-    assert!(invented_log(&w).is_empty());
+    let before = invented_log(&w).len();
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert_eq!(invented_log(&w).len(), before);
+    // The same brain, built but not running a node.
+    {
+        let b = brains(&mut w.e.vm).unwrap();
+        borrow(&b).unwrap().brains.get_mut(&mind).unwrap().tree.current = None;
+    }
+    assert!(brain(&w.e.vm, mind).unwrap().tree.current.is_none());
+    per_ai_not_yet(activate(&mut w, me, f));
+    assert_eq!(invented_log(&w).len(), before);
 }
