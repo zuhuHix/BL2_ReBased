@@ -52,7 +52,7 @@ run; `UNVERIFIED` in game. Decision 2026-11-19-40 (assigned -103); logs under ig
 **IMPL-LINK10-NEXT (2026-11-19, pc-hummer, on #496 9b591ada; gate on a local merge with #497 7af3ab76):** AI-assisted
 (Claude Code, Opus 5.5). The accept screen's calls in Off from NATIVE_MISSION_TEXT_LIST.md (#504 cb42b97a) and the
 hub's rulings R1 to R3: `UpdateMissionTextList` nothing with a None list; `GetVariableObject` None; `FocusOn(None)`
-writes `FocusObject` None and `FocusOffset` (0, 0); `RecordMissionStatusChangedEventForPlayer` nothing. `cargo build
+writes `FocusObject` None, then `FocusOffset` the zero vector; `RecordMissionStatusChangedEventForPlayer` nothing. `cargo build
 --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,382 passed / 0 failed / 46 ignored;
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict on the local merge: 0 ok / 5 NotYet / 9 errors before,
 1 / 4 / 9 after. Link 10 passes (8 of 8 steps); link 11 reaches 4 of 8 and stops at `hit:fire` on a pawn's

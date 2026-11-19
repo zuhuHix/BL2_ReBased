@@ -57,18 +57,29 @@
 //!   Flash player only when the movie has a native player object with a movie view; with none, no wrapper is made and
 //!   the answer is None. The port's movies are stand-ins with no native player, so Off answers None and writes nothing.
 //!   UNVERIFIED (the return on this branch was read by fit).
-//! - **`WillowGFxMovie3D.FocusOn(Thing)`** (section 4, with the hub's ruling R2 on #504; UNVERIFIED). The movie's
-//!   class must declare `FocusObject` (an object) and `FocusOffset` (a struct with float `X` and `Y`), else a
-//!   `VmError::Script` naming the field; this is checked before any write.
-//!   - **`Thing` None, on a movie with no native player** (every port movie): `FocusObject` = None, then
-//!     `FocusOffset` = (0, 0), and no other write. The game's clamp limits Y to plus or minus a bound made from the
-//!     stage height; the port's movie has no view, so its stage height is 0 and the bound is 0. A bound that came out
-//!     negative or NaN would be [`FOCUS_BOUND`], `NotYet { NotRead }`, before any write ([`y_bound`]).
-//!   - **Any other `Thing`:** [`FOCUS`], `NotYet { LayerAbsent }`: the chain step's Flash lookups need a hosted movie.
+//! - **`WillowGFxMovie3D.FocusOn(Thing)`** (section 4, with the hub's ruling R2 on #504; UNVERIFIED).
+//!   - **Any `Thing` but None:** [`FOCUS`], `NotYet { LayerAbsent }`, at once: the chain step's Flash lookups need a
+//!     hosted movie. Nothing is read or written first (review r1 of #509).
+//!   - **`Thing` None, on a movie with no native player** (every port movie): [`focus_writes`] plans, writing
+//!     nothing, `FocusObject` = None, then `FocusOffset` = the zero `Vector` (X, Y and Z all 0), and the native makes
+//!     those two writes in that order and no other (`InterpFocusOffset` is not written). Before either write:
+//!     - the class must declare `FocusObject` as an object and `FocusOffset` as a struct declaring float `X`, `Y` and
+//!       `Z`, else a `VmError::Script` naming the field;
+//!     - the clamp's Y bound ([`y_bound`]): half the margin between the stage height and the stage height times the
+//!       scale. The port's stand-in for a movie with no native player is a stage of height 0 and scale 0
+//!       ([`FocusStage::NO_PLAYER`]), so the bound is 0. A bound that is negative or NaN is [`FOCUS_BOUND`],
+//!       `NotYet { NotRead }`, record [`RECORD_TEXT_LIST`] (#504's note, which lands before or with this). The
+//!       offset is zero with no `FocusObject`, so the clamp leaves it zero.
 //! - **`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer(ForPlayer, Status, MissionDefinition)`**
 //!   (section 5, with the hub's ruling R3 on #504): the shared statistics submit routine answers nothing, with no write,
 //!   for every player. A port answer, the same as the revived event's (#500); UNVERIFIED. The player argument must be
 //!   an object.
+//!   - **Known limit, not fixed here (review r1 of #509, item 4):** the binding goes to the native's dispatch key,
+//!     `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer(object,byte,name)`, which names the class and
+//!     the function but not the package (the VM builds it as the C++ `nativeKey` does). The VM dispatches every
+//!     native through one key map, and its per-declaration binding (`Vm::override_script`) takes script functions
+//!     only. So a class of the same name with the same native in another package would get this no-op too. Scoping
+//!     a native to its resolved declaration is a VM design change, queued by the hub as its own item.
 //! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
 //!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
 //!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
@@ -87,6 +98,7 @@
 
 use ow_core::NotYet;
 use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{CallResult, NativeCall, Vm};
 use ow_vm::error::VmError;
@@ -127,8 +139,8 @@ pub const FOCUS: &str = "the 3D movie's Flash focus (not hosted)";
 pub const RECORD_STATUS_CHANGED: &str = "WillowGame.WillowLeviathanService.RecordMissionStatusChangedEventForPlayer";
 /// The record of the text list body, `GetVariableObject`'s no-player answer and the status telemetry.
 pub const RECORD_TEXT_LIST: &str = "docs/verification/NATIVE_MISSION_TEXT_LIST.md";
-/// The `NotYet` of a focus clamp whose Y bound is negative or NaN (the hub's ruling R2 on #504).
-pub const FOCUS_BOUND: &str = "WillowGFxMovie3D.FocusOn: a negative or NaN focus clamp bound";
+/// The `NotYet` of a focus clamp whose Y bound is negative or NaN (the hub's ruling R2 on #504, its text).
+pub const FOCUS_BOUND: &str = "WillowGFxMovie3D.FocusOn: the focus offset's clamp bound";
 /// The layer the port lacks for [`TEXT_LIST`] and [`FOCUS`].
 pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
 
@@ -481,69 +493,111 @@ pub(crate) fn n_status_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value
     Ok(Value::None)
 }
 
-/// The focus clamp's Y bound for a movie with no native player: half the margin between the stage height and the
-/// stage height times a scale. The port's movie has no view, so the stage height is 0 and the bound is 0, whatever the
-/// (unread) scale. A negative or NaN bound is [`FOCUS_BOUND`] (ruling R2).
-pub fn y_bound(stage_height: f32) -> Result<f32, VmError> {
-    if stage_height != 0.0 {
-        // The scale's source was not read (NATIVE_MISSION_TEXT_LIST.md open question 3); a port movie never gets here.
-        return Err(NotYet::not_read(FOCUS_BOUND, RECORD_TEXT_LIST).into());
-    }
-    let bound = 0.0_f32;
+/// The stage the focus clamp reads (NATIVE_MISSION_TEXT_LIST.md section 4, step 3): the native player's view height
+/// and the scale. The port's movies have no native player, so the port's stand-in is [`FocusStage::NO_PLAYER`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FocusStage {
+    pub height: f32,
+    pub scale: f32,
+}
+
+impl FocusStage {
+    /// The stand-in for a movie with no native player: height 0 and scale 0, so the bound is 0 (ruling R2).
+    pub const NO_PLAYER: FocusStage = FocusStage { height: 0.0, scale: 0.0 };
+}
+
+/// The focus clamp's Y bound on `stage`: half the margin between the stage height and the stage height times the
+/// scale. A negative or NaN bound (a garbage height, or a scale above 1) is [`FOCUS_BOUND`], `NotYet { NotRead }`
+/// (ruling R2).
+pub fn y_bound(stage: FocusStage) -> Result<f32, VmError> {
+    let bound = (stage.height - stage.height * stage.scale) * 0.5;
     if bound.is_nan() || bound < 0.0 {
         return Err(NotYet::not_read(FOCUS_BOUND, RECORD_TEXT_LIST).into());
     }
     Ok(bound)
 }
 
-/// `FocusOffset`'s current value with `X` and `Y` set to `x` and `y`, checked as a struct with float `X` and `Y`.
-fn focus_offset(vm: &Vm, current: &Value, x: f32, y: f32) -> Result<Value, VmError> {
-    const UNIT: &str = FOCUS_ON;
-    let mut v = current.clone();
-    let s = v.as_struct().ok_or_else(|| bad(UNIT, format!("FocusOffset holds {}, not a struct", current.kind_name())))?;
-    let layout = vm.space.classes.struct_layout(s.ty).ok_or_else(|| bad(UNIT, "FocusOffset has no layout".to_string()))?;
-    let mut at = Vec::new();
-    for name in ["X", "Y"] {
-        let id = vm.space.names.find(name).ok_or_else(|| bad(UNIT, format!("FocusOffset has no {name}")))?;
-        let (index, _) = layout.field(id).ok_or_else(|| bad(UNIT, format!("FocusOffset has no {name}")))?;
-        let index = usize::try_from(index).map_err(|_| bad(UNIT, format!("FocusOffset's {name} is out of range")))?;
-        match s.fields.get(index) {
-            Some(Value::Float(_)) => at.push(index),
-            other => return Err(bad(UNIT, format!("FocusOffset's {name} holds {other:?}, not a float"))),
-        }
+/// The stage `FocusOn` reads: the no-player stand-in, or in a test the [`TestFocusStage`] service's.
+fn stage_for(vm: &Vm) -> FocusStage {
+    #[cfg(test)]
+    if let Some(s) = vm.service::<TestFocusStage>() {
+        return s.borrow().0;
     }
-    let s = v.struct_mut().expect("checked above");
-    s.fields[at[0]] = Value::Float(x);
-    s.fields[at[1]] = Value::Float(y);
+    let _ = vm;
+    FocusStage::NO_PLAYER
+}
+
+/// Tests only: the stage `FocusOn` reads.
+#[cfg(test)]
+pub(crate) struct TestFocusStage(pub FocusStage);
+
+/// The zero `Vector` of struct `ty`: its defaults with float `X`, `Y` and `Z` each 0; a struct that does not declare
+/// all three as floats is a `VmError::Script`.
+fn zero_vector(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> {
+    const UNIT: &str = FOCUS_ON;
+    let mut v = vm.space.classes.struct_defaults(ty).map_err(|e| bad(UNIT, format!("FocusOffset's defaults: {e:?}")))?;
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(|| bad(UNIT, "FocusOffset has no layout".to_string()))?;
+    for name in ["X", "Y", "Z"] {
+        let field = vm.space.names.find(name).and_then(|id| layout.field(id));
+        let index = match field {
+            Some((index, d)) if matches!(d.kind, PropKind::Float) => index,
+            _ => return Err(bad(UNIT, format!("FocusOffset does not declare {name} as a float"))),
+        };
+        let index = usize::try_from(index).map_err(|_| bad(UNIT, format!("FocusOffset's {name} is out of range")))?;
+        let s = v.struct_mut().ok_or_else(|| bad(UNIT, "FocusOffset's defaults are not a struct".to_string()))?;
+        *s.fields.get_mut(index).ok_or_else(|| bad(UNIT, format!("FocusOffset's {name} is out of range")))? =
+            Value::Float(0.0);
+    }
     Ok(v)
 }
 
-/// `FocusOn` (module documentation, ruling R2): the declarations, then the case; the two writes come last.
+/// `FocusOn(None)`'s writes on `movie`, in order, planned with nothing written (module documentation): `FocusObject`
+/// = None, then `FocusOffset` = the zero `Vector`, after the declarations and the clamp's bound are checked.
+pub(crate) fn focus_writes(vm: &Vm, movie: ObjRef) -> Result<[(PropAddr, Value); 2], VmError> {
+    const UNIT: &str = FOCUS_ON;
+    let class = vm.space.heap.get(movie)?.class;
+    let declared = |name: &str| {
+        let p = vm
+            .space
+            .prop(class, name)
+            .ok_or_else(|| bad(UNIT, format!("{} declares no {name}", ow_attr::eval::class_path(&vm.space, movie))))?;
+        let kind = vm.space.classes.decl(p).map(|d| d.kind.clone());
+        Ok::<_, VmError>((p, kind))
+    };
+    let (object_field, kind) = declared("FocusObject")?;
+    if !matches!(kind, Some(PropKind::Object { .. })) {
+        return Err(bad(UNIT, "FocusObject is not declared as an object".to_string()));
+    }
+    let (offset_field, kind) = declared("FocusOffset")?;
+    let Some(PropKind::Struct(ty)) = kind else {
+        return Err(bad(UNIT, "FocusOffset is not declared as a struct".to_string()));
+    };
+    let offset = zero_vector(vm, ty)?;
+    // The clamp: Y within the bound. With no `FocusObject` the offset is not centred, so Y stays 0 for any valid bound.
+    y_bound(stage_for(vm))?;
+    Ok([(PropAddr::scalar(object_field), Value::Object(None)), (PropAddr::scalar(offset_field), offset)])
+}
+
+/// `FocusOn` (module documentation, ruling R2): a set `Thing` refuses at once; otherwise the planned writes, in order.
 pub(crate) fn n_focus(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const UNIT: &str = FOCUS_ON;
     let movie = c.this.ok_or_else(|| bad(UNIT, "called with no movie".to_string()))?;
-    let thing = object_of(c.arg(0)?.clone(), "Thing", UNIT)?;
-    let class = c.vm.space.heap.get(movie)?.class;
-    let declared = |name: &str| {
-        c.vm.space
-            .prop(class, name)
-            .ok_or_else(|| bad(UNIT, format!("{} declares no {name}", ow_attr::eval::class_path(&c.vm.space, movie))))
-    };
-    let object_field = declared("FocusObject")?;
-    let offset_field = declared("FocusOffset")?;
-    if !matches!(c.vm.space.read(movie, PropAddr::scalar(object_field))?, Value::Object(_)) {
-        return Err(bad(UNIT, "FocusObject is not an object field".to_string()));
-    }
-    let current = c.vm.space.read(movie, PropAddr::scalar(offset_field))?.clone();
-    if thing.is_some() {
+    if object_of(c.arg(0)?.clone(), "Thing", UNIT)?.is_some() {
         return screen_not_yet(FOCUS);
     }
-    let bound = y_bound(0.0)?;
-    let offset = focus_offset(c.vm, &current, 0.0, 0.0_f32.clamp(-bound, bound))?;
-    c.vm.space.write(movie, PropAddr::scalar(object_field), Value::Object(None))?;
-    c.vm.space.write(movie, PropAddr::scalar(offset_field), offset)?;
+    for (at, v) in focus_writes(c.vm, movie)? {
+        #[cfg(test)]
+        if let Some(log) = c.vm.service::<TestFocusWrites>() {
+            log.borrow_mut().0.push(at);
+        }
+        c.vm.space.write(movie, at, v)?;
+    }
     Ok(Value::None)
 }
+
+/// Tests only: the addresses `FocusOn` writes, in the order it writes them.
+#[cfg(test)]
+pub(crate) struct TestFocusWrites(pub Vec<PropAddr>);
 
 #[cfg(test)]
 #[path = "mission_numbers_tests.rs"]

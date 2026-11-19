@@ -112,10 +112,12 @@ fn willow() -> Vec<u8> {
     t.function(unbound, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     let movie3d = t.class("WillowGFxMovie3D", object);
     t.prop("Object", movie3d, "FocusObject", 0, object);
-    let vector2d = strukt(&mut t, movie3d, "ToyVector2D");
-    t.prop("Float", vector2d, "X", 0, 0);
-    t.prop("Float", vector2d, "Y", 0, 0);
-    t.prop("Struct", movie3d, "FocusOffset", 0, vector2d);
+    let vector = strukt(&mut t, movie3d, "ToyVector");
+    for axis in ["X", "Y", "Z"] {
+        t.prop("Float", vector, axis, 0, 0);
+    }
+    t.prop("Struct", movie3d, "FocusOffset", 0, vector);
+    t.prop("Struct", movie3d, "InterpFocusOffset", 0, vector);
     let spec = FunctionSpec::new(NATIVE, "FocusOn");
     t.function(movie3d, "FocusOn", &[param("Object", "Target", 0, object)], None, &[], &spec, |_| None);
     t.class("ToyOtherMovie", movie3d);
@@ -649,11 +651,10 @@ fn the_tracker_branch_alone_answers_when_the_world_exists() {
     assert_eq!(active_mission_number(&mut t.vm, pc).unwrap(), 8, "no level: the fallback");
 }
 
-/// The mission screen's calls (NATIVE_MISSION_TEXT_LIST.md section 6, lane IMPL-LINK10-NEXT, the hub's rulings R1 and
-/// R2 on #504). The text list update returns at once with `MissionTextList` None and is the named `LayerAbsent` with it
-/// set; `GetVariableObject` answers None; `FocusOn` writes `FocusObject` None and `FocusOffset` (0, 0) for a None
-/// `Thing`, and is the named `LayerAbsent` for any other. None of them marks its own `NotYet` (the mark comes from the accept's
-/// write boundary in the mission bridge), and nothing on the screen changes.
+/// The mission screen's calls (NATIVE_MISSION_TEXT_LIST.md section 6, lane IMPL-LINK10-NEXT, the hub's ruling R1 on
+/// #504): the text list update returns at once with `MissionTextList` None and is the named `LayerAbsent` with it set;
+/// `GetVariableObject` answers None. Neither marks its own `NotYet` (the mark comes from the accept's write boundary in
+/// the mission bridge), and nothing on the screen changes. `FocusOn` has its own tests below.
 #[test]
 fn the_screen_calls_answer_the_notes_defined_cases_only() {
     let mut t = toy(true);
@@ -663,28 +664,6 @@ fn the_screen_calls_answer_the_notes_defined_cases_only() {
     let wi = t.world_info;
     set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
     not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, TEXT_LIST, RECORD_GFX);
-    let focus = "WillowGame.WillowGFxMovie3D.FocusOn";
-    // Ruling R2: a set Thing needs a hosted movie, before any write.
-    set(&mut t.vm, movie, "FocusObject", Value::Object(Some(wi)));
-    not_yet_in(t.call(focus, movie, vec![Value::Object(Some(wi))]), true, FOCUS, RECORD_GFX);
-    let offset = |t: &Toy| {
-        let class = t.vm.space.heap.get(movie).unwrap().class;
-        let p = t.vm.space.prop(class, "FocusOffset").unwrap();
-        let v = t.vm.space.read(movie, PropAddr::scalar(p)).unwrap().clone();
-        (struct_field(&t.vm, &v, "X", "test").unwrap(), struct_field(&t.vm, &v, "Y", "test").unwrap())
-    };
-    let class = t.vm.space.heap.get(movie).unwrap().class;
-    let p = t.vm.space.prop(class, "FocusOffset").unwrap();
-    let mut v = t.vm.space.read(movie, PropAddr::scalar(p)).unwrap().clone();
-    set_field(&t.vm, &mut v, "X", Value::Float(3.0));
-    set_field(&t.vm, &mut v, "Y", Value::Float(-4.0));
-    set(&mut t.vm, movie, "FocusOffset", v);
-    assert_eq!(offset(&t), (Value::Float(3.0), Value::Float(-4.0)), "unchanged by the refusal");
-    // Thing None, no native player: FocusObject None, then FocusOffset (0, 0).
-    assert_eq!(t.call(focus, movie, vec![Value::Object(None)]).unwrap(), Value::None);
-    let p = t.vm.space.prop(class, "FocusObject").unwrap();
-    assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(None));
-    assert_eq!(offset(&t), (Value::Float(0.0), Value::Float(0.0)));
     let player = t.vm.find_class("GFxUI.GFxMoviePlayer").unwrap();
     let player = t.vm.space.alloc(player, "ToyPlayer", None, Origin::Runtime).unwrap();
     let path = Value::Str("missions.selections.selection1".into());
@@ -694,22 +673,105 @@ fn the_screen_calls_answer_the_notes_defined_cases_only() {
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
 }
 
-/// A movie whose class declares no `MissionCategories` is bad data for the text list update, even with the list None
-/// (the native called directly on it).
-#[test]
-fn a_movie_without_the_categories_is_a_script_error() {
-    let mut t = toy(true);
-    let bare = t.vm.find_class("WillowGame.ToyBareQuestMovie").unwrap();
-    let bare = t.vm.space.alloc(bare, "ToyBare", None, Origin::Runtime).unwrap();
-    script_error(t.call(UPDATE_MISSION_TEXT_LIST, bare, vec![]), "MissionCategories");
+const FOCUS_PATH: &str = "WillowGame.WillowGFxMovie3D.FocusOn";
+
+/// A `QuestAcceptGFxMovie` with every focus field seeded nonzero: `FocusObject` set, `FocusOffset` (3, -4, 5) and
+/// `InterpFocusOffset` (1, 2, 3).
+fn seeded_movie(t: &mut Toy) -> ObjRef {
+    let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
+    let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
+    let wi = t.world_info;
+    set(&mut t.vm, movie, "FocusObject", Value::Object(Some(wi)));
+    for (name, xyz) in [("FocusOffset", [3.0, -4.0, 5.0]), ("InterpFocusOffset", [1.0, 2.0, 3.0])] {
+        let class = t.vm.space.heap.get(movie).unwrap().class;
+        let p = t.vm.space.prop(class, name).unwrap();
+        let mut v = t.vm.space.read(movie, PropAddr::scalar(p)).unwrap().clone();
+        for (axis, x) in ["X", "Y", "Z"].iter().zip(xyz) {
+            set_field(&t.vm, &mut v, axis, Value::Float(x));
+        }
+        set(&mut t.vm, movie, name, v);
+    }
+    movie
 }
 
-/// The focus clamp's bound (ruling R2): 0 for the port's stage height of 0; any other stage height needs the unread
-/// scale, `NotYet { NotRead }`.
+/// The heap's text, to show a call wrote nothing.
+fn heap_text(t: &Toy) -> String {
+    format!("{:?}", t.vm.space.heap)
+}
+
+/// `FocusOn(None)` (ruling R2; review r1 of #509): two writes in this order, `FocusObject` = None, then `FocusOffset`
+/// = (0, 0, 0), and no other (`InterpFocusOffset` keeps its seed). The plan is checked for the order; the call's end
+/// state is the seeded heap with exactly those two writes applied.
 #[test]
-fn the_focus_bound_is_zero_for_the_ports_stage() {
-    assert_eq!(y_bound(0.0).unwrap(), 0.0);
-    not_yet_in(y_bound(720.0).map(Value::Float), false, FOCUS_BOUND, RECORD_TEXT_LIST);
+fn focus_on_none_writes_the_object_then_the_zero_vector() {
+    let mut t = toy(true);
+    let movie = seeded_movie(&mut t);
+    let class = t.vm.space.heap.get(movie).unwrap().class;
+    let at = |t: &Toy, n: &str| PropAddr::scalar(t.vm.space.prop(class, n).unwrap());
+    let plan = focus_writes(&t.vm, movie).unwrap();
+    assert_eq!(plan[0], (at(&t, "FocusObject"), Value::Object(None)), "first: FocusObject");
+    assert_eq!(plan[1].0, at(&t, "FocusOffset"), "second: FocusOffset");
+    for axis in ["X", "Y", "Z"] {
+        assert_eq!(struct_field(&t.vm, &plan[1].1, axis, "test").unwrap(), Value::Float(0.0), "{axis} zeroed");
+    }
+    let mut expected = t.vm.space.clone();
+    for (a, v) in plan.clone() {
+        expected.write(movie, a, v).unwrap();
+    }
+    t.vm.add_service(TestFocusWrites(Vec::new())).unwrap();
+    assert_eq!(t.call(FOCUS_PATH, movie, vec![Value::Object(None)]).unwrap(), Value::None);
+    let written = t.vm.service::<TestFocusWrites>().unwrap().borrow().0.clone();
+    assert_eq!(written, vec![at(&t, "FocusObject"), at(&t, "FocusOffset")], "the native's writes, in order");
+    assert_eq!(heap_text(&t), format!("{:?}", expected.heap), "exactly the two planned writes");
+    let interp = t.vm.space.read(movie, at(&t, "InterpFocusOffset")).unwrap().clone();
+    assert_eq!(struct_field(&t.vm, &interp, "Z", "test").unwrap(), Value::Float(3.0), "InterpFocusOffset not written");
+}
+
+/// The refusals write nothing (review r1 of #509): a set `Thing` is the named `LayerAbsent`; a negative bound (a scale
+/// above 1) and a NaN bound (a NaN stage height) are `NotYet { NotRead }` with the ruling's text and the note's record.
+#[test]
+fn focus_on_refusals_write_nothing() {
+    let mut t = toy(true);
+    let movie = seeded_movie(&mut t);
+    let wi = t.world_info;
+    t.vm.add_service(TestFocusWrites(Vec::new())).unwrap();
+    let before = heap_text(&t);
+    not_yet_in(t.call(FOCUS_PATH, movie, vec![Value::Object(Some(wi))]), true, FOCUS, RECORD_GFX);
+    assert_eq!(heap_text(&t), before, "set Thing: no write");
+    t.vm.add_service(TestFocusStage(FocusStage { height: 720.0, scale: 2.0 })).unwrap();
+    not_yet_in(t.call(FOCUS_PATH, movie, vec![Value::Object(None)]), false, FOCUS_BOUND, RECORD_TEXT_LIST);
+    assert_eq!(heap_text(&t), before, "negative bound: no write");
+    t.vm.service::<TestFocusStage>().unwrap().borrow_mut().0 = FocusStage { height: f32::NAN, scale: 0.5 };
+    not_yet_in(t.call(FOCUS_PATH, movie, vec![Value::Object(None)]), false, FOCUS_BOUND, RECORD_TEXT_LIST);
+    assert_eq!(heap_text(&t), before, "NaN bound: no write");
+    assert!(t.vm.service::<TestFocusWrites>().unwrap().borrow().0.is_empty(), "no write on any refusal");
+    // A valid nonzero bound writes as the stand-in does.
+    t.vm.service::<TestFocusStage>().unwrap().borrow_mut().0 = FocusStage { height: 720.0, scale: 0.5 };
+    assert_eq!(t.call(FOCUS_PATH, movie, vec![Value::Object(None)]).unwrap(), Value::None);
+    assert_ne!(heap_text(&t), before);
+}
+
+/// A set `Thing` refuses before any field is read (review r1 of #509, item 5): the native called directly on an object
+/// whose class declares no focus fields (the world info) is still the typed `LayerAbsent` for a set `Thing`, while
+/// `Thing` None there is the field check's script error.
+#[test]
+fn focus_on_a_set_thing_refuses_before_reading_fields() {
+    let mut t = toy(true);
+    let wi = t.world_info;
+    not_yet_in(t.call(FOCUS_PATH, wi, vec![Value::Object(Some(wi))]), true, FOCUS, RECORD_GFX);
+    script_error(t.call(FOCUS_PATH, wi, vec![Value::Object(None)]), "FocusObject");
+}
+
+/// The focus clamp's bound (ruling R2): half the margin between the stage height and the stage height times the
+/// scale; 0 for the no-player stand-in; a negative or NaN bound is `NotYet { NotRead }`.
+#[test]
+fn the_focus_bound_is_checked_as_computed() {
+    assert_eq!(y_bound(FocusStage::NO_PLAYER).unwrap(), 0.0);
+    assert_eq!(y_bound(FocusStage { height: 720.0, scale: 0.5 }).unwrap(), 180.0);
+    assert_eq!(y_bound(FocusStage { height: 720.0, scale: 1.0 }).unwrap(), 0.0);
+    for bad in [FocusStage { height: 720.0, scale: 2.0 }, FocusStage { height: f32::NAN, scale: 0.5 }] {
+        not_yet_in(y_bound(bad).map(Value::Float), false, FOCUS_BOUND, RECORD_TEXT_LIST);
+    }
 }
 
 /// The status telemetry (ruling R3): nothing, with no write, for a None player and for a player.

@@ -6,9 +6,11 @@ the decisions check refuses it until then.
 
 - **The branch.** `fix/rust-link10-next`, on #496 (`fix/rust-mission-list-build` 9b591ada). The gate ran on a local,
   unpushed merge with #497 (`fix/rust-playthrough-virtual` 7af3ab76), which links 10 to 12 need.
-- **The source.** NATIVE_MISSION_TEXT_LIST.md at `research/rust-link10-next` cb42b97a (#504, analyst lane
-  ANALYST-LINK10-NEXT), and the hub's rulings R1 to R3 on its questions. The rules were coded from that note and the
-  rulings alone.
+- **The source.** NATIVE_MISSION_TEXT_LIST.md at `research/rust-link10-next` 8862a45c (#504's accepted head, analyst
+  lane ANALYST-LINK10-NEXT), and the hub's rulings R1 to R3 on its questions. The rules were coded from that note and
+  the rulings alone.
+- **Landing order.** The code cites that note as the record of its new `NotYet`s (the focus clamp's bound among
+  them), and the note comes with #504, so **#504 lands before or with #509**.
 - **Clean room.** This lane did not read the natives and opened no `local/analysis/`, Ghidra or REA output. The
   packages were read only for field names and parameter order.
 - **No dependency, no parsing change.** No real-game session took place, so every rule is **UNVERIFIED** in the
@@ -21,21 +23,39 @@ where the note and the rulings give an answer:
   - with it set it keeps `NotYet` (layer absent), "the mission screen's Flash text list (not hosted)";
   - a movie class without `MissionTextList` or `MissionCategories` is a `VmError::Script`.
 - **`GFxMoviePlayer.GetVariableObject`** (ruling R1): None, no write. The port's movies have no native player.
-- **`WillowGFxMovie3D.FocusOn`** (ruling R2):
-  - the declarations of `FocusObject` and `FocusOffset` are checked first;
-  - with `Thing` None: `FocusObject` = None, then `FocusOffset` = (0, 0), and no other write. The port's stage height
-    is 0, so the clamp's Y bound is 0. A negative or NaN bound, or a non-zero stage height (whose scale was not read),
-    is `NotYet` (not read) before any write;
-  - any other `Thing`: `NotYet` (layer absent), "the 3D movie's Flash focus (not hosted)".
+- **`WillowGFxMovie3D.FocusOn`** (ruling R2; review r1 of #509):
+  - any `Thing` but None: `NotYet` (layer absent), "the 3D movie's Flash focus (not hosted)", at once, before any
+    field is read;
+  - with `Thing` None, both writes are planned with nothing written, and the plan checks first:
+    - that `FocusObject` is declared as an object, and `FocusOffset` as a struct with float `X`, `Y` and `Z`;
+    - the clamp's actual Y bound: half the margin between the stage height and the stage height times the scale.
+      The port's stand-in for a movie with no native player is height 0 and scale 0, so the bound is 0. A
+      negative or NaN bound is `NotYet` (not read), "WillowGFxMovie3D.FocusOn: the focus offset's clamp bound",
+      record NATIVE_MISSION_TEXT_LIST.md;
+  - then the two writes, in order: `FocusObject` = None, then `FocusOffset` = the zero `Vector` (X, Y and Z all 0,
+    built fresh, so a prior Z does not survive). There is no other write; `InterpFocusOffset` is untouched.
 - **`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`** (ruling R3, newly bound): nothing, with no
   write, for every player. A port answer, the same as #500's revived event.
+  - **Known limit (review r1 of #509, item 4), not fixed here.** The binding goes to the native's dispatch key, which
+    names the class and the function but not the package, as the C++ `nativeKey` does. The VM dispatches every native
+    through one key map, and its only per-declaration binding (`override_script`) takes script functions. So a
+    same-named class with the same native in another package would get the no-op too. Scoping a native to its
+    resolved declaration would be a VM design change; the hub queues it as a separate VM item.
 - The partial-writes mark stays where the writes are known (the mission bridge's status hook): these natives return
   their `NotYet`s unmarked.
 
 **Tests** (synthetic, `ow_package::testkit`), in `mission_numbers_tests.rs`:
-- the screen calls, including `FocusOn`'s two writes and its refusal leaving the fields unchanged;
+- the screen calls;
+- `FocusOn` (review r1 of #509), with every focus field seeded nonzero before the call (X, Y and Z, `FocusObject`
+  and `InterpFocusOffset`):
+  - on success, the plan's order, the native's own writes in order (through a test-only write log), and an end state
+    equal to the seeded heap with exactly those two writes;
+  - zero writes on the set-`Thing`, negative-bound and NaN-bound refusals;
+  - a set `Thing` refusing before any field is read;
+  - two mutations, run locally, each fail a test: the native's writes reversed, and the bound checked after the
+    writes;
 - the categories' declaration;
-- the focus bound;
+- the focus bound as computed (0 for the stand-in, positive, zero at scale 1, negative and NaN refused);
 - the telemetry for a None player and a player.
 
 **Verified.**
