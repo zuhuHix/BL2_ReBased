@@ -53,6 +53,8 @@ fn willow() -> Vec<u8> {
         "StructProperty",
         "ArrayProperty",
         "ScriptStruct",
+        "NameProperty",
+        "FloatProperty",
     ]);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
@@ -109,13 +111,26 @@ fn willow() -> Vec<u8> {
     let index = [param("Int", "PlaythroughIndex", CPF_OPT, 0)];
     t.function(unbound, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     let movie3d = t.class("WillowGFxMovie3D", object);
+    t.prop("Object", movie3d, "FocusObject", 0, object);
+    let vector2d = strukt(&mut t, movie3d, "ToyVector2D");
+    t.prop("Float", vector2d, "X", 0, 0);
+    t.prop("Float", vector2d, "Y", 0, 0);
+    t.prop("Struct", movie3d, "FocusOffset", 0, vector2d);
     let spec = FunctionSpec::new(NATIVE, "FocusOn");
     t.function(movie3d, "FocusOn", &[param("Object", "Target", 0, object)], None, &[], &spec, |_| None);
     t.class("ToyOtherMovie", movie3d);
     let movie = t.class("QuestAcceptGFxMovie", movie3d);
     t.prop("Object", movie, "MissionTextList", 0, object);
+    array_of(&mut t, movie, "MissionCategories", "Int", 0);
     let spec = FunctionSpec::new(NATIVE, "UpdateMissionTextList");
     t.function(movie, "UpdateMissionTextList", &[], None, &[], &spec, |_| None);
+    // A movie class without MissionCategories (bad data for the text list update).
+    let bare = t.class("ToyBareQuestMovie", movie3d);
+    t.prop("Object", bare, "MissionTextList", 0, object);
+    let service = t.class("WillowLeviathanService", object);
+    let spec = FunctionSpec::new(NATIVE, "RecordMissionStatusChangedEventForPlayer");
+    let params = [param("Object", "ForPlayer", 0, pc), param("Byte", "Status", 0, 0), param("Name", "MissionDefinition", 0, 0)];
+    t.function(service, "RecordMissionStatusChangedEventForPlayer", &params, None, &[], &spec, |_| None);
     t.p.build()
 }
 
@@ -634,28 +649,80 @@ fn the_tracker_branch_alone_answers_when_the_world_exists() {
     assert_eq!(active_mission_number(&mut t.vm, pc).unwrap(), 8, "no level: the fallback");
 }
 
-/// Section 3 in the conservative form: the text list update is the named `LayerAbsent` with the list None or set, and
-/// so are `GetVariableObject` and `FocusOn`. The natives write nothing, so a direct call on a fresh movie is not marked
-/// (review r1 of #480, item 2); the mark comes from the accept's write boundary in the mission bridge. Nothing on the
-/// screen changes.
+/// The mission screen's calls (NATIVE_MISSION_TEXT_LIST.md section 6, lane IMPL-LINK10-NEXT, the hub's rulings R1 and
+/// R2 on #504). The text list update returns at once with `MissionTextList` None and is the named `LayerAbsent` with it
+/// set; `GetVariableObject` answers None; `FocusOn` writes `FocusObject` None and `FocusOffset` (0, 0) for a None
+/// `Thing`, and is the named `LayerAbsent` for any other. None of them marks its own `NotYet` (the mark comes from the accept's
+/// write boundary in the mission bridge), and nothing on the screen changes.
 #[test]
-fn the_screen_calls_are_layer_absent_and_not_marked_by_themselves() {
+fn the_screen_calls_answer_the_notes_defined_cases_only() {
     let mut t = toy(true);
     let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
     let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
-    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, TEXT_LIST, RECORD_GFX);
+    assert_eq!(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]).unwrap(), Value::None, "None list: nothing");
     let wi = t.world_info;
     set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
     not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, TEXT_LIST, RECORD_GFX);
     let focus = "WillowGame.WillowGFxMovie3D.FocusOn";
-    not_yet_in(t.call(focus, movie, vec![Value::Object(None)]), true, FOCUS, RECORD_GFX);
+    // Ruling R2: a set Thing needs a hosted movie, before any write.
+    set(&mut t.vm, movie, "FocusObject", Value::Object(Some(wi)));
+    not_yet_in(t.call(focus, movie, vec![Value::Object(Some(wi))]), true, FOCUS, RECORD_GFX);
+    let offset = |t: &Toy| {
+        let class = t.vm.space.heap.get(movie).unwrap().class;
+        let p = t.vm.space.prop(class, "FocusOffset").unwrap();
+        let v = t.vm.space.read(movie, PropAddr::scalar(p)).unwrap().clone();
+        (struct_field(&t.vm, &v, "X", "test").unwrap(), struct_field(&t.vm, &v, "Y", "test").unwrap())
+    };
+    let class = t.vm.space.heap.get(movie).unwrap().class;
+    let p = t.vm.space.prop(class, "FocusOffset").unwrap();
+    let mut v = t.vm.space.read(movie, PropAddr::scalar(p)).unwrap().clone();
+    set_field(&t.vm, &mut v, "X", Value::Float(3.0));
+    set_field(&t.vm, &mut v, "Y", Value::Float(-4.0));
+    set(&mut t.vm, movie, "FocusOffset", v);
+    assert_eq!(offset(&t), (Value::Float(3.0), Value::Float(-4.0)), "unchanged by the refusal");
+    // Thing None, no native player: FocusObject None, then FocusOffset (0, 0).
+    assert_eq!(t.call(focus, movie, vec![Value::Object(None)]).unwrap(), Value::None);
+    let p = t.vm.space.prop(class, "FocusObject").unwrap();
+    assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(None));
+    assert_eq!(offset(&t), (Value::Float(0.0), Value::Float(0.0)));
     let player = t.vm.find_class("GFxUI.GFxMoviePlayer").unwrap();
     let player = t.vm.space.alloc(player, "ToyPlayer", None, Origin::Runtime).unwrap();
-    let path = Value::Str("missions.selections.selection0".into());
-    not_yet_in(t.call(GET_VARIABLE_OBJECT, player, vec![path]), true, MOVIE_QUERY, RECORD_GFX);
+    let path = Value::Str("missions.selections.selection1".into());
+    assert_eq!(t.call(GET_VARIABLE_OBJECT, player, vec![path]).unwrap(), Value::Object(None));
     let class = t.vm.space.heap.get(movie).unwrap().class;
     let p = t.vm.space.prop(class, "MissionTextList").unwrap();
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
+}
+
+/// A movie whose class declares no `MissionCategories` is bad data for the text list update, even with the list None
+/// (the native called directly on it).
+#[test]
+fn a_movie_without_the_categories_is_a_script_error() {
+    let mut t = toy(true);
+    let bare = t.vm.find_class("WillowGame.ToyBareQuestMovie").unwrap();
+    let bare = t.vm.space.alloc(bare, "ToyBare", None, Origin::Runtime).unwrap();
+    script_error(t.call(UPDATE_MISSION_TEXT_LIST, bare, vec![]), "MissionCategories");
+}
+
+/// The focus clamp's bound (ruling R2): 0 for the port's stage height of 0; any other stage height needs the unread
+/// scale, `NotYet { NotRead }`.
+#[test]
+fn the_focus_bound_is_zero_for_the_ports_stage() {
+    assert_eq!(y_bound(0.0).unwrap(), 0.0);
+    not_yet_in(y_bound(720.0).map(Value::Float), false, FOCUS_BOUND, RECORD_TEXT_LIST);
+}
+
+/// The status telemetry (ruling R3): nothing, with no write, for a None player and for a player.
+#[test]
+fn the_status_telemetry_answers_nothing_for_every_player() {
+    let mut t = toy(true);
+    let service = t.vm.find_class("WillowGame.WillowLeviathanService").unwrap();
+    let service = t.vm.space.alloc(service, "ToyService", None, Origin::Runtime).unwrap();
+    let name = t.vm.space.names.intern("M_Toy");
+    let args = |p: Option<ObjRef>| vec![Value::Object(p), Value::Byte(1), Value::Name(name)];
+    assert_eq!(t.call(RECORD_STATUS_CHANGED, service, args(None)).unwrap(), Value::None);
+    let pc = t.pc;
+    assert_eq!(t.call(RECORD_STATUS_CHANGED, service, args(Some(pc))).unwrap(), Value::None);
 }
 
 /// Review r2 of #480, L1, after the engine gate's retirement (lane IMPL-PLAYTHROUGH-VIRTUAL): the outer call no longer

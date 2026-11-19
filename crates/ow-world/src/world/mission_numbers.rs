@@ -47,12 +47,28 @@
 //! **The mission screen** (section 3). The slice's accept reaches it through the controller's
 //! `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`, after the accept's own
 //! writes.
-//! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`:** [`TEXT_LIST`], `NotYet { LayerAbsent }` (record
-//!   [`RECORD_GFX`]), whether or not `MissionTextList` is set: the note's read-back check does not cover the 10
-//!   undecoded script functions or native readers, so no call here is answered "nothing".
-//! - **The calls `SetFocus` makes next** are not reached while the text list refuses. If they are: `GetVariableObject`
-//!   is [`MOVIE_QUERY`] and `WillowGFxMovie3D.FocusOn` is [`FOCUS`], each `NotYet { LayerAbsent }`, never None or
-//!   nothing.
+//! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`** (lane IMPL-LINK10-NEXT, from NATIVE_MISSION_TEXT_LIST.md
+//!   section 2 and its Off step 1, which settle NATIVE_MISSION_NUMBERS.md open question 3): the movie's class must
+//!   declare `MissionTextList` and `MissionCategories`, else a `VmError::Script` naming the field. With
+//!   `MissionTextList` None the body reads nothing more and writes nothing, so the native returns at once. With it set,
+//!   [`TEXT_LIST`], `NotYet { LayerAbsent }` (record [`RECORD_GFX`]): its steps rebuild a container that only a hosted
+//!   movie fills.
+//! - **`GFxMoviePlayer.GetVariableObject(Path, Type)`** (NATIVE_MISSION_TEXT_LIST.md section 3): the game asks the
+//!   Flash player only when the movie has a native player object with a movie view; with none, no wrapper is made and
+//!   the answer is None. The port's movies are stand-ins with no native player, so Off answers None and writes nothing.
+//!   UNVERIFIED (the return on this branch was read by fit).
+//! - **`WillowGFxMovie3D.FocusOn(Thing)`** (section 4, with the hub's ruling R2 on #504; UNVERIFIED). The movie's
+//!   class must declare `FocusObject` (an object) and `FocusOffset` (a struct with float `X` and `Y`), else a
+//!   `VmError::Script` naming the field; this is checked before any write.
+//!   - **`Thing` None, on a movie with no native player** (every port movie): `FocusObject` = None, then
+//!     `FocusOffset` = (0, 0), and no other write. The game's clamp limits Y to plus or minus a bound made from the
+//!     stage height; the port's movie has no view, so its stage height is 0 and the bound is 0. A bound that came out
+//!     negative or NaN would be [`FOCUS_BOUND`], `NotYet { NotRead }`, before any write ([`y_bound`]).
+//!   - **Any other `Thing`:** [`FOCUS`], `NotYet { LayerAbsent }`: the chain step's Flash lookups need a hosted movie.
+//! - **`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer(ForPlayer, Status, MissionDefinition)`**
+//!   (section 5, with the hub's ruling R3 on #504): the shared statistics submit routine answers nothing, with no write,
+//!   for every player. A port answer, the same as the revived event's (#500); UNVERIFIED. The player argument must be
+//!   an object.
 //! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
 //!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
 //!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
@@ -105,10 +121,14 @@ pub const GRI_OVERRIDE: &str = "a subclass override of the replication info's cu
 pub const RECORD_GFX: &str = "docs/verification/NATIVE_GFX_BRIDGE.md";
 /// The `NotYet` of the mission screen's text list update (section 3, step 1).
 pub const TEXT_LIST: &str = "the mission screen's Flash text list (not hosted)";
-/// The `NotYet` of `GetVariableObject` (section 3, step 2).
-pub const MOVIE_QUERY: &str = "a Flash movie query (not hosted)";
 /// The `NotYet` of `FocusOn` (section 3, step 2: its state is not answered "nothing").
 pub const FOCUS: &str = "the 3D movie's Flash focus (not hosted)";
+/// `WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`.
+pub const RECORD_STATUS_CHANGED: &str = "WillowGame.WillowLeviathanService.RecordMissionStatusChangedEventForPlayer";
+/// The record of the text list body, `GetVariableObject`'s no-player answer and the status telemetry.
+pub const RECORD_TEXT_LIST: &str = "docs/verification/NATIVE_MISSION_TEXT_LIST.md";
+/// The `NotYet` of a focus clamp whose Y bound is negative or NaN (the hub's ruling R2 on #504).
+pub const FOCUS_BOUND: &str = "WillowGFxMovie3D.FocusOn: a negative or NaN focus clamp bound";
 /// The layer the port lacks for [`TEXT_LIST`] and [`FOCUS`].
 pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
 
@@ -432,16 +452,97 @@ fn screen_not_yet(what: &'static str) -> Result<Value, VmError> {
     Err(NotYet::layer_absent(what, TEXT_LIST_LAYER, RECORD_GFX).into())
 }
 
-pub(crate) fn n_update_mission_text_list(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(TEXT_LIST)
+pub(crate) fn n_update_mission_text_list(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const UNIT: &str = UPDATE_MISSION_TEXT_LIST;
+    let movie = c.this.ok_or_else(|| bad(UNIT, "called with no movie".to_string()))?;
+    let class = c.vm.space.heap.get(movie)?.class;
+    for name in ["MissionTextList", "MissionCategories"] {
+        if c.vm.space.prop(class, name).is_none() {
+            return Err(bad(UNIT, format!("{} declares no {name}", ow_attr::eval::class_path(&c.vm.space, movie))));
+        }
+    }
+    let p = c.vm.space.prop(class, "MissionTextList").expect("checked above");
+    let list = object_of(c.vm.space.read(movie, PropAddr::scalar(p))?.clone(), "MissionTextList", UNIT)?;
+    match list {
+        // The read None branch: nothing more is read, nothing is written (NATIVE_MISSION_TEXT_LIST.md section 2).
+        None => Ok(Value::None),
+        Some(_) => screen_not_yet(TEXT_LIST),
+    }
 }
 
+/// `GetVariableObject` on a movie with no native player: None, no write (module documentation).
 pub(crate) fn n_movie_query(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(MOVIE_QUERY)
+    Ok(Value::Object(None))
 }
 
-pub(crate) fn n_focus(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(FOCUS)
+/// The status telemetry (module documentation): nothing, with no write, for every player (ruling R3).
+pub(crate) fn n_status_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    object_of(c.arg(0)?.clone(), "ForPlayer", RECORD_STATUS_CHANGED)?;
+    Ok(Value::None)
+}
+
+/// The focus clamp's Y bound for a movie with no native player: half the margin between the stage height and the
+/// stage height times a scale. The port's movie has no view, so the stage height is 0 and the bound is 0, whatever the
+/// (unread) scale. A negative or NaN bound is [`FOCUS_BOUND`] (ruling R2).
+pub fn y_bound(stage_height: f32) -> Result<f32, VmError> {
+    if stage_height != 0.0 {
+        // The scale's source was not read (NATIVE_MISSION_TEXT_LIST.md open question 3); a port movie never gets here.
+        return Err(NotYet::not_read(FOCUS_BOUND, RECORD_TEXT_LIST).into());
+    }
+    let bound = 0.0_f32;
+    if bound.is_nan() || bound < 0.0 {
+        return Err(NotYet::not_read(FOCUS_BOUND, RECORD_TEXT_LIST).into());
+    }
+    Ok(bound)
+}
+
+/// `FocusOffset`'s current value with `X` and `Y` set to `x` and `y`, checked as a struct with float `X` and `Y`.
+fn focus_offset(vm: &Vm, current: &Value, x: f32, y: f32) -> Result<Value, VmError> {
+    const UNIT: &str = FOCUS_ON;
+    let mut v = current.clone();
+    let s = v.as_struct().ok_or_else(|| bad(UNIT, format!("FocusOffset holds {}, not a struct", current.kind_name())))?;
+    let layout = vm.space.classes.struct_layout(s.ty).ok_or_else(|| bad(UNIT, "FocusOffset has no layout".to_string()))?;
+    let mut at = Vec::new();
+    for name in ["X", "Y"] {
+        let id = vm.space.names.find(name).ok_or_else(|| bad(UNIT, format!("FocusOffset has no {name}")))?;
+        let (index, _) = layout.field(id).ok_or_else(|| bad(UNIT, format!("FocusOffset has no {name}")))?;
+        let index = usize::try_from(index).map_err(|_| bad(UNIT, format!("FocusOffset's {name} is out of range")))?;
+        match s.fields.get(index) {
+            Some(Value::Float(_)) => at.push(index),
+            other => return Err(bad(UNIT, format!("FocusOffset's {name} holds {other:?}, not a float"))),
+        }
+    }
+    let s = v.struct_mut().expect("checked above");
+    s.fields[at[0]] = Value::Float(x);
+    s.fields[at[1]] = Value::Float(y);
+    Ok(v)
+}
+
+/// `FocusOn` (module documentation, ruling R2): the declarations, then the case; the two writes come last.
+pub(crate) fn n_focus(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    const UNIT: &str = FOCUS_ON;
+    let movie = c.this.ok_or_else(|| bad(UNIT, "called with no movie".to_string()))?;
+    let thing = object_of(c.arg(0)?.clone(), "Thing", UNIT)?;
+    let class = c.vm.space.heap.get(movie)?.class;
+    let declared = |name: &str| {
+        c.vm.space
+            .prop(class, name)
+            .ok_or_else(|| bad(UNIT, format!("{} declares no {name}", ow_attr::eval::class_path(&c.vm.space, movie))))
+    };
+    let object_field = declared("FocusObject")?;
+    let offset_field = declared("FocusOffset")?;
+    if !matches!(c.vm.space.read(movie, PropAddr::scalar(object_field))?, Value::Object(_)) {
+        return Err(bad(UNIT, "FocusObject is not an object field".to_string()));
+    }
+    let current = c.vm.space.read(movie, PropAddr::scalar(offset_field))?.clone();
+    if thing.is_some() {
+        return screen_not_yet(FOCUS);
+    }
+    let bound = y_bound(0.0)?;
+    let offset = focus_offset(c.vm, &current, 0.0, 0.0_f32.clamp(-bound, bound))?;
+    c.vm.space.write(movie, PropAddr::scalar(object_field), Value::Object(None))?;
+    c.vm.space.write(movie, PropAddr::scalar(offset_field), offset)?;
+    Ok(Value::None)
 }
 
 #[cfg(test)]

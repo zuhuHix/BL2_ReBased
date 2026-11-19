@@ -172,6 +172,7 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(vm, m::UPDATE_MISSION_TEXT_LIST, Rc::new(m::n_update_mission_text_list))?;
         bind(vm, m::GET_VARIABLE_OBJECT, Rc::new(m::n_movie_query))?;
         bind(vm, m::FOCUS_ON, Rc::new(m::n_focus))?;
+        bind(vm, m::RECORD_STATUS_CHANGED, Rc::new(m::n_status_changed_telemetry))?;
     }
     for path in PROVIDER_FUNCTIONS {
         let Ok(f) = vm.find_function(path) else { continue };

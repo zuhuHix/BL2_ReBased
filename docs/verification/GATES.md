@@ -49,6 +49,17 @@ but get past the accessor to the unbound `SkeletalMeshComponent.SetAnimTreeTempl
 `init`, the unbound `WillowWeapon.CacheWeaponCard()`. ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-40 (assigned -103); logs under ignored `local/p2/links68/`.
 
+**IMPL-LINK10-NEXT (2026-11-19, pc-hummer, on #496 9b591ada; gate on a local merge with #497 7af3ab76):** AI-assisted
+(Claude Code, Opus 5.5). The accept screen's calls in Off from NATIVE_MISSION_TEXT_LIST.md (#504 cb42b97a) and the
+hub's rulings R1 to R3: `UpdateMissionTextList` nothing with a None list; `GetVariableObject` None; `FocusOn(None)`
+writes `FocusObject` None and `FocusOffset` (0, 0); `RecordMissionStatusChangedEventForPlayer` nothing. `cargo build
+--workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,382 passed / 0 failed / 46 ignored;
+`crate_edges_test.py` OK. Installed Off `--slice-gate` strict on the local merge: 0 ok / 5 NotYet / 9 errors before,
+1 / 4 / 9 after. Link 10 passes (8 of 8 steps); link 11 reaches 4 of 8 and stops at `hit:fire` on a pawn's
+`QueryInterface(IAIInterface)` routed to its `SkeletalMeshComponent` (NotYet); link 12 is blocked behind it (0 of 6).
+ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN
+(placeholder); logs under ignored `local/p2/link10-next/`.
+
 **IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on the note #493 r1 5b880555, reviews r1 and r2 of #496 folded in):**
 AI-assisted (Claude Code, Opus 5.5). The tracker's MissionList build and the mission numbering in Off from
 NATIVE_MISSION_LIST_BUILD.md and the hub's rulings. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
