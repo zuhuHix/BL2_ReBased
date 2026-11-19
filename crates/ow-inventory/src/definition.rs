@@ -27,6 +27,16 @@
 //! inventory whose class declares no `DefinitionData`, or whose data holds neither definition field.
 //!
 //! **Reference: unbound.** `src/` has no stand-in for any of the three, so the VM's stub policy answers.
+//!
+//! **`GetInventoryDefinition()`** (lane IMPL-INVENTORY-DEFINITION, decision 2026-11-19-75, from
+//! NATIVE_INVENTORY_DEFINITION.md section 3 alone; UNVERIFIED in the running game). It binds under
+//! `Engine.WillowInventory`, where the installed packages declare it, and answers by the inventory's exact class, not
+//! by which field is set: one of the four read weapon classes its `DefinitionData.WeaponTypeDefinition`, one of the
+//! nine read item classes its `DefinitionData.ItemDefinition`, each as stored (None included), and exactly
+//! `Engine.WillowInventory` None with no diagnostic. Any other class, a descendant beyond the thirteen included, is a
+//! `NotYet { NotRead }` naming it, and so is a read class without `DefinitionData` or without the selected field. It
+//! never writes, so no refusal can follow a write. `ComputeMonetaryValue` keeps its own choice (the first field its
+//! `DefinitionData` declares), unchanged.
 
 use std::rc::Rc;
 
@@ -52,6 +62,13 @@ pub const GENERATE_UNIQUE_ID: &str = "Engine.WillowInventory.GenerateUniqueID";
 pub const COMPUTE_MONETARY_VALUE: &str = "Engine.WillowInventory.ComputeMonetaryValue";
 pub const GET_MANUFACTURER: &str = "Engine.WillowInventory.GetManufacturer";
 
+/// `GetInventoryDefinition` (NATIVE_INVENTORY_DEFINITION.md section 3): under `Engine`, not `WillowGame`.
+pub const GET_INVENTORY_DEFINITION: &str = "Engine.WillowInventory.GetInventoryDefinition";
+
+/// The record `GetInventoryDefinition` follows.
+pub const DEFINITION_RECORD: &str =
+    "docs/verification/NATIVE_INVENTORY_DEFINITION.md (GetInventoryDefinition, the Off answers)";
+
 /// The `FormOfCurrency` caps (the note's constants).
 pub const CREDITS_CAP: i32 = 99_999_999;
 pub const ERIDIUM_CAP: i32 = 500;
@@ -62,19 +79,20 @@ pub const CURRENCY_ENTRIES: usize = 13;
 /// The stream the two `GenerateUniqueID` draws come from (module documentation).
 pub const ID_STREAM: CrtStream = CrtStream::LootPool;
 
-/// Binds the three natives in Off, by function path: a function the VM does not declare is skipped, and a key some
+/// Binds the four natives in Off, by function path: a function the VM does not declare is skipped, and a key some
 /// other pack bound first is left alone.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 3] = [
+    let natives: [(&str, NativeFn); 4] = [
         (
             GENERATE_UNIQUE_ID,
             Rc::new(|c: &mut NativeCall<'_>| Ok(Value::Int(unique_id(c.vm.rng.crt(ID_STREAM))))),
         ),
         (COMPUTE_MONETARY_VALUE, Rc::new(compute_monetary_value)),
         (GET_MANUFACTURER, Rc::new(get_manufacturer)),
+        (GET_INVENTORY_DEFINITION, Rc::new(get_inventory_definition)),
     ];
     for (path, f) in natives {
         let Ok(id) = vm.find_function(path) else {
@@ -271,5 +289,85 @@ fn get_manufacturer(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::Object(object_of(&m, "ManufacturerDefinition")?))
 }
 
+/// The weapon classes whose `GetInventoryDefinition` rule was read (NATIVE_INVENTORY_DEFINITION.md section 2): they
+/// answer `DefinitionData.WeaponTypeDefinition`. The note names them without a package; `WillowGame` is this
+/// module's reading (UNVERIFIED), and a class under another path answers the step-4 `NotYet`.
+pub const READ_WEAPON_CLASSES: [&str; 4] = [
+    "WillowGame.WillowWeapon",
+    "WillowGame.WillowBuzzaxeWeapon",
+    "WillowGame.WillowTurretWeapon",
+    "WillowGame.WillowVehicleWeapon",
+];
+
+/// The item classes whose rule was read (section 2): they answer `DefinitionData.ItemDefinition`. Packages as above.
+pub const READ_ITEM_CLASSES: [&str; 9] = [
+    "WillowGame.WillowItem",
+    "WillowGame.WillowEquipAbleItem",
+    "WillowGame.WillowArtifact",
+    "WillowGame.WillowClassMod",
+    "WillowGame.WillowGrenadeMod",
+    "WillowGame.WillowShield",
+    "WillowGame.WillowUsableItem",
+    "WillowGame.WillowMissionItem",
+    "WillowGame.WillowUsableCustomizationItem",
+];
+
+/// The exact base, which answers None (section 3, step 3).
+pub const INVENTORY_BASE: &str = "Engine.WillowInventory";
+
+fn definition_not_read(what: String) -> VmError {
+    NotYet::not_read(what, DEFINITION_RECORD).into()
+}
+
+/// `GetInventoryDefinition()`'s answer for the inventory `me` (NATIVE_INVENTORY_DEFINITION.md section 3): the field
+/// is chosen by `me`'s exact class, never by which field is set, and is answered as stored. It reads nothing else and
+/// writes nothing.
+pub fn inventory_definition_of(vm: &Vm, me: ObjRef) -> Result<Option<ObjRef>, VmError> {
+    const NATIVE: &str = "GetInventoryDefinition";
+    let class = vm.space.heap.get(me)?.class;
+    let path = vm.space.classes.layout(class).path().as_str().to_string();
+    let name = if READ_WEAPON_CLASSES.contains(&path.as_str()) {
+        "WeaponTypeDefinition"
+    } else if READ_ITEM_CLASSES.contains(&path.as_str()) {
+        "ItemDefinition"
+    } else if path == INVENTORY_BASE {
+        // Step 3: None, with no diagnostic (the game's log line changes no state script can see).
+        return Ok(None);
+    } else {
+        // Step 4: a plain Engine.Weapon, a subclass outside the two trees, or a descendant beyond the thirteen read
+        // classes; its engine rule was not read.
+        return Err(definition_not_read(format!(
+            "{NATIVE} on a {path}: a class whose engine rule was not read"
+        )));
+    };
+    // Step 5: a missing layout is a named NotYet before anything is answered.
+    let data = crate::equip::read(vm, me, "DefinitionData")?
+        .ok_or_else(|| definition_not_read(format!("{NATIVE} on a class without DefinitionData")))?;
+    let ty = data.as_struct().map(|s| s.ty).ok_or_else(|| {
+        bad(NATIVE, format!("DefinitionData holds {}", data.kind_name()))
+    })?;
+    let declared = vm.space.names.find(name).is_some_and(|id| {
+        vm.space
+            .classes
+            .struct_layout(ty)
+            .is_some_and(|l| l.field(id).is_some())
+    });
+    if !declared {
+        return Err(definition_not_read(format!(
+            "{NATIVE} on a DefinitionData without {name}"
+        )));
+    }
+    // Step 6: a declared field that holds None answers None.
+    object_of(&field(vm, &data, name)?, name)
+}
+
+fn get_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = this(c, "GetInventoryDefinition")?;
+    inventory_definition_of(c.vm, me).map(Value::Object)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod get_definition_tests;
