@@ -38,6 +38,16 @@ now links here instead.
    auto state.
 3. The navigation list is its own implementer lane, after #536.
 
+**From the review of #536 (lane 1's note, NATIVE_MAP_LOAD.md sections 5 and 6), folded in.** Three changes:
+1. **Navigation timing.** The persistent level's navigation join is inside the bring-up, after the game info's spawn
+   (section 3, step 6), not before any script runs. The full join schedule is UNVERIFIED. Lane 2's first PR does no
+   navigation.
+2. **The player call site.** `GamePlayers` is filled before the map load, and the map load calls the engine's
+   local-player spawn directly, the native routine the script's `SpawnPlayActor` shares (NATIVE_MAP_LOAD.md section
+   6.2). Step 7, lane 3 and Q3 follow it.
+3. **Lane 3's Off failure contract** (section 4, lane 3): a write-free preflight, refusals before and after script
+   told apart, the `Login` error kept, a typed outcome for an empty error, and the write order.
+
 ## 1. Where the slice's worlds come from today
 
 No slice link loads a map into its VM world. The drivers build their worlds by hand:
@@ -133,10 +143,11 @@ sequence for a slice driver (one `World`, Off):
      first-wins would skip silently. It records the binding pack per key: through `Vm::is_bound` and each owner's own
      binding call, or a test-only registry hook.
 3. **`load_map(Sanctuary_P)`** (exists). This places `WorldInfo_2` first, then the persistent and streaming levels'
-   actors.
-4. **The navigation list** (new). It fills `WorldInfo.NavigationPointList` and each point's `nextNavigationPoint` before
-   any script runs, so #513's iterator walks real points. Scoped once lane 1 says where the list comes from (section
-   4).
+   actors. **Before it,** the driver puts one local player in the engine's `GamePlayers`, with no actor (step 7,
+   item 1).
+4. **The navigation list: not here** (review of #536). An earlier draft filled the list at this point, before any
+   script. NATIVE_MAP_LOAD.md section 5.2 puts the persistent level's join inside the bring-up instead, after the game
+   info's spawn: see step 6. Nothing runs between `load_map` and the game info for navigation.
 5. **The game info** (new). NATIVE_MAP_LOAD.md section 3 for the branch Sanctuary takes:
    - `DefaultGameType` is None, and the slice URL has no `GAME=` option, so the class is the configured
      `DefaultGame`.
@@ -146,8 +157,16 @@ sequence for a slice driver (one `World`, Off):
    - The other two branches stay `NotYet`: a set `DefaultGameType`, and a loadable `GAME=` class. Both need the
      `SetGameType` receiver, which is open.
    - The world has not begun play, so the spawn raises no begin-play events (NATIVE_ENGINE_CORE.md, "Actor.Spawn").
-6. **`bring_up_for_play`** (exists). `InitGame` runs before the routing, with an empty options text. The game info is in
-   the actor list, so in the routing:
+6. **`bring_up_for_play`** (exists). `InitGame` runs before the routing, with an empty options text.
+   - **The persistent level's navigation join** (NATIVE_MAP_LOAD.md section 5.2, schedule item 1; the navigation lane,
+     not lane 2) belongs in the bring-up's begin-play-once step: after the game info's spawn (step 5), before the
+     actor initialisation pass. It puts `Sanctuary_P`'s chains in front of `WorldInfo`'s navigation, cover and pylon
+     lists. **The full join schedule is UNVERIFIED:** when the streamed levels visible at load join, before or after
+     the persistent level or some of each, was not read (section 5.2, "The order across levels"), and the per-point
+     engine call each join makes is unread. Until the navigation lane lands, the bring-up has no join and #513's
+     iterator walks the empty list.
+
+   The game info is in the actor list, so in the routing:
    - its `PreBeginPlay` runs the script that spawns the replication info class into `WorldInfo.GRI`;
    - `WillowGameInfo`'s override then spawns the `MissionTracker` into the GRI's `MissionTracker`.
    - Both spawns happen after `bBegunPlay`, so they run their own begin-play events.
@@ -156,10 +175,16 @@ sequence for a slice driver (one `World`, Off):
    `PreBeginPlay` both stopped at `GotoState('Auto')`. So nothing in this step makes a GRI or a tracker until the
    auto-state work lands (ANALYST-AUTO-STATE, then an implementer). Until then, the map route ends here with that typed
    stop.
-7. **The local player** (new; NATIVE_MAP_LOAD.md section 4, all of it; review r1 of #530, item 5):
-   1. **The engine's local-player list:** one local player is put in `GamePlayers`. Where the engine fills it is open
-      (Q3).
-   2. **`LocalPlayer.SpawnPlayActor(URL, out Error)`**, on the server:
+7. **The local player** (new; NATIVE_MAP_LOAD.md sections 4 and 6; review r1 of #530, item 5; the review of #536):
+   1. **The engine's local-player list, before the map load** (section 6.1): one local player in `GamePlayers`, with
+      no actor. In the game, `GameViewportClient.Init` ends with `CreateInitialPlayer`, which calls `CreatePlayer`
+      without a spawn; the engine calls `Init` at start-up, before any map (inferred: that caller was not read).
+      Controller id 0 is the port's answer for the slice, which has no login or gamepad layer (UNVERIFIED). In the
+      port the driver does this before step 3.
+   2. **The map load calls the engine's local-player spawn directly** (section 6.2): once for each local player in
+      `GamePlayers`, in their order, with the map URL as text, after the game info (step 5) and the bring-up (step 6).
+      It calls the native routine that the script's `LocalPlayer.SpawnPlayActor(URL, out Error)` also reaches; it does
+      not call the script function. What that routine does, on the server:
       - it parses the URL text and adds a `Name=<name>` option when the local player's name is known;
       - it finds the player's index in `GamePlayers`;
       - it asks the local player's script event `GetUniqueNetId` for the player's id. With no online subsystem, the
@@ -179,8 +204,10 @@ sequence for a slice driver (one `World`, Off):
    5. **Then the port's hook:** `Actors::add_local_player(controller)`, so `LocalPlayerControllers` yields it. This
       gives the iterator only. It is not the attachment of step 3 or the store of step 4, and does not replace them.
 
-   Where the map load calls `SpawnPlayActor` is open (Q3). The lane calls it once after the bring-up, as a labelled
-   harness call site, UNVERIFIED.
+   **Still unread, so UNVERIFIED:** the map load's two engine calls between the bring-up and the player loop, and
+   the error path a failed spawn with an error text leads to (by stock UE3 convention the load fails with that error).
+   Lane 3 models neither: its player loop runs straight after the bring-up, and a failed spawn is the load's typed
+   failure (section 4, lane 3).
 8. **Adopt** (the bridge's second half), once the player exists. The bridge takes:
    - the `WorldInfo` from the world, the GRI from `WorldInfo.GRI`, and the tracker from the GRI's `MissionTracker`;
    - the controller from `LocalPlayerControllers`, its PRI from the controller, and its possessed `Pawn`;
@@ -233,6 +260,8 @@ and the typed bring-up stop, and nothing further**. Contents:
 - **The spawn API:** `mapload::game_info::spawn_game_info(world, options)` (or the name lane 2 picks), returning the game
   info. It exists once lane 2's first PR lands.
 - **The module wiring:** lane 2 owns `mapload.rs`'s `mod` lines and `MapReport::pending`.
+- **No navigation** (the review of #536): the persistent level's join in the bring-up is the navigation lane's, after
+  lane 2's first PR.
 
 Tests, on a synthetic map package built with the `package()` / `tag()` helpers:
 - the branch taken;
@@ -245,26 +274,49 @@ The installed Sanctuary test (ignored by default) asserts three things: the clas
 `PreBeginPlay`, recorded as the stop, not as a pass. It does **not** assert a GRI or a tracker. That assertion moves to
 the auto-state implementer's PR, or to a follow-up after it.
 
-**Lane 3, the local player** (from NATIVE_MAP_LOAD.md section 4 and lane 1). Contents:
-- one local player in `GamePlayers`;
-- `LocalPlayer.SpawnPlayActor` bound in Off, with the world's play-actor spawn: all of section 3, step 7, in that
-  order;
-- `add_local_player` last;
-- `GetUniqueNetId`'s answer, as lane 1 gives it, or a labelled `NotYet`.
+**Lane 3, the local player** (from NATIVE_MAP_LOAD.md sections 4 and 6). Contents:
+- one local player in `GamePlayers`, put there before the map load (section 3, step 7, item 1);
+- the map load's player loop after the bring-up: the engine's local-player spawn for each local player, the routine
+  `LocalPlayer.SpawnPlayActor` shares, called directly (step 7, item 2), with the world's play-actor spawn: all of
+  section 3, step 7, in that order. The script's `SpawnPlayActor` binding in Off calls the same routine;
+- `add_local_player` last, on success only;
+- the failure contract below.
+
+**The Off failure contract** (the review of #536; NATIVE_MAP_LOAD.md section 6.3):
+1. **A write-free preflight, before any write and before any script runs.** Refuse, as not-read refusals:
+   - a `GetUniqueNetId` answer the port does not model, anything but the empty id;
+   - a remote role other than the single-player one;
+   - a missing game info.
+2. **Preflight refusals and failures after script are told apart.** A preflight refusal leaves the world unchanged and
+   is never marked. A refusal raised inside `Login` or `PostLogin`, or after them, is marked "stopped after partial
+   writes" by the caller, keeping its own kind and record.
+3. **`Login` returns None with a non-empty error:** the load's failure, carrying the `Login` error text unchanged.
+   Nothing after `Login` runs: no attachment, no roles, no `PostLogin`, no store, no `add_local_player`.
+4. **`Login` returns None with an empty error:** its own typed outcome, a not-read refusal ("the map load after a
+   play-actor spawn that gave no actor and no error"), not a success and not the error case.
+5. **The order on success:** the net player index, the attachment of the local player to the controller, `Role` and
+   `RemoteRole`, then `PostLogin(NewPlayer)`; after it, the controller stored as the local player's actor; last,
+   `add_local_player`.
 
 **Coding order and merge order** (review r1 of #530, item 4):
 - **Coding:** lane 3 can start before lane 2 lands. Its synthetic tests put a toy game info in `WorldInfo.Game`
   themselves, as decision 2026-11-19-20's tests do, and read it through the existing `bringup::game_info`.
 - **Merging:** lane 3 lands after lane 2. It rebases onto lane 2's module wiring and adds its `mod player;` line there,
   so the two lanes never both edit `mapload.rs`'s wiring in flight.
-- **Lane 1:** where lane 1 has not settled `SpawnPlayActor`'s call site, lane 3 keeps its labelled harness call site.
+- **Lane 1:** #536 settles the call site (section 3, step 7, item 2). Lane 3's fallback is only for what that note
+  leaves unread: the two intervening engine calls and the failed spawn's error path stay unmodelled and UNVERIFIED,
+  and the player loop runs straight after the bring-up.
 
 Tests:
 - a toy game info whose `Login` spawns a controller at the toy start;
 - a toy `PostLogin` that records what it sees, which **asserts the attachment**: the controller's local player is set
   when `PostLogin` runs, along with the net index and the roles;
 - the local player's actor is the controller after the call;
-- a `Login` that returns None, giving the error string, with no attachment and no `PostLogin`;
+- a `Login` that returns None with an error text: the load's failure carries that text unchanged, with no
+  attachment, no `PostLogin`, no store and no `add_local_player`;
+- a `Login` that returns None with an empty error: the typed not-read outcome;
+- each preflight refusal (a modelled-out unique id, a remote role, no game info) leaves the world unchanged
+  (the heap snapshot) and is not marked; a refusal from a toy `PostLogin` is marked "stopped after partial writes";
 - the play actor in `LocalPlayerControllers`;
 - Reference unbound.
 
@@ -311,8 +363,11 @@ engine-native class, and the physics level filter. Those are on other actors, no
 - **Q2. The game info class.** Does the travel URL into Sanctuary carry a `GAME=` option? Does the user's
   `WillowGame.ini` override `DefaultGame.ini`? The resulting class alone cannot tell these apart, so they need three
   separate reads (section 5, last paragraph).
-- **Q3. The play actor.** Where the map load calls `SpawnPlayActor`, and where `GamePlayers` is filled
-  (NATIVE_MAP_LOAD.md, Open). (Lane 1.)
+- **Q3. The play actor.** Answered by lane 1 (#536, NATIVE_MAP_LOAD.md sections 6.1 and 6.2): `GamePlayers` is
+  filled at start-up, before any map, and the map load calls the engine's local-player spawn directly for each local
+  player after the bring-up. Still open, UNVERIFIED: the start-up caller of `GameViewportClient.Init` (inferred), the
+  map load's two engine calls before the player loop, and its error path. The live check is NATIVE_MAP_LOAD.md section
+  6.5, item 2 (`GamePlayers` before and after the load).
 - **Q4. Grading an incomplete bring-up.** Decision 2026-11-19-20 counted 1,855 failures over Sanctuary's actors, and
   `BringUp::complete` is false for any failure. The question is whether a link may pass on a map world whose bring-up
   is not complete, if every failure is off that link's path. This design proposes: such a link is reported with the
