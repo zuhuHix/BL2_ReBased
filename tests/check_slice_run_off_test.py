@@ -35,9 +35,9 @@ def row(n, result='ok', grading='strict', **fields):
 def all_ok(grading='strict'):
     rows = [row(n, grading=grading) for n in range(1, 15)]
     for r in rows:
-        if r['driver'] in ('none', 'phaselock-cast'):
-            # A link without a driver, or link 9's cast with no evidence check yet, is never ok: a passing run has an
-            # evidence-checked driver for every link (a synthetic one here).
+        if r['driver'] in ('none', 'phaselock-cast', 'sanctuary-walk'):
+            # A link without a driver, or link 9's cast or link 2's walk with no evidence check yet, is never ok: a
+            # passing run has an evidence-checked driver for every link (a synthetic one here).
             r['driver'] = 'combat-run'
     return rows
 
@@ -153,7 +153,6 @@ class Parse(unittest.TestCase):
 
     def test_the_walk_driver_drives_link_2_only(self):
         rows = all_ok()
-        self.assertEqual(rows[1]['driver'], 'sanctuary-walk')
         rows[1] = row(2, result='notyet', steps=['load', 'spawn', 'walk', 'fight_area'],
                       stop=stop(native='the fight area of link 2', record='SLICE_RUN_PLAN.md section 3.2'))
         chk.parse(lines(rows))
@@ -161,6 +160,16 @@ class Parse(unittest.TestCase):
         rows[0] = dict(rows[0], driver='sanctuary-walk')
         with self.assertRaises(chk.Malformed, msg='sanctuary-walk on link 1'):
             chk.parse(lines(rows))
+
+    def test_a_sanctuary_walk_row_is_never_ok_until_it_checks_arrival(self):
+        # Decision 2026-11-19-76 lifts this once the walk driver checks arrival at the fight area.
+        rows = all_ok()
+        rows[1] = row(2)
+        self.assertEqual((rows[1]['driver'], rows[1]['result']), ('sanctuary-walk', 'ok'))
+        with self.assertRaises(chk.Malformed, msg='an ok reach_fight_area from sanctuary-walk'):
+            chk.parse(lines(rows))
+        rows[1] = dict(rows[1], result='notyet', stop=stop())
+        chk.parse(lines(rows))
 
     def test_a_phaselock_cast_row_is_never_ok_until_its_evidence_check_exists(self):
         rows = all_ok()

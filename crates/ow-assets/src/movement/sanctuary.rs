@@ -124,14 +124,26 @@ pub fn spawn(scene: &Scene, world: &CollisionWorld, out: &mut String) -> Result<
     Ok(mover)
 }
 
+/// The walk's time step: the simulation's fixed step.
+pub fn walk_dt() -> f64 {
+    f64::from(DEFAULT_STEP_SECONDS)
+}
+
+/// H4's Sanctuary walk from `mover` in `world`: [`SANCTUARY_SCRIPT`] at [`walk_dt`], sampled every
+/// [`SAMPLE_EVERY`] ticks. `ow-host --walk` ([`run`]) and the slice gate's `sanctuary-walk` driver both call this,
+/// so their script and time step cannot drift apart.
+pub fn scripted_walk(world: &CollisionWorld, mover: &mut Mover) -> WalkReport {
+    walk::run(world, mover, &SANCTUARY_SCRIPT, walk_dt(), SAMPLE_EVERY)
+}
+
 /// Loads Sanctuary from the install's cooked folder `cooked`, builds its collision and runs the walk.
 pub fn run(cooked: &Path) -> Result<WalkRun, String> {
     let loaded = load(cooked, MAP)?;
     let mut out = loaded.text.clone();
     let mut mover = spawn(&loaded.scene, &loaded.collision.world, &mut out)?;
-    let dt = f64::from(DEFAULT_STEP_SECONDS);
+    let dt = walk_dt();
     let walked = Instant::now();
-    let report = walk::run(&loaded.collision.world, &mut mover, &SANCTUARY_SCRIPT, dt, SAMPLE_EVERY);
+    let report = scripted_walk(&loaded.collision.world, &mut mover);
     let walk_time = walked.elapsed();
     walk_text(&mut out, &report, dt);
     blockers(&mut out, &loaded.scene, &loaded.collision.world, &report);
