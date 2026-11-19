@@ -23,6 +23,15 @@ use crate::equip::read_prop;
 const DIM: i32 = 4;
 const ROLES: [&str; 4] = ["ROLE_None", "ROLE_SimulatedProxy", "ROLE_AutonomousProxy", "ROLE_Authority"];
 
+/// Declaration variants of the invented item class (review r2 of #468).
+#[derive(Default)]
+struct Variant {
+    /// `bNetDirty` declared as an int, so a bool cannot be written to it.
+    net_dirty_int: bool,
+    /// No `Role` declared: a value-pass input that a base-pass refusal must come before.
+    no_role: bool,
+}
+
 struct Toy {
     vm: Vm,
     aid: StructId,
@@ -60,6 +69,10 @@ fn shared_fields(s: &mut ObjectSpace, obj: &PropKind, aid: StructId) -> Vec<Prop
 
 impl Toy {
     fn new(mode: ParityMode) -> Toy {
+        Toy::with(mode, Variant::default())
+    }
+
+    fn with(mode: ParityMode, variant: Variant) -> Toy {
         let mut s = ObjectSpace::new();
         let object = s.classes.define("Core.Object", None, vec![]).unwrap();
         let obj = PropKind::Object { class: object };
@@ -114,15 +127,17 @@ impl Toy {
         let idata = s.classes.define_struct("Test.ItemDefinitionData", None, i).unwrap();
         let roles = ROLES.iter().map(|r| s.names.intern(r)).collect();
         let role = s.classes.define_enum("Engine.Actor.ENetRole", roles).unwrap();
-        let inv = vec![
-            decl(&mut s, "Role", PropKind::Byte { enum_: Some(role) }),
-            decl(&mut s, "bNetDirty", PropKind::Bool),
+        let mut inv = vec![
+            decl(&mut s, "bNetDirty", if variant.net_dirty_int { PropKind::Int } else { PropKind::Bool }),
             decl(&mut s, "AttributeSlots", PropKind::Struct(slot)).with_array_dim(DIM),
             decl(&mut s, "ReplicatedAttributeSlotModifierValues", PropKind::Float).with_array_dim(DIM),
             decl(&mut s, "TempStatModifier", PropKind::FloatAttribute).with_flags(PropertyDecl::STACK_ATTRIBUTE),
             decl(&mut s, "TempStatModifierBaseValue", PropKind::FloatAttribute).with_flags(PropertyDecl::PLAIN_ATTRIBUTE),
             decl(&mut s, "TempStatModifierModifierStack", objs),
         ];
+        if !variant.no_role {
+            inv.push(decl(&mut s, "Role", PropKind::Byte { enum_: Some(role) }));
+        }
         let inventory = s.classes.define("WillowGame.WillowInventory", Some(object), inv).unwrap();
         let (v, b, st) = (
             s.names.intern("TempStatModifier"),
@@ -225,13 +240,19 @@ impl Toy {
     }
 
     fn weapon(&mut self, definition: Option<ObjRef>, parts: &[(&str, ObjRef)], authority: bool) -> ObjRef {
+        let has_role = {
+            let c = self.class("WillowGame.WillowInventory");
+            self.vm.space.prop(c, "Role").is_some()
+        };
         let w = self.obj("WillowGame.WillowWeapon", "Weapon_0");
         let mut fields = vec![("WeaponTypeDefinition", Value::Object(definition))];
         fields.extend(parts.iter().map(|(slot, p)| (*slot, Value::Object(Some(*p)))));
         let ty = self.wdata;
         let data = self.st(ty, fields);
         self.set(w, "DefinitionData", data);
-        self.set(w, "Role", Value::Byte(if authority { 3 } else { 1 }));
+        if has_role {
+            self.set(w, "Role", Value::Byte(if authority { 3 } else { 1 }));
+        }
         w
     }
 
@@ -380,6 +401,107 @@ fn activated_slots_are_kept_and_new_records_follow_them() {
     let b = t.name("B");
     assert_eq!(t.summary(w, 1), (b, Value::Bool(true), Value::Int(2), Value::Float(2.5)));
     assert_eq!(t.get(w, "bNetDirty"), Value::Bool(false));
+}
+
+/// The replication boundary off the authority (review r2 of #468): every slot below the limit takes its replicated
+/// element, an inactive one included, and a slot at or past the limit keeps its value.
+#[test]
+fn off_the_authority_the_replicated_values_stop_at_the_limit() {
+    let mut t = Toy::new(ParityMode::Off);
+    let ua = t.up("A", 0, true);
+    let ea = t.effect("A", 1.0, 1.0, vec![]);
+    let definition = t.definition(vec![ua], vec![ea], 2, 1.0);
+    let w = t.weapon(Some(definition), &[], false);
+    for i in 0..DIM as u32 {
+        t.put_slot(w, i, vec![("ComputedModifierValue", Value::Float(-1.0))]);
+        t.put_replicated(w, i, 100.0 + i as f32);
+    }
+    initialize(&mut t.vm, w, false, false).unwrap();
+    assert_eq!(t.summary(w, 0).1, Value::Bool(true), "A is written at 0");
+    assert_eq!(t.summary(w, 0).3, Value::Float(100.0));
+    assert_eq!(t.summary(w, 1).1, Value::Bool(false), "slot 1 stays inactive");
+    assert_eq!(t.summary(w, 1).3, Value::Float(101.0), "an inactive slot below the limit takes its replicated value");
+    for i in 2..DIM as u32 {
+        assert_eq!(t.summary(w, i).3, Value::Float(-1.0), "slot {i} is past the limit of 2: untouched");
+    }
+}
+
+/// Every planned write is checked before the first (review r2 of #468): a `bNetDirty` declared as an int refuses the
+/// call with the item unchanged.
+#[test]
+fn a_write_that_cannot_be_made_refuses_before_any_write() {
+    let mut t = Toy::with(ParityMode::Off, Variant { net_dirty_int: true, ..Variant::default() });
+    let ua = t.up("A", 1, true);
+    let ea = t.effect("A", 1.0, 1.0, vec![]);
+    let d = t.definition(vec![ua], vec![ea], 19, 1.0);
+    let w = t.weapon(Some(d), &[], true);
+    let before = t.snapshot(w);
+    let e = initialize(&mut t.vm, w, false, false).unwrap_err();
+    assert!(!matches!(e, VmError::NotYet(_)), "a heap kind error, not a NotYet: {e:?}");
+    assert_eq!(t.snapshot(w), before, "nothing written");
+}
+
+/// The refusal order (review r2 of #468): the value pass's inputs (here a class with no `Role`) are read only when the
+/// value pass runs, so a base-pass refusal comes first.
+#[test]
+fn a_base_pass_refusal_comes_before_the_value_pass_inputs() {
+    let mut t = Toy::with(ParityMode::Off, Variant { no_role: true, ..Variant::default() });
+    let ua = t.up("A", 1, true);
+    let ea = t.effect("A", 1.0, 1.0, vec![]);
+    let d = t.definition(vec![ua], vec![ea], 19, 1.0);
+    let g = t.init_attr();
+    t.set(d, "AttributeSlotBaseGrade", g);
+    let w = t.weapon(Some(d), &[], true);
+    let (_, what) = not_yet(&initialize(&mut t.vm, w, false, false).unwrap_err());
+    assert!(what.starts_with("IAS-BASE-GRADE-CONTEXT: "), "{what}");
+    // Without the base-pass refusal, the missing Role is the value pass's data error.
+    let d2 = t.definition(vec![], vec![], 19, 1.0);
+    let w2 = t.weapon(Some(d2), &[], true);
+    assert!(!matches!(initialize(&mut t.vm, w2, false, false).unwrap_err(), VmError::NotYet(_)));
+}
+
+/// The name-part pass's in-place grades are planned one write per applied upgrade, in upgrade order, and a kept slot
+/// with no upgrade is not rewritten (review r2 of #468): prefix B+1 then A+2, title B+3.
+#[test]
+fn in_place_grades_are_written_per_upgrade_in_upgrade_order() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition(vec![], vec![], 19, 1.0);
+    let (pb, pa, tb) = (t.up("B", 1, false), t.up("A", 2, false), t.up("B", 3, false));
+    let prefix = t.holder("Test.Part", "Prefix", vec![pb, pa], vec![]);
+    let title = t.holder("Test.Part", "Title", vec![tb], vec![]);
+    let w = t.weapon(Some(definition), &[("PrefixPartDefinition", prefix), ("TitlePartDefinition", title)], false);
+    let (a, b, c) = (t.name("A"), t.name("B"), t.name("C"));
+    for (i, n) in [(0, a.clone()), (1, b.clone()), (2, c.clone())] {
+        t.put_slot(w, i, vec![("SlotName", n), ("bActivated", Value::Bool(true)), ("EffectGrade", Value::Int(1))]);
+    }
+    let s = plan(&mut t.vm, w, false, true).unwrap();
+    let mut grades = Vec::new();
+    for op in &s.ops {
+        if let Op::Slot(i, v) = op {
+            grades.push((*i, t.f(v, "EffectGrade")));
+        }
+    }
+    // The three in-place writes, then the value pass's (off the authority: every slot below the limit).
+    assert_eq!(&grades[..3], [(1, Value::Int(2)), (0, Value::Int(3)), (1, Value::Int(5))]);
+    assert_eq!(grades.len(), 3 + DIM as usize, "no other in-place write; slot C (no upgrade) only in the value pass");
+    s.commit(&mut t.vm).unwrap();
+    assert_eq!((t.summary(w, 0).2, t.summary(w, 1).2, t.summary(w, 2).2), (Value::Int(3), Value::Int(5), Value::Int(1)));
+}
+
+/// `EffectGrade - 1` that would wrap (a base grade of 0 plus `GradeIncrease` i32::MIN) is the note's
+/// IAS-ROUNDING-RANGE port restriction (hub ruling, review r2 of #468), refused in the plan on the authority.
+#[test]
+fn a_grade_whose_step_would_wrap_is_refused_in_the_plan() {
+    let mut t = Toy::new(ParityMode::Off);
+    let ua = t.up("A", i32::MIN, true);
+    let ea = t.effect("A", 1.0, 1.0, vec![]);
+    let d = t.definition(vec![ua], vec![ea], 19, 0.0);
+    let w = t.weapon(Some(d), &[], true);
+    let before = t.snapshot(w);
+    let (missing, what) = not_yet(&initialize(&mut t.vm, w, false, false).unwrap_err());
+    assert_eq!(missing, Missing::NotRead);
+    assert!(what.starts_with("IAS-ROUNDING-RANGE: "), "{what}");
+    assert_eq!(t.snapshot(w), before, "nothing written");
 }
 
 /// The name-part pass (with the bool, and on its own): a name part's upgrade grows an activated slot in place without

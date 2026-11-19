@@ -63,7 +63,8 @@
 //!   an `InitializationDefinition` (open question 1: lifting these is the hub's call). Context-free data is
 //!   `BaseValueConstant x BaseValueScaleConstant` whatever the context;
 //! - `IAS-ROUNDING-RANGE`: a base grade whose 2x + 0.5 is outside the native's exact conversion (-2^31 included, up
-//!   to just below 2^31) or not finite, and a grade sum that would wrap a 32-bit int (both port restrictions);
+//!   to just below 2^31) or not finite, a grade sum that would wrap a 32-bit int, and (hub ruling, review r2 of
+//!   #468) an `EffectGrade - 1` that would wrap (all port restrictions);
 //! - `IAS-RUNTIME-SKILL`: an activated external run-as-skill slot on the authority with an `AttributeSlotEffectMode`
 //!   other than 2 (open question 2: the runtime `SkillDefinition`'s outer and name).
 //! A class that is neither a `WillowWeapon` nor a `WillowItem` is this lane's own `NotYet` (its lists are not read).
@@ -71,7 +72,10 @@
 //! **Before any write** (the hub's ruling; the note's section 8): every step runs on copies in memory, the slot array,
 //! the replicated values and the stat, in the note's planning order (the definition, the slot shape, the base pass,
 //! its projected write, the name-part pass, then the value passes), and every `NotYet` and data error above is decided
-//! there. The plan records its writes in the native's order and only then replays them: the base pass's copies, with
+//! there. Each pass reads its own inputs as it runs (the parts at the base pass, the name parts at the name-part
+//! pass, the `Role`, the replicated values and the write destinations at the value pass), so a later input cannot
+//! block or mask an earlier refusal. Every planned write is then checked with the heap's own checks before the
+//! first is made (review r2 of #468). The plan records its writes in the native's order and only then replays them: the base pass's copies, with
 //! the bool the name-part pass's in-place grades, copies and its own value pass, then the value pass, each value pass
 //! per slot in section 5's order. So `InitializeAttributeSlots(true)` keeps its two value passes as two write passes
 //! (they write the same values for what Off plans). No planned `NotYet` follows a write; one that still surfaced
@@ -132,7 +136,7 @@ fn lists_of(vm: &mut Vm, item: ObjRef, what: &str) -> Result<Lists, VmError> {
         ("WillowGame.WillowWeapon", "WeaponTypeDefinition", &WEAPON_ALL_PARTS),
         ("WillowGame.WillowItem", "ItemDefinition", &ITEM_ALL_PARTS),
     ] {
-        if let Ok(c) = vm.find_class(path)
+        if let Some(c) = vm.find_class_if_present(path)?
             && vm.space.classes.is_child_of(class, c)
         {
             return Ok(Lists { definition, slots });
@@ -251,17 +255,19 @@ struct State {
     item: ObjRef,
     what: &'static str,
     definition: ObjRef,
-    parts: Vec<ObjRef>,
-    names: Vec<ObjRef>,
+    /// The item's `DefinitionData` and the class's lists; the parts and name parts are read and loaded only when a
+    /// pass needs them (review r2 of #468).
+    data: Value,
+    lists: Lists,
+    parts: Option<Vec<ObjRef>>,
+    names: Option<Vec<ObjRef>>,
     /// The item's `AttributeSlots`, every declared element.
     slots: Vec<Value>,
     slot_ty: StructId,
     slots_prop: PropId,
     limit: usize,
-    /// `ReplicatedAttributeSlotModifierValues`, every declared element.
-    replicated: Vec<f32>,
-    replicated_prop: PropId,
-    authority: bool,
+    /// What the value pass reads, read when it first runs (review r2 of #468).
+    value_inputs: Option<ValueInputs>,
     /// The planned writes, in the native's order (the note's section 8 step 7).
     ops: Vec<Op>,
     /// The definition's `AttributeSlotBaseGrade`, evaluated once when an activation needs it.
@@ -280,6 +286,14 @@ fn static_array(vm: &Vm, item: ObjRef, name: &str, what: &str) -> Result<(PropId
         .map(|i| Ok(vm.space.read(item, PropAddr::element(p, i))?.clone()))
         .collect::<Result<Vec<_>, VmError>>()?;
     Ok((p, kind, values))
+}
+
+/// What the value pass reads: the replicated values, the authority, and the destinations of its writes.
+struct ValueInputs {
+    /// `ReplicatedAttributeSlotModifierValues`, every declared element.
+    replicated: Vec<f32>,
+    replicated_prop: PropId,
+    authority: bool,
 }
 
 /// Whether `item`'s `Role` is the `ROLE_Authority` entry of the enum its declaration names.
@@ -315,16 +329,7 @@ impl State {
                 &format!("an item without a {} (the native reads the slot limit from it unguarded)", lists.definition),
             ));
         };
-        let mut parts = Vec::new();
-        let mut names = Vec::new();
-        for (i, slot) in lists.slots.iter().enumerate() {
-            if let Some(p) = object_of(&field(vm, &data, slot)?, what)? {
-                if i < 9 { parts.push(p) } else { names.push(p) }
-            }
-        }
-        for o in std::iter::once(&definition).chain(parts.iter()).chain(names.iter()) {
-            super::value::loaded(vm, *o)?;
-        }
+        super::value::loaded(vm, definition)?;
         let stored = match required(vm, definition, "AttributeSlotMaxActivated", what)? {
             Value::Int(i) => i,
             other => return Err(bad(what, format!("AttributeSlotMaxActivated holds {}, not an int", other.kind_name()))),
@@ -334,41 +339,86 @@ impl State {
             return Err(bad(what, "AttributeSlots is not declared as slot structs"));
         };
         let limit = usize::try_from(clamped_slot_max(stored)).unwrap_or(0).min(slots.len());
-        let (replicated_prop, kind, values) = static_array(vm, item, "ReplicatedAttributeSlotModifierValues", what)?;
-        if !matches!(kind, PropKind::Float) || values.len() < limit {
-            return Err(bad(what, "ReplicatedAttributeSlotModifierValues is not a float array of at least the slot limit"));
-        }
-        let replicated = values
-            .iter()
-            .map(|v| match v {
-                Value::Float(f) => Ok(*f),
-                other => Err(bad(what, format!("a replicated value holds {}", other.kind_name()))),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let authority = is_authority(vm, item, what)?;
         Ok(State {
             item,
             what,
             definition,
-            parts,
-            names,
+            data,
+            lists,
+            parts: None,
+            names: None,
             slots,
             slot_ty,
             slots_prop,
             limit,
-            replicated,
-            replicated_prop,
-            authority,
+            value_inputs: None,
             ops: Vec::new(),
             base_grade: None,
         })
     }
 
+    /// The set slots of the list `range` of the class's lists, each loaded (read when a pass first needs them).
+    fn holders(&self, vm: &mut Vm, range: std::ops::Range<usize>) -> Result<Vec<ObjRef>, VmError> {
+        let mut out = Vec::new();
+        for slot in &self.lists.slots[range] {
+            if let Some(p) = object_of(&field(vm, &self.data, slot)?, self.what)? {
+                super::value::loaded(vm, p)?;
+                out.push(p);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The part list (section 2), read and loaded on first use.
+    fn parts(&mut self, vm: &mut Vm) -> Result<Vec<ObjRef>, VmError> {
+        if self.parts.is_none() {
+            self.parts = Some(self.holders(vm, 0..9)?);
+        }
+        Ok(self.parts.clone().unwrap_or_default())
+    }
+
+    /// The name-part list (section 2), read and loaded on first use.
+    fn names(&mut self, vm: &mut Vm) -> Result<Vec<ObjRef>, VmError> {
+        if self.names.is_none() {
+            self.names = Some(self.holders(vm, 9..11)?);
+        }
+        Ok(self.names.clone().unwrap_or_default())
+    }
+
+    /// The value pass's inputs, read on its first run: the replicated values, the authority, and on the authority the
+    /// declarations of `TempStatModifier` and `bNetDirty` its writes need.
+    fn value_inputs(&mut self, vm: &Vm) -> Result<&ValueInputs, VmError> {
+        if self.value_inputs.is_none() {
+            let what = self.what;
+            let (replicated_prop, kind, values) = static_array(vm, self.item, "ReplicatedAttributeSlotModifierValues", what)?;
+            if !matches!(kind, PropKind::Float) || values.len() < self.limit {
+                return Err(bad(what, "ReplicatedAttributeSlotModifierValues is not a float array of at least the slot limit"));
+            }
+            let replicated = values
+                .iter()
+                .map(|v| match v {
+                    Value::Float(f) => Ok(*f),
+                    other => Err(bad(what, format!("a replicated value holds {}", other.kind_name()))),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let authority = is_authority(vm, self.item, what)?;
+            if authority {
+                stat_companions(vm, self.item, what)?;
+                if read(vm, self.item, "bNetDirty")?.is_none() {
+                    return Err(bad(what, "the item declares no bNetDirty"));
+                }
+            }
+            self.value_inputs = Some(ValueInputs { replicated, replicated_prop, authority });
+        }
+        self.value_inputs.as_ref().ok_or_else(|| bad(self.what, "the value pass's inputs are missing"))
+    }
+
     /// A new record from the first `AttributeSlotEffects` entry named `name`, in the definition, then the parts in
     /// list order (section 3 step 3); `None` when none names it.
-    fn new_record(&self, vm: &Vm, name: &Value) -> Result<Option<Value>, VmError> {
+    fn new_record(&mut self, vm: &mut Vm, name: &Value) -> Result<Option<Value>, VmError> {
         let what = self.what;
-        for holder in std::iter::once(self.definition).chain(self.parts.iter().copied()) {
+        let parts = self.parts(vm)?;
+        for holder in std::iter::once(self.definition).chain(parts) {
             for entry in list(vm, holder, "AttributeSlotEffects")? {
                 if name_field(vm, &entry, what)? != *name {
                     continue;
@@ -448,6 +498,11 @@ impl State {
                 let increase = int_field(vm, &entry, "GradeIncrease", what)?;
                 grade = grade.checked_add(increase).ok_or_else(|| wraps(what))?;
                 set_field(vm, &mut working[i].value, "EffectGrade", Value::Int(grade), what)?;
+                // An in-place slot (the name-part pass) is written as its upgrade is applied, in upgrade order
+                // (section 4; review r2 of #468).
+                if let Some(slot) = working[i].in_place {
+                    self.ops.push(Op::Slot(slot, working[i].value.clone()));
+                }
             }
         }
         Ok(())
@@ -472,7 +527,7 @@ impl State {
         let mut copies = Vec::new();
         for r in working {
             if let Some(i) = r.in_place {
-                self.ops.push(Op::Slot(i, r.value.clone()));
+                // Its writes were queued by `upgrade`, one per applied upgrade.
                 self.slots[i] = r.value;
                 continue;
             }
@@ -510,9 +565,10 @@ impl State {
     /// The value pass on the copies (section 5).
     fn value_pass(&mut self, vm: &mut Vm) -> Result<(), VmError> {
         let what = self.what;
+        let authority = self.value_inputs(vm)?.authority;
         for i in 0..self.limit {
-            if !self.authority {
-                let r = self.replicated[i];
+            if !authority {
+                let r = self.value_inputs(vm)?.replicated[i];
                 set_field(vm, &mut self.slots[i], "ComputedModifierValue", Value::Float(r), what)?;
                 self.ops.push(Op::Slot(i, self.slots[i].clone()));
                 continue;
@@ -522,15 +578,21 @@ impl State {
                 continue;
             }
             let grade = int_field(vm, &slot, "EffectGrade", what)?;
+            // EffectGrade - 1 that would wrap: the note's IAS-ROUNDING-RANGE port restriction (hub ruling, review r2 of
+            // #468), decided here, in the plan.
+            let steps = grade.checked_sub(1).ok_or_else(|| {
+                not_yet("IAS-ROUNDING-RANGE", what, "EffectGrade - 1 would wrap a 32-bit int (the native wraps; the port does not reproduce it)")
+            })?;
             self.ops.push(Op::Stat(grade as f32));
             let base = evaluate(vm, &field(vm, &slot, "BaseModifierValue")?, self.item, "IAS-VALUE-CONTEXT", "a slot's BaseModifierValue", what)?;
             let per = evaluate(vm, &field(vm, &slot, "PerGradeUpgrade")?, self.item, "IAS-VALUE-CONTEXT", "a slot's PerGradeUpgrade", what)?;
             // The 1 is subtracted in integers, then one single-precision multiply and one add (no fused multiply-add).
-            let steps = grade.checked_sub(1).ok_or_else(|| bad(what, "EffectGrade - 1 overflows"))?;
             let computed = base + (steps as f32) * per;
             set_field(vm, &mut self.slots[i], "ComputedModifierValue", Value::Float(computed), what)?;
             self.ops.push(Op::Slot(i, self.slots[i].clone()));
-            self.replicated[i] = computed;
+            if let Some(v) = self.value_inputs.as_mut() {
+                v.replicated[i] = computed;
+            }
             self.ops.push(Op::Replicated(i, computed));
             self.ops.push(Op::NetDirty);
             if flag(vm, &slot, "bExternalSlot", what)? && flag(vm, &slot, "bRunEffectsAsSkill", what)? {
@@ -557,33 +619,54 @@ impl State {
         for (i, _) in self.kept(vm)? {
             working.push(Rec { value: self.slots[i].clone(), in_place: Some(i) });
         }
-        let names = self.names.clone();
+        let names = self.names(vm)?;
         self.upgrade(vm, &names, &mut working)?;
         self.write_records(vm, working)?;
         self.value_pass(vm)
     }
 
-    /// The planned writes, replayed in order (module documentation). Every planned `NotYet` was decided before the
-    /// first; should a `NotYet` still surface after a write (a port defect), it stops the call with the partial-writes
-    /// mark, its kind and record kept, and the writes already made stay. Other errors pass unchanged.
-    fn commit(self, vm: &mut Vm) -> Result<(), VmError> {
+    /// The planned writes as (property address, value), in order, each checked with the heap's own checks (the
+    /// declaration exists, the address reads, the value fits the declared kind) before any is made (review r2 of #468).
+    fn resolve(&self, vm: &Vm) -> Result<Vec<(PropAddr, Value)>, VmError> {
         let what = self.what;
-        let mut wrote = false;
-        for op in self.ops {
-            let r = match op {
-                Op::Slot(i, v) => index(i).and_then(|i| Ok(vm.space.write(self.item, PropAddr::element(self.slots_prop, i), v)?)),
+        let mut out = Vec::new();
+        for op in &self.ops {
+            match op {
+                Op::Slot(i, v) => out.push((PropAddr::element(self.slots_prop, index(*i)?), v.clone())),
                 Op::Replicated(i, f) => {
-                    index(i).and_then(|i| Ok(vm.space.write(self.item, PropAddr::element(self.replicated_prop, i), Value::Float(f))?))
+                    let p = self.value_inputs.as_ref().ok_or_else(|| bad(what, "a replicated write without the value pass"))?.replicated_prop;
+                    out.push((PropAddr::element(p, index(*i)?), Value::Float(*f)));
                 }
-                Op::Stat(grade) => stat_companions(vm, self.item, what).and_then(|c| {
-                    vm.space.write(self.item, PropAddr::scalar(c.value), Value::Float(grade))?;
-                    vm.space.write(self.item, PropAddr::scalar(c.base), Value::Float(grade))?;
-                    vm.space.write(self.item, PropAddr::scalar(c.stack), Value::array(Vec::new()))?;
-                    Ok(())
-                }),
-                Op::NetDirty => super::write(vm, self.item, "bNetDirty", Value::Bool(true), what),
-            };
-            match r {
+                Op::Stat(grade) => {
+                    let c = stat_companions(vm, self.item, what)?;
+                    out.push((PropAddr::scalar(c.value), Value::Float(*grade)));
+                    out.push((PropAddr::scalar(c.base), Value::Float(*grade)));
+                    out.push((PropAddr::scalar(c.stack), Value::array(Vec::new())));
+                }
+                Op::NetDirty => {
+                    let class = vm.space.heap.get(self.item)?.class;
+                    let p = vm.space.prop(class, "bNetDirty").ok_or_else(|| bad(what, "the item declares no bNetDirty"))?;
+                    out.push((PropAddr::scalar(p), Value::Bool(true)));
+                }
+            }
+        }
+        for (addr, v) in &out {
+            let kind = &vm.space.classes.decl(addr.prop).ok_or_else(|| bad(what, "a planned write to no declaration"))?.kind;
+            vm.space.read(self.item, *addr)?;
+            vm.space.heap.check_value(&vm.space.classes, kind, v)?;
+        }
+        Ok(out)
+    }
+
+    /// The planned writes, checked ([`State::resolve`]) and then made in order (module documentation). Every planned
+    /// `NotYet` and every check was decided before the first write; should a `NotYet` still surface after a write (a
+    /// port defect), it stops the call with the partial-writes mark, its kind and record kept, and the writes already
+    /// made stay. Other errors pass unchanged.
+    fn commit(self, vm: &mut Vm) -> Result<(), VmError> {
+        let writes = self.resolve(vm)?;
+        let mut wrote = false;
+        for (addr, v) in writes {
+            match vm.space.write(self.item, addr, v).map_err(VmError::from) {
                 Ok(()) => wrote = true,
                 Err(VmError::NotYet(n)) if wrote && !n.what.contains(PARTIAL_WRITES) => {
                     return Err(NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into());
@@ -636,21 +719,22 @@ fn stat_companions(vm: &Vm, item: ObjRef, what: &str) -> Result<ow_object::layou
 /// One call (module documentation): `name_parts` is the bool of `InitializeAttributeSlots`; `only_name_parts` makes
 /// it `InitializeAttributeSlotsForNameParts`.
 pub fn initialize(vm: &mut Vm, item: ObjRef, name_parts: bool, only_name_parts: bool) -> Result<(), VmError> {
+    let s = plan(vm, item, name_parts, only_name_parts)?;
+    s.commit(vm)
+}
+
+/// The read-only plan of one call (the note's section 8): the definition and the limit, the slot shape, then each
+/// pass's own inputs as it runs. Nothing is written.
+fn plan(vm: &mut Vm, item: ObjRef, name_parts: bool, only_name_parts: bool) -> Result<State, VmError> {
     let what = if only_name_parts { INIT_NAME_PART_SLOTS } else { INIT_SLOTS };
     let mut s = State::read(vm, item, what)?;
     s.check_shape(vm)?;
-    if s.authority {
-        // Checked first, so a bad declaration is refused before anything is written.
-        stat_companions(vm, item, what)?;
-        if read(vm, item, "bNetDirty")?.is_none() {
-            return Err(bad(what, "the item declares no bNetDirty"));
-        }
-    }
     if only_name_parts {
         s.name_part_pass(vm)?;
     } else {
         let mut working = Vec::new();
-        let holders: Vec<ObjRef> = std::iter::once(s.definition).chain(s.parts.iter().copied()).collect();
+        let parts = s.parts(vm)?;
+        let holders: Vec<ObjRef> = std::iter::once(s.definition).chain(parts).collect();
         s.upgrade(vm, &holders, &mut working)?;
         s.write_records(vm, working)?;
         if name_parts {
@@ -658,7 +742,7 @@ pub fn initialize(vm: &mut Vm, item: ObjRef, name_parts: bool, only_name_parts: 
         }
         s.value_pass(vm)?;
     }
-    s.commit(vm)
+    Ok(s)
 }
 
 fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
