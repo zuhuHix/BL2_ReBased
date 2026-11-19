@@ -9,7 +9,7 @@ build). `crate_edges_test.py` 19 OK; Fire checker self-test passes and, under Re
 rules hold. Installed Off: `--slice-gate` strict 0/11/3 before, 0/14/0 after (link 10 moves from the `ActivateEvent` error
 at `use` to the `GetDataStoreClient` `NotYet` at `accept`); `--slice-run` and `--mission-run` Fire unchanged. No host or
 real-game run; the rule stays `UNVERIFIED` in game. Decision 2026-11-19-42; logs under ignored
-`local/p2/fix-activate-event/`. **Reviews r1 and r2:** ow-ai 83/83 (9 ActivateEvent tests), ow-cli 82/82;
+`local/p2/fix-activate-event/`. **Reviews r1 to r3:** ow-ai 84/84 after r3 (10 ActivateEvent tests); r2: ow-cli 82/82;
 `cargo test --workspace` 2,027 passed / 0 failed / 45 ignored; installed Off `--slice-gate` strict still 0/14/0, rows 10
 to 12 unchanged at `GetDataStoreClient` (`accept`).
 

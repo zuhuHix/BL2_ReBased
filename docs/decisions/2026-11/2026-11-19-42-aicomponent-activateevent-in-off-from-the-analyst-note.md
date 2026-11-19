@@ -21,9 +21,14 @@ loosened and no existing `NotYet` guard was relaxed.
     ow-ai part 2's brain keeps its own per-AI copies, and handlers write to the receiver. Owning a copy does not settle
     it either: an AI without a brain could list another mind's copies (review r2). So in Off any set `Action` in the
     list is `NotYet { NotRead }` naming the note's per-AI copies item, and so is a brain built for this component,
-    running or not, found through `AI` or, while `AI` is still unset, through its mind's `AIComponent`. **Off delivers
+    running or not, found through `AI` or, while `AI` is still unset, through its mind's `AIComponent`, and counted
+    also while `tick_brain` has it out of the map to build or tick it (review r3: a script callback in that window
+    sees the brain in flight). **Off delivers
     nothing.** The only answer Off gives itself is false: for `AI` or `AIDef` unset with no brain for the component,
     or for a list with no `Action` set.
+  - With `AI` or `AIDef` truly unset and no brain of the port's for the component, false is returned without reading
+    the definition, `NodeList` or `CurrentState`: the note says the native "does nothing unless the component's `AI`
+    interface and its `AIDef` are both set" (the hub's ruling on review r3).
   - Because nothing is delivered, no handler can write state before a later one fails.
   - Every field is read and its kind checked first. A component, definition or node without a field read, or with a
     field of the wrong kind (`NodeList` not an array, `CurrentState.Dummy` not an int, a node `Action` not an object),
@@ -34,14 +39,16 @@ loosened and no existing `NotYet` guard was relaxed.
   Their worlds do not register ow-ai's packs, and registering the whole pack would also bind the hold natives under
   Reference.
 
-**Verified (automated, invented classes).** `ow-ai`: 9 tests after review r2; `ow-cli`: the stub-list test.
+**Verified (automated, invented classes).** `ow-ai`: 10 tests after review r3; `ow-cli`: the stub-list test.
 
 - In Off, a list with set actions is `NotYet` naming the per-AI copies item, with nothing delivered: the definition's
   own actions, and the same actions marked as this mind's copies (an invented stand-in). Under Reference nothing is
   bound.
 - In Off, two AIs: B's brain is built, A has none and its list holds B's copies. A's event is `NotYet` and B's handlers
   do not run.
-- In Off, a brain built for the component's mind while the component's `AI` is unset is `NotYet`, not false.
+- In Off, a brain built for the component's mind while the component's `AI` is unset is `NotYet`, not false; so is
+  the call from a script callback (`Init` while the brain is built, `Start` while it ticks) with `AI` unset. That test
+  fails with the in-flight marker removed (checked).
 - In Off, an unset `AI` or `AIDef` (each, and both) with no brain, an empty list, and a list with no `Action` set
   answer false.
 - In Off, a running node answers `NotYet { NotRead }` naming the first delivery; a built brain, running a node or not,
