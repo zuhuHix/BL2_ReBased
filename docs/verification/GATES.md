@@ -296,6 +296,20 @@ Results:
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-178.
 
+**LINK9-EVIDENCE-CHECK (2026-11-19, pc-hummer, on origin/main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). Link
+9's evidence: after the cast, the Phaselock skill's `LiftedPawn` is the target and `CurrentState` is `EPLS_Intro` (the
+harness's choice, UNVERIFIED in game).
+
+Results:
+- `cargo test -p ow-cli`: 115 + 2 passed / 0 failed / 1 ignored (1 new, 1 changed).
+- `cargo test --workspace -j 2`: 2,445 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK.
+- Installed Off `--slice-gate` strict (a local merge with #564, #535, #548, #555, #560, #523 and the link 9 spawn
+  branches, never pushed; under the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and `cast` but
+  is not ok: no evidence, because the cast takes the blocked path (`IsPhaselocked(target)` answers true in the port).
+
+ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
