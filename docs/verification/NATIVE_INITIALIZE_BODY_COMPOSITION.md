@@ -229,7 +229,9 @@ modes 0 and 3:
 1. **Identifier `Mesh`:**
    - the old `Pawn.Mesh` is released: if it was attached, it is detached and removed from a global list. **That list
      was not read:** neither what it holds nor what the removal changes. Maya's pawn archetype
-     (`GD_Siren_Streaming.Pawn_Siren`) sets `Mesh`, so the release does run on her first build;
+     (`GD_Siren_Streaming.Pawn_Siren`) sets `Mesh`. Whether the spawned pawn still holds it, attached, when the build
+     runs is not read (**UNVERIFIED**). If it does, the release runs; in the port as #542 (b2b4de8a) measured it, the
+     pawn holds no `Mesh` and nothing is released;
    - `Pawn.Mesh` = the made object, as a `SkeletalMeshComponent` (None when it is not one).
    - **When the new mesh is set:**
      - `MeshBodyCompositionIndex` = `i`;
@@ -350,15 +352,15 @@ inside the gate, it keeps the root-motion writes: `Mesh.RootMotionMode` = 3 when
      possible if the hub revisits ruling 3: set the link, and fill the map from the two meshes' bone tables, with the
      same mesh-data layer as the socket attach;
    - **the pawn's `PostInitBodyComposition`** (section 4.5):
-     - identifier `Mesh` with a made `SkeletalMeshComponent` → `NotYet { LayerAbsent }`, "InitializeBodyComposition:
-       the new Mesh's animation nodes (ArmBoneBlend, AimOffset, LeftHandGrip, the head look-at, WillowFootIK and the
-       slot nodes)", layer "an animation-tree instance for the skeletal mesh". The `ReattachWeapons` script event and the
-       unread mesh flag follow it. **Maya's attachment 0 meets this;**
      - **the release of the old field**, for identifier `Mesh` or `CylinderComponent`, when the old `Pawn.Mesh` or
        `Pawn.CylinderComponent` is set and attached (or the port cannot tell whether it is attached) →
        `NotYet { NotRead }`, "releasing the old Mesh/CylinderComponent" (hub ruling, 20:03Z: the global list it is
        removed from is not read, section 4.5). An old field that is None, or set but not attached, releases nothing.
        With stock `Pawn` defaults the old cylinder is set, so a first build meets this;
+     - after the release check: identifier `Mesh` with a made `SkeletalMeshComponent` → `NotYet { LayerAbsent }`, "InitializeBodyComposition:
+       the new Mesh's animation nodes (ArmBoneBlend, AimOffset, LeftHandGrip, the head look-at, WillowFootIK and the
+       slot nodes)", layer "an animation-tree instance for the skeletal mesh". The `ReattachWeapons` script event and the
+       unread mesh flag follow it. **Maya's attachment 0 meets this;**
      - identifier `CylinderComponent`, after the release: `Pawn.CylinderComponent` and `CollisionComponent` are plain
        writes, answered;
      - the gear-likeness step, the mode-0 rendering setting and the light environment: render-side. **Hub ruling
@@ -390,10 +392,12 @@ the tracker.
 
 **Where Maya stops under these rulings**, all found in the preflight, before any write, in the walk's order. Each
 item is reached only once everything before it has an answer:
-1. attachment 0's `PostInitBodyComposition`: the release of the old `Pawn.Mesh` (`NotRead`). Her archetype
-   `Pawn_Siren` sets `Mesh`, so the old field is set. Unless the port can tell that it is not attached, **this is her
-   single first stop**;
-2. then attachment 0's animation nodes (`LayerAbsent`, the animation-tree instance);
+1. attachment 0's `PostInitBodyComposition`: the release of the old `Pawn.Mesh` (`NotRead`), only when the pawn
+   still holds a `Mesh`, attached, at the build. Her archetype `Pawn_Siren` sets `Mesh`, but whether the spawned pawn
+   still holds it then is not read (**UNVERIFIED**). If it does, this is her first stop. In the port, as #542
+   (b2b4de8a) measured, the pawn holds none, so this item passes;
+2. then attachment 0's animation nodes (`LayerAbsent`, the animation-tree instance): **in the port as measured, her
+   first stop**;
 3. then attachment 0's rendering hooks (`LayerAbsent`): the gear-likeness step, the mode-0 rendering setting (it is a
    primitive), and the light environment (`Pawn_Siren` sets `LightEnvironment`);
 4. attachment 1's socket attach to its skeletal parent with socket `Root` (`LayerAbsent`, the skeletal mesh data

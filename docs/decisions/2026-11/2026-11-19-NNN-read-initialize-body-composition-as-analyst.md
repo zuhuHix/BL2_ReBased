@@ -48,9 +48,10 @@ All three are port answers, UNVERIFIED.
   - calls `ReattachWeapons`.
 
   Under the rulings, Maya's build stops at these points, all found in preflight and in the walk's order:
-  1. attachment 0's release of the old `Pawn.Mesh` (`NotYet { NotRead }`: its global list is not read, and her
-     archetype sets `Mesh`). This is her single first stop;
-  2. attachment 0's animation-node lookups (`LayerAbsent`);
+  1. attachment 0's release of the old `Pawn.Mesh` (`NotYet { NotRead }`: its global list is not read), only if the
+     spawned pawn still holds an attached `Mesh` at the build. Her archetype sets `Mesh`, but that is not read
+     (UNVERIFIED). In the port, as #542 (b2b4de8a) measured, the pawn holds none;
+  2. attachment 0's animation-node lookups (`LayerAbsent`), which is her first stop in the port as measured;
   3. attachment 0's rendering hooks (`LayerAbsent`; under the hub ruling, the unread flags are taken as allowing);
   4. attachment 1's socket attach to socket `Root` (`LayerAbsent`, the mesh-data reader), then its `Parent` link
      (`NotRead`) and its hooks;
