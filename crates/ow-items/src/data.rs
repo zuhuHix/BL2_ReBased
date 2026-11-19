@@ -494,6 +494,119 @@ impl InventoryInstance {
     }
 }
 
+// --- A weapon named by a file ------------------------------------------------------------------------------------
+//
+// Moved here from `ow-host`'s `weapon.rs` (lane H4-WEAPON, decision 2026-11-16-61) by lane FIX-FIRE-TO-HIT (decision
+// 2026-11-19-06), so that the host's `--weapon FILE` and `ow-package --combat-run`'s `weapon:<file>` step read the
+// same file the same way (decision 61's "shared weapon builder" follow-up). The behaviour is unchanged. A weapon file
+// names game objects: keep it under ignored `local/`.
+
+/// A weapon named by a file ([`parse_weapon_spec`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WeaponSpec {
+    pub definition: String,
+    pub balance: Option<String>,
+    pub manufacturer: Option<String>,
+    /// (slot, part path), slots as `crate::registry::WEAPON_SLOTS` names them.
+    pub parts: Vec<(String, String)>,
+    pub prefix: Option<String>,
+    pub title: Option<String>,
+    pub level: i32,
+}
+
+/// Reads a weapon file: one `key value` per line, the keys `definition`, `balance`, `manufacturer`, `part <slot>`,
+/// `prefix`, `title` and `level`; empty lines and lines starting with `#` are skipped. `definition` and `level` are
+/// required; a key twice, an unknown key or slot, or a level outside 1 to 80 is refused.
+pub fn parse_weapon_spec(text: &str) -> Result<WeaponSpec, String> {
+    use crate::registry::WEAPON_SLOTS;
+    let mut spec = WeaponSpec::default();
+    let (mut definition, mut level) = (None, None);
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let bad = |what: &str| format!("weapon line {}: {what}: {line:?}", n + 1);
+        let mut words = line.split_whitespace();
+        let key = words.next().unwrap_or_default();
+        let once = |slot: &mut Option<String>, value: Option<&str>| -> Result<(), String> {
+            let value = value.ok_or_else(|| bad("no value"))?;
+            if slot.replace(value.to_string()).is_some() {
+                return Err(bad("given twice"));
+            }
+            Ok(())
+        };
+        match key {
+            "definition" => once(&mut definition, words.next())?,
+            "balance" => once(&mut spec.balance, words.next())?,
+            "manufacturer" => once(&mut spec.manufacturer, words.next())?,
+            "prefix" => once(&mut spec.prefix, words.next())?,
+            "title" => once(&mut spec.title, words.next())?,
+            "level" => {
+                let value = words
+                    .next()
+                    .and_then(|w| w.parse::<i32>().ok())
+                    .filter(|l| (1..=80).contains(l));
+                let value =
+                    value.ok_or_else(|| bad("level must be a whole number from 1 to 80"))?;
+                if level.replace(value).is_some() {
+                    return Err(bad("given twice"));
+                }
+            }
+            "part" => {
+                let (Some(slot), Some(path)) = (words.next(), words.next()) else {
+                    return Err(bad("part needs a slot and a path"));
+                };
+                if !WEAPON_SLOTS.contains(&slot) {
+                    return Err(bad("not a weapon slot"));
+                }
+                if spec.parts.iter().any(|(s, _)| s == slot) {
+                    return Err(bad("slot given twice"));
+                }
+                spec.parts.push((slot.to_string(), path.to_string()));
+            }
+            _ => return Err(bad("unknown key")),
+        }
+        if words.next().is_some() {
+            return Err(bad("more than one value"));
+        }
+    }
+    spec.definition = definition.ok_or("the weapon file names no definition")?;
+    spec.level = level.ok_or("the weapon file names no level")?;
+    Ok(spec)
+}
+
+/// The definition data of `spec`, as `ow-package --item-stats --data` builds it.
+pub fn weapon_definition_data(spec: &WeaponSpec) -> Result<DefinitionData, crate::ItemError> {
+    use crate::ItemError;
+    use crate::registry::WEAPON_SLOTS;
+    let path = |p: &str| ObjectPath::parse(p).map_err(|e| ItemError::BadData(format!("{p}: {e}")));
+    let opt = |p: &Option<String>| p.as_deref().map(path).transpose();
+    let mut parts: [Option<ObjectPath>; SLOT_COUNT] = Default::default();
+    for (slot, part) in &spec.parts {
+        let i = WEAPON_SLOTS
+            .iter()
+            .position(|s| s == slot)
+            .ok_or_else(|| ItemError::BadData(format!("{slot} is not a weapon slot")))?;
+        if let Some(cell) = parts.get_mut(i) {
+            *cell = Some(path(part)?);
+        }
+    }
+    Ok(DefinitionData {
+        kind: ItemKind::Weapon,
+        balance: opt(&spec.balance)?,
+        definition: path(&spec.definition)?,
+        manufacturer: opt(&spec.manufacturer)?,
+        manufacturer_grade: spec.level,
+        parts,
+        prefix: opt(&spec.prefix)?,
+        title: opt(&spec.title)?,
+        game_stage: GameStage(spec.level),
+        unique_id: 0,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

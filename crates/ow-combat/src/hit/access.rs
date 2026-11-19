@@ -197,6 +197,16 @@ pub fn path_of(vm: &Vm, o: Option<ObjRef>) -> String {
         .unwrap_or_default()
 }
 
+/// [`path_of`], or the object's name for a run-time object with no stock path (a weapon the run built); empty for
+/// None.
+pub fn label_of(vm: &Vm, o: Option<ObjRef>) -> String {
+    let path = path_of(vm, o);
+    match o {
+        Some(o) if path.is_empty() => name_of(vm, o),
+        _ => path,
+    }
+}
+
 /// Whether `o`'s class is `class_path` or derives from it. A class no package of the set holds is `false` (the C++
 /// catches the lookup's error the same way).
 pub fn is_a(vm: &mut Vm, o: ObjRef, class_path: &str) -> Result<bool, VmError> {

@@ -9,6 +9,19 @@ Release build (VS 18, `-T version=14.50`, `--parallel 2`) clean; ctest at `-j 2`
 verify_packages 9 packages, decoded bytes, counts and export fields match, all class bodies exact. Installed
 Phaselock test (ignored, `OW_BL2_ROOT`) passes in Off and Reference: the lift runs 43 frames, Z 0 to 200, never down;
 `OnActionSkillStarted` stops at the unbound `ActionSkill.OnActionSkillActivated`.
+**FIX-FIRE-TO-HIT (2026-11-19, pc-hummer, main 86c28d00 plus this lane):** AI-assisted (Claude Code, Opus 5.5).
+`cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 1,882 passed / 0 failed / 42
+ignored (7 new: 6 `ow-combat` shot tests, 1 `ow-world` replication-info fallback). Release CLI build clean.
+`decisions_index.py --check` OK (1 added); `crate_edges_test.py` 19 tests OK; Fire checker and combat checker
+self-tests pass. `verify_packages.py`: 9 packages, 3,339/3,339 class bodies exact with the C++ reader (same sources)
+and with this branch's Rust reader. Fresh C++ Release build (`-T version=14.50`, `OW_REQUIRE_TEST_TOOLS=ON`, `--parallel 4`)
+clean; `ctest -j 4` 173/173 passed, 0 failed, 126.12 s (the 7 Rust CTests included).
+Installed, Off: `--combat-run` (W6-COMBAT's 15 steps) 0 rows on main, 13 after (spawns pass; hits stop at the
+`WillowAIComponent` hold override; swings at unbound `WillowGameInfo.TravelPostCountdownInProcess`); Reference 29
+rows, identical before and after. `--slice-run` Off byte-identical before and after (exit 3 at the Pawn
+`IAIInterface` refusal, 12 steps; the checker cannot parse the partial report). New `weapon:` / `fire:` steps: Reference
+4 shots land (18 rows); Off each shot stops at the same hold override. No host or real-game run; every rule stays
+`UNVERIFIED` in game. Decision 2026-11-19-06; logs under ignored `local/p2/fix-fire-to-hit/`.
 
 **Object.Localize path correction (2026-11-18, desktop):** AI-assisted (Codex/GPT-6.1 Sol).
 The CLI now derives localization roots from the package store's absolute, lexically normalized root.

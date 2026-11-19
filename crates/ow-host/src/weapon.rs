@@ -44,7 +44,9 @@
 //!
 //! **A duplication to retire** (review r1 of PR #366): [`definition_data`] and the balance snapshot here repeat
 //! `ow-cli`'s `items_stats.rs` (`definition_data`, `snapshot`). The two can drift: that command evaluates `--data` at
-//! level 1 unless told otherwise, this one at the weapon's level. A shared builder in `ow-items` is a follow-up.
+//! level 1 unless told otherwise, this one at the weapon's level. The weapon file's reader and its definition data now
+//! live in `ow_items::data` (lane FIX-FIRE-TO-HIT), shared with `ow-package --combat-run`; `items_stats.rs` and the
+//! snapshot are still separate.
 //!
 //! Everything is UNVERIFIED in the running game.
 
@@ -59,12 +61,10 @@ use ow_balance::types::{
     AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount, Playthrough,
 };
 use ow_core::units::Rotator;
-use ow_core::{DetMap, NotYet, ObjectPath, ParityMode};
+use ow_core::{DetMap, NotYet, ParityMode};
 use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_items::ItemError;
-use ow_items::data::{DefinitionData, ItemKind};
-use ow_items::registry::WEAPON_SLOTS;
 use ow_items::stats::{instance_stat, instantiate_stats};
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{PropAddr, PropId};
@@ -100,76 +100,9 @@ pub fn target_damage() -> NotYet {
     )
 }
 
-/// A weapon named by a file (module documentation).
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct WeaponSpec {
-    pub definition: String,
-    pub balance: Option<String>,
-    pub manufacturer: Option<String>,
-    /// (slot, part path), slots as `ow_items::registry::WEAPON_SLOTS` names them.
-    pub parts: Vec<(String, String)>,
-    pub prefix: Option<String>,
-    pub title: Option<String>,
-    pub level: i32,
-}
-
-/// Reads a weapon file: one `key value` per line, the keys `definition`, `balance`, `manufacturer`, `part <slot>`,
-/// `prefix`, `title` and `level`; empty lines and lines starting with `#` are skipped. `definition` and `level` are
-/// required; a key twice, an unknown key or slot, or a level outside 1 to 80 is refused.
-pub fn parse_spec(text: &str) -> Result<WeaponSpec, String> {
-    let mut spec = WeaponSpec::default();
-    let (mut definition, mut level) = (None, None);
-    for (n, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let bad = |what: &str| format!("weapon line {}: {what}: {line:?}", n + 1);
-        let mut words = line.split_whitespace();
-        let key = words.next().unwrap_or_default();
-        let once = |slot: &mut Option<String>, value: Option<&str>| -> Result<(), String> {
-            let value = value.ok_or_else(|| bad("no value"))?;
-            if slot.replace(value.to_string()).is_some() {
-                return Err(bad("given twice"));
-            }
-            Ok(())
-        };
-        match key {
-            "definition" => once(&mut definition, words.next())?,
-            "balance" => once(&mut spec.balance, words.next())?,
-            "manufacturer" => once(&mut spec.manufacturer, words.next())?,
-            "prefix" => once(&mut spec.prefix, words.next())?,
-            "title" => once(&mut spec.title, words.next())?,
-            "level" => {
-                let value = words.next().and_then(|w| w.parse::<i32>().ok()).filter(|l| (1..=80).contains(l));
-                let value = value.ok_or_else(|| bad("level must be a whole number from 1 to 80"))?;
-                if level.replace(value).is_some() {
-                    return Err(bad("given twice"));
-                }
-            }
-            "part" => {
-                let (Some(slot), Some(path)) = (words.next(), words.next()) else {
-                    return Err(bad("part needs a slot and a path"));
-                };
-                if !WEAPON_SLOTS.contains(&slot) {
-                    return Err(bad("not a weapon slot"));
-                }
-                if spec.parts.iter().any(|(s, _)| s == slot) {
-                    return Err(bad("slot given twice"));
-                }
-                spec.parts.push((slot.to_string(), path.to_string()));
-            }
-            _ => return Err(bad("unknown key")),
-        }
-        if words.next().is_some() {
-            return Err(bad("more than one value"));
-        }
-    }
-    spec.definition = definition.ok_or("the weapon file names no definition")?;
-    spec.level = level.ok_or("the weapon file names no level")?;
-    Ok(spec)
-}
+/// A weapon named by a file, its reader and its definition data: `ow_items::data`'s since lane FIX-FIRE-TO-HIT
+/// (decision 2026-11-19-06), which `ow-package --combat-run`'s `weapon:<file>` step shares; the names are kept.
+pub use ow_items::data::{WeaponSpec, parse_weapon_spec as parse_spec, weapon_definition_data as definition_data};
 
 /// The class whose change notifications [`evaluate`] records.
 pub const WEAPON_CLASS: &str = "WillowGame.WillowWeapon";
@@ -229,37 +162,6 @@ fn snapshot(level: i32) -> Result<BalanceSnapshot, ItemError> {
         AwesomeLevel::new(0),
         LevelCapUpgrades::ALL,
     )?)
-}
-
-fn object_path(p: &str) -> Result<ObjectPath, ItemError> {
-    ObjectPath::parse(p).map_err(|e| ItemError::BadData(format!("{p}: {e}")))
-}
-
-/// The definition data of `spec`, as `ow-package --item-stats --data` builds it.
-pub fn definition_data(spec: &WeaponSpec) -> Result<DefinitionData, ItemError> {
-    let opt = |p: &Option<String>| p.as_deref().map(object_path).transpose();
-    let mut parts: [Option<ObjectPath>; 9] = Default::default();
-    for (slot, part) in &spec.parts {
-        let i = WEAPON_SLOTS
-            .iter()
-            .position(|s| s == slot)
-            .ok_or_else(|| ItemError::BadData(format!("{slot} is not a weapon slot")))?;
-        if let Some(cell) = parts.get_mut(i) {
-            *cell = Some(object_path(part)?);
-        }
-    }
-    Ok(DefinitionData {
-        kind: ItemKind::Weapon,
-        balance: opt(&spec.balance)?,
-        definition: object_path(&spec.definition)?,
-        manufacturer: opt(&spec.manufacturer)?,
-        manufacturer_grade: spec.level,
-        parts,
-        prefix: opt(&spec.prefix)?,
-        title: opt(&spec.title)?,
-        game_stage: GameStage(spec.level),
-        unique_id: 0,
-    })
 }
 
 /// Evaluates `spec` against the install at `cooked` (module documentation).

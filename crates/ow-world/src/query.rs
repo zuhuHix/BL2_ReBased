@@ -16,6 +16,11 @@
 //!   engine state register them: resource pools (W5-POOLS, this crate), inventory and equipped items (W5-EQUIP,
 //!   `ow-inventory`), player skills (W6-SKILLS), the game replication info (the map load, not built yet; added by
 //!   FIX-PLAYTHROUGH-OFF). A kind with no handler is `NotYet { LayerAbsent }` naming that layer.
+//! - The game replication info with no handler registered (lane FIX-FIRE-TO-HIT, decision 2026-11-19-06): a query
+//!   that follows the actor list answers the `GRI` of the `WorldInfo` placed there, the object the playthrough native
+//!   reads (NATIVE_PLAYTHROUGH_ATTRIBUTES.md section 3; in stock UE3 `GameInfo` spawns it into `WorldInfo.GRI`). No
+//!   `WorldInfo` placed, or a None `GRI`, stays `NotYet { LayerAbsent }`: a world that has not made its replication
+//!   info does not say, and is not read as "no replication info" (the note's 1.0 row). UNVERIFIED in the running game.
 //!   The world itself answers none: how the game finds the player controller from a source, or redirects a pawn's
 //!   attribute context, is not read here (NATIVE_ATTRIBUTES.md sections 5 and 10).
 //!
@@ -248,9 +253,37 @@ impl WorldHooks for Hooks {
             )
             .into());
         };
-        let handler = self.read("an engine query", |s| s.handlers.get(&kind).cloned())?;
+        let (handler, actors) = self.read("an engine query", |s| {
+            (s.handlers.get(&kind).cloned(), s.actors.clone())
+        })?;
         match handler {
             Some(f) => f(q, source, w),
+            // The replication info falls back to the placed WorldInfo's GRI (module documentation).
+            None if kind == QueryKind::GameReplicationInfo && actors.is_some() => {
+                let info = actors
+                    .as_ref()
+                    .map(|a| {
+                        a.try_borrow().map(|a| a.world_info()).map_err(|_| {
+                            AttrError::World(
+                                "the game replication info: the actor list is borrowed".into(),
+                            )
+                        })
+                    })
+                    .transpose()?
+                    .flatten();
+                let gri = match info {
+                    Some(info) => world_info_object(w.space, info, "GRI")?,
+                    None => None,
+                };
+                gri.map(Some).ok_or_else(|| {
+                    NotYet::layer_absent(
+                        format!("engine query {q:?} from {source:?} (no placed WorldInfo, or its GRI is None)"),
+                        kind.layer(),
+                        RECORD,
+                    )
+                    .into()
+                })
+            }
             None => Err(NotYet::layer_absent(
                 format!("engine query {q:?} from {source:?}"),
                 kind.layer(),
@@ -264,17 +297,27 @@ impl WorldHooks for Hooks {
 /// The `Game` reference of the `WorldInfo` `info`: `Ok(None)` for a None reference. A class without an object property
 /// `Game` is bad data, never a default.
 fn world_info_game(space: &ObjectSpace, info: ObjRef) -> Result<Option<ObjRef>, AttrError> {
+    world_info_object(space, info, "Game")
+}
+
+/// The object reference `name` of the `WorldInfo` `info` (`Game`, `GRI`): `Ok(None)` for a None reference. A class
+/// without an object property of that name is bad data, never a default.
+fn world_info_object(
+    space: &ObjectSpace,
+    info: ObjRef,
+    name: &str,
+) -> Result<Option<ObjRef>, AttrError> {
     let class = space.heap.get(info)?.class;
-    let Some(prop) = space.prop(class, "Game") else {
+    let Some(prop) = space.prop(class, name) else {
         return Err(AttrError::BadData {
-            reason: "the game info object: the placed WorldInfo's class declares no Game".into(),
+            reason: format!("the placed WorldInfo's class declares no {name}").into(),
         });
     };
     match space.read(info, prop.into())? {
         Value::Object(r) => Ok(*r),
         other => Err(AttrError::BadData {
             reason: format!(
-                "the game info object: WorldInfo.Game holds {}, not an object reference",
+                "WorldInfo.{name} holds {}, not an object reference",
                 other.kind_name()
             )
             .into(),
@@ -520,6 +563,50 @@ mod tests {
             ),
             Missing::LayerAbsent(_)
         ));
+    }
+
+    /// Decision 2026-11-19-06: with no handler registered, a query that follows an actor list answers the placed
+    /// `WorldInfo`'s `GRI`; none placed, or a None `GRI`, stays `NotYet { LayerAbsent }`; a class without `GRI` is
+    /// bad data; a registered handler wins. Invented classes and objects.
+    #[test]
+    fn the_game_replication_info_falls_back_to_the_placed_world_infos_gri() {
+        use ow_object::layout::{PropKind, PropertyDecl};
+        let mut space = ObjectSpace::new();
+        let actor = space.classes.define("Invented.Actor", None, Vec::new()).unwrap();
+        let props = vec![
+            PropertyDecl::new(space.names.intern("Game"), PropKind::Object { class: actor }),
+            PropertyDecl::new(space.names.intern("GRI"), PropKind::Object { class: actor }),
+        ];
+        let info_class = space.classes.define("Invented.WorldInfo", Some(actor), props).unwrap();
+        let info = space.alloc(info_class, "WorldInfo_0", None, Origin::Runtime).unwrap();
+        let gri = space.alloc(actor, "GRI_0", None, Origin::Runtime).unwrap();
+        let other = space.alloc(actor, "Other_0", None, Origin::Runtime).unwrap();
+        let mut vm = Vm::new(
+            space,
+            DefStore::new_empty(),
+            Rc::new(AttributeSystem::new_empty()),
+            ParityMode::Off,
+        );
+        let q = install(&mut vm).unwrap();
+        let actors = Rc::new(RefCell::new(Actors::new(actor)));
+        q.borrow_mut().follow_world_info(actors.clone());
+        let query = |vm: &mut Vm| vm.engine_query(EngineQuery::GameReplicationInfo, other);
+        // Nothing placed yet, then a None GRI: the world does not say.
+        assert!(matches!(missing(query(&mut vm).unwrap_err()), Missing::LayerAbsent(_)));
+        actors.borrow_mut().place_world_info(info).unwrap();
+        assert!(matches!(missing(query(&mut vm).unwrap_err()), Missing::LayerAbsent(_)));
+        let prop = vm.space.prop(info_class, "GRI").unwrap();
+        vm.space.write(info, prop.into(), Value::Object(Some(gri))).unwrap();
+        assert_eq!(query(&mut vm).unwrap(), Some(gri));
+        // A placed WorldInfo whose class declares no GRI is bad data, never a default.
+        let plain = Rc::new(RefCell::new(Actors::new(actor)));
+        plain.borrow_mut().place_world_info(other).unwrap();
+        q.borrow_mut().follow_world_info(plain);
+        assert!(matches!(query(&mut vm).unwrap_err(), AttrError::BadData { .. }));
+        // A registered handler wins over the WorldInfo.
+        let handler: QueryFn = Rc::new(move |_q, _source, _w| Ok(Some(other)));
+        q.borrow_mut().register(QueryKind::GameReplicationInfo, handler).unwrap();
+        assert_eq!(query(&mut vm).unwrap(), Some(other));
     }
 
     #[test]
