@@ -110,14 +110,15 @@ and `ApplyInternalSlotEffectModifiers`, both already in NATIVE_INDEX.md, with th
 
 No rounding; single precision.
 
-After it, the script goes on to the name parts:
-1. `ChooseRandomNameParts` (native, unread);
+After it, the script goes on to the name parts, **only on the name-part branch** (corrected by
+NATIVE_CACHE_WEAPON_CARD.md section 1, read with the converted jump targets):
+1. `ChooseRandomNameParts` (native, read there);
 2. `ComputeValueOfParts` (its second call);
 3. `InitializeAttributeSlotsForNameParts` and `ApplyInternalSlotEffectModifiers` (both in the index);
-4. `ApplyNamePartWeaponAttributeEffects` (script).
+4. `ApplyNamePartWeaponAttributeEffects` (script);
+5. `RecomputeNormalizedDamageValues` (its second call, still inside the branch).
 
-Then `RecomputeNormalizedDamageValues` and `ComputeValueOfParts` (its third call) run again, then `CacheWeaponCard`
-(native, unread),
+Then, on every path: `ComputeValueOfParts` (its third call), `CacheWeaponCard` (native, read in outline there),
 `RecomputeAttributeBaseValues` (in the index), `ClientInitializeFromWeaponTypeDefinition` (script) and
 `GetFiringModeDefinition` (in the index).
 
@@ -139,8 +140,7 @@ bound, and the equip run's weapons list is not on this machine.
 
 1. Whether `ComputeValueOfParts` is called on items outside the spawn (the shop and the save-load paths), and with
    what part data.
-2. `ChooseRandomNameParts` and `CacheWeaponCard`, the next unread natives of the weapon's `InitializeInternal`. Read since in NATIVE_CACHE_WEAPON_CARD.md, which also corrects the branch's extent in section 5 (the
-   second `RecomputeNormalizedDamageValues` is inside the name-part branch; the third `ComputeValueOfParts` is not).
+2. `ChooseRandomNameParts` and `CacheWeaponCard`: read since, in NATIVE_CACHE_WEAPON_CARD.md.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
