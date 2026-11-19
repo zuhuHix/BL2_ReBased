@@ -661,7 +661,12 @@ pub fn compute(vm: &mut Vm, weapon: ObjRef) -> Result<Option<Card>, VmError> {
     let Some(weapon_type) = object_of(&field(vm, &data, "WeaponTypeDefinition")?, NATIVE)? else {
         return Ok(None);
     };
-    // 2. An unloaded weapon type is refused here, loading nothing (NATIVE_CARD_SLOT_COUNT.md section 4, step 3).
+    // 2. A weapon type whose load already failed gives that stored error again, which changes nothing (review r1 of
+    // #534); any other unloaded weapon type is refused here, loading nothing (NATIVE_CARD_SLOT_COUNT.md section 4,
+    // step 3).
+    if vm.defs.is_failed(&vm.space, weapon_type) {
+        loaded(vm, weapon_type)?;
+    }
     if vm.defs.is_unloaded(&vm.space, weapon_type) {
         return Err(unloaded_type(vm, weapon_type));
     }
