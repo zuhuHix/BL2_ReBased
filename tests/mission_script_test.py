@@ -1661,18 +1661,66 @@ def build_tracker_mission():
 
 
 failures = []
-# Checks that failed after a --slice-run met a NotYet (a rule the Rust port has not read or ported yet): named not-yets, never
-# passes. A run that met one says so in its report ("not_yet", and "stopped" when a step stopped there; lane
-# FIX-MISSION-SCRIPT-TEST, decision 2026-11-19-37), and every failing check up to the next run is graded against it.
+# Checks that failed because a --slice-run met a NotYet (a rule the Rust port has not read or ported yet): named not-yets, never
+# passes. A run that met one says so in its report ("stopped" when a step stopped there, and "not_yet" for every NotYet it met;
+# lane FIX-MISSION-SCRIPT-TEST, decision 2026-11-19-37). A failing check is graded against the run it is given (`run`) only, and
+# only when it waits on that NotYet (review r1 of #423); every other failing check is a failure.
 not_yets = []
-last_not_yet = None
 
 
-def check(label, condition, detail=''):
+def waits_on(run, at, needs):
+    """The NotYet text a failing check on `run` waits on, or None (then it is a failure).
+
+    - A run that stopped: a check that reads the whole run (`at` None), or a step the run did not finish (the stop step, which is
+      the last record, or one with no record), waits on the stop. A check that reads only finished steps does not.
+    - A run that met a NotYet, recorded it and went on: only a check marked as depending on it (`needs`, a text the NotYet names)
+      waits on it."""
+    if run is None:
+        return None
+    stop = run.get('stopped')
+    if stop:
+        names = [step['step'] for step in run['steps']]
+        if not names or names[-1] != stop['step']:
+            raise ValueError(f"a stopped run whose last record is not its stop step ({stop['step']}): {names}")
+        finished = names[:-1]
+        text = f"stopped at {stop['step']}: {stop['not_yet']}"
+        if at is None:
+            return text
+        return text if any(name not in finished or name == stop['step'] for name in at) else None
+    if needs:
+        for text in run.get('not_yet', []):
+            if needs in text:
+                return text
+    return None
+
+
+# The grading itself, on invented reports (review r1 of #423): a check on a finished step of a stopped run fails; the stop step, a
+# step not run and the whole run wait on the stop; a recorded NotYet is waited on only by a check that names it.
+_stopped = {'steps': [{'step': 'accept'}, {'step': 'tick:2'}], 'stopped': {'step': 'tick:2', 'not_yet': 'an invented NotYet'},
+            'not_yet': ['an invented NotYet']}
+_recorded = {'steps': [{'step': 'accept'}, {'step': 'tick:2'}], 'not_yet': ['BehaviorBase.RunBehaviors: an invented NotYet']}
+assert waits_on(None, None, None) is None
+assert waits_on(_stopped, ['accept'], None) is None
+assert waits_on(_stopped, ['tick:2'], None) == 'stopped at tick:2: an invented NotYet'
+assert waits_on(_stopped, ['turnin'], None) and waits_on(_stopped, None, None)
+assert waits_on(_recorded, None, None) is None and waits_on(_recorded, ['tick:2'], 'SkillManager') is None
+assert waits_on(_recorded, None, 'BehaviorBase.RunBehaviors') == 'BehaviorBase.RunBehaviors: an invented NotYet'
+assert waits_on({'steps': [], 'not_yet': []}, None, 'BehaviorBase.RunBehaviors') is None
+try:
+    waits_on({'steps': [{'step': 'accept'}], 'stopped': {'step': 'tick:2', 'not_yet': 'x'}}, None, None)
+    raise AssertionError('a stopped run whose last record is not its stop step was accepted')
+except ValueError:
+    pass
+
+
+def check(label, condition, detail='', run=None, at=None, needs=None):
+    """A check. `run` is the --slice-run report it reads, `at` the steps it reads (None: the whole run), `needs` the NotYet it
+    depends on when the run records one and goes on (waits_on)."""
     if condition:
         return
-    if last_not_yet:
-        not_yets.append(f'{label}: not yet: {last_not_yet}')
+    why = waits_on(run, at, needs)
+    if why:
+        not_yets.append(f'{label}: not yet: {why}')
     else:
         failures.append(f'{label}: {detail}')
 
@@ -1843,33 +1891,28 @@ with tempfile.TemporaryDirectory() as folder:
     (root / 'Sanctuary_Dynamic.upk').write_bytes(build_dynamic().build())
 
     def slice_run(*steps):
-        global last_not_yet
         proc = subprocess.run([reader, str(root / 'Sanctuary_Dynamic.upk'), '--slice-run', 'ToyMission', '--cooked', str(root), *steps],
                               capture_output=True, text=True, encoding='utf-8')
         assert proc.stdout.strip(), ('no JSON output', proc.returncode, proc.stderr)
-        got = json.loads(proc.stdout)
-        stop = got.get('stopped')
-        met = got.get('not_yet', [])
-        last_not_yet = (f"stopped at {stop['step']}: {stop['not_yet']}" if stop else None) or (met[0] if met else None)
-        return proc.returncode, got
+        return proc.returncode, json.loads(proc.stdout)
 
     def remote(step): return [e['a'] for e in step['events'] if e['kind'] == 'remote_event']
     code, got = slice_run('accept', 'spawn', 'range', 'turnin')
-    check('D exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('D exit and errors', code == 0 and got['errors'] == [], (code, got['errors']), run=got)
     steps = {step['step']: step for step in got['steps']}
     # before the spawn the provider is not a consumer: the accept (Active) notifications reach no condition
-    check('D accept: no sequence events', remote(steps['accept']) == [], remote(steps['accept']))
+    check('D accept: no sequence events', remote(steps['accept']) == [], remote(steps['accept']), run=got, at=['accept'])
     # registration: pass 1 enables Idle, then each condition's verdict is applied in sequence order (objective Active in the active set,
     # RestrictA's set is active, RestrictB's is not, mission not Complete, MutexA's {Active} holds, MutexB's {ReadyToTurnIn} does not)
     # (Idle's IdleOn follows its Behavior_SpecialMove through the move's output 0, which the bridge's boundary handler selects as the script does)
-    check('D spawn registration', remote(steps['spawn']) == ['IdleOn', 'ObjSeqOn', 'RestrictAOn', 'MutexAOn'], remote(steps['spawn']))
+    check('D spawn registration', remote(steps['spawn']) == ['IdleOn', 'ObjSeqOn', 'RestrictAOn', 'MutexAOn'], remote(steps['spawn']), run=got, at=['spawn'])
     # the objective's progress write already makes it Complete (status Active, progress = count): ObjSeq and RestrictA turn off at the
     # progress notification; the set completion makes the mission ReadyToTurnIn: MutexB enables and disables MutexA first (the mutex)
-    check('D range', remote(steps['range']) == ['ObjSeqOff', 'RestrictAOff', 'MutexAOff', 'MutexBOn'], remote(steps['range']))
+    check('D range', remote(steps['range']) == ['ObjSeqOff', 'RestrictAOff', 'MutexAOff', 'MutexBOn'], remote(steps['range']), run=got, at=['range'])
     # Complete: the mission-level condition turns on, MutexB's {ReadyToTurnIn} no longer holds
-    check('D turn-in', remote(steps['turnin']) == ['MissionLevelOn', 'MutexBOff'], remote(steps['turnin']))
+    check('D turn-in', remote(steps['turnin']) == ['MissionLevelOn', 'MutexBOff'], remote(steps['turnin']), run=got, at=['turnin'])
     # transitions only: the sequences end in the state the last verdicts left
-    check('D final enabled sequences', sorted(got['dummy_enabled_sequences']) == ['Idle', 'MissionLevel'], got['dummy_enabled_sequences'])
+    check('D final enabled sequences', sorted(got['dummy_enabled_sequences']) == ['Idle', 'MissionLevel'], got['dummy_enabled_sequences'], run=got)
 
     # Scenario S7 (swap 7): the level-up's skill points come from the globals' formula and the new maximum health from the health pool's data, both
     # as host events after the Level event. The reward at stage 4 is 27; R(4) 30, R(5) 48, R(6) 70.
@@ -1884,18 +1927,18 @@ with tempfile.TemporaryDirectory() as folder:
     flow = ('accept', 'range', 'turnin', 'tick:0.5')
     # 4 -> 5 (pool 30 + 27 = 57): the first level with a point
     code, got, events = level_events('stage:4', 'player:4:30', *flow)
-    check('S7 4 -> 5 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
-    check('S7 4 -> 5 awards 1 point, health 10 x 1.5^5', leveled(events, 5, 1, 75.9375), events)
-    check('S7 no stubs and no notes', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']))
+    check('S7 4 -> 5 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']), run=got)
+    check('S7 4 -> 5 awards 1 point, health 10 x 1.5^5', leveled(events, 5, 1, 75.9375), events, run=got)
+    check('S7 no stubs and no notes', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']), run=got)
     # 5 -> 6 (pool 48 + 27 = 75)
     code, got, events = level_events('stage:4', 'player:5:48', *flow)
-    check('S7 5 -> 6 awards 1 point, health 10 x 1.5^6', code == 0 and got['errors'] == [] and leveled(events, 6, 1, 113.90625), (events, got['errors']))
+    check('S7 5 -> 6 awards 1 point, health 10 x 1.5^6', code == 0 and got['errors'] == [] and leveled(events, 6, 1, 113.90625), (events, got['errors']), run=got)
     # 3 -> 4 (pool 16 + 27 = 43): below level 5 the formula gives 0, and the event still says so
     code, got, events = level_events('stage:4', 'player:3:16', *flow)
-    check('S7 3 -> 4 awards no point', code == 0 and got['errors'] == [] and leveled(events, 4, 0, 50.625), (events, got['errors']))
+    check('S7 3 -> 4 awards no point', code == 0 and got['errors'] == [] and leveled(events, 4, 0, 50.625), (events, got['errors']), run=got)
     # two levels from one reward (pool 44 + 27 = 71 >= R(6)): one event with both points, the health of the last level
     code, got, events = level_events('stage:4', 'player:4:44', *flow)
-    check('S7 4 -> 6 awards 2 points once', code == 0 and got['errors'] == [] and leveled(events, 6, 2, 113.90625), (events, got['errors']))
+    check('S7 4 -> 6 awards 2 points once', code == 0 and got['errors'] == [] and leveled(events, 6, 2, 113.90625), (events, got['errors']), run=got)
     # Scenario S7b (swap 7b): the pool rebase and the OnLevelUp refill (NATIVE_LEVEL_UP_ATTRIBUTES.md). The pool is seeded for the player's level (player:) with
     # the host's current health (health:); a level-up is made by giving the pool the next level's experience (R(5) = 48, R(6) = 70, R(7) = 96) and ticking.
     # Health at level 4 / 5 / 6 / 7 is 10 x 1.5^level: 50.625, 75.9375, 113.90625, 170.859375. The guard is OnExpLevelChange's: game time since the
@@ -1907,20 +1950,20 @@ with tempfile.TemporaryDirectory() as folder:
     def near(pairs, *wanted): return len(pairs) == len(wanted) and all(abs(a - x) < 1e-3 and abs(b - y) < 1e-3 for (a, b), (x, y) in zip(pairs, wanted))
     # a full pool follows the new maximum with no behavior run (inside the guard: t = 0.5)
     code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
-    check('S7b full pool follows the new maximum', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:0.5'), (75.9375, 75.9375)), (health_of(got, 'tick:0.5'), got['errors']))
+    check('S7b full pool follows the new maximum', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:0.5'), (75.9375, 75.9375)), (health_of(got, 'tick:0.5'), got['errors']), run=got)
     # a half pool keeps its current value through the rebase when the behaviors do not run (inside the guard)
     code, got = slice_run('stage:4', 'player:4:48', 'health:20', 'tick:0.5')
-    check('S7b half pool keeps current through the rebase', code == 0 and near(health_of(got, 'tick:0.5'), (20.0, 75.9375)), health_of(got, 'tick:0.5'))
+    check('S7b half pool keeps current through the rebase', code == 0 and near(health_of(got, 'tick:0.5'), (20.0, 75.9375)), health_of(got, 'tick:0.5'), run=got)
     # the same level-up after the guard: the level-up behavior adds the maximum to current and the pool clamps it: full
     code, got = slice_run('stage:4', 'player:4:48', 'health:20', 'tick:2')
-    check('S7b half pool is refilled by the level-up behavior', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:2'), (75.9375, 75.9375)), health_of(got, 'tick:2'))
-    check('S7b effects of a pool the VM lacks are not added, no stubs', got['script']['stubs'] == [], got['script']['stubs'])
+    check('S7b half pool is refilled by the level-up behavior', code == 0 and got['errors'] == [] and near(health_of(got, 'tick:2'), (75.9375, 75.9375)), health_of(got, 'tick:2'), run=got, needs='BehaviorBase.RunBehaviors')
+    check('S7b effects of a pool the VM lacks are not added, no stubs', got['script']['stubs'] == [], got['script']['stubs'], run=got)
     # two level-ups within 1 s refill only once: the first (t = 2.1) refills, the second (t = 2.2, 0.1 s later) leaves current, the third (t = 3.7) refills again
     code, got = slice_run('stage:4', 'tick:2', 'player:4:48', 'health:20', 'tick:0.1', 'player:5:70', 'health:20', 'tick:0.1', 'player:6:96', 'health:20', 'tick:1.5')
     ticks = [s for s in got['steps'] if s['step'].startswith('tick:')]
     per_step = [[(float(e['a']), float(e['b'])) for e in s['events'] if e['kind'] == 'health'] for s in ticks]
     check('S7b two level-ups within 1 s refill once', code == 0 and got['errors'] == [] and len(per_step) == 4 and per_step[0] == []
-          and near(per_step[1], (75.9375, 75.9375)) and near(per_step[2], (20.0, 113.90625)) and near(per_step[3], (170.859375, 170.859375)), (per_step, got['errors']))
+          and near(per_step[1], (75.9375, 75.9375)) and near(per_step[2], (20.0, 113.90625)) and near(per_step[3], (170.859375, 170.859375)), (per_step, got['errors']), run=got, needs='BehaviorBase.RunBehaviors')
     # Scenario S9 (swap 9): a natural level-up (ExpLevelUp(false): bNaturalLevelup) also runs PlayerClass.OnLevelUpNaturally. Its skill's effect targets the held
     # weapon's damage (a stack attribute of a weapon the VM does not have), so the host gets a weapon_damage_scale event: the effect's value (0.75) and the
     # skill's duration (12.5 s), both from the invented data, after the level's own events. A level-up that is not natural (ExpLevelUp(true), the step
@@ -1930,34 +1973,32 @@ with tempfile.TemporaryDirectory() as folder:
 
     def kinds_of(got, step): return [e['kind'] for s in got['steps'] if s['step'] == step for e in s['events']]
     code, got = slice_run('stage:4', 'player:4:48', 'tick:2')
-    check('S9 natural level-up: one event with the data value and duration', code == 0 and got['errors'] == [] and scale_events(got) == [('tick:2', 0.75, 12.5)], (scale_events(got), got['errors']))
-    check('S9 the event follows the level, points, maximum, health and cooldown events', kinds_of(got, 'tick:2') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown', 'weapon_damage_scale'], kinds_of(got, 'tick:2'))
-    check('S9 the weapon effect is applied by the host: no stub, no note about it', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']))
+    check('S9 natural level-up: one event with the data value and duration', code == 0 and got['errors'] == [] and scale_events(got) == [('tick:2', 0.75, 12.5)], (scale_events(got), got['errors']), run=got, needs='BehaviorBase.RunBehaviors')
+    check('S9 the event follows the level, points, maximum, health and cooldown events', kinds_of(got, 'tick:2') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown', 'weapon_damage_scale'], kinds_of(got, 'tick:2'), run=got, needs='BehaviorBase.RunBehaviors')
+    check('S9 the weapon effect is applied by the host: no stub, no note about it', got['script']['stubs'] == [] and got['script']['notes'] == [], (got['script']['stubs'], got['script']['notes']), run=got)
     code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
-    check('S9 natural level-up inside the 1 s guard: no event', code == 0 and got['errors'] == [] and scale_events(got) == [] and 'level' in kinds_of(got, 'tick:0.5'), (scale_events(got), kinds_of(got, 'tick:0.5')))
+    check('S9 natural level-up inside the 1 s guard: no event', code == 0 and got['errors'] == [] and scale_events(got) == [] and 'level' in kinds_of(got, 'tick:0.5'), (scale_events(got), kinds_of(got, 'tick:0.5')), run=got)
     code, got = slice_run('stage:4', 'tick:2', 'player:4:0', 'cheatlevel')
     check('S9 not-natural level-up past the guard: the level-up behavior ran (health, cooldown), no weapon event',
-          code == 0 and got['errors'] == [] and scale_events(got) == [] and kinds_of(got, 'cheatlevel') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown'], (scale_events(got), kinds_of(got, 'cheatlevel')))
-    check('S9 not-natural level-up: no stubs', got['script']['stubs'] == [], got['script']['stubs'])
+          code == 0 and got['errors'] == [] and scale_events(got) == [] and kinds_of(got, 'cheatlevel') == ['level', 'skill_points', 'max_health', 'health', 'action_skill_cooldown'], (scale_events(got), kinds_of(got, 'cheatlevel')), run=got, needs='BehaviorBase.RunBehaviors')
+    check('S9 not-natural level-up: no stubs', got['script']['stubs'] == [], got['script']['stubs'], run=got)
     code, got = slice_run('stage:4', 'tick:2', 'player:4:48', 'tick:0.1', 'player:5:70', 'tick:0.1', 'player:6:96', 'tick:1.5')
     check('S9 each natural level-up outside the guard gives its own event (t = 2.1 and 3.7, not 2.2)',
-          code == 0 and got['errors'] == [] and [(s, a, b) for s, a, b in scale_events(got)] == [('tick:0.1', 0.75, 12.5), ('tick:1.5', 0.75, 12.5)], scale_events(got))
+          code == 0 and got['errors'] == [] and [(s, a, b) for s, a, b in scale_events(got)] == [('tick:0.1', 0.75, 12.5), ('tick:1.5', 0.75, 12.5)], scale_events(got), run=got, needs='BehaviorBase.RunBehaviors')
     # Scenario S10 (swap 10): the OnLevelUp skill's second effect scales the action-skill cooldown's current value by the pool's minimum (invented: 0.25, so a Scale
     # of the data's value and not a hard-coded reset). The VM has no cooldown current value (the host keeps it), so it hands over the modifier type and the value
     # evaluated from the data, in the OnLevelUp collection, hence for a natural and a not-natural level-up alike (the script's rule), and only past the 1 s guard.
     def cooldown_events(got):
         return [(s['step'], e['a'], float(e['b'])) for s in got['steps'] for e in s['events'] if e['kind'] == 'action_skill_cooldown']
     code, got = slice_run('stage:4', 'player:4:48', 'tick:2')
-    check('S10 natural level-up: one Scale event with the pool minimum from the data', code == 0 and got['errors'] == [] and cooldown_events(got) == [('tick:2', 'Scale', 0.25)], (cooldown_events(got), got['errors']))
+    check('S10 natural level-up: one Scale event with the pool minimum from the data', code == 0 and got['errors'] == [] and cooldown_events(got) == [('tick:2', 'Scale', 0.25)], (cooldown_events(got), got['errors']), run=got, needs='BehaviorBase.RunBehaviors')
     code, got = slice_run('stage:4', 'tick:2', 'player:4:0', 'cheatlevel')
-    check('S10 not-natural level-up: the same event (OnLevelUp runs for it)', code == 0 and cooldown_events(got) == [('cheatlevel', 'Scale', 0.25)], cooldown_events(got))
+    check('S10 not-natural level-up: the same event (OnLevelUp runs for it)', code == 0 and cooldown_events(got) == [('cheatlevel', 'Scale', 0.25)], cooldown_events(got), run=got, needs='BehaviorBase.RunBehaviors')
     code, got = slice_run('stage:4', 'player:4:48', 'tick:0.5')
-    check('S10 inside the 1 s guard: no event', code == 0 and cooldown_events(got) == [], cooldown_events(got))
+    check('S10 inside the 1 s guard: no event', code == 0 and cooldown_events(got) == [], cooldown_events(got), run=got)
     # no level change (27 < R(5)): neither event is sent
     code, got, events = level_events('stage:4', 'player:4:0', *flow)
-    check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events)
-
-    last_not_yet = None   # the --slice-run scenarios end here
+    check('S7 no level change, no points or health event', code == 0 and [kind for kind, _ in events] == ['experience'], events, run=got)
 
     # Scenario E: Behavior_TriggerDialogEvent through --mission-run (src/dialog.*), NATIVE_DIALOG.md.
     (root / 'DialogMission.upk').write_bytes(build_dialog_mission().build())
@@ -2093,21 +2134,21 @@ with tempfile.TemporaryDirectory() as folder:
     # F1: Marcus's touch is ignored; the player's completes the objective (the toy set can complete the mission) with exactly one update;
     # touching again after it completed changes nothing
     code, got = slice_run('touch:marcus', 'accept', 'touch:marcus', 'touch:player', 'untouch:player', 'touch:player')
-    check('F1 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('F1 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']), run=got)
     status = [step['status'] for step in got['steps']]
-    check('F1 Marcus ignored, the player completes it once', status == [0, 1, 1, 2, 2, 2] and updates(got) == 1, (status, updates(got)))
+    check('F1 Marcus ignored, the player completes it once', status == [0, 1, 1, 2, 2, 2] and updates(got) == 1, (status, updates(got)), run=got)
 
     # F2: not updatable (the mission is not started): a touch changes nothing; the player already inside when the set activates completes the
     # objective at that moment, without leaving and re-entering
     code, got = slice_run('touch:player', 'accept')
-    check('F2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']))
+    check('F2 exit and errors', code == 0 and got['errors'] == [], (code, got['errors']), run=got)
     status = [step['status'] for step in got['steps']]
     check('F2 no update while not updatable, then the set-changed reaction completes it', status == [0, 2] and updates(got) == 1
-          and [e['kind'] for e in got['steps'][0]['events']] == [], (status, updates(got)))
+          and [e['kind'] for e in got['steps'][0]['events']] == [], (status, updates(got)), run=got)
 
     # F3: the Fire-style direct wrapper (range) goes through the waypoint too
     code, got = slice_run('accept', 'range')
-    check('F3 range wrapper', code == 0 and [step['status'] for step in got['steps']] == [1, 2] and updates(got) == 1, [step['status'] for step in got['steps']])
+    check('F3 range wrapper', code == 0 and [step['status'] for step in got['steps']] == [1, 2] and updates(got) == 1, [step['status'] for step in got['steps']], run=got)
 
     # Scenario E2 (swap 6e): a pawn's component TriggerEvent through the stock dialog data (NATIVE_DIALOG.md "Component TriggerEvent")
     def component(*steps):

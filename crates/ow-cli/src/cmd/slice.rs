@@ -44,7 +44,9 @@
 //! meets a `NotYet` ends the run with a well-formed report instead of a cut-off one: that step's record has
 //! `"ok":false`, its events so far and `"not_yet":<text>`; no later step runs; the report's tail follows as usual, then
 //! `"stopped":{"step","not_yet"}`. A run that met any `NotYet` (a stop, or one a script run or the dummy's provider
-//! recorded and went on past) also lists their texts in `"not_yet":[..]`. Both keys appear only then, so a run that
+//! recorded and went on past) also lists their texts in `"not_yet":[..]`. After a stop, a tail part that cannot be
+//! read (the script report, the dummy's lists) is written empty and its error named in `"tail_unread":[..]`, so the
+//! report is never cut off (review r1 of #423). These keys appear only then, so a run that
 //! compares with the C++ keeps its bytes. The exit code is 3 and the stop's text goes to stderr as before. The VM runs on its own thread (`ow_vm::interp::on_vm_stack`). Lines end in `\n`.
 
 use std::cell::RefCell;
@@ -322,16 +324,23 @@ fn execute_with(
     }
     let errors = slice.errors();
     let list = |lines: &[String]| lines.iter().map(|l| quote(l)).collect::<Vec<_>>().join(",");
+    // After a stop a tail part that cannot be read is written empty and named in `"tail_unread"` (review r1 of #423),
+    // so the report stays whole; without a stop it fails as before (the C++ shape).
+    let halted = stop.is_some();
+    let mut unread: Vec<String> = Vec::new();
+    let script = tail_part(slice.script().report_json(vm), halted, "{}".to_string(), &mut unread)?;
     let _ = write!(
         out,
         "],\"status\":{},\"errors\":[{}],\"script\":{}",
         slice.mission().status().index(),
         list(&errors),
-        slice.script().report_json(vm)?
+        script
     );
-    let _ = write!(out, ",\"dummy_boundary\":[{}]", list(&slice.dummy_boundary()?));
+    let boundary = tail_part(slice.dummy_boundary(), halted, Vec::new(), &mut unread)?;
+    let _ = write!(out, ",\"dummy_boundary\":[{}]", list(&boundary));
     out.push_str(",\"dummy_boundary_calls\":[");
-    for (i, call) in slice.dummy_boundary_calls()?.iter().enumerate() {
+    let calls = tail_part(slice.dummy_boundary_calls(), halted, Vec::new(), &mut unread)?;
+    for (i, call) in calls.iter().enumerate() {
         let fields = call
             .fields
             .iter()
@@ -349,12 +358,17 @@ fn execute_with(
             fields
         );
     }
+    let enabled = tail_part(slice.dummy_enabled_sequences(), halted, Vec::new(), &mut unread)?;
+    let trace = tail_part(slice.dummy_trace(), halted, Vec::new(), &mut unread)?;
     let _ = write!(
         out,
         "],\"dummy_enabled_sequences\":[{}],\"dummy_trace\":[{}]",
-        list(&slice.dummy_enabled_sequences()?),
-        list(&slice.dummy_trace()?)
+        list(&enabled),
+        list(&trace)
     );
+    if !unread.is_empty() {
+        let _ = write!(out, ",\"tail_unread\":[{}]", list(&unread));
+    }
     // The `NotYet`s the run met, and the stop, only when there are any: the C++ never meets one, so a run that
     // compares with the C++ keeps its bytes.
     let not_yet: Vec<String> = slice.not_yet().iter().map(|n| n.to_string()).collect();
@@ -413,6 +427,24 @@ const EMPTY_HIT: &str = "{\"health_before\":0,\"health_after\":0,\"arriving\":0,
                          \"demigod_before\":false,\"demigod_after\":false,\"events\":[]}";
 
 /// One step (module documentation).
+/// A part of the report's tail: after a stop (`halted`) one that cannot be read is `empty`, its text added to
+/// `unread`; otherwise its failure ends the run as before.
+fn tail_part<T, E: Into<Failure>>(
+    r: Result<T, E>,
+    halted: bool,
+    empty: T,
+    unread: &mut Vec<String>,
+) -> Result<T, Failure> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) if halted => {
+            unread.push(e.into().message);
+            Ok(empty)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
 pub(crate) fn run_step(
     vm: &mut Vm,
     slice: &FireMissionSlice,
@@ -612,6 +644,20 @@ mod tests {
         assert!(!stub_policy(ParityMode::Off).allows_stub(spawn));
         let keys: BTreeSet<&str> = REFERENCE_STUBS.iter().map(|(k, _)| *k).collect();
         assert_eq!(keys.len(), REFERENCE_STUBS.len(), "no key twice");
+    }
+
+    /// After a stop a tail part that cannot be read is written empty and named; without a stop it still fails.
+    #[test]
+    fn a_tail_part_after_a_stop_is_empty_and_named() {
+        let mut unread = Vec::new();
+        let bad = || -> Result<Vec<String>, String> { Err("an invented tail failure".to_string()) };
+        assert_eq!(tail_part(bad(), true, Vec::new(), &mut unread).unwrap(), Vec::<String>::new());
+        assert_eq!(unread, vec!["an invented tail failure".to_string()]);
+        let e = tail_part(bad(), false, Vec::new(), &mut unread).unwrap_err();
+        assert_eq!(e.message, "an invented tail failure");
+        assert_eq!(unread.len(), 1, "nothing named without a stop");
+        let good: Result<Vec<String>, String> = Ok(vec!["x".to_string()]);
+        assert_eq!(tail_part(good, true, Vec::new(), &mut unread).unwrap(), vec!["x".to_string()]);
     }
 
     #[test]
