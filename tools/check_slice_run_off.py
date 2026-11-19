@@ -13,7 +13,8 @@ the counts, and grades the run:
   never passes (exit 1), whatever its counts. Any other run exits 1.
 
 The drivers are `combat-run`, `slice-run`, `equip-run` (link 8) and `phaselock-cast` (link 9, lane
-SLICE-GATE-DRIVERS, decision 2026-11-19-39), or `none`.
+SLICE-GATE-DRIVERS, decision 2026-11-19-39), or `none`. `equip-run` and `phaselock-cast` drive their own link
+only, and a `phaselock-cast` row is never ok until an evidence check is chosen for it.
 
 A pass says the Rust port's headless drivers did each link in Off; it says nothing about the real game (UNVERIFIED).
 
@@ -31,6 +32,10 @@ from check_slice_gate import NAMES  # noqa: E402  (the gate's 14 link names, in 
 RESULTS = ('ok', 'notyet', 'error')
 GRADINGS = ('strict', 'past-errors')
 DRIVERS = ('combat-run', 'slice-run', 'equip-run', 'phaselock-cast', 'none')
+# The drivers that run one link only, and the link each runs (decision 2026-11-19-39).
+DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy'}
+# Drivers with no evidence check chosen yet: a row they drive is never ok.
+NO_EVIDENCE_YET = ('phaselock-cast',)
 STOP_FIELDS = ('step', 'native', 'record', 'text')
 
 
@@ -68,6 +73,8 @@ def parse(lines):
             raise Malformed(f'{where}: grading {row.get("grading")!r} (one grading for all rows)')
         if row.get('driver') not in DRIVERS:
             raise Malformed(f'{where}: driver {row.get("driver")!r}')
+        if DRIVER_LINK.get(row['driver'], row['link']) != row['link']:
+            raise Malformed(f'{where}: driver {row["driver"]} runs {DRIVER_LINK[row["driver"]]} only')
         if not isinstance(row.get('steps'), list) or not all(_string(s) for s in row['steps']):
             raise Malformed(f'{where}: steps is not a list of strings')
         if not _string(row.get('scope')):
@@ -100,6 +107,8 @@ def parse(lines):
                 raise Malformed(f'{where}: blocked by {name} but its result differs')
         if row['driver'] == 'none' and row['result'] == 'ok':
             raise Malformed(f'{where}: a link without a driver cannot be ok')
+        if row['driver'] in NO_EVIDENCE_YET and row['result'] == 'ok':
+            raise Malformed(f'{where}: {row["driver"]} has no evidence check yet, so it cannot be ok')
         seen[row['link']] = row
     return rows
 
