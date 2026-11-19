@@ -621,6 +621,27 @@ impl<'a> ValueCx<'a> {
         outcome
     }
 
+    /// [`ValueCx::load`] whose objects are always freed and dropped from the caches when it ends, failed or not: a
+    /// read that publishes nothing (lane IMPL-SETTINGS-FILL, review r1 of #464). What it leaves is what the load's
+    /// roll-back leaves: objects a resolver allocates by itself are not tracked. Inside a load already under way it is
+    /// that load's part, and its objects are kept with the outer load's, as [`ValueCx::load`] keeps them.
+    pub fn load_discarded<T>(
+        &mut self,
+        load: impl FnOnce(&mut ValueCx<'a>) -> Result<T, DecodeError>,
+    ) -> Result<T, DecodeError> {
+        if self.state.load_depth != 0 {
+            return self.load(load);
+        }
+        self.state.load_resolves = 0;
+        self.state.load_allocated.clear();
+        self.state.load_depth += 1;
+        let outcome = load(self);
+        self.state.load_depth -= 1;
+        self.roll_back();
+        self.state.load_allocated.clear();
+        outcome
+    }
+
     /// Records an object a load allocated, for [`ValueCx::load`]'s roll-back.
     pub(crate) fn allocated(&mut self, o: ObjRef) {
         if self.state.load_depth > 0 {

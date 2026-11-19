@@ -726,8 +726,9 @@ fn run_fire_once(
         Ok(two) => two,
         Err(f) => {
             let refused = f.message.contains(slice::COPY_REFUSAL);
-            let (outcome, stop) = classify("setup", &f.message);
-            let outcome = if f.not_yet { Outcome::NotYet } else { outcome };
+            // Graded by the failure's type, never by its text (review r1 of #464, item 5).
+            let (_, stop) = classify("setup", &f.message);
+            let outcome = if f.not_yet { Outcome::NotYet } else { Outcome::Error };
             for i in 0..LINKS.len() {
                 if LINKS[i].driver == Driver::Fire && LINKS[i].needs.is_empty() {
                     ran[i] = Some(Ran {
@@ -760,9 +761,11 @@ fn run_fire_once(
             let lines: Vec<String> = fire.errors()[errors..].to_vec();
             refused |= lines.iter().any(|t| t.contains(slice::COPY_REFUSAL));
             if let Some(text) = lines.first() {
-                let (outcome, stop) = classify(step, text);
-                if grading == Grading::Strict || outcome == Outcome::NotYet {
-                    r.stop = Some((outcome, stop));
+                // A typed `NotYet` the bridge recorded is graded above; a recorded line here is an error, whatever
+                // its text quotes (review r1 of #464, item 5).
+                let (_, stop) = classify(step, text);
+                if grading == Grading::Strict {
+                    r.stop = Some((Outcome::Error, stop));
                     break;
                 }
                 r.error_lines.extend(lines.into_iter().map(|t| ((*step).to_string(), t)));
@@ -770,8 +773,8 @@ fn run_fire_once(
             match result {
                 Err(f) => {
                     refused |= f.message.contains(slice::COPY_REFUSAL);
-                    let (outcome, stop) = classify(step, &f.message);
-                    r.stop = Some((if f.not_yet { Outcome::NotYet } else { outcome }, stop));
+                    let (_, stop) = classify(step, &f.message);
+                    r.stop = Some((if f.not_yet { Outcome::NotYet } else { Outcome::Error }, stop));
                     break;
                 }
                 Ok((false, _)) => {

@@ -2142,6 +2142,25 @@ impl DefStore {
             Ok(cdo::class_default(l.cx, key)?)
         })
     }
+
+    /// `read` of the default object of the class at `class_path`, **without publishing it** (lane IMPL-SETTINGS-FILL,
+    /// review r1 of #464): a default object already built is read as it is; one not yet built is built for the read
+    /// and then freed and dropped from the cache ([`ValueCx::load_discarded`](ow_object::decode::ValueCx::load_discarded)),
+    /// so a later [`DefStore::class_default`] builds it again. For a preflight that must leave nothing behind.
+    pub fn with_class_default<R>(
+        &mut self,
+        w: &mut ObjectSpace,
+        class_path: &str,
+        read: impl FnOnce(&ObjectSpace, ObjRef) -> R,
+    ) -> Result<R, DefError> {
+        self.run(w, |l| {
+            let key = l.cx.code.find_class(l.cx.store, class_path)?;
+            Ok(l.cx.load_discarded(|cx| {
+                let o = cdo::class_default(cx, key)?;
+                Ok(read(cx.space, o))
+            })?)
+        })
+    }
 }
 
 /// The census of `files` (`DefStore::census`).

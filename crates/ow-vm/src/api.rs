@@ -261,6 +261,8 @@ struct Function {
     decl: FunctionDecl,
     /// A host binding that runs instead of the bytecode (`override_script`).
     binding: Option<NativeFn>,
+    /// A host wrapper that runs around the bytecode (`wrap_script`).
+    wrap: Option<ScriptWrapFn>,
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -276,6 +278,15 @@ pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
 /// for no answer. Registered per class with [`Vm::register_interface_rule`]; an object of a class with none (and no
 /// parent with one) answers by [`Vm::plain_interface`].
 pub type InterfaceRuleFn = Rc<dyn Fn(&mut Vm, ObjRef, ClassId) -> Result<Option<ObjRef>, VmError>>;
+
+/// The body a [`ScriptWrapFn`] is given: it runs the wrapped function's own bytecode with the call's arguments, once.
+pub type ScriptBody<'b> = dyn FnMut(&mut Vm) -> Result<CallResult, VmError> + 'b;
+
+/// A host wrapper around a script function's bytecode ([`Vm::wrap_script`], lane IMPL-SETTINGS-FILL, review r1 of
+/// #464): it is given the call's receiver, may act before and after the body, and sees the body's result, error
+/// included. The body is the
+/// function's own script, unchanged.
+pub type ScriptWrapFn = Rc<dyn Fn(&mut Vm, Option<ObjRef>, &mut ScriptBody<'_>) -> Result<CallResult, VmError>>;
 
 /// What an engine iterator native (`Actor.AllActors`, `Actor.DynamicActors`) gives a `foreach`: the values the loop
 /// visits, in order, each assigned to the call's out parameter `out_param` (C++ `IteratorResult`).
@@ -598,6 +609,7 @@ impl Vm {
         self.functions.push(Function {
             decl,
             binding: None,
+            wrap: None,
         });
         Ok(id)
     }
@@ -853,7 +865,37 @@ impl Vm {
         if function.binding.is_some() {
             return Err(refused("the script function is already overridden"));
         }
+        if function.wrap.is_some() {
+            return Err(refused("the script function is wrapped"));
+        }
         function.binding = Some(f);
+        Ok(())
+    }
+
+    /// Runs `f` around a **script** function's own bytecode (lane IMPL-SETTINGS-FILL, review r1 of #464): the call
+    /// still runs the function's script, through the body the wrapper is given, and the wrapper sees the result. For
+    /// a rule scoped to one script call, such as a mark kept for the length of that call. The function must be
+    /// declared, not native and not overridden, and is wrapped once.
+    pub fn wrap_script(&mut self, path: &str, f: ScriptWrapFn) -> Result<(), VmError> {
+        let refused = |reason| VmError::Registration {
+            key: path.to_string(),
+            reason,
+        };
+        let id = ObjectPath::parse(path)
+            .ok()
+            .and_then(|p| self.function_by_path.get(&p).copied())
+            .ok_or(refused("wrapScript needs a script function"))?;
+        let function = &mut self.functions[id.index()];
+        if function.decl.is_native() {
+            return Err(refused("wrapScript needs a script function"));
+        }
+        if function.binding.is_some() {
+            return Err(refused("the script function is overridden"));
+        }
+        if function.wrap.is_some() {
+            return Err(refused("the script function is already wrapped"));
+        }
+        function.wrap = Some(f);
         Ok(())
     }
 
@@ -1052,6 +1094,7 @@ impl Vm {
             .as_ref()
             .map(|key| (key.clone(), self.natives.get(key).cloned()));
         let binding = function.binding.clone();
+        let wrap = function.wrap.clone();
         if let Some(trace) = &mut self.trace {
             trace.push(path.clone());
         }
@@ -1066,9 +1109,20 @@ impl Vm {
         match native {
             Some((_, Some(imp))) => self.run_native(&imp, f, this, args),
             Some((key, None)) => self.stub(f, &key, args),
-            None => match binding {
-                Some(imp) => self.run_native(&imp, f, this, args),
-                None => self.run_bytecode(f, this, args),
+            None => match (binding, wrap) {
+                (Some(imp), _) => self.run_native(&imp, f, this, args),
+                (None, Some(wrap)) => {
+                    let mut args = Some(args);
+                    let mut body = |vm: &mut Vm| match args.take() {
+                        Some(args) => vm.run_bytecode(f, this, args),
+                        None => Err(VmError::Script {
+                            function: vm.function_path(f),
+                            message: "a wrapped script body runs once".to_string(),
+                        }),
+                    };
+                    wrap(self, this, &mut body)
+                }
+                (None, None) => self.run_bytecode(f, this, args),
             },
         }
     }

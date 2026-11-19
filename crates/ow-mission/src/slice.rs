@@ -1380,7 +1380,7 @@ impl FireMissionSlice {
     }
 }
 
-/// Whether `e` is a behavior walk's stop after partial writes (`ow_behavior::kernel::run::PARTIAL_WRITES`).
+/// Whether `e` is a stop after partial writes, by its variant (`bridge::is_partial_stop`; review r1 of #464, item 5).
 fn is_terminal(e: &MissionError) -> bool {
-    e.to_string().contains(ow_behavior::kernel::run::PARTIAL_WRITES)
+    crate::bridge::is_partial_stop(e)
 }

@@ -65,4 +65,26 @@ errors.
   (NATIVE_SAVE_LOAD.md) in Off.
 - The note's open questions 1 (when the stores are initialised, and `Registered`) and 2 (the DLC manager in the
   shipped game).
-- The inherited provider scripts.
+- `UIRoot` and `Object` functions called on a settings provider run unrefused (not the provider's classes).
+
+**Review r1 of #464 (six findings, all fixed).**
+1. **The write mark is scoped to the refresh.** `ow_vm::api::Vm::wrap_script` (new) runs a host wrapper around a
+   script function's own bytecode. `UpdateOnlineGameSettings` keeps its script and is wrapped: one mark per running
+   refresh, set by a write inside it. A `NotYet` that leaves a marked refresh, from anything it called, gets the
+   prefix (kind kept). A lookup or setter outside a refresh marks nothing; a second lookup does not clear the mark; a
+   nested refresh that wrote marks the outer one.
+2. **The plan publishes nothing.** Declarations and kinds are checked first, then the class defaults are read through
+   `DefStore::with_class_default` (new; built for the read and rolled back with `ValueCx::load_discarded` when not
+   already built), then each written value's assignability. A cold refusal leaves the full heap count unchanged.
+3. **Entries are published as they are made**, `GameSettings` then `Provider`, so a later failure keeps them.
+4. **Provider scripts are refused at dispatch** for a settings-provider receiver, inherited ones from
+   `UIDataProvider` and `UIDynamicDataProvider` included (wrapped); another receiver runs the script.
+5. **Grading by type.** The mission bridge keeps the typed stop (`bridge::is_partial_stop`: a `NotYet` or script error
+   whose text starts with the mark) and returns it unchanged; `slice.rs` uses the same check. The slice gate's Fire
+   driver grades `NotYet` only from the typed record or `Failure::not_yet`, never from a message.
+6. **`SettingsArrayProviders` is set empty** on each new provider, whatever a subclass's defaults hold.
+
+Verified (automated, invented packages): `ow-world` 17 data store tests (7 new), and 1 new `ow-mission` bridge test;
+`cargo test --workspace` 2,186 passed, 0 failed. Installed Off `--slice-gate` strict: still 0 ok / 14 `NotYet` / 0
+errors, with links 10 to 12 stopping in `accept` at `GetActiveMissionNumber`, marked. Every rule stays UNVERIFIED in
+the running game.

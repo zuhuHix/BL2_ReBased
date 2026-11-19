@@ -1857,3 +1857,30 @@ fn a_partial_write_failure_unwinds_and_stops_later_script_runs() {
     assert!(plain.is_ok());
     assert_eq!(f.partial_stop(), None);
 }
+
+/// The stop is judged by its variant and kept typed (review r1 of #464, item 5): a marked `NotYet` of kind `NotPorted`
+/// comes back as that `NotYet`, not rebuilt as `NotRead`; an error that only quotes the mark inside its text (here a
+/// script error whose message does not start with it) is recorded and not terminal.
+#[test]
+fn a_partial_stop_is_judged_by_its_variant_and_kept_typed() {
+    let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
+    let mut env = Env::new(false);
+    let s = env.script.clone();
+    let text = format!("{mark}: an invented NotYet");
+    let r = s.run(env.vm(), move |_| Err(VmError::NotYet(NotYet::not_ported(text, "an invented record")).into()));
+    match r {
+        Err(BehaviorError::Vm(VmError::NotYet(n))) => {
+            assert_eq!(n.missing, ow_core::Missing::NotPorted, "{n}");
+            assert_eq!(n.record, "an invented record", "{n}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let mut fresh = Env::new(false);
+    let f = fresh.script.clone();
+    let quoted = format!("an invented failure that quotes \"{mark}\"");
+    let r = f.run(fresh.vm(), move |_| {
+        Err(VmError::Script { function: "an invented function".to_string(), message: quoted }.into())
+    });
+    assert!(r.is_ok(), "{r:?}");
+    assert_eq!(f.partial_stop(), None);
+}
