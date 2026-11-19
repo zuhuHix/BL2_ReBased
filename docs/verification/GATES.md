@@ -9,6 +9,10 @@ Update this file in the commit that changes a number. Paste real output in repor
 all class bodies exact. Installed, Off: `--slice-gate` 14 rows identical before and after (links 1, 3, 4, 5, 13 and 14
 stop at the unbound `WillowGlobals.GetPlayerPawnDataManager()`); `--combat-run` `player:8 spawn:baby:6` stops the
 spawn at `TargetableAttributeValueResolver`, before and after. No installed Off run reaches the death roll.
+**TEST-FOLLOWUPS (2026-11-19, desktop, on main 0a23f13):** AI-assisted (Claude Code, Claude Opus 5.5). Tests only:
+two review follow-ups (#407 pack order, #405 Force with a parked thread). `cargo build --workspace` clean;
+`cargo test --workspace` 1,977 passed / 0 failed / 45 ignored; ctest at `-j 2` 173/173, 0 failed, 488.16 s;
+verify_packages 9 packages, all class bodies exact.
 
 **FIX-PHASELOCK-CAST part B (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5).
 `ActionSkill.OnActionSkillActivated` and `OnActionSkillDeactivated` bound in Off (Reference unbound). `cargo build

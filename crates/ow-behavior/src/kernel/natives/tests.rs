@@ -31,6 +31,7 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 const PROVIDER: &str = "ToyKernelProvider";
 const CONDITIONAL: &str = "ToyConditionalProvider";
 const FAILING: &str = "ToyFailingProvider";
+const DELAYED: &str = "ToyDelayedProvider";
 
 /// The toy action enum, in an order unlike the game's.
 const ACTIONS: [&str; 3] = ["CHANGE_Disable", "CHANGE_Toggle", "CHANGE_Enable"];
@@ -75,6 +76,22 @@ fn spec() -> Spec {
                 ..Seq::default()
             },
         ],
+        vec![],
+    )
+}
+
+/// `Late` (enabled on spawn): its event `Go` runs one toy behavior after a 1 s link delay, so the thread parks.
+fn delayed() -> Spec {
+    Spec::new(
+        DELAYED,
+        vec![Seq {
+            name: "Late",
+            enabled_on_spawn: Some(true),
+            events: vec![ev("Go", (0, 1))],
+            behaviors: vec![beh("D", "Behavior_ToySame", (0, 0))],
+            links: vec![(0, -1, 1.0)],
+            ..Seq::default()
+        }],
         vec![],
     )
 }
@@ -138,6 +155,7 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ("TestBpd", provider_package(&spec())),
         ("TestCond", provider_package(&conditional())),
         ("TestFail", provider_package(&failing())),
+        ("TestDelay", provider_package(&delayed())),
     ]);
     let borrowed: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
     let defs = DefStore::from_synthetic(&dir, &borrowed, IdentityPolicy::FirstInScanOrder, mode)
@@ -741,4 +759,38 @@ fn force_unregister_on_a_crate_handle_is_not_yet() {
     let r = t.vm.call(f, None, vec![h]).map(|d| d.ret);
     assert_eq!(not_yet(r), Missing::NotPorted);
     assert_eq!(owner_of(&t.vm, 5).unwrap(), Some(Owner::Crate("ow-mission")));
+}
+
+/// Review follow-up of #405: a consumer whose provider holds a parked (delayed) thread is forced out; ticking past the
+/// delay then runs nothing of it. A second consumer of the same provider, not forced, is the control: its parked
+/// thread runs on the same tick. The forced process has left the table, so no tick can reach its provider again.
+#[test]
+fn force_unregister_drops_a_parked_thread_so_a_later_tick_runs_nothing() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let definition = Value::Object(Some(t.definition("TestDelay", DELAYED)));
+    let consumer = |t: &mut Toy, name: &str| {
+        let o = t.object(t.bare, name);
+        let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(o))]).unwrap();
+        t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), definition.clone()]).unwrap();
+        h
+    };
+    let (forced, kept) = (consumer(&mut t, "Skill_F"), consumer(&mut t, "Skill_K"));
+    let (forced_pid, kept_pid) = (t.pid_of(&forced), t.pid_of(&kept));
+    let go = t.name("Go");
+    for h in [&forced, &kept] {
+        t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), definition.clone(), go.clone()]).unwrap();
+    }
+    assert!(t.seen().is_empty(), "both threads are parked behind the 1 s delay");
+    let (_, after) = t.call_by_ref(FORCE_UNREGISTER, forced.clone()).unwrap();
+    assert_eq!(t.pid_of(&after), INVALID_PID);
+    // Past the delay: the kept consumer's thread runs; the forced one's provider is not there to tick.
+    let ticked = with_provider(&mut t.vm, kept_pid, DELAYED, |vm, p| p.tick(vm, 2.0)).unwrap();
+    ticked.expect("the kept provider").unwrap();
+    assert!(with_provider(&mut t.vm, forced_pid, DELAYED, |vm, p| p.tick(vm, 2.0)).unwrap().is_none());
+    assert_eq!(t.seen(), ["Go D consumer=Skill_K"], "only the kept consumer's parked thread ran");
+    // Later ticks run nothing more: the forced consumer's thread never runs.
+    let ticked = with_provider(&mut t.vm, kept_pid, DELAYED, |vm, p| p.tick(vm, 5.0)).unwrap();
+    ticked.expect("the kept provider").unwrap();
+    assert!(t.seen().is_empty());
 }
