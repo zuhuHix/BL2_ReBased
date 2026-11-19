@@ -78,3 +78,28 @@ of 14, as on #452. Links 6 and 7 are errors at `make` (1 of 3 and 1 of 4 driver 
 - The suspend query, the shrink enable query and its limit (open questions 1 and 3).
 - Whether `WillowHUD`'s field names hold, a declared-order fit at medium confidence. The packages' `WillowHUD`
   property list could not be laid out by `class_layout.py` (two field-list heads).
+
+**Review r1 of #467** (a fix commit on 7ff524a3):
+- **The plan dispatches nothing.**
+  - `GetInventoryDefinition` is answered by field reads: the exact-class rule of NATIVE_INVENTORY_DEFINITION.md,
+    the same allowlist and fields as #462's native. #462 is not on this stack, so the list is repeated here until it
+    lands.
+  - `GetGlobalsDefinition` is answered with the Off world's stock `GD_Globals.General.Globals`, the object
+    `ow_combat::hit::globals` and the mission bridge already use. `WillowGlobals` declares no script field that holds
+    its definition (only the string `DefaultGlobalsDefinitionName`), so the hub's "read the globals object's field" has
+    no field to read. This is the substitute, UNVERIFIED as the native's answer.
+  - Each getter must resolve to its native declaration. A script override, or any other function, is a named
+    `NotYet { NotRead }` in the plan.
+  - `Host` takes a shared `&Vm`.
+- **The globals are resolved lazily** (a `Globals` provider), when the pass reaches the pickup list. So no HUDDef,
+  and no camera, answer before them.
+- **The planned event's handler** is resolved, its parameters checked and its binding prepared in the plan. The call
+  itself stays in the write sequence.
+- **The shrink refusal** comes after the winner's, the trace's and the event's checks.
+- **An out-of-range winner** writes the seen-item slot twice, in section 7's order: the winner's inventory, then
+  `H`, then empty.
+- **The partial-writes prefix** is tested with `starts_with` in both helpers.
+- **Tests:** 22 for the pass. Link 7's shape now uses a capture radius wide enough that only the cone stops the
+  decoy, and checks the decoy never reaches the bounds query. New cases: an exact tie, a win decided by the 0.25
+  bonus, a script override, a missing handler, the shrink order, the out-of-range seen slot, and the globals not
+  resolved before the camera.

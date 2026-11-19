@@ -165,6 +165,12 @@ fn only_a_not_yet_after_a_write_is_marked() {
         }
         e => panic!("{e}"),
     }
+    // A text that mentions the prefix later on is still marked at its start (review r1 of #467).
+    let inside = format!("a handler ({PARTIAL_WRITES} inside)");
+    match after_writes(NotYet::not_read(inside, "NOTE.md").into()) {
+        VmError::NotYet(n) => assert!(n.what.starts_with(PARTIAL_WRITES), "{n}"),
+        e => panic!("{e}"),
+    }
     let ordinary = after_writes(VmError::Script { function: "f".into(), message: "an ordinary error".into() });
     assert!(matches!(&ordinary, VmError::Script { message, .. } if message == "an ordinary error"), "{ordinary}");
     // Through a step: an ordinary error of a written run passes unchanged.

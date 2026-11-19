@@ -73,7 +73,7 @@ fn error(message: impl Into<String>) -> VmError {
 /// error unchanged.
 pub fn after_writes(e: VmError) -> VmError {
     match e {
-        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+        VmError::NotYet(n) if !n.what.starts_with(PARTIAL_WRITES) => {
             NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
         }
         other => other,

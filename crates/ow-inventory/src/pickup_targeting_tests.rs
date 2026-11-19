@@ -17,7 +17,7 @@ use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::PropAddr;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
-use ow_package::testkit::script::{FunctionSpec, Param, ScriptToy};
+use ow_package::testkit::script::{Asm, FunctionSpec, Param, ScriptToy};
 use ow_vm::api::{NativeCall, StubPolicy};
 
 use super::*;
@@ -72,7 +72,6 @@ fn engine() -> Vec<u8> {
     let dropped = t.class("DroppedPickup", actor);
     let inventory = t.class("WillowInventory", actor);
     t.prop("Object", dropped, "Inventory", 0, inventory);
-    t.prop("Object", inventory, "ToyDefinition", 0, object);
     native(&mut t, inventory, "GetInventoryDefinition", &[], Some(("Object", object)));
     let definition = t.class("WillowInventoryDefinition", object);
     t.prop("Struct", definition, "PickupFlagOffset", 0, vector);
@@ -88,6 +87,30 @@ fn willow_game() -> Vec<u8> {
     let player = t.p.add_import("Core", "Class", engine, "PlayerController");
     let hud = t.p.add_import("Core", "Class", engine, "HUD");
     let dropped = t.p.add_import("Core", "Class", engine, "DroppedPickup");
+    let inventory = t.p.add_import("Core", "Class", engine, "WillowInventory");
+    // The weapon's definition data, with the field GetInventoryDefinition's rule reads for a weapon.
+    let weapon = t.class("WillowWeapon", inventory);
+    let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
+    t.prop("Object", data, "WeaponTypeDefinition", 0, object);
+    t.prop("Struct", weapon, "DefinitionData", 0, data);
+    // A weapon subclass that overrides the getter in script (review r1 of #467).
+    let overriding = t.class("ToyOverridingWeapon", weapon);
+    t.function(
+        overriding,
+        "GetInventoryDefinition",
+        &[],
+        Some(("Object", object)),
+        &[],
+        &FunctionSpec::new(0x1 | 0x2 | 0x20000, "GetInventoryDefinition"),
+        |_| {
+            let mut a = Asm::new();
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        },
+    );
+    // A player controller with neither handler.
+    t.class("ToyMuteController", player);
     let player_pawn = t.class("WillowPlayerPawn", pawn);
     t.class("ToyPlayerPawnSubclass", player_pawn);
     let controller = t.class("WillowPlayerController", player);
@@ -101,7 +124,7 @@ fn willow_game() -> Vec<u8> {
     let hud_definition = t.class("HUDDefinition", object);
     t.prop("Float", hud_definition, "PickupRange", 0, 0);
     let willow_hud = t.class("WillowHUD", hud);
-    t.prop("Object", willow_hud, "WPlayerOwner", 0, controller);
+    t.prop("Object", willow_hud, "WPlayerOwner", 0, player);
     t.prop("Object", willow_hud, "HUDDef", 0, hud_definition);
     for o in ["CachedHoverPickup", "CachedBestPickup", "ClosestPickup"] {
         t.prop("Object", willow_hud, o, 0, pickup);
@@ -126,24 +149,40 @@ struct Events {
     hud: Option<ObjRef>,
 }
 
-/// The test's view, bounds and line check.
+/// The test's view, bounds and line check, recording which pickups reached the bounds query.
 struct Fixed {
     view: View,
     height: f32,
     blocker: Option<ObjRef>,
     traced: u32,
+    bounded: Vec<ObjRef>,
 }
 
 impl Host for Fixed {
-    fn view(&mut self, _: &mut Vm, _: ObjRef) -> Result<View, VmError> {
+    fn view(&mut self, _: &Vm, _: ObjRef) -> Result<View, VmError> {
         Ok(self.view)
     }
-    fn bounds_height(&mut self, _: &mut Vm, _: ObjRef) -> Result<f32, VmError> {
+    fn bounds_height(&mut self, _: &Vm, p: ObjRef) -> Result<f32, VmError> {
+        self.bounded.push(p);
         Ok(self.height)
     }
-    fn line_blocker(&mut self, _: &mut Vm, _: [f32; 3], _: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
+    fn line_blocker(&mut self, _: &Vm, _: [f32; 3], _: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
         self.traced += 1;
         Ok(self.blocker)
+    }
+}
+
+/// The toy globals and their definition; `resolved` counts the calls (the pass asks only when it reaches the list).
+struct ToyGlobals {
+    globals: ObjRef,
+    definition: ObjRef,
+    resolved: u32,
+}
+
+impl Globals for ToyGlobals {
+    fn resolve(&mut self, _: &mut Vm) -> Result<(ObjRef, ObjRef), VmError> {
+        self.resolved += 1;
+        Ok((self.globals, self.definition))
     }
 }
 
@@ -158,18 +197,13 @@ struct Fx {
     controller: ObjRef,
     pawn: ObjRef,
     host: Fixed,
+    provider: ToyGlobals,
 }
 
 impl Drop for Fx {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
-}
-
-/// The toy definition a toy holder returns (its `ToyDefinition`).
-fn toy_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let me = c.this.ok_or_else(|| bad("test", "no self"))?;
-    required(c.vm, me, "ToyDefinition", "test")
 }
 
 fn make(vm: &mut Vm, class: &str) -> ObjRef {
@@ -205,14 +239,12 @@ fn fx() -> Fx {
         vm.find_class(c).unwrap();
     }
     let events = Rc::new(RefCell::new(Events::default()));
-    vm.register_native("WillowInventory.GetInventoryDefinition()", Rc::new(toy_definition)).unwrap();
-    vm.register_native("WillowGlobals.GetGlobalsDefinition()", Rc::new(toy_definition)).unwrap();
     let e1 = events.clone();
     vm.register_native(
         "WillowPlayerController.SawPickupable(object)",
         Rc::new(move |c: &mut NativeCall<'_>| {
             if e1.borrow().refuse {
-                return Err(NotYet::not_read("the toy SawPickupable", "TOY.md").into());
+                return Err(NotYet::not_read(format!("the toy SawPickupable ({PARTIAL_WRITES} inside)"), "TOY.md").into());
             }
             let p = object_of(c.arg(0)?, "test")?.unwrap();
             let s = reported_now(c.vm, e1.borrow().hud);
@@ -248,9 +280,15 @@ fn fx() -> Fx {
         hud_definition,
         controller,
         pawn,
-        host: Fixed { view: View { location: [0.0; 3], pitch: 0, yaw: 0 }, height: 40.0, blocker: None, traced: 0 },
+        host: Fixed {
+            view: View { location: [0.0; 3], pitch: 0, yaw: 0 },
+            height: 40.0,
+            blocker: None,
+            traced: 0,
+            bounded: Vec::new(),
+        },
+        provider: ToyGlobals { globals, definition: gd, resolved: 0 },
     };
-    x.set(globals, "ToyDefinition", Value::Object(Some(gd)));
     x.set(gd, "HoverWidthPickup", Value::Float(100.0));
     x.set(gd, "ItemHoverProjectionHeight", Value::Float(20.0));
     x.set(hud_definition, "PickupRange", Value::Float(300.0));
@@ -312,11 +350,11 @@ impl Fx {
         let v = self.vector(p, "Location", at);
         self.set(p, "Location", v);
         self.set(p, "bPickupable", Value::Bool(true));
-        let item = self.obj("Engine.WillowInventory");
+        let item = self.obj("WillowGame.WillowWeapon");
         let definition = self.obj("Engine.WillowInventoryDefinition");
         let o = self.vector(definition, "PickupFlagOffset", offset);
         self.set(definition, "PickupFlagOffset", o);
-        self.set(item, "ToyDefinition", Value::Object(Some(definition)));
+        self.set_definition(item, Some(definition));
         self.set(p, "Inventory", Value::Object(Some(item)));
         let mut list = match self.get(self.globals, "PickupList") {
             Value::Array(a) => a.as_ref().clone(),
@@ -327,8 +365,18 @@ impl Fx {
         p
     }
 
+    /// `item`'s `DefinitionData.WeaponTypeDefinition`.
+    fn set_definition(&mut self, item: ObjRef, definition: Option<ObjRef>) {
+        let mut data = self.get(item, "DefinitionData");
+        let ty = data.as_struct().unwrap().ty;
+        let id = self.vm.space.names.find("WeaponTypeDefinition").unwrap();
+        let (index, _) = self.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap();
+        data.struct_mut().unwrap().fields[usize::try_from(index).unwrap()] = Value::Object(definition);
+        self.set(item, "DefinitionData", data);
+    }
+
     fn tick(&mut self) -> Result<Outcome, VmError> {
-        tick(&mut self.vm, self.hud, self.globals, &mut self.host)
+        tick(&mut self.vm, self.hud, &mut self.provider, &mut self.host)
     }
 
     fn seen(&self) -> Vec<(String, Option<ObjRef>)> {
@@ -349,9 +397,12 @@ fn not_yet(r: Result<Outcome, VmError>) -> ow_core::NotYet {
 #[test]
 fn the_aimed_pickup_wins_over_the_nearer_decoy_and_is_reported_once() {
     let mut x = fx();
+    // A capture radius of 100, so the decoy 45 from the ray would score if the cone did not stop it first.
+    x.set(x.gd, "HoverWidthPickup", Value::Float(1000.0));
     let decoy = x.pickup([0.0, 45.0, 0.0], [0.0; 3]);
     let aimed = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
     assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: aimed, reported: true });
+    assert_eq!(x.host.bounded, vec![aimed], "the decoy fails the cone before its bounds are asked");
     assert_eq!(x.slots(), (Some(aimed), Some(aimed)));
     assert_eq!(x.seen(), vec![(format!("Saw {aimed:?}"), None)], "raised before S is written");
     assert_eq!(x.slot("ClosestPickup"), Some(decoy), "the nearest counted pickup with an inventory");
@@ -453,7 +504,7 @@ fn a_winner_without_a_definition_changes_nothing() {
     let mut x = fx();
     let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
     let item = object_field(&x.vm, p, "Inventory").unwrap().unwrap();
-    x.set(item, "ToyDefinition", Value::Object(None));
+    x.set_definition(item, None);
     let earlier = x.obj(PICKUP);
     x.set_slots(Some(earlier), Some(earlier));
     assert_eq!(x.tick().unwrap(), Outcome::Unchanged { winner: p });
@@ -565,12 +616,13 @@ fn the_shrink_bookkeeping_is_not_yet_before_any_write() {
 fn the_headless_world_names_each_missing_layer() {
     let mut x = fx();
     let p = x.pickup([150.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
-    let (hud, globals) = (x.hud, x.globals);
-    let n = not_yet(tick(&mut x.vm, hud, globals, &mut Headless));
+    let hud = x.hud;
+    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut Headless));
     assert_eq!(n.missing, Missing::LayerAbsent("a camera (the headless world has none)"));
-    let n = not_yet(tick(&mut x.vm, hud, globals, &mut BoundsOnly(x.host.view)));
+    assert_eq!(x.provider.resolved, 0, "the camera refuses before the globals are resolved");
+    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut BoundsOnly(x.host.view)));
     assert_eq!(n.missing, Missing::LayerAbsent("component bounds (the headless world has none)"));
-    let n = not_yet(tick(&mut x.vm, hud, globals, &mut TraceOnly(x.host.view)));
+    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut TraceOnly(x.host.view)));
     assert_eq!(n.missing, Missing::LayerAbsent("collision (the headless world has none)"));
     assert!(!n.what.contains(PARTIAL_WRITES));
     assert_eq!(x.get(p, "bHasPickupParticleOffset"), Value::Bool(false), "nothing written");
@@ -585,13 +637,13 @@ fn the_headless_world_names_each_missing_layer() {
 /// A host with a view and bounds but the headless line check.
 struct TraceOnly(View);
 impl Host for TraceOnly {
-    fn view(&mut self, _: &mut Vm, _: ObjRef) -> Result<View, VmError> {
+    fn view(&mut self, _: &Vm, _: ObjRef) -> Result<View, VmError> {
         Ok(self.0)
     }
-    fn bounds_height(&mut self, _: &mut Vm, _: ObjRef) -> Result<f32, VmError> {
+    fn bounds_height(&mut self, _: &Vm, _: ObjRef) -> Result<f32, VmError> {
         Ok(40.0)
     }
-    fn line_blocker(&mut self, vm: &mut Vm, from: [f32; 3], to: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
+    fn line_blocker(&mut self, vm: &Vm, from: [f32; 3], to: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
         Headless.line_blocker(vm, from, to)
     }
 }
@@ -599,13 +651,13 @@ impl Host for TraceOnly {
 /// A host with a view but the headless bounds.
 struct BoundsOnly(View);
 impl Host for BoundsOnly {
-    fn view(&mut self, _: &mut Vm, _: ObjRef) -> Result<View, VmError> {
+    fn view(&mut self, _: &Vm, _: ObjRef) -> Result<View, VmError> {
         Ok(self.0)
     }
-    fn bounds_height(&mut self, vm: &mut Vm, p: ObjRef) -> Result<f32, VmError> {
+    fn bounds_height(&mut self, vm: &Vm, p: ObjRef) -> Result<f32, VmError> {
         Headless.bounds_height(vm, p)
     }
-    fn line_blocker(&mut self, _: &mut Vm, _: [f32; 3], _: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
+    fn line_blocker(&mut self, _: &Vm, _: [f32; 3], _: [f32; 3]) -> Result<Option<ObjRef>, VmError> {
         Ok(None)
     }
 }
@@ -618,7 +670,7 @@ fn a_refused_event_after_a_write_is_marked() {
     let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
     x.events.borrow_mut().refuse = true;
     let n = not_yet(x.tick());
-    assert!(n.what.starts_with(PARTIAL_WRITES), "{n}");
+    assert!(n.what.starts_with(PARTIAL_WRITES), "marked although its text mentions the prefix: {n}");
     assert_eq!((n.missing, n.record), (Missing::NotRead, "TOY.md"));
     assert_eq!(x.slots(), (Some(p), None));
 }
@@ -649,4 +701,82 @@ fn a_pickup_straight_above_fails_the_cone_and_the_view_uses_the_table() {
     assert!(quarter[0].abs() < 1e-6 && (quarter[1] - 1.0).abs() < 1e-6, "{quarter:?}");
     // Units below one table step (4) give the same direction.
     assert_eq!(view_direction(&View { location: [0.0; 3], pitch: 0, yaw: 3 }), [1.0, 0.0, 0.0]);
+}
+
+/// An exact tie (two pickups mirrored across the ray, bit-identical values) keeps the earlier list entry.
+#[test]
+fn an_exact_tie_keeps_the_earlier_pickup() {
+    for first_left in [true, false] {
+        let mut x = fx();
+        let (a, b) = ([150.0, 5.0, 0.0], [150.0, -5.0, 0.0]);
+        let (first, second) = if first_left { (a, b) } else { (b, a) };
+        let earlier = x.pickup(first, [0.0; 3]);
+        let _later = x.pickup(second, [0.0; 3]);
+        assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: earlier, reported: true });
+    }
+}
+
+/// The hover bonus decides a win: a farther pickup that is `H` beats a nearer one only by its 0.25 (both are hit
+/// dead on, so both score 1).
+#[test]
+fn the_hover_bonus_decides_a_win() {
+    let mut x = fx();
+    let near = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let far = x.pickup([160.0, 0.0, 0.0], [0.0; 3]);
+    assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: near, reported: true });
+    x.set_slots(Some(far), Some(near));
+    assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: far, reported: true }, "1.25 / 160 > 1 / 150");
+}
+
+/// The getters are answered by field reads only: an inventory whose class overrides `GetInventoryDefinition` in
+/// script is a named `NotYet { NotRead }` in the plan, with nothing written.
+#[test]
+fn a_script_override_of_a_getter_is_refused_in_the_plan() {
+    let mut x = fx();
+    let p = x.pickup([150.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let item = x.obj("WillowGame.ToyOverridingWeapon");
+    x.set(p, "Inventory", Value::Object(Some(item)));
+    let n = not_yet(x.tick());
+    assert!(n.missing == Missing::NotRead && n.what.contains("ToyOverridingWeapon"), "{n}");
+    assert_eq!(x.slot("ClosestPickup"), None);
+    assert_eq!(x.get(p, "bHasPickupParticleOffset"), Value::Bool(false), "nothing written");
+}
+
+/// The planned event's handler is resolved and checked in the plan: a recipient without `SawPickupable` is an
+/// ordinary error before any write.
+#[test]
+fn a_missing_handler_is_found_before_any_write() {
+    let mut x = fx();
+    let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    let mute = x.obj("WillowGame.ToyMuteController");
+    x.set(x.hud, "WPlayerOwner", Value::Object(Some(mute)));
+    x.set(x.hud, "ClosestPickup", Value::Object(Some(p)));
+    let e = x.tick().unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains("SawPickupable")), "{e}");
+    assert_eq!(x.slot("ClosestPickup"), Some(p), "nothing written");
+    assert_eq!(x.slots(), (None, None));
+}
+
+/// The shrink refusal comes after the winner's checks: with a long-lived pickup and a winner beyond a quarter of the
+/// range, the missing collision answers first.
+#[test]
+fn the_shrink_refusal_comes_after_the_line_check() {
+    let mut x = fx();
+    let p = x.pickup([150.0, 0.0, 0.0], [0.0; 3]);
+    x.set(p, "LifeSpan", Value::Float(30.0));
+    let hud = x.hud;
+    let n = not_yet(tick(&mut x.vm, hud, &mut x.provider, &mut TraceOnly(x.host.view)));
+    assert_eq!(n.missing, Missing::LayerAbsent("collision (the headless world has none)"));
+}
+
+/// An out-of-range winner: the seen-item slot ends empty after `H` is updated (section 7, both writes planned).
+#[test]
+fn an_out_of_range_winner_ends_with_the_seen_slot_empty() {
+    let mut x = fx();
+    let particle = x.obj("Engine.Actor");
+    x.set(x.gd, "PartItemHover", Value::Object(Some(particle)));
+    let far = x.pickup([400.0, 0.0, 0.0], [0.0; 3]);
+    assert_eq!(x.tick().unwrap(), Outcome::Hover { winner: far, reported: false });
+    assert_eq!(x.slot("CachedHoverPickup"), Some(far));
+    assert_eq!(x.slot("SavedLookAtInventory"), None);
 }
