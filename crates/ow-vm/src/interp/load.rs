@@ -461,6 +461,11 @@ pub(crate) fn declare_state_code(
     Ok(id)
 }
 
+/// Whether `f` is a state's code (W5-STATES' `declare_state_code`), not a function.
+pub(crate) fn is_state_code(vm: &Vm, f: FuncId) -> bool {
+    vm.code.code.get(&f).is_some_and(|c| c.state_code)
+}
+
 /// The loader's record of `f`, if a package export is behind it.
 pub(crate) fn code_of(vm: &Vm, f: FuncId) -> Option<Rc<FuncCode>> {
     vm.code.code.get(&f).cloned()

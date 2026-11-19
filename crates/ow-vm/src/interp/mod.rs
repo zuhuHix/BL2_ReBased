@@ -91,7 +91,7 @@ pub use load::instantiate_from_defaults;
 
 pub(crate) use eval::{Alias, Place, alias_value, check_entry, is_a_named, is_child, prepare, run_frame, write_alias};
 pub(crate) use load::{
-    class_at, declare_state_code, find_class, find_class_if_present, find_function, find_function_if_any,
+    class_at, declare_state_code, find_class, find_class_if_present, find_function, find_function_if_any, is_state_code,
 };
 
 /// The stack a thread running the VM needs (module documentation, "Stack depth"). Measured locally on one shape:

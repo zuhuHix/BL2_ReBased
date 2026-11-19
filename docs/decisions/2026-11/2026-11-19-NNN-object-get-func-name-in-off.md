@@ -14,7 +14,12 @@ Reference is unchanged (the C++ VM has no binding; Reference leaves it unbound).
     is `OnSelectedTarget`;
   - with no script function running (a call from outside bytecode), `NotYet { NotRead }`: the answer outside a script
     frame is not read.
-- **Tests:** 3 (the innermost function's name, back to the outer after the inner returns; the no-frame `NotRead`,
+- **Review r1 of #564:** inside a state's code (W5-STATES runs it as a function whose path ends `.<state code>`), the
+  answer is `NotYet { NotRead }`, "GetFuncName: inside state code", not a made-up name; a frame whose function the VM
+  does not declare is `NotYet { NotRead }`; the name is `ObjectPath::name` (splits at `.` and `:`). Two more tests:
+  state-scoped functions, state code and unknown frames; a call through the binding from bytecode, and a native
+  calling back into script (the callee's name, then the caller's).
+- **Tests (first round):** 3 (the innermost function's name, back to the outer after the inner returns; the no-frame `NotRead`,
   write-free; Off binds, Reference does not).
 - **The slice** (installed, Off, strict, a local merge never pushed): this branch with #535 @ 7f8fc7d7, #548 @
   22b29bfb, #555 @ 0e9092a8, #560 @ 97dc3a43 (newer than the 3bad6013 named), #523 @ d2227301 (its counter names
