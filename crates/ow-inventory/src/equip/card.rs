@@ -985,7 +985,9 @@ const POW10: [f64; 11] = [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10
 /// The integer n of rounding modes 0 to 3 from `w` at precision `p` (the rest note's section 3, step 5): the doubled
 /// sum converted to the nearest integer (ties to even), halved toward minus infinity, and negated for mode 3. With
 /// `single`, every step is rounded to single precision (the product of mode 0, then the doubled sum). `None` when the
-/// converted value is NaN, infinite or outside the signed 32-bit range.
+/// converted value is NaN, infinite or outside the signed 32-bit range. The double-precision sum is not exact for a
+/// small X (in mode 0 below about 1/32, in modes 1 to 3 below about 1e-9): it rounds, and that rounding does not move n
+/// except for |X| below about 1e-16 (the rest note's precision notes).
 fn rounded(mode: u8, w: f32, p: usize, single: bool) -> Option<i64> {
     let sum = if single {
         let x = if mode == 0 { POW10[p] as f32 * w } else { w };
@@ -1042,21 +1044,49 @@ pub fn shows(d: &Display, v: f32) -> Result<bool, VmError> {
         return Ok(w.abs() >= SIZE);
     }
     let n = rounded(mode, w, p, false).ok_or_else(|| rest(RANGE))?;
-    if rounded(mode, w, p, true).is_none_or(|single| (single == 0) != (n == 0)) {
-        return Err(rest(PRECISION));
-    }
+    let single = rounded(mode, w, p, true);
+    judge(mode, p, n, single)
+}
+
+/// Where n puts a value in the card's mode (the rest note's section 3, the cutoff).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Hidden,
+    /// Mode 0 at precision 8 or more, |n| strictly between half and twice 10^(P−8): the division's precision decides.
+    Band,
+    Shown,
+}
+
+fn outcome(mode: u8, p: usize, n: i64) -> Outcome {
     if mode != 0 || p <= 7 {
-        return Ok(n != 0);
+        return if n != 0 { Outcome::Shown } else { Outcome::Hidden };
     }
     // Mode 0 at precision 8 or more: the size |n| / 10^P against 0.00000001, boundary t = 10^(P−8).
     let t = POW10[p - 8] as i64;
     let m = n.abs();
     if m >= 2 * t {
-        Ok(true)
+        Outcome::Shown
     } else if 2 * m <= t {
-        Ok(false)
+        Outcome::Hidden
     } else {
-        Err(rest(CUTOFF))
+        Outcome::Band
+    }
+}
+
+/// The display decision from `n`, the double-precision rule's integer, and `single`, the same with every step rounded to
+/// single (`None` when that conversion leaves the integer range). The precision refusal ([`PRECISION`]) comes when the
+/// two disagree on the outcome: in modes 1 to 3, and in mode 0 below precision 8, that is whether n is 0; in mode 0 at
+/// precision 8 or more it is hidden, in the band or shown (the hub's ruling on #532: single rounding can move n by one
+/// into or out of the band without crossing 0). Then a value in the band is the cutoff refusal ([`CUTOFF`]).
+fn judge(mode: u8, p: usize, n: i64, single: Option<i64>) -> Result<bool, VmError> {
+    let found = outcome(mode, p, n);
+    if single.is_none_or(|s| outcome(mode, p, s) != found) {
+        return Err(rest(PRECISION));
+    }
+    match found {
+        Outcome::Shown => Ok(true),
+        Outcome::Hidden => Ok(false),
+        Outcome::Band => Err(rest(CUTOFF)),
     }
 }
 

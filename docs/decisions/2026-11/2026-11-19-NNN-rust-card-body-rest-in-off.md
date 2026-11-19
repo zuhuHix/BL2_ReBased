@@ -21,12 +21,14 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CARD-BODY-REST, implementer. The 
   `bShouldDisplay` from the displayed form. This covers the zero snap, the percentage or the remap, the sign, and the
   rounding by mode and clamped precision on the doubled sum, with no minimum of 1. The display refusal is gone.
   - V is computed in single precision. The doubled sum is computed in double, and the remap in double, then rounded to
-    single.
+    single. The double sum is not exact for a small X: it rounds, but that moves n only below about 1e-16.
 - **The typed refusals** of the note's section 4, item 3, each `NotYet` of kind `NotRead` with this note as the
   record, raised in the card step before the first card write:
   - the remap without `bUseContextOverride` (no hub ruling for the default source);
   - a converted value that is NaN, infinite or outside the signed 32-bit range;
-  - single-precision steps that change whether n is 0;
+  - single-precision steps that change the outcome. In mode 0 at precision 8 or more the outcome is hidden, in the
+    band or shown; elsewhere it is whether n is 0. This follows the hub's ruling on #532, since single rounding can move
+    n by one into or out of the band without crossing 0.
   - mode 0 at precision 8 or more with |n| strictly between half and twice 10^(P−8).
 
   The remap's four evaluations pass the attribute layer's refusals through unchanged.
@@ -52,6 +54,10 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-CARD-BODY-REST, implementer. The 
 - the range, precision and cutoff refusals, including the note's two precision examples;
 - two new schema failures;
 - #521's draw-then-refusal test, now driven by the NaN refusal.
+- the hub's two band examples on the decision (P 8: double −2 shows, single −1 in the band; P 9: double 5 hides,
+  single 6 in the band);
+- their two mirrors through `shows`, from single values a search found. The ruling's exact pairs need a double sum just
+  past a tie, which single precision cannot reach.
 
 The sort examples come from the note's table and were not tuned: every one matched at the first run.
 

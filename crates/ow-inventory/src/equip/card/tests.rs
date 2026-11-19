@@ -1001,6 +1001,32 @@ fn the_remap_maps_below_inside_and_above_its_input_range() {
     rest_refused(shows(&nan, 5.0), RANGE);
 }
 
+/// The hub's ruling on #532: in mode 0 at precision 8 or more, the precision refusal compares the outcome (hidden, in
+/// the band, shown), not only whether n is 0. The ruling's two examples, on the decision itself.
+#[test]
+fn single_rounding_that_moves_n_across_the_band_is_the_precision_refusal() {
+    let refused = |r: Result<bool, VmError>| {
+        let n = not_yet(r.unwrap_err());
+        assert_eq!((&*n.what, n.missing, n.record), (PRECISION, Missing::NotRead, REST_RECORD));
+    };
+    // P 8: double n −2 shows, single n −1 is in the band.
+    refused(judge(0, 8, -2, Some(-1)));
+    // P 9: double n 5 hides, single n 6 is in the band.
+    refused(judge(0, 9, 5, Some(6)));
+    // Agreeing outcomes decide as before; another mode still compares only n = 0.
+    assert!(judge(0, 8, -2, Some(-3)).unwrap());
+    assert!(!judge(0, 9, 5, Some(4)).unwrap());
+    assert!(judge(1, 8, -2, Some(-1)).unwrap());
+    // Two single values that produce such a move (found by a search over single values; the ruling's exact pairs
+    // need a double sum just past a tie that single precision cannot reach, so their mirrors are used):
+    // P 8, W just below 1.5e-8 (the single value 1.4999999e-8, by its bits): double n 1 is in the band, single n 2 shows.
+    rest_refused(shows(&Display { precision: 8, ..form(3, 0) }, f32::from_bits(847_305_049)), PRECISION);
+    // P 9, W just past −5.5e-9 (−5.5000000e-9 by its bits; reached through the remap's c, since a V that small snaps to 0): double n −6 is in
+    // the band, single n −5 hides.
+    let remap_to = |c: f32| Display { precision: 9, remap: Some([10.0, 20.0, c, 0.0]), ..form(3, 0) };
+    rest_refused(shows(&remap_to(f32::from_bits(2_981_952_131)), 1.0), PRECISION);
+}
+
 #[test]
 fn the_rounding_refusals() {
     // Outside the integer range.
