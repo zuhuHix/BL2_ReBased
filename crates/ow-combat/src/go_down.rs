@@ -20,10 +20,10 @@
 //!   `Engine.IsSplitScreen`, `InteractionProxy.IsInteractionDebugEnabled`, the three `WillowGlobals` getters (4.2 and
 //!   NATIVE_RESPAWN_STATIONS.md 3.2), `WillowPlayerPawn.SetShadowCasting` with nothing to visit (4.4),
 //!   `WillowPlayerPawn.InitRagdoll` (death.rs's presentation answer, 3.2), `Controller.IsUsingVehicleEx` with no pawn
-//!   and `WillowLeviathanService.RecordCharacterRevivedEventForPlayer` (NATIVE_RESPAWN_STATIONS.md 3.1 and 3.5),
-//!   `GearboxDialogComponent.StopTalking` with no live line and no flag (NATIVE_DIALOG.md);
+//!   (NATIVE_RESPAWN_STATIONS.md 3.1), the revived and killed events' telemetry ([`TELEMETRY`], hub ruling R3 of
+//!   #504, NATIVE_MISSION_TEXT_LIST.md section 6: nothing, a port answer), `GearboxDialogComponent.StopTalking` with no live line and no flag (NATIVE_DIALOG.md);
 //! - `NotRead`: the overridable implementations of 3.2, `ClearAllStatusEffects` (3.3), `SetCollision` and
-//!   `SetCollisionSize` (4.1), `SetLocation`, `SetRotation`, `IsUsingVehicle`, the killed-event statistics (4.3),
+//!   `SetCollisionSize` (4.1), `SetLocation`, `SetRotation`, `IsUsingVehicle`,
 //!   `ResetAI`'s entries and `StaticTriggerTemplateEvent`'s contents;
 //! - `NotPorted`: `Pawn.SetAnchor` (read as bookkeeping in NATIVE_DOWN_TIMERS.md, not ported here) and the parts of
 //!   `StopTalking` this lane does not port;
@@ -75,7 +75,7 @@ pub const UNRESOLVED: [&str; 16] = [
 ];
 
 /// The natives answered `NotRead` with a fixed text, and that text's record.
-pub const NOT_READ: [(&str, &str, &str); 9] = [
+pub const NOT_READ: [(&str, &str, &str); 8] = [
     (
         "WillowGame.StatusEffectsComponent.ClearAllStatusEffects",
         "StatusEffectsComponent.ClearAllStatusEffects: the per-kind removal and the skill manager step",
@@ -86,17 +86,20 @@ pub const NOT_READ: [(&str, &str, &str); 9] = [
     ("Engine.Actor.SetLocation", "Actor.SetLocation: not read", RECORD_RESPAWN),
     ("Engine.Actor.SetRotation", "Actor.SetRotation: not read", RECORD_RESPAWN),
     ("Engine.Controller.IsUsingVehicle", "Controller.IsUsingVehicle", RECORD),
-    (
-        "WillowGame.WillowLeviathanService.RecordCharacterKilledEventForPlayer",
-        "WillowLeviathanService.RecordCharacterKilledEventForPlayer: the killed-event statistics",
-        RECORD,
-    ),
     ("WillowGame.WillowGameInfo.ResetAI", "WillowGameInfo.ResetAI: the per-entry conditions and the AI resets", RECORD_DOWN),
     (
         "WillowGame.WillowDialogGlobalsDefinition.StaticTriggerTemplateEvent",
         "WillowDialogGlobalsDefinition.StaticTriggerTemplateEvent: the template event's contents",
         RECORD_DIALOG,
     ),
+];
+
+/// The events that end in the shared statistics submit routine (NATIVE_MISSION_TEXT_LIST.md section 5): answered
+/// nothing in Off under hub ruling R3. `RecordMissionStatusChangedEventForPlayer` shares it too and is bound by the lane
+/// that implements that note.
+pub const TELEMETRY: [&str; 2] = [
+    "WillowGame.WillowLeviathanService.RecordCharacterRevivedEventForPlayer",
+    "WillowGame.WillowLeviathanService.RecordCharacterKilledEventForPlayer",
 ];
 
 /// The status-effect damage type bytes 3.4's unread test runs for.
@@ -144,8 +147,12 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     })?;
     bind_fn(vm, "WillowGame.WillowPlayerPawn.SetShadowCasting", set_shadow_casting)?;
     bind_fn(vm, "Engine.Controller.IsUsingVehicleEx", is_using_vehicle_ex)?;
-    // Telemetry only: in what NATIVE_RESPAWN_STATIONS.md section 3.5 read, it changes no game object.
-    bind_fn(vm, "WillowGame.WillowLeviathanService.RecordCharacterRevivedEventForPlayer", |_| Ok(Value::None))?;
+    // The events that end in the statistics submit routine (hub ruling R3, review of #504; NATIVE_MISSION_TEXT_LIST.md
+    // section 6, step 4): the port has no telemetry service, so in Off each answers nothing, with no write and no
+    // `NotYet`, for every player. A port answer, UNVERIFIED.
+    for path in TELEMETRY {
+        bind_fn(vm, path, |_| Ok(Value::None))?;
+    }
     bind_fn(vm, "GearboxFramework.GearboxDialogComponent.StopTalking", stop_talking)
 }
 

@@ -32,6 +32,7 @@ a placeholder until the hub assigns one.
     - `Controller.IsUsingVehicleEx` (NATIVE_RESPAWN_STATIONS.md 3.1): with no `Pawn`, false and a None vehicle.
       With a `Pawn`, `NotRead` for the pawn's own answer.
     - `WillowLeviathanService.RecordCharacterRevivedEventForPlayer` (that note's 3.5, telemetry only): nothing.
+      Since the R3 follow-up below, this is the hub's telemetry ruling, shared with the killed event.
     - `GearboxDialogComponent.StopTalking` (NATIVE_DIALOG.md): nothing when there is no live line (no `EventData`,
       or its `LiveTalkAction` is None) and the flag is clear. Otherwise `NotPorted`.
   - **Named `NotYet`s**, each plain at entry. The layer that wrote earlier adds "stopped after partial writes"
@@ -41,7 +42,7 @@ a placeholder until the hub assigns one.
         `Engine.PlayerController.IsLocalController` beside the `Controller` key;
       - `ClearAllStatusEffects`, `SetCollision`, `SetCollisionSize`, `SetLocation`, `SetRotation` and
         `IsUsingVehicle`;
-      - `RecordCharacterKilledEventForPlayer`, `WillowGameInfo.ResetAI` and
+      - `RecordCharacterKilledEventForPlayer` (until the R3 follow-up below), `WillowGameInfo.ResetAI` and
         `WillowDialogGlobalsDefinition.StaticTriggerTemplateEvent`.
     - **`NotPorted`:** `Pawn.SetAnchor`. Its note reads it as bookkeeping, and this lane does not port it.
     - **`LayerAbsent`:** `Actor.Trace`, "Actor.Trace: the world's collision".
@@ -74,3 +75,9 @@ a placeholder until the hub assigns one.
    - `StopTalking` with event data but no live act;
    - `SetAnchor`'s `NotPorted`, and `SetDefaultStance` and `SetHidden`.
 5. **The record** for `SetLocation` and `SetRotation` is NATIVE_RESPAWN_STATIONS.md, as the note's table says.
+
+**R3 follow-up (hub ruling R3, review of #504).** `RecordCharacterKilledEventForPlayer` ends in the same statistics
+submit routine as the revived and mission-status events (NATIVE_MISSION_TEXT_LIST.md section 5). The port has no
+telemetry service, so in Off it now answers nothing, with no write and no `NotYet`, for every player, like the
+revived event. Both are listed in `go_down::TELEMETRY`, and one test covers both events, for a None player and a set
+one. This is a port answer, UNVERIFIED. NATIVE_GO_DOWN_PATH.md 4.3's `NotRead` is superseded by that ruling.

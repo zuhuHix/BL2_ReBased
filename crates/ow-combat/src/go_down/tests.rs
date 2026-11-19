@@ -480,3 +480,24 @@ fn the_out_vehicle_the_half_line_and_the_named_kinds() {
     assert!(not_read(&e.vm.call(stance, Some(p), vec![]).unwrap_err()), "SetDefaultStance");
     assert!(not_read(&e.vm.call(hidden, Some(p), vec![Value::Bool(true)]).unwrap_err()), "SetHidden");
 }
+
+/// Hub ruling R3 (review of #504, NATIVE_MISSION_TEXT_LIST.md section 6): the revived and killed events share the
+/// statistics submit routine, and the port has no telemetry service, so both answer nothing for every player, None or
+/// set, with no write.
+#[test]
+fn the_shared_telemetry_answers_nothing_for_every_player() {
+    let mut e = env(ParityMode::Off);
+    let service = class(&mut e.vm, "WillowGame.WillowLeviathanService", e.object, &[]);
+    let o = PropKind::Object { class: e.object };
+    let params = [("Player", o, 0), ("Reason", PropKind::Byte { enum_: None }, 0)];
+    let fs: Vec<FuncId> = super::TELEMETRY.iter().map(|p| native(&mut e.vm, p, service, &params, None)).collect();
+    super::register(&mut e.vm).unwrap();
+    let s = make(&mut e.vm, service, "Leviathan_0");
+    let player = make(&mut e.vm, e.controller, "WPC_7");
+    for f in fs {
+        for who in [None, Some(player)] {
+            let r = e.vm.call(f, Some(s), vec![Value::Object(who), Value::Byte(1)]).unwrap();
+            assert_eq!(r.ret, Value::None, "{who:?}");
+        }
+    }
+}
