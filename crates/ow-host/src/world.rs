@@ -63,7 +63,8 @@ pub const PAWN_CLASS: &str = "Engine.Pawn";
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PawnActor {
-    /// The actor's object path in its map file.
+    /// The actor's full object path: its map file's package name, then its path in that file
+    /// (`Sanctuary_P.TheWorld.PersistentLevel.WillowAIPawn_3`), so two levels' actors of the same name stay apart.
     pub path: String,
     /// Its class path.
     pub class: String,
@@ -85,6 +86,8 @@ pub struct WorldFrame {
     pub time_seconds: Option<f32>,
     pub delta_seconds: Option<f32>,
     pub pawns: Vec<PawnActor>,
+    /// Placed pawns left out because their transform cannot be read: path and reason.
+    pub unplaced: Vec<String>,
     pub halted: Option<Halt>,
 }
 
@@ -116,6 +119,8 @@ pub struct LoadSummary {
     pub pending: Vec<String>,
     /// The pawns as placed, before any tick.
     pub pawns: Vec<PawnActor>,
+    /// Placed pawns left out because their transform cannot be read: path and reason.
+    pub unplaced: Vec<String>,
     /// How long opening the store and loading the map took.
     pub load_time: Duration,
 }
@@ -176,6 +181,9 @@ impl LoadSummary {
         }
         for p in &self.pawns {
             let _ = writeln!(out, "world pawn {}", pawn_text(p));
+        }
+        for p in &self.unplaced {
+            let _ = writeln!(out, "world pawn left out: {p}");
         }
         out
     }
@@ -242,11 +250,17 @@ impl WorldLink {
                 return Err(e);
             }
             Err(_) => {
-                let _ = thread.join();
-                return Err("the world thread stopped before loading the map".into());
+                return Err(match thread.join() {
+                    Err(payload) => format!("the world thread panicked before loading the map: {}", panic_text(payload.as_ref())),
+                    Ok(()) => "the world thread stopped before loading the map".into(),
+                });
             }
         };
-        let last = WorldFrame { pawns: summary.pawns.clone(), ..WorldFrame::default() };
+        let last = WorldFrame {
+            pawns: summary.pawns.clone(),
+            unplaced: summary.unplaced.clone(),
+            ..WorldFrame::default()
+        };
         Ok((WorldLink { requests: Some(request_tx), replies: reply_rx, thread: Some(thread), last }, summary))
     }
 }
@@ -260,15 +274,25 @@ impl WorldTick for WorldLink {
         match sent.then(|| self.replies.recv().ok()).flatten() {
             Some(frame) => self.last = frame,
             None => {
-                self.last.halted = Some(Halt {
-                    tick: self.last.ticks + 1,
-                    message: "the world thread stopped".into(),
-                    not_yet: false,
-                });
+                // The thread is gone: join it for its panic message, if it panicked.
+                let why = match self.thread.take().map(JoinHandle::join) {
+                    Some(Err(payload)) => format!("the world thread panicked: {}", panic_text(payload.as_ref())),
+                    _ => "the world thread stopped".to_string(),
+                };
+                self.last.halted = Some(Halt { tick: self.last.ticks + 1, message: why, not_yet: false });
             }
         }
         self.last.clone()
     }
+}
+
+/// The text of a panic payload (`&str` or `String`), else a placeholder.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a payload that is not text".to_string())
 }
 
 impl Drop for WorldLink {
@@ -297,9 +321,11 @@ fn serve(
     };
     let mut frame = WorldFrame::default();
     match pawns(&mut world.vm) {
-        Ok(p) => {
+        Ok((p, unplaced)) => {
             summary.pawns = p.clone();
+            summary.unplaced = unplaced.clone();
             frame.pawns = p;
+            frame.unplaced = unplaced;
         }
         Err(e) => {
             let _ = load.send(Err(format!("reading the placed pawns: {e}")));
@@ -330,7 +356,8 @@ fn step(world: &mut World, frame: &mut WorldFrame, dt: f32) {
             frame.halted = Some(Halt { tick, message: e.to_string(), not_yet });
         }
     }
-    let mut read = || -> Result<(Option<f32>, Option<f32>, Vec<PawnActor>), VmError> {
+    type ReadBack = (Option<f32>, Option<f32>, (Vec<PawnActor>, Vec<String>));
+    let mut read = || -> Result<ReadBack, VmError> {
         let wi = world.actors().try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.world_info();
         let (t, d) = match wi {
             Some(wi) => (float(&world.vm.space, wi, "TimeSeconds"), float(&world.vm.space, wi, "DeltaSeconds")),
@@ -339,10 +366,11 @@ fn step(world: &mut World, frame: &mut WorldFrame, dt: f32) {
         Ok((t, d, pawns(&mut world.vm)?))
     };
     match read() {
-        Ok((t, d, p)) => {
+        Ok((t, d, (p, unplaced))) => {
             frame.time_seconds = t;
             frame.delta_seconds = d;
             frame.pawns = p;
+            frame.unplaced = unplaced;
         }
         Err(e) if frame.halted.is_none() => {
             frame.halted = Some(Halt { tick, message: format!("reading the world back: {e}"), not_yet: false });
@@ -372,31 +400,45 @@ fn field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v Value>
     s.fields.get(usize::try_from(entry).ok()?)
 }
 
-/// `Location` and `Rotation` of `o` (zero where absent or of another shape).
-fn transform(space: &ObjectSpace, o: ObjRef) -> ([f32; 3], Rotator) {
-    let mut location = [0.0f32; 3];
-    if let Some(v) = read(space, o, "Location") {
-        for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
-            if let Some(Value::Float(f)) = field(space, &v, axis) {
-                location[i] = *f;
-            }
+/// `X`, `Y`, `Z` of a vector value: `None` unless all three are floats.
+fn vector_of(space: &ObjectSpace, v: &Value) -> Option<[f32; 3]> {
+    let mut out = [0.0f32; 3];
+    for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
+        match field(space, v, axis) {
+            Some(Value::Float(f)) => out[i] = *f,
+            _ => return None,
         }
     }
-    let mut r = [0i32; 3];
-    if let Some(v) = read(space, o, "Rotation") {
-        for (i, axis) in ["Pitch", "Yaw", "Roll"].iter().enumerate() {
-            if let Some(Value::Int(n)) = field(space, &v, axis) {
-                r[i] = *n;
-            }
-        }
-    }
-    (location, Rotator::new(r[0], r[1], r[2]))
+    Some(out)
 }
 
-/// The listed actors whose class derives from [`PAWN_CLASS`] and that are not destroyed, in list order.
-fn pawns(vm: &mut Vm) -> Result<Vec<PawnActor>, VmError> {
+/// `Pitch`, `Yaw`, `Roll` of a rotator value: `None` unless all three are ints.
+fn rotator_of(space: &ObjectSpace, v: &Value) -> Option<Rotator> {
+    let mut r = [0i32; 3];
+    for (i, axis) in ["Pitch", "Yaw", "Roll"].iter().enumerate() {
+        match field(space, v, axis) {
+            Some(Value::Int(n)) => r[i] = *n,
+            _ => return None,
+        }
+    }
+    Some(Rotator::new(r[0], r[1], r[2]))
+}
+
+/// `Location` and `Rotation` of `o`, or why there is none: a pawn whose transform cannot be read is reported and left
+/// out, never placed at a made-up origin (rule R3).
+fn transform(space: &ObjectSpace, o: ObjRef) -> Result<([f32; 3], Rotator), &'static str> {
+    let location = read(space, o, "Location").ok_or("no Location")?;
+    let location = vector_of(space, &location).ok_or("its Location is not a vector")?;
+    let rotation = read(space, o, "Rotation").ok_or("no Rotation")?;
+    let rotation = rotator_of(space, &rotation).ok_or("its Rotation is not a rotator")?;
+    Ok((location, rotation))
+}
+
+/// The listed actors whose class derives from [`PAWN_CLASS`] and that are not destroyed, in list order; and, apart,
+/// those whose transform cannot be read (path and reason), which are left out.
+fn pawns(vm: &mut Vm) -> Result<(Vec<PawnActor>, Vec<String>), VmError> {
     let Ok(pawn_class) = vm.find_class(PAWN_CLASS) else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let list = {
         let actors = ow_world::actors::actors_of(vm)?;
@@ -404,6 +446,7 @@ fn pawns(vm: &mut Vm) -> Result<Vec<PawnActor>, VmError> {
         list
     };
     let mut out = Vec::new();
+    let mut unplaced = Vec::new();
     for o in list {
         let object = vm.space.heap.get(o)?;
         if object.destroyed || !vm.space.classes.is_child_of(object.class, pawn_class) {
@@ -412,7 +455,7 @@ fn pawns(vm: &mut Vm) -> Result<Vec<PawnActor>, VmError> {
         let (path, archetype) = match object.origin {
             Origin::Export { package, index } | Origin::Resource { package, index } => {
                 let pkg = vm.defs.packages().get(package);
-                let path = pkg.path_of(index).unwrap_or_default();
+                let path = format!("{}.{}", pkg.name, pkg.path_of(index).unwrap_or_default());
                 let archetype = pkg
                     .object(index)
                     .ok()
@@ -423,7 +466,13 @@ fn pawns(vm: &mut Vm) -> Result<Vec<PawnActor>, VmError> {
             }
             _ => (String::new(), None),
         };
-        let (location, rotation) = transform(&vm.space, o);
+        let (location, rotation) = match transform(&vm.space, o) {
+            Ok(t) => t,
+            Err(why) => {
+                unplaced.push(format!("{path}: {why}"));
+                continue;
+            }
+        };
         out.push(PawnActor {
             path,
             class: ow_attr::eval::class_path(&vm.space, o),
@@ -432,7 +481,7 @@ fn pawns(vm: &mut Vm) -> Result<Vec<PawnActor>, VmError> {
             rotation,
         });
     }
-    Ok(out)
+    Ok((out, unplaced))
 }
 
 /// The record the host's physics step names.

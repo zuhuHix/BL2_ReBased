@@ -20,7 +20,7 @@ removed. No package parsing behaviour changed.
       The game reads them from the save, and the play mode has no save yet.
   - **One world tick per play step:** `World::tick(DEFAULT_STEP_SECONDS)`, after the mover. So `WorldInfo.TimeSeconds`
     and `DeltaSeconds` follow the simulation's fixed 1/60 s step, never the frame times.
-  - `--no-world` runs on the scene alone, as before.
+  - `--no-world` runs on the scene alone, as before; its one note goes to stderr, so its stdout is the old run's.
 - **Where the world runs.** `World` is `!Send` (D18), and the VM wants its deep stack. So the world is built and ticked
   on one thread with `ow_vm::interp::STACK_SIZE`, and the play loop sends each tick and waits for the answer.
   - Only plain data comes back: the time fields and the placed pawns.
@@ -36,8 +36,10 @@ removed. No package parsing behaviour changed.
     parameters and its controller's acceleration are not read.
   - The world has no player pawn before the local-player step that W5-MAPLOAD leaves pending.
 - **Pawns.**
-  - A placed actor whose class derives from `Engine.Pawn` goes out with each snapshot: its path, class, archetype (its
-    export's archetype reference), `Location` and `Rotation`.
+  - A placed actor whose class derives from `Engine.Pawn` goes out with each snapshot: its full path (its map file's
+    package name first, so two levels' actors of one name stay apart), class, archetype (its export's archetype
+    reference), `Location` and `Rotation`. A pawn whose `Location` or `Rotation` cannot be read is reported ("left
+    out") and not drawn or digested; it is never placed at the origin (review r1).
   - With `--world-pawns DIR`, the drawer loads each pawn's look from its archetype through the scene's own store
     (H-PAWNS' path) and places it from the world's transform each frame. It never reads from or loads into the world's
     object space.
