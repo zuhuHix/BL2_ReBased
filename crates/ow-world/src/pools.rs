@@ -1145,14 +1145,16 @@ const RECORD_QUERY: &str = "NATIVE_ATTRIBUTES.md section 5 (ResourcePoolAttribut
 
 /// The answer to [`EngineQuery::ResourcePool`] (NATIVE_ATTRIBUTES.md section 5, confidence medium): the resource's
 /// own owner resolver (`ResourceContextResolver`) finds the owner from the source, then the owner's pool for the
-/// resource is the slot its manager's map gives. Only the controller resolver with a controller source is read here
-/// (the record: a controller source resolves to itself); any other resolver class or source is `NotYet`, and so is
-/// an owner without `ResourcePoolManager`. A None manager or no pool for the resource is `Ok(None)`.
+/// resource is the slot its manager's map gives. Only the controller resolver is read here, with the record's rule
+/// on any source (`ow_attr::context_resolvers::controller_of`: a controller is itself, an actor with an
+/// `Instigator` the instigator's controller, a pawn its own or its vehicle's); a source with no controller has no
+/// pool (`Ok(None)`). Any other resolver class is `NotYet`, and so is an owner without `ResourcePoolManager`. A None
+/// manager or no pool for the resource is `Ok(None)`.
 ///
 /// The record does not name the property. `ResourceContextResolver` is the `ResourceDefinition` property checked
 /// locally against the installed `Engine.upk`: all 31 installed resources hold a `ControllerAttributeContextResolver`
 /// there (decision 2026-11-15-29). A None resolver giving `Ok(None)` is UNVERIFIED (fitted: no installed resource has
-/// one). The controller rule is re-implemented here, more narrowly than `ow-attr`'s resolver; dispatching through the
+/// one). The controller rule is `ow-attr`'s, called directly; dispatching any resolver class through the
 /// `AttributeSystem` registry is an open contract follow-up.
 fn query_pool(
     maps: &RefCell<PoolMaps>,
@@ -1177,10 +1179,13 @@ fn query_pool(
         return Ok(None);
     };
     load(space, resolver)?;
-    let owner = if is_a(space, resolver, "ControllerAttributeContextResolver")?
-        && is_a(space, source, "Controller")?
-    {
-        source
+    let owner = if is_a(space, resolver, "ControllerAttributeContextResolver")? {
+        // The record's controller rule on any source (`ow-attr`'s resolver; a weapon reaches here through
+        // `WeaponResourcePoolAttributeContextResolver`, lane FIX-EQUIP-NATIVES). No controller is no pool.
+        match ow_attr::context_resolvers::controller_of(space, source)? {
+            Some(owner) => owner,
+            None => return Ok(None),
+        }
     } else {
         return Err(NotYet::not_read(
             format!(

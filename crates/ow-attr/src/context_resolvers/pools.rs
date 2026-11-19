@@ -84,11 +84,15 @@ impl ContextResolver for WeaponResourcePool {
             let Some(prop) = space.prop(class, "bOffHand") else {
                 return Err(not_declared(space, s, "bOffHand", WHO));
             };
+            // The installed `Engine.Weapon` declares `bOffHand` as a byte, and its script only compares it with 0
+            // (lane FIX-EQUIP-NATIVES): nonzero is the off hand. A bool is taken too (an invented class may declare
+            // one).
             match space.read(s, prop.into())? {
                 Value::Bool(b) => *b,
+                Value::Byte(b) => *b != 0,
                 other => {
                     return Err(AttrError::BadData {
-                        reason: format!("bOffHand holds {}, not a bool", other.kind_name()).into(),
+                        reason: format!("bOffHand holds {}, not a byte or bool", other.kind_name()).into(),
                     });
                 }
             }

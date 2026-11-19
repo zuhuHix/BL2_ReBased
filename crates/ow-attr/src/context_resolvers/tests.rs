@@ -139,7 +139,8 @@ fn build_classes(space: &mut ObjectSpace) -> Classes {
         decl("Pawn", obj_kind(pawn_id)),
         decl("PlayerReplicationInfo", obj_kind(pri_id)),
     ];
-    let b_off_hand = decl("bOffHand", PropKind::Bool);
+    // A byte, as the installed `Engine.Weapon` declares it (its script compares it with 0).
+    let b_off_hand = decl("bOffHand", PropKind::Byte { enum_: None });
     let actor = c
         .define("Engine.Actor", Some(object), vec![instigator])
         .unwrap();
@@ -330,7 +331,7 @@ fn scene() -> Scene {
     let pri = w.obj(c.pri, "PRI");
     let gun = w.obj(c.weapon, "Gun");
     let off_gun = w.obj(c.weapon, "OffGun");
-    w.set(off_gun, "bOffHand", Value::Bool(true));
+    w.set(off_gun, "bOffHand", Value::Byte(1));
     w.link(pc, "Pawn", player);
     w.link(pc, "PlayerReplicationInfo", pri);
     w.link(player, "Controller", pc);
