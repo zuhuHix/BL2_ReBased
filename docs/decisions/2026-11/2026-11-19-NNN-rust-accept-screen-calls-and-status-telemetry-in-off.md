@@ -32,6 +32,8 @@ where the note and the rulings give an answer:
       The port's stand-in for a movie with no native player is height 0 and scale 0, so the bound is 0. A
       negative or NaN bound is `NotYet` (not read), "WillowGFxMovie3D.FocusOn: the focus offset's clamp bound",
       record NATIVE_MISSION_TEXT_LIST.md;
+    - that both destination slots exist on the receiver, by a read of each (review r2 of #509), so a slot missing from
+      the object is the heap's own error before the first write;
   - then the two writes, in order: `FocusObject` = None, then `FocusOffset` = the zero `Vector` (X, Y and Z all 0,
     built fresh, so a prior Z does not survive). There is no other write; `InterpFocusOffset` is untouched.
 - **`WillowLeviathanService.RecordMissionStatusChangedEventForPlayer`** (ruling R3, newly bound): nothing, with no
@@ -52,6 +54,8 @@ where the note and the rulings give an answer:
     equal to the seeded heap with exactly those two writes;
   - zero writes on the set-`Thing`, negative-bound and NaN-bound refusals;
   - a set `Thing` refusing before any field is read;
+  - a movie whose slots end between `FocusObject` and `FocusOffset`: the heap's `SlotMissing`, with `FocusObject` kept
+    and no write (review r2 of #509; it fails without the slot check);
   - two mutations, run locally, each fail a test: the native's writes reversed, and the bound checked after the
     writes;
 - the categories' declaration;

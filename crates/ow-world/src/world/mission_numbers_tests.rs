@@ -111,13 +111,14 @@ fn willow() -> Vec<u8> {
     let index = [param("Int", "PlaythroughIndex", CPF_OPT, 0)];
     t.function(unbound, "GetActivePlotCriticalMissionNumber", &index, Some(("Int", 0)), &[], &spec, |_| None);
     let movie3d = t.class("WillowGFxMovie3D", object);
-    t.prop("Object", movie3d, "FocusObject", 0, object);
     let vector = strukt(&mut t, movie3d, "ToyVector");
     for axis in ["X", "Y", "Z"] {
         t.prop("Float", vector, axis, 0, 0);
     }
     t.prop("Struct", movie3d, "FocusOffset", 0, vector);
     t.prop("Struct", movie3d, "InterpFocusOffset", 0, vector);
+    // Declared last, so the layout gives it the slot before `FocusOffset`'s (the slot-missing test cuts between them).
+    t.prop("Object", movie3d, "FocusObject", 0, object);
     let spec = FunctionSpec::new(NATIVE, "FocusOn");
     t.function(movie3d, "FocusOn", &[param("Object", "Target", 0, object)], None, &[], &spec, |_| None);
     t.class("ToyOtherMovie", movie3d);
@@ -760,6 +761,36 @@ fn focus_on_a_set_thing_refuses_before_reading_fields() {
     let wi = t.world_info;
     not_yet_in(t.call(FOCUS_PATH, wi, vec![Value::Object(Some(wi))]), true, FOCUS, RECORD_GFX);
     script_error(t.call(FOCUS_PATH, wi, vec![Value::Object(None)]), "FocusObject");
+}
+
+/// A movie whose class declares no `MissionCategories` is bad data for the text list update, even with the list None
+/// (the native called directly on it).
+#[test]
+fn a_movie_without_the_categories_is_a_script_error() {
+    let mut t = toy(true);
+    let bare = t.vm.find_class("WillowGame.ToyBareQuestMovie").unwrap();
+    let bare = t.vm.space.alloc(bare, "ToyBare", None, Origin::Runtime).unwrap();
+    script_error(t.call(UPDATE_MISSION_TEXT_LIST, bare, vec![]), "MissionCategories");
+}
+
+/// A destination slot missing from the receiver (review r2 of #509): the movie's slots end after `FocusObject`, before
+/// `FocusOffset`. The heap's own `SlotMissing` comes back before the first write, so `FocusObject` keeps its seed.
+#[test]
+fn focus_on_a_missing_offset_slot_refuses_before_any_write() {
+    let mut t = toy(true);
+    let movie = seeded_movie(&mut t);
+    let class = t.vm.space.heap.get(movie).unwrap().class;
+    let object = PropAddr::scalar(t.vm.space.prop(class, "FocusObject").unwrap());
+    let offset = PropAddr::scalar(t.vm.space.prop(class, "FocusOffset").unwrap());
+    let at = t.vm.space.classes.resolve(class, object).unwrap();
+    assert!(t.vm.space.classes.resolve(class, offset).unwrap() > at, "the toy declares FocusOffset after FocusObject");
+    t.vm.space.heap.get_mut(movie).unwrap().slots.truncate(at + 1);
+    t.vm.add_service(TestFocusWrites(Vec::new())).unwrap();
+    let e = t.call(FOCUS_PATH, movie, vec![Value::Object(None)]).unwrap_err();
+    assert!(matches!(e, VmError::Heap(ow_object::heap::HeapError::SlotMissing { .. })), "{e:?}");
+    let wi = t.world_info;
+    assert_eq!(t.vm.space.read(movie, object).unwrap(), &Value::Object(Some(wi)), "FocusObject survives");
+    assert!(t.vm.service::<TestFocusWrites>().unwrap().borrow().0.is_empty(), "no write");
 }
 
 /// The focus clamp's bound (ruling R2): half the margin between the stage height and the stage height times the

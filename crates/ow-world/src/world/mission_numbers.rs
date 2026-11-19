@@ -552,7 +552,8 @@ fn zero_vector(vm: &Vm, ty: ow_object::ids::StructId) -> Result<Value, VmError> 
 }
 
 /// `FocusOn(None)`'s writes on `movie`, in order, planned with nothing written (module documentation): `FocusObject`
-/// = None, then `FocusOffset` = the zero `Vector`, after the declarations and the clamp's bound are checked.
+/// = None, then `FocusOffset` = the zero `Vector`, after the declarations, the clamp's bound and both destination
+/// slots on the receiver are checked.
 pub(crate) fn focus_writes(vm: &Vm, movie: ObjRef) -> Result<[(PropAddr, Value); 2], VmError> {
     const UNIT: &str = FOCUS_ON;
     let class = vm.space.heap.get(movie)?.class;
@@ -575,7 +576,13 @@ pub(crate) fn focus_writes(vm: &Vm, movie: ObjRef) -> Result<[(PropAddr, Value);
     let offset = zero_vector(vm, ty)?;
     // The clamp: Y within the bound. With no `FocusObject` the offset is not centred, so Y stays 0 for any valid bound.
     y_bound(stage_for(vm))?;
-    Ok([(PropAddr::scalar(object_field), Value::Object(None)), (PropAddr::scalar(offset_field), offset)])
+    let writes = [(PropAddr::scalar(object_field), Value::Object(None)), (PropAddr::scalar(offset_field), offset)];
+    // Both destination slots must exist on the receiver (review r2 of #509): a read of each, so a slot missing from
+    // the object is the heap's own error before the first write, not after it.
+    for (at, _) in &writes {
+        vm.space.read(movie, *at)?;
+    }
+    Ok(writes)
 }
 
 /// `FocusOn` (module documentation, ruling R2): a set `Thing` refuses at once; otherwise the planned writes, in order.
