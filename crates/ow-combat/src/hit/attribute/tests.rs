@@ -37,6 +37,8 @@ fn engine() -> Vec<u8> {
     let last = t.prop("Object", pawn, "LastContext", 0, object);
     let attr_prop = t.prop("Object", pawn, "Attr", 0, object);
     let seen = t.prop("Float", pawn, "Seen", 0, 0);
+    // A plain-attribute flag on a name property: bad data for the value resolver (review r2 of #442).
+    t.prop("Name", pawn, "Label", 1 << 62, 0);
     let base = t.class("AttributeDefinitionBase", object);
     for chain in ["ContextResolverChain", "ValueResolverChain"] {
         let array = t.p.next_export();
@@ -358,6 +360,28 @@ fn get_value_writes_the_context_before_the_value_chain_and_a_later_refusal_is_te
     let text = not_read(fx.probe(p));
     assert!(text.starts_with("stopped after partial writes: "), "{text}");
     assert_eq!(fx.value(p, "LastContext"), Value::Object(Some(p)), "the write is not put back");
+}
+
+/// Off (review r2 of #442): a data error found after `ResolvedContext` is written is returned unchanged, kind and
+/// text: `VmError::Attr(BadData)` with no prefix. The written context stays.
+#[test]
+fn a_data_error_after_the_out_write_is_returned_unchanged() {
+    let mut fx = Fx::new(ParityMode::Off);
+    let label = fx.reader("Label");
+    let a = fx.attribute_with("PawnAttributeContextResolver", vec![label]);
+    let p = fx.pawn(1.0);
+    let sentinel = fx.make("Object");
+    fx.set(p, "Attr", Value::Object(Some(a)));
+    fx.set(p, "LastContext", Value::Object(Some(sentinel)));
+    let e = fx.probe(p).unwrap_err();
+    match &e {
+        VmError::Attr(AttrError::BadData { reason }) => {
+            assert!(reason.contains("an attribute flag on a") && !reason.contains("partial writes"), "{reason}");
+        }
+        other => panic!("expected the library's BadData unchanged, got {other:?}"),
+    }
+    assert!(!e.to_string().contains("partial writes"), "{e}");
+    assert_eq!(fx.value(p, "LastContext"), Value::Object(Some(p)), "the out write happened first");
 }
 
 /// Off (item 3): a supplied `ResolvedContext` that is not an object reference is a data error before anything is
