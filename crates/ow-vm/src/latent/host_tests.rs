@@ -19,8 +19,8 @@ use ow_package::testkit::script::{Asm, CPF_OPT, FunctionSpec, Param, ScriptToy};
 use ow_package::testkit::{Export, ints};
 
 use super::{
-    HostLatentKind, LatentAction, LatentStatus, LatentTicket, finish_host_latent, host_latent_kind,
-    host_latent_of, register_host_latent, start_host_latent,
+    HostLatentKind, HostLatentPoll, LatentAction, LatentStatus, LatentTicket, finish_host_latent,
+    host_latent_kind, host_latent_of, register_host_latent, start_host_latent,
 };
 use crate::api::{StubPolicy, Vm};
 use crate::error::VmError;
@@ -133,6 +133,7 @@ fn package() -> Vec<u8> {
     let goal = t.prop("Float", walker, "Goal", 0, 0);
     let move_toward = native(&mut t, walker, "MoveToward", &[param("Float", "NewGoal", 0)], 0);
     let finish_anim = native(&mut t, walker, "FinishAnim", &[], 0);
+    let move_twice = native(&mut t, walker, "MoveTwice", &[param("Float", "NewGoal", 0)], 0);
 
     let walking = {
         let mut a = Asm::new();
@@ -156,7 +157,38 @@ fn package() -> Vec<u8> {
         finish(&mut t, a, &[("Begin", begin)])
     };
     state(&mut t, walker, "Idle", &idle);
+    // Double: Begin: "a"; MoveTwice(Goal) (one native that starts two host calls); "b"; Stop.
+    let double = {
+        let mut a = Asm::new();
+        let begin = a.here();
+        append(&mut a, trace, "a");
+        a.stmt().final_function(move_twice, |a| {
+            a.instance(goal);
+        });
+        append(&mut a, trace, "b");
+        a.stmt().raw(&[0x08]);
+        finish(&mut t, a, &[("Begin", begin)])
+    };
+    state(&mut t, walker, "Double", &double);
     t.build()
+}
+
+/// What the move poll does besides moving the walker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Poll {
+    /// Moves, and answers `Done` at the goal.
+    #[default]
+    Normal,
+    /// Sends the walker to `Idle` instead of moving it, and answers `Pending`.
+    Redirect,
+    /// Finishes its own call with `finish_host_latent`, and answers `Pending`.
+    FinishSelf,
+    /// Answers `Err` on its first poll, then moves normally.
+    ErrOnce,
+    /// Marks its walker destroyed, and answers `Pending`.
+    DestroySelf,
+    /// Looks a kind up and registers a new one (re-entering the registry), then moves normally.
+    Reenter,
 }
 
 /// The fake host world: each walker's position and goal, its label, and a log of every start and poll.
@@ -165,8 +197,8 @@ struct World {
     walkers: Vec<(ObjRef, String, f32, f32)>,
     anim: Vec<(ObjRef, LatentTicket)>,
     log: Vec<String>,
-    /// The move poll sends the walker to `Idle` instead of moving it.
-    redirect: bool,
+    poll: Poll,
+    polls: u32,
 }
 
 impl World {
@@ -179,9 +211,9 @@ impl World {
 }
 
 /// Registers the two host latent kinds and their natives, as a host would.
-fn host(vm: &mut Vm, redirect: bool) -> Rc<RefCell<World>> {
+fn host(vm: &mut Vm, poll: Poll) -> Rc<RefCell<World>> {
     let world = Rc::new(RefCell::new(World {
-        redirect,
+        poll,
         ..World::default()
     }));
 
@@ -190,12 +222,46 @@ fn host(vm: &mut Vm, redirect: bool) -> Rc<RefCell<World>> {
         vm,
         "MoveToward",
         Rc::new(move |vm: &mut Vm, o, ticket, delta| {
-            if w.borrow().redirect {
-                w.borrow_mut().log.push(format!("redirect#{}", ticket.get()));
-                let f = vm.find_function("Core.Object.GotoState")?;
-                let idle = Value::Name(vm.space.names.intern("Idle"));
-                vm.call(f, Some(o), vec![idle])?;
-                return Ok(LatentStatus::Pending);
+            let (mode, first) = {
+                let mut w = w.borrow_mut();
+                w.polls += 1;
+                (w.poll, w.polls == 1)
+            };
+            match mode {
+                Poll::Normal => {}
+                Poll::Redirect => {
+                    w.borrow_mut().log.push(format!("redirect#{}", ticket.get()));
+                    let f = vm.find_function("Core.Object.GotoState")?;
+                    let idle = Value::Name(vm.space.names.intern("Idle"));
+                    vm.call(f, Some(o), vec![idle])?;
+                    return Ok(LatentStatus::Pending);
+                }
+                Poll::FinishSelf => {
+                    let finished = finish_host_latent(vm, o, ticket)?;
+                    w.borrow_mut().log.push(format!("finish-self#{}:{finished}", ticket.get()));
+                    return Ok(LatentStatus::Pending);
+                }
+                Poll::ErrOnce if first => {
+                    w.borrow_mut().log.push(format!("err#{}", ticket.get()));
+                    return Err(VmError::Script {
+                        function: "the test host".to_string(),
+                        message: "an invented host failure".to_string(),
+                    });
+                }
+                Poll::ErrOnce => {}
+                Poll::DestroySelf => {
+                    vm.space.heap.get_mut(o)?.destroyed = true;
+                    w.borrow_mut().log.push(format!("destroy#{}", ticket.get()));
+                    return Ok(LatentStatus::Pending);
+                }
+                Poll::Reenter => {
+                    let known = host_latent_kind(vm, "FinishAnim")?.is_some();
+                    let name = format!("Extra{}", ticket.get());
+                    let poll: HostLatentPoll = Rc::new(|_: &mut Vm, _, _, _| Ok(LatentStatus::Done));
+                    register_host_latent(vm, &name, poll)?;
+                    let added = host_latent_kind(vm, &name)?.is_some();
+                    w.borrow_mut().log.push(format!("reenter#{}:{known}:{added}", ticket.get()));
+                }
             }
             let mut w = w.borrow_mut();
             let label = w.label(o);
@@ -225,6 +291,26 @@ fn host(vm: &mut Vm, redirect: bool) -> Rc<RefCell<World>> {
             let entry = w.walkers.iter_mut().find(|e| e.0 == o).expect("a walker");
             entry.3 = goal;
             w.log.push(format!("{label}:start-move#{}", ticket.get()));
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+
+    let w = Rc::clone(&world);
+    vm.register_native(
+        "Walker.MoveTwice(float)",
+        Rc::new(move |c| {
+            let Value::Float(goal) = *c.arg(0)? else {
+                panic!("MoveTwice takes a float");
+            };
+            let o = c.this.expect("an object");
+            let first = start_host_latent(c, move_kind)?;
+            let second = start_host_latent(c, move_kind)?;
+            let mut w = w.borrow_mut();
+            let label = w.label(o);
+            let entry = w.walkers.iter_mut().find(|e| e.0 == o).expect("a walker");
+            entry.3 = goal;
+            w.log.push(format!("{label}:start-twice#{}#{}", first.get(), second.get()));
             Ok(Value::None)
         }),
     )
@@ -273,7 +359,9 @@ impl Drop for Run {
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
-fn start_with(mode: ParityMode, redirect: bool) -> Run {
+/// A run in `mode`. The host registers its kinds and natives only outside Reference (registration is refused there);
+/// under Reference the world stays empty and the latent natives unbound.
+fn start_with(mode: ParityMode, poll: Poll) -> Run {
     let dir = std::env::temp_dir().join(format!(
         "ow-vm-latent-host-{}-{}",
         std::process::id(),
@@ -295,12 +383,16 @@ fn start_with(mode: ParityMode, redirect: bool) -> Run {
     )
     .with_stub_policy(StubPolicy::refuse_all());
     natives_core::register(&mut vm).unwrap();
-    let world = host(&mut vm, redirect);
+    let world = if mode == ParityMode::Reference {
+        Rc::new(RefCell::new(World::default()))
+    } else {
+        host(&mut vm, poll)
+    };
     Run { vm, world, dir }
 }
 
 fn start(mode: ParityMode) -> Run {
-    start_with(mode, false)
+    start_with(mode, Poll::Normal)
 }
 
 impl Run {
@@ -429,7 +521,7 @@ fn a_state_change_abandons_the_host_call_and_its_ticket() {
 
 #[test]
 fn a_state_change_made_by_the_poll_wins_over_its_answer() {
-    let mut r = start_with(ParityMode::Off, true);
+    let mut r = start_with(ParityMode::Off, Poll::Redirect);
     let w = r.walker("w", 0.5);
     r.step(w);
     assert_eq!(r.trace(w), "a");
@@ -479,6 +571,13 @@ fn under_reference_no_state_code_runs_so_no_host_call_starts() {
     }
     assert_eq!(r.trace(w), "");
     assert!(r.entries().is_empty());
+    // A kind cannot be registered there (as `Actor.Sleep` stays unbound), and a lookup finds none.
+    let poll: HostLatentPoll = Rc::new(|_: &mut Vm, _, _, _| Ok(LatentStatus::Done));
+    assert!(matches!(
+        register_host_latent(&mut r.vm, "MoveToward", poll),
+        Err(VmError::Registration { .. })
+    ));
+    assert_eq!(host_latent_kind(&mut r.vm, "MoveToward").unwrap(), None);
 }
 
 /// Three walkers with invented goals stepped `steps` times in `order`: the host log and each walker's trace.
@@ -532,4 +631,115 @@ fn host_latent_calls_run_in_the_fixed_step_order_and_repeat_exactly() {
     // The order is the caller's: stepping in reverse hands out the tickets in reverse.
     let (reversed, _) = run_walkers(&[2, 1, 0], 1);
     assert_eq!(reversed, ["w2:start-move#1", "w1:start-move#2", "w0:start-move#3"]);
+}
+
+// ---- review follow-ups of #389 (regression tests) -------------------------------------------------------------
+
+#[test]
+fn a_lookup_does_not_add_the_registry_service() {
+    let mut r = start(ParityMode::Reference);
+    assert_eq!(host_latent_kind(&mut r.vm, "MoveToward").unwrap(), None);
+    assert!(r.vm.service::<super::HostLatents>().is_none(), "the lookup made no registry");
+}
+
+#[test]
+fn a_poll_that_finishes_its_own_call_continues_in_the_same_step() {
+    let mut r = start_with(ParityMode::Off, Poll::FinishSelf);
+    let w = r.walker("w", 0.5);
+    r.step(w);
+    assert_eq!(r.trace(w), "a");
+    // The poll marks its own ticket finished and answers Pending: finished wins, the code goes on to FinishAnim.
+    r.step(w);
+    assert_eq!(r.trace(w), "ab");
+    assert_eq!(r.entries(), ["w:start-move#1", "finish-self#1:true", "w:start-anim#2"]);
+}
+
+#[test]
+fn a_poll_error_ends_the_step_and_leaves_the_call_pending_for_the_next() {
+    let mut r = start_with(ParityMode::Off, Poll::ErrOnce);
+    let w = r.walker("w", 0.25);
+    r.step(w);
+    let got = process_state(&mut r.vm, w, DT);
+    assert!(matches!(got, Err(VmError::Script { .. })), "{got:?}");
+    assert_eq!(r.trace(w), "a");
+    let h = host_latent_of(&mut r.vm, w).unwrap().expect("still pending");
+    assert_eq!(h.ticket().get(), 1);
+    assert!(!h.is_finished());
+    // The next step polls the same call again; it reaches the goal and the code continues.
+    r.step(w);
+    assert_eq!(r.trace(w), "ab");
+    assert_eq!(
+        r.entries(),
+        ["w:start-move#1", "err#1", "w:move#1@0.25", "w:start-anim#2"]
+    );
+}
+
+#[test]
+fn an_object_destroyed_while_waiting_reports_no_call_and_is_not_polled() {
+    let mut r = start(ParityMode::Off);
+    let w = r.walker("w", 0.5);
+    r.step(w);
+    let ticket = host_latent_of(&mut r.vm, w).unwrap().unwrap().ticket();
+    r.vm.space.heap.get_mut(w).unwrap().destroyed = true;
+    assert_eq!(host_latent_of(&mut r.vm, w).unwrap(), None, "destroyed, not yet forgotten");
+    assert!(!finish_host_latent(&mut r.vm, w, ticket).unwrap());
+    r.step(w);
+    assert_eq!(r.trace(w), "a");
+    assert_eq!(r.entries(), ["w:start-move#1"], "never polled");
+}
+
+#[test]
+fn an_object_destroyed_inside_its_poll_stops_there() {
+    let mut r = start_with(ParityMode::Off, Poll::DestroySelf);
+    let w = r.walker("w", 0.5);
+    r.step(w);
+    let ticket = host_latent_of(&mut r.vm, w).unwrap().unwrap().ticket();
+    r.step(w);
+    assert_eq!(r.trace(w), "a");
+    assert_eq!(host_latent_of(&mut r.vm, w).unwrap(), None);
+    assert!(!finish_host_latent(&mut r.vm, w, ticket).unwrap());
+    r.step(w);
+    assert_eq!(r.entries(), ["w:start-move#1", "destroy#1"], "polled once, then never");
+}
+
+#[test]
+fn a_poll_may_re_enter_the_registry() {
+    let mut r = start_with(ParityMode::Off, Poll::Reenter);
+    let w = r.walker("w", 0.25);
+    r.step(w);
+    r.step(w);
+    assert_eq!(r.trace(w), "ab");
+    assert_eq!(
+        r.entries(),
+        ["w:start-move#1", "reenter#1:true:true", "w:move#1@0.25", "w:start-anim#2"]
+    );
+    assert!(host_latent_kind(&mut r.vm, "Extra1").unwrap().is_some());
+}
+
+#[test]
+fn a_second_start_replaces_the_pending_call() {
+    let mut r = start(ParityMode::Off);
+    let w = r.walker("w", 0.25);
+    r.goto(w, "Double");
+    r.step(w);
+    assert_eq!(r.trace(w), "a");
+    let h = host_latent_of(&mut r.vm, w).unwrap().unwrap();
+    assert_eq!(h.ticket().get(), 2, "the second start's call is current");
+    assert!(!finish_host_latent(&mut r.vm, w, LatentTicket(1)).unwrap(), "the first ticket is not");
+    r.step(w);
+    assert_eq!(r.trace(w), "ab");
+    assert_eq!(r.entries(), ["w:start-twice#1#2", "w:move#2@0.25"], "only the second call is polled");
+}
+
+#[test]
+fn a_ticket_is_refused_on_another_object() {
+    let mut r = start(ParityMode::Off);
+    let (w1, w2) = (r.walker("w1", 0.5), r.walker("w2", 0.5));
+    r.step(w1);
+    r.step(w2);
+    let t1 = host_latent_of(&mut r.vm, w1).unwrap().unwrap().ticket();
+    let before = host_latent_of(&mut r.vm, w2).unwrap();
+    assert!(!finish_host_latent(&mut r.vm, w2, t1).unwrap());
+    assert_eq!(host_latent_of(&mut r.vm, w2).unwrap(), before, "w2's call is unchanged");
+    assert!(!host_latent_of(&mut r.vm, w1).unwrap().unwrap().is_finished(), "and w1's too");
 }
