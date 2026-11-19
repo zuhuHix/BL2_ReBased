@@ -211,6 +211,18 @@ argument `OnSelectedTarget` evaluates just before this native, so the new rule i
 verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-166; logs under
 ignored `local/analysis/aep-impl/`.
 
+**IMPL-ANIM-NODE-LOOKUP (2026-11-19, desktop, on fix/rust-body-composition b2b4de8a, #542):** AI-assisted (Claude
+Code, Opus 5.5). The new Mesh's animation-node lookups from the template, write-free and loading nothing, from
+NATIVE_ANIM_NODE_LOOKUP.md (#543, b09720f6). `cargo build --workspace -j 2` clean; `cargo test -p ow-world -j 2` 279
+passed / 0 failed / 5 ignored (8 new); `cargo test --workspace -j 2` 2,474 passed / 0 failed / 48 ignored; clippy flags
+nothing in the changed files. Installed Off `--slice-gate` strict on a local merge with #528 (0e8e2312; never pushed),
+under the machine lock: 1 ok / 4 NotYet / 9 errors. Link 1 is 0 of its 2 driver steps, stopping in `maya:8` at the
+unbound `Engine.IsSplitScreen()`, as are links 3, 4, 5, 13 and 14. With `IsSplitScreen` also bound false, locally only
+as #542's row did: 1 ok / 10 NotYet / 3 errors, and those six links stop in `maya:8` at #529's unmarked `LayerAbsent`
+"the new Mesh's animation nodes", now raised by this check (its record names both notes). ctest and verify_packages not
+run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored
+`local/p2/anl/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

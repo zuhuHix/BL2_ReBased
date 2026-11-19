@@ -618,6 +618,7 @@ pub mod pawn_data;
 
 /// `WorldInfo.AllNavigationPoints` (lane IMPL-ALL-NAVIGATION-POINTS).
 pub mod nav_points;
+pub mod anim_node_lookup;
 pub mod body_composition;
 pub mod pawn_meshes;
 

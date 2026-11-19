@@ -15,6 +15,7 @@ use ow_object::heap::{ObjectSpace, Origin};
 use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
+use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::script::ScriptToy;
 use ow_vm::api::{FunctionDecl, Vm};
 use ow_vm::error::VmError;
@@ -79,7 +80,17 @@ fn env() -> Env {
         t.build()
     };
     let engine = {
-        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "BoolProperty", "FloatProperty"]);
+        let mut t = ScriptToy::with_imports(&[
+            "Class",
+            "ObjectProperty",
+            "BoolProperty",
+            "FloatProperty",
+            "ScriptStruct",
+            "NameProperty",
+            "IntProperty",
+            "ArrayProperty",
+            "StructProperty",
+        ]);
         let core = t.p.add_import("Core", "Package", 0, "Core");
         let object = t.p.add_import("Core", "Class", core, "Object");
         let component = t.class("ActorComponent", object);
@@ -94,8 +105,27 @@ fn env() -> Env {
         let mesh = t.class("MeshComponent", primitive);
         let skeletal = t.class("SkeletalMeshComponent", mesh);
         t.prop("Object", skeletal, "SkeletalMesh", 0, object);
+        // The animation classes the lookups read (NATIVE_ANIM_NODE_LOOKUP.md), with only the fields they read.
+        let node = t.class("AnimNode", object);
+        t.prop("Name", node, "NodeName", 0, 0);
+        t.prop("Int", node, "TickArrayIndex", 0, 0);
+        let blend = t.class("AnimNodeBlendBase", node);
+        let child = toy_struct(&mut t, blend, "AnimBlendChild", None);
+        t.prop("Object", child, "Anim", 0, node);
+        toy_array_of(&mut t, blend, "Children", "Struct", child);
+        t.class("AnimNodeBlendPerBone", blend);
+        t.class("AnimNodeSlot", blend);
+        let control = t.class("SkelControlBase", object);
+        t.prop("Name", control, "ControlName", 0, 0);
+        t.prop("Object", control, "NextControl", 0, control);
+        t.class("SkelControlLeftHandGripWeapon", control);
+        let tree = t.class("AnimTree", blend);
+        let head = toy_struct(&mut t, tree, "SkelControlListHead", None);
+        t.prop("Object", head, "ControlHead", 0, control);
+        toy_array_of(&mut t, tree, "SkelControlLists", "Struct", head);
+        t.prop("Object", skeletal, "AnimTreeTemplate", 0, tree);
         let holder = t.class("ToyTemplateHolder", object);
-        for name in ["Skel", "Cyl", "Cycle"] {
+        for name in ["Skel", "Cyl", "Cycle", "SkelTree"] {
             t.prop("Object", holder, name, 0, object);
         }
         t.build()
@@ -106,6 +136,7 @@ fn env() -> Env {
         let skeletal = t.p.add_import("Core", "Class", engine, "SkeletalMeshComponent");
         let cylinder = t.p.add_import("Core", "Class", engine, "CylinderComponent");
         let holder = t.p.add_import("Core", "Class", engine, "ToyTemplateHolder");
+        let anim_tree = t.p.add_import("Core", "Class", engine, "AnimTree");
         let component = |t: &mut ScriptToy, class: i32, name: &str| {
             let mut payload = ow_package::testkit::ints(&[0, 0]);
             payload.extend_from_slice(&t.none);
@@ -120,8 +151,14 @@ fn env() -> Env {
         let mut cycle = ow_package::testkit::Export::new(cylinder, "CycleTemplate", cycle_payload);
         cycle.archetype = cycle_ref;
         t.p.add_export_with(cycle);
+        // A skeletal template whose AnimTreeTemplate is a store handle of its own.
+        let tree = component(&mut t, anim_tree, "TreeTemplate");
+        let mut payload = ow_package::testkit::ints(&[0, 0]);
+        payload.extend(t.p.object_tag("AnimTreeTemplate", tree));
+        payload.extend_from_slice(&t.none);
+        let skel_tree = t.p.add_export(skeletal, "SkelTreeTemplate", payload);
         let mut payload = ow_package::testkit::ints(&[0]);
-        for (name, r) in [("Skel", skel), ("Cyl", cyl), ("Cycle", cycle_ref)] {
+        for (name, r) in [("Skel", skel), ("Cyl", cyl), ("Cycle", cycle_ref), ("SkelTree", skel_tree)] {
             payload.extend(t.p.object_tag(name, r));
         }
         payload.extend_from_slice(&t.none);
@@ -192,6 +229,8 @@ fn env() -> Env {
         ("UseRootMotion", PropKind::Bool),
         ("UseRootRotation", PropKind::Bool),
         ("bUseMeshForCollision", PropKind::Bool),
+        ("AimOffsetNodeName", PropKind::Name),
+        ("HeadLookAtName", PropKind::Name),
     ]);
     let pawn = class(&mut vm, crate::world::pawn_meshes::WILLOW_PAWN, actor, &[
         ("BodyClass", PropKind::Object { class: body }),
@@ -548,16 +587,21 @@ fn a_missing_template_makes_nothing() {
     assert!(entries(&e, p).is_empty());
 }
 
-/// Maya's order: attachment 0 (`Mesh`, a skeletal component) is the animation-node `LayerAbsent`, found before any
-/// write, so attachment 13's cylinder (later in the list) is not written either.
+/// Maya's order: attachment 0 (`Mesh`, a skeletal component whose loaded tree has a kept `AimOffset` node) is the
+/// animation-node `LayerAbsent`, found before any write, so attachment 13's cylinder (later in the list) is not written
+/// either.
 #[test]
 fn the_new_mesh_s_animation_nodes_are_layer_absent_and_write_free() {
     let mut e = env();
-    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let t = Anim::new(&mut e);
+    let aim = t.node(&mut e, "WillowAnimNodeAimOffset", "AimOffset", 1);
+    t.children(&mut e, t.root, &[aim]);
+    let skel = skel_with(&mut e, Some(t.root));
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let a0 = attachment(&mut e, A { template: Some(skel), parent: MESH_ID, index: 1, ..A::default() });
     let a1 = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, index: 2, ..A::default() });
     let p = pawn_with(&mut e, vec![a0, a1]);
+    aim_offset_named(&mut e, p, "AimOffset");
     let (missing, what) = refused(&mut e, p);
     assert!(matches!(missing, Missing::LayerAbsent(l) if l == ANIM_LAYER), "{missing:?}");
     assert_eq!(what, ANIM_NODES);
@@ -842,4 +886,268 @@ fn a_failed_template_is_refused_before_any_write() {
     let (missing, what) = refused(&mut e, p);
     assert_eq!(missing, Missing::NotRead);
     assert_eq!(what, failed_template("GD_ToyBody.CycleTemplate"));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The animation-node lookups (NATIVE_ANIM_NODE_LOOKUP.md at b09720f6, lane IMPL-ANIM-NODE-LOOKUP)
+// ---------------------------------------------------------------------------------------------------------------
+
+use crate::world::anim_node_lookup::{Settled, TICK_ORDER, check};
+
+/// An invented template tree, made of runtime objects (loaded, so the template settles what it can).
+struct Anim {
+    root: ObjRef,
+}
+
+impl Anim {
+    /// A root `AnimTree` with no name and saved tick index 0.
+    fn new(e: &mut Env) -> Self {
+        let class = e.vm.find_class("Engine.AnimTree").unwrap();
+        Anim { root: make(&mut e.vm, class, "AnimTree_Toy") }
+    }
+
+    /// A node of class `class` (an engine class, or one of the invented game classes), named `name` ("None" for
+    /// none), at saved tick index `tick`.
+    fn node(&self, e: &mut Env, class: &str, node_name: &str, tick: i32) -> ObjRef {
+        let class = anim_class(e, class);
+        let n = make(&mut e.vm, class, "Node");
+        let v = name(&mut e.vm, node_name);
+        put(&mut e.vm, n, "NodeName", v);
+        put(&mut e.vm, n, "TickArrayIndex", Value::Int(tick));
+        n
+    }
+
+    /// `parent.Children`, one child per node, in order.
+    fn children(&self, e: &mut Env, parent: ObjRef, nodes: &[ObjRef]) {
+        let s = e.vm.space.classes.struct_by_path("Engine.AnimNodeBlendBase.AnimBlendChild").unwrap();
+        let list = nodes.iter().map(|n| value(&e.vm, s, vec![("Anim", Value::Object(Some(*n)))])).collect();
+        put(&mut e.vm, parent, "Children", Value::array(list));
+    }
+
+    /// One control list per chain, each control of the class and name given, linked by `NextControl`.
+    fn controls(&self, e: &mut Env, chains: &[&[(&str, &str)]]) {
+        let s = e.vm.space.classes.struct_by_path("Engine.AnimTree.SkelControlListHead").unwrap();
+        let mut heads = Vec::new();
+        for chain in chains {
+            let mut list: Vec<ObjRef> = Vec::new();
+            for (class, control_name) in *chain {
+                let class = anim_class(e, class);
+                let c = make(&mut e.vm, class, "Control");
+                let v = name(&mut e.vm, control_name);
+                put(&mut e.vm, c, "ControlName", v);
+                if let Some(&prev) = list.last() {
+                    put(&mut e.vm, prev, "NextControl", Value::Object(Some(c)));
+                }
+                list.push(c);
+            }
+            heads.push(value(&e.vm, s, vec![("ControlHead", Value::Object(list.first().copied()))]));
+        }
+        put(&mut e.vm, self.root, "SkelControlLists", Value::array(heads));
+    }
+}
+
+/// The engine class `short`, or one of the invented game classes (defined on first use under the class the game's
+/// extends).
+fn anim_class(e: &mut Env, short: &str) -> ClassId {
+    if let Some(c) = e.vm.space.classes.by_path(&format!("WillowGame.{short}")) {
+        return c;
+    }
+    let base = match short {
+        "WillowAnimNodeAimOffset" => "Engine.AnimNodeBlendBase",
+        "AnimNodeSpecialMoveBlend" => "Engine.AnimNodeSlot",
+        "WillowSkelControl_LookAtActor" | "WillowSkelControl_FootPlacement" => "Engine.SkelControlBase",
+        engine => return e.vm.find_class(&format!("Engine.{engine}")).unwrap(),
+    };
+    let base = e.vm.find_class(base).unwrap();
+    class(&mut e.vm, &format!("WillowGame.{short}"), base, &[])
+}
+
+fn body_of(e: &Env, p: ObjRef) -> ObjRef {
+    let Value::Object(Some(body)) = prop(&e.vm, p, "BodyClass") else { panic!("no body class") };
+    body
+}
+
+/// Sets the pawn's body class's `AimOffsetNodeName` (`HeadLookAtName` stays None).
+fn aim_offset_named(e: &mut Env, p: ObjRef, aim: &str) {
+    let body = body_of(e, p);
+    let v = name(&mut e.vm, aim);
+    put(&mut e.vm, body, "AimOffsetNodeName", v);
+}
+
+/// A pawn with one `Mesh` attachment from `template`, its body class naming `AimOffset` (Maya's).
+fn mesh_pawn(e: &mut Env, template: ObjRef) -> ObjRef {
+    let a = attachment(e, A { template: Some(template), parent: MESH_ID, ..A::default() });
+    let p = pawn_with(e, vec![a]);
+    aim_offset_named(e, p, "AimOffset");
+    p
+}
+
+fn skel_with(e: &mut Env, tree: Option<ObjRef>) -> ObjRef {
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    put(&mut e.vm, skel, "AnimTreeTemplate", Value::Object(tree));
+    skel
+}
+
+/// #529's refusal, text and layer unchanged.
+fn is_anim_refusal(missing: &Missing, what: &str) -> bool {
+    matches!(missing, Missing::LayerAbsent(l) if *l == ANIM_LAYER) && what == ANIM_NODES
+}
+
+/// Rule 5: a template with no tree settles all four lookups as None, `bUsingFootIK` false and `SlotNodes` empty; the
+/// rest of the made-`Mesh` step (the unidentified flag, `ReattachWeapons`) is then `NotRead`, write-free.
+#[test]
+fn no_tree_settles_everything_and_the_rest_of_the_mesh_step_is_not_read() {
+    let mut e = env();
+    let skel = skel_with(&mut e, None);
+    let p = mesh_pawn(&mut e, skel);
+    let body = body_of(&e, p);
+    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: false });
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, MESH_REST);
+    assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None), "untouched");
+}
+
+/// Rule 3, a settled tree: an `ArmBoneBlend` node that is not an `AnimNodeBlendPerBone`, a `LeftHandGrip` control that
+/// is not the kept class, no `AimOffset` node, two `WillowFootIK` controls on the second list: every field settles,
+/// and `bUsingFootIK` is true.
+#[test]
+fn a_tree_with_nothing_kept_settles_and_finds_the_foot_ik() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    let arm = t.node(&mut e, "AnimNode", "ArmBoneBlend", 1);
+    let blend = t.node(&mut e, "AnimNodeBlendBase", "UBMoveBlend", 2);
+    let leaf = t.node(&mut e, "AnimNode", "Leaf", 3);
+    t.children(&mut e, t.root, &[arm, blend]);
+    t.children(&mut e, blend, &[leaf]);
+    let foot = ("WillowSkelControl_FootPlacement", "WillowFootIK");
+    t.controls(&mut e, &[&[("SkelControlBase", "LeftHandGrip")], &[foot, foot]]);
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let body = body_of(&e, p);
+    let before = Counters::read(&e.vm);
+    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
+    assert_eq!(Counters::read(&e.vm), before, "the check writes nothing");
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, MESH_REST));
+}
+
+/// Rule 4: each kept find needs the instance's node, and so does a slot node; each is #529's refusal, write-free.
+#[test]
+fn a_kept_find_or_a_slot_node_is_the_refusal() {
+    // (node class, node name, control class, control name, head look-at name)
+    let cases: [(&str, &str, &str, &str, &str); 5] = [
+        ("AnimNodeBlendPerBone", "ArmBoneBlend", "SkelControlBase", "Other", "None"),
+        ("WillowAnimNodeAimOffset", "AimOffset", "SkelControlBase", "Other", "None"),
+        ("AnimNode", "Other", "SkelControlLeftHandGripWeapon", "LeftHandGrip", "None"),
+        ("AnimNode", "Other", "WillowSkelControl_LookAtActor", "HeadLook", "HeadLook"),
+        ("AnimNodeSpecialMoveBlend", "SpecialMoveBlend", "SkelControlBase", "Other", "None"),
+    ];
+    for (node_class, node_name, control_class, control_name, head) in cases {
+        let mut e = env();
+        let t = Anim::new(&mut e);
+        let n = t.node(&mut e, node_class, node_name, 1);
+        t.children(&mut e, t.root, &[n]);
+        t.controls(&mut e, &[&[(control_class, control_name)]]);
+        let skel = skel_with(&mut e, Some(t.root));
+        let p = mesh_pawn(&mut e, skel);
+        let body = body_of(&e, p);
+        let v = name(&mut e.vm, head);
+        put(&mut e.vm, body, "HeadLookAtName", v);
+        let (missing, what) = refused(&mut e, p);
+        assert!(is_anim_refusal(&missing, &what), "{node_class} {control_class}: {missing:?} {what}");
+        assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
+    }
+}
+
+/// Rule 3: of two nodes with one name, the lower saved tick index is found. With the plain node first the field
+/// settles; with the kept node first it refuses. The kept node is first in `Children` both times.
+#[test]
+fn the_first_match_is_by_saved_tick_order() {
+    for (plain_tick, kept_tick, refuses) in [(1, 2, false), (2, 1, true)] {
+        let mut e = env();
+        let t = Anim::new(&mut e);
+        let kept = t.node(&mut e, "WillowAnimNodeAimOffset", "AimOffset", kept_tick);
+        let plain = t.node(&mut e, "AnimNode", "AimOffset", plain_tick);
+        t.children(&mut e, t.root, &[kept, plain]);
+        let skel = skel_with(&mut e, Some(t.root));
+        let p = mesh_pawn(&mut e, skel);
+        let (missing, what) = refused(&mut e, p);
+        assert_eq!(is_anim_refusal(&missing, &what), refuses, "{plain_tick} {kept_tick}: {what}");
+    }
+}
+
+/// Section 1: a None node name matches the first node whose `NodeName` is None, the root here (not a kept class), so
+/// a nameless kept `AimOffset` node later in the order is not found. A None control name answers None at once, so a
+/// nameless kept look-at control is not found either.
+#[test]
+fn none_names_match_the_root_and_no_control() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    let aim = t.node(&mut e, "WillowAnimNodeAimOffset", "None", 1);
+    t.children(&mut e, t.root, &[aim]);
+    t.controls(&mut e, &[&[("WillowSkelControl_LookAtActor", "None")]]);
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    aim_offset_named(&mut e, p, "None");
+    let body = body_of(&e, p);
+    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: false });
+}
+
+/// Rule 3: saved tick indices that are not a full, distinct order 0 to n - 1 are `NotRead`, write-free.
+#[test]
+fn a_saved_tick_order_that_is_not_full_is_not_read() {
+    for ticks in [[1, 1], [1, 5]] {
+        let mut e = env();
+        let t = Anim::new(&mut e);
+        let a = t.node(&mut e, "AnimNode", "A", ticks[0]);
+        let b = t.node(&mut e, "AnimNode", "B", ticks[1]);
+        t.children(&mut e, t.root, &[a, b]);
+        let skel = skel_with(&mut e, Some(t.root));
+        let p = mesh_pawn(&mut e, skel);
+        let (missing, what) = refused(&mut e, p);
+        assert_eq!(missing, Missing::NotRead);
+        assert_eq!(what, TICK_ORDER);
+    }
+}
+
+/// Rule 2: an unloaded template component is #529's refusal with nothing loaded; so is a loaded template whose tree
+/// is an unloaded handle.
+#[test]
+fn an_unloaded_template_or_tree_is_the_refusal_with_nothing_loaded() {
+    let mut e = env();
+    let (skel, _, _) = store_templates(&mut e);
+    let p = mesh_pawn(&mut e, skel);
+    let (missing, what) = refused(&mut e, p);
+    assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, skel), "nothing loaded");
+
+    let mut e = env();
+    let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let skel_tree = prop_object(&e, holder, "SkelTree");
+    e.vm.defs.ensure_loaded(&mut e.vm.space, skel_tree).unwrap();
+    let tree = prop_object(&e, skel_tree, "AnimTreeTemplate");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, tree), "the tree is a handle the store has not loaded");
+    let p = mesh_pawn(&mut e, skel_tree);
+    let (missing, what) = refused(&mut e, p);
+    assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, tree), "nothing loaded");
+}
+
+/// Section 4.5.1's order: with an old `Mesh` set, its release is refused before the lookups, even on a tree that
+/// would be the refusal.
+#[test]
+fn the_old_mesh_release_comes_before_the_lookups() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    let n = t.node(&mut e, "AnimNodeSlot", "Slot", 1);
+    t.children(&mut e, t.root, &[n]);
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let old = make(&mut e.vm, e.skeletal, "OldMesh");
+    put(&mut e.vm, p, "Mesh", Value::Object(Some(old)));
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, releasing_old("Mesh"));
 }

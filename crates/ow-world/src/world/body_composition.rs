@@ -26,7 +26,10 @@
 //! each attachment the walk makes, in list order: object and template types, a hit region, both attach attempts, the
 //! `Parent` link, and the pawn's `PostInitBodyComposition` in section 4.5's order (the release of an old `Mesh` or
 //! `CylinderComponent` the pawn already holds, or one an earlier attachment assigned, is `NotRead`, [`releasing_old`];
-//! the new `Mesh`'s animation nodes are `LayerAbsent`; then the rendering hooks, `LayerAbsent`).
+//! then the new `Mesh`'s animation nodes, read from its template with nothing loaded
+//! (crate::world::anim_node_lookup, NATIVE_ANIM_NODE_LOOKUP.md): `LayerAbsent` unless the template settles every field,
+//! and when it does, the rest of the made-`Mesh` step is `NotRead` ([`MESH_REST`]); then the rendering hooks,
+//! `LayerAbsent`).
 //!
 //! **The writes** ([`build`]), in the note's order: per made attachment, in list order: a component is made from its
 //! template, its entry appended, its collision set, attached (the parent's attach, else the owner retry), then the
@@ -84,6 +87,12 @@ pub const RENDER_LAYER: &str =
     "a rendering layer (the gear-likeness step, the mode-0 rendering setting and the light environment)";
 pub const MESH_LAYER: &str = "a skeletal mesh data reader (sockets and the reference skeleton)";
 pub const ANIM_LAYER: &str = "an animation-tree instance for the skeletal mesh";
+
+/// The made `Mesh`'s steps after the animation nodes that neither note gives an Off answer for: the mesh flag section
+/// 4.5 does not identify, and the `ReattachWeapons` script event (lane IMPL-ANIM-NODE-LOOKUP; reached only when the
+/// template settles every animation field).
+pub const MESH_REST: &str =
+    "InitializeBodyComposition: the new Mesh's unidentified flag and its ReattachWeapons event";
 
 /// This lane's additions, for cases the note's scope does not reach.
 pub const MENU_MODES: &str = "InitializeBodyComposition: the menu modes' visibility toggles";
@@ -551,7 +560,9 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         return Err(not_read(releasing_old("Mesh")));
                     }
                     if skeletal {
-                        return Err(NotYet::layer_absent(ANIM_NODES, ANIM_LAYER, RECORD).into());
+                        // NATIVE_ANIM_NODE_LOOKUP.md section 5: the template's answers, with nothing loaded.
+                        crate::world::anim_node_lookup::check(vm, template, body_class)?;
+                        return Err(not_read(MESH_REST));
                     }
                     return Err(not_read(MESH_NOT_SKELETAL));
                 }
