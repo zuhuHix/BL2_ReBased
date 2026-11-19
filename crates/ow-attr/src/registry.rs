@@ -181,6 +181,26 @@ impl AttributeSystem {
         eval::value_of(self, attr, source, override_source, cx)
     }
 
+    /// The context step of `GetValue` alone: the override source first when given, then `source`, through the
+    /// definition's context chain (NATIVE_ATTRIBUTES.md, "AttributeDefinition.GetValue"). A multi-context definition is
+    /// `NotYet`. [`AttributeSystem::value_of`] is this step followed by [`AttributeSystem::value_from_context`]; a
+    /// caller that writes the resolved context somewhere before the value chain runs uses the two steps.
+    pub fn value_context(
+        &self,
+        attr: ObjRef,
+        source: Option<ObjRef>,
+        override_source: Option<ObjRef>,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        eval::value_context(self, attr, source, override_source, cx)
+    }
+
+    /// What a read of `attr` can refuse before it evaluates anything: a multi-context definition, a context or value
+    /// resolver class this library does not implement, a None value chain entry. Nothing is resolved or evaluated.
+    pub fn preflight_read(&self, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        eval::preflight_read(self, attr, cx)
+    }
+
     /// `AttributeDefinition.GetBaseValue`: as [`AttributeSystem::value_of`] with each resolver's base-value method.
     pub fn base_value_of(
         &self,

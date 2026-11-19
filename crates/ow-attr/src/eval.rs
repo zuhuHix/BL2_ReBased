@@ -501,7 +501,33 @@ pub(crate) fn resolve_contexts(
 }
 
 /// The context `GetValue` uses: the override source's when the override is given and resolves, else the source's.
-fn value_context(
+/// [`AttributeSystem::preflight_read`]: what a read can refuse before it evaluates anything (review of #442). The
+/// definition is loaded, and must not be multi-context. Every resolver of its context chain must be a class this
+/// library implements. Every entry of its value chain must be set and a class it implements. Nothing is resolved or
+/// evaluated, so no generator is drawn and no resolver writes. A refusal from deeper in a read (a nested attribute, a
+/// resolver's own data) can only be found by evaluating, and is not covered here.
+pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    ensure_loaded(cx, attr)?;
+    if is_multi_context(cx.world.parts().space, attr)? {
+        return Err(multi_context_not_read("GetValue"));
+    }
+    let chain = required(cx, attr, "ContextResolverChain")?;
+    for entry in elements("ContextResolverChain", &chain)? {
+        if let Some(resolver) = object("ContextResolverChain entry", entry)? {
+            sys.context_resolver(cx.world.parts().space, resolver)?;
+        }
+    }
+    let chain = required(cx, attr, "ValueResolverChain")?;
+    for entry in elements("ValueResolverChain", &chain)? {
+        let Some(resolver) = object("ValueResolverChain entry", entry)? else {
+            return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
+        };
+        sys.value_resolver(cx.world.parts().space, resolver)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn value_context(
     sys: &AttributeSystem,
     attr: ObjRef,
     source: Option<ObjRef>,

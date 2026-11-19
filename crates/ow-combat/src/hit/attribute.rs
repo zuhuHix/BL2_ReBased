@@ -1,13 +1,13 @@
 //! `AttributeDefinition.GetValue` as a script native (lane FIX-ATTR-GETVALUE-NATIVE, decision 2026-11-19-58).
 //! AI-assisted (Claude Code). The rule is `ow-attr`'s existing library rule, [`ow_attr::AttributeSystem::value_of`]
-//! (NATIVE_ATTRIBUTES.md, "AttributeDefinition.GetValue"); this module only adapts the script call to it and writes
-//! no second copy of the rule. UNVERIFIED in the running game.
+//! (NATIVE_ATTRIBUTES.md, "AttributeDefinition.GetValue"), through its shared steps (`preflight_read`, `value_context`,
+//! `value_from_context`); this module only adapts the script call and writes no second copy of the rule. UNVERIFIED in the running game.
 //!
 //! `ParityMode::Off` only. The C++ reference has no script native for it (its attribute reads are library calls), so
 //! Reference binds nothing and the call stays the unbound native it was.
 
 use ow_attr::api::EvalCx;
-use ow_core::ParityMode;
+use ow_core::{NotYet, ParityMode};
 use ow_object::ids::ObjRef;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
@@ -28,32 +28,55 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
     bind_fn(vm, GET_VALUE, get_value)
 }
 
-/// The note's rule, all of it in [`ow_attr::AttributeSystem::value_of`]: the override source is tried first when one
-/// is given, then `ContextSource`, through the definition's context chain. With a context, the value chain's result
-/// is returned and the context is written to `ResolvedContext`. With none, 0.0 and a None context. Anything the
-/// library leaves unread (a resolver class it does not implement, a multi-context definition) comes back as its own
-/// `NotYet`.
+/// The note's rule (NATIVE_ATTRIBUTES.md, "AttributeDefinition.GetValue"), in its order, on `ow-attr`'s shared steps:
+/// 1. the context: the override source first when one is given, then `ContextSource`, through the definition's context
+///    chain ([`ow_attr::AttributeSystem::value_context`]);
+/// 2. the context written to the caller's `ResolvedContext` (None when nothing resolved), when the caller passed it, so
+///    script the value chain reaches sees the new object;
+/// 3. with a context, the value chain's result ([`ow_attr::AttributeSystem::value_from_context`]); with none, 0.0.
 ///
-/// An argument that is not an object reference is a script error, never read as None. `ResolvedContext` is written
-/// only when the caller passed it.
+/// **Refusals (the hub's ruling in review r1 of #442, the same rule as #437 and #439).** Everything that can refuse is
+/// decided before anything has an effect:
+/// - the arguments: `ContextSource`, a supplied `ResolvedContext` and a supplied `OptionalOverrideContextSource` must
+///   each be an object reference;
+/// - the definition's own chains, through [`ow_attr::AttributeSystem::preflight_read`]: not multi-context, every
+///   resolver class one the library implements, no None value chain entry.
+///
+/// Those refuse with nothing changed: no generator drawn, no saved random value written, no out argument written.
+/// Once step 1 starts, a refusal can come from what the steps reach (a nested attribute, a resolver's own data, script
+/// a context resolver runs). It may follow effects (a random draw, the out write), and the port does not track
+/// whether one happened. So it is **terminal**: nothing is put back, its text starts "stopped after partial writes",
+/// and its kind is kept.
 fn get_value(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let attr = this(c, UNIT)?;
     let source = object_arg(c, 0, "ContextSource")?;
+    let out = c.arg_count() > 1 && c.has(1);
+    if out {
+        object_arg(c, 1, "ResolvedContext")?;
+    }
     let override_source = if c.arg_count() > 2 && c.has(2) {
         object_arg(c, 2, "OptionalOverrideContextSource")?
     } else {
         None
     };
     let attrs = c.vm.attrs.clone();
-    let read = attrs.value_of(attr, source, override_source, &mut EvalCx::new(c.vm))?;
-    let (context, value) = match read {
-        Some(v) => (Some(v.context), v.value),
-        None => (None, 0.0),
-    };
-    if c.arg_count() > 1 && c.has(1) {
-        c.set_out(1, Value::Object(context))?;
+    attrs.preflight_read(attr, &mut EvalCx::new(c.vm))?;
+    let committed = (|| -> Result<f32, VmError> {
+        let context = attrs.value_context(attr, source, override_source, &mut EvalCx::new(c.vm))?;
+        if out {
+            c.set_out(1, Value::Object(context))?;
+        }
+        Ok(attrs.value_from_context(attr, context, &mut EvalCx::new(c.vm))?)
+    })();
+    committed.map(Value::Float).map_err(after_partial_writes)
+}
+
+/// A refusal after evaluation started: terminal, its text prefixed, its kind kept.
+fn after_partial_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) => NotYet::new(format!("stopped after partial writes: {}", n.what), n.missing, n.record).into(),
+        other => super::access::error(format!("{UNIT}: stopped after partial writes: {other}")),
     }
-    Ok(Value::Float(value))
 }
 
 fn object_arg(c: &NativeCall<'_>, i: usize, name: &str) -> Result<Option<ObjRef>, VmError> {

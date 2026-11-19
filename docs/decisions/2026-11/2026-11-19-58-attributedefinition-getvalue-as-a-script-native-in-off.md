@@ -22,7 +22,24 @@ in the running game. No dependency was added, no bounds check was loosened and n
   calls in `src/progression.cpp`), so there is no stand-in to label, and the call stays the unbound native it was.
   The library's own Reference stand-ins (the designer attribute) are unchanged.
 
-**Verified (automated, invented classes).** `ow-combat`: 2 new tests on an invented `Engine` package (a `Pawn` with a
+**Review r1 of #442 (the hub's ruling, the same rule as #437 and #439).**
+
+- **Everything that can refuse is decided before any effect.**
+  - The arguments are checked first, a supplied non-object `ResolvedContext` included (item 3).
+  - Then `ow-attr`'s new `AttributeSystem::preflight_read` checks that the definition is not multi-context, that every
+    resolver class in its two chains is one the library implements, and that the value chain has no None entry (item
+    1).
+  - A refusal at this stage changes nothing: no generator draw, no saved random value, no out write.
+- **The note's order** (item 2). The steps are `ow-attr`'s shared ones:
+  1. the context (`AttributeSystem::value_context`, newly public);
+  2. the write to the caller's `ResolvedContext`;
+  3. the value chain (`value_from_context`).
+- **After step 1 starts, a refusal is terminal.** It can come from what the steps reach: a nested attribute, a
+  resolver's data, or script a context resolver runs. The port does not track whether an effect came first, so the
+  refusal is labelled by position, as in #437. Nothing is put back, the text starts "stopped after partial writes",
+  and the kind is kept.
+
+**Verified (automated, invented classes).** `ow-combat`: 2 tests on an invented `Engine` package (a `Pawn` with a
 plain float attribute, the two attribute classes with the game's `GetValue` parameter shape, the pawn context resolver
 and the object-property value resolver).
 
@@ -32,6 +49,14 @@ and the object-property value resolver).
 - In Off, an unimplemented resolver class passes the library's `NotYet { NotRead }` through, and a non-object argument
   is an error.
 - Under Reference the key `AttributeDefinition.GetValue(object,object,object)` is not bound.
+- After review r1, three more tests on invented `Engine` and `GearboxFramework` packages, run from a script caller
+  whose out argument aliases the pawn's own property:
+  - A random resolver followed by an unread class is refused before the draw. The generator, `SavedRandomValues` and
+    the out destination are untouched; the same random resolver alone does draw and save.
+  - A test-registered probe resolver sees `ResolvedContext` already written when the value chain runs. A refusal found
+    only by evaluating carries the terminal prefix, and the written context stays.
+  - A non-object `ResolvedContext` is an error, with no draw.
+  - Removing the preflight, or writing the out argument after the value chain, fails these tests (checked).
 - Gate numbers are in `docs/verification/GATES.md`.
 
 **Installed (Off; outputs under ignored `local/p2/fix-attr-getvalue/`).**
