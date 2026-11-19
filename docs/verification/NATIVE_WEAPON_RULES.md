@@ -273,7 +273,8 @@ with the recorded name parts gives all four exactly, and all 69 golden sale valu
 function failed the same way as the first. `ComputeMonetaryValue` and `ComputeValueOfParts` are exec thunks that call
 through the item's vtable. The project's vtable lookup finds no constructor pattern for `WillowInventory`,
 `WillowItem` or `WillowWeapon`. The stored value is the integer that `GetMonetaryValue` returns. The formula above is
-therefore confirmed by 69 of 69 cards, not read.
+therefore confirmed by 69 of 69 cards, not read. Since read (2026-11-19): NATIVE_INVENTORY_VALUE.md; the cards
+confirm the outcome, not the order of effects.
 
 Buying and selling: the card prints the value unless a shop passes an override; the buy-back list prices an item at its
 value; a vending machine's featured item costs `int(value * FeaturedItemCommerceMarkup)` (or a fixed cost) capped by the

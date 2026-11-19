@@ -9,7 +9,9 @@ and three `NATIVE_INDEX.md` rows record:
 - `ComputeValueOfParts` (weapons and items) writes three fields:
   - `RarityLevel`: the definition's base rarity plus each part's rarity, each truncated before the sum. A mission
     item takes the globals definition's `MissionItemRarityLevel` instead;
-  - `MonetaryValueModifierTotal`: the definition's base modifier times every part's and both name parts' value
+  - `MonetaryValueModifierTotal` (the property's package name; calculators read it as the attribute
+    `InventoryPartMonetaryValueModifierTotal`): the definition's base modifier times every part's and both name parts'
+    value
     modifiers, unrounded;
   - `MonetaryValue`: through the same body as `ComputeMonetaryValue`.
 

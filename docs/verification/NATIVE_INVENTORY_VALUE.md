@@ -13,7 +13,8 @@ section lists the live observations that would confirm the rest.
 codes them from this note alone.
 
 **Why it matters.** Slice link 8 (equip): per #406, every installed weapon's init phase (the spawn's
-`InitializeInternal`) stops at `ComputeValueOfParts`. No record had its body: NATIVE_WEAPON_RULES.md section 6 records that the earlier
+`InitializeInternal`) stops at `ComputeValueOfParts`. No record had its body: NATIVE_WEAPON_RULES.md section 6 records
+that the earlier
 read could not resolve it. It is read here.
 
 ## Summary
@@ -32,12 +33,15 @@ which rarity rule they use. The rule writes three fields of the inventory, in th
 1. **Nothing happens without a definition.** The first definition of the definition data must be set:
    `WeaponTypeDefinition` for a weapon, `ItemDefinition` for an item.
 2. **`RarityLevel`** is computed (section 2).
-3. **`MonetaryValueModifierTotal`** starts at the definition's `BaseMonetaryValueModifier`. For each part slot that
-   holds a part, the part's `MonetaryValueMod` attribute, when set, is evaluated with the inventory as context, and
-   the total is multiplied by it.
-   - The slots are walked in the `AllParts` order (NATIVE_EQUIP_PARTS.md section 2): the nine part slots, then the
-     two name-part slots. **The name parts are included** in this walk.
-   - The total stays a single-precision float. Nothing is rounded.
+3. **`MonetaryValueModifierTotal`** (the `WillowInventory` property of that name in the packages; the value calculators
+   read it as the attribute `D_Attributes.Inventory.InventoryPartMonetaryValueModifierTotal`, the name
+   NATIVE_WEAPON_RULES.md and `ow-items` use; how that attribute reaches the property was not read: UNVERIFIED) starts
+   at the definition's `BaseMonetaryValueModifier`.
+   - Then one part at a time, in the `AllParts` order (NATIVE_EQUIP_PARTS.md section 2: the nine part slots, then the
+     two name-part slots), the total is multiplied by the part's `MonetaryValueMod` attribute, evaluated with the
+     inventory as context. A part whose `MonetaryValueMod` is not set, and an empty slot, leave the total as it is.
+     **The name parts are included** in this walk.
+   - Each product is stored back in single precision before the next part. Nothing is rounded to an integer.
    - The attribute is evaluated by its value-resolver chain, as for any attribute (NATIVE_ATTRIBUTES.md).
 4. **`MonetaryValue`** = `ComputeMonetaryValue()` (section 3), which reads the total through the value attributes.
 
@@ -52,6 +56,9 @@ the name parts' modifiers.
   same slot walk with the name parts included. Every value is evaluated with **its own definition or part** as
   context, then truncated toward zero to an integer **before** it is added. A truncated sum of untruncated values
   would differ.
+  - An unset value adds 0. With no base attribute and no initialization definition, the evaluator's answer is the
+    value's constant times its scale constant, and an unset struct holds zero there. An empty slot adds nothing.
+  - **The mission rule below does not apply to weapons:** the weapon rule has no mission-item case.
 - **Item:**
   - for an item whose definition is a `MissionItemDefinition` (or a subclass), the answer is the globals definition's
     `MissionItemRarityLevel`; it is 0 when there is no globals object or globals definition;
@@ -77,7 +84,8 @@ NATIVE_WEAPON_RULES.md section 6 matched 69 of 69 golden sale values with a calc
 truncated. That match needed every part's **and both name parts'** `MonetaryValueMod` in the part total.
 
 The read here is that structure:
-- `PartTotal` is `MonetaryValueModifierTotal`, which includes the name parts;
+- `PartTotal` is `MonetaryValueModifierTotal` (read by the calculator as the attribute
+  `InventoryPartMonetaryValueModifierTotal`), which includes the name parts;
 - the calculator is the definition's `MonetaryValue` initialization data, evaluated with the inventory as context;
 - the truncation is `ComputeMonetaryValue`'s.
 
@@ -108,7 +116,8 @@ After it, the script goes on to the name parts:
 3. `InitializeAttributeSlotsForNameParts` and `ApplyInternalSlotEffectModifiers` (both in the index);
 4. `ApplyNamePartWeaponAttributeEffects` (script).
 
-Then `RecomputeNormalizedDamageValues` and `ComputeValueOfParts` (its third call) run again, then `CacheWeaponCard` (native, unread),
+Then `RecomputeNormalizedDamageValues` and `ComputeValueOfParts` (its third call) run again, then `CacheWeaponCard`
+(native, unread),
 `RecomputeAttributeBaseValues` (in the index), `ClientInitializeFromWeaponTypeDefinition` (script) and
 `GetFiringModeDefinition` (in the index).
 
