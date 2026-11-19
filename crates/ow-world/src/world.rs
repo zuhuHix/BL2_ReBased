@@ -495,6 +495,9 @@ impl NativePack for Pack {
             // the hub's ruling, a port answer like the empty online-subsystem slot. The port always runs the game,
             // never the editor, so false: no read, no write, UNVERIFIED in game.
             vm.register_native(IS_EDITOR, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
+            // WorldInfo.AllNavigationPoints (link 1's next stop in `FindPlayerStart`; lane IMPL-ALL-NAVIGATION-POINTS,
+            // decision 2026-11-19-NNN): the stock iterator over the serialized list, UNVERIFIED in game.
+            nav_points::register(vm)?;
             vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
             // The engine's data store client, its global stores and the online game settings route
             // (NATIVE_ONLINE_GAME_SETTINGS.md; lane IMPL-ONLINE-GAME-SETTINGS, decision 2026-11-19-65).
@@ -601,6 +604,9 @@ pub mod after_login;
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;
 pub mod pawn_data;
+
+/// `WorldInfo.AllNavigationPoints` (lane IMPL-ALL-NAVIGATION-POINTS).
+pub mod nav_points;
 
 #[cfg(test)]
 mod tests;

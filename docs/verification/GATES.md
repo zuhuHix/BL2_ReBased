@@ -21,6 +21,15 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-ALL-NAVIGATION-POINTS (2026-11-19, pc-hummer, on research/rust-is-split-screen 368f3f0f, #510 on #508):**
+AI-assisted (Claude Code, Opus 5.5). `WorldInfo.AllNavigationPoints` in Off: the serialized list walked with a class
+filter, six open cases `NotYet { NotRead }`. `cargo test -p ow-world -p ow-cli --locked -j 4` 343 passed / 0 failed / 8
+ignored; `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict (release build, `Engine.IsSplitScreen()` bound
+false locally only, uncommitted, under the machine lock): 0 ok / 5 NotYet / 9 errors. Links 1, 3, 4, 5, 13 and 14 get
+past the iterator and stop in `maya:8` at the unbound `WillowPlayerPawn.InitializePawnMeshes()` (link 1: 0 of 1 driver
+step). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN; logs under ignored `local/analysis/navpoints/`.
+
 **IMPL-IS-EDITOR (2026-11-19, pc-hummer, on fix/rust-link1-after-login c42f2e35, #499):** AI-assisted (Claude Code, Opus
 5.5). `WillowGameInfo.IsEditor` answers false in Off (the hub's ruling). `cargo build --workspace --locked -j 4` clean;
 `cargo test --workspace --locked -j 4` 2,422 passed / 0 failed / 48 ignored; `crate_edges_test.py` 19 OK. Installed Off

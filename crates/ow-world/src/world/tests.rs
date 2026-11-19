@@ -2213,6 +2213,19 @@ fn is_editor_is_false_in_off_and_unbound_in_reference() {
     });
 }
 
+/// `WorldInfo.AllNavigationPoints` (lane IMPL-ALL-NAVIGATION-POINTS): `World::new` binds the iterator in Off and not
+/// under Reference. A second registration of the key is refused only where the world bound it.
+#[test]
+fn all_navigation_points_is_bound_in_off_only() {
+    run(|| {
+        let empty = || -> ow_vm::api::IteratorFn { Rc::new(|_c: &mut NativeCall<'_>| Ok(ow_vm::api::IteratorResult::default())) };
+        let mut x = fx();
+        assert!(x.w.vm.register_iterator(crate::world::nav_points::KEY, empty()).is_err(), "bound in Off");
+        let mut x = fx_in(true, ParityMode::Reference);
+        assert!(x.w.vm.register_iterator(crate::world::nav_points::KEY, empty()).is_ok(), "unbound under Reference");
+    });
+}
+
 /// `PlayerController.IsLocalPlayerController` (decision 2026-11-19-15, public UE3 semantics): a controller in the
 /// world's local-player list is local; an unlisted one with no `Player` is not; an unlisted one with a `Player` the
 /// world does not model is `NotYet`; a destroyed listed one is not. Without a world: `NotYet { LayerAbsent }`. Unbound
