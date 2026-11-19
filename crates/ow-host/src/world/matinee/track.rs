@@ -154,7 +154,8 @@ fn vec3(space: &ObjectSpace, v: &Value, name: &str) -> Result<[f32; 3], String> 
     let mut out = [0.0f32; 3];
     for (i, axis) in ["X", "Y", "Z"].iter().enumerate() {
         match field(space, v, axis) {
-            Some(Value::Float(f)) => out[i] = *f,
+            Some(Value::Float(f)) if f.is_finite() => out[i] = *f,
+            Some(Value::Float(_)) => return Err(format!("{name}.{axis} is not finite")),
             _ => return Err(format!("{name}.{axis} is not a float")),
         }
     }
@@ -191,7 +192,8 @@ fn curve(space: &ObjectSpace, track: ObjRef, name: &str) -> Result<Curve, String
     let mut keys = Vec::new();
     for p in points.iter() {
         let time = match field(space, p, "InVal") {
-            Some(Value::Float(f)) => *f,
+            Some(Value::Float(f)) if f.is_finite() => *f,
+            Some(Value::Float(_)) => return Err(format!("{name}: a key's InVal is not finite")),
             _ => return Err(format!("{name}: a key's InVal is not a float")),
         };
         let mode = match field_enum(space, p, "InterpMode") {
@@ -206,7 +208,8 @@ fn curve(space: &ObjectSpace, track: ObjRef, name: &str) -> Result<Curve, String
             mode,
         });
     }
-    // The record's evaluation assumes keys in time order; a curve out of order is refused, not sorted.
+    // The record's evaluation assumes keys in time order; a curve out of order is refused, not sorted. Every time,
+    // value and tangent is finite by now (review r1 of #436: a NaN time defeats an order check of `<` alone).
     if keys.windows(2).any(|w| w[1].time < w[0].time) {
         return Err(format!("{name}: the keys are not in time order"));
     }

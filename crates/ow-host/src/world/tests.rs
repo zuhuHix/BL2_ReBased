@@ -29,6 +29,7 @@ fn engine() -> Vec<u8> {
         "ObjectProperty",
         "ArrayProperty",
         "StructProperty",
+        "StrProperty",
     ]);
     let object = t.class("Object", 0);
     let vector = toy_struct(&mut t, object, "Vector", None);
@@ -71,8 +72,74 @@ fn engine() -> Vec<u8> {
     // object variable, a subclass of it, a named variable and a scalar one.
     let link = toy_struct(&mut t, object, "SeqVarLink", None);
     toy_array_of(&mut t, link, "LinkedVariables", "Object", object);
-    let interp = t.class("SeqAct_Interp", object);
+    // The Kismet graph's classes (lane H-MATINEE review r1): ops with output links, events, actions, sequences.
+    let input_link = toy_struct(&mut t, object, "SeqOpOutputInputLink", None);
+    let sequence_op = t.class("SequenceOp", object);
+    t.prop("Object", input_link, "LinkedOp", 0, sequence_op);
+    let output_link = toy_struct(&mut t, object, "SeqOpOutputLink", None);
+    toy_array_of(&mut t, output_link, "Links", "Struct", input_link);
+    t.prop_tail("Str", output_link, "LinkDesc", 0, &[]);
+    toy_array_of(&mut t, sequence_op, "OutputLinks", "Struct", output_link);
+    let event = t.class("SequenceEvent", sequence_op);
+    let action = t.class("SequenceAction", sequence_op);
+    t.class("Sequence", sequence_op);
+    for e in ["SeqEvent_LevelLoaded", "SeqEvent_Touch", "SeqEvent_SequenceActivated", "SeqEvent_Mission"] {
+        t.class(e, event);
+    }
+    let remote = t.class("SeqEvent_RemoteEvent", event);
+    t.prop("Name", remote, "EventName", 0, 0);
+    let activate = t.class("SeqAct_ActivateRemoteEvent", action);
+    t.prop("Name", activate, "EventName", 0, 0);
+    let finish = t.class("SeqAct_FinishSequence", action);
+    t.prop_tail("Str", finish, "OutputLabel", 0, &[]);
+    let interp = t.class("SeqAct_Interp", action);
     toy_array_of(&mut t, interp, "VariableLinks", "Struct", link);
+    // The movement track's classes: the curve structs, the track and its enums.
+    let enum_export = |t: &mut ScriptToy, outer: i32, name: &str, values: &[&str]| {
+        let mut payload = ints(&[0]);
+        payload.extend_from_slice(&t.none);
+        payload.extend(ints(&[0, values.len() as i32]));
+        for v in values {
+            let bytes = t.p.fname(v, 0);
+            payload.extend_from_slice(&bytes);
+        }
+        let mut e = Export::new(t.import("Enum"), name, payload);
+        e.outer = outer;
+        t.p.add_export_with(e)
+    };
+    let curve_mode = enum_export(&mut t, object, "EInterpCurveMode", &[
+        "CIM_Linear",
+        "CIM_CurveAuto",
+        "CIM_Constant",
+        "CIM_CurveUser",
+        "CIM_CurveBreak",
+        "CIM_CurveAutoClamped",
+    ]);
+    let curve_method = enum_export(&mut t, object, "EInterpCurveMethod", &[
+        "IMT_UseFixedTangentEvalAndNewAutoTangents",
+        "IMT_UseFixedTangentEval",
+        "IMT_UseBrokenTangentEval",
+    ]);
+    let point = toy_struct(&mut t, object, "InterpCurvePointVector", None);
+    t.prop("Float", point, "InVal", 0, 0);
+    for v in ["OutVal", "ArriveTangent", "LeaveTangent"] {
+        t.prop("Struct", point, v, 0, vector);
+    }
+    t.prop("Byte", point, "InterpMode", 0, curve_mode);
+    let curve = toy_struct(&mut t, object, "InterpCurveVector", None);
+    toy_array_of(&mut t, curve, "Points", "Struct", point);
+    t.prop("Byte", curve, "InterpMethod", 0, curve_method);
+    let track = t.class("InterpTrackMove", object);
+    let frame = enum_export(&mut t, track, "EInterpTrackMoveFrame", &["IMF_World", "IMF_RelativeToInitial"]);
+    let rot = enum_export(&mut t, track, "EInterpTrackMoveRotMode", &["IMR_Keyframed", "IMR_LookAtGroup", "IMR_Ignore"]);
+    for c in ["PosTrack", "EulerTrack"] {
+        t.prop("Struct", track, c, 0, curve);
+    }
+    t.prop("Byte", track, "MoveFrame", 0, frame);
+    t.prop("Byte", track, "RotMode", 0, rot);
+    for b in ["bUseQuatInterpolation", "bDisableMovement"] {
+        t.prop("Bool", track, b, 0, 0);
+    }
     let var = t.class("SeqVar_Object", object);
     t.prop("Object", var, "ObjValue", 0, object);
     t.class("SeqVar_ObjectList", var);
@@ -150,6 +217,169 @@ fn map(remote_role: u8, physics: Option<&str>, streaming: Option<&str>, kismet: 
     p.build()
 }
 
+/// The exports of [`kismet_package`], by index.
+mod k {
+    pub const PARENT: i32 = 1;
+    pub const CHILD: i32 = 2;
+    pub const LOADED: i32 = 3;
+    pub const FINISH: i32 = 4;
+    pub const EXIT_OP: i32 = 5;
+    pub const PING: i32 = 6;
+    pub const PING_ACTION: i32 = 7;
+    pub const REMOTE_OP: i32 = 8;
+    pub const TOUCH: i32 = 9;
+    pub const TOUCH_OP: i32 = 10;
+    pub const LONE_OP: i32 = 11;
+    pub const TRACK: i32 = 12;
+    pub const NAN_TRACK: i32 = 13;
+}
+
+/// A Vector's native body: three floats.
+fn vector_bytes(v: [f32; 3]) -> Vec<u8> {
+    v.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+/// `Test_K.upk`, an invented Kismet package (review r1 of #436), every op read through `read_graph`:
+/// - a parent sequence (1) and a child sequence (2) in it; in the child, a level-loaded event (3) linked to a finish op
+///   (4) labelled `Out`; the child's output `Out` links to a Matinee op in the parent (5): the exit edge;
+/// - a remote event `Ping` (6) linked to an action firing `Ping` (7), which the name edge closes into a cycle, and the
+///   event also linked to a Matinee op (8);
+/// - a touch event (9) linked to a Matinee op (10), and a Matinee op nothing links to (11);
+/// - a movement track (12): position keys at 0 and 2 s with a broken-tangent curve segment, and Euler yaw from 0 to
+///   720 degrees (two turns); and a track (13) whose middle key time is NaN.
+fn kismet_package() -> Vec<u8> {
+    let mut p = PackageBuilder::new_empty();
+    p.names(["None"]);
+    let engine = p.add_import("Core", "Package", 0, "Engine");
+    let class = |p: &mut PackageBuilder, name: &str| p.add_import("Core", "Class", engine, name);
+    let classes: Vec<i32> = [
+        "Sequence",
+        "SeqEvent_LevelLoaded",
+        "SeqAct_FinishSequence",
+        "SeqAct_Interp",
+        "SeqEvent_RemoteEvent",
+        "SeqAct_ActivateRemoteEvent",
+        "SeqEvent_Touch",
+        "InterpTrackMove",
+    ]
+    .iter()
+    .map(|c| class(&mut p, c))
+    .collect();
+    let (sequence, loaded, finish, interp, remote, activate, touch, track) =
+        (classes[0], classes[1], classes[2], classes[3], classes[4], classes[5], classes[6], classes[7]);
+    // One output (`desc`) linking to `targets`.
+    let outputs = |p: &mut PackageBuilder, desc: &str, targets: &[i32]| {
+        let mut links = Vec::new();
+        for &t in targets {
+            links.extend(p.object_tag("LinkedOp", t));
+            links.extend_from_slice(&p.none());
+        }
+        let mut element = p.array_tag("Links", i32::try_from(targets.len()).unwrap(), &links);
+        element.extend(p.str_tag("LinkDesc", desc));
+        element.extend_from_slice(&p.none());
+        p.array_tag("OutputLinks", 1, &element)
+    };
+    let add = |p: &mut PackageBuilder, class: i32, name: &str, outer: i32, tags: Vec<Vec<u8>>| {
+        let mut body = vec![0u8; 4];
+        for t in tags {
+            body.extend_from_slice(&t);
+        }
+        body.extend_from_slice(&p.none());
+        let mut export = Export::new(class, name, body);
+        export.outer = outer;
+        p.add_export_with(export)
+    };
+    assert_eq!(add(&mut p, sequence, "Main_Sequence", 0, Vec::new()), k::PARENT);
+    let child_out = outputs(&mut p, "Out", &[k::EXIT_OP]);
+    assert_eq!(add(&mut p, sequence, "Child", k::PARENT, vec![child_out]), k::CHILD);
+    let to_finish = outputs(&mut p, "Out", &[k::FINISH]);
+    assert_eq!(add(&mut p, loaded, "LevelLoaded_0", k::CHILD, vec![to_finish]), k::LOADED);
+    let label = p.str_tag("OutputLabel", "Out");
+    assert_eq!(add(&mut p, finish, "Finish_0", k::CHILD, vec![label]), k::FINISH);
+    assert_eq!(add(&mut p, interp, "Interp_Exit", k::PARENT, Vec::new()), k::EXIT_OP);
+    let mut ping = vec![p.name_tag("EventName", "Ping")];
+    ping.push(outputs(&mut p, "Out", &[k::PING_ACTION, k::REMOTE_OP]));
+    assert_eq!(add(&mut p, remote, "RemoteEvent_0", k::PARENT, ping), k::PING);
+    let fire = p.name_tag("EventName", "Ping");
+    assert_eq!(add(&mut p, activate, "Activate_0", k::PARENT, vec![fire]), k::PING_ACTION);
+    assert_eq!(add(&mut p, interp, "Interp_Remote", k::PARENT, Vec::new()), k::REMOTE_OP);
+    let touched = outputs(&mut p, "Touched", &[k::TOUCH_OP]);
+    assert_eq!(add(&mut p, touch, "Touch_0", k::PARENT, vec![touched]), k::TOUCH);
+    assert_eq!(add(&mut p, interp, "Interp_Touch", k::PARENT, Vec::new()), k::TOUCH_OP);
+    assert_eq!(add(&mut p, interp, "Interp_Lone", k::PARENT, Vec::new()), k::LONE_OP);
+    // A key: time, value, arrive and leave tangents, mode.
+    let key = |p: &mut PackageBuilder, time: f32, value: [f32; 3], leave: [f32; 3], mode: &str| {
+        let mut body = p.float_tag("InVal", time);
+        body.extend(p.struct_tag("OutVal", "Vector", &vector_bytes(value)));
+        body.extend(p.struct_tag("ArriveTangent", "Vector", &vector_bytes([0.0; 3])));
+        body.extend(p.struct_tag("LeaveTangent", "Vector", &vector_bytes(leave)));
+        body.extend(p.enum_tag("InterpMode", "EInterpCurveMode", mode));
+        body.extend_from_slice(&p.none());
+        body
+    };
+    let curve = |p: &mut PackageBuilder, name: &str, keys: Vec<Vec<u8>>, method: &str| {
+        let n = i32::try_from(keys.len()).unwrap();
+        let mut body = p.array_tag("Points", n, &keys.concat());
+        body.extend(p.enum_tag("InterpMethod", "EInterpCurveMethod", method));
+        body.extend_from_slice(&p.none());
+        p.struct_tag(name, "InterpCurveVector", &body)
+    };
+    let broken = "IMT_UseBrokenTangentEval";
+    let pos_keys = vec![
+        key(&mut p, 0.0, [0.0; 3], [1.0, 0.0, 0.0], "CIM_CurveBreak"),
+        key(&mut p, 2.0, [0.0; 3], [0.0; 3], "CIM_Linear"),
+    ];
+    let pos = curve(&mut p, "PosTrack", pos_keys, broken);
+    let euler_keys = vec![
+        key(&mut p, 0.0, [0.0; 3], [0.0; 3], "CIM_Linear"),
+        key(&mut p, 2.0, [0.0, 0.0, 720.0], [0.0; 3], "CIM_Linear"),
+    ];
+    let euler = curve(&mut p, "EulerTrack", euler_keys, broken);
+    let frame = p.enum_tag("MoveFrame", "EInterpTrackMoveFrame", "IMF_RelativeToInitial");
+    let rot = p.enum_tag("RotMode", "EInterpTrackMoveRotMode", "IMR_Keyframed");
+    assert_eq!(add(&mut p, track, "InterpTrackMove_0", k::PARENT, vec![pos, euler, frame, rot]), k::TRACK);
+    let nan_keys = vec![
+        key(&mut p, 0.0, [0.0; 3], [0.0; 3], "CIM_Linear"),
+        key(&mut p, f32::NAN, [1.0; 3], [0.0; 3], "CIM_Linear"),
+        key(&mut p, 2.0, [2.0; 3], [0.0; 3], "CIM_Linear"),
+    ];
+    let nan_pos = curve(&mut p, "PosTrack", nan_keys, broken);
+    let empty = curve(&mut p, "EulerTrack", Vec::new(), broken);
+    let frame = p.enum_tag("MoveFrame", "EInterpTrackMoveFrame", "IMF_World");
+    let rot = p.enum_tag("RotMode", "EInterpTrackMoveRotMode", "IMR_Keyframed");
+    assert_eq!(add(&mut p, track, "InterpTrackMove_NaN", k::PARENT, vec![nan_pos, empty, frame, rot]), k::NAN_TRACK);
+    p.build()
+}
+
+/// A VM over a store of the invented `Engine.upk` and [`kismet_package`], whose folder lives as long as the guard
+/// (the store opens an object's file again when it loads it).
+struct KismetStore {
+    vm: Vm,
+    package: ow_package::PackageId,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for KismetStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn kismet_store() -> KismetStore {
+    let dir = std::env::temp_dir().join(format!(
+        "ow-host-kismet-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (engine, kismet) = (engine(), kismet_package());
+    let files: [(&str, &[u8]); 2] = [("Engine.upk", &engine), ("Test_K.upk", &kismet)];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let package = vm.defs.code_mut().1.load(&PackageName::parse("Test_K").unwrap()).unwrap();
+    KismetStore { vm, package, dir }
+}
+
 /// A builder over a fresh store holding the invented packages, that also moves the pawn to `at` after the load (the
 /// invented `Vector` has no tagged form here, so the placement is written, not read).
 fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
@@ -205,7 +435,9 @@ fn builder_files(
         let _ = std::fs::remove_dir_all(&dir);
         let list = world.actors().borrow().list().to_vec();
         let pawn = *list.last().unwrap();
-        let mut bindings = matinee_bound(&mut world.vm)?;
+        let summary = LoadSummary::from_report("Test_P", ParityMode::Off, &report, list.len());
+        let packages = level_packages(&mut world.vm, &summary)?;
+        let mut bindings = matinee_bound(&mut world.vm, &packages)?;
         if !kismet {
             assert_eq!(bindings.ops, 0, "the invented packages hold no Matinee op");
         }
@@ -319,12 +551,19 @@ fn each_physics_mode_s_rule() {
     let off = ParityMode::Off;
     assert_eq!(physics_rule("PHYS_None", c, &Driver::Bound, off), Ok(()));
     assert_eq!(physics_rule("PHYS_Interpolating", c, &Driver::Unbound, off), Ok(()));
-    assert_eq!(physics_rule("PHYS_Interpolating", c, &Driver::NotStarted, off), Ok(()));
     // R3: the no-op is Off's; the C++ reference has no host physics to stand in.
-    for driver in [Driver::Unbound, Driver::NotStarted] {
-        let reference = physics_rule("PHYS_Interpolating", c, &driver, ParityMode::Reference).unwrap_err();
-        assert!(matches!(reference.missing, Missing::NotPorted), "{reference}");
+    let reference = physics_rule("PHYS_Interpolating", c, &Driver::Unbound, ParityMode::Reference).unwrap_err();
+    assert!(matches!(reference.missing, Missing::NotPorted), "{reference}");
+    // An op the graph does not start at load still answers NotYet (review r1 of #436): the startup paths outside the
+    // graph, SetPosition from a script and a touch from a spawn overlap, are not ruled out.
+    for touch in [false, true] {
+        let n = physics_rule("PHYS_Interpolating", c, &Driver::NotStarted { touch }, off).unwrap_err();
+        assert!(matches!(n.missing, Missing::NotRead), "{n}");
+        assert!(n.to_string().contains("a script calling its SetPosition"), "{n}");
+        assert_eq!(n.to_string().contains("a touch from an actor spawned overlapping"), touch, "{n}");
     }
+    let incomplete = physics_rule("PHYS_Interpolating", c, &Driver::Incomplete("a reason (x1)".into()), off).unwrap_err();
+    assert!(incomplete.to_string().contains("the Kismet graph is incomplete (a reason (x1))"), "{incomplete}");
     let missing = |mode: &str, driver: Driver| physics_rule(mode, c, &driver, off).unwrap_err();
     let at_load = missing("PHYS_Interpolating", Driver::AtLoad("Engine.SeqEvent_LevelLoaded".into()));
     assert!(matches!(at_load.missing, Missing::LayerAbsent(_)), "{at_load}");
@@ -459,9 +698,10 @@ fn the_scan_reads_each_variable_kind_and_flags_what_it_cannot_see() {
 /// is incomplete and the placed pawn's driver is Unknown.
 #[test]
 fn the_export_walk_reads_ops_skips_listed_classes_and_counts_unresolved_ones() {
-    let (mut world, _) = kismet_builder()().unwrap();
+    let (mut world, summary) = kismet_builder()().unwrap();
     let pawn = *world.actors().borrow().list().last().unwrap();
-    let bindings = matinee_bound(&mut world.vm).unwrap();
+    let packages = level_packages(&mut world.vm, &summary).unwrap();
+    let bindings = matinee_bound(&mut world.vm, &packages).unwrap();
     assert_eq!(bindings.ops, 1, "{bindings:?}");
     assert_eq!(
         bindings.unresolved_classes.iter().map(|(c, n)| (c.as_str(), *n)).collect::<Vec<_>>(),
@@ -500,6 +740,8 @@ fn graph(
     g.load_events = load.iter().map(|&i| ops[i]).collect();
     g.events = events.iter().map(|&i| ops[i]).collect();
     g.gameplay_events = gameplay.iter().map(|&i| ops[i]).collect();
+    // The hand-made graphs' gameplay events are touches.
+    g.touch_events = g.gameplay_events.clone();
     g
 }
 
@@ -519,7 +761,7 @@ fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
     let events = [load, mission, touch];
     // Nothing links to the op: it never starts.
     let g = graph(&o, &classes, &[], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: false });
     // A load event two links up (through an action): it starts at load, and the load event wins over the others.
     let g = graph(&o, &classes, &[(op, &[action, touch]), (action, &[load, mission])], &[load], &events, &[touch]);
     assert_eq!(start_of(&g, o[op]), Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
@@ -528,7 +770,7 @@ fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
     assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["WillowGame.WillowSeqEvent_MissionRemoteEvent".into()]));
     // Only a touch and an action no link reaches: not at load.
     let g = graph(&o, &classes, &[(op, &[touch, dead])], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: true });
     // A remote event whose action a load event fires (the name edge read_graph adds): at load.
     let (remote, activate) = (6, 7);
     let classes2 = [
@@ -544,7 +786,17 @@ fn an_op_starts_at_load_only_if_a_level_load_event_reaches_it() {
     assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
     // A cycle with no event in it: nothing starts it.
     let g = graph(&o, &classes, &[(op, &[action]), (action, &[dead]), (dead, &[action])], &[load], &events, &[touch]);
-    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad);
+    assert_eq!(start_of(&g, o[op]), Start::NotAtLoad { touch: false });
+    // A remote event whose only action has no source (a dead sender): still firable from outside (review r1).
+    let g = graph(&o, &classes2, &[(op, &[remote]), (remote, &[activate])], &[load], &[load, remote], &[]);
+    assert_eq!(start_of(&g, o[op]), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
+    // An incomplete graph answers Incomplete for every op, naming its reasons.
+    let mut g = graph(&o, &classes, &[], &[load], &events, &[touch]);
+    g.incomplete.insert("a link's LinkedOp is missing or not an object".into(), 2);
+    assert_eq!(
+        start_of(&g, o[op]),
+        Start::Incomplete("a link's LinkedOp is missing or not an object (x2)".into())
+    );
 }
 
 #[test]
@@ -557,9 +809,9 @@ fn an_actor_s_driver_combines_the_ops_that_bind_it() {
     bindings.by_actor.insert(actor, [a, b].into_iter().collect());
     // A start not worked out: the playback NotYet, as before this lane.
     assert_eq!(Driver::of(&bindings, actor), Driver::Bound);
-    bindings.starts.insert(a, Start::NotAtLoad);
-    bindings.starts.insert(b, Start::NotAtLoad);
-    assert_eq!(Driver::of(&bindings, actor), Driver::NotStarted);
+    bindings.starts.insert(a, Start::NotAtLoad { touch: false });
+    bindings.starts.insert(b, Start::NotAtLoad { touch: true });
+    assert_eq!(Driver::of(&bindings, actor), Driver::NotStarted { touch: true });
     bindings.starts.insert(b, Start::Outside(vec!["X.Mission".into()]));
     assert_eq!(Driver::of(&bindings, actor), Driver::Outside("X.Mission".into()));
     bindings.by_actor.insert(actor, [a, b, c].into_iter().collect());
@@ -569,6 +821,60 @@ fn an_actor_s_driver_combines_the_ops_that_bind_it() {
     assert_eq!(Driver::of(&bindings, a), Driver::Unbound);
     bindings.unreadable = 1;
     assert_eq!(Driver::of(&bindings, actor), Driver::Unknown);
+}
+
+/// The invented Kismet package through `read_graph` (review r1 of #436): the exit out of a subsequence, a remote
+/// cycle that stays externally firable, a touch, and an op nothing links to; and an unresolved class elsewhere makes
+/// every start Incomplete.
+#[test]
+fn read_graph_follows_exits_and_keeps_remote_events_external() {
+    use matinee::{Start, read_graph, start_of};
+    let mut store = kismet_store();
+    let package = store.package;
+    let vm = &mut store.vm;
+    let packages: ow_core::DetSet<_> = [package].into_iter().collect();
+    let graph = read_graph(vm, &packages).unwrap();
+    assert!(graph.incomplete.is_empty(), "{:?}", graph.incomplete);
+    assert_eq!(graph.matinee.len(), 4);
+    let op = |vm: &mut Vm, index: i32| vm.defs.resolve_ref(&mut vm.space, package, index).unwrap().unwrap();
+    let (exit, remote, touch, lone) = (op(vm, k::EXIT_OP), op(vm, k::REMOTE_OP), op(vm, k::TOUCH_OP), op(vm, k::LONE_OP));
+    // The level-loaded event inside the child reaches the parent's op through the finish op and the child's output.
+    assert_eq!(start_of(&graph, exit), Start::AtLoad(vec!["Engine.SeqEvent_LevelLoaded".into()]));
+    assert!(graph.sources[&exit].contains(&op(vm, k::FINISH)));
+    // The remote event has a source in the graph (its own action, a cycle), and stays firable from outside.
+    assert!(graph.sources[&op(vm, k::PING)].contains(&op(vm, k::PING_ACTION)));
+    assert_eq!(start_of(&graph, remote), Start::Outside(vec!["Engine.SeqEvent_RemoteEvent".into()]));
+    assert_eq!(start_of(&graph, touch), Start::NotAtLoad { touch: true });
+    assert_eq!(start_of(&graph, lone), Start::NotAtLoad { touch: false });
+    // Over the map that holds exports of a class that does not resolve, the graph is incomplete.
+    let (mut world, summary) = kismet_builder()().unwrap();
+    let levels = level_packages(&mut world.vm, &summary).unwrap();
+    let graph = read_graph(&mut world.vm, &levels).unwrap();
+    assert_eq!(graph.incomplete.get("the export class Engine.NoSuchOp does not resolve"), Some(&2));
+    let any = graph.matinee[0];
+    assert!(matches!(start_of(&graph, any), Start::Incomplete(_)));
+}
+
+/// The invented movement tracks through `read_move` (review r1 of #436): a broken-tangent segment and yaw wound past
+/// one turn, and a NaN key time refused while decoding.
+#[test]
+fn read_move_decodes_the_package_and_refuses_a_nan_key() {
+    use matinee::track::{MoveFrame, read_move};
+    let mut store = kismet_store();
+    let package = store.package;
+    let vm = &mut store.vm;
+    let track = vm.defs.resolve_ref(&mut vm.space, package, k::TRACK).unwrap().unwrap();
+    let m = read_move(&vm.space, track).unwrap();
+    assert_eq!(m.frame, MoveFrame::RelativeToInitial);
+    assert!(m.position.broken);
+    // From 0 to 0 over 2 s with leave tangent 1, broken (not scaled by the 2 s): at 1 s, h10 = 0.125.
+    assert_eq!(m.key_pose(1.0).0, [0.125, 0.0, 0.0]);
+    // Yaw 720 degrees at 2 s: two turns, 131072 units, not wrapped.
+    assert_eq!(m.key_pose(2.0).1.yaw, 131_072);
+    assert_eq!(m.key_pose(1.0).1.yaw, 65_536);
+    let nan = vm.defs.resolve_ref(&mut vm.space, package, k::NAN_TRACK).unwrap().unwrap();
+    let refused = read_move(&vm.space, nan).unwrap_err();
+    assert!(refused.to_string().contains("InVal is not finite"), "{refused}");
 }
 
 #[test]
@@ -611,9 +917,10 @@ fn sanctuary_physics_census() {
     let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
     let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
     let text = ow_vm::interp::on_vm_stack(move || {
-        let (mut world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let (mut world, summary) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
         let list = world.actors().borrow().list().to_vec();
-        let bindings = scan_matinee(&mut world.vm).unwrap();
+        let packages = level_packages(&mut world.vm, &summary).unwrap();
+        let bindings = scan_matinee(&mut world.vm, &packages).unwrap();
         let bound = bindings.bound.clone();
         let space = &world.vm.space;
         let mut census: std::collections::BTreeMap<String, usize> = Default::default();
@@ -701,9 +1008,16 @@ fn sanctuary_matinee_census() {
     let root = std::env::var_os("OW_BL2_ROOT").expect("set OW_BL2_ROOT to the install folder");
     let cooked = std::path::Path::new(&root).join("WillowGame/CookedPCConsole");
     let text = ow_vm::interp::on_vm_stack(move || {
-        let (mut world, _) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
-        let graph = read_graph(&mut world.vm).unwrap();
-        let mut out = format!("ops {}, matinee {}, load events {}\n", graph.ops.len(), graph.matinee.len(), graph.load_events.len());
+        let (mut world, summary) = build_installed(cooked, "Sanctuary_P".into(), ParityMode::Off).unwrap();
+        let packages = level_packages(&mut world.vm, &summary).unwrap();
+        let graph = read_graph(&mut world.vm, &packages).unwrap();
+        let mut out = format!("graph incomplete: {:?}\n", graph.incomplete);
+        out.push_str(&format!(
+            "ops {}, matinee {}, load events {}\n",
+            graph.ops.len(),
+            graph.matinee.len(),
+            graph.load_events.len()
+        ));
         let mut classes: std::collections::BTreeMap<String, usize> = Default::default();
         for c in graph.ops.values() {
             *classes.entry(c.clone()).or_default() += 1;
@@ -727,14 +1041,15 @@ fn sanctuary_matinee_census() {
         for &op in &graph.matinee.clone() {
             let start = start_of(&graph, op);
             let key = match &start {
-                Start::NotAtLoad => "not at load".to_string(),
+                Start::NotAtLoad { touch } => format!("not at load (touch {touch})"),
+                Start::Incomplete(why) => format!("incomplete: {why}"),
                 Start::AtLoad(e) => format!("at load via {e:?}"),
                 Start::Outside(e) => format!("from outside the graph via {e:?}"),
             };
             let playing = read(&world.vm.space, op, "bIsPlaying");
             let looping = read(&world.vm.space, op, "bLooping");
             *starts.entry(format!("{key}; bIsPlaying {playing:?} bLooping {looping:?}")).or_default() += 1;
-            if matches!(start, Start::NotAtLoad) {
+            if matches!(start, Start::NotAtLoad { .. }) {
                 let up = matinee::upstream(&graph, op);
                 let mut roots: Vec<String> = up
                     .iter()
@@ -746,7 +1061,8 @@ fn sanctuary_matinee_census() {
                 *starts.entry(format!("  roots of a not-at-load op: {roots:?}")).or_default() += 1;
             }
             let kind = match &start {
-                Start::NotAtLoad => "not-at-load",
+                Start::NotAtLoad { .. } => "not-at-load",
+                Start::Incomplete(_) => "incomplete",
                 Start::AtLoad(_) => "load-started",
                 Start::Outside(_) => "outside-started",
             };

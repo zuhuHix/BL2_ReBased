@@ -336,8 +336,8 @@ walking, nav-mesh walking and rotating modes).
 **After H-MATINEE (2026-11-19, same machine; decision `2026-11-19-53`):** the same path and world digests; still halted
 at tick 1, now on the level-load event that starts the Matinee op binding a `WillowSpectatorPoint`. A change to the
 Matinee scan or tracks reruns `world::tests::sanctuary_matinee_census` (ignored, `OW_BL2_ROOT`) and reports the ops by
-start (today 20 at load, 44 from outside the graph, 17 not at load) and the movement tracks read (today 168 of 169,
-every one ending within its op's `InterpLength`), with the physics census (today 59 pass).
+start (today, with a complete graph: 20 at load, 53 from outside the graph, 8 not at load) and the movement tracks read (today 168 of 169,
+every one ending within its op's `InterpLength`), with the physics census (today 57 pass, none by the not-at-load rule).
 
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
