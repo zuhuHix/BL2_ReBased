@@ -139,7 +139,8 @@ pub(crate) struct Failure {
 ///   load goes through the definition store, so #518's load-transition counter counts it. The first load's challenge
 ///   numbering is not run (NATIVE_WILLOW_GLOBALS.md section 6.1). UNVERIFIED stand-in for the game's own first load.
 ///
-/// A world with no globals object recorded is left as it is (the native then answers false). `--slice-run` and
+/// A world with no globals object recorded is left as it is (the native then refuses with the globals lookup's
+/// `NotYet { LayerAbsent }`). `--slice-run` and
 /// `--slice-gate`'s Fire group both call it after `FireMissionSlice::new`.
 pub(crate) fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_vm::error::VmError> {
     ow_inventory::globals::achievement::register(&mut world.vm)?;
@@ -147,7 +148,7 @@ pub(crate) fn unlock_setup(world: &mut ow_world::world::World) -> Result<(), ow_
     if let Some(globals) = globals {
         crate::cmd::inventory::equip_run::preload_globals_definition(&mut world.vm, globals, "the Fire driver's set-up")?;
         world.vm.log.push(format!(
-            "harness input: preload {} into the globals' TheGlobalsDefinition (UNVERIFIED stand-in for its first load;              no challenge numbering)",
+            "harness input: preload {} into the globals' TheGlobalsDefinition (UNVERIFIED stand-in for its first load; no challenge numbering)",
             crate::cmd::inventory::equip_run::GLOBALS_DEFINITION
         ));
     }

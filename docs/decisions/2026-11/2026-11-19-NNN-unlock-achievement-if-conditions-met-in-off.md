@@ -8,7 +8,8 @@ analyse it. The code is `ow-inventory` `globals/achievement.rs`, registered from
 a key already bound is kept. Reference is unchanged, so the VM's stub policy answers.
 
 **The rule** (the note's section 4 in full, by the hub's ruling, not its smaller alternative):
-1. **No globals object recorded:** false, and nothing is done.
+1. **No globals object recorded:** the port's globals lookup's existing `NotYet { LayerAbsent }`, unmarked and before
+   any write. It is a port gap, not a game answer (review r1 of #546, item 1; the note's section 4, rule 1).
 2. **The globals definition** is read through the existing `globals::globals_definition` helper, as it is (the hub's
    ruling on #541's r1 review). A None `TheGlobalsDefinition` is its first-load `NotYet { NotRead }`. A handle not
    loaded yet is its lazy-load `NotYet`. Both are raised before any write and are unmarked. The native does not

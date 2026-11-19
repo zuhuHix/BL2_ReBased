@@ -67,7 +67,8 @@ fn gearbox() -> Vec<u8> {
     t.build()
 }
 
-fn willow_game() -> Vec<u8> {
+/// The `WillowGame` package; with `mistyped`, `AchievementUnlockData.IntData` is declared a string.
+fn willow_game_with(mistyped: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let object = t.p.add_import("Core", "Class", engine, "Object");
@@ -80,7 +81,7 @@ fn willow_game() -> Vec<u8> {
     t.prop("Byte", data, "UnlockType", 0, 0);
     t.prop("Byte", data, "Achievement", 0, 0);
     t.prop("Str", data, "StringData", 0, 0);
-    t.prop("Int", data, "IntData", 0, 0);
+    t.prop(if mistyped { "Str" } else { "Int" }, data, "IntData", 0, 0);
     let gd = t.class("GlobalsDefinition", gearbox_definition);
     toy_array_of(&mut t, gd, "AchievementData", "Struct", data);
     // The same field names in a struct that is not the declared one, and a list of ints.
@@ -146,9 +147,11 @@ struct Setup {
     globals: bool,
     /// Whether the native's key is already bound (to an invented answer, true) before the module registers.
     prebound: bool,
+    /// Whether `AchievementUnlockData.IntData` is declared with the wrong type.
+    mistyped: bool,
 }
 
-const OFF: Setup = Setup { mode: ParityMode::Off, client: Client::Record, globals: true, prebound: false };
+const OFF: Setup = Setup { mode: ParityMode::Off, client: Client::Record, globals: true, prebound: false, mistyped: false };
 
 fn fx_with(setup: Setup) -> Fx {
     let Setup { mode, client, .. } = setup;
@@ -158,7 +161,7 @@ fn fx_with(setup: Setup) -> Fx {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let (e, g, w) = (engine(), gearbox(), willow_game());
+    let (e, g, w) = (engine(), gearbox(), willow_game_with(setup.mistyped));
     let defs = DefStore::from_synthetic(
         &dir,
         &[("Engine.upk", e.as_slice()), ("GearboxFramework.upk", g.as_slice()), ("WillowGame.upk", w.as_slice())],
@@ -396,13 +399,31 @@ fn the_calls_follow_the_entry_order() {
     assert_eq!(ids, vec![52, 51, 50], "the shared selection function gives the same ids");
 }
 
-/// No globals object recorded: false, nothing done.
+/// No globals object recorded: the globals lookup's `NotYet { LayerAbsent }`, unmarked, nothing written or called
+/// (review r1 of #546, item 1).
 #[test]
-fn no_globals_is_false() {
+fn no_globals_is_the_lookup_s_layer_absent() {
     let mut x = fx_with(Setup { globals: false, ..OFF });
     x.set_rows(&[(1, 9, "", 1)]);
     let (heap, counters) = (x.heap(), x.counters());
-    assert_eq!(x.unlock(1, "", 1, NONE).unwrap(), Value::Bool(false));
+    let n = not_yet(x.unlock(1, "", 1, NONE));
+    assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n:?}");
+    assert!(!n.what.starts_with("stopped after partial writes"), "{}", n.what);
+    assert!(x.calls().is_empty());
+    assert_eq!((x.heap(), x.counters()), (heap, counters));
+}
+
+/// A `GlobalsDefinition` whose `AchievementUnlockData` declares a field with the wrong type: `VmError::Script` naming
+/// the field, raised through the native before any value is read; no call, nothing written (review r1 of #546, item
+/// 2).
+#[test]
+fn a_mistyped_unlock_data_field_is_a_data_error_through_the_native() {
+    let mut x = fx_with(Setup { mistyped: true, ..OFF });
+    let (heap, counters) = (x.heap(), x.counters());
+    match x.unlock(1, "", 1, NONE) {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("AchievementUnlockData.IntData"), "{message}"),
+        other => panic!("expected a data error, got {other:?}"),
+    }
     assert!(x.calls().is_empty());
     assert_eq!((x.heap(), x.counters()), (heap, counters));
 }

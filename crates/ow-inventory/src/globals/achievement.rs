@@ -9,7 +9,8 @@
 //! **The rule** (`UnlockAchievementIfConditionsMet(AchievementUnlockType, StringData, IntData, bCanBeGreater,
 //! bCheckStringAndIntData, bCanBeLess)`, a bool):
 //! 1. **The globals definition** (the hub's ruling on #541's r1 review): the world's globals
-//!    ([`super::world_globals`]); no globals object is false, nothing done. Then `TheGlobalsDefinition` through the
+//!    ([`super::world_globals`]); no globals object recorded is that lookup's `NotYet { LayerAbsent }`, unmarked and
+//!    before any write: a port gap, not a game answer (review r1 of #546, item 1; the note's section 4, rule 1). Then `TheGlobalsDefinition` through the
 //!    existing [`super::globals_definition`] helper, as it is: a None field is its `NotYet { NotRead }`, "the globals
 //!    definition's first load, which numbers the challenge list"; a handle the store has not loaded is its lazy-load
 //!    `NotYet`. Both are raised before any write, unmarked. A world that wants the definition read preloads it at
@@ -30,7 +31,8 @@
 //! 3. **None selected:** false; nothing is written.
 //! 4. **Some selected:** the receiver's script function `ClientUnlockAchievement(AchievementId)` (found by name on the
 //!    receiver's class and state, as a script event) is called through the VM once per selected entry, in order, with
-//!    the entry's `Achievement`; then true. Its refusals propagate. A `NotYet` that leaves the native after any write
+//!    the entry's `Achievement` (a byte) passed as an int: the installed package declares `AchievementId` an
+//!    `IntProperty` (checked for review r1 of #546, item 3); then true. Its refusals propagate. A `NotYet` that leaves the native after any write
 //!    committed since entry (#518's counters: the heap's committed writes, the generators' draws, the store's load
 //!    transitions; the counter files were copied byte-identical from `fix/rust-483-followup` 1f1a2bc, as #518 is not
 //!    on main yet) is marked "stopped after partial writes: " with its kind and record
@@ -43,7 +45,7 @@
 
 use std::rc::Rc;
 
-use ow_core::{Missing, ParityMode};
+use ow_core::ParityMode;
 use ow_object::ids::PropAddr;
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
@@ -222,12 +224,8 @@ pub fn unlock_achievement_if_conditions_met(c: &mut NativeCall<'_>) -> Result<Va
 fn run(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let this = c.this.ok_or_else(|| bad(WHAT, "called with no receiver"))?;
     let call = conditions(c)?;
-    // Step 1: no globals, or no definition, is false with nothing done.
-    let globals = match super::world_globals(c.vm) {
-        Ok(g) => g,
-        Err(VmError::NotYet(n)) if matches!(n.missing, Missing::LayerAbsent(_)) => return Ok(Value::Bool(false)),
-        Err(e) => return Err(e),
-    };
+    // Step 1: no globals object is the lookup's own LayerAbsent refusal, before any write (review r1 of #546).
+    let globals = super::world_globals(c.vm)?;
     // The existing helper as it is: None and an unloaded handle are its typed refusals (the hub's ruling).
     let definition = super::globals_definition(c.vm, globals, WHAT)?;
     // Step 2: the declared types, then the selection, reads only.
