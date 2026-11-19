@@ -46,6 +46,8 @@ fn core() -> Vec<u8> {
     let mut t = ScriptToy::new(&[]);
     let object = t.class("Object", 0);
     t.class("Package", object);
+    // `Core.Component`, by which the spawn's component plan knows a component (lane DUMMY-COMPONENTS).
+    t.class("Component", object);
     t.build()
 }
 
@@ -110,6 +112,11 @@ fn engine() -> Vec<u8> {
     t.prop("Object", pawn, "Controller", 0, object);
     t.prop("Object", pawn, "DrivenVehicle", 0, object);
     t.prop("Object", pawn, "Mesh", 0, object);
+    // A skeletal mesh component class declaring `Owner`, for the dummy's per-actor mesh (lane DUMMY-COMPONENTS).
+    let core_package = t.p.add_import("Core", "Package", 0, "Core");
+    let component = t.p.add_import("Core", "Class", core_package, "Component");
+    let mesh = t.class("SkeletalMeshComponent", component);
+    t.prop("Object", mesh, "Owner", 0, object);
     let world = t.class("WorldInfo", actor);
     t.prop("Object", world, "GRI", 0, object);
     t.prop("Bool", world, "bIsMenuLevel", 0, 0);
@@ -696,6 +703,9 @@ struct Map {
     pawn_reference: bool,
     /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Mind`, an invented `GearboxMind` export.
     pawn_mind: bool,
+    /// With [`Map::pawn`]: the archetype's `Mesh` names `Pawn_Mesh`, its own `SkeletalMeshComponent` export (outered
+    /// to the archetype), as the installed dummy's template mesh is (lane DUMMY-COMPONENTS).
+    pawn_mesh: bool,
     /// An OnTakeDamage `Behavior_AIHold` on the dummy, after `Hit` and the status effect.
     hold: bool,
     /// With [`Map::hold`]: the hold is OnTakeDamage's first behavior instead, ahead of `Hit`.
@@ -752,8 +762,22 @@ fn dynamic(map: Map) -> Vec<u8> {
             payload.extend(p.object_tag("Controller", mind));
             payload.extend_from_slice(&none);
         }
+        if map.pawn_mesh {
+            // The mesh export comes right after the pawn's, so its reference is known before the pawn is added.
+            let mesh_ref = p.next_export() + 1;
+            payload = 0i32.to_le_bytes().to_vec();
+            payload.extend(p.object_tag("Mesh", mesh_ref));
+            payload.extend_from_slice(&none);
+        }
         let pawn = p.add_export(c, "Pawn_TargetDummy", payload);
         p.set_outer(pawn, character);
+        if map.pawn_mesh {
+            let mesh_class = class_import(&mut p, "Engine", "SkeletalMeshComponent");
+            let mut mesh_payload = [0i32, 0].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+            mesh_payload.extend_from_slice(&none);
+            let mesh = p.add_export(mesh_class, "Pawn_Mesh", mesh_payload);
+            p.set_outer(mesh, pawn);
+        }
     }
     // The mission package's objects, by import.
     let startup = p.add_import("Core", "Package", 0, "Startup");
@@ -1548,4 +1572,33 @@ fn a_terminal_stop_from_the_conditions_is_returned_not_kept() {
     let ordinary = Err(VmError::NotYet(NotYet::not_read("an ordinary NotYet", "an invented record")).into());
     assert!(env.slice.settle_conditions(ordinary).is_ok());
     assert!(env.slice.inner.state.borrow().pending.is_some(), "kept for the step");
+}
+
+/// Lane DUMMY-COMPONENTS (the hub's spawn ruling): in Off the placed dummy gets its own copy of the mesh its archetype
+/// owns, outered to the dummy, with the dummy as its `Owner`; the archetype's template mesh is untouched. Under
+/// Reference the dummy keeps the template, as before.
+#[test]
+fn the_dummy_gets_its_own_mesh_in_off() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut env = Env::new(Map { pawn: true, pawn_mesh: true, ..Map::default() }, mode);
+        env.spawn();
+        let pawn = env.slice.dummy_pawn().expect("the archetype gives a pawn");
+        let vm = env.vm();
+        let template = vm
+            .defs
+            .find(&mut vm.space, &ow_core::ObjectPath::parse("GD_TargetDummy.Character.Pawn_TargetDummy.Pawn_Mesh").unwrap())
+            .unwrap()
+            .expect("the template mesh");
+        let Some(Value::Object(Some(mesh))) = prop(&vm.space, pawn, "Mesh").unwrap() else {
+            panic!("{mode:?}: the dummy has a mesh");
+        };
+        if mode == ParityMode::Off {
+            assert_ne!(mesh, template, "a per-actor copy, not the template");
+            assert_eq!(vm.space.heap.get(mesh).unwrap().outer, Some(pawn), "outered to the dummy");
+            assert_eq!(prop(&vm.space, mesh, "Owner").unwrap(), Some(Value::Object(Some(pawn))), "the dummy owns it");
+            assert_eq!(prop(&vm.space, template, "Owner").unwrap(), Some(Value::Object(None)), "the template untouched");
+        } else {
+            assert_eq!(mesh, template, "Reference keeps the template");
+        }
+    }
 }

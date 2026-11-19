@@ -1157,10 +1157,42 @@ impl FireMissionSlice {
         let Some(index) = store.get(id).find_export(DUMMY_PAWN)?.filter(|&i| i > 0) else {
             return Ok(());
         };
+        // Off (lane DUMMY-COMPONENTS, the hub's spawn ruling): the dummy gets its own copy of each component its
+        // archetype owns, the per-actor plan the world's spawn uses (`ow_world::actors::plan_components_tracked`), so
+        // its `Mesh` is never the archetype's template. The plan is worked out on the archetype's definition before
+        // the pawn is made; a lazy load during it is a write, which marks a later refusal.
+        let plan = if vm.parity == ParityMode::Off {
+            let mut loaded = false;
+            let planned = (|| -> Result<ow_world::actors::Plan, VmError> {
+                let heap = vm.space.heap.len();
+                let template = vm.defs.load_export(&mut vm.space, id, index, PropertyPrefix::Ordinary);
+                vm.log.extend(vm.defs.take_log());
+                loaded |= vm.space.heap.len() != heap;
+                let template = template?;
+                ow_world::actors::plan_components_tracked(vm, template, &mut loaded)
+            })();
+            Some(planned.map_err(|e| if loaded { ow_world::pools::after_partial_writes(e) } else { e })?)
+        } else {
+            None
+        };
         // slice.cpp:366, `instantiateExport(dummyPackage_, index, 4)`: a new object, its references the definition
         // store's objects (the body class among them, which the dialog loads).
         let pawn = instantiate_export(vm, id, index, PropertyPrefix::Ordinary)?;
         self.inner.state.borrow_mut().dummy_pawn = Some(pawn);
+        if let Some(plan) = plan {
+            // After the pawn was made, so a refusal here is terminal and marked. Each copy is outered to the pawn and
+            // re-pointed in its slots. A copy whose class declares `Owner` gets the pawn there, as the game's attach
+            // step sets it (UNVERIFIED in this game; the port does not model that step elsewhere).
+            let pairs = ow_world::actors::apply_plan(vm, &plan, pawn).map_err(ow_world::pools::after_partial_writes)?;
+            for (_, copy) in pairs {
+                let class = vm.space.heap.get(copy)?.class;
+                if let Some(p) = vm.space.prop(class, "Owner") {
+                    vm.space
+                        .write(copy, PropAddr::scalar(p), Value::Object(Some(pawn)))
+                        .map_err(|e| ow_world::pools::after_partial_writes(VmError::from(e)))?;
+                }
+            }
+        }
         let body = prop(&vm.space, pawn, "BodyClass")?.unwrap_or(Value::None);
         self.inner.mission.with_dialog(|d| -> Result<(), MissionError> {
             let dialog = d.pawn_dialog(vm, &body)?;

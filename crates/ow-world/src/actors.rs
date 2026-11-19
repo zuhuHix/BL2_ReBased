@@ -32,7 +32,7 @@ use ow_vm::error::VmError;
 use ow_vm::natives_core::ActorWalk;
 
 mod instancing;
-pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components};
+pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components, plan_components_tracked};
 
 /// The record these rules come from.
 pub const RECORD: &str = "NATIVE_ENGINE_CORE.md (Spawning and lifetime, Iterators)";
