@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**FIX-PHASELOCK-CAST part B (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5).
+`ActionSkill.OnActionSkillActivated` and `OnActionSkillDeactivated` bound in Off (Reference unbound). `cargo build
+--workspace` clean; `cargo test --workspace` 1,880 passed / 0 failed / 42 ignored (four new `ow-skills` tests).
+C++ Release build clean; ctest at `-j 2` 173/173, 0 failed, 606.01 s; verify_packages 9 packages, all class bodies
+exact. Installed Phaselock test passes in both modes: in Off `OnActionSkillStarted` now stops at the unbound
+`GearboxPawn.GetSMComponent()`; Reference still stops at `ActionSkill.OnActionSkillActivated`.
+
 **FIX-PHASELOCK-CAST part A (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5). `Object.VLerp` in
 `ow-vm` (both modes), the two provider natives read into NATIVE_BEHAVIOR_PROVIDERS.md (not bound). `cargo build
 --workspace` clean; `cargo test --workspace` 1,876 passed / 0 failed / 42 ignored (one new `ow-vm` test). Fresh C++
