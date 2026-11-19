@@ -238,7 +238,7 @@ fn every_declared_slot_is_read_and_a_dynamic_array_is_refused() {
     let mut slots = vec![slot(&mut w, false, false, false, None, 0.0); usize::try_from(SLOTS - 1).unwrap()];
     slots.push(last);
     set_slots(&mut w, item, slots);
-    assert_eq!(attribute_slots(&w.vm, item).unwrap().len(), usize::try_from(SLOTS).unwrap());
+    assert_eq!(attribute_slots(&w.vm, item, SLOTS).unwrap().len(), usize::try_from(SLOTS).unwrap());
     assert_eq!(external_slot_effects(&w.vm, item, SLOTS).unwrap().len(), 1);
     assert!(external_slot_effects(&w.vm, item, SLOTS - 1).unwrap().is_empty(), "past the count");
     // A class that declares the slots as a dynamic array is not the installed shape: a data error.
@@ -252,6 +252,56 @@ fn every_declared_slot_is_read_and_a_dynamic_array_is_refused() {
     let odd = w.vm.space.alloc(other, "Test.Odd", None, Origin::Runtime).unwrap();
     let e = external_slot_effects(&w.vm, odd, SLOTS).unwrap_err();
     assert!(e.to_string().contains("other than slot structs"), "{e}");
+}
+
+#[test]
+fn no_slot_past_the_count_is_read_but_the_declaration_is_checked_first() {
+    let mut w = World::new();
+    let (item_class, _) = slot_classes(&mut w);
+    let a = w.controller_bonus;
+    let item = w.vm.space.alloc(item_class, "Test.Item", None, Origin::Runtime).unwrap();
+    let first = slot(&mut w, true, true, false, Some(a), 1.5);
+    set_slots(&mut w, item, vec![first]);
+    // Cut the object's slots just after `AttributeSlots[0]`: every later element is missing from the heap.
+    let p = w.vm.space.prop(item_class, "AttributeSlots").unwrap();
+    let at = w.vm.space.classes.resolve(item_class, ow_object::ids::PropAddr::element(p, 0)).unwrap();
+    w.vm.space.heap.get_mut(item).unwrap().slots.truncate(at + 1);
+    assert_eq!(external_slot_effects(&w.vm, item, 1).unwrap().len(), 1, "slot 0 only, slot 1 is never read");
+    assert!(external_slot_effects(&w.vm, item, 0).unwrap().is_empty(), "a count of 0 reads no slot");
+    assert!(external_slot_effects(&w.vm, item, -3).unwrap().is_empty(), "nor does a negative count");
+    assert!(external_slot_effects(&w.vm, item, 2).is_err(), "within the count, a missing slot is an error");
+}
+
+#[test]
+fn a_struct_without_the_slot_fields_is_refused_whatever_the_count() {
+    let mut w = World::new();
+    // A static array of a struct that holds only `bActivated`: its false defaults would skip every slot.
+    let only = PropertyDecl::new(w.vm.space.names.intern("bActivated"), PropKind::Bool);
+    let ty = w.vm.space.classes.define_struct("Test.NotASlot", None, vec![only]).unwrap();
+    let slots = PropertyDecl::new(w.vm.space.names.intern("AttributeSlots"), PropKind::Struct(ty)).with_array_dim(SLOTS);
+    let object = w.class("Core.Object");
+    let class = w.vm.space.classes.define("Test.OddSlotItem", Some(object), vec![slots]).unwrap();
+    let item = w.vm.space.alloc(class, "Test.Odd", None, Origin::Runtime).unwrap();
+    for max in [SLOTS, 0] {
+        let e = external_slot_effects(&w.vm, item, max).unwrap_err();
+        assert!(e.to_string().contains("without bExternalSlot as a bool"), "{e}");
+    }
+    // A slot field declared as the wrong kind is refused too.
+    let fields = [
+        ("bActivated", PropKind::Bool),
+        ("bExternalSlot", PropKind::Bool),
+        ("bRunEffectsAsSkill", PropKind::Bool),
+        ("AttributeToModify", PropKind::Object { class: object }),
+        ("ModifierType", PropKind::Int),
+        ("ComputedModifierValue", PropKind::Float),
+    ];
+    let decls = fields.into_iter().map(|(n, k)| PropertyDecl::new(w.vm.space.names.intern(n), k)).collect();
+    let ty = w.vm.space.classes.define_struct("Test.IntModifierSlot", None, decls).unwrap();
+    let slots = PropertyDecl::new(w.vm.space.names.intern("AttributeSlots"), PropKind::Struct(ty)).with_array_dim(SLOTS);
+    let class = w.vm.space.classes.define("Test.IntSlotItem", Some(object), vec![slots]).unwrap();
+    let item = w.vm.space.alloc(class, "Test.IntOdd", None, Origin::Runtime).unwrap();
+    let e = external_slot_effects(&w.vm, item, SLOTS).unwrap_err();
+    assert!(e.to_string().contains("without ModifierType as a byte"), "{e}");
 }
 
 #[test]
