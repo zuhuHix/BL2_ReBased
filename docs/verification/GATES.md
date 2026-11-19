@@ -22,6 +22,12 @@ alone. `cargo build --workspace` clean; `cargo test --workspace` 2,169 passed / 
 `maya:8` on the stock `OnPlayerClassChange`'s unbound `WillowPlayerController.InitPlayerSkillTree` (#444), which runs
 before the ammo maxima, so the resolver is not reached on main. No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-72; logs under ignored `local/p2/bm-resolver/`.
+**IMPL-INVENTORY-CONTEXT (2026-11-19, desktop, rebased onto main 9e53789):** AI-assisted (Claude Code, Opus 5.5).
+`cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,128 passed / 0 failed / 45 ignored (6 new in `ow-attr`, 3 in
+`ow-inventory`). `crate_edges_test.py` OK. ctest `-j 2` 173/173, 388.70 s. verify_packages 9 packages, all class bodies exact.
+Installed Off, main and this branch each built: `--slice-gate` strict 0/14/0 before, 0/13/1 after (link 8 moves from the
+resolver's `NotYet` at `init` to the unbound native `WillowInventory.InitializeAttributeSlots(bool)`; the other 13 rows identical).
+No host or real-game run; the rules stay `UNVERIFIED` in game. Decision 2026-11-19-67.
 
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps

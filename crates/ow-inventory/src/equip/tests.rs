@@ -162,6 +162,8 @@ impl World {
         let mut decls = vec![
             decl(&mut space, "BackpackInventoryCount", PropKind::Int, 0),
             decl(&mut space, "InventorySlotMax_Misc", PropKind::Int, 0),
+            // The item chain `ItemActors` walks (lane IMPL-INVENTORY-CONTEXT).
+            decl(&mut space, "ItemChain", obj.clone(), 0),
         ];
         decls.extend(stack(&mut space, "WeaponReadyMax", true, modifier));
         let willow_manager = class(&mut space, "WillowGame.WillowInventoryManager", manager_class, decls);

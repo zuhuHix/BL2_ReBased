@@ -34,7 +34,10 @@ pub use actors::{
     PlayerReplicationInfo, Weapon, WillowMind, controller_of,
 };
 pub use balanced::{BALANCED_ACTOR_INTERFACE, BalancedActor, implements_interface};
-pub use inventory::{EquippedInventory, Inventory};
+pub use inventory::{
+    BODY_PAWN_INTERFACE, EQUIP_ABLE_ITEM, EQUIPPED_SLOTS, EquippedInventory, Inventory,
+    RECORD_INVENTORY_CONTEXT, equipped_off,
+};
 pub use pending::{Designer, Script, Skill, StatusEffectChance, Unread};
 pub use player::{
     PLAYER_BEHAVIOR_INTERFACE, PLAYER_MASTER_INTERFACE, RECORD_PLAYER_CONTROLLER, player_controller_of,

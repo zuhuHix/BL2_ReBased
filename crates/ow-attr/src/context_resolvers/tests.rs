@@ -26,6 +26,10 @@ mod balanced_tests;
 #[path = "player_tests.rs"]
 mod player_tests;
 
+/// The inventory resolvers' Off rules over synthetic code packages (decision 2026-11-19-67).
+#[path = "inventory_tests.rs"]
+mod inventory_tests;
+
 // ---------------------------------------------------------------------------------------------------------------
 // The world
 // ---------------------------------------------------------------------------------------------------------------
@@ -823,9 +827,11 @@ fn weapon_resource_pool_follows_the_hand() {
     );
 }
 
+/// Reference keeps the engine query (Off: `inventory_tests.rs`, decision 2026-11-19-67).
 #[test]
 fn equipped_inventory() {
     let mut s = scene();
+    s.w.defs = Some(reference_store());
     let props = vec![("EquipmentLocation", PropKind::Byte { enum_: None })];
     let r = registered(
         &mut s,
@@ -860,9 +866,11 @@ fn the_unported_resolvers_say_what_they_wait_for() {
             "WillowGame.DesignerAttributeContextResolverByName",
             Missing::LayerAbsent("ow-vm"),
         ),
+        // Script in Off (decision 2026-11-19-67): this world runs no script. Its Reference answer is in
+        // `inventory_tests.rs`.
         (
             "WillowGame.InventoryAttributeContextResolver",
-            Missing::NotRead,
+            Missing::LayerAbsent("ow-vm"),
         ),
         // A script class (SCRIPTED): this world runs no script.
         (
@@ -881,7 +889,7 @@ fn the_unported_resolvers_say_what_they_wait_for() {
         // A None source ends a chain without asking for what is missing, except for a script class, whose script
         // decides what None gives.
         let none = walk(&s.sys, &[Some(r)], None, &mut s.w);
-        if path.contains("Projectile") {
+        if path.contains("Projectile") || path.contains("InventoryAttribute") {
             assert_eq!(missing(none), Missing::LayerAbsent("ow-vm"));
         } else {
             assert_eq!(none, Ok(None), "{path}");
@@ -1369,10 +1377,13 @@ fn each_path_read_from_the_packages_reaches_its_resolver() {
     let props = vec![("EquipmentLocation", PropKind::Byte { enum_: None })];
     let r = registered(&mut s, READ_FROM_PACKAGES[3], props);
     s.w.set(r, "EquipmentLocation", Value::Byte(2));
+    // In Reference (Off asks no query: decision 2026-11-19-67, `inventory_tests.rs`).
+    s.w.defs = Some(reference_store());
     assert_eq!(
         walk(&s.sys, &[Some(r)], Some(player), &mut s.w),
         Ok(Some(item))
     );
+    s.w.defs = None;
     // Skill: its script body is not read.
     let r = registered(&mut s, READ_FROM_PACKAGES[4], vec![]);
     assert_eq!(
