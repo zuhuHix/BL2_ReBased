@@ -116,6 +116,16 @@ Review r1 of #537: `cargo test -p ow-world` 231 passed / 0 failed / 6 ignored, `
 failed; clippy flags nothing in the changed files; the installed map-route test passes under the lock, the game info's two
 stops now asserted marked.
 
+**IMPL-MAPLOAD-NAVLIST (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). The level
+navigation join in Off from NATIVE_MAP_LOAD.md sections 5 and 6 (`ow-world` `world::nav_join`, nothing calls it yet):
+a write-free preflight of the three list kinds, then the splices; the level tail's pairs are `NotYet { NotRead }`.
+`cargo build --workspace -j 4` clean; `cargo test --workspace -j 4` 2,451 passed / 0 failed / 46 ignored (ow-world 227
+passed, nav_join 7); clippy no new warnings; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release
+build, under the machine lock): 1 ok / 4 NotYet / 9 errors, as expected with nothing calling the join (the stops are
+main's: `maya:8` `GetOnlineSubsystem`, `SetAnimTreeTemplate`, `CacheWeaponCard`, the bounding-cylinder rule,
+`GetAllMissions`). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-NNN; logs under ignored `local/analysis/navjoin/`.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322

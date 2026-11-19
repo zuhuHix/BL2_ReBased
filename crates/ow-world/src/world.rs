@@ -595,6 +595,10 @@ fn travel_countdown_in_process(c: &mut NativeCall<'_>) -> Result<Value, VmError>
 /// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).
 pub mod mapload;
 
+/// A level's navigation, cover and pylon lists joined onto the world's (lane IMPL-MAPLOAD-NAVLIST, NATIVE_MAP_LOAD.md
+/// section 5); the bring-up calls it.
+pub mod nav_join;
+
 pub mod localize;
 
 /// The engine's data store client and the online game settings route (lane IMPL-ONLINE-GAME-SETTINGS).
