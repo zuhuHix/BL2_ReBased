@@ -464,6 +464,8 @@ impl NativePack for Pack {
                 Ok(Value::Float(x))
             }),
         )?;
+        // AttributeInitializationDefinition.SetBaseValue, Off only (lane IMPL-SET-BASE-VALUE).
+        set_base_value::register(vm)?;
         // WorldInfo.GetWorldInfo: the persistent level's first actor; SequenceObject.GetWorldInfo and
         // BehaviorBase.GetWorldInfo: the world's own world info, ignoring self. Here both are the level's WorldInfo;
         // None when there is no world (NATIVE_ENGINE_CORE.md, "Lookups", UNVERIFIED).
@@ -626,6 +628,9 @@ pub mod body_composition;
 // Lane IMPL-COPY-ANIM-TREE: the animation tree's copy and initialisation (NATIVE_COPY_ANIM_TREE.md).
 pub mod anim_tree_copy;
 pub mod pawn_meshes;
+
+/// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).
+pub mod set_base_value;
 
 #[cfg(test)]
 mod tests;

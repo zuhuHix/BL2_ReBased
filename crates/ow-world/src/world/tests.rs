@@ -585,6 +585,11 @@ fn package() -> Vec<u8> {
         Some(("Float", 0)),
         NATIVE | STATIC,
     );
+    // SetBaseValue (lane IMPL-SET-BASE-VALUE): its lazy-handle preflight test.
+    let object_param = |name: &str| Param { type_ref: object, ..Param::new("Object", name) };
+    let base_value = Param { type_ref: init, flags: ow_package::testkit::script::CPF_OUT, ..Param::new("Struct", "BaseValue") };
+    let set_base_params = [object_param("DestAttribute"), base_value, object_param("ValueContextSource"), object_param("AttributeContextSource")];
+    native(&mut t, definition, "SetBaseValue", &set_base_params, Some(("Bool", 0)), NATIVE | STATIC);
     // An actor class with a component field, and its component class (a Core.Component), for the instancing test.
     // Core.Component, which `core_package` defines for the instancing test (review r1 of #435).
     let core = t.p.add_import("Core", "Package", 0, "Core");
