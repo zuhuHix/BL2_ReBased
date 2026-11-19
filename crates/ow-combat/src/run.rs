@@ -59,7 +59,26 @@ use crate::hit::{self, Enemy, HitReport, Player, TakeDamageEvent, call_method, n
 
 mod player;
 pub use player::{BridgeGain, PlayerBridge};
+mod shots;
 use player::{Episode, Fee, HealthPool};
+
+/// The damage type of a player's hit ([`Run::player_hit`]): the `hit` step's stock path, resolved inside the chain
+/// (so a bad path is the bridge guard's error, as the C++ `hitFromPlayer`; `""` is None), or a shot's object.
+#[derive(Clone, Copy)]
+enum DamageTypeOf<'a> {
+    Path(&'a str),
+    Object(Option<ObjRef>),
+}
+
+impl DamageTypeOf<'_> {
+    fn resolve(self, vm: &mut Vm) -> Result<Option<ObjRef>, VmError> {
+        match self {
+            DamageTypeOf::Path("") => Ok(None),
+            DamageTypeOf::Path(p) => Ok(Some(hit::stock_object(vm, p)?)),
+            DamageTypeOf::Object(o) => Ok(o),
+        }
+    }
+}
 
 /// The record of the run.
 pub const RECORD: &str = "src/combat.hpp (combatRun); COMBAT_GOLDEN_TRACE.md; the COMBAT_* records";
@@ -139,7 +158,8 @@ pub const BASE_HEALTH_PATH: &str =
 
 /// The steps after which the C++ adds no `state` of the pawn the second field names (`rollpool` is not one: the C++
 /// reports the pawn's state after it).
-const NO_STATE: [&str; 13] = [
+const NO_STATE: [&str; 14] = [
+    "weapon",
     "spawn",
     "base",
     "player",
@@ -967,6 +987,8 @@ pub struct Run {
     /// The bridge's errors the steps already listed, and the script errors of the step running.
     bridge_errors_seen: usize,
     script_errors: Vec<String>,
+    /// The player's held weapon (the `weapon` step, [`Run::hold_weapon`]): the instance and its firing mode.
+    held: Option<(ObjRef, Option<ObjRef>)>,
 }
 
 impl std::fmt::Debug for Run {
@@ -1068,6 +1090,7 @@ impl Run {
             fee_rows: Vec::new(),
             bridge_errors_seen: 0,
             script_errors: Vec::new(),
+            held: None,
         })
     }
 
@@ -1444,6 +1467,8 @@ impl Run {
             "mayahealth" => self.maya_health(parts),
             "swing" => self.swing(parts),
             "hit" => self.hit(parts),
+            "weapon" => self.weapon_step(parts),
+            "fire" => self.fire(parts),
             "seed" => {
                 // seed:<n>: the loot's generator restarts from n (`crate::loot::seed`).
                 let n = u32::try_from(stoul(at(1)?)?)
@@ -1677,13 +1702,34 @@ impl Run {
             source = format!("WillowGame.{prefix}{source}");
         }
         let damage = stod(parts[2])?;
+        let source_class = self.world.vm.find_class(&source)?;
+        self.player_hit(
+            index,
+            damage,
+            DamageTypeOf::Path(parts[3]),
+            source_class,
+            hit::ShotParts::default(),
+            "hit",
+        )
+    }
+
+    /// A hit from the run's player on pawn `index` (the `hit` and `fire` steps): the chain, then the rows
+    /// `<row>.<class>.L<level>.<n>.*`, the kills, the loot and the down state, as the C++ `hit` step.
+    fn player_hit(
+        &mut self,
+        index: usize,
+        damage: f64,
+        damage_type: DamageTypeOf<'_>,
+        source_class: ow_object::ids::ClassId,
+        shot: hit::ShotParts,
+        row: &str,
+    ) -> Result<String, VmError> {
         let (pawn, row_class, level) = {
             let s = &self.pawns[index];
             (s.enemy.pawn, s.row_class.clone(), s.level)
         };
         let bridge = self.bridge.clone();
         let vm = &mut self.world.vm;
-        let source_class = vm.find_class(&source)?;
         let (pool_before, level_before) = match &bridge {
             Some(b) => (b.experience_pool(), b.player_level(vm)?),
             None => (0.0, 0),
@@ -1696,7 +1742,8 @@ impl Run {
                 let controller = b.player_controller();
                 let player_pawn = self.bridge_pawn(&**b)?;
                 match player::with_player_pawn(&mut self.world.vm, controller, player_pawn, |vm, _| {
-                    hit::hit(vm, pawn, Some(controller), damage, parts[3], Some(source_class))
+                    let damage_type = damage_type.resolve(vm)?;
+                    hit::hit_with(vm, pawn, Some(controller), damage, damage_type, Some(source_class), shot)
                 }) {
                     Ok(r) => r,
                     // A NotYet is not a script error: it stops the step (review r2 of PR #356).
@@ -1709,7 +1756,8 @@ impl Run {
             }
             None => {
                 let instigator = self.players[0].controller;
-                hit::hit(vm, pawn, Some(instigator), damage, parts[3], Some(source_class))?
+                let damage_type = damage_type.resolve(vm)?;
+                hit::hit_with(vm, pawn, Some(instigator), damage, damage_type, Some(source_class), shot)?
             }
         };
         let vm = &mut self.world.vm;
@@ -1738,10 +1786,15 @@ impl Run {
             });
         }
         self.kills_seen = kills.len();
-        let key = format!("{row_class}{level}");
+        // A shot counts apart from the scripted hits, so a `hit` row keeps its number whatever `fire` steps run.
+        let key = if row == "hit" {
+            format!("{row_class}{level}")
+        } else {
+            format!("{row}:{row_class}{level}")
+        };
         let count = self.hit_counts.entry(key).or_insert(0);
         *count += 1;
-        let id = format!("hit.{row_class}.L{level}.{count}");
+        let id = format!("{row}.{row_class}.L{level}.{count}");
         self.row(&format!("{id}.arriving"), report.arriving);
         self.row(&format!("{id}.applied"), report.applied);
         self.row(&format!("{id}.health_after"), report.health_after);

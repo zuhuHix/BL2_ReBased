@@ -31,6 +31,7 @@
 //!   rule and the hold behavior's own run ([`crate::holds`], decision 2026-11-16-83).
 
 pub mod access;
+pub mod shot;
 pub mod pools;
 
 use std::cell::RefCell;
@@ -965,6 +966,43 @@ pub fn hit_with_type(
     damage_type: Option<ObjRef>,
     source: Option<ClassId>,
 ) -> Result<HitReport, VmError> {
+    hit_with(
+        vm,
+        victim,
+        instigator,
+        damage,
+        damage_type,
+        source,
+        ShotParts::default(),
+    )
+}
+
+/// What a weapon's shot adds to a hit ([`shot`]; lane FIX-FIRE-TO-HIT, decision 2026-11-19-06): the impact
+/// definition the pipeline carries and the damage causer (the weapon). `Default` is a plain hit: neither.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShotParts {
+    pub impact: Option<ObjRef>,
+    pub causer: Option<ObjRef>,
+}
+
+impl ShotParts {
+    pub fn new(impact: Option<ObjRef>, causer: Option<ObjRef>) -> ShotParts {
+        ShotParts { impact, causer }
+    }
+}
+
+/// [`hit_with_type`] with a shot's parts: the pipeline carries `parts.impact`, and a declared `DamageCauser` gets
+/// `parts.causer` (the zero value without one). With [`ShotParts::default`] this is exactly [`hit_with_type`].
+pub fn hit_with(
+    vm: &mut Vm,
+    victim: ObjRef,
+    instigator: Option<ObjRef>,
+    damage: f64,
+    damage_type: Option<ObjRef>,
+    source: Option<ClassId>,
+    parts: ShotParts,
+) -> Result<HitReport, VmError> {
     let mut report = HitReport::default();
     let mark = with_state(vm, |s| s.events.len())?;
     let type_path = path_of(vm, damage_type);
@@ -983,7 +1021,7 @@ pub fn hit_with_type(
     let pipeline = acquire_pipeline(
         vm,
         Value::Object(damage_type),
-        Value::Object(None),
+        Value::Object(parts.impact),
         false,
         Value::Object(None),
     )?;
@@ -1000,6 +1038,7 @@ pub fn hit_with_type(
             "instigatedby" => Value::Object(instigator),
             "damagetype" => Value::Class(source),
             "pipeline" => Value::Object(Some(pipeline)),
+            "damagecauser" if parts.causer.is_some() => Value::Interface(parts.causer),
             _ => vm.space.classes.zero_value(&p.kind),
         });
     }
@@ -1019,6 +1058,10 @@ pub fn hit_with_type(
             g5(damage)
         ),
     )?;
+    if parts != ShotParts::default() {
+        let (impact, causer) = (path_of(vm, parts.impact), access::label_of(vm, parts.causer));
+        note(vm, format!("TakeDamage shot impact={impact} causer={causer}"))?;
+    }
 
     let outer_census = vm.census.replace(CallCensus::default());
     let outer_trace = vm.trace.replace(Vec::new());

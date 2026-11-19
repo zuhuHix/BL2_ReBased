@@ -1,6 +1,7 @@
 //! Invented values and geometry only (AGENTS.md rule 9): no game object is named, and the weapon numbers are made up.
 
 use super::*;
+use ow_items::data::ItemKind;
 use crate::movement::collide::Brush;
 
 fn wall_at(x: f64) -> CollisionWorld {
