@@ -90,6 +90,45 @@ game. Every binding is Off only. Reference has no C++ stand-in and binds nothing
 - **Open.**
   - For an analyst: the owner's replication record of step 4.4 (and the stop's update of it), and the anim tree node
     search behind `GetSMNode`.
-  - For the hub: a link 9 driver; the combat pack's `Play` / `IsPlayingClass` stand-ins in Off.
+  - For the hub: a link 9 driver.
   - The note's own open questions: `RunBehaviors`, `OnStart` / `OnServerStart`, `PlayData`;
     `PerformSharedWeaponActions`; the queue order of a `NextSpecialMove` chain.
+- **Review r1 of #437** (fix commits on this branch). Where this section and the text above differ, this section
+  holds.
+  - **The combat stand-ins** (`ow-combat` `hit`): the `Play` no-op and the `IsPlayingClass` false are now bound in
+    Reference only (`SPECIAL_MOVE_STAND_INS`). In Off this module's natives answer whichever pack registers first, and
+    a world without the action skill pack leaves both unbound. A new test registers both packs in both orders, in both
+    modes. The Off combat runs are not changed by it: `--slice-gate` is byte-identical.
+  - **Refusals before any change.** `Play` now resolves, before it changes anything:
+    - each stop it may run: the current move's, and the new move's own for a duration of 0 or less;
+    - their `ClientFinished`;
+    - their callbacks: the target must declare the function, with no parameter or one `bool bInterrupted`. Any other
+      signature is `NotYet`. The note names no other argument, and the zero or default the first version passed
+      would be a guess.
+
+    A script event that fails during the start (an unbound native under `ClientStarted`, for example) cannot be
+    decided in advance. Then `CurrentSMData`, `SMDQueue` and `StartTime` are put back as they were and the error is
+    answered. What the events themselves changed is not undone. A new test seeds a current move, a one-entry queue
+    and a `StartTime` and checks that six refusals leave all three unchanged.
+  - **`GetSMNode` with a tree** no longer answers `NotYet { NotPorted }`.
+    - The node named `SpecialMoveBlend` (without case) is looked for from the tree's root down: each node, then its
+      `Children` entries' `Anim` in order, each node once, at most 4,096 nodes. The order is the port's, UNVERIFIED.
+    - The first node of that name answers when it is an `AnimNodeSpecialMoveBlend`, and is cached in `SMBlendNode`.
+      Another class, or no such node, answers the note's None.
+    - The missing-tree `NotYet { LayerAbsent }` stays for no mesh or no `Animations`, the headless case.
+  - **`Pawn.IsFriendly`** already has an Off binding from a note: `ow-combat`'s allegiance rule (NATIVE_COMBAT_GROUNDWORK.md
+    section 6), bound in both modes. Those four natives (`GetOpinion`, `IsEnemy`, `IsNeutral`, `IsFriendly`) are now
+    their own `hit::register_allegiance`. The hit pack still calls it, and the W6-SKILLS installed cast's VM now
+    calls it on its own, without the combat stand-ins. The installed cast still stops first at `GetSMComponent`.
+  - **The tests are rebuilt on two invented packages** (`ow_package::testkit`, the Rust side of the `package()` /
+    `tag()` helpers): `Engine` and `GearboxFramework`. Every native is declared by the packages and reached by its
+    path. There are 12 tests, among them:
+    - a script-level regression: a toy `GetPlayerAnimation` script with the cast's shape (`IsFriendly`, then
+      `IsAliveAndWell`) picks the hit move for an enemy alive and well, and the fizzle move for a friend and for a
+      dead target;
+    - the pack-order test;
+    - the seeded-refusal test;
+    - the `GetSMNode` search (none, another class, found without case, cached, a cache on another mesh not reused).
+  - **Gates after r1:** `ow-skills` 90 / 0 / 1; `ow-combat` 148 / 0 / 2; workspace 2,040 / 0 / 45. `--slice-gate`
+    strict is byte-identical to the #437 head, 0 / 11 / 3, and link 9 is still `notyet` (no headless driver). The
+    installed cast is unchanged: it still stops at `GetSMComponent`.
