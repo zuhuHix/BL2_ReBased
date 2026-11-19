@@ -24,5 +24,8 @@ SOFTWARE.
 
 This license covers the original code and documents in this repository. It
 does not cover, and this repository does not contain, any Borderlands 2 game
-data, Gearbox Software code, or Epic Games engine code. Third-party code
-vendored here keeps its own license; see THIRD_PARTY.md.
+data or Gearbox Software code. Files under crates/ow-render/shaders/ue3/ are
+excluded from this licence: they are derived from Epic Games' UE3 shader
+source, Epic Games retains its rights, and no licence is granted for them (see
+docs/LEGAL.md, "License"). Third-party code vendored here keeps its own
+license; see THIRD_PARTY.md.

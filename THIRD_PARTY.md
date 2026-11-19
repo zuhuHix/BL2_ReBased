@@ -264,6 +264,20 @@ decision before implementation.
 - tu-testbed gameswf by Thatcher Ulrich and contributors, public domain.
   Approved for the same benchmark; not yet downloaded or built.
 
+## UE3 shader source (Epic Games): translated, not vendored (maintainer decision 2026-11-19)
+
+- **What:** the `.usf` shader source files in the player's Borderlands 2 install (`Engine/Shaders`, 163 files on the
+  zuhu desktop on 2026-11-19). They are read from the player's install; the `.usf` files themselves are never
+  committed.
+- **Licence:** proprietary. The files headed with an Epic Games copyright notice ("Copyright 1998-2011 Epic Games,
+  Inc. All Rights Reserved.", a few with 1998-2010) carry no redistribution grant that the project knows of.
+- **Use:** hand translations into WGSL under `crates/ow-render/shaders/ue3/`. Each file is headed with its source
+  file name and a notice that it is derived from Epic Games' UE3 shaders and is not under the MIT licence; `LICENSE`
+  excludes that folder. Maintainer decision in chat on 2026-11-19 ("C-public: approve draft"), accepting the risk of a
+  rights-holder takedown.
+- **Not covered:** the install's shader files headed with a Gearbox Software, NVIDIA or Scaleform notice, and the ones
+  with no notice in their first lines. None of them may be translated into the tree without a decision of their own.
+
 ## Rust toolchain (maintainer decision 2026-11-14)
 
 - **Rust** 1.96.0 (`rustc` and `cargo` 1.96.0, released 2026-05-25), https://github.com/rust-lang/rust, licence MIT OR
