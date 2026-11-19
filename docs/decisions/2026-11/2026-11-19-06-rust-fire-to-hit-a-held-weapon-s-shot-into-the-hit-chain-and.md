@@ -117,6 +117,28 @@ this branch; no game data here).**
   12 steps emitted, so it never reaches `hit:fire`. On a `NotYet` the command prints its report without the closing
   brackets, so the checker cannot parse it; that predates this lane and is reported.
 
+**Review r1 of #393 (FIX).**
+
+1. **No firing mode is no shot read** (`NotYet { NotRead }`, both modes). The two records disagree: NATIVE_WEAPON_TRIGGER_AMMO.md
+   section 3 says `InstantFire` does nothing at all without a definition (the ammunition is still spent), while
+   NATIVE_WEAPON_FIRING.md section 1.2 step 4's "HitScan (or no firing mode)" sits inside `FiringModeDefinitionFire`,
+   which only runs once a definition exists. The first round's "no firing mode: the HitScan path" took the second
+   reading; neither is taken now.
+2. **Guards read as declared.** `CurrentFireMode`, `ProjectilesPerShot`, `FireType`, `DamageTypeDefinition`,
+   `ImpactResponses`, `OnAnyImpact` and `bSuppressImpactEffects` go through `access::required`, so a weapon or firing
+   mode of an unexpected class is bad data instead of passing every refusal.
+3. **The run-built replication info is labelled a stand-in.** In `--combat-run` the GRI fallback finds the GRI
+   `enable_deaths` builds from class defaults, in both modes, so Off's playthrough native answers 1 from a harness
+   object: the run assumes Normal mode, UNVERIFIED (the label is in `enable_deaths` and `ow_world::query`, after the
+   precedent of decision 2026-11-16-49).
+4. **The causer takes the declared parameter kind** (interface or object; another kind keeps its zero value).
+5. **The firing mode's two readings disagree** on the elemental part (NATIVE_WEAPON_TRIGGER_AMMO.md section 3: barrel,
+   else elemental, else type; NATIVE_WEAPON_FIRING.md section 1.1: barrel, else type). Where they agree the answer
+   stands; an elemental part with its own mode and no barrel mode is `NotYet { NotRead }`. Installed check: the
+   Tediore pistol's parts give the same mode as before (no elemental part).
+6. **Tests:** Rocket and `OnAnyImpact` refusals; no firing mode; the elemental conflict, settled by a barrel mode; a
+   mode of the wrong class as bad data; the causer kind, checked on the value.
+
 **Open, for the hub.**
 
 1. `WillowAIComponent`'s hold virtual overrides (a fresh analyst, with a way to reach that class's function table),

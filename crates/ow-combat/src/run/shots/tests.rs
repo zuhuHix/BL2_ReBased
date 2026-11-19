@@ -110,6 +110,11 @@ fn toy_weapons() -> Vec<u8> {
         let tag = p.object_tag("DamageTypeDefinition", shock);
         mode(&mut p, "Mode_OwnType", 0, vec![tag])
     };
+    let rocket = mode(&mut p, "Mode_Rocket", 2, Vec::new());
+    let any_impact = {
+        let tag = p.array_tag("OnAnyImpact", 1, &ints(&[impact]));
+        mode(&mut p, "Mode_AnyImpact", 0, vec![tag])
+    };
     let tags = vec![
         p.tag("InstantHitDamageType", "ClassProperty", &ints(&[bullet])),
         p.object_tag("DefaultDamageTypeDefinition", damage_type),
@@ -127,6 +132,13 @@ fn toy_weapons() -> Vec<u8> {
     ];
     let body = payload(&mut p, tags);
     p.add_export(type_class, "Type_Plain", body);
+    // A type with no firing mode at all (review r1 of #393: no shot is read for it).
+    let tags = vec![
+        p.tag("InstantHitDamageType", "ClassProperty", &ints(&[bullet])),
+        p.object_tag("WeaponImpact", impact),
+    ];
+    let body = payload(&mut p, tags);
+    p.add_export(type_class, "Type_NoMode", body);
     let tags = vec![
         p.object_tag("CustomDamageTypeDefinition", shock),
         p.object_tag("WeaponImpact", impact_shock),
@@ -138,11 +150,19 @@ fn toy_weapons() -> Vec<u8> {
         ("Barrel_Responses", responses),
         ("Barrel_Suppress", suppress),
         ("Barrel_OwnType", own_type),
+        ("Barrel_Rocket", rocket),
+        ("Barrel_AnyImpact", any_impact),
+        // Not a firing mode: an impact object, whose class declares none of a mode's properties (bad data).
+        ("Barrel_NotAMode", impact),
     ] {
         let tags = vec![p.object_tag("CustomFiringModeDefinition", m)];
         let body = payload(&mut p, tags);
         p.add_export(part_class, name, body);
     }
+    // An elemental part with its own firing mode: the two records disagree on it (review r1 of #393).
+    let tags = vec![p.object_tag("CustomFiringModeDefinition", beam)];
+    let body = payload(&mut p, tags);
+    p.add_export(part_class, "Part_ElementalMode", body);
     // A part with neither override: the type's damage type, impact and firing mode stay.
     let body = payload(&mut p, Vec::new());
     p.add_export(part_class, "Part_Plain", body);
@@ -253,7 +273,7 @@ fn a_shot_hands_the_chain_the_weapons_damage_source_type_impact_and_causer() {
         let vm = &mut run.world().vm;
         let s = shot::shot(vm, weapon, held_mode).unwrap();
         assert_eq!(s.damage, 12.5);
-        assert_eq!(s.fire_type, Some(0));
+        assert_eq!(s.fire_type, 0);
         assert_eq!(s.damage_type, Some(def(vm, "ToyWeapons.DamageType_Shock")));
         assert_eq!(s.parts.impact, Some(def(vm, "ToyWeapons.Impact_Shock")));
         assert_eq!(s.parts.causer, Some(weapon));
@@ -289,6 +309,12 @@ fn a_shot_refuses_what_the_notes_do_not_read_in_both_modes() {
         assert!(matches!(missing, Missing::NotRead), "{missing:?}");
         let (text, _) = refusal(mode, Some("Barrel_OwnType"), |_, _| {});
         assert!(text.contains("its own DamageTypeDefinition"), "{text}");
+        let (text, missing) = refusal(mode, Some("Barrel_Rocket"), |_, _| {});
+        assert!(text.contains("a Rocket shot"), "{text}");
+        assert!(matches!(missing, Missing::NotPorted), "{missing:?}");
+        let (text, missing) = refusal(mode, Some("Barrel_AnyImpact"), |_, _| {});
+        assert!(text.contains("OnAnyImpact"), "{text}");
+        assert!(matches!(missing, Missing::NotRead), "{missing:?}");
         let (text, _) = refusal(mode, None, |run, w| {
             set(&mut run.world().vm, w, "ProjectilesPerShot", Value::Int(3)).unwrap();
         });
@@ -309,7 +335,7 @@ fn a_suppressed_impact_leaves_the_pipeline_without_one() {
     let held_mode = run.held.unwrap().1;
     let s = shot::shot(&mut run.world().vm, weapon, held_mode).unwrap();
     assert_eq!(s.parts.impact, None);
-    assert_eq!(s.fire_type, Some(3));
+    assert_eq!(s.fire_type, 3);
 }
 
 /// The text of the step result whose step is `step`, in a report.
@@ -404,4 +430,59 @@ fn fire_needs_a_player_and_a_held_weapon() {
     assert!(text.contains("the weapon file no/such/file.txt"), "{text}");
     // The weapon step names no pawn: no state is added after it.
     assert!(!result_of(&text, "weapon:no/such/file.txt").contains("\"state\""), "{text}");
+}
+
+/// Review r1 of #393: no firing mode is no shot read (`NotYet { NotRead }`, the records disagree); an elemental part
+/// with its own mode and no barrel mode is the records' other disagreement; a mode of the wrong class is bad data.
+#[test]
+fn no_firing_mode_the_elemental_conflict_and_a_wrong_class_are_refused() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let (mut run, _dir) = armed_run(mode);
+        let weapon = toy_weapon(&mut run, 10.0);
+        let p = parts_of(&mut run, "Type_NoMode", None, None);
+        run.hold_weapon(weapon, &p).unwrap();
+        assert_eq!(run.held.unwrap().1, None);
+        match shot::shot(&mut run.world().vm, weapon, None) {
+            Err(VmError::NotYet(n)) => {
+                assert!(matches!(n.missing, Missing::NotRead), "{n}");
+                assert!(n.to_string().contains("no firing mode"), "{n}");
+            }
+            other => panic!("{mode:?}: expected a NotYet, got {other:?}"),
+        }
+
+        let (mut run, _dir) = armed_run(mode);
+        let p = parts(&mut run, Some("Part_ElementalMode"), None);
+        match shot::firing_mode(&mut run.world().vm, &p) {
+            Err(VmError::NotYet(n)) => assert!(n.to_string().contains("elemental part"), "{n}"),
+            other => panic!("{mode:?}: expected a NotYet, got {other:?}"),
+        }
+        // A barrel mode settles it whatever the elemental part holds: both records take the barrel's first.
+        let p = parts(&mut run, Some("Part_ElementalMode"), Some("Barrel_Suppress"));
+        let vm = &mut run.world().vm;
+        assert_eq!(shot::firing_mode(vm, &p).unwrap(), Some(def(vm, "ToyWeapons.Mode_Suppress")));
+
+        let (mut run, _dir) = armed_run(mode);
+        let weapon = toy_weapon(&mut run, 10.0);
+        let p = parts(&mut run, None, Some("Barrel_NotAMode"));
+        run.hold_weapon(weapon, &p).unwrap();
+        let held_mode = run.held.unwrap().1;
+        let e = shot::shot(&mut run.world().vm, weapon, held_mode).unwrap_err();
+        assert!(!matches!(e, VmError::NotYet(_)), "{e:?}");
+        assert!(crate::hit::access::error_text(&e).contains("has no property FireType"), "{e:?}");
+    }
+}
+
+/// Review r1 of #393: the causer takes the declared `DamageCauser` kind (the installed `WillowPawn` declares an
+/// interface, the combat fixture's toy pawns an object); another kind gets its zero value.
+#[test]
+fn the_causer_follows_the_declared_parameter_kind() {
+    use ow_object::layout::PropKind;
+    let (mut run, _dir) = armed_run(ParityMode::Off);
+    let weapon = toy_weapon(&mut run, 10.0);
+    let vm = &mut run.world().vm;
+    let class = vm.find_class("ToyWeaponGame.ToyWeapon").unwrap();
+    let arg = |vm: &ow_vm::api::Vm, k: PropKind| crate::hit::causer_arg(vm, &k, Some(weapon));
+    assert_eq!(arg(vm, PropKind::Interface { class }), Value::Interface(Some(weapon)));
+    assert_eq!(arg(vm, PropKind::Object { class }), Value::Object(Some(weapon)));
+    assert_eq!(arg(vm, PropKind::Int), Value::Int(0));
 }
