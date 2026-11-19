@@ -7,7 +7,7 @@ use ow_assets::skeletal::{Bone, BoneTransform, Influence, SkeletalMesh, SkinSect
 use super::math::{affine, max_difference, nlerp, rigid_inverse, rotate};
 use super::pose::{AnimError, Skeleton, Wrap, keys_at};
 use super::skin::{skin, skin_matrices};
-use crate::frame::Affine;
+use crate::frame::{Affine, ToEngine};
 
 const S: f32 = std::f32::consts::FRAC_1_SQRT_2;
 const ID: [f32; 4] = [0.0, 0.0, 0.0, 1.0];

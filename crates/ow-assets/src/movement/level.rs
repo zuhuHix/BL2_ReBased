@@ -18,7 +18,7 @@
 //!   terrain and BSP collision (`tools/terrain_decode.py` and `tools/bsp_decode.py` are not ported), and blocking
 //!   volumes (`tools/collision_volumes.py` is not ported; their placement in the scene is not read either).
 
-use ow_assets::collision::{BodyCollision, read_body_setup};
+use crate::collision::{BodyCollision, read_body_setup};
 use ow_core::{DetMap, NotYet};
 use ow_defs::DefStore;
 use ow_object::heap::ObjectSpace;
@@ -28,7 +28,7 @@ use ow_object::value::Value;
 
 use super::collide::{Brush, CollisionWorld};
 use super::geom::V3;
-use crate::frame::{Affine, Placement as FramePlacement, Ue3Matrix, component_to_world};
+use crate::placement::{Affine, Placement as FramePlacement, Ue3Matrix, component_to_world};
 use crate::scene::{MeshStatus, Pose, Scene};
 
 /// The record a `NotYet` of this module names.

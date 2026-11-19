@@ -24,7 +24,11 @@
 //!   ok on its own evidence only ([`equip_evident`]).
 //! - `phaselock-cast` (same lane): link 9, the installed Phaselock cast on its own world; no evidence check is chosen
 //!   yet, so it is never ok.
-//! - `none`: links 2, 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
+//! - `sanctuary-walk` (lane LINK-2-HEADLESS-MOVER, decision 2026-11-19-66): link 2, H4's scripted walk on the
+//!   installed Sanctuary (`ow_assets::movement`, the mover and collision `ow-host --walk` and `--play` use), on its own
+//!   load. The walk's own checks (no fall through the world, no stuck segment) are its evidence; it then stops at
+//!   `fight_area` with a named `NotYet`, because no fight area is placed in the map world yet ([`fight_area_not_yet`]).
+//! - `none`: links 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
 //!
 //! The two driver worlds are separate: the gate's one session is not modelled yet (the slice bridge refuses a world
 //! that already has actors, and the map world is not brought up for play, decision 2026-11-19-04).
@@ -81,6 +85,8 @@ pub enum Driver {
     Equip,
     /// The installed Phaselock cast (link 9).
     Phaselock,
+    /// H4's scripted Sanctuary walk through the shared mover (link 2).
+    Walk,
     /// No headless driver yet; the text says why.
     None(&'static str),
 }
@@ -92,6 +98,7 @@ impl Driver {
             Driver::Fire => "slice-run",
             Driver::Equip => "equip-run",
             Driver::Phaselock => "phaselock-cast",
+            Driver::Walk => "sanctuary-walk",
             Driver::None(_) => "none",
         }
     }
@@ -155,15 +162,12 @@ pub const LINKS: [Link; 14] = [
     ),
     link(
         "reach_fight_area",
-        Driver::None(
-            "no headless driver: the only mover is H4's in ow-host (decision 2026-11-16-52), which ow-cli does not \
-             depend on; no fight area is placed in a map world, and the map world is not brought up for play \
-             (decision 2026-11-19-04)",
-        ),
+        Driver::Walk,
+        &["load", "spawn", "walk", "fight_area"],
         &[],
-        &[],
-        Evidence::Steps,
-        "",
+        Evidence::Driver("the walk's own checks: no fall through the world and no stuck segment"),
+        "H4's scripted Sanctuary walk (SANCTUARY_SCRIPT, 1/60 s steps) through the host's mover and collision, on its \
+         own load; no fight area is placed in the map world, so the link stops at fight_area",
     ),
     link(
         "kill_enemy",
@@ -794,6 +798,7 @@ fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
     run_fire(cooked, grading, &mut ran, &mut status);
     run_equip(Path::new(cooked), grading, &mut ran);
     run_phaselock(Path::new(cooked), grading, &mut ran);
+    run_walk(Path::new(cooked), &mut ran);
     rows(&ran, grading, |i| evident(i, &ran, &status))
 }
 
@@ -923,6 +928,93 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         step_error(&mut r, "cast", &text, grading);
     }
     ran[i] = Some(r);
+}
+
+/// Link 2 (module documentation): Sanctuary loaded and its collision built (`load`), Maya at its first player start
+/// (`spawn`), H4's scripted walk (`walk`), then the fight area (`fight_area`). The mover and the collision are the
+/// host's own (`ow_assets::movement`); nothing here adds a movement rule. A walk that fails its own checks is an
+/// `error`; one that passes reaches `fight_area`, which answers [`fight_area_not_yet`].
+fn run_walk(cooked: &Path, ran: &mut [Option<Ran>]) {
+    let Some(i) = link_of(Driver::Walk) else {
+        return;
+    };
+    if !should_run(i, Driver::Walk, ran) {
+        return;
+    }
+    ran[i] = Some(walk_link(cooked));
+}
+
+fn walk_link(cooked: &Path) -> Ran {
+    use ow_assets::movement::{sanctuary, walk};
+    let mut r = Ran::default();
+    r.steps.push("load".into());
+    let loaded = match sanctuary::load(cooked, sanctuary::MAP) {
+        Ok(l) => l,
+        Err(text) => {
+            r.stop = Some(classify("load", &text));
+            return r;
+        }
+    };
+    r.steps.push("spawn".into());
+    let mut spawn_text = String::new();
+    let world = &loaded.collision.world;
+    let mut mover = match sanctuary::spawn(&loaded.scene, world, &mut spawn_text) {
+        Ok(m) => m,
+        Err(text) => {
+            r.stop = Some(classify("spawn", &text));
+            return r;
+        }
+    };
+    // What the run was given: the map, the player start and the lift out of solid (the spawn's own lines).
+    r.harness = spawn_text.lines().map(str::to_string).collect();
+    r.steps.push("walk".into());
+    let dt = f64::from(ow_core::sim::DEFAULT_STEP_SECONDS);
+    let every = sanctuary::SAMPLE_EVERY;
+    let report = walk::run(world, &mut mover, &walk::SANCTUARY_SCRIPT, dt, every);
+    walk_graded(
+        &mut r,
+        report.passed(),
+        report.fell_through,
+        report.stuck,
+        report.ticks,
+    );
+    r
+}
+
+/// Grades link 2 after the walk (pure, so the tests share it with `walk_link`): a walk that failed its own checks
+/// stops the link with an `error`; one that passed is the link's evidence and goes on to `fight_area`, which stops
+/// it with [`fight_area_not_yet`].
+pub fn walk_graded(r: &mut Ran, passed: bool, fell_through: bool, stuck: bool, ticks: u64) {
+    r.evident = passed;
+    if !passed {
+        r.stop = Some((
+            Outcome::Error,
+            Stop {
+                step: "walk".into(),
+                text: format!(
+                    "the walk failed its own checks after {ticks} ticks: fell through {fell_through}, stuck {stuck}"
+                ),
+                ..Stop::default()
+            },
+        ));
+        return;
+    }
+    r.steps.push("fight_area".into());
+    r.stop = Some((
+        Outcome::NotYet,
+        stop_of_not_yet("fight_area", &fight_area_not_yet()),
+    ));
+}
+
+/// Why link 2 stops after a passing walk: the gate needs enemies placed where Maya can reach them, and whether that
+/// is Sanctuary's own population or a test fixture is not chosen (SLICE_RUN_PLAN.md section 3.2). The walk does not
+/// stand in for it.
+pub fn fight_area_not_yet() -> NotYet {
+    NotYet::layer_absent(
+        "the fight area of link 2",
+        "a fight area placed in the map world",
+        "SLICE_RUN_PLAN.md section 3.2",
+    )
 }
 
 /// Maya's Phaselock skill, its script entry and the classes the cast is given.

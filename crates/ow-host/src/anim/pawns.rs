@@ -42,7 +42,7 @@ use super::skin::skin_matrices;
 use super::tree::eval::DriverState;
 use super::tree::report::{library, locate};
 use super::tree::{ClipLibrary, Driver, Inputs, Kind, TreeDef, Unsupported, load_tree};
-use crate::frame::{Affine, Mat4, Placement};
+use crate::frame::{Affine, Mat4, Placement, ToEngine};
 use crate::render::Lighting;
 
 /// A pawn this host knows how to draw: its archetype and the flat colour it is drawn in.

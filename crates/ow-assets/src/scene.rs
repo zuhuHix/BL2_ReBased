@@ -64,8 +64,8 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::path::PathBuf;
 
-use ow_assets::mesh::{MeshAsset, read_mesh};
-use ow_assets::texture::{AssetError, TextureAsset, read_texture};
+use crate::mesh::{MeshAsset, read_mesh};
+use crate::texture::{AssetError, TextureAsset, read_texture};
 use ow_core::units::Rotator;
 use ow_core::{DetMap, DetSet, NotYet, OrderedMap, PackageName};
 use ow_defs::DefStore;
@@ -126,7 +126,6 @@ const MAX_MATERIAL_CHAIN: usize = 32;
 
 /// Why a scene could not be loaded at all. A part that cannot be read is not an error: it is a [`Gap`] or an
 /// [`Exclusion`] in the scene. This is the scene's error, not the host's: `ow-host` has no crate-wide error type.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum SceneError {
     /// The definition store failed outside one placement (a level-streaming object, a base-class lookup).
@@ -195,7 +194,6 @@ impl From<HeapError> for SceneError {
 
 /// Where the asset decoders read from: the folder holding the install's texture file caches (`.tfc`), which is the
 /// cooked package folder.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneAssets {
     pub tfc_root: PathBuf,
@@ -218,7 +216,6 @@ pub struct ExportKey {
 }
 
 /// One level of the scene.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneLevel {
     /// The level's package name as the streaming object (or the caller) gives it.
@@ -227,7 +224,6 @@ pub struct SceneLevel {
 }
 
 /// An actor's serialized pose: `Location`, `Rotation`, `DrawScale`, `DrawScale3D`.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ActorPose {
     /// uu.
@@ -238,7 +234,6 @@ pub struct ActorPose {
 }
 
 /// A component's serialized pose relative to its owner: `Translation`, `Rotation`, `Scale`, `Scale3D`.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ComponentPose {
     /// uu.
@@ -251,7 +246,6 @@ pub struct ComponentPose {
 /// Which scale a collection placement uses: the component's own `Scale3D` and `Scale` when its tags set either,
 /// otherwise the collection tail's copy (decision 2026-09-18-04: the running game applied the property where the two
 /// disagreed).
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleSource {
     Component,
@@ -259,7 +253,6 @@ pub enum ScaleSource {
 }
 
 /// Where a placement is, as serialized.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pose {
     /// A component of an actor: the world pose is the actor's pose applied to the component's.
@@ -278,7 +271,6 @@ pub enum Pose {
 }
 
 /// The serialized hidden flags of a placement.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HiddenFlags {
     /// The component's `HiddenGame`.
@@ -288,7 +280,6 @@ pub struct HiddenFlags {
 }
 
 /// A static mesh placement.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placement {
     /// The component's path in its level's file.
@@ -313,7 +304,6 @@ impl Placement {
 }
 
 /// Why a component that looked like a placement is not one.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Exclusion {
     /// The component names no mesh.
@@ -331,7 +321,6 @@ pub enum Exclusion {
 }
 
 /// An excluded component, with why.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Excluded {
     pub path: String,
@@ -339,7 +328,6 @@ pub struct Excluded {
 }
 
 /// Where an asset export lives: the file the store's identity policy chose for its path.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Holder {
     pub package: PackageId,
@@ -349,7 +337,6 @@ pub struct Holder {
 }
 
 /// What `ow-assets` made of a mesh.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum MeshStatus {
     Decoded(MeshAsset),
@@ -360,7 +347,6 @@ pub enum MeshStatus {
 }
 
 /// A mesh the scene draws.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneMesh {
     pub holder: Option<Holder>,
@@ -380,7 +366,6 @@ impl SceneMesh {
 }
 
 /// What the scene read of a material.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum MaterialStatus {
     Read,
@@ -391,7 +376,6 @@ pub enum MaterialStatus {
 }
 
 /// A material a placement or a mesh section names.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneMaterial {
     /// The material's class path.
@@ -407,7 +391,6 @@ pub struct SceneMaterial {
 }
 
 /// Where a material named a texture.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureSource {
     /// A `TextureParameterValues` entry of the material or of a parent instance.
@@ -417,7 +400,6 @@ pub enum TextureSource {
 }
 
 /// One texture a material names, and how.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterialTexture {
     /// The texture's object path: a key of [`Scene::textures`].
@@ -433,7 +415,6 @@ pub struct MaterialTexture {
 }
 
 /// A texture a scene material names. Decoded on demand by [`Scene::decode_texture`].
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneTexture {
     /// The texture's class path.
@@ -443,7 +424,6 @@ pub struct SceneTexture {
 }
 
 /// A player start actor (any subclass of `Engine.PlayerStart`).
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerStart {
     pub path: String,
@@ -452,7 +432,6 @@ pub struct PlayerStart {
 }
 
 /// How many light components of one class the levels hold.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LightCount {
     pub total: u32,
@@ -461,7 +440,6 @@ pub struct LightCount {
 }
 
 /// A terrain actor (any subclass of `Engine.Terrain`), named but not decoded.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct TerrainActor {
     pub path: String,
@@ -471,7 +449,6 @@ pub struct TerrainActor {
 }
 
 /// A level's BSP: its model exports, named but not decoded.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LevelModels {
     /// `Engine.Model` exports under the level.
@@ -481,7 +458,6 @@ pub struct LevelModels {
 }
 
 /// What a [`Gap`] is about.
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GapPart {
     Mesh,
@@ -494,7 +470,6 @@ pub enum GapPart {
 
 /// A part of the scene that is not there yet, with the object it concerns. `not_yet.what` is the same text for every
 /// gap of one kind, so gaps can be counted by reason.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gap {
     pub part: GapPart,
@@ -503,7 +478,6 @@ pub struct Gap {
 }
 
 /// A map's scene. See the module documentation.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
     /// The persistent level's package name as given.
@@ -528,7 +502,7 @@ pub struct Scene {
 
 impl Scene {
     /// A scene with no level and nothing in it.
-    pub(crate) fn empty(map: &str, assets: SceneAssets) -> Scene {
+    pub fn empty(map: &str, assets: SceneAssets) -> Scene {
         Scene {
             map: map.to_string(),
             assets,
@@ -683,7 +657,6 @@ impl Scene {
 }
 
 /// The counts of [`Scene::summary`].
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SceneSummary {
     pub placements: usize,
@@ -707,7 +680,6 @@ pub struct SceneSummary {
 }
 
 /// Why [`Scene::decode_texture`] gave no texture.
-#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextureError {
     NotInScene(String),
@@ -1702,14 +1674,14 @@ impl Loader<'_> {
 }
 
 /// A `ParameterName` value: `None` for the name `None`.
-pub(crate) fn parameter_name(name: &str) -> Option<String> {
+pub fn parameter_name(name: &str) -> Option<String> {
     (name != "None").then(|| name.to_string())
 }
 
 /// The object path of `index` in `package` as the game names it: an import's path is full; an export whose outermost
 /// export is a `Package` object is named by its path in the file, any other by `<file stem>.<path in the file>` (the
 /// definition store's rule, `ow_defs::identity`).
-pub(crate) fn full_path(package: &Package, index: i32) -> Result<String, PackageError> {
+pub fn full_path(package: &Package, index: i32) -> Result<String, PackageError> {
     let path = package.path_of(index)?;
     if index <= 0 {
         return Ok(path);
@@ -1804,7 +1776,7 @@ fn bad(object: &str, reason: &str) -> SceneError {
 // ---------------------------------------------------------------------------------------------- value readers
 
 /// Property `name` of loaded object `o`, or `None` where its class declares no such property.
-pub(crate) fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<Option<&'w Value>, String> {
+pub fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<Option<&'w Value>, String> {
     let class = space.heap.get(o).map_err(|e| e.to_string())?.class;
     let Some(p) = space.prop(class, name) else {
         return Ok(None);
@@ -1815,7 +1787,7 @@ pub(crate) fn read<'w>(space: &'w ObjectSpace, o: ObjRef, name: &str) -> Result<
         .map_err(|e| format!("{name}: {e}"))
 }
 
-pub(crate) fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjRef>, String> {
+pub fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Option<ObjRef>, String> {
     match read(space, o, name)? {
         Some(Value::Object(r)) => Ok(*r),
         None => Ok(None),
@@ -1823,7 +1795,7 @@ pub(crate) fn read_object(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<
     }
 }
 
-pub(crate) fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Vec<Option<ObjRef>>, String> {
+pub fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Vec<Option<ObjRef>>, String> {
     match read(space, o, name)? {
         Some(Value::Array(items)) => items
             .iter()
@@ -1837,7 +1809,7 @@ pub(crate) fn read_objects(space: &ObjectSpace, o: ObjRef, name: &str) -> Result
     }
 }
 
-pub(crate) fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, String> {
+pub fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bool, String> {
     match read(space, o, name)? {
         Some(Value::Bool(b)) => Ok(*b),
         Some(v) => Err(format!("{name} is a {}, not a bool", v.kind_name())),
@@ -1845,7 +1817,7 @@ pub(crate) fn read_bool(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<bo
     }
 }
 
-pub(crate) fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f32, String> {
+pub fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f32, String> {
     match read(space, o, name)? {
         Some(Value::Float(f)) => Ok(*f),
         Some(v) => Err(format!("{name} is a {}, not a float", v.kind_name())),
@@ -1854,7 +1826,7 @@ pub(crate) fn read_float(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<f
 }
 
 /// Field `name` of struct value `v`, or `None`.
-pub(crate) fn struct_field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v Value> {
+pub fn struct_field<'v>(space: &ObjectSpace, v: &'v Value, name: &str) -> Option<&'v Value> {
     let s = v.as_struct()?;
     let layout = space.classes.struct_layout(s.ty)?;
     let (entry, _) = layout.field(space.names.find(name)?)?;
@@ -1873,7 +1845,7 @@ fn read_vector(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<[f32; 3], S
     Ok(out)
 }
 
-pub(crate) fn read_rotator(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Rotator, String> {
+pub fn read_rotator(space: &ObjectSpace, o: ObjRef, name: &str) -> Result<Rotator, String> {
     let v = read(space, o, name)?.ok_or_else(|| format!("the class declares no {name}"))?;
     let mut out = [0i32; 3];
     for (slot, field) in out.iter_mut().zip(["Pitch", "Yaw", "Roll"]) {

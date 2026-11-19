@@ -14,7 +14,7 @@
 //! ([`SegmentResult::blocker`]) so a reader can tell which wall it was.
 //!
 //! **One input path** (lane H4-PLAY). A script becomes per-tick [`MoveInput`]s through [`segment_ticks`] and
-//! [`segment_input`] only: [`run`] here and the play mode's [`ScriptCursor`] (`crate::play`) both use them, and both
+//! [`segment_input`] only: [`run`] here and the play mode's [`ScriptCursor`] (`ow-host`'s `play`) both use them, and both
 //! fold every tick's location into a [`PathDigest`]. Equal digests at every segment end mean the two runs put the
 //! pawn at the same bits on every tick.
 //!
@@ -26,7 +26,7 @@ use std::borrow::Cow;
 
 use super::collide::CollisionWorld;
 use super::geom::{V3, add, floor_index, horizontal, length, normalize, scale, sub};
-use crate::frame::rotator_axes;
+use crate::placement::rotator_axes;
 use ow_core::units::Rotator;
 use super::mover::{MoveInput, Mover, Physics};
 

@@ -50,7 +50,7 @@
 use ow_assets::mesh::MeshLod;
 use ow_core::DetMap;
 
-use crate::frame::{self, Affine, Mat4, Ue3Matrix};
+use crate::frame::{self, Affine, Mat4, ToEngine, Ue3Matrix};
 use crate::lightmap::{COEFFICIENTS, LightMap, SAMPLE_BYTES, SceneLighting};
 use crate::material::{Blend, DEFAULT_CLIP, DiffuseSource, MaterialLibrary, SkyInputs};
 use crate::scene::{MeshStatus, Pose, Scene, SceneMaterial};

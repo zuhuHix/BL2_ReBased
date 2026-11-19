@@ -24,7 +24,7 @@
 
 use super::collide::{CollisionWorld, Hit, SKIN, Shape};
 use super::geom::{V3, ZERO, add, along_plane, dot, horizontal, length, normalize, scale, sub};
-use crate::frame::rotator_axes;
+use crate::placement::rotator_axes;
 use ow_core::units::Rotator;
 
 /// The pawn's movement numbers, uu and seconds.
@@ -235,7 +235,7 @@ impl Mover {
             .saturating_add(input.pitch)
             .clamp(self.params.view_pitch_min, self.params.view_pitch_max);
         // Yaw wraps into one signed turn (`frame::normalize_axis`).
-        self.view = Rotator::new(pitch, crate::frame::normalize_axis(yaw), self.view.roll);
+        self.view = Rotator::new(pitch, crate::placement::normalize_axis(yaw), self.view.roll);
     }
 
     /// Section 9: (forward input x the yaw-only forward vector) + (strafe input x its right vector), Z zeroed,

@@ -44,7 +44,7 @@ data or against the C++, UNVERIFIED in the running game.
 | Link | Headless, Reference | Headless, Off | Host |
 |---|---|---|---|
 | 1 spawn | The mission bridge's own controller and pawn, from class defaults; no map is loaded (D34, D54) | Maya's health pool `NotYet` (D38, D54) | `--walk` and `--play` start at `WillowCoopPlayerStart_0` (D52, D57); no world pawn |
-| 2 reach the fight area | not modelled (no map) | not modelled | walking in the window (D57); no fight area actors |
+| 2 reach the fight area | not modelled (no map) | `--slice-gate` link 2 (`sanctuary-walk`, decision 2026-11-19-66): H4's walk passes on the installed Sanctuary through the shared mover, then a named `NotYet` at `fight_area` (no fight area is placed) | walking in the window (D57); no fight area actors |
 | 3 kill an enemy | `--combat-run` scripted `hit` steps; the adult's kill stops at `AmmoDropWeightAttributeValueResolver` (D54) | every spawn stops at `Default__WillowAIPawn.SpecialMoveComponent0` (D54, D55) | #366: one hit-scan ray against collision; no pawns to hit (D61) |
 | 4 the enemy fights back | scripted `swing` rows equal to the C++ (D54); the AI picks the player and starts Patrol, then stops (D59, #364) | as link 3 | none |
 | 5 loot drop | C++ stand-in inventories, stops at the same resolver (D41, D54) | `ItemPool.SpawnBalancedInventoryFromPool` `NotYet` (D41) | none |

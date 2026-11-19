@@ -69,16 +69,58 @@ fn an_error_text_names_its_unbound_native_when_it_has_one() {
 #[test]
 fn links_without_a_driver_are_not_yet_with_their_reason() {
     let rows = rows(&vec![None; LINKS.len()], Grading::Strict, |_| true);
-    for l in ["reach_fight_area", "pick_up_gun", "pick_up_aimed_not_nearest"] {
+    for l in ["pick_up_gun", "pick_up_aimed_not_nearest"] {
         let r = &rows[index(l)];
         assert_eq!((r.result, r.driver), (Outcome::NotYet, "none"), "{l}");
         assert!(r.stop.as_ref().unwrap().text.starts_with("no headless driver"), "{l}");
     }
     // A driven link that did not run is an error, never a silent ok.
     assert_eq!(rows[index("spawn_maya")].result, Outcome::Error);
-    for l in ["equip_gun", "phaselock_enemy"] {
+    for l in ["reach_fight_area", "equip_gun", "phaselock_enemy"] {
         assert_eq!(rows[index(l)].result, Outcome::Error, "{l}");
     }
+}
+
+#[test]
+fn link_2_walks_with_the_shared_mover_and_stops_at_the_fight_area() {
+    let i = index("reach_fight_area");
+    let l = &LINKS[i];
+    assert_eq!(l.driver.name(), "sanctuary-walk");
+    assert_eq!(l.steps, ["load", "spawn", "walk", "fight_area"]);
+    assert!(l.needs.is_empty() && matches!(l.evidence, Evidence::Driver(_)));
+    let status = vec![0u8; LINKS.len()];
+    // A passing walk is the link's evidence and goes on to the fight area, which is a named NotYet, never ok.
+    let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
+    walk_graded(&mut r, true, false, false, 2400);
+    assert!(r.evident);
+    assert_eq!(r.steps.last().map(String::as_str), Some("fight_area"));
+    let mut ran = vec![None; LINKS.len()];
+    ran[i] = Some(r);
+    let graded = rows(&ran, Grading::Strict, |j| evident(j, &ran, &status));
+    let stop = graded[i].stop.as_ref().unwrap();
+    assert_eq!(
+        (graded[i].result, stop.step.as_str()),
+        (Outcome::NotYet, "fight_area")
+    );
+    assert_eq!(stop.native, "the fight area of link 2");
+    assert_eq!(stop.record, "SLICE_RUN_PLAN.md section 3.2");
+    // The stop text grades as a NotYet when read back from text too.
+    assert_eq!(
+        classify("fight_area", &fight_area_not_yet().to_string()).0,
+        Outcome::NotYet
+    );
+    // A walk that fails its own checks is an error at `walk`, with no evidence.
+    let mut r = ran_ok(&["load", "spawn", "walk"]).unwrap();
+    walk_graded(&mut r, false, true, false, 90);
+    assert!(!r.evident);
+    ran[i] = Some(r);
+    let graded = rows(&ran, Grading::Strict, |j| evident(j, &ran, &status));
+    let stop = graded[i].stop.as_ref().unwrap();
+    assert_eq!(
+        (graded[i].result, stop.step.as_str()),
+        (Outcome::Error, "walk")
+    );
+    assert!(stop.text.contains("fell through true"), "{}", stop.text);
 }
 
 #[test]
