@@ -92,6 +92,16 @@ with tempfile.TemporaryDirectory() as tmp:
     case.check(new_layout(n99, n100, n101), base, 0, b'3 added, 0 edited')
     case.check(new_layout((D + '2026-10/2026-10-02-099-padded.md', b'## 2026-10-02: Padded\n\nAI-assisted (x).\n')),
                base, 1, b'is not a decision file')
+    # NN 00 is not a place in the day, and only ASCII digits count (U+0660 is an Arabic-Indic zero).
+    case.check(new_layout((D + '2026-10/2026-10-02-00-zero.md', b'## 2026-10-02: Zero\n\nAI-assisted (x).\n')),
+               base, 1, b'is not a decision file')
+    case.check(new_layout((D + '2026-10/2026-10-02-1٠٠-arabic.md', b'## 2026-10-02: Arabic\n\nAI-assisted (x).\n')),
+               base, 1, b'is not a decision file')
+    # --check reports in numeric order: with 99 and 100 both missing the AI line, 99 is reported first.
+    bad99 = (D + '2026-10/2026-10-02-99-ninety-nine.md', b'## 2026-10-02: Ninety nine\n\nNo disclosure.\n')
+    bad100 = (D + '2026-10/2026-10-02-100-one-hundred.md', b'## 2026-10-02: One hundred\n\nNo disclosure.\n')
+    out = case.check(new_layout(bad100, bad99), base, 1, b'-100-one-hundred')
+    assert -1 < out.find(b'-99-ninety-nine') < out.find(b'-100-one-hundred'), out
 
     # A Supersedes: line marks the old entry in the listing; the old file stays as it was.
     sup = (D + '2026-10/2026-10-06-01-replaces-beta.md',

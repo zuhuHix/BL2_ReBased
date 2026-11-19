@@ -23,7 +23,9 @@ REPO = Path(__file__).resolve().parents[1]
 LOG = 'DECISIONS.md'
 DIR = 'docs/decisions'
 ARCHIVE = re.compile(r'^docs/decisions/(\d{4}-\d{2})\.md$')
-NAME = re.compile(r'^docs/decisions/(\d{4}-\d{2})/((\d{4}-\d{2})-\d{2})-(\d{2}|[1-9]\d{2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$')
+# NN is 01 to 99, or 100 to 999 with no leading zero; re.ASCII keeps \d to the ASCII digits.
+NAME = re.compile(r'^docs/decisions/(\d{4}-\d{2})/((\d{4}-\d{2})-\d{2})-(0[1-9]|[1-9][0-9]{1,2})-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$',
+                  re.ASCII)
 LINK = re.compile(rb'^(Edits|Supersedes): `?(docs/decisions/[^\s`]+)`?[ \t]*$', re.M)
 # In the stub, any line that looks like an entry heading, at any heading level and with or without the colon.
 LOOKS_LIKE_ENTRY = re.compile(rb'^#+[ \t]*\d{4}-\d{2}-\d{2}', re.M)
@@ -107,6 +109,12 @@ def decision_paths(tree):
     return [p for p in tree if NAME.match(p)]
 
 
+def order_key(path):
+    """Decision files by date, NN as a number, then slug (so 100 follows 99); any other path after them, by name."""
+    m = NAME.match(path)
+    return (0, m.group(2), int(m.group(4)), m.group(5)) if m else (1, path, 0, '')
+
+
 def is_old_layout(tree):
     """No decision file yet, and entries in DECISIONS.md or a monthly archive."""
     if decision_paths(tree):
@@ -180,7 +188,7 @@ def structure(tree, blobs=False):
         return problems
     if LOG not in tree:
         problems.append('%s is missing: the stub that says where decisions live stays' % LOG)
-    for path in sorted(tree):
+    for path in sorted(tree, key=order_key):
         if path == LOG:
             held = LOOKS_LIKE_ENTRY.findall(normalize(tree[LOG]))
             if held:
@@ -231,10 +239,10 @@ def against(tree, base):
         edited = []
     else:
         old = {p: normalize(base[p]) for p in decision_paths(base)}
-        added = sorted(p for p in files if p not in old)
+        added = sorted((p for p in files if p not in old), key=order_key)
         allowed = {target for p in added for kind, target in links(files[p]) if kind == 'Edits'}
         edited = []
-        for path in sorted(old):
+        for path in sorted(old, key=order_key):
             if path not in files:
                 problems.append('%s was deleted or renamed: a decision file stays (a replacement is a new file '
                                 'with "Supersedes: %s")' % (path, path))
