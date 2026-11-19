@@ -62,6 +62,8 @@ pub mod card;
 pub mod slots;
 /// `ApplyInternalSlotEffectModifiers` (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS).
 pub mod internal_slots;
+/// `RecomputeAttributeBaseValues` (lane IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES).
+pub mod rebase;
 /// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
 pub mod value;
 
