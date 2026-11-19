@@ -14,6 +14,14 @@ ignored. **Review r1 of #456:** `cargo test --workspace` 2,167 passed / 0 failed
 the changed files; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict 0/14/0; no row names a QueryInterface
 rule (links 10 to 12 at `accept`, `GetDataStoreClient`; the combat links at `maya:8`). Decision 2026-11-19-62; logs
 under ignored `local/p2/pawn-ai/`.
+**IMPL-BLACKMARKET-RESOLVER (2026-11-19, pc-hummer, on main 74c7b0ac with #451's note stacked):** AI-assisted
+(Claude Code, Opus 5.5). `WillowGame.BlackMarketUpgradeAttributeValueResolver` in Off from NATIVE_BLACKMARKET_UPGRADES.md
+alone. `cargo build --workspace` clean; `cargo test --workspace` 2,169 passed / 0 failed / 46 ignored (14 resolver tests);
+`crate_edges_test.py` 19 OK. Installed Off
+`--slice-gate` strict: 0/14/0, byte-identical before and after on the same base. Links 1, 3, 4, 5, 13 and 14 stop at
+`maya:8` on the stock `OnPlayerClassChange`'s unbound `WillowPlayerController.InitPlayerSkillTree` (#444), which runs
+before the ammo maxima, so the resolver is not reached on main. No real-game run; `UNVERIFIED` in game. Decision
+2026-11-19-72; logs under ignored `local/p2/bm-resolver/`.
 
 **FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
 (Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps
