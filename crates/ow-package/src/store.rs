@@ -275,6 +275,15 @@ impl PackageStore {
             .unwrap_or(&[])
     }
 
+    /// Whether the one file named `name` is already loaded, read only (no load; lane MAP-ROUTE-FOLLOWUP, review r2 of
+    /// #571). False when no file or several files have that stem.
+    pub fn is_loaded(&self, name: &PackageName) -> bool {
+        match self.by_name.get(&fold(name.as_str())) {
+            Some(paths) if paths.len() == 1 => self.loaded.contains_key(&path_key(&normal_absolute(&paths[0]))),
+            _ => false,
+        }
+    }
+
     /// Loads the one file named `name` (C++ `loadPackage`): an error when no file or several files have that stem.
     pub fn load(&mut self, name: &PackageName) -> Result<PackageId, StoreError> {
         self.load_named(name.as_str())

@@ -3218,12 +3218,23 @@ impl MissionScript {
             return Err(data("mission script bridge: the map world's actors are gone".to_string()));
         };
         let list = actors.try_borrow().map_err(|_| BehaviorError::Vm(VmError::ServiceBorrowed("Actors")))?.list().to_vec();
+        // The export is resolved once per matching cached package (review r2 of #571, item 1), then each actor's origin
+        // index is compared with it.
+        let mut resolved: DetMap<ow_package::package::PackageId, Option<i32>> = DetMap::new();
         for a in list {
             let Origin::Export { package: id, index } = vm.space.heap.get(a)?.origin else {
                 continue;
             };
-            let held = vm.defs.packages().get(id);
-            if held.name.eq_ignore_ascii_case(package.as_str()) && held.find_export(path)? == Some(index) {
+            let wanted = match resolved.get(&id) {
+                Some(w) => *w,
+                None => {
+                    let held = vm.defs.packages().get(id);
+                    let w = if held.name.eq_ignore_ascii_case(package.as_str()) { held.find_export(path)? } else { None };
+                    resolved.insert(id, w);
+                    w
+                }
+            };
+            if wanted == Some(index) {
                 return Ok(Some(a));
             }
         }

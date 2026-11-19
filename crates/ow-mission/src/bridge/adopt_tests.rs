@@ -281,8 +281,10 @@ fn the_map_route_makes_no_director_and_takes_the_placed_waypoint() {
     let loads = m.world.vm.defs.load_transitions();
     // Review r1 of #571, item 1: nothing is loaded first. An uncached package, an unknown one and (below) a missing
     // export are each the typed refusal, not a store error or `false`.
+    assert!(!m.world.vm.defs.packages().is_loaded(&director), "TestDirector starts uncached");
     let n = not_yet(script.place_waypoint(&mut m.world.vm, &director, PLACED).unwrap_err());
     assert_eq!(&*n.what, waypoint_on_map(PLACED));
+    assert!(!m.world.vm.defs.packages().is_loaded(&director), "still uncached: the lookup loaded no package (review r2 of #571)");
     let unknown = PackageName::parse("NoSuchMap").unwrap();
     let n = not_yet(script.place_waypoint(&mut m.world.vm, &unknown, PLACED).unwrap_err());
     assert_eq!(&*n.what, waypoint_on_map(PLACED));
