@@ -1151,3 +1151,79 @@ fn the_old_mesh_release_comes_before_the_lookups() {
     assert_eq!(missing, Missing::NotRead);
     assert_eq!(what, releasing_old("Mesh"));
 }
+
+/// Review r1 of #557, item 1: a control reached from two lists' chains is not a loop. It keeps its first place, and
+/// the lookups still find it.
+#[test]
+fn a_control_shared_by_two_lists_is_not_a_loop() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    t.controls(&mut e, &[&[("WillowSkelControl_FootPlacement", "WillowFootIK")]]);
+    let lists = prop(&e.vm, t.root, "SkelControlLists");
+    let head = lists.elements().unwrap()[0].clone();
+    put(&mut e.vm, t.root, "SkelControlLists", Value::array(vec![head.clone(), head]));
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let body = body_of(&e, p);
+    assert_eq!(check(&e.vm, skel, Some(body)).unwrap(), Settled { foot_ik: true });
+    let (missing, what) = refused(&mut e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, MESH_REST));
+}
+
+/// `check` on its own, with #518's counters read around it: a refusal moves none of them.
+fn check_refused(e: &Env, skel: ObjRef, body: Option<ObjRef>) -> (Missing, String) {
+    let before = Counters::read(&e.vm);
+    let err = check(&e.vm, skel, body).unwrap_err();
+    let VmError::NotYet(n) = err else { panic!("{err:?}") };
+    assert_eq!(Counters::read(&e.vm), before, "write-free: {}", n.what);
+    (n.missing, n.what.to_string())
+}
+
+/// Review r1 of #557, item 2: the AimOffset lookup with no body class is `NotRead`. The pawn wrapper's gate needs a
+/// loaded body class, so this is reached only through `check` itself.
+#[test]
+fn no_body_class_is_not_read() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    let skel = skel_with(&mut e, Some(t.root));
+    let (missing, what) = check_refused(&e, skel, None);
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, crate::world::anim_node_lookup::NO_BODY_CLASS);
+}
+
+/// Review r1 of #557, items 2 and 3: an unloaded body class is #529's refusal with nothing loaded; one whose load
+/// failed is `NotRead`, naming it. Store handles stand in for the body class (only their state is read first).
+#[test]
+fn an_unloaded_or_failed_body_class_is_refused_with_nothing_loaded() {
+    let mut e = env();
+    let t = Anim::new(&mut e);
+    let skel = skel_with(&mut e, Some(t.root));
+    let (_, cyl, cycle) = store_templates(&mut e);
+    let (missing, what) = check_refused(&e, skel, Some(cyl));
+    assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, cyl), "nothing loaded");
+    assert!(e.vm.defs.ensure_loaded(&mut e.vm.space, cycle).is_err(), "the cycle export's load fails");
+    let (missing, what) = check_refused(&e, skel, Some(cycle));
+    assert_eq!(missing, Missing::NotRead);
+    assert_eq!(what, crate::world::anim_node_lookup::failed_body_class("GD_ToyBody.CycleTemplate"));
+}
+
+/// Review r1 of #557, item 2: an unloaded node inside a loaded tree is #529's refusal with nothing loaded, through the
+/// pawn wrapper.
+#[test]
+fn an_unloaded_node_in_a_loaded_tree_is_the_refusal() {
+    let mut e = env();
+    let path = ObjectPath::parse("GD_ToyBody.Holder").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let skel_tree = prop_object(&e, holder, "SkelTree");
+    e.vm.defs.ensure_loaded(&mut e.vm.space, skel_tree).unwrap();
+    let handle = prop_object(&e, skel_tree, "AnimTreeTemplate");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, handle));
+    let t = Anim::new(&mut e);
+    t.children(&mut e, t.root, &[handle]);
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let (missing, what) = refused(&mut e, p);
+    assert!(is_anim_refusal(&missing, &what), "{missing:?} {what}");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, handle), "nothing loaded");
+}

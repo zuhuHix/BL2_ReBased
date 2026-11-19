@@ -15,7 +15,8 @@
 //!    they stand, so a template the store loaded has its class defaults applied.
 //! 2. **Nothing is loaded** (hub ruling, review r1 of #543: a lazy load is a write under #518). An unloaded or failed
 //!    template component, tree, node or control, or an unloaded body class whose names a lookup needs, is #529's
-//!    refusal ([`refusal`]), raised with nothing loaded.
+//!    refusal ([`refusal`]), raised with nothing loaded. A body class whose load failed is `NotRead`, naming it
+//!    ([`failed_body_class`]).
 //! 3. Node lookups take the first match in the saved `TickArrayIndex` order. Saved values that are not a full, distinct
 //!    order 0 to n - 1 over the nodes are `NotYet { NotRead }` ([`TICK_ORDER`]). A None node name matches the first
 //!    node whose `NodeName` is None (the root, when it has none). A None control name answers None with no search.
@@ -46,6 +47,11 @@ pub const TICK_ORDER: &str = "InitializeBodyComposition: the template's saved ti
 /// The AimOffset lookup with no body class: the note leaves it unread (unreachable from the pawn wrapper, whose gate
 /// needs a loaded body class).
 pub const NO_BODY_CLASS: &str = "InitializeBodyComposition: the AimOffset node name with no BodyClass";
+
+/// `"InitializeBodyComposition: the body class <path>, whose load failed"`: a failed body class handle.
+pub fn failed_body_class(path: &str) -> String {
+    format!("InitializeBodyComposition: the body class {path}, whose load failed")
+}
 
 /// The answers the template settles (rules 4 and 5): the four lookups are None and `SlotNodes` is empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,12 +170,18 @@ fn read_tree(vm: &Vm, root: ObjRef) -> Result<Tree, VmError> {
         let lists = get(vm, root, "SkelControlLists")?;
         let lists = lists.elements().ok_or_else(|| script("SkelControlLists is not an array".into()))?.to_vec();
         for list in &lists {
+            // A repeat within one chain is a loop; a control an earlier list already reached keeps its first place
+            // (review r1 of #557, item 1).
+            let mut chain: Vec<ObjRef> = Vec::new();
             let mut cursor = object(&field(vm, list, "ControlHead", "SkelControlListHead")?);
             while let Some(control) = cursor {
-                if controls.contains(&control) {
+                if chain.contains(&control) {
                     return Err(script("a skeletal control list that loops back on itself".into()));
                 }
-                controls.push(need(vm, control)?);
+                chain.push(need(vm, control)?);
+                if !controls.contains(&control) {
+                    controls.push(control);
+                }
                 cursor = object(&get(vm, control, "NextControl")?);
             }
         }
@@ -223,6 +235,10 @@ pub fn check(vm: &Vm, template: ObjRef, body: Option<ObjRef>) -> Result<Settled,
     };
     let tree = read_tree(vm, root)?;
     let body = match body {
+        // A body class whose load failed is named, as a failed template is (review r1 of #557, item 3).
+        Some(b) if vm.defs.is_failed(&vm.space, b) => {
+            return Err(NotYet::not_read(failed_body_class(&super::pawn_meshes::handle_path(vm, b)), RECORD).into());
+        }
         Some(b) => Some(need(vm, b)?),
         None => None,
     };
