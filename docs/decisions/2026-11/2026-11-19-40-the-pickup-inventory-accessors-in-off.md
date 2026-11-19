@@ -43,3 +43,12 @@ No note reads either native, so each needs an analyst lane.
 - nothing written.
 
 Reference still binds none of the six.
+
+**Review r1 of #487, folded in.**
+1. The definition query is dispatched only when it resolves to the native `Engine.WillowInventory.GetInventoryDefinition`
+   (the guard of #467's `native_getter`). Anything else, a script or state override included, is a third named
+   `NotYet { NotRead }`: the note does not say the native runs an override. An inherited native with nothing
+   registered stays `UnboundNative`. The fixture's unbound case is now a subclass that inherits the native.
+2. A test with an invented subclass that overrides the query in script: the named `NotRead`, nothing written.
+3. A comment says `pickup_targeting::definition_of`'s `Ok(None)` for a pickup with no inventory follows
+   NATIVE_PICKUP_TARGETING.md, not this native, so the two are not aligned.

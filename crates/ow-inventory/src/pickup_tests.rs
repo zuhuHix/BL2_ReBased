@@ -21,6 +21,7 @@ use ow_vm::error::VmError;
 use super::*;
 
 const NATIVE: u32 = 0x400 | 0x20000;
+const SCRIPT: u32 = 0x1 | 0x2 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
 const IMPORTS: [&str; 7] =
@@ -52,9 +53,15 @@ fn engine() -> Vec<u8> {
     native(&mut t, inventory, "ComputeMonetaryValue", &[], Some(("Int", 0)));
     native(&mut t, inventory, "GenerateUniqueID", &[], Some(("Int", 0)));
     native(&mut t, inventory, "GetInventoryDefinition", &[], Some(("Object", object)));
-    // An invented inventory class whose own definition query is a native nothing binds.
-    let unbound = t.class("ToyUnboundInventory", actor);
-    native(&mut t, unbound, "GetInventoryDefinition", &[], Some(("Object", object)));
+    // Invented: a subclass that inherits the native query, and one that overrides it in script (review r1 of #487).
+    t.class("ToyInheritingInventory", inventory);
+    let scripted = t.class("ToyScriptedInventory", inventory);
+    t.function(scripted, "GetInventoryDefinition", &[], Some(("Object", object)), &[], &FunctionSpec::new(SCRIPT, "GetInventoryDefinition"), |_| {
+        let mut a = ow_package::testkit::script::Asm::new();
+        a.stmt().return_nothing();
+        a.end();
+        Some(a)
+    });
     t.build()
 }
 
@@ -193,8 +200,8 @@ fn add_to_navigation_is_a_no_op_and_remove_pickup_is_not_yet() {
 }
 
 /// The two pickup accessors (decision 2026-11-19-40, assigned -103): the pickup's `Inventory`, and that inventory's own
-/// `GetInventoryDefinition()` through the VM. A pickup with no inventory and an inventory class without the query are
-/// named `NotRead`s; an unbound callee is its own `UnboundNative`. Nothing is written.
+/// native `GetInventoryDefinition()` through the VM (a subclass that inherits it included). A pickup with no inventory
+/// and an inventory class without the query are named `NotRead`s. Nothing is written.
 #[test]
 fn the_pickup_accessors_read_the_inventory_and_ask_its_definition() {
     let mut x = fx(ParityMode::Off);
@@ -204,32 +211,63 @@ fn the_pickup_accessors_read_the_inventory_and_ask_its_definition() {
         .register_native(key, Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(Some(definition)))))
         .unwrap();
     let pickup = x.obj("WillowGame.WillowPickup");
-    let (inventory_of, definition_of) =
-        ("Engine.DroppedPickup.GetPickupableInventory", "Engine.DroppedPickup.GetPickupableInventoryDefinition");
-    assert_eq!(x.call(inventory_of, pickup, vec![]).unwrap(), Value::Object(None));
-    match x.call(definition_of, pickup, vec![]) {
-        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == NO_INVENTORY && n.record == RECORD_EQUIP, "{n}"),
-        other => panic!("{other:?}"),
+    assert_eq!(x.call(INVENTORY_OF, pickup, vec![]).unwrap(), Value::Object(None));
+    expect_not_read(x.call(DEFINITION_OF, pickup, vec![]), NO_INVENTORY);
+    for class in ["Engine.WillowInventory", "Engine.ToyInheritingInventory"] {
+        let item = x.obj(class);
+        x.set(pickup, "Inventory", Value::Object(Some(item)));
+        assert_eq!(x.call(INVENTORY_OF, pickup, vec![]).unwrap(), Value::Object(Some(item)), "{class}");
+        assert_eq!(x.call(DEFINITION_OF, pickup, vec![]).unwrap(), Value::Object(Some(definition)), "{class}");
     }
-    let item = x.obj("Engine.WillowInventory");
-    x.set(pickup, "Inventory", Value::Object(Some(item)));
-    assert_eq!(x.call(inventory_of, pickup, vec![]).unwrap(), Value::Object(Some(item)));
-    assert_eq!(x.call(definition_of, pickup, vec![]).unwrap(), Value::Object(Some(definition)));
     let plain = x.obj("Engine.Actor");
     x.set(pickup, "Inventory", Value::Object(Some(plain)));
-    match x.call(definition_of, pickup, vec![]) {
-        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == NO_DEFINITION_QUERY, "{n}"),
-        other => panic!("{other:?}"),
-    }
-    let unbound = x.obj("Engine.ToyUnboundInventory");
-    x.set(pickup, "Inventory", Value::Object(Some(unbound)));
-    match x.call(definition_of, pickup, vec![]) {
+    expect_not_read(x.call(DEFINITION_OF, pickup, vec![]), NO_DEFINITION_QUERY);
+    assert_eq!(inventory_of(&x, pickup), Some(plain), "nothing written");
+}
+
+/// Review r1 of #487, item 1: with nothing registered under the native's key, a subclass that inherits it is the
+/// callee's own `UnboundNative`, unchanged.
+#[test]
+fn an_inherited_unbound_definition_query_is_unbound_native() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    let item = x.obj("Engine.ToyInheritingInventory");
+    x.set(pickup, "Inventory", Value::Object(Some(item)));
+    match x.call(DEFINITION_OF, pickup, vec![]) {
         Err(VmError::UnboundNative(k)) => assert!(k.contains("GetInventoryDefinition"), "{k}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// Review r1 of #487, item 2: a subclass that overrides the query in script gets the named `NotRead` before anything
+/// runs, and nothing is written.
+#[test]
+fn a_script_override_of_the_definition_query_is_not_read() {
+    let mut x = fx(ParityMode::Off);
+    let pickup = x.obj("WillowGame.WillowPickup");
+    let item = x.obj("Engine.ToyScriptedInventory");
+    x.set(pickup, "Inventory", Value::Object(Some(item)));
+    expect_not_read(x.call(DEFINITION_OF, pickup, vec![]), NO_NATIVE_DEFINITION_QUERY);
+    assert_eq!(inventory_of(&x, pickup), Some(item), "nothing written");
+}
+
+const INVENTORY_OF: &str = "Engine.DroppedPickup.GetPickupableInventory";
+const DEFINITION_OF: &str = "Engine.DroppedPickup.GetPickupableInventoryDefinition";
+
+fn expect_not_read(r: Result<Value, VmError>, what: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == what && n.record == RECORD_EQUIP, "{n}"),
+        other => panic!("expected the NotRead {what:?}, got {other:?}"),
+    }
+}
+
+fn inventory_of(x: &Fx, pickup: ObjRef) -> Option<ObjRef> {
     let class = x.vm.space.heap.get(pickup).unwrap().class;
     let p = x.vm.space.prop(class, "Inventory").unwrap();
-    assert_eq!(x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(unbound)), "nothing written");
+    match x.vm.space.read(pickup, PropAddr::scalar(p)).unwrap() {
+        Value::Object(o) => *o,
+        other => panic!("{other:?}"),
+    }
 }
 
 /// Reference binds none of them (no C++ stand-in).

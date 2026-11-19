@@ -22,10 +22,13 @@
 //!   write nothing.
 //!   - `GetPickupableInventory`: the pickup's `Inventory`, as stored (None included).
 //!   - `GetPickupableInventoryDefinition`: "that inventory's definition". It is read as the inventory's own
-//!     `GetInventoryDefinition()`, dispatched through the VM on the inventory's class, so the callee answers for itself
-//!     (an unbound one is `VmError::UnboundNative`, unchanged) (UNVERIFIED that the native asks that virtual).
-//!   - Where the note is silent, a named `NotYet { NotRead }`: a pickup with no `Inventory` ([`NO_INVENTORY`]), and an
-//!     inventory whose class declares no `GetInventoryDefinition` ([`NO_DEFINITION_QUERY`]).
+//!     `GetInventoryDefinition()`, dispatched through the VM on the inventory's class, only when that resolves to the
+//!     native `Engine.WillowInventory.GetInventoryDefinition` (the guard of #467's `native_getter`, review r1 of
+//!     #487). An unbound one is `VmError::UnboundNative`, unchanged (UNVERIFIED that the native asks that virtual).
+//!   - Where the note is silent, a named `NotYet { NotRead }`: a pickup with no `Inventory` ([`NO_INVENTORY`]); an
+//!     inventory whose class declares no `GetInventoryDefinition` ([`NO_DEFINITION_QUERY`]); and one whose query
+//!     resolves to anything but that native, a script or state override included ([`NO_NATIVE_DEFINITION_QUERY`]):
+//!     the note does not say the native runs an override.
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference has no stand-in, so Reference binds nothing here (R3).
 
@@ -48,6 +51,11 @@ pub const NO_INVENTORY: &str = "DroppedPickup.GetPickupableInventoryDefinition o
 /// The `NotYet` of an inventory whose class has no definition query (the note is silent).
 pub const NO_DEFINITION_QUERY: &str =
     "DroppedPickup.GetPickupableInventoryDefinition on an inventory whose class declares no GetInventoryDefinition";
+/// The `NotYet` of an inventory whose query resolves to anything but the native (the note is silent on overrides).
+pub const NO_NATIVE_DEFINITION_QUERY: &str = "DroppedPickup.GetPickupableInventoryDefinition on an inventory whose \
+     GetInventoryDefinition is not the native Engine.WillowInventory.GetInventoryDefinition (an override)";
+/// The native declaration the definition query must resolve to.
+pub const NATIVE_DEFINITION_QUERY: &str = "Engine.WillowInventory.GetInventoryDefinition";
 
 /// The native keys [`register`] binds in Off.
 pub const GET_INVENTORY_PAWN: &str = "WillowPlayerController.GetInventoryPawn()";
@@ -68,6 +76,8 @@ fn get_pickupable_inventory(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 
 fn get_pickupable_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     const WHAT: &str = "DroppedPickup.GetPickupableInventoryDefinition";
+    // No inventory is this native's named NotYet. `pickup_targeting::definition_of` answers Ok(None) there, following
+    // NATIVE_PICKUP_TARGETING.md, not this native: the two are not to be aligned (review r1 of #487).
     let Some(inventory) = pickup_inventory(c, WHAT)? else {
         return Err(NotYet::not_read(NO_INVENTORY, RECORD_EQUIP).into());
     };
@@ -78,6 +88,14 @@ fn get_pickupable_inventory_definition(c: &mut NativeCall<'_>) -> Result<Value, 
     let Some(f) = c.vm.find_method(class, "GetInventoryDefinition", state)? else {
         return Err(NotYet::not_read(NO_DEFINITION_QUERY, RECORD_EQUIP).into());
     };
+    // Checked before anything runs: only the native declaration is dispatched.
+    let native = c
+        .vm
+        .function(f)
+        .is_some_and(|d| d.native_key.is_some() && d.path.as_str().eq_ignore_ascii_case(NATIVE_DEFINITION_QUERY));
+    if !native {
+        return Err(NotYet::not_read(NO_NATIVE_DEFINITION_QUERY, RECORD_EQUIP).into());
+    }
     Ok(c.vm.call(f, Some(inventory), vec![])?.ret)
 }
 
