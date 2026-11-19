@@ -59,6 +59,23 @@ added, no bounds check was loosened and no `NotYet` guard was relaxed. No game r
 - **ctest.** `tests/CMakeLists.txt` registers this test (`mission-script-synthetic`) with the C++ binary only. Running
   it on the Rust binary as well would need a new registration there. That file was not edited, because CMakeLists files
   are sensitive; the maintainer can add it.
+- **Review r1 of #423.**
+  - **Grading is per run, with no global.** `check` takes the report it reads (`run=`), the steps it reads (`at=`,
+    none for the whole run) and, for a NotYet the run recorded and went past, the text it depends on (`needs=`).
+    - A failing check waits on a stop only when it reads the whole run, the stop step or a step the run did not
+      finish. A check on a finished, earlier step fails.
+    - A recorded NotYet is waited on only by a check that names it: the 8 Reference checks name
+      `BehaviorBase.RunBehaviors`. Every other failing check is a failure.
+    - The `--mission-run` scenarios (E, E2, E3, T) pass no run, so a NotYet of an earlier `--slice-run` (Scenario F
+      runs one after E) can no longer turn their failures into not-yets.
+  - **Self-test.** `waits_on` is checked at import on invented reports.
+  - **Results** on this branch's binary are unchanged:
+    - Off: 0 failures, 17 not yet, exit 3;
+    - Reference: 0 failures, 8 not yet, the same 8 labels and texts, exit 3.
+  - **`ow-cli` (`cmd/slice.rs`).** After a stop, a tail part that cannot be read (the script report, the dummy's
+    lists) is written empty and its error named in `"tail_unread":[..]`, instead of a `?` cutting the report off. A run
+    without a stop fails as before, so C++-shaped runs keep their bytes. Unit test
+    `a_tail_part_after_a_stop_is_empty_and_named`.
 - **Open:**
   - the level-up `RunBehaviors` stand-in port (Reference);
   - the Off health pool (`NotYet` by design);
