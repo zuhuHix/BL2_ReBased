@@ -170,8 +170,8 @@ Fills the attack's own fields from its `Limits` (an array of `AttackLocation` ob
 1. `Type` becomes `Attack_Far`.
 2. The first `Limits` entry that is an `AttackLocation_Range`, if any:
    - the movement is limited when `Range.MaxVal` is below 512 or `Range.MinVal` is below the pawn's collision radius
-     (the radius field is read as the cylinder's `CollisionRadius`; the layout tool places that field 16 bytes earlier
-     than the native reads, so the reading is UNVERIFIED);
+     (the radius field is read as the cylinder's `CollisionRadius`; the layout tool and the native disagree on where
+     that field sits, so the reading is UNVERIFIED);
    - the flag the layout tool names `bCanBeLimitedByDownedPlayers` takes that answer. `bLimitedMovement` is **not**
      written. The tool's bit order is taken as right because the neighbouring bit it names `bWantsFullLOSTrace` is the
      one that receives `bFullLineOfSight` in step 4; still UNVERIFIED, and the first live check below settles it;
