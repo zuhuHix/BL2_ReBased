@@ -51,7 +51,9 @@ and loads nothing. In order:
 1. **It walks every stack attribute of the weapon's class, inherited ones included.** It starts from the object's
    runtime class and follows a linked chain from property to property. The recorded live evidence below shows that the
    chain reaches `Engine.Weapon`'s `InstantHitDamage`, so it is the class's whole property chain (every property of the
-   class and its parents), not the list of fields the class itself declares. Every property whose flags carry the
+   class and its parents), not the list of fields the class itself declares. This reach comes from the live record;
+   the walk in the executable was not re-read to tell an own-fields list from a whole-class property chain
+   (UNVERIFIED). Every property whose flags carry the
    stack-attribute bit (the port's `PropertyDecl::STACK_ATTRIBUTE`, the value side of a triple) is handled; other
    properties are skipped. For each one:
    1. **its modifier stack** (the `XModifierStack` companion) is emptied: the length is set to 0, and when the array
@@ -90,7 +92,7 @@ rests on the chain being one chain, not on a read of each.
 - backpack guns read a live value equal to their base.
 
 So for `InstantHitDamage`, a triple `Engine.Weapon` declares, both halves of section 3 are seen: the base takes the
-value, and the stack is emptied. That settles the walk's reach to inherited fields and supports the copy's direction.
+value, and the stack is emptied. That supports the walk's reach to inherited fields and the copy's direction.
 The record does not say when in the build this happened. This native is the only step of the init that empties stacks
 (section 2), so it is attributed here; that attribution is UNVERIFIED.
 
