@@ -25,8 +25,8 @@ is link 1 (`spawn_maya`) of the slice gate, and links 3, 4, 5, 13 and 14 wait be
 `WillowPlayerController.ApplyCharacterClassDefaults(P, CharClass)` runs the parent's version, then the skill manager
 statement, then (with `P` a `WillowPawn` and `CharClass` a `PlayerClassDefinition`) this one:
 
-`GetWillowGlobals().GetPlayerPawnDataManager().FindAlreadyLoadedObject(PlayerClass.PawnArchetypePath)`, cast to
-`WillowPlayerPawn`. Its `BodyClass` goes to the pawn's `BodySelectClass`. The statements after that are script calls:
+it gets the globals' pawn data manager, looks up the player class's `PawnArchetypePath` with
+`FindAlreadyLoadedObject`, and casts the result to `WillowPlayerPawn`. Its `BodyClass` goes to the pawn's `BodySelectClass`. The statements after that are script calls:
 `SetShieldResourcePoolDefinition`, the FOV and split profile calls, the FOV and eye-height speeds,
 `ApplyAttributeStartingValues`, `SetUpTradeInteraction`, and below `NetMode` 3
 `BalanceModifierDefinition.ApplyPlayThroughBasedPlayerAttributeEffects` and `RecalculateAttributeInitializedState`.
