@@ -23,10 +23,12 @@ codes it from this note alone.
 |---|---|---|---|
 | Declaration | `Engine.WillowInventory.GetInventoryDefinition()`, native, no parameters, returns a `WillowInventoryDefinition` (the return property's class, from the package) | high | UNVERIFIED |
 | Script overrides | none in the installed packages | high | UNVERIFIED |
-| Weapons | the weapon's `DefinitionData.WeaponTypeDefinition` | high | UNVERIFIED |
-| Items | the item's `DefinitionData.ItemDefinition` | high | UNVERIFIED |
-| A `WillowInventory` that is neither | None, after an engine log line saying the function has no implementation there | high | UNVERIFIED |
-| Refusals | none: it never fails and never writes | high | UNVERIFIED |
+| Weapons (the four read classes) | the weapon's `DefinitionData.WeaponTypeDefinition` | high | UNVERIFIED |
+| Items (the nine read classes) | the item's `DefinitionData.ItemDefinition` | high | UNVERIFIED |
+| Exactly `Engine.WillowInventory` | the game: None, after an engine log line saying the function has no implementation there | high | UNVERIFIED |
+| What the game refuses | nothing: the native never fails and never writes | high | UNVERIFIED |
+| Off's own refusals | named `NotYet`s of kind `NotRead` for the cases this read does not cover (section 3) | the port's choice | UNVERIFIED |
+| Logging | the game logs only for the exact base; Off emits no diagnostic | the port's choice | UNVERIFIED |
 
 ## 1. Where it lives
 
@@ -63,16 +65,28 @@ for an item (high).
 Bind `Engine.WillowInventory.GetInventoryDefinition` (not a `WillowGame.` path; see section 4). With `this` the
 inventory:
 
-1. `this` is a `WillowGame.WillowWeapon` or a subclass of it: answer the `WeaponTypeDefinition` field of
-   `this.DefinitionData`, as stored (an object or None).
-2. `this` is a `WillowGame.WillowItem` or a subclass of it: answer the `ItemDefinition` field of `this.DefinitionData`,
-   as stored.
-3. `this` is exactly `Engine.WillowInventory`: answer None. Logging the line is optional; it changes no state script
-   can see.
-4. Any other class, such as a plain `Engine.Weapon` or a `WillowInventory` subclass in a package not read here (for
-   example a DLC): a `NotYet` of kind `NotRead`, naming the class. Its engine rule was not read.
-5. A class in step 1 or 2 that does not declare `DefinitionData`, or whose `DefinitionData` lacks the field, is bad
-   data (the installed classes all declare it).
+1. `this` is exactly one of the four read weapon classes (`WillowWeapon`, `WillowBuzzaxeWeapon`, `WillowTurretWeapon`,
+   `WillowVehicleWeapon`): answer the `WeaponTypeDefinition` field of `this.DefinitionData`, as stored.
+2. `this` is exactly one of the nine read item classes (section 2): answer the `ItemDefinition` field of
+   `this.DefinitionData`, as stored.
+3. `this` is exactly `Engine.WillowInventory`: answer None, with no diagnostic. The game also logs a line here (section
+   2, step 3); Off does not reproduce it, since it changes no state script can see.
+4. Any other class: a `NotYet` of kind `NotRead`, naming the class, because its engine rule was not read. That
+   includes:
+   - a plain `Engine.Weapon`;
+   - a `WillowInventory` subclass outside the two trees;
+   - **any descendant of `WillowWeapon` or `WillowItem` beyond the thirteen read classes** (for example a DLC
+     package's). Such a class may share its parent's rule, as a script-only class does in UE3, or bring its own engine
+     override. The port's class table holds no class flags to tell the two apart (decision 2026-11-15-26).
+5. **Missing layout, for a class of step 1 or 2**, each a `NotYet` of kind `NotRead` before anything is answered, the
+   same treatment the module's existing definition natives give a missing layout:
+   - the class declares no `DefinitionData`: "GetInventoryDefinition on a class without DefinitionData";
+   - its `DefinitionData` struct declares no selected field (`WeaponTypeDefinition` for step 1, `ItemDefinition` for
+     step 2): "GetInventoryDefinition on a DefinitionData without <field>".
+6. **A declared field that holds None** is not a refusal: the answer is None (section 2: "as stored").
+
+The engine rule underneath (section 2) is the evidence. Steps 3 to 5 are the port's Off answers for what the read does
+not cover, and they are not claims about the game.
 
 Reference: the C++ has no stand-in, so the key stays unbound there.
 
@@ -83,11 +97,14 @@ Reference: the C++ has no stand-in, so the key stays unbound there.
   installed data, to `Engine.WillowInventory.*`.
 - **`GetInventoryDefinition` belongs with them.** It is a native of the same class, it is reached from the same
   inventory scripts, and it reads the same `DefinitionData`.
-- The module's own reading of "the inventory definition" (the one definition `DefinitionData` holds, `WeaponTypeDefinition`
-  for a weapon's data, `ItemDefinition` for an item's) agrees with section 2 for the two read class trees.
-- One difference matters for an implementer. The native chooses the field **by the object's class**, not by which
-  field is set: a weapon answers its `WeaponTypeDefinition` even when it is None. A shared helper should follow the
-  class rule.
+- The module's own reading of "the inventory definition" agrees with section 2 for the two read class trees.
+- **How the module's helper chooses today** (the one `ComputeMonetaryValue` uses): it takes the first of
+  `WeaponTypeDefinition` and `ItemDefinition` that the `DefinitionData` struct **declares**, even when that field holds
+  None. It does not look for the first field that is set. On the installed data the two agree, because a weapon's
+  struct declares only `WeaponTypeDefinition` and an item's only `ItemDefinition`.
+- `GetInventoryDefinition` chooses **by the object's class** (section 3). An implementer should add that as its own
+  rule, or scope any shared helper so that `ComputeMonetaryValue`'s present behaviour (the first declared field) stays
+  exactly as it is.
 
 ## Open questions
 
@@ -98,7 +115,17 @@ Reference: the C++ has no stand-in, so the key stays unbound there.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-- On a dropped or held weapon, call `GetInventoryDefinition()` and compare with `DefinitionData.WeaponTypeDefinition`.
-- The same on an item of each kind (a shield, a grenade mod, a class mod, a relic, a usable item, a mission item):
-  compare with `DefinitionData.ItemDefinition`.
-- Hook `WillowInventory.DropFrom` while dropping a gun, and read the value the call returns.
+- **A populated reference.** On a held weapon, call `GetInventoryDefinition()` and compare with
+  `DefinitionData.WeaponTypeDefinition`. Do the same on an item of each kind (a shield, a grenade mod, a class mod, a
+  relic, a usable item, a mission item), comparing with `DefinitionData.ItemDefinition`.
+- **A null reference, without a fallback.** On a scratch weapon (spawned, or a clone), set
+  `DefinitionData.WeaponTypeDefinition` to None while keeping the rest. Expect None, not some other definition (for
+  example the balance's). Do the same for an item's `ItemDefinition`.
+- **The exact base, with its diagnostic.** Construct a bare `Engine.WillowInventory` object, if the SDK can, and call
+  the function with the log captured. Expect None and one "not implemented" line. If the SDK cannot construct one, this
+  receiver is an open verification gap.
+- **Other receivers.** A plain `Engine.Weapon`, and any `WillowWeapon` or `WillowItem` descendant beyond the thirteen
+  read classes (from a DLC package), where one can be obtained. Each is an open verification gap until obtained.
+- **The reference during the drop.** Hook `WillowInventory.DropFrom` while dropping a gun. At the hook's entry read
+  `DefinitionData.WeaponTypeDefinition`, then read the value the call inside `DropFrom` returns. This shows whether
+  the reference is already set when the drop proceeds (open question 2).
