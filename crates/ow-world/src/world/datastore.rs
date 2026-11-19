@@ -5,36 +5,42 @@
 //! code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: under
 //! `ParityMode::Reference` the C++ binds none of these, so the VM's stub policy answers (R3).
 //!
-//! **The note's section 5 is the contract** (hub ruling of 2026-11-19; research/rust-next-stop 40c0a89).
+//! **The note's section 5 is the contract** (hub ruling of 2026-11-19).
 //!
 //! **Branch 1, the online subsystem:** the host has none, so the subsystem's `GetGameSettings` is never called and
 //! the refresh takes branch 2, the data store. That is the engine's fact, not a refusal: nothing is bound for it.
 //!
 //! **`UIInteraction.GetDataStoreClient()`** (section 2): the engine's data store client. The port's engine is the
 //! world, and it has one client per world ([`DataStores`], a VM service), made on the first call from the
-//! `Engine.DataStoreClient` class defaults together with its global data stores. So the note's fallbacks (the
-//! `UIInteraction` class default's client, then None) are never reached here: the port's engine always has its client,
-//! as the shipped game's does once it is running. Nothing else is read or written.
+//! `Engine.DataStoreClient` class defaults together with its global data stores. The note's fallbacks (the
+//! `UIInteraction` class default's client, then None) are out of scope for Off (section 5).
+//! - **Before anything is made** (review r2 of #448, item 3): the service's borrow is taken, and every class the
+//!   getter makes is found. A refusal there leaves nothing behind.
+//! - **After that** (item 4, hub ruling): a failure while making the objects is terminal. A `NotYet` gets the
+//!   [`PARTIAL_WRITES`] mark (its kind kept), any other error propagates unchanged, and nothing is rolled back.
 //!
 //! **The global data stores** (section 4): the engine configuration lists the client's global data store classes. The
 //! port reads no configuration file, so [`GLOBAL_DATA_STORES`] names the one the note read there that this path needs,
-//! `WillowGame.WillowOnlineGameSettings_DataStore`. Each store is made from its class defaults, so its `Tag`
-//! (`WillowOnlineGameSettings`) and its one `GameSettingsCfgList` entry with an empty `GameSettings` are the installed
-//! defaults. Who fills `GameSettings` when the engine starts is the note's open question 2. Off does not assume it
-//! empty (section 5: "never empty, so return with no writes"): `FindDataStore` answers such a store only when its first
-//! entry's `GameSettings` is set, and is `NotYet { NotRead }` naming open question 2 otherwise. The script reads the
-//! entry as a plain field right after the lookup, so the lookup is the last native boundary before that read.
+//! `WillowGame.WillowOnlineGameSettings_DataStore`. It is made from its class defaults, so its `Tag`
+//! (`WillowOnlineGameSettings`) and its settings list are the installed defaults.
 //!
-//! **`DataStoreClient.FindDataStore(Tag, optional Player)`** (section 3):
+//! **`DataStoreClient.FindDataStore(Tag, optional Player)`** (section 3), the store lookup only:
 //! - a `None` tag answers None;
-//! - with a player, that player's own data stores come first: the port models no player data stores, so a call with
-//!   a player is `NotYet { NotPorted }`;
-//! - then the client's global stores, in registration order, by `Tag` (names compare without case, as UE3 names do);
-//! - no match: the game answers None, but the port registers only part of the configuration's global stores, so a tag
-//!   none of them has is `NotYet { NotRead }` rather than a None the game might not give;
+//! - with a player, that player's own data stores are searched first. The port's players hold no data stores, so
+//!   that search finds nothing and the lookup goes on to the global stores, as the note's step 3 does on a miss;
+//! - the client's global stores, in registration order, by `Tag` (names compare without case, as UE3 names do);
+//! - no match: None;
 //! - called on another client than the world's: `NotYet { NotPorted }`.
 //!
 //! It changes nothing and creates nothing.
+//!
+//! **The settings entry read** (section 5, review r2 of #448, item 2): Off does not assume the store's settings entry
+//! (`GameSettingsCfgList[0].GameSettings`) is empty, and reading it is a named `NotYet` naming open question 2. The
+//! read is the controller's script `GetOnlineGameSettingsViaDatastore`, the one of the note's two route functions
+//! that answers the settings. (Its sibling `GetOnlineGameSettingsDatastore`, with its `gameSettingsName` local, answers
+//! the store; both by their installed declarations.) In Off that function is overridden: it runs the store lookup as
+//! script; with no store it answers None, as the note's route does ("with no store ... the refresh does nothing");
+//! otherwise it is the named `NotYet`, whatever the entry holds.
 //!
 //! **After the settings are found** (section 5, steps 1 to 5): field reads are plain reads and the `Update...` steps
 //! are script, run as script. The natives among them are not read: [`UNREAD`] are bound in Off as
@@ -47,7 +53,7 @@
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::ids::{ClassId, ObjRef, PropAddr};
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
@@ -55,12 +61,20 @@ use ow_vm::error::VmError;
 /// The record these rules come from.
 pub const RECORD: &str = "docs/verification/NATIVE_ONLINE_GAME_SETTINGS.md";
 
+/// The mark of a failure after state was written. The same text as `ow_behavior::kernel::run::PARTIAL_WRITES`
+/// (`ow-world` cannot depend on `ow-behavior`), which the mission bridge and the slice commands stop on.
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
 /// `UIInteraction.GetDataStoreClient`.
 pub const GET_DATA_STORE_CLIENT: &str = "Engine.UIInteraction.GetDataStoreClient";
 /// `DataStoreClient.FindDataStore`.
 pub const FIND_DATA_STORE: &str = "Engine.DataStoreClient.FindDataStore";
 /// The class of the engine's data store client.
 pub const CLIENT_CLASS: &str = "Engine.DataStoreClient";
+/// The controller's script that reads the settings entry (overridden in Off; module documentation).
+pub const SETTINGS_VIA_DATASTORE: &str = "WillowGame.WillowPlayerController.GetOnlineGameSettingsViaDatastore";
+/// The controller's script that looks the store up (run as script).
+pub const SETTINGS_DATASTORE: &str = "GetOnlineGameSettingsDatastore";
 /// The global data store classes the port registers, in order: the one of the engine configuration's list this path
 /// needs (module documentation).
 pub const GLOBAL_DATA_STORES: [&str; 1] = ["WillowGame.WillowOnlineGameSettings_DataStore"];
@@ -96,7 +110,7 @@ impl DataStores {
     }
 }
 
-/// Binds this module's natives (Off only; the caller checks the mode).
+/// Binds this module's natives and the settings-entry override (Off only; the caller checks the mode).
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.service::<DataStores>().is_none() {
         vm.add_service(DataStores::default())?;
@@ -115,6 +129,12 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
                 .into())
             }),
         )?;
+    }
+    // The settings entry read, where the package set declares the script.
+    if let Ok(f) = vm.find_function(SETTINGS_VIA_DATASTORE)
+        && vm.function(f).is_some_and(|d| !d.is_native())
+    {
+        vm.override_script(SETTINGS_VIA_DATASTORE, Rc::new(settings_via_datastore))?;
     }
     Ok(())
 }
@@ -136,36 +156,39 @@ fn service(vm: &Vm) -> Result<Rc<std::cell::RefCell<DataStores>>, VmError> {
     })
 }
 
-/// The world's client, made with its global stores on the first call: the stores first, then the client, and any
-/// object made before a failure is freed again, so a failure leaves nothing behind.
+/// A failure after the getter began making objects (module documentation): a `NotYet` is marked [`PARTIAL_WRITES`]
+/// with its kind kept; any other error is returned as it is.
+fn after_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
+}
+
+/// The world's client, made with its global stores on the first call (module documentation): the service's borrow
+/// and every class are taken before anything is made; a failure after that is terminal, with nothing rolled back.
 pub fn data_store_client(vm: &mut Vm) -> Result<ObjRef, VmError> {
     let stores = service(vm)?;
-    if let Some(client) = stores.try_borrow().map_err(|_| VmError::ServiceBorrowed("DataStores"))?.client {
+    let mut s = stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
+    if let Some(client) = s.client {
         return Ok(client);
     }
-    let mut made: Vec<ObjRef> = Vec::new();
-    let result = (|| -> Result<ObjRef, VmError> {
-        for path in GLOBAL_DATA_STORES {
-            let class = vm.find_class(path)?;
-            made.push(ow_vm::interp::instantiate_from_defaults(vm, class)?);
-        }
-        let class = vm.find_class(CLIENT_CLASS)?;
-        let client = ow_vm::interp::instantiate_from_defaults(vm, class)?;
-        made.push(client);
-        Ok(client)
-    })();
-    match result {
-        Ok(client) => {
-            let mut s = stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
-            s.globals = made[..made.len() - 1].to_vec();
-            s.client = Some(client);
-            Ok(client)
-        }
-        Err(e) => {
-            let _ = vm.space.free_many(&made);
-            Err(e)
-        }
+    let mut classes: Vec<ClassId> = Vec::with_capacity(GLOBAL_DATA_STORES.len());
+    for path in GLOBAL_DATA_STORES {
+        classes.push(vm.find_class(path)?);
     }
+    let client_class = vm.find_class(CLIENT_CLASS)?;
+    let mut globals = Vec::with_capacity(classes.len());
+    for class in classes {
+        let store = ow_vm::interp::instantiate_from_defaults(vm, class).map_err(after_writes)?;
+        globals.push(store);
+        s.globals = globals.clone();
+    }
+    let client = ow_vm::interp::instantiate_from_defaults(vm, client_class).map_err(after_writes)?;
+    s.client = Some(client);
+    Ok(client)
 }
 
 fn get_data_store_client(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -186,14 +209,6 @@ fn find_data_store(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     if tag_text.is_empty() || tag_text.eq_ignore_ascii_case("None") {
         return Ok(Value::Object(None));
     }
-    let player = if c.arg_count() > 1 {
-        match c.arg(1)? {
-            Value::Object(o) | Value::Interface(o) => *o,
-            _ => None,
-        }
-    } else {
-        None
-    };
     let stores = service(c.vm)?;
     let (client, globals) = {
         let s = stores.try_borrow().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
@@ -206,13 +221,8 @@ fn find_data_store(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         )
         .into());
     }
-    if player.is_some() {
-        return Err(NotYet::not_ported(
-            "DataStoreClient.FindDataStore with a player: a player's own data stores (the port models none)",
-            RECORD,
-        )
-        .into());
-    }
+    // A player's own data stores come first (section 3, step 2); the port's players hold none, so that search finds
+    // nothing and the global stores follow (step 3).
     for store in globals {
         let class = c.vm.space.heap.get(store)?.class;
         let p = c.vm.space.prop(class, "Tag").ok_or_else(|| VmError::Script {
@@ -222,51 +232,40 @@ fn find_data_store(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
         if let Value::Name(t) = c.vm.space.read(store, PropAddr::scalar(p))?
             && c.vm.space.names.text(*t).eq_ignore_ascii_case(&tag_text)
         {
-            settings_known(c.vm, store)?;
             return Ok(Value::Object(Some(store)));
         }
     }
-    Err(NotYet::not_read(
-        format!(
-            "DataStoreClient.FindDataStore: the tag {tag_text}, which no global data store the port registers has (the \
-             engine configuration's other global stores are not registered)"
-        ),
-        RECORD,
-    )
-    .into())
+    Ok(Value::Object(None))
 }
 
-/// The hub's ruling for this lane (review of the note, #443): Off does not assume a game settings store's settings
-/// entry is empty. A store that declares `GameSettingsCfgList` is answered only when its first entry's `GameSettings`
-/// is set; otherwise what fills it in a world with no online subsystem is not read (the note's open question 2), and
-/// the lookup is `NotYet { NotRead }`, before the script reads the entry, rather than a store whose empty entry would
-/// make the refresh write nothing on a guess. A store that declares no such list is answered as it is.
-fn settings_known(vm: &Vm, store: ObjRef) -> Result<(), VmError> {
-    let class = vm.space.heap.get(store)?.class;
-    let Some(p) = vm.space.prop(class, "GameSettingsCfgList") else {
-        return Ok(());
+/// `WillowPlayerController.GetOnlineGameSettingsViaDatastore` in Off (module documentation): the store lookup runs as
+/// script; no store answers None; a store's settings entry read is the named `NotYet` (open question 2).
+fn settings_via_datastore(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let me = c.this.ok_or_else(|| VmError::Script {
+        function: SETTINGS_VIA_DATASTORE.to_string(),
+        message: "called with no controller".to_string(),
+    })?;
+    let (class, state) = {
+        let o = c.vm.space.heap.get(me)?;
+        (o.class, o.state)
     };
-    let first = match vm.space.read(store, PropAddr::scalar(p))? {
-        Value::Array(items) => items.first().cloned(),
+    let f = c.vm.find_method(class, SETTINGS_DATASTORE, state)?.ok_or_else(|| VmError::Script {
+        function: SETTINGS_VIA_DATASTORE.to_string(),
+        message: format!("the controller has no {SETTINGS_DATASTORE}"),
+    })?;
+    let store = match c.vm.call(f, Some(me), Vec::new())?.ret {
+        Value::Object(o) | Value::Interface(o) => o,
         _ => None,
     };
-    let filled = first.as_ref().and_then(|entry| {
-        let s = entry.as_struct()?;
-        let layout = vm.space.classes.struct_layout(s.ty)?;
-        let (at, _) = layout.field(vm.space.names.find("GameSettings")?)?;
-        match s.fields.get(usize::try_from(at).ok()?)? {
-            Value::Object(Some(_)) => Some(()),
-            _ => None,
-        }
-    });
-    if filled.is_some() {
-        return Ok(());
-    }
+    let Some(store) = store else {
+        return Ok(Value::Object(None));
+    };
     Err(NotYet::not_read(
         format!(
-            "DataStoreClient.FindDataStore: {}'s first GameSettingsCfgList entry has no GameSettings, and what fills it \
-             in a world with no online subsystem is not read (open question 2; the hub does not assume it empty)",
-            ow_attr::eval::class_path(&vm.space, store)
+            "WillowPlayerController.GetOnlineGameSettingsViaDatastore: the settings entry of {} \
+             (GameSettingsCfgList[0].GameSettings): what fills it in a world with no online subsystem is not read \
+             (open question 2; section 5: it is not assumed empty)",
+            ow_attr::eval::class_path(&c.vm.space, store)
         ),
         RECORD,
     )
