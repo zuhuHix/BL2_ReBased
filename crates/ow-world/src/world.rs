@@ -491,9 +491,57 @@ impl NativePack for Pack {
         // not bind it (R3; decision 2026-11-16-81).
         if vm.parity != ParityMode::Reference {
             vm.register_native("WorldInfo.IsPlayInEditor()", Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(false))))?;
+            vm.register_native(IS_LOCAL_PLAYER_CONTROLLER, Rc::new(is_local_player_controller))?;
         }
         Ok(())
     }
+}
+
+const IS_LOCAL_PLAYER_CONTROLLER: &str = "PlayerController.IsLocalPlayerController()";
+
+/// `PlayerController.IsLocalPlayerController()`, a stock UE3 native (public UE3 semantics: true when the controller's
+/// `Player` is a local player, not a network connection; decision 2026-11-19-15). Outside Reference only: the C++
+/// logs it as a zero-result stub, which Reference keeps (R3).
+///
+/// The world models local players by its local-player list (`Actors::add_local_player`), not by `Player` objects:
+/// - a listed controller that is not destroyed: true;
+/// - an unlisted controller whose `Player` is None: false (no player at all, as in UE3);
+/// - an unlisted controller whose `Player` is set: `NotYet { NotPorted }`. The world does not model that object, so it
+///   cannot tell a local player from a connection;
+/// - no world (no `Actors` service): `NotYet { LayerAbsent }`.
+///
+/// Whether this game's own controller classes change the rule is UNVERIFIED (not read; no live check yet).
+fn is_local_player_controller(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let players = match c.vm.service::<Actors>() {
+        Some(a) => a
+            .try_borrow()
+            .map_err(|_| VmError::ServiceBorrowed("Actors"))?
+            .local_players()
+            .to_vec(),
+        None => {
+            return Err(NotYet::layer_absent(
+                "PlayerController.IsLocalPlayerController: the engine's local player list",
+                "ow-world (a World)",
+                "docs/verification/NATIVE_ENGINE_CORE.md",
+            )
+            .into());
+        }
+    };
+    let Some(this) = c.this else {
+        return Ok(Value::Bool(false));
+    };
+    if players.contains(&this) {
+        return Ok(Value::Bool(!is_destroyed(&c.vm.space, this)?));
+    }
+    if object(&c.vm.space, this, "Player")?.is_some() {
+        return Err(NotYet::not_ported(
+            "PlayerController.IsLocalPlayerController on a controller outside the world's local-player list whose \
+             Player is set (the world does not model Player objects)",
+            "docs/verification/NATIVE_ENGINE_CORE.md",
+        )
+        .into());
+    }
+    Ok(Value::Bool(false))
 }
 
 /// A map's placed actors in a world (lane W5-MAPLOAD; here because lanes do not edit the crate's `lib.rs`).

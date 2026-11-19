@@ -356,7 +356,10 @@ fn package() -> Vec<u8> {
     void(&mut t, dud, "PreBeginPlay", &[], |_, a| {
         a.stmt().final_function(ids.destroy, |_| {});
     });
-    t.class("Controller", actor);
+    let controller = t.class("Controller", actor);
+    let player_controller = t.class("PlayerController", controller);
+    t.prop("Object", player_controller, "Player", 0, object);
+    native(&mut t, player_controller, "IsLocalPlayerController", &[], Some(("Bool", 0)), NATIVE);
     t.class("Thing", object);
 
     let definition = t.class("AttributeInitializationDefinition", object);
@@ -460,7 +463,7 @@ fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     )
     .unwrap();
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
-    for class in ["Probe", "Dud", "Controller", "WorldInfo"] {
+    for class in ["Probe", "Dud", "Controller", "PlayerController", "WorldInfo"] {
         let cdo =
             w.vm.defs
                 .class_default(&mut w.vm.space, &format!("Engine.{class}"))
@@ -1499,6 +1502,45 @@ fn is_play_in_editor_is_false_outside_reference() {
         assert_eq!(x.call("WorldInfo.IsPlayInEditor", Some(wi), Vec::new()).unwrap(), Value::Bool(false));
         let x = fx_in(true, ParityMode::Reference);
         assert!(!x.w.vm.has_native("WorldInfo.IsPlayInEditor()"), "unbound under Reference");
+    });
+}
+
+/// `PlayerController.IsLocalPlayerController` (decision 2026-11-19-15, public UE3 semantics): a controller in the
+/// world's local-player list is local; an unlisted one with no `Player` is not; an unlisted one with a `Player` the
+/// world does not model is `NotYet`; a destroyed listed one is not. Without a world: `NotYet { LayerAbsent }`. Unbound
+/// under Reference (the C++ stub).
+#[test]
+fn is_local_player_controller_follows_the_local_player_list() {
+    run(|| {
+        let mut x = fx();
+        let (local, remote, odd) = (x.spawn("PlayerController"), x.spawn("PlayerController"), x.spawn("PlayerController"));
+        x.w.actors().borrow_mut().add_local_player(local).unwrap();
+        let wi = x.wi;
+        set_field(&mut x.w.vm.space, odd, "Player", Value::Object(Some(wi))).unwrap();
+        let ask = |x: &mut Fx, pc| x.call("PlayerController.IsLocalPlayerController", Some(pc), Vec::new());
+        assert_eq!(ask(&mut x, local).unwrap(), Value::Bool(true));
+        assert_eq!(ask(&mut x, remote).unwrap(), Value::Bool(false));
+        let refused = ask(&mut x, odd).unwrap_err();
+        assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotPorted), "{refused}");
+        // Destroying a controller is not yet ported in Off (NATIVE_ACTOR_DESTROY.md): mark it as the destroy would.
+        set_field(&mut x.w.vm.space, local, "bDeleteMe", Value::Bool(true)).unwrap();
+        assert_eq!(ask(&mut x, local).unwrap(), Value::Bool(false), "a destroyed controller");
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native("PlayerController.IsLocalPlayerController()"), "unbound under Reference");
+    });
+}
+
+#[test]
+fn is_local_player_controller_without_a_world_is_not_yet() {
+    run(|| {
+        let dir = std::env::temp_dir().join(format!("ow-world-bare-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let bytes = package();
+        let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+        let f = vm.find_function("Engine.PlayerController.IsLocalPlayerController").unwrap();
+        let refused = super::is_local_player_controller(&mut NativeCall::new(&mut vm, f, None, Vec::new())).unwrap_err();
+        assert!(matches!(&refused, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_))), "{refused}");
+        let _ = std::fs::remove_dir_all(&dir);
     });
 }
 
