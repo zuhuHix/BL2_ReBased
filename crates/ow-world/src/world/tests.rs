@@ -2122,8 +2122,8 @@ fn the_world_natives_without_a_world_are_not_yet() {
 mod placement {
     use super::*;
     use crate::placement::{
-        BOUNDING_CYLINDER, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision, Sweep,
-        Test, install_collision,
+        BOUNDING_CYLINDER, Bounds, ENCROACHMENT, ENCROACHMENT_RULE, Mode, RELOCATION, SPOT_SEARCH, SpawnCollision,
+        Sweep, Test, install_collision,
     };
 
     /// One query the service was asked.
@@ -2140,6 +2140,8 @@ mod placement {
         sweeps: RefCell<Vec<Sweep>>,
         rest: Test,
         asked: RefCell<Vec<Asked>>,
+        /// The bounds it reports for every live actor primitive (None: it holds none).
+        bounds: Option<Bounds>,
     }
 
     impl SpawnCollision for Script {
@@ -2157,6 +2159,9 @@ mod placement {
             self.asked.borrow_mut().push(Asked::PointSweep(start, end));
             Ok(Sweep::Clear)
         }
+        fn actor_bounds(&self, _space: &ObjectSpace, _primitive: ObjRef) -> Result<Option<Bounds>, VmError> {
+            Ok(self.bounds)
+        }
     }
 
     fn script(x: &mut Fx, tests: Vec<Test>, sweeps: Vec<Sweep>, rest: Test) -> Rc<Script> {
@@ -2165,9 +2170,35 @@ mod placement {
             sweeps: RefCell::new(sweeps),
             rest,
             asked: RefCell::new(Vec::new()),
+            bounds: None,
         });
         install_collision(&mut x.w.vm, s.clone()).unwrap();
         s
+    }
+
+    /// A clear service that reports `bounds` for every live actor primitive.
+    fn script_with_bounds(x: &mut Fx, bounds: Bounds) {
+        let s = Rc::new(Script {
+            tests: RefCell::new(vec![]),
+            sweeps: RefCell::new(vec![]),
+            rest: Test::Clear,
+            asked: RefCell::new(Vec::new()),
+            bounds: Some(bounds),
+        });
+        install_collision(&mut x.w.vm, s).unwrap();
+    }
+
+    /// A live `class` actor whose collision cylinder has the blocking flags `blocks`.
+    fn blocker(x: &mut Fx, class: &str, world_geometry: bool, blocks: &[&str]) -> ObjRef {
+        let actor = x.spawn(class);
+        let c = x.class("CylinderComponent");
+        let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
+        for b in blocks {
+            set_field(&mut x.w.vm.space, comp, b, Value::Bool(true)).unwrap();
+        }
+        set_field(&mut x.w.vm.space, actor, "CollisionComponent", Value::Object(Some(comp))).unwrap();
+        set_field(&mut x.w.vm.space, actor, "bWorldGeometry", Value::Bool(world_geometry)).unwrap();
+        actor
     }
 
     /// The Probe class default collides with the world, with a cylinder of radius and half height (None: none).
@@ -2243,27 +2274,25 @@ mod placement {
         });
     }
 
-    /// A live actor whose collision cylinder blocks non-zero extents (NATIVE_SPAWN_PLACEMENT.md section 7, review r3
-    /// of #465): an `Engine.Actor` with `bWorldGeometry` is a candidate of the spawn's box test, so the unread
-    /// per-component test stops the search; without it, it is not tested. A `Probe` (a class whose filter was not
-    /// read) stops the search with that class's filter, whatever its flags. Nothing is made when the search stops.
+    /// Live actors in the box test's walk (NATIVE_SPAWN_PLACEMENT.md section 7, reviews r3 of #465 and r1 of #477).
+    /// A primitive that blocks the query's kind refuses, naming its most specific unread rule; with no bounds from the
+    /// service it is taken to meet the box. A primitive that does not block it is no candidate. Nothing is made when
+    /// the search stops.
     #[test]
-    fn a_live_actor_primitive_under_an_unread_rule_makes_the_box_test_unsupported() {
+    fn a_blocking_live_primitive_with_no_bounds_makes_the_box_test_unsupported() {
         run(|| {
-            for (class, world_geometry, want) in [
-                ("Actor", true, Some("the trace filter's per-component test (the live actor primitive")),
-                ("Actor", false, None),
-                ("Probe", false, Some("the trace filter of Engine.Probe (the live actor primitive")),
+            let none: &[&str] = &[];
+            for (class, world_geometry, blocks, want) in [
+                ("Actor", true, &["BlockNonZeroExtent"][..], Some("the trace filter's per-component test (the live actor primitive")),
+                ("Actor", false, &["BlockNonZeroExtent"][..], Some("the trace filter's skip flag")),
+                ("Probe", false, &["BlockNonZeroExtent"][..], Some("the trace filter of Engine.Probe (the live actor primitive")),
+                ("Actor", true, none, None),
+                ("Actor", true, &["BlockZeroExtent"][..], None),
             ] {
                 let mut x = fx();
                 let wi = x.wi;
                 script(&mut x, vec![], vec![], Test::Clear);
-                let blocker = x.spawn(class);
-                let c = x.class("CylinderComponent");
-                let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
-                set_field(&mut x.w.vm.space, comp, "BlockNonZeroExtent", Value::Bool(true)).unwrap();
-                set_field(&mut x.w.vm.space, blocker, "CollisionComponent", Value::Object(Some(comp))).unwrap();
-                set_field(&mut x.w.vm.space, blocker, "bWorldGeometry", Value::Bool(world_geometry)).unwrap();
+                blocker(&mut x, class, world_geometry, blocks);
                 let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
                 let before = count(&x);
                 let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
@@ -2273,11 +2302,68 @@ mod placement {
                         assert_eq!(missing, Missing::NotRead, "{class}");
                         assert!(text.starts_with(SPOT_SEARCH), "{text}");
                         assert!(text.contains(rule), "{class}: {text}");
+                        assert!(text.contains("whose bounds the collision service does not hold"), "{text}");
                         assert_eq!(count(&x), before, "{class}: nothing made");
                     }
                     None => {
-                        assert!(got.unwrap().is_some(), "{class}");
+                        assert!(got.unwrap().is_some(), "{class} {blocks:?}");
                         assert_eq!(count(&x), before + 1);
+                    }
+                }
+            }
+        });
+    }
+
+    /// With bounds from the service, a blocking primitive is in the walk only when its bounds meet the box.
+    #[test]
+    fn a_blocking_live_primitive_whose_bounds_miss_the_box_is_not_walked() {
+        run(|| {
+            // The probe asks for a 10 x 10 x 20 box at the origin (the fixture's default location).
+            for (bounds, refused) in [
+                (Bounds { min: [500.0, 500.0, 500.0], max: [510.0, 510.0, 510.0] }, false),
+                (Bounds { min: [-5.0, -5.0, -5.0], max: [5.0, 5.0, 5.0] }, true),
+            ] {
+                let mut x = fx();
+                let wi = x.wi;
+                script_with_bounds(&mut x, bounds);
+                blocker(&mut x, "Actor", true, &["BlockNonZeroExtent"]);
+                let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+                let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+                if refused {
+                    let (missing, text) = what(got.unwrap_err());
+                    assert_eq!(missing, Missing::NotRead);
+                    assert!(text.contains("the trace filter's per-component test (the live actor primitive"), "{text}");
+                    assert!(!text.contains("does not hold"), "{text}");
+                } else {
+                    assert!(got.unwrap().is_some());
+                }
+            }
+        });
+    }
+
+    /// Review r1 of #477, item 3: a box the level blocks reads no actor, and a primitive whose properties are not
+    /// loaded is a named refusal once a query reaches the walk.
+    #[test]
+    fn the_level_is_asked_first_and_missing_primitive_data_is_a_named_refusal() {
+        run(|| {
+            for level in [Test::Blocked, Test::Clear] {
+                let mut x = fx();
+                let wi = x.wi;
+                script(&mut x, vec![], vec![], level);
+                let actor = x.spawn("Actor");
+                let c = x.class("CylinderComponent");
+                let origin = ow_object::heap::Origin::Resource { package: 0, index: -1 };
+                let lazy = x.w.vm.space.alloc_stand_in(c, "LazyCylinder", origin).unwrap();
+                set_field(&mut x.w.vm.space, actor, "CollisionComponent", Value::Object(Some(lazy))).unwrap();
+                // A zero extent: a blocked first test fails the search at once (note section 3, step 2).
+                let probe = colliding_probe(&mut x, Some((0.0, 0.0)));
+                let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
+                match level {
+                    Test::Blocked => assert_eq!(got.unwrap(), None, "the search fails; no actor read"),
+                    _ => {
+                        let (missing, text) = what(got.unwrap_err());
+                        assert_eq!(missing, Missing::NotRead);
+                        assert!(text.contains("LazyCylinder, which is not loaded"), "{text}");
                     }
                 }
             }

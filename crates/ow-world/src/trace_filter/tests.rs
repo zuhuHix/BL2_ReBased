@@ -136,7 +136,7 @@ fn only_the_read_classes_have_a_row() {
 }
 
 #[test]
-fn a_candidate_is_unsupported_by_the_per_component_test() {
+fn a_blocking_primitive_is_always_unsupported_and_names_its_most_specific_rule() {
     let mut w = world();
     let prim = w.primitive;
     let non_zero = w.obj(prim, &["BlockNonZeroExtent"]);
@@ -149,19 +149,22 @@ fn a_candidate_is_unsupported_by_the_per_component_test() {
     let zero_test = Query::BoxTest { zero_extent: true, complex: false };
     let t = |w: &World, p, o, q| tested(&w.space, p, o, q).unwrap();
     let per = Candidate::Unsupported(Unread::PerComponentTest);
+    let skip = Candidate::Unsupported(Unread::SkipFlag);
     assert_eq!(t(&w, non_zero, geometry, box_test), per);
     assert_eq!(t(&w, non_zero, geometry, Query::BoxSweep), per);
-    assert_eq!(t(&w, non_zero, plain, box_test), Candidate::NotTested);
-    // The wrong blocking flag for the query's kind.
+    // A blocking primitive the row would drop still meets the unresolved skip flag (review r1 of #477).
+    assert_eq!(t(&w, non_zero, plain, box_test), skip);
+    // The wrong blocking flag for the query's kind: no candidate, whatever the owner.
     assert_eq!(t(&w, non_zero, geometry, zero_test), Candidate::NotTested);
     assert_eq!(t(&w, non_zero, geometry, Query::PointSweep), Candidate::NotTested);
     assert_eq!(t(&w, zero, geometry, Query::PointSweep), per);
     assert_eq!(t(&w, zero, geometry, zero_test), per);
-    // Movers: sweeps only. Pawns: never.
-    assert_eq!(t(&w, non_zero, mover, box_test), Candidate::NotTested);
+    // Movers: tested by sweeps only; a box test meets the skip flag. Pawns: never tested, so always the skip flag.
+    assert_eq!(t(&w, non_zero, mover, box_test), skip);
     assert_eq!(t(&w, non_zero, mover, Query::BoxSweep), per);
-    assert_eq!(t(&w, non_zero, pawn, box_test), Candidate::NotTested);
-    assert_eq!(t(&w, non_zero, pawn, Query::BoxSweep), Candidate::NotTested);
+    assert_eq!(t(&w, non_zero, pawn, box_test), skip);
+    assert_eq!(t(&w, non_zero, pawn, Query::BoxSweep), skip);
+    assert_eq!(Unread::SkipFlag.rule(), SKIP_FLAG);
 }
 
 #[test]

@@ -15,10 +15,15 @@
 //!
 //! **The note's Off policy for what is unread:** wherever an unread rule decides the answer, the query is
 //! Unsupported, naming the rule ([`Unread`]). So:
-//! - every candidate is Unsupported, because the further per-component test runs for it and was not read (a
-//!   candidate's skip flag, also unresolved, is covered by the same answer);
+//! - every candidate is Unsupported, because the further per-component test runs for it and was not read;
 //! - a blocking primitive whose owner's class has no read row is Unsupported;
+//! - **every other blocking primitive is Unsupported too**, on the unresolved skip flag: the note makes a query with
+//!   a blocking primitive that has it set Unsupported, and the flag cannot be read, so the owner row is not allowed
+//!   to drop a blocking primitive first (review r1 of #477);
 //! - a `Terrain` actor's primitive is Unsupported (the terrain bit's handling was not read).
+//!
+//! So a primitive that blocks the query's kind is never answered here. Only a primitive that does not block it (and
+//! is not terrain) is [`Candidate::NotTested`]. The rows still pick the most specific rule to name.
 //!
 //! **Which hit a sweep returns** ([`choose_sweep_hit`]): the BSP hit, or the actors' hit when there is no BSP hit.
 //! Actors are walked to the BSP hit plus 5 units along the sweep, capped at the end point (the whole sweep without a
@@ -70,6 +75,7 @@ pub const PER_COMPONENT_TEST: &str = "the trace filter's per-component test";
 pub const TERRAIN_HANDLING: &str = "the trace filter's terrain handling";
 pub const BSP_ACTOR_COMPARATOR: &str = "the trace filter's comparator between a BSP hit and an actor hit";
 pub const TIE_ORDER: &str = "the trace filter's order among tied actor hits";
+pub const SKIP_FLAG: &str = "the trace filter's skip flag (bit 10 of a primitive's collision flag word, unresolved)";
 
 /// One of the spawn's queries, as the filter sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +194,8 @@ pub enum Unread {
     OwnerClass(String),
     /// A primitive of a `Terrain` actor.
     TerrainHandling,
+    /// A blocking primitive the owner's row would not test: the unresolved skip flag still decides the query.
+    SkipFlag,
 }
 
 impl Unread {
@@ -197,6 +205,7 @@ impl Unread {
             Unread::PerComponentTest => PER_COMPONENT_TEST.to_string(),
             Unread::OwnerClass(class) => format!("the trace filter of {class}"),
             Unread::TerrainHandling => TERRAIN_HANDLING.to_string(),
+            Unread::SkipFlag => SKIP_FLAG.to_string(),
         }
     }
 }
@@ -204,7 +213,8 @@ impl Unread {
 /// A primitive's standing in one query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Candidate {
-    /// The query does not test it.
+    /// The query does not test it: it does not block the query's kind (and is not terrain), or the query does not
+    /// walk the actors.
     NotTested,
     /// The query's answer depends on an unread rule for it: Unsupported.
     Unsupported(Unread),
@@ -250,11 +260,11 @@ pub fn tested(space: &ObjectSpace, primitive: ObjRef, owner: ObjRef, query: Quer
     } else {
         false
     };
-    Ok(if owner_tested(row, &o, primitive_blocks, flags) {
-        Candidate::Unsupported(Unread::PerComponentTest)
+    Ok(Candidate::Unsupported(if owner_tested(row, &o, primitive_blocks, flags) {
+        Unread::PerComponentTest
     } else {
-        Candidate::NotTested
-    })
+        Unread::SkipFlag
+    }))
 }
 
 /// One sweep hit: where, the surface normal, and the fraction of the whole sweep.
