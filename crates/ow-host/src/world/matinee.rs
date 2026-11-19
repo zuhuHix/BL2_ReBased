@@ -6,16 +6,20 @@
 //! **The graph** ([`read_graph`]). Every export of the loaded levels' map files (the loader's level packages, streaming
 //! levels with no placed actor included) whose class derives from `Engine.SequenceOp` is loaded: events, actions,
 //! Matinee ops and the sequences themselves. An edge runs from an op to each op its `OutputLinks` name
-//! (`Links[].LinkedOp`, read by property name). Three kinds of edge that no link holds are added:
+//! (`Links[].LinkedOp`, read by property name), except from a sequence (`Engine.Sequence` or a subclass): a sequence's
+//! outputs fire only when a finish op inside it does, so its exits are added from those finish ops alone (delta review
+//! of #436, finding 3). Three kinds of edge that no link holds are added:
 //! - a remote event: every `SeqAct_ActivateRemoteEvent` (or subclass) to every `SeqEvent_RemoteEvent` (or subclass)
 //!   whose `EventName` is the action's;
-//! - into a subsequence: a `SeqEvent_SequenceActivated` runs when its sequence (its outer) is activated;
+//! - into a subsequence: a `SeqEvent_SequenceActivated` runs when its sequence (its outer) is activated, and that is
+//!   the only way an impulse into a sequence goes on inside it;
 //! - out of a subsequence: a `SeqAct_FinishSequence` fires its sequence's output link whose `LinkDesc` is its
 //!   `OutputLabel`, so each op that output names has the finish op as a source.
 //!
 //! **What makes the graph incomplete** ([`KismetGraph::incomplete`], by reason): an export class that does not resolve
 //! (outside `super::NOT_OP_CLASSES`) or whose reference cannot be read, an op whose `OutputLinks`, a link's `Links` or a
-//! link's `LinkedOp` is missing or of another shape (a decoded null `LinkedOp` is a link to nothing, not a fault), and a
+//! link's `LinkedOp` is missing or of another shape (a decoded null `LinkedOp` is a link to nothing, not a fault), a
+//! remote-event action or a remote event whose `EventName` does not read (delta review of #436, finding 4), and a
 //! finish op whose output cannot be resolved. While the graph is incomplete, every op's start is
 //! [`Start::Incomplete`].
 //!
@@ -27,12 +31,15 @@
 //! - else an event that something outside the graph can fire, whatever graph sources it also has: any event but a
 //!   level-load event, a gameplay event ([`GAMEPLAY_EVENTS`]) or a subsequence's activation event. Mission and
 //!   population events, a remote event (a script can fire it by name): [`Start::Outside`], naming the classes;
-//! - else [`Start::NotAtLoad`]: only a touch, a console command or nothing reaches it through the graph.
+//! - else [`Start::StartupUnknown`]: through the graph only a touch, a console command or nothing reaches it, an op
+//!   no link reaches included.
 //!
-//! `NotAtLoad` is not "moves nothing" (the hub's rule on review r1 of #436): two startup paths outside the graph are
-//! not ruled out. A script can call the op's `SetPosition`, which builds group instances and applies a position with no
-//! impulse (the record), and an actor spawned overlapping a trigger can fire its touch while the map starts. So an
-//! actor that only such ops bind still answers `NotYet`, naming both (`super::physics_rule`).
+//! **No op is answered "not started at load"** (delta review of #436, finding 1). The graph cannot rule out two startup
+//! paths outside it: a script can call the op's `SetPosition`, which builds group instances and applies a position
+//! with no impulse (the record), and an actor spawned overlapping a trigger can fire its touch while the map starts.
+//! Proving neither happens needs the scripts' and the spawn's side, which this module does not read, so the start is
+//! unknown and an actor that only such ops bind answers `NotYet`, naming both (`super::physics_rule`). A proven
+//! exclusion would be a new variant with its proof.
 
 use ow_core::{DetMap, DetSet};
 use ow_object::ids::ObjRef;
@@ -51,6 +58,9 @@ pub const MATINEE_OP_CLASS: &str = "Engine.SeqAct_Interp";
 /// The event classes that fire while a level loads or starts (stock UE3: "Level Loaded" and "Level Startup"). An
 /// event of a class derived from one of these counts too.
 pub const LOAD_EVENTS: [&str; 2] = ["Engine.SeqEvent_LevelLoaded", "Engine.SeqEvent_LevelStartup"];
+
+/// A Kismet sequence (an op holding ops).
+pub const SEQUENCE_CLASS: &str = "Engine.Sequence";
 
 /// The base class of every Kismet event.
 pub const SEQUENCE_EVENT_CLASS: &str = "Engine.SequenceEvent";
@@ -92,9 +102,9 @@ pub struct KismetGraph {
 /// How a Matinee op can start (module notes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Start {
-    /// Through the graph only a touch, a console command or nothing reaches it; `touch` when a touch does. Startup
-    /// paths outside the graph are not ruled out (module notes).
-    NotAtLoad { touch: bool },
+    /// Through the graph only a touch, a console command or nothing reaches it (`touch` when a touch does), and the
+    /// startup paths outside the graph are not ruled out (module notes): its start is not known.
+    StartupUnknown { touch: bool },
     /// The graph is incomplete (the reasons, joined): its start is not known.
     Incomplete(String),
     /// These level-load events (class paths) reach it.
@@ -125,9 +135,11 @@ pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Resu
     let (touch_class, activated_class) = (class(vm, TOUCH_EVENT), class(vm, SEQUENCE_ACTIVATED_EVENT));
     let (remote_event_class, remote_action_class) = (class(vm, REMOTE_EVENT), class(vm, REMOTE_ACTION));
     let finish_class = class(vm, FINISH_SEQUENCE);
+    let sequence_class = class(vm, SEQUENCE_CLASS);
     let note = |graph: &mut KismetGraph, why: String| *graph.incomplete.entry(why).or_insert(0) += 1;
     let mut is_op: DetMap<String, Option<bool>> = DetMap::new();
     let (mut remote_events, mut remote_actions, mut finishes) = (Vec::new(), Vec::new(), Vec::new());
+    let mut sequences = DetSet::new();
     for &package in packages {
         let mut candidates = Vec::new();
         {
@@ -194,13 +206,20 @@ pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Resu
             if is(finish_class) {
                 finishes.push(o);
             }
+            if is(sequence_class) {
+                sequences.insert(o);
+            }
         }
     }
     let ops: Vec<ObjRef> = graph.ops.keys().copied().collect();
     for &o in &ops {
         let class = graph.ops[&o].clone();
-        for (target, _) in output_targets(vm, o, &mut |why| note(&mut graph, format!("{class}: {why}")))? {
-            graph.sources.entry(target).or_default().insert(o);
+        let targets = output_targets(vm, o, &mut |why| note(&mut graph, format!("{class}: {why}")))?;
+        // A sequence's outputs fire through its finish ops only (below): an impulse into it is not one out of it.
+        if !sequences.contains(&o) {
+            for (target, _) in targets {
+                graph.sources.entry(target).or_default().insert(o);
+            }
         }
         // A subsequence's activation event runs when its sequence does.
         if graph.activation_events.contains(&o)
@@ -209,16 +228,23 @@ pub fn read_graph(vm: &mut Vm, packages: &DetSet<ow_package::PackageId>) -> Resu
             graph.sources.entry(o).or_default().insert(outer);
         }
     }
-    // Remote events by name, both sides by inheritance.
+    // Remote events by name, both sides by inheritance; a name that does not read on either side is a fault.
     let named = |vm: &Vm, o: ObjRef| read(&vm.space, o, "EventName").and_then(|v| text_of(vm, &v));
+    let mut events_named: Vec<(ObjRef, String)> = Vec::new();
+    for &event in &remote_events {
+        match named(vm, event) {
+            Some(name) => events_named.push((event, name)),
+            None => note(&mut graph, "a remote event with no EventName".into()),
+        }
+    }
     for &action in &remote_actions {
         let Some(name) = named(vm, action) else {
             note(&mut graph, "a remote-event action with no EventName".into());
             continue;
         };
-        for &event in &remote_events {
-            if named(vm, event).as_deref() == Some(name.as_str()) {
-                graph.sources.entry(event).or_default().insert(action);
+        for (event, event_name) in &events_named {
+            if *event_name == name {
+                graph.sources.entry(*event).or_default().insert(action);
             }
         }
     }
@@ -337,5 +363,5 @@ pub fn start_of(graph: &KismetGraph, op: ObjRef) -> Start {
     if !outside.is_empty() {
         return Start::Outside(outside);
     }
-    Start::NotAtLoad { touch: up.iter().any(|o| graph.touch_events.contains(o)) }
+    Start::StartupUnknown { touch: up.iter().any(|o| graph.touch_events.contains(o)) }
 }

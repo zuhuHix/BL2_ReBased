@@ -411,7 +411,12 @@ impl crate::world::WorldTick for FakeWorld {
         let tick = self.frame.ticks + 1;
         if tick >= self.halt_at {
             self.frame.halted =
-                Some(crate::world::Halt { tick, message: "an invented NotYet".into(), not_yet: true });
+                Some(crate::world::Halt {
+                    tick,
+                    message: "an invented NotYet".into(),
+                    not_yet: true,
+                    partial_writes: true,
+                });
             return self.frame.clone();
         }
         self.frame.ticks = tick;
@@ -479,7 +484,7 @@ fn a_halted_world_stops_ticking_and_the_walk_goes_on() {
     assert_eq!(deltas.len(), 10, "the halting tick is the last one the world sees");
     assert_eq!(w.requested, run.steps);
     let text = stats_text(&run);
-    assert!(text.contains("play world halted at tick 10 (NotYet): an invented NotYet"), "{text}");
+    assert!(text.contains("play world halted at tick 10 (NotYet, stopped after partial writes): an invented NotYet"), "{text}");
 }
 
 #[test]

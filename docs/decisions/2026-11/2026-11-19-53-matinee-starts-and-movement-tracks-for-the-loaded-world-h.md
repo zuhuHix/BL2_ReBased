@@ -12,29 +12,33 @@ changed: everything here is read by property name through the definition store.
   - **New `world/matinee.rs`:** the Kismet graph read backwards, and the start rule.
   - **New `world/matinee/track.rs`:** the movement track reader and its curve evaluation.
   - **`world.rs`:**
-    - `Driver` gains `NotStarted`, `Incomplete`, `AtLoad` and `Outside`, decided per actor over every op that binds
-      it.
+    - `Driver` gains `StartupUnknown`, `Incomplete`, `AtLoad` and `Outside`, decided per actor over every op that
+      binds it.
     - `MatineeBindings` gains `by_actor` and `starts`.
     - `level_packages` gives both scans the loader's own level packages; `scan_matinee` runs the binding scan and the
       graph once after the map load.
     - `physics_rule` takes the new drivers. **No new driver answers `Ok`:** after review r1 (below) the only no-op left
       for an interpolating actor is H-PHYSICS-MODES' unbound case.
+    - A failed tick is terminal and says it stopped after partial writes (the delta review, below).
 - **The graph.**
   - Every `Engine.SequenceOp` export in the loaded levels' map files is loaded: 1,162 ops on Sanctuary, 81 of them
     Matinee ops. The levels are the map loader's own (`MapReport::levels`), so a streaming level that places no actor
     is read too (review r1, finding 2).
-  - Edges come from `OutputLinks[].Links[].LinkedOp`.
+  - Edges come from `OutputLinks[].Links[].LinkedOp`, except a sequence's own outputs (delta review, finding 3): an
+    impulse into a sequence goes on only through its activation events, and out of it only through a finish op, so a
+    sequence is no source of its outputs' targets.
   - Three kinds of edge that no link holds are added:
     - a remote event by its `EventName` from each action naming it, both sides by inheritance from
-      `SeqEvent_RemoteEvent` and `SeqAct_ActivateRemoteEvent` (finding 3);
+      `SeqEvent_RemoteEvent` and `SeqAct_ActivateRemoteEvent` (finding 3); a name that does not read, on either side,
+      makes the graph incomplete (delta review, finding 4);
     - into a subsequence: a `SeqEvent_SequenceActivated` from its outer sequence;
     - out of a subsequence (finding 1): a `SeqAct_FinishSequence` to each op its sequence's output links name, for the
       output whose `LinkDesc` is the finish op's `OutputLabel`.
   - **Incompleteness** (findings 1 and 5) is kept by reason and count, and makes every op's start `Incomplete`, a
     `NotYet` naming the reasons. The reasons are: an export class that does not resolve (outside `NOT_OP_CLASSES`) or
     whose reference cannot be read; an op whose `OutputLinks`, an output's `Links` or a link's `LinkedOp` is missing or
-    of another shape (a decoded null `LinkedOp` links to nothing and is no fault); a remote-event action with no
-    `EventName`; a finish op with no label or sequence, or whose label names no output. Sanctuary's graph is complete.
+    of another shape (a decoded null `LinkedOp` links to nothing and is no fault); a remote-event action or a remote
+    event with no `EventName`; a finish op with no label or sequence, or whose label names no output. Sanctuary's graph is complete.
 - **The start rule.** The record: an op moves its actors only after an impulse on one of its inputs activates it. The op
   class declares `bLooping`, `bRewindOnPlay` and `bForceStartPos`, but no auto-play or play-on-load property. Walking
   the graph backwards from an op gives the events its impulses can start from:
@@ -50,22 +54,25 @@ changed: everything here is read by property name through the definition store.
       these events: BL2's mission system and population fire them from outside Kismet, and whether they fire while the
       map loads (to restore story state, or as a den spawns) is that system's question. It cannot be shown from the
       graph.
-  - Else: **not started at load through the graph** (`NotAtLoad`, with whether a touch reaches it). Its impulses can
-    come only from a touch, a console command, or nowhere (an action no link reaches never runs).
-  - **`NotAtLoad` is not "moves nothing"** (the hub's rule on review r1, finding 4). In Off that answer needs a
-    complete graph and every other startup path ruled out, and two are not: a startup script calling the op's
-    `SetPosition`, which builds group instances and applies a position with no impulse (NATIVE_KISMET_MATINEE.md), and,
-    when a touch reaches the op, an actor spawned overlapping the trigger. So an actor only such ops bind answers
-    `NotYet` (not read), naming both.
+  - Else: **startup unknown** (`StartupUnknown`, with whether a touch reaches it). Through the graph its impulses can
+    come only from a touch, a console command, or nowhere (an op no link reaches included).
+  - **No op is answered "not started at load"** (the hub's rule on review r1, finding 4, and the delta review, finding
+    1). In Off that answer needs a complete graph and every other startup path ruled out, and two are not: a startup
+    script calling the op's `SetPosition`, which builds group instances and applies a position with no impulse
+    (NATIVE_KISMET_MATINEE.md), and, when a touch reaches the op, an actor spawned overlapping the trigger. Ruling them
+    out needs the scripts' and the spawn's side, which this lane does not read. So the start is unknown, and an actor
+    only such ops bind answers `NotYet` (not read), naming both. A proven exclusion would be a new answer with its
+    proof.
 - **Per actor:** an incomplete graph wins, then an op that starts at load, then one started from outside the graph,
-  then one whose start was not worked out (the old playback `NotYet`), then the not-at-load `NotYet`. An incomplete
+  then one whose start was not worked out (the old playback `NotYet`), then the startup-unknown `NotYet`. An incomplete
   binding scan stays `Unknown` (#420 review r1).
 - **Sanctuary's 81 ops:**
   - 20 start at load (`SeqEvent_LevelLoaded`), 6 of them looping;
   - 53 are started from outside the graph (44 before review r1, which keeps remote events with an in-graph sender
     firable from outside): 8 only from mission remote events, 10 only from remote events, and the rest from mixes with
     mission, population or move-node events;
-  - 8 are not started at load through the graph, 1 of them reached by a touch.
+  - 8 have an unknown startup (no load or outside event reaches them through the graph), 1 of them reached by a
+    touch. Dropping the sequence pass-through edges (delta review) changed none of the 81.
   - None is playing at load (`bIsPlaying` false on all 81).
 - **Movement tracks** (`track::read_move`, `Curve::eval`, `MoveTrack::key_pose`).
   - **Read by name:** `PosTrack` and `EulerTrack` (`Points[]`: `InVal`, `OutVal`, `ArriveTangent`, `LeaveTangent`,
@@ -92,13 +99,19 @@ changed: everything here is read by property name through the definition store.
     `InterpTrackAnimControl` and `InterpTrackDirector`.
 - **What tick 1 meets now** (the physics census, in list order; it agrees with the runs):
   - 57 interpolating actors pass, the unbound ones only, as before this lane. (Before review r1, 59 passed: the 2 the
-    not-at-load rule let through now answer `NotYet`.) No actor on Sanctuary is answered by `NotAtLoad`.
+    not-at-load rule let through now answer `NotYet`.)
   - 14 stop at a load-started op.
   - 51 stop at an op started from outside the graph.
-  - 1 stops at the not-at-load `NotYet` (a script's `SetPosition`).
+  - 1 stops at the startup-unknown `NotYet` (a script's `SetPosition`).
   - 23 stop at the world's `Base` guard.
   - 13 stop at the walking, nav-mesh walking and rotating modes.
   - The first stop is the load-started op that binds a `WillowSpectatorPoint`.
+- **A failed tick** (delta review, finding 2; the hub's ruling, as for #437 and #439: no rollback). By the time the
+  actor pass reaches a refusal, the tick has advanced the clock, written the `WorldInfo` time fields and may have run
+  earlier actors' script. Nothing is undone: the halt is terminal, `Halt::partial_writes` says the tick stopped after
+  partial writes and the report prints it (`play world halted at tick 1 (NotYet, stopped after partial writes)`), and
+  the world's step itself refuses every later tick, not only its link. A read-back failure after a finished tick halts
+  the same way, without the partial-writes mark.
 - **Proof.**
   - **Synthetic** (invented values):
     - `world::matinee::track::tests`: no keys, one key, the held ends, each segment mode, tangents scaled and broken,
@@ -116,6 +129,14 @@ changed: everything here is read by property name through the definition store.
       of a class that does not resolve, the graph is incomplete with that reason counted twice. The same package's
       movement tracks through `read_move`: a broken-tangent segment (0.125 at 1 s of a 2 s segment with leave tangent
       1) and yaw wound to 720 degrees (131,072 units); a track whose middle key time is NaN is refused.
+    - **Delta review:** in the same package, a level-loaded event entering a second child sequence in which only a
+      touch reaches the finish op leaves the op behind the child's output `StartupUnknown` with the touch, not `AtLoad`
+      (finding 3); over an engine whose remote event declares no `EventName`, the graph is incomplete with "a remote
+      event with no EventName" counted once (finding 4); a streamed level that places no actor holds the level-loaded
+      event firing the remote event that starts the persistent level's op binding its pawn: through the loader's levels
+      the pawn's driver is `AtLoad`, over the persistent level alone it would be `Outside` (finding 5); a world whose
+      bound pawn's refusal stops tick 1 keeps the clock, the time fields and the pawn's transform as the stop left
+      them, marks the halt as after partial writes, and a second step changes nothing (finding 2).
   - **Installed** (`world::tests::sanctuary_matinee_census` and `sanctuary_physics_census`, ignored, `OW_BL2_ROOT`;
     counts only, output under ignored `local/p2/h-matinee/` and `local/p2/h-physics-modes/`): the numbers above.
   - **Installed, headless** (`--map Sanctuary --play-script` with H4-PLAY's 60 s script, desktop, release, under the
@@ -129,12 +150,14 @@ changed: everything here is read by property name through the definition store.
       desktop was shared with other lanes).
     - **After review r1, two runs again:** identical text apart from timings, the same digests, segment digests and
       first stop.
+    - **After the delta review, two runs again:** the same, and the halt line now reads "stopped after partial
+      writes".
     - **The tick count does not rise.**
 - **Open items:**
   - A Kismet layer in the world that fires the level-load events and runs the load-started ops: 14 actors. The move
     frame and the pose application go with it.
   - The mission system's, population's and scripts' remote events at load: 51 actors.
   - The startup paths outside the graph: a script's `SetPosition` on a Matinee op, and touches from spawn overlaps (1
-    actor today).
+    actor today, whose start is unknown).
   - The world's `Base` guard (23), the AI walking modes (11) and rotating (2).
   - The non-movement track types.
