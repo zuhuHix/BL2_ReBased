@@ -18,11 +18,16 @@ only).
   #548, #555, #560, #523 and the link 9 spawn branches, as the GetFuncName probe): 1 ok / 3 NotYet / 10 errors.
   - Link 9 passes `spawn` and `cast` but is **not ok**: "no stop, but no evidence". After the cast the skill's
     `LiftedPawn` is None and `CurrentState` is 0.
-  - **Why** (a VM trace on the probe): the cast takes the blocked path. `SelectTarget` asks `CanPhaseLockTarget`,
-    which asks `IsPhaselocked(target)`: `GD_Siren_Skills.Attributes.IsPhaselocked`'s `GetValue(target) > 0`. The
-    port answers it true for a target that was never locked, so `TargetBlocked` and `OnTargetBlocked` run, not
-    `PhaseLockTarget`. The `GetFuncName` stop of the earlier probes was inside `OnTargetBlocked`.
-  - So the evidence check is doing its job; the next fix is that attribute's value on the target (a separate lane).
+  - **Why** (a full VM trace on the probe, corrected after lane FIX-ISPHASELOCKED-UNLOCKED; the first reading named
+    `IsPhaselocked`, wrongly): `CanPhaseLockTarget` answers **true**, and `IsPhaselocked`'s attribute
+    (`GD_Siren_Skills.Attributes.IsPhaselocked`, a noun with default 0) reads 0 on the target. `SelectTarget`'s second
+    test fails: `CanLiftTargetIf` (`FlagExpressionEvaluator.Evaluate` of `Flag_Skills_CanPhaseLock`) answers false,
+    so `TargetBlocked` and `OnTargetBlocked` run, not `PhaseLockTarget`. The cast's target is a `WillowAIPawn` the
+    world spawned with **no `Controller`**, so it has no mind, and every inner flag of `CanPhaseLock` resolves through
+    the mind or its AI component. NATIVE_FLAG_EXPRESSION_EVALUATE.md expects true for an enemy with a mind (its
+    branch D). The `GetFuncName` stop of the earlier probes was inside `OnTargetBlocked`.
+  - So the evidence check is doing its job. The next fix is the cast's target: a harness input giving it a mind (a
+    separate lane), not the attribute.
 - **Review r1 of #568:**
   - `tools/check_slice_run_off.py` accepts an ok link 9 only from `phaselock-cast` with exactly the steps `spawn` and
     `cast` (it rejected every ok `phaselock-cast` row before); its test is replaced, the other links' checks unchanged;

@@ -305,7 +305,8 @@ Results:
 - `cargo test --workspace -j 2`: 2,445 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK.
 - Installed Off `--slice-gate` strict (a local merge with #564, #535, #548, #555, #560, #523 and the link 9 spawn
   branches, never pushed; under the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and `cast` but
-  is not ok: no evidence, because the cast takes the blocked path (`IsPhaselocked(target)` answers true in the port).
+  is not ok: no evidence, because the cast takes the blocked path: `CanLiftTargetIf` answers false for a target the
+  harness spawned with no mind (`IsPhaselocked` reads 0; corrected after FIX-ISPHASELOCKED-UNLOCKED).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN.
