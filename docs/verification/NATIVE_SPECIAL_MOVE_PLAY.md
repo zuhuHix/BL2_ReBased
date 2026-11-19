@@ -32,7 +32,7 @@ ignores the answer.
 | `SpecialMoveComponent.PlayLocal`, and the component's stop and queue steps | native | medium | UNVERIFIED |
 | `SpecialMoveComponent.GetSMNode`, `IsPlayingClass` | native | high | UNVERIFIED |
 | `Pawn.IsAliveAndWell`, and the target tests of `LiftActionSkill.GetPlayerAnimation` | native and script | high | UNVERIFIED |
-| `RunBehaviors`, `GearboxAnimDefinition.OnStart` / `OnServerStart`, the blend node's `PlayData` | native | not read | — |
+| `RunBehaviors`, `GearboxAnimDefinition.OnStart` / `OnServerStart` (since read: NATIVE_RUN_BEHAVIORS.md), the blend node's `PlayData` | native | not read (`PlayData`) | — |
 
 The class chain of the Phaselock definitions is `SpecialMove_FirstAndThirdPersonAnimation` → `SpecialMove_WeaponAction`
 → `WillowAnimDefinition` → `GearboxAnimDefinition` → `SpecialMoveDefinition`. The first two have no native code of
@@ -171,7 +171,7 @@ reverse order (as read; UNVERIFIED, and not used by Phaselock).
 
 ## Open questions
 
-1. `RunBehaviors`, `OnStart` / `OnServerStart` and the blend node's `PlayData` (not read).
+1. The blend node's `PlayData` (not read). `RunBehaviors` and `OnStart` / `OnServerStart` are since read in NATIVE_RUN_BEHAVIORS.md.
 2. What `PerformSharedWeaponActions` does with a weapon-blocking move.
 3. Whether the reverse queue order for a `NextSpecialMove` chain holds in the game.
 
