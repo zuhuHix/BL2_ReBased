@@ -63,6 +63,7 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | Actor.ModifyTimerTimeDilation | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
 | Actor.ResetTimerTimeDilation | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | none seen | UNVERIFIED | high | |
 | Actor.Spawn | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | every dynamic actor (70 sites); event order PreBeginPlay/PostBeginPlay/SetInitialState | UNVERIFIED | medium | |
+| The post-spawn encroachment check (after PreBeginPlay; destroys the new actor on encroachment) | [NATIVE_ENCROACHMENT_CHECK.md](NATIVE_ENCROACHMENT_CHECK.md) | link 9: the cast's spawns after the spot search | UNVERIFIED | medium | |
 | Actor's bounding-cylinder rule (the spawn's extent without a cylinder collision component) | [NATIVE_SPAWN_EXTENT.md](NATIVE_SPAWN_EXTENT.md) | link 9: the cast's spawn extent (WillowPlayerPawn's class default) | UNVERIFIED | medium-high | |
 | Pawn's bounding-cylinder rule (Pawn, WillowPawn, WillowAIPawn, WillowPlayerPawn; one body) | [NATIVE_SPAWN_EXTENT.md](NATIVE_SPAWN_EXTENT.md) | link 9: the cast's pawn template | UNVERIFIED | high | |
 | Actor.SpawnForMap | [NATIVE_ENGINE_CORE.md](NATIVE_ENGINE_CORE.md) | ISpawnActor; not seen in script | UNVERIFIED | medium | |
