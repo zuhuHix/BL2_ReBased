@@ -223,6 +223,15 @@ as #542's row did: 1 ok / 10 NotYet / 3 errors, and those six links stop in `may
 run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-168; logs under ignored
 `local/p2/anl/`.
 
+**IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus
+5.5). `WillowWeapon.RecomputeAttributeBaseValues()` in Off from NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md (#539).
+`cargo test --workspace -j 2` 2,450 passed / 0 failed / 46 ignored (6 new in `ow-inventory`); clippy flags nothing in
+the changed files (`-D warnings` stops in `ow-package`, unchanged); `crate_edges_test.py` OK. Installed Off
+`--slice-gate` strict on a local, unpushed merge of this change with #534 (8fc0420b) and #552 (f17a9d60): 1 ok / 4
+notyet / 9 error. Link 8 is 1 of 5 at `init`, now past `RecomputeAttributeBaseValues` and stopped at the unbound
+`EffectCollectionDefinition.GetParticleEffect(object)`. ctest and verify_packages not run (no C++ change). No
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
 NATIVE_INVENTORY_EQUIP.md. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,322
