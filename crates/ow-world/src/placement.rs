@@ -22,12 +22,14 @@
 //! 3. **The trace filters** (lane IMPL-SPAWN-TRACE-FILTERS, decision 2026-11-19-90; [`crate::trace_filter`]). Each
 //!    query has two parts. The service answers for the geometry it holds: the level's BSP and whatever else it loaded,
 //!    under the note's filters. This crate answers for the VM's live actors: for each kind of query, the first live
-//!    actor primitive the filter tests ([`crate::trace_filter::tested`]). The world holds no geometry for an actor's
-//!    primitives, and their skip flag is unresolved, so a tested one makes that kind of query Unsupported. A box test
-//!    the service reports blocked is blocked whatever the actors (bit 512, the BSP first).
+//!    actor primitive whose standing depends on an unread rule ([`crate::trace_filter::tested`]): a candidate (the
+//!    unread per-component test), a blocking primitive of a class whose filter was not read, or a `Terrain` actor's
+//!    primitive. The world holds no bounds for an actor's primitives, so any such primitive is taken to be in the
+//!    query's region and makes that kind of query Unsupported, naming the rule. A box test the service reports
+//!    blocked is blocked whatever the actors (bit 512, the BSP first).
 //! 4. The steps of section 3 (the first box test, the zero-extent failure, the slice step, the corner nudges, the
 //!    point sweep, the final sweep), each query asked of both parts. The first Unsupported query is
-//!    `NotYet { NotRead }` naming it (and, for an actor part, the actor). A failed search makes the spawn return None,
+//!    `NotYet { NotRead }` naming it (and, for an actor part, the rule and the actor). A failed search makes the spawn return None,
 //!    nothing made; a successful one gives the location.
 //!
 //! **After `PreBeginPlay`** (note section 6), only after play began and when the actor was not destroyed, decided on
@@ -224,8 +226,8 @@ fn test_name(mode: Mode) -> &'static str {
     }
 }
 
-/// The first live actor primitive each kind of query tests (module documentation, step 3), as "actor's component";
-/// `None` when the kind tests none.
+/// For each kind of query, the first live actor primitive that makes it Unsupported (module documentation, step 3),
+/// as "<rule> (the live actor primitive <actor>'s <component>)"; `None` when there is none.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ActorScan {
     box_test: Option<String>,
@@ -285,8 +287,16 @@ fn scan_actors(vm: &Vm) -> Result<ActorScan, VmError> {
                 (Query::BoxSweep, &mut scan.box_sweep),
                 (Query::PointSweep, &mut scan.point_sweep),
             ] {
-                if slot.is_none() && trace_filter::tested(space, part, actor, kind)? == Candidate::Tested {
-                    *slot = Some(format!("{}'s {}", name(space, actor)?, name(space, part)?));
+                if slot.is_some() {
+                    continue;
+                }
+                if let Candidate::Unsupported(rule) = trace_filter::tested(space, part, actor, kind)? {
+                    *slot = Some(format!(
+                        "{} (the live actor primitive {}'s {})",
+                        rule.rule(),
+                        name(space, actor)?,
+                        name(space, part)?
+                    ));
                 }
             }
         }
@@ -294,15 +304,8 @@ fn scan_actors(vm: &Vm) -> Result<ActorScan, VmError> {
     Ok(scan)
 }
 
-fn actor_unsupported(query: &str, actor: &str) -> VmError {
-    NotYet::not_read(
-        format!(
-            "{SPOT_SEARCH}: {query} that tests the live actor primitive {actor}, whose geometry and skip flag the \
-             world does not hold"
-        ),
-        RECORD,
-    )
-    .into()
+fn actor_unsupported(query: &str, why: &str) -> VmError {
+    NotYet::not_read(format!("{SPOT_SEARCH}: {query}: {why}"), RECORD).into()
 }
 
 /// The search's queries: the service's part, then the live actors' (module documentation, step 3). An Unsupported

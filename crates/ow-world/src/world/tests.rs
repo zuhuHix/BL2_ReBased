@@ -2243,16 +2243,22 @@ mod placement {
         });
     }
 
-    /// A live actor whose collision cylinder blocks non-zero extents: with `bWorldGeometry` the spawn's box test
-    /// tests it, so the search stops on its NotYet, nothing made; without it, it is not tested.
+    /// A live actor whose collision cylinder blocks non-zero extents (NATIVE_SPAWN_PLACEMENT.md section 7, review r3
+    /// of #465): an `Engine.Actor` with `bWorldGeometry` is a candidate of the spawn's box test, so the unread
+    /// per-component test stops the search; without it, it is not tested. A `Probe` (a class whose filter was not
+    /// read) stops the search with that class's filter, whatever its flags. Nothing is made when the search stops.
     #[test]
-    fn a_tested_live_actor_primitive_makes_the_box_test_unsupported() {
+    fn a_live_actor_primitive_under_an_unread_rule_makes_the_box_test_unsupported() {
         run(|| {
-            for world_geometry in [true, false] {
+            for (class, world_geometry, want) in [
+                ("Actor", true, Some("the trace filter's per-component test (the live actor primitive")),
+                ("Actor", false, None),
+                ("Probe", false, Some("the trace filter of Engine.Probe (the live actor primitive")),
+            ] {
                 let mut x = fx();
                 let wi = x.wi;
                 script(&mut x, vec![], vec![], Test::Clear);
-                let blocker = x.spawn("Probe");
+                let blocker = x.spawn(class);
                 let c = x.class("CylinderComponent");
                 let comp = ow_vm::interp::instantiate_from_defaults(&mut x.w.vm, c).unwrap();
                 set_field(&mut x.w.vm.space, comp, "BlockNonZeroExtent", Value::Bool(true)).unwrap();
@@ -2261,15 +2267,18 @@ mod placement {
                 let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
                 let before = count(&x);
                 let got = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe)));
-                if world_geometry {
-                    let (missing, text) = what(got.unwrap_err());
-                    assert_eq!(missing, Missing::NotRead);
-                    assert!(text.starts_with(SPOT_SEARCH), "{text}");
-                    assert!(text.contains("tests the live actor primitive"), "{text}");
-                    assert_eq!(count(&x), before);
-                } else {
-                    assert!(got.unwrap().is_some());
-                    assert_eq!(count(&x), before + 1);
+                match want {
+                    Some(rule) => {
+                        let (missing, text) = what(got.unwrap_err());
+                        assert_eq!(missing, Missing::NotRead, "{class}");
+                        assert!(text.starts_with(SPOT_SEARCH), "{text}");
+                        assert!(text.contains(rule), "{class}: {text}");
+                        assert_eq!(count(&x), before, "{class}: nothing made");
+                    }
+                    None => {
+                        assert!(got.unwrap().is_some(), "{class}");
+                        assert_eq!(count(&x), before + 1);
+                    }
                 }
             }
         });
