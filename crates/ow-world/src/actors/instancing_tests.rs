@@ -165,3 +165,19 @@ fn the_template_is_matched_by_path() {
     assert_eq!(get(&x.vm, x.actor, "Comp"), obj(pairs[0].1));
     assert_eq!(get(&x.vm, x.actor, "Other"), obj(not_it));
 }
+
+/// A component reached only through another component (the template's `CompB.Peer`) is copied too, and the copy of
+/// the one that holds it points at the copy (review r1 of #435): a write through it leaves the template as it was.
+#[test]
+fn a_component_reached_through_another_is_copied() {
+    let mut x = fx(true);
+    let deep = make(&mut x.vm, "Test.ToyComponent", "CompDeep", Some(x.template));
+    set(&mut x.vm, x.b, "Peer", obj(deep));
+    let pairs = instance_components(&mut x.vm, x.template, x.actor).unwrap();
+    assert_eq!(pairs.iter().map(|p| p.0).collect::<Vec<_>>(), vec![x.a, x.b, deep]);
+    let (cb, cdeep) = (pairs[1].1, pairs[2].1);
+    assert_eq!(get(&x.vm, cb, "Peer"), obj(cdeep));
+    assert_eq!(x.vm.space.heap.get(cdeep).unwrap().outer, Some(x.actor));
+    set(&mut x.vm, cdeep, "Peer", obj(x.a));
+    assert_eq!(get(&x.vm, deep, "Peer"), Value::Object(None), "the template's component is not written");
+}

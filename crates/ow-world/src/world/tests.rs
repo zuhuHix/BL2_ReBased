@@ -425,6 +425,22 @@ fn package() -> Vec<u8> {
         Some(("Float", 0)),
         NATIVE | STATIC,
     );
+    // An actor class with a component field, and its component class (a Core.Component), for the instancing test.
+    // Core.Component, which `core_package` defines for the instancing test (review r1 of #435).
+    let core = t.p.add_import("Core", "Package", 0, "Core");
+    let component = t.p.add_import("Core", "Class", core, "Component");
+    let toy_component = t.class("ToyComponent", component);
+    t.prop("Int", toy_component, "Payload", 0, 0);
+    let toolbox = t.class("Toolbox", actor);
+    t.prop("Object", toolbox, "Comp", 0, toy_component);
+    t.p.build()
+}
+
+/// `Core.upk`: `Core.Object` and `Core.Component`, which only the instancing test's fixture loads.
+fn core_package() -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class"]);
+    let object = t.class("Object", 0);
+    t.class("Component", object);
     t.p.build()
 }
 
@@ -471,6 +487,11 @@ fn fx_with(begin: bool) -> Fx {
 }
 
 pub(super) fn fx_in(begin: bool, mode: ParityMode) -> Fx {
+    fx_files(begin, mode, false)
+}
+
+/// [`fx_in`], with `Core.upk` (its `Core.Component`) beside the engine package when `core` is set.
+fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
         std::process::id(),
@@ -478,9 +499,14 @@ pub(super) fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
+    let core_bytes = core_package();
+    let mut files: Vec<(&str, &[u8])> = vec![("Engine.upk", &bytes)];
+    if core {
+        files.push(("Core.upk", &core_bytes));
+    }
     let defs = DefStore::from_synthetic(
         &dir,
-        &[("Engine.upk", &bytes)],
+        &files,
         IdentityPolicy::FirstInScanOrder,
         mode,
     )
@@ -1162,6 +1188,91 @@ fn an_archetype_template_spawns_from_its_slots_in_off_only() {
             }
         }
     });
+}
+
+/// The archetype's own collision flags count as the class defaults' do (review r1 of #435): an archetype that sets
+/// `bCollideWorld` or (after play began) `bCollideActors` is refused with the collision `NotYet`, nothing made.
+#[test]
+fn an_archetype_that_sets_collision_flags_is_refused() {
+    run(|| {
+        for flag_name in ["bCollideWorld", "bCollideActors"] {
+            let mut x = fx();
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            let archetype = toy_archetype(&mut x, probe, "Probe_ToyArchetype");
+            set_field(&mut x.w.vm.space, archetype, flag_name, Value::Bool(true)).unwrap();
+            let before = x.w.actors().borrow().list().len();
+            let req = SpawnRequest::new(Some(probe)).with_template(Some(archetype));
+            let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
+            assert!(matches!(vm_missing(e), Missing::LayerAbsent(_)), "{flag_name}");
+            assert_eq!(x.w.actors().borrow().list().len(), before, "{flag_name}: nothing made");
+        }
+    });
+}
+
+/// An archetype whose properties are not loaded (a stand-in with no slots), and a live actor as the template, are
+/// `NotYet { NotRead }` before anything is made (review r1 of #435).
+#[test]
+fn an_archetype_with_no_slots_or_a_live_actor_is_not_yet() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        let probe = x.class("Probe");
+        let stand_in = x
+            .w
+            .vm
+            .space
+            .alloc_stand_in(probe, "Probe_StandIn", ow_object::heap::Origin::Resource { package: 0, index: 1 })
+            .unwrap();
+        let live = x.spawn("Probe");
+        for template in [stand_in, live] {
+            let before = x.w.actors().borrow().list().len();
+            let req = SpawnRequest::new(Some(probe)).with_template(Some(template));
+            let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
+            assert_eq!(vm_missing(e), Missing::NotRead);
+            assert_eq!(x.w.actors().borrow().list().len(), before, "nothing made");
+        }
+    });
+}
+
+/// An Off spawn from an archetype that has a component: the actor gets its own copy, outered to it and holding the
+/// archetype's values; the archetype keeps its own (decision 2026-11-19-44).
+#[test]
+fn an_off_spawn_from_an_archetype_copies_its_components() {
+    run(|| {
+        let mut x = fx_files(true, ParityMode::Off, true);
+        let wi = x.wi;
+        let toolbox = x.class("Toolbox");
+        let archetype = toy_archetype(&mut x, toolbox, "Toolbox_ToyArchetype");
+        let component_class = x.class("ToyComponent");
+        let component = x
+            .w
+            .vm
+            .space
+            .alloc(component_class, "ToyComponent0", Some(archetype), ow_object::heap::Origin::Runtime)
+            .unwrap();
+        set_field(&mut x.w.vm.space, component, "Payload", Value::Int(42)).unwrap();
+        set_field(&mut x.w.vm.space, archetype, "Comp", Value::Object(Some(component))).unwrap();
+        let req = SpawnRequest::new(Some(toolbox)).with_template(Some(archetype));
+        let actor = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+        let Value::Object(Some(copy)) = field(&x.w.vm.space, actor, "Comp").unwrap() else {
+            panic!("no component");
+        };
+        assert_ne!(copy, component);
+        assert_eq!(x.w.vm.space.heap.get(copy).unwrap().outer, Some(actor));
+        assert_eq!(field(&x.w.vm.space, copy, "Payload").unwrap(), Value::Int(42));
+        assert_eq!(field(&x.w.vm.space, archetype, "Comp").unwrap(), Value::Object(Some(component)));
+    });
+}
+
+/// An archetype of `class`: a new object with the class defaults' slots.
+fn toy_archetype(x: &mut Fx, class: ow_object::ids::ClassId, name: &str) -> ObjRef {
+    let path = x.w.vm.space.classes.get_layout(class).unwrap().path().as_str().to_string();
+    let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, &path).unwrap();
+    let archetype = x.w.vm.space.alloc(class, name, None, ow_object::heap::Origin::Runtime).unwrap();
+    let slots = x.w.vm.space.heap.get(cdo).unwrap().slots.clone();
+    x.w.vm.space.heap.get_mut(archetype).unwrap().slots = slots;
+    archetype
 }
 
 #[test]

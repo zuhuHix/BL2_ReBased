@@ -19,6 +19,9 @@
 //!   that fails stops the spawn with the store's error.
 //! - **Left as it is (a plain shared reference):** an object whose outer is anything else, such as another archetype's
 //!   component or an asset.
+//! - **Found transitively:** the actor's component fields are searched, then each found component's own component
+//!   fields, with the same outer test, until nothing new turns up (review r1 of #435). A component reached only
+//!   through another one is copied too, so no copy points at a template component.
 //! - **Re-pointed:** every reference to a copied component, in the new actor's slots and in the copies' own slots, at
 //!   any depth (arrays, structs). This covers `Components` and the named field holding the same object.
 //!
@@ -26,7 +29,14 @@
 //! - a component the template holds only inside a struct;
 //! - a non-component object outered to the template (public UE3's `instanced` / `editinlinenew` objects, which need
 //!   the unidentified flags);
-//! - a component's own sub-objects (nested sub-objects, outered to the template's component).
+//! - a component's own sub-objects (nested sub-objects, outered to the template's component);
+//! - a component inherited from a parent class's default (its outer is that parent's `Default__` object, not the
+//!   template);
+//! - references to the template itself, or to its `Default__` export handle, held by the actor or a copy: they are not
+//!   re-pointed to the new actor.
+//!
+//! **Lifetime, UNVERIFIED.** A copy refers to its actor (its outer, and often an `Owner` field), and the actor to the
+//! copy. `release_unreferenced` does not free such a loop; the port does not model the game's garbage collection.
 //!
 //! **What a copy is.** The same class and name, outered to the new actor. Its slots are copied from the template's
 //! component, with the references re-pointed as above. The copies' archetype link is not kept: the port's heap has
@@ -54,31 +64,14 @@ pub fn instance_components(
     let Ok(component) = vm.find_class(COMPONENT_CLASS) else {
         return Ok(Vec::new());
     };
-    let class = vm.space.heap.get(actor)?.class;
-    let mut kinds = Vec::new();
-    for (_, decl) in vm.space.classes.props(class).map_err(ow_object::heap::HeapError::Layout)? {
-        for _ in 0..decl.array_dim {
-            kinds.push(is_component_kind(vm, &decl.kind, component));
-        }
-    }
-    let slots = vm.space.heap.get(actor)?.slots.clone();
+    // The actor's component fields first, then each found component's own, until nothing new turns up: a component
+    // reached only through another one is copied too (review r1 of #435).
     let mut found: Vec<ObjRef> = Vec::new();
-    for (value, counts) in slots.iter().zip(&kinds) {
-        if !counts {
-            continue;
-        }
-        let refs = match value {
-            Value::Object(Some(r)) => vec![*r],
-            Value::Array(items) => items
-                .iter()
-                .filter_map(|v| match v {
-                    Value::Object(Some(r)) => Some(*r),
-                    _ => None,
-                })
-                .collect(),
-            _ => Vec::new(),
-        };
-        for r in refs {
+    let mut scan = vec![actor];
+    let mut next = 0;
+    while let Some(&o) = scan.get(next) {
+        next += 1;
+        for r in component_refs(vm, o, component)? {
             if found.contains(&r) || !vm.space.classes.is_child_of(vm.space.heap.get(r)?.class, component) {
                 continue;
             }
@@ -89,10 +82,11 @@ pub fn instance_components(
                 loaded?;
             }
             let outer = vm.space.heap.get(r)?.outer;
-            if let Some(outer) = outer {
-                if same_object(vm, outer, template)? {
-                    found.push(r);
-                }
+            if let Some(outer) = outer
+                && same_object(vm, outer, template)?
+            {
+                found.push(r);
+                scan.push(r);
             }
         }
     }
@@ -133,6 +127,40 @@ fn same_object(vm: &Vm, a: ObjRef, b: ObjRef) -> Result<bool, VmError> {
         (a, b) = (ox.outer, oy.outer);
     }
     Ok(a.is_none() && b.is_none())
+}
+
+/// The objects `o` holds in its component fields (scalar or array), in slot order. Each field's slots are found from
+/// its recorded first slot (`PropId::slot`); a field outside `o`'s slots is an error, never a silent cut.
+fn component_refs(vm: &Vm, o: ObjRef, component: ClassId) -> Result<Vec<ObjRef>, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let slots = &vm.space.heap.get(o)?.slots;
+    let mut refs = Vec::new();
+    for (id, decl) in vm.space.classes.props(class).map_err(ow_object::heap::HeapError::Layout)? {
+        if !is_component_kind(vm, &decl.kind, component) {
+            continue;
+        }
+        let dim = u32::try_from(decl.array_dim).unwrap_or(0);
+        for k in 0..dim {
+            let at = usize::try_from(id.slot + k).unwrap_or(usize::MAX);
+            let value = slots.get(at).ok_or_else(|| VmError::Script {
+                function: "Spawn".to_string(),
+                message: format!(
+                    "{}: slot {at} of a component field is outside its {} slots",
+                    ow_attr::eval::class_path(&vm.space, o),
+                    slots.len()
+                ),
+            })?;
+            match value {
+                Value::Object(Some(r)) => refs.push(*r),
+                Value::Array(items) => refs.extend(items.iter().filter_map(|v| match v {
+                    Value::Object(Some(r)) => Some(*r),
+                    _ => None,
+                })),
+                _ => {}
+            }
+        }
+    }
+    Ok(refs)
 }
 
 /// An object property of `Core.Component` or a subclass, or an array of one.
