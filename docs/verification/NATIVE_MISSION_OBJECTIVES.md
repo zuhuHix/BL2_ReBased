@@ -37,6 +37,9 @@ record is a **binary search** of that array:
 - The list is kept **sorted by the mission object's name**. The search compares the probed record's mission name with
   the wanted mission's name, and stops on a record whose `MissionDef` *is* the wanted object (identity, not name).
   The name comparison routine itself was not opened; it is read as the engine's ordinary name ordering.
+  - **Correction (2026-11-19, NATIVE_MISSION_LIST_BUILD.md):** the comparison, opened there, orders names by their
+    entry in the engine's global name table, then by instance number, not alphabetically. The build that fills the
+    list uses the same key.
 - A None mission, an empty list or no matching record gives "no record".
 - Consequence for a port that holds one record (the bridge): "no record" for every mission but its own; the order rule
   matters only once the tracker holds the whole list.
