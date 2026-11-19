@@ -26,11 +26,15 @@
 //!   interfaces); a `WillowMind`, the Fire dummy's mind, takes it;
 //! - `WillowPlayerController`'s answer for `IAIInterface` (other interfaces keep the plain answer: the note's open item
 //!   is that one question);
-//! - a skeletal mesh component's answer, for every interface.
+//! - a component class other than exactly `ActorComponent` and `SkeletalMeshComponent`, for every interface (below).
 //!
-//! A handed-on `NotYet` names the step ("goes to its Controller, a ...") ahead of the open answer. Any other class
-//! answers by its registered rule or the plain one, as a direct question does. Nothing is written by any step: a
-//! `NotYet` here leaves the world as it was.
+//! **A component's answer** ([`component_answer`], the note's section 6.4 at 17b9c330, lane
+//! IMPL-LINK11-QUERY-INTERFACE): for a receiver whose class is exactly `Engine.ActorComponent` or
+//! `Engine.SkeletalMeshComponent`, the plain answer, then, only after a successful none, its `Owner`'s answer through
+//! [`Vm::query_interface`] (whose cycle guard gives none for an object already answering). The rule is registered on
+//! both classes; the VM lets every other component class inherit it, so the rule tests the exact class first and any
+//! other class is the open `NotYet { NotRead }`, never `ActorComponent`'s rule by inheritance. It writes and loads
+//! nothing: an unloaded receiver or `Owner` is `NotYet { NotRead }`.
 //!
 //! **`WillowAIPawn`** ([`willow_ai_pawn_answer`], section 3): `Pawn`'s rule, then, only when that gives none and the
 //! asked class is `IPlayerMaster`, its player master. That field's identification is open (UNVERIFIED), so the step
@@ -45,6 +49,7 @@ use std::rc::Rc;
 
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::{ClassId, ObjRef};
+use ow_object::value::Value;
 use ow_vm::api::{InterfaceRuleFn, Vm};
 use ow_vm::error::VmError;
 
@@ -55,6 +60,10 @@ pub const RECORD: &str = "docs/verification/NATIVE_PAWN_AI_INTERFACE.md";
 
 /// The classes whose answers are registered.
 pub const PAWN: &str = "Engine.Pawn";
+pub const ACTOR_COMPONENT: &str = "Engine.ActorComponent";
+pub const SKELETAL_MESH_COMPONENT: &str = "Engine.SkeletalMeshComponent";
+/// The classes whose answer is `ActorComponent`'s body (the note's section 6.1), compared exactly.
+pub const COMPONENT_RULE_CLASSES: [&str; 2] = [ACTOR_COMPONENT, SKELETAL_MESH_COMPONENT];
 pub const WILLOW_AI_PAWN: &str = "WillowGame.WillowAIPawn";
 pub const WILLOW_VEHICLE: &str = "WillowGame.WillowVehicle";
 
@@ -64,7 +73,7 @@ pub const PLAYER_MASTER_INTERFACE: &str = "WillowGame.IPlayerMaster";
 
 /// The classes whose own answer the note leaves open, with how it names them, and whether the open item is the
 /// `IAIInterface` question only (module notes).
-pub const OPEN_ANSWERS: [(&str, &str, bool); 3] = [
+pub const OPEN_ANSWERS: [(&str, &str, bool); 2] = [
     (
         "GearboxFramework.GearboxMind",
         "GearboxMind's own QueryInterface answer (whether it adds steps before or after its class's declared \
@@ -72,7 +81,6 @@ pub const OPEN_ANSWERS: [(&str, &str, bool); 3] = [
         false,
     ),
     ("WillowGame.WillowPlayerController", "WillowPlayerController's QueryInterface answer for IAIInterface", true),
-    ("Engine.SkeletalMeshComponent", "what a skeletal mesh component answers to QueryInterface", false),
 ];
 
 /// Registers `Pawn`'s, `WillowAIPawn`'s and `WillowVehicle`'s answers, and the open answers as `NotYet` rules, in
@@ -87,6 +95,8 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (PAWN, Rc::new(pawn_answer)),
         (WILLOW_AI_PAWN, Rc::new(willow_ai_pawn_answer)),
         (WILLOW_VEHICLE, Rc::new(vehicle_answer)),
+        (ACTOR_COMPONENT, Rc::new(component_answer)),
+        (SKELETAL_MESH_COMPONENT, Rc::new(component_answer)),
     ];
     for (path, words, ai_only) in OPEN_ANSWERS {
         rules.push((path, open_answer(words, ai_only)));
@@ -191,6 +201,103 @@ pub fn willow_ai_pawn_answer(vm: &mut Vm, pawn: ObjRef, iface: ClassId) -> Resul
         .into());
     }
     Ok(None)
+}
+
+/// The unit the component rule's errors and refusals name (the note's section 6.4).
+pub const COMPONENT_UNIT: &str = "ActorComponent.QueryInterface";
+
+/// A component's answer (the note's section 6.4, the hub's rulings on review r1 of #512, at 17b9c330):
+/// 1. the receiver's class exactly `ActorComponent` or `SkeletalMeshComponent`; any other class reaching this rule by
+///    inheritance is the open `NotYet { NotRead }`, "what a <class> answers to QueryInterface is not read (asked of
+///    <class> for <interface>)";
+/// 2. the plain answer: an object is the answer, a `NotYet` or error passes through, only a successful none goes on;
+/// 3. the `Owner` field: undeclared, or declared as anything but an object reference to `Engine.Actor` or a subclass,
+///    is a `VmError::Script` with the note's text; the receiver or the `Owner` an unloaded definition handle is
+///    `NotYet { NotRead }` (nothing is loaded: a load is a store write); `Owner` None answers none;
+/// 4. the owner's answer through [`Vm::query_interface`], the VM's cycle guard and depth limit unchanged, passed
+///    through as it is.
+///
+/// Writes nothing and loads nothing.
+pub fn component_answer(vm: &mut Vm, component: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let mut exact = false;
+    for path in COMPONENT_RULE_CLASSES {
+        exact |= vm.find_class_if_present(path)? == Some(class);
+    }
+    if !exact {
+        let name = class_path(vm, class);
+        return Err(NotYet::not_read(
+            format!(
+                "what a {name} answers to QueryInterface is not read (asked of {name} for {})",
+                class_path(vm, iface)
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    if vm.defs.is_unloaded(&vm.space, component) {
+        return Err(NotYet::not_read(
+            format!(
+                "{COMPONENT_UNIT}: the component {} is an unloaded definition handle",
+                object_path(vm, component)?
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    if let Some(me) = vm.plain_interface(component, iface)? {
+        return Ok(Some(me));
+    }
+    let script = |message: String| VmError::Script { function: COMPONENT_UNIT.to_string(), message };
+    let Some(prop) = vm.space.prop(class, "Owner") else {
+        return Err(script(format!("{COMPONENT_UNIT}: {} declares no Owner", class_path(vm, class))));
+    };
+    let actor = vm.find_class_if_present("Engine.Actor")?;
+    let typed = match vm.space.classes.decl(prop).map(|d| &d.kind) {
+        Some(ow_object::layout::PropKind::Object { class: target }) => {
+            actor.is_some_and(|a| vm.space.classes.is_child_of(*target, a))
+        }
+        _ => false,
+    };
+    if !typed {
+        return Err(script(format!(
+            "{COMPONENT_UNIT}: {}.Owner is not an object reference to Engine.Actor",
+            class_path(vm, class)
+        )));
+    }
+    let owner = match vm.space.read(component, ow_object::ids::PropAddr::scalar(prop))? {
+        Value::Object(o) => *o,
+        _ => {
+            return Err(script(format!(
+                "{COMPONENT_UNIT}: {}.Owner is not an object reference to Engine.Actor",
+                class_path(vm, class)
+            )));
+        }
+    };
+    let Some(owner) = owner else {
+        return Ok(None);
+    };
+    if vm.defs.is_unloaded(&vm.space, owner) {
+        return Err(NotYet::not_read(
+            format!(
+                "{COMPONENT_UNIT}: the Owner {} of {} is an unloaded definition handle",
+                object_path(vm, owner)?,
+                object_path(vm, component)?
+            ),
+            RECORD,
+        )
+        .into());
+    }
+    vm.query_interface(owner, iface)
+}
+
+/// `o`'s full path name for a refusal's text; an object whose path is not known yet (an unloaded definition handle has
+/// no outer chain) is named by its own name.
+fn object_path(vm: &Vm, o: ObjRef) -> Result<String, VmError> {
+    match ow_vm::path_name::path_name(vm, o) {
+        Err(VmError::NotYet(_)) => Ok(vm.space.names.text(vm.space.heap.get(o)?.name).into_owned()),
+        other => other,
+    }
 }
 
 /// `WillowVehicle`'s answer: its own rule is recorded for completeness only and not implemented.

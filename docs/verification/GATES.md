@@ -242,6 +242,13 @@ files; `crate_edges_test.py` 19 OK; `check_slice_run_off_test.py` OK; decisions 
 steps, stop `maya:8`, unchanged; the other rows byte-identical; 1 ok / 13 NotYet / 0 errors. ctest and verify_packages
 not run (no C++ change). `UNVERIFIED` in game. Decision 2026-11-19-91; logs under ignored `local/p2/inherited/`.
 
+**IMPL-LINK11-QUERY-INTERFACE (2026-11-19, desktop, on #512 17b9c33):** AI-assisted (Claude Code, Claude Opus 5.5).
+A component's `QueryInterface` answer in Off, for exactly `ActorComponent` and `SkeletalMeshComponent` (NATIVE_PAWN_AI_INTERFACE.md
+section 6.4). `cargo build --workspace -j 4` clean; `cargo test --workspace -j 4` 2,445 passed / 0 failed / 46 ignored
+(8 new or reworked component tests in `ow-combat` `pawn_interface`); `crate_edges_test.py` 19 OK. Installed Off
+`--slice-gate` strict under the run lock: 0 ok / 5 notyet / 9 errors on this base (links 10 to 12 at `GetAllMissions`, no #496/#497); a local probe merged with #496 and #497: 1 / 4 / 9, link 10 ok 8/8, link 11 4 of 8 steps (as before), stop `hit:fire` now at the rule's unloaded-handle `NotRead` on the dummy's archetype mesh `SkeletalMeshComponent_333`; logs under ignored `local/p2/impl-qi/`. ctest and verify_packages not run (no C++ change). No real-game run; every
+rule stays `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **LINK-2-FIGHT-AREA r2 (2026-11-19, desktop, on main 0235937):** AI-assisted (Claude Code, Claude Opus 5.5). Review r2
 of #470: the cylinder read from the package before any write, a grounded reach walk, the partial-writes prefix after the
 first write, typed world setup. `cargo build -p ow-cli -j 2` clean; `cargo test -p ow-cli -j 2` 110 passed / 0 failed / 1

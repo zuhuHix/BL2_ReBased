@@ -55,20 +55,49 @@ fn real_class(t: &mut ScriptToy, name: &str, super_ref: i32, within: i32, flags:
 /// `Controller` and `Vehicle` (a pawn), each with `Controller` where the rule reads it; `SkeletalMeshComponent`; and the
 /// classes that stand in for read answers: `ToyAnsweringController` and `ToyAnsweringMesh`.
 fn engine() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+    engine_with(false)
+}
+
+/// [`engine`]; with `mistyped`, `ActorComponent` declares `Owner` as an int (the mistyped-`Owner` case).
+fn engine_with(mistyped: bool) -> Vec<u8> {
+    let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty"]);
     let object = real_class(&mut t, "Object", 0, 1, 2, &[]);
     let thing = real_class(&mut t, "IToyThing", object, object, INTERFACE, &[]);
-    let pawn = real_class(&mut t, "Pawn", object, object, 2, &[]);
+    // `Engine.Actor`, the class a component's `Owner` must reference (lane IMPL-LINK11-QUERY-INTERFACE).
+    let actor = real_class(&mut t, "Actor", object, object, 2, &[]);
+    let pawn = real_class(&mut t, "Pawn", actor, object, 2, &[]);
     for field in ["Controller", "DrivenVehicle", "Mesh"] {
         t.prop("Object", pawn, field, 0, object);
     }
     let thing_pawn = real_class(&mut t, "ToyThingPawn", pawn, object, 2, &[thing]);
     real_class(&mut t, "ToyInheritingPawn", thing_pawn, object, 2, &[]);
-    let controller = real_class(&mut t, "Controller", object, object, 2, &[]);
+    let controller = real_class(&mut t, "Controller", actor, object, 2, &[]);
+    // A controller listing the interface, for the direct mesh query's owner forwarding.
+    real_class(&mut t, "ToyThingController", controller, object, 2, &[thing]);
     real_class(&mut t, "Vehicle", pawn, object, 2, &[]);
-    let component = real_class(&mut t, "SkeletalMeshComponent", object, object, 2, &[]);
+    // `ActorComponent` without `Owner` (for the missing-declaration case), `SkeletalMeshComponent` under it declaring
+    // `Owner`, a subclass of it and another component class (lane IMPL-LINK11-QUERY-INTERFACE).
+    let actor_component = real_class(&mut t, "ActorComponent", object, object, 2, &[]);
+    if mistyped {
+        t.prop("Int", actor_component, "Owner", 0, 0);
+    }
+    let component = real_class(&mut t, "SkeletalMeshComponent", actor_component, object, 2, &[]);
+    t.prop("Object", component, "Owner", 0, actor);
+    real_class(&mut t, "ToySubMesh", component, object, 2, &[]);
+    real_class(&mut t, "ToyPlainComponent", actor_component, object, 2, &[]);
     real_class(&mut t, "ToyAnsweringController", controller, object, 2, &[]);
     real_class(&mut t, "ToyAnsweringMesh", component, object, 2, &[]);
+    // A holder whose `Held` names a pawn export, which the store keeps as an unloaded handle until it is loaded.
+    let holder = real_class(&mut t, "ToyHolder", object, object, 2, &[]);
+    t.prop("Object", holder, "Held", 0, actor);
+    let held = t.p.next_export() + 1;
+    let mut payload = ints(&[0]);
+    payload.extend(t.p.object_tag("Held", held));
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(holder, "ToyHolder_0", payload));
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(pawn, "ToyLazyPawn_0", payload));
     t.build()
 }
 
@@ -87,13 +116,17 @@ impl Drop for Env {
 impl Env {
     /// The invented world in `mode`, with the hand-defined classes and (in Off) the pawn rules registered.
     fn new(mode: ParityMode) -> Env {
+        Env::with(mode, false)
+    }
+
+    fn with(mode: ParityMode, mistyped: bool) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-combat-pawn-interface-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let engine = engine();
+        let engine = engine_with(mistyped);
         let defs =
             DefStore::from_synthetic(&dir, &[("Engine.upk", engine.as_slice())], IdentityPolicy::FirstInScanOrder, mode)
                 .unwrap();
@@ -251,10 +284,11 @@ fn the_open_answers_are_named_not_yets() {
     e.link(pawn, "Controller", plain);
     assert_eq!(e.vm.query_interface(pawn, ai).unwrap(), None, "a plain controller: its plain answer");
     let lone = e.make("Engine.Pawn", "Lone_0");
-    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    let mesh = e.make("Engine.ToySubMesh", "Mesh_0");
     e.link(lone, "Mesh", mesh);
-    not_read(e.ask(lone), "goes to its Mesh, a Engine.SkeletalMeshComponent: what a skeletal mesh component answers");
-    not_read(e.ask(mesh), "what a skeletal mesh component answers");
+    // A skeletal mesh component class other than exactly SkeletalMeshComponent keeps the open answer.
+    not_read(e.ask(lone), "goes to its Mesh, a Engine.ToySubMesh: what a Engine.ToySubMesh answers");
+    not_read(e.ask(mesh), "what a Engine.ToySubMesh answers");
     let vehicle = e.make("Engine.Vehicle", "Vehicle_0");
     e.link(lone, "DrivenVehicle", vehicle);
     e.link(vehicle, "Controller", mind);
@@ -334,4 +368,123 @@ fn registering_twice_keeps_the_rule_and_reference_registers_none() {
     let class = r.vm.find_class(PAWN).unwrap();
     assert!(r.vm.interface_rule_for(class).is_none());
     assert_eq!(r.ask(pawn).unwrap(), None, "Reference: the plain answer");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// A component's answer (NATIVE_PAWN_AI_INTERFACE.md section 6, with the hub's rulings on review of #512; lane
+// IMPL-LINK11-QUERY-INTERFACE)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Pawn first, with the mesh's ownership known and no controller: the pawn asks its mesh, the mesh's plain answer is
+/// none, its `Owner` is the pawn, which is still answering the same question, so the VM's guard gives none at once.
+/// The pawn's answer is none, and nothing is written.
+#[test]
+fn a_pawn_s_mesh_owned_by_the_pawn_meets_the_cycle_guard() {
+    let mut e = Env::new(ParityMode::Off);
+    let pawn = e.make("Engine.Pawn", "Pawn_0");
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(pawn, "Mesh", mesh);
+    e.link(mesh, "Owner", pawn);
+    let before: Vec<_> = [pawn, mesh].iter().map(|&o| e.vm.space.heap.get(o).unwrap().slots.clone()).collect();
+    assert_eq!(e.ask(pawn).unwrap(), None);
+    let after: Vec<_> = [pawn, mesh].iter().map(|&o| e.vm.space.heap.get(o).unwrap().slots.clone()).collect();
+    assert_eq!(before, after, "no writes");
+}
+
+/// A direct mesh query (the note's section 6.3, case 2): the mesh's `Owner` is a pawn whose `Controller` lists the
+/// interface, so the pawn answers through its controller before any cycle, and the mesh answers that controller.
+/// `Owner` None answers none.
+#[test]
+fn a_direct_mesh_query_forwards_to_its_owner() {
+    let mut e = Env::new(ParityMode::Off);
+    let pawn = e.make("Engine.Pawn", "Pawn_0");
+    let controller = e.make("Engine.ToyThingController", "Controller_0");
+    e.link(pawn, "Controller", controller);
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(mesh, "Owner", pawn);
+    assert_eq!(e.ask(mesh).unwrap(), Some(controller));
+    set(&mut e.vm, mesh, "Owner", Value::Object(None)).unwrap();
+    assert_eq!(e.ask(mesh).unwrap(), None);
+}
+
+/// The exact-class test: a `SkeletalMeshComponent` subclass and another component class get the open `NotRead`, not
+/// the rule, even with an `Owner` that would answer.
+#[test]
+fn other_component_classes_get_the_open_answer() {
+    let mut e = Env::new(ParityMode::Off);
+    let owner = e.make("Engine.ToyThingPawn", "Owner_0");
+    let sub = e.make("Engine.ToySubMesh", "Sub_0");
+    e.link(sub, "Owner", owner);
+    not_read(
+        e.ask(sub),
+        "what a Engine.ToySubMesh answers to QueryInterface is not read (asked of Engine.ToySubMesh for Engine.IToyThing)",
+    );
+    let plain = e.make("Engine.ToyPlainComponent", "Plain_0");
+    not_read(e.ask(plain), "what a Engine.ToyPlainComponent answers to QueryInterface is not read");
+}
+
+/// A `NotYet` from the plain answer passes through unchanged, before `Owner` is read: the receiver's class is made an
+/// engine-native stand-in, whose derivation the plain answer cannot decide.
+#[test]
+fn a_not_yet_from_the_plain_answer_passes_through() {
+    let mut e = Env::new(ParityMode::Off);
+    let owner = e.make("Engine.ToyThingPawn", "Owner_0");
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(mesh, "Owner", owner);
+    let class = e.vm.find_class("Engine.SkeletalMeshComponent").unwrap();
+    e.vm.space.classes.mark_native(class).unwrap();
+    match e.ask(mesh).unwrap_err() {
+        VmError::NotYet(n) => {
+            // Unchanged: the VM's own kind, record and text, with no step prefix of this rule's.
+            assert_eq!(n.missing, Missing::NotRead);
+            assert_eq!(n.record, "decision 2026-11-15-08 (engine-native stand-in classes)");
+            assert!(n.what.starts_with("whether a class derives from another through the engine-native class"), "{n}");
+        }
+        other => panic!("expected the plain answer's NotYet, got {other:?}"),
+    }
+}
+
+fn script_text(r: Result<Option<ObjRef>, VmError>) -> String {
+    match r.unwrap_err() {
+        VmError::Script { message, .. } => message,
+        other => panic!("expected a Script error, got {other:?}"),
+    }
+}
+
+/// `Owner` missing and mistyped: the note's two `VmError::Script` texts.
+#[test]
+fn a_missing_or_mistyped_owner_is_a_script_error() {
+    let mut e = Env::new(ParityMode::Off);
+    let component = e.make("Engine.ActorComponent", "Component_0");
+    assert_eq!(script_text(e.ask(component)), "ActorComponent.QueryInterface: Engine.ActorComponent declares no Owner");
+    let mut e = Env::with(ParityMode::Off, true);
+    let component = e.make("Engine.ActorComponent", "Component_0");
+    assert_eq!(
+        script_text(e.ask(component)),
+        "ActorComponent.QueryInterface: Engine.ActorComponent.Owner is not an object reference to Engine.Actor"
+    );
+}
+
+/// An unloaded `Owner`: `NotYet { NotRead }` under this note, and nothing loaded (a load is a store write).
+#[test]
+fn an_unloaded_owner_is_not_read_and_not_loaded() {
+    let mut e = Env::new(ParityMode::Off);
+    let path = ow_core::ObjectPath::parse("Engine.ToyHolder_0").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let lazy = crate::hit::access::object(&mut e.vm, holder, "Held").unwrap().expect("a held pawn");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, lazy), "the fixture's pawn is a lazy handle");
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(mesh, "Owner", lazy);
+    not_read(e.ask(mesh), "ActorComponent.QueryInterface: the Owner Engine.ToyLazyPawn_0 of");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, lazy), "still not loaded");
+}
+
+/// Reference registers none of it: a mesh gives its plain answer.
+#[test]
+fn reference_keeps_the_plain_component_answer() {
+    let mut e = Env::new(ParityMode::Reference);
+    let owner = e.make("Engine.ToyThingPawn", "Owner_0");
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(mesh, "Owner", owner);
+    assert_eq!(e.ask(mesh).unwrap(), None);
 }
