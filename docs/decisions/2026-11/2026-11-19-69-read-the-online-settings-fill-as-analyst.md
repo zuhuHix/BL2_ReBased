@@ -15,8 +15,11 @@ stop at the online game settings entry, open question 2 of NATIVE_ONLINE_GAME_SE
   `GetCurrPlaythrough` reads the game replication info's `CurrentPlaythrough`. `GetDLCManager` reads the engine's
   `DLCManager`. The two DLC manager queries were not read past their entry. The two mission-number natives point to
   their existing notes.
-- What Off does for each, and what stays a named `NotYet`. A recommendation for the hub: the port's engine has no DLC
-  manager, so `GetDLCManager` answers None and the refresh skips the DLC writes.
+- What Off does for each, and what stays a named `NotYet`: one answer for the provider at creation, binding and
+  registration, and one ordered contract for the refresh's writes (four before the DLC gate, two more with a manager).
+- **Hub ruling (2026-11-19, settled):** the port's engine has no DLC manager, the same kind of ruling as the online
+  subsystem. `GetDLCManager` answers None in Off, and the refresh skips the DLC writes. This is revisited when DLC
+  content is in scope. Whether the shipped game always has a manager stays a separate UNVERIFIED question.
 
 Raw output stays under ignored `local/analysis/settings-fill/`; the Ghidra runs were read-only and took the machine
 lock. Nothing is implemented. Every rule is UNVERIFIED in the running game; the note lists the bl-sdk checks and two
