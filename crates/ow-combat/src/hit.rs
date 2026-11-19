@@ -1125,7 +1125,8 @@ pub fn hit_with(
     // script state changed, as `Pawn.Died` moves it to `Dying`) comes after the hit's and the death script's writes.
     // It is terminal: marked once, its kind and record kept, carried typed to the caller. Other errors are unchanged.
     let state_after = vm.space.heap.get(victim).map(|o| o.state).ok();
-    let ran = ran.map_err(|e| kill_boundary(e, Some(state_before), state_after));
+    // Off only (review r2 of #481, M2): Reference keeps the C++ `Run::apply`, which has no such mark.
+    let ran = if vm.parity == ParityMode::Off { ran.map_err(|e| kill_boundary(e, Some(state_before), state_after)) } else { ran };
     ran?;
     note(
         vm,

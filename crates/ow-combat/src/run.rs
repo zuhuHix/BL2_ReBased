@@ -1215,6 +1215,7 @@ impl Run {
                 // is sticky and typed, as the class switch's stop: no snapshot runs script getters after it, and no
                 // later step runs.
                 if self.class_switch_stop.is_none()
+                    && self.world.vm.parity == ParityMode::Off
                     && let VmError::NotYet(n) = &e
                     && ow_core::notyet::is_partial_writes(&n.what)
                 {
