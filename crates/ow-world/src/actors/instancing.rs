@@ -15,6 +15,19 @@
 //! spawn calls it before it makes the actor. [`apply_plan`] then makes the copies and re-points; if a copy cannot be
 //! made, the copies made so far are freed and the caller frees the actor.
 //!
+//! **The plan's two passes** (review r3 of #435):
+//! 1. Every reference in the template's own slots is judged first, from handles and the packages' export tables
+//!    alone. Nothing is loaded, so a refusal decided there changes nothing.
+//! 2. Each template component is then loaded, checked whole (its slot count must be its class layout's; a stand-in
+//!    is refused), and its own slots judged the same way, until nothing new turns up.
+//!    - A refusal found inside a component's own fields comes after that component was loaded. That load is of the
+//!      template's own definition, read as the archetype itself is read before the spawn's checks.
+//!    - The store's loads cannot be staged. Refusing every component not yet loaded would refuse every installed
+//!      class-default spawn, whose components are all lazy.
+//!
+//! Each object is judged on its whole outer chain, so the order objects are met in changes nothing: a sub-object of a
+//! component, at any depth, is refused even when it is met before the component.
+//!
 //! **What is a component of the template.** An object reached from the template's slots, and then from each found
 //! component's slots, at any depth: scalars, arrays, structs, interfaces and delegate targets, whatever the field's
 //! declared type. It counts when:
@@ -22,9 +35,10 @@
 //!   property flag is read: the flag bits for "instanced" are not identified in this port (rule 4); and
 //! - its owner (outer) is the template: by handle, or by canonical export identity (package and export index). A
 //!   class default object's sub-objects point at the handle of its `Default__<Class>` export in its class's package,
-//!   which is another heap object than the class default, so that export is the template's identity. A component the
-//!   store has not loaded is loaded first, since the store sets its outer on load, and a load that fails stops the
-//!   spawn. Ownership is never matched by name.
+//!   which is another heap object than the class default, so that export is the template's identity. The export is
+//!   chosen as the class-default decoder chooses it (`ow_object::cdo::default_export_in`: the exact name and the class
+//!   reference). An object the store has not loaded has no outer yet, so its export's outers in the export table stand
+//!   for it. Ownership is never matched by name.
 //!
 //! **Re-pointed:** every reference to a copied component, in the new actor's slots and in the copies' own slots, at
 //! any depth, delegate targets included.
@@ -34,7 +48,8 @@
 //!   read;
 //! - a sub-object of the template that is not a component: public UE3's `instanced` objects need the unidentified
 //!   property flags;
-//! - a sub-object of one of the template's components (nested instancing);
+//! - a sub-object of one of the template's components, at any depth (nested instancing);
+//! - a template component whose properties are not loaded (a stand-in with no slots);
 //! - a component owned by another class default object (inherited from a parent class's default).
 //!
 //! **Left as it is (a plain shared reference):** an object owned by anything else, such as another archetype's
@@ -88,56 +103,125 @@ pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
     let identity = template_export(vm, template);
     let mut originals: Vec<ObjRef> = Vec::new();
     let mut seen: Vec<ObjRef> = Vec::new();
-    let mut scan = vec![template];
+    // Pass 1, nothing loaded: every reference the template's own slots hold is judged first (review r3 of #435, item
+    // 3), from handles and the packages' export tables alone.
+    let mut found = Vec::new();
+    judge_slots(vm, template, template, identity, &mut seen, &mut found)?;
+    // Pass 2: each template component is loaded (it is the template's definition, read as the archetype itself is),
+    // checked whole, and its own slots judged the same way, until nothing new turns up.
     let mut next = 0;
-    while let Some(&holder) = scan.get(next) {
+    while let Some(&component) = found.get(next) {
         next += 1;
-        let mut refs = Vec::new();
-        for v in &vm.space.heap.get(holder)?.slots {
-            collect_refs(v, &mut refs);
+        if vm.defs.is_unloaded(&vm.space, component) {
+            let loaded = vm.defs.ensure_loaded(&mut vm.space, component);
+            vm.log.extend(vm.defs.take_log());
+            loaded?;
         }
-        for r in refs {
-            if r == template || (identity.is_some() && export_of(vm, r) == identity) {
-                return Err(not_yet(
-                    "a reference back to the template itself (whether it becomes the new actor is not read)",
-                ));
-            }
-            if seen.contains(&r) {
-                continue;
-            }
-            seen.push(r);
-            let component = is_component(vm, vm.space.heap.get(r)?.class);
-            // An unloaded component handle has no outer yet: the store sets it on load.
-            if component && vm.defs.is_unloaded(&vm.space, r) {
-                let loaded = vm.defs.ensure_loaded(&mut vm.space, r);
-                vm.log.extend(vm.defs.take_log());
-                loaded?;
-            }
-            if owned_by(vm, r, template, identity) {
-                if !component {
-                    return Err(not_yet(&format!(
-                        "a sub-object of the template that is not a component (which ones are instanced needs the \
-                         unidentified property flags): {}",
-                        describe(vm, r)
-                    )));
-                }
-                originals.push(r);
-                scan.push(r);
-            } else if originals.iter().any(|&c| owned_by(vm, r, c, export_of(vm, c))) {
-                return Err(not_yet(&format!(
-                    "a sub-object of one of the template's components (nested instancing): {}",
-                    describe(vm, r)
-                )));
-            } else if component && let Some(owner) = default_outer(vm, r) {
-                return Err(not_yet(&format!(
-                    "a component of another class default object (inherited from a parent class's default): {} of \
-                     {owner}",
-                    describe(vm, r)
-                )));
-            }
+        let o = vm.space.heap.get(component)?;
+        let want = vm.space.classes.get_layout(o.class).map(|l| l.slot_count());
+        if u32::try_from(o.slots.len()).ok() != want {
+            return Err(not_yet(&format!(
+                "a template component whose properties are not loaded (a stand-in with no slots): {}",
+                describe(vm, component)
+            )));
         }
+        originals.push(component);
+        judge_slots(vm, component, template, identity, &mut seen, &mut found)?;
     }
     Ok(Plan { template, originals })
+}
+
+/// Judges every object `holder`'s slots refer to (module documentation), at any depth: a template component is added
+/// to `found`; a refusal is `NotYet { NotRead }`; anything else stays shared. Loads nothing.
+fn judge_slots(
+    vm: &Vm,
+    holder: ObjRef,
+    template: ObjRef,
+    identity: Option<(u32, i32)>,
+    seen: &mut Vec<ObjRef>,
+    found: &mut Vec<ObjRef>,
+) -> Result<(), VmError> {
+    let mut refs = Vec::new();
+    for v in &vm.space.heap.get(holder)?.slots {
+        collect_refs(v, &mut refs);
+    }
+    let is_template = |a: &(Option<ObjRef>, Option<(u32, i32)>)| {
+        a.0 == Some(template) || (identity.is_some() && a.1 == identity)
+    };
+    for r in refs {
+        if r == template || (identity.is_some() && export_of(vm, r) == identity) {
+            return Err(not_yet(
+                "a reference back to the template itself (whether it becomes the new actor is not read)",
+            ));
+        }
+        if seen.contains(&r) {
+            continue;
+        }
+        seen.push(r);
+        let component = is_component(vm, vm.space.heap.get(r)?.class);
+        // The whole outer chain, so the judgement does not depend on the order objects are met in (review r3, item 1).
+        let chain = ancestors(vm, r);
+        let Some(first) = chain.first() else {
+            continue;
+        };
+        if is_template(first) {
+            if !component {
+                return Err(not_yet(&format!(
+                    "a sub-object of the template that is not a component (which ones are instanced needs the \
+                     unidentified property flags): {}",
+                    describe(vm, r)
+                )));
+            }
+            found.push(r);
+        } else if chain[1..].iter().any(is_template) {
+            return Err(not_yet(&format!(
+                "a sub-object of one of the template's components (nested instancing): {}",
+                describe(vm, r)
+            )));
+        } else if component && let Some(owner) = default_outer(vm, r) {
+            return Err(not_yet(&format!(
+                "a component of another class default object (inherited from a parent class's default): {} of \
+                 {owner}",
+                describe(vm, r)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `o`'s outers, innermost first, each as its handle (when the heap has it) and its export identity (when it has one):
+/// the heap's outer links, then, past an object the store has not given an outer yet, its export's outers in its
+/// package's export table. Bounded at 256 links.
+fn ancestors(vm: &Vm, o: ObjRef) -> Vec<(Option<ObjRef>, Option<(u32, i32)>)> {
+    let mut chain = Vec::new();
+    let mut cursor = o;
+    while chain.len() < 256 {
+        let Ok(obj) = vm.space.heap.get(cursor) else {
+            return chain;
+        };
+        match obj.outer {
+            Some(outer) => {
+                chain.push((Some(outer), export_of(vm, outer)));
+                cursor = outer;
+            }
+            None => break,
+        }
+    }
+    let Some((package, mut index)) = export_of(vm, cursor) else {
+        return chain;
+    };
+    let pkg = vm.defs.packages().get(package);
+    while chain.len() < 256 {
+        let Ok(entry) = pkg.object(index) else {
+            break;
+        };
+        if entry.outer <= 0 {
+            break;
+        }
+        index = entry.outer;
+        chain.push((None, Some((package, index))));
+    }
+    chain
 }
 
 /// Makes the copies of `plan` for `actor` and re-points the actor's and the copies' references, delegates included.
@@ -210,8 +294,9 @@ fn template_export(vm: &Vm, template: ObjRef) -> Option<(u32, i32)> {
     let info = code.class(code.key_of(class)?);
     let package = vm.defs.packages().get(info.package);
     let wanted = format!("Default__{}", info.name);
-    let at = package.exports.iter().position(|e| e.outer == 0 && e.name.eq_ignore_ascii_case(&wanted))?;
-    Some((info.package, i32::try_from(at).ok()? + 1))
+    // The export the class-default decoder applies (review r3 of #435, item 4): the same selection, shared.
+    let at = ow_object::cdo::default_export_in(&package.exports, info.export, &wanted)?;
+    Some((info.package, at))
 }
 
 /// The package export an object stands for (its origin), when it has one.
@@ -219,25 +304,6 @@ fn export_of(vm: &Vm, o: ObjRef) -> Option<(u32, i32)> {
     match vm.space.heap.get(o).ok()?.origin {
         Origin::Export { package, index } | Origin::Resource { package, index } if index > 0 => Some((package, index)),
         _ => None,
-    }
-}
-
-/// Whether `owner` is `o`'s outer: by handle, or by the outer's canonical export identity (`identity`, the owner's
-/// export), which covers an outer that is another handle of the same export and an object the store has not given an
-/// outer yet (its export's outer in the same package). Never by name.
-fn owned_by(vm: &Vm, o: ObjRef, owner: ObjRef, identity: Option<(u32, i32)>) -> bool {
-    let Ok(obj) = vm.space.heap.get(o) else {
-        return false;
-    };
-    if let Some(outer) = obj.outer {
-        return outer == owner || (identity.is_some() && export_of(vm, outer) == identity);
-    }
-    let (Some(identity), Some((package, index))) = (identity, export_of(vm, o)) else {
-        return false;
-    };
-    match vm.defs.packages().get(package).object(index) {
-        Ok(entry) => entry.outer > 0 && (package, entry.outer) == identity,
-        Err(_) => false,
     }
 }
 
