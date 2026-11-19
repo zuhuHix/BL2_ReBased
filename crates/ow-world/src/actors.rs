@@ -852,7 +852,8 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
             let actor = vm.instantiate(class, "")?;
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
-                apply_plan(vm, &plan, actor)
+                apply_plan(vm, &plan, actor)?;
+                load_own_definitions(vm, actor, loaded)
             });
             if let Err(e) = made {
                 let _ = vm.space.free(actor);
@@ -872,6 +873,37 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut boo
     } else {
         rest
     }
+}
+
+/// Off: the spawn completes the actor before any script runs on it (hub ruling, lane SPAWN-COMPLETE): every definition
+/// the new actor's own object properties point to that the store has not loaded is loaded now, one level deep (the
+/// loaded definitions' own references are not followed), through the store, setting `loaded` so a later refusal of
+/// the spawn is marked "stopped after partial writes" (a lazy load is a write). Natives stay load-free: Maya's
+/// `BodyClass` is loaded here, before `InitializePawnMeshes` reads it. UNVERIFIED in game (when the game loads a
+/// pawn's definitions is not read; the game's packages are loaded with the map).
+///
+/// Only object-valued slots are read (a property holding one reference; arrays and structs are not walked). A handle
+/// whose load already failed is left as it is (its error is the store's, raised again only by a reader that asks for
+/// it), so a spawn that succeeded before does not fail on an old error; a fresh load failure is the spawn's error, and
+/// the caller frees the actor.
+fn load_own_definitions(vm: &mut Vm, actor: ObjRef, loaded: &mut bool) -> Result<(), VmError> {
+    let mut refs: Vec<ObjRef> = Vec::new();
+    for v in &vm.space.heap.get(actor)?.slots {
+        if let Value::Object(Some(r)) = v
+            && !refs.contains(r)
+        {
+            refs.push(*r);
+        }
+    }
+    for r in refs {
+        if vm.defs.is_unloaded(&vm.space, r) && !vm.defs.is_failed(&vm.space, r) {
+            *loaded = true;
+            let done = vm.defs.ensure_loaded(&mut vm.space, r);
+            vm.log.extend(vm.defs.take_log());
+            done.map_err(VmError::Def)?;
+        }
+    }
+    Ok(())
 }
 
 /// The spawn's steps after the actor joined the level list (module documentation, steps 3 and 4).

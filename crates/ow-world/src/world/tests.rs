@@ -509,6 +509,20 @@ fn package() -> Vec<u8> {
     archetype.extend(t.p.object_tag("Target", toy_target));
     archetype.extend_from_slice(&t.none);
     t.p.add_export(thing, "ToyArchetype", archetype);
+    // An invented actor whose archetype names a definition (lane SPAWN-COMPLETE): BodyProbe_Arch's Body is ToyTarget,
+    // a store handle that stays unloaded until something reads it. BodyProbe_Collider's archetype also sets
+    // bCollideActors, so its spawn refuses after PreBeginPlay.
+    let body_probe = t.class("BodyProbe", actor);
+    t.prop("Object", body_probe, "Body", 0, thing);
+    let mut body_arch = 0i32.to_le_bytes().to_vec();
+    body_arch.extend(t.p.object_tag("Body", toy_target));
+    body_arch.extend_from_slice(&t.none);
+    t.p.add_export(body_probe, "BodyProbe_Arch", body_arch);
+    let mut body_collider = 0i32.to_le_bytes().to_vec();
+    body_collider.extend(t.p.object_tag("Body", toy_target));
+    body_collider.extend(t.p.bool_tag("bCollideActors", true));
+    body_collider.extend_from_slice(&t.none);
+    t.p.add_export(body_probe, "BodyProbe_Collider", body_collider);
     // A probe archetype the store loads lazily (review r2 of #481, M1): ToyLazyHolder's Arch is an unloaded handle to
     // Probe_LazyArch, whose bCollideWorld asks for the spot search.
     let lazy_holder = t.class("LazyHolder", object);
@@ -3649,5 +3663,48 @@ fn a_refusal_after_the_spawns_lazy_load_is_prefixed() {
             VmError::NotYet(n) => assert!(!n.what.starts_with("stopped after partial writes"), "{n}"),
             e => panic!("expected NotYet, got {e}"),
         }
+    });
+}
+
+/// Lane SPAWN-COMPLETE (hub ruling): an Off spawn loads the definitions the new actor's own object properties point to,
+/// one level deep, before any script runs on it. `ToyTarget` is unloaded before the spawn and loaded after it, and the
+/// actor's `Body` is that same definition.
+#[test]
+fn a_spawn_loads_the_definitions_its_actor_points_to() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        let class = x.class("BodyProbe");
+        let path = ow_core::ObjectPath::parse("Engine.BodyProbe_Arch").unwrap();
+        let vm = &mut x.w.vm;
+        let arch = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let target = crate::actors::object(&x.w.vm.space, arch, "Body").unwrap().unwrap();
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, target), "ToyTarget is unloaded before the spawn");
+        let req = SpawnRequest::new(Some(class)).with_template(Some(arch));
+        let actor = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+        assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, target), "loaded by the spawn");
+        assert_eq!(crate::actors::object(&x.w.vm.space, actor, "Body").unwrap(), Some(target));
+    });
+}
+
+/// Lane SPAWN-COMPLETE: the spawn's definition load is a write, so a refusal after it is marked "stopped after partial
+/// writes", its kind kept (here the post-spawn encroachment check of an actor that collides with actors).
+#[test]
+fn a_refusal_after_the_spawn_s_definition_load_is_marked() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        let class = x.class("BodyProbe");
+        let path = ow_core::ObjectPath::parse("Engine.BodyProbe_Collider").unwrap();
+        let vm = &mut x.w.vm;
+        let arch = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let target = crate::actors::object(&x.w.vm.space, arch, "Body").unwrap().unwrap();
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, target));
+        let req = SpawnRequest::new(Some(class)).with_template(Some(arch)).with_no_collision_fail(true);
+        match spawn(&mut x.w.vm, wi, &req) {
+            Err(VmError::NotYet(n)) => assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}"),
+            other => panic!("expected a marked NotYet, got {other:?}"),
+        }
+        assert!(!x.w.vm.defs.is_unloaded(&x.w.vm.space, target), "the load happened before the refusal");
     });
 }
