@@ -1,6 +1,6 @@
 # Native rules of the current playthrough and the engine-wide condition: WillowPlayerController.GetCurrentPlaythrough (draft, 2026-11-19)
 
-AI-assisted (Claude Code), analyst lane LINK-10-MISSIONLIST (decision 2026-11-19-102, filed as 2026-11-19-99), for slice links 10 to 12 (the
+AI-assisted (Claude Code), analyst lane LINK-10-MISSIONLIST (decision 2026-11-19-99), for slice links 10 to 12 (the
 Fire mission's accept, objective and turn-in). It settles the two named `NotYet`s that NATIVE_MISSION_NUMBERS.md (#473)
 leaves open, open questions 1 and 2:
 - the engine-wide condition of `GetActiveMissionNumber`;
@@ -15,8 +15,8 @@ It also records why these two answers alone do not move links 10 to 12, and what
   with Ghidra (`tools/ghidra/run.ps1 -ReadOnly`, under the machine lock).
 - Field names come from the cooked packages (`tools/ghidra/class_layout.py`).
 
-Written in our own words, as behaviour only: no decompiler output, pseudo-code, addresses, offsets or call structure
-is reproduced here. **Every rule is UNVERIFIED in the running game.** The last section lists the live observations
+Written in our own words, as behaviour only: no decompiler output, pseudo-code, addresses, offsets, call structure or
+listing structure is reproduced here. **Every rule is UNVERIFIED in the running game.** The last section lists the live observations
 that would confirm them.
 
 **Clean room.** This lane implements nothing. Everything here stays a named `NotYet` in Off until a fresh implementer
@@ -63,6 +63,27 @@ codes it from this note alone.
   replication info's virtual in subclasses of `WillowGameReplicationInfo`. Only the two classes' own versions were read
   (open question 1).
 
+**Relation to existing records and code.**
+- **The record.** NATIVE_CONTROLLER_HELPERS.md, section "WillowPlayerController.GetCurrentPlaythrough" (and its index
+  row), already gives this rule: the world, its `WorldInfo`, the `GRI`, `CurrentPlaythrough`; 0 for each missing piece
+  or a replication info that is not a `WillowGameReplicationInfo`; `PlaythroughOverride` ignored; no clamp. This note
+  agrees with it.
+- **What this note adds:**
+  - the script native and the virtual that `GetActivePlotCriticalMissionNumber` and
+    `AllExpansionSideMissionsComplete` call are one function, which settles NATIVE_MISSION_NUMBERS.md open question 2;
+  - the replication info's answer is itself a virtual, so subclasses of either class are not covered by the reading;
+  - section 1's engine-wide condition.
+- **The code.** The Off binding of `GetCurrentPlaythrough` exists and is owned by the mission bridge (`ow_mission`,
+  the bridge's `n_playthrough`, bound with its other controller natives). It reads the bridge's own replication
+  object. A missing field gives 0. It makes no world, replication-info-class or subclass check, and it answers
+  "outside the binding" on any controller but the bridge's.
+  - #480 (`ow_world` mission numbers) asks the controller's `GetCurrentPlaythrough` through the VM, so today it lands
+    on that binding.
+  - What this note asks of the binding (an implementer's change, in the bridge): read the world's `WorldInfo.GRI`
+    rather than the bridge's own object; a `CurrentPlaythrough` of the wrong kind is bad data, not 0; the two subclass
+    refusals of section 4; and the same answer for every exactly-`WillowPlayerController` controller, since the rule
+    does not read the controller.
+
 ## 3. What this means for links 10 to 12
 
 The slice's accept runs the settings refresh, and with it `GetActiveMissionNumber` (NATIVE_MISSION_NUMBERS.md
@@ -76,6 +97,10 @@ mission bridge's `MissionTracker.GetAllMissions`: `NotYet` (layer absent), becau
   its one record. The stop then moved to the current-playthrough `NotYet` of #480. So with the whole list in place, the
   next need is section 2's query, as #480's both-branch form computes the fallback too. With the condition settled,
   the fallback is not computed when the tracker branch answers.
+- **Section 2 is needed regardless.** The settings refresh calls `GetActivePlotCriticalMissionNumber()` directly
+  (NATIVE_SETTINGS_FILL.md section 4, step 7), with the default index, right after `GetActiveMissionNumber` (step 6).
+- **The expected stop order once both are bound:** step 6's `GetAllMissions` `NotYet` (layer absent) stays the first
+  stop. Only with the tracker's whole list does step 6 answer, and then step 7 reaches section 2's query.
 - **The tracked-mission route does not help.** In the recorded golden trace (FIRE_MISSION_GOLDEN_TRACE.md, step 11)
   the plot mission tracked before the accept is `GD_Episode04.M_Ep4_WelcomeToSanctuary`. Its stored `MissionNumber` in
   the installed package is -1. A world fixture that tracked it would answer -1, which takes the fallback, and so
@@ -94,14 +119,39 @@ The hub's rulings apply:
 The natives here write nothing, so nothing is preflighted for them. Inside the settings refresh they come after the
 refresh's writes, and a `NotYet` they answer is marked by the refresh's own rule.
 
-| Step | Off answer |
-|---|---|
-| The engine-wide condition | holds when the port's world exists: the world whose `WorldInfo` the world query answers. With it, `GetActiveMissionNumber` runs the tracker branch alone, and the both-branch comparison is no longer needed. With no world, the fallback |
-| `WillowPlayerController.GetCurrentPlaythrough()` on a `WillowPlayerController` | the world, its `WorldInfo`, its `GRI` as a `WillowGameReplicationInfo`: the replication info's `CurrentPlaythrough` field. Any missing piece, or a replication info of another class: 0 |
-| on a subclass of `WillowPlayerController` | a named `NotYet` (not read), "a subclass override of the controller's current-playthrough query" (open question 1) |
-| a `GRI` that is a subclass of `WillowGameReplicationInfo` | a named `NotYet` (not read), "a subclass override of the replication info's current-playthrough answer" (open question 1) |
-| `GetActivePlotCriticalMissionNumber` with a negative or omitted index | the playthrough from the row above, then NATIVE_MISSION_NUMBERS.md section 2's rule |
-| `MissionTracker.GetAllMissions` | unchanged: the bridge's `NotYet` (layer absent) while it holds one record (open question 3) |
+**No lazy load.** The reads below are of run-time objects (the world's `WorldInfo`, its replication info, the
+controller), not definition-store handles, so none of them loads anything. Where a caller reads through the attribute
+evaluator's context, #480's rule for that context applies unchanged.
+
+**The engine-wide condition** holds when the port's world exists: the `WorldInfo` the world's actor list holds
+(`Actors::world_info()`). With it, `GetActiveMissionNumber` runs the tracker branch alone. With no world it takes the
+fallback.
+- The both-branch comparison and its `NotYet`, #480's `ENGINE_GATE`, are retired.
+- `Reads::engine_gate` becomes the Off behaviour rather than a test switch.
+- Open question 2 needs no refusal. NATIVE_CONTROLLER_HELPERS.md already reads the same global as the engine's world
+  object: point 4 of its conventions, and the `GetCurrentPlaythrough` section.
+
+**`WillowPlayerController.GetCurrentPlaythrough()`**, in this order. The class tests are exact-class tests.
+1. The controller's class is not exactly `WillowPlayerController`: `NotYet` (not read), "a subclass override of the
+   controller's current-playthrough query" (open question 1).
+2. No world: 0.
+3. No `WorldInfo`: 0.
+4. The `WorldInfo`'s `GRI` is None, or not a `WillowGameReplicationInfo` (neither that class nor a subclass): 0.
+5. The `GRI`'s class is a strict subclass of `WillowGameReplicationInfo`: `NotYet` (not read), "a subclass override
+   of the replication info's current-playthrough answer" (open question 1).
+6. The `GRI`'s `CurrentPlaythrough`, read as an int or a byte (as the port's
+   `WillowGameReplicationInfo.GetCurrPlaythrough` reads it, `datastore::get_curr_playthrough`). Any other kind is bad
+   data, a `VmError::Script`, as NATIVE_MISSION_NUMBERS.md section 1's Off steps treat a field of the wrong kind.
+
+**Direct callers.** `GetActivePlotCriticalMissionNumber` (a negative or omitted index) and
+`MissionTracker.AllExpansionSideMissionsComplete` reach the controller's virtual, not the script function. In the port
+they use this rule as a function on the controller, not a VM dispatch of `GetCurrentPlaythrough`.
+
+**The slice.** The bridge's world holds exactly a `WillowPlayerController` and a `WillowGameReplicationInfo`, so the
+slice does not reach steps 1 or 5.
+
+**`MissionTracker.GetAllMissions`** is unchanged: the bridge's `NotYet` (layer absent) while it holds one record (open
+question 3).
 
 ## Open questions
 
@@ -109,7 +159,9 @@ refresh's writes, and a `NotYet` they answer is marked by the refresh's own rule
    `WillowPlayerController`, and of the replication info's answer in subclasses of `WillowGameReplicationInfo`. Not
    read.
 2. **UNVERIFIED:** that the global is the engine's current world in every build state. It is read from how the value
-   is used: the next step reads the world's `WorldInfo` from it. The code that writes it was not read in detail.
+   is used: the next step reads the world's `WorldInfo` from it. This agrees with NATIVE_CONTROLLER_HELPERS.md (point 4
+   of its conventions, and its `GetCurrentPlaythrough` section). The code that writes it was not read in detail. No Off
+   refusal follows from this.
 3. **Not found:** how the tracker's `MissionList` is built. Known from the existing notes: one record per mission
    definition, kept sorted by the definition's full name, found by a binary search (NATIVE_MISSION_OBJECTIVES.md,
    NATIVE_SAVE_LOAD.md). The tracker's functions that use the list were surveyed in this pass. None of them adds

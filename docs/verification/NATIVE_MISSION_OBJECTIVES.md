@@ -92,5 +92,6 @@ record is a **binary search** of that array:
 ## Not read
 
 - The name comparison routine behind the record lookup.
-- The controller virtual that gives `AllExpansionSideMissionsComplete` its playthrough index.
+- The controller virtual that gives `AllExpansionSideMissionsComplete` its playthrough index. Settled in
+  NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED): it is `WillowPlayerController.GetCurrentPlaythrough`'s virtual.
 - What keeps `MissionList` sorted (the insertion routine); this note relies on it being sorted, as the search requires.

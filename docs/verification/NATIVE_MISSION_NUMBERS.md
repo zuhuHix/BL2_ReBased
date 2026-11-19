@@ -31,7 +31,8 @@ No parameters; returns an int. The native body only reads, and writes nothing.
    - It goes on only when an engine-wide condition holds, the world exists, the replication info is one, the tracker
      is set, and the tracker's data is valid (`bDataValidated`, as `MissionTracker.IsDataValid` answers).
    - Any failure takes the fallback (step 4).
-   - The engine-wide condition is a global whose name was not resolved. Read as "the game is running" (UNVERIFIED).
+   - The engine-wide condition: the engine's current world is set. Settled in NATIVE_PLAYTHROUGH_QUERY.md
+     (UNVERIFIED).
 2. **The tracked mission.** When the tracker's `ActiveMission` is set, the answer is that definition's
    `MissionNumber`. There is no status check and no plot-critical check.
 3. **Otherwise, the tracker's mission list** (the list `MissionTracker.GetAllMissions` gives, in its order). For each
@@ -49,7 +50,9 @@ No parameters; returns an int. The native body only reads, and writes nothing.
 nothing is preflighted for it and nothing is rolled back. Every call below goes through the VM:
 1. **The inputs:** the world's `WorldInfo.GRI`, its class checked against `WillowGameReplicationInfo`, and its
    `MissionTracker`.
-2. **The engine-wide condition** (step 1's unresolved global): Off does not guess it.
+2. **The engine-wide condition** (step 1's unresolved global): Off does not guess it. Settled in
+   NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED): it holds when the world exists, and the both-branch comparison below is
+   retired there.
    - When the world, the replication info and the tracker are all there, both branches are computed: the tracker
      branch (steps 2 and 3) and the fallback (section 2).
    - Equal answers: that number.
@@ -84,14 +87,15 @@ not the game's list (`ow_mission::bridge`, decision 2026-11-19-10).
   marks.
 - So today no installed case of this native gets past a named `NotYet`. The two unresolved decisions that change its
   result, the engine-wide condition and the playthrough virtual, are each a named `NotYet { NotRead }`. No Off
-  substitute is authorized for either.
+  substitute is authorized for either. Both are settled in NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED).
 
 ## 2. `WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`
 
 Read again in this lane; it agrees with NATIVE_SAVE_LOAD.md.
 
 1. **The playthrough.** A negative index (the default) becomes the current playthrough, through a virtual of the
-   controller. Its body was not read; read as `GetCurrentPlaythrough` (UNVERIFIED).
+   controller. Its body was not read; read as `GetCurrentPlaythrough` (UNVERIFIED). Settled in
+   NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED): it is that function's virtual.
 2. **Out of range** (negative, or not below the length of the controller's `MissionPlaythroughs`): the answer is 0.
 3. **The playthrough's `MissionList`**, in its order. For each record whose `MissionDef` is set, has `bPlotCritical`,
    and has no `DlcExpansion`, its own `Status` field is read (the controller's record, not the tracker):
@@ -102,7 +106,7 @@ Read again in this lane; it agrees with NATIVE_SAVE_LOAD.md.
 **Off answers, step by step:**
 1. **The current playthrough** (a negative index, the default): the controller's virtual that gives it was not read,
    and its identity is not guessed. `NotYet { NotRead }`, "the controller's current-playthrough virtual". An explicit
-   index of 0 or more does not ask it.
+   index of 0 or more does not ask it. Settled in NATIVE_PLAYTHROUGH_QUERY.md (UNVERIFIED), section 4.
 2. **The list:** the controller's `MissionPlaythroughs[p].MissionList` as the VM holds it. The mission bridge keeps one
    playthrough with the bridge's mission in it.
 3. Steps 2 to 4 above. Nothing is written. A record without a readable `MissionDef` or `Status`, or a definition
@@ -207,8 +211,10 @@ the fields named.
 
 ## Open questions
 
-1. The engine-wide condition in section 1, step 1 (an unresolved global).
-2. The controller's current-playthrough virtual in section 2, step 1.
+1. The engine-wide condition in section 1, step 1 (an unresolved global). Settled in NATIVE_PLAYTHROUGH_QUERY.md
+   (UNVERIFIED).
+2. The controller's current-playthrough virtual in section 2, step 1. Settled in NATIVE_PLAYTHROUGH_QUERY.md
+   (UNVERIFIED).
 3. The movie's slot 536 body (NATIVE_GFX_BRIDGE.md's reading is used).
 4. Whether an unhosted movie's `GetVariableObject` answers None in the game (it has a Flash file loaded there).
 5. The 10 script functions the decoder cannot read, for the read-back check.
