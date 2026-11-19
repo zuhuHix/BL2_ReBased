@@ -118,8 +118,8 @@ impl From<AttrError> for VmError {
 
 /// For a world that runs script inside the attribute system (a change-notification override, a resolver that calls
 /// into the VM): `NotYet`, heap and attribute errors pass through unchanged and a definition store error converts as a
-/// `DefError` does, so a caller still sees what is missing; every other VM error travels as `AttrError::WorldTyped`,
-/// typed, and converts back to itself (review r1 of #455; it travelled as `AttrError::World` text before).
+/// `DefError` does, so a caller still sees what is missing; every other VM error travels as `AttrError::World` with its
+/// text. The Off script boundary uses [`VmError::into_attr_typed`] instead (review r2 of #455).
 impl From<VmError> for AttrError {
     fn from(e: VmError) -> Self {
         match e {
@@ -127,6 +127,18 @@ impl From<VmError> for AttrError {
             VmError::Heap(h) => AttrError::Heap(h),
             VmError::Attr(a) => a,
             VmError::Def(d) => d.into(),
+            other => AttrError::World(other.to_string()),
+        }
+    }
+}
+
+impl VmError {
+    /// As the `From` conversion, except that every other VM error travels as `AttrError::WorldTyped`, typed, and
+    /// converts back to itself. Used only where the VM runs script for the attribute system in `ParityMode::Off`
+    /// (reviews r1 and r2 of #455); Reference keeps the text conversion.
+    pub fn into_attr_typed(self) -> AttrError {
+        match self {
+            VmError::NotYet(_) | VmError::Heap(_) | VmError::Attr(_) | VmError::Def(_) => self.into(),
             other => AttrError::WorldTyped(ow_attr::api::WorldError::new(other)),
         }
     }
@@ -188,13 +200,21 @@ mod tests {
         );
         let inner = AttrError::World("inner".into());
         assert_eq!(AttrError::from(VmError::Attr(inner.clone())), inner);
-        // Any other VM error is carried typed and comes back as itself (review r1 of #455), its text unchanged.
-        let carried = AttrError::from(VmError::StepLimit);
+        // Any other VM error travels as text through `From` (Reference's conversion, kept by review r2 of #455) ...
+        assert_eq!(
+            AttrError::from(VmError::StepLimit),
+            AttrError::World("step limit exceeded (runaway script?)".into())
+        );
+        // ... and typed through `into_attr_typed` (the Off script boundary), coming back as itself, its text unchanged.
+        let carried = VmError::StepLimit.into_attr_typed();
         assert!(matches!(&carried, AttrError::WorldTyped(_)), "{carried:?}");
         assert_eq!(carried.to_string(), "world: step limit exceeded (runaway script?)");
         assert_eq!(VmError::from(carried), VmError::StepLimit);
         let script = VmError::UnboundNative("Object.Foo(int)".into());
-        assert_eq!(VmError::from(AttrError::from(script.clone())), script);
+        assert_eq!(VmError::from(script.clone().into_attr_typed()), script);
+        // The variants that keep their own forms convert as `From` does.
+        let n = NotYet::not_read("x", "r");
+        assert_eq!(VmError::NotYet(n.clone()).into_attr_typed(), AttrError::NotYet(n));
     }
 
     #[test]

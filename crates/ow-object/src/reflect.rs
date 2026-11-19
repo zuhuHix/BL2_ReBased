@@ -331,6 +331,9 @@ pub struct ClassInfo {
     load_error: Option<ReflectError>,
     /// The resolved interface entries of the body: `None` until resolved (lazily, entry by entry, as the C++).
     interface_targets: Vec<Option<Option<ClassKey>>>,
+    /// The same entries as [`CodeIndex::implements_declared`] resolves them, strictly: `None` until resolved, then the
+    /// lookup's outcome, its error included, so a failure is kept across calls (review r2 of #455).
+    declared_targets: Vec<Option<Result<Option<ClassKey>, ReflectError>>>,
 }
 
 impl ClassInfo {
@@ -822,6 +825,7 @@ impl CodeIndex {
             functions: BTreeMap::new(),
             states: BTreeMap::new(),
             load_error: None,
+            declared_targets: vec![None; interface_targets.len()],
             interface_targets,
         });
         self.by_export.insert((package, index), key);
@@ -957,57 +961,143 @@ impl CodeIndex {
         false
     }
 
-    /// The strict form of [`CodeIndex::implements`], for a rule that must not guess (review r1 of #455): `Some(true)`
-    /// when the interface table of `class` or of a super class names `iface` or a class derived from it, `Some(false)`
-    /// when every table on the chain was read and none does, and `None` when that cannot be established. Unreadable
-    /// is: the interface's body or a body on the chain did not decode, a class on the chain did not load its super
-    /// class, or a table entry does not resolve to a class. There is no structural fallback and no unresolved entry
-    /// is dropped. An `iface` whose body decoded but is not an interface class is implemented by nothing.
+    /// Whether `class` implements `iface` by its package declarations alone (review r1 and r2 of #455): the interface
+    /// tables on the class's super chain, every entry resolved strictly, with no structural fallback.
+    ///
+    /// - `Ok(Some(true))`: an entry is `iface` or derives from it, and everything read was complete.
+    /// - `Ok(Some(false))`: every entry resolved, none is `iface` or below it, and everything read was complete; also
+    ///   when `iface` (decoded) is not an interface.
+    /// - `Ok(None)`, unreadable: the interface's body did not decode; or a class on the source chain has an undecoded
+    ///   body; or an entry resolves to nothing (its target is in no installed package); or a chain (the source's or an
+    ///   entry target's) has a load error or a super class reference that resolved to nothing. Every entry is checked
+    ///   before answering, so the answer does not depend on table order.
+    /// - `Err`: any other failure of an entry's lookup (a target that is not a class, a package that fails to load,
+    ///   a malformed import), typed. The first one met is returned, and it is cached with its entry, so a later call
+    ///   gives the same error.
     pub fn implements_declared(
         &mut self,
         store: &mut PackageStore,
         class: ClassKey,
         iface: ClassKey,
-    ) -> Option<bool> {
+    ) -> Result<Option<bool>, ReflectError> {
         if !self.classes[iface.index()].body_decoded() {
-            return None;
+            return Ok(None);
         }
         if !self.classes[iface.index()].is_interface() {
-            return Some(false);
+            return Ok(Some(false));
         }
         let chain: Vec<ClassKey> = self.super_chain(class).collect();
-        for &cursor in &chain {
-            let info = &self.classes[cursor.index()];
-            if !info.body_decoded() || info.load_error.is_some() {
-                return None;
-            }
-        }
+        let mut readable = self.chain_complete(store, class)
+            && chain.iter().all(|c| self.classes[c.index()].body_decoded());
+        let mut present = false;
         for cursor in chain {
-            let entries = self.classes[cursor.index()].interface_targets.len();
+            let entries = self.classes[cursor.index()].declared_targets.len();
             for entry in 0..entries {
-                let target = match self.classes[cursor.index()].interface_targets[entry] {
-                    Some(target) => target,
+                let target = match self.classes[cursor.index()].declared_targets[entry].clone() {
+                    Some(cached) => cached,
                     None => {
                         let info = &self.classes[cursor.index()];
                         let (package, class_ref) = (
                             info.package,
                             info.body.as_ref().map_or(0, |b| b.interfaces[entry].class_ref),
                         );
-                        let target = self.class_at(store, package, class_ref).ok().flatten();
-                        self.classes[cursor.index()].interface_targets[entry] = Some(target);
-                        target
+                        let resolved = self.class_at_strict(store, package, class_ref);
+                        self.classes[cursor.index()].declared_targets[entry] = Some(resolved.clone());
+                        resolved
                     }
-                };
-                let target = target?;
-                if self.is_child_of(target, iface) {
-                    return Some(true);
-                }
-                if self.classes[target.index()].load_error.is_some() {
-                    return None;
+                }?;
+                match target {
+                    None => readable = false,
+                    Some(target) if !self.chain_complete(store, target) => readable = false,
+                    Some(target) => present |= self.is_child_of(target, iface),
                 }
             }
         }
-        Some(false)
+        Ok(readable.then_some(present))
+    }
+
+    /// Whether the super chain of `key` is known to its root: no class on it has a load error, and every class whose
+    /// export names a super class has one (`load_class` leaves the super class empty, without an error, when the
+    /// reference resolves to nothing).
+    fn chain_complete(&self, store: &PackageStore, key: ClassKey) -> bool {
+        self.super_chain(key).all(|c| {
+            let info = &self.classes[c.index()];
+            info.load_error.is_none()
+                && (info.super_class.is_some()
+                    || store.get(info.package).exports[info.export as usize - 1].super_ == 0)
+        })
+    }
+
+    /// [`Self::class_at`] without swallowing failures (review r2 of #455): `Ok(None)` only where the target is in no
+    /// installed package; a failing lookup or a target that is not a class is the error. Not cached here (the caller
+    /// caches per entry), and the lenient reference cache is neither read nor written.
+    fn class_at_strict(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<ClassKey>, ReflectError> {
+        let Some(target) = self.resolve_ref_strict(store, package, reference)? else {
+            return Ok(None);
+        };
+        if let Some(&key) = self.by_export.get(&target) {
+            return Ok(Some(key));
+        }
+        self.nested(|index| index.load_class(store, target.0, target.1))
+            .map(Some)
+    }
+
+    /// [`Self::resolve_ref`] with its failures kept: a missing package is "nothing" (`Ok(None)`), as is an import
+    /// whose target the package does not export; a malformed import or a package that fails to load otherwise is the
+    /// error.
+    fn resolve_ref_strict(
+        &mut self,
+        store: &mut PackageStore,
+        package: PackageId,
+        reference: i32,
+    ) -> Result<Option<(PackageId, i32)>, ReflectError> {
+        if reference == 0 {
+            return Ok(None);
+        }
+        let package = self.file(store, package);
+        if reference > 0 {
+            let exports = store.get(package).exports.len();
+            return Ok((reference as usize <= exports).then_some((package, reference)));
+        }
+        let source = store.shared(package);
+        let mut cursor = reference;
+        let mut all_imports = true;
+        let mut depth = 0;
+        while cursor != 0 && depth < MAX_IMPORT_DEPTH {
+            let object = source.object(cursor)?;
+            if cursor > 0 {
+                all_imports = false;
+                break;
+            }
+            if object.outer == 0 {
+                break;
+            }
+            cursor = object.outer;
+            depth += 1;
+        }
+        let result = if all_imports && cursor < 0 {
+            let root = source.object(cursor)?.name.clone();
+            let full = source.path_of(reference)?;
+            let target = match self.package(store, &root) {
+                Ok(target) => target,
+                Err(ReflectError::Store(StoreError::PackageNotFound(_))) => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            let index = self.find_export(store, target, &full);
+            (index != 0).then_some((target, index))
+        } else {
+            match store.resolve(package, reference) {
+                Ok(found) => found,
+                Err(StoreError::PackageNotFound(_)) => None,
+                Err(e) => return Err(e.into()),
+            }
+        };
+        Ok(result.map(|(target, index)| (self.file(store, target), index)))
     }
 
     /// C++ `implementsStructurally`, the earlier stand-in kept as the fallback and the comparison baseline: the

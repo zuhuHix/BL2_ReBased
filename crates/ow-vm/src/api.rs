@@ -1167,6 +1167,13 @@ impl Vm {
         Ok(None)
     }
 
+    /// A VM error raised by script the attribute system asked this VM to run: typed in `ParityMode::Off`
+    /// ([`VmError::into_attr_typed`], so it reaches the caller as itself), the text conversion in Reference, as before
+    /// (review r2 of #455).
+    fn attr_boundary(&self, e: VmError) -> AttrError {
+        if self.parity == ParityMode::Off { e.into_attr_typed() } else { e.into() }
+    }
+
     /// Runs `f` on the world hooks with this VM's parts: `NotYet { LayerAbsent("ow-world") }` without hooks, an
     /// `AttrError::World` (not a panic) when the hooks are already borrowed.
     fn with_hooks<R>(
@@ -1276,7 +1283,7 @@ impl AttrWorld for Vm {
                 }
             })
             .collect();
-        match self.call(function, Some(resolver), args)?.ret {
+        match self.call(function, Some(resolver), args).map_err(|e| self.attr_boundary(e))?.ret {
             Value::Object(o) | Value::Interface(o) => Ok(o),
             other => Err(AttrError::BadData {
                 reason: format!(
@@ -1319,7 +1326,7 @@ impl AttrWorld for Vm {
             )
             .into());
         };
-        match self.call(function, Some(info), vec![Value::Byte(form)])?.ret {
+        match self.call(function, Some(info), vec![Value::Byte(form)]).map_err(|e| self.attr_boundary(e))?.ret {
             Value::Int(n) => Ok(n),
             other => Err(AttrError::BadData {
                 reason: format!("GetCurrencyOnHand returned a {}, not an int", other.kind_name()).into(),

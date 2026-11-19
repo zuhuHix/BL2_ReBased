@@ -79,3 +79,26 @@ Four items, fixed as commits on the same branch.
   wins; with neither readied the answer is None. The toy has no object-comparison native, so "matching" is the
   iterator's class filter, and the readied test is the script's.
 - **Still UNVERIFIED in game**, as above.
+
+## Review r2 of #455
+
+Four items, fixed in one commit on top of ed882d1.
+
+- **Typed lookup errors (reflect.rs).** `implements_declared` now returns `Result<Option<bool>, ReflectError>` and
+  resolves each table entry with a strict resolver of its own. That resolver neither reads nor writes the lenient
+  reference cache. Only a target in no installed package is "nothing". Any other failure is the typed error: a
+  non-class export (`NotAClass`), a package that fails to load, or a malformed import. The outcome, error included, is
+  cached per entry, so a second call gives the same error. The equipped resolver passes such an error up as a
+  definition error. Only "unreadable" becomes the named `IBodyPawn` `NotYet`.
+- **Order.** Every entry is checked before the answer is given. `[IBodyPawn, unresolved]` and
+  `[unresolved, IBodyPawn]` are both unreadable.
+- **Incomplete chains.** A chain is incomplete when a class on it has a load error, or names a super class that
+  resolved to nothing (`load_class` leaves that empty without recording an error). The check covers the source class's
+  chain and each entry target's chain, and either case makes the answer unreadable rather than "absent".
+- **Reference conversion kept (ow-vm).** `From<VmError> for AttrError` is back to the text form
+  (`AttrError::World`). The typed form is `VmError::into_attr_typed`. The VM uses it only in Off, at the two places it
+  runs script for the attribute system: `script_context` and `currency_on_hand`. A Reference resolver script that runs
+  past the step limit still gives `VmError::Attr(AttrError::World(_))`, and a test pins that. Change notifications
+  convert as before r1, in both modes.
+- **Tests.** One `ow-object` test covers both orders, the cached `NotAClass`, and an orphan target and source chain.
+  One `ow-vm` test covers the step limit in Off (typed) and in Reference (text).
