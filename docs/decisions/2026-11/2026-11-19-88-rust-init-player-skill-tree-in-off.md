@@ -1,7 +1,7 @@
 ## 2026-11-19: InitPlayerSkillTree in Off
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane IMPL-INIT-PLAYER-SKILL-TREE, slice links 1, 3, 4, 5, 13 and 14. Coded
-from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 094415f3 (clean room: lane
+from docs/verification/NATIVE_INIT_PLAYER_SKILL_TREE.md alone, the note's text at 094415f3, landed unchanged as 8559e2dc (clean room: lane
 ANALYST-INIT-PLAYER-SKILL-TREE wrote it, decision 2026-11-19-78, PR #466). The executable and the analysis output were
 not opened. Synthetic fixtures only.
 
@@ -47,10 +47,17 @@ not opened. Synthetic fixtures only.
   - `SkillTreePath` read only for a request (P5b);
   - Reference.
 - **Installed `--slice-gate`, Off, strict: 0 ok / 14 not yet / 0 error, as before.**
-  - Links 1, 3, 4, 5, 13 and 14 no longer stop at `InitPlayerSkillTree`. They still stop at `maya:8`, now at "stopped
-    after partial writes: value resolver class WillowGame.BlackMarketUpgradeAttributeValueResolver: not read from
-    native code or script yet".
-  - `UIInteraction.GetLoginStatus`, the note's likely next stop, is not the stop on this run.
+  - Links 1, 3, 4, 5, 13 and 14 no longer stop at the `InitPlayerSkillTree` check. They still stop at `maya:8`, now
+    at "stopped after partial writes: value resolver class WillowGame.BlackMarketUpgradeAttributeValueResolver: not
+    read from native code or script yet".
+  - **That stop comes before the event.** `ApplyCharacterClassStartingValues` checks the event, then makes the
+    override's pools, then runs `OnPlayerClassChange`. The installed run stops while making the pools, and a temporary
+    local probe (not committed) saw no `InitPlayerSkillTree` call. So the native is not yet exercised on the installed
+    run, and neither is the `IsInvalidName` and `GetLoginStatus` path after it. The synthetic tests are its only
+    evidence so far.
+  - **`UIInteraction.GetLoginStatus` is script, not a native** (the #474 review supersedes #466's wording). This lane
+    binds and stubs nothing for it: the script dispatches through the VM, and `GameEngine.GetOnlineSubsystem` and the
+    Steamworks `GetLoginStatus` are lane -95's.
   - The other eight rows are byte-identical against the same build without the new pack.
 - **UNVERIFIED.** Nothing here was checked in the running game. Still open, from the note: residency (open question
   3), the immediate-load switch (2), the delivery receiver (4), the reset of a tree with no branch list (1), and the
