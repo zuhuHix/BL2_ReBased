@@ -46,8 +46,9 @@
 //!   definition data during the loop changes what is visited (here it does not: the list was taken first). No
 //!   installed caller does either (the note); both are UNVERIFIED.
 //!
-//! Not bound (a run stops at them): `ApplyInternalSlotEffectModifiers` and `InitializeAttributeSlots` (the spawn path,
-//! which stops earlier at `ComputeValueOfParts`).
+//! Not bound (a run stops at it): `ApplyInternalSlotEffectModifiers`. `InitializeAttributeSlots` and
+//! `InitializeAttributeSlotsForNameParts` are [`super::slots`]' (lane IMPL-INIT-ATTRIBUTE-SLOTS, decision
+//! 2026-11-19-82), which also computes the `ComputedModifierValue` the external slots read.
 
 use std::rc::Rc;
 
