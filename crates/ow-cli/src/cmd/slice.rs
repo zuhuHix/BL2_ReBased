@@ -288,6 +288,8 @@ fn execute_with(
                 stop = Some((step.clone(), f.message));
                 (false, None)
             }
+            // A stop after partial writes surfaced as another error still ends the run with its report.
+            Err(_) if slice.script().partial_stop().is_some() => (false, None),
             Err(f) => return Err(f),
         };
         // A script run that failed after a behavior walk wrote state stops the run at this step too (review r1 of

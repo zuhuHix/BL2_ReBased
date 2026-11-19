@@ -224,15 +224,29 @@ fn bind_parameter(
     path: &str,
 ) -> Result<(), VmError> {
     let missing = || script_error(path, "a parameter slot outside its frame's storage");
-    let dim = local.decl.array_dim;
-    if dim <= 1 {
+    let Some(items) = parameter_items(local, a, path)? else {
         *slots.get_mut(local.slot).ok_or_else(missing)? = a.value.clone();
         return Ok(());
+    };
+    let end = local.slot.checked_add(items.len()).ok_or_else(missing)?;
+    slots
+        .get_mut(local.slot..end)
+        .ok_or_else(missing)?
+        .clone_from_slice(items);
+    Ok(())
+}
+
+/// The argument check of [`bind_parameter`], on its own: `None` for a scalar parameter (any value is taken), the
+/// elements for a static-array one, and the `NotYet` [`bind_parameter`] refuses with otherwise.
+fn parameter_items<'a>(local: &super::Local, a: &'a Arg, path: &str) -> Result<Option<&'a [Value]>, VmError> {
+    let dim = local.decl.array_dim;
+    if dim <= 1 {
+        return Ok(None);
     }
-    let items = a
-        .value
+    a.value
         .elements()
         .filter(|items| a.alias.is_none() && i32::try_from(items.len()).is_ok_and(|n| n == dim))
+        .map(Some)
         .ok_or_else(|| {
             VmError::from(NotYet::not_ported(
                 format!(
@@ -241,12 +255,35 @@ fn bind_parameter(
                 ),
                 "decision 2026-11-15-28 (a static array is passed whole as an array of its elements)",
             ))
-        })?;
-    let end = local.slot.checked_add(items.len()).ok_or_else(missing)?;
-    slots
-        .get_mut(local.slot..end)
-        .ok_or_else(missing)?
-        .clone_from_slice(items);
+        })
+}
+
+/// Whether a call of `f` with `args` would be refused at its entry, without running it or changing anything: for a
+/// script function, the refusals of the function's entry before its body runs (no bytecode, a function that cannot
+/// run, an argument [`bind_parameter`] refuses); a native takes its arguments as they are (lane FIX-RUN-BEHAVIORS,
+/// review r2 of #439, so a caller can check every call of a walk before it makes the first).
+pub(crate) fn check_entry(vm: &mut Vm, f: FuncId, args: &[Arg]) -> Result<(), VmError> {
+    if vm.function(f).is_some_and(|d| d.is_native()) {
+        return Ok(());
+    }
+    let Some(code) = code_of(vm, f) else {
+        return Err(NotYet::not_ported(
+            format!(
+                "running script function {}: it was declared by hand, with no package export and so no bytecode",
+                vm.function_path(f)
+            ),
+            "lane W3-INTERP (script functions run from the code packages)",
+        )
+        .into());
+    };
+    if let Some(why) = &code.failure {
+        return Err(cannot_run(&code.path, why));
+    }
+    for (position, &entry) in code.params.iter().enumerate() {
+        if let Some(a) = args.get(position).filter(|a| a.supplied) {
+            parameter_items(&code.locals[entry], a, &code.path)?;
+        }
+    }
     Ok(())
 }
 

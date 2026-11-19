@@ -481,6 +481,11 @@ fn call_by_name(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>) -> Result<
     Ok(vm.call(f, Some(o), args)?)
 }
 
+/// The terminal error of a script run that stopped after a behavior walk wrote state (`MissionScript::run`).
+fn stopped_error(text: String) -> MissionError {
+    BehaviorError::Vm(VmError::NotYet(NotYet::not_read(text, RECORD)))
+}
+
 /// The registry key of the native at `path`, or the C++ refusal for a script function.
 fn native_key(vm: &mut Vm, path: &str) -> Result<String, MissionError> {
     let f = vm.find_function(path)?;
@@ -684,7 +689,7 @@ impl MissionScript {
         };
         script.bind_natives(vm)?;
         let c = controller;
-        script.run(vm, |vm| call_by_name(vm, c, "ClientValidateMissionData", Vec::new()).map(|_| ()));
+        script.run(vm, |vm| call_by_name(vm, c, "ClientValidateMissionData", Vec::new()).map(|_| ()))?;
         script.install_hooks();
         Ok(script)
     }
@@ -708,9 +713,12 @@ impl MissionScript {
     }
 
     fn bind_natives(&self, vm: &mut Vm) -> Result<(), MissionError> {
-        // The behavior kernel pack first, before any script runs (review r1 of #439, item 1): its Off natives
-        // (`RunBehaviors` among them) are bound whether or not the director's provider is ever placed.
-        ow_vm::api::NativePack::register(&natives::Pack, vm)?;
+        // The behavior kernel pack first, before any script runs, in Off (review r1 of #439, item 1): its Off natives
+        // (`RunBehaviors` among them) are bound whether or not the director's provider is ever placed. Reference keeps
+        // the C++ timing, the pack registered with the director's provider (review r2, item 5).
+        if vm.parity == ParityMode::Off {
+            ow_vm::api::NativePack::register(&natives::Pack, vm)?;
+        }
         const BOUND: [(&str, Body); 33] = [
             ("WillowGame.MissionTracker.ActivateMission", MissionScript::n_activate),
             ("WillowGame.MissionTracker.CompleteMission", MissionScript::n_complete),
@@ -791,24 +799,29 @@ impl MissionScript {
     fn install_hooks(&self) {
         let w = self.weak();
         self.inner.mission.set_status_hook(Some(Rc::new(move |vm: &mut Vm, status: u8| {
-            if let Some(inner) = w.upgrade() {
-                MissionScript { inner }.update_mission_status(vm, status);
+            match w.upgrade() {
+                Some(inner) => MissionScript { inner }.update_mission_status(vm, status),
+                None => Ok(()),
             }
         })));
         let w = self.weak();
         self.inner
             .mission
             .set_objective_hook(Some(Rc::new(move |vm: &mut Vm, path: &str, bit: i32| {
-                if let Some(inner) = w.upgrade() {
-                    MissionScript { inner }.objective_updated(vm, path, bit);
+                match w.upgrade() {
+                    Some(inner) => MissionScript { inner }.objective_updated(vm, path, bit),
+                    None => Ok(()),
                 }
             })));
         let w = self.weak();
         self.inner.mission.set_kickoff_hook(Some(Rc::new(move |vm: &mut Vm| {
-            if let Some(inner) = w.upgrade() {
-                let s = MissionScript { inner };
-                let c = s.inner.o.controller;
-                s.run(vm, |vm| call_by_name(vm, c, "IsMissionMoviePlaying", Vec::new()).map(|_| ()));
+            match w.upgrade() {
+                Some(inner) => {
+                    let s = MissionScript { inner };
+                    let c = s.inner.o.controller;
+                    s.run(vm, |vm| call_by_name(vm, c, "IsMissionMoviePlaying", Vec::new()).map(|_| ()))
+                }
+                None => Ok(()),
             }
         })));
     }
@@ -820,11 +833,13 @@ impl MissionScript {
 
 impl MissionScript {
     /// The outermost script run collects what the VM logged while it ran; a script that fails is recorded, never
-    /// propagated (module documentation).
-    fn run(&self, vm: &mut Vm, script: impl FnOnce(&mut Vm) -> Result<(), MissionError>) {
-        // A VM a walk left half-written runs no more script.
-        if self.inner.state.borrow().partial.is_some() {
-            return;
+    /// propagated (module documentation), except a failure after a behavior walk wrote state ("stopped after partial
+    /// writes", `ow_behavior::kernel::run::PARTIAL_WRITES`; review r2 of #439). That one is terminal: it is recorded
+    /// once and returned, so the hook or native that ran this script fails with it and everything above unwinds at
+    /// once, and a later run on that VM fails the same way without running.
+    fn run(&self, vm: &mut Vm, script: impl FnOnce(&mut Vm) -> Result<(), MissionError>) -> Result<(), MissionError> {
+        if let Some(text) = self.inner.state.borrow().partial.clone() {
+            return Err(stopped_error(text));
         }
         let before = vm.log.len();
         self.inner.state.borrow_mut().depth += 1;
@@ -832,24 +847,30 @@ impl MissionScript {
         let mut s = self.inner.state.borrow_mut();
         s.depth -= 1;
         if let Err(e) = result {
-            if let Some(n) = e.not_yet() {
-                s.not_yet.push(n.clone());
-            }
             let text = error_text(&e);
-            if text.contains(ow_behavior::kernel::run::PARTIAL_WRITES) && s.partial.is_none() {
-                s.partial = Some(text.clone());
+            // A stop recorded by an inner run unwinds through here: it is recorded once.
+            if s.partial.is_none() {
+                if let Some(n) = e.not_yet() {
+                    s.not_yet.push(n.clone());
+                }
+                if text.contains(ow_behavior::kernel::run::PARTIAL_WRITES) {
+                    s.partial = Some(text.clone());
+                }
+                s.errors.push(format!("mission script: {text}"));
             }
-            s.errors.push(format!("mission script: {text}"));
         }
-        if s.depth != 0 {
-            return;
-        }
-        for line in vm.log.iter().skip(before) {
-            if let Some(stub) = line.strip_prefix(STUB_PREFIX) {
-                *s.stubs.entry(stub.to_string()).or_insert(0) += 1;
-            } else if !s.notes.contains(line) {
-                s.notes.push(line.clone());
+        if s.depth == 0 {
+            for line in vm.log.iter().skip(before) {
+                if let Some(stub) = line.strip_prefix(STUB_PREFIX) {
+                    *s.stubs.entry(stub.to_string()).or_insert(0) += 1;
+                } else if !s.notes.contains(line) {
+                    s.notes.push(line.clone());
+                }
             }
+        }
+        match s.partial.clone() {
+            Some(text) => Err(stopped_error(text)),
+            None => Ok(()),
         }
     }
 
@@ -884,7 +905,7 @@ impl MissionScript {
 
     /// The status routine's script hook: the Active branch locks the mission game stage (the region's) before the
     /// hook runs; then `UpdateMissionStatus` on the one local controller and the tracker's status-changed delegates.
-    fn update_mission_status(&self, vm: &mut Vm, status: u8) {
+    fn update_mission_status(&self, vm: &mut Vm, status: u8) -> Result<(), MissionError> {
         if status == 1 {
             let mut s = self.inner.state.borrow_mut();
             s.locked_stage = s.region_stage;
@@ -894,12 +915,12 @@ impl MissionScript {
             call_by_name(vm, c, "UpdateMissionStatus", vec![Value::Object(Some(def)), Value::Byte(status)])?;
             call_by_name(vm, t, "TriggerMissionStatusChangedDelegates", Vec::new())?;
             Ok(())
-        });
+        })
     }
 
     /// After an applied objective update (NATIVE_OBJECTIVE_TRIGGERS.md): the controller hears
     /// `UpdateMissionObjective(objective, bit)` and the tracker its objectives-changed delegates.
-    fn objective_updated(&self, vm: &mut Vm, path: &str, bit: i32) {
+    fn objective_updated(&self, vm: &mut Vm, path: &str, bit: i32) -> Result<(), MissionError> {
         self.inner.state.borrow_mut().objective_updates += 1;
         let (c, t, def) = (self.inner.o.controller, self.inner.o.tracker, self.inner.mission.definition());
         let package = self.inner.package.clone();
@@ -909,7 +930,7 @@ impl MissionScript {
             call_by_name(vm, c, "UpdateMissionObjective", vec![Value::Object(objective), Value::Int(bit)])?;
             call_by_name(vm, t, "TriggerMissionObjectivesChangedDelegates", vec![Value::Object(Some(def))])?;
             Ok(())
-        });
+        })
     }
 
     /// `AcceptMission(Mission, MissionDirector)` on the controller; `completed` is what `MissionDependenciesMet`
@@ -920,7 +941,7 @@ impl MissionScript {
         let (c, def, director) = (self.inner.o.controller, self.inner.mission.definition(), self.director());
         self.run(vm, |vm| {
             call_by_name(vm, c, "AcceptMission", vec![Value::Object(Some(def)), Value::Object(director)]).map(|_| ())
-        });
+        })?;
         Ok(self.inner.mission.status() != before)
     }
 
@@ -928,11 +949,12 @@ impl MissionScript {
     pub fn turn_in(&self, vm: &mut Vm) -> Result<bool, MissionError> {
         self.inner.state.borrow_mut().turning_in = true;
         let (c, def, director) = (self.inner.o.controller, self.inner.mission.definition(), self.director());
-        self.run(vm, |vm| {
+        let ran = self.run(vm, |vm| {
             call_by_name(vm, c, "ServerCompleteMission", vec![Value::Object(Some(def)), Value::Object(director)])
                 .map(|_| ())
         });
         self.inner.state.borrow_mut().turning_in = false;
+        ran?;
         Ok(self.inner.mission.status() == tracker::Status::Complete)
     }
 
@@ -1323,7 +1345,7 @@ impl MissionScript {
             if stop {
                 break;
             }
-            self.run(vm, |vm| call_by_name(vm, c, "ExpLevelUp", vec![Value::Bool(cheated)]).map(|_| ()));
+            self.run(vm, |vm| call_by_name(vm, c, "ExpLevelUp", vec![Value::Bool(cheated)]).map(|_| ()))?;
             if self.player_level(vm)? == level {
                 self.inner
                     .state
@@ -2029,7 +2051,7 @@ impl MissionScript {
         }
         *self.inner.marcus.borrow_mut() = Some(provider);
         self.inner.has_marcus.set(true);
-        self.run(vm, |vm| self.with_marcus(vm, |p, vm| p.register_consumer(vm)));
+        self.run(vm, |vm| self.with_marcus(vm, |p, vm| p.register_consumer(vm)))?;
         let mut slot = self.inner.marcus.borrow_mut();
         if let Some(p) = slot.as_mut() {
             let mut s = self.inner.state.borrow_mut();
@@ -2128,7 +2150,7 @@ impl MissionScript {
                         })
                         .collect::<Vec<_>>();
                     let object = behavior.object;
-                    self.run(vm, |vm| vm.call(f, Some(object), args).map(|_| ()).map_err(BehaviorError::Vm));
+                    self.run(vm, |vm| vm.call(f, Some(object), args).map(|_| ()).map_err(BehaviorError::Vm))?;
                 }
                 Ok(())
             })
@@ -2442,7 +2464,7 @@ impl MissionScript {
                 }
             }
             Ok(())
-        });
+        })?;
         Ok(lists)
     }
 
@@ -2477,7 +2499,7 @@ impl MissionScript {
         let pawn = self.pawn_for(vm, Toucher::Player)?;
         self.run(vm, |vm| {
             self.with_marcus(vm, |p, vm| p.fire_event(vm, "OnUsed", &DetMap::new(), 2, &[Some(pawn), None]))
-        });
+        })?;
         let (opened, open) = {
             let s = self.inner.state.borrow();
             (s.use_.interface_opened, s.screen_open)
@@ -2687,7 +2709,7 @@ impl MissionScript {
             }
             call_by_name(vm, director, "BeginUse", vec![Value::Object(Some(pawn))])?;
             Ok(())
-        });
+        })?;
         Ok(())
     }
 
@@ -2732,7 +2754,7 @@ impl MissionScript {
         if !self.screen_open() || self.reward_pending() {
             return Ok(false);
         }
-        self.run(vm, |vm| call_by_name(vm, movie, "extChoiceCancelled", Vec::new()).map(|_| ()));
+        self.run(vm, |vm| call_by_name(vm, movie, "extChoiceCancelled", Vec::new()).map(|_| ()))?;
         Ok(!self.screen_open())
     }
 
@@ -2746,7 +2768,7 @@ impl MissionScript {
         let (c, def) = (self.inner.o.controller, self.inner.mission.definition());
         self.run(vm, |vm| {
             call_by_name(vm, c, "MissionRewardsReceived", vec![Value::Object(Some(def))]).map(|_| ())
-        });
+        })?;
         self.inner.mission.note(EffectKind::RewardReceived, &mission, "", "");
         self.inner.state.borrow_mut().reward_mission.clear();
         Ok(before && !self.controller_needs_rewards(vm)?)
@@ -2769,7 +2791,7 @@ impl MissionScript {
         self.inner.state.borrow_mut().waypoint = Some(waypoint);
         set(&mut vm.space, waypoint, "Role", Value::Byte(self.inner.o.authority))?;
         set(&mut vm.space, waypoint, "WorldInfo", Value::Object(Some(self.inner.o.world_info)))?;
-        self.run(vm, |vm| call_by_name(vm, waypoint, "PostBeginPlay", Vec::new()).map(|_| ()));
+        self.run(vm, |vm| call_by_name(vm, waypoint, "PostBeginPlay", Vec::new()).map(|_| ()))?;
         Ok(true)
     }
 
@@ -2793,7 +2815,7 @@ impl MissionScript {
         }
         touching.push(Value::Object(Some(actor)));
         set(&mut vm.space, waypoint, "Touching", Value::array(touching))?;
-        self.run(vm, |vm| call_by_name(vm, waypoint, "Touch", vec![Value::Object(Some(actor))]).map(|_| ()));
+        self.run(vm, |vm| call_by_name(vm, waypoint, "Touch", vec![Value::Object(Some(actor))]).map(|_| ()))?;
         Ok(())
     }
 
@@ -2816,14 +2838,14 @@ impl MissionScript {
             (x.class, x.state)
         };
         if vm.find_method(class, "UnTouch", state)?.is_some() {
-            self.run(vm, |vm| call_by_name(vm, waypoint, "UnTouch", vec![Value::Object(Some(actor))]).map(|_| ()));
+            self.run(vm, |vm| call_by_name(vm, waypoint, "UnTouch", vec![Value::Object(Some(actor))]).map(|_| ()))?;
         }
         Ok(())
     }
 
     /// The tracker's observer notifications reach the VM observers (a registered waypoint) as their
     /// `MissionReaction*` script events (arguments beyond the tracker are not passed).
-    pub fn notify(&self, vm: &mut Vm, kind: Notification) {
+    pub fn notify(&self, vm: &mut Vm, kind: Notification) -> Result<(), MissionError> {
         let name = match kind {
             Notification::LevelLoad => "MissionReactionLevelLoad",
             Notification::StatusChanged => "MissionReactionStatusChanged",
@@ -2835,17 +2857,18 @@ impl MissionScript {
         let observers = self.inner.state.borrow().observers.clone();
         let tracker = self.inner.o.tracker;
         for observer in observers {
-            self.run(vm, |vm| call_by_name(vm, observer, name, vec![Value::Object(Some(tracker))]).map(|_| ()));
+            self.run(vm, |vm| call_by_name(vm, observer, name, vec![Value::Object(Some(tracker))]).map(|_| ()))?;
         }
+        Ok(())
     }
 
     /// Runs a script behavior's `ApplyBehaviorToContext` on the VM with `context` as its `ContextObject` (`None`: the
     /// C++ null context, which the Fire slice passes for the dummy's objective behavior; seam of lane W6-FIRE, decision
     /// 2026-11-16-38).
-    pub fn apply_behavior(&self, vm: &mut Vm, behavior: ObjRef, context: Option<ObjRef>) {
+    pub fn apply_behavior(&self, vm: &mut Vm, behavior: ObjRef, context: Option<ObjRef>) -> Result<(), MissionError> {
         self.run(vm, |vm| {
             call_by_name(vm, behavior, "ApplyBehaviorToContext", vec![Value::Object(context)]).map(|_| ())
-        });
+        })
     }
 
     // ---- the report ----------------------------------------------------------------------------------------------

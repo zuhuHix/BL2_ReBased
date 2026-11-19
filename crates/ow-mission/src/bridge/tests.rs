@@ -1790,41 +1790,70 @@ fn the_director_is_a_new_object_with_the_store_s_references_in_off_mode() {
     the_director_is_a_new_object_with_the_store_s_references(ParityMode::Off);
 }
 
-/// The behavior kernel pack is registered with the bridge, before any script runs (review r1 of #439, item 1): in Off
-/// `RunBehaviors` is the kernel's, bound without the director; in Reference it is the bridge's C++ stand-in.
+/// The behavior kernel pack is registered with the bridge before any script runs in Off, and keeps the C++ timing in
+/// Reference (review r1 of #439, item 1; r2, item 5). Without the director, `RunBehaviors` runs the kernel's body in
+/// Off (this fixture's toy form, one object, is not the note's list: its typed refusal is the kernel's) and the
+/// bridge's C++ stand-in in Reference (outside the level-up: the stub line and nothing).
 #[test]
-fn run_behaviors_is_bound_without_the_director() {
+fn run_behaviors_without_the_director_runs_each_modes_body() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let mut env = Env::with_mode(false, mode);
+        assert!(env.script.inner.state.borrow().marcus_pawn.is_none(), "no director placed");
         let vm = env.vm();
         let f = vm.find_function("Engine.BehaviorBase.RunBehaviors").unwrap();
-        let key = vm.function(f).unwrap().native_key.clone().unwrap();
-        assert!(vm.has_native(&key), "{mode:?}: bound");
-        assert!(env.script.inner.state.borrow().marcus_pawn.is_none(), "no director placed");
+        let ran = vm.call(f, None, vec![Value::Object(None)]);
+        match mode {
+            ParityMode::Off => {
+                let e = ran.unwrap_err();
+                assert!(e.to_string().contains("not an array"), "the kernel's body: {e}");
+            }
+            ParityMode::Reference => {
+                assert_eq!(ran.unwrap().ret, Value::None);
+                assert!(vm.log.iter().any(|l| l.contains("outside the level-up stand-in")), "{:?}", vm.log);
+            }
+        }
+        // ActivateBehaviorOutputLink: bound early in Off only (Reference binds the kernel pack with the director).
+        let declared = vm.find_function(ow_behavior::kernel::natives::OUTPUT_LINK).ok();
+        if let Some(f) = declared {
+            let key = vm.function(f).unwrap().native_key.clone().unwrap();
+            assert_eq!(vm.has_native(&key), mode == ParityMode::Off, "{mode:?}");
+        }
     }
 }
 
-/// A script run that failed after a behavior walk wrote state stops the bridge (review r1 of #439, item 2b): the
-/// failure is kept as the partial stop, and the VM runs no later script.
+/// A script run that failed after a behavior walk wrote state is terminal (review r1 of #439, item 2b; r2, item 1):
+/// the run returns the stop, an outer run unwinds with it at once (nothing after the inner run happens), the failure
+/// is recorded once, and no later run on that VM runs.
 #[test]
-fn a_partial_write_failure_stops_later_script_runs() {
+fn a_partial_write_failure_unwinds_and_stops_later_script_runs() {
     let mut env = Env::new(false);
     let s = env.script.clone();
     assert_eq!(s.partial_stop(), None);
     let text = format!("{}: an invented NotYet", ow_behavior::kernel::run::PARTIAL_WRITES);
-    s.run(env.vm(), move |_| Err(VmError::NotYet(NotYet::not_read(text, "an invented record")).into()));
+    let after = Rc::new(std::cell::Cell::new(false));
+    let wrote = after.clone();
+    let inner = s.clone();
+    let outer = s.run(env.vm(), move |vm| {
+        inner.run(vm, move |_| Err(VmError::NotYet(NotYet::not_read(text, "an invented record")).into()))?;
+        wrote.set(true);
+        Ok(())
+    });
+    assert!(outer.unwrap_err().to_string().contains("an invented NotYet"));
+    assert!(!after.get(), "nothing after the inner run happened");
     let stop = s.partial_stop().expect("the partial stop");
     assert!(stop.contains("an invented NotYet"), "{stop}");
+    assert_eq!(s.errors().iter().filter(|e| e.contains("an invented NotYet")).count(), 1, "recorded once");
     let ran = Rc::new(std::cell::Cell::new(false));
     let seen = ran.clone();
-    s.run(env.vm(), move |_| {
+    let later = s.run(env.vm(), move |_| {
         seen.set(true);
         Ok(())
     });
-    assert!(!ran.get(), "no script runs on that VM again");
-    // A failure that is not after partial writes does not stop the bridge.
+    assert!(later.is_err() && !ran.get(), "no script runs on that VM again");
+    // A failure that is not after partial writes is recorded and not propagated, as before.
     let mut fresh = Env::new(false);
     let f = fresh.script.clone();
-    f.run(fresh.vm(), |_| Err(VmError::NotYet(NotYet::not_read("an invented NotYet", "an invented record")).into()));
+    let plain = f.run(fresh.vm(), |_| Err(VmError::NotYet(NotYet::not_read("an invented NotYet", "an invented record")).into()));
+    assert!(plain.is_ok());
     assert_eq!(f.partial_stop(), None);
 }

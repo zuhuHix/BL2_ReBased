@@ -22,7 +22,8 @@
 //!   outer behavior's list (the note's section 5 warning). A wait request (the record's `NextExecutionDelayTime`
 //!   left non-zero) is `NotYet { NotRead }`: open question 1.
 //! - **Before any dispatch** (review r1 of #439): every entry the list holds is resolved and checked (its
-//!   `ApplyBehavior` and that function's form), and the record is made; a record that declares no
+//!   `ApplyBehavior`, that function's form, and the VM's own call-entry check with the arguments the dispatch will
+//!   give, `Vm::check_call`), and the record is made; a record that declares no
 //!   `NextExecutionDelayTime` is refused there, since a wait request could not be seen. A failure there changes
 //!   nothing.
 //! - **After a dispatch** a failure is marked [`PARTIAL_WRITES`]: the behaviors that ran may have written state and
@@ -58,7 +59,9 @@
 //! - `PlayClient` when it is;
 //! - `PlayLocal` when the owner's pawn's `Controller` answers `IsLocalController()` true (read as the stock "locally
 //!   controlled", UNVERIFIED). The owner's pawn is the owner itself when it is an `Engine.Pawn`; another owner's pawn
-//!   is not read: `NotYet`. No controller: false.
+//!   is not read: `NotYet`. No controller: false. The side tests run before any behavior, so `IsLocalController` is
+//!   called only when it is a bound native (the stock read-only query); a script override or an unbound native is
+//!   `NotYet` before it is invoked.
 //!
 //! The flags are tried in that order.
 //!
@@ -293,18 +296,23 @@ impl Walk {
         self.run(vm, behavior, p).map_err(partial)
     }
 
-    fn run(&mut self, vm: &mut Vm, behavior: ObjRef, p: &Prepared) -> Result<(), VmError> {
+    /// The arguments of `p`'s `ApplyBehavior` for this walk now.
+    fn args(&self, vm: &Vm, p: &Prepared) -> Vec<Value> {
         let event = match &self.event_data {
             Some(v) => v.clone(),
             None => vm.space.classes.zero_value(&p.params[4].kind),
         };
-        let args = vec![
+        vec![
             Value::Object(self.self_object),
             self.record.clone().unwrap_or(Value::None),
             Value::Object(self.instigator),
             Value::Object(self.other),
             event,
-        ];
+        ]
+    }
+
+    fn run(&mut self, vm: &mut Vm, behavior: ObjRef, p: &Prepared) -> Result<(), VmError> {
+        let args = self.args(vm, p);
         // A frame of its own: the output links the behavior selects lead nowhere (module documentation).
         let f = p.f;
         let (ran, _dropped) = collect(vm, |vm| vm.call(f, Some(behavior), args))?;
@@ -334,6 +342,10 @@ impl Walk {
             if i == 0 && self.record.is_none() {
                 self.start(vm, &p)?;
             }
+            // The VM's own call-entry check, with the arguments the dispatch will give (review r2 of #439, item 3):
+            // a call the entry would refuse is refused here, before any behavior ran.
+            let args = self.args(vm, &p);
+            vm.check_call(p.f, args)?;
         }
         Ok(())
     }
@@ -591,6 +603,25 @@ fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<
             )
             .into());
         };
+        // The side tests run before any behavior (the preflight), so only a query known to change nothing is called
+        // (review r2 of #439, item 2): a bound native `IsLocalController`, the stock read-only query. A script
+        // override, or a native nothing binds, is refused before it is invoked.
+        let bound = vm
+            .function(f)
+            .filter(|d| d.is_native())
+            .and_then(|d| d.native_key.clone())
+            .is_some_and(|key| vm.has_native(&key));
+        if !bound {
+            return Err(NotYet::not_read(
+                format!(
+                    "CanPlayBehaviorData's PlayLocal: {} is not a bound native (a script override, or unbound), so \
+                     it is not known to change nothing",
+                    vm.function(f).map_or_else(String::new, |d| d.path.as_str().to_string())
+                ),
+                RECORD,
+            )
+            .into());
+        }
         return Ok(matches!(vm.call(f, Some(controller), Vec::new())?.ret, Value::Bool(true)));
     }
     Ok(false)
