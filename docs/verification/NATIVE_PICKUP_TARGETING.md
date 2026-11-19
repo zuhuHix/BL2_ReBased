@@ -184,8 +184,44 @@ They were not read in detail.
 Each step is answered with a value (a plain read or a computed rule), None, or a named `NotYet`. Its kind is given in
 words: "layer absent" (a part the headless world does not have yet) or "not read".
 
+**Plan first, then write (review r2 of #461).** The native writes as it goes: it empties the nearest-pickup slot
+before it asks for the view, refills it and sets `bHasPickupParticleOffset` while it scores, and then raises
+`BeginShrinking`, writes the seen-item slot, `H` and `S`, and raises the two events. Off does not. It runs the whole
+tick read-only first, on what it read, and writes only once that plan is complete:
+1. **The plan** takes every read and every decision of sections 1 to 8 in the native's order: the HUD, its owner and
+   `HUDDef`, the view, `WPlayerOwner`, the pawn and the suspend test, every candidate's eligibility, offset, bounds and
+   score, the ranking, the pawn test and the trace, the winner's definition, the 0.5 check, the range, which event (if
+   any) the tick raises, and the shrink bookkeeping. Each cheap, certain blocker on the path the plan takes is decided
+   here, before any write:
+   - no HUD, and no camera (layer absent);
+   - a suspend query on a pawn that is not a `WillowPlayerPawn` (not read);
+   - the bounds of each candidate that reaches scoring (layer absent);
+   - the trace, when the winner is beyond a quarter of `PickupRange` (layer absent);
+   - a None `WPlayerOwner`, but **only when the plan raises `SawPickupable` or `ClearSeenPickupable`** (below);
+   - the shrink bookkeeping when its count is reached (not read).
+   A blocker off the path is not reached: a candidate that fails the cone needs no bounds, and a winner within a
+   quarter of the range needs no trace.
+2. **Why the plan is exact.** Nothing the pass reads depends on what it writes in the same tick: the nearest-pickup
+   slot and `bHasPickupParticleOffset` have no reader on the targeting path, `H` and `S` are read before they are
+   written, and the seen-item slot is presentation.
+3. **The writes,** in the native's order: the nearest-pickup slot, each scored pickup's `bHasPickupParticleOffset`, the
+   shrink event, the seen-item slot, `H` with its highlight, then each event before its write to `S` (sections 6 and
+   7).
+4. **A `NotYet` after a write.** The only answers still to come once the writes start are those of the script the
+   events run: the controller's `SawPickupable` and `ClearSeenPickupable` handlers, and the pickup's `BeginShrinking`.
+   If one of them answers a `NotYet`, the call stops there. Its text starts "stopped after partial writes", its kind
+   and record are kept, and the writes already made stay in place: nothing is rolled back. Any other error passes
+   unchanged.
+
+**The recipient, read early, refused late.** `WPlayerOwner` is read when the pass starts, with the owner and `HUDDef`,
+as a plain read. A None value is refused (a named `NotYet`, not read: the native raises without a check) only when the
+plan's path dispatches an event: a no-winner tick with `S` set (`ClearSeenPickupable`), or an in-range winner that is
+not `S` (`SawPickupable`). Every other tick, with no pawn, suspended with `S` empty, a winner that is already `S`, an
+out-of-range winner, a missing definition, or a failed 0.5 check, raises nothing and passes with a None recipient. The
+refusal is decided in the plan, before any write.
+
 **What a headless `look` answers, in order.** A driver of link 7 checks these in this order and stops at the first
-that answers a `NotYet`; nothing before the view writes anything the targeting reads.
+that answers a `NotYet`, all of them in the plan and so before any write:
 1. **The touched-slot prerequisite** (the fixture's own check, NATIVE_PICKUP.md section 4): Maya's controller holds the
    decoy as `CurrentTouchedPickupable`. #452's driver checks this first and refuses with an ordinary error when it
    does not hold. That is the fixture's check, not the pass's, and it stays first.
@@ -204,23 +240,23 @@ answer the HUD first, or supply a HUD and answer the camera.
 | Step | Off answer |
 |---|---|
 | The HUD (section 1) | the world has no HUD: a named `NotYet` (layer absent) naming the HUD, its owner and its `HUDDef`, until a host lane provides one; which `HUDDefinition` the player's HUD holds is open question 2 |
-| No owner or no HUD definition | value: the pass ends; only the nearest slot is emptied |
+| No owner or no HUD definition | value: the pass ends; the nearest slot is emptied (the native empties it first; Off writes it after the plan, and here the plan is this check alone) |
 | The view point `V` and rotation | a named `NotYet` (layer absent) naming the view (the camera, hub ruling) until a host lane supplies it; read before the pawn test |
-| The events' recipient `WPlayerOwner` | value: a plain read. When it is None, a named `NotYet` (not read: the native raises without a check), decided when the pass starts, before any write |
+| The events' recipient `WPlayerOwner` | value: a plain read when the pass starts. None is refused with a named `NotYet` (not read: the native raises without a check) only when the planned path raises `SawPickupable` or `ClearSeenPickupable`; decided in the plan, before any write |
 | No pawn | value: no event, `H` and `S` unchanged; the nearest slot is not needed (no reader on the targeting path) |
 | Suspended: the controller in its `Dead` state | value: no scoring, section 6 |
 | Suspended: the pawn's query | value: no for a `WillowPlayerPawn`; a pawn of another class, or a driven vehicle, a named `NotYet` (not read) |
 | Candidates, `bPickupable`, the class test | values: plain reads of `WillowGlobals.PickupList` and the flag |
 | The range gate, `PartItemHover`, `PickupRange` | values: plain reads; strictly below the range |
 | The 0.9 horizontal cone | value: the rule of section 3, including the 1e-8 cutoff (zero horizontal separation fails) |
-| The particle offset | value: `PickupFlagOffset` turned by the pickup's rotation; also sets `bHasPickupParticleOffset` |
+| The particle offset | value: `PickupFlagOffset` turned by the pickup's rotation. The native sets `bHasPickupParticleOffset` as it scores; Off computes the offset in the plan and writes the flag with the other writes, after the bounds and the trace are decided |
 | The bounding-box height | a named `NotYet` (layer absent) naming the pickup's component bounds, while the world has none |
 | The score, the radius, the ranking | values: the formulas and cutoffs of section 4 (plain reads of `HoverWidthPickup` and `ItemHoverProjectionHeight`); a radius at most 0 scores 0 |
 | The pawn test before the trace | value: the three flags |
 | The trace | value: no trace within `PickupRange × 0.25` horizontally; otherwise a named `NotYet` (layer absent) naming collision |
 | The definition, the 0.5 check, the range | values: section 7 |
-| `SawPickupable` / `ClearSeenPickupable` | values: raised on `WPlayerOwner` as sections 6 and 7 say, each event **before** its write to `S`; the handlers are NATIVE_PICKUP.md's script |
-| The shrink bookkeeping | value: nothing when no counted pickup's `LifeSpan` is above `PickupShrinkDuration`; otherwise a named `NotYet` (not read: the enable query and the HUD's limit are open question 3) |
+| `SawPickupable` / `ClearSeenPickupable` | values: raised on `WPlayerOwner` as sections 6 and 7 say, each event **before** its write to `S`; the handlers are NATIVE_PICKUP.md's script. A `NotYet` from a handler comes after writes: "stopped after partial writes", kind kept, writes left in place |
+| The shrink bookkeeping | value: nothing when no counted pickup's `LifeSpan` is above `PickupShrinkDuration`; otherwise a named `NotYet` (not read: the enable query and the HUD's limit are open question 3), decided in the plan |
 | Presentation | value: nothing (nothing the rules read changes) |
 
 ## 11. Link 7 with the score resolved
@@ -266,14 +302,23 @@ call with its receiver and argument, in call order.
 - **The cone cutoff, apart from the capture radius.** Drop one gun, stand at a distance where the capture radius
   covers a wide angle, and turn the yaw slowly with the pitch level so the ray stays on the segment. The event edge is
   then the cone's (a cosine of 0.9 from the horizontal direction to the gun's location `L`).
-- **The capture-radius cutoff, apart from the cone.** With the yaw pointing straight at the gun (well inside the
-  cone), raise the pitch slowly so the ray leaves the segment above its top. The edge is then the capture radius:
-  `HoverWidthPickup × 0.1` (× 1.5 once the gun is the hover pickup) from the segment's top. Repeat in both directions
-  to see the hover pickup's wider radius hold the gun longer than it took to gain it.
-- **An equal-value tie, apart from the hover bonus.** Two identical guns at the same distance, both crossed by the
-  ray at the same offset, neither yet the hover pickup: the earlier entry of `WillowGlobals.PickupList` should win.
-  Then make the later one the hover pickup first (aim at it alone), bring the other in at an equal raw value: the
-  hover pickup should keep winning by its 0.25 bonus and wider radius.
+- **The capture-radius cutoff, apart from the cone.** Sweep **sideways**, not in pitch: a ray that leaves the
+  segment past its top or bottom puts the closest point outside the segment, and then there is no `d` at all
+  (section 4), so a pitch sweep measures the segment's end, not the radius. Stand far enough away that the capture
+  radius's edge comes at a small yaw: more than about 2.1 × the capture radius horizontally from the gun, since the
+  cone's 0.9 edge is about 25.8 degrees off. Keep the pitch so the ray crosses the gun's height between the segment's
+  bottom and top, and turn the yaw slowly off the gun. At the edge, record the view and the gun's location and check
+  from them both that the horizontal cosine is still above 0.9 and that both closest points lie inside their pieces
+  (the segment between bottom and top, the ray within its length). The edge should then be `d` = `HoverWidthPickup ×
+  0.1`, or × 1.5 once the gun is the hover pickup. Sweep out and back in to see the hover pickup's wider radius hold
+  the gun longer than it took to gain it.
+- **An exact tie, apart from the hover bonus.** Two guns of the same definition and rotation, placed as mirror images
+  across the view ray: the view's yaw and pitch exactly 0, and the guns at the same forward distance and height, one
+  at the view's sideways coordinate plus `a` and one at minus `a`, with `a` below the capture radius. Neither is yet
+  the hover pickup. Record the inputs and recompute each gun's final single-precision ranking value (section 4) from
+  them. The probe counts as a tie only when the two values are bit-identical; then the earlier entry of
+  `WillowGlobals.PickupList` should win. Then make the later one the hover pickup first (aim at it alone) and repeat:
+  the hover pickup should keep winning, by its 0.25 bonus and its wider radius and segment.
 - **The trace exemption and allowed hits.** A wall between the view and a gun further than a quarter of `PickupRange`
   horizontally: not reported. The same wall with a gun within a quarter of `PickupRange`: still reported (no trace).
   A gun resting on a crate (its `Base`) whose top hides part of the line: still reported.

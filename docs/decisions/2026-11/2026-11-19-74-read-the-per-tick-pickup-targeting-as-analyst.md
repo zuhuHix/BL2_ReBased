@@ -44,3 +44,12 @@ checks and four open questions.
 
 `NATIVE_PICKUP.md` section 4, its Off contract, section 7 and open question 1 now point at the note. They keep the
 touched-slot prerequisite for the key. Still analyst only, and every rule is UNVERIFIED in the running game.
+
+**Review r2 of #461.** Section 10 now says Off plans the whole tick read-only before any write, because the native
+writes as it goes (the nearest-pickup slot before the view, `bHasPickupParticleOffset` while it scores). Every cheap,
+certain blocker on the path the plan takes is decided there. Only the event handlers' script can still answer a
+`NotYet` after a write; that stop carries "stopped after partial writes", keeps its kind and leaves the writes in
+place. `WPlayerOwner` is read early but refused only when the planned path raises an event. The capture-radius probe
+now sweeps sideways with both closest points inside their pieces and the cone checked at the edge. The tie probe
+needs a bit-identical single-precision tie. In `NATIVE_PICKUP.md`, link 7's aimed gun wins only with a supplied view
+and section 11's gates.

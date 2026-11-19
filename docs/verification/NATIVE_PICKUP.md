@@ -108,7 +108,10 @@ valid touch, which includes the touch trace and `PickupQuery` passing (section 3
   (open question 5).
 - **Link 7** (the aimed gun, plus a nearer decoy 45 uu to Maya's side, about 90 degrees off her aim): **the touch
   source is the decoy**, the nearer gun, which fills the touched slot when its touch is valid. The aimed gun then
-  wins as the seen one. If the aimed gun also touches Maya, the answer is the same.
+  wins as the seen one **only with a supplied view** that puts the decoy outside the cone and the aimed gun inside it,
+  and only when the aimed gun passes NATIVE_PICKUP_TARGETING.md section 11's scoring and reporting gates (a positive
+  score, the pawn test, the trace beyond a quarter of the range, its definition, the 0.5 check, and `PickupRange`).
+  If the aimed gun also touches Maya, the answer is the same.
 - **Link 7's look** is NATIVE_PICKUP_TARGETING.md section 11: with a supplied view at Maya's location aimed at the
   gun, the decoy fails the cone and the aimed gun is the only scored candidate. The fixture's placements alone give no
   camera geometry.
