@@ -696,3 +696,51 @@ fn a_malformed_stack_is_reported_before_an_unread_base() {
     assert_eq!(not_yet_kind(&e), None, "the stack's data error, not the base's NotYet: {e}");
     assert!(e.to_string().contains("Type"), "{e}");
 }
+
+/// Review r2 of #446, item 1: the output addresses are checked before any base is evaluated, so a class missing one is
+/// refused before a resolver runs. The instant-hit base here reads `Test.Bumps`, which would set the stack's modifier
+/// to 100: it never runs, and the error is the missing output's.
+#[test]
+fn a_missing_output_is_refused_before_any_resolver_runs() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let same = t.obj("Test.Same", "Same");
+    let bumps = t.obj("Test.Bumps", "Bumps");
+    let attr = t.obj("Engine.AttributeDefinition", "BumpsAttr");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(same))]));
+    t.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(bumps))]));
+    let instant = t.init_attr(attr);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let melee = t.init(0.0);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let w = t.obj("Test.ShortWeapon", "Short_0");
+    let ty = t.wdata;
+    let data = t.st(ty, vec![("WeaponTypeDefinition", Value::Object(Some(definition)))]);
+    t.set(w, "DefinitionData", data);
+    let modifier = t.modifier("PostAdd", 2, 1.0);
+    let Value::Object(Some(m)) = modifier else { panic!("a modifier") };
+    t.set(w, "InstantHitDamageModifierStack", Value::array(vec![modifier]));
+    t.set(w, "MeleeDamageModifierStack", Value::array(vec![]));
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    assert_eq!(not_yet_kind(&e), None, "the missing output's data error: {e}");
+    assert!(e.to_string().contains("NormalizedMeleeDamage"), "{e}");
+    assert_eq!(t.get(m, "Value"), Value::Float(1.0), "the base resolver did not run");
+}
+
+/// Review r2 of #446, item 2: a bare None in `WeaponTypeDefinition` is an absent definition, so it is the caller's
+/// missing-definition `NotYet`, as an empty object reference is.
+#[test]
+fn a_bare_none_type_definition_is_the_missing_definition_not_yet() {
+    let mut t = Toy::new(ParityMode::Off);
+    let w = t.weapon(None, &[]);
+    let class = t.vm.space.heap.get(w).unwrap().class;
+    let p = t.vm.space.prop(class, "DefinitionData").unwrap();
+    let field = t.vm.space.names.find("WeaponTypeDefinition").unwrap();
+    let ty = t.wdata;
+    let at = t.vm.space.classes.struct_layout(ty).unwrap().field(field).unwrap().0;
+    let slot = t.vm.space.slot_mut(w, PropAddr::scalar(p)).unwrap();
+    slot.struct_mut().unwrap().fields[at as usize] = Value::None;
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    assert_eq!(not_yet_kind(&e), Some(Missing::NotRead), "{e}");
+    assert!(e.to_string().contains("without a WeaponTypeDefinition"), "{e}");
+}

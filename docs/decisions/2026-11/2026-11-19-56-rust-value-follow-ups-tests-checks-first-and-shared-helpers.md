@@ -20,7 +20,11 @@ AI-assisted (Claude Code, Claude Opus 5.5). Lane FIX-VALUE-C, the LOW follow-ups
   first write: each stack's modifiers, each base, and then all six outputs (the two copied stacks, the two bases, the
   two values) against their declarations, with the value each will hold. A class missing one, or declaring one with
   the wrong kind (an int `NormalizedMeleeDamage`, review of #446), is a data error that changes none of the others.
-  Two tests cover it with toy weapon classes.
+  Two tests cover it with toy weapon classes. The order (review r2 of #446): the six output addresses first, then
+  every stack's modifiers, then the bases (the only step that runs a resolver), then the staged values, then the
+  writes. So a class missing an output is refused before any resolver runs; a test shows a state-changing base
+  resolver never runs there. A bare None in `WeaponTypeDefinition` is an absent definition, so it gives the
+  missing-definition `NotYet` as before; a test covers that too.
 - **(d) One implementation each: withdrawn (review of #446).** The first version of this lane replaced the module's
   stack reader with `ow_attr::storage::stack_value` and its type lookup with a shared helper. The review found that
   this was not behaviour-neutral: the modifiers were then read after the base was evaluated, and the shared
