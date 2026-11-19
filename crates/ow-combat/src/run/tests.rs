@@ -1618,8 +1618,9 @@ fn an_off_spawn_goes_through_the_minds_class_route() {
 }
 
 /// The `Controller` base of `ApplyCharacterClassStartingValues`, Off: every pool deleted, then the class's
-/// `ResourcePools` in array order from the lowest slot; no class deletes only; one resource twice and a player
-/// controller are `NotYet` before anything changes. Reference leaves it unbound.
+/// `ResourcePools` in array order from the lowest slot; no class deletes only; one resource twice is `NotYet` before
+/// anything changes. A player controller off the authority gets the base too (decision 2026-11-19-57). Reference
+/// leaves it unbound.
 #[test]
 fn the_class_starting_values_delete_then_create_in_class_order() {
     use crate::hit::pools::apply_class_starting_values;
@@ -1647,8 +1648,10 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     apply_class_starting_values(vm, enemy.mind, None).unwrap();
     assert!(pool_definitions(vm, enemy.mind).is_empty(), "no class: only the delete");
     let player = make(vm, "WillowGame.WillowPlayerController");
-    let refused = apply_class_starting_values(vm, player, Some(two)).unwrap_err();
-    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    // Not the authority and with no manager: the base runs, and `CreatePool` makes no manager off the authority, so
+    // no pool is made (the pool creation rule, not this native's).
+    apply_class_starting_values(vm, player, Some(two)).unwrap();
+    assert!(pool_definitions(vm, player).is_empty());
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
 }
@@ -1688,33 +1691,174 @@ fn a_class_switch_that_stops_stops_every_later_step_in_off() {
     assert_eq!(fake.selects.get(), 0);
 }
 
-/// The player controller's native override of the starting values (decision 2026-11-19-46), Off: `NotYet { NotRead }`
-/// naming the unread script call of section 1.10 step 2, before any pool changes. Reference leaves it unbound.
-#[test]
-fn the_player_controllers_starting_values_are_not_yet_before_anything_changes() {
-    let (w, _dir) = world_with(ParityMode::Off, vec![("ToyStarting.upk", fixture::toy_starting())]);
+/// A `ToyPlayerStarting` world (decision 2026-11-19-57): its player controller, with `OnPlayerClassChange` bound to a
+/// native that keeps, per call, how many pools the manager held then.
+fn player_starting(mode: ParityMode) -> (Run, Dir, ow_object::ids::ObjRef, Rc<std::cell::RefCell<Vec<usize>>>) {
+    let (w, dir) = world_with(
+        mode,
+        vec![("ToyStarting.upk", fixture::toy_starting()), ("ToyPlayerStarting.upk", fixture::toy_player_starting())],
+    );
     let mut run = Run::new(w).unwrap();
     let vm = &mut run.world().vm;
-    let two = crate::hit::stock_object(vm, "ToyStarting.Class_Two").unwrap();
-    let player = make(vm, "WillowGame.WillowPlayerController");
-    let before = pool_definitions(vm, player);
-    // Through the controller's own method lookup, as the class switch's call reaches it (review r1 of #431): the
-    // override, not the `Controller` base, answers for a WillowPlayerController.
-    let class = vm.space.heap.get(player).unwrap().class;
+    let player = make(vm, "ToyPlayerStarting.ToyPlayerController");
+    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = calls.clone();
+    let f = vm.find_function("ToyPlayerStarting.ToyPlayerController.OnPlayerClassChange").unwrap();
+    let key = vm.function(f).unwrap().native_key.clone().unwrap();
+    vm.register_native(
+        &key,
+        Rc::new(move |c: &mut ow_vm::api::NativeCall<'_>| {
+            let me = c.this.unwrap();
+            let n = pool_definitions(c.vm, me).len();
+            seen.borrow_mut().push(n);
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    (run, dir, player, calls)
+}
+
+fn set_role(vm: &mut Vm, controller: ow_object::ids::ObjRef, authority: bool) {
+    let role = if authority { crate::hit::with_state(vm, |s| s.authority).unwrap() } else { 0 };
+    crate::hit::access::set_required(vm, controller, "Role", Value::Byte(role), "test").unwrap();
+}
+
+fn set_player_class(vm: &mut Vm, controller: ow_object::ids::ObjRef, class: Option<&str>) {
+    let class = class.map(|c| crate::hit::stock_object(vm, c).unwrap());
+    crate::hit::access::set_required(vm, controller, "PlayerClass", Value::Object(class), "test").unwrap();
+}
+
+/// The slot a pool reference field names, and the field's whole value.
+fn reference(vm: &mut Vm, controller: ow_object::ids::ObjRef, field: &str) -> (u8, Value) {
+    let v = crate::hit::access::get(vm, controller, field).unwrap().unwrap();
+    (ow_world::pools::read_ref(&vm.space, &v).unwrap().index, v)
+}
+
+fn names(list: &[(u8, &str)]) -> Vec<(u8, String)> {
+    list.iter().map(|(i, n)| (*i, (*n).to_string())).collect()
+}
+
+/// The player controller's override (NATIVE_CLASS_STARTING_VALUES.md section 2; decision 2026-11-19-57), Off, on the
+/// authority with a `PlayerClass`: the base's pools from the argument (its `ResourcePools` in order, then accuracy),
+/// then experience, skill cooldown and melee cooldown from `PlayerClass`, each reference stored; `OnPlayerClassChange`
+/// runs once, after the last pool. The same through the `Controller` base's function (a native virtual).
+#[test]
+fn the_player_override_on_the_authority_makes_the_player_pools_then_runs_the_event() {
+    let (mut run, _dir, player, calls) = player_starting(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    set_role(vm, player, true);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_Player"));
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    let off_hand_before = reference(vm, player, "OffHandAccuracyPool").1;
+    let own = vm.space.heap.get(player).unwrap().class;
     let state = vm.space.heap.get(player).unwrap().state;
-    let f = vm.find_method(class, "ApplyCharacterClassStartingValues", state).unwrap().unwrap();
+    let f = vm.find_method(own, "ApplyCharacterClassStartingValues", state).unwrap().unwrap();
     assert_eq!(f, vm.find_function(crate::hit::pools::PLAYER_STARTING_VALUES).unwrap(), "the override");
-    let refused = vm.call(f, Some(player), vec![Value::Object(Some(two))]).map(|d| d.ret);
-    match &refused {
-        Err(VmError::NotYet(n)) => {
-            assert_eq!(n.missing, ow_core::Missing::NotRead);
-            assert!(n.to_string().contains("section 1.10 step 2"), "{n}");
+    let base = vm.find_function("Engine.Controller.ApplyCharacterClassStartingValues").unwrap();
+    let expected = names(&[
+        (0, "Pool_Health"),
+        (1, "Pool_Ammo"),
+        (2, "Pool_Accuracy"),
+        (3, "Pool_Exp"),
+        (4, "Pool_Cooldown"),
+        (5, "Pool_Melee"),
+    ]);
+    for (round, function) in [f, base].into_iter().enumerate() {
+        vm.call(function, Some(player), vec![Value::Object(Some(class))]).unwrap();
+        assert_eq!(pool_definitions(vm, player), expected, "round {round}");
+        for (field, slot) in
+            [("AccuracyPool", 2), ("ExpPool", 3), ("SkillCooldownPool", 4), ("MeleeSkillCooldownPool", 5)]
+        {
+            assert_eq!(reference(vm, player, field).0, slot, "round {round}: {field}");
         }
-        other => panic!("expected NotYet, got {other:?}"),
+        assert_eq!(reference(vm, player, "OffHandAccuracyPool").1, off_hand_before, "unset definition: left as it was");
+        assert_eq!(*calls.borrow(), vec![6; round + 1], "the event once per call, after every pool");
     }
+}
+
+/// Off: a controller that is not the authority gets only the base. The player pools are not made, their references
+/// keep what they held, and the event does not run. On the authority with no `PlayerClass`, the base and then the
+/// event, with the references left. The override reads `PlayerClass`, the base the argument (open question 1).
+#[test]
+fn the_player_override_gates_the_pools_on_authority_and_player_class_and_the_event_on_authority() {
+    let (mut run, _dir, player, calls) = player_starting(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    let only = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_ExpOnly").unwrap();
+    let apply = crate::hit::pools::apply_class_starting_values;
+    set_role(vm, player, true);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_Player"));
+    apply(vm, player, Some(class)).unwrap();
+    let held: Vec<Value> = ["ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"]
+        .iter()
+        .map(|f| reference(vm, player, f).1)
+        .collect();
+    // Not the authority: the base only.
+    set_role(vm, player, false);
+    apply(vm, player, Some(only)).unwrap();
+    assert_eq!(pool_definitions(vm, player), names(&[(0, "Pool_Health")]));
+    for (f, before) in ["ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"].iter().zip(&held) {
+        assert_eq!(&reference(vm, player, f).1, before, "{f} left as it was");
+    }
+    assert_eq!(*calls.borrow(), [6], "no event off the authority");
+    // The authority without a PlayerClass: the base, then the event.
+    set_role(vm, player, true);
+    set_player_class(vm, player, None);
+    apply(vm, player, Some(class)).unwrap();
+    assert_eq!(pool_definitions(vm, player), names(&[(0, "Pool_Health"), (1, "Pool_Ammo"), (2, "Pool_Accuracy")]));
+    for (f, before) in ["ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"].iter().zip(&held) {
+        assert_eq!(&reference(vm, player, f).1, before, "{f} left as it was");
+    }
+    assert_eq!(*calls.borrow(), [6, 3]);
+    // PlayerClass differs from the argument: the base reads the argument, the override the field.
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_ExpOnly"));
+    apply(vm, player, Some(class)).unwrap();
+    assert_eq!(
+        pool_definitions(vm, player),
+        names(&[(0, "Pool_Health"), (1, "Pool_Ammo"), (2, "Pool_Accuracy"), (3, "Pool_Exp")])
+    );
+    assert_eq!(reference(vm, player, "ExpPool").0, 3);
+    assert_eq!(reference(vm, player, "SkillCooldownPool").1, held[1], "unset definition: left as it was");
+    assert_eq!(*calls.borrow(), [6, 3, 4]);
+    // No class on the authority: the delete, nothing made, then the event.
+    apply(vm, player, None).unwrap();
+    assert_eq!(pool_definitions(vm, player), names(&[(0, "Pool_Exp")]), "the override's pool from PlayerClass");
+    assert_eq!(*calls.borrow(), [6, 3, 4, 1]);
+}
+
+/// Off: one resource twice across the base and the override (`CreatePool`'s reinitialise flag is not read) is
+/// `NotYet { NotRead }` before anything changes, with no event; off the authority the override's pools are not made,
+/// so the same class is fine. A player controller without `PlayerClass` (the plain fixture class) is an error on the
+/// authority, before anything changes. Reference binds neither native.
+#[test]
+fn the_player_override_refuses_before_anything_changes() {
+    let (mut run, _dir, player, calls) = player_starting(ParityMode::Off);
+    let vm = &mut run.world().vm;
+    let class = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_Player").unwrap();
+    let dup = crate::hit::stock_object(vm, "ToyPlayerStarting.Class_DupExp").unwrap();
+    let apply = crate::hit::pools::apply_class_starting_values;
+    set_role(vm, player, true);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_Player"));
+    apply(vm, player, Some(class)).unwrap();
+    let before = pool_definitions(vm, player);
+    set_player_class(vm, player, Some("ToyPlayerStarting.Class_DupExp"));
+    let refused = apply(vm, player, Some(dup)).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
     assert_eq!(pool_definitions(vm, player), before, "nothing changed");
+    assert_eq!(*calls.borrow(), [6], "no event");
+    set_role(vm, player, false);
+    apply(vm, player, Some(dup)).unwrap();
+    assert_eq!(pool_definitions(vm, player), names(&[(0, "Pool_Health")]));
+    // The plain WillowPlayerController of the fixture declares no PlayerClass.
+    let plain = make(vm, "WillowGame.WillowPlayerController");
+    set_role(vm, plain, true);
+    let two = crate::hit::stock_object(vm, "ToyStarting.Class_Two").unwrap();
+    let e = apply(vm, plain, Some(two)).unwrap_err();
+    assert!(e.to_string().contains("PlayerClass"), "{e}");
+    assert!(pool_definitions(vm, plain).is_empty(), "nothing made");
     let (w, _dir) = world(ParityMode::Reference);
     assert!(!w.vm.has_native("WillowPlayerController.ApplyCharacterClassStartingValues(object)"));
+    assert!(!w.vm.has_native("Controller.ApplyCharacterClassStartingValues(object)"));
 }
 
 /// `SetDefaultPhysics` and `GetExpLevel` in Off (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).

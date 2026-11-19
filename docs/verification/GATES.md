@@ -12,6 +12,15 @@ review r1, on main b985dcbf: `cargo test --workspace` 2,044 / 0 / 45 and `crate_
 `fix/rust-class-starting-values` before review r1, the six links moved to the library's `NotYet` on
 `WillowGame.BlackMarketUpgradeAttributeValueResolver`, still inside `maya:8`. No real-game run; `UNVERIFIED` in game.
 Decision 2026-11-19-58; logs under ignored `local/p2/fix-attr-getvalue/`.
+**FIX-CLASS-STARTING-VALUES (2026-11-19, pc-hummer, on origin/fix/rust-player-class-b 95afcebd plus the #434 note):**
+AI-assisted (Claude Code, Opus 5.5). `ApplyCharacterClassStartingValues` (the `Controller` base and the
+`WillowPlayerController` override) in Off from NATIVE_CLASS_STARTING_VALUES.md. `cargo build --workspace --locked -j 4`
+clean; `cargo test --workspace --locked -j 4` 2,041 passed / 0 failed / 45 ignored (3 new, 1 updated in `ow-combat`);
+`crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict: links 1, 3, 4, 5, 13 and 14 move from the override's
+NotYet to an error at `maya:8`, the unbound script native `AttributeDefinition.GetValue(object,object,object)`; rows 10
+to 12 stop at the unbound `AIComponent.ActivateEvent` (#429 is not on this stack); 0 ok / 5 NotYet / 9 errors. ctest
+and verify_packages not run (no C++ change). No host or real-game run; every rule stays `UNVERIFIED` in game. Decision
+2026-11-19-57; logs under ignored `local/p2/fix-class-starting-values/`.
 
 **FIX-PLAYER-CLASS-B (2026-11-19, desktop, on main df99b25):** AI-assisted (Claude Code, Claude Opus 5.5). The pawn
 archetype preload (a harness input) and the player controller's starting values NotYet in Off; review r1 of #426 folded
