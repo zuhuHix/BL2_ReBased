@@ -289,8 +289,9 @@ the auto-state implementer's PR, or to a follow-up after it.
 **The Off failure contract** (the review of #536; NATIVE_MAP_LOAD.md section 6.3):
 1. **A write-free preflight, before any write and before any script runs.** Refuse, as not-read refusals:
    - a `GetUniqueNetId` answer the port does not model, anything but the empty id;
-   - a remote role other than the single-player one. **Which role value that is** is #536's to name; until it does,
-     the value the lane accepts is a port answer, labelled UNVERIFIED in code and in the decision file;
+   - a remote role other than the single-player one. #536 takes `ROLE_SimulatedProxy`, the stock UE3 value; the
+     value the engine passes was not read, so the accepted value is a port answer, labelled UNVERIFIED in code and in
+     the decision file;
    - a missing game info.
 2. **Preflight refusals and failures after script are told apart.** A preflight refusal leaves the world unchanged and
    is never marked. A refusal raised inside `Login` or `PostLogin`, or after them, is marked "stopped after partial
