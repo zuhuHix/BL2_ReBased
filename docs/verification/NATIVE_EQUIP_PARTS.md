@@ -12,6 +12,12 @@ This note hands the rule to the implementer of `ParityMode::Off`. The analyst la
 run stops there with the VM's `UnboundNative` text (decision 2026-11-19-03). A fresh implementer should build the Off
 rule from this note alone (docs/LANE_BRIEF.md, "Clean room").
 
+**Implemented (2026-11-19, lane FIX-ALLPARTS, decision 2026-11-19-27),** by a fresh implementer from this note alone,
+in Off only (Reference stays unbound): `ow_inventory::equip::natives::all_parts`, one iterator for both declarations.
+The two cases section 2 leaves open (the out argument after a `break`, and a body that writes the definition data
+during the loop) cannot be guarded in the VM's iterator contract, which takes the whole list when the loop starts; they
+stay UNVERIFIED, as the decision says.
+
 ## 1. Where it sits
 
 `AllParts(DefinitionData, out Part, bIncludeNameParts)` is a script iterator: a `foreach` over it runs its body once

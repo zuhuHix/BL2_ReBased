@@ -135,9 +135,12 @@ impl World {
         // Definition data: the weapon's and the item's part fields.
         let mut wfields = vec![("WeaponTypeDefinition", obj.clone())];
         wfields.extend(WEAPON_PART_FIELDS.iter().map(|f| (*f, obj.clone())));
+        // The two name parts (lane FIX-ALLPARTS: the part iterator visits them with its flag).
+        wfields.extend(["PrefixPartDefinition", "TitlePartDefinition"].map(|f| (f, obj.clone())));
         let wdata = st(&mut space, "Test.WeaponDefinitionData", wfields);
         let mut ifields = vec![("ItemDefinition", obj.clone())];
         ifields.extend(ITEM_PART_FIELDS.iter().map(|f| (*f, obj.clone())));
+        ifields.extend(["PrefixItemNamePartDefinition", "TitleItemNamePartDefinition"].map(|f| (f, obj.clone())));
         let idata = st(&mut space, "Test.ItemDefinitionData", ifields);
         // Actors.
         let decls = vec![decl(&mut space, "Instigator", obj.clone(), 0)];

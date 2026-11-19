@@ -6,7 +6,7 @@ use ow_object::heap::Origin;
 use ow_object::ids::{ClassId, FuncId, ObjRef};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
-use ow_vm::api::FunctionDecl;
+use ow_vm::api::{Arg, FunctionDecl};
 
 use super::*;
 use crate::equip::tests::World;
@@ -257,4 +257,107 @@ fn the_slot_count_native_reads_the_definition() {
         w.set(def, "AttributeSlotMaxActivated", Value::Int(stored));
         assert_eq!(w.vm.call(f, Some(def), vec![]).unwrap().ret, Value::Int(answer), "{stored}");
     }
+}
+
+// ------------------------------------------------------------------------------------------ AllParts (FIX-ALLPARTS)
+
+/// `AllParts(DefinitionData, out Part, bIncludeNameParts)` declared on the weapon or item class, as the loader declares
+/// it, under the key `key`.
+fn all_parts_fn(w: &mut World, path: &str, key: &str, data_struct: &str) -> FuncId {
+    let object = w.class("Core.Object");
+    let owner = w.class("Engine.Actor");
+    let data = w.vm.space.classes.struct_by_path(data_struct).unwrap();
+    let params = vec![
+        param(w, "DefinitionData", PropKind::Struct(data), 0),
+        param(w, "Part", PropKind::Object { class: object }, PropertyDecl::OUT),
+        param(w, "bIncludeNameParts", PropKind::Bool, 0),
+    ];
+    native_fn(w, path, key, owner, params)
+}
+
+/// The parts the bound iterator of `f` yields for `data` and `flag`.
+fn iterate(w: &mut World, f: FuncId, data: Value, flag: Value) -> Result<Vec<Value>, VmError> {
+    let it = w.vm.iterator_for(f).expect("AllParts is bound");
+    let args = vec![Arg::new(data, false, true), Arg::new(Value::None, true, true), Arg::new(flag, false, true)];
+    let mut call = NativeCall::new(&mut w.vm, f, None, args);
+    let out = it(&mut call)?;
+    assert_eq!(out.out_param, 1, "the out argument is the part");
+    Ok(out.items)
+}
+
+const WEAPON_KEY: &str = "WillowWeapon.AllParts(weapondefinitiondata,object,bool)";
+const ITEM_KEY: &str = "WillowItem.AllParts(itemdefinitiondata,object,bool)";
+
+/// NATIVE_EQUIP_PARTS.md section 2: the set slots in declared order, None skipped, the two name parts only with the
+/// flag (the material slot either way), a part in two slots visited twice, nothing for an all-None definition.
+#[test]
+fn all_parts_visits_the_set_slots_in_order_and_the_name_parts_with_the_flag() {
+    let mut w = World::new();
+    let f = all_parts_fn(&mut w, ALL_PARTS_WEAPON, WEAPON_KEY, "Test.WeaponDefinitionData");
+    register(&mut w.vm).unwrap();
+    let [body, barrel, material, prefix, title] =
+        ["Body", "Barrel", "Material", "Prefix", "Title"].map(|n| w.obj("Test.Definition", &format!("Test.{n}")));
+    let o = |x: ObjRef| Value::Object(Some(x));
+    let data = w.st(
+        "Test.WeaponDefinitionData",
+        vec![
+            ("BodyPartDefinition", o(body)),
+            ("BarrelPartDefinition", o(barrel)),
+            // A part in two slots: visited for each.
+            ("Accessory2PartDefinition", o(barrel)),
+            ("MaterialPartDefinition", o(material)),
+            ("PrefixPartDefinition", o(prefix)),
+            ("TitlePartDefinition", o(title)),
+        ],
+    );
+    let without = iterate(&mut w, f, data.clone(), Value::Bool(false)).unwrap();
+    assert_eq!(without, vec![o(body), o(barrel), o(barrel), o(material)]);
+    let with = iterate(&mut w, f, data, Value::Bool(true)).unwrap();
+    assert_eq!(with, vec![o(body), o(barrel), o(barrel), o(material), o(prefix), o(title)]);
+    let empty = w.st("Test.WeaponDefinitionData", vec![]);
+    assert!(iterate(&mut w, f, empty, Value::Bool(true)).unwrap().is_empty());
+    // The first nine slots are the equip's WEAPON_PART_FIELDS (the note's check).
+    assert_eq!(WEAPON_ALL_PARTS[..9], crate::equip::WEAPON_PART_FIELDS);
+    assert_eq!(ITEM_ALL_PARTS[..9], crate::equip::ITEM_PART_FIELDS);
+}
+
+/// The item's declaration gets the same rule over `ItemDefinitionData`'s slots.
+#[test]
+fn all_parts_on_an_item_walks_the_item_slots() {
+    let mut w = World::new();
+    let f = all_parts_fn(&mut w, ALL_PARTS_ITEM, ITEM_KEY, "Test.ItemDefinitionData");
+    register(&mut w.vm).unwrap();
+    let [alpha, theta, title] = ["Alpha", "Theta", "Title"].map(|n| w.obj("Test.Definition", &format!("Test.{n}")));
+    let o = |x: ObjRef| Value::Object(Some(x));
+    let data = w.st(
+        "Test.ItemDefinitionData",
+        vec![
+            ("TitleItemNamePartDefinition", o(title)),
+            ("ThetaItemPartDefinition", o(theta)),
+            ("AlphaItemPartDefinition", o(alpha)),
+        ],
+    );
+    assert_eq!(iterate(&mut w, f, data.clone(), Value::Bool(false)).unwrap(), vec![o(alpha), o(theta)]);
+    assert_eq!(iterate(&mut w, f, data, Value::Bool(true)).unwrap(), vec![o(alpha), o(theta), o(title)]);
+}
+
+/// A slot holding something other than an object is a typed error, never a skipped slot.
+#[test]
+fn all_parts_refuses_a_slot_that_is_not_an_object() {
+    let mut w = World::new();
+    let f = all_parts_fn(&mut w, ALL_PARTS_WEAPON, WEAPON_KEY, "Test.WeaponDefinitionData");
+    register(&mut w.vm).unwrap();
+    let data = w.st("Test.WeaponDefinitionData", vec![("GripPartDefinition", Value::Int(3))]);
+    let e = iterate(&mut w, f, data, Value::Bool(false)).unwrap_err();
+    assert!(e.to_string().contains("GripPartDefinition"), "{e}");
+}
+
+/// Reference: the C++ VM binds no AllParts, so the iterator stays unbound there (R3).
+#[test]
+fn all_parts_is_bound_in_off_only() {
+    let mut w = World::new();
+    w.vm.parity = ParityMode::Reference;
+    let f = all_parts_fn(&mut w, ALL_PARTS_WEAPON, WEAPON_KEY, "Test.WeaponDefinitionData");
+    register(&mut w.vm).unwrap();
+    assert!(w.vm.iterator_for(f).is_none());
 }

@@ -29,9 +29,20 @@
 //! **Reference** (architecture rule R3): the C++ VM binds none of these, so [`register`] binds nothing there and the
 //! stub policy answers, as before.
 //!
-//! Not bound (a run stops at them): `WillowItem.AllParts` / `WillowWeapon.AllParts`, read by this lane as analyst
-//! (NATIVE_EQUIP_PARTS.md; a fresh implementer binds it); `ApplyInternalSlotEffectModifiers` and
-//! `InitializeAttributeSlots` (the spawn path, which stops earlier at `ComputeValueOfParts`).
+//! - **`WillowWeapon.AllParts(DefinitionData, out Part, bIncludeNameParts)` and `WillowItem.AllParts(...)`** (lane
+//!   FIX-ALLPARTS, decision 2026-11-19-27, coded from NATIVE_EQUIP_PARTS.md alone; the analyst was lane
+//!   FIX-EQUIP-NATIVES): one iterator over the definition data the script passes. It visits the struct's eleven part
+//!   slots by field name in their declared order ([`WEAPON_ALL_PARTS`], [`ITEM_ALL_PARTS`]), skips a slot that holds
+//!   None, and visits the last two (the name parts) only when the flag is set (any nonzero value). Parts are not
+//!   type-checked; a part in two slots is visited twice. A loop that runs to its end leaves the out argument None
+//!   (the VM's engine-iterator rule, which is the note's). Two cases the note leaves open cannot be guarded here,
+//!   because the VM's iterator hands over its whole list when the loop starts and is not called again: what the out
+//!   argument holds after a `break` in the body (the VM keeps the last part), and whether a body that writes the
+//!   definition data during the loop changes what is visited (here it does not: the list was taken first). No
+//!   installed caller does either (the note); both are UNVERIFIED.
+//!
+//! Not bound (a run stops at them): `ApplyInternalSlotEffectModifiers` and `InitializeAttributeSlots` (the spawn path,
+//! which stops earlier at `ComputeValueOfParts`).
 
 use std::rc::Rc;
 
@@ -54,6 +65,65 @@ pub const ADD_MODIFIER: &str = "AttributeDefinitionBase.AddAttributeModifier(obj
 pub const REMOVE_MODIFIER: &str = "AttributeDefinitionBase.RemoveAttributeModifier(object,object,bool)";
 pub const SLOT_MAX: &str = "WillowInventoryDefinition.GetAttributeSlotMaxActivated()";
 pub const EXTERNAL_SLOTS: &str = "WillowInventory.ApplyExternalSlotEffectModifiers(object,int,array,object)";
+
+/// The script functions of the part iterator (one native body for both, NATIVE_EQUIP_PARTS.md section 1).
+pub const ALL_PARTS_WEAPON: &str = "WillowGame.WillowWeapon.AllParts";
+pub const ALL_PARTS_ITEM: &str = "WillowGame.WillowItem.AllParts";
+
+/// `WeaponDefinitionData`'s eleven part slots in declared order, the two name parts last (NATIVE_EQUIP_PARTS.md
+/// section 2); the first nine are [`super::WEAPON_PART_FIELDS`].
+pub const WEAPON_ALL_PARTS: [&str; 11] = [
+    "BodyPartDefinition",
+    "GripPartDefinition",
+    "BarrelPartDefinition",
+    "SightPartDefinition",
+    "StockPartDefinition",
+    "ElementalPartDefinition",
+    "Accessory1PartDefinition",
+    "Accessory2PartDefinition",
+    "MaterialPartDefinition",
+    "PrefixPartDefinition",
+    "TitlePartDefinition",
+];
+
+/// `ItemDefinitionData`'s eleven part slots in declared order, the two name parts last; the first nine are
+/// [`super::ITEM_PART_FIELDS`].
+pub const ITEM_ALL_PARTS: [&str; 11] = [
+    "AlphaItemPartDefinition",
+    "BetaItemPartDefinition",
+    "GammaItemPartDefinition",
+    "DeltaItemPartDefinition",
+    "EpsilonItemPartDefinition",
+    "ZetaItemPartDefinition",
+    "EtaItemPartDefinition",
+    "ThetaItemPartDefinition",
+    "MaterialItemPartDefinition",
+    "PrefixItemNamePartDefinition",
+    "TitleItemNamePartDefinition",
+];
+
+/// The parts `AllParts` visits for definition data `data` with `slots` (module documentation): the set slots in order,
+/// the last two only with `names`. A slot the struct does not declare, or one holding a non-object, is a typed error.
+pub fn all_parts(vm: &Vm, data: &Value, slots: &[&str; 11], names: bool) -> Result<Vec<ObjRef>, VmError> {
+    let visited = if names { &slots[..] } else { &slots[..9] };
+    let mut out = Vec::new();
+    for f in visited {
+        if let Some(p) = object_of(&field(vm, data, f)?, f)? {
+            out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+/// The iterator body for `slots` (the out argument is parameter 1).
+fn all_parts_iterator(slots: &'static [&'static str; 11]) -> ow_vm::api::IteratorFn {
+    Rc::new(move |call: &mut NativeCall<'_>| {
+        let data = call.arg(0)?.clone();
+        let names = call.has(2) && call.arg(2)?.truth(&call.vm.space.names);
+        let parts = all_parts(call.vm, &data, slots, names)?;
+        Ok(ow_vm::api::IteratorResult::new(1, parts.into_iter().map(|p| Value::Object(Some(p))).collect()))
+    })
+}
 
 /// The most attribute slots an item considers, and the answer for a stored count outside 1 to this.
 pub const MAX_ATTRIBUTE_SLOTS: i32 = 19;
@@ -218,6 +288,15 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     ];
     for (key, f) in natives {
         vm.register_native(key, f)?;
+    }
+    // AllParts: an iterator, keyed by each declaration's own native key (a package without the function binds none).
+    for (path, slots) in [(ALL_PARTS_WEAPON, &WEAPON_ALL_PARTS), (ALL_PARTS_ITEM, &ITEM_ALL_PARTS)] {
+        let Ok(id) = vm.find_function(path) else {
+            continue;
+        };
+        if let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) {
+            vm.register_iterator(&key, all_parts_iterator(slots))?;
+        }
     }
     Ok(())
 }
