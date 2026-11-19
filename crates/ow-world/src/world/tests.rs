@@ -390,6 +390,12 @@ fn package() -> Vec<u8> {
     });
     // An invented actor whose PreBeginPlay turns on bCollideActors (lane IMPL-SPAWN-PLACEMENT): LetBool,
     // BoolVariable(instance bCollideActors), True.
+    // An invented native the tests bind to answer a NotYet, and an actor whose PreBeginPlay calls it (review r1 of #463).
+    let halt_fn = native(&mut t, actor, "Halt", &[], None, NATIVE);
+    let halter = t.class("Halter", actor);
+    void(&mut t, halter, "PreBeginPlay", &[], |_, a| {
+        a.stmt().final_function(halt_fn, |_| {});
+    });
     let collider = t.class("Collider", actor);
     void(&mut t, collider, "PreBeginPlay", &[], |_, a| {
         a.stmt().raw(&[0x14, 0x2D]).instance(collide_actors).raw(&[0x27]);
@@ -567,7 +573,7 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     )
     .unwrap();
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
-    for class in ["Probe", "Dud", "Collider", "Controller", "PlayerController", "WorldInfo"] {
+    for class in ["Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo"] {
         let cdo =
             w.vm.defs
                 .class_default(&mut w.vm.space, &format!("Engine.{class}"))
@@ -2286,15 +2292,81 @@ mod placement {
 
     #[test]
     fn reference_keeps_its_collision_refusals() {
+        // A service and a cylinder are installed (review r1 of #463, item 4): Reference still answers its legacy
+        // refusal, while Off reaches the trace filter.
         run(|| {
-            let mut x = fx_in(true, ParityMode::Reference);
+            for mode in [ParityMode::Reference, ParityMode::Off] {
+                let mut x = fx_in(true, mode);
+                let wi = x.wi;
+                script(&mut x, vec![], vec![], Test::Clear);
+                let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+                let before = count(&x);
+                let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
+                match mode {
+                    ParityMode::Reference => {
+                        assert!(matches!(missing, Missing::LayerAbsent(_)));
+                        assert_eq!(text, "the spawn placement spot search");
+                    }
+                    _ => assert_eq!((missing, text.as_str()), (Missing::NotRead, TRACE_FILTER)),
+                }
+                assert_eq!(count(&x), before);
+            }
+        });
+    }
+
+    #[test]
+    fn an_off_refusal_after_insertion_is_prefixed_and_the_actor_stays() {
+        // Review r1 of #463, item 1: PreBeginPlay answers a NotYet; the actor is already registered.
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            x.w.vm
+                .register_native(
+                    "Actor.Halt()",
+                    Rc::new(|_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+                        Err(ow_core::NotYet::not_read("an invented halt", "test").into())
+                    }),
+                )
+                .unwrap();
+            let before = count(&x);
+            let c = x.class("Halter");
+            let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(c))).unwrap_err());
+            assert_eq!(missing, Missing::NotRead);
+            assert_eq!(text, "stopped after partial writes: an invented halt");
+            assert_eq!(count(&x), before + 1, "the actor stays registered");
+        });
+    }
+
+    #[test]
+    fn the_placement_refusal_comes_before_the_base_precheck() {
+        // Review r1 of #463, item 2: a template after play began that needs both, with no service.
+        run(|| {
+            let mut x = fx();
             let wi = x.wi;
             let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+            let cdo = x.w.vm.defs.class_default(&mut x.w.vm.space, "Engine.Probe").unwrap();
+            set_field(&mut x.w.vm.space, cdo, "bShouldBaseAtStartup", Value::Bool(true)).unwrap();
             let before = count(&x);
             let (missing, text) = what(spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err());
-            assert!(matches!(missing, Missing::LayerAbsent(_)));
-            assert_eq!(text, "the spawn placement spot search");
+            assert!(matches!(missing, Missing::LayerAbsent(_)), "{missing:?}");
+            assert_eq!(text, SPOT_SEARCH);
             assert_eq!(count(&x), before);
+        });
+    }
+
+    #[test]
+    fn a_borrowed_collision_service_is_a_borrow_error_not_an_absent_service() {
+        // Review r1 of #463, item 3.
+        run(|| {
+            let mut x = fx();
+            let wi = x.wi;
+            script(&mut x, vec![], vec![], Test::Clear);
+            let probe = colliding_probe(&mut x, Some((10.0, 20.0)));
+            let service = x.w.vm.service::<crate::placement::CollisionService>().unwrap();
+            let held = service.borrow_mut();
+            let e = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(probe))).unwrap_err();
+            assert!(matches!(e, VmError::ServiceBorrowed(_)), "{e:?}");
+            drop(held);
         });
     }
 }
