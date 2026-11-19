@@ -1667,3 +1667,33 @@ fn the_route_natives_answer_what_the_note_settles() {
     // Reference binds neither (`hit::pools::register` returns before any Off rule); the fixture does not declare the
     // two natives, so the Off bodies are called directly here.
 }
+
+/// The spawn-move gate of `SetDefaultPhysics` (review r1 of #418): a pawn whose special move is a
+/// `WillowGame.SpecialMove_Spawned` keeps its physics (nothing changes); one in another move is past the gates
+/// (`NotYet`).
+#[test]
+fn a_pawn_in_its_spawn_move_keeps_its_physics() {
+    use crate::hit::pools::set_default_physics;
+    let (w, _dir) = world_with(ParityMode::Off, vec![("ToyRoute.upk", fixture::toy_route())]);
+    let mut run = Run::new(w).unwrap();
+    let vm = &mut run.world().vm;
+    assert!(vm.find_class("WillowGame.SpecialMove_Spawned").is_ok(), "the toy class is under WillowGame");
+    let with_move = |vm: &mut Vm, class: &str| {
+        let pawn = make(vm, "ToyRoute.ToyRoutePawn");
+        let component = make(vm, "ToyRoute.ToySMComponent");
+        set(vm, pawn, "SMComponent", Value::Object(Some(component))).unwrap();
+        let special = make(vm, class);
+        let mut data = crate::hit::access::get(vm, component, "CurrentSMData").unwrap().unwrap();
+        let ty = data.as_struct().unwrap().ty;
+        let id = vm.space.names.find("SMD").unwrap();
+        let at = vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0;
+        data.struct_mut().unwrap().fields[at as usize] = Value::Object(Some(special));
+        set(vm, component, "CurrentSMData", data).unwrap();
+        pawn
+    };
+    let spawning = with_move(vm, "WillowGame.SpecialMove_Spawned");
+    set_default_physics(vm, spawning).unwrap();
+    let other = with_move(vm, "ToyRoute.ToyOtherMove");
+    let refused = set_default_physics(vm, other).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+}
