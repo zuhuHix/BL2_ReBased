@@ -1,8 +1,8 @@
 //! Owner: lane IMPL-MISSION-NUMBERS (decision 2026-11-19-93). The two mission numbers of the online game settings
 //! refresh, and the mission screen's calls the accept reaches after it. AI-assisted (Claude Code).
 //!
-//! Coded from NATIVE_MISSION_NUMBERS.md alone (#473 at 0a32108b, its review r1; analyst lane ANALYST-MISSION-NUMBERS,
-//! decision 2026-11-19-86). No
+//! Coded from NATIVE_MISSION_NUMBERS.md alone (#473 at f586ab9c, its review r2, the final round; analyst lane
+//! ANALYST-MISSION-NUMBERS, decision 2026-11-19-86). No
 //! native code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: the caller
 //! (`datastore::register`) binds nothing here under `ParityMode::Reference`, so the VM's stub policy answers there.
 //!
@@ -31,10 +31,10 @@
 //!    steps 2 and 3 answer -1.
 //!
 //! **`WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`** (section 2):
-//! 1. A negative or omitted index needs the controller's current-playthrough virtual, which the note reads as
-//!    `GetCurrentPlaythrough` without resolving it (open question 2): [`PLAYTHROUGH_QUERY`], `NotYet { NotRead }`.
-//!    Taken as read, it is the controller's `GetCurrentPlaythrough()` through the VM, and a class without it answers
-//!    the same `NotYet`.
+//! 1. A negative or omitted index needs the controller's current-playthrough virtual, which was not read and whose
+//!    identity is not guessed (open question 2): [`PLAYTHROUGH_QUERY`], `NotYet { NotRead }`. An explicit index of 0
+//!    or more does not ask it. (Only the tests take it as read, as `GetCurrentPlaythrough()` through the VM, to run
+//!    the rest of the rule.)
 //! 2. Out of range (negative, or not below the length of `MissionPlaythroughs`): 0.
 //! 3. That playthrough's `MissionList`, in order. A record with a `MissionDef` that has `bPlotCritical` and no
 //!    `DlcExpansion` is graded by its own `Status` field. In progress answers its `MissionNumber` at once, Complete
@@ -50,14 +50,14 @@
 //! **The mission screen** (section 3). The slice's accept reaches it through the controller's
 //! `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`, after the accept's own
 //! writes. The port's screen is a stand-in made from class defaults, so its script runs only on that path.
-//! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`:** [`TEXT_LIST`], `NotYet { LayerAbsent }`, whether or not
-//!   `MissionTextList` is set. The note's "nothing" for a missing list rests on a read-back check that is under review,
-//!   so it is not taken. It is marked "stopped after partial writes" ([`super::datastore::PARTIAL_WRITES`]), kind and
-//!   record kept, nothing rolled back.
-//! - **The focus pair that `SetFocus` calls next,** `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`:
-//!   [`FOCUS`], `NotYet { LayerAbsent }`, never the note's None and nothing. On the mission screen (a
-//!   `QuestAcceptGFxMovie`) it is marked in the same way. On any other movie nothing is known about the writes before
-//!   the call, so it is not marked.
+//! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`:** [`TEXT_LIST`], `NotYet { LayerAbsent }` (record
+//!   [`RECORD_GFX`]), whether or not `MissionTextList` is set: the note's read-back check does not cover the 10
+//!   undecoded script functions or native readers, so no call here is answered "nothing". It is marked "stopped after
+//!   partial writes" ([`super::datastore::PARTIAL_WRITES`]), kind and record kept, nothing rolled back.
+//! - **The calls `SetFocus` makes next** are not reached while the text list refuses. If they are: `GetVariableObject`
+//!   is [`MOVIE_QUERY`] and `WillowGFxMovie3D.FocusOn` is [`FOCUS`], each `NotYet { LayerAbsent }`, never None or
+//!   nothing. On the mission screen (a `QuestAcceptGFxMovie`) they are marked in the same way; on any other movie
+//!   nothing is known about the writes before the call, so they are not marked.
 //! - **What the accept checks after the screen returns** (the note's section 3, step 5) is not read. Nothing here
 //!   answers for it.
 
@@ -90,11 +90,15 @@ pub const ENGINE_GATE: &str = "the engine-wide condition of GetActiveMissionNumb
 /// The `NotYet` of a `None` entry in the tracker's mission list (section 1, Off step 5).
 pub const NONE_ENTRY: &str = "a None entry in the tracker's mission list";
 /// The `NotYet` of the controller's unresolved current-playthrough virtual (section 2, open question 2).
-pub const PLAYTHROUGH_QUERY: &str = "the controller's current playthrough query";
-/// The `NotYet` of the mission screen's text list update (section 3).
+pub const PLAYTHROUGH_QUERY: &str = "the controller's current-playthrough virtual";
+/// The record of the screen's calls (the note's section 3 names it for the text list).
+pub const RECORD_GFX: &str = "docs/verification/NATIVE_GFX_BRIDGE.md";
+/// The `NotYet` of the mission screen's text list update (section 3, step 1).
 pub const TEXT_LIST: &str = "the mission screen's Flash text list (not hosted)";
-/// The `NotYet` of the screen's focus pair (section 3, step 4).
-pub const FOCUS: &str = "the mission screen's Flash focus (GetVariableObject, FocusOn; not hosted)";
+/// The `NotYet` of `GetVariableObject` (section 3, step 2).
+pub const MOVIE_QUERY: &str = "a Flash movie query (not hosted)";
+/// The `NotYet` of `FocusOn` (section 3, step 2: its state is not answered "nothing").
+pub const FOCUS: &str = "the 3D movie's Flash focus (not hosted)";
 /// The layer the port lacks for [`TEXT_LIST`] and [`FOCUS`].
 pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
 
@@ -344,11 +348,15 @@ fn screen_not_yet(vm: &Vm, this: Option<ObjRef>, what: &str) -> Result<Value, Vm
         _ => false,
     };
     let what = if on_screen { format!("{}: {what}", super::datastore::PARTIAL_WRITES) } else { what.to_string() };
-    Err(NotYet::layer_absent(what, TEXT_LIST_LAYER, RECORD).into())
+    Err(NotYet::layer_absent(what, TEXT_LIST_LAYER, RECORD_GFX).into())
 }
 
 pub(crate) fn n_update_mission_text_list(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     screen_not_yet(c.vm, c.this, TEXT_LIST)
+}
+
+pub(crate) fn n_movie_query(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    screen_not_yet(c.vm, c.this, MOVIE_QUERY)
 }
 
 pub(crate) fn n_focus(c: &mut NativeCall<'_>) -> Result<Value, VmError> {

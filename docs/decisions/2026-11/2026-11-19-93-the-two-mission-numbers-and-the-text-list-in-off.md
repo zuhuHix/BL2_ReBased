@@ -2,7 +2,7 @@
 
 AI-assisted (Claude Code, Opus 5.5). Lane IMPL-MISSION-NUMBERS, implementer.
 
-- **Sources:** `docs/verification/NATIVE_MISSION_NUMBERS.md` (#473 at 0a32108b, its review r1; analyst lane
+- **Sources:** `docs/verification/NATIVE_MISSION_NUMBERS.md` (#473 at f586ab9c, its review r2 and final round; analyst lane
   ANALYST-MISSION-NUMBERS, decision 2026-11-19-86, not this thread). No native code or analysis
   output was opened.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
@@ -31,25 +31,26 @@ rules with the two unresolved reads taken as read; the natives pass it as nothin
   - An explicit, non-negative index is answered: out of range is 0; otherwise that playthrough's `MissionList` is
     scanned the same way, graded by each record's own `Status`.
   - A negative or omitted index needs the controller's current-playthrough virtual, which the note does not resolve:
-    `NotYet { NotRead }`, "the controller's current playthrough query" (open question 2). Behind the switch, it is
+    `NotYet { NotRead }`, "the controller's current-playthrough virtual" (open question 2). Behind the switch, it is
     `GetCurrentPlaythrough()` through the VM.
 - **Both:** they write nothing, so nothing is preflighted or rolled back. A tracker or controller function's own
   answer, an unbound native's `UnboundNative` included, propagates unchanged. Inside the settings refresh, its write
   mark (decision 2026-11-19-80) makes these `NotYet`s terminal, prefixed, with kind and record kept. Missing or
   mistyped fields are a `VmError::Script` naming the field.
 - **The mission screen** (section 3), whose stand-in is reached in the port only after the accept's writes. The note's
-  r1 labels its "nothing" and None answers as port Off answers, with a wider read-back check. Under the hub's heads-up
-  they stay named `NotYet`s until its last review round settles them:
+  read-back check does not cover the 10 undecoded script functions or native readers, so no call is answered
+  "nothing":
   - `QuestAcceptGFxMovie.UpdateMissionTextList`: `NotYet { LayerAbsent }`, "the mission screen's Flash text list
-    (not hosted)", with the list None or set. The note's "nothing" with no list rests on a read-back check that is
-    under review, so it is not taken. It is marked "stopped after partial writes", kind and record kept.
-  - The focus pair `SetFocus` calls next, `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`: the same
-    `LayerAbsent`, "the mission screen's Flash focus", never the note's None and nothing. On the mission screen it is
-    marked. On another movie nothing is known about earlier writes, so it is not marked.
-  - What the accept checks after the screen returns is not read, and nothing here answers for it.
+    (not hosted)", record NATIVE_GFX_BRIDGE.md, with the list None or set. It is marked "stopped after partial
+    writes", kind and record kept.
+  - Not reached while it refuses: `GetVariableObject`, "a Flash movie query (not hosted)", and `FocusOn`, "the 3D
+    movie's Flash focus (not hosted)", each `NotYet { LayerAbsent }`. On the mission screen they are marked; on
+    another movie nothing is known about earlier writes, so they are not marked.
+  - What the accept checks after the screen returns is the bridge's own code (the note's section 3, step 3); nothing
+    here answers for it.
 - **`datastore::UNREAD`** keeps only the DLC manager's two queries. Two refresh-mark tests of #464 used
-  `GetActiveMissionNumber` as their unread native; they now expect its engine-wide `NotYet`, marked or unmarked as
-  before.
+  `GetActiveMissionNumber` as their unread native; they now expect its unread playthrough virtual (the toy has no
+  level, so the fallback answers), marked or unmarked as before.
 - **`ow-cli`'s `REFERENCE_STUBS`:** the three screen entries say Off answers a named `NotYet`.
 
 **Installed Off `--slice-gate`:** links 10 to 12 get past the two numbers' entry and stop in `accept` at "stopped after
@@ -63,3 +64,10 @@ reached yet.
 - a tracker `NotYet` passed through, and bad data;
 - the two branches agreeing, differing and failing, the natives' unread playthrough virtual, and the screen's marked
   and unmarked `LayerAbsent`s.
+
+**Rebase and the note's final round.** Rebased onto #464's accepted head (8ea5f6d5) with
+`git rebase --onto origin/fix/rust-settings-fill e9bfd1d5`; GATES.md kept both entries. The final note (f586ab9c)
+answers no screen call "nothing": `UpdateMissionTextList` is the named `LayerAbsent` with record NATIVE_GFX_BRIDGE.md,
+`GetVariableObject` "a Flash movie query (not hosted)" and `FocusOn` "the 3D movie's Flash focus (not hosted)", each
+marked on the mission screen. The playthrough `NotYet` is named "the controller's current-playthrough virtual". The
+engine-wide condition keeps the both-branches rule, and the `None` entry its `NotRead`, as the note states.

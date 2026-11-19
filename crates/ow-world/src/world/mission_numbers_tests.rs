@@ -436,6 +436,10 @@ fn bad_data_is_a_script_error() {
 }
 
 fn not_yet(r: Result<Value, VmError>, layer: bool, what: &str) {
+    not_yet_in(r, layer, what, RECORD);
+}
+
+fn not_yet_in(r: Result<Value, VmError>, layer: bool, what: &str, record: &str) {
     match r {
         Err(VmError::NotYet(n)) => {
             if layer {
@@ -444,7 +448,7 @@ fn not_yet(r: Result<Value, VmError>, layer: bool, what: &str) {
                 assert_eq!(n.missing, Missing::NotRead, "{n}");
             }
             assert_eq!(n.what, what);
-            assert_eq!(n.record, RECORD);
+            assert_eq!(n.record, record);
         }
         other => panic!("expected the NotYet {what:?}, got {other:?}"),
     }
@@ -508,15 +512,15 @@ fn the_screen_calls_are_layer_absent_and_marked_on_the_mission_screen() {
     let marked = |what: &str| format!("{}: {what}", crate::world::datastore::PARTIAL_WRITES);
     let movie = t.vm.find_class("WillowGame.QuestAcceptGFxMovie").unwrap();
     let movie = t.vm.space.alloc(movie, "ToyQuestAccept", None, Origin::Runtime).unwrap();
-    not_yet(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST));
+    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST), RECORD_GFX);
     let wi = t.world_info;
     set(&mut t.vm, movie, "MissionTextList", Value::Object(Some(wi)));
-    not_yet(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST));
+    not_yet_in(t.call(UPDATE_MISSION_TEXT_LIST, movie, vec![]), true, &marked(TEXT_LIST), RECORD_GFX);
     let focus = "WillowGame.WillowGFxMovie3D.FocusOn";
-    not_yet(t.call(focus, movie, vec![Value::Object(None)]), true, &marked(FOCUS));
+    not_yet_in(t.call(focus, movie, vec![Value::Object(None)]), true, &marked(FOCUS), RECORD_GFX);
     let other = t.vm.find_class("WillowGame.ToyOtherMovie").unwrap();
     let other = t.vm.space.alloc(other, "ToyOther", None, Origin::Runtime).unwrap();
-    not_yet(t.call(focus, other, vec![Value::Object(None)]), true, FOCUS);
+    not_yet_in(t.call(focus, other, vec![Value::Object(None)]), true, FOCUS, RECORD_GFX);
     let class = t.vm.space.heap.get(movie).unwrap().class;
     let p = t.vm.space.prop(class, "MissionTextList").unwrap();
     assert_eq!(t.vm.space.read(movie, PropAddr::scalar(p)).unwrap(), &Value::Object(Some(wi)), "nothing changed");
