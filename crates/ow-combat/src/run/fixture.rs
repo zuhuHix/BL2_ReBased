@@ -1653,7 +1653,8 @@ pub fn toy_injured() -> Vec<u8> {
 
 /// `ToyStarting` (decision 2026-11-19-26), an extra package the starting-values tests add: a toy character class with
 /// the three fields `Controller.ApplyCharacterClassStartingValues` reads, and two of it: `Class_Two` lists `ToyPawns`'
-/// `Pool_Health` then `Pool_Ammo`, and `Class_Twice` lists `Pool_Health` and `Pool_Health_Copy` (one resource twice).
+/// `Pool_Health` then `Pool_Ammo`, `Class_Twice` lists `Pool_Health` and `Pool_Health_Copy` (one resource twice), and
+/// `Class_Accuracy` lists `Pool_Health` with `Pool_Health_Copy` as its accuracy pool (review r1 of #412).
 pub fn toy_starting() -> Vec<u8> {
     let mut w = Toy::new(&["Object", "Array"]);
     w.import_root();
@@ -1675,6 +1676,10 @@ pub fn toy_starting() -> Vec<u8> {
         let payload = object_payload(p, vec![tag]);
         p.add_export(class, name, payload);
     }
+    // Class_Accuracy lists Pool_Health and names Pool_Health_Copy (the same resource) as its accuracy pool.
+    let tags = vec![p.array_tag("ResourcePools", 1, &health.to_le_bytes()), p.object_tag("AccuracyPoolDefinition", copy)];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_Accuracy", payload);
     w.build()
 }
 

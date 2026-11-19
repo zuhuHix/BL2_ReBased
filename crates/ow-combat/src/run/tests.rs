@@ -1622,6 +1622,16 @@ fn the_class_starting_values_delete_then_create_in_class_order() {
     let refused = apply_class_starting_values(vm, enemy.mind, Some(twice)).unwrap_err();
     assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
     assert_eq!(pool_definitions(vm, enemy.mind).len(), 2, "nothing changed");
+    // An accuracy pool of a resource the class already lists (review r1 of #412): refused before the delete.
+    let accuracy = crate::hit::stock_object(vm, "ToyStarting.Class_Accuracy").unwrap();
+    let refused = apply_class_starting_values(vm, enemy.mind, Some(accuracy)).unwrap_err();
+    assert!(matches!(&refused, VmError::NotYet(n) if n.missing == ow_core::Missing::NotRead), "{refused}");
+    assert_eq!(pool_definitions(vm, enemy.mind).len(), 2, "nothing changed");
+    // A class argument that is not an object reference is an error, never "no class" (which deletes every pool).
+    let f = vm.find_function("Engine.Controller.ApplyCharacterClassStartingValues").unwrap();
+    let wrong = vm.call(f, Some(enemy.mind), vec![Value::Int(3)]);
+    assert!(format!("{wrong:?}").contains("not an object reference"), "{wrong:?}");
+    assert_eq!(pool_definitions(vm, enemy.mind).len(), 2, "nothing deleted");
     apply_class_starting_values(vm, enemy.mind, None).unwrap();
     assert!(pool_definitions(vm, enemy.mind).is_empty(), "no class: only the delete");
     let player = make(vm, "WillowGame.WillowPlayerController");
