@@ -790,6 +790,22 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     for name in ["CreationTime", "WorldInfo", "Location", "Rotation", "Instigator", "Owner"] {
         prop_of(&vm.space, source, name)?;
     }
+    // The world list the actor will join, checked before anything is made (review r1 of #481, item 4): its link field
+    // declared and the list walkable. A world that does not hold the list keeps none (no refusal at spawn).
+    let joins = match (vm.parity, WorldList::of(&vm.space, source)?) {
+        (ParityMode::Off, Some(list)) => {
+            let holder = list_holder(&vm.space, &*actors.try_borrow().map_err(borrow_err)?, list)?;
+            if let Some(holder) = holder {
+                prop_of(&vm.space, source, list.next())?;
+                list_members(&vm.space, holder, list)?;
+                if list == WorldList::Controllers {
+                    prop_of(&vm.space, source, "bPendingDelete")?;
+                }
+            }
+            holder.map(|h| (list, h))
+        }
+        _ => None,
+    };
     // The level list is borrowed for the registration before anything is made (review r3 of #435, item 2): a list
     // another caller holds is refused here, with nothing allocated; the borrow ends right after the insertion, before
     // any event runs.
@@ -816,7 +832,7 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
     // The actor is registered: in Off, every error from here on goes through the partial-write rule (review r1 of
     // #463, item 1): a `NotYet` is terminal and prefixed, its kind kept; any other error propagates unchanged; the actor
     // stays (no rollback). Reference keeps its errors as they were.
-    let rest = after_insertion(vm, actor, begun, off, req, time, world_info, location, rotation, instigator);
+    let rest = after_insertion(vm, actor, begun, off, req, time, world_info, location, rotation, instigator, joins);
     if off {
         rest.map_err(crate::pools::after_partial_writes)
     } else {
@@ -837,6 +853,7 @@ fn after_insertion(
     location: Value,
     rotation: Value,
     instigator: Option<ObjRef>,
+    joins: Option<(WorldList, ObjRef)>,
 ) -> Result<Option<ObjRef>, VmError> {
     set_field(&mut vm.space, actor, "CreationTime", Value::Float(time))?;
     set_field(
@@ -864,19 +881,6 @@ fn after_insertion(
     if is_destroyed(&vm.space, actor)? {
         return Ok(None);
     }
-    // The world's lists (decision 2026-11-19-92; NATIVE_ACTOR_DESTROY_CONTROLLER.md section 4): a native begin-play
-    // step adds a controller (unless it is being deleted) or a pawn at the head. Which step, and so where among the
-    // begin-play events, was not identified: here, after PreBeginPlay (UNVERIFIED). Off only; a world whose WorldInfo
-    // does not declare the list keeps none.
-    if vm.parity == ParityMode::Off
-        && let Some(list) = WorldList::of(&vm.space, actor)?
-        && !(list == WorldList::Controllers && flag(&vm.space, actor, "bPendingDelete")?)
-    {
-        let holder = list_holder(&vm.space, &*actors.try_borrow().map_err(borrow_err)?, list)?;
-        if let Some(holder) = holder {
-            link_head(&mut vm.space, holder, list, actor)?;
-        }
-    }
     if flag(&vm.space, actor, "bCollideActors")? {
         if off {
             // On the live actor, after the destroyed check: terminal and prefixed (crate::placement).
@@ -885,6 +889,16 @@ fn after_insertion(
         return Err(collision(
             "the post-spawn encroachment check of an actor that PreBeginPlay made collide with actors",
         ));
+    }
+    // The world's lists (decision 2026-11-19-92; NATIVE_ACTOR_DESTROY_CONTROLLER.md section 4): a native begin-play
+    // step adds a controller (unless it is being deleted) or a pawn at the head. Which step, and so where among the
+    // begin-play events, was not identified: here, after PreBeginPlay and the encroachment check (review r1 of #481,
+    // item 4), so a refused actor is not reachable through a list (UNVERIFIED). Off only; checked before the actor
+    // was made.
+    if let Some((list, holder)) = joins
+        && !(list == WorldList::Controllers && flag(&vm.space, actor, "bPendingDelete")?)
+    {
+        link_head(&mut vm.space, holder, list, actor)?;
     }
     send_event(vm, actor, "PostBeginPlay", Vec::new())?;
     if is_destroyed(&vm.space, actor)? {
@@ -919,11 +933,14 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
     if vm.space.heap.get(t)?.destroyed {
         return Err(NotYet::not_read("Spawn with a destroyed actor as its ActorTemplate", RECORD).into());
     }
-    if vm.defs.is_unloaded(&vm.space, t) {
+    // A lazy load is a committed write (review r1 of #481, item 4): a refusal after it is marked.
+    let lazily_loaded = vm.defs.is_unloaded(&vm.space, t);
+    if lazily_loaded {
         let loaded = vm.defs.ensure_loaded(&mut vm.space, t);
         vm.log.extend(vm.defs.take_log());
         loaded?;
     }
+    let checked = (|| -> Result<(), VmError> {
     let want = vm
         .space
         .classes
@@ -948,6 +965,12 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
             RECORD,
         )
         .into());
+    }
+        Ok(())
+    })();
+    match checked {
+        Err(e) if lazily_loaded => return Err(after_writes(e)),
+        other => other?,
     }
     Ok(t)
 }
@@ -989,99 +1012,17 @@ pub(crate) fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, 
 ///   actor leaves the level list, `bDeleteMe` is set, the heap marks it destroyed and its timer entries are dropped.
 ///   It is not freed here.
 pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
-    let space = &vm.space;
-    if is_destroyed(space, actor)? {
-        return Ok(true);
-    }
-    if flag(space, actor, "bStatic")? || flag(space, actor, "bNoDelete")? {
-        return Ok(false);
-    }
-    if byte(space, actor, "Role")? < ROLE_AUTHORITY && !flag(space, actor, "bNetTemporary")? {
-        return Ok(false);
-    }
     let actors = actors_of(vm)?;
-    if actors
-        .try_borrow()
-        .map_err(borrow_err)?
-        .destroying
-        .contains(&actor)
-    {
-        return Err(NotYet::not_read(
-            "Destroy of an actor whose destroy routine is running",
-            RECORD,
-        )
-        .into());
-    }
-    let x = space.heap.get(actor)?;
     let off = vm.parity == ParityMode::Off;
-    if class_named_in_chain(space, x.class, "Controller") {
-        if !off {
+    let drop = match destroy_preflight(vm, &actors, actor)? {
+        Preflight::Answer(b) => return Ok(b),
+        Preflight::ReferenceStandIn => {
             // The C++ stand-in (module documentation): marked, nothing else.
             set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
             return Ok(true);
         }
-        // The controller and player case (NATIVE_ACTOR_DESTROY.md section 3), before anything changes.
-        if class_named_in_chain(space, x.class, "PlayerController")
-            && let Some(player) = object(space, actor, "Player")?
-        {
-            if class_named_in_chain(space, space.heap.get(player)?.class, "LocalPlayer") {
-                // A local player's controller is not destroyed; the viewport removal is the host's.
-                set_field(&mut vm.space, actor, "bPendingDestroy", Value::Bool(true))?;
-                return Ok(false);
-            }
-            return Err(NotYet::not_ported(
-                "the destroy of a network player's controller (its child connections)",
-                RECORD_CONTROLLER,
-            )
-            .into());
-        }
-    }
-    let x = vm.space.heap.get(actor)?;
-    let space = &vm.space;
-    if x.state.is_some() {
-        return Err(NotYet::layer_absent(
-            "EndState when an actor in a state is destroyed",
-            "ow-vm states (lane W5-STATES)",
-            RECORD,
-        )
-        .into());
-    }
-    if objects(space, actor, "GeneratedEvents")?
-        .iter()
-        .any(Option::is_some)
-    {
-        return Err(NotYet::layer_absent(
-            "the Kismet destroyed events of a destroyed actor (event class not confirmed)",
-            "ow-mission kismet (lane W5-KISMET)",
-            RECORD,
-        )
-        .into());
-    }
-    if object(space, actor, "Base")?.is_some() {
-        return Err(NotYet::not_read("unbasing a destroyed actor (SetBase)", RECORD).into());
-    }
-    for a in objects(space, actor, "Attached")?.into_iter().flatten() {
-        if !is_destroyed(space, a)? && object(space, a, "Base")? == Some(actor) {
-            return Err(NotYet::not_read(
-                "unbasing the actors attached to a destroyed actor",
-                RECORD,
-            )
-            .into());
-        }
-    }
-    for t in objects(space, actor, "Touching")?.into_iter().flatten() {
-        if !is_destroyed(space, t)? {
-            return Err(NotYet::not_read(
-                "the untouch routine for a destroyed actor's neighbours",
-                RECORD,
-            )
-            .into());
-        }
-    }
-
-    // The class's world-drop step, preflighted (Off; decision 2026-11-19-92).
-    let drop = if off { Some(plan_world_drop(vm, &actors, actor)?) } else { None };
-
+        Preflight::Run(drop) => drop,
+    };
     set_field(&mut vm.space, actor, "bPendingDelete", Value::Bool(true))?;
     actors
         .try_borrow_mut()
@@ -1119,15 +1060,125 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
     Ok(true)
 }
 
-/// A failure after the destroy's first write (the hub's ruling): a `NotYet` gets [`PARTIAL_WRITES`] with its kind and
-/// record kept; any other error is returned as it is.
-fn after_writes(e: VmError) -> VmError {
+/// A failure after a first write (the hub's ruling): a `NotYet` gets the partial-writes mark once (`ow_core::notyet`),
+/// its kind and record kept; any other error is returned as it is.
+pub fn after_writes(e: VmError) -> VmError {
     match e {
-        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
-            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-        }
+        VmError::NotYet(n) => n.after_partial_writes().into(),
         other => other,
     }
+}
+
+/// What a destroy will do, decided before its first write ([`destroy_preflight`]).
+#[derive(Debug)]
+pub(crate) enum Preflight {
+    /// The routine answers at once, writing nothing.
+    Answer(bool),
+    /// `ParityMode::Reference`'s C++ stand-in for a controller (it marks `bDeleteMe`).
+    ReferenceStandIn,
+    /// The generic routine runs; in Off with the class's world-drop step.
+    Run(Option<WorldDrop>),
+}
+
+/// The destroy's checks, **read only** (review r1 of #481, item 1): every early answer and every refusal the routine
+/// makes before its first write, in order. [`destroy`] runs it, and so does the kill's earliest certain point (the
+/// `Dying.BeginState` wrapper, [`register`]).
+pub(crate) fn destroy_preflight(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Result<Preflight, VmError> {
+    let space = &vm.space;
+    if is_destroyed(space, actor)? {
+        return Ok(Preflight::Answer(true));
+    }
+    if flag(space, actor, "bStatic")? || flag(space, actor, "bNoDelete")? {
+        return Ok(Preflight::Answer(false));
+    }
+    if byte(space, actor, "Role")? < ROLE_AUTHORITY && !flag(space, actor, "bNetTemporary")? {
+        return Ok(Preflight::Answer(false));
+    }
+    let a = actors.try_borrow().map_err(borrow_err)?;
+    if a.destroying.contains(&actor) {
+        return Err(NotYet::not_read("Destroy of an actor whose destroy routine is running", RECORD).into());
+    }
+    let x = space.heap.get(actor)?;
+    let off = vm.parity == ParityMode::Off;
+    if class_named_in_chain(space, x.class, "Controller") {
+        if !off {
+            return Ok(Preflight::ReferenceStandIn);
+        }
+        // The controller and player case (NATIVE_ACTOR_DESTROY.md section 3; review r1 of #481, item 3). The world's
+        // own local-player identity decides: a local player's controller is not destroyed, and the engine is asked to
+        // drop the player (the host's viewport). The port has no host effect for it and no read-back check, so it is
+        // refused before any write.
+        if a.local_players.contains(&actor) {
+            return Err(NotYet::layer_absent(
+                "the destroy of a local player's controller (the engine drops the player from the viewport)",
+                "the host's viewport (ow-host)",
+                RECORD_CONTROLLER,
+            )
+            .into());
+        }
+        if class_named_in_chain(space, x.class, "PlayerController") && object(space, actor, "Player")?.is_some() {
+            return Err(NotYet::not_ported(
+                "the destroy of a network player's controller (its child connections)",
+                RECORD_CONTROLLER,
+            )
+            .into());
+        }
+    }
+    drop(a);
+    if x.state.is_some() {
+        return Err(NotYet::layer_absent(
+            "EndState when an actor in a state is destroyed",
+            "ow-vm states (lane W5-STATES)",
+            RECORD,
+        )
+        .into());
+    }
+    if objects(space, actor, "GeneratedEvents")?.iter().any(Option::is_some) {
+        return Err(NotYet::layer_absent(
+            "the Kismet destroyed events of a destroyed actor (event class not confirmed)",
+            "ow-mission kismet (lane W5-KISMET)",
+            RECORD,
+        )
+        .into());
+    }
+    if object(space, actor, "Base")?.is_some() {
+        return Err(NotYet::not_read("unbasing a destroyed actor (SetBase)", RECORD).into());
+    }
+    for b in objects(space, actor, "Attached")?.into_iter().flatten() {
+        if !is_destroyed(space, b)? && object(space, b, "Base")? == Some(actor) {
+            return Err(NotYet::not_read("unbasing the actors attached to a destroyed actor", RECORD).into());
+        }
+    }
+    for t in objects(space, actor, "Touching")?.into_iter().flatten() {
+        if !is_destroyed(space, t)? {
+            return Err(NotYet::not_read("the untouch routine for a destroyed actor's neighbours", RECORD).into());
+        }
+    }
+    // The class's world-drop step, preflighted (Off; decision 2026-11-19-92).
+    Ok(Preflight::Run(if off { Some(plan_world_drop(vm, actors, actor)?) } else { None }))
+}
+
+/// The scripts the kill's earliest certain point wraps (NATIVE_ACTOR_DESTROY_CONTROLLER.md section 5.1): the pawn's
+/// `Dying.BeginState`, `Pawn`'s and `WillowPawn`'s (which replaces it and does not call it).
+pub const DYING_BEGIN_STATE: [&str; 2] = ["Engine.Pawn.Dying.BeginState", "WillowGame.WillowPawn.Dying.BeginState"];
+
+/// The wrapper of [`DYING_BEGIN_STATE`] (Off; review r1 of #481, item 1). At the entry of the pawn's `Dying.BeginState`,
+/// before its first write: when the pawn has a `Controller` whose `Pawn` is this pawn and which is not a player
+/// (`bIsPlayer` false), `Controller.PawnDied` will reach `Destroy()` on that controller. So that destroy's read-only
+/// checks ([`destroy_preflight`]) run here, and a refusal stops the kill before the body runs, the pawn's dying writes
+/// and both possession links untouched. It comes after `Pawn.Died`'s and `PlayDying`'s writes, so a `NotYet` is marked
+/// (kind and record kept). Otherwise the body runs as script.
+fn dying_begin_state(vm: &mut Vm, this: Option<ObjRef>, body: &mut ow_vm::api::ScriptBody<'_>) -> Result<CallResult, VmError> {
+    if vm.parity == ParityMode::Off
+        && let Some(pawn) = this
+        && let Some(c) = object(&vm.space, pawn, "Controller")?
+        && object(&vm.space, c, "Pawn")? == Some(pawn)
+        && !flag(&vm.space, c, "bIsPlayer")?
+    {
+        let actors = actors_of(vm)?;
+        destroy_preflight(vm, &actors, c).map_err(after_writes)?;
+    }
+    body(vm)
 }
 
 /// The world-drop step of one destroy, checked before the destroy's first write.
@@ -1329,5 +1380,12 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
             Ok(Value::Bool(destroy(c.vm, actor)?))
         }),
     )?;
+    // The kill's earliest certain point (review r1 of #481, item 1); a package set without the script binds nothing.
+    for path in DYING_BEGIN_STATE {
+        let script = vm.find_function(path).ok().and_then(|f| vm.function(f)).is_some_and(|d| !d.is_native());
+        if script {
+            vm.wrap_script(path, Rc::new(dying_begin_state))?;
+        }
+    }
     Ok(())
 }

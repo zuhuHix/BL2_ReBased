@@ -97,6 +97,31 @@ fn set_timer(a: &mut Asm, ids: &Ids, rate: f32, name: &[u8; 8]) {
     });
 }
 
+/// A state `name` of class `owner` with empty state code: its functions are declared with it as their owner.
+fn toy_state(t: &mut ScriptToy, owner: i32, name: &str) -> i32 {
+    let mut a = Asm::new();
+    a.stmt().raw(&[0x0C]);
+    let none = t.none;
+    a.raw(&none).i32(0);
+    a.end();
+    let label = u16::try_from(a.bytes.len()).unwrap_or(0);
+    let mut payload = ow_package::testkit::ints(&[0]);
+    payload.extend_from_slice(&none);
+    payload.extend_from_slice(&ow_package::testkit::ints(&[0, 0, 0, 0, 0, 0, 0]));
+    payload.extend_from_slice(&ow_package::testkit::ints(&[
+        i32::try_from(a.memory_size()).unwrap(),
+        i32::try_from(a.bytes.len()).unwrap(),
+    ]));
+    payload.extend_from_slice(&a.bytes);
+    payload.extend_from_slice(&0u32.to_le_bytes());
+    payload.extend_from_slice(&label.to_le_bytes());
+    payload.extend_from_slice(&0u16.to_le_bytes());
+    payload.extend_from_slice(&ow_package::testkit::ints(&[0]));
+    let mut export = ow_package::testkit::Export::new(t.import("State"), name, payload);
+    export.outer = owner;
+    t.p.add_export_with(export)
+}
+
 fn package() -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
@@ -412,6 +437,8 @@ fn package() -> Vec<u8> {
     });
     let controller = t.class("Controller", actor);
     t.prop("Object", controller, "NextController", 0, actor);
+    t.prop("Object", controller, "Pawn", 0, actor);
+    t.prop("Bool", controller, "bIsPlayer", 0, 0);
     t.prop("Object", controller, "ResourcePoolManager", 0, actor);
     let gearbox_mind = t.class("GearboxMind", controller);
     t.prop("Object", gearbox_mind, "MyRuleEngine", 0, object);
@@ -423,6 +450,25 @@ fn package() -> Vec<u8> {
     });
     let pawn = t.class("Pawn", actor);
     t.prop("Object", pawn, "NextPawn", 0, actor);
+    t.prop("Object", pawn, "Controller", 0, actor);
+    // The kill's state (review r1 of #481, item 1): `Dying.BeginState` notes 30, standing for its dying writes.
+    let dying = toy_state(&mut t, pawn, "Dying");
+    void(&mut t, dying, "BeginState", &[], |_, a| note(a, &ids, 30));
+    // Who is in the pawn list when a script asks (review r1 of #481, item 5).
+    let snapshot = native(&mut t, actor, "SnapshotPawns", &[], None, NATIVE);
+    let listed = t.class("ListedPawn", pawn);
+    void(&mut t, listed, "Destroyed", &[], |_, a| {
+        a.stmt().final_function(snapshot, |_| {});
+    });
+    let collide_now = native(&mut t, actor, "CollideNow", &[], None, NATIVE);
+    let colliding = t.class("CollidingPawn", pawn);
+    void(&mut t, colliding, "PreBeginPlay", &[], |_, a| {
+        a.stmt().final_function(collide_now, |_| {});
+    });
+    let listed_owner = t.class("ListedOwner", actor);
+    void(&mut t, listed_owner, "LostChild", &[opt("Object", "Other", actor)], |_, a| {
+        a.stmt().final_function(snapshot, |_| {});
+    });
     let refuse = native(&mut t, actor, "Refuse", &[], None, NATIVE);
     let doomed = t.class("DoomedPawn", pawn);
     void(&mut t, doomed, "Destroyed", &[], |_, a| {
@@ -523,6 +569,8 @@ pub(super) struct Fx {
     pub(super) w: World,
     pub(super) wi: ObjRef,
     pub(super) notes: Rc<RefCell<Vec<(ObjRef, i32)>>>,
+    /// Each `SnapshotPawns()` call: the caller and the pawn list's members at that moment.
+    pub(super) pawn_lists: Rc<RefCell<Vec<(ObjRef, Vec<ObjRef>)>>>,
     dir: PathBuf,
 }
 
@@ -601,6 +649,28 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
         }),
     )
     .unwrap();
+    let pawn_lists = Rc::new(RefCell::new(Vec::new()));
+    let sink = pawn_lists.clone();
+    vm.register_native(
+        "Actor.SnapshotPawns()",
+        Rc::new(move |c: &mut NativeCall<'_>| {
+            let me = c.this.expect("SnapshotPawns on an actor");
+            let wi = crate::actors::actors_of(c.vm)?.borrow().world_info().expect("a WorldInfo");
+            let members = crate::actors::list_members(&c.vm.space, wi, crate::actors::WorldList::Pawns)?;
+            sink.borrow_mut().push((me, members));
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
+    vm.register_native(
+        "Actor.CollideNow()",
+        Rc::new(|c: &mut NativeCall<'_>| {
+            let me = c.this.expect("CollideNow on an actor");
+            set_field(&mut c.vm.space, me, "bCollideActors", Value::Bool(true))?;
+            Ok(Value::None)
+        }),
+    )
+    .unwrap();
     vm.register_native(
         "Actor.Refuse()",
         Rc::new(|_c: &mut NativeCall<'_>| Err(ow_core::NotYet::not_read("an invented refusal", "an invented record").into())),
@@ -609,6 +679,9 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
     for class in [
         "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
+
+        "Probe", "Dud", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind", "DoomedPawn",
+        "ListedPawn", "ListedOwner", "CollidingPawn",
     ] {
         let cdo =
             w.vm.defs
@@ -623,7 +696,7 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     if begin {
         w.actors().borrow_mut().begin_play();
     }
-    Fx { w, wi, notes, dir }
+    Fx { w, wi, notes, pawn_lists, dir }
 }
 
 impl Fx {
@@ -2759,27 +2832,25 @@ fn a_refusal_after_the_first_write_is_marked() {
     });
 }
 
-/// The player case (NATIVE_ACTOR_DESTROY.md section 3): a local player's controller answers false with
-/// `bPendingDestroy` set and nothing destroyed; a network player's is `NotYet { NotPorted }`.
+/// The player case (NATIVE_ACTOR_DESTROY.md section 3; review r1 of #481, item 3), by the world's own local-player
+/// identity: a local player's controller is `NotYet { LayerAbsent }` (the viewport removal is the host's, which the
+/// port lacks) before any write; a player controller with a `Player` the world does not list as local is a network
+/// player's, `NotYet { NotPorted }`.
 #[test]
 fn a_player_controllers_destroy_follows_the_player_case() {
     run(|| {
         let mut x = fx();
         let pc = x.spawn("PlayerController");
-        let local = {
-            let c = x.class("LocalPlayer");
-            x.w.vm.space.alloc(c, "ToyLocalPlayer", None, ow_object::heap::Origin::Runtime).unwrap()
-        };
-        set_field(&mut x.w.vm.space, pc, "Player", Value::Object(Some(local))).unwrap();
-        assert!(!destroy(&mut x.w.vm, pc).unwrap());
-        assert_eq!(field(&x.w.vm.space, pc, "bPendingDestroy").unwrap(), Value::Bool(true));
-        assert_eq!(field(&x.w.vm.space, pc, "bDeleteMe").unwrap(), Value::Bool(false));
+        x.w.actors().borrow_mut().add_local_player(pc).unwrap();
+        assert!(matches!(vm_missing(destroy(&mut x.w.vm, pc).unwrap_err()), Missing::LayerAbsent(_)));
+        assert_eq!(field(&x.w.vm.space, pc, "bPendingDestroy").unwrap(), Value::Bool(false), "nothing written");
+        let net_pc = x.spawn("PlayerController");
         let net = {
             let c = x.class("Object");
             x.w.vm.space.alloc(c, "ToyConnection", None, ow_object::heap::Origin::Runtime).unwrap()
         };
-        set_field(&mut x.w.vm.space, pc, "Player", Value::Object(Some(net))).unwrap();
-        assert_eq!(vm_missing(destroy(&mut x.w.vm, pc).unwrap_err()), Missing::NotPorted);
+        set_field(&mut x.w.vm.space, net_pc, "Player", Value::Object(Some(net))).unwrap();
+        assert_eq!(vm_missing(destroy(&mut x.w.vm, net_pc).unwrap_err()), Missing::NotPorted);
     });
 }
 
@@ -2799,5 +2870,77 @@ fn a_minds_pawn_died_reaches_its_destroy_through_script() {
         }
         assert_eq!(field(&x.w.vm.space, mind, "bDeleteMe").unwrap(), Value::Bool(false));
         assert_eq!(members(&x, Controllers), [mind]);
+    });
+}
+
+/// The kill's earliest certain point (review r1 of #481, item 1; note section 5.1): at the entry of the pawn's
+/// `Dying.BeginState`, a non-player controller that still possesses it is checked with its destroy's read-only
+/// preflight. Its refusal stops the kill before the body: no dying write (note 30), and both possession links are
+/// left. The refusal is marked (it comes after the death's earlier writes), kind kept. A player's controller is not
+/// checked, and the body runs.
+#[test]
+fn the_kill_refuses_at_dying_begin_state_before_its_writes() {
+    run(|| {
+        let mut x = fx();
+        let pawn = x.spawn("Pawn");
+        let mind = x.spawn("WillowMind");
+        set_field(&mut x.w.vm.space, pawn, "Controller", Value::Object(Some(mind))).unwrap();
+        set_field(&mut x.w.vm.space, mind, "Pawn", Value::Object(Some(pawn))).unwrap();
+        x.clear_notes();
+        let f = x.w.vm.find_function("Engine.Pawn.Dying.BeginState").unwrap();
+        match x.w.vm.call(f, Some(pawn), vec![]).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}");
+                assert!(n.what.ends_with(crate::actors::NOTIFICATION_NOT_READ), "{n}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(x.noted(pawn), Vec::<i32>::new(), "the body did not run");
+        assert_eq!(obj(&x, pawn, "Controller"), Some(mind));
+        assert_eq!(obj(&x, mind, "Pawn"), Some(pawn));
+        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(false));
+
+        // A player's controller: not the destroy path, so the body runs.
+        set_field(&mut x.w.vm.space, mind, "bIsPlayer", Value::Bool(true)).unwrap();
+        x.w.vm.call(f, Some(pawn), vec![]).unwrap();
+        assert_eq!(x.noted(pawn), vec![30]);
+    });
+}
+
+/// The pawn list as the destroy's own scripts see it (review r1 of #481, item 5): the pawn's `Destroyed()` runs
+/// before the world-drop step, so it still sees itself listed; its owner's `LostChild` runs after, and no longer does.
+#[test]
+fn a_pawns_destroy_scripts_see_its_membership_in_order() {
+    run(|| {
+        let mut x = fx();
+        let owner = x.spawn("ListedOwner");
+        let pawn = x.spawn("ListedPawn");
+        set_owner(&mut x.w.vm, pawn, Some(owner)).unwrap();
+        x.pawn_lists.borrow_mut().clear();
+        assert!(destroy(&mut x.w.vm, pawn).unwrap());
+        let seen = x.pawn_lists.borrow().clone();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[0].0, pawn);
+        assert!(seen[0].1.contains(&pawn), "Destroyed() sees itself listed");
+        assert_eq!(seen[1].0, owner);
+        assert!(!seen[1].1.contains(&pawn), "the owner's LostChild sees it gone");
+    });
+}
+
+/// A spawn that refuses after `PreBeginPlay` made the actor collide is not linked into its list (review r1 of #481,
+/// item 4), and the refusal is marked: the actor was made and listed in the level first.
+#[test]
+fn a_spawn_refused_after_pre_begin_play_is_not_linked_and_is_marked() {
+    use crate::actors::WorldList::Pawns;
+    run(|| {
+        let mut x = fx();
+        let class = x.class("CollidingPawn");
+        let wi = x.wi;
+        match spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(class))).unwrap_err() {
+            VmError::NotYet(n) => assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(members(&x, Pawns).is_empty(), "not reachable through the pawn list");
     });
 }

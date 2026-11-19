@@ -74,3 +74,31 @@ the lists, and whether `AllControllers` must follow the list order (the note's o
     that come after its own first write.
 - Tests: `ow-world` has 149, 9 of them this lane's, with the toy's `DoomedPawn` for the terminal mark. `cargo test
   --workspace`: 2,202 passed, 0 failed. The installed gate is unchanged: 0/14/0, links 3 and 4 blocked by link 1.
+
+**Review r1 of #481 (five findings, all fixed). Stacked on #464 for `Vm::wrap_script`:** a merge of
+`fix/rust-settings-fill`, no rebase. The PR's diff holds #464's commits until it lands.
+1. **The earliest certain point.** In Off, the pawn's `Dying.BeginState` (`Engine.Pawn`'s and `WillowGame.WillowPawn`'s)
+   is wrapped. Its script is kept.
+   - At entry, when the pawn's `Controller` possesses it (`Controller.Pawn` is the pawn) and is not a player, that
+     controller's destroy runs its read-only preflight (`destroy_preflight`, which `destroy` now shares).
+   - A refusal stops the kill before the body, so the dying writes and both possession links are untouched. It is
+     marked, since `Pawn.Died` wrote before.
+2. **The kill boundary.**
+   - `ow_combat::hit::kill_boundary` marks a `NotYet` that leaves the hit after the victim's script state changed.
+   - `Run::apply` latches a marked `NotYet` as its typed sticky stop: no snapshot, and no later step.
+   - The slice gate's combat driver grades that stop by its variant.
+3. **The player case uses the world's local-player identity** (`Actors::local_players`). A local player's controller
+   is `NotYet { LayerAbsent }` (the viewport removal is the host's, and there is no read-back check) before any write.
+   A player controller with a `Player` the world does not list as local is `NotPorted`.
+4. **Spawn:**
+   - the list is checked before the actor is made (its link field, and that it walks);
+   - linking comes after the encroachment check, so a refused actor is not reachable;
+   - in Off, every `NotYet` after the actor is made and listed, or after an archetype's lazy load, is marked.
+5. **Tests:**
+   - a pawn's `Destroyed()` sees itself in `PawnList`, and its owner's `LostChild` sees it gone;
+   - the `Dying.BeginState` refusal leaves the dying writes and the possession links untouched;
+   - a spawn refused after `PreBeginPlay` is not linked;
+   - the kill-boundary rule.
+
+`cargo test --workspace`: 2,255 passed, 0 failed. Installed Off `--slice-gate` strict: 0/12/2, the same as main (links
+6 and 7 are main's `GetInventoryDefinition` errors; links 3 and 4 are blocked by link 1). Every rule stays UNVERIFIED.
