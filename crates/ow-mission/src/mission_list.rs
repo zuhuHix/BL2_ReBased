@@ -11,9 +11,11 @@
 //! **Which definitions** (hub ruling 2, the port's stand-in for "every `MissionDefinition` in memory"): every export
 //! whose class is exactly `WillowGame.MissionDefinition` (no subclass is declared in the installed packages),
 //! `Default__` objects left out, in every package the store has loaded when the build starts, each loaded there as its
-//! own definition (`DefStore::find`). That load is part of set-up, before any script runs. A definition the build
-//! reads that is still an unloaded handle after that (a dependency, a chain member, an expansion) is
-//! `NotYet { NotRead }` ([`NEEDS_LOAD`]), before any write.
+//! own definition (`DefStore::find`). That load is part of set-up, before any script runs, and counts as a write (the
+//! hub's ruling on review r1 of #496): the equal-key check comes before it, and every `NotYet` after the first load
+//! is marked "stopped after partial writes". A definition the build reads that is still an unloaded handle after that
+//! (a dependency, a chain member, an expansion) is `NotYet { NotRead }` ([`NEEDS_LOAD`]), marked so, before any field
+//! write. A loaded `Dependencies` or `NextMissionInChain` target that is not a `MissionDefinition` is bad data.
 //!
 //! **The order** (hub ruling 3, fitted, not proven: UNVERIFIED): the engine's name-table order is approximated by
 //! first insertion. Each name text gets the index of its first appearance when the loaded packages' name tables are
@@ -35,7 +37,8 @@
 //! Every other error fails the set-up as before.
 //!
 //! **Order of work** (the hub rules): every read, every check and the whole numbering are computed before the first
-//! write, so every `NotYet` and every bad-data error comes before any write and leaves nothing changed. Bad data is a
+//! field write, so every `NotYet` and every bad-data error leaves the definitions' fields and the list unchanged (the
+//! set's loads, which come first, stay). Bad data is a
 //! `VmError::Script` naming what is wrong: a missing or mistyped field, a `NextMissionInChain` loop, a cycle among side
 //! missions' dependencies (section 4, step 3). The writes then follow in the game's order: the resets and the list,
 //! then the numbers.
@@ -54,13 +57,11 @@ pub const DEFINITION_CLASS: &str = "WillowGame.MissionDefinition";
 /// The `NotYet` of a second build in one world.
 pub const SECOND_BUILD: &str = "a second run of the tracker's list build";
 /// The `NotYet` of a definition that would still need loading after set-up.
-pub const NEEDS_LOAD: &str = "a mission reference into a package the set-up did not load";
+pub const NEEDS_LOAD: &str = "a reference the set-up did not load";
 /// The `NotYet` of two definitions with the same name and number.
 pub const TIE: &str = "the visit order of equal mission names";
 /// The `NotYet` of the reorder pass's edge (section 3, step 6).
 pub const EDGE: &str = "a dependency that stands after its mission in the tracker's reorder pass";
-/// The `NotYet` of a chain member or a dependency outside the built set.
-pub const OUTSIDE: &str = "a mission the tracker's numbering reaches that is not in the built list";
 
 const UNIT: &str = "MissionTracker list build";
 
@@ -168,6 +169,20 @@ fn loaded(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
+/// A loaded `Dependencies` or `NextMissionInChain` target must be a `MissionDefinition` (section 4: bad data otherwise,
+/// review r1 of #496).
+fn mission_target(vm: &Vm, o: ObjRef, field_name: &str) -> Result<(), VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let is_mission = vm.space.classes.by_path(DEFINITION_CLASS).is_some_and(|m| vm.space.classes.is_child_of(class, m));
+    if !is_mission {
+        return Err(bad(format!(
+            "{field_name} names {}, not a MissionDefinition",
+            ow_attr::eval::class_path(&vm.space, o)
+        )));
+    }
+    Ok(())
+}
+
 fn read_def(vm: &Vm, obj: ObjRef) -> Result<Def, VmError> {
     let plot = match field(vm, obj, "bPlotCritical")? {
         Value::Bool(b) => b,
@@ -188,13 +203,21 @@ fn read_def(vm: &Vm, obj: ObjRef) -> Result<Def, VmError> {
     for o in deps.iter().flatten().chain(next.iter()).chain(dlc.iter()) {
         loaded(vm, *o)?;
     }
+    for o in deps.iter().flatten() {
+        mission_target(vm, *o, "Dependencies")?;
+    }
+    if let Some(o) = next {
+        mission_target(vm, o, "NextMissionInChain")?;
+    }
     Ok(Def { obj, plot, deps, next, dlc })
 }
 
 /// The numbers the numbering gives, by list index (-1 for unnumbered), computed without writing (section 3).
 fn numbering(vm: &Vm, defs: &[Def]) -> Result<Vec<i32>, VmError> {
     let index_of = |o: ObjRef| defs.iter().position(|d| d.obj == o);
-    let inside = |o: ObjRef| index_of(o).ok_or_else(|| VmError::from(NotYet::not_read(OUTSIDE, RECORD)));
+    // Every target is a loaded MissionDefinition (read_def), and every loaded MissionDefinition export is in the list:
+    // a miss is inconsistent data.
+    let inside = |o: ObjRef| index_of(o).ok_or_else(|| bad("a mission the numbering reaches is not in the built list".to_string()));
     let mut number = vec![-1i32; defs.len()];
     // The groups by expansion, in list order of first appearance.
     let mut groups: Vec<Option<ObjRef>> = Vec::new();
@@ -389,11 +412,14 @@ fn depends_on(
     Ok(false)
 }
 
-/// The tracker's list build at set-up (module documentation). `built` is the bridge's record that it ran.
-pub fn build(vm: &mut Vm, tracker: ObjRef, built: &mut bool) -> Result<(), VmError> {
-    if *built {
+/// The tracker's list build at set-up (module documentation). `ran` is the bridge's record that the set-up build ran:
+/// it is set on entry, whatever the outcome (a refusal included), so every later request is [`SECOND_BUILD`] (review
+/// r1 of #496).
+pub fn build(vm: &mut Vm, tracker: ObjRef, ran: &mut bool) -> Result<(), VmError> {
+    if *ran {
         return Err(NotYet::not_read(SECOND_BUILD, RECORD).into());
     }
+    *ran = true;
     // The list's declaration, before anything is loaded.
     let class = vm.space.heap.get(tracker)?.class;
     // A tracker class that declares no list (an invented package set without one) has nothing to build: the world
@@ -407,40 +433,51 @@ pub fn build(vm: &mut Vm, tracker: ObjRef, built: &mut bool) -> Result<(), VmErr
     let PropKind::Struct(record_ty) = *inner else {
         return Err(bad("MissionList is not an array of structs".to_string()));
     };
-    // The set (hub ruling 2), loaded at set-up as each one's own definition, in load order.
-    let found = candidates(vm)?;
-    let mut set: Vec<(ObjRef, (u64, i32))> = Vec::with_capacity(found.len());
-    for c in &found {
-        let path = ow_core::ObjectPath::parse(&c.path).map_err(|e| bad(format!("{}: {e}", c.path)))?;
-        let o = vm.defs.find(&mut vm.space, &path);
-        vm.log.extend(vm.defs.take_log());
-        let Some(o) = o.map_err(VmError::from)? else { continue };
-        if !set.iter().any(|(x, _)| *x == o) {
-            set.push((o, c.key));
-        }
-    }
-    // The order (hub ruling 3).
-    set.sort_by_key(|(_, k)| *k);
-    if set.windows(2).any(|w| w[0].1 == w[1].1) {
+    // The set (hub ruling 2) and the order (hub ruling 3): the keys and paths are known before anything is loaded, so
+    // the equal-key check comes first (review r1 of #496, the hub's ruling).
+    let mut found = candidates(vm)?;
+    found.sort_by_key(|c| c.key);
+    if found.windows(2).any(|w| w[0].key == w[1].key) {
         return Err(NotYet::not_read(TIE, RECORD).into());
     }
-    // Every read and the numbering, before any write.
-    let defs: Vec<Def> = set.iter().map(|(o, _)| read_def(vm, *o)).collect::<Result<_, _>>()?;
-    let numbers = numbering(vm, &defs)?;
-    let zero = vm
-        .space
+    if found.is_empty() {
+        return writes(vm, tracker, &[], &[], &record_zero(vm, record_ty)?, 0).map(|_| ());
+    }
+    // The loads count as writes (the hub's ruling): from the first one on, a `NotYet` is terminal, marked "stopped
+    // after partial writes" (kind and record kept) through `ow_world::pools::after_partial_writes`; other errors pass
+    // unchanged; nothing is rolled back.
+    after_loads(vm, tracker, record_ty, &found).map_err(ow_world::pools::after_partial_writes)
+}
+
+fn record_zero(vm: &Vm, record_ty: ow_object::ids::StructId) -> Result<Value, VmError> {
+    vm.space
         .classes
         .struct_layout(record_ty)
         .map(|l| l.zero().clone())
-        .ok_or_else(|| bad("the record struct has no layout".to_string()))?;
+        .ok_or_else(|| bad("the record struct has no layout".to_string()))
+}
+
+/// The build from the first load on (module documentation).
+fn after_loads(vm: &mut Vm, tracker: ObjRef, record_ty: ow_object::ids::StructId, found: &[Candidate]) -> Result<(), VmError> {
+    let mut set: Vec<ObjRef> = Vec::with_capacity(found.len());
+    for c in found {
+        let path = ow_core::ObjectPath::parse(&c.path).map_err(|e| bad(format!("{}: {e}", c.path)))?;
+        let o = vm.defs.find(&mut vm.space, &path);
+        vm.log.extend(vm.defs.take_log());
+        // An enumerated export the store cannot find is inconsistent data, not a silent drop (review r1 of #496).
+        let o = o.map_err(VmError::from)?.ok_or_else(|| bad(format!("{}: listed in its package, not found by the store", c.path)))?;
+        if !set.contains(&o) {
+            set.push(o);
+        }
+    }
+    // Every read and the numbering, before the field writes.
+    let defs: Vec<Def> = set.iter().map(|o| read_def(vm, *o)).collect::<Result<_, _>>()?;
+    let numbers = numbering(vm, &defs)?;
+    let zero = record_zero(vm, record_ty)?;
     let def_field = record_field(vm, &zero, "MissionDef")?;
-    // The writes, in the game's order: the resets and the records, then the numbers. The build counts as run from
-    // here. Anything that fails from here on is terminal: a `NotYet` is marked "stopped after partial writes" (kind and
-    // record kept) through `ow_world::pools::after_partial_writes`; other errors pass unchanged; nothing is rolled
-    // back. The writes go to this world's own definition objects (its VM's object space), so nothing reaches another
-    // world.
-    *built = true;
-    writes(vm, tracker, &defs, &numbers, &zero, def_field).map_err(ow_world::pools::after_partial_writes)
+    // The writes, in the game's order: the resets and the records, then the numbers. They go to this world's own
+    // definition objects (its VM's object space), so nothing reaches another world.
+    writes(vm, tracker, &defs, &numbers, &zero, def_field)
 }
 
 fn writes(

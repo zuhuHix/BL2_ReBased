@@ -228,7 +228,8 @@ fn the_resets_the_records_and_the_order() {
 }
 
 /// An expansion's group counts from its `MissionNumberBase`, apart from the base game's, when set-up has loaded the
-/// expansion. Not loaded (hub ruling 2 loads mission definitions only), it is the named `NotRead`, before any write.
+/// expansion. Not loaded (hub ruling 2 loads mission definitions only), it is the named `NotRead`, marked since it comes
+/// after the set's loads (which count as writes), and before any field write.
 #[test]
 fn an_expansion_group_counts_from_its_base() {
     let list = [
@@ -238,7 +239,9 @@ fn an_expansion_group_counts_from_its_base() {
     ];
     let mut t = toy(&list);
     match t.build() {
-        Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == NEEDS_LOAD, "{n}"),
+        Err(VmError::NotYet(n)) => {
+            assert!(n.missing == Missing::NotRead && n.what == format!("stopped after partial writes: {NEEDS_LOAD}"), "{n}")
+        }
         other => panic!("{other:?}"),
     }
     assert_eq!(t.number("Story0"), 7, "nothing written");
@@ -319,9 +322,61 @@ fn equal_mission_names_are_not_read() {
         Err(VmError::NotYet(n)) => assert!(n.missing == Missing::NotRead && n.what == TIE, "{n}"),
         other => panic!("{other:?}"),
     }
-    assert!(!built, "refused before the build ran");
+    assert!(built, "the build ran (and refused): a later request is the second-build refusal");
+    match build(&mut vm, tracker, &mut built) {
+        Err(VmError::NotYet(n)) => assert_eq!(n.what, SECOND_BUILD),
+        other => panic!("{other:?}"),
+    }
     let class = vm.space.heap.get(tracker).unwrap().class;
     let p = vm.space.prop(class, "MissionList").unwrap();
     assert_eq!(vm.space.read(tracker, PropAddr::scalar(p)).unwrap().elements().map(<[Value]>::len), Some(0));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The second pass's edge (section 3, step 6): SideK is SideM's dependency and stands after it in the bucket, so the
+/// dry run refuses with `NotYet { NotRead }` before any field write. Bucket 0 fills A, M, Z, then K after Z.
+#[test]
+fn a_dependency_after_its_mission_is_not_read_before_any_write() {
+    let list = [
+        m("Story0", true, &[], None),
+        m("SideA", false, &["Story0"], None),
+        m("SideM", false, &["SideA", "SideK"], None),
+        m("SideZ", false, &["Story0"], None),
+        m("SideK", false, &["SideZ"], None),
+    ];
+    let mut t = toy(&list);
+    match t.build() {
+        Err(VmError::NotYet(n)) => {
+            assert!(n.missing == Missing::NotRead && n.what == format!("stopped after partial writes: {EDGE}"), "{n}")
+        }
+        other => panic!("{other:?}"),
+    }
+    for x in &list {
+        assert_eq!(t.number(x.name), 7, "{}: nothing written", x.name);
+    }
+    assert_eq!(t.read(t.tracker, "MissionList").elements().map(<[Value]>::len), Some(0));
+}
+
+/// Review r1 of #496, item 2: a loaded `Dependencies` target that is not a `MissionDefinition` is bad data naming the
+/// field, before any field write.
+#[test]
+fn a_dependency_that_is_not_a_mission_is_bad_data() {
+    let list = [
+        m("Story0", true, &[], None),
+        m("SideOdd", false, &[], None),
+        M { name: "DlcStory", plot: true, deps: &[], next: None, dlc: Some("Pack") },
+    ];
+    let mut t = toy(&list);
+    // The store's decoder drops a reference of the wrong class, so the slot is set past the class check (an invented
+    // inconsistency the check guards against).
+    let pack = t.get("Pack");
+    let odd = t.get("SideOdd");
+    let class = t.vm.space.heap.get(odd).unwrap().class;
+    let p = t.vm.space.prop(class, "Dependencies").unwrap();
+    *t.vm.space.slot_mut(odd, PropAddr::scalar(p)).unwrap() = Value::array(vec![Value::Object(Some(pack))]);
+    match t.build() {
+        Err(VmError::Script { message, .. }) => assert!(message.contains("Dependencies"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(t.number("Story0"), 7, "nothing written");
 }

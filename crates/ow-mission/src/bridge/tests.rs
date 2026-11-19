@@ -2054,9 +2054,13 @@ fn a_set_up_list_refusal_is_answered_by_the_first_list_read() {
     match got {
         VmError::NotYet(n) => {
             assert_eq!(n.missing, ow_core::Missing::NotRead);
-            assert_eq!(n.what, crate::mission_list::NEEDS_LOAD);
+            assert_eq!(n.what, format!("stopped after partial writes: {}", crate::mission_list::NEEDS_LOAD), "after the set's loads");
             assert_eq!(n.record, crate::mission_list::RECORD);
         }
         other => panic!("{other:?}"),
     }
+    // Review r1 of #496: the set-up build ran, so a later request is the second-build refusal, not a fresh build.
+    let script = env.script.clone();
+    let second = script.build_mission_list(env.vm()).unwrap_err();
+    assert!(matches!(&second, BehaviorError::Vm(VmError::NotYet(n)) if n.what == crate::mission_list::SECOND_BUILD), "{second}");
 }

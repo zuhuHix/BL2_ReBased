@@ -220,6 +220,8 @@ struct Objects {
 struct BState {
     /// Whether the tracker's `MissionList` was built at set-up (Off; `crate::mission_list`).
     list_built: bool,
+    /// Whether the set-up build ran, whatever its outcome: every later build request is refused (review r1 of #496).
+    list_ran: bool,
     /// The set-up build's `NotYet`, answered unchanged by the first list read (`crate::mission_list`).
     list_refusal: Option<NotYet>,
     completed: DetSet<String>,
@@ -629,12 +631,13 @@ impl MissionScript {
         // The tracker's list build, once at set-up, before any script runs (Off only; NATIVE_MISSION_LIST_BUILD.md and
         // the hub's rulings, lane IMPL-MISSIONLIST-BUILD). Reference builds nothing, as the C++.
         let mut list_built = false;
+        let mut list_ran = false;
         let mut list_refusal = None;
         if vm.parity == ParityMode::Off {
             // A `NotYet` of the build is recorded, kind and record kept, and answered by the first list read; any
             // other error fails the set-up (`crate::mission_list`, "A set-up refusal").
-            match crate::mission_list::build(vm, tracker, &mut list_built) {
-                Ok(()) => {}
+            match crate::mission_list::build(vm, tracker, &mut list_ran) {
+                Ok(()) => list_built = true,
                 Err(VmError::NotYet(n)) => list_refusal = Some(n),
                 Err(e) => return Err(e.into()),
             }
@@ -719,7 +722,7 @@ impl MissionScript {
                     pri,
                     authority,
                 },
-                state: RefCell::new(BState { list_built, list_refusal, ..BState::default() }),
+                state: RefCell::new(BState { list_built, list_ran, list_refusal, ..BState::default() }),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
                 marcus_pid: Cell::new(None),
@@ -1912,12 +1915,16 @@ impl MissionScript {
         Ok(Value::None)
     }
 
-    /// A second build of the tracker's list in this world: `NotYet { NotRead }` (hub ruling 1); the set-up build is
-    /// the only one.
+    /// A build request after set-up: `NotYet { NotRead }` (hub ruling 1), since the set-up build ran in every Off
+    /// world, whatever its outcome (review r1 of #496). Off only: under Reference there is no list, and the request
+    /// does nothing.
     pub fn build_mission_list(&self, vm: &mut Vm) -> Result<(), MissionError> {
-        let mut built = self.inner.state.borrow().list_built;
-        crate::mission_list::build(vm, self.inner.o.tracker, &mut built)?;
-        self.inner.state.borrow_mut().list_built = built;
+        if vm.parity != ParityMode::Off {
+            return Ok(());
+        }
+        let mut ran = self.inner.state.borrow().list_ran;
+        crate::mission_list::build(vm, self.inner.o.tracker, &mut ran)?;
+        self.inner.state.borrow_mut().list_ran = ran;
         Ok(())
     }
 

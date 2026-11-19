@@ -25,12 +25,13 @@ run; `UNVERIFIED` in game. Decision 2026-11-19-40 (assigned -103); logs under ig
 **IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on the note #493 r1 5b880555, on main 6f9789b):** AI-assisted (Claude
 Code, Opus 5.5). The tracker's MissionList build and the mission numbering in Off from NATIVE_MISSION_LIST_BUILD.md and
 the hub's rulings. `cargo build --workspace --locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,376 passed /
-0 failed / 46 ignored (8 new tests in `mission_list_tests.rs`, 1 new and 1 changed in the bridge); `crate_edges_test.py`
-19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 5 NotYet / 9 errors, the same as the base 1f43a95b,
-where links 10 to 12 stopped at `GetAllMissions`; here they pass 3 of 4 driver steps and stop in `accept` at "stopped
-after partial writes: the controller's current-playthrough virtual". `tests/mission_script_test.py`: 17 not-yet, all the
-player's health-pool `NotYet`. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in
-game. Decision 2026-11-19-NNN (number pending); logs under ignored `local/p2/mlist/`.
+0 failed / 46 ignored (10 tests in `mission_list_tests.rs` after review r1 of #496, 1 new and 1 changed in the bridge);
+`crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 5 NotYet / 9 errors, the same
+as the base 1f43a95b, where links 10 to 12 stopped at `GetAllMissions`; here they pass 3 of 4 driver steps and stop in
+`accept` at "stopped after partial writes: the controller's current-playthrough virtual".
+`tests/mission_script_test.py`: 17 not-yet, all the player's health-pool `NotYet`. ctest and verify_packages not run (no
+C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (number pending); logs under ignored
+`local/p2/mlist/`.
 
 **LINK-1-NEXT-STOP (2026-11-19, pc-hummer, rebased onto fix/rust-init-player-skill-tree 07017c6d, #475 r1):**
 AI-assisted (Claude Code, Opus 5.5). The recorded resource pool idle-reset hooks are matched by their installed package

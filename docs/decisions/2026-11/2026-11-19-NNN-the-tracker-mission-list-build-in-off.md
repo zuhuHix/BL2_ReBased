@@ -9,7 +9,7 @@ hub (three digits); NNN is a placeholder.
 - **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
   relaxed.
 - **The base:** the note #493 at its review r1 (5b880555, on main 6f9789b after #480 and #486 landed). The refusal
-  texts follow that fix: "a mission reference into a package the set-up did not load" and "the visit order of equal
+  texts follow that fix: "a reference the set-up did not load" and "the visit order of equal
   mission names".
 
 **The hub's rulings, each a port Off answer, UNVERIFIED:**
@@ -42,8 +42,8 @@ hub (three digits); NNN is a placeholder.
   - **Before the first write:** every read, every check and the whole numbering are computed first, so every
     `NotYet` and every bad-data error leaves nothing changed. Bad data is a `VmError::Script`: a missing or mistyped
     field, a `NextMissionInChain` loop, or a cycle among side missions' dependencies. The second pass's edge case (a
-    dependency that stands after its mission) is `NotYet { NotRead }`. So is a chain member or dependency outside the
-    built set.
+    dependency that stands after its mission) is `NotYet { NotRead }`. A dependency or chain target that is not a
+    `MissionDefinition` is bad data.
   - **After the first write:** anything that fails is terminal. It goes through `ow_world::pools::after_partial_writes`
     (prefixed, kind and record kept), and nothing is rolled back.
   - The writes go to the world's own definition objects (its VM's object space), so nothing leaks across worlds.
@@ -64,16 +64,28 @@ stop in `accept` at "stopped after partial writes: the controller's current-play
 2026-11-19-93). Every other link is as on the base 1f43a95b (verified with a base run): 0 ok / 5 NotYet / 9 errors
 both times.
 
-**Tests:** 8 new tests on invented packages in `mission_list_tests.rs`, covering:
+**Tests:** 10 tests on invented packages in `mission_list_tests.rs`, covering:
 - the main chain, the side buckets and the unnumbered cases;
 - the resets, the records and the first-insertion order;
 - an expansion group, loaded or not;
 - both cycle kinds as bad data, with nothing written;
-- the second build's `NotRead`, the second pass, and equal names' `NotRead`.
+- the second build's `NotRead`, the second pass, and equal names' `NotRead`;
+- the second pass's edge (`NotRead`, nothing written) and a non-mission dependency target (bad data).
 
 The bridge's `GetAllMissions` test now checks the built list and the second build's refusal. A new bridge test checks
 that a set-up refusal is answered, unchanged, by the first list read.
 
-**Open item (hub ruling of 2026-11-19, not now):** a `DlcExpansion` (or any mission reference) into a package set-up did
-not load stays `NotYet { NotRead }`, as the note says. The installed slice does not reach one. Adding expansion packages
+**Open item (hub ruling of 2026-11-19, not now):** a `DlcExpansion` (or any other reference) that set-up did not load
+stays `NotYet { NotRead }`, "a reference the set-up did not load", as the note says. The installed slice does not reach one. Adding expansion packages
 to the set-up's load list is a later lane.
+
+**Review r1 of #496, folded in.**
+1. The set-up build is recorded as run whatever its outcome, so every later request is the second-build `NotRead`, also
+   after a set-up refusal (tested). The request method runs in Off only.
+2. `OUTSIDE` is gone. A loaded `Dependencies` or `NextMissionInChain` target that is not a `MissionDefinition` is bad
+   data naming the field (section 4); a target missing from the list is inconsistent data.
+3. The hub's ruling: the candidate loads count as writes. The equal-key check runs on the candidates' keys before any
+   load; every `NotYet` from the first load on goes through `after_partial_writes`. A candidate the store cannot find
+   is a `VmError::Script`, not a silent drop.
+4. The not-loaded refusal reads "a reference the set-up did not load".
+5. An edge test, and the test counts corrected.
