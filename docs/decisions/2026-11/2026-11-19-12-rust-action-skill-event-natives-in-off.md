@@ -30,3 +30,8 @@ author read in part A (`BeginNondeterministicProviderRegistration`, `ForceUnregi
   that native, so it needs an analyst first. Reference is unchanged.
 - **UNVERIFIED.** Every rule above. Nothing was checked in the running game. The Phaselock provider's behaviors on
   `OnActionSkillDeactivated` did not run in any of these runs.
+
+Edits: docs/decisions/2026-11/2026-11-19-02-rust-phaselock-cast-vlerp-and-the-provider-natives-read.md
+Review r1 of PR #390 (two low doc fixes, folded into this change): the 2026-11-19-02 VLerp bullet now says Reference
+differs from the C++ there (the C++ VM has no VLerp and logs a stub where Rust answers, as for `VInterpTo`), and
+NATIVE_BEHAVIOR_PROVIDERS.md section 1 now points to section 3, step 4 for the -1 handle write.

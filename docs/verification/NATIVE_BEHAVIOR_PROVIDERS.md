@@ -44,10 +44,10 @@ The parameter's script name was not read. Both are bound by name in `UBehaviorKe
   provider registrations).
 
 **Lookup.** A handle whose `PID` is negative, at or past the kernel's process count, or names an unused slot, finds an
-empty record whose state byte is 0. Both natives then do nothing to the kernel (but see 3.3 for the handle).
+empty record whose state byte is 0. Both natives then do nothing to the kernel (but see section 3, step 4 for the handle).
 
 **"The kernel exists."** Both natives, and the kernel calls they make, first check that the engine has a behavior
-kernel. If it has none, the native does nothing at all, including the -1 write in 3.3. In our port the kernel pack is
+kernel. If it has none, the native does nothing at all, including the -1 write in section 3, step 4. In our port the kernel pack is
 always there once it is registered, so this check is always true.
 
 ## 2. BeginNondeterministicProviderRegistration
