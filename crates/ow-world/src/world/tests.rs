@@ -500,6 +500,18 @@ fn package() -> Vec<u8> {
     archetype.extend(t.p.object_tag("Target", toy_target));
     archetype.extend_from_slice(&t.none);
     t.p.add_export(thing, "ToyArchetype", archetype);
+    // A probe archetype the store loads lazily (review r2 of #481, M1): ToyLazyHolder's Arch is an unloaded handle to
+    // Probe_LazyArch, whose bCollideWorld asks for the spot search.
+    let lazy_holder = t.class("LazyHolder", object);
+    t.prop("Object", lazy_holder, "Arch", 0, probe);
+    let mut lazy = 0i32.to_le_bytes().to_vec();
+    lazy.extend(t.p.bool_tag("bCollideWorld", true));
+    lazy.extend_from_slice(&t.none);
+    let lazy_arch = t.p.add_export(probe, "Probe_LazyArch", lazy);
+    let mut holder = 0i32.to_le_bytes().to_vec();
+    holder.extend(t.p.object_tag("Arch", lazy_arch));
+    holder.extend_from_slice(&t.none);
+    t.p.add_export(lazy_holder, "ToyLazyHolder", holder);
     // The travel countdown (lane MAP-LOAD-C, NATIVE_TRAVEL.md).
     let willow_game = t.class("WillowGameInfo", actor);
     t.prop("Int", willow_game, "TravelPostCountdownTime", 0, 0);
@@ -2942,5 +2954,29 @@ fn a_spawn_refused_after_pre_begin_play_is_not_linked_and_is_marked() {
             other => panic!("{other:?}"),
         }
         assert!(members(&x, Pawns).is_empty(), "not reachable through the pawn list");
+    });
+}
+
+/// A lazy archetype load is a write (review r2 of #481, M1): a spawn whose unloaded archetype loads and then asks for
+/// the spot search refuses with the collision `NotYet` marked "stopped after partial writes", its kind kept.
+#[test]
+fn a_refusal_after_a_lazy_archetype_load_is_marked() {
+    run(|| {
+        let mut x = fx();
+        let wi = x.wi;
+        let probe = x.class("Probe");
+        let path = ow_core::ObjectPath::parse("Engine.ToyLazyHolder").unwrap();
+        let vm = &mut x.w.vm;
+        let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let arch = crate::actors::object(&x.w.vm.space, holder, "Arch").unwrap().unwrap();
+        assert!(x.w.vm.defs.is_unloaded(&x.w.vm.space, arch), "the fixture's archetype is lazy");
+        let req = SpawnRequest::new(Some(probe)).with_template(Some(arch));
+        match spawn(&mut x.w.vm, wi, &req).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}");
+            }
+            other => panic!("{other:?}"),
+        }
     });
 }

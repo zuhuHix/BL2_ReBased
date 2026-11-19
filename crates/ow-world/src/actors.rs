@@ -697,6 +697,14 @@ fn collision(what: &'static str) -> VmError {
 /// Not checked: the abstract and "not instantiable" class-flag refusals. The class table holds no class flags and
 /// the record does not identify the bits (open item, decision 2026-11-15-26).
 pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<ObjRef>, VmError> {
+    // A lazy archetype load is a write (review r2 of #481, M1): once it happened, every later refusal of the spawn is
+    // marked in Off, its kind and record kept.
+    let mut loaded = false;
+    let made = spawn_from(vm, spawner, req, &mut loaded);
+    if loaded && vm.parity == ParityMode::Off { made.map_err(after_writes) } else { made }
+}
+
+fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest, loaded: &mut bool) -> Result<Option<ObjRef>, VmError> {
     let Some(class) = req.class else {
         return Ok(None);
     };
@@ -735,7 +743,7 @@ pub fn spawn(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option<
                 )
                 .into());
             }
-            source = archetype(vm, &actors, class, t)?;
+            source = archetype(vm, &actors, class, t, loaded)?;
         }
     }
     let space = &vm.space;
@@ -921,7 +929,7 @@ fn after_insertion(
 /// - a live actor (one in the level list) as the template: whether its run-time state is copied is not read;
 /// - a template whose properties are not loaded (a resource stand-in, its slots not the class layout's);
 /// - a destroyed or pending-delete template (`bDeleteMe`, `bPendingDelete`), and one whose `Owner` is set.
-fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef) -> Result<ObjRef, VmError> {
+fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRef, loaded: &mut bool) -> Result<ObjRef, VmError> {
     if actors.try_borrow().map_err(borrow_err)?.list.contains(&t) {
         return Err(NotYet::not_read(
             "Spawn with a live actor as its ActorTemplate (whether its run-time state is copied)",
@@ -936,6 +944,7 @@ fn archetype(vm: &mut Vm, actors: &Rc<RefCell<Actors>>, class: ClassId, t: ObjRe
     // A lazy load is a committed write (review r1 of #481, item 4): a refusal after it is marked.
     let lazily_loaded = vm.defs.is_unloaded(&vm.space, t);
     if lazily_loaded {
+        *loaded = true;
         let loaded = vm.defs.ensure_loaded(&mut vm.space, t);
         vm.log.extend(vm.defs.take_log());
         loaded?;

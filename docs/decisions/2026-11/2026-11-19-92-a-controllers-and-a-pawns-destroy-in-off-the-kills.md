@@ -102,3 +102,16 @@ the lists, and whether `AllControllers` must follow the list order (the note's o
 
 `cargo test --workspace`: 2,255 passed, 0 failed. Installed Off `--slice-gate` strict: 0/12/2, the same as main (links
 6 and 7 are main's `GetInventoryDefinition` errors; links 3 and 4 are blocked by link 1). Every rule stays UNVERIFIED.
+
+**Review r2 of #481 (the last round).**
+- **M1:** `archetype()` reports a lazy load, and in Off every later refusal of that spawn is marked: the collision
+  refusals, the list checks and the instancing plan. Test: an unloaded archetype with `bCollideWorld` gives a marked
+  `LayerAbsent`.
+- **M2:** the kill-boundary mark and the run's latch are Off only. Reference keeps the C++ `Run::apply`.
+- **Open, UNVERIFIED:**
+  - L3: the state change stands in for "after the hit's first write". A `NotYet` after `TakeDamage` wrote `Health` but
+    before `PlayDying` leaves the hit unmarked.
+  - L4: there is no end-to-end test through `hit_with`, the move to `Dying`, `Run::sticky_stop` and the typed grading.
+    The boundary rule is unit-tested only.
+  - L5: the wrapper covers `Pawn`'s and `WillowPawn`'s `Dying.BeginState` only. A subclass that replaces it without
+    calling its parent skips the check.
