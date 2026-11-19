@@ -133,6 +133,19 @@ fn call(vm: &mut Vm, path: &str, this: Option<ObjRef>, args: Vec<Value>) -> Resu
         .map_err(|e| format!("{path}: {e}"))
 }
 
+/// An actor of `class` as the world's spawn makes it in Off (decision 2026-11-19-44): from the class defaults, with
+/// its own copy of each component they own. Under Reference the C++ stand-in shares them, as `new_of` does.
+fn spawned_of(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
+    let made = new_of(vm, class)?;
+    if vm.parity == ParityMode::Off {
+        let c = vm.space.heap.get(made).map_err(|e| e.to_string())?.class;
+        let path = vm.space.classes.get_layout(c).ok_or("no layout")?.path().as_str().to_string();
+        let defaults = vm.defs.class_default(&mut vm.space, &path).map_err(|e| format!("{class}: {e}"))?;
+        ow_world::actors::instance_components(vm, defaults, made).map_err(|e| format!("{class}: {e}"))?;
+    }
+    Ok(made)
+}
+
 fn new_of(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
     let c = vm.find_class(class).map_err(|e| format!("{class}: {e}"))?;
     ow_vm::interp::instantiate_from_defaults(vm, c).map_err(|e| format!("{class}: {e}"))
@@ -729,9 +742,10 @@ fn part_lift(vm: &mut Vm, out: &mut String) -> Result<(), String> {
 
 fn part_cast(vm: &mut Vm, out: &mut String) -> Result<(), String> {
     let a = find(vm, "GD_Siren_Skills.Phaselock.ActionSkill_Phaselock")?;
-    let controller = new_of(vm, "WillowGame.WillowPlayerController")?;
-    let pawn = new_of(vm, "WillowGame.WillowPlayerPawn")?;
-    let target = new_of(vm, "WillowGame.WillowAIPawn")?;
+    // The cast's actors as the world's spawn makes them (each with its own components in Off).
+    let controller = spawned_of(vm, "WillowGame.WillowPlayerController")?;
+    let pawn = spawned_of(vm, "WillowGame.WillowPlayerPawn")?;
+    let target = spawned_of(vm, "WillowGame.WillowAIPawn")?;
     let r = call(
         vm,
         "WillowGame.LiftActionSkill.OnActionSkillStarted",

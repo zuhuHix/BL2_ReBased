@@ -89,6 +89,11 @@ read here.
 
 1. Whether the port's class-default player pawn should hold its own instance of the special-move component, or answer
    the class default's sub-object (the game's spawned pawn holds an instance).
+   **Port decision (decision 2026-11-19-44, lane SUBOBJECT-INSTANCING):** answered by stock UE3 component instancing,
+   not by this game: in Off the world's spawn gives each actor its own copy of each component its template owns
+   (`ow_world::actors::instance_components`), and `GetSMComponent` answers it. A pawn that still shares a template's
+   component stays `NotYet`. UNVERIFIED in the running game; the bl-sdk check above settles it.
 2. The rules of `SpecialMoveComponent.Play` and the other component natives (not read).
 3. The next native the cast actually stops at, once `GetSMComponent` is bound (run the installed `OnActionSkillStarted`
-   test in Off).
+   test in Off). **Seen** on pc-hummer, decision 2026-11-19-44 (main e59bff01 plus that lane): the unbound
+   `Pawn.IsFriendly(object)`, the first native of `CanPhaseLockTarget`.

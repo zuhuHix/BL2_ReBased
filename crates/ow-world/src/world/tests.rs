@@ -1126,6 +1126,44 @@ fn spawn_refusals_return_none_and_collision_is_not_yet() {
     });
 }
 
+/// An archetype of the class (an object of it other than the class default): in Off the actor is made from its
+/// slots (decision 2026-11-19-44); under Reference it stays `NotYet { NotRead }`, as before.
+#[test]
+fn an_archetype_template_spawns_from_its_slots_in_off_only() {
+    run(|| {
+        for mode in [ParityMode::Off, ParityMode::Reference] {
+            let mut x = fx_in(true, mode);
+            let wi = x.wi;
+            let probe = x.class("Probe");
+            let cdo =
+                x.w.vm
+                    .defs
+                    .class_default(&mut x.w.vm.space, "Engine.Probe")
+                    .unwrap();
+            let archetype =
+                x.w.vm
+                    .space
+                    .alloc(probe, "Probe_ToyArchetype", None, ow_object::heap::Origin::Runtime)
+                    .unwrap();
+            let slots = x.w.vm.space.heap.get(cdo).unwrap().slots.clone();
+            x.w.vm.space.heap.get_mut(archetype).unwrap().slots = slots;
+            set_field(&mut x.w.vm.space, archetype, "LifeSpan", Value::Float(7.0)).unwrap();
+            let req = SpawnRequest::new(Some(probe)).with_template(Some(archetype));
+            match mode {
+                ParityMode::Off => {
+                    let a = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+                    assert_eq!(field(&x.w.vm.space, a, "LifeSpan").unwrap(), Value::Float(7.0));
+                    assert_eq!(field(&x.w.vm.space, cdo, "LifeSpan").unwrap(), Value::Float(0.0));
+                }
+                ParityMode::Reference => {
+                    let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
+                    assert_eq!(vm_missing(e), Missing::NotRead);
+                }
+            }
+        }
+    });
+}
+
 #[test]
 fn before_play_begins_spawn_sends_no_begin_play_events() {
     run(|| {
