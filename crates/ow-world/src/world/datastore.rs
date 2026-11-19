@@ -253,7 +253,7 @@ fn service(vm: &Vm) -> Result<Rc<std::cell::RefCell<DataStores>>, VmError> {
 
 /// A failure after the getter began making objects (module documentation): a `NotYet` is marked [`PARTIAL_WRITES`]
 /// with its kind kept; any other error is returned as it is.
-fn after_writes(e: VmError) -> VmError {
+pub(super) fn after_writes(e: VmError) -> VmError {
     match e {
         VmError::NotYet(n) => n.after_partial_writes().into(),
         other => other,
@@ -662,7 +662,7 @@ fn get_curr_playthrough(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 }
 
 /// Notes that the running refresh, if any, wrote state (module documentation).
-fn mark_written(vm: &Vm) -> Result<(), VmError> {
+pub(super) fn mark_written(vm: &Vm) -> Result<(), VmError> {
     let stores = service(vm)?;
     let mut s = stores.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("DataStores"))?;
     if let Some(mark) = s.refresh.last_mut() {

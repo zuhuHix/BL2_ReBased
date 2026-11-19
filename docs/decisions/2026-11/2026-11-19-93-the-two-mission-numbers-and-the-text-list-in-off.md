@@ -71,3 +71,17 @@ answers no screen call "nothing": `UpdateMissionTextList` is the named `LayerAbs
 `GetVariableObject` "a Flash movie query (not hosted)" and `FocusOn` "the 3D movie's Flash focus (not hosted)", each
 marked on the mission screen. The playthrough `NotYet` is named "the controller's current-playthrough virtual". The
 engine-wide condition keeps the both-branches rule, and the `None` entry its `NotRead`, as the note states.
+
+**Review r1 of #480, folded in.**
+1. **Lazy loads.** A field read on a store definition that `DefStore::is_unloaded` reports is loaded first, and the
+   load counts as a write: it marks a running settings refresh, and a `NotYet` that leaves the native after it is
+   marked "stopped after partial writes" once, kind and record kept. Tested with a genuinely unloaded synthetic
+   export read from a loaded holder.
+2. **The mark at the write boundary.** The screen natives no longer mark their own `NotYet` by the movie's class. The
+   mission bridge's accept and turn-in mark a `NotYet` that leaves the controller's script after the mission's status
+   changed, in Off only; with the status unchanged, or under Reference, it is recorded as before. Tested: a direct
+   call on a fresh movie is not marked (`GetVariableObject` included), and a post-activation `NotYet` through the
+   bridge is marked and terminal.
+3. **The fallback is dispatched.** `GetActiveMissionNumber`'s fallback calls the controller's
+   `GetActivePlotCriticalMissionNumber(-1)` through the VM, so an unbound callee is `VmError::UnboundNative`, unchanged
+   (tested).

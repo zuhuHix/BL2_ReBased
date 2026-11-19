@@ -49,17 +49,26 @@
 //!
 //! **The mission screen** (section 3). The slice's accept reaches it through the controller's
 //! `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`, after the accept's own
-//! writes. The port's screen is a stand-in made from class defaults, so its script runs only on that path.
+//! writes.
 //! - **`QuestAcceptGFxMovie.UpdateMissionTextList()`:** [`TEXT_LIST`], `NotYet { LayerAbsent }` (record
 //!   [`RECORD_GFX`]), whether or not `MissionTextList` is set: the note's read-back check does not cover the 10
-//!   undecoded script functions or native readers, so no call here is answered "nothing". It is marked "stopped after
-//!   partial writes" ([`super::datastore::PARTIAL_WRITES`]), kind and record kept, nothing rolled back.
+//!   undecoded script functions or native readers, so no call here is answered "nothing".
 //! - **The calls `SetFocus` makes next** are not reached while the text list refuses. If they are: `GetVariableObject`
 //!   is [`MOVIE_QUERY`] and `WillowGFxMovie3D.FocusOn` is [`FOCUS`], each `NotYet { LayerAbsent }`, never None or
-//!   nothing. On the mission screen (a `QuestAcceptGFxMovie`) they are marked in the same way; on any other movie
-//!   nothing is known about the writes before the call, so they are not marked.
-//! - **What the accept checks after the screen returns** (the note's section 3, step 5) is not read. Nothing here
-//!   answers for it.
+//!   nothing.
+//! - **The partial-writes mark** (review r1 of #480, item 2): these natives write nothing, so they do not mark their
+//!   own `NotYet`. The mark is applied where a write is known: the mission bridge's accept and turn-in mark a `NotYet`
+//!   that leaves the controller's script after the mission's status changed (`ow_mission::bridge`). A direct call on
+//!   a fresh movie is not marked.
+//! - **What the accept checks after the screen returns** is the bridge's own code. Nothing here answers for it.
+//!
+//! **Dispatch and lazy loads** (review r1 of #480, items 1 and 3):
+//! - `GetActiveMissionNumber`'s fallback is the controller's `GetActivePlotCriticalMissionNumber(-1)`, dispatched
+//!   through the VM on the controller's class, so an unbound or overridden callee answers for itself (an unbound one is
+//!   `VmError::UnboundNative`, unchanged).
+//! - A field read on a store definition that is not loaded yet (`DefStore::is_unloaded`) loads it first. That load is
+//!   a write: it marks a running settings refresh, and a `NotYet` that leaves the native after it is marked "stopped
+//!   after partial writes" once, kind and record kept.
 
 use ow_core::NotYet;
 use ow_object::ids::{ObjRef, PropAddr};
@@ -82,8 +91,6 @@ pub const GRI_CLASS: &str = "WillowGame.WillowGameReplicationInfo";
 /// `GFxMoviePlayer.GetVariableObject` and `WillowGFxMovie3D.FocusOn`, the focus pair of the screen's `SetFocus`.
 pub const GET_VARIABLE_OBJECT: &str = "GFxUI.GFxMoviePlayer.GetVariableObject";
 pub const FOCUS_ON: &str = "WillowGame.WillowGFxMovie3D.FocusOn";
-/// The mission screen's class.
-pub const SCREEN_CLASS: &str = "WillowGame.QuestAcceptGFxMovie";
 /// The `NotYet` of the unresolved engine-wide condition of `GetActiveMissionNumber`, when its two branches differ
 /// (section 1, open question 1).
 pub const ENGINE_GATE: &str = "the engine-wide condition of GetActiveMissionNumber";
@@ -126,9 +133,25 @@ fn bad(unit: &str, message: String) -> VmError {
     VmError::Script { function: unit.to_string(), message }
 }
 
-/// The value of `o.name`, loading a store definition first; a class that does not declare it is bad data.
-fn field(vm: &mut Vm, o: ObjRef, name: &str, unit: &str) -> Result<Value, VmError> {
-    if !vm.space.heap.contains(o) {
+/// What one native call did: whether it loaded a store definition (a write; module documentation).
+#[derive(Debug, Default)]
+struct Cx {
+    wrote: bool,
+}
+
+impl Cx {
+    /// The native's result: a `NotYet` after a load is marked once, kind and record kept; other errors unchanged.
+    fn finish<T>(&self, r: Result<T, VmError>) -> Result<T, VmError> {
+        r.map_err(|e| if self.wrote { super::datastore::after_writes(e) } else { e })
+    }
+}
+
+/// The value of `o.name`, loading an unloaded store definition first (a write, noted on `cx` and on a running settings
+/// refresh); a class that does not declare it is bad data.
+fn field(vm: &mut Vm, cx: &mut Cx, o: ObjRef, name: &str, unit: &str) -> Result<Value, VmError> {
+    if vm.defs.is_unloaded(&vm.space, o) {
+        cx.wrote = true;
+        super::datastore::mark_written(vm)?;
         let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
         vm.log.extend(vm.defs.take_log());
         loaded?;
@@ -165,13 +188,13 @@ fn byte_of(v: &Value, what: &str, unit: &str) -> Result<u8, VmError> {
 
 /// The three fields both scans read of a mission definition: whether it counts (`bPlotCritical` set, no
 /// `DlcExpansion`), and its `MissionNumber`.
-fn plot_mission(vm: &mut Vm, def: ObjRef, unit: &str) -> Result<Option<i32>, VmError> {
-    let plot = match field(vm, def, "bPlotCritical", unit)? {
+fn plot_mission(vm: &mut Vm, cx: &mut Cx, def: ObjRef, unit: &str) -> Result<Option<i32>, VmError> {
+    let plot = match field(vm, cx, def, "bPlotCritical", unit)? {
         Value::Bool(b) => b,
         other => return Err(bad(unit, format!("bPlotCritical holds {}, not a bool", other.kind_name()))),
     };
-    let dlc = object_of(field(vm, def, "DlcExpansion", unit)?, "DlcExpansion", unit)?;
-    let number = int_of(&field(vm, def, "MissionNumber", unit)?, "MissionNumber", unit)?;
+    let dlc = object_of(field(vm, cx, def, "DlcExpansion", unit)?, "DlcExpansion", unit)?;
+    let number = int_of(&field(vm, cx, def, "MissionNumber", unit)?, "MissionNumber", unit)?;
     Ok((plot && dlc.is_none()).then_some(number))
 }
 
@@ -219,36 +242,36 @@ fn call_required(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>, unit: &st
 
 /// The world's mission tracker, or `None` when there is no world, replication info of that class or tracker (section
 /// 1, step 1).
-fn tracker(vm: &mut Vm, unit: &str) -> Result<Option<ObjRef>, VmError> {
+fn tracker(vm: &mut Vm, cx: &mut Cx, unit: &str) -> Result<Option<ObjRef>, VmError> {
     let world_info = match vm.service::<Actors>() {
         Some(a) => a.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.world_info(),
         None => None,
     };
     let Some(world_info) = world_info else { return Ok(None) };
-    let Some(gri) = object_of(field(vm, world_info, "GRI", unit)?, "WorldInfo.GRI", unit)? else {
+    let Some(gri) = object_of(field(vm, cx, world_info, "GRI", unit)?, "WorldInfo.GRI", unit)? else {
         return Ok(None);
     };
     let Some(gri_class) = vm.space.classes.by_path(GRI_CLASS) else { return Ok(None) };
     if !vm.space.classes.is_child_of(vm.space.heap.get(gri)?.class, gri_class) {
         return Ok(None);
     }
-    object_of(field(vm, gri, "MissionTracker", unit)?, "MissionTracker", unit)
+    object_of(field(vm, cx, gri, "MissionTracker", unit)?, "MissionTracker", unit)
 }
 
 /// The tracker branch: `None` for the fallback (data not valid, or a -1 answer), else the number of steps 2 and 3.
-fn tracker_branch(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<Option<i32>, VmError> {
+fn tracker_branch(vm: &mut Vm, cx: &mut Cx, tracker: ObjRef, unit: &str) -> Result<Option<i32>, VmError> {
     let valid = call_required(vm, tracker, "IsDataValid", vec![], unit)?.ret;
     if !valid.truth(&vm.space.names) {
         return Ok(None);
     }
-    let n = from_tracker(vm, tracker, unit)?;
+    let n = from_tracker(vm, cx, tracker, unit)?;
     Ok((n != -1).then_some(n))
 }
 
 /// Section 1, steps 2 and 3, on a tracker with valid data.
-fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError> {
-    if let Some(active) = object_of(field(vm, tracker, "ActiveMission", unit)?, "ActiveMission", unit)? {
-        return int_of(&field(vm, active, "MissionNumber", unit)?, "MissionNumber", unit);
+fn from_tracker(vm: &mut Vm, cx: &mut Cx, tracker: ObjRef, unit: &str) -> Result<i32, VmError> {
+    if let Some(active) = object_of(field(vm, cx, tracker, "ActiveMission", unit)?, "ActiveMission", unit)? {
+        return int_of(&field(vm, cx, active, "MissionNumber", unit)?, "MissionNumber", unit);
     }
     let listed = call_required(vm, tracker, "GetAllMissions", vec![Value::array(vec![])], unit)?;
     let list = listed.outs.first().and_then(Value::elements).map(<[Value]>::to_vec).ok_or_else(|| {
@@ -259,7 +282,7 @@ fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError
         let Some(def) = object_of(entry, "a mission of the tracker's list", unit)? else {
             return Err(NotYet::not_read(NONE_ENTRY, RECORD).into());
         };
-        let Some(number) = plot_mission(vm, def, unit)? else { continue };
+        let Some(number) = plot_mission(vm, cx, def, unit)? else { continue };
         let status = call_required(vm, tracker, "GetMissionStatus", vec![Value::Object(Some(def))], unit)?.ret;
         if let Some(n) = scan.grade(byte_of(&status, "GetMissionStatus", unit)?, number) {
             return Ok(n);
@@ -270,22 +293,41 @@ fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError
 
 /// `GetActiveMissionNumber` on `controller` (module documentation), with `reads` taken as read.
 pub fn active_mission_number(vm: &mut Vm, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
+    let mut cx = Cx::default();
+    let r = active_with(vm, &mut cx, controller, reads);
+    cx.finish(r)
+}
+
+fn active_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActiveMissionNumber";
-    let Some(tracker) = tracker(vm, UNIT)? else {
-        return plot_critical_mission_number(vm, controller, -1, reads);
+    let Some(tracker) = tracker(vm, cx, UNIT)? else {
+        return fallback(vm, controller, UNIT);
     };
-    let Some(n) = tracker_branch(vm, tracker, UNIT)? else {
-        return plot_critical_mission_number(vm, controller, -1, reads);
+    let Some(n) = tracker_branch(vm, cx, tracker, UNIT)? else {
+        return fallback(vm, controller, UNIT);
     };
     if reads.engine_gate {
         return Ok(n);
     }
-    let fallback = plot_critical_mission_number(vm, controller, -1, reads)?;
-    if n == fallback { Ok(n) } else { Err(NotYet::not_read(ENGINE_GATE, RECORD).into()) }
+    let other = fallback(vm, controller, UNIT)?;
+    if n == other { Ok(n) } else { Err(NotYet::not_read(ENGINE_GATE, RECORD).into()) }
+}
+
+/// The fallback (section 1, step 4): the controller's `GetActivePlotCriticalMissionNumber(-1)`, dispatched through
+/// the VM on its class; the callee's own answer, error included, is the answer.
+fn fallback(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<i32, VmError> {
+    let r = call_required(vm, controller, "GetActivePlotCriticalMissionNumber", vec![Value::Int(-1)], unit)?;
+    int_of(&r.ret, "GetActivePlotCriticalMissionNumber", unit)
 }
 
 /// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation), with `reads` taken as read.
 pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
+    let mut cx = Cx::default();
+    let r = plot_with(vm, &mut cx, controller, index, reads);
+    cx.finish(r)
+}
+
+fn plot_with(vm: &mut Vm, cx: &mut Cx, controller: ObjRef, index: i32, reads: Reads) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActivePlotCriticalMissionNumber";
     let index = if index < 0 {
         if !reads.playthrough {
@@ -298,7 +340,7 @@ pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32,
     } else {
         index
     };
-    let all = field(vm, controller, "MissionPlaythroughs", UNIT)?;
+    let all = field(vm, cx, controller, "MissionPlaythroughs", UNIT)?;
     let all = all.elements().ok_or_else(|| bad(UNIT, "MissionPlaythroughs is not an array".to_string()))?;
     let Some(playthrough) = usize::try_from(index).ok().and_then(|i| all.get(i)).cloned() else {
         return Ok(0);
@@ -310,7 +352,7 @@ pub fn plot_critical_mission_number(vm: &mut Vm, controller: ObjRef, index: i32,
         let Some(def) = object_of(struct_field(vm, &record, "MissionDef", UNIT)?, "MissionDef", UNIT)? else {
             continue;
         };
-        let Some(number) = plot_mission(vm, def, UNIT)? else { continue };
+        let Some(number) = plot_mission(vm, cx, def, UNIT)? else { continue };
         let status = byte_of(&struct_field(vm, &record, "Status", UNIT)?, "Status", UNIT)?;
         if let Some(n) = scan.grade(status, number) {
             return Ok(n);
@@ -329,38 +371,49 @@ fn struct_field(vm: &Vm, v: &Value, name: &str, unit: &str) -> Result<Value, VmE
     s.fields.get(index).cloned().ok_or_else(missing)
 }
 
+/// The reads the bound natives take: nothing in the port ([`Reads::OFF`]). A test may switch them with a
+/// [`TestReads`] service, so the rules behind them run through the VM's dispatch too.
+fn reads_for(vm: &Vm) -> Reads {
+    #[cfg(test)]
+    if let Some(r) = vm.service::<TestReads>() {
+        return r.borrow().0;
+    }
+    let _ = vm;
+    Reads::OFF
+}
+
+/// Tests only: the reads the bound natives take.
+#[cfg(test)]
+pub(crate) struct TestReads(pub Reads);
+
 pub(crate) fn n_active_mission_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(ACTIVE_MISSION_NUMBER, "called with no controller".to_string()))?;
-    Ok(Value::Int(active_mission_number(c.vm, me, Reads::OFF)?))
+    let reads = reads_for(c.vm);
+    Ok(Value::Int(active_mission_number(c.vm, me, reads)?))
 }
 
 pub(crate) fn n_plot_critical_number(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let me = c.this.ok_or_else(|| bad(PLOT_CRITICAL_NUMBER, "called with no controller".to_string()))?;
     let index = if c.has(0) { int_of(c.arg(0)?, "PlaythroughIndex", PLOT_CRITICAL_NUMBER)? } else { -1 };
-    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index, Reads::OFF)?))
+    let reads = reads_for(c.vm);
+    Ok(Value::Int(plot_critical_mission_number(c.vm, me, index, reads)?))
 }
 
-/// The screen's `NotYet` of `what`: marked after the accept's writes when `this` is the mission screen (module
-/// documentation), plain on any other receiver.
-fn screen_not_yet(vm: &Vm, this: Option<ObjRef>, what: &str) -> Result<Value, VmError> {
-    let on_screen = match (this, vm.space.classes.by_path(SCREEN_CLASS)) {
-        (Some(o), Some(screen)) => vm.space.classes.is_child_of(vm.space.heap.get(o)?.class, screen),
-        _ => false,
-    };
-    let what = if on_screen { format!("{}: {what}", super::datastore::PARTIAL_WRITES) } else { what.to_string() };
+/// The screen's named `NotYet` of `what`. The native writes nothing, so it is not marked here (module documentation).
+fn screen_not_yet(what: &'static str) -> Result<Value, VmError> {
     Err(NotYet::layer_absent(what, TEXT_LIST_LAYER, RECORD_GFX).into())
 }
 
-pub(crate) fn n_update_mission_text_list(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(c.vm, c.this, TEXT_LIST)
+pub(crate) fn n_update_mission_text_list(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    screen_not_yet(TEXT_LIST)
 }
 
-pub(crate) fn n_movie_query(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(c.vm, c.this, MOVIE_QUERY)
+pub(crate) fn n_movie_query(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    screen_not_yet(MOVIE_QUERY)
 }
 
-pub(crate) fn n_focus(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    screen_not_yet(c.vm, c.this, FOCUS)
+pub(crate) fn n_focus(_c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    screen_not_yet(FOCUS)
 }
 
 #[cfg(test)]

@@ -947,7 +947,8 @@ impl MissionScript {
         let before = self.inner.mission.status();
         let (c, def, director) = (self.inner.o.controller, self.inner.mission.definition(), self.director());
         self.run(vm, |vm| {
-            call_by_name(vm, c, "AcceptMission", vec![Value::Object(Some(def)), Value::Object(director)]).map(|_| ())
+            let r = call_by_name(vm, c, "AcceptMission", vec![Value::Object(Some(def)), Value::Object(director)]);
+            self.after_status_write(vm, before, r.map(|_| ()))
         })?;
         Ok(self.inner.mission.status() != before)
     }
@@ -955,14 +956,32 @@ impl MissionScript {
     /// `ServerCompleteMission(Mission, MissionDirector)`. True when the mission became Complete through it.
     pub fn turn_in(&self, vm: &mut Vm) -> Result<bool, MissionError> {
         self.inner.state.borrow_mut().turning_in = true;
+        let before = self.inner.mission.status();
         let (c, def, director) = (self.inner.o.controller, self.inner.mission.definition(), self.director());
         let ran = self.run(vm, |vm| {
-            call_by_name(vm, c, "ServerCompleteMission", vec![Value::Object(Some(def)), Value::Object(director)])
-                .map(|_| ())
+            let r = call_by_name(vm, c, "ServerCompleteMission", vec![Value::Object(Some(def)), Value::Object(director)]);
+            self.after_status_write(vm, before, r.map(|_| ()))
         });
         self.inner.state.borrow_mut().turning_in = false;
         ran?;
         Ok(self.inner.mission.status() == tracker::Status::Complete)
+    }
+
+    /// The accept's and the turn-in's write boundary (review r1 of #480, item 2), Off only: a `NotYet` that leaves the
+    /// controller's script after the mission's status changed from `before` came after a known write, so it is marked
+    /// "stopped after partial writes" (once; kind and record kept) and the run stops on it. Any other result, and every
+    /// result under Reference, is unchanged.
+    fn after_status_write(&self, vm: &Vm, before: tracker::Status, r: Result<(), MissionError>) -> Result<(), MissionError> {
+        match r {
+            Err(BehaviorError::Vm(VmError::NotYet(n)))
+                if vm.parity == ParityMode::Off && self.inner.mission.status() != before =>
+            {
+                let mark = ow_behavior::kernel::run::PARTIAL_WRITES;
+                let what = if n.what.starts_with(mark) { n.what.to_string() } else { format!("{mark}: {}", n.what) };
+                Err(VmError::NotYet(NotYet::new(what, n.missing, n.record)).into())
+            }
+            other => other,
+        }
     }
 
     /// After `MissionSystem::load_state`: the controller's own record follows the restored status, as the level-load
