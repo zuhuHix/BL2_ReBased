@@ -30,6 +30,11 @@ no raw analysis output, Ghidra or REA. That note lands with the analyst's branch
   - `NotYet`: not in memory (the engine flag, the queue and the later report are not read), and a context the VM
     finds not implementing the interface (a "no" is not proven outside `ow-vm`, decision 2026-11-15-20).
   - The interface path, `GearboxFramework.IStreamingDataEvent`, was read from the installed package's declaration.
+- **The class switch after an asynchronous report is not driven here.** Per the note as fixed in #422 (head 87602e3):
+  the not-found path arms no retry timer; the report reaches the controller's script `RunStreamingDataEvent`, which
+  only stores the pending class and archetype (`SetPendingClassSwitch`); each `SwitchPlayerClass` looks the archetype
+  up again; and what carries the switch on after the report is not read. This lane codes only the already-loaded
+  path, and the not-found path stays `NotYet` before anything is queued or reported.
 - **Reference.** Both natives stay unbound there: the C++ has no stand-in. They are registered by the pawn-data pack,
   outside Reference only.
 - **Verified (automated, local).** Four `ow-world` tests on an invented `GearboxFramework` package:
