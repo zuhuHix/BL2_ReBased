@@ -181,15 +181,15 @@ unread, the answer is marked **Off assumption**, and that is UNVERIFIED like eve
   cannot re-enter the reset, and the headless world has no remote client to send it to. Below the authority the
   native does not send it at all.
 
-**The four request cases.** A request is made only when both the manager and the player class are set (P4 and P5).
+**The request cases.** A request is made only when both the manager and the player class are set (P4 and P5a).
 
-| Path shape | Game, already loaded | Game, not loaded | Off (A1, A2) |
-|---|---|---|---|
-| has a dot | delivered inside the call | queued, delivered later | pending request recorded, nothing delivered |
-| no dot (the empty string included) | delivered inside the call | dropped: nothing recorded, nothing delivered | nothing recorded, nothing delivered |
+| Path shape | Game, already loaded | Game, not loaded, switch on | Game, not loaded, switch off | Off (A1, A2) |
+|---|---|---|---|---|
+| has a dot | delivered inside the call | loaded and delivered inside the call | queued, delivered later | pending request recorded, nothing delivered |
+| no dot (the empty string included) | delivered inside the call | dropped: nothing recorded, nothing delivered | dropped: nothing recorded, nothing delivered | nothing recorded, nothing delivered |
 
-Off's row is the game's "not loaded" column, by A1. Off does not deliver for a dotted path even where the game
-would deliver at once.
+Off's answer is the game's "not loaded, switch off" column, by A1 and A2. For a dotted path, Off does not deliver
+even where the game would deliver at once: already loaded, or the switch on.
 
 **Preflight.** These reads are cheap and certain, and all of them come before the allocation, in this order:
 
@@ -198,9 +198,10 @@ would deliver at once.
 | P1 | the controller's class declares `PlayerSkillTree` as an object property | otherwise a data error |
 | P2 | read `PlayerSkillTree` | None: a new tree (go on); set: **an existing tree**, the named `NotYet` (`NotRead`) "InitPlayerSkillTree: the reset of an existing skill tree (NATIVE_SKILLS.md section 3.1 is not ported)", returned before any write; any other kind: a data error |
 | P3 | find the class `WillowGame.PlayerSkillTree` in the code store | found: go on; otherwise the store's own error, propagated unchanged (never a `NotYet` made here, never a None) |
-| P4 | the engine globals | from the world; a world without them gives its own `NotYet` (`LayerAbsent`), unchanged. The globals' class must declare `ThePlayerPawnDataManager` as an object property, otherwise a data error; None: **no request**; an object: go on; any other kind: a data error |
-| P5 | the controller's `PlayerClass` (declared as an object property, otherwise a data error) | None: **no request**; set: its class must declare `SkillTreePath` as a string property, otherwise a data error; the string is the request path |
-| P6 | the request decision | a request exactly when P4 and P5 both gave one; then its row in the table above (a dot or not) |
+| P4 | the engine globals | From the world. A world without them gives its own `NotYet` (`LayerAbsent`), unchanged. The globals' class must declare `ThePlayerPawnDataManager` as an object property, otherwise a data error. The stored value: None means **no manager**; an object is the manager; any other kind is the data error "ThePlayerPawnDataManager holds a <kind>, not an object" |
+| P5a | the controller's `PlayerClass`, read **whether or not P4 found a manager** (the native reads it first in the request test) | The class must declare it as an object property, otherwise a data error. The stored value: None means **no player class**; an object is the player class; any other kind is the data error "PlayerClass holds a <kind>, not an object". A missing manager only disables the request; it does not skip this check |
+| P5b | the player class's `SkillTreePath`, read **only when P4 gave a manager and P5a a player class** (the native reads the path only for a request) | The player class's class must declare it as a string property, otherwise a data error. The stored value: a string is the request path; any other kind is the data error "SkillTreePath holds a <kind>, not a string" |
+| P6 | the request decision | A request exactly when P4 gave a manager and P5a a player class, and then its row in the table above (a dot or not). With no manager or no player class: no request, W3 is skipped, and P5b is not read |
 
 The existing-tree refusal in P2 is the one answer for that state. The only installed caller, `OnPlayerClassChange`,
 clears `PlayerSkillTree` first, so the slice never meets it. Its reset is the full NATIVE_SKILLS.md section 3.1
@@ -285,7 +286,16 @@ Run them at a new game and at a save load as well. The **state snapshot** read a
    and record whether it is resident and whether the path holds a dot (section 2, point 4).
 2. **The native's frame.** Take the state snapshot in a pre-hook and in a post-hook of `InitPlayerSkillTree`, and
    record the frame number at each.
-3. **The callback.** Hook `WillowPlayerController.RunStreamingDataEvent`, and record:
+3. **The callback.**
+   - Hook the script event `RunStreamingDataEvent` on every class that declares or overrides it, not only
+     `WillowPlayerController`. Add a process-event hook filtered on the function name `RunStreamingDataEvent`, so a
+     delivery to any object is seen.
+   - Also hook every `RunStreamingDataEvent`-named function the SDK can enumerate, with its event name argument, from
+     the native's pre-hook until a set number of frames after it.
+   - A delivery seen by none of these hooks within that window is recorded as "not delivered". One seen only by the
+     broad hook names its actual receiver.
+
+   For each delivery, record:
    - **the receiver** (the hooked `self`, and whether it is the requesting controller, open question 4);
    - the event name;
    - the other participant and its path;
@@ -295,8 +305,10 @@ Run them at a new game and at a save load as well. The **state snapshot** read a
    - whether the native's pre-hook has fired and its post-hook has not, which means the callback ran inside the call
      (A1 and A2, open questions 2, 3 and 5).
    Take the state snapshot at the callback's entry and at its exit.
-4. **The completion's order.** Hook `PlayerSkillTree.Initialize` and `PlayerSkillTree.RegisterListener`, and record
-   their order and frames against points 2 and 3.
+4. **The completion's order.** Hook `PlayerSkillTree.Initialize` and `PlayerSkillTree.RegisterListener`.
+   - Record their order and frames against points 2 and 3.
+   - Take the state snapshot at the entry and at the exit of each, so the reset inside `Initialize` and the listener
+     count before and after the registration are visible.
 5. **The reset's client event** (A5). Hook `WillowPlayerController.ClientResetSkillTree` and record:
    - whether it is called inside the native's frame;
    - its argument;
