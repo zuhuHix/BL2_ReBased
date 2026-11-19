@@ -211,6 +211,12 @@ impl WorldHooks for Hooks {
             })
     }
 
+    /// The world query service supports the globals object: `Ok(None)` until the map load sets it (review r1 of
+    /// #458, item 6), where [`WorldHooks::globals`] answers `NotYet`.
+    fn globals_object(&mut self, _w: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError> {
+        self.read("the engine globals object", WorldQuery::globals)
+    }
+
     fn game_info(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError> {
         let (set, actors) =
             self.read("the game info object", |s| (s.game_info, s.actors.clone()))?;
@@ -407,11 +413,15 @@ mod tests {
     #[test]
     fn globals_and_game_info_are_not_yet_until_the_map_load_sets_them() {
         let (mut vm, o) = vm_with_object();
+        // Without the hooks there is no engine-globals support: the optional path keeps the NotYet (review r1 of #458).
+        assert!(matches!(missing(vm.globals_object().unwrap_err()), Missing::LayerAbsent(_)));
         let q = install(&mut vm).unwrap();
         assert!(matches!(
             missing(vm.globals().unwrap_err()),
             Missing::LayerAbsent(_)
         ));
+        // With them, a world that has no globals object yet says so.
+        assert_eq!(vm.globals_object().unwrap(), None);
         assert!(matches!(
             missing(vm.game_info().unwrap_err()),
             Missing::LayerAbsent(_)
@@ -419,6 +429,7 @@ mod tests {
         q.borrow_mut().set_globals(o);
         q.borrow_mut().set_game_info(o);
         assert_eq!(vm.globals().unwrap(), o);
+        assert_eq!(vm.globals_object().unwrap(), Some(o));
         assert_eq!(vm.game_info().unwrap(), Some(o));
     }
 

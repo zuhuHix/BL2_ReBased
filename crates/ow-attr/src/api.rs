@@ -293,17 +293,28 @@ pub trait AttrWorld {
         .into())
     }
 
+    /// The engine globals object, or `Ok(None)` when this world supports one but has none (review r1 of #458, item 6).
+    /// The default cannot tell the two apart, so it is [`AttrWorld::globals`] as `Some`: a world without engine-globals
+    /// support keeps its `NotYet { LayerAbsent }`. A world that can tell (the VM world, through its hooks) overrides
+    /// it. Added by IMPL-BLACKMARKET-RESOLVER (an additive change).
+    fn globals_object(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        self.globals().map(Some)
+    }
+
     /// The globals definition reached through the engine globals object (`BlackMarketUpgradeAttributeValueResolver`'s
     /// cold-cache walk, NATIVE_BLACKMARKET_UPGRADES.md section 3). `Ok(None)`: the lookup is supported and finds no
     /// definition, which that resolver answers with 0.0. The default is the port's reading of "through it" (lane
     /// IMPL-BLACKMARKET-RESOLVER, decision 2026-11-19-72, UNVERIFIED): the globals object's
     /// `DefaultGlobalsDefinitionName` (the configured name, `GD_Globals.General.Globals` in the installed class
-    /// default), loaded through the world's store. An empty name is `Ok(None)`. Errors propagate unchanged:
+    /// default), loaded through the world's store. No globals object ([`AttrWorld::globals_object`] `Ok(None)`) and an
+    /// empty name are `Ok(None)`. Errors propagate unchanged:
     /// [`AttrWorld::globals`]'s `NotYet { LayerAbsent }` for a world without engine globals, the store's
     /// `NotYet { LayerAbsent("ow-defs") }` for a world without one. A globals object whose class lacks the name, or
     /// holds something else there, is bad data. Added by IMPL-BLACKMARKET-RESOLVER (an additive change).
     fn globals_definition(&mut self) -> Result<Option<ObjRef>, AttrError> {
-        let globals = self.globals()?;
+        let Some(globals) = self.globals_object()? else {
+            return Ok(None);
+        };
         let WorldParts { space, defs } = self.parts();
         let class = space.heap.get(globals)?.class;
         let bad = |what: String| AttrError::BadData {
@@ -424,6 +435,9 @@ pub struct NumForms {
 pub struct EvalCx<'a> {
     pub world: &'a mut dyn AttrWorld,
     pub forms: NumForms,
+    /// How many committed resolver writes this evaluation made (review r1 of #458, item 4): a resolver that writes
+    /// on a read ([`EvalCx::note_writes`]) makes a later `NotYet` of the same evaluation terminal, prefixed.
+    committed: std::cell::Cell<u32>,
 }
 
 impl<'a> EvalCx<'a> {
@@ -432,7 +446,18 @@ impl<'a> EvalCx<'a> {
         EvalCx {
             world,
             forms: NumForms::default(),
+            committed: std::cell::Cell::new(0),
         }
+    }
+
+    /// Records that a resolver committed writes during this evaluation (module documentation of `eval`, the fold).
+    pub fn note_writes(&self) {
+        self.committed.set(self.committed.get().saturating_add(1));
+    }
+
+    /// Whether any resolver committed writes during this evaluation.
+    pub fn wrote(&self) -> bool {
+        self.committed.get() > 0
     }
 
     pub fn with_forms(mut self, forms: NumForms) -> Self {
@@ -484,6 +509,14 @@ pub trait ValueResolver {
         previous: f32,
         cx: &mut EvalCx<'_>,
     ) -> Result<f32, AttrError>;
+
+    /// Whether this class is available to a read in this world's mode, checked by
+    /// [`AttributeSystem::preflight_read`] before anything is evaluated (review r1 of #458, item 5). The default is
+    /// available. A class implemented in one mode only refuses here in the other, as an unregistered class would.
+    fn available(&self, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        let _ = cx;
+        Ok(())
+    }
 
     /// The base value. The class default is the same as [`ValueResolver::value`] (section 6).
     fn base_value(

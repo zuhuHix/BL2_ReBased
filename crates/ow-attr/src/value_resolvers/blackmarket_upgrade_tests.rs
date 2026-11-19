@@ -12,7 +12,7 @@ use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 use ow_package::store::PackageStore;
 
-use super::blackmarket_upgrade::{ARRAY_WRITE, CLASS, CONTROLLER};
+use super::blackmarket_upgrade::{ARRAY_WRITE, CACHE_WRITE, CLASS, CONTROLLER};
 use super::testworld::{Fx, World, system};
 use crate::api::{AttrError, AttrWorld, EngineQuery, EvalCx, GlobalSlots, NumForms, WorldParts};
 
@@ -361,4 +361,179 @@ fn the_standard_system_registers_the_class() {
     let c = fx.by_path(CLASS);
     let o = fx.obj(c, "R", vec![]);
     assert!(sys.value_resolver(&fx.w.space, o).is_ok());
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review r1 of #458
+// ---------------------------------------------------------------------------------------------------------------
+
+/// Item 1: an empty array declared with the wrong element kind is refused before either write, for the controller's
+/// levels (floats) and for the globals list (ints).
+#[test]
+fn empty_arrays_of_the_wrong_kind_refuse_before_either_write() {
+    let mut fx = Fx::new();
+    let object = fx.c.object;
+    let space = &mut fx.w.space;
+    let d = |space: &mut ow_object::heap::ObjectSpace, n: &str, k: PropKind| PropertyDecl::new(space.names.intern(n), k);
+    let decls = vec![d(space, "CachedUpgradeIndex", PropKind::Int)];
+    let up_class = space.classes.define("WillowGame.BlackMarketUpgradeDefinition", Some(object), decls).unwrap();
+    let decls = vec![d(space, "BlackMarketUpgrades", PropKind::Array(Box::new(PropKind::Object { class: object })))];
+    let def_class = space.classes.define("WillowGame.GlobalsDefinition", Some(object), decls).unwrap();
+    let decls = vec![d(space, "BlackMarketUpgrades", PropKind::Array(Box::new(PropKind::Int)))];
+    let int_list = space.classes.define("Test.IntListGlobals", Some(object), decls).unwrap();
+    let decls = vec![d(space, "BlackMarketUpgrades", PropKind::Array(Box::new(PropKind::Float)))];
+    let floats = space.classes.define("Test.FloatLevels", Some(object), decls).unwrap();
+    let a = fx.obj(up_class, "A", vec![("CachedUpgradeIndex", Value::Int(-1))]);
+    let def = fx.obj(def_class, "Globals", vec![("BlackMarketUpgrades", Value::array(vec![Value::Object(Some(a))]))]);
+    // No WillowPlayerController is declared, so every context is accepted (note section 2).
+    let holder = fx.obj(floats, "Holder", vec![]);
+    let at = attr(&mut fx, holder, Some(a));
+    assert!(matches!(read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err(), AttrError::BadData { .. }));
+    assert_eq!(cache(&fx, a), -1, "the empty float array is refused before the cache commits");
+    let bad_list = fx.obj(int_list, "IntGlobals", vec![]);
+    let e = read(&mut fx, at, Ok(Some(bad_list)), false).0.unwrap_err();
+    assert!(matches!(e, AttrError::BadData { .. }), "{e:?}");
+    assert_eq!(cache(&fx, a), -1);
+}
+
+/// Item 2: a warm cache past the array bound is bad data before any write, the array unchanged.
+#[test]
+fn a_cached_index_past_the_array_bound_is_bad_data_before_any_write() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let up = upgrade(&mut fx, &c, "Huge", i32::MAX);
+    let pc = holder(&mut fx, c.controller, "PC", &[4]);
+    let at = attr(&mut fx, pc, Some(up));
+    let e = read(&mut fx, at, Err(()), false).0.unwrap_err();
+    assert!(matches!(e, AttrError::BadData { .. }), "{e:?}");
+    assert_eq!(array(&fx, pc), vec![4]);
+}
+
+/// Item 3: a listed stand-in after a writable entry is the named cache-write `NotPorted`, and the writable entry is
+/// not written; a handle with no store keeps its load error.
+#[test]
+fn a_listed_stand_in_is_the_cache_write_not_yet_and_a_load_failure_keeps_its_error() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let a = upgrade(&mut fx, &c, "Writable", -1);
+    let s = fx.w.space.alloc_stand_in(c.upgrade, "StandIn", Origin::Default { class: c.upgrade }).unwrap();
+    let def = definition(&mut fx, &c, &[Some(a), Some(s)]);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let at = attr(&mut fx, pc, Some(a));
+    let e = read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert_eq!((n.missing.clone(), n.what.as_ref()), (Missing::NotPorted, CACHE_WRITE));
+    assert_eq!(cache(&fx, a), -1);
+    assert!(array(&fx, pc).is_empty());
+    let r = fx.w.space.alloc_stand_in(c.upgrade, "Handle", Origin::Resource { package: 0, index: 1 }).unwrap();
+    let def = definition(&mut fx, &c, &[Some(a), Some(r)]);
+    let e = read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err();
+    assert!(matches!(not_yet(&e).map(|n| &n.missing), Some(Missing::LayerAbsent(_))), "the load error: {e:?}");
+    assert_eq!(cache(&fx, a), -1);
+}
+
+/// Item 4: a later resolver's `NotYet` after the black-market writes is terminal and prefixed, its kind kept, also
+/// on a direct library read.
+#[test]
+fn a_later_not_yet_after_the_writes_is_prefixed_on_a_library_read() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let ([_, b, _], _, def) = setup(&mut fx, &c);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let bm = fx.by_path(CLASS);
+    let r = fx.obj(bm, "BM", vec![("AssociatedBlackMarketUpgrade", Value::Object(Some(b)))]);
+    let unread_class = fx.by_path("Test.UnreadValueResolver");
+    let unread = fx.obj(unread_class, "Unread", vec![]);
+    let ctx = fx.target(Some(pc));
+    let at = fx.attr("Att_BM_Then_Unread", vec![ctx], vec![r, unread]);
+    let e = read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert_eq!(n.missing, Missing::NotRead);
+    assert!(n.what.starts_with("stopped after partial writes: value resolver class Test.UnreadValueResolver"), "{n:?}");
+    assert_eq!(cache(&fx, b), 2, "the writes stay");
+    // Without writes the same chain refuses plainly.
+    let up = upgrade(&mut fx, &c, "NoUpgrade", 0);
+    let _ = up;
+    let r2 = fx.obj(bm, "BM2", vec![("AssociatedBlackMarketUpgrade", Value::Object(None))]);
+    let at = fx.attr("Att_None_Then_Unread", vec![ctx], vec![r2, unread]);
+    let n = read(&mut fx, at, Ok(Some(def)), false).0.unwrap_err();
+    assert!(!not_yet(&n).unwrap().what.starts_with("stopped"), "{n:?}");
+}
+
+/// Item 5: under Reference the preflight refuses the class as it refused an unregistered one.
+#[test]
+fn reference_preflight_refuses_the_class_as_before() {
+    let mut fx = Fx::new();
+    fx.w.defs = Some(DefStore::new(PackageStore::new_empty(), IdentityPolicy::FirstInScanOrder, ParityMode::Reference));
+    let c = classes(&mut fx);
+    let up = upgrade(&mut fx, &c, "Warm", 0);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let at = attr(&mut fx, pc, Some(up));
+    let sys = system();
+    let e = sys.preflight_read(at, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert_eq!(n.missing, Missing::NotRead);
+    assert_eq!(n.what.as_ref(), format!("value resolver class {CLASS}"));
+    // Off passes the same preflight.
+    let mut off = Fx::new();
+    let c = classes(&mut off);
+    let up = upgrade(&mut off, &c, "Warm", 0);
+    let pc = holder(&mut off, c.controller, "PC", &[]);
+    let at = attr(&mut off, pc, Some(up));
+    assert!(system().preflight_read(at, &mut EvalCx::new(&mut off.w)).is_ok());
+}
+
+/// Item 6: a world that supports a globals object but has none answers "none found" (0.0), unlike a world without
+/// the support (its `NotYet`).
+#[test]
+fn no_globals_object_is_none_found_and_no_support_is_its_not_yet() {
+    struct NoGlobals<'a>(&'a mut World);
+    impl AttrWorld for NoGlobals<'_> {
+        fn parts(&mut self) -> WorldParts<'_> {
+            self.0.parts()
+        }
+        fn globals(&mut self) -> Result<ObjRef, AttrError> {
+            Err(NotYet::layer_absent("the engine globals object", "ow-world", "test world").into())
+        }
+        fn globals_object(&mut self) -> Result<Option<ObjRef>, AttrError> {
+            Ok(None)
+        }
+        fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
+            Ok(None)
+        }
+        fn global_slots(&mut self) -> &mut GlobalSlots {
+            self.0.global_slots()
+        }
+        fn attribute_changed(&mut self, o: ObjRef, p: PropId, f: NumForms) -> Result<(), AttrError> {
+            self.0.attribute_changed(o, p, f)
+        }
+        fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+            self.0.rng(s)
+        }
+    }
+    let mut fx = Fx::new();
+    assert_eq!(NoGlobals(&mut fx.w).globals_definition().unwrap(), None);
+    struct NoSupport<'a>(&'a mut World);
+    impl AttrWorld for NoSupport<'_> {
+        fn parts(&mut self) -> WorldParts<'_> {
+            self.0.parts()
+        }
+        fn globals(&mut self) -> Result<ObjRef, AttrError> {
+            Err(NotYet::layer_absent("the engine globals object", "ow-world", "test world").into())
+        }
+        fn game_info(&mut self) -> Result<Option<ObjRef>, AttrError> {
+            Ok(None)
+        }
+        fn global_slots(&mut self) -> &mut GlobalSlots {
+            self.0.global_slots()
+        }
+        fn attribute_changed(&mut self, o: ObjRef, p: PropId, f: NumForms) -> Result<(), AttrError> {
+            self.0.attribute_changed(o, p, f)
+        }
+        fn rng(&mut self, s: CrtStream) -> Result<&mut dyn Rand15, AttrError> {
+            self.0.rng(s)
+        }
+    }
+    let e = NoSupport(&mut fx.w).globals_definition().unwrap_err();
+    assert!(matches!(not_yet(&e).map(|n| &n.missing), Some(Missing::LayerAbsent(_))), "{e:?}");
 }

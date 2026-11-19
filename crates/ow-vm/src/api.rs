@@ -61,6 +61,11 @@ use crate::services::Services;
 pub trait WorldHooks {
     /// The engine globals object (`AttrWorld::globals`).
     fn globals(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;
+    /// The engine globals object, `Ok(None)` when the world supports one but has none (`AttrWorld::globals_object`,
+    /// review r1 of #458). The default cannot tell, so it is [`WorldHooks::globals`] as `Some`.
+    fn globals_object(&mut self, w: WorldParts<'_>) -> Result<Option<ObjRef>, AttrError> {
+        self.globals(w).map(Some)
+    }
     /// The game info object (`AttrWorld::game_info`).
     fn game_info(&mut self, w: WorldParts<'_>) -> Result<ObjRef, AttrError>;
     /// An engine query of a context resolver (`AttrWorld::engine_query`). `Ok(None)`: ran, found nothing.
@@ -1192,6 +1197,11 @@ impl AttrWorld for Vm {
     /// Through the [`WorldHooks`]; without them `NotYet { LayerAbsent("ow-world") }`.
     fn globals(&mut self) -> Result<ObjRef, AttrError> {
         self.with_hooks("the engine globals object", |h, w| h.globals(w))
+    }
+
+    /// Through the [`WorldHooks`]; without them `NotYet { LayerAbsent("ow-world") }` (no engine-globals support).
+    fn globals_object(&mut self) -> Result<Option<ObjRef>, AttrError> {
+        self.with_hooks("the engine globals object", |h, w| h.globals_object(w))
     }
 
     /// Through the [`WorldHooks`] (always an object or an error); without them `NotYet { LayerAbsent("ow-world") }`.

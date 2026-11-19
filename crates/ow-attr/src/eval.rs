@@ -522,9 +522,23 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
         let Some(resolver) = object("ValueResolverChain entry", entry)? else {
             return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
         };
-        sys.value_resolver(cx.world.parts().space, resolver)?;
+        sys.value_resolver(cx.world.parts().space, resolver)?.available(cx)?;
     }
     Ok(())
+}
+
+/// The mark of a refusal after committed writes (the hub's ruling, the same text the script-native wrappers use).
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
+/// A `NotYet` met after a resolver of this evaluation committed writes is terminal: its text is prefixed with
+/// [`PARTIAL_WRITES`] at the very start (once), its kind and record kept. Any other error is returned unchanged.
+pub fn after_partial_writes(e: AttrError) -> AttrError {
+    match e {
+        AttrError::NotYet(n) if !n.what.starts_with(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
 }
 
 pub(crate) fn value_context(
@@ -630,11 +644,19 @@ fn fold(
                 NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into(),
             );
         };
-        let r = sys.value_resolver(cx.world.parts().space, resolver)?;
-        previous = if base {
-            r.base_value(sys, resolver, context, previous, cx)?
-        } else {
-            r.value(sys, resolver, context, previous, cx)?
+        // A refusal after a resolver of this evaluation committed writes is terminal and prefixed (review r1 of #458,
+        // item 4): the shared fold marks it, whichever API the read came through.
+        let step = sys.value_resolver(cx.world.parts().space, resolver).and_then(|r| {
+            if base {
+                r.base_value(sys, resolver, context, previous, cx)
+            } else {
+                r.value(sys, resolver, context, previous, cx)
+            }
+        });
+        previous = match step {
+            Ok(v) => v,
+            Err(e) if cx.wrote() => return Err(after_partial_writes(e)),
+            Err(e) => return Err(e),
         };
     }
     Ok(previous)
