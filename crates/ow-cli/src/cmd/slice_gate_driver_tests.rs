@@ -167,10 +167,17 @@ impl Toy {
         let mut r = Ran::default();
         let seen: Rc<Cell<Option<CastActors>>> = Rc::new(Cell::new(None));
         let got = seen.clone();
-        drive_phaselock(&mut r, &mut self.world.vm, grading, classes, move |_vm, actors| {
-            got.set(Some(actors));
-            Ok(())
-        });
+        drive_phaselock(
+            &mut r,
+            &mut self.world.vm,
+            grading,
+            classes,
+            move |_vm, actors| {
+                got.set(Some(actors));
+                actors.0.ok_or_else(|| VmError::Script { function: "toy".into(), message: "no pawn".into() })
+            },
+            |_, _, _| false,
+        );
         (r, seen.get())
     }
 }
@@ -244,9 +251,14 @@ fn a_not_yet_after_a_committed_spawn_is_marked() {
     let mut t = toy();
     let before = t.listed().len();
     let mut r = Ran::default();
-    drive_phaselock(&mut r, &mut t.world.vm, Grading::Strict, &["Engine.ToyPawn", "Engine.ToyBlocked", "Engine.ToyTarget"], |_, _| {
-        panic!("the cast must not run")
-    });
+    drive_phaselock(
+        &mut r,
+        &mut t.world.vm,
+        Grading::Strict,
+        &["Engine.ToyPawn", "Engine.ToyBlocked", "Engine.ToyTarget"],
+        |_, _| panic!("the cast must not run"),
+        |_, _, _| panic!("no evidence without a cast"),
+    );
     let (outcome, stop) = r.stop.expect("a stop");
     assert_eq!(outcome, Outcome::NotYet);
     assert!(stop.text.starts_with(PARTIAL_WRITES), "{}", stop.text);
@@ -297,9 +309,14 @@ fn the_grading_follows_the_error_s_variant_not_its_text() {
     let mut t = toy();
     let mut r = Ran::default();
     let message = looks.clone();
-    drive_phaselock(&mut r, &mut t.world.vm, Grading::Strict, &ACTORS, move |_, _| {
-        Err(VmError::Script { function: "toy".into(), message })
-    });
+    drive_phaselock(
+        &mut r,
+        &mut t.world.vm,
+        Grading::Strict,
+        &ACTORS,
+        move |_, _| Err(VmError::Script { function: "toy".into(), message }),
+        |_, _, _| panic!("no evidence after a cast error"),
+    );
     let (outcome, stop) = r.stop.expect("a stop");
     assert_eq!((outcome, stop.step.as_str()), (Outcome::Error, "cast"), "{}", stop.text);
     // A real NotYet whose record names a higher-priority phrase keeps its own subject and record.
@@ -408,4 +425,91 @@ fn link_9_s_evidence_is_the_skill_s_lift_writes() {
     put(&mut vm, plain, "LiftedPawn", Value::Object(Some(target)));
     put(&mut vm, plain, "CurrentState", Value::Byte(2));
     assert!(!phaselock_evident(&vm, plain, Some(target)), "a CurrentState with no enum");
+}
+
+/// An invented skill class with the two fields link 9's evidence reads, on `vm`; `EPLS_Intro` at position 2. With
+/// `fold`, the name table first holds the spelling `epls_intro` (review r1 of #568: the evidence finds the value by
+/// name, not by the stored spelling).
+fn toy_skill_class(vm: &mut Vm, fold: bool) -> (ow_object::ids::ClassId, u8) {
+    use ow_object::layout::{PropKind, PropertyDecl};
+    if fold {
+        vm.space.names.intern("epls_intro");
+    }
+    let names = ["EPLS_None", "EPLS_Locked", "EPLS_Intro"].iter().map(|n| vm.space.names.intern(n)).collect();
+    let states = vm.space.classes.define_enum("WillowGame.ToyLiftActionSkill.EPhaselockState", names).unwrap();
+    let props = vec![
+        PropertyDecl::new(vm.space.names.intern("CurrentState"), PropKind::Byte { enum_: Some(states) }),
+        PropertyDecl::new(vm.space.names.intern("LiftedPawn"), PropKind::Object { class: ow_object::ids::ClassId::new(0) }),
+    ];
+    (vm.space.classes.define("WillowGame.ToyLiftActionSkill", None, props).unwrap(), 2)
+}
+
+fn lift(vm: &mut Vm, skill: ObjRef, target: Option<ObjRef>, state: u8) {
+    let class = vm.space.heap.get(skill).unwrap().class;
+    let p = vm.space.prop(class, "LiftedPawn").unwrap();
+    vm.space.write(skill, PropAddr::scalar(p), Value::Object(target)).unwrap();
+    let p = vm.space.prop(class, "CurrentState").unwrap();
+    vm.space.write(skill, PropAddr::scalar(p), Value::Byte(state)).unwrap();
+}
+
+/// Review r1 of #568, at the driver: the evidence is asked about the exact receiver the cast returns, and only after a
+/// cast that returned `Ok`. A cast that lifts the target on the skill it returns is evident; one that returns another
+/// object is not; a cast that errors is never asked (also under past-errors grading, where no stop is recorded).
+#[test]
+fn the_driver_asks_the_evidence_about_the_cast_s_own_receiver_only_after_success() {
+    for (case, want) in [("right receiver", true), ("wrong receiver", false)] {
+        let mut t = toy();
+        let (class, intro) = toy_skill_class(&mut t.world.vm, false);
+        let mut r = Ran::default();
+        drive_phaselock(
+            &mut r,
+            &mut t.world.vm,
+            Grading::Strict,
+            &ACTORS,
+            move |vm, actors| {
+                let skill = vm.space.alloc(class, "Skill", None, Origin::Runtime)?;
+                let other = vm.space.alloc(class, "Other", None, Origin::Runtime)?;
+                lift(vm, skill, actors.2, intro);
+                Ok(if case == "right receiver" { skill } else { other })
+            },
+            |vm, skill, (_, _, target)| phaselock_evident(vm, skill, target),
+        );
+        assert!(r.stop.is_none(), "{case}: {:?}", r.stop);
+        assert_eq!(r.evident, want, "{case}");
+    }
+    let mut t = toy();
+    let (class, intro) = toy_skill_class(&mut t.world.vm, false);
+    let asked = Rc::new(Cell::new(false));
+    let flag = asked.clone();
+    let mut r = Ran::default();
+    drive_phaselock(
+        &mut r,
+        &mut t.world.vm,
+        Grading::PastErrors,
+        &ACTORS,
+        move |vm, actors| {
+            let skill = vm.space.alloc(class, "Skill", None, Origin::Runtime)?;
+            lift(vm, skill, actors.2, intro);
+            Err(VmError::Script { function: "toy".into(), message: "an ordinary cast error".into() })
+        },
+        move |_, _, _| {
+            flag.set(true);
+            true
+        },
+    );
+    assert!(r.stop.is_none(), "past-errors grading goes on past the error");
+    assert_eq!(r.error_lines.len(), 1);
+    assert!(!asked.get() && !r.evident, "a cast that errored is never evidence");
+}
+
+/// Review r1 of #568: `EPLS_Intro` found by name when the name table's first spelling is `epls_intro`.
+#[test]
+fn link_9_s_evidence_finds_the_state_by_name_whatever_its_spelling() {
+    let mut vm = Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(ow_attr::AttributeSystem::new_empty()), ParityMode::Off);
+    let (class, intro) = toy_skill_class(&mut vm, true);
+    assert_eq!(vm.space.names.text(vm.space.names.find("EPLS_Intro").unwrap()), "epls_intro", "the first spelling kept");
+    let skill = vm.space.alloc(class, "Skill", None, Origin::Runtime).unwrap();
+    let target = vm.space.alloc(class, "Target", None, Origin::Runtime).unwrap();
+    lift(&mut vm, skill, Some(target), intro);
+    assert!(phaselock_evident(&vm, skill, Some(target)));
 }

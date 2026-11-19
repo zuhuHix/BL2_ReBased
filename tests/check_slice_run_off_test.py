@@ -35,10 +35,13 @@ def row(n, result='ok', grading='strict', **fields):
 def all_ok(grading='strict'):
     rows = [row(n, grading=grading) for n in range(1, 15)]
     for r in rows:
-        if r['driver'] in ('none', 'phaselock-cast'):
-            # A link without a driver, or link 9's cast with no evidence check yet, is never ok: a passing run has
-            # an evidence-checked driver for every link (a synthetic one here).
+        if r['driver'] == 'none':
+            # A link without a driver is never ok: a passing run has an evidence-checked driver for every link (a
+            # synthetic one here).
             r['driver'] = 'combat-run'
+        if r['driver'] == 'phaselock-cast':
+            # Link 9's cast is ok after its two steps (review r1 of #568).
+            r['steps'] = ['spawn', 'cast']
         if r['driver'] == 'sanctuary-walk':
             # Link 2's walk is ok only after its fight-area check (decision 2026-11-19-76).
             r['steps'] = ['load', 'spawn', 'walk', 'fight_area']
@@ -185,12 +188,18 @@ class Parse(unittest.TestCase):
         rows[1] = dict(rows[1], steps=['load', 'spawn', 'walk'], result='notyet', stop=stop())
         chk.parse(lines(rows))
 
-    def test_a_phaselock_cast_row_is_never_ok_until_its_evidence_check_exists(self):
+    def test_an_ok_phaselock_cast_row_needs_its_own_driver_and_its_two_steps(self):
+        # Review r1 of #568: the Rust gate grades link 9 ok on the driver's own evidence; the checker accepts that row
+        # only from phaselock-cast, with exactly the steps spawn and cast.
         rows = all_ok()
-        rows[8] = dict(rows[8], driver='phaselock-cast')
-        with self.assertRaises(chk.Malformed):
-            chk.parse(lines(rows))
-        rows[8] = dict(rows[8], result='notyet', stop=stop())
+        self.assertEqual((rows[8]['driver'], rows[8]['steps']), ('phaselock-cast', ['spawn', 'cast']))
+        chk.parse(lines(rows))
+        for bad in (dict(rows[8], driver='combat-run'), dict(rows[8], steps=['spawn']), dict(rows[8], steps=['cast', 'spawn'])):
+            changed = list(rows)
+            changed[8] = bad
+            with self.assertRaises(chk.Malformed, msg=str(bad)):
+                chk.parse(lines(changed))
+        rows[8] = dict(rows[8], steps=['spawn'], result='notyet', stop=stop())
         chk.parse(lines(rows))
 
     def test_a_link_without_a_driver_is_never_ok(self):

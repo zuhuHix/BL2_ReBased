@@ -1022,27 +1022,10 @@ fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
-    let seen = std::cell::Cell::new(None);
-    drive_phaselock(&mut r, &mut world.vm, grading, &PHASELOCK_ACTORS, |vm, actors| {
-        seen.set(Some(actors));
-        phaselock_cast(vm, actors)
+    drive_phaselock(&mut r, &mut world.vm, grading, &PHASELOCK_ACTORS, phaselock_cast, |vm, skill, (_, _, target)| {
+        phaselock_evident(vm, skill, target)
     });
-    if r.stop.is_none()
-        && let Some((_, _, target)) = seen.get()
-    {
-        r.evident = phaselock_skill(&mut world.vm).is_ok_and(|skill| phaselock_evident(&world.vm, skill, target));
-    }
     ran[i] = Some(r);
-}
-
-/// The Phaselock skill the cast ran on ([`PHASELOCK_SKILL`]): loaded by the cast already, so the lookup finds it.
-fn phaselock_skill(vm: &mut ow_vm::api::Vm) -> Result<ow_object::ids::ObjRef, ow_vm::error::VmError> {
-    let path = ow_core::ObjectPath::parse(PHASELOCK_SKILL).map_err(|e| script_error(e.to_string()))?;
-    let found = vm.defs.find(&mut vm.space, &path);
-    vm.log.extend(vm.defs.take_log());
-    found
-        .map_err(ow_vm::error::VmError::Def)?
-        .ok_or_else(|| script_error(format!("{PHASELOCK_SKILL}: no package holds it")))
 }
 
 /// The value name link 9's evidence expects in `CurrentState` (`LiftActionSkill.EPhaselockState`).
@@ -1072,11 +1055,13 @@ pub fn phaselock_evident(vm: &ow_vm::api::Vm, skill: ow_object::ids::ObjRef, tar
     let Some(PropKind::Byte { enum_: Some(e) }) = vm.space.classes.decl(state).map(|d| d.kind.clone()) else {
         return false;
     };
+    // By name, as the decoder reads an enum value (`NameTable::find`, case-folded, then `EnumLayout::index_of`; review r1
+    // of #568): the name table keeps the first spelling interned, so the text is not compared.
     let Some(want) = vm
         .space
-        .classes
-        .enum_layout(e)
-        .and_then(|l| l.values().iter().position(|v| vm.space.names.text(*v) == PHASELOCK_LIFTED_STATE))
+        .names
+        .find(PHASELOCK_LIFTED_STATE)
+        .and_then(|n| vm.space.classes.enum_layout(e)?.index_of(n))
     else {
         return false;
     };
@@ -1091,12 +1076,17 @@ pub const PHASELOCK_ACTORS: [&str; 3] = ["WillowGame.WillowPlayerPawn", "WillowG
 /// its text) is the link's not-yet stop. Any other error is a hard stop, under both gradings, when it comes from the
 /// spawn, because the cast cannot run without its actors; from the cast, an error follows the grading as any step's
 /// does.
+///
+/// **The evidence** (review r1 of #568): `cast` returns the exact object it ran on, and only after a cast that
+/// returned `Ok` is `evidence` asked, read-only through `&Vm`, about that receiver and the actors; its answer is
+/// `Ran::evident`. A cast that errored (also one past-errors grading goes on past) is never evidence.
 pub fn drive_phaselock(
     r: &mut Ran,
     vm: &mut ow_vm::api::Vm,
     grading: Grading,
     classes: &[&str],
-    cast: impl FnOnce(&mut ow_vm::api::Vm, CastActors) -> Result<(), ow_vm::error::VmError>,
+    cast: impl FnOnce(&mut ow_vm::api::Vm, CastActors) -> Result<ow_object::ids::ObjRef, ow_vm::error::VmError>,
+    evidence: impl FnOnce(&ow_vm::api::Vm, ow_object::ids::ObjRef, CastActors) -> bool,
 ) {
     r.steps.push("spawn".into());
     let actors = match phaselock_actors(vm, classes) {
@@ -1107,12 +1097,15 @@ pub fn drive_phaselock(
         }
     };
     r.steps.push("cast".into());
-    if let Err(e) = cast(vm, actors) {
-        let (outcome, stop) = typed_stop("cast", &e);
-        if grading == Grading::Strict || outcome == Outcome::NotYet {
-            r.stop = Some((outcome, stop));
-        } else {
-            r.error_lines.push(("cast".to_string(), stop.text));
+    match cast(vm, actors) {
+        Ok(receiver) => r.evident = evidence(vm, receiver, actors),
+        Err(e) => {
+            let (outcome, stop) = typed_stop("cast", &e);
+            if grading == Grading::Strict || outcome == Outcome::NotYet {
+                r.stop = Some((outcome, stop));
+            } else {
+                r.error_lines.push(("cast".to_string(), stop.text));
+            }
         }
     }
 }
@@ -1304,7 +1297,8 @@ pub use ow_behavior::kernel::run::PARTIAL_WRITES;
 /// The cast's three actors: Maya's pawn, her controller, the target.
 type CastActors = (Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>, Option<ow_object::ids::ObjRef>);
 
-fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<(), ow_vm::error::VmError> {
+/// The installed cast on Maya's Phaselock skill; answers the skill it ran on (the receiver of `OnActionSkillStarted`).
+fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<ow_object::ids::ObjRef, ow_vm::error::VmError> {
     let path = ow_core::ObjectPath::parse(PHASELOCK_SKILL).map_err(|e| script_error(e.to_string()))?;
     let found = vm.defs.find(&mut vm.space, &path);
     vm.log.extend(vm.defs.take_log());
@@ -1322,7 +1316,7 @@ fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<(), ow_
             ow_object::value::Value::Object(target),
         ],
     )?;
-    Ok(())
+    Ok(skill)
 }
 
 /// The cast's actors (lane LINK-9-CAST-SPAWN, decision 2026-11-19-70): one actor of each of `classes` (three: Maya's

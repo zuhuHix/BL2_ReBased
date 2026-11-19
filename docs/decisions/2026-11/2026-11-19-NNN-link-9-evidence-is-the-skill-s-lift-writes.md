@@ -23,6 +23,14 @@ only).
     port answers it true for a target that was never locked, so `TargetBlocked` and `OnTargetBlocked` run, not
     `PhaseLockTarget`. The `GetFuncName` stop of the earlier probes was inside `OnTargetBlocked`.
   - So the evidence check is doing its job; the next fix is that attribute's value on the target (a separate lane).
+- **Review r1 of #568:**
+  - `tools/check_slice_run_off.py` accepts an ok link 9 only from `phaselock-cast` with exactly the steps `spawn` and
+    `cast` (it rejected every ok `phaselock-cast` row before); its test is replaced, the other links' checks unchanged;
+  - the cast returns the exact object it ran on, and `drive_phaselock` asks the evidence, read-only, about that
+    receiver only after a cast that returned `Ok` (no second lookup, no log drain; never after a cast error, also
+    under past-errors grading); a driver-level test catches a dropped assignment or a wrong receiver;
+  - `EPLS_Intro` is found with `NameTable::find` and `EnumLayout::index_of`, as the decoder reads enum values; a
+    mixed-case fixture covers it.
 - **Live check (bl-sdk, the RTSE way; not run):** hook `LiftActionSkill.OnSelectedTarget` during a Phaselock on an
   enemy and read the skill's `LiftedPawn` and `CurrentState` there (expect the target and `EPLS_Intro`). Also read
   `GD_Siren_Skills.Attributes.IsPhaselocked`'s value on an unlocked enemy (expect 0).

@@ -15,8 +15,9 @@ the counts, and grades the run:
 The drivers are `combat-run`, `slice-run`, `equip-run` (link 8) and `phaselock-cast` (link 9, lane
 SLICE-GATE-DRIVERS, decision 2026-11-19-39), `sanctuary-walk` (link 2, lane LINK-2-HEADLESS-MOVER, decision
 2026-11-19-66), `pickup` (link 6) and `pickup-aimed` (link 7; lane IMPL-PICKUP, decision 2026-11-19-68), or `none`.
-Each of the last five drives its own link only, and a `phaselock-cast` row is never ok until an evidence check is
-chosen for it.
+Each of the last five drives its own link only. An ok `phaselock_enemy` row (link 9) must be driven by
+`phaselock-cast` with exactly the steps spawn and cast: its evidence is the driver's own check of the skill's lift
+writes (lane LINK9-EVIDENCE-CHECK, review r1 of #568).
 An ok `reach_fight_area` row (link 2)
 must be driven by `sanctuary-walk` with exactly the steps load, spawn, walk and fight_area, in that order: the
 fight-area check is a port fixture (decision 2026-11-19-76, review r1 of #470).
@@ -44,7 +45,10 @@ DRIVER_LINK = {'equip-run': 'equip_gun', 'phaselock-cast': 'phaselock_enemy', 's
 # Drivers with no evidence check chosen yet: a row they drive is never ok. `sanctuary-walk` left this list with
 # lane LINK-2-FIGHT-AREA (decision 2026-11-19-76): its driver now checks that Maya's walk ends in the fight area (a
 # labelled port fixture) with the target dummy placed there, so its row may be ok, but only as ARRIVAL_STEPS says.
-NO_EVIDENCE_YET = ('phaselock-cast',)
+# Link 9's cast: ok only from its own driver, after its two steps (its evidence is the driver's check; review r1 of #568).
+CAST_LINK = 'phaselock_enemy'
+CAST_DRIVER = 'phaselock-cast'
+CAST_STEPS = ['spawn', 'cast']
 # An ok `reach_fight_area` row: driven by `sanctuary-walk`, with exactly these steps in this order, the fight-area check
 # last (decision 2026-11-19-76; review r1 of #470: no other driver, no missing or extra step).
 ARRIVAL_LINK = 'reach_fight_area'
@@ -122,8 +126,11 @@ def parse(lines):
                 raise Malformed(f'{where}: blocked by {name} but its result differs')
         if row['driver'] == 'none' and row['result'] == 'ok':
             raise Malformed(f'{where}: a link without a driver cannot be ok')
-        if row['driver'] in NO_EVIDENCE_YET and row['result'] == 'ok':
-            raise Malformed(f'{where}: {row["driver"]} has no evidence check yet, so it cannot be ok')
+        if row['link'] == CAST_LINK and row['result'] == 'ok':
+            if row['driver'] != CAST_DRIVER:
+                raise Malformed(f'{where}: an ok {CAST_LINK} row must be driven by {CAST_DRIVER}, not {row["driver"]}')
+            if row['steps'] != CAST_STEPS:
+                raise Malformed(f'{where}: an ok {CAST_LINK} row needs the steps {CAST_STEPS}, not {row["steps"]}')
         if row['link'] == ARRIVAL_LINK and row['result'] == 'ok':
             if row['driver'] != ARRIVAL_DRIVER:
                 raise Malformed(f'{where}: an ok {ARRIVAL_LINK} row must be driven by {ARRIVAL_DRIVER}, '
