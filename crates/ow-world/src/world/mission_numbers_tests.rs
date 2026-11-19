@@ -136,11 +136,11 @@ fn willow() -> Vec<u8> {
     t.function(service, "RecordMissionStatusChangedEventForPlayer", &params, None, &[], &spec, |_| None);
     let spec = FunctionSpec::new(NATIVE, "RecordMissionObjectiveChangedEventForPlayer");
     let params = [
-        param("Object", "Player", 0, pc),
+        param("Object", "ForPlayer", 0, pc),
         param("Int", "ObjectiveIndex", 0, 0),
-        param("Int", "OldValue", 0, 0),
-        param("Int", "NewValue", 0, 0),
-        param("Name", "MissionName", 0, 0),
+        param("Int", "ObjectiveProgress", 0, 0),
+        param("Int", "PreviousObjectiveProgress", 0, 0),
+        param("Name", "MissionDefinition", 0, 0),
     ];
     t.function(service, "RecordMissionObjectiveChangedEventForPlayer", &params, None, &[], &spec, |_| None);
     t.p.build()
@@ -829,7 +829,9 @@ fn the_status_telemetry_answers_nothing_for_every_player() {
 
 /// The objective telemetry (ruling R3, NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3): nothing, for a None
 /// player and for a player, with the heap unchanged (no write, no new object) and nothing logged; a player argument
-/// that is not an object is a script error. Its dispatch key is the one the note names.
+/// that is not an object is a script error. Its dispatch key is the one the note names. The declared parameters are
+/// `ForPlayer, ObjectiveIndex, ObjectiveProgress, PreviousObjectiveProgress, MissionDefinition` (the hub, review of
+/// #531); the integers are passed old third, new fourth, as the script does, and nothing reads them.
 #[test]
 fn the_objective_telemetry_answers_nothing_for_every_player() {
     let mut t = toy(true);

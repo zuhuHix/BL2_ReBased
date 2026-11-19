@@ -80,11 +80,15 @@
 //!     native through one key map, and its per-declaration binding (`Vm::override_script`) takes script functions
 //!     only. So a class of the same name with the same native in another package would get this no-op too. Scoping
 //!     a native to its resolved declaration is a VM design change, queued by the hub as its own item.
-//! - **`WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(Player, ObjectiveIndex, OldValue, NewValue,
-//!   MissionName)`** (lane IMPL-R3-MISSION-OBJECTIVE, slice link 11; NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md
-//!   section 3): it ends in the same shared statistics submit routine, so ruling R3 covers it. Nothing, with no write
-//!   and no load, for every player, a None one included. A port answer, UNVERIFIED. The player argument must be an
-//!   object. The same known limit as the status event's: it is bound by its dispatch key.
+//! - **`WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(ForPlayer, ObjectiveIndex,
+//!   ObjectiveProgress, PreviousObjectiveProgress, MissionDefinition)`**, no return value (lane
+//!   IMPL-R3-MISSION-OBJECTIVE, slice link 11; NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3, with the hub's
+//!   reading of the declared parameters on #531's review): it ends in the same shared statistics submit routine, so
+//!   ruling R3 covers it. Nothing, with no write and no load, for every player, a None one included. Nothing is read
+//!   from the three integers or the name: the script's calls pass the old value third and the new value fourth, and
+//!   what each means stays UNVERIFIED. A port answer, UNVERIFIED. No telemetry-specific refusal or preflight; the
+//!   ordinary argument errors apply, as for the status event (a player argument that is not an object is refused).
+//!   The same known limit as the status event's: it is bound by its dispatch key.
 //! - **The partial-writes mark** (review r1 of #480, item 2; r2, H1): these natives write nothing, so they do not mark
 //!   their own `NotYet`. The mark is applied where a write is known, in the mission bridge (`ow_mission::bridge`): the
 //!   status routine's hook (`UpdateMissionStatus`, which runs only after the status was written, and is the screen's
@@ -506,7 +510,7 @@ pub(crate) fn n_status_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value
 /// The objective telemetry (module documentation): nothing, with no write, for every player (ruling R3, per
 /// NATIVE_RECORD_MISSION_OBJECTIVE_CHANGED.md section 3).
 pub(crate) fn n_objective_changed_telemetry(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    object_of(c.arg(0)?.clone(), "Player", RECORD_OBJECTIVE_CHANGED)?;
+    object_of(c.arg(0)?.clone(), "ForPlayer", RECORD_OBJECTIVE_CHANGED)?;
     Ok(Value::None)
 }
 

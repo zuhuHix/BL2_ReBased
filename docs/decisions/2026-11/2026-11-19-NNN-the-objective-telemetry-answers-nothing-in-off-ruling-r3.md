@@ -12,8 +12,15 @@ placeholder; the hub gives it.
   bound in the same module.
 - **What is bound** (`ow_world::world::mission_numbers`, bound with the module's other natives in Off only):
   `WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer(object,int,int,int,name)`.
-  - It answers nothing, for every player, a None one included. There is no write, no load and no log line.
-  - A player argument that is not an object is a `VmError::Script`, as for the status event.
+  - **The declared parameters**, in order, are `ForPlayer`, `ObjectiveIndex`, `ObjectiveProgress`,
+    `PreviousObjectiveProgress` and `MissionDefinition`, with no return value. This follows the hub's reading on the
+    review of #531; the note's draft named them by fit, and its analyst corrects it. All three script calls pass the
+    old value third and the new value fourth. Nothing reads the integers or the name, and their meaning stays
+    UNVERIFIED.
+  - It answers nothing, for every player, a None one included. There is no write, no load and no log line. R3 adds no
+    telemetry-specific refusal or preflight.
+  - The ordinary argument errors still apply, as for the status event: a player argument that is not an object is a
+    `VmError::Script`.
   - It is bound by its dispatch key, the same known limit as the status event's (#509). Package-qualified dispatch
     comes with #519.
 - **Test** (synthetic, `mission_numbers_tests.rs`): `the_objective_telemetry_answers_nothing_for_every_player`. It
