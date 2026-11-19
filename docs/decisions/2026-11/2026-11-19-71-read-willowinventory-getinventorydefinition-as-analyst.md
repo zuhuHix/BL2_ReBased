@@ -23,9 +23,14 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-INVENTORY-DEFINITION, analyst 
   - a weapon (the `WillowWeapon` tree, four classes): its `DefinitionData.WeaponTypeDefinition`, as stored;
   - an item (the `WillowItem` tree, nine classes): its `DefinitionData.ItemDefinition`, as stored;
   - `WillowInventory` itself: None, after an engine log line.
-- It never refuses and never writes.
-- An Off answer list for an implementer, step by step, with a `NotYet` of kind `NotRead` for any class outside the two
-  read trees.
+- **The native:** it never refuses and never writes. The game logs a line only for the exact base.
+- **Off's answers, kept separate from the native:** the thirteen read classes answer by the rule; the exact base
+  answers None with no diagnostic; any other class (a plain `Engine.Weapon`, an unread descendant of either tree such
+  as a DLC class, or another subclass) is a `NotYet` of kind `NotRead`. A missing `DefinitionData`, or a missing
+  selected field, is a named `NotYet` of kind `NotRead`; a declared field that holds None answers None.
+- **Review r1 of #457:** the Off answers above; how the monetary-value helper chooses (the first declared field, even
+  when None) and why a change must keep it; and live checks for the populated and null references, the base with its
+  log, other receivers, and the reference during the drop.
 - **It belongs with `ow_inventory::definition`'s three `Engine.WillowInventory` natives**, whose paths lane IMPL-PICKUP
   fixed. The module's reading of the definition field agrees with this one, but the native chooses the field by class,
   not by which field is set.
