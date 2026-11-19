@@ -23,12 +23,13 @@
 //!
 //! **Creation refusal in Off mode:** an unsupported idle hook can refuse inside `InitializeAuthoritative`.
 //! The refusal comes from inside the pool's
-//! script, so it is not decided before anything changes. Such a refusal is **terminal** (the hub's ruling in review r1
-//! of #444, the same rule as #437, #439 and #442): the slot keeps the new pool and `NextPoolGUID` keeps the spent GUID,
-//! no map entry is made, nothing the script wrote is undone, and the refusal's text starts "stopped after partial
-//! writes" with its kind kept ([`after_partial_writes`]). A manager the call itself spawned is still destroyed
-//! ([`create_pool`], [`controller_pool`]), and [`controller_pool`] leaves the controller's `ResourcePoolManager` as it
-//! was.
+//! script, so it is not decided before anything changes. In `ParityMode::Off` such a refusal is **terminal** (the
+//! hub's ruling in review r1 of #444, the same rule as #437, #439 and #442): the slot keeps the new pool and
+//! `NextPoolGUID` keeps the spent GUID, no map entry is made, nothing the script wrote is undone, and a `NotYet`'s text
+//! starts "stopped after partial writes" with its kind kept ([`after_partial_writes`]). Under Reference the earlier
+//! rollback stays (review r2 of #444): [`create_pool_at_index`] empties the slot again and [`create_pool`] restores
+//! `NextPoolGUID`, the error unchanged. In both modes a manager the call itself spawned is destroyed ([`create_pool`],
+//! [`controller_pool`]), and [`controller_pool`] leaves the controller's `ResourcePoolManager` as it was.
 //!
 //! Always `NotYet`: a `CreatePoolAtIndex` without a manager, a vehicle's pool provider in the controller lookup, a
 //! `DeletePool` whose manager is not the reference's, and every resource owner resolver but the controller one in the
@@ -698,6 +699,12 @@ pub fn is_authoritative(space: &ObjectSpace, actor: ObjRef) -> Result<bool, VmEr
     is_authority(space, actor)
 }
 
+/// The pool class a definition makes (its resource's `DefaultResourcePoolClass`); None when it names none. For a
+/// caller's preflight (review r2 of #444).
+pub fn pool_class_of(vm: &mut Vm, def: ObjRef) -> Result<Option<ClassId>, VmError> {
+    pool_class(vm, def)
+}
+
 /// Whether [`ensure_manager`] would spawn a manager for `owner` (no manager yet): `owner` has authority and a world
 /// exists.
 pub fn can_spawn_manager(vm: &Vm, owner: ObjRef) -> Result<bool, VmError> {
@@ -825,9 +832,16 @@ pub fn create_pool_at_index(
     maps_of(vm)?;
     set_slot(&mut vm.space, manager, index, Some(pool))?;
     // A refusal after the slot was written (in Off mode, `ResetIdleTimer` inside the installed
-    // `InitializeAuthoritative`) is terminal: nothing is put back (module documentation).
-    fill_new_pool(vm, manager, pool, def, index, guid, init, resource).map_err(after_partial_writes)?;
-    Ok(Some(pool))
+    // `InitializeAuthoritative`): terminal in Off, nothing put back; under Reference the slot is emptied again (module
+    // documentation).
+    match fill_new_pool(vm, manager, pool, def, index, guid, init, resource) {
+        Ok(()) => Ok(Some(pool)),
+        Err(e) if vm.parity == ParityMode::Reference => {
+            set_slot(&mut vm.space, manager, index, None)?;
+            Err(e)
+        }
+        Err(e) => Err(after_partial_writes(e)),
+    }
 }
 
 /// The tail of [`create_pool_at_index`] after the slot is written: the GUID, the start state (the script, or only the
@@ -978,8 +992,17 @@ fn create_in(vm: &mut Vm, m: ObjRef, def: ObjRef, reinitialize: bool) -> Result<
         return Ok(invalid(manager));
     };
     let guid = next_guid(&mut vm.space, m)?;
-    // A refusal inside the new pool's setup is terminal; the spent GUID stays spent (module documentation).
-    let made = create_pool_at_index(vm, m, Some(def), i32::from(i), guid)?;
+    // A refusal inside the new pool's setup: in Off terminal, the spent GUID stays spent; under Reference the GUID
+    // counter is restored (module documentation).
+    let made = match create_pool_at_index(vm, m, Some(def), i32::from(i), guid) {
+        Ok(made) => made,
+        Err(e) => {
+            if vm.parity == ParityMode::Reference {
+                set_field(&mut vm.space, m, "NextPoolGUID", Value::Byte(guid))?;
+            }
+            return Err(e);
+        }
+    };
     let reference = match made {
         Some(pool) => PoolRef::new(manager, i, guid, Some(pool)),
         None => PoolRef::INVALID,

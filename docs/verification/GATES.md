@@ -23,7 +23,7 @@ NotYet to an error at `maya:8`, the unbound script native `AttributeDefinition.G
 to 12 stop at `UIInteraction.GetDataStoreClient` (`accept`); 0 ok / 8 NotYet / 6 errors. **Review r1:** `cargo test -p
 ow-combat -p ow-world` 273 passed / 0 failed / 7 ignored, ow-cli 89 passed (combat digests unchanged); clippy flags
 nothing in the changed files; installed Off `--slice-gate` 0/14/0, the six links now at the `InitPlayerSkillTree`
-`NotYet { NotPorted }` before any delete. ctest
+`NotYet { NotPorted }` before any delete. **Review r2:** ow-combat + ow-world 295 / 0 / 7, ow-cli 89 passed. ctest
 and verify_packages not run (no C++ change). No host or real-game run; every rule stays `UNVERIFIED` in game. Decision
 2026-11-19-57; logs under ignored `local/p2/fix-class-starting-values/`.
 
