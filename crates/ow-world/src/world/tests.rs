@@ -487,10 +487,30 @@ fn package() -> Vec<u8> {
     void(&mut t, doomed, "Destroyed", &[], |_, a| {
         a.stmt().final_function(refuse, |_| {});
     });
-    t.class("LocalPlayer", object);
+    let local_player = t.class("LocalPlayer", object);
+    // The local player's play actor (lane IMPL-MAPLOAD-PLAYER): `LocalPlayer.Actor`, `PlayerController.NetPlayerIndex`.
+    t.prop("Object", local_player, "Actor", 0, actor);
     let player_controller = t.class("PlayerController", controller);
     t.prop("Object", player_controller, "Player", 0, object);
     t.prop("Bool", player_controller, "bPendingDestroy", 0, 0);
+    t.prop("Byte", player_controller, "NetPlayerIndex", 0, 0);
+    // A toy game info whose Login and PostLogin are natives the player tests bind (the game's are script).
+    let toy_game = t.class("ToyGame", actor);
+    let out = ow_package::testkit::script::CPF_OUT;
+    native(
+        &mut t,
+        toy_game,
+        "Login",
+        &[
+            Param::new("Str", "Portal"),
+            Param::new("Str", "Options"),
+            Param::new("Int", "UniqueId"),
+            Param { flags: out, ..Param::new("Str", "ErrorMessage") },
+        ],
+        Some(("Object", player_controller)),
+        NATIVE,
+    );
+    native(&mut t, toy_game, "PostLogin", &[Param { type_ref: player_controller, ..Param::new("Object", "NewPlayer") }], None, NATIVE);
     native(&mut t, player_controller, "IsLocalPlayerController", &[], Some(("Bool", 0)), NATIVE);
     let ui = t.class("UIInteraction", object);
     native(&mut t, ui, "GetDataStoreClient", &[], Some(("Object", object)), NATIVE | STATIC);
