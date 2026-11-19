@@ -134,3 +134,22 @@ loosened and no `NotYet` guard was relaxed.
       and stops later runs; each mode's `RunBehaviors` body runs without the director, with the output-link binding
       timing checked.
     - `ow-cli`: `step_outcome`.
+- **Review r3 of #439** (round 4). The hub's ruling: the preflight refuses only what is cheap and certain up front. A
+  refusal the VM finds only on entry, after an earlier behavior wrote state, is the terminal "stopped after partial
+  writes" stop, and that is the rule.
+  - **Item 1.** A side test calls only a binding on an explicit allow-list of read-only queries
+    (`READ_ONLY_QUERIES`): the stock `Controller.IsLocalController()`, which no lane binds yet.
+    - Any other resolved binding is `NotYet` before it is invoked: a subclass's own bound native, a script override,
+      an unbound native.
+    - So in a real run `PlayLocal` is `NotYet` until a lane binds that query.
+  - **Item 2.** `Vm::check_call` refuses, in Off, a native target nothing binds. For a script function it also runs
+    the body's decoding (`decoded`, the step the call takes first, cached for it). Both happen in the preflight,
+    before any behavior.
+  - **Item 3.** The slice's notification hook returns a terminal stop from the dummy's conditions at once
+    (`settle_conditions`), so the tracker fires no further event. Any other conditions error is kept for the step, as
+    before.
+  - **Tests:**
+    - `ow-behavior`: an unbound native `ApplyBehavior` refused before any run; a subclass's own bound query refused
+      without being invoked.
+    - `ow-mission`: `settle_conditions` returns the terminal stop and keeps an ordinary error. The tracker test of r2
+      shows a hook's error stops the next event.

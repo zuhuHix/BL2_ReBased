@@ -263,7 +263,19 @@ fn parameter_items<'a>(local: &super::Local, a: &'a Arg, path: &str) -> Result<O
 /// run, an argument [`bind_parameter`] refuses); a native takes its arguments as they are (lane FIX-RUN-BEHAVIORS,
 /// review r2 of #439, so a caller can check every call of a walk before it makes the first).
 pub(crate) fn check_entry(vm: &mut Vm, f: FuncId, args: &[Arg]) -> Result<(), VmError> {
-    if vm.function(f).is_some_and(|d| d.is_native()) {
+    if let Some(d) = vm.function(f).filter(|d| d.is_native()) {
+        // An unbound native in Off is refused here, as the call would refuse it (review r3 of #439, item 2); Reference
+        // leaves it to the stub policy, as the call does.
+        if vm.parity == ow_core::ParityMode::Off
+            && let Some(key) = d.native_key.clone()
+            && !vm.has_native(&key)
+        {
+            return Err(NotYet::not_ported(
+                format!("{}: an unbound native {key}", d.path.as_str()),
+                "the VM's call-entry check (Vm::check_call)",
+            )
+            .into());
+        }
         return Ok(());
     }
     let Some(code) = code_of(vm, f) else {
@@ -279,6 +291,8 @@ pub(crate) fn check_entry(vm: &mut Vm, f: FuncId, args: &[Arg]) -> Result<(), Vm
     if let Some(why) = &code.failure {
         return Err(cannot_run(&code.path, why));
     }
+    // The body's decoding, the same step the call takes first (its result is cached for the call).
+    decoded(vm, &code)?;
     for (position, &entry) in code.params.iter().enumerate() {
         if let Some(a) = args.get(position).filter(|a| a.supplied) {
             parameter_items(&code.locals[entry], a, &code.path)?;

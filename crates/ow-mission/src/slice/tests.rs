@@ -1470,3 +1470,23 @@ fn the_dummy_s_pawn_is_a_new_object_with_the_store_s_references() {
         assert_eq!(env.slice.errors().len(), earlier, "{mode:?}: {:?}", env.slice.errors());
     }
 }
+
+/// A terminal stop from the dummy's conditions is returned by the notification hook at once, so the tracker fires no
+/// further event; an ordinary error is kept for the step, as before (review r3 of #439, item 3).
+#[test]
+fn a_terminal_stop_from_the_conditions_is_returned_not_kept() {
+    let env = Env::off();
+    let terminal = || -> Result<(), MissionError> {
+        Err(VmError::NotYet(NotYet::not_read(
+            format!("{}: an invented NotYet", ow_behavior::kernel::run::PARTIAL_WRITES),
+            "an invented record",
+        ))
+        .into())
+    };
+    let e = env.slice.settle_conditions(terminal()).unwrap_err();
+    assert!(e.to_string().contains("an invented NotYet"), "{e}");
+    assert!(env.slice.inner.state.borrow().pending.is_none(), "not kept for later");
+    let ordinary = Err(VmError::NotYet(NotYet::not_read("an ordinary NotYet", "an invented record")).into());
+    assert!(env.slice.settle_conditions(ordinary).is_ok());
+    assert!(env.slice.inner.state.borrow().pending.is_some(), "kept for the step");
+}

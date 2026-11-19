@@ -371,11 +371,11 @@ impl FireMissionSlice {
         mission.set_notify_hook(Some(Rc::new(move |vm: &mut Vm, kind: Notification| {
             if let Some(inner) = w.upgrade() {
                 let s = FireMissionSlice { inner };
-                // A script stop after partial writes unwinds the tracker at once (review r2 of #439).
+                // A script stop after partial writes unwinds the tracker at once (review r2 of #439), from the
+                // observers or from the dummy's conditions (r3): the hook returns it before the tracker goes on.
                 s.inner.script.notify(vm, kind)?;
-                if let Err(e) = s.apply_conditions(vm) {
-                    s.keep(e);
-                }
+                let conditions = s.apply_conditions(vm);
+                s.settle_conditions(conditions)?;
             }
             Ok(())
         })));
@@ -561,6 +561,20 @@ impl FireMissionSlice {
     }
 
     /// An error a hook met: its `NotYet` (if any) is listed, and the first one is kept for the public call.
+    /// What a notification hook does with its conditions' result (review r3 of #439, item 3): a terminal stop
+    /// ("stopped after partial writes") is returned at once, so the tracker stops before its next event; any other
+    /// error is kept for the step to report, as before.
+    fn settle_conditions(&self, result: Result<(), MissionError>) -> Result<(), MissionError> {
+        match result {
+            Err(e) if is_terminal(&e) || self.inner.script.partial_stop().is_some() => Err(e),
+            Err(e) => {
+                self.keep(e);
+                Ok(())
+            }
+            Ok(()) => Ok(()),
+        }
+    }
+
     fn keep(&self, e: MissionError) {
         let mut s = self.inner.state.borrow_mut();
         if let Some(n) = e.not_yet() {
@@ -1323,4 +1337,9 @@ impl FireMissionSlice {
     pub fn dummy_pawn(&self) -> Option<ObjRef> {
         self.inner.state.borrow().dummy_pawn
     }
+}
+
+/// Whether `e` is a behavior walk's stop after partial writes (`ow_behavior::kernel::run::PARTIAL_WRITES`).
+fn is_terminal(e: &MissionError) -> bool {
+    e.to_string().contains(ow_behavior::kernel::run::PARTIAL_WRITES)
 }

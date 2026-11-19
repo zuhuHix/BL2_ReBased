@@ -137,7 +137,8 @@ fn package() -> Vec<u8> {
     e.outer = world;
     let net_mode = t.p.add_export_with(e);
     t.prop("Byte", world, "NetMode", 0, net_mode);
-    let controller = t.class("ToyController", object);
+    // Named Controller, so its native query's key is the allow-listed `Controller.IsLocalController()`.
+    let controller = t.class("Controller", object);
     let spec = FunctionSpec::new(NATIVE, "IsLocalController");
     t.function(controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| None);
     // A behavior whose script ApplyBehavior takes its instigator as a static array of 2 (the call-entry check, review r2
@@ -158,6 +159,14 @@ fn package() -> Vec<u8> {
     payload.extend_from_slice(&t.none);
     payload.extend_from_slice(&ow_package::testkit::ints(&[0, object]));
     t.p.set_payload(instigator, payload);
+    // A subclass with its own bound native query (not on the allow-list: review r3 of #439, item 1).
+    let sub_controller = t.class("ToySubController", controller);
+    let spec = FunctionSpec::new(NATIVE, "IsLocalController");
+    t.function(sub_controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| None);
+    // A behavior whose ApplyBehavior is a native nothing binds (review r3 of #439, item 2).
+    let unbound_behavior = t.class("ToyUnboundBehavior", base);
+    let spec = FunctionSpec::new(NATIVE, "ApplyBehavior");
+    t.function(unbound_behavior, "ApplyBehavior", &apply, None, &[], &spec, |_| None);
     let script_controller = t.class("ToyScriptController", controller);
     let spec = FunctionSpec::new(0x1 | 0x2 | 0x20000, "IsLocalController");
     t.function(script_controller, "IsLocalController", &[], Some(("Bool", 0)), &[], &spec, |_| {
@@ -192,7 +201,7 @@ fn toy(mode: ParityMode) -> Toy {
     let object = vm.find_class("Engine.Object").unwrap();
     let base = vm.find_class("Engine.BehaviorBase").unwrap();
     let behavior = vm.find_class("Engine.ToyBehavior").unwrap();
-    let controller = vm.find_class("Engine.ToyController").unwrap();
+    let controller = vm.find_class("Engine.Controller").unwrap();
     let helper = vm.find_class("Engine.InstanceDataHelper").unwrap();
     let apply = vm.find_method(behavior, "ApplyBehavior", None).unwrap().unwrap();
     let is_local = vm.find_method(controller, "IsLocalController", None).unwrap().unwrap();
@@ -503,7 +512,7 @@ fn the_special_move_runs_the_entries_its_side_allows() {
     let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
     let pawn = t.make("Engine.ToyPawn", "Maya");
     let world = t.make("Engine.ToyWorldInfo", "World");
-    let controller = t.make("Engine.ToyController", "PC");
+    let controller = t.make("Engine.Controller", "PC");
     t.set(pawn, "WorldInfo", Value::Object(Some(world)));
     let zero = t.vm.space.classes.default_value(&PropKind::Struct(t.sm_entry)).unwrap();
     let entry = |t: &mut Toy, names: &[&str], server: bool, client: bool, local: bool| {
@@ -600,7 +609,7 @@ fn an_object_with_instance_data_is_not_yet() {
 fn play_local_on_an_owner_that_is_not_a_pawn_is_not_yet() {
     let mut t = toy(ParityMode::Off);
     let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
-    let owner = t.make("Engine.ToyController", "NotAPawn");
+    let owner = t.make("Engine.Controller", "NotAPawn");
     t.set(component, "SMI", Value::Object(Some(owner)));
     let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.sm_entry));
     let local = with(&t.vm, &zero, "PlayLocal", Value::Bool(true));
@@ -651,7 +660,7 @@ fn the_side_tests_call_only_a_bound_native_query() {
     let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
     let pawn = t.make("Engine.ToyPawn", "Maya");
     let world = t.make("Engine.ToyWorldInfo", "World");
-    let controller = t.make("Engine.ToyController", "PC");
+    let controller = t.make("Engine.Controller", "PC");
     t.set(pawn, "WorldInfo", Value::Object(Some(world)));
     t.set(pawn, "Controller", Value::Object(Some(controller)));
     t.set(component, "SMI", Value::Object(Some(pawn)));
@@ -676,5 +685,62 @@ fn the_side_tests_call_only_a_bound_native_query() {
         VmError::NotYet(n) => assert!(n.what.contains("not a bound native"), "{n}"),
         e => panic!("expected NotYet, got {e}"),
     }
+    assert!(t.log.borrow().is_empty(), "no behavior ran");
+}
+
+/// The preflight's call-entry check refuses an `ApplyBehavior` that is a native nothing binds, in Off, before any
+/// behavior ran (review r3 of #439, item 2).
+#[test]
+fn an_unbound_native_apply_behavior_is_refused_before_any_runs() {
+    let mut t = toy(ParityMode::Off);
+    let class = t.vm.find_class("Engine.ToyUnboundBehavior").unwrap();
+    let unbound = t.vm.space.alloc(class, "UnboundBehavior", None, Origin::Runtime).unwrap();
+    let mut list = t.behaviors(&[Some("A")]);
+    if let Value::Array(items) = &mut list {
+        Rc::make_mut(items).push(Value::Object(Some(unbound)));
+    }
+    match t.call(RUN_BEHAVIORS, None, vec![list, Value::Object(None)]).unwrap_err() {
+        VmError::NotYet(n) => {
+            assert!(n.what.contains("unbound native"), "{n}");
+            assert!(!n.what.contains(PARTIAL_WRITES), "{n}");
+        }
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert!(t.log.borrow().is_empty(), "A did not run");
+}
+
+/// Only an allow-listed binding is called by a side test (review r3 of #439, item 1): a subclass's own bound native
+/// `IsLocalController` is refused before it is invoked, and before any behavior runs.
+#[test]
+fn a_subclass_s_own_bound_query_is_refused() {
+    let mut t = toy(ParityMode::Off);
+    let f = t.vm.find_function("Engine.ToySubController.IsLocalController").unwrap();
+    let key = t.vm.function(f).unwrap().native_key.clone().unwrap();
+    let called = Rc::new(Cell::new(false));
+    let seen = called.clone();
+    t.vm.register_native(
+        &key,
+        Rc::new(move |_c: &mut ow_vm::api::NativeCall<'_>| -> Result<Value, VmError> {
+            seen.set(true);
+            Ok(Value::Bool(true))
+        }),
+    )
+    .unwrap();
+    let component = t.make("GearboxFramework.SpecialMoveComponent", "SpecialMoveComponent0");
+    let pawn = t.make("Engine.ToyPawn", "Maya");
+    let world = t.make("Engine.ToyWorldInfo", "World");
+    let sub = t.make("Engine.ToySubController", "SubPC");
+    t.set(pawn, "WorldInfo", Value::Object(Some(world)));
+    t.set(pawn, "Controller", Value::Object(Some(sub)));
+    t.set(component, "SMI", Value::Object(Some(pawn)));
+    let zero = t.vm.space.classes.zero_value(&PropKind::Struct(t.sm_entry));
+    let list = t.behaviors(&[Some("L")]);
+    let e = with(&t.vm, &zero, "Behaviors", list);
+    let local = with(&t.vm, &e, "PlayLocal", Value::Bool(true));
+    match t.call(SM_RUN_BEHAVIORS, Some(component), vec![Value::Array(Rc::new(vec![local]))]).unwrap_err() {
+        VmError::NotYet(n) => assert!(n.what.contains("allow-list"), "{n}"),
+        e => panic!("expected NotYet, got {e}"),
+    }
+    assert!(!called.get(), "the subclass's query was not invoked");
     assert!(t.log.borrow().is_empty(), "no behavior ran");
 }
