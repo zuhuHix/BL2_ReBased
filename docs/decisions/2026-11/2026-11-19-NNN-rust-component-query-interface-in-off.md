@@ -23,6 +23,15 @@ executable and the analysis output were not opened. Synthetic fixtures only.
      as it is.
   - **Nothing written, nothing loaded.** A load is a store write, so a receiver or an `Owner` that is an unloaded
     definition handle is `NotYet { NotRead }` with the note's texts.
+- **Review r1 of #524** (on #512's r2 note, b2960b33):
+  1. The unloaded-receiver check runs only after the plain answer returns None. An unloaded receiver's plain answer,
+     an object, a `NotYet` or an error, is unchanged.
+  2. Owner forwarding loads nothing. The Off pawn rule's field reads no longer load: an unloaded definition met
+     there (for example a `DrivenVehicle`) is `NotYet { NotRead }` naming the read.
+  3. The `Owner` declaration is judged once, at registration, from the class metadata. A declared target held only
+     as a reserved class is defined from its package first, so a valid declaration to an uninstantiated `Actor`
+     subclass is never a Script error.
+  4. Refusal texts name an object best effort: its own name when its path cannot be made.
 - **Retired:** the open answer for `Engine.SkeletalMeshComponent` ("what a skeletal mesh component answers to
   QueryInterface"), now the rule. Reference is unchanged and registers none of it.
 - **Tests** (`ow-combat` `pawn_interface/tests.rs`, on an invented `Engine.upk`; `Pawn` and `Controller` now derive

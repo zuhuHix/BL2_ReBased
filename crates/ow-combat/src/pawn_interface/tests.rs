@@ -54,12 +54,21 @@ fn real_class(t: &mut ScriptToy, name: &str, super_ref: i32, within: i32, flags:
 /// `Mesh`; `ToyThingPawn` (a pawn listing `IToyThing`) and `ToyInheritingPawn` (its subclass, which lists nothing);
 /// `Controller` and `Vehicle` (a pawn), each with `Controller` where the rule reads it; `SkeletalMeshComponent`; and the
 /// classes that stand in for read answers: `ToyAnsweringController` and `ToyAnsweringMesh`.
-fn engine() -> Vec<u8> {
-    engine_with(false)
+/// The fixture's `Owner` declarations.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owners {
+    /// `ActorComponent` declares none; `SkeletalMeshComponent` declares one to `Engine.Actor`.
+    Plain,
+    /// `ActorComponent` declares `Owner` as an int.
+    Mistyped,
+    /// `SkeletalMeshComponent` declares `Owner` to `ToyOwnerActor`, a subclass of `Engine.Actor` never instantiated, so
+    /// the class table holds it only as a reserved name until something defines it (review r1 of #524, item 3).
+    Reserved,
 }
 
-/// [`engine`]; with `mistyped`, `ActorComponent` declares `Owner` as an int (the mistyped-`Owner` case).
-fn engine_with(mistyped: bool) -> Vec<u8> {
+/// [`engine`] with the `Owner` declarations of `owners`.
+fn engine_with(owners: Owners) -> Vec<u8> {
+    let mistyped = owners == Owners::Mistyped;
     let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty", "IntProperty"]);
     let object = real_class(&mut t, "Object", 0, 1, 2, &[]);
     let thing = real_class(&mut t, "IToyThing", object, object, INTERFACE, &[]);
@@ -82,22 +91,33 @@ fn engine_with(mistyped: bool) -> Vec<u8> {
         t.prop("Int", actor_component, "Owner", 0, 0);
     }
     let component = real_class(&mut t, "SkeletalMeshComponent", actor_component, object, 2, &[]);
-    t.prop("Object", component, "Owner", 0, actor);
+    let owner_target = if owners == Owners::Reserved {
+        real_class(&mut t, "ToyOwnerActor", actor, object, 2, &[])
+    } else {
+        actor
+    };
+    t.prop("Object", component, "Owner", 0, owner_target);
     real_class(&mut t, "ToySubMesh", component, object, 2, &[]);
     real_class(&mut t, "ToyPlainComponent", actor_component, object, 2, &[]);
     real_class(&mut t, "ToyAnsweringController", controller, object, 2, &[]);
     real_class(&mut t, "ToyAnsweringMesh", component, object, 2, &[]);
     // A holder whose `Held` names a pawn export, which the store keeps as an unloaded handle until it is loaded.
+    // It also names a skeletal mesh export, an unloaded receiver for the component rule (review r1 of #524, item 1).
     let holder = real_class(&mut t, "ToyHolder", object, object, 2, &[]);
     t.prop("Object", holder, "Held", 0, actor);
+    t.prop("Object", holder, "HeldMesh", 0, component);
     let held = t.p.next_export() + 1;
     let mut payload = ints(&[0]);
     payload.extend(t.p.object_tag("Held", held));
+    payload.extend(t.p.object_tag("HeldMesh", held + 1));
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(holder, "ToyHolder_0", payload));
     let mut payload = ints(&[0]);
     payload.extend_from_slice(&t.none);
     t.p.add_export_with(Export::new(pawn, "ToyLazyPawn_0", payload));
+    let mut payload = ints(&[0]);
+    payload.extend_from_slice(&t.none);
+    t.p.add_export_with(Export::new(component, "ToyLazyMesh_0", payload));
     t.build()
 }
 
@@ -116,17 +136,17 @@ impl Drop for Env {
 impl Env {
     /// The invented world in `mode`, with the hand-defined classes and (in Off) the pawn rules registered.
     fn new(mode: ParityMode) -> Env {
-        Env::with(mode, false)
+        Env::with(mode, Owners::Plain)
     }
 
-    fn with(mode: ParityMode, mistyped: bool) -> Env {
+    fn with(mode: ParityMode, owners: Owners) -> Env {
         let dir = std::env::temp_dir().join(format!(
             "ow-combat-pawn-interface-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let engine = engine_with(mistyped);
+        let engine = engine_with(owners);
         let defs =
             DefStore::from_synthetic(&dir, &[("Engine.upk", engine.as_slice())], IdentityPolicy::FirstInScanOrder, mode)
                 .unwrap();
@@ -457,7 +477,7 @@ fn a_missing_or_mistyped_owner_is_a_script_error() {
     let mut e = Env::new(ParityMode::Off);
     let component = e.make("Engine.ActorComponent", "Component_0");
     assert_eq!(script_text(e.ask(component)), "ActorComponent.QueryInterface: Engine.ActorComponent declares no Owner");
-    let mut e = Env::with(ParityMode::Off, true);
+    let mut e = Env::with(ParityMode::Off, Owners::Mistyped);
     let component = e.make("Engine.ActorComponent", "Component_0");
     assert_eq!(
         script_text(e.ask(component)),
@@ -486,5 +506,61 @@ fn reference_keeps_the_plain_component_answer() {
     let owner = e.make("Engine.ToyThingPawn", "Owner_0");
     let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
     e.link(mesh, "Owner", owner);
+    assert_eq!(e.ask(mesh).unwrap(), None);
+}
+
+/// The holder's lazy handles: (the pawn, the skeletal mesh), both still unloaded.
+fn lazy_handles(e: &mut Env) -> (ObjRef, ObjRef) {
+    let path = ow_core::ObjectPath::parse("Engine.ToyHolder_0").unwrap();
+    let holder = e.vm.defs.find(&mut e.vm.space, &path).unwrap().unwrap();
+    let pawn = crate::hit::access::object(&mut e.vm, holder, "Held").unwrap().expect("a held pawn");
+    let mesh = crate::hit::access::object(&mut e.vm, holder, "HeldMesh").unwrap().expect("a held mesh");
+    for o in [pawn, mesh] {
+        assert!(e.vm.defs.is_unloaded(&e.vm.space, o), "the fixture's handles are lazy");
+    }
+    (pawn, mesh)
+}
+
+/// Review r1 of #524, item 1: the unloaded-receiver check runs only after the plain answer returns None. An unloaded
+/// exact-class receiver whose class derives from the asked class answers itself; a plain `NotYet` passes through; a
+/// plain None meets the check. Nothing is loaded.
+#[test]
+fn an_unloaded_receiver_is_checked_only_after_a_plain_none() {
+    let mut e = Env::new(ParityMode::Off);
+    let (_, mesh) = lazy_handles(&mut e);
+    let base = e.vm.find_class("Engine.ActorComponent").unwrap();
+    assert_eq!(e.vm.query_interface(mesh, base).unwrap(), Some(mesh), "the plain answer");
+    not_read(e.ask(mesh), "ActorComponent.QueryInterface: the component Engine.ToyLazyMesh_0 is an unloaded definition handle");
+    let class = e.vm.find_class("Engine.SkeletalMeshComponent").unwrap();
+    e.vm.space.classes.mark_native(class).unwrap();
+    match e.ask(mesh).unwrap_err() {
+        VmError::NotYet(n) => assert_eq!(n.record, "decision 2026-11-15-08 (engine-native stand-in classes)"),
+        other => panic!("expected the plain answer's NotYet, got {other:?}"),
+    }
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, mesh), "still not loaded");
+}
+
+/// Review r1 of #524, item 2: forwarding loads nothing. A mesh forwards to a loaded pawn with no controller whose
+/// `DrivenVehicle` is an unloaded handle: the pawn rule's next read needs it, so the answer is a typed `NotRead`, and the
+/// vehicle stays unloaded.
+#[test]
+fn owner_forwarding_never_loads_a_definition() {
+    let mut e = Env::new(ParityMode::Off);
+    let (vehicle, _) = lazy_handles(&mut e);
+    let pawn = e.make("Engine.Pawn", "Pawn_0");
+    e.link(pawn, "DrivenVehicle", vehicle);
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
+    e.link(mesh, "Owner", pawn);
+    not_read(e.ask(mesh), "the pawn QueryInterface rule: reading Controller of Engine.ToyLazyPawn_0, an unloaded definition handle");
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, vehicle), "the vehicle stays unloaded");
+}
+
+/// Review r1 of #524, item 3: an `Owner` declared to a subclass of `Engine.Actor` that nothing instantiates is a valid
+/// declaration, its ancestry read from the class metadata at registration: `Owner` None answers None, never a Script
+/// error.
+#[test]
+fn an_owner_declared_to_an_uninstantiated_actor_subclass_is_valid() {
+    let mut e = Env::with(ParityMode::Off, Owners::Reserved);
+    let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
     assert_eq!(e.ask(mesh).unwrap(), None);
 }

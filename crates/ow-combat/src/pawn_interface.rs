@@ -53,7 +53,8 @@ use ow_object::value::Value;
 use ow_vm::api::{InterfaceRuleFn, Vm};
 use ow_vm::error::VmError;
 
-use crate::hit::access::{object_of, required};
+use crate::hit::access::object_of;
+use std::collections::BTreeMap;
 
 /// The analyst note this module implements.
 pub const RECORD: &str = "docs/verification/NATIVE_PAWN_AI_INTERFACE.md";
@@ -95,9 +96,22 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         (PAWN, Rc::new(pawn_answer)),
         (WILLOW_AI_PAWN, Rc::new(willow_ai_pawn_answer)),
         (WILLOW_VEHICLE, Rc::new(vehicle_answer)),
-        (ACTOR_COMPONENT, Rc::new(component_answer)),
-        (SKELETAL_MESH_COMPONENT, Rc::new(component_answer)),
     ];
+    // The component rule's `Owner` declarations, judged once here from the class metadata (review r1 of #524, item
+    // 3): a declared target the class table has only reserved (its superclass not filled in) is defined now, so its
+    // ancestry is read from the packages and never from a half-built runtime chain.
+    let mut owners = BTreeMap::new();
+    for path in COMPONENT_RULE_CLASSES {
+        if let Some(class) = vm.find_class_if_present(path)? {
+            let verdict = owner_declaration(vm, class)?;
+            owners.insert(class, verdict);
+        }
+    }
+    let owners = Rc::new(owners);
+    for path in COMPONENT_RULE_CLASSES {
+        let owners = owners.clone();
+        rules.push((path, Rc::new(move |vm: &mut Vm, this: ObjRef, iface: ClassId| component_answer(vm, this, iface, &owners))));
+    }
     for (path, words, ai_only) in OPEN_ANSWERS {
         rules.push((path, open_answer(words, ai_only)));
     }
@@ -141,9 +155,26 @@ fn class_path(vm: &Vm, class: ClassId) -> String {
     vm.space.classes.layout(class).path().to_string()
 }
 
-/// Object property `name` of `o`, which its class must declare.
+/// Object property `name` of `o`, which its class must declare (a `VmError::Script` otherwise). It loads nothing
+/// (review r1 of #524, item 2): a load is a store write, so an `o` that is an unloaded definition handle is
+/// `NotYet { NotRead }` naming the read.
 fn field(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, VmError> {
-    Ok(object_of(&required(vm, o, name, "the pawn QueryInterface rule")?))
+    const UNIT: &str = "the pawn QueryInterface rule";
+    if vm.defs.is_unloaded(&vm.space, o) {
+        return Err(NotYet::not_read(
+            format!("{UNIT}: reading {name} of {}, an unloaded definition handle", object_path(vm, o)),
+            RECORD,
+        )
+        .into());
+    }
+    let class = vm.space.heap.get(o)?.class;
+    let Some(p) = vm.space.prop(class, name) else {
+        return Err(crate::hit::access::error(format!(
+            "{UNIT}: {} has no property {name}",
+            crate::hit::access::class_name(vm, o)
+        )));
+    };
+    Ok(object_of(vm.space.read(o, ow_object::ids::PropAddr::scalar(p))?))
 }
 
 /// Steps 2 and 3: `step`'s object `o` answers `iface` by its own rule, through the one dispatch
@@ -203,6 +234,37 @@ pub fn willow_ai_pawn_answer(vm: &mut Vm, pawn: ObjRef, iface: ClassId) -> Resul
     Ok(None)
 }
 
+/// How an exact component class declares `Owner` (judged at registration, [`owner_declaration`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerDeclaration {
+    /// An object reference to `Engine.Actor` or a subclass.
+    Actor(ow_object::ids::PropId),
+    /// Not declared.
+    Missing,
+    /// Declared with another type.
+    Mistyped,
+}
+
+/// `class`'s `Owner` declaration. The declared target's ancestry is read from the class metadata: a target the class
+/// table holds only as a reserved name is defined from its package first ([`Vm::find_class_if_present`]).
+pub fn owner_declaration(vm: &mut Vm, class: ClassId) -> Result<OwnerDeclaration, VmError> {
+    let Some(prop) = vm.space.prop(class, "Owner") else {
+        return Ok(OwnerDeclaration::Missing);
+    };
+    let target = match vm.space.classes.decl(prop).map(|d| d.kind.clone()) {
+        Some(ow_object::layout::PropKind::Object { class: target }) => target,
+        _ => return Ok(OwnerDeclaration::Mistyped),
+    };
+    let path = class_path(vm, target);
+    let target = vm.find_class_if_present(&path)?.unwrap_or(target);
+    let actor = vm.find_class_if_present("Engine.Actor")?;
+    Ok(if actor.is_some_and(|a| vm.space.classes.is_child_of(target, a)) {
+        OwnerDeclaration::Actor(prop)
+    } else {
+        OwnerDeclaration::Mistyped
+    })
+}
+
 /// The unit the component rule's errors and refusals name (the note's section 6.4).
 pub const COMPONENT_UNIT: &str = "ActorComponent.QueryInterface";
 
@@ -218,13 +280,14 @@ pub const COMPONENT_UNIT: &str = "ActorComponent.QueryInterface";
 ///    through as it is.
 ///
 /// Writes nothing and loads nothing.
-pub fn component_answer(vm: &mut Vm, component: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
+pub fn component_answer(
+    vm: &mut Vm,
+    component: ObjRef,
+    iface: ClassId,
+    owners: &BTreeMap<ClassId, OwnerDeclaration>,
+) -> Result<Option<ObjRef>, VmError> {
     let class = vm.space.heap.get(component)?.class;
-    let mut exact = false;
-    for path in COMPONENT_RULE_CLASSES {
-        exact |= vm.find_class_if_present(path)? == Some(class);
-    }
-    if !exact {
+    let Some(declaration) = owners.get(&class).copied() else {
         let name = class_path(vm, class);
         return Err(NotYet::not_read(
             format!(
@@ -234,37 +297,32 @@ pub fn component_answer(vm: &mut Vm, component: ObjRef, iface: ClassId) -> Resul
             RECORD,
         )
         .into());
+    };
+    // The plain answer first, unchanged in every case: an object, a `NotYet` or an error is the answer (the hub's
+    // ruling on review r2 of #512, review r1 of #524 item 1). Only a successful None reaches the checks below.
+    if let Some(me) = vm.plain_interface(component, iface)? {
+        return Ok(Some(me));
     }
     if vm.defs.is_unloaded(&vm.space, component) {
         return Err(NotYet::not_read(
-            format!(
-                "{COMPONENT_UNIT}: the component {} is an unloaded definition handle",
-                object_path(vm, component)?
-            ),
+            format!("{COMPONENT_UNIT}: the component {} is an unloaded definition handle", object_path(vm, component)),
             RECORD,
         )
         .into());
     }
-    if let Some(me) = vm.plain_interface(component, iface)? {
-        return Ok(Some(me));
-    }
     let script = |message: String| VmError::Script { function: COMPONENT_UNIT.to_string(), message };
-    let Some(prop) = vm.space.prop(class, "Owner") else {
-        return Err(script(format!("{COMPONENT_UNIT}: {} declares no Owner", class_path(vm, class))));
-    };
-    let actor = vm.find_class_if_present("Engine.Actor")?;
-    let typed = match vm.space.classes.decl(prop).map(|d| &d.kind) {
-        Some(ow_object::layout::PropKind::Object { class: target }) => {
-            actor.is_some_and(|a| vm.space.classes.is_child_of(*target, a))
+    let prop = match declaration {
+        OwnerDeclaration::Actor(prop) => prop,
+        OwnerDeclaration::Missing => {
+            return Err(script(format!("{COMPONENT_UNIT}: {} declares no Owner", class_path(vm, class))));
         }
-        _ => false,
+        OwnerDeclaration::Mistyped => {
+            return Err(script(format!(
+                "{COMPONENT_UNIT}: {}.Owner is not an object reference to Engine.Actor",
+                class_path(vm, class)
+            )));
+        }
     };
-    if !typed {
-        return Err(script(format!(
-            "{COMPONENT_UNIT}: {}.Owner is not an object reference to Engine.Actor",
-            class_path(vm, class)
-        )));
-    }
     let owner = match vm.space.read(component, ow_object::ids::PropAddr::scalar(prop))? {
         Value::Object(o) => *o,
         _ => {
@@ -281,8 +339,8 @@ pub fn component_answer(vm: &mut Vm, component: ObjRef, iface: ClassId) -> Resul
         return Err(NotYet::not_read(
             format!(
                 "{COMPONENT_UNIT}: the Owner {} of {} is an unloaded definition handle",
-                object_path(vm, owner)?,
-                object_path(vm, component)?
+                object_path(vm, owner),
+                object_path(vm, component)
             ),
             RECORD,
         )
@@ -291,12 +349,18 @@ pub fn component_answer(vm: &mut Vm, component: ObjRef, iface: ClassId) -> Resul
     vm.query_interface(owner, iface)
 }
 
-/// `o`'s full path name for a refusal's text; an object whose path is not known yet (an unloaded definition handle has
-/// no outer chain) is named by its own name.
-fn object_path(vm: &Vm, o: ObjRef) -> Result<String, VmError> {
+/// `o`'s full path name for a refusal's text, best effort (review r1 of #524, item 4): when the path cannot be made
+/// (an unloaded handle has no outer chain yet, or the chain is past `PathName`'s limit), `o`'s own name, and "an object"
+/// for a stale handle. A diagnostic name never turns the refusal into another error.
+fn object_path(vm: &Vm, o: ObjRef) -> String {
     match ow_vm::path_name::path_name(vm, o) {
-        Err(VmError::NotYet(_)) => Ok(vm.space.names.text(vm.space.heap.get(o)?.name).into_owned()),
-        other => other,
+        Ok(path) => path,
+        Err(_) => vm
+            .space
+            .heap
+            .get(o)
+            .map(|object| vm.space.names.text(object.name).into_owned())
+            .unwrap_or_else(|_| "an object".to_string()),
     }
 }
 
