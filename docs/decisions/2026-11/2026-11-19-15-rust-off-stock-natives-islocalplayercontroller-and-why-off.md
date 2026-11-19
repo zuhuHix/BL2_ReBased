@@ -17,7 +17,9 @@ by its local-player list (`Actors::add_local_player`, decision 2026-11-16-81), n
   from a connection without the `Player` object;
 - no world: `NotYet { LayerAbsent }`.
 
-Whether this game's own controller classes change the rule is UNVERIFIED. Reference keeps the C++ zero-result stub
+Whether this game's own controller classes change the rule is UNVERIFIED. Two answers are this port's modelling
+choices, not UE3's rule (which decides by `Player` alone), and are UNVERIFIED too: a listed controller that is
+destroyed answers false, and a listed controller whose `Player` is None answers true. Reference keeps the C++ zero-result stub
 (R3); `--slice-run`'s allow list keeps it, and only its reason text changed.
 
 ### 2. The Off spawn health factor: diagnosed, not fixed (an unread native)
@@ -45,9 +47,10 @@ Whether this game's own controller classes change the rule is UNVERIFIED. Refere
   mind's installed `InitializeCharacterClass`.
   - On the installed data it stops at once at `Controller.ApplyCharacterClassStartingValues(object)`. That is the
     `WillowMind` override, which NATIVE_COMBAT_GROUNDWORK.md (sections 1.10 and "Not read yet") lists as not read.
-  - The same change breaks 19 synthetic Off tests in `ow-combat`, whose toy minds have no such script.
-  - So it was reverted, and Off spawn health stays as it is. Those rows are counts, not parity, as decision 40200264's
-    branch already says.
+  - The same change breaks 19 synthetic Off tests in `ow-combat`, whose toy minds have no such script. (Both results
+    were seen locally on pc-hummer with that reverted patch; they are not reproducible from the tree.)
+  - So it was reverted, and Off spawn health stays as it is. Those rows are counts, not parity, as the FIX-FIRE-TO-HIT
+    branch (`fix/rust-fire-to-hit`, decision 2026-11-19-06) already says.
 - **Question for an analyst** (no Ghidra here): what does the `WillowMind` override of
   `ApplyCharacterClassStartingValues` do for an AI mind? Which pools does it make, in what order, and does it call the
   `Controller` base? After that, a fresh implementer can route the Off adopt through `InitializeCharacterClass` and
