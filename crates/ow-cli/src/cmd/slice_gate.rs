@@ -897,6 +897,13 @@ fn link_of(driver: Driver) -> Option<usize> {
 
 /// Link 8 (module documentation): `make` prepares the weapon and its owner as `--equip-run` does, then each of its
 /// phases runs in turn, the spawn's `init` first. The evidence is the run's own ([`equip_evident`]).
+///
+/// Before the weapon is made, `make` runs the weapon init's preflight (lane IMPL-CACHE-WEAPON-CARD,
+/// NATIVE_CACHE_WEAPON_CARD.md section 5.1, [`ow_inventory::equip::name_parts::preflight`]): Off answers
+/// `CacheWeaponCard` with `NotYet { NotRead }` whatever the data, so the stop is that refusal, unprefixed and graded by
+/// its variant, with nothing written. When the card is read, the globals preflight of NATIVE_WILLOW_GLOBALS.md section
+/// 6.2, steps 1 to 3, on a world set up per its section 6.1, replaces the refusal (review of #491); this lane adds no
+/// globals set-up.
 fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Equip) else { return };
     if !should_run(i, Driver::Equip, ran) {
@@ -913,6 +920,11 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     };
     let vm = &mut world.vm;
     r.steps.push("make".into());
+    if let Err(e) = ow_inventory::equip::name_parts::preflight(vm) {
+        r.stop = Some(classify_error("make", &e));
+        ran[i] = Some(r);
+        return;
+    }
     let weapon = match crate::cmd::inventory::equip_run::prepare_line(vm, EQUIP_WEAPON) {
         Ok(w) => w,
         Err(text) => {

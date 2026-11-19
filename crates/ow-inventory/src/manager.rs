@@ -414,6 +414,7 @@ impl NativePack for Pack {
         register_queries(vm)?;
         crate::equip::bind_overrides(vm)?;
         crate::equip::natives::register(vm)?;
+        crate::equip::name_parts::register(vm)?;
         crate::definition::register(vm)?;
         crate::equip::value::register(vm)?;
         crate::pickup::register(vm)?;

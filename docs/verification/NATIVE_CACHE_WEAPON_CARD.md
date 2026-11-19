@@ -15,6 +15,10 @@ AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-CACHE-WEAPON-CARD (dec
 **Clean room.** This lane implements nothing. Both natives stay unbound (or `NotYet`) in Off until a fresh implementer
 codes them from this note alone.
 
+**Implemented in Off** by lane IMPL-CACHE-WEAPON-CARD (decision 2026-11-19-NNN, placeholder number), from this note
+alone: `ChooseRandomNameParts` in full, `CacheWeaponCard`'s call-time `NotRead`, and the equip driver's preflight of
+section 5.1. Still UNVERIFIED in the running game.
+
 **Why it matters.** Slice link 8 (equip): once `ApplyInternalSlotEffectModifiers` is bound (lane H6's note, decision
 -87, #471), a weapon's init (`InitializeInternal`, run by its spawn) reaches the name-part branch's
 `ChooseRandomNameParts`, or `CacheWeaponCard` when the branch is skipped. Neither native is bound.
