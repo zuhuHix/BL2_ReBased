@@ -300,8 +300,10 @@ fn a_struct_without_the_slot_fields_is_refused_whatever_the_count() {
     let slots = PropertyDecl::new(w.vm.space.names.intern("AttributeSlots"), PropKind::Struct(ty)).with_array_dim(SLOTS);
     let class = w.vm.space.classes.define("Test.IntSlotItem", Some(object), vec![slots]).unwrap();
     let item = w.vm.space.alloc(class, "Test.IntOdd", None, Origin::Runtime).unwrap();
-    let e = external_slot_effects(&w.vm, item, SLOTS).unwrap_err();
-    assert!(e.to_string().contains("without ModifierType as a byte"), "{e}");
+    for count in [SLOTS, 0] {
+        let e = external_slot_effects(&w.vm, item, count).unwrap_err();
+        assert!(e.to_string().contains("without ModifierType as a byte"), "count {count}: {e}");
+    }
 }
 
 #[test]
