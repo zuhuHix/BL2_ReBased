@@ -113,6 +113,7 @@ fn package() -> Vec<u8> {
         "ObjectProperty",
         "ArrayProperty",
         "StructProperty",
+        "StrProperty",
     ]);
     let object = t.class("Object", 0);
     let vector = toy_struct(&mut t, object, "Vector", None);
@@ -381,6 +382,14 @@ fn package() -> Vec<u8> {
     native(&mut t, player_controller, "IsLocalPlayerController", &[], Some(("Bool", 0)), NATIVE);
     let ui = t.class("UIInteraction", object);
     native(&mut t, ui, "GetDataStoreClient", &[], Some(("Object", object)), NATIVE | STATIC);
+    // The player pawn data manager (decision 2026-11-19-24): the game's class names, which the natives' keys carry.
+    let manager = t.class("WillowPlayerPawnDataManager", object);
+    let mut path = Param::new("Str", "Path");
+    path.flags = 0x80;
+    native(&mut t, manager, "FindAlreadyLoadedObject", &[path], Some(("Object", object)), NATIVE);
+    let globals = t.class("WillowGlobals", object);
+    t.prop("Object", globals, "ThePlayerPawnDataManager", 0, manager);
+    native(&mut t, globals, "GetPlayerPawnDataManager", &[], Some(("Object", manager)), NATIVE);
     t.class("Thing", object);
     // The travel countdown (lane MAP-LOAD-C, NATIVE_TRAVEL.md).
     let willow_game = t.class("WillowGameInfo", actor);
@@ -1579,6 +1588,69 @@ fn get_data_store_client_is_not_yet_outside_reference() {
         assert!(matches!(&r, Err(VmError::NotYet(n)) if matches!(n.missing, ow_core::Missing::LayerAbsent(_))), "{r:?}");
         let x = fx_in(true, ParityMode::Reference);
         assert!(!x.w.vm.has_native("UIInteraction.GetDataStoreClient()"), "unbound under Reference");
+    });
+}
+
+/// The player pawn data manager (NATIVE_PAWN_DATA.md; decision 2026-11-19-24), Off: the getter reads the field and is
+/// `NotYet` before the set-up; the set-up makes one manager and keeps it; an existing manager the set-up would have to
+/// pick is `NotYet`.
+#[test]
+fn the_pawn_data_manager_is_read_from_the_globals_after_the_set_up() {
+    run(|| {
+        let mut x = fx();
+        pawn_data::Pack.register(x.vm()).unwrap();
+        let class = x.class("WillowGlobals");
+        let globals = ow_vm::interp::instantiate_from_defaults(x.vm(), class).unwrap();
+        let get = |x: &mut Fx| x.call("WillowGlobals.GetPlayerPawnDataManager", Some(globals), Vec::new());
+        let before = get(&mut x);
+        assert!(matches!(&before, Err(VmError::NotYet(n)) if n.missing == Missing::NotRead), "{before:?}");
+        let made = pawn_data::set_up(x.vm(), globals).unwrap();
+        assert_eq!(get(&mut x).unwrap(), Value::Object(Some(made)));
+        assert_eq!(get(&mut x).unwrap(), Value::Object(Some(made)), "the same object on every call");
+        assert_eq!(pawn_data::set_up(x.vm(), globals).unwrap(), made, "a set field is kept");
+        // A second globals object with an empty field while a manager is alive: the engine check is not read.
+        let other = ow_vm::interp::instantiate_from_defaults(x.vm(), class).unwrap();
+        let refused = pawn_data::set_up(x.vm(), other).unwrap_err();
+        assert!(matches!(&refused, VmError::NotYet(n) if n.missing == Missing::NotRead), "{refused}");
+    });
+}
+
+/// `FindAlreadyLoadedObject`, Off: an object in memory at the full path (any case), None for nothing there, and
+/// `NotYet { NotRead }` for a partial path and for an empty one.
+#[test]
+fn find_already_loaded_object_looks_up_full_paths_in_memory() {
+    run(|| {
+        let mut x = fx();
+        pawn_data::Pack.register(x.vm()).unwrap();
+        let globals_class = x.class("WillowGlobals");
+        let globals = ow_vm::interp::instantiate_from_defaults(x.vm(), globals_class).unwrap();
+        let manager = pawn_data::set_up(x.vm(), globals).unwrap();
+        let thing = x.class("Thing");
+        // A top-level package names its own path (Object.PathName); the toy package set has no Core, so declare it.
+        let package = x.vm().space.classes.define("Core.Package", None, vec![]).unwrap();
+        let outer = x.vm().space.alloc(package, "ToyPackage", None, ow_object::heap::Origin::Runtime).unwrap();
+        let inner = x.vm().space.alloc(thing, "ToyArchetype", Some(outer), ow_object::heap::Origin::Runtime).unwrap();
+        let find = |x: &mut Fx, p: &str| {
+            x.call("WillowPlayerPawnDataManager.FindAlreadyLoadedObject", Some(manager), vec![Value::Str(p.into())])
+        };
+        assert_eq!(find(&mut x, "ToyPackage.ToyArchetype").unwrap(), Value::Object(Some(inner)));
+        assert_eq!(find(&mut x, "toypackage.TOYARCHETYPE").unwrap(), Value::Object(Some(inner)), "names compare in any case");
+        assert_eq!(find(&mut x, "ToyPackage.Nothing").unwrap(), Value::Object(None));
+        for partial in ["ToyArchetype", ""] {
+            let r = find(&mut x, partial);
+            assert!(matches!(&r, Err(VmError::NotYet(n)) if n.missing == Missing::NotRead), "{partial:?}: {r:?}");
+        }
+    });
+}
+
+/// Reference keeps both unbound (no C++ stand-in).
+#[test]
+fn the_pawn_data_natives_are_unbound_in_reference() {
+    run(|| {
+        let mut x = fx_in(true, ParityMode::Reference);
+        pawn_data::Pack.register(x.vm()).unwrap();
+        assert!(!x.w.vm.has_native(pawn_data::GET_MANAGER));
+        assert!(!x.w.vm.has_native(pawn_data::FIND_LOADED));
     });
 }
 

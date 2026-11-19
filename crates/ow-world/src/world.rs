@@ -594,5 +594,8 @@ pub mod mapload;
 
 pub mod localize;
 
+/// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
+pub mod pawn_data;
+
 #[cfg(test)]
 mod tests;
