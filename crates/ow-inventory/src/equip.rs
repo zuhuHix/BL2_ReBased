@@ -54,6 +54,8 @@ use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 
 pub mod natives;
+/// The attribute slot natives (`InitializeAttributeSlots`; lane IMPL-INIT-ATTRIBUTE-SLOTS).
+pub mod slots;
 /// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
 pub mod value;
 

@@ -158,7 +158,7 @@ fn definition_and_parts(vm: &mut Vm, inv: ObjRef, layout: &Layout, what: &str) -
     Ok((definition, parts))
 }
 
-fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
+pub(super) fn loaded(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
     if vm.defs.is_unloaded(&vm.space, o) {
         let r = vm.defs.ensure_loaded(&mut vm.space, o);
         let log = vm.defs.take_log();

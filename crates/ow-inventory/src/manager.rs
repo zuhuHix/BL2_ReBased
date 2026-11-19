@@ -418,6 +418,7 @@ impl NativePack for Pack {
         crate::equip::value::register(vm)?;
         crate::pickup::register(vm)?;
         crate::globals::register(vm)?;
+        crate::equip::slots::register(vm)?;
         crate::spawn::register(vm)
     }
 }
