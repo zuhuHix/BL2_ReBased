@@ -42,28 +42,45 @@ No parameters; returns an int. The native body only reads, and writes nothing.
    - A definition that is not plot-critical, or has a `DlcExpansion`, is skipped whatever its status.
 4. **The fallback** is `GetActivePlotCriticalMissionNumber` for the current playthrough (section 2). It is taken when
    step 1 fails. It is also taken when steps 2 and 3 answer -1, which only a `MissionNumber` of -1 can give.
-   - **Correction:** NATIVE_CONTROLLER_HELPERS.md names the local active-mission function as the fallback. The body
-     read here calls the plot-critical function instead.
+   - **Correction:** NATIVE_CONTROLLER_HELPERS.md named the local active-mission function as the fallback. The body
+     read here calls the plot-critical function instead; that note is now fixed in place.
 
-**Off answers, step by step** (for an implementer; hub rulings of 2026-11-19 apply):
-1. **The inputs**, through the VM:
-   - the world's `WorldInfo.GRI`;
-   - its class checked against `WillowGameReplicationInfo`;
-   - its `MissionTracker`;
-   - the tracker's `IsDataValid()`, `ActiveMission`, `GetAllMissions()` and `GetMissionStatus(definition)`, as the
-     mission bridge binds them (`ow_mission::bridge`).
-   - A tracker native the bridge does not bind is the VM's answer for that native (its own `NotYet` or refusal),
-     propagated unchanged.
-2. **No world, no replication info of that class, no tracker, or data not valid:** the fallback (section 2).
-3. **The rest** as steps 2 to 4 above. Nothing is written, so there is nothing to preflight and nothing to roll back.
-   The refresh's own write mark (decision 2026-11-19-80) still marks a `NotYet` from a tracker native after the
-   refresh wrote.
-4. **A definition without a readable `bPlotCritical`, `DlcExpansion` or `MissionNumber`** is bad data: a script error
+**Off answers, step by step** (for an implementer; hub rulings of 2026-11-19 apply). The native writes nothing, so
+nothing is preflighted for it and nothing is rolled back. Every call below goes through the VM:
+1. **The inputs:** the world's `WorldInfo.GRI`, its class checked against `WillowGameReplicationInfo`, and its
+   `MissionTracker`.
+2. **The engine-wide condition** (step 1's unresolved global): Off does not guess it.
+   - When the world, the replication info and the tracker are all there, both branches are computed: the tracker
+     branch (steps 2 and 3) and the fallback (section 2).
+   - Equal answers: that number.
+   - Different answers: `NotYet { NotRead }`, "the engine-wide condition of GetActiveMissionNumber". If either branch
+     fails, that failure is the answer (below).
+   - With no world, no replication info of that class, or no tracker, the condition does not matter: the fallback is
+     the answer.
+3. **The tracker branch:**
+   - `IsDataValid()` false: the fallback.
+   - `ActiveMission` set: its `MissionNumber`.
+   - Otherwise the list from `GetAllMissions(out Missions)`, then `GetMissionStatus(definition)` for each plot-critical,
+     non-DLC entry, as steps 2 and 3 above.
+4. **A call that fails propagates unchanged**, its variant and kind kept:
+   - a bound native's `NotYet` or error;
+   - an unbound native's `VmError::UnboundNative`.
+   - Inside the settings refresh, a `NotYet` that leaves after the refresh wrote gets the refresh's prefix (decision
+     2026-11-19-80); this native adds none of its own.
+5. **A `None` entry** in the list: the game's loop reads each entry's fields with no `None` test, so what it does with
+   one was not read. `NotYet { NotRead }`, "a None entry in the tracker's mission list".
+6. **A definition without a readable `bPlotCritical`, `DlcExpansion` or `MissionNumber`** is bad data: a script error
    naming the field, propagated unchanged.
 
-**The port's case today.** The bridge's tracker holds one mission. The installed slice's answer then depends on two
-things: whether the bridge sets `ActiveMission` when it accepts, and whether that mission is plot-critical. An
-implementer reads both from the VM; this note does not assume them.
+**The port's case today, and the stop it would give.** The mission bridge binds `IsDataValid` (the tracker's
+`bDataValidated`) and `GetMissionStatus` (its one mission's status, NotStarted for any other). It sets no
+`ActiveMission`. Its `GetAllMissions` answers `NotYet { LayerAbsent }` today, because the bridge holds one record and
+not the game's list (`ow_mission::bridge`, decision 2026-11-19-10).
+- Bound by this note in the installed slice, with the tracker's data valid: the tracker branch reaches `GetAllMissions`
+  and stops there with that `LayerAbsent`, marked by the refresh. That is links 10 to 12's next stop, unless the
+  bridge's tracker holds the full list by then.
+- With the data not valid: both branches give the fallback's number (section 2), and the refresh goes on.
+- Which of the two holds at the accept is the bridge's `bDataValidated` at that moment; the implementer reads it.
 
 ## 2. `WillowPlayerController.GetActivePlotCriticalMissionNumber(optional int PlaythroughIndex)`
 
@@ -92,17 +109,35 @@ and `UpdateActivePlotMission` each write the number plus one through `SetIntProp
 
 ## 3. What the accept reaches after the refresh
 
-**The script path** (read with `research/script_disasm.py`). The slice's `accept` step calls the controller's
-`AcceptMission` directly (`ow_mission::bridge`), not the screen's `extAcceptConfirmed`:
-1. `AcceptMission` asks the tracker's `ActivateMission`; the status routine then runs the controller's
-   `UpdateMissionStatus`. The settings refresh runs on the accept's path before the list update below (as the probe
-   showed; its exact caller was not traced here);
+**The script path** (read with `research/script_disasm.py`; the callers come from a scan of every decoded script
+function of the nine code packages). The slice's `accept` step calls the controller's `AcceptMission` directly
+(`ow_mission::bridge`), not the screen's `extAcceptConfirmed`. The native the probe stopped at is reached by one chain:
+1. `AcceptMission` asks the tracker's `ActivateMission`. The status routine runs the controller's
+   `UpdateMissionStatus` (the settings refresh runs on this path first, as the probe's order showed).
 2. `UpdateMissionStatus` calls `ClientUpdateUIMissionList`. That takes the playing movie (the UI manager's
-   `GetPlayingMovie`, which the bridge answers with its stand-in screen) and, when the movie has no reward object, calls
-   its `UpdateMissionList(mission)`;
-3. `UpdateMissionList` looks for the mission in the movie's `MissionList` and `InProgressMissionList`. When it is there,
-   it runs `DetermineQuestEntries`, `GotoCorrectPartOfMovie(false)` and `extPopulateQuestEntries`. The screen's own
-   `extAcceptConfirmed` (a Flash callback, not driven by the slice) ends the same way.
+   `GetPlayingMovie`, which the bridge answers with its stand-in screen) and, when the movie has no reward object,
+   calls its `UpdateMissionList(mission)`. FIRE_MISSION_GOLDEN_TRACE.md (after swap 11) has this same nested route
+   observed in the game at the accept.
+3. `UpdateMissionList` runs `DetermineQuestEntries`, `GotoCorrectPartOfMovie(false)` and `extPopulateQuestEntries`
+   when the mission is in its lists.
+4. `extPopulateQuestEntries` calls `UpdateMissionTextList`.
+
+Why it is this chain:
+- The script callers of `UpdateMissionTextList` are `extPopulateQuestEntries` and the status menu's
+  `UpdateListOfMissionTitles` (another movie).
+- `extPopulateQuestEntries` is called by `UpdateMissionList`, `extAcceptConfirmed` and `AcceptReward` (both Flash
+  callbacks, not driven by the slice).
+- `UpdateMissionList` is called only by `ClientUpdateUIMissionList`, whose callers are `UpdateMissionStatus` and
+  `ClientSpawnMissionRewardUI` (the turn-in's reward page).
+- So at the accept it is `UpdateMissionStatus`'s call, and at link 12's turn-in it can also be the reward page's.
+
+**Preflight and terminal refusals.** Both routes reach the native after the accept's or the turn-in's own writes (the
+mission's status at least).
+- Its cheap, certain checks come before its own first write: is `MissionTextList` None, and does the port host a Flash
+  movie.
+- A `NotYet` from it is still terminal for the step: its text starts "stopped after partial writes: ", its kind and
+  record are kept, and nothing is rolled back.
+- The same holds for `GetVariableObject` and `FocusOn` after it.
 
 `extPopulateQuestEntries` drops the entries without a mission. It then calls the movie's `MissionTextList`:
 `EmptyData`, then one `AddDataEntry` per mission. It inserts header rows when there are redeemable or eligible
@@ -140,8 +175,9 @@ when nothing on the slice path reads it back; otherwise it is a named `NotYet` o
      says `None` for a missing movie. Off answer: None, since the stand-in hosts no movie (UNVERIFIED that an unhosted
      movie counts as missing). The same ruling applies: the object is only passed on to `FocusOn`.
    - Then `WillowGFxMovie3D.FocusOn(None)`: NATIVE_GFX_BRIDGE.md says a no-op is safe with `None` tolerance. Off
-     answer: nothing. Its only state, the movie's `FocusObject`, has no script reader on the slice path (the same check
-     applied to `FocusObject` is left to the implementer lane).
+     answer: nothing. **Label:** a port Off answer for a headless world with no Flash movie hosted, UNVERIFIED.
+   - The state these two could change (`FocusObject`, the focus offset, the movie's clip tables) has no reader on links
+     10 to 12 (the read-back check below). `GetVariableObject`'s result goes only to `FocusOn`.
    - Both are listed today as Reference-only presentation stubs (`ow-cli`'s `REFERENCE_STUBS`). In Off they are
      unbound, so each would be the next stop until bound.
 5. **Past `SetFocus`**, `extAcceptConfirmed` returns. What the slice's accept step checks after that was not read in
@@ -162,6 +198,11 @@ searched for the movie's two fields the native touches.
     `UpdateMissionTextList` ran, so the native's "nothing" changes no answer.
   - The other readers are reached only from Flash callbacks (`UpdateMissionDetails`, `extLogListTrack`, `LogUp`,
     `LogDown`), which the slice does not drive.
+- **`FocusOn`'s state:** no script reads `WillowGFxMovie3D.FocusObject`, `InterpFocusOffset`, `ChainedObjectMap` or
+  `RedundantClipArray`. `FocusOffset` is read only by four movies' `HandleInputAxis` functions (the accept screen's
+  among them), which run on the player's stick input to the movie. The slice drives no input to the screen. The
+  offset's other user is the 3D movie's drawing, which a headless world does not do.
+- **`GetVariableObject`'s result** is used only as `FocusOn`'s argument inside `SetFocus`.
 - **Not covered:** the 10 functions the decoder cannot read, and native readers other than the record's. One of the
   10 is `WillowGFxUIManager.PlayMovie`, which the bridge's stand-in manager does not reach on links 10 to 12 (it binds
   `GetPlayingMovie` only).
@@ -175,19 +216,38 @@ searched for the movie's two fields the native touches.
 3. The movie's slot 536 body (NATIVE_GFX_BRIDGE.md's reading is used).
 4. Whether an unhosted movie's `GetVariableObject` answers None in the game (it has a Flash file loaded there).
 5. The 10 script functions the decoder cannot read, for the read-back check.
+6. What the game does with a `None` entry in the tracker's mission list.
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-1. **The tracked mission wins.** With a side mission tracked and a plot mission active, read `GetActiveMissionNumber()`.
-   Expect the side mission's `MissionNumber` (section 1, step 2). Untrack it, and expect the plot mission's.
-2. **The plot scan.** With no tracked mission, one plot mission Complete and another Active, expect the Active one's
-   number from both natives. With only Complete plot missions, expect the largest of their numbers.
-3. **A DLC plot mission** in progress is skipped by both: expect the base game's answer.
-4. **The fallback.** Read `GetActiveMissionNumber()` before the tracker's data is valid (early in a load, hooking
-   `MissionTracker.ValidateData`). Expect `GetActivePlotCriticalMissionNumber(-1)`'s answer, not the local
-   active-mission one: a tracked side mission is ignored there.
-5. **The playthrough index.** `GetActivePlotCriticalMissionNumber(5)`: expect 0. `(-1)` and the current index: the
-   same answer.
-6. **The text list.** Hook `QuestAcceptGFxMovie.UpdateMissionTextList` on accept. Record `MissionTextList` (expected
-   set in the game) and the order of `extPopulateQuestEntries`, `UpdateMissionTextList`, `PositionHighlightBar`,
-   `SetFocus`.
+Each check names the rule it tells apart from its alternative.
+1. **First in list order, not lowest number** (section 1, step 3; section 2, step 3).
+   - Setup: no tracked mission, and two plot-critical, non-DLC missions in progress, the one earlier in the tracker's
+     list (and in the playthrough's `MissionList`) with the larger `MissionNumber`.
+   - Read: `GetActiveMissionNumber()` and `GetActivePlotCriticalMissionNumber()`.
+   - Expect: the earlier mission's number from both, not the smaller number.
+2. **The tracked mission wins without a status check** (section 1, step 2).
+   - Setup: track a side (not plot-critical) mission, then complete it while still tracked if the game allows, with a
+     plot mission in progress.
+   - Expect: the side mission's number in both cases.
+3. **The fallback is the plot-critical function, not the local one** (section 1, step 4).
+   - Setup: a moment before the tracker's data is valid (hook `MissionTracker.ValidateData`), with candidates chosen
+     so the two functions differ: a tracked side mission in progress (the local function would answer it), and a plot
+     mission in progress with another number.
+   - Expect: the plot mission's number.
+4. **The Complete maximum** (section 2, step 4).
+   - Setup: no plot mission in progress, and three Complete plot missions whose numbers are not in list order.
+   - Expect: the largest number.
+5. **The playthrough index** (section 2, steps 1 and 2).
+   - Read `GetActivePlotCriticalMissionNumber()` (default), `(-1)`, the current index, the other playthrough's index
+     (with different missions in its list), and `(5)`.
+   - Expect: the same answer for the first three, the other list's answer for the fourth, and 0 for the last.
+6. **The screen's state, present case** (section 3).
+   - Setup: on accept, hook `UpdateMissionList`, `extPopulateQuestEntries`, `UpdateMissionTextList`, `SetFocus` and
+     `FocusOn`.
+   - Record before and after each: the order of the calls; `MissionTextList` (expected set in the game);
+     `MissionCategories`; the list's displayed rows; `FocusObject` and `FocusOffset`.
+7. **Still open:**
+   - the -1 sentinel of section 1, step 4 (no mission has number -1);
+   - the absent case of section 3 (`MissionTextList` None), which the game's screen does not produce;
+   - the engine-wide condition.
