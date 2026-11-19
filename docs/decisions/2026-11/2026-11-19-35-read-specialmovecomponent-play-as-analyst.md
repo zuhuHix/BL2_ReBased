@@ -4,7 +4,7 @@ AI-assisted (Claude Code / Claude Opus 5.5).
 
 Lane SM-PLAY, analyst only (slice link 9). After `GetSMComponent`, Maya's cast plays the Phaselock hit or fizzle
 definition through `SpecialMoveComponent.Play`. The new own-words note `docs/verification/NATIVE_SPECIAL_MOVE_PLAY.md`
-and two `NATIVE_INDEX.md` rows record, as behaviour only:
+and four `NATIVE_INDEX.md` rows record, as behaviour only:
 
 - What `Play` does: resolve the definition (it answers itself), two gates (`IsLocalAuthority` and the script
   `AuthorityCanPlay`), then start: stop any current move, record the request and start time, queue follow-ups, and on

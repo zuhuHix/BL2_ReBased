@@ -78,7 +78,7 @@ The component holds the current move (`CurrentSMData`: the definition, data, rat
    1. a move that is already playing is stopped first, as interrupted, with the queue cleared (section 4);
    2. the request becomes the current move, and `StartTime` = the world time;
    3. a chain of follow-ups (`NextSpecialMove`) is queued (section 4); the Phaselock definitions have none;
-   4. on the authority (`Role` 3), the owner records the current move for replication, and the definition's
+   4. on the authority (`Role` = `ROLE_Authority`), the owner records the current move for replication, and the definition's
       `ServerStarted` event runs;
    5. the definition's `ClientStarted` event runs, and its answer is the move's duration. A duration of 0 or less
       stops the move again at once (not interrupted, queue cleared).
@@ -128,14 +128,9 @@ True only when all of these hold:
 
 ### The two component queries AuthorityCanPlay uses
 
-- **`GetSMNode()`:**
-  1. asks the owner for its skeletal mesh;
-  2. answers the cached `SMBlendNode` when it belongs to that mesh;
-  3. otherwise looks up the mesh's animation node named `SpecialMoveBlend`, keeps it when it is an
-     `AnimNodeSpecialMoveBlend`, caches it in `SMBlendNode` and answers it.
-
-  The answer is None with no owner interface, no mesh, or no node of that name and class. The start routine of section
-  1 also asks the owner for its mesh, but does nothing with the answer.
+- **`GetSMNode()`:** answers the owner mesh's animation node named `SpecialMoveBlend` when it is an
+  `AnimNodeSpecialMoveBlend`, and None otherwise (no owner interface, no mesh, no such node). The node found is
+  cached in `SMBlendNode` and reused while it belongs to the owner's current mesh.
 - **`IsPlayingClass(Class)`:** true when a move is current and its definition is of that class or a subclass; false
   with no current move or no class.
 
