@@ -1,22 +1,28 @@
 //! Owner: lane IMPL-MISSION-NUMBERS (decision 2026-11-19-93). The two mission numbers of the online game settings
 //! refresh, and the mission screen's calls the accept reaches after it. AI-assisted (Claude Code).
 //!
-//! Coded from NATIVE_MISSION_NUMBERS.md alone (analyst lane ANALYST-MISSION-NUMBERS, decision 2026-11-19-86). No
+//! Coded from NATIVE_MISSION_NUMBERS.md alone (#473 at 0a32108b, its review r1; analyst lane ANALYST-MISSION-NUMBERS,
+//! decision 2026-11-19-86). No
 //! native code or analysis output was opened. **Every rule is UNVERIFIED in the running game.** Off only: the caller
 //! (`datastore::register`) binds nothing here under `ParityMode::Reference`, so the VM's stub policy answers there.
 //!
 //! **The conservative form** (the hub's heads-up of 2026-11-19, while #473's last review round runs): the parts of the
-//! note that rest on an unresolved read, or on a "no read-back" argument, answer a named `NotYet` in Off. The rules
-//! behind the two unread gates are coded and unit-tested behind [`Reads`], which the natives pass as [`Reads::OFF`]
-//! (nothing taken as read) until the note settles them.
+//! note that rest on an unresolved read, or on a "no read-back" argument, answer a named `NotYet` in Off. [`Reads`]
+//! switches the two unresolved reads; the natives pass [`Reads::OFF`] (nothing taken as read), and the tests also run
+//! the rules with them taken as read.
 //!
 //! **`WillowPlayerController.GetActiveMissionNumber()`** (section 1). It writes nothing, so nothing is preflighted and
 //! nothing rolled back.
-//! 0. **The engine-wide condition** is a global the note did not resolve (open question 1): [`ENGINE_GATE`],
-//!    `NotYet { NotRead }`, before anything is read.
-//! 1. Taken as read: the world's `WorldInfo` (the level's, as `GetWorldInfo` answers), its `GRI` as a
-//!    `WillowGameReplicationInfo`, and that object's `MissionTracker`. The tracker's `IsDataValid()` is called
-//!    through the VM. No world, a replication info of another class, no tracker, or data not valid: the fallback.
+//! 1. The world's `WorldInfo` (the level's, as `GetWorldInfo` answers), its `GRI` as a `WillowGameReplicationInfo`,
+//!    and that object's `MissionTracker`. With no world, a replication info of another class, or no tracker, the
+//!    answer is the fallback (step 4).
+//!    - **The engine-wide condition** is a global the note did not resolve (open question 1), so Off does not guess
+//!      it: with a tracker, both branches are computed, the tracker branch (below) first, then the fallback. Equal
+//!      answers give that number; different answers are [`ENGINE_GATE`], `NotYet { NotRead }`. A branch that fails is
+//!      the answer, its error unchanged. ([`Reads::engine_gate`] takes the condition as holding: the tracker branch
+//!      alone.)
+//!    - The tracker branch: the tracker's `IsDataValid()` through the VM; false is the fallback. In the installed
+//!      slice its data is valid, so the branch reaches the bridge's `GetAllMissions` `LayerAbsent` first.
 //! 2. The tracker's `ActiveMission` set: that definition's `MissionNumber`, with no status or plot-critical check.
 //! 3. Otherwise the tracker's `GetAllMissions(out)` list, through the VM, in its order. A definition with
 //!    `bPlotCritical` and no `DlcExpansion` has its `GetMissionStatus` asked through the VM. In progress (1, 2, 3)
@@ -38,7 +44,8 @@
 //! refusal), propagated unchanged. Inside the settings refresh, the refresh's write mark (decision 2026-11-19-80) turns
 //! such a `NotYet`, and these natives' own, into a terminal stop after partial writes, kind and record kept. A
 //! definition or record that lacks one of the fields read here, or holds the wrong kind there, is bad data: a
-//! `VmError::Script` naming the field. A `None` entry in the tracker's list is bad data too.
+//! `VmError::Script` naming the field. A `None` entry in the tracker's list is [`NONE_ENTRY`], `NotYet { NotRead }`:
+//! the game's loop reads each entry with no `None` test, and what it does with one was not read.
 //!
 //! **The mission screen** (section 3). The slice's accept reaches it through the controller's
 //! `ClientUpdateUIMissionList`, the movie's `UpdateMissionList` and `extPopulateQuestEntries`, after the accept's own
@@ -77,8 +84,11 @@ pub const GET_VARIABLE_OBJECT: &str = "GFxUI.GFxMoviePlayer.GetVariableObject";
 pub const FOCUS_ON: &str = "WillowGame.WillowGFxMovie3D.FocusOn";
 /// The mission screen's class.
 pub const SCREEN_CLASS: &str = "WillowGame.QuestAcceptGFxMovie";
-/// The `NotYet` of the unresolved engine-wide condition of `GetActiveMissionNumber` (section 1, open question 1).
-pub const ENGINE_GATE: &str = "GetActiveMissionNumber's engine-wide condition (an unresolved global)";
+/// The `NotYet` of the unresolved engine-wide condition of `GetActiveMissionNumber`, when its two branches differ
+/// (section 1, open question 1).
+pub const ENGINE_GATE: &str = "the engine-wide condition of GetActiveMissionNumber";
+/// The `NotYet` of a `None` entry in the tracker's mission list (section 1, Off step 5).
+pub const NONE_ENTRY: &str = "a None entry in the tracker's mission list";
 /// The `NotYet` of the controller's unresolved current-playthrough virtual (section 2, open question 2).
 pub const PLAYTHROUGH_QUERY: &str = "the controller's current playthrough query";
 /// The `NotYet` of the mission screen's text list update (section 3).
@@ -92,7 +102,8 @@ pub const TEXT_LIST_LAYER: &str = "a hosted Flash movie (the port hosts none)";
 /// rules behind them with [`Reads::ALL`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reads {
-    /// The engine-wide condition of `GetActiveMissionNumber` (section 1, step 1).
+    /// The engine-wide condition of `GetActiveMissionNumber` taken as holding (section 1, step 1): the tracker branch
+    /// alone. Off computes both branches instead.
     pub engine_gate: bool,
     /// The controller's current-playthrough virtual, read as `GetCurrentPlaythrough` (section 2, step 1).
     pub playthrough: bool,
@@ -202,7 +213,8 @@ fn call_required(vm: &mut Vm, o: ObjRef, name: &str, args: Vec<Value>, unit: &st
     })
 }
 
-/// The world's mission tracker with valid data, or `None` for the fallback (section 1, step 1).
+/// The world's mission tracker, or `None` when there is no world, replication info of that class or tracker (section
+/// 1, step 1).
 fn tracker(vm: &mut Vm, unit: &str) -> Result<Option<ObjRef>, VmError> {
     let world_info = match vm.service::<Actors>() {
         Some(a) => a.try_borrow().map_err(|_| VmError::ServiceBorrowed("Actors"))?.world_info(),
@@ -216,11 +228,17 @@ fn tracker(vm: &mut Vm, unit: &str) -> Result<Option<ObjRef>, VmError> {
     if !vm.space.classes.is_child_of(vm.space.heap.get(gri)?.class, gri_class) {
         return Ok(None);
     }
-    let Some(tracker) = object_of(field(vm, gri, "MissionTracker", unit)?, "MissionTracker", unit)? else {
-        return Ok(None);
-    };
+    object_of(field(vm, gri, "MissionTracker", unit)?, "MissionTracker", unit)
+}
+
+/// The tracker branch: `None` for the fallback (data not valid, or a -1 answer), else the number of steps 2 and 3.
+fn tracker_branch(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<Option<i32>, VmError> {
     let valid = call_required(vm, tracker, "IsDataValid", vec![], unit)?.ret;
-    Ok(valid.truth(&vm.space.names).then_some(tracker))
+    if !valid.truth(&vm.space.names) {
+        return Ok(None);
+    }
+    let n = from_tracker(vm, tracker, unit)?;
+    Ok((n != -1).then_some(n))
 }
 
 /// Section 1, steps 2 and 3, on a tracker with valid data.
@@ -235,7 +253,7 @@ fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError
     let mut scan = Scan::default();
     for entry in list {
         let Some(def) = object_of(entry, "a mission of the tracker's list", unit)? else {
-            return Err(bad(unit, "the tracker's mission list holds None".to_string()));
+            return Err(NotYet::not_read(NONE_ENTRY, RECORD).into());
         };
         let Some(number) = plot_mission(vm, def, unit)? else { continue };
         let status = call_required(vm, tracker, "GetMissionStatus", vec![Value::Object(Some(def))], unit)?.ret;
@@ -249,16 +267,17 @@ fn from_tracker(vm: &mut Vm, tracker: ObjRef, unit: &str) -> Result<i32, VmError
 /// `GetActiveMissionNumber` on `controller` (module documentation), with `reads` taken as read.
 pub fn active_mission_number(vm: &mut Vm, controller: ObjRef, reads: Reads) -> Result<i32, VmError> {
     const UNIT: &str = "WillowPlayerController.GetActiveMissionNumber";
-    if !reads.engine_gate {
-        return Err(NotYet::not_read(ENGINE_GATE, RECORD).into());
+    let Some(tracker) = tracker(vm, UNIT)? else {
+        return plot_critical_mission_number(vm, controller, -1, reads);
+    };
+    let Some(n) = tracker_branch(vm, tracker, UNIT)? else {
+        return plot_critical_mission_number(vm, controller, -1, reads);
+    };
+    if reads.engine_gate {
+        return Ok(n);
     }
-    if let Some(tracker) = tracker(vm, UNIT)? {
-        let n = from_tracker(vm, tracker, UNIT)?;
-        if n != -1 {
-            return Ok(n);
-        }
-    }
-    plot_critical_mission_number(vm, controller, -1, reads)
+    let fallback = plot_critical_mission_number(vm, controller, -1, reads)?;
+    if n == fallback { Ok(n) } else { Err(NotYet::not_read(ENGINE_GATE, RECORD).into()) }
 }
 
 /// `GetActivePlotCriticalMissionNumber(index)` on `controller` (module documentation), with `reads` taken as read.

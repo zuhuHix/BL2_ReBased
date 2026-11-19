@@ -13,12 +13,13 @@ earlier, at `BlackMarketUpgradeAttributeValueResolver`. ctest and verify_package
 run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/link1/`.
 **IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
 Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission screen's three calls in Off,
-from NATIVE_MISSION_NUMBERS.md (#473 at eb24ea43), in the hub's conservative form: the unresolved engine-wide condition
-and playthrough virtual are `NotRead`, and the screen calls are a marked `LayerAbsent`. `cargo build --workspace --locked
--j 4` clean; `cargo test --workspace --locked -j 4` 2,197 passed / 0 failed / 46 ignored (11 new tests in `ow-world`);
+from NATIVE_MISSION_NUMBERS.md (#473 at 0a32108b), in the hub's conservative form: the engine-wide condition is not
+guessed (both branches, `NotRead` when they differ), the playthrough virtual is `NotRead`, and the screen calls are a
+marked `LayerAbsent`. `cargo build --workspace --locked
+-j 4` clean; `cargo test --workspace --locked -j 4` 2,198 passed / 0 failed / 46 ignored (12 new tests in `ow-world`);
 `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict (release build): 0 ok / 14 NotYet / 0 errors. Links 10
-to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after partial writes: GetActiveMissionNumber's
-engine-wide condition" (`NotRead`); the other links are unchanged. ctest and verify_packages not run (no C++ change). No
+to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after partial writes: MissionTracker.GetAllMissions",
+the bridge's own `LayerAbsent`; the other links are unchanged. ctest and verify_packages not run (no C++ change). No
 real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under ignored
 `local/p2/mission-numbers/`.
 

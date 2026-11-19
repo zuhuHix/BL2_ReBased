@@ -756,12 +756,12 @@ fn expect_unmarked(r: Result<Value, VmError>, what: &str) {
 }
 
 const MISSION: &str = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
-/// What `GetActiveMissionNumber` answers in Off since decision 2026-11-19-93: the note's unresolved engine-wide
-/// condition (`NotYet { NotRead }`).
-const MISSION_STOP: &str = super::super::mission_numbers::ENGINE_GATE;
+/// What `GetActiveMissionNumber` answers in Off since decision 2026-11-19-93: the toy world has no level, so the
+/// fallback answers, and its current playthrough is the unread virtual (`NotYet { NotRead }`).
+const MISSION_STOP: &str = super::super::mission_numbers::PLAYTHROUGH_QUERY;
 
 /// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then
-/// `GetActiveMissionNumber`, whose `NotYet` (its unresolved engine-wide condition) leaves the refresh marked, kind kept.
+/// `GetActiveMissionNumber`, whose `NotYet` (the unread playthrough virtual) leaves the refresh marked, kind kept.
 /// A second lookup does not clear the mark.
 #[test]
 fn a_not_yet_after_the_refreshs_fill_is_marked_past_a_second_lookup() {
