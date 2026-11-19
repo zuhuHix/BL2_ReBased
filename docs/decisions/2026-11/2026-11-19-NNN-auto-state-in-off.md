@@ -31,6 +31,7 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-AUTO-STATE, implementer. The deci
 - a child without one taking the parent's;
 - a child's own auto state winning;
 - a child's same-named non-auto state skipped for the parent's auto state export (not in installed data);
+  this case (`ShadowZ`) is reached only by the synthetic test (review r1 of #545);
 - the two refusals, with the heap unchanged;
 - the auto state's `BeginState` raised inside `SetInitialState` after `PostBeginPlay`, and its `Begin` code run only at
   the next state-code step.

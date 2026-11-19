@@ -998,8 +998,9 @@ pub const STATE_AUTO: u16 = 2;
 const AUTO_RECORD: &str = "NATIVE_AUTO_STATE.md";
 
 /// What `Auto` resolves to for an object of `class`. In Off, the rule of NATIVE_AUTO_STATE.md section 5 ([`auto_state_off`],
-/// lane IMPL-AUTO-STATE). This module's `GotoState` is bound outside Reference only, so the branch below is the earlier
-/// approximation kept as it was, for a caller in another mode: which state flag bit means auto is not
+/// lane IMPL-AUTO-STATE). This module's `GotoState` is bound outside Reference only, and Off returns above, so the branch
+/// below is unreachable today (review r1 of #545: kept in this round, not removed). It is the earlier approximation, as
+/// it was: which state flag bit means auto is not
 /// read, but auto is a bit of the state flags (this port's reading, UNVERIFIED), so when the class's own state flags
 /// and those of every state its chain declares are all 0 the answer is no state, whatever the bit is (129 of the 166
 /// installed states have flags 0, decision 2026-11-15-27). Otherwise, or when the class body does not read,
@@ -1082,21 +1083,13 @@ fn auto_state_off(vm: &mut Vm, class: ClassId) -> Result<Option<StateKey>, VmErr
         let info = vm.defs.code().class(k);
         (info.package, info.export)
     }) else {
-        return Err(NotYet::not_read(
-            "GotoState('Auto'): which state flag bit marks an auto state (the class has no package export)",
-            RECORD,
-        )
-        .into());
+        return Err(NotYet::not_read("GotoState('Auto'): the class has no package export", AUTO_RECORD).into());
     };
     let pkg = vm.defs.packages().shared(package);
     let class_auto = match read_class_state_part(&pkg, export) {
         Ok(body) => body.flags & STATE_AUTO != 0,
         Err(_) => {
-            return Err(NotYet::not_read(
-                "GotoState('Auto'): which state flag bit marks an auto state (the class body's state flags do not read)",
-                RECORD,
-            )
-            .into());
+            return Err(NotYet::not_read("GotoState('Auto'): the class body's state flags do not read", AUTO_RECORD).into());
         }
     };
     // The first class of the chain (most derived first) that declares an auto state, with its owner.
