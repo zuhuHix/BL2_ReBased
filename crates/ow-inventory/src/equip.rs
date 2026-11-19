@@ -601,19 +601,13 @@ pub fn remove_weapon_external_effects(vm: &mut Vm, weapon: ObjRef) -> Result<(),
     )
 }
 
-/// `weapon`'s `DefinitionData.WeaponTypeDefinition`, None when it holds none (`what` names the caller in errors). Each
-/// caller says what None means for it: [`weapon_type_of`] here, `RecomputeNormalizedDamageValues` in `value`.
-pub fn weapon_type_definition(vm: &Vm, weapon: ObjRef, what: &str) -> Result<Option<ObjRef>, VmError> {
-    let data = required(vm, weapon, "DefinitionData", what)?;
-    Ok(ow_attr::eval::object("WeaponTypeDefinition", &field(vm, &data, "WeaponTypeDefinition")?)?)
-}
-
 /// The weapon type of `weapon` (`DefinitionData.WeaponTypeDefinition`). None is `NotYet { NotRead }`: the script
 /// reads every type field through a None context (an Accessed None, which gives zero values) and writes the bases
 /// from those zeros, and that path (the zero each read gives, `EvaluateInitializationData` on a zeroed struct) is not
 /// ported.
 pub fn weapon_type_of(vm: &Vm, weapon: ObjRef) -> Result<ObjRef, VmError> {
-    let t = weapon_type_definition(vm, weapon, CALCULATE_WEAPON_BASE_VALUES)?;
+    let data = required(vm, weapon, "DefinitionData", CALCULATE_WEAPON_BASE_VALUES)?;
+    let t = ow_attr::eval::object("WeaponTypeDefinition", &field(vm, &data, "WeaponTypeDefinition")?)?;
     t.ok_or_else(|| {
         NotYet::not_read(
             "CalculateWeaponBaseValues on a weapon without a WeaponTypeDefinition (the script's Accessed None reads \

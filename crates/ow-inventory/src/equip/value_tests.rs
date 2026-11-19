@@ -75,6 +75,23 @@ impl ValueResolver for ReadsTotal {
     }
 }
 
+/// A toy value resolver (review of #446): sets the `Value` of the first modifier on the context's instant-hit stack
+/// to 100, then answers 10. It shows whether the recompute read the modifiers before it evaluated the base.
+struct Bumps;
+impl ValueResolver for Bumps {
+    fn value(&self, _: &AttributeSystem, _: ObjRef, context: ObjRef, _: f32, cx: &mut EvalCx<'_>) -> Result<f32, AttrError> {
+        let space = &mut *cx.world.parts().space;
+        let class = space.heap.get(context)?.class;
+        let stack = space.prop(class, "InstantHitDamageModifierStack").expect("a toy weapon");
+        let Value::Array(items) = space.read(context, PropAddr::scalar(stack))?.clone() else { panic!("a stack") };
+        let Value::Object(Some(m)) = items[0] else { panic!("a modifier") };
+        let mclass = space.heap.get(m)?.class;
+        let value = space.prop(mclass, "Value").expect("a modifier");
+        space.write(m, PropAddr::scalar(value), Value::Float(100.0))?;
+        Ok(10.0)
+    }
+}
+
 /// Toy world hooks: only the globals object, made once (the mission-item rarity tests).
 struct GlobalsOnly(ObjRef);
 impl WorldHooks for GlobalsOnly {
@@ -128,6 +145,7 @@ impl Toy {
         let constant = vec![decl(&mut s, "ConstantValue", PropKind::Float)];
         s.classes.define("GearboxFramework.ConstantAttributeValueResolver", Some(object), constant).unwrap();
         s.classes.define("Test.ReadsTotal", Some(object), vec![]).unwrap();
+        s.classes.define("Test.Bumps", Some(object), vec![]).unwrap();
         // The 13 entries `crate::definition`'s cap rule checks: three named, ten reserved (invented names).
         let mut currencies: Vec<String> =
             ["CURRENCY_Credits", "CURRENCY_Eridium", "CURRENCY_SeraphCrystals"].iter().map(|c| c.to_string()).collect();
@@ -178,6 +196,18 @@ impl Toy {
             short.push(decl(&mut s, name, kind));
         }
         s.classes.define("Test.ShortWeapon", Some(inventory), short).unwrap();
+        // A weapon-like class whose NormalizedMeleeDamage is an int (review of #446): the float write would refuse, so
+        // the native refuses before any write.
+        let mut wrong = fields(&mut s, wdata);
+        for (name, stack) in NORMALIZED_FIELDS {
+            let kind = match (name, stack) {
+                ("NormalizedMeleeDamage", _) => PropKind::Int,
+                (_, true) => objs.clone(),
+                _ => PropKind::Float,
+            };
+            wrong.push(decl(&mut s, name, kind));
+        }
+        s.classes.define("Test.IntMeleeWeapon", Some(inventory), wrong).unwrap();
         let modifier = vec![decl(&mut s, "Type", PropKind::Byte { enum_: None }), decl(&mut s, "Value", PropKind::Float)];
         s.classes.define("Engine.AttributeModifier", Some(object), modifier).unwrap();
         s.classes.define("Test.Same", Some(object), vec![]).unwrap();
@@ -194,6 +224,8 @@ impl Toy {
             .with_value_resolver("Test.IsWeapon", IsWeapon(weapon))
             .unwrap()
             .with_value_resolver("Test.ReadsTotal", ReadsTotal)
+            .unwrap()
+            .with_value_resolver("Test.Bumps", Bumps)
             .unwrap();
         let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(attrs), mode);
         for (path, key) in [
@@ -532,9 +564,10 @@ fn the_monetary_value_reads_the_modifier_total_just_written() {
     assert_eq!(t.get(w, "MonetaryValue"), Value::Int(900), "read the new total, not the old 1.0 (which gives 100)");
 }
 
-/// Review of #428, item (b): a negative scale goes to the divisor, and the combine runs in single precision step by
-/// step: (0.1 + 0.2) x (1 / (1 - -0.3)) gives 0.23076925 (bits 0x3e6c4ec6), where computing in double and rounding
-/// once would give 0.23076923.
+/// Review of #428, item (b), and of #446: a negative scale goes to the divisor, and the combine takes the reciprocal
+/// of the divisor and multiplies, in single precision step by step: (0.1 + 0.1) x (1 / (1 - -0.1)) gives bits
+/// 0x3e3a2e8b. A direct single-precision division gives 0x3e3a2e8c, and so does computing in double and rounding once,
+/// so the test pins both the precision and the order of the operations.
 #[test]
 fn a_negative_scale_combines_in_single_precision() {
     let mut t = Toy::new(ParityMode::Off);
@@ -544,14 +577,16 @@ fn a_negative_scale_combines_in_single_precision() {
     let melee = t.init(0.0);
     t.set(definition, "NormalizedMeleeDamage", melee);
     let w = t.weapon(Some(definition), &[]);
-    let stack = Value::array(vec![t.modifier("PreAdd", 1, 0.2), t.modifier("Shrink", 0, -0.3)]);
+    let stack = Value::array(vec![t.modifier("PreAdd", 1, 0.1), t.modifier("Shrink", 0, -0.1)]);
     t.set(w, "InstantHitDamageModifierStack", stack);
     t.set(w, "MeleeDamageModifierStack", Value::array(vec![]));
     t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap();
     let Value::Float(v) = t.get(w, "NormalizedInstantHitDamage") else { panic!("not a float") };
-    assert_eq!(v.to_bits(), 0x3e6c_4ec6, "{v}");
-    let double_once = ((f64::from(0.1f32) + f64::from(0.2f32)) / (1.0 - f64::from(-0.3f32))) as f32;
-    assert_ne!(v.to_bits(), double_once.to_bits(), "the two precisions differ here, so the test pins one");
+    assert_eq!(v.to_bits(), 0x3e3a_2e8b, "{v}");
+    let direct = (0.1f32 + 0.1f32) / (1.0f32 - -0.1f32);
+    assert_eq!(direct.to_bits(), 0x3e3a_2e8c, "{direct}");
+    let double_once = ((f64::from(0.1f32) + f64::from(0.1f32)) / (1.0 - f64::from(-0.1f32))) as f32;
+    assert_eq!(double_once.to_bits(), 0x3e3a_2e8c, "{double_once}");
 }
 
 /// Review of #428, item (c): all six outputs are looked up before the first write, so a class missing one changes
@@ -582,4 +617,82 @@ fn a_missing_normalized_output_changes_nothing() {
         .map(|n| t.get(w, n))
         .collect();
     assert_eq!(after, before, "nothing was written");
+}
+
+/// Review of #446, item 2: a declared output of the wrong kind (an int `NormalizedMeleeDamage`) is refused before any
+/// write, so the other five keep their values.
+#[test]
+fn a_wrong_kind_normalized_output_changes_nothing() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let five = t.init(5.0);
+    t.set(definition, "NormalizedInstantHitDamage", five.clone());
+    t.set(definition, "NormalizedMeleeDamage", five);
+    let w = t.obj("Test.IntMeleeWeapon", "IntMelee_0");
+    let ty = t.wdata;
+    let data = t.st(ty, vec![("WeaponTypeDefinition", Value::Object(Some(definition)))]);
+    t.set(w, "DefinitionData", data);
+    let stack = Value::array(vec![t.modifier("PostAdd", 2, 1.0)]);
+    t.set(w, "InstantHitDamageModifierStack", stack.clone());
+    t.set(w, "MeleeDamageModifierStack", stack);
+    let names = [
+        "NormalizedInstantHitDamageModifierStack",
+        "NormalizedInstantHitDamageBaseValue",
+        "NormalizedInstantHitDamage",
+        "NormalizedMeleeDamageModifierStack",
+        "NormalizedMeleeDamageBaseValue",
+        "NormalizedMeleeDamage",
+    ];
+    let before: Vec<Value> = names.iter().map(|n| t.get(w, n)).collect();
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    assert_eq!(not_yet_kind(&e), None, "a data error, not a NotYet: {e}");
+    let after: Vec<Value> = names.iter().map(|n| t.get(w, n)).collect();
+    assert_eq!(after, before, "nothing was written");
+}
+
+/// Review of #446, item 1: each stack's modifiers are read before its base is evaluated. The base resolver here sets
+/// the stack's PostAdd modifier to 100 while it answers 10; the recompute still uses the PostAdd 1 it read first,
+/// giving 11, not 110.
+#[test]
+fn the_modifiers_are_read_before_the_base() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let same = t.obj("Test.Same", "Same");
+    let bumps = t.obj("Test.Bumps", "Bumps");
+    let attr = t.obj("Engine.AttributeDefinition", "BumpsAttr");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(same))]));
+    t.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(bumps))]));
+    let instant = t.init_attr(attr);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let melee = t.init(0.0);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let w = t.weapon(Some(definition), &[]);
+    let stack = Value::array(vec![t.modifier("PostAdd", 2, 1.0)]);
+    t.set(w, "InstantHitDamageModifierStack", stack);
+    t.set(w, "MeleeDamageModifierStack", Value::array(vec![]));
+    t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap();
+    assert_eq!(t.get(w, "NormalizedInstantHitDamageBaseValue"), Value::Float(10.0));
+    assert_eq!(t.get(w, "NormalizedInstantHitDamage"), Value::Float(11.0), "the modifier as read before the base");
+}
+
+/// Review of #446, item 1: a malformed stack is reported before an unread base is evaluated. The melee stack holds an
+/// object with no `Type`, and the melee base reads an attribute no resolver answers: the stack's data error wins.
+#[test]
+fn a_malformed_stack_is_reported_before_an_unread_base() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let unread = t.obj("Core.Object", "Unread");
+    let attr = t.obj("Engine.AttributeDefinition", "UnreadAttr");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(unread))]));
+    let melee = t.init_attr(attr);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let instant = t.init(5.0);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let w = t.weapon(Some(definition), &[]);
+    let not_a_modifier = t.obj("Test.Same", "NotAModifier");
+    t.set(w, "InstantHitDamageModifierStack", Value::array(vec![]));
+    t.set(w, "MeleeDamageModifierStack", Value::array(vec![Value::Object(Some(not_a_modifier))]));
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    assert_eq!(not_yet_kind(&e), None, "the stack's data error, not the base's NotYet: {e}");
+    assert!(e.to_string().contains("Type"), "{e}");
 }
