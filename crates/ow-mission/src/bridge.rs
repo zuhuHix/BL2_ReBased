@@ -511,25 +511,29 @@ pub fn is_partial_stop(e: &MissionError) -> bool {
     }
 }
 
-/// The registry key of the native at `path`, or the C++ refusal for a script function.
-fn native_key(vm: &mut Vm, path: &str) -> Result<String, MissionError> {
+/// The native function at `path`, or the C++ refusal for a script function.
+fn native_at(vm: &mut Vm, path: &str) -> Result<ow_object::ids::FuncId, MissionError> {
     let f = vm.find_function(path)?;
-    vm.function(f)
-        .and_then(|d| d.native_key.clone())
-        .ok_or_else(|| data(format!("mission script bridge: expected a native: {path}")))
+    if vm.function(f).is_some_and(|d| d.is_native()) {
+        Ok(f)
+    } else {
+        Err(data(format!("mission script bridge: expected a native: {path}")))
+    }
 }
 
+/// Binds `f` to the native at `path`, for `path`'s package (`Vm::register_native_for`); a binding already there is
+/// refused (`duplicate native registration`).
 fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), MissionError> {
-    let key = native_key(vm, path)?;
-    vm.register_native(&key, f)?;
+    let id = native_at(vm, path)?;
+    vm.register_native_for(id, f)?;
     Ok(())
 }
 
 /// A native the real packages have and a synthetic package set may lack: no binding when it is not declared.
 fn bind_optional(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), MissionError> {
-    match native_key(vm, path) {
-        Ok(key) => {
-            vm.register_native(&key, f)?;
+    match native_at(vm, path) {
+        Ok(id) => {
+            vm.register_native_for(id, f)?;
             Ok(())
         }
         Err(_) => Ok(()),

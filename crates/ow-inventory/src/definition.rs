@@ -99,11 +99,11 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         let Some(id) = vm.find_function_if_any(path)? else {
             continue;
         };
-        let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
+        if !vm.function(id).is_some_and(|d| d.is_native()) {
             continue;
-        };
-        if !vm.has_native(&key) {
-            vm.register_native(&key, f)?;
+        }
+        if !vm.is_bound(id) {
+            vm.register_native_for(id, f)?;
         }
     }
     Ok(())

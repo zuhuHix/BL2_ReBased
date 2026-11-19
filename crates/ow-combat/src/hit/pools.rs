@@ -434,7 +434,7 @@ fn check_deletes(vm: &mut Vm, controller: ObjRef) -> Result<(), VmError> {
 /// `NotYet { NotPorted }` when `f` is a native nothing binds.
 fn unbound_native(vm: &Vm, f: ow_object::ids::FuncId, what: &str) -> Result<(), VmError> {
     if let Some(key) = vm.function(f).and_then(|d| d.native_key.clone())
-        && !vm.has_native(&key)
+        && !vm.is_bound(f)
     {
         return Err(NotYet::not_ported(
             format!("ApplyCharacterClassStartingValues: {what} is the native {key}, which nothing binds"),
@@ -500,7 +500,7 @@ fn check_event(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<(), VmErro
     if stock == Some(event)
         && let Ok(tree) = vm.find_function("WillowGame.WillowPlayerController.InitPlayerSkillTree")
         && let Some(key) = vm.function(tree).and_then(|d| d.native_key.clone())
-        && !vm.has_native(&key)
+        && !vm.is_bound(tree)
     {
         return Err(NotYet::not_ported(
             format!(

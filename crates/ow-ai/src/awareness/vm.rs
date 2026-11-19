@@ -460,9 +460,11 @@ impl NativePack for Pack {
         ];
         for (path, body) in bodies {
             let Ok(id) = vm.find_function(path) else { continue };
-            let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else { continue };
-            if !vm.has_native(&key) {
-                vm.register_native(&key, body)?;
+            if !vm.function(id).is_some_and(|d| d.is_native()) {
+                continue;
+            }
+            if !vm.is_bound(id) {
+                vm.register_native_for(id, body)?;
             }
         }
         Ok(())

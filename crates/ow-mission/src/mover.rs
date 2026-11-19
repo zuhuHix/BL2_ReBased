@@ -591,11 +591,10 @@ impl Mover {
     ) -> Result<(), MoverError> {
         let bind = |vm: &mut Vm, path: &str, f: NativeFn| -> Result<(), MoverError> {
             let id = vm.find_function(path)?;
-            let key = vm
-                .function(id)
-                .and_then(|d| d.native_key.clone())
-                .ok_or_else(|| binding(format!("expected native: {path}")))?;
-            vm.register_native(&key, f)?;
+            if !vm.function(id).is_some_and(|d| d.is_native()) {
+                return Err(binding(format!("expected native: {path}")));
+            }
+            vm.register_native_for(id, f)?;
             Ok(())
         };
         let timers = Rc::clone(shared);

@@ -210,7 +210,7 @@ pub fn preflight(vm: &mut Vm, setup: &PickupSetup) -> Result<ClassId, VmError> {
 fn bound_native(vm: &mut Vm, path: &str) -> Result<(), VmError> {
     let f = vm.find_function(path)?;
     let key = vm.function(f).and_then(|d| d.native_key.clone()).ok_or_else(|| error(format!("{path} is not declared native")))?;
-    if !vm.has_native(&key) {
+    if !vm.is_bound(f) {
         return Err(VmError::UnboundNative(key));
     }
     Ok(())

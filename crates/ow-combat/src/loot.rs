@@ -220,10 +220,10 @@ fn push_drop(vm: &Vm, drop: LootDrop) -> Result<(), VmError> {
 // Set-up
 // ---------------------------------------------------------------------------------------------------------------
 
-/// The native key the loader derived for `path`, when the package set declares that function native.
-fn declared_native_key(vm: &mut Vm, path: &str) -> Option<String> {
+/// The function at `path` and the native key the loader derived for it, when the package set declares it native.
+fn declared_native(vm: &mut Vm, path: &str) -> Option<(ow_object::ids::FuncId, String)> {
     let id = vm.find_function(path).ok()?;
-    vm.function(id).and_then(|d| d.native_key.clone())
+    vm.function(id).and_then(|d| d.native_key.clone()).map(|key| (id, key))
 }
 
 /// Binds the loot natives where the package set declares them native, overrides `DropLootOnDeath` in Reference mode,
@@ -242,19 +242,19 @@ pub fn enable(vm: &mut Vm) -> Result<(), VmError> {
     ];
     let mut bound = Vec::new();
     for (path, f) in natives {
-        let Some(key) = declared_native_key(vm, path) else {
+        let Some((id, key)) = declared_native(vm, path) else {
             continue;
         };
-        if vm.has_native(&key) {
+        if vm.is_bound(id) {
             return Err(VmError::Registration {
                 key,
                 reason: "a loot native's key is already bound (ow-combat::loot owns it)",
             });
         }
-        bound.push((key, f));
+        bound.push((id, f));
     }
-    for (key, f) in bound {
-        vm.register_native(&key, f)?;
+    for (id, f) in bound {
+        vm.register_native_for(id, f)?;
     }
     if vm.parity == ParityMode::Reference {
         // The C++ catches the override's error: a set without the script function (or with a native one) keeps it.

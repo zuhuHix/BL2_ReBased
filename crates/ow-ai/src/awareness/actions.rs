@@ -766,11 +766,11 @@ fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
-    let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
+    if !vm.function(id).is_some_and(|d| d.is_native()) {
         return Ok(());
-    };
-    if !vm.has_native(&key) {
-        vm.register_native(&key, f)?;
+    }
+    if !vm.is_bound(id) {
+        vm.register_native_for(id, f)?;
     }
     Ok(())
 }

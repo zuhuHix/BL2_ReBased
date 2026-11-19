@@ -257,6 +257,12 @@ impl FunctionDecl {
     }
 }
 
+/// The package part of a function's dispatch key: the first component of its path, lowercased (paths compare
+/// case-insensitively).
+fn package_key(d: &FunctionDecl) -> String {
+    d.path.package().to_ascii_lowercase()
+}
+
 struct Function {
     decl: FunctionDecl,
     /// A host binding that runs instead of the bytecode (`override_script`).
@@ -488,7 +494,13 @@ pub struct Vm {
     pub trace: Option<Vec<String>>,
     functions: Vec<Function>,
     function_by_path: DetMap<ObjectPath, FuncId>,
+    /// Natives bound VM-wide by key ([`Vm::register_native`]): every function with that key uses one.
     natives: DetMap<String, NativeFn>,
+    /// Natives bound for one package's functions ([`Vm::register_native_for`]), by (package, key); the package is
+    /// the first component of the function's path, lowercased (paths compare case-insensitively).
+    natives_at: DetMap<(String, String), NativeFn>,
+    /// How many `natives_at` entries carry each key, so that [`Vm::has_native`] keeps answering for a key.
+    natives_at_count: DetMap<String, usize>,
     iterators: DetMap<String, IteratorFn>,
     notify: DetMap<ObjectPath, AttrNotifyFn>,
     /// Per-class `QueryInterface` answers ([`InterfaceRuleFn`]).
@@ -525,7 +537,7 @@ impl std::fmt::Debug for Vm {
         f.debug_struct("Vm")
             .field("parity", &self.parity)
             .field("functions", &self.functions.len())
-            .field("natives", &self.natives.len())
+            .field("natives", &(self.natives.len() + self.natives_at.len()))
             .field("stub_policy", &self.stub_policy)
             .field("services", &self.services)
             .finish_non_exhaustive()
@@ -559,6 +571,8 @@ impl Vm {
             functions: Vec::new(),
             function_by_path: DetMap::new(),
             natives: DetMap::new(),
+            natives_at: DetMap::new(),
+            natives_at_count: DetMap::new(),
             iterators: DetMap::new(),
             notify: DetMap::new(),
             interface_rules: DetMap::new(),
@@ -696,10 +710,12 @@ impl Vm {
 
     // ---- registration ----------------------------------------------------------------------------------------
 
-    /// Binds the native implementation `f` to `key` (`Class.Name(type,type)`). A key registered twice is refused
-    /// (C++ "duplicate native registration"). Functions declared before or after with this key use it.
+    /// Binds the native implementation `f` to `key` (`Class.Name(type,type)`) VM-wide: every function with this
+    /// key, in any package, declared before or after, uses it unless [`Vm::register_native_for`] bound that
+    /// function's own package. A key registered twice is refused (C++ "duplicate native registration"), and so is a
+    /// key some package already bound with [`Vm::register_native_for`], as before that form existed.
     pub fn register_native(&mut self, key: &str, f: NativeFn) -> Result<(), VmError> {
-        if self.natives.contains_key(key) {
+        if self.has_native(key) {
             return Err(VmError::Registration {
                 key: key.to_string(),
                 reason: "duplicate native registration",
@@ -709,9 +725,56 @@ impl Vm {
         Ok(())
     }
 
-    /// Whether a native implementation is registered for `key`.
+    /// Binds the native implementation `imp` to the native function `f` and to every function with the same key in
+    /// `f`'s package (decision 2026-11-19-NNN, the package-qualified dispatch key). The key alone (`Class.Name(..)`)
+    /// leaves out the package, so two packages that declare `Class.Function` share it; this form binds one of them
+    /// without binding the other. Refused: a function that is not native; a key already bound in `f`'s package, or
+    /// bound VM-wide by [`Vm::register_native`] (C++ "duplicate native registration").
+    pub fn register_native_for(&mut self, f: FuncId, imp: NativeFn) -> Result<(), VmError> {
+        let Some(d) = self.function(f) else {
+            return Err(VmError::Registration {
+                key: format!("{f:?}"),
+                reason: "no such function in this VM",
+            });
+        };
+        let Some(key) = d.native_key.clone() else {
+            return Err(VmError::Registration {
+                key: d.path.as_str().to_string(),
+                reason: "not a native function",
+            });
+        };
+        let at = (package_key(d), key.clone());
+        if self.natives.contains_key(&key) || self.natives_at.contains_key(&at) {
+            return Err(VmError::Registration {
+                key,
+                reason: "duplicate native registration",
+            });
+        }
+        self.natives_at.insert(at, imp);
+        *self.natives_at_count.entry(key).or_insert(0) += 1;
+        Ok(())
+    }
+
+    /// Whether a native implementation is registered for `key`, VM-wide or for some package.
     pub fn has_native(&self, key: &str) -> bool {
-        self.natives.contains_key(key)
+        self.natives.contains_key(key) || self.natives_at_count.get(key).is_some_and(|&n| n > 0)
+    }
+
+    /// Whether the native function `f` has an implementation: its package's binding of its key, or the VM-wide
+    /// one. `false` for a script function.
+    pub fn is_bound(&self, f: FuncId) -> bool {
+        self.native_of(f).is_some()
+    }
+
+    /// The implementation the call of native `f` runs: its package's binding of its key first, then the VM-wide
+    /// binding of the key.
+    pub(crate) fn native_of(&self, f: FuncId) -> Option<NativeFn> {
+        let d = self.function(f)?;
+        let key = d.native_key.as_ref()?;
+        self.natives_at
+            .get(&(package_key(d), key.clone()))
+            .or_else(|| self.natives.get(key))
+            .cloned()
     }
 
     /// Every registered native key, in key order (read only; lane IMPL-LINK1-AFTER-LOGIN's read-back census).
@@ -730,7 +793,7 @@ impl Vm {
             });
         };
         if let Some(key) = d.native_key.clone() {
-            return if self.has_native(&key) { Ok(()) } else { Err(VmError::UnboundNative(key)) };
+            return if self.is_bound(f) { Ok(()) } else { Err(VmError::UnboundNative(key)) };
         }
         let path = d.path.as_str().to_string();
         if crate::interp::prepare_script(self, f)? {
@@ -1115,7 +1178,7 @@ impl Vm {
             .decl
             .native_key
             .as_ref()
-            .map(|key| (key.clone(), self.natives.get(key).cloned()));
+            .map(|key| (key.clone(), self.native_of(f)));
         let binding = function.binding.clone();
         let wrap = function.wrap.clone();
         if let Some(trace) = &mut self.trace {

@@ -1838,7 +1838,7 @@ fn native_row(vm: &mut Vm, closure: &mut Closure, f: FuncId) -> NativeRow {
         .and_then(|d| d.native_key.clone())
         .unwrap_or_default();
     NativeRow {
-        implemented: vm.has_native(&key),
+        implemented: vm.is_bound(f),
         key,
         package,
         owner: decl
@@ -1951,7 +1951,7 @@ fn report(
                     match vm.function(f) {
                         Some(d) if d.is_native() => {
                             counts.natives += 1;
-                            if d.native_key.as_deref().is_some_and(|k| vm.has_native(k)) {
+                            if vm.is_bound(f) {
                                 counts.natives_implemented += 1;
                             }
                         }

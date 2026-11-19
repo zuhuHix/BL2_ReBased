@@ -622,7 +622,7 @@ fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<
             .function(f)
             .filter(|d| d.is_native())
             .and_then(|d| d.native_key.clone())
-            .is_some_and(|key| READ_ONLY_QUERIES.contains(&key.as_str()) && vm.has_native(&key));
+            .is_some_and(|key| READ_ONLY_QUERIES.contains(&key.as_str()) && vm.is_bound(f));
         if !bound {
             return Err(NotYet::not_read(
                 format!(

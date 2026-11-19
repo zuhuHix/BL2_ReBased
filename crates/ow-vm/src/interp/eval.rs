@@ -268,7 +268,7 @@ pub(crate) fn check_entry(vm: &mut Vm, f: FuncId, args: &[Arg]) -> Result<(), Vm
         // leaves it to the stub policy, as the call does.
         if vm.parity == ow_core::ParityMode::Off
             && let Some(key) = d.native_key.clone()
-            && !vm.has_native(&key)
+            && !vm.is_bound(f)
         {
             return Err(NotYet::not_ported(
                 format!("{}: an unbound native {key}", d.path.as_str()),

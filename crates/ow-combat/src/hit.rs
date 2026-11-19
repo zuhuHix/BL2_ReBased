@@ -225,18 +225,17 @@ pub fn attribute(vm: &mut Vm, owner: ObjRef, name: &str, fallback: f32) -> Resul
 // ---------------------------------------------------------------------------------------------------------------
 
 /// Binds `f` to the native at `path` (`Package.Class.Function`) when the package set declares it native (module
-/// documentation, "Binding"). A function the set lacks, a script function, or a key already bound: nothing.
+/// documentation, "Binding"). A function the set lacks, a script function, or a function already bound: nothing.
+/// The binding is for `path`'s package (`Vm::register_native_for`), so a same-named native of another package is
+/// neither bound nor shadowed by it.
 pub fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
-    let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
-        return Ok(());
-    };
-    if vm.has_native(&key) {
+    if !vm.function(id).is_some_and(|d| d.is_native()) || vm.is_bound(id) {
         return Ok(());
     }
-    vm.register_native(&key, f)
+    vm.register_native_for(id, f)
 }
 
 /// [`bind`] of a closure.

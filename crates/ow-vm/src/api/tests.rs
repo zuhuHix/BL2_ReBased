@@ -850,3 +850,101 @@ fn the_vm_world_answers_the_clock_and_refuses_a_class_without_the_currency_call(
         Err(AttrError::NotYet(n)) if n.missing == Missing::NotRead
     ));
 }
+
+// ---- the package-qualified dispatch key (lane VM-DISPATCH-KEY, decision 2026-11-19-NNN) ----------------------------
+
+/// `native function int Ping()` declared at `p` with the shared key `Widget.Ping()`.
+fn declare_ping(vm: &mut Vm, p: &str) -> FuncId {
+    let r = ret(vm, PropKind::Int);
+    vm.declare_function(FunctionDecl::native(path(p), "Widget.Ping()").with_result(r))
+        .unwrap()
+}
+
+fn ping(vm: &mut Vm, f: FuncId) -> Result<Value, VmError> {
+    Ok(vm.call(f, None, vec![])?.ret)
+}
+
+#[test]
+fn two_packages_with_one_class_function_do_not_shadow_each_other() {
+    let mut fx = fixture(ParityMode::Off);
+    let vm = &mut fx.vm;
+    let a = declare_ping(vm, "PackA.Widget.Ping");
+    let b = declare_ping(vm, "PackB.Widget.Ping");
+    vm.register_native_for(a, native(|_| Ok(Value::Int(1)))).unwrap();
+    // PackA's binding is not PackB's: B stays unbound, and its call refuses as an unbound native does.
+    assert!(vm.is_bound(a));
+    assert!(!vm.is_bound(b));
+    assert_eq!(vm.prepare_call(b), Err(VmError::UnboundNative("Widget.Ping()".into())));
+    assert!(ping(vm, b).is_err());
+    assert_eq!(ping(vm, a).unwrap(), Value::Int(1));
+    // PackB binds its own; neither replaces the other.
+    vm.register_native_for(b, native(|_| Ok(Value::Int(2)))).unwrap();
+    assert_eq!(ping(vm, a).unwrap(), Value::Int(1));
+    assert_eq!(ping(vm, b).unwrap(), Value::Int(2));
+    // The key-level question still answers for the key.
+    assert!(vm.has_native("Widget.Ping()"));
+}
+
+#[test]
+fn first_wins_is_kept_within_one_package_and_key() {
+    let mut fx = fixture(ParityMode::Off);
+    let vm = &mut fx.vm;
+    let a = declare_ping(vm, "PackA.Widget.Ping");
+    // A second function of the same package with the same key (a state's), spelled with another case.
+    let a_state = declare_ping(vm, "PACKA.Widget.Busy.Ping");
+    vm.register_native_for(a, native(|_| Ok(Value::Int(1)))).unwrap();
+    assert!(vm.is_bound(a_state));
+    assert_eq!(ping(vm, a_state).unwrap(), Value::Int(1));
+    for f in [a, a_state] {
+        assert!(matches!(
+            vm.register_native_for(f, native(|_| Ok(Value::Int(9)))),
+            Err(VmError::Registration {
+                reason: "duplicate native registration",
+                ..
+            })
+        ));
+    }
+    assert_eq!(ping(vm, a).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn the_vm_wide_key_still_binds_every_package_and_refuses_an_overlap() {
+    let mut fx = fixture(ParityMode::Off);
+    let vm = &mut fx.vm;
+    let a = declare_ping(vm, "PackA.Widget.Ping");
+    let b = declare_ping(vm, "PackB.Widget.Ping");
+    // The key form, as every existing caller uses it: one binding for every package's function.
+    vm.register_native("Widget.Ping()", native(|_| Ok(Value::Int(3)))).unwrap();
+    assert_eq!(ping(vm, a).unwrap(), Value::Int(3));
+    assert_eq!(ping(vm, b).unwrap(), Value::Int(3));
+    assert!(matches!(
+        vm.register_native_for(a, native(|_| Ok(Value::Int(4)))),
+        Err(VmError::Registration {
+            reason: "duplicate native registration",
+            ..
+        })
+    ));
+    // The other order: a package binding first, then the key form is refused, as a second key binding was.
+    let mut fx = fixture(ParityMode::Off);
+    let vm = &mut fx.vm;
+    let a = declare_ping(vm, "PackA.Widget.Ping");
+    let b = declare_ping(vm, "PackB.Widget.Ping");
+    vm.register_native_for(a, native(|_| Ok(Value::Int(1)))).unwrap();
+    assert!(matches!(
+        vm.register_native("Widget.Ping()", native(|_| Ok(Value::Int(5)))),
+        Err(VmError::Registration {
+            reason: "duplicate native registration",
+            ..
+        })
+    ));
+    assert!(!vm.is_bound(b));
+    // A script function has no key to bind.
+    let script = vm.declare_function(FunctionDecl::script(path("PackA.Widget.Plain"))).unwrap();
+    assert!(matches!(
+        vm.register_native_for(script, native(|_| Ok(Value::None))),
+        Err(VmError::Registration {
+            reason: "not a native function",
+            ..
+        })
+    ));
+}

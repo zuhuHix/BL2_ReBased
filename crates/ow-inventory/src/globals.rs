@@ -300,9 +300,11 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     let natives = natives.into_iter().chain(REMOVE_SPAWNED_ACTOR.map(|p| (p, refused.clone())));
     for (path, f) in natives {
         let Ok(id) = vm.find_function(path) else { continue };
-        let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else { continue };
-        if !vm.has_native(&key) {
-            vm.register_native(&key, f)?;
+        if !vm.function(id).is_some_and(|d| d.is_native()) {
+            continue;
+        }
+        if !vm.is_bound(id) {
+            vm.register_native_for(id, f)?;
         }
     }
     Ok(())

@@ -823,7 +823,7 @@ fn a_loot_spawn_behavior_is_unsupported_on_its_branch_and_the_event_goes_on_in_b
 
 /// The key the fixture's package set declares for `path`.
 fn key_of(vm: &mut Vm, path: &str) -> String {
-    declared_native_key(vm, path).expect("declared native")
+    declared_native(vm, path).expect("declared native").1
 }
 
 #[test]

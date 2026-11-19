@@ -751,15 +751,18 @@ pub(crate) fn bind(vm: &mut Vm, path: &str, f: NativeFn) -> Result<(), VmError> 
     let Ok(id) = vm.find_function(path) else {
         return Ok(());
     };
-    let Some(key) = vm.function(id).and_then(|d| d.native_key.clone()) else {
+    let Some(key) = vm
+        .function(id)
+        .and_then(|d| d.native_key.as_ref().map(|key| format!("{}.{key}", d.path.package())))
+    else {
         return Ok(());
     };
     let k = kernel(vm)?;
     if borrow(&k)?.bound.contains(&key) {
         return Ok(());
     }
-    // Another pack's binding of the key is refused here: the kernel natives have one owner.
-    vm.register_native(&key, f)?;
+    // Another pack's binding of the function is refused here: the kernel natives have one owner.
+    vm.register_native_for(id, f)?;
     borrow(&k)?.bound.insert(key);
     Ok(())
 }
