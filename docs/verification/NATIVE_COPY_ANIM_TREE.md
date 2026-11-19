@@ -66,13 +66,23 @@ path always runs. A first build of a just-spawned pawn is the case where the poo
    it is.
 3. **The root's first child** (`Children[0].Anim`) is mapped to its copy.
 4. **For each new node**, in the same order: its `ParentNodes` is rebuilt from the template node's `ParentNodes`, each
-   entry mapped to its copy. Then the node's per-class link fix-up runs with the map. For `AnimNode`,
-   `AnimNodeBlendBase` and `AnimNodeSequence` that fix-up does nothing. The other node classes' fix-ups were not read.
+   entry mapped to its copy. Then the node's per-class link fix-up runs with the map. It is a virtual: a class that
+   does not override it uses its parent's. It was checked class by class for every node class in Maya's tree
+   (review r1 of #551):
+   - it does nothing for `AnimNode`, `AnimNodeBlendBase`, `AnimNodeSequence`, `AnimNodeSlot` and every other node
+     class of her tree, except one;
+   - `WillowAnimNodeAimOffset` has its own. When the copy's `Outer` differs from its template node's, which is always
+     so for a copy outered to the component, it sets the copy's `TemplateNode` to the template node, then makes one
+     further call that was not read (by fit, a refresh of its aim profiles).
+
+   The fix-ups of classes outside her tree were not checked.
 5. **The tree's own fix-up**, with the map:
    - each `AnimGroups` entry's run-time state is cleared: its `SeqNodes` list emptied, `SynchMaster` and
      `NotifyMaster` None;
    - unless `bRebuildAnimTickArray` is set on the copy, it takes the template's cached tick list (`AnimTickArray`), with
-     each entry mapped to its copy. This was read only in part; by fit it is the tree's tick-list cache;
+     each entry mapped to its copy. This was read only in part; by fit it is the tree's tick-list cache. The flag is
+     read here, before step 6 copies it, so its value at this point depends on the root copy of step 1, which was not
+     read in full. By fit it equals the template's (UNVERIFIED);
 6. **One flag:** the copy's `bRebuildAnimTickArray` is set to the template's.
 
 **Which links are rewired:** `Children[i].Anim` (step 2 for the nodes, step 3 for the root's first child),
@@ -138,7 +148,7 @@ sets (step 4, not read). The component gets its tick list and its counters.
 ## 3. Maya's attachment 0 (names and counts only)
 
 Her mesh component's template is `GD_PlayerShared.Character.AnimTree_Player` (a `WillowAnimTree`):
-- **66 nodes**, the root included: the closure of the root's `Children`. 16 child slots are empty, and 4 nodes have
+- **66 nodes**, the root included: the closure of the root's `Children`. The root has exactly one child slot. 16 child slots are empty, and 4 nodes have
   more than one parent;
 - **5 controls** in 4 `SkelControlLists` (bones `L_Hand`, `L_Foot`, `R_Foot`, `R_Hand`);
 - **no morph nodes** (`RootMorphNodes` is not set);
@@ -158,7 +168,10 @@ is a structural oracle on the template, not a run of the game.
   `TurnBlend`, `WeaponAction`. This is still UNVERIFIED in the game.
 - **Open question 3** (the copy keeps class and name): **settled by reading.** Each copy has its template node's class,
   and its template node as archetype (section 1.2), so its names are the template's.
-- **Open question 2** (the gather step when the tick list is not the component's): the gather order is section 1.3.
+- **Open question 2** (the gather step when the tick list is not the component's): the lookup's fallback and the
+  copy call the same per-class gather virtual. Its `AnimNode` and `AnimNodeBlendBase` versions were read (the tree
+  uses the latter), and they give the order of section 1.3. Overrides in other node classes were not checked, so for
+  those this is by fit (**UNVERIFIED**).
 
 ## 5. Proposed Off answer (question c; for a separate implementer)
 
@@ -170,9 +183,25 @@ nothing and loads nothing, then written.
 1. The template, and every node, control and morph node the gather reaches, must already be loaded. An unloaded
    handle refuses `NotYet { LayerAbsent("an animation-tree instance for the skeletal mesh") }`, which is #543's
    refusal, kept unchanged, with nothing loaded.
-2. A node class whose per-class link fix-up was not read (section 1.2 step 4: any class other than `AnimNode`,
-   `AnimNodeBlendBase`, `AnimNodeSequence` and the tree) refuses `NotYet { NotRead }`, "CopyAnimTree: the link
-   fix-up of <class>". The same applies to a morph node of any class, since their gather step was not read.
+2. **The link fix-ups** (section 1.2 step 4). The check is per class, by the class's own virtual, inheritance
+   included: a subclass that does not override a checked fix-up uses that fix-up. Refuse `NotYet { NotRead }`,
+   "CopyAnimTree: the link fix-up of <class>", for:
+   - a node class whose fix-up was not checked (any class outside Maya's tree);
+   - `WillowAnimNodeAimOffset`, whose fix-up is read except for its last call: "CopyAnimTree: the aim-offset node's
+     refresh after its TemplateNode is set";
+   - a morph node of any class, since the morph nodes' gather step was not read.
+2a. **The root** (review r1 of #551). The root copy comes from an unread per-class virtual (open question 5), and
+   section 1.2 step 3 remaps only its first child. A root with more than one child slot refuses `NotYet { NotRead }`,
+   "CopyAnimTree: a root with more than one child". Maya's root has exactly one child slot.
+2b. **The initialisation's gates** (section 2 steps 1 to 3):
+   - the template's `bRebuildAnimTickArray` set: `NotYet { NotRead }`, "the animation tree's rebuild step (the
+     unidentified class whose extra children it drops)";
+   - the template's `bParentNodeArrayBuilt` clear: `NotYet { NotRead }`, "the animation tree's parent node array
+     build".
+
+   **Port answer, UNVERIFIED:** the port always builds the tick list by the section 2 rule. The unidentified gate
+   field of the component and the setting that allows the cached tick list are both treated as clear. Maya's template
+   passes both gates: `bRebuildAnimTickArray` is clear and `bParentNodeArrayBuilt` is set.
 3. **The initialisation's unread steps** (section 2 steps 4 and 5): a typed refusal, unless the hub rules otherwise.
    - The per-node initialisation of every node class: `NotYet { NotRead }`, "the animation tree's per-node
      initialisation". This affects every tree, Maya's included.
@@ -180,25 +209,31 @@ nothing and loads nothing, then written.
      (sockets and the reference skeleton)") }`, the layer #529 already names.
 
    **For the hub:** these steps write native state on the nodes and the component. Whether any of it is a field that
-   the script or a slice step reads was not read. Under the 19:58Z render-side ruling they stay refused until it is.
+   the script or a slice step reads was not read. Under NATIVE_ANIM_NODE_LOOKUP.md section 5, rule 4, they stay
+   refused until it is.
    One alternative is a ruling that the port leaves them out, labelled UNVERIFIED. Only then does the instance below
    advance link 1.
 4. **The owner's event** (section 2 step 6): the event's name was not read. Run it as `PostInitAnimTree` only under a
    hub ruling; otherwise `NotYet { NotRead }`, "the owner's event after the tree initialisation".
 
 **Writes, in order** (only when the preflight passed), all in the VM heap:
-1. the new tree object (outer the component, archetype the template), its `AnimTreeTemplate` set as section 1.2 step 1
-   says;
+1. the new tree object, outer the component, with its `AnimTreeTemplate` set as section 1.2 step 1 says. "Archetype
+   the template" is by fit and **UNVERIFIED**: the root copy comes from an unread per-class virtual (open question
+   5);
 2. one new object per node in gather order (section 1.3; the root excluded), then per control (in `SkelControlLists`
    order and `NextControl` order), then per morph node. Each has outer the component and archetype its template
    object;
 3. the links through the maps: `Children[i].Anim`, `ParentNodes`, `NextControl`, `SkelControlLists[i].ControlHead`,
    `RootMorphNodes`, and the tree's cached `AnimTickArray`;
 4. the `AnimGroups` run-time lists emptied, and `bRebuildAnimTickArray` copied;
-5. the initialisation of section 2: the parent lists (skipped when `bParentNodeArrayBuilt`), the tick list by the
-   section 2 rule, and each node's `SkelComponent`, `TickArrayIndex` and `NodeTickTag`; the component's
-   `Animations`, its tick list and its initialised flag;
-6. the owner's event, if ruled.
+5. the component's `Animations` = the new tree, written by #495's `SetAnimTreeTemplate` path between the copy and
+   the initialisation (section 2 needs it set);
+6. the initialisation of section 2:
+   - no rebuild and no parent-list build: both are refused in the preflight unless the template's flags skip them;
+   - the tick list, always built by the section 2 rule (the port answer above);
+   - each node's `SkelComponent`, `TickArrayIndex` and `NodeTickTag`;
+   - the component's tick list and its initialised flag;
+7. the owner's event, if ruled.
 
 **The counters.** Object creation and link writes are heap writes under #518. A refusal raised after any of them
 takes the "stopped after partial writes: " prefix exactly when `committed_writes()`, `draws()` or
@@ -208,18 +243,18 @@ prefix.
 **The pool:** absent in the port (section 1.1), so the fresh path always runs. UNVERIFIED.
 
 **Maya's next stop.** Rule 1 passes when her template is loaded. If it is not loaded, that refusal stays her stop, as
-in #543. Rule 2 passes only if every node class in her tree is one whose fix-up was read; her tree holds `WillowGame`
-and `GearboxFramework` node classes (for example `WillowAnimNodeAimOffset` and `AnimNodeSpecialMoveBlend`), whose
-fix-ups were not read, so by the rule as written **rule 2 is her next stop**. After it comes rule 3. Reading those
-fix-ups and the per-node initialisation is the next analyst step. No local probe was run in this lane.
+in #543. In rule 2, every node class in her tree has a checked fix-up. The one exception is the last call of
+`WillowAnimNodeAimOffset`'s (her tree has one such node), so **rule 2's aim-offset refusal is her next stop**. Rules
+2a and 2b pass. After them comes rule 3. Reading that refresh call and the per-node initialisation is the next analyst
+step. No local probe was run in this lane.
 
 **Reference** keeps the stub policy.
 
 ## Open questions
 
 1. **UNVERIFIED:** which trees enter the pool and when (section 1.1). The port runs the fresh path always.
-2. **Not read:** the link fix-up of node classes other than `AnimNode`, `AnimNodeBlendBase` and `AnimNodeSequence`,
-   and the morph nodes' gather step.
+2. **Not read:** the link fix-up of node classes outside Maya's tree, the last call of `WillowAnimNodeAimOffset`'s
+   fix-up, and the morph nodes' gather step.
 3. **Not read:** the per-node initialisation of each class, the component pass, the morph initialisation and the
    per-bone arrays (section 2 steps 4 and 5).
 4. **UNVERIFIED:** the owner event's name (by fit `PostInitAnimTree`).

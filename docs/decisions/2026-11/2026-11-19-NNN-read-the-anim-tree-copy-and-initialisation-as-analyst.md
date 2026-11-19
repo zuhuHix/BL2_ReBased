@@ -25,6 +25,8 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-COPY-ANIM-TREE, analyst only, 
   - **Not read:** the per-class link fix-ups beyond the base classes, the per-node initialisation, the morph and
     per-bone steps, and the owner event's name (by fit `PostInitAnimTree`).
   - **The proposed Off answer:** a write-free, load-free preflight, then the copy and tick list written in the heap.
-    The unread steps refuse typed: `NotRead`, or `LayerAbsent` for the mesh-data reader. Maya's next stop is the
-    unread link fix-up of her WillowGame and GearboxFramework node classes, then the per-node initialisation. Both
-    are questions for the next analyst step or a hub ruling. No probe was run.
+    The unread steps refuse typed: `NotRead`, or `LayerAbsent` for the mesh-data reader. The fix-up was checked
+    per class for every node class in Maya's tree (review r1 of #551). All are empty except
+    `WillowAnimNodeAimOffset`'s, which sets `TemplateNode` and then makes one unread call. That call is Maya's next
+    stop, then the per-node initialisation. Preflight refusals were added for the rebuild flag, an unbuilt parent
+    array and a root with more than one child. No probe was run.
