@@ -62,4 +62,24 @@ Synthetic fixtures only.
   - Maya's `CanLiftTargetIf` evaluator is still an unloaded definition handle when the cast's script calls it. Who
     loads the skill definition's sub-objects before the cast is a question for the hub (a load is a write; this
     native loads nothing).
+- **Aligned to the accepted note, e2724bc9** (#527, the hub's low fix included). This supersedes the interim and
+  draft rules above where they differ:
+  - **eager checks:** only the receiver and the `FlagChain` shape; each conditional is checked when reached;
+  - **step 1:** a None `FlagDefinition` answers false, before the type check;
+  - **loads are writes:** a reached handle (the receiver, a definition, its expression, its resolvers) is loaded when
+    first used, through ow-attr's `ensure_loaded` (`LayerAbsent` with no definition store, `NotRead` for a stand-in),
+    and counts for the mark. No unloaded handle is refused any more;
+  - **section 4.0:**
+    - a None context answers false;
+    - a None chain entry is skipped;
+    - a resolver that answers None ends the chain, and the context so far stays;
+    - an empty chain keeps the context;
+    - with neither an expression nor a value resolver, `IsTrue` is false and `IsFalse` is `NotRead`;
+    - the hand-off of a computed answer to a value resolver is `NotRead` ("FlagDefinition: handing a computed answer
+      to its value resolver"), after the expression is evaluated.
+  - **Tests:** a None definition of a timed type is false; a reached handle is loaded; the definition path's cases.
+    Flag-expression tests 6 passed; workspace 2,450 passed, 0 failed.
+  - **Installed gate, rerun** on a throwaway merge with #523 (d2227301): 1 ok / 3 not yet / 10 error. Link 9 still
+    passes `spawn` (1 of 2), and its `cast` now gets past `Evaluate`. It stops at the unbound native
+    `BehaviorProviderDefinition.SetObjectBehaviorVariable(behaviorvariablevalue,object)`, a VM error.
 - **UNVERIFIED.** Nothing here was checked in the running game. The note's open questions 1 to 6 stand.

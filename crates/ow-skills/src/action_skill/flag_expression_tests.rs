@@ -298,6 +298,9 @@ fn or_and_and_exit_early() {
     assert!(!x.eval(skipped, Some(pawn)).unwrap(), "the timed test is never reached");
     let none = x.evaluator(&[(0, None)], 1);
     assert!(!x.eval(none, Some(pawn)).unwrap(), "a None definition is false");
+    // Step 1 comes before the type check (the accepted note, e2724bc9): a None definition of a timed type is false.
+    let none_timed = x.evaluator(&[(2, None)], 1);
+    assert!(!x.eval(none_timed, Some(pawn)).unwrap(), "a None definition is false before the type check");
     // Or with a false first conditional goes on: the function runs, and sets the flag in the mind's store.
     let or = x.evaluator(&[(1, Some(truthy)), (0, Some(held))], 0);
     assert!(x.eval(or, Some(pawn)).unwrap());
@@ -344,11 +347,15 @@ fn the_refusals_come_before_any_write() {
     let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
     let Value::Object(Some(lazy)) = x.get(holder, "Held") else { panic!("a held object") };
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy));
+    // A reached handle is loaded when first used (the accepted note, section 6): here the toy package's object, which
+    // declares no ContextResolverChain, so the read after the load is a Script error, not a NotYet.
     let e = x.evaluator(&[(0, Some(lazy))], 1);
     let pawn = x.obj("Engine.Pawn", "Pawn");
-    let text = not_read(x.eval(e, Some(pawn)), "the unloaded flag definition");
-    assert!(!text.starts_with("stopped after partial writes"), "{text}");
-    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "nothing loaded");
+    match x.eval(e, Some(pawn)).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("declares no ContextResolverChain"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, lazy), "the reached handle was loaded");
     let other = x.obj("Toy.OtherFlagValueResolver", "Other");
     let f = x.definition("OtherFlag");
     x.set(f, "ValueResolver", Value::Object(Some(other)));
@@ -389,21 +396,24 @@ fn a_refusal_after_a_write_is_marked() {
     let _ = x.flag_entry;
 }
 
-/// The paths the note leaves unanswered refuse `NotRead` when reached (the hub's interim ruling): no context object, an
-/// empty `ContextResolverChain`, and a definition with neither an expression nor a value resolver.
+/// The definition path's cases (the accepted note, section 4.0): a None context answers false; an empty
+/// `ContextResolverChain` keeps the context; with neither an expression nor a value resolver `IsTrue` is false and
+/// `IsFalse` is `NotRead`.
 #[test]
-fn the_unanswered_paths_are_not_read() {
+fn the_definition_path_cases() {
     let mut x = fx();
     let pawn = x.obj("Engine.Pawn", "Pawn");
     let empty = x.evaluator(&[], 1);
     let computed = x.computed(empty);
     let e = x.evaluator(&[(0, Some(computed))], 1);
-    not_read(x.eval(e, None), "Evaluate with no context object");
+    assert!(!x.eval(e, None).unwrap(), "a None context answers false");
     let bare = x.obj("GearboxFramework.FlagDefinition", "NoChain");
     x.set(bare, "EvaluationExpression", Value::Object(Some(empty)));
     let e = x.evaluator(&[(0, Some(bare))], 1);
-    not_read(x.eval(e, Some(pawn)), "an empty ContextResolverChain");
+    assert!(x.eval(e, Some(pawn)).unwrap(), "an empty chain keeps the context");
     let nothing = x.definition("Nothing");
     let e = x.evaluator(&[(0, Some(nothing))], 1);
-    not_read(x.eval(e, Some(pawn)), "neither an EvaluationExpression nor a ValueResolver");
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "IsTrue with neither: false");
+    let e = x.evaluator(&[(1, Some(nothing))], 1);
+    not_read(x.eval(e, Some(pawn)), "IsFalse with neither an EvaluationExpression nor a ValueResolver");
 }
