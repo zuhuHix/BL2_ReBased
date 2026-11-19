@@ -107,7 +107,9 @@ This replaces "body not read in detail" in NATIVE_INVENTORY_EQUIP.md.
   a source whose class implements no `IBodyPawn` by its package declaration, an accessor that gives None, or an
   empty slot. A source that does implement `IBodyPawn` needs the accessor, which is not settled, so Off answers a
   named `NotYet` (not read: "which `IBodyPawn` accessor the equipped resolver calls") rather than pick one. A source
-  whose interface list cannot be read from its class also answers a `NotYet`, never None. An equipable item source
+  for which it cannot be established whether its class implements `IBodyPawn` (its interface list, or an inherited
+  one, cannot be read) answers its own named `NotYet` (not read: "whether the source class implements
+  `IBodyPawn`"), never None. An equipable item source
   needs neither and is answered (itself).
 - **The location is not range-checked.** The body indexes the four-entry array by the byte as given. The enum values
   above 3, if `EEquipmentLoc` has any, would read past it. An implementation should refuse a location of 4 or more
@@ -156,21 +158,21 @@ native. The checks make a resolver object with `unrealsdk.construct_object`, set
 | Flag name and kind | read `bOnlyConsiderEquippedItems` on an installed resolver default object |
 | Controller source, first match by definition | the player controller as source, `InventoryDefinition` set to an equipped class mod's `DefinitionData.ItemDefinition`: the answer is that class mod |
 | Flag reads `bReadied` | the same, with a backpacked (unreadied) copy as the only match: the answer is the copy when the flag is clear, None when it is set |
-| Several matches | two items of one definition on the item chain: compare the answer with the order `ItemActors` gives in a script `foreach` |
+| Several matches | two items sharing one definition on the item chain, with a third item of another definition ahead of them, and the equipped-only flag clear: the answer is the first of the two matching entries in the order `ItemActors` gives in a script `foreach`, not the chain's head |
 | Weapon pawn driver | the controller while driving: the driver pawn's items are searched (the same answer as on foot) |
 | Pawn source gives None | the player pawn as source: None |
 | Inventory source returns itself | an equipped weapon as source, `InventoryDefinition` set to something else: the answer is the weapon |
 | Equipped resolver, item source | a `WillowEquipAbleItem` as source: itself, at any `EquipmentLocation` |
-| Equipped resolver, pawn source | the player pawn as source, each location 0 to 3: `EquippedItems[loc]`. This confirms the slot read only: every accessor gives a player pawn back as itself, so it cannot tell them apart |
+| Equipped resolver, pawn source | the player pawn as source, each location 0 to 3, a filled slot at each: `EquippedItems[loc]` if the accessor is `GetAWillowPawn` or `GetAWillowPlayerPawn`, None if it is `GetAWillowAIPawn`. An outcome check of the slot read; the accessor question is settled by the case below |
 | Equipped resolver, weapon source | an equipped weapon as source: None |
 
 **The open questions.** Each needs a case whose outcome differs between the possibilities, or a direct observation.
 
 | Open question | Case that tells the possibilities apart |
 |---|---|
-| Which `IBodyPawn` accessor | an AI pawn with a filled `EquippedItems` slot as source (set one for the check if no AI pawn has one). `GetAWillowPawn` and `GetAWillowAIPawn` give its slot, and `GetAWillowPlayerPawn` gives None. Then the player pawn as source: `GetAWillowAIPawn` gives None there, the other two its slot. The two outcomes together leave one accessor. A direct observation also settles it: a bl-sdk hook on the three accessors' script entry points, if the native's call reaches them, shows which one fires |
+| Which `IBodyPawn` accessor | an AI pawn with a filled `EquippedItems` slot as source (set one for the check if no AI pawn has one). `GetAWillowPawn` and `GetAWillowAIPawn` give its slot, and `GetAWillowPlayerPawn` gives None. Then the player pawn as source, also with a filled slot: `GetAWillowAIPawn` gives None there, the other two its slot. The two outcomes together leave one accessor. A direct observation also settles it: a bl-sdk hook on the three accessors' script entry points, if the native's call reaches them, shows which one fires |
 | Which classes implement `IBodyPawn` | a direct observation: each candidate class's interface list, read live (the player controller, the player and AI pawn classes, a weapon, a vehicle). The resolver's answer for a controller source (a slot or None) then has to agree with that list |
-| The order items join `ItemChain` | a direct observation: give the player two items of one definition, one after the other, and read the chain from `ItemChain` through each entry's `Inventory` link; the resolver's answer for a controller source must be the chain's first |
+| The order items join `ItemChain` | a direct observation: give the player two items of one definition, one after the other, and read the chain from `ItemChain` through each entry's `Inventory` link; the resolver's answer for a controller source (both items of the resolver's definition, flag clear) must be the first matching entry in that chain |
 
 ## 7. Corrections to NATIVE_ATTRIBUTES.md section 5
 
