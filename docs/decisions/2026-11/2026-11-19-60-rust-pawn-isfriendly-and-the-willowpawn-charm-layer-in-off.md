@@ -82,4 +82,18 @@ hub.
     override answering through `IsFriendly` and through step 3; the `CharmedChild` match over a self parent link;
     the cast pack binding no groundwork test in Off.
   - **Gates after r2:** `ow-combat` 158 / 0 / 2; `ow-skills` 97 / 0 / 1; `crate_edges_test.py` OK.
+- **Review r3 of #449** (the final round; a commit on top).
+  - **Overrides that cannot run.** An override that resolves but cannot run is a named `NotYet`, naming the resolved
+    method. This covers both `GetOpinion` and the charm parent's `IsFriendly`, and is decided before the call:
+    - an unbound native, under any stub policy;
+    - a script whose bytecode does not prepare.
+
+    The check is the new `ow_vm::api::Vm::prepare_call`, which runs the call's own preparation without running the
+    function. Errors from a script that actually runs pass through unchanged.
+  - **Read order.** `CharmedParent` is read only after the `CharmedChild` step, so a matching child answers Enemy even
+    when the parent field is missing. Each self-link refusal sits on the step that depends on it.
+  - **New tests:** an unbound native override and a script that does not prepare, both named in the `NotYet`, and the
+    charm parent's unbound `IsFriendly`; a child-only class whose matching child answers before the missing parent
+    field is read.
+  - **Gates after r3:** `ow-combat` 160 / 0 / 2; `ow-skills` 97 / 0 / 1; `ow-vm` 202 / 0 / 1.
 

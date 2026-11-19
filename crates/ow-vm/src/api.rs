@@ -658,6 +658,30 @@ impl Vm {
         self.natives.contains_key(key)
     }
 
+    /// Whether `f` could be called here, checked without running it (lane IMPL-IS-FRIENDLY, review r3 of #449): a
+    /// native needs a registered implementation, whatever the stub policy; a script function needs a package export
+    /// whose script prepares. The error says why it cannot.
+    pub fn prepare_call(&mut self, f: FuncId) -> Result<(), VmError> {
+        let Some(d) = self.function(f) else {
+            return Err(VmError::Script {
+                function: format!("{f:?}"),
+                message: "no such function in this VM".to_string(),
+            });
+        };
+        if let Some(key) = d.native_key.clone() {
+            return if self.has_native(&key) { Ok(()) } else { Err(VmError::UnboundNative(key)) };
+        }
+        let path = d.path.as_str().to_string();
+        if crate::interp::prepare_script(self, f)? {
+            Ok(())
+        } else {
+            Err(VmError::Script {
+                function: path,
+                message: "declared by hand, with no package export and so no bytecode".to_string(),
+            })
+        }
+    }
+
     /// Binds an iterator native to `key`. A key registered twice is refused (C++ "duplicate iterator registration").
     pub fn register_iterator(&mut self, key: &str, f: IteratorFn) -> Result<(), VmError> {
         if self.iterators.contains_key(key) {
