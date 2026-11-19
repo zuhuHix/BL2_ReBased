@@ -78,9 +78,17 @@ The item's own `AttributeSlots` are not cleared first. In order:
 
    Whenever 2x + 0.5 is exact in single precision this is `floor(x + 0.5)`: a half goes up, towards plus infinity, for
    negative values too (2.5 gives 3, -0.5 gives 0, -2.5 gives -2). Close below a half the single-precision step can
-   round up (0.49999997 gives 1). The supported range is |y| < 2^31; outside it the conversion gives the processor's
-   "integer indefinite" value, which the port does not reproduce (the Off answer is `NotYet` IAS-ROUNDING-RANGE,
-   section 8).
+   round up (0.49999997 gives 1).
+
+   **The conversion's range.** The native conversion is exact for every finite `y` from -2^31 to just below 2^31,
+   both -2^31 itself (representable in single precision, it converts to the int32 minimum) and the largest single
+   below 2^31 included. A `y` at or above 2^31, below -2^31, infinite or not a number (an `x` that is not finite)
+   converts to the processor's "integer indefinite" value, which is the same bit pattern as -2^31. The native does not
+   tell the two apart. The Off answer converts exactly over the native's exact range, -2^31 included, and refuses
+   every other `y` (out of range or not finite) with `NotYet` IAS-ROUNDING-RANGE. Not reproducing the indefinite
+   value is a port restriction, not a rule of the game. Both grade additions are 32-bit two's-complement additions,
+   which wrap in the native; the port refuses a sum that would wrap with the same identifier (a port restriction too).
+   The plan decides both (section 8).
 
    An entry whose slot is not found is ignored.
 3. **Finding a slot record** for a slot name:
@@ -134,7 +142,12 @@ The same steps with two differences:
   (medium confidence).
 
 The activated records it makes are written as in section 3 step 4, then the value pass runs. When it is reached from
-`InitializeAttributeSlots(true)`, the value pass runs twice; the second result is the same.
+`InitializeAttributeSlots(true)`, the value pass runs twice: once at the end of this pass, and again at the end of
+`InitializeAttributeSlots`. Both passes write, and the port keeps both as separate write passes. The second writes the
+same values as the first **only for what Off plans**: context-free data, and a skill part that is absent or in mode 2.
+Outside that, the two passes can differ in the native: a context-dependent evaluation is evaluated again (after the
+first pass set `TempStatModifier`), and a supported skill mode makes a fresh runtime skill on each pass. Off refuses
+those cases (IAS-VALUE-CONTEXT, IAS-RUNTIME-SKILL), so no equivalence is claimed for them.
 
 ## 5. The value pass
 
@@ -157,8 +170,9 @@ For each of the item's first slot-limit slots, in index order, one slot finished
      fitted, but still UNVERIFIED in play.
 
   A slot that is not activated is left as it is.
-- **Elsewhere**, each slot's `ComputedModifierValue` takes its element of `ReplicatedAttributeSlotModifierValues`,
-  activated or not; nothing else is written.
+- **Elsewhere**, each of the first slot-limit slots' `ComputedModifierValue` takes its element of
+  `ReplicatedAttributeSlotModifierValues`, activated or not; the slots past the limit and everything else are left as
+  they are.
 
 After the last slot, `RuntimeAttributeSlotSkill` is set (skill part). The value pass reads nothing it wrote for an
 earlier slot except `TempStatModifier`, which only a context-dependent evaluation could read.
@@ -207,7 +221,7 @@ The enum entries are given by number: their names were not resolved here.
 | the definition | the class's rule (section 2); **None: `NotYet` IAS-NO-DEFINITION** (the native reads the slot limit from it unguarded; the game has no answer) |
 | the part and name-part lists | the class's slots in the order of section 2 |
 | finding a slot record | the value (section 3 step 3); a slot not found: the entry is ignored |
-| the activation's `AttributeSlotBaseGrade` | its evaluated value, rounded as section 3 says, **when the initialization data reads no attribute and no initialization definition** (then the context does not matter); otherwise **`NotYet` IAS-BASE-GRADE-CONTEXT** (open question 1); a `y` outside the supported range: **`NotYet` IAS-ROUNDING-RANGE** |
+| the activation's `AttributeSlotBaseGrade` | its evaluated value, rounded as section 3 says, **when the initialization data reads no attribute and no initialization definition** (then the context does not matter); otherwise **`NotYet` IAS-BASE-GRADE-CONTEXT** (open question 1); a `y` outside the native's exact conversion range or not finite, or a grade sum that would wrap: **`NotYet` IAS-ROUNDING-RANGE** (port restrictions) |
 | the item's slots before the call | a packed, unique prefix of activated slots (section 3 step 4.5): the value; any other shape: **`NotYet` IAS-SLOT-SHAPE** |
 | writing the records, the limit and the clamps | the value (section 3 step 4) |
 | the name-part pass | the value (section 4), with the in-place grade rule |
@@ -226,12 +240,16 @@ complete. **No refusal is meant to come after a mutation**: every `NotYet` above
 errors (a property the class does not declare, a failed read) could arise later, and the plan reads every field it
 needs, so it raises them first too.
 
+**If a `NotYet` still surfaces after a write** (a port defect, or a rule a later lane adds), the Off rule is the
+hub's: the call stops there, the `NotYet` keeps its kind and record, its message starts with "stopped after partial
+writes", and the writes already made stay (no rollback in Off). Any other error passes through unchanged.
+
 **`InitializeAttributeSlots(b)`:**
 1. The definition (IAS-NO-DEFINITION), then the slot limit from it.
 2. The item's first slot-limit slots: their shape (IAS-SLOT-SHAPE). The kept names and `K` follow.
 3. The base pass on scratch records: the working set from the definition's and then the part list's upgrades (section
-   3 steps 2-3). At each activation, the base grade's context-free test (IAS-BASE-GRADE-CONTEXT), its evaluation and the
-   range of its rounding (IAS-ROUNDING-RANGE).
+   3 steps 2-3). At each activation, the base grade's context-free test (IAS-BASE-GRADE-CONTEXT), its evaluation, the
+   range of its rounding and the grade sums (IAS-ROUNDING-RANGE).
 4. The projected write of step 4: which records go to indices `K` onwards, and their clamped grades.
 5. When `b` is true, the name-part pass on the projected slots (section 4): the in-place grade increases on the projected
    copies, the new records it activates with the same tests as step 3, and their projected write after the projected
@@ -241,13 +259,20 @@ needs, so it raises them first too.
    authority, for every activated projected slot among the first slot-limit ones: both initialization data
    (IAS-VALUE-CONTEXT), the computed value, and, for an external run-as-skill slot, the mode (IAS-RUNTIME-SKILL unless it
    is 2). Elsewhere, the replicated values.
-7. Then the writes, in the native's order: the base pass's copies and clamps; with `b`, the name-part pass's in-place
-   increases, its copies and clamps and its value pass; then the value pass. Each value pass writes per slot in section
-   5's order.
+7. Then the writes, in the native's order:
+   1. the base pass's copies and clamps;
+   2. with `b`, the name-part pass's in-place increases, its copies and clamps, and its own value pass;
+   3. then `InitializeAttributeSlots`'s value pass.
 
-**`InitializeAttributeSlotsForNameParts()`:** steps 1 and 2, then step 5 on the item's own slots, step 6 for its one
-value pass, and step 7 for its writes. In the native the in-place increases are written while the upgrades are
-applied, so a later entry's activation is evaluated after an earlier entry's write; in the plan both are decided first.
+   Each value pass writes per slot in section 5's order.
+
+**`InitializeAttributeSlotsForNameParts()`:** steps 1 and 2, then step 5 on the item's own slots, then step 6 for
+its one value pass. Its writes, with no base pass:
+1. the name-part pass's in-place increases (in upgrade order), then its copies and clamps;
+2. its one value pass, per slot in section 5's order.
+
+In the native the in-place increases are written while the upgrades are applied, so a later entry's activation is
+evaluated after an earlier entry's write; in the plan both are decided first.
 
 **Why the plan is exact.** Every value the plan computes reads only context-free data (constants and scales, no
 attribute and no initialization definition) and the slots themselves, so the writes cannot change a planned value. The
@@ -298,13 +323,19 @@ shape; finding one is part of the check, and where none exists the case is liste
   only a hook that changes the value in memory before the call would show it (a session change, the maintainer's call).
 - **A negative half tie:** an `AttributeSlotBaseGrade` that evaluates to -0.5, -1.5 or 2.5. Expect grade increments 0,
   -1 and 3. Cooked base grades are likely small positive constants, so this likely needs the same in-memory change.
-- **Client slots:** on a client in a co-op session (the maintainer's call), an item whose `ComputedModifierValue` and
-  `ReplicatedAttributeSlotModifierValues` differ before the call, an inactive slot included. Expect every slot's
-  computed value to equal its replicated element afterwards, the inactive one too.
-- **Contexts:** the same weapon definition initialised under two owners whose attribute values differ (two player
-  levels, or a pawn and a vendor), with a base grade or a per-grade value that reads an attribute. Capture the grades
-  and computed values both times; equal values point at the item as the context. Repeat the initialisation of one item
-  (a save reload) and check the values are stable.
-- **The runtime skill:** initialise a class mod twice (equip, unequip, reload) and record whether
-  `RuntimeAttributeSlotSkill` is a new object each time, its outer and its name. With a mode-2 definition, if any,
-  record that it stays None.
+- **Client slots and the copy boundary:** on a client in a co-op session (the maintainer's call), before the call set
+  every one of the 19 `ComputedModifierValue`s to -1 and each `ReplicatedAttributeSlotModifierValues` element to its
+  own sentinel, 100 plus its index, on an item whose slot limit `L` is below 19 and with an inactive slot below `L`.
+  Expect `ComputedModifierValue` = 100 + i for every i below `L`, the inactive one included, and -1 left at every i
+  from `L` on.
+- **Contexts, item against owner:** an item whose `PerGradeUpgrade` (or base grade) reads an attribute that resolves
+  to different values on the item and on its owner, for example 2 on the item and 5 on the owner, with
+  `BaseModifierValue` 10 and an `EffectGrade` of 3. Expect `ComputedModifierValue` 10 + 2 x 2 = 14 if the item is the
+  context, and 10 + 2 x 5 = 20 if the owner is. For the base grade, an attribute of 2 on the item and 5 on the owner
+  with no increases gives `EffectGrade` 2 or 5. A cooked item with that shape may not exist; then the attribute's value
+  is changed in memory before the call (a session change, the maintainer's call). Repeat the initialisation of one
+  item (a save reload) and check the values are stable.
+- **The runtime skill:** seed `RuntimeAttributeSlotSkill` with a known object before the call. On a definition in a
+  mode other than 2, initialise a class mod twice (equip, unequip, reload): expect a new object each time, not the
+  seed, and record its outer and its name. On a mode-2 definition, if any, expect the seed left in place after the
+  call (the pass makes no skill and writes none).

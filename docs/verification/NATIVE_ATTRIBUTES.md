@@ -318,10 +318,12 @@ Slot record layout (`WillowInventory.AttributeSlotData`, 19 per item): `SlotName
   `IIAttributeSlotEffectProvider` interface (the same interface the slot value resolver uses); values are the slot's
   `EffectGrade` and `ComputedModifierValue`. The interface bodies were **not** resolved. The computation of
   `ComputedModifierValue` is a native step run once the active slot list has been rebuilt (script never assigns it); it
-  was read from the executable on 2026-11-19 and is given under "Open" below. That reading stays UNVERIFIED in game.
+  was read from the executable on 2026-11-19 and is given in "The `ComputedModifierValue` computation" paragraph
+  below. That reading stays UNVERIFIED in game.
 - **GetAttributeSlotIndex(SlotName)**: index of the first activated slot with that name among the first
   `AttributeSlotMaxActivated` slots, else -1. The limit is the definition's `AttributeSlotMaxActivated` when it lies in
-  1..19 and exactly 19 otherwise (0, negative, or above 19); it is not clamped to the nearer end. **...ByAttributeDef(Def)**: first slot (up to the
+  1..19 and exactly 19 otherwise (0, negative, or above 19); it is not clamped to the nearer end. That fallback is
+  the 2026-11-19 reading of the executable (NATIVE_INIT_ATTRIBUTE_SLOTS.md), UNVERIFIED in game. **...ByAttributeDef(Def)**: first slot (up to the
   same limit) whose `AttributeToModify` is `Def`, else -1.
 - **InitializeAttributeSlots(bIncludeNameParts) / ...ForNameParts**: builds the slot list from the type's and then each
   part's `AttributeSlotUpgrades` (and the name parts' for the second form). Grade accumulation as in NATIVE_WEAPON_RULES
@@ -344,7 +346,8 @@ Slot record layout (`WillowInventory.AttributeSlotData`, 19 per item): `SlotName
   [NATIVE_INIT_ATTRIBUTE_SLOTS.md](NATIVE_INIT_ATTRIBUTE_SLOTS.md) section 5; a native reading, **UNVERIFIED** in game):
   on the authority, for each activated slot, `BaseModifierValue + float(EffectGrade - 1) x PerGradeUpgrade` in single
   precision, stored as a float and copied into the slot's element of `ReplicatedAttributeSlotModifierValues` (a
-  19-float array); elsewhere every slot's `ComputedModifierValue` takes that element. NATIVE_WEAPON_RULES's fit
+  19-float array); elsewhere each of the first slot-limit slots' `ComputedModifierValue` takes its element, and the
+  slots past the limit are left as they are. NATIVE_WEAPON_RULES's fit
   `BaseModifierValue + PerGradeUpgrade x` the summed increases is the same rule when the activation's base grade is 1;
   it is superseded by the reading, not by a game check. That note also gives where a slot's data comes from and the slot
   limit.
