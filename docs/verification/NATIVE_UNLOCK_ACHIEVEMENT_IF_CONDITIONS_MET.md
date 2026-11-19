@@ -89,6 +89,7 @@ Its only effect is the online subsystem's achievement call.
   - **The port's slice world leaves the definition empty.** The bridge world builds `WillowGlobals` from its class
     defaults, so `TheGlobalsDefinition` is None there. The main proposal (section 4) therefore stops at the globals
     refusal unless the driver preloads the definition, as the pickup route's world set-up does for links 6 and 7.
+    That preload is a harness input (world set-up before the run), not a write of this native.
 
 ## 4. Proposed ParityMode Off answer (for a separate implementer)
 
@@ -99,14 +100,18 @@ Its only effect is the online subsystem's achievement call.
      challenge list". A load from an empty field stays not read;
    - **a definition handle the store has not loaded** is the helper's lazy-handle refusal. If the hub rules that load a
      tracked write, it is the store's handle load, `DefStore::ensure_loaded`, with one counted load transition (the
-     store's counter of #518).
+     store's counter of #518, open).
 
    **The hub's ruling for the implementer:** the main proposal, with the driver preloading the installed definition
-   (as `equip_run.rs`'s pickup world does), so the slice's turn-in reaches the selection.
+   (as `equip_run.rs`'s pickup world does), so the slice's turn-in reaches the selection. The preload is a
+   harness input (world set-up before the run, like `pickup_world`'s), not the native's write.
+   - **A missing world globals object** stays the existing layer-absent refusal of the port's globals lookup, where
+     the game selects nothing (section 2).
 2. **The declared field types are checked** after the definition refusal and before any value is read:
    `AchievementData` an array of `AchievementUnlockData`, with `UnlockType` a byte, `Achievement` a byte, `StringData`
    a string and `IntData` an int. Otherwise it is a data error, `VmError::Script`, naming the field.
-3. **Select the entries** by section 2, step 1 (reads only).
+3. **Select the entries** by section 2, step 1 (reads only), through one selection function. If open question 3
+   finds that `ShouldUnlockAchievementFromUnlockType` shares the rule, that native uses the same function.
 4. **None selected** (the slice's case): return false. Nothing is written, so no preflight is needed.
 5. **Some selected:** call `ClientUnlockAchievement(id)` on the controller through the VM, once per selected entry, in
    order, then return true. Its own refusals propagate; a refusal after an earlier call's writes is the caller's to
