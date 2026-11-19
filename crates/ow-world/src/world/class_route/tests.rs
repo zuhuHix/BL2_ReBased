@@ -343,17 +343,20 @@ fn load_async_reports_at_once_for_an_object_in_memory() {
 }
 
 #[test]
-fn load_async_without_a_package_part_does_nothing_and_the_rest_is_not_yet() {
+fn load_async_without_a_package_part_and_the_rest_is_not_yet() {
     let mut x = fx(ParityMode::Off);
     let manager = x.make("WillowPlayerPawnDataManager");
     let context = x.make("ToyController");
     let empty = x.got(context);
-    // No package part: no report, no error.
-    assert_eq!(
-        x.load_async(manager, "ToyPawn", Some(context), None)
-            .unwrap(),
-        Value::None
-    );
+    // No package part: the lookup cannot establish a miss for a partial path (review of #431), even with an object of
+    // that name live.
+    x.load("GearboxFramework.ToyPawn");
+    assert!(not_read(&x.load_async(
+        manager,
+        "ToyPawn",
+        Some(context),
+        None
+    )));
     assert_eq!(x.got(context), empty);
     // Held by a package but not loaded, and held by nothing: the load and its report are not read.
     assert!(not_read(&x.load_async(
@@ -427,6 +430,38 @@ fn an_unnamed_match_is_not_yet_and_a_wrong_kind_argument_is_an_error() {
     let r = x.vm.call(f, Some(manager), args).map(|d| d.ret);
     assert!(
         matches!(&r, Err(VmError::Script { message, .. }) if message.contains("expected an object")),
+        "{r:?}"
+    );
+}
+
+/// Review of #431: a cold `GetDefinition` for the wrong class is refused from the holders' class before anything is
+/// loaded, so no definition is left live for a later lookup; and an integer in the `Instigator` slot is an error.
+#[test]
+fn a_wrong_class_loads_nothing_and_instigator_is_kind_checked() {
+    let mut x = fx(ParityMode::Off);
+    let thing = x.class("Thing");
+    assert!(not_read(
+        &x.get_definition(Some(thing), "GearboxFramework.ToyClassDef")
+    ));
+    let class = x.class("PlayerClassDefinition");
+    assert_eq!(x.vm.space.live(class).count(), 0, "nothing was loaded");
+    let manager = x.make("WillowPlayerPawnDataManager");
+    let f =
+        x.vm.find_function("GearboxFramework.WillowPlayerPawnDataManager.LoadPlayerPawnDataAsync")
+            .unwrap();
+    let event = Value::Name(x.vm.space.names.intern("SwitchPlayerClass"));
+    let args = vec![
+        Value::Str("GearboxFramework.ToyPawn".into()),
+        Value::Object(None),
+        Value::Object(None),
+        Value::Int(3),
+        Value::Int(0),
+        Value::Float(0.0),
+        event,
+    ];
+    let r = x.vm.call(f, Some(manager), args).map(|d| d.ret);
+    assert!(
+        matches!(&r, Err(VmError::Script { message, .. }) if message.contains("argument 3")),
         "{r:?}"
     );
 }

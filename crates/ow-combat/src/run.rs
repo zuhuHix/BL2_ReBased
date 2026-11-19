@@ -989,6 +989,10 @@ pub struct Run {
     script_errors: Vec<String>,
     /// The player's held weapon (the `weapon` step, [`Run::hold_weapon`]): the instance and its firing mode.
     held: Option<(ObjRef, Option<ObjRef>)>,
+    /// Off: the stop of a class switch that failed part-way (a `maya` step), which every later step answers with
+    /// (decision 2026-11-19-46, review of #431). The switch writes the controller's class before it can stop, so a
+    /// later step would build on a half-switched player.
+    class_switch_stop: Option<VmError>,
 }
 
 impl std::fmt::Debug for Run {
@@ -1091,6 +1095,7 @@ impl Run {
             bridge_errors_seen: 0,
             script_errors: Vec::new(),
             held: None,
+            class_switch_stop: None,
         })
     }
 
@@ -1233,6 +1238,9 @@ impl Run {
     }
 
     fn step(&mut self, parts: &[&str], step: &str) -> Result<String, VmError> {
+        if let Some(stop) = &self.class_switch_stop {
+            return Err(stop.clone());
+        }
         let verb = parts.first().copied().unwrap_or("");
         let at = |i: usize| -> Result<&str, VmError> {
             parts
@@ -2002,8 +2010,12 @@ impl Run {
         self.one_local_player()?;
         let vm = &mut self.world.vm;
         // Off: the controller's class through the game's script route first (decision 2026-11-19-41).
-        if vm.parity == ParityMode::Off {
-            b.select_player_class(vm)?;
+        if vm.parity == ParityMode::Off
+            && let Err(e) = b.select_player_class(vm)
+        {
+            // Sticky: the switch may have written part of the player before it stopped.
+            self.class_switch_stop = Some(e.clone());
+            return Err(e);
         }
         b.set_player_experience(vm, level, 0)?;
         self.health.ensure_and_seed(vm, &*b, -1.0, &mut self.script_errors)?;
