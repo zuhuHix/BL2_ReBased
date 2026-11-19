@@ -16,8 +16,8 @@
 //! in the native's order: every read, every decision and every refusal (`NotYet`) on the path it takes. The plan uses
 //! read-only accessors only (review r1 of #467): it dispatches nothing through the VM.
 //! - The getters it needs are answered by field reads. `GetInventoryDefinition` uses the exact-class rule of
-//!   NATIVE_INVENTORY_DEFINITION.md, the same field reads as #462's native. `GetGlobalsDefinition` is answered with
-//!   the Off world's stock globals definition.
+//!   NATIVE_INVENTORY_DEFINITION.md, the same field reads as #462's native. `GetGlobalsDefinition` is the globals'
+//!   `TheGlobalsDefinition` field (declared on `GearboxGlobals`), as NATIVE_WILLOW_GLOBALS.md (#469) reads it.
 //! - The plan checks that the receiver's method resolves to the native declaration. A script override, or any other
 //!   function, is a named `NotYet { NotRead }`.
 //! - The `Host` gets a shared view of the VM.
@@ -157,13 +157,15 @@ pub trait Globals {
     fn resolve(&mut self, vm: &mut Vm) -> Result<(ObjRef, ObjRef), VmError>;
 }
 
-/// The Off world's globals (module documentation): the attribute world's `WillowGlobals`, and the stock
-/// [`GLOBALS_DEFINITION`] when the globals' `GetGlobalsDefinition` is the native declaration.
+/// The Off world's globals (module documentation): the attribute world's `WillowGlobals`, and its
+/// `TheGlobalsDefinition` (declared on `GearboxGlobals`) when the globals' `GetGlobalsDefinition` is the native
+/// declaration. That field holding no `GlobalsDefinition` is a named `NotYet { NotRead }`: the native's first load
+/// numbers the challenge list, which was not read (NATIVE_WILLOW_GLOBALS.md, #469, section 6 step 4).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WorldGlobals;
 
-/// The stock globals definition the Off world answers (`ow_combat::hit::globals` and the mission bridge use the same).
-pub const GLOBALS_DEFINITION: &str = "GD_Globals.General.Globals";
+/// The class `TheGlobalsDefinition` must hold for the getter to be a field read.
+pub const GLOBALS_DEFINITION_CLASS: &str = "WillowGame.GlobalsDefinition";
 
 impl Globals for WorldGlobals {
     fn resolve(&mut self, vm: &mut Vm) -> Result<(ObjRef, ObjRef), VmError> {
@@ -172,14 +174,13 @@ impl Globals for WorldGlobals {
             cx.world.globals()?
         };
         native_getter(vm, globals, "GetGlobalsDefinition", "WillowGame.WillowGlobals.GetGlobalsDefinition")?;
-        let path = ow_core::ObjectPath::parse(GLOBALS_DEFINITION)
-            .map_err(|_| bad(WHAT, format!("{GLOBALS_DEFINITION} is not an object path")))?;
-        let found = vm.defs.find(&mut vm.space, &path);
-        vm.log.extend(vm.defs.take_log());
-        let definition = found
-            .map_err(VmError::Def)?
-            .ok_or_else(|| bad(WHAT, format!("no stock globals definition {GLOBALS_DEFINITION}")))?;
-        Ok((globals, definition))
+        let class = vm.find_class(GLOBALS_DEFINITION_CLASS)?;
+        match object_field(vm, globals, "TheGlobalsDefinition")? {
+            Some(d) if vm.space.classes.is_child_of(class_of(vm, d)?, class) => Ok((globals, d)),
+            _ => Err(refused(
+                "the globals' TheGlobalsDefinition holds no GlobalsDefinition, and the getter's first load (which numbers                  the challenge list) was not read (NATIVE_WILLOW_GLOBALS.md section 4)",
+            )),
+        }
     }
 }
 
