@@ -8,7 +8,7 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-MISSION-NUMBERS, implementer.
 - **No real-game session:** every rule is **UNVERIFIED** in the running game.
 - **Unchanged rules:** no dependency was added, no bounds check was loosened and no existing `NotYet` guard was
   relaxed.
-- **The base:** stacked on `fix/rust-settings-fill` (#464, 223a2ced).
+- **The base:** first stacked on `fix/rust-settings-fill` (#464); rebased onto main (d3d76fed) after #464 landed.
 
 **What changed** (`crates/ow-world/src/world/mission_numbers.rs`, bound by `datastore::register`, Off only; Reference
 unchanged). **Conservative form** (the hub's heads-up of 2026-11-19, while #473's last review round runs): what rests
@@ -41,11 +41,11 @@ rules with the two unresolved reads taken as read; the natives pass it as nothin
   read-back check does not cover the 10 undecoded script functions or native readers, so no call is answered
   "nothing":
   - `QuestAcceptGFxMovie.UpdateMissionTextList`: `NotYet { LayerAbsent }`, "the mission screen's Flash text list
-    (not hosted)", record NATIVE_GFX_BRIDGE.md, with the list None or set. It is marked "stopped after partial
-    writes", kind and record kept.
+    (not hosted)", record NATIVE_GFX_BRIDGE.md, with the list None or set. The native does not mark it; the
+    bridge's status hook does (review r2 of #480, below), kind and record kept.
   - Not reached while it refuses: `GetVariableObject`, "a Flash movie query (not hosted)", and `FocusOn`, "the 3D
-    movie's Flash focus (not hosted)", each `NotYet { LayerAbsent }`. On the mission screen they are marked; on
-    another movie nothing is known about earlier writes, so they are not marked.
+    movie's Flash focus (not hosted)", each `NotYet { LayerAbsent }`, marked the same way at the hook, never by
+    the native itself.
   - What the accept checks after the screen returns is the bridge's own code (the note's section 3, step 3); nothing
     here answers for it.
 - **`datastore::UNREAD`** keeps only the DLC manager's two queries. Two refresh-mark tests of #464 used
@@ -58,7 +58,7 @@ partial writes: MissionTracker.GetAllMissions", the bridge's own `LayerAbsent` (
 `ActiveMission`). That is the tracker branch's failure, the stop the note's r1 expects. The mission screen is not
 reached yet.
 
-**Tests:** 12 new tests on invented packages in `mission_numbers_tests.rs`, covering:
+**Tests:** 15 new tests on invented packages in `mission_numbers_tests.rs` (and 2 in the bridge's tests), covering:
 - the tracked mission, the scan's first in-progress and largest-complete answers, and the empty scan;
 - the five fallback causes, the playthrough index rules and the missing query;
 - a tracker `NotYet` passed through, and bad data;
@@ -85,3 +85,17 @@ engine-wide condition keeps the both-branches rule, and the `None` entry its `No
 3. **The fallback is dispatched.** `GetActiveMissionNumber`'s fallback calls the controller's
    `GetActivePlotCriticalMissionNumber(-1)` through the VM, so an unbound callee is `VmError::UnboundNative`, unchanged
    (tested).
+
+**Review r2 of #480, folded in.**
+- **H1, the hook is the write boundary.** The screen's only script route is the controller's `UpdateMissionStatus`,
+  which the bridge runs from the status routine's hook, a nested run after the status was written. The accept, the
+  turn-in and the reward page (`ServerGrantMissionRewards`, from `UpdateMissionStatus`) all go through it. The hook now
+  marks a `NotYet` "stopped after partial writes" (Off only, once, kind and record kept) before its own run records
+  it, so the accept and the turn-in stop on it. The accept's and the turn-in's own frames keep their status-change
+  mark. Tested through the bridge for the accept (status stays Active) and the turn-in (Complete), and unchanged under
+  Reference.
+- **L1.** The load count is kept on the VM, so a load inside the VM-dispatched fallback marks the outer call's later
+  `NotYet` too (tested).
+- **L2.** A handle whose load already failed is not counted as a new write (`DefStore::is_failed`, a read-only query
+  added beside `is_unloaded`); the mark on a running refresh comes before the count.
+- **L3.** This file, GATES.md and the index rows now name the hook as the marking boundary.

@@ -1837,6 +1837,12 @@ impl DefStore {
             )
     }
 
+    /// Whether `obj` is a handle whose load already failed: [`DefStore::ensure_loaded`] returns that error again and
+    /// changes nothing (one of the [`DefStore::is_unloaded`] handles; review r2 of #480, L2).
+    pub fn is_failed(&self, w: &ObjectSpace, obj: ObjRef) -> bool {
+        w.heap.contains(obj) && matches!(self.handles.borrow().entries.get(&obj), Some(Entry::Failed { .. }))
+    }
+
     /// Export `index` of `package`, loaded. Its tags are read from the prefix the store derives for it (module
     /// documentation, "Prefix by class"); `prefix` is the caller's expectation, checked against it
     /// ([`DefError::PrefixMismatch`]). An export whose prefix the store cannot derive is [`DefError::NotYet`].
