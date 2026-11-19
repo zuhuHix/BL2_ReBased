@@ -66,12 +66,21 @@ fn main() -> ExitCode {
             ),
             Err(code) => code,
         },
-        Command::Play { game, map, script, vsync, size, screenshot, weapon, arms, pawns } => match check(&game) {
-            Ok(()) => play(&game, &map, script.as_deref(), weapon.as_deref(), Some(PlayWindow { vsync, size, screenshot, arms, pawns })),
-            Err(code) => code,
-        },
-        Command::PlayHeadless { game, map, script, weapon } => match check(&game) {
-            Ok(()) => play(&game, &map, Some(&script), weapon.as_deref(), None),
+        Command::Play { game, map, script, vsync, size, screenshot, weapon, arms, pawns, world, world_pawns } => {
+            match check(&game) {
+                Ok(()) => play(
+                    &game,
+                    &map,
+                    script.as_deref(),
+                    weapon.as_deref(),
+                    world,
+                    Some(PlayWindow { vsync, size, screenshot, arms, pawns, world_pawns }),
+                ),
+                Err(code) => code,
+            }
+        }
+        Command::PlayHeadless { game, map, script, weapon, world } => match check(&game) {
+            Ok(()) => play(&game, &map, Some(&script), weapon.as_deref(), world, None),
             Err(code) => code,
         },
         Command::Window { game, frames, vsync, time_limit } => match check(&game) {
@@ -394,10 +403,20 @@ struct PlayWindow {
     arms: Option<PathBuf>,
     /// Third-person pawns (lane H-PAWNS).
     pawns: Vec<args::PawnArg>,
+    /// UModel export folders for the loaded world's pawns (lane H-WORLD).
+    world_pawns: Vec<PathBuf>,
 }
 
-/// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY).
-fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, window: Option<PlayWindow>) -> ExitCode {
+/// `--play` (with `window`) or a headless `--play-script` (lane H4-PLAY), on the map loaded as a world unless
+/// `on_world` is off (lane H-WORLD).
+fn play(
+    game: &Path,
+    map: &str,
+    script: Option<&Path>,
+    weapon: Option<&Path>,
+    on_world: bool,
+    window: Option<PlayWindow>,
+) -> ExitCode {
     use ow_host::movement::sanctuary;
     use ow_host::play::{self, InputCollector, PlayDrawReport, PlayDrawer, PlayStats, PlayWorld};
     let Ok(install) = ow_host::find_install(game) else {
@@ -481,10 +500,30 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         .map(|p| format!("{} ({})", p.path, p.mesh))
         .collect();
     let sanctuary::Loaded { scene, mut defs, mut space, collision, .. } = loaded;
+    // The map as a world (lane H-WORLD), on its own thread, in Off: the slice gate counts only there.
+    let world = if on_world {
+        let (cooked, name) = (install.cooked.clone(), map.clone());
+        let build: ow_host::world::Builder =
+            Box::new(move || ow_host::world::build_installed(cooked, name, ow_core::ParityMode::Off));
+        match ow_host::world::WorldLink::spawn(build) {
+            Ok((link, summary)) => {
+                print!("{}", summary.text());
+                let pawns = summary.pawns.clone();
+                Some((Box::new(link) as Box<dyn ow_host::world::WorldTick>, pawns))
+            }
+            Err(e) => {
+                eprintln!("ow-host: loading {map} as a world: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        println!("world: not loaded (--no-world): the play mode runs on the scene alone");
+        None
+    };
     let Some(window) = window else {
         let Some(script) = script else { return ExitCode::from(2) };
         let started = Instant::now();
-        return match play::run_headless_with(collision.world, mover, script, &play::HEADLESS_FRAMES, gun, labels) {
+        return match play::run_headless_on(collision.world, mover, script, &play::HEADLESS_FRAMES, gun, labels, world) {
             Ok(stats) => {
                 print!("{}", play::stats_text(&stats));
                 println!("headless play in {} ms", millis(started.elapsed()));
@@ -530,11 +569,31 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
         },
         None => None,
     };
-    // Third-person pawns, through the same store and object space (lane H-PAWNS).
-    let pawns = if window.pawns.is_empty() {
+    // Third-person pawns, through the same store and object space (lane H-PAWNS), and the loaded world's placed
+    // pawns from their archetypes (lane H-WORLD): the look is read through the scene's store, never the world's.
+    let mut world_drawn = Vec::new();
+    if !window.world_pawns.is_empty()
+        && let Some((_, placed)) = &world
+    {
+        for actor in placed {
+            let Some(archetype) = &actor.archetype else {
+                println!("world pawn {} not drawn: its export names no archetype", actor.path);
+                continue;
+            };
+            let Some(at) = ow_host::anim::pawns::world_placement(actor.location, actor.rotation) else {
+                println!("world pawn {} not drawn: its location is not finite", actor.path);
+                continue;
+            };
+            match ow_host::anim::pawns::load_archetype(&mut defs, &mut space, &actor.path, archetype, &window.world_pawns, at) {
+                Ok(pawn) => world_drawn.push(pawn),
+                Err(e) => println!("world pawn {} not drawn: {e}", actor.path),
+            }
+        }
+    }
+    let pawns = if window.pawns.is_empty() && world_drawn.is_empty() {
         None
     } else {
-        let mut loaded = Vec::new();
+        let mut loaded = world_drawn;
         for arg in &window.pawns {
             let Some(kind) = ow_host::anim::pawns::kind(&arg.kind) else {
                 eprintln!("ow-host: --pawn {}: not a known pawn (bullymong, maya)", arg.kind);
@@ -588,7 +647,10 @@ fn play(game: &Path, map: &str, script: Option<&Path>, weapon: Option<&Path>, wi
     )
     .with_arms(arms)
     .with_pawns(pawns);
-    let sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats)).with_gun(gun, labels, !scripted);
+    let mut sim = PlayWorld::new(collision.world, mover, script, Rc::clone(&stats)).with_gun(gun, labels, !scripted);
+    if let Some((link, pawns)) = world {
+        sim = sim.with_world(link, pawns);
+    }
     let options = RunOptions { frames: None, vsync: window.vsync, time_limit: None };
     let code = match app::run_play(options, sim, Some(Box::new(drawer)), InputCollector::new(!scripted)) {
         Ok(report) => print_run(&report, options),

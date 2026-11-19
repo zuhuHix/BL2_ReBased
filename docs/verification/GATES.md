@@ -227,6 +227,22 @@ shots, with the weapon 53 shots and shot digest `797e931e95ce7bb6`, headless and
 0.780 ms). Workspace tests 1,712 passed, 0 failed, 25 ignored (main e002de5 plus this lane with review r1 of PR #366; the installed-game
 runs on main f5cd6a4 plus this lane).
 
+### Host play mode on the loaded world (Rust, H-WORLD): lane H-WORLD, 2026-11-19
+The play mode's world (decision `docs/decisions/2026-11/2026-11-19-01-host-play-mode-on-the-loaded-world-h-world.md`).
+- **Every change to `ow-host/src/world*`, the play mode's world tick, or `anim/pawns.rs`' world placement:** the
+  workspace build and tests (the `world`, `play` and `args` tests).
+- **On a machine with the game installed**, under the machine lock, with H4-PLAY's 60 s script: `--map Sanctuary
+  --play-script <file>` twice and once with `--no-world` (headless), then `--play --play-script <file> --size 1280x720
+  --screenshot <png> --no-vsync --world-pawns <dir>...` (the window; the folders are UModel `-export -psk -notex
+  -nostat` exports of Sanctuary's level packages under ignored `local/`). Pass is exit 0 for all four; the same path
+  digest and segment digests for all four; the same world digest for both headless runs and the window. Report the
+  world's load line, its halt line and how many pawns were drawn.
+
+**Baseline (2026-11-19, zuhu desktop, RTX 4070, Vulkan, release, lane H-WORLD):** world Sanctuary_P (Off) 2,363
+actors, 0 refused, 11 pawns; halted at tick 1 (`NotYet`: the host's `PHYS_Interpolating` physics for a placed
+`Engine.InterpActor`), `TimeSeconds` 0.016667; path digest `d7b95ebfe14df774`, world digest `c233c6faac880f05`; the
+window drew 1 of 11 pawns (median frame 1.724 ms).
+
 The retired UE5 host's suites and their baselines are in `git show 08bcf3e:docs/verification/GATES.md`.
 
 ## Records

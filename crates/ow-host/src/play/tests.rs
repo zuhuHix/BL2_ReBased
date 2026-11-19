@@ -393,3 +393,111 @@ fn a_press_shorter_than_a_step_fires_once() {
     }
     assert_eq!(stats.borrow().shots.len(), 1, "the latch is used once");
 }
+
+/// An invented world (lane H-WORLD): it records every delta it is ticked by, keeps an f32 clock, walks its one pawn
+/// 1 uu along X per tick, and from tick `halt_at` on answers a halt as the real link does.
+struct FakeWorld {
+    deltas: Rc<RefCell<Vec<f32>>>,
+    frame: crate::world::WorldFrame,
+    halt_at: u64,
+}
+
+impl crate::world::WorldTick for FakeWorld {
+    fn tick(&mut self, dt: f32) -> crate::world::WorldFrame {
+        if self.frame.halted.is_some() {
+            return self.frame.clone();
+        }
+        self.deltas.borrow_mut().push(dt);
+        let tick = self.frame.ticks + 1;
+        if tick >= self.halt_at {
+            self.frame.halted =
+                Some(crate::world::Halt { tick, message: "an invented NotYet".into(), not_yet: true });
+            return self.frame.clone();
+        }
+        self.frame.ticks = tick;
+        self.frame.time_seconds = Some(self.frame.time_seconds.unwrap_or(0.0) + dt);
+        self.frame.delta_seconds = Some(dt);
+        for p in &mut self.frame.pawns {
+            p.location[0] += 1.0;
+        }
+        self.frame.clone()
+    }
+}
+
+fn placed_pawn() -> crate::world::PawnActor {
+    crate::world::PawnActor {
+        path: "TheWorld.PersistentLevel.Pawn_0".into(),
+        class: "Engine.Pawn".into(),
+        archetype: None,
+        location: [100.0, 0.0, 50.0],
+        rotation: Rotator::new(0, 16384, 0),
+    }
+}
+
+fn on_fake_world(frames: &[Duration], halt_at: u64) -> (PlayStats, Vec<f32>) {
+    let deltas = Rc::new(RefCell::new(Vec::new()));
+    let fake = FakeWorld {
+        deltas: Rc::clone(&deltas),
+        frame: crate::world::WorldFrame { pawns: vec![placed_pawn()], ..Default::default() },
+        halt_at,
+    };
+    let gun = Gun::new(Err(crate::weapon::equipped_weapon()));
+    let loaded: LoadedWorld = (Box::new(fake), vec![placed_pawn()]);
+    let stats = run_headless_on(world(), pawn(), script(), frames, gun, Vec::new(), Some(loaded)).unwrap();
+    let deltas = deltas.borrow().clone();
+    (stats, deltas)
+}
+
+#[test]
+fn the_world_is_ticked_once_per_step_by_the_step_whatever_the_frame_times() {
+    let plain = run_headless(world(), pawn(), script(), &HEADLESS_FRAMES).unwrap();
+    let (uneven, uneven_deltas) = on_fake_world(&HEADLESS_FRAMES, u64::MAX);
+    let (steady, _) = on_fake_world(&[FRAME_60], u64::MAX);
+    // One tick per step, each by the step's length, never by a frame time.
+    assert_eq!(uneven_deltas.len() as u64, uneven.steps);
+    assert!(uneven_deltas.iter().all(|&d| d == DEFAULT_STEP_SECONDS));
+    let (u, s) = (uneven.world.as_ref().unwrap(), steady.world.as_ref().unwrap());
+    assert_eq!((u.requested, u.last.ticks), (uneven.steps, uneven.steps));
+    // The world's digest is a function of the script, as the path's is; the world does not change the path.
+    assert_eq!(u.digest, s.digest);
+    assert_eq!(u.trace, s.trace);
+    assert_eq!((uneven.digest, uneven.segments.clone()), (plain.digest, plain.segments.clone()));
+    assert_eq!(u.last.pawns[0].location[0], 100.0 + uneven.steps as f32);
+    let text = stats_text(&uneven);
+    assert!(text.contains("play world halted: no"), "{text}");
+    assert!(plain.world.is_none() && !stats_text(&plain).contains("play world"));
+}
+
+#[test]
+fn a_halted_world_stops_ticking_and_the_walk_goes_on() {
+    let plain = run_headless(world(), pawn(), script(), &HEADLESS_FRAMES).unwrap();
+    let (run, deltas) = on_fake_world(&HEADLESS_FRAMES, 10);
+    assert!(run.finished);
+    assert_eq!(run.digest, plain.digest);
+    let w = run.world.as_ref().unwrap();
+    assert_eq!(w.last.ticks, 9);
+    assert_eq!(deltas.len(), 10, "the halting tick is the last one the world sees");
+    assert_eq!(w.requested, run.steps);
+    let text = stats_text(&run);
+    assert!(text.contains("play world halted at tick 10 (NotYet): an invented NotYet"), "{text}");
+}
+
+#[test]
+fn the_snapshot_carries_the_world_s_pawns() {
+    let stats = Rc::new(RefCell::new(PlayStats::default()));
+    let fake = FakeWorld {
+        deltas: Rc::new(RefCell::new(Vec::new())),
+        frame: crate::world::WorldFrame { pawns: vec![placed_pawn()], ..Default::default() },
+        halt_at: u64::MAX,
+    };
+    let mut sim = PlayWorld::new(world(), pawn(), Some(script()), Rc::clone(&stats)).with_world(Box::new(fake), vec![placed_pawn()]);
+    // Before any step: the pawns as loaded.
+    let first = sim.step(&[], Duration::ZERO).unwrap();
+    assert_eq!(first.pawns.as_ref().unwrap()[0].location, [100.0, 0.0, 50.0]);
+    let second = sim.step(&[], FRAME_60 * 2).unwrap();
+    assert_eq!(second.step, 2);
+    assert_eq!(second.pawns.as_ref().unwrap()[0].location, [102.0, 0.0, 50.0]);
+    // Without a world, no pawns go out.
+    let mut bare = PlayWorld::new(world(), pawn(), Some(script()), Rc::new(RefCell::new(PlayStats::default())));
+    assert_eq!(bare.step(&[], FRAME_60).unwrap().pawns, None);
+}

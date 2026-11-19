@@ -18,6 +18,11 @@
 //!   when given: one input per step, whatever the frame times, so a scripted run is a function of its script only.
 //! - [`PlayDrawer`], the renderer: H2's [`SceneRenderer`] seen from the snapshot's view, with the matrices from
 //!   `crate::frame`.
+//! - The loaded world (lane H-WORLD, `crate::world`), when given: ticked once per step, after the mover, by the step's
+//!   length, so `WorldInfo.TimeSeconds` and `DeltaSeconds` advance with the simulation and a scripted run's world is a
+//!   function of its script too. Its pawns go out in the snapshot for the drawer; nothing the drawer does reaches the
+//!   world or the mover. The world's state is folded into its own digest ([`WorldStats::digest`]), so the path
+//!   digests mean what they meant before.
 //!
 //! **The view.** The eye is the pawn's centre plus `BaseEyeHeight` 70 (read live, `MovementParams::maya`, the same as
 //! `--walk`'s [`Mover::eye`]); the game's eye-height easing and bob (`NATIVE_PLAYER_MOVEMENT.md` section 15) are not
@@ -47,6 +52,7 @@ use crate::movement::walk::{PathDigest, ScriptCursor, Segment};
 use crate::render::{DrawReport, Drawer, Lighting, SceneRenderer, TextureSource};
 use crate::sim::{HostCommand, PlayInput, ShotView, SimError, Simulation, Snapshot, ViewPose};
 use crate::weapon::{Gun, RangeSource, Shot};
+use crate::world::{WorldFrame, WorldTick};
 
 /// The simulation step: `--walk`'s, decision D13's default 1/60 s, as `f64`.
 pub fn step_seconds() -> f64 {
@@ -269,6 +275,41 @@ pub struct PlayStats {
     pub shots: Vec<(Shot, String)>,
     /// A digest over every shot's step, end point and damage, so two runs that fire alike compare in one number.
     pub shot_digest: PathDigest,
+    /// The loaded world's side of the run, when there is one (lane H-WORLD).
+    pub world: Option<WorldStats>,
+}
+
+/// What the loaded world did over a play run (lane H-WORLD).
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorldStats {
+    /// Ticks the play loop asked for (one per step).
+    pub requested: u64,
+    /// What the last tick left (its halt included).
+    pub last: WorldFrame,
+    /// A digest over, per step: the world's completed ticks, `TimeSeconds` and `DeltaSeconds` (their bits, -1 when
+    /// absent), the pawn count and every pawn's location and rotation.
+    pub digest: PathDigest,
+    /// Every [`TRACE_EVERY`] steps: the step, the world's completed ticks and `TimeSeconds`.
+    pub trace: Vec<(u64, u64, Option<f32>)>,
+}
+
+impl WorldStats {
+    /// Folds step `step`'s frame in.
+    pub fn record(&mut self, step: u64, frame: WorldFrame) {
+        self.requested = self.requested.saturating_add(1);
+        let bits = |v: Option<f32>| v.map_or(-1.0, |f| f64::from(f.to_bits()));
+        self.digest.push([frame.ticks as f64, bits(frame.time_seconds), bits(frame.delta_seconds)]);
+        self.digest.push([frame.pawns.len() as f64, 0.0, 0.0]);
+        for p in &frame.pawns {
+            self.digest.push(p.location.map(f64::from));
+            self.digest.push([f64::from(p.rotation.pitch), f64::from(p.rotation.yaw), f64::from(p.rotation.roll)]);
+        }
+        if step % TRACE_EVERY == 0 {
+            self.trace.push((step, frame.ticks, frame.time_seconds));
+        }
+        self.last = frame;
+    }
 }
 
 /// The play simulation (module documentation).
@@ -299,6 +340,8 @@ pub struct PlayWorld {
     labels: Vec<String>,
     /// Print each shot as it fires (an interactive run).
     echo: bool,
+    /// The loaded world, ticked once per step (lane H-WORLD).
+    loaded: Option<Box<dyn WorldTick>>,
 }
 
 impl PlayWorld {
@@ -326,7 +369,17 @@ impl PlayWorld {
             last_shot: None,
             labels: Vec::new(),
             echo: false,
+            loaded: None,
         }
+    }
+
+    /// The same play run on a loaded world (lane H-WORLD): `world` is ticked once per step, after the mover, and
+    /// `pawns` (the world as loaded) go out in the snapshots until the first tick.
+    pub fn with_world(mut self, world: Box<dyn WorldTick>, pawns: Vec<crate::world::PawnActor>) -> PlayWorld {
+        self.loaded = Some(world);
+        let last = WorldFrame { pawns, ..WorldFrame::default() };
+        self.stats.borrow_mut().world = Some(WorldStats { last, ..WorldStats::default() });
+        self
     }
 
     /// The same world with `gun` held, `labels` naming each brush's placement (by `Brush::source`) in the shot log,
@@ -475,6 +528,12 @@ impl Simulation for PlayWorld {
             }
             let step = stats.steps;
             drop(stats);
+            if let Some(world) = self.loaded.as_mut() {
+                let frame = world.tick(DEFAULT_STEP_SECONDS);
+                if let Some(w) = self.stats.borrow_mut().world.as_mut() {
+                    w.record(step, frame);
+                }
+            }
             let held = self.trigger(segment);
             if let Some(shot) = self.gun.step(&self.world, held, self.mover.eye(), self.mover.view, dt, step) {
                 let label = shot.hit.map_or_else(String::new, |h| self.label(h.brush));
@@ -541,6 +600,7 @@ impl Simulation for PlayWorld {
                 this_frame: self.stats.borrow().shots.len() > shots_before,
                 damage_known,
             }),
+            pawns: self.stats.borrow().world.as_ref().map(|w| w.last.pawns.clone()),
         })
     }
 }
@@ -561,8 +621,27 @@ pub fn run_headless_with(
     gun: Gun,
     labels: Vec<String>,
 ) -> Result<PlayStats, SimError> {
+    run_headless_on(world, mover, script, frames, gun, labels, None)
+}
+
+/// A loaded world for a play run (lane H-WORLD): the world and its pawns as loaded.
+pub type LoadedWorld = (Box<dyn WorldTick>, Vec<crate::world::PawnActor>);
+
+/// [`run_headless_with`] on a loaded world when `loaded` gives one (lane H-WORLD).
+pub fn run_headless_on(
+    world: CollisionWorld,
+    mover: Mover,
+    script: Vec<Segment>,
+    frames: &[Duration],
+    gun: Gun,
+    labels: Vec<String>,
+    loaded: Option<LoadedWorld>,
+) -> Result<PlayStats, SimError> {
     let stats = Rc::new(RefCell::new(PlayStats::default()));
     let mut sim = PlayWorld::new(world, mover, Some(script), Rc::clone(&stats)).with_gun(gun, labels, false);
+    if let Some((w, pawns)) = loaded {
+        sim = sim.with_world(w, pawns);
+    }
     let frames = if frames.is_empty() { &HEADLESS_FRAMES[..] } else { frames };
     // Ten million frames at the shortest pattern frame is hours of game time: a guard, not a limit anyone meets.
     for i in 0..10_000_000usize {
@@ -644,6 +723,43 @@ pub fn stats_text(s: &PlayStats) -> String {
         s.digest.0
     );
     let _ = writeln!(out, "play shots: {}, shot digest {:016x}", s.shots.len(), s.shot_digest.0);
+    if let Some(w) = &s.world {
+        out.push_str(&world_text(w));
+    }
+    out
+}
+
+/// The loaded world's lines of a play run's stats (lane H-WORLD): the trace, the pawns, the clock and the digest, and
+/// why the world halted if it did.
+pub fn world_text(w: &WorldStats) -> String {
+    use std::fmt::Write as _;
+    let time = |t: Option<f32>| t.map_or_else(|| "none".to_string(), |t| ow_core::fmt::fmt_f(f64::from(t), 6));
+    let mut out = String::new();
+    for (step, ticks, t) in &w.trace {
+        let _ = writeln!(out, "play world step {step}: {ticks} ticks, TimeSeconds {}", time(*t));
+    }
+    for p in &w.last.pawns {
+        let _ = writeln!(out, "play world pawn {}", crate::world::pawn_text(p));
+    }
+    let _ = writeln!(
+        out,
+        "play world: {} ticks asked, {} completed, TimeSeconds {}, DeltaSeconds {}, {} pawns, world digest {:016x}",
+        w.requested,
+        w.last.ticks,
+        time(w.last.time_seconds),
+        time(w.last.delta_seconds),
+        w.last.pawns.len(),
+        w.digest.0
+    );
+    match &w.last.halted {
+        Some(h) => {
+            let kind = if h.not_yet { "NotYet" } else { "error" };
+            let _ = writeln!(out, "play world halted at tick {} ({kind}): {}", h.tick, h.message);
+        }
+        None => {
+            let _ = writeln!(out, "play world halted: no");
+        }
+    }
     out
 }
 
@@ -830,6 +946,9 @@ impl Drawer for PlayDrawer {
         }
         if let Some(pawns) = &mut self.pawns {
             pawns.snapshot(snapshot.sim_time);
+            if let Some(actors) = &snapshot.pawns {
+                pawns.place_world(actors);
+            }
         }
         self.finished = snapshot.finished;
         self.shot = snapshot.shot;
