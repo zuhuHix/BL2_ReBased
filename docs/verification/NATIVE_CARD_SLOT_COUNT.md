@@ -80,38 +80,51 @@ routine is the one behind the script native `GetAttributeSlotMaxActivated`.
    implementer may call one shared function for both rather than write a second copy.
 2. **Where it is read:** with the rest of the card's call-time computation (the body note's section 4, step 2),
    before the native's own first write. Reading it early changes nothing: step 2's clear does not touch it.
-3. **The weapon type** is the object the definition read already found. Under the lazy-load rule, a weapon type that
-   is still an unloaded definition handle must not be loaded here. In that case the answer is
-   `NotYet { NotRead }`, "WillowWeapon.CacheWeaponCard: the weapon type <object> is an unloaded definition handle",
-   record this note. Expected not to occur on link 8, since the weapon type is read earlier in the init.
+3. **The weapon type, and the order of the reads** (review r1 of #525). The refusal for an unloaded weapon type
+   belongs where the weapon type is first read, not in the count's own step. An implementation that loads the
+   weapon type earlier (for example to read its fields for the balance or the damage type) must move that load
+   behind this check. In order:
+   1. resolve the globals and the globals definition (the outline's step 1);
+   2. read the weapon's `DefinitionData.WeaponTypeDefinition` reference, loading nothing;
+   3. keep the early return: a None weapon type ends the native, with no write;
+   4. **a weapon type that is an unloaded definition handle** is refused here, before any load and before the
+      balance, damage-type and slot reads: `VmError::NotYet` with kind `NotRead`, "WillowWeapon.CacheWeaponCard: the
+      weapon type <object> is an unloaded definition handle", record this note;
+   5. only then the balance, the damage type, the count of section 2 and the slots.
+
+   The refusal comes before any write of the card's own. Inside the equip run it follows the spawn's writes, so the
+   equip caller adds the "stopped after partial writes: " prefix; the refusal keeps its kind and record.
 4. **The schema** (in the equip driver's preflight, with the body note's card schema): `WeaponTypeDefinition`
    (through `WillowInventoryDefinition`) declares `AttributeSlotMaxActivated` as an int. A missing or mistyped field is
    a `VmError::Script` naming it.
 5. **Then the slots** 0 to count−1 run section 3's step, unchanged from slot 0's. The body note's other refusals (the
    tie order and the displayed value, its section 4, step 3) stay as they are.
 
-**What link 8 meets next.** With the count read, the slot step no longer refuses. The card then runs on to the body
-note's sections 3.1 to 3.3. The next stop is one of that note's two remaining refusals, if an appended entry ties on
-priority or has a modifier record:
-- "WillowWeapon.CacheWeaponCard: the card order of equal-priority entries";
-- "WillowWeapon.CacheWeaponCard: the presentation's displayed value".
-
-Otherwise the card completes, and link 8 goes past `init`. Which of these the installed weapon meets is for the gate
-run to show; this note does not assume it.
+**What link 8 meets next.** Implementing this removes the slot-count stop, and nothing more is claimed here. The card's
+other refusals stay as they are (the body note's tie order and displayed value, #521's typed refusal for an unread
+definition visit), and the attribute evaluations the card runs can return their own `NotYet`. The gate run shows the
+next stop.
 
 ## 5. Open questions
 
 1. A subclass of `WillowWeapon` with its own card body was not looked at (the outline's open question 5 stands).
-2. The installed weapon type's stored `AttributeSlotMaxActivated` and its class default were not read here. The gate
-   run shows them through the slots the card lists.
+2. The installed weapon type's stored `AttributeSlotMaxActivated` and its class default were not read here. The card's
+   entries cannot show them: an inactive slot, or one not marked for modifier text, makes no entry, and several raw
+   values give the same clamped count. They are read directly, from the field and the class default (the package's
+   stored value, or a live read).
 3. The body note's open questions 2 to 5 stand (the display conversion, the tie order, the class test).
 
 ## Live checks that would confirm these rules (bl-sdk, the RTSE way)
 
-1. **The definition.** On a weapon whose type's `AttributeSlotMaxActivated` (read with `GetAttributeSlotMaxActivated`
-   on `DefinitionData.WeaponTypeDefinition`) is smaller than the number of activated slots, count the slot entries at
-   the head of `WeaponCardModifierStats` after the drop. Expect only the slots below the type's count.
-2. **The clamp.** On a weapon type whose stored value is 0 or above 19, expect every activated slot of the 19 to be
-   listed.
-3. **A slot past 0.** On a weapon with slot 1 activated and `bIncludeInModifierText` set, expect its entry right after
-   slot 0's, with `bShouldDisplay` true and `ModifierValue` equal to the slot's `ComputedModifierValue`.
+1. **The stored value and its default.** Read `AttributeSlotMaxActivated` directly on the weapon's
+   `DefinitionData.WeaponTypeDefinition` and on its class default, and `GetAttributeSlotMaxActivated()` on the same
+   definition. Expect the getter to give the stored value when it lies in 1 to 19, else 19.
+2. **The count boundary.** On a weapon whose type's count is N (below 19), first capture every slot's `bActivated`,
+   `bIncludeInModifierText`, `AttributeToModify`, `ConstraintAttribute` and `ComputedModifierValue`. Use a weapon with
+   activated slots marked for modifier text on both sides of the boundary (slot N−1 and slot N). Call
+   `CacheWeaponCard`, then compare the head of `WeaponCardModifierStats` with the captured slots in slot order. Expect
+   an entry for every captured slot below N that is activated and marked, and none for slot N or past it.
+3. **The clamp.** The same comparison on a weapon type whose stored value is 0 or above 19: expect every activated,
+   marked slot of the 19.
+4. **A slot past 0.** In the same capture, slot 1 activated and marked: expect its entry right after slot 0's (when
+   slot 0 makes one), with `bShouldDisplay` true and `ModifierValue` equal to the captured `ComputedModifierValue`.

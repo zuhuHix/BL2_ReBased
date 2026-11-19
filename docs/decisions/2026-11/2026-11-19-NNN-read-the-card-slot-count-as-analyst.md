@@ -12,7 +12,10 @@ No live session was run.
 - **Read:** slots 0 to count−1 all run the outline's slot step, with no special case for slot 0. The bits and fields it
   reads match the layout tool's `AttributeSlotData`.
 - **For the implementer:** replace the "the card's slot count" `NotYet` with that count. An unloaded weapon type is a
-  `NotRead`, never loaded. The schema check goes in the equip preflight.
-- **Link 8's expected next stop:** one of the body note's two remaining refusals (the tie order or the displayed
-  value), or past `init`.
+  NotRead, never loaded. The schema check goes in the equip preflight.
+- **Review r1 of #525:** the unloaded-weapon-type refusal sits where the weapon type is first read (after the None
+  early return, before any load and before the balance, damage-type and slot reads). The next stop is left to the
+  gate run. The stored value and its class default are to be read directly, and the live checks compare captured
+  slots in slot order across the count boundary.
+- **Link 8:** this removes the slot-count stop; the card's other refusals stay.
 - **UNVERIFIED.** Every rule is unconfirmed in the running game; the note lists the live checks.
