@@ -84,5 +84,7 @@ changes and needs for its installed proof.
     component's stand-in). Once one of those loads has run, every `NotYet` the spawn returns gets the same prefix. A
     stand-in resolution counts as a load whether or not its handle was loaded before, because the store does not say
     (conservative). Test: `a_refusal_after_the_spawns_lazy_load_is_prefixed`.
+    On main the archetype's flag came with review r2 of #481 (`spawn_from`); the rebase onto main c8dacc1 keeps
+    main's code and this branch adds the plan's loads (`plan_components_tracked`) and the test.
   - Synthetic tests: `an_inherited_component_with_two_stand_ins_is_refused`,
     `an_object_inside_an_inherited_component_is_refused` and `a_not_yet_after_registration_is_prefixed_in_off`.
