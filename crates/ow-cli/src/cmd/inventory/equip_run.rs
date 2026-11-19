@@ -144,43 +144,100 @@ fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>]) 
 
 /// The run's world (module documentation).
 fn run_world(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, String> {
+    run_world_typed(cooked, mode).map_err(|e| e.text())
+}
+
+/// Why the run's world could not be set up, typed (review r2 of #470, item 4): a `NotYet` of any layer, or any other
+/// VM error, stays a [`VmError`], so a caller grading by variant keeps it; the rest is text.
+#[derive(Debug)]
+pub(crate) enum SetupError {
+    Vm(VmError),
+    Other(String),
+}
+
+impl SetupError {
+    /// The text the untyped callers have always printed.
+    pub(crate) fn text(&self) -> String {
+        match self {
+            SetupError::Vm(e) => vm_text(e),
+            SetupError::Other(t) => t.clone(),
+        }
+    }
+}
+
+impl From<VmError> for SetupError {
+    fn from(e: VmError) -> SetupError {
+        SetupError::Vm(e)
+    }
+}
+
+/// A layer's error as a [`SetupError`]: its `NotYet` (`as_not_yet`) as `VmError::NotYet`, anything else as its text.
+fn setup_error<E: std::error::Error>(e: E, as_not_yet: impl FnOnce(&E) -> Option<ow_core::NotYet>) -> SetupError {
+    match as_not_yet(&e) {
+        Some(n) => SetupError::Vm(VmError::NotYet(n)),
+        None => SetupError::Other(error_text(&e)),
+    }
+}
+
+fn run_world_typed(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, SetupError> {
     use ow_balance::types::{
-        AwesomeLevel, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
+        AwesomeLevel, BalanceError, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
         Playthrough,
     };
-    let defs = DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, mode)
-        .map_err(|e| error_text(&e))?;
-    let attrs = AttributeSystem::standard().map_err(|e| error_text(&e))?;
+    let def = |e: ow_defs::store::DefError| {
+        setup_error(e, |e| match e {
+            ow_defs::store::DefError::NotYet(n) => Some(n.clone()),
+            _ => None,
+        })
+    };
+    let attr = |e: ow_attr::api::AttrError| {
+        setup_error(e, |e| match e {
+            ow_attr::api::AttrError::NotYet(n) => Some(n.clone()),
+            _ => None,
+        })
+    };
+    let balance = |e: BalanceError| {
+        setup_error(e, |e| match e {
+            BalanceError::NotYet(n) => Some(n.clone()),
+            _ => None,
+        })
+    };
+    let defs = DefStore::open(cooked.to_path_buf(), IdentityPolicy::FirstInScanOrder, mode).map_err(def)?;
+    let attrs = AttributeSystem::standard().map_err(attr)?;
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), mode);
-    ow_vm::natives_core::register(&mut vm).map_err(|e| vm_text(&e))?;
+    ow_vm::natives_core::register(&mut vm)?;
     let snapshot = BalanceSnapshot::new(
         Playthrough::NORMAL,
-        OpLevel::new(0).map_err(|e| error_text(&e))?,
+        OpLevel::new(0).map_err(balance)?,
         PlayerCount::SINGLE,
         ExpLevel::new(1),
         GameStage(1),
         AwesomeLevel::new(0),
         LevelCapUpgrades::ALL,
     )
-    .map_err(|e| error_text(&e))?;
+    .map_err(balance)?;
     let combat = ow_combat::hit::Pack;
     let inventory = ow_inventory::manager::Pack;
     let packs: [&dyn ow_vm::api::NativePack; 2] = [&combat, &inventory];
-    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs)
-        .map_err(|e| error_text(&e))?;
+    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs).map_err(
+        |e| match e {
+            ow_world::world::WorldError::Vm(v) => SetupError::Vm(v),
+            other => SetupError::Other(error_text(&other)),
+        },
+    )?;
     place_world_info(world)
 }
 
 /// The level's `WorldInfo`, from its class defaults (as `--combat-run` places one without its bridge): the pool
 /// native spawns its manager only in a world that has one.
-fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world::World, String> {
-    let info = make(&mut world.vm, "Engine.WorldInfo")?;
+fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world::World, SetupError> {
+    let class = world.vm.find_class("Engine.WorldInfo")?;
+    let info = instantiate_from_defaults(&mut world.vm, class)?;
     world
         .actors()
         .try_borrow_mut()
-        .map_err(|_| "the actor list is borrowed".to_string())?
-        .place_world_info(info)
-        .map_err(|e| vm_text(&e))?;
+        .map_err(|_| SetupError::Other("the actor list is borrowed".to_string()))?
+        .place_world_info(info)?;
     Ok(world)
 }
 
@@ -234,11 +291,6 @@ struct EquipRun {
     /// `ExternalAttributeModifiers`' length after equip and after unequip.
     after_equip: usize,
     after_unequip: usize,
-}
-
-fn make(vm: &mut Vm, class: &str) -> Result<ObjRef, String> {
-    let c = vm.find_class(class).map_err(|e| vm_text(&e))?;
-    instantiate_from_defaults(vm, c).map_err(|e| vm_text(&e))
 }
 
 fn records(vm: &Vm, weapon: ObjRef) -> usize {
@@ -395,6 +447,11 @@ pub(crate) fn pickup_world(
     write_t(vm, globals, "TheGlobalsDefinition", Value::Object(Some(definition)))?;
     world.query().try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("WorldQuery"))?.set_globals(globals);
     Ok((world, crate::cmd::slice_pickup::PickupSetup { weapon_defaults, definition_class }))
+}
+
+/// [`gate_world`], typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).
+pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, SetupError> {
+    run_world_typed(cooked, ParityMode::Off)
 }
 
 /// One weapon of a weapons-file line with no owner (`--slice-gate`'s link 7 decoy, lane IMPL-PICKUP), typed as

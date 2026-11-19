@@ -84,3 +84,22 @@ It adds no dependency, CLI flag or parsing change. Reference is unchanged, since
     passed, stop at `fight_area`. The floor and reach checks pass on the installed Sanctuary, and the spawn then stops
     at decision 2026-11-19-44's inherited-component `NotYet`, as before. 0 ok, 14 notyet, 0 error. Row 9 differs from
     the 203c1aa run above only through main's own LINK-9-CAST-SPAWN changes.
+- **Review r2 of #470** (on 6268e6d, rebased onto main 0235937):
+  - **No write before every check.** The dummy's cylinder is read from the package, not from a made object: the
+    archetype export's own `CylinderComponent` reference (an export of the same file) and that component's own
+    `CollisionRadius` and `CollisionHeight` tags. An untagged value or a reference out of the file is a `NotYet`. The
+    floor, Maya's reach and the final location vector follow, and only then is the template made.
+  - **Maya's reach is a grounded walk.** The single raised sweep let two platforms at one height across a gap pass. The
+    port's mover now walks her from her walked end straight at the dummy's spot, steering each tick. She must arrive
+    within 16 uu, never drop more than her step height below her start, and stay inside a tick budget (twice the
+    straight time at full speed, plus two seconds). Port choices, UNVERIFIED as game rules. A synthetic gap test
+    covers it.
+  - **The first write is making the template** (a lazy definition load counts). From there a `NotYet` is terminal,
+    with "stopped after partial writes: " at the start of its text and its kind and record kept.
+  - **World setup is typed.** A `NotYet` met while the gate's world is set up stays a `NotYet`, and other failures are
+    errors.
+  - **Installed, Off, under the machine run lock** (desktop): link 2 `notyet`, 3 of 4 steps passed, stop at
+    `fight_area`. The package-read cylinder, the floor and the grounded reach pass on the installed Sanctuary. The
+    spawn stops at decision 2026-11-19-44's inherited-component `NotYet` as before, now with the partial-writes
+    prefix. On main 0235937: 0 ok, 12 notyet, 2 error. Rows 6 and 7 stop at `make` on an unbound native of
+    main's pickup work, not this branch.
