@@ -44,8 +44,9 @@ Otherwise the requested location is used as it is. The flags are read from the t
     per-class engine method, not read here.
 - **`bCollideComplex`** on the template chooses complex (per-polygon) collision for the first box test.
 - **The requested location.** The search may move it in place; the moved location is where the actor is made.
-- Nothing about other actors: the search tests world geometry only. Other actors are the encroachment check's
-  business (section 5).
+- **What the search tests** (section 7 has the class rules): the level's BSP and world-geometry actors in every query,
+  and, in the sweeps only, movers (`InterpActor`, `KActor`) too, with or without `bWorldGeometry`. Pawns and other
+  actors are never tested. Encroaching on other actors is the encroachment check's business (section 5).
 
 ## 3. The search, step by step
 
@@ -148,7 +149,8 @@ default object.
 7. The search fails: the spawn returns None, nothing made.
 
 **The encroachment check (after `PreBeginPlay`)**, one answer per case. These steps run after the actor is made, so
-any `NotYet` here is terminal ("stopped after partial writes", its kind kept):
+any `NotYet` here is terminal ("stopped after partial writes", its kind kept). **Off rolls nothing back:** the made
+actor, its `PreBeginPlay` effects and every other live-actor write stay as they are when the `NotYet` is returned:
 1. Before play began: not run (the record's step 6 onwards is skipped).
 2. **`PreBeginPlay` destroyed the actor:** the spawn returns None. This early return comes first, before any check.
 3. `req.no_collision_fail` false, play begun, the actor alive:
@@ -175,9 +177,21 @@ any `NotYet` here is terminal ("stopped after partial writes", its kind kept):
 **The boundary.** `ow-world` would declare a small collision service as a VM service: a trait and its registration, with no
 `ow-assets` or `ow-host` dependency. A host registers an implementation of it. The spawn asks it three kinds of query,
 each answered **Clear**, **Hit**, or **Unsupported**:
-- a box test: an extent, a point, and the collision mode (template or simple);
-- a box sweep: an extent, a start and an end; a hit carries its location, normal and fraction;
-- a point sweep: a start and an end.
+- **a box test:** an extent, a point, and the effective collision mode, passed explicitly as `complex`: true only for
+  a template-mode test of a `bCollideComplex` template (flag 131072), false for every simple-mode test and for a
+  template-mode test of any other template. An extent of (0, 0, 0) is a zero-extent test (below);
+- **a box sweep:** an extent, a start and an end; a Hit carries its location, normal and fraction;
+- **a point sweep:** a start and an end, the same Hit.
+
+**Which blocking flag a primitive needs** (read in the box walker and the sweep walker):
+- a box test whose extent is not all zero, and a box sweep: `BlockNonZeroExtent`;
+- a box test whose extent is (0, 0, 0) (the first test of a zero-extent template, section 3 step 1), and a point
+  sweep: `BlockZeroExtent`.
+
+**Complex collision: missing in the game versus missing in the service.**
+- A primitive that has **no** per-polygon collision of its own is tested with its simple collision even when
+  `complex` is true. That is the game's answer, not a gap.
+- A primitive that **has** per-polygon collision the service does not hold, in a `complex` test: Unsupported.
 
 **Availability is per query, and covers the whole query.** An answer needs three things for the whole region the
 query touches:
@@ -235,37 +249,63 @@ world's box and sweep routines, the collision hash's walkers, and the per-actor 
 4. **The primitive's own test** of the query (box or line) runs, with bit 131072 asking for complex (per-polygon)
    collision where the primitive has it.
 
-**The spawn's queries pass no source actor.** So:
-- **The box tests (8902, bits 2, 4, 64, 128, 512 and 8192):**
-  - they test the level's BSP and world-geometry actors (`bWorldGeometry`) through their primitives with
-    `BlockNonZeroExtent`;
-  - movers are rejected (bit 64 with no source actor);
-  - pawns, volumes and other actors are not selected;
-  - the first hit decides.
-  - In template mode for a `bCollideComplex` template, those primitives use their complex collision.
-- **The sweeps (8326, bits 2, 4, 128 and 8192, with 1024 added):**
-  - they test the level's BSP, world-geometry actors, and movers (`InterpActor`, `KActor`) with no blocking
-    narrowing;
-  - the primitives must have `BlockNonZeroExtent` for a box sweep, or `BlockZeroExtent` for a point sweep;
-  - pawns, volumes and other actors are not selected.
-  - Simple collision always: no sweep carries bit 131072.
+**The spawn's queries pass no source actor.** Applied to the class rules above (step 3), for a candidate primitive
+that blocks the query's kind:
+
+| Owner actor | Box tests (8902: bits 2, 4, 64, 128, 512, 8192) | Sweeps (8326: bits 2, 4, 128, 8192; 1024 added) |
+|---|---|---|
+| `Actor` rule (`Actor`, `StaticMeshActor`, `Brush`, `Terrain`) with `bWorldGeometry` | tested (bit 128) | tested (bit 128) |
+| `Actor` rule without `bWorldGeometry` | not tested (needs bit 16) | not tested (needs bit 16) |
+| `Volume` with `bPawnsOnly` | not tested (no source actor) | not tested (no source actor) |
+| `Volume` without `bPawnsOnly`, with `bWorldGeometry` | tested (bit 128) | tested (bit 128) |
+| `Volume` without either | not tested (needs bit 8) | not tested (needs bit 8) |
+| `InterpActor`, `KActor`, with or without `bWorldGeometry` | not tested (bit 64 narrowing, no source actor) | tested (bit 2, no narrowing) |
+| `Pawn` | not tested (needs bit 1, or bit 16 with `bStationary`) | not tested (same) |
+
+- The mover filters have no bit 128 shortcut, so a mover with `bWorldGeometry` follows the mover row.
+- **Classes whose filter was not read** (`DynamicSMActor`, `Projectile`, `Vehicle`, `WorldInfo` and the game's own
+  classes, among others): the Off rule takes the nearest read ancestor's row (`Pawn`, `Volume`, `InterpActor` or
+  `KActor`, else `Actor`). UNVERIFIED: a class of these may override the filter.
+- **Box tests:** the BSP first (bit 4), then the actors; with bit 512 the first Hit decides, and the test answers Hit
+  or Clear only (no hit is chosen).
+- **Sweeps:** simple collision always (no bit 131072). The winning hit is chosen as below.
+
+**Which hit a sweep returns** (read in the multi-hit routine and the actor hash's single-result step):
+1. **The BSP** is swept first (bit 4). Bit 512 is not set, so a BSP hit does not end the query.
+2. **The actors** are walked only up to the BSP hit plus 5 units along the sweep (the whole sweep with no BSP hit).
+   Their fractions are then scaled back to the whole sweep.
+3. **Among the actors**, bit 1024 keeps the hit with the smallest fraction; on an exact tie, the first one met in the
+   hash's walk (that order is not read).
+4. **The BSP hit and the actor hit** are sorted by a comparator that was not read, and the first is the result. The
+   Off rule takes it as the smaller fraction (UNVERIFIED).
+5. **Exact ties** (two or more hits at the same smallest fraction, from the BSP and an actor, or from two actors): the
+   order is not read.
+   - **Off answer:** when the tied hits have the same location and normal, that hit.
+   - Otherwise **Unsupported**, because the downward sweep's normal (section 3, step 3.3) would depend on the unread
+     order.
+
+**The Off policy for the unread points, one answer each (UNVERIFIED):**
+- **The skip flag** (bit 10 of a primitive's collision flag word, unresolved): a query with a candidate primitive
+  that has it set is **Unsupported**. A candidate is one that blocks the query's kind and whose owner is tested by
+  the table above. Section 6 turns that into a `NotYet` of kind `NotRead`.
+- **The further per-component test** (not read): taken as passing for every candidate.
+- **The terrain bit** (8192): it selects no actor by itself in the filters read. Off ignores any terrain-specific
+  effect it may have beyond entering the actor hash: terrain is tested by its actor's row (the `Actor` rule with
+  `bWorldGeometry`). A service that does not hold a level's terrain geometry over the region answers Unsupported
+  under the coverage rule.
 
 **What a headless collision service must answer for each query** (the boundary above):
-- **A box test**, simple or template mode: Blocked or Clear against **the level's BSP and the world-geometry actors'
-  blocking-box primitives**, over the whole box. In template mode for a `bCollideComplex` template, against their
-  per-polygon collision.
-- **A box sweep:** the first hit against the BSP, the world-geometry actors' and the movers' blocking-box primitives,
-  over the whole swept volume. A hit carries its location, normal and fraction.
-- **A point sweep:** the same, against blocking-zero-extent primitives.
-- **Unsupported** for any part of a query it cannot cover:
+- **A box test:** Hit or Clear against the BSP and the primitives the table tests, over the whole box, with the
+  blocking flag for its extent and the `complex` mode it is given.
+- **A box sweep:** the hit chosen as above, against the BSP and the primitives the table tests (movers included), over
+  the whole swept volume. A Hit carries its location, normal and fraction.
+- **A point sweep:** the same, against `BlockZeroExtent` primitives.
+- **Unsupported**, for any part of a query it cannot cover:
   - BSP it does not hold;
   - a mover it does not track;
-  - per-polygon collision it lacks for a template-mode test.
-- **Port's Off choice, UNVERIFIED:** the two unread component conditions (the skip flag, and the further
-  per-component test) are taken as not excluding anything. This holds until they are read; a stricter implementer
-  may answer a `NotYet` of kind `NotRead` for any primitive that has the skip flag set.
-- **The terrain bit** (8192) selects no actor by itself in the filters read. Terrain is tested as world geometry when
-  its actor has `bWorldGeometry`.
+  - per-polygon collision it lacks for a primitive that has it, in a `complex` test;
+  - a candidate with the skip flag;
+  - an exact tie with different locations or normals.
 
 **The host's movement collision** (lane H4, `crates/ow-host/src/movement/collide.rs`, decision 2026-11-16-52) is a
 world of convex brushes with a swept cylinder or capsule trace that reports a start inside solid.
