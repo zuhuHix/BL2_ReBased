@@ -23,7 +23,9 @@
 //! `ParityMode::Reference` the C++ `UNIMPLEMENTED <key> (outside the mission bridge binding)` line and the zero result):
 //! - the tracker: `ActivateMission`, `CompleteMission`, `PlayTurnIn`, `GetMissionStatus`, `CanStartMission`,
 //!   `CanEndMission`, `GetCompletedBranch`, `IsDataValid`, `ValidateData`, `IsMissionObjectiveActive`,
-//!   `IsMissionObjectiveComplete`, `IsObjectiveSetActive`, `UpdateObjective`, `RegisterMissionObserver`;
+//!   `IsMissionObjectiveComplete`, `IsObjectiveSetActive`, `UpdateObjective`, `RegisterMissionObserver`, and outside
+//!   `ParityMode::Reference` `GetObjectivesProgress` (NATIVE_SLICE_OFF_STOPS.md; the C++ stubs it, decision
+//!   2026-11-19-05);
 //! - the controller: `NativeGetMissionIndex`, `GetCurrentPlaythrough`, `ExpEarn`, `GetMaxExpLevel`,
 //!   `GetExpPointsRequiredForLevel`, `GetHUDMovie` (None), `UpdateLcdMissionStatus` and `PlayUIAkEvent`
 //!   (presentation: no-ops), `PlayerController.IsPrimaryPlayer`;
@@ -742,6 +744,11 @@ impl MissionScript {
         ];
         for (path, body) in OPTIONAL {
             bind_optional(vm, path, self.native(path, body))?;
+        }
+        // Off only: the C++ stubs it, and Reference keeps that stub (R3; decision 2026-11-19-05).
+        if vm.parity != ParityMode::Reference {
+            let path = "WillowGame.MissionTracker.GetObjectivesProgress";
+            bind_optional(vm, path, self.native(path, MissionScript::n_objectives_progress))?;
         }
         bind(
             vm,
@@ -1698,6 +1705,42 @@ impl MissionScript {
             let bit = if c.has(1) { arg_int(c, 1)? } else { 0 };
             self.inner.mission.update_objective_by_path(c.vm, &path, bit)?;
         }
+        Ok(Value::None)
+    }
+
+    // GetObjectivesProgress(Mission, out Progress, Flag), Off mode only (NATIVE_SLICE_OFF_STOPS.md, UNVERIFIED; the C++
+    // stubs it, so Reference keeps the stub). No record (another mission): the array is left as passed. Otherwise it
+    // becomes the record's progress, one value per entry of the mission's `ObjectiveDefs`. With the flag set, an
+    // all-or-nothing objective that fails the objective's "is complete" test reads 0; that test is not read, so a
+    // `bAllOrNothing` entry that is not already 0 is `NotYet { NotRead }` (an entry that is 0 stays 0 either way).
+    fn n_objectives_progress(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
+        if !self.on(c, self.inner.o.tracker) {
+            return outside_binding(c);
+        }
+        if !self.is_mission(c.vm, &c.arg(0)?.clone())? {
+            return Ok(Value::None);
+        }
+        let flag = c.arg(2)?.truth(&c.vm.space.names);
+        let def = self.inner.mission.definition();
+        let defs = prop(&c.vm.space, def, "ObjectiveDefs")?;
+        let defs: Vec<Value> = defs.as_ref().and_then(|d| d.elements()).map(<[Value]>::to_vec).unwrap_or_default();
+        let mut progress = Vec::with_capacity(defs.len());
+        for d in &defs {
+            let value = self.inner.mission.stored_progress(&path_of(c.vm, d)?);
+            if flag && value != 0 && matches!(d, Value::Object(Some(_))) {
+                let objective = self.load_ref(c.vm, d)?;
+                if prop(&c.vm.space, objective, "bAllOrNothing")?.is_some_and(|v| v.truth(&c.vm.space.names)) {
+                    return Err(NotYet::not_read(
+                        "MissionTracker.GetObjectivesProgress with its flag set, on an all-or-nothing objective with \
+                         progress (the objective's \"is complete\" test)",
+                        "NATIVE_SLICE_OFF_STOPS.md",
+                    )
+                    .into());
+                }
+            }
+            progress.push(Value::Int(value));
+        }
+        c.set_out(1, Value::Array(Rc::new(progress)))?;
         Ok(Value::None)
     }
 

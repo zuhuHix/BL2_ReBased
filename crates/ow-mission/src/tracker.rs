@@ -878,6 +878,18 @@ impl MissionSystem {
         progress_of(self.data(), &self.inner.state.borrow(), name)
     }
 
+    /// The record's stored progress of the objective at `path`, as the record keeps it: the count, or for a bit-mask
+    /// objective the mask itself (NATIVE_MISSION_DISPATCH.md B1). 0 when it has no progress yet or `path` is not one of
+    /// the mission's objectives (an objective of `ObjectiveDefs` in no set is never updated). `GetObjectivesProgress`
+    /// copies these.
+    pub fn stored_progress(&self, path: &str) -> i32 {
+        let d = self.data();
+        let Some(name) = d.objectives.iter().find(|(_, o)| o.path == path).map(|(n, _)| n) else {
+            return 0;
+        };
+        self.inner.state.borrow().progress.get(name).copied().unwrap_or(0)
+    }
+
     pub fn kickoff_pending(&self) -> bool {
         self.inner.state.borrow().kickoff_pending
     }
