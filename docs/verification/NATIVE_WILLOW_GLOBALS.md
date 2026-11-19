@@ -113,7 +113,8 @@ skip `AddPickup` silently. That is why section 6 does not answer None for either
   - 2 picks `LongLivedDropLifeSpan`;
   - 3 and 4 give 0.
   The script then sets the actor's `LifeSpan` to that value. When it is above 0, it sets a one-shot timer named
-  `ShrinkPickupBeforeDestruction`, `PickupShrinkDuration` before the end.
+  `ShrinkPickupBeforeDestruction` with the delay `LifeSpan - PickupShrinkDuration` (section 6.3, step 4 of the
+  sequence; a delay of 0 or below is UNVERIFIED).
 
 ## 6. For an implementer: the Off answers, step by step
 
@@ -184,13 +185,20 @@ been written yet.
    not fill it, and Off does not run that load. Another class: the same *not read*, because the game would reload in
    that case too.
 4. **The schemas the route reads,** on the declared classes:
-   - `PickupList` on the globals' class: declared, and a dynamic array of object references. Otherwise: *data error*;
+   - `PickupList` on the globals' class: declared, and a dynamic array whose element is an object reference to
+     `WillowGame.WillowPickup` (section 3; the installed declaration's element type). Any other element type,
+     another object class included: *data error*;
    - `RarityLevelColors` on the definition's class: declared, and a dynamic array of the `RarityLevelColor` struct.
      That struct must declare `MinLevel` and `MaxLevel` as ints and `DropLifeSpanType` as a byte. Otherwise: *data
      error*;
    - `ThePopulationMaster` on the globals' class: declared, and an object reference. Otherwise: *data error*.
    - `TheGlobalsDefinition` on the globals' class: declared, through the parent chain (section 6.0), and an object
-     reference. Otherwise: *data error*. Check this schema before step 3 reads the field.
+     reference to `GearboxFramework.GearboxGlobalsDefinition`, its declared type. Any other type, another object
+     class included: *data error*.
+
+   Every schema here is checked before any field value is read, step 3's included (steps 1 and 2 read only the
+   world's slot and the instance's class). A declaration of the wrong shape or reference target is a `VmError::Script`
+   before the run's first write, so it cannot pass the preflight and then fail after writes.
 
 ### 6.3 The natives, at call time
 
@@ -234,13 +242,16 @@ Only what cannot be known before the run's first write is checked here.
 2. `Actor.LocalPlayerControllers`, bound in the port; no HUD, so nothing is called;
 3. the pickup's `InitializeFromInventory`, with `GetManufacturer` and `GetInventoryDefinition` (both bound). The
    `MissionTracker` reads happen only for a mission item;
-4. `InitializeDropLifespan`:
-   - `GetGlobalsDefinition` and `GetDropLifeSpanType` give the kind;
-   - the span is the definition's `PickupLifeSpan` when that is above 0, otherwise the kind's (section 5);
+4. `InitializeDropLifespan` (script):
+   - the kind: a mission item (`bIsMissionItem`) takes kind 3 and calls neither getter; any other pickup takes
+     `GetGlobalsDefinition` then `GetDropLifeSpanType` of its `InventoryRarityLevel`;
+   - the span: the inventory definition's `PickupLifeSpan` when the pickup is not a mission item and that value is
+     above 0; otherwise the kind's (section 5);
    - the actor's `LifeSpan` is set to the span;
-   - **only when the span is above 0**, a one-shot timer `ShrinkPickupBeforeDestruction` is set to fire
-     `PickupShrinkDuration` before the span ends, so after the span minus `PickupShrinkDuration`. With a span of 0
-     there is no timer;
+   - **only when `LifeSpan` is above 0** (strictly), `SetTimer` is called with the delay `LifeSpan -
+     PickupShrinkDuration`, not looping, for `ShrinkPickupBeforeDestruction`. With a span of 0 there is no timer.
+     What a delay of 0 or below does (a span no longer than `PickupShrinkDuration`) is the timer native's rule. It
+     is **UNVERIFIED** here: this note does not say it is clamped, cancelled or fired at once;
 5. `InventoryAssociated` (the mesh and physics set-up, not read here);
 6. `SetPickupability`, with `TryToSetInteractParticles` reading `GlobalsDefinition.PartPickup`.
 
@@ -268,8 +279,15 @@ What follows in `touch` and `key` is NATIVE_PICKUP.md's.
     run that early), read `TheGlobalsDefinition`. Expect None, or the definition if an earlier engine step loaded it.
   - Hook `GetGlobalsDefinition`. On its first call, read `TheGlobalsDefinition` and the challenge list's indices
     before and after.
+  - **Pass condition for the first call**, all three required:
+    1. `TheGlobalsDefinition` is None when the call starts;
+    2. after the first call that returns, `TheGlobalsDefinition` holds the loaded object, and the call returned that
+       same object (identity);
+    3. the challenge writes of section 4, step 3, are seen on that call and not before it. This part can be judged
+       only once the written fields are named (open question 2).
   - Call it again, and expect the same object and no further change to the indices.
-  - If the hook cannot run before the first load, the cold capture is an open verification gap.
+  - If the hook cannot run before the first load, or the challenge fields cannot be named and observed, the cold
+    capture is an open verification gap, and the challenge numbering stays **UNVERIFIED**.
 - **The pickup list on add.** Read `PickupList` before and after dropping a gun: expect one more entry, at the end,
   that is the new pickup. Call `AddPickup` twice on one scratch pickup: expect two entries. Call `AddPickup(None)`:
   expect one more entry, holding None.

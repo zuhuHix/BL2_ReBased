@@ -52,3 +52,8 @@ challenge list; whether the headless world needs a population master; who listen
    typed `GearboxGlobalsDefinition`, declared on `GearboxFramework.GearboxGlobals` and inherited by `WillowGlobals`,
    read from the installed export table. `DefaultGlobalsDefinitionName` is only the first load's configured name. Off
    writes the definition into the inherited field at world set-up, and the preflight checks its schema (note 6.0).
+7. Review r2 of #469: the preflight requires the declared reference targets (`PickupList` of `WillowPickup`,
+   `TheGlobalsDefinition` of `GearboxGlobalsDefinition`) before any value is read; the cold-load check has a pass
+   condition (empty, then stored and returned as one object, then the challenge writes once named, else UNVERIFIED);
+   the timer delay is `LifeSpan - PickupShrinkDuration`, a delay of 0 or below UNVERIFIED; a mission item takes kind 3
+   without the getters.
