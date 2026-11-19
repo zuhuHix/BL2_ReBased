@@ -37,3 +37,9 @@ AI-assisted (Claude Code, Opus 5.5). Lane IMPL-AUTO-STATE, implementer. The deci
 
 Two earlier tests are replaced, since their expectations (no state for a clear class bit with no auto state; a refusal
 for a flagged state) are the old approximation.
+
+**The installed Off `--slice-gate`** (strict, under the machine lock, pc-hummer, two runs):
+- on this branch's head: ok 1, NotYet 4, error 9 of 14;
+- on a throwaway local merge with #537 at 3d25b4a (deleted after): the same rows, with the same stops.
+- No row reaches `GotoState('Auto')`: the slice gate's links do not drive the map route's bring-up, so this rule is
+  not exercised there. It is proven by the synthetic tests only.
