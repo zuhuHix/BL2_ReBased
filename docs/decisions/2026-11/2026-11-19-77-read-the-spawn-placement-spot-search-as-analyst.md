@@ -34,5 +34,23 @@ AI-assisted (Claude Code, Opus 5.5). Lane ANALYST-SPAWN-PLACEMENT, analyst only 
 - The cross-reference: H4's host collision world (`crates/ow-host/src/movement/collide.rs`) as the later source of the
   tests, with the shape and geometry differences named.
 
+**Review r1 of #459.**
+- **The search steps, made exact:** extents are half sizes, the slice's `1` is a Z half extent, and each test's
+  collision mode is named (the first, corner and retest use the template's mode; the slice uses simple collision).
+- **The floor:** a floor miss with the lowered box blocked fails (there is no normal to move along), and the fraction
+  ≤ 0.5 case takes no upward sweep.
+- **Corners and the final sweep:** the corner order, with the first two free counting; the final sweep includes the
+  slice correction and runs from the moved location to a point beyond the requested one (corrected from the first
+  draft).
+- **Off answers:**
+  - the template alone decides the flags, which changes the port's either-flag pre-check;
+  - the precedence is no service, then no cylinder, then the first test;
+  - the encroachment check gets one answer per case, decided on the live actor after `PreBeginPlay` and after the
+    destroyed check, replacing the eager pre-allocation refusal;
+  - relocation only after play began, on the live flag.
+- **The collision service boundary:** an `ow-world` trait with Clear, Hit or Unsupported per query and per covered
+  geometry. H4 cannot answer box queries yet.
+- The live checks now tell the requested cases apart.
+
 **Open (in the note).** The encroachment check's internals, the relocation step, the bounding-cylinder rule, the trace
 flag sets, and the net-mode comparison.
