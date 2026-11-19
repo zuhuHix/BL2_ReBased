@@ -195,6 +195,12 @@ fn run_all(root: PathBuf, mode: ParityMode) -> String {
             return out;
         }
     };
+    // The allegiance natives only (NATIVE_COMBAT_GROUNDWORK.md section 6), not the combat pack's stand-ins: the cast's
+    // `GetPlayerAnimation` asks `Pawn.IsFriendly` on its target path (review of #437).
+    if let Err(e) = ow_combat::hit::register_allegiance(&mut w.vm) {
+        let _ = writeln!(out, "allegiance: {e}");
+        return out;
+    }
     let wi = match new_of(&mut w.vm, "Engine.WorldInfo") {
         Ok(wi) => wi,
         Err(e) => {

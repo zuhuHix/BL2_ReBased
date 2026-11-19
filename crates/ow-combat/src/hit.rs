@@ -618,26 +618,57 @@ pub fn pipeline_counts(vm: &Vm) -> Result<(usize, usize), VmError> {
 
 /// The presentation the hit chain reaches that needs no state in the VM (no animation system, no HUD, no impact
 /// effects, no AI targeting): bound no-ops, as the C++ binds them.
-pub const PRESENTATION_NO_OPS: [&str; 9] = [
+pub const PRESENTATION_NO_OPS: [&str; 7] = [
     "WillowGame.WillowPawn.SetupImpactsForPlayHit",
     "WillowGame.WillowPawn.UpdatePlayHitEffectCounters",
     "WillowGame.WillowPawn.UpdatePlayHitInfo",
     "WillowGame.WillowPawn.StartCringe",
     "WillowGame.WillowPawn.InterpRotation",
-    "WillowGame.SpecialMoveComponent.Play",
-    "GearboxFramework.SpecialMoveComponent.Play",
     "WillowGame.WillowPlayerController.NotifyInstinctSkillAction",
     "WillowGame.WillowPlayerController.NotifyShotStatus",
 ];
 
 /// The special-move queries the chain asks: the VM plays no special move, so none is playing (true of this world,
 /// not a game rule).
-pub const NOTHING_PLAYING: [&str; 4] = [
+pub const NOTHING_PLAYING: [&str; 2] = [
     "WillowGame.SpecialMoveComponent.IsPlayingAny",
     "GearboxFramework.SpecialMoveComponent.IsPlayingAny",
-    "WillowGame.SpecialMoveComponent.IsPlayingClass",
-    "GearboxFramework.SpecialMoveComponent.IsPlayingClass",
 ];
+
+/// The C++ stand-ins for `SpecialMoveComponent.Play` (a no-op) and `IsPlayingClass` (false), bound in
+/// `ParityMode::Reference` only (R3; review of #437). In Off, `ow-skills`' `action_skill::special_move` binds both from
+/// NATIVE_SPECIAL_MOVE_PLAY.md, and a world without that pack leaves them unbound, so the stub policy answers.
+pub const SPECIAL_MOVE_STAND_INS: [(&str, bool); 4] = [
+    ("WillowGame.SpecialMoveComponent.Play", false),
+    ("GearboxFramework.SpecialMoveComponent.Play", false),
+    ("WillowGame.SpecialMoveComponent.IsPlayingClass", true),
+    ("GearboxFramework.SpecialMoveComponent.IsPlayingClass", true),
+];
+
+/// The allegiance natives (NATIVE_COMBAT_GROUNDWORK.md section 6), in both modes: `GetOpinion` is the four-step rule
+/// of [`opinion`]; `IsEnemy` / `IsNeutral` / `IsFriendly` compare it with the opinion enum (Enemy 0, Neutral 1,
+/// Friendly 2). The WillowPawn minion layer is not modelled. Bound by the hit pack, and on their own by worlds that
+/// need only these (the Phaselock cast's `GetPlayerAnimation`; review of #437), by path with the first binding of a
+/// key winning. UNVERIFIED.
+pub fn register_allegiance(vm: &mut Vm) -> Result<(), VmError> {
+    bind_fn(vm, "Engine.Pawn.GetOpinion", |c| {
+        let me = this(c, "GetOpinion")?;
+        let o = opinion(c.vm, me, arg_object(c, 0)?)?;
+        // The opinion enum holds 0..=2 here; a byte keeps the low 8 bits as the C++ makeByte does.
+        Ok(Value::Byte(access::low_u8(o)))
+    })?;
+    for (path, wanted) in [
+        ("Engine.Pawn.IsEnemy", 0),
+        ("Engine.Pawn.IsNeutral", 1),
+        ("Engine.Pawn.IsFriendly", 2),
+    ] {
+        bind_fn(vm, path, move |c| {
+            let me = this(c, "the opinion tests")?;
+            Ok(Value::Bool(opinion(c.vm, me, arg_object(c, 0)?)? == wanted))
+        })?;
+    }
+    Ok(())
+}
 
 fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
     // Actor.GetDamagePipeline(InDamageTypeDef, InImpactDef, inCanHitFriendly, InHitObject) and the three small ones
@@ -785,24 +816,7 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
         Ok(Value::None)
     })?;
 
-    // Allegiance (section 6): GetOpinion is the four-step rule; IsEnemy / IsNeutral / IsFriendly compare it with the
-    // opinion enum (Enemy 0, Neutral 1, Friendly 2). The WillowPawn minion layer is not modelled.
-    bind_fn(vm, "Engine.Pawn.GetOpinion", |c| {
-        let me = this(c, "GetOpinion")?;
-        let o = opinion(c.vm, me, arg_object(c, 0)?)?;
-        // The opinion enum holds 0..=2 here; a byte keeps the low 8 bits as the C++ makeByte does.
-        Ok(Value::Byte(access::low_u8(o)))
-    })?;
-    for (path, wanted) in [
-        ("Engine.Pawn.IsEnemy", 0),
-        ("Engine.Pawn.IsNeutral", 1),
-        ("Engine.Pawn.IsFriendly", 2),
-    ] {
-        bind_fn(vm, path, move |c| {
-            let me = this(c, "the opinion tests")?;
-            Ok(Value::Bool(opinion(c.vm, me, arg_object(c, 0)?)? == wanted))
-        })?;
-    }
+    register_allegiance(vm)?;
     // WillowPawn.GetHitRegionForTakenDamage(Instigator, HitInfo): the region lookup of AdjustDamage's stage 6.
     bind_fn(
         vm,
@@ -822,6 +836,15 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
     }
     for path in NOTHING_PLAYING {
         bind_fn(vm, path, |_| Ok(Value::Bool(false)))?;
+    }
+    if vm.parity == ParityMode::Reference {
+        for (path, query) in SPECIAL_MOVE_STAND_INS {
+            if query {
+                bind_fn(vm, path, |_| Ok(Value::Bool(false)))?;
+            } else {
+                bind_fn(vm, path, |_| Ok(Value::None))?;
+            }
+        }
     }
     // Actor.SetPhysics(newPhysics): the physics mode is the actor's Physics byte.
     bind_fn(vm, "Engine.Actor.SetPhysics", |c| {
