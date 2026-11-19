@@ -32,6 +32,8 @@ enum Schema {
     PlainPrefixField,
     /// The weapon declares no `ExpLevel`.
     NoExpLevel,
+    /// The definition data struct's own name only ends with `WeaponDefinitionData` (review r1 of #506, item 4).
+    SuffixStruct,
 }
 
 struct Fx {
@@ -97,7 +99,8 @@ impl Fx {
         let prefix = if schema == Schema::PlainPrefixField { obj.clone() } else { np.clone() };
         fields.push(decl(&mut space, "PrefixPartDefinition", prefix));
         fields.push(decl(&mut space, "TitlePartDefinition", np));
-        let data = space.classes.define_struct("Test.WeaponDefinitionData", None, fields).unwrap();
+        let data_path = if schema == Schema::SuffixStruct { "Test.FooWeaponDefinitionData" } else { "Test.WeaponDefinitionData" };
+        let data = space.classes.define_struct(data_path, None, fields).unwrap();
         let actor = class(&mut space, "Engine.Actor", object, vec![]);
         let engine_weapon = class(&mut space, "Engine.Weapon", actor, vec![]);
         let mut decls = vec![decl(&mut space, "DefinitionData", PropKind::Struct(data))];
@@ -328,7 +331,7 @@ fn a_weapon_with_no_type_writes_nothing() {
 }
 
 #[test]
-fn an_expression_not_yet_is_prefixed_and_writes_nothing() {
+fn an_expression_not_yet_is_returned_unprefixed_and_writes_nothing() {
     let mut x = Fx::new(Schema::Good);
     let unread = x.unread;
     let refused = x.above(Some(unread), 0.0);
@@ -338,21 +341,21 @@ fn an_expression_not_yet_is_prefixed_and_writes_nothing() {
     let old = x.part_name(1, 100, 1.0, vec![]);
     x.data(Some(t), &[], (Some(old), Some(old)));
     let n = not_yet(x.run().unwrap_err());
-    assert!(n.what.starts_with("stopped after partial writes: "), "{}", n.what);
-    assert_eq!(n.what.matches(PARTIAL_WRITES).count(), 1, "prefixed once");
+    // The native has written nothing: the caller layer that wrote adds the mark (review r1 of #506).
+    assert!(!n.what.contains("partial writes"), "{}", n.what);
     assert_eq!(x.picks(), (Some(old), Some(old)), "the prefix pick computed before the refusal is not written");
 }
 
 // ---- CacheWeaponCard and the preflight -----------------------------------------------------------------------
 
 #[test]
-fn cache_weapon_card_at_call_time_is_a_prefixed_not_read() {
+fn cache_weapon_card_at_call_time_is_an_unprefixed_not_read() {
     let mut x = Fx::new(Schema::Good);
     let w = x.weapon;
     let before = read_prop(&x.vm, w, "DefinitionData");
     let n = not_yet(cache_weapon_card(&mut x.vm, w).unwrap_err());
     assert_eq!(n.missing, Missing::NotRead);
-    assert_eq!(n.what, format!("{PARTIAL_WRITES}: {CACHE_WEAPON_CARD_NOT_READ}"));
+    assert_eq!(n.what, CACHE_WEAPON_CARD_NOT_READ, "no prefix: the native writes nothing (review r1 of #506)");
     assert_eq!(n.record, RECORD);
     assert_eq!(read_prop(&x.vm, w, "DefinitionData"), before);
 }
@@ -381,6 +384,7 @@ fn each_schema_failure_is_a_script_error_naming_the_field() {
         (Schema::PlainTitleList, "TitleList"),
         (Schema::PlainPrefixField, "PrefixPartDefinition"),
         (Schema::NoExpLevel, "ExpLevel"),
+        (Schema::SuffixStruct, "FooWeaponDefinitionData"),
     ] {
         let mut x = Fx::new(schema);
         match name_part_schema(&mut x.vm).unwrap_err() {
@@ -416,7 +420,7 @@ fn register_binds_both_natives_by_their_own_keys_in_off() {
     x.vm.call(choose, Some(w), vec![]).unwrap();
     assert_eq!(x.picks(), (Some(pick), None));
     let n = not_yet(x.vm.call(card, Some(w), vec![]).unwrap_err());
-    assert!(n.what.starts_with(PARTIAL_WRITES), "{}", n.what);
+    assert_eq!(n.what, CACHE_WEAPON_CARD_NOT_READ);
 }
 
 #[test]
@@ -431,3 +435,90 @@ fn reference_binds_neither_native() {
     }
 }
 
+
+// ---- Item 3 of review r1 of #506: untagged fields read through the class defaults -------------------------------
+
+mod store {
+    //! An invented `WillowGame.upk` in a synthetic store (AGENTS.md rule 9): `Default__WeaponNamePartDefinition` tags
+    //! `MinExpLevelRequirement` 1, `MaxExpLevelRequirement` 100 and `Priority` 1, and the name part `ToyName` tags
+    //! none of them. Loaded, it qualifies at level 10.
+
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use ow_attr::AttributeSystem;
+    use ow_core::{ObjectPath, ParityMode};
+    use ow_defs::DefStore;
+    use ow_defs::identity::IdentityPolicy;
+    use ow_object::heap::{ObjectSpace, Origin};
+    use ow_object::value::Value;
+    use ow_package::testkit::ints;
+    use ow_package::testkit::reflect::toy_struct;
+    use ow_package::testkit::script::ScriptToy;
+    use ow_vm::api::Vm;
+
+    use super::super::{NAME_PART_CLASS, qualifies};
+
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+
+    fn package() -> Vec<u8> {
+        let mut t = ScriptToy::with_imports(&[
+            "Class",
+            "ScriptStruct",
+            "IntProperty",
+            "FloatProperty",
+            "ObjectProperty",
+            "ArrayProperty",
+            "StructProperty",
+        ]);
+        let object = t.class("Object", 0);
+        let name_part = t.class("WeaponNamePartDefinition", object);
+        t.prop("Int", name_part, "MinExpLevelRequirement", 0, 0);
+        t.prop("Int", name_part, "MaxExpLevelRequirement", 0, 0);
+        t.prop("Float", name_part, "Priority", 0, 0);
+        let expr = toy_struct(&mut t, name_part, "AttributeExpressionData", None);
+        t.prop("Object", expr, "AttributeOperand1", 0, object);
+        let inner = t.p.next_export();
+        t.prop("Array", name_part, "Expressions", 0, inner + 1);
+        t.prop("Struct", inner, "Expressions", 0, expr);
+        let mut d = ints(&[0]);
+        d.extend(t.p.int_tag("MinExpLevelRequirement", 1));
+        d.extend(t.p.int_tag("MaxExpLevelRequirement", 100));
+        d.extend(t.p.float_tag("Priority", 1.0));
+        d.extend_from_slice(&t.none);
+        t.p.add_export(name_part, "Default__WeaponNamePartDefinition", d);
+        let mut untagged = ints(&[0]);
+        untagged.extend_from_slice(&t.none);
+        t.p.add_export(name_part, "ToyName", untagged);
+        // A weapon-like owner for the expressions' context (no expressions here, so it is never read).
+        t.class("Owner", object);
+        t.p.build()
+    }
+
+    #[test]
+    fn an_untagged_name_part_takes_its_class_defaults_and_qualifies() {
+        let dir = std::env::temp_dir().join(format!(
+            "ow-inventory-name-parts-store-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bytes = package();
+        let defs =
+            DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+                .unwrap();
+        let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::standard().unwrap()), ParityMode::Off);
+        let path = ObjectPath::parse("WillowGame.ToyName").unwrap();
+        let entry = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+        let name_part = vm.find_class(NAME_PART_CLASS).unwrap();
+        assert_eq!(vm.space.heap.get(entry).unwrap().class, name_part);
+        let read = |vm: &Vm, n: &str| crate::equip::read_prop(vm, entry, n).unwrap();
+        assert_eq!(read(&vm, "MinExpLevelRequirement"), Value::Int(1), "from the class defaults, not 0");
+        assert_eq!(read(&vm, "MaxExpLevelRequirement"), Value::Int(100));
+        assert_eq!(read(&vm, "Priority"), Value::Float(1.0));
+        let owner_class = vm.find_class("WillowGame.Owner").unwrap();
+        let weapon = vm.space.alloc(owner_class, "Owner_0", None, Origin::Runtime).unwrap();
+        assert!(qualifies(&mut vm, weapon, 10, entry).unwrap(), "level 10 is inside 1 to 100 and Priority 1 is above 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

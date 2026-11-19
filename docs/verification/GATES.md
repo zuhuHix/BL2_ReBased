@@ -51,15 +51,17 @@ current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
 **IMPL-CACHE-WEAPON-CARD (2026-11-19, desktop, on main d72b96d):** AI-assisted (Claude Code, Claude Opus 5.5).
+**IMPL-CACHE-WEAPON-CARD r1 (2026-11-19, desktop, on main 7668d07):** AI-assisted (Claude Code, Claude Opus 5.5).
 `WillowWeapon.ChooseRandomNameParts` in full and `CacheWeaponCard`'s `NotRead` in Off (`ow-inventory`
 `equip::name_parts`), and link 8's preflight before the weapon is made. `cargo build --workspace -j 2` clean; `cargo
-test --workspace -j 2` 2,419 passed / 0 failed / 46 ignored (16 new in `equip::name_parts::tests`); clippy flags
-nothing in the changed files. Installed Off `--slice-gate` strict, under the machine run lock: 0 ok / 6 NotYet / 8
-errors. Link 8 `notyet`, 0 of 5 steps, stop `make` at the unprefixed `CacheWeaponCard` `NotRead`. The same build
-with the preflight call disabled reaches `init` and stops at the unbound
-`WillowInventory.ApplyInternalSlotEffectModifiers(bool,int,array)` (graded error, 1 of 5 steps; 0 / 5 / 9 overall); the other 13 rows are identical in the two runs and come from main. ctest and
+test --workspace -j 2` 2,453 passed / 0 failed / 46 ignored (15 new in `equip::name_parts::tests`); clippy flags
+nothing in the changed files. The natives return unprefixed `NotYet`s; link 8's driver marks phase errors after
+`make` (review r1). Installed Off `--slice-gate` strict, under the machine run lock: 0 ok / 6 NotYet / 8 errors. Link
+8 `notyet`, 0 of 5 steps, stop `make` at the unprefixed `CacheWeaponCard` `NotRead`. The same build with the preflight
+call disabled reaches `init` and stops at the call-time `CacheWeaponCard` `NotRead`, prefixed "stopped after partial
+writes" by the driver (1 of 5 steps); the other 13 rows are identical in the two runs and come from main. ctest and
 verify_packages not run (no C++ change). `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder); logs under
-ignored `local/p2/cwc/`.
+ignored `local/p2/cwc-r1/`.
 
 **LINK-1-NEXT-STOP (2026-11-19, pc-hummer, rebased onto fix/rust-init-player-skill-tree 07017c6d, #475 r1):**
 AI-assisted (Claude Code, Opus 5.5). The recorded resource pool idle-reset hooks are matched by their installed package

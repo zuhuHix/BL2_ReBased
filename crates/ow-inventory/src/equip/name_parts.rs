@@ -17,12 +17,14 @@
 //!     other field.
 //!   - Name parts are read as the definition store loads them: a field the package leaves untagged holds its archetype
 //!     or class default (`WeaponNamePartDefinition`'s defaults, the note's section 5.1).
-//!   - Any `NotYet` it returns (an expression's, or a lazy definition load's) carries the "stopped after partial
-//!     writes" prefix, its kind and record kept: the native runs inside `InitializeInternal`, which has written before
-//!     (the note's section 5), so whether a load counts as a write changes nothing here.
+//!   - Any `NotYet` it returns (an expression's, or a lazy definition load's) is returned as it is, **unprefixed**: the
+//!     native writes only at its very end, so no refusal comes after a write of its own. The "stopped after partial
+//!     writes" prefix is added by the caller layer that wrote (review r1 of #506, the hub's rule; the same as
+//!     `ApplyInternalSlotEffectModifiers`, #483): in `--slice-gate`'s link 8, the equip driver, whose `make` step
+//!     wrote before the init runs.
 //! - **`WillowWeapon.CacheWeaponCard()`** (sections 3 and 5.3): Off answers `NotYet { NotRead }` at entry, before the
 //!   globals definition is asked for, before the clear and before any slot flag changes ([`cache_weapon_card`]).
-//!   Called at its place in `InitializeInternal`, its text carries the partial-writes prefix.
+//!   It writes nothing, so its answer is unprefixed; the caller layer that wrote marks it (review r1 of #506).
 //! - **The preflight** of a driver that makes a weapon and runs its init ([`preflight`], section 5.1), before the
 //!   weapon is made: first the `CacheWeaponCard` refusal with **no** prefix (every init path reaches it and Off
 //!   answers `NotRead` whatever the data), then the name-part schema ([`name_part_schema`]), each failure a
@@ -60,9 +62,6 @@ pub const NAME_PART_CLASS: &str = "WillowGame.WeaponNamePartDefinition";
 /// While false, Off refuses the native and the preflight refuses it first.
 pub const CACHE_WEAPON_CARD_READ: bool = false;
 
-/// The mark of a refusal after committed writes (the hub's ruling, the text the other Off paths use).
-pub const PARTIAL_WRITES: &str = "stopped after partial writes";
-
 /// The text of `CacheWeaponCard`'s Off refusal (the note's section 5.3).
 pub const CACHE_WEAPON_CARD_NOT_READ: &str =
     "WillowWeapon.CacheWeaponCard: the card presentation lookup and the card attributes of the type and parts";
@@ -72,20 +71,9 @@ pub fn cache_weapon_card_refusal() -> VmError {
     NotYet::not_read(CACHE_WEAPON_CARD_NOT_READ, RECORD).into()
 }
 
-/// `e` met after writes: a `NotYet` gets [`PARTIAL_WRITES`] at the very start of its text (once), its kind and record
-/// kept; anything else is unchanged.
-pub fn after_writes(e: VmError) -> VmError {
-    match e {
-        VmError::NotYet(n) if !n.what.starts_with(PARTIAL_WRITES) => {
-            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
-        }
-        other => other,
-    }
-}
-
-/// `CacheWeaponCard` at call time in Off (module documentation): the refusal, prefixed, before anything of its own.
+/// `CacheWeaponCard` at call time in Off (module documentation): the refusal, unprefixed, before anything of its own.
 pub fn cache_weapon_card(_vm: &mut Vm, _weapon: ObjRef) -> Result<(), VmError> {
-    Err(after_writes(cache_weapon_card_refusal()))
+    Err(cache_weapon_card_refusal())
 }
 
 /// The preflight of a driver that makes a weapon and runs its init (module documentation), before the weapon is
@@ -118,7 +106,7 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
         .classes
         .struct_layout(ty)
         .ok_or_else(|| schema(format!("{WEAPON_CLASS}.DefinitionData's struct has no layout")))?;
-    if !layout.path().as_str().ends_with("WeaponDefinitionData") {
+    if !own_name_is(layout.path().as_str(), "WeaponDefinitionData") {
         return Err(schema(format!("{WEAPON_CLASS}.DefinitionData is a {}, not a WeaponDefinitionData", layout.path().as_str())));
     }
     let fields = std::iter::once("WeaponTypeDefinition")
@@ -162,7 +150,7 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
             "an int" => matches!(kind, PropKind::Int),
             "a float" => matches!(kind, PropKind::Float),
             _ => matches!(&kind, PropKind::Array(inner) if matches!(**inner, PropKind::Struct(s)
-                if vm.space.classes.struct_layout(s).is_some_and(|l| l.path().as_str().ends_with("AttributeExpressionData")))),
+                if vm.space.classes.struct_layout(s).is_some_and(|l| own_name_is(l.path().as_str(), "AttributeExpressionData")))),
         };
         if !ok {
             return Err(schema(format!("{NAME_PART_CLASS}.{name} is {kind:?}, not {want}")));
@@ -172,6 +160,12 @@ pub fn name_part_schema(vm: &mut Vm) -> Result<(), VmError> {
         return Err(schema(format!("{WEAPON_CLASS}.ExpLevel is not an int")));
     }
     Ok(())
+}
+
+/// Whether the last segment of `path` (a struct's own name) is exactly `name` (review r1 of #506, item 4: a suffix
+/// match would let `FooWeaponDefinitionData` pass).
+fn own_name_is(path: &str, name: &str) -> bool {
+    path.rsplit('.').next() == Some(name)
 }
 
 fn schema(message: String) -> VmError {
@@ -300,7 +294,7 @@ fn merged(vm: &Vm, current: Option<ObjRef>, offered: Option<ObjRef>) -> Result<O
 
 /// `ChooseRandomNameParts` on `weapon` in Off (module documentation).
 pub fn choose_random_name_parts(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
-    picks(vm, weapon).map_err(after_writes).and_then(|p| match p {
+    picks(vm, weapon).and_then(|p| match p {
         None => Ok(()),
         Some((prefix, title)) => {
             let mut data = super::required(vm, weapon, "DefinitionData", NATIVE)?;

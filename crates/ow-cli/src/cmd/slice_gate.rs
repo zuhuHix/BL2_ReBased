@@ -901,7 +901,13 @@ fn link_of(driver: Driver) -> Option<usize> {
 /// Before the weapon is made, `make` runs the weapon init's preflight (lane IMPL-CACHE-WEAPON-CARD,
 /// NATIVE_CACHE_WEAPON_CARD.md section 5.1, [`ow_inventory::equip::name_parts::preflight`]): Off answers
 /// `CacheWeaponCard` with `NotYet { NotRead }` whatever the data, so the stop is that refusal, unprefixed and graded by
-/// its variant, with nothing written. When the card is read, the globals preflight of NATIVE_WILLOW_GLOBALS.md section
+/// its variant, with nothing written.
+///
+/// **The partial-writes mark is this layer's** (review r1 of #506; the hub's rule that the caller layer that wrote adds
+/// it): `make` writes the weapon and its owner, so every phase's `NotYet` after it is terminal and gets "stopped after
+/// partial writes: " through `ow_world::pools::after_partial_writes`, its kind and record kept. The init's natives
+/// (`ChooseRandomNameParts`, `CacheWeaponCard`, `ApplyInternalSlotEffectModifiers`) return their pre-write `NotYet`s
+/// unprefixed. When the card is read, the globals preflight of NATIVE_WILLOW_GLOBALS.md section
 /// 6.2, steps 1 to 3, on a world set up per its section 6.1, replaces the refusal (review of #491); this lane adds no
 /// globals set-up.
 fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
@@ -939,7 +945,9 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         if *step == "equip" {
             before = Some(crate::cmd::inventory::equip_run::external_records(vm, weapon));
         }
-        let error = crate::cmd::inventory::equip_run::run_phase_typed(vm, step, weapon);
+        // `make` wrote: a phase's NotYet is after partial writes (this layer's mark, review r1 of #506).
+        let error = crate::cmd::inventory::equip_run::run_phase_typed(vm, step, weapon)
+            .map(ow_world::pools::after_partial_writes);
         let records = crate::cmd::inventory::equip_run::external_records(vm, weapon);
         match *step {
             "equip" => after_equip = Some(records),
