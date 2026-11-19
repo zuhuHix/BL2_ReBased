@@ -13,6 +13,10 @@ spawn at `TargetableAttributeValueResolver`, before and after. No installed Off 
 two review follow-ups (#407 pack order, #405 Force with a parked thread). `cargo build --workspace` clean;
 `cargo test --workspace` 1,977 passed / 0 failed / 45 ignored; ctest at `-j 2` 173/173, 0 failed, 488.16 s;
 verify_packages 9 packages, all class bodies exact.
+**TEST-FOLLOWUPS (2026-11-19, desktop, on main 5554ead):** AI-assisted (Claude Code, Claude Opus 5.5). Tests only:
+three review follow-ups (#407 pack order, #405 Force with a parked thread, #413 a script `AllParts` loop through the
+engine iterator). `cargo build --workspace` clean; `cargo test --workspace` 1,987 passed / 0 failed / 45 ignored;
+ctest at `-j 2` 173/173, 0 failed, 432.30 s; verify_packages 9 packages, all class bodies exact.
 
 **FIX-PHASELOCK-CAST part B (2026-11-19, desktop):** AI-assisted (Claude Code, Claude Opus 5.5).
 `ActionSkill.OnActionSkillActivated` and `OnActionSkillDeactivated` bound in Off (Reference unbound). `cargo build

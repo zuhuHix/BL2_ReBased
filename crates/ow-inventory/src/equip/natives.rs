@@ -303,3 +303,6 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod script_tests;

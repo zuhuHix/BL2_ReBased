@@ -1,4 +1,4 @@
-## 2026-11-19: Review follow-up tests: pack order for the action skill events, Force with a parked thread
+## 2026-11-19: Review follow-up tests: pack order, Force with a parked thread, a script AllParts loop
 
 AI-assisted (Claude Code, Claude Opus 5.5). Lane TEST-FOLLOWUPS. Tests only: no rule, binding or behaviour changes.
 
@@ -19,6 +19,15 @@ AI-assisted (Claude Code, Claude Opus 5.5). Lane TEST-FOLLOWUPS. Tests only: no 
   (`ForceUnregisterBehaviorConsumer`). The other, as the control, is ticked past the delay, and its thread runs. The
   forced process has left the table, so no tick reaches its provider, and its parked thread never runs, on that tick
   or on a later one.
-- **#413 follow-up: not done.** The `foreach AllParts(...)` test needs the `AllParts` iterator, which is in #413. #413
-  was still open on `origin/main` (0a23f13) when this lane ran, so the test belongs after it lands.
+- **#413 follow-up (`ow-inventory`, `equip/natives/script_tests.rs`).** An invented `WillowGame.upk` holds a weapon
+  class with the eleven-slot definition data, the native iterator `AllParts` and one script function, assembled with
+  `ow_package::testkit::script::Asm`: `foreach AllParts(DefinitionData, Cursor, false) { Seen = Cursor; } return
+  Cursor;`. The loop is called by reference (`FinalFunction`), so it runs through `ow_vm::interp::iter`'s `engine`.
+  - In Off, the body runs once per visited part (Body, then Barrel; the Title name part is skipped without the flag),
+    and the out argument is None after the loop runs to its end (NATIVE_EQUIP_PARTS.md section 2).
+  - With no slot set, the body never runs, and the out argument is None as well.
+  - In Reference the same loop is refused at the unbound `AllParts` (`StubPolicy::refuse_all`).
+
+  The out argument is an instance variable, because the toy package's locals carry no class reference. #413 landed
+  on `origin/main` (5554ead) during this lane, and the branch was rebased onto it before this test was written.
 - **UNVERIFIED.** These tests say what the port does on invented data, not what the game does.
