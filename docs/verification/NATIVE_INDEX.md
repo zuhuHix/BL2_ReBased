@@ -609,3 +609,8 @@ Earlier note sets (2026-10-01..04) are listed by file, not yet row by row: [NATI
 | WillowGlobals.RemovePickup | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | links 6-7: the pickup's destroy (the globals' pickup list, two global events) | UNVERIFIED | medium | |
 | DroppedPickup.AddToNavigation | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | link 6: the pickup's landing (does nothing in this build) | UNVERIFIED | high | |
 | the per-tick pickup targeting (raises SawPickupable / ClearSeenPickupable) | [NATIVE_PICKUP.md](NATIVE_PICKUP.md) | link 7: the aimed pickup (view cone, score over distance, line check) | UNVERIFIED | medium | |
+| UIDataStore_OnlineGameSettings initialisation (fills GameSettings and Provider per entry) | [NATIVE_SETTINGS_FILL.md](NATIVE_SETTINGS_FILL.md) | links 10-12: the settings entry the refresh reads | UNVERIFIED | high | |
+| Settings.SetIntProperty | [NATIVE_SETTINGS_FILL.md](NATIVE_SETTINGS_FILL.md) | links 10-12: the refresh's five writes | UNVERIFIED | high | |
+| WillowGameReplicationInfo.GetCurrPlaythrough | [NATIVE_SETTINGS_FILL.md](NATIVE_SETTINGS_FILL.md) | links 10-12: the playthrough write | UNVERIFIED | high | |
+| GameEngine.GetDLCManager | [NATIVE_SETTINGS_FILL.md](NATIVE_SETTINGS_FILL.md) | links 10-12: gates the DLC writes (None in the port) | UNVERIFIED | high | |
+| WillowDownloadableContentManager.HasCompatibilityData / StaticGetDlcContentIdForCurrentMap | [NATIVE_SETTINGS_FILL.md](NATIVE_SETTINGS_FILL.md) | links 10-12: only with a DLC manager | UNVERIFIED | low | |
