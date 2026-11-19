@@ -75,6 +75,27 @@ fn absent(what: String) -> VmError {
 
 /// [`crate::api::Vm::find_class`]: a class the table has (its code loaded if it came from a package), else the
 /// class loaded from the code packages (C++ `findClass`).
+/// [`find_class`], with a class that is genuinely absent (no installed package holds it, or no code layer at all) as
+/// `None`; every other failure is kept (lane FIX-RUN-BEHAVIORS, review r1 of #439).
+pub(crate) fn find_class_if_present(vm: &mut Vm, path: &str) -> Result<Option<ClassId>, VmError> {
+    if vm.space.classes.by_path(path).is_some_and(|id| vm.space.classes.get_layout(id).is_some_and(|l| l.is_defined())) {
+        return find_class(vm, path).map(Some);
+    }
+    if no_code_layer(vm) {
+        return Ok(None);
+    }
+    let found = {
+        let (code, store) = vm.defs.code_mut();
+        code.find_class(store, path)
+    };
+    match found {
+        Err(ReflectError::ClassNotFound(_))
+        | Err(ReflectError::Store(ow_package::store::StoreError::PackageNotFound(_))) => Ok(None),
+        Err(e) => Err(reflect_error(path, &e)),
+        Ok(_) => find_class(vm, path).map(Some),
+    }
+}
+
 pub(crate) fn find_class(vm: &mut Vm, path: &str) -> Result<ClassId, VmError> {
     if let Some(id) = vm.space.classes.by_path(path)
         && vm

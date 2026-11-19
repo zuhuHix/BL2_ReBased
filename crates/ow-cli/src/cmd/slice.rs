@@ -290,6 +290,15 @@ fn execute_with(
             }
             Err(f) => return Err(f),
         };
+        // A script run that failed after a behavior walk wrote state stops the run at this step too (review r1 of
+        // #439, item 2b): no later step runs on that VM.
+        let (ok, extra) = match slice.script().partial_stop() {
+            Some(text) if stop.is_none() => {
+                stop = Some((step.clone(), format!("stopped after partial writes: {text}")));
+                (false, extra)
+            }
+            _ => (ok, extra),
+        };
         let _ = write!(
             out,
             "{}{{\"step\":{},\"ok\":{},\"status\":{}",

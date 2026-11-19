@@ -10,8 +10,9 @@
 //!
 //! **`BehaviorBase.RunBehaviors(out Behaviors, SelfObject, optional MyInstigatorObject, OtherEventParticipantObject,
 //! EventData)`** (the note's section 1):
-//! - one kernel-info record for the whole call: the zero value of the record parameter of `ApplyBehavior`, with only
-//!   `bIsInitialRunOfThisBehavior` set; each behavior gets the record the previous one left (its `out` value);
+//! - one kernel-info record for the whole call: the plain zero value of the record parameter of `ApplyBehavior`
+//!   (struct defaults not applied), with only `bIsInitialRunOfThisBehavior` set; each behavior gets the record the
+//!   previous one left (its `out` value);
 //! - the list is walked in index order, its length read again at each step (the caller's storage, through the `out`
 //!   alias); `None` entries are skipped; an empty or None list does nothing;
 //! - each behavior's script `ApplyBehavior` runs with the self object, the record, the instigator, the other
@@ -20,6 +21,14 @@
 //!   frame of the output-link collector ([`super::natives::collect`]) and the ids are dropped, so they never reach an
 //!   outer behavior's list (the note's section 5 warning). A wait request (the record's `NextExecutionDelayTime`
 //!   left non-zero) is `NotYet { NotRead }`: open question 1.
+//! - **Before any dispatch** (review r1 of #439): every entry the list holds is resolved and checked (its
+//!   `ApplyBehavior` and that function's form), and the record is made; a record that declares no
+//!   `NextExecutionDelayTime` is refused there, since a wait request could not be seen. A failure there changes
+//!   nothing.
+//! - **After a dispatch** a failure is marked [`PARTIAL_WRITES`]: the behaviors that ran may have written state and
+//!   nothing is rolled back, so the caller stops its run at that step and does not reuse the VM (the mission bridge
+//!   does, `MissionScript::partial_stop`). A wait request is seen only after the behavior that made it ran, so it is
+//!   always such a failure.
 //! - A port error inside a behavior (a `NotYet`, an unbound native) stops the walk with that error. The game's "a
 //!   behavior that fails inside its script does not stop the walk" is a script runtime warning, which the VM logs and
 //!   goes past.
@@ -29,6 +38,8 @@
 //! `ContextObject`; 3 and anything else None). With no `InstancedDataContextName` the base object is the one result.
 //! With a name, a base object that does not implement `Engine.IInstanceData` gives nothing, and one that does is
 //! `NotYet { NotRead }` (the entry layout was read coarsely; the same open item as `GetFirstInstanceDataObject`'s).
+//! "Does not implement" must be proven (review r1 of #439): the interface class absent from the package set, or the
+//! VM's checked query (`Vm::implements_checked`) answering no; any other lookup failure is kept.
 //! The "all" form writes its results to its `out` array and answers whether there is one; an array that arrives
 //! non-empty is `NotYet` (whether it is cleared first was not read).
 //!
@@ -39,19 +50,26 @@
 //! **`SpecialMoveComponent.RunBehaviors(SMBehaviors)`** (section 4): nothing without an owner interface (`SMI`);
 //! otherwise each entry, in order, that passes `CanPlayBehaviorData` has its `Behaviors` run by the loop above, with
 //! the owner actor as self and the other arguments empty. The entries are read once at the start (the note: the walk
-//! is not affected by a change to the list, UNVERIFIED). **`CanPlayBehaviorData(Data)`**: false without an owner
-//! interface; else `PlayServer` when the owner's world is not a network client (`NetMode` is not `NM_Client`, 3),
-//! `PlayClient` when it is, `PlayLocal` when the owner pawn's `Controller` answers `IsLocalController()` true (read as
-//! the stock "locally controlled", UNVERIFIED); the flags are tried in that order.
+//! is not affected by a change to the list, UNVERIFIED). Every entry's side test runs, and every behavior that will
+//! run is resolved, before the first dispatch; the game may interleave them (UNVERIFIED). **`CanPlayBehaviorData(Data)`**:
+//! false without an owner interface; else
+//! - `PlayServer` when the owner's world is not a network client: `NetMode` is not `NM_Client`, whose value is its
+//!   position in the enum `NetMode` is declared with (no constant);
+//! - `PlayClient` when it is;
+//! - `PlayLocal` when the owner's pawn's `Controller` answers `IsLocalController()` true (read as the stock "locally
+//!   controlled", UNVERIFIED). The owner's pawn is the owner itself when it is an `Engine.Pawn`; another owner's pawn
+//!   is not read: `NotYet`. No controller: false.
 //!
-//! **Not bound:** `GearboxAnimDefinition.OnStart` / `OnServerStart` (a kernel event activation followed by a kernel
-//! step the note leaves open, question 3).
+//! The flags are tried in that order.
+//!
+//! **`GearboxAnimDefinition.OnStart` / `OnServerStart`** are `NotYet { NotRead }` in Off: a kernel event activation
+//! followed by a kernel step the note leaves open (question 3).
 
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::ids::ObjRef;
-use ow_object::layout::PropKind;
+use ow_object::ids::{FuncId, ObjRef};
+use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::{StructValue, Value};
 use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
@@ -79,10 +97,16 @@ pub const FIRST_INSTANCE_DATA: [&str; 2] = [
 pub const SM_RUN_BEHAVIORS: &str = "GearboxFramework.SpecialMoveComponent.RunBehaviors";
 /// `SpecialMoveComponent.CanPlayBehaviorData`.
 pub const SM_CAN_PLAY: &str = "GearboxFramework.SpecialMoveComponent.CanPlayBehaviorData";
+/// `GearboxAnimDefinition.OnStart` / `OnServerStart`: `NotYet` in Off (open question 3; review r1 of #439, item 6).
+/// The class's package is not named by the note, so both packages that hold behavior classes are tried.
+pub const ANIM_EVENTS: [&str; 4] = [
+    "GearboxFramework.GearboxAnimDefinition.OnStart",
+    "GearboxFramework.GearboxAnimDefinition.OnServerStart",
+    "Engine.GearboxAnimDefinition.OnStart",
+    "Engine.GearboxAnimDefinition.OnServerStart",
+];
 /// The instance-data interface (NATIVE_BEHAVIOR_CONTEXT.md: the Engine `IInstanceData` interface).
 pub const INSTANCE_DATA_INTERFACE: &str = "Engine.IInstanceData";
-/// `WorldInfo.NetMode` of a network client (`NM_Client`).
-pub const NM_CLIENT: u8 = 3;
 
 /// Binds this module's natives (Off only; module documentation).
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -98,6 +122,17 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     }
     for path in FIRST_INSTANCE_DATA {
         bind_one(vm, path, Rc::new(first_instance_data))?;
+    }
+    for path in ANIM_EVENTS {
+        bind_one(vm, path, Rc::new(move |_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
+            Err(NotYet::not_read(
+                format!(
+                    "{path}: the kernel step after the event activation (NATIVE_RUN_BEHAVIORS.md open question 3)"
+                ),
+                RECORD,
+            )
+            .into())
+        }))?;
     }
     Ok(())
 }
@@ -158,6 +193,60 @@ fn set_flag(vm: &Vm, v: &mut Value, name: &str) -> Result<(), VmError> {
 // BehaviorBase.RunBehaviors
 // ---------------------------------------------------------------------------------------------------------------
 
+/// The text a refusal carries once a walk has dispatched a behavior (review r1 of #439, item 2): the behaviors that
+/// ran may have written state, so the caller must stop the run there and not reuse its VM.
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
+
+/// What dispatching one behavior needs, resolved before anything runs: its `ApplyBehavior` and that function's
+/// parameters.
+struct Prepared {
+    f: FuncId,
+    params: Vec<PropertyDecl>,
+}
+
+/// Resolves `behavior`'s `ApplyBehavior` and checks its form. Changes nothing.
+fn prepare(vm: &mut Vm, behavior: ObjRef) -> Result<Prepared, VmError> {
+    let (class, state) = {
+        let o = vm.space.heap.get(behavior)?;
+        (o.class, o.state)
+    };
+    let f = vm.find_method(class, "ApplyBehavior", state)?.ok_or_else(|| {
+        script(
+            RUN_BEHAVIORS,
+            format!("{} has no ApplyBehavior", ow_attr::eval::class_path(&vm.space, behavior)),
+        )
+    })?;
+    let params = vm
+        .function(f)
+        .map(|d| d.params.clone())
+        .ok_or_else(|| script(RUN_BEHAVIORS, "ApplyBehavior is not in this VM"))?;
+    if params.len() < 5 {
+        return Err(script(
+            RUN_BEHAVIORS,
+            format!("ApplyBehavior has {} parameters, the note's form has 5", params.len()),
+        ));
+    }
+    let PropKind::Struct(_) = &params[1].kind else {
+        return Err(script(RUN_BEHAVIORS, "ApplyBehavior's record parameter is not a struct"));
+    };
+    Ok(Prepared { f, params })
+}
+
+/// A failure after a walk dispatched its first behavior, marked [`PARTIAL_WRITES`] (once, however deep the walks
+/// nest).
+fn partial(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        VmError::Script { function, message } if !message.contains(PARTIAL_WRITES) => VmError::Script {
+            function,
+            message: format!("{PARTIAL_WRITES}: {message}"),
+        },
+        other => other,
+    }
+}
+
 /// The arguments every behavior of one walk gets.
 struct Walk {
     self_object: Option<ObjRef>,
@@ -165,52 +254,49 @@ struct Walk {
     other: Option<ObjRef>,
     /// The event data, or None when the caller gave none (the parameter's zero value is used).
     event_data: Option<Value>,
-    /// The shared record, made on the first behavior from its `ApplyBehavior`'s parameter.
+    /// The shared record, made before the first dispatch ([`Walk::start`]).
     record: Option<Value>,
+    /// Whether a behavior has been dispatched: from then on a failure is [`partial`].
+    begun: bool,
 }
 
 impl Walk {
-    /// Runs `behavior`'s script `ApplyBehavior` with this walk's arguments and keeps the record it leaves.
-    fn apply(&mut self, vm: &mut Vm, behavior: ObjRef) -> Result<(), VmError> {
-        let (class, state) = {
-            let o = vm.space.heap.get(behavior)?;
-            (o.class, o.state)
-        };
-        let f = vm.find_method(class, "ApplyBehavior", state)?.ok_or_else(|| {
-            script(
-                RUN_BEHAVIORS,
-                format!("{} has no ApplyBehavior", ow_attr::eval::class_path(&vm.space, behavior)),
+    fn new(self_object: Option<ObjRef>, instigator: Option<ObjRef>, other: Option<ObjRef>, event_data: Option<Value>) -> Self {
+        Walk { self_object, instigator, other, event_data, record: None, begun: false }
+    }
+
+    /// The shared record, from `first`'s record parameter: its plain zero value (every field zero, struct defaults
+    /// not applied: review r1 of #439, item 5) with only `bIsInitialRunOfThisBehavior` set. A record that declares no
+    /// `NextExecutionDelayTime` is refused before anything runs: a wait request could not be seen.
+    fn start(&mut self, vm: &Vm, first: &Prepared) -> Result<(), VmError> {
+        let mut record = vm.space.classes.zero_value(&first.params[1].kind);
+        set_flag(vm, &mut record, "bIsInitialRunOfThisBehavior")?;
+        if struct_field(vm, &record, "NextExecutionDelayTime").is_none() {
+            return Err(NotYet::not_read(
+                "BehaviorBase.RunBehaviors: a kernel-info record that declares no NextExecutionDelayTime (a wait \
+                 request could not be seen)",
+                RECORD,
             )
-        })?;
-        let params = vm
-            .function(f)
-            .map(|d| d.params.clone())
-            .ok_or_else(|| script(RUN_BEHAVIORS, "ApplyBehavior is not in this VM"))?;
-        if params.len() < 5 {
-            return Err(script(
-                RUN_BEHAVIORS,
-                format!("ApplyBehavior has {} parameters, the note's form has 5", params.len()),
-            ));
+            .into());
         }
+        self.record = Some(record);
+        Ok(())
+    }
+
+    /// Runs `behavior`'s script `ApplyBehavior` with this walk's arguments and keeps the record it leaves. A failure
+    /// from here on is [`partial`].
+    fn dispatch(&mut self, vm: &mut Vm, behavior: ObjRef, p: &Prepared) -> Result<(), VmError> {
         if self.record.is_none() {
-            let PropKind::Struct(_) = &params[1].kind else {
-                return Err(script(RUN_BEHAVIORS, "ApplyBehavior's record parameter is not a struct"));
-            };
-            let mut record = vm
-                .space
-                .classes
-                .default_value(&params[1].kind)
-                .map_err(|e| script(RUN_BEHAVIORS, e.to_string()))?;
-            set_flag(vm, &mut record, "bIsInitialRunOfThisBehavior")?;
-            self.record = Some(record);
+            self.start(vm, p).map_err(|e| if self.begun { partial(e) } else { e })?;
         }
+        self.begun = true;
+        self.run(vm, behavior, p).map_err(partial)
+    }
+
+    fn run(&mut self, vm: &mut Vm, behavior: ObjRef, p: &Prepared) -> Result<(), VmError> {
         let event = match &self.event_data {
             Some(v) => v.clone(),
-            None => vm
-                .space
-                .classes
-                .default_value(&params[4].kind)
-                .map_err(|e| script(RUN_BEHAVIORS, e.to_string()))?,
+            None => vm.space.classes.zero_value(&p.params[4].kind),
         };
         let args = vec![
             Value::Object(self.self_object),
@@ -220,6 +306,7 @@ impl Walk {
             event,
         ];
         // A frame of its own: the output links the behavior selects lead nowhere (module documentation).
+        let f = p.f;
         let (ran, _dropped) = collect(vm, |vm| vm.call(f, Some(behavior), args))?;
         let ran = ran?;
         if let Some(record) = ran.outs.get(1) {
@@ -238,17 +325,35 @@ impl Walk {
         }
         Ok(())
     }
+
+    /// Preflight over `behaviors` before any dispatch (review r1 of #439, item 2a): every one's `ApplyBehavior` is
+    /// resolved and checked, and the record is made. A wait request itself is seen only after a behavior ran.
+    fn preflight(&mut self, vm: &mut Vm, behaviors: &[ObjRef]) -> Result<(), VmError> {
+        for (i, &b) in behaviors.iter().enumerate() {
+            let p = prepare(vm, b)?;
+            if i == 0 && self.record.is_none() {
+                self.start(vm, &p)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The behaviors `list` holds now (None entries left out).
+fn entries_of(list: &Value, function: &str) -> Result<Vec<ObjRef>, VmError> {
+    match list {
+        Value::Array(items) => Ok(items.iter().filter_map(object_of).collect()),
+        Value::None => Ok(Vec::new()),
+        other => Err(script(function, format!("Behaviors holds {}, not an array", other.kind_name()))),
+    }
 }
 
 fn run_behaviors(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let mut walk = Walk {
-        self_object: arg_object(c, 1)?,
-        instigator: arg_object(c, 2)?,
-        other: arg_object(c, 3)?,
-        // An omitted event data arrives as no value: the parameter's zero value is used instead.
-        event_data: if c.arg_count() > 4 { Some(c.arg(4)?.clone()).filter(|v| matches!(v, Value::Struct(_))) } else { None },
-        record: None,
-    };
+    // An omitted event data arrives as no value: the parameter's zero value is used instead.
+    let event_data = if c.arg_count() > 4 { Some(c.arg(4)?.clone()).filter(|v| matches!(v, Value::Struct(_))) } else { None };
+    let mut walk = Walk::new(arg_object(c, 1)?, arg_object(c, 2)?, arg_object(c, 3)?, event_data);
+    let now = entries_of(c.arg(0)?, RUN_BEHAVIORS)?;
+    walk.preflight(c.vm, &now)?;
     let mut i = 0usize;
     loop {
         // The length is read again at every step: a behavior that changes the list changes the walk.
@@ -258,11 +363,15 @@ fn run_behaviors(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
                 None => break,
             },
             Value::None => break,
-            other => return Err(script(RUN_BEHAVIORS, format!("Behaviors holds {}, not an array", other.kind_name()))),
+            other => {
+                let e = script(RUN_BEHAVIORS, format!("Behaviors holds {}, not an array", other.kind_name()));
+                return Err(if walk.begun { partial(e) } else { e });
+            }
         };
         i += 1;
         if let Some(behavior) = entry {
-            walk.apply(c.vm, behavior)?;
+            let p = prepare(c.vm, behavior).map_err(|e| if walk.begun { partial(e) } else { e })?;
+            walk.dispatch(c.vm, behavior, &p)?;
         }
     }
     Ok(Value::None)
@@ -314,12 +423,14 @@ fn resolve(
     .into())
 }
 
+/// Whether `o` implements `Engine.IInstanceData` (review r1 of #439, item 3): false only when the interface class is
+/// absent from the package set, or when the checked query proves the "no"; any other lookup failure is kept.
 fn implements_instance_data(vm: &mut Vm, o: ObjRef) -> Result<bool, VmError> {
-    let Ok(iface) = vm.find_class(INSTANCE_DATA_INTERFACE) else {
+    let Some(iface) = vm.find_class_if_present(INSTANCE_DATA_INTERFACE)? else {
         return Ok(false);
     };
     let class = vm.space.heap.get(o)?.class;
-    Ok(vm.implements(class, iface))
+    vm.implements_checked(class, iface)
 }
 
 fn static_context(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -403,23 +514,69 @@ fn flag(vm: &Vm, data: &Value, name: &str, function: &str) -> Result<bool, VmErr
     }
 }
 
-/// `CanPlayBehaviorData` for the owner `owner` (module documentation).
+/// Whether `world`'s `NetMode` is `NM_Client`, by that value's position in the enum `NetMode` is declared with
+/// (review r1 of #439, item 4), never a constant.
+fn is_client(vm: &Vm, world: ObjRef, function: &str) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(world)?.class;
+    let p = vm.space.prop(class, "NetMode").ok_or_else(|| {
+        script(function, format!("{} declares no NetMode", ow_attr::eval::class_path(&vm.space, world)))
+    })?;
+    let Some(PropKind::Byte { enum_: Some(e) }) = vm.space.classes.decl(p).map(|d| d.kind.clone()) else {
+        return Err(NotYet::not_read("CanPlayBehaviorData: a NetMode not declared with its enum", RECORD).into());
+    };
+    let client = vm
+        .space
+        .classes
+        .enum_layout(e)
+        .and_then(|l| l.values().iter().position(|v| vm.space.names.text(*v).eq_ignore_ascii_case("NM_Client")));
+    let Some(client) = client.and_then(|i| u8::try_from(i).ok()) else {
+        return Err(NotYet::not_read("CanPlayBehaviorData: a NetMode enum with no NM_Client", RECORD).into());
+    };
+    match vm.space.read(world, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Byte(m) => Ok(*m == client),
+        other => Err(script(function, format!("NetMode holds {}", other.kind_name()))),
+    }
+}
+
+/// Whether `class` is `Engine.Pawn` or a subclass, by the paths of its own layout chain.
+fn is_pawn(vm: &Vm, class: ow_object::ids::ClassId) -> bool {
+    let mut cursor = Some(class);
+    let mut steps = 0;
+    while let Some(c) = cursor.filter(|_| steps < 256) {
+        steps += 1;
+        let Some(layout) = vm.space.classes.get_layout(c) else {
+            return false;
+        };
+        if layout.path().as_str().eq_ignore_ascii_case("Engine.Pawn") {
+            return true;
+        }
+        cursor = layout.super_class();
+    }
+    false
+}
+
+/// `CanPlayBehaviorData` for the owner `owner` (module documentation). `PlayLocal` asks the owner's pawn: the owner
+/// itself when it is a pawn (review r1 of #439, item 4); any other owner's pawn is not read, `NotYet`.
 fn can_play(vm: &mut Vm, owner: ObjRef, data: &Value, function: &str) -> Result<bool, VmError> {
-    let client = || -> Result<bool, VmError> {
+    let client = |vm: &Vm| -> Result<bool, VmError> {
         let world = object_of(&field(vm, owner, "WorldInfo", function)?)
             .ok_or_else(|| script(function, "the owner has no WorldInfo"))?;
-        match field(vm, world, "NetMode", function)? {
-            Value::Byte(m) => Ok(m == NM_CLIENT),
-            other => Err(script(function, format!("NetMode holds {}", other.kind_name()))),
-        }
+        is_client(vm, world, function)
     };
-    if flag(vm, data, "PlayServer", function)? && !client()? {
+    if flag(vm, data, "PlayServer", function)? && !client(vm)? {
         return Ok(true);
     }
-    if flag(vm, data, "PlayClient", function)? && client()? {
+    if flag(vm, data, "PlayClient", function)? && client(vm)? {
         return Ok(true);
     }
     if flag(vm, data, "PlayLocal", function)? {
+        if !is_pawn(vm, vm.space.heap.get(owner)?.class) {
+            return Err(NotYet::not_read(
+                "CanPlayBehaviorData's PlayLocal: the pawn of a special-move owner that is not a pawn (not read)",
+                RECORD,
+            )
+            .into());
+        }
         let Some(controller) = object_of(&field(vm, owner, "Controller", function)?) else {
             return Ok(false);
         };
@@ -461,26 +618,29 @@ fn sm_run_behaviors(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
             return Err(script(SM_RUN_BEHAVIORS, format!("SMBehaviors holds {}, not an array", other.kind_name())));
         }
     };
+    // Before any dispatch (review r1 of #439, item 2a): each entry's side test, and each behavior that will run
+    // resolved and checked, with its walk's record made. The side tests are queries, run here in entry order before
+    // the behaviors rather than between them (UNVERIFIED: the game may interleave them).
+    let mut walks = Vec::new();
     for data in entries {
         if !can_play(c.vm, owner, &data, SM_RUN_BEHAVIORS)? {
             continue;
         }
         let behaviors = match struct_field(c.vm, &data, "Behaviors") {
-            Some(Value::Array(items)) => items.as_ref().clone(),
-            Some(Value::None) | None => Vec::new(),
-            Some(other) => {
-                return Err(script(SM_RUN_BEHAVIORS, format!("Behaviors holds {}, not an array", other.kind_name())));
-            }
+            Some(list) => entries_of(list, SM_RUN_BEHAVIORS)?,
+            None => Vec::new(),
         };
-        let mut walk = Walk {
-            self_object: Some(owner),
-            instigator: None,
-            other: None,
-            event_data: None,
-            record: None,
-        };
-        for behavior in behaviors.iter().filter_map(object_of) {
-            walk.apply(c.vm, behavior)?;
+        let mut walk = Walk::new(Some(owner), None, None, None);
+        walk.preflight(c.vm, &behaviors)?;
+        walks.push((walk, behaviors));
+    }
+    let mut begun = false;
+    for (mut walk, behaviors) in walks {
+        for behavior in behaviors {
+            let p = prepare(c.vm, behavior).map_err(|e| if begun { partial(e) } else { e })?;
+            walk.begun |= begun;
+            walk.dispatch(c.vm, behavior, &p)?;
+            begun = true;
         }
     }
     Ok(Value::None)
