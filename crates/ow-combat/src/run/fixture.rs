@@ -1689,6 +1689,90 @@ pub fn toy_starting() -> Vec<u8> {
     w.build()
 }
 
+/// `ToyPlayerStarting` (decision 2026-11-19-57), an extra package the player-controller starting-values tests add.
+/// Invented throughout:
+/// - `ToyPlayerClass` with the six definition fields the two natives read (the base's three, the override's three);
+/// - `ToyPlayerController`, a `WillowPlayerController` with `PlayerClass`, the five pool reference fields and a native
+///   `OnPlayerClassChange()` the test binds to count its calls;
+/// - four resources (`Accuracy`, `Exp`, `Cooldown`, `Melee`) and one pool definition of each, plus `Pool_Exp_Health`,
+///   an experience definition of `ToyPawns`' `Health` resource;
+/// - `Class_Player` (`ToyPawns`' `Pool_Health` and `Pool_Ammo`, the accuracy pool, and the three player pools),
+///   `Class_ExpOnly` (`Pool_Health`, and only the experience pool) and `Class_DupExp` (`Pool_Health`, and
+///   `Pool_Exp_Health`: one resource twice across the base and the override).
+pub fn toy_player_starting() -> Vec<u8> {
+    let mut w = Toy::new(&["Object", "Array", "Struct"]);
+    w.import_root();
+    let engine = w.import_full("Package", 0, "Engine");
+    let actor = w.import_full("Class", engine, "Actor");
+    let reference = w.import_full("ScriptStruct", actor, "ResourcePoolReference");
+    let willow = w.import_full("Package", 0, "WillowGame");
+    let player_controller = w.import_full("Class", willow, "WillowPlayerController");
+    let class = w.cls("ToyPlayerClass", 0);
+    w.array_of(class, "ResourcePools", "Object", 0);
+    for f in [
+        "AccuracyPoolDefinition",
+        "OffHandAccuracyPoolDefinition",
+        "ExperiencePoolDefinition",
+        "SkillCooldownPoolDefinition",
+        "MeleeSkillCooldownPoolDefinition",
+    ] {
+        w.prop("Object", class, f, 0, 0);
+    }
+    let controller = w.cls("ToyPlayerController", player_controller);
+    w.prop("Object", controller, "PlayerClass", 0, 0);
+    for f in ["AccuracyPool", "OffHandAccuracyPool", "ExpPool", "SkillCooldownPool", "MeleeSkillCooldownPool"] {
+        w.prop("Struct", controller, f, 0, reference);
+    }
+    w.native(controller, "OnPlayerClassChange", &[], None);
+    let p = &mut w.t.p;
+    let resource_class = p.add_import("Core", "Class", engine, "ResourceDefinition");
+    let definition_class = p.add_import("Core", "Class", engine, "ResourcePoolDefinition");
+    let pool_class = p.add_import("Core", "Class", engine, "ResourcePool");
+    let pawns = p.add_import("Core", "Package", 0, "ToyPawns");
+    let pool_health = p.add_import("Engine", "ResourcePoolDefinition", pawns, "Pool_Health");
+    let pool_ammo = p.add_import("Engine", "ResourcePoolDefinition", pawns, "Pool_Ammo");
+    let health = p.add_import("Engine", "ResourceDefinition", pawns, "Health");
+    let resource = |p: &mut PackageBuilder, name: &str| {
+        let tag = p.tag("DefaultResourcePoolClass", "ClassProperty", &ints(&[pool_class]));
+        let payload = object_payload(p, vec![tag]);
+        p.add_export(resource_class, name, payload)
+    };
+    let accuracy = resource(p, "Accuracy");
+    let exp = resource(p, "Exp");
+    let cooldown = resource(p, "Cooldown");
+    let melee = resource(p, "Melee");
+    let definition = |p: &mut PackageBuilder, name: &str, r: i32, start: f32| {
+        let tags = vec![p.object_tag("Resource", r), p.float_tag("StartingValue", start)];
+        let payload = object_payload(p, tags);
+        p.add_export(definition_class, name, payload)
+    };
+    let pool_accuracy = definition(p, "Pool_Accuracy", accuracy, 1.0);
+    let pool_exp = definition(p, "Pool_Exp", exp, 2.0);
+    let pool_cooldown = definition(p, "Pool_Cooldown", cooldown, 3.0);
+    let pool_melee = definition(p, "Pool_Melee", melee, 4.0);
+    let pool_exp_health = definition(p, "Pool_Exp_Health", health, 5.0);
+    let list = |p: &mut PackageBuilder, pools: &[i32]| {
+        let refs: Vec<u8> = pools.iter().flat_map(|r| r.to_le_bytes()).collect();
+        p.array_tag("ResourcePools", i32::try_from(pools.len()).expect("fits"), &refs)
+    };
+    let tags = vec![
+        list(p, &[pool_health, pool_ammo]),
+        p.object_tag("AccuracyPoolDefinition", pool_accuracy),
+        p.object_tag("ExperiencePoolDefinition", pool_exp),
+        p.object_tag("SkillCooldownPoolDefinition", pool_cooldown),
+        p.object_tag("MeleeSkillCooldownPoolDefinition", pool_melee),
+    ];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_Player", payload);
+    let tags = vec![list(p, &[pool_health]), p.object_tag("ExperiencePoolDefinition", pool_exp)];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_ExpOnly", payload);
+    let tags = vec![list(p, &[pool_health]), p.object_tag("ExperiencePoolDefinition", pool_exp_health)];
+    let payload = object_payload(p, tags);
+    p.add_export(class, "Class_DupExp", payload);
+    w.build()
+}
+
 /// `ToyRoute` (decision 2026-11-19-32), an extra package the route-native tests add: `ToyRoutePawn` (a `WillowAIPawn`
 /// with `bIsDead` and an `SMComponent`), `ToySMComponent`, whose `CurrentSMData` struct holds `SMD`, and `ToyOtherMove`,
 /// a special move that is not the spawn move.

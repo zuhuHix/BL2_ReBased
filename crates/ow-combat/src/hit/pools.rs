@@ -16,11 +16,12 @@ use super::{bind_fn, this};
 pub const RECORD: &str = "NATIVE_RESOURCE_POOL_IDLE.md";
 /// The record of the class starting values (lane FIX-MIND-ADOPT, decision 2026-11-19-26).
 pub const RECORD_STARTING: &str = "NATIVE_COMBAT_GROUNDWORK.md sections 1.10 and 1.11";
-/// The player controller's native override of the starting values (decision 2026-11-19-46).
+/// The player controller's native override of the starting values (decision 2026-11-19-46; its rule, decision
+/// 2026-11-19-57).
 pub const PLAYER_STARTING_VALUES: &str = "WillowGame.WillowPlayerController.ApplyCharacterClassStartingValues";
-/// What that override leaves unread (section 1.10 step 2): the name of the parameterless script function it calls
-/// last. The override is native, so the installed script cannot name it; an analyst read of the override can.
-pub const PLAYER_STARTING_VALUES_OPEN: &str = "WillowPlayerController.ApplyCharacterClassStartingValues (native): the parameterless script function its last step calls is not named (NATIVE_COMBAT_GROUNDWORK.md section 1.10 step 2)";
+/// The note both natives are implemented from (lane FIX-CLASS-STARTING-VALUES, decision 2026-11-19-57; the analyst was
+/// lane ANALYST-CLASS-STARTING-VALUES, decision 2026-11-19-50).
+pub const RECORD_CLASS_STARTING: &str = "docs/verification/NATIVE_CLASS_STARTING_VALUES.md";
 
 fn float(vm: &mut Vm, pool: ObjRef, name: &str) -> Result<f32, VmError> {
     match required(vm, pool, name, "resource pool")? {
@@ -92,25 +93,17 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
     })?;
     bind_fn(vm, "Engine.Controller.ApplyCharacterClassStartingValues", |c| {
         let controller = this(c, "Controller.ApplyCharacterClassStartingValues")?;
-        // A class argument that is not an object reference is refused: reading it as None would delete every pool.
-        let class = match c.arg(0)? {
-            Value::Object(o) => *o,
-            other => {
-                return Err(super::access::error(format!(
-                    "Controller.ApplyCharacterClassStartingValues: the class argument is not an object reference ({})",
-                    other.kind_name()
-                )));
-            }
-        };
+        let class = class_argument(c.arg(0)?, "Controller.ApplyCharacterClassStartingValues")?;
         apply_class_starting_values(c.vm, controller, class)?;
         Ok(Value::None)
     })?;
     // The player controller's own override is native too (its declaration carries no script; lane FIX-PLAYER-CLASS-B,
-    // decision 2026-11-19-46). It ends with a script call the record does not name (section 1.10 step 2), so it is
-    // refused before anything changes, naming that call, rather than running steps 1 and 2 and refusing halfway.
+    // decision 2026-11-19-46), NATIVE_CLASS_STARTING_VALUES.md section 2 (decision 2026-11-19-57).
     bind_fn(vm, PLAYER_STARTING_VALUES, |c| {
-        this(c, "WillowPlayerController.ApplyCharacterClassStartingValues")?;
-        Err(NotYet::not_read(PLAYER_STARTING_VALUES_OPEN, RECORD_STARTING).into())
+        let controller = this(c, "WillowPlayerController.ApplyCharacterClassStartingValues")?;
+        let class = class_argument(c.arg(0)?, "WillowPlayerController.ApplyCharacterClassStartingValues")?;
+        apply_class_starting_values(c.vm, controller, class)?;
+        Ok(Value::None)
     })?;
     // Two natives of the AI mind's class route (NATIVE_MIND_ROUTE.md sections 1 and 2; decision 2026-11-19-32).
     bind_fn(vm, "WillowGame.WillowPawn.SetDefaultPhysics", |c| {
@@ -138,92 +131,172 @@ pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
     })
 }
 
-/// `Controller.ApplyCharacterClassStartingValues(inCharacterClass)`, the `Controller` base (NATIVE_COMBAT_GROUNDWORK.md
-/// section 1.10 step 1, and section 1.11: `WillowMind` has no override). Every pool of the controller's
-/// `ResourcePoolManager` is deleted; then, with a class, one pool per entry of its `ResourcePools` in array order, then
-/// `AccuracyPoolDefinition` into `AccuracyPool` and `OffHandAccuracyPoolDefinition` into `OffHandAccuracyPool`, each only
-/// when set. The pools are made by `CreatePool` with the controller as owner. A manager that call spawns is written
-/// back to `ResourcePoolManager`.
-///
-/// Refused, `NotYet`:
-/// - a `WillowPlayerController` (or a subclass): its override ends with a script function whose name is not read
-///   (section 1.10 step 2);
-/// - a class whose pools (its `ResourcePools` and the two accuracy pool definitions together) name one resource twice.
-///   The note does not give `CreatePool`'s reinitialise flag. After the delete no pool exists, so the flag can matter
-///   only for a second pool of the same resource; that case is refused before anything changes.
-///
-/// A class argument that is not an object reference is a script error, not "no class" (review r1 of #412).
-///
-/// UNVERIFIED in the running game.
-pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
-    let unit = "Controller.ApplyCharacterClassStartingValues";
-    if let Ok(player) = vm.find_class("WillowGame.WillowPlayerController") {
-        let own = vm.space.heap.get(controller)?.class;
-        if vm.space.classes.is_child_of(own, player) {
-            return Err(NotYet::not_read(
-                "ApplyCharacterClassStartingValues on a WillowPlayerController (its override's last script call is not named)",
-                RECORD_STARTING,
-            )
-            .into());
-        }
+/// The class argument of either native. One that is not an object reference is a script error, never "no class"
+/// (which would delete every pool; review r1 of #412).
+fn class_argument(v: &Value, unit: &str) -> Result<Option<ObjRef>, VmError> {
+    match v {
+        Value::Object(o) => Ok(*o),
+        other => Err(super::access::error(format!(
+            "{unit}: the class argument is not an object reference ({})",
+            other.kind_name()
+        ))),
     }
-    let mut defs: Vec<Option<ObjRef>> = Vec::new();
-    let mut accuracy = (None, None);
+}
+
+/// `ApplyCharacterClassStartingValues(inCharacterClass)` on any controller, Off, from NATIVE_CLASS_STARTING_VALUES.md
+/// alone (clean room; decision 2026-11-19-57). A `WillowPlayerController` (or a subclass) gets the override of section
+/// 2, every other controller (AI minds included) the `Controller` base of section 1. Both natives' bindings come here,
+/// so a call through the base on a player controller runs the override, as a native virtual does.
+///
+/// **The base (section 1):** every pool of the controller's `ResourcePoolManager` is deleted, always. Then, with a
+/// class, one pool per entry of its `ResourcePools` in array order, then `AccuracyPoolDefinition` into `AccuracyPool`
+/// and `OffHandAccuracyPoolDefinition` into `OffHandAccuracyPool`, each only when set. The pools are made by
+/// `CreatePool` with the controller as owner (the lowest free slot); a manager that call spawns is written back to
+/// `ResourcePoolManager`. No role check, and nothing else changes.
+///
+/// **The override (section 2):** the base first, with the same class. Then only on the authority (`Role` is
+/// `ROLE_Authority`): with the controller's own `PlayerClass` (not the argument), pools for its
+/// `ExperiencePoolDefinition`, `SkillCooldownPoolDefinition` and `MeleeSkillCooldownPoolDefinition`, in that order and
+/// each only when set, stored as `ExpPool`, `SkillCooldownPool` and `MeleeSkillCooldownPool`; then, with or without a
+/// `PlayerClass`, the controller's script event `OnPlayerClassChange()`, run through the VM.
+///
+/// **References left as they were:** no stored pool reference is cleared. With no class, an unset definition, a
+/// controller that is not the authority or no `PlayerClass`, the field keeps what it held. Its pool was deleted, so it
+/// reads as not valid by the manager's GUID rule (whether a new pool in the same slot can carry the same GUID is the
+/// note's open question 2, not decided here).
+///
+/// Everything is read and checked before the delete: the class fields, `Role`, `PlayerClass`, the struct types of the
+/// reference fields to be written, and that the controller has `OnPlayerClassChange` when it will be called. Refused,
+/// `NotYet { NotRead }`, before anything changes: pools that name one resource twice (the base's and the override's
+/// together). The note does not give `CreatePool`'s reinitialise flag; after the delete no pool exists, so the flag can
+/// matter only for a second pool of the same resource.
+///
+/// Open question 1 (whether the argument and `PlayerClass` can differ) does not change the rule: each step reads what
+/// the note says it reads. UNVERIFIED in the running game.
+pub fn apply_class_starting_values(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
+    let player = match vm.find_class("WillowGame.WillowPlayerController") {
+        Ok(player) => {
+            let own = vm.space.heap.get(controller)?.class;
+            vm.space.classes.is_child_of(own, player)
+        }
+        Err(_) => false,
+    };
+    let unit = if player {
+        "WillowPlayerController.ApplyCharacterClassStartingValues"
+    } else {
+        "Controller.ApplyCharacterClassStartingValues"
+    };
+    // The pools to make, in order, each with the controller field that stores its reference (none for `ResourcePools`).
+    let mut plan: Vec<(ObjRef, Option<&'static str>)> = Vec::new();
     if let Some(class) = class {
         let class = super::access::loaded(vm, class)?;
         if let Some(list) = get(vm, class, "ResourcePools")? {
-            for v in list.elements().unwrap_or(&[]) {
-                defs.push(object_of(v));
+            let Some(list) = list.elements() else {
+                return Err(super::access::error(format!("{unit}: the class's ResourcePools is not an array")));
+            };
+            plan.extend(list.iter().filter_map(object_of).map(|d| (d, None)));
+        }
+        for (def, field) in
+            [("AccuracyPoolDefinition", "AccuracyPool"), ("OffHandAccuracyPoolDefinition", "OffHandAccuracyPool")]
+        {
+            if let Some(d) = object(vm, class, def)? {
+                plan.push((d, Some(field)));
             }
         }
-        accuracy = (
-            object(vm, class, "AccuracyPoolDefinition")?,
-            object(vm, class, "OffHandAccuracyPoolDefinition")?,
-        );
-        // Every pool the call will make, the two accuracy pools included, before anything is deleted.
-        let mut resources = Vec::new();
-        for def in defs.iter().flatten().chain([accuracy.0, accuracy.1].iter().flatten()) {
-            let def = super::access::loaded(vm, *def)?;
-            let resource = object(vm, def, "Resource")?;
-            if resource.is_some() && resources.contains(&resource) {
-                return Err(NotYet::not_read(
-                    "ApplyCharacterClassStartingValues for a class listing one resource twice (CreatePool's reinitialise flag is not given)",
-                    RECORD_STARTING,
-                )
-                .into());
+    }
+    let mut event = false;
+    if player && is_authority_strict(vm, controller, unit)? {
+        let player_class = match required(vm, controller, "PlayerClass", unit)? {
+            Value::Object(o) => o,
+            other => {
+                return Err(super::access::error(format!(
+                    "{unit}: PlayerClass holds {}, not an object",
+                    other.kind_name()
+                )));
             }
-            resources.push(resource);
+        };
+        if let Some(pc) = player_class {
+            let pc = super::access::loaded(vm, pc)?;
+            for (def, field) in [
+                ("ExperiencePoolDefinition", "ExpPool"),
+                ("SkillCooldownPoolDefinition", "SkillCooldownPool"),
+                ("MeleeSkillCooldownPoolDefinition", "MeleeSkillCooldownPool"),
+            ] {
+                match required(vm, pc, def, unit)? {
+                    Value::Object(Some(d)) => plan.push((d, Some(field))),
+                    Value::Object(None) => {}
+                    other => {
+                        return Err(super::access::error(format!(
+                            "{unit}: the PlayerClass's {def} holds {}, not an object",
+                            other.kind_name()
+                        )));
+                    }
+                }
+            }
         }
+        let own = vm.space.heap.get(controller)?.class;
+        let state = vm.space.heap.get(controller)?.state;
+        if vm.find_method(own, "OnPlayerClassChange", state)?.is_none() {
+            return Err(super::access::error(format!("{unit}: the controller has no OnPlayerClassChange")));
+        }
+        event = true;
+    }
+    // Every pool the call will make, before anything is deleted: one resource twice is not read.
+    let mut resources = Vec::new();
+    let mut types = Vec::new();
+    for &(def, field) in &plan {
+        let def = super::access::loaded(vm, def)?;
+        let resource = object(vm, def, "Resource")?;
+        if resource.is_some() && resources.contains(&resource) {
+            return Err(NotYet::not_read(
+                "ApplyCharacterClassStartingValues for pools that name one resource twice (CreatePool's reinitialise flag is not given)",
+                RECORD_CLASS_STARTING,
+            )
+            .into());
+        }
+        resources.push(resource);
+        types.push(match field {
+            Some(field) => Some(reference_type(vm, controller, field, unit)?),
+            None => None,
+        });
     }
     let mut manager = object(vm, controller, "ResourcePoolManager")?;
     ow_world::pools::delete_all_pools(vm, manager)?;
-    if class.is_none() {
-        return Ok(());
-    }
-    for def in defs.into_iter().flatten() {
+    for ((def, field), ty) in plan.into_iter().zip(types) {
         let made = ow_world::pools::create_pool(vm, manager, Some(controller), Some(def), false)?;
         manager = made.manager;
         set_required(vm, controller, "ResourcePoolManager", Value::Object(manager), unit)?;
+        if let (Some(field), Some(ty)) = (field, ty) {
+            let v = ow_world::pools::ref_value(&vm.space, ty, made.reference)?;
+            set_required(vm, controller, field, v, unit)?;
+        }
     }
-    for (def, field) in [(accuracy.0, "AccuracyPool"), (accuracy.1, "OffHandAccuracyPool")] {
-        let Some(def) = def else { continue };
-        let made = ow_world::pools::create_pool(vm, manager, Some(controller), Some(def), false)?;
-        manager = made.manager;
-        set_required(vm, controller, "ResourcePoolManager", Value::Object(manager), unit)?;
-        let class_id = vm.space.heap.get(controller)?.class;
-        let ty = vm
-            .space
-            .prop(class_id, field)
-            .and_then(|p| vm.space.classes.decl(p))
-            .and_then(|d| match d.kind {
-                PropKind::Struct(t) => Some(t),
-                _ => None,
-            })
-            .ok_or_else(|| super::access::error(format!("{unit}: the controller has no struct property {field}")))?;
-        let v = ow_world::pools::ref_value(&vm.space, ty, made.reference)?;
-        set_required(vm, controller, field, v, unit)?;
+    if event {
+        super::call_method(vm, controller, "OnPlayerClassChange", vec![])?;
     }
     Ok(())
+}
+
+/// Whether `controller`'s `Role` is `ROLE_Authority`; a controller without a byte `Role` is bad data.
+fn is_authority_strict(vm: &mut Vm, controller: ObjRef, unit: &str) -> Result<bool, VmError> {
+    let authority = super::with_state(vm, |s| s.authority)?;
+    match required(vm, controller, "Role", unit)? {
+        Value::Byte(r) => Ok(i64::from(r) == i64::from(authority)),
+        other => Err(super::access::error(format!("{unit}: Role holds {}, not a byte", other.kind_name()))),
+    }
+}
+
+/// The struct type of the controller's pool reference field `field`.
+fn reference_type(vm: &Vm, controller: ObjRef, field: &str, unit: &str) -> Result<ow_object::ids::StructId, VmError> {
+    let class_id = vm.space.heap.get(controller)?.class;
+    vm.space
+        .prop(class_id, field)
+        .and_then(|p| vm.space.classes.decl(p))
+        .and_then(|d| match d.kind {
+            PropKind::Struct(t) => Some(t),
+            _ => None,
+        })
+        .ok_or_else(|| super::access::error(format!("{unit}: the controller has no struct property {field}")))
 }
 
 /// The record of the route natives (decision 2026-11-19-32).
