@@ -741,6 +741,9 @@ pub fn world_text(w: &WorldStats) -> String {
     for p in &w.last.pawns {
         let _ = writeln!(out, "play world pawn {}", crate::world::pawn_text(p));
     }
+    for p in &w.last.unplaced {
+        let _ = writeln!(out, "play world pawn left out: {p}");
+    }
     let _ = writeln!(
         out,
         "play world: {} ticks asked, {} completed, TimeSeconds {}, DeltaSeconds {}, {} pawns, world digest {:016x}",

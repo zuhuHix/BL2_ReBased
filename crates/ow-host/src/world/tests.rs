@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use ow_object::value::StructValue;
 use ow_package::testkit::script::ScriptToy;
-use ow_package::testkit::reflect::toy_struct;
+use ow_package::testkit::reflect::{toy_array_of, toy_struct};
 use ow_package::testkit::{Export, PackageBuilder, ints};
 
 use super::*;
@@ -66,6 +66,9 @@ fn engine() -> Vec<u8> {
     for f in ["TimeSeconds", "RealTimeSeconds", "TimeDilation", "DeltaSeconds"] {
         t.prop("Float", world_info, f, 0, 0);
     }
+    toy_array_of(&mut t, world_info, "StreamingLevels", "Object", object);
+    let streaming = t.class("LevelStreaming", object);
+    t.prop("Name", streaming, "PackageName", 0, 0);
     t.class("Pawn", actor);
     t.class("World", object);
     t.class("Level", object);
@@ -74,18 +77,19 @@ fn engine() -> Vec<u8> {
 
 /// A map: `TheWorld` (1), `PersistentLevel` (2), `WorldInfo_0` (3, time dilation 1), `Actor_0` (4), `Pawn_0` (5);
 /// the level lists 3, a null, 4 and 5. The pawn's `RemoteRole` is `remote_role`; with `walking` its `Physics` is
-/// `PHYS_Walking`.
-fn map(remote_role: u8, walking: bool) -> Vec<u8> {
+/// `PHYS_Walking`. With `streaming`, the `WorldInfo` names that level through a `LevelStreaming` (6).
+fn map(remote_role: u8, walking: bool, streaming: Option<&str>) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     p.names(["None"]);
     let engine = p.add_import("Core", "Package", 0, "Engine");
     let class = |p: &mut PackageBuilder, name: &str| p.add_import("Core", "Class", engine, name);
-    let (world, level, world_info, actor, pawn) = (
+    let (world, level, world_info, actor, pawn, level_streaming) = (
         class(&mut p, "World"),
         class(&mut p, "Level"),
         class(&mut p, "WorldInfo"),
         class(&mut p, "Actor"),
         class(&mut p, "Pawn"),
+        class(&mut p, "LevelStreaming"),
     );
     let add = |p: &mut PackageBuilder, class: i32, name: &str, outer: i32, prefix: usize, tags: Vec<Vec<u8>>, tail: Vec<u8>| {
         let mut body = vec![0u8; prefix];
@@ -104,14 +108,21 @@ fn map(remote_role: u8, walking: bool) -> Vec<u8> {
     tail.extend_from_slice(b"unreal\0");
     assert_eq!(add(&mut p, level, "PersistentLevel", 1, 4, Vec::new(), tail), 2);
     let role = p.byte_tag("Role", 3);
-    let dilation = p.float_tag("TimeDilation", 1.0);
-    assert_eq!(add(&mut p, world_info, "WorldInfo_0", 2, 26, vec![role.clone(), dilation], Vec::new()), 3);
+    let mut wi_tags = vec![role.clone(), p.float_tag("TimeDilation", 1.0)];
+    if streaming.is_some() {
+        wi_tags.push(p.array_tag("StreamingLevels", 1, &ints(&[6])));
+    }
+    assert_eq!(add(&mut p, world_info, "WorldInfo_0", 2, 26, wi_tags, Vec::new()), 3);
     assert_eq!(add(&mut p, actor, "Actor_0", 2, 26, vec![role.clone()], Vec::new()), 4);
     let mut tags = vec![role, p.byte_tag("RemoteRole", remote_role)];
     if walking {
         tags.push(p.enum_tag("Physics", "EPhysics", "PHYS_Walking"));
     }
     assert_eq!(add(&mut p, pawn, "Pawn_0", 2, 26, tags, Vec::new()), 5);
+    if let Some(name) = streaming {
+        let tags = vec![p.name_tag("PackageName", name)];
+        assert_eq!(add(&mut p, level_streaming, "LevelStreaming_0", 3, 4, tags, Vec::new()), 6);
+    }
     p.build()
 }
 
@@ -121,8 +132,19 @@ fn builder(remote_role: u8, at: [f32; 3], yaw: i32) -> Builder {
     builder_with(remote_role, false, at, yaw)
 }
 
+/// [`builder`] over a map whose `WorldInfo` streams a second level, `Test_Sub`, that places its own `Pawn_0`; the last
+/// pawn (the streamed level's) is the one moved to `at`.
+fn streaming_builder(at: [f32; 3]) -> Builder {
+    builder_files(0, false, true, at, 0)
+}
+
 /// [`builder`] with the pawn in `PHYS_Walking` when `walking`, and the host's physics step installed.
 fn builder_with(remote_role: u8, walking: bool, at: [f32; 3], yaw: i32) -> Builder {
+    builder_files(remote_role, walking, false, at, yaw)
+}
+
+/// [`builder_with`], with the streamed level `Test_Sub` when `streamed`.
+fn builder_files(remote_role: u8, walking: bool, streamed: bool, at: [f32; 3], yaw: i32) -> Builder {
     Box::new(move || {
         let dir = std::env::temp_dir().join(format!(
             "ow-host-world-{}-{}",
@@ -130,8 +152,13 @@ fn builder_with(remote_role: u8, walking: bool, at: [f32; 3], yaw: i32) -> Build
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        let (engine, map) = (engine(), map(remote_role, walking));
-        let files: [(&str, &[u8]); 2] = [("Engine.upk", &engine), ("Test_P.upk", &map)];
+        let engine = engine();
+        let map_p = map(remote_role, walking, streamed.then_some("Test_Sub"));
+        let map_sub = map(remote_role, walking, None);
+        let mut files: Vec<(&str, &[u8])> = vec![("Engine.upk", &engine), ("Test_P.upk", &map_p)];
+        if streamed {
+            files.push(("Test_Sub.upk", &map_sub));
+        }
         let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off)
             .map_err(|e| e.to_string())?;
         let vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
@@ -171,7 +198,7 @@ fn the_loaded_world_ticks_on_its_thread_and_reports_its_pawns() {
     assert_eq!(summary.pending.len(), 3, "the map load's three NotYets are carried");
     assert_eq!(summary.pawns.len(), 1);
     let pawn = &summary.pawns[0];
-    assert_eq!((pawn.path.as_str(), pawn.class.as_str()), ("TheWorld.PersistentLevel.Pawn_0", "Engine.Pawn"));
+    assert_eq!((pawn.path.as_str(), pawn.class.as_str()), ("Test_P.TheWorld.PersistentLevel.Pawn_0", "Engine.Pawn"));
     assert_eq!(pawn.location, [10.0, -20.0, 30.5]);
     assert_eq!(pawn.rotation.yaw, 16384);
     assert_eq!(pawn.archetype, None);
@@ -217,6 +244,43 @@ fn the_host_s_physics_step_answers_not_yet_naming_the_actor_and_its_mode() {
     assert!(halt.message.contains(PHYSICS_RECORD), "{}", halt.message);
     // The clock advanced before the actor pass, and the read-back shows it.
     assert_eq!((frame.ticks, frame.time_seconds, frame.delta_seconds), (0, Some(0.5), Some(0.5)));
+}
+
+#[test]
+fn two_levels_pawns_of_one_name_keep_their_own_paths_and_places() {
+    let (mut link, summary) = WorldLink::spawn(streaming_builder([1.0, 2.0, 3.0])).unwrap();
+    assert_eq!(summary.levels.len(), 2, "{}", summary.text());
+    let paths: Vec<&str> = summary.pawns.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(paths, ["Test_P.TheWorld.PersistentLevel.Pawn_0", "Test_Sub.TheWorld.PersistentLevel.Pawn_0"]);
+    assert_eq!(summary.pawns[0].location, [0.0; 3]);
+    assert_eq!(summary.pawns[1].location, [1.0, 2.0, 3.0]);
+    let frame = link.tick(1.0 / 60.0);
+    assert_eq!(frame.pawns, summary.pawns);
+    assert!(frame.unplaced.is_empty());
+}
+
+#[test]
+fn a_transform_that_cannot_be_read_is_refused_not_zeroed() {
+    let (mut world, _) = streaming_builder([1.0, 2.0, 3.0])().unwrap();
+    let streaming_class = world.vm.find_class("Engine.LevelStreaming").unwrap();
+    let space = &world.vm.space;
+    let list = world.actors().borrow().list().to_vec();
+    let pawn = *list.last().unwrap();
+    assert_eq!(transform(space, pawn), Ok(([1.0, 2.0, 3.0], Rotator::new(0, 0, 0))));
+    // A rotator is not a vector, nor a vector a rotator.
+    let rotation = read(space, pawn, "Rotation").unwrap();
+    let location = read(space, pawn, "Location").unwrap();
+    assert_eq!(vector_of(space, &rotation), None);
+    assert_eq!(rotator_of(space, &location), None);
+    // An object with no Location (the persistent level's LevelStreaming) has no transform.
+    let streaming = space.live(streaming_class).next();
+    assert_eq!(transform(space, streaming.expect("the LevelStreaming is loaded")), Err("no Location"));
+}
+
+#[test]
+fn a_world_thread_panic_is_reported_with_its_message() {
+    let err = WorldLink::spawn(Box::new(|| panic!("an invented failure"))).unwrap_err();
+    assert_eq!(err, "the world thread panicked before loading the map: an invented failure");
 }
 
 #[test]

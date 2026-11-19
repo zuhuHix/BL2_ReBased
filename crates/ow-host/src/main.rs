@@ -517,7 +517,7 @@ fn play(
             }
         }
     } else {
-        println!("world: not loaded (--no-world): the play mode runs on the scene alone");
+        eprintln!("world: not loaded (--no-world): the play mode runs on the scene alone");
         None
     };
     let Some(window) = window else {
