@@ -2,15 +2,16 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
-**FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, on main b985dcbf):** AI-assisted (Claude Code, Opus 5.5).
-`AttributeDefinition.GetValue` bound as a script native in Off to `ow-attr`'s `value_of`. `cargo build --workspace
---locked -j 4` clean; `cargo test --workspace --locked -j 4` 2,044 passed / 0 failed / 45 ignored (2 new in
-`ow-combat`); `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict on this branch: 0/14/0 (the combat links
-stop before the native, at `FindAlreadyLoadedObject`, without #431). On a local unpushed merge with
-`fix/rust-class-starting-values`: links 1, 3, 4, 5, 13 and 14 move from the unbound-native error to the library's
-`NotYet` on `WillowGame.BlackMarketUpgradeAttributeValueResolver`, still inside `maya:8`; 0/14/0. ctest and
-verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-58; logs under
-ignored `local/p2/fix-attr-getvalue/`.
+**FIX-ATTR-GETVALUE-NATIVE (2026-11-19, pc-hummer, review r1 folded in, rebased onto main 7e80d7b6):** AI-assisted
+(Claude Code, Opus 5.5). `AttributeDefinition.GetValue` bound as a script native in Off on `ow-attr`'s shared steps
+(preflight, context, out write, value chain). After the rebase: `cargo test -p ow-combat -p ow-attr -p ow-inventory
+--locked -j 4` 445 passed / 0 failed / 3 ignored (5 `GetValue` tests); clippy flags nothing in the changed files. Before
+review r1, on main b985dcbf: `cargo test --workspace` 2,044 / 0 / 45 and `crate_edges_test.py` 19 OK. Installed Off
+`--slice-gate` strict on this branch: 0/14/0, with links 1, 3, 4, 5, 13 and 14 at the player controller's starting-values
+`NotYet` (#444 is not on main yet, so the native is not reached). On a local unpushed merge with
+`fix/rust-class-starting-values` before review r1, the six links moved to the library's `NotYet` on
+`WillowGame.BlackMarketUpgradeAttributeValueResolver`, still inside `maya:8`. No real-game run; `UNVERIFIED` in game.
+Decision 2026-11-19-58; logs under ignored `local/p2/fix-attr-getvalue/`.
 
 **FIX-PLAYER-CLASS-B (2026-11-19, desktop, on main df99b25):** AI-assisted (Claude Code, Claude Opus 5.5). The pawn
 archetype preload (a harness input) and the player controller's starting values NotYet in Off; review r1 of #426 folded
