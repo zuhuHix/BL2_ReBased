@@ -61,11 +61,13 @@ class resident because the whole streaming package is: `BodyClass_Siren` shares 
    marker only matches `NotYet`). The harness (`apply_class_inputs`) reads the write tracker's counters when it
    starts and marks a `NotYet` from the preload, the same-package loads or the class select iff a counter moved.
 2. **No copies left behind.** The actor's own definition loads now run before the actor is made, so a failed load
-   leaves neither the actor nor its component copies. The spawn keeps the copies `apply_plan` returns and frees them
-   with the actor if making the actor fails, and `apply_plan` frees its copies if re-pointing fails.
+   leaves neither the actor nor its component copies. `apply_plan` frees the copies it made if it fails (making a
+   copy or re-pointing), and the spawn frees the actor; nothing can fail after `apply_plan` returns, so the spawn
+   keeps no copy list of its own (review r2 of #528).
 3. **A cached failure refuses every time.** A handle whose load already failed is no longer skipped: the spawn
    returns the store's cached error, its kind kept. The reference is treated as required (the conservative choice;
-   nothing shows it is optional).
+   nothing shows it is optional). Review r2 of #528: the harness's same-package loads do the same, so a retry of
+   `apply_class_inputs` after a failed load returns the cached error, unmarked, and never reaches the class select.
 4. **The marker follows the counters.** The spawn reads #518's counters (`Heap::committed_writes`, `GameRng::draws`,
    `DefStore::load_transitions`, copied from `origin/fix/rust-483-followup` @ 211484a5 in their own commit) when it
    starts. In Off a `NotYet` is marked iff one moved, replacing the `loaded` flag.

@@ -740,14 +740,9 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
         .into());
     };
     // A class default built here is published in the store's cache: in Off a cold build is a write, so every later
-    // `NotYet` of the spawn is marked (review r1 of #514, item 3). Building allocates the default object, so a heap
-    // that grew across the call shows it; a cached default allocates nothing.
-    let allocated = vm.space.heap.len();
-    let defaults = class_default(vm, class);
-    if vm.parity == ParityMode::Off && vm.space.heap.len() != allocated {
-        *loaded = true;
-    }
-    let defaults = defaults?;
+    // `NotYet` of the spawn is marked (review r1 of #514, item 3). Building allocates the default object, which moves
+    // the spawn's write counters (`spawn`); a cached default allocates nothing.
+    let defaults = class_default(vm, class)?;
     let space = &vm.space;
     if begun && (flag(space, defaults, "bStatic")? || flag(space, defaults, "bNoDelete")?) {
         return Ok(None);
@@ -802,10 +797,10 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
     // Off: the spot search on the template alone (NATIVE_SPAWN_PLACEMENT.md, crate::placement), before the actor is
     // made; a failed search makes nothing. The extent's loads run first (NATIVE_SPAWN_EXTENT.md section 5, step 5.3):
     // a load is a store write, so once one ran, every `NotYet` up to the actor's insertion is marked "stopped after
-    // partial writes: ", its kind kept, nothing rolled back: `loaded` is the spawn's own write flag, which `spawn`
-    // turns into the mark for every later error (review r1 of #498, item 2).
+    // partial writes: ", its kind kept, nothing rolled back: a load moves the spawn's counters, which `spawn` turns
+    // into the mark for every later error (review r1 of #498, item 2).
     let location = if off && crate::placement::search_runs(space, source, req.no_collision_fail, client)? {
-        *loaded |= crate::placement::load_extent_components(vm, source)?;
+        crate::placement::load_extent_components(vm, source)?;
         match crate::placement::spot_search(vm, source, &requested)? {
             Some(l) => l,
             None => return Ok(None),
@@ -849,19 +844,17 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
             // Every refusal of the instancing, and the actor's own definition loads, run before the actor is made
-            // (review r1 of #528, items 2 and 3); a failure while making it frees it and the copies made for it.
+            // (review r1 of #528, items 2 and 3). A failure while making it frees the actor; `apply_plan` frees the
+            // copies it made before it fails (review r2 of #528: nothing can fail after it returns).
             let plan = instancing::plan_components(vm, source)?;
             load_own_definitions(vm, source, &plan)?;
             let actor = vm.instantiate(class, "")?;
-            let mut copies: Vec<ObjRef> = Vec::new();
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
-                copies = apply_plan(vm, &plan, actor)?.into_iter().map(|p| p.1).collect();
-                Ok(())
+                apply_plan(vm, &plan, actor).map(|_| ())
             });
             if let Err(e) = made {
-                copies.push(actor);
-                let _ = vm.space.free_many(&copies);
+                let _ = vm.space.free(actor);
                 return Err(e);
             }
             actor

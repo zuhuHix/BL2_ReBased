@@ -152,20 +152,30 @@ fn reference_does_neither_input() {
     assert!(x.vm.space.live(thing).next().is_none(), "no preload");
 }
 
-/// Review r1 of #528, item 1: a same-package reference whose load itself fails stops the step with the store's
-/// `NotYet`, its kind kept, and marked (the preload and the failed load are writes); the class select does not run.
+/// Review r1 of #528, item 1, and r2: a same-package reference whose load itself fails stops the step with the store's
+/// `NotYet`, its kind kept, and marked (the preload and the failed load are writes). A retry meets the cached failure:
+/// the same typed refusal, unmarked (nothing was written). The class select runs on neither attempt.
 #[test]
 fn a_failed_same_package_load_keeps_its_kind_and_is_marked() {
     let mut x = fx(ParityMode::Off, "WillowGame.ToyLinkedArchetype");
-    match apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)) {
-        Err(ow_vm::error::VmError::NotYet(n)) => {
-            assert_eq!(n.missing, ow_core::notyet::Missing::NotRead);
-            assert!(n.what.starts_with("stopped after partial writes: "), "{n}");
-            assert!(n.what.contains("archetype chain is a cycle"), "{n}");
+    let mut first = String::new();
+    for attempt in 0..2 {
+        match apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)) {
+            Err(ow_vm::error::VmError::NotYet(n)) => {
+                assert_eq!(n.missing, ow_core::notyet::Missing::NotRead, "attempt {attempt}");
+                assert!(n.what.contains("archetype chain is a cycle"), "{n}");
+                let marked = n.what.starts_with("stopped after partial writes: ");
+                assert_eq!(marked, attempt == 0, "attempt {attempt}: {n}");
+                if attempt == 0 {
+                    first = n.what.to_string();
+                } else {
+                    assert_eq!(format!("stopped after partial writes: {}", n.what), first, "the same error");
+                }
+            }
+            other => panic!("attempt {attempt}: expected the load's NotYet, got {other:?}"),
         }
-        other => panic!("expected the load's NotYet, got {other:?}"),
     }
-    assert!(x.seen.borrow().is_empty(), "no class select");
+    assert!(x.seen.borrow().is_empty(), "no class select on either attempt");
 }
 
 /// Review r1 of #528, item 1: the write state is carried through the class select, so its refusal after a preload

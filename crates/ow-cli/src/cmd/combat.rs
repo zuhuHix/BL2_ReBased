@@ -279,9 +279,10 @@ fn has_player_class(vm: &Vm, controller: ObjRef) -> Result<bool, VmError> {
 /// by the time `ApplyCharacterClassDefaults` reads it off the archetype and hands it to `BodySelectClass`. An UNVERIFIED
 /// stand-in, like the preload it extends: which exports the game's streaming load makes resident is not read.
 ///
-/// Only object-valued slots are read (arrays and structs are not walked). A reference to another package, or a handle
-/// whose load already failed, is left alone. Each load is logged; a fresh failure is the step's error. Returns the
-/// object paths loaded, in slot order.
+/// Only object-valued slots are read (arrays and structs are not walked). A reference to another package is left alone.
+/// Each load is logged. A fresh failure is the step's error, and a handle whose load already failed returns that same
+/// error again, its kind kept (review r2 of #528, as the spawn does), so a retry never reaches the class select.
+/// Returns the object paths loaded, in slot order.
 pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Result<Vec<String>, VmError> {
     use ow_object::heap::Origin;
     let package_of = |vm: &Vm, o: ObjRef| match vm.space.heap.get(o).map(|x| x.origin) {
@@ -301,7 +302,7 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     }
     let mut done = Vec::new();
     for r in refs {
-        if package_of(vm, r) != Some(home) || !vm.defs.is_unloaded(&vm.space, r) || vm.defs.is_failed(&vm.space, r) {
+        if package_of(vm, r) != Some(home) || !vm.defs.is_unloaded(&vm.space, r) {
             continue;
         }
         let path = match vm.space.heap.get(r).map(|x| x.origin) {

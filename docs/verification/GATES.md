@@ -202,6 +202,9 @@ Results:
   ow-world` 225 passed / 0 failed / 5 ignored; `cargo test -p ow-cli` 116 + 2 passed / 1 ignored; `cargo test
   --workspace` 2,454 passed / 0 failed / 46 ignored. The same installed gate gave 1 ok / 10 NotYet / 3 errors, link 1
   0 of 1 at the same `LayerAbsent`, links 3, 4, 5, 13 and 14 with it.
+- Review r2 of #528 (the harness retries a cached failure; the unreachable copy cleanup removed): `cargo test -p
+  ow-world` 225 / 0 / 5; `cargo test -p ow-cli` 116 + 2 / 0 / 1; `cargo test --workspace` 2,454 passed / 0 failed /
+  46 ignored. The gate was not re-run (no change on the installed path: Maya's same-package loads succeed).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-NNN.
