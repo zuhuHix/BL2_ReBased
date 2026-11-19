@@ -756,10 +756,13 @@ fn expect_unmarked(r: Result<Value, VmError>, what: &str) {
 }
 
 const MISSION: &str = "WillowGame.WillowPlayerController.GetActiveMissionNumber";
+/// What the toy's `GetActiveMissionNumber` answers since decision 2026-11-19-93: the toy world has no level, so the
+/// fallback runs, and the toy controller declares no `GetCurrentPlaythrough` (`NotYet { NotRead }`).
+const MISSION_STOP: &str = super::super::mission_numbers::PLAYTHROUGH_QUERY;
 
-/// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then the
-/// unread `GetActiveMissionNumber`: its `NotYet` leaves the refresh marked, kind kept. A second lookup does not clear
-/// the mark.
+/// Through the wrapped refresh (review r1 of #464, item 1): the client lookup's fill, then a second lookup, then
+/// `GetActiveMissionNumber`, whose `NotYet` (the toy's unread playthrough query) leaves the refresh marked, kind kept.
+/// A second lookup does not clear the mark.
 #[test]
 fn a_not_yet_after_the_refreshs_fill_is_marked_past_a_second_lookup() {
     let mut t = fill_toy(Some("WillowGame.WillowOnlineGameSettings"), None);
@@ -770,7 +773,7 @@ fn a_not_yet_after_the_refreshs_fill_is_marked_past_a_second_lookup() {
         let f = c.vm.find_function(MISSION)?;
         Ok(c.vm.call(f, pc, vec![])?.ret)
     });
-    expect_marked(t.refresh(), Missing::NotRead, "GetActiveMissionNumber");
+    expect_marked(t.refresh(), Missing::NotRead, MISSION_STOP);
 }
 
 /// A `NotYet` from outside the listed bindings, after a setting was written in the refresh, is marked as it leaves the
@@ -809,14 +812,14 @@ fn writes_outside_a_refresh_leave_no_mark() {
     t.set_properties(settings, &[(1, 1, 0)]);
     t.call(SET_INT_PROPERTY, Some(settings), vec![Value::Int(1), Value::Int(31)]).unwrap();
     let pc = t.make("WillowGame.WillowPlayerController", "ToyPC");
-    expect_unmarked(t.call(MISSION, Some(pc), vec![]), "GetActiveMissionNumber");
+    expect_unmarked(t.call(MISSION, Some(pc), vec![]), MISSION_STOP);
     t.on_step(|c| {
         data_store_client(c.vm)?;
         let pc = c.this;
         let f = c.vm.find_function(MISSION)?;
         Ok(c.vm.call(f, pc, vec![])?.ret)
     });
-    expect_unmarked(t.refresh(), "GetActiveMissionNumber");
+    expect_unmarked(t.refresh(), MISSION_STOP);
     assert!(t.vm.service::<DataStores>().unwrap().borrow().refresh.is_empty(), "no refresh left open");
 }
 

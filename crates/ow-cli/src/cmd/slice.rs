@@ -94,7 +94,7 @@ pub const REFERENCE_STUBS: &[(&str, &str)] = &[
     ("MissionTracker.RegisterWaypoint(object,object)", "the HUD waypoint registry; presentation, not read"),
     ("Object.Localize(string,string,string)", "localized text lookup; no localization files are read"),
     ("PlayerController.IsLocalPlayerController()", "a controller query; the C++ has none (Off binds it, decision 2026-11-19-15)"),
-    ("QuestAcceptGFxMovie.UpdateMissionTextList()", "the mission screen's text list; the screen is not hosted"),
+    ("QuestAcceptGFxMovie.UpdateMissionTextList()", "the mission screen's text list; the screen is not hosted (Off binds it, decision 2026-11-19-93)"),
     ("Trigger.TriggerDetachSprites()", "editor sprites of a trigger; presentation"),
     ("WillowGFxMovie3D.FocusOn(object)", "the 3D movie's camera focus; presentation"),
     (

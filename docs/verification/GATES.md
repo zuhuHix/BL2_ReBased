@@ -11,6 +11,15 @@ AI-assisted (Claude Code, Opus 5.5). The recorded resource pool idle-reset hooks
 unbound native `GameEngine.GetOnlineSubsystem()` (graded error; NATIVE_LOGIN_STATUS.md, #474). Without #458 they stop
 earlier, at `BlackMarketUpgradeAttributeValueResolver`. ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-98; logs under ignored `local/p2/link1/`.
+**IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
+Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and `UpdateMissionTextList` in Off, from
+NATIVE_MISSION_NUMBERS.md (#473 at eb24ea43). `cargo build --workspace --locked -j 4` clean; `cargo test --workspace
+--locked -j 4` 2,196 passed / 0 failed / 46 ignored (10 new tests in `ow-world`); `crate_edges_test.py` 19 OK. Installed
+Off `--slice-gate` strict (release build): 0 ok / 14 NotYet / 0 errors. Links 10 to 12 get past both mission numbers and
+still pass 3 of 4 driver steps, stopping in `accept` at the bridge's own `MissionTracker.GetAllMissions` `LayerAbsent`
+("stopped after partial writes"); the other links are unchanged. ctest and verify_packages not run (no C++ change). No
+real-game run; every rule stays `UNVERIFIED` in game. Decision 2026-11-19-93; logs under ignored
+`local/p2/mission-numbers/`.
 
 **IMPL-PAWN-AI-INTERFACE (2026-11-19, desktop, on main bb46e11):** AI-assisted (Claude Code, Claude Opus 5.5).
 `Pawn`'s `QueryInterface` rule for `IAIInterface` in Off (a per-class rule registry in `ow-vm`, `ow-combat`

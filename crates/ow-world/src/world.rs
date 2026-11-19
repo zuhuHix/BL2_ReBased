@@ -581,6 +581,9 @@ pub mod localize;
 /// The engine's data store client and the online game settings route (lane IMPL-ONLINE-GAME-SETTINGS).
 pub mod datastore;
 
+/// The two mission numbers of the settings refresh and the mission screen's text list (lane IMPL-MISSION-NUMBERS).
+pub mod mission_numbers;
+
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;
 pub mod pawn_data;
