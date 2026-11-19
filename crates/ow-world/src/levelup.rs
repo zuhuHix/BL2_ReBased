@@ -91,7 +91,8 @@ pub fn recalculate_attribute_initialized_state(
 pub const RECORD_MIND: &str = "NATIVE_MIND_ROUTE.md section 3";
 
 /// `WillowMind`'s override, the parts before the shared controller part (NATIVE_MIND_ROUTE.md section 3), Off only.
-/// Every refusal is decided before anything changes:
+/// Every refusal of the mind's own part and of the controller part's class-level step is decided before anything
+/// changes; the skill refresh's own refusal comes after `GetSkillManager`, which may have made the manager by then:
 /// - **the mind's own part** (with both `AIClass` and `MyWillowPawn`) sets the pawn's `CommerceMarkup` and ten
 ///   status-effect resistances from evaluations of the class's init data. The note does not name the context those are
 ///   evaluated with, so it is `NotYet { NotRead }`;
@@ -114,6 +115,9 @@ fn mind_override(vm: &mut Vm, mind: ObjRef) -> Result<(), VmError> {
         )
         .into());
     }
+    // The shared controller part's class-level refusal comes first, so the skill refresh below (whose
+    // `GetSkillManager` can make the manager lazily) never runs ahead of a refusal (review r1 of #418).
+    refuse_class_parts(&vm.space, mind)?;
     let world_info = object(&vm.space, mind, "WorldInfo")?;
     let game = match world_info {
         Some(w) => object(&vm.space, w, "Game")?,

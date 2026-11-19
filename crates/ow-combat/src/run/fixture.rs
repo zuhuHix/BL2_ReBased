@@ -633,6 +633,8 @@ pub fn willow_game() -> Vec<u8> {
     w.prop("Object", ai_class, "AIDef", 0, 0);
     let starting = w.strukt(ai_class, "AttributeStartingValue");
     w.prop("Object", starting, "Attribute", 0, 0);
+    // The spawn move `SetDefaultPhysics` gates on (a `WillowGame` class; review r1 of #418, decision 2026-11-19-32).
+    w.cls("SpecialMove_Spawned", 0);
     let mind = w.cls("WillowMind", controller);
     let mind_ai_class = w.prop("Object", mind, "AIClass", 0, 0);
     // The AI mind's class route (NATIVE_COMBAT_GROUNDWORK.md section 1.11; decision 2026-11-19-26), cut to what the toy
@@ -1686,7 +1688,8 @@ pub fn toy_starting() -> Vec<u8> {
 }
 
 /// `ToyRoute` (decision 2026-11-19-32), an extra package the route-native tests add: `ToyRoutePawn` (a `WillowAIPawn`
-/// with `bIsDead` and an `SMComponent`) and `ToySMComponent`, whose `CurrentSMData` struct holds `SMD`.
+/// with `bIsDead` and an `SMComponent`), `ToySMComponent`, whose `CurrentSMData` struct holds `SMD`, and `ToyOtherMove`,
+/// a special move that is not the spawn move.
 pub fn toy_route() -> Vec<u8> {
     let mut w = Toy::new(&["Object", "Bool", "Struct"]);
     w.import_root();
@@ -1699,6 +1702,8 @@ pub fn toy_route() -> Vec<u8> {
     let pawn = w.cls("ToyRoutePawn", ai_pawn);
     w.prop("Bool", pawn, "bIsDead", 0, 0);
     w.prop("Object", pawn, "SMComponent", 0, component);
+    // A special move that is not `SpecialMove_Spawned` (the gate's toy `SpecialMove_Spawned` is `willow_game()`'s).
+    w.cls("ToyOtherMove", 0);
     w.build()
 }
 

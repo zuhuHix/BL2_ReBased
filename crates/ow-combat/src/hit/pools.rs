@@ -220,7 +220,8 @@ pub const RECORD_ROUTE: &str = "NATIVE_MIND_ROUTE.md";
 /// `WillowPawn.SetDefaultPhysics()` (NATIVE_MIND_ROUTE.md section 1), Off. The gates first. Nothing changes when:
 /// - the pawn is gone (`bDeleteMe` or `bIsDead`);
 /// - it has no `SMComponent`;
-/// - that component's `CurrentSMData.SMD` is a `SpecialMove_Spawned` (a pawn in its spawn move keeps its physics).
+/// - that component's `CurrentSMData.SMD` is a `WillowGame.SpecialMove_Spawned` (a pawn in its spawn move keeps its
+///   physics); with a special move set, a world whose classes lack `SpecialMove_Spawned` is an error.
 ///
 /// The gate on the pawn's `ObjectArchetype` being a `Pawn` always passes for a pawn here: its archetype is its template
 /// or its class default object, both pawns (UNVERIFIED; the port does not model `ObjectArchetype`).
@@ -244,7 +245,10 @@ pub fn set_default_physics(vm: &mut Vm, pawn: ObjRef) -> Result<(), VmError> {
         .as_ref()
         .and_then(|v| ow_combat_field(vm, v, "SMD"))
         .and_then(|v| object_of(&v));
-    if let (Some(smd), Ok(spawned)) = (smd, vm.find_class("GearboxFramework.SpecialMove_Spawned")) {
+    if let Some(smd) = smd {
+        // `SpecialMove_Spawned` is a `WillowGame` class (research/native_by_class.json). A failed lookup is an error,
+        // never a gate that silently passes (review r1 of #418).
+        let spawned = vm.find_class("WillowGame.SpecialMove_Spawned")?;
         let own = vm.space.heap.get(smd)?.class;
         if vm.space.classes.is_child_of(own, spawned) {
             return Ok(());
