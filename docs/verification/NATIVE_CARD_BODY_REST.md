@@ -143,15 +143,17 @@ up: 0.5 gives 1, and −0.5 gives 0. So steps 3 and 5 must run in this order, on
 **Precision, all the way to the cutoff:**
 - V and the four remap values are single precision. The remap's arithmetic runs in the engine's wider float, and its
   result is stored back to single precision. The rule: compute in double, then round to single.
-- **In modes 0 to 3**, n comes from the doubled sum (step 5). In double, the sum and the mode-0 product
-  `10^P × W` are exact, since `10^P` is exact in single precision for P from 0 to 10. So n is the floor or ceil form.
+- **In modes 0 to 3**, n comes from the doubled sum (step 5). In double, the mode-0 product `10^P × W` is exact
+  (`10^P` is exact in single precision for P from 0 to 10). The sum is either exact or rounded without moving n,
+  except for the tiny values below about 1e-16 (see below). So n is the floor or ceil form.
   **But if the engine's wider float ran at single precision** (open question 2), the product in mode 0 and the sum in
   every mode would round first, and that can move n across 0:
   - `IntRound`, W = 0.5 − 2^-25: n is 0 exactly, but 1.5 − 2^-24 rounds to 1.5 in single, ties to even give 2, and the
     halved n is 1;
   - `IntFloor`, W = −1.2e-8: n is −1 exactly, but the sum rounds to −0.5 in single, which converts to 0, so n = 0.
 
-  Section 4 refuses whenever the single-precision steps change whether n is 0.
+  Section 4 refuses whenever the single-precision steps change whether n is 0. In mode 0 with P of 8 or more, it
+  also refuses when they change the outcome of the cutoff band (below), even without crossing 0.
 - **Even in double** the floor and ceil forms fail when |W| is below about 1e-16, where the 0.5 swamps 2X. A V that
   small is snapped to 0 in step 1, and the percent scale only enlarges, so only a remap output can reach it.
 - **The cutoff.** In modes 1 to 3 the size is |n|, which is 0 or at least 1, so the test is `n ≠ 0`. In mode 0 the
@@ -210,9 +212,13 @@ up: 0.5 gives 1, and −0.5 gives 0. So steps 3 and 5 must run in this order, on
    - In modes 0 to 3, the doubled value the engine converts is NaN, infinite or outside the signed 32-bit range:
      "CacheWeaponCard: a displayed value outside the integer range". That value is `2 × X ± 0.5`, computed in double,
      where X is W, or `10^P × W` in mode 0.
-   - In modes 0 to 3: compute n twice, once in double (the rule) and once with every step rounded to single (in mode
-     0 the product, then the doubled sum in every mode). Refuse when the two disagree on whether n is 0:
-     "CacheWeaponCard: the display rounding's intermediate precision".
+   - In modes 0 to 3, compute n twice: once in double (the rule), and once with every step rounded to single (the
+     product in mode 0, then the doubled sum in every mode). Refuse, with "CacheWeaponCard: the display rounding's
+     intermediate precision", when the two disagree:
+     - in mode 0 with P of 8 or more (hub ruling): on the outcome, which is hidden (|n| ≤ 10^(P−8) / 2), in the band
+       (between), or shown (|n| ≥ 2 × 10^(P−8)). For example, at P = 8, a double n of −2 shows and a single n of −1
+       is in the band; at P = 9, a double n of 5 hides and a single n of 6 is in the band;
+     - in every other case: on whether n is 0.
    - In mode 0, with P of 8 or more and 10^(P−8) / 2 < |n| < 2 × 10^(P−8): "CacheWeaponCard: a displayed value at the
      display cutoff".
    - The remap's four evaluations refuse as the attribute layer refuses (typed, passed through unchanged).
