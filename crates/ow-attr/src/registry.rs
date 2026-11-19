@@ -288,6 +288,28 @@ impl AttributeSystem {
         effects::remove_modifier(self, attr, context, modifier, suppress_notify, cx)
     }
 
+    /// The storages an add or remove of a modifier through `attr`'s value chain on `context` would touch, found without
+    /// writing; `None` when the chain would refuse (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97).
+    pub fn modifier_storages(
+        &self,
+        attr: ObjRef,
+        context: ObjRef,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<Option<Vec<crate::api::Storage>>, AttrError> {
+        effects::modifier_storages(self, attr, context, cx)
+    }
+
+    /// A new `Core.AttributeModifier` of `kind` and `value`, outer `outer` (the object the apply natives make).
+    pub fn new_modifier(
+        &self,
+        outer: Option<ObjRef>,
+        kind: crate::stack::ModifierType,
+        value: f32,
+        cx: &mut EvalCx<'_>,
+    ) -> Result<ObjRef, AttrError> {
+        effects::make_modifier(cx, outer, kind, value)
+    }
+
     /// `AttributeDefinitionBase.SetAttributeBaseValue(ContextSource, BaseValue, bSuppressNotify)`. `Ok(true)` only
     /// when at least one context and one resolver were found and every set succeeded (NATIVE_ATTRIBUTES.md section
     /// 1), the bool the script sees. The calls stop at the first failure; earlier sets stay (no rollback).

@@ -57,6 +57,43 @@ fn storage_at(
     resolver.storage(sys, r, context, cx)
 }
 
+/// The storages an add or a remove of a modifier through `attr`'s value chain on `context` would touch, in chain
+/// order, found without writing anything: `None` when the chain would refuse (no value resolvers, a None entry, an
+/// entry whose resolver takes no writes). The same walk as [`add_chain`] and [`remove_modifier`] up to the point where
+/// they touch a stack (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS, decision 2026-11-19-97: the read-only test its note
+/// asks for). A resolver handle that is not loaded is loaded by the walk, as the add's own walk does; a caller that
+/// must not load checks first.
+pub(crate) fn modifier_storages(
+    sys: &AttributeSystem,
+    attr: ObjRef,
+    context: ObjRef,
+    cx: &mut EvalCx<'_>,
+) -> Result<Option<Vec<Storage>>, AttrError> {
+    let chain = value_chain(cx, attr)?;
+    if chain.is_empty() {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(chain.len());
+    for entry in chain {
+        let Some(r) = entry else { return Ok(None) };
+        match storage_at(sys, r, context, cx)? {
+            Some(s) => out.push(s),
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(out))
+}
+
+/// [`new_modifier`] for a caller outside this crate (the slot natives make their own modifiers).
+pub(crate) fn make_modifier(
+    cx: &mut EvalCx<'_>,
+    outer: Option<ObjRef>,
+    kind: ModifierType,
+    value: f32,
+) -> Result<ObjRef, AttrError> {
+    new_modifier(cx, outer, kind, value)
+}
+
 /// The add through the chain. `on_stack` is set once a stack attribute's add was asked for the modifier, so a
 /// stack may hold it from then on (also when that add or a later step failed); a plain edit keeps no reference.
 fn add_chain(

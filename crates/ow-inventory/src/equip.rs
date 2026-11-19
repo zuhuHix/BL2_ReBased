@@ -56,6 +56,8 @@ use ow_vm::error::VmError;
 pub mod natives;
 /// The attribute slot natives (`InitializeAttributeSlots`; lane IMPL-INIT-ATTRIBUTE-SLOTS).
 pub mod slots;
+/// `ApplyInternalSlotEffectModifiers` (lane IMPL-APPLY-SLOT-EFFECT-MODIFIERS).
+pub mod internal_slots;
 /// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
 pub mod value;
 
