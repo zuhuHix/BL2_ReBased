@@ -59,7 +59,8 @@ fn willow_game() -> Vec<u8> {
     let controller = t.p.add_import("Core", "Class", engine, "Controller");
     let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
     let dropped = t.p.add_import("Core", "Class", engine, "DroppedPickup");
-    t.class("WillowPlayerPawn", pawn);
+    let player = t.class("WillowPlayerPawn", pawn);
+    t.class("ToyPlayerPawnSubclass", player);
     let player = t.class("WillowPlayerController", controller);
     native(&mut t, player, "GetInventoryPawn", &[], Some(("Object", pawn)));
     let globals = t.class("WillowGlobals", object);
@@ -132,8 +133,9 @@ fn not_read(r: Result<Value, VmError>) -> String {
     }
 }
 
-/// `GetInventoryPawn` (the Off contract): the controller's plain player pawn, None without one; any other pawn,
-/// a vehicle or a plain `Pawn`, is `NotYet { NotRead }` (open question 4).
+/// `GetInventoryPawn` (the Off contract): the controller's plain player pawn, None without one; any other pawn, a
+/// vehicle, a plain `Pawn` or a subclass of the player pawn (review r2 of #452), is `NotYet { NotRead }` (open
+/// question 4).
 #[test]
 fn get_inventory_pawn_supports_only_a_plain_player_pawn() {
     let mut x = fx(ParityMode::Off);
@@ -143,7 +145,7 @@ fn get_inventory_pawn_supports_only_a_plain_player_pawn() {
     let maya = x.obj("WillowGame.WillowPlayerPawn");
     x.set(controller, "Pawn", Value::Object(Some(maya)));
     assert_eq!(x.call(path, controller, vec![]).unwrap(), Value::Object(Some(maya)));
-    for class in ["Engine.Vehicle", "Engine.Pawn"] {
+    for class in ["Engine.Vehicle", "Engine.Pawn", "WillowGame.ToyPlayerPawnSubclass"] {
         let other = x.obj(class);
         x.set(controller, "Pawn", Value::Object(Some(other)));
         assert!(not_read(x.call(path, controller, vec![])).contains("open question 4"), "{class}");

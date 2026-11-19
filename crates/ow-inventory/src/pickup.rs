@@ -4,9 +4,10 @@
 //! (the touch state, the key, `GiveTo`, `AddInventory`, the destroy), and the VM runs it.
 //!
 //! - **`WillowPlayerController.GetInventoryPawn()`** (section 7's table, medium confidence; the Off contract): the
-//!   controller's `Pawn`, None without one. Only a plain player pawn (a `WillowPlayerPawn`) is supported: it answers
-//!   as no vehicle. Any other pawn is `NotYet { NotRead }`, because the note leaves the vehicle test open (question 4),
-//!   and a vehicle gives its `Driver` instead.
+//!   controller's `Pawn`, None without one. Only a plain player pawn is supported: one of the concrete class
+//!   `WillowPlayerPawn`, which answers as no vehicle. Any other pawn, a subclass included, is `NotYet { NotRead }`,
+//!   because the note leaves the vehicle test open (question 4) and a vehicle gives its `Driver` instead. A failed
+//!   class lookup is that error, not the refusal (review r2 of #452).
 //! - **`DroppedPickup.TouchPickupTrace(StartLoc, EndLoc)`** (section 3; the Off contract): `NotYet { NotRead }`. What
 //!   blocks the trace inside the native was not read, so a touch's validity cannot be settled in Off.
 //! - **`DroppedPickup.AddToNavigation()`** (high confidence): does nothing in this build.
@@ -41,9 +42,9 @@ fn get_inventory_pawn(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let Some(pawn) = object_of(&required(c.vm, controller, "Pawn", WHAT)?, WHAT)? else {
         return Ok(Value::Object(None));
     };
-    let player = c.vm.find_class("WillowGame.WillowPlayerPawn").ok();
+    let player = c.vm.find_class("WillowGame.WillowPlayerPawn")?;
     let class = c.vm.space.heap.get(pawn)?.class;
-    if !player.is_some_and(|p| c.vm.space.classes.is_child_of(class, p)) {
+    if class != player {
         return Err(NotYet::not_read(
             format!(
                 "GetInventoryPawn on a {} (only a plain player pawn is supported: the vehicle test, and so whether its \
