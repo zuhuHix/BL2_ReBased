@@ -124,6 +124,12 @@ component holds the class defaults: `Owner` None, `Animations` None and the list
 
 ## 5. For the hub: the registry walk
 
+**Hub ruling (2026-11-19, review of #492):** "nothing". In Off, a world without that registry models it as an
+explicit, empty registry layer, so the walk finds no entry and steps 2 and 3 run. It is a port Off answer,
+UNVERIFIED, like the empty online-subsystem slot. A lane that later binds a native which adds entries to the
+registry adds them to that layer, and the walk then reads them. The options below are kept as the record of
+the question.
+
 - **The case for "nothing".** In the slice's call the component was made one statement earlier and is not attached.
   The port has no such registry, and no native the port binds adds entries to one. So the walk would find nothing.
 - **Why the note does not take it.** The registry's adders were not identified (open question 1). A native that adds
