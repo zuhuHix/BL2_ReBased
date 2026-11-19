@@ -11,7 +11,8 @@
 //!   interleaving ("Draw order": the firing `FRand`; the pool's roll with each new inventory's two draws and its
 //!   parts roll; then the toss draws; then the next pool) is not reproduced on one generator (UNVERIFIED).
 //! - `ComputeMonetaryValue()`: 0 without an inventory definition; otherwise the definition's `MonetaryValue`
-//!   (attribute initialization data) evaluated and truncated toward zero, then capped by the definition's
+//!   (attribute initialization data) evaluated with the inventory itself as context (NATIVE_INVENTORY_VALUE.md
+//!   section 3; decision 2026-11-19-45) and truncated toward zero, then capped by the definition's
 //!   `FormOfCurrency`: credits 99,999,999, Eridium 500, the other in-range values 999, and a value past the enum's last
 //!   entry 0. A negative value is not raised.
 //! - `GetManufacturer()`: the inventory's `DefinitionData.ManufacturerDefinition`, as it is.
@@ -20,9 +21,8 @@
 //! `WillowInventoryDefinition` the inventory's `DefinitionData` holds: `WeaponTypeDefinition` (a weapon's data) or
 //! `ItemDefinition` (an item's), the fields the installed `InitializeInventory` writes.
 //!
-//! **`NotYet { NotRead }`, each naming its question.** A `MonetaryValue` that reads an attribute or an initialization
-//! definition (which context the evaluation is given is open question 2 of the note; a constant evaluates the same in
-//! every context); a truncation of a NaN or a value outside the `int` range; a `FormOfCurrency` enum that is not the
+//! **`NotYet { NotRead }`, each naming its question.** Whatever part of the `MonetaryValue` evaluation the attribute
+//! evaluator cannot do (its own `NotYet`); a truncation of a NaN or a value outside the `int` range; a `FormOfCurrency` enum that is not the
 //! note's 13 entries (credits, Eridium, Seraph crystals and ten reserved), or a byte on a trailing `_MAX` entry; an
 //! inventory whose class declares no `DefinitionData`, or whose data holds neither definition field.
 //!
@@ -212,16 +212,13 @@ pub fn monetary_value_of(vm: &mut Vm, me: ObjRef) -> Result<Value, VmError> {
     }
     let raw = crate::equip::required(vm, definition, "MonetaryValue", NATIVE)?;
     let init = ow_attr::eval::init_data(&vm.space, &raw)?;
-    if init.base_value_attribute.is_some() || init.initialization_definition.is_some() {
-        return Err(not_read(
-            "ComputeMonetaryValue of a MonetaryValue that reads an attribute or an initialization definition \
-             (the context the evaluation is given; NATIVE_LOOT_SPAWN.md open question 2)",
-        ));
-    }
+    // The context is the inventory itself (NATIVE_INVENTORY_VALUE.md section 3, which answers NATIVE_LOOT_SPAWN.md's
+    // open question 2; lane FIX-VALUE-B, decision 2026-11-19-45). Whatever the evaluator cannot do answers its own
+    // `NotYet`.
     let sys = vm.attrs.clone();
     let value = {
         let mut cx = EvalCx::new(&mut *vm);
-        sys.evaluate_init(&init, None, None, &mut cx)?
+        sys.evaluate_init(&init, Some(me), None, &mut cx)?
     };
     let cap = currency_cap_of(vm, definition)?;
     monetary_value(value, cap).map(Value::Int).map_err(not_read)

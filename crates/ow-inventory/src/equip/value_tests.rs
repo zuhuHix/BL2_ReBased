@@ -1,10 +1,13 @@
 //! The value natives on an invented class set (AGENTS.md rule 9; decision 2026-11-19-36). Expected values are written
 //! by hand from NATIVE_INVENTORY_VALUE.md. Every init value here has scale 1 and no base attribute, so its value is its
-//! constant whatever the evaluator's formula.
+//! constant whatever the evaluator's formula. The normalized damage tests (decision 2026-11-19-45) add two toy resolvers,
+//! `Test.Same` (the context is the source) and `Test.IsWeapon` (40 on a weapon, an error on anything else).
 
 use std::rc::Rc;
 
 use ow_attr::AttributeSystem;
+use ow_attr::api::{AttrError, ContextResolver, ValueResolver};
+use ow_core::notyet::Missing;
 use ow_core::{ObjectPath, ParityMode};
 use ow_defs::DefStore;
 use ow_object::heap::{ObjectSpace, Origin};
@@ -23,6 +26,47 @@ struct Toy {
     wdata: StructId,
     idata: StructId,
 }
+
+/// A toy context resolver: the context is the source itself.
+struct Same;
+impl ContextResolver for Same {
+    fn resolve(
+        &self,
+        _: &AttributeSystem,
+        _: ObjRef,
+        _: ObjRef,
+        source: Option<ObjRef>,
+        _: &mut EvalCx<'_>,
+    ) -> Result<Option<ObjRef>, AttrError> {
+        Ok(source)
+    }
+}
+
+/// A toy value resolver: 40 on a weapon context, a data error on any other.
+struct IsWeapon(ClassId);
+impl ValueResolver for IsWeapon {
+    fn value(&self, _: &AttributeSystem, _: ObjRef, context: ObjRef, _: f32, cx: &mut EvalCx<'_>) -> Result<f32, AttrError> {
+        let space = cx.world.parts().space;
+        let class = space.heap.get(context)?.class;
+        if space.classes.is_child_of(class, self.0) {
+            Ok(40.0)
+        } else {
+            Err(AttrError::BadData { reason: "IsWeapon: the context is not a weapon".into() })
+        }
+    }
+}
+
+/// The weapon's normalized damage fields (section 5); `true` marks a stack (an array of modifier objects).
+const NORMALIZED_FIELDS: [(&str, bool); 8] = [
+    ("InstantHitDamageModifierStack", true),
+    ("MeleeDamageModifierStack", true),
+    ("NormalizedInstantHitDamageModifierStack", true),
+    ("NormalizedMeleeDamageModifierStack", true),
+    ("NormalizedInstantHitDamageBaseValue", false),
+    ("NormalizedMeleeDamageBaseValue", false),
+    ("NormalizedInstantHitDamage", false),
+    ("NormalizedMeleeDamage", false),
+];
 
 fn decl(space: &mut ObjectSpace, name: &str, kind: PropKind) -> PropertyDecl {
     PropertyDecl::new(space.names.intern(name), kind)
@@ -44,7 +88,7 @@ impl Toy {
             .classes
             .define_struct("Engine.AttributeInitializationDefinition.AttributeInitializationData", None, fields)
             .unwrap();
-        let chains = vec![decl(&mut s, "ContextResolverChain", objs.clone()), decl(&mut s, "ValueResolverChain", objs)];
+        let chains = vec![decl(&mut s, "ContextResolverChain", objs.clone()), decl(&mut s, "ValueResolverChain", objs.clone())];
         let base = s.classes.define("Engine.AttributeDefinitionBase", Some(object), chains).unwrap();
         s.classes.define("Engine.AttributeDefinition", Some(base), vec![]).unwrap();
         s.classes.define("Engine.AttributeInitializationDefinition", Some(object), vec![]).unwrap();
@@ -61,6 +105,8 @@ impl Toy {
             decl(&mut s, "BaseMonetaryValueModifier", PropKind::Float),
             decl(&mut s, "MonetaryValue", PropKind::Struct(aid)),
             decl(&mut s, "FormOfCurrency", PropKind::Byte { enum_: Some(currency) }),
+            decl(&mut s, "NormalizedInstantHitDamage", PropKind::Struct(aid)),
+            decl(&mut s, "NormalizedMeleeDamage", PropKind::Struct(aid)),
         ];
         let definition = s.classes.define("Test.Definition", Some(object), definition).unwrap();
         s.classes.define("WillowGame.MissionItemDefinition", Some(definition), vec![]).unwrap();
@@ -85,14 +131,29 @@ impl Toy {
             ]
         };
         let inventory = s.classes.define("WillowGame.WillowInventory", Some(object), vec![]).unwrap();
-        let wf = fields(&mut s, wdata);
-        s.classes.define("WillowGame.WillowWeapon", Some(inventory), wf).unwrap();
+        let mut wf = fields(&mut s, wdata);
+        for (name, stack) in NORMALIZED_FIELDS {
+            let kind = if stack { objs.clone() } else { PropKind::Float };
+            wf.push(decl(&mut s, name, kind));
+        }
+        let weapon = s.classes.define("WillowGame.WillowWeapon", Some(inventory), wf).unwrap();
+        let modifier = vec![decl(&mut s, "Type", PropKind::Byte { enum_: None }), decl(&mut s, "Value", PropKind::Float)];
+        s.classes.define("Engine.AttributeModifier", Some(object), modifier).unwrap();
+        s.classes.define("Test.Same", Some(object), vec![]).unwrap();
+        s.classes.define("Test.IsWeapon", Some(object), vec![]).unwrap();
         let itf = fields(&mut s, idata);
         s.classes.define("WillowGame.WillowItem", Some(inventory), itf).unwrap();
-        let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(AttributeSystem::standard().unwrap()), mode);
+        let attrs = AttributeSystem::standard()
+            .unwrap()
+            .with_context_resolver("Test.Same", Same)
+            .unwrap()
+            .with_value_resolver("Test.IsWeapon", IsWeapon(weapon))
+            .unwrap();
+        let mut vm = Vm::new(s, DefStore::new_empty(), Rc::new(attrs), mode);
         for (path, key) in [
             ("WillowGame.WillowWeapon.ComputeValueOfParts", WEAPON_VALUE),
             ("WillowGame.WillowItem.ComputeValueOfParts", ITEM_VALUE),
+            ("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", NORMALIZED_DAMAGE),
         ] {
             vm.declare_function(FunctionDecl::native(ObjectPath::parse(path).unwrap(), key)).unwrap();
         }
@@ -142,6 +203,20 @@ impl Toy {
         let a = self.obj("Engine.AttributeDefinition", name);
         self.set(a, "ValueResolverChain", Value::array(vec![Value::Object(Some(r))]));
         a
+    }
+
+    /// A modifier object of raw type `kind` (0 Scale, 1 PreAdd, 2 PostAdd) and value `v`.
+    fn modifier(&mut self, name: &str, kind: u8, v: f32) -> Value {
+        let m = self.obj("Engine.AttributeModifier", name);
+        self.set(m, "Type", Value::Byte(kind));
+        self.set(m, "Value", Value::Float(v));
+        Value::Object(Some(m))
+    }
+
+    /// An init value read from `attr` (scale 1).
+    fn init_attr(&mut self, attr: ObjRef) -> Value {
+        let aid = self.aid;
+        self.st(aid, vec![("BaseValueAttribute", Value::Object(Some(attr))), ("BaseValueScaleConstant", Value::Float(1.0))])
     }
 
     fn definition(&mut self, class: &str, rarity: f32, modifier: f32, money: f32, currency: u8) -> ObjRef {
@@ -249,7 +324,82 @@ fn an_item_uses_the_rule_and_a_mission_item_needs_the_globals() {
 #[test]
 fn reference_binds_nothing() {
     let t = Toy::new(ParityMode::Reference);
-    for key in [WEAPON_VALUE, ITEM_VALUE] {
+    for key in [WEAPON_VALUE, ITEM_VALUE, NORMALIZED_DAMAGE] {
         assert!(!t.vm.has_native(key), "{key}");
+    }
+}
+
+/// `RecomputeNormalizedDamageValues` (section 5): each stack is copied; each base is the type definition's init value
+/// evaluated with the weapon as context (the instant-hit one reads an attribute only a weapon context answers, 40);
+/// each value is the base with the copied stack, as a float. Instant-hit: (40 + 2) x (1 + 0.5) = 63, a None element
+/// and a modifier of type 7 skipped. Melee: the constant 10, plus 3 = 13.
+#[test]
+fn normalized_damage_uses_the_weapon_and_its_copied_stacks() {
+    let mut t = Toy::new(ParityMode::Off);
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let same = t.obj("Test.Same", "Same");
+    let is_weapon = t.obj("Test.IsWeapon", "IsWeapon");
+    let attr = t.obj("Engine.AttributeDefinition", "NormalizedDamageAttr");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(same))]));
+    t.set(attr, "ValueResolverChain", Value::array(vec![Value::Object(Some(is_weapon))]));
+    let instant = t.init_attr(attr);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let melee = t.init(10.0);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let w = t.weapon(Some(definition), &[]);
+    let instant_stack = Value::array(vec![
+        t.modifier("Scale", 0, 0.5),
+        t.modifier("PreAdd", 1, 2.0),
+        Value::Object(None),
+        t.modifier("Unknown", 7, 100.0),
+    ]);
+    let melee_stack = Value::array(vec![t.modifier("PostAdd", 2, 3.0)]);
+    t.set(w, "InstantHitDamageModifierStack", instant_stack.clone());
+    t.set(w, "MeleeDamageModifierStack", melee_stack.clone());
+    t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap();
+    assert_eq!(t.get(w, "NormalizedInstantHitDamageModifierStack"), instant_stack);
+    assert_eq!(t.get(w, "NormalizedInstantHitDamageBaseValue"), Value::Float(40.0));
+    assert_eq!(t.get(w, "NormalizedInstantHitDamage"), Value::Float(63.0));
+    assert_eq!(t.get(w, "NormalizedMeleeDamageModifierStack"), melee_stack);
+    assert_eq!(t.get(w, "NormalizedMeleeDamageBaseValue"), Value::Float(10.0));
+    assert_eq!(t.get(w, "NormalizedMeleeDamage"), Value::Float(13.0));
+}
+
+/// A weapon without a type definition is `NotYet { NotRead }` (the note does not say what the native does then), and
+/// nothing is written; an evaluation the evaluator cannot do refuses before any write too.
+#[test]
+fn normalized_damage_without_a_type_or_with_an_unread_attribute_writes_nothing() {
+    let mut t = Toy::new(ParityMode::Off);
+    let w = t.weapon(None, &[]);
+    t.set(w, "NormalizedInstantHitDamage", Value::Float(7.0));
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    let text = e.to_string();
+    assert_eq!(not_yet_kind(&e), Some(Missing::NotRead), "{text}");
+    assert!(text.contains("without a WeaponTypeDefinition"), "{text}");
+    assert_eq!(t.get(w, "NormalizedInstantHitDamage"), Value::Float(7.0));
+    // The melee base reads an attribute whose context resolver class is registered nowhere: the evaluator's NotYet,
+    // after the instant-hit value was computed but before anything was written.
+    let definition = t.definition("Test.Definition", 0.0, 1.0, 0.0, 0);
+    let unread = t.obj("Core.Object", "Unread");
+    let attr = t.obj("Engine.AttributeDefinition", "UnreadAttr");
+    t.set(attr, "ContextResolverChain", Value::array(vec![Value::Object(Some(unread))]));
+    let melee = t.init_attr(attr);
+    t.set(definition, "NormalizedMeleeDamage", melee);
+    let instant = t.init(5.0);
+    t.set(definition, "NormalizedInstantHitDamage", instant);
+    let w = t.weapon(Some(definition), &[]);
+    t.set(w, "NormalizedInstantHitDamage", Value::Float(7.0));
+    let e = t.call("WillowGame.WillowWeapon.RecomputeNormalizedDamageValues", w).unwrap_err();
+    let text = e.to_string();
+    assert_eq!(not_yet_kind(&e), Some(Missing::NotRead), "{text}");
+    assert!(text.contains("context resolver class Core.Object"), "{text}");
+    assert_eq!(t.get(w, "NormalizedInstantHitDamage"), Value::Float(7.0));
+}
+
+/// The kind of a `NotYet` error, or None for any other error.
+fn not_yet_kind(e: &VmError) -> Option<Missing> {
+    match e {
+        VmError::NotYet(n) => Some(n.missing.clone()),
+        _ => None,
     }
 }
