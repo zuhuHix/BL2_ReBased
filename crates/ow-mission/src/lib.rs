@@ -12,6 +12,7 @@ pub mod bridge;
 pub mod dialog;
 pub mod interactive;
 pub mod kismet;
+pub mod mission_list;
 pub mod mover;
 pub mod slice;
 pub mod stations;

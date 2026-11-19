@@ -218,6 +218,10 @@ struct Objects {
 
 #[derive(Debug, Default)]
 struct BState {
+    /// Whether the tracker's `MissionList` was built at set-up (Off; `crate::mission_list`).
+    list_built: bool,
+    /// The set-up build's `NotYet`, answered unchanged by the first list read (`crate::mission_list`).
+    list_refusal: Option<NotYet>,
     completed: DetSet<String>,
     stubs: DetMap<String, usize>,
     notes: Vec<String>,
@@ -622,6 +626,22 @@ impl MissionScript {
             _ => return Err(data("mission script bridge: the mission is not read from a package".to_string())),
         };
         let tracker = new_object(vm, "WillowGame.MissionTracker")?;
+        // The tracker's list build, once at set-up, before any script runs (Off only; NATIVE_MISSION_LIST_BUILD.md and
+        // the hub's rulings, lane IMPL-MISSIONLIST-BUILD). Reference builds nothing, as the C++.
+        let mut list_built = false;
+        let mut list_refusal = None;
+        if vm.parity == ParityMode::Off {
+            // A `NotYet` of the build is recorded, kind and record kept, and answered by the first list read; any
+            // other error fails the set-up (`crate::mission_list`, "A set-up refusal").
+            match crate::mission_list::build(vm, tracker, &mut list_built) {
+                Ok(()) => {}
+                Err(VmError::NotYet(n)) => list_refusal = Some(n),
+                Err(e) => return Err(e.into()),
+            }
+            // A tracker without a declared list builds nothing (`crate::mission_list`, "A world without a list").
+            let class = vm.space.heap.get(tracker)?.class;
+            list_built = list_built && vm.space.prop(class, "MissionList").is_some();
+        }
         let replication = new_object(vm, "WillowGame.WillowGameReplicationInfo")?;
         set(&mut vm.space, replication, "MissionTracker", Value::Object(Some(tracker)))?;
         let world_info = new_object(vm, "Engine.WorldInfo")?;
@@ -699,7 +719,7 @@ impl MissionScript {
                     pri,
                     authority,
                 },
-                state: RefCell::new(BState::default()),
+                state: RefCell::new(BState { list_built, list_refusal, ..BState::default() }),
                 marcus: RefCell::new(None),
                 has_marcus: Cell::new(false),
                 marcus_pid: Cell::new(None),
@@ -1864,20 +1884,41 @@ impl MissionScript {
         Err(data(format!("mission script bridge: the active objective set {active} is not in ObjectiveSetDefs")))
     }
 
-    // GetAllMissions(out Missions), Off mode only (NATIVE_MISSION_OBJECTIVES.md). The rule is read (every record's
-    // MissionDef, in the list's name order, appended to the caller's array), but it walks the tracker's whole
-    // MissionList and the bridge holds one record: answering with that one would tell the turn-in's playthrough checks
-    // that every mission of the game is in the list. NotYet until the tracker holds the game's list.
+    // GetAllMissions(out Missions), Off mode only (NATIVE_MISSION_OBJECTIVES.md): every record's MissionDef, in the
+    // list's order, appended to the caller's array. The list is the one built at set-up (`crate::mission_list`; its
+    // order is the hub's first-insertion stand-in for the name-table order, UNVERIFIED). A world whose list was not
+    // built answers the NotYet it answered before.
     fn n_all_missions(&self, c: &mut NativeCall<'_>) -> Result<Value, MissionError> {
         if !self.on(c, self.inner.o.tracker) {
             return outside_binding(c);
         }
-        Err(NotYet::layer_absent(
-            "MissionTracker.GetAllMissions (every record of the tracker's MissionList)",
-            "the tracker's full mission list (the bridge holds one record)",
-            RECORD_OBJECTIVES,
-        )
-        .into())
+        if let Some(n) = self.inner.state.borrow().list_refusal.clone() {
+            return Err(n.into());
+        }
+        if !self.inner.state.borrow().list_built {
+            return Err(NotYet::layer_absent(
+                "MissionTracker.GetAllMissions (every record of the tracker's MissionList)",
+                "the tracker's full mission list (not built in this world)",
+                RECORD_OBJECTIVES,
+            )
+            .into());
+        }
+        let mut out = match c.arg(0)? {
+            Value::Array(a) => a.as_ref().clone(),
+            _ => Vec::new(),
+        };
+        out.extend(crate::mission_list::missions(c.vm, self.inner.o.tracker)?);
+        c.set_out(0, Value::array(out))?;
+        Ok(Value::None)
+    }
+
+    /// A second build of the tracker's list in this world: `NotYet { NotRead }` (hub ruling 1); the set-up build is
+    /// the only one.
+    pub fn build_mission_list(&self, vm: &mut Vm) -> Result<(), MissionError> {
+        let mut built = self.inner.state.borrow().list_built;
+        crate::mission_list::build(vm, self.inner.o.tracker, &mut built)?;
+        self.inner.state.borrow_mut().list_built = built;
+        Ok(())
     }
 
     // AllExpansionSideMissionsComplete(Controller, Expansion), Off mode only (NATIVE_MISSION_OBJECTIVES.md). A None

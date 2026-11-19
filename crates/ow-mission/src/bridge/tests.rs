@@ -210,6 +210,16 @@ fn willowgame() -> Vec<u8> {
     t.prop("Struct", mission, "Reward", 0, reward);
     t.prop("Struct", mission, "AlternativeReward", 0, reward);
     t.prop("Object", mission, "BehaviorProvider", 0, object);
+    // The fields the tracker's list build reads and writes (lane IMPL-MISSIONLIST-BUILD).
+    for name in ["bPlotCritical", "bGameStageLocked"] {
+        t.prop("Bool", mission, name, 0, 0);
+    }
+    for name in ["MissionNumber", "GameStage"] {
+        t.prop("Int", mission, name, 0, 0);
+    }
+    t.prop("Object", mission, "NextMissionInChain", 0, object);
+    t.prop("Object", mission, "DlcExpansion", 0, object);
+    toy_array_of(&mut t, mission, "Dependencies", "Object", object);
     native(&mut t, mission, "GetExperienceReward", &[param("Object", "InWPC", 0, object), param("Bool", "bGetAltReward", 0, 0)], Some(("Int", 0)), NATIVE);
     native(&mut t, mission, "GetGameStage", &[], Some(("Int", 0)), NATIVE);
     native(&mut t, mission, "GetCurrencyRewardType", &[param("Bool", "bGetAltReward", 0, 0)], Some(("Byte", 0)), NATIVE);
@@ -227,6 +237,11 @@ fn willowgame() -> Vec<u8> {
     // The tracker and the replication info.
     let tracker = t.class("MissionTracker", object);
     t.prop("Bool", tracker, "bDataValidated", 0, 0);
+    // The tracker's list (an invented record struct with the two fields the bridge reads).
+    let mission_data = toy_struct(&mut t, tracker, "MissionData", None);
+    t.prop("Object", mission_data, "MissionDef", 0, object);
+    t.prop("Byte", mission_data, "Status", 0, 0);
+    toy_array_of(&mut t, tracker, "MissionList", "Struct", mission_data);
     let pair = [param("Object", "InMission", 0, object), param("Object", "WillowPC", CPF_OPT, object)];
     let activate = native(&mut t, tracker, "ActivateMission", &pair, None, NATIVE);
     let complete = native(&mut t, tracker, "CompleteMission", &pair, None, NATIVE);
@@ -481,6 +496,12 @@ fn director_package() -> Vec<u8> {
 /// With `progress` (the `GetObjectivesProgress` tests): `SetA` also holds `Pair` (count 2, `bAllOrNothing`), and the
 /// mission's `ObjectiveDefs` are [`Pair`, `Only`, `Spare`], `Spare` (count 1) being in no set.
 fn mission_package(optional: bool, multiplier: f32, items: bool, progress: bool) -> Vec<u8> {
+    mission_package_with(optional, multiplier, items, progress, false)
+}
+
+/// [`mission_package`]; with `refuse_list`, `Other`'s `DlcExpansion` names the `Globals` export, which set-up does not
+/// load (it is not a mission definition), so the tracker's list build refuses with its named `NotRead`.
+fn mission_package_with(optional: bool, multiplier: f32, items: bool, progress: bool, refuse_list: bool) -> Vec<u8> {
     let mut p = PackageBuilder::new_empty();
     let none = p.none();
     let willow = p.add_import("Core", "Package", 0, "WillowGame");
@@ -560,6 +581,12 @@ fn mission_package(optional: bool, multiplier: f32, items: bool, progress: bool)
     payload.extend_from_slice(&none);
     let globals = p.add_export(c, "Globals", payload);
     p.set_outer(globals, general);
+    if refuse_list {
+        let mut tags = 0i32.to_le_bytes().to_vec();
+        tags.extend(p.object_tag("DlcExpansion", globals));
+        tags.extend_from_slice(&none);
+        p.set_payload(other, tags);
+    }
     p.build()
 }
 
@@ -592,6 +619,11 @@ impl Env {
     /// A reward with credit multiplier `multiplier` and, with `items`, one reward item.
     fn with_reward(optional: bool, multiplier: f32, items: bool, mode: ParityMode) -> Env {
         Env::build(mission_package(optional, multiplier, items, false), mode)
+    }
+
+    /// A world whose tracker list build refuses at set-up ([`mission_package_with`]'s `refuse_list`).
+    fn with_list_refusal() -> Env {
+        Env::build(mission_package_with(false, 0.0, false, false, true), ParityMode::Off)
     }
 
     /// The `GetObjectivesProgress` mission ([`mission_package`] with `progress`).
@@ -982,15 +1014,26 @@ fn the_active_primary_objective_set_in_off_mode() {
     assert_eq!(m.status(), crate::tracker::Status::Active, "no side effect on the record");
 }
 
-/// `GetAllMissions` and `AllExpansionSideMissionsComplete` in Off mode: both walk the tracker's whole mission list,
-/// which the bridge does not hold, so they are `NotYet` (the list a layer, the expansion check's playthrough virtual
-/// not read); a None controller is false, as the note settles.
+/// `GetAllMissions` in Off mode answers the list built at set-up (lane IMPL-MISSIONLIST-BUILD): every mission
+/// definition of the loaded packages once, appended to the caller's array. `AllExpansionSideMissionsComplete` still
+/// waits for its playthrough virtual (`NotRead`); a None controller is false, as the note settles.
 #[test]
-fn the_mission_list_queries_wait_for_the_full_list_in_off_mode() {
+fn the_mission_list_queries_in_off_mode() {
     let mut env = Env::new(false);
     let c = env.script.player_controller();
-    let list = tracker_call(&mut env, "WillowGame.MissionTracker.GetAllMissions", vec![Value::array(Vec::new())]).unwrap_err();
-    assert!(matches!(&list, VmError::NotYet(n) if matches!(n.missing, ow_core::Missing::LayerAbsent(_)) && n.record == RECORD_OBJECTIVES), "{list}");
+    let (def, other) = (env.mission.definition(), env.object("Other"));
+    let listed = tracker_call(&mut env, "WillowGame.MissionTracker.GetAllMissions", vec![Value::array(vec![Value::Object(None)])]).unwrap();
+    let out = listed.outs[0].elements().unwrap().to_vec();
+    assert_eq!(out[0], Value::Object(None), "appended to the caller's array");
+    let mut found: Vec<Value> = out[1..].to_vec();
+    found.sort_by_key(|v| format!("{v:?}"));
+    let mut want = vec![Value::Object(Some(def)), Value::Object(Some(other))];
+    want.sort_by_key(|v| format!("{v:?}"));
+    assert_eq!(found, want, "each mission definition once");
+    // A second build in this world is refused.
+    let script = env.script.clone();
+    let second = script.build_mission_list(env.vm()).unwrap_err();
+    assert!(matches!(&second, BehaviorError::Vm(VmError::NotYet(n)) if n.what == crate::mission_list::SECOND_BUILD), "{second}");
     let check = "WillowGame.MissionTracker.AllExpansionSideMissionsComplete";
     let none = tracker_call(&mut env, check, vec![Value::Object(None), Value::Object(None)]).unwrap().ret;
     assert_eq!(none, Value::Bool(false), "a None controller");
@@ -2000,4 +2043,20 @@ fn a_not_yet_from_the_status_hook_is_marked_and_terminal() {
     let s = env.script.clone();
     assert!(s.accept(env.vm(), &DetSet::new()).unwrap());
     assert_eq!(s.partial_stop(), None);
+}
+
+/// The hub's steer on IMPL-MISSIONLIST-BUILD: a `NotYet` of the set-up build does not fail the set-up; the first list
+/// read answers with that same `NotYet`, kind and record unchanged.
+#[test]
+fn a_set_up_list_refusal_is_answered_by_the_first_list_read() {
+    let mut env = Env::with_list_refusal();
+    let got = tracker_call(&mut env, "WillowGame.MissionTracker.GetAllMissions", vec![Value::array(Vec::new())]).unwrap_err();
+    match got {
+        VmError::NotYet(n) => {
+            assert_eq!(n.missing, ow_core::Missing::NotRead);
+            assert_eq!(n.what, crate::mission_list::NEEDS_LOAD);
+            assert_eq!(n.record, crate::mission_list::RECORD);
+        }
+        other => panic!("{other:?}"),
+    }
 }

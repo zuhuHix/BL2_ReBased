@@ -309,6 +309,12 @@ impl PackageStore {
         Ok(self.insert(key, package))
     }
 
+    /// How many packages the store has handed out; their ids are `0..loaded_count()`, in load order (lane
+    /// IMPL-MISSIONLIST-BUILD: the tracker's list build reads the loaded packages in that order).
+    pub fn loaded_count(&self) -> usize {
+        self.packages.len()
+    }
+
     /// The package with this id.
     ///
     /// # Panics
