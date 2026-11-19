@@ -21,9 +21,15 @@ rows: one row updated and two added. The note records, as behaviour only:
   likely next stop for a local player is `UIInteraction.GetLoginStatus`, through `IsInvalidName`. The input devices'
   native is not read.
 - **An Off answer list.** Preflight reads first, then writes, under the hub's write rule.
-- **A slice minimum.** Make the tree, record a pending request for a dotted path (nothing for a dotless one), deliver
-  nothing, and reset the new tree as a no-op with no client event. This is the game's own state right after the call
-  when the definition is not loaded yet.
+- **A slice minimum.** This is an Off result under the note's assumptions A1 to A5, all UNVERIFIED; it is not a
+  claim about the game's state after the call, where the reset is unread and the client event is sent on the
+  authority's side. For a new tree, Off:
+  - makes the tree;
+  - with both the globals' pawn data manager and the controller's `PlayerClass` set, records a pending request for a
+    dotted `SkillTreePath`, and nothing for a dotless one. Without either, it makes no request. `PlayerClass` is
+    kind-checked either way;
+  - delivers nothing;
+  - resets the new tree as a no-op, with no client event.
 
 **How it was read.** The Ghidra runs were read-only and took the machine lock. Raw output stays under ignored
 `local/analysis/init-player-skill-tree/`. The note passed the clean-room scan.
@@ -54,3 +60,13 @@ The other changes:
   conditional on a local owner.
 - The bl-sdk checks now record residency before the request, the callback's receiver, and state snapshots at each
   boundary, for a new tree and for an existing one.
+
+**Edits: review r2 of #466.**
+- The preflight now names a data error for each stored value of the wrong kind (the manager, `PlayerClass`,
+  `SkillTreePath`).
+- `PlayerClass` is read and checked even without a manager, because a missing manager only disables the request.
+- `SkillTreePath` is read only when a request will be made.
+- The request table now splits the not-loaded case by the immediate-load switch.
+- The slice minimum above is stated as an Off result, with the manager and player-class gates.
+- The live checks observe the callback on any receiver, and take state snapshots at the entry and exit of
+  `Initialize` and `RegisterListener`.
