@@ -1020,6 +1020,7 @@ fn new_object(vm: &mut Vm, f: &mut Frame, e: &Expr, ctx: Ctx) -> Result<Value, V
     let object = instantiate_from_defaults(vm, class)?;
     if let Value::Object(outer) = eval(vm, f, &e.kids[0], ctx)? {
         vm.space.heap.get_mut(object)?.outer = outer;
+        vm.space.heap.note_write();
     }
     Ok(Value::Object(Some(object)))
 }

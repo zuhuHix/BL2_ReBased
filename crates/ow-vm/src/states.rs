@@ -742,6 +742,7 @@ fn ensure_frame(vm: &mut Vm, o: ObjRef) -> Result<(), VmError> {
         None => None,
     };
     vm.space.heap.get_mut(o)?.state = name;
+    vm.space.heap.note_write();
     with(vm, |m| {
         m.frames.entry(o).or_insert(StateFrame {
             node,
@@ -785,6 +786,7 @@ fn set_node(
         fr.moved = true;
     })?;
     vm.space.heap.get_mut(o)?.state = name;
+    vm.space.heap.note_write();
     Ok(())
 }
 

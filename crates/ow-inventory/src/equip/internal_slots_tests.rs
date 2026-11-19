@@ -605,6 +605,8 @@ fn variance_definition(w: &mut World, low: Value) -> ObjRef {
         let decls = fields.iter().map(|(n, k)| d(w, n, k.clone())).collect();
         w.vm.space.classes.define_struct(path, None, decls).unwrap()
     };
+    let defined = |w: &World, path: &str| w.vm.space.classes.struct_by_path(path);
+    let st = |w: &mut World, path: &str, fields: &[(&str, PropKind)]| defined(w, path).unwrap_or_else(|| st(w, path, fields));
     let formula = st(w, "Test.VarianceDefinition.Formula", &[("bEnabled", PropKind::Bool)]);
     let conditional = st(w, "Test.VarianceDefinition.Conditional", &[("bEnabled", PropKind::Bool)]);
     let variance = st(
@@ -631,8 +633,10 @@ fn variance_definition(w: &mut World, low: Value) -> ObjRef {
         d(w, "BaseValueMode", byte.clone()),
         d(w, "RoundingMode", byte),
     ];
-    let parent = w.class("Engine.AttributeInitializationDefinition");
-    w.vm.space.classes.define("Test.VarianceDefinition", Some(parent), decls).unwrap();
+    if w.vm.space.classes.by_path("Test.VarianceDefinition").is_none() {
+        let parent = w.class("Engine.AttributeInitializationDefinition");
+        w.vm.space.classes.define("Test.VarianceDefinition", Some(parent), decls).unwrap();
+    }
     let def = w.obj("Test.VarianceDefinition", "Test.Variance");
     let high = w.init(5.0);
     let v = w.st("Test.VarianceDefinition.Variance", vec![("bEnabled", Value::Bool(true)), ("LowerBound", low), ("UpperBound", high)]);
@@ -876,15 +880,17 @@ fn plain_removal_refusing_after(callback: impl Fn(&mut ow_vm::api::Vm, ObjRef, o
     (w, item, rec, e)
 }
 
-/// Item 2 of review r1 of #518: a notification that "removes" an item its array does not hold (it reads the array,
-/// drops nothing and writes it back) changed nothing, so its `NotYet` is unprefixed; one that writes a changed array is
-/// marked. Kind and record are kept either way.
+/// Item 2 of review r1 of #518 (counters, review r2): a notification that removes an item its array does not hold, in
+/// place, wrote nothing, so its `NotYet` is unprefixed; one that writes the array is marked. Kind and record are kept
+/// either way.
 #[test]
 fn only_a_committed_change_marks_a_w1_refusal() {
+    // Removing an item the array does not hold, in place (as the VM's array removal does): a borrow, no write.
     let absent = |vm: &mut ow_vm::api::Vm, owner: ObjRef, items: ow_object::ids::PropId| {
         let gone = Value::Object(None);
-        let list: Vec<Value> = vm.space.read(owner, PropAddr::scalar(items)).unwrap().elements().unwrap().iter().filter(|v| **v != gone).cloned().collect();
-        vm.space.write(owner, PropAddr::scalar(items), Value::array(list)).unwrap();
+        if let Some(list) = vm.space.slot_mut(owner, PropAddr::scalar(items)).unwrap().array_mut() {
+            list.retain(|v| *v != gone);
+        }
     };
     let (w, item, rec, e) = plain_removal_refusing_after(absent);
     let VmError::NotYet(n) = &e else { panic!("{e:?}") };
@@ -952,5 +958,197 @@ fn a_same_named_record_struct_is_not_the_canonical_one() {
     let before = format!("{:?}", w.vm.space.heap);
     let e = call(&mut w, g, item, true, SLOTS, Value::array(vec![])).unwrap_err();
     assert!(matches!(&e, VmError::Script { message, .. } if message.contains(APPLIED_STRUCT)), "{e:?}");
+    assert_eq!(format!("{:?}", w.vm.space.heap), before, "nothing written");
+}
+
+// ---- review r2 of #518: the write-tracker's three counters --------------------------------------------------------
+
+/// The marked refusal text of [`plain_removal_refusing_after`].
+const MARKED: &str = "stopped after partial writes: the callback test notification";
+
+fn refusal_text(e: &VmError) -> String {
+    match e {
+        VmError::NotYet(n) => n.what.to_string(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Item 4: a notification that writes the array and then writes it back as it was, and one that draws from a stream
+/// and then sets the stream back: the end state is unchanged, yet a write and a draw were made, so both are marked.
+#[test]
+fn a_reversed_write_and_a_restored_draw_are_marked() {
+    let reversed = |vm: &mut ow_vm::api::Vm, owner: ObjRef, items: ow_object::ids::PropId| {
+        let was = vm.space.read(owner, PropAddr::scalar(items)).unwrap().clone();
+        vm.space.write(owner, PropAddr::scalar(items), Value::array(vec![])).unwrap();
+        vm.space.write(owner, PropAddr::scalar(items), was).unwrap();
+    };
+    let (_, _, _, e) = plain_removal_refusing_after(reversed);
+    assert_eq!(refusal_text(&e), MARKED, "a reversed write");
+    let restored = |vm: &mut ow_vm::api::Vm, _owner: ObjRef, _items: ow_object::ids::PropId| {
+        let stream = vm.rng.crt(ow_core::rand::CrtStream::AttributeVariance);
+        let saved = stream.state;
+        ow_core::rand::Rand15::rand15(stream);
+        stream.state = saved;
+    };
+    let (_, _, _, e) = plain_removal_refusing_after(restored);
+    assert_eq!(refusal_text(&e), MARKED, "a restored draw");
+}
+
+/// Item 3: a notification that writes -0.0 over a 0.0 float (equal under float comparison, an end-state check would
+/// call it unchanged) is a committed write: marked.
+#[test]
+fn a_float_write_of_negative_zero_is_marked() {
+    let zero = |vm: &mut ow_vm::api::Vm, owner: ObjRef, _items: ow_object::ids::PropId| {
+        let class = vm.space.heap.get(owner).unwrap().class;
+        let quiet = vm.space.prop(class, "Quiet").unwrap();
+        vm.space.write(owner, PropAddr::scalar(quiet), Value::Float(-0.0)).unwrap();
+    };
+    let (_, _, _, e) = plain_removal_refusing_after(zero);
+    assert_eq!(refusal_text(&e), MARKED);
+}
+
+/// Item 3: a nested re-entry. The outer call's removal notifies; the notification runs the native again on another
+/// item, which applies its slots and succeeds; then the notification refuses. The inner call's writes come after the
+/// outer call began, so the outer refusal is marked.
+#[test]
+fn a_nested_call_s_writes_mark_the_outer_refusal() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let decls = vec![PropertyDecl::new(w.vm.space.names.intern("Quiet"), PropKind::FloatAttribute)
+        .with_flags(PropertyDecl::PLAIN_ATTRIBUTE | PropertyDecl::NOTIFY)];
+    let plain_class = w.vm.space.classes.define("Test.ReentrySlotWeapon", Some(class), decls).unwrap();
+    let slots = five(&mut w);
+    let inner = item_with(&mut w, class, slots);
+    w.vm
+        .register_attribute_notify(
+            "Test.ReentrySlotWeapon",
+            Rc::new(move |vm, _owner, _prop, _forms| {
+                vm.call(f, Some(inner), vec![Value::Bool(true), Value::Int(SLOTS), Value::array(vec![])]).unwrap();
+                Err(ow_core::NotYet::not_read("the re-entry test notification", "TOY_NOTIFY.md").into())
+            }),
+        )
+        .unwrap();
+    let quiet = w.attribute("Test.ReentryQuiet", "Engine.WeaponAttributeContextResolver", "Quiet");
+    let item = item_with(&mut w, plain_class, vec![]);
+    let m = w.obj("Core.AttributeModifier", "Test.ReentryModifier");
+    let ty = w.vm.space.classes.struct_by_path(APPLIED_STRUCT).unwrap();
+    let rec = applied_values(&w.vm, ty, &ow_attr::api::Applied(vec![ow_attr::api::AppliedEffect { context: item, attribute: quiet, modifier: m }])).unwrap();
+    w.set(item, "AppliedAttributeSlotEffects", Value::array(rec));
+    let e = call(&mut w, f, item, false, SLOTS, Value::array(vec![])).unwrap_err();
+    assert_eq!(refusal_text(&e), "stopped after partial writes: the re-entry test notification");
+    assert_eq!(w.float(inner, "Bonus"), 3.0, "the inner call applied its slots");
+}
+
+/// The definition class of the conditional tests: a formula and variance off, a conditional with an expression list
+/// and a default, no range.
+fn conditional_definition(w: &mut World, entries: Vec<(Vec<Value>, Value)>, default: Value) -> ObjRef {
+    let aid = w.vm.space.classes.struct_by_path(AID).unwrap();
+    let object = w.class("Core.Object");
+    let d = |w: &mut World, n: &str, k: PropKind| PropertyDecl::new(w.vm.space.names.intern(n), k);
+    if w.vm.space.classes.by_path("Test.ConditionalDefinition").is_none() {
+        let st = |w: &mut World, path: &str, fields: Vec<(&str, PropKind)>| {
+            let decls = fields.into_iter().map(|(n, k)| d(w, n, k)).collect();
+            w.vm.space.classes.define_struct(path, None, decls).unwrap()
+        };
+        let byte = PropKind::Byte { enum_: None };
+        let expr = st(
+            w,
+            "Test.ConditionalDefinition.Expression",
+            vec![
+                ("ComparisonOperator", byte.clone()),
+                ("Operand2Usage", byte.clone()),
+                ("AttributeOperand1", PropKind::Object { class: object }),
+                ("AttributeOperand2", PropKind::Object { class: object }),
+                ("ConstantOperand2", PropKind::Float),
+            ],
+        );
+        let entry = st(
+            w,
+            "Test.ConditionalDefinition.Entry",
+            vec![("Expressions", PropKind::Array(Box::new(PropKind::Struct(expr)))), ("BaseValueIfTrue", PropKind::Struct(aid))],
+        );
+        let cond = st(
+            w,
+            "Test.ConditionalDefinition.Conditional",
+            vec![
+                ("bEnabled", PropKind::Bool),
+                ("ConditionalExpressionList", PropKind::Array(Box::new(PropKind::Struct(entry)))),
+                ("DefaultBaseValue", PropKind::Struct(aid)),
+            ],
+        );
+        let off = st(w, "Test.ConditionalDefinition.Off", vec![("bEnabled", PropKind::Bool)]);
+        let range = st(
+            w,
+            "Test.ConditionalDefinition.Range",
+            vec![("bEnableMinValueRestriction", PropKind::Bool), ("bEnableMaxValueRestriction", PropKind::Bool)],
+        );
+        let decls = vec![
+            d(w, "ValueFormula", PropKind::Struct(off)),
+            d(w, "ConditionalInitialization", PropKind::Struct(cond)),
+            d(w, "RandomVariance", PropKind::Struct(off)),
+            d(w, "RangeRestriction", PropKind::Struct(range)),
+            d(w, "BaseValueMode", byte.clone()),
+            d(w, "RoundingMode", byte),
+        ];
+        let parent = w.class("Engine.AttributeInitializationDefinition");
+        w.vm.space.classes.define("Test.ConditionalDefinition", Some(parent), decls).unwrap();
+    }
+    let list: Vec<Value> = entries
+        .into_iter()
+        .map(|(exprs, if_true)| {
+            w.st("Test.ConditionalDefinition.Entry", vec![("Expressions", Value::array(exprs)), ("BaseValueIfTrue", if_true)])
+        })
+        .collect();
+    let cond = w.st(
+        "Test.ConditionalDefinition.Conditional",
+        vec![("bEnabled", Value::Bool(true)), ("ConditionalExpressionList", Value::array(list)), ("DefaultBaseValue", default)],
+    );
+    let def = w.obj("Test.ConditionalDefinition", "Test.Conditional");
+    w.set(def, "ConditionalInitialization", cond);
+    def
+}
+
+/// Item 5: a conditional whose first entry has no expressions always takes that entry, so its default is never
+/// reached. The default names an attribute with a value resolver the attribute system does not know; the probe does
+/// not walk it, and the call goes through, the entry created from the first entry's value.
+#[test]
+fn the_probe_keeps_the_conditional_s_short_circuit() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    let unsupported = chained(&mut w, "Test.UnreadFallback", &[Some("Test.UnreadValueResolver")]);
+    let fallback = w.st(AID, vec![("BaseValueAttribute", Value::Object(Some(unsupported))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let first = w.init(2.0);
+    let def = conditional_definition(&mut w, vec![(vec![], first)], fallback);
+    let default = w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", default);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0]);
+    call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap();
+    let entries = w.get(item, "NounState");
+    assert_eq!(entries.elements().unwrap().len(), 1, "the add created the entry");
+}
+
+/// Item 1: a chain of initialization definitions deeper than the evaluator's depth budget (each variance's lower bound
+/// names the next definition). The probe enters the evaluator's guard at every level, so it refuses with the guard's
+/// own data error in the preflight, unprefixed, before any write: no stack overflow, and no noun entry made.
+#[test]
+fn a_definition_chain_past_the_depth_budget_is_refused_in_the_preflight() {
+    let mut w = World::new();
+    let (class, f) = setup(&mut w);
+    let (noun_item, noun) = noun_classes(&mut w, class);
+    let mut next = w.init(1.0);
+    for _ in 0..ow_attr::eval::MAX_DEPTH + 6 {
+        let def = variance_definition(&mut w, next);
+        next = w.st(AID, vec![("InitializationDefinition", Value::Object(Some(def))), ("BaseValueScaleConstant", Value::Float(1.0))]);
+    }
+    let attr = noun_attribute(&mut w, noun, "Attribute_ToyOuter", next);
+    let s0 = slot(&mut w, true, false, false, Some(attr), 1.0);
+    let item = item_with(&mut w, noun_item, vec![s0]);
+    let before = format!("{:?}", w.vm.space.heap);
+    let e = call(&mut w, f, item, true, SLOTS, Value::array(vec![])).unwrap_err();
+    let text = format!("{e:?}");
+    assert!(text.contains("nested deeper than"), "the guard's depth refusal: {text}");
+    assert!(!text.contains("partial writes"), "{text}");
     assert_eq!(format!("{:?}", w.vm.space.heap), before, "nothing written");
 }

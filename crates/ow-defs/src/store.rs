@@ -473,6 +473,8 @@ enum Entry {
 /// The identity map: object paths and holder exports to the store's objects, and what each object is.
 #[derive(Debug, Default)]
 struct Handles {
+    /// How many handles went from unloaded to loaded or to failed ([`DefStore::load_transitions`]).
+    transitions: u64,
     /// Folded object path -> its object (in Off also the no-holder stand-ins).
     by_path: FixedHashMap<String, ObjRef>,
     /// Holder export (filed id, index) -> its object.
@@ -987,6 +989,7 @@ impl Loader<'_, '_> {
                     let mut handles = self.linker.handles.borrow_mut();
                     handles.prune(self.cx.space);
                     if self.cx.space.heap.contains(o) {
+                        handles.transitions += 1;
                         handles.entries.insert(
                             o,
                             Entry::Failed {
@@ -1074,11 +1077,11 @@ impl Loader<'_, '_> {
                 .collect();
             self.class_props.insert(class, props);
         }
-        self.linker
-            .handles
-            .borrow_mut()
-            .entries
-            .insert(o, Entry::Loaded { class });
+        {
+            let mut handles = self.linker.handles.borrow_mut();
+            handles.transitions += 1;
+            handles.entries.insert(o, Entry::Loaded { class });
+        }
         self.apply_pending(target, o);
         Ok(())
     }
@@ -1815,6 +1818,12 @@ impl DefStore {
     /// for a stale handle ([`DefError::Heap`]) or a handle whose load fails.
     pub fn ensure_loaded(&mut self, w: &mut ObjectSpace, obj: ObjRef) -> Result<(), DefError> {
         self.run(w, |l| l.ensure(obj, false)).map(|_| ())
+    }
+
+    /// How many handles have gone from unloaded to loaded or to failed: a count that only grows (the hub's ruling in
+    /// review r2 of #518). A retry of a handle whose load already failed returns the cached error and does not move it.
+    pub fn load_transitions(&self) -> u64 {
+        self.handles.borrow().transitions
     }
 
     /// Whether `obj` is a definition of this store that is loaded.

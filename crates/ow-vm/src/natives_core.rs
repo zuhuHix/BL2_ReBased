@@ -1457,6 +1457,7 @@ fn goto_state(
             "GotoState: state {target_text} is not declared on {class_name}; name set, no state events"
         ));
         c.vm.space.heap.get_mut(this)?.state = target;
+        c.vm.space.heap.note_write();
         return Ok(Value::None);
     }
     if depth.get() >= MAX_NESTED_STATE_CHANGES {
@@ -1490,6 +1491,7 @@ fn state_events(
         return Ok(Value::None);
     }
     c.vm.space.heap.get_mut(this)?.state = target;
+    c.vm.space.heap.note_write();
     if let Some(begin) = states.find_method(c.vm, class_id, "BeginState", target)? {
         c.call_script(begin, Some(this), vec![name_of(previous)])?;
     }

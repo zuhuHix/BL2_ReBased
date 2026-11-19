@@ -844,20 +844,25 @@ fn definition_modes(cx: &mut EvalCx<'_>, definition: ObjRef) -> Result<(BaseValu
 ///   is itself initialization data, checked the same way.
 ///
 /// A conditional entry is checked whether or not an earlier one would hold, since which one holds is only known by
-/// evaluating. A definition already being checked is not checked again (evaluation's own guard refuses the cycle).
+/// evaluating, except where it is known without evaluating: an entry with no expressions always holds, so the entries
+/// after it and `DefaultBaseValue` are never reached and are not checked (review r2 of #518, item 5).
+///
+/// Each definition level enters the evaluator's own guard ([`MAX_DEPTH`] deep, [`MAX_WORK`] steps, a definition already
+/// in progress refused as a cycle), so a long or cyclic chain is the same `BadData` the evaluation would give, not a
+/// stack overflow; a definition already checked whole is not checked again (review r2 of #518, item 1).
 /// What stays out of reach of a check: a resolver's own data read only when it runs (a context resolver's answer, a
 /// value resolver's property). A definition load is not a write under NATIVE_APPLY_SLOT_EFFECT_MODIFIERS.md's
 /// ruling; a caller that counts loads as writes (the hub's ruling in review r1 of #518) tracks them itself.
 pub(crate) fn preflight_init(sys: &AttributeSystem, v: &Value, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-    let mut seen = Vec::new();
-    preflight_init_in(sys, v, cx, &mut seen)
+    let mut done = std::collections::HashSet::new();
+    preflight_init_in(sys, v, cx, &mut done)
 }
 
 fn preflight_init_in(
     sys: &AttributeSystem,
     v: &Value,
     cx: &mut EvalCx<'_>,
-    seen: &mut Vec<ObjRef>,
+    seen: &mut std::collections::HashSet<ObjRef>,
 ) -> Result<(), AttrError> {
     let data = init_data(cx.world.parts().space, v)?;
     if let Some(attr) = data.base_value_attribute {
@@ -869,14 +874,19 @@ fn preflight_init_in(
     if seen.contains(&definition) {
         return Ok(());
     }
-    seen.push(definition);
+    // The evaluator's depth, work and cycle budgets, held while this definition's terms are checked.
+    let _guard = Guard::enter(Step::Definition {
+        definition,
+        source: None,
+        override_source: None,
+    })?;
     ensure_loaded(cx, definition)?;
     let [formula, conditional, variance, range] = definition_parts(cx, definition)?;
     definition_modes(cx, definition)?;
     let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
         flag(name, &field_of(cx, v, name)?)
     };
-    let term = |cx: &mut EvalCx<'_>, v: &Value, name: &str, seen: &mut Vec<ObjRef>| -> Result<(), AttrError> {
+    let term = |cx: &mut EvalCx<'_>, v: &Value, name: &str, seen: &mut std::collections::HashSet<ObjRef>| -> Result<(), AttrError> {
         let t = field_of(cx, v, name)?;
         preflight_init_in(sys, &t, cx, seen)
     };
@@ -897,19 +907,43 @@ fn preflight_init_in(
                 }
             }
             term(cx, entry, "BaseValueIfTrue", seen)?;
+            if exprs.is_empty() {
+                // This entry always holds: nothing after it is reached.
+                seen.insert(definition);
+                return range_and_variance(cx, &variance, &range, seen, &term);
+            }
         }
         term(cx, &conditional, "DefaultBaseValue", seen)?;
     }
-    if enabled(cx, &variance, "bEnabled")? {
-        term(cx, &variance, "LowerBound", seen)?;
-        term(cx, &variance, "UpperBound", seen)?;
-        enabled(cx, &variance, "bUseIntegerRandomization")?;
+    range_and_variance(cx, &variance, &range, seen, &term)?;
+    seen.insert(definition);
+    Ok(())
+}
+
+/// The check of one initialization-data term of [`preflight_init_in`].
+type Term<'a> = dyn Fn(&mut EvalCx<'_>, &Value, &str, &mut std::collections::HashSet<ObjRef>) -> Result<(), AttrError> + 'a;
+
+/// The variance bounds and range limits of [`preflight_init_in`], each when enabled.
+fn range_and_variance(
+    cx: &mut EvalCx<'_>,
+    variance: &Value,
+    range: &Value,
+    seen: &mut std::collections::HashSet<ObjRef>,
+    term: &Term<'_>,
+) -> Result<(), AttrError> {
+    let enabled = |cx: &mut EvalCx<'_>, v: &Value, name: &str| -> Result<bool, AttrError> {
+        flag(name, &field_of(cx, v, name)?)
+    };
+    if enabled(cx, variance, "bEnabled")? {
+        term(cx, variance, "LowerBound", seen)?;
+        term(cx, variance, "UpperBound", seen)?;
+        enabled(cx, variance, "bUseIntegerRandomization")?;
     }
-    if enabled(cx, &range, "bEnableMinValueRestriction")? {
-        term(cx, &range, "MinValue", seen)?;
+    if enabled(cx, range, "bEnableMinValueRestriction")? {
+        term(cx, range, "MinValue", seen)?;
     }
-    if enabled(cx, &range, "bEnableMaxValueRestriction")? {
-        term(cx, &range, "MaxValue", seen)?;
+    if enabled(cx, range, "bEnableMaxValueRestriction")? {
+        term(cx, range, "MaxValue", seen)?;
     }
     Ok(())
 }

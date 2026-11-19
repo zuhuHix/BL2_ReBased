@@ -117,7 +117,7 @@ fn fx() -> Fx {
     let _ = std::fs::remove_dir_all(&dir);
     let bytes = package();
     let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
-    let attrs = AttributeSystem::new_empty().with_value_resolver("WillowGame.ToyStackResolver", ToyStack).unwrap();
+    let attrs = AttributeSystem::standard().unwrap().with_value_resolver("WillowGame.ToyStackResolver", ToyStack).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(attrs), ParityMode::Off);
     let path = ObjectPath::parse("WillowGame.ToyHolder").unwrap();
     let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
@@ -136,7 +136,7 @@ fn fx() -> Fx {
 fn p0_loads_the_attribute_and_its_chain_entries() {
     let mut x = fx();
     let attr = x.attr;
-    load_attribute(&mut x.vm, attr, true, &mut false).unwrap();
+    load_attribute(&mut x.vm, attr, true).unwrap();
     assert!(!x.vm.defs.is_unloaded(&x.vm.space, attr), "the attribute is loaded");
     let chain = crate::equip::read_prop(&x.vm, attr, "ValueResolverChain").unwrap();
     let entry = ow_attr::eval::object("e", &chain.elements().unwrap()[0]).unwrap().unwrap();
@@ -149,7 +149,7 @@ fn p0_loads_the_attribute_and_its_chain_entries() {
 fn p0_returns_a_failed_load_unchanged() {
     let mut x = fx();
     let broken = x.broken;
-    let e = load_attribute(&mut x.vm, broken, true, &mut false).unwrap_err();
+    let e = load_attribute(&mut x.vm, broken, true).unwrap_err();
     assert!(
         matches!(e, ow_vm::error::VmError::Def(ow_defs::store::DefError::Decode(_))),
         "the store's own decode error, typed: {e:?}"
@@ -363,4 +363,111 @@ fn a_load_refusal_comes_before_the_modifier_type_check() {
     x.vm.space.write(item, slots, slot).unwrap();
     let e = x.vm.call(f, Some(item), vec![Value::Bool(true), Value::Int(2), Value::array(vec![])]).unwrap_err();
     assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "the store's own decode error: {e:?}");
+}
+
+// ---- review r2 of #518: load transitions and the resident modifier class ------------------------------------------
+
+/// Item 2: a fresh load failure is one load transition; a retry of the same handle returns the cached failure and is
+/// none. Both answers are the store's own error, unprefixed.
+#[test]
+fn a_cached_load_failure_is_not_a_new_load() {
+    let mut x = fx();
+    let (item, f) = x.item_and_native();
+    x.modifier_class();
+    let broken = x.broken;
+    let slot = x.st(
+        "WillowGame.ToyItem.AttributeSlotData",
+        vec![
+            ("bActivated", Value::Bool(true)),
+            ("AttributeToModify", Value::Object(Some(broken))),
+            ("ModifierType", Value::Byte(2)),
+            ("ComputedModifierValue", Value::Float(1.0)),
+        ],
+    );
+    let slots = x.at(item, "AttributeSlots");
+    x.vm.space.write(item, slots, slot).unwrap();
+    let args = || vec![Value::Bool(true), Value::Int(2), Value::array(vec![])];
+    let n = x.vm.defs.load_transitions();
+    let e = x.vm.call(f, Some(item), args()).unwrap_err();
+    assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "{e:?}");
+    assert_eq!(x.vm.defs.load_transitions(), n + 1, "the fresh failure");
+    let e = x.vm.call(f, Some(item), args()).unwrap_err();
+    assert!(matches!(e, VmError::Def(ow_defs::store::DefError::Decode(_))), "{e:?}");
+    assert_eq!(x.vm.defs.load_transitions(), n + 1, "the cached retry is no load");
+}
+
+/// Item 2: a load only P9 makes. A removal's attribute is resident and goes through a noun resolver (run-time objects,
+/// no loads in P0); the item holds no noun entry, so the probe checks the noun's default, whose `BaseValueAttribute` is
+/// the unloaded `ToyAttr`. The probe loads it, then refuses its value resolver (a class the attribute system does not
+/// know). The refusal follows that load, so it is marked.
+#[test]
+fn a_refusal_after_a_load_only_p9_makes_is_marked() {
+    let mut x = fx();
+    let (_, f) = x.item_and_native();
+    let modifier_class = x.modifier_class();
+    let object = x.vm.find_class("WillowGame.Object").unwrap();
+    let d = |x: &mut Fx, n: &str, k: PropKind| PropertyDecl::new(x.vm.space.names.intern(n), k);
+    let aid_fields = vec![
+        d(&mut x, "BaseValueConstant", PropKind::Float),
+        d(&mut x, "BaseValueAttribute", PropKind::Object { class: object }),
+        d(&mut x, "InitializationDefinition", PropKind::Object { class: object }),
+        d(&mut x, "BaseValueScaleConstant", PropKind::Float),
+    ];
+    let aid = x.vm.space.classes.define_struct("Engine.AttributeInitializationDefinition.AttributeInitializationData", None, aid_fields).unwrap();
+    let fields = vec![
+        d(&mut x, "NounName", PropKind::Name),
+        d(&mut x, "Value", PropKind::Float),
+        d(&mut x, "BaseValue", PropKind::Float),
+        d(&mut x, "ModifierStack", PropKind::Array(Box::new(PropKind::Object { class: object }))),
+        d(&mut x, "ReplicationStrategy", PropKind::Byte { enum_: None }),
+        d(&mut x, "IndexInReplicationArray", PropKind::Int),
+    ];
+    let state = x.vm.space.classes.define_struct("GearboxFramework.INounAttributeProvider.NounAttributeState", None, fields).unwrap();
+    let item_class = x.vm.find_class("WillowGame.ToyItem").unwrap();
+    let decls = vec![d(&mut x, "NounState", PropKind::Array(Box::new(PropKind::Struct(state))))];
+    let noun_item = x.vm.space.classes.define("Test.NounItem", Some(item_class), decls).unwrap();
+    let decls = vec![d(&mut x, "DefaultValue", PropKind::Struct(aid)), d(&mut x, "ReplicationStrategy", PropKind::Byte { enum_: None })];
+    let noun = x.vm.space.classes.define("GearboxFramework.NounAttributeValueResolver", Some(object), decls).unwrap();
+    let attr_class = x.vm.find_class("WillowGame.ToyAttribute").unwrap();
+    let rt = ow_object::heap::Origin::Runtime;
+    let attr = x.vm.space.alloc(attr_class, "Attribute_ToyP9", None, rt).unwrap();
+    let resolver = x.vm.space.alloc(noun, "NounAttributeValueResolver_0", Some(attr), rt).unwrap();
+    let toy_attr = x.attr;
+    let mut default = x.vm.space.classes.struct_defaults(aid).unwrap();
+    let at = |x: &Fx, name: &str| {
+        let id = x.vm.space.names.find(name).unwrap();
+        x.vm.space.classes.struct_layout(aid).unwrap().field(id).unwrap().0 as usize
+    };
+    default.struct_mut().unwrap().fields[at(&x, "BaseValueAttribute")] = Value::Object(Some(toy_attr));
+    default.struct_mut().unwrap().fields[at(&x, "BaseValueScaleConstant")] = Value::Float(1.0);
+    x.vm.space.write(resolver, x.at(resolver, "DefaultValue"), default).unwrap();
+    x.vm.space.write(attr, x.at(attr, "ValueResolverChain"), Value::array(vec![Value::Object(Some(resolver))])).unwrap();
+    let item = x.vm.space.alloc(noun_item, "Test.NounItem_0", None, rt).unwrap();
+    let m = x.vm.space.alloc(modifier_class, "Test.Removed", None, rt).unwrap();
+    let rec = x.st(
+        "WillowGame.ToyItem.AppliedAttributeEffect",
+        vec![("Context", Value::Object(Some(item))), ("Attribute", Value::Object(Some(attr))), ("Modifier", Value::Object(Some(m)))],
+    );
+    let list = x.at(item, "AppliedAttributeSlotEffects");
+    x.vm.space.write(item, list, Value::array(vec![rec.clone()])).unwrap();
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, toy_attr));
+    let e = x.vm.call(f, Some(item), vec![Value::Bool(false), Value::Int(0), Value::array(vec![])]).unwrap_err();
+    let VmError::NotYet(n) = &e else { panic!("{e:?}") };
+    assert!(n.what.starts_with("stopped after partial writes: "), "{n}");
+    assert!(!x.vm.defs.is_unloaded(&x.vm.space, toy_attr), "P9 loaded it");
+    assert_eq!(x.vm.space.read(item, list).unwrap(), &Value::array(vec![rec]), "W2 not reached");
+}
+
+/// Item 6: the modifier class is not resident at the call (the package set has no `Core.AttributeModifier`, so
+/// binding could not set it up). P4 reads resident metadata only: a data error naming the class, with no class laid
+/// out and no load made.
+#[test]
+fn a_cold_modifier_class_is_refused_without_a_lookup() {
+    let mut x = fx();
+    let (item, f) = x.item_and_native();
+    let n = x.vm.defs.load_transitions();
+    let e = x.vm.call(f, Some(item), vec![Value::Bool(true), Value::Int(0), Value::array(vec![])]).unwrap_err();
+    assert!(matches!(&e, VmError::Script { message, .. } if message.contains(MODIFIER_CLASS)), "{e:?}");
+    assert!(x.vm.space.classes.by_path(MODIFIER_CLASS).is_none(), "no class set up by the call");
+    assert_eq!(x.vm.defs.load_transitions(), n, "no load");
 }

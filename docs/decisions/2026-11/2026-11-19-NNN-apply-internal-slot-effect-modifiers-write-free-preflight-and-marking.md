@@ -78,12 +78,14 @@ the two F3 tests were re-run with the old order restored:
 - **The hub's ruling, recorded here:** there is no isolated or read-only store view. P0 may load, **a load counts as a
   write** (the spawn's `loaded` pattern), and a refusal after any load is marked through
   `ow_world::pools::after_partial_writes`. There is **one write-tracking path** for the whole call: a refusal is marked
-  when P0 loaded anything, when the heap changed since the call began, or when the generator was drawn. It replaces
+  when P0 loaded anything, when the heap changed since the call began, or when the generator was drawn (**the
+  mechanism is replaced in review r2** by three counters; the rule stands). It replaces
   both F4's W1-only mark and the unconditional mark after W2. For this native it supersedes the note's "definition
   loads are not writes".
 - **1 (high), the lazy load:** `load_attribute` sets `loaded` before each load. A load that succeeds, followed by a
   later refusal, is now marked. P9's nested loads change the heap, so the heap check catches them.
-- **2 (medium), the change count:** `Heap::mutations()` counted mutable borrows. It is replaced by a change watch:
+- **2 (medium), the change count** (**replaced in review r2** by the three counters below): `Heap::mutations()`
+  counted mutable borrows. It is replaced by a change watch:
   `Heap::watch_changes`, `Heap::changed_since` and `Heap::end_watch`.
   - While a watch is open, the first mutable borrow of each object keeps a copy of it, and `changed_since` compares
     each touched object with its copy. Creations and frees are counted too.
@@ -116,3 +118,44 @@ Mutations run locally:
 - with the variance bounds left unchecked, the refusal comes after W2, marked.
 
 **Verified (r1):** `cargo test --workspace`: 2,452 passed, 0 failed, 46 ignored.
+
+**Review r2 of #518 (Sol high on d4f5db4b, the last Sol round), fixed in one commit on top.**
+- **The hub's ruling, the write tracker's final design** (9554's #523 uses the same one): three monotonic counters,
+  each bumped at the moment its event commits.
+  - **The heap's committed writes** (`Heap::committed_writes`). Every write that commits bumps it: `write`,
+    `write_in`, an object made or freed, a destroy, and an in-place change reported through `Heap::note_write`. The
+    reporters are the VM's array operations (when an array's length changes, which every real change does), its state
+    changes and its outer change. Same-value writes count. A read, a refused write, a plain borrow and a no-op (such as
+    removing an absent item) do not.
+  - **The generator's draws** (`GameRng::draws`, from a counter in `CrtRand` and `VmLcg`). Every draw bumps it,
+    including one whose stream is set back afterwards. The counter takes no part in equality or `Debug` text.
+  - **The definition store's load transitions** (`DefStore::load_transitions`). It is bumped when a handle goes from
+    unloaded to loaded or to failed. A retry of a cached failure does not bump it.
+
+  The tracker reads the three counters at the start of the call and marks a refusal iff one moved. That handles
+  re-entry, reversed writes, restored draws, NaN and -0.0, with no per-object scan.
+- **What it replaces:** the r1 change watch (`watch_changes`, `changed_since` and `end_watch` are removed), and the
+  `loaded` flag. A cached-failed handle no longer sets a flag, and a fresh failure anywhere in the call (P0, P9 or an
+  evaluation) counts.
+- **1 (high), the probe's budgets:** the noun-default probe enters the evaluator's own guard at each definition level:
+  the same `MAX_DEPTH`, `MAX_WORK` and cycle refusal. A chain past the limit is that `BadData`, not a stack overflow.
+  Definitions already checked are kept in a hash set.
+- **5 (medium), the short-circuit:** a conditional entry with no expressions always holds, so the probe checks no entry
+  after it and not the default. That is the evaluator's own short-circuit, known without evaluating anything.
+- **6 (medium), the modifier class:** P4 reads resident metadata only (`classes.by_path`, laid out). The class is set
+  up once when the native is bound; a package set without it binds anyway, and P4 then refuses naming the class.
+- **Tests added in r2:**
+  - the heap's committed-write count;
+  - the RNG's draw count;
+  - a reversed write and a restored draw, both marked;
+  - a -0.0 float write, marked;
+  - a nested re-entry, whose inner writes mark the outer refusal;
+  - the conditional short-circuit (the call goes through);
+  - a definition chain past the depth limit (the guard's refusal, unprefixed, nothing written);
+  - a fresh load failure (one transition) and its cached retry (none);
+  - a refusal after a load only P9 makes (marked);
+  - the cold modifier class (a data error, no class set up, no load).
+
+  The r1 no-op test now removes an absent item in place, a borrow, since a same-value write now counts.
+
+**Verified (r2):** `cargo test --workspace`: 2,461 passed, 0 failed, 46 ignored.

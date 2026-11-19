@@ -48,17 +48,43 @@ pub trait ScriptRng {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrtRand {
     pub state: u32,
+    draws: Draws,
+}
+
+/// How many draws a generator has made ([`GameRng::draws`]; the hub's ruling in review r2 of #518). It takes no part
+/// in a generator's equality or `Debug` text: two generators in the same state are equal however they got there.
+#[derive(Clone, Copy, Default)]
+struct Draws(u64);
+
+impl PartialEq for Draws {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Draws {}
+
+impl std::fmt::Debug for Draws {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("_")
+    }
 }
 
 impl CrtRand {
     /// `srand(seed)`: the state is the seed.
     pub fn new(seed: u32) -> Self {
-        CrtRand { state: seed }
+        CrtRand { state: seed, draws: Draws::default() }
+    }
+
+    /// How many draws this generator has made.
+    pub fn draws(&self) -> u64 {
+        self.draws.0
     }
 }
 
 impl Rand15 for CrtRand {
     fn rand15(&mut self) -> u16 {
+        self.draws.0 += 1;
         self.state = self.state.wrapping_mul(214_013).wrapping_add(2_531_011);
         // Bits 16..30 of the new state: 15 bits, so the value fits u16 without loss.
         ((self.state >> 16) & 0x7FFF) as u16
@@ -92,6 +118,7 @@ impl ScriptRng for CrtRand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmLcg {
     pub state: u32,
+    draws: Draws,
 }
 
 impl VmLcg {
@@ -101,11 +128,12 @@ impl VmLcg {
     pub const FRAND_SEED: u32 = 54_321;
 
     pub fn new(seed: u32) -> Self {
-        VmLcg { state: seed }
+        VmLcg { state: seed, draws: Draws::default() }
     }
 
     /// One step; returns the top 24 bits of the new state.
     fn step(&mut self) -> u32 {
+        self.draws.0 += 1;
         self.state = self
             .state
             .wrapping_mul(1_664_525)
@@ -313,6 +341,20 @@ impl GameRng {
         self.mode
     }
 
+    /// How many draws every stream has made together: a count that only grows, whatever state a stream is in (the
+    /// hub's ruling in review r2 of #518: a draw is a write even when the stream is later set back).
+    pub fn draws(&self) -> u64 {
+        self.crt.iter().map(CrtRand::draws).sum::<u64>()
+            + self
+                .script
+                .iter()
+                .map(|g| match g {
+                    ScriptGen::Crt(r) => r.draws(),
+                    ScriptGen::Lcg(r) => r.draws.0,
+                })
+                .sum::<u64>()
+    }
+
     /// The named C-`rand()` stream. Drawing it moves no other stream.
     pub fn crt(&mut self, s: CrtStream) -> &mut CrtRand {
         &mut self.crt[s.index()]
@@ -339,6 +381,28 @@ mod tests {
     //! A row's digest is FNV-1a 64 over the 1,000 outputs, each as a little-endian u32 (a `rand15` value, a
     //! `rand_limit` result as `i32` bits, an `frand` result as `f32` bits).
     use super::*;
+
+    /// The draw count (review r2 of #518): every draw counts, also one whose stream is set back; it takes no part in
+    /// equality, so two generators in the same state are equal however many draws each made.
+    #[test]
+    fn draws_are_counted_and_take_no_part_in_equality() {
+        let mut g = GameRng::from_world_seed(7, ParityMode::Off);
+        let fresh = g.clone();
+        assert_eq!(g.draws(), 0);
+        let stream = g.crt(CrtStream::AttributeVariance);
+        let saved = stream.state;
+        stream.rand15();
+        stream.state = saved;
+        g.script(ScriptStream::ALL[0]).frand();
+        assert_eq!(g.draws(), 2, "a restored draw and a script draw");
+        let mut r = GameRng::from_world_seed(7, ParityMode::Reference);
+        r.script(ScriptStream::ALL[1]).rand_limit(0);
+        assert_eq!(r.draws(), 1, "a Reference stand-in step counts too");
+        let mut h = fresh.clone();
+        h.script(ScriptStream::ALL[0]).frand();
+        assert_eq!(g, h, "same state, equal");
+        assert_ne!(g, fresh);
+    }
 
     const SEEDS: [u32; 20] = [
         0,
@@ -472,7 +536,7 @@ mod tests {
         // The state is public and is the whole generator.
         let mut c = CrtRand::new(7);
         c.rand15();
-        let mut d = CrtRand { state: c.state };
+        let mut d = CrtRand::new(c.state);
         assert_eq!(c.rand15(), d.rand15());
     }
 

@@ -360,10 +360,22 @@ fn with_array<R>(
                 _ => Fill::Untyped,
             };
             let root = vm.space.slot_mut(*o, *at)?;
-            match walk_mut(root, path)?.array_mut() {
-                Some(items) => change(items, &fill).map(Some),
-                None => Ok(None),
-            }
+            let result = match walk_mut(root, path)?.array_mut() {
+                Some(items) => {
+                    // Every array operation that changes an array changes its length (a set, an add or insert of
+                    // one or more, a removal of present items); one that does not is a no-op (review r2 of #518).
+                    let before = items.len();
+                    let r = change(items, &fill)?;
+                    Some((r, items.len() != before))
+                }
+                None => None,
+            };
+            Ok(result.map(|(r, changed)| {
+                if changed {
+                    vm.space.heap.note_write();
+                }
+                r
+            }))
         }
         Place::In(..) => Err(script_error(
             "",
