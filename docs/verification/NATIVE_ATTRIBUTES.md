@@ -342,6 +342,10 @@ Slot record layout (`WillowInventory.AttributeSlotData`, 19 per item): `SlotName
 - **Open:** the `ComputedModifierValue` computation (NATIVE_WEAPON_RULES gives the working fit `BaseModifierValue +
   PerGradeUpgrade * grade`, still the best available rule); how `ReplicatedAttributeSlotModifierValues` (a 19-float array) is
   filled on clients.
+  *Since read (2026-11-19, [NATIVE_INIT_ATTRIBUTE_SLOTS.md](NATIVE_INIT_ATTRIBUTE_SLOTS.md)): the computation is
+  `BaseModifierValue + (EffectGrade - 1) x PerGradeUpgrade` on the authority, copied into
+  `ReplicatedAttributeSlotModifierValues`, which elsewhere fills `ComputedModifierValue`; that note also gives where a
+  slot's data comes from and the slot limit.*
 
 ## 10. Skill.GetAttributeContexts(EffectInstigator, SkillEffect)
 Fills the applied-effect record's context list. If the effect's attribute names, as its first context resolver, the
