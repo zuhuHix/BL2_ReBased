@@ -18,7 +18,8 @@
 //!   `tools/verify_fire_event_order.py`): links 10 to 12, on a second world. On the definition store's copy refusal
 //!   the group runs again on the explicit load set, as `--slice-run` does.
 //! - `equip-run` (lane SLICE-GATE-DRIVERS, decision 2026-11-19-39): link 8, the phases of `--inventory-move
-//!   --equip-run` on one fixed weapon ([`EQUIP_WEAPON`]) on that command's own world; ok on its own evidence only.
+//!   --equip-run` (the spawn's `init` included) on one fixed weapon ([`EQUIP_WEAPON`]) on that command's own world;
+//!   ok on its own evidence only ([`equip_evident`]).
 //! - `phaselock-cast` (same lane): link 9, the installed Phaselock cast on its own world; no evidence check is chosen
 //!   yet, so it is never ok.
 //! - `none`: links 2, 6 and 7 have no headless driver yet; each row is `notyet` with the reason.
@@ -105,6 +106,8 @@ pub enum Evidence {
     Steps,
     /// What the link's own driver reports of its own run (`Ran::evident`); the text says what it checks.
     Driver(&'static str),
+    /// No evidence check is chosen yet, so the link is never `ok`; the text says why.
+    NotChosen(&'static str),
 }
 
 /// One link of the gate.
@@ -210,20 +213,22 @@ pub const LINKS: [Link; 14] = [
     link(
         "equip_gun",
         Driver::Equip,
-        &["make", "bases", "equip", "unequip"],
+        &["make", "init", "bases", "equip", "unequip"],
         &[],
-        Evidence::Driver("the equip left external records on the weapon and the unequip took every one back"),
-        "--equip-run's phases on one fixed weapon (EQUIP_WEAPON), not link 5's drop, on its own world; the spawn's \
-         InitializeInternal is not run, and no shot is fired (decision 2026-11-19-03)",
+        Evidence::Driver(
+            "the equip added external records to the weapon, the unequip took every one back, and no step left an \
+             error line",
+        ),
+        "--equip-run's phases on one fixed weapon (EQUIP_WEAPON), not link 5's drop, on its own world: the spawn's \
+         InitializeInternal first, then the bases, the equip and the unequip; no shot is fired (decision 2026-11-19-03)",
     ),
     link(
         "phaselock_enemy",
         Driver::Phaselock,
         &["cast"],
         &[],
-        Evidence::Driver(
-            "none chosen yet: what a lock leaves on its target is not settled, so a cast that returns is not yet \
-             evidence",
+        Evidence::NotChosen(
+            "what a lock leaves on its target is not settled, so a cast that returns is not yet evidence",
         ),
         "the installed LiftActionSkill.OnActionSkillStarted on Maya's Phaselock skill, with a player pawn, its \
          controller and an AI pawn from class defaults, on its own world (as ow-skills' installed run; decision \
@@ -558,6 +563,7 @@ fn evidence_text(e: Evidence) -> String {
         Evidence::Status(s) => format!("the Fire mission's status is not {s}"),
         Evidence::Steps => "none needed".into(),
         Evidence::Driver(what) => format!("the driver's own check: {what}"),
+        Evidence::NotChosen(why) => format!("no evidence check is chosen yet: {why}"),
     }
 }
 
@@ -772,12 +778,33 @@ fn gate(cooked: &str, grading: Grading) -> Vec<Row> {
     run_fire(cooked, grading, &mut ran, &mut status);
     run_equip(Path::new(cooked), grading, &mut ran);
     run_phaselock(Path::new(cooked), grading, &mut ran);
-    rows(&ran, grading, |i| match LINKS[i].evidence {
+    rows(&ran, grading, |i| evident(i, &ran, &status))
+}
+
+/// Whether link `i` has its evidence (the one check `gate` and the tests share): the rows its own steps added, the
+/// Fire mission's status after it, its driver's own check, or never for a link whose check is not chosen.
+pub fn evident(i: usize, ran: &[Option<Ran>], status: &[u8]) -> bool {
+    match LINKS[i].evidence {
         Evidence::Row(prefix) => evidence_in(ran[i].as_ref(), prefix),
-        Evidence::Status(s) => status[i] == s,
+        Evidence::Status(s) => status.get(i) == Some(&s),
         Evidence::Steps => true,
         Evidence::Driver(_) => ran[i].as_ref().is_some_and(|r| r.evident),
-    })
+        Evidence::NotChosen(_) => false,
+    }
+}
+
+/// Link 8's own evidence: no error line, the external records before the equip, after it and after the unequip
+/// all seen, the equip adding at least one record, and the unequip leaving none.
+pub fn equip_evident(
+    error_lines: usize,
+    before: Option<usize>,
+    after_equip: Option<usize>,
+    after_unequip: Option<usize>,
+) -> bool {
+    match (before, after_equip, after_unequip) {
+        (Some(b), Some(e), Some(u)) => error_lines == 0 && e > b && u == 0,
+        _ => false,
+    }
 }
 
 /// The weapon link 8 equips: a weapons-file line of `--equip-run` (`<weapon type> <level> <balance>
@@ -809,7 +836,7 @@ fn link_of(driver: Driver) -> Option<usize> {
 }
 
 /// Link 8 (module documentation): `make` prepares the weapon and its owner as `--equip-run` does, then each of its
-/// phases runs in turn. The evidence is the run's own: external records after the equip, none after the unequip.
+/// phases runs in turn, the spawn's `init` first. The evidence is the run's own ([`equip_evident`]).
 fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Equip) else { return };
     if !should_run(i, Driver::Equip, ran) {
@@ -834,9 +861,12 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             return;
         }
     };
-    let (mut after_equip, mut after_unequip) = (None, None);
+    let (mut before, mut after_equip, mut after_unequip) = (None, None, None);
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());
+        if *step == "equip" {
+            before = Some(crate::cmd::inventory::equip_run::external_records(vm, weapon));
+        }
         let error = crate::cmd::inventory::equip_run::run_phase(vm, step, weapon);
         let records = crate::cmd::inventory::equip_run::external_records(vm, weapon);
         match *step {
@@ -850,15 +880,13 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
             break;
         }
     }
-    r.evident = r.error_lines.is_empty()
-        && after_equip.is_some_and(|n| n > 0)
-        && after_unequip == Some(0);
+    r.evident = equip_evident(r.error_lines.len(), before, after_equip, after_unequip);
     ran[i] = Some(r);
 }
 
 /// Link 9 (module documentation): the installed cast on a world with the Core natives and `ow-skills`' tree and
 /// action-skill packs and a `WorldInfo`, as `ow-skills`' installed run builds it. No evidence check is chosen yet
-/// (`Evidence::Driver`), so a cast that returns is not `ok`.
+/// (`Evidence::NotChosen`), so a cast that returns is not `ok`.
 fn run_phaselock(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
     let Some(i) = link_of(Driver::Phaselock) else { return };
     if !should_run(i, Driver::Phaselock, ran) {

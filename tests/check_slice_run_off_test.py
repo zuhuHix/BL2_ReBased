@@ -35,8 +35,9 @@ def row(n, result='ok', grading='strict', **fields):
 def all_ok(grading='strict'):
     rows = [row(n, grading=grading) for n in range(1, 15)]
     for r in rows:
-        if r['driver'] == 'none':
-            # A link without a driver is never ok; a passing run has a driver for every link.
+        if r['driver'] in ('none', 'phaselock-cast'):
+            # A link without a driver, or link 9's cast with no evidence check yet, is never ok: a passing run has an
+            # evidence-checked driver for every link (a synthetic one here).
             r['driver'] = 'combat-run'
     return rows
 
@@ -133,11 +134,30 @@ class Parse(unittest.TestCase):
 
     def test_the_equip_and_cast_drivers_are_known_and_an_unknown_one_is_malformed(self):
         rows = all_ok()
-        self.assertEqual((rows[7]['driver'], rows[8]['driver']), ('equip-run', 'phaselock-cast'))
+        self.assertEqual(rows[7]['driver'], 'equip-run')
+        rows[8] = row(9, result='error', driver='phaselock-cast', steps=['cast'])
         chk.parse(lines(rows))
         rows[7] = dict(rows[7], driver='equip')
         with self.assertRaises(chk.Malformed):
             chk.parse(lines(rows))
+
+    def test_each_one_link_driver_drives_its_own_link_only(self):
+        rows = all_ok()
+        rows[0] = dict(rows[0], driver='equip-run')
+        with self.assertRaises(chk.Malformed, msg='equip-run on link 1'):
+            chk.parse(lines(rows))
+        rows = all_ok()
+        rows[7] = dict(rows[7], driver='phaselock-cast', result='error', stop=stop())
+        with self.assertRaises(chk.Malformed, msg='phaselock-cast on link 8'):
+            chk.parse(lines(rows))
+
+    def test_a_phaselock_cast_row_is_never_ok_until_its_evidence_check_exists(self):
+        rows = all_ok()
+        rows[8] = dict(rows[8], driver='phaselock-cast')
+        with self.assertRaises(chk.Malformed):
+            chk.parse(lines(rows))
+        rows[8] = dict(rows[8], result='notyet', stop=stop())
+        chk.parse(lines(rows))
 
     def test_a_link_without_a_driver_is_never_ok(self):
         rows = all_ok()

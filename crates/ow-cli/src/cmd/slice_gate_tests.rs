@@ -84,10 +84,10 @@ fn links_without_a_driver_are_not_yet_with_their_reason() {
 fn links_8_and_9_have_their_own_drivers_and_their_own_evidence() {
     let (equip, cast) = (&LINKS[index("equip_gun")], &LINKS[index("phaselock_enemy")]);
     assert_eq!((equip.driver.name(), cast.driver.name()), ("equip-run", "phaselock-cast"));
-    assert_eq!(equip.steps, ["make", "bases", "equip", "unequip"]);
+    assert_eq!(equip.steps, ["make", "init", "bases", "equip", "unequip"], "the spawn's init runs first");
     assert_eq!(cast.steps, ["cast"]);
     assert!(equip.needs.is_empty() && cast.needs.is_empty());
-    assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::Driver(_)));
+    assert!(matches!(equip.evidence, Evidence::Driver(_)) && matches!(cast.evidence, Evidence::NotChosen(_)));
     // The weapon line parses as an --equip-run line.
     assert!(EQUIP_WEAPON.split_whitespace().count() > 3 && !EQUIP_WEAPON.contains("  "));
 }
@@ -96,22 +96,37 @@ fn links_8_and_9_have_their_own_drivers_and_their_own_evidence() {
 fn a_driver_s_own_evidence_decides_and_a_stop_wins_over_it() {
     let mut ran = vec![None; LINKS.len()];
     let (e, c) = (index("equip_gun"), index("phaselock_enemy"));
-    // Steps that ran with no stop: ok only when the driver's own check found its evidence.
-    ran[e] = Some(Ran { evident: true, ..ran_ok(&["make", "bases", "equip", "unequip"]).unwrap() });
-    ran[c] = ran_ok(&["cast"]);
-    let graded = rows(&ran, Grading::Strict, |i| ran[i].as_ref().is_some_and(|r| r.evident));
+    let status = vec![0u8; LINKS.len()];
+    // Steps that ran with no stop: ok only when the driver's own check found its evidence (the shared `evident`).
+    ran[e] = Some(Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip", "unequip"]).unwrap() });
+    // Link 9 is never ok, even with its driver's flag set: no evidence check is chosen.
+    ran[c] = Some(Ran { evident: true, ..ran_ok(&["cast"]).unwrap() });
+    assert!(evident(e, &ran, &status) && !evident(c, &ran, &status));
+    let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
     assert_eq!(graded[e].result, Outcome::Ok);
     let cast_row = &graded[c];
     assert_eq!(cast_row.result, Outcome::Error, "a cast that returns is not evidence yet");
-    assert!(cast_row.stop.as_ref().unwrap().text.contains("the driver's own check"));
+    assert!(cast_row.stop.as_ref().unwrap().text.contains("no evidence check is chosen yet"));
     // A stop is the row's reason, whatever the evidence flag says.
-    let mut r = Ran { evident: true, ..ran_ok(&["make", "bases", "equip"]).unwrap() };
+    let mut r = Ran { evident: true, ..ran_ok(&["make", "init", "bases", "equip"]).unwrap() };
     assert!(step_error(&mut r, "equip", "unbound native WillowWeapon.AllParts(x)", Grading::Strict));
     ran[e] = Some(r);
-    let graded = rows(&ran, Grading::Strict, |i| ran[i].as_ref().is_some_and(|r| r.evident));
+    let graded = rows(&ran, Grading::Strict, |i| evident(i, &ran, &status));
     let stop = graded[e].stop.as_ref().unwrap();
     assert_eq!((graded[e].result, stop.step.as_str()), (Outcome::Error, "equip"));
     assert_eq!(stop.native, "WillowWeapon.AllParts(x)");
+}
+
+#[test]
+fn the_equip_evidence_needs_new_records_none_left_and_no_error_line() {
+    assert!(equip_evident(0, Some(0), Some(3), Some(0)));
+    assert!(equip_evident(0, Some(1), Some(2), Some(0)), "one new record is enough");
+    assert!(!equip_evident(0, Some(3), Some(3), Some(0)), "records already there before the equip are not new");
+    assert!(!equip_evident(0, Some(0), Some(0), Some(0)), "an equip that added nothing");
+    assert!(!equip_evident(0, Some(0), Some(3), Some(1)), "the unequip left one");
+    assert!(!equip_evident(1, Some(0), Some(3), Some(0)), "an error line");
+    assert!(!equip_evident(0, None, Some(3), Some(0)), "the equip step never ran");
+    assert!(!equip_evident(0, Some(0), Some(3), None), "the unequip step never ran");
 }
 
 #[test]
