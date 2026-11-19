@@ -17,7 +17,7 @@ only:
 - The special-move callers: `SpecialMoveComponent.RunBehaviors` behind its `PlayServer` / `PlayClient` / `PlayLocal`
   test, with the owner as self; and `GearboxAnimDefinition.OnStart` / `OnServerStart`, kernel event activations.
 
-This extends the paragraph on `RunBehaviors` in NATIVE_DOWN_TIMERS.md without contradicting it. Raw output stays under
+This extends the paragraph on `RunBehaviors` in NATIVE_DOWN_TIMERS.md and refines it: that note calls the kernel-info record empty, and this read finds `bIsInitialRunOfThisBehavior` set. Raw output stays under
 ignored `local/analysis/runbeh/`; the Ghidra runs were read-only and took the machine lock. Nothing is implemented:
 everything named stays unbound or `NotYet` in Off until a fresh lane codes it from the note. Every rule is UNVERIFIED
 in the running game; the note lists the bl-sdk checks and three open questions.

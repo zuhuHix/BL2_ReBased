@@ -12,8 +12,9 @@ implementer codes it from this note alone.
 
 **Why it matters.** `BehaviorBase.RunBehaviors` is what 8 Reference checks of `tests/mission_script_test.py` stop on
 during the level-up (S7b, S9, S10). The special-move start of slice link 9 runs behavior lists the same way
-(NATIVE_SPECIAL_MOVE_PLAY.md). NATIVE_DOWN_TIMERS.md already gives the loop in one paragraph. This note extends that
-reading and adds the script it reaches and the two special-move callers.
+(NATIVE_SPECIAL_MOVE_PLAY.md). NATIVE_DOWN_TIMERS.md already gives the loop in one paragraph and calls the record empty. This note
+refines that (one flag of the record is set, section 1) and adds the script it reaches and the two special-move
+callers.
 
 ## Summary
 
@@ -29,7 +30,8 @@ reading and adds the script it reaches and the two special-move callers.
 ## 1. BehaviorBase.RunBehaviors
 
 1. **One shared kernel-info record** (`BehaviorKernelInfo`) is made for the whole call. It has no running-thread state,
-   all times are 0 and `bHasLinkedOutputs` is clear; only `bIsInitialRunOfThisBehavior` is set. Every behavior of the
+   all times are 0 and `bHasLinkedOutputs` is clear; only `bIsInitialRunOfThisBehavior` is set (this refines
+   NATIVE_DOWN_TIMERS.md, which calls the record empty). Every behavior of the
    list gets the same record, so a later one sees what an earlier one wrote into it.
 2. **The list is walked in index order.** Its length is read again at every step, so a behavior that changes the list
    changes the walk. Empty entries are skipped.
@@ -38,7 +40,8 @@ reading and adds the script it reaches and the two special-move callers.
 4. **No result, and nothing is checked.** A behavior that does nothing, or fails inside its script, does not stop the
    walk. An empty or None list does nothing.
 5. **Not a kernel thread.** No behavior consumer, provider or process is involved. A behavior that asks the kernel to
-   follow an output link or to wait (`NextExecutionDelayTime`) has no thread to act on, so nothing follows from it.
+   follow an output link or to wait (`NextExecutionDelayTime`) has no thread to act on, so nothing follows from it,
+   as read (UNVERIFIED; open question 1).
    Reading the record as having no thread is this read's (UNVERIFIED); NATIVE_MISSION_DISPATCH.md A2 describes the
    kernel's own threads.
 
@@ -66,12 +69,14 @@ Its `ApplyBehavior` and its `ApplyBehaviorToContext` both lead to one step:
 
 **`InstanceDataHelper.GetFirstInstanceDataObject(ContextObj, DataName, DefaultValue)`:**
 - answers `DefaultValue` when either the name or the context object is missing;
-- otherwise asks the context's instance-data interface for its first entry of that name. An entry of an object kind
-  answers its object (two kinds read one value field, a third kind another);
+- otherwise asks the context's instance-data interface for its first entry of that name. An entry that holds an
+  object answers it (which entry kinds count is open question 2);
 - any other case answers `DefaultValue`.
 
 **The level-up.** The controller's level-up script runs `RunBehaviors` over the player class's `OnLevelUp` list, with
-the pawn as self and instigator, and over `OnLevelUpNaturally` unless cheated. Maya's `OnLevelUp` is one
+the pawn as self and the pawn's instigator as instigator, and then over `OnLevelUpNaturally` when `bNaturalLevelup` is
+set. Both runs sit behind the guard of NATIVE_LEVEL_UP_ATTRIBUTES.md section 6 step 3 (`bFeedback`, and more than
+1.0 second since `LastLevelUpTime`). Maya's `OnLevelUp` is one
 `Behavior_RunBehaviorCollection` naming `PlayerBehavior_LevelUp`, whose four behaviors run in data order
 (NATIVE_LEVEL_UP_ATTRIBUTES.md section 7). So the level-up is two nested `RunBehaviors` calls, and each inner
 behavior's own `ApplyBehavior`, through the context lookup of section 2.
@@ -82,7 +87,7 @@ behavior's own `ApplyBehavior`, through the context lookup of section 2.
   - nothing without an owner interface;
   - otherwise, for each `SMBehavior` entry in order that passes `CanPlayBehaviorData`, its `Behaviors` run through the
     loop of section 1, with **the owner actor as self** and the other arguments left empty;
-  - it works on its own copy of the list and frees it afterwards.
+  - the walk is not affected if the definition's list changes during it (UNVERIFIED).
 - **`CanPlayBehaviorData(Data)`:** true when at least one of the entry's flags allows the current side:
   - `PlayServer`, when the world is not a network client (`NetMode` is not `NM_Client`);
   - `PlayClient`, when it is one;

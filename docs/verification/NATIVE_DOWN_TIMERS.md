@@ -281,6 +281,7 @@ The player pawn carries a small interface (`IProtectionTimer`, three natives) im
   empty kernel-info record (the same record is passed to every entry, so a later behavior sees what an earlier one wrote into it), the instigator,
   the other participant and a copy of the event data. `ApplyBehavior` (script, Engine) then looks up the behavior's contexts and calls
   `ApplyBehaviorToContext` on each. Nothing is returned. No exceptions for an empty or None array.
+  Since read (NATIVE_RUN_BEHAVIORS.md section 1): the record is not quite empty, `bIsInitialRunOfThisBehavior` is set.
 - **Down state use:** `injured.KilledEnemy` passes the definition's `KilledEnemyBehaviors` with the pawn as self; the injured `Tick` passes
   `RecoveredBehaviors` (self = the pawn, instigator = the controller) after the second wind; `BeginState`/`EndState`/revive use the targeted, injured, revived and
   resurrected lists the same way (script call sites of the lists other than the first two were not enumerated here). The five pool refills are data inside those lists.
