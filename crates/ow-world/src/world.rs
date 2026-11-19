@@ -510,7 +510,10 @@ const IS_LOCAL_PLAYER_CONTROLLER: &str = "PlayerController.IsLocalPlayerControll
 ///   cannot tell a local player from a connection;
 /// - no world (no `Actors` service): `NotYet { LayerAbsent }`.
 ///
-/// Whether this game's own controller classes change the rule is UNVERIFIED (not read; no live check yet).
+/// Whether this game's own controller classes change the rule is UNVERIFIED (not read; no live check yet). Two
+/// answers are this port's modelling choices, not UE3's rule (which decides by `Player` alone), and are UNVERIFIED
+/// too: a listed controller that is destroyed answers false, and a listed controller whose `Player` is None answers
+/// true.
 fn is_local_player_controller(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let players = match c.vm.service::<Actors>() {
         Some(a) => a
