@@ -33,7 +33,7 @@
 //!      not a path search (review r2 of #470: a raised straight sweep passed two platforms across a gap);
 //!    - each miss is an `error` at `fight_area`.
 //! 3. The dummy is then placed through `ow_world`'s spawn path ([`ow_world::actors::spawn`]): the stock target dummy
-//!    archetype, made from its export in `Sanctuary_Dynamic`, as the template, at the floor spot found in step 2,
+//!    archetype, as the store holds it under its identity policy (decision 2026-11-19-91), as the template, at the floor spot found in step 2,
 //!    spawned by the level's `WorldInfo` in the slice gate's Off world, before play begins (so no begin-play script
 //!    runs), with `Spawn`'s `bNoCollisionFail` set, since a fixture stands where it is put (the VM world has no
 //!    collision hash for the free-spot search; step 2 is the port's check of the spot instead);
@@ -132,8 +132,7 @@ pub fn stop_of(f: &Failed) -> (Outcome, Stop) {
     }
 }
 
-/// The package and archetype of the dummy the driver places.
-pub const DUMMY_PACKAGE: &str = "Sanctuary_Dynamic";
+/// The archetype of the dummy the driver places, taken as the store holds it.
 pub use ow_mission::slice::DUMMY_PAWN;
 
 /// The area's centre for the player start `start`.
@@ -236,11 +235,18 @@ fn spawn_at(
     location: Value,
     spot: [f64; 3],
 ) -> Result<[f64; 3], Failed> {
-    // The archetype export of the dummy's own package, made as an object (as the mission slice and `--combat-run`
-    // take it): the path alone names another file's object under the store's identity policy.
-    let archetype = ow_combat::hit::instantiate_copy(vm, DUMMY_PACKAGE, DUMMY_PAWN)?
-        .ok_or_else(|| Failed::Check(format!("{DUMMY_PACKAGE} has no {DUMMY_PAWN}")))?;
+    // The dummy archetype as the store holds it under its identity policy, the one object for that path (decision
+    // 2026-11-19-91). A copy made from another file's export would own none of the components its slots name: those
+    // resolve to the holder's, so the spawn would share them instead of copying them.
+    let path = dummy_path()?;
+    let found = vm.defs.find(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    let archetype = found
+        .map_err(VmError::from)?
+        .ok_or_else(|| Failed::Check(format!("no package holds {DUMMY_PAWN}")))?;
     let class = vm.space.heap.get(archetype).map_err(VmError::from)?.class;
+    // What the template and the class default hold, read before the spawn (review r1 of #478, item 4).
+    let shared = shared_components(vm, archetype, class)?;
     // `Spawn`'s bNoCollisionFail: the fixture is placed exactly at the spot checked above, so no free-spot search is
     // asked (that search needs a collision hash the VM world does not model).
     let req = SpawnRequest::new(Some(class))
@@ -257,6 +263,7 @@ fn spawn_at(
     if !listed {
         return Err(Failed::Check("the spawned dummy is not in the world's actor list".into()));
     }
+    owns_its_components(vm, made, &shared)?;
     let at = location_of(vm, made)?;
     let off = distance(at, spot);
     // The spawn writes the location as the script's float, so the spot comes back to within a float's rounding.
@@ -274,13 +281,29 @@ fn spawn_at(
 /// reference to an export of the same file, and that export's own two tags. Where any of it cannot be read, the
 /// placement checks are not available: a `NotYet`.
 pub fn dummy_shape(vm: &mut Vm) -> Result<Shape, Failed> {
-    let name = ow_core::PackageName::parse(DUMMY_PACKAGE).map_err(|e| Failed::Check(format!("{DUMMY_PACKAGE}: {e}")))?;
-    let (_, store) = vm.defs.code_mut();
-    let found = store.resolve_path(&name, DUMMY_PAWN).map_err(|e| Failed::Check(format!("{DUMMY_PACKAGE}: {e}")))?;
-    let Some((id, archetype)) = found else {
-        return Err(Failed::Check(format!("{DUMMY_PACKAGE} has no {DUMMY_PAWN}")));
+    let path = dummy_path()?;
+    // The holder `find` loads later: the first in scan order, the gate world's policy. Reading the holders loads their
+    // files into the package store and no definition.
+    if *vm.defs.policy() != ow_defs::identity::IdentityPolicy::FirstInScanOrder {
+        return Err(Failed::Vm(
+            NotYet::not_read("fight area: the dummy's holder under a policy other than the first in scan order", RECORD)
+                .into(),
+        ));
+    }
+    let holders = vm.defs.owners(&path).map_err(VmError::from)?;
+    let Some(holder) = holders.holders.first() else {
+        return Err(Failed::Check(format!("no package holds {DUMMY_PAWN}")));
     };
-    cylinder_of(&store.shared(id), archetype)
+    let Some(id) = holder.id else {
+        return Err(Failed::Check(format!("the holder of {DUMMY_PAWN} is not loaded")));
+    };
+    let (_, store) = vm.defs.code_mut();
+    cylinder_of(&store.shared(id), holder.export)
+}
+
+/// The dummy archetype's object path.
+fn dummy_path() -> Result<ow_core::ObjectPath, Failed> {
+    ow_core::ObjectPath::parse(DUMMY_PAWN).map_err(|e| Failed::Check(format!("{DUMMY_PAWN}: {e}")))
 }
 
 /// The cylinder of archetype export `archetype` of `pkg` ([`dummy_shape`]): pure, so the tests share it.
@@ -414,6 +437,58 @@ pub fn reachable(
         "no grounded way from Maya's walked end to the dummy: her walk stops {} uu short of it",
         fmt_f(horizontal(mover.location, to), 1)
     )))
+}
+
+/// The components the fixture checks the spawn gave the dummy its own copy of (decisions 2026-11-19-44 and -91):
+/// `SMComponent` is inherited from the class default in the installed archetype, `CylinderComponent` is the
+/// archetype's own.
+pub const OWN_COMPONENTS: [&str; 2] = ["SMComponent", "CylinderComponent"];
+
+/// For each of [`OWN_COMPONENTS`], what the template `template` and the class default of `class` hold (each `None`
+/// where the slot is empty): the objects the spawned dummy must not share.
+fn shared_components(
+    vm: &mut Vm,
+    template: ObjRef,
+    class: ow_object::ids::ClassId,
+) -> Result<Vec<[Option<ObjRef>; 2]>, Failed> {
+    let path = vm.space.classes.get_layout(class).map(|l| l.path().as_str().to_string());
+    let path = path.ok_or_else(|| Failed::Check("the dummy's class has no layout".into()))?;
+    let defaults = vm.defs.class_default(&mut vm.space, &path);
+    vm.log.extend(vm.defs.take_log());
+    let defaults = defaults.map_err(VmError::from)?;
+    let mut out = Vec::new();
+    for name in OWN_COMPONENTS {
+        out.push([component_of(vm, template, name)?, component_of(vm, defaults, name)?]);
+    }
+    Ok(out)
+}
+
+/// Object `o`'s component slot `name`.
+fn component_of(vm: &mut Vm, o: ObjRef, name: &str) -> Result<Option<ObjRef>, Failed> {
+    match ow_combat::hit::access::get(vm, o, name)? {
+        Some(Value::Object(r)) => Ok(r),
+        other => Err(Failed::Check(format!("the dummy's {name} is {other:?}, not an object field"))),
+    }
+}
+
+/// Each of [`OWN_COMPONENTS`] on the spawned dummy `made` is its own object: outered to it, and none of `shared` (the
+/// template's and the class default's, [`shared_components`]). A shared one is an `error` at `fight_area`.
+fn owns_its_components(vm: &mut Vm, made: ObjRef, shared: &[[Option<ObjRef>; 2]]) -> Result<(), Failed> {
+    for (name, theirs) in OWN_COMPONENTS.into_iter().zip(shared) {
+        let Some(own) = component_of(vm, made, name)? else {
+            return Err(Failed::Check(format!("the spawned dummy has no {name}")));
+        };
+        let outer = vm.space.heap.get(own).map_err(VmError::from)?.outer;
+        let is_shared = theirs.contains(&Some(own));
+        if outer != Some(made) || is_shared {
+            return Err(Failed::Check(format!(
+                "the spawned dummy's {name} is not its own copy (outered to it: {}, the template's or the class \
+                 default's: {is_shared})",
+                outer == Some(made)
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Distance between `a` and `b`, uu.

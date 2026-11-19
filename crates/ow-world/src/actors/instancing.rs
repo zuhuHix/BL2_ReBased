@@ -50,7 +50,27 @@
 //!   property flags;
 //! - a sub-object of one of the template's components, at any depth (nested instancing);
 //! - a template component whose properties are not loaded (a stand-in with no slots);
-//! - a component owned by another class default object (inherited from a parent class's default).
+//! - a component owned by another class default object (inherited from a parent class's default) that the template has
+//!   no sub-object of its own for (next paragraph).
+//!
+//! **An inherited component** (lane INHERITED-COMPONENT-INSTANCING, decision 2026-11-19-91). A template's slot can
+//! name a component of a parent class's default object: a field the template's export does not serialize keeps the
+//! class default's value, and that value is the default's own component. Public UE3 settles such a reference when it
+//! loads the template: the template's own sub-object whose archetype is that component stands for it (the loader's
+//! instancing step matches existing sub-objects by archetype). The port does the same from the packages, by export
+//! identity, never by name:
+//! - the template's own sub-objects are the exports directly outered to its export identity; each one's export
+//!   archetype reference is resolved to the export it names (`CodeIndex::resolve_ref`);
+//! - a reference to a class default's component whose export is one of those archetypes stands for the template's
+//!   sub-object of that archetype. That sub-object is loaded, must be owned by the template (by handle or export
+//!   identity), and is copied for the new actor like any other template component; the inherited reference is
+//!   re-pointed to the same copy;
+//! - where the template has no such sub-object, the reference stays a refusal.
+//!
+//! The structural oracle is the export table: on the installed `Sanctuary_Dynamic`, the target dummy archetype's own
+//! `SpecialMoveComponent0` has `Default__WillowAIPawn.SpecialMoveComponent0` as its export archetype, the very object
+//! the inherited slot names. **UNVERIFIED in the running game**; the bl-sdk check that would confirm it: a spawned
+//! `WillowAIPawn`'s `SpecialMoveComponent` is a distinct object from its class default's, with the default's values.
 //!
 //! **Left as it is (a plain shared reference):** an object owned by anything else, such as another archetype's
 //! component or an asset. That is a reference the template does not own, so sharing it is the rule, not a fallback.
@@ -76,12 +96,22 @@ pub const COMPONENT_CLASS: &str = "Core.Component";
 /// The record of this rule.
 pub const RECORD_INSTANCING: &str = "docs/decisions/2026-11/2026-11-19-44-rust-spawn-gives-each-actor-its-own-template-components.md";
 
+/// The record of the inherited-component rule.
+pub const RECORD_INHERITED: &str =
+    "docs/decisions/2026-11/2026-11-19-91-rust-spawn-instances-inherited-components.md";
+
+/// An export by filed package id and export index.
+type ExportId = (u32, i32);
+
 /// What a spawn from `template` will copy, worked out before anything is made ([`plan_components`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     pub template: ObjRef,
     /// The template's components, in discovery order.
     pub originals: Vec<ObjRef>,
+    /// Inherited references and the template component that stands for each (module documentation): a parent class
+    /// default's component, then the template's own sub-object whose export archetype it is.
+    pub inherited: Vec<(ObjRef, ObjRef)>,
 }
 
 /// Gives `actor`, just made from `template`'s slots, its own copy of each component `template` owns (module
@@ -101,12 +131,17 @@ pub fn instance_components(
 /// the actor. `NotYet { NotRead }` for what Off cannot copy or re-point correctly (module documentation).
 pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
     let identity = template_export(vm, template);
+    let archetypes = own_archetypes(vm, identity);
     let mut originals: Vec<ObjRef> = Vec::new();
     let mut seen: Vec<ObjRef> = Vec::new();
+    let mut pending: Vec<(ObjRef, (u32, i32))> = Vec::new();
+    let mut inherited: Vec<(ObjRef, ObjRef)> = Vec::new();
     // Pass 1, nothing loaded: every reference the template's own slots hold is judged first (review r3 of #435, item
     // 3), from handles and the packages' export tables alone.
     let mut found = Vec::new();
-    judge_slots(vm, template, template, identity, &mut seen, &mut found)?;
+    let mut judge = Judge { template, identity, archetypes: &archetypes };
+    judge.slots(vm, template, &mut seen, &mut found, &mut pending)?;
+    stand_ins(vm, &judge, &mut pending, &mut seen, &mut found, &mut inherited)?;
     // Pass 2: each template component is loaded (it is the template's definition, read as the archetype itself is),
     // checked whole, and its own slots judged the same way, until nothing new turns up.
     let mut next = 0;
@@ -126,67 +161,158 @@ pub fn plan_components(vm: &mut Vm, template: ObjRef) -> Result<Plan, VmError> {
             )));
         }
         originals.push(component);
-        judge_slots(vm, component, template, identity, &mut seen, &mut found)?;
+        judge = Judge { template, identity, archetypes: &archetypes };
+        judge.slots(vm, component, &mut seen, &mut found, &mut pending)?;
+        stand_ins(vm, &judge, &mut pending, &mut seen, &mut found, &mut inherited)?;
     }
-    Ok(Plan { template, originals })
+    Ok(Plan { template, originals, inherited })
 }
 
-/// Judges every object `holder`'s slots refer to (module documentation), at any depth: a template component is added
-/// to `found`; a refusal is `NotYet { NotRead }`; anything else stays shared. Loads nothing.
-fn judge_slots(
-    vm: &Vm,
-    holder: ObjRef,
-    template: ObjRef,
-    identity: Option<(u32, i32)>,
+/// The template's own sub-objects that have an export archetype (module documentation, "An inherited component"):
+/// `(the archetype's export, the sub-object's export)`, both by filed package id and export index. Reads the export
+/// tables only.
+fn own_archetypes(vm: &mut Vm, identity: Option<ExportId>) -> Vec<(ExportId, ExportId)> {
+    let Some((package, index)) = identity else {
+        return Vec::new();
+    };
+    let children: Vec<(i32, i32)> = {
+        let pkg = vm.defs.packages().get(package);
+        (1..=pkg.exports.len())
+            .filter_map(|i| {
+                let i = i32::try_from(i).ok()?;
+                let e = pkg.object(i).ok()?;
+                (e.outer == index && e.archetype != 0).then_some((i, e.archetype))
+            })
+            .collect()
+    };
+    let (code, store) = vm.defs.code_mut();
+    let filed = code.filed_id(package);
+    children
+        .into_iter()
+        .filter_map(|(child, archetype)| Some((code.resolve_ref(store, package, archetype)?, (filed, child))))
+        .collect()
+}
+
+/// Resolves each pending inherited reference to the template's own sub-object (module documentation): loads it, checks
+/// that the template owns it, adds it to the template components when it is new, and records the pair. A sub-object
+/// another file holds under the identity policy, or one the template does not own, is `NotYet { NotRead }`.
+fn stand_ins(
+    vm: &mut Vm,
+    judge: &Judge<'_>,
+    pending: &mut Vec<(ObjRef, (u32, i32))>,
     seen: &mut Vec<ObjRef>,
     found: &mut Vec<ObjRef>,
+    inherited: &mut Vec<(ObjRef, ObjRef)>,
 ) -> Result<(), VmError> {
-    let mut refs = Vec::new();
-    for v in &vm.space.heap.get(holder)?.slots {
-        collect_refs(v, &mut refs);
-    }
-    let is_template = |a: &(Option<ObjRef>, Option<(u32, i32)>)| {
-        a.0 == Some(template) || (identity.is_some() && a.1 == identity)
-    };
-    for r in refs {
-        if r == template || (identity.is_some() && export_of(vm, r) == identity) {
-            return Err(not_yet(
-                "a reference back to the template itself (whether it becomes the new actor is not read)",
-            ));
-        }
-        if seen.contains(&r) {
-            continue;
-        }
-        seen.push(r);
-        let component = is_component(vm, vm.space.heap.get(r)?.class);
-        // The whole outer chain, so the judgement does not depend on the order objects are met in (review r3, item 1).
-        let chain = ancestors(vm, r);
-        let Some(first) = chain.first() else {
-            continue;
+    for (reference, (package, index)) in std::mem::take(pending) {
+        let resolved = vm.defs.resolve_ref(&mut vm.space, package, index);
+        vm.log.extend(vm.defs.take_log());
+        let own = resolved?;
+        let owned = own.is_some_and(|o| ancestors(vm, o).first().is_some_and(|a| judge.is_template(a)));
+        let Some(own) = own.filter(|_| owned) else {
+            return Err(not_yet_inherited(&format!(
+                "an inherited component whose stand-in, the template's own sub-object of that archetype, is not the \
+                 template's (another file holds it, or it has another outer): {}",
+                describe(vm, reference)
+            )));
         };
-        if is_template(first) {
-            if !component {
-                return Err(not_yet(&format!(
-                    "a sub-object of the template that is not a component (which ones are instanced needs the \
-                     unidentified property flags): {}",
-                    describe(vm, r)
-                )));
-            }
-            found.push(r);
-        } else if chain[1..].iter().any(is_template) {
-            return Err(not_yet(&format!(
-                "a sub-object of one of the template's components (nested instancing): {}",
-                describe(vm, r)
+        if !is_component(vm, vm.space.heap.get(own)?.class) {
+            return Err(not_yet_inherited(&format!(
+                "an inherited component whose stand-in is not a component: {}",
+                describe(vm, own)
             )));
-        } else if component && let Some(owner) = default_outer(vm, r) {
-            return Err(not_yet(&format!(
-                "a component of another class default object (inherited from a parent class's default): {} of \
-                 {owner}",
-                describe(vm, r)
-            )));
+        }
+        if !seen.contains(&own) {
+            seen.push(own);
+        }
+        if !found.contains(&own) {
+            found.push(own);
+        }
+        if !inherited.iter().any(|p| p.0 == reference) {
+            inherited.push((reference, own));
         }
     }
     Ok(())
+}
+
+/// What the plan judges against: the template, its export identity and its own sub-objects' export archetypes.
+struct Judge<'a> {
+    template: ObjRef,
+    identity: Option<(u32, i32)>,
+    archetypes: &'a [(ExportId, ExportId)],
+}
+
+impl Judge<'_> {
+    /// Whether an outer link (handle, export identity) is the template.
+    fn is_template(&self, a: &(Option<ObjRef>, Option<(u32, i32)>)) -> bool {
+        a.0 == Some(self.template) || (self.identity.is_some() && a.1 == self.identity)
+    }
+
+    /// Judges every object `holder`'s slots refer to (module documentation), at any depth: a template component is
+    /// added to `found`; an inherited component with a stand-in goes to `pending`; a refusal is `NotYet { NotRead }`;
+    /// anything else stays shared. Loads nothing.
+    fn slots(
+        &self,
+        vm: &Vm,
+        holder: ObjRef,
+        seen: &mut Vec<ObjRef>,
+        found: &mut Vec<ObjRef>,
+        pending: &mut Vec<(ObjRef, (u32, i32))>,
+    ) -> Result<(), VmError> {
+        let (template, identity) = (self.template, self.identity);
+        let mut refs = Vec::new();
+        for v in &vm.space.heap.get(holder)?.slots {
+            collect_refs(v, &mut refs);
+        }
+        let is_template = |a: &(Option<ObjRef>, Option<(u32, i32)>)| self.is_template(a);
+        for r in refs {
+            if r == template || (identity.is_some() && export_of(vm, r) == identity) {
+                return Err(not_yet(
+                    "a reference back to the template itself (whether it becomes the new actor is not read)",
+                ));
+            }
+            if seen.contains(&r) {
+                continue;
+            }
+            seen.push(r);
+            let component = is_component(vm, vm.space.heap.get(r)?.class);
+            // The whole outer chain, so the judgement does not depend on the order objects are met in (review r3,
+            // item 1).
+            let chain = ancestors(vm, r);
+            let Some(first) = chain.first() else {
+                continue;
+            };
+            if is_template(first) {
+                if !component {
+                    return Err(not_yet(&format!(
+                        "a sub-object of the template that is not a component (which ones are instanced needs the \
+                         unidentified property flags): {}",
+                        describe(vm, r)
+                    )));
+                }
+                found.push(r);
+            } else if chain[1..].iter().any(is_template) {
+                return Err(not_yet(&format!(
+                    "a sub-object of one of the template's components (nested instancing): {}",
+                    describe(vm, r)
+                )));
+            } else if component && let Some(owner) = default_outer(vm, r) {
+                // Decision 2026-11-19-91: the template's own sub-object of that archetype stands for it.
+                let key = export_of(vm, r).map(|(p, i)| (vm.defs.code().filed_id(p), i));
+                match key.and_then(|k| self.archetypes.iter().find(|(a, _)| *a == k)) {
+                    Some(&(_, own)) => pending.push((r, own)),
+                    None => {
+                        return Err(not_yet_inherited(&format!(
+                            "a component of another class default object (inherited from a parent class's default), \
+                             with no sub-object of the template made from it: {} of {owner}",
+                            describe(vm, r)
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `o`'s outers, innermost first, each as its handle (when the heap has it) and its export identity (when it has one):
@@ -249,8 +375,15 @@ pub fn apply_plan(vm: &mut Vm, plan: &Plan, actor: ObjRef) -> Result<Vec<(ObjRef
     if pairs.is_empty() {
         return Ok(pairs);
     }
+    // An inherited reference is re-pointed to its stand-in's copy (decision 2026-11-19-91).
+    let mut swaps = pairs.clone();
+    for &(reference, own) in &plan.inherited {
+        if let Some(&(_, copy)) = pairs.iter().find(|p| p.0 == own) {
+            swaps.push((reference, copy));
+        }
+    }
     for o in std::iter::once(actor).chain(pairs.iter().map(|p| p.1)) {
-        let slots: Vec<Value> = vm.space.heap.get(o)?.slots.iter().map(|v| repoint(v, &pairs)).collect();
+        let slots: Vec<Value> = vm.space.heap.get(o)?.slots.iter().map(|v| repoint(v, &swaps)).collect();
         vm.space.heap.get_mut(o)?.slots = slots;
     }
     Ok(pairs)
@@ -258,6 +391,10 @@ pub fn apply_plan(vm: &mut Vm, plan: &Plan, actor: ObjRef) -> Result<Vec<(ObjRef
 
 fn not_yet(what: &str) -> VmError {
     NotYet::not_read(format!("Spawn: {what}"), RECORD_INSTANCING).into()
+}
+
+fn not_yet_inherited(what: &str) -> VmError {
+    NotYet::not_read(format!("Spawn: {what}"), RECORD_INHERITED).into()
 }
 
 /// Whether `class` is `Core.Component` or a subclass, by the paths of its own layout chain.
