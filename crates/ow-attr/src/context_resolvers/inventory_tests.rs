@@ -28,6 +28,9 @@ fn willow_package(with_interface: bool) -> Vec<u8> {
         d.real_class("TestBodyPawnChild", pawn, base, 2, &[], None);
     }
     d.real_class("TestPlain", base, base, 2, &[], None);
+    // A class whose body does not decode (a 16-byte stand-in): its interface table cannot be read (review r1 of
+    // #455).
+    d.p.add_export(0, "TestOpaque", vec![0u8; 16]);
     d.build()
 }
 
@@ -124,8 +127,8 @@ fn off_equipped_through_the_interface_waits_for_the_accessor() {
 }
 
 /// Section 4 (review r2 of #445): when it cannot be established whether the source class implements `IBodyPawn`, the
-/// answer is that named `NotYet`, never None: a class with no package export behind it, and a world without a
-/// definition store.
+/// answer is that named `NotYet`, never None: a class with no package export behind it, a world without a
+/// definition store, and a class whose interface table cannot be read.
 #[test]
 fn off_equipped_with_an_unreadable_interface_list_is_its_own_not_yet() {
     const NAMED: &str = "whether the source class implements IBodyPawn";
@@ -141,6 +144,10 @@ fn off_equipped_with_an_unreadable_interface_list_is_its_own_not_yet() {
     let player = s.player;
     let text = not_read_text(walk(&s.sys, &[Some(r)], Some(player), &mut s.w));
     assert!(text.contains(NAMED) && text.contains("no package export"), "{text}");
+    // A class whose table cannot be read: the strict lookup has no structural fallback (review r1 of #455).
+    let opaque = package_object(&mut s, "TestOpaque");
+    let text = not_read_text(walk(&s.sys, &[Some(r)], Some(opaque), &mut s.w));
+    assert!(text.contains(NAMED) && text.contains("cannot be read"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

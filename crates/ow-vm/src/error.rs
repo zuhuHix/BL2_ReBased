@@ -107,6 +107,10 @@ impl From<AttrError> for VmError {
             AttrError::NotYet(n) => VmError::NotYet(n),
             AttrError::Heap(h) => VmError::Heap(h),
             AttrError::Def(d) => d.into(),
+            // A VM error carried through the attribute system comes back as itself (review r1 of #455).
+            AttrError::WorldTyped(w) if w.downcast_ref::<VmError>().is_some() => {
+                w.downcast_ref::<VmError>().cloned().expect("checked")
+            }
             other => VmError::Attr(other),
         }
     }
@@ -114,8 +118,8 @@ impl From<AttrError> for VmError {
 
 /// For a world that runs script inside the attribute system (a change-notification override, a resolver that calls
 /// into the VM): `NotYet`, heap and attribute errors pass through unchanged and a definition store error converts as a
-/// `DefError` does, so a caller still sees what is missing; every other VM error travels as `AttrError::World` with its
-/// text.
+/// `DefError` does, so a caller still sees what is missing; every other VM error travels as `AttrError::WorldTyped`,
+/// typed, and converts back to itself (review r1 of #455; it travelled as `AttrError::World` text before).
 impl From<VmError> for AttrError {
     fn from(e: VmError) -> Self {
         match e {
@@ -123,7 +127,7 @@ impl From<VmError> for AttrError {
             VmError::Heap(h) => AttrError::Heap(h),
             VmError::Attr(a) => a,
             VmError::Def(d) => d.into(),
-            other => AttrError::World(other.to_string()),
+            other => AttrError::WorldTyped(ow_attr::api::WorldError::new(other)),
         }
     }
 }
@@ -184,10 +188,13 @@ mod tests {
         );
         let inner = AttrError::World("inner".into());
         assert_eq!(AttrError::from(VmError::Attr(inner.clone())), inner);
-        assert_eq!(
-            AttrError::from(VmError::StepLimit),
-            AttrError::World("step limit exceeded (runaway script?)".into())
-        );
+        // Any other VM error is carried typed and comes back as itself (review r1 of #455), its text unchanged.
+        let carried = AttrError::from(VmError::StepLimit);
+        assert!(matches!(&carried, AttrError::WorldTyped(_)), "{carried:?}");
+        assert_eq!(carried.to_string(), "world: step limit exceeded (runaway script?)");
+        assert_eq!(VmError::from(carried), VmError::StepLimit);
+        let script = VmError::UnboundNative("Object.Foo(int)".into());
+        assert_eq!(VmError::from(AttrError::from(script.clone())), script);
     }
 
     #[test]
