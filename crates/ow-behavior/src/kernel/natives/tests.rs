@@ -170,6 +170,8 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ),
         (BROADCAST_FROM_SCRIPT, vec![("Handle", h(), false), ("EventName", PropKind::Name, false)], None),
         (REGISTER_CONSUMER, vec![("Consumer", o(), false)], Some(h())),
+        (BEGIN_NONDETERMINISTIC, vec![("Handle", h(), false)], None),
+        (FORCE_UNREGISTER, vec![("Handle", h(), false)], None),
         (INITIALIZE_PROVIDER, vec![("Handle", h(), false), ("Provider", o(), false)], None),
         (
             CHANGE_SEQUENCE,
@@ -183,7 +185,15 @@ fn toy_with(mode: ParityMode, natives: bool) -> Toy {
         ),
     ];
     for (path, params, result) in decls.into_iter().filter(|_| natives) {
-        let params = params.into_iter().map(|(n, k, opt)| param(&mut vm, n, k, opt)).collect();
+        // The two provider natives take the handle by reference (NATIVE_BEHAVIOR_PROVIDERS.md: out parameters).
+        let by_ref = path == BEGIN_NONDETERMINISTIC || path == FORCE_UNREGISTER;
+        let params = params
+            .into_iter()
+            .map(|(n, k, opt)| {
+                let d = param(&mut vm, n, k, opt);
+                if by_ref { d.with_flags(PropertyDecl::PARAM | PropertyDecl::OUT) } else { d }
+            })
+            .collect();
         let result = result.map(|k| {
             PropertyDecl::new(vm.space.names.intern("ReturnValue"), k).with_flags(PropertyDecl::RETURN)
         });
@@ -350,7 +360,7 @@ fn reference_binds_only_what_the_cxx_binds() {
     for path in [OUTPUT_LINK, CONSUMER_HANDLE, IS_SEQUENCE_ENABLED, EVENT_FROM_SCRIPT, BROADCAST_FROM_SCRIPT] {
         assert!(t.vm.has_native(path), "{path}");
     }
-    for path in [REGISTER_CONSUMER, INITIALIZE_PROVIDER, CHANGE_SEQUENCE] {
+    for path in [REGISTER_CONSUMER, INITIALIZE_PROVIDER, CHANGE_SEQUENCE, BEGIN_NONDETERMINISTIC, FORCE_UNREGISTER] {
         assert!(!t.vm.has_native(path), "{path}");
     }
     // Unbound there, the stub policy answers, as before the pack.
@@ -645,4 +655,90 @@ fn a_failed_pass_one_registers_nothing_and_can_be_retried() {
     t.fail.set(false);
     t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
     assert_eq!(t.call(IS_SEQUENCE_ENABLED, None, vec![h, p, boom]).unwrap(), Value::Bool(true));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The provider natives (NATIVE_BEHAVIOR_PROVIDERS.md section 4; decision 2026-11-19-19)
+// ---------------------------------------------------------------------------------------------------------------
+
+impl Toy {
+    /// Calls a by-reference handle native and returns (result, the handle as the caller sees it afterwards).
+    fn call_by_ref(&mut self, path: &str, handle: Value) -> Result<(Value, Value), VmError> {
+        let f = self.vm.find_function(path)?;
+        let done = self.vm.call(f, None, vec![handle])?;
+        Ok((done.ret, done.outs[0].clone()))
+    }
+}
+
+/// Begin: nothing changes and the handle is not written, on a registered PID, on -1 and on an unknown PID; the
+/// consumer still answers afterwards.
+#[test]
+fn begin_nondeterministic_changes_nothing_a_script_sees() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let skill = t.object(t.bare, "Skill_0");
+    let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
+    let pid = t.pid_of(&h);
+    for given in [h.clone(), t.handle(INVALID_PID), t.handle(77)] {
+        let (ret, after) = t.call_by_ref(BEGIN_NONDETERMINISTIC, given.clone()).unwrap();
+        assert_eq!(ret, Value::None);
+        assert_eq!(after, given, "the handle is not written");
+    }
+    let definition = t.definition("TestBpd", PROVIDER);
+    let p = Value::Object(Some(definition));
+    t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
+    let main = t.name("Main");
+    assert_eq!(t.call(IS_SEQUENCE_ENABLED, None, vec![h, p, main]).unwrap(), Value::Bool(true));
+    assert_eq!(process_of(&t.vm, skill).unwrap(), Some(pid));
+}
+
+/// Force on a kernel consumer: the handle comes back -1; the process and its provider are gone, so nothing of it runs
+/// again (its events fire nothing, its sequences read disabled); the PID is kept out of the allocator; a second Force
+/// only writes -1. Force on -1 and on an unknown PID: the handle reads -1 and nothing else changes.
+#[test]
+fn force_unregister_tears_the_consumer_down_and_always_writes_minus_one() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    let skill = t.object(t.bare, "Skill_0");
+    let h = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(skill))]).unwrap();
+    let pid = t.pid_of(&h);
+    let definition = t.definition("TestBpd", PROVIDER);
+    let p = Value::Object(Some(definition));
+    t.call(INITIALIZE_PROVIDER, None, vec![h.clone(), p.clone()]).unwrap();
+    let (ret, after) = t.call_by_ref(FORCE_UNREGISTER, h.clone()).unwrap();
+    assert_eq!(ret, Value::None);
+    assert_eq!(t.pid_of(&after), INVALID_PID);
+    assert_eq!(process_of(&t.vm, skill).unwrap(), None);
+    assert!(with_provider(&mut t.vm, pid, PROVIDER, |_, _| ()).unwrap().is_none(), "the provider is gone");
+    // Calls with the old handle find no consumer.
+    let (main, go) = (t.name("Main"), t.name("Go"));
+    assert_eq!(t.call(IS_SEQUENCE_ENABLED, None, vec![h.clone(), p.clone(), main]).unwrap(), Value::Bool(false));
+    t.call(EVENT_FROM_SCRIPT, None, vec![h.clone(), p, go]).unwrap();
+    assert!(t.seen().is_empty(), "nothing of the released consumer runs");
+    assert_eq!(owner_of(&t.vm, pid).unwrap(), Some(Owner::Released));
+    // The released PID is not handed out again (NATIVE_BEHAVIOR_PROVIDERS.md, open question 2).
+    let other = t.object(t.bare, "Skill_1");
+    let next = t.call(REGISTER_CONSUMER, None, vec![Value::Object(Some(other))]).unwrap();
+    assert_ne!(t.pid_of(&next), pid);
+    // A second Force with the old handle, and Force on -1 and on an unknown PID: only the -1 write.
+    let owners_before = format!("{:?}", owner_of(&t.vm, t.pid_of(&next)).unwrap());
+    for given in [h, t.handle(INVALID_PID), t.handle(77)] {
+        let (_, after) = t.call_by_ref(FORCE_UNREGISTER, given).unwrap();
+        assert_eq!(t.pid_of(&after), INVALID_PID);
+    }
+    assert_eq!(format!("{:?}", owner_of(&t.vm, t.pid_of(&next)).unwrap()), owners_before, "the other consumer is kept");
+    assert_eq!(owner_of(&t.vm, 77).unwrap(), None);
+}
+
+/// Force on a handle another crate owns: `NotYet` (that crate's teardown is not ported here), before any write.
+#[test]
+fn force_unregister_on_a_crate_handle_is_not_yet() {
+    let mut t = toy(ParityMode::Off);
+    Pack.register(&mut t.vm).unwrap();
+    claim(&mut t.vm, 5, "ow-mission").unwrap();
+    let h = t.handle(5);
+    let f = t.vm.find_function(FORCE_UNREGISTER).unwrap();
+    let r = t.vm.call(f, None, vec![h]).map(|d| d.ret);
+    assert_eq!(not_yet(r), Missing::NotPorted);
+    assert_eq!(owner_of(&t.vm, 5).unwrap(), Some(Owner::Crate("ow-mission")));
 }
