@@ -661,12 +661,12 @@ pub(super) fn fx_in(begin: bool, mode: ParityMode) -> Fx {
     fx_files(begin, mode, false)
 }
 
-/// [`fx_in`], with `Core.upk` (its `Core.Component`) beside the engine package when `core` is set.
 thread_local! {
     /// A `Note` number the test native refuses with an invented `NotYet` (review r1 of #478, item 4).
     static REFUSE_NOTE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
 }
 
+/// [`fx_in`], with `Core.upk` (its `Core.Component`) beside the engine package when `core` is set.
 fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-world-{}-{}",
