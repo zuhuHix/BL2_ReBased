@@ -165,7 +165,8 @@ manufacturer, the grade-or-level word and the context source (NATIVE_LOOT.md ste
 - **`ComputeMonetaryValue()`** (one body for weapons and items):
   1. 0 without an inventory definition;
   2. otherwise the definition's `MonetaryValue` (an attribute initialization value, evaluated by the engine's
-     initialization evaluator with the inventory itself as context: NATIVE_INVENTORY_VALUE.md section 3), truncated toward zero to an
+     initialization evaluator with the inventory itself as context: NATIVE_INVENTORY_VALUE.md section 3), truncated
+     toward zero to an
      integer;
   3. then capped by the definition's `FormOfCurrency`: `CURRENCY_Credits` at 99,999,999, `CURRENCY_Eridium` at 500,
      `CURRENCY_SeraphCrystals` and the ten reserved values at 999, and a value above the enum's last entry gives 0. A
