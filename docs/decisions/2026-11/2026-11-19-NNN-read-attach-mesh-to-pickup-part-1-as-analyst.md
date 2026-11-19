@@ -23,10 +23,24 @@ placeholder; the hub gives it. This lane writes docs only. A fresh implementer c
   - **`HideBoneByName(name,byte)`:** nothing with a None name or no skeletal mesh (the slice's case); otherwise
     `NotRead`.
   - **`Actor.AttachComponent(object)`:**
-    - nothing for a None component or a `bDeleteMe` actor;
-    - otherwise the default answer is `NotYet { LayerAbsent }`: the world's scene, which the port does not have;
-    - section 5 puts the option of a script-visible-only port answer to the hub.
-  - **Effect:** in default Off, links 6 and 7 stop at `AttachComponent`, with the `make` step's prefix.
+    - nothing for a None component, a `bDeleteMe` actor, or an actor destroyed in the heap (the pending-kill flag,
+      UNVERIFIED (fitted));
+    - **hub ruling (review r1 of #505):** with the slice world's explicit, empty scene layer (Off only), a `NotRead`
+      preflight for an already attached component, then, unconditionally and in the order read:
+      - `bNeedsReattach` and `bNeedsUpdateTransform` false;
+      - `Owner` = the actor;
+      - the `Components` append, with no duplicate check.
+
+      `Scene` and `bAttached` are not written. It is a port answer, UNVERIFIED;
+    - without the layer: `NotYet { LayerAbsent }`, the world's scene.
+  - **Effect:** links 6 and 7 go past `AttachComponent` under the scene layer. After that attach, a later deferred
+    reattach on the component takes the owner branch (`NotRead`).
+  - **Review r1 of #505** also:
+    - names the record of both deferred-reattach `NotRead`s;
+    - says "`Scene` not zero" means any field of the port's value;
+    - has the implementer read the component instance, not the class default object (the defaults are all zero);
+    - says the `bNeedsUpdateTransform` clear was read;
+    - says `bOldForceRefPose` is never written.
 - **Part 2** (section 6 of the note) lists what the rest of the `make` step reaches: `SetLightEnvironment`,
   `InitializePickupForRBPhysics` and `SpawnPickupParticles`. Not written up yet.
 - **Not verified:** everything above in the running game. The fitted identities are `bForceRefpose`, the `HiddenGame`
