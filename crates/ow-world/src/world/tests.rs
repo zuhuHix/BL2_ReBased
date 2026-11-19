@@ -292,6 +292,9 @@ fn package() -> Vec<u8> {
         t.prop("Bool", world_info, b, 0, 0);
     }
     t.prop("Byte", world_info, "NetMode", 0, 0);
+    // The world's two lists (decision 2026-11-19-92).
+    t.prop("Object", world_info, "ControllerList", 0, actor);
+    t.prop("Object", world_info, "PawnList", 0, actor);
     // The game info the world's hooks fall back to (decision 2026-11-16-49).
     t.prop("Object", world_info, "Game", 0, actor);
     native(
@@ -401,8 +404,22 @@ fn package() -> Vec<u8> {
         a.stmt().raw(&[0x14, 0x2D]).instance(collide_actors).raw(&[0x27]);
     });
     let controller = t.class("Controller", actor);
+    t.prop("Object", controller, "NextController", 0, actor);
+    t.prop("Object", controller, "ResourcePoolManager", 0, actor);
+    let gearbox_mind = t.class("GearboxMind", controller);
+    t.prop("Object", gearbox_mind, "MyRuleEngine", 0, object);
+    let willow_mind = t.class("WillowMind", gearbox_mind);
+    t.prop("Object", willow_mind, "InteractionProxy", 0, actor);
+    // The kill's end, as script: the mind's PawnDied destroys the mind (Controller.PawnDied for a non-player).
+    void(&mut t, willow_mind, "PawnDied", &[], |_, a| {
+        a.stmt().final_function(ids.destroy, |_| {});
+    });
+    let pawn = t.class("Pawn", actor);
+    t.prop("Object", pawn, "NextPawn", 0, actor);
+    t.class("LocalPlayer", object);
     let player_controller = t.class("PlayerController", controller);
     t.prop("Object", player_controller, "Player", 0, object);
+    t.prop("Bool", player_controller, "bPendingDestroy", 0, 0);
     native(&mut t, player_controller, "IsLocalPlayerController", &[], Some(("Bool", 0)), NATIVE);
     let ui = t.class("UIInteraction", object);
     native(&mut t, ui, "GetDataStoreClient", &[], Some(("Object", object)), NATIVE | STATIC);
@@ -573,7 +590,9 @@ fn fx_files(begin: bool, mode: ParityMode, core: bool) -> Fx {
     )
     .unwrap();
     let mut w = World::new(vm, BalanceState::new(snapshot()), &[&natives_core::Pack]).unwrap();
-    for class in ["Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo"] {
+    for class in [
+        "Probe", "Dud", "Collider", "Halter", "Controller", "PlayerController", "WorldInfo", "Pawn", "GearboxMind", "WillowMind",
+    ] {
         let cdo =
             w.vm.defs
                 .class_default(&mut w.vm.space, &format!("Engine.{class}"))
@@ -1636,11 +1655,6 @@ fn destroy_refuses_static_and_non_authority_actors_and_runs_the_events() {
 fn destroy_is_not_yet_where_this_world_cannot_run_the_routine() {
     run(|| {
         let mut x = fx();
-        let ctrl = x.spawn("Controller");
-        assert!(matches!(
-            vm_missing(destroy(&mut x.w.vm, ctrl).unwrap_err()),
-            Missing::NotRead
-        ));
         let p = x.spawn("Probe");
         let other = x.spawn("Probe");
         set_field(&mut x.w.vm.space, p, "Base", Value::Object(Some(other))).unwrap();
@@ -1684,20 +1698,14 @@ fn destroy_is_not_yet_where_this_world_cannot_run_the_routine() {
 }
 
 #[test]
-fn a_controller_is_the_cxx_stand_in_in_reference_and_not_yet_in_off() {
+fn a_controller_is_the_cxx_stand_in_in_reference_and_generic_in_off() {
     run(|| {
-        // Off: the controller and player case waits for its implementer; nothing changes before the refusal.
+        // Off (decision 2026-11-19-92): an AI controller takes the generic routine.
         let mut x = fx();
         let ctrl = x.spawn("Controller");
-        match destroy(&mut x.w.vm, ctrl).unwrap_err() {
-            VmError::NotYet(n) => {
-                assert_eq!(n.missing, Missing::NotRead);
-                assert_eq!(n.record, crate::actors::RECORD_CONTROLLER);
-            }
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(field(&x.w.vm.space, ctrl, "bDeleteMe").unwrap(), Value::Bool(false));
-        assert_eq!(field(&x.w.vm.space, ctrl, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert!(destroy(&mut x.w.vm, ctrl).unwrap());
+        assert_eq!(field(&x.w.vm.space, ctrl, "bDeleteMe").unwrap(), Value::Bool(true));
+        assert!(!x.w.actors().borrow().list().contains(&ctrl), "out of the level list");
 
         // Reference: the C++ stand-in, marked and true; no event, still listed; a second destroy is true.
         let mut x = fx_in(true, ParityMode::Reference);
@@ -2389,4 +2397,192 @@ mod placement {
             drop(held);
         });
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// A controller's and a pawn's destroy, the kill's unlinking (lane IMPL-ACTOR-DESTROY-CONTROLLER, decision
+// 2026-11-19-92; NATIVE_ACTOR_DESTROY_CONTROLLER.md)
+// ---------------------------------------------------------------------------------------------------------------
+
+fn obj(x: &Fx, o: ObjRef, name: &str) -> Option<ObjRef> {
+    match field(&x.w.vm.space, o, name).unwrap() {
+        Value::Object(r) => r,
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+fn members(x: &Fx, list: crate::actors::WorldList) -> Vec<ObjRef> {
+    crate::actors::list_members(&x.w.vm.space, x.wi, list).unwrap()
+}
+
+/// A spawn adds a controller and a pawn at the head of their lists, newest first (section 4).
+#[test]
+fn a_spawn_links_controllers_and_pawns_newest_first() {
+    use crate::actors::WorldList::{Controllers, Pawns};
+    run(|| {
+        let mut x = fx();
+        let (c1, c2) = (x.spawn("WillowMind"), x.spawn("Controller"));
+        let (p1, p2) = (x.spawn("Pawn"), x.spawn("Pawn"));
+        x.spawn("Probe");
+        assert_eq!(members(&x, Controllers), [c2, c1]);
+        assert_eq!(members(&x, Pawns), [p2, p1]);
+    });
+}
+
+/// The mind's destroy, in order (section 5): `Destroyed()` first, then its pool manager destroyed and cleared, its
+/// unlink with `NextController` None, then its interaction proxy destroyed (the field kept). A middle member's
+/// predecessor takes its link.
+#[test]
+fn a_minds_destroy_unlinks_it_and_destroys_what_it_owns() {
+    use crate::actors::WorldList::Controllers;
+    run(|| {
+        let mut x = fx();
+        let first = x.spawn("Controller");
+        let mind = x.spawn("WillowMind");
+        let last = x.spawn("Controller");
+        let (pool, proxy) = (x.spawn("Probe"), x.spawn("Probe"));
+        set_field(&mut x.w.vm.space, mind, "ResourcePoolManager", Value::Object(Some(pool))).unwrap();
+        set_field(&mut x.w.vm.space, mind, "InteractionProxy", Value::Object(Some(proxy))).unwrap();
+        assert_eq!(members(&x, Controllers), [last, mind, first]);
+        assert!(destroy(&mut x.w.vm, mind).unwrap());
+        assert_eq!(members(&x, Controllers), [last, first], "the predecessor takes its link");
+        assert_eq!(obj(&x, mind, "NextController"), None);
+        assert_eq!(obj(&x, mind, "ResourcePoolManager"), None);
+        assert_eq!(obj(&x, mind, "InteractionProxy"), Some(proxy), "the proxy field is not cleared");
+        for o in [mind, pool, proxy] {
+            assert_eq!(field(&x.w.vm.space, o, "bDeleteMe").unwrap(), Value::Bool(true));
+        }
+        // The head is unlinked through the list's head field.
+        assert!(destroy(&mut x.w.vm, last).unwrap());
+        assert_eq!(members(&x, Controllers), [first]);
+    });
+}
+
+/// A pawn's destroy unlinks it from `PawnList`; its own `NextPawn` is left as it was (section 3).
+#[test]
+fn a_pawns_destroy_unlinks_it_and_leaves_its_link() {
+    use crate::actors::WorldList::Pawns;
+    run(|| {
+        let mut x = fx();
+        let (p1, p2) = (x.spawn("Pawn"), x.spawn("Pawn"));
+        assert!(destroy(&mut x.w.vm, p2).unwrap());
+        assert_eq!(members(&x, Pawns), [p1]);
+        assert_eq!(obj(&x, p2, "NextPawn"), Some(p1), "NextPawn left");
+    });
+}
+
+/// Preflight (section 5, step 2): a mind whose rule engine is set is `NotYet { NotRead }`, and a world whose
+/// `WorldInfo` does not hold the list is `NotYet { LayerAbsent }`; both before any write.
+#[test]
+fn a_minds_destroy_refuses_before_any_write() {
+    use crate::actors::WorldList::Controllers;
+    run(|| {
+        let mut x = fx();
+        let mind = x.spawn("WillowMind");
+        let engine = x.spawn("Probe");
+        set_field(&mut x.w.vm.space, mind, "MyRuleEngine", Value::Object(Some(engine))).unwrap();
+        match destroy(&mut x.w.vm, mind).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert_eq!(n.missing, Missing::NotRead);
+                assert!(n.what.contains("rule engine") && !n.what.contains(crate::actors::PARTIAL_WRITES), "{n}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(false));
+        assert_eq!(members(&x, Controllers), [mind], "still listed");
+
+        // A level whose WorldInfo stand-in does not declare the lists.
+        let mut x = fx_with(false);
+        let probe = x.spawn("Probe");
+        let mut actors = crate::actors::Actors::new(x.class("Actor"));
+        actors.place_world_info(probe).unwrap();
+        assert_eq!(crate::actors::list_holder(&x.w.vm.space, &actors, Controllers).unwrap(), None);
+    });
+}
+
+/// The layer refusal through `destroy`: a world whose `WorldInfo` class does not declare the pawn list.
+#[test]
+fn a_pawns_destroy_without_the_list_is_layer_absent() {
+    run(|| {
+        let mut x = fx();
+        let pawn = x.spawn("Pawn");
+        // Swap the level's WorldInfo for a probe, which declares no lists (the service is the world's).
+        let probe = x.spawn("Probe");
+        let actor_class = x.class("Actor");
+        let fresh = {
+            let mut a = crate::actors::Actors::new(actor_class);
+            a.place_world_info(probe).unwrap();
+            a.begin_play();
+            a
+        };
+        *x.w.actors().borrow_mut() = fresh;
+        match destroy(&mut x.w.vm, pawn).unwrap_err() {
+            VmError::NotYet(n) => assert!(matches!(n.missing, Missing::LayerAbsent(_)) && n.what.contains("pawn list"), "{n}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, pawn, "bPendingDelete").unwrap(), Value::Bool(false), "nothing written");
+    });
+}
+
+/// A `NotYet` after the first write is terminal: the nested destroy of a proxy in a state refuses, and the mind's
+/// destroy answers it marked "stopped after partial writes", kind kept, with its writes so far left (no rollback).
+#[test]
+fn a_nested_refusal_after_the_first_write_is_marked() {
+    use crate::actors::WorldList::Controllers;
+    run(|| {
+        let mut x = fx();
+        let mind = x.spawn("WillowMind");
+        let proxy = x.spawn("Probe");
+        set_field(&mut x.w.vm.space, mind, "InteractionProxy", Value::Object(Some(proxy))).unwrap();
+        let state = x.name("ToyState");
+        x.w.vm.space.heap.get_mut(proxy).unwrap().state = Some(state);
+        match destroy(&mut x.w.vm, mind).unwrap_err() {
+            VmError::NotYet(n) => {
+                assert!(matches!(n.missing, Missing::LayerAbsent(_)), "{n}");
+                assert!(n.what.starts_with(crate::actors::PARTIAL_WRITES), "{n}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(field(&x.w.vm.space, mind, "bPendingDelete").unwrap(), Value::Bool(true));
+        assert!(members(&x, Controllers).is_empty(), "the unlink before the proxy stays");
+    });
+}
+
+/// The player case (NATIVE_ACTOR_DESTROY.md section 3): a local player's controller answers false with
+/// `bPendingDestroy` set and nothing destroyed; a network player's is `NotYet { NotPorted }`.
+#[test]
+fn a_player_controllers_destroy_follows_the_player_case() {
+    run(|| {
+        let mut x = fx();
+        let pc = x.spawn("PlayerController");
+        let local = {
+            let c = x.class("LocalPlayer");
+            x.w.vm.space.alloc(c, "ToyLocalPlayer", None, ow_object::heap::Origin::Runtime).unwrap()
+        };
+        set_field(&mut x.w.vm.space, pc, "Player", Value::Object(Some(local))).unwrap();
+        assert!(!destroy(&mut x.w.vm, pc).unwrap());
+        assert_eq!(field(&x.w.vm.space, pc, "bPendingDestroy").unwrap(), Value::Bool(true));
+        assert_eq!(field(&x.w.vm.space, pc, "bDeleteMe").unwrap(), Value::Bool(false));
+        let net = {
+            let c = x.class("Object");
+            x.w.vm.space.alloc(c, "ToyConnection", None, ow_object::heap::Origin::Runtime).unwrap()
+        };
+        set_field(&mut x.w.vm.space, pc, "Player", Value::Object(Some(net))).unwrap();
+        assert_eq!(vm_missing(destroy(&mut x.w.vm, pc).unwrap_err()), Missing::NotPorted);
+    });
+}
+
+/// The kill's script path ends in the mind's own `Destroy()` (section 1, step 3): run as script from a toy
+/// `PawnDied`, the mind is destroyed and unlinked through the native.
+#[test]
+fn a_minds_pawn_died_destroys_it_through_script() {
+    use crate::actors::WorldList::Controllers;
+    run(|| {
+        let mut x = fx();
+        let mind = x.spawn("WillowMind");
+        let f = x.w.vm.find_function("Engine.WillowMind.PawnDied").unwrap();
+        x.w.vm.call(f, Some(mind), vec![]).unwrap();
+        assert_eq!(field(&x.w.vm.space, mind, "bDeleteMe").unwrap(), Value::Bool(true));
+        assert!(members(&x, Controllers).is_empty());
+    });
 }

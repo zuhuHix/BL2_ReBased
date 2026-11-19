@@ -38,6 +38,11 @@ pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, pla
 pub const RECORD: &str = "NATIVE_ENGINE_CORE.md (Spawning and lifetime, Iterators)";
 /// The record of the destroy routine's controller and player case (lane FIX-ACTOR-DESTROY, decision 2026-11-16-79).
 pub const RECORD_CONTROLLER: &str = "NATIVE_ACTOR_DESTROY.md (the controller and player case)";
+/// The record of a controller's and a pawn's destroy, the kill's unlinking (lane IMPL-ACTOR-DESTROY-CONTROLLER,
+/// decision 2026-11-19-92).
+pub const RECORD_UNLINK: &str = "docs/verification/NATIVE_ACTOR_DESTROY_CONTROLLER.md";
+/// The mark of a failure after state was written (the hub's ruling; the same text as the other crates' marks).
+pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
 /// `ROLE_Authority` (NATIVE_ENGINE_CORE.md, "Conventions": the value is 3).
 pub const ROLE_AUTHORITY: u8 = 3;
@@ -215,6 +220,103 @@ fn class_named_in_chain(space: &ObjectSpace, class: ClassId, name: &str) -> bool
         cursor = layout.super_class();
     }
     false
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The world's controller and pawn lists (lane IMPL-ACTOR-DESTROY-CONTROLLER, decision 2026-11-19-92)
+// ---------------------------------------------------------------------------------------------------------------
+
+/// One of the world's two linked lists (NATIVE_ACTOR_DESTROY_CONTROLLER.md sections 2 to 4): its head on the
+/// `WorldInfo`, and each member's link to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorldList {
+    /// `WorldInfo.ControllerList`, linked through `Controller.NextController`.
+    Controllers,
+    /// `WorldInfo.PawnList`, linked through `Pawn.NextPawn`.
+    Pawns,
+}
+
+impl WorldList {
+    pub fn head(self) -> &'static str {
+        match self {
+            WorldList::Controllers => "ControllerList",
+            WorldList::Pawns => "PawnList",
+        }
+    }
+
+    pub fn next(self) -> &'static str {
+        match self {
+            WorldList::Controllers => "NextController",
+            WorldList::Pawns => "NextPawn",
+        }
+    }
+
+    fn named(self) -> &'static str {
+        match self {
+            WorldList::Controllers => "the world's controller list",
+            WorldList::Pawns => "the world's pawn list",
+        }
+    }
+
+    /// The list `o` belongs in, by its class: a `Controller`, a `Pawn`, or neither.
+    pub fn of(space: &ObjectSpace, o: ObjRef) -> Result<Option<WorldList>, VmError> {
+        let class = space.heap.get(o)?.class;
+        Ok(if class_named_in_chain(space, class, "Controller") {
+            Some(WorldList::Controllers)
+        } else if class_named_in_chain(space, class, "Pawn") {
+            Some(WorldList::Pawns)
+        } else {
+            None
+        })
+    }
+}
+
+/// The `WorldInfo` that holds `list`: the world's, when its class declares the list's head. None: the world does not
+/// hold that list (the port's lists are kept only on a `WorldInfo` that declares them).
+pub fn list_holder(space: &ObjectSpace, actors: &Actors, list: WorldList) -> Result<Option<ObjRef>, VmError> {
+    let Some(wi) = actors.world_info else {
+        return Ok(None);
+    };
+    Ok(space.prop(space.heap.get(wi)?.class, list.head()).map(|_| wi))
+}
+
+/// The members of `list` in link order, from the holder's head. A link that loops, or that runs longer than the heap,
+/// is bad data (a typed error).
+pub fn list_members(space: &ObjectSpace, holder: ObjRef, list: WorldList) -> Result<Vec<ObjRef>, VmError> {
+    let mut out = Vec::new();
+    let mut cursor = object(space, holder, list.head())?;
+    while let Some(o) = cursor {
+        if out.contains(&o) || out.len() > space.heap.len() {
+            return Err(rule_error(list.head(), format!("{} loops through {o:?}", list.head())));
+        }
+        out.push(o);
+        cursor = object(space, o, list.next())?;
+    }
+    Ok(out)
+}
+
+/// Adds `o` at the head of `list` (section 4, "Adding": newest first). A pawn already in the list is first removed.
+fn link_head(space: &mut ObjectSpace, holder: ObjRef, list: WorldList, o: ObjRef) -> Result<(), VmError> {
+    if list == WorldList::Pawns && list_members(space, holder, list)?.contains(&o) {
+        unlink(space, holder, list, o)?;
+    }
+    let head = object(space, holder, list.head())?;
+    set_field(space, o, list.next(), Value::Object(head))?;
+    set_field(space, holder, list.head(), Value::Object(Some(o)))
+}
+
+/// Unlinks `o` from `list`: the head, or its predecessor's link, takes `o`'s link. A member not in the list is left
+/// alone. `o`'s own link is not changed here.
+fn unlink(space: &mut ObjectSpace, holder: ObjRef, list: WorldList, o: ObjRef) -> Result<(), VmError> {
+    let members = list_members(space, holder, list)?;
+    let Some(at) = members.iter().position(|&m| m == o) else {
+        return Ok(());
+    };
+    let next = object(space, o, list.next())?;
+    match at.checked_sub(1).map(|i| members[i]) {
+        None => set_field(space, holder, list.head(), Value::Object(next)),
+        Some(prev) => set_field(space, prev, list.next(), Value::Object(next)),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -762,6 +864,19 @@ fn after_insertion(
     if is_destroyed(&vm.space, actor)? {
         return Ok(None);
     }
+    // The world's lists (decision 2026-11-19-92; NATIVE_ACTOR_DESTROY_CONTROLLER.md section 4): a native begin-play
+    // step adds a controller (unless it is being deleted) or a pawn at the head. Which step, and so where among the
+    // begin-play events, was not identified: here, after PreBeginPlay (UNVERIFIED). Off only; a world whose WorldInfo
+    // does not declare the list keeps none.
+    if vm.parity == ParityMode::Off
+        && let Some(list) = WorldList::of(&vm.space, actor)?
+        && !(list == WorldList::Controllers && flag(&vm.space, actor, "bPendingDelete")?)
+    {
+        let holder = list_holder(&vm.space, &*actors.try_borrow().map_err(borrow_err)?, list)?;
+        if let Some(holder) = holder {
+            link_head(&mut vm.space, holder, list, actor)?;
+        }
+    }
     if flag(&vm.space, actor, "bCollideActors")? {
         if off {
             // On the live actor, after the destroyed check: terminal and prefixed (crate::placement).
@@ -856,8 +971,14 @@ pub(crate) fn needs_base_search(space: &ObjectSpace, o: ObjRef) -> Result<bool, 
 ///   is below authority and that is not `bNetTemporary`.
 /// - A `Controller`: in `ParityMode::Reference` the C++ stand-in (`src/combat_death.cpp`, `Actor.Destroy`: the
 ///   actor is marked `bDeleteMe` and the answer is true; nothing else runs, it stays in the level list), decision
-///   2026-11-16-79; in `ParityMode::Off` `NotYet`: the controller and player case is now read
-///   (NATIVE_ACTOR_DESTROY.md) and its Off rule waits for a fresh implementer (docs/LANE_BRIEF.md, "Clean room").
+///   2026-11-16-79. In `ParityMode::Off` (lane IMPL-ACTOR-DESTROY-CONTROLLER, decision 2026-11-19-92, from
+///   NATIVE_ACTOR_DESTROY.md and NATIVE_ACTOR_DESTROY_CONTROLLER.md): a player controller whose `Player` is a
+///   `LocalPlayer` gets `bPendingDestroy` and answers false; one with another `Player` (a network connection) is
+///   `NotYet { NotPorted }`; any other controller takes the generic routine below.
+/// - **Off, the world-drop step** ([`plan_world_drop`], [`world_drop`]): preflighted before any write (a
+///   `GearboxMind` with `MyRuleEngine` set is `NotYet { NotRead }`; a controller or pawn in a world whose `WorldInfo`
+///   does not declare its list is `NotYet { LayerAbsent }`), run right after `Destroyed()`. A `NotYet` after the first
+///   write is marked [`PARTIAL_WRITES`] (kind kept); nothing is rolled back. All UNVERIFIED in the running game.
 /// - `NotYet`, before anything changes, for the parts this world cannot run: an actor with Kismet events in `GeneratedEvents` (the destroyed-event class is not
 ///   confirmed: W5-KISMET), an actor in a state (`EndState` and the state frame: W5-STATES), an actor with a `Base`,
 ///   with attached actors based on it, or touching others (the unbase and untouch routines are physics natives, not
@@ -890,18 +1011,31 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         .into());
     }
     let x = space.heap.get(actor)?;
+    let off = vm.parity == ParityMode::Off;
     if class_named_in_chain(space, x.class, "Controller") {
-        if vm.parity == ParityMode::Reference {
+        if !off {
             // The C++ stand-in (module documentation): marked, nothing else.
             set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
             return Ok(true);
         }
-        return Err(NotYet::not_read(
-            "the destroy routine's controller and player case in Off mode (read in the analyst note; its Off rule              waits for a fresh implementer)",
-            RECORD_CONTROLLER,
-        )
-        .into());
+        // The controller and player case (NATIVE_ACTOR_DESTROY.md section 3), before anything changes.
+        if class_named_in_chain(space, x.class, "PlayerController")
+            && let Some(player) = object(space, actor, "Player")?
+        {
+            if class_named_in_chain(space, space.heap.get(player)?.class, "LocalPlayer") {
+                // A local player's controller is not destroyed; the viewport removal is the host's.
+                set_field(&mut vm.space, actor, "bPendingDestroy", Value::Bool(true))?;
+                return Ok(false);
+            }
+            return Err(NotYet::not_ported(
+                "the destroy of a network player's controller (its child connections)",
+                RECORD_CONTROLLER,
+            )
+            .into());
+        }
     }
+    let x = vm.space.heap.get(actor)?;
+    let space = &vm.space;
     if x.state.is_some() {
         return Err(NotYet::layer_absent(
             "EndState when an actor in a state is destroyed",
@@ -943,6 +1077,9 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         }
     }
 
+    // The class's world-drop step, preflighted (Off; decision 2026-11-19-92).
+    let drop = if off { Some(plan_world_drop(vm, &actors, actor)?) } else { None };
+
     set_field(&mut vm.space, actor, "bPendingDelete", Value::Bool(true))?;
     actors
         .try_borrow_mut()
@@ -951,8 +1088,13 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
         .push(actor);
     let events = (|| {
         send_event(vm, actor, "Destroyed", Vec::new())?;
+        if let Some(drop) = &drop {
+            world_drop(vm, actor, drop)?;
+        }
         set_owner(vm, actor, None)
     })();
+    // A NotYet after the first write is terminal (the hub's ruling): marked, its kind kept; nothing rolled back.
+    let events = if off { events.map_err(after_writes) } else { events };
     actors
         .try_borrow_mut()
         .map_err(borrow_mut_err)?
@@ -973,6 +1115,93 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
             .forget(actor);
     }
     Ok(true)
+}
+
+/// A failure after the destroy's first write (the hub's ruling): a `NotYet` gets [`PARTIAL_WRITES`] with its kind and
+/// record kept; any other error is returned as it is.
+fn after_writes(e: VmError) -> VmError {
+    match e {
+        VmError::NotYet(n) if !n.what.contains(PARTIAL_WRITES) => {
+            NotYet::new(format!("{PARTIAL_WRITES}: {}", n.what), n.missing, n.record).into()
+        }
+        other => other,
+    }
+}
+
+/// The world-drop step of one destroy, checked before the destroy's first write.
+#[derive(Debug)]
+struct WorldDrop {
+    /// The list the actor leaves, and its holder.
+    list: Option<(WorldList, ObjRef)>,
+    /// A controller: whether it is the authority (its pool manager is destroyed then).
+    authority: bool,
+    /// A `WillowMind`: whether its `InteractionProxy` is destroyed.
+    proxy: bool,
+}
+
+/// The world-drop step's preflight (NATIVE_ACTOR_DESTROY_CONTROLLER.md section 5, step 2), before any write:
+/// - a `GearboxMind` with `MyRuleEngine` set: `NotYet { NotRead }` (the rule engine's call is not read);
+/// - a controller or a pawn in a world that does not hold its list: `NotYet { LayerAbsent }`, never "not in the
+///   list"; a list that does not walk is bad data;
+/// - every field the step reads or writes is declared (a typed error otherwise).
+fn plan_world_drop(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: ObjRef) -> Result<WorldDrop, VmError> {
+    let space = &vm.space;
+    let class = space.heap.get(actor)?.class;
+    let Some(list) = WorldList::of(space, actor)? else {
+        return Ok(WorldDrop { list: None, authority: false, proxy: false });
+    };
+    let mut drop = WorldDrop { list: None, authority: false, proxy: false };
+    if list == WorldList::Controllers {
+        object(space, actor, "ResourcePoolManager")?;
+        drop.authority = byte(space, actor, "Role")? >= ROLE_AUTHORITY;
+        if class_named_in_chain(space, class, "GearboxMind") && object(space, actor, "MyRuleEngine")?.is_some() {
+            return Err(NotYet::not_read("the rule engine's call at its mind's destroy", RECORD_UNLINK).into());
+        }
+        if class_named_in_chain(space, class, "WillowMind") {
+            object(space, actor, "InteractionProxy")?;
+            drop.proxy = true;
+        }
+    }
+    let holder = list_holder(space, &*actors.try_borrow().map_err(borrow_err)?, list)?;
+    let Some(holder) = holder else {
+        return Err(NotYet::layer_absent(list.named(), "ow-world (the WorldInfo's list)", RECORD_UNLINK).into());
+    };
+    object(space, actor, list.next())?;
+    list_members(space, holder, list)?;
+    drop.list = Some((list, holder));
+    Ok(drop)
+}
+
+/// The class's world-drop step, run right after `Destroyed()` (section 2, step 4; section 3, step 2), in order:
+/// - a controller: its `ResourcePoolManager`, when still set on the authority, destroyed and the field None; the
+///   `ControllerList` unlink, and its `NextController` None;
+/// - a `GearboxMind`: its rule engine (preflighted: none here); its two engine lookups change no game state (not run);
+/// - a `WillowMind`: its `InteractionProxy`, when set, destroyed (a nested destroy; the field is not cleared);
+/// - a pawn: the `PawnList` unlink; its `NextPawn` is left.
+///
+/// The actor step's engine notification changes no game state the note saw, and is not run.
+fn world_drop(vm: &mut Vm, actor: ObjRef, drop: &WorldDrop) -> Result<(), VmError> {
+    let Some((list, holder)) = drop.list else {
+        return Ok(());
+    };
+    if list == WorldList::Controllers {
+        if drop.authority
+            && let Some(pool) = object(&vm.space, actor, "ResourcePoolManager")?
+        {
+            destroy(vm, pool)?;
+            set_field(&mut vm.space, actor, "ResourcePoolManager", Value::Object(None))?;
+        }
+        unlink(&mut vm.space, holder, list, actor)?;
+        set_field(&mut vm.space, actor, list.next(), Value::Object(None))?;
+        if drop.proxy
+            && let Some(proxy) = object(&vm.space, actor, "InteractionProxy")?
+        {
+            destroy(vm, proxy)?;
+        }
+    } else {
+        unlink(&mut vm.space, holder, list, actor)?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------------------------
