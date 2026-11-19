@@ -58,10 +58,9 @@ selection order.
 ### 3.1 `Controller.IsUsingVehicleEx(bCheckDrivenVehicle, out Vehicle)`
 
 - With no `Pawn`, the answer is false and the out vehicle is None.
-- Otherwise it asks the pawn, through one of the pawn's virtual functions, for a vehicle. That slot was not resolved
-  (section 4); its name and the base pawn's answer are not known. If the answer is a vehicle, that vehicle is the out
-  argument and the result is true.
-- If not, and the flag is set and the pawn's `DrivenVehicle` is set, the same virtual is asked of the driven vehicle.
+- Otherwise it asks the pawn for the vehicle it uses. The body was not located by this analysis; a bl-sdk live read settles it. If the answer is a vehicle, that
+  vehicle is the out argument and the result is true.
+- If not, and the flag is set and the pawn's `DrivenVehicle` is set, the driven vehicle is asked the same question.
   Its answer is the out argument, and the result is whether it is a vehicle.
 - Otherwise the out argument is None and the result false.
 - The flag counts as true for any nonzero value.
@@ -81,46 +80,38 @@ Returns the globals object's `TheEffectsCoordinator` field, as stored. Nothing e
 
 ### 3.4 `WillowEffectCoordinator.PopEffect(Target, EffectDefinition, EffectOwner, optional bool = true)` (partial)
 
-- The target is first redirected through a helper chain that was not read. It asks the target for a replacement
-  object and uses that object when there is one; the condition and the replacement were not read.
-- The process for the target is then found (the helper was not read; presumably as in `HasEffect`). With a
-  definition given, the thread for the definition and the owner is found by another helper that was not read.
+- Under conditions not read, the target may be replaced by another object before the search.
+- The process for the target and, with a definition given, the thread for the definition and the owner are then
+  found; how they are matched was not read (presumably as in `HasEffect`).
 - When a thread is found, `bPendingDelete` is set on it and the answer is true. Otherwise the answer is false.
   Nothing else was seen to change; the thread stays in the array marked for deletion.
 - What the optional bool does was not seen in the parts read.
 
 ### 3.5 `WillowLeviathanService.RecordCharacterRevivedEventForPlayer(Player, Byte)`
 
-It builds a local event record with event code 31 for the player and the byte, hands it to a telemetry sender, which
-was not read, and frees the record. In what was read it changes no game object. For a slice run, a no-op that returns
-normally matches what was read, provided the sender has no side effect; that was not read.
+Telemetry only. In what was read it changes no game object.
 
 ### 3.6 `FastTravelStationsLookup.AddStationToNameListInOrder(Station, out NameList)` (partial)
 
 - The list holds names. If the station object's own `Name` (with its number) is already in the list, the answer is
   false and the list is unchanged.
-- Otherwise, when a global lookup object exists and two further conditions hold (both helpers unread), the station is
-  resolved to a second object, also through an unread helper. Its name is then inserted into the list:
+- Otherwise, under conditions not read, the name of an object the station stands for (not read) is inserted
+  into the list:
   - appended, when the list is empty or the lookup's own ordered table does not hold it;
   - else placed after the last list entry whose name comes before it in that table.
 - The answer is then true, and it is also true when the conditions fail and nothing is inserted.
 
 ## 4. Not readable here
 
-The natives below forward to a native virtual function of their class. Their bodies are those virtuals, and the
-analysis could not find the vtables: these classes have no RTTI names in the executable, and the query script found
-no registration or constructor pattern for them. Settling them needs another way into the vtables, or a live read
-with bl-sdk.
+For each native below: The body was not located by this analysis; a bl-sdk live read settles it.
 
-- `TravelStation.GetTravelStationDefinition`, and the fast-travel and level-travel declarations: one shared
-  forwarding stub. The live read D60 names is the way to settle them: `GetTravelStationDefinition` on each Sanctuary
-  station.
+- `TravelStation.GetTravelStationDefinition`, and the fast-travel and level-travel declarations. The live read D60
+  names fits: `GetTravelStationDefinition` on each Sanctuary station.
 - `Controller.IsDead`.
 - `WillowGameReplicationInfo.AddFastTravelLocation(Station)` and `IsStationInList(Station)`.
-- The pawn virtual that `IsUsingVehicleEx` asks (section 3.1).
-- `MissionTracker.FastTravelStationRegistered`: not a forwarding stub, but a routine over the tracker's missions and
-  objectives (it calls the objective-complete check and the mission-data lookup). It was too deep to read reliably in
-  this lane. It returns at once when the tracker's `ActiveMission` is None; what it does with an active mission
+- The pawn's answer that `IsUsingVehicleEx` asks for (section 3.1).
+- `MissionTracker.FastTravelStationRegistered`: it works on the tracker's missions and objectives, and was too deep
+  to read reliably in this lane. It returns at once when the tracker's `ActiveMission` is None; what it does with an active mission
   (the Fire mission, in the slice) was not read.
 
 ## 5. For the slice
