@@ -92,6 +92,11 @@ pub trait PlayerBridge {
     fn errors(&self) -> Vec<String>;
     /// The player's class definition (`CharClass_Siren`): it names the health pool and the injured definition.
     fn player_class(&self, vm: &mut Vm) -> Result<Option<ObjRef>, VmError>;
+    /// Gives the player's controller its class through the game's own script route, once (a labelled harness input:
+    /// a class-select call naming the class, not a save; decision 2026-11-19-41). The default does nothing.
+    fn select_player_class(&self, _vm: &mut Vm) -> Result<(), VmError> {
+        Ok(())
+    }
 }
 
 /// The Reference stand-in of the player's health pool (module documentation): the manager and the pool, once built.
