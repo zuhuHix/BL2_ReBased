@@ -112,6 +112,13 @@ changed: everything here is read by property name through the definition store.
   partial writes and the report prints it (`play world halted at tick 1 (NotYet, stopped after partial writes)`), and
   the world's step itself refuses every later tick, not only its link. A read-back failure after a finished tick halts
   the same way, without the partial-writes mark.
+  - Review r3: the mark follows the phase the tick reached. It is set once the world clock advanced (the tick's first
+    write), and not for a tick refused before it, such as a NaN delta, which wrote nothing; the halt is terminal
+    either way.
+- **Off only** (review r3, finding 1): the delta review's two graph rules (a sequence is no source of its outputs'
+  targets; a remote event with no readable name makes the graph incomplete) apply in `ParityMode::Off`. Reference
+  keeps the graph as it was before them, so an op it answered `AtLoad` (layer absent) through a sequence the load
+  event enters stays so. A test runs both modes on the gated child.
 - **Proof.**
   - **Synthetic** (invented values):
     - `world::matinee::track::tests`: no keys, one key, the held ends, each segment mode, tangents scaled and broken,
