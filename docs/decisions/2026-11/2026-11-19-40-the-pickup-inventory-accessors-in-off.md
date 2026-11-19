@@ -52,3 +52,5 @@ Reference still binds none of the six.
 2. A test with an invented subclass that overrides the query in script: the named `NotRead`, nothing written.
 3. A comment says `pickup_targeting::definition_of`'s `Ok(None)` for a pickup with no inventory follows
    NATIVE_PICKUP_TARGETING.md, not this native, so the two are not aligned.
+
+**Rebase.** #476 landed; this branch was rebased onto main a0d40f5c (`git rebase --onto origin/main a0653806`).
