@@ -21,7 +21,9 @@ pub const GET_VALUE: &str = "Engine.AttributeDefinition.GetValue";
 
 const UNIT: &str = "AttributeDefinition.GetValue";
 
-pub(super) fn register(vm: &mut Vm) -> Result<(), VmError> {
+/// Binds [`GET_VALUE`] in `ParityMode::Off`; nothing under Reference. The combat pack calls it, and so does the
+/// action-skill pack for the cast's worlds (lane IMPL-LINK9-ATTR-GETVALUE): a native already bound is kept.
+pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }

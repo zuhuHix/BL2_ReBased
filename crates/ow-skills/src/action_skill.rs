@@ -688,8 +688,17 @@ impl NativePack for Pack {
         register_events(vm)?;
         register_sm_component(vm)?;
         special_move::register(vm)?;
-        register_cast_opinion(vm)
+        register_cast_opinion(vm)?;
+        register_cast_get_value(vm)
     }
+}
+
+/// `AttributeDefinition.GetValue` for the cast's worlds (lane IMPL-LINK9-ATTR-GETVALUE): the Phaselock cast reads
+/// attribute values through it. The one rule is the combat pack's Off binding (`ow_combat::hit::attribute`, lane
+/// FIX-ATTR-GETVALUE-NATIVE, decision 2026-11-19-58) over `ow-attr`'s `value_of`, bound here because the cast's worlds
+/// install no combat pack. Off only: under Reference it binds nothing and the call stays the unbound native it was.
+fn register_cast_get_value(vm: &mut Vm) -> Result<(), VmError> {
+    ow_combat::hit::attribute::register(vm)
 }
 
 // ---------------------------------------------------------------------------------------------------------------

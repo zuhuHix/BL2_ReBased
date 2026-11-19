@@ -137,6 +137,9 @@ fn engine() -> Vec<u8> {
     let controller = t.class("Controller", actor);
     t.prop("Object", controller, "Pawn", 0, pawn);
     native(&mut t, pawn, "ToyDoneWithCount", &[D("Int", "Count", 0, vec![0]), D("Bool", "bInterrupted", 0, vec![0])], None);
+    // AttributeDefinition.GetValue, which the cast's pack binds in Off (lane IMPL-LINK9-ATTR-GETVALUE).
+    let attribute = t.class("AttributeDefinition", object);
+    native(&mut t, attribute, "GetValue", &[D("Object", "ContextSource", 0, vec![object])], Some(("Float", vec![0])));
     let world = t.class("WorldInfo", actor);
     let modes = enumeration(&mut t, world, "ENetMode", &NET_MODES);
     t.prop("Byte", world, "NetMode", 0, modes);
@@ -746,6 +749,20 @@ fn the_cast_script_asks_is_friendly_through_the_pack() {
             assert_eq!(choose(&mut x, friend).unwrap(), Value::Object(Some(miss)), "a friend: fizzle");
             assert!(choose(&mut x, enemy).is_err(), "an enemy: IsAliveAndWell is unbound in Reference");
         }
+    }
+}
+
+/// The cast's pack binds `AttributeDefinition.GetValue` in Off (lane IMPL-LINK9-ATTR-GETVALUE): the combat pack's one
+/// Off binding (decision 2026-11-19-58), since the cast's worlds install no combat pack. Under Reference it stays
+/// unbound.
+#[test]
+fn the_cast_pack_binds_get_value_in_off_only() {
+    for mode in [ParityMode::Off, ParityMode::Reference] {
+        let mut x = fx(mode);
+        let vm = &mut x.world.vm;
+        let id = vm.find_function("Engine.AttributeDefinition.GetValue").unwrap();
+        let key = vm.function(id).and_then(|d| d.native_key.clone()).expect("a native");
+        assert_eq!(vm.has_native(&key), mode == ParityMode::Off, "{mode:?}");
     }
 }
 
