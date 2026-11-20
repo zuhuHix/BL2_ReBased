@@ -48,3 +48,6 @@ implements it). The decision number is pending from the hub (three digits); NNN 
   6. the root-motion refusal is a numbered rule;
   7. only `SpaceBases` is written;
   8. #636 and #639 are open; #645, not #641, implements #635.
+- **Review r2 of #646** (final): the pose update checks all seven field kinds before rule 1, `SpaceBases` included and
+  on `Skip` too, with test 6's fixture explicit; the composed cache is a field of `SkeletalMeshes`, cleared with it,
+  and test 2 is observable.

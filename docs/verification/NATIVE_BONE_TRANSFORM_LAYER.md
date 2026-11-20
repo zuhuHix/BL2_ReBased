@@ -164,9 +164,10 @@ read-only. Here `SpaceBase { rotation: [f32; 4], translation: [f32; 3], scale: f
 - **Every bone counts as required** (an UNVERIFIED simplification: `RequiredBones` depends on the LOD and is native).
 - **Refusals:** any bone with `bind: None` is `NotYet { LayerAbsent }` with #569's layer text (`skeletal::LAYER`).
   The mesh and source checks are #569's own (`reference_skeleton`'s).
-- **The cache:** a new per-mesh cache beside `reference_skeleton`'s, a `DetMap` by identity holding the composed
-  `Rc<Vec<SpaceBase>>`. A second ask of the same mesh computes nothing and asks the source nothing, because
-  `reference_skeleton` itself is cached.
+- **The cache:** a new field of the `SkeletalMeshes` service beside `reference_skeleton`'s cache: a `DetMap` by mesh
+  identity holding the composed `Rc<Vec<SpaceBase>>`. It lives and is cleared with the service, so a new source starts
+  with both caches empty. A refusal puts nothing in it. A second ask of the same mesh computes nothing and asks the
+  source nothing, because `reference_skeleton` itself is cached.
 - **The mapping onto `Object.BoneAtom`**, for a fill path that writes the buffer: `Rotation` is a `Quat` struct `{X, Y,
   Z, W}` from `rotation[0..4]`; `Translation` is a `Vector` `{X, Y, Z}` from `translation`; `Scale` is a float from
   `scale`. The member names and kinds are checked against the declared `Object.BoneAtom` (else `VmError::Script`).
@@ -187,8 +188,10 @@ buffer stays empty to them, as in the native.
 writes in its own write phase, where `PoseUpdate` is `Skip` (write nothing) or `Write(Rc<Vec<SpaceBase>>)` (the new
 `SpaceBases`).
 
-**Field kinds** (review r1 of #646, item 2), each read by name on the component's class. Another declaration, or none,
-is a `VmError::Script` naming the field:
+**Field kinds** (review r1 of #646, item 2), each read by name on the component's class. **All seven are checked up
+front, before rule 1, `SpaceBases` included, on every call, `Skip` answers included** (review r2 of #646, item 1; the
+same pattern as `ow-inventory` `attach_mesh.rs`, which checks its declarations before any rule). Another declaration,
+or none, is a `VmError::Script` naming the field, in this list's order:
 - `SkeletalMesh`, `Animations` and `ParentAnimComponent`: objects;
 - `bSkipUpdateSkelPose` and `bForceDiscardRootMotion`: bools;
 - `bForceRefpose`: an **int**, as #511's `SetForceRefPose` declares and writes it (`ow-inventory` `attach_mesh.rs`):
@@ -238,12 +241,13 @@ On synthetic classes and an invented skeleton source (`package()` / `tag()`, eve
 1. `reference_space_bases` on a three-bone chain with invented bind rotations and translations: each entry follows
    6.1's formula. The root equals its bind transform, every scale is 1, and a 90-degree parent rotation carries the
    child's translation;
-2. a bone with `bind: None`: `LayerAbsent` with #569's layer text. Nothing is put in the **new composed-pose cache**:
-   a later ask with the data present still computes. `reference_skeleton`'s own cache is unchanged by the refusal;
+2. a bone with `bind: None`: `LayerAbsent` with #569's layer text. A second ask of the same mesh refuses again with
+   the same answer, and the composed-pose cache holds no entry for that mesh. A fresh `SkeletalMeshes` service with a
+   source that has bind data then computes the pose;
 3. the composed-pose cache: a second ask of the same mesh computes nothing (the source is asked once in total);
 4. `stored_space_bases`: an empty buffer gives an empty answer (no pose is made); a filled one gives its entries; a
    `SpaceBases` of another kind is `VmError::Script`;
-5. `pose_update`, each rule on its own:
+5. `pose_update`, each rule on its own, on a component whose seven fields are all declared with their kinds:
    - no mesh, and `bSkipUpdateSkelPose`, give `Skip`;
    - an unloaded mesh is `NotRead`;
    - `ParentAnimComponent` set is the parent copy's `LayerAbsent`;
@@ -251,14 +255,16 @@ On synthetic classes and an invented skeleton source (`package()` / `tag()`, eve
    - `Animations` set with `bForceRefpose` 1 gives `Write`;
    - `bForceDiscardRootMotion` is `NotPorted`;
    - a tree-less component gives `Write` with 6.1's entries;
-6. the field kinds: `bForceRefpose` declared as a bool, `bSkipUpdateSkelPose` as an int, `Animations` as an int, and
-   each other field of 6.3 with a wrong kind or undeclared, give `VmError::Script` naming it. A `bForceRefpose` of
-   2 counts as set;
+6. the field kinds, checked up front: on a component with `SkeletalMesh` **None** (rule 1 would give `Skip`), each of
+   the seven fields in turn declared with a wrong kind (`bForceRefpose` as a bool, `bSkipUpdateSkelPose` as an int,
+   `Animations` as an int, `SpaceBases` as an int, and so on), or undeclared, is still `VmError::Script` naming it. With
+   two wrong, the first in 6.3's list is reported. A `bForceRefpose` of 2 counts as set;
 7. `ForceSkelUpdate`: unattached is nothing (no counter moves); attached is the `NotRead`; `bAttached` of another kind
    is `VmError::Script`;
 8. `UpdateAnimations`: no tree is nothing; a tree is `NotPorted`, with the tag unwritten; `Animations` of another kind
    is `VmError::Script`;
-9. every refusal and every `Skip` leaves #518's three counters and the name table's length unchanged;
+9. every refusal, every `VmError::Script` of test 6 and every `Skip` leaves #518's three counters and the name table's
+   length unchanged (on test 5's and test 6's fixtures);
 10. keep-existing binding in Off, and nothing bound under Reference.
 
 ## Open questions
