@@ -32,7 +32,11 @@ With #574's answer for the rigid-body set-up stood in, links 6 and 7 stop at `ma
 - **The proposed Off answer:**
   - harness inputs: the pickup world preloads `PartPickup` (hub ruling 1) and the particle component class with its
     defaults and declarations, all UNVERIFIED;
-  - a write-, load- and draw-free preflight in the native's order that plans everything before any write: the new
+  - since one of the activation and initialisation refusals always applies, **today the native writes nothing**.
+    The write sequence applies only once both are resolved;
+  - a write-, load- and draw-free preflight in the native's own order (the offset before the attach, the rarity
+    choice before `SetTemplate`, the colour and parameter after it). It checks concrete values and slots, and
+    allocates a new component from defaults captured once. It plans everything before any write: the new
     component from its class defaults, the attach from actor guards, the colour and parameter, and each deferred
     step's owner test with its own text;
   - eight typed refusals, plus #520's four kept as they are;

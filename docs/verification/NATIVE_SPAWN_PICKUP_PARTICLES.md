@@ -185,8 +185,8 @@ rendering) is left out as an empty particle layer, the same shape as the empty s
 `AttachComponent` and #574 (UNVERIFIED, a hub ruling). **Neither the activation nor the initialisation falls under that
 ruling.** Both write script-visible state (section 2), so each keeps its own refusal (E and F).
 
-**Harness inputs** (hub ruling 1 on #581; UNVERIFIED, logged like the globals preload). The pickup world's set-up
-preloads, before `make`:
+**Harness inputs** (hub ruling 1 on #581; UNVERIFIED, logged like the globals preload). Before `make`, the pickup
+world's set-up preloads:
 - the globals definition's `PartPickup` template;
 - the `ParticleSystemComponent` class, its default object, and the declarations this answer reads: the component
   fields of section 2, `ParticleSysParam`'s `Name`, `ParamType` and `Vector`, and `ParticleSystemLOD`'s `bLit`.
@@ -194,66 +194,77 @@ preloads, before `make`:
 In the game these packages are loaded already. Every lookup below reads only what is loaded, through the class table
 and the definition store, and never through a path that loads.
 
-**Preflight, before the first write.** It is write-free, load-free and draw-free. It runs in the native's order, and
-the first refusal met wins.
+**Preflight, before the first write.** It is write-free, load-free and draw-free. It runs in the native's own order,
+section 2's steps 1 to 10, and the first refusal or data error met wins. It checks the concrete values and slots it
+will write, not only their declarations.
 1. **The pickup's declarations:** `PickupParticles`, `PickupParticleComponent`, `InventoryRarityLevel`, `Inventory`,
-   `Rotation` and `bHasPickupParticleOffset`. A missing or wrongly typed one is a data error.
-2. `PickupParticles` None: #520's `PARTICLES_REMOVAL`, unchanged.
-3. **The component C:**
-   - when `PickupParticleComponent` is set, C is that object. It must be a `ParticleSystemComponent`, else a data
-     error. Its own fields are the inputs below;
-   - when it is None, nothing is allocated yet. The plan takes C's inputs from the preloaded class default object. If
-     the class or its default object is not loaded: refusal G.
-4. **The attach plan, only for a new C,** from the actor guards and the default's values, never from an allocated
-   object:
-   - the pickup destroyed or `bDeleteMe`: nothing is attached, and part 1's guards apply. The native's later steps
-     still run on C with no owner;
-   - no `SceneLayer` in the world: #520's `ATTACH`;
-   - the default's `bAttached` set: #520's `ATTACH_DETACH`;
-   - otherwise the plan is part 1's writes, with C's owner then the pickup.
+   `Rotation`, `bHasPickupParticleOffset` and `Components`. A missing or wrongly typed one is a data error.
+2. **Step 1.** `PickupParticles` None: #520's `PARTICLES_REMOVAL`, unchanged.
+3. **Step 2, the component C.**
+   - When `PickupParticleComponent` is set, C is that object. It must be a `ParticleSystemComponent`, else a data
+     error. Its own current field values are the inputs below.
+   - When it is None, nothing is allocated yet. The preflight looks up the preloaded class and its default object
+     **once**; if either is not loaded, that is refusal G. It captures the default's values of every field below,
+     each checked for its type. The write phase allocates from these captured values, with no second lookup.
+   - **For a new C, in the native's order:**
+     1. **The offset** (`GetPickupParticleOffset`'s reads): `inventory_definition_of` (write-free), the definition's
+        `PickupFlagOffset` (a vector) and the pickup's `Rotation` (a rotator), turned as NATIVE_PICKUP_TARGETING.md
+        says. No method lookup. This plans `Translation` and whether `bHasPickupParticleOffset` is set.
+     2. **The attach plan**, from the actor guards and the captured defaults:
+        - the pickup destroyed or `bDeleteMe`: nothing is attached (part 1's guards), and the later steps run on C
+          with no owner;
+        - no `SceneLayer` in the world: #520's `ATTACH`;
+        - the captured `bAttached` set: #520's `ATTACH_DETACH`;
+        - otherwise part 1's writes. Their concrete checks: the pickup's `Components` value is an array of component
+          references that the port can append to; C's `Owner`, `bNeedsReattach` and `bNeedsUpdateTransform` take an
+          object and two bools. C's owner is then the pickup.
+4. **Step 4, the rarity choice** (only the choice; the colour comes later). G is the globals definition the pickup
+   world prepared. The rating is the `RarityRating` of the first `RarityLevelColors` entry holding
+   `InventoryRarityLevel`, else `RARITY_Unknown`. Each entry's `MinLevel`, `MaxLevel` and `RarityRating` are checked
+   for type. `RARITY_Rainbow`: refusal A.
+5. **Step 5, `SetTemplate`.**
+   1. The template T is `PickupParticles`. Not loaded: refusal B. T's `WarmupTime` (a float) and `LODSettings` (an
+      array of `ParticleSystemLOD`, each with a bool `bLit`) are read. "Changed" means T differs from C's `Template`
+      (None for a new C).
+   2. Activation or initialisation, from C's `bAutoActivate`, `bIsActive` and `bWasDeactivated`: activation is
+      refusal E, initialisation is refusal F. **One of them always applies, so today the preflight always stops
+      here**, after refusals G, A and B and #520's attach refusals, and before anything later.
+   3. Once E and F are resolved: `bAcceptsLights` from `LODSettings[LODLevel]` (`LODLevel` an int; out of range gives
+      false). Then **SetTemplate's reattach**, requested only when T changed or C has a render proxy (the port has
+      none). O is C's owner after step 3's plan:
+      - O set, and O is `bStatic` or `bTickIsDisabled`, and not `bDeleteMe`: refusal C1;
+      - no O, and C's `Scene` is not zero: #520's `REATTACH_SCENE`.
+6. **Step 6:** C's `AbsoluteTranslation`, `AbsoluteRotation` and `AbsoluteScale` are bools, and its `Rotation` is a
+   rotator.
+7. **Step 7, the colour.** The same `RarityLevelColors` entry's `Color` (a `Color` struct with byte channels), or
+   opaque white without one. Then the definition's `LootBeamColorOverride` (the same struct type), when it is not all
+   zero.
+8. **Step 8, the parameter.** C's `InstanceParameters` value must be an array whose every element is a
+   `ParticleSysParam` with a name `Name`, a byte `ParamType` and a vector `Vector`. The plan is either the index of the
+   first element with the parameter's name and `ParamType` 3 (update its `Vector`), or an append of one element that
+   is zero except those three fields.
+9. **Step 9, `SetHidden(false)`.** A reattach is requested only when C's `HiddenGame` is set, with the same tests and
+   texts as step 5.3. This native does not use #520's `SetHidden` preflight, which refuses any owner.
+10. **Step 10, the transform update**, always requested. O set under step 5.3's owner test: refusal C2. No O, and C
+    `bAttached`: refusal D. C's `bNeedsUpdateTransform` is a bool.
 
-   The offset comes from the same reads `GetPickupParticleOffset` makes: `inventory_definition_of` (write-free), the
-   definition's `PickupFlagOffset` and the pickup's `Rotation`, turned as NATIVE_PICKUP_TARGETING.md says. No method
-   lookup is involved.
-5. **The rating and the colour:**
-   - G is the globals definition the pickup world prepared;
-   - the rating is the `RarityRating` of the first `RarityLevelColors` entry holding `InventoryRarityLevel`, else
-     `RARITY_Unknown`. `RARITY_Rainbow`: refusal A;
-   - the colour is planned from the same entry's `Color`, and the definition's `LootBeamColorOverride` when it is not
-     all zero, as section 2, step 7.
-6. **The template T** is `PickupParticles`. Not loaded: refusal B. With the preload, it is loaded on the slice. T's
-   `WarmupTime` and `LODSettings` are read; "changed" means T differs from C's `Template` (None for a new C).
-7. **Activation or initialisation**, from C's `bAutoActivate`, `bIsActive` and `bWasDeactivated` (the default's for a
-   new C): activation is refusal E, initialisation is refusal F.
-8. **The deferred steps.** O is C's owner after step 4's plan. Three requests come in the native's order, each with
-   the same owner tests (read in #574 for the shared entry):
-   1. **SetTemplate's reattach**, requested only when T changed or C has a render proxy (the port has none). With O
-      set: refusal C1 when O is `bStatic` or `bTickIsDisabled`, and not `bDeleteMe`. Without O: #520's
-      `REATTACH_SCENE` when C's `Scene` is not zero;
-   2. **`SetHidden(false)`'s reattach**, requested only when C's `HiddenGame` is set. The same tests and texts as 8.1.
-      This native does not use #520's `SetHidden` preflight, which refuses any owner;
-   3. **the transform update**, always requested. With O set: refusal C2 under 8.1's owner test. Without O: refusal D
-      when C is `bAttached`.
-9. **The destinations' declarations:** `Translation`, `Rotation`, `AbsoluteTranslation`, `AbsoluteRotation`,
-   `AbsoluteScale`, `Template`, `WarmupTime`, `bIsViewRelevanceDirty`, `bWasCompleted`, `bAcceptsLights`,
-   `bNeedsReattach`, `bNeedsUpdateTransform`, `HiddenGame` and `InstanceParameters` (an array of `ParticleSysParam`).
-   A mismatch is a data error.
-
-**Writes, after the preflight passes.** They are applied from the plan, with no helper that can refuse:
-1. a new C, if planned (the port's object construction, as script `New` makes one), then `PickupParticleComponent` :=
-   C, `Translation` := the offset, `bHasPickupParticleOffset` := true when it is not zero, then the planned attach
-   writes;
-2. `bIsViewRelevanceDirty` := true, `bWasCompleted` := false, `Template` := T, `WarmupTime` := T's. That is as far as
-   it gets today, since step 7 always refuses. With E and F answered later: `bAcceptsLights`, then `bNeedsReattach`
-   when 8.1 requests it;
+**Writes, after the preflight passes. This whole sequence applies only once refusals E and F are resolved.** Until
+then the preflight stops at step 5.2 every time, and **the native writes nothing.** When it does run, it applies the
+plan with no helper that can refuse:
+1. for a new C: the allocation from the captured defaults (the port's object construction, as script `New` makes
+   one), `PickupParticleComponent` := C, `Translation` := the offset, `bHasPickupParticleOffset` := true when the
+   offset is not zero, then the planned attach writes;
+2. `bIsViewRelevanceDirty` := true, `bWasCompleted` := false, `Template` := T, `WarmupTime` := T's. Then the
+   activation's or initialisation's writes, as their later answer gives them. Then `bAcceptsLights`, then
+   `bNeedsReattach` when step 5.3 requests it;
 3. the absolute flags and `Rotation` := zero;
-4. the `InstanceParameters` update with the planned colour;
-5. `HiddenGame` := false and `bNeedsReattach`, when 8.2 requests it;
+4. the planned `InstanceParameters` update or append, with the planned colour;
+5. `HiddenGame` := false and `bNeedsReattach`, when step 9 requests it;
 6. `bNeedsUpdateTransform` := true.
 
-No loads and no draws. **A late `NotYet`** can come only from a step this plan missed. It keeps its kind and record,
-and gets the "stopped after partial writes" prefix only when this native's own write, load or draw counters moved. The
-pickup driver marks the earlier `make` writes separately.
+This answer itself makes no loads and no draws. **A late `NotYet`** can come only from a step this plan missed. It
+keeps its kind and record, and gets the "stopped after partial writes" prefix only when this native's own write,
+load or draw counters moved. The pickup driver marks the earlier `make` writes separately.
 
 **Typed refusals.** The record is `docs/verification/NATIVE_SPAWN_PICKUP_PARTICLES.md` unless one is named.
 
