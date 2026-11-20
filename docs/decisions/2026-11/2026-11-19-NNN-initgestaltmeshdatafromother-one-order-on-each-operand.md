@@ -57,3 +57,19 @@ Installed Off strict `--slice-gate` (release, under the machine lock), on main d
 NotYet / 0 errors. Link 8 passes `make` and stops in `init` at `BuildCompositeMesh`'s cold gestalt definition, the
 harness gap #632 closes. This native is not reached there, and the gate is the same as main's. ctest and
 verify_packages were not run (no C++ change). This is what the host did, not parity.
+
+### Review r1 of #634 (FIX)
+
+AI-assisted (Claude Code, Claude Opus 5.5).
+1. **The wrapper checks the receiver first.** The native wrapper now runs the receiver's checks (None, unloaded, class,
+   field) before it reads or converts argument 0. So an unloaded receiver with a raw int argument is
+   `NotYet { NotRead }`, and a None receiver is `RECEIVER_NONE`. Before, both came back as the argument's script
+   error. A regression test calls the registered native.
+2. **`register` keeps existing handlers per key.** A key an earlier pack bound keeps its handler, and the other key is
+   still bound. Before, a pre-bound Init key made `register` bind Build and then fail. Tested with each key pre-bound,
+   and with `register` run twice.
+3. **The missing-field and malformed-slot cases run through `refused_copy`,** which also checks the name table. The
+   no-`GestaltData` fixture gains `ToyDeclaringComponent`, a component subclass that declares the field. It is the
+   valid receiver for an argument whose class has no such field.
+
+`cargo test --workspace -j 2`: 3,133 passed / 0 failed / 51 ignored. The gestalt tests: 30 passed.

@@ -136,6 +136,10 @@ fn package_mis(gestalt_data: bool, mis: Mis) -> Vec<u8> {
         // A class that is not a component but declares a same-named struct field (lane FOLLOWUP-GESTALT-OPERAND-ORDER).
         let lookalike = t.class("ToyLookalike", object);
         t.prop("Struct", lookalike, "GestaltData", 0, container);
+    } else {
+        // Without the base class's field: a component subclass that declares it, a valid receiver (review r1 of #634).
+        let declaring = t.class("ToyDeclaringComponent", component);
+        t.prop("Struct", declaring, "GestaltData", 0, container);
     }
     let weapon = t.class("WillowWeapon", object);
     let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
@@ -522,10 +526,8 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     bad.struct_mut().unwrap().fields[at] = Value::array(vec![Value::Int(3)]);
     // Placed in the slot directly, past the heap's write checks (a fixture of a malformed decode).
     *x.vm.space.slot_mut(c2, PropAddr::scalar(p)).unwrap() = bad;
-    let before = x.snapshot();
-    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(c1), Some(c2)));
-    assert_eq!(script(e), crate::gestalt_data::INIT_MISMATCH);
-    assert_eq!(x.snapshot(), before, "nothing written");
+    // Through `refused_copy` (review r1 of #634): the counters, the slots and the name table unchanged.
+    assert_eq!(script(refused_copy(&mut x, Some(c1), Some(c2))), crate::gestalt_data::INIT_MISMATCH);
     // A real stand-in (slotless, not a store definition, never loads): F1(ii)'s NotRead (the hub's ruling on #603),
     // as the receiver or as the argument.
     let class = x.vm.space.heap.get(c1).unwrap().class;
@@ -627,7 +629,13 @@ fn a_component_class_without_gestalt_data_is_a_data_error() {
     let c = x.o("ToyComp1");
     assert!(script(quiet(&mut x.vm, |vm| build_composite_mesh(vm, Some(c), &data))).contains("GestaltData"));
     let c2 = x.o("ToyComp2");
-    assert!(script(quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(c), Some(c2)))).contains("GestaltData"));
+    // The receiver without the field (review r1 of #634: through `refused_copy`, the name table included).
+    assert!(script(refused_copy(&mut x, Some(c), Some(c2))).contains("GestaltData"));
+    // A valid receiver (a component subclass that declares the field) with a resident component that has none.
+    let class = x.vm.find_class("Engine.ToyDeclaringComponent").unwrap();
+    let declaring = ow_vm::interp::instantiate_from_defaults(&mut x.vm, class).unwrap();
+    let e = script(refused_copy(&mut x, Some(declaring), Some(c2)));
+    assert!(e.contains("declares no GestaltData"), "the argument's field: {e}");
 }
 
 /// A runtime `ToyLookalike`: not a component, but its class declares a struct `GestaltData`.
@@ -751,4 +759,48 @@ fn off_binds_both_natives_and_reference_binds_none() {
     y.vm.parity = ParityMode::Reference;
     register(&mut y.vm).unwrap();
     assert!(!y.vm.has_native(BUILD_COMPOSITE_MESH) && !y.vm.has_native(INIT_GESTALT_MESH_DATA));
+}
+
+/// Declares `InitGestaltMeshDataFromOther` on the fixture's component class, as the package's native.
+fn declare_init(x: &mut Fx) -> ow_object::ids::FuncId {
+    let component = x.vm.space.classes.by_path("Engine.SkeletalMeshComponent").unwrap();
+    let p = PropertyDecl::new(x.vm.space.names.intern("ComponentToCopyFrom"), PropKind::Object { class: component })
+        .with_flags(PropertyDecl::PARAM);
+    let path = ObjectPath::parse("Engine.SkeletalMeshComponent.InitGestaltMeshDataFromOther").unwrap();
+    x.vm.declare_function(FunctionDecl::native(path, INIT_GESTALT_MESH_DATA).with_owner(component).with_params(vec![p])).unwrap()
+}
+
+/// Review r1 of #634, item 1: through the registered native, the receiver is answered whole before argument 0 is read
+/// or converted: an unloaded receiver with a raw int argument is `NotRead`, and a None receiver is `RECEIVER_NONE`.
+#[test]
+fn the_native_answers_the_receiver_before_converting_its_argument() {
+    let mut x = fx();
+    register(&mut x.vm).unwrap();
+    let f = declare_init(&mut x);
+    let un = x.handle("UnComp");
+    let mark = crate::equip::card::load_mark(&x.vm);
+    assert_eq!(not_read(x.vm.call(f, Some(un), vec![Value::Int(1)]).unwrap_err()), RECEIVER_NOT_LOADED);
+    assert_eq!(script(x.vm.call(f, None, vec![Value::Int(1)]).unwrap_err()), RECEIVER_NONE);
+    assert_eq!(crate::equip::card::load_mark(&x.vm), mark, "nothing written, drawn or loaded");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, un));
+    // With a valid receiver the argument's shape is then the error.
+    let c = x.o("ToyComp1");
+    assert!(matches!(x.vm.call(f, Some(c), vec![Value::Int(1)]).unwrap_err(), VmError::Script { .. }));
+}
+
+/// Review r1 of #634, item 2: `register` keeps an existing handler per key and binds the other key.
+#[test]
+fn register_keeps_an_existing_handler_per_key() {
+    for pre in [INIT_GESTALT_MESH_DATA, BUILD_COMPOSITE_MESH] {
+        let mut x = fx();
+        x.vm.register_native(pre, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Int(7)))).unwrap();
+        register(&mut x.vm).unwrap();
+        assert!(x.vm.has_native(BUILD_COMPOSITE_MESH) && x.vm.has_native(INIT_GESTALT_MESH_DATA), "{pre}");
+        if pre == INIT_GESTALT_MESH_DATA {
+            let f = declare_init(&mut x);
+            let c = x.o("ToyComp1");
+            assert_eq!(x.vm.call(f, Some(c), vec![some(c)]).unwrap().ret, Value::Int(7), "the earlier handler kept");
+        }
+        register(&mut x.vm).unwrap();
+    }
 }

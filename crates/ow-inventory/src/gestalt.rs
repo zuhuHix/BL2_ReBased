@@ -320,7 +320,7 @@ pub fn build_composite_mesh(vm: &mut Vm, component: Option<ObjRef>, data: &Value
 /// The write-free preflight of `InitGestaltMeshDataFromOther(from)` on `this` (module documentation): `None` for a
 /// self-copy (nothing to write), else the planned whole-slot copy.
 pub fn plan_init(vm: &Vm, this: Option<ObjRef>, from: Option<ObjRef>) -> Result<Option<SlotWrite>, VmError> {
-    let this = operand(vm, this, RECEIVER_NONE, "the receiver", RECEIVER_NOT_LOADED)?;
+    let this = receiver(vm, this)?;
     let from = operand(vm, from, "InitGestaltMeshDataFromOther: ComponentToCopyFrom is None", "ComponentToCopyFrom", ARGUMENT_NOT_LOADED)?;
     if from == this {
         return Ok(None);
@@ -360,18 +360,32 @@ fn build_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 }
 
 fn init_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    // The receiver first, whole (review r1 of #634): its None, residency, class and field are answered before argument
+    // 0 is read or converted, so a bad argument never hides a receiver's refusal.
+    receiver(c.vm, c.this)?;
     let from = object_of(c.arg(0)?, INIT)?;
     init_gestalt_mesh_data(c.vm, c.this, from)?;
     Ok(Value::None)
 }
 
-/// Binds both natives in `ParityMode::Off`; Reference binds nothing.
+/// The receiver's checks of [`plan_init`] alone ([`operand`]), for the native's wrapper (review r1 of #634).
+fn receiver(vm: &Vm, this: Option<ObjRef>) -> Result<ObjRef, VmError> {
+    operand(vm, this, RECEIVER_NONE, "the receiver", RECEIVER_NOT_LOADED)
+}
+
+/// Binds both natives in `ParityMode::Off`; Reference binds nothing. Keep-existing per key (review r1 of #634): a key
+/// an earlier pack bound keeps its handler, and the other key is still bound when it is absent.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    vm.register_native(BUILD_COMPOSITE_MESH, Rc::new(build_native))?;
-    vm.register_native(INIT_GESTALT_MESH_DATA, Rc::new(init_native))
+    if !vm.has_native(BUILD_COMPOSITE_MESH) {
+        vm.register_native(BUILD_COMPOSITE_MESH, Rc::new(build_native))?;
+    }
+    if !vm.has_native(INIT_GESTALT_MESH_DATA) {
+        vm.register_native(INIT_GESTALT_MESH_DATA, Rc::new(init_native))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
