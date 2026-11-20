@@ -289,6 +289,14 @@ pub fn this(c: &NativeCall<'_>, what: &str) -> Result<ObjRef, VmError> {
         .ok_or_else(|| error(format!("combat: {what} called without an object")))
 }
 
+/// The combat pack's pawn and pool natives alone (`pools::register`: the class starting values, the mind route's
+/// `SetDefaultPhysics`, `GetExpLevel`, `IsStaggered`, `DropCombatPerch` and the pool manager), in Off only and
+/// keep-existing, for a world that does not register the whole combat pack: link 9's Phaselock world (lane
+/// LINK9-PAWN-NATIVES). Nothing under Reference.
+pub fn register_pawn_natives(vm: &mut Vm) -> Result<(), VmError> {
+    pools::register(vm)
+}
+
 /// The combat natives as a [`NativePack`]: the hit chain (here), `crate::damage`, `crate::death`, `crate::down` and
 /// `crate::xp`, and the [`CombatState`] service. Register it after the world's packs (`World::new` does).
 #[derive(Debug, Clone, Copy, Default)]

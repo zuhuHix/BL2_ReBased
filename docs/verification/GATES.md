@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK9-NEXT-STOP (2026-11-20, pc-hummer, on fix/rust-link9-pawn-natives, stacked on #650):** AI-assisted (Claude
+Code, Opus 5.5). Link 9's set-up registers the combat pack's pawn natives (`IsStaggered`, `DropCombatPerch`).
+`cargo test --workspace`: 3202 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off
+`--slice-gate` strict (release builds, under the machine lock): this branch 4/9/1, link 9 at #616's
+`AddAttributeModifier`, not in its base. A local throwaway with #616 gives 4/10/0, link 9 1 of 2 steps, `cast` at
+`Actor.Trace`'s missing component bounds (a NotYet). UNVERIFIED in game.
+
 **LINK9-RESOLVER-PRELOAD (2026-11-20, pc-hummer, on fix/rust-link9-resolver-preload from #644 905f3ece):** AI-assisted
 (Claude Code, Opus 5.5). Link 9's set-up preloads the phaselock attribute's context resolver, a labelled UNVERIFIED
 stand-in. `cargo test --workspace`: 3201 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off

@@ -123,10 +123,15 @@ fn engine() -> Vec<u8> {
 
 /// `WillowGame.upk`: `WillowMind`, a `Controller` (the target mind's fallback class).
 fn willow() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class"]);
+    let mut t = ScriptToy::with_imports(&["Class", "Function"]);
     let engine = t.p.add_import("Core", "Package", 0, "Engine");
     let controller = t.p.add_import("Core", "Class", engine, "Controller");
     t.class("WillowMind", controller);
+    // Lane LINK9-PAWN-NATIVES: a WillowPawn declaring the native IsStaggered, which the combat pack's pawn natives bind.
+    let actor = t.p.add_import("Core", "Class", engine, "Actor");
+    let pawn = t.class("WillowPawn", actor);
+    let spec = ow_package::testkit::script::FunctionSpec::new(0x400 | 0x20000, "IsStaggered");
+    t.function(pawn, "IsStaggered", &[], None, &[], &spec, |_| None);
     t.p.build()
 }
 
@@ -793,4 +798,17 @@ fn a_set_up_object_is_loaded_once_and_reported() {
     outcome.unwrap();
     assert!(line.ends_with(": not in the packages, nothing loaded"), "{line}");
     assert_eq!(t.world.vm.defs.load_transitions(), loads, "nothing loaded for a missing path");
+}
+
+/// Lane LINK9-PAWN-NATIVES: link 9's set-up registers the combat pack's pawn natives (`register_pawn_natives`), so
+/// `WillowPawn.IsStaggered` is bound once the set-up has run; before it, the native is unbound and refused as one.
+#[test]
+fn link_9_s_set_up_binds_the_pawn_natives() {
+    let mut t = toy();
+    let f = t.world.vm.find_function(ow_combat::hit::pools::IS_STAGGERED[0]).unwrap();
+    assert!(!t.world.vm.is_bound(f), "unbound before the set-up");
+    assert!(t.world.vm.prepare_call(f).is_err(), "a missing registration is the unbound error");
+    let mut harness = Vec::new();
+    phaselock_setup(&mut t.world.vm, &mut harness).unwrap();
+    assert!(t.world.vm.is_bound(f), "bound by the set-up");
 }

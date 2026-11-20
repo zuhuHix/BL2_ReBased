@@ -1665,7 +1665,9 @@ pub fn preload_object(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<()
 /// through them; without them a pawn takes the plain answer. They come through `ow_combat::holds::register`, which
 /// registers them first and then the AI holds' natives, `GearboxMind.GetAIComponent` among them (lane
 /// LINK9-GETAICOMPONENT-BINDING): the port's own Off registration, the one the combat worlds make, not a harness
-/// stand-in. Off only (it binds nothing under Reference); a key bound first keeps its binding.
+/// stand-in. Off only (it binds nothing under Reference); a key bound first keeps its binding. Then the combat
+/// pack's pawn natives (`ow_combat::hit::register_pawn_natives`, lane LINK9-PAWN-NATIVES: `IsStaggered` and
+/// `DropCombatPerch` among them), the same Off registration the combat worlds make.
 pub fn phaselock_setup(vm: &mut ow_vm::api::Vm, harness: &mut Vec<String>) -> Result<(), ow_vm::error::VmError> {
     for path in phaselock_setup_classes() {
         let (line, outcome) = preload_class(vm, path);
@@ -1677,7 +1679,8 @@ pub fn phaselock_setup(vm: &mut ow_vm::api::Vm, harness: &mut Vec<String>) -> Re
         harness.push(line);
         outcome?;
     }
-    ow_combat::holds::register(vm)
+    ow_combat::holds::register(vm)?;
+    ow_combat::hit::register_pawn_natives(vm)
 }
 
 /// The ids in `after` that `before` does not account for, as multisets (a repeated kill id counts each time).
