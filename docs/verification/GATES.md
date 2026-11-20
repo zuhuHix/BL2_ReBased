@@ -97,6 +97,12 @@ the machine lock: 4 ok / 10 NotYet / 0 errors. Link 8 passes 1 of 5 driver steps
 `SetScale`, so main's gate does not reach the new binding yet. No real-game run; `UNVERIFIED` in game. Decision
 2026-11-19-256-primitive-setscale-in-off; logs under ignored `local/p2/setscale/`.
 
+**IMPL-BONE-TRANSFORM-LAYER (2026-11-20, pc-hummer, on main dba540a3):** AI-assisted (Claude Code, Opus 5.5). The
+bind pose, the composed reference pose, `stored_space_bases`, `pose_update` and `ForceSkelUpdate` / `UpdateAnimations`
+in Off, from NATIVE_BONE_TRANSFORM_LAYER.md at 78bc883c. `cargo test --workspace -j 2` 3,226 passed / 0 failed / 51
+ignored (8 new in `bone_transform_tests.rs`); `crate_edges_test.py` OK. Installed Off strict `--slice-gate`: 4 ok / 9
+NotYet / 1 error, every row as main's (no link reaches the layer). No real-game run.
+
 **ANALYST-BONE-TRANSFORM-LAYER (2026-11-20, pc-hummer, on main 241a6c47):** AI-assisted (Claude Code, Opus 5.5).
 Analyst note NATIVE_BONE_TRANSFORM_LAYER.md, no code. Installed Off `--slice-gate` strict on main: 4 ok / 9 NotYet / 1
 error; with local stand-ins (never pushed) for #612, #622, the socket attach and the Parent link, still 4 / 9 / 1, the

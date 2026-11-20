@@ -17,7 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ow_world::world::skeletal::{ReferenceSkeleton, SkeletonBone, SkeletonSource};
+use ow_world::world::skeletal::{BoneBind, ReferenceSkeleton, SkeletonBone, SkeletonSource};
 
 /// UModel export roots.
 pub struct PskExports {
@@ -67,7 +67,17 @@ fn safe_component(name: &str) -> Result<(), String> {
 pub fn read_skeleton(path: &Path) -> Result<ReferenceSkeleton, String> {
     let mesh = ow_assets::skeletal::read_psk_file(path).map_err(|e| e.to_string())?;
     Ok(ReferenceSkeleton {
-        bones: mesh.bones.iter().map(|b| SkeletonBone { name: b.name.clone(), parent: b.parent }).collect(),
+        // The bind pose relative to the parent, as the reader gives it (lane IMPL-BONE-TRANSFORM-LAYER; UNVERIFIED that
+        // it equals the mesh's reference skeleton).
+        bones: mesh
+            .bones
+            .iter()
+            .map(|b| SkeletonBone {
+                name: b.name.clone(),
+                parent: b.parent,
+                bind: Some(BoneBind { rotation: b.bind.rotation, translation: b.bind.translation }),
+            })
+            .collect(),
     })
 }
 

@@ -535,6 +535,9 @@ impl NativePack for Pack {
             // PrimitiveComponent.SetScale (NATIVE_PRIMITIVE_SETSCALE.md, UNVERIFIED; lane IMPL-SETSCALE): the same scale
             // does nothing; a change writes Scale and bNeedsUpdateTransform, or refuses an unread update first.
             primitive_scale::register(vm)?;
+            // SkeletalMeshComponent.ForceSkelUpdate and UpdateAnimations (NATIVE_BONE_TRANSFORM_LAYER.md, UNVERIFIED;
+            // lane IMPL-BONE-TRANSFORM-LAYER): keep-existing per key, Off only.
+            bone_transform::register(vm)?;
         }
         Ok(())
     }
@@ -620,6 +623,9 @@ pub mod nav_join;
 
 /// The skeletal mesh data layer, read only (lane IMPL-SKELETAL-MESH-LAYER).
 pub mod skeletal;
+
+/// The bone-transform layer's gate and `ForceSkelUpdate` / `UpdateAnimations` (lane IMPL-BONE-TRANSFORM-LAYER).
+pub mod bone_transform;
 
 pub mod localize;
 
