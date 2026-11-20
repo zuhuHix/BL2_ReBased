@@ -20,6 +20,14 @@ and branch both ok 4, notyet 9, error 1 of 14. Only link 9 differs: still 1 of 2
 GearboxMind's unread QueryInterface answer for `IAIInterface` (marked after partial writes), past the
 IRuleEngineOwner load.
 
+**FOLLOWUP-FLAG-PROVIDER-ORDER (2026-11-20, pc-hummer, on main at 4c4522d7):** AI-assisted (Claude Code, Opus
+5.5). The flag evaluator's IFlagProvider guard before any resolver side effect, a non-loading rule engine search
+(`Vm::implements_read_only`) and the store path before the guard. `cargo test --workspace --locked -j 2` 2,982 passed
+/ 0 failed / 51 ignored (4 new); `cargo clippy` adds no warning in the touched files; `crate_edges_test.py` OK.
+Installed Off `--slice-gate` (strict, under the lock) on the branch and its base: ok 4 / NotYet 9 / error 1 of 14 on
+both, every link the same (link 9: 2 of 2 steps, stopped at the IRuleEngineOwner class not loaded). ctest and
+verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
