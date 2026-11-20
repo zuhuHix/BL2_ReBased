@@ -56,6 +56,14 @@ pub const LOD_CHANGE: &str = "ParticleSystemComponent.ActivateSystem: a change o
 /// inside that step's gate, so a component the gate skips plans as the note says.
 pub const OLD_NOT_LOADED: &str =
     "ParticleSystemComponent.SetTemplate: the old template's stop audio events read a template that is not loaded (a load is a write)";
+/// The same refusal for T in the activation's stop-audio step (review r1 of #617). The preflight refuses an
+/// unloaded T first (#581's refusal B), so this is a guard.
+pub const T_NOT_LOADED: &str =
+    "ParticleSystemComponent.ActivateSystem: the template's stop audio events read a template that is not loaded (a load is a write)";
+/// A looping sound record with a `SourceComponent` and a zero `AkPlayingId` (review r1 of #617): the note did not read
+/// the test that tells a recorded looping sound (sections 7.2 and 7.4).
+pub const LOOPING_UNREAD: &str =
+    "ParticleSystemComponent: the looping sound record's test (a SourceComponent with a zero AkPlayingId; not read)";
 pub const PARTICLE_LAYER: &str = "a particle simulation layer (the port has none)";
 pub const AUDIO_LAYER: &str = "an audio layer (the port has none)";
 pub const CAMERA_LAYER: &str = "a camera layer (the port has none)";
@@ -373,7 +381,16 @@ impl<'a> Setup<'a> {
     }
 
     /// The stop-audio step (section 7.2) on `template` as it is at that moment.
-    fn stop_audio(&mut self, template: Option<ObjRef>, text: &'static str, record: &'static str) -> Result<(), VmError> {
+    ///
+    /// `unloaded` is the refusal for a `template` that is not loaded: [`OLD_NOT_LOADED`] for the reset's old template,
+    /// [`T_NOT_LOADED`] for T (review r1 of #617; the preflight checks T first, so that path is a guard).
+    fn stop_audio(
+        &mut self,
+        template: Option<ObjRef>,
+        text: &'static str,
+        unloaded: &'static str,
+        record: &'static str,
+    ) -> Result<(), VmError> {
         let c = self.c;
         if !self.flag(c, "AudioEnabled")? || !(self.flags.is_game || self.object(c, "Owner")?.is_none()) {
             return Ok(());
@@ -384,17 +401,28 @@ impl<'a> Setup<'a> {
         // The template the step reads, only now (review r1 of #609): loaded, and its three stop fields declared.
         if let Some(t) = template {
             if self.vm.defs.is_unloaded(&self.vm.space, t) || super::pickup_particles::stand_in(self.vm, t)? {
-                return Err(NotYet::not_read(OLD_NOT_LOADED, RECORD_ACTIVATION).into());
+                return Err(NotYet::not_read(unloaded, RECORD_ACTIVATION).into());
             }
             check(self.vm, t, &TEMPLATE_FIELDS[15..], WHAT)?;
         }
-        // A recorded looping sound: `AkPlayingId` set (review r1 of #609). The note leaves the test unread ("by its
-        // role"); the playing id is what names a playing sound, so that member is the test (UNVERIFIED).
+        // A recorded looping sound. The note leaves the test unread (sections 7.2 and 7.4). A non-zero `AkPlayingId`
+        // counts as recorded (review r1 of #609) and the all-zero record as none; the mixed state, a `SourceComponent`
+        // with a zero id, is the unread test itself, [`LOOPING_UNREAD`] (review r1 of #617). UNVERIFIED.
         let info = self.get(c, "LoopingAkPlayingInfo")?;
-        let holds = match field(self.vm, &info, "AkPlayingId")? {
-            Value::Int(id) => id != 0,
+        let id = match field(self.vm, &info, "AkPlayingId")? {
+            Value::Int(id) => id,
             other => return Err(bad(WHAT, format!("LoopingAkPlayingInfo.AkPlayingId holds {}, not an int", other.kind_name()))),
         };
+        let source = match field(self.vm, &info, "SourceComponent")? {
+            Value::Object(o) => o,
+            other => {
+                return Err(bad(WHAT, format!("LoopingAkPlayingInfo.SourceComponent holds {}, not an object", other.kind_name())));
+            }
+        };
+        if id == 0 && source.is_some() {
+            return Err(NotYet::not_read(LOOPING_UNREAD, RECORD_ACTIVATION).into());
+        }
+        let holds = id != 0;
         let events = match template {
             Some(t) => self.object(t, "StopAudioEvent")?.is_some() || self.object(t, "StopLoopingAudioEvent")?.is_some(),
             None => false,
@@ -441,7 +469,7 @@ impl<'a> Setup<'a> {
                 self.set(c, "SMMaterialInterfaces", Value::array(Vec::new()))?;
             }
             self.set(c, "bIsActive", Value::Bool(false))?;
-            self.stop_audio(old, OLD_AUDIO, RECORD_ACTIVATION)?;
+            self.stop_audio(old, OLD_AUDIO, OLD_NOT_LOADED, RECORD_ACTIVATION)?;
         }
         self.set(c, "Template", Value::Object(Some(t)))?;
         let warm_up = self.float(t, "WarmupTime")?;
@@ -555,7 +583,7 @@ impl<'a> Setup<'a> {
         let (delay, audio_delay) = (self.float(t, "Delay")?, self.float(t, "fAudioDelaySeconds")?);
         self.set(c, "EmitterDelay", Value::Float(delay))?;
         self.set(c, "AudioEventDelay", Value::Float(audio_delay))?;
-        self.stop_audio(Some(t), TEMPLATE_AUDIO, RECORD_ACTIVATION)?;
+        self.stop_audio(Some(t), TEMPLATE_AUDIO, T_NOT_LOADED, RECORD_ACTIVATION)?;
         let w = self.flag(c, "bWasDeactivated")?;
         for name in ["bWasCompleted", "bSuppressSpawning", "bWasDeactivated"] {
             self.set(c, name, Value::Bool(false))?;

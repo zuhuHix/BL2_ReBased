@@ -289,78 +289,101 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             (d, Some(NewComponent { class: preload.class, defaults: d, slots }))
         }
     };
-    // The parameter name, interned here so the plan can build the parameter value whole (review r1 of #609). It
-    // changes the name table only: no object, generator draw or store load, which #518's counters count.
-    let color_name = vm.space.names.intern(COLOR_PARAMETER);
-    // 4. Step 4, the rarity choice (only the choice; the colour is step 7).
-    let world = crate::globals::world_globals(vm)?;
-    let vm: &Vm = vm;
-    crate::globals::declared_reference_loaded(vm, world, "TheGlobalsDefinition", Some(crate::globals::GEARBOX_GLOBALS_DEFINITION), WHAT)?;
-    let level = match required(vm, pickup, "InventoryRarityLevel", WHAT)? {
-        Value::Int(i) => i,
-        other => return Err(bad(WHAT, format!("InventoryRarityLevel holds {}, not an int", other.kind_name()))),
-    };
-    let entry = match object_of(&required(vm, world, "TheGlobalsDefinition", WHAT)?, WHAT)? {
-        None => None,
-        Some(_) => {
-            let g = crate::globals::globals_definition_loaded(vm, world, WHAT)?;
-            let entry = rarity_entry(vm, g, level)?;
-            if entry.as_ref().is_some_and(|(_, rainbow)| *rainbow) {
-                return Err(NotYet::not_read(A, RECORD_PARTICLES).into());
-            }
-            entry
-        }
-    };
-    // 5. Step 5, SetTemplate.
-    if unloaded(vm, template)? {
-        return Err(NotYet::not_read(B, RECORD_PARTICLES).into());
-    }
-    let flags = pa::engine_flags(vm)?;
-    let mut s = Setup::new(vm, c, new.is_some(), flags);
-    for (o, name, v) in early {
-        // Each new-component write against the heap's write rules, its slot read (part 1's are checked already).
-        super::fits(vm, o, name, &v, WHAT)?;
-        required(vm, o, name, WHAT)?;
-        s.planned(o, name, v);
-    }
-    s.set_template(template)?;
-    // 6. #581's step 6: the absolute flags and Rotation.
-    s.set(c, "AbsoluteTranslation", Value::Bool(false))?;
-    s.set(c, "AbsoluteRotation", Value::Bool(true))?;
-    s.set(c, "AbsoluteScale", Value::Bool(false))?;
-    let zero = with_fields(vm, &s.get(c, "Rotation")?, &[("Pitch", Value::Int(0)), ("Yaw", Value::Int(0)), ("Roll", Value::Int(0))])?;
-    s.set(c, "Rotation", zero)?;
-    // 7. The colour: the entry's, or opaque white; then a non-zero LootBeamColorOverride.
-    let mut colour = match &entry {
-        Some((color, _)) => rgb(vm, color)?.0,
-        None => [1.0; 3],
-    };
-    if let Some(definition) = definition(vm, pickup)? {
-        pa::check(vm, definition, &[("LootBeamColorOverride", COLOR)], WHAT)?;
-        let (over, zero) = rgb(vm, &required(vm, definition, "LootBeamColorOverride", WHAT)?)?;
-        if !zero {
-            colour = over;
-        }
-    }
-    // 8. The parameter plan.
-    pa::check(vm, c, &STEP_FIELDS[..1], WHAT)?;
-    let mut params = s.array(c, "InstanceParameters")?;
-    let name = Some(color_name);
-    let mut at = None;
-    for (i, p) in params.iter().enumerate() {
-        let n = match field(vm, p, "Name")? {
-            Value::Name(n) => n,
-            other => return Err(bad(WHAT, format!("a parameter's Name holds {}, not a name", other.kind_name()))),
+    // Steps 4 to 10 read only. The parameter value is built after them (review r1 of #617), so the parameter name is
+    // interned only after the last refusal.
+    let (before, after, params, at, colour) = {
+        // 4. Step 4, the rarity choice (only the choice; the colour is step 7).
+        let world = crate::globals::world_globals(vm)?;
+        let vm: &Vm = vm;
+        crate::globals::declared_reference_loaded(vm, world, "TheGlobalsDefinition", Some(crate::globals::GEARBOX_GLOBALS_DEFINITION), WHAT)?;
+        let level = match required(vm, pickup, "InventoryRarityLevel", WHAT)? {
+            Value::Int(i) => i,
+            other => return Err(bad(WHAT, format!("InventoryRarityLevel holds {}, not an int", other.kind_name()))),
         };
-        let ty = byte_in(vm, p, "ParamType")?;
-        let v = field(vm, p, "Vector")?;
-        for axis in ["X", "Y", "Z"] {
-            float_in(vm, &v, axis)?;
+        let entry = match object_of(&required(vm, world, "TheGlobalsDefinition", WHAT)?, WHAT)? {
+            None => None,
+            Some(_) => {
+                let g = crate::globals::globals_definition_loaded(vm, world, WHAT)?;
+                let entry = rarity_entry(vm, g, level)?;
+                if entry.as_ref().is_some_and(|(_, rainbow)| *rainbow) {
+                    return Err(NotYet::not_read(A, RECORD_PARTICLES).into());
+                }
+                entry
+            }
+        };
+        // 5. Step 5, SetTemplate.
+        if unloaded(vm, template)? {
+            return Err(NotYet::not_read(B, RECORD_PARTICLES).into());
         }
-        if at.is_none() && Some(n) == name && ty == PARAM_VECTOR {
-            at = Some(i);
+        let flags = pa::engine_flags(vm)?;
+        let mut s = Setup::new(vm, c, new.is_some(), flags);
+        for (o, name, v) in early {
+            // Each new-component write against the heap's write rules, its slot read (part 1's are checked already).
+            super::fits(vm, o, name, &v, WHAT)?;
+            required(vm, o, name, WHAT)?;
+            s.planned(o, name, v);
         }
-    }
+        s.set_template(template)?;
+        // 6. #581's step 6: the absolute flags and Rotation.
+        s.set(c, "AbsoluteTranslation", Value::Bool(false))?;
+        s.set(c, "AbsoluteRotation", Value::Bool(true))?;
+        s.set(c, "AbsoluteScale", Value::Bool(false))?;
+        let zero = with_fields(vm, &s.get(c, "Rotation")?, &[("Pitch", Value::Int(0)), ("Yaw", Value::Int(0)), ("Roll", Value::Int(0))])?;
+        s.set(c, "Rotation", zero)?;
+        // 7. The colour: the entry's, or opaque white; then a non-zero LootBeamColorOverride.
+        let mut colour = match &entry {
+            Some((color, _)) => rgb(vm, color)?.0,
+            None => [1.0; 3],
+        };
+        if let Some(definition) = definition(vm, pickup)? {
+            pa::check(vm, definition, &[("LootBeamColorOverride", COLOR)], WHAT)?;
+            let (over, zero) = rgb(vm, &required(vm, definition, "LootBeamColorOverride", WHAT)?)?;
+            if !zero {
+                colour = over;
+            }
+        }
+        // 8. The parameter plan.
+        pa::check(vm, c, &STEP_FIELDS[..1], WHAT)?;
+        let params = s.array(c, "InstanceParameters")?;
+        // Found, not interned: the name table keeps the first spelling it meets (decision 2026-11-15-23), so a refused
+        // call must not add one (review r1 of #617).
+        let name = vm.space.names.find(COLOR_PARAMETER);
+        let mut at = None;
+        for (i, p) in params.iter().enumerate() {
+            let n = match field(vm, p, "Name")? {
+                Value::Name(n) => n,
+                other => return Err(bad(WHAT, format!("a parameter's Name holds {}, not a name", other.kind_name()))),
+            };
+            let ty = byte_in(vm, p, "ParamType")?;
+            let v = field(vm, p, "Vector")?;
+            for axis in ["X", "Y", "Z"] {
+                float_in(vm, &v, axis)?;
+            }
+            if at.is_none() && Some(n) == name && ty == PARAM_VECTOR {
+                at = Some(i);
+            }
+        }
+        let before = std::mem::take(&mut s.writes);
+        // 9. SetHidden(false): only when HiddenGame is set.
+        if s.flag(c, "HiddenGame")? {
+            s.set(c, "HiddenGame", Value::Bool(false))?;
+            s.deferred_reattach()?;
+        }
+        // 10. The deferred transform update.
+        s.set(c, "bNeedsUpdateTransform", Value::Bool(true))?;
+        s.transform_refusals()?;
+        let after = std::mem::take(&mut s.writes);
+        (before, after, params, at, colour)
+    };
+    // The parameter value, built whole in the plan (review r1 of #609) after the last NotYet (review r1 of #617). The
+    // name is interned only when the table has no spelling of it yet: a name-table change, no object, generator draw
+    // or store load, which #518's counters count; every refusal before it changes nothing at all.
+    let color_name = match vm.space.names.find(COLOR_PARAMETER) {
+        Some(n) => n,
+        None => vm.space.names.intern(COLOR_PARAMETER),
+    };
+    let vm: &Vm = vm;
+    let mut params = params;
     let vector = |base: &Value| {
         with_fields(vm, base, &[("X", Value::Float(colour[0])), ("Y", Value::Float(colour[1])), ("Z", Value::Float(colour[2]))])
     };
@@ -383,16 +406,6 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
     let value = Value::array(params);
     super::fits(vm, c, "InstanceParameters", &value, WHAT)?;
     let parameter = Some(value);
-    let before = std::mem::take(&mut s.writes);
-    // 9. SetHidden(false): only when HiddenGame is set.
-    if s.flag(c, "HiddenGame")? {
-        s.set(c, "HiddenGame", Value::Bool(false))?;
-        s.deferred_reattach()?;
-    }
-    // 10. The deferred transform update.
-    s.set(c, "bNeedsUpdateTransform", Value::Bool(true))?;
-    s.transform_refusals()?;
-    let after = std::mem::take(&mut s.writes);
     Ok(Plan { component: c, new, before, parameter, after })
 }
 

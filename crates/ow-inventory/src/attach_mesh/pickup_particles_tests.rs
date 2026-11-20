@@ -763,8 +763,34 @@ fn the_lod_bias_and_the_forced_lowest_lod_are_ported() {
     refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
 }
 
-/// Review r1 of #609, item c: a looping sound is recorded by `AkPlayingId` only. A `SourceComponent` set with a zero
-/// playing id is not a recorded sound: the step zeroes the struct and the call passes.
+/// Review r1 of #617, item 2: step 11 itself, with `game_thread_lod` clear (so the level for location before the delay
+/// does not run) and two LOD distances. The forced lowest LOD asks for level 1: `LODLevel` 1 plans, `LODLevel` 0 is
+/// `LOD_CHANGE`. With the forced lowest LOD clear, a non-automatic `LODMethod` and no bias, no level is checked. The
+/// LOD bias is not tested: it stays unreachable while more than one distance needs the camera layer for the level for
+/// location, and with one distance every level clamps to 0.
+#[test]
+fn step_11_sets_the_forced_lowest_level() {
+    let lowest = ParticleEngineFlags { force_lowest: true, game_thread_lod: false, ..ParticleEngineFlags::SLICE };
+    let fixed = ParticleEngineFlags { game_thread_lod: false, ..ParticleEngineFlags::SLICE };
+    for (flags, level, ok) in [(lowest, 1, true), (lowest, 0, false), (fixed, 0, true), (fixed, 1, true)] {
+        let mut x = slice_with(Opts { flags: Some(flags), ..OPTS });
+        let t = x.template;
+        x.set(t, "LODDistances", Value::array(vec![Value::Float(0.0), Value::Float(100.0)]));
+        let c = x.held();
+        x.set(c, "bAutoActivate", Value::Bool(true));
+        x.set(c, "LODLevel", Value::Int(level));
+        if ok {
+            x.call().unwrap_or_else(|e| panic!("force_lowest {} level {level}: {e}", flags.force_lowest));
+            assert_eq!(x.get(c, "LODLevel"), Value::Int(level), "no level written");
+        } else {
+            refused(&mut x, Missing::NotPorted, LOD_CHANGE, RECORD_ACTIVATION);
+        }
+    }
+}
+
+/// Review r1 of #609, item c, and review r1 of #617, item 1: a non-zero `AkPlayingId` counts as a recorded looping
+/// sound (the audio layer is absent); a `SourceComponent` with a zero playing id is the test the note did not read,
+/// `NotYet { NotRead }`, before any write; and that refusal interns no parameter name (item 3).
 #[test]
 fn a_looping_sound_is_recorded_by_its_playing_id_only() {
     let mut x = slice();
@@ -773,9 +799,15 @@ fn a_looping_sound_is_recorded_by_its_playing_id_only() {
     let source = make(&mut x.vm, "Engine.AkComponent");
     let info = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("SourceComponent", Value::Object(Some(source)))]);
     x.set(c, "LoopingAkPlayingInfo", info);
-    x.call().unwrap();
-    let zero = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("SourceComponent", Value::Object(None)), ("AkPlayingId", Value::Int(0))]);
-    assert_eq!(x.get(c, "LoopingAkPlayingInfo"), zero, "zeroed by the step");
+    assert_eq!(x.vm.space.names.find(COLOR_PARAMETER), None, "the fixture has no RColor name");
+    refused(&mut x, Missing::NotRead, LOOPING_UNREAD, RECORD_ACTIVATION);
+    assert_eq!(x.vm.space.names.find(COLOR_PARAMETER), None, "not interned by a refusal");
+    let mut x = slice();
+    let c = x.held();
+    x.set(c, "AudioEnabled", Value::Bool(true));
+    let info = with(&x.vm, &x.get(c, "LoopingAkPlayingInfo"), &[("AkPlayingId", Value::Int(7))]);
+    x.set(c, "LoopingAkPlayingInfo", info);
+    refused(&mut x, Missing::LayerAbsent(AUDIO_LAYER), OLD_AUDIO, RECORD_ACTIVATION);
 }
 
 /// Review r1 of #609, item d: the plan holds the whole `InstanceParameters` value (the "RColor" entry built), and the
