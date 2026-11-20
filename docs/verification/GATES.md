@@ -28,7 +28,7 @@ NATIVE_MISSION_LIST_BUILD.md and the hub's rulings. `cargo build --workspace --l
 bridge). Installed Off `--slice-gate` strict (release build, under the machine lock): 0 ok / 5 NotYet / 9 errors; links
 10 to 12 pass 3 of 4 driver steps and stop in `accept` at "stopped after partial writes: the controller's
 current-playthrough virtual" (links 11 and 12 blocked behind link 10). ctest and verify_packages not run (no C++ change).
-No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (number pending); logs under ignored `local/p2/mlist/`.
+No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-108 (number pending); logs under ignored `local/p2/mlist/`.
 
 **LINK-1-NEXT-STOP (2026-11-19, pc-hummer, rebased onto fix/rust-init-player-skill-tree 07017c6d, #475 r1):**
 AI-assisted (Claude Code, Opus 5.5). The recorded resource pool idle-reset hooks are matched by their installed package
