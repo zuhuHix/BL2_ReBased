@@ -220,7 +220,8 @@ fn package() -> Vec<u8> {
     }
     t.prop("Struct", actor, "Location", 0, vector);
     t.prop("Struct", actor, "Rotation", 0, rotator);
-    for a in ["Attached", "Touching", "GeneratedEvents", "Components"] {
+    // `AllComponents`: the spawn's component update (lane IMPL-SPAWN-COMPONENT-ATTACH).
+    for a in ["Attached", "Touching", "GeneratedEvents", "Components", "AllComponents"] {
         ow_package::testkit::reflect::toy_array_of(&mut t, actor, a, "Object", object);
     }
     let note_fn = native(
@@ -635,6 +636,14 @@ fn package() -> Vec<u8> {
     let component = t.p.add_import("Core", "Class", core, "Component");
     let toy_component = t.class("ToyComponent", component);
     t.prop("Int", toy_component, "Payload", 0, 0);
+    // The fields the spawn's component update reads and writes (lane IMPL-SPAWN-COMPONENT-ATTACH).
+    t.prop("Object", toy_component, "Owner", 0, actor);
+    t.prop("Object", toy_component, "Scene", 0, object);
+    for f in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform", "bSkipChildComponentUpdate"] {
+        t.prop("Bool", toy_component, f, 0, 0);
+    }
+    // A component class without the fields the spawn's component update needs (lane IMPL-SPAWN-COMPONENT-ATTACH).
+    t.class("ToyBareComponent", component);
     let toolbox = t.class("Toolbox", actor);
     t.prop("Object", toolbox, "Comp", 0, toy_component);
     t.prop("Object", toolbox, "Thing", 0, object);
@@ -1655,6 +1664,120 @@ fn an_off_spawn_from_an_archetype_copies_its_components() {
         assert_eq!(x.w.vm.space.heap.get(copy).unwrap().outer, Some(actor));
         assert_eq!(field(&x.w.vm.space, copy, "Payload").unwrap(), Value::Int(42));
         assert_eq!(field(&x.w.vm.space, archetype, "Comp").unwrap(), Value::Object(Some(component)));
+    });
+}
+
+/// The spawn's component update (lane IMPL-SPAWN-COMPONENT-ATTACH, NATIVE_SPAWN_COMPONENT_ATTACH.md): in Off, before
+/// and after play began, the spawned actor's own copy in `Components` gets the actor as `Owner` and both update flags
+/// cleared; `ToyComponent` is not an AI component class, so its `bAttached` and the actor's `AllComponents` stay as
+/// they were. The standard Off world logged its empty scene layer as a harness input; a Reference world has none.
+#[test]
+fn an_off_spawn_gives_its_components_the_actor_as_owner() {
+    run(|| {
+        // Reference installs no layer and logs nothing (its archetype spawns are refused before any component).
+        let reference = fx_files(true, ParityMode::Reference, true);
+        assert!(reference.w.vm.service::<crate::actors::SceneLayer>().is_none());
+        assert!(!reference.w.vm.log.iter().any(|l| l == crate::actors::component_attach::HARNESS_LINE));
+        for (begin, mode) in [(true, ParityMode::Off), (false, ParityMode::Off)] {
+            let mut x = fx_files(begin, mode, true);
+            let wi = x.wi;
+            let toolbox = x.class("Toolbox");
+            let archetype = toy_archetype(&mut x, toolbox, "Toolbox_ToyArchetype");
+            let component_class = x.class("ToyComponent");
+            let component = x
+                .w
+                .vm
+                .space
+                .alloc(component_class, "ToyComponent0", Some(archetype), ow_object::heap::Origin::Runtime)
+                .unwrap();
+            for f in ["bNeedsReattach", "bNeedsUpdateTransform"] {
+                set_field(&mut x.w.vm.space, component, f, Value::Bool(true)).unwrap();
+            }
+            set_field(&mut x.w.vm.space, archetype, "Comp", Value::Object(Some(component))).unwrap();
+            // `Components` is typed with the fixture's own root class, which `ToyComponent` (a `Core.Component`) is not
+            // under; the packages fill it through tags, so the test writes the slot as they do, unchecked.
+            let p = x.w.vm.space.prop(toolbox, "Components").unwrap();
+            *x.w.vm.space.slot_mut(archetype, ow_object::ids::PropAddr::scalar(p)).unwrap() =
+                Value::array(vec![Value::Object(None), Value::Object(Some(component))]);
+            let req = SpawnRequest::new(Some(toolbox)).with_template(Some(archetype));
+            let actor = spawn(&mut x.w.vm, wi, &req).unwrap().unwrap();
+            let Value::Object(Some(copy)) = field(&x.w.vm.space, actor, "Comp").unwrap() else {
+                panic!("no component");
+            };
+            let label = format!("begin {begin}, {mode:?}");
+            {
+                assert_ne!(copy, component, "{label}");
+                assert_eq!(field(&x.w.vm.space, copy, "Owner").unwrap(), Value::Object(Some(actor)), "{label}");
+                for f in ["bNeedsReattach", "bNeedsUpdateTransform"] {
+                    assert_eq!(field(&x.w.vm.space, copy, f).unwrap(), Value::Bool(false), "{label}: {f}");
+                }
+                assert_eq!(field(&x.w.vm.space, copy, "bAttached").unwrap(), Value::Bool(false), "{label}");
+                assert_eq!(field(&x.w.vm.space, actor, "AllComponents").unwrap(), Value::array(vec![]), "{label}");
+                assert_eq!(field(&x.w.vm.space, component, "Owner").unwrap(), Value::Object(None), "the archetype's own");
+                assert!(x.w.vm.log.iter().any(|l| l == crate::actors::component_attach::HARNESS_LINE), "{label}");
+                // The `Components` entry and the `Comp` slot name the same copy (the re-pointing of the instancing).
+                assert_eq!(
+                    field(&x.w.vm.space, actor, "Components").unwrap(),
+                    Value::array(vec![Value::Object(None), Value::Object(Some(copy))]),
+                    "{label}"
+                );
+            }
+        }
+    });
+}
+
+/// The spawn's component update refuses before the actor is made, so each refusal leaves the level list and the
+/// heap as they were before the spawn, and the template's component untouched (NATIVE_SPAWN_COMPONENT_ATTACH.md
+/// section 4 at bc83e3b6):
+/// - an entry that is not this spawn's own copy (a component the archetype does not own, which the instancing
+///   shares): `NotYet { NotRead }`;
+/// - an attached template component: `NotYet { NotRead }`;
+/// - a non-empty `AllComponents` on the source: `NotYet { NotRead }`;
+/// - a component class without `Owner`: `VmError::Script`.
+#[test]
+fn the_spawn_s_component_update_refusals_leave_no_actor() {
+    run(|| {
+        for case in ["not a copy", "attached", "AllComponents", "no Owner"] {
+            let mut x = fx_files(true, ParityMode::Off, true);
+            let wi = x.wi;
+            let toolbox = x.class("Toolbox");
+            let archetype = toy_archetype(&mut x, toolbox, "Toolbox_ToyArchetype");
+            let class = x.class(if case == "no Owner" { "ToyBareComponent" } else { "ToyComponent" });
+            let outer = if case == "not a copy" { None } else { Some(archetype) };
+            let component = x.w.vm.space.alloc(class, "ToyComponent0", outer, ow_object::heap::Origin::Runtime).unwrap();
+            if case == "attached" {
+                set_field(&mut x.w.vm.space, component, "bAttached", Value::Bool(true)).unwrap();
+            }
+            let list = Value::array(vec![Value::Object(Some(component))]);
+            let components = x.w.vm.space.prop(toolbox, "Components").unwrap();
+            *x.w.vm.space.slot_mut(archetype, ow_object::ids::PropAddr::scalar(components)).unwrap() = list.clone();
+            if case == "AllComponents" {
+                let all = x.w.vm.space.prop(toolbox, "AllComponents").unwrap();
+                *x.w.vm.space.slot_mut(archetype, ow_object::ids::PropAddr::scalar(all)).unwrap() = list;
+            }
+            let (listed, objects) = (x.w.actors().borrow().list().len(), x.w.vm.space.heap.handles().len());
+            let req = SpawnRequest::new(Some(toolbox)).with_template(Some(archetype));
+            let e = spawn(&mut x.w.vm, wi, &req).unwrap_err();
+            match (case, e) {
+                ("no Owner", VmError::Script { message, .. }) => assert!(message.contains("declares no Owner"), "{message}"),
+                ("not a copy", VmError::NotYet(n)) => {
+                    assert_eq!(n.missing, Missing::NotRead);
+                    assert!(n.what.contains(crate::actors::component_attach::NOT_A_COPY_WHY), "{n}");
+                }
+                ("attached", VmError::NotYet(n)) => {
+                    assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, crate::actors::component_attach::ATTACHED));
+                }
+                ("AllComponents", VmError::NotYet(n)) => {
+                    assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, crate::actors::component_attach::PRE_PASS));
+                }
+                (case, other) => panic!("{case}: unexpected {other:?}"),
+            }
+            assert_eq!(x.w.actors().borrow().list().len(), listed, "{case}: no actor listed");
+            assert_eq!(x.w.vm.space.heap.handles().len(), objects, "{case}: no object made");
+            if case != "no Owner" {
+                assert_eq!(field(&x.w.vm.space, component, "Owner").unwrap(), Value::Object(None), "{case}");
+            }
+        }
     });
 }
 

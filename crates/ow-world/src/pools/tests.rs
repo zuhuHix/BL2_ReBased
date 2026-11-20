@@ -175,7 +175,7 @@ fn package() -> Vec<u8> {
     }
     t.prop("Struct", actor, "Location", 0, vector);
     t.prop("Struct", actor, "Rotation", 0, rotator);
-    for a in ["Attached", "Touching", "GeneratedEvents"] {
+    for a in ["Attached", "Touching", "GeneratedEvents", "Components", "AllComponents"] {
         toy_array_of(&mut t, actor, a, "Object", object);
     }
     let reference = toy_struct(&mut t, actor, "ResourcePoolReference", None);

@@ -32,6 +32,9 @@ use ow_vm::error::VmError;
 use ow_vm::natives_core::ActorWalk;
 
 mod instancing;
+/// The spawn's component update and the world's scene layer (lane IMPL-SPAWN-COMPONENT-ATTACH).
+pub mod component_attach;
+pub use component_attach::{SceneLayer, add_empty_scene};
 pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components, plan_components_tracked};
 
 /// The record these rules come from.
@@ -843,6 +846,8 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
     // another caller holds is refused here, with nothing allocated; the borrow ends right after the insertion, before
     // any event runs.
     let mut level = actors.try_borrow_mut().map_err(borrow_mut_err)?;
+    // Off: the spawn's component update, planned before the actor is made, and this spawn's component copies.
+    let mut attach: Option<(component_attach::Plan, Vec<(ObjRef, ObjRef)>)> = None;
     let actor = match vm.parity {
         ParityMode::Reference => ow_vm::interp::instantiate_from_defaults(vm, class)?,
         ParityMode::Off => {
@@ -851,14 +856,20 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
             // copies it made before it fails (review r2 of #528: nothing can fail after it returns).
             let plan = instancing::plan_components(vm, source)?;
             load_own_definitions(vm, source, &plan)?;
+            // The spawn's component update is decided here, on the source mapped through the instancing plan, so a
+            // refusal leaves no actor (NATIVE_SPAWN_COMPONENT_ATTACH.md; the hub's final rules on #605 r1, item 1).
+            let attach_plan = component_attach::plan(vm, source, &plan)?;
             let actor = vm.instantiate(class, "")?;
             let made = vm.space.heap.get(source).map(|o| o.slots.clone()).map_err(VmError::from).and_then(|slots| {
                 vm.space.heap.get_mut(actor)?.slots = slots;
-                apply_plan(vm, &plan, actor).map(|_| ())
+                apply_plan(vm, &plan, actor)
             });
-            if let Err(e) = made {
-                let _ = vm.space.free(actor);
-                return Err(e);
+            match made {
+                Err(e) => {
+                    let _ = vm.space.free(actor);
+                    return Err(e);
+                }
+                Ok(pairs) => attach = Some((attach_plan, pairs)),
             }
             actor
         }
@@ -868,7 +879,7 @@ fn spawn_from(vm: &mut Vm, spawner: ObjRef, req: &SpawnRequest) -> Result<Option
     // The actor is registered: in Off, every error from here on goes through the partial-write rule (review r1 of
     // #463, item 1): a `NotYet` is terminal and prefixed, its kind kept; any other error propagates unchanged; the actor
     // stays (no rollback). Reference keeps its errors as they were.
-    let rest = after_insertion(vm, actor, begun, off, req, time, world_info, location, rotation, instigator, joins);
+    let rest = after_insertion(vm, actor, begun, off, req, time, world_info, location, rotation, instigator, joins, attach);
     if off {
         rest.map_err(crate::pools::after_partial_writes)
     } else {
@@ -927,6 +938,7 @@ fn after_insertion(
     rotation: Value,
     instigator: Option<ObjRef>,
     joins: Option<(WorldList, ObjRef)>,
+    attach: Option<(component_attach::Plan, Vec<(ObjRef, ObjRef)>)>,
 ) -> Result<Option<ObjRef>, VmError> {
     set_field(&mut vm.space, actor, "CreationTime", Value::Float(time))?;
     set_field(
@@ -939,6 +951,12 @@ fn after_insertion(
     let (placed, rotated) = (location.clone(), rotation.clone());
     set_field(&mut vm.space, actor, "Location", location)?;
     set_field(&mut vm.space, actor, "Rotation", rotation)?;
+    // Off: the spawn's component update (NATIVE_SPAWN_COMPONENT_ATTACH.md, lane IMPL-SPAWN-COMPONENT-ATTACH): each of
+    // the new actor's components gets the actor as Owner, before the owner, Instigator and any script event. Its
+    // preflight ran before the actor was made; only the writes are here.
+    if let Some((plan, pairs)) = &attach {
+        component_attach::apply(vm, actor, plan, pairs)?;
+    }
     set_owner(vm, actor, req.owner)?;
     if is_destroyed(&vm.space, actor)? {
         return Ok(None);

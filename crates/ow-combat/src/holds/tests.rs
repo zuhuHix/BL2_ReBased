@@ -92,6 +92,11 @@ impl Env {
             .unwrap();
         let list = PropKind::Array(Box::new(PropKind::Struct(hold)));
         let mut props = vec![("Owner", o.clone())];
+        // The fields the spawn's component update reads and writes (lane IMPL-SPAWN-COMPONENT-ATTACH).
+        props.push(("Scene", o.clone()));
+        for f in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform", "bSkipChildComponentUpdate"] {
+            props.push((f, PropKind::Bool));
+        }
         for (_, name) in KINDS {
             props.push((name, list.clone()));
         }
@@ -552,4 +557,33 @@ fn an_unloaded_mind_is_not_read_and_not_loaded() {
     assert!(vm.defs.is_unloaded(&vm.space, peer));
     drop(vm);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The spawn's component update changes what `HoldMovement` answers (lane IMPL-SPAWN-COMPONENT-ATTACH): an AI
+/// component with no `Owner` holds with no motion side effect; once the step has attached it (its `Owner` the actor),
+/// a new movement hold appends the pair and then stops with the terminal `NotYet { NotRead }` of the unresolved owner
+/// controller lookup. The step runs here through `ow_world`'s own plan and writes, the copy standing in as itself.
+#[test]
+fn the_spawn_s_attach_makes_a_movement_hold_terminal() {
+    let mut e = Env::new(ParityMode::Off);
+    register(&mut e.vm).unwrap();
+    ow_world::actors::add_empty_scene(&mut e.vm).unwrap();
+    let root = e.vm.space.classes.by_path("Toy.ToyObject").unwrap();
+    let o = PropKind::Object { class: root };
+    let arrays = [("Components", PropKind::Array(Box::new(o.clone()))), ("AllComponents", PropKind::Array(Box::new(o)))];
+    let actor_class = class(&mut e.vm, "Toy.ToyMindActor", root, &arrays);
+    let actor = e.make(actor_class, "ToyMind_9");
+    let component = e.make(e.component, "ToyAIComponent_9");
+    set(&mut e.vm, actor, "Components", Value::array(vec![Value::Object(Some(component))])).unwrap();
+    let tag = e.make(e.thing, "ToyTag");
+    e.hold("HoldMovement", component, "Before", Some(tag)).unwrap();
+    let instancing = ow_world::actors::Plan { template: actor, originals: vec![component], inherited: vec![] };
+    let plan = ow_world::actors::component_attach::plan(&e.vm, actor, &instancing).unwrap();
+    ow_world::actors::component_attach::apply(&mut e.vm, actor, &plan, &[(component, component)]).unwrap();
+    assert_eq!(get(&mut e.vm, component, "Owner").unwrap(), Some(Value::Object(Some(actor))));
+    let err = e.hold("HoldMovement", component, "After", Some(tag)).unwrap_err();
+    assert!(not_read(&err), "{err}");
+    assert!(err.to_string().contains(PARTIAL_WRITES), "terminal: {err}");
+    let names: Vec<String> = e.pairs(component, "MovementHolds").into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, ["Before", "After"], "the pair was appended before the refusal");
 }

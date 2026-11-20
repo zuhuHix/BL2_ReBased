@@ -80,6 +80,17 @@ evaluator reaches this native. A probe stacked on #523 was not run: #523 conflic
 names against #518's), which is #523's rebase. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-210; logs
 under ignored `local/p2/gac/`.
 
+**IMPL-SPAWN-COMPONENT-ATTACH (2026-11-20, pc-hummer, on main c687c135):** AI-assisted (Claude Code, Opus 5.5).
+The spawn's component update in Off from NATIVE_SPAWN_COMPONENT_ATTACH.md as final at bc83e3b6 (`ow-world`
+`actors::component_attach`): the preflight before the actor is made, the writes between `Rotation` and `set_owner`; the
+empty `SceneLayer` moved to `ow-world` and installed by `World::new` in Off (a logged harness input). `cargo build
+--workspace` clean; `cargo test --workspace` 2,748 passed / 0 failed / 49 ignored (7 `component_attach` unit tests, 2
+spawn-level tests, 1 holds test; 124 existing tests fixed in six fixture builders, no assertion changed);
+`crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 3 ok / 10 NotYet / 1 error, all 14 rows byte-identical
+to main's. Link 9 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on main's noun `ReplicationStrategy`
+2 refusal, before the mind's AI component is asked. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN;
+logs under ignored `local/p2/sca/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

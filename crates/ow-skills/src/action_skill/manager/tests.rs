@@ -69,6 +69,10 @@ fn engine() -> Vec<u8> {
         t.prop("Object", actor, o, 0, actor);
     }
     t.prop("Struct", actor, "Location", 0, vector);
+    // The spawn's component update (lane IMPL-SPAWN-COMPONENT-ATTACH) reads both arrays.
+    for a in ["Components", "AllComponents"] {
+        ow_package::testkit::reflect::toy_array_of(&mut t, actor, a, "Object", object);
+    }
     t.prop("Struct", actor, "Rotation", 0, rotator);
     let world = t.class("WorldInfo", actor);
     t.prop("Float", world, "TimeSeconds", 0, 0);

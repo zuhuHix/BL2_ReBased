@@ -83,9 +83,9 @@ pub const REATTACH_OWNER: &str = "the deferred reattach: the owner's component u
 pub const REATTACH_SCENE: &str = "the deferred reattach: the component's detach and reattach";
 pub const HIDE_BONE: &str =
     "SkeletalMeshComponent.HideBoneByName on a component with a skeletal mesh: the bone lookup and the visibility rebuild";
-pub const ATTACH: &str = "Actor.AttachComponent: the component's attach to the world's scene";
+pub const ATTACH: &str = ow_world::actors::component_attach::ATTACH;
 /// The absent layer [`ATTACH`] names, for a world without a [`SceneLayer`].
-pub const SCENE_LAYER: &str = "a scene that components attach to: render, collision and physics registration (the port has none)";
+pub const SCENE_LAYER: &str = ow_world::actors::component_attach::SCENE_LAYER;
 pub const ATTACH_DETACH: &str = "Actor.AttachComponent on an attached component: the detach before the attach";
 
 /// Part 2's native keys.
@@ -102,21 +102,10 @@ pub const HIDDEN_GAME: &str = "HiddenGame";
 pub const OWNER_NO_SEE: &str = "bOwnerNoSee";
 pub const SKELETAL_MESH: &str = "SkeletalMesh";
 
-/// The world's scene that `Actor.AttachComponent` attaches to, as an explicit layer on the world (a VM service). The
-/// hub's ruling on the note's section 5: a world that holds it, empty, gets the attach's script-visible writes and no
-/// registration (a port Off answer, UNVERIFIED in game). A world without it is `NotYet { LayerAbsent }`.
-///
-/// **A lane that adds a real scene feeds this layer**; the attach then registers there. It holds nothing today.
-#[derive(Debug, Default)]
-pub struct SceneLayer {}
-
-/// Adds an empty [`SceneLayer`] to `vm`'s world unless one is there (world set-up).
-pub fn add_empty_scene(vm: &mut Vm) -> Result<(), VmError> {
-    if vm.service::<SceneLayer>().is_none() {
-        vm.add_service(SceneLayer::default())?;
-    }
-    Ok(())
-}
+/// The world's scene that `Actor.AttachComponent` attaches to, and its set-up: moved to `ow-world`
+/// (`ow_world::actors::component_attach`, lane IMPL-SPAWN-COMPONENT-ATTACH) so the spawn's component update uses the
+/// same layer; re-exported here unchanged. The standard Off world (`ow_world::world::World::new`) installs it.
+pub use ow_world::actors::{SceneLayer, add_empty_scene};
 
 fn declared(vm: &Vm, o: ObjRef, name: &str, what: &str) -> Result<PropKind, VmError> {
     let class = vm.space.heap.get(o)?.class;

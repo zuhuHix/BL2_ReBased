@@ -187,6 +187,9 @@ pub fn engine() -> Vec<u8> {
     e.prop("Byte", actor, "Role", 0, 0);
     e.prop("Object", actor, "WorldInfo", 0, 0);
     e.prop("Object", actor, "Owner", 0, 0);
+    // The spawn's component update (lane IMPL-SPAWN-COMPONENT-ATTACH) reads both arrays.
+    e.array_of(actor, "Components", "Object", 0);
+    e.array_of(actor, "AllComponents", "Object", 0);
     e.prop("Bool", actor, "bCanTarget", 0, 0);
     for b in ["bCollideWorld", "bCollideWhenPlacing", "bDeleteMe"] {
         e.prop("Bool", actor, b, 0, 0);

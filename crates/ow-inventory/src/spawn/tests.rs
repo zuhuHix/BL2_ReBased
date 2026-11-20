@@ -217,7 +217,7 @@ mod level {
         }
         t.prop("Struct", actor, "Location", 0, vector);
         t.prop("Struct", actor, "Rotation", 0, rotator);
-        for a in ["Attached", "Touching", "GeneratedEvents"] {
+        for a in ["Attached", "Touching", "GeneratedEvents", "Components", "AllComponents"] {
             toy_array_of(&mut t, actor, a, "Object", object);
         }
         let world_info = t.class("WorldInfo", actor);

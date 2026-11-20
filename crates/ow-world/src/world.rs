@@ -177,6 +177,11 @@ impl World {
         let actor_class = vm.find_class(ACTOR_CLASS)?;
         let query = query::install(&mut vm)?;
         let actors = vm.add_service(Actors::new(actor_class))?;
+        // The world's empty scene layer, in Off (the hub's ruling on NATIVE_SPAWN_COMPONENT_ATTACH.md, item 2): the
+        // spawn's component update and Actor.AttachComponent attach to it. An UNVERIFIED harness input, logged.
+        if vm.parity == ParityMode::Off && crate::actors::add_empty_scene(&mut vm)? {
+            vm.log.push(crate::actors::component_attach::HARNESS_LINE.to_string());
+        }
         // The game info falls back to the placed WorldInfo's Game (decision 2026-11-16-49).
         query
             .try_borrow_mut()
