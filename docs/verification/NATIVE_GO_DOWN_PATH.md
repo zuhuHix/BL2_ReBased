@@ -1,6 +1,6 @@
 # Look-ahead: what slice links 13 and 14 reach after maya:8 (go down, bleed out, respawn) (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane MAIN-READING + LOOKAHEAD-13-14 (decision 2026-11-19-NNN, number to
+AI-assisted (Claude Code, Opus 5.5), analyst lane MAIN-READING + LOOKAHEAD-13-14 (decision 2026-11-19-101, number to
 be given by the hub).
 - **Method.** The natives were listed from the installed path itself: the combat driver's steps of links 1, 4, 13
   and 14 (`maya:8 players:1 spawn:adult:7 swing:0:melee`, then `cash:3000` and three more swings, then `bleed:50`)
