@@ -281,7 +281,8 @@ is not a human player's. Otherwise it falls back to section 2. This is recorded 
 ## Open (each UNVERIFIED)
 
 - The rule for a question asked twice (section 2): that the inner question gets none and the asker goes on.
-- `GearboxMind`'s own answer: whether it adds steps before or after its class's declared interfaces.
+- `GearboxMind`'s own answer: read 2026-11-20 in [NATIVE_GEARBOXMIND_QUERYINTERFACE.md](NATIVE_GEARBOXMIND_QUERYINTERFACE.md)
+  (it is `Controller`'s rule; a mind asked `IAIInterface` answers itself). Still UNVERIFIED in game.
 - `WillowPlayerController`'s answer for `IAIInterface`.
 - What a skeletal mesh component answers: read in section 6 (`ActorComponent`'s rule). Still open there: the rule of
   the component classes between `ActorComponent` and `SkeletalMeshComponent`, and of every other component class.
