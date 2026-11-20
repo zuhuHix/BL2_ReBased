@@ -251,8 +251,11 @@ fn unresolved_natives_refuse_by_kind_and_the_player_ragdoll_is_presented() {
     let err = e.vm.call(local, Some(c), vec![]).unwrap_err();
     assert!(not_read(&err), "{err:?}");
     let p = make(&mut e.vm, e.player_pawn, "Maya_1");
+    // The shared Off implementation (lane IMPL-ACTOR-TRACE), not the bare layer-absent refusal it replaced: this toy
+    // declaration has no parameters, so it refuses on the missing TraceEnd before any layer is asked. Its own tests
+    // are in `ow_world::world::actor_trace`.
     let err = e.vm.call(trace, Some(p), vec![]).unwrap_err();
-    assert!(matches!(kind(&err), Some(Missing::LayerAbsent(_))), "{err:?}");
+    assert!(kind(&err).is_none(), "not a NotYet: {err:?}");
     assert_eq!(e.vm.call(ragdoll, Some(p), vec![]).unwrap().ret, Value::Bool(true));
     let comp = make(&mut e.vm, e.object, "Effects_2");
     assert!(not_read(&e.vm.call(clear, Some(comp), vec![Value::Bool(false)]).unwrap_err()));

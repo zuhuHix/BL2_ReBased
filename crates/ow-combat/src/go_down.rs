@@ -27,7 +27,9 @@
 //!   `ResetAI`'s entries and `StaticTriggerTemplateEvent`'s contents;
 //! - `NotPorted`: `Pawn.SetAnchor` (read as bookkeeping in NATIVE_DOWN_TIMERS.md, not ported here) and the parts of
 //!   `StopTalking` this lane does not port;
-//! - `LayerAbsent`: `Actor.Trace`, "Actor.Trace: the world's collision" (4.5).
+//! - `Actor.Trace`: the shared Off implementation, `ow_world::world::actor_trace` (lane IMPL-ACTOR-TRACE,
+//!   NATIVE_ACTOR_TRACE.md), whose refusal with no collision world is still `LayerAbsent`, "Actor.Trace: the world's
+//!   collision" (4.5).
 //!
 //! **The native iterators** of 4.5 cannot be bound by name: the VM's own refusal for an unbound iterator names its
 //! key in Off, and a lane that binds one answers `NotYet { NotRead }`, "the engine iterator <key>".
@@ -119,9 +121,9 @@ pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
     for (path, what, record) in NOT_READ {
         bind_fn(vm, path, move |_| Err(NotYet::not_read(what, record).into()))?;
     }
-    bind_fn(vm, "Engine.Actor.Trace", |_| {
-        Err(NotYet::layer_absent("Actor.Trace: the world's collision", COLLISION_LAYER, RECORD).into())
-    })?;
+    // The shared Off implementation (lane IMPL-ACTOR-TRACE, NATIVE_ACTOR_TRACE.md), replacing the bare layer-absent
+    // refusal at its source so either pack order binds the same function.
+    bind_fn(vm, ow_world::world::actor_trace::PATH, ow_world::world::actor_trace::trace)?;
     bind_fn(vm, "Engine.Pawn.SetAnchor", |_| {
         Err(NotYet::not_ported("Pawn.SetAnchor: the anchor bookkeeping", RECORD_DOWN).into())
     })?;

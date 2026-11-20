@@ -693,7 +693,8 @@ impl NativePack for Pack {
         register_cast_opinion(vm)?;
         register_cast_get_value(vm)?;
         register_cast_resolve_context(vm)?;
-        register_attach_component(vm)
+        register_attach_component(vm)?;
+        register_cast_trace(vm)
     }
 }
 
@@ -708,6 +709,17 @@ impl NativePack for Pack {
 /// Reference: unbound, as before.
 fn register_attach_component(vm: &mut Vm) -> Result<(), VmError> {
     ow_inventory::attach_mesh::bind_engine_attach(vm)
+}
+
+/// `Actor.Trace` for the cast's worlds (lane IMPL-ACTOR-TRACE): `LiftActionSkill.BeginLifting` traces for the floor
+/// under the target. The one implementation is `ow_world::world::actor_trace` (NATIVE_ACTOR_TRACE.md), which the
+/// go-down worlds bind too, so whichever pack binds first the key gets the same function. Off only: under Reference it
+/// binds nothing.
+fn register_cast_trace(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    bind(vm, ow_world::world::actor_trace::PATH, Rc::new(ow_world::world::actor_trace::trace))
 }
 
 /// `AttributeDefinition.GetValue` for the cast's worlds (lane IMPL-LINK9-ATTR-GETVALUE): the Phaselock cast reads

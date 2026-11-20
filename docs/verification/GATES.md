@@ -66,6 +66,18 @@ class table's read-only `by_path`, by id, with no load.
 
 No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-243 (placeholder).
 
+**IMPL-ACTOR-TRACE (2026-11-20, zuhu desktop, on fix/rust-actor-trace from main 4c4522d):** AI-assisted (Claude Code,
+Opus 5.5). `Actor.Trace` in Off from NATIVE_ACTOR_TRACE.md (#621 at 860e5492): one shared `ow-world` function, bound
+by the action skill pack and by go_down in place of its bare `LayerAbsent` closure. `cargo test -p ow-world --lib
+actor_trace` 10 passed / 0 failed; `cargo test -p ow-skills --lib` 133 passed / 0 failed / 1 ignored (the binding-site
+test included); `cargo build --workspace -j 2` OK; `cargo test --workspace -j 2` 2,989 passed / 0 failed / 51
+ignored; `crate_edges_test.py` 19 OK; clippy: no warning in the new files. Installed Off `--slice-gate` strict (release
+build, under the machine lock): 4 ok / 9 NotYet / 1 error. Link 9 passes `spawn` and stops in `cast` at the unloaded
+`IRuleEngineOwner` (1 of 2 steps), before the trace. A throwaway probe with #628 and #623 gives the same counts, with
+link 9 stopping at #602's GearboxMind `QueryInterface` question, still before the trace. ctest and verify_packages
+not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored
+`local/p2/impl-actor-trace/`.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p

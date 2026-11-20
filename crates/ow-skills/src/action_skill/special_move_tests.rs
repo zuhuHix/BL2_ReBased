@@ -122,6 +122,9 @@ fn engine() -> Vec<u8> {
     let roles = enumeration(&mut t, actor, "ENetRole", &ROLES);
     t.prop("Byte", actor, "Role", 0, roles);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
+    // Actor.Trace, which both binding sites bind in Off (lane IMPL-ACTOR-TRACE); no parameters are needed to tell
+    // the shared function from the old refusal.
+    native(&mut t, actor, "Trace", &[], Some(("Object", vec![actor])));
     let allegiance = t.class("PawnAllegiance", object);
     t.prop("Byte", allegiance, "SelfOpinion", 0, 0);
     let pawn = t.class("Pawn", actor);
@@ -918,6 +921,31 @@ fn is_friendly_is_one_binding_in_either_pack_order() {
             let r = x.call("Engine.Pawn.IsFriendly", caster, vec![Value::Object(Some(controller))]).unwrap();
             assert_eq!(r, Value::Bool(mode == ParityMode::Reference), "order {i}, {mode:?}");
         }
+    }
+}
+
+/// NATIVE_ACTOR_TRACE.md test 9 (lane IMPL-ACTOR-TRACE): `Actor.Trace` gets the one shared function in Off whatever
+/// the pack set (the Phaselock set's action skill pack alone, or with the combat pack before or after it), never the
+/// go-down worlds' old layer-absent refusal. Called with no receiver, the shared function answers a script error,
+/// where the old refusal answered `NotYet`. Under Reference neither site binds it.
+#[test]
+fn actor_trace_is_the_shared_function_in_every_pack_order() {
+    let combat = ow_combat::hit::Pack;
+    let skills = crate::action_skill::Pack;
+    let sets: [&[&dyn NativePack]; 3] = [&[&skills], &[&combat, &skills], &[&skills, &combat]];
+    for (i, packs) in sets.iter().enumerate() {
+        let mut x = fx_with(ParityMode::Off, packs);
+        let vm = x.vm();
+        let f = vm.find_function(ow_world::world::actor_trace::PATH).unwrap();
+        match vm.call(f, None, vec![]) {
+            Err(VmError::Script { function, .. }) => assert_eq!(function, "Actor.Trace", "set {i}"),
+            other => panic!("set {i}: expected the shared function's script error, got {other:?}"),
+        }
+        let mut x = fx_with(ParityMode::Reference, packs);
+        let vm = x.vm();
+        let f = vm.find_function(ow_world::world::actor_trace::PATH).unwrap();
+        let key = vm.function(f).unwrap().native_key.clone().unwrap();
+        assert!(!vm.has_native(&key), "set {i}: Reference binds nothing");
     }
 }
 
