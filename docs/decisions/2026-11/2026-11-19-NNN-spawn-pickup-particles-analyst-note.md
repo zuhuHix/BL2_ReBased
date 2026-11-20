@@ -15,34 +15,39 @@ With #574's answer for the rigid-body set-up stood in, links 6 and 7 stop at `ma
   - the definition's `PickupFlagOffset` and `LootBeamColorOverride`;
   - the globals definition's `RarityLevelColors`;
   - the template's `WarmupTime` and `LODSettings`.
-- **What it does.** It makes and attaches a `ParticleSystemComponent` when there is none, with `Translation` := the
-  existing `GetPickupParticleOffset` rule. It picks the template: `PickupParticles`, or, for `RARITY_Rainbow`, a field
-  of an item-set definition it loads by name. Then `SetTemplate`, part read: field writes, an activation, the
-  `bAcceptsLights` copy and the deferred reattach. Then the absolute-transform flags and `Rotation`, a colour from the
-  rarity entry or the definition's override, a `SetVectorParameter` read in full (an `InstanceParameters` update),
-  `SetHidden(false)`, and the deferred transform update.
-- **Loads and random numbers.** It draws no random numbers. It loads only for the Rainbow rarity, plus a template
-  post-load when one is needed.
-- **What links 6 and 7 read.** Nothing they read depends on the effect. The only reachable write is the component in
-  `Components`, through component bounds, which the headless world does not have. So a minimal answer is enough, with
-  the particle system's own work as an empty particle layer (a hub ruling).
-- **Proposed Off answer.** A write-free preflight, the field writes in order, and typed refusals:
-  - the Rainbow template load;
-  - an unloaded template;
-  - the owner and ownerless transform updates;
-  - the activation, unless the hub rules it into the empty layer.
-- **The slice's data** (a local probe, loaded-only reads): a new component is made; the rarity is not Rainbow; the
-  offset and the override are zero; **the template handle is not loaded in the port**. So the answer stops on the
-  unloaded-template refusal unless the pickup world's set-up preloads `PartPickup` (an UNVERIFIED harness input, the
-  smaller of the two ways; the hub's call).
-- **Next stop** (the probe, a merge of origin/main with #520, never pushed, with both natives stood in): links 6 and 7
-  pass `make` and error at `touch` on the unbound `Actor.GetBoundingCylinder`. `SetAnimTreeTemplate` does not come
-  first on this base; that stop is from the #573 stack.
+- **What it does:**
+  - makes and attaches a `ParticleSystemComponent` when there is none, with `Translation` := the existing
+    `GetPickupParticleOffset` rule;
+  - picks the template (`PickupParticles`, or a load by name for `RARITY_Rainbow`);
+  - calls `SetTemplate`;
+  - sets the absolute-transform flags and `Rotation`;
+  - sets a colour parameter in `InstanceParameters`;
+  - calls `SetHidden(false)`;
+  - runs the deferred transform update.
+- **The activation (hub ruling 2 on #581), read for its script-visible writes.** `SetTemplate` activates or initialises
+  the system. The activation writes script-visible fields: `EmitterDelay`, which can be a random draw from the
+  template's delay range, `AudioEventDelay`, `bIsActive` and the related flags, `LOD`, `bHasBeenActivated`,
+  `AccumTickTime`, and `WarmupTime` after warm-up ticks. So it is not render-side only and keeps its refusal. The
+  initialisation has its own refusal: its body is unread, and it writes `AccumTickTime`.
+- **The proposed Off answer:**
+  - harness inputs: the pickup world preloads `PartPickup` (hub ruling 1) and the particle component class with its
+    defaults and declarations, all UNVERIFIED;
+  - a write-, load- and draw-free preflight in the native's order that plans everything before any write: the new
+    component from its class defaults, the attach from actor guards, the colour and parameter, and each deferred
+    step's owner test with its own text;
+  - eight typed refusals, plus #520's four kept as they are;
+  - a late `NotYet` is prefixed only when this native's counters moved.
+- **What links 6 and 7 read.** Nothing they read depends on the effect. But the activation or initialisation refusal
+  comes first, so with the answer and the preload the expected stop is that refusal at `make`. That is UNVERIFIED,
+  because no probe ran the answer.
+- **The probes** (a local merge of origin/main with #520, never pushed): both natives were stood in with no-write
+  answers. The observed stop is at `touch`: the unbound `Actor.GetBoundingCylinder`. `SetAnimTreeTemplate` does not
+  come first on this base.
 
-Method: the script with `research/script_disasm.py`; the layouts with `tools/ghidra/class_layout.py`; the enum value
-names from `WillowGame.upk`; the native with Ghidra 12.1.4 headless, read-only, under the machine lock. Raw output
-stays under ignored `local/analysis/spp/`. No bl-sdk session was granted and no recorded evidence covers this native,
-so every rule is UNVERIFIED. The note lists four bl-sdk checks.
+Method: the script with `research/script_disasm.py`; the layouts with `tools/ghidra/class_layout.py` (the fits stay
+under ignored `local/analysis/spp/`); the enum value names from `WillowGame.upk`; the native with Ghidra 12.1.4
+headless, read-only, under the machine lock. No bl-sdk session was granted and no recorded evidence covers this
+native, so every rule is UNVERIFIED. The note lists four bl-sdk checks.
 
-Open: `DestroyPickupParticles`; `SetTemplate`'s activation, initialisation and post-load; the two transform updates;
-the item-set field; the parameter name.
+Open: `DestroyPickupParticles`; the activation's engine steps and the initialisation's body; the delay draw's stream;
+the two transform updates; the item-set field; the component default's `bAutoActivate`; the parameter name.
