@@ -50,7 +50,8 @@ c687c13):** AI-assisted (Claude Code, Opus 5.5). The gestalt component data laye
 NATIVE_GESTALT_DATA_LAYER.md (#603, 9e5113c0): `BuildCompositeMesh`'s fill and `InitGestaltMeshDataFromOther`'s copy,
 each one whole-slot write after a write-free preflight (F1, F2). `cargo build --workspace -j 2` clean (0 warnings);
 `cargo test --workspace -j 2` 2,761 passed / 0 failed / 49 ignored (10 new in `ow-inventory`); clippy on
-`ow-inventory` clean. Installed Off `--slice-gate` strict (release build, under the machine lock), base 491a1ba and branch each built:
+`ow-inventory` clean in the gestalt files. Review r1 of #613 (4 tests on the declaration checks; the F2 prefix named):
+`cargo test --workspace -j 2` 2,765 passed / 0 failed / 49 ignored. Installed Off `--slice-gate` strict (release build, under the machine lock), base 491a1ba and branch each built:
 3 ok / 10 NotYet / 1 error both times, every row byte-identical. Link 8 stops in `init` (1 of 5 driver steps,
 `make`) at the unbound `WillowWeapon.RecomputeAttributeBaseValues()`, before either native, so the gate does not
 reach the layer. ctest and verify_packages not run (no C++ change). No real-game run;

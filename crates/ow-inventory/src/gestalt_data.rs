@@ -218,8 +218,10 @@ pub fn arrays_decoded(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
     };
     let store = vm.defs.packages();
     let typer = ReflectionTyper::new(store, vm.defs.code(), &vm.space, package, vm.defs.mode());
-    // A gestalt definition is an ordinary object: its tags start 4 bytes into the payload.
-    let Ok(walked) = read_tagged(store.get(package), index, 4, &typer) else {
+    // A gestalt definition is an ordinary object, so its tags start after the ordinary prefix: the store chooses the
+    // same `PropertyPrefix` for it (`ow-defs/src/store.rs`, `derive_prefix`).
+    let start = ow_object::prefix::PropertyPrefix::Ordinary.bytes();
+    let Ok(walked) = read_tagged(store.get(package), index, start, &typer) else {
         return Ok(false);
     };
     Ok(walked.entries.iter().filter(|e| WALKED.contains(&e.name.as_str())).all(|e| whole(&e.value)))

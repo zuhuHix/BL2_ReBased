@@ -9,7 +9,7 @@ use ow_object::value::Value;
 
 use super::*;
 use crate::gestalt::tests::{
-    FULL_BOUNDS, FULL_PARTS, FULL_SOCKETS, Fx, fx, not_read, not_yet, quiet, script, some,
+    FULL_BOUNDS, FULL_PARTS, FULL_SOCKETS, Fx, Mis, fx, fx_mis, not_read, not_yet, quiet, script, some,
 };
 use crate::gestalt::{STAND_IN, build_composite_mesh, init_gestalt_mesh_data};
 
@@ -308,4 +308,65 @@ fn the_native_writes_the_slot_once() {
     assert_eq!(build_composite_mesh(&mut x.vm, Some(c), &data).unwrap(), Some(shared));
     assert_eq!(crate::equip::card::load_mark(&x.vm), (w + 1, draws, loads), "one write, no draw, no load");
     assert_eq!(fragments(&x, &slot(&x, c)), vec![vec![(1, 0, 10)], Vec::new()]);
+}
+
+/// Points `ToyType` at definition `g` (its shared mesh `mesh`) and calls `BuildCompositeMesh` on `c`, asserting the
+/// heap unchanged and #518's counters still (`quiet`): the refusal.
+fn refuse(x: &mut Fx, g: &str, mesh: ObjRef, c: ObjRef) -> String {
+    let ty = x.o("ToyType");
+    let g = x.o(g);
+    x.set(g, "GestaltSkeletalMesh", some(mesh));
+    x.set(ty, "GestaltMesh", some(g));
+    let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
+    let before = x.snapshot();
+    let e = quiet(&mut x.vm, |vm| build_composite_mesh(vm, Some(c), &data));
+    assert_eq!(x.snapshot(), before, "nothing written: {e}");
+    script(e)
+}
+
+/// Review r1 of #613, item 1: a container member of the wrong kind is a data error naming it, and the component's
+/// declaration is checked before F1 (a slotless store component still gets the declaration's error, not F1(i)).
+#[test]
+fn a_mis_declared_container_member_is_a_data_error_before_f1() {
+    let mut x = fx_mis(Mis::BoundsInt);
+    let (shared, c1, c2) = (x.o("ToyShared"), x.o("ToyComp1"), x.o("ToyComp2"));
+    let text = refuse(&mut x, "ToyGestalt", shared, c1);
+    assert!(text.contains("GestaltData.ReferencePoseBounds") && text.contains("not declared as"), "{text}");
+    x.vm.space.heap.get_mut(c2).unwrap().slots.clear();
+    assert!(x.vm.defs.is_loaded(&x.vm.space, c2), "a slotless store component: F1(i) if F1 came first");
+    let text = refuse(&mut x, "ToyGestalt", shared, c2);
+    assert!(text.contains("GestaltData.ReferencePoseBounds"), "the declaration before F1: {text}");
+}
+
+/// Review r1 of #613, item 1: a definition array with the wrong element type is a data error naming it.
+#[test]
+fn a_mis_declared_definition_array_is_a_data_error() {
+    let mut x = fx_mis(Mis::InfosInt);
+    let (shared, c) = (x.o("ToyShared"), x.o("ToyComp1"));
+    let text = refuse(&mut x, "ToyGestalt", shared, c);
+    assert!(text.contains("ToyGestaltDefinition.GestaltInfos") && text.contains("not declared as"), "{text}");
+}
+
+/// Review r1 of #613, item 1: a definition slot that is not complete (placed past the heap's write checks, a fixture
+/// of a malformed decode) is a data error naming it.
+#[test]
+fn an_incomplete_definition_slot_is_a_data_error() {
+    let mut x = fx();
+    let (shared, c) = (x.o("ToyShared"), x.o("ToyComp1"));
+    let g = x.o("ToyGestaltFull");
+    let class = x.vm.space.heap.get(g).unwrap().class;
+    let p = x.vm.space.prop(class, "GestaltInfos").unwrap();
+    *x.vm.space.slot_mut(g, PropAddr::scalar(p)).unwrap() = Value::array(vec![Value::Int(3)]);
+    let text = refuse(&mut x, "ToyGestaltFull", shared, c);
+    assert_eq!(text, "the gestalt definition's GestaltInfos does not match its declaration");
+}
+
+/// Review r1 of #613, item 1: a planned value the heap's own write rules refuse is a data error, before the write.
+/// The container's `SkeletalMesh` is declared as the mesh class; a shared mesh of another class cannot be written.
+#[test]
+fn a_planned_value_the_heap_refuses_is_a_data_error() {
+    let mut x = fx();
+    let (part, c) = (x.o("ToyPartA"), x.o("ToyComp1"));
+    let text = refuse(&mut x, "ToyGestaltFull", part, c);
+    assert!(text.starts_with("the GestaltData write would be refused: "), "{text}");
 }

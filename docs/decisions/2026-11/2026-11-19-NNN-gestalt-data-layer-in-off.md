@@ -54,6 +54,18 @@ leaves raw while the store still loads the definition. It is not the note's "nes
 case, which this fixture could not produce. #596's three tests that expected the layer's refusal now expect the fill,
 the copy, or F1's texts. Test 10 (Reference binds nothing) is #596's.
 
+**Review r1 of #613, folded in.** Tests now reach every refusal of the declaration check: a container member and a
+definition array of the wrong kind, an incomplete definition slot, and a planned value the heap's write rules refuse
+(the fixture's container `SkeletalMesh` is now declared as the mesh class). One pins the component's declaration
+before F1. F2's walk names its prefix by `PropertyPrefix::Ordinary`, the one the store's `derive_prefix` picks. The
+note's own F2 case (a nested `Parts` the typer leaves raw) is still not pinned; the delegate-tag case stands in.
+
+**Open item, the first check when link 8 reaches this native: F2's coverage on real data.**
+- A possible false pass: an array the definition does not tag itself, inherited from its archetype or class default,
+  is absent from the walk, so the filter is empty and passes.
+- Possible false refusals: an unrelated tag that makes the whole walk fail, and a `Raw` value in a field of the three
+  arrays that the fill does not read.
+
 **Not verified:** every rule in the running game; the start constant's value; the union's bit parity; that the
 installed gestalt definitions' arrays walk whole (F2 on real data). The installed slice gate does not reach these
 natives yet: link 8 stops earlier, at `WillowWeapon.CacheWeaponCard`.

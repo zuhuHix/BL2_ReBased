@@ -32,7 +32,17 @@ const LOADED: [&str; 12] = [
 const UNLOADED: [&str; 5] = ["UnType", "UnPart", "UnComp", "UnMesh", "UnGestalt"];
 
 /// The package; without `gestalt_data` the component class declares no `GestaltData`.
-fn package(gestalt_data: bool) -> Vec<u8> {
+/// A fixture variant with one member declared with the wrong kind (review r1 of #613, item 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mis {
+    No,
+    /// The container's `ReferencePoseBounds` declared as an int.
+    BoundsInt,
+    /// The gestalt definition's `GestaltInfos` declared as an array of ints.
+    InfosInt,
+}
+
+fn package_mis(gestalt_data: bool, mis: Mis) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&[
         "Class",
         "ScriptStruct",
@@ -86,12 +96,17 @@ fn package(gestalt_data: bool) -> Vec<u8> {
     }
     let container = toy_struct(&mut t, component, "GestaltDataContainer", None);
     toy_array_of(&mut t, container, "PartMeshNames", "Name", 0);
-    t.prop("Object", container, "SkeletalMesh", 0, object);
+    // Declared as the mesh class, so a planned value holding another class's object is refused by the heap's rules.
+    t.prop("Object", container, "SkeletalMesh", 0, mesh);
     toy_array_of(&mut t, container, "LODModelData", "Struct", lod);
     toy_array_of(&mut t, container, "SocketMappings", "Struct", remap);
     toy_array_of(&mut t, container, "GestaltAccessoryList", "Struct", accessory);
     t.prop("Object", container, "GestaltPartMatricesContainer", 0, object);
-    t.prop("Struct", container, "ReferencePoseBounds", 0, bounds);
+    if mis == Mis::BoundsInt {
+        t.prop("Int", container, "ReferencePoseBounds", 0, 0);
+    } else {
+        t.prop("Struct", container, "ReferencePoseBounds", 0, bounds);
+    }
     // The gestalt definition's three arrays (the note's section 6, check 2).
     let part_ty = toy_struct(&mut t, gestalt, "ToyGestaltPart", None);
     t.prop("Name", part_ty, "SkeletalMeshFragmentName", 0, 0);
@@ -107,7 +122,11 @@ fn package(gestalt_data: bool) -> Vec<u8> {
     let part_bounds = toy_struct(&mut t, gestalt, "ToyGestaltPartBounds", None);
     t.prop("Name", part_bounds, "SkeletalMeshFragmentName", 0, 0);
     t.prop("Struct", part_bounds, "ReferencePoseBounds", 0, bounds);
-    toy_array_of(&mut t, gestalt, "GestaltInfos", "Struct", info);
+    if mis == Mis::InfosInt {
+        toy_array_of(&mut t, gestalt, "GestaltInfos", "Int", 0);
+    } else {
+        toy_array_of(&mut t, gestalt, "GestaltInfos", "Struct", info);
+    }
     toy_array_of(&mut t, gestalt, "GestaltSocketMappings", "Struct", socket);
     toy_array_of(&mut t, gestalt, "GestaltPartBounds", "Struct", part_bounds);
     if gestalt_data {
@@ -139,7 +158,9 @@ fn package(gestalt_data: bool) -> Vec<u8> {
     t.p.add_export(holder, "ToyHolder", h);
     // The serialized gestalt definitions: one whole, one whose first part holds a delegate tag the walker leaves raw,
     // and one of a class without the arrays.
-    for (name, raw) in [("ToyGestaltFull", false), ("ToyGestaltRaw", true)] {
+    // With `InfosInt` the serialized definitions would not decode, so they are left out.
+    let serialized: &[(&str, bool)] = if mis == Mis::InfosInt { &[] } else { &[("ToyGestaltFull", false), ("ToyGestaltRaw", true)] };
+    for &(name, raw) in serialized {
         let payload = full_definition(&mut t, raw);
         t.p.add_export(gestalt, name, payload);
     }
@@ -238,9 +259,18 @@ pub(crate) fn fx() -> Fx {
 }
 
 fn fx_with(gestalt_data: bool) -> Fx {
+    fx_mis_with(gestalt_data, Mis::No)
+}
+
+/// [`fx`] on the variant `mis`.
+pub(crate) fn fx_mis(mis: Mis) -> Fx {
+    fx_mis_with(true, mis)
+}
+
+fn fx_mis_with(gestalt_data: bool, mis: Mis) -> Fx {
     let dir = std::env::temp_dir().join(format!("ow-inventory-gestalt-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
-    let bytes = package(gestalt_data);
+    let bytes = package_mis(gestalt_data, mis);
     let defs = DefStore::from_synthetic(&dir, &[("Engine.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     for n in LOADED.iter().chain(["ToyHolder"].iter()) {
