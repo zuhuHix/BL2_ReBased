@@ -991,34 +991,6 @@ impl CodeIndex {
         Some(false)
     }
 
-    /// Resolves every interface entry on the super chain of `class` not resolved yet, as [`CodeIndex::implements`]
-    /// resolves one (a set-up step: a load, which the caller logs). Returns how many entries this call resolved.
-    pub fn resolve_interfaces(&mut self, store: &mut PackageStore, class: ClassKey) -> usize {
-        let chain: Vec<ClassKey> = self.super_chain(class).collect();
-        let mut resolved = 0;
-        for cursor in chain {
-            for entry in 0..self.classes[cursor.index()].interface_targets.len() {
-                if self.classes[cursor.index()].interface_targets[entry].is_some() {
-                    continue;
-                }
-                let info = &self.classes[cursor.index()];
-                let (package, class_ref) =
-                    (info.package, info.body.as_ref().map_or(0, |b| b.interfaces[entry].class_ref));
-                let target = self.class_at(store, package, class_ref).ok().flatten();
-                self.classes[cursor.index()].interface_targets[entry] = Some(target);
-                resolved += 1;
-            }
-        }
-        resolved
-    }
-
-    /// How many interface entries on the super chain of `class` are not resolved yet (read only).
-    pub fn unresolved_interfaces(&self, class: ClassKey) -> usize {
-        self.super_chain(class)
-            .map(|c| self.classes[c.index()].interface_targets.iter().filter(|t| t.is_none()).count())
-            .sum()
-    }
-
     /// Whether `class` implements `iface` by its package declarations alone (review r1 and r2 of #455): the interface
     /// tables on the class's super chain, every entry resolved strictly, with no structural fallback.
     ///

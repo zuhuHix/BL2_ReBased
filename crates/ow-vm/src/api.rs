@@ -885,8 +885,8 @@ impl Vm {
     /// [`Vm::implements_checked`] without resolving, loading or caching anything (lane FIX-FLAG-PROVIDER-ORDER): only
     /// interface-table entries already resolved are read (`CodeIndex::implements_resolved`). `Ok(Some(true))` or
     /// `Ok(Some(false))` (a "no" through an engine-native stand-in chain is `NotYet`, as `implements_checked` answers
-    /// it); `Ok(None)` when an entry on the chain is not resolved yet and no resolved one answers yes, so the answer
-    /// would need a load (the caller words that refusal). A class with no package export behind it implements nothing,
+    /// it); `Ok(None)` when `CodeIndex::implements` would resolve an entry first (one not resolved yet, met before
+    /// any match: main's `implements_resolved`, #575), so the answer would need a load (the caller words that refusal). A class with no package export behind it implements nothing,
     /// as [`Vm::implements`] answers it.
     pub fn implements_read_only(&self, class: ClassId, iface: ClassId) -> Result<Option<bool>, VmError> {
         if self.space.classes.is_child_of(class, iface) {
@@ -895,8 +895,12 @@ impl Vm {
         let code = self.defs.code();
         let answer = match (code.key_of(class), code.key_of(iface)) {
             (Some(c), Some(i)) => match code.implements_resolved(c, i) {
-                Ok(yes) => yes,
-                Err(_) => return Ok(None),
+                Some(yes) => yes,
+                // A chain whose bodies did not all decode: `implements`' structural rule, which reads only.
+                None if !(code.class(i).body_decoded() && code.super_chain(c).all(|k| code.class(k).body_decoded())) => {
+                    code.implements_structurally(c, i)
+                }
+                None => return Ok(None),
             },
             _ => false,
         };

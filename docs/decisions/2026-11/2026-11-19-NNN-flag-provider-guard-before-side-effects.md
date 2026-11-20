@@ -22,8 +22,9 @@ decision number is pending from the hub (three digits); NNN is a placeholder.
 2. **A non-loading rule engine search.** The search asked for `IRuleEngineOwner` through `Vm::implements_checked`,
    whose `CodeIndex::implements` resolves a cold interface-table entry, and so loads its target class. It now asks
    through `Vm::implements_read_only` (new in `ow-vm`), which reads only entries already resolved
-   (`CodeIndex::implements_resolved`, added here with #602's text so the two branches meet cleanly). An entry not
-   resolved yet, with no resolved entry answering yes, is `NotYet { NotRead }` ("the interface table of `<class>` has
+   (`CodeIndex::implements_resolved`, main's since #575; a chain whose bodies did not all decode takes the structural
+   rule, which reads only, as `implements` does). An entry not resolved yet, met before any match, is
+   `NotYet { NotRead }` ("the interface table of `<class>` has
    an entry not resolved (resolving it is a load)"), and the entry stays cold. The engine-native stand-in check after
    a "no" is kept.
 **Review r1 of #630 (Sol), the scan's two changes:**
@@ -46,8 +47,10 @@ decision number is pending from the hub (three digits); NNN is a placeholder.
   writes. The set-up alternative (loading the interface class before the run) was not taken, because it is a harness
   input and not the native's rule. The cost: a lone definition with a context resolver and neither field, which
   answered false with `IFlagProvider` missing, is now that `NotRead`.
-- **Item 3:** the ow-object hunk (`CodeIndex::implements_resolved`, its set-up helpers and its test) is now #602's
-  byte for byte (3e7c1294), so the two branches merge cleanly. The test that warms the cache through the ordinary
+- **Item 3:** at r1 the ow-object hunk was made #602's byte for byte (3e7c1294). Batch 7 (main df0970ec) then
+  landed #575's own `CodeIndex::implements_resolved` (`Option<bool>`, no answer at an unresolved entry met before any
+  match), so on the rebase this branch changes nothing in ow-object: `Vm::implements_read_only` uses main's function,
+  and #602 meets main's version on its own rebase. The test that warms the cache through the ordinary
   lookup is `ow-vm`'s `implements_read_only_leaves_a_cold_target_cold` (through `implements_checked`).
 - **Item 4:** that test's snapshot also holds the generator's draws and the name table's size.
 
@@ -71,7 +74,7 @@ decision number is pending from the hub (three digits); NNN is a placeholder.
   counter moves and the answer stays cold;
 - a timed first conditional reports the timed refusal;
 - a loaded computed definition with a known engine reports the store path with `IFlagProvider` missing;
-- `CodeIndex::implements_resolved` and `Vm::implements_read_only` leave a cold entry cold and agree with the caching
+- `Vm::implements_read_only` (over main's `CodeIndex::implements_resolved`) leaves a cold entry cold and agree with the caching
   lookup once it resolved the entry;
 - review r1 of #630: an And whose first conditional is a proven false answers false with nothing run, and the same
   definition as `IsFalse` gives the loop's own refusal (item 1); an Or chain whose first conditional runs a context

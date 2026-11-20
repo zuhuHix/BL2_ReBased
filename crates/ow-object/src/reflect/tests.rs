@@ -220,33 +220,6 @@ fn implements_follows_the_interface_tables() {
     );
 }
 
-/// The read-only lookup (lane IMPL-GEARBOXMIND-QUERYINTERFACE): before set-up an entry is unresolved and named, and
-/// nothing is resolved by asking; after `resolve_interfaces` the answers are `implements`'s.
-#[test]
-fn implements_resolved_reads_only_resolved_entries() {
-    let tree = Tree::new("implements-resolved");
-    tree.write("Core.upk", &interface_fixture().0.build());
-    let mut store = tree.store();
-    let mut index = CodeIndex::new();
-    let mut key = |path: &str| index.find_class(&mut store, path).unwrap();
-    let thing = key("Core.IThing");
-    let child = key("Core.IThingChild");
-    let (implementer, derived, plain) = (key("Core.Impl"), key("Core.Derived"), key("Core.Plain"));
-    let cold = index.unresolved_interfaces(derived);
-    assert!(cold > 0, "the fixture's entries start unresolved");
-    assert!(index.implements_resolved(derived, thing).is_err(), "an unresolved entry is not an answer");
-    assert_eq!(index.unresolved_interfaces(derived), cold, "asking resolves nothing");
-    assert_eq!(index.resolve_interfaces(&mut store, derived), cold);
-    assert_eq!(index.unresolved_interfaces(derived), 0);
-    assert_eq!(index.resolve_interfaces(&mut store, derived), 0, "nothing left to resolve");
-    for (class, iface) in [(implementer, thing), (derived, thing), (plain, thing), (implementer, child), (derived, child)] {
-        index.resolve_interfaces(&mut store, class);
-        let want = index.implements(&mut store, class, iface);
-        assert_eq!(index.implements_resolved(class, iface), Ok(want));
-    }
-    assert_eq!(index.implements_resolved(implementer, plain), Ok(false), "not an interface class");
-}
-
 /// `--interface-compare` over a store whose eight other code packages are empty; a missing one fails the command.
 #[test]
 fn compare_interfaces_counts_every_pair() {
