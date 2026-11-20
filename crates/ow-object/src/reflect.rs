@@ -961,6 +961,36 @@ impl CodeIndex {
         false
     }
 
+    /// [`CodeIndex::implements`]'s answer read only, for a caller that must not resolve or load (lane
+    /// IMPL-ANIM-NODE-INIT, NATIVE_ANIM_NODE_INIT.md rule 7): `Some(true)` when an interface entry on the class's
+    /// chain already resolved to `iface` or a class derived from it; `Some(false)` when every entry on the chain is
+    /// resolved and none is; `None` when that method would resolve an entry first (an unresolved entry met before any
+    /// match), or would fall back to the
+    /// structural rule (a chain whose bodies did not all decode). `iface` decoded but not an interface: `Some(false)`.
+    pub fn implements_resolved(&self, class: ClassKey, iface: ClassKey) -> Option<bool> {
+        let decoded = self.classes[iface.index()].body_decoded()
+            && self.super_chain(class).all(|c| self.classes[c.index()].body_decoded());
+        if !decoded {
+            return None;
+        }
+        if !self.classes[iface.index()].is_interface() {
+            return Some(false);
+        }
+        // In `implements`' own order (the class first, then its parents; each table in order): an entry not resolved
+        // yet, met before any match, is where that method would resolve first, so there is no answer (review r1 of
+        // #575, item 2: a cached hit further up must not answer over it).
+        for cursor in self.super_chain(class) {
+            for target in &self.classes[cursor.index()].interface_targets {
+                match target {
+                    Some(Some(t)) if self.is_child_of(*t, iface) => return Some(true),
+                    Some(_) => {}
+                    None => return None,
+                }
+            }
+        }
+        Some(false)
+    }
+
     /// Whether `class` implements `iface` by its package declarations alone (review r1 and r2 of #455): the interface
     /// tables on the class's super chain, every entry resolved strictly, with no structural fallback.
     ///

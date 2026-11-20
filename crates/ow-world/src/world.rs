@@ -627,6 +627,8 @@ pub mod anim_node_lookup;
 pub mod body_composition;
 // Lane IMPL-COPY-ANIM-TREE: the animation tree's copy and initialisation (NATIVE_COPY_ANIM_TREE.md).
 pub mod anim_tree_copy;
+// Lane IMPL-ANIM-NODE-INIT: the per-node initialisation (NATIVE_ANIM_NODE_INIT.md).
+pub mod anim_node_init;
 pub mod pawn_meshes;
 
 /// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).

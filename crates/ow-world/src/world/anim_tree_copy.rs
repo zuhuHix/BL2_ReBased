@@ -96,9 +96,10 @@ pub const CHECKED: [&str; 18] = [
     "WillowGame.WillowAnimNode_ClimbLadder",
     "WillowGame.WillowAnimNode_Condition",
 ];
-/// The aim-offset node, whose fix-up sets the copy's `TemplateNode` and then makes an unread call.
+/// The aim-offset classes, whose fix-up (NATIVE_ANIM_NODE_INIT.md section 1, lane IMPL-ANIM-NODE-INIT) sets the
+/// copy's `TemplateNode` to its source node and empties the copy's own `Profiles`, when the outers differ.
 pub const AIM_OFFSET_CLASS: &str = "WillowGame.WillowAnimNodeAimOffset";
-pub const AIM_OFFSET: &str = "CopyAnimTree: the aim-offset node's refresh after its TemplateNode is set";
+pub const AIM_OFFSET_CLASSES: [&str; 2] = ["Engine.AnimNodeAimOffset", AIM_OFFSET_CLASS];
 /// Rules 2a and 2b (#551 r1), the note's texts.
 pub const ROOT_CHILDREN: &str = "CopyAnimTree: a root with more than one child";
 pub const REBUILD: &str = "the animation tree's rebuild step (the unidentified class whose extra children it drops)";
@@ -107,9 +108,9 @@ pub const PARENTS: &str = "the animation tree's parent node array build";
 pub const TAG_COLLISION: &str =
     "CopyAnimTree: a template node whose NodeTickTag equals the component's next tick tag (how the game keeps the \
      copies' tags apart was not read)";
-/// The initialisation's unread steps (the note's section 5, rules 3 and 4), raised in this order; while
-/// [`PER_NODE_INIT`] refuses every tree, the other three are reached only under the test switch.
-pub const PER_NODE_INIT: &str = "the animation tree's per-node initialisation";
+/// The initialisation's unread steps after the per-node initialisation (the note's section 5, rules 3 and 4), raised in
+/// this order. The per-node initialisation itself is planned by `crate::world::anim_node_init` (lane
+/// IMPL-ANIM-NODE-INIT); these three still refuse every tree, so a test-only switch answers them to cover the writes.
 pub const COMPONENT_PASS: &str = "the animation tree initialisation's pass over the component";
 pub const BONE_ARRAYS: &str = "CopyAnimTree: the component's per-bone control arrays";
 pub const OWNER_EVENT: &str = "the owner's event after the tree initialisation";
@@ -125,7 +126,7 @@ thread_local! {
 
 /// The initialisation's four unread steps.
 #[cfg(test)]
-const INIT_STEPS: u8 = 4;
+const INIT_STEPS: u8 = 3;
 
 /// For the tests only: answer the initialisation's unread steps with nothing on this thread, to keep the write path
 /// covered while production refuses it.
@@ -134,7 +135,7 @@ pub(crate) fn answer_init_steps_for_tests(on: bool) {
     INIT_STEPS_ANSWERED.with(|c| c.set(if on { INIT_STEPS } else { 0 }));
 }
 
-/// For the tests only: answer the first `n` of the four unread steps, so the next one's refusal shows.
+/// For the tests only: answer the first `n` of the three unread steps, so the next one's refusal shows.
 #[cfg(test)]
 pub(crate) fn answer_init_steps_up_to_for_tests(n: u8) {
     INIT_STEPS_ANSWERED.with(|c| c.set(n.min(INIT_STEPS)));
@@ -163,18 +164,18 @@ fn not_read(what: impl Into<String>) -> VmError {
     NotYet::not_read(what.into(), RECORD).into()
 }
 
-fn object_of(v: &Value) -> Option<ObjRef> {
+pub(crate) fn object_of(v: &Value) -> Option<ObjRef> {
     match v {
         Value::Object(o) | Value::Interface(o) => *o,
         _ => None,
     }
 }
 
-fn class_of(vm: &Vm, o: ObjRef) -> Result<ClassId, VmError> {
+pub(crate) fn class_of(vm: &Vm, o: ObjRef) -> Result<ClassId, VmError> {
     Ok(vm.space.heap.get(o)?.class)
 }
 
-fn class_path(vm: &Vm, class: ClassId) -> String {
+pub(crate) fn class_path(vm: &Vm, class: ClassId) -> String {
     vm.space.classes.get_layout(class).map_or_else(|| format!("{class:?}"), |l| l.path().as_str().to_string())
 }
 
@@ -182,24 +183,24 @@ fn is_a(vm: &Vm, class: ClassId, path: &str) -> bool {
     vm.space.classes.by_path(path).is_some_and(|p| vm.space.classes.is_child_of(class, p))
 }
 
-fn read(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
+pub(crate) fn read(vm: &Vm, o: ObjRef, name: &str) -> Result<Value, VmError> {
     let class = class_of(vm, o)?;
     let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} has no {name}", class_path(vm, class))))?;
     Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
 }
 
-fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
+pub(crate) fn write(vm: &mut Vm, o: ObjRef, name: &str, v: Value) -> Result<(), VmError> {
     let class = class_of(vm, o)?;
     let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} has no {name}", class_path(vm, class))))?;
     vm.space.write(o, PropAddr::scalar(p), v)?;
     Ok(())
 }
 
-fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
+pub(crate) fn elements(v: &Value, what: &str) -> Result<Vec<Value>, VmError> {
     Ok(v.elements().ok_or_else(|| script(format!("{what} is not an array")))?.to_vec())
 }
 
-fn truth(v: &Value) -> bool {
+pub(crate) fn truth(v: &Value) -> bool {
     matches!(v, Value::Bool(true)) || matches!(v, Value::Int(i) if *i != 0) || matches!(v, Value::Byte(b) if *b != 0)
 }
 
@@ -243,8 +244,18 @@ fn children(vm: &Vm, o: ObjRef) -> Result<Vec<ObjRef>, VmError> {
     }
     let mut out = Vec::new();
     for slot in elements(&read(vm, o, "Children")?, "Children")? {
-        if let Some(a) = object_of(&field(vm, &slot, "Anim", "AnimBlendChild")?) {
-            out.push(a);
+        // Only an object-typed link: the copy remaps object links, so an interface-typed one would be planned as a
+        // copied node and walked as its source (review r2 of #575, item 2). The preflight's gather meets it first.
+        match field(vm, &slot, "Anim", "AnimBlendChild")? {
+            Value::Object(Some(a)) => out.push(a),
+            Value::Object(None) => {}
+            other => {
+                return Err(script(format!(
+                    "{}: a child link holds {}, not an object reference",
+                    class_path(vm, class_of(vm, o)?),
+                    other.kind_name()
+                )));
+            }
         }
     }
     Ok(out)
@@ -260,6 +271,10 @@ pub struct Plan {
     pub controls: Vec<ObjRef>,
     /// The initialisation runs (the component's `bAnimTreeInitialised` was clear).
     pub initialise: bool,
+    /// The initialisation's planned steps, on template nodes (lane IMPL-ANIM-NODE-INIT, review r1 of #575).
+    pub steps: Vec<crate::world::anim_node_init::Step>,
+    /// The planned tick list, on template nodes.
+    pub order: Vec<ObjRef>,
 }
 
 /// The gather order (section 1.3): depth first from the root, a node taken the first time it is reached, then its
@@ -365,8 +380,16 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
     for &n in &nodes {
         node_fields(vm, n)?;
         let path = class_path(vm, class_of(vm, n)?);
-        if path == AIM_OFFSET_CLASS {
-            return Err(not_read(AIM_OFFSET));
+        if AIM_OFFSET_CLASSES.contains(&path.as_str()) {
+            // The aim-offset fix-up's fields (lane IMPL-ANIM-NODE-INIT), and, when it will run (the copy's outer, the
+            // component, differs from the source's), the note's checked cast of the source to AnimNodeAimOffset
+            // (review r1 of #575, item 5).
+            read(vm, n, "TemplateNode")?;
+            elements(&read(vm, n, "Profiles")?, "Profiles")?;
+            if vm.space.heap.get(n)?.outer != Some(component) && !is_a(vm, class_of(vm, n)?, "Engine.AnimNodeAimOffset") {
+                return Err(script(format!("{path} is not an Engine.AnimNodeAimOffset (the fix-up's checked cast)")));
+            }
+            continue;
         }
         if !CHECKED.contains(&path.as_str()) {
             return Err(not_read(fix_up(&path)));
@@ -394,6 +417,8 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
     }
     // The initialisation (when the flag is clear): the tag collision, then its unread steps in order.
     let initialise = !truth(&read(vm, component, "bAnimTreeInitialised")?);
+    let mut order = Vec::new();
+    let mut steps = Vec::new();
     if initialise {
         let next = int(&read(vm, component, "TickTag")?).wrapping_add(1);
         for &n in &nodes {
@@ -401,9 +426,15 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
                 return Err(not_read(TAG_COLLISION));
             }
         }
+        // The per-node initialisation (lane IMPL-ANIM-NODE-INIT): the tick list by the writes' own parent rule, then the
+        // planned steps and their checks (review r1 of #575, item 1).
+        let tree: DetSet<ObjRef> = std::iter::once(template).chain(nodes.iter().copied()).collect();
+        let planned_order = tick_order(vm, template, &tree, next)?;
+        let planned_steps = crate::world::anim_node_init::plan(vm, component, &planned_order)?;
+        order = planned_order;
+        steps = planned_steps;
         let answered = init_steps_answered();
-        let steps: [VmError; 4] = [
-            not_read(PER_NODE_INIT),
+        let steps: [VmError; 3] = [
             not_read(COMPONENT_PASS),
             NotYet::layer_absent(BONE_ARRAYS, crate::world::body_composition::MESH_LAYER, RECORD).into(),
             not_read(OWNER_EVENT),
@@ -412,7 +443,7 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
             return Err(e);
         }
     }
-    Ok(Plan { template, nodes, controls, initialise })
+    Ok(Plan { template, nodes, controls, initialise, steps, order })
 }
 
 /// A copy of `t` with outer `outer`: its class and name, and its values (the port's archetype, module documentation).
@@ -466,7 +497,7 @@ fn map_children(vm: &mut Vm, o: ObjRef, map: &DetMap<ObjRef, ObjRef>, first_only
 }
 
 /// The copy (module documentation, write step 1): the new tree.
-fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<ObjRef, VmError> {
+fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<(ObjRef, DetMap<ObjRef, ObjRef>), VmError> {
     let t = plan.template;
     // 1. The root, and the original it names.
     let root = duplicate(vm, t, component)?;
@@ -492,6 +523,13 @@ fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<ObjRef, VmError> 
     for &(n, c) in &made {
         let parents = read(vm, n, "ParentNodes")?;
         map_array(vm, c, "ParentNodes", &map, parents)?;
+        // The aim-offset fix-up (NATIVE_ANIM_NODE_INIT.md section 1): when the outers differ, the copy's
+        // TemplateNode is its source node and its own Profiles are emptied.
+        let path = class_path(vm, class_of(vm, c)?);
+        if AIM_OFFSET_CLASSES.contains(&path.as_str()) && vm.space.heap.get(c)?.outer != vm.space.heap.get(n)?.outer {
+            write(vm, c, "TemplateNode", Value::Object(Some(n)))?;
+            write(vm, c, "Profiles", Value::array(Vec::new()))?;
+        }
     }
     // 5. The tree's fix-up: the groups' run-time state, and the cached tick list unless a rebuild is asked for.
     let mut groups = read(vm, root, "AnimGroups")?;
@@ -535,7 +573,42 @@ fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<ObjRef, VmError> 
         *lists.array_mut().expect("checked") = list;
     }
     write(vm, root, "SkelControlLists", lists)?;
-    Ok(root)
+    Ok((root, map))
+}
+
+/// The tick order of tree `root` by the same rule as [`build_tick_list`], read only (the preflight's order). A node of
+/// `tree` counts as listed once this walk lists it (its copy's tag is `next_tag` only then: the tag collision check
+/// rules out an earlier match); a parent outside `tree` is not copied, so the writes read its own tag, and it counts as
+/// listed exactly when that tag is `next_tag` (review r1 of #575, item 1).
+pub(crate) fn tick_order(vm: &Vm, root: ObjRef, tree: &DetSet<ObjRef>, next_tag: i32) -> Result<Vec<ObjRef>, VmError> {
+    let mut list = vec![root];
+    let mut listed = DetSet::new();
+    listed.insert(root);
+    let mut stack: Vec<std::vec::IntoIter<ObjRef>> = vec![children(vm, root)?.into_iter()];
+    while let Some(top) = stack.last_mut() {
+        let Some(c) = top.next() else {
+            stack.pop();
+            continue;
+        };
+        if listed.contains(&c) {
+            continue;
+        }
+        let mut ready = true;
+        for p in elements(&read(vm, c, "ParentNodes")?, "ParentNodes")? {
+            let Some(p) = object_of(&p) else { continue };
+            let in_list = if tree.contains(&p) { listed.contains(&p) } else { int(&read(vm, p, "NodeTickTag")?) == next_tag };
+            if !in_list {
+                ready = false;
+            }
+        }
+        if !ready {
+            continue;
+        }
+        listed.insert(c);
+        list.push(c);
+        stack.push(children(vm, c)?.into_iter());
+    }
+    Ok(list)
 }
 
 /// The tick list of the tree `root` (section 2, step 3), with `tag` the component's new counter: the root first, then
@@ -578,7 +651,13 @@ pub fn build_tick_list(vm: &mut Vm, component: ObjRef, root: ObjRef, tag: i32) -
 }
 
 /// The initialisation (module documentation, write step 3) of `component`'s tree `root`.
-fn initialise(vm: &mut Vm, component: ObjRef, root: ObjRef) -> Result<(), VmError> {
+fn initialise(
+    vm: &mut Vm,
+    component: ObjRef,
+    root: ObjRef,
+    plan: &Plan,
+    map: &DetMap<ObjRef, ObjRef>,
+) -> Result<(), VmError> {
     let tag = int(&read(vm, component, "TickTag")?).wrapping_add(1);
     write(vm, component, "TickTag", Value::Int(tag))?;
     write(vm, component, "AnimTickArray", Value::array(Vec::new()))?;
@@ -586,10 +665,25 @@ fn initialise(vm: &mut Vm, component: ObjRef, root: ObjRef) -> Result<(), VmErro
     let values: Vec<Value> = list.iter().map(|o| Value::Object(Some(*o))).collect();
     write(vm, root, "AnimTickArray", Value::array(values.clone()))?;
     write(vm, component, "AnimTickArray", Value::array(values))?;
-    // Step 4: each node in tick order (its class's initialisation is answered with nothing only under the test switch).
-    for &n in &list {
-        write(vm, n, "SkelComponent", Value::Object(Some(component)))?;
-        write(vm, n, "NodeTickTag", Value::Int(tag))?;
+    // The built list is the planned one (the same rule; review r1 of #575, item 1).
+    let copy_of = |t: &ObjRef| map.get(t).copied().unwrap_or(*t);
+    let planned: Vec<ObjRef> = plan.order.iter().map(copy_of).collect();
+    if planned != list {
+        return Err(script("the built tick list differs from the planned one".into()));
+    }
+    // Step 4, the planned steps replayed in order, iteratively (lane IMPL-ANIM-NODE-INIT).
+    use crate::world::anim_node_init::{Step, write_head, write_tail};
+    for step in &plan.steps {
+        match *step {
+            Step::Tick(t) => {
+                let n = copy_of(&t);
+                write(vm, n, "SkelComponent", Value::Object(Some(component)))?;
+                write(vm, n, "NodeTickTag", Value::Int(tag))?;
+            }
+            Step::Child(t) => write(vm, copy_of(&t), "SkelComponent", Value::Object(Some(component)))?,
+            Step::Head(t) => write_head(vm, component, copy_of(&t))?,
+            Step::Tail(t) => write_tail(vm, component, copy_of(&t))?,
+        }
     }
     // Steps 5 and 6 are unread: refused in the preflight unless the test switch answers them.
     write(vm, component, "bAnimTreeInitialised", Value::Bool(true))
@@ -601,10 +695,10 @@ pub fn instance(vm: &mut Vm, component: ObjRef, template: ObjRef) -> Result<ObjR
     let before = Counters::read(vm);
     let plan = plan(vm, component, template)?;
     let run = |vm: &mut Vm| -> Result<ObjRef, VmError> {
-        let root = copy(vm, component, &plan)?;
+        let (root, map) = copy(vm, component, &plan)?;
         write(vm, component, "Animations", Value::Object(Some(root)))?;
         if plan.initialise {
-            initialise(vm, component, root)?;
+            initialise(vm, component, root, &plan, &map)?;
         }
         Ok(root)
     };

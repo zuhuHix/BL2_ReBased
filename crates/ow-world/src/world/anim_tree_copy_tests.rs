@@ -28,6 +28,7 @@ struct Fx {
     group: StructId,
     list_head: StructId,
     n: u32,
+    object: ClassId,
 }
 
 fn decl(vm: &mut Vm, name: &str, kind: PropKind) -> PropertyDecl {
@@ -54,6 +55,14 @@ enum Shape {
     Good,
     /// The node class declares no `TickArrayIndex`.
     NoTickIndex,
+    /// The component class declares no `bUpdateComposeSkeletonPasses` (lane IMPL-ANIM-NODE-INIT).
+    NoComposeFlag,
+    /// H's `AnimParameters` declared an array of ints (review r1 of #575, item 4).
+    IntParameters,
+    /// The Willow aim-offset class not derived from `Engine.AnimNodeAimOffset` (review r1 of #575, item 5).
+    AimNoBase,
+    /// `AnimBlendChild.Anim` declared interface-typed (review r2 of #575, item 2).
+    InterfaceAnim,
 }
 
 impl Fx {
@@ -68,7 +77,8 @@ impl Fx {
 
     /// The fixture's classes on `vm` (its `Core.Object` taken when a store already has it).
     fn on(mut vm: Vm, shape: Shape) -> Fx {
-        let object = match vm.find_class("Core.Object") {
+        // The store's root class when it has one (the package-backed owner test's is GearboxFramework's).
+        let object = match vm.find_class("Core.Object").or_else(|_| vm.find_class("GearboxFramework.Object")) {
             Ok(c) => c,
             Err(_) => vm.space.classes.define("Core.Object", None, vec![]).unwrap(),
         };
@@ -78,17 +88,59 @@ impl Fx {
             ("NodeTickTag", PropKind::Int),
             ("ParentNodes", arr(o.clone())),
             ("NodeName", PropKind::Name),
+            // The per-node initialisation's fields (lane IMPL-ANIM-NODE-INIT).
+            ("bRelevant", PropKind::Bool),
+            ("bJustBecameRelevant", PropKind::Bool),
+            ("NodeTotalWeight", PropKind::Float),
+            ("bCallScriptEventOnInit", PropKind::Bool),
         ];
         if shape != Shape::NoTickIndex {
             node_props.push(("TickArrayIndex", PropKind::Int));
         }
         let node = class(&mut vm, NODE, anim_object, &node_props);
-        let child = strukt(&mut vm, "Engine.AnimNodeBlendBase.AnimBlendChild", &[("Name", PropKind::Name), ("Anim", o.clone())]);
+        let anim = if shape == Shape::InterfaceAnim { PropKind::Interface { class: node } } else { o.clone() };
+        let child = strukt(&mut vm, "Engine.AnimNodeBlendBase.AnimBlendChild", &[
+            ("Name", PropKind::Name),
+            ("Anim", anim),
+            ("Weight", PropKind::Float),
+            ("bIsAdditive", PropKind::Bool),
+            ("AdditiveWeightScale", PropKind::Float),
+        ]);
         let blend = class(&mut vm, BLEND, node, &[("Children", arr(PropKind::Struct(child)))]);
-        class(&mut vm, SEQUENCE, node, &[]);
+        class(&mut vm, SEQUENCE, node, &[
+            ("AnimSeqName", PropKind::Name),
+            ("AnimSeq", o.clone()),
+            ("AnimLinkupIndex", PropKind::Int),
+            ("CachedNumDesiredBones", PropKind::Int),
+            ("bIsIssuingNotifies", PropKind::Bool),
+            ("ActiveCameraAnimInstance", o.clone()),
+        ]);
         class(&mut vm, "Test.OtherBlend", blend, &[]);
-        class(&mut vm, "GearboxFramework.AnimNodeSpecialMoveBlend", blend, &[]);
-        class(&mut vm, AIM_OFFSET_CLASS, blend, &[]);
+        class(&mut vm, "Engine.AnimNodeScaleRateBySpeed", blend, &[]);
+        let weights = [("TargetWeight", arr(PropKind::Float)), ("ActiveChildIndex", PropKind::Int)];
+        class(&mut vm, "Engine.AnimNodeBlendBySpeed", blend, &weights);
+        class(&mut vm, "Engine.AnimNodeBlendPerBone", blend, &[]);
+        class(&mut vm, "Engine.AnimNodeAdditiveBlending", blend, &[]);
+        let slot = class(&mut vm, "Engine.AnimNodeSlot", blend, &[("TargetWeight", arr(PropKind::Float)), ("SynchNode", o.clone())]);
+        let params = strukt(&mut vm, "GearboxFramework.AnimNodeSpecialMoveBlend.SlotAnimParameters", &[("CustomAnimDef", o.clone())]);
+        let smi = match vm.space.classes.by_path(crate::world::anim_node_init::SPECIAL_MOVE_INTERFACE) {
+            Some(class) => PropKind::Interface { class },
+            None => o.clone(),
+        };
+        class(&mut vm, "GearboxFramework.AnimNodeSpecialMoveBlend", slot, &[
+            (
+                "AnimParameters",
+                if shape == Shape::IntParameters { arr(PropKind::Int) } else { arr(PropKind::Struct(params)) },
+            ),
+            // Interface-typed when the store holds the interface class (the package-backed owner test).
+            ("SMI", smi),
+        ]);
+        let aim = class(&mut vm, "Engine.AnimNodeAimOffset", blend, &[("TemplateNode", o.clone()), ("Profiles", arr(o.clone()))]);
+        if shape == Shape::AimNoBase {
+            class(&mut vm, AIM_OFFSET_CLASS, blend, &[("TemplateNode", PropKind::Object { class: aim }), ("Profiles", arr(o.clone()))]);
+        } else {
+            class(&mut vm, AIM_OFFSET_CLASS, aim, &[]);
+        }
         let group = strukt(&mut vm, "Engine.AnimTree.AnimGroup", &[
             ("SeqNodes", arr(o.clone())),
             ("SynchMaster", o.clone()),
@@ -107,21 +159,28 @@ impl Fx {
             ("SkelControlLists", arr(PropKind::Struct(list_head))),
             ("AnimTickArray", arr(o.clone())),
         ]);
-        class(&mut vm, "Test.WillowAnimTree", tree, &[]);
-        class(&mut vm, "Engine.SkeletalMeshComponent", object, &[
+        class(&mut vm, "WillowGame.WillowAnimTree", tree, &[]);
+        class(&mut vm, "Test.OtherTree", tree, &[]);
+        let mut component_props = vec![
             ("AnimTreeTemplate", o.clone()),
             ("Animations", o.clone()),
             ("AnimTickArray", arr(o.clone())),
             ("TickTag", PropKind::Int),
             ("bAnimTreeInitialised", PropKind::Bool),
-        ]);
-        Fx { vm, child, group, list_head, n: 0 }
+            ("SkeletalMesh", o.clone()),
+            ("Owner", o.clone()),
+        ];
+        if shape != Shape::NoComposeFlag {
+            component_props.push(("bUpdateComposeSkeletonPasses", PropKind::Bool));
+        }
+        class(&mut vm, "Engine.SkeletalMeshComponent", object, &component_props);
+        Fx { vm, child, group, list_head, n: 0, object }
     }
 
     fn obj(&mut self, class: &str) -> ObjRef {
         self.n += 1;
         let c = self.vm.space.classes.by_path(class).unwrap();
-        let outer = self.vm.space.classes.by_path("Core.Object").unwrap();
+        let outer = self.object;
         let pkg = self.vm.space.alloc(outer, &format!("TestPackage_{}", self.n), None, Origin::Runtime).unwrap();
         self.vm.space.alloc(c, &format!("Test_{}", self.n), Some(pkg), Origin::Runtime).unwrap()
     }
@@ -149,7 +208,10 @@ impl Fx {
             .iter()
             .map(|c| {
                 let mut v = self.vm.space.classes.struct_defaults(ty).unwrap();
-                set_field(&self.vm, &mut v, "Anim", Value::Object(*c), "test").unwrap();
+                // An interface-typed link (the InterfaceAnim shape) holds an interface value.
+                let interface = matches!(field(&self.vm, &v, "Anim", "t").unwrap(), Value::Interface(_));
+                let link = if interface { Value::Interface(*c) } else { Value::Object(*c) };
+                set_field(&self.vm, &mut v, "Anim", link, "test").unwrap();
                 v
             })
             .collect();
@@ -202,7 +264,7 @@ struct Diamond {
 }
 
 fn diamond(x: &mut Fx) -> Diamond {
-    let root = x.obj("Test.WillowAnimTree");
+    let root = x.obj("WillowGame.WillowAnimTree");
     let a = x.obj(BLEND);
     let b = x.obj(BLEND);
     let c = x.obj(BLEND);
@@ -247,9 +309,17 @@ fn refused(e: VmError, what: &str) {
 
 /// A refusal of `instance`, with nothing written and nothing made.
 fn refused_clean(x: &mut Fx, component: ObjRef, template: ObjRef) -> VmError {
-    let (writes, objects) = (x.vm.space.heap.committed_writes(), x.vm.space.heap.handles().len());
+    let counts = |x: &Fx| {
+        (
+            x.vm.space.heap.committed_writes(),
+            x.vm.space.heap.handles().len(),
+            x.vm.rng.draws(),
+            x.vm.defs.load_transitions(),
+        )
+    };
+    let before = counts(x);
     let e = instance(&mut x.vm, component, template).unwrap_err();
-    assert_eq!((x.vm.space.heap.committed_writes(), x.vm.space.heap.handles().len()), (writes, objects), "write-free");
+    assert_eq!(counts(x), before, "write-free: no heap write, no object, no draw, no load");
     e
 }
 
@@ -378,10 +448,11 @@ fn an_initialised_component_gets_the_copy_and_no_initialisation() {
     assert_eq!(x.get(comp, "AnimTickArray"), Value::array(Vec::new()));
 }
 
-/// Review r1 of #561, item 2: the four unread steps are raised in order, the per-bone arrays as `LayerAbsent`.
+/// Review r1 of #561, item 2: the unread steps after the per-node initialisation (now planned, lane
+/// IMPL-ANIM-NODE-INIT) are raised in order, the per-bone arrays as `LayerAbsent`.
 #[test]
 fn the_initialisation_s_unread_steps_refuse_in_order() {
-    for (answered, what) in [(0, PER_NODE_INIT), (1, COMPONENT_PASS), (2, BONE_ARRAYS), (3, OWNER_EVENT)] {
+    for (answered, what) in [(0, COMPONENT_PASS), (1, BONE_ARRAYS), (2, OWNER_EVENT)] {
         let mut x = Fx::new();
         answer_init_steps_up_to_for_tests(answered);
         let t = diamond(&mut x);
@@ -433,13 +504,15 @@ fn a_looping_control_chain_is_a_script_error_and_a_shared_control_keeps_its_plac
     }
 }
 
+/// The per-node initialisation passes on the diamond (lane IMPL-ANIM-NODE-INIT); the component pass after it still
+/// refuses every tree, before any write.
 #[test]
-fn the_per_node_initialisation_refuses_every_tree_before_any_write() {
+fn the_component_pass_refuses_every_tree_before_any_write() {
     let mut x = Fx::new();
     answer_init_steps_for_tests(false);
     let t = diamond(&mut x);
     let comp = x.component();
-    refused(refused_clean(&mut x, comp, t.root), PER_NODE_INIT);
+    refused(refused_clean(&mut x, comp, t.root), COMPONENT_PASS);
 }
 
 #[test]
@@ -454,13 +527,14 @@ fn a_node_class_whose_fix_up_was_not_read_is_refused() {
     refused(refused_clean(&mut x, comp, t.root), &fix_up("Test.OtherBlend"));
 }
 
-/// A class of Maya's tree with a checked, empty fix-up passes; the aim-offset node is its own refusal (her next stop).
+/// A class of Maya's tree with a checked, empty fix-up passes; the aim-offset node gets its fix-up (lane
+/// IMPL-ANIM-NODE-INIT: `TemplateNode` its source, its own `Profiles` emptied).
 #[test]
-fn a_checked_class_passes_and_the_aim_offset_node_is_refused() {
+fn a_checked_class_passes_and_the_aim_offset_node_gets_its_fix_up() {
     let mut x = Fx::new();
     answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
-    let slot = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let slot = x.obj("Engine.AnimNodeScaleRateBySpeed");
     x.children(t.c, &[Some(t.d), Some(slot)]);
     x.parents(slot, &[t.c]);
     let comp = x.component();
@@ -471,14 +545,40 @@ fn a_checked_class_passes_and_the_aim_offset_node_is_refused() {
     answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let aim = x.obj(AIM_OFFSET_CLASS);
+    let profile = x.obj("Engine.SkelControlBase");
+    x.set(aim, "Profiles", Fx::objects(&[profile]));
     x.children(t.c, &[Some(t.d), Some(aim)]);
     x.parents(aim, &[t.c]);
     let comp = x.component();
-    refused(refused_clean(&mut x, comp, t.root), AIM_OFFSET);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let copy = copy_of(&x, comp, aim);
+    assert_eq!(x.get(copy, "TemplateNode"), Value::Object(Some(aim)), "the source node");
+    assert_eq!(x.get(copy, "Profiles"), Value::array(Vec::new()), "the copy's own profiles emptied");
+    assert_eq!(x.get(aim, "Profiles"), Fx::objects(&[profile]), "the template keeps its own");
+}
+
+/// The aim-offset fix-up does nothing when the copy's outer is its source's (the gate of NATIVE_ANIM_NODE_INIT.md
+/// section 1): a source node outered to the component itself.
+#[test]
+fn the_aim_offset_fix_up_does_nothing_when_the_outers_match() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    let class = x.vm.space.classes.by_path(AIM_OFFSET_CLASS).unwrap();
+    let aim = x.vm.space.alloc(class, "SameOuterAim", Some(comp), Origin::Runtime).unwrap();
+    let profile = x.obj("Engine.SkelControlBase");
+    x.set(aim, "Profiles", Fx::objects(&[profile]));
+    x.children(t.c, &[Some(t.d), Some(aim)]);
+    x.parents(aim, &[t.c]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let copy = copy_of(&x, comp, aim);
+    assert_eq!(x.get(copy, "TemplateNode"), Value::Object(None));
+    assert_eq!(x.get(copy, "Profiles"), Fx::objects(&[profile]));
 }
 
 /// The body composition's attach check: no tree has nothing to copy; a tree runs the copy's preflight, write-free
-/// (here the aim-offset refusal, Maya's expected stop), with the component template standing for the component.
+/// (here a fix-up refusal), with the component template standing for the component.
 #[test]
 fn the_attach_check_runs_the_copy_preflight_on_the_template_s_tree() {
     let mut x = Fx::new();
@@ -488,11 +588,11 @@ fn the_attach_check_runs_the_copy_preflight_on_the_template_s_tree() {
     attach_check(&x.vm, template).unwrap();
     x.set(template, "AnimTreeTemplate", Value::Object(Some(t.root)));
     attach_check(&x.vm, template).unwrap();
-    let aim = x.obj(AIM_OFFSET_CLASS);
-    x.children(t.c, &[Some(t.d), Some(aim)]);
-    x.parents(aim, &[t.c]);
+    let other = x.obj("Test.OtherBlend");
+    x.children(t.c, &[Some(t.d), Some(other)]);
+    x.parents(other, &[t.c]);
     let writes = x.vm.space.heap.committed_writes();
-    refused(attach_check(&x.vm, template).unwrap_err(), AIM_OFFSET);
+    refused(attach_check(&x.vm, template).unwrap_err(), &fix_up("Test.OtherBlend"));
     assert_eq!(x.vm.space.heap.committed_writes(), writes);
 }
 
@@ -702,5 +802,470 @@ struct DirGuard(PathBuf);
 impl Drop for DirGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// ---- The per-node initialisation (NATIVE_ANIM_NODE_INIT.md section 2; lane IMPL-ANIM-NODE-INIT) -------------------
+
+use crate::world::anim_node_init::{
+    CAMERA, ENTRY_WEIGHTS, ON_INIT, OWNER_NOT_SMI, RECORD as INIT_RECORD, SEQUENCE_CHANGE, answer_owner_for_tests,
+    per_bone_weights, set_active_child, unknown_class,
+};
+
+/// The copy of template node `n` on `comp`'s instance (by name, in the component's tick list).
+fn copy_of(x: &Fx, comp: ObjRef, n: ObjRef) -> ObjRef {
+    let name = x.name_of(n);
+    Fx::list(&x.get(comp, "AnimTickArray"))
+        .into_iter()
+        .flatten()
+        .find(|&o| x.name_of(o) == name && o != n)
+        .unwrap_or_else(|| panic!("no copy of {name}"))
+}
+
+/// The diamond with `n` as C's second child (its one parent C), and a component.
+fn with_node(x: &mut Fx, n: ObjRef) -> (Diamond, ObjRef) {
+    let t = diamond(x);
+    x.children(t.c, &[Some(t.d), Some(n)]);
+    x.parents(n, &[t.c]);
+    let comp = x.component();
+    (t, comp)
+}
+
+/// Child slots of `o` with these `(anim, weight, additive, additive weight scale)`.
+fn slots_of(x: &mut Fx, o: ObjRef, slots: &[(Option<ObjRef>, f32, bool, f32)]) {
+    let ty = x.child;
+    let list = slots
+        .iter()
+        .map(|&(a, w, additive, scale)| {
+            let mut v = x.vm.space.classes.struct_defaults(ty).unwrap();
+            for (f, val) in [
+                ("Anim", Value::Object(a)),
+                ("Weight", Value::Float(w)),
+                ("bIsAdditive", Value::Bool(additive)),
+                ("AdditiveWeightScale", Value::Float(scale)),
+            ] {
+                set_field(&x.vm, &mut v, f, val, "test").unwrap();
+            }
+            v
+        })
+        .collect();
+    x.set(o, "Children", Value::array(list));
+}
+
+fn slot_field(x: &Fx, o: ObjRef, i: usize, f: &str) -> Value {
+    field(&x.vm, &x.get(o, "Children").elements().unwrap()[i], f, "t").unwrap()
+}
+
+fn init_refused(e: VmError, what: &str) {
+    let n = not_yet(e);
+    assert_eq!((&*n.what, n.missing, n.record), (what, Missing::NotRead, INIT_RECORD));
+}
+
+/// A and B: the relevance flags and the total weight cleared, the tick tag the component's; a child slot's additive
+/// weight scale of exactly 0 becomes 1, another stays.
+#[test]
+fn a_and_b_write_their_fields() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj(BLEND);
+    let leaf = x.obj(NODE);
+    x.parents(leaf, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(leaf), 1.0, false, 0.0), (None, 0.0, false, 0.5)]);
+    for o in [n, leaf] {
+        x.set(o, "bRelevant", Value::Bool(true));
+        x.set(o, "NodeTotalWeight", Value::Float(5.0));
+    }
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let (c, l) = (copy_of(&x, comp, n), copy_of(&x, comp, leaf));
+    for o in [c, l] {
+        assert_eq!((x.get(o, "bRelevant"), x.get(o, "NodeTotalWeight")), (Value::Bool(false), Value::Float(0.0)));
+        assert_eq!(x.get(o, "NodeTickTag"), x.get(comp, "TickTag"));
+    }
+    assert_eq!(slot_field(&x, c, 0, "AdditiveWeightScale"), Value::Float(1.0));
+    assert_eq!(slot_field(&x, c, 1, "AdditiveWeightScale"), Value::Float(0.5));
+}
+
+/// Refusal 1: a node with `bCallScriptEventOnInit` set.
+#[test]
+fn a_node_with_the_on_init_event_is_refused() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj(NODE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bCallScriptEventOnInit", Value::Bool(true));
+    init_refused(refused_clean(&mut x, comp, t.root), ON_INIT);
+}
+
+/// C: `TargetWeight` rebuilt to one entry per child, the first 1.0; refusal 3 when the non-additive weights sum to
+/// at most 1e-5 (an additive slot does not count).
+#[test]
+fn c_rebuilds_its_target_weights_and_refuses_a_zero_sum() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendBySpeed");
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(None, 1.0, false, 1.0), (None, 0.0, false, 1.0)]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!(x.get(c, "TargetWeight"), Value::array(vec![Value::Float(1.0), Value::Float(0.0)]));
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendBySpeed");
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(None, 1.0, true, 1.0), (None, 0.0, false, 1.0)]);
+    init_refused(refused_clean(&mut x, comp, t.root), &set_active_child("Engine.AnimNodeBlendBySpeed"));
+}
+
+/// D: the name kept, the sequence unset, the linkup index -1, the bone count 0; with notifies issuing, the set-anim
+/// does nothing. Refusal 2 for a set sequence (notifies clear) and for a camera animation.
+#[test]
+fn d_keeps_its_name_and_unbinds_its_sequence() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let walk = Value::Name(x.vm.space.names.intern("Walk"));
+    let n = x.obj(SEQUENCE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "AnimSeqName", walk.clone());
+    x.set(n, "AnimLinkupIndex", Value::Int(4));
+    x.set(n, "CachedNumDesiredBones", Value::Int(9));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!(x.get(c, "AnimSeqName"), walk);
+    assert_eq!((x.get(c, "AnimLinkupIndex"), x.get(c, "CachedNumDesiredBones")), (Value::Int(-1), Value::Int(0)));
+    // Issuing notifies: the set-anim does nothing (a set sequence is kept, the linkup index too).
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj(SEQUENCE);
+    let seq = x.obj(NODE);
+    let (t, comp) = with_node(&mut x, n);
+    x.set(n, "bIsIssuingNotifies", Value::Bool(true));
+    x.set(n, "AnimSeq", Value::Object(Some(seq)));
+    x.set(n, "AnimLinkupIndex", Value::Int(4));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let c = copy_of(&x, comp, n);
+    assert_eq!((x.get(c, "AnimSeq"), x.get(c, "AnimLinkupIndex")), (Value::Object(Some(seq)), Value::Int(4)));
+    for (what, f) in [(SEQUENCE_CHANGE, "AnimSeq"), (CAMERA, "ActiveCameraAnimInstance")] {
+        let mut x = Fx::new();
+        answer_init_steps_for_tests(true);
+        let n = x.obj(SEQUENCE);
+        let other = x.obj(NODE);
+        let (t, comp) = with_node(&mut x, n);
+        x.set(n, f, Value::Object(Some(other)));
+        init_refused(refused_clean(&mut x, comp, t.root), what);
+    }
+}
+
+/// E: the component's fitted flag set (UNVERIFIED); a component class that does not declare it is a script error.
+#[test]
+fn e_sets_the_component_flag_and_needs_it_declared() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(comp, "bUpdateComposeSkeletonPasses"), Value::Bool(true));
+    let mut x = Fx::with(Shape::NoComposeFlag);
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("bUpdateComposeSkeletonPasses"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// F and G: with no mesh, F builds nothing and both set the first child's weight to 1; with a mesh, F is #529's
+/// `MESH_LAYER` refusal.
+#[test]
+fn f_and_g_set_the_first_weight_and_f_needs_the_mesh_layer() {
+    for class in ["Engine.AnimNodeBlendPerBone", "Engine.AnimNodeAdditiveBlending"] {
+        let mut x = Fx::new();
+        answer_init_steps_for_tests(true);
+        let n = x.obj(class);
+        let (t, comp) = with_node(&mut x, n);
+        slots_of(&mut x, n, &[(None, 0.25, false, 1.0)]);
+        instance(&mut x.vm, comp, t.root).unwrap();
+        assert_eq!(slot_field(&x, copy_of(&x, comp, n), 0, "Weight"), Value::Float(1.0), "{class}");
+    }
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("Engine.AnimNodeBlendPerBone");
+    let (t, comp) = with_node(&mut x, n);
+    let mesh = x.obj(NODE);
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    let e = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!(&*e.what, per_bone_weights("Engine.AnimNodeBlendPerBone"));
+    assert_eq!(e.missing, Missing::LayerAbsent(crate::world::body_composition::MESH_LAYER));
+}
+
+/// H: the slot part (the children past the first initialised again, `TargetWeight`, the first weight, `SynchNode`)
+/// and the special-move part (`AnimParameters`, `SMI` the owner when it implements the interface).
+#[test]
+fn h_writes_its_slot_and_special_move_parts() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+    x.parents(h0, &[n]);
+    x.parents(h1, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(h0), 0.2, false, 1.0), (Some(h1), 0.3, false, 1.0)]);
+    x.set(n, "SynchNode", Value::Object(Some(h0)));
+    let owner = x.obj(NODE);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    answer_owner_for_tests(Some(true));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    answer_owner_for_tests(None);
+    let c = copy_of(&x, comp, n);
+    assert_eq!(slot_field(&x, c, 0, "Weight"), Value::Float(1.0 - 0.3), "1 − the others' non-additive weights");
+    assert_eq!(x.get(c, "TargetWeight"), Value::array(vec![Value::Float(1.0), Value::Float(0.0)]));
+    assert_eq!(x.get(c, "SynchNode"), Value::Object(None));
+    assert_eq!(x.get(c, "AnimParameters").elements().map(<[Value]>::len), Some(2), "one zeroed entry per child");
+    assert_eq!(x.get(c, "SMI"), Value::Object(Some(owner)));
+    let c1 = copy_of(&x, comp, h1);
+    assert_eq!(x.get(c1, "SkelComponent"), Value::Object(Some(comp)), "re-initialised");
+}
+
+/// H's refusals: an entry past the first naming a `CustomAnimDef` (6), and an owner not known to implement the
+/// interface (7: hand-built classes are not in the code index, so the side-effect-free check cannot answer yes).
+#[test]
+fn h_refuses_an_entry_weight_build_and_an_unknown_owner() {
+    let setup = |x: &mut Fx| {
+        let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+        let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+        x.parents(h0, &[n]);
+        x.parents(h1, &[n]);
+        let (t, comp) = with_node(x, n);
+        slots_of(x, n, &[(Some(h0), 1.0, false, 1.0), (Some(h1), 0.0, false, 1.0)]);
+        (t, comp, n)
+    };
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let (t, comp, n) = setup(&mut x);
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "AnimParameters").unwrap();
+    let PropKind::Array(inner) = x.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
+    let PropKind::Struct(ty) = *inner else { panic!() };
+    let def = x.obj(NODE);
+    let mut entry = x.vm.space.classes.struct_defaults(ty).unwrap();
+    set_field(&x.vm, &mut entry, "CustomAnimDef", Value::Object(Some(def)), "t").unwrap();
+    let plain = x.vm.space.classes.struct_defaults(ty).unwrap();
+    x.set(n, "AnimParameters", Value::array(vec![plain, entry]));
+    init_refused(refused_clean(&mut x, comp, t.root), ENTRY_WEIGHTS);
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let (t, comp, _) = setup(&mut x);
+    let owner = x.obj(NODE);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    answer_owner_for_tests(None);
+    init_refused(refused_clean(&mut x, comp, t.root), OWNER_NOT_SMI);
+}
+
+/// A root (never fix-up checked) whose exact class is not in the table refuses by name.
+#[test]
+fn an_unknown_node_class_refuses_by_name() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let class = x.vm.space.classes.by_path("Test.OtherTree").unwrap();
+    let root = x.vm.space.alloc(class, "OtherRoot", None, Origin::Runtime).unwrap();
+    for f in ["Children", "SkelControlLists", "AnimTickArray", "AnimGroups"] {
+        let v = x.get(t.root, f);
+        x.set(root, f, v);
+    }
+    x.set(root, "bParentNodeArrayBuilt", Value::Bool(true));
+    x.parents(t.a, &[root]);
+    let comp = x.component();
+    init_refused(refused_clean(&mut x, comp, root), &unknown_class("Test.OtherTree"));
+}
+
+// ---- Review r1 of #575 ----------------------------------------------------------------------------------------------
+
+/// An H node in C's second slot with `h1` in its own second slot; `h1`'s one parent is `outside`, an object outside the
+/// tree, so `h1` is on the tick list only when `outside`'s tag is the component's next tag.
+fn h_with_outside_parent(x: &mut Fx, outside_tag: i32) -> (Diamond, ObjRef, ObjRef, ObjRef) {
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+    let outside = x.obj(NODE);
+    x.set(outside, "NodeTickTag", Value::Int(outside_tag));
+    x.parents(h0, &[n]);
+    x.parents(h1, &[outside]);
+    let (t, comp) = with_node(x, n);
+    slots_of(x, n, &[(Some(h0), 1.0, false, 1.0), (Some(h1), 0.0, false, 1.0)]);
+    (t, comp, n, h1)
+}
+
+/// Item 1 (and 6): a child H re-initialises that is not on the tick list (its parent outside the tree, untagged) is
+/// still initialised at H's step 2, and the preflight checks it: its `OnInit` refusal fires.
+#[test]
+fn h_initialises_and_the_preflight_checks_a_child_off_the_tick_list() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let (t, comp, _, h1) = h_with_outside_parent(&mut x, 0);
+    x.set(h1, "bRelevant", Value::Bool(true));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let listed = Fx::list(&x.get(comp, "AnimTickArray"));
+    let name = x.name_of(h1);
+    assert!(listed.iter().flatten().all(|&o| x.name_of(o) != name), "h1 is not on the tick list");
+    // Its copy: the one whose outer is the component, named as h1.
+    let copy = x
+        .vm
+        .space
+        .heap
+        .handles()
+        .into_iter()
+        .find(|&o| o != h1 && x.name_of(o) == name && x.outer(o) == Some(comp))
+        .expect("h1's copy");
+    assert_eq!(x.get(copy, "SkelComponent"), Value::Object(Some(comp)), "H's step 2 call");
+    assert_eq!(x.get(copy, "bRelevant"), Value::Bool(false), "initialised by H's step 2 only");
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let (t, comp, _, h1) = h_with_outside_parent(&mut x, 0);
+    x.set(h1, "bCallScriptEventOnInit", Value::Bool(true));
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!(&*n.what, ON_INIT);
+}
+
+/// Item 1: a parent outside the tree whose tag is the component's next tag lists its child in both the preflight's and
+/// the writes' tick list (they agree, or the writes refuse).
+#[test]
+fn an_outside_parent_with_the_next_tag_lists_its_child() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let (t, comp, _, h1) = h_with_outside_parent(&mut x, 1);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let name = x.name_of(h1);
+    assert!(Fx::list(&x.get(comp, "AnimTickArray")).iter().flatten().any(|&o| x.name_of(o) == name));
+}
+
+/// Item 3: an H node whose second slot leads back to itself is a script error in the preflight, write-free.
+#[test]
+fn a_slot_whose_children_lead_back_to_it_is_a_script_error() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let h0 = x.obj(NODE);
+    x.parents(h0, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(h0), 1.0, false, 1.0), (Some(n), 0.0, false, 1.0)]);
+    x.parents(n, &[t.c, t.root]);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("lead back"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// Item 4: an `AnimParameters` that is not an array of a defined struct is a script error in the preflight.
+#[test]
+fn h_parameters_of_another_element_are_a_script_error_before_any_write() {
+    let mut x = Fx::with(Shape::IntParameters);
+    answer_init_steps_for_tests(true);
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+    x.parents(h0, &[n]);
+    x.parents(h1, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(h0), 1.0, false, 1.0), (Some(h1), 0.0, false, 1.0)]);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("AnimParameters"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// Item 5: an aim-offset node not derived from `Engine.AnimNodeAimOffset` fails the fix-up's checked cast in the
+/// preflight, before the copy is made.
+#[test]
+fn an_aim_offset_without_its_engine_base_fails_the_checked_cast_before_any_write() {
+    let mut x = Fx::with(Shape::AimNoBase);
+    answer_init_steps_for_tests(true);
+    let aim = x.obj(AIM_OFFSET_CLASS);
+    let (t, comp) = with_node(&mut x, aim);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("checked cast"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+}
+
+/// Item 6: H's owner test on a package-backed owner whose class implements `SpecialMoveInterface`, its interface
+/// entries resolved: `SMI` (interface-typed) is the owner, with no test switch.
+#[test]
+fn h_takes_a_package_backed_owner_that_implements_the_interface() {
+    use ow_object::class_body::CLASS_INTERFACE;
+    use ow_package::testkit::reflect::{ClassBodySpec, Declarations, class_body};
+    let dir = std::env::temp_dir().join(format!("ow-world-animcopy-smi-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _dir = DirGuard(dir.clone());
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut d = Declarations::with_imports(&["Class", "Function", "StructProperty"]);
+    let object_body = class_body(&mut d.p, &ClassBodySpec::new(0, 1, 2));
+    let obj = d.p.add_export(0, "Object", object_body);
+    d.default_object(obj, "Object");
+    let iface = d.real_class("SpecialMoveInterface", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    d.real_class("ToyOwner", obj, obj, 2, &[iface], None);
+    let bytes = d.build();
+    let defs = DefStore::from_synthetic(&dir, &[("GearboxFramework.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let iface = vm.find_class(crate::world::anim_node_init::SPECIAL_MOVE_INTERFACE).unwrap();
+    let owner_class = vm.find_class("GearboxFramework.ToyOwner").unwrap();
+    // The interface entries resolved before the run (as a loaded pawn class's would be).
+    assert!(vm.implements(owner_class, iface));
+    let owner = vm.space.alloc(owner_class, "Owner_0", None, Origin::Runtime).unwrap();
+    let mut x = Fx::on(vm, Shape::Good);
+    answer_init_steps_for_tests(true);
+    answer_owner_for_tests(None);
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+    x.parents(h0, &[n]);
+    x.parents(h1, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(h0), 1.0, false, 1.0), (Some(h1), 0.0, false, 1.0)]);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(copy_of(&x, comp, n), "SMI"), Value::Interface(Some(owner)));
+}
+
+// ---- Review r2 of #575 ----------------------------------------------------------------------------------------------
+
+/// Item 1: H's new `AnimParameters` entries are zeroed, not the element struct's defaults (here a nonzero default
+/// naming a `CustomAnimDef`).
+#[test]
+fn h_makes_zeroed_parameter_entries_whatever_the_struct_defaults() {
+    let mut x = Fx::new();
+    answer_init_steps_for_tests(true);
+    let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
+    let (h0, h1) = (x.obj(NODE), x.obj(NODE));
+    x.parents(h0, &[n]);
+    x.parents(h1, &[n]);
+    let (t, comp) = with_node(&mut x, n);
+    slots_of(&mut x, n, &[(Some(h0), 1.0, false, 1.0), (Some(h1), 0.0, false, 1.0)]);
+    let class = x.vm.space.heap.get(n).unwrap().class;
+    let p = x.vm.space.prop(class, "AnimParameters").unwrap();
+    let PropKind::Array(inner) = x.vm.space.classes.decl(p).unwrap().kind.clone() else { panic!() };
+    let PropKind::Struct(ty) = *inner else { panic!() };
+    let def = x.obj(NODE);
+    let mut default = x.vm.space.classes.struct_defaults(ty).unwrap();
+    set_field(&x.vm, &mut default, "CustomAnimDef", Value::Object(Some(def)), "t").unwrap();
+    x.vm.space.set_struct_defaults(ty, default).unwrap();
+    instance(&mut x.vm, comp, t.root).unwrap();
+    let entries = x.get(copy_of(&x, comp, n), "AnimParameters");
+    let entries = entries.elements().unwrap();
+    assert_eq!(entries.len(), 2);
+    for e in entries {
+        assert_eq!(field(&x.vm, e, "CustomAnimDef", "t").unwrap(), Value::Object(None), "zeroed, not the default");
+    }
+}
+
+/// Item 2: an interface-typed child link is a script error in the preflight, write-free (the copy remaps object links
+/// only, so it would be planned and walked differently).
+#[test]
+fn an_interface_typed_child_link_is_a_script_error_before_any_write() {
+    let mut x = Fx::with(Shape::InterfaceAnim);
+    answer_init_steps_for_tests(true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("not an object reference"), "{message}"),
+        e => panic!("{e:?}"),
     }
 }

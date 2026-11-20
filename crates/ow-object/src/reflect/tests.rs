@@ -139,6 +139,50 @@ fn class_check_refuses_the_vm_test_mutations() {
 
 /// The interface answers `vm_test.py` asks through `QueryInterface`: own table, super class table, a derived
 /// interface implies its base, a base implementer is not the derived one.
+/// `implements_resolved` (lane IMPL-ANIM-NODE-INIT): no answer before `implements` resolved the entries, then the same
+/// answer, with nothing resolved by asking.
+#[test]
+fn implements_resolved_answers_only_from_resolved_entries() {
+    let tree = Tree::new("implements_resolved");
+    tree.write("Core.upk", &interface_fixture().0.build());
+    let mut store = tree.store();
+    let mut index = CodeIndex::new();
+    let mut key = |path: &str| index.find_class(&mut store, path).unwrap();
+    let thing = key("Core.IThing");
+    let (implementer, plain) = (key("Core.Impl"), key("Core.Plain"));
+    assert_eq!(index.implements_resolved(implementer, thing), None, "not resolved yet");
+    assert_eq!(index.implements_resolved(implementer, thing), None, "asking resolves nothing");
+    assert!(index.implements(&mut store, implementer, thing));
+    assert_eq!(index.implements_resolved(implementer, thing), Some(true));
+    assert!(!index.implements(&mut store, plain, thing));
+    assert_eq!(index.implements_resolved(plain, thing), Some(false));
+}
+
+/// Review r1 of #575, item 2: a derived class whose own interface entry is not resolved yet gives no answer, even when
+/// its base class's hit is already cached (`implements` resolves the derived entry first).
+#[test]
+fn implements_resolved_does_not_answer_over_an_unresolved_derived_entry() {
+    let mut d = Declarations::with_imports(&["Class", "Function", "StructProperty"]);
+    let object_body = class_body(&mut d.p, &ClassBodySpec::new(0, 1, 2));
+    let obj = d.p.add_export(0, "Object", object_body);
+    d.default_object(obj, "Object");
+    let thing = d.real_class("IThing", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    let other = d.real_class("IOther", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    let base = d.real_class("Base", obj, obj, 2, &[thing], Some("VfTable_IThing"));
+    d.real_class("DerivedOwn", base, obj, 2, &[other], Some("VfTable_IOther"));
+    let tree = Tree::new("implements_resolved_derived");
+    tree.write("Core.upk", &d.build());
+    let mut store = tree.store();
+    let mut index = CodeIndex::new();
+    let mut key = |path: &str| index.find_class(&mut store, path).unwrap();
+    let (thing, base, derived) = (key("Core.IThing"), key("Core.Base"), key("Core.DerivedOwn"));
+    assert!(index.implements(&mut store, base, thing), "the base's hit, cached");
+    assert_eq!(index.implements_resolved(base, thing), Some(true));
+    assert_eq!(index.implements_resolved(derived, thing), None, "the derived entry is not resolved yet");
+    assert!(index.implements(&mut store, derived, thing));
+    assert_eq!(index.implements_resolved(derived, thing), Some(true));
+}
+
 #[test]
 fn implements_follows_the_interface_tables() {
     let tree = Tree::new("implements");

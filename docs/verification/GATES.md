@@ -74,6 +74,15 @@ the tree preload loads 71 objects, and link 1 runs 0 of 1 step, stopped unmarked
 5, 13 and 14 blocked behind it). ctest and verify_packages not run (no C++ change). No real-game run; every rule
 UNVERIFIED.
 
+**IMPL-ANIM-NODE-INIT (2026-11-19, pc-hummer, on #561 at d83f2fee):** AI-assisted (Claude Code, Opus 5.5). The aim-offset
+fix-up and the per-node initialisation in Off from NATIVE_ANIM_NODE_INIT.md (#566 at 07b2dd68). `cargo test -p
+ow-world` 314 passed / 0 failed / 5 ignored after review r1 of #575; `cargo test --workspace --locked -j 2` 2,511 passed
+/ 0 failed / 48 ignored; `cargo clippy -p ow-world -p ow-object --all-targets` adds no warning in the touched files;
+`crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #570, #500 and
+#528: ok 1 / NotYet 10 / error 3 of 14. Links 1, 3, 4, 5, 13 and 14 run 0 steps (link 1 0 of 1) and stop unmarked at the
+per-bone weight build's `MESH_LAYER` `LayerAbsent`. ctest and verify_packages not run (no C++ change). No real-game
+run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **IMPL-COPY-ANIM-TREE (2026-11-19, pc-hummer, on #542 at b2b4de8a, with #557 at 9694cc30 merged):** AI-assisted
 (Claude Code, Opus 5.5). The animation tree's copy and initialisation in Off from NATIVE_COPY_ANIM_TREE.md (#551 at
 4a363c0c), wired before #557's lookups. `cargo test -p ow-world` 298 passed / 0 failed / 5 ignored after review r1 of #561 (18 in
