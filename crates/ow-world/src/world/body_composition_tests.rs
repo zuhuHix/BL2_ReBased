@@ -72,6 +72,9 @@ const ACTOR_TEMPLATE: u8 = 7;
 const FLAGS: [&str; 5] = ["CollideActors", "BlockActors", "BlockRigidBody", "BlockNonZeroExtent", "BlockZeroExtent"];
 
 fn env() -> Env {
+    // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
+    // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
+    crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
     let dir = std::env::temp_dir().join(format!("ow-world-bodycomp-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     let _ = std::fs::remove_dir_all(&dir);
     let core = {
@@ -1030,6 +1033,30 @@ fn a_tree_with_nothing_kept_settles_and_finds_the_foot_ik() {
     assert_eq!(Counters::read(&e.vm), before, "the check writes nothing");
     let (missing, what) = refused(&mut e, p);
     assert_eq!((missing, what.as_str()), (Missing::NotRead, MESH_REST));
+}
+
+/// Review r1 of #561, item 8: with the attach's tree-copy check on (lane IMPL-COPY-ANIM-TREE), the same settled tree
+/// stops at the copy's own check, before the lookups: this fixture's component declares none of the copy's fields, so
+/// it is the copy's `VmError::Script`, not the lookups' answer, and nothing is written.
+#[test]
+fn with_the_copy_check_on_the_copy_refuses_before_the_lookups() {
+    let mut e = env();
+    crate::world::anim_tree_copy::skip_attach_check_for_tests(false);
+    let t = Anim::new(&mut e);
+    let arm = t.node(&mut e, "AnimNode", "ArmBoneBlend", 1);
+    t.children(&mut e, t.root, &[arm]);
+    let skel = skel_with(&mut e, Some(t.root));
+    let p = mesh_pawn(&mut e, skel);
+    let before = Counters::read(&e.vm);
+    match run(&mut e, p).unwrap_err() {
+        VmError::Script { function, message } => {
+            assert_eq!(function, "CopyAnimTree", "{message}");
+        }
+        other => panic!("expected the copy's script error, got {other:?}"),
+    }
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert!(entries(&e, p).is_empty());
+    crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
 }
 
 /// Rule 4: each kept find needs the instance's node, and so does a slot node; each is #529's refusal, write-free.

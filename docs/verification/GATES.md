@@ -45,6 +45,16 @@ native and stop in `make` (0 of 3 and 0 of 4 steps) at the unbound `SkeletalMesh
 ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-107
 (placeholder); logs under ignored `local/p2/anim-tree/`.
 
+**IMPL-COPY-ANIM-TREE (2026-11-19, pc-hummer, on #542 at b2b4de8a, with #557 at 9694cc30 merged):** AI-assisted
+(Claude Code, Opus 5.5). The animation tree's copy and initialisation in Off from NATIVE_COPY_ANIM_TREE.md (#551 at
+4a363c0c), wired before #557's lookups. `cargo test -p ow-world` 298 passed / 0 failed / 5 ignored after review r1 of #561 (18 in
+`anim_tree_copy`); `cargo test --workspace --locked -j 2` 2,486 passed / 0 failed / 48 ignored; `cargo clippy -p ow-world
+--all-targets` adds no warning in the touched files; `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict,
+under the lock) on a throwaway merge with #500 and #528: ok 1 / NotYet 10 / error 3 of 14. Link 1 runs 0 of 1 step,
+stopped at #543's `LayerAbsent` for the unloaded tree template `AnimTree_Player`. With the tree preloaded (local probe
+only), link 1 stops at the aim-offset refusal. ctest and verify_packages not run (no C++ change). No real-game run;
+`UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **IMPL-BODY-COMPOSITION (2026-11-19, pc-hummer, on fix/rust-init-pawn-meshes 1551f039, #522; note #529 at 87c8b9cd):**
 AI-assisted (Claude Code, Opus 5.5). `InstanceDataHelper.InitializeBodyComposition` in Off for the pawn wrapper: a
 write-free preflight, then the writes in the note's order under #518's counters. `InitializePawnMeshes` runs the build.

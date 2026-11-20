@@ -560,6 +560,8 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                         return Err(not_read(releasing_old("Mesh")));
                     }
                     if skeletal {
+                        // NATIVE_COPY_ANIM_TREE.md: the attach's tree instance comes first (its preflight, write-free).
+                        crate::world::anim_tree_copy::attach_check(vm, template)?;
                         // NATIVE_ANIM_NODE_LOOKUP.md section 5: the template's answers, with nothing loaded.
                         crate::world::anim_node_lookup::check(vm, template, body_class)?;
                         return Err(not_read(MESH_REST));

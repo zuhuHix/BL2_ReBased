@@ -620,6 +620,8 @@ pub mod pawn_data;
 pub mod nav_points;
 pub mod anim_node_lookup;
 pub mod body_composition;
+// Lane IMPL-COPY-ANIM-TREE: the animation tree's copy and initialisation (NATIVE_COPY_ANIM_TREE.md).
+pub mod anim_tree_copy;
 pub mod pawn_meshes;
 
 #[cfg(test)]
