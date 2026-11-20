@@ -113,7 +113,7 @@ fn off_preloads_then_selects_the_class_and_logs_both() {
     let mut x = fx(ParityMode::Off, "WillowGame.ToyPawnArchetype");
     apply_class_inputs(&mut x.vm, x.controller, Some(x.definition)).unwrap();
     let lines = harness_lines(&x.vm);
-    assert_eq!(lines.len(), 8, "{lines:?}");
+    assert_eq!(lines.len(), 10, "{lines:?}");
     assert!(lines[0].starts_with("harness input: preload WillowGame.ToyPawnArchetype (UNVERIFIED"), "{lines:?}");
     assert_eq!(lines[1], "harness input: preload WillowGame.ToyPawnArchetype: loaded", "{lines:?}");
     // Maya's tree (lane IMPL-MESH-REST): this toy package set has none, so the attempt is logged and finds nothing.
@@ -126,7 +126,10 @@ fn off_preloads_then_selects_the_class_and_logs_both() {
     let mesh = "harness input: preload Char_Siren.Mesh.Skel_SirenBody (Maya's mesh; UNVERIFIED";
     assert!(lines[5].starts_with(mesh), "{lines:?}");
     assert_eq!(lines[6], "harness input: preload Char_Siren.Mesh.Skel_SirenBody: found nothing", "{lines:?}");
-    assert!(lines[7].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
+    // The mesh's sockets (lane IMPL-BODYCOMP-SOCKET-BONE-TABLES): no mesh here either, so logged and skipped.
+    assert!(lines[7].starts_with("harness input: preload the sockets of Char_Siren.Mesh.Skel_SirenBody (UNVERIFIED"), "{lines:?}");
+    assert_eq!(lines[8], "harness input: preload the sockets of Char_Siren.Mesh.Skel_SirenBody: found nothing", "{lines:?}");
+    assert!(lines[9].starts_with("harness input: ServerPlayerSelectClass("), "{lines:?}");
     let seen = x.seen.borrow();
     assert_eq!(seen.len(), 1, "the class select ran once");
     let (log_then, loaded_then) = &seen[0];

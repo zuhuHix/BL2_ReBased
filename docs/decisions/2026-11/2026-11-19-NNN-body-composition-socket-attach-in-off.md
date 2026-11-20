@@ -3,7 +3,7 @@
 AI-assisted (Claude Code)
 
 Lane IMPL-BODYCOMP-SOCKET-BONE-TABLES, implementer, with Claude Opus 5.5. The file number is a placeholder until the
-maintainer gives one. Stacked on #618 (`fix/rust-body-composition-lookup` @ 3630cd59, which holds #608).
+maintainer gives one. Written on #618 and rebased onto main 92c79308 after batch 8 landed #618 and #608.
 
 - **Clean room.** The rule is coded from NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4 alone, as c376's analyst
   lane wrote it. The note is copied in unchanged at its r1 head 05b96935. This lane did not read the executable.
@@ -29,8 +29,8 @@ maintainer gives one. Stacked on #618 (`fix/rust-body-composition-lookup` @ 3630
   - It loads a mesh's unloaded socket objects, Off only, logged before and after, labelled "UNVERIFIED stand-in";
   - a failed load keeps its error;
   - it has set-up tests.
-  - **Not wired yet:** its call belongs beside #592's `preload_mesh`, which is on main but not in #618's base. It is
-    added when this branch is rebased onto main (REBASE NOW).
+  - It is wired right after #592's `preload_mesh` in the `maya` step's class inputs, which are now six. #592's
+    harness test counts 10 lines.
 - **Tests:**
   - `ow-world` `world/body_composition_socket_tests.rs`: the note's tests 1 to 13. Each refusal is checked against
     #518's three counters and the name table's length;

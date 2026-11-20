@@ -14,10 +14,6 @@
 //!   loaded it already, so in the slice this adds no load for the mesh. A path no package holds is logged and skipped.
 //! - **A failed socket load keeps its error:** it is logged and returned, as `preload_mesh` does.
 
-// Called beside #592's `preload_mesh` once this branch is rebased onto main, which holds #592; until then only the
-// tests call it.
-#![allow(dead_code)]
-
 use ow_core::{ObjectPath, ParityMode};
 use ow_object::ids::PropAddr;
 use ow_object::value::Value;

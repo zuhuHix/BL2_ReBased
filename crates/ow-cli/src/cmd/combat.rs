@@ -481,9 +481,9 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
     Ok(done)
 }
 
-/// The five Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
+/// The six Off harness inputs of the `maya` step, in order, each logged with its outcome (rule 7; decisions
 /// 2026-11-19-41 and 2026-11-19-46, lane IMPL-MESH-REST for the tree, and lane SLICE-HARNESS-MAYA-MESH for steps 3
-/// and 4). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
+/// and 4, lane IMPL-BODYCOMP-SOCKET-BONE-TABLES for step 5). Outside Off, or for a controller that already has a `PlayerClass`, nothing.
 /// 1. **Preload:** `class`'s own `PawnArchetypePath` is loaded through the definition store, an UNVERIFIED stand-in for
 ///    the streaming load NATIVE_PLAYER_CLASS.md does not settle. A missing, non-string or unparsable path is skipped
 ///    (and logged), and a load that finds nothing is logged; the class select then runs either way.
@@ -492,7 +492,10 @@ pub(crate) fn load_same_package_references(vm: &mut Vm, archetype: ObjRef) -> Re
 ///    ([`install_skeleton_source`]), an UNVERIFIED stand-in for the engine's own mesh data.
 /// 4. **Mesh preload:** Maya's skeletal mesh [`MAYA_MESH_PATH`] loaded through the definition store ([`preload_mesh`]),
 ///    an UNVERIFIED stand-in for the streaming load that brings it with her pawn.
-/// 5. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
+/// 5. **Socket preload:** the mesh's unloaded socket objects loaded through the store
+///    (`crate::cmd::mesh_sockets::preload_mesh_sockets`), an UNVERIFIED stand-in for the same streaming load (hub
+///    ruling).
+/// 6. **Class select:** the controller's installed `ServerPlayerSelectClass(<Maya's class path>)`.
 pub(crate) fn apply_class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off || has_player_class(vm, controller)? {
         return Ok(());
@@ -557,6 +560,7 @@ fn class_inputs(vm: &mut Vm, controller: ObjRef, class: Option<ObjRef>) -> Resul
         install_skeleton_source(vm, &psk_roots())?;
     }
     preload_mesh(vm, MAYA_MESH_PATH)?;
+    crate::cmd::mesh_sockets::preload_mesh_sockets(vm, MAYA_MESH_PATH)?;
     let own = vm.space.heap.get(controller)?.class;
     let state = vm.space.heap.get(controller)?.state;
     let Some(f) = vm.find_method(own, "ServerPlayerSelectClass", state)? else {

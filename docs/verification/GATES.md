@@ -14,10 +14,19 @@ game.
 #618 3630cd59):** AI-assisted (Claude Code, Opus 5.5). The body composition's socket attach in Off
 (NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4), and the harness's socket preload (not wired until the rebase onto
 main, which holds #592). `cargo test --workspace`: 3043 passed / 0 failed / 51 ignored (13 new in `ow-world`
+**IMPL-BODYCOMP-SOCKET-BONE-TABLES (2026-11-20, pc-hummer, on fix/rust-bodycomp-socket-bone-tables from main
+92c79308):** AI-assisted (Claude Code, Opus 5.5). The body composition's socket attach in Off
+(NATIVE_BODYCOMP_SOCKET_BONE_TABLES.md section 4), and the harness's socket preload beside #592's mesh preload.
+`cargo test --workspace`: 3192 passed / 0 failed / 51 ignored (13 new in `ow-world`
 `world/body_composition_socket_tests.rs`, 4 in `ow-cli` `cmd/mesh_sockets_tests.rs`); `crate_edges_test.py` OK.
-Installed Off `--slice-gate` strict (release build, under the machine lock): ok 4, notyet 9, error 1 of 14. Link 1
-stops in `maya:8` at the unloaded mesh `Skel_SirenBody`, because #592's mesh preload is not in this base; links 3,
-4, 5, 13 and 14 are blocked behind it. The new rule is not reached on installed data yet. UNVERIFIED in game.
+Installed Off `--slice-gate` strict (release build, under the machine lock): ok 4, notyet 10, error 0 of 14. The
+preload loads all 13 of `Skel_SirenBody`'s sockets.
+- With `OPENWILLOW_PSK_EXPORTS` at a local UModel export: link 1 stops in `maya:8` at "the owner's event after the
+  tree initialisation" (#612, a note only).
+- Without the export: link 1 stops at "no reference skeleton for Char_Siren.Mesh.Skel_SirenBody".
+
+Links 3, 4, 5, 13 and 14 are blocked behind link 1. Both stops come before the socket attaches, so the new rule is
+not reached on installed data yet. UNVERIFIED in game.
 
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
