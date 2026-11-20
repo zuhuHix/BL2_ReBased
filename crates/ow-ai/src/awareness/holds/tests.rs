@@ -226,3 +226,34 @@ fn a_script_refusal_after_an_earlier_context_ran_is_terminal_in_off() {
         );
     }
 }
+
+/// The Off preflight runs the mind checks (NATIVE_GEARBOXMIND_GETAICOMPONENT.md, "Where a NotYet from this answer
+/// lands"): over two contexts whose `IAIInterface` answers are minds, the second holding a class default's template
+/// component, the run refuses before any script runs, unprefixed.
+#[test]
+fn the_preflight_refuses_a_template_component_before_any_script() {
+    let (mut e, behavior, seen) = world(ParityMode::Off);
+    let vm = &mut e.vm;
+    Pack.register(vm).unwrap();
+    let mind_class = vm.space.heap.get(e.mind).unwrap().class;
+    let component_class = vm.space.heap.get(e.component).unwrap().class;
+    let class_default = vm.space.alloc(mind_class, "ToyDefaultMind", None, ow_object::heap::Origin::Default { class: mind_class }).unwrap();
+    let template = vm.space.alloc(component_class, "ToyTemplate", Some(class_default), ow_object::heap::Origin::Runtime).unwrap();
+    let second = make(vm, mind_class, "ToyMind_2");
+    let p = vm.space.prop(mind_class, "AIComponent").unwrap();
+    vm.space.write(second, ow_object::ids::PropAddr::scalar(p), Value::Object(Some(template))).unwrap();
+    let context_class = vm.space.classes.define("Toy.ToyAIContext", Some(e.object), vec![]).unwrap();
+    let (first_ctx, second_ctx) = (make(vm, context_class, "ToyContext_1"), make(vm, context_class, "ToyContext_2"));
+    let (mind, ctx2) = (e.mind, second_ctx);
+    vm.register_interface_rule(
+        context_class,
+        Rc::new(move |_vm: &mut Vm, o: ObjRef, _iface| Ok(Some(if o == ctx2 { second } else { mind }))),
+    )
+    .unwrap();
+    let err = apply(vm, behavior, &[first_ctx, second_ctx]).unwrap_err();
+    assert!(
+        matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead && n.what == ow_combat::holds::TEMPLATE_COMPONENT),
+        "{err}"
+    );
+    assert_eq!(*seen.borrow(), [], "no context's script ran");
+}

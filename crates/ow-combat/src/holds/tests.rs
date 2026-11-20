@@ -445,3 +445,85 @@ fn callers_and_missing_layout_errors_are_not_silently_accepted() {
     e.call("HoldGod", component, vec![]).unwrap();
     assert_eq!(e.pairs(component, "GodHolds").len(), 1);
 }
+
+/// The template test reads only the heap (NATIVE_GEARBOXMIND_GETAICOMPONENT.md at 660d0b32): an `AIComponent` outered
+/// to an `Origin::Default` object, or to an object named `Default__...`, is `NotYet { NotRead }`; a component outered to
+/// a plain object is answered. Nothing is written, made or loaded either way.
+#[test]
+fn a_template_component_is_not_read() {
+    let mut e = Env::new(ParityMode::Off);
+    register(&mut e.vm).unwrap();
+    let (gearbox, willow) = minds(&mut e);
+    let class_default = e.vm.space.alloc(willow, "ToyDefaultMind", None, Origin::Default { class: willow }).unwrap();
+    let exported_default = e.vm.space.alloc(willow, "Default__WillowMind", None, Origin::Runtime).unwrap();
+    let plain = e.make(e.thing, "ToyOwner");
+    for (outer, template) in [(class_default, true), (exported_default, true), (plain, false)] {
+        let component = e.vm.space.alloc(e.component, "ToyAIComponent", Some(outer), Origin::Runtime).unwrap();
+        let mind = e.make(gearbox, "ToyMind_1");
+        set(&mut e.vm, mind, "AIComponent", Value::Object(Some(component))).unwrap();
+        let before = fingerprint(&e.vm);
+        let r = e.call("GetAIComponent", mind, vec![]);
+        if template {
+            let err = r.unwrap_err();
+            assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead && n.what == TEMPLATE_COMPONENT
+                && n.record == RECORD_GET_AI_COMPONENT), "{err}");
+        } else {
+            assert_eq!(r.unwrap(), Value::Object(Some(component)));
+        }
+        assert_eq!(fingerprint(&e.vm), before, "nothing written, made or loaded");
+    }
+}
+
+/// `GearboxFramework.upk` (invented): `GearboxMind` with `AIComponent`. `GD_ToyMinds.upk` (invented): `Holder`, a mind
+/// whose `AIComponent` names `Peer`, another mind export, so reading the loaded holder gives `Peer` as an unloaded
+/// definition handle.
+fn mind_packages() -> (Vec<u8>, Vec<u8>) {
+    let framework = {
+        let mut t = ScriptToy::with_imports(&["Class", "ObjectProperty"]);
+        let object = t.class("Object", 0);
+        let mind = t.class("GearboxMind", object);
+        t.prop("Object", mind, "AIComponent", 0, object);
+        t.p.build()
+    };
+    let minds = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let package = t.p.add_import("Core", "Package", 0, "GearboxFramework");
+        let mind = t.p.add_import("Core", "Class", package, "GearboxMind");
+        let mut body = ow_package::testkit::ints(&[0]);
+        body.extend_from_slice(&t.none);
+        let peer = t.p.add_export(mind, "Peer", body);
+        let mut holder = ow_package::testkit::ints(&[0]);
+        holder.extend(t.p.tag("AIComponent", "ObjectProperty", &ow_package::testkit::ints(&[peer])));
+        holder.extend_from_slice(&t.none);
+        t.p.add_export(mind, "Holder", holder);
+        t.p.build()
+    };
+    (framework, minds)
+}
+
+/// A mind that is itself an unloaded definition handle is `NotYet { NotRead }` naming it, and it is not loaded.
+#[test]
+fn an_unloaded_mind_is_not_read_and_not_loaded() {
+    let dir = std::env::temp_dir().join(format!("ow-combat-minds-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (framework, minds) = mind_packages();
+    let files: [(&str, &[u8]); 2] = [("GearboxFramework.upk", &framework), ("GD_ToyMinds.upk", &minds)];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).unwrap();
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let path = ObjectPath::parse("GD_ToyMinds.Holder").unwrap();
+    let holder = vm.defs.find(&mut vm.space, &path).unwrap().unwrap();
+    let Value::Object(Some(peer)) = get(&mut vm, holder, "AIComponent").unwrap().unwrap() else {
+        panic!("the holder names its peer")
+    };
+    assert!(vm.defs.is_unloaded(&vm.space, peer), "a genuinely unloaded handle");
+    let before = fingerprint(&vm);
+    let err = mind_ai_component(&vm, peer).unwrap_err();
+    assert!(
+        matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead && n.what.contains("Peer is an unloaded definition handle")),
+        "{err}"
+    );
+    assert_eq!(fingerprint(&vm), before, "not loaded");
+    assert!(vm.defs.is_unloaded(&vm.space, peer));
+    drop(vm);
+    let _ = std::fs::remove_dir_all(&dir);
+}

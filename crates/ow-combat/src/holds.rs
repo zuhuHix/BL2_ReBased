@@ -83,6 +83,10 @@ pub const RECORD_GET_AI_COMPONENT: &str = "docs/verification/NATIVE_GEARBOXMIND_
 /// The class the native belongs to.
 pub const MIND: &str = "GearboxFramework.GearboxMind";
 
+/// The refusal for a mind whose `AIComponent` is a class default's template component (the note's text).
+pub const TEMPLATE_COMPONENT: &str =
+    "GearboxMind.GetAIComponent: the mind's AIComponent is its class default's template, not an instance";
+
 
 fn error(message: String) -> VmError {
     VmError::Script {
@@ -107,38 +111,75 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     bind(vm, GET_AI_COMPONENT, Rc::new(get_ai_component))
 }
 
-/// `GearboxMind.GetAIComponent()` in Off (NATIVE_GEARBOXMIND_GETAICOMPONENT.md section 3): the receiver's
-/// `AIComponent`, read by name with a plain read and returned as it is, the component handle or None. `WillowMind` and
-/// any other subclass answer the same. It writes, loads and draws nothing; an unloaded component handle is returned
-/// as the handle, not loaded. Classes are looked up only in the class table (`by_path`), never loaded.
-///
-/// Refusals, all before any effect: no receiver; a receiver whose class is not `GearboxMind` or a subclass (a class
-/// not in the table counts as not one); a class that declares no `AIComponent`; a value that is not an object: each a
-/// `VmError::Script`. The field is read straight from the heap (no `access::get`, which loads an unloaded handle).
-///
-/// **Pending the note's review r1 of #594** (two clarifications, not coded yet): how the note's template refusal (an
-/// `AIComponent` that is the class default's template component) is detected without a load, and what a receiver
-/// that is itself an unloaded handle answers. Until then neither case is special-cased here.
+/// `GearboxMind.GetAIComponent()` in Off (NATIVE_GEARBOXMIND_GETAICOMPONENT.md section 3, the note as final at
+/// 660d0b32): [`mind_ai_component`] on the receiver. No receiver is a `VmError::Script`.
 pub fn get_ai_component(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let vm = &*c.vm;
+    let this = c.this.ok_or_else(|| VmError::Script {
+        function: GET_AI_COMPONENT.to_string(),
+        message: "called with no mind".to_string(),
+    })?;
+    Ok(Value::Object(mind_ai_component(c.vm, this)?))
+}
+
+/// The mind's own `AIComponent`, as it is (component handle or None), with the note's checks in its order. It writes,
+/// loads and draws nothing; the returned handle is not loaded either. `WillowMind` and any other subclass answer the
+/// same.
+/// 1. The receiver's class must be `GearboxMind` or a subclass, from the class table alone (`by_path`; a class not in
+///    the table counts as not one): otherwise a `VmError::Script`.
+/// 2. A receiver that is itself an unloaded definition handle (`vm.defs.is_unloaded`, a read): `NotYet { NotRead }`,
+///    not loaded first.
+/// 3. The field is read with `vm.space.prop` and `vm.space.read`, never `hit::access::get`, which loads. A class that
+///    declares no `AIComponent`, or a value that is not an object: `VmError::Script`.
+/// 4. A template component ([`is_template_component`]): `NotYet { NotRead }` ([`TEMPLATE_COMPONENT`]). A hold written
+///    to it would land on the shared template; this is the port's choice, not the native's.
+pub fn mind_ai_component(vm: &Vm, mind: ObjRef) -> Result<Option<ObjRef>, VmError> {
     let fail = |message: String| VmError::Script {
         function: GET_AI_COMPONENT.to_string(),
         message,
     };
-    let this = c.this.ok_or_else(|| fail("called with no mind".to_string()))?;
-    let class = vm.space.heap.get(this)?.class;
-    let mind = vm.space.classes.by_path(MIND);
-    if !mind.is_some_and(|m| vm.space.classes.is_child_of(class, m)) {
-        return Err(fail(format!("{} is not a GearboxMind", ow_attr::eval::class_path(&vm.space, this))));
+    let class = vm.space.heap.get(mind)?.class;
+    let base = vm.space.classes.by_path(MIND);
+    if !base.is_some_and(|m| vm.space.classes.is_child_of(class, m)) {
+        return Err(fail(format!("{} is not a GearboxMind", ow_attr::eval::class_path(&vm.space, mind))));
+    }
+    if vm.defs.is_unloaded(&vm.space, mind) {
+        return Err(NotYet::not_read(
+            format!(
+                "GearboxMind.GetAIComponent: the mind {} is an unloaded definition handle (reading its AIComponent \
+                 would load it)",
+                ow_behavior::provider::object_name(vm, mind).unwrap_or_default()
+            ),
+            RECORD_GET_AI_COMPONENT,
+        )
+        .into());
     }
     let Some(p) = vm.space.prop(class, "AIComponent") else {
-        return Err(fail(format!("{} declares no AIComponent", ow_attr::eval::class_path(&vm.space, this))));
+        return Err(fail(format!("{} declares no AIComponent", ow_attr::eval::class_path(&vm.space, mind))));
     };
-    let component = match vm.space.read(this, ow_object::ids::PropAddr::scalar(p))? {
+    let component = match vm.space.read(mind, ow_object::ids::PropAddr::scalar(p))? {
         Value::Object(r) => *r,
         other => return Err(fail(format!("AIComponent holds {}, not an object", other.kind_name()))),
     };
-    Ok(Value::Object(component))
+    if let Some(comp) = component
+        && is_template_component(vm, comp)?
+    {
+        return Err(NotYet::not_read(TEMPLATE_COMPONENT, RECORD_GET_AI_COMPONENT).into());
+    }
+    Ok(component)
+}
+
+/// Whether `component` is a class default's template component (the note's template test). It reads only the heap,
+/// never the definition store: the component's own `outer` is a class default when that outer's origin is
+/// `Origin::Default` (the heap's mark for a class default object) or its name starts with `Default__` (a class
+/// default that came in as a package export). A component with no outer, or an outer that is neither, is not a
+/// template. An unloaded stand-in is judged by its own heap record the same way, and it is not loaded.
+pub fn is_template_component(vm: &Vm, component: ObjRef) -> Result<bool, VmError> {
+    let Some(outer) = vm.space.heap.get(component)?.outer else {
+        return Ok(false);
+    };
+    let o = vm.space.heap.get(outer)?;
+    Ok(matches!(o.origin, ow_object::heap::Origin::Default { .. })
+        || vm.space.names.text(o.name).starts_with("Default__"))
 }
 
 /// The text a hold refusal carries once a context's script has run (review r1 of #456, item 2), the kernel's
@@ -236,13 +277,14 @@ fn judge_context(vm: &mut Vm, context: ObjRef) -> Result<(), VmError> {
             )));
         }
         let iface = vm.find_class(crate::pawn_interface::AI_INTERFACE)?;
-        vm.query_interface(context, iface)?;
-        return Ok(());
+        let answer = vm.query_interface(context, iface)?;
+        return judge_mind(vm, answer);
     }
     if vm.parity == ParityMode::Off
         && let Some(iface) = vm.find_class_if_present(crate::pawn_interface::AI_INTERFACE)?
     {
-        vm.query_interface(context, iface)?;
+        let answer = vm.query_interface(context, iface)?;
+        judge_mind(vm, answer)?;
     }
     for link in ["Controller", "MyWillowMind"] {
         if object(vm, context, link)?.is_some() {
@@ -256,6 +298,21 @@ fn judge_context(vm: &mut Vm, context: ObjRef) -> Result<(), VmError> {
             )
             .into());
         }
+    }
+    Ok(())
+}
+
+/// The Off preflight's mind checks (NATIVE_GEARBOXMIND_GETAICOMPONENT.md, "Where a NotYet from this answer lands"):
+/// when a context's `IAIInterface` answer is a mind, the script will ask it `GetAIComponent`, so its unloaded-receiver
+/// and template refusals ([`mind_ai_component`]) are raised here, before any script runs. An answer that is not a
+/// `GearboxMind` (or none) is the script's own business and is not judged here.
+fn judge_mind(vm: &Vm, answer: Option<ObjRef>) -> Result<(), VmError> {
+    let Some(mind) = answer else {
+        return Ok(());
+    };
+    let class = vm.space.heap.get(mind)?.class;
+    if vm.space.classes.by_path(MIND).is_some_and(|m| vm.space.classes.is_child_of(class, m)) {
+        mind_ai_component(vm, mind)?;
     }
     Ok(())
 }
