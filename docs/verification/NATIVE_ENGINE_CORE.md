@@ -216,6 +216,9 @@ variant was not read in detail and does not matter for single-player.
   5. Fields set before any script runs: `bTicked` from the level's tick state, `CreationTime` = world `TimeSeconds`,
      `WorldInfo`, optionally the role pair swapped when remote-owned, `Location`, `Rotation`, `PhysicsVolume` = the default
      physics volume, then `Owner` through `SetOwner` (below), then `Instigator`.
+  5a. (Read 2026-11-19, [NATIVE_SPAWN_COMPONENT_ATTACH.md](NATIVE_SPAWN_COMPONENT_ATTACH.md).) Between `Rotation` and
+     `PhysicsVolume`, on every spawn: a full component update, which attaches each `Components` entry and so sets its
+     `Owner` (UNVERIFIED).
   6. When the world has begun play: one call that initialises each attached primitive component's physics body (inferred
      as the actor's physics init). In a non-editor game two more engine calls follow (state-frame creation and the
      collision-type update, both inferred); the collision type becomes none, no collision, normal, or one of the
