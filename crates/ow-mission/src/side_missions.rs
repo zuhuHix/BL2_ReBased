@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-ALL-EXPANSION-SIDE-MISSIONS (decision 2026-11-19-NNN, number pending).
+//! Owner: lane IMPL-ALL-EXPANSION-SIDE-MISSIONS (decision 2026-11-19-165, number pending).
 //! `MissionTracker.AllExpansionSideMissionsComplete(Controller, Expansion)` in `ParityMode::Off`. AI-assisted (Claude
 //! Code).
 //!
