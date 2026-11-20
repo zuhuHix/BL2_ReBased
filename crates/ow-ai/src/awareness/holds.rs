@@ -21,8 +21,9 @@
 //! before; in both modes a context that is not a pawn but has `Controller` or `MyWillowMind` set is `NotYet`.
 //!
 //! **The kinds.** The base and target holds are part 2's bindings ([`super::actions::Pack`], from G26). The movement,
-//! demigod, god and dialog kinds, and `GearboxMind.GetAIComponent` (`NotYet`: the note leaves it unresolved), are
-//! implemented from NATIVE_AI_HOLDS.md in `ow_combat::holds` (clean room, decision 2026-11-16-83), because
+//! demigod, god and dialog kinds are implemented from NATIVE_AI_HOLDS.md, and `GearboxMind.GetAIComponent` (the
+//! mind's own `AIComponent`) from NATIVE_GEARBOXMIND_GETAICOMPONENT.md, in `ow_combat::holds` (clean room, decisions
+//! 2026-11-16-83 and 2026-11-19-NNN), because
 //! `ow-combat`'s pawns reach the demigod kind through their script and `ow-combat` sits below this crate. [`Pack`]
 //! binds them in Off for a world without `ow_combat::hit::Pack` (which binds them too), and nothing under Reference.
 //! A key another pack has already bound keeps that binding.
@@ -42,7 +43,8 @@ pub fn apply(vm: &mut Vm, behavior: ObjRef, contexts: &[ObjRef]) -> Result<(), V
     ow_combat::holds::apply_hold_behavior(vm, behavior, contexts)
 }
 
-/// Binds the four hold kinds' twelve natives and `GetAIComponent` (`NotYet`) in Off (`ow_combat::holds::register`);
+/// Binds the four hold kinds' twelve natives and `GetAIComponent` (the mind's `AIComponent`) in Off
+/// (`ow_combat::holds::register`);
 /// nothing under Reference.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Pack;

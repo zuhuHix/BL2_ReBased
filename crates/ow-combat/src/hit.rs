@@ -866,7 +866,8 @@ fn register_hit(vm: &mut Vm) -> Result<(), VmError> {
     // Behavior_AIHold script calls HoldDemigod / ReleaseDemigod for its type 3; the C++ keeps the hold as a list of
     // reasons and DemigodOnHold answers "any hold" (UNVERIFIED), and GetAIComponent answers the mind's AIComponent
     // property. Off has NATIVE_AI_HOLDS.md's rule instead (`crate::holds`: name and tag pairs on `DemigodHolds` and
-    // the other three lists; GetAIComponent `NotYet`, the note leaves it unresolved). Decision 2026-11-16-83.
+    // the other three lists; GetAIComponent the mind's own AIComponent by NATIVE_GEARBOXMIND_GETAICOMPONENT.md, the
+    // same value as this stand-in, lane IMPL-GEARBOXMIND-GETAICOMPONENT). Decision 2026-11-16-83.
     if vm.parity == ParityMode::Reference {
         register_hold_stand_ins(vm)?;
     } else {

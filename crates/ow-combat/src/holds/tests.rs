@@ -342,9 +342,72 @@ fn subclass_virtuals_are_refused_for_all_kinds_before_mutation() {
     }
 }
 
-/// `GetAIComponent` is `NotYet` in Off; under Reference nothing is bound; a key bound first keeps its binding.
+/// Every heap object's class, slots and origin, and the store's load state: equal before and after means nothing was
+/// written, made or loaded (#518's counters are not on main yet).
+fn fingerprint(vm: &Vm) -> String {
+    vm.space
+        .heap
+        .handles()
+        .into_iter()
+        .map(|h| {
+            let o = vm.space.heap.get(h).unwrap();
+            format!("{h:?} {:?} {:?} {:?} {}\n", o.class, o.origin, o.slots, vm.defs.is_unloaded(&vm.space, h))
+        })
+        .collect()
+}
+
+/// An invented `GearboxMind` (with `AIComponent`) and a `WillowMind` under it, at the paths the native reads.
+fn minds(e: &mut Env) -> (ClassId, ClassId) {
+    let root = e.vm.space.classes.by_path("Toy.ToyObject").unwrap();
+    let o = PropKind::Object { class: root };
+    let gearbox = class(&mut e.vm, MIND, root, &[("AIComponent", o)]);
+    let willow = class(&mut e.vm, "WillowGame.WillowMind", gearbox, &[]);
+    (gearbox, willow)
+}
+
+/// `GetAIComponent` in Off (NATIVE_GEARBOXMIND_GETAICOMPONENT.md section 3): the mind's own `AIComponent` as it is,
+/// on a `GearboxMind` and on a `WillowMind` alike; None stays None and nothing is made; a stand-in handle is returned
+/// as the handle, unread. Each call leaves every heap object and the store as they were.
 #[test]
-fn get_ai_component_is_not_yet_in_off_and_reference_binds_nothing() {
+fn get_ai_component_answers_the_mind_s_own_component() {
+    let mut e = Env::new(ParityMode::Off);
+    register(&mut e.vm).unwrap();
+    let (gearbox, willow) = minds(&mut e);
+    let component = e.make(e.component, "ToyComponent_0");
+    let stand_in = e.vm.space.alloc_stand_in(e.component, "ToyStandIn", Origin::Resource { package: 0, index: -1 }).unwrap();
+    for (mind_class, value) in [
+        (gearbox, Some(component)),
+        (willow, Some(component)),
+        (willow, None),
+        (gearbox, Some(stand_in)),
+    ] {
+        let mind = e.make(mind_class, "ToyMind_0");
+        set(&mut e.vm, mind, "AIComponent", Value::Object(value)).unwrap();
+        let before = fingerprint(&e.vm);
+        assert_eq!(e.call("GetAIComponent", mind, vec![]).unwrap(), Value::Object(value));
+        assert_eq!(fingerprint(&e.vm), before, "nothing written, made or loaded");
+    }
+}
+
+/// A call with no receiver, or on a class outside `GearboxMind` (here a controller), is a `VmError::Script`. A mind
+/// class without `AIComponent`, or a value of another kind, cannot be built here: every `GearboxMind` subclass
+/// inherits the object field, and the heap refuses a write of another kind.
+#[test]
+fn get_ai_component_refuses_malformed_calls_as_script_errors() {
+    let mut e = Env::new(ParityMode::Off);
+    register(&mut e.vm).unwrap();
+    minds(&mut e);
+    let f = e.native("GetAIComponent");
+    let err = e.vm.call(f, None, vec![]).unwrap_err();
+    assert!(matches!(err, VmError::Script { .. }), "no receiver: {err:?}");
+    let controller = e.make(e.controller, "ToyController");
+    let err = e.vm.call(f, Some(controller), vec![]).unwrap_err();
+    assert!(matches!(&err, VmError::Script { message, .. } if message.contains("is not a GearboxMind")), "{err:?}");
+}
+
+/// Under Reference this pack binds nothing (the `hit.rs` stand-in answers there); a key bound first keeps its binding.
+#[test]
+fn reference_binds_nothing_and_a_key_bound_first_is_kept() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
         let mut e = Env::new(mode);
         let taken = e.native("DialogOnHold");
@@ -353,29 +416,17 @@ fn get_ai_component_is_not_yet_in_off_and_reference_binds_nothing() {
             .register_native(&key, Rc::new(|_c: &mut NativeCall<'_>| Ok(Value::Bool(true))))
             .unwrap();
         register(&mut e.vm).unwrap();
-        let mind = e.make(e.controller, "ToyMind_0");
-        match mode {
-            ParityMode::Off => {
-                let err = e.call("GetAIComponent", mind, vec![]).unwrap_err();
-                assert!(not_read(&err), "{err}");
-                assert!(err.to_string().contains("NATIVE_AI_HOLDS.md"), "{err}");
-            }
-            _ => {
-                for (name, f) in e.natives.clone() {
-                    if name == "DialogOnHold" {
-                        continue;
-                    }
-                    let key = e.vm.function(f).unwrap().native_key.clone().unwrap();
-                    assert!(!e.vm.has_native(&key), "{name}: unbound under Reference");
+        if mode == ParityMode::Reference {
+            for (name, f) in e.natives.clone() {
+                if name == "DialogOnHold" {
+                    continue;
                 }
+                let key = e.vm.function(f).unwrap().native_key.clone().unwrap();
+                assert!(!e.vm.has_native(&key), "{name}: unbound under Reference");
             }
         }
         let component = e.make(e.component, "ToyComponent_0");
-        assert_eq!(
-            e.call("DialogOnHold", component, vec![]).unwrap(),
-            Value::Bool(true),
-            "{mode:?}: kept"
-        );
+        assert_eq!(e.call("DialogOnHold", component, vec![]).unwrap(), Value::Bool(true), "{mode:?}: kept");
     }
 }
 

@@ -132,7 +132,8 @@ fn declare(vm: &mut Vm, owner: ow_object::ids::ClassId, path: &str) -> ow_object
     vm.declare_function(d).unwrap()
 }
 
-/// The pack binds the four kinds (`ow_combat::holds`, whose tests hold the rule) and `GetAIComponent` in Off, and
+/// The pack binds the four kinds (`ow_combat::holds`, whose tests hold the rule) and `GetAIComponent` (the mind's own
+/// `AIComponent`) in Off, and
 /// nothing under Reference; a key another pack bound first keeps its binding.
 #[test]
 fn the_pack_binds_the_hold_kinds_in_off_only() {
@@ -150,9 +151,9 @@ fn the_pack_binds_the_hold_kinds_in_off_only() {
         match mode {
             ParityMode::Off => {
                 assert!(vm.has_native(&key), "bound in Off");
-                let err = vm.call(get_component, Some(e.mind), vec![]).unwrap_err();
-                assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{err}");
-                assert!(err.to_string().contains("NATIVE_AI_HOLDS.md"), "{err}");
+                // The mind's own AIComponent (NATIVE_GEARBOXMIND_GETAICOMPONENT.md; lane IMPL-GEARBOXMIND-GETAICOMPONENT).
+                let got = vm.call(get_component, Some(e.mind), vec![]).unwrap().ret;
+                assert_eq!(got, Value::Object(Some(e.component)), "the mind's AIComponent");
             }
             _ => assert!(!vm.has_native(&key), "unbound under Reference"),
         }

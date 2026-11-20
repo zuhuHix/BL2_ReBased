@@ -27,8 +27,13 @@
 //! (NATIVE_AI_HOLDS.md, read 2026-11-19 by lane LINK-1-NEXT; implemented by lane FIX-AI-HOLDS-SUBCLASS, decision
 //! 2026-11-19-43) found that `WillowAIComponent` keeps `AIComponent`'s routines for the movement, demigod, god and
 //! dialog kinds (and the target kind, `ow-ai`'s), replacing only the base kind. Any other subclass's table was not
-//! read: `NotYet { NotRead }`, as before. `GearboxMind.GetAIComponent` remains NotYet. Damage-reader behavior is not
-//! proven.
+//! read: `NotYet { NotRead }`, as before. Damage-reader behavior is not proven.
+//!
+//! **`GearboxMind.GetAIComponent`** (lane IMPL-GEARBOXMIND-GETAICOMPONENT, decision 2026-11-19-NNN), coded from
+//! `docs/verification/NATIVE_GEARBOXMIND_GETAICOMPONENT.md` alone (the note at 4b83f1c5; clean room: lane
+//! ANALYST-GEARBOXMIND-GETAICOMPONENT wrote it). In Off it is [`get_ai_component`]: the mind's own `AIComponent`, read
+//! by name and returned as it is, None included. It writes, loads and draws nothing, and the returned handle is not
+//! loaded either. UNVERIFIED in the running game.
 //!
 //! **A pawn context** (lane IMPL-PAWN-AI-INTERFACE, decision 2026-11-19-62): in Off the script's `QueryInterface`
 //! answers by `Pawn`'s rule ([`crate::pawn_interface`], registered here), so the hold behavior runs on a pawn when the
@@ -38,7 +43,8 @@
 //! earlier context's script ran is terminal. Reference keeps its per-context order.
 //!
 //! **Reference** (R3) binds none of this: `crate::hit` keeps the C++ stand-ins there (the demigod hold as a list of
-//! reasons, `GetAIComponent` as the mind's property, the pawn-to-mind context).
+//! reasons, `GetAIComponent` as the mind's property, the pawn-to-mind context). The Off answer of `GetAIComponent`
+//! gives the same value as that stand-in for a mind with its own component.
 
 use std::rc::Rc;
 
@@ -68,8 +74,15 @@ pub const COMPONENT: &str = "GearboxFramework.AIComponent";
 /// The subclass that keeps these four kinds' routines (NATIVE_AI_HOLDS.md, read 2026-11-19).
 pub const WILLOW_COMPONENT: &str = "WillowGame.WillowAIComponent";
 
-/// The script native the note does not resolve (`NotYet` in Off).
+/// The mind's script native, answered in Off by [`get_ai_component`].
 pub const GET_AI_COMPONENT: &str = "GearboxFramework.GearboxMind.GetAIComponent";
+
+/// The analyst note of [`get_ai_component`].
+pub const RECORD_GET_AI_COMPONENT: &str = "docs/verification/NATIVE_GEARBOXMIND_GETAICOMPONENT.md";
+
+/// The class the native belongs to.
+pub const MIND: &str = "GearboxFramework.GearboxMind";
+
 
 fn error(message: String) -> VmError {
     VmError::Script {
@@ -78,7 +91,7 @@ fn error(message: String) -> VmError {
     }
 }
 
-/// Binds the four kinds' twelve natives, [`GET_AI_COMPONENT`] (`NotYet`) and the pawn `QueryInterface` rule
+/// Binds the four kinds' twelve natives, [`GET_AI_COMPONENT`] ([`get_ai_component`]) and the pawn `QueryInterface` rule
 /// ([`crate::pawn_interface::register`]) in Off; nothing under Reference. A key another pack bound first keeps its
 /// binding.
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
@@ -91,18 +104,41 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
         bind(vm, &format!("{COMPONENT}.Release{kind}"), release(list))?;
         bind(vm, &format!("{COMPONENT}.{kind}OnHold"), on_hold(list))?;
     }
-    bind(
-        vm,
-        GET_AI_COMPONENT,
-        Rc::new(|_c: &mut NativeCall<'_>| -> Result<Value, VmError> {
-            Err(NotYet::not_read(
-                "GearboxMind.GetAIComponent: which object of the mind answers it is not resolved (the mind's \
-                 AIComponent property is plausible and unproven)",
-                RECORD_HOLDS,
-            )
-            .into())
-        }),
-    )
+    bind(vm, GET_AI_COMPONENT, Rc::new(get_ai_component))
+}
+
+/// `GearboxMind.GetAIComponent()` in Off (NATIVE_GEARBOXMIND_GETAICOMPONENT.md section 3): the receiver's
+/// `AIComponent`, read by name with a plain read and returned as it is, the component handle or None. `WillowMind` and
+/// any other subclass answer the same. It writes, loads and draws nothing; an unloaded component handle is returned
+/// as the handle, not loaded. Classes are looked up only in the class table (`by_path`), never loaded.
+///
+/// Refusals, all before any effect: no receiver; a receiver whose class is not `GearboxMind` or a subclass (a class
+/// not in the table counts as not one); a class that declares no `AIComponent`; a value that is not an object: each a
+/// `VmError::Script`. The field is read straight from the heap (no `access::get`, which loads an unloaded handle).
+///
+/// **Pending the note's review r1 of #594** (two clarifications, not coded yet): how the note's template refusal (an
+/// `AIComponent` that is the class default's template component) is detected without a load, and what a receiver
+/// that is itself an unloaded handle answers. Until then neither case is special-cased here.
+pub fn get_ai_component(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    let vm = &*c.vm;
+    let fail = |message: String| VmError::Script {
+        function: GET_AI_COMPONENT.to_string(),
+        message,
+    };
+    let this = c.this.ok_or_else(|| fail("called with no mind".to_string()))?;
+    let class = vm.space.heap.get(this)?.class;
+    let mind = vm.space.classes.by_path(MIND);
+    if !mind.is_some_and(|m| vm.space.classes.is_child_of(class, m)) {
+        return Err(fail(format!("{} is not a GearboxMind", ow_attr::eval::class_path(&vm.space, this))));
+    }
+    let Some(p) = vm.space.prop(class, "AIComponent") else {
+        return Err(fail(format!("{} declares no AIComponent", ow_attr::eval::class_path(&vm.space, this))));
+    };
+    let component = match vm.space.read(this, ow_object::ids::PropAddr::scalar(p))? {
+        Value::Object(r) => *r,
+        other => return Err(fail(format!("AIComponent holds {}, not an object", other.kind_name()))),
+    };
+    Ok(Value::Object(component))
 }
 
 /// The text a hold refusal carries once a context's script has run (review r1 of #456, item 2), the kernel's
@@ -123,7 +159,7 @@ pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 ///
 /// **Order.** In Off every context is judged first ([`preflight_hold_contexts`]) and only then is any script run, so
 /// those refusals change nothing (the hub's rule: refusals before any write). A refusal from a script itself (an
-/// unread `GetAIComponent`, a hold override, a release out of order) after an earlier context's script has run may
+/// `GetAIComponent` refusal, a hold override, a release out of order) after an earlier context's script has run may
 /// follow that script's hold writes, so it is terminal: a `NotYet` is prefixed [`PARTIAL_WRITES`], its kind kept, and
 /// other errors are returned unchanged (review r1 of #456, item 2). "Has run" is the honest bound: the port does not
 /// tell a script that held something from one that held nothing. Under Reference each context is judged just before
