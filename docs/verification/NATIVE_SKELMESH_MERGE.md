@@ -1,7 +1,7 @@
 # The skeletal mesh merge behind BuildCompositeMesh (draft, 2026-11-20)
 
 AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-SKELMESH-MERGE (decision
-2026-11-19-NNN-skelmesh-merge-analyst). Analyst only: a different lane implements anything proposed here (clean
+2026-11-19-261-skelmesh-merge-analyst). Analyst only: a different lane implements anything proposed here (clean
 room).
 
 **Sources:**
