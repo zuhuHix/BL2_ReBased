@@ -14,12 +14,10 @@
 //! 1. a component made from a template counts as valid (the validity check is not modelled);
 //! 2. a custom head or skin entry is appended and nothing is applied; the attachment counts as not made;
 //! 3. the `Parent` link stays `NotYet { NotRead }` ([`PARENT_LINK`]);
-//! 4. the render-side hooks of the pawn's `PostInitBodyComposition` (the gear-likeness step, the mode-0 rendering
-//!    setting, the light environment) answer nothing only where they write no field the script or a slice step reads.
-//!    None of the three was read far enough to list its fields (the note's r2 at 8b324f22), and their conditions are
-//!    unread, so the port takes them as allowing the hook (UNVERIFIED): **every** made component is
-//!    `NotYet { LayerAbsent }` ([`RENDER_HOOKS`]) until they are read (review r1 of #542 and the hub's precision). On
-//!    installed data this makes the component write path unreachable; switches and custom entries still write.
+//! 4. the render-side hooks of the pawn's `PostInitBodyComposition` (the gear-likeness step, the mode-0 owner-no-see
+//!    setting, the light environment) follow NATIVE_BODYCOMP_RENDER_HOOKS.md section 4 (crate::world::render_hooks,
+//!    lane IMPL-BODYCOMP-RENDER-HOOKS): each does nothing or refuses in the preflight, and none writes in Off
+//!    (UNVERIFIED).
 //!
 //! **The preflight** ([`plan`]) reads and writes nothing, loads included: the call-wide checks (shapes, a rebuild, a
 //! client-side apply, a mode other than 0), then the walk (the note's section 3: bases, switches, records), and for
@@ -103,11 +101,7 @@ pub const PARENT_LINK: &str = "InitializeBodyComposition: the Parent link's pare
 pub const SCRIPT_CALL: &str = "InitializeBodyComposition called from script (its destinations)";
 pub const ANIM_NODES: &str = "InitializeBodyComposition: the new Mesh's animation nodes (ArmBoneBlend, AimOffset, \
                               LeftHandGrip, the head look-at, WillowFootIK and the slot nodes)";
-/// The rendering hooks (ruling 4).
-pub const RENDER_HOOKS: &str = "InitializeBodyComposition: the body's rendering hooks";
 /// The layers.
-pub const RENDER_LAYER: &str =
-    "a rendering layer (the gear-likeness step, the mode-0 rendering setting and the light environment)";
 pub const MESH_LAYER: &str = "a skeletal mesh data reader (sockets and the reference skeleton)";
 pub const ANIM_LAYER: &str = "an animation-tree instance for the skeletal mesh";
 
@@ -181,21 +175,6 @@ impl Counters {
 /// record kept; any other error, and a `NotYet` with no write since, is returned as it is.
 pub fn after_writes(vm: &Vm, before: Counters, e: VmError) -> VmError {
     if Counters::read(vm) != before { crate::pools::after_partial_writes(e) } else { e }
-}
-
-thread_local! {
-    static RENDER_HOOKS_ANSWERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// For the tests only: answer the rendering hooks with nothing on this thread, to keep the component write path
-/// covered while production refuses it (ruling 4).
-#[cfg(test)]
-pub(crate) fn answer_render_hooks_for_tests(on: bool) {
-    RENDER_HOOKS_ANSWERED.with(|c| c.set(on));
-}
-
-fn render_hooks_answered() -> bool {
-    RENDER_HOOKS_ANSWERED.with(std::cell::Cell::get)
 }
 
 fn script(message: String) -> VmError {
@@ -752,15 +731,15 @@ pub fn plan(vm: &Vm, i: &Inputs) -> Result<Option<Plan>, VmError> {
                     }
                     post.cylinder = Some(!mesh_for_collision);
                 }
+                // The rendering hooks (NATIVE_BODYCOMP_RENDER_HOOKS.md section 4, lane IMPL-BODYCOMP-RENDER-HOOKS):
+                // hook 1 before the custom-head step, hooks 2 and 3 after it. Read only; none writes in Off.
+                crate::world::render_hooks::gear_likeness(vm, class)?;
                 if name_is(vm, &field(vm, &a.data, "Name", "InstanceDataUnion")?, CUSTOM_HEAD_NAME) {
                     require_prop(vm, owner_class, "HeadMesh")?;
                     post.head = true;
                 }
-                // Ruling 4: the gear-likeness step, the mode-0 rendering setting and the light environment, for every
-                // made component (their conditions are unread, so they are taken as allowing the hook; UNVERIFIED).
-                if !render_hooks_answered() {
-                    return Err(NotYet::layer_absent(RENDER_HOOKS, RENDER_LAYER, RECORD).into());
-                }
+                crate::world::render_hooks::owner_no_see(vm, owner, template, class)?;
+                crate::world::render_hooks::light_environment(vm, owner, template, class)?;
                 made.push(Made::Component { template, class, collision, post });
             }
         }

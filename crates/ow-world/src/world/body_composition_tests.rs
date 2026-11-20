@@ -16,7 +16,7 @@ use ow_object::ids::{ClassId, FuncId, ObjRef, PropAddr, StructId};
 use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 use ow_package::testkit::reflect::{toy_array_of, toy_struct};
-use ow_package::testkit::script::ScriptToy;
+use ow_package::testkit::script::{FunctionSpec, ScriptToy};
 use ow_vm::api::{FunctionDecl, Vm};
 use ow_vm::error::VmError;
 
@@ -37,6 +37,14 @@ struct Env {
     component_data: StructId,
     composition: StructId,
     wrapper: FuncId,
+    /// The rendering hooks' classes (lane IMPL-BODYCOMP-RENDER-HOOKS): a plain `Engine.ActorComponent`, an
+    /// `Engine.PlayerController`, a package component that implements `WillowGame.IGearLikenessConsumer` (by the
+    /// structural rule: these synthetic class bodies do not decode), and a cylinder that declares the deferred
+    /// reattach's fields (the package's `PrimitiveComponent` does not, so `SetOwnerNoSee`'s planner refuses it).
+    actor_component: ClassId,
+    player_controller: ClassId,
+    likeness: ClassId,
+    reattach_cylinder: ClassId,
 }
 
 impl Drop for Env {
@@ -78,6 +86,12 @@ fn env() -> Env {
 /// The fixture; with `reattach`, the pawn class has the canonical `WillowPawn.ReattachWeapons` (a hand-declared class
 /// gets it through `Vm::declare_method`).
 fn env_with(reattach: bool) -> Env {
+    env_opts(reattach, true, false)
+}
+
+/// [`env_with`]; without `head_mesh` the pawn class declares no `HeadMesh`, and with `controller_int` its
+/// `Controller` is declared as an int (the rendering hooks' malformed-field tests).
+fn env_opts(reattach: bool, head_mesh: bool, controller_int: bool) -> Env {
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -111,6 +125,13 @@ fn env_with(reattach: bool) -> Env {
         }
         t.prop("Object", primitive, "LightEnvironment", 0, object);
         t.prop("Float", primitive, "Scale", 0, 0);
+        // The rendering hooks' flags (NATIVE_BODYCOMP_RENDER_HOOKS.md: hook 2's and hook 3's).
+        for flag in ["bOwnerNoSee", "bAcceptsLights"] {
+            t.prop("Bool", primitive, flag, 0, 0);
+        }
+        let controller = t.class("Controller", object);
+        let player_controller = t.class("PlayerController", controller);
+        t.prop("Object", player_controller, "Player", 0, object);
         let cylinder = t.class("CylinderComponent", primitive);
         t.prop("Float", cylinder, "CollisionRadius", 0, 0);
         let mesh = t.class("MeshComponent", primitive);
@@ -227,8 +248,26 @@ fn env_with(reattach: bool) -> Env {
         t.p.add_export(holder, "Holder", payload);
         t.build()
     };
-    let files: Vec<(&str, &[u8])> =
-        vec![("Core.upk", core.as_slice()), ("Engine.upk", engine.as_slice()), ("GD_ToyBody.upk", templates.as_slice())];
+    // The gear-likeness interface and one component that defines its function (hook 1).
+    let willow = {
+        let mut t = ScriptToy::with_imports(&["Class", "Function"]);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let component = t.p.add_import("Core", "Class", engine, "ActorComponent");
+        let iface = t.class("IGearLikenessConsumer", object);
+        let likeness = t.class("ToyLikenessComponent", component);
+        for owner in [iface, likeness] {
+            t.function(owner, "ToyRefresh", &[], None, &[], &FunctionSpec::new(0x400 | 0x20000, "ToyRefresh"), |_| None);
+        }
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Core.upk", core.as_slice()),
+        ("Engine.upk", engine.as_slice()),
+        ("GD_ToyBody.upk", templates.as_slice()),
+        ("WillowGame.upk", willow.as_slice()),
+    ];
     let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
     let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
     let object = vm.find_class("Core.Object").unwrap();
@@ -276,6 +315,17 @@ fn env_with(reattach: bool) -> Env {
     let skeletal = vm.find_class(SKELETAL).unwrap();
     vm.find_class(PRIMITIVE).unwrap();
     vm.find_class(MESH_COMPONENT).unwrap();
+    // The rendering hooks' set-up classes (defined at set-up, as the game has them loaded).
+    vm.find_class(crate::world::render_hooks::GEAR_LIKENESS).unwrap();
+    let likeness = vm.find_class("WillowGame.ToyLikenessComponent").unwrap();
+    let player_controller = vm.find_class("Engine.PlayerController").unwrap();
+    let actor_component = vm.find_class("Engine.ActorComponent").unwrap();
+    let scene = strukt(&mut vm, "Test.ToyScenePointer", &[("Ptr", PropKind::Int)]);
+    let reattach_cylinder = class(&mut vm, "Test.ToyReattachCylinder", cylinder, &[
+        ("Scene", PropKind::Struct(scene)),
+        ("bNeedsReattach", PropKind::Bool),
+        ("bNeedsUpdateTransform", PropKind::Bool),
+    ]);
     let actor = class(&mut vm, "Engine.Actor", object, &[
         ("Role", PropKind::Byte { enum_: None }),
         ("bNetDirty", PropKind::Bool),
@@ -294,7 +344,7 @@ fn env_with(reattach: bool) -> Env {
         ("AimOffsetNodeName", PropKind::Name),
         ("HeadLookAtName", PropKind::Name),
     ]);
-    let pawn = class(&mut vm, crate::world::pawn_meshes::WILLOW_PAWN, actor, &[
+    let mut pawn_props = vec![
         ("BodyClass", PropKind::Object { class: body }),
         ("InstanceDataState", PropKind::Struct(set)),
         ("ReplicatedInstanceDataState", PropKind::Struct(rep)),
@@ -313,7 +363,12 @@ fn env_with(reattach: bool) -> Env {
         ("RepMeshScale", PropKind::Float),
         ("Weapon", o.clone()),
         ("OffHandWeapon", o.clone()),
-    ]);
+        ("Controller", if controller_int { PropKind::Int } else { o.clone() }),
+    ];
+    if !head_mesh {
+        pawn_props.retain(|(n, _)| *n != "HeadMesh");
+    }
+    let pawn = class(&mut vm, crate::world::pawn_meshes::WILLOW_PAWN, actor, &pawn_props);
     let path = "WillowGame.WillowPawn.InitializePawnMeshes";
     let d = FunctionDecl::native(ObjectPath::parse(path).unwrap(), "WillowPawn.InitializePawnMeshes()").with_owner(pawn);
     let wrapper = vm.declare_function(d).unwrap();
@@ -321,7 +376,24 @@ fn env_with(reattach: bool) -> Env {
         declare_reattach(&mut vm, pawn, REATTACH_WEAPONS);
     }
     crate::world::pawn_meshes::register(&mut vm).unwrap();
-    Env { vm, dir, object, pawn, body, cylinder, skeletal, union, body_union, component_data, composition, wrapper }
+    Env {
+        vm,
+        dir,
+        object,
+        pawn,
+        body,
+        cylinder,
+        skeletal,
+        union,
+        body_union,
+        component_data,
+        composition,
+        wrapper,
+        actor_component,
+        player_controller,
+        likeness,
+        reattach_cylinder,
+    }
 }
 
 /// `ReattachWeapons` at `path`, a method of the hand-declared `class`.
@@ -488,7 +560,6 @@ fn refused(e: &mut Env, p: ObjRef) -> (Missing, String) {
 #[test]
 fn a_cylinder_is_made_entered_collided_attached_and_posted() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
     put(&mut e.vm, template, "CollisionRadius", Value::Float(34.0));
     let a = attachment(&mut e, A { template: Some(template), parent: CYLINDER_ID, collision: 2, index: 14, ..A::default() });
@@ -525,7 +596,6 @@ fn a_cylinder_is_made_entered_collided_attached_and_posted() {
 #[test]
 fn a_mesh_for_collision_body_keeps_collision_component() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
     let a = attachment(&mut e, A { template: Some(template), parent: CYLINDER_ID, ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
@@ -546,7 +616,6 @@ fn the_collision_table_sets_and_clears_by_type() {
         (8, [false, true, true, true, true], [false, false, false]),
     ] {
         let mut e = env();
-        answer_render_hooks_for_tests(true);
         let template = make(&mut e.vm, e.cylinder, "Cylinder_Template");
         for flag in FLAGS {
             put(&mut e.vm, template, flag, Value::Bool(true));
@@ -570,7 +639,6 @@ fn the_collision_table_sets_and_clears_by_type() {
 #[test]
 fn a_switch_is_copied_and_gates_its_components() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let t1 = make(&mut e.vm, e.cylinder, "Cylinder_T1");
     let t2 = make(&mut e.vm, e.cylinder, "Cylinder_T2");
     let s = attachment(&mut e, A { ty: SWITCH, int: 1, index: 1, ..A::default() });
@@ -648,7 +716,6 @@ fn a_custom_head_entry_is_appended_and_counts_as_not_made() {
 #[test]
 fn the_owner_retry_and_head_mesh() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
     let head = make(&mut e.vm, e.skeletal, "Head_Template");
     let base = attachment(&mut e, A { template: Some(skel), index: 1, ..A::default() });
@@ -729,7 +796,6 @@ fn releasing_the_old_cylinder_or_mesh_is_not_read() {
 #[test]
 fn a_second_cylinder_attachment_is_a_release() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let c1 = make(&mut e.vm, e.cylinder, "Cyl_1");
     let c2 = make(&mut e.vm, e.cylinder, "Cyl_2");
     let a0 = attachment(&mut e, A { template: Some(c1), parent: CYLINDER_ID, ..A::default() });
@@ -740,18 +806,20 @@ fn a_second_cylinder_attachment_is_a_release() {
     assert_eq!(what, releasing_old("CylinderComponent"));
 }
 
-/// Ruling 4 (review r1 of #542): in production every made component is the rendering hooks' `LayerAbsent`, before any
-/// write; a body with only switches and custom entries still writes.
+/// The rendering hooks (lane IMPL-BODYCOMP-RENDER-HOOKS, which replaced ruling 4's refusal of every made component):
+/// a made cylinder on a pawn with no controller and no light environment passes all three and is written; a body with
+/// only switches and custom entries still writes.
 #[test]
-fn a_made_component_is_the_rendering_hooks_layer_absent() {
+fn a_made_component_passes_the_rendering_hooks_when_none_acts() {
     let mut e = env();
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let a = attachment(&mut e, A { template: Some(cyl), parent: CYLINDER_ID, collision: 2, ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
-    let (missing, what) = refused(&mut e, p);
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
-    assert_eq!(what, RENDER_HOOKS);
-    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(None));
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, p, "CylinderComponent"), Value::Object(Some(made)));
+    assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(false), "no hook wrote");
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None), "no hook wrote");
 
     let mut e = env();
     let s = attachment(&mut e, A { ty: SWITCH, index: 1, ..A::default() });
@@ -775,13 +843,14 @@ fn the_root_motion_check_follows_the_preflight() {
     assert_eq!(what, crate::world::pawn_meshes::ROOT_MOTION);
 
     let mut e = env();
-    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
-    let a = attachment(&mut e, A { template: Some(cyl), ..A::default() });
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let a = attachment(&mut e, A { template: Some(skel), ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
+    stop_at_light(&mut e, p, skel);
     let Value::Object(Some(body)) = prop(&e.vm, p, "BodyClass") else { panic!() };
     put(&mut e.vm, body, "UseRootMotion", Value::Bool(true));
     let (_, what) = refused(&mut e, p);
-    assert_eq!(what, RENDER_HOOKS, "the preflight's refusal comes first");
+    assert_eq!(what, crate::world::render_hooks::ARRAY_CHECK, "the preflight's refusal comes first");
 }
 
 /// Review r1 of #542, item 5: a replicated state without the packing's fields is the build's shape error before any
@@ -822,7 +891,6 @@ fn the_named_refusals_are_write_free() {
     for case in ["rebuild", "client", "template", "hit", "actor socket", "socket tables", "parent link", "other target"] {
         let mut e = env();
         // The later attachments' refusals need the earlier made component past the rendering hooks.
-        answer_render_hooks_for_tests(true);
         let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
         let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
         let object = e.object;
@@ -934,7 +1002,6 @@ fn store_templates(e: &mut Env) -> (ObjRef, ObjRef, ObjRef) {
 #[test]
 fn an_unloaded_skeletal_parent_template_is_not_read() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (skel, _, _) = store_templates(&mut e);
     let cyl = make(&mut e.vm, e.cylinder, "Cyl");
     let a0 = attachment(&mut e, A { template: Some(skel), ..A::default() });
@@ -951,7 +1018,6 @@ fn an_unloaded_skeletal_parent_template_is_not_read() {
 #[test]
 fn a_template_loaded_by_the_writes_is_counted() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (_, cyl, _) = store_templates(&mut e);
     let a = attachment(&mut e, A { template: Some(cyl), ..A::default() });
     let p = pawn_with(&mut e, vec![a]);
@@ -1083,18 +1149,18 @@ fn is_anim_refusal(missing: &Missing, what: &str) -> bool {
 }
 
 /// Rule 5: a template with no tree settles all four lookups as None, `bUsingFootIK` false and `SlotNodes` empty. The
-/// rest of the made-`Mesh` step (NATIVE_MESH_REST.md) then passes its preflight, and production stops at the rendering
-/// hooks' `LayerAbsent`, write-free.
+/// rest of the made-`Mesh` step (NATIVE_MESH_REST.md) then passes its preflight, and the walk reaches the rendering
+/// hooks: here hook 3's array check (the pawn's light environment set, the template's `bAcceptsLights` set), write-free.
 #[test]
 fn no_tree_settles_everything_and_the_mesh_step_reaches_the_rendering_hooks() {
     let mut e = env();
     let skel = skel_with(&mut e, None);
     let p = mesh_pawn(&mut e, skel);
+    stop_at_light(&mut e, p, skel);
     let body = body_of(&e, p);
     assert_eq!(check(&e.vm, skel, Some(body), None).unwrap(), Settled::default());
     let (missing, what) = refused(&mut e, p);
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
-    assert_eq!(what, RENDER_HOOKS);
+    assert!(is_light_stop(&missing, &what), "{missing:?} {what}");
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None), "untouched");
 }
 
@@ -1173,9 +1239,9 @@ fn with_the_copy_check_on_a_plannable_tree_passes_the_lookups() {
     put(&mut e.vm, t.root, "bParentNodeArrayBuilt", Value::Bool(true));
     let skel = skel_with(&mut e, Some(t.root));
     let p = mesh_pawn(&mut e, skel);
+    stop_at_light(&mut e, p, skel);
     let (missing, what) = with_copy(|| refused(&mut e, p));
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?} {what}");
-    assert_eq!(what, RENDER_HOOKS);
+    assert!(is_light_stop(&missing, &what), "{missing:?} {what}");
 }
 
 /// With no planned copy, a kept find and a slot node are #529's refusal too (as before this lane), write-free.
@@ -1263,9 +1329,9 @@ fn a_control_shared_by_two_lists_is_not_a_loop() {
     let body = body_of(&e, p);
     let copy = planned(&e, skel);
     assert_eq!(check(&e.vm, skel, Some(body), copy.as_ref()).unwrap(), Settled { foot_ik: true, ..Settled::default() });
+    stop_at_light(&mut e, p, skel);
     let (missing, what) = with_copy(|| refused(&mut e, p));
-    assert!(matches!(missing, Missing::LayerAbsent(l) if l == RENDER_LAYER), "{missing:?}");
-    assert_eq!(what, RENDER_HOOKS);
+    assert!(is_light_stop(&missing, &what), "{missing:?} {what}");
 }
 
 /// `check` on its own, with #518's counters read around it: a refusal moves none of them.
@@ -1361,7 +1427,6 @@ fn mesh_rest_pawn(e: &mut Env) -> (ObjRef, ObjRef) {
 #[test]
 fn the_rest_of_the_mesh_step_sets_its_fields_on_authority() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (p, skel) = mesh_rest_pawn(&mut e);
     run(&mut e, p).unwrap();
     let list = entries(&e, p);
@@ -1407,7 +1472,6 @@ fn the_lookups_write_the_copies_of_aim_offset_and_the_slot_nodes() {
         (p, skel, slot, aim)
     };
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (p, _, slot, aim) = build(&mut e);
     with_copy(|| run(&mut e, p)).unwrap();
     let mesh = made_of(&e, &entries(&e, p)[1]);
@@ -1424,7 +1488,6 @@ fn the_lookups_write_the_copies_of_aim_offset_and_the_slot_nodes() {
     assert_eq!(prop(&e.vm, p, "ArmBoneBlend"), Value::Object(None), "no ArmBoneBlend node");
 
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (p, skel, _, _) = build(&mut e);
     put(&mut e.vm, skel, "bAnimTreeInitialised", Value::Bool(true));
     let (missing, what) = with_copy(|| refused(&mut e, p));
@@ -1435,7 +1498,6 @@ fn the_lookups_write_the_copies_of_aim_offset_and_the_slot_nodes() {
 #[test]
 fn off_authority_the_mesh_scale_is_not_replicated() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (p, _) = mesh_rest_pawn(&mut e);
     put(&mut e.vm, p, "Role", Value::Byte(2));
     put(&mut e.vm, p, "RepMeshScale", Value::Float(9.0));
@@ -1451,7 +1513,6 @@ fn off_authority_the_mesh_scale_is_not_replicated() {
 fn a_held_weapon_is_not_read_and_write_free() {
     for hand in ["Weapon", "OffHandWeapon"] {
         let mut e = env();
-        answer_render_hooks_for_tests(true);
         let (p, _) = mesh_rest_pawn(&mut e);
         let object = e.object;
         let gun = make(&mut e.vm, object, "Gun");
@@ -1467,7 +1528,6 @@ fn a_held_weapon_is_not_read_and_write_free() {
 #[test]
 fn a_second_mesh_attachment_is_a_release() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s1 = skel_with(&mut e, None);
     let s2 = skel_with(&mut e, None);
     let a0 = attachment(&mut e, A { template: Some(s1), parent: MESH_ID, ..A::default() });
@@ -1506,7 +1566,6 @@ fn the_flag_and_the_mesh_scale_are_kind_checked() {
 #[test]
 fn no_reattach_weapons_is_refused_like_an_override() {
     let mut e = env_with(false);
-    answer_render_hooks_for_tests(true);
     let (p, _) = mesh_rest_pawn(&mut e);
     let (missing, what) = refused(&mut e, p);
     assert_eq!((missing, what.as_str()), (Missing::NotRead, REATTACH_OVERRIDE));
@@ -1520,7 +1579,6 @@ fn no_reattach_weapons_is_refused_like_an_override() {
 #[test]
 fn an_override_is_refused_before_a_held_weapon() {
     let mut e = env_with(false);
-    answer_render_hooks_for_tests(true);
     let pawn = e.pawn;
     let sub = class(&mut e.vm, "WillowGame.ToyPawnSub", pawn, &[]);
     declare_reattach(&mut e.vm, sub, "WillowGame.ToyPawnSub.ReattachWeapons");
@@ -1541,7 +1599,6 @@ fn an_override_is_refused_before_a_held_weapon() {
 #[test]
 fn a_dispatch_that_needs_a_read_is_refused_before_a_held_weapon() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (p, _) = mesh_rest_pawn(&mut e);
     let state = e.vm.space.names.intern("Aiming");
     e.vm.space.heap.get_mut(p).unwrap().state = Some(state);
@@ -1557,7 +1614,6 @@ fn a_dispatch_that_needs_a_read_is_refused_before_a_held_weapon() {
 #[test]
 fn a_scale_that_is_not_a_float_fails_before_any_write() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let skeletal = e.skeletal;
     let odd = class(&mut e.vm, "Engine.ToyIntScaleMeshComponent", skeletal, &[("Scale", PropKind::Int)]);
     let skel = make(&mut e.vm, odd, "Odd_Template");
@@ -1568,4 +1624,311 @@ fn a_scale_that_is_not_a_float_fails_before_any_write() {
     assert_eq!(Counters::read(&e.vm), before, "write-free");
     assert!(entries(&e, p).is_empty());
     assert_eq!(prop(&e.vm, p, "Mesh"), Value::Object(None));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The rendering hooks (NATIVE_BODYCOMP_RENDER_HOOKS.md section 4, lane IMPL-BODYCOMP-RENDER-HOOKS). Numbers are the
+// note's test list. Each refusal goes through `refused`: no heap write, no draw, no load transition, no entry.
+// ---------------------------------------------------------------------------------------------------------------
+
+use crate::world::render_hooks::{
+    ARRAY_CHECK, GEAR_INTERFACE, GEAR_LIKENESS, GEAR_REFRESH, GEAR_UNRESOLVED, NOT_SETTLED, PAWN_TEST, RECORD as HOOKS_RECORD,
+    RENDER_LAYER as HOOKS_LAYER,
+};
+
+/// Hook 3's array-check stop on the made component from `template`: the pawn's `LightEnvironment` set and the
+/// template's `bAcceptsLights` set.
+fn stop_at_light(e: &mut Env, p: ObjRef, template: ObjRef) {
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    put(&mut e.vm, template, "bAcceptsLights", Value::Bool(true));
+}
+
+fn is_light_stop(missing: &Missing, what: &str) -> bool {
+    *missing == Missing::NotRead && what == ARRAY_CHECK
+}
+
+/// A player controller for `p`; with `local`, listed as the world's local player (an `Actors` service is added).
+fn controller_for(e: &mut Env, p: ObjRef, local: bool) -> ObjRef {
+    let pc_class = e.player_controller;
+    let pc = make(&mut e.vm, pc_class, "PC_Test");
+    put(&mut e.vm, p, "Controller", Value::Object(Some(pc)));
+    if e.vm.service::<crate::actors::Actors>().is_none() {
+        let actor = e.vm.space.classes.by_path("Engine.Actor").unwrap();
+        e.vm.add_service(crate::actors::Actors::new(actor)).unwrap();
+    }
+    if local {
+        e.vm.service::<crate::actors::Actors>().unwrap().borrow_mut().add_local_player(pc).unwrap();
+    }
+    pc
+}
+
+/// A pawn with one made attachment from `template` (identifier None, collision 0).
+fn one_made(e: &mut Env, template: ObjRef) -> ObjRef {
+    let a = attachment(e, A { template: Some(template), ..A::default() });
+    pawn_with(e, vec![a])
+}
+
+fn hooks_not_read(e: &mut Env, p: ObjRef, want: &str) {
+    let (missing, what) = refused(e, p);
+    assert_eq!((missing, what.as_str()), (Missing::NotRead, want));
+}
+
+/// Test 1 (and hook 1's no on the walk): Engine components do not implement the interface; nothing is written by the
+/// hooks. The made cylinder of [`a_made_component_passes_the_rendering_hooks_when_none_acts`] covers the write side.
+#[test]
+fn hook_1_an_engine_component_does_not_implement_the_gear_likeness_interface() {
+    let e = env();
+    for class in [e.cylinder, e.skeletal, e.actor_component, e.reattach_cylinder] {
+        crate::world::render_hooks::gear_likeness(&e.vm, class).unwrap();
+    }
+}
+
+/// Test 2: a made component whose class implements it is the refresh's `LayerAbsent`, before any write.
+#[test]
+fn hook_1_an_implementer_is_the_gear_likeness_layer_absent() {
+    let mut e = env();
+    let likeness = e.likeness;
+    let t = make(&mut e.vm, likeness, "Likeness_Template");
+    let p = one_made(&mut e, t);
+    let before = Counters::read(&e.vm);
+    let VmError::NotYet(n) = run(&mut e, p).unwrap_err() else { panic!() };
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert!(matches!(&n.missing, Missing::LayerAbsent(l) if &**l == HOOKS_LAYER), "{:?}", n.missing);
+    assert_eq!((&*n.what, n.record), (GEAR_REFRESH, HOOKS_RECORD));
+}
+
+/// Test 3, on decoded class bodies (a WillowGame package built with `Declarations`): an implementing class whose interface entry is not resolved yet (`NotRead`: resolving it would load), the
+/// same class once the entry is resolved (the refresh's `LayerAbsent`), and a class with no entries (nothing).
+#[test]
+fn hook_1_reads_only_resolved_interface_entries() {
+    use ow_object::class_body::CLASS_INTERFACE;
+    use ow_package::testkit::reflect::{ClassBodySpec, Declarations, class_body};
+    let dir = std::env::temp_dir().join(format!("ow-world-gearlike-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut d = Declarations::with_imports(&["Class", "Function", "StructProperty"]);
+    let object_body = class_body(&mut d.p, &ClassBodySpec::new(0, 1, 2));
+    let obj = d.p.add_export(0, "Object", object_body);
+    d.default_object(obj, "Object");
+    let iface = d.real_class("IGearLikenessConsumer", obj, obj, 2 | CLASS_INTERFACE, &[], None);
+    d.real_class("ToyConsumer", obj, obj, 2, &[iface], None);
+    d.real_class("ToyPlain", obj, obj, 2, &[], None);
+    let bytes = d.build();
+    let defs = DefStore::from_synthetic(&dir, &[("WillowGame.upk", &bytes)], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let consumer = vm.find_class("WillowGame.ToyConsumer").unwrap();
+    let plain = vm.find_class("WillowGame.ToyPlain").unwrap();
+    let not_read = |r: Result<(), VmError>, want: &str| {
+        let VmError::NotYet(n) = r.unwrap_err() else { panic!() };
+        assert_eq!((n.missing, &*n.what, n.record), (Missing::NotRead, want, HOOKS_RECORD));
+    };
+    let gear = vm.find_class(GEAR_LIKENESS).unwrap();
+    not_read(crate::world::render_hooks::gear_likeness(&vm, consumer), GEAR_UNRESOLVED);
+    assert!(vm.implements(consumer, gear), "the entry resolved (as a loaded pawn class's would be)");
+    let VmError::NotYet(n) = crate::world::render_hooks::gear_likeness(&vm, consumer).unwrap_err() else { panic!() };
+    assert_eq!(&*n.what, GEAR_REFRESH);
+    crate::world::render_hooks::gear_likeness(&vm, plain).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test 3, the fixture's side: a store whose interface class is not defined at set-up is `NotRead` on the walk.
+#[test]
+fn hook_1_the_interface_not_defined_at_set_up_is_not_read() {
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let p = one_made(&mut e, cyl);
+    // A hand class of the same path cannot stand in: `by_path` must find no class. So the lookup is asked directly on
+    // a fresh store with no WillowGame package.
+    let dir = std::env::temp_dir().join(format!("ow-world-gearless-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let _ = std::fs::remove_dir_all(&dir);
+    let core = {
+        let mut t = ScriptToy::new(&[]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let defs = DefStore::from_synthetic(&dir, &[("Core.upk", core.as_slice())], IdentityPolicy::FirstInScanOrder, ParityMode::Off)
+        .expect("store");
+    let mut vm = Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    let object = vm.find_class("Core.Object").unwrap();
+    let VmError::NotYet(n) = crate::world::render_hooks::gear_likeness(&vm, object).unwrap_err() else { panic!() };
+    assert_eq!((n.missing, &*n.what), (Missing::NotRead, GEAR_INTERFACE));
+    let _ = std::fs::remove_dir_all(&dir);
+    run(&mut e, p).unwrap();
+}
+
+/// Test 4: hook 1 comes before the custom-head step, so its refusal masks a pawn class that declares no `HeadMesh`.
+#[test]
+fn hook_1_is_reported_before_the_custom_head_declaration() {
+    let mut e = env_opts(true, false, false);
+    let likeness = e.likeness;
+    let t = make(&mut e.vm, likeness, "Likeness_Template");
+    let a = attachment(&mut e, A { template: Some(t), data_name: CUSTOM_HEAD_NAME, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    let (_, what) = refused(&mut e, p);
+    assert_eq!(what, GEAR_REFRESH);
+    // Without hook 1's refusal the missing declaration is the custom-head step's script error.
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let a = attachment(&mut e, A { template: Some(cyl), data_name: CUSTOM_HEAD_NAME, ..A::default() });
+    let p = pawn_with(&mut e, vec![a]);
+    match run(&mut e, p).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("HeadMesh"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Test 5: a local player's pawn, `bOwnerNoSee` already true: the setter would do nothing, so the pawn test does not
+/// decide; nothing, and the component is written.
+#[test]
+fn hook_2_a_flag_already_set_is_nothing() {
+    let mut e = env();
+    let rc = e.reattach_cylinder;
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    put(&mut e.vm, t, "bOwnerNoSee", Value::Bool(true));
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p, true);
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "bOwnerNoSee"), Value::Bool(true));
+    assert_eq!(prop(&e.vm, made, "bNeedsReattach"), Value::Bool(false), "no setter ran");
+}
+
+/// Test 6: a local player's pawn, `bOwnerNoSee` clear: the pawn test decides, its `NotRead` before any write and
+/// ahead of the setter's deferred-reattach refusal (the attach sets `Owner`).
+#[test]
+fn hook_2_a_clear_flag_is_the_pawn_test_s_not_read() {
+    let mut e = env();
+    let rc = e.reattach_cylinder;
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p, true);
+    hooks_not_read(&mut e, p, PAWN_TEST);
+}
+
+/// Test 7: no controller, a controller that is not a `PlayerController`, a non-local one, and a made object that is
+/// not a `PrimitiveComponent`: the gate fails whatever the pawn test says, so nothing. Mode 3 never reaches the hooks
+/// (the walk refuses every mode other than 0 first, `MENU_MODES`).
+#[test]
+fn hook_2_a_failing_known_gate_is_nothing() {
+    let rc_flag_clear = |e: &mut Env| {
+        let rc = e.reattach_cylinder;
+        make(&mut e.vm, rc, "Cyl_Template")
+    };
+    // No controller.
+    let mut e = env();
+    let t = rc_flag_clear(&mut e);
+    let p = one_made(&mut e, t);
+    run(&mut e, p).unwrap();
+    // A plain controller.
+    let mut e = env();
+    let t = rc_flag_clear(&mut e);
+    let p = one_made(&mut e, t);
+    let c = e.vm.find_class("Engine.Controller").unwrap();
+    let ai = make(&mut e.vm, c, "AI_Test");
+    put(&mut e.vm, p, "Controller", Value::Object(Some(ai)));
+    run(&mut e, p).unwrap();
+    // A player controller that is not local (no Player).
+    let mut e = env();
+    let t = rc_flag_clear(&mut e);
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p, false);
+    run(&mut e, p).unwrap();
+    // A local player, but the made object is not a PrimitiveComponent.
+    let mut e = env();
+    let ac = e.actor_component;
+    let t = make(&mut e.vm, ac, "Plain_Template");
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p, true);
+    run(&mut e, p).unwrap();
+}
+
+/// Test 8: the setter's planner keeps its order: a component class that declares no deferred-reattach fields is the
+/// planner's script error even when the flag already equals the value, before any write.
+#[test]
+fn hook_2_a_malformed_reattach_declaration_is_the_planner_s_error() {
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    put(&mut e.vm, cyl, "bOwnerNoSee", Value::Bool(true));
+    let p = one_made(&mut e, cyl);
+    controller_for(&mut e, p, true);
+    let before = Counters::read(&e.vm);
+    match run(&mut e, p).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("Scene"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
+    assert!(entries(&e, p).is_empty());
+}
+
+/// Test 9: no pawn `LightEnvironment`, a non-mesh component with one set, or a mesh template whose `bAcceptsLights` is
+/// clear: nothing, and the light environment is not written.
+#[test]
+fn hook_3_nothing_without_a_light_environment_a_mesh_or_accepted_lights() {
+    // No light environment (the default).
+    let mut e = env();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    put(&mut e.vm, skel, "bAcceptsLights", Value::Bool(true));
+    let p = one_made(&mut e, skel);
+    run(&mut e, p).unwrap();
+    // A cylinder (not a MeshComponent) with lights accepted and a light environment set.
+    let mut e = env();
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let p = one_made(&mut e, cyl);
+    stop_at_light(&mut e, p, cyl);
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None));
+    // A mesh whose bAcceptsLights is clear.
+    let mut e = env();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let p = one_made(&mut e, skel);
+    stop_at_light(&mut e, p, skel);
+    put(&mut e.vm, skel, "bAcceptsLights", Value::Bool(false));
+    run(&mut e, p).unwrap();
+    let made = made_of(&e, &entries(&e, p)[0]);
+    assert_eq!(prop(&e.vm, made, "LightEnvironment"), Value::Object(None));
+}
+
+/// Test 10: a mesh template with `bAcceptsLights` set reaches the array check: its `NotRead`, before any write.
+#[test]
+fn hook_3_accepted_lights_reach_the_array_check() {
+    let mut e = env();
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let p = one_made(&mut e, skel);
+    stop_at_light(&mut e, p, skel);
+    hooks_not_read(&mut e, p, ARRAY_CHECK);
+}
+
+/// Test 11: a template the store has not loaded, on a path that needs its values, is the not-settled `NotRead`, with
+/// nothing loaded: hook 2 (a local player's cylinder) and hook 3 (a skeletal template with a light environment).
+#[test]
+fn an_unloaded_template_on_a_hook_path_is_not_settled() {
+    let mut e = env();
+    let (_, cyl, _) = store_templates(&mut e);
+    let p = one_made(&mut e, cyl);
+    controller_for(&mut e, p, true);
+    hooks_not_read(&mut e, p, NOT_SETTLED);
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, cyl), "nothing loaded");
+
+    let mut e = env();
+    let (skel, _, _) = store_templates(&mut e);
+    let p = one_made(&mut e, skel);
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    hooks_not_read(&mut e, p, NOT_SETTLED);
+    assert!(e.vm.defs.is_unloaded(&e.vm.space, skel), "nothing loaded");
+}
+
+/// Test 12: a pawn `Controller` not declared as an object is a script error naming it, before any write.
+#[test]
+fn a_malformed_controller_field_is_a_script_error() {
+    let mut e = env_opts(true, true, true);
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let p = one_made(&mut e, cyl);
+    let before = Counters::read(&e.vm);
+    match run(&mut e, p).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains("Controller"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(Counters::read(&e.vm), before, "write-free");
 }
