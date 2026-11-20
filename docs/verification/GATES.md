@@ -94,6 +94,13 @@ AI-assisted (Claude Code, Opus 5.5). NATIVE_SPECIALMOVE_OWNER.md: what `AnimNode
 during and after the tree initialisation. No code changed, so no measured number moved; the slice gate was not run
 for this lane. UNVERIFIED in game.
 
+**ANALYST-SKELMESH-MERGE (2026-11-20, zuhu desktop, on docs/native-skelmesh-merge from main dba540a):** AI-assisted
+(Claude Code, Opus 5.5). Docs only: NATIVE_SKELMESH_MERGE.md, an index row and a decision. No code changed, so no
+build or test run. Installed Off `--slice-gate` strict on main dba540a, under the machine lock, for section 0: 4 ok /
+9 NotYet / 1 error. Link 8 passes 1 of 5 driver steps (`make`) and stops in `init` at "SetSkeletalMesh: a mesh
+change", after `BuildCompositeMesh` answered the gestalt mesh. The slice gun's type has a `GestaltMesh`, so link 8
+does not reach the merge. No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/merge/`.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50
