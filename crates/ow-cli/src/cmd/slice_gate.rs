@@ -1405,8 +1405,9 @@ pub const TARGET_FLAG_PROVIDER_INPUT: &str = "harness input: set-up class";
 ///   together, as the port already possesses an AI pawn (`ow_combat::hit::adopt`). The script's `Possess` is not run
 ///   (as in `adopt`).
 ///
-/// The line is logged before the class lookup, so a lookup that loads (a write) or fails still shows. The classes the
-/// mind's flags need are resolved by link 9's set-up ([`phaselock_setup`]), not here.
+/// The line is logged before the class is read. The fallback class and the classes the mind's flags need are resolved
+/// by link 9's set-up ([`phaselock_setup`]); here the fallback is only read, and one set-up did not resolve is a
+/// refusal with nothing loaded (review r2 of #579).
 pub fn target_mind(
     vm: &mut ow_vm::api::Vm,
     spawner: ow_object::ids::ObjRef,
@@ -1439,9 +1440,19 @@ pub fn target_mind(
         "{TARGET_MIND_INPUT} {path} (spawned and linked as the port's adopt links an AI pawn; UNVERIFIED stand-in for \
          the population spawn's AI controller)"
     ));
+    // The fallback was resolved at link 9's set-up; it is read here, never loaded (review r2 of #579): a lazy load
+    // would write before the slot checks below can refuse.
     let mind_class = match chosen {
         Some(c) => c,
-        None => vm.find_class(TARGET_MIND_FALLBACK)?,
+        None => match vm.space.classes.by_path(TARGET_MIND_FALLBACK) {
+            Some(c) if class_ready(vm, c) => c,
+            _ => {
+                return Err(script_error(format!(
+                    "the target's mind {TARGET_MIND_FALLBACK} was not resolved at link 9's set-up (nothing loaded, \
+                     spawned or linked)"
+                )));
+            }
+        },
     };
     // Every destination first: (holder class, field, required, the class the field must hold, on the target).
     let plan = [
@@ -1480,40 +1491,62 @@ pub fn target_mind(
     Ok(Some(mind))
 }
 
-/// The classes link 9's set-up resolves ([`phaselock_setup`], review r1 of #579): the mind's flag store interface,
+/// The classes link 9's set-up resolves ([`phaselock_setup`], reviews r1 and r2 of #579): the target mind's fallback
+/// class, the mind's flag store interface,
 /// the two interfaces the pawn rules compare against, and every class whose answer `ow_combat::pawn_interface`
 /// registers. Resolving them at set-up keeps the cast from loading any of them lazily (a load is a write).
 pub fn phaselock_setup_classes() -> Vec<&'static str> {
     use ow_combat::pawn_interface as pi;
-    let mut classes = vec![TARGET_FLAG_PROVIDER, pi::AI_INTERFACE, pi::PLAYER_MASTER_INTERFACE, pi::PAWN];
+    let mut classes = vec![TARGET_MIND_FALLBACK, TARGET_FLAG_PROVIDER, pi::AI_INTERFACE, pi::PLAYER_MASTER_INTERFACE];
+    classes.push(pi::PAWN);
     classes.extend([pi::WILLOW_AI_PAWN, pi::WILLOW_VEHICLE]);
     classes.extend(pi::OPEN_ANSWERS.iter().map(|(path, _, _)| *path));
     classes
 }
 
-/// One class resolved at link 9's set-up, with its harness line: already loaded (a defined layout; a class that is
-/// only declared is not loaded), loaded now (a write), absent from the packages, or a failed load. The line is made
-/// whatever the outcome, so a failure is reported too.
+/// Whether class `c` is ready to use with no load: its layout is defined and its function and state code is loaded.
+pub fn class_ready(vm: &ow_vm::api::Vm, c: ow_object::ids::ClassId) -> bool {
+    vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()) && vm.class_code_loaded(c)
+}
+
+/// One class resolved at link 9's set-up, with its harness line (review r2 of #579). The full class lookup always
+/// runs, so a class whose layout another load defined still gets its code loaded here, not later. The line names
+/// the layout and the code separately, each "ready" (it was before) or "loaded at set-up" (a write). A class absent
+/// from the packages loads nothing. A failed lookup is logged with the state it found. The line is made whatever the
+/// outcome.
 pub fn preload_class(vm: &mut ow_vm::api::Vm, path: &str) -> (String, Result<(), ow_vm::error::VmError>) {
-    let defined = vm
-        .space
-        .classes
-        .by_path(path)
-        .is_some_and(|id| vm.space.classes.get_layout(id).is_some_and(|l| l.is_defined()));
-    if defined {
-        return (format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: already loaded, nothing loaded"), Ok(()));
-    }
+    let before = vm.space.classes.by_path(path);
+    let layout_before = before.is_some_and(|c| vm.space.classes.get_layout(c).is_some_and(|l| l.is_defined()));
+    let code_before = before.is_some_and(|c| vm.class_code_loaded(c));
+    let state = |ready: bool| if ready { "ready" } else { "loaded at set-up" };
     match vm.find_class_if_present(path) {
-        Ok(Some(_)) => (
-            format!(
-                "{TARGET_FLAG_PROVIDER_INPUT} {path}: loaded at set-up (a write; UNVERIFIED stand-in for the game \
-                 having it loaded)"
-            ),
-            Ok(()),
-        ),
+        Ok(Some(c)) => {
+            let code_after = vm.class_code_loaded(c);
+            let code = match (code_before, code_after) {
+                (true, _) => "ready",
+                (false, true) => "loaded at set-up",
+                // A class the store has no code key for (made at run time) has no code to load.
+                (false, false) => "none to load",
+            };
+            let wrote = !layout_before || code == "loaded at set-up";
+            let note = if wrote {
+                " (a write; UNVERIFIED stand-in for the game having it loaded)"
+            } else {
+                ", nothing loaded"
+            };
+            (
+                format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: layout {}, code {code}{note}", state(layout_before)),
+                Ok(()),
+            )
+        }
         Ok(None) => (format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: not in the packages, nothing loaded"), Ok(())),
         Err(e) => (
-            format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: the load failed: {}", ow_combat::hit::access::error_text(&e)),
+            format!(
+                "{TARGET_FLAG_PROVIDER_INPUT} {path}: the load failed (layout {}, code {} before): {}",
+                if layout_before { "ready" } else { "not ready" },
+                if code_before { "ready" } else { "not ready" },
+                ow_combat::hit::access::error_text(&e)
+            ),
             Err(e),
         ),
     }

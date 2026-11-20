@@ -33,27 +33,35 @@ unchanged, and Reference is unchanged: these are harness steps of link 9's own O
   - link 9's world never registered `ow_combat::pawn_interface` (decision 2026-11-19-62), so the pawn gave the plain
     `QueryInterface` answer (None) instead of handing the question to its mind. `ow-mission`'s slice world already
     registers it.
-- **Link 9's set-up** (`phaselock_setup`, run by `phaselock_world`; review r1 of #579). It resolves every class the
-  harness needs before the driver starts: `IFlagProvider`, the two interfaces the pawn rules compare against
-  (`IAIInterface`, `IPlayerMaster`), and each class whose answer `pawn_interface` registers. Then it registers the
-  pawn rules, which find those classes loaded, so the cast loads none of them lazily (a load is a write). Each class
-  gets one `harness input: set-up class` line with its outcome: already loaded (a defined layout; a class that is only
-  declared counts as not loaded), loaded at set-up, not in the packages, or the load failed. A failure is logged before
-  the set-up stops. The row's `harness` carries these lines, also when the set-up fails.
+- **Link 9's set-up** (`phaselock_setup`, run by `phaselock_world`; reviews r1 and r2 of #579). It resolves every
+  class the harness needs before the driver starts: the target mind's fallback `WillowGame.WillowMind`,
+  `IFlagProvider`, the two interfaces the pawn rules compare against (`IAIInterface`, `IPlayerMaster`), and each class
+  whose answer `pawn_interface` registers. Then it registers the pawn rules, which find those classes loaded, so the
+  cast loads none of them lazily (a load is a write). Each class gets the full class lookup, layout and code, even when
+  its layout was already defined by another load. Each gets one `harness input: set-up class` line that names the
+  layout and the code separately, each "ready" or "loaded at set-up". A class not in the packages loads nothing, and a
+  failed lookup is logged with the state it found before the set-up stops. The row's `harness` carries these lines,
+  also when the set-up fails.
+- **The fallback is only read at possession** (review r2 of #579). `target_mind` uses the fallback class only when
+  set-up made it ready (layout defined and code loaded, a read through `Vm::class_code_loaded`). Otherwise it refuses
+  with nothing loaded, spawned or linked, so a lazy load can no longer write before the slot checks refuse.
 - **For the hub, not changed here:** the evaluator's class check (`flag_expression.rs`, `implements`) answers false,
   not a NotYet, when the interface class is not loaded. A world that never loads the interface gets a false flag with
   no stop. That native belongs to another lane.
 - **Tests on invented classes:**
   - the mind: with no `ControllerClass`, the fallback `WillowGame.WillowMind`; with a `ControllerClass` default naming
     a toy mind, that class, with `MyWillowMind` and `MyWillowPawn` linked. The mind possesses the pawn, the world
-    lists it, its harness line (marked UNVERIFIED) is logged, and the spawn loads no set-up class. A target class
+    lists it, and its harness line (marked UNVERIFIED) is logged; link 9's set-up runs first. A target class
     with no `Controller` gets no mind and no harness line;
   - a `MyWillowMind` slot narrower than the mind's class: a typed error at the spawn, no mind spawned, `Controller`
     still None;
   - an already-possessed target, by `Controller` and by `MyWillowMind` alone: its mind is returned, nothing is
     spawned, written or logged;
-  - set-up classes: absent from the packages, declared only (loaded, reported as a write), and already loaded; the
-    set-up reports one line per class, in order;
+  - set-up classes: absent from the packages, declared only (loaded, reported as a write), already loaded, and a
+    layout already defined with no code (the code loaded at set-up, and the line says so); the set-up reports one
+    line per class, in order;
+  - with no set-up, a cold fallback mind is refused with nothing loaded or spawned, also for a target whose slot is
+    too narrow;
   - the partial-writes mark is added once at the start, also when the text already mentions it.
 - **The slice** (installed, Off, strict, under the machine lock; a local merge never pushed: this branch, which
   holds #568 @ 350fb829, with #535, #564, #548, #555, #560, #523 and the link 9 spawn branches):

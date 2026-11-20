@@ -300,10 +300,10 @@ ctest and verify_packages were not run (no C++ change). No real-game run; `UNVER
 Code, Opus 5.5). Link 9's target gets a mind (a harness input, UNVERIFIED): `WillowGame.WillowMind` or the target's
 `ControllerClass`, spawned by the world and linked as `adopt` links an AI pawn, after all four links are checked. Link
 9's set-up resolves and reports the classes the harness needs (`IFlagProvider` among them), then registers the pawn
-`QueryInterface` rules. Review r1 of #579 is applied.
+`QueryInterface` rules. Reviews r1 and r2 of #579 are applied (the fallback mind is resolved at set-up).
 
 Results:
-- `cargo test -p ow-cli`: 122 + 2 passed / 0 failed / 1 ignored (6 new).
+- `cargo test -p ow-cli`: 124 + 2 passed / 0 failed / 1 ignored (8 new).
 - `cargo test --workspace -j 2`: 2,453 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK;
   `check_slice_run_off_test.py` OK; clippy has no hits in the touched files.
 - Installed Off `--slice-gate` strict (a local merge with #535, #564, #548, #555, #560, #523 and the link 9 spawn

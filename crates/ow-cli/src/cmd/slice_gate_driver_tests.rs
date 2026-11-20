@@ -558,16 +558,16 @@ fn link_9_s_evidence_finds_the_state_by_name_whatever_its_spelling() {
 /// Lane IMPL-LINK9-TARGET-MIND: the spawned target gets a mind that possesses it, through the world's own spawn. With
 /// no ControllerClass the mind is the fallback `WillowGame.WillowMind`; a target whose default names `ToyMind` gets a
 /// `ToyMind`, linked both ways (`Controller`, `MyWillowMind`; `Pawn`, `MyWillowPawn`). The mind is registered in the
-/// world and the harness line is logged. The spawn loads no set-up class (that is link 9's set-up, review r1 of #579).
+/// world and the harness line is logged. Link 9's set-up runs first (it resolves the fallback, review r2 of #579).
 /// A target that cannot hold a controller gets none.
 #[test]
 fn the_cast_s_target_gets_a_mind_that_possesses_it() {
     for (target, mind_class) in [("Engine.ToyMindedTarget", "WillowGame.WillowMind"), ("Engine.ToyNamedTarget", "Engine.ToyMind")] {
         let mut t = toy();
+        phaselock_setup(&mut t.world.vm, &mut Vec::new()).unwrap();
         let before = t.listed().len();
         let (r, actors) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", target], Grading::Strict);
         assert!(r.stop.is_none(), "{target}: {:?}", r.stop);
-        assert!(t.world.vm.space.classes.by_path(TARGET_FLAG_PROVIDER).is_none(), "{target}: the spawn loads no set-up class");
         let (_, _, Some(pawn)) = actors.expect("the cast ran") else { panic!() };
         let Value::Object(Some(mind)) = read(&t, pawn, "Controller") else { panic!("{target}: no controller") };
         let want = t.world.vm.find_class(mind_class).unwrap();
@@ -613,6 +613,7 @@ fn spawner(t: &Toy) -> ObjRef {
 #[test]
 fn a_target_slot_that_cannot_hold_the_mind_leaves_nothing_half_linked() {
     let mut t = toy();
+    phaselock_setup(&mut t.world.vm, &mut Vec::new()).unwrap();
     let before = t.listed().len();
     let (r, _) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", "Engine.ToyNarrowTarget"], Grading::Strict);
     let Some((outcome, stop)) = &r.stop else { panic!("no stop") };
@@ -663,12 +664,51 @@ fn a_set_up_class_is_resolved_and_reported_whatever_its_state() {
     assert!(vm.space.classes.get_layout(vm.space.classes.by_path(TARGET_FLAG_PROVIDER).unwrap()).unwrap().is_defined());
     let (line, outcome) = preload_class(vm, TARGET_FLAG_PROVIDER);
     assert!(outcome.is_ok());
-    assert!(line.ends_with("already loaded, nothing loaded"), "{line}");
+    assert!(line.ends_with("layout ready, code ready, nothing loaded"), "{line}");
+}
+
+/// Review r2 of #579, item 2: a class whose layout another load defined, with no code loaded, gets its code loaded by
+/// the set-up step, and the line says so (layout ready, code loaded at set-up), so registration later loads nothing.
+#[test]
+fn a_set_up_class_with_a_ready_layout_still_gets_its_code() {
+    let mut t = toy();
+    let vm = &mut t.world.vm;
+    let id = {
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, TARGET_FLAG_PROVIDER).unwrap();
+        code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap()
+    };
+    assert!(vm.space.classes.get_layout(id).unwrap().is_defined(), "layout defined");
+    assert!(!vm.class_code_loaded(id), "no code yet");
+    let (line, outcome) = preload_class(vm, TARGET_FLAG_PROVIDER);
+    assert!(outcome.is_ok());
+    assert!(line.contains("layout ready, code loaded at set-up (a write"), "{line}");
+    assert!(vm.class_code_loaded(id), "the code is loaded at set-up");
+    assert!(class_ready(vm, id));
+}
+
+/// Review r2 of #579, item 1: with no set-up, the fallback `WillowGame.WillowMind` is cold, and the target's mind
+/// refuses before anything is loaded. A target whose `MyWillowMind` slot is also too narrow gets the same refusal:
+/// the fallback is never loaded to reach the slot check.
+#[test]
+fn a_cold_fallback_mind_is_refused_with_nothing_loaded() {
+    for target in ["Engine.ToyMindedTarget", "Engine.ToyNarrowTarget"] {
+        let mut t = toy();
+        let before = t.listed().len();
+        let (r, _) = t.drive(&["Engine.ToyPawn", "Engine.ToyController", target], Grading::Strict);
+        let Some((outcome, stop)) = &r.stop else { panic!("{target}: no stop") };
+        assert_eq!(*outcome, Outcome::Error, "{target}");
+        assert!(stop.text.contains("was not resolved at link 9's set-up"), "{target}: {}", stop.text);
+        let vm = &t.world.vm;
+        let cold = vm.space.classes.by_path(TARGET_MIND_FALLBACK).is_none_or(|c| !class_ready(vm, c));
+        assert!(cold, "{target}: the fallback was not loaded");
+        assert_eq!(t.listed().len(), before + 3, "{target}: no mind spawned");
+    }
 }
 
 /// Review r1 of #579, item 3: link 9's set-up resolves each of its classes and reports one line per class, in
-/// order. The toy packages hold only `IFlagProvider` of them, so the rest are absent. The pawn rules then find
-/// nothing to load.
+/// order. The toy packages hold only the fallback mind and `IFlagProvider` of them, so the rest are absent. The pawn
+/// rules then find nothing to load.
 #[test]
 fn link_9_s_set_up_reports_every_class_it_resolves() {
     let mut t = toy();
@@ -679,7 +719,9 @@ fn link_9_s_set_up_reports_every_class_it_resolves() {
     for (line, path) in harness.iter().zip(&classes) {
         assert!(line.starts_with(&format!("{TARGET_FLAG_PROVIDER_INPUT} {path}: ")), "{line}");
     }
+    assert_eq!(classes[0], TARGET_MIND_FALLBACK);
     assert!(harness[0].contains("loaded at set-up"), "{}", harness[0]);
+    assert!(harness[1].contains("loaded at set-up"), "{}", harness[1]);
     assert!(classes.contains(&ow_combat::pawn_interface::PLAYER_MASTER_INTERFACE));
 }
 
