@@ -24,7 +24,7 @@ This lane fixes #609's four review lows:
 
 `cargo test --workspace -j 2`: 2,504 passed / 0 failed / 46 ignored (4 new). The installed Off `--slice-gate` strict:
 0 ok / 5 NotYet / 9 errors. Links 6 and 7 pass `make` and stop at `touch` (`Actor.GetBoundingCylinder`), unchanged
-from #609. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (particle activation follow-up).
+from #609. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-229 (particle activation follow-up).
 
 **IMPL-PARTICLE-ACTIVATION (2026-11-20, zuhu desktop, on fix/rust-spawn-pickup-particles 9777c2cc, #593):**
 AI-assisted (Claude Code, Opus 5.5). `SetTemplate`'s activation and initialisation in Off from
