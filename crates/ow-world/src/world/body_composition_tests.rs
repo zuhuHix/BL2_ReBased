@@ -86,12 +86,32 @@ fn env() -> Env {
 /// The fixture; with `reattach`, the pawn class has the canonical `WillowPawn.ReattachWeapons` (a hand-declared class
 /// gets it through `Vm::declare_method`).
 fn env_with(reattach: bool) -> Env {
-    env_opts(reattach, true, false)
+    env_opts(Opts { reattach, ..Opts::default() })
 }
 
-/// [`env_with`]; without `head_mesh` the pawn class declares no `HeadMesh`, and with `controller_int` its
-/// `Controller` is declared as an int (the rendering hooks' malformed-field tests).
-fn env_opts(reattach: bool, head_mesh: bool, controller_int: bool) -> Env {
+/// The rendering hooks' malformed-field options (lane IMPL-BODYCOMP-RENDER-HOOKS, review of #657, LOW 3).
+#[derive(Clone, Copy)]
+struct Opts {
+    reattach: bool,
+    /// The pawn class declares `HeadMesh`.
+    head_mesh: bool,
+    /// The pawn's `Controller` declared as an int.
+    controller_int: bool,
+    /// The pawn's `LightEnvironment` declared as an int.
+    light_int: bool,
+    /// `PrimitiveComponent`'s `bOwnerNoSee` and `bAcceptsLights` declared as ints.
+    flags_int: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Opts { reattach: true, head_mesh: true, controller_int: false, light_int: false, flags_int: false }
+    }
+}
+
+/// [`env_with`] with [`Opts`].
+fn env_opts(opts: Opts) -> Env {
+    let Opts { reattach, head_mesh, controller_int, light_int, flags_int } = opts;
     // The attach's tree-copy check (lane IMPL-COPY-ANIM-TREE) comes before the lookups; this fixture's tree has no
     // copy fields, so these tests skip it (the check has its own tests in anim_tree_copy_tests.rs).
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
@@ -127,7 +147,7 @@ fn env_opts(reattach: bool, head_mesh: bool, controller_int: bool) -> Env {
         t.prop("Float", primitive, "Scale", 0, 0);
         // The rendering hooks' flags (NATIVE_BODYCOMP_RENDER_HOOKS.md: hook 2's and hook 3's).
         for flag in ["bOwnerNoSee", "bAcceptsLights"] {
-            t.prop("Bool", primitive, flag, 0, 0);
+            t.prop(if flags_int { "Int" } else { "Bool" }, primitive, flag, 0, 0);
         }
         let controller = t.class("Controller", object);
         let player_controller = t.class("PlayerController", controller);
@@ -351,7 +371,7 @@ fn env_opts(reattach: bool, head_mesh: bool, controller_int: bool) -> Env {
         ("CylinderComponent", o.clone()),
         ("Mesh", o.clone()),
         ("HeadMesh", o.clone()),
-        ("LightEnvironment", o.clone()),
+        ("LightEnvironment", if light_int { PropKind::Int } else { o.clone() }),
         // The rest of the made-Mesh step (NATIVE_MESH_REST.md).
         ("MeshBodyCompositionIndex", PropKind::Byte { enum_: None }),
         ("ArmBoneBlend", o.clone()),
@@ -544,10 +564,12 @@ fn rep(e: &Env, p: ObjRef) -> (Value, Value) {
 /// A refusal of the preflight: its kind and text, with no counter moved and no entry written.
 fn refused(e: &mut Env, p: ObjRef) -> (Missing, String) {
     let before = Counters::read(&e.vm);
+    let names = e.vm.space.names.len();
     let err = run(e, p).unwrap_err();
     let VmError::NotYet(n) = err else { panic!("{err:?}") };
     assert!(!ow_core::notyet::is_partial_writes(&n.what), "{}", n.what);
     assert_eq!(Counters::read(&e.vm), before, "write-free: {}", n.what);
+    assert_eq!(e.vm.space.names.len(), names, "intern-free: {}", n.what);
     assert!(entries(e, p).is_empty());
     (n.missing, n.what.to_string())
 }
@@ -1760,7 +1782,7 @@ fn hook_1_the_interface_not_defined_at_set_up_is_not_read() {
 /// Test 4: hook 1 comes before the custom-head step, so its refusal masks a pawn class that declares no `HeadMesh`.
 #[test]
 fn hook_1_is_reported_before_the_custom_head_declaration() {
-    let mut e = env_opts(true, false, false);
+    let mut e = env_opts(Opts { head_mesh: false, ..Opts::default() });
     let likeness = e.likeness;
     let t = make(&mut e.vm, likeness, "Likeness_Template");
     let a = attachment(&mut e, A { template: Some(t), data_name: CUSTOM_HEAD_NAME, ..A::default() });
@@ -1922,7 +1944,7 @@ fn an_unloaded_template_on_a_hook_path_is_not_settled() {
 /// Test 12: a pawn `Controller` not declared as an object is a script error naming it, before any write.
 #[test]
 fn a_malformed_controller_field_is_a_script_error() {
-    let mut e = env_opts(true, true, true);
+    let mut e = env_opts(Opts { controller_int: true, ..Opts::default() });
     let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
     let p = one_made(&mut e, cyl);
     let before = Counters::read(&e.vm);
@@ -1931,4 +1953,67 @@ fn a_malformed_controller_field_is_a_script_error() {
         other => panic!("{other:?}"),
     }
     assert_eq!(Counters::read(&e.vm), before, "write-free");
+}
+
+/// A script error before any write, nothing interned, its message naming `needle`.
+fn script_refusal(e: &mut Env, p: ObjRef, needle: &str) {
+    let (before, names) = (Counters::read(&e.vm), e.vm.space.names.len());
+    match run(e, p).unwrap_err() {
+        VmError::Script { message, .. } => assert!(message.contains(needle), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!((Counters::read(&e.vm), e.vm.space.names.len()), (before, names), "write-free and intern-free");
+    assert!(entries(e, p).is_empty());
+}
+
+/// Test 12, the other half (review of #657, LOW 3): a pawn `LightEnvironment` not declared as an object, and a
+/// `bOwnerNoSee` or `bAcceptsLights` that is not a bool, are script errors naming the field, before any write.
+#[test]
+fn malformed_light_environment_and_flag_fields_are_script_errors() {
+    // The pawn's LightEnvironment declared as an int: hook 3 reads it for every made component.
+    let mut e = env_opts(Opts { light_int: true, ..Opts::default() });
+    let cyl = make(&mut e.vm, e.cylinder, "Cyl_Template");
+    let p = one_made(&mut e, cyl);
+    script_refusal(&mut e, p, "LightEnvironment");
+    // bOwnerNoSee an int: hook 2's setter planner (a local player's reattach-ready cylinder).
+    let mut e = env_opts(Opts { flags_int: true, ..Opts::default() });
+    let rc = e.reattach_cylinder;
+    let t = make(&mut e.vm, rc, "Cyl_Template");
+    let p = one_made(&mut e, t);
+    controller_for(&mut e, p, true);
+    script_refusal(&mut e, p, "bOwnerNoSee");
+    // bAcceptsLights an int: hook 3 on a mesh with a light environment.
+    let mut e = env_opts(Opts { flags_int: true, ..Opts::default() });
+    let skel = make(&mut e.vm, e.skeletal, "Skel_Template");
+    let p = one_made(&mut e, skel);
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    script_refusal(&mut e, p, "bAcceptsLights");
+}
+
+/// Review of #657, LOW 2: the walk refuses a failed template before the hooks, so their not-settled answer for one is
+/// tested on the hooks directly: hook 2 on a local player's pawn, and hook 3 with a light environment set.
+#[test]
+fn the_hooks_called_directly_refuse_a_failed_template_as_not_settled() {
+    use crate::world::render_hooks::{light_environment, owner_no_see};
+    let mut e = env();
+    let (_, _, cycle) = store_templates(&mut e);
+    assert!(e.vm.defs.ensure_loaded(&mut e.vm.space, cycle).is_err(), "the cycle export's load fails");
+    assert!(e.vm.defs.is_failed(&e.vm.space, cycle));
+    let p = pawn_with(&mut e, Vec::new());
+    controller_for(&mut e, p, true);
+    let light = make(&mut e.vm, e.object, "Light_Test");
+    put(&mut e.vm, p, "LightEnvironment", Value::Object(Some(light)));
+    let (before, names) = (Counters::read(&e.vm), e.vm.space.names.len());
+    let class = e.vm.space.heap.get(cycle).unwrap().class;
+    let not_settled = |r: Result<(), VmError>| {
+        let VmError::NotYet(n) = r.unwrap_err() else { panic!() };
+        assert_eq!((n.missing, &*n.what), (Missing::NotRead, NOT_SETTLED));
+    };
+    not_settled(owner_no_see(&e.vm, p, cycle, class));
+    // Hook 3 needs a mesh class: the same failed handle asked as one (its class is a cylinder, so the mesh test is
+    // the hand-picked skeletal class here).
+    let skeletal = e.skeletal;
+    not_settled(light_environment(&e.vm, p, cycle, skeletal));
+    assert_eq!((Counters::read(&e.vm), e.vm.space.names.len()), (before, names), "read only");
 }
