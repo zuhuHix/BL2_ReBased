@@ -532,6 +532,9 @@ impl NativePack for Pack {
             // SkeletalMeshComponent.SetSkeletalMesh (NATIVE_SET_SKELETAL_MESH.md, UNVERIFIED; lane
             // IMPL-SET-SKELETAL-MESH): the same mesh does nothing; a change is LayerAbsent, before any write.
             skeletal_mesh::register(vm)?;
+            // PrimitiveComponent.SetScale (NATIVE_PRIMITIVE_SETSCALE.md, UNVERIFIED; lane IMPL-SETSCALE): the same scale
+            // does nothing; a change writes Scale and bNeedsUpdateTransform, or refuses an unread update first.
+            primitive_scale::register(vm)?;
         }
         Ok(())
     }
@@ -633,6 +636,9 @@ pub mod after_login;
 
 /// `SkeletalMeshComponent.SetSkeletalMesh` (lane IMPL-SET-SKELETAL-MESH, NATIVE_SET_SKELETAL_MESH.md).
 pub mod skeletal_mesh;
+
+/// `PrimitiveComponent.SetScale` (lane IMPL-SETSCALE, NATIVE_PRIMITIVE_SETSCALE.md).
+pub mod primitive_scale;
 
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;

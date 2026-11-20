@@ -4051,3 +4051,14 @@ fn a_cached_template_failure_is_not_marked() {
         }
     });
 }
+
+/// Lane IMPL-SETSCALE: `PrimitiveComponent.SetScale` is bound in Off only; Reference keeps the stub policy.
+#[test]
+fn set_scale_is_bound_outside_reference_only() {
+    run(|| {
+        let x = fx();
+        assert!(x.w.vm.has_native(crate::world::primitive_scale::SET_SCALE));
+        let x = fx_in(true, ParityMode::Reference);
+        assert!(!x.w.vm.has_native(crate::world::primitive_scale::SET_SCALE), "unbound under Reference");
+    });
+}
