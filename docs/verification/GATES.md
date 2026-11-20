@@ -81,7 +81,7 @@ test -p ow-world` 337 passed / 0 failed / 5 ignored; `cargo test -p ow-object` 1
 files; `crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #570,
 #500 and #528: ok 1 / NotYet 10 / error 3 of 14. Links 1, 3, 4, 5, 13 and 14 moved from the F `MESH_LAYER` refusal to
 #569's "the unloaded skeletal mesh Skel_SirenBody", unmarked. ctest and verify_packages not run (no C++ change). No
-real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-194.
 
 **IMPL-ANIM-NODE-INIT (2026-11-19, pc-hummer, on #561 at d83f2fee):** AI-assisted (Claude Code, Opus 5.5). The aim-offset
 fix-up and the per-node initialisation in Off from NATIVE_ANIM_NODE_INIT.md (#566 at 07b2dd68). `cargo test -p

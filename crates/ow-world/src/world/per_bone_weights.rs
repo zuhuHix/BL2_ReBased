@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-PER-BONE-WEIGHTS (decision 2026-11-19-NNN, number pending). The per-bone weight builders of
+//! Owner: lane IMPL-PER-BONE-WEIGHTS (decision 2026-11-19-194, number pending). The per-bone weight builders of
 //! `AnimNodeBlendPerBone` and `WillowAnimNodeFeatherBlend` (implementation F of NATIVE_ANIM_NODE_INIT.md), in
 //! `ParityMode::Off`. AI-assisted (Claude Code).
 //!
