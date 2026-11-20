@@ -25,5 +25,9 @@ decision number is pending (the hub numbers decisions at landing); NNN is a plac
   - **The proposed Off answer:** a write-free preflight (receiver, then argument; None or the wrong class is a
     `VmError::Script`, an unloaded handle `NotRead`), then `LayerAbsent` with the same layer name as #588 until the
     layer exists, and after that the slot copy.
+  - **Review r1 of #591:** a fourth preflight check makes both `GestaltData` slots be held whole, with no decode or
+    load (else `NotRead`, or the same `LayerAbsent`), and the copy is one atomic value replacement. A self-copy
+    answers success with no writes, even while the layer is absent. A tests list for the implementer was added, and
+    NATIVE_SET_SKELETAL_MESH.md is cited as #583's until it lands.
   - **The probe:** with a no-op stand-in, link 8 (still 1 of 5 at `init`) goes from `error` to `notyet` at
     `SetSkeletalMesh`'s mesh change (#583's `LayerAbsent`). Installed strict: 1 ok, 5 notyet, 8 error.

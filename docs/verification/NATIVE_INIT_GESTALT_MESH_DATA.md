@@ -110,26 +110,44 @@ Reference keeps the stub policy.
      native does not handle it, so there is no game answer;
    - not a `SkeletalMeshComponent`, or with no `GestaltData` field: a `VmError::Script` naming the class or the field;
    - an unloaded handle: `NotYet` with missing kind `NotRead`, as in check 1.
-3. **Same component** (`this` is `ComponentToCopyFrom`): a self-assignment, so nothing changes and nothing is
-   written. It is answered as success after checks 1 and 2. UNVERIFIED: the self-copy path was not read separately.
+3. **Same component** (`this` is `ComponentToCopyFrom`): a self-assignment, so nothing changes. It answers
+   **success with no writes**, after checks 1 and 2 and before check 4, so it succeeds **even while the layer of
+   section 4 is absent**: there is nothing to copy. UNVERIFIED: the self-copy path was not read separately.
+4. **Both slots held whole.** The receiver's and the argument's `GestaltData` slots must each be held by the heap as
+   one complete value (all seven members, the nested `LODModelData` arrays included), readable as they are, with no
+   decode and no load. A slot the heap does not hold whole refuses before any write: `NotYet` with missing kind
+   `NotRead` when the store has the data but has not decoded it (a decode or load is a write), and otherwise the same
+   `LayerAbsent` as the answer below. Check 1 shows only that the receiver's class **declares** `GestaltData`; this
+   check is what shows the slots can be read and replaced.
 
 **The answer:**
 - **Until the layer of section 4 exists:** `NotYet` with missing kind `LayerAbsent("a gestalt component data layer (a
   skeletal mesh component's GestaltData)")`, "InitGestaltMeshDataFromOther: the gestalt mesh data of the component",
   raised before any write. This is **the same layer name** `BuildCompositeMesh` refuses with on #588 r1, so both
   natives go to one implementer. On link 8 this native is not reached in Off while the fill refuses first.
-- **With the layer:** assign the argument's `GestaltData` value to the receiver's slot whole, as section 3 says. The
-  assignment is one heap write and it can fail only on a slot shape, which check 1 has already settled. Return
-  nothing.
+- **With the layer:** replace the receiver's `GestaltData` with the argument's value, as section 3 says. It is **one
+  atomic value replacement**: a single heap write of the whole container. It either happens whole or not at all, so
+  no member is left half-copied. Checks 1 to 4 have settled everything it depends on, so it is not expected to fail.
+  Return nothing.
 
 **The counters:** the refusals all come before the native's only write, so they never carry the "stopped after
 partial writes: " prefix inside it. The caller's earlier writes can mark it.
+
+**Tests for the implementer** (synthetic, built with the existing `package()` / `tag()` helpers; every value
+invented). Each refusal case also checks zero writes, zero loads and zero draws (#518's counters unchanged):
+1. a None argument is a `VmError::Script`;
+2. an argument that is not a `SkeletalMeshComponent` is a `VmError::Script`;
+3. an unloaded receiver, and an unloaded argument, each refuse `NotYet` with missing kind `NotRead`;
+4. with the layer absent, the refusal is exactly `LayerAbsent("a gestalt component data layer (a skeletal mesh
+   component's GestaltData)")`, text "InitGestaltMeshDataFromOther: the gestalt mesh data of the component";
+5. a self-copy (`this` as its own argument) succeeds, with zero writes, with the layer absent too;
+6. under `ParityMode::Reference` nothing is bound, and the stub policy answers.
 
 ## 6. What link 8 meets after it (local probe, uncommitted)
 
 The probe ran on a local, unpushed merge of #558, #534, #552 and #572, with throwaway stand-ins:
 - for `GetParticleEffect`, `GetExpLevelFromManufacturerData` and `StaticGetWeaponDamageType`;
-- for `SetSkeletalMesh`, NATIVE_SET_SKELETAL_MESH.md's rule (the same mesh does nothing, a different mesh refuses),
+- for `SetSkeletalMesh`, NATIVE_SET_SKELETAL_MESH.md's rule (#583's note, not on main until #583 lands) (the same mesh does nothing, a different mesh refuses),
   with its unloaded component handles loaded by the probe;
 - for `BuildCompositeMesh`, the gestalt answer without the component write;
 - for this native, a no-op.
@@ -139,7 +157,8 @@ was an `error` at an unbound native; no other link changed).
 - The stand-in was reached once, on `ThirdPersonMesh`, with `FirstPersonMesh` as the argument. The weapon had no
   extra slots.
 - The run then stopped at **`SetSkeletalMesh(NewMesh)` on `FirstPersonMesh`**: the gestalt mesh against the
-  component's None, a mesh change. By NATIVE_SET_SKELETAL_MESH.md section 4 that is `LayerAbsent("a skeletal mesh
+  component's None, a mesh change. By NATIVE_SET_SKELETAL_MESH.md section 4 (#583's note, on its branch until #583
+  lands) that is `LayerAbsent("a skeletal mesh
   component's bone transforms")`, the stand-in's refusal, marked "stopped after partial writes: " by the script's
   earlier writes.
 
