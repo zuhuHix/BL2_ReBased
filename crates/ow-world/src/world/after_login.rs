@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK1-AFTER-LOGIN (decision 2026-11-19-NNN, number pending). The three natives the login path
+//! Owner: lane IMPL-LINK1-AFTER-LOGIN (decision 2026-11-19-113, number pending). The three natives the login path
 //! reaches after `SetName` and `SetupInputDevices`. AI-assisted (Claude Code).
 //!
 //! Coded from NATIVE_LOGIN_URL_CONFIG_INPUT.md alone (#494; analyst lane ANALYST-LINK1-AFTER-LOGIN, not this thread).

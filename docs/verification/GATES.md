@@ -21,7 +21,7 @@ AI-assisted (Claude Code, Opus 5.5). `UpdateURL` and `SaveConfig` (nothing, unde
 `crate_edges_test.py` 19 OK. Installed Off `--slice-gate` strict: 0 ok / 5 NotYet / 9 errors; links 1, 3, 4, 5, 13 and
 14 get past the login natives and stop in `maya:8` at the unbound `WillowGameInfo.IsEditor()` (link 1: 0 of 1 driver
 step). ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/p2/link1login/`.
+2026-11-19-113; logs under ignored `local/p2/link1login/`.
 
 **IMPL-ENGINE-OBJECT-OFFLINE (2026-11-19, zuhu desktop, on fix/rust-login-status afb32d8, #479 on main d72b96d):**
 AI-assisted (Claude Code, Opus 5.5). The combat-run world registers, in Off only, a `GameEngine` with an empty
