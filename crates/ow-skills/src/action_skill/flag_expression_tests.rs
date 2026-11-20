@@ -528,12 +528,14 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
         assert!(!x.eval(and, Some(mind)).unwrap(), "{missing}: the And stops at the None definition");
         let bare = x.definition("Bare");
         let plain = x.evaluator(&[(0, Some(bare))], 1);
+        let before = WriteCounters::of(&x.vm);
         let r = x.eval(plain, Some(mind));
         if missing.ends_with("IFlagProvider") {
             assert!(!r.unwrap(), "a definition with neither field is false without a store");
         } else {
             // The rule engine search asks for IRuleEngineOwner before the definition's load.
             not_read(r, "is not loaded (a load is a write)");
+            assert!(!before.moved(&x.vm), "{missing}: the bare refusal is write-free");
         }
     }
 }

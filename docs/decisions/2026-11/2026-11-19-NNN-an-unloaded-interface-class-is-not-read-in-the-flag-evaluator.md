@@ -24,7 +24,9 @@ fixtures only.
     reached.
 - **Callers checked.** The module's `implements` has two callers, both inside the evaluator: the rule engine owner
   check, and `RuleEngineFlagValueResolver`'s store check. The function-call path's `QueryInterface` already refused
-  an unloaded `IFlagProvider` with `NotRead`, but after writes; it now meets the same eager check. No native outside
+  an unloaded `IFlagProvider` with `NotRead`, but after writes; it now refuses before the definition's load,
+  because the definition's `ValueResolver` makes `may_need_store` true. Not covered by a test yet (review r2 of #586,
+  low): a cold definition handle with `IFlagProvider` missing, which needs a second invented package export. No native outside
   the module calls this helper. The other `implements` users (`Vm::implements` and `Vm::implements_checked` in
   ow-vm, the casts in `interp/eval.rs` and `natives_core.rs`, ow-world `class_route`, ow-attr's
   `implements_interface`, the ow-behavior kernel, ow-combat `pawn_interface`) are unchanged. What changes outside is
