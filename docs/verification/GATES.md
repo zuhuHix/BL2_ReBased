@@ -406,7 +406,7 @@ ignored; `cargo clippy -p ow-inventory --all-targets` adds no warning in the tou
 Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #572: ok 1 / NotYet 4 / error 9 of 14.
 Link 8 passes 1 of 5 steps and stops at `init` on the unbound `WillowWeapon.CacheWeaponCard()`, before this native
 (#573, #534 and #552 conflict with #572 and were left out). ctest and verify_packages not run (no C++ change). No
-real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-192.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

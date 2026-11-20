@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-STATIC-GET-WEAPON-DAMAGE-TYPE (decision 2026-11-19-NNN, number pending).
+//! Owner: lane IMPL-STATIC-GET-WEAPON-DAMAGE-TYPE (decision 2026-11-19-192, number pending).
 //! `WillowWeapon.StaticGetWeaponDamageType(WeaponDefinitionData)` in `ParityMode::Off`. AI-assisted (Claude Code).
 //!
 //! **Clean room.** Implemented from `docs/verification/NATIVE_STATIC_GET_WEAPON_DAMAGE_TYPE.md` (#576, accepted at 3225f887,
