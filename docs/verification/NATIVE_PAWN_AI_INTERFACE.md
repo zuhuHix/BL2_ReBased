@@ -100,7 +100,7 @@ COMBAT_HIT_CHAIN.md's note ("the hold is applied to the pawn's mind") matches st
 
 ## 6. A component's answer (`ActorComponent`'s rule; lane ANALYST-LINK11-QUERY-INTERFACE, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK11-QUERY-INTERFACE (decision 2026-11-19-NNN).
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK11-QUERY-INTERFACE (decision 2026-11-19-124).
 - **Sources:**
   - the game executable, read with Ghidra (`tools/ghidra/run.ps1` read-only queries and the local table reader, one
     headless run at a time under the machine lock);
