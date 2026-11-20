@@ -732,7 +732,7 @@ impl Vm {
     }
 
     /// Binds the native implementation `imp` to the native function `f` and to every function with the same key in
-    /// `f`'s package (decision 2026-11-19-NNN, the package-qualified dispatch key). The key alone (`Class.Name(..)`)
+    /// `f`'s package (decision 2026-11-19-131, the package-qualified dispatch key). The key alone (`Class.Name(..)`)
     /// leaves out the package, so two packages that declare `Class.Function` share it; this form binds one of them
     /// without binding the other. Refused: a function that is not native; a key already bound in `f`'s package, or
     /// bound VM-wide by [`Vm::register_native`] (C++ "duplicate native registration").

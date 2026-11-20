@@ -851,7 +851,7 @@ fn the_vm_world_answers_the_clock_and_refuses_a_class_without_the_currency_call(
     ));
 }
 
-// ---- the package-qualified dispatch key (lane VM-DISPATCH-KEY, decision 2026-11-19-NNN) ----------------------------
+// ---- the package-qualified dispatch key (lane VM-DISPATCH-KEY, decision 2026-11-19-131) ----------------------------
 
 /// `native function int Ping()` declared at `p` with the shared key `Widget.Ping()`.
 fn declare_ping(vm: &mut Vm, p: &str) -> FuncId {
