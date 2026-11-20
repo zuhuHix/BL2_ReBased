@@ -1,6 +1,6 @@
 # How a mind answers `QueryInterface` (link 9's `IAIInterface` question, 2026-11-20)
 
-AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-GEARBOXMIND-QUERYINTERFACE, decision 2026-11-19-NNN.
+AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-GEARBOXMIND-QUERYINTERFACE, decision 2026-11-19-201.
 Read from the game executable with Ghidra (`tools/ghidra/run.ps1 -ReadOnly` and a local read-only table reader, under
 the machine lock). Field names come from the cooked packages (`tools/ghidra/class_layout.py`). It is written in our
 own words: no decompiler output, pseudo-code, addresses, offsets or listing structure is reproduced here, and raw
