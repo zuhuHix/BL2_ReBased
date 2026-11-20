@@ -207,7 +207,7 @@ Results:
   46 ignored. The gate was not re-run (no change on the installed path: Maya's same-package loads succeed).
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN.
+2026-11-19-139.
 
 **IMPL-MISSION-NUMBERS (2026-11-19, pc-hummer, stacked on fix/rust-settings-fill 223a2ced):** AI-assisted (Claude Code,
 Opus 5.5). `GetActiveMissionNumber`, `GetActivePlotCriticalMissionNumber` and the mission screen's three calls in Off,
