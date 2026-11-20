@@ -2,6 +2,14 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**LINK9-GETAICOMPONENT-BINDING (2026-11-20, pc-hummer, on fix/rust-link9-holds-binding from main 241a6c47):**
+AI-assisted (Claude Code, Opus 5.5). Link 9's set-up registers the AI holds' natives (`ow_combat::holds::register`),
+`GearboxMind.GetAIComponent` among them. `cargo test --workspace`: 3200 passed / 0 failed / 51 ignored;
+`crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build, under the machine lock): ok 4, notyet
+10, error 0 of 14. Link 9 passes 1 of 2 steps; `cast` stops with a NotYet, no longer an error: `ResolveContext`'s
+unloaded context resolver `GD_Siren_Skills.Attributes.IsPhaselocked.PawnAttributeContextResolver_0`. UNVERIFIED in
+game.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50

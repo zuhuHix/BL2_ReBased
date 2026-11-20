@@ -130,12 +130,16 @@ fn willow() -> Vec<u8> {
     t.p.build()
 }
 
-/// `GearboxFramework.upk`: `IFlagProvider`, the interface the harness preloads with the mind.
+/// `GearboxFramework.upk`: `IFlagProvider`, the interface the harness preloads with the mind, and a `GearboxMind`
+/// declaring the native `GetAIComponent` (lane LINK9-GETAICOMPONENT-BINDING).
 fn gearbox() -> Vec<u8> {
-    let mut t = ScriptToy::with_imports(&["Class"]);
+    let mut t = ScriptToy::with_imports(&["Class", "Function"]);
     let core = t.p.add_import("Core", "Package", 0, "Core");
     let object = t.p.add_import("Core", "Class", core, "Object");
     t.class("IFlagProvider", object);
+    let mind = t.class("GearboxMind", object);
+    let spec = ow_package::testkit::script::FunctionSpec::new(0x400 | 0x20000, "GetAIComponent");
+    t.function(mind, "GetAIComponent", &[], None, &[], &spec, |_| None);
     t.p.build()
 }
 
@@ -744,4 +748,19 @@ fn a_mind_not_yet_is_marked_once_at_the_start() {
     assert_eq!(marked.what.matches(PARTIAL_WRITES).count(), 2, "the leading mark, and the text's own");
     assert_eq!(marked.record, "R.md");
     assert!(matches!(marked.missing, Missing::NotRead));
+}
+
+/// Lane LINK9-GETAICOMPONENT-BINDING: link 9's set-up registers the AI holds' natives (`ow_combat::holds::register`),
+/// so `GearboxMind.GetAIComponent` is bound once the set-up has run; before it, the native is unbound and a call is
+/// refused as one (`Vm::prepare_call`, whatever the stub policy).
+#[test]
+fn link_9_s_set_up_binds_get_ai_component() {
+    let mut t = toy();
+    let f = t.world.vm.find_function(ow_combat::holds::GET_AI_COMPONENT).unwrap();
+    assert!(!t.world.vm.is_bound(f), "unbound before the set-up");
+    assert!(t.world.vm.prepare_call(f).is_err(), "a missing registration is the unbound error");
+    let mut harness = Vec::new();
+    phaselock_setup(&mut t.world.vm, &mut harness).unwrap();
+    assert!(t.world.vm.is_bound(f), "bound by the set-up");
+    assert!(t.world.vm.prepare_call(f).is_ok());
 }
