@@ -1,6 +1,6 @@
 # Link 10's next stop: the accept screen's text list, its focus pair, and the mission-status telemetry (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK10-NEXT (decision 2026-11-19-NNN, number to be given by
+AI-assisted (Claude Code, Opus 5.5). Analyst lane ANALYST-LINK10-NEXT (decision 2026-11-19-116, number to be given by
 the hub).
 - **Sources:**
   - one local slice-gate run on a throwaway merge of #496 (629d0b9, which carries #493) and #497 (d4c57cc) on main
