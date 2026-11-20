@@ -50,7 +50,7 @@ Results:
   - Link 1: 0 of 1 driver step.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/analysis/`.
+2026-11-19-134; logs under ignored `local/analysis/`.
 
 **IMPL-ALL-NAVIGATION-POINTS (2026-11-19, pc-hummer, on research/rust-is-split-screen 368f3f0f, #510 on #508):**
 AI-assisted (Claude Code, Opus 5.5). `WorldInfo.AllNavigationPoints` in Off: the serialized list walked with a class

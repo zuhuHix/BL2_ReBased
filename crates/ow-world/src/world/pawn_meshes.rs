@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-INIT-PAWN-MESHES (decision 2026-11-19-NNN, number pending). `WillowPawn.InitializePawnMeshes()`
+//! Owner: lane IMPL-INIT-PAWN-MESHES (decision 2026-11-19-134, number pending). `WillowPawn.InitializePawnMeshes()`
 //! and `WillowPlayerPawn.InitializePawnMeshes()`, slice link 1's stop in `maya:8` (`ApplyBodyClassStartingValues`).
 //! AI-assisted (Claude Code).
 //!
