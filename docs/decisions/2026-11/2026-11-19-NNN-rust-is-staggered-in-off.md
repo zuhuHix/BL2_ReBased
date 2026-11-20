@@ -15,9 +15,9 @@ only. Based on main c687c135.
   2. **S1**, `NotYet { NotRead }`, with two texts: an unloaded handle, and a slotless stand-in.
   3. The class:
      - exactly `WillowAIPawn`, or a script-only child of it: the AI rule;
-     - a native descendant (`NATIVE_AI_PAWN_DESCENDANTS`, carried with the binding from
-       `research/native_by_class.json`: `WillowAICranePawn`, and `DeployableTurretActor` from the export super
-       chain, added on review r1 of #620), or a child of one: **S2**;
+     - a native descendant (`NATIVE_AI_PAWN_DESCENDANTS`, carried with the binding: `WillowAICranePawn` and
+       `DeployableTurretActor`, the two children of `WillowAIPawn` in `WillowGame`'s export super chain; the second
+       was added on review r1 of #620), or a child of one: **S2**;
      - exactly `WillowPawn`: false;
      - any other child of `WillowPawn`, script-only ones included: **S2**.
   4. The AI rule reads by name, with no offset: `StaggerState` must be declared as a `WillowAIPawn.StaggerStateData`
