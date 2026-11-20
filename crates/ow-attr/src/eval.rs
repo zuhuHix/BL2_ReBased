@@ -274,6 +274,35 @@ pub(crate) fn tracked<T>(
     }
 }
 
+/// The full path of `obj` for messages, by its outers only (no load): names joined with `.`, and `:` before an object
+/// whose outer is not a package but whose outer's outer is (the subobject separator, as `Object.PathName` writes it).
+/// An object that is not live is its handle's debug text.
+pub fn object_path(space: &ObjectSpace, obj: ObjRef) -> String {
+    let mut links = Vec::new();
+    let mut at = Some(obj);
+    while let Some(o) = at {
+        let Ok(x) = space.heap.get(o) else {
+            return format!("{obj:?}");
+        };
+        let package = space.classes.get_layout(x.class).is_some_and(|l| l.path().as_str() == "Core.Package");
+        links.push((space.names.text(x.name).into_owned(), package));
+        if links.len() > 64 {
+            break;
+        }
+        at = x.outer;
+    }
+    links.reverse();
+    let mut out = String::new();
+    for (i, (name, _)) in links.iter().enumerate() {
+        if i > 0 {
+            let sub = !links[i - 1].1 && i >= 2 && links[i - 2].1;
+            out.push(if sub { ':' } else { '.' });
+        }
+        out.push_str(name);
+    }
+    out
+}
+
 /// Property `name` of `obj` (element 0), loaded first; `Ok(None)` when the object's class (its whole super chain)
 /// has no property of that name.
 pub fn property(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Option<Value>, AttrError> {

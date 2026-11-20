@@ -32,7 +32,8 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 /// - `Object`, `Actor`, `Pawn`, `Controller` (with `Pawn`), and `ToyMarker` (an object with a `Touched` int);
 /// - `AttributeDefinitionBase` (its `ContextResolverChain`, and the native `ResolveContext` with the game's shape),
 ///   `AttributeDefinition` and `AttributeDefinitionMultiContext`;
-/// - `ToyBadChainDefinition`, a child of the base whose `ContextResolverChain` is an int (malformed);
+/// - `ToyBadChainDefinition`, a child of the base whose `ContextResolverChain` is an int (malformed), and
+///   `ToyIntChainDefinition`, whose `ContextResolverChain` is an array of ints (malformed even when empty);
 /// - `PawnAttributeContextResolver`, `ToyUnreadResolver` (a class `ow-attr` does not register), and two resolvers the
 ///   tests register: `ToyWritingResolver` (writes, then answers its source) and `ToyRefusingResolver` (a NotYet);
 /// - `ToyHolder_0`, whose `HeldDef` and `HeldResolver` name an `AttributeDefinition` export and a Pawn resolver
@@ -56,6 +57,10 @@ fn engine() -> Vec<u8> {
     t.class("AttributeDefinitionMultiContext", base);
     let bad = t.class("ToyBadChainDefinition", base);
     t.prop("Int", bad, "ContextResolverChain", 0, 0);
+    let int_chain = t.class("ToyIntChainDefinition", base);
+    let array = t.p.next_export();
+    t.prop("Array", int_chain, "ContextResolverChain", 0, array + 1);
+    t.prop("Int", array, "ContextResolverChain", 0, 0);
     let pawn_resolver = t.class("PawnAttributeContextResolver", object);
     t.class("ToyUnreadResolver", object);
     t.class("ToyWritingResolver", object);
@@ -319,7 +324,7 @@ fn an_unloaded_definition_is_r1_and_stays_unloaded() {
     let pawn = fx.obj("Engine.Pawn");
     let before = Counters::read(&fx.vm);
     let text = not_read(fx.call_on(Some(d), Value::Object(Some(pawn))));
-    assert!(text.contains("the definition") && text.contains(UNLOADED) && !text.contains("partial writes"), "{text}");
+    assert!(text.contains("the definition Engine.ToyLazyDefinition_0 ") && text.contains(UNLOADED) && !text.contains("partial writes"), "{text}");
     assert!(fx.vm.defs.is_unloaded(&fx.vm.space, d), "not loaded");
     assert_eq!(Counters::read(&fx.vm), before, "nothing counted");
 }
@@ -336,7 +341,7 @@ fn an_unloaded_resolver_is_r2_before_any_r3() {
         let d = fx.definition(&chain);
         let before = Counters::read(&fx.vm);
         let text = not_read(fx.call_on(Some(d), Value::Object(Some(pawn))));
-        assert!(text.contains("the context resolver") && text.contains(UNLOADED), "{text}");
+        assert!(text.contains("the context resolver Engine.ToyLazyResolver_0 ") && text.contains(UNLOADED), "{text}");
         assert!(fx.vm.defs.is_unloaded(&fx.vm.space, lazy), "not loaded");
         assert_eq!(Counters::read(&fx.vm), before, "nothing counted");
     }
@@ -367,11 +372,14 @@ fn malformed_calls_are_script_errors() {
     let flag = fx.definition_of("GearboxFramework.FlagDefinition", &[Some(p)]);
     let d = fx.definition(&[Some(p)]);
     let bad = fx.obj("Engine.ToyBadChainDefinition");
-    let cases: [(Option<ObjRef>, Value, &str); 4] = [
+    // An empty array declared as ints: malformed by its declared type (review r1 of #615).
+    let ints = fx.obj("Engine.ToyIntChainDefinition");
+    let cases: [(Option<ObjRef>, Value, &str); 5] = [
         (None, Value::Object(Some(pawn)), "without a definition"),
         (Some(flag), Value::Object(Some(pawn)), "not an Engine.AttributeDefinitionBase"),
         (Some(d), Value::Int(3), "ContextSource holds"),
         (Some(bad), Value::Object(Some(pawn)), "ContextResolverChain is not declared as an array"),
+        (Some(ints), Value::Object(Some(pawn)), "ContextResolverChain is not declared as an array"),
     ];
     for (this, source, want) in cases {
         let before = Counters::read(&fx.vm);

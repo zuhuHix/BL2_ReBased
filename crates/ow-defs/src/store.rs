@@ -1835,6 +1835,16 @@ impl DefStore {
             )
     }
 
+    /// The object path an unloaded handle (or a stand-in that stays one) was made for, read from the store's own record
+    /// without loading anything; None for any other object. For messages (review r1 of #615: refusal texts name the
+    /// full path, and an unloaded handle has no outer in the object space yet).
+    pub fn handle_path(&self, obj: ObjRef) -> Option<String> {
+        match self.handles.borrow().entries.get(&obj) {
+            Some(Entry::Unloaded { path, .. } | Entry::Stays { path, .. }) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
     /// Whether `obj` is one of the store's unloaded handles: [`DefStore::ensure_loaded`] would load it (or, for a
     /// handle whose load failed, return its error again). False for every other object, the stand-ins that stay
     /// stand-ins included.

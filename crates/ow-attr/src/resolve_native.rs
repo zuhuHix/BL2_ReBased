@@ -8,7 +8,8 @@
 //!
 //! **The preflight** (write-free, load-free, RNG-free; plain object-space reads, nothing that loads), in order:
 //! 1. **R1:** the definition is an unloaded definition handle: `NotYet { NotRead }`;
-//! 2. the chain: `ContextResolverChain` declared as an array whose entries are object references, else
+//! 2. the chain: `ContextResolverChain` declared, in the class layout, as an array of object references (the declared
+//!    element type, so an empty array of another type is malformed too; review r1 of #615), else
 //!    [`ResolveError::Malformed`] (the wrapper's `VmError::Script`);
 //! 3. **R2, every entry first:** the first non-None entry that is an unloaded handle: `NotYet { NotRead }`;
 //! 4. **R3, every entry after that:** the first non-None entry whose class is not registered with the context
@@ -20,6 +21,7 @@
 
 use ow_core::NotYet;
 use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 
 use crate::api::{AttrError, EvalCx};
@@ -52,8 +54,10 @@ impl From<AttrError> for ResolveError {
     }
 }
 
-fn name_of(space: &ow_object::heap::ObjectSpace, o: ObjRef) -> String {
-    space.heap.get(o).map(|x| space.names.text(x.name).into_owned()).unwrap_or_default()
+/// The `<path>` R1's and R2's texts name (review r1 of #615): an unloaded handle's path from the store's own record
+/// (it has no outer yet), otherwise the object's full path by its outers.
+fn name_of(parts: &crate::api::WorldParts<'_>, o: ObjRef) -> String {
+    parts.defs.as_deref().and_then(|d| d.handle_path(o)).unwrap_or_else(|| crate::eval::object_path(parts.space, o))
 }
 
 impl AttributeSystem {
@@ -72,7 +76,7 @@ impl AttributeSystem {
             // R1.
             if unloaded(attr) {
                 return Err(AttrError::from(NotYet::not_read(
-                    format!("{UNIT}: the definition {} {UNLOADED}", name_of(space, attr)),
+                    format!("{UNIT}: the definition {} {UNLOADED}", name_of(&parts, attr)),
                     RECORD,
                 ))
                 .into());
@@ -83,6 +87,11 @@ impl AttributeSystem {
             let Some(prop) = space.prop(class, CHAIN) else {
                 return Err(malformed());
             };
+            // The declared element type, not the values (review r1 of #615): an empty array of ints is malformed.
+            let declared = space.classes.decl(prop).map(|d| &d.kind);
+            if !matches!(declared, Some(PropKind::Array(inner)) if matches!(**inner, PropKind::Object { .. })) {
+                return Err(malformed());
+            }
             let chain = space.read(attr, PropAddr::scalar(prop)).map_err(AttrError::from)?;
             let Some(items) = chain.elements() else {
                 return Err(malformed());
@@ -97,7 +106,7 @@ impl AttributeSystem {
             // R2, every entry.
             if let Some(&r) = entries.iter().find(|&&r| unloaded(r)) {
                 return Err(AttrError::from(NotYet::not_read(
-                    format!("{UNIT}: the context resolver {} {UNLOADED}", name_of(space, r)),
+                    format!("{UNIT}: the context resolver {} {UNLOADED}", name_of(&parts, r)),
                     RECORD,
                 ))
                 .into());

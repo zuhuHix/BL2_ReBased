@@ -50,3 +50,17 @@ Off only. Reference is unchanged: the equip pack binds nothing there, as before.
   - the note's test 13 assumed the wrong parent class for `FlagDefinition` (it is a `GBXDefinition` in the installed
     packages, not an `AttributeDefinitionBase`). The port follows the note's receiver check, so that receiver is a
     `VmError::Script`, as the hub ruled (2026-11-20).
+
+### Review r1 of #615 (ACCEPT, two lows fixed)
+
+AI-assisted (Claude Code, Claude Opus 5.5). Still from the note alone, Off only, **UNVERIFIED** in the running game.
+1. **The chain's shape is checked by its declared type.** The note's section 5.4 says a `ContextResolverChain` that is
+   not an array of object references is `VmError::Script`. The preflight now reads the declared element type from the
+   class layout (an array whose inner kind is an object reference), so an empty array declared as ints is a script
+   error too. Before, it checked only the values, and an empty array passed. A new fixture class,
+   `ToyIntChainDefinition`, is a case in `malformed_calls_are_script_errors`.
+2. **R1 and R2 name the full object path,** as the note's `<path>` says, not the object's short name. An unloaded
+   handle has no outer in the object space yet, so the path comes from the store's own record. `ow-defs` gains a
+   read-only `DefStore::handle_path`, which loads nothing. Any other object gets its path from its outers
+   (`ow_attr::eval::object_path`, with `.` and `:` as `Object.PathName` writes them). The R1 and R2 tests now assert
+   `Engine.ToyLazyDefinition_0` and `Engine.ToyLazyResolver_0`.
