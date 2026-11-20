@@ -19,7 +19,7 @@ impl SkeletonSource for Bones {
             .0
             .iter()
             .enumerate()
-            .map(|(i, n)| SkeletonBone { name: (*n).to_string(), parent: if i == 0 { None } else { Some(0) } })
+            .map(|(i, n)| SkeletonBone { name: (*n).to_string(), parent: if i == 0 { None } else { Some(0) }, bind: None })
             .collect();
         Ok(Some(ReferenceSkeleton { bones }))
     }

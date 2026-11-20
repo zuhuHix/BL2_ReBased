@@ -48,3 +48,5 @@ and the name table's length unchanged.
   - link 8 at #599's mesh change (1 of 5; #645 is not on main);
   - link 9 an error at the unbound `GearboxMind.GetAIComponent()`.
 - This is what the host did, not parity.
+
+Landing amend (hub ruling, 2026-11-20): #641's socket test constructor gets `bind: None`; no rule change.
