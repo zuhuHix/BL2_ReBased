@@ -578,10 +578,19 @@ pub trait ValueResolver {
     ) -> Result<f32, AttrError>;
 
     /// Whether this class is available to a read in this world's mode, checked by
-    /// [`AttributeSystem::preflight_read`] before anything is evaluated (review r1 of #458, item 5). The default is
-    /// available. A class implemented in one mode only refuses here in the other, as an unregistered class would.
+    /// [`AttributeSystem::preflight_read`] before anything is evaluated (review r1 of #458, item 5). The default asks
+    /// [`ValueResolver::availability`] with the world's mode.
     fn available(&self, resolver: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-        let _ = (resolver, cx);
+        let mode = crate::eval::parity(cx);
+        self.availability(cx.world.parts().space, resolver, mode)
+    }
+
+    /// The class's mode availability as metadata: it sees the object space and the mode only, so it can load, write
+    /// or draw nothing (review r2 of #573). [`AttributeSystem::preflight_read_resident`] asks only this, never
+    /// [`ValueResolver::available`]. The default is available. A class implemented in one mode only refuses here in
+    /// the other, as an unregistered class would.
+    fn availability(&self, space: &ObjectSpace, resolver: ObjRef, mode: ow_core::ParityMode) -> Result<(), AttrError> {
+        let _ = (space, resolver, mode);
         Ok(())
     }
 

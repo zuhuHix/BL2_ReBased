@@ -425,6 +425,7 @@ impl NativePack for Pack {
         crate::anim_tree::register(vm)?;
         crate::attach_mesh::register(vm)?;
         crate::equip::rebase::register(vm)?;
+        crate::equip::particle_effect::register(vm)?;
         crate::spawn::register(vm)
     }
 }

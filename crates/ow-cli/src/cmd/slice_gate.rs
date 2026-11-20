@@ -960,7 +960,20 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         ran[i] = Some(r);
         return;
     }
-    let made = make_marked(vm, |vm, wrote| crate::cmd::inventory::equip_run::prepare_line_typed(vm, EQUIP_WEAPON, wrote));
+    let log_before = vm.log.len();
+    let made = make_marked(vm, |vm, wrote| {
+        // The equip run's own preparation (prepare, then the muzzle-flash preload of #573), inside #506's mark.
+        let weapon = crate::cmd::inventory::equip_run::prepare_line_typed(vm, EQUIP_WEAPON, wrote)?;
+        crate::cmd::inventory::equip_run::preload_muzzle_flashes(vm, weapon)?;
+        Ok(weapon)
+    });
+    // The set-up's harness inputs (the muzzle-flash preload), kept on success and on a make failure alike (review r1
+    // of #573, item 5).
+    r.harness = vm.log[log_before.min(vm.log.len())..]
+        .iter()
+        .filter(|l| l.starts_with("harness input:"))
+        .cloned()
+        .collect();
     let weapon = match made {
         Ok(w) => w,
         Err(e) => {
@@ -976,7 +989,7 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         ran[i] = Some(r);
         return;
     }
-    r.harness = vm.log[log_before..].iter().filter(|l| l.starts_with("harness input:")).cloned().collect();
+    r.harness.extend(vm.log[log_before..].iter().filter(|l| l.starts_with("harness input:")).cloned()); // after #573's
     let (mut before, mut after_equip, mut after_unequip) = (None, None, None);
     for step in LINKS[i].steps.iter().skip(1) {
         r.steps.push((*step).to_string());

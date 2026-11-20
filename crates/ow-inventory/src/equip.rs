@@ -64,6 +64,8 @@ pub mod slots;
 pub mod internal_slots;
 /// `RecomputeAttributeBaseValues` (lane IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES).
 pub mod rebase;
+/// `EffectCollectionDefinition.GetParticleEffect` (lane IMPL-GET-PARTICLE-EFFECT).
+pub mod particle_effect;
 /// The value natives (`ComputeValueOfParts`, `ComputeMonetaryValue`; lane FIX-COMPUTE-VALUE).
 pub mod value;
 

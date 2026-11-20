@@ -4,7 +4,9 @@
 //! It runs the installed script a looted gun goes through, on a gameplay world, and reports where each phase stops:
 //! the lane's stop list (decision 2026-11-19-03). The weapons file is `--script-diff`'s (`<weapon type> <level>
 //! <balance> [<Slot>=<part>]...`). One world over the cooked folder: W5-WORLD's packs, then `ow_combat::hit::Pack`
-//! (the Off pool natives `--combat-run` binds: `ShutDown`, the idle timer) and `ow_inventory::manager::Pack`, a `WorldInfo` from its class defaults placed first, with the VM's default stub policy (`Refuse`, nothing allowed), so a native the
+//! (the Off pool natives `--combat-run` binds: `ShutDown`, the idle timer) and `ow_inventory::manager::Pack`, in Off
+//! `ow_skills::action_skill::Pack` (its `AttributeExpressionEvaluator.Evaluate`, which the muzzle-flash collections'
+//! evaluators reach; lane IMPL-GET-PARTICLE-EFFECT), a `WorldInfo` from its class defaults placed first, with the VM's default stub policy (`Refuse`, nothing allowed), so a native the
 //! script reaches that nothing binds stops the phase with the VM's `UnboundNative` text. No native is bound here.
 //!
 //! Per weapon (each phase runs even when an earlier one stopped, so one run lists every phase's stop):
@@ -18,6 +20,9 @@
 //!   that pool in the player's own bring-up, which no script of the equip path reaches and no record reads (W5-MAPLOAD
 //!   and the pools lanes); without it the weapon's accuracy effects find no pool and fall back to the controller
 //!   source, where `WeaponResourcePoolAttributeContextResolver` is not read. A harness stand-in, not a rule.
+//!   In Off it also preloads the muzzle-flash collections ([`preload_muzzle_flashes`], lane IMPL-GET-PARTICLE-EFFECT):
+//!   the native loads nothing, as #518 counts a lazy load as a write, so the harness loads them, the way #528 preloads
+//!   the body class and #541 the unlock data. A logged harness input, not a rule.
 //! - **init**: the installed `WillowWeapon.InitializeInternal(false)`, the spawn's script (bases, ammo, the attribute
 //!   slots, the weapon's own effects and slot modifiers, the card).
 //! - **bases**: `CalculateWeaponBaseValues` (the crate's override), so the equip phases start from computed bases
@@ -144,7 +149,7 @@ fn summary(weapons: usize, passed: &[usize], stops: &[BTreeMap<String, usize>]) 
 
 /// The run's world (module documentation).
 fn run_world(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, String> {
-    run_world_typed(cooked, mode).map_err(|e| e.text())
+    run_world_typed(cooked, mode, true).map_err(|e| e.text())
 }
 
 /// Why the run's world could not be set up, typed (review r2 of #470, item 4): a `NotYet` of any layer, or any other
@@ -179,7 +184,8 @@ fn setup_error<E: std::error::Error>(e: E, as_not_yet: impl FnOnce(&E) -> Option
     }
 }
 
-fn run_world_typed(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, SetupError> {
+/// `equip` adds `ow_skills::action_skill::Pack` in Off: `--equip-run` and link 8 only (review r1 of #573, item 3).
+fn run_world_typed(cooked: &Path, mode: ParityMode, equip: bool) -> Result<ow_world::world::World, SetupError> {
     use ow_balance::types::{
         AwesomeLevel, BalanceError, BalanceSnapshot, ExpLevel, GameStage, LevelCapUpgrades, OpLevel, PlayerCount,
         Playthrough,
@@ -218,8 +224,14 @@ fn run_world_typed(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::W
     .map_err(balance)?;
     let combat = ow_combat::hit::Pack;
     let inventory = ow_inventory::manager::Pack;
-    let packs: [&dyn ow_vm::api::NativePack; 2] = [&combat, &inventory];
-    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs).map_err(
+    let skills = ow_skills::action_skill::Pack;
+    let mut packs: Vec<&dyn ow_vm::api::NativePack> = vec![&combat, &inventory];
+    // The evaluators the muzzle-flash collections hold (lane IMPL-GET-PARTICLE-EFFECT): the equip run's world only, in
+    // Off only.
+    if equip && mode == ParityMode::Off {
+        packs.push(&skills);
+    }
+    let world = ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs[..]).map_err(
         |e| match e {
             ow_world::world::WorldError::Vm(v) => SetupError::Vm(v),
             other => SetupError::Other(error_text(&other)),
@@ -368,7 +380,7 @@ fn make_t(vm: &mut Vm, class: &str) -> Result<ObjRef, VmError> {
 }
 
 fn run_weapon(vm: &mut Vm, r: &DiffRequest) -> Result<EquipRun, String> {
-    let weapon = prepare(vm, r, &mut false).map_err(|e| vm_text(&e))?;
+    let weapon = prepare_equip(vm, r).map_err(|e| vm_text(&e))?;
     let init = run_phase(vm, "init", weapon);
     let bases = run_phase(vm, "bases", weapon);
     let equip = run_phase(vm, "equip", weapon);
@@ -581,7 +593,7 @@ fn particle_preload(vm: &mut Vm, definition: ObjRef) -> Result<(), VmError> {
 
 /// The run's world in Off, typed ([`SetupError`]): a setup `NotYet` stays a `NotYet` (review r2 of #470, item 4).
 pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, SetupError> {
-    run_world_typed(cooked, ParityMode::Off)
+    run_world_typed(cooked, ParityMode::Off, false)
 }
 
 /// The run's world in Off ([`run_world_t`]) with the world's one globals object, for `--slice-gate`'s link 8 (lane IMPL-CACHE-WEAPON-CARD-BODY,
@@ -651,6 +663,106 @@ fn prepare(vm: &mut Vm, r: &DiffRequest, wrote: &mut bool) -> Result<ObjRef, VmE
     write_t(vm, weapon, "Owner", Value::Object(Some(pawn)))?;
     accuracy_pool(vm, controller)?;
     Ok(weapon)
+}
+
+/// [`prepare`] and then the muzzle-flash preload: the equip run's own (`--equip-run` and link 8; review r1 of #573,
+/// item 3). The pickup links prepare their weapons with [`prepare`] alone.
+fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
+    let weapon = prepare(vm, r, &mut false)?;
+    preload_muzzle_flashes(vm, weapon)?;
+    Ok(weapon)
+}
+
+/// The definition fields whose `MuzzleFlashPSTemplates` the weapon's client initialisation asks, in its order
+/// (NATIVE_GET_PARTICLE_EFFECT.md section 1): the barrel part's, then the weapon type's.
+const MUZZLE_FLASH_HOLDERS: [&str; 2] = ["BarrelPartDefinition", "WeaponTypeDefinition"];
+
+/// The Off harness preload of lane IMPL-GET-PARTICLE-EFFECT (the hub's ruling): for each set field of
+/// [`MUZZLE_FLASH_HOLDERS`] whose `MuzzleFlashPSTemplates` is set, that collection is loaded, then the entries'
+/// `Expression`s in array order up to the first entry with none (the native's preflight boundary; review r1 of #573,
+/// item 4), and for an `AttributeExpressionEvaluator` its operands' attribute definitions and their chains' resolver
+/// objects (item 2: the native's preflight checks them resident). Each load is logged as a harness input before it
+/// runs (rule 7). `GetParticleEffect` itself loads nothing and refuses a cold handle. The particle systems are not
+/// loaded (the native returns them as stored). Outside Off, nothing.
+pub(crate) fn preload_muzzle_flashes(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")
+        .ok_or_else(|| script("the weapon has no DefinitionData".into()))?;
+    let mut collections = Vec::new();
+    for field in MUZZLE_FLASH_HOLDERS {
+        let Some(Value::Object(Some(holder))) = ow_attr::eval::field(&vm.space, &data, field).ok().cloned() else {
+            continue;
+        };
+        if let Some(Value::Object(Some(c))) = ow_inventory::equip::read_prop(vm, holder, "MuzzleFlashPSTemplates") {
+            collections.push(c);
+        }
+    }
+    for c in collections {
+        preload(vm, c, "a muzzle-flash collection")?;
+        let entries = ow_inventory::equip::read_prop(vm, c, "ParticleEffects").unwrap_or(Value::None);
+        let mut evaluators = Vec::new();
+        for e in entries.elements().unwrap_or(&[]) {
+            match ow_attr::eval::field(&vm.space, e, "Expression") {
+                Ok(Value::Object(Some(o))) => evaluators.push(*o),
+                _ => break,
+            }
+        }
+        for e in evaluators {
+            preload(vm, e, "its evaluator")?;
+            preload_operands(vm, e)?;
+        }
+    }
+    Ok(())
+}
+
+/// The operands of an `AttributeExpressionEvaluator` `e` ([`preload_muzzle_flashes`]): each set operand's attribute
+/// definition, then the resolver objects of its context and value chains. Any other evaluator class, nothing.
+fn preload_operands(vm: &mut Vm, e: ObjRef) -> Result<(), VmError> {
+    let Some(class) = vm.space.classes.by_path(ow_inventory::equip::particle_effect::ATTRIBUTE_EVALUATOR) else {
+        return Ok(());
+    };
+    if !vm.space.classes.is_child_of(vm.space.heap.get(e)?.class, class) {
+        return Ok(());
+    }
+    let Some(expression) = ow_inventory::equip::read_prop(vm, e, "Expression") else {
+        return Ok(());
+    };
+    for name in ["AttributeOperand1", "AttributeOperand2"] {
+        let Ok(Value::Object(Some(attr))) = ow_attr::eval::field(&vm.space, &expression, name).cloned() else {
+            continue;
+        };
+        preload(vm, attr, "an evaluator's attribute")?;
+        for chain in ["ContextResolverChain", "ValueResolverChain"] {
+            let resolvers: Vec<ObjRef> = ow_inventory::equip::read_prop(vm, attr, chain)
+                .as_ref()
+                .and_then(Value::elements)
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Object(Some(o)) => Some(*o),
+                    _ => None,
+                })
+                .collect();
+            for r in resolvers {
+                preload(vm, r, "its resolver")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One logged harness load (rule 7: labelled before it runs, so a failed load still shows).
+fn preload(vm: &mut Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
+    let name = ow_vm::path_name::path_name(vm, o).unwrap_or_else(|_| format!("{o:?}"));
+    vm.log.push(format!("harness input: preload {what} {name} (GetParticleEffect loads nothing)"));
+    let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
+    vm.log.extend(vm.defs.take_log());
+    if let Err(e) = &loaded {
+        vm.log.push(format!("harness input: preload {name}: failed ({e})"));
+    }
+    loaded.map_err(VmError::from)
 }
 
 /// The weapon of a request, its definition data and level set, with no owner. `wrote` is set once the weapon exists.

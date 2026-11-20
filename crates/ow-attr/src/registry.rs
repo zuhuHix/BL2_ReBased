@@ -208,6 +208,12 @@ impl AttributeSystem {
         eval::preflight_set_base_value(self, dest, data, cx)
     }
 
+    /// [`AttributeSystem::preflight_read`] loading nothing: the definition and its chains' resolver objects must be
+    /// resident (a cold handle is `NotYet { NotRead }`), and the dispatch is checked as there.
+    pub fn preflight_read_resident(&self, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        eval::preflight_read_resident(self, attr, cx)
+    }
+
     /// `AttributeDefinition.GetBaseValue`: as [`AttributeSystem::value_of`] with each resolver's base-value method.
     pub fn base_value_of(
         &self,

@@ -676,3 +676,66 @@ fn store_backed_stand_ins_and_load_errors_after_a_writable_entry() {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// A registered resolver whose `available`, given the mutable context, writes a cache and then refuses (an invented
+/// extension, not a game class), counting its calls. Its value is never asked here.
+struct WritesWhenAsked {
+    asked: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+impl crate::api::ValueResolver for WritesWhenAsked {
+    fn available(&self, resolver: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+        self.asked.set(self.asked.get() + 1);
+        let space = cx.world.parts().space;
+        let class = space.heap.get(resolver)?.class;
+        let p = space.prop(class, "AssociatedBlackMarketUpgrade").unwrap();
+        space.write(resolver, PropAddr::scalar(p), Value::Object(None))?;
+        Err(NotYet::not_read("a resolver that wrote while asked", "a test record").into())
+    }
+
+    fn value(
+        &self,
+        _sys: &crate::AttributeSystem,
+        _resolver: ObjRef,
+        _context: ObjRef,
+        _previous: f32,
+        _cx: &mut EvalCx<'_>,
+    ) -> Result<f32, AttrError> {
+        panic!("the preflights evaluate nothing")
+    }
+}
+
+/// Review r2 of #573: the resident preflight asks a resolver's mode availability as metadata only. A resolver whose
+/// `available` would write is never called by it (no call, no write); the loading preflight does call it.
+#[test]
+fn the_resident_preflight_never_calls_a_resolvers_available() {
+    let mut fx = Fx::new();
+    let c = classes(&mut fx);
+    let up = upgrade(&mut fx, &c, "Warm", 0);
+    let class = fx.by_path(CLASS);
+    let r = fx.obj(class, "BM", vec![("AssociatedBlackMarketUpgrade", Value::Object(Some(up)))]);
+    let at = fx.attr("Att_BM_Test", vec![], vec![r]);
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0));
+    let sys = crate::AttributeSystem::new_empty().with_value_resolver(CLASS, WritesWhenAsked { asked: asked.clone() }).unwrap();
+    let writes = fx.w.space.heap.committed_writes();
+    assert!(sys.preflight_read_resident(at, &mut EvalCx::new(&mut fx.w)).is_ok());
+    assert_eq!(asked.get(), 0, "the resident preflight never calls available");
+    assert_eq!(fx.w.space.heap.committed_writes(), writes, "and nothing is written");
+    let e = sys.preflight_read(at, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+    assert_eq!(not_yet(&e).unwrap().what.as_ref(), "a resolver that wrote while asked");
+    assert_eq!(asked.get(), 1, "the loading preflight still asks it");
+}
+
+/// Review r2 of #573: the resident preflight keeps the class's Reference refusal, now asked as metadata.
+#[test]
+fn the_resident_preflight_keeps_the_reference_refusal() {
+    let mut fx = Fx::new();
+    fx.w.defs = Some(DefStore::new(PackageStore::new_empty(), IdentityPolicy::FirstInScanOrder, ParityMode::Reference));
+    let c = classes(&mut fx);
+    let up = upgrade(&mut fx, &c, "Warm", 0);
+    let pc = holder(&mut fx, c.controller, "PC", &[]);
+    let at = attr(&mut fx, pc, Some(up));
+    let e = system().preflight_read_resident(at, &mut EvalCx::new(&mut fx.w)).unwrap_err();
+    let n = not_yet(&e).expect("a NotYet");
+    assert_eq!((n.missing, n.what.as_ref()), (Missing::NotRead, format!("value resolver class {CLASS}").as_str()));
+}

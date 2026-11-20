@@ -272,6 +272,16 @@ as #542's row did: 1 ok / 10 NotYet / 3 errors, and those six links stop in `may
 run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-168; logs under ignored
 `local/p2/anl/`.
 
+**IMPL-GET-PARTICLE-EFFECT (2026-11-19, zuhu desktop, on 3a598e4c / #558):** AI-assisted (Claude Code, Opus 5.5).
+`EffectCollectionDefinition.GetParticleEffect(object)` in Off from NATIVE_GET_PARTICLE_EFFECT.md (#562 at 865ba911);
+the equip run's world registers `ow_skills::action_skill::Pack` in Off and preloads the muzzle-flash collections and
+their evaluators as a logged harness input. `cargo test --workspace -j 2` 2,466 passed / 0 failed / 46 ignored (14 new
+in `ow-inventory`); clippy flags nothing in the changed files; `crate_edges_test.py` OK. Installed Off `--slice-gate`
+strict on a local, unpushed merge with #534 (8fc0420b) and #552 (0438f6b3): 1 ok / 5 notyet / 8 error. Link 8 is 1 of
+5 at `init`, now `notyet`, past `GetParticleEffect` and stopped in the first evaluator at
+`DamageTypeAttributeValueResolver` (NATIVE_ATTRIBUTES.md section 6, marked after partial writes). ctest and
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+
 **IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus
 5.5). `WillowWeapon.RecomputeAttributeBaseValues()` in Off from NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md (#539).
 `cargo test --workspace -j 2` 2,450 passed / 0 failed / 46 ignored (6 new in `ow-inventory`); clippy flags nothing in

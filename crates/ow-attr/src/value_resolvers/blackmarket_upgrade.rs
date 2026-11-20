@@ -347,10 +347,11 @@ fn read(cx: &mut EvalCx<'_>, resolver: ObjRef, context: ObjRef) -> Result<f32, A
 }
 
 impl ValueResolver for BlackMarketUpgrade {
-    /// Reference refuses at the preflight as an unregistered class did (review r1 of #458, item 5).
-    fn available(&self, resolver: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
-        match parity(cx) {
-            ParityMode::Reference => Err(reference_refusal(cx.world.parts().space, resolver)),
+    /// Reference refuses at the preflight as an unregistered class did (review r1 of #458, item 5), as metadata
+    /// (review r2 of #573).
+    fn availability(&self, space: &ObjectSpace, resolver: ObjRef, mode: ParityMode) -> Result<(), AttrError> {
+        match mode {
+            ParityMode::Reference => Err(reference_refusal(space, resolver)),
             _ => Ok(()),
         }
     }

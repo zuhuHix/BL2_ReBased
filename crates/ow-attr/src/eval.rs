@@ -563,6 +563,68 @@ pub(crate) fn preflight_read(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalC
     Ok(())
 }
 
+/// [`AttributeSystem::preflight_read_resident`]: [`preflight_read`]'s checks, loading nothing (review r1 of #573, item
+/// 2; under #518 a lazy load is a write). The definition and every resolver object of its two chains must be
+/// resident: a handle the definition store has not loaded is `NotYet { NotRead }` naming it, and one whose load failed
+/// is `BadData`. Then, as [`preflight_read`]: not multi-context, every context resolver class implemented, every value
+/// chain entry set and of an implemented class available in this mode, asked through
+/// [`crate::api::ValueResolver::availability`] with shared references only (review r2 of #573). Nothing is loaded,
+/// resolved or evaluated, and no resolver code that gets the mutable context runs.
+pub(crate) fn preflight_read_resident(sys: &AttributeSystem, attr: ObjRef, cx: &mut EvalCx<'_>) -> Result<(), AttrError> {
+    resident(cx, attr, "the attribute definition")?;
+    if is_multi_context(cx.world.parts().space, attr)? {
+        return Err(multi_context_not_read("GetValue"));
+    }
+    let chain = resident_field(cx, attr, "ContextResolverChain")?;
+    for entry in elements("ContextResolverChain", &chain)? {
+        if let Some(resolver) = object("ContextResolverChain entry", entry)? {
+            resident(cx, resolver, "a context resolver")?;
+            sys.context_resolver(cx.world.parts().space, resolver)?;
+        }
+    }
+    let chain = resident_field(cx, attr, "ValueResolverChain")?;
+    for entry in elements("ValueResolverChain", &chain)? {
+        let Some(resolver) = object("ValueResolverChain entry", entry)? else {
+            return Err(NotYet::not_read("a None entry in a ValueResolverChain on a read", CHAINS).into());
+        };
+        // The dispatch first: a class this library does not implement is refused by its name, resident or not.
+        let r = sys.value_resolver(cx.world.parts().space, resolver)?;
+        resident(cx, resolver, "a value resolver")?;
+        // The mode availability as metadata, with shared references only: the resolver's own `available`, which gets
+        // the mutable context, is never called here (review r2 of #573).
+        let WorldParts { space, defs, .. } = cx.world.parts();
+        let mode = defs.as_ref().map_or(ow_core::ParityMode::Off, |d| d.mode());
+        r.availability(space, resolver, mode)?;
+    }
+    Ok(())
+}
+
+/// `obj` as a read may use it without a load: `NotYet { NotRead }` for a handle the store has not loaded, `BadData`
+/// for one whose load failed. Loads nothing.
+fn resident(cx: &mut EvalCx<'_>, obj: ObjRef, what: &str) -> Result<(), AttrError> {
+    let WorldParts { space, defs, .. } = cx.world.parts();
+    if let Some(defs) = defs {
+        let name = || format!("{} {}", class_path(space, obj), space.heap.get(obj).map_or_else(|_| "?".into(), |o| space.names.text(o.name).into_owned()));
+        if defs.is_failed(space, obj) {
+            return Err(AttrError::BadData { reason: format!("{what} ({}) failed to load", name()).into() });
+        }
+        if defs.is_unloaded(space, obj) {
+            return Err(NotYet::not_read(format!("{what} ({}) is not loaded (a load is a write)", name()), CHAINS).into());
+        }
+    }
+    Ok(())
+}
+
+/// Property `name` of the resident `obj`, read without a load (`BadData` when its class has none).
+fn resident_field(cx: &mut EvalCx<'_>, obj: ObjRef, name: &str) -> Result<Value, AttrError> {
+    let space = cx.world.parts().space;
+    let class = space.heap.get(obj)?.class;
+    match space.prop(class, name) {
+        Some(p) => Ok(space.read(obj, PropAddr::scalar(p))?.clone()),
+        None => Err(AttrError::BadData { reason: format!("{} has no property {name}", class_path(space, obj)).into() }),
+    }
+}
+
 /// The mark of a refusal after committed writes (the hub's ruling, the same text the script-native wrappers use).
 pub const PARTIAL_WRITES: &str = "stopped after partial writes";
 
