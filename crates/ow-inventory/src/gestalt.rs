@@ -29,13 +29,16 @@
 //! - the non-gestalt path answers None for zero meshes and that mesh for one. Two or more refuse
 //!   `LayerAbsent(`[`MERGE_LAYER`]`)` ([`MERGE`]).
 //!
-//! **`InitGestaltMeshDataFromOther(From)`** (NATIVE_INIT_GESTALT_MESH_DATA.md section 5). The preflight, in order:
-//! 1. the receiver must be resident ([`RECEIVER_NOT_LOADED`], `NotRead`) and declare a struct `GestaltData` (else a
-//!    data error);
-//! 2. the argument:
-//!    - None is a data error;
-//!    - so is one that is not a `SkeletalMeshComponent` or declares no struct `GestaltData`;
-//!    - an unloaded handle is [`ARGUMENT_NOT_LOADED`] (`NotRead`).
+//! **`InitGestaltMeshDataFromOther(From)`** (NATIVE_INIT_GESTALT_MESH_DATA.md section 5). The preflight, in order.
+//! Checks 1 and 2 apply one order to each operand ([`operand`], lane FOLLOWUP-GESTALT-OPERAND-ORDER), the receiver
+//! first, then the argument:
+//! 1. and 2.:
+//!    - None is a data error ([`RECEIVER_NONE`], or "ComponentToCopyFrom is None");
+//!    - an unloaded handle is `NotRead` ([`RECEIVER_NOT_LOADED`], [`ARGUMENT_NOT_LOADED`]), decided before any class or
+//!      field is read, so a handle is never misclassified;
+//!    - a resident object that is not a `SkeletalMeshComponent`, or whose class declares no struct `GestaltData`, is a
+//!      data error naming the class or the field. The receiver's class check is the port's (**UNVERIFIED**): the note
+//!      names it for the argument only;
 //!
 //! 3. the receiver being the argument is a self-assignment: success, with nothing written, even while the layer is
 //!    absent (UNVERIFIED: the notes did not read the self-copy separately);
@@ -81,6 +84,8 @@ pub const MERGE_LAYER: &str = "a skeletal mesh merge";
 pub const MERGE: &str = "BuildCompositeMesh: merging the parts' meshes";
 pub const NOT_LOADED: &str = "BuildCompositeMesh: a definition it reads is not loaded (a load is a write)";
 pub const COMPONENT_NOT_LOADED: &str = "BuildCompositeMesh: the component is an unloaded handle (a load is a write)";
+/// The receiver None (lane FOLLOWUP-GESTALT-OPERAND-ORDER; the note does not read it: a script call always has one).
+pub const RECEIVER_NONE: &str = "InitGestaltMeshDataFromOther: the receiver component is None";
 pub const RECEIVER_NOT_LOADED: &str =
     "InitGestaltMeshDataFromOther: the component is an unloaded handle (a load is a write)";
 pub const ARGUMENT_NOT_LOADED: &str =
@@ -314,21 +319,29 @@ pub fn build_composite_mesh(vm: &mut Vm, component: Option<ObjRef>, data: &Value
 
 /// The write-free preflight of `InitGestaltMeshDataFromOther(from)` on `this` (module documentation): `None` for a
 /// self-copy (nothing to write), else the planned whole-slot copy.
-pub fn plan_init(vm: &Vm, this: ObjRef, from: Option<ObjRef>) -> Result<Option<SlotWrite>, VmError> {
-    resident(vm, this, RECEIVER_NOT_LOADED, INIT_RECORD)?;
-    has_gestalt_data(vm, this, INIT)?;
-    let from = from.ok_or_else(|| bad(INIT, "InitGestaltMeshDataFromOther: ComponentToCopyFrom is None"))?;
-    is_component(vm, from, "ComponentToCopyFrom", INIT)?;
-    has_gestalt_data(vm, from, INIT)?;
-    resident(vm, from, ARGUMENT_NOT_LOADED, INIT_RECORD)?;
+pub fn plan_init(vm: &Vm, this: Option<ObjRef>, from: Option<ObjRef>) -> Result<Option<SlotWrite>, VmError> {
+    let this = operand(vm, this, RECEIVER_NONE, "the receiver", RECEIVER_NOT_LOADED)?;
+    let from = operand(vm, from, "InitGestaltMeshDataFromOther: ComponentToCopyFrom is None", "ComponentToCopyFrom", ARGUMENT_NOT_LOADED)?;
     if from == this {
         return Ok(None);
     }
     crate::gestalt_data::plan_copy(vm, this, from).map(Some)
 }
 
+/// Checks 1 and 2 for one operand of the copy, in one order (lane FOLLOWUP-GESTALT-OPERAND-ORDER): None is a data error
+/// (`none`); an unloaded handle is `NotRead` (`unloaded`), before any class or field is read; then a class that is not
+/// a `SkeletalMeshComponent`, or that declares no struct `GestaltData`, is a data error naming `role`'s class or the
+/// field. Every read is the class table's or the heap's own: nothing loads, writes or draws, and no name is interned.
+fn operand(vm: &Vm, o: Option<ObjRef>, none: &str, role: &str, unloaded: &'static str) -> Result<ObjRef, VmError> {
+    let o = o.ok_or_else(|| bad(INIT, none))?;
+    resident(vm, o, unloaded, INIT_RECORD)?;
+    is_component(vm, o, role, INIT)?;
+    has_gestalt_data(vm, o, INIT)?;
+    Ok(o)
+}
+
 /// `InitGestaltMeshDataFromOther(from)` on `this` in Off: [`plan_init`], then its one write.
-pub fn init_gestalt_mesh_data(vm: &mut Vm, this: ObjRef, from: Option<ObjRef>) -> Result<(), VmError> {
+pub fn init_gestalt_mesh_data(vm: &mut Vm, this: Option<ObjRef>, from: Option<ObjRef>) -> Result<(), VmError> {
     if let Some(w) = plan_init(vm, this, from)? {
         w.apply(vm)?;
     }
@@ -347,9 +360,8 @@ fn build_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 }
 
 fn init_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let this = c.this.ok_or_else(|| bad(INIT, "called without a component"))?;
     let from = object_of(c.arg(0)?, INIT)?;
-    init_gestalt_mesh_data(c.vm, this, from)?;
+    init_gestalt_mesh_data(c.vm, c.this, from)?;
     Ok(Value::None)
 }
 

@@ -280,16 +280,16 @@ fn the_copy_hands_the_value_on_whole() {
     let (g, _, c1) = full(&mut x);
     fill(&mut x, c1, g, &["Toy_A", "Toy_B"]);
     let c2 = x.o("ToyComp2");
-    init_gestalt_mesh_data(&mut x.vm, c2, Some(c1)).unwrap();
+    init_gestalt_mesh_data(&mut x.vm, Some(c2), Some(c1)).unwrap();
     assert_eq!(slot(&x, c2), slot(&x, c1));
     let class = x.vm.space.heap.get(c1).unwrap().class;
     let ghost = x.vm.space.alloc_stand_in(class, "ToyGhostComp", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
-    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, c2, Some(ghost)));
+    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(c2), Some(ghost)));
     let n = not_yet(e);
     assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, INIT_STAND_IN, DATA_RECORD));
     let before = x.snapshot();
     let mark = crate::equip::card::load_mark(&x.vm);
-    init_gestalt_mesh_data(&mut x.vm, c1, Some(c1)).unwrap();
+    init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c1)).unwrap();
     assert_eq!((x.snapshot(), crate::equip::card::load_mark(&x.vm)), (before, mark));
 }
 

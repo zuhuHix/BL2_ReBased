@@ -129,8 +129,13 @@ fn package_mis(gestalt_data: bool, mis: Mis) -> Vec<u8> {
     }
     toy_array_of(&mut t, gestalt, "GestaltSocketMappings", "Struct", socket);
     toy_array_of(&mut t, gestalt, "GestaltPartBounds", "Struct", part_bounds);
+    // The component's own mesh, which the copy must leave alone (lane FOLLOWUP-GESTALT-OPERAND-ORDER).
+    t.prop("Object", component, "SkeletalMesh", 0, mesh);
     if gestalt_data {
         t.prop("Struct", component, "GestaltData", 0, container);
+        // A class that is not a component but declares a same-named struct field (lane FOLLOWUP-GESTALT-OPERAND-ORDER).
+        let lookalike = t.class("ToyLookalike", object);
+        t.prop("Struct", lookalike, "GestaltData", 0, container);
     }
     let weapon = t.class("WillowWeapon", object);
     let data = toy_struct(&mut t, weapon, "WeaponDefinitionData", None);
@@ -510,7 +515,7 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     let at = part_mesh_names(&x, &whole);
     whole.struct_mut().unwrap().fields[at] = Value::array(vec![Value::Name(names)]);
     x.vm.space.write(c2, PropAddr::scalar(p), whole.clone()).unwrap();
-    init_gestalt_mesh_data(&mut x.vm, c1, Some(c2)).unwrap();
+    init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c2)).unwrap();
     assert_eq!(x.vm.space.read(c1, PropAddr::scalar(p)).unwrap(), &whole, "both whole: the value is copied");
     // A malformed nested array element: F1(iii), a data error.
     let mut bad = whole;
@@ -518,7 +523,7 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     // Placed in the slot directly, past the heap's write checks (a fixture of a malformed decode).
     *x.vm.space.slot_mut(c2, PropAddr::scalar(p)).unwrap() = bad;
     let before = x.snapshot();
-    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, c1, Some(c2)));
+    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(c1), Some(c2)));
     assert_eq!(script(e), crate::gestalt_data::INIT_MISMATCH);
     assert_eq!(x.snapshot(), before, "nothing written");
     // A real stand-in (slotless, not a store definition, never loads): F1(ii)'s NotRead (the hub's ruling on #603),
@@ -527,18 +532,18 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     let ghost = x.vm.space.alloc_stand_in(class, "ToyGhostComp", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
     assert!(x.vm.space.heap.get(ghost).unwrap().slots.is_empty() && !x.vm.defs.is_loaded(&x.vm.space, ghost));
     for (this, from) in [(c1, ghost), (ghost, c1)] {
-        let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, this, Some(from)));
+        let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(this), Some(from)));
         assert_eq!(not_read(e), crate::gestalt_data::INIT_STAND_IN);
     }
     // The self-copy answers before check 4, so even the stand-in succeeds with nothing written.
-    init_gestalt_mesh_data(&mut x.vm, ghost, Some(ghost)).unwrap();
+    init_gestalt_mesh_data(&mut x.vm, Some(ghost), Some(ghost)).unwrap();
     assert!(x.vm.space.heap.get(ghost).unwrap().slots.is_empty());
     // A definition, not a stand-in: a loaded store export whose slots were never filled is NOT_DECODED (the store
     // holds the data), as the receiver and as the argument. The slots are cleared directly (a fixture of that state).
     assert!(x.vm.defs.is_loaded(&x.vm.space, c2), "c2 is a store definition");
     x.vm.space.heap.get_mut(c2).unwrap().slots.clear();
-    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, c1, Some(c2)).unwrap_err()), NOT_DECODED);
-    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, c2, Some(c1)).unwrap_err()), NOT_DECODED);
+    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c2)).unwrap_err()), NOT_DECODED);
+    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, Some(c2), Some(c1)).unwrap_err()), NOT_DECODED);
 }
 
 /// The slot index of `PartMeshNames` in a `GestaltData` value.
@@ -622,23 +627,102 @@ fn a_component_class_without_gestalt_data_is_a_data_error() {
     let c = x.o("ToyComp1");
     assert!(script(quiet(&mut x.vm, |vm| build_composite_mesh(vm, Some(c), &data))).contains("GestaltData"));
     let c2 = x.o("ToyComp2");
-    assert!(script(quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, c, Some(c2)))).contains("GestaltData"));
+    assert!(script(quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, Some(c), Some(c2)))).contains("GestaltData"));
 }
 
-/// NATIVE_INIT_GESTALT_MESH_DATA.md section 5: the receiver, the argument, the self-copy, then the copy.
+/// A runtime `ToyLookalike`: not a component, but its class declares a struct `GestaltData`.
+fn lookalike(x: &mut Fx) -> ObjRef {
+    let class = x.vm.find_class("Engine.ToyLookalike").unwrap();
+    ow_vm::interp::instantiate_from_defaults(&mut x.vm, class).unwrap()
+}
+
+/// One refused copy: #518's counters ([`quiet`]), the loaded objects' slots and the name table's size all unchanged.
+fn refused_copy(x: &mut Fx, this: Option<ObjRef>, from: Option<ObjRef>) -> VmError {
+    let (before, names) = (x.snapshot(), x.vm.space.names.len());
+    let e = quiet(&mut x.vm, |vm| init_gestalt_mesh_data(vm, this, from));
+    assert_eq!(x.snapshot(), before, "nothing written: {e}");
+    assert_eq!(x.vm.space.names.len(), names, "no name interned: {e}");
+    e
+}
+
+/// Lane FOLLOWUP-GESTALT-OPERAND-ORDER: one order on each operand, the receiver first. None is a data error; an
+/// unloaded handle is `NotRead` before its class is read (an unloaded mesh handle is `NotRead`, not a class error);
+/// a resident object of another class is a data error, also when its class declares a same-named `GestaltData`.
 #[test]
-fn the_copy_checks_both_components_answers_a_self_copy_then_copies() {
+fn each_operand_refuses_in_one_order() {
     let mut x = fx();
-    let (c1, c2, mesh, un) = (x.o("ToyComp1"), x.o("ToyComp2"), x.o("ToyMeshObj"), x.handle("UnComp"));
-    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, un, Some(c1)).unwrap_err()), RECEIVER_NOT_LOADED);
-    assert!(script(init_gestalt_mesh_data(&mut x.vm, mesh, Some(c1)).unwrap_err()).contains("GestaltData"));
-    assert!(script(init_gestalt_mesh_data(&mut x.vm, c1, None).unwrap_err()).contains("ComponentToCopyFrom is None"));
-    assert!(script(init_gestalt_mesh_data(&mut x.vm, c1, Some(mesh)).unwrap_err()).contains(COMPONENT_CLASS));
-    assert_eq!(not_read(init_gestalt_mesh_data(&mut x.vm, c1, Some(un)).unwrap_err()), ARGUMENT_NOT_LOADED);
-    let before = x.snapshot();
-    init_gestalt_mesh_data(&mut x.vm, c1, Some(c1)).unwrap();
-    assert_eq!(x.snapshot(), before, "a self-copy writes nothing");
-    init_gestalt_mesh_data(&mut x.vm, c2, Some(c1)).unwrap();
+    let (c1, mesh, un, un_mesh) = (x.o("ToyComp1"), x.o("ToyMeshObj"), x.handle("UnComp"), x.handle("UnMesh"));
+    let look = lookalike(&mut x);
+    // The receiver, with a good argument.
+    assert_eq!(script(refused_copy(&mut x, None, Some(c1))), RECEIVER_NONE);
+    assert_eq!(not_read(refused_copy(&mut x, Some(un), Some(c1))), RECEIVER_NOT_LOADED);
+    assert_eq!(not_read(refused_copy(&mut x, Some(un_mesh), Some(c1))), RECEIVER_NOT_LOADED, "residency before class");
+    for wrong in [mesh, look] {
+        let e = script(refused_copy(&mut x, Some(wrong), Some(c1)));
+        assert!(e.contains("the receiver is a") && e.contains(COMPONENT_CLASS), "{e}");
+    }
+    // The argument, with a good receiver.
+    assert_eq!(script(refused_copy(&mut x, Some(c1), None)), "InitGestaltMeshDataFromOther: ComponentToCopyFrom is None");
+    assert_eq!(not_read(refused_copy(&mut x, Some(c1), Some(un))), ARGUMENT_NOT_LOADED);
+    assert_eq!(not_read(refused_copy(&mut x, Some(c1), Some(un_mesh))), ARGUMENT_NOT_LOADED, "residency before class");
+    for wrong in [mesh, look] {
+        let e = script(refused_copy(&mut x, Some(c1), Some(wrong)));
+        assert!(e.contains("ComponentToCopyFrom is a") && e.contains(COMPONENT_CLASS), "{e}");
+    }
+    // The receiver is checked whole before the argument: a bad receiver wins over a bad argument.
+    assert_eq!(script(refused_copy(&mut x, None, Some(un))), RECEIVER_NONE);
+    assert_eq!(not_read(refused_copy(&mut x, Some(un), None)), RECEIVER_NOT_LOADED);
+    for o in [un, un_mesh] {
+        assert!(x.vm.defs.is_unloaded(&x.vm.space, o), "never loaded");
+    }
+}
+
+/// The note's test 5: a self-copy succeeds with nothing written, nothing loaded or drawn and no name interned. Then
+/// the layer's refusals (F1, the hub's ruling on #603: the copy's slot checks replaced the note's pre-layer
+/// `LayerAbsent`) are exact, with nothing changed, and a copy between two whole components is one whole-slot write:
+/// the receiver keeps its identity and its own `SkeletalMesh`, and its `GestaltData` is the argument's value, the
+/// objects inside it the same objects.
+#[test]
+fn the_self_copy_the_layer_refusals_and_one_whole_slot_write() {
+    let mut x = fx();
+    let (c1, c2, mesh_a, mesh_b) = (x.o("ToyComp1"), x.o("ToyComp2"), x.o("ToyMeshA"), x.o("ToyMeshB"));
+    let (mark, names, before) = (crate::equip::card::load_mark(&x.vm), x.vm.space.names.len(), x.snapshot());
+    init_gestalt_mesh_data(&mut x.vm, Some(c1), Some(c1)).unwrap();
+    assert_eq!((crate::equip::card::load_mark(&x.vm), x.vm.space.names.len(), x.snapshot()), (mark, names, before));
+    // The layer's refusals, exactly: a stand-in (F1(ii)) and an undecoded store definition (F1(i)), on either operand.
+    let class = x.vm.space.heap.get(c1).unwrap().class;
+    let ghost = x.vm.space.alloc_stand_in(class, "ToyGhostComp", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
+    for (this, from) in [(c1, ghost), (ghost, c1)] {
+        let n = not_yet(refused_copy(&mut x, Some(this), Some(from)));
+        assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, crate::gestalt_data::INIT_STAND_IN, crate::gestalt_data::DATA_RECORD));
+    }
+    // The whole-slot write. Each component holds its own mesh; c1's GestaltData names mesh A.
+    x.set(c1, "SkeletalMesh", some(mesh_a));
+    x.set(c2, "SkeletalMesh", some(mesh_b));
+    let p = x.vm.space.prop(class, "GestaltData").unwrap();
+    let mut value = x.vm.space.read(c1, PropAddr::scalar(p)).unwrap().clone();
+    let at = {
+        let ty = value.as_struct().unwrap().ty;
+        let id = x.vm.space.names.find("SkeletalMesh").unwrap();
+        x.vm.space.classes.struct_layout(ty).unwrap().field(id).unwrap().0 as usize
+    };
+    value.struct_mut().unwrap().fields[at] = some(mesh_a);
+    x.vm.space.write(c1, PropAddr::scalar(p), value.clone()).unwrap();
+    let writes = x.vm.space.heap.committed_writes();
+    let (draws, loads) = (x.vm.rng.draws(), x.vm.defs.load_transitions());
+    init_gestalt_mesh_data(&mut x.vm, Some(c2), Some(c1)).unwrap();
+    assert_eq!(x.vm.space.heap.committed_writes(), writes + 1, "one whole-slot write");
+    assert_eq!((x.vm.rng.draws(), x.vm.defs.load_transitions()), (draws, loads), "no draw, no load");
+    assert_eq!(x.vm.space.read(c2, PropAddr::scalar(p)).unwrap(), &value, "the argument's value, its objects the same");
+    assert_eq!(x.o("ToyComp2"), c2, "the receiver keeps its identity");
+    assert_eq!(crate::equip::read_prop(&x.vm, c2, "SkeletalMesh"), Some(some(mesh_b)), "its own mesh unchanged");
+    assert_eq!(crate::equip::read_prop(&x.vm, c1, "SkeletalMesh"), Some(some(mesh_a)), "the argument unchanged");
+    // The undecoded store definition, last (its slots are cleared directly, a fixture of that state).
+    x.vm.space.heap.get_mut(c2).unwrap().slots.clear();
+    for (this, from) in [(c1, c2), (c2, c1)] {
+        let n = not_yet(refused_copy(&mut x, Some(this), Some(from)));
+        assert_eq!((n.missing, n.what.as_ref(), n.record), (Missing::NotRead, NOT_DECODED, INIT_RECORD));
+    }
 }
 
 /// Both natives bound in Off and called through the VM; Reference binds neither.

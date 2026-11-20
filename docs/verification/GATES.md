@@ -36,6 +36,12 @@ the machine lock): on this branch 4 ok / 9 NotYet / 1 error, link 8 at `GetExpLe
 a probe merge with #596, #613, #577 and #599, 4 ok / 10 NotYet / 0 errors, link 8 passes `make` and stops in `init` at
 #599's `SetSkeletalMesh` mesh-change LayerAbsent. ctest and verify_packages not run (no C++ change). No real-game run. Rebased onto main df0970ec (batch 7): `cargo test --workspace -j 2` 3,134 passed / 0 failed / 51 ignored; the branch alone is now 4 ok / 10 NotYet / 0 errors, link 8 at the same mesh-change stop.
 
+**FOLLOWUP-GESTALT-OPERAND-ORDER (2026-11-20, pc-hummer, on main df0970ec):** AI-assisted (Claude Code, Opus 5.5).
+InitGestaltMeshDataFromOther's one operand order (None, unloaded, class and field). `cargo test --workspace -j 2`
+3,131 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off strict `--slice-gate`: 4 ok / 10 NotYet /
+0 errors, the same as main; link 8 passes `make` and stops at `BuildCompositeMesh`'s cold gestalt definition (#632).
+ctest and verify_packages not run (no C++ change). No real-game run.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p
