@@ -1,7 +1,7 @@
 # ParticleSystemComponent activation and initialisation, as SetTemplate runs them (draft, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-PARTICLE-ACTIVATION (decision
-`docs/decisions/2026-11/2026-11-19-NNN-particle-activation-note.md`, number pending). Analyst only: a different lane implements it (clean room). This lane implemented #593
+`docs/decisions/2026-11/2026-11-19-206-particle-activation-note.md`, number pending). Analyst only: a different lane implements it (clean room). This lane implemented #593
 (`SpawnPickupParticles`' preflight) from NATIVE_SPAWN_PICKUP_PARTICLES.md before it read these natives. It does not
 implement this note.
 
