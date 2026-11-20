@@ -34,6 +34,7 @@ use std::rc::Rc;
 use ow_core::{DetMap, NotYet};
 use ow_object::heap::Origin;
 use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::Vm;
 use ow_vm::error::VmError;
@@ -47,14 +48,36 @@ const MESH_CLASS: &str = "Engine.SkeletalMesh";
 const LOAD_LAYER: &str = "the definition store's load (the skeletal mesh data layer loads nothing)";
 
 /// One bone of a reference skeleton: its name and its parent's index (`None` for the root).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkeletonBone {
     pub name: String,
     pub parent: Option<usize>,
+    /// The bone's bind pose relative to its parent, when the source has it (lane IMPL-BONE-TRANSFORM-LAYER,
+    /// NATIVE_BONE_TRANSFORM_LAYER.md section 6.1). `None` is "unknown": the reference pose then refuses. That the
+    /// source's bind pose equals the mesh's reference skeleton is **UNVERIFIED**.
+    pub bind: Option<BoneBind>,
+}
+
+/// A bone's transform relative to its parent: `p_parent = q p q* + t` (the `.psk` reader's convention).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoneBind {
+    /// A unit quaternion `(x, y, z, w)`.
+    pub rotation: [f32; 4],
+    pub translation: [f32; 3],
+}
+
+/// One component-space bone transform, as `SpaceBases` holds it: a rotation, a translation and a uniform scale
+/// (NATIVE_BONE_TRANSFORM_LAYER.md sections 1 and 6.1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpaceBase {
+    /// A unit quaternion `(x, y, z, w)`.
+    pub rotation: [f32; 4],
+    pub translation: [f32; 3],
+    pub scale: f32,
 }
 
 /// A mesh's reference skeleton: its bones in order; every bone's parent comes before it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReferenceSkeleton {
     pub bones: Vec<SkeletonBone>,
 }
@@ -97,11 +120,13 @@ pub trait SkeletonSource {
 pub struct SkeletalMeshes {
     source: Box<dyn SkeletonSource>,
     cache: DetMap<ObjRef, Rc<ReferenceSkeleton>>,
+    /// The composed reference poses, by mesh identity ([`reference_space_bases`]).
+    poses: DetMap<ObjRef, Rc<Vec<SpaceBase>>>,
 }
 
 impl SkeletalMeshes {
     pub fn new(source: Box<dyn SkeletonSource>) -> Self {
-        SkeletalMeshes { source, cache: DetMap::new() }
+        SkeletalMeshes { source, cache: DetMap::new(), poses: DetMap::new() }
     }
 
     /// Installs the layer in `vm` (a harness input; at most once per VM).
@@ -279,6 +304,223 @@ fn ints(vm: &Vm, v: &Value, names: [&str; 3], what: &str) -> Result<[i32; 3], Vm
         };
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The bone-transform layer (lane IMPL-BONE-TRANSFORM-LAYER, NATIVE_BONE_TRANSFORM_LAYER.md section 6, #646 at 78bc883c;
+// clean room). Two separate answers: the consumers' read ([`stored_space_bases`], the buffer as stored) and the fill
+// paths' plan ([`pose_update`], no fill path is ported yet). Every rule is UNVERIFIED in the running game.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The record of the bone-transform layer's refusals.
+pub const BONE_RECORD: &str = "docs/verification/NATIVE_BONE_TRANSFORM_LAYER.md";
+/// The struct `SpaceBases` holds.
+pub const BONE_ATOM: &str = "Core.Object.BoneAtom";
+/// `pose_update`'s rule 2.
+pub const UNLOADED_MESH: &str = "the bone-transform layer: the mesh is an unloaded handle (a load is a write)";
+/// `pose_update`'s rule 3: its layer and text.
+pub const PARENT_COPY: &str = "the bone-transform layer's parent copy";
+pub const PARENT_COPY_TEXT: &str = "the bone-transform layer: the bones of a ParentAnimComponent";
+/// `pose_update`'s rule 4: its layer and text.
+pub const TREE_POSE: &str = "the animation tree's pose";
+pub const TREE_POSE_TEXT: &str = "the bone-transform layer: the animation tree's evaluation";
+/// `pose_update`'s rule 5.
+pub const ROOT_MOTION: &str = "the bone-transform layer: the discarded root motion";
+
+/// A field's declared kind, as the layer and its natives check it (section 6.3's field kinds).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Object,
+    Bool,
+    Int,
+}
+
+/// Field `name` of `o`: declared on its class with `kind` (by the declaration, not the value), else
+/// `VmError::Script` naming it for `function`; then its value, read without a load.
+pub fn read_kind(vm: &Vm, o: ObjRef, name: &str, kind: Kind, function: &str) -> Result<Value, VmError> {
+    let class = vm.space.heap.get(o)?.class;
+    let path = || vm.space.classes.layout(class).path().to_string();
+    let bad = || VmError::Script {
+        function: function.to_string(),
+        message: format!("{function}: {}.{name} is not declared as {}", path(), kind_name(kind)),
+    };
+    let p = vm.space.prop(class, name).ok_or_else(bad)?;
+    let declared = vm.space.classes.decl(p).map(|d| &d.kind);
+    let ok = matches!(
+        (kind, declared),
+        (Kind::Object, Some(PropKind::Object { .. })) | (Kind::Bool, Some(PropKind::Bool)) | (Kind::Int, Some(PropKind::Int))
+    );
+    if !ok {
+        return Err(bad());
+    }
+    Ok(vm.space.read(o, PropAddr::scalar(p))?.clone())
+}
+
+fn kind_name(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Object => "an object",
+        Kind::Bool => "a bool",
+        Kind::Int => "an int",
+    }
+}
+
+/// Whether `o` is resident: not an unloaded or failed handle, and not a stand-in with no slots whose class has some.
+pub fn resident(vm: &Vm, o: ObjRef) -> Result<bool, VmError> {
+    let x = vm.space.heap.get(o)?;
+    let stand_in = x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0);
+    Ok(!vm.defs.is_unloaded(&vm.space, o) && !stand_in)
+}
+
+/// The consumers' read (section 6.2): `component`'s `SpaceBases` entries as stored, possibly empty. Its only rule:
+/// `SpaceBases` declared as an array of [`BONE_ATOM`], else `VmError::Script` naming it. It never computes a pose.
+/// Read-only, load-free, RNG-free and intern-free.
+pub fn stored_space_bases(vm: &Vm, component: ObjRef) -> Result<Vec<Value>, VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let path = || vm.space.classes.layout(class).path().to_string();
+    let bad = || script(format!("{}.SpaceBases is not declared as an array of {BONE_ATOM}", path()));
+    let p = vm.space.prop(class, "SpaceBases").ok_or_else(bad)?;
+    let atoms = match vm.space.classes.decl(p).map(|d| &d.kind) {
+        Some(PropKind::Array(inner)) => match inner.as_ref() {
+            PropKind::Struct(ty) => vm.space.classes.struct_layout(*ty).is_some_and(|l| l.path().as_str() == BONE_ATOM),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !atoms {
+        return Err(bad());
+    }
+    Ok(vm.space.read(component, PropAddr::scalar(p))?.elements().map(<[Value]>::to_vec).unwrap_or_default())
+}
+
+/// The fill paths' plan (section 6.3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PoseUpdate {
+    /// Write nothing.
+    Skip,
+    /// The new `SpaceBases`, one entry per bone of the mesh.
+    Write(Rc<Vec<SpaceBase>>),
+}
+
+/// The pose update a fill path writes in its own write phase (section 6.3). Write-free, load-free, RNG-free and
+/// intern-free. The field kinds are checked first, each by its declaration (else `VmError::Script` naming it):
+/// `SkeletalMesh`, `Animations` and `ParentAnimComponent` objects; `bSkipUpdateSkelPose` and
+/// `bForceDiscardRootMotion` bools; `bForceRefpose` an int (non-zero is set); `SpaceBases` as [`stored_space_bases`]
+/// checks it. Then, the first that applies:
+/// 1. no `SkeletalMesh`, or `bSkipUpdateSkelPose` set: [`PoseUpdate::Skip`];
+/// 2. the mesh not resident: `NotYet { NotRead }`, [`UNLOADED_MESH`];
+/// 3. a set `ParentAnimComponent`: `NotYet { LayerAbsent(`[`PARENT_COPY`]`) }`;
+/// 4. a set `Animations` with `bForceRefpose` zero: `NotYet { LayerAbsent(`[`TREE_POSE`]`) }`;
+/// 5. `bForceDiscardRootMotion` set: `NotYet { NotPorted }`, [`ROOT_MOTION`];
+/// 6. otherwise [`PoseUpdate::Write`] with [`reference_space_bases`]. The update-rate and not-rendered skips are taken
+///    as not skipping (UNVERIFIED).
+pub fn pose_update(vm: &Vm, component: ObjRef) -> Result<PoseUpdate, VmError> {
+    const F: &str = "the bone-transform layer";
+    let object = |n: &str| match read_kind(vm, component, n, Kind::Object, F)? {
+        Value::Object(o) => Ok(o),
+        other => Err(script(format!("{n} holds {}, not an object", other.kind_name()))),
+    };
+    let boolean = |n: &str| match read_kind(vm, component, n, Kind::Bool, F)? {
+        Value::Bool(b) => Ok(b),
+        other => Err(script(format!("{n} holds {}, not a bool", other.kind_name()))),
+    };
+    let mesh = object("SkeletalMesh")?;
+    let animations = object("Animations")?;
+    let parent = object("ParentAnimComponent")?;
+    let skip = boolean("bSkipUpdateSkelPose")?;
+    let discard = boolean("bForceDiscardRootMotion")?;
+    let force_refpose = match read_kind(vm, component, "bForceRefpose", Kind::Int, F)? {
+        Value::Int(i) => i != 0,
+        other => return Err(script(format!("bForceRefpose holds {}, not an int", other.kind_name()))),
+    };
+    stored_space_bases(vm, component)?;
+    // Rule 1.
+    let Some(mesh) = mesh else {
+        return Ok(PoseUpdate::Skip);
+    };
+    if skip {
+        return Ok(PoseUpdate::Skip);
+    }
+    // Rule 2, the residency first: NotRead (a direct call of the layer's functions keeps their own LayerAbsent).
+    if !resident(vm, mesh)? {
+        return Err(NotYet::not_read(UNLOADED_MESH, BONE_RECORD).into());
+    }
+    // Rules 3 to 5.
+    if parent.is_some() {
+        return Err(NotYet::layer_absent(PARENT_COPY_TEXT, PARENT_COPY, BONE_RECORD).into());
+    }
+    if animations.is_some() && !force_refpose {
+        return Err(NotYet::layer_absent(TREE_POSE_TEXT, TREE_POSE, BONE_RECORD).into());
+    }
+    if discard {
+        return Err(NotYet::not_ported(ROOT_MOTION, BONE_RECORD).into());
+    }
+    // Rule 6.
+    Ok(PoseUpdate::Write(reference_space_bases(vm, mesh)?))
+}
+
+/// The reference pose's text when a bone of the skeleton has no bind pose.
+pub const NO_BIND_POSE: &str = "the skeletal mesh data layer: a reference skeleton without bind poses";
+
+/// `mesh`'s reference pose in component space (lane IMPL-BONE-TRANSFORM-LAYER, NATIVE_BONE_TRANSFORM_LAYER.md section
+/// 6.1): each bone's bind pose composed onto its parent's composed transform, root first, every scale 1. A child's
+/// rotation is its parent's composed rotation times its own; its translation is the parent's translation plus the
+/// parent's rotation applied to its own. Every bone counts as required (an UNVERIFIED simplification). A skeleton with
+/// any bone's bind pose unknown is `NotYet { LayerAbsent }` with [`LAYER`] and [`NO_BIND_POSE`], and nothing is cached.
+/// Reads only; cached by mesh identity, and the skeleton through [`reference_skeleton`]'s cache.
+pub fn reference_space_bases(vm: &Vm, mesh: ObjRef) -> Result<Rc<Vec<SpaceBase>>, VmError> {
+    let skeleton = reference_skeleton(vm, mesh)?;
+    let Some(cell) = vm.service::<SkeletalMeshes>() else {
+        return Err(NotYet::layer_absent(format!("{UNIT}: no skeleton source is installed"), LAYER, RECORD).into());
+    };
+    if let Some(hit) = cell.try_borrow().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.poses.get(&mesh) {
+        return Ok(Rc::clone(hit));
+    }
+    let mut out: Vec<SpaceBase> = Vec::with_capacity(skeleton.len());
+    for bone in &skeleton.bones {
+        let Some(bind) = bone.bind else {
+            return Err(NotYet::layer_absent(NO_BIND_POSE, LAYER, RECORD).into());
+        };
+        let atom = match bone.parent {
+            None => SpaceBase { rotation: bind.rotation, translation: bind.translation, scale: 1.0 },
+            Some(p) => {
+                let parent = out[p];
+                let r = rotate(parent.rotation, bind.translation);
+                SpaceBase {
+                    rotation: quat_mul(parent.rotation, bind.rotation),
+                    translation: [parent.translation[0] + r[0], parent.translation[1] + r[1], parent.translation[2] + r[2]],
+                    scale: 1.0,
+                }
+            }
+        };
+        out.push(atom);
+    }
+    let out = Rc::new(out);
+    cell.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SkeletalMeshes"))?.poses.insert(mesh, Rc::clone(&out));
+    Ok(out)
+}
+
+/// Whether the composed-pose cache holds `mesh` (tests only: a refusal caches nothing).
+#[cfg(test)]
+pub(crate) fn has_cached_pose(vm: &Vm, mesh: ObjRef) -> bool {
+    vm.service::<SkeletalMeshes>().is_some_and(|c| c.borrow().poses.contains_key(&mesh))
+}
+
+/// The Hamilton product `a b` of two `(x, y, z, w)` quaternions, in single precision.
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let [ax, ay, az, aw] = a;
+    let [bx, by, bz, bw] = b;
+    [
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ]
+}
+
+/// `v` rotated by the unit quaternion `q` (`q v q*`), in single precision.
+fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+    let [x, y, z, _] = quat_mul(quat_mul(q, [v[0], v[1], v[2], 0.0]), [-q[0], -q[1], -q[2], q[3]]);
+    [x, y, z]
 }
 
 /// `mesh`'s sockets, in its `Sockets` order (module documentation). Reads only.

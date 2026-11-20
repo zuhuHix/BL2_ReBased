@@ -47,7 +47,7 @@ impl SkeletonSource for Fixed {
 
 fn bones(parents: &[Option<usize>]) -> ReferenceSkeleton {
     ReferenceSkeleton {
-        bones: parents.iter().enumerate().map(|(i, &p)| SkeletonBone { name: format!("Bone{i}"), parent: p }).collect(),
+        bones: parents.iter().enumerate().map(|(i, &p)| SkeletonBone { name: format!("Bone{i}"), parent: p, bind: None }).collect(),
     }
 }
 

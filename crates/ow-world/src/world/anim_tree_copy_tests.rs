@@ -1329,7 +1329,7 @@ use crate::world::skeletal::{ReferenceSkeleton, SkeletonBone};
 /// An invented skeleton: bone `i` named `B<i>`, with these parents.
 fn skeleton(parents: &[Option<usize>]) -> ReferenceSkeleton {
     ReferenceSkeleton {
-        bones: parents.iter().enumerate().map(|(i, &parent)| SkeletonBone { name: format!("B{i}"), parent }).collect(),
+        bones: parents.iter().enumerate().map(|(i, &parent)| SkeletonBone { name: format!("B{i}"), parent, bind: None }).collect(),
     }
 }
 
