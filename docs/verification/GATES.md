@@ -130,7 +130,7 @@ ignored; `crate_edges_test.py` 19 OK; clippy: no warning in the touched files. I
 `GearboxMind.GetAIComponent()`, which is batch 9's own error (lane d2b6). With #602 the mind answers `IAIInterface`
 read-only, so the preflight passes and the cast reaches that call. The old "after partial writes" stop is not reached
 on this base. ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN; logs under ignored `local/p2/link9-preflight/`. **Review r1 of #648:** the preflight now asks only for a resident
+2026-11-19-266; logs under ignored `local/p2/link9-preflight/`. **Review r1 of #648:** the preflight now asks only for a resident
 definition whose first set resolver is the AI component resolver, and passes on only a rule's own `NotYet` (not one
 with the read-only dispatch's own record). `cargo test -p ow-skills --lib flag_expression` 23 passed / 0
 failed; `cargo test -p ow-vm -p ow-skills -j 2` 371 passed / 0 failed / 2 ignored; clippy: no warning in the touched files. Off `--slice-gate`
