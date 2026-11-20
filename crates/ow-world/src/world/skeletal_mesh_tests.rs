@@ -164,22 +164,16 @@ fn the_same_mesh_does_nothing() {
     assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the unloaded mesh stays unloaded");
 }
 
-/// A replacement and a clear are `LayerAbsent` before any write, neither mesh's residency checked.
+/// A replacement and a clear are the mesh change's rows now (lane IMPL-SKELMESH-MESH-CHANGE); their tests are in
+/// `skeletal_mesh_change_tests.rs`. On this fixture's bare component (no row field declared), a change to a resident
+/// mesh is the first row's field read, a script error, with nothing written.
 #[test]
-fn a_mesh_change_is_layer_absent() {
+fn a_mesh_change_on_a_bare_component_is_a_script_error() {
     let mut x = fx();
     let mesh = x.obj("Engine.SkeletalMesh", "Mesh");
-    let other = x.obj("Engine.SkeletalMesh", "Other");
     let none = x.component(None);
-    not_yet(x.call(none, vec![Value::Object(Some(mesh))]), Missing::LayerAbsent(BONES_LAYER), "a mesh change");
+    script_error(x.call(none, vec![Value::Object(Some(mesh))]), "PhysicsAssetInstance");
     assert_eq!(x.mesh_of(none), Value::Object(None), "unchanged");
-    let set = x.component(Some(mesh));
-    not_yet(x.call(set, vec![Value::Object(Some(other)), Value::Bool(true)]), Missing::LayerAbsent(BONES_LAYER), "a mesh change");
-    not_yet(x.call(set, vec![Value::Object(None)]), Missing::LayerAbsent(BONES_LAYER), "a mesh change");
-    assert_eq!(x.mesh_of(set), Value::Object(Some(mesh)), "unchanged");
-    let lazy = x.unloaded();
-    not_yet(x.call(set, vec![Value::Object(Some(lazy))]), Missing::LayerAbsent(BONES_LAYER), "a mesh change");
-    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the new mesh is not loaded");
 }
 
 /// The receiver's residency comes first; then the field and the argument shapes are `VmError::Script`.

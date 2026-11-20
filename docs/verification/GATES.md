@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**IMPL-SKELMESH-MESH-CHANGE (2026-11-20, pc-hummer, on main 241a6c47):** AI-assisted (Claude Code, Opus 5.5).
+SetSkeletalMesh's mesh change in Off from NATIVE_SKELMESH_MESH_CHANGE.md. `cargo test --workspace -j 2` 3,209 passed / 0
+failed / 51 ignored (10 new in `skeletal_mesh_change_tests.rs`); `crate_edges_test.py` OK. Installed Off strict
+`--slice-gate`: 4 ok / 9 NotYet / 1 error, as main (link 9: unbound `GearboxMind.GetAIComponent()`); link 8 passes
+`make` and stops in `init` at "SetSkeletalMesh: the new mesh is an unloaded handle" (NotRead). No real-game run.
+
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
 the pickup worlds' existing function (keep-existing, Off only). `cargo test --workspace`: 2878 passed / 0 failed / 50

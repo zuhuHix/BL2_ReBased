@@ -1,35 +1,101 @@
-//! Owner: lane IMPL-SET-SKELETAL-MESH. `SkeletalMeshComponent.SetSkeletalMesh(NewMesh, optional bKeepSpaceBases)` in
-//! `ParityMode::Off`, coded from docs/verification/NATIVE_SET_SKELETAL_MESH.md alone (#583 at 231bbaed; clean room:
-//! lane ANALYST-SET-SKELETAL-MESH read the native, this lane did not). AI-assisted (Claude Code). **Every rule here is
-//! UNVERIFIED in the running game.** Reference binds nothing, so the VM's stub policy answers there.
+//! Owner: lanes IMPL-SET-SKELETAL-MESH and IMPL-SKELMESH-MESH-CHANGE. `SkeletalMeshComponent.SetSkeletalMesh(NewMesh,
+//! optional bKeepSpaceBases)` in `ParityMode::Off`, coded from docs/verification/NATIVE_SET_SKELETAL_MESH.md (#583 at
+//! 231bbaed) and, for a different mesh, docs/verification/NATIVE_SKELMESH_MESH_CHANGE.md (#635) alone (clean room: the
+//! analyst lanes read the native, these lanes did not). AI-assisted (Claude Code). **Every rule here is UNVERIFIED in
+//! the running game.** Reference binds nothing, so the VM's stub policy answers there.
 //!
-//! **The answer** (note section 4), in this order. Every path writes nothing, loads nothing and draws nothing:
-//! 1. **the receiver:** `this` must be set and resident; an unloaded definition handle is `NotYet { NotRead }`;
-//! 2. **the arguments:** `NewMesh` is an object (`Object(None)` is null), and `bKeepSpaceBases`, when supplied
+//! **The answer** (NATIVE_SKELMESH_MESH_CHANGE.md section 4, the one authoritative Off order). The first row that
+//! applies is the answer; every row reads only (no write, no load, no draw, no name interned), and nothing is written
+//! until every row has passed.
+//!
+//! **A. #599's order, unchanged:**
+//! 1. the receiver set and resident: an unloaded definition handle is `NotYet { NotRead }`;
+//! 2. the arguments: `NewMesh` an object (`Object(None)` is null), and `bKeepSpaceBases`, when supplied
 //!    (`NativeCall::has`), a bool; an omitted one is false. Anything else is `VmError::Script`;
-//! 3. **the current mesh:** `SkeletalMesh`, read straight from the component's slot. A class with no `SkeletalMesh`
-//!    object field is `VmError::Script`. This swaps the note's steps 2 and 3; both are `VmError::Script`, so only
-//!    the message differs (review r2 of #599, L2);
-//! 4. **identity first,** before either mesh's residency is looked at: equal handles (both None, or the same handle,
-//!    loaded or not) are the native's own "nothing to do"; unequal ones (a replacement or a clear) are
-//!    `NotYet { LayerAbsent }`, the component's bone transforms, raised before any write. The port has no layer for
-//!    the bones, the tree's per-bone state, physics or the render state the change touches (note section 3).
+//! 3. the current mesh: `SkeletalMesh` from the component's slot. A class with no `SkeletalMesh` object field is
+//!    `VmError::Script`;
+//! 4. equal handles (both None, or the same handle, loaded or not): the native's own "nothing to do".
+//!
+//! **B. The meshes:** 5. the old mesh, when set, resident; 6. the new mesh, when set, resident (a clear skips it). An
+//! unloaded, a failed or a slotless stand-in handle is `NotYet { NotRead }` ([`OLD_UNLOADED`], [`NEW_UNLOADED`]).
+//!
+//! **C. The unported paths, in the native's step order** (the note's step in brackets):
+//! 7. [1] `bKeepSpaceBases` with a current mesh and a non-empty `SpaceBases`: `LayerAbsent(`[`BONES_LAYER`]`)`;
+//! 8. [2] a set `PhysicsAssetInstance`: `LayerAbsent(`[`PHYSICS_INSTANCE_LAYER`]`)`;
+//! 9. [5] `bAttached`: `NotRead`, the detach and re-attach with its pose update ([`ATTACHED`]);
+//! 10. [8] a set `Animations`: `NotPorted`, the tree's per-bone state ([`TREE`]);
+//! 11. [9] the transform (the hub's ruling, UNVERIFIED): each set mesh's `Origin` (a `Vector`: `X`, `Y`, `Z` floats) and
+//!     `RotOrigin` (a `Rotator`: `Pitch`, `Yaw`, `Roll` ints), the old mesh's first. Another declaration, or none, is
+//!     `VmError::Script` naming the field. Any member non-zero (`-0.0` is zero): `LayerAbsent(`[`TRANSFORM_LAYER`]`)`.
+//!     All zero, or no mesh: nothing is answered for the transform;
+//! 12. [10] a set `ParentAnimComponent`: `LayerAbsent(`[`BONE_NAMES_LAYER`]`)`, the parent bone map;
+//! 13. [11] a set `PhysicsAsset`: the same layer, for `bHasValidBodies`;
+//! 14. [15] a non-empty `MorphSets`, or a `MorphTargetIndexMap` that is not None: `NotPorted` ([`MORPH`]);
+//! 15. [16] a new mesh only: the LOD count from the skeletal mesh data layer (`skeletal::lod_count`). No count, or a
+//!     known count other than zero against an empty `LODInfo`: `LayerAbsent(`[`LOD_LAYER`]`)`. A known zero with an
+//!     empty `LODInfo`: nothing.
+//!
+//! **D. The destinations:** `bAnimTreeInitialised` (a bool), `SkeletalMesh` (an object field taking the new mesh),
+//! `SpaceBases` (an array) and `bHasValidBodies` (a bool), each declared on the component's class with that kind, and
+//! each planned value accepted by the heap's own check. Anything else is `VmError::Script` naming the field.
+//!
+//! **The writes**, only after A to D: four, in the native's order ([4], [6], [7], [11]): `bAnimTreeInitialised` false,
+//! `SkeletalMesh` the new mesh (None on a clear), `SpaceBases` the empty array, `bHasValidBodies` false. Each is written
+//! even when unchanged. `MorphTargetIndexMap`, `LODInfo`, the transform, the native-only field of step 12 and step
+//! 17's notification are not written. A `NotYet` raised after the first write would be marked "stopped after partial
+//! writes: " (none is expected: D settles every write).
 
 use std::rc::Rc;
 
 use ow_core::NotYet;
-use ow_object::ids::{ObjRef, PropAddr};
+use ow_object::ids::{ObjRef, PropAddr, PropId};
 use ow_object::layout::PropKind;
 use ow_object::value::Value;
 use ow_vm::api::{NativeCall, Vm};
 use ow_vm::error::VmError;
 
+use crate::actors::{flag, object, objects};
+
 /// The native's registry key.
 pub const SET_SKELETAL_MESH: &str = "SkeletalMeshComponent.SetSkeletalMesh(object,bool)";
-/// The record of the rule.
+/// The record of #599's rows (A).
 pub const RECORD: &str = "NATIVE_SET_SKELETAL_MESH.md";
-/// The layer a mesh change needs (note section 3).
+/// The record of the mesh change's rows (B to D).
+pub const CHANGE_RECORD: &str = "docs/verification/NATIVE_SKELMESH_MESH_CHANGE.md";
+/// Row 7's layer: the component's bone transforms.
 pub const BONES_LAYER: &str = "a skeletal mesh component's bone transforms";
+/// Row 8's layer.
+pub const PHYSICS_INSTANCE_LAYER: &str = "a skeletal physics instance";
+/// Row 11's layer.
+pub const TRANSFORM_LAYER: &str = "a component transform";
+/// Rows 12 and 13's layer.
+pub const BONE_NAMES_LAYER: &str = "the skeletal mesh data layer's bone names";
+/// Row 15's layer.
+pub const LOD_LAYER: &str = "the skeletal mesh data layer's LOD models";
+/// Row 5's text.
+pub const OLD_UNLOADED: &str = "SetSkeletalMesh: the old mesh is an unloaded handle (a load is a write)";
+/// Row 6's text.
+pub const NEW_UNLOADED: &str = "SetSkeletalMesh: the new mesh is an unloaded handle (a load is a write)";
+/// Row 7's text.
+pub const KEEP: &str = "SetSkeletalMesh: keeping the bone transforms over a mesh change";
+/// Row 8's text.
+pub const PHYSICS_INSTANCE: &str = "SetSkeletalMesh: the physics-asset instance's termination";
+/// Row 9's text.
+pub const ATTACHED: &str =
+    "SetSkeletalMesh: an attached component's detach and re-attach (the pose update; see ANALYST-BODYCOMP-SOCKET-BONE-TABLES)";
+/// Row 10's text.
+pub const TREE: &str = "SetSkeletalMesh: the animation tree's per-bone state on a mesh change";
+/// Row 11's text.
+pub const TRANSFORM: &str =
+    "SetSkeletalMesh: the component transform's origin compensation (a mesh with a non-zero origin)";
+/// Row 12's text.
+pub const PARENT_BONES: &str = "SetSkeletalMesh: the parent bone map (ParentAnimComponent's bone names)";
+/// Row 13's text.
+pub const VALID_BODIES: &str = "SetSkeletalMesh: bHasValidBodies (the PhysicsAsset's bodies against the new mesh's bones)";
+/// Row 14's text.
+pub const MORPH: &str = "SetSkeletalMesh: the morph-target index map";
+/// Row 15's text.
+pub const LOD: &str = "SetSkeletalMesh: the LOD info from the new mesh's LOD models";
 const UNIT: &str = "SetSkeletalMesh";
 
 /// Binds the native (module documentation); the caller binds it in Off only.
@@ -43,7 +109,7 @@ fn script(message: String) -> VmError {
 
 fn set_skeletal_mesh(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     let component = c.this.ok_or_else(|| script("called with no component".to_string()))?;
-    // Rule 1 before the argument shapes (the note's section 4 order; review r1 of #599, item 4).
+    // Row 1 before the argument shapes (review r1 of #599, item 4).
     resident(c.vm, component)?;
     let new_mesh = match c.arg(0)? {
         Value::Object(o) => *o,
@@ -57,13 +123,13 @@ fn set_skeletal_mesh(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
     } else {
         false
     };
-    // The flag only matters to a mesh change (note section 2), which is refused; its shape is still checked.
-    let _keep_space_bases = keep_space_bases;
-    answer(c.vm, component, new_mesh)?;
+    if let Some(plan) = answer(c.vm, component, new_mesh, keep_space_bases)? {
+        plan.apply(c.vm)?;
+    }
     Ok(Value::None)
 }
 
-/// Rule 1: the receiver is resident. An unloaded handle is `NotRead`; one whose load already failed says so
+/// Row 1: the receiver is resident. An unloaded handle is `NotRead`; one whose load already failed says so
 /// (review r1 of #599, item 6).
 fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     if vm.defs.is_failed(&vm.space, component) {
@@ -79,19 +145,175 @@ fn resident(vm: &Vm, component: ObjRef) -> Result<(), VmError> {
     Ok(())
 }
 
-/// The rule on its inputs (module documentation): `Ok` when the mesh is already `new_mesh`.
-pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>) -> Result<(), VmError> {
+/// The mesh change's four writes, settled by the preflight (module documentation, D).
+#[derive(Debug)]
+pub struct Plan {
+    component: ObjRef,
+    writes: [(PropId, Value); 4],
+}
+
+impl Plan {
+    /// The writes, in the native's order. A `NotYet` after the first is marked "stopped after partial writes: ".
+    pub fn apply(self, vm: &mut Vm) -> Result<(), VmError> {
+        for (i, (p, v)) in self.writes.into_iter().enumerate() {
+            if let Err(e) = vm.space.write(self.component, PropAddr::scalar(p), v) {
+                let e = VmError::from(e);
+                return Err(if i > 0 { crate::pools::after_partial_writes(e) } else { e });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The rule on its inputs (module documentation): `Ok(None)` when the mesh is already `new_mesh`, `Ok(Some(plan))` for
+/// a change every row lets through. Reads only.
+pub fn answer(vm: &Vm, component: ObjRef, new_mesh: Option<ObjRef>, keep_space_bases: bool) -> Result<Option<Plan>, VmError> {
     resident(vm, component)?;
     let current = current_mesh(vm, component)?;
+    // Row 4.
     if current == new_mesh {
-        return Ok(());
+        return Ok(None);
     }
-    Err(NotYet::layer_absent(
-        format!("{UNIT}: a mesh change (bones, the animation tree's per-bone state, physics and render state)"),
-        BONES_LAYER,
-        RECORD,
-    )
-    .into())
+    let space = &vm.space;
+    // Rows 5 and 6.
+    if let Some(old) = current {
+        mesh_resident(vm, old, OLD_UNLOADED)?;
+    }
+    if let Some(new) = new_mesh {
+        mesh_resident(vm, new, NEW_UNLOADED)?;
+    }
+    // Row 7.
+    if keep_space_bases && current.is_some() && array_len(vm, component, "SpaceBases")? > 0 {
+        return Err(NotYet::layer_absent(KEEP, BONES_LAYER, CHANGE_RECORD).into());
+    }
+    // Row 8.
+    if object(space, component, "PhysicsAssetInstance")?.is_some() {
+        return Err(NotYet::layer_absent(PHYSICS_INSTANCE, PHYSICS_INSTANCE_LAYER, CHANGE_RECORD).into());
+    }
+    // Row 9.
+    if flag(space, component, "bAttached")? {
+        return Err(NotYet::not_read(ATTACHED, CHANGE_RECORD).into());
+    }
+    // Row 10.
+    if object(space, component, "Animations")?.is_some() {
+        return Err(NotYet::not_ported(TREE, CHANGE_RECORD).into());
+    }
+    // Row 11, the old mesh first.
+    for mesh in [current, new_mesh].into_iter().flatten() {
+        if !origin_zero(vm, mesh)? {
+            return Err(NotYet::layer_absent(TRANSFORM, TRANSFORM_LAYER, CHANGE_RECORD).into());
+        }
+    }
+    // Rows 12 and 13.
+    if object(space, component, "ParentAnimComponent")?.is_some() {
+        return Err(NotYet::layer_absent(PARENT_BONES, BONE_NAMES_LAYER, CHANGE_RECORD).into());
+    }
+    if object(space, component, "PhysicsAsset")?.is_some() {
+        return Err(NotYet::layer_absent(VALID_BODIES, BONE_NAMES_LAYER, CHANGE_RECORD).into());
+    }
+    // Row 14.
+    if !objects(space, component, "MorphSets")?.is_empty() || crate::actors::field(space, component, "MorphTargetIndexMap")? != Value::None
+    {
+        return Err(NotYet::not_ported(MORPH, CHANGE_RECORD).into());
+    }
+    // Row 15, a new mesh only.
+    if let Some(new) = new_mesh {
+        let count = crate::world::skeletal::lod_count(vm, new)?;
+        if count != Some(0) || array_len(vm, component, "LODInfo")? != 0 {
+            return Err(NotYet::layer_absent(LOD, LOD_LAYER, CHANGE_RECORD).into());
+        }
+    }
+    // D, the destinations.
+    let writes = [
+        destination(vm, component, "bAnimTreeInitialised", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
+        destination(vm, component, "SkeletalMesh", Value::Object(new_mesh), |k| matches!(k, PropKind::Object { .. }))?,
+        destination(vm, component, "SpaceBases", Value::array(Vec::new()), |k| matches!(k, PropKind::Array(_)))?,
+        destination(vm, component, "bHasValidBodies", Value::Bool(false), |k| matches!(k, PropKind::Bool))?,
+    ];
+    Ok(Some(Plan { component, writes }))
+}
+
+/// Rows 5 and 6: `mesh` resident. An unloaded or a failed handle, or a stand-in with no slots whose class has some, is
+/// `NotRead` with `text`; nothing is loaded.
+fn mesh_resident(vm: &Vm, mesh: ObjRef, text: &'static str) -> Result<(), VmError> {
+    let x = vm.space.heap.get(mesh)?;
+    let stand_in = x.slots.is_empty() && vm.space.classes.get_layout(x.class).is_some_and(|l| l.slot_count() > 0);
+    if vm.defs.is_unloaded(&vm.space, mesh) || stand_in {
+        return Err(NotYet::not_read(text, CHANGE_RECORD).into());
+    }
+    Ok(())
+}
+
+/// The number of elements of the array field `name` of `o`; a field that is not an array is `VmError::Script`.
+fn array_len(vm: &Vm, o: ObjRef, name: &str) -> Result<usize, VmError> {
+    let v = crate::actors::field(&vm.space, o, name)?;
+    v.elements().map(<[Value]>::len).ok_or_else(|| script(format!("{name} holds {}, not an array", v.kind_name())))
+}
+
+/// Row 11 on one mesh: whether its `Origin` and `RotOrigin` are all zero. The declarations are checked by their members
+/// (module documentation).
+fn origin_zero(vm: &Vm, mesh: ObjRef) -> Result<bool, VmError> {
+    let floats = members(vm, mesh, "Origin", ["X", "Y", "Z"], |v| match v {
+        Value::Float(f) => Some(*f == 0.0),
+        _ => None,
+    })?;
+    let ints = members(vm, mesh, "RotOrigin", ["Pitch", "Yaw", "Roll"], |v| match v {
+        Value::Int(i) => Some(*i == 0),
+        _ => None,
+    })?;
+    Ok(floats && ints)
+}
+
+/// Whether every one of the three `names` of the struct field `field` of `mesh` is zero by `zero`; a field that is not
+/// declared as a struct with those three members of the expected kind is `VmError::Script` naming it.
+fn members(
+    vm: &Vm,
+    mesh: ObjRef,
+    field: &str,
+    names: [&str; 3],
+    zero: impl Fn(&Value) -> Option<bool>,
+) -> Result<bool, VmError> {
+    let class = vm.space.heap.get(mesh)?.class;
+    let path = || vm.space.classes.layout(class).path().to_string();
+    let bad = || script(format!("{}.{field} is not declared as a struct of {}", path(), names.join(", ")));
+    let p = vm.space.prop(class, field).ok_or_else(|| script(format!("{} declares no {field}", path())))?;
+    let Some(PropKind::Struct(ty)) = vm.space.classes.decl(p).map(|d| d.kind.clone()) else {
+        return Err(bad());
+    };
+    let layout = vm.space.classes.struct_layout(ty).ok_or_else(bad)?;
+    let value = vm.space.read(mesh, PropAddr::scalar(p))?;
+    let s = value.as_struct().ok_or_else(bad)?;
+    let mut all = true;
+    for n in names {
+        let id = vm.space.names.find(n).ok_or_else(bad)?;
+        let (i, _) = layout.field(id).ok_or_else(bad)?;
+        let v = s.fields.get(usize::try_from(i).map_err(|_| bad())?).ok_or_else(bad)?;
+        all &= zero(v).ok_or_else(bad)?;
+    }
+    Ok(all)
+}
+
+/// D for one write: `name` declared on `component`'s class with a kind `kind_ok` accepts, and `value` accepted by the
+/// heap's own check for it. Anything else is `VmError::Script` naming the field.
+fn destination(
+    vm: &Vm,
+    component: ObjRef,
+    name: &str,
+    value: Value,
+    kind_ok: impl Fn(&PropKind) -> bool,
+) -> Result<(PropId, Value), VmError> {
+    let class = vm.space.heap.get(component)?.class;
+    let path = || vm.space.classes.layout(class).path().to_string();
+    let p = vm.space.prop(class, name).ok_or_else(|| script(format!("{} declares no {name}", path())))?;
+    let kind = vm.space.classes.decl(p).map(|d| d.kind.clone()).ok_or_else(|| script(format!("{name} has no declaration")))?;
+    if !kind_ok(&kind) {
+        return Err(script(format!("{}.{name} is declared as {}, not the kind the mesh change writes", path(), kind.kind_name())));
+    }
+    vm.space
+        .heap
+        .check_value(&vm.space.classes, &kind, &value)
+        .map_err(|e| script(format!("{}.{name} cannot take the planned value: {e}", path())))?;
+    Ok((p, value))
 }
 
 /// The component's `SkeletalMesh`, read from its slot without a load.
@@ -111,3 +333,7 @@ fn current_mesh(vm: &Vm, component: ObjRef) -> Result<Option<ObjRef>, VmError> {
 #[cfg(test)]
 #[path = "skeletal_mesh_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "skeletal_mesh_change_tests.rs"]
+mod change_tests;
