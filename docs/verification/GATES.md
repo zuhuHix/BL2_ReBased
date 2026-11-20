@@ -31,7 +31,7 @@ read_only` 16 passed; `cargo test --workspace --locked -j 2 --no-fail-fast` 3,20
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict, under the machine lock (run on the pre-rebase head
 e315d48c and its base 5e1ca57a, not rerun after r1's test-and-doc changes): 4 ok / 9 NotYet / 1 error on both, row for
 row. Link 9 runs `spawn` (1 of 2 steps) and `cast` stops at the unbound `GearboxMind.GetAIComponent()`. No real-game
-run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+run; `UNVERIFIED` in game. Decision 2026-11-19-251.
 
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
