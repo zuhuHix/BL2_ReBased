@@ -100,6 +100,16 @@ stop in `make` at "stopped after partial writes: WillowPickup.InitializePickupFo
 set-up" (0 of 3 and 0 of 4 driver steps; #587 not on main yet). They spawn with `bNoCollisionFail` and never ask for
 the extent. This is what the host did, not parity.
 
+**IMPL-SET-SKELETAL-MESH (2026-11-20, zuhu desktop, from main 97a3e39):** AI-assisted (Claude Code, Opus 5.5).
+`SkeletalMeshComponent.SetSkeletalMesh` in Off from NATIVE_SET_SKELETAL_MESH.md (#583 at 231bbaed): the same mesh does
+nothing, a change is `LayerAbsent` before any write; plus the equip harness's own weapon components (an UNVERIFIED
+harness input). `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,447 passed / 0 failed / 46
+ignored (3 new in `ow-world`); clippy flags nothing in the changed files. Installed Off `--slice-gate` strict, under
+the machine lock, on a throwaway merge with #572 (3d948c43), #534 (8fc0420b) and #573 (144a73f5; conflicts resolved
+by hand) — #552 conflicts with #534 in `card.rs` and was left out: 1 ok / 5 NotYet / 8 errors. Link 8 is 1 of 5 driver
+steps (`make` passes, 6 components instanced), stopping in `init` at "stopped after partial writes: value resolver
+class WillowGame.DamageTypeAttributeValueResolver". ctest and verify_packages not run (no C++ change). No real-game
+run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under the throwaway worktree's ignored `local/probe/`.
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace
