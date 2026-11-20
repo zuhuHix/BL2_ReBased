@@ -113,6 +113,8 @@ probe with a stand-in past L stopped both at `DroppedPickup.TouchPickupTrace`. N
 `DroppedPickup.TouchPickupTrace` in Off, from NATIVE_TOUCH_PICKUP_TRACE.md (#624, 6dbdea1e). The pickup run's world
 gets link 9's `NoLevel` collision service (UNVERIFIED stand-in).
 - `cargo test --workspace -j 2`: 2,993 passed / 0 failed / 51 ignored. The 15 note cases are in `pickup_touch_tests.rs`.
+  With r1 (the Base chain before the owner's flags, the declared Vector id, a kept None, the harness line): 2,995 / 0 /
+  51; the probe readings below are unchanged, and link 6's `harness` names the NoLevel stand-in.
 - Clippy on `ow-world`, `ow-inventory` and `ow-cli`: no warning on a changed line.
 - Installed Off `--slice-gate` strict, on a local probe that is never pushed (under the machine lock):
   - **main df0970e + this branch:** 4 ok / 10 NotYet / 0 errors. Links 6 and 7 pass `make` and stop in `touch` at
