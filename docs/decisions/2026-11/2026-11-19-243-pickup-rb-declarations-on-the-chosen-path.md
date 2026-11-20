@@ -1,4 +1,4 @@
-# InitializePickupForRBPhysics checks the chosen path's declarations, and the globals' reference checks look nothing up
+## 2026-11-19: InitializePickupForRBPhysics checks the chosen path's declarations, and the globals' reference checks look nothing up
 
 AI-assisted (Claude Code, Claude Opus 5.5), lane FOLLOWUP-PICKUP-RB-VALIDATION, on main b0d9ca08, with review r1 of
 #625 and the hub's ruling on it. It follows up findings a recheck on main confirmed in #587's code

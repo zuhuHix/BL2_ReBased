@@ -64,7 +64,7 @@ class table's read-only `by_path`, by id, with no load.
   before.
 - Not run: ctest and verify_packages (no C++ change).
 
-No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
+No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-243 (placeholder).
 
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
