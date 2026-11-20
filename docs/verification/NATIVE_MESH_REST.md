@@ -1,6 +1,6 @@
 # The rest of the made-Mesh step of the body composition (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-MESH-REST (decision 2026-11-19-NNN, number pending). Analyst
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-MESH-REST (decision 2026-11-19-177, number pending). Analyst
 only: a different lane implements it (clean room). This lane's author implemented #542 and #557, so it does not
 implement this note.
 
