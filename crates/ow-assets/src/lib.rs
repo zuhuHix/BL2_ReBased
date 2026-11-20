@@ -15,5 +15,6 @@ pub mod placement;
 pub mod png;
 pub mod scene;
 pub mod skeletal;
+pub mod skeletal_lods;
 pub mod texture;
 pub mod tfc;

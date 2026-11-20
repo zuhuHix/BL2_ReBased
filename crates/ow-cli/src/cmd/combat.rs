@@ -155,7 +155,7 @@ pub(crate) const PSK_ROOTS_VAR: &str = "OPENWILLOW_PSK_EXPORTS";
 /// (`<file package>/SkeletalMesh3/<mesh>.psk`, what `skeletal_source::PskExports` reads).
 pub(crate) const PSK_ROOTS_DEFAULT: &str = "local/external/psk";
 
-fn psk_roots() -> Vec<std::path::PathBuf> {
+pub(crate) fn psk_roots() -> Vec<std::path::PathBuf> {
     parse_psk_roots(std::env::var(PSK_ROOTS_VAR).ok().as_deref())
 }
 

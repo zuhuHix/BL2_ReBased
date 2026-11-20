@@ -797,7 +797,63 @@ fn prepare_equip(vm: &mut Vm, r: &DiffRequest) -> Result<ObjRef, VmError> {
     preload_muzzle_flashes(vm, weapon)?;
     preload_gestalt_mesh(vm, weapon)?;
     preload_gestalt_skeletal_mesh(vm, weapon)?;
+    install_mesh_layer(vm, weapon)?;
     Ok(weapon)
+}
+
+/// The text of [`install_mesh_layer`]'s line.
+pub(crate) const LOD_LAYER_LINE: &str = "harness input: the skeletal mesh data layer reads a mesh's LOD model count from its own package \
+     export (ow_assets::skeletal_lods; a fitted layout checked by structural oracles, UNVERIFIED)";
+
+/// Lane SKELMESH-LOD-LAYER: in Off, the equip world gets the skeletal mesh data layer, as the combat run's does
+/// (`combat::install_skeleton_source`, logged as a harness input there), so `SetSkeletalMesh`'s LOD row can ask
+/// it for the new mesh's LOD count. The count is read from the player's own packages, not from a stand-in. The
+/// install is logged once; then the count the layer gives for the weapon's resident gestalt mesh (the mesh
+/// `SetSkeletalMesh` is handed) is logged, a read with no write. A world that has the layer already gets no second
+/// install. Reference gets nothing.
+pub(crate) fn install_mesh_layer(vm: &mut Vm, weapon: ObjRef) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off {
+        return Ok(());
+    }
+    if vm.service::<ow_world::world::skeletal::SkeletalMeshes>().is_none() {
+        crate::cmd::combat::install_skeleton_source(vm, &crate::cmd::combat::psk_roots())?;
+        vm.log.push(LOD_LAYER_LINE.to_string());
+    }
+    let Some(mesh) = gestalt_skeletal_mesh(vm, weapon) else {
+        return Ok(());
+    };
+    if vm.defs.is_unloaded(&vm.space, mesh) {
+        return Ok(());
+    }
+    let name = ow_vm::path_name::path_name(vm, mesh).unwrap_or_else(|_| format!("{mesh:?}"));
+    // A refusal or a parse failure is logged, not raised: `SetSkeletalMesh`'s LOD row asks again and reports it.
+    let shown = match ow_world::world::skeletal::lod_count(vm, mesh) {
+        Ok(Some(n)) => format!("{n} LOD model(s)"),
+        Ok(None) => "no answer".to_string(),
+        Err(e) => format!("no answer ({e})"),
+    };
+    vm.log.push(format!("{LOD_LAYER_LINE}: {name} has {shown}"));
+    Ok(())
+}
+
+/// The weapon type's gestalt definition's `GestaltSkeletalMesh`, by reads only (the path of
+/// [`preload_gestalt_skeletal_mesh`]); `None` where that path ends.
+fn gestalt_skeletal_mesh(vm: &Vm, weapon: ObjRef) -> Option<ObjRef> {
+    let data = ow_inventory::equip::read_prop(vm, weapon, "DefinitionData")?;
+    let Ok(Value::Object(Some(weapon_type))) = ow_attr::eval::field(&vm.space, &data, "WeaponTypeDefinition").cloned()
+    else {
+        return None;
+    };
+    let Some(Value::Object(Some(gestalt))) = ow_inventory::equip::read_prop(vm, weapon_type, "GestaltMesh") else {
+        return None;
+    };
+    if vm.defs.is_unloaded(&vm.space, gestalt) {
+        return None;
+    }
+    match ow_inventory::equip::read_prop(vm, gestalt, "GestaltSkeletalMesh") {
+        Some(Value::Object(Some(mesh))) => Some(mesh),
+        _ => None,
+    }
 }
 
 /// The text of [`preload_gestalt_mesh`]'s harness lines.

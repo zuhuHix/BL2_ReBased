@@ -969,6 +969,8 @@ fn run_equip(cooked: &Path, grading: Grading, ran: &mut [Option<Ran>]) {
         crate::cmd::inventory::equip_run::preload_muzzle_flashes(vm, weapon)?;
         crate::cmd::inventory::equip_run::preload_gestalt_mesh(vm, weapon)?;
         crate::cmd::inventory::equip_run::preload_gestalt_skeletal_mesh(vm, weapon)?;
+        // Lane SKELMESH-LOD-LAYER: the skeletal mesh data layer, whose LOD count the LOD row asks for.
+        crate::cmd::inventory::equip_run::install_mesh_layer(vm, weapon)?;
         Ok(weapon)
     });
     // The set-up's harness inputs (the muzzle-flash preload), kept on success and on a make failure alike (review r1

@@ -2,6 +2,15 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**SKELMESH-LOD-LAYER (2026-11-20, pc-hummer, on #651 da91849b):** AI-assisted (Claude Code, Opus 5.5). A
+`SkeletalMesh` export's LOD model count, read from its package (fitted layout, structural oracles; UNVERIFIED).
+`cargo test --workspace --locked -j 2 --no-fail-fast` 3,217 passed / 0 failed / 52 ignored; `crate_edges_test.py` OK.
+The installed census (`ow-cli` `installed_lod_count_census`, nine packages) read 90 meshes and refused 0. Installed Off
+`--slice-gate` strict, under the machine lock: 4 ok / 9 NotYet / 1 error, the same row for row as the stack's base.
+Link 8 passes `make` (1 of 5 steps) and stops in `init` at `SetSkeletalMesh`'s LOD row, now with the count known (1
+LOD): the row refuses a positive count by its own rule (the per-LOD usage byte). No real-game run; `UNVERIFIED` in
+game. Decision 2026-11-19-NNN.
+
 **LINK8-NEWMESH-PRELOAD (2026-11-20, pc-hummer, on #645 44992baa):** AI-assisted (Claude Code, Opus 5.5). Link 8's
 set-up preloads the gestalt definition's `GestaltSkeletalMesh` (an UNVERIFIED stand-in, Off only). `cargo test
 --workspace` 3,211 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 4 ok /
