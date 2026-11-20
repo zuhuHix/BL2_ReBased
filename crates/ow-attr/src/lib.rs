@@ -15,6 +15,7 @@ pub mod eval;
 pub mod expr;
 pub mod math;
 pub mod registry;
+pub mod resolve_native;
 pub mod stack;
 pub mod storage;
 pub mod value_resolvers;

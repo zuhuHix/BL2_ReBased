@@ -5,6 +5,8 @@
 //! **UNVERIFIED** throughout. The stops come from the installed equip run (`ow-package --inventory-move
 //! --equip-run`, lane FIX-EQUIP-NATIVES).
 //!
+//! - **`AttributeDefinitionBase.ResolveContext`** is the shared rule with its preflight, [`resolve_context_native`]
+//!   (lane IMPL-RESOLVE-CONTEXT, NATIVE_RESOLVE_CONTEXT.md section 5); the action-skill pack binds the same wrapper.
 //! - **`AttributeDefinitionBase.ResolveContext(ContextSource)`, `AddAttributeModifier(Context, Modifier,
 //!   bSuppressNotify)` and `RemoveAttributeModifier(...)`** (NATIVE_ATTRIBUTES.md section 1) are `ow-attr`'s
 //!   `resolve_context`, `add_modifier` and `remove_modifier` on the definition the script calls them on. The add and
@@ -151,14 +153,6 @@ fn arg_object(call: &NativeCall<'_>, i: usize, what: &str) -> Result<Option<ObjR
 
 fn suppress(call: &NativeCall<'_>) -> Result<bool, VmError> {
     Ok(call.has(2) && matches!(call.arg(2)?, Value::Bool(true)))
-}
-
-fn resolve_context(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
-    let attr = this_of(call, RESOLVE_CONTEXT)?;
-    let source = arg_object(call, 0, RESOLVE_CONTEXT)?;
-    let attrs = call.vm.attrs.clone();
-    let context = attrs.resolve_context(attr, source, &mut EvalCx::new(call.vm))?;
-    Ok(Value::Object(context))
 }
 
 fn add_modifier(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -364,13 +358,63 @@ fn external_slots(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
     Ok(Value::None)
 }
 
+/// The script function whose native key is [`RESOLVE_CONTEXT`], for the keep-existing binds (`ow_combat::hit::bind_fn`).
+pub const RESOLVE_CONTEXT_FUNCTION: &str = "Engine.AttributeDefinitionBase.ResolveContext";
+
+/// The class every `ResolveContext` receiver must be (the receiver check, by the class table's `by_path` only).
+pub const ATTRIBUTE_DEFINITION_BASE: &str = "Engine.AttributeDefinitionBase";
+
+/// `AttributeDefinitionBase.ResolveContext(ContextSource)` in Off (lane IMPL-RESOLVE-CONTEXT, NATIVE_RESOLVE_CONTEXT.md
+/// section 5, **UNVERIFIED**): the one wrapper the equip pack and the action-skill pack bind. In order, the first failure
+/// is the answer, and nothing before the walk loads, writes or draws:
+/// 1. the receiver: set, and its class [`ATTRIBUTE_DEFINITION_BASE`] or a child: else `VmError::Script`;
+/// 2. the argument `ContextSource`: an object reference or None: else `VmError::Script`;
+/// 3. `ow-attr`'s [`ow_attr::AttributeSystem::resolve_context_native`]: R1, the chain's shape (`VmError::Script`), R2
+///    for every entry, R3 for every entry, then the walk, whose `NotYet`s are terminal.
+pub fn resolve_context_native(call: &mut NativeCall<'_>) -> Result<Value, VmError> {
+    use ow_attr::resolve_native::{ResolveError, UNIT};
+    let script = |message: String| VmError::Script { function: UNIT.to_string(), message };
+    let Some(attr) = call.this else {
+        return Err(script(format!("{UNIT} called without a definition")));
+    };
+    let space = &call.vm.space;
+    let class = space.heap.get(attr)?.class;
+    if !space.classes.by_path(ATTRIBUTE_DEFINITION_BASE).is_some_and(|b| space.classes.is_child_of(class, b)) {
+        let name = space.names.text(space.heap.get(attr)?.name).into_owned();
+        return Err(script(format!(
+            "{UNIT}: the receiver {name} is a {}, not an {ATTRIBUTE_DEFINITION_BASE}",
+            space.classes.layout(class).path()
+        )));
+    }
+    let source = match call.arg(0)? {
+        Value::Object(o) => *o,
+        other => return Err(script(format!("{UNIT}: ContextSource holds {}, not an object reference", other.kind_name()))),
+    };
+    let attrs = call.vm.attrs.clone();
+    match attrs.resolve_context_native(attr, source, &mut EvalCx::new(call.vm)) {
+        Ok(context) => Ok(Value::Object(context)),
+        Err(ResolveError::Malformed(message)) => Err(script(message)),
+        Err(ResolveError::Attr(e)) => Err(e.into()),
+    }
+}
+
+/// Binds [`resolve_context_native`] at [`RESOLVE_CONTEXT`] in `ParityMode::Off` unless a pack bound the key first (the
+/// keep-existing rule of `ow_combat::hit::bind_fn`, decision 2026-11-19-127, which this crate cannot call).
+pub fn bind_resolve_context(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ParityMode::Off || vm.has_native(RESOLVE_CONTEXT) {
+        return Ok(());
+    }
+    vm.register_native(RESOLVE_CONTEXT, Rc::new(resolve_context_native))
+}
+
 /// Binds the module's natives in `ParityMode::Off`; Reference binds nothing (module documentation).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let natives: [(&str, NativeFn); 5] = [
-        (RESOLVE_CONTEXT, Rc::new(resolve_context)),
+    // ResolveContext: the shared rule with its preflight (lane IMPL-RESOLVE-CONTEXT), keeping a binding made first.
+    bind_resolve_context(vm)?;
+    let natives: [(&str, NativeFn); 4] = [
         (ADD_MODIFIER, Rc::new(add_modifier)),
         (REMOVE_MODIFIER, Rc::new(remove_modifier)),
         (SLOT_MAX, Rc::new(slot_max)),
@@ -398,3 +442,7 @@ mod slot_package_tests;
 
 #[cfg(test)]
 mod script_tests;
+
+#[cfg(test)]
+#[path = "resolve_context_tests.rs"]
+mod resolve_context_tests;

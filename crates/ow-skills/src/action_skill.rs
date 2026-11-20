@@ -691,7 +691,8 @@ impl NativePack for Pack {
         flag_expression::register(vm)?;
         provider_definition::register(vm)?;
         register_cast_opinion(vm)?;
-        register_cast_get_value(vm)
+        register_cast_get_value(vm)?;
+        register_cast_resolve_context(vm)
     }
 }
 
@@ -701,6 +702,18 @@ impl NativePack for Pack {
 /// install no combat pack. Off only: under Reference it binds nothing and the call stays the unbound native it was.
 fn register_cast_get_value(vm: &mut Vm) -> Result<(), VmError> {
     ow_combat::hit::attribute::register(vm)
+}
+
+/// `AttributeDefinitionBase.ResolveContext` for the cast's worlds (lane IMPL-RESOLVE-CONTEXT, NATIVE_RESOLVE_CONTEXT.md
+/// section 5): skill scripts' `AttributeEffect.ApplyAttributeEffects` reaches it (link 9's `PhaseLockTarget`). The one
+/// shared rule is the equip pack's wrapper over `ow-attr`'s `resolve_context_native`, bound through the keep-existing
+/// bind, so whichever pack registers first binds it. Off only; Reference binds nothing.
+fn register_cast_resolve_context(vm: &mut Vm) -> Result<(), VmError> {
+    if vm.parity != ow_core::ParityMode::Off {
+        return Ok(());
+    }
+    use ow_inventory::equip::natives::{RESOLVE_CONTEXT_FUNCTION, resolve_context_native};
+    ow_combat::hit::bind_fn(vm, RESOLVE_CONTEXT_FUNCTION, resolve_context_native)
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1163,6 +1176,9 @@ mod tests;
 
 #[cfg(test)]
 mod events_tests;
+
+#[cfg(test)]
+mod resolve_context_tests;
 
 #[cfg(test)]
 mod sm_component_tests;
