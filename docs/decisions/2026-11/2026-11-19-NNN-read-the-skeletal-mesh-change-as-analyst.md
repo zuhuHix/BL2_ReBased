@@ -20,8 +20,9 @@ implements it). The decision number is pending from the hub (three digits); NNN 
     - each path the port has no layer for is refused before any write: keep with a non-empty buffer, a physics
       instance, a tree, an attached component, a parent component, a physics asset, morph sets, and a differing LOD
       count;
-    - the minimal case writes `bAnimTreeInitialised`, `SkeletalMesh`, `SpaceBases`, `bHasValidBodies` and the morph
-      map;
+    - the minimal case makes four writes, in the native's order: `bAnimTreeInitialised`, `SkeletalMesh`,
+      `SpaceBases`, `bHasValidBodies`. The morph map is left as None, the port's empty value. Every destination is
+      checked before any write;
     - **the native-only transform, by the hub's ruling (05:35Z):** `LayerAbsent` when either mesh has a non-zero
       origin offset or rotation, nothing when both are zero (UNVERIFIED);
     - Reference is unchanged.
@@ -39,3 +40,14 @@ implements it). The decision number is pending from the hub (three digits); NNN 
   Both changes link 8 reaches are the minimal case (None to the composite mesh, unattached). The new mesh is an
   unloaded handle, so under the proposal link 8 stops first at its `NotRead`, and then at the `LODInfo` layer row.
 - **Index:** a NATIVE_INDEX row was added.
+- **Review r1 of #635 (Sol):**
+  - one authoritative Off order (#599's rows, the meshes' residency, then the unported paths in the native's step
+    order, with the attached check at the deferred detach and the transform before the parent map);
+  - the LOD row is `LayerAbsent` while the data layer gives no count. Only a known zero count with an empty `LODInfo`
+    passes, and the per-LOD update runs whether or not the lengths match;
+  - four writes, not five;
+  - the clear skips the new-mesh and LOD rows but still reads the old mesh;
+  - #583's mesh-change section and layer table are marked superseded, and the empty-buffer answer holds for an
+    unattached component only;
+  - the origin fields' kinds, and a destination check before any write;
+  - the tests grow to eleven, with mixed cases, the clear's three cases and a late unwritable destination.

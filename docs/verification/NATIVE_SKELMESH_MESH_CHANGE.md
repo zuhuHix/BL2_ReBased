@@ -23,9 +23,11 @@ structure. **Every rule here is UNVERIFIED** in the running game.
 > What does a mesh change on a component with no bone transforms do: which fields does it read and write, and does it
 > rebuild from the new mesh's reference pose or from the old transforms?
 
-**Answer: neither.** The mesh change empties the component's transform buffer and does not refill it. Neither the
-reference pose nor the old transforms is copied into it. The buffer is refilled only by the pose update that a later
-attach or tick runs (section 3). A saved copy of the old transforms is copied back by bone name **only if** something
+**Answer: neither.** The mesh change empties the component's transform buffer. Neither the reference pose nor the old
+transforms is copied into it. **On an unattached component the buffer stays empty after the call**: it is refilled
+only by the pose update that a later attach or tick runs (section 3). On an **attached** component, the call's own
+re-attach (section 2, step 13) runs that pose update before it returns, so the buffer is refilled within the call, by
+the attach side's rule and not by this native's. A saved copy of the old transforms is copied back by bone name **only if** something
 refilled the buffer within the same call. That needs `bKeepSpaceBases`, a current mesh and an attached component. On a
 component with no transforms (an empty buffer), nothing is saved, and the buffer is still empty after the change.
 
@@ -67,8 +69,9 @@ included), it does nothing.
 16. **LOD info.** With a new mesh, when the component's `LODInfo` length differs from the mesh's LOD count, `LODInfo` is
     emptied and refilled with one default entry per LOD: no hidden materials, both flags clear, and the index -1. Then,
     for each LOD whose model has data of a kind not identified, the entry's usage byte is copied from that LOD model
-    and its index is set to 0 (fitted: `InstanceWeightUsage` and `InstanceWeightIdx`). With a None mesh, `LODInfo` is
-    left as it is.
+    and its index is set to 0 (fitted: `InstanceWeightUsage` and `InstanceWeightIdx`). **This per-LOD loop runs
+    whether or not the lengths matched**, over every LOD of the new mesh. With a None mesh, `LODInfo` is left as it
+    is.
 17. **Notification.** A global object's virtual is called with the component (not identified; by fit, the
     render-scene update).
 
@@ -100,64 +103,92 @@ That lane (c376) covers `AttachComponent`, the attachments, and the socket and b
 
 **Every rule below is UNVERIFIED.** It replaces #599's single mesh-change refusal in
 `crates/ow-world/src/world/skeletal_mesh.rs`. **Reference is unchanged.** Each new `NotYet` carries this note as its
-record: `docs/verification/NATIVE_SKELMESH_MESH_CHANGE.md`.
+record: `docs/verification/NATIVE_SKELMESH_MESH_CHANGE.md`. The rows below are **the one authoritative Off order**
+(review r1 of #635, item 1). The first that applies is the answer. Every row reads only (write-free, load-free,
+RNG-free; `vm.space.prop` / `vm.space.read`), and nothing is written until every row has passed.
 
-**Preflight, in this order** (write-free, load-free, RNG-free; reads with `vm.space.prop` / `vm.space.read`). Rules 1
-to 3 are #599's and stay as they are:
-1. the receiver resident (#599's `NotRead`);
-2. the current mesh read, and the arguments decoded (#599);
-3. equal meshes: nothing (#599).
-4. **The new mesh, when set, must be resident:** an unloaded or failed handle is `NotYet { NotRead }`, "SetSkeletalMesh:
-   the new mesh is an unloaded handle (a load is a write)". The native reads its origin, bones and LOD models.
-5. **The old mesh, when set and the new one differs:** it must be resident too (its origin and bone count), else
-   `NotYet { NotRead }`, "SetSkeletalMesh: the old mesh is an unloaded handle (a load is a write)".
-6. **The paths the port has no layer for**, each before any write, in the native's order:
-   - `bKeepSpaceBases` with a current mesh and a non-empty `SpaceBases`: `NotYet { LayerAbsent(BONES_LAYER) }`,
-     "SetSkeletalMesh: keeping the bone transforms over a mesh change". An empty buffer saves nothing, so it passes;
-   - a set `PhysicsAssetInstance`: `NotYet { LayerAbsent("a skeletal physics instance") }`;
-   - a set `Animations`: `NotYet { NotPorted }`, "SetSkeletalMesh: the animation tree's per-bone state on a mesh
-     change". The emptying branch is simple, but the port's tree instance (#561/#575) does not hold that array as a
-     field this rule can write, so it is named rather than guessed;
-   - `bAttached` true: `NotYet { NotRead }`, "SetSkeletalMesh: the re-attach's pose update (see
-     ANALYST-BODYCOMP-SOCKET-BONE-TABLES)" (section 3);
-   - a set `ParentAnimComponent`: `NotYet { LayerAbsent("the skeletal mesh data layer's bone names") }`, the parent
-     bone map. It is liftable through #569's `reference_skeleton()` once that answers without a load;
-   - a set `PhysicsAsset`: the same layer refusal, for `bHasValidBodies`;
-   - a non-empty `MorphSets`: `NotYet { NotPorted }`, "SetSkeletalMesh: the morph-target index map";
-   - **`LODInfo`** (step 16): with a new mesh whose LOD count differs from `LODInfo`'s length, `NotYet { LayerAbsent(
-     "the skeletal mesh data layer's LOD models") }`. The count, and the per-LOD byte copied from each LOD model, come
-     from native mesh data with no script declaration. With a None mesh, or an equal count, nothing is written there.
-7. **The transform** (step 9) is native-only in the port: the probe found no `LocalToWorld` declaration on the port's
-   layout (section 5), and an unattached component has no scene transform.
+**A. #599's existing order, unchanged:**
+1. the receiver resident, else #599's `NotRead`;
+2. the arguments decoded: `NewMesh` an object (None allowed); `bKeepSpaceBases` through `NativeCall::has`, false when
+   omitted, else a bool. Any other shape is #599's `VmError::Script`. **The arguments come before the current mesh slot
+   is read;**
+3. the current `SkeletalMesh` read: declared as an object field, else #599's `VmError::Script`;
+4. equal meshes (both None, or the same handle): nothing, #599's no-op.
 
-   **The hub's ruling (05:35Z, on the review of this note), UNVERIFIED:** in Off, read each mesh that is set (old and
-   new; both are resident by rules 4 and 5) for its origin offset and origin rotation (by fit `Origin` and
-   `RotOrigin`; each declared with its kind, else a `VmError::Script` naming it). When either mesh has a non-zero
-   offset or a non-zero rotation, the recomputed transform would matter, so refuse before any write with
-   `NotYet { LayerAbsent("a component transform") }`, "SetSkeletalMesh: the component transform's origin compensation
-   (a mesh with a non-zero origin)". When both are zero (or the mesh is None), the compensation is the identity on
-   both sides, so the transform is answered as nothing. The unidentified component flag of step 3, which would make
-   the compensation the identity whatever the origin, is not read: a non-zero origin refuses even if the flag is set.
-   The ruling covers the transform only. Step 12's unidentified field and step 17's notification are native-only
-   too: this note proposes no write for them and leaves them as open questions.
+**B. The meshes' residency** (the native reads the old mesh at step 3 and the new one from step 8 on):
 
-**Writes**, only after the whole preflight passed, in the native's order:
-1. `bAnimTreeInitialised` = false;
-2. `SkeletalMesh` = `NewMesh`;
-3. `SpaceBases` emptied;
-4. `bHasValidBodies` = false (rule 6 has refused every case where it would be set);
-5. `MorphTargetIndexMap` emptied, when the port holds it as a value (the probe saw a map declaration read as None:
-   write nothing when it is already empty);
-6. `LODInfo`: nothing (rule 6 has refused every case where it would change).
+5. the old mesh, when set: resident, else `NotYet { NotRead }`, "SetSkeletalMesh: the old mesh is an unloaded handle (a
+   load is a write)". An unloaded or a failed handle refuses alike;
+6. the new mesh, when set: resident, else `NotYet { NotRead }`, "SetSkeletalMesh: the new mesh is an unloaded handle (a
+   load is a write)". **A clear (`NewMesh` None) skips this row.**
 
-Each write is declared with its kind, else a `VmError::Script` naming the field, checked in the preflight. A write that
-leaves a value unchanged is still made (the native writes it), except item 5's empty map. **After writes started:** a
-`NotYet` raised despite the preflight is marked "stopped after partial writes: " by #518's counters, with its kind and
-record kept.
+**C. The unported paths, in the native's step order** (section 2's step number in brackets):
 
-**The clear** (a set mesh to None) needs no mesh data under these rules: rules 4 and 6's `LODInfo` row do not apply,
-and rule 5 reads the old mesh's origin only for the transform (rule 7: a non-zero old origin refuses). Link 8 makes
-no such call (its resets are None to None, #583 section 5).
+7. [1] `bKeepSpaceBases` with a current mesh and a non-empty `SpaceBases`: `NotYet { LayerAbsent(BONES_LAYER) }`,
+   "SetSkeletalMesh: keeping the bone transforms over a mesh change". An empty buffer saves nothing, so it passes;
+8. [2] a set `PhysicsAssetInstance`: `NotYet { LayerAbsent("a skeletal physics instance") }`;
+9. [5] `bAttached` true: `NotYet { NotRead }`, "SetSkeletalMesh: an attached component's detach and re-attach (the
+   pose update; see ANALYST-BODYCOMP-SOCKET-BONE-TABLES)". **The attached check sits here, at the deferred detach's
+   start.** One test covers both halves: the detach at step 5 and the re-attach with its pose update at step 13 happen
+   only for an attached component, and the refusal names the pair;
+10. [8] a set `Animations`: `NotYet { NotPorted }`, "SetSkeletalMesh: the animation tree's per-bone state on a mesh
+    change". The port's tree instance (#561/#575) does not hold that array as a field this rule can write;
+11. [9] **the transform** (the hub's ruling, 05:35Z, UNVERIFIED). The probe found no `LocalToWorld` declaration on the
+    port's layout, so the transform is native-only in the port. Read the origin offset and origin rotation of each mesh
+    that is set: the old one, then the new one.
+    - **Expected kinds** (by fit, `Engine.SkeletalMesh`): `Origin` a `Vector` struct (`X`, `Y`, `Z` floats), and
+      `RotOrigin` a `Rotator` struct (`Pitch`, `Yaw`, `Roll` ints). Another declaration, or none, is a
+      `VmError::Script` naming the field.
+    - **Zero** means every member equals 0; `-0.0` counts as zero.
+    - Either mesh non-zero: `NotYet { LayerAbsent("a component transform") }`, "SetSkeletalMesh: the component
+      transform's origin compensation (a mesh with a non-zero origin)".
+    - Both zero, or None: the transform is answered as nothing.
+    - Step 3's unidentified component flag is not read, so a non-zero origin refuses even when the flag is set;
+12. [10] a set `ParentAnimComponent`: `NotYet { LayerAbsent("the skeletal mesh data layer's bone names") }`, the parent
+    bone map. It can be lifted through #569's `reference_skeleton()` once that answers without a load;
+13. [11] a set `PhysicsAsset`: the same layer refusal, for `bHasValidBodies`;
+14. [15] a non-empty `MorphSets`: `NotYet { NotPorted }`, "SetSkeletalMesh: the morph-target index map". A
+    `MorphTargetIndexMap` that reads as anything but None is the same refusal. None is the only empty value the port
+    is known to hold (section 5), and the native empties the map whatever it held;
+15. [16] **`LODInfo`**, a new mesh only (**a clear skips this row**: the native leaves `LODInfo` alone with a None
+    mesh). The native reads the mesh's LOD count, and for each LOD a usage byte from that LOD's model. Both are native
+    mesh data with no script declaration, so they can come only from the skeletal-mesh data layer (#569):
+    - **the layer gives no LOD count** (today's state: it does not expose the LOD models):
+      `NotYet { LayerAbsent("the skeletal mesh data layer's LOD models") }`. `LayerAbsent`, not `NotRead`, because the
+      native behaviour is read (section 2) and what is missing is the port's layer for the data. Nothing is unread or
+      unloaded;
+    - **a known count of zero** and an empty `LODInfo`: nothing (no resize, and no per-LOD update with zero LODs);
+    - **any other known count** (positive, or zero against a non-empty `LODInfo`): the same `LayerAbsent`. A positive
+      count runs the per-LOD usage update **whether or not the lengths match**, because the native runs that loop over
+      every LOD after the resize test. Each entry's byte comes from the LOD model, which the layer does not expose
+      either.
+
+**D. The destinations.** Every planned write's field is checked before any is committed (review r1 of #635, item 6): the
+field is declared with the kind below on the component's class, and the component is the resident receiver. Another
+declaration, or none, is a `VmError::Script` naming the field, raised here with nothing written.
+
+**Writes**, only after rows 1 to 15 and D have passed: **four**, in the native's order:
+1. [4] `bAnimTreeInitialised` = false (a bool);
+2. [6] `SkeletalMesh` = `NewMesh` (an object);
+3. [7] `SpaceBases` = the empty array (an array);
+4. [11] `bHasValidBodies` = false (a bool). Row 13 has refused every case where it would be set.
+
+Each is written even when the value is unchanged, because the native writes it. **Not written:**
+- `MorphTargetIndexMap`: row 14 lets it through only as None, the port's empty value, so the native's emptying leaves
+  it as it is;
+- `LODInfo`: row 15 lets it through only when nothing changes;
+- the transform, step 12's field and step 17's notification: native-only, with no write proposed (row 11, open
+  questions).
+
+**After writes started:** a `NotYet` raised despite the preflight is marked "stopped after partial writes: " by #518's
+counters, with its kind and record kept.
+
+**The clear** (a set mesh to None):
+- rows 6 and 15 are skipped, and the new mesh's origin counts as zero in row 11;
+- the old mesh is still read: row 5 (resident) and row 11 (its origin);
+- so an unloaded old mesh refuses `NotRead`, a zero-origin old mesh gives the four writes (`SkeletalMesh` None), and a
+  non-zero one refuses the transform's `LayerAbsent`;
+- link 8 makes no such call: its resets are None to None (#583 section 5).
 
 ## 5. What link 8 meets (local probe, uncommitted)
 
@@ -182,39 +213,56 @@ The probe ran on a local, unpushed merge of main 4c4522d7 with #577, #599, #596 
   false. The morph-target index map is declared and read as None. `LocalToWorld` is not declared on the port's layout;
 - **the new mesh is an unloaded handle** (an `Engine.SkeletalMesh`).
 
-**So under section 4, link 8 stops first at rule 4**, the new mesh's `NotRead`. What would lift it: the mesh resident
-before the run, through a harness preload as with the gestalt definitions (an UNVERIFIED harness input, a hub ruling),
-or through the composite-mesh build once it is ported to produce a resident mesh. After that comes rule 6's `LODInfo`
-row: the mesh has at least one LOD and `LODInfo` is empty, so it is `LayerAbsent` until #569's layer exposes the LOD
-models. Then rule 7: a non-zero origin on the composite mesh refuses (its values were not read for this note). With
-all of those lifted, the next stop is `PrimitiveComponent.SetScale(float)`.
+**So under section 4, link 8 stops first at row 6**, the new mesh's `NotRead`. What would lift it: the mesh resident
+before the run, either through a harness preload as with the gestalt definitions (an UNVERIFIED harness input, a hub
+ruling), or through a ported composite-mesh build that produces a resident mesh. Then rows 7 to 10 and 12 to 14 pass on
+the logged state.
+- Row 11 refuses if the composite mesh's `Origin` or `RotOrigin` is non-zero. Those values were not read for this note.
+- Row 15 refuses `LayerAbsent` today in any case, because the data layer gives no LOD count. That the installed mesh
+  has a positive LOD count is a fit, not an observation: **UNVERIFIED**.
+
+With all of those lifted, the next stop is `PrimitiveComponent.SetScale(float)`.
 
 ## Tests for the implementer
 
 Synthetic packages through `package()`/`tag()`. Each refusal leaves the heap writes, draws and load transitions
-unchanged:
-1. #599's tests unchanged: an unloaded receiver, the argument shapes, the same mesh (None included) as a no-op;
-2. a new mesh that is an unloaded handle, or a failed one: rule 4's `NotRead`, with nothing loaded;
-3. an old mesh that is an unloaded handle, with a resident new one: rule 5's `NotRead`;
-4. each rule 6 row on its own (keep with a non-empty buffer, a physics instance, a tree, attached, a parent component,
-   a physics asset, morph sets, a differing LOD count): its refusal before any write. With two rows set, the first in
-   the order above is reported;
-5. keep with a current mesh and an **empty** buffer: no refusal from that row;
-6. the minimal change (link 8's shape, with an equal LOD count, here 0 against a mesh whose LOD data the fixture
-   leaves empty): the writes of section 4 in order, `SkeletalMesh` set to the new mesh and `SpaceBases` empty;
-7. the clear (a set mesh to None) on a minimal component: `SkeletalMesh` None, `bAnimTreeInitialised` false,
-   `SpaceBases` empty, `LODInfo` unchanged;
-8. a field declared with the wrong kind (each written field): `VmError::Script` naming it, before any write;
-9. rule 7 (the hub's ruling): a non-zero origin offset, or a non-zero origin rotation, on the new mesh, and then on
-   the old mesh, is the transform's `LayerAbsent` before any write; both zero, or a None mesh, writes no transform;
-10. Reference: unchanged.
+(#518's counters) and the name table's length unchanged, and every component slot as it was:
+1. #599's tests unchanged: an unloaded receiver, the argument shapes, the same mesh (None included) as a no-op. A
+   malformed argument is reported ahead of a malformed `SkeletalMesh` declaration (row 2 before row 3);
+2. rows 5 and 6: an unloaded or a failed old mesh (with a resident new one), and an unloaded or a failed new mesh (with
+   no old one), each `NotRead` with nothing loaded. With both unloaded, the old mesh's refusal is reported;
+3. each row of C on its own (7 keep with a non-empty buffer, 8 a physics instance, 9 attached, 10 a tree, 11 a non-zero
+   `Origin` and, separately, a non-zero `RotOrigin`, on the new mesh and then on the old, 12 a parent component, 13 a
+   physics asset, 14 morph sets, and a `MorphTargetIndexMap` that is not None): its refusal, before any write;
+4. **mixed cases** (review r1 of #635, item 1): a non-zero origin together with a LOD blocker (a layer with no count)
+   reports the transform's `LayerAbsent` (row 11 before row 15); attached with a tree reports row 9; morph sets with a
+   LOD blocker report row 14;
+5. keep with a current mesh and an **empty** buffer: no refusal from row 7;
+6. row 11's declarations: `Origin` declared as another kind, or `RotOrigin` undeclared, is a `VmError::Script` naming
+   it, before any write; `-0.0` members count as zero;
+7. row 15: with no layer answer, `LayerAbsent`; with a layer answer that gives a **known count of zero** and an empty
+   `LODInfo`, nothing; with a known count of 2, `LayerAbsent` both when `LODInfo` has 2 entries and when it is empty;
+8. **the minimal change** (link 8's shape): an unattached component with no physics instance, tree, parent, physics
+   asset or morph sets; an empty `SpaceBases` and `LODInfo`; no old mesh; a resident new mesh with zero `Origin` and
+   `RotOrigin`; and a layer stand-in answering a **known LOD count of zero**. The four writes, in order:
+   `bAnimTreeInitialised` false, `SkeletalMesh` the new mesh, `SpaceBases` empty, `bHasValidBodies` false. `LODInfo`
+   and `MorphTargetIndexMap` stay as they were;
+9. **the clear** (review r1 of #635, item 4), each on a minimal component with a set old mesh and `NewMesh` None:
+   - an unloaded old mesh: row 5's `NotRead`, nothing loaded;
+   - a resident old mesh at zero origin: the four writes with `SkeletalMesh` None, and `LODInfo` unchanged. This holds
+     with no layer answer at all, since row 15 is skipped;
+   - a resident old mesh with a non-zero origin: the transform's `LayerAbsent`;
+10. **row D** (review r1 of #635, item 6): a component whose late destination is unwritable (`bHasValidBodies` declared
+    as an int, or not declared) gives the `VmError::Script` naming it. `bAnimTreeInitialised`, `SkeletalMesh` and
+    `SpaceBases` stay unchanged, and no counter moves;
+11. Reference: unchanged.
 
 ## Open questions
 
 1. **UNVERIFIED:** every field name of section 2 (by fit); the component flag of step 3; step 12's field; step 17's
    call; the LOD-model data behind step 16's byte.
 2. **Not read in detail:** the bone-name search of steps 8, 10 and 14, and the tree's per-bone array layout.
-3. **Ruled by the hub (05:35Z):** rule 7, the native-only transform. Still open: steps 12 and 17 (native-only, no
+3. **Ruled by the hub (05:35Z):** row 11 (rule 7 before review r1 of #635), the native-only transform. Still open: steps 12 and 17 (native-only, no
    write proposed).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)

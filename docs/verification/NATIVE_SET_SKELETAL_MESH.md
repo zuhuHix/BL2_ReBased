@@ -39,6 +39,10 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
 
 ## 2. What the native does (question: writes, reads, loads, draws)
 
+> **Superseded for a mesh change** (review r1 of #635, item 5): step 2 below (the different-mesh steps) and section 3's
+> layer table are replaced by [NATIVE_SKELMESH_MESH_CHANGE.md](NATIVE_SKELMESH_MESH_CHANGE.md) sections 2 and 4. Step 1
+> (the same mesh), section 1, section 4's rules 1 to 3 with rule 4's equal case, and section 5 stand.
+
 1. **The same mesh:** when `NewMesh` is the component's current `SkeletalMesh` (None included), it **does nothing**:
    no write, no load, no draw.
 2. **A different mesh**, in order (each step by fit). This covers both a replacement and a clear, a populated mesh
@@ -67,6 +71,9 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
    nothing of its own: a mesh handle it is given must already be readable for step 8.
 
 ## 3. The layers the port lacks
+
+> **Superseded** by [NATIVE_SKELMESH_MESH_CHANGE.md](NATIVE_SKELMESH_MESH_CHANGE.md) section 4, which refuses each
+> unported path separately, in one stated order.
 
 | Part (section 2.2) | Layer the port lacks | Typed refusal |
 |---|---|---|
