@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-ACTOR-TRACE (decision 2026-11-19-NNN). `Actor.Trace` in `ParityMode::Off`, the one shared
+//! Owner: lane IMPL-ACTOR-TRACE (decision 2026-11-19-245). `Actor.Trace` in `ParityMode::Off`, the one shared
 //! implementation both binding sites use (the Phaselock pack set, `ow_skills::action_skill::Pack`, and the go-down
 //! worlds, `ow_combat::go_down`). AI-assisted (Claude Code).
 //!

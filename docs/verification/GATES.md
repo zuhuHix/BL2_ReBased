@@ -75,7 +75,7 @@ ignored; `crate_edges_test.py` 19 OK; clippy: no warning in the new files. Insta
 build, under the machine lock): 4 ok / 9 NotYet / 1 error. Link 9 passes `spawn` and stops in `cast` at the unloaded
 `IRuleEngineOwner` (1 of 2 steps), before the trace. A throwaway probe with #628 and #623 gives the same counts, with
 link 9 stopping at #602's GearboxMind `QueryInterface` question, still before the trace. ctest and verify_packages
-not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored
+not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-245; logs under ignored
 `local/p2/impl-actor-trace/`. **Review r1 of #633 (rebased on main df0970e as 441827b, then fixed on top):** both
 outs and their alias writes are checked before either is written (`NativeCall::check_out`), non-finite or negative
 query values and unsound primitive bounds refuse as `NotRead` (UNVERIFIED policy), and every vector must be
