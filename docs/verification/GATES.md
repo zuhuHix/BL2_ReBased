@@ -65,7 +65,7 @@ nothing in the changed files. The natives return unprefixed `NotYet`s; link 8's 
 8 `notyet`, 0 of 5 steps, stop `make` at the unprefixed `CacheWeaponCard` `NotRead`. The same build with the preflight
 call disabled reaches `init` and stops at the call-time `CacheWeaponCard` `NotRead`, prefixed "stopped after partial
 writes" by the driver (1 of 5 steps); the other 13 rows are identical in the two runs and come from main. ctest and
-verify_packages not run (no C++ change). `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder); logs under
+verify_packages not run (no C++ change). `UNVERIFIED` in game. Decision 2026-11-19-118 (placeholder); logs under
 ignored `local/p2/cwc-r1/`.
 
 **LINK-1-NEXT-STOP (2026-11-19, pc-hummer, rebased onto fix/rust-init-player-skill-tree 07017c6d, #475 r1):**

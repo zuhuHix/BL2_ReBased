@@ -15,7 +15,7 @@ AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-CACHE-WEAPON-CARD (dec
 **Clean room.** This lane implements nothing. Both natives stay unbound (or `NotYet`) in Off until a fresh implementer
 codes them from this note alone.
 
-**Implemented in Off** by lane IMPL-CACHE-WEAPON-CARD (decision 2026-11-19-NNN, placeholder number), from this note
+**Implemented in Off** by lane IMPL-CACHE-WEAPON-CARD (decision 2026-11-19-118, placeholder number), from this note
 alone: `ChooseRandomNameParts` in full, `CacheWeaponCard`'s call-time `NotRead`, and the equip driver's preflight of
 section 5.1. Still UNVERIFIED in the running game.
 
