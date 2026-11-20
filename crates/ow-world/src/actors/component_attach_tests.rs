@@ -262,6 +262,24 @@ fn the_refusals_write_nothing() {
     x.refuses(source, &x.instancing(source, vec![toy]), Missing::NotRead, OTHER_AI_CLASS);
 }
 
+/// A component listed twice, directly or as an inherited reference next to the own sub-object it maps to, refuses
+/// with `NotYet { NotRead }` (the hub's ruling on #610 r1), with nothing written.
+#[test]
+fn a_component_listed_twice_is_refused() {
+    let mut x = fx(true);
+    let source = x.make(x.actor);
+    let ai = x.component(x.ai);
+    x.components(source, vec![Some(ai), None, Some(ai)]);
+    x.refuses(source, &x.instancing(source, vec![ai]), Missing::NotRead, LISTED_TWICE);
+
+    let mut x = fx(true);
+    let source = x.make(x.actor);
+    let (parents, own) = (x.component(x.ai), x.component(x.ai));
+    x.components(source, vec![Some(parents), Some(own)]);
+    let inst = Instancing { template: source, originals: vec![own], inherited: vec![(parents, own)] };
+    x.refuses(source, &inst, Missing::NotRead, LISTED_TWICE);
+}
+
 /// An inherited reference (a parent class default's component) maps to the template's own sub-object, whose copy is
 /// written.
 #[test]

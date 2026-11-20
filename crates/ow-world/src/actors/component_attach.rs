@@ -69,6 +69,8 @@ pub const ATTACHED: &str =
 pub const NOT_A_COPY: &str = "the spawn's component update: the component";
 /// The end of that refusal.
 pub const NOT_A_COPY_WHY: &str = "is not this spawn's own copy (writing Owner onto it would write a shared object)";
+/// The refusal for a component listed twice in `Components` (directly, or through an inherited reference).
+pub const LISTED_TWICE: &str = "the spawn's component update: a component listed twice in Components";
 /// The start of the refusal for an `AIComponent` subclass whose own attach entry was not read.
 pub const OTHER_AI_CLASS: &str = "the spawn's component update: the own attach entry of";
 
@@ -135,7 +137,7 @@ fn declared(vm: &Vm, o: ObjRef, name: &str, want: &str, ok: impl Fn(&PropKind) -
     }
 }
 
-fn read<'v>(vm: &'v Vm, o: ObjRef, p: PropId) -> Result<&'v Value, VmError> {
+fn read(vm: &Vm, o: ObjRef, p: PropId) -> Result<&Value, VmError> {
     Ok(vm.space.read(o, PropAddr::scalar(p))?)
 }
 
@@ -190,6 +192,11 @@ pub fn plan(vm: &Vm, source: ObjRef, instancing: &super::instancing::Plan) -> Re
             )
             .into());
         };
+        // The same template component reached twice (the same entry, or an inherited reference and the own sub-object
+        // it maps to): the hub's ruling on #610 r1, a refusal (the game's double attach is not read).
+        if planned.iter().any(|w: &ComponentWrites| w.original == original) {
+            return Err(NotYet::not_read(format!("{LISTED_TWICE}: {}", class_path(vm, original)), RECORD).into());
+        }
         let obj = vm.space.heap.get(original)?;
         let full = u32::try_from(obj.slots.len()).ok() == vm.space.classes.get_layout(obj.class).map(|l| l.slot_count());
         if vm.defs.is_unloaded(&vm.space, original) || !full {

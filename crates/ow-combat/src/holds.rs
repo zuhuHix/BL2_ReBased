@@ -468,3 +468,7 @@ fn on_hold(list: &'static str) -> NativeFn {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "holds/spawn_attach_tests.rs"]
+mod spawn_attach_tests;

@@ -18,6 +18,8 @@ and the analysis output were not opened. Synthetic fixtures only. Based on main 
        - must declare the six `ActorComponent` fields (else `VmError::Script`);
        - must have `bAttached` false on the template component (else `NotYet { NotRead }`);
        - must not be an `AIComponent` subclass other than the two exact classes (else `NotYet { NotRead }`);
+    - must not be a component already listed: the same entry twice, or an inherited reference next to the own
+      sub-object it maps to, refuses `NotYet { NotRead }`, "listed twice" (the hub's ruling on #610 r1);
     4. the scene layer must be present, asked for only when an entry is to be attached (else
        `NotYet { LayerAbsent }`, with `Actor.AttachComponent`'s text).
   - **The writes** go in `after_insertion`, between `Rotation` and `set_owner`, before and after play began, on this
@@ -38,8 +40,12 @@ and the analysis output were not opened. Synthetic fixtures only. Based on main 
 - **What else reads the new `Owner`:**
   - `ow-combat` `holds.rs`: `HoldMovement` on an AI component with `Owner` set is the terminal `NotYet { NotRead }`. A
     test shows the change.
-  - `ow-inventory` `attach_mesh.rs` (`REATTACH_OWNER`): reachable only for an attached component with `Owner` set,
-    and the step attaches only the two AI classes.
+  - `ow-inventory` `attach_mesh.rs` (`REATTACH_OWNER`, corrected on review r1 of #610). The deferred reattach's
+    preflight refuses whenever `Owner` is set, whatever `bAttached` holds. `SetForceRefPose`, `SetHidden` and
+    `SetOwnerNoSee` go through it, so on a spawned actor's own component copy they now refuse `REATTACH_OWNER` before
+    any write. That holds for a primitive copy too, which keeps `bAttached` false. Only `SetLightEnvironment` checks
+    `bAttached` first: an unattached copy takes its write, and an attached one (an AI copy) meets the owner refusal.
+    A test shows the `SetForceRefPose` case on a world-spawned copy.
 
   No installed slice row reaches either (below).
 - **Ripple in existing tests:** 124 tests failed only because their invented `Actor` or component classes did not
@@ -58,5 +64,14 @@ and the analysis output were not opened. Synthetic fixtures only. Based on main 
   - the installed Off strict slice gate is identical to main's, row by row.
 - **Not verified:** the game's own rule. Nothing is checked against the running game, so every rule is
   **UNVERIFIED** in game.
-- **Not covered by a test:** the note's "a script `GainedChild` or `PreBeginPlay` that reads the component's `Owner`
-  sees the actor". The writes' place, before `set_owner` and the begin-play events, gives it.
+- **Tests through the world's spawn** (review r1 of #610). In `ow-combat` (`holds/spawn_attach_tests.rs`), because it
+  reaches the spawn, the deferred reattach and the hold kinds:
+  - `SetForceRefPose` on a spawned primitive copy refuses `REATTACH_OWNER`;
+  - `PreBeginPlay` after play began sees the copy's `Owner`;
+  - `HoldMovement` on a spawned AI copy is terminal;
+  - an `AIComponent` subclass other than the two refuses, and a bare VM without the layer refuses `LayerAbsent`, each
+    leaving no actor;
+  - an actor with no components spawns with no layer.
+
+  The unloaded-handle refusal is not reachable through the spawn: the instancing plan loads each template component
+  before this step, and refuses a stand-in with no slots itself. The unit tests cover it.
