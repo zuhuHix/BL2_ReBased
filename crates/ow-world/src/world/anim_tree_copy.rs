@@ -25,11 +25,11 @@
 //!    `NotYet { NotRead }` ([`TAG_COLLISION`]): the copies take their templates' tags, so the tick rule would take such
 //!    a node as listed (how the game avoids it was not read; hub ruling, review r1 of #561); then the initialisation's
 //!    unread steps (the note's section 2, steps 4 to 6), in order: the per-node initialisation ([`PER_NODE_INIT`],
-//!    every tree), the pass over the component ([`COMPONENT_PASS`], this lane's text), the per-bone control arrays
-//!    (`NotYet { LayerAbsent }`, [`BONE_ARRAYS`] with `body_composition::MESH_LAYER`) and the owner's event
-//!    ([`OWNER_EVENT`]). On installed data these make the write path unreachable; a test-only switch answers them with
-//!    nothing to keep it covered (as #542 does). With the flag set, the initialisation is skipped and none of these
-//!    apply.
+//!    every tree), the pass over the component and the per-bone control arrays (planned by
+//!    `crate::world::control_arrays`, lane IMPL-COPY-COMPONENT-PASS; [`COMPONENT_PASS`] and [`BONE_ARRAYS`] were
+//!    their refusals) and the owner's event ([`OWNER_EVENT`], still `NotYet { NotRead }`). On installed data the last
+//!    makes the write path unreachable; a test-only switch answers it with nothing to keep it covered (as #542 does).
+//!    With the flag set, the initialisation is skipped and none of these apply.
 //!
 //! **The writes** ([`instance`]), in the note's order, all in the VM heap, under #518's counters (a `NotYet` after a
 //! counter moved is marked "stopped after partial writes"):
@@ -124,9 +124,9 @@ thread_local! {
     static INIT_STEPS_ANSWERED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-/// The initialisation's four unread steps.
+/// The initialisation's unread steps: the owner's event only, since lane IMPL-COPY-COMPONENT-PASS read step 5.
 #[cfg(test)]
-const INIT_STEPS: u8 = 3;
+const INIT_STEPS: u8 = 1;
 
 /// For the tests only: answer the initialisation's unread steps with nothing on this thread, to keep the write path
 /// covered while production refuses it.
@@ -135,7 +135,7 @@ pub(crate) fn answer_init_steps_for_tests(on: bool) {
     INIT_STEPS_ANSWERED.with(|c| c.set(if on { INIT_STEPS } else { 0 }));
 }
 
-/// For the tests only: answer the first `n` of the three unread steps, so the next one's refusal shows.
+/// For the tests only: answer the first `n` of the unread steps (one now), so the next one's refusal shows.
 #[cfg(test)]
 pub(crate) fn answer_init_steps_up_to_for_tests(n: u8) {
     INIT_STEPS_ANSWERED.with(|c| c.set(n.min(INIT_STEPS)));
@@ -277,6 +277,8 @@ pub struct Plan {
     pub order: Vec<ObjRef>,
     /// The F heads' planned builds, which their steps index (review r1 of #585, item 2).
     pub builds: Vec<crate::world::per_bone_weights::Build>,
+    /// Step 5's planned arrays, on template controls (lane IMPL-COPY-COMPONENT-PASS).
+    pub arrays: crate::world::control_arrays::Arrays,
 }
 
 /// The gather order (section 1.3): depth first from the root, a node taken the first time it is reached, then its
@@ -422,6 +424,7 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
     let mut order = Vec::new();
     let mut steps = Vec::new();
     let mut builds = Vec::new();
+    let mut arrays = crate::world::control_arrays::Arrays::default();
     if initialise {
         let next = int(&read(vm, component, "TickTag")?).wrapping_add(1);
         for &n in &nodes {
@@ -437,17 +440,15 @@ pub fn plan(vm: &Vm, component: ObjRef, template: ObjRef) -> Result<Plan, VmErro
         order = planned_order;
         steps = planned_steps;
         builds = planned_builds;
-        let answered = init_steps_answered();
-        let steps: [VmError; 3] = [
-            not_read(COMPONENT_PASS),
-            NotYet::layer_absent(BONE_ARRAYS, crate::world::body_composition::MESH_LAYER, RECORD).into(),
-            not_read(OWNER_EVENT),
-        ];
-        if let Some(e) = steps.into_iter().nth(usize::from(answered)) {
-            return Err(e);
+        // Step 5, the component pass and the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS,
+        // NATIVE_COPY_COMPONENT_PASS.md): planned on the template, the copies' tags being their templates'.
+        arrays = crate::world::control_arrays::plan(vm, component, template, next)?;
+        // The owner's event (#551 rule 4) is still unread.
+        if init_steps_answered() == 0 {
+            return Err(not_read(OWNER_EVENT));
         }
     }
-    Ok(Plan { template, nodes, controls, initialise, steps, order, builds })
+    Ok(Plan { template, nodes, controls, initialise, steps, order, builds, arrays })
 }
 
 /// A copy of `t` with outer `outer`: its class and name, and its values (the port's archetype, module documentation).
@@ -577,6 +578,10 @@ fn copy(vm: &mut Vm, component: ObjRef, plan: &Plan) -> Result<(ObjRef, DetMap<O
         *lists.array_mut().expect("checked") = list;
     }
     write(vm, root, "SkelControlLists", lists)?;
+    // The controls' copies join the map, so the initialisation's step 5 writes them (lane IMPL-COPY-COMPONENT-PASS).
+    for (t, c) in cmap {
+        map.insert(t, c);
+    }
     Ok((root, map))
 }
 
@@ -689,7 +694,9 @@ fn initialise(
             Step::Tail(t) => write_tail(vm, component, copy_of(&t))?,
         }
     }
-    // Steps 5 and 6 are unread: refused in the preflight unless the test switch answers them.
+    // Step 5 (lane IMPL-COPY-COMPONENT-PASS): the component pass writes nothing for its empty list; the control arrays.
+    crate::world::control_arrays::write_arrays(vm, component, &plan.arrays, |t| copy_of(&t))?;
+    // Step 6, the owner's event, is unread: refused in the preflight unless the test switch answers it.
     write(vm, component, "bAnimTreeInitialised", Value::Bool(true))
 }
 

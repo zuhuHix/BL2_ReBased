@@ -645,6 +645,8 @@ pub mod anim_tree_copy;
 pub mod anim_node_init;
 // Lane IMPL-PER-BONE-WEIGHTS: the per-bone weight builders (NATIVE_PER_BONE_WEIGHTS.md).
 pub mod per_bone_weights;
+/// The tree initialisation's component pass and per-bone control arrays in Off (lane IMPL-COPY-COMPONENT-PASS).
+pub mod control_arrays;
 pub mod pawn_meshes;
 
 /// `AttributeInitializationDefinition.SetBaseValue` (lane IMPL-SET-BASE-VALUE).

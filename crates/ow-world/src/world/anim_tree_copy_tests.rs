@@ -180,7 +180,14 @@ impl Fx {
             ("GroupName", PropKind::Name),
         ]);
         let list_head = strukt(&mut vm, "Engine.AnimTree.SkelControlListHead", &[("BoneName", PropKind::Name), ("ControlHead", o.clone())]);
-        class(&mut vm, "Engine.SkelControlBase", object, &[("ControlName", PropKind::Name), ("NextControl", o.clone())]);
+        // The control fields of the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS).
+        let control_props = [
+            ("ControlName", PropKind::Name),
+            ("NextControl", o.clone()),
+            ("ControlTickTag", PropKind::Int),
+            ("bPostPhysicsController", PropKind::Bool),
+        ];
+        class(&mut vm, "Engine.SkelControlBase", object, &control_props);
         class(&mut vm, "Engine.MorphNodeBase", object, &[]);
         let tree = class(&mut vm, TREE, blend, &[
             ("AnimTreeTemplate", o.clone()),
@@ -201,6 +208,11 @@ impl Fx {
             ("bAnimTreeInitialised", PropKind::Bool),
             ("SkeletalMesh", if shape == Shape::IntMesh { PropKind::Int } else { o.clone() }),
             ("Owner", o.clone()),
+            // The component pass and the per-bone control arrays (lane IMPL-COPY-COMPONENT-PASS).
+            ("MorphSets", arr(o.clone())),
+            ("SkelControlIndex", arr(PropKind::Byte { enum_: None })),
+            ("PostPhysSkelControlIndex", arr(PropKind::Byte { enum_: None })),
+            ("SkelControlTickArray", arr(o.clone())),
         ];
         if shape != Shape::NoComposeFlag {
             component_props.push(("bUpdateComposeSkeletonPasses", PropKind::Bool));
@@ -480,23 +492,22 @@ fn an_initialised_component_gets_the_copy_and_no_initialisation() {
     assert_eq!(x.get(comp, "AnimTickArray"), Value::array(Vec::new()));
 }
 
-/// Review r1 of #561, item 2: the unread steps after the per-node initialisation (now planned, lane
-/// IMPL-ANIM-NODE-INIT) are raised in order, the per-bone arrays as `LayerAbsent`.
+/// Review r1 of #561, item 2: the unread step after the per-node initialisation and step 5 (now planned, lanes
+/// IMPL-ANIM-NODE-INIT and IMPL-COPY-COMPONENT-PASS) is the owner's event; answering it lets the writes run.
 #[test]
 fn the_initialisation_s_unread_steps_refuse_in_order() {
-    for (answered, what) in [(0, COMPONENT_PASS), (1, BONE_ARRAYS), (2, OWNER_EVENT)] {
-        let mut x = Fx::new();
-        answer_init_steps_up_to_for_tests(answered);
-        let t = diamond(&mut x);
-        let comp = x.component();
-        let n = not_yet(refused_clean(&mut x, comp, t.root));
-        assert_eq!((&*n.what, n.record), (what, RECORD), "{answered}");
-        if what == BONE_ARRAYS {
-            assert_eq!(n.missing, Missing::LayerAbsent(crate::world::body_composition::MESH_LAYER));
-        } else {
-            assert_eq!(n.missing, Missing::NotRead, "{answered}");
-        }
-    }
+    let mut x = Fx::new();
+    answer_init_steps_up_to_for_tests(0);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!((&*n.what, n.missing, n.record), (OWNER_EVENT, Missing::NotRead, RECORD));
+    let mut x = Fx::new();
+    answer_init_steps_up_to_for_tests(1);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    instance(&mut x.vm, comp, t.root).unwrap();
+    answer_init_steps_for_tests(false);
 }
 
 /// Review r1 of #561, item 3: a component that is not a skeletal mesh component is a script error before any write.
@@ -536,15 +547,15 @@ fn a_looping_control_chain_is_a_script_error_and_a_shared_control_keeps_its_plac
     }
 }
 
-/// The per-node initialisation passes on the diamond (lane IMPL-ANIM-NODE-INIT); the component pass after it still
-/// refuses every tree, before any write.
+/// The per-node initialisation and step 5 pass on the diamond (lanes IMPL-ANIM-NODE-INIT and
+/// IMPL-COPY-COMPONENT-PASS); the owner's event after them still refuses every tree, before any write.
 #[test]
-fn the_component_pass_refuses_every_tree_before_any_write() {
+fn the_owner_s_event_refuses_every_tree_before_any_write() {
     let mut x = Fx::new();
     answer_init_steps_for_tests(false);
     let t = diamond(&mut x);
     let comp = x.component();
-    refused(refused_clean(&mut x, comp, t.root), COMPONENT_PASS);
+    refused(refused_clean(&mut x, comp, t.root), OWNER_EVENT);
 }
 
 #[test]
@@ -1642,4 +1653,251 @@ fn a_static_array_target_member_is_refused() {
         VmError::Script { message, .. } => assert!(message.contains("BoneBlendTargets.BlendWeight"), "{message}"),
         e => panic!("{e:?}"),
     }
+}
+
+// ---- Lane IMPL-COPY-COMPONENT-PASS: step 5, the component pass and the per-bone control arrays -------------------
+
+use crate::world::control_arrays::{LOOP, MORPH_SETS, TOO_MANY_LISTS};
+
+/// The diamond with the owner's event answered, a component holding a mesh whose skeleton is `parents`, and the
+/// tree's lists set to `lists` (a bone name or None, and the head control).
+fn arrays_fx(x: &mut Fx, parents: &[Option<usize>], lists: &[(Option<&str>, Option<ObjRef>)]) -> (Diamond, ObjRef) {
+    answer_init_steps_for_tests(true);
+    let t = diamond(x);
+    let comp = x.component();
+    let mesh = x.obj("Engine.SkeletalMesh");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(mesh)));
+    skeleton_for_tests(Some(skeleton(parents)));
+    set_lists(x, t.root, lists);
+    (t, comp)
+}
+
+fn set_lists(x: &mut Fx, root: ObjRef, lists: &[(Option<&str>, Option<ObjRef>)]) {
+    let lt = x.list_head;
+    let mut out = Vec::new();
+    for &(bone, head) in lists {
+        let mut l = x.vm.space.classes.struct_defaults(lt).unwrap();
+        let name = x.vm.space.names.intern(bone.unwrap_or("None"));
+        set_field(&x.vm, &mut l, "BoneName", Value::Name(name), "t").unwrap();
+        set_field(&x.vm, &mut l, "ControlHead", Value::Object(head), "t").unwrap();
+        out.push(l);
+    }
+    x.set(root, "SkelControlLists", Value::array(out));
+}
+
+/// A chain of `n` new controls, linked by `NextControl`; their template objects in order.
+fn chain(x: &mut Fx, n: usize) -> Vec<ObjRef> {
+    let made: Vec<ObjRef> = (0..n).map(|_| x.obj("Engine.SkelControlBase")).collect();
+    for w in made.windows(2) {
+        x.set(w[0], "NextControl", Value::Object(Some(w[1])));
+    }
+    made
+}
+
+/// The template object each copy in the component's `SkelControlTickArray` was made from, by name (a copy keeps it).
+fn listed(x: &Fx, comp: ObjRef, templates: &[ObjRef]) -> Vec<ObjRef> {
+    let name = |o: ObjRef| x.vm.space.heap.get(o).unwrap().name;
+    x.get(comp, "SkelControlTickArray")
+        .elements()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            let Value::Object(Some(c)) = v else { panic!("{v:?}") };
+            assert_eq!(x.vm.space.heap.get(*c).unwrap().outer, Some(comp), "a copy, outered to the component");
+            *templates.iter().find(|t| name(**t) == name(*c)).expect("a known control")
+        })
+        .collect()
+}
+
+fn five_bones() -> Vec<Option<usize>> {
+    vec![None, Some(0), Some(1), Some(1), Some(3)]
+}
+
+/// Test 1: no mesh, or no lists: the three arrays emptied (stale entries removed) and `TickTag` only the tick list's.
+#[test]
+fn with_no_mesh_or_no_lists_the_arrays_are_emptied_and_the_tag_kept() {
+    for case in ["no mesh", "no lists"] {
+        let mut x = Fx::new();
+        let k = chain(&mut x, 1);
+        let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
+        if case == "no mesh" {
+            x.set(comp, "SkeletalMesh", Value::Object(None));
+        } else {
+            set_lists(&mut x, t.root, &[]);
+        }
+        x.set(comp, "SkelControlIndex", Value::array(vec![Value::Byte(7)]));
+        x.set(comp, "PostPhysSkelControlIndex", Value::array(vec![Value::Byte(7)]));
+        x.set(comp, "SkelControlTickArray", Fx::objects(&[k[0]]));
+        instance(&mut x.vm, comp, t.root).unwrap();
+        skeleton_for_tests(None);
+        for name in ["SkelControlIndex", "PostPhysSkelControlIndex", "SkelControlTickArray"] {
+            assert_eq!(x.get(comp, name), Value::array(Vec::new()), "{case}: {name}");
+        }
+        assert_eq!(x.get(comp, "TickTag"), Value::Int(1), "{case}: the tick list's step only");
+    }
+}
+
+/// Tests 2, 3 and 4: two lists on bones 1 and 3, a second list on bone 1, a None name and an unknown name: the list
+/// indices there and 255 elsewhere; the later list on a taken bone is neither tagged nor listed; the skipped lists
+/// keep no index; `TickTag` + 1 after the tick list's; the controls listed in walk order with the new tag.
+#[test]
+fn lists_set_their_bones_first_list_wins_and_unknown_names_are_skipped() {
+    let mut x = Fx::new();
+    let (a, b, c) = (chain(&mut x, 2), chain(&mut x, 1), chain(&mut x, 1));
+    let d = chain(&mut x, 1);
+    let lists = [
+        (None, Some(d[0])),
+        (Some("b1"), Some(a[0])),
+        (Some("NoSuchBone"), Some(d[0])),
+        (Some("B3"), Some(b[0])),
+        (Some("B1"), Some(c[0])),
+    ];
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &lists);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    assert_eq!(bytes(&x.get(comp, "SkelControlIndex")), vec![255, 1, 255, 3, 255], "list indices, by list position");
+    assert_eq!(x.get(comp, "PostPhysSkelControlIndex"), Value::array(Vec::new()));
+    let all: Vec<ObjRef> = a.iter().chain(&b).chain(&c).chain(&d).copied().collect();
+    assert_eq!(listed(&x, comp, &all), vec![a[0], a[1], b[0]], "walk order; the later bone-1 list and skipped ones not");
+    assert_eq!(x.get(comp, "TickTag"), Value::Int(2), "the tick list's step, then the build's");
+    for v in x.get(comp, "SkelControlTickArray").elements().unwrap() {
+        let Value::Object(Some(k)) = v else { panic!() };
+        assert_eq!(x.get(*k, "ControlTickTag"), Value::Int(2));
+    }
+}
+
+/// Tests 5 and 6: a control shared by two chains is listed once; a control whose tag already is the new tag is walked
+/// (its successor is listed) but not listed.
+#[test]
+fn a_shared_control_is_listed_once_and_a_pre_tagged_one_not_at_all() {
+    let mut x = Fx::new();
+    let shared = chain(&mut x, 1)[0];
+    let (a, b) = (chain(&mut x, 1)[0], chain(&mut x, 2));
+    x.set(a, "NextControl", Value::Object(Some(shared)));
+    x.set(b[0], "ControlTickTag", Value::Int(2));
+    x.set(b[1], "NextControl", Value::Object(Some(shared)));
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(a)), (Some("B2"), Some(b[0]))]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    assert_eq!(listed(&x, comp, &[a, shared, b[0], b[1]]), vec![a, shared, b[1]]);
+}
+
+/// Test 7: a post-physics control in the middle of a chain sizes `PostPhysSkelControlIndex` and ends the walk; a
+/// second post-physics list keeps the earlier entry.
+#[test]
+fn a_post_physics_control_sets_its_bone_and_ends_the_chain() {
+    let mut x = Fx::new();
+    let a = chain(&mut x, 3);
+    let b = chain(&mut x, 1);
+    x.set(a[1], "bPostPhysicsController", Value::Bool(true));
+    x.set(b[0], "bPostPhysicsController", Value::Bool(true));
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B2"), Some(a[0])), (Some("B4"), Some(b[0]))]);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    assert_eq!(bytes(&x.get(comp, "PostPhysSkelControlIndex")), vec![255, 255, 0, 255, 1]);
+    assert_eq!(bytes(&x.get(comp, "SkelControlIndex")), vec![255, 255, 0, 255, 1]);
+    assert_eq!(listed(&x, comp, &[a[0], a[1], a[2], b[0]]), vec![a[0], a[1], b[0]], "a[2] after the post-physics one");
+}
+
+/// Tests 8 and 9: 256 lists, and a chain that loops: each refused before any write (counters unchanged). The copy's
+/// own control gather meets a loop first (#557's rule, a script error), so this lane's guard is checked on its plan.
+#[test]
+fn too_many_lists_and_a_looping_chain_are_refused_before_any_write() {
+    let mut x = Fx::new();
+    let k = chain(&mut x, 1);
+    let lists: Vec<(Option<&str>, Option<ObjRef>)> = (0..256).map(|_| (Some("B1"), Some(k[0]))).collect();
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &lists);
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    skeleton_for_tests(None);
+    assert_eq!((&*n.what, n.missing), (TOO_MANY_LISTS, Missing::NotRead));
+    let mut x = Fx::new();
+    let k = chain(&mut x, 2);
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
+    x.set(k[1], "NextControl", Value::Object(Some(k[0])));
+    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions());
+    let before = counts(&x);
+    let r = crate::world::control_arrays::plan(&x.vm, comp, t.root, 1);
+    skeleton_for_tests(None);
+    assert_eq!(counts(&x), before);
+    let n = not_yet(r.unwrap_err());
+    assert_eq!((&*n.what, n.missing), (LOOP, Missing::NotRead));
+}
+
+/// Test 10: a non-empty `MorphSets` is `NotPorted` before any write; an empty one (or one of None entries) passes.
+#[test]
+fn a_set_morph_set_is_not_ported_before_any_write() {
+    let mut x = Fx::new();
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[]);
+    let set = x.obj("Engine.SkeletalMesh");
+    x.set(comp, "MorphSets", Value::array(vec![Value::Object(None), Value::Object(Some(set))]));
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!((&*n.what, n.missing), (MORPH_SETS, Missing::NotPorted));
+    x.set(comp, "MorphSets", Value::array(vec![Value::Object(None)]));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+}
+
+/// Test 11: #569's refusals pass through unchanged (a mesh that is not a `SkeletalMesh`, through the layer itself with
+/// no invented skeleton), before any write.
+#[test]
+fn the_skeletal_layer_s_refusals_pass_through() {
+    let mut x = Fx::new();
+    let k = chain(&mut x, 1);
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
+    skeleton_for_tests(None);
+    let not_a_mesh = x.obj("Engine.SkelControlBase");
+    x.set(comp, "SkeletalMesh", Value::Object(Some(not_a_mesh)));
+    let direct = crate::world::skeletal::reference_skeleton(&x.vm, not_a_mesh).unwrap_err();
+    let e = refused_clean(&mut x, comp, t.root);
+    assert_eq!(format!("{e:?}"), format!("{direct:?}"), "the layer's own error");
+}
+
+/// A `BoneName` that is not a name is a script error before any write.
+#[test]
+fn a_bone_name_of_another_kind_is_a_script_error_before_any_write() {
+    let mut x = Fx::new();
+    let k = chain(&mut x, 1);
+    let (t, comp) = arrays_fx(&mut x, &five_bones(), &[(Some("B1"), Some(k[0]))]);
+    let lists = x.get(t.root, "SkelControlLists");
+    let mut items = lists.elements().unwrap().to_vec();
+    if let Value::Struct(s) = &mut items[0] {
+        for f in std::rc::Rc::make_mut(s).fields.iter_mut() {
+            if matches!(f, Value::Name(_)) {
+                *f = Value::Int(3);
+            }
+        }
+    }
+    let p = x.vm.space.prop(x.vm.space.heap.get(t.root).unwrap().class, "SkelControlLists").unwrap();
+    let sp = &mut x.vm.space;
+    *sp.heap.slot_mut(&sp.classes, t.root, PropAddr::scalar(p)).unwrap() = Value::array(items);
+    match refused_clean(&mut x, comp, t.root) {
+        VmError::Script { message, .. } => assert!(message.contains("BoneName"), "{message}"),
+        e => panic!("{e:?}"),
+    }
+    skeleton_for_tests(None);
+}
+
+/// Test 12, Maya-shaped (invented bone names B0..B26): 4 lists on bones 18, 4, 8 and 24, 5 controls (a chain of two,
+/// then three single ones), none post-physics: the note's section 5 arrays.
+#[test]
+fn a_maya_shaped_tree_gives_the_note_s_arrays() {
+    let mut x = Fx::new();
+    let mut parents = vec![None];
+    parents.extend((0..26).map(Some));
+    let grip = chain(&mut x, 2);
+    let (l_foot, r_foot, r_hand) = (chain(&mut x, 1)[0], chain(&mut x, 1)[0], chain(&mut x, 1)[0]);
+    let lists = [(Some("B18"), Some(grip[0])), (Some("B4"), Some(l_foot)), (Some("B8"), Some(r_foot)), (Some("B24"), Some(r_hand))];
+    let (t, comp) = arrays_fx(&mut x, &parents, &lists);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    skeleton_for_tests(None);
+    let mut want = vec![255u8; 27];
+    want[18] = 0;
+    want[4] = 1;
+    want[8] = 2;
+    want[24] = 3;
+    assert_eq!(bytes(&x.get(comp, "SkelControlIndex")), want);
+    assert_eq!(x.get(comp, "PostPhysSkelControlIndex"), Value::array(Vec::new()));
+    let all = [grip[0], grip[1], l_foot, r_foot, r_hand];
+    assert_eq!(listed(&x, comp, &all), all.to_vec());
+    assert_eq!(x.get(comp, "TickTag"), Value::Int(2), "two above its value before");
 }

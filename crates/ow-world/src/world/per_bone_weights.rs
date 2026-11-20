@@ -71,7 +71,8 @@ pub(crate) fn skeleton_for_tests(s: Option<ReferenceSkeleton>) {
     SKELETON.with(|c| *c.borrow_mut() = s.map(Rc::new));
 }
 
-fn skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>, VmError> {
+/// The mesh's reference skeleton (#569's layer; its refusals passed through), or the tests' invented one.
+pub(crate) fn skeleton(vm: &Vm, mesh: ObjRef) -> Result<Rc<ReferenceSkeleton>, VmError> {
     #[cfg(test)]
     if let Some(s) = SKELETON.with(|c| c.borrow().clone()) {
         return Ok(s);
