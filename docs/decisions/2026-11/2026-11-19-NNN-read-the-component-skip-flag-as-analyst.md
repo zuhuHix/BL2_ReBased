@@ -23,3 +23,15 @@ it). The decision number is pending from the hub (three digits); NNN is a placeh
   granted, and no recorded capture covers this.
 - **Verified:** nothing in the running game. Every rule is UNVERIFIED.
 - **Index:** a NATIVE_INDEX row was added.
+- **Review r1 of #653, with the hub's rulings written into the note's section 5:**
+  - refusal S is lifted on every path: the bounding cylinder's live and template paths, and the spawn extent's
+    `placement::actor_rule`, by the same set/clear rule;
+  - the component virtual is asked only for an entry every other test would count, after the skip check and just
+    before the box. Unread classes refuse `NotRead`, and the virtual is assumed to have no side effects (UNVERIFIED);
+  - the full per-entry order is written for both bounding-cylinder paths and for the spawn extent, with refusal N's
+    place, what a template entry meets after the skip check (L), and the spawn extent's step 7 (`LayerAbsent` with
+    L's text);
+  - new wording for `trace_filter::SKIP_FLAG` (no longer "unresolved");
+  - links 6 and 7 are now predicted to stop at the skeletal mesh's component check (`NotRead`);
+  - the engine-convention assumption and the static vtable read stay UNVERIFIED, and the name is "corroborated";
+  - the NATIVE_INDEX trace-filter row points here.
