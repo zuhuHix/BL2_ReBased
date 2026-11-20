@@ -109,6 +109,22 @@ clippy (ow-object, ow-vm, ow-world): no new warning. Slice gate not rerun for th
 only: NATIVE_COMPONENT_BOUNDS.md. Installed Off strict `--slice-gate` (release, under the machine lock): 4 ok / 10
 NotYet / 0 errors; links 6 and 7 pass `make` and stop in `touch` at `GetBoundingCylinder`'s refusal L. A throwaway
 probe with a stand-in past L stopped both at `DroppedPickup.TouchPickupTrace`. No real-game run.
+**IMPL-TOUCH-PICKUP-TRACE (2026-11-20, zuhu desktop, on main 4c4522d):** AI-assisted (Claude Code, Opus 5.5).
+`DroppedPickup.TouchPickupTrace` in Off, from NATIVE_TOUCH_PICKUP_TRACE.md (#624, 6dbdea1e). The pickup run's world
+gets link 9's `NoLevel` collision service (UNVERIFIED stand-in).
+- `cargo test --workspace -j 2`: 2,993 passed / 0 failed / 51 ignored. The 15 note cases are in `pickup_touch_tests.rs`.
+- Clippy on `ow-world`, `ow-inventory` and `ow-cli`: no warning on a changed line.
+- Installed Off `--slice-gate` strict, on a local probe that is never pushed (under the machine lock):
+  - **main df0970e + this branch:** 4 ok / 10 NotYet / 0 errors. Links 6 and 7 pass `make` and stop in `touch` at
+    `Actor.GetBoundingCylinder` refusal L ("the colliding components' bounds"), before this native.
+  - **The same plus a local stand-in for that refusal** (an invented cylinder): 4 ok / 9 NotYet / 1 error.
+    - Link 6 passes `touch` and `key`, then fails the driver's own evidence check: the weapon is not the pawn's
+      afterwards.
+    - Link 7 stops in `touch` in this native, at "the trace filter of WillowGame.WillowPickup": the other pickup's
+      `CollisionCylinder`, a class with no read row, which is the note's refusal.
+- Not run: ctest and verify_packages (no C++ change).
+
+No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
 
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
