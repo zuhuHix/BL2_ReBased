@@ -280,7 +280,7 @@ in `ow-inventory`); clippy flags nothing in the changed files; `crate_edges_test
 strict on a local, unpushed merge with #534 (8fc0420b) and #552 (0438f6b3): 1 ok / 5 notyet / 8 error. Link 8 is 1 of
 5 at `init`, now `notyet`, past `GetParticleEffect` and stopped in the first evaluator at
 `DamageTypeAttributeValueResolver` (NATIVE_ATTRIBUTES.md section 6, marked after partial writes). ctest and
-verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-188.
 
 **IMPL-RECOMPUTE-ATTRIBUTE-BASE-VALUES (2026-11-19, pc-hummer, on main d52bcc79):** AI-assisted (Claude Code, Opus
 5.5). `WillowWeapon.RecomputeAttributeBaseValues()` in Off from NATIVE_RECOMPUTE_ATTRIBUTE_BASE_VALUES.md (#539).

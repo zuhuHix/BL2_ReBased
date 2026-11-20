@@ -76,3 +76,7 @@ number is pending from the maintainer (three digits); NNN is a placeholder.
   reached yet.
 - **UNVERIFIED in game:** every rule, including that `Evaluate` here is the evaluator class's own virtual (the note's
   open question 1).
+- **Landing (hub run, 2026-11-20).** Merged with #506 r2 and #572 on the chain: link 8's make keeps #506's card
+  preflight and partial-writes mark and runs this preload inside that mark, after the preparation. The link keeps
+  these `harness input:` lines and #572's SetBaseValue lines (appended, not replaced). The logged loader is named
+  `preload_flash`, beside #572's own `preload`.

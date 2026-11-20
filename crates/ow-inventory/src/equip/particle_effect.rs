@@ -1,6 +1,6 @@
 //! Owner: lane IMPL-GET-PARTICLE-EFFECT. AI-assisted (Claude Code). `EffectCollectionDefinition.GetParticleEffect(object)`,
 //! implemented from NATIVE_GET_PARTICLE_EFFECT.md alone (PR #562 at 865ba911, accepted; this lane's decision
-//! 2026-11-19-NNN). Every rule is the note's reading, **UNVERIFIED** in the running game.
+//! 2026-11-19-188). Every rule is the note's reading, **UNVERIFIED** in the running game.
 //!
 //! **What it does** (the note's section 2): it walks the collection's `ParticleEffects`, an array of
 //! `ConditionalParticleEffectData { Expression, ParticleEffect }`, in array order, and returns the `ParticleEffect` of

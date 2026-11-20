@@ -1,5 +1,5 @@
 //! `GetParticleEffect` on an invented `GearboxFramework.upk` in a synthetic store (AGENTS.md rule 9; this lane's decision
-//! 2026-11-19-NNN). Loading `ToyHolder` makes its references (the collection, four evaluators and three particle
+//! 2026-11-19-188). Loading `ToyHolder` makes its references (the collection, four evaluators and three particle
 //! systems) store handles that are not loaded; a test loads the ones it needs as its own set-up step. The evaluators'
 //! `Evaluate` is a test native whose answer comes from the evaluator's `Mode` and `Answer`. Expected values are
 //! written by hand from NATIVE_GET_PARTICLE_EFFECT.md sections 2 and 4. AI-assisted (Claude Code).

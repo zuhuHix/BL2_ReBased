@@ -256,14 +256,16 @@ fn place_world_info(mut world: ow_world::world::World) -> Result<ow_world::world
 /// [`run_world`] with its errors typed, for the Off pickup gate's set-up only (reviews r1 and r2 of #476): the shared
 /// runner keeps its own diagnostics.
 fn run_world_t(cooked: &Path, mode: ParityMode) -> Result<ow_world::world::World, VmError> {
-    place_world_info_t(bare_world_t(cooked, mode, |_| Ok(()))?)
+    place_world_info_t(bare_world_t(cooked, mode, false, |_| Ok(()))?)
 }
 
 /// [`run_world_t`]'s world before its `WorldInfo` is placed, with no object made yet: `before` runs on the VM first,
-/// right after the core natives are registered (the card's class setup, review r2 of #521, item 5).
+/// right after the core natives are registered (the card's class setup, review r2 of #521, item 5). `equip` adds
+/// `ow_skills::action_skill::Pack` in Off, as [`run_world_typed`] does: link 8's [`equip_world`] only (#573).
 fn bare_world_t(
     cooked: &Path,
     mode: ParityMode,
+    equip: bool,
     before: impl FnOnce(&mut Vm) -> Result<(), VmError>,
 ) -> Result<ow_world::world::World, VmError> {
     use ow_balance::types::{
@@ -288,8 +290,13 @@ fn bare_world_t(
     .map_err(|e| balance(&e))?;
     let combat = ow_combat::hit::Pack;
     let inventory = ow_inventory::manager::Pack;
-    let packs: [&dyn ow_vm::api::NativePack; 2] = [&combat, &inventory];
-    ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs).map_err(|e| match e {
+    let skills = ow_skills::action_skill::Pack;
+    let mut packs: Vec<&dyn ow_vm::api::NativePack> = vec![&combat, &inventory];
+    // The evaluators the muzzle-flash collections hold (lane IMPL-GET-PARTICLE-EFFECT): link 8's world only, in Off.
+    if equip && mode == ParityMode::Off {
+        packs.push(&skills);
+    }
+    ow_world::world::World::new(vm, ow_world::world::BalanceState::new(snapshot), &packs[..]).map_err(|e| match e {
         ow_world::world::WorldError::Vm(v) => v,
         other => script(error_text(&other)),
     })
@@ -608,7 +615,7 @@ pub(crate) fn gate_world_typed(cooked: &Path) -> Result<ow_world::world::World, 
 /// definition loads) are tracked from the first allocation, the `WorldInfo`'s default instantiation included: a
 /// refusal after any of them moved is marked "stopped after partial writes".
 pub(crate) fn equip_world(cooked: &Path) -> Result<ow_world::world::World, VmError> {
-    let mut world = bare_world_t(cooked, ParityMode::Off, ow_inventory::equip::card::setup)?;
+    let mut world = bare_world_t(cooked, ParityMode::Off, true, ow_inventory::equip::card::setup)?;
     let before = ow_inventory::equip::card::load_mark(&world.vm);
     match equip_world_objects(&mut world) {
         Ok(()) => Ok(world),
@@ -700,7 +707,7 @@ pub(crate) fn preload_muzzle_flashes(vm: &mut Vm, weapon: ObjRef) -> Result<(), 
         }
     }
     for c in collections {
-        preload(vm, c, "a muzzle-flash collection")?;
+        preload_flash(vm, c, "a muzzle-flash collection")?;
         let entries = ow_inventory::equip::read_prop(vm, c, "ParticleEffects").unwrap_or(Value::None);
         let mut evaluators = Vec::new();
         for e in entries.elements().unwrap_or(&[]) {
@@ -710,7 +717,7 @@ pub(crate) fn preload_muzzle_flashes(vm: &mut Vm, weapon: ObjRef) -> Result<(), 
             }
         }
         for e in evaluators {
-            preload(vm, e, "its evaluator")?;
+            preload_flash(vm, e, "its evaluator")?;
             preload_operands(vm, e)?;
         }
     }
@@ -733,7 +740,7 @@ fn preload_operands(vm: &mut Vm, e: ObjRef) -> Result<(), VmError> {
         let Ok(Value::Object(Some(attr))) = ow_attr::eval::field(&vm.space, &expression, name).cloned() else {
             continue;
         };
-        preload(vm, attr, "an evaluator's attribute")?;
+        preload_flash(vm, attr, "an evaluator's attribute")?;
         for chain in ["ContextResolverChain", "ValueResolverChain"] {
             let resolvers: Vec<ObjRef> = ow_inventory::equip::read_prop(vm, attr, chain)
                 .as_ref()
@@ -746,7 +753,7 @@ fn preload_operands(vm: &mut Vm, e: ObjRef) -> Result<(), VmError> {
                 })
                 .collect();
             for r in resolvers {
-                preload(vm, r, "its resolver")?;
+                preload_flash(vm, r, "its resolver")?;
             }
         }
     }
@@ -754,7 +761,7 @@ fn preload_operands(vm: &mut Vm, e: ObjRef) -> Result<(), VmError> {
 }
 
 /// One logged harness load (rule 7: labelled before it runs, so a failed load still shows).
-fn preload(vm: &mut Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
+fn preload_flash(vm: &mut Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
     let name = ow_vm::path_name::path_name(vm, o).unwrap_or_else(|_| format!("{o:?}"));
     vm.log.push(format!("harness input: preload {what} {name} (GetParticleEffect loads nothing)"));
     let loaded = vm.defs.ensure_loaded(&mut vm.space, o);
