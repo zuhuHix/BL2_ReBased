@@ -1,6 +1,6 @@
 # `AttributeDefinitionBase.ResolveContext`: an attribute definition's context on link 9 (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-RESOLVE-CONTEXT (decision 2026-11-19-NNN, number pending).
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-RESOLVE-CONTEXT (decision 2026-11-19-213, number pending).
 Analyst only: a different lane implements it (clean room).
 
 **Sources:**
