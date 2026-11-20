@@ -375,7 +375,6 @@ fn refused_clean(x: &mut Fx, component: ObjRef, template: ObjRef) -> VmError {
 #[test]
 fn the_gather_order_is_depth_first_and_takes_a_node_once() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let p = plan(&x.vm, comp, t.root).unwrap();
@@ -387,7 +386,6 @@ fn the_gather_order_is_depth_first_and_takes_a_node_once() {
 #[test]
 fn the_tick_list_appends_a_node_once_all_its_parents_are_listed() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let root = instance(&mut x.vm, comp, t.root).unwrap();
@@ -411,7 +409,6 @@ fn the_tick_list_appends_a_node_once_all_its_parents_are_listed() {
 #[test]
 fn the_copy_keeps_class_and_name_takes_the_component_as_outer_and_rewires_links() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let root = instance(&mut x.vm, comp, t.root).unwrap();
@@ -458,7 +455,6 @@ fn the_copy_keeps_class_and_name_takes_the_component_as_outer_and_rewires_links(
 #[test]
 fn a_copy_of_a_copy_names_the_original() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let first = instance(&mut x.vm, comp, t.root).unwrap();
@@ -474,7 +470,6 @@ fn a_copy_of_a_copy_names_the_original() {
 #[test]
 fn a_copy_whose_node_tags_collide_with_the_next_tick_tag_is_refused() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let first = instance(&mut x.vm, comp, t.root).unwrap();
@@ -487,7 +482,6 @@ fn a_copy_whose_node_tags_collide_with_the_next_tick_tag_is_refused() {
 #[test]
 fn an_initialised_component_gets_the_copy_and_no_initialisation() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(false);
     let t = diamond(&mut x);
     let comp = x.component();
     x.set(comp, "bAnimTreeInitialised", Value::Bool(true));
@@ -497,29 +491,10 @@ fn an_initialised_component_gets_the_copy_and_no_initialisation() {
     assert_eq!(x.get(comp, "AnimTickArray"), Value::array(Vec::new()));
 }
 
-/// Review r1 of #561, item 2: the unread step after the per-node initialisation and step 5 (now planned, lanes
-/// IMPL-ANIM-NODE-INIT and IMPL-COPY-COMPONENT-PASS) is the owner's event; answering it lets the writes run.
-#[test]
-fn the_initialisation_s_unread_steps_refuse_in_order() {
-    let mut x = Fx::new();
-    answer_init_steps_up_to_for_tests(0);
-    let t = diamond(&mut x);
-    let comp = x.component();
-    let n = not_yet(refused_clean(&mut x, comp, t.root));
-    assert_eq!((&*n.what, n.missing, n.record), (OWNER_EVENT, Missing::NotRead, RECORD));
-    let mut x = Fx::new();
-    answer_init_steps_up_to_for_tests(1);
-    let t = diamond(&mut x);
-    let comp = x.component();
-    instance(&mut x.vm, comp, t.root).unwrap();
-    answer_init_steps_for_tests(false);
-}
-
 /// Review r1 of #561, item 3: a component that is not a skeletal mesh component is a script error before any write.
 #[test]
 fn a_component_that_is_not_skeletal_is_a_script_error() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let other = x.obj(BLEND);
     match refused_clean(&mut x, other, t.root) {
@@ -533,7 +508,6 @@ fn a_component_that_is_not_skeletal_is_a_script_error() {
 #[test]
 fn a_looping_control_chain_is_a_script_error_and_a_shared_control_keeps_its_place() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let lt = x.list_head;
     let head = |x: &Fx, c: ObjRef| {
@@ -552,21 +526,9 @@ fn a_looping_control_chain_is_a_script_error_and_a_shared_control_keeps_its_plac
     }
 }
 
-/// The per-node initialisation and step 5 pass on the diamond (lanes IMPL-ANIM-NODE-INIT and
-/// IMPL-COPY-COMPONENT-PASS); the owner's event after them still refuses every tree, before any write.
-#[test]
-fn the_owner_s_event_refuses_every_tree_before_any_write() {
-    let mut x = Fx::new();
-    answer_init_steps_for_tests(false);
-    let t = diamond(&mut x);
-    let comp = x.component();
-    refused(refused_clean(&mut x, comp, t.root), OWNER_EVENT);
-}
-
 #[test]
 fn a_node_class_whose_fix_up_was_not_read_is_refused() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let other = x.obj("Test.OtherBlend");
     x.children(t.c, &[Some(t.d), Some(other)]);
@@ -580,7 +542,6 @@ fn a_node_class_whose_fix_up_was_not_read_is_refused() {
 #[test]
 fn a_checked_class_passes_and_the_aim_offset_node_gets_its_fix_up() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let slot = x.obj("Engine.AnimNodeScaleRateBySpeed");
     x.children(t.c, &[Some(t.d), Some(slot)]);
@@ -590,7 +551,6 @@ fn a_checked_class_passes_and_the_aim_offset_node_gets_its_fix_up() {
     assert_eq!(Fx::list(&x.get(comp, "AnimTickArray")).len(), 6, "the checked class is copied and listed");
     assert_eq!(x.get(comp, "Animations"), Value::Object(Some(root)));
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let aim = x.obj(AIM_OFFSET_CLASS);
     let profile = x.obj("Engine.SkelControlBase");
@@ -610,7 +570,6 @@ fn a_checked_class_passes_and_the_aim_offset_node_gets_its_fix_up() {
 #[test]
 fn the_aim_offset_fix_up_does_nothing_when_the_outers_match() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     let class = x.vm.space.classes.by_path(AIM_OFFSET_CLASS).unwrap();
@@ -630,24 +589,22 @@ fn the_aim_offset_fix_up_does_nothing_when_the_outers_match() {
 #[test]
 fn the_attach_check_runs_the_copy_preflight_on_the_template_s_tree() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let template = x.component();
-    attach_check(&x.vm, template).unwrap();
+    attach_check(&x.vm, template, None).unwrap();
     x.set(template, "AnimTreeTemplate", Value::Object(Some(t.root)));
-    attach_check(&x.vm, template).unwrap();
+    attach_check(&x.vm, template, None).unwrap();
     let other = x.obj("Test.OtherBlend");
     x.children(t.c, &[Some(t.d), Some(other)]);
     x.parents(other, &[t.c]);
     let writes = x.vm.space.heap.committed_writes();
-    refused(attach_check(&x.vm, template).unwrap_err(), &fix_up("Test.OtherBlend"));
+    refused(attach_check(&x.vm, template, None).unwrap_err(), &fix_up("Test.OtherBlend"));
     assert_eq!(x.vm.space.heap.committed_writes(), writes);
 }
 
 #[test]
 fn a_morph_node_is_refused() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let m = x.obj("Engine.MorphNodeBase");
     x.set(t.root, "RootMorphNodes", Fx::objects(&[m]));
@@ -668,7 +625,6 @@ fn the_hub_s_preflight_additions_refuse_before_any_write() {
     ];
     for (what, change) in cases {
         let mut x = Fx::new();
-        answer_init_steps_for_tests(true);
         let t = diamond(&mut x);
         let comp = x.component();
         change(&mut x, &t, comp);
@@ -679,7 +635,6 @@ fn the_hub_s_preflight_additions_refuse_before_any_write() {
 #[test]
 fn a_missing_field_is_a_script_error_before_any_write() {
     let mut x = Fx::with(Shape::NoTickIndex);
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     match refused_clean(&mut x, comp, t.root) {
@@ -829,7 +784,6 @@ fn an_unloaded_node_or_control_in_a_loaded_tree_is_rule_1_s_refusal() {
     for which in ["node", "control"] {
         let (vm, _dir, node, control) = handles_store();
         let mut x = Fx::on(vm, Shape::Good);
-        answer_init_steps_for_tests(true);
         let t = diamond(&mut x);
         if which == "node" {
             x.children(t.c, &[Some(t.d), Some(node)]);
@@ -914,7 +868,6 @@ fn init_refused(e: VmError, what: &str) {
 #[test]
 fn a_and_b_write_their_fields() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj(BLEND);
     let leaf = x.obj(NODE);
     x.parents(leaf, &[n]);
@@ -938,7 +891,6 @@ fn a_and_b_write_their_fields() {
 #[test]
 fn a_node_with_the_on_init_event_is_refused() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj(NODE);
     let (t, comp) = with_node(&mut x, n);
     x.set(n, "bCallScriptEventOnInit", Value::Bool(true));
@@ -950,7 +902,6 @@ fn a_node_with_the_on_init_event_is_refused() {
 #[test]
 fn c_rebuilds_its_target_weights_and_refuses_a_zero_sum() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendBySpeed");
     let (t, comp) = with_node(&mut x, n);
     slots_of(&mut x, n, &[(None, 1.0, false, 1.0), (None, 0.0, false, 1.0)]);
@@ -958,7 +909,6 @@ fn c_rebuilds_its_target_weights_and_refuses_a_zero_sum() {
     let c = copy_of(&x, comp, n);
     assert_eq!(x.get(c, "TargetWeight"), Value::array(vec![Value::Float(1.0), Value::Float(0.0)]));
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendBySpeed");
     let (t, comp) = with_node(&mut x, n);
     slots_of(&mut x, n, &[(None, 1.0, true, 1.0), (None, 0.0, false, 1.0)]);
@@ -970,7 +920,6 @@ fn c_rebuilds_its_target_weights_and_refuses_a_zero_sum() {
 #[test]
 fn d_keeps_its_name_and_unbinds_its_sequence() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let walk = Value::Name(x.vm.space.names.intern("Walk"));
     let n = x.obj(SEQUENCE);
     let (t, comp) = with_node(&mut x, n);
@@ -983,7 +932,6 @@ fn d_keeps_its_name_and_unbinds_its_sequence() {
     assert_eq!((x.get(c, "AnimLinkupIndex"), x.get(c, "CachedNumDesiredBones")), (Value::Int(-1), Value::Int(0)));
     // Issuing notifies: the set-anim does nothing (a set sequence is kept, the linkup index too).
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj(SEQUENCE);
     let seq = x.obj(NODE);
     let (t, comp) = with_node(&mut x, n);
@@ -995,7 +943,6 @@ fn d_keeps_its_name_and_unbinds_its_sequence() {
     assert_eq!((x.get(c, "AnimSeq"), x.get(c, "AnimLinkupIndex")), (Value::Object(Some(seq)), Value::Int(4)));
     for (what, f) in [(SEQUENCE_CHANGE, "AnimSeq"), (CAMERA, "ActiveCameraAnimInstance")] {
         let mut x = Fx::new();
-        answer_init_steps_for_tests(true);
         let n = x.obj(SEQUENCE);
         let other = x.obj(NODE);
         let (t, comp) = with_node(&mut x, n);
@@ -1008,13 +955,11 @@ fn d_keeps_its_name_and_unbinds_its_sequence() {
 #[test]
 fn e_sets_the_component_flag_and_needs_it_declared() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     instance(&mut x.vm, comp, t.root).unwrap();
     assert_eq!(x.get(comp, "bUpdateComposeSkeletonPasses"), Value::Bool(true));
     let mut x = Fx::with(Shape::NoComposeFlag);
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     match refused_clean(&mut x, comp, t.root) {
@@ -1029,7 +974,6 @@ fn e_sets_the_component_flag_and_needs_it_declared() {
 fn f_and_g_set_the_first_weight_and_f_needs_the_mesh_layer() {
     for class in ["Engine.AnimNodeBlendPerBone", "Engine.AnimNodeAdditiveBlending"] {
         let mut x = Fx::new();
-        answer_init_steps_for_tests(true);
         let n = x.obj(class);
         let (t, comp) = with_node(&mut x, n);
         slots_of(&mut x, n, &[(None, 0.25, false, 1.0)]);
@@ -1039,7 +983,6 @@ fn f_and_g_set_the_first_weight_and_f_needs_the_mesh_layer() {
     // With a mesh and no skeleton source installed, #569's layer refusal passes through unchanged (lane
     // IMPL-PER-BONE-WEIGHTS).
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     crate::world::per_bone_weights::skeleton_for_tests(None);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_node(&mut x, n);
@@ -1055,7 +998,6 @@ fn f_and_g_set_the_first_weight_and_f_needs_the_mesh_layer() {
 #[test]
 fn h_writes_its_slot_and_special_move_parts() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, h1) = (x.obj(NODE), x.obj(NODE));
     x.parents(h0, &[n]);
@@ -1092,7 +1034,6 @@ fn h_refuses_an_entry_weight_build_and_an_unknown_owner() {
         (t, comp, n)
     };
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let (t, comp, n) = setup(&mut x);
     let class = x.vm.space.heap.get(n).unwrap().class;
     let p = x.vm.space.prop(class, "AnimParameters").unwrap();
@@ -1105,7 +1046,6 @@ fn h_refuses_an_entry_weight_build_and_an_unknown_owner() {
     x.set(n, "AnimParameters", Value::array(vec![plain, entry]));
     init_refused(refused_clean(&mut x, comp, t.root), ENTRY_WEIGHTS);
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let (t, comp, _) = setup(&mut x);
     let owner = x.obj(NODE);
     x.set(comp, "Owner", Value::Object(Some(owner)));
@@ -1117,7 +1057,6 @@ fn h_refuses_an_entry_weight_build_and_an_unknown_owner() {
 #[test]
 fn an_unknown_node_class_refuses_by_name() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let class = x.vm.space.classes.by_path("Test.OtherTree").unwrap();
     let root = x.vm.space.alloc(class, "OtherRoot", None, Origin::Runtime).unwrap();
@@ -1152,7 +1091,6 @@ fn h_with_outside_parent(x: &mut Fx, outside_tag: i32) -> (Diamond, ObjRef, ObjR
 #[test]
 fn h_initialises_and_the_preflight_checks_a_child_off_the_tick_list() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let (t, comp, _, h1) = h_with_outside_parent(&mut x, 0);
     x.set(h1, "bRelevant", Value::Bool(true));
     instance(&mut x.vm, comp, t.root).unwrap();
@@ -1171,7 +1109,6 @@ fn h_initialises_and_the_preflight_checks_a_child_off_the_tick_list() {
     assert_eq!(x.get(copy, "SkelComponent"), Value::Object(Some(comp)), "H's step 2 call");
     assert_eq!(x.get(copy, "bRelevant"), Value::Bool(false), "initialised by H's step 2 only");
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let (t, comp, _, h1) = h_with_outside_parent(&mut x, 0);
     x.set(h1, "bCallScriptEventOnInit", Value::Bool(true));
     let n = not_yet(refused_clean(&mut x, comp, t.root));
@@ -1183,7 +1120,6 @@ fn h_initialises_and_the_preflight_checks_a_child_off_the_tick_list() {
 #[test]
 fn an_outside_parent_with_the_next_tag_lists_its_child() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let (t, comp, _, h1) = h_with_outside_parent(&mut x, 1);
     instance(&mut x.vm, comp, t.root).unwrap();
     let name = x.name_of(h1);
@@ -1194,7 +1130,6 @@ fn an_outside_parent_with_the_next_tag_lists_its_child() {
 #[test]
 fn a_slot_whose_children_lead_back_to_it_is_a_script_error() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let h0 = x.obj(NODE);
     x.parents(h0, &[n]);
@@ -1211,7 +1146,6 @@ fn a_slot_whose_children_lead_back_to_it_is_a_script_error() {
 #[test]
 fn h_parameters_of_another_element_are_a_script_error_before_any_write() {
     let mut x = Fx::with(Shape::IntParameters);
-    answer_init_steps_for_tests(true);
     let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, h1) = (x.obj(NODE), x.obj(NODE));
     x.parents(h0, &[n]);
@@ -1229,7 +1163,6 @@ fn h_parameters_of_another_element_are_a_script_error_before_any_write() {
 #[test]
 fn an_aim_offset_without_its_engine_base_fails_the_checked_cast_before_any_write() {
     let mut x = Fx::with(Shape::AimNoBase);
-    answer_init_steps_for_tests(true);
     let aim = x.obj(AIM_OFFSET_CLASS);
     let (t, comp) = with_node(&mut x, aim);
     match refused_clean(&mut x, comp, t.root) {
@@ -1263,7 +1196,6 @@ fn h_takes_a_package_backed_owner_that_implements_the_interface() {
     assert!(vm.implements(owner_class, iface));
     let owner = vm.space.alloc(owner_class, "Owner_0", None, Origin::Runtime).unwrap();
     let mut x = Fx::on(vm, Shape::Good);
-    answer_init_steps_for_tests(true);
     answer_owner_for_tests(None);
     let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, h1) = (x.obj(NODE), x.obj(NODE));
@@ -1283,7 +1215,6 @@ fn h_takes_a_package_backed_owner_that_implements_the_interface() {
 #[test]
 fn h_makes_zeroed_parameter_entries_whatever_the_struct_defaults() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, h1) = (x.obj(NODE), x.obj(NODE));
     x.parents(h0, &[n]);
@@ -1312,7 +1243,6 @@ fn h_makes_zeroed_parameter_entries_whatever_the_struct_defaults() {
 #[test]
 fn an_interface_typed_child_link_is_a_script_error_before_any_write() {
     let mut x = Fx::with(Shape::InterfaceAnim);
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     match refused_clean(&mut x, comp, t.root) {
@@ -1364,7 +1294,6 @@ fn with_mesh(x: &mut Fx, n: ObjRef, s: ReferenceSkeleton) -> (Diamond, ObjRef) {
 #[test]
 fn the_per_bone_builder_weights_a_branch_and_lists_its_ancestors() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_mesh(&mut x, n, five());
     let branch = names(&mut x, &["b2", "NoSuchBone", "None"]);
@@ -1382,7 +1311,6 @@ fn the_per_bone_builder_weights_a_branch_and_lists_its_ancestors() {
 #[test]
 fn the_root_as_branch_gives_an_empty_list() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_mesh(&mut x, n, five());
     let branch = names(&mut x, &["B0", "B0"]);
@@ -1400,7 +1328,6 @@ fn the_root_as_branch_gives_an_empty_list() {
 fn the_feather_builder_clamps_lists_partial_weights_and_obeys_local_space() {
     for force in [false, true] {
         let mut x = Fx::new();
-        answer_init_steps_for_tests(true);
         let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
         let (t, comp) = with_mesh(&mut x, n, five());
         let class = x.vm.space.heap.get(n).unwrap().class;
@@ -1443,7 +1370,6 @@ fn the_parents_pass_inserts_the_missing_chain() {
 #[test]
 fn a_null_mesh_keeps_both_arrays() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_node(&mut x, n);
     x.set(n, "Child2PerBoneWeight", Value::array(vec![Value::Float(0.25)]));
@@ -1458,7 +1384,6 @@ fn a_null_mesh_keeps_both_arrays() {
 #[test]
 fn the_builder_s_refusals_are_write_free() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let mut parents = vec![None];
     parents.extend((0..256).map(Some));
@@ -1467,7 +1392,6 @@ fn the_builder_s_refusals_are_write_free() {
     skeleton_for_tests(None);
     assert_eq!((&*e.what, e.missing), (too_many_bones("Engine.AnimNodeBlendPerBone").as_str(), Missing::NotRead));
     let mut x = Fx::with(Shape::IntMesh);
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_node(&mut x, n);
     match refused_clean(&mut x, comp, t.root) {
@@ -1475,7 +1399,6 @@ fn the_builder_s_refusals_are_write_free() {
         e => panic!("{e:?}"),
     }
     let mut x = Fx::with(Shape::IntBlendWeight);
-    answer_init_steps_for_tests(true);
     let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
     let (t, comp) = with_mesh(&mut x, n, five());
     let class = x.vm.space.heap.get(n).unwrap().class;
@@ -1497,7 +1420,6 @@ fn the_builder_s_refusals_are_write_free() {
 #[test]
 fn an_f_node_under_h_is_built_at_both_initialisations() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let h = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, f) = (x.obj(NODE), x.obj("Engine.AnimNodeBlendPerBone"));
     x.parents(h0, &[h]);
@@ -1520,7 +1442,6 @@ fn an_f_node_under_h_is_built_at_both_initialisations() {
 #[test]
 fn both_f_heads_carry_their_planned_builds() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let h = x.obj("GearboxFramework.AnimNodeSpecialMoveBlend");
     let (h0, f) = (x.obj(NODE), x.obj("Engine.AnimNodeBlendPerBone"));
     x.parents(h0, &[h]);
@@ -1557,7 +1478,6 @@ fn both_f_heads_carry_their_planned_builds() {
 fn an_empty_target_list_still_needs_its_declared_members() {
     for (shape, member) in [(Shape::NoStartBone, "StartBoneName"), (Shape::IntBlendWeight, "BlendWeight")] {
         let mut x = Fx::with(shape);
-        answer_init_steps_for_tests(true);
         let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
         let (t, comp) = with_mesh(&mut x, n, five());
         let r = refused_clean(&mut x, comp, t.root);
@@ -1574,7 +1494,6 @@ fn an_empty_target_list_still_needs_its_declared_members() {
 #[test]
 fn a_flag_of_another_kind_and_a_name_outside_the_table_are_script_errors() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
     let (t, comp) = with_mesh(&mut x, n, five());
     let class = x.vm.space.heap.get(n).unwrap().class;
@@ -1589,7 +1508,6 @@ fn a_flag_of_another_kind_and_a_name_outside_the_table_are_script_errors() {
         e => panic!("{e:?}"),
     }
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_mesh(&mut x, n, five());
     let mut other = ow_object::names::NameTable::new();
@@ -1615,7 +1533,6 @@ fn a_flag_of_another_kind_and_a_name_outside_the_table_are_script_errors() {
 #[test]
 fn a_full_byte_chain_and_an_unsorted_ancestor_insertion() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let mut parents = vec![None];
     parents.extend((0..255).map(Some));
@@ -1632,7 +1549,6 @@ fn a_full_byte_chain_and_an_unsorted_ancestor_insertion() {
     // Root 0; B1 and B2 under 0; B3 under 1. Branches B2 and B3: candidates [2, 3]; B2's parent (the root) goes ahead
     // of it, then B3's parent B1 ahead of B3.
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let n = x.obj("Engine.AnimNodeBlendPerBone");
     let (t, comp) = with_mesh(&mut x, n, skeleton(&[None, Some(0), Some(0), Some(1)]));
     let branch = names(&mut x, &["B2", "B3"]);
@@ -1649,7 +1565,6 @@ fn a_full_byte_chain_and_an_unsorted_ancestor_insertion() {
 #[test]
 fn a_static_array_target_member_is_refused() {
     let mut x = Fx::with(Shape::ArrayBlendWeight);
-    answer_init_steps_for_tests(true);
     let n = x.obj("WillowGame.WillowAnimNodeFeatherBlend");
     let (t, comp) = with_mesh(&mut x, n, five());
     let r = refused_clean(&mut x, comp, t.root);
@@ -1667,7 +1582,6 @@ use crate::world::control_arrays::{MORPH_SETS, TAG_COLLISION as CONTROL_TAG_COLL
 /// The diamond with the owner's event answered, a component holding a mesh whose skeleton is `parents`, and the
 /// tree's lists set to `lists` (a bone name or None, and the head control).
 fn arrays_fx(x: &mut Fx, parents: &[Option<usize>], lists: &[(Option<&str>, Option<ObjRef>)]) -> (Diamond, ObjRef) {
-    answer_init_steps_for_tests(true);
     let t = diamond(x);
     let comp = x.component();
     let mesh = x.obj("Engine.SkeletalMesh");
@@ -2004,7 +1918,6 @@ fn looked_up(x: &Fx, comp: ObjRef, root: ObjRef, body: Option<ObjRef>) -> Result
 #[test]
 fn a_node_lookup_takes_the_first_in_tick_order_and_keeps_only_its_class() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let aim = x.obj(AIM_OFFSET_CLASS);
     let (t, comp) = with_node(&mut x, aim);
     named(&mut x, aim, "AimOffset");
@@ -2024,7 +1937,6 @@ fn a_node_lookup_takes_the_first_in_tick_order_and_keeps_only_its_class() {
 #[test]
 fn control_lookups_and_foot_ik_follow_the_lists() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     named(&mut x, t.b, "ArmBoneBlend");
@@ -2049,7 +1961,6 @@ fn control_lookups_and_foot_ik_follow_the_lists() {
 #[test]
 fn slot_nodes_are_the_tick_list_s_slots_in_tick_order() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let slot = x.obj("Engine.AnimNodeSlot");
     let (t, comp) = with_node(&mut x, slot);
     slots_of(&mut x, slot, &[(None, 1.0, false, 1.0)]);
@@ -2064,7 +1975,6 @@ fn slot_nodes_are_the_tick_list_s_slots_in_tick_order() {
 #[test]
 fn no_tick_list_and_no_body_class_are_not_read() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let t = diamond(&mut x);
     let comp = x.component();
     match looked_up(&x, comp, t.root, None) {
@@ -2084,7 +1994,6 @@ fn no_tick_list_and_no_body_class_are_not_read() {
 #[test]
 fn apply_writes_the_copies_into_the_pawn() {
     let mut x = Fx::new();
-    answer_init_steps_for_tests(true);
     let aim = x.obj(AIM_OFFSET_CLASS);
     let (t, comp) = with_node(&mut x, aim);
     named(&mut x, aim, "AimOffset");
@@ -2119,4 +2028,508 @@ fn apply_writes_the_copies_into_the_pawn() {
         other => panic!("{other:?}"),
     }
     assert_eq!(x.vm.space.heap.committed_writes(), before, "checked before the first write");
+}
+
+// ---- The owner's event (NATIVE_TREE_INIT_OWNER_EVENT.md section 3; lane IMPL-TREE-INIT-OWNER-EVENT) ----------------
+
+use crate::world::tree_lookup::{FIND_ANIM_NODE, FIND_SKEL_CONTROL, find_anim_node, find_skel_control};
+use ow_object::ids::NameId;
+use ow_package::testkit::script::{Asm, FunctionSpec, Param};
+
+/// Defined | Event | Public, for the toy events.
+const EVENT_FLAGS: u32 = 0x2 | 0x800 | 0x20000;
+/// Native | Public, for the toy unread native.
+const NATIVE_FLAGS: u32 = 0x400 | 0x20000;
+
+/// What an owner store changes from the good shape (test 12's malformed owners).
+#[derive(Clone, Copy, PartialEq)]
+enum OwnerShape {
+    Good,
+    /// `Engine.Pawn` declares no `Mesh`.
+    NoMesh,
+    /// `WillowPlayerPawn.AimOffset` declared an int.
+    IntAimOffset,
+    /// `Actor`'s version calls an invented native `ToyUnread`, which nothing binds (test 18).
+    UnreadNative,
+}
+
+/// Toy `Core`, `Engine` and `WillowGame` packages with the three read versions of `PostInitAnimTree` at their
+/// installed paths (Actor's and Pawn's empty; WillowPlayerPawn's records its argument in the invented `ToySeen`, so a
+/// test sees the call and its argument), an invented override (`ToyOverridePawn`), an enemy-like pawn and an
+/// actor-only class with no version of their own, two invented body classes, a pawn class with a state `Toying` that
+/// holds its own `PostInitAnimTree` (test 15), and a data package whose holder refers to an unloaded `ToyBody`
+/// (test 16).
+fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
+    let dir = std::env::temp_dir().join(format!("ow-world-animcopy-ev-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let guard = DirGuard(dir.clone());
+    let _ = std::fs::remove_dir_all(&dir);
+    let kinds = ["Class", "Function", "State", "ObjectProperty", "IntProperty", "NameProperty"];
+    let event_calling = |t: &mut ScriptToy, owner: i32, object: i32, record: Option<i32>, call: Option<i32>| {
+        let params = [Param { type_ref: object, ..Param::new("Object", "SkelComp") }];
+        t.function(owner, "PostInitAnimTree", &params, None, &[], &FunctionSpec::new(EVENT_FLAGS, "PostInitAnimTree"), |ids| {
+            let mut a = Asm::new();
+            if let Some(field) = record {
+                a.stmt().raw(&[0x0F]).instance(field).local(ids.get("SkelComp"));
+            }
+            if let Some(native) = call {
+                a.stmt().final_function(native, |_| {});
+            }
+            a.stmt().return_nothing();
+            a.end();
+            Some(a)
+        });
+    };
+    let event = |t: &mut ScriptToy, owner: i32, object: i32, record: Option<i32>| event_calling(t, owner, object, record, None);
+    let core = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        t.class("Object", 0);
+        t.build()
+    };
+    let engine = {
+        let mut t = ScriptToy::with_imports(&kinds);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let actor = t.class("Actor", object);
+        let unread = (shape == OwnerShape::UnreadNative)
+            .then(|| t.function(actor, "ToyUnread", &[], None, &[], &FunctionSpec::new(NATIVE_FLAGS, "ToyUnread"), |_| None).function);
+        event_calling(&mut t, actor, object, None, unread);
+        let pawn = t.class("Pawn", actor);
+        if shape != OwnerShape::NoMesh {
+            t.prop("Object", pawn, "Mesh", 0, object);
+        }
+        event(&mut t, pawn, object, None);
+        t.class("ToyActorOnly", actor);
+        t.build()
+    };
+    let willow = {
+        let mut t = ScriptToy::with_imports(&kinds);
+        let core = t.p.add_import("Core", "Package", 0, "Core");
+        let object = t.p.add_import("Core", "Class", core, "Object");
+        let engine = t.p.add_import("Core", "Package", 0, "Engine");
+        let pawn = t.p.add_import("Core", "Class", engine, "Pawn");
+        let player = t.class("WillowPlayerPawn", pawn);
+        for f in ["ArmBoneBlend", "LeftHandIK", "BodyClass"] {
+            t.prop("Object", player, f, 0, object);
+        }
+        if shape == OwnerShape::IntAimOffset {
+            t.prop("Int", player, "AimOffset", 0, 0);
+        } else {
+            t.prop("Object", player, "AimOffset", 0, object);
+        }
+        let seen = t.prop("Object", player, "ToySeen", 0, object);
+        event(&mut t, player, object, Some(seen));
+        let over = t.class("ToyOverridePawn", player);
+        event(&mut t, over, object, None);
+        t.class("ToyEnemyPawn", pawn);
+        let body = t.class("ToyBody", object);
+        t.prop("Name", body, "AimOffsetNodeName", 0, 0);
+        let bad = t.class("ToyBadBody", object);
+        t.prop("Int", bad, "AimOffsetNodeName", 0, 0);
+        let stated = t.class("ToyStatePawn", pawn);
+        let mut state = ow_package::testkit::Export::new(t.import("State"), "Toying", ow_package::testkit::ints(&[0, 0, 0, 0]));
+        state.outer = stated;
+        let toying = t.p.add_export_with(state);
+        event(&mut t, toying, object, None);
+        let holder = t.class("ToyBodyHolder", object);
+        t.prop("Object", holder, "Body", 0, object);
+        t.build()
+    };
+    let data = {
+        let mut t = ScriptToy::with_imports(&["Class"]);
+        let pkg = t.p.add_import("Core", "Package", 0, "WillowGame");
+        let body = t.p.add_import("Core", "Class", pkg, "ToyBody");
+        let holder = t.p.add_import("Core", "Class", pkg, "ToyBodyHolder");
+        let mut payload = ow_package::testkit::ints(&[0, 0]);
+        payload.extend_from_slice(&t.none);
+        let b = t.p.add_export(body, "ColdBody", payload);
+        let mut payload = ow_package::testkit::ints(&[0]);
+        payload.extend(t.p.object_tag("Body", b));
+        payload.extend_from_slice(&t.none);
+        t.p.add_export(holder, "Holder", payload);
+        t.build()
+    };
+    let files: Vec<(&str, &[u8])> = vec![
+        ("Core.upk", core.as_slice()),
+        ("Engine.upk", engine.as_slice()),
+        ("WillowGame.upk", willow.as_slice()),
+        ("GD_ToyBodies.upk", data.as_slice()),
+    ];
+    let defs = DefStore::from_synthetic(&dir, &files, IdentityPolicy::FirstInScanOrder, ParityMode::Off).expect("store");
+    (Vm::new(ObjectSpace::new(), defs, Rc::new(AttributeSystem::new_empty()), ParityMode::Off), guard)
+}
+
+/// The fixture on an owner store, the two lookups bound (as the Off pack binds them) and the left-hand control class
+/// defined (the three cast classes, rule 7).
+fn owner_fx(shape: OwnerShape) -> (Fx, DirGuard) {
+    let (mut vm, guard) = owner_store(shape);
+    crate::world::tree_lookup::register(&mut vm).unwrap();
+    (cast_ready(Fx::on(vm, Shape::Good)), guard)
+}
+
+fn cast_ready(mut x: Fx) -> Fx {
+    let base = x.vm.space.classes.by_path("Engine.SkelControlBase").unwrap();
+    class(&mut x.vm, LEFT_HAND_CLASS, base, &[]);
+    x
+}
+
+/// A runtime object of package class `class`. With `load` its class code is loaded (`find_class`); without, only its
+/// layout is defined, straight through the code index (as ow-vm's `find_loaded_method` test does), so its functions
+/// are not loaded.
+fn owner_of(x: &mut Fx, class: &str, load: bool) -> ObjRef {
+    let c = if load {
+        x.vm.find_class(class).unwrap()
+    } else {
+        let vm = &mut x.vm;
+        let (code, store) = vm.defs.code_mut();
+        let key = code.find_class(store, class).unwrap();
+        code.define_layout(store, &mut vm.space.names, &mut vm.space.classes, key).unwrap()
+    };
+    x.n += 1;
+    x.vm.space.alloc(c, &format!("Owner_{}", x.n), None, Origin::Runtime).unwrap()
+}
+
+fn event_refused(e: VmError, what: &str) {
+    let n = not_yet(e);
+    assert_eq!((&*n.what, n.missing, n.record), (what, Missing::NotRead, EVENT_RECORD));
+}
+
+fn script_error(e: VmError, needle: &str) {
+    match e {
+        VmError::Script { message, .. } => assert!(message.contains(needle), "{message}"),
+        e => panic!("expected a script error naming {needle}, got {e:?}"),
+    }
+}
+
+/// The owner and the path of the event `plan` picks.
+fn planned(x: &Fx, comp: ObjRef, root: ObjRef) -> Option<(ObjRef, String)> {
+    plan(&x.vm, comp, root).unwrap().event.map(|(o, f)| (o, x.vm.function(f).unwrap().path.as_str().to_string()))
+}
+
+/// Test 1: no owner, no event; the initialisation still sets `bAnimTreeInitialised`.
+#[test]
+fn with_no_owner_no_event_is_sent_and_the_component_is_initialised() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    assert_eq!(planned(&x, comp, t.root), None);
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(true));
+}
+
+/// Test 2: an owner with only `Actor`'s version: the event is planned and runs, writing nothing of its own.
+#[test]
+fn an_actor_only_owner_gets_the_actor_event_which_writes_nothing() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "Engine.ToyActorOnly", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    assert_eq!(planned(&x, comp, t.root), Some((owner, ACTOR_EVENT.to_string())));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(true));
+}
+
+/// Tests 3 and 4: a `Pawn`-line owner whose `Mesh` is the component is the `CacheAnimNodes` refusal before any write;
+/// whose `Mesh` is another component gets `Pawn`'s version, its branch skipped.
+#[test]
+fn a_pawn_s_own_mesh_is_refused_and_another_mesh_passes() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.ToyEnemyPawn", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    let other = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    x.set(owner, "Mesh", Value::Object(Some(comp)));
+    event_refused(refused_clean(&mut x, comp, t.root), OWN_MESH);
+    x.set(owner, "Mesh", Value::Object(Some(other)));
+    assert_eq!(planned(&x, comp, t.root), Some((owner, PAWN_EVENT.to_string())));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(owner, "Mesh"), Value::Object(Some(other)), "Pawn's branch skipped");
+}
+
+/// A diamond with a `WillowAnimNodeAimOffset` named `AimOffset` under C and its first control named `LeftHandGrip`.
+fn player_tree(x: &mut Fx) -> (Diamond, ObjRef, ObjRef) {
+    let aim = x.obj(AIM_OFFSET_CLASS);
+    let (t, comp) = with_node(x, aim);
+    let n = x.vm.space.names.intern("AimOffset");
+    x.set(aim, "NodeName", Value::Name(n));
+    let g = x.vm.space.names.intern("LeftHandGrip");
+    x.set(t.k1, "ControlName", Value::Name(g));
+    (t, aim, comp)
+}
+
+/// Test 5 (its port side): a `WillowPlayerPawn` owner gets its version, called with the component; the lookups it
+/// calls answer on the instance: no `ArmBoneBlend` node (None), the copy's aim-offset node by `AimOffsetNodeName`, the
+/// copy's `LeftHandGrip` control. Tests 6 to 8 (each cache only while None, a result of another class stored as None)
+/// are the event's own script, which the toy event does not reproduce, so they are not covered here.
+#[test]
+fn a_player_owner_gets_its_event_with_the_component_and_the_lookups_answer_on_the_instance() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let body = owner_of(&mut x, "WillowGame.ToyBody", true);
+    let (t, aim, comp) = player_tree(&mut x);
+    let name = x.vm.space.names.intern("AimOffset");
+    x.set(body, "AimOffsetNodeName", Value::Name(name));
+    x.set(owner, "BodyClass", Value::Object(Some(body)));
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    assert_eq!(planned(&x, comp, t.root), Some((owner, PLAYER_EVENT.to_string())));
+    let draws = x.vm.rng.draws();
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.vm.rng.draws(), draws, "no random number");
+    assert_eq!(x.get(owner, "ToySeen"), Value::Object(Some(comp)), "called with the component");
+    assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(true));
+    let arm = x.vm.space.names.intern("ArmBoneBlend");
+    assert_eq!(find_anim_node(&x.vm, comp, arm).unwrap(), None);
+    assert_eq!(find_anim_node(&x.vm, comp, name).unwrap(), Some(copy_of(&x, comp, aim)));
+    let grip = x.vm.space.names.intern("LeftHandGrip");
+    let k = find_skel_control(&x.vm, comp, grip).unwrap().expect("the grip control");
+    assert_eq!((x.name_of(k), x.outer(k)), (x.name_of(t.k1), Some(comp)), "the copy, not the template");
+}
+
+/// Test 7 (its preflight side), and test 5's body class checks: with `BodyClass` None the body class is not read; a
+/// set one must declare `AimOffsetNodeName` as a name.
+#[test]
+fn the_body_class_is_checked_only_when_set() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let bad = owner_of(&mut x, "WillowGame.ToyBadBody", true);
+    let (t, _aim, comp) = player_tree(&mut x);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    assert_eq!(planned(&x, comp, t.root).map(|(_, p)| p), Some(PLAYER_EVENT.to_string()), "BodyClass None");
+    x.set(owner, "BodyClass", Value::Object(Some(bad)));
+    script_error(refused_clean(&mut x, comp, t.root), "AimOffsetNodeName");
+}
+
+/// Test 17: each of the two natives unbound is its own `NotPorted`, before any write.
+#[test]
+fn each_unbound_lookup_is_its_own_not_ported_before_any_write() {
+    for bind_node in [false, true] {
+        let (mut vm, _dir) = owner_store(OwnerShape::Good);
+        if bind_node {
+            vm.register_native(FIND_ANIM_NODE, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(None)))).unwrap();
+        }
+        let mut x = cast_ready(Fx::on(vm, Shape::Good));
+        let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+        let (t, _aim, comp) = player_tree(&mut x);
+        x.set(comp, "Owner", Value::Object(Some(owner)));
+        let n = not_yet(refused_clean(&mut x, comp, t.root));
+        let want = if bind_node { SKEL_CONTROL_UNBOUND } else { ANIM_NODE_UNBOUND };
+        assert_eq!((&*n.what, n.missing, n.record), (want, Missing::NotPorted, EVENT_RECORD));
+    }
+}
+
+/// Rule 7's cast classes: one not defined at set-up is refused before any write (the cast would define it).
+#[test]
+fn an_undefined_cast_class_is_refused_before_any_write() {
+    let (mut vm, _dir) = owner_store(OwnerShape::Good);
+    crate::world::tree_lookup::register(&mut vm).unwrap();
+    let mut x = Fx::on(vm, Shape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let (t, _aim, comp) = player_tree(&mut x);
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    event_refused(refused_clean(&mut x, comp, t.root), &cast_undefined(LEFT_HAND_CLASS));
+}
+
+/// Test 8 (its preflight side): a node named `ArmBoneBlend` that is not an `AnimNodeBlendPerBone` passes the
+/// preflight, the cast's answer (no) computed there; the event runs.
+#[test]
+fn a_find_of_another_class_is_answered_in_the_preflight() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let (t, _aim, comp) = player_tree(&mut x);
+    let arm = x.vm.space.names.intern("ArmBoneBlend");
+    x.set(t.b, "NodeName", Value::Name(arm));
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(x.get(owner, "ToySeen"), Value::Object(Some(comp)));
+    assert_eq!(find_anim_node(&x.vm, comp, arm).unwrap(), Some(copy_of(&x, comp, t.b)), "found; the cast is the script's");
+}
+
+/// Test 9: an override on an invented subclass, refused by path before any write.
+#[test]
+fn an_override_is_refused_by_path_before_any_write() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.ToyOverridePawn", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    event_refused(refused_clean(&mut x, comp, t.root), &event_override("WillowGame.ToyOverridePawn.PostInitAnimTree"));
+}
+
+/// Test 10: an owner whose class code is not loaded, with nothing loaded.
+#[test]
+fn an_owner_whose_code_is_not_loaded_is_refused_with_nothing_loaded() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", false);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    event_refused(refused_clean(&mut x, comp, t.root), EVENT_NOT_LOADED);
+    let class = x.vm.space.heap.get(owner).unwrap().class;
+    assert_eq!(x.vm.find_loaded_method(class, EVENT, None), None, "still not loaded");
+}
+
+/// Test 11: an unloaded owner handle is #543's refusal.
+#[test]
+fn an_unloaded_owner_is_the_lookup_refusal() {
+    let (vm, _dir, handle, _) = handles_store();
+    let mut x = Fx::on(vm, Shape::Good);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(handle)));
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!((&*n.what, n.missing), (ANIM_NODES, Missing::LayerAbsent(ANIM_LAYER)));
+}
+
+/// Test 12: an owner with no `Mesh`, or a cache field of another kind, is a script error before any write.
+#[test]
+fn a_malformed_owner_is_a_script_error_before_any_write() {
+    for (shape, class, needle) in [
+        (OwnerShape::NoMesh, "WillowGame.ToyEnemyPawn", "Mesh"),
+        (OwnerShape::IntAimOffset, "WillowGame.WillowPlayerPawn", "AimOffset"),
+    ] {
+        let (mut x, _dir) = owner_fx(shape);
+        let owner = owner_of(&mut x, class, true);
+        let t = diamond(&mut x);
+        let comp = x.component();
+        x.set(comp, "Owner", Value::Object(Some(owner)));
+        script_error(refused_clean(&mut x, comp, t.root), needle);
+    }
+}
+
+/// Test 13: the attach check plans the event for the passed owner (not the template's own `Owner`), with the same
+/// refusals and nothing written; the own-`Mesh` refusal is the instance path's only.
+#[test]
+fn the_attach_check_plans_the_passed_owner_s_event() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let over = owner_of(&mut x, "WillowGame.ToyOverridePawn", true);
+    let enemy = owner_of(&mut x, "WillowGame.ToyEnemyPawn", true);
+    let cold = owner_of(&mut x, "Engine.ToyActorOnly", false);
+    let t = diamond(&mut x);
+    let template = x.component();
+    x.set(template, "AnimTreeTemplate", Value::Object(Some(t.root)));
+    x.set(template, "Owner", Value::Object(Some(over)));
+    x.set(enemy, "Mesh", Value::Object(Some(template)));
+    let counts = |x: &Fx| (x.vm.space.heap.committed_writes(), x.vm.space.heap.handles().len(), x.vm.defs.load_transitions());
+    let before = counts(&x);
+    attach_check(&x.vm, template, None).unwrap();
+    attach_check(&x.vm, template, Some(enemy)).unwrap();
+    let e = attach_check(&x.vm, template, Some(over)).unwrap_err();
+    event_refused(e, &event_override("WillowGame.ToyOverridePawn.PostInitAnimTree"));
+    event_refused(attach_check(&x.vm, template, Some(cold)).unwrap_err(), EVENT_NOT_LOADED);
+    assert_eq!(counts(&x), before, "nothing written, made or loaded");
+}
+
+/// Test 19 and the binding's other rules: no tree is None; the gather path (a tree that is not the component's own, or
+/// an empty tick list) is `NotRead`; names match whole (`Name_1` is not `Name_2`); a None name finds no control; a
+/// looping chain is a script error.
+#[test]
+fn the_lookups_follow_the_scoped_binding() {
+    use crate::world::tree_lookup::{GATHER, RECORD as LOOKUP_RECORD};
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let (t, aim, comp) = player_tree(&mut x);
+    let one = x.vm.space.names.intern("Name_1");
+    let two = x.vm.space.names.intern("Name_2");
+    x.set(aim, "NodeName", Value::Name(one));
+    assert_eq!(find_anim_node(&x.vm, comp, one).unwrap(), None, "no tree");
+    assert_eq!(find_skel_control(&x.vm, comp, one).unwrap(), None, "no tree");
+    let gather = |e: VmError| {
+        let n = not_yet(e);
+        assert_eq!((&*n.what, n.missing, n.record), (GATHER, Missing::NotRead, LOOKUP_RECORD));
+    };
+    x.set(comp, "Animations", Value::Object(Some(t.root)));
+    gather(find_anim_node(&x.vm, comp, one).unwrap_err());
+    x.set(comp, "Animations", Value::Object(None));
+    instance(&mut x.vm, comp, t.root).unwrap();
+    assert_eq!(find_anim_node(&x.vm, comp, one).unwrap(), Some(copy_of(&x, comp, aim)));
+    assert_eq!(find_anim_node(&x.vm, comp, two).unwrap(), None, "a whole-name match");
+    let ticks = x.get(comp, "AnimTickArray");
+    x.set(comp, "AnimTickArray", Value::array(Vec::new()));
+    gather(find_anim_node(&x.vm, comp, one).unwrap_err());
+    x.set(comp, "AnimTickArray", ticks);
+    assert_eq!(find_skel_control(&x.vm, comp, NameId::NONE).unwrap(), None);
+    let root = object_of(&x.get(comp, "Animations")).unwrap();
+    let k2 = Fx::list(&x.get(comp, "SkelControlTickArray")).into_iter().flatten().find(|&k| x.name_of(k) == x.name_of(t.k2));
+    let lists = x.get(root, "SkelControlLists");
+    let head = object_of(&field(&x.vm, &lists.elements().unwrap()[0], "ControlHead", "t").unwrap()).unwrap();
+    x.set(k2.unwrap_or(head), "NextControl", Value::Object(Some(head)));
+    script_error(find_skel_control(&x.vm, comp, two).unwrap_err(), "loops back");
+}
+
+/// Test 15: an owner in a state is refused before any write, also when that state holds its own `PostInitAnimTree`
+/// (rule 3 before rule 4).
+#[test]
+fn an_owner_in_a_state_is_refused_before_any_write() {
+    for (class, state) in [("WillowGame.ToyEnemyPawn", "Anything"), ("WillowGame.ToyStatePawn", "Toying")] {
+        let (mut x, _dir) = owner_fx(OwnerShape::Good);
+        let owner = owner_of(&mut x, class, true);
+        let s = x.vm.space.names.intern(state);
+        let c = x.vm.space.heap.get(owner).unwrap().class;
+        if state == "Toying" {
+            let f = x.vm.find_loaded_method(c, EVENT, Some(s)).unwrap().expect("the state's own function");
+            assert!(x.vm.function(f).unwrap().path.as_str().contains("Toying"), "reached by the state");
+        }
+        x.vm.space.heap.get_mut(owner).unwrap().state = Some(s);
+        let t = diamond(&mut x);
+        let comp = x.component();
+        x.set(comp, "Owner", Value::Object(Some(owner)));
+        event_refused(refused_clean(&mut x, comp, t.root), IN_STATE);
+    }
+}
+
+/// Test 16: an unloaded `BodyClass` is #543's refusal, before any write.
+#[test]
+fn an_unloaded_body_class_is_the_lookup_refusal() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+    let path = ObjectPath::parse("GD_ToyBodies.Holder").unwrap();
+    let holder = x.vm.defs.find(&mut x.vm.space, &path).unwrap().unwrap();
+    let cold = object_of(&x.get(holder, "Body")).unwrap();
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, cold));
+    let (t, _aim, comp) = player_tree(&mut x);
+    x.set(owner, "BodyClass", Value::Object(Some(cold)));
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    let n = not_yet(refused_clean(&mut x, comp, t.root));
+    assert_eq!((&*n.what, n.missing), (ANIM_NODES, Missing::LayerAbsent(ANIM_LAYER)));
+}
+
+/// Test 18: a `NotYet` the event's run raises after the copy's writes (an invented body reaching an invented native
+/// that answers `NotYet`, standing for an unread one) is marked "stopped after partial writes: " once, its kind and
+/// record kept. (An unbound native inside the run is `VmError::UnboundNative`, which passes unchanged.)
+#[test]
+fn a_not_yet_in_the_event_s_run_is_marked_after_partial_writes() {
+    let (mut x, _dir) = owner_fx(OwnerShape::UnreadNative);
+    let unread = |_c: &mut ow_vm::api::NativeCall<'_>| -> Result<Value, VmError> {
+        Err(ow_core::NotYet::not_read("Actor.ToyUnread (invented)", "a toy record").into())
+    };
+    x.vm.register_native("Actor.ToyUnread()", Rc::new(unread)).unwrap();
+    let owner = owner_of(&mut x, "Engine.ToyActorOnly", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    let (_, f) = plan(&x.vm, comp, t.root).unwrap().event.expect("planned");
+    let writes = x.vm.space.heap.committed_writes();
+    let n = not_yet(instance(&mut x.vm, comp, t.root).unwrap_err());
+    assert!(x.vm.space.heap.committed_writes() > writes, "after the copy's writes");
+    let prefix = "stopped after partial writes: ";
+    assert!(n.what.starts_with(prefix) && n.what.matches(prefix).count() == 1, "{}", n.what);
+    assert_eq!(&n.what[prefix.len()..], "Actor.ToyUnread (invented)");
+    assert_eq!((n.missing, n.record), (Missing::NotRead, "a toy record"), "the kind and record kept");
+    assert!(x.vm.function(f).is_some());
+}
+
+
+/// Test 14: Reference binds neither lookup; Off binds both. A key bound first keeps its binding (a duplicate
+/// registration would be an error).
+#[test]
+fn reference_binds_no_lookup_and_off_keeps_an_existing_binding() {
+    for (mode, bound) in [(ParityMode::Reference, false), (ParityMode::Off, true)] {
+        let mut vm = Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), mode);
+        ow_vm::api::NativePack::register(&crate::world::Pack, &mut vm).unwrap();
+        assert_eq!((vm.has_native(FIND_ANIM_NODE), vm.has_native(FIND_SKEL_CONTROL)), (bound, bound), "{mode:?}");
+    }
+    let mut vm = Vm::new(ObjectSpace::new(), DefStore::new_empty(), Rc::new(AttributeSystem::new_empty()), ParityMode::Off);
+    vm.register_native(FIND_ANIM_NODE, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Int(7)))).unwrap();
+    crate::world::tree_lookup::register(&mut vm).unwrap();
+    assert!(vm.has_native(FIND_SKEL_CONTROL));
 }

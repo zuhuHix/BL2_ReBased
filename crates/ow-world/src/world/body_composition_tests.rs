@@ -1205,16 +1205,14 @@ fn with_the_copy_check_on_the_copy_refuses_before_the_lookups() {
 /// #618, item 3), so the attach's planned copy is the lookups' input, as in production.
 fn with_copy<T>(f: impl FnOnce() -> T) -> T {
     crate::world::anim_tree_copy::skip_attach_check_for_tests(false);
-    crate::world::anim_tree_copy::answer_init_steps_for_tests(true);
     let out = f();
-    crate::world::anim_tree_copy::answer_init_steps_for_tests(false);
     crate::world::anim_tree_copy::skip_attach_check_for_tests(true);
     out
 }
 
 /// The attach's planned copy of `skel`'s tree, with the copy's check on.
 fn planned(e: &Env, skel: ObjRef) -> Option<crate::world::anim_tree_copy::Plan> {
-    with_copy(|| crate::world::anim_tree_copy::attach_plan(&e.vm, skel).unwrap())
+    with_copy(|| crate::world::anim_tree_copy::attach_plan(&e.vm, skel, None).unwrap())
 }
 
 /// Review r1 of #618, item 3: with the copy's check on, a tree the copy can plan (a root with no children, its parent

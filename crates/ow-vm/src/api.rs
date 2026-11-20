@@ -973,6 +973,14 @@ impl Vm {
         crate::interp::is_child(self, class, iface).map(Some)
     }
 
+    /// Whether `class` is `want` or a child of it, with the stand-in check `DynamicCast` applies: through an
+    /// engine-native stand-in class a "no" is `NotYet` (`interp::is_child`). Read only, for a preflight that plans a
+    /// cast to a class that is not an interface (lane IMPL-TREE-INIT-OWNER-EVENT); for an interface class the cast
+    /// also asks [`Vm::implements_checked`].
+    pub fn is_child_checked(&self, class: ClassId, want: ClassId) -> Result<bool, VmError> {
+        crate::interp::is_child(self, class, want)
+    }
+
     /// Binds `class`'s own `QueryInterface` answer (an [`InterfaceRuleFn`]); its subclasses use it too unless one has
     /// its own. A class registered twice is refused, like a native key.
     pub fn register_interface_rule(&mut self, class: ClassId, f: InterfaceRuleFn) -> Result<(), VmError> {
@@ -1230,7 +1238,7 @@ impl Vm {
     /// changing anything: the same argument binding, and for a script function the same entry checks
     /// (`interp::check_entry`, shared with the call). Lane FIX-RUN-BEHAVIORS, review r2 of #439: a walk checks
     /// every call before it makes the first.
-    pub fn check_call(&mut self, f: FuncId, args: Vec<Value>) -> Result<(), VmError> {
+    pub fn check_call(&self, f: FuncId, args: Vec<Value>) -> Result<(), VmError> {
         let bound = self.bind_args(f, args)?;
         crate::interp::check_entry(self, f, &bound)
     }
