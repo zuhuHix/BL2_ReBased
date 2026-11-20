@@ -35,7 +35,7 @@
 //!   goes on the end of the array as it stands after that evaluation. Reads give the entry's `Value` / `BaseValue`;
 //!   the chain's previous value is ignored. The writes are [`add`], [`remove`] and [`set_base`] on
 //!   [`Storage::Noun`], with the recompute of section 5 and no change notification.
-//! - **The providers' arrays** (note section 10, lane IMPL-NOUN-REPLICATION, decision 2026-11-19-NNN, coded from
+//! - **The providers' arrays** (note section 10, lane IMPL-NOUN-REPLICATION, decision 2026-11-19-212, coded from
 //!   section 10 alone; analyst lane ANALYST-NOUN-REPLICATION, not this thread). The classes read, each by its exact
 //!   class path: `WillowPawn`, `WillowAIPawn`, `WillowPlayerPawn` and `WillowPlayerReplicationInfo` hand over
 //!   `NounState` on authority (`Role` 3) and `ReplicatedNouns` always (20 slots, `NumReplicatedNouns`, the change call

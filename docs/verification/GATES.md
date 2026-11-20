@@ -9,7 +9,7 @@ ow-world -p ow-cli --locked -j 4` 1,092 passed / 0 failed / 10 ignored; `cargo t
 passed / 0 failed / 46 ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release build, under
 the machine lock): 1 ok / 3 NotYet / 10 errors. Link 9 passes `spawn` and stops in `cast` at the unbound
 `FlagExpressionEvaluator.Evaluate(object)` (1 of 2 steps). ctest and verify_packages not run (no C++ change). No
-real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under ignored `local/analysis/nounrep-impl/`.
+real-game run; `UNVERIFIED` in game. Decision 2026-11-19-212; logs under ignored `local/analysis/nounrep-impl/`.
 Rebased onto #518's counters (squash cf9cfd31 on main 3ad58b0, desktop): `cargo test -p ow-attr -p ow-inventory` 537
 passed / 0 failed / 1 ignored; `cargo test --workspace -j 2` 2,682 passed / 0 failed / 48 ignored; clippy clean on both
 crates; installed Off `--slice-gate` strict 2 ok / 9 NotYet / 3 errors, link 9 still 1 of 2 steps, `cast` stopping at
