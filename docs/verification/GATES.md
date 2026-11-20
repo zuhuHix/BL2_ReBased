@@ -2,6 +2,11 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**ANALYST-UNLOCKPLAYERCLASSACHIEVEMENT (2026-11-20, pc-hummer, docs only, on docs/native-unlock-class-achievement from
+main 9c28c68c):** AI-assisted (Claude Code, Opus 5.5). NATIVE_UNLOCK_CLASS_ACHIEVEMENT.md, link 9's next stop after
+the trace amendment. No code changed, so no measured number moved; the slice gate was not run for this lane.
+UNVERIFIED in game.
+
 **LINK9-RESOLVER-PRELOAD (2026-11-20, pc-hummer, on fix/rust-link9-resolver-preload from #644 905f3ece):** AI-assisted
 (Claude Code, Opus 5.5). Link 9's set-up preloads the phaselock attribute's context resolver, a labelled UNVERIFIED
 stand-in. `cargo test --workspace`: 3201 passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off
