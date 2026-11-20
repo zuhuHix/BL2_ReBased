@@ -526,6 +526,9 @@ impl NativePack for Pack {
             // Actor/Pawn/NavigationPoint.GetBoundingCylinder (NATIVE_GET_BOUNDING_CYLINDER.md; lane
             // IMPL-GET-BOUNDING-CYLINDER, decision 2026-11-19-203). The C++ binds none, so Reference keeps the stub (R3).
             bounding_cylinder::register(vm)?;
+            // SkeletalMeshComponent.SetSkeletalMesh (NATIVE_SET_SKELETAL_MESH.md, UNVERIFIED; lane
+            // IMPL-SET-SKELETAL-MESH): the same mesh does nothing; a change is LayerAbsent, before any write.
+            skeletal_mesh::register(vm)?;
         }
         Ok(())
     }
@@ -624,6 +627,9 @@ pub mod online;
 
 /// `UpdateURL`, `SaveConfig` and `UpdateInputContext` after the login check (lane IMPL-LINK1-AFTER-LOGIN).
 pub mod after_login;
+
+/// `SkeletalMeshComponent.SetSkeletalMesh` (lane IMPL-SET-SKELETAL-MESH, NATIVE_SET_SKELETAL_MESH.md).
+pub mod skeletal_mesh;
 
 /// The player pawn data manager natives (lane FIX-PAWN-DATA-B, NATIVE_PAWN_DATA.md).
 pub mod class_route;
