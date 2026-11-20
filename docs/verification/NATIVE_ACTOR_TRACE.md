@@ -140,7 +140,8 @@ service covers the level's BSP only.
    - **missing bounds** (`actor_bounds` None) is **T5**, a layer-absent refusal, "Actor.Trace: the colliding
      components' bounds", layer "component bounds (the headless world has none)" (the pickup targeting's layer text);
    - **bounds known to be disjoint** from the swept box (the segment's box grown by `Extent`): the primitive cannot be
-     hit, and it is left out **without reading any filter field**;
+     hit, and it is left out **without reading any filter field** (for `CollideActors` and the owner's
+     `bCollideActors`, replaced by section 5, which reads them first);
    - **bounds that meet the swept box:** **T7**, a not-read refusal naming the first unread rule that would have to
      decide it: the terrain handling (`trace_filter::TERRAIN_HANDLING`) for a terrain owner, then the owner filters
      with a source actor, then the collision hash's admission (`trace_filter::HASH_ADMISSION`). The walk does not try
@@ -175,7 +176,8 @@ that answers what the test sets:
 3. a primitive whose bounds meet the swept box: T7; the source actor's own primitives never refuse;
 4. `bTraceActors` false: the walk still runs from the flag word, so a meeting primitive still gives T7 (no false
    miss);
-5. a primitive with **known-disjoint bounds and unloaded filter fields**: left out, so the answer is the miss;
+5. a primitive with **known-disjoint bounds and unloaded filter fields**: left out, so the answer is the miss (with
+   section 5, the two collide flags are read and set on it; the other filter fields stay unloaded);
 6. outcome order: missing bounds gives T5; a meeting primitive gives T7; `Sweep::Unsupported` gives its not-read
    refusal;
 7. omitted `TraceStart` (from `Location`), `bTraceActors` (from `bCollideActors`) and `Extent` (zero, a point sweep);
@@ -214,6 +216,82 @@ So **under the probe's stand-ins**, link 9's next stop is `Actor.AttachComponent
 stand-ins the stop would be earlier. Note too that the probe's trace stand-in answered a plain miss, which section 3's
 answer gives only when every primitive is known to be clear.
 
+## 5. Primitives no query meets (amendment, 2026-11-20)
+
+AI-assisted (Claude Code, Claude Opus 5.5), lane LINK9-NEXT-STOP-2, analyst only. Its author wrote this note and
+NATIVE_SPAWN_TRACE_FILTER.md, so a different lane implements it. **UNVERIFIED** in the running game.
+
+**The stop it answers.** On a local throwaway merge, never pushed, of main b9dfca8b with #650, #655 and #616's own
+commits (installed Off `--slice-gate`, strict), link 9's `cast` stops at T5, "Actor.Trace: the colliding components'
+bounds". A probe line named the primitive: the `CylinderComponent` of Maya's `WillowPlayerController`, which has
+`bAttached` clear, `CollideActors` clear, and an owner whose `bCollideActors` is clear. #643's bounds work does not
+change this. It covers `GetBoundingCylinder` and the attach record, not the collision service's `actor_bounds`, which
+link 9's `NoLevel` world cannot answer.
+
+**The rule it rests on.** NATIVE_SPAWN_TRACE_FILTER.md section 5: a primitive enters the world's collision hash, when
+it is attached, only if the per-component test of its section 2 passes. That test needs the primitive's
+`CollideActors` set, and no owner or an owner whose `bCollideActors` is set. Its section 6 records this same cylinder,
+for the spawn's traces. Section 3 adds that each walker test only rejects, so a primitive that any one of them rejects
+is passed over, whatever the order.
+
+**What is inferred, and UNVERIFIED in its own right.** Applying that rule to `Actor.Trace` rests on two things that
+were not read:
+- that Trace's single-line check walks the same collision hash, with the same per-component test, as the spawn's
+  walkers;
+- that clearing the flags takes a primitive out of the hash. Removal from the hash was not read. A primitive attached
+  while colliding, then given `SetCollision(false)`, may still be in it.
+
+Link 9's cylinder is safe either way: it was never attached (`bAttached` clear), so it never entered the hash. The
+inference is open question 4.
+
+**Proposed change to section 3.3, step 2** (for a separate implementer; UNVERIFIED). It **replaces** that step's
+clause "left out **without reading any filter field**", and test 5's "unloaded filter fields", for these two flags
+only:
+1. **Residency first, as now:** the primitive and its owner (`trace_filter::owner_of`'s) must be resident (T1, naming
+   the object).
+2. **The terrain exception, kept** (NATIVE_SPAWN_TRACE_FILTER.md section 7, step 3): when the walked actor or the owner
+   is a terrain actor, the skip below is not applied, and the primitive goes on to the bounds. With meeting bounds that
+   is T7 naming `trace_filter::TERRAIN_HANDLING`, as now.
+3. **The skip:** otherwise read:
+   - the live primitive's `CollideActors`;
+   - the live owner's `bCollideActors`.
+
+   If either is clear, the primitive is left out: no bounds are asked and nothing more is read. This is the hash
+   admission's necessary condition, not the whole admission.
+4. **Both set:** the walk goes on as now. Missing bounds give T5, disjoint bounds leave it out, and meeting bounds give
+   T7.
+
+Also:
+- **The fields' shapes:** a class that declares either flag as something other than a bool, or does not declare it,
+  is a `VmError::Script` naming the class.
+- **Not read by this walk:** `bAttached` (NATIVE_SPAWN_TRACE_FILTER.md leaves a clear `bAttached` unread on its own),
+  and `BulletListener`, the skip flag. A primitive with that bit set still reaches the bounds and gives T5 or T7: the
+  cautious side.
+- **Purity:** the change is read-only. It writes, loads, draws and interns nothing.
+
+**The existing fixtures.** `actor_trace_tests.rs` declares only `Owner` on its toy component class. It must declare
+both flags and set them on every obstacle, so that test 5, T5 and T7 still reach their cases.
+
+**Tests** (synthetic, `package()` / `tag()`, every value invented; each refusal with #518's three counters and the
+name table's length unchanged):
+1. a primitive with `CollideActors` clear and no bounds in the service: left out, so the trace is a miss (it was T5);
+2. the owner's `bCollideActors` clear and the primitive's set: left out;
+3. **order (a):** flags clear and bounds that **meet** the swept box: a miss, not T7;
+4. **order (b):** `CollideActors` clear with an unresident stand-in owner: T1 naming the owner, so residency comes first;
+5. **terrain:** a terrain actor's primitive, flags clear, bounds that meet the trace: T7 naming `TERRAIN_HANDLING`;
+6. both set and no bounds: T5 as before;
+7. both set and bounds meeting the swept box: T7 as before;
+8. a class declaring `CollideActors` as an int: `VmError::Script`.
+
+**What the probe saw past it** (the same throwaway, with the skip stood in locally, without the terrain exception,
+never pushed): ok 4, notyet 9, error 1 of 14. Link 9 still passes 1 of 2 steps.
+- `Actor.Trace` answers a miss.
+- The light's `Actor.AttachComponent` (#623) runs.
+- `cast` stops with an **error** at the unbound native
+  `WillowPlayerController.UnlockPlayerClassAchievementIfConditionsMet(byte,int,bool,bool)`. Main holds no record or
+  binding for it. It is not NATIVE_UNLOCK_ACHIEVEMENT_IF_CONDITIONS_MET.md's `UnlockAchievementIfConditionsMet`, so it
+  needs its own reading.
+
 ## Open questions
 
 1. **Not read:**
@@ -222,10 +300,13 @@ answer gives only when every primitive is known to be clear.
    - the source virtual for classes other than `WillowAIPawn`;
    - the `HitInfo` fill;
    - the bullet listeners.
-2. **The headless world:** `NoLevel` holds no bounds, so T5 stops link 9 whenever another live actor has a
-   primitive. Whether the link 9 world has one was not checked.
+2. **The headless world:** `NoLevel` holds no bounds, so T5 stops link 9 at a primitive that passes section 5's
+   test. Link 9 has none so far: the controller's cylinder fails it.
 3. **UNVERIFIED:** that the blocking bit's effect is the swap in section 1. The bit names are `trace_filter.rs`'s,
    which NATIVE_SPAWN_PLACEMENT.md section 7 recorded.
+4. **UNVERIFIED (section 5's inference):** that Trace's single-line check walks the same collision hash with the
+   same per-component test as the spawn's walkers, and that clearing the flags removes a primitive from the hash
+   (removal was not read).
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
