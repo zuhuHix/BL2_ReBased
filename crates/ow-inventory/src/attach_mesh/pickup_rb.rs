@@ -238,7 +238,7 @@ fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithCompon
     // 4.3. The deferred reattach, with CollideActors clear (refusals 3 and 4); its fields only then.
     let reattach = !flag(vm, c, "CollideActors")?;
     if reattach {
-        schemas(vm, c, &[("Owner", Want::Object), ("Scene", Want::Struct), ("bNeedsReattach", Want::Bool)], WHAT)?;
+        schemas(vm, c, &[("Owner", Want::Object), ("bNeedsReattach", Want::Bool)], WHAT)?;
         match object_of(&required(vm, c, "Owner", WHAT)?, WHAT)? {
             Some(owner) => {
                 if (flag(vm, owner, "bStatic")? || flag(vm, owner, "bTickIsDisabled")?) && !flag(vm, owner, "bDeleteMe")? {
@@ -246,6 +246,8 @@ fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithCompon
                 }
             }
             None => {
+                // Only the ownerless path reads Scene (#625 r2, item 2).
+                schemas(vm, c, &[("Scene", Want::Struct)], WHAT)?;
                 if !is_zero(&required(vm, c, "Scene", WHAT)?, WHAT)? {
                     return Err(NotYet::not_read(REATTACH_SCENE, RECORD).into());
                 }
@@ -269,7 +271,10 @@ fn component_checks(vm: &mut Vm, pickup: ObjRef, c: ObjRef) -> Result<WithCompon
     let Some(asset) = object_of(&required(vm, definition, "PhysicsAsset", WHAT)?, WHAT)? else {
         return Err(no_asset());
     };
-    // 4.5. The declarations of G's fields this path copies or reads, before its first write (#625 r1).
+    // 4.5. The declarations of the asset path's own write (an exact float: a FloatAttribute also holds a float value
+    // and would pass the heap's check, #625 r2 item 1) and of G's fields this path copies or reads, before its first
+    // write (#625 r1).
+    schemas(vm, c, &[("PhysicsWeight", Want::Float)], WHAT)?;
     schemas(vm, g, &IMPACT_FIELDS, WHAT)?;
     Ok(WithComponent { c, g, reattach, asset })
 }
@@ -289,6 +294,8 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Option<Vec<Step>>, VmError> 
     };
     // 3. The pickup's fields of steps 1, 2, 5, 6 and 7, and the timer service.
     schemas(vm, pickup, &PICKUP_FIELDS, WHAT)?;
+    // An exact float, not a FloatAttribute, which also holds a float value (#625 r2, item 1).
+    schemas(vm, pickup, &[("MaxRBAwakeTime", Want::Float)], WHAT)?;
     let awake_time = float_of(&required(vm, pickup, "MaxRBAwakeTime", WHAT)?, "MaxRBAwakeTime")?;
     let mode = enum_value(vm, pickup, "Physics", "PHYS_RigidBody")?;
     ow_world::timers::timers_of(vm)?;

@@ -20,6 +20,13 @@ four range fields' declarations is checked too. The preflight still plans every 
 malformed declaration there is a data error (`VmError::Script`) with nothing written. A refusal path that never reads
 those fields still refuses with its own `NotYet`. `schemas` gains a float kind (`Want::Float`).
 
+Review r2 of #625 restored two exact checks and moved a third:
+- **`MaxRBAwakeTime`**, after the `bUseRBPhysics` guard, and **`PhysicsWeight`**, inside the asset path, are checked
+  as exact floats again. A plain `FloatAttribute` declaration also holds a float value, so the value read and the
+  heap's write check would accept it.
+- **`Scene`** is checked only in the ownerless arm of the reattach, the only path that reads it. An owned mesh needs
+  `Owner` and `bNeedsReattach` alone.
+
 **2. No lookup in the globals' reference checks** (`crates/ow-inventory/src/globals.rs`). `declared_reference` used
 to call `Vm::find_class` before checking the declaration. A lookup can load, and a load is a write in an Off
 preflight. It now checks the declaration first, then compares the declared class with the wanted one (`class_named`).
@@ -41,14 +48,20 @@ change. Both now take `&Vm`. Callers are unchanged: `globals_schemas` and the eq
 - `the_declared_reference_check_looks_nothing_up` asserts the three counters and the name table's length after
   **each** call. It also checks that `GearboxFramework:GearboxGlobalsDefinition` matches the class stored with a dot.
 - `a_declared_only_target_stays_cold` compares a reference declared to a class nothing looks up. The class's layout
-  and code stay as cold as they were, and neither the counters nor the name table's length moves.
+  starts undefined and its code cold, and the matching check must succeed. Afterwards both are still cold, and
+  neither the counters nor the name table's length has moved.
+- `a_float_attribute_declaration_is_not_a_float` covers `MaxRBAwakeTime` and `PhysicsWeight`.
+  `the_owned_reattach_reads_no_scene` covers the owned path (r2).
 
 **Fixture changes (rule 9):**
 - `ToyBadPrimitive`, a primitive that shadows `BlockActors` as an int;
 - `ToyBadImpactGlobalsDefinition`, a globals definition that shadows `DropImpactEffectDelay` as an int;
-- `ToyColdTarget` and `ToyColdHolder`.
+- `ToyColdTarget` and `ToyColdHolder`;
+- `ToyOwnedMesh`, an owned mesh with no `Scene`;
+- `ToyAttrWeightMesh` and `ToyAttrAwakePickup`, which shadow `PhysicsWeight` and `MaxRBAwakeTime` as plain
+  `FloatAttribute`s (r2).
 
-All of them are invented. The first round's `ToyOwnedMesh` and `ToyPrimitive` are gone with the tests that used them.
+All of them are invented.
 
 **Verified (host only):** the test counts are in the GATES row. **Not verified:** anything in the running game. The
 installed classes declare every field checked here. That the checks never refuse real slice data is shown only by

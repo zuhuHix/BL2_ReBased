@@ -394,16 +394,11 @@ fn a_declared_only_target_stays_cold() {
     let holder = ow_vm::interp::instantiate_from_defaults(&mut x.vm, holder_class).unwrap();
     let target = x.vm.space.classes.by_path("WillowGame.ToyColdTarget").expect("declared by the store");
     let cold = |vm: &Vm| (vm.space.classes.get_layout(target).is_some_and(|l| l.is_defined()), vm.class_code_loaded(target));
-    let before = cold(&x.vm);
-    assert!(!before.1, "the target's code starts cold");
+    assert_eq!(cold(&x.vm), (false, false), "the target's layout starts undefined and its code cold");
     let marks = |vm: &Vm| (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len());
     let start = marks(&x.vm);
-    let r = declared_reference(&x.vm, holder, "Target", Some("WillowGame.ToyColdTarget"), "test");
-    match &r {
-        Ok(()) => {}
-        Err(VmError::NotYet(n)) => assert!(n.what.contains("not loaded"), "{n}"),
-        Err(e) => panic!("{e}"),
-    }
-    assert_eq!(marks(&x.vm), start, "nothing moved: {r:?}");
-    assert_eq!(cold(&x.vm), before, "layout and code stay cold");
+    declared_reference(&x.vm, holder, "Target", Some("WillowGame.ToyColdTarget"), "test")
+        .expect("the declared class is the wanted one");
+    assert_eq!(marks(&x.vm), start, "nothing moved");
+    assert_eq!(cold(&x.vm), (false, false), "layout and code stay cold");
 }

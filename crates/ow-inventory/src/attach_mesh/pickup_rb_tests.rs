@@ -27,7 +27,8 @@ const NATIVE: u32 = 0x400 | 0x20000;
 static NEXT: AtomicU32 = AtomicU32::new(0);
 const RB_FN: &str = "WillowGame.WillowPickup.InitializePickupForRBPhysics";
 
-const IMPORTS: [&str; 10] = [
+const IMPORTS: [&str; 11] = [
+    "FloatAttributeProperty",
     "Class",
     "Function",
     "ScriptStruct",
@@ -111,6 +112,14 @@ fn engine() -> Vec<u8> {
     t.prop("Struct", toy_mesh, "Scene", 0, pointer);
     t.prop("Object", toy_mesh, "Owner", 0, actor);
     t.prop("Bool", toy_mesh, "bNeedsReattach", 0, 0);
+    // An owned mesh with the reattach's owner fields and no Scene, which only the ownerless path reads (#625 r2,
+    // item 2).
+    let owned = t.class("ToyOwnedMesh", mesh);
+    t.prop("Object", owned, "Owner", 0, actor);
+    t.prop("Bool", owned, "bNeedsReattach", 0, 0);
+    // A mesh whose PhysicsWeight is a plain FloatAttribute, shadowing the parent's float (#625 r2, item 1).
+    let attr_mesh = t.class("ToyAttrWeightMesh", toy_mesh);
+    t.prop("FloatAttribute", attr_mesh, "PhysicsWeight", ow_object::layout::PropertyDecl::PLAIN_ATTRIBUTE, 0);
     // A plain primitive whose `BlockActors` is declared an int, shadowing the parent's bool (#625 r1, item 2).
     let bad_primitive = t.class("ToyBadPrimitive", primitive);
     t.prop("Int", bad_primitive, "BlockActors", 0, 0);
@@ -166,6 +175,9 @@ fn willow_game() -> Vec<u8> {
     t.prop("Int", pickup, "MaxImpactEffectPlayCount", 0, 0);
     t.prop("Float", pickup, "ImpactEffectDelay", 0, 0);
     t.prop("Object", pickup, "ImpactVelocityAkRtpc", 0, object);
+    // A pickup whose MaxRBAwakeTime is a plain FloatAttribute, shadowing the parent's float (#625 r2, item 1).
+    let attr_pickup = t.class("ToyAttrAwakePickup", pickup);
+    t.prop("FloatAttribute", attr_pickup, "MaxRBAwakeTime", ow_object::layout::PropertyDecl::PLAIN_ATTRIBUTE, 0);
     let spec = FunctionSpec::new(NATIVE, "InitializePickupForRBPhysics");
     t.function(pickup, "InitializePickupForRBPhysics", &[], None, &[], &spec, |_| None);
     let globals = t.class("WillowGlobals", object);
@@ -705,4 +717,41 @@ fn a_malformed_declaration_on_the_chosen_path_refuses_before_any_write() {
     x.set(x.pickup, "CollisionComponent", Value::Object(Some(primitive)));
     x.mesh = primitive;
     refused(&mut x, Missing::NotRead, NO_ASSET, RECORD_RB);
+}
+
+/// #625 r2, item 1: `MaxRBAwakeTime` and the asset path's `PhysicsWeight` must be declared exact floats. A plain
+/// `FloatAttribute` also holds a float value, so only the declaration check refuses it, before any write.
+#[test]
+fn a_float_attribute_declaration_is_not_a_float() {
+    // The pickup's awake time, on the path with no primitive.
+    let mut x = fx();
+    let other = x.obj("WillowGame.ToyAttrAwakePickup");
+    x.set(other, "bUseRBPhysics", Value::Bool(true));
+    x.pickup = other;
+    let message = refused_script(&mut x);
+    assert!(message.contains("MaxRBAwakeTime"), "{message}");
+    // The asset path's PhysicsWeight.
+    let mut x = fx();
+    let mesh = x.obj("Engine.ToyAttrWeightMesh");
+    let pickup = x.pickup;
+    x.set(mesh, "Owner", Value::Object(Some(pickup)));
+    x.set(x.pickup, "CollisionComponent", Value::Object(Some(mesh)));
+    x.mesh = mesh;
+    let message = refused_script(&mut x);
+    assert!(message.contains("PhysicsWeight"), "{message}");
+}
+
+/// #625 r2, item 2: an owned mesh with `CollideActors` clear and an owner that needs no update runs the reattach
+/// without a `Scene` declaration, which only the ownerless path reads.
+#[test]
+fn the_owned_reattach_reads_no_scene() {
+    let mut x = fx();
+    let owned = x.obj("Engine.ToyOwnedMesh");
+    let pickup = x.pickup;
+    x.set(owned, "Owner", Value::Object(Some(pickup)));
+    x.set(x.pickup, "CollisionComponent", Value::Object(Some(owned)));
+    x.mesh = owned;
+    x.call().expect("the owned path reads no Scene");
+    assert_eq!(x.get(owned, "bNeedsReattach"), Value::Bool(true));
+    assert_eq!(x.get(owned, "CollideActors"), Value::Bool(true));
 }

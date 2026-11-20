@@ -50,20 +50,14 @@ machine lock: 4 ok / 10 NotYet / 0 errors without stand-ins (link 8 at `BuildCom
 `make`, passes both mesh changes in `init` and stops at the unbound `PrimitiveComponent.SetScale(float)`). No real-game run;
 `UNVERIFIED` in game. Decision 2026-11-19-242; raw output under ignored `local/analysis/smmc/`.
 
-**FOLLOWUP-PICKUP-RB-VALIDATION (2026-11-20, zuhu desktop, on main b0d9ca08):** AI-assisted (Claude Code, Opus 5.5).
-`InitializePickupForRBPhysics` checks every declaration it reads before its branches, and the globals' reference
-checks compare the declared class by its path with no lookup (no load). `cargo test --workspace -j 2` 2,874 passed /
-0 failed / 50 ignored; clippy on `ow-inventory` adds no warning. Installed Off `--slice-gate` strict (release build,
-under the machine lock): 3 ok / 9 NotYet / 2 errors. Links 6 and 7 pass the native (0 of 1 driver step, `make`) and
-stop later, at "stopped after partial writes: ParticleSystemComponent.ActivateSystem", so the new checks refuse
-nothing on the installed data (the base was not rerun). ctest and verify_packages not run (no C++ change). No
-real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
 **FOLLOWUP-PICKUP-RB-VALIDATION r1 (2026-11-20, zuhu desktop, on main b0d9ca08, #625):** AI-assisted (Claude Code,
 Opus 5.5). Under the hub's ruling, `InitializePickupForRBPhysics` checks only the chosen path's declarations again
 (#587's branch-scoped checks and tests restored). It also checks G's four impact fields, and on the spin branch its
 range fields, before that path's first write. The globals' reference checks compare the declared class through the
 class table's read-only `by_path`, by id, with no load.
-- `cargo test --workspace -j 2`: 2,876 passed / 0 failed / 50 ignored.
+- `cargo test --workspace -j 2`: 2,876 passed / 0 failed / 50 ignored. With r2's fixes (exact float checks for
+  `MaxRBAwakeTime` and `PhysicsWeight`, `Scene` only on the ownerless reattach): 2,878 / 0 / 50, and the slice gate
+  below is unchanged.
 - Clippy on `ow-inventory`: no new warning.
 - Installed Off `--slice-gate` strict (release build, under the machine lock): 3 ok / 9 NotYet / 2 errors. Links 6 and
   7 pass the native (`make`) and stop at "stopped after partial writes: ParticleSystemComponent.ActivateSystem", as
