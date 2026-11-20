@@ -1,6 +1,6 @@
 # Native rules of WillowLeviathanService.RecordMissionObjectiveChangedEventForPlayer (draft, 2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK12 (decision 2026-11-19-NNN, number pending). Analyst
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-LINK12 (decision 2026-11-19-142, number pending). Analyst
 only: a different lane implements it (clean room).
 
 **Sources:**
