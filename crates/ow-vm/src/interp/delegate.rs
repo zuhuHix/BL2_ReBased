@@ -606,7 +606,10 @@ mod tests {
         let mut r = toy.run(ParityMode::Off);
         let class = |r: &mut Run, p: &str| r.vm.find_class(p).unwrap();
         let (impl_, thing, plain) = (class(&mut r, "Core.Impl"), class(&mut r, "Core.IThing"), class(&mut r, "Core.Plain"));
-        let counts = |vm: &crate::api::Vm| (vm.space.heap.committed_writes(), vm.defs.load_transitions(), vm.space.classes.len());
+        let counts = |vm: &crate::api::Vm| {
+            let (writes, loads, draws) = (vm.space.heap.committed_writes(), vm.defs.load_transitions(), vm.rng.draws());
+            (writes, loads, draws, vm.space.classes.len(), vm.space.names.len())
+        };
         let before = counts(&r.vm);
         assert_eq!(r.vm.implements_read_only(impl_, thing).unwrap(), None, "cold: would need a load");
         assert_eq!(r.vm.implements_read_only(impl_, thing).unwrap(), None, "still cold");

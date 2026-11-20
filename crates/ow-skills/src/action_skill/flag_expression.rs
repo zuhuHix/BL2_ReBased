@@ -33,7 +33,12 @@
 //! - `IFlagProvider` before a reached definition is loaded, when the definition may still need a store: it is a
 //!   handle not loaded yet (its fields are unknown), or it has a `ValueResolver` (both read resolvers ask a store) or
 //!   an `EvaluationExpression` (a nested evaluator may ask either interface; the port's conservative choice);
-//! - both before a receiver handle is loaded, since its chain is unknown until then.
+//! - both before a receiver handle is loaded, since its chain is unknown until then;
+//! - `IFlagProvider` before the chain's first side effect (`provider_first`, lane FIX-FLAG-PROVIDER-ORDER and review r1
+//!   of #630): the chain is read as the loop will reach it, following early exits on answers proven with nothing run,
+//!   up to the first conditional whose answer is not proven. That one is required to have the interface when it may
+//!   need a store, and also when it runs a context resolver, since a resolver may set a `ValueResolver` that would
+//!   then ask for a store after its writes (refused up front with [`MUTABLE_PATH`]).
 //!
 //! With no context no interface question is reached (step 4's None context answers false, and `R` is None), so
 //! nothing is required. An empty chain, a short-circuited branch, a None definition and a definition with neither
@@ -405,13 +410,26 @@ pub fn evaluate(vm: &mut Vm, me: Option<ObjRef>, context: Option<ObjRef>) -> Res
     Ok(result)
 }
 
-/// The `IFlagProvider` guard ahead of the chain's first side effect (lane FIX-FLAG-PROVIDER-ORDER, finding 1). A
-/// conditional's context resolvers and loads are writes, so a later conditional's missing-interface refusal, met after
-/// them on an Or (or And) chain, would come after writes. This reads the chain in order, as the loop will reach it,
-/// until the first conditional that refuses with no side effect of its own (a timed test, a type past the tests, or a
-/// loaded definition on the store path): if any conditional before that may still need a store, `IFlagProvider` is
-/// required now. While every answer so far is known (only None definitions, each false), the loop's early exits are
-/// followed too, so a conditional the chain cannot reach asks for nothing (an And stops at its first None definition).
+/// The `IFlagProvider` guard ahead of the chain's first side effect (lane FIX-FLAG-PROVIDER-ORDER, finding 1, and
+/// review r1 of #630). A conditional's context resolvers and loads are writes, so a missing-interface refusal met after
+/// them would come after writes. This reads the chain in order, as the loop will reach it, by reads only:
+/// - while every answer so far is **proven** without running anything, the loop's early exits are followed, so a
+///   conditional the chain cannot reach asks for nothing. Proven answers: a None definition (false), and `IsTrue` on a
+///   loaded definition off the store path with no `ValueResolver`, no `EvaluationExpression` and no context resolver
+///   (false, with nothing run: review r1 of #630, item 1);
+/// - the first conditional whose answer is not proven decides, and the scan ends there. A refusal of its own with no
+///   side effect (a timed test, a type past the tests, a loaded definition on the store path, `IsFalse` with neither
+///   field and no context resolver) is left to the loop. Otherwise it is certainly reached and it writes before it
+///   answers (a load, a store lookup, a nested evaluation or a context resolver), so `IFlagProvider` is required now:
+///   - when it may still need a store itself ([`may_need_store`]);
+///   - when it runs a context resolver (review r1 of #630, item 2): a resolver may set any definition's
+///     `ValueResolver` or `EvaluationExpression`, its own or a later one's, so which stores the rest of the chain asks
+///     for is not known before that write. With `IFlagProvider` not loaded this is `NotYet { NotRead }` before the
+///     first write ([`MUTABLE_PATH`]), not a guarantee made at set-up.
+///
+///   Every later conditional is reached, if at all, only after those writes, and by then `IFlagProvider` is known to
+///   be loaded, so its per-conditional check cannot refuse on the interface.
+///
 /// The rule engine `R` this needs is worked out here (reads only) and kept for the loop. A field this cannot read
 /// leniently is left to the loop, which reports it when the conditional is reached.
 fn provider_first(
@@ -424,45 +442,69 @@ fn provider_first(
     if context.is_none() {
         return Ok(());
     }
-    // The chain's result while it is known (Some: every conditional so far had a None definition).
-    let mut known: Option<bool> = Some(true);
+    let mut result = true;
     for (i, c) in chain.iter().enumerate() {
-        let Some(definition) = c.definition else {
-            if let Some(so_far) = known {
-                let result = if i == 0 {
-                    false
-                } else {
-                    match operator {
-                        0 => so_far,
-                        1 => false,
-                        _ => false,
-                    }
-                };
-                if (operator == 0 && result) || (operator == 1 && !result) {
+        let answer = match c.definition {
+            None => false,
+            Some(definition) => {
+                if c.kind > 1 {
                     return Ok(());
                 }
-                known = Some(result);
+                if engine.is_none() {
+                    *engine = Some(rule_engine(vm, context)?);
+                }
+                let resident = !vm.defs.is_unloaded(&vm.space, definition);
+                if resident && takes_store_path(vm, definition, engine.flatten()).unwrap_or(false) {
+                    return Ok(());
+                }
+                if may_need_store(vm, definition)? {
+                    interface(vm, FLAG_PROVIDER)?;
+                    return Ok(());
+                }
+                // Loaded, with neither field: its context resolvers decide whether anything runs first.
+                let Ok(live) = has_context_resolver(vm, definition) else {
+                    return Ok(());
+                };
+                if live {
+                    if vm.space.classes.by_path(FLAG_PROVIDER).is_none() {
+                        return Err(not_read(MUTABLE_PATH.to_string()));
+                    }
+                    return Ok(());
+                }
+                if c.kind == 1 {
+                    // IsFalse with neither field: the loop's own refusal, with nothing run.
+                    return Ok(());
+                }
+                false
             }
-            continue;
         };
-        known = None;
-        if c.kind > 1 {
-            return Ok(());
-        }
-        if engine.is_none() {
-            *engine = Some(rule_engine(vm, context)?);
-        }
-        if !vm.defs.is_unloaded(&vm.space, definition)
-            && takes_store_path(vm, definition, engine.flatten()).unwrap_or(false)
-        {
-            return Ok(());
-        }
-        if may_need_store(vm, definition)? {
-            interface(vm, FLAG_PROVIDER)?;
+        result = if i == 0 {
+            answer
+        } else {
+            match operator {
+                0 => result || answer,
+                1 => result && answer,
+                _ => false,
+            }
+        };
+        if (operator == 0 && result) || (operator == 1 && !result) {
             return Ok(());
         }
     }
     Ok(())
+}
+
+/// The refusal of [`provider_first`] for a reached context resolver while `IFlagProvider` is not loaded (review r1 of
+/// #630, item 2).
+pub const MUTABLE_PATH: &str = "a context resolver runs before the chain's store needs are known (it may set a \
+     ValueResolver or EvaluationExpression), and the interface class GearboxFramework.IFlagProvider is not loaded (a \
+     load is a write)";
+
+/// Whether a definition's `ContextResolverChain` holds a resolver (a non-None entry), by reads only.
+fn has_context_resolver(vm: &Vm, definition: ObjRef) -> Result<bool, VmError> {
+    let chain = field(vm, definition, "ContextResolverChain")?;
+    let entries = chain.elements().ok_or_else(|| script("ContextResolverChain is not an array".to_string()))?;
+    Ok(entries.iter().any(|v| !matches!(v, Value::Object(None))))
 }
 
 /// Whether a reached definition may still ask for `IFlagProvider` (module documentation), by reads only: a handle not

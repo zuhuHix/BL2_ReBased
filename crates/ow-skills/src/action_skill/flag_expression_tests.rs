@@ -531,7 +531,22 @@ fn an_unloaded_interface_class_is_not_read_before_any_write() {
         let before = WriteCounters::of(&x.vm);
         let r = x.eval(plain, Some(mind));
         if missing.ends_with("IFlagProvider") {
-            assert!(!r.unwrap(), "a definition with neither field is false without a store");
+            // Review r1 of #630, item 2: a reached context resolver may set a ValueResolver, so with IFlagProvider not
+            // loaded the bare definition (one pass-through resolver) is refused before it runs.
+            let text = not_read(r, MUTABLE_PATH);
+            assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+            assert!(!before.moved(&x.vm), "{missing}: the mutable-path refusal is write-free");
+            // Review r1 of #630, item 1: an And whose first conditional is IsTrue on a loaded definition with no
+            // context resolver and neither field is false with nothing run, so the second (a store flag) is never
+            // reached and asks for nothing.
+            let quiet = x.obj("GearboxFramework.FlagDefinition", "Quiet");
+            let and = x.evaluator(&[(0, Some(quiet)), (0, Some(f))], 1);
+            let start = WriteCounters::of(&x.vm);
+            assert!(!x.eval(and, Some(mind)).unwrap(), "the And stops at the proven false");
+            assert!(!start.moved(&x.vm), "nothing ran");
+            // The same definition answering IsFalse is the loop's own refusal, not the provider's.
+            let and = x.evaluator(&[(1, Some(quiet)), (0, Some(f))], 1);
+            not_read(x.eval(and, Some(mind)), "IsFalse with neither an EvaluationExpression nor a ValueResolver");
         } else {
             // The rule engine search asks for IRuleEngineOwner before the definition's load.
             not_read(r, "is not loaded (a load is a write)");
@@ -826,6 +841,35 @@ fn the_provider_refusal_comes_before_an_earlier_conditionals_resolver() {
     // A chain that refuses at its first conditional with no side effect (a timed test) reports that, not the provider.
     let timed = x.evaluator(&[(2, Some(first)), (0, Some(second))], 0);
     not_read(x.eval(timed, Some(pawn)), "the timed flag tests");
+}
+
+/// Review r1 of #630, item 2: on an Or chain, the first conditional's context resolver could set the second
+/// definition's `ValueResolver` (neither definition has one before it runs), so the second's provider check would come
+/// after the resolver's writes. With `IFlagProvider` not loaded the chain is refused before the first write: the
+/// resolver never runs (its cold answer stays cold). With it loaded, the same chain runs and answers false.
+#[test]
+fn a_reached_context_resolver_needs_the_provider_before_it_runs() {
+    let mut x = fx_full(true, Some("GearboxFramework.IFlagProvider"));
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let lazy = x.held("Held");
+    let fixed = x.obj("Toy.FixedContextResolver", "Fixed");
+    FIXED.with(|c| c.set(Some(lazy)));
+    let first = x.definition("First");
+    x.set(first, "ContextResolverChain", Value::array(vec![Value::Object(Some(fixed))]));
+    let second = x.obj("GearboxFramework.FlagDefinition", "Second");
+    let e = x.evaluator(&[(0, Some(first)), (0, Some(second))], 0);
+    let start = WriteCounters::of(&x.vm);
+    let text = not_read(x.eval(e, Some(pawn)), MUTABLE_PATH);
+    assert!(!text.starts_with("stopped after partial writes: "), "{text}");
+    assert!(!start.moved(&x.vm), "no counter moved");
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, lazy), "the resolver never ran");
+
+    let mut x = fx();
+    let pawn = x.obj("Engine.Pawn", "Pawn");
+    let first = x.definition("First");
+    let second = x.obj("GearboxFramework.FlagDefinition", "Second");
+    let e = x.evaluator(&[(0, Some(first)), (0, Some(second))], 0);
+    assert!(!x.eval(e, Some(pawn)).unwrap(), "IFlagProvider loaded: the chain runs, false");
 }
 
 /// Finding 3: a loaded computed definition with a known rule engine and no value resolver reports the rule engine's own

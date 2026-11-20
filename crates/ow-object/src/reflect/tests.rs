@@ -220,11 +220,11 @@ fn implements_follows_the_interface_tables() {
     );
 }
 
-/// The read-only lookup (lane FIX-FLAG-PROVIDER-ORDER, as #602's): a cold entry is named, not resolved, and stays cold
-/// however often it is asked; once `implements` has resolved it, the answers agree.
+/// The read-only lookup (lane IMPL-GEARBOXMIND-QUERYINTERFACE): before set-up an entry is unresolved and named, and
+/// nothing is resolved by asking; after `resolve_interfaces` the answers are `implements`'s.
 #[test]
-fn implements_resolved_leaves_cold_entries_cold() {
-    let tree = Tree::new("implements-resolved-cold");
+fn implements_resolved_reads_only_resolved_entries() {
+    let tree = Tree::new("implements-resolved");
     tree.write("Core.upk", &interface_fixture().0.build());
     let mut store = tree.store();
     let mut index = CodeIndex::new();
@@ -232,14 +232,18 @@ fn implements_resolved_leaves_cold_entries_cold() {
     let thing = key("Core.IThing");
     let child = key("Core.IThingChild");
     let (implementer, derived, plain) = (key("Core.Impl"), key("Core.Derived"), key("Core.Plain"));
-    assert!(index.implements_resolved(derived, thing).is_err(), "a cold entry is not an answer");
-    assert!(index.implements_resolved(derived, thing).is_err(), "asking resolved nothing: still cold");
-    assert_eq!(index.implements_resolved(plain, thing), Ok(false), "no entry: a proven no");
-    assert!(index.implements(&mut store, derived, thing), "the caching lookup resolves it");
-    assert_eq!(index.implements_resolved(derived, thing), Ok(true));
-    assert_eq!(index.implements_resolved(implementer, thing), Ok(true), "the same resolved entry");
-    let want = index.implements(&mut store, implementer, child);
-    assert_eq!(index.implements_resolved(implementer, child), Ok(want));
+    let cold = index.unresolved_interfaces(derived);
+    assert!(cold > 0, "the fixture's entries start unresolved");
+    assert!(index.implements_resolved(derived, thing).is_err(), "an unresolved entry is not an answer");
+    assert_eq!(index.unresolved_interfaces(derived), cold, "asking resolves nothing");
+    assert_eq!(index.resolve_interfaces(&mut store, derived), cold);
+    assert_eq!(index.unresolved_interfaces(derived), 0);
+    assert_eq!(index.resolve_interfaces(&mut store, derived), 0, "nothing left to resolve");
+    for (class, iface) in [(implementer, thing), (derived, thing), (plain, thing), (implementer, child), (derived, child)] {
+        index.resolve_interfaces(&mut store, class);
+        let want = index.implements(&mut store, class, iface);
+        assert_eq!(index.implements_resolved(class, iface), Ok(want));
+    }
     assert_eq!(index.implements_resolved(implementer, plain), Ok(false), "not an interface class");
 }
 
