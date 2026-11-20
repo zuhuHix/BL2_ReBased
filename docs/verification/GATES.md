@@ -53,7 +53,7 @@ ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED
 under the lock) on a throwaway merge with #500 and #528: ok 1 / NotYet 10 / error 3 of 14. Link 1 runs 0 of 1 step,
 stopped at #543's `LayerAbsent` for the unloaded tree template `AnimTree_Player`. With the tree preloaded (local probe
 only), link 1 stops at the aim-offset refusal. ctest and verify_packages not run (no C++ change). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN.
+`UNVERIFIED` in game. Decision 2026-11-19-172.
 
 **IMPL-BODY-COMPOSITION (2026-11-19, pc-hummer, on fix/rust-init-pawn-meshes 1551f039, #522; note #529 at 87c8b9cd):**
 AI-assisted (Claude Code, Opus 5.5). `InstanceDataHelper.InitializeBodyComposition` in Off for the pawn wrapper: a

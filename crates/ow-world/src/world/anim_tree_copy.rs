@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-COPY-ANIM-TREE (decision 2026-11-19-NNN, number pending). The animation tree's copy
+//! Owner: lane IMPL-COPY-ANIM-TREE (decision 2026-11-19-172, number pending). The animation tree's copy
 //! (`CopyAnimTree`, fresh path) and its initialisation on a skeletal mesh component, in `ParityMode::Off`.
 //! AI-assisted (Claude Code).
 //!
