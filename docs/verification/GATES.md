@@ -54,6 +54,7 @@ success; the layer itself is not built. `cargo build --workspace --locked -j 4` 
 build, under the machine lock): 2 ok / 4 NotYet / 8 errors. Link 8 is `notyet` in `make` at `WillowWeapon.CacheWeaponCard`,
 before either native, so the gate does not reach them (the base was not rerun). ctest and verify_packages not run (no
 C++ change). No real-game run; `UNVERIFIED` in game. Logs under ignored `local/p2/gestalt/`.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

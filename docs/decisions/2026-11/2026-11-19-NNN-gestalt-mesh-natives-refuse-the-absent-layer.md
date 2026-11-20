@@ -18,6 +18,12 @@ ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (#591 at 67170f22). This lane rea
   - no gestalt path, with zero meshes: None;
   - one mesh: that mesh;
   - two or more meshes: `LayerAbsent("a skeletal mesh merge")`.
+
+  A weapon type or part that is a stand-in (slotless, not a store definition) is the defined `NotRead` refusal
+  `STAND_IN`, not a heap error. The two natives treat a stand-in differently on purpose: what `BuildCompositeMesh`
+  reads is a definition, whose fields exist in the packages and are only unread by the port, so it is `NotRead`;
+  what `InitGestaltMeshDataFromOther` reads is a component's `GestaltData`, which no part of the port fills, so it
+  is the layer's `LayerAbsent`.
 - **`InitGestaltMeshDataFromOther`** answers a self-copy with success and no write, even while the layer is absent.
   Otherwise it checks that both `GestaltData` slots are held whole (#591 r1):
   - an object without its slots: the layer's `LayerAbsent`, since a slotless resident object is a stand-in that

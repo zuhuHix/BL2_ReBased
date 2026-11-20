@@ -332,8 +332,8 @@ fn a_part_without_a_read_field_is_a_data_error() {
     assert!(script(build_composite_mesh(&x.vm, None, &data).unwrap_err()).contains("bIsGestaltMode"));
 }
 
-/// Check 4 of the fixed copy note (#591 r1): a loaded stand-in whose slots the store has not filled is `NotRead`, and
-/// a `GestaltData` value of the wrong shape is the layer's `LayerAbsent`; nothing is written either way.
+/// Check 4 of the fixed copy note (#591 r1): a stand-in is the layer's `LayerAbsent`; a loaded definition with unfilled
+/// slots is `NotRead`; a `GestaltData` value of the wrong shape is the layer's `LayerAbsent`. Nothing is written.
 #[test]
 fn the_copy_needs_both_gestalt_slots_held_whole() {
     let mut x = fx();
@@ -367,6 +367,20 @@ fn the_copy_needs_both_gestalt_slots_held_whole() {
     // The self-copy answers before check 4, so even the stand-in succeeds with nothing written.
     init_gestalt_mesh_data(&x.vm, ghost, Some(ghost)).unwrap();
     assert!(x.vm.space.heap.get(ghost).unwrap().slots.is_empty());
+    // A definition, not a stand-in: a loaded store export whose slots were never filled is NOT_DECODED (the store
+    // holds the data), as the receiver and as the argument. The slots are cleared directly (a fixture of that state).
+    assert!(x.vm.defs.is_loaded(&x.vm.space, c2), "c2 is a store definition");
+    x.vm.space.heap.get_mut(c2).unwrap().slots.clear();
+    assert_eq!(not_read(init_gestalt_mesh_data(&x.vm, c1, Some(c2)).unwrap_err()), NOT_DECODED);
+    assert_eq!(not_read(init_gestalt_mesh_data(&x.vm, c2, Some(c1)).unwrap_err()), NOT_DECODED);
+}
+
+/// Runs one refused native call and checks #518's counters (heap writes, draws, load transitions) did not move.
+fn quiet<T: std::fmt::Debug>(vm: &Vm, f: impl FnOnce(&Vm) -> Result<T, VmError>) -> VmError {
+    let mark = crate::equip::card::load_mark(vm);
+    let e = f(vm).unwrap_err();
+    assert_eq!(crate::equip::card::load_mark(vm), mark, "#518's counters moved on a refusal: {e}");
+    e
 }
 
 /// Review r1 of #596, item 5: an unloaded gestalt definition, and an unloaded part on the non-gestalt path, are
@@ -377,20 +391,20 @@ fn unloaded_and_stand_in_definitions_refuse_not_read() {
     let (ty, un_gestalt) = (x.o("ToyType"), x.handle("UnGestalt"));
     x.set(ty, "GestaltMesh", some(un_gestalt));
     let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
-    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), NOT_LOADED);
+    assert_eq!(not_read(quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data))), NOT_LOADED);
     x.set(ty, "GestaltMesh", Value::Object(None));
     let un_part = x.handle("UnPart");
     let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("GripPartDefinition", some(un_part))]);
-    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), NOT_LOADED, "the non-gestalt path");
+    assert_eq!(not_read(quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data))), NOT_LOADED, "the non-gestalt path");
     let part_a = x.o("ToyPartA");
     let part_class = x.vm.space.heap.get(part_a).unwrap().class;
     let ghost = x.vm.space.alloc_stand_in(part_class, "ToyGhostPart", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
     let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("GripPartDefinition", some(ghost))]);
-    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), STAND_IN);
+    assert_eq!(not_read(quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data))), STAND_IN);
     let type_class = x.vm.space.heap.get(ty).unwrap().class;
     let ghost_type = x.vm.space.alloc_stand_in(type_class, "ToyGhostType", ow_object::heap::Origin::Resource { package: 0, index: 1 }).unwrap();
     let data = x.data(vec![("WeaponTypeDefinition", some(ghost_type))]);
-    assert_eq!(not_read(build_composite_mesh(&x.vm, None, &data).unwrap_err()), STAND_IN);
+    assert_eq!(not_read(quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data))), STAND_IN);
 }
 
 /// Review r1 of #596, item 5: a field holding the wrong kind of value is a data error naming it. The values are
@@ -406,7 +420,7 @@ fn a_field_of_the_wrong_kind_is_a_data_error_naming_it() {
     let ty = x.o("ToyType");
     put(&mut x, ty, "GestaltMesh", Value::Int(1));
     let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
-    let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
+    let e = quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data));
     assert!(matches!(e, VmError::Script { .. }) && e.to_string().contains("GestaltMesh"), "{e}");
     for (field, v) in [("GestaltModeSkeletalMeshName", Value::Int(2)), ("NongestaltSkeletalMesh", Value::Int(3))] {
         let mut x = fx();
@@ -414,7 +428,7 @@ fn a_field_of_the_wrong_kind_is_a_data_error_naming_it() {
         let a = x.o("ToyPartA");
         put(&mut x, a, field, v);
         let data = x.data(vec![("WeaponTypeDefinition", some(ty)), ("BodyPartDefinition", some(a))]);
-        let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
+        let e = quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data));
         assert!(matches!(e, VmError::Script { .. }) && e.to_string().contains(field), "{field}: {e}");
     }
     // A bad field of D itself (item 3): a data error, not an attribute error.
@@ -422,8 +436,8 @@ fn a_field_of_the_wrong_kind_is_a_data_error_naming_it() {
     let ty = x.o("ToyType");
     let mut data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
     data.struct_mut().unwrap().fields.truncate(1);
-    let e = build_composite_mesh(&x.vm, None, &data).unwrap_err();
-    assert!(matches!(e, VmError::Script { .. }), "{e:?}");
+    let e = quiet(&x.vm, |vm| build_composite_mesh(vm, None, &data));
+    assert!(matches!(e, VmError::Script { .. }) && e.to_string().contains("WeaponDefinitionData.WeaponTypeDefinition"), "{e}");
 }
 
 /// Review r1 of #596, item 5: a component of the right class whose class declares no `GestaltData` is a data error.
@@ -433,9 +447,9 @@ fn a_component_class_without_gestalt_data_is_a_data_error() {
     let ty = x.gestalt_type();
     let data = x.data(vec![("WeaponTypeDefinition", some(ty))]);
     let c = x.o("ToyComp1");
-    assert!(script(build_composite_mesh(&x.vm, Some(c), &data).unwrap_err()).contains("GestaltData"));
+    assert!(script(quiet(&x.vm, |vm| build_composite_mesh(vm, Some(c), &data))).contains("GestaltData"));
     let c2 = x.o("ToyComp2");
-    assert!(script(init_gestalt_mesh_data(&x.vm, c, Some(c2)).unwrap_err()).contains("GestaltData"));
+    assert!(script(quiet(&x.vm, |vm| init_gestalt_mesh_data(vm, c, Some(c2)))).contains("GestaltData"));
 }
 
 /// NATIVE_INIT_GESTALT_MESH_DATA.md section 5: the receiver, the argument, the self-copy, then the layer.
