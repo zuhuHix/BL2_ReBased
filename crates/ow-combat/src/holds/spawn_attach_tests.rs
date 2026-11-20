@@ -340,6 +340,9 @@ fn hold_movement_on_a_spawned_ai_component_is_terminal() {
     let err = x.vm.call(f, Some(copy), vec![name, Value::Object(Some(tag))]).unwrap_err();
     assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{err}");
     assert!(err.to_string().contains(PARTIAL_WRITES), "terminal: {err}");
+    // Review r2 of #610: the hold's pair was appended before the stop.
+    let holds = crate::hit::access::array(&mut x.vm, copy, "MovementHolds").unwrap();
+    assert_eq!(holds.len(), 1, "the new hold is appended before the terminal stop");
 }
 
 /// Refusals through the world's spawn (review r1 of #610 item 2), each leaving no actor (the level list and the heap as

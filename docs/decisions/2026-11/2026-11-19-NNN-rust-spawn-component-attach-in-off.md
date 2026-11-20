@@ -43,7 +43,7 @@ and the analysis output were not opened. Synthetic fixtures only. Based on main 
   - `ow-inventory` `attach_mesh.rs` (`REATTACH_OWNER`, corrected on review r1 of #610). The deferred reattach's
     preflight refuses whenever `Owner` is set, whatever `bAttached` holds. `SetForceRefPose`, `SetHidden` and
     `SetOwnerNoSee` go through it, so on a spawned actor's own component copy they now refuse `REATTACH_OWNER` before
-    any write. That holds for a primitive copy too, which keeps `bAttached` false. Only `SetLightEnvironment` checks
+    any write (`SetHidden` and `SetOwnerNoSee` only when the value would change: an unchanged flag returns first). That holds for a primitive copy too, which keeps `bAttached` false. Only `SetLightEnvironment` checks
     `bAttached` first: an unattached copy takes its write, and an attached one (an AI copy) meets the owner refusal.
     A test shows the `SetForceRefPose` case on a world-spawned copy.
 
