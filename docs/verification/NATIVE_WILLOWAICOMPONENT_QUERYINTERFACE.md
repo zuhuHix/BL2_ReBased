@@ -1,7 +1,7 @@
 # How an AI component answers `QueryInterface`, and its `PhaseLockOnHold` (link 9, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5), analyst lane ANALYST-WILLOWAICOMPONENT-QUERYINTERFACE-IFLAGPROVIDER,
-decision `docs/decisions/2026-11/2026-11-19-NNN-willowaicomponent-queryinterface-is-the-component-rule.md`. Read from
+decision `docs/decisions/2026-11/2026-11-19-207-willowaicomponent-queryinterface-is-the-component-rule.md`. Read from
 the game executable with Ghidra (`tools/ghidra/run.ps1 -ReadOnly` and a local read-only table reader, under the
 machine lock). Field names come from the cooked packages (`tools/ghidra/class_layout.py`). The script was checked with
 `research/script_disasm.py`. It is written in our own words: no decompiler output, pseudo-code, addresses, offsets or
