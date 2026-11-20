@@ -32,10 +32,19 @@ landing run and bring the `globals.rs` resolution.
   template's and T's stop audio events (the audio layer; a recorded looping sound counts); the LOD for location with
   more than one LOD distance (the camera layer); the warm-up; the world's time with no world clock; #520's `ATTACH`;
   part 1's `REATTACH_OWNER` and `REATTACH_SCENE`; #581's C2 and D. `LODMethod` is compared as the raw byte 1.
-- **Two guards of this lane's own,** not note refusals, both `NotPorted`:
+- **Two guards of this lane's own,** not note refusals, both `NotPorted` (a third is listed below):
   - engine flags outside the slice's kind of session (the editor, a non-game session, the forced lowest LOD, a
     non-zero LOD bias). The note reads branches for them that are not coded;
   - an LOD level that would change. The note's step 16 reattach and the instances' LOD are not modelled.
+- **A third guard, and two known gaps (review r1 of #609; follow-ups, not fixed here):**
+  - the template reset refuses with refusal B's text when the old `Template` is unloaded or a stand-in, and
+    type-checks its three audio fields, before `stop_audio`'s own gate. On a held component with `AudioEnabled`
+    clear, the note never reads the old template, so this refuses `NotRead` where the native would plan. It is
+    stricter than the note, never looser;
+  - the engine-flags guard also covers the forced-lowest LOD and the LOD bias, which the note does give (section 3,
+    steps 11 and 16). They are deferred, not unknown;
+  - the "looping sound recorded" check counts any non-zero member of the playing-info struct, and the
+    `InstanceParameters` value is built in the apply phase from lookups the plan has already checked.
 - **What is not told apart:** a template object is a class default on the component's outer chain
   (`Origin::Default`, or a `Default__` name). Archetypes are not recognised (UNVERIFIED).
 - **Review r1 of #593, folded in:**
