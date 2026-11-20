@@ -127,8 +127,19 @@ each refusal before any write; the native writes nothing anyway.
    whose owner is the pickup, or in the pickup's `Base` chain, is not tested (NATIVE_SPAWN_TRACE_FILTER.md). The
    owner rows are those of section 2's table; a `bPawnsOnly` volume is a `NotRead` `NotYet`, "the source actor's
    volume test". Every unread point keeps its existing named refusal: the skip flag, terrain handling, hash admission,
-   and an owner class with no row. A primitive the filters **test** cannot be answered either, since the port has no
-   primitive line test: a `NotRead` `NotYet` naming the primitive's line test.
+   and an owner class with no row.
+   - **Hash admission wins.** A primitive that every read filter accepts (a world-geometry actor's, a mover's) reaches
+     `trace_filter`'s hash-admission step before anything else, so its first refusal is the existing `HashAdmission`
+     `NotRead` (NATIVE_SPAWN_TRACE_FILTER.md), not a line test.
+   - **Only once admission is established** (a later reading of the hash, UNVERIFIED) does the primitive's own line
+     test come next. Its per-primitive behaviour is unread, so that is a `NotRead` `NotYet` naming the primitive's line
+     test; it would be `LayerAbsent` only if a geometry layer the test needs were missing. Neither is `NotPorted`: no
+     port of it is waiting.
+   - **The `Base` chain is read load-free.** The pickup's `Base` and each link's `Base` are read from resident objects
+     only, through lookup-only names (`ObjectSpace::prop`, which never interns), never through a reader that loads. A
+     link the store has not loaded, when it is needed to decide whether a candidate's owner is excluded, is a `NotRead`
+     `NotYet`, "a Base-chain link the store has not loaded". The walk stops at None and at a link already seen (a
+     cycle), so it is bounded. A `Base` field the class does not declare is a `VmError::Script`.
 9. **Otherwise** (the level is clear and every candidate is "not tested"): `Bool(true)`.
 
 Reference keeps the C++ stub policy and binds nothing.
@@ -141,8 +152,8 @@ answer.
 ## 5. Tests
 
 These use synthetic classes and an invented service, with `package()` and `tag()` helpers where a package is needed.
-Each checks the answer and that #518's three counters (heap committed writes, generator draws, load transitions) are
-unchanged:
+Each checks the answer, that #518's three counters (heap committed writes, generator draws, load transitions) are
+unchanged, and that the name table's length is unchanged (interning a name moves none of the counters):
 1. no receiver (`Script`); an `Engine.Actor` receiver and a `WillowPickup` subclass (`NotRead`, naming the class); a
    non-vector argument (`Script`);
 2. an unloaded `WillowPickup` handle: `NotRead`, and still unloaded;
@@ -155,8 +166,13 @@ unchanged:
 8. a clear level with only the toucher pawn's primitive, the pickup's own primitive, and a primitive of an actor in
    the pickup's `Base` chain: true, since none is tested;
 9. a clear level with a non-world-geometry `Actor`'s primitive and a `Volume` without `bWorldGeometry`: true;
-10. a clear level with a world-geometry `Actor`'s primitive, a mover's primitive, or a `bPawnsOnly` volume: `NotRead`
-    (the primitive's line test, or the volume test);
+10. a clear level with a world-geometry `Actor`'s primitive or a mover's primitive: the `HashAdmission` `NotRead`,
+    which comes first; and a `bPawnsOnly` volume: `NotRead`, the source actor's volume test;
+10a. the same world-geometry primitive with admission established (a test stand-in for the hash step):
+    `NotRead` naming the primitive's line test;
+10b. a pickup whose `Base` is a handle the store has not loaded, with a candidate whose owner the chain must decide:
+    `NotRead`, "a Base-chain link the store has not loaded", the handle still unloaded; and a `Base` cycle with no
+    candidate: true, the walk ending;
 11. a clear level with a primitive of an invented game class with no row: `NotRead`, "the trace filter of <class>";
 12. a primitive with `BlockZeroExtent` clear: not tested;
 13. Reference: unbound (the stub policy).
@@ -177,3 +193,8 @@ unchanged:
   - the same gun with a wall between the pickup's touch point and the toucher: expect false;
   - with another pawn standing between: expect true.
   Then compare `EndLoc` with the pickup's location plus half its cylinder height.
+- **Direction.** Those three cases give the same answer whichever way the segment runs, so they cannot show that it
+  runs from `EndLoc` to `StartLoc`. Two ways to settle it: hook the world's single-line check under the native (the
+  routine section 2 names) and log the start and end it receives; or use a scene whose answer depends on direction,
+  such as the toucher's touch point inside a blocking volume or behind one-sided geometry, where a start inside the
+  blocker and a start outside it answer differently.
