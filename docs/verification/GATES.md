@@ -144,7 +144,7 @@ local merge of this branch with #533, #496, #497, #509, #512, #524 and #526 (nev
 errors. Links 10 and 11 ok; link 12 passes 1 of 6 driver steps (`use`) and gets past the native to the port's own
 "stopped after partial writes: MissionTracker.AllExpansionSideMissionsComplete with a controller …" (`NotYet
 { NotRead }`, NATIVE_MISSION_OBJECTIVES.md). ctest and verify_packages not run (no C++ change). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN (unlock achievement); logs under ignored `local/p2/link12-unlock/`.
+`UNVERIFIED` in game. Decision 2026-11-19-157 (unlock achievement); logs under ignored `local/p2/link12-unlock/`.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from

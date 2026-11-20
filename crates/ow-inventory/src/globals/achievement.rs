@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-LINK12-UNLOCK-ACHIEVEMENT (decision 2026-11-19-NNN, number pending). AI-assisted (Claude Code).
+//! Owner: lane IMPL-LINK12-UNLOCK-ACHIEVEMENT (decision 2026-11-19-157, number pending). AI-assisted (Claude Code).
 //! `WillowPlayerController.UnlockAchievementIfConditionsMet`, the native slice link 12's turn-in reaches.
 //!
 //! Coded from NATIVE_UNLOCK_ACHIEVEMENT_IF_CONDITIONS_MET.md alone (analyst lane ANALYST-LINK12-UNLOCK-ACHIEVEMENT,
