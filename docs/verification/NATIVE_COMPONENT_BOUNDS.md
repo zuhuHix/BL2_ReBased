@@ -95,9 +95,11 @@ engine computes it in a per-class virtual, the **bounds update**.
     - the **physics asset**: each body's box is put through that body's bone's **current transform** and merged;
     - otherwise the mesh's own stored bounds, transformed as for a static mesh.
   - The scale used includes `Scale`, `Scale3D` and the owner's draw scale.
-  - Which source applies depends on flags of the component and of its mesh.
-  - Both sources need data the port does not hold: the physics asset's bodies, the bone transforms (the "space
-    bases"), or the mesh's own stored bounds.
+  - Which source applies depends on flags of the component and of its mesh. That **source selector** (with the two
+    early returns) was not read in detail.
+  - Only the physics-asset branch uses the **current bone transforms** (the "space bases"). The mesh-bounds branch
+    needs the mesh's own stored bounds instead, and the physics-asset branch also needs the asset's bodies. So the
+    bone-transform layer answers only one of the two branches (section 7, B.7).
 
 **The transform update** builds `LocalToWorld` from the component's `Translation`, `Rotation` and `Scale` ×
 `Scale3D`, and the parent-to-world matrix (the owner's, for a component attached to an actor):
@@ -112,15 +114,23 @@ and draw scale, the world position is the owner's `Location`. That is a reading 
 **The flag word.** The transform update tests bits 24 to 26 of the primitive flag word as the three Absolute flags,
 and the attach tests bit 2 for its collision path. Both match `tools/ghidra/class_layout.py`'s names for that word
 (`AbsoluteTranslation`, `AbsoluteRotation`, `AbsoluteScale`, `CollideActors`). This **supports**, but does not prove,
-the same fit's name for bit 10, `BulletListener`. That is the skip flag the box routine tests, which
-NATIVE_GET_BOUNDING_CYLINDER.md left at main's `SKIP_FLAG` refusal. `trace_filter::SKIP_FLAG_FIELD` already reads the
-bit as `BulletListener`.
+the same fit's name for bit 10. **Bit 10, `BulletListener`, by the layout tool's fit, is an UNVERIFIED candidate
+only.** That is the skip flag the box routine tests, which NATIVE_GET_BOUNDING_CYLINDER.md left at main's `SKIP_FLAG`
+refusal. The hub's ruling on #639 keeps that refusal: this note's answer does not read the bit (section 7).
 
 ## 4. What `GetBoundingCylinder` reads from them (question b)
 
 From NATIVE_GET_BOUNDING_CYLINDER.md, unchanged by this lane. The actor default (a `WillowPickup`'s) takes the union
-of the counted components' `Bounds` boxes, each box being `Origin` ± `BoxExtent`. A component counts when it is a
-primitive, attached, `CollideActors`, and without the skip flag. The answer is:
+of the counted components' `Bounds` boxes, each box being `Origin` ± `BoxExtent`. A component counts when, in the
+box routine's order:
+1. it is not None and **passes a component virtual the routine asks first**, whose behaviour is still unread. The port
+   treats every component as passing it (#595), an **UNVERIFIED** assumption;
+2. it is a primitive;
+3. it is attached;
+4. its `CollideActors` is set;
+5. its skip flag is clear.
+
+The answer is:
 - radius = √(half-x² + half-y²) of the union;
 - height = its half z size.
 
@@ -149,32 +159,52 @@ colliding `CylinderComponent`'s box. Installed Off strict `--slice-gate`, under 
 
 **The pickup's entries at the call** (each live pickup of links 6 and 7, the same values):
 
-| Entry | `CollideActors` | `bAttached` | skip flag (`BulletListener`) | Notes |
+| Entry | `CollideActors` | `bAttached` | fitted bit 10 (candidate `BulletListener`, UNVERIFIED) | Notes |
 |---|---|---|---|---|
 | `CylinderComponent` | set | clear | clear | radius 64, height 20, `Owner` set |
 | `SkeletalMeshComponent` | **set** | clear | clear | `Owner` set |
 | `ParticleSystemComponent` | clear | clear | clear | `Owner` set |
 
 `CollideActors` on the mesh is now **set**, where #590's earlier probe saw it clear (before #520 and #609 landed). So
-if both components were attached, the game's counted set would be **the cylinder and the skeletal mesh**, and the
-mesh's bounds would decide the union.
+if both components were attached, **and both passed the unread component virtual and the unresolved skip check**
+(section 4), the game's counted set would be **the cylinder and the skeletal mesh**, and the mesh's bounds would decide
+the union. Neither condition is settled.
 
 **The next stop past the stand-in.** Both links then stop, still in `touch`, at
 `DroppedPickup.TouchPickupTrace` ("what blocks the touch trace inside the native"). That is the port's Off stub,
 NATIVE_PICKUP.md section 3, which NATIVE_TOUCH_PICKUP_TRACE.md (#624, open) reads. It needs a collision service the
-equip world does not install. So **the stand-in moves both links to an already-owned stop.**
+equip world does not install. So the stand-in moves both links to an already-owned stop. That is **probe evidence
+only**: the proposed answer (section 7) stops at refusal S before it.
 
 ## 7. The proposed Off answer (for a separate implementer)
 
-**What the minimal computed case buys.** It is the `CylinderComponent`'s box, and it is not enough on its own for links
-6 and 7. Their skeletal mesh is a counted entry once attachment is known, and its bounds need the bone transforms or the
-physics asset: a layer, the same bone-transform layer #599's `SetSkeletalMesh` refuses on for link 8. The steps below
-still help: they replace "attachment unknown" with an exact refusal on the entry that needs the missing layer.
+**The hub's ruling on the skip flag (review r1 of #639): refusal S stays.** The skip flag is not read on any path. "Bit
+10, `BulletListener`, by the layout tool's fit" is recorded only as an **UNVERIFIED candidate** (section 3). So on a
+live receiver, the first entry that reaches the skip check refuses S, and no live receiver's bounds are counted yet.
+The bounds steps below (B.7) are future cases. They are written down so the implementer knows their shape, but S
+blocks them today.
 
 **A. Attachment, recorded, not written.**
-- **The record.** Add an Off service in `ow-world`, an attach record: the set of components the port's own attach
-  paths attached, with the scene layer present. The spawn's component update (#610) and `Actor.AttachComponent`
-  (#520) add each component they attach.
+- **The record.** An Off service in `ow-world`, the attach record: the components the port's own attach paths attached
+  while the scene layer is present. Each entry holds the component, its owner actor and the world it was attached in.
+- **Publish after success only.** The spawn's component update (#610) and `Actor.AttachComponent` (#520) each add
+  their component **after** their own attach succeeded. An attach that refuses or fails adds nothing, and an earlier
+  record of that component is left as it was.
+- **Invalidate on the supported lifecycle paths.** The record of a component is removed when:
+  - the port detaches it (`Actor.DetachComponent`, or the detach half of a reattach the port models);
+  - the component or its owner is destroyed (the heap's destroy, `Actor.Destroy`);
+  - its `Owner` changes to another actor;
+
+  whichever the port supports. Any other path leaves a record that might be stale, so the lookup checks it again (next
+  item).
+- **The lookup is scoped.** A component counts as attached only when its record names the **current** owner (the
+  receiver whose `Components` holds it, and its own `Owner`) and the **current** world, and the component is not
+  destroyed. Anything else is "attachment unknown".
+- **The write boundary.** The record is one more write of the attach paths, so it is published **after** their last
+  existing write. Any check the record needs (the component resident, its `Owner`, the scene layer) belongs to those
+  paths' **existing preflights**. Those preflights end before the first write, and they use resident, lookup-only
+  reads (`ObjectSpace::prop`, never a reader that loads or interns), with no RNG draw. No new refusal comes after a
+  write.
 - **`bAttached` is not written.** The #605 ruling keeps it as it was, and the encroachment check and the deferred
   reattach read it. So the record changes no other rule.
 - **A component the port did not attach through those paths is "attachment unknown".** That covers a component of a
@@ -184,68 +214,87 @@ still help: they replace "attachment unknown" with an exact refusal on the entry
 order, write-free, load-free and RNG-free:
 1. None, and a non-primitive: skipped (as now);
 2. a lazy handle: refusal N (as now);
-3. **`CollideActors` clear: skipped.** This is new on a live receiver. The game's test needs attached **and**
-   colliding, so a non-colliding entry is never counted, attached or not. Asking `CollideActors` first changes no
-   answer, only which refusal comes first;
-4. **not in the attach record:** refusal L, with #595's text. Attachment is unknown, as now;
-5. **the skip flag:** read as `BulletListener`, set means skipped. The flag-word fit in section 3 supports it, and the
-   trace filter already reads the bit that way (UNVERIFIED). **For the hub:** this replaces refusal S on this path.
-   Keeping refusal S here is the other option, and then nothing is counted on a live receiver;
-6. **the entry's bounds, by its exact class:**
+3. **the component virtual the box routine asks first** (section 4): its behaviour is unread. The port treats every
+   component as passing it, as #595 already does. That pass-through is **UNVERIFIED**, and a later reading of the
+   virtual may turn it into a refusal at this step;
+4. **`CollideActors` clear: skipped.** This is new on a live receiver. The game's test needs attached **and** colliding,
+   so a non-colliding entry is never counted, attached or not. Asking `CollideActors` first changes no answer, only
+   which refusal comes first;
+5. **attachment:** not attached by the record's scoped lookup (A): refusal L, with #595's text. Attachment is unknown,
+   as now;
+6. **the skip flag: refusal S**, always. That is `NotYet { NotRead }` with main's `trace_filter::SKIP_FLAG` text and
+   #595's record, raised whenever an entry reaches this step. The flag is not read (the hub's ruling);
+7. **future cases, unreachable while step 6 refuses.** The entry's bounds, by its exact class:
    - `Engine.CylinderComponent`: the box of section 3, with `BoxExtent` (R, R, H). Its origin is the owner's
      `Location`, **only when** the component's `Translation` is zero, none of the three Absolute flags is set, and the
      owner is the receiver. Otherwise `NotYet { NotRead }`, "the component's world transform". `CollisionRadius` and
      `CollisionHeight` must be floats, else `VmError::Script`;
-   - `Engine.SkeletalMeshComponent`: `NotYet { LayerAbsent }`, "Actor.GetBoundingCylinder: a skeletal mesh
-     component's bounds", layer "a skeletal mesh component's bone transforms". The layer name is `SetSkeletalMesh`'s,
-     so both go to one implementer;
+   - `Engine.SkeletalMeshComponent`, in this order:
+     - the skeletal bounds' **source selector** (section 3: the two early returns, and the choice between the physics
+       asset and the mesh's bounds) is unread: `NotYet { NotRead }`, "Actor.GetBoundingCylinder: a skeletal mesh
+       component's bounds source";
+     - once a later reading settles the branch: on the **physics-asset branch**, which uses the current bone
+       transforms, `NotYet { LayerAbsent }` with the layer "a skeletal mesh component's bone transforms" (the layer
+       `SetSkeletalMesh` names, so both go to one implementer);
+     - on the **mesh-bounds branch**, which needs no bone transforms, `LayerAbsent` with the layer "a skeletal mesh's
+       stored bounds";
+     - missing physics-asset bodies are their own `LayerAbsent`, "a physics asset's bodies".
+
+     The bone-transform layer solves only the first of these three;
    - `Engine.StaticMeshComponent`: `NotYet { LayerAbsent }`, "Actor.GetBoundingCylinder: a static mesh component's
      bounds", layer "a static mesh's stored bounds". The mesh asset's bounds are not a script property the port reads;
    - any other primitive class: `NotYet { NotRead }`, "the bounds update of <class>". Its override was not read, and
-     the base rule's unbounded box would be wrong for any class that overrides it.
-7. With every entry skipped or answered: the union through `placement::box_cylinder` (#595's), and no entry gives
-   0 and 0.
+     the base rule's unbounded box would be wrong for any class that overrides it;
+8. with every entry skipped (and, in the future, answered): the union through `placement::box_cylinder` (#595's). No
+   entry gives 0 and 0.
 
 Nothing is written in B. The two out arguments are written at the end, as now. Nothing is stored in `Bounds` either:
-the box is computed at the query from stored fields. Storing it would need the transform update, which the port does
-not have.
+when B.7 is reachable, the box is computed at the query from stored fields. Storing it would need the transform update,
+which the port does not have.
 
 **C. Template receivers** (`Origin::Default`) keep #595's path unchanged: `bAttached` read from the entry, then
 `CollideActors`, then refusal S. Link 9's spawn extent is untouched.
 
-**What links 6 and 7 get.** The spawn's component update attaches the pickup's components into the record, so:
-- the cylinder entry passes step 6 with a box (R 64, H 20, the owner's `Location`);
-- the skeletal mesh entry is the next counted entry. It refuses `LayerAbsent` ("a skeletal mesh component's bone
-  transforms"), marked "stopped after partial writes: " by the driver;
-- the particle component is skipped at step 3 and never reached.
+**What links 6 and 7 get.** The spawn's component update attaches the pickup's components into the record. Then, on
+the live pickup:
+- the `CylinderComponent` is the first entry: it passes step 3 (the UNVERIFIED pass-through), is colliding (step 4) and
+  attached by the record (step 5);
+- so it reaches the skip check and **refuses S** (`NotRead`, main's `SKIP_FLAG` text), marked "stopped after partial
+  writes: " by the pickup driver (section 2).
 
-So the links' stop moves from "attachment unknown" to the bone-transform layer. That is a move in kind, not in steps:
-both still pass `make` and stop in `touch`. Only when that layer exists does the touch reach `TouchPickupTrace`
-(section 6).
+Both links still pass `make` and stop in `touch` (1 of 3, and 1 of 4). The stop moves from refusal L to refusal S. The
+skeletal mesh entry is not reached. The probe's later stop at `TouchPickupTrace` (section 6) came from a stand-in past
+L and is **probe evidence only**: no proposed step answers past S.
 
-**What stays LayerAbsent:** skeletal mesh bounds and static mesh bounds. The port keeps no `Bounds` storage, no
-transform update, and no bounds update on attach.
+**What stays refused:** the skip flag (S), every live entry's bounds (B.7's future cases), and with them the skeletal
+mesh's source selector and layers and the static mesh's layer. The port keeps no `Bounds` storage, no transform update,
+and no bounds update on attach.
 
 **Reference** is unchanged and binds nothing.
 
 **Tests for the implementer** (synthetic, built with the existing `package()` / `tag()` helpers; every value invented).
 Every refusal case checks #518's counters (heap writes, draws, load transitions) and the name table's size unchanged.
-1. A live actor whose one entry is a recorded, colliding cylinder: radius √2 × R and half height H, whatever its stored
-   `Bounds`.
-2. Two recorded colliding cylinders at the owner's location: the union. For two equal cylinders that is the same as
-   one.
-3. A recorded cylinder with a non-zero `Translation`, or with an Absolute flag set: `NotRead` "the component's world
-   transform".
-4. A colliding entry not in the attach record: refusal L, unchanged text and layer.
-5. A non-colliding entry, recorded or not: skipped, and no refusal for it.
-6. The skip flag set on a recorded colliding cylinder: skipped. Or refusal S, if the hub keeps it.
-7. A recorded colliding skeletal mesh entry: `LayerAbsent` with the bone-transform layer. A static mesh entry:
-   `LayerAbsent` with the static-mesh layer. Any other primitive class: `NotRead` naming the class.
-8. Order: a recorded cylinder before an unrecorded colliding mesh answers L (the mesh), after the cylinder passed.
-9. The spawn's component update and `Actor.AttachComponent` add their components to the record, and `bAttached` is
-   left as it was.
-10. A template receiver: #595's existing tests unchanged.
-11. Reference: nothing bound.
+1. A live actor whose one entry is a recorded, colliding cylinder: refusal S, `NotRead` with main's `SKIP_FLAG` text,
+   whatever its stored `Bounds` and its fitted skip bit.
+2. The same with the fitted bit (`BulletListener`) set and clear: refusal S both times (the flag is not read).
+3. A colliding entry not in the attach record: refusal L, unchanged text and layer.
+4. A non-colliding entry, recorded or not: skipped, with no refusal for it. A live actor with only non-colliding or
+   non-primitive entries answers 0 and 0.
+5. Order: a non-colliding recorded entry, then an unrecorded colliding one: L. A recorded colliding entry first: S,
+   before any later entry is read.
+6. The record's lifecycle:
+   - a successful spawn component update and a successful `Actor.AttachComponent` add their component;
+   - an attach that refuses (any of its existing preflight refusals) adds nothing and leaves #518's counters and the
+     name table unchanged;
+   - a supported detach, a destroyed component or owner, and an `Owner` changed to another actor each remove the
+     record, so the next query answers L.
+7. The scoped lookup: a record naming another owner or another world, or a destroyed component, is "attachment
+   unknown": L.
+8. `bAttached` is left as it was by every attach path.
+9. A template receiver: #595's existing tests unchanged.
+10. Reference: nothing bound.
+
+The future cases of B.7 get their tests when S is answered.
 
 ## 8. Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
@@ -261,6 +310,7 @@ Every refusal case checks #518's counters (heap writes, draws, load transitions)
 ## Open questions
 
 1. **Not read:**
+   - the component virtual the box routine asks first (section 4);
    - the deferred reattach's scheduling for an owned component;
    - whether every transform update is followed by a bounds update;
    - the two early-return flags and the source choice of the skeletal bounds;

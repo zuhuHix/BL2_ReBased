@@ -23,15 +23,27 @@ game.** No code changes.
   so the counted set would be the cylinder and the skeletal mesh. A stand-in past refusal L moves links 6 and 7 to
   `DroppedPickup.TouchPickupTrace`, which #624's note reads.
 
-**The proposal, for the hub:**
-- an attach record (not `bAttached` writes);
-- on a live receiver, a `CollideActors` skip before the attachment question;
-- the skip flag read as `BulletListener`. This is a choice: keeping refusal S is the alternative;
-- the cylinder box computed at query time;
-- static and skeletal mesh bounds `LayerAbsent`. The skeletal layer is the one #599's `SetSkeletalMesh` names.
+**The proposal** (after review r1 of #639 and the hub's ruling):
+- an attach record (not `bAttached` writes), published after a successful attach, invalidated on the supported detach,
+  destruction and owner-change paths, and looked up for the current owner and world only. Its checks stay in the
+  attach paths' existing preflights, before the first write;
+- on a live receiver, the unread component virtual is passed through (UNVERIFIED), and a `CollideActors` skip comes
+  before the attachment question;
+- **refusal S stays**, unconditionally, whenever an entry reaches the skip check. Bit 10, `BulletListener` by the layout
+  tool's fit, is recorded as an UNVERIFIED candidate only;
+- every live entry's bounds are future cases behind S: the cylinder box at query time; the skeletal mesh's unread
+  source selector (`NotRead`), then the bone-transform layer on the physics-asset branch only, and its own
+  `LayerAbsent`s otherwise; the static mesh's `LayerAbsent`.
 
-So links 6 and 7 would move from "attachment unknown" to the bone-transform layer, still in `touch`.
+So links 6 and 7 would move from refusal L to refusal S on the pickup's `CylinderComponent`, still in `touch` (1 of 3,
+and 1 of 4), with the driver's partial-writes mark. The probe's stop at `TouchPickupTrace` is probe evidence only.
 
 **Gates.** Docs only. The leak gate is clean. Installed Off strict `--slice-gate` on main df0970ec: 4 ok / 10 NotYet / 0
 errors. Links 6 and 7 pass `make` (1 of 3, and 1 of 4) and stop in `touch` at refusal L. This is what the host did,
 not parity.
+
+Review r1 of #639 (FIX, docs): refusal S made unconditional, as the hub ruled; the component virtual put back into the
+box routine's order with the port's pass-through labelled UNVERIFIED; the counted-set prediction made conditional on
+that virtual and the skip check; the attach record given its lifecycle (publish after success, invalidate on detach,
+destruction and owner change, scoped lookup) and its write boundary; the skeletal refusals split by branch, with the
+unread source selector as `NotRead`; the link predictions and the test list updated to stop at S.
