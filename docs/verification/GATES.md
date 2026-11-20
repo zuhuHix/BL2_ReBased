@@ -91,6 +91,15 @@ to main's. Link 9 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast`
 2 refusal, before the mind's AI component is asked. No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-221;
 logs under ignored `local/p2/sca/`.
 
+**PLACEMENT-WILLOWPICKUP-EXTENT (2026-11-20, zuhu desktop, on main c687c135):** AI-assisted (Claude Code, Opus 5.5).
+The spawn extent's `Actor` rule now also covers `WillowGame.WillowPickup` (by exact class), as #595's
+`GetBoundingCylinder` does (UNVERIFIED in game). `cargo test --workspace -j 2`: 2,741 passed, 0 failed (48 result
+lines); `ow-world` gains 3 tests (`placement_pickup_tests.rs`). Clippy: no warning on the changed lines.
+`tests/crate_edges_test.py`: OK. Installed `--slice-gate` (Off, strict): ok 3, notyet 10, error 1 of 14. Links 6 and 7
+stop in `make` at "stopped after partial writes: WillowPickup.InitializePickupForRBPhysics: the pickup's rigid-body
+set-up" (0 of 3 and 0 of 4 driver steps; #587 not on main yet). They spawn with `bNoCollisionFail` and never ask for
+the extent. This is what the host did, not parity.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

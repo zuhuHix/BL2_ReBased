@@ -19,7 +19,7 @@
 //!    read alone.
 //! 2. No service: `NotYet { LayerAbsent }`. Then the extent ([`extent`]; lane IMPL-LINK9-EXTENT, from
 //!    NATIVE_SPAWN_EXTENT.md): a cylinder `CollisionComponent`, else the template's exact class's bounding-cylinder
-//!    rule (the four pawn classes' and `Actor`'s; any other class `NotYet { NotRead }`). `Actor`'s rule reads the
+//!    rule (the four pawn classes', and `Actor`'s for `Actor` and `WillowPickup`; any other class `NotYet { NotRead }`). `Actor`'s rule reads the
 //!    template's primitive `Components` entries, which the spawn loads first ([`load_extent_components`], a store
 //!    write: every later `NotYet` up to the actor's insertion is marked "stopped after partial writes: ").
 //! 3. **The trace filters** (lane IMPL-SPAWN-TRACE-FILTERS, decision 2026-11-19-90; [`crate::trace_filter`]). Each
@@ -187,8 +187,11 @@ pub fn search_runs(space: &ObjectSpace, template: ObjRef, no_collision_fail: boo
 
 /// The classes whose bounding-cylinder rule is `Pawn`'s (NATIVE_SPAWN_EXTENT.md section 3).
 pub const PAWN_RULE_CLASSES: [&str; 4] = ["Engine.Pawn", "WillowGame.WillowPawn", "WillowGame.WillowAIPawn", "WillowGame.WillowPlayerPawn"];
-/// The class whose bounding-cylinder rule is `Actor`'s own (NATIVE_SPAWN_EXTENT.md section 2).
-pub const ACTOR_RULE_CLASS: &str = "Engine.Actor";
+/// The classes whose bounding-cylinder rule is `Actor`'s own (NATIVE_SPAWN_EXTENT.md section 2). `WillowPickup` holds
+/// the same body (NATIVE_GET_BOUNDING_CYLINDER.md section 4, step 1, which read its vtable; lane
+/// PLACEMENT-WILLOWPICKUP-EXTENT), so a pickup template's extent agrees with `Actor.GetBoundingCylinder` in Off.
+/// UNVERIFIED in the running game.
+pub const ACTOR_RULE_CLASSES: [&str; 2] = ["Engine.Actor", "WillowGame.WillowPickup"];
 /// The record of the bounding-cylinder rule (lane IMPL-LINK9-EXTENT).
 pub const EXTENT_RECORD: &str = "NATIVE_SPAWN_EXTENT.md";
 /// The prefix of the bounding-cylinder rule's `NotYet`s.
@@ -246,7 +249,7 @@ fn rule(space: &ObjectSpace, template: ObjRef) -> Result<Rule, VmError> {
         }
         return Ok(Rule::Actor(path));
     }
-    if exactly(ACTOR_RULE_CLASS) {
+    if ACTOR_RULE_CLASSES.iter().any(|p| exactly(p)) {
         return Ok(Rule::Actor(path));
     }
     Ok(Rule::NotRead(path))
@@ -309,8 +312,8 @@ fn cylinder_extent(vm: &Vm, component: ObjRef, class: &str) -> Result<[f32; 3], 
 ///    - `Pawn`, `WillowPawn`, `WillowAIPawn` and `WillowPlayerPawn` ([`PAWN_RULE_CLASSES`]): a `CylinderComponent` that
 ///      is set, is not the `CollisionComponent` and is a cylinder component gives its radius and height; otherwise
 ///      `Actor`'s rule;
-///    - `Actor` ([`ACTOR_RULE_CLASS`]): [`actor_rule`];
-///    - any other class: `NotYet { NotRead }`, "the bounding-cylinder rule of <class>" (the body was read for these five
+///    - `Actor` and `WillowPickup` ([`ACTOR_RULE_CLASSES`]): [`actor_rule`];
+///    - any other class: `NotYet { NotRead }`, "the bounding-cylinder rule of <class>" (the body was read for these six
 ///      classes only, and no other class may be assumed to keep its parent's).
 ///
 /// A field the classes do not declare is a `VmError::Script` naming it (the actor field reads of [`crate::actors`]).
@@ -899,3 +902,7 @@ mod tests {
         assert!(s.asked.borrow()[6].starts_with("point"), "{:?}", s.asked.borrow());
     }
 }
+
+#[cfg(test)]
+#[path = "placement_pickup_tests.rs"]
+mod pickup_tests;
