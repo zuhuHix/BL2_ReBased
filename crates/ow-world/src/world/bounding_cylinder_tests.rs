@@ -221,17 +221,21 @@ impl Fx {
         Ok((r.outs[0].clone(), r.outs[1].clone()))
     }
 
-    /// Every heap object's class, slots and store state: equal before and after means no slot was written, no object
-    /// made and nothing loaded.
+    /// Every heap object's class, slots and store state, and the name table's size: equal before and after means no
+    /// slot was written, no object made, nothing loaded, no load tried (a failed load stays `is_unloaded` but turns
+    /// `is_failed`, review r1 of #627) and no name interned.
     fn fingerprint(&self) -> String {
-        let heap = &self.vm.space.heap;
-        heap.handles()
+        let (space, defs) = (&self.vm.space, &self.vm.defs);
+        let heap = &space.heap;
+        let objects: String = heap
+            .handles()
             .into_iter()
             .map(|h| {
                 let o = heap.get(h).unwrap();
-                format!("{h:?} {:?} {:?} {}\n", o.class, o.slots, self.vm.defs.is_unloaded(&self.vm.space, h))
+                format!("{h:?} {:?} {:?} {} {}\n", o.class, o.slots, defs.is_unloaded(space, h), defs.is_failed(space, h))
             })
-            .collect()
+            .collect();
+        format!("{objects}names {}\n", space.names.len())
     }
 
     /// The answer for `o` must be a `NotYet` of `missing` with `what` on `record`, and leave the heap and store as
@@ -500,4 +504,23 @@ fn an_exported_non_pawn_with_a_resident_primitive_is_t() {
             x.refuses(actor, Missing::NotRead, REFUSAL_T, RECORD);
         }
     }
+}
+
+/// Review r1 of #627: a really lazy outer, a store handle not yet loaded, on a run-time object's chain is refusal T,
+/// and the walk neither loads it nor tries to (it stays unloaded and not failed; [`Fx::refuses`] also checks every
+/// object and the name table).
+#[test]
+fn a_lazy_outer_is_t_and_never_loaded_or_tried() {
+    let mut x = fx();
+    let outer = x.lazy("HolderActor");
+    let actor = x.newed("Engine.Actor", outer);
+    let mesh = x.primitive(true, true);
+    x.components(actor, vec![Some(mesh)]);
+    x.refuses(actor, Missing::NotRead, REFUSAL_T, RECORD);
+    let pawn = x.newed("Engine.Pawn", outer);
+    let c = x.cylinder(22.0, 44.0);
+    x.set(pawn, "CylinderComponent", Value::Object(Some(c)));
+    x.refuses(pawn, Missing::NotRead, REFUSAL_T, RECORD);
+    assert!(x.vm.defs.is_unloaded(&x.vm.space, outer), "still unloaded");
+    assert!(!x.vm.defs.is_failed(&x.vm.space, outer), "no load was tried");
 }

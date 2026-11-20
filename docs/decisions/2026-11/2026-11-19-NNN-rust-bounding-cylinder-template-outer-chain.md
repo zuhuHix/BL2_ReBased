@@ -23,10 +23,13 @@ fixtures only.
   - a pawn `new`ed into a class default, and one two outers up, get the pawn rule's cylinder; an actor `new`ed into a
     class default reads its entries' `bAttached` and meets the skip flag, with no refusal L;
   - a run-time object under only run-time outers is live (L); one with an export on its chain is T;
+  - a run-time object whose outer is a really lazy store handle is T, and the handle stays unloaded and not failed
+    (review r1 of #627);
   - an exported non-pawn with a resident primitive is T (both entry shapes), and without one answers the actor
     default.
 
-  Every answer and refusal leaves the heap fingerprint (classes, slots and store state) and the RNG state unchanged.
+  Every answer and refusal leaves the heap fingerprint (classes, slots, `is_unloaded` and `is_failed` per object,
+  and the name table's size) and the RNG state unchanged.
   #518's counters (`committed_writes`, `load_transitions`, `draws`) are not in this base; that assertion is to be
   added when #595 is rebased onto main.
 - **Not verified:** nothing is checked against the running game, so the rule is **UNVERIFIED** in game. Whether an

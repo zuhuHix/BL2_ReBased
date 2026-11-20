@@ -11,8 +11,10 @@
 //! 1. **The body, by the receiver's exact class:** main's `placement::PAWN_RULE_CLASSES` take the pawn rule,
 //!    `Engine.NavigationPoint` the navigation-point rule, `Engine.Actor` and `WillowGame.WillowPickup` the actor default.
 //!    Any other class is refusal **C**, main's "the bounding-cylinder rule of <class>" on main's record.
-//! 2. **Template or live**, from the receiver's heap `Origin` ([`template`]), asked only where it is used: a class
-//!    default is a template, a run-time object is live, and an export or resource stand-in is refusal **T**.
+//! 2. **Template or live**, from the heap `Origin` of the receiver and of every object on its outer chain
+//!    ([`template`]), read-only and asked only where it is used. A class default anywhere on the chain wins: a
+//!    template. Otherwise an export or resource stand-in anywhere on the chain (the receiver included) is refusal
+//!    **T**. Only a chain made wholly of run-time objects is live.
 //! 3. **The pawn rule:** a `CylinderComponent` that differs from the `CollisionComponent`, on a template, and set,
 //!    answers that component's `CollisionRadius` and `CollisionHeight`. Otherwise the actor default. No class test is
 //!    made on the component.
