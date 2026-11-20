@@ -2,6 +2,12 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**BIND-UPDATEANIMATIONS-FORCESKELUPDATE (2026-11-20, pc-hummer, on fix/rust-bone-transform-layer 0c260d56):**
+AI-assisted (Claude Code, Opus 5.5). The world pack binds both natives in every slice world (one new test).
+`cargo test --workspace -j 2` 3,227 passed / 0 failed / 51 ignored. Installed Off strict `--slice-gate`: 4 ok / 9
+NotYet / 1 error, as main; a probe counted zero calls of either native (link 1 stops at `maya:8` first). No
+real-game run.
+
 **IMPL-BONE-TRANSFORM-LAYER (2026-11-20, pc-hummer, on main dba540a3):** AI-assisted (Claude Code, Opus 5.5). The
 bind pose, the composed reference pose, `stored_space_bases`, `pose_update` and `ForceSkelUpdate` / `UpdateAnimations`
 in Off, from NATIVE_BONE_TRANSFORM_LAYER.md at 94ab4339. `cargo test --workspace -j 2` 3,226 passed / 0 failed / 51
