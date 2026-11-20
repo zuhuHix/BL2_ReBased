@@ -1,6 +1,6 @@
 # The body composition's rendering hooks (2026-11-19)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-235, number
 pending). Analyst only: a different lane implements it (clean room). This thread implemented #618, the lookups that
 come before these hooks; that is a different rule. It implements nothing here.
 
