@@ -1,6 +1,6 @@
 # SkeletalMeshComponent.SetSkeletalMesh: the mesh change (2026-11-20)
 
-AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SKELMESH-MESH-CHANGE (decision 2026-11-19-NNN, number
+AI-assisted (Claude Code, Opus 5.5), analyst lane ANALYST-SKELMESH-MESH-CHANGE (decision 2026-11-19-242, number
 pending). **Analyst only: a different lane implements this note (clean room).**
 
 This note covers what [NATIVE_SET_SKELETAL_MESH.md](NATIVE_SET_SKELETAL_MESH.md) (#583) left at one refusal: a call

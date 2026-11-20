@@ -48,7 +48,7 @@ merge of main 4c4522d7 with #577, #599, #596 and #613, deleted after), installed
 machine lock: 4 ok / 10 NotYet / 0 errors without stand-ins (link 8 at `BuildCompositeMesh`'s unloaded definition);
 4 ok / 9 NotYet / 1 error with a gestalt preload and SetSkeletalMesh's mesh-change refusal stubbed (link 8 runs
 `make`, passes both mesh changes in `init` and stops at the unbound `PrimitiveComponent.SetScale(float)`). No real-game run;
-`UNVERIFIED` in game. Decision 2026-11-19-NNN; raw output under ignored `local/analysis/smmc/`.
+`UNVERIFIED` in game. Decision 2026-11-19-242; raw output under ignored `local/analysis/smmc/`.
 
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
