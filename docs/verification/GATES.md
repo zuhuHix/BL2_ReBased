@@ -2,6 +2,13 @@
 
 Update this file in the commit that changes a number. Paste real output in reports; do not copy these numbers.
 
+**BIND-UPDATEANIMATIONS-FORCESKELUPDATE (2026-11-25, pc-hummer, on main d3c7a13b):** AI-assisted (Claude Code, Opus
+5.5). `World::new` binds `ForceSkelUpdate` and `UpdateAnimations` in Off in every slice world, neither under Reference
+(two new tests). `cargo test --workspace -j 8` 3,365 passed / 0 failed / 52 ignored; `crate_edges_test.py` 19 OK.
+Installed Off strict `--slice-gate` (release build, under the machine lock): 4 ok / 10 NotYet / 0 error, as main. A
+throwaway probe (reverted) counted zero calls of either native: links 1, 3, 4, 5, 13 and 14 stop at `maya:8` before
+Maya's body-class step, link 8 at `init` before the equip paths. No real-game run.
+
 **SLICE-GATE-STEP-SHARE (2026-11-25, pc-hummer, on main faa3bbcc):** AI-assisted (Claude Code, Opus 5.5). After its
 JSON rows, `--slice-gate` prints a report to stderr: one line per link, `link <n> <name>: <result>, steps
 <passed>/<total>` (total = the link's own step list; a strict row's stop step does not count as passed), then `links
