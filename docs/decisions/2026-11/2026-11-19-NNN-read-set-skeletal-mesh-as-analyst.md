@@ -13,9 +13,10 @@ is pending from the maintainer (three digits); NNN is a placeholder.
   - **The same mesh does nothing.** On link 8 the probe observed two resets (first- and third-person meshes) to
     None, on components that already held None. The weapon had no extra slots, so the extra-slot loop after
     `InitExtraMeshes` made no call.
-  - **A different mesh** re-initialises the component: physics instance, tree-initialised flag, bone transforms
-    from the reference pose, the tree's per-bone state, and the render registration. One `LayerAbsent` refusal is
-    proposed for the whole change.
+  - **A different mesh** (a replacement or a clear to None) terminates the physics instance, clears the
+    tree-initialised flag and sets the mesh. Only a **non-null replacement** then rebuilds the bone transforms from
+    the reference pose and the tree's per-bone state. What a clear does to those arrays and the tree is UNVERIFIED.
+    One `LayerAbsent` refusal is proposed for both kinds of change.
   - **Overlap:** #569 reads the reference skeleton but binds no component native; #570 and #575 cover other steps.
   - **The first stop on link 8 is an instancing question:** the weapon's `FirstPersonMesh` is the class default's
     unloaded component handle. The hub ruled (on #583) that the harness instances the weapon's components through

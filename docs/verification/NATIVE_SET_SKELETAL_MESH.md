@@ -42,20 +42,22 @@ output, pseudo-code, addresses, offsets or listing structure. **Every rule here 
 1. **The same mesh:** when `NewMesh` is the component's current `SkeletalMesh` (None included), it **does nothing**:
    no write, no load, no draw.
 2. **A different mesh**, in order (each step by fit). This covers both a replacement and a clear, a populated mesh
-   set to None. The reads of a new reference skeleton and pose (steps 7 and 8) apply only to a non-null replacement.
-   What the clear path does to the bone arrays and the tree's per-bone state is **UNVERIFIED** (not read separately):
+   set to None. Steps 1 to 5 apply to both. **Steps 6 to 9 are scoped to a non-null replacement.** What the clear
+   path does to the bone arrays and the tree's per-bone state is **UNVERIFIED** (not read separately):
    1. with `bKeepSpaceBases` and a current mesh, the current bone transforms are saved;
    2. the component's physics-asset instance, if any, is terminated and cleared;
    3. the component's animation-tree-initialised flag is cleared (the flag `SetAnimTreeTemplate` also clears;
       NATIVE_COPY_ANIM_TREE.md section 2);
    4. the component is detached for an update (by fit);
    5. `SkeletalMesh` = `NewMesh`;
-   6. the component's bone-transform buffer is emptied;
-   7. with an animation tree (the component's `Animations` is an `AnimTree`), the tree's per-bone state is resized
+   6. (a non-null replacement) the component's bone-transform buffer is emptied;
+   7. (a non-null replacement) with an animation tree (the component's `Animations` is an `AnimTree`), the tree's
+      per-bone state is resized
       to the new mesh's reference-skeleton bone count, unless `bKeepSpaceBases` holds and the count is unchanged;
-   8. the bone transforms are rebuilt from the new mesh's reference pose, using the bone names, and several
+   8. (a non-null replacement) the bone transforms are rebuilt from the new mesh's reference pose, using the bone
+      names, and several
       per-component bone and LOD arrays are rebuilt;
-   9. part of the component pass of the tree initialisation runs (the same step NATIVE_COPY_ANIM_TREE.md section 2
+   9. (a non-null replacement) part of the component pass of the tree initialisation runs (the same step NATIVE_COPY_ANIM_TREE.md section 2
       step 5 names);
    10. the component is re-registered with the render scene (by fit).
 
@@ -129,7 +131,8 @@ The probe ran on a local, unpushed merge of #558, #534, #552 and #572 (3d948c43)
 
 1. **UNVERIFIED:** the field names of section 2.2 (by fit); the layout tool cannot lay out the class.
 2. **Not read in detail:** steps 8 to 10 (the bone-array rebuild, the component pass and the re-registration).
-3. **For the hub:** the instancing question of section 4.
+3. **Open check of the ruled harness input** (section 4): that a spawned weapon in the game owns per-weapon mesh
+   components, as the harness instancing through #435 assumes (live check 1 below). UNVERIFIED.
 
 ## Live checks that would confirm the rules (bl-sdk, the RTSE way; none run, no session granted)
 
