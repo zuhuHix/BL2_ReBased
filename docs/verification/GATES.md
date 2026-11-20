@@ -276,7 +276,7 @@ AI-assisted (Claude Code, Opus 5.5). In Off, `FlagExpressionEvaluator.Evaluate` 
 `IRuleEngineOwner` or `IFlagProvider` class as `NotYet { NotRead }` before any write, instead of reading "no".
 `cargo build --workspace -j 2` clean; `cargo test --workspace -j 2` 2,460 passed / 0 failed / 46 ignored (1 new test in
 `ow-skills`); clippy flags nothing in ow-skills. Slice not probed in this lane. ctest and verify_packages not run (no C++
-change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN.
+change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-175.
 
 **LINKS-6-8-NEXT (2026-11-19, pc-hummer, rebased onto main a0d40f5c after #476 landed):** AI-assisted (Claude Code, Opus
 5.5). `DroppedPickup.GetPickupableInventory` and `GetPickupableInventoryDefinition` in Off from
