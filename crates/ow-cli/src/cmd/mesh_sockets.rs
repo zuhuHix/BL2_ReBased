@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BODYCOMP-SOCKET-BONE-TABLES (decision 2026-11-19-NNN). The slice harness's preload of a skeletal
+//! Owner: lane IMPL-BODYCOMP-SOCKET-BONE-TABLES (decision 2026-11-19-249). The slice harness's preload of a skeletal
 //! mesh's socket objects (hub ruling, 05:35Z), next to #592's mesh preload. AI-assisted (Claude Code).
 //!
 //! In the game the mesh's socket objects are in the same package as the mesh, and are presumably loaded with it.
