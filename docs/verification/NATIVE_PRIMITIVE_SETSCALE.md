@@ -1,6 +1,6 @@
 # `PrimitiveComponent.SetScale`: the uniform scale and the deferred transform update
 
-AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SETSCALE (decision 2026-11-19-NNN-primitive-setscale-in-off).
+AI-assisted (Claude Code, Opus 5.5). Lane IMPL-SETSCALE (decision 2026-11-19-256-primitive-setscale-in-off).
 
 **Sources.**
 - The native was read in `Borderlands2.exe` locally, through the project's Ghidra tooling (`tools/ghidra/run.ps1`,

@@ -67,7 +67,7 @@ ignored (5 new in `ow-world`). Clippy flags nothing in the changed files. Instal
 the machine lock: 4 ok / 10 NotYet / 0 errors. Link 8 passes 1 of 5 driver steps (`make`) and stops in `init` at
 "stopped after partial writes: BuildCompositeMesh: a definition it reads is not loaded", which comes before
 `SetScale`, so main's gate does not reach the new binding yet. No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN-primitive-setscale-in-off; logs under ignored `local/p2/setscale/`.
+2026-11-19-256-primitive-setscale-in-off; logs under ignored `local/p2/setscale/`.
 
 **BIND-ATTACHCOMPONENT-SKILL-WORLDS (2026-11-20, pc-hummer, on fix/rust-attach-component-skill-worlds from main
 b0d9ca08):** AI-assisted (Claude Code, Opus 5.5). `Actor.AttachComponent(object)` is bound in the action-skill pack with
