@@ -24,7 +24,8 @@
 //!    - an unloaded handle is [`COMPONENT_NOT_LOADED`] (`NotRead`).
 //!
 //! **Its answers:**
-//! - the gestalt path refuses `LayerAbsent(`[`GESTALT_LAYER`]`)` ([`GESTALT_DATA`]);
+//! - the gestalt path fills the component's `GestaltData` (lane IMPL-GESTALT-DATA-LAYER, `crate::gestalt_data`, from
+//!   NATIVE_GESTALT_DATA_LAYER.md): its preflight, then one whole-slot write, then the shared mesh is the answer;
 //! - the non-gestalt path answers None for zero meshes and that mesh for one. Two or more refuse
 //!   `LayerAbsent(`[`MERGE_LAYER`]`)` ([`MERGE`]).
 //!
@@ -38,29 +39,16 @@
 //!
 //! 3. the receiver being the argument is a self-assignment: success, with nothing written, even while the layer is
 //!    absent (UNVERIFIED: the notes did not read the self-copy separately);
-//! 4. both components' `GestaltData` slots must be held whole: one complete value, read as it stands, with no decode
-//!    and no load ([`held_whole`]). An object without its slots is the layer's `LayerAbsent`: in this store a slotless
-//!    resident object is a stand-in that never loads (review r1 of #596). Only a store definition whose slots were
-//!    never filled is [`NOT_DECODED`] (`NotRead`): the store holds the data but has not decoded it. A slot of the
-//!    wrong shape is the same `LayerAbsent` as the answer.
+//! 4. both components' `GestaltData` slots must be held whole (`crate::gestalt_data::held_whole`, F1 of
+//!    NATIVE_GESTALT_DATA_LAYER.md): a store definition whose slots were never filled is [`NOT_DECODED`] (`NotRead`),
+//!    a slotless stand-in is `crate::gestalt_data::INIT_STAND_IN` (`NotRead`, the hub's ruling on #603), and a slot
+//!    that does not match its declaration is a data error.
 //!
-//! Any other pair then refuses `LayerAbsent(`[`GESTALT_LAYER`]`)` ([`INIT_GESTALT_DATA`]), the same layer as the
-//! fill. With the layer, the copy would be one atomic value replacement (a single heap write of the whole container),
-//! after checks 1 to 4.
+//! Then the argument's value is copied into the receiver: one whole-slot heap write (lane IMPL-GESTALT-DATA-LAYER).
 //!
-//! **Not built here: the gestalt data layer itself** (the component's `GestaltData` value and the fill that writes it).
-//! The fill needs several things the notes did not read:
-//! - which apply step writes `PartMeshNames`;
-//! - how the socket mappings are filled;
-//! - how the reference-pose bounds grow per kept part;
-//! - which declared member each write lands in. The notes match that only by position (UNVERIFIED).
-//!
-//! Filling it now would mean inventing those, so both natives stop at the refusal. The copy alone (a whole-value
-//! assignment, the second note's section 3) would copy a container that nothing fills, so it waits for the fill.
-//!
-//! **Write-free by construction.** Both answers take `&Vm`. They cannot write, load (a lazy load is a write) or draw.
-//! Every refusal comes before either native's first write, so none carries the "stopped after partial writes: "
-//! prefix inside the native. The caller's write tracking marks it when earlier steps wrote.
+//! **Write-free preflights.** [`plan_build`] and [`plan_init`] take `&Vm`: they cannot write, load (a lazy load is a
+//! write) or draw. Each native then makes at most one write, its whole-slot write, so no refusal carries the "stopped
+//! after partial writes: " prefix inside the native. The caller's write tracking marks it when earlier steps wrote.
 //!
 //! **Only in `ParityMode::Off`.** The C++ reference binds neither native, so Reference keeps the VM's stub policy.
 //! `WillowItem`'s twin of `BuildCompositeMesh` is not bound here.
@@ -76,6 +64,7 @@ use ow_vm::error::VmError;
 
 use crate::equip::natives::WEAPON_ALL_PARTS;
 use crate::equip::{bad, field, object_of};
+use crate::gestalt_data::{Native, SlotWrite};
 
 /// The records the two natives follow.
 pub const BUILD_RECORD: &str = "docs/verification/NATIVE_BUILD_COMPOSITE_MESH.md";
@@ -85,17 +74,13 @@ pub const INIT_RECORD: &str = "docs/verification/NATIVE_INIT_GESTALT_MESH_DATA.m
 pub const BUILD_COMPOSITE_MESH: &str = "WillowWeapon.BuildCompositeMesh(object,weapondefinitiondata)";
 pub const INIT_GESTALT_MESH_DATA: &str = "SkeletalMeshComponent.InitGestaltMeshDataFromOther(object)";
 
-/// The absent layer both natives name (the notes' shared layer name).
-pub const GESTALT_LAYER: &str = "a gestalt component data layer (a skeletal mesh component's GestaltData)";
 /// The absent layer of the non-gestalt path with two or more meshes.
 pub const MERGE_LAYER: &str = "a skeletal mesh merge";
 
 /// The named `NotYet`s.
-pub const GESTALT_DATA: &str = "BuildCompositeMesh: the gestalt mesh data of the component";
 pub const MERGE: &str = "BuildCompositeMesh: merging the parts' meshes";
 pub const NOT_LOADED: &str = "BuildCompositeMesh: a definition it reads is not loaded (a load is a write)";
 pub const COMPONENT_NOT_LOADED: &str = "BuildCompositeMesh: the component is an unloaded handle (a load is a write)";
-pub const INIT_GESTALT_DATA: &str = "InitGestaltMeshDataFromOther: the gestalt mesh data of the component";
 pub const RECEIVER_NOT_LOADED: &str =
     "InitGestaltMeshDataFromOther: the component is an unloaded handle (a load is a write)";
 pub const ARGUMENT_NOT_LOADED: &str =
@@ -217,7 +202,7 @@ fn has_gestalt_data(vm: &Vm, o: ObjRef, what: &str) -> Result<(), VmError> {
 
 /// Whether `v` is a complete value of `kind`, nested structs and arrays included (the same variant, a struct value of
 /// the declared struct with every entry of its layout).
-fn complete(vm: &Vm, v: &Value, kind: &PropKind, dim: i32) -> bool {
+pub(crate) fn complete(vm: &Vm, v: &Value, kind: &PropKind, dim: i32) -> bool {
     match (kind, v) {
         (PropKind::Struct(ty), Value::Struct(sv)) => {
             let Some(layout) = vm.space.classes.struct_layout(*ty) else { return false };
@@ -241,23 +226,6 @@ fn complete(vm: &Vm, v: &Value, kind: &PropKind, dim: i32) -> bool {
         | (PropKind::Interface { .. }, Value::Interface(_) | Value::Object(_))
         | (PropKind::Class { .. }, Value::Class(_)) => dim == 1,
         _ => false,
-    }
-}
-
-/// Check 4 of the copy: `o`'s `GestaltData` slot is held whole, read as it stands (module documentation).
-pub fn held_whole(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
-    if slotless(vm, o)? {
-        // A store definition holds data it has not decoded; any other slotless object is a stand-in that never loads.
-        if vm.defs.is_loaded(&vm.space, o) {
-            return Err(NotYet::not_read(NOT_DECODED, INIT_RECORD).into());
-        }
-        return Err(NotYet::layer_absent(INIT_GESTALT_DATA, GESTALT_LAYER, INIT_RECORD).into());
-    }
-    let (p, kind, dim) = declared(vm, o, "GestaltData", INIT)?;
-    if complete(vm, vm.space.read(o, PropAddr::scalar(p))?, &kind, dim) {
-        Ok(())
-    } else {
-        Err(NotYet::layer_absent(INIT_GESTALT_DATA, GESTALT_LAYER, INIT_RECORD).into())
     }
 }
 
@@ -310,27 +278,43 @@ pub fn composite_plan(vm: &Vm, data: &Value) -> Result<Option<CompositePlan>, Vm
     }))
 }
 
-/// `BuildCompositeMesh(component, data)` in Off (module documentation): the answered mesh, or a refusal.
-pub fn build_composite_mesh(vm: &Vm, component: Option<ObjRef>, data: &Value) -> Result<Option<ObjRef>, VmError> {
+/// The write-free preflight of `BuildCompositeMesh(component, data)` (module documentation): the answered mesh and,
+/// on the gestalt path, the planned whole-slot fill.
+pub fn plan_build(
+    vm: &Vm,
+    component: Option<ObjRef>,
+    data: &Value,
+) -> Result<(Option<ObjRef>, Option<SlotWrite>), VmError> {
     match composite_plan(vm, data)? {
-        None => Ok(None),
-        Some(CompositePlan::Gestalt { .. }) => {
+        None => Ok((None, None)),
+        Some(CompositePlan::Gestalt { definition, mesh, names }) => {
             let c = component.ok_or_else(|| bad(BUILD, "BuildCompositeMesh: the component is None"))?;
             is_component(vm, c, "the component", BUILD)?;
             has_gestalt_data(vm, c, BUILD)?;
             resident(vm, c, COMPONENT_NOT_LOADED, BUILD_RECORD)?;
-            Err(NotYet::layer_absent(GESTALT_DATA, GESTALT_LAYER, BUILD_RECORD).into())
+            let fill = crate::gestalt_data::plan_fill(vm, c, definition, &names)?;
+            Ok((Some(mesh), Some(fill)))
         }
         Some(CompositePlan::Meshes(m)) => match m.as_slice() {
-            [] => Ok(None),
-            [one] => Ok(Some(*one)),
+            [] => Ok((None, None)),
+            [one] => Ok((Some(*one), None)),
             _ => Err(NotYet::layer_absent(MERGE, MERGE_LAYER, BUILD_RECORD).into()),
         },
     }
 }
 
-/// `InitGestaltMeshDataFromOther(from)` on `this` in Off (module documentation): success only for a self-copy.
-pub fn init_gestalt_mesh_data(vm: &Vm, this: ObjRef, from: Option<ObjRef>) -> Result<(), VmError> {
+/// `BuildCompositeMesh(component, data)` in Off: [`plan_build`], then its one write; the answered mesh.
+pub fn build_composite_mesh(vm: &mut Vm, component: Option<ObjRef>, data: &Value) -> Result<Option<ObjRef>, VmError> {
+    let (mesh, fill) = plan_build(vm, component, data)?;
+    if let Some(w) = fill {
+        w.apply(vm)?;
+    }
+    Ok(mesh)
+}
+
+/// The write-free preflight of `InitGestaltMeshDataFromOther(from)` on `this` (module documentation): `None` for a
+/// self-copy (nothing to write), else the planned whole-slot copy.
+pub fn plan_init(vm: &Vm, this: ObjRef, from: Option<ObjRef>) -> Result<Option<SlotWrite>, VmError> {
     resident(vm, this, RECEIVER_NOT_LOADED, INIT_RECORD)?;
     has_gestalt_data(vm, this, INIT)?;
     let from = from.ok_or_else(|| bad(INIT, "InitGestaltMeshDataFromOther: ComponentToCopyFrom is None"))?;
@@ -338,11 +322,22 @@ pub fn init_gestalt_mesh_data(vm: &Vm, this: ObjRef, from: Option<ObjRef>) -> Re
     has_gestalt_data(vm, from, INIT)?;
     resident(vm, from, ARGUMENT_NOT_LOADED, INIT_RECORD)?;
     if from == this {
-        return Ok(());
+        return Ok(None);
     }
-    held_whole(vm, this)?;
-    held_whole(vm, from)?;
-    Err(NotYet::layer_absent(INIT_GESTALT_DATA, GESTALT_LAYER, INIT_RECORD).into())
+    crate::gestalt_data::plan_copy(vm, this, from).map(Some)
+}
+
+/// `InitGestaltMeshDataFromOther(from)` on `this` in Off: [`plan_init`], then its one write.
+pub fn init_gestalt_mesh_data(vm: &mut Vm, this: ObjRef, from: Option<ObjRef>) -> Result<(), VmError> {
+    if let Some(w) = plan_init(vm, this, from)? {
+        w.apply(vm)?;
+    }
+    Ok(())
+}
+
+/// Check 4 of the copy for one component (F1), kept under its #596 name.
+pub fn held_whole(vm: &Vm, o: ObjRef) -> Result<(), VmError> {
+    crate::gestalt_data::held_whole(vm, o, Native::Init)
 }
 
 fn build_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
@@ -369,4 +364,4 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
 
 #[cfg(test)]
 #[path = "gestalt_tests.rs"]
-mod tests;
+pub(crate) mod tests;

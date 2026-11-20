@@ -13,6 +13,7 @@ pub mod attach_mesh;
 pub mod definition;
 pub mod equip;
 pub mod gestalt;
+pub mod gestalt_data;
 pub mod globals;
 pub mod manager;
 pub mod navigation;

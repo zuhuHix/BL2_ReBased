@@ -45,6 +45,17 @@ Installed `--slice-gate` (Off, strict): ok 0, notyet 7, error 7 of 14. Links 6 a
 rigid-body set-up" (`LayerAbsent`) to "stopped after partial writes: WillowPickup.SpawnPickupParticles: the pickup's
 particle effect" in `make`, as #574 foresaw. The other 12 rows read as before. This is what the host did, not parity.
 
+**IMPL-GESTALT-DATA-LAYER (2026-11-20, zuhu desktop, on #596's fix/rust-gestalt-mesh-layer 491a1ba over main
+c687c13):** AI-assisted (Claude Code, Opus 5.5). The gestalt component data layer in Off from
+NATIVE_GESTALT_DATA_LAYER.md (#603, 9e5113c0): `BuildCompositeMesh`'s fill and `InitGestaltMeshDataFromOther`'s copy,
+each one whole-slot write after a write-free preflight (F1, F2). `cargo build --workspace -j 2` clean (0 warnings);
+`cargo test --workspace -j 2` 2,761 passed / 0 failed / 49 ignored (10 new in `ow-inventory`); clippy on
+`ow-inventory` clean. Installed Off `--slice-gate` strict (release build, under the machine lock), base 491a1ba and branch each built:
+3 ok / 10 NotYet / 1 error both times, every row byte-identical. Link 8 stops in `init` (1 of 5 driver steps,
+`make`) at the unbound `WillowWeapon.RecomputeAttributeBaseValues()`, before either native, so the gate does not
+reach the layer. ctest and verify_packages not run (no C++ change). No real-game run;
+`UNVERIFIED` in game. Decision 2026-11-19-NNN (placeholder).
+
 **IMPL-GESTALT-MESH-LAYER (2026-11-20, zuhu desktop, on main c687c13):** AI-assisted (Claude Code, Opus 5.5).
 `WillowWeapon.BuildCompositeMesh` and `SkeletalMeshComponent.InitGestaltMeshDataFromOther` in Off, from
 NATIVE_BUILD_COMPOSITE_MESH.md (ce0ec917) and NATIVE_INIT_GESTALT_MESH_DATA.md (67170f22). They run the notes'
