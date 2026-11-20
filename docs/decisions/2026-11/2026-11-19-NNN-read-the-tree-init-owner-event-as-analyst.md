@@ -28,3 +28,19 @@ implements it). The decision number is pending from the hub (three digits); NNN 
 - **Probe:** with a local stand-in for the event, the six links (1, 3, 4, 5, 13, 14) stop next at the body
   composition's lookup refusal ("needs an animation-tree instance ..."), now unblocked by the copy.
 - **Index:** a NATIVE_INDEX row was added.
+
+**Review r1 of #612** (FIX; the script account confirmed, the proposed Off run tightened, note section 3):
+1. the event is called with `vm.call(f, Some(owner), ...)` and the preflight's own `f`, as `notify_owner` does, not
+   through the world-event path, whose frame set-up writes and can load; an owner in a state is refused until a
+   read-only state-chain lookup is planned;
+2. the three casts' classes are resolved read-only and each cast's answer computed in the preflight, so no `NotYet`
+   comes after the writes;
+3. the Off binding of `FindAnimNode` / `FindSkelControl` is scoped to #543's tick-list path, with "own tree" defined,
+   the gather path `NotRead`, whole-name matching, and a strict `--slice-gate` re-run asked of the implementer;
+4. the call's entry checks are planned with `Vm::check_call`;
+5. the port evidence for "`Pawn.Mesh` is not the made component" is cited, and the write path must call `instance`
+   after the attach writes `Owner`;
+6. a prerequisites list in landing order (#570 for `find_loaded_method`, #608, the probe's other branches), and the new
+   owner parameter of `plan` and `attach_check`;
+7. five more tests (a state, a state function, an unloaded `BodyClass`, each native unbound, the partial-writes mark,
+   the binding's gather path), one `NotPorted` text per native, and this note named as every new `NotYet`'s record.

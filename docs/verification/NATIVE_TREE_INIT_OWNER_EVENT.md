@@ -45,7 +45,12 @@ is by the signature (high, UNVERIFIED).
 3. only later, in the pawn's `PostInitBodyComposition`, does `Pawn.Mesh` become the made component (#529 section 4.5,
    NATIVE_MESH_REST.md section 2).
 
-So when the event runs, the pawn's `Mesh` is still the old one. The order is by fit from those records, UNVERIFIED.
+So when the event runs, the pawn's `Mesh` is not the made component. **In the port** (review r1 of #612, item 5): on
+the #608 head, `body_composition.rs` refuses a pawn that already holds a `Mesh` (the old-`Mesh` release, `NotRead`)
+before it reaches `attach_check`, so the copy's preflight only ever runs with `Pawn.Mesh` unset; and #529 records
+#542's measurement of Maya's case. **In the game,** the archetype's `Mesh` is not the new component whichever way the
+order goes, so `Pawn`'s `SkelComp == Mesh` test is false for this attach. The game's order itself stays by fit from
+those records, UNVERIFIED.
 
 ### What the three versions do
 
@@ -91,57 +96,105 @@ lane. NATIVE_ANIM_NODE_LOOKUP.md section 1 already says one lookup can serve bot
 ## 3. Proposed Off answer (for a separate implementer)
 
 **Every rule below is UNVERIFIED.** It replaces #561's `OWNER_EVENT` refusal ("the owner's event after the tree
-initialisation"). **Reference is unchanged.**
+initialisation"). **Reference is unchanged.** Every new `NotYet` below carries this note as its record:
+`docs/verification/NATIVE_TREE_INIT_OWNER_EVENT.md`.
+
+**Prerequisites, in landing order** (review r1 of #612, item 6):
+1. #570 (`fix/rust-mesh-rest` at d910fa13): `Vm::find_loaded_method` exists only there;
+2. #608 (`fix/rust-copy-component-pass` at 383c929c): the copy's step 5, after which this event runs;
+3. the probe's other branches, which the slice needs but this rule does not: #592 (5ab85711, the skeleton source and
+   Maya's mesh preload), #500 (c1ed82a9) and #528 (0e8e2312).
+
+`anim_tree_copy::plan` and `attach_check` need a new parameter, the owner (below, preflight rule 1).
 
 **Where it runs.** In `anim_tree_copy::initialise`, after step 5's writes and before `bAnimTreeInitialised` is set, as
 section 1 orders it. It is planned in the copy's preflight (`anim_tree_copy::plan`), which already runs write-free
-before the copy's first write.
+before the copy's first write. **The write path must call `instance` after the attach has written the component's
+`Owner`** (`attach_to_actor`, #529's attach step). Called before, "no owner: no event" would skip the event without a
+word.
 
-**The approach.** Run the owner's script event through the VM, as the game does, rather than coding its three versions
-natively. The script is read whole (section 1), and running it keeps any override honest. To make that safe, the
-preflight checks that the run cannot reach anything unread:
+**The call** (review r1 of #612, item 1). It is `vm.call(f, Some(owner), vec![Value::Object(Some(component))])`,
+with the `f` the preflight found, as `ow-inventory/src/anim_tree.rs` `notify_owner` does for `SetAnimTreeTemplate`.
+It is **not** the world-event path (`states::send_world_event` / `find_event`). That path writes: `ensure_frame`
+writes the heap's state name (counted by `note_write`) and builds a probe mask that can load class code. It also walks
+parent states, which `find_loaded_method` does not.
 
 **Preflight additions, in this order** (each refusal before any write, nothing loaded, nothing drawn):
 1. **The owner:**
    - in the instance path it is the component's `Owner`. In the attach's check (`attach_check`, which runs on the
-     template component), it is the actor being attached to, which the caller passes; the template's own `Owner` is
-     not it;
+     template component), it is the actor being attached to, passed by the caller; the template's own `Owner` is not
+     it;
    - `Owner` must be declared as an object reference, else `VmError::Script`;
    - no owner: no event.
 2. **The owner must be resident:** an unloaded handle is #543's refusal (`anim_node_lookup::refusal`), as #561 refuses
    any unloaded object.
-3. **The event, found without loading:** `PostInitAnimTree` on the owner, in the owner's state, then its class chain,
-   with #570's `Vm::find_loaded_method` (it answers None when a chain class's code is not loaded):
-   - a chain class whose code is not loaded: `NotYet { NotRead }`, "the owner's PostInitAnimTree on a class whose code
-     is not loaded" (finding it would be a load);
+3. **The owner's state.** `find_loaded_method(class, name, state)` reads only the heap state's own table, not its
+   parent states, and the game's lookup takes the state chain (by fit). So:
+   - an owner in no state: the class chain, through `find_loaded_method(class, "PostInitAnimTree", None)`;
+   - an owner in a state: `NotYet { NotRead }`, "the owner's PostInitAnimTree while the owner is in a state (the
+     state chain lookup is not planned read-only)". An implementer may replace this refusal with a read-only lookup
+     over the state and its parent states, as `crate::states` resolves them, reading class code only where it is
+     loaded (a chain class whose code is not loaded is then rule 4's refusal). Whether Maya's pawn holds a state at
+     this point was not read; the strict `--slice-gate` re-run below shows it.
+4. **The event, found without loading:**
+   - `find_loaded_method` answering None (a chain class whose code is not loaded): `NotYet { NotRead }`, "the owner's
+     PostInitAnimTree on a class whose code is not loaded" (finding it would be a load);
    - a function that is none of `Engine.Actor.PostInitAnimTree`, `Engine.Pawn.PostInitAnimTree` and
      `WillowGame.WillowPlayerPawn.PostInitAnimTree` (compared by path): `NotYet { NotRead }`, "an override of
-     PostInitAnimTree that was not read (`<path>`)";
-   - a state function of that name is the same refusal.
-4. **`Pawn`'s branch** (for `Pawn`'s and `WillowPlayerPawn`'s versions):
+     PostInitAnimTree that was not read (`<path>`)". A state function of that name meets rule 3 first.
+5. **The call's entry** (review r1 of #612, item 4): `Vm::call` refuses on a borrowed service, on the argument binding
+   and on its entry checks (`check_entry`). The preflight plans these with `Vm::check_call(f, args)`, which makes the
+   same binding and entry checks without making the call or changing anything. The caller holds no service borrow
+   across the call (the copy's `instance` holds none).
+6. **`Pawn`'s branch** (for `Pawn`'s and `WillowPlayerPawn`'s versions):
    - the owner must declare `Mesh` (`VmError::Script` if not);
    - when the owner's `Mesh` is the component (in the instance path; never in the attach, whose component is new),
      the branch would run `ClearAnimNodes` and the native `CacheAnimNodes`, so it refuses: `NotYet { NotRead }`, "the
      owner's PostInitAnimTree on its own Mesh: Pawn.CacheAnimNodes (native) is not read". The `ClearAnimNodes`
      override question does not arise before that.
-5. **`WillowPlayerPawn`'s lookups** (for its version only):
+7. **`WillowPlayerPawn`'s lookups** (for its version only):
    - the owner must declare `ArmBoneBlend`, `AimOffset`, `LeftHandIK` and `BodyClass` as object references, else
      `VmError::Script`;
    - a set `BodyClass` must be resident (#543's refusal if not), and declare `AimOffsetNodeName` as a name;
-   - the natives `SkeletalMeshComponent.FindAnimNode` and `SkeletalMeshComponent.FindSkelControl` must be bound in
-     Off. **This lane binds them**, read-only, from NATIVE_ANIM_NODE_LOOKUP.md section 1's rules, on the component's
-     instanced tree. The animation-node lookup takes the tick-list path, since the tick list is filled by then and the
-     tree is the component's own. If a lane lands this without them, an unbound key is `NotYet { NotPorted }`,
-     "SkeletalMeshComponent.FindAnimNode / FindSkelControl in Off";
-   - the lookups' answers can be planned on the template (#543 rule 3: the copy keeps each node's class and name), so
-     the preflight knows they cannot refuse. The template's nodes and controls are the copy's sources, already checked
-     resident by #561's gather.
-6. **Random numbers:** none of the three versions draws one.
+   - **the natives.** `SkeletalMeshComponent.FindAnimNode` and `SkeletalMeshComponent.FindSkelControl` must be bound
+     in Off. An unbound one is `NotYet { NotPorted }`, each with its own text:
+     - "SkeletalMeshComponent.FindAnimNode in Off";
+     - "SkeletalMeshComponent.FindSkelControl in Off";
+   - **the casts** (review r1 of #612, item 2). The script casts each find, and the VM's dynamic cast calls `class_at`,
+     which can define a class layout on first use, and `is_child`, which raises `NotYet` through an engine-native
+     stand-in chain. So the preflight:
+     - resolves the three cast classes, `Engine.AnimNodeBlendPerBone`, `WillowGame.WillowAnimNodeAimOffset` and
+       `WillowGame.SkelControlLeftHandGripWeapon`, read-only (`classes.by_path`, a defined layout), else
+       `NotYet { NotRead }`, "the cast class `<path>` is not defined at set-up";
+     - computes each cast's answer on the template object the lookup plans (below), with the same rule as the cast
+       (`is_child`, its stand-in check included), so any `NotYet` of it is raised before the first write;
+     - at run time the copy has the template's class, so the cast meets a defined layout and the answer the preflight
+       computed;
+   - **the lookups planned:** each find is planned on the template (#543 rule 3: the copy keeps each node's class and
+     name), over the copy's planned tick order and control order. The template's nodes and controls are the copy's
+     sources, already checked resident by #561's gather.
+8. **Random numbers:** none of the three versions draws one.
 
-**The writes** (only after the whole preflight passed): the event is called with the component as its argument, through
-the VM's normal event call (the owner as receiver). Its script writes what section 1 lists. On Maya's path that is
-`ArmBoneBlend` = None, `AimOffset` = the instance's aim-offset node, and `LeftHandIK` = the instance's `LeftHandGrip`
-control (the fields that are None before; Maya's are, at spawn).
+**The two natives' Off binding** (review r1 of #612, item 3). The binding is global in Off: every script caller gets
+it, not only this event. #543 read only the tick-list path, so the binding is scoped to it:
+- **the component's own tree:** `Animations` is set, its class derives from `Engine.AnimTree`, and its heap outer is
+  the component (the copy's outer, #561). Anything else is not the component's own tree;
+- **the tick-list path:** with the component's own tree and a non-empty `AnimTickArray` whose first entry is
+  `Animations`, `FindAnimNode(Name)` answers the first node of `AnimTickArray`, in order, whose `NodeName` equals
+  `Name`, compared as a whole name (name and number); a None `Name` matches the first node whose `NodeName` is None;
+- **the gather path** (no `Animations` that is the own tree, or an empty tick list): `NotYet { NotRead }`, "the
+  animation-node lookup's gather path (no tick list, or not the component's own tree)". With no `Animations` at all
+  the answer is None (#543 section 1);
+- **`FindSkelControl(Name)`:** None at once for a None `Name`; None when the component has no tree or its tree is not
+  an `AnimTree`; else the tree's `SkelControlLists` in array order, each list's `ControlHead` then its `NextControl`
+  chain, the first control whose `ControlName` equals `Name` (a whole name);
+- both read only and load nothing. A target that is an unloaded handle is #543's refusal;
+- **a strict re-run.** Because the binding is global, the implementer re-runs the installed Off strict
+  `--slice-gate` and reports every link whose stop changes, not only the six below.
+
+**The writes** (only after the whole preflight passed): the call above. Its script writes what section 1 lists. On
+Maya's path that is `ArmBoneBlend` = None, `AimOffset` = the instance's aim-offset node, and `LeftHandIK` = the
+instance's `LeftHandGrip` control (the fields that are None before; Maya's are, at spawn).
 
 **After writes started:** the copy's writes precede the event. So any `NotYet` the event's run raises despite the
 preflight is marked "stopped after partial writes: " by #518's counters, as `anim_tree_copy::instance` already does
@@ -159,13 +212,21 @@ refusal with the heap writes, draws and load transitions unchanged):
 6. the same with a cache already set: that field is left as it was;
 7. with `BodyClass` None: `AimOffset` is not looked up and stays None;
 8. a lookup result of another class (a node named `ArmBoneBlend` that is not an `AnimNodeBlendPerBone`): stored as
-   None;
+   None, the cast's answer computed in the preflight (no `NotYet` after the writes);
 9. an override of `PostInitAnimTree` on an invented subclass: the override refusal, before any write;
 10. an owner whose class code is not loaded: the not-loaded refusal, with nothing loaded;
 11. an unloaded owner handle: #543's refusal;
 12. a malformed owner (no `Mesh`, or a cache field of another kind): `VmError::Script`, before any write;
 13. the attach check with a passed owner: the same refusals on the template, nothing written;
-14. Reference: nothing new registered, and the copy's Reference path unchanged.
+14. Reference: nothing new registered, and the copy's Reference path unchanged;
+15. an owner in a state: the state refusal, before any write; and a state function named `PostInitAnimTree` on the
+    owner's class, reached by that state: the same refusal (rule 3 before rule 4);
+16. an unloaded `BodyClass`: #543's refusal, before any write;
+17. each of the two natives unbound: its own `NotPorted` text, before any write;
+18. a `NotYet` raised during the run (an invented event body that reaches an unread native after the copy's writes):
+    marked "stopped after partial writes: " once, its kind and record kept;
+19. the binding's gather path: `FindAnimNode` on a component whose tick list is empty, and on one whose `Animations`
+    is not its own tree, each `NotRead`; and a whole-name match (`Name_1` does not match `Name_2`).
 
 ## 4. Maya's attachment 0 (names and counts only)
 
