@@ -135,7 +135,6 @@ fn refusal(e: &mut Env, p: ObjRef) -> (Missing, String) {
 #[test]
 fn a_socket_hit_writes_the_entry_and_the_back_link() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [1.5, -2.0, 3.25], [100, -200, 300]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let head = child(&mut e, "Shield_Template");
@@ -155,7 +154,6 @@ fn a_socket_hit_writes_the_entry_and_the_back_link() {
 #[test]
 fn a_bone_hit_has_zero_offsets_and_a_socket_wins_over_a_bone() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Spine3", "Spine1", [4.0, 5.0, 6.0], [1, 2, 3]);
     let (pt, _) = parent_with(&mut e, vec![s], Some(vec!["Root", "Spine3", "R_Thigh"]));
     let (a, b) = (child(&mut e, "A_Template"), child(&mut e, "B_Template"));
@@ -175,7 +173,6 @@ fn a_bone_hit_has_zero_offsets_and_a_socket_wins_over_a_bone() {
 fn a_miss_none_name_or_no_mesh_is_the_owner_retry() {
     for case in ["miss", "none", "no mesh"] {
         let mut e = env();
-        answer_render_hooks_for_tests(true);
         let (m, cold) = mesh(&mut e);
         let bones = if case == "miss" { Some(vec!["Root"]) } else { None };
         let (pt, _) = parent_with(&mut e, vec![], bones);
@@ -217,7 +214,6 @@ fn remap_struct(e: &Env) -> (StructId, StructId) {
 #[test]
 fn the_remap_rewrites_the_name_and_the_first_entry_wins() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Launcher", "Spine3", [9.0, 0.0, 0.0], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s], Some(vec!["Root"]));
     let (gestalt, remap) = remap_struct(&e);
@@ -275,7 +271,6 @@ fn a_second_attach_of_one_component_overwrites_its_entry() {
 #[test]
 fn a_non_skeletal_component_gets_the_entry_and_no_back_link() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let cyl = e.cylinder;
@@ -293,7 +288,6 @@ fn a_non_skeletal_component_gets_the_entry_and_no_back_link() {
 #[test]
 fn an_unloaded_socket_before_the_hit_refuses_and_after_it_is_never_read() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (_, cold) = mesh(&mut e);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![cold, s], None);
@@ -305,7 +299,6 @@ fn an_unloaded_socket_before_the_hit_refuses_and_after_it_is_never_read() {
     assert!(e.vm.defs.is_unloaded(&e.vm.space, cold), "nothing loaded");
 
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (_, cold) = mesh(&mut e);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s, cold], None);
@@ -320,7 +313,6 @@ fn an_unloaded_socket_before_the_hit_refuses_and_after_it_is_never_read() {
 #[test]
 fn a_bone_search_without_a_source_refuses() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let (pt, _) = parent_with(&mut e, vec![], None);
     let head = child(&mut e, "Head_Template");
     let p = body(&mut e, pt, &[(head, "Hips")]);
@@ -336,7 +328,6 @@ fn each_gate_refuses_write_free_in_order() {
     let decal_class = |e: &Env| e.vm.space.classes.by_path(DECAL).unwrap();
     for case in ["detach", "parent anim", "decal", "placement", "decal child", "decal flag set", "decal detach", "decal parent anim"] {
         let mut e = env();
-        answer_render_hooks_for_tests(true);
         let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
         let (pt, _) = parent_with(&mut e, vec![s], None);
         let kid = match case {
@@ -384,7 +375,6 @@ fn each_gate_refuses_write_free_in_order() {
 #[test]
 fn a_refusal_on_the_second_attach_writes_nothing() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let (one, two) = (child(&mut e, "One_Template"), child(&mut e, "Two_Template"));
@@ -410,7 +400,6 @@ fn reference_binds_nothing() {
 #[test]
 fn maya_s_shape_gives_eight_entries_in_order() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let sockets = vec![
         socket(&mut e, "ToyFX", "ToyRoot", [1.0, 1.0, 1.0], [1, 1, 1]),
         socket(&mut e, "ToyShield", "ToyHips", [2.0, 0.0, 0.0], [0, 2, 0]),
@@ -463,7 +452,6 @@ fn numbered_names_compare_by_id() {
 #[test]
 fn a_none_name_remapped_to_a_socket_is_attached() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [5.0, 0.0, 0.0], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let (gestalt, remap) = remap_struct(&e);
@@ -490,7 +478,6 @@ fn a_malformed_destination_refuses_before_any_write() {
     ODD_ATTACHMENT.with(|c| c.set(true));
     let mut e = env();
     ODD_ATTACHMENT.with(|c| c.set(false));
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [1, 2, 3]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let head = child(&mut e, "Head_Template");
@@ -510,7 +497,6 @@ fn a_malformed_destination_refuses_before_any_write() {
 #[test]
 fn a_template_without_the_back_link_slot_refuses_before_any_write() {
     let mut e = env();
-    answer_render_hooks_for_tests(true);
     let s = socket(&mut e, "Shield", "Hips", [0.0; 3], [0; 3]);
     let (pt, _) = parent_with(&mut e, vec![s], None);
     let head = child(&mut e, "Head_Template");

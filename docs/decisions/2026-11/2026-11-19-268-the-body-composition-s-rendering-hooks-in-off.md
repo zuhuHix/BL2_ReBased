@@ -43,3 +43,5 @@ because the walk refuses every mode other than 0 first. The interface name, the 
 **Tests:** the note's tests 1 to 12 are in `body_composition_tests.rs`. The five tests that used the old refusal as
 their stop now stop at hook 3's array check. `ow-inventory`'s setter tests are unchanged. The numbers and the slice
 gate are in `docs/verification/GATES.md`, row IMPL-BODYCOMP-RENDER-HOOKS.
+
+Landing amend (hub ruling, 2026-11-20): #641's socket tests no longer call the removed stub (`answer_render_hooks_for_tests`, 14 calls in `ow-world/src/world/body_composition_socket_tests.rs`; this lane's real hooks answer there); #625's `Want::Float` lines carried into `component_setters.rs`; #643's `record_ready` and `publish_attach` kept in `attach_mesh.rs`; no rule change.

@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-NNN, number pending). The Off rules of
+//! Owner: lane IMPL-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-268, number pending). The Off rules of
 //! `PrimitiveComponent.SetHidden` / `SetOwnerNoSee` ([`set_flag`]) and `PrimitiveComponent.SetLightEnvironment`
 //! ([`set_light_environment`]), split into read-only planners and apply functions so the body composition's
 //! rendering hooks (NATIVE_BODYCOMP_RENDER_HOOKS.md section 4) and the natives in `ow-inventory` share one
@@ -76,6 +76,7 @@ pub enum Want {
     Object,
     Bool,
     Int,
+    Float,
     Struct,
     Array,
 }
@@ -88,6 +89,7 @@ pub fn schemas(vm: &Vm, o: ObjRef, fields: &[(&str, Want)], what: &str) -> Resul
             Want::Object => matches!(kind, PropKind::Object { .. }),
             Want::Bool => matches!(kind, PropKind::Bool),
             Want::Int => matches!(kind, PropKind::Int),
+            Want::Float => matches!(kind, PropKind::Float),
             Want::Struct => matches!(kind, PropKind::Struct(_)),
             Want::Array => matches!(kind, PropKind::Array(_)),
         };

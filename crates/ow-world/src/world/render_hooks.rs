@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-NNN, number pending). The three rendering hooks the
+//! Owner: lane IMPL-BODYCOMP-RENDER-HOOKS (decision 2026-11-19-268, number pending). The three rendering hooks the
 //! pawn's `PostInitBodyComposition` runs on each made component, in `ParityMode::Off`, as the body composition's
 //! preflight (crate::world::body_composition). The note is NATIVE_BODYCOMP_RENDER_HOOKS.md, section 4. Every rule is
 //! **UNVERIFIED** in the running game. AI-assisted (Claude Code).
