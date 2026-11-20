@@ -505,6 +505,11 @@ fn the_slice_case_activates_a_new_component_in_order() {
     assert_eq!(x.vm.space.heap.get(c).unwrap().outer, Some(x.pickup), "the pickup is the outer");
     let Value::Array(list) = x.get(x.pickup, "Components") else { panic!() };
     assert_eq!(list.as_ref(), &vec![Value::Object(Some(c))], "attached by part 1, no default left in the list");
+    // Review r1 of #643, item 2: the runtime copy is in the attach record once every write succeeded; the defaults
+    // object is not.
+    assert!(ow_world::actors::attached_to(&x.vm, c, x.pickup).unwrap(), "the copy is recorded attached");
+    let layer = x.vm.service::<ow_world::actors::SceneLayer>().expect("the slice world's scene layer");
+    assert_eq!(layer.borrow().recorded_owner(x.defaults), None, "the defaults object is not recorded");
     for (name, v) in [
         ("Owner", Value::Object(Some(x.pickup))),
         ("Template", Value::Object(Some(x.template))),

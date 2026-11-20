@@ -34,7 +34,7 @@ use ow_vm::natives_core::ActorWalk;
 mod instancing;
 /// The spawn's component update and the world's scene layer (lane IMPL-SPAWN-COMPONENT-ATTACH).
 pub mod component_attach;
-pub use component_attach::{SceneLayer, add_empty_scene, attached_to};
+pub use component_attach::{SceneLayer, add_empty_scene, attached_to, publish_attach, record_ready};
 pub use instancing::{COMPONENT_CLASS, Plan, apply_plan, instance_components, plan_components, plan_components_tracked};
 
 /// The record these rules come from.
@@ -1138,8 +1138,9 @@ pub fn destroy(vm: &mut Vm, actor: ObjRef) -> Result<bool, VmError> {
     set_field(&mut vm.space, actor, "bDeleteMe", Value::Bool(true))?;
     vm.space.heap.destroy(actor)?;
     // The attach record drops the destroyed actor's entries, as owner and as component (lane IMPL-COMPONENT-BOUNDS).
+    // The preflight checked the layer is not borrowed (review r1 of #643, item 3).
     if let Some(layer) = vm.service::<SceneLayer>() {
-        layer.borrow_mut().forget(actor);
+        layer.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SceneLayer"))?.forget(actor);
     }
     // The destroyed actor's timer entries go with it (its update pass never runs again).
     if let Some(timers) = vm.service::<crate::timers::Timers>() {
@@ -1185,6 +1186,8 @@ pub(crate) fn destroy_preflight(vm: &Vm, actors: &Rc<RefCell<Actors>>, actor: Ob
     if byte(space, actor, "Role")? < ROLE_AUTHORITY && !flag(space, actor, "bNetTemporary")? {
         return Ok(Preflight::Answer(false));
     }
+    // The attach record is changed after the writes: the scene layer must not be borrowed (review r1 of #643).
+    record_ready(vm)?;
     let a = actors.try_borrow().map_err(borrow_err)?;
     if a.destroying.contains(&actor) {
         return Err(NotYet::not_read("Destroy of an actor whose destroy routine is running", RECORD).into());

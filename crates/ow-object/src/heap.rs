@@ -234,11 +234,26 @@ impl std::fmt::Debug for Writes {
     }
 }
 
+/// Per-object write counts of the properties a caller asked to watch ([`Heap::watch`]). Its `Debug` form is constant,
+/// as [`Writes`]'s is.
+#[derive(Clone, Default)]
+struct Watched {
+    props: ow_core::DetSet<PropId>,
+    counts: ow_core::DetMap<(ObjRef, PropId), u64>,
+}
+
+impl std::fmt::Debug for Watched {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("_")
+    }
+}
+
 /// The arena. See the module documentation.
 #[derive(Debug, Clone, Default)]
 pub struct Heap {
     entries: Vec<Entry>,
     writes: Writes,
+    watched: Watched,
     /// Freed slots to reuse, last freed first.
     free: Vec<u32>,
     /// Every allocation in creation order; freed handles are skipped and compacted away now and then.
@@ -377,6 +392,25 @@ impl Heap {
         self.writes.0
     }
 
+    /// Starts counting, per object, the writes [`Heap::write`] and [`Heap::write_in`] commit to property `prop`
+    /// ([`Heap::watched_writes`]). Writes before the call are not counted; a write through [`Heap::slot_mut`] is not
+    /// counted either. Changing what is watched is not a write. Lane IMPL-COMPONENT-BOUNDS (review r1 of #643): the
+    /// attach record compares a component's `Owner` count to tell a later change of owner.
+    pub fn watch(&mut self, prop: PropId) {
+        self.watched.props.insert(prop);
+    }
+
+    /// How many writes to `prop` of `o` have committed since `prop` was watched (0 when it is not watched).
+    pub fn watched_writes(&self, o: ObjRef, prop: PropId) -> u64 {
+        self.watched.counts.get(&(o, prop)).copied().unwrap_or(0)
+    }
+
+    fn count_watched(&mut self, o: ObjRef, prop: PropId) {
+        if self.watched.props.contains(&prop) {
+            *self.watched.counts.entry((o, prop)).or_insert(0) += 1;
+        }
+    }
+
     /// Reports a write committed in place through [`Heap::get_mut`] or [`Heap::slot_mut`], for
     /// [`Heap::committed_writes`].
     pub fn note_write(&mut self) {
@@ -432,6 +466,7 @@ impl Heap {
         self.check_value(classes, kind, &v)?;
         *self.slot_mut(classes, o, a)? = v;
         self.writes.0 += 1;
+        self.count_watched(o, a.prop);
         Ok(())
     }
 
@@ -517,6 +552,7 @@ impl Heap {
         }
         *target = v;
         self.writes.0 += 1;
+        self.count_watched(o, a.prop);
         Ok(())
     }
 
@@ -972,6 +1008,27 @@ mod tests {
     /// commits even when it writes the same value, a float written as NaN or -0.0 counts like any other, a write later
     /// reversed counts twice, and a creation, a destroy, a free and a reported in-place change count once each. The
     /// `Debug` text does not show it.
+    /// The watched per-property counts (lane IMPL-COMPONENT-BOUNDS, review r1 of #643): nothing is counted before the
+    /// property is watched or through a borrow; each committed write counts, the same value or a restored one included;
+    /// other objects are apart; watching is not a write, and the `Debug` text does not show it.
+    #[test]
+    fn watched_writes_count_commits_per_object_after_watch() {
+        let mut w = world();
+        let health = w.p(w.pawn, "health");
+        let (a, b) = (w.new_obj(w.pawn, "Pawn_0"), w.new_obj(w.pawn, "Pawn_1"));
+        w.space.write(a, health.into(), Value::Int(1)).unwrap();
+        let (text, c0) = (format!("{:?}", w.space.heap), w.space.heap.committed_writes());
+        w.space.heap.watch(health);
+        assert_eq!((format!("{:?}", w.space.heap), w.space.heap.committed_writes()), (text, c0), "watching is not a write");
+        assert_eq!(w.space.heap.watched_writes(a, health), 0, "the earlier write is not counted");
+        w.space.slot_mut(a, health.into()).unwrap();
+        assert_eq!(w.space.heap.watched_writes(a, health), 0, "a borrow is not counted");
+        w.space.write(a, health.into(), Value::Int(2)).unwrap();
+        w.space.write(a, health.into(), Value::Int(1)).unwrap();
+        assert_eq!(w.space.heap.watched_writes(a, health), 2, "a write restoring the old value still counts");
+        assert_eq!(w.space.heap.watched_writes(b, health), 0, "per object");
+    }
+
     #[test]
     fn the_committed_write_count_moves_on_commits_only() {
         let mut w = world();

@@ -124,9 +124,17 @@ impl Fx {
         (self.vm.space.heap.committed_writes(), self.vm.defs.load_transitions(), self.vm.rng.draws())
     }
 
+    /// The whole attach record (its `Debug` text, or none without a scene layer) and the name table's length (review
+    /// r1 of #643, item 4).
+    fn record(&self) -> (Option<String>, usize) {
+        let layer = self.vm.service::<SceneLayer>().map(|l| format!("{:?}", l.borrow()));
+        (layer, self.vm.space.names.len())
+    }
+
     /// The plan for `source` must be the `NotYet` of `missing` with `what`, and leave the counters as they were.
     fn refuses(&self, source: ObjRef, instancing: &Instancing, missing: Missing, what: &str) {
         let before = self.counters();
+        let record = self.record();
         match plan(&self.vm, source, instancing) {
             Err(VmError::NotYet(n)) => {
                 assert_eq!(n.missing, missing, "{n}");
@@ -136,6 +144,7 @@ impl Fx {
             other => panic!("expected the NotYet {what:?}, got {other:?}"),
         }
         assert_eq!(self.counters(), before, "a refusal writes, loads and draws nothing");
+        assert_eq!(self.record(), record, "the attach record and the name table are as they were");
     }
 }
 
@@ -251,9 +260,13 @@ fn the_refusals_write_nothing() {
     let mut x = fx(true);
     let source = x.make(x.actor);
     let ai = x.component(x.ai);
+    // An earlier record of the component (review r1 of #643, item 4): a refused plan leaves it as it was.
+    publish_attach(&mut x.vm, ai, source).unwrap();
+    assert_eq!(x.vm.service::<SceneLayer>().unwrap().borrow().len(), 1);
     x.set(ai, "bAttached", Value::Bool(true));
     x.components(source, vec![Some(ai)]);
     x.refuses(source, &x.instancing(source, vec![ai]), Missing::NotRead, ATTACHED);
+    assert_eq!(x.vm.service::<SceneLayer>().unwrap().borrow().recorded_owner(ai), Some(source), "the earlier record");
 
     let mut x = fx(true);
     let source = x.make(x.actor);

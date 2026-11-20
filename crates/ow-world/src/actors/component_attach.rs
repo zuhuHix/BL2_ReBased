@@ -94,24 +94,65 @@ pub const HARNESS_LINE: &str = "harness input: an empty scene layer (the port ha
 /// It is read through [`attached_to`] only, which checks the entry against the current owner and the heap.
 #[derive(Debug, Default)]
 pub struct SceneLayer {
-    attached: DetMap<ObjRef, ObjRef>,
+    /// Each component's owner, and its `Owner` write count when the entry was published (review r1 of #643).
+    attached: DetMap<ObjRef, (ObjRef, u64)>,
 }
 
 impl SceneLayer {
-    /// Publishes `component` as attached to `owner` (after a successful attach), replacing an older entry.
-    pub fn record_attach(&mut self, component: ObjRef, owner: ObjRef) {
-        self.attached.insert(component, owner);
+    /// Publishes `component` as attached to `owner`, with `owner_writes` the component's `Owner` write count at
+    /// publication ([`publish_attach`] is the attach paths' entry), replacing an older entry.
+    pub fn record_attach(&mut self, component: ObjRef, owner: ObjRef, owner_writes: u64) {
+        self.attached.insert(component, (owner, owner_writes));
+    }
+
+    /// The entry of `component`: its owner and its `Owner` write count at publication.
+    pub fn entry(&self, component: ObjRef) -> Option<(ObjRef, u64)> {
+        self.attached.get(&component).copied()
+    }
+
+    /// The number of entries (a snapshot for the tests).
+    pub fn len(&self) -> usize {
+        self.attached.len()
+    }
+
+    /// Whether the record is empty.
+    pub fn is_empty(&self) -> bool {
+        self.attached.is_empty()
     }
 
     /// Drops every entry naming `o`, as the component or as the owner (`crate::actors::destroy`).
     pub fn forget(&mut self, o: ObjRef) {
-        self.attached.retain(|&c, &mut owner| c != o && owner != o);
+        self.attached.retain(|&c, &mut (owner, _)| c != o && owner != o);
     }
 
     /// The owner `component` was last recorded attached to, if any (not checked: [`attached_to`] checks it).
     pub fn recorded_owner(&self, component: ObjRef) -> Option<ObjRef> {
-        self.attached.get(&component).copied()
+        self.attached.get(&component).map(|&(owner, _)| owner)
     }
+}
+
+/// The preflight half of a record change (review r1 of #643, item 3): when the world has a scene layer, it must not be
+/// borrowed, so the publication or removal after the writes cannot fail on the borrow. Reads only.
+pub fn record_ready(vm: &Vm) -> Result<(), VmError> {
+    match vm.service::<SceneLayer>() {
+        Some(layer) if layer.try_borrow_mut().is_err() => Err(VmError::ServiceBorrowed("SceneLayer")),
+        _ => Ok(()),
+    }
+}
+
+/// Publishes `component` as attached to `owner` in the attach record, after an attach path's writes all succeeded.
+/// It starts watching the component's `Owner` property on the heap and keeps its write count, so a later change of
+/// owner (even back to `owner`) makes the entry stale. Not a heap write. A world with no scene layer publishes nothing.
+pub fn publish_attach(vm: &mut Vm, component: ObjRef, owner: ObjRef) -> Result<(), VmError> {
+    let Some(layer) = vm.service::<SceneLayer>() else {
+        return Ok(());
+    };
+    let class = vm.space.heap.get(component)?.class;
+    let owner_prop = vm.space.prop(class, "Owner").ok_or_else(|| script(format!("{} declares no Owner", class_path(vm, component))))?;
+    vm.space.heap.watch(owner_prop);
+    let count = vm.space.heap.watched_writes(component, owner_prop);
+    layer.try_borrow_mut().map_err(|_| VmError::ServiceBorrowed("SceneLayer"))?.record_attach(component, owner, count);
+    Ok(())
 }
 
 /// Whether `component` is attached to `owner` by the attach record, in this VM's world (its scene layer), by reads
@@ -121,19 +162,28 @@ impl SceneLayer {
 /// - neither the component nor the owner is destroyed on the heap (destruction makes it stale).
 ///
 /// The port's lifecycle paths: it has no detach path; `crate::actors::destroy` drops the destroyed actor's entries
-/// ([`SceneLayer::forget`]); an `Owner` changed by another path is caught here. The world is this VM's (one scene
+/// ([`SceneLayer::forget`]); any write to the component's `Owner` after publication, even one that restores the same
+/// owner, makes the entry stale (its `Owner` write count moved, review r1 of #643). The world is this VM's (one scene
 /// layer per world). No scene layer means no record: `false`. A component whose class does not declare `Owner` as an object is a `VmError::Script`.
 pub fn attached_to(vm: &Vm, component: ObjRef, owner: ObjRef) -> Result<bool, VmError> {
     let Some(layer) = vm.service::<SceneLayer>() else {
         return Ok(false);
     };
-    if layer.borrow().recorded_owner(component) != Some(owner) {
+    let entry = layer.try_borrow().map_err(|_| VmError::ServiceBorrowed("SceneLayer"))?.entry(component);
+    let Some((recorded, count)) = entry else {
+        return Ok(false);
+    };
+    if recorded != owner || vm.space.heap.get(component)?.destroyed || vm.space.heap.get(owner)?.destroyed {
         return Ok(false);
     }
-    if vm.space.heap.get(component)?.destroyed || vm.space.heap.get(owner)?.destroyed {
+    if crate::actors::object(&vm.space, component, "Owner")? != Some(owner) {
         return Ok(false);
     }
-    Ok(crate::actors::object(&vm.space, component, "Owner")? == Some(owner))
+    let class = vm.space.heap.get(component)?.class;
+    let Some(p) = vm.space.prop(class, "Owner") else {
+        return Ok(false);
+    };
+    Ok(vm.space.heap.watched_writes(component, p) == count)
 }
 
 /// Adds an empty [`SceneLayer`] to `vm`'s world unless one is there (world set-up). Answers whether it added one.
@@ -279,9 +329,13 @@ pub fn plan(vm: &Vm, source: ObjRef, instancing: &super::instancing::Plan) -> Re
             attached: own_entry.then_some(attached),
         });
     }
-    // The layer is asked for only when a component is to be attached.
-    if !planned.is_empty() && vm.service::<SceneLayer>().is_none() {
-        return Err(NotYet::layer_absent(NO_LAYER, SCENE_LAYER, RECORD).into());
+    // The layer is asked for only when a component is to be attached; then it must not be borrowed, so publishing
+    // the record after the writes cannot fail (review r1 of #643, item 3).
+    if !planned.is_empty() {
+        if vm.service::<SceneLayer>().is_none() {
+            return Err(NotYet::layer_absent(NO_LAYER, SCENE_LAYER, RECORD).into());
+        }
+        record_ready(vm)?;
     }
     Ok(Plan { components: planned, all_components })
 }
@@ -306,13 +360,11 @@ pub fn apply(vm: &mut Vm, actor: ObjRef, plan: &Plan, pairs: &[(ObjRef, ObjRef)]
         }
         vm.space.write(copy, PropAddr::scalar(skip), Value::Bool(false))?;
     }
-    // The attach record, published only once every write succeeded (lane IMPL-COMPONENT-BOUNDS).
-    if let Some(layer) = vm.service::<SceneLayer>() {
-        let mut layer = layer.borrow_mut();
-        for w in &plan.components {
-            if let Some(&(_, copy)) = pairs.iter().find(|(o, _)| *o == w.original) {
-                layer.record_attach(copy, actor);
-            }
+    // The attach record, published only once every write succeeded (lane IMPL-COMPONENT-BOUNDS); nothing for an
+    // empty plan (review r1 of #643, item 3).
+    for w in &plan.components {
+        if let Some(&(_, copy)) = pairs.iter().find(|(o, _)| *o == w.original) {
+            publish_attach(vm, copy, actor)?;
         }
     }
     Ok(())

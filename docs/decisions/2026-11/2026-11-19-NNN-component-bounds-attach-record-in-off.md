@@ -44,3 +44,22 @@ did not read the natives). The decision number is pending from the hub (three di
 - **Probe:** installed Off `--slice-gate` strict. Links 6 and 7 pass `make` (1 of 3, and 1 of 4) and stop in `touch` at
   refusal S, marked by the pickup driver. Before, they stopped at L.
 - **Verified:** nothing in the running game. Every rule is UNVERIFIED.
+- **Review r1 of #643 (Sol):**
+  1. **A stale record could revive.** Change `Owner` from A to B and back to A, with no new attach, and the old
+     entry still matched. The heap now counts, per object, the writes to a watched property (`Heap::watch` and
+     `Heap::watched_writes` in `ow-object`; opt-in; not a write; constant `Debug`). Publishing an entry starts
+     watching `Owner` and stores the component's count. The lookup requires the count to be unchanged, so any later
+     `Owner` write, even one that restores the owner, makes the entry stale. Script cannot assign the const `Owner`,
+     so in the port only natives write it; a test covers A to B to A.
+  2. **`SpawnPickupParticles` did not publish.** Its part-1 attach now publishes the runtime copy, after every
+     pickup-particle write. `ow-inventory` already depends on `ow-world`, so no new crate edge.
+  3. **A borrow could fail after writes.** `record_ready` (the scene layer not borrowed) is now in the preflights:
+     the spawn's plan when a component is to be attached, `Actor.AttachComponent`'s plan (and with it the particle
+     attach) and `Actor.Destroy`'s. An empty spawn plan publishes nothing, and the lookup uses `try_borrow`.
+  4. **Tests:**
+     - `Actor.Destroy` drops the actor's entries as owner and as component, through the real destroy path;
+     - the refusals of both attach paths keep the whole record (its `Debug` text), #518's three counters and the
+       name table, with an earlier record present;
+     - the particle copy is recorded after a successful call;
+     - a heap test of the watch counts.
+- **Probe after r1:** the slice gate is unchanged (4 ok / 9 NotYet / 1 error; links 6 and 7 at S).

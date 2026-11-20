@@ -251,6 +251,8 @@ pub fn attach_plan(vm: &Vm, actor: ObjRef, component: Option<ObjRef>) -> Result<
     if vm.service::<SceneLayer>().is_none() {
         return Err(NotYet::layer_absent(ATTACH, SCENE_LAYER, RECORD).into());
     }
+    // The record is published after the writes: the layer must not be borrowed (review r1 of #643, item 3).
+    ow_world::actors::record_ready(vm)?;
     schemas(vm, component, &[("bAttached", Want::Bool)], WHAT)?;
     if bool_of(&required(vm, component, "bAttached", WHAT)?, "bAttached", WHAT)? {
         return Err(NotYet::not_read(ATTACH_DETACH, RECORD).into());
@@ -293,12 +295,8 @@ pub fn attach_component(vm: &mut Vm, actor: ObjRef, component: Option<ObjRef>) -
         let r = write(vm, o, field, v, WHAT);
         if i == 0 { r? } else { r.map_err(after_writes)? }
     }
-    // The attach record, published only after every write succeeded (lane IMPL-COMPONENT-BOUNDS); the plan refused
-    // a world with no scene layer, so it is there.
-    if let Some(layer) = vm.service::<SceneLayer>() {
-        layer.borrow_mut().record_attach(component, actor);
-    }
-    Ok(())
+    // The attach record, published only after every write succeeded (lane IMPL-COMPONENT-BOUNDS).
+    ow_world::actors::publish_attach(vm, component, actor).map_err(after_writes)
 }
 
 /// `SetLightEnvironment(NewLightEnvironment)` on `component` in Off (module documentation, part 2).

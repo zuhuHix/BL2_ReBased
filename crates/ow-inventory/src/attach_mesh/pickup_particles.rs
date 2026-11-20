@@ -238,6 +238,9 @@ struct Plan {
     /// name and sets it there before the write (review r2 of #617), so the preflight never interns.
     parameter: Option<(Value, Option<usize>)>,
     after: Vec<(ObjRef, &'static str, Value)>,
+    /// Whether part 1's attach is planned: its component goes into the attach record after every write (review r1
+    /// of #643, item 2).
+    attached: bool,
 }
 
 /// The preflight (module documentation): the whole plan, or the first refusal or data error.
@@ -250,6 +253,7 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
     };
     // 3. Step 2, the component C and its inputs.
     let mut early: Vec<(ObjRef, &'static str, Value)> = Vec::new();
+    let mut attached = false;
     let (c, new) = match object_of(&required(vm, pickup, "PickupParticleComponent", WHAT)?, WHAT)? {
         Some(c) => {
             if !is_a(vm, c, COMPONENT_CLASS)? {
@@ -286,6 +290,7 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
             // Part 1's attach plan from the default's values: its guards, its refusals, its concrete checks.
             if let Some(attach) = attach_plan(vm, pickup, Some(d))? {
                 early.extend(attach);
+                attached = true;
             }
             let slots = vm.space.heap.get(d)?.slots.clone();
             (d, Some(NewComponent { class: preload.class, defaults: d, slots }))
@@ -407,7 +412,7 @@ fn preflight(vm: &mut Vm, pickup: ObjRef) -> Result<Plan, VmError> {
     let value = Value::array(params);
     super::fits(vm, c, "InstanceParameters", &value, WHAT)?;
     let parameter = Some((value, patch));
-    Ok(Plan { component: c, new, before, parameter, after })
+    Ok(Plan { component: c, new, before, parameter, after, attached })
 }
 
 /// The write phase: the plan applied in order (module documentation).
@@ -449,6 +454,10 @@ fn apply(vm: &mut Vm, pickup: ObjRef, plan: Plan) -> Result<(), VmError> {
     }
     for (o, name, v) in plan.after {
         write(vm, remap(o), name, remap_value(v), WHAT)?;
+    }
+    // The runtime copy enters the attach record only after every write succeeded (review r1 of #643, item 2).
+    if plan.attached {
+        ow_world::actors::publish_attach(vm, c, pickup)?;
     }
     Ok(())
 }

@@ -375,12 +375,21 @@ fn with_the_empty_scene_the_attach_makes_only_the_script_visible_writes() {
     x.set(attached, "bAttached", Value::Bool(true));
     x.set(attached, "bNeedsReattach", Value::Bool(true));
     x.set(attached, "bNeedsUpdateTransform", Value::Bool(true));
-    let held = x.written(attached);
+    // An earlier record of the component, and a full snapshot around the refused attach (review r1 of #643, item 4).
+    let other = x.obj("Engine.Actor");
+    x.set(attached, "Owner", Value::Object(Some(other)));
+    ow_world::actors::publish_attach(&mut x.vm, attached, other).unwrap();
+    let snapshot = |x: &Fx| {
+        let layer = format!("{:?}", x.vm.service::<SceneLayer>().unwrap().borrow());
+        let space = &x.vm.space;
+        (layer, space.heap.committed_writes(), x.vm.rng.draws(), x.vm.defs.load_transitions(), space.names.len())
+    };
+    let held = (x.written(attached), snapshot(&x));
     let n = not_yet(x.call(ATTACH_FN, actor, vec![Value::Object(Some(attached))]));
     unmarked(&n, Missing::NotRead, "Actor.AttachComponent on an attached component: the detach before the attach");
-    assert_eq!(x.written(attached), held, "no clear ahead of the preflight");
+    assert_eq!((x.written(attached), snapshot(&x)), held, "no clear, record change, write, draw, load or name");
     let recorded = |x: &Fx, c: ObjRef| x.vm.service::<SceneLayer>().unwrap().borrow().recorded_owner(c);
-    assert_eq!(recorded(&x, attached), None, "a refused attach records nothing (lane IMPL-COMPONENT-BOUNDS)");
+    assert_eq!(recorded(&x, attached), Some(other), "a refused attach keeps the earlier record");
     assert_eq!(x.get(actor, "Components"), Value::array(Vec::new()));
 
     let plan = attach_plan(&x.vm, actor, Some(mesh)).unwrap().expect("the attach writes");

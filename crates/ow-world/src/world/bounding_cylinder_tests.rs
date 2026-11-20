@@ -280,7 +280,7 @@ impl Fx {
     fn attach(&mut self, owner: ObjRef, c: ObjRef) {
         self.scene();
         self.set(c, "Owner", Value::Object(Some(owner)));
-        self.vm.service::<crate::actors::SceneLayer>().unwrap().borrow_mut().record_attach(c, owner);
+        crate::actors::publish_attach(&mut self.vm, c, owner).unwrap();
     }
 
     /// The answer for `o` must be `want`, with #518's counters unchanged (the answer itself writes nothing).
@@ -640,16 +640,19 @@ fn stale_or_foreign_records_are_attachment_unknown() {
     x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
     x.set(cyl, "Owner", Value::Object(Some(other)));
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
-    // A destroyed component.
+    // Review r1 of #643, item 1: attached to A, its Owner changed to B, then back to A with no new attach. The
+    // record is stale (its Owner write count moved), so attachment is unknown: L, not S.
     x.attach(pickup, cyl);
+    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    x.set(cyl, "Owner", Value::Object(Some(other)));
+    x.set(cyl, "Owner", Value::Object(Some(pickup)));
+    x.refuses(pickup, l(), REFUSAL_L, RECORD);
+    // A new attach to A makes it current again.
+    x.attach(pickup, cyl);
+    x.refuses(pickup, Missing::NotRead, SKIP_FLAG, RECORD);
+    // A destroyed component (the world's destroy path is tested in `world::tests`).
     x.vm.space.heap.destroy(cyl).unwrap();
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
-    // A destroyed owner's entries are dropped by the world's destroy path.
-    let layer = x.vm.service::<crate::actors::SceneLayer>().unwrap();
-    let fresh = x.cylinder(1.0, 1.0);
-    layer.borrow_mut().record_attach(fresh, other);
-    layer.borrow_mut().forget(other);
-    assert_eq!(layer.borrow().recorded_owner(fresh), None, "the owner's entries are gone");
     // No scene layer: no record at all.
     let mut y = fx();
     let p = y.live("WillowGame.WillowPickup");

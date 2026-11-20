@@ -2192,6 +2192,32 @@ fn destroy_refuses_static_and_non_authority_actors_and_runs_the_events() {
     });
 }
 
+/// Lane IMPL-COMPONENT-BOUNDS (review r1 of #643, item 4): `Actor.Destroy` drops the destroyed actor's attach-record
+/// entries, as owner and as component. A second actor stands in for a component here (it declares `Owner`, set by
+/// the spawn).
+#[test]
+fn destroy_drops_the_actors_attach_record_entries() {
+    run(|| {
+        let mut x = fx();
+        let owner = x.spawn("Probe");
+        let c = x.class("Probe");
+        let wi = x.wi;
+        let part = spawn(&mut x.w.vm, wi, &SpawnRequest::new(Some(c)).with_owner(Some(owner))).unwrap().unwrap();
+        let held = x.spawn("Probe");
+        crate::actors::publish_attach(&mut x.w.vm, part, owner).unwrap();
+        assert!(crate::actors::attached_to(&x.w.vm, part, owner).unwrap(), "recorded");
+        assert!(destroy(&mut x.w.vm, owner).unwrap());
+        let layer = x.w.vm.service::<crate::actors::SceneLayer>().expect("the Off world's scene layer");
+        assert_eq!(layer.borrow().recorded_owner(part), None, "the owner's entries are gone");
+        assert!(!crate::actors::attached_to(&x.w.vm, part, owner).unwrap());
+        // As the component: an entry naming the destroyed actor as the component goes too.
+        set_field(&mut x.w.vm.space, held, "Owner", Value::Object(Some(part))).unwrap();
+        crate::actors::publish_attach(&mut x.w.vm, held, part).unwrap();
+        assert!(destroy(&mut x.w.vm, held).unwrap());
+        assert_eq!(layer.borrow().recorded_owner(held), None, "the component's entry is gone");
+    });
+}
+
 #[test]
 fn destroy_is_not_yet_where_this_world_cannot_run_the_routine() {
     run(|| {
