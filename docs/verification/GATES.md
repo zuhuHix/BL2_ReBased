@@ -57,7 +57,7 @@ writes `FocusObject` None, then `FocusOffset` the zero vector; `RecordMissionSta
 `crate_edges_test.py` OK. Installed Off `--slice-gate` strict on the local merge: 0 ok / 5 NotYet / 9 errors before,
 1 / 4 / 9 after. Link 10 passes (8 of 8 steps); link 11 reaches 4 of 8 and stops at `hit:fire` on a pawn's
 `QueryInterface(IAIInterface)` routed to its `SkeletalMeshComponent` (NotYet); link 12 is blocked behind it (0 of 6).
-ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-NNN
+ctest and verify_packages not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-121
 (placeholder); logs under ignored `local/p2/link10-next/`.
 
 **IMPL-MISSIONLIST-BUILD (2026-11-19, pc-hummer, on the note #493 r1 5b880555, reviews r1 and r2 of #496 folded in):**
