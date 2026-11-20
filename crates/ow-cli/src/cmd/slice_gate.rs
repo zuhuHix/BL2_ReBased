@@ -1622,7 +1622,8 @@ pub fn resolve_interface(
             return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: the load failed: {text}"), Err(e));
         }
         _ => {
-            return (format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: not in the packages, nothing resolved"), Ok(()));
+            let line = format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: not in the packages, nothing resolved");
+            return (line, Ok(()));
         }
     };
     let (decoded, before) = {
@@ -1642,17 +1643,16 @@ pub fn resolve_interface(
     };
     let answer = vm.implements(c, i);
     let yes_no = if answer { "yes" } else { "no" };
-    let line = if !decoded {
-        format!(
-            "{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, by the structural fallback (the class bodies              did not all decode; UNVERIFIED stand-in for the packages' interface lists)"
-        )
+    let source = if !decoded {
+        "by the structural fallback (the class bodies did not all decode; UNVERIFIED stand-in for the packages' \
+         interface lists)"
     } else if before.is_some() {
-        format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, read from the packages' interface lists, already resolved, nothing resolved")
+        "read from the packages' interface lists, already resolved, nothing resolved"
     } else {
-        format!(
-            "{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, read from the packages' interface lists; their              entries resolved at set-up (a write; UNVERIFIED stand-in for when the game resolves them)"
-        )
+        "read from the packages' interface lists; their entries resolved at set-up (a write; UNVERIFIED stand-in for \
+         when the game resolves them)"
     };
+    let line = format!("{SETUP_INTERFACE_INPUT} {class} implements {iface}: {yes_no}, {source}");
     (line, Ok(()))
 }
 
