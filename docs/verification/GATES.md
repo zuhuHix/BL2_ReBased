@@ -119,6 +119,9 @@ by hand) — #552 conflicts with #534 in `card.rs` and was left out: 1 ok / 5 No
 steps (`make` passes, 6 components instanced), stopping in `init` at "stopped after partial writes: value resolver
 class WillowGame.DamageTypeAttributeValueResolver". ctest and verify_packages not run (no C++ change). No real-game
 run; `UNVERIFIED` in game. Decision 2026-11-19-NNN; logs under the throwaway worktree's ignored `local/probe/`.
+Rebased onto main c687c13 (98f22f6, desktop): `cargo test -p ow-world -p ow-cli` 461 passed / 0 failed / 9 ignored;
+`cargo test --workspace -j 2` 2,742 passed / 0 failed / 49 ignored; clippy flags nothing in the changed files.
+
 **IMPL-ATTACH-MESH-TO-PICKUP part 2 (2026-11-19, zuhu desktop, on fix/rust-attach-mesh-to-pickup fdef74e, #511):**
 AI-assisted (Claude Code, Opus 5.5). `SetLightEnvironment`, `InitializePickupForRBPhysics` and `SpawnPickupParticles`
 in Off from NATIVE_ATTACH_MESH_TO_PICKUP.md section 6. `cargo build --workspace -j 2` clean; `cargo test --workspace

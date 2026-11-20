@@ -188,6 +188,8 @@ fn the_receiver_and_the_shapes() {
     let mut x = fx();
     let lazy = x.unloaded();
     not_yet(x.call(lazy, vec![Value::Object(None)]), Missing::NotRead, "the component is an unloaded handle");
+    // Review r2 of #599: the receiver is checked before a badly shaped argument.
+    not_yet(x.call(lazy, vec![Value::Int(3)]), Missing::NotRead, "the component is an unloaded handle");
     let bare = x.obj("Toy.NoMeshComponent", "Bare");
     script_error(x.call(bare, vec![Value::Object(None)]), "declares no SkeletalMesh");
     let int = x.obj("Toy.IntMeshComponent", "Int");

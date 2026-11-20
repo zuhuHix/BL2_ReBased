@@ -5,10 +5,11 @@
 //!
 //! **The answer** (note section 4), in this order. Every path writes nothing, loads nothing and draws nothing:
 //! 1. **the receiver:** `this` must be set and resident; an unloaded definition handle is `NotYet { NotRead }`;
-//! 2. **the current mesh:** `SkeletalMesh`, read straight from the component's slot. A class with no `SkeletalMesh`
-//!    object field is `VmError::Script`;
-//! 3. **the arguments:** `NewMesh` is an object (`Object(None)` is null), and `bKeepSpaceBases`, when supplied
+//! 2. **the arguments:** `NewMesh` is an object (`Object(None)` is null), and `bKeepSpaceBases`, when supplied
 //!    (`NativeCall::has`), a bool; an omitted one is false. Anything else is `VmError::Script`;
+//! 3. **the current mesh:** `SkeletalMesh`, read straight from the component's slot. A class with no `SkeletalMesh`
+//!    object field is `VmError::Script`. This swaps the note's steps 2 and 3; both are `VmError::Script`, so only
+//!    the message differs (review r2 of #599, L2);
 //! 4. **identity first,** before either mesh's residency is looked at: equal handles (both None, or the same handle,
 //!    loaded or not) are the native's own "nothing to do"; unequal ones (a replacement or a clear) are
 //!    `NotYet { LayerAbsent }`, the component's bone transforms, raised before any write. The port has no layer for

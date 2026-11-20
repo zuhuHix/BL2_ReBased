@@ -10,10 +10,11 @@ read the native, and this lane did not open the executable or the analysis outpu
   1. the receiver must be set and resident, checked before the arguments. An unloaded handle is
      `NotYet { NotRead }`, "SetSkeletalMesh: the component is an unloaded handle (a load is a write)"; a handle whose
      load already failed is `NotYet { NotRead }`, "the component is a handle whose load failed";
-  2. the current mesh is read straight from the component's `SkeletalMesh` slot. A class with no `SkeletalMesh`
-     object field is `VmError::Script`;
-  3. `NewMesh` is an object argument, and `Object(None)` is null. `bKeepSpaceBases` is false when omitted
+  2. `NewMesh` is an object argument, and `Object(None)` is null. `bKeepSpaceBases` is false when omitted
      (`NativeCall::has`) and must be a bool when supplied. Any other shape is `VmError::Script`;
+  3. the current mesh is read straight from the component's `SkeletalMesh` slot. A class with no `SkeletalMesh`
+     object field is `VmError::Script`. Steps 2 and 3 are swapped from the note's order; both are
+     `VmError::Script`, so only the message differs (review r2 of #599);
   4. identity comes first, before either mesh's residency is looked at. Equal handles (both None, or the same handle,
      even an unloaded one) do nothing. Unequal handles (a replacement, or a clear to None) are
      `NotYet { LayerAbsent("a skeletal mesh component's bone transforms") }`, "SetSkeletalMesh: a mesh change (bones,
