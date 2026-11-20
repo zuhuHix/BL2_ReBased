@@ -74,6 +74,21 @@ passed / 0 failed / 51 ignored; `crate_edges_test.py` OK. Installed Off `--slice
 4 ok / 9 NotYet / 1 error. Links 6 and 7 pass `make` (1 of 3, 1 of 4) and stop in `touch` at refusal S (they stopped
 at L before). No real-game run; `UNVERIFIED` in game. Decision 2026-11-19-253.
 
+**IMPL-BODYCOMP-RENDER-HOOKS (2026-11-20, zuhu desktop, on #631 at 36334758):** AI-assisted (Claude Code, Opus 5.5).
+The body composition's three rendering hooks in Off, from NATIVE_BODYCOMP_RENDER_HOOKS.md section 4 (#622), replacing
+ruling 4's refusal of every made component. `cargo build --workspace --locked` clean; `cargo test --workspace --locked -j
+4` 3,212 passed / 0 failed / 51 ignored (the note's tests 1 to 12 in `body_composition_tests.rs`; five old tests now
+stop at hook 3's array check; `ow-inventory`'s setter tests unchanged); `python tests/crate_edges_test.py` OK (19);
+`cargo clippy -p ow-world -p ow-inventory --all-targets` adds no warning in the touched files. Installed Off
+`--slice-gate` (strict, under the lock) against #631's own run: ok 4 / NotYet 10 / error 0 of 14 on both. Links 1, 3, 4,
+5, 13 and 14 now stop at hook 1, "the gear-likeness interface not resolved at set-up" (`NotRead`: the harness never
+defines `WillowGame.IGearLikenessConsumer`); link 1 runs 0 of its 1 step, the other five 0 of 0. The other eight links
+are unchanged. Two local probes (never pushed) under the lock: with the interface loaded at set-up, the stop is hook 1's
+unresolved interface entry on `Engine.SkeletalMeshComponent`'s chain; with that entry also resolved at set-up (answer:
+no), it is hook 2's pawn test (`NotRead`), since Maya's `Mesh` template has `bOwnerNoSee` clear. Both inputs would be
+harness changes, not made here. ctest and verify_packages not run (no C++ change). No real-game run; every rule
+UNVERIFIED.
+
 **IMPL-TREE-INIT-OWNER-EVENT (2026-11-20, zuhu desktop, on main 92c79308, with reviews r1 and r2 of #631):** AI-assisted
 (Claude Code, Opus 5.5). The owner's `PostInitAnimTree` after the tree initialisation, and
 `SkeletalMeshComponent.FindAnimNode` / `FindSkelControl` in Off (bound for Engine by their package-qualified identity),
