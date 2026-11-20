@@ -164,11 +164,11 @@ impl Fx {
         self.vm.space.alloc(c, "ToyNewed", Some(outer), Origin::Runtime).unwrap()
     }
 
-    /// This base's stand-in for #518's counters, which reached main after #595's base: every heap object's class, slots
-    /// and store state ([`Fx::fingerprint`]: no write, no new object, no load) and the RNG streams' whole state (no
-    /// draw). Once #595 is rebased onto main, `committed_writes`, `load_transitions` and `draws` replace it.
-    fn counters(&self) -> (String, ow_core::rand::GameRng) {
-        (self.fingerprint(), self.vm.rng.clone())
+    /// #518's three counters (committed heap writes, generator draws, store load transitions) and the name table's
+    /// length (lane FOLLOWUP-627-COUNTERS, the assertion #627's decision promised once #595 was on main).
+    fn counters(&self) -> (u64, u64, u64, usize) {
+        let vm = &self.vm;
+        (vm.space.heap.committed_writes(), vm.rng.draws(), vm.defs.load_transitions(), vm.space.names.len())
     }
 
     fn export(&mut self, class: &str) -> ObjRef {
@@ -250,7 +250,7 @@ impl Fx {
             other => panic!("expected the NotYet {what:?}, got {other:?}"),
         }
         assert_eq!(self.fingerprint(), before, "a refusal writes, makes and loads nothing");
-        assert_eq!(self.counters(), counters, "#518's counters");
+        assert_eq!(self.counters(), counters, "#518's counters and the name table");
     }
 
     /// The answer for `o` must be `want`, with #518's counters unchanged (the answer itself writes nothing).
@@ -307,9 +307,10 @@ fn a_live_pickup_s_cylinder_entry_is_l() {
     x.components(pickup, vec![None, Some(cyl), Some(light), Some(mesh)]);
     x.refuses(pickup, l(), REFUSAL_L, RECORD);
     // From the host the outs are copies, so the check is that the call fails before writing: no out comes back.
-    let before = x.fingerprint();
+    let (before, counters) = (x.fingerprint(), x.counters());
     assert!(matches!(x.call("Actor", Some(pickup)), Err(VmError::NotYet(ref n)) if n.what == REFUSAL_L));
     assert_eq!(x.fingerprint(), before);
+    assert_eq!(x.counters(), counters, "#518's counters and the name table");
 }
 
 /// A class-default actor: unattached (or attached but not colliding) loaded entries give 0 and 0; an attached
@@ -379,9 +380,10 @@ fn lazy_handles_are_n_or_skipped_and_never_loaded() {
     x.components(pickup, vec![Some(cyl)]);
     x.refuses(pickup, Missing::NotRead, REFUSAL_N, RECORD);
     x.components(pickup, vec![Some(lamp)]);
-    let before = x.fingerprint();
+    let (before, counters) = (x.fingerprint(), x.counters());
     assert_eq!(answer(&x.vm, pickup).unwrap(), (0.0, 0.0));
     assert_eq!(x.fingerprint(), before, "the non-primitive lazy entry was skipped, not loaded");
+    assert_eq!(x.counters(), counters, "#518's counters and the name table");
     let t = x.template("Engine.Pawn");
     x.set(t, "CylinderComponent", Value::Object(Some(cyl)));
     x.refuses(t, Missing::NotRead, REFUSAL_N, RECORD);
