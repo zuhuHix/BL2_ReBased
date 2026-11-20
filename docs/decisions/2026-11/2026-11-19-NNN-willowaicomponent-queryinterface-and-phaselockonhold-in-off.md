@@ -23,7 +23,7 @@ natives. This lane did not open the executable or the analysis output. The fixtu
 
   The port cannot tell a component the game never attached from one whose attach step the port does not run, so the
   rule refuses rather than answering none. `ActorComponent` and `SkeletalMeshComponent` keep "Owner None answers none",
-  and they never read `bAttached`. #605 gives a spawned mind's component its `Owner`, so after it the refusal is
+  and they never read `bAttached`. #610 (#605's note) gives a spawned mind's component its `Owner`, so after it the refusal is
   reachable only for a map-placed mind's component. The tests cover both cases.
 - **`WillowAIComponent.PhaseLockOnHold()` (`ow-combat` `holds`, bound in Off by the holds pack).** The steps, in the
   hub's order:
@@ -55,10 +55,17 @@ natives. This lane did not open the executable or the analysis output. The fixtu
   stops at "stopped after partial writes: NounAttributeValueResolver with ReplicationStrategy 2 on a provider"
   (NATIVE_NOUN_ATTRIBUTES.md). The same merge without this branch gives byte-identical output, so this branch moves
   no slice stop yet: the cast stops before it asks an AI component anything.
-- **Landing notes.** #601 and this branch both add to `holds.rs` and `holds/tests.rs`, and the merge is a union.
-  With #602, `an_owned_ai_component_answers_its_owner_s_answer` must first resolve the controller's interface table
-  (`resolve_interface_tables`), as #602 does in `a_direct_mesh_query_forwards_to_its_owner`, because #602's
-  `Controller` rule reads only entries resolved at set-up.
+- **Landing notes** (corrected on review r1 of #614).
+  - **#601** conflicts in `holds.rs` and `holds/tests.rs`. The `holds.rs` registration hunk is not a union: #601
+    replaces the `GET_AI_COMPONENT` NotYet stub with `bind(vm, GET_AI_COMPONENT, Rc::new(get_ai_component))`, and
+    this branch keeps the stub as context after its new `PHASE_LOCK_ON_HOLD` bind. Resolve it to this branch's
+    `PHASE_LOCK_ON_HOLD` bind line plus #601's `GET_AI_COMPONENT` bind, and drop the stub. Never keep the stub with
+    a `?;`: `bind` keeps the first binding, so the stub would silently shadow #601's native. The other two hunks
+    are a union.
+  - **#610** also conflicts in `holds/tests.rs`. Both sides append tests at the end of the file, so it is a union.
+  - **#602:** `an_owned_ai_component_answers_its_owner_s_answer` must first resolve the controller's interface table
+    (`resolve_interface_tables`), as #602 does in `a_direct_mesh_query_forwards_to_its_owner`, because #602's
+    `Controller` rule reads only entries resolved at set-up.
 - **Verified:** only the host tests and the slice probe. **UNVERIFIED in the running game:** every rule here. The
   note's live checks (a placed and a spawned mind's component, its `Owner` and `bAttached`) would confirm the
   attach-state reading.

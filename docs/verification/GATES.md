@@ -128,7 +128,7 @@ Opus 5.5).
   `WillowAIComponent` take the component `QueryInterface` rule. Owner None with `bAttached` false is NotRead. Also
   `WillowAIComponent.PhaseLockOnHold` in Off.
 - **Gates:**
-  - `cargo test -p ow-combat -j 2`: 220 passed / 0 failed / 2 ignored, 6 of them new;
+  - `cargo test -p ow-combat -j 2`: 220 passed / 0 failed / 2 ignored, 7 of them new;
   - `cargo build --workspace -j 2`: clean;
   - `cargo test --workspace -j 2`: 2,745 passed / 0 failed / 49 ignored;
   - clippy flags nothing in the changed files.

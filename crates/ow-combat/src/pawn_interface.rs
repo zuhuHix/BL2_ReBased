@@ -37,12 +37,12 @@
 //! other class is the open `NotYet { NotRead }`, never `ActorComponent`'s rule by inheritance. It writes and loads
 //! nothing: an unloaded receiver or `Owner` is `NotYet { NotRead }`.
 //!
-//! **The AI components** (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, #600 at c24a2a51; lane
+//! **The AI components** (NATIVE_WILLOWAICOMPONENT_QUERYINTERFACE.md, #600 at e7dcddec; lane
 //! IMPL-WILLOWAICOMPONENT-QUERYINTERFACE): exactly `GearboxFramework.AIComponent` and `WillowGame.WillowAIComponent`
 //! hold `ActorComponent`'s body too, so they take the same rule, with one Off refusal (the hub's ruling): `Owner` None on
 //! a component whose `bAttached` is false is `NotYet { NotRead }`, because the port does not run the attach step that
 //! sets `Owner` and so cannot tell "never attached" from "not attached by the port". `Owner` None on an attached one
-//! answers none. A spawned mind's component gets its `Owner` on the spawn path (#605), so the refusal is reachable
+//! answers none. A spawned mind's component gets its `Owner` on the spawn path (#610), so the refusal is reachable
 //! for a map-placed mind's component. The check reads `bAttached` only once `Owner` reads None; undeclared or not a
 //! bool is a `VmError::Script`. `ActorComponent` and `SkeletalMeshComponent` keep "`Owner` None answers none". Their
 //! subclasses keep the open answer. `WillowAIComponent.PhaseLockOnHold` is `crate::holds`'.
