@@ -23,16 +23,27 @@
 //!
 //! A tick-list entry whose heap outer is not the component is the gather path too (review r1 of #631, item 2).
 //!
+//! **The current copy** (review r2 of #631, item 3). The heap outer alone does not tell the current copy's objects
+//! from a stale node or control of an earlier copy on the same component, so the world keeps a record
+//! ([`TreeLookups`], a VM service the binding adds): each copy's root and the objects the copy made
+//! ([`record_copy`], called by the copy). A root with no record, a tick-list entry outside the root's record, or a
+//! control reached through `ControlHead` or `NextControl` outside it, is the lookup's refusal: [`GATHER`] for nodes,
+//! [`FOREIGN`] for controls. This record is a port device, not a game structure.
+//!
+//! **Which handlers the owner event may predict** (review r2 of #631, item 1). The event's preflight predicts the two
+//! lookups' answers from its own scan, which holds only for this module's handlers. The record keeps the two this
+//! module bound; [`bound_to_ours`] tells whether a call would run them.
+//!
 //! Both are bound under their package-qualified identity, `Engine` plus the key ([`ow_vm::api::Vm::register_native_in`],
 //! review r1 of #631, item 4): a binding of the same key in another package does not stand for Engine's. A key already
 //! bound for Engine, or VM-wide, keeps its binding (keep-existing).
 
 use std::rc::Rc;
 
-use ow_core::NotYet;
+use ow_core::{DetMap, DetSet, NotYet};
 use ow_object::ids::{NameId, ObjRef};
 use ow_object::value::Value;
-use ow_vm::api::{NativeCall, Vm};
+use ow_vm::api::{NativeCall, NativeFn, Vm};
 use ow_vm::error::VmError;
 
 use crate::world::anim_tree_copy::{elements, object_of, read};
@@ -48,6 +59,53 @@ pub const GATHER: &str = "the animation-node lookup's gather path (no tick list,
 pub const FOREIGN: &str = "the skeletal-control lookup on a tree that is not the component's own (not read)";
 /// The package both natives are declared in (their package-qualified identity).
 pub const PACKAGE: &str = "Engine";
+
+/// The world's record of the binding and of each copy (module documentation).
+#[derive(Default)]
+pub struct TreeLookups {
+    /// The handlers this module bound (None: a key that kept an earlier binding).
+    anim_node: Option<NativeFn>,
+    skel_control: Option<NativeFn>,
+    /// Each copy's root and the objects the copy made, the root included.
+    copies: DetMap<ObjRef, DetSet<ObjRef>>,
+}
+
+fn borrowed() -> VmError {
+    VmError::ServiceBorrowed("TreeLookups")
+}
+
+/// Records the copy rooted at `root` with its `members` (the copy's own objects). A world without the binding keeps
+/// no record.
+pub fn record_copy(vm: &Vm, root: ObjRef, members: impl IntoIterator<Item = ObjRef>) -> Result<(), VmError> {
+    if let Some(s) = vm.service::<TreeLookups>() {
+        let mut set: DetSet<ObjRef> = members.into_iter().collect();
+        set.insert(root);
+        s.try_borrow_mut().map_err(|_| borrowed())?.copies.insert(root, set);
+    }
+    Ok(())
+}
+
+/// The recorded members of the copy rooted at `root`, if it is one.
+fn members(vm: &Vm, root: ObjRef) -> Result<Option<DetSet<ObjRef>>, VmError> {
+    match vm.service::<TreeLookups>() {
+        Some(s) => Ok(s.try_borrow().map_err(|_| borrowed())?.copies.get(&root).cloned()),
+        None => Ok(None),
+    }
+}
+
+/// Whether a call of `key` (Engine's) runs the handler this module bound: false for a binding kept from before, or
+/// with no record.
+pub fn bound_to_ours(vm: &Vm, key: &str) -> Result<bool, VmError> {
+    let Some(s) = vm.service::<TreeLookups>() else {
+        return Ok(false);
+    };
+    let s = s.try_borrow().map_err(|_| borrowed())?;
+    let ours = if key == FIND_ANIM_NODE { s.anim_node.clone() } else { s.skel_control.clone() };
+    Ok(match (ours, vm.native_in(PACKAGE, key)) {
+        (Some(a), Some(b)) => std::ptr::addr_eq(Rc::as_ptr(&a), Rc::as_ptr(&b)),
+        _ => false,
+    })
+}
 
 fn script(message: String) -> VmError {
     VmError::Script { function: "SkeletalMeshComponent.FindAnimNode / FindSkelControl".to_string(), message }
@@ -90,12 +148,13 @@ pub fn find_anim_node(vm: &Vm, component: ObjRef, name: NameId) -> Result<Option
     };
     let own = is_tree(vm, root)? && vm.space.heap.get(root)?.outer == Some(component);
     let ticks = elements(&read(vm, component, "AnimTickArray")?, "AnimTickArray")?;
-    if !own || ticks.first().and_then(object_of) != Some(root) {
+    let copy = if own { members(vm, root)? } else { None };
+    let Some(copy) = copy.filter(|_| ticks.first().and_then(object_of) == Some(root)) else {
         return Err(NotYet::not_read(GATHER, RECORD).into());
-    }
+    };
     for t in &ticks {
         let Some(node) = object_of(t) else { continue };
-        if vm.space.heap.get(readable(vm, node)?)?.outer != Some(component) {
+        if vm.space.heap.get(readable(vm, node)?)?.outer != Some(component) || !copy.contains(&node) {
             return Err(NotYet::not_read(GATHER, RECORD).into());
         }
         if name_in(vm, readable(vm, node)?, "NodeName")? == name {
@@ -116,15 +175,19 @@ pub fn find_skel_control(vm: &Vm, component: ObjRef, name: NameId) -> Result<Opt
     if !is_tree(vm, root)? {
         return Ok(None);
     }
-    if vm.space.heap.get(root)?.outer != Some(component) {
+    let copy = if vm.space.heap.get(root)?.outer == Some(component) { members(vm, root)? } else { None };
+    let Some(copy) = copy else {
         return Err(NotYet::not_read(FOREIGN, RECORD).into());
-    }
+    };
     for list in elements(&read(vm, root, "SkelControlLists")?, "SkelControlLists")? {
         let mut seen = ow_core::DetSet::new();
         let mut next = object_of(&field(vm, &list, "ControlHead", "SkelControlListHead")?);
         while let Some(c) = next {
             if !seen.insert(c) {
                 return Err(script("a skeletal control list that loops back on itself".into()));
+            }
+            if !copy.contains(&c) {
+                return Err(NotYet::not_read(FOREIGN, RECORD).into());
             }
             if name_in(vm, readable(vm, c)?, "ControlName")? == name {
                 return Ok(Some(c));
@@ -156,11 +219,25 @@ fn skel_control_native(c: &mut NativeCall<'_>) -> Result<Value, VmError> {
 /// Binds both natives for [`PACKAGE`] (Off only; the caller checks the mode). A key bound first for Engine, or
 /// VM-wide, keeps its binding; one bound only in another package does not count.
 pub(crate) fn register(vm: &mut Vm) -> Result<(), VmError> {
-    if !vm.is_bound_in(PACKAGE, FIND_ANIM_NODE) {
-        vm.register_native_in(PACKAGE, FIND_ANIM_NODE, Rc::new(anim_node_native))?;
-    }
-    if !vm.is_bound_in(PACKAGE, FIND_SKEL_CONTROL) {
-        vm.register_native_in(PACKAGE, FIND_SKEL_CONTROL, Rc::new(skel_control_native))?;
+    let bind = |vm: &mut Vm, key: &str, f: NativeFn| -> Result<Option<NativeFn>, VmError> {
+        if vm.is_bound_in(PACKAGE, key) {
+            return Ok(None);
+        }
+        vm.register_native_in(PACKAGE, key, f.clone())?;
+        Ok(Some(f))
+    };
+    let anim_node = bind(vm, FIND_ANIM_NODE, Rc::new(anim_node_native))?;
+    let skel_control = bind(vm, FIND_SKEL_CONTROL, Rc::new(skel_control_native))?;
+    match vm.service::<TreeLookups>() {
+        Some(s) => {
+            let mut s = s.try_borrow_mut().map_err(|_| borrowed())?;
+            s.anim_node = s.anim_node.take().or(anim_node);
+            s.skel_control = s.skel_control.take().or(skel_control);
+        }
+        None => {
+            vm.add_service(TreeLookups { anim_node, skel_control, copies: DetMap::new() })?;
+        }
     }
     Ok(())
 }
+

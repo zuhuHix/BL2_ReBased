@@ -2145,10 +2145,13 @@ fn owner_store(shape: OwnerShape) -> (Vm, DirGuard) {
             t.prop("Object", player, "AimOffset", 0, object);
         }
         let seen = t.prop("Object", player, "ToySeen", 0, object);
-        // WillowPlayerPawn's version, its order kept (review r1 of #631, item 6): the argument recorded, the flag the
-        // call sees recorded, then the two finds through the bound natives, each stored in its cache. The casts and the
+        // UNVERIFIED stand-in for WillowPlayerPawn's version (an invented body, not the game's script; review r2 of
+        // #631, item 4), its order kept (review r1 of #631, item 6): the argument recorded, the flag the call sees
+        // recorded, then the two finds through the bound natives, each stored in its cache. The casts and the
         // aim-offset find (through `BodyClass`) are not reproduced: the cast classes are hand-declared, which bytecode
-        // cannot name, and the preflight's cast answers are tested on their own.
+        // cannot name; the aim-offset find needs a `BodyClass != None` guard, an object comparison this toolkit's
+        // bytecode has no tested form of, and unguarded it would read a None context in the tests whose `BodyClass` is
+        // None. The preflight's cast and aim-offset answers are tested through the Rust lookups instead.
         let flag_seen = t.prop("Bool", player, "ToyFlagSeen", 0, 0);
         let (arm_cache, left_cache) = (caches[0], caches[1]);
         let mesh = t.p.add_import("Core", "Class", engine, "SkeletalMeshComponent");
@@ -2352,7 +2355,9 @@ fn a_player_owner_gets_its_event_with_the_component_and_the_lookups_answer_on_th
     assert_eq!(x.get(owner, "ToySeen"), Value::Object(Some(comp)), "called with the component");
     assert_eq!(x.get(owner, "ToyFlagSeen"), Value::Bool(false), "sent before bAnimTreeInitialised is set");
     assert_eq!(x.get(comp, "bAnimTreeInitialised"), Value::Bool(true));
-    // The caches the event's bytecode filled through the bound natives (review r1 of #631, item 6).
+    // Through bytecode dispatch (the stand-in event above): `ToySeen`, `ToyFlagSeen` and the two caches it filled
+    // through the bound natives (review r1 of #631, item 6). The `find_anim_node` / `find_skel_control` calls after
+    // them call the Rust lookups directly; the aim-offset answer is checked only that way (review r2, item 4).
     assert_eq!(x.get(owner, "ArmBoneBlend"), Value::Object(None), "no ArmBoneBlend node");
     let left = object_of(&x.get(owner, "LeftHandIK")).expect("the grip control, through FindSkelControl");
     assert_eq!((x.name_of(left), x.outer(left)), (x.name_of(t.k1), Some(comp)), "the copy, not the template");
@@ -2745,4 +2750,98 @@ fn an_uninterned_grip_literal_still_checks_the_controls() {
     let comp = x.component();
     x.set(comp, "Owner", Value::Object(Some(owner)));
     script_error(refused_clean(&mut x, comp, t.root), "ControlName");
+}
+
+/// A handler of either key bound before the port's, so kept by the binding.
+fn foreign_bound(key: &str) -> (Fx, DirGuard) {
+    let (mut vm, guard) = owner_store(OwnerShape::Good);
+    vm.register_native(key, Rc::new(|_c: &mut ow_vm::api::NativeCall<'_>| Ok(Value::Object(None)))).unwrap();
+    crate::world::tree_lookup::register(&mut vm).unwrap();
+    (cast_ready(Fx::on(vm, Shape::Good)), guard)
+}
+
+/// Review r2 of #631, item 1: a handler bound before the port's is kept, and the player event, whose answers the
+/// preflight predicts from the port's own lookups, is refused before any write; an Actor-only owner, which calls no
+/// lookup, still runs.
+#[test]
+fn a_foreign_handler_bound_first_is_kept_and_the_player_event_refused_before_any_write() {
+    use crate::world::tree_lookup::{PACKAGE, bound_to_ours};
+    for (key, want) in [(FIND_ANIM_NODE, ANIM_NODE_OTHER), (FIND_SKEL_CONTROL, SKEL_CONTROL_OTHER)] {
+        let (mut x, _dir) = foreign_bound(key);
+        assert!(x.vm.is_bound_in(PACKAGE, key) && !bound_to_ours(&x.vm, key).unwrap(), "the earlier binding kept");
+        let owner = owner_of(&mut x, "WillowGame.WillowPlayerPawn", true);
+        let (t, _aim, comp) = player_tree(&mut x);
+        x.set(comp, "Owner", Value::Object(Some(owner)));
+        let n = not_yet(refused_clean(&mut x, comp, t.root));
+        assert_eq!((&*n.what, n.missing, n.record), (want, Missing::NotPorted, EVENT_RECORD), "{key}");
+        assert_eq!(x.get(owner, "ToySeen"), Value::Object(None), "no event");
+        let actor = owner_of(&mut x, "Engine.ToyActorOnly", true);
+        x.set(comp, "Owner", Value::Object(Some(actor)));
+        instance(&mut x.vm, comp, t.root).unwrap();
+    }
+}
+
+/// Review r2 of #631, item 2: the call-entry depth refusal is met in the preflight (`Vm::check_call`), before the copy
+/// writes, rather than after it by the call. The frame-slot bound shares the same check; its bound is too large for a
+/// synthetic frame to reach here, so only the depth is exercised.
+#[test]
+fn a_call_depth_refusal_is_met_in_the_preflight() {
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let owner = owner_of(&mut x, "Engine.ToyActorOnly", true);
+    let t = diamond(&mut x);
+    let comp = x.component();
+    x.set(comp, "Owner", Value::Object(Some(owner)));
+    let depth = x.vm.limits.max_call_depth;
+    x.vm.limits.max_call_depth = 0;
+    script_error(refused_clean(&mut x, comp, t.root), "call depth limit");
+    x.vm.limits.max_call_depth = depth;
+    instance(&mut x.vm, comp, t.root).unwrap();
+}
+
+/// The control list head of `root`'s first list.
+fn first_head(x: &Fx, root: ObjRef) -> ObjRef {
+    let lists = x.get(root, "SkelControlLists");
+    object_of(&field(&x.vm, &lists.elements().unwrap()[0], "ControlHead", "t").unwrap()).unwrap()
+}
+
+/// Review r2 of #631, item 3: a node or control of an earlier copy on the same component shares the heap outer but
+/// is not the current copy's: `FindAnimNode` does not return a stale tick-list node, and `FindSkelControl` does not
+/// reach a stale control through `NextControl`, nor a template control through `ControlHead`.
+#[test]
+fn the_lookups_refuse_a_stale_copy_s_node_or_control() {
+    use crate::world::tree_lookup::{FOREIGN, GATHER, RECORD as LOOKUP_RECORD};
+    let (mut x, _dir) = owner_fx(OwnerShape::Good);
+    let (t, aim, comp) = player_tree(&mut x);
+    let name = x.vm.space.names.intern("AimOffset");
+    let grip = x.vm.space.names.intern("LeftHandGrip");
+    let refused = |e: VmError, what: &str| {
+        let n = not_yet(e);
+        assert_eq!((&*n.what, n.missing, n.record), (what, Missing::NotRead, LOOKUP_RECORD));
+    };
+    let first = instance(&mut x.vm, comp, t.root).unwrap();
+    let stale_aim = copy_of(&x, comp, aim);
+    let stale_grip = first_head(&x, first);
+    assert_eq!(find_skel_control(&x.vm, comp, grip).unwrap(), Some(stale_grip), "the first copy answers");
+    // A second copy on the same, now initialised, component.
+    let second = instance(&mut x.vm, comp, t.root).unwrap();
+    assert_ne!(second, first);
+    assert_eq!(x.outer(stale_aim), Some(comp), "the stale node shares the outer");
+    x.set(comp, "AnimTickArray", Fx::objects(&[second, stale_aim]));
+    refused(find_anim_node(&x.vm, comp, name).unwrap_err(), GATHER);
+    x.set(comp, "AnimTickArray", Fx::objects(&[second]));
+    assert_eq!(find_anim_node(&x.vm, comp, name).unwrap(), None, "the current copy alone");
+    // A stale control through NextControl: the current head renamed, its next the first copy's grip control.
+    let head = first_head(&x, second);
+    assert_ne!(head, stale_grip);
+    assert_eq!(find_skel_control(&x.vm, comp, grip).unwrap(), Some(head), "the current copy answers");
+    let other = x.vm.space.names.intern("ToyOtherControl");
+    x.set(head, "ControlName", Value::Name(other));
+    x.set(head, "NextControl", Value::Object(Some(stale_grip)));
+    refused(find_skel_control(&x.vm, comp, grip).unwrap_err(), FOREIGN);
+    // A template control through ControlHead.
+    let lt = x.list_head;
+    let mut l = x.vm.space.classes.struct_defaults(lt).unwrap();
+    set_field(&x.vm, &mut l, "ControlHead", Value::Object(Some(t.k1)), "t").unwrap();
+    x.set(second, "SkelControlLists", Value::array(vec![l]));
+    refused(find_skel_control(&x.vm, comp, grip).unwrap_err(), FOREIGN);
 }
