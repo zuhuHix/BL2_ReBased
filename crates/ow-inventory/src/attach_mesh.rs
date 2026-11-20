@@ -413,8 +413,8 @@ struct EngineAttachBound;
 
 /// Binds this module's `Actor.AttachComponent` rule to [`ATTACH_COMPONENT_PATH`] alone in `ParityMode::Off`, for the
 /// skill worlds (`ow_skills::action_skill::Pack`, lane BIND-ATTACHCOMPONENT-SKILL-WORLDS), which do not register this
-/// module. Keep-existing: a function the VM does not declare, one that is not native, or one already bound gets
-/// nothing. Reference binds nothing.
+/// module. Keep-existing: a function the VM does not declare, one that is not native, one declared under another
+/// native key than [`ATTACH_COMPONENT`], or one already bound gets nothing. Reference binds nothing.
 ///
 /// Unlike [`register`], this binds `Engine`'s function only, not the key VM-wide: a same-keyed function of another
 /// package stays unbound (review r1 of #623).
@@ -425,7 +425,10 @@ pub fn bind_engine_attach(vm: &mut Vm) -> Result<(), VmError> {
     let Ok(id) = vm.find_function(ATTACH_COMPONENT_PATH) else {
         return Ok(());
     };
-    if !vm.function(id).is_some_and(|d| d.is_native()) || vm.is_bound(id) {
+    // Only the signature this rule is for (review r2 of #623): a function declared under another key is left alone,
+    // and the reuse record is never set for it.
+    let ours = vm.function(id).is_some_and(|d| d.is_native() && d.native_key.as_deref() == Some(ATTACH_COMPONENT));
+    if !ours || vm.is_bound(id) {
         return Ok(());
     }
     vm.register_native_for(id, Rc::new(attach_native))?;

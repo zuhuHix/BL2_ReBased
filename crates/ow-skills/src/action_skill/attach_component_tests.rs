@@ -34,7 +34,9 @@ const IMPORTS: [&str; 6] = ["Class", "Function", "ObjectProperty", "BoolProperty
 /// The component fields the attach may write, checked unchanged after a refusal.
 const WRITTEN: [&str; 4] = ["Owner", "bAttached", "bNeedsReattach", "bNeedsUpdateTransform"];
 
-fn engine() -> Vec<u8> {
+/// The `Engine` package; with `mismatch`, `Actor.AttachComponent` takes an int, so its native key is not the rule's (review r2 of
+/// #623).
+fn engine_with(mismatch: bool) -> Vec<u8> {
     let mut t = ScriptToy::with_imports(&IMPORTS);
     let object = t.class("Object", 0);
     let actor = t.class("Actor", object);
@@ -43,7 +45,8 @@ fn engine() -> Vec<u8> {
     t.prop("Array", actor, "Components", 0, array + 1);
     t.prop("Object", array, "Components", 0, component);
     t.prop("Bool", actor, "bDeleteMe", 0, 0);
-    let new_component = Param { type_ref: component, ..Param::new("Object", "NewComponent") };
+    let new_component =
+        if mismatch { Param::new("Int", "NewComponent") } else { Param { type_ref: component, ..Param::new("Object", "NewComponent") } };
     t.function(actor, "AttachComponent", &[new_component], None, &[], &FunctionSpec::new(NATIVE, "AttachComponent"), |_| None);
     t.prop("Object", component, "Owner", 0, actor);
     for flag in ["bAttached", "bNeedsReattach", "bNeedsUpdateTransform"] {
@@ -94,18 +97,19 @@ enum Inventory {
 /// A world in `mode` built with the action skill pack, the inventory's registration placed by `inventory`, and the
 /// empty scene layer when `scene` is set.
 fn fx(mode: ParityMode, scene: bool, inventory: Inventory) -> Fx {
-    fx_with(mode, scene, inventory, false)
+    fx_with(mode, scene, inventory, false, false)
 }
 
 /// [`fx`]; with `conflict`, a refusing handler bound for `Other`'s function before any pack.
-fn fx_with(mode: ParityMode, scene: bool, inventory: Inventory, conflict: bool) -> Fx {
+/// With `mismatch`, `Engine`'s `AttachComponent` is declared under another native key ([`engine_with`]).
+fn fx_with(mode: ParityMode, scene: bool, inventory: Inventory, conflict: bool, mismatch: bool) -> Fx {
     let dir = std::env::temp_dir().join(format!(
         "ow-skills-attach-component-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    let e = engine();
+    let e = engine_with(mismatch);
     let o = other();
     let defs = DefStore::from_synthetic(
         &dir,
@@ -281,7 +285,7 @@ fn reference_binds_nothing_new() {
 /// `Engine` binding, and the action-skill pack still binds `Engine`'s function.
 #[test]
 fn a_conflicting_binding_keeps_the_duplicate_error() {
-    let mut x = fx_with(ParityMode::Off, true, Inventory::Absent, true);
+    let mut x = fx_with(ParityMode::Off, true, Inventory::Absent, true, false);
     assert!(x.bound(), "the action-skill pack binds Engine's function beside the conflict");
     assert!(matches!(
         ow_inventory::attach_mesh::register(&mut x.world.vm),
@@ -291,4 +295,19 @@ fn a_conflicting_binding_keeps_the_duplicate_error() {
     let light = x.obj("Engine.PointLightComponent");
     x.attach(pawn, light).unwrap();
     assert_eq!(x.get(light, "Owner"), Value::Object(Some(pawn)));
+}
+
+/// Review r2 of #623: when `Engine`'s `AttachComponent` is declared under another native key, the action-skill pack
+/// binds nothing and records no reuse, so `Other`'s conflicting handler, the key's only binding, still gives the
+/// inventory its duplicate-registration error.
+#[test]
+fn a_mismatched_signature_binds_nothing_and_keeps_the_error() {
+    let mut x = fx_with(ParityMode::Off, true, Inventory::Absent, true, true);
+    let f = x.world.vm.find_function(ATTACH_COMPONENT_PATH).unwrap();
+    assert_ne!(x.world.vm.function(f).unwrap().native_key.as_deref(), Some(ow_inventory::attach_mesh::ATTACH_COMPONENT));
+    assert!(!x.bound(), "the action-skill pack leaves the other signature unbound");
+    assert!(matches!(
+        ow_inventory::attach_mesh::register(&mut x.world.vm),
+        Err(VmError::Registration { reason: "duplicate native registration", .. })
+    ));
 }

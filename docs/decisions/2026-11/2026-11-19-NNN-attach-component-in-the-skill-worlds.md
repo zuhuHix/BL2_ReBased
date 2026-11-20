@@ -47,3 +47,17 @@ NATIVE_ATTACH_MESH_TO_PICKUP.md; it reuses that note's existing implementation.
   The order test covers both with a second invented package, and a test with a conflicting handler keeps the
   duplicate error.
 - **The success test** asserts exactly four committed writes.
+
+## Edits: review r2 of #623
+
+- **The key is checked.** `bind_engine_attach` binds, and records the reuse, only when `Engine.Actor.AttachComponent`
+  is declared under `Actor.AttachComponent(object)`, the rule's key. A function declared under another signature gets
+  nothing, so a conflicting handler that holds the key elsewhere still gives inventory its duplicate error. A test
+  covers the mismatched signature.
+- **A known order difference, left in the code.** With the action-skill pack first, inventory reuses the `Engine`
+  binding and binds no other package. A same-keyed function in another package then stays unbound, where inventory
+  first would bind it VM-wide.
+  - Promoting the binding to VM-wide would need a new `ow-vm` operation that replaces a package binding. That is more
+    than a small change.
+  - The slice's worlds use `Engine`'s `Actor`. Whether any other installed package declares a same-keyed
+    `AttachComponent` was not checked.
