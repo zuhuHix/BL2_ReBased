@@ -314,7 +314,7 @@ Results:
   The other rows are unchanged. B was re-run after review r1, with the same result.
 
 ctest and verify_packages were not run (no C++ change). No real-game run; `UNVERIFIED` in game. Decision
-2026-11-19-NNN (link 9 target mind).
+2026-11-19-183 (link 9 target mind).
 
 **LINK9-EVIDENCE-CHECK (2026-11-19, pc-hummer, on origin/main d52bcc79):** AI-assisted (Claude Code, Opus 5.5). Link
 9's evidence: after the cast, the Phaselock skill's `LiftedPawn` is the target and `CurrentState` is `EPLS_Intro` (the
