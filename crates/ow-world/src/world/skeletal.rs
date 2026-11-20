@@ -1,4 +1,4 @@
-//! Owner: lane IMPL-SKELETAL-MESH-LAYER (decision 2026-11-19-NNN, number pending). The skeletal mesh data layer, read
+//! Owner: lane IMPL-SKELETAL-MESH-LAYER (decision 2026-11-19-184, number pending). The skeletal mesh data layer, read
 //! only, for `ParityMode::Off`: a loaded `SkeletalMesh`'s reference skeleton (bone names in order and parent indices)
 //! and its sockets. AI-assisted (Claude Code). **UNVERIFIED in the running game**: the layer reports what the data
 //! holds, not what the engine does with it.
@@ -41,7 +41,7 @@ use ow_vm::error::VmError;
 /// The layer, as the consumers' refusals name it (#529).
 pub const LAYER: &str = "a skeletal mesh data reader (sockets and the reference skeleton)";
 /// The record of the layer.
-pub const RECORD: &str = "docs/decisions/2026-11/2026-11-19-NNN-skeletal-mesh-data-layer.md";
+pub const RECORD: &str = "docs/decisions/2026-11/2026-11-19-184-skeletal-mesh-data-layer.md";
 const UNIT: &str = "the skeletal mesh data layer";
 const MESH_CLASS: &str = "Engine.SkeletalMesh";
 const LOAD_LAYER: &str = "the definition store's load (the skeletal mesh data layer loads nothing)";
