@@ -12,6 +12,14 @@ steps and `cast` stops before the attach, at `FlagExpressionEvaluator.Evaluate`'
 stand-ins of NATIVE_ACTOR_TRACE.md section 4, and `phaselock_world` installs no scene layer, so there it would refuse
 layer-absent. UNVERIFIED in game.
 
+**HARNESS-LINK9-SETUP (2026-11-20, pc-hummer, on fix/rust-link9-harness-setup from main 4c4522d7):** AI-assisted
+(Claude Code, Opus 5.5). Link 9's set-up resolves `GearboxFramework.IRuleEngineOwner` and installs the pickup worlds'
+empty scene layer, both labelled UNVERIFIED harness inputs. `cargo test --workspace`: 2978 passed / 0 failed / 51
+ignored; `crate_edges_test.py` OK. Installed Off `--slice-gate` strict (release builds, under the machine lock): main
+and branch both ok 4, notyet 9, error 1 of 14. Only link 9 differs: still 1 of 2 steps, with `cast` now stopping at
+GearboxMind's unread QueryInterface answer for `IAIInterface` (marked after partial writes), past the
+IRuleEngineOwner load.
+
 **IMPL-NOUN-REPLICATION (2026-11-19, pc-hummer, on fix/rust-link9-attr-get-value b0cd5f4f, #515):** AI-assisted
 (Claude Code, Opus 5.5). The noun providers' arrays and replicated copy in Off, from section 10 of
 NATIVE_NOUN_ATTRIBUTES.md (#516 r1, 94663dbe). `cargo test -p ow-attr -p ow-inventory -p ow-combat -p ow-skills -p

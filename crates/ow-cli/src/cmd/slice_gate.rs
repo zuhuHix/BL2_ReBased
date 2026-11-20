@@ -1313,8 +1313,18 @@ fn phaselock_world(
     // This world loads no level, so its collision service holds no geometry (lane IMPL-SPAWN-TRACE-FILTERS, decision
     // 2026-11-19-90): a harness stand-in. The spot search still filters the live actors itself.
     ow_world::placement::install_collision(&mut world.vm, Rc::new(ow_world::placement::NoLevel))?;
+    // The pickup worlds' empty scene layer (lane HARNESS-LINK9-SETUP, the hub's ruling on #623): a harness input, so
+    // `Actor.AttachComponent` (the phaselock light's attach) makes only its script-visible writes.
+    ow_inventory::attach_mesh::add_empty_scene(&mut world.vm)?;
+    harness.push(TARGET_SCENE_INPUT.to_string());
     Ok(world)
 }
+
+/// Link 9's scene-layer harness line (lane HARNESS-LINK9-SETUP).
+pub const TARGET_SCENE_INPUT: &str = concat!(
+    "harness input: the scene layer: the pickup worlds' empty scene (ow_inventory::attach_mesh::SceneLayer; ",
+    "UNVERIFIED stand-in for the game's render, collision and physics registration)"
+);
 
 fn script_error(message: String) -> ow_vm::error::VmError {
     ow_vm::error::VmError::Script {
@@ -1407,6 +1417,10 @@ pub const TARGET_MIND_INPUT: &str = "harness input: the target's mind";
 /// The interface a mind's flag store answers, resolved at link 9's set-up ([`phaselock_setup`]): the flag evaluator
 /// checks a store by its class tables, which only hold a class once loaded.
 pub const TARGET_FLAG_PROVIDER: &str = "GearboxFramework.IFlagProvider";
+
+/// The interface the flag evaluator checks a rule-engine owner against, resolved at link 9's set-up for the same reason
+/// (lane HARNESS-LINK9-SETUP): main's link 9 stopped at its class not being loaded.
+pub const TARGET_RULE_ENGINE_OWNER: &str = "GearboxFramework.IRuleEngineOwner";
 
 /// The text that starts each of link 9's set-up class lines ([`preload_class`]).
 pub const TARGET_FLAG_PROVIDER_INPUT: &str = "harness input: set-up class";
@@ -1513,12 +1527,18 @@ pub fn target_mind(
 }
 
 /// The classes link 9's set-up resolves ([`phaselock_setup`], reviews r1 and r2 of #579): the target mind's fallback
-/// class, the mind's flag store interface,
+/// class, the mind's flag store interface and the rule-engine owner interface (lane HARNESS-LINK9-SETUP),
 /// the two interfaces the pawn rules compare against, and every class whose answer `ow_combat::pawn_interface`
 /// registers. Resolving them at set-up keeps the cast from loading any of them lazily (a load is a write).
 pub fn phaselock_setup_classes() -> Vec<&'static str> {
     use ow_combat::pawn_interface as pi;
-    let mut classes = vec![TARGET_MIND_FALLBACK, TARGET_FLAG_PROVIDER, pi::AI_INTERFACE, pi::PLAYER_MASTER_INTERFACE];
+    let mut classes = vec![
+        TARGET_MIND_FALLBACK,
+        TARGET_FLAG_PROVIDER,
+        TARGET_RULE_ENGINE_OWNER,
+        pi::AI_INTERFACE,
+        pi::PLAYER_MASTER_INTERFACE,
+    ];
     classes.push(pi::PAWN);
     classes.extend([pi::WILLOW_AI_PAWN, pi::WILLOW_VEHICLE]);
     classes.extend(pi::OPEN_ANSWERS.iter().map(|(path, _, _)| *path));

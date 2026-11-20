@@ -728,6 +728,10 @@ fn link_9_s_set_up_reports_every_class_it_resolves() {
     assert!(harness[0].contains("loaded at set-up"), "{}", harness[0]);
     assert!(harness[1].contains("loaded at set-up"), "{}", harness[1]);
     assert!(classes.contains(&ow_combat::pawn_interface::PLAYER_MASTER_INTERFACE));
+    // Lane HARNESS-LINK9-SETUP: the rule-engine owner interface is resolved too, right after the flag store's; the
+    // toy packages lack it, so its line says nothing was loaded.
+    assert_eq!(classes[2], TARGET_RULE_ENGINE_OWNER);
+    assert!(harness[2].ends_with("not in the packages, nothing loaded"), "{}", harness[2]);
 }
 
 /// Review r1 of #579, item 4: a NotYet from the mind is marked once, at the start, with its kind and record kept, even
