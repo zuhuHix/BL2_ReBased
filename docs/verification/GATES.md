@@ -163,8 +163,8 @@ ctest and verify_packages were not run (no C++ change). No real-game run; `UNVER
 **IMPL-DROPCOMBATPERCH (2026-11-20, pc-hummer, on fix/rust-is-staggered 11097cef, main c687c135):** AI-assisted (Claude
 Code, Opus 5.5). `WillowAIPawn.DropCombatPerch` in Off from NATIVE_DROP_COMBAT_PERCH.md at 08edad6d (`ow-combat`
 `hit/pools.rs`): D1 (two texts), D2 for native descendants, the three fields by name, the guard answering nothing,
-D3 when it holds; Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,756 passed / 0
-failed / 49 ignored (10 new tests); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 3 ok / 10 NotYet / 1
+D3 when it holds; Reference unchanged. `cargo build --workspace` clean; `cargo test --workspace` 2,758 passed / 0
+failed / 49 ignored (12 new tests); `crate_edges_test.py` OK. Installed Off `--slice-gate` strict: 3 ok / 10 NotYet / 1
 error, all 14 rows byte-identical to main's. Link 9 passes 1 of its driver's 2 steps (`spawn`) and stops at `cast` on
 main's noun `ReplicationStrategy` 2 refusal, before the lift asks this native. No real-game run; `UNVERIFIED` in game.
 Decision 2026-11-19-NNN; logs under ignored `local/p2/is/`.

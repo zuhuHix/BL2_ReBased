@@ -58,18 +58,22 @@ fn willow(shape: Shape) -> Vec<u8> {
     }
     t.prop("Object", pawn, "ToyLink", 0, object);
     let ai = t.class("WillowAIPawn", pawn);
+    // Declared flag first: the class's own fields take slots in reverse declaration order, so `bPerchAttached` gets
+    // the last slot (the short-slot test cuts it off).
+    t.prop(if shape == Shape::IntFlag { "Int" } else { "Bool" }, ai, "bPerchAttached", 0, 0);
     if shape != Shape::NoProjectile {
         t.prop("Object", ai, "PerchProjectile", 0, definition);
     }
-    t.prop(if shape == Shape::IntFlag { "Int" } else { "Bool" }, ai, "bPerchAttached", 0, 0);
     let spec = FunctionSpec::new(NATIVE_FLAGS, "DropCombatPerch");
-    let drop = t.function(ai, "DropCombatPerch", &[], None, &[], &spec, |_| None).function;
-    // `Died(Killer)`, a script stand-in for the installed one's call: it calls `DropCombatPerch` on itself.
+    t.function(ai, "DropCombatPerch", &[], None, &[], &spec, |_| None);
+    let drop = t.p.name("DropCombatPerch");
+    // `Died(Killer)`, a script stand-in for the installed one's call: it calls `DropCombatPerch` on itself by name, a
+    // virtual call as the installed script makes it (review r1 of #626).
     let spec = FunctionSpec::new(SCRIPT_FLAGS, "Died");
     let killer = Param { type_ref: object, ..Param::new("Object", "Killer") };
     t.function(ai, "Died", &[killer], None, &[], &spec, |_| {
         let mut a = Asm::new();
-        a.stmt().final_function(drop, |_| {});
+        a.stmt().raw(&[0x1B]).i32(drop).i32(0).raw(&[0x16]);
         a.stmt().return_nothing();
         a.end();
         Some(a)
@@ -153,6 +157,17 @@ impl Fx {
         }
         self.set(pawn, "bPerchAttached", Value::Bool(attached));
         pawn
+    }
+
+    /// Cuts `pawn`'s slot vector just before `bPerchAttached`'s slot, after checking that `Role`'s and
+    /// `PerchProjectile`'s slots come before it, so only the flag (and what follows it) is missing.
+    fn short_of_attached(&mut self, pawn: ObjRef) {
+        let space = &self.vm.space;
+        let class = space.heap.get(pawn).unwrap().class;
+        let slot = |name: &str| space.classes.resolve(class, PropAddr::scalar(space.prop(class, name).unwrap())).unwrap();
+        let attached = slot("bPerchAttached");
+        assert!(slot("Role") < attached && slot("PerchProjectile") < attached, "the fixture's slot order");
+        self.vm.space.heap.get_mut(pawn).unwrap().slots.truncate(attached);
     }
 
     /// #518's three counters.
@@ -347,10 +362,12 @@ fn died_reaches_the_rule_in_off_and_the_no_op_in_reference() {
         }
         let f = x.vm.find_function(died).unwrap();
         let perched = x.pawn("WillowAIPawn", 3, true, true);
+        let before = x.counters();
         match x.vm.call(f, Some(perched), vec![Value::Object(None)]) {
             Err(VmError::NotYet(n)) => assert!(n.what.contains(PERCH_DROP), "death first {death_first}: {n}"),
             other => panic!("death first {death_first}: expected D3, got {other:?}"),
         }
+        assert_eq!(x.counters(), before, "death first {death_first}: #518's counters");
         let slice = x.pawn("WillowAIPawn", 3, false, false);
         x.vm.call(f, Some(slice), vec![Value::Object(None)]).unwrap();
     }
@@ -360,4 +377,32 @@ fn died_reaches_the_rule_in_off_and_the_no_op_in_reference() {
     let f = x.vm.find_function(died).unwrap();
     let perched = x.pawn("WillowAIPawn", 3, true, true);
     x.vm.call(f, Some(perched), vec![Value::Object(None)]).unwrap();
+}
+
+/// Review r1 of #626: the declarations are checked first, then the slots are read in the guard's order. A pawn with
+/// `Role` 2 whose slot vector is short of `bPerchAttached` answers nothing, because the first guard decides and the
+/// missing slot is never read; with `Role` 3 and a set projectile the missing slot is reached and is a heap error.
+#[test]
+fn the_first_failing_guard_answers_before_a_later_slot_is_read() {
+    let mut x = fx();
+    for (role, projectile) in [(2, true), (3, false)] {
+        let pawn = x.pawn("WillowAIPawn", role, projectile, true);
+        x.short_of_attached(pawn);
+        x.nothing(pawn, "short of bPerchAttached");
+    }
+    let pawn = x.pawn("WillowAIPawn", 3, true, true);
+    x.short_of_attached(pawn);
+    assert!(matches!(drop_combat_perch(&x.vm, pawn), Err(VmError::Heap(_))), "the missing slot, once reached");
+}
+
+/// Review r1 of #626: a freed receiver is an invalid receiver, a `VmError::Script` naming the native, with #518's
+/// counters unchanged.
+#[test]
+fn a_freed_receiver_is_a_script_error() {
+    let mut x = fx();
+    let pawn = x.pawn("WillowAIPawn", 3, true, true);
+    x.vm.space.free(pawn).unwrap();
+    let before = x.counters();
+    script_error(drop_combat_perch(&x.vm, pawn), "WillowAIPawn.DropCombatPerch: the receiver is not a live object");
+    assert_eq!(x.counters(), before);
 }

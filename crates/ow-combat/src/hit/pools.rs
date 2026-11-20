@@ -773,8 +773,13 @@ pub fn drop_combat_perch(vm: &Vm, pawn: ObjRef) -> Result<(), VmError> {
 pub fn drop_combat_perch_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<(), VmError> {
     const WHAT: &str = "WillowAIPawn.DropCombatPerch";
     let space = &vm.space;
+    // A receiver the heap does not hold (a freed handle) is an invalid receiver: a script error, as the note says for
+    // one outside `WillowAIPawn` (review r1 of #626).
+    let obj = space
+        .heap
+        .get(pawn)
+        .map_err(|e| super::access::error(format!("{WHAT}: the receiver is not a live object ({e})")))?;
     let path = ow_attr::eval::class_path(space, pawn);
-    let obj = space.heap.get(pawn)?;
     let class = obj.class;
     let Some(ai) = space.classes.by_path("WillowGame.WillowAIPawn").filter(|&a| space.classes.is_child_of(class, a)) else {
         return Err(super::access::error(format!("{WHAT}: {path} is not a WillowAIPawn")));
@@ -801,21 +806,27 @@ pub fn drop_combat_perch_with(vm: &Vm, pawn: ObjRef, native: &[&str]) -> Result<
         }
         cursor = space.classes.get_layout(c).and_then(|l| l.super_class());
     }
-    let field = |name: &str, want: &str, ok: fn(&PropKind) -> bool| -> Result<Value, VmError> {
+    // Every declaration is checked before any slot is read; then the slots are read and tested in the guard's order,
+    // and the first failing guard answers, so a later slot is never read (review r1 of #626).
+    let decl = |name: &str, want: &str, ok: fn(&PropKind) -> bool| -> Result<_, VmError> {
         let bad = |why: String| super::access::error(format!("{WHAT}: {path}.{name} {why}"));
         let p = space.prop(class, name).ok_or_else(|| bad("is not declared".to_string()))?;
         match space.classes.decl(p).map(|d| &d.kind) {
-            Some(k) if ok(k) => Ok(space.read(pawn, ow_object::ids::PropAddr::scalar(p))?.clone()),
+            Some(k) if ok(k) => Ok(p),
             _ => Err(bad(format!("is not {want}"))),
         }
     };
-    let role = field("Role", "a byte", |k| matches!(k, PropKind::Byte { .. }))?;
-    let projectile = field("PerchProjectile", "an object", |k| matches!(k, PropKind::Object { .. }))?;
-    let attached = field("bPerchAttached", "a bool", |k| matches!(k, PropKind::Bool))?;
-    let role = matches!(role, Value::Byte(ROLE_AUTHORITY));
-    let projectile = matches!(projectile, Value::Object(Some(_)));
-    let attached = matches!(attached, Value::Bool(true));
-    if !role || !projectile || !attached {
+    let role = decl("Role", "a byte", |k| matches!(k, PropKind::Byte { .. }))?;
+    let projectile = decl("PerchProjectile", "an object", |k| matches!(k, PropKind::Object { .. }))?;
+    let attached = decl("bPerchAttached", "a bool", |k| matches!(k, PropKind::Bool))?;
+    let read = |p| space.read(pawn, ow_object::ids::PropAddr::scalar(p));
+    if !matches!(read(role)?, Value::Byte(ROLE_AUTHORITY)) {
+        return Ok(());
+    }
+    if !matches!(read(projectile)?, Value::Object(Some(_))) {
+        return Ok(());
+    }
+    if !matches!(read(attached)?, Value::Bool(true)) {
         return Ok(());
     }
     Err(NotYet::not_read(PERCH_DROP, RECORD_PERCH).into())

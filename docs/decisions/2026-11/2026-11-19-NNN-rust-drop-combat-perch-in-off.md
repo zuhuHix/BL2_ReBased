@@ -26,6 +26,10 @@ Stacked on fix/rust-is-staggered @ f0066f0f (#619), because both bind in `ow-com
   the rule answers whichever pack registers first, and `Died` and `Staggered.BeginState` reach it. COMBAT_DEATH.md's
   presentation row says so. A test runs a perched pawn's `Died` in Off (D3) in both registration orders, and
   the no-op under Reference.
+- **Review r1 of #626:** every declaration is checked before any slot is read, and the slots are then read in the
+  guard's order (`Role`, `PerchProjectile`, `bPerchAttached`), so the first failing guard answers before a later slot
+  is read. A freed receiver is a `VmError::Script` naming the native. The fixture's `Died` calls `DropCombatPerch`
+  virtually, by name, as the installed script does, and the perched Off call meets D3 with #518's counters unchanged.
 - **Verified:** host unit tests on invented packages, covering the note's ten tests (a missing or non-byte `Role`, D2 for each listed
   class and an invented child of each, and the death path among them). Every answer and refusal leaves
   #518's counters unchanged. The installed Off strict slice gate is identical to main's, row by row.
