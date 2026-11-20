@@ -1349,6 +1349,12 @@ fn phaselock_cast(vm: &mut ow_vm::api::Vm, actors: CastActors) -> Result<ow_obje
         .map_err(ow_vm::error::VmError::Def)?
         .ok_or_else(|| script_error(format!("{PHASELOCK_SKILL}: no package holds it")))?;
     let (pawn, controller, target) = actors;
+    // The QueryInterface set-up (lane IMPL-GEARBOXMIND-QUERYINTERFACE): the classes and interface tables the read-only
+    // `Controller` rule can reach from the cast's actors are resolved before the cast asks anything, each logged as an
+    // UNVERIFIED harness input (a load is a write, so the rule itself loads nothing).
+    let roots: Vec<ow_object::ids::ObjRef> = [pawn, controller, target].into_iter().flatten().collect();
+    let lines = ow_combat::pawn_interface::read_only::prepare(vm, &roots)?;
+    vm.log.extend(lines);
     let f = vm.find_function(PHASELOCK_CAST)?;
     vm.call(
         f,

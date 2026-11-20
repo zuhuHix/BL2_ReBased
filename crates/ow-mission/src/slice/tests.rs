@@ -188,8 +188,6 @@ fn gearbox() -> Vec<u8> {
     let bpd = t.class("BehaviorProviderDefinition", object);
     // The interface Behavior_AIHold's context is asked for (decision 2026-11-19-62); no toy class lists it.
     t.class("IAIInterface", object);
-    // A mind, whose own QueryInterface answer is open (bound as NotYet in Off).
-    t.class("GearboxMind", object);
     let path = toy_struct(&mut t, 0, "NameBasedObjectPath", None);
     t.prop("Name", path, "PathComponentNames", 0, 0);
     let provider = t.class("ToyPathHolder", object);
@@ -703,7 +701,8 @@ struct Map {
     /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Note`, an invented `Behavior_RemoteEvent` export
     /// of the package (event name `InventedNote`), to check the pawn's references resolve through the store.
     pawn_reference: bool,
-    /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Mind`, an invented `GearboxMind` export.
+    /// With [`Map::pawn`]: the archetype's `Controller` names `Pawn_Mind`, an invented `WillowPlayerController` export
+    /// (a controller whose answer to the hold's question is still open).
     pawn_mind: bool,
     /// With [`Map::pawn`]: the archetype's `Mesh` names `Pawn_Mesh`, its own `SkeletalMeshComponent` export (outered
     /// to the archetype), as the installed dummy's template mesh is (lane DUMMY-COMPONENTS).
@@ -760,7 +759,7 @@ fn dynamic(map: Map) -> Vec<u8> {
             payload.extend_from_slice(&none);
         }
         if map.pawn_mind {
-            let mind_class = class_import(&mut p, "GearboxFramework", "GearboxMind");
+            let mind_class = class_import(&mut p, "WillowGame", "WillowPlayerController");
             let mind = p.add_export(mind_class, "Pawn_Mind", empty.clone());
             p.set_outer(mind, character);
             payload = 0i32.to_le_bytes().to_vec();
@@ -1269,9 +1268,9 @@ fn the_ai_hold_by_mode() {
     }
 }
 
-/// A dummy whose pawn's controller is a mind, with the hold OnTakeDamage's first behavior and no variable links
-/// (reviews r1 and r2 of #456): in Off the hold is checked before the event fires, so its `NotYet { NotRead }` names
-/// `GearboxMind`'s open answer, is not a partial-writes stop, and leaves the event untriggered, `Hit` unraised and
+/// A dummy whose pawn's controller has an open answer (a `WillowPlayerController`, for `IAIInterface`), with the hold
+/// OnTakeDamage's first behavior and no variable links (reviews r1 and r2 of #456): in Off the hold is checked before
+/// the event fires, so its `NotYet { NotRead }` names that open answer, is not a partial-writes stop, and leaves the event untriggered, `Hit` unraised and
 /// the script not run. Reference keeps the no-op. A controller of a class with no open answer answers by its plain
 /// table, none here, so the script runs.
 #[test]
@@ -1289,7 +1288,7 @@ fn the_first_hold_of_a_pawn_with_a_mind_is_refused_before_the_event_fires() {
                 let e = r.unwrap_err();
                 let n = e.not_yet().expect("a NotYet");
                 assert_eq!(n.missing, Missing::NotRead, "{e:?}");
-                assert!(n.what.contains("goes to its Controller, a GearboxFramework.GearboxMind"), "{e:?}");
+                assert!(n.what.contains("goes to its Controller, a WillowGame.WillowPlayerController"), "{e:?}");
                 assert!(!n.what.contains("stopped after partial writes"), "{e:?}");
                 assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 0, "the event state is untouched");
                 assert_eq!(env.remotes(), Vec::<String>::new(), "Hit was not raised");
@@ -1324,7 +1323,7 @@ fn a_later_hold_is_refused_by_the_firing_as_a_terminal_stop() {
     let n = e.not_yet().expect("a NotYet");
     assert_eq!(n.missing, Missing::NotRead, "the kind is kept: {e:?}");
     assert!(n.what.starts_with("stopped after partial writes: "), "{e:?}");
-    assert!(n.what.contains("GearboxMind's own QueryInterface answer"), "{e:?}");
+    assert!(n.what.contains("WillowPlayerController's QueryInterface answer for IAIInterface"), "{e:?}");
     assert_eq!(s.dummy_event_triggers("OnTakeDamage"), 1, "the event had triggered");
     assert_eq!(env.remotes(), vec!["Hit".to_string()], "Hit, ahead of the hold, was raised");
     assert!(seen.borrow().is_empty());

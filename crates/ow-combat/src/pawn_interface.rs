@@ -22,8 +22,8 @@
 //! object, which "answers by its own rule": [`Vm::query_interface`], the same dispatch as a direct `QueryInterface`
 //! on that object (review r1 of #456, item 3). The answers the note leaves open are bound in Off as rules that are
 //! `NotYet { NotRead }`, so a direct question and a handed-on one meet the same refusal:
-//! - `GearboxMind`'s own answer, for every interface (whether it adds steps before or after its class's declared
-//!   interfaces); a `WillowMind`, the Fire dummy's mind, takes it;
+//! - (`GearboxMind`'s answer was open here; it is `Controller`'s rule now, [`read_only`], lane
+//!   IMPL-GEARBOXMIND-QUERYINTERFACE, from NATIVE_GEARBOXMIND_QUERYINTERFACE.md);
 //! - `WillowPlayerController`'s answer for `IAIInterface` (other interfaces keep the plain answer: the note's open item
 //!   is that one question);
 //! - a component class other than exactly `ActorComponent`, `SkeletalMeshComponent`, `AIComponent` and
@@ -61,7 +61,7 @@ use std::rc::Rc;
 use ow_core::{NotYet, ParityMode};
 use ow_object::ids::{ClassId, ObjRef};
 use ow_object::value::Value;
-use ow_vm::api::{InterfaceRuleFn, Vm};
+use ow_vm::api::{InterfaceAsking, InterfaceRuleFn, ReadOnlyInterfaceRuleFn, Vm};
 use ow_vm::error::VmError;
 
 use crate::hit::access::object_of;
@@ -91,29 +91,31 @@ pub const AI_INTERFACE: &str = "GearboxFramework.IAIInterface";
 pub const PLAYER_MASTER_INTERFACE: &str = "WillowGame.IPlayerMaster";
 
 /// The classes whose own answer the note leaves open, with how it names them, and whether the open item is the
-/// `IAIInterface` question only (module notes).
-pub const OPEN_ANSWERS: [(&str, &str, bool); 2] = [
-    (
-        "GearboxFramework.GearboxMind",
-        "GearboxMind's own QueryInterface answer (whether it adds steps before or after its class's declared \
-         interfaces)",
-        false,
-    ),
+/// `IAIInterface` question only (module notes). `GearboxMind`'s answer is no longer open: it is `Controller`'s
+/// ([`read_only`], lane IMPL-GEARBOXMIND-QUERYINTERFACE).
+pub const OPEN_ANSWERS: [(&str, &str, bool); 1] = [
     ("WillowGame.WillowPlayerController", "WillowPlayerController's QueryInterface answer for IAIInterface", true),
 ];
 
-/// Registers `Pawn`'s, `WillowAIPawn`'s and `WillowVehicle`'s answers, and the open answers as `NotYet` rules, in
-/// Off, for each class the installed packages hold; nothing under Reference. A class that already has an answer keeps
-/// it. A class lookup that fails for another reason than the class being absent is returned as the error, so a class
-/// that is present but fails to load never quietly takes a parent's rule (review r1 of #456, item 4).
+/// Registers `Pawn`'s, `WillowAIPawn`'s and `WillowVehicle`'s answers, and the open answers as `NotYet` rules, each
+/// with its read-only form ([`read_only`]); `Controller`'s rule (for `Engine.Controller` and `WillowGame.WillowMind`)
+/// and `Engine.PlayerController`'s `NotYet`, both read-only rules (lane IMPL-GEARBOXMIND-QUERYINTERFACE). In Off, for
+/// each class the installed packages hold; nothing under Reference. A class that already has an answer keeps it (and
+/// a read-only form it has). A class lookup that fails for another reason than the class being absent is returned as
+/// the error, so a class that is present but fails to load never quietly takes a parent's rule (review r1 of #456,
+/// item 4).
 pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     if vm.parity != ParityMode::Off {
         return Ok(());
     }
-    let mut rules: Vec<(&str, InterfaceRuleFn)> = vec![
-        (PAWN, Rc::new(pawn_answer)),
-        (WILLOW_AI_PAWN, Rc::new(willow_ai_pawn_answer)),
-        (WILLOW_VEHICLE, Rc::new(vehicle_answer)),
+    let vehicle_read_only: ReadOnlyInterfaceRuleFn =
+        Rc::new(|vm: &Vm, _asking: &mut InterfaceAsking, o: ObjRef, iface: ClassId| Err(vehicle_not_yet(vm, o, iface)));
+    // Each rule with its read-only form, or none: the component rule has no read-only form yet, so the read-only chain
+    // answers `NotPorted` where it reaches a component (the hub's ruling in review r1 of #602, item 1).
+    let mut rules: Vec<(&str, InterfaceRuleFn, Option<ReadOnlyInterfaceRuleFn>)> = vec![
+        (PAWN, Rc::new(pawn_answer), Some(Rc::new(read_only::pawn_read_only))),
+        (WILLOW_AI_PAWN, Rc::new(willow_ai_pawn_answer), Some(Rc::new(read_only::willow_ai_pawn_read_only))),
+        (WILLOW_VEHICLE, Rc::new(vehicle_answer), Some(vehicle_read_only)),
     ];
     // The component rule's `Owner` declarations, judged once here from the class metadata (review r1 of #524, item
     // 3): a declared target the class table has only reserved (its superclass not filled in) is defined now, so its
@@ -130,17 +132,31 @@ pub fn register(vm: &mut Vm) -> Result<(), VmError> {
     let owners = Rc::new(owners);
     for path in COMPONENT_RULE_CLASSES {
         let owners = owners.clone();
-        rules.push((path, Rc::new(move |vm: &mut Vm, this: ObjRef, iface: ClassId| component_answer(vm, this, iface, &owners))));
+        rules.push((path, Rc::new(move |vm: &mut Vm, this: ObjRef, iface: ClassId| component_answer(vm, this, iface, &owners)), None));
     }
     for (path, words, ai_only) in OPEN_ANSWERS {
-        rules.push((path, open_answer(words, ai_only)));
+        rules.push((path, open_answer(words, ai_only), Some(read_only::open_read_only(words, ai_only, RECORD))));
     }
-    for (path, rule) in rules {
+    for (path, rule, form) in rules {
         let Some(class) = vm.find_class_if_present(path)? else {
             continue;
         };
         if !vm.has_interface_rule(class) {
             vm.register_interface_rule(class, rule)?;
+            if let Some(form) = form {
+                vm.register_read_only_form(class, form)?;
+            }
+        }
+    }
+    let mut controllers: Vec<(&str, ReadOnlyInterfaceRuleFn)> =
+        read_only::CONTROLLER_RULES.iter().map(|&(path, pawn)| (path, read_only::controller_rule(pawn))).collect();
+    controllers.push((read_only::PLAYER_CONTROLLER, read_only::player_controller_rule()));
+    for (path, rule) in controllers {
+        let Some(class) = vm.find_class_if_present(path)? else {
+            continue;
+        };
+        if !vm.has_interface_rule(class) && !vm.has_read_only_interface_rule(class) {
+            vm.register_read_only_interface_rule(class, rule)?;
         }
     }
     Ok(())
@@ -448,7 +464,11 @@ fn object_path(vm: &Vm, o: ObjRef) -> String {
 
 /// `WillowVehicle`'s answer: its own rule is recorded for completeness only and not implemented.
 fn vehicle_answer(vm: &mut Vm, vehicle: ObjRef, iface: ClassId) -> Result<Option<ObjRef>, VmError> {
-    Err(NotYet::not_read(
+    Err(vehicle_not_yet(vm, vehicle, iface))
+}
+
+fn vehicle_not_yet(vm: &Vm, vehicle: ObjRef, iface: ClassId) -> VmError {
+    NotYet::not_read(
         format!(
             "WillowVehicle's own QueryInterface({}) rule (its controller unless a human player's, IAnimBehavior from \
              its Mesh), recorded for completeness and not implemented, asked of {}",
@@ -457,8 +477,10 @@ fn vehicle_answer(vm: &mut Vm, vehicle: ObjRef, iface: ClassId) -> Result<Option
         ),
         RECORD,
     )
-    .into())
+    .into()
 }
+
+pub mod read_only;
 
 #[cfg(test)]
 mod tests;

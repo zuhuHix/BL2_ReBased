@@ -68,6 +68,12 @@ fn world_where(mode: ParityMode, refuse: Rc<dyn Fn(ObjRef) -> Option<VmError>>) 
     let vm = &mut e.vm;
     let root = vm.find_class("Core.Object").unwrap();
     vm.space.classes.define("GearboxFramework.IAIInterface", Some(root), vec![]).unwrap();
+    // A player controller, whose own QueryInterface answer for IAIInterface is still open (a `NotYet`): the AI pawn's
+    // `Controller` in the tests that need a context whose answer is not read. The mind's answer is read now (lane
+    // IMPL-GEARBOXMIND-QUERYINTERFACE), and a skeletal mesh component answers by #524's rule (review r1 of #602,
+    // item 2).
+    let toy_root = vm.space.classes.by_path("Toy.ToyObject").unwrap();
+    vm.space.classes.define("WillowGame.WillowPlayerController", Some(toy_root), vec![]).unwrap();
     let class = vm.find_class("ToyHolds.ToyHoldBehavior").unwrap();
     let behavior = make(vm, class, "Hold_57");
     let seen = Rc::new(RefCell::new(Vec::new()));
@@ -92,8 +98,8 @@ fn world_where(mode: ParityMode, refuse: Rc<dyn Fn(ObjRef) -> Option<VmError>>) 
 
 /// A context with no AI to reach runs the installed-shaped script with itself as `ContextObject`. A pawn: in Off,
 /// `Pawn`'s `QueryInterface` rule (lane IMPL-PAWN-AI-INTERFACE): a pawn with no controller, vehicle or mesh answers
-/// none and the script runs; one whose `Controller` is set asks that controller, whose own answer is not read, so it
-/// is `NotYet` with nothing run. Under Reference every pawn is `NotYet`, as before.
+/// none and the script runs; one whose `Controller` is a player controller asks it, whose own answer for
+/// `IAIInterface` is not read, so it is `NotYet` with nothing run. Under Reference every pawn is `NotYet`, as before.
 #[test]
 fn the_script_runs_unless_the_context_has_an_ai() {
     for mode in [ParityMode::Off, ParityMode::Reference] {
@@ -112,10 +118,11 @@ fn the_script_runs_unless_the_context_has_an_ai() {
             assert_eq!(*seen.borrow(), [plain], "{mode:?}");
         }
         let ran = seen.borrow().len();
+        with_open_controller(vm, e.ai);
         let err = apply(vm, behavior, &[e.ai]).unwrap_err();
         assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
         let words = if mode == ParityMode::Off {
-            "goes to its Controller, a WillowGame.WillowMind"
+            "goes to its Controller, a WillowGame.WillowPlayerController"
         } else {
             "Pawn IAIInterface"
         };
@@ -125,6 +132,14 @@ fn the_script_runs_unless_the_context_has_an_ai() {
         let wrong = make(vm, other, "NotAHold");
         assert!(apply(vm, wrong, &[plain]).unwrap_err().to_string().contains("no ApplyBehaviorToContext"));
     }
+}
+
+/// Gives `pawn` a player controller as its `Controller` (see [`world_where`]).
+fn with_open_controller(vm: &mut Vm, pawn: ObjRef) {
+    let class = vm.find_class("WillowGame.WillowPlayerController").unwrap();
+    let controller = make(vm, class, "ToyPlayer_0");
+    let p = vm.space.prop(vm.space.heap.get(pawn).unwrap().class, "Controller").unwrap();
+    vm.space.write(pawn, ow_object::ids::PropAddr::scalar(p), Value::Object(Some(controller))).unwrap();
 }
 
 fn declare(vm: &mut Vm, owner: ow_object::ids::ClassId, path: &str) -> ow_object::ids::FuncId {
@@ -173,12 +188,13 @@ fn off_judges_every_context_first_and_reference_keeps_its_order() {
         Pack.register(vm).unwrap();
         let first = make(vm, e.object, "ToyFirst");
         let last = make(vm, e.object, "ToyLast");
+        with_open_controller(vm, e.ai);
         let err = apply(vm, behavior, &[first, e.ai, last]).unwrap_err();
         assert!(matches!(&err, VmError::NotYet(n) if n.missing == Missing::NotRead), "{mode:?}: {err}");
         assert!(!err.to_string().contains(ow_combat::holds::PARTIAL_WRITES), "{mode:?}: {err}");
         match mode {
             ParityMode::Off => {
-                assert!(err.to_string().contains("goes to its Controller, a WillowGame.WillowMind"), "{err}");
+                assert!(err.to_string().contains("goes to its Controller, a WillowGame.WillowPlayerController"), "{err}");
                 assert_eq!(*seen.borrow(), [], "no script call");
             }
             _ => assert_eq!(*seen.borrow(), [first], "Reference: the first context ran"),

@@ -17,6 +17,7 @@ use ow_defs::DefStore;
 use ow_defs::identity::IdentityPolicy;
 use ow_object::heap::ObjectSpace;
 use ow_object::ids::{ClassId, ObjRef};
+use ow_object::layout::{PropKind, PropertyDecl};
 use ow_object::value::Value;
 use ow_core::PackageName;
 use ow_package::testkit::reflect::{ClassBodySpec, class_body};
@@ -87,6 +88,10 @@ fn engine_with(owners: Owners, attached: Attached) -> Vec<u8> {
     let controller = real_class(&mut t, "Controller", actor, object, 2, &[]);
     // A controller listing the interface, for the direct mesh query's owner forwarding.
     real_class(&mut t, "ToyThingController", controller, object, 2, &[thing]);
+    // `Controller`'s rule reads these (lane IMPL-GEARBOXMIND-QUERYINTERFACE).
+    for field in ["Pawn", "PlayerReplicationInfo"] {
+        t.prop("Object", controller, field, 0, object);
+    }
     real_class(&mut t, "Vehicle", pawn, object, 2, &[]);
     // `ActorComponent` without `Owner` (for the missing-declaration case), `SkeletalMeshComponent` under it declaring
     // `Owner`, a subclass of it and another component class (lane IMPL-LINK11-QUERY-INTERFACE).
@@ -187,9 +192,10 @@ impl Env {
         let (object, pawn, controller) =
             (class(&mut vm, "Engine.Object"), class(&mut vm, "Engine.Pawn"), class(&mut vm, "Engine.Controller"));
         let vehicle = class(&mut vm, "Engine.Vehicle");
+        let mind = vm.space.classes.define("GearboxFramework.GearboxMind", Some(controller), vec![]).unwrap();
+        let my_pawn = PropertyDecl::new(vm.space.names.intern("MyWillowPawn"), PropKind::Object { class: object });
+        vm.space.classes.define("WillowGame.WillowMind", Some(mind), vec![my_pawn]).unwrap();
         let classes = &mut vm.space.classes;
-        let mind = classes.define("GearboxFramework.GearboxMind", Some(controller), vec![]).unwrap();
-        classes.define("WillowGame.WillowMind", Some(mind), vec![]).unwrap();
         classes.define("WillowGame.WillowPlayerController", Some(controller), vec![]).unwrap();
         classes.define("WillowGame.WillowAIPawn", Some(pawn), vec![]).unwrap();
         classes.define("WillowGame.WillowVehicle", Some(vehicle), vec![]).unwrap();
@@ -241,6 +247,18 @@ impl Env {
 
     fn ask(&mut self, o: ObjRef) -> Result<Option<ObjRef>, VmError> {
         self.vm.query_interface(o, self.iface)
+    }
+}
+
+/// A `NotYet { NotRead }` of `Controller`'s read-only rule naming `words`.
+fn not_read_gm(r: Result<Option<ObjRef>, VmError>, words: &str) {
+    match r {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotRead, "{n}");
+            assert_eq!(n.record, read_only::RECORD);
+            assert!(n.what.contains(words), "{n}");
+        }
+        other => panic!("expected NotYet naming {words:?}, got {other:?}"),
     }
 }
 
@@ -334,9 +352,11 @@ fn the_open_answers_are_named_not_yets() {
     let pawn = e.make("Engine.Pawn", "Pawn_0");
     let mind = e.make("WillowGame.WillowMind", "Mind_0");
     e.link(pawn, "Controller", mind);
-    not_read(e.ask(pawn), "goes to its Controller, a WillowGame.WillowMind: GearboxMind's own QueryInterface answer");
-    not_read(e.ask(mind), "GearboxMind's own QueryInterface answer");
-    not_read(e.vm.query_interface(mind, ai), "GearboxMind's own QueryInterface answer");
+    // A mind answers by `Controller`'s rule now (lane IMPL-GEARBOXMIND-QUERYINTERFACE; its own tests are in
+    // `read_only_tests`): this hand-defined one lists nothing and has no pawn, so it declines, and so does the pawn.
+    assert_eq!(e.ask(pawn).unwrap(), None);
+    assert_eq!(e.ask(mind).unwrap(), None);
+    assert_eq!(e.vm.query_interface(mind, ai).unwrap(), None);
     let player = e.make("WillowGame.WillowPlayerController", "Player_0");
     e.link(pawn, "Controller", player);
     not_read(e.vm.query_interface(pawn, ai), "WillowPlayerController's QueryInterface answer for IAIInterface");
@@ -355,7 +375,24 @@ fn the_open_answers_are_named_not_yets() {
     let vehicle = e.make("Engine.Vehicle", "Vehicle_0");
     e.link(lone, "DrivenVehicle", vehicle);
     e.link(vehicle, "Controller", mind);
-    not_read(e.ask(lone), "goes to its driven vehicle's Controller, a WillowGame.WillowMind");
+    // The vehicle's controller (the mind) declines, so the pawn goes on to its mesh, whose answer is still open.
+    not_read(e.ask(lone), "goes to its Mesh, a Engine.ToySubMesh");
+    // The read-only chain (lane IMPL-GEARBOXMIND-QUERYINTERFACE) reaching a `SkeletalMeshComponent`, whose component
+    // rule (#524) has no read-only form: `NotPorted` (the hub's ruling in review r1 of #602, item 1).
+    let held = e.make("Engine.Pawn", "Held_0");
+    let skeletal = e.make("Engine.SkeletalMeshComponent", "Skeletal_0");
+    e.link(held, "Mesh", skeletal);
+    let asker = e.make("Engine.Controller", "Asker_0");
+    e.link(asker, "Pawn", held);
+    let iface = e.iface;
+    match read_only::query_read_only(&e.vm, asker, Some(iface)) {
+        Err(VmError::NotYet(n)) => {
+            assert_eq!(n.missing, Missing::NotPorted, "{n}");
+            assert!(n.what.contains("goes to its pawn, a Engine.Pawn"), "{n}");
+            assert!(n.what.contains("Engine.SkeletalMeshComponent's QueryInterface rule is not ported read-only"), "{n}");
+        }
+        other => panic!("expected NotPorted, got {other:?}"),
+    }
 }
 
 /// A question asked twice: a controller whose answer asks the pawn back gets none for it at once, and the pawn takes
@@ -423,7 +460,7 @@ fn registering_twice_keeps_the_rule_and_reference_registers_none() {
     let mind = e.make("WillowGame.WillowMind", "Mind_0");
     e.link(pawn, "Controller", mind);
     register(&mut e.vm).unwrap();
-    not_read(e.ask(pawn), "GearboxMind's own");
+    assert_eq!(e.ask(pawn).unwrap(), None, "the mind's Controller rule declines; the pawn has no mesh");
     let mut r = Env::new(ParityMode::Reference);
     let pawn = r.make("Engine.Pawn", "Pawn_0");
     let mind = r.make("WillowGame.WillowMind", "Mind_0");
@@ -465,6 +502,11 @@ fn a_direct_mesh_query_forwards_to_its_owner() {
     e.link(pawn, "Controller", controller);
     let mesh = e.make("Engine.SkeletalMeshComponent", "Mesh_0");
     e.link(mesh, "Owner", pawn);
+    // The controller answers by `Controller`'s read-only rule (lane IMPL-GEARBOXMIND-QUERYINTERFACE), which reads only
+    // interface entries resolved at set-up: cold, it is `NotRead`; resolved, the answer is the controller.
+    not_read_gm(e.ask(mesh), "the interface table of Engine.ToyThingController has an entry not resolved at set-up");
+    let class = e.vm.space.heap.get(controller).unwrap().class;
+    e.vm.resolve_interface_tables(class);
     assert_eq!(e.ask(mesh).unwrap(), Some(controller));
     set(&mut e.vm, mesh, "Owner", Value::Object(None)).unwrap();
     assert_eq!(e.ask(mesh).unwrap(), None);
@@ -689,6 +731,10 @@ fn an_owned_ai_component_answers_its_owner_s_answer() {
     let pawn = e.make("Engine.Pawn", "Pawn_0");
     let controller = e.make("Engine.ToyThingController", "Controller_0");
     e.link(pawn, "Controller", controller);
+    // The controller answers by `Controller`'s read-only rule (#602), which reads only interface entries resolved at
+    // set-up, so they are resolved first (hub ruling at landing, 2026-11-20).
+    let class = e.vm.space.heap.get(controller).unwrap().class;
+    e.vm.resolve_interface_tables(class);
     for path in [AI_COMPONENT, WILLOW_AI_COMPONENT] {
         let component = e.make(path, "AIComponent_0");
         e.link(component, "Owner", pawn);

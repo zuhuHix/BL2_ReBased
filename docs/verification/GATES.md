@@ -215,6 +215,16 @@ rows are byte-identical. ctest and verify_packages not run (no C++ change). No r
 (the destinations' slots read before the first write; 2 tests): `cargo test --workspace -j 2` 2,463 passed / 0 failed
 / 46 ignored; no slice-gate rerun (the slice's path has full slot vectors).
 
+**IMPL-GEARBOXMIND-QUERYINTERFACE (2026-11-20, pc-hummer, on main at 66378ec4):** AI-assisted (Claude Code, Opus
+5.5). `Controller`'s QueryInterface rule in Off from NATIVE_GEARBOXMIND_QUERYINTERFACE.md (#589 at 53daae12),
+read-only along the chain (ow-vm read-only dispatch and plain answer over entries resolved at set-up), with link 9's
+interface set-up as a harness input. `cargo test --workspace --locked -j 2` 2,575 passed / 0 failed / 48 ignored (10
+new in `pawn_interface::read_only`, 1 in `reflect`); `cargo clippy` adds no warning in the touched files;
+`crate_edges_test.py` OK. Installed Off `--slice-gate` (strict, under the lock) on a throwaway merge with #579, #586,
+#564, #548, #555, #560, #523 and #595: ok 2 / NotYet 3 / error 9 of 14; link 9 runs 2 of 2 steps and stops at the
+unbound `GearboxMind.GetAIComponent()` (was the NotYet at GearboxMind's own QueryInterface). ctest and
+verify_packages not run (no C++ change). No real-game run; every rule UNVERIFIED.
+
 **FOLLOWUP-BOUNDING-CYLINDER-TEMPLATE (2026-11-20, pc-hummer, on #595 9de51c43):** AI-assisted (Claude Code, Opus
 5.5). `GetBoundingCylinder`'s template test walks the receiver's outer chain (a class default anywhere: template; an
 export or resource on it: T; only run-time objects: live), read-only. `cargo build --workspace` clean; `cargo test

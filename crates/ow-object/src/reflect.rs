@@ -991,6 +991,65 @@ impl CodeIndex {
         Some(false)
     }
 
+    /// [`CodeIndex::implements`] reading only entries already resolved, over the whole chain (lane IMPL-GEARBOXMIND-QUERYINTERFACE;
+    /// named `_chain` beside #575's [`CodeIndex::implements_resolved`] at landing, hub ruling 2026-11-20;
+    /// NATIVE_GEARBOXMIND_QUERYINTERFACE.md section 5): nothing is resolved, loaded or cached. `Ok(true)` when one
+    /// resolved entry on the chain is `iface` or derives from it; `Ok(false)` when every entry on the chain is resolved
+    /// and none is, or `iface` (decoded) is not an interface; `Err(class)` naming the first class on the chain with an
+    /// entry not resolved yet, when no resolved entry answers yes (so the answer does not depend on table order). A
+    /// chain whose bodies did not all decode answers [`CodeIndex::implements_structurally`], as `implements` does.
+    pub fn implements_resolved_chain(&self, class: ClassKey, iface: ClassKey) -> Result<bool, ClassKey> {
+        let decoded = self.classes[iface.index()].body_decoded()
+            && self.super_chain(class).all(|c| self.classes[c.index()].body_decoded());
+        if !decoded {
+            return Ok(self.implements_structurally(class, iface));
+        }
+        if !self.classes[iface.index()].is_interface() {
+            return Ok(false);
+        }
+        let mut unresolved = None;
+        for cursor in self.super_chain(class) {
+            for target in &self.classes[cursor.index()].interface_targets {
+                match target {
+                    Some(Some(t)) if self.is_child_of(*t, iface) => return Ok(true),
+                    Some(_) => {}
+                    None => {
+                        unresolved.get_or_insert(cursor);
+                    }
+                }
+            }
+        }
+        unresolved.map_or(Ok(false), Err)
+    }
+
+    /// Resolves every interface entry on the super chain of `class` not resolved yet, as [`CodeIndex::implements`]
+    /// resolves one (a set-up step: a load, which the caller logs). Returns how many entries this call resolved.
+    pub fn resolve_interfaces(&mut self, store: &mut PackageStore, class: ClassKey) -> usize {
+        let chain: Vec<ClassKey> = self.super_chain(class).collect();
+        let mut resolved = 0;
+        for cursor in chain {
+            for entry in 0..self.classes[cursor.index()].interface_targets.len() {
+                if self.classes[cursor.index()].interface_targets[entry].is_some() {
+                    continue;
+                }
+                let info = &self.classes[cursor.index()];
+                let (package, class_ref) =
+                    (info.package, info.body.as_ref().map_or(0, |b| b.interfaces[entry].class_ref));
+                let target = self.class_at(store, package, class_ref).ok().flatten();
+                self.classes[cursor.index()].interface_targets[entry] = Some(target);
+                resolved += 1;
+            }
+        }
+        resolved
+    }
+
+    /// How many interface entries on the super chain of `class` are not resolved yet (read only).
+    pub fn unresolved_interfaces(&self, class: ClassKey) -> usize {
+        self.super_chain(class)
+            .map(|c| self.classes[c.index()].interface_targets.iter().filter(|t| t.is_none()).count())
+            .sum()
+    }
+
     /// Whether `class` implements `iface` by its package declarations alone (review r1 and r2 of #455): the interface
     /// tables on the class's super chain, every entry resolved strictly, with no structural fallback.
     ///

@@ -42,6 +42,9 @@ use ow_object::layout::{LayoutError, PropertyDecl};
 use ow_object::value::Value;
 
 use crate::error::VmError;
+
+#[path = "interface_read_only.rs"]
+mod interface_read_only;
 use crate::services::Services;
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -285,6 +288,24 @@ pub type NativeFn = Rc<dyn Fn(&mut NativeCall<'_>) -> Result<Value, VmError>>;
 /// parent with one) answers by [`Vm::plain_interface`].
 pub type InterfaceRuleFn = Rc<dyn Fn(&mut Vm, ObjRef, ClassId) -> Result<Option<ObjRef>, VmError>>;
 
+/// The read-only form of a class's `QueryInterface` answer (lane IMPL-GEARBOXMIND-QUERYINTERFACE,
+/// NATIVE_GEARBOXMIND_QUERYINTERFACE.md section 5): it sees the VM by shared reference, so it writes, loads and draws
+/// nothing except through a service or the world hooks ([`Vm::service`] and the world hooks hand out shared cells),
+/// which these rules do not touch (review r1 of #602, item 5); the questions being answered travel in
+/// [`InterfaceAsking`]. Registered with
+/// [`Vm::register_read_only_interface_rule`] and dispatched by [`Vm::query_interface_read_only`].
+pub type ReadOnlyInterfaceRuleFn =
+    Rc<dyn Fn(&Vm, &mut InterfaceAsking, ObjRef, ClassId) -> Result<Option<ObjRef>, VmError>>;
+
+/// The questions a read-only `QueryInterface` chain is answering, outermost first: the dispatch guard's (object,
+/// interface) pairs, and a rule's own marks (a rule name and the object it marks, such as `Controller`'s guard keyed by
+/// the controller alone).
+#[derive(Debug, Default, Clone)]
+pub struct InterfaceAsking {
+    pub asking: Vec<(ObjRef, ClassId)>,
+    pub marks: Vec<(&'static str, ObjRef)>,
+}
+
 /// The body a [`ScriptWrapFn`] is given: it runs the wrapped function's own bytecode with the call's arguments, once,
 /// on the call's own VM, and only while no service is borrowed (another VM, or a second run, is a script error).
 pub type ScriptBody<'b> = dyn FnMut(&mut Vm) -> Result<CallResult, VmError> + 'b;
@@ -510,6 +531,8 @@ pub struct Vm {
     notify: DetMap<ObjectPath, AttrNotifyFn>,
     /// Per-class `QueryInterface` answers ([`InterfaceRuleFn`]).
     interface_rules: DetMap<ClassId, InterfaceRuleFn>,
+    /// Per-class read-only forms of those answers ([`ReadOnlyInterfaceRuleFn`]).
+    read_only_interface_rules: DetMap<ClassId, ReadOnlyInterfaceRuleFn>,
     /// The (object, interface) questions being answered, outermost first ([`Vm::query_interface`]).
     interface_asking: Vec<(ObjRef, ClassId)>,
     services: Services,
@@ -582,6 +605,7 @@ impl Vm {
             iterators: DetMap::new(),
             notify: DetMap::new(),
             interface_rules: DetMap::new(),
+            read_only_interface_rules: DetMap::new(),
             interface_asking: Vec::new(),
             services: Services::new(),
             unique_names: DetMap::new(),
