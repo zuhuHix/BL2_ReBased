@@ -1,7 +1,7 @@
 # WillowWeapon.RecomputeAttributeBaseValues (analyst note, 2026-11-19)
 
 AI-assisted (Claude Code, Claude Opus 5.5). Analyst lane ANALYST-RECOMPUTE-ATTRIBUTE-BASE-VALUES (decision
-2026-11-19-NNN, a placeholder), for slice link 8 (equip). It corrects the short entry in NATIVE_ATTRIBUTES.md section 8.
+2026-11-19-150, a placeholder), for slice link 8 (equip). It corrects the short entry in NATIVE_ATTRIBUTES.md section 8.
 - **Sources, in the brief's order:**
   - the script, read with `research/script_disasm.py` (every script function of the nine code packages searched for
     callers);
