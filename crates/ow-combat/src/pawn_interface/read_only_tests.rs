@@ -35,7 +35,8 @@ static NEXT: AtomicU32 = AtomicU32::new(0);
 
 const INTERFACE: u32 = 2 | 0x4000;
 /// A native class's flags (the fitted native bit, `ow_object::class_body::CLASS_NATIVE`).
-const NATIVE: u32 = 2 | ow_object::class_body::CLASS_NATIVE;
+// A literal, so the fixture pins bit 7 on its own (review r2 of #640): a change of the production constant fails here.
+const NATIVE: u32 = 2 | (1 << 7);
 
 /// A class export with a decodable body naming `table`'s interfaces, and its default object.
 fn real_class(t: &mut ScriptToy, name: &str, super_ref: i32, within: i32, flags: u32, table: &[i32]) -> i32 {
@@ -698,6 +699,11 @@ fn the_rule_reads_the_pawn_only_on_the_branch_that_reaches_it() {
 
 /// Review r1 of #640, item 2: precedence. Of two unread native ancestors the nearest is named; a class whose body did
 /// not decode counts as an unread native; each on both paths, with the counters unchanged.
+#[test]
+fn the_fixture_native_bit_is_the_production_constant() {
+    assert_eq!(ow_object::class_body::CLASS_NATIVE, 1 << 7, "the fitted native bit is bit 7 (value 128)");
+}
+
 #[test]
 fn the_nearest_unread_native_wins_and_an_undecodable_body_is_unread() {
     let mut e = Env::new(ParityMode::Off);
